@@ -142,7 +142,7 @@ func rollupLocation(ctx context.Context, loc workspace.Location) (row projectRol
 	// and a project that happens to carry a focus label would otherwise report
 	// "ready" totals that silently meant "ready on that project's focus path" —
 	// the same number, a different fact. [LAW:no-silent-failure]
-	gathered, err := classifyWorkable(ctx, st, nil, workableFilter{})
+	gathered, err := classifyWorkable(ctx, st, nil)
 	if err != nil {
 		row.Err = err
 		return row

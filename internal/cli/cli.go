@@ -922,7 +922,27 @@ func (f workableFilter) criteria() (storage.IssueCriteria, error) {
 // [LAW:single-enforcer] `lit next` and `lit backlog` both
 // read from this single pipeline so their "what is workable, in what
 // order" model cannot drift.
+//
+// The filter is parsed before a single row is read, so a label the vocabulary
+// cannot express fails here rather than after the queue is materialized.
+// [LAW:parse-dont-validate]
 func gatherWorkableAnnotated(ctx context.Context, ap *app.App, rf workableFilter) (workableGather, error) {
+	criteria, err := rf.criteria()
+	if err != nil {
+		return workableGather{}, err
+	}
+	queue, err := gatherWorkableQueue(ctx, ap)
+	if err != nil {
+		return workableGather{}, err
+	}
+	return queue.keepRows(criteria), nil
+}
+
+// gatherWorkableQueue is the workable pipeline with nothing narrowed: the whole
+// queue, for a caller that applies the filter itself. `lit next` is the one —
+// its filter decides which rows it may serve, not which rows its walks may read,
+// so it needs the rows a filter would drop (see routeNext).
+func gatherWorkableQueue(ctx context.Context, ap *app.App) (workableGather, error) {
 	requiredFields, err := readyRequiredFields(ap)
 	if err != nil {
 		return workableGather{}, err
@@ -933,7 +953,7 @@ func gatherWorkableAnnotated(ctx context.Context, ap *app.App, rf workableFilter
 	// lets the cross-project rollup run the SAME pipeline over a read-only
 	// foreign store — which has no repo root and so no per-repo config — by
 	// passing the policy as a value. [LAW:single-enforcer]
-	return classifyWorkable(ctx, ap.Store, requiredFields, rf)
+	return classifyWorkable(ctx, ap.Store, requiredFields)
 }
 
 // readyRequiredFields reads this repo's ready required-fields policy. Every
@@ -988,16 +1008,12 @@ func noReadyPolicy() ([]string, error) { return nil, nil }
 // focus path would leave the counts reading as project totals while meaning
 // something else — a query silently swapped for a similar-looking one with
 // different semantics. [LAW:no-silent-failure]
-func classifyWorkable(ctx context.Context, st storage.Store, requiredFields []string, rf workableFilter) (workableGather, error) {
-	criteria, err := rf.criteria()
-	if err != nil {
-		return workableGather{}, err
-	}
-	// The query asks for the workable population and nothing the caller wanted
+func classifyWorkable(ctx context.Context, st storage.Store, requiredFields []string) (workableGather, error) {
+	// The query asks for the workable population and nothing a caller wants
 	// narrowed. A narrowed query is upstream of everything: it would put the
 	// queue facts below out of reach of every consumer at once, and no wider
-	// list handed to a renderer could reach back past it. The narrowing is
-	// applied — and the rest released — once those facts are derived.
+	// list handed to a renderer could reach back past it. The caller narrows —
+	// and releases the rest — once those facts are derived.
 	//
 	// [LAW:one-source-of-truth] rank is the canonical ordering, and the store's
 	// default sort is it: tree order, so every epic's leaves arrive together at
@@ -1022,10 +1038,10 @@ func classifyWorkable(ctx context.Context, st storage.Store, requiredFields []st
 	// to answer over, so ordering has one authority. [LAW:one-source-of-truth]
 	sortByPriority(queue.rows)
 	enrichWithParentEpic(queue.rows, queue.details)
-	// Derived over the queue, then the queue is let go: keepRows returns the
-	// caller's rows and their relations, and the facts outlive the set they came
-	// from as a map of ids and an int.
-	return workableGather{annotatedRows: queue, facts: deriveQueueFacts(queue.rows)}.keepRows(criteria), nil
+	// Derived over the queue, so the facts are true of the queue whatever the
+	// caller narrows it to: keepRows lets the rest go, and the facts outlive the
+	// set they came from as a map of ids and an int.
+	return workableGather{annotatedRows: queue, facts: deriveQueueFacts(queue.rows)}, nil
 }
 
 // annotateIssues runs every registered annotator over the given issues and

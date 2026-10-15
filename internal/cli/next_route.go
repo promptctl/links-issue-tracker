@@ -150,6 +150,30 @@ type ServedPastExhaustion struct {
 	Exhaustion Exhausted
 }
 
+// Narrowed is a run that hands back nothing only because of its filter: no
+// step serves a row the filter selects, but the same steps over the whole queue
+// would serve Hidden — the held scope's next ticket at step 3, or the pool's
+// top ready ticket at step 4 for a checkout holding no lane. Neither the scope
+// nor the backlog is out of work, and saying so would be false — the question
+// was narrowed, not the work. Hidden is that unfiltered pick, so the agent
+// learns exactly which ticket dropping the filter hands it.
+//
+// It is an error on the same terms as Exhausted and NoWork, whose answers it
+// replaces when the filter is the reason for them.
+// [LAW:types-are-the-program] [LAW:no-silent-failure]
+type Narrowed struct{ Hidden annotation.AnnotatedIssue }
+
+// ServedPastNarrowing is Narrowed with somewhere to go: the pool's top ready
+// ticket the filter selects, which lies outside the scope, served beneath the
+// ticket the filter hid. Like ServedPastExhaustion it carries the whole reason
+// rather than a flag, so the one sentence that names the hidden ticket is
+// written once, on Narrowed.
+type ServedPastNarrowing struct {
+	Row       annotation.AnnotatedIssue
+	Lane      model.LaneID
+	Narrowing Narrowed
+}
+
 // Exhausted is the checkout's own claimed epic(s) having open work with none
 // of it reachable: not the held lanes, not an on-path dependency, not another
 // lane of the same epic — and the global pool having nothing ready outside it
@@ -163,6 +187,12 @@ type ServedPastExhaustion struct {
 // never claimed of rows the pool was not asked about; with no focus active it
 // is empty, and on ServedPastExhaustion, whose pool did offer a row.
 //
+// Narrowing is set when the pool offered nothing the filter selects but would
+// serve a row over the whole queue: the filter, not the backlog, is why nothing
+// outside the scope is on offer, and that row is what `lit next` without the
+// filter hands over. OffPath is then empty, as on ServedPastExhaustion, since
+// the unfiltered pool did offer a row.
+//
 // It is also an error, for the same reason HelpRequestedError is: it is an
 // answer, not a failure, and the error channel is the only channel runNext has
 // for an answer that hands back no row. Being the error itself — rather than
@@ -170,10 +200,11 @@ type ServedPastExhaustion struct {
 // sinks reading the routing verdict rather than a copy of it that could drift
 // from these fields. [LAW:one-source-of-truth]
 type Exhausted struct {
-	Epics   []string
-	Blocked []rowReach
-	Held    []rowReach
-	OffPath []rowReach
+	Epics     []string
+	Blocked   []rowReach
+	Held      []rowReach
+	OffPath   []rowReach
+	Narrowing *Narrowed
 }
 
 // reachKind is what one row is to this checkout right now — the one fact both
@@ -213,9 +244,10 @@ const (
 	// moves it, above reachOutOfView because this run can see it.
 	reachAwaitingOutside
 	// reachOutOfView: nothing that would clear it is among the gathered rows,
-	// so this run knows nothing about it. --type/--labels/--assignee and
-	// leaf-only membership narrow the gather; the dependency annotation is read
-	// from the store and does not. Only the exhaustion walk can reach it — that
+	// so this run knows nothing about it — an epic with no open ticket under
+	// it, say. Leaf-only membership narrows the gather; the dependency
+	// annotation is read from the store and does not, and no filter narrows
+	// what routing reads (routeNext). Only the exhaustion walk can reach it — that
 	// one reads dependency ids off annotations, while the pool walk classifies
 	// rows it is already holding.
 	reachOutOfView
@@ -303,7 +335,9 @@ func (ServedFromEpicLane) isNextOutcome()   {}
 func (ServedFromNewLane) isNextOutcome()    {}
 func (ServedFromDependency) isNextOutcome() {}
 func (ServedPastExhaustion) isNextOutcome() {}
+func (ServedPastNarrowing) isNextOutcome()  {}
 func (Exhausted) isNextOutcome()            {}
+func (Narrowed) isNextOutcome()             {}
 func (NoWork) isNextOutcome()               {}
 
 // capacity is the single answer to "may this checkout take this row, and as
@@ -369,12 +403,12 @@ func capacityFor(row annotation.AnnotatedIssue, standing claims.Standing, self m
 // ownScope reads this checkout's held lanes, and the epics they sit in,
 // straight from the standings.
 //
-// [LAW:one-source-of-truth] It reads standings and NOT the gathered rows. The
-// rows are already narrowed by --type/--labels/--assignee, so deriving
-// ownership from them would let any display filter empty this set and drop the
-// whole self-aware branch — a checkout with a perfectly fresh claim silently
-// hopping epics because it asked for one issue type. Ownership is a fact about
-// the workspace; a display filter must not be able to change it.
+// [LAW:one-source-of-truth] It reads standings and NOT the gathered rows. A
+// lane is held whether or not any of its tickets is workable right now: one
+// whose tickets are all closed gathers no rows, and deriving ownership from the
+// rows would drop the whole self-aware branch — a checkout with a perfectly
+// fresh claim silently hopping epics. Ownership is a fact about the workspace,
+// and nothing the rows happen to hold may change it.
 //
 // An unidentified self needs no guard here: relationOf owns what a
 // public-checkout self may match, so ownership and the start gate cannot drift
@@ -409,6 +443,15 @@ func ownScope(standings claims.Standings, self model.Attribution) (map[model.Lan
 // lanes of its own starts straight at the global pool — unfocus is the zero
 // state, not a hop through the earlier steps.
 //
+// rows is the whole workable queue and asked is the filter the run was given
+// (--type/--status/--labels/--assignee). The filter decides which rows may be
+// SERVED and nothing else: every walk reads every row, so a dependency is found
+// through a ticket the filter leaves out, and "is the scope exhausted" — or
+// "is anything ready" — is asked of the queue rather than of the part of it the
+// filter kept. A filter applied to the rows before routing would make those
+// answers false: under --type bug, a ready task of ours would read as an
+// exhausted epic, and a backlog of ready tasks as no ready work.
+//
 // The focus scope narrows STEP 4 AND NOTHING ELSE. Steps 1-3 route over lanes
 // this checkout already holds, and ownScope takes pains to read that from the
 // standings rather than the gathered rows precisely so a display narrowing
@@ -425,7 +468,7 @@ func ownScope(standings claims.Standings, self model.Attribution) (map[model.Lan
 //
 // epics is the relations of the epics above the rows, keyed by epic id — what
 // epicsAbove climbs to tell which rows sit under an epic.
-func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.IssueRelations, epics map[string]storage.IssueRelations, standings claims.Standings, self model.Attribution, scope focusScope) NextOutcome {
+func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.IssueRelations, epics map[string]storage.IssueRelations, standings claims.Standings, self model.Attribution, scope focusScope, asked storage.IssueCriteria) NextOutcome {
 	laneOf := func(row annotation.AnnotatedIssue) model.LaneID {
 		return model.LaneOf(row.Issue, details[row.ID].Parent)
 	}
@@ -435,8 +478,10 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 	reachFor := func(row annotation.AnnotatedIssue) reachKind {
 		return reachOf(row, standings.Of(laneOf(row)), self)
 	}
-	// pick keeps the first row, in rank order, that sits in an admitted lane
-	// and carries one of the accepted verdicts.
+	selected := func(row annotation.AnnotatedIssue) bool { return asked.Selects(row.Issue) }
+	anyRow := func(annotation.AnnotatedIssue) bool { return true }
+	// pickFrom keeps the first row, in rank order, that the run may serve, sits
+	// in an admitted lane and carries one of the accepted verdicts.
 	//
 	// accept is a SET and never a preference order: rank order is the only
 	// tiebreak routing gets to apply, and ranking capacities against each other
@@ -447,77 +492,112 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 	// one: steps 1-3 walk every gathered row, step 4 walks the focus-scoped
 	// pool. Passing the set is what keeps that difference visible at each call
 	// instead of hidden in a closure every step reads differently.
-	pickFrom := func(from []annotation.AnnotatedIssue, inScope func(model.LaneID) bool, accept ...capacity) (annotation.AnnotatedIssue, capacity, bool) {
+	pickFrom := func(from []annotation.AnnotatedIssue, serves func(annotation.AnnotatedIssue) bool, inScope func(model.LaneID) bool, accept ...capacity) (annotation.AnnotatedIssue, capacity, bool) {
 		for _, row := range from {
-			if how := verdict(row); inScope(laneOf(row)) && slices.Contains(accept, how) {
+			if how := verdict(row); serves(row) && inScope(laneOf(row)) && slices.Contains(accept, how) {
 				return row, how, true
 			}
 		}
 		return annotation.AnnotatedIssue{}, routeAround, false
 	}
-	pick := func(inScope func(model.LaneID) bool, accept ...capacity) (annotation.AnnotatedIssue, capacity, bool) {
-		return pickFrom(rows, inScope, accept...)
-	}
 
 	// Step 4's pick, shared by the step that falls through to it. The pool is
-	// the focus-scoped one — see the step 4 comment below.
+	// the focus-scoped one — see the step 4 comment below — and, as at every
+	// step, serves admits what may be served from it: the filter for the run's
+	// answer, every row for the answer the filter would otherwise have got.
 	pool, offPath := scope.partition(rows)
-	fromPool := func() (annotation.AnnotatedIssue, bool) {
-		row, _, ok := pickFrom(pool, func(model.LaneID) bool { return true }, serveWork)
+	fromPool := func(serves func(annotation.AnnotatedIssue) bool) (annotation.AnnotatedIssue, bool) {
+		row, _, ok := pickFrom(pool, serves, func(model.LaneID) bool { return true }, serveWork)
 		return row, ok
+	}
+	// The diagnostics name only rows the filter selects: what they report is
+	// why this run's question got no row.
+	selectedOf := func(from []annotation.AnnotatedIssue) []annotation.AnnotatedIssue {
+		return slices.DeleteFunc(slices.Clone(from), func(row annotation.AnnotatedIssue) bool { return !selected(row) })
 	}
 
 	ownLanes, ownEpics := ownScope(standings, self)
 	mine := func(lane model.LaneID) bool { return ownLanes[lane] }
 	if len(ownLanes) > 0 {
 		workToward := workTowardEach(rows, details, epics)
-		// Step 1 — our own lanes, startable work and work already underway
-		// alike, whichever the backlog ranks first.
-		if row, how, ok := pick(mine, serveWork, resumeWork); ok {
-			if how == resumeWork {
-				return ResumedOwnWork{Row: row}
-			}
-			return ServedFromClaim{Row: row}
-		}
-		// Step 1b — a dependency outside our lanes that gates one of them. It
-		// establishes a claim on a lane we do not hold, so it is announced as
-		// one and its own lane's standing is honoured rather than ignored.
-		if served, ok := onPathDependency(gatingDependencies(rows, laneOf, mine, reachFor, workToward), laneOf); ok {
-			return served
-		}
-		// Step 2 — the rest of our epic, in lanes we do not already hold.
 		ourEpic := func(lane model.LaneID) bool {
 			return lane.Epic() != "" && ownEpics[lane.Epic()]
 		}
-		if row, _, ok := pick(func(lane model.LaneID) bool { return ourEpic(lane) && !mine(lane) }, serveWork); ok {
-			return ServedFromEpicLane{Row: row, Lane: laneOf(row)}
-		}
-		// Step 2b — a dependency outside our epic that gates any of it. Clearing
-		// it is how the epic moves again, so it outranks every ticket the pool
-		// could offer; after step 2, because a ready lane of the epic moves it
-		// without leaving it. The one walk feeds step 3 too, so what exhaustion
-		// reports is exactly what this step declined. [LAW:one-source-of-truth]
 		ourScope := func(lane model.LaneID) bool { return mine(lane) || ourEpic(lane) }
+		// Both dependency walks read every row and are shared by both runs of
+		// ownSteps; the walk step 2b declines is the walk step 3 reports, so
+		// what exhaustion names is exactly what that step passed over.
+		// [LAW:one-source-of-truth]
+		gatingMine := gatingDependencies(rows, laneOf, mine, reachFor, workToward)
 		gating := gatingDependencies(rows, laneOf, ourScope, reachFor, workToward)
-		if served, ok := onPathDependency(gating, laneOf); ok {
-			return served
+		// ownSteps is steps 1-2b for a run that may serve only the rows serves
+		// accepts. It runs once with the filter, and — only when that finds
+		// nothing — once over the whole queue, which is how step 3 tells a
+		// scope with no reachable work from one whose next ticket the filter
+		// left out. One function for both runs, so the two cannot disagree about
+		// what the scope would serve. [LAW:one-source-of-truth]
+		ownSteps := func(serves func(annotation.AnnotatedIssue) bool) (NextOutcome, annotation.AnnotatedIssue, bool) {
+			// Step 1 — our own lanes, startable work and work already underway
+			// alike, whichever the backlog ranks first.
+			if row, how, ok := pickFrom(rows, serves, mine, serveWork, resumeWork); ok {
+				if how == resumeWork {
+					return ResumedOwnWork{Row: row}, row, true
+				}
+				return ServedFromClaim{Row: row}, row, true
+			}
+			// Step 1b — a dependency outside our lanes that gates one of them. It
+			// establishes a claim on a lane we do not hold, so it is announced as
+			// one and its own lane's standing is honoured rather than ignored.
+			if served, ok := onPathDependency(gatingMine, serves, reachFor, workToward, laneOf); ok {
+				return served, served.Row, true
+			}
+			// Step 2 — the rest of our epic, in lanes we do not already hold.
+			if row, _, ok := pickFrom(rows, serves, func(lane model.LaneID) bool { return ourEpic(lane) && !mine(lane) }, serveWork); ok {
+				return ServedFromEpicLane{Row: row, Lane: laneOf(row)}, row, true
+			}
+			// Step 2b — a dependency outside our epic that gates any of it.
+			// Clearing it is how the epic moves again, so it outranks every
+			// ticket the pool could offer; after step 2, because a ready lane of
+			// the epic moves it without leaving it.
+			if served, ok := onPathDependency(gating, serves, reachFor, workToward, laneOf); ok {
+				return served, served.Row, true
+			}
+			return nil, annotation.AnnotatedIssue{}, false
+		}
+		if outcome, _, ok := ownSteps(selected); ok {
+			return outcome
 		}
 		// Step 3 — loud, and never a silent hop. The pool's pick is outside our
-		// scope by construction: steps 1 and 2 took every serveWork row in our
-		// lanes and our epic, and the pool is a subset of the rows they walked.
+		// scope by construction: steps 1 and 2 took every serveWork row the
+		// filter selects in our lanes and our epic, and the pick serves only
+		// rows it selects.
+		if _, hidden, ok := ownSteps(anyRow); ok {
+			narrowing := Narrowed{Hidden: hidden}
+			if row, ok := fromPool(selected); ok {
+				return ServedPastNarrowing{Row: row, Lane: laneOf(row), Narrowing: narrowing}
+			}
+			return narrowing
+		}
 		ours := func(row annotation.AnnotatedIssue) bool { return ourScope(laneOf(row)) }
 		exhausted := Exhausted{
 			Epics:   slices.Sorted(maps.Keys(ownEpics)),
 			Blocked: blockedRows(gating),
 			Held:    heldByThemselves(rows, ours, reachFor),
 		}
-		if row, ok := fromPool(); ok {
+		if row, ok := fromPool(selected); ok {
 			return ServedPastExhaustion{Row: row, Lane: laneOf(row), Exhaustion: exhausted}
+		}
+		// Nothing outside our scope is ready that the filter selects. Over the
+		// whole queue the pool may still serve a row, and then the filter is why
+		// nothing outside is on offer: "nothing ready outside it" would be false.
+		if hidden, ok := fromPool(anyRow); ok {
+			exhausted.Narrowing = &Narrowed{Hidden: hidden}
+			return exhausted
 		}
 		// The pool offered nothing, so what the focus kept from it is the rest
 		// of the answer: the withheld rows outside our scope — ours were walked
 		// by steps 1-2b, focus or not.
-		exhausted.OffPath = withheldByScope(slices.DeleteFunc(slices.Clone(offPath), ours))
+		exhausted.OffPath = withheldByScope(slices.DeleteFunc(selectedOf(offPath), ours))
 		return exhausted
 	}
 
@@ -530,10 +610,16 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 	// "nothing on your focus path is startable" are different answers, and a
 	// pool that quietly served an off-path row instead would be substituting a
 	// similar-looking query for the one asked. [LAW:no-silent-failure]
-	if row, ok := fromPool(); ok {
+	//
+	// "No ready work" is asked of the queue, as exhaustion is: when only the
+	// filter emptied the pool, the answer is the ticket it hid.
+	if row, ok := fromPool(selected); ok {
 		return ServedFromNewLane{Row: row, Lane: laneOf(row)}
 	}
-	return NoWork{Unreachable: append(passedOver(pool, reachFor), withheldByScope(offPath)...)}
+	if hidden, ok := fromPool(anyRow); ok {
+		return Narrowed{Hidden: hidden}
+	}
+	return NoWork{Unreachable: append(passedOver(selectedOf(pool), reachFor), withheldByScope(selectedOf(offPath))...)}
 }
 
 // withheldByScope classifies the rows the focus scope kept out of the pool. They
@@ -679,8 +765,8 @@ func workTowardEach(rows []annotation.AnnotatedIssue, details, epics map[string]
 // an edge lit refuses inside one epic — and a sibling edge can still exist,
 // written by an import or before that rule. Where the scope can be read is
 // the prerequisite's lane: an earlier lane-mate's is the lane of the row
-// waiting behind it, known even when a filter keeps the lane-mate out of view;
-// any other's is known only from work toward it in view.
+// waiting behind it, known even when the lane-mate is not a gathered row; any
+// other's is known only from work toward it in view.
 func gatingDependencies(rows []annotation.AnnotatedIssue, laneOf func(annotation.AnnotatedIssue) model.LaneID, inScope func(model.LaneID) bool, reachFor func(annotation.AnnotatedIssue) reachKind, workToward map[string][]annotation.AnnotatedIssue) []gatedDep {
 	// onPath is a row whose prerequisites gate the scope: an in-scope row, or
 	// work toward a prerequisite its chain already collected, carrying the hops
@@ -690,10 +776,9 @@ func gatingDependencies(rows []annotation.AnnotatedIssue, laneOf func(annotation
 		via []hop
 	}
 	// placed is the lane of each earlier lane-mate a gathered row waits behind —
-	// the waiter's own, known even when a filter keeps the lane-mate out of
-	// view. Read off every row before the walk starts, so whether a hidden
-	// lane-mate is inside the scope does not depend on which chain reaches it
-	// first.
+	// the waiter's own, known even when the lane-mate is not a gathered row.
+	// Read off every row before the walk starts, so whether such a lane-mate
+	// is inside the scope does not depend on which chain reaches it first.
 	placed := map[string]model.LaneID{}
 	for _, row := range rows {
 		for _, prerequisite := range ClassifyReadiness(row.Annotations).Prerequisites() {
@@ -751,15 +836,18 @@ func gatingDependencies(rows []annotation.AnnotatedIssue, laneOf func(annotation
 }
 
 // onPathDependency finds, among the dependencies one gatingDependencies walk
-// found, the first work this checkout may itself take toward closing one — "a
+// found, the first work this run may itself take toward closing one — "a
 // dependency outside the claimed lane that gates it, at any depth, is on the
 // path" (design-docs/work-claims.md, Routing step 1). Step 1b asks it of our own
 // lanes and step 2b of our whole epic. A gate inside the scope never reaches
 // here: the walk leaves it out, since step 1 or 2 already served it.
 //
-// The pick is the row gatingDependencies classified the dependency by: the
-// dependency itself when it is a leaf, a ticket under it when it is an epic,
-// which cannot be started.
+// The pick is the first work toward the dependency, in rank order, that is
+// takeable and that serves admits: the dependency itself when it is a leaf, a
+// ticket under it when it is an epic, which cannot be started. With every row
+// admitted that is the row gatingDependencies classified the dependency by; a
+// filter can leave that row out while admitting a later ticket under the same
+// epic, and that ticket is still work toward the dependency.
 //
 // Takeability is the shared verdict, not a local readiness test. A local test
 // sees no standings, so it would offer a ticket sitting in a lane another
@@ -768,13 +856,25 @@ func gatingDependencies(rows []annotation.AnnotatedIssue, laneOf func(annotation
 // unservable: the steps before each call already took every servable row the
 // walk's scope admits, so by the time we are here each of them is routeAround
 // by construction.
-func onPathDependency(deps []gatedDep, laneOf func(annotation.AnnotatedIssue) model.LaneID) (ServedFromDependency, bool) {
+func onPathDependency(deps []gatedDep, serves func(annotation.AnnotatedIssue) bool, reachFor func(annotation.AnnotatedIssue) reachKind, workToward map[string][]annotation.AnnotatedIssue, laneOf func(annotation.AnnotatedIssue) model.LaneID) (ServedFromDependency, bool) {
 	for _, dep := range deps {
-		if dep.Kind == reachTakeable {
-			return ServedFromDependency{Row: dep.Row, Lane: laneOf(dep.Row), Gates: dep.Gates, Via: dep.Via, Blocker: dep.ID}, true
+		if dep.Kind != reachTakeable {
+			continue
+		}
+		for _, work := range workToward[dep.ID] {
+			if serves(work) && reachFor(work) == reachTakeable {
+				return ServedFromDependency{Row: work, Lane: laneOf(work), Gates: dep.Gates, Via: dep.Via, Blocker: dep.ID}, true
+			}
 		}
 	}
 	return ServedFromDependency{}, false
+}
+
+// Error names the ticket the filter hid by the run that hands it over. The
+// four flags are named rather than "the filter" because routing never learns
+// which of them the run was given, and every one of them narrows the same way.
+func (o Narrowed) Error() string {
+	return fmt.Sprintf("`lit next` without --type, --status, --labels or --assignee hands you %s, which this run's filter leaves out", o.Hidden.ID)
 }
 
 // Error renders Exhausted as the loud diagnostic it is when the pool offered
@@ -799,11 +899,14 @@ func (o Exhausted) why() string {
 	return fmt.Sprintf("no ready work in %s — %s", o.scope(), strings.Join(stops, "; "))
 }
 
-// outside is what the pool held beyond the scope when it offered nothing: no
-// ready row at all, or rows a focus label kept it from asking about, named so
-// the agent can widen the question rather than read their absence as none.
-// [LAW:no-silent-failure]
+// outside is what the pool held beyond the scope when it offered nothing: a
+// ready row the filter left out, no ready row at all, or rows a focus label
+// kept it from asking about, named so the agent can widen the question rather
+// than read their absence as none. [LAW:no-silent-failure]
 func (o Exhausted) outside() string {
+	if o.Narrowing != nil {
+		return o.Narrowing.Error()
+	}
 	if len(o.OffPath) == 0 {
 		return "`lit next` has nothing ready outside it either"
 	}

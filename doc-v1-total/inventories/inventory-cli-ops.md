@@ -893,7 +893,7 @@ Positional args are the roots; with none, the cwd is used (`os.Getwd`, error `ge
 - Label = `cfg.IssuePrefix` from `workspace.ReadConfig(loc.ConfigPath)` when non-empty, else the `StorageDir` (`stores.go`).
 - `app.OpenLocationForRead`; failure → `row.Err`, no counts (`stores.go`).
 - Read-only close failure → `row.CloseErr`, set only when `row.Err` is nil (`stores.go`).
-- `classifyWorkable(ctx, st, nil, workableFilter{})` — a **nil required-fields** argument opts out of the per-repo `required_fields` policy only; blockers, the lane gate, and the reserved blocking labels still apply (`stores.go`). Counts come from `partitionWorkable` (`stores.go`).
+- `classifyWorkable(ctx, st, nil)` — a **nil required-fields** argument opts out of the per-repo `required_fields` policy only; blockers, the lane gate, and the reserved blocking labels still apply (`stores.go`). Counts come from `partitionWorkable` (`stores.go`).
 
 `printCrossProjectRollup` (`stores.go`):
 - Zero rows → `(no stores discovered)` and return (`stores.go`).

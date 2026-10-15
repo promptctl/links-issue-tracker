@@ -108,7 +108,9 @@ func nextStatuslineFacts(outcome NextOutcome, plain bool) statusline.Facts {
 		picked = statuslineTicketRef(o.Row.Issue)
 	case ServedPastExhaustion:
 		picked = statuslineTicketRef(o.Row.Issue)
-	case Exhausted, NoWork:
+	case ServedPastNarrowing:
+		picked = statuslineTicketRef(o.Row.Issue)
+	case Exhausted, Narrowed, NoWork:
 	default:
 		panic(fmt.Sprintf("nextStatuslineFacts: unhandled NextOutcome %T", outcome))
 	}

@@ -128,12 +128,16 @@ func ExitCode(err error) int {
 	if errors.As(err, &purge) {
 		return ExitValidation
 	}
-	// Both of the router's terminal answers share one code: the caller's
-	// question here is binary — was a ticket handed back? — and which of the two
-	// emptinesses it was is carried by the reason string and the message.
+	// All three of the router's terminal answers share one code: the caller's
+	// question here is binary — was a ticket handed back? — and which emptiness
+	// it was is carried by the reason string and the message.
 	// [LAW:no-mode-explosion]
 	var exhausted Exhausted
 	if errors.As(err, &exhausted) {
+		return ExitNoWork
+	}
+	var narrowed Narrowed
+	if errors.As(err, &narrowed) {
 		return ExitNoWork
 	}
 	var noWork NoWork

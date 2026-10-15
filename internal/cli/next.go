@@ -55,12 +55,18 @@ func nextLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
+		asked, err := filter.criteria()
+		if err != nil {
+			return err
+		}
 		// [LAW:single-enforcer] Same staleness warning, same position, as every
 		// other ordinary read command.
 		if err := printStalenessWarning(ctx, stdout, ap.Workspace, ap.Store, time.Now()); err != nil {
 			return err
 		}
-		gathered, err := gatherWorkableAnnotated(ctx, ap, filter)
+		// The whole queue, not the filtered one: routing applies the filter to
+		// what it may serve, and reads every row to decide it (see routeNext).
+		gathered, err := gatherWorkableQueue(ctx, ap)
 		if err != nil {
 			return err
 		}
@@ -68,8 +74,8 @@ func nextLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		outcome := routeNext(gathered.rows, gathered.details, gathered.epics, cc.standings, cc.self, gathered.scope.scopeFor(*all))
-		recordNextEvent(ctx, outcome, len(gathered.rows))
+		outcome := routeNext(gathered.rows, gathered.details, gathered.epics, cc.standings, cc.self, gathered.scope.scopeFor(*all), asked)
+		recordNextEvent(ctx, outcome, len(gathered.keepRows(asked).rows))
 		ap.Statusline.Record(nextStatuslineFacts(outcome, !filter.narrows() && !*all)...)
 		occasion, err := renderNextOutcome(stdout, outcome, gathered.details, cc, actor())
 		if err != nil {
@@ -79,9 +85,9 @@ func nextLeaf() appLeaf {
 	}}
 }
 
-// renderNextOutcome prints the row routeNext selected — or, for Exhausted
-// and NoWork, returns the loud diagnostic instead of printing a ticket that
-// was never picked. A claim this pick WOULD establish (EpicLane, NewLane,
+// renderNextOutcome prints the row routeNext selected — or, for Exhausted,
+// Narrowed and NoWork, returns the loud diagnostic instead of printing a ticket
+// that was never picked. A claim this pick WOULD establish (EpicLane, NewLane,
 // Dependency) is named above the row, so the commitment is visible before it
 // is made (design-docs/work-claims.md, Routing step 4); a lane already held
 // names nothing to commit — nothing at all for ServedFromClaim, and the state
@@ -120,7 +126,13 @@ func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[string]stor
 		row = o.Row
 		routes := append(o.Exhaustion.stay(), "move on to the top ready ticket outside it: "+startAdvice(o.Row, o.Lane))
 		announce = o.Exhaustion.why() + "\n" + strings.Join(routes, "\nor ") + "\n"
-	// The two terminal outcomes travel outward AS THEMSELVES. Rendering them
+	// The hidden ticket's route comes first, as the stay route does above: it
+	// is the answer the unfiltered question gets, and the row is the one this
+	// question gets.
+	case ServedPastNarrowing:
+		row = o.Row
+		announce = o.Narrowing.Error() + "\nor take the top ready ticket the filter selects, outside the work you hold: " + startAdvice(o.Row, o.Lane) + "\n"
+	// The three terminal outcomes travel outward AS THEMSELVES. Rendering them
 	// into an untyped error here would discard the very discriminator routing
 	// has just established, so both sinks — ExitCode and commandErrorReason —
 	// would fall through to "command_failed", whose remediation tells the agent
@@ -128,6 +140,8 @@ func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[string]stor
 	// workspace. [LAW:types-are-the-program] classification is carried by the
 	// type, never re-derived from the message.
 	case Exhausted:
+		return workflows.Occasion{}, o
+	case Narrowed:
 		return workflows.Occasion{}, o
 	case NoWork:
 		return workflows.Occasion{}, o
