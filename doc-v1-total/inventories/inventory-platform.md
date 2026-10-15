@@ -900,16 +900,20 @@ then `dolt version`.
 
 - Triggers: `schedule: cron '17 9 * * *'` and `workflow_dispatch`
   (`.github/workflows/nightly.yml`).
-- `permissions: contents: read, issues: write`. Concurrency group
+- `permissions: contents: read`. Concurrency group
   `nightly-full-suite`, `cancel-in-progress: false`.
-- Single job `full-suite`, `ubuntu-latest`, `timeout-minutes: 60`.
-- Steps: checkout → setup-go → install-dolt → `go build ./cmd/lit` →
-  `go test -timeout 30m ./...` (no `-short`, so `testing.Short()` is false).
-- Failure reporting step runs `if: failure() || cancelled()` — the `cancelled()` arm exists
-  because a job timeout is reported as cancelled. With `GH_TOKEN=github.token`, it
-  `gh label create nightly-failure --force --description "The scheduled full test lane is red" --color B60205`,
-  looks for an open issue with that label, and either comments on it or creates
-  `Nightly full test lane is failing` with the run URL.
+- Job `full-suite`, `ubuntu-latest`, `timeout-minutes: 60`.
+  Steps: checkout → setup-go → install-dolt → `go build ./cmd/lit` →
+  `go test -timeout 30m ./...` (no `-short`, so `testing.Short()` is false) →
+  `go run ./tools/lawtokens-sync -check` (`if: ${{ !cancelled() }}`).
+- Job `report`, `needs: full-suite`,
+  `if: ${{ always() && needs.full-suite.result != 'success' }}` (a job timeout is
+  reported as cancelled, so the condition reads the result, not `failure()`),
+  `permissions: contents: write`, `timeout-minutes: 15`. Steps: checkout
+  (`persist-credentials: false`) → `./.github/actions/report-to-lit` with label
+  `nightly-failure` and title `Nightly full test lane is failing`. The action
+  comments `Red again: <run URL>` on the open ticket carrying the label, or files an
+  urgent bug inside epic `links-ci-alarm-z6sv`, then runs `lit sync push`.
 
 ### 11.4 `.github/workflows/license-graph-audit.yml` — "License graph audit"
 

@@ -77,7 +77,7 @@ own runtime, so a full-lane run's output is the current number). The **full lane
 real work brushes go test's 10-minute per-package default — runs everything,
 and a scheduled job
 ([`.github/workflows/nightly.yml`](.github/workflows/nightly.yml)) runs it
-nightly, filing a `nightly-failure` issue when it breaks so the skipped tests
+nightly, filing an urgent `nightly-failure` lit ticket when it breaks so the skipped tests
 stay covered rather than quietly rotting. A test belongs behind
 `testing.Short()` only when its cost is the scale it generates, not the
 behavior it pins — never move a test there to make a slow test disappear.

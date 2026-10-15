@@ -217,9 +217,11 @@ Push to `master` and PRs targeting `master`; concurrency-cancelled per ref; `ubu
 
 The composite action `.github/actions/install-dolt` installs the pinned Dolt CLI v1.81.10 — used as a test-only oracle, not shipped.
 
+The composite action `.github/actions/report-to-lit` (inputs `label`, `title`, `body`, `token`) files a scheduled workflow's red run into this repository's lit backlog: it sets a global git `extraheader` from the token (embedded Dolt runs git against its own cache repository), builds lit, runs `lit init` with `LIT_DISABLE_AUTO_SYNC=1` to adopt the remote backlog, then comments `Red again: <run URL>` on the first open or in-progress ticket carrying the label, or files an urgent `--top` bug with that label and topic inside epic `links-ci-alarm-z6sv`, and finishes with `lit sync push`.
+
 ### `nightly.yml`
 
-Cron `17 9 * * *` + manual dispatch; single 60-minute job running the full suite (`go test -timeout 30m ./...`, no `-short`). On failure *or cancellation* (a job timeout reports as cancelled) it force-creates the `nightly-failure` label and either comments on the open labeled issue or creates "Nightly full test lane is failing" with the run URL.
+Cron `17 9 * * *` + manual dispatch. Job `full-suite` (60 minutes, `contents: read`) runs the full suite (`go test -timeout 30m ./...`, no `-short`) and then `go run ./tools/lawtokens-sync -check`. Job `report` (`contents: write`) runs whenever `full-suite` did not succeed, timeout and cancellation included, and calls `report-to-lit` with label `nightly-failure` and title "Nightly full test lane is failing".
 
 ### `license-graph-audit.yml`
 
