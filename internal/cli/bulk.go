@@ -8,7 +8,6 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/model"
-	"github.com/promptctl/links-issue-tracker/internal/statusline"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -178,16 +177,12 @@ func bulkCloseLeaf() appLeaf {
 		}
 		actor := resolveActor()
 		return runBulkOver(stdout, issueIDs, func(issueID string) error {
-			issue, err := ap.Store.Apply(ctx, issueID, storage.Change{
+			_, err := applyChange(ctx, ap, issueID, storage.Change{
 				Action: model.Close{Outcome: outcome},
 				Actor:  actor,
 				Reason: *reason,
 			})
-			if err != nil {
-				return err
-			}
-			ap.Statusline.Record(statusline.Invalidated{ID: issue.ID})
-			return nil
+			return err
 		})
 	}}
 }
@@ -208,12 +203,8 @@ func bulkTransitionLeaf(action model.Action) appLeafFn {
 			}
 			actor := resolveActor()
 			return runBulkOver(stdout, issueIDs, func(issueID string) error {
-				issue, err := ap.Store.Apply(ctx, issueID, storage.Change{Action: action, Actor: actor, Reason: *reason})
-				if err != nil {
-					return err
-				}
-				ap.Statusline.Record(transitionStatuslineFact(action, issue))
-				return nil
+				_, err := applyChange(ctx, ap, issueID, storage.Change{Action: action, Actor: actor, Reason: *reason})
+				return err
 			})
 		}}
 	}

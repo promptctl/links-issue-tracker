@@ -81,6 +81,10 @@ type Started struct{ Ticket Ticket }
 // nil.
 type Picked struct{ Ticket *Ticket }
 
+// Retitled says Ticket's title is now Ticket.Title, so any record naming it
+// shows that title from here on; when the record was made does not change.
+type Retitled struct{ Ticket Ticket }
+
 // Invalidated says ticket ID has left the state the file's records describe —
 // finished, closed, reopened, archived, deleted, or purged — so any record
 // naming it no longer stands.
@@ -93,6 +97,17 @@ func (s Started) apply(f File, at time.Time) File {
 
 func (p Picked) apply(f File, at time.Time) File {
 	f.Next = &Next{Ticket: p.Ticket, RecordedAt: at}
+	return f
+}
+
+func (r Retitled) apply(f File, _ time.Time) File {
+	if f.WorkingOn != nil && f.WorkingOn.Ticket.ID == r.Ticket.ID {
+		f.WorkingOn = &WorkingOn{Ticket: r.Ticket, RecordedAt: f.WorkingOn.RecordedAt}
+	}
+	if f.Next != nil && f.Next.Ticket != nil && f.Next.Ticket.ID == r.Ticket.ID {
+		ticket := r.Ticket
+		f.Next = &Next{Ticket: &ticket, RecordedAt: f.Next.RecordedAt}
+	}
 	return f
 }
 

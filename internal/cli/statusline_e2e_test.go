@@ -96,6 +96,11 @@ func TestStatuslineFileFollowsEachCheckoutsOwnWork(t *testing.T) {
 		t.Fatalf("a start in the main checkout wrote the worktree's file (stat err = %v)", err)
 	}
 
+	runCLIInDir(t, main, "update", first, "--title", "First, renamed")
+	if got := readStatusline(t, main); workingOnID(got) != first || got.WorkingOn.Ticket.Title != "First, renamed" || got.Next.Ticket.Title != "First, renamed" {
+		t.Fatalf("after a retitle: file = %+v / %+v; want both records of %s titled \"First, renamed\"", got.WorkingOn, got.Next, first)
+	}
+
 	// A narrowed next answers a different question than "what's next", so it
 	// leaves the pick alone; the worktree's next writes the worktree's file.
 	// Both find nothing, which `lit next` reports as an error exit.

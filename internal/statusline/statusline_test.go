@@ -13,7 +13,9 @@ import (
 var (
 	alpha = Ticket{ID: "t-alpha", Title: "Alpha"}
 	bravo = Ticket{ID: "t-bravo", Title: "Bravo"}
-	at    = time.Date(2026, 10, 15, 9, 30, 0, 0, time.UTC)
+	// alphaRenamed is alpha after a retitle.
+	alphaRenamed = Ticket{ID: "t-alpha", Title: "Alpha, renamed"}
+	at           = time.Date(2026, 10, 15, 9, 30, 0, 0, time.UTC)
 )
 
 func testLocation(t *testing.T) Location {
@@ -90,6 +92,21 @@ func TestWritesFoldFactsIntoTheFile(t *testing.T) {
 			want:   File{SchemaVersion: SchemaVersion, WorkingOn: working(alpha)},
 		},
 		{
+			name:   "a retitle renames every slot naming the ticket",
+			writes: [][]Fact{{Started{alpha}, Picked{&alpha}}, {Retitled{alphaRenamed}}},
+			want:   File{SchemaVersion: SchemaVersion, WorkingOn: working(alphaRenamed), Next: next(&alphaRenamed)},
+		},
+		{
+			name:   "retitling another ticket renames nothing",
+			writes: [][]Fact{{Started{alpha}, Picked{&bravo}}, {Retitled{Ticket{ID: "t-other", Title: "Other"}}}},
+			want:   File{SchemaVersion: SchemaVersion, WorkingOn: working(alpha), Next: next(&bravo)},
+		},
+		{
+			name:   "retitling leaves a recorded pick of nothing alone",
+			writes: [][]Fact{{Picked{nil}}, {Retitled{alphaRenamed}}},
+			want:   File{SchemaVersion: SchemaVersion, Next: next(nil)},
+		},
+		{
 			name:   "facts apply in the order the command learned them",
 			writes: [][]Fact{{Started{alpha}, Invalidated{alpha.ID}, Started{bravo}}},
 			want:   File{SchemaVersion: SchemaVersion, WorkingOn: working(bravo)},
@@ -105,6 +122,19 @@ func TestWritesFoldFactsIntoTheFile(t *testing.T) {
 				t.Fatalf("file = %+v\nwant %+v", got, tc.want)
 			}
 		})
+	}
+}
+
+// A retitle changes what a record shows, not when the checkout made it.
+func TestARetitleKeepsWhenTheRecordWasMade(t *testing.T) {
+	loc := testLocation(t)
+	write(t, loc, Started{alpha}, Picked{&alpha})
+	if _, err := Write(loc, Facts{Retitled{alphaRenamed}}, at.Add(time.Hour)); err != nil {
+		t.Fatalf("Write(retitle) error = %v", err)
+	}
+	got := readFile(t, loc)
+	if !got.WorkingOn.RecordedAt.Equal(at) || !got.Next.RecordedAt.Equal(at) {
+		t.Fatalf("recorded_at after a retitle = %v / %v, want both %v", got.WorkingOn.RecordedAt, got.Next.RecordedAt, at)
 	}
 }
 

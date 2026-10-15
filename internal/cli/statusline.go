@@ -1,12 +1,15 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/statusline"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -29,14 +32,34 @@ func statuslineTicket(issue model.Issue) statusline.Ticket {
 	return statusline.Ticket{ID: issue.ID, Title: issue.Title}
 }
 
-// transitionStatuslineFact is what a transition tells the statusline file. A
-// start is this checkout taking the ticket on; every other transition moves the
-// ticket out of what the file can say about it.
-func transitionStatuslineFact(action model.Action, issue model.Issue) statusline.Fact {
-	if _, started := action.(model.Start); started {
-		return statusline.Started{Ticket: statuslineTicket(issue)}
+// applyChange applies one change to a ticket and records what it tells the
+// statusline file. Every command that changes a ticket does so through here,
+// so the file hears of each change without any command remembering to tell it.
+// [LAW:single-enforcer]
+func applyChange(ctx context.Context, ap *app.App, issueID string, change storage.Change) (model.Issue, error) {
+	issue, err := ap.Store.Apply(ctx, issueID, change)
+	if err != nil {
+		return model.Issue{}, err
 	}
-	return statusline.Invalidated{ID: issue.ID}
+	ap.Statusline.Record(changeStatuslineFacts(change.Action, issue)...)
+	return issue, nil
+}
+
+// changeStatuslineFacts is what a change tells the statusline file. Every
+// change leaves the ticket with the title it now has. A start is this checkout
+// taking the ticket on; every other transition moves the ticket out of what
+// the file can say about it; a change of fields alone moves it nowhere.
+func changeStatuslineFacts(action model.Action, issue model.Issue) statusline.Facts {
+	ticket := statuslineTicket(issue)
+	facts := statusline.Facts{statusline.Retitled{Ticket: ticket}}
+	switch action.(type) {
+	case nil:
+	case model.Start:
+		facts.Record(statusline.Started{Ticket: ticket})
+	default:
+		facts.Record(statusline.Invalidated{ID: issue.ID})
+	}
+	return facts
 }
 
 // nextStatuslineFacts is what a `lit next` outcome tells the statusline file.
