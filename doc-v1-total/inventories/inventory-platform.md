@@ -117,8 +117,9 @@ to `/Users/bmf/code/links-issue-tracker`.
     `--assignee` ⇒ `UnsupportedError` naming `--by` (`internal/cli/cli.go`);
   - every other parse error (unknown flag, missing value, invalid value, bad syntax) ⇒
     `UsageError` (`internal/cli/flagset.go`).
-  - `--help` (or `pflag.ErrHelp`) prints `Usage of <cmd>:` followed by `PrintDefaults()` to
-    stdout and returns the swallowed sentinel (`internal/cli/cli.go`).
+  - `--help` or `-h` parsed as true (`--help=false` is no request) prints `Usage of <cmd>:`
+    followed by `PrintDefaults()` to stdout and returns the swallowed sentinel
+    (`internal/cli/flagset.go`).
 
 ### 2.5 Per-command bootstrap (`runWithApp` / `acquireFromWD`)
 

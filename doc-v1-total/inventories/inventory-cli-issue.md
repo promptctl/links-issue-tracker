@@ -124,9 +124,9 @@ into* one of those, the call and its observable effect are recorded here.
   (`--flag` with no value takes `defaultIfPresent`, absent takes
   `defaultIfAbsent` — `cli.go`).
 - `parseFlagSet(fs, args, stdout)` (`flagset.go`) is the single parse boundary:
-  - On `pflag.ErrHelp` it prints `"Usage of <use>:\n"` followed by
-    `PrintDefaults()` **to stdout** and returns `errHelpHandled` → exit 0
-    (`cli.go`, printer at `cli.go`).
+  - A `--help` or `-h` that parses as true prints `"Usage of <use>:\n"`
+    followed by `PrintDefaults()` **to stdout** and returns `errHelpHandled`
+    → exit 0 (`flagset.go`); `--help=false` and `-h=false` are no request.
   - A `*pflag.NotExistError` whose parsed name the leaf declared retired with
     `fs.Retire` (from `--name` or `--name=<x>`; not `--namex`, and not `-name`,
     which pflag reads as a shorthand group) → `UnsupportedError` carrying that
@@ -139,8 +139,6 @@ into* one of those, the call and its observable effect are recorded here.
     syntax — → `UsageError{Message: err.Error()}` → exit 2 (`flagset.go`).
     A leaf-position `--output` is an ordinary unknown flag here; only
     `parseGlobalArgs` maps `--output` to `UnsupportedError`.
-  - A parsed-and-changed `--help` flag also prints help and returns
-    `errHelpHandled` (`cli.go`).
 
 ### 1.7 Positional/flag splitting (`splitArgs`)
 
