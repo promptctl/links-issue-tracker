@@ -25,8 +25,8 @@ REPO_DOWNLOAD_BASE="https://github.com/promptctl/links-issue-tracker/releases/do
 REPO_LATEST_API="https://api.github.com/repos/promptctl/links-issue-tracker/releases/latest"
 
 # [LAW:one-source-of-truth] One variable names the on-disk binary across every
-# mode: from-release extraction validation, atomic rename, the stale-binary
-# scan that walks PATH, and the post-install version check. On windows the
+# mode: from-release extraction validation, the version check on the staged
+# binary, the atomic rename, and the stale-binary scan that walks PATH. On windows the
 # executable is `lit.exe` (goreleaser appends .exe for windows archives; Go
 # does the same when compiling for GOOS=windows). Detect once at script start
 # so downstream code does not branch on OS.
@@ -185,6 +185,16 @@ if [ -z "$TARGET_DIR" ]; then
 fi
 mkdir -p "$TARGET_DIR"
 
+# Every mode stages its binary at "$tmp/$BIN_NAME"; the one rename after the
+# mode dispatch installs it. The staging dir is on the SAME filesystem as
+# TARGET_DIR, so that rename is atomic (cross-FS mv is a copy+unlink): a
+# process already running the old lit keeps its inode, and nothing ever execs
+# a half-written file. Writing the build straight to "$TARGET_DIR/$BIN_NAME"
+# rewrites the file other sessions on this machine are running.
+# [LAW:single-enforcer] one install step; the modes differ only in what they stage.
+tmp="$(mktemp -d "$TARGET_DIR/.lit-install.XXXXXX")"
+trap 'rm -rf "$tmp"' EXIT
+
 # --- mode dispatch -----------------------------------------------------------
 
 case "$mode" in
@@ -229,7 +239,7 @@ case "$mode" in
         # reported at all. [LAW:one-source-of-truth]
         GOFLAGS="${GOFLAGS:+$GOFLAGS }-buildvcs=false" go build \
             -ldflags "-X ${pkg}.Version=${ver} -X ${pkg}.Commit=${LIT_BUILD_COMMIT} -X ${pkg}.Date=${LIT_BUILD_DATE} -X ${pkg}.Origin=${LIT_BUILD_ORIGIN}" \
-            -o "$TARGET_DIR/$BIN_NAME" ./cmd/lit
+            -o "$tmp/$BIN_NAME" ./cmd/lit
         ;;
     release|latest)
         # curl is the single transport for release-download mode. Probe it
@@ -325,11 +335,6 @@ case "$mode" in
         archive="lit_${archive_version}_${os}_${arch}.${ext}"
         url="${REPO_DOWNLOAD_BASE}/${release_tag}/${archive}"
         checksums_url="${REPO_DOWNLOAD_BASE}/${release_tag}/checksums.txt"
-
-        # Temp dir on the SAME filesystem as TARGET_DIR so the final rename
-        # is genuinely atomic (cross-FS mv is a copy+unlink, not atomic).
-        tmp="$(mktemp -d "$TARGET_DIR/.lit-install.XXXXXX")"
-        trap 'rm -rf "$tmp"' EXIT
 
         echo "Downloading $url ..."
         curl -fsSL -o "$tmp/$archive" "$url"
@@ -444,20 +449,24 @@ case "$mode" in
         fi
         # Zip's mode bits aren't reliably preserved (the windows path uses
         # `unzip`, and even POSIX tar archives can lose +x under restrictive
-        # umask). Set the executable bit explicitly before validating so a
-        # successful install always yields a runnable binary. mingw/msys
-        # bash treats `chmod +x` on `.exe` as a no-op without erroring; `-x`
-        # on `.exe` returns true regardless of mode bits.
+        # umask), so set the executable bit before the shared version check
+        # below runs the binary. mingw/msys bash treats `chmod +x` on `.exe`
+        # as a no-op without erroring.
         chmod +x "$tmp/$BIN_NAME"
-        if [ ! -x "$tmp/$BIN_NAME" ]; then
-            echo "error: extracted '$BIN_NAME' is not executable" >&2
-            exit 1
-        fi
-
-        # Atomic rename within $TARGET_DIR (mktemp put us on the same FS).
-        mv -f "$tmp/$BIN_NAME" "$TARGET_DIR/$BIN_NAME"
         ;;
 esac
+
+# The staged binary must run before it replaces the installed one: a build or
+# download that cannot report its own version leaves any working lit in place,
+# and the script says nothing was installed after the binary's own error. One
+# message, true on a first install and on an upgrade. Running it is also the
+# one executability check every mode shares. [LAW:no-silent-failure]
+# [LAW:single-enforcer]
+if ! staged_version="$("$tmp/$BIN_NAME" version)"; then
+    echo "error: the newly staged lit failed to run 'lit version'; nothing was installed at $TARGET_DIR/$BIN_NAME" >&2
+    exit 1
+fi
+mv -f "$tmp/$BIN_NAME" "$TARGET_DIR/$BIN_NAME"
 
 # Stale `lnks` symlink/binary from previous installs is removed; `lit` is the
 # only entrypoint.
@@ -486,7 +495,7 @@ for dir in "${PATH_ENTRIES[@]}"; do
 done
 
 echo "Installed lit -> $TARGET_DIR/$BIN_NAME"
-"$TARGET_DIR/$BIN_NAME" version 2>/dev/null || true
+echo "$staged_version"
 if [ "${#STALE[@]}" -gt 0 ]; then
     echo
     echo "WARNING: other 'lit' binaries found on PATH that were NOT updated:"

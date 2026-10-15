@@ -229,8 +229,10 @@ bash scripts/install.sh --latest-release
 ```
 
 Release-mode downloads the per-platform archive, fetches `checksums.txt`,
-verifies SHA256, extracts, and atomically renames into place. Same
-target-directory resolution and stale-binary detector across all modes.
+verifies SHA256, and extracts. Every mode stages the binary in a temp dir
+beside the target, runs its `lit version`, and only then atomically renames
+it into place, so a binary that cannot run never replaces the installed one.
+Same target-directory resolution and stale-binary detector across all modes.
 
 ## Open follow-ups
 
