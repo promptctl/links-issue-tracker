@@ -367,6 +367,17 @@ func TestAHardExitedInvocationEndsAsInterrupted(t *testing.T) {
 	}
 }
 
+// Bare `lit upgrade` on a workspace ahead of every release is recorded as the
+// too-old binary's refusal, not as a refusal of its command.
+func TestABareUpgradeAheadOfLatestEndsAsSchemaAhead(t *testing.T) {
+	at := time.Now()
+	err := workspaceAheadOfLatestError()
+	end := invocationEnd(at, err, nil)
+	if end.Outcome != telemetry.OutcomeError || end.ExitCode != ExitValidation || end.Reason != string(reasonWorkspaceSchemaAhead) || end.Error != err.Error() {
+		t.Errorf("invocationEnd(workspace ahead of latest) = %+v, want an error at exit %d with reason %s", end, ExitValidation, reasonWorkspaceSchemaAhead)
+	}
+}
+
 // An invocation that panics is recorded as a panic, with the exit status the
 // Go runtime gives a process that dies of one.
 func TestAPanickingInvocationEndsAsAPanic(t *testing.T) {

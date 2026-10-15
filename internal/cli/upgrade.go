@@ -66,6 +66,34 @@ func (*UpgradeTargetBehindError) RefusesCommand() {}
 
 var _ model.Refusal = (*UpgradeTargetBehindError)(nil)
 
+// WorkspaceAheadOfLatestError reports that bare `lit upgrade` resolved the
+// latest published release and its schema support ends below a workspace this
+// binary cannot open either: the workspace was written by a lit build newer
+// than that release. UpgradeTargetBehindError's remedy, a newer target, is not
+// one here — the target already was the latest — so this names the ways out
+// that exist: the build that wrote the workspace, or the lossy rollback the
+// schema-ahead refusal carries.
+//
+// It is not a model.Refusal: no change to the command clears it. Unwrap yields
+// the schema-ahead refusal it stands on, because the condition is that one —
+// this lit is too old for the workspace, and the act it asks for is a
+// different lit — so it exits and classifies as that refusal does.
+// [LAW:one-type-per-behavior]
+type WorkspaceAheadOfLatestError struct {
+	Latest    string
+	LatestMax int64
+	Ahead     *store.UnsupportedSchemaVersionError
+}
+
+func (e *WorkspaceAheadOfLatestError) Error() string {
+	return fmt.Sprintf(
+		"cannot upgrade: the latest published release, %s, supports only through schema v%d, but this workspace is at v%d — it was written by a lit build newer than that release, and this binary cannot open it either\n\nto operate this workspace, run the lit build that wrote it; once a release whose schema support reaches v%d is published, `lit upgrade` installs it.\n\n%s",
+		e.Latest, e.LatestMax, e.Ahead.WorkspaceVersion, e.Ahead.WorkspaceVersion, e.Ahead.RollbackAdvice(),
+	)
+}
+
+func (e *WorkspaceAheadOfLatestError) Unwrap() error { return e.Ahead }
+
 // upgradeLeaf composes the release pipeline (internal/release) into the
 // forward-direction counterpart of `lit downgrade`. Where downgrade must reverse
 // the schema itself before installing the older binary — because only the
@@ -141,15 +169,16 @@ type upgradeResolver interface {
 }
 
 // workspaceSchema is what upgrade learns about the target workspace before it
-// decides: the applied schema version, and whether THIS binary could open the
-// workspace to read it. Openable is the discriminator the backward-move
-// remediation turns on — false means the version was recovered from a
-// schema-ahead refusal, so a reverse (`lit downgrade`) cannot run here.
-// [LAW:types-are-the-program] the two facts travel together so no consumer can
+// decides: the applied schema version, and the schema-ahead refusal THIS
+// binary's open returned, nil when it opened the workspace cleanly. Ahead is
+// the discriminator the backward-move remediation turns on — non-nil means a
+// reverse (`lit downgrade`) cannot run here — and it carries the rollback
+// snapshot that refusal offers.
+// [LAW:types-are-the-program] the facts travel together so no consumer can
 // hold a version without also knowing whether it came from a clean open.
 type workspaceSchema struct {
 	AppliedVersion int64
-	Openable       bool
+	Ahead          *store.UnsupportedSchemaVersionError
 }
 
 // schemaReader is the schema-side dependency upgrade's work reads to make the
@@ -168,7 +197,7 @@ type schemaReader interface {
 // workspace whose schema is ahead of this binary — because that refusal
 // (UnsupportedSchemaVersionError) is the very message that sent the user here and
 // it carries the workspace version as data. Reading the version off the refusal
-// (and marking the workspace not-Openable) is what stops `lit upgrade` from
+// (and keeping the refusal as Ahead) is what stops `lit upgrade` from
 // dead-ending on the store it cannot open. Any OTHER open failure propagates.
 // [LAW:no-silent-failure]
 // [LAW:dataflow-not-control-flow] the applied version is handshake DATA taken
@@ -181,10 +210,7 @@ type workspaceSchemaReader struct {
 func (r workspaceSchemaReader) ReadWorkspaceSchema(ctx context.Context) (schema workspaceSchema, err error) {
 	st, err := engine.Open(ctx, engine.ReadOnly, r.ws.DatabasePath, r.ws.WorkspaceID)
 	if err != nil {
-		if v, ok := appliedVersionFromOpenErr(err); ok {
-			return workspaceSchema{AppliedVersion: v, Openable: false}, nil
-		}
-		return workspaceSchema{}, err
+		return workspaceSchemaFromOpenErr(err)
 	}
 	// [LAW:no-silent-failure] Store.Close releases the workspace shared lock; a
 	// discarded close error could leave the workspace pinned against a later
@@ -203,22 +229,22 @@ func (r workspaceSchemaReader) ReadWorkspaceSchema(ctx context.Context) (schema 
 	if err != nil {
 		return workspaceSchema{}, err
 	}
-	return workspaceSchema{AppliedVersion: version, Openable: true}, nil
+	return workspaceSchema{AppliedVersion: version}, nil
 }
 
-// appliedVersionFromOpenErr recovers the workspace's applied schema version from
-// a store-open failure when — and only when — that failure is the schema-ahead
-// refusal. UnsupportedSchemaVersionError.WorkspaceVersion IS the applied version,
-// stated by the binary that could not operate it, so upgrade reads it and moves
-// on. handled=false means the error is something else entirely (a genuine open
-// failure the caller must surface). [LAW:types-are-the-program] the typed refusal
-// carries the datum; there is no string parsing of the message.
-func appliedVersionFromOpenErr(err error) (version int64, handled bool) {
+// workspaceSchemaFromOpenErr recovers the workspace schema from a store-open
+// failure when — and only when — that failure is the schema-ahead refusal.
+// UnsupportedSchemaVersionError.WorkspaceVersion IS the applied version, stated
+// by the binary that could not operate it, so upgrade reads it and moves on. Any
+// other failure is a genuine open failure, returned for the caller to surface.
+// [LAW:types-are-the-program] the typed refusal carries the datum; there is no
+// string parsing of the message.
+func workspaceSchemaFromOpenErr(err error) (workspaceSchema, error) {
 	var ahead *store.UnsupportedSchemaVersionError
 	if errors.As(err, &ahead) {
-		return ahead.WorkspaceVersion, true
+		return workspaceSchema{AppliedVersion: ahead.WorkspaceVersion, Ahead: ahead}, nil
 	}
-	return 0, false
+	return workspaceSchema{}, err
 }
 
 // runUpgradeWith is the body parameterised over the typed dependencies so tests
@@ -232,8 +258,10 @@ func appliedVersionFromOpenErr(err error) (version int64, handled bool) {
 //     omitted — the latest published release, from the release feed.
 //  2. Resolve the tag through the release manifest → typed Target.
 //  3. Read the workspace schema; refuse a target whose schema support ends below
-//     it (a backward move — UpgradeTargetBehindError names the right remedy from
-//     whether this binary can open the workspace: a reverse, or a newer target).
+//     it. UpgradeTargetBehindError names the remedy from whether this binary can
+//     open the workspace: a reverse, or a newer target. When it cannot and the
+//     target was already the latest, no newer target is on offer, and
+//     WorkspaceAheadOfLatestError names the writer build and the rollback.
 //  4. An unpinned invocation that is already on the resolved release keeps it:
 //     a friendly no-op naming the version. A pinned --to always installs — the
 //     explicit tag is a command (and the reinstall path for a damaged binary).
@@ -281,18 +309,22 @@ func upgradeLeafWith(
 		// [LAW:no-silent-failure] Read the workspace schema BEFORE installing so a
 		// backward-move request is refused without having overwritten the binary.
 		// A target whose schema support ends below the workspace could not open it,
-		// so installing it would strand the user; the refusal names the right remedy
-		// (downgrade vs. a newer target) from whether this binary can open it.
+		// so installing it would strand the user; the refusal names the remedy
+		// that exists, which turns on whether this binary can open the workspace
+		// and whether a target newer than this one could have been asked for.
 		ws, err := scope.schema.ReadWorkspaceSchema(ctx)
 		if err != nil {
 			return fmt.Errorf("upgrade: read workspace schema version: %w", err)
 		}
 		if target.Manifest.Schema.Max < ws.AppliedVersion {
+			if !pinned && ws.Ahead != nil {
+				return &WorkspaceAheadOfLatestError{Latest: tag, LatestMax: target.Manifest.Schema.Max, Ahead: ws.Ahead}
+			}
 			return &UpgradeTargetBehindError{
 				Current:           ws.AppliedVersion,
 				Target:            target.Manifest.Schema.Max,
 				Tag:               tag,
-				WorkspaceOpenable: ws.Openable,
+				WorkspaceOpenable: ws.Ahead == nil,
 			}
 		}
 

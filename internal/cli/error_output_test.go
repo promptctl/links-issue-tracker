@@ -191,6 +191,9 @@ func TestCommandErrorReason(t *testing.T) {
 		{"workspace schema ahead wrapped", fmt.Errorf("open store: %w", schemaAheadError()), "workspace_schema_ahead"},
 		{"migration quarantined wrapped", fmt.Errorf("open store: %w", quarantineBlockError()), "migration_quarantined"},
 		{"upgrade target behind wrapped", fmt.Errorf("upgrade: %w", upgradeTargetBehindError()), "validation_refused"},
+		// Bare upgrade's target already was the latest, so no --to clears it:
+		// it is the too-old binary's refusal, not one of its command.
+		{"workspace ahead of latest wrapped", fmt.Errorf("upgrade: %w", workspaceAheadOfLatestError()), "workspace_schema_ahead"},
 		// A stat that failed for any reason but ENOENT is an unclassified fault,
 		// and the retry-then-doctor default is the right advice for it. The
 		// workspace_not_initialized arm must not widen to it.
@@ -441,10 +444,17 @@ func quarantineBlockError() *store.QuarantineBlockError {
 	return &store.QuarantineBlockError{Version: 9, Name: "00009_x.sql", ErrorText: "simulated failure"}
 }
 
-// upgradeTargetBehindError is `lit upgrade` against that same workspace: the
-// latest release stops at schema 5, and this binary cannot open the workspace.
+// upgradeTargetBehindError is `lit upgrade --to v0.14.0` against that same
+// workspace: the pinned target stops at schema 5, and this binary cannot open
+// the workspace.
 func upgradeTargetBehindError() *UpgradeTargetBehindError {
 	return &UpgradeTargetBehindError{Current: 999, Target: 5, Tag: "v0.14.0", WorkspaceOpenable: false}
+}
+
+// workspaceAheadOfLatestError is bare `lit upgrade` against that same
+// workspace: the latest release, v0.14.0, stops at schema 5.
+func workspaceAheadOfLatestError() *WorkspaceAheadOfLatestError {
+	return &WorkspaceAheadOfLatestError{Latest: "v0.14.0", LatestMax: 5, Ahead: schemaAheadError()}
 }
 
 // TestWriteCommandErrorSchemaVersionRefusals pins the surface an agent reads
@@ -476,6 +486,9 @@ func TestWriteCommandErrorSchemaVersionRefusals(t *testing.T) {
 		},
 		// The message names a newer target, which is the command adjusted.
 		{"upgrade target behind", upgradeTargetBehindError(), "validation_refused", "adjust the command to satisfy it", "supported path"},
+		// No command reaches past the latest release; the ways out the message
+		// names are a different lit and a lossy rollback, both the user's call.
+		{"workspace ahead of latest", workspaceAheadOfLatestError(), "workspace_schema_ahead", "take such a path only when the user directs it", "adjust the command"},
 	}
 	for _, tc := range tests {
 		tc := tc

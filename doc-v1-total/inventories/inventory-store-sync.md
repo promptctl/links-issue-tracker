@@ -958,7 +958,7 @@ Tests: `TestPreGooseAdoptionStampsWithoutRerunningBaseline` (`migration_runner_t
 2. If `len(MissingBaseline) > 0`: `"; the live schema is also missing baseline shape: %s"` (comma-joined).
 3. `")"`.
 4. Always: `"\n\nto operate this workspace, install a lit that supports schema version %d:\n  lit upgrade\n\n(this is the supported path — `lit upgrade` runs even from this too-old binary, installs the latest release, and refuses a release that cannot operate this workspace.)"` (`WorkspaceVersion`).
-5. If `SnapshotName != ""` → `"\n\nif you are stuck and need to roll back this workspace to match this binary:\n  lit snapshots restore %s\n\nthis is a LOSSY recovery — any data written under the newer binary will be discarded."`; else → `"\n\nno pre-upgrade snapshot available; lossy rollback is not possible from this workspace."`.
+5. `"\n\n"` + `RollbackAdvice()` (`migration_runner.go`), which `cli.WorkspaceAheadOfLatestError` also renders: if `SnapshotName != ""` → `"if you are stuck and need to roll back this workspace to match this binary:\n  lit snapshots restore %s\n\nthis is a LOSSY recovery — any data written under the newer binary will be discarded."`; else → `"no pre-upgrade snapshot available; lossy rollback is not possible from this workspace."`.
 Tests: `TestUnsupportedSchemaVersionMessageShape` (`migration_runner_test.go`), `TestRefusalSurfacesRecoveryDataFromWorkspace`.
 
 ### 8.14 The transient schema lift

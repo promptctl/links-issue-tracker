@@ -163,14 +163,22 @@ func (e *UnsupportedSchemaVersionError) Error() string {
 	fmt.Fprintf(&b,
 		"\n\nto operate this workspace, install a lit that supports schema version %d:\n  lit upgrade\n\n(this is the supported path — `lit upgrade` runs even from this too-old binary, installs the latest release, and refuses a release that cannot operate this workspace.)",
 		e.WorkspaceVersion)
-	if e.SnapshotName != "" {
-		fmt.Fprintf(&b,
-			"\n\nif you are stuck and need to roll back this workspace to match this binary:\n  lit snapshots restore %s\n\nthis is a LOSSY recovery — any data written under the newer binary will be discarded.",
-			e.SnapshotName)
-	} else {
-		b.WriteString("\n\nno pre-upgrade snapshot available; lossy rollback is not possible from this workspace.")
-	}
+	b.WriteString("\n\n" + e.RollbackAdvice())
 	return b.String()
+}
+
+// RollbackAdvice is the lossy way out of this refusal: the snapshot to restore
+// when one exists, or the statement that none does. A refusal that stands on
+// this one — bare `lit upgrade` finding even the latest release too old —
+// offers the same rollback, so it renders this rather than a second wording.
+// [LAW:one-source-of-truth]
+func (e *UnsupportedSchemaVersionError) RollbackAdvice() string {
+	if e.SnapshotName == "" {
+		return "no pre-upgrade snapshot available; lossy rollback is not possible from this workspace."
+	}
+	return fmt.Sprintf(
+		"if you are stuck and need to roll back this workspace to match this binary:\n  lit snapshots restore %s\n\nthis is a LOSSY recovery — any data written under the newer binary will be discarded.",
+		e.SnapshotName)
 }
 
 // VersionContentMismatchError is returned by verifyAppliedVersionsMatchRegistry

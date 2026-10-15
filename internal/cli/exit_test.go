@@ -48,6 +48,7 @@ func TestExitCodeMappings(t *testing.T) {
 		// model.Refusal, which is how store's downgrade refusals reach it too.
 		{name: "workspace schema ahead wrapped", err: fmt.Errorf("open store: %w", schemaAheadError()), want: ExitValidation},
 		{name: "upgrade target behind wrapped", err: fmt.Errorf("upgrade: %w", upgradeTargetBehindError()), want: ExitValidation},
+		{name: "workspace ahead of latest wrapped", err: fmt.Errorf("upgrade: %w", workspaceAheadOfLatestError()), want: ExitValidation},
 		// A prefix lit cannot settle on is a self-fixable precondition, not
 		// "lit is broken" — one code for both would leave a script to tell
 		// them apart by parsing the English.
