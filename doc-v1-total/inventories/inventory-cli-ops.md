@@ -21,9 +21,9 @@ data — described as assets, not as documentation of behavior).
 
 ### 0.2 Flag set semantics (applies to every command below)
 
-- `internal/cli/cli.go` `newCobraFlagSet(use)` builds a cobra command with a default `--help` flag, output discarded.
+- `internal/cli/cli.go` `newCobraFlagSet(use)` builds a cobra command that declares its own `-h`/`--help` bool flag, output discarded.
 - `internal/cli/cli.go` `parseFlagSet`:
-  - `--help` → prints `Usage of <use>:` plus `PrintDefaults()` to stdout, returns `errHelpHandled` (exit 0) — `cli.go`.
+  - `--help` or `-h` parsed as true (`--help=false` is no request) → prints `Usage of <use>:` plus `PrintDefaults()` to stdout, returns `errHelpHandled` (exit 0) — `flagset.go`.
   - A flag the leaf declared retired with `fs.Retire` → `UnsupportedError` carrying the leaf's sentence (exit 3): `next`'s `--continue` → `UnsupportedError{Message: "--continue is retired; claim routing already keeps \`lit next\` in your checkout's own epic first — run \`lit next\` with no flag"}` (exit 3) — `flagset.go`.
   - Every other parse error (unknown flag, missing value, invalid value, bad syntax) → `UsageError` (exit 2) — `flagset.go`.
 - `internal/cli/cli.go` `StringOptional(name, defaultIfPresent, defaultIfAbsent, usage)` — used only by `quickstart --eject`.

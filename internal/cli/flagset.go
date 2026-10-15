@@ -57,9 +57,11 @@ func newCobraFlagSet(use string) *cobraFlagSet {
 	// describe itself by its family: `rank set` advertising "help for rank",
 	// `dep add` "help for dep". A leaf's name here is its whole invocation path,
 	// which is what the caller typed and what the surrounding "Usage of rank
-	// set:" line already says. Unlike the Bools below it accepts a repeat:
-	// rewriteHelpCommand appends one to whatever the caller typed, so `lit help
-	// ls --help` reaches the leaf holding two.
+	// set:" line already says.
+	// [LAW:no-silent-failure] exception: unlike the Bools below it accepts a
+	// repeat, keeping the last value, because rewriteHelpCommand adds one to
+	// whatever the caller typed, so `lit help ls --help` reaches the leaf
+	// holding two. The root's help flag accepts a repeat the same way.
 	help := cmd.Flags().BoolP("help", "h", false, "help for "+use)
 	cmd.SetOut(io.Discard)
 	cmd.SetErr(io.Discard)

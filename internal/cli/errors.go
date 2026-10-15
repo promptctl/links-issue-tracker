@@ -67,7 +67,7 @@ func (e RetiredCommandError) Error() string {
 }
 
 // HelpRequestedError signals that the caller asked a command family for help
-// (-h/--help as the first argument). It is an answer, not a failure: like
+// (a first argument that parses as a true -h/--help, per isHelpFlag). It is an answer, not a failure: like
 // pflag.ErrHelp it travels the error channel only because that is the channel
 // resolve has, and Run — the seam that owns stdout — writes the carried page
 // and maps it to success before any error sink sees it.

@@ -117,8 +117,8 @@ into* one of those, the call and its observable effect are recorded here.
 
 ### 1.6 Per-command flag parsing (`cobraFlagSet`)
 
-- `newCobraFlagSet(use)` builds a throwaway cobra command with a default `--help`
-  flag installed and all output discarded (`cli.go`).
+- `newCobraFlagSet(use)` builds a throwaway cobra command that declares its own
+  `-h`/`--help` bool flag, with all output discarded (`flagset.go`).
 - Registration helpers: `String`, `Bool`, `Int` (`cli.go`), `StringArray`
   (repeatable, never comma-split — `cli.go`), `StringOptional`
   (`--flag` with no value takes `defaultIfPresent`, absent takes

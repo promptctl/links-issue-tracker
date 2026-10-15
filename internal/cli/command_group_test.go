@@ -197,9 +197,9 @@ func TestLeafHelpAnswersWithoutAcquiringResources(t *testing.T) {
 // `--help`, and `--help=false` is no request at all. Outside a repo nothing can
 // run, which tells "answered help" (nil, the page) apart from "did not" (an
 // error, nothing on stdout); a leaf's `--help=false` is pinned to the workspace
-// refusal, which only running the listing can produce. `ls` stands for every
-// leaf, since all of them parse through parseFlagSet over the set
-// newCobraFlagSet declared; the groups come from the registry.
+// refusal, which only running the listing can produce. The true spellings are
+// asked of every leaf and group in the registry; the false ones run the command,
+// so `ls` stands for the leaves there rather than running every one.
 // [LAW:behavior-not-structure]
 func TestHelpFlagFollowsItsValue(t *testing.T) {
 	prevWD, err := os.Getwd()
@@ -220,16 +220,28 @@ func TestHelpFlagFollowsItsValue(t *testing.T) {
 		return append(append([]string{}, path...), flag)
 	}
 
-	for _, path := range append([][]string{{"ls"}}, commandGroupPaths()...) {
+	pageOf := func(path []string) string {
 		page, err := run(with(path, "--help")...)
 		if err != nil || page == "" {
 			t.Fatalf("Run(%v) = (err %v, stdout %q), want the help page at success", with(path, "--help"), err, page)
 		}
+		return page
+	}
+
+	leaves, groups := commandLeafPaths(), commandGroupPaths()
+	if len(leaves) == 0 || len(groups) == 0 {
+		t.Fatalf("registry advertises %d leaves and %d groups; the test would assert nothing", len(leaves), len(groups))
+	}
+	for _, path := range append(leaves, groups...) {
+		page := pageOf(path)
 		for _, flag := range []string{"-h", "--help=true", "-h=true"} {
 			if got, err := run(with(path, flag)...); err != nil || got != page {
 				t.Errorf("Run(%v) = (err %v, stdout %q), want the page `--help` answers: %q", with(path, flag), err, got, page)
 			}
 		}
+	}
+
+	for _, path := range append([][]string{{"ls"}}, groups...) {
 		for _, flag := range []string{"--help=false", "-h=false"} {
 			if got, err := run(with(path, flag)...); err == nil || got != "" {
 				t.Errorf("Run(%v) = (err %v, stdout %q), want no help answered: an error and nothing on stdout", with(path, flag), err, got)
@@ -241,12 +253,13 @@ func TestHelpFlagFollowsItsValue(t *testing.T) {
 	if _, err := run("ls", "--help=false"); !errors.As(err, &outside) {
 		t.Errorf("Run([ls --help=false]) error = %v, want the listing run: OutsideWorkspaceError", err)
 	}
-	// `lit help` appends its own --help to the caller's tokens, so a leaf must
-	// answer a second help flag rather than refuse it.
-	page, _ := run("ls", "--help")
-	for _, flag := range []string{"--help", "-h"} {
-		if got, err := run("help", "ls", flag); err != nil || got != page {
-			t.Errorf("Run([help ls %s]) = (err %v, stdout %q), want the page `ls --help` answers", flag, err, got)
+	// `lit help` adds its own --help to the caller's tokens, ahead of any `--`
+	// terminator, so a leaf must answer a second help flag rather than refuse it,
+	// and a terminator must not turn the added one into a positional.
+	page := pageOf([]string{"ls"})
+	for _, args := range [][]string{{"help", "ls", "--help"}, {"help", "ls", "-h"}, {"help", "ls", "--", "x"}} {
+		if got, err := run(args...); err != nil || got != page {
+			t.Errorf("Run(%v) = (err %v, stdout %q), want the page `ls --help` answers", args, err, got)
 		}
 	}
 }
