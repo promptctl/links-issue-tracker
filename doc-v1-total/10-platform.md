@@ -80,11 +80,6 @@ Defaults set in `Load` (`config.go`):
 
 | Key | Type | Default | Validation |
 |---|---|---|---|
-| `logging.verbose` | bool | `false` | |
-| `logging.file` | string | `""` | |
-| `init.install_hooks` | bool | `true` | |
-| `init.install_agents` | bool | `true` | |
-| `migration.auto_apply` | bool | `false` | |
 | `ready.required_fields` | []string | `[]` | also fed by legacy top-level `required_fields` |
 | `quickstart.soil_mode` | bool | `false` | |
 | `snapshot.retention_budget` | int | `5` | must be > 0 or `Load` fails (`config.go`) |
