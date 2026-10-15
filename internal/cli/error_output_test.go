@@ -29,6 +29,7 @@ var reasonCodes = map[commandReason]int{
 	"corruption_detected":       7,
 	"entity_not_found":          4,
 	"merge_conflict":            5,
+	"migration_quarantined":     3,
 	"no_ready_work":             6,
 	"outside_git_workspace":     3,
 	"owner_approval_required":   5,
@@ -188,6 +189,7 @@ func TestCommandErrorReason(t *testing.T) {
 		// are model.Refusal and take validation_refused.
 		{"workspace schema ahead", schemaAheadError(), "workspace_schema_ahead"},
 		{"workspace schema ahead wrapped", fmt.Errorf("open store: %w", schemaAheadError()), "workspace_schema_ahead"},
+		{"migration quarantined wrapped", fmt.Errorf("open store: %w", &store.QuarantineBlockError{Version: 9, Name: "00009_x.sql", ErrorText: "simulated failure"}), "migration_quarantined"},
 		{"upgrade target behind wrapped", fmt.Errorf("upgrade: %w", upgradeTargetBehindError()), "validation_refused"},
 		// A stat that failed for any reason but ENOENT is an unclassified fault,
 		// and the retry-then-doctor default is the right advice for it. The
@@ -459,6 +461,13 @@ func TestWriteCommandErrorSchemaVersionRefusals(t *testing.T) {
 		// Both paths the message names change more than this command, so the
 		// agent is told to wait for the user rather than take either.
 		{"workspace schema ahead", schemaAheadError(), "workspace_schema_ahead", "take such a path only when the user directs it", "adjust the command"},
+		// Same shape: the command is not what is wrong, and both ways out the
+		// message names change more than it, so neither is the agent's to take.
+		{
+			"migration quarantined",
+			&store.QuarantineBlockError{Version: 9, Name: "00009_x.sql", ErrorText: "simulated failure"},
+			"migration_quarantined", "take either path only when the user directs it", "adjust the command",
+		},
 		// The message names a newer target, which is the command adjusted.
 		{"upgrade target behind", upgradeTargetBehindError(), "validation_refused", "adjust the command to satisfy it", "supported path"},
 	}

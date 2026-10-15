@@ -170,6 +170,13 @@ func ExitCode(err error) int {
 	if errors.As(err, &schemaAhead) {
 		return ExitValidation
 	}
+	// A quarantined migration is the same kind of precondition: no retry
+	// clears it, and the act it asks for — clear the quarantine or restore a
+	// snapshot — is carried by the reason. [LAW:no-mode-explosion]
+	var quarantined *store.QuarantineBlockError
+	if errors.As(err, &quarantined) {
+		return ExitValidation
+	}
 	// Not ExitGeneric, which also means "lit is broken": a prefix lit cannot
 	// settle on is a self-fixable precondition, and under one code a script
 	// could only tell the two apart by parsing the English.

@@ -34,7 +34,7 @@ Exit codes are a contract, not just 0/1:
 | 0 | Success |
 | 1 | Generic failure |
 | 2 | Usage error (bad arguments or flags) |
-| 3 | Validation error (missing required value, unsupported value, an upgrade or downgrade target on the wrong side of the workspace's schema), or the environment is not ready for lit (outside a git repository/worktree, inside one where `lit init` has never run, or a workspace whose schema is newer than this `lit` supports) |
+| 3 | Validation error (missing required value, unsupported value, an upgrade or downgrade target on the wrong side of the workspace's schema), or the environment is not ready for lit (outside a git repository/worktree, inside one where `lit init` has never run, a workspace whose schema is newer than this `lit` supports, or a workspace whose pending migration is quarantined after a failed attempt) |
 | 4 | Issue or resource not found |
 | 5 | Conflict (e.g. sync merge conflict) |
 | 6 | Nothing to hand back (`lit next` had no ticket for you), or nothing to do (the state the command asked for already holds) |
@@ -42,8 +42,9 @@ Exit codes are a contract, not just 0/1:
 
 Code 3 means the command as issued, or the place it was issued, cannot succeed
 unchanged: a value lit does not accept, a working directory that is not a git
-repository/worktree, one where `lit init` has never run, or a workspace whose schema is
-newer than the installed `lit` supports. Running the same command
+repository/worktree, one where `lit init` has never run, a workspace whose schema is
+newer than the installed `lit` supports, or a workspace whose pending migration is
+quarantined after a failed attempt. Running the same command
 again without changing something reproduces the same refusal.
 
 A failed command's first stderr line carries the code and a reason:
@@ -74,6 +75,7 @@ the code it arrives on:
 | `outside_git_workspace` | 3 | The working directory is not in a git repository/worktree |
 | `workspace_not_initialized` | 3 | The repository has no lit workspace (`lit init` has never run) |
 | `workspace_schema_ahead` | 3 | The workspace's schema is newer than this `lit` supports |
+| `migration_quarantined` | 3 | A migration this workspace has pending failed on an earlier run and is quarantined; the message names both ways to recover |
 | `entity_not_found` | 4 | The named issue or resource does not exist |
 | `version_not_found` | 4 | `lit history --version` named a version past the ones the issue's history records |
 | `merge_conflict` | 5 | A sync merge conflict |
