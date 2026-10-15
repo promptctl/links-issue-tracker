@@ -693,7 +693,7 @@ Three modes, one target-resolution rule (`scripts/install.sh`):
     (`error: extracted '<bin>' is a symlink; archive rejected`), require a regular
     file, then `chmod +x`.
 - **Install, every mode**: runs `"$tmp/$BIN_NAME" version`, capturing its stdout; if it fails,
-  prints `error: the newly staged lit failed to run 'lit version'; <target> was left unchanged`
+  prints `error: the newly staged lit failed to run 'lit version'; nothing was installed at <target>`
   and exits 1, leaving the installed binary in place. Otherwise
   `mv -f "$tmp/$BIN_NAME" "$TARGET_DIR/$BIN_NAME"`.
 - Post-install, unconditional: removes any stale `lnks`/`lnks.exe` in the target

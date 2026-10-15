@@ -457,12 +457,13 @@ case "$mode" in
 esac
 
 # The staged binary must run before it replaces the installed one: a build or
-# download that cannot report its own version leaves the working lit in place,
-# and the script says so after the binary's own error. Running it is also the
+# download that cannot report its own version leaves any working lit in place,
+# and the script says nothing was installed after the binary's own error. One
+# message, true on a first install and on an upgrade. Running it is also the
 # one executability check every mode shares. [LAW:no-silent-failure]
 # [LAW:single-enforcer]
 if ! staged_version="$("$tmp/$BIN_NAME" version)"; then
-    echo "error: the newly staged lit failed to run 'lit version'; $TARGET_DIR/$BIN_NAME was left unchanged" >&2
+    echo "error: the newly staged lit failed to run 'lit version'; nothing was installed at $TARGET_DIR/$BIN_NAME" >&2
     exit 1
 fi
 mv -f "$tmp/$BIN_NAME" "$TARGET_DIR/$BIN_NAME"

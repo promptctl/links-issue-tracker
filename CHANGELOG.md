@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `scripts/install.sh` (and `just install`) built from source straight into the installed `lit`, rewriting in place a file that other lit commands on the machine could be running at that moment. Every mode now puts the new binary in a temporary directory beside the installed one, runs its `lit version`, and only then renames it over the old one. The `--from-release` and `--latest-release` modes already renamed, but they installed a binary whose `lit version` failed and ignored the error. A binary that cannot run now leaves the installed `lit` untouched: the script prints the binary's error, names the `lit` it left in place, and exits 1. (links-unfiled-fc79.pm2v)
+- `scripts/install.sh` (and `just install`) built from source straight into the installed `lit`, rewriting in place a file that other lit commands on the machine could be running at that moment. Every mode now puts the new binary in a temporary directory beside the installed one, runs its `lit version`, and only then renames it over the old one. The `--from-release` and `--latest-release` modes already renamed, but they installed a binary whose `lit version` failed and ignored the error. A binary that cannot run now leaves any installed `lit` untouched: the script prints the binary's error, says nothing was installed at the target path, and exits 1. (links-unfiled-fc79.pm2v)
 
 ## [0.18.0] - 2026-10-15
 

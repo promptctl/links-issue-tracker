@@ -133,7 +133,7 @@ func TestInstallLeavesTheInstalledLitWhenTheStagedBuildCannotRun(t *testing.T) {
 	if inode(t, run.target) != run.oldIno {
 		t.Errorf("installed lit was replaced by a build that cannot run")
 	}
-	for _, want := range []string{"boom", run.target + " was left unchanged"} {
+	for _, want := range []string{"boom", "nothing was installed at " + run.target} {
 		if !strings.Contains(run.stderr, want) {
 			t.Errorf("stderr lacks %q:\n%s", want, run.stderr)
 		}
