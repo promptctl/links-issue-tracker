@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A command's `--help=false` or `-h=false` is no longer a help request. Every command except `lit` itself printed its help page and exited 0 whenever the help flag was given, whatever its value, so `lit ls --help=false` printed `Usage of ls:` instead of listing, while `lit --help=false` already read the value. Every command now reads it: `--help=false` runs the command as if the flag were absent, and `--help`, `-h` and `--help=true` still print the help page. (links-cli-b67u)
+
 ## [0.17.0] - 2026-10-15
 
 ### Changed

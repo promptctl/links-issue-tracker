@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"strings"
@@ -187,6 +188,51 @@ func TestLeafHelpAnswersWithoutAcquiringResources(t *testing.T) {
 			if got := stderr.String(); got != "" {
 				t.Errorf("Run(%v) stderr = %q, want empty — no error framing on a help answer", args, got)
 			}
+		}
+	}
+}
+
+// A leaf's help flag is a request only when its value is true (links-cli-b67u):
+// `lit ls --help=false` lists rather than answering with the help page, the same
+// reading the root gives `lit --help=false`. Every leaf parses through the one
+// parseFlagSet over a flag set newCobraFlagSet declared, so `ls` stands for all
+// of them. Outside a repo a listing cannot succeed, which tells "ran the command"
+// (an error, no help page) apart from "answered help" (nil, the page); the true
+// spellings are the other side of the pair. [LAW:behavior-not-structure]
+func TestLeafHelpFlagFollowsItsValue(t *testing.T) {
+	prevWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatalf("Chdir(nonRepo) error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(prevWD) })
+
+	for _, tc := range []struct {
+		flag     string
+		wantHelp bool
+	}{
+		{"--help", true},
+		{"-h", true},
+		{"--help=true", true},
+		{"-h=true", true},
+		{"--help=false", false},
+		{"-h=false", false},
+	} {
+		args := []string{"ls", tc.flag}
+		var stdout, stderr bytes.Buffer
+		runErr := Run(context.Background(), &stdout, &stderr, args)
+		named, answeredHelp := leafHelpSubject(stdout.String())
+		if tc.wantHelp {
+			if runErr != nil || !answeredHelp || named != "ls" {
+				t.Errorf("Run(%v) = (err %v, stdout %q), want the ls help page at success", args, runErr, stdout.String())
+			}
+			continue
+		}
+		var usage UsageError
+		if runErr == nil || errors.As(runErr, &usage) || strings.Contains(stdout.String(), "Usage of ") {
+			t.Errorf("Run(%v) = (err %v, stdout %q), want the listing attempted: a non-usage error outside a repo and no help page", args, runErr, stdout.String())
 		}
 	}
 }
