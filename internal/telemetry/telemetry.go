@@ -94,9 +94,8 @@ type Event struct {
 
 // Recorder is one invocation's event while it is still open.
 type Recorder struct {
-	mu     sync.Mutex
-	ev     Event
-	closed bool
+	mu sync.Mutex
+	ev Event
 }
 
 // Begin opens an invocation's event from its identity — everything known
@@ -118,19 +117,11 @@ type End struct {
 	Error    string
 }
 
-// Finish closes the event and returns it, complete, with closed true. An
-// invocation can end two ways at once — its stack unwinding just as the
-// interrupt guard's hard exit fires — and its event is one record, so only
-// the first Finish closes it; a later one returns closed false and no event.
-// [LAW:one-source-of-truth]
-func (r *Recorder) Finish(end End) (ev Event, closed bool) {
+// Finish closes the event and returns it, complete.
+func (r *Recorder) Finish(end End) Event {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.closed {
-		return Event{}, false
-	}
-	r.closed = true
-	ev = r.ev
+	ev := r.ev
 	// The duration is read before StartedAt is moved to UTC, which drops the
 	// monotonic clock reading a wall-clock step would otherwise corrupt.
 	ev.DurationMS = end.At.Sub(ev.StartedAt).Milliseconds()
@@ -142,7 +133,7 @@ func (r *Recorder) Finish(end End) (ev Event, closed bool) {
 	ev.Flags = append([]string{}, ev.Flags...)
 	ev.Counts = maps.Clone(ev.Counts)
 	ev.Facts = maps.Clone(ev.Facts)
-	return ev, true
+	return ev
 }
 
 // Line is the event as one line of JSONL.

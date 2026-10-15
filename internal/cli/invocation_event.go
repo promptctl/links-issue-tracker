@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/config"
@@ -76,6 +77,21 @@ func interruptedEnd(at time.Time, code int) telemetry.End {
 		ExitCode: code,
 		Error:    fmt.Sprintf("still running when the grace after an interrupt ran out; hard-exited with %d", code),
 	}
+}
+
+// invocationRecord writes one invocation's event, once. An invocation can end
+// two ways at once — its stack unwinding just as the interrupt guard's hard
+// exit fires — and its event is one record: the first end to arrive is
+// written, and a later one returns only once that write has landed, so the
+// hard exit cannot cut it short. [LAW:one-source-of-truth]
+type invocationRecord struct {
+	once     sync.Once
+	recorder *telemetry.Recorder
+	stderr   io.Writer
+}
+
+func (r *invocationRecord) close(end telemetry.End) {
+	r.once.Do(func() { recordInvocation(r.stderr, r.recorder.Finish(end)) })
 }
 
 // recordInvocation is the export edge: the one place an invocation's event

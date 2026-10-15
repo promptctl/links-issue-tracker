@@ -33,19 +33,15 @@ import (
 // running under it adds facts through ctx, and the finished event is written
 // whether the command succeeded, failed, panicked, or was hard-exited by the
 // interrupt guard, which never unwinds this stack and so is handed the
-// recording to do itself. Whichever end comes first closes the event.
+// recording to do itself.
 // [LAW:nothing-unseen] [LAW:single-enforcer]
 func Run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string) (err error) {
 	recorder := beginInvocation(time.Now())
-	record := func(end telemetry.End) {
-		if ev, closed := recorder.Finish(end); closed {
-			recordInvocation(stderr, ev)
-		}
-	}
-	interrupt.BeforeHardExit(ctx, func(code int) { record(interruptedEnd(time.Now(), code)) })
+	record := &invocationRecord{recorder: recorder, stderr: stderr}
+	interrupt.BeforeHardExit(ctx, func(code int) { record.close(interruptedEnd(time.Now(), code)) })
 	defer func() {
 		panicked := recover()
-		record(invocationEnd(time.Now(), err, panicked))
+		record.close(invocationEnd(time.Now(), err, panicked))
 		if panicked != nil {
 			panic(panicked)
 		}

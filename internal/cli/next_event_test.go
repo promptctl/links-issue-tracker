@@ -114,7 +114,7 @@ func TestNextRecordsWhatAnExhaustedScopeNamed(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			recorder := telemetry.Begin(telemetry.Event{})
 			recordNextEvent(telemetry.With(context.Background(), recorder), tc.outcome, tc.gathered)
-			ev, _ := recorder.Finish(telemetry.End{})
+			ev := recorder.Finish(telemetry.End{})
 			if got, want := writtenFacts(t, ev), decodeJSON(t, tc.want); !reflect.DeepEqual(got, want) {
 				t.Errorf("facts =\n%v\nwant\n%v", got, want)
 			}

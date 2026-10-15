@@ -51,10 +51,16 @@ const (
 // would otherwise rotate twice, and the second rename would move the first's
 // fresh file over the generation it had just kept.
 // [LAW:no-ambient-temporal-coupling] the kernel flock owns the ordering.
+// Only a log that looks over its cap takes the lock, so the append that
+// needs no rotation — nearly all of them — never depends on a filesystem
+// whose flock fails or stalls.
 // A rotation problem is reported, never fatal: the worst outcome of skipping
 // it is a log that keeps growing, which must not cost the caller its run.
 // [LAW:no-silent-failure]
 func rotateLog(path string, maxBytes int64) (bool, error) {
+	if !logOverCap(path, maxBytes) {
+		return false, nil
+	}
 	lockPath := path + ".lock"
 	release, acquired, err := filelock.Acquire(context.Background(), lockPath, true, logRotationLockAttempts, logRotationLockRetryDelay)
 	if err != nil {
@@ -70,17 +76,23 @@ func rotateLog(path string, maxBytes int64) (bool, error) {
 	return rotated, rotateErr
 }
 
+// rotateLogLocked rotates under the log's lock, checking the size again: an
+// appender that held the lock first may already have rotated.
 func rotateLogLocked(path string, maxBytes int64) (bool, error) {
-	st, err := os.Stat(path)
-	if err != nil || st.Size() <= maxBytes {
-		// Absent is the common first-append case and needs no rotation; any
-		// other stat failure will resurface loudly from OpenFile just after.
+	if !logOverCap(path, maxBytes) {
 		return false, nil
 	}
 	if err := os.Rename(path, path+".1"); err != nil {
 		return false, err
 	}
 	return true, nil
+}
+
+func logOverCap(path string, maxBytes int64) bool {
+	st, err := os.Stat(path)
+	// Absent is the common first-append case and needs no rotation; any other
+	// stat failure will resurface loudly from OpenFile just after.
+	return err == nil && st.Size() > maxBytes
 }
 
 const (

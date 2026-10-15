@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -259,6 +260,69 @@ func TestRotationWaitsForTheLogsLock(t *testing.T) {
 	}
 	if _, err := os.Stat(path + ".1"); err != nil {
 		t.Errorf("no previous generation after the rotation: %v", err)
+	}
+}
+
+// A log under its cap is appended to without its lock, so a filesystem whose
+// flock fails or stalls costs nothing until the log needs rotating.
+func TestALogUnderItsCapDoesNotTakeItsLock(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	if err := os.WriteFile(path, []byte("under the cap"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	release, acquired, err := filelock.Acquire(context.Background(), path+".lock", true, 1, 0)
+	if err != nil || !acquired {
+		t.Fatalf("hold the log's lock: acquired %v, %v", acquired, err)
+	}
+	defer func() { _ = release() }()
+
+	if rotated, err := rotateLog(path, 1<<20); rotated || err != nil {
+		t.Errorf("rotateLog under the cap = %v, %v; want no rotation and no error while another process holds the lock", rotated, err)
+	}
+}
+
+// An invocation's event is written once, by whichever end reaches it first,
+// and a second end returns only after that write has landed: the interrupt
+// guard's hard exit, arriving while the deferred end is still writing, cannot
+// exit the process before the line is in the file.
+func TestASecondEndWaitsForTheFirstEndsWrite(t *testing.T) {
+	isolateEvents(t)
+	path := eventsPath(t)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// Over its cap, so a write takes the rotation lock, which the test holds
+	// to keep the first end mid-write.
+	if err := os.WriteFile(path, bytes.Repeat([]byte("x"), eventsMaxBytes+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	release, acquired, err := filelock.Acquire(context.Background(), path+".lock", true, 1, 0)
+	if err != nil || !acquired {
+		t.Fatalf("hold the rotation lock: acquired %v, %v", acquired, err)
+	}
+
+	record := &invocationRecord{recorder: telemetry.Begin(telemetry.Event{Event: "lit sync push"}), stderr: io.Discard}
+	written := make(chan bool, 2)
+	for _, end := range []telemetry.End{{Outcome: telemetry.OutcomeOK}, interruptedEnd(time.Now(), 143)} {
+		go func() {
+			record.close(end)
+			// Written: the oversized file rotated away and the event begun a
+			// new one.
+			info, err := os.Stat(path)
+			written <- err == nil && info.Size() > 0 && info.Size() < eventsMaxBytes
+		}()
+	}
+	time.Sleep(100 * time.Millisecond)
+	if err := release(); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if !<-written {
+			t.Fatal("an end returned before the event was in the file")
+		}
+	}
+	if events := readEvents(t); len(events) != 1 || events[0].Event != "lit sync push" {
+		t.Errorf("events = %+v, want the one event, written once", events)
 	}
 }
 
