@@ -3,12 +3,15 @@ format: .yaml or .yml is the YAML bulk format, which creates or updates;
 any other extension is the JSON tree spec, which only creates.
 
 Both formats reject any key they do not name, so a misspelled field fails
-the whole file rather than being dropped. Structure is checked before
-anything is written — required keys, duplicate ids, unresolvable
-references, cycles, and (in a JSON file) type and priority. The remaining
-value rules below are enforced as each issue is created, so a bad topic
-or label fails partway through and the creates already made are rolled
-back. See Results for what rollback covers.
+the whole file rather than being dropped. Every rule the file alone can
+answer is checked before anything is written — required keys, duplicate
+ids, references within the file, cycles among them, and every value rule
+below — and a file that breaks one exits 3 with nothing changed. A rule
+that needs the existing issues is checked as each document is written:
+in a YAML file, an id, parent or blocked_by naming an issue that does
+not exist, a parent that exists but is not an epic, or a blocked_by
+between an issue and an epic it sits under fails partway through.
+See Results for what rollback covers.
 
 JSON tree spec (creates only)
 
@@ -97,9 +100,7 @@ Values both formats enforce
 
   A local_id may not be used twice in one file, a record may not name its
   own local_id in its own blocked_by, and parent/blocked_by references
-  within the file may not form a cycle. A blocked_by pointing at an issue
-  that already exists is also rejected if it would close a cycle in the
-  blocked-by graph.
+  within the file may not form a cycle.
 
   A file with zero records or zero documents is an error.
 
