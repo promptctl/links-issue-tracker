@@ -25,8 +25,8 @@ REPO_DOWNLOAD_BASE="https://github.com/promptctl/links-issue-tracker/releases/do
 REPO_LATEST_API="https://api.github.com/repos/promptctl/links-issue-tracker/releases/latest"
 
 # [LAW:one-source-of-truth] One variable names the on-disk binary across every
-# mode: from-release extraction validation, atomic rename, the stale-binary
-# scan that walks PATH, and the post-install version check. On windows the
+# mode: from-release extraction validation, the version check on the staged
+# binary, the atomic rename, and the stale-binary scan that walks PATH. On windows the
 # executable is `lit.exe` (goreleaser appends .exe for windows archives; Go
 # does the same when compiling for GOOS=windows). Detect once at script start
 # so downstream code does not branch on OS.
@@ -449,22 +449,22 @@ case "$mode" in
         fi
         # Zip's mode bits aren't reliably preserved (the windows path uses
         # `unzip`, and even POSIX tar archives can lose +x under restrictive
-        # umask). Set the executable bit explicitly before validating so a
-        # successful install always yields a runnable binary. mingw/msys
-        # bash treats `chmod +x` on `.exe` as a no-op without erroring; `-x`
-        # on `.exe` returns true regardless of mode bits.
+        # umask), so set the executable bit before the shared version check
+        # below runs the binary. mingw/msys bash treats `chmod +x` on `.exe`
+        # as a no-op without erroring.
         chmod +x "$tmp/$BIN_NAME"
-        if [ ! -x "$tmp/$BIN_NAME" ]; then
-            echo "error: extracted '$BIN_NAME' is not executable" >&2
-            exit 1
-        fi
         ;;
 esac
 
 # The staged binary must run before it replaces the installed one: a build or
 # download that cannot report its own version leaves the working lit in place,
-# and `set -e` stops here with the binary's own error. [LAW:no-silent-failure]
-"$tmp/$BIN_NAME" version
+# and the script says so after the binary's own error. Running it is also the
+# one executability check every mode shares. [LAW:no-silent-failure]
+# [LAW:single-enforcer]
+if ! staged_version="$("$tmp/$BIN_NAME" version)"; then
+    echo "error: the newly staged lit failed to run 'lit version'; $TARGET_DIR/$BIN_NAME was left unchanged" >&2
+    exit 1
+fi
 mv -f "$tmp/$BIN_NAME" "$TARGET_DIR/$BIN_NAME"
 
 # Stale `lnks` symlink/binary from previous installs is removed; `lit` is the
@@ -494,6 +494,7 @@ for dir in "${PATH_ENTRIES[@]}"; do
 done
 
 echo "Installed lit -> $TARGET_DIR/$BIN_NAME"
+echo "$staged_version"
 if [ "${#STALE[@]}" -gt 0 ]; then
     echo
     echo "WARNING: other 'lit' binaries found on PATH that were NOT updated:"
