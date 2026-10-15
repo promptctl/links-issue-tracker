@@ -79,7 +79,6 @@ type Recorder struct {
 func Begin(identity Event) *Recorder {
 	ev := identity
 	ev.TraceID = newTraceID()
-	ev.Flags = []string{}
 	ev.Counts = map[string]int{}
 	ev.Facts = map[string]any{}
 	return &Recorder{ev: ev}
