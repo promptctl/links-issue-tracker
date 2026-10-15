@@ -14,6 +14,7 @@ var canonicalKeys = []string{
 	"LAW:no-ambient-temporal-coupling",
 	"LAW:effects-at-boundaries",
 	"LAW:one-source-of-truth",
+	"LAW:domain-language",
 	"LAW:single-enforcer",
 	"LAW:comments-carry-meaning",
 	"LAW:dataflow-not-control-flow",

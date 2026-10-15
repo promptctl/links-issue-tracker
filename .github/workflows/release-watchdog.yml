@@ -8,8 +8,9 @@
 # [LAW:no-silent-failure]
 #
 # A watchdog whose failures nobody sees is deletion with extra steps (the
-# nightly lane's rule), so a detection files (or extends) a GitHub issue
-# labeled `release-stuck` with the run URL and the recovery path.
+# nightly lane's rule), so a detection files (or extends) an urgent lit bug
+# labeled `release-stuck` through .github/actions/report-to-lit, carrying the
+# run URL and the recovery path.
 name: Release watchdog
 
 on:
@@ -19,10 +20,9 @@ on:
 
 permissions:
   contents: read
-  issues: write
 
 # A dispatched run overlapping the scheduled one must queue, not race: two
-# concurrent failing runs would each see no open release-stuck issue and file
+# concurrent failing runs would each see no open release-stuck ticket and file
 # a duplicate. Never cancel-in-progress — a cancelled watchdog is a skipped
 # watchdog.
 concurrency:
@@ -92,32 +92,30 @@ jobs:
           echo "::error::v$VER has been pending for ${age_minutes}m (grace: ${GRACE_MINUTES}m) — the promotion merged but no release-validate run has published its tag, and no master push has arrived to re-trigger the gate." >&2
           exit 1
 
-      # failure() alone would miss the job-level timeout: GitHub marks a
-      # timed-out job cancelled, not failed. [LAW:no-silent-failure]
-      - name: Report the stuck release as a GitHub issue
-        if: failure() || cancelled()
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          body="The release watchdog went red: ${run_url}
+  # Its own job, so the check never runs holding the write token the report
+  # needs. `result != 'success'` covers failure, cancellation, and the
+  # job-level timeout, which GitHub reports as cancelled. [LAW:no-silent-failure]
+  # Only master's runs report: the backlog is master's, and a run dispatched
+  # on a branch is red in front of the session that dispatched it.
+  report:
+    needs: watchdog
+    if: ${{ always() && needs.watchdog.result != 'success' && github.ref == 'refs/heads/master' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/report-to-lit
+        with:
+          label: release-stuck
+          title: "A promoted release is stuck: no tag published"
+          token: ${{ github.token }}
+          body: |
+            Either a promoted CHANGELOG version has had no published tag for over the grace window, or the watchdog could not determine the release state at all; the run log names which, and the version.
 
-          Either a promoted CHANGELOG version has had no published tag for over the grace window, or the watchdog could not determine the release state at all — the run log names which, and the version.
+            What a stuck release means: the chore(release) promotion merged, but no surviving release-validate run published the tag. Usual cause: the promotion's run was evicted from the concurrency queue by later master pushes (GitHub keeps one pending slot per group), the burst's surviving run failed or was cancelled, and no later push has re-triggered the state-based publish gate.
 
-          What a stuck release means: the chore(release) promotion merged, but no surviving release-validate run published the tag. Usual cause: the promotion's run was evicted from the concurrency queue by later master pushes (GitHub keeps one pending slot per group), the burst's surviving run failed or was cancelled, and no later push has re-triggered the state-based publish gate.
-
-          Recovery (RELEASING.md, 'Re-running the pipeline on demand'): \`gh workflow run release-validate.yml --ref master\` re-derives the pending version and publishes it. Close this issue once the tag exists — the watchdog goes green on its own but does not close it for you."
-          gh label create release-stuck --force \
-            --description "A promoted CHANGELOG version has no published tag" --color B60205
-          # One open issue collects repeat detections; the next hour's red
-          # lands as a comment, not a duplicate issue.
-          existing=$(gh issue list --label release-stuck --state open \
-            --json number --jq '.[0].number // empty')
-          if [ -n "$existing" ]; then
-            gh issue comment "$existing" --body "$body"
-          else
-            gh issue create --title "A promoted release is stuck: no tag published" \
-              --label release-stuck --body "$body"
-          fi
+            Recovery (RELEASING.md, 'Re-running the pipeline on demand'): `gh workflow run release-validate.yml --ref master` re-derives the pending version and publishes it. Close this ticket once the tag exists; the watchdog goes green on its own but does not close it for you.
