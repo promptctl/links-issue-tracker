@@ -18,6 +18,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -153,8 +154,13 @@ func LocationOf(checkoutRoot, gitCommonDir string) Location {
 	}
 }
 
-// Outcome is what one Write did.
+// Outcome is what one Write did. A write that fails part way returns what it
+// had done by then: an exclude entry added before the file could not be
+// written stays added, and the Outcome says so.
 type Outcome struct {
+	// Changed names the file's slots, by their field names in the file, whose
+	// records this write changed; empty, never nil, when nothing was written.
+	Changed []string
 	// Bytes is the size of the file written; zero when nothing was written.
 	Bytes int
 	// Created is true when the file did not exist before this write.
@@ -163,7 +169,7 @@ type Outcome struct {
 	ExcludeAdded bool
 	// Replaced is why the file already on disk could not be read as this
 	// schema and was rewritten from these facts alone; nil when it was read,
-	// or when there was none.
+	// when there was none, or when the rewrite failed.
 	Replaced error
 }
 
@@ -182,21 +188,26 @@ type Outcome struct {
 // before the file exists, so the file never shows in git status and every later
 // write pays nothing for it.
 func Write(loc Location, facts Facts, now time.Time) (Outcome, error) {
-	var out Outcome
+	out := Outcome{Changed: []string{}}
 	if len(facts) == 0 {
 		return out, nil
 	}
 	prior := File{SchemaVersion: SchemaVersion}
+	// before is what the slots held on disk; nil when the file could not be
+	// read, so no slot of it is known.
+	before := &prior
+	var replaced error
 	raw, err := os.ReadFile(loc.File)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		out.Created = true
 	case err != nil:
-		return Outcome{}, fmt.Errorf("read statusline file: %w", err)
+		return out, fmt.Errorf("read statusline file: %w", err)
 	default:
 		parsed, parseErr := parse(raw)
 		if parseErr != nil {
-			out.Replaced = fmt.Errorf("%s: %w", loc.File, parseErr)
+			replaced = fmt.Errorf("%s: %w", loc.File, parseErr)
+			before = nil
 		} else {
 			prior = parsed
 		}
@@ -204,19 +215,36 @@ func Write(loc Location, facts Facts, now time.Time) (Outcome, error) {
 	if out.Created {
 		out.ExcludeAdded, err = ensureExcluded(loc.Exclude)
 		if err != nil {
-			return Outcome{}, err
+			return out, err
 		}
 	}
-	payload, err := json.MarshalIndent(facts.applyTo(prior, now.UTC()), "", "  ")
+	written := facts.applyTo(prior, now.UTC())
+	payload, err := json.MarshalIndent(written, "", "  ")
 	if err != nil {
-		return Outcome{}, fmt.Errorf("encode statusline file: %w", err)
+		return out, fmt.Errorf("encode statusline file: %w", err)
 	}
 	payload = append(payload, '\n')
 	if err := replaceFile(loc.File, payload); err != nil {
-		return Outcome{}, err
+		return out, err
 	}
+	out.Replaced = replaced
+	out.Changed = changedSlots(before, written)
 	out.Bytes = len(payload)
 	return out, nil
+}
+
+// changedSlots names the slots whose records differ between before and after,
+// recorded_at included. A file that could not be read (before is nil) has no
+// record to match, so every slot is changed: all it shows came from this write.
+func changedSlots(before *File, after File) []string {
+	changed := []string{}
+	if before == nil || !reflect.DeepEqual(before.WorkingOn, after.WorkingOn) {
+		changed = append(changed, "working_on")
+	}
+	if before == nil || !reflect.DeepEqual(before.Next, after.Next) {
+		changed = append(changed, "next")
+	}
+	return changed
 }
 
 // parse reads a file this lit wrote. A file of another schema version is not

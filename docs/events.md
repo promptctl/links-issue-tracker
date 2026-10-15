@@ -46,7 +46,7 @@ lines here for reading:
   "exit_code": 0,
   "sink": "file",
   "sink_rotation": "none",
-  "counts": {"next.rows_gathered": 1},
+  "counts": {"next.rows_gathered": 1, "statusline.bytes": 199},
   "facts": {
     "next.outcome": "served_from_new_lane",
     "next.picked": "app-auth-082.oa5",
@@ -55,7 +55,12 @@ lines here for reading:
     "next.held": [],
     "next.off_path": [],
     "next.unreachable": [],
-    "next.stay_offered": false
+    "next.stay_offered": false,
+    "statusline.changed": ["next"],
+    "statusline.created": false,
+    "statusline.exclude_added": false,
+    "statusline.replaced": null,
+    "statusline.error": null
   }
 }
 ```
@@ -77,7 +82,7 @@ lines here for reading:
 | `sink_rotation` | What happened to the file's size cap before this line was appended: `none`, `rotated` (this is the first line of a new file), or `failed` (the file keeps growing past its cap). |
 | `sink_rotation_error` | Present only when `sink_rotation` is `failed`: why. |
 | `counts` | The command's counts. A count of zero is written as `0`, so "ran and found none" is distinguishable from a command that does not count that thing. |
-| `facts` | What the command decided, under keys prefixed with the command's name. |
+| `facts` | What the command decided, under keys prefixed with the command's name, or with `statusline.` for what it wrote to the statusline file. |
 
 A command that records no counts or facts writes `{}` for each.
 
@@ -117,6 +122,26 @@ none), and `reach` is what this checkout can do about it:
 | `awaiting_outside` | Labeled `external`: it waits on an event outside this repository. |
 | `out_of_view` | Nothing that would clear it was among the tickets this run read, for example because a filter hid them. |
 | `off_focus_path` | Outside the focus label's scope, so the pick never considered it. |
+
+## What a statusline-file write records
+
+Every command that works on the tickets of the checkout it runs in, such as
+`lit next`, `lit start` or `lit show`, records what it did to the checkout's
+[statusline file](statusline.md) once it has run, even when it ends in an
+error. A command that learned nothing for the file writes nothing to it and
+records zero bytes and no changed slots. The keys are present exactly when the
+command reached that write: a line without them is either a command that does
+not work on this checkout's tickets, such as `lit sync push`, `lit init` or
+`lit ls --at`, or one whose `outcome` is `panic` or `interrupted`.
+
+| Key | Meaning |
+| --- | --- |
+| `statusline.changed` | The file's slots whose records this write changed: `working_on`, `next`, both, or `[]`. A slot re-recorded with the ticket it already held is listed, since its `recorded_at` moved; a slot the command's facts did not reach is not. When the file was replaced, both are listed. |
+| `statusline.created` | Whether the file did not exist before this write. |
+| `statusline.exclude_added` | Whether this write added the file's entry to the repository's `info/exclude`. Only a write that creates the file adds it, and only when the entry is missing. |
+| `statusline.replaced` | Why the file already on disk could not be read and was rewritten from this command's facts alone, or `null`. |
+| `statusline.error` | Why the write failed, or `null`. The command's own result is unchanged; the other keys say what the write had done before it failed. |
+| `counts.statusline.bytes` | The size of the file written; `0` when nothing was written. |
 
 ## Reading the file
 

@@ -10,15 +10,17 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/statusline"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
 // recordStatusline writes the facts a command recorded to its checkout's
-// statusline file. A failed write is a warning and never the command's
-// failure: the command's own work is already done, and the file is a record of
-// it, not part of it.
-func recordStatusline(ws workspace.Info, facts statusline.Facts) {
+// statusline file, and puts what the write did on the command's event. A
+// failed write is a warning and never the command's failure: the command's own
+// work is already done, and the file is a record of it, not part of it.
+func recordStatusline(ctx context.Context, ws workspace.Info, facts statusline.Facts) {
 	out, err := statusline.Write(statusline.LocationOf(ws.RootDir, ws.GitCommonDir), facts, time.Now())
+	recordStatuslineEvent(ctx, out, err)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: statusline file not written: %v\n", err)
 		return
@@ -26,6 +28,29 @@ func recordStatusline(ws workspace.Info, facts statusline.Facts) {
 	if out.Replaced != nil {
 		fmt.Fprintf(os.Stderr, "warning: statusline file was unreadable and has been rewritten: %v\n", out.Replaced)
 	}
+}
+
+// recordStatuslineEvent puts one statusline write on the command's event.
+// Every key is set on every command that passes through the write, so a
+// command that wrote nothing reads as zero bytes and no slots changed, not as
+// a command the file never heard from. The record is in memory: it adds no
+// store access and no lock to the write. [LAW:nothing-unseen]
+func recordStatuslineEvent(ctx context.Context, out statusline.Outcome, err error) {
+	telemetry.Count(ctx, "statusline.bytes", out.Bytes)
+	telemetry.Set(ctx, "statusline.changed", out.Changed)
+	telemetry.Set(ctx, "statusline.created", out.Created)
+	telemetry.Set(ctx, "statusline.exclude_added", out.ExcludeAdded)
+	telemetry.Set(ctx, "statusline.replaced", errorText(out.Replaced))
+	telemetry.Set(ctx, "statusline.error", errorText(err))
+}
+
+// errorText is err's message, or nil for no error, as the event records it.
+func errorText(err error) *string {
+	if err == nil {
+		return nil
+	}
+	text := err.Error()
+	return &text
 }
 
 func statuslineTicket(issue model.Issue) statusline.Ticket {

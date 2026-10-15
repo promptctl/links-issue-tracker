@@ -184,7 +184,7 @@ func runWithApp(ctx context.Context, stdout io.Writer, accessMode app.AccessMode
 	// After the close, so the write happens outside the workspace lock, and
 	// before the error check, because a fact recorded before a failure is still
 	// true: `lit next` reports finding nothing as an error, and that is the fact.
-	recordStatusline(ws, ap.Statusline)
+	recordStatusline(ctx, ws, ap.Statusline)
 	if runErr != nil {
 		return runErr
 	}
