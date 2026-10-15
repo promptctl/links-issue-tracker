@@ -47,6 +47,7 @@ const (
 	reasonCorruptionDetected      commandReason = "corruption_detected"
 	reasonEntityNotFound          commandReason = "entity_not_found"
 	reasonMergeConflict           commandReason = "merge_conflict"
+	reasonMigrationQuarantined    commandReason = "migration_quarantined"
 	reasonNoReadyWork             commandReason = "no_ready_work"
 	reasonOutsideGitWorkspace     commandReason = "outside_git_workspace"
 	reasonOwnerApprovalRequired   commandReason = "owner_approval_required"
@@ -210,6 +211,16 @@ func commandErrorReason(err error) commandReason {
 	var schemaAhead *store.UnsupportedSchemaVersionError
 	if errors.As(err, &schemaAhead) {
 		return reasonWorkspaceSchemaAhead
+	}
+	// A pending migration that failed and is quarantined: on the run that
+	// failed, or any open after it. Every open that has it pending refuses
+	// until the quarantine row is cleared or a snapshot from before the
+	// failure is restored, so it must not reach the default's retry advice. Not
+	// validation_refused: the command is not what is wrong, so "adjust the
+	// command" would be false advice. [LAW:one-type-per-behavior]
+	var quarantined *store.QuarantineBlockError
+	if errors.As(err, &quarantined) {
+		return reasonMigrationQuarantined
 	}
 	// lit could not settle on an issue prefix, and the three ways it can fail
 	// split by the ACT that clears them, which is what a reason names.
@@ -405,6 +416,16 @@ func commandErrorRemediation(reason commandReason) string {
 		// rollback is named conditionally because the message offers it only
 		// when a recovery snapshot exists.
 		return "Do not retry unchanged — this lit is older than the workspace's schema, and rerunning the command with the same binary repeats this refusal. The message above names the supported path. " + agentInstructionsOpen + "Installing a different lit replaces it for every workspace on this machine, and any snapshot rollback the message offers discards data: take such a path only when the user directs it, and until then surface this refusal to the user as blocking." + agentInstructionsClose
+	case reasonMigrationQuarantined:
+		// The message names both ways out, so this line defers to it rather
+		// than restating either. [LAW:one-source-of-truth] It does say which
+		// snapshot: one taken after the failure still holds the quarantine
+		// row. Neither way is the agent's to take on its own: a restore
+		// discards what was written since the snapshot, and clearing the row
+		// lets a migration that already failed run again, on the judgment that
+		// the failure was transient. So both are gated the way
+		// workspace_schema_ahead gates its paths.
+		return "Do not retry unchanged — a migration this workspace has pending failed and is quarantined, and every command that opens the store refuses until the quarantine is cleared or a snapshot taken before the failure is restored. The message above names both. " + agentInstructionsOpen + "Restoring a snapshot discards everything written since it was taken, and clearing the quarantine lets a migration that already failed run again: take either path only when the user directs it, and until then surface this refusal to the user as blocking." + agentInstructionsClose
 	case reasonBulkPartialFailure:
 		return "Some items failed; see the per-item errors above. Re-run the command for only the failed IDs after addressing each error."
 	default:

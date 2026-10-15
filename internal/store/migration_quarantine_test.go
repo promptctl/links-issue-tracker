@@ -312,6 +312,12 @@ func TestMigrationFailureCheckpointPath(t *testing.T) {
 	if !errors.Is(cpErr.Cause, sentinel) {
 		t.Errorf("CheckpointResetError.Cause does not wrap sentinel: %v", cpErr.Cause)
 	}
+	// The run that quarantines already carries the quarantine, so it is
+	// classified as the refusal every later open returns.
+	var firstQ *QuarantineBlockError
+	if !errors.As(openErr, &firstQ) || firstQ.Version != failVersion {
+		t.Errorf("failed Open error = %v, want it to carry the quarantine of v%d", openErr, failVersion)
+	}
 
 	// Error message must mention the checkpoint name and the restore command.
 	msg := rollback.Error()
@@ -455,6 +461,11 @@ func TestCheckpointResetErrorUnknownVersion(t *testing.T) {
 	}
 	if cpErr.Version != 0 {
 		t.Errorf("CheckpointResetError.Version = %d, want 0 (nil result)", cpErr.Version)
+	}
+	// No version, no quarantine row: nothing here may read as quarantined.
+	var q *QuarantineBlockError
+	if errors.As(openErr, &q) {
+		t.Errorf("failed Open with unknown version carries a quarantine (v%d); none was recorded", q.Version)
 	}
 
 	msg := cpErr.Error()

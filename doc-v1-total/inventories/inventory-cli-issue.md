@@ -193,10 +193,11 @@ Constants (`exit.go`):
 18. `OutsideWorkspaceError` → 3 (`exit.go`)
 19. `errors.Is(err, store.ErrWorkspaceNotInitialized)` → 3 (`exit.go`)
 20. `*store.UnsupportedSchemaVersionError` → 3 (`exit.go`)
-21. `errors.Is(err, workspace.ErrIssuePrefixRefused)` → 3 (`exit.go`)
-22. `BulkFailureError` → 1 (`exit.go`)
-23. `errors.Is(err, store.ErrTransientGCContention)` → 1 (`exit.go`)
-24. anything else → 1 (`exit.go`)
+21. `*store.QuarantineBlockError` → 3 (`exit.go`)
+22. `errors.Is(err, workspace.ErrIssuePrefixRefused)` → 3 (`exit.go`)
+23. `BulkFailureError` → 1 (`exit.go`)
+24. `errors.Is(err, store.ErrTransientGCContention)` → 1 (`exit.go`)
+25. anything else → 1 (`exit.go`)
 
 Error types defined in `cli.go`: `MergeConflictError` (`cli.go`),
 `CorruptionError` (`cli.go`), `UsageError` (`cli.go`),
@@ -245,16 +246,17 @@ several of these types gets the reason of the earliest one:
 20. `OutsideWorkspaceError` → `outside_git_workspace`
 21. `errors.Is(err, store.ErrWorkspaceNotInitialized)` → `workspace_not_initialized`
 22. `*store.UnsupportedSchemaVersionError` → `workspace_schema_ahead`
-23. `workspace.StoredPrefixError` → `stored_prefix_refused`
-24. `errors.Is(err, workspace.ErrIssuePrefixRefused)` → `validation_refused`
-    (`StoredPrefixError` unwraps to this sentinel; step 22 catches it first)
-25. `BulkFailureError` → `bulk_partial_failure`
-26. `store.WorkspaceWriteBlockedError` → `workspace_write_blocked` (it unwraps
+23. `*store.QuarantineBlockError` → `migration_quarantined`
+24. `workspace.StoredPrefixError` → `stored_prefix_refused`
+25. `errors.Is(err, workspace.ErrIssuePrefixRefused)` → `validation_refused`
+    (`StoredPrefixError` unwraps to this sentinel; step 24 catches it first)
+26. `BulkFailureError` → `bulk_partial_failure`
+27. `store.WorkspaceWriteBlockedError` → `workspace_write_blocked` (it unwraps
     to `store.ErrTransientGCContention`; this step catches it first)
-27. `errors.Is(err, store.ErrWorkspaceBusy)` or
+28. `errors.Is(err, store.ErrWorkspaceBusy)` or
     `errors.Is(err, workspace.ErrConfigBusy)` → `workspace_busy`
-28. `errors.Is(err, store.ErrTransientGCContention)` → `transient_gc_contention`
-29. anything else → `command_failed`
+29. `errors.Is(err, store.ErrTransientGCContention)` → `transient_gc_contention`
+30. anything else → `command_failed`
 
 `commandErrorRemediation(reason)` (`error_output.go`), verbatim strings. An
 empty string means no `remediation:` line is printed:
@@ -284,6 +286,7 @@ empty string means no `remediation:` line is printed:
 - `outside_git_workspace`: "Run the command inside a git repository/worktree with links initialized."
 - `workspace_not_initialized`: "Do not retry unchanged — this repository has no lit workspace, and retrying this command cannot create one. Run `lit init` here to create it, or change to a directory that already has one."
 - `workspace_schema_ahead`: "Do not retry unchanged — this lit is older than the workspace's schema, and rerunning the command with the same binary repeats this refusal. The message above names the supported path. \<agent-instructions>Installing a different lit replaces it for every workspace on this machine, and any snapshot rollback the message offers discards data: take such a path only when the user directs it, and until then surface this refusal to the user as blocking.\</agent-instructions>"
+- `migration_quarantined`: "Do not retry unchanged — a migration this workspace has pending failed and is quarantined, and every command that opens the store refuses until the quarantine is cleared or a snapshot taken before the failure is restored. The message above names both. \<agent-instructions>Restoring a snapshot discards everything written since it was taken, and clearing the quarantine lets a migration that already failed run again: take either path only when the user directs it, and until then surface this refusal to the user as blocking.\</agent-instructions>"
 - `bulk_partial_failure`: "Some items failed; see the per-item errors above. Re-run the command for only the failed IDs after addressing each error."
 - default: "Retry the command. If it still fails, run `lit doctor` for diagnostics."
 
