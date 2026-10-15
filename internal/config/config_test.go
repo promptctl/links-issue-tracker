@@ -266,6 +266,43 @@ soil_mode = true
 	}
 }
 
+// A config written for an older lit can still carry sections lit no longer
+// declares; it loads, and the keys lit does declare beside them still apply.
+func TestLoadAcceptsRetiredSections(t *testing.T) {
+	dir := t.TempDir()
+	configDir := filepath.Join(dir, "links-issue-tracker")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := `
+[logging]
+verbose = true
+file = "/tmp/lit.log"
+
+[init]
+install_hooks = false
+install_agents = false
+
+[migration]
+auto_apply = true
+
+[quickstart]
+soil_mode = true
+`
+	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	cfg, err := Load(pathspec.PathSpec{})
+	if err != nil {
+		t.Fatalf("Load(pathspec.PathSpec{}) error = %v, want a config with retired sections to load", err)
+	}
+	if !cfg.Quickstart.SoilMode {
+		t.Fatal("expected soil_mode=true from the file that also carries retired sections")
+	}
+}
+
 func TestLoadPartialTOML(t *testing.T) {
 	dir := t.TempDir()
 	configDir := filepath.Join(dir, "links-issue-tracker")
@@ -310,8 +347,8 @@ func TestLoadMissingDir(t *testing.T) {
 	}
 
 	// Should return defaults without error.
-	if cfg.Snapshot.RetentionBudget != 5 {
-		t.Fatalf("expected snapshot.retention_budget=5 from default, got %d", cfg.Snapshot.RetentionBudget)
+	if !cfg.Sync.Receive {
+		t.Fatal("expected sync.receive=true from default")
 	}
 }
 
