@@ -99,12 +99,6 @@ func TestEagerPushOnDefaultCadenceReachesRemoteWithoutExplicitPush(t *testing.T)
 		"init", "--skip-hooks", "--skip-agents"); err != nil {
 		t.Fatalf("lit init: %v\noutput:\n%s", err, out)
 	}
-	// The oracle poll below proves DELIVERY, not quiescence: the `lit new`'s
-	// detached mirror can still owe a post-release re-check cycle after the
-	// commit has landed, and that no-op cycle's engine would race this test's
-	// TempDir sweep. Same guard, same reason as the sibling mirror-spawning
-	// tests. [LAW:no-ambient-temporal-coupling]
-	awaitMirrorQuiescence(t, root)
 	// The epic the mutation under test files into is part of the bootstrap:
 	// created with auto-sync off and carried by the manual push, so the one
 	// mutation below is the only thing left for eager push to deliver.

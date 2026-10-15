@@ -73,9 +73,6 @@ func TestPushFailureBannerReachesMutationOnlySession(t *testing.T) {
 		"init", "--skip-hooks", "--skip-agents"); err != nil {
 		t.Fatalf("lit init: %v\noutput:\n%s", err, out)
 	}
-	// The mutations below spawn detached mirrors; the last one can outlive the
-	// test body, so the TempDir sweep must wait for mirror quiescence.
-	awaitMirrorQuiescence(t, root)
 	// The epic every mutation below files into is part of the bootstrap, made
 	// with auto-sync off and carried by the manual push.
 	epic := newEpicViaLit(t, root, self, isolatedEnv(xdgConfigHome, "1"), "banner-epic")

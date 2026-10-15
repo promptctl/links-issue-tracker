@@ -86,7 +86,7 @@ func scheduleReceive(ctx context.Context, ws workspace.Info) {
 	if !hasRemote {
 		return
 	}
-	if err := spawnDetachedWorker(ws, backgroundReceiveSubcommand, ReceiveLogName, receiveEnv(), os.Getpid()); err != nil {
+	if err := spawnDetachedWorker(ws, receiveWorker, receiveEnv(), os.Getpid()); err != nil {
 		cause := fmt.Errorf("start the background receive: %w", err)
 		fmt.Fprintf(os.Stderr, "lit: automatic receive not started: %v\n", err)
 		recordReceiveError(ws, cause)
@@ -177,7 +177,7 @@ const mirrorQuietPoll = 100 * time.Millisecond
 
 // awaitNoLiveMirror waits until no mirror is owed or live and returns how long
 // that took. Two witnesses cover a mirror's whole life between them, with no
-// gap: the mirror-pending claim a mutating command leaves (MirrorOwed) stands
+// gap: the mirror-pending claim a mutating command leaves (mirrorOwed) stands
 // from before that command exits until the mirror clears it inside its clone
 // hold, and the liveness beacon is held from the mirror's entry to its exit.
 // The beacon alone is not enough: a just-spawned mirror may not hold it yet
@@ -193,7 +193,7 @@ func awaitNoLiveMirror(ctx context.Context, ws workspace.Info, bound time.Durati
 		// The beacon is probed only once nothing is owed: while a claim stands
 		// the answer cannot end the wait, and each probe's brief hold is one
 		// more chance to mislead a claimant probing at the same instant.
-		live, err := MirrorOwed(ws)
+		live, err := mirrorOwed(ws)
 		if err != nil {
 			return time.Since(start), err
 		}

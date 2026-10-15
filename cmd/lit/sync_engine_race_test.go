@@ -91,15 +91,6 @@ func TestBurstOfMutationsNeverHitsEngineReadOnlyCollision(t *testing.T) {
 		"init", "--skip-hooks", "--skip-agents"); err != nil {
 		t.Fatalf("lit init: %v\noutput:\n%s", err, out)
 	}
-	// The oracle poll below proves DELIVERY, not quiescence: a mirror can
-	// still owe a post-release re-check cycle (a claim stamped after the
-	// delivering cycle's entry-clear) when the commit count is already
-	// satisfied, and that no-op cycle's engine would race this test's TempDir
-	// sweep. The quiescence cleanup owns TempDir safety — it joins the mirror
-	// on the marker it has not yet cleared and the beacon it holds while it
-	// lives, so the sweep runs against no process at all.
-	// [LAW:no-ambient-temporal-coupling]
-	awaitMirrorQuiescence(t, root)
 	// The epic the burst files into is part of the bootstrap, made with
 	// auto-sync off and carried by the manual push, so the burst's commits are
 	// exactly the ones the oracle counts past the baseline.
@@ -148,7 +139,7 @@ func TestBurstOfMutationsNeverHitsEngineReadOnlyCollision(t *testing.T) {
 	//
 	// The poll proves delivery only; TempDir safety against a mirror that
 	// outlives the satisfied commit count (a post-release re-check cycle) is
-	// owned by the awaitMirrorQuiescence cleanup registered above.
+	// owned by the worker join runLit registers (joinDetachedWorkers).
 	//
 	// Budget: delivery of the tail can legitimately chain up to three full
 	// mirror cycles (the in-flight push finishing, the holder's post-release

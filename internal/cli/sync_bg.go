@@ -47,13 +47,18 @@ func rotateWorkerLog(path string) error {
 		// other stat failure will resurface loudly from OpenFile just after.
 		return nil
 	}
-	if renameErr := os.Rename(path, path+".1"); renameErr != nil && !errors.Is(renameErr, fs.ErrNotExist) {
+	if renameErr := os.Rename(path, rotatedWorkerLogPath(path)); renameErr != nil && !errors.Is(renameErr, fs.ErrNotExist) {
 		// A missing source means a concurrent spawner rotated between the stat
 		// and the rename — the rotation happened, just not by this process.
 		return renameErr
 	}
 	return nil
 }
+
+// rotatedWorkerLogPath is where rotateWorkerLog keeps a worker log's previous
+// generation. [LAW:one-source-of-truth] the rotation and SpawnedWorkerPIDs
+// both read the name from here.
+func rotatedWorkerLogPath(path string) string { return path + ".1" }
 
 const (
 	// parentPostSpawnTail is how long a HEALTHY parent can legitimately live
@@ -93,8 +98,32 @@ const (
 // and fails records a trace through the one shared writer the pre-push hook
 // already uses. [LAW:one-source-of-truth]
 func spawnBackgroundMirror(ws workspace.Info, parentPID int) error {
-	return spawnDetachedWorker(ws, backgroundMirrorSubcommand, mirrorLogName, mirrorEnv(), parentPID)
+	return spawnDetachedWorker(ws, mirrorWorker, mirrorEnv(), parentPID)
 }
+
+// detachedWorker is one kind of detached worker: the hidden `lit sync`
+// subcommand it runs and the log under the storage dir it writes to.
+type detachedWorker struct {
+	subcommand string
+	logName    string
+}
+
+var (
+	mirrorWorker  = detachedWorker{subcommand: backgroundMirrorSubcommand, logName: mirrorLogName}
+	receiveWorker = detachedWorker{subcommand: backgroundReceiveSubcommand, logName: ReceiveLogName}
+
+	// detachedWorkers is every kind spawnDetachedWorker starts, so
+	// SpawnedWorkerPIDs reads every log a spawn record can be in.
+	// [LAW:one-source-of-truth]
+	detachedWorkers = []detachedWorker{mirrorWorker, receiveWorker}
+)
+
+// workerSpawnedFormat is the head of the spawn record spawnDetachedWorker
+// appends to a worker's log: timestamp, subcommand, the worker's pid. The
+// spawner writes it, not the worker, so it is in the log before the spawning
+// command exits — a worker the scheduler has not run yet is already on record.
+// The worker's own lines start only once it runs.
+const workerSpawnedFormat = "%s spawned %s pid=%d"
 
 // spawnDetachedWorker starts one of the hidden `lit sync` worker subcommands
 // as a detached process of its own, told which process spawned it so it can
@@ -102,12 +131,12 @@ func spawnBackgroundMirror(ws workspace.Info, parentPID int) error {
 // [LAW:one-type-per-behavior] the mirror and the receive are two instances
 // of one detached worker; what differs is the subcommand, the log and the
 // environment, all values.
-func spawnDetachedWorker(ws workspace.Info, subcommand, logName string, env []string, parentPID int) error {
+func spawnDetachedWorker(ws workspace.Info, worker detachedWorker, env []string, parentPID int) error {
 	self, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("resolve lit binary: %w", err)
 	}
-	cmd := exec.Command(self, "sync", subcommand, "--parent-pid", strconv.Itoa(parentPID))
+	cmd := exec.Command(self, "sync", worker.subcommand, "--parent-pid", strconv.Itoa(parentPID))
 	cmd.Dir = ws.RootDir
 	cmd.Stdin = nil
 	// Route the detached worker's output to a durable log. [LAW:no-silent-failure]
@@ -115,13 +144,13 @@ func spawnDetachedWorker(ws workspace.Info, subcommand, logName string, env []st
 	// stderr and still spawn with discarded streams — the worker's run matters
 	// more than its log, and the inability to log is itself loud here rather
 	// than swallowed.
-	logPath := filepath.Join(ws.StorageDir, logName)
+	logPath := filepath.Join(ws.StorageDir, worker.logName)
 	if rotateErr := rotateWorkerLog(logPath); rotateErr != nil {
-		fmt.Fprintf(os.Stderr, "lit: %s rotation failed (%v); the log keeps growing past its cap\n", logName, rotateErr)
+		fmt.Fprintf(os.Stderr, "lit: %s rotation failed (%v); the log keeps growing past its cap\n", worker.logName, rotateErr)
 	}
 	logFile, logErr := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if logErr != nil {
-		fmt.Fprintf(os.Stderr, "lit: %s unavailable (%v); background worker output will be discarded\n", logName, logErr)
+		fmt.Fprintf(os.Stderr, "lit: %s unavailable (%v); background worker output will be discarded\n", worker.logName, logErr)
 	} else {
 		cmd.Stdout, cmd.Stderr = logFile, logFile
 	}
@@ -129,11 +158,57 @@ func spawnDetachedWorker(ws workspace.Info, subcommand, logName string, env []st
 	cmd.Env = env
 	startErr := cmd.Start()
 	if logFile != nil {
+		if startErr == nil {
+			// [LAW:nothing-unseen] the spawn is recorded with the pid only the
+			// spawner holds; SpawnedWorkerPIDs reads it back.
+			if _, err := fmt.Fprintf(logFile, workerSpawnedFormat+" parent_pid=%d\n",
+				time.Now().UTC().Format(time.RFC3339), worker.subcommand, cmd.Process.Pid, parentPID); err != nil {
+				fmt.Fprintf(os.Stderr, "lit: %s spawn record not written: %v\n", worker.logName, err)
+			}
+		}
 		// The child inherited its own dup of the fd at exec; the parent's copy is
 		// no longer needed. Closing it cannot affect the child's logging.
 		_ = logFile.Close()
 	}
 	return startErr
+}
+
+// WorkerLogPaths is the current generation of every detached worker's log
+// under storageDir.
+func WorkerLogPaths(storageDir string) []string {
+	paths := make([]string, 0, len(detachedWorkers))
+	for _, worker := range detachedWorkers {
+		paths = append(paths, filepath.Join(storageDir, worker.logName))
+	}
+	return paths
+}
+
+// SpawnedWorkerPIDs returns the pid of every detached worker whose spawn record
+// is in a worker log under storageDir, current generation and rotated one
+// alike, in log order. A log that does not exist yet holds no records.
+func SpawnedWorkerPIDs(storageDir string) ([]int, error) {
+	var pids []int
+	for _, path := range WorkerLogPaths(storageDir) {
+		for _, generation := range []string{rotatedWorkerLogPath(path), path} {
+			body, err := os.ReadFile(generation)
+			if errors.Is(err, fs.ErrNotExist) {
+				continue
+			}
+			if err != nil {
+				return nil, fmt.Errorf("read worker log: %w", err)
+			}
+			for _, line := range strings.Split(string(body), "\n") {
+				var stamp, subcommand string
+				var pid int
+				// Every other line in the log is the worker's own, and fails
+				// the format at its second word.
+				if _, err := fmt.Sscanf(line, workerSpawnedFormat, &stamp, &subcommand, &pid); err == nil {
+					pids = append(pids, pid)
+				}
+			}
+		}
+	}
+	return pids, nil
 }
 
 // mirrorEnv builds the detached mirror's environment: the parent's environment

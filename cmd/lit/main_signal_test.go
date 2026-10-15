@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -341,9 +342,11 @@ func issueIDFromLitNew(t *testing.T, out, title string) string {
 	return ""
 }
 
-// runLit runs a lit command to completion via a re-exec of the test binary.
+// runLit runs a lit command to completion via a re-exec of the test binary,
+// and joins the detached workers it leaves running before t's TempDir sweep.
 func runLit(t *testing.T, dir, self string, extraEnv map[string]string, args ...string) (string, error) {
 	t.Helper()
+	joinDetachedWorkers(t, dir)
 	cmd := exec.Command(self, args...)
 	cmd.Dir = dir
 	cmd.Env = litEnv(extraEnv)
@@ -500,6 +503,15 @@ func TestAPeerPushReachesTheStoreThroughTheReceiveWorker(t *testing.T) {
 
 	lit(consumer, onPushEnv(cadenceConfig, "0"), "backlog")
 	pid := receiveWorkerPID(t, ws)
+	// The spawner's record of the worker is what the cleanup join waits on, so
+	// it must name the pid the worker reports for itself.
+	spawned, err := cli.SpawnedWorkerPIDs(ws.StorageDir)
+	if err != nil {
+		t.Fatalf("SpawnedWorkerPIDs: %v", err)
+	}
+	if !slices.Contains(spawned, pid) {
+		t.Fatalf("no spawn record names receive worker %d (records: %v):\n%s", pid, spawned, receiveLog(t, ws))
+	}
 	deadline := time.Now().Add(60 * time.Second)
 	for !strings.Contains(receiveLog(t, ws), fmt.Sprintf("receive end pid=%d ", pid)) {
 		if time.Now().After(deadline) {

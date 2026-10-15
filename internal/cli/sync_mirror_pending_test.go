@@ -24,7 +24,7 @@ func mirrorPendingTestWorkspace(t *testing.T) workspace.Info {
 	return workspace.Info{Location: workspace.LocationFromStorageDir(filepath.Join(t.TempDir(), ".lit"))}
 }
 
-// mirrorPendingSet is the in-package spelling of MirrorOwed for tests that
+// mirrorPendingSet is the in-package spelling of mirrorOwed for tests that
 // assert on the marker's presence: the same question, with the error arm
 // spent on the spot so an assertion can be written as a plain bool. Fatal
 // rather than false — a test that cannot read the marker has learned nothing,
@@ -32,9 +32,9 @@ func mirrorPendingTestWorkspace(t *testing.T) workspace.Info {
 // observed. [LAW:no-silent-failure]
 func mirrorPendingSet(t *testing.T, ws workspace.Info) bool {
 	t.Helper()
-	owed, err := MirrorOwed(ws)
+	owed, err := mirrorOwed(ws)
 	if err != nil {
-		t.Fatalf("MirrorOwed() = %v", err)
+		t.Fatalf("mirrorOwed() = %v", err)
 	}
 	return owed
 }
@@ -231,7 +231,7 @@ func TestMirrorOwedRefusesToGuessWhenTheMarkerIsUnreadable(t *testing.T) {
 	}
 	ws := workspace.Info{Location: workspace.LocationFromStorageDir(storageDir)}
 
-	owed, err := MirrorOwed(ws)
+	owed, err := mirrorOwed(ws)
 	if err == nil {
 		t.Fatalf("an unreadable marker returned owed=%t with no error; a caller cannot tell that apart from a truthful read", owed)
 	}
