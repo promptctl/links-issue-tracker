@@ -9,16 +9,16 @@ import (
 
 // TestLocationFromStorageDirMatchesDeriveLocation locks the geometry seam: a
 // Location rebuilt from a StorageDir string (what a caller holds after reading a
-// `lit stores` line) must be byte-identical to the Location deriveLocation mints
+// `lit stores` line) must be byte-identical to the Location Locate mints
 // for the same repository. If the two ever drift, `lit ls-at <dir>` would open a
 // different store than the one `lit stores` reported.
 func TestLocationFromStorageDirMatchesDeriveLocation(t *testing.T) {
 	repo := mkdir(t, filepath.Join(t.TempDir(), "repo"))
 	run(t, repo, "git", "init")
 
-	derived, err := deriveLocation(repo)
+	derived, err := Locate(repo)
 	if err != nil {
-		t.Fatalf("deriveLocation() error = %v", err)
+		t.Fatalf("Locate() error = %v", err)
 	}
 	rebuilt := LocationFromStorageDir(derived.StorageDir)
 	if rebuilt != derived {

@@ -386,7 +386,7 @@ Defaults are set in `Load` (`internal/config/config.go`).
 | `DatabasePath` | `<storageDir>/dolt` |
 | `DoltRepoPath` | `<storageDir>/dolt/links` |
 
-### 5.2 `deriveLocation(cwd)` (`internal/workspace/workspace.go`)
+### 5.2 `Locate(cwd)` (`internal/workspace/workspace.go`)
 
 1. `git rev-parse --git-common-dir` run with `cmd.Dir = cwd` (`internal/workspace/workspace.go`,
 ).
@@ -399,7 +399,7 @@ Defaults are set in `Load` (`internal/config/config.go`).
 ### 5.3 `Resolve(cwd)` (`internal/workspace/workspace.go`, `ResolveWithPrefix`)
 
 1. `git rev-parse --show-toplevel` ⇒ `RootDir`; failure classified by `classifyGitError`.
-2. `deriveLocation(cwd)`.
+2. `Locate(cwd)`.
 3. `resolvePrivateGitDir(cwd)` = `git rev-parse --git-dir` anchored to cwd
    (`internal/workspace/workspace.go`) — **not** symlink-canonicalized
    (`internal/workspace/workspace.go`).
@@ -430,7 +430,7 @@ All geometry git calls use `context.Background()` deliberately (`internal/worksp
   - Non-directories are skipped.
   - `os.Lstat(<path>/.git)`: `os.ErrNotExist` ⇒ skip; any other stat error ⇒ `stat %q: %w`
 .
-  - `deriveLocation(path)`: `ErrNotGitRepo` ⇒ skip; any other error ⇒ surfaced.
+  - `Locate(path)`: `ErrNotGitRepo` ⇒ skip; any other error ⇒ surfaced.
   - `os.Stat(loc.DatabasePath)`: `os.ErrNotExist` ⇒ skip ("git repo, no lit store"); other error
     ⇒ `stat store database %q: %w`.
   - The database path must be a **directory**; a regular file there is skipped.

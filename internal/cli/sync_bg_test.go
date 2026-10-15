@@ -2,9 +2,6 @@ package cli
 
 import (
 	"context"
-	"os"
-	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -113,45 +110,5 @@ func TestWaitForParentExitEndsOnTeardown(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
 		t.Fatalf("teardown took %s to end the wait; it must not sleep toward the deadline", elapsed)
-	}
-}
-
-// TestSpawnedWorkerPIDsReadsEveryWorkerLogAndGeneration pins where spawn
-// records are read from: both workers' logs, the rotated generation as well as
-// the current one, and nothing but the spawn records in them — a worker's own
-// lines carry a pid too, and a stderr line can start with anything.
-func TestSpawnedWorkerPIDsReadsEveryWorkerLogAndGeneration(t *testing.T) {
-	storageDir := t.TempDir()
-	logs := map[string]string{
-		"mirror.log.1": "2026-10-15T12:00:00Z spawned __mirror-bg pid=101 parent_pid=1\n" +
-			"2026-10-15T12:00:01Z mirror cycle start (hold budget 20s, push deadline 40s)\n",
-		"mirror.log": "2026-10-15T12:01:00Z spawned __mirror-bg pid=102 parent_pid=2\n" +
-			"lit: mirror beacon not released (busy); concurrent claims may read this dying mirror as live until process exit\n",
-		"receive.log": "2026-10-15T12:02:00Z spawned __receive-bg pid=201 parent_pid=3\n" +
-			"2026-10-15T12:02:00Z receive start pid=201 deadline=15s\n" +
-			"2026-10-15T12:02:01Z receive end pid=201 mirror_wait=0s elapsed=1s\n",
-	}
-	for name, body := range logs {
-		if err := os.WriteFile(filepath.Join(storageDir, name), []byte(body), 0o644); err != nil {
-			t.Fatalf("write %s: %v", name, err)
-		}
-	}
-
-	got, err := SpawnedWorkerPIDs(storageDir)
-	if err != nil {
-		t.Fatalf("SpawnedWorkerPIDs() = %v", err)
-	}
-	slices.Sort(got)
-	if want := []int{101, 102, 201}; !slices.Equal(got, want) {
-		t.Fatalf("SpawnedWorkerPIDs() = %v, want %v", got, want)
-	}
-}
-
-// TestSpawnedWorkerPIDsOfAStoreWithNoWorkerLogsIsEmpty pins that a store no
-// worker was ever spawned for answers "none", not an error.
-func TestSpawnedWorkerPIDsOfAStoreWithNoWorkerLogsIsEmpty(t *testing.T) {
-	got, err := SpawnedWorkerPIDs(t.TempDir())
-	if err != nil || len(got) != 0 {
-		t.Fatalf("SpawnedWorkerPIDs(empty store) = %v, %v; want none and no error", got, err)
 	}
 }

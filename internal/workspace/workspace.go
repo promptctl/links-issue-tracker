@@ -101,7 +101,7 @@ type Info struct {
 // the store. It is what a filesystem scan can know about a store WITHOUT opening
 // or creating it: Resolve layers store creation, config, and identity on top;
 // Discover uses it to detect a store in place. [LAW:one-source-of-truth] The
-// paths are minted only by deriveLocation, so a discovered Location and the
+// paths are minted only by Locate, so a discovered Location and the
 // Info Resolve opens for the same repository are the same store by construction.
 type Location struct {
 	GitCommonDir string
@@ -316,7 +316,7 @@ func ResolveWithPrefix(cwd string, requested PrefixRequest) (Info, error) {
 	if err != nil {
 		return Info{}, classifyGitError(fmt.Sprintf("git rev-parse --show-toplevel in %q", cwd), err)
 	}
-	loc, err := deriveLocation(cwd)
+	loc, err := Locate(cwd)
 	if err != nil {
 		return Info{}, err
 	}
@@ -328,7 +328,7 @@ func ResolveWithPrefix(cwd string, requested PrefixRequest) (Info, error) {
 	if err != nil {
 		return Info{}, err
 	}
-	// [LAW:effects-at-boundaries] deriveLocation is pure geometry; store
+	// [LAW:effects-at-boundaries] Locate is pure geometry; store
 	// creation is the one mutation, gathered here where the write is intended.
 	if err := os.MkdirAll(loc.StorageDir, 0o755); err != nil {
 		return Info{}, fmt.Errorf("create storage dir: %w", err)
@@ -346,14 +346,14 @@ func ResolveWithPrefix(cwd string, requested PrefixRequest) (Info, error) {
 	}, nil
 }
 
-// deriveLocation computes the lit store geometry for the git repository
+// Locate computes the lit store geometry for the git repository
 // containing cwd, purely — the only effects are the git queries that read
 // repository geometry and the symlink canonicalization that reads the
 // filesystem; nothing is created or written. [LAW:effects-at-boundaries]
 // [LAW:single-enforcer] This is the one place cwd becomes a set of store paths,
 // so Resolve (which then creates the store) and Discover (which then only
 // detects it) can never derive different paths for the same repository.
-func deriveLocation(cwd string) (Location, error) {
+func Locate(cwd string) (Location, error) {
 	// [LAW:one-source-of-truth] Git owns repository geometry. --git-common-dir is
 	// emitted relative to the invocation cwd (e.g. "../.git" from a subdirectory),
 	// so a relative result must be anchored to the cwd. Anchoring it to the
@@ -401,7 +401,7 @@ func deriveLocation(cwd string) (Location, error) {
 // --path-format=absolute flag that would do it is recent, and older git rejects
 // it with a misleading "not a git repository".
 //
-// [LAW:single-enforcer] Both path-answering queries — deriveLocation's
+// [LAW:single-enforcer] Both path-answering queries — Locate's
 // --git-common-dir and resolvePrivateGitDir's --git-dir — anchor through here,
 // so the two cannot drift into resolving the same git output differently.
 func anchorGitPath(cwd string, gitPath string) (string, error) {
@@ -417,7 +417,7 @@ func anchorGitPath(cwd string, gitPath string) (string, error) {
 
 // resolvePrivateGitDir locates the checkout's own git directory — the per-worktree
 // private area git keeps HEAD and the index in. It is the deliberate counterpart
-// to deriveLocation's --git-common-dir query, and the difference between the two
+// to Locate's --git-common-dir query, and the difference between the two
 // is what lets one repository hold one shared backlog and many distinct
 // identities: --git-common-dir answers with the SAME directory from every
 // worktree, while --git-dir answers with a DIFFERENT one (".git" in the primary
@@ -444,7 +444,7 @@ func resolvePrivateGitDir(cwd string) (string, error) {
 
 // LocationFromStorageDir mints the store geometry rooted at an already-resolved
 // StorageDir — the "dolt", "config.json", and links-repo suffixes and nothing
-// else. [LAW:single-enforcer] These suffixes live here only; deriveLocation
+// else. [LAW:single-enforcer] These suffixes live here only; Locate
 // resolves a git-common-dir to a StorageDir and then hands off here, and a caller
 // holding a StorageDir string (a `lit stores` line) reconstructs its Location the
 // same way. So a Location rebuilt from a path and one derived from its repository
@@ -518,7 +518,7 @@ const gitFatalExitCode = 128
 // keeps the classification locale-independent. [LAW:no-silent-failure]
 //
 // [LAW:single-enforcer] Both git repo gates — Resolve's --show-toplevel and
-// deriveLocation's --git-common-dir — route through here, so they cannot drift
+// Locate's --git-common-dir — route through here, so they cannot drift
 // into classifying the same git failure two different ways.
 func classifyGitError(context string, err error) error {
 	var exitErr *exec.ExitError

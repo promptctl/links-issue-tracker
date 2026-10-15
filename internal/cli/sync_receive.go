@@ -86,7 +86,7 @@ func scheduleReceive(ctx context.Context, ws workspace.Info) {
 	if !hasRemote {
 		return
 	}
-	if err := spawnDetachedWorker(ws, receiveWorker, receiveEnv(), os.Getpid()); err != nil {
+	if err := spawnDetachedWorker(ws, backgroundReceiveSubcommand, ReceiveLogName, receiveEnv(), os.Getpid()); err != nil {
 		cause := fmt.Errorf("start the background receive: %w", err)
 		fmt.Fprintf(os.Stderr, "lit: automatic receive not started: %v\n", err)
 		recordReceiveError(ws, cause)

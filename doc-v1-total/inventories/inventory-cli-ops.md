@@ -418,7 +418,9 @@ Config defaults (`internal/config/config.go`): `sync.cadence = "on-change"`, `sy
   - `exec.Command(self, "sync", "__mirror-bg", "--parent-pid", <pid>)`, `cmd.Dir = ws.RootDir`, `cmd.Stdin = nil`.
   - Log sink `<StorageDir>/mirror.log` opened `O_CREATE|O_WRONLY|O_APPEND, 0o644` (`sync_bg.go`); on failure prints `lit: on-change mirror log unavailable (<err>); worker output will be discarded` and spawns anyway with discarded streams (`sync_bg.go`).
   - `cmd.SysProcAttr = detachSysProcAttr()` — POSIX `&syscall.SysProcAttr{Setsid: true}` (`detach_posix.go`); Windows returns an empty struct, and the file notes lit has no Windows build because embedded Dolt does not compile there (`detach_windows.go`).
-  - `cmd.Env = mirrorEnv()`; then `cmd.Start()`; on success the spawner appends `<RFC3339> spawned __mirror-bg pid=<child pid> parent_pid=<pid>` to the log (a failed write prints `lit: mirror.log spawn record not written: <err>`); the parent's log fd is closed after start (`sync_bg.go`).
+  - Before building the command: `holdWorkerLock(ws.StorageDir)` opens `<StorageDir>/.links-detached-workers.lock` `O_CREATE|O_RDWR, 0o600` and takes `flock(LOCK_SH)`; an open failure returns `open the detached-worker lock: %w`, a lock failure `hold the detached-worker lock: %w`, and either fails the spawn. The hold is `cmd.ExtraFiles`, the worker's fd 3 (`worker_lock_posix.go`); on Windows `holdWorkerLock` returns no files (`worker_lock_windows.go`).
+  - `cmd.Env = mirrorEnv()`; then `cmd.Start()`; the parent's log fd and its copy of each hold are closed after start (`sync_bg.go`).
+- `JoinDetachedWorkers(storageDir, patience) error` — exported, POSIX only (`worker_lock_posix.go`): no lock file → `nil`; stat error → `find the detached-worker lock: %w`; else `filelock.Acquire` exclusive, `patience/20ms + 1` attempts 20ms apart; an Acquire error → `join detached workers: %w`; contention → `detached workers still hold <lock path> after <patience>`; acquired → the release's error.
 - `mirrorEnv()` — `sync_bg.go`: copies the parent env with `LNKS_AUTOMATION_TRIGGER=`, `LNKS_AUTOMATION_REASON=`, `LNKS_AUTOMATION_TRACE_REF_FILE=` prefixes stripped, then appends `LNKS_AUTOMATION_TRIGGER=on-change` and `LNKS_AUTOMATION_REASON=on-change cadence mirrored after a mutating command`. The mirror carries no trace-ref file.
 - Timing constants (`sync_bg.go`):
   - `parentPostSpawnTail = compactTimeout(45s)`.
@@ -459,7 +461,7 @@ Flag parse output is `io.Discard` (`sync_bg.go`).
 1. Debounce on `<StorageDir>/receive.last` mtime (`sync_cadence.go`); not due → return.
 2. Mark the attempt BEFORE any work; failure → stderr `lit: automatic receive debounce marker not written: <err>` (`sync_receive.go`).
 3. `workspaceHasGitRemote` error → `recordReceiveError("check git remotes: %w")`; no remote → silent return.
-4. `spawnDetachedWorker(ws, receiveWorker, receiveEnv(), os.Getpid())` (`receiveWorker` is `__receive-bg` logging to `receive.log`); failure → stderr `lit: automatic receive not started: <err>` and `recordReceiveError("start the background receive: %w")`. `receiveEnv()` is the parent env with `LNKS_AUTOMATION_TRACE_REF_FILE` stripped.
+4. `spawnDetachedWorker(ws, "__receive-bg", "receive.log", receiveEnv(), os.Getpid())`; failure → stderr `lit: automatic receive not started: <err>` and `recordReceiveError("start the background receive: %w")`. `receiveEnv()` is the parent env with `LNKS_AUTOMATION_TRACE_REF_FILE` stripped.
 
 `backgroundReceiveLeaf` — `sync_receive.go`, the worker (`--parent-pid`, default `0`): writes `<RFC3339> receive start pid=<pid> deadline=15s`; runs `receiveWhenQuiet`; then writes `<RFC3339> receive end pid=<pid> mirror_wait=<d> elapsed=<d>`. Always returns nil.
 
@@ -653,7 +655,7 @@ The block has no trailing newline after `</agent-instructions>` (`sync_failure.g
 - `cmd/lit/eager_push_test.go` `TestEagerPushOnDefaultCadenceReachesRemoteWithoutExplicitPush` — with no `[sync]` config at all, a single mutating command's change reaches a bare git remote with no explicit push; verified by an independent `dolt clone` oracle polled with a bounded deadline (`eager_push_test.go`). Skips when `git` or `dolt` is missing (`eager_push_test.go`).
 - `cmd/lit/mutation_staleness_banner_test.go` `TestPushFailureBannerReachesMutationOnlySession` — pins that a mutation-only session sees the push-failure banner within a bounded window against an unreachable remote, and that a healthy remote produces NO banner despite the command being momentarily "ahead" (`mutation_staleness_banner_test.go`).
 - `cmd/lit/sync_engine_race_test.go` `TestBurstOfMutationsNeverHitsEngineReadOnlyCollision` — a back-to-back burst of mutating commands must never surface Dolt's "database is read only" error, every command must exit 0, and every commit (including the last) must reach the remote with no sweep push (`sync_engine_race_test.go`).
-- `cmd/lit/worker_join_test.go` `joinDetachedWorkers` — registered by `runLit` once per test and directory; at cleanup it finds the store with `workspace.Discover` and polls `cli.SpawnedWorkerPIDs` until every listed pid fails `kill(pid, 0)` and a re-read lists no pid the first read did not. Budget `workerJoinPatience = 2m`, poll `20ms`; past the budget it fails the test naming the live pids and dumping every worker log (`worker_join_test.go`).
+- `cmd/lit/worker_join_test.go` `joinDetachedWorkers` — called by `runLit` for every lit run: `workspace.Locate(dir)` (`ErrNotGitRepo` ⇒ nothing registered; any other error fails the test), then a cleanup calling `cli.JoinDetachedWorkers(storageDir, 2m)`; an error fails the test with the receive and mirror logs (`worker_join_test.go`).
 
 ---
 

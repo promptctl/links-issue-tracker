@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -503,21 +502,13 @@ func TestAPeerPushReachesTheStoreThroughTheReceiveWorker(t *testing.T) {
 
 	lit(consumer, onPushEnv(cadenceConfig, "0"), "backlog")
 	pid := receiveWorkerPID(t, ws)
-	// The spawner's record of the worker is what the cleanup join waits on, so
-	// it must name the pid the worker reports for itself.
-	spawned, err := cli.SpawnedWorkerPIDs(ws.StorageDir)
-	if err != nil {
-		t.Fatalf("SpawnedWorkerPIDs: %v", err)
+	// The join reads the worker's exit from the kernel, so once it returns the
+	// worker has made its last write and its end line is already in the log.
+	if err := cli.JoinDetachedWorkers(ws.StorageDir, 60*time.Second); err != nil {
+		t.Fatalf("%v:\n%s", err, receiveLog(t, ws))
 	}
-	if !slices.Contains(spawned, pid) {
-		t.Fatalf("no spawn record names receive worker %d (records: %v):\n%s", pid, spawned, receiveLog(t, ws))
-	}
-	deadline := time.Now().Add(60 * time.Second)
-	for !strings.Contains(receiveLog(t, ws), fmt.Sprintf("receive end pid=%d ", pid)) {
-		if time.Now().After(deadline) {
-			t.Fatalf("receive worker %d did not end within 60s:\n%s", pid, receiveLog(t, ws))
-		}
-		time.Sleep(50 * time.Millisecond)
+	if !strings.Contains(receiveLog(t, ws), fmt.Sprintf("receive end pid=%d ", pid)) {
+		t.Fatalf("receive worker %d has no end line once the join returned:\n%s", pid, receiveLog(t, ws))
 	}
 	if backlog := lit(consumer, quiet, "backlog"); !strings.Contains(backlog, "second-ticket") {
 		t.Fatalf("consumer backlog missing the peer's second-ticket after the receive worker ended:\n%s\nreceive log:\n%s", backlog, receiveLog(t, ws))

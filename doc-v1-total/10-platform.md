@@ -105,7 +105,7 @@ Cadence semantics (`config.go`): `on-push` mirrors only when the managed pre-pus
 
 A `Location` is pure path geometry derived from the storage dir (`workspace.go`): `StorageDir` = `<git-common-dir>/links`, `ConfigPath` = `<storage>/config.json`, `DatabasePath` = `<storage>/dolt`, `DoltRepoPath` = `<storage>/dolt/links`.
 
-`deriveLocation(cwd)` (`workspace.go`): run `git rev-parse --git-common-dir` anchored at cwd; join a relative answer onto the absolute cwd (not the repo toplevel); canonicalize through `filepath.EvalSymlinks`; append `links`. `Resolve(cwd)` adds: `git rev-parse --show-toplevel` for the root, `git rev-parse --git-dir` for the checkout's **private** git dir (deliberately not symlink-canonicalized, `workspace.go`), `MkdirAll` on the storage dir, and load-or-create of `config.json` (`workspace.go`). All geometry git calls use `context.Background()` deliberately.
+`Locate(cwd)` (`workspace.go`): run `git rev-parse --git-common-dir` anchored at cwd; join a relative answer onto the absolute cwd (not the repo toplevel); canonicalize through `filepath.EvalSymlinks`; append `links`. `Resolve(cwd)` adds: `git rev-parse --show-toplevel` for the root, `git rev-parse --git-dir` for the checkout's **private** git dir (deliberately not symlink-canonicalized, `workspace.go`), `MkdirAll` on the storage dir, and load-or-create of `config.json` (`workspace.go`). All geometry git calls use `context.Background()` deliberately.
 
 Git-error classification (`workspace.go`): only an `exec.ExitError` with exit code 128 maps to the sentinel `ErrNotGitRepo`; git missing from PATH, signal-killed git, or any other exit code is surfaced with context.
 

@@ -117,14 +117,14 @@ func TestBurstOfMutationsNeverHitsEngineReadOnlyCollision(t *testing.T) {
 		out, err := runLit(t, root, self, isolatedEnv(xdgConfigHome, "0"),
 			"new", "--title", "burst-issue", "--topic", "demo", "--parent", epic)
 		if err != nil {
-			t.Fatalf("lit new #%d failed: %v\noutput:\n%s\n%s", i, err, out, dumpMirrorLog(root))
+			t.Fatalf("lit new #%d failed: %v\noutput:\n%s\n%s", i, err, out, dumpMirrorLog(filepath.Join(root, ".git", "links")))
 		}
 		lower := strings.ToLower(out)
 		if strings.Contains(lower, "database is read only") || strings.Contains(lower, "cannot update manifest") {
-			t.Fatalf("lit new #%d hit an engine open-collision instead of waiting for it to clear:\noutput:\n%s\n%s", i, out, dumpMirrorLog(root))
+			t.Fatalf("lit new #%d hit an engine open-collision instead of waiting for it to clear:\noutput:\n%s\n%s", i, out, dumpMirrorLog(filepath.Join(root, ".git", "links")))
 		}
 		if strings.Contains(lower, "online garbage collection") && strings.Contains(lower, "reconnect") {
-			t.Fatalf("lit new #%d hit an online-GC reconnect collision:\noutput:\n%s\n%s", i, out, dumpMirrorLog(root))
+			t.Fatalf("lit new #%d hit an online-GC reconnect collision:\noutput:\n%s\n%s", i, out, dumpMirrorLog(filepath.Join(root, ".git", "links")))
 		}
 	}
 
@@ -157,7 +157,7 @@ func TestBurstOfMutationsNeverHitsEngineReadOnlyCollision(t *testing.T) {
 			}
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("burst's %d commits never all reached the remote within %s of the last lit new returning\n%s", burstSize, settleTimeout, dumpMirrorLog(root))
+			t.Fatalf("burst's %d commits never all reached the remote within %s of the last lit new returning\n%s", burstSize, settleTimeout, dumpMirrorLog(filepath.Join(root, ".git", "links")))
 		}
 		time.Sleep(settlePollInterval)
 	}
@@ -166,14 +166,14 @@ func TestBurstOfMutationsNeverHitsEngineReadOnlyCollision(t *testing.T) {
 // dumpMirrorLog reads the on-change mirror's durable log (mirrorLogName in
 // internal/cli/sync_bg.go) at its conventional path — <git-common-dir>/links/
 // mirror.log, i.e. <root>/.git/links/mirror.log for a plain (non-worktree)
-// repo, matching internal/workspace.deriveLocation's StorageDir derivation —
+// repo, matching internal/workspace.Locate's StorageDir derivation —
 // and formats it for inclusion in a failure message. Every mirror this test's
 // foreground commands spawn writes here, so on a failure this is the one place
 // that can show what a background mirror (parent-wait, single-flight,
 // engine-open wait, push) was actually doing when the failure happened,
 // instead of guessing from the foreground command's error alone.
-func dumpMirrorLog(root string) string {
-	path := filepath.Join(root, ".git", "links", "mirror.log")
+func dumpMirrorLog(storageDir string) string {
+	path := filepath.Join(storageDir, "mirror.log")
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Sprintf("mirror log (%s) unavailable: %v", path, err)

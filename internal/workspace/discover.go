@@ -76,7 +76,7 @@ func discoverUnder(root string, byStore map[string]Location) error {
 			}
 			return fmt.Errorf("stat %q: %w", gitEntry, statErr)
 		}
-		loc, derr := deriveLocation(path)
+		loc, derr := Locate(path)
 		if derr != nil {
 			// A `.git` git itself refuses (a dangling gitfile, a non-repository)
 			// is simply not a discoverable store — the expected "this looked like
