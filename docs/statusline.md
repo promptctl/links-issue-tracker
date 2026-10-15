@@ -23,7 +23,10 @@ create it. A script should treat a missing file as "nothing recorded yet".
 The rest of `.lit/` holds committed project files, so the file is not
 gitignored. Instead, the write that creates it adds `/.lit/statusline.json*` to
 the repository's `info/exclude`, in the git common directory that every worktree
-shares. The file never shows in `git status`.
+shares, so the file stays out of `git status`. Later writes do not check the
+entry again. If the entry is removed while the file exists, `git status` lists
+the file until you add the entry back, or delete the file so that the next write
+recreates both.
 
 lit writes the file to a temporary sibling and renames it into place, so a reader
 always sees a complete file. Reading it needs no lock.
@@ -89,14 +92,15 @@ seconds.
   this checkout holds. This happens with or without filter flags, and it also
   updates `recorded_at`.
 
-**`next`** is set by a plain `lit next`: one run without `--assignee`, `--type`,
-`--status`, `--labels` or `--all`. A filtered `lit next`, or one with `--all`,
-answers a different question and leaves `next` alone. A focus scope configured
-for the repository does not count as a filter.
+**`next`** is set by a plain `lit next`: one that neither narrows the pick with
+`--assignee`, `--type`, `--status` or `--labels` nor turns on `--all`. A flag
+that narrows nothing, such as `--status ""` or `--all=false`, leaves the run
+plain. A filtered `lit next`, or one with `--all`, answers a different question
+and leaves `next` alone. A focus scope configured for the repository does not
+count as a filter.
 
-**Titles.** When a command changes a ticket's title, for example
-`lit update --title`, every value naming that ticket shows the new title. Its
-`recorded_at` does not change.
+**Titles.** After `lit update --title`, every value naming that ticket shows the
+new title. Its `recorded_at` does not change.
 
 **Clearing.** A value becomes `null` when this checkout moves the ticket it names
 through any lifecycle change other than a start: `lit done`, `lit close`,
@@ -115,7 +119,10 @@ matters to you.
 
 - **Changes made elsewhere.** A ticket closed, retitled or taken over in another
   checkout keeps its old value here, even after `lit sync pull` brings the change
-  in. Only a command run in this checkout updates this checkout's file.
+  in. Only a command run in this checkout updates this checkout's file. This
+  holds for `lit purge` too: the purged ticket's title stays in every other
+  checkout's file. To remove the title, delete that checkout's file; a missing
+  file reads as nothing recorded.
 - **`next` is a snapshot.** It is the answer as of `next.recorded_at`. Tickets
   filed, ranked or finished since then can change what `lit next` would pick, and
   nothing reruns it.
@@ -133,7 +140,8 @@ matters to you.
 `schema_version` changes when a field is removed or a field's meaning changes. It
 does not change when a field is added. A script should check that
 `schema_version` is the version it was written for and ignore fields it does not
-know.
+know. A field added later can be missing even at the same `schema_version`,
+because an older lit that rewrites the file drops the fields it does not know.
 
 When lit finds a file it cannot parse, or one with a different `schema_version`,
 it replaces the whole file with what the current command recorded. It prints
@@ -142,8 +150,9 @@ it does.
 
 ## A minimal statusline
 
-This script prints the ticket being worked on and the next pick, and prints
-nothing when the file is missing or has a schema version it does not know:
+This script prints the ticket being worked on and the next pick. It prints
+nothing when the file is missing, has a schema version it does not know, or
+records nothing:
 
 ```sh
 #!/bin/sh
@@ -156,5 +165,6 @@ jq -r '
                elif .ticket == null then "next: nothing ready"
                else "next: \(.ticket.id)" end) ]
   | join("  |  ")
+  | select(. != "")
 ' "$f"
 ```
