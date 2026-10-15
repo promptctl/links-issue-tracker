@@ -36,8 +36,8 @@ runs:
         TOKEN: ${{ inputs.token }}
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         # The explicit `lit sync push` below is the one push, and it fails this
-        # step if it fails; a background mirror could still be running when the
-        # job ends. [LAW:no-silent-failure]
+        # step if its last attempt fails; a background mirror could still be
+        # running when the job ends. [LAW:no-silent-failure]
         LIT_DISABLE_AUTO_SYNC: "1"
       run: |
         set -euo pipefail
@@ -55,8 +55,7 @@ runs:
         go build -o "$lit" ./cmd/lit
         # A fresh clone adopts the remote's backlog here (first-receive).
         "$lit" init
-        existing=$("$lit" ls --labels "$LABEL" --status open,in_progress --columns id)
-        existing=${existing%%$'\n'*}
+        existing=$("$lit" ls --labels "$LABEL" --status open,in_progress --limit 1 --columns id)
         if [ -n "$existing" ]; then
           "$lit" comment add "$existing" --body "Red again: ${RUN_URL}"
         else
@@ -66,4 +65,14 @@ runs:
 
         ${BODY}"
         fi
+        # A push is refused when another writer (an agent session, the other
+        # scheduled lane) moved refs/dolt/data after `lit init` adopted it; the
+        # pull merges that write in and the push goes again. A failure the pull
+        # cannot cure fails the last push, and with it this step.
+        # [LAW:no-silent-failure]
+        for attempt in 1 2; do
+          "$lit" sync push && exit 0
+          echo "::warning::lit sync push attempt ${attempt} of 3 was refused; pulling the remote and retrying"
+          "$lit" sync pull
+        done
         "$lit" sync push

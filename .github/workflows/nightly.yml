@@ -65,9 +65,11 @@ jobs:
   # Its own job, so the suite never runs holding the write token the report
   # needs. `result != 'success'` covers failure, cancellation, and the
   # job-level timeout, which GitHub reports as cancelled. [LAW:no-silent-failure]
+  # Only master's runs report: the backlog is master's, and a run dispatched
+  # on a branch is red in front of the session that dispatched it.
   report:
     needs: full-suite
-    if: ${{ always() && needs.full-suite.result != 'success' }}
+    if: ${{ always() && needs.full-suite.result != 'success' && github.ref == 'refs/heads/master' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:

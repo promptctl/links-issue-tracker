@@ -907,13 +907,12 @@ then `dolt version`.
   `go test -timeout 30m ./...` (no `-short`, so `testing.Short()` is false) →
   `go run ./tools/lawtokens-sync -check` (`if: ${{ !cancelled() }}`).
 - Job `report`, `needs: full-suite`,
-  `if: ${{ always() && needs.full-suite.result != 'success' }}` (a job timeout is
-  reported as cancelled, so the condition reads the result, not `failure()`),
+  `if: ${{ always() && needs.full-suite.result != 'success' && github.ref == 'refs/heads/master' }}`
+  (a job timeout is reported as cancelled, so the condition reads the result, not
+  `failure()`; a run on any other ref files nothing),
   `permissions: contents: write`, `timeout-minutes: 15`. Steps: checkout
   (`persist-credentials: false`) → `./.github/actions/report-to-lit` with label
-  `nightly-failure` and title `Nightly full test lane is failing`. The action
-  comments `Red again: <run URL>` on the open ticket carrying the label, or files an
-  urgent bug inside epic `links-ci-alarm-z6sv`, then runs `lit sync push`.
+  `nightly-failure` and title `Nightly full test lane is failing` (§11.8).
 
 ### 11.4 `.github/workflows/license-graph-audit.yml` — "License graph audit"
 
@@ -1079,6 +1078,48 @@ setup-go@v5 (`cache: true`) → `go mod download` → `go run ./tools/licenses -
   `::error::no release assets found under $DIST — refusing to publish an empty release`; a
   failing `gh release create` prints a recovery instruction naming
   `gh release delete $TAG --repo … --cleanup-tag --yes`.
+
+### 11.8 `.github/actions/report-to-lit/action.yml`
+
+Composite action (`.github/actions/report-to-lit/action.yml`). Inputs, all required:
+`label`, `title`, `body`, `token`.
+
+- `actions/setup-go@v5` with `go-version-file: go.mod`.
+- One bash step, `set -euo pipefail`, env `LIT_DISABLE_AUTO_SYNC=1` and
+  `RUN_URL=<server_url>/<repository>/actions/runs/<run_id>`:
+  - sets the global git config `http.https://github.com/.extraheader` to
+    `AUTHORIZATION: basic <base64 of x-access-token:<token>>`, and the global
+    `user.name`/`user.email` to `github-actions[bot]`;
+  - `go build -o "$RUNNER_TEMP/lit" ./cmd/lit`, then `lit init`;
+  - `lit ls --labels <label> --status open,in_progress --limit 1 --columns id`; a
+    hit gets `lit comment add <id> --body "Red again: <run URL>"`; no hit runs
+    `lit new --parent links-ci-alarm-z6sv --type bug --priority urgent --top
+    --topic <label> --labels <label> --title <title>` with description
+    `Red run: <run URL>`, a blank line, then `<body>`;
+  - `lit sync push`; a refused push prints
+    `::warning::lit sync push attempt <n> of 3 was refused; pulling the remote and retrying`
+    and runs `lit sync pull` before the next push. The third push's exit status is
+    the step's.
+
+### 11.9 `.github/workflows/release-watchdog.yml` — "Release watchdog"
+
+- Triggers: `schedule: cron '23 * * * *'` and `workflow_dispatch`.
+- `permissions: contents: read`. Concurrency group `release-watchdog`,
+  `cancel-in-progress: false`.
+- Job `watchdog`, `ubuntu-latest`, `timeout-minutes: 10`, env `GRACE_MINUTES: 120`.
+  Steps: checkout (`fetch-depth: 0`) → `scripts/release-kind.sh`. Verdict
+  `snapshot` or `tagged *` exits 0. Verdict `pending <VER>`: `git log -1 --format=%ct
+  -S "## [<VER>]" -- CHANGELOG.md` gives the promotion time; no such commit is
+  `::error::` and exit 1; an age at or under `GRACE_MINUTES` exits 0; an older one is
+  `::error::v<VER> has been pending for <age>m (grace: 120m) …` and exit 1. Any other
+  verdict is `::error::unrecognized verdict from scripts/release-kind.sh: '<verdict>'`
+  and exit 1.
+- Job `report`, `needs: watchdog`,
+  `if: ${{ always() && needs.watchdog.result != 'success' && github.ref == 'refs/heads/master' }}`,
+  `permissions: contents: write`, `timeout-minutes: 15`. Steps: checkout
+  (`persist-credentials: false`) → `./.github/actions/report-to-lit` (§11.8) with label
+  `release-stuck`, title `A promoted release is stuck: no tag published`, and a body
+  naming the recovery `gh workflow run release-validate.yml --ref master`.
 
 ---
 
