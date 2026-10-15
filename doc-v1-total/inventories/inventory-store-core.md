@@ -90,7 +90,7 @@ Both hooks are per-`Store` instance state, not package globals (`store.go`).
 
 #### 1.5 `newEngineOpenBackOff`
 
-`store.go`. `newHoldWait(workspaceStorageDir(doltRootDir), DoltJournalLockPath(doltRootDir), coResidentHolderWaitNow)` per connector: `holdWait` (`lock_holder.go`) polls every `storeLockPollInterval` = 100ms and returns `backoff.Stop` once no holder-record name it has not seen before has appeared under the lock's holder directory for the wait; `Reset` starts the clock and takes the first reading. Only attached for `engineWrite` (`store.go`).
+`store.go`. `newHoldWait(workspaceStorageDir(doltRootDir), DoltJournalLockPath(doltRootDir), coResidentHolderWaitNow, time.Now)` per connector: `holdWait` (`lock_holder.go`) polls every `storeLockPollInterval` = 100ms and returns `backoff.Stop` once no holder-record name it has not seen before has appeared under the lock's holder directory for the wait; `Reset` starts the clock and takes the first reading. Only attached for `engineWrite` (`store.go`).
 
 #### 1.6 `wrapEngineOpenContention`
 
