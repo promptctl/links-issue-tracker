@@ -406,6 +406,7 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "find the detached-worker lock: %w", Src: "find the detached-worker lock: %w"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "hold the detached-worker lock: %w", Src: "hold the detached-worker lock: %w"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "hooks install", Src: "hooks install"},
+	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "installs it.", Src: "cannot upgrade: the latest published release, %s, supports only through schema v%d, but this workspace is at v%d — it was written by a lit build newer than that release, and this binary cannot open it either\n\nto operate this workspace, run the lit build that wrote it; once a release whose schema support reaches v%d is published, `lit upgrade` installs it.\n\n%s"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "instead (it reverses the schema before installing the older binary)", Src: "cannot upgrade to %s: its schema support ends at v%d but this workspace is already at v%d — that is a backward move; use `lit downgrade --to %s` instead (it reverses the schema before installing the older binary)"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "is blocked by", Src: "is blocked by"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "join detached workers: %w", Src: "join detached workers: %w"},
