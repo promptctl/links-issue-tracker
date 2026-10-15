@@ -89,7 +89,7 @@ func TestRetainTransitionTable(t *testing.T) {
 		{deleted, Delete{}, nil, "issue is already deleted", true},
 
 		{live, Restore{}, nil, "issue is not deleted", true},
-		{archived, Restore{}, nil, "issue is not deleted", true},
+		{archived, Restore{}, nil, "cannot restore archived issue; it is not deleted — unarchive it instead", false},
 		{deleted, Restore{}, Live{}, "", false},
 	}
 

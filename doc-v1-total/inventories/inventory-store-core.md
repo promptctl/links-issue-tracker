@@ -863,7 +863,7 @@ with `created_at` as RFC3339Nano; failure → `fmt.Errorf("insert comment: %w", 
 #### 8.2 `DeleteComment(ctx, commentID string) (model.Comment, error)`
 
 `store.go`:
-1. `id := strings.TrimSpace(commentID)`; empty → `errors.New("comment id is required")` (`store.go`).
+1. `id := strings.TrimSpace(commentID)`; empty → `model.ValidationError` `"comment id is required"` (`store.go`).
 2. Inside `withMutation(ctx, "delete comment", ...)`:
    - `SELECT id, issue_id, body, created_at, created_by FROM comments WHERE id = ?` (`store.go`);
    - `sql.ErrNoRows` → `storage.NotFoundError{Entity: "comment", ID: id}` (`store.go`); other → `fmt.Errorf("read comment: %w", err)`;
@@ -2909,10 +2909,7 @@ Pinned cases — `internal/store/ranking_frame_test.go`:
 - `{{g,s,e},{c,e}}` → `[s c]`
 - `{{c,e},{e}}`, `{{e},{g,s,e}}`, `{{e},{x},{c,e}}` → `storage.FrameContainmentError`
 
-`resolveComparableFrame(issueChain, targetChain)` — `internal/store/ranking.go`: wraps `resolveFrameRepresentatives` for the pair and rewrites containment errors as `model.ValidationError`:
-- when the container is the issue itself: `fmt.Sprintf("cannot rank %s relative to %s: %s contains it; rank it against a sibling instead", issueChain[0], targetChain[0], issueChain[0])`;
-- otherwise: `fmt.Sprintf("cannot rank %s relative to %s: %s is inside %s; rank it against a sibling instead", issueChain[0], targetChain[0], issueChain[0], targetChain[0])`.
-Returns `(reps[0], reps[1])` as `(movedID, anchorID)`.
+`resolveComparableFrame(issueChain, targetChain)` — `internal/store/ranking.go`: wraps `resolveFrameRepresentatives` for the pair and returns its error unwrapped, so a containment reaches the caller as `storage.FrameContainmentError` in either direction. Returns `(reps[0], reps[1])` as `(movedID, anchorID)`.
 
 Pinned pair cases — `internal/store/ranking_frame_test.go`: top-level pair unchanged; same-epic siblings unchanged; standalone vs child → `(x, e)`; child vs standalone → `(e, x)`; two epics' children → `(e1, e2)`; grandchild vs child of shared epic → `(s, c)`; either containment direction errors.
 
@@ -2958,11 +2955,11 @@ Frame behavior pinned by tests — `internal/store/ranking_frame_test.go`:
 - Child above a standalone moves the **epic**; children and anchor unchanged.
 - Across two epics, `RankBelow(child1, child2)` moves epic1 relative to epic2.
 - Same-epic siblings rank directly.
-- `RankAbove(child, own epic)` errors containing `"inside"`; `RankBelow(epic, own child)` errors containing `"contains"`.
+- `RankAbove(child, own epic)` and `RankBelow(epic, own child)` both refuse with `storage.FrameContainmentError{ContainerID: epic, ContainedID: child}`.
 
 **RankSet(ids)** — `internal/store/ranking.go`:
-- Validation `rankSetValidateIDs` — `internal/store/ranking.go`: each refusal is a `model.ValidationError`: fewer than 2 ids → `"rank set: need at least 2 IDs to establish order"`; an empty-string id → `"rank set: empty ID in input"`; a repeated id → `"rank set: duplicate ID %q in input"`.
-- `resolveRankSet` — `internal/store/ranking.go`: per id, `GetIssue` then `ancestorChain`; `resolveFrameRepresentatives` errors are wrapped `fmt.Errorf("rank set: %w", err)`; two named ids collapsing to the same representative → `model.ValidationError`
+- Validation `storage.ValidateRankSetIDs` — `internal/storage/rank.go`, shared with the memory engine: each refusal is a `model.ValidationError`: fewer than 2 ids → `"rank set: need at least 2 IDs to establish order"`; an empty-string id → `"rank set: empty ID in input"`; a repeated id → `"rank set: duplicate ID %q in input"`.
+- `resolveRankSet` — `internal/store/ranking.go`: per id, `GetIssue` then `ancestorChain`; `resolveFrameRepresentatives` errors are wrapped `fmt.Errorf("rank set: %w", err)`; `storage.RankSetResolutions(ids, reps)` (`internal/storage/rank.go`, shared with the memory engine) pairs each id with its representative, and two named ids collapsing to the same representative → `model.ValidationError`
   `fmt.Sprintf("rank set: %s and %s both resolve to %s — their relative order is internal to %s and cannot be set against outside issues; run rank set among siblings instead", prior, id, reps[i], reps[i])`.
   Returns `[]storage.RankSetResolution{{NamedID, RankedID}}` parallel to the input order.
 - In `withMutation(ctx, "rank set", …)`, `unrankedAmongTx` first reads which representatives are live and hold no key, one `SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank = '' AND id IN (…)` per `idBatches` batch, error → `fmt.Errorf("read which of %v hold no key: %w", batch, err)` wrapped `fmt.Errorf("rank set: %w", err)`; each is placed at the frame's bottom by `bottomEdge.placeBeyondTx`, error wrapped `fmt.Errorf("rank set: %w", err)`. Then the frame's keys are read lowest first, ties by id:

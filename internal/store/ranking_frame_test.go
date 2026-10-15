@@ -360,11 +360,20 @@ func TestRankAgainstOwnContainerErrors(t *testing.T) {
 	st := openIssueStore(t, ctx)
 	fx := newFrameFixture(t, ctx, st)
 
-	if _, err := st.RankAbove(ctx, fx.children[0].ID, fx.epic.ID); err == nil || !strings.Contains(err.Error(), "inside") {
-		t.Errorf("RankAbove(child, own epic) error = %v, want containment rejection", err)
-	}
-	if _, err := st.RankBelow(ctx, fx.epic.ID, fx.children[0].ID); err == nil || !strings.Contains(err.Error(), "contains") {
-		t.Errorf("RankBelow(epic, own child) error = %v, want containment rejection", err)
+	// Either direction is the one refusal, naming the epic as the container
+	// whichever side of the pair it was given on.
+	want := storage.FrameContainmentError{ContainerID: fx.epic.ID, ContainedID: fx.children[0].ID}
+	for _, tc := range []struct {
+		name string
+		rank func() error
+	}{
+		{"RankAbove(child, own epic)", func() error { _, err := st.RankAbove(ctx, fx.children[0].ID, fx.epic.ID); return err }},
+		{"RankBelow(epic, own child)", func() error { _, err := st.RankBelow(ctx, fx.epic.ID, fx.children[0].ID); return err }},
+	} {
+		var got storage.FrameContainmentError
+		if err := tc.rank(); !errors.As(err, &got) || got != want {
+			t.Errorf("%s error = %v, want %#v", tc.name, err, want)
+		}
 	}
 }
 

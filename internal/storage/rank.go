@@ -14,8 +14,9 @@ import (
 // contained issue's representative would be (or sit under) the container
 // itself — so no frame-coherent rank order between them exists, and the same
 // request is refused the same way on every run.
-// [LAW:one-source-of-truth] Both engines resolve frames to this one type, so
-// they cannot word or classify the refusal differently.
+// [LAW:one-source-of-truth] Both engines resolve frames to this one type and
+// return it unreworded, so they cannot word or classify the refusal
+// differently.
 type FrameContainmentError struct {
 	ContainerID string
 	ContainedID string
@@ -27,6 +28,50 @@ func (e FrameContainmentError) Error() string {
 
 // RefusesCommand marks FrameContainmentError as a model.Refusal.
 func (FrameContainmentError) RefusesCommand() {}
+
+var _ model.Refusal = FrameContainmentError{}
+
+// ValidateRankSetIDs refuses a rank set whose arguments cannot name an order:
+// fewer than two ids, an empty id, or one id named twice. The refusals are
+// about the call's own arguments, so they carry the "rank set: " prefix.
+// [LAW:one-source-of-truth] Both engines run this one check, so they cannot
+// word or classify these refusals differently.
+func ValidateRankSetIDs(ids []string) error {
+	if len(ids) < 2 {
+		return model.ValidationError{Message: "rank set: need at least 2 IDs to establish order"}
+	}
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if id == "" {
+			return model.ValidationError{Message: "rank set: empty ID in input"}
+		}
+		if _, dup := seen[id]; dup {
+			return model.ValidationError{Message: fmt.Sprintf("rank set: duplicate ID %q in input", id)}
+		}
+		seen[id] = struct{}{}
+	}
+	return nil
+}
+
+// RankSetResolutions pairs each named id with reps[i], the frame
+// representative it resolved to. Two named ids collapsing onto one
+// representative is refused: the order asked for places issues from inside one
+// epic against outsiders, which no frame-coherent write expresses, and honoring
+// the part of it that fits would misrepresent the request.
+// [LAW:no-silent-failure] [LAW:one-source-of-truth] Both engines resolve
+// through this one pairing.
+func RankSetResolutions(ids, reps []string) ([]RankSetResolution, error) {
+	resolutions := make([]RankSetResolution, len(ids))
+	namedByRep := make(map[string]string, len(ids))
+	for i, id := range ids {
+		if prior, dup := namedByRep[reps[i]]; dup {
+			return nil, model.ValidationError{Message: fmt.Sprintf("rank set: %s and %s both resolve to %s — their relative order is internal to %s and cannot be set against outside issues; run rank set among siblings instead", prior, id, reps[i], reps[i])}
+		}
+		namedByRep[reps[i]] = id
+		resolutions[i] = RankSetResolution{NamedID: id, RankedID: reps[i]}
+	}
+	return resolutions, nil
+}
 
 // RankMove reports the pair a relative rank operation actually applied to
 // after frame resolution: MovedID was re-ranked relative to AnchorID. When

@@ -1,5 +1,7 @@
 package model
 
+import "github.com/promptctl/links-issue-tracker/internal/model/lifecycle"
+
 // ValidationError is a refusal of a value the caller supplied: it breaks a
 // domain rule, so the same input is refused the same way on every run. The CLI
 // maps it to exit 3 and to advice to change the input, never to retry.
@@ -40,3 +42,8 @@ type StateRequestError interface {
 	error
 	Satisfied() bool
 }
+
+var (
+	_ StateRequestError = ContainerActionError{}
+	_ StateRequestError = lifecycle.RetentionError{}
+)

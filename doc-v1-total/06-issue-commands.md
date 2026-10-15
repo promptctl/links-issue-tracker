@@ -139,7 +139,7 @@ Sequence: read the issue (missing → exit 4) → authorization (only `start` ha
 
 **`lit parent set --child <id> --parent <id>`** / **`lit parent clear <child-id>`** (`issue_relations.go`): `set` prints the edge as `<child> child of <parent>`, and refuses a `--parent` that is not an epic (exit 3); `clear` prints `ok` for an epic, which it lifts to the top level, and refuses a leaf (exit 3, "cannot detach X from its epic: a task lives inside an epic, so move it with lit parent set --child X --parent <epic-id>").
 
-**`lit comment add <id> --body <text>`**: blank body → "comment body is required" (exit 3); comment IDs are `cmt-<uuid>`; prints `<issueID> <commentID>`; no breadcrumb. **`lit comment rm <comment-id>`**: unknown ID → exit 4; prints the deleted pair (`cli.go`).
+**`lit comment add <id> --body <text>`**: blank body → "comment body is required" (exit 3); comment IDs are `cmt-<uuid>`; prints `<issueID> <commentID>`; no breadcrumb. **`lit comment rm <comment-id>`**: blank ID → "comment id is required" (exit 3); unknown ID → exit 4; prints the deleted pair (`cli.go`).
 
 **`lit label add|rm <issue-id> <label>`**: normalizes through the label rules (chapter 01), prints the resulting full label set comma-joined. Reserved labels: `needs-design` and `external` block readiness; `focus` marks a focus-path goal (`issue_relations.go`).
 

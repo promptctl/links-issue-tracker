@@ -768,7 +768,7 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 - **`AddComment` records no history event.**
 
 **`DeleteComment`**
-- `id = strings.TrimSpace(commentID)`; empty → `errors.New("comment id is required")`.
+- `id = strings.TrimSpace(commentID)`; empty → `model.ValidationError` `"comment id is required"`.
 - Not found → `storage.NotFoundError{Entity: "comment", ID: id}`.
 - Deletes and returns the removed comment.
 
@@ -869,12 +869,11 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 **`RankToTop` / `RankToBottom`** — `rankToEdge(issueID, storage.RankTop|RankBottom)` (`internal/storage/memory/rank.go`): `mustRankable` (a missing id is `NotFoundError`; a deleted one → `model.ValidationError` with message `"cannot rank deleted issue %s; restore it first"`), then `orderEdgeFor(placement)`. The ends are the issue's own frame's: the result carries `Frame: e.frameOf(issueID)`, and an issue with no frame-mates returns with `Moved` false. An issue already past the edge among its frame-mates returns with `Moved` false; otherwise it is `detach`ed and inserted at `edge.positionIn` of its frame-mates' positions.
 
 **`RankSet(ids)`**
-- `len(ids) < 2` → `model.ValidationError` `"rank set: need at least 2 IDs to establish order"`.
-- Empty id → `model.ValidationError` `"rank set: empty ID in input"`.
-- Duplicate id → `model.ValidationError` `"rank set: duplicate ID %q in input"`.
+- `storage.ValidateRankSetIDs(ids)` (`internal/storage/rank.go`, shared with the Dolt store), each refusal a `model.ValidationError`: `len(ids) < 2` → `"rank set: need at least 2 IDs to establish order"`; empty id → `"rank set: empty ID in input"`; duplicate id → `"rank set: duplicate ID %q in input"`.
+- `mustRankable` per id, unwrapped.
 - Builds an ancestor chain per id (missing id → `NotFoundError` from `ancestorChain`).
 - `frameRepresentatives(chains)`; error wrapped as `fmt.Errorf("rank set: %w", err)`.
-- **Two named ids collapsing onto one representative is refused** with a `model.ValidationError`: `"rank set: %s and %s both resolve to %s — their relative order is internal to %s and cannot be set against outside issues; run rank set among siblings instead"`.
+- `storage.RankSetResolutions(ids, reps)` (`internal/storage/rank.go`, shared with the Dolt store) pairs each id with its representative. **Two named ids collapsing onto one representative is refused** with a `model.ValidationError`: `"rank set: %s and %s both resolve to %s — their relative order is internal to %s and cannot be set against outside issues; run rank set among siblings instead"`.
 - Rewrites the frame's own slots in place with `storage.RankSetOrder` — the representatives first, in the order named, then every other frame-mate in its current order; nothing outside the frame moves (`internal/storage/rank.go`).
 - Returns one `RankSetResolution{NamedID, RankedID}` per input, in input order.
 
@@ -885,7 +884,7 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 - `issueID == targetID` → `model.ValidationError` `"cannot rank an issue relative to itself"`.
 - `mustRecord(targetID)` **before** `mustRecord(issueID)`.
 - Builds both ancestor chains, calls `frameRepresentatives`.
-- A `storage.FrameContainmentError` is re-worded, as a `model.ValidationError`, by which side contains which: if `containment.ContainerID == issueID` → `"cannot rank %s relative to %s: %s contains it; rank it against a sibling instead"`; else → `"cannot rank %s relative to %s: %s is inside %s; rank it against a sibling instead"`.
+- Any `frameRepresentatives` error is returned unwrapped, so a `storage.FrameContainmentError` reaches the caller as itself, whichever side of the pair contains the other.
 - Returns `RankMove{MovedID: reps[0], AnchorID: reps[1]}`.
 
 **`ancestorChain(id)`** — self first, root last, following only parents that are still there. Missing id → `NotFoundError`. A parent cycle → `fmt.Errorf("ancestor chain of %s: parent cycle at %s", id, parent)`.

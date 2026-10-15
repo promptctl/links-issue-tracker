@@ -276,7 +276,7 @@ empty string means no `remediation:` line is printed:
 - `workspace_write_blocked`: "Wait a moment and retry — a normal command releases the store in well under a second. If it persists, a lit process is stuck: find it with `ps aux | grep '[l]it'` and terminate it, then retry; if none is running the hold is stale, so run `lit doctor --fix`. \<agent-instructions>This is a mechanical, self-diagnosable state — the steps above resolve it without needing the user's input.\</agent-instructions>"
 - `scope_exhausted`: "Do not retry unchanged — routing is deterministic and repeats this answer until the work named above moves. Act on what the message names — the route it offers, or the rows off your focus path — or finish or hand off what you already hold."
 - `no_ready_work`: "Do not retry unchanged — routing is deterministic and repeats this answer until something in the backlog moves. That is the backlog's state, not a fault. If `--type`, `--labels`, `--assignee`, or `--status` narrowed this run, drop the filter and ask again. If a `focus` label narrowed it, `lit next --all` routes over the whole queue for one run and `lit label rm <id> focus` lifts the scope. Otherwise `lit backlog --all` shows the whole queue and who holds what, and `lit new` adds work if it is genuinely empty."
-- `state_already_holds`: "No action is needed — the command asked for a state the workspace is already in, and the message above says how that state was reached. Do not retry: running it again cannot change the answer, and `lit doctor` has nothing to diagnose because nothing is broken."
+- `state_already_holds`: "No action is needed — the command asked for a state the workspace is already in. Do not retry: running it again cannot change the answer, and `lit doctor` has nothing to diagnose because nothing is broken."
 - `takeover_unconfirmed`: "Rerun with `--take` to take the lane over, or run `lit next` for work nobody else holds. \<agent-instructions>Taking over a lane another checkout holds right now overrides that checkout's work: pass `--take` only when the user directs the takeover.\</agent-instructions>"
 - `purge_unconfirmed`: "Rerun with `--yes` to purge it, or run `lit delete <id>` to remove it reversibly. \<agent-instructions>A purge cannot be undone and reaches every store lit syncs with: pass `--yes` only when the user directs the purge.\</agent-instructions>"
 - `outside_git_workspace`: "Run the command inside a git repository/worktree with links initialized."
@@ -1643,7 +1643,7 @@ usage string as a `UsageError` → exit 2 (`resolve`, `register.go`).
 - No flags (not even `--by`).
 - Refusal: `len(positional) != 1` →
   `UsageError{"usage: lit comment rm <comment-id>"}` → exit 2 (`cli.go`).
-- Store: blank id → `"comment id is required"`; unknown id →
+- Store: blank id → `model.ValidationError` `"comment id is required"` → exit 3; unknown id →
   `storage.NotFoundError{Entity: "comment", ID: id}` → exit 4
   (`internal/store/store.go`).
 - Output: `"<issueID> <commentID>\n"` for the deleted comment (`cli.go`).

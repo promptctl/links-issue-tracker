@@ -346,9 +346,10 @@ func commandErrorRemediation(reason commandReason) string {
 		// No act to name, because there is none: the caller asked for a state
 		// the workspace is already in. It must still say "do not retry":
 		// without it, an unattended agent loops on a state nothing it runs can
-		// change. How the state was reached is the message's to say, not this
-		// line's, so nothing here restates it. [LAW:one-source-of-truth]
-		return "No action is needed — the command asked for a state the workspace is already in, and the message above says how that state was reached. Do not retry: running it again cannot change the answer, and `lit doctor` has nothing to diagnose because nothing is broken."
+		// change. Anything about how the state was reached is the message's to
+		// say, and not every message has it to say, so this line neither
+		// restates it nor promises it. [LAW:one-source-of-truth]
+		return "No action is needed — the command asked for a state the workspace is already in. Do not retry: running it again cannot change the answer, and `lit doctor` has nothing to diagnose because nothing is broken."
 	case reasonTakeoverUnconfirmed:
 		// Action-only, like its neighbours: the message names the holder. Both
 		// ways out are named and neither is urged, and the envelope says whose

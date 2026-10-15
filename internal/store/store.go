@@ -1415,7 +1415,7 @@ func (s *Store) AddComment(ctx context.Context, in storage.AddCommentInput) (mod
 func (s *Store) DeleteComment(ctx context.Context, commentID string) (model.Comment, error) {
 	id := strings.TrimSpace(commentID)
 	if id == "" {
-		return model.Comment{}, errors.New("comment id is required")
+		return model.Comment{}, model.ValidationError{Message: "comment id is required"}
 	}
 	var deleted model.Comment
 	// [LAW:single-enforcer] Existence is verified by the SELECT inside the same mutation that deletes,

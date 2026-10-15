@@ -556,23 +556,6 @@ func (e rankEdge) placeBeyondTx(ctx context.Context, tx *sql.Tx, f storage.Frame
 	return smoothRanksIfNeededTx(ctx, tx, newRank)
 }
 
-func rankSetValidateIDs(ids []string) error {
-	if len(ids) < 2 {
-		return model.ValidationError{Message: "rank set: need at least 2 IDs to establish order"}
-	}
-	seen := make(map[string]struct{}, len(ids))
-	for _, id := range ids {
-		if id == "" {
-			return model.ValidationError{Message: "rank set: empty ID in input"}
-		}
-		if _, dup := seen[id]; dup {
-			return model.ValidationError{Message: fmt.Sprintf("rank set: duplicate ID %q in input", id)}
-		}
-		seen[id] = struct{}{}
-	}
-	return nil
-}
-
 // resolveRankSet maps the named IDs onto the frame-comparable representatives
 // a rank-set order is actually about (see resolveFrameRepresentatives). Two
 // named IDs collapsing onto one representative is rejected: the requested
@@ -600,14 +583,9 @@ func resolveRankSet(ctx context.Context, q rowQueryer, ids []string) ([]storage.
 	if err != nil {
 		return nil, storage.TopLevel, fmt.Errorf("rank set: %w", err)
 	}
-	resolutions := make([]storage.RankSetResolution, len(ids))
-	repToNamed := make(map[string]string, len(ids))
-	for i, id := range ids {
-		if prior, dup := repToNamed[reps[i]]; dup {
-			return nil, storage.TopLevel, model.ValidationError{Message: fmt.Sprintf("rank set: %s and %s both resolve to %s — their relative order is internal to %s and cannot be set against outside issues; run rank set among siblings instead", prior, id, reps[i], reps[i])}
-		}
-		repToNamed[reps[i]] = id
-		resolutions[i] = storage.RankSetResolution{NamedID: id, RankedID: reps[i]}
+	resolutions, err := storage.RankSetResolutions(ids, reps)
+	if err != nil {
+		return nil, storage.TopLevel, err
 	}
 	return resolutions, f, nil
 }
@@ -625,7 +603,7 @@ func resolveRankSet(ctx context.Context, q rowQueryer, ids []string) ([]storage.
 // [LAW:single-enforcer] Multi-issue rank reassignment lives in this one
 // transaction so partial-application states cannot occur.
 func (s *Store) RankSet(ctx context.Context, ids []string) (storage.RankSetResult, error) {
-	if err := rankSetValidateIDs(ids); err != nil {
+	if err := storage.ValidateRankSetIDs(ids); err != nil {
 		return storage.RankSetResult{}, err
 	}
 	// Existence and liveness run before the lock so a caller naming a missing or
@@ -897,13 +875,6 @@ func resolveFrameRepresentatives(chains [][]string) ([]string, storage.Frame, er
 // meaning and is rejected. [LAW:no-silent-failure]
 func resolveComparableFrame(issueChain, targetChain []string) (movedID, anchorID string, f storage.Frame, err error) {
 	reps, f, err := resolveFrameRepresentatives([][]string{issueChain, targetChain})
-	var containment storage.FrameContainmentError
-	if errors.As(err, &containment) {
-		if containment.ContainerID == issueChain[0] {
-			return "", "", storage.TopLevel, model.ValidationError{Message: fmt.Sprintf("cannot rank %s relative to %s: %s contains it; rank it against a sibling instead", issueChain[0], targetChain[0], issueChain[0])}
-		}
-		return "", "", storage.TopLevel, model.ValidationError{Message: fmt.Sprintf("cannot rank %s relative to %s: %s is inside %s; rank it against a sibling instead", issueChain[0], targetChain[0], issueChain[0], targetChain[0])}
-	}
 	if err != nil {
 		return "", "", storage.TopLevel, err
 	}

@@ -124,8 +124,13 @@ func Retain(cur Retention, action RetentionAction, at time.Time) (Retention, err
 		}
 	case Restore:
 		switch cur.(type) {
-		case Live, Archived:
+		case Live:
 			return nil, alreadyHolds("issue is not deleted")
+		case Archived:
+			// Restore asks for Live, and an archived issue is not Live: the
+			// archive axis is unarchive's to move, so this is refused with the
+			// command that does it rather than answered as already holding.
+			return nil, refused("cannot restore archived issue; it is not deleted — unarchive it instead")
 		case Deleted:
 			return Live{}, nil
 		}
@@ -142,9 +147,11 @@ func Retain(cur Retention, action RetentionAction, at time.Time) (Retention, err
 
 // RetentionError is a move the retention table has no cell for. Its cells
 // split by what the caller asked for: a state the issue is already in ("issue
-// is already archived", "issue is not deleted") needs nothing done, while a
-// move along the archive axis for a deleted issue is refused until the issue
-// is restored. Neither changes on a rerun, so neither is a fault to retry.
+// is already archived", "issue is not deleted" of a live one) needs nothing
+// done, while a move the issue's other axis blocks — archiving or unarchiving
+// a deleted issue, restoring an archived one — is refused with the command
+// that moves that axis. Neither changes on a rerun, so neither is a fault to
+// retry.
 // [LAW:one-source-of-truth] Each cell of Retain says which it is, so the
 // classification is written beside the rule and never re-derived elsewhere.
 type RetentionError struct {

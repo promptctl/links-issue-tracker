@@ -2066,6 +2066,8 @@ func commentsRoundtrip(t *testing.T, ctx context.Context, st storage.Store, clk 
 
 	_, err = st.DeleteComment(ctx, "no-such-comment")
 	assertNotFound(t, err, "comment", "DeleteComment")
+	_, err = st.DeleteComment(ctx, " \t")
+	assertRefused(t, err, "DeleteComment(blank id)")
 
 	_, _, err = st.AddComment(ctx, storage.AddCommentInput{IssueID: "no-such-issue", Body: "x", CreatedBy: "ada"})
 	assertNotFound(t, err, "issue", "AddComment on a missing issue")
