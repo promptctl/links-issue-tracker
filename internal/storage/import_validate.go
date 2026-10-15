@@ -224,10 +224,16 @@ func validateImportTreeSpecs(specs []ImportTreeSpec) error {
 		if err := RejectLeafWithoutParent(types[spec.LocalID], spec.Parent); err != nil {
 			return fmt.Errorf("import: spec %q: %w", spec.LocalID, err)
 		}
+		named := make(map[string]struct{}, len(spec.BlockedBy))
 		for _, dep := range spec.BlockedBy {
 			if dep != strings.TrimSpace(dep) {
 				return model.ValidationError{Message: fmt.Sprintf("import: spec %q blocked_by entry %q has surrounding whitespace", spec.LocalID, dep)}
 			}
+			// One entry is one edge, and the store holds an edge once.
+			if _, twice := named[dep]; twice {
+				return model.ValidationError{Message: fmt.Sprintf("import: spec %q names blocked_by %q twice", spec.LocalID, dep)}
+			}
+			named[dep] = struct{}{}
 			if _, ok := types[dep]; !ok {
 				return model.ValidationError{Message: fmt.Sprintf("import: spec %q references missing blocked_by %q", spec.LocalID, dep)}
 			}
@@ -262,10 +268,16 @@ func validateBulkSpecs(specs []BulkIssueSpec) error {
 		if spec.Parent != strings.TrimSpace(spec.Parent) {
 			return model.ValidationError{Message: fmt.Sprintf("bulk: doc %d parent %q has surrounding whitespace", i, spec.Parent)}
 		}
+		named := make(map[string]struct{}, len(spec.BlockedBy))
 		for _, dep := range spec.BlockedBy {
 			if dep != strings.TrimSpace(dep) {
 				return model.ValidationError{Message: fmt.Sprintf("bulk: doc %d blocked_by entry %q has surrounding whitespace", i, dep)}
 			}
+			// One entry is one edge, and the store holds an edge once.
+			if _, twice := named[dep]; twice {
+				return model.ValidationError{Message: fmt.Sprintf("bulk: doc %d names blocked_by %q twice", i, dep)}
+			}
+			named[dep] = struct{}{}
 			if spec.LocalID != "" && dep == spec.LocalID {
 				return model.ValidationError{Message: fmt.Sprintf("bulk: doc %d (local_id %q) cannot depend on itself", i, spec.LocalID)}
 			}

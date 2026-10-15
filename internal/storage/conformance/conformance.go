@@ -2318,6 +2318,9 @@ func anImportFileThatBreaksARuleIsRefusedWhole(t *testing.T, ctx context.Context
 			storage.ImportTreeSpec{LocalID: "a", Title: "a", IssueType: "epic", Topic: "core", BlockedBy: []string{"b"}},
 			storage.ImportTreeSpec{LocalID: "b", Title: "b", IssueType: "epic", Topic: "core", BlockedBy: []string{"a"}},
 		)},
+		{"ImportTree(a blocked_by naming one record twice)", tree(lands,
+			storage.ImportTreeSpec{LocalID: "b", Title: "b", IssueType: "epic", Topic: "core", BlockedBy: []string{"e", "e"}},
+		)},
 		{"ImportTree(a task blocked by the epic it sits under)", tree(lands,
 			storage.ImportTreeSpec{LocalID: "t", Title: "t", IssueType: "task", Topic: "core", Parent: "e", BlockedBy: []string{"e"}},
 		)},
@@ -2341,6 +2344,8 @@ func anImportFileThatBreaksARuleIsRefusedWhole(t *testing.T, ctx context.Context
 			storage.BulkIssueSpec{ID: existing.ID, Assignee: &commaAssignee})},
 		{"BulkApply(a duplicate local_id)", bulk(epic("a", ""), epic("a", ""))},
 		{"BulkApply(a blocked_by cycle)", bulk(epic("a", "b"), epic("b", "a"))},
+		{"BulkApply(a blocked_by naming one existing issue twice)", bulk(
+			storage.BulkIssueSpec{Title: &title, Topic: &topic, IssueType: &epicType, BlockedBy: []string{existing.ID, existing.ID}})},
 		{"BulkApply(a task with no local_id blocked by the epic it sits under)", bulk(epic("e", ""),
 			storage.BulkIssueSpec{Title: &title, Topic: &topic, IssueType: &taskType, Parent: "e", BlockedBy: []string{"e"}})},
 	} {
