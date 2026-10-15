@@ -46,14 +46,14 @@ var workflowsFamily = commandFamily[wsSubcommand]{
 // flag, exactly as a nested family's bare path is (`lit sync reconcile`). A
 // top-level command has no owning subcommandRow to carry `bare`, so that
 // pairing is stated here instead. [LAW:dataflow-not-control-flow]
-func workflowsDispatch(args []string) (wsLeaf, []string, error) {
+func workflowsDispatch(ctx context.Context, args []string) (wsLeaf, []string, error) {
 	if len(args) > 0 && isHelpFlag(args[0]) {
 		return wsLeaf{}, nil, HelpRequestedError{Usage: workflowsUsage, Detail: helpText("workflows")}
 	}
 	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
 		return workflowsOverviewLeaf(), args, nil
 	}
-	return resolveWsLeaf(workflowsFamily, args)
+	return resolveWsLeaf(ctx, workflowsFamily, args)
 }
 
 // workflowsOverviewLeaf renders the lifecycle spine annotated with what is

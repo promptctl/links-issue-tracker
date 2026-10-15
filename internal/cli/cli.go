@@ -20,13 +20,31 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/pathspec"
 	"github.com/promptctl/links-issue-tracker/internal/query"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workflows"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
 
-func Run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string) error {
+// Run is one lit invocation, and the one place every invocation passes
+// through, so it is where each one's event opens and closes: the command
+// running under it adds facts through ctx, and the finished event is written
+// whether the command succeeded, failed, or panicked.
+// [LAW:nothing-unseen] [LAW:single-enforcer]
+func Run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string) (err error) {
+	recorder := beginInvocation(time.Now())
+	defer func() {
+		panicked := recover()
+		recordInvocation(stderr, recorder.Finish(invocationEnd(time.Now(), err, panicked)))
+		if panicked != nil {
+			panic(panicked)
+		}
+	}()
+	return dispatch(telemetry.With(ctx, recorder), stdout, stderr, args)
+}
+
+func dispatch(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string) error {
 	normalizedArgs, err := parseGlobalArgs(args)
 	if err != nil {
 		return err
@@ -472,7 +490,7 @@ var (
 // [LAW:one-source-of-truth]
 func runList(ctx context.Context, stdout io.Writer, surface listSurface, args []string) error {
 	l, atDir := listLeaf(surface)
-	declared, err := parseLeaf(l, args, stdout)
+	declared, err := parseLeaf(ctx, l, args, stdout)
 	if err != nil {
 		return err
 	}
@@ -2134,8 +2152,8 @@ var completionFamily = commandFamily[string]{
 	},
 }
 
-func runCompletion(stdout io.Writer, args []string) error {
-	shell, err := completionFamily.resolve(args)
+func runCompletion(ctx context.Context, stdout io.Writer, args []string) error {
+	shell, err := completionFamily.resolve(ctx, args)
 	if err != nil {
 		return err
 	}

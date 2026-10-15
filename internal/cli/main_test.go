@@ -40,5 +40,23 @@ func TestMain(m *testing.M) {
 	if err := os.Setenv(DisableAutoSyncEnvVar, "1"); err != nil {
 		panic("set " + DisableAutoSyncEnvVar + ": " + err.Error())
 	}
-	os.Exit(m.Run())
+	stateHome := isolateStateHome("lit-cli-state-")
+	code := m.Run()
+	_ = os.RemoveAll(stateHome)
+	os.Exit(code)
+}
+
+// isolateStateHome points XDG_STATE_HOME at a fresh directory for the rest of
+// the process: every Run appends its invocation event there, and a test run's
+// events belong in a directory the suite owns, never in the developer's own
+// events file. The detached workers a test spawns inherit it.
+func isolateStateHome(prefix string) string {
+	dir, err := os.MkdirTemp("", prefix)
+	if err != nil {
+		panic("create isolated XDG_STATE_HOME: " + err.Error())
+	}
+	if err := os.Setenv("XDG_STATE_HOME", dir); err != nil {
+		panic("set XDG_STATE_HOME: " + err.Error())
+	}
+	return dir
 }

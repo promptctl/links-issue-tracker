@@ -197,7 +197,7 @@ func TestParseLeafRefusesSurplusPositionals(t *testing.T) {
 			t.Parallel()
 			fs := newCobraFlagSet("probe")
 			l := leaf[struct{}]{fs: fs, positionals: tc.declared}
-			got, err := parseLeaf(l, tc.args, io.Discard)
+			got, err := parseLeaf(underInvocation(context.Background()), l, tc.args, io.Discard)
 			if tc.wantRefused {
 				if err == nil {
 					t.Fatalf("parseLeaf(declared=%d, %q) = %q, nil; want a usage refusal", tc.declared, tc.args, got)
@@ -229,7 +229,7 @@ func TestBooleanFlagDoesNotSwallowFollowingPositional(t *testing.T) {
 	fs := newCobraFlagSet("probe")
 	apply := fs.Bool("apply", false, "apply")
 
-	got, err := parseLeaf(leaf[struct{}]{fs: fs, positionals: 1}, []string{"--apply", "demo"}, io.Discard)
+	got, err := parseLeaf(underInvocation(context.Background()), leaf[struct{}]{fs: fs, positionals: 1}, []string{"--apply", "demo"}, io.Discard)
 	if err != nil {
 		t.Fatalf("parseLeaf(--apply demo) error = %v, want the positional kept", err)
 	}
@@ -243,7 +243,7 @@ func TestBooleanFlagDoesNotSwallowFollowingPositional(t *testing.T) {
 	// consumes the token after it.
 	fs2 := newCobraFlagSet("probe")
 	value := fs2.String("value", "", "value")
-	got2, err := parseLeaf(leaf[struct{}]{fs: fs2, positionals: 1}, []string{"--value", "v", "pos"}, io.Discard)
+	got2, err := parseLeaf(underInvocation(context.Background()), leaf[struct{}]{fs: fs2, positionals: 1}, []string{"--value", "v", "pos"}, io.Discard)
 	if err != nil {
 		t.Fatalf("parseLeaf(--value v pos) error = %v", err)
 	}
@@ -356,7 +356,7 @@ func TestTerminatorMakesEverythingAfterItPositional(t *testing.T) {
 	fs := newCobraFlagSet("probe")
 	field := fs.String("field", "", "field")
 
-	got, err := parseLeaf(leaf[struct{}]{fs: fs, positionals: 1}, []string{"--field", "f", "--", "-x"}, io.Discard)
+	got, err := parseLeaf(underInvocation(context.Background()), leaf[struct{}]{fs: fs, positionals: 1}, []string{"--field", "f", "--", "-x"}, io.Discard)
 	if err != nil {
 		t.Fatalf("parseLeaf(--field f -- -x) error = %v, want -x kept as the positional", err)
 	}
@@ -369,7 +369,7 @@ func TestTerminatorMakesEverythingAfterItPositional(t *testing.T) {
 
 	// A surplus after the terminator is still a surplus, and is still named.
 	fs2 := newCobraFlagSet("probe")
-	_, err = parseLeaf(leaf[struct{}]{fs: fs2, positionals: 1}, []string{"--", "a", "b"}, io.Discard)
+	_, err = parseLeaf(underInvocation(context.Background()), leaf[struct{}]{fs: fs2, positionals: 1}, []string{"--", "a", "b"}, io.Discard)
 	var usage UsageError
 	if !errors.As(err, &usage) {
 		t.Fatalf("parseLeaf(-- a b) error = %v (%T), want UsageError", err, err)

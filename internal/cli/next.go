@@ -69,6 +69,7 @@ func nextLeaf() appLeaf {
 			return err
 		}
 		outcome := routeNext(gathered.rows, gathered.details, gathered.epics, cc.standings, cc.self, gathered.scope.scopeFor(*all))
+		recordNextEvent(ctx, outcome, len(gathered.rows))
 		ap.Statusline.Record(nextStatuslineFacts(outcome, !filter.narrows() && !*all)...)
 		occasion, err := renderNextOutcome(stdout, outcome, gathered.details, cc, actor())
 		if err != nil {

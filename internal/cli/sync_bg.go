@@ -36,19 +36,20 @@ const mirrorLogName = "mirror.log"
 // free to go.
 const workerLogMaxBytes = 256 * 1024
 
-// rotateWorkerLog moves an over-cap worker log aside (one kept generation)
-// before the next worker appends. A rotation problem is reported, never fatal:
-// the worst outcome of skipping it is a log that keeps growing, which must not
-// cost the worker its run. [LAW:no-silent-failure]
-func rotateWorkerLog(path string) error {
+// rotateLog moves an append-only log past maxBytes aside (one kept generation)
+// before the next append, for the worker logs and the invocation events file
+// alike. A rotation problem is reported, never fatal: the worst outcome of
+// skipping it is a log that keeps growing, which must not cost the caller its
+// run. [LAW:no-silent-failure]
+func rotateLog(path string, maxBytes int64) error {
 	st, err := os.Stat(path)
-	if err != nil || st.Size() <= workerLogMaxBytes {
-		// Absent is the common first-spawn case and needs no rotation; any
+	if err != nil || st.Size() <= maxBytes {
+		// Absent is the common first-append case and needs no rotation; any
 		// other stat failure will resurface loudly from OpenFile just after.
 		return nil
 	}
 	if renameErr := os.Rename(path, path+".1"); renameErr != nil && !errors.Is(renameErr, fs.ErrNotExist) {
-		// A missing source means a concurrent spawner rotated between the stat
+		// A missing source means a concurrent appender rotated between the stat
 		// and the rename — the rotation happened, just not by this process.
 		return renameErr
 	}
@@ -142,7 +143,7 @@ func spawnDetachedWorker(ws workspace.Info, subcommand, logName string, env []st
 	// more than its log, and the inability to log is itself loud here rather
 	// than swallowed.
 	logPath := filepath.Join(ws.StorageDir, logName)
-	if rotateErr := rotateWorkerLog(logPath); rotateErr != nil {
+	if rotateErr := rotateLog(logPath, workerLogMaxBytes); rotateErr != nil {
 		fmt.Fprintf(os.Stderr, "lit: %s rotation failed (%v); the log keeps growing past its cap\n", logName, rotateErr)
 	}
 	logFile, logErr := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)

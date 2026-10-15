@@ -15,7 +15,7 @@ func TestCompletionScriptsRender(t *testing.T) {
 	t.Parallel()
 	for _, shell := range []string{"bash", "zsh", "fish"} {
 		var stdout bytes.Buffer
-		if err := runCompletion(&stdout, []string{shell}); err != nil {
+		if err := runCompletion(underInvocation(context.Background()), &stdout, []string{shell}); err != nil {
 			t.Fatalf("runCompletion(%q) error = %v", shell, err)
 		}
 		if !strings.Contains(stdout.String(), "lit") {
@@ -27,7 +27,7 @@ func TestCompletionScriptsRender(t *testing.T) {
 func renderCompletion(t *testing.T, shell string) string {
 	t.Helper()
 	var stdout bytes.Buffer
-	if err := runCompletion(&stdout, []string{shell}); err != nil {
+	if err := runCompletion(underInvocation(context.Background()), &stdout, []string{shell}); err != nil {
 		t.Fatalf("runCompletion(%q) error = %v", shell, err)
 	}
 	return stdout.String()

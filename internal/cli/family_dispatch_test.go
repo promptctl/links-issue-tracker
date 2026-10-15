@@ -14,7 +14,7 @@ import (
 // production table so they exercise the routing behavior, not a
 // private path. [LAW:behavior-not-structure]
 func runAppFamily(f commandFamily[appSubcommand], ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	sub, err := f.resolve(args)
+	sub, err := f.resolve(underInvocation(context.Background()), args)
 	if err != nil {
 		return err
 	}
@@ -27,7 +27,7 @@ func runAppFamily(f commandFamily[appSubcommand], ctx context.Context, stdout io
 // runWsFamily is runAppFamily for workspace-mode families, walking nested
 // families to the same depth wsFamilyCmd does.
 func runWsFamily(f commandFamily[wsSubcommand], ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
-	l, rest, err := resolveWsLeaf(f, args)
+	l, rest, err := resolveWsLeaf(underInvocation(context.Background()), f, args)
 	if err != nil {
 		return err
 	}

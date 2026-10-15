@@ -44,7 +44,19 @@ func TestMain(m *testing.M) {
 		main()
 		os.Exit(0)
 	}
-	os.Exit(m.Run())
+	// Every lit this suite runs appends its invocation event under
+	// XDG_STATE_HOME, and the child processes inherit this environment: point
+	// it at a directory the suite owns, never the developer's own events file.
+	stateHome, err := os.MkdirTemp("", "lit-cmd-state-")
+	if err != nil {
+		panic("create isolated XDG_STATE_HOME: " + err.Error())
+	}
+	if err := os.Setenv("XDG_STATE_HOME", stateHome); err != nil {
+		panic("set XDG_STATE_HOME: " + err.Error())
+	}
+	code := m.Run()
+	_ = os.RemoveAll(stateHome)
+	os.Exit(code)
 }
 
 // TestSIGTERMDuringWedgedSyncExitsCleanly is the acceptance pin: a SIGTERM
