@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 	"github.com/spf13/cobra"
 )
@@ -142,7 +143,12 @@ type commandFamily[P any] struct {
 // The match is exact — argv tokens arrive verbatim from the shell, and a
 // table that trimmed names would claim inputs as legal that no dispatch
 // ever honored. [FRAMING:representation]
-func (f commandFamily[P]) resolve(args []string) (P, error) {
+//
+// A matched subcommand is added to the invocation event's command path here,
+// at the one resolve every family routes through, so an invocation a family
+// answers itself — a nested family's help — is named as deep as it reached.
+// [LAW:single-enforcer]
+func (f commandFamily[P]) resolve(ctx context.Context, args []string) (P, error) {
 	var zero P
 	if len(args) == 0 {
 		return zero, UsageError{Message: f.usage}
@@ -152,6 +158,7 @@ func (f commandFamily[P]) resolve(args []string) (P, error) {
 	}
 	for _, s := range f.subcommands {
 		if s.name == args[0] {
+			telemetry.Subcommand(ctx, s.name)
 			if s.nestedUsage != "" && len(args) > 1 && isHelpFlag(args[1]) {
 				return zero, HelpRequestedError{Usage: s.nestedUsage}
 			}
@@ -306,15 +313,23 @@ type (
 // errHelpHandled, which Run maps to exit 0, so every caller below returns before
 // acquiring anything. [LAW:single-enforcer] one parse path for every leaf, at
 // the one altitude that precedes acquisition.
-func parseLeaf[R any](l leaf[R], args []string, stdout io.Writer) ([]string, error) {
+//
+// Being the one path every leaf passes through, it is also where the
+// invocation's event learns which command ran — the leaf's flag set carries its
+// whole invocation path — and which flags it was given, so no command has to
+// name itself. [LAW:single-enforcer] [LAW:nothing-unseen]
+func parseLeaf[R any](ctx context.Context, l leaf[R], args []string, stdout io.Writer) ([]string, error) {
+	telemetry.Command(ctx, "lit "+l.fs.cmd.Use)
 	positional, flagArgs, err := splitArgs(args, l.positionals, l.fs)
 	if err != nil {
 		// A shape the split will not perform, refused in the same sentence an
 		// arity refusal uses: the act that works, then what was not understood.
 		return nil, UsageError{Message: fmt.Sprintf("%s; %s", usageSentence(l.fs, l.positionals, l.usage), err)}
 	}
-	if err := parseFlagSet(l.fs, flagArgs, stdout); err != nil {
-		return nil, err
+	parseErr := parseFlagSet(l.fs, flagArgs, stdout)
+	telemetry.Flags(ctx, setFlagNames(l.fs.cmd.Flags()))
+	if parseErr != nil {
+		return nil, parseErr
 	}
 	// Anything pflag has left over is a token the leaf's declared arity did not
 	// admit: splitArgs fills positionals up to the ceiling and passes the rest
@@ -465,7 +480,7 @@ func (r *commandRegistrar) appCmdDispatch(access app.AccessMode, dispatch func(a
 func (r *commandRegistrar) appCmdPipeline(resolve func([]string) app.AccessMode, dispatch func(args []string) (appLeaf, []string)) CommandRunner {
 	return func(args []string) error {
 		l, rest := dispatch(args)
-		positional, err := parseLeaf(l, rest, r.stdout)
+		positional, err := parseLeaf(r.ctx, l, rest, r.stdout)
 		if err != nil {
 			return err
 		}
@@ -480,7 +495,7 @@ func (r *commandRegistrar) appCmdPipeline(resolve func([]string) app.AccessMode,
 // parses, and only then does the app open in the row's access mode.
 func (r *commandRegistrar) familyCmd(f commandFamily[appSubcommand]) CommandRunner {
 	return func(args []string) error {
-		sub, err := f.resolve(args)
+		sub, err := f.resolve(r.ctx, args)
 		if err != nil {
 			return err
 		}
@@ -491,7 +506,7 @@ func (r *commandRegistrar) familyCmd(f commandFamily[appSubcommand]) CommandRunn
 			return *sub.retired
 		}
 		l := sub.declare()
-		positional, err := parseLeaf(l, args[1:], r.stdout)
+		positional, err := parseLeaf(r.ctx, l, args[1:], r.stdout)
 		if err != nil {
 			return err
 		}
@@ -520,8 +535,8 @@ type wsSubcommand struct {
 // and answered with no workspace, sync store, or app open. [LAW:one-way-deps]
 // resolution flows strictly downward through the tables; no level reaches back
 // for a resource to decide the next.
-func resolveWsLeaf(f commandFamily[wsSubcommand], args []string) (wsLeaf, []string, error) {
-	sub, err := f.resolve(args)
+func resolveWsLeaf(ctx context.Context, f commandFamily[wsSubcommand], args []string) (wsLeaf, []string, error) {
+	sub, err := f.resolve(ctx, args)
 	if err != nil {
 		return wsLeaf{}, nil, err
 	}
@@ -534,7 +549,7 @@ func resolveWsLeaf(f commandFamily[wsSubcommand], args []string) (wsLeaf, []stri
 	if sub.bare != nil && (len(rest) == 0 || strings.HasPrefix(rest[0], "-")) {
 		return sub.bare(), rest, nil
 	}
-	return resolveWsLeaf(*sub.nested, rest)
+	return resolveWsLeaf(ctx, *sub.nested, rest)
 }
 
 // wsCmdPipeline is appCmdPipeline's workspace-mode twin: it seals the
@@ -551,7 +566,7 @@ func (r *commandRegistrar) wsCmdPipeline(dispatch func(args []string) (wsLeaf, w
 		if err != nil {
 			return err
 		}
-		positional, err := parseLeaf(l, rest, r.stdout)
+		positional, err := parseLeaf(r.ctx, l, rest, r.stdout)
 		if err != nil {
 			return err
 		}
@@ -591,7 +606,7 @@ func withWDAcquire(dispatch func(args []string) (wsLeaf, []string, error)) func(
 // wsFamilyCmd is familyCmd for workspace-mode families: the family table
 // rejects bad paths, and the leaf it yields declares the surface help answers.
 func (r *commandRegistrar) wsFamilyCmd(f commandFamily[wsSubcommand]) CommandRunner {
-	return r.wsCmdPipeline(withWDAcquire(func(args []string) (wsLeaf, []string, error) { return resolveWsLeaf(f, args) }))
+	return r.wsCmdPipeline(withWDAcquire(func(args []string) (wsLeaf, []string, error) { return resolveWsLeaf(r.ctx, f, args) }))
 }
 
 func (r *commandRegistrar) wsCmd(declare wsLeafFn) CommandRunner {
@@ -620,7 +635,7 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 	r := &commandRegistrar{ctx: ctx, stdout: stdout, stderr: stderr}
 
 	completionRun := func(args []string) error {
-		return runCompletion(stdout, args)
+		return runCompletion(ctx, stdout, args)
 	}
 
 	versionRun := func(args []string) error {
@@ -641,7 +656,7 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 		{Name: "quickstart", Summary: "Agent quickstart workflow", GroupID: "guidance",
 			Run: r.wsCmd(quickstartLeaf)},
 		{Name: "workflows", Summary: "See the work lifecycle and the guidance active at each point (`workflows show <id>` resolved, `edit <id-or-point>` to customize, `dry-run` to explain a hypothetical)", GroupID: "guidance",
-			Run: r.wsCmdPipeline(withWDAcquire(workflowsDispatch)), Subcommands: workflowsFamily.visibleSubcommands()},
+			Run: r.wsCmdPipeline(withWDAcquire(func(args []string) (wsLeaf, []string, error) { return workflowsDispatch(r.ctx, args) })), Subcommands: workflowsFamily.visibleSubcommands()},
 		{Name: "completion", Summary: "Generate shell completion script", GroupID: "guidance",
 			Run: completionRun, Subcommands: completionFamily.visibleSubcommands()},
 		{Name: "version", Summary: "Print binary version, build metadata, and supported schema range", GroupID: "guidance",
@@ -779,6 +794,10 @@ func buildPassthroughCommand(spec CommandSpec) *cobra.Command {
 		DisableFlagParsing: true,
 		Args:               cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// The command is named as soon as dispatch reaches it, so an
+			// invocation its family answers itself — help, a usage refusal — is
+			// named too; the leaf's parse refines it to the full path.
+			telemetry.Command(cmd.Context(), "lit "+spec.Name)
 			return spec.Run(args)
 		},
 	}

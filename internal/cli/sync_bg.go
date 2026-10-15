@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,6 +17,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/primitives/filelock"
 )
 
 // backgroundMirrorSubcommand is the hidden `lit sync` subcommand the on-change
@@ -36,23 +36,63 @@ const mirrorLogName = "mirror.log"
 // free to go.
 const workerLogMaxBytes = 256 * 1024
 
-// rotateWorkerLog moves an over-cap worker log aside (one kept generation)
-// before the next worker appends. A rotation problem is reported, never fatal:
-// the worst outcome of skipping it is a log that keeps growing, which must not
-// cost the worker its run. [LAW:no-silent-failure]
-func rotateWorkerLog(path string) error {
+// A rotation hold spans one stat and at most one rename, so a holder still in
+// front after half a second is stalled, and the caller's run matters more
+// than this rotation.
+const (
+	logRotationLockAttempts   = 50
+	logRotationLockRetryDelay = 10 * time.Millisecond
+)
+
+// rotateLog moves an append-only log past maxBytes aside (one kept generation)
+// before the next append, for the worker logs and the invocation events file
+// alike, and reports whether it did. The size check and the rename are one
+// step under the log's lock: two appenders that both saw the file over its cap
+// would otherwise rotate twice, and the second rename would move the first's
+// fresh file over the generation it had just kept.
+// [LAW:no-ambient-temporal-coupling] the kernel flock owns the ordering.
+// Only a log that looks over its cap takes the lock, so the append that
+// needs no rotation — nearly all of them — never depends on a filesystem
+// whose flock fails or stalls.
+// A rotation problem is reported, never fatal: the worst outcome of skipping
+// it is a log that keeps growing, which must not cost the caller its run.
+// [LAW:no-silent-failure]
+func rotateLog(path string, maxBytes int64) (bool, error) {
+	if !logOverCap(path, maxBytes) {
+		return false, nil
+	}
+	lockPath := path + ".lock"
+	release, acquired, err := filelock.Acquire(context.Background(), lockPath, true, logRotationLockAttempts, logRotationLockRetryDelay)
+	if err != nil {
+		return false, fmt.Errorf("lock %s: %w", lockPath, err)
+	}
+	if !acquired {
+		return false, fmt.Errorf("another lit process held %s for over %s", lockPath, time.Duration(logRotationLockAttempts)*logRotationLockRetryDelay)
+	}
+	rotated, rotateErr := rotateLogLocked(path, maxBytes)
+	if relErr := release(); relErr != nil {
+		return rotated, errors.Join(rotateErr, fmt.Errorf("release %s: %w", lockPath, relErr))
+	}
+	return rotated, rotateErr
+}
+
+// rotateLogLocked rotates under the log's lock, checking the size again: an
+// appender that held the lock first may already have rotated.
+func rotateLogLocked(path string, maxBytes int64) (bool, error) {
+	if !logOverCap(path, maxBytes) {
+		return false, nil
+	}
+	if err := os.Rename(path, path+".1"); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func logOverCap(path string, maxBytes int64) bool {
 	st, err := os.Stat(path)
-	if err != nil || st.Size() <= workerLogMaxBytes {
-		// Absent is the common first-spawn case and needs no rotation; any
-		// other stat failure will resurface loudly from OpenFile just after.
-		return nil
-	}
-	if renameErr := os.Rename(path, path+".1"); renameErr != nil && !errors.Is(renameErr, fs.ErrNotExist) {
-		// A missing source means a concurrent spawner rotated between the stat
-		// and the rename — the rotation happened, just not by this process.
-		return renameErr
-	}
-	return nil
+	// Absent is the common first-append case and needs no rotation; any other
+	// stat failure will resurface loudly from OpenFile just after.
+	return err == nil && st.Size() > maxBytes
 }
 
 const (
@@ -142,7 +182,7 @@ func spawnDetachedWorker(ws workspace.Info, subcommand, logName string, env []st
 	// more than its log, and the inability to log is itself loud here rather
 	// than swallowed.
 	logPath := filepath.Join(ws.StorageDir, logName)
-	if rotateErr := rotateWorkerLog(logPath); rotateErr != nil {
+	if _, rotateErr := rotateLog(logPath, workerLogMaxBytes); rotateErr != nil {
 		fmt.Fprintf(os.Stderr, "lit: %s rotation failed (%v); the log keeps growing past its cap\n", logName, rotateErr)
 	}
 	logFile, logErr := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)

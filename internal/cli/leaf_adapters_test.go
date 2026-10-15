@@ -7,6 +7,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/release"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/version"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
@@ -24,11 +25,18 @@ import (
 // work phase through an ordering appCmdPipeline/wsCmdPipeline would not
 // produce. [LAW:single-enforcer]
 
+// underInvocation is ctx carrying an open invocation event, as Run hands one
+// to everything an invocation runs.
+func underInvocation(ctx context.Context) context.Context {
+	return telemetry.With(ctx, telemetry.Begin(telemetry.Event{}))
+}
+
 // runLeaf drives a leaf the way its pipeline does, minus the acquisition the
 // pipeline performs between parse and work: the resource is whatever the test
 // supplies.
 func runLeaf[R any](l leaf[R], ctx context.Context, stdout io.Writer, res R, args []string) error {
-	positional, err := parseLeaf(l, args, stdout)
+	ctx = underInvocation(ctx)
+	positional, err := parseLeaf(ctx, l, args, stdout)
 	if err != nil {
 		return err
 	}
@@ -187,8 +195,9 @@ func runListWithStore(ctx context.Context, stdout io.Writer, st storage.Store, p
 // runListLeaf is runList with the acquisition replaced by a supplied scope: the
 // same parse and the same positional read, then the work.
 func runListLeaf(ctx context.Context, stdout io.Writer, surface listSurface, scope listScope, args []string) error {
+	ctx = underInvocation(ctx)
 	l, _ := listLeaf(surface)
-	declared, err := parseLeaf(l, args, stdout)
+	declared, err := parseLeaf(ctx, l, args, stdout)
 	if err != nil {
 		return err
 	}

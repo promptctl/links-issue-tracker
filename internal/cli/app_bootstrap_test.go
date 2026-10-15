@@ -139,7 +139,7 @@ func TestCommandFamilyResolve(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := tc.family.resolve(tc.args)
+			got, err := tc.family.resolve(underInvocation(context.Background()), tc.args)
 			if tc.wantHelpUsage != "" {
 				var help HelpRequestedError
 				if !errors.As(err, &help) {

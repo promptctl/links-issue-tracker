@@ -523,7 +523,7 @@ usage: lit workflows [show <id> | edit <id-or-point> | dry-run [--event <name>] 
 
 Routing (`internal/cli/workflows.go`): a help flag gives the family usage;
 zero args or a leading `-` gives `workflowsOverviewLeaf`; anything else goes to
-`resolveWsLeaf(workflowsFamily, args)` against the family table
+`resolveWsLeaf(ctx, workflowsFamily, args)` against the family table
 (`internal/cli/workflows.go`). Each shape is its own leaf declaring its own
 arity:
 

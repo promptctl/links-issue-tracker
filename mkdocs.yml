@@ -33,6 +33,7 @@ nav:
       - Agent setup & workflow: agent-setup.md
       - Workflows (guidance injection): workflows.md
       - Statusline file: statusline.md
+      - Events file: events.md
       - Troubleshooting: troubleshooting.md
   - CLI reference:
       - Commands: cli-reference.md

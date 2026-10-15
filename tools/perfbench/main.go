@@ -106,7 +106,7 @@ func run(args []string, out, progress io.Writer) error {
 	if err := os.MkdirAll(configHome, 0o755); err != nil {
 		return fmt.Errorf("creating the hermetic config home: %w", err)
 	}
-	env := hermeticEnv(os.Environ(), configHome)
+	env := hermeticEnv(os.Environ(), configHome, filepath.Join(workDir, "state-home"))
 
 	results := make([]result, 0, len(sizes))
 	for _, sz := range sizes {

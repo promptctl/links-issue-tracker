@@ -102,7 +102,7 @@ func TestListingRefusesTheWrongPositionalCount(t *testing.T) {
 	}
 	for _, tc := range cases {
 		var out bytes.Buffer
-		err := runList(context.Background(), &out, tc.surface, tc.args)
+		err := runList(underInvocation(context.Background()), &out, tc.surface, tc.args)
 		var usage UsageError
 		if !errors.As(err, &usage) || !strings.Contains(err.Error(), "usage: lit "+tc.surface.name) {
 			t.Fatalf("%s %v error = %#v, want a UsageError naming the usage line", tc.surface.name, tc.args, err)
@@ -186,7 +186,7 @@ func TestLsRepeatedParentIsAUnion(t *testing.T) {
 func TestChildrenHelpListsTheLsFlags(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer
-	if err := runList(context.Background(), &out, childrenSurface, []string{"--help"}); !errors.Is(err, errHelpHandled) {
+	if err := runList(underInvocation(context.Background()), &out, childrenSurface, []string{"--help"}); !errors.Is(err, errHelpHandled) {
 		t.Fatalf("children --help error = %v, want errHelpHandled", err)
 	}
 	for _, flag := range []string{"--format", "--columns", "--status", "--sort", "--parent", "--query"} {

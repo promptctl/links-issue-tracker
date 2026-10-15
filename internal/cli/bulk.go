@@ -144,7 +144,7 @@ func bulkLabelLeaf() appLeaf {
 		// precedence: missing --ids/--label surface before an unknown action does.
 		// A help-shaped action never reaches here — the outer bulkFamily resolve
 		// answers `bulk label --help` before the app is even opened (links-cli-zc3r).
-		op, err := bulkLabelFamily.resolve(positional)
+		op, err := bulkLabelFamily.resolve(ctx, positional)
 		if err != nil {
 			return err
 		}

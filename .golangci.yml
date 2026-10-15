@@ -47,3 +47,13 @@ linters:
             - "**/internal/statusline/**"
           allow:
             - $gostd
+        # [LAW:one-way-deps] any package may add a fact to the invocation's
+        # event, the store and the workspace code included, so the package that
+        # holds the event sits below all of them and imports only the standard
+        # library.
+        telemetry-stdlib-only:
+          list-mode: strict
+          files:
+            - "**/internal/telemetry/**"
+          allow:
+            - $gostd

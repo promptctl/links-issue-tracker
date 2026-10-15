@@ -153,6 +153,14 @@ func (fs *cobraFlagSet) Visit(fn func(*pflag.Flag)) {
 	fs.cmd.Flags().Visit(fn)
 }
 
+// setFlagNames is the names of the flags a parse of flags set, in lexical
+// order: what an invocation event records for the root and every leaf alike.
+func setFlagNames(flags *pflag.FlagSet) []string {
+	names := []string{}
+	flags.Visit(func(f *pflag.Flag) { names = append(names, f.Name) })
+	return names
+}
+
 func (fs *cobraFlagSet) Changed(name string) bool {
 	return fs.cmd.Flags().Changed(name)
 }

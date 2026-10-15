@@ -170,16 +170,34 @@ const (
 	projectConfigPathEnv = "LIT_CONFIG_PROJECT_PATH"
 )
 
+// appDirName is lit's directory under each XDG base directory.
+// [LAW:one-source-of-truth]
+const appDirName = "links-issue-tracker"
+
 // ConfigDir returns the canonical directory where global config and templates live.
 func ConfigDir() string {
 	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
-		return filepath.Join(xdg, "links-issue-tracker")
+		return filepath.Join(xdg, appDirName)
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, ".config", "links-issue-tracker")
+	return filepath.Join(home, ".config", appDirName)
+}
+
+// StateDir returns the directory for lit's per-user state that outlives one
+// invocation but is no project's data: XDG_STATE_HOME, by default
+// ~/.local/state.
+func StateDir() (string, error) {
+	if xdg := os.Getenv("XDG_STATE_HOME"); xdg != "" {
+		return filepath.Join(xdg, appDirName), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve state directory: %w", err)
+	}
+	return filepath.Join(home, ".local", "state", appDirName), nil
 }
 
 // layers is the config precedence chain: merged in slice order, so later

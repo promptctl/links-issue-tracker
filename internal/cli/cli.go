@@ -16,17 +16,40 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/config"
+	"github.com/promptctl/links-issue-tracker/internal/interrupt"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/pathspec"
 	"github.com/promptctl/links-issue-tracker/internal/query"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workflows"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
 
-func Run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string) error {
+// Run is one lit invocation, and the one place every invocation passes
+// through, so it is where each one's event opens and closes: the command
+// running under it adds facts through ctx, and the finished event is written
+// whether the command succeeded, failed, panicked, or was hard-exited by the
+// interrupt guard, which never unwinds this stack and so is handed the
+// recording to do itself.
+// [LAW:nothing-unseen] [LAW:single-enforcer]
+func Run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string) (err error) {
+	recorder := beginInvocation(time.Now())
+	record := &invocationRecord{recorder: recorder, stderr: stderr}
+	interrupt.BeforeHardExit(ctx, func(signal string, code int) { record.close(interruptedEnd(time.Now(), signal, code)) })
+	defer func() {
+		panicked := recover()
+		record.close(invocationEnd(time.Now(), err, panicked))
+		if panicked != nil {
+			panic(panicked)
+		}
+	}()
+	return dispatch(telemetry.With(ctx, recorder), stdout, stderr, args)
+}
+
+func dispatch(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string) error {
 	normalizedArgs, err := parseGlobalArgs(args)
 	if err != nil {
 		return err
@@ -54,10 +77,10 @@ func Run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string)
 	// A command starved by a co-resident store holder leaves a durable record
 	// alongside the sync traces the holder itself writes, so the two events can
 	// be correlated afterwards.
-	// Recorded here because this is the one seam that knows the verbatim
-	// invocation; the mirror never reaches it — its busy errors complete
-	// through the push-outcome seam and it exits 0. [LAW:single-enforcer]
-	recordEngineOpenContentionTrace(normalizedArgs, err)
+	// Recorded here because every command's error returns through this seam;
+	// the mirror never reaches it — its busy errors complete through the
+	// push-outcome seam and it exits 0. [LAW:single-enforcer]
+	recordEngineOpenContentionTrace(ctx, err)
 	return err
 }
 
@@ -73,8 +96,10 @@ func newRootCommand(ctx context.Context, stdout io.Writer, stderr io.Writer) *co
 		// reported as a success.
 		DisableFlagParsing: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := cmd.Flags().Parse(args); err != nil {
-				return cmd.FlagErrorFunc()(cmd, err)
+			parseErr := cmd.Flags().Parse(args)
+			telemetry.Flags(cmd.Context(), setFlagNames(cmd.Flags()))
+			if parseErr != nil {
+				return cmd.FlagErrorFunc()(cmd, parseErr)
 			}
 			// [LAW:single-enforcer] the one place a name that is no command is
 			// refused. It outranks a help flag on either side of it, because
@@ -472,7 +497,7 @@ var (
 // [LAW:one-source-of-truth]
 func runList(ctx context.Context, stdout io.Writer, surface listSurface, args []string) error {
 	l, atDir := listLeaf(surface)
-	declared, err := parseLeaf(l, args, stdout)
+	declared, err := parseLeaf(ctx, l, args, stdout)
 	if err != nil {
 		return err
 	}
@@ -2134,8 +2159,8 @@ var completionFamily = commandFamily[string]{
 	},
 }
 
-func runCompletion(stdout io.Writer, args []string) error {
-	shell, err := completionFamily.resolve(args)
+func runCompletion(ctx context.Context, stdout io.Writer, args []string) error {
+	shell, err := completionFamily.resolve(ctx, args)
 	if err != nil {
 		return err
 	}

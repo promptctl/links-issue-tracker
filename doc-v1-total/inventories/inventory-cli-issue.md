@@ -1971,9 +1971,10 @@ updated <n> issues
   `completionFamily.visibleSubcommands()`.
 - `completionFamily` — usage `"usage: lit completion <bash|zsh|fish>"`, rows
   `bash`, `zsh`, `fish` (`cli.go`).
-- `runCompletion(stdout, args)` (`cli.go`): `len(args) != 1` →
-  `errors.New(completionFamily.usage)` → exit 1; an unknown shell → the same
-  usage error via `resolve`; otherwise writes the generated script to stdout.
+- `runCompletion(ctx, stdout, args)` (`cli.go`): a missing or unknown shell →
+  `UsageError{completionFamily.usage}` via `resolve` → exit 2; a help flag after
+  the shell → that shell's help; a token after the shell → a usage refusal
+  naming the shells; otherwise writes the generated script to stdout.
 - `completionRenderer(shell)` panics for any shell not in the switch
   (`completion.go`).
 
