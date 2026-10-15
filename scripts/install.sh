@@ -185,6 +185,16 @@ if [ -z "$TARGET_DIR" ]; then
 fi
 mkdir -p "$TARGET_DIR"
 
+# Every mode stages its binary at "$tmp/$BIN_NAME"; the one rename after the
+# mode dispatch installs it. The staging dir is on the SAME filesystem as
+# TARGET_DIR, so that rename is atomic (cross-FS mv is a copy+unlink): a
+# process already running the old lit keeps its inode, and nothing ever execs
+# a half-written file. Writing the build straight to "$TARGET_DIR/$BIN_NAME"
+# rewrites the file other sessions on this machine are running.
+# [LAW:single-enforcer] one install step; the modes differ only in what they stage.
+tmp="$(mktemp -d "$TARGET_DIR/.lit-install.XXXXXX")"
+trap 'rm -rf "$tmp"' EXIT
+
 # --- mode dispatch -----------------------------------------------------------
 
 case "$mode" in
@@ -229,7 +239,7 @@ case "$mode" in
         # reported at all. [LAW:one-source-of-truth]
         GOFLAGS="${GOFLAGS:+$GOFLAGS }-buildvcs=false" go build \
             -ldflags "-X ${pkg}.Version=${ver} -X ${pkg}.Commit=${LIT_BUILD_COMMIT} -X ${pkg}.Date=${LIT_BUILD_DATE} -X ${pkg}.Origin=${LIT_BUILD_ORIGIN}" \
-            -o "$TARGET_DIR/$BIN_NAME" ./cmd/lit
+            -o "$tmp/$BIN_NAME" ./cmd/lit
         ;;
     release|latest)
         # curl is the single transport for release-download mode. Probe it
@@ -325,11 +335,6 @@ case "$mode" in
         archive="lit_${archive_version}_${os}_${arch}.${ext}"
         url="${REPO_DOWNLOAD_BASE}/${release_tag}/${archive}"
         checksums_url="${REPO_DOWNLOAD_BASE}/${release_tag}/checksums.txt"
-
-        # Temp dir on the SAME filesystem as TARGET_DIR so the final rename
-        # is genuinely atomic (cross-FS mv is a copy+unlink, not atomic).
-        tmp="$(mktemp -d "$TARGET_DIR/.lit-install.XXXXXX")"
-        trap 'rm -rf "$tmp"' EXIT
 
         echo "Downloading $url ..."
         curl -fsSL -o "$tmp/$archive" "$url"
@@ -453,11 +458,14 @@ case "$mode" in
             echo "error: extracted '$BIN_NAME' is not executable" >&2
             exit 1
         fi
-
-        # Atomic rename within $TARGET_DIR (mktemp put us on the same FS).
-        mv -f "$tmp/$BIN_NAME" "$TARGET_DIR/$BIN_NAME"
         ;;
 esac
+
+# The staged binary must run before it replaces the installed one: a build or
+# download that cannot report its own version leaves the working lit in place,
+# and `set -e` stops here with the binary's own error. [LAW:no-silent-failure]
+"$tmp/$BIN_NAME" version
+mv -f "$tmp/$BIN_NAME" "$TARGET_DIR/$BIN_NAME"
 
 # Stale `lnks` symlink/binary from previous installs is removed; `lit` is the
 # only entrypoint.
@@ -486,7 +494,6 @@ for dir in "${PATH_ENTRIES[@]}"; do
 done
 
 echo "Installed lit -> $TARGET_DIR/$BIN_NAME"
-"$TARGET_DIR/$BIN_NAME" version 2>/dev/null || true
 if [ "${#STALE[@]}" -gt 0 ]; then
     echo
     echo "WARNING: other 'lit' binaries found on PATH that were NOT updated:"
