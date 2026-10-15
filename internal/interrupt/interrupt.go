@@ -19,6 +19,8 @@ import (
 	"context"
 	"os"
 	"os/signal"
+	"slices"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -46,18 +48,20 @@ var interruptSignals = []os.Signal{syscall.SIGINT, syscall.SIGTERM}
 // never leave the process terminable only by SIGKILL: the OS default disposition
 // is restored (a second interrupt terminates immediately) AND a grace timer
 // hard-exits with the conventional 128+signum code if the clean path has not
-// returned within grace.
+// returned within grace, after running what the guarded work registered with
+// BeforeHardExit.
 //
 // stop() must be called on the normal exit path; it disarms the handler and
 // releases the internal goroutine. It is a no-op if an interrupt already fired.
 func Guard(parent context.Context, grace time.Duration) (context.Context, func()) {
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, interruptSignals...)
-	ctx, cancel := context.WithCancel(parent)
+	hooks := &hardExitHooks{}
+	ctx, cancel := context.WithCancel(context.WithValue(parent, hardExitHooksKey{}, hooks))
 	done := make(chan struct{})
 
 	go watch(sigs, done, cancel, func() { signal.Stop(sigs) }, grace,
-		func(sig os.Signal) { os.Exit(exitCode(sig)) })
+		escalation(hooks, hardExitHookBudget, os.Exit))
 
 	var stopped bool
 	return ctx, func() {
@@ -68,6 +72,64 @@ func Guard(parent context.Context, grace time.Duration) (context.Context, func()
 		signal.Stop(sigs)
 		cancel()
 		close(done)
+	}
+}
+
+// hardExitHookBudget bounds how long the hooks registered with BeforeHardExit
+// may run. The hard exit exists so the process ends, and a hook stuck on a
+// hung filesystem must not undo that: past the budget the exit goes ahead.
+const hardExitHookBudget = time.Second
+
+type hardExitHooksKey struct{}
+
+// hardExitHooks is what a guarded context's work asked to have done before a
+// hard exit, which skips every deferred call and so every ordinary way of
+// leaving a last word.
+type hardExitHooks struct {
+	mu  sync.Mutex
+	fns []func(code int)
+}
+
+// BeforeHardExit registers fn to run, with the exit code, before the guard
+// hard-exits the process. A context no Guard derived is never hard-exited, so
+// there is no exit for fn to precede and nothing is registered.
+func BeforeHardExit(ctx context.Context, fn func(code int)) {
+	hooks, guarded := ctx.Value(hardExitHooksKey{}).(*hardExitHooks)
+	if !guarded {
+		return
+	}
+	hooks.mu.Lock()
+	defer hooks.mu.Unlock()
+	hooks.fns = append(hooks.fns, fn)
+}
+
+// run calls every registered hook in order, waiting at most budget for them.
+func (h *hardExitHooks) run(code int, budget time.Duration) {
+	h.mu.Lock()
+	fns := slices.Clone(h.fns)
+	h.mu.Unlock()
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		for _, fn := range fns {
+			fn(code)
+		}
+	}()
+	timer := time.NewTimer(budget)
+	defer timer.Stop()
+	select {
+	case <-finished:
+	case <-timer.C:
+	}
+}
+
+// escalation is the guard's hard exit: the registered hooks, within their
+// budget, then exit with the conventional code for the signal.
+func escalation(hooks *hardExitHooks, budget time.Duration, exit func(int)) func(os.Signal) {
+	return func(sig os.Signal) {
+		code := exitCode(sig)
+		hooks.run(code, budget)
+		exit(code)
 	}
 }
 

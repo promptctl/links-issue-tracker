@@ -327,7 +327,7 @@ func parseLeaf[R any](ctx context.Context, l leaf[R], args []string, stdout io.W
 		return nil, UsageError{Message: fmt.Sprintf("%s; %s", usageSentence(l.fs, l.positionals, l.usage), err)}
 	}
 	parseErr := parseFlagSet(l.fs, flagArgs, stdout)
-	telemetry.Flags(ctx, l.fs.setFlagNames())
+	telemetry.Flags(ctx, setFlagNames(l.fs.cmd.Flags()))
 	if parseErr != nil {
 		return nil, parseErr
 	}

@@ -11,10 +11,20 @@ import (
 
 var traceIDShape = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
+// finished is r's event, closed by this Finish.
+func finished(t *testing.T, r *Recorder, end End) Event {
+	t.Helper()
+	ev, closed := r.Finish(end)
+	if !closed {
+		t.Fatal("Finish did not close an open event")
+	}
+	return ev
+}
+
 // Each event gets its own W3C trace id.
 func TestBeginMintsAFreshTraceIDPerEvent(t *testing.T) {
-	first := Begin(Event{}).Finish(End{})
-	second := Begin(Event{}).Finish(End{})
+	first := finished(t, Begin(Event{}), End{})
+	second := finished(t, Begin(Event{}), End{})
 	for _, ev := range []Event{first, second} {
 		if !traceIDShape.MatchString(ev.TraceID) {
 			t.Errorf("TraceID = %q, want 32 lowercase hex digits", ev.TraceID)
@@ -33,11 +43,14 @@ func TestFactsAddedThroughTheContextLandOnTheFinishedEvent(t *testing.T) {
 	ctx := With(context.Background(), recorder)
 
 	Command(ctx, "lit next")
+	if got := EventName(ctx); got != "lit next" {
+		t.Errorf("EventName = %q, want lit next", got)
+	}
 	Flags(ctx, []string{"all"})
 	Set(ctx, "next.outcome", "no_work")
 	Count(ctx, "next.rows_gathered", 0)
 
-	ev := recorder.Finish(End{At: started.Add(1500 * time.Millisecond), Outcome: OutcomeError, ExitCode: 6, Reason: "no_ready_work", Error: "no ready work", Sink: "file"})
+	ev := finished(t, recorder, End{At: started.Add(1500 * time.Millisecond), Outcome: OutcomeError, ExitCode: 6, Reason: "no_ready_work", Error: "no ready work"})
 	if ev.Event != "lit next" || ev.Service != "lit" {
 		t.Errorf("Event, Service = %q, %q; want lit next, lit", ev.Event, ev.Service)
 	}
@@ -56,8 +69,22 @@ func TestFactsAddedThroughTheContextLandOnTheFinishedEvent(t *testing.T) {
 	if ev.StartedAt.Location() != time.UTC || !ev.StartedAt.Equal(started) {
 		t.Errorf("StartedAt = %v, want %v in UTC", ev.StartedAt, started)
 	}
-	if ev.Outcome != OutcomeError || ev.ExitCode != 6 || ev.Reason != "no_ready_work" || ev.Error != "no ready work" || ev.Sink != "file" {
-		t.Errorf("end fields = %q %d %q %q %q, want error 6 no_ready_work, no ready work, file", ev.Outcome, ev.ExitCode, ev.Reason, ev.Error, ev.Sink)
+	if ev.Outcome != OutcomeError || ev.ExitCode != 6 || ev.Reason != "no_ready_work" || ev.Error != "no ready work" {
+		t.Errorf("end fields = %q %d %q %q, want error 6 no_ready_work, no ready work", ev.Outcome, ev.ExitCode, ev.Reason, ev.Error)
+	}
+}
+
+// An event is closed once: the first end to reach it is the one it records,
+// and a later Finish closes nothing and returns no event.
+func TestOnlyTheFirstFinishClosesTheEvent(t *testing.T) {
+	recorder := Begin(Event{Event: "lit sync push"})
+	first := finished(t, recorder, End{Outcome: OutcomeInterrupted, ExitCode: 143})
+	second, closed := recorder.Finish(End{Outcome: OutcomeError, ExitCode: 1})
+	if closed || second.Event != "" {
+		t.Errorf("second Finish = %+v, closed %v; want no event and closed false", second, closed)
+	}
+	if first.Event != "lit sync push" || first.Outcome != OutcomeInterrupted || first.ExitCode != 143 {
+		t.Errorf("first Finish = %q %q %d, want lit sync push interrupted 143", first.Event, first.Outcome, first.ExitCode)
 	}
 }
 
@@ -65,7 +92,7 @@ func TestFactsAddedThroughTheContextLandOnTheFinishedEvent(t *testing.T) {
 func TestAFinishedEventDoesNotChangeAfterwards(t *testing.T) {
 	recorder := Begin(Event{})
 	ctx := With(context.Background(), recorder)
-	ev := recorder.Finish(End{})
+	ev := finished(t, recorder, End{})
 	Set(ctx, "late", true)
 	Count(ctx, "late", 1)
 	if len(ev.Facts) != 0 || len(ev.Counts) != 0 {
@@ -87,7 +114,7 @@ func TestAFactWithNoOpenEventPanics(t *testing.T) {
 // The written form is one JSON line carrying the default field names, with
 // empty flags, counts and facts written as empty rather than left out.
 func TestLineIsOneJSONLineInTheDefaultFieldNames(t *testing.T) {
-	line, err := Line(Begin(Event{Event: "lit version"}).Finish(End{Outcome: OutcomeOK, Sink: "file"}))
+	line, err := Line(finished(t, Begin(Event{Event: "lit version"}), End{Outcome: OutcomeOK}))
 	if err != nil {
 		t.Fatalf("Line error = %v", err)
 	}
@@ -98,7 +125,7 @@ func TestLineIsOneJSONLineInTheDefaultFieldNames(t *testing.T) {
 	if err := json.Unmarshal(line, &fields); err != nil {
 		t.Fatalf("Line is not JSON: %v", err)
 	}
-	for _, name := range []string{"event", "trace_id", "service", "started_at", "duration_ms", "outcome", "exit_code", "sink", "flags", "counts", "facts"} {
+	for _, name := range []string{"event", "trace_id", "service", "started_at", "duration_ms", "outcome", "exit_code", "sink", "sink_rotation", "flags", "counts", "facts"} {
 		if _, ok := fields[name]; !ok {
 			t.Errorf("Line has no %q field: %s", name, line)
 		}

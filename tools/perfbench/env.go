@@ -17,9 +17,10 @@ import "strings"
 // $XDG_STATE_HOME/links-issue-tracker/events.jsonl, whose size decides whether a
 // write rotates it, and a measured run must not fill a developer's own file.
 // LIT_DISABLE_AUTO_SYNC skips the post-command maintenance outright, and
-// CLAUDE_CODE_SESSION_ID changes what the write probe records as its assignee. So: XDG_CONFIG_HOME and XDG_STATE_HOME are pointed
-// at empty directories the run owns, and every LIT_* variable and the session id
-// are dropped.
+// CLAUDE_CODE_SESSION_ID changes what the write probe records as its
+// assignee. So: XDG_CONFIG_HOME and XDG_STATE_HOME are pointed at empty
+// directories the run owns, and every LIT_* variable and the session id are
+// dropped.
 // [LAW:one-source-of-truth] the generated store's own .lit/config.toml is then
 // the only configuration in force, at every size, on every machine.
 //

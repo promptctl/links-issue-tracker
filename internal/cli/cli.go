@@ -16,6 +16,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/config"
+	"github.com/promptctl/links-issue-tracker/internal/interrupt"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/pathspec"
 	"github.com/promptctl/links-issue-tracker/internal/query"
@@ -30,13 +31,21 @@ import (
 // Run is one lit invocation, and the one place every invocation passes
 // through, so it is where each one's event opens and closes: the command
 // running under it adds facts through ctx, and the finished event is written
-// whether the command succeeded, failed, or panicked.
+// whether the command succeeded, failed, panicked, or was hard-exited by the
+// interrupt guard, which never unwinds this stack and so is handed the
+// recording to do itself. Whichever end comes first closes the event.
 // [LAW:nothing-unseen] [LAW:single-enforcer]
 func Run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string) (err error) {
 	recorder := beginInvocation(time.Now())
+	record := func(end telemetry.End) {
+		if ev, closed := recorder.Finish(end); closed {
+			recordInvocation(stderr, ev)
+		}
+	}
+	interrupt.BeforeHardExit(ctx, func(code int) { record(interruptedEnd(time.Now(), code)) })
 	defer func() {
 		panicked := recover()
-		recordInvocation(stderr, recorder.Finish(invocationEnd(time.Now(), err, panicked)))
+		record(invocationEnd(time.Now(), err, panicked))
 		if panicked != nil {
 			panic(panicked)
 		}
@@ -72,10 +81,10 @@ func dispatch(ctx context.Context, stdout io.Writer, stderr io.Writer, args []st
 	// A command starved by a co-resident store holder leaves a durable record
 	// alongside the sync traces the holder itself writes, so the two events can
 	// be correlated afterwards.
-	// Recorded here because this is the one seam that knows the verbatim
-	// invocation; the mirror never reaches it — its busy errors complete
-	// through the push-outcome seam and it exits 0. [LAW:single-enforcer]
-	recordEngineOpenContentionTrace(normalizedArgs, err)
+	// Recorded here because every command's error returns through this seam;
+	// the mirror never reaches it — its busy errors complete through the
+	// push-outcome seam and it exits 0. [LAW:single-enforcer]
+	recordEngineOpenContentionTrace(ctx, err)
 	return err
 }
 
@@ -91,8 +100,10 @@ func newRootCommand(ctx context.Context, stdout io.Writer, stderr io.Writer) *co
 		// reported as a success.
 		DisableFlagParsing: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := cmd.Flags().Parse(args); err != nil {
-				return cmd.FlagErrorFunc()(cmd, err)
+			parseErr := cmd.Flags().Parse(args)
+			telemetry.Flags(cmd.Context(), setFlagNames(cmd.Flags()))
+			if parseErr != nil {
+				return cmd.FlagErrorFunc()(cmd, parseErr)
 			}
 			// [LAW:single-enforcer] the one place a name that is no command is
 			// refused. It outranks a help flag on either side of it, because

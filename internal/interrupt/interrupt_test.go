@@ -2,7 +2,9 @@ package interrupt
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -130,6 +132,43 @@ func TestWatchNormalExitDoesNotEscalate(t *testing.T) {
 	// Give any errant timer time to (wrongly) fire; the escalate/restoreDefault
 	// closures t.Error if they run.
 	time.Sleep(20 * time.Millisecond)
+}
+
+// The hard exit runs what the guarded work registered, in order and with the
+// exit code, before the process exits.
+func TestEscalationRunsTheHooksBeforeExiting(t *testing.T) {
+	hooks := &hardExitHooks{}
+	ctx := context.WithValue(context.Background(), hardExitHooksKey{}, hooks)
+	var calls []string
+	BeforeHardExit(ctx, func(code int) { calls = append(calls, fmt.Sprintf("first %d", code)) })
+	BeforeHardExit(ctx, func(code int) { calls = append(calls, fmt.Sprintf("second %d", code)) })
+
+	escalation(hooks, time.Hour, func(code int) { calls = append(calls, fmt.Sprintf("exit %d", code)) })(syscall.SIGTERM)
+
+	if got, want := strings.Join(calls, ", "), "first 143, second 143, exit 143"; got != want {
+		t.Errorf("escalation ran %q, want %q", got, want)
+	}
+}
+
+// A hook that never returns cannot hold the process past its budget: the
+// exit goes ahead without it.
+func TestAStuckHookDoesNotStopTheHardExit(t *testing.T) {
+	hooks := &hardExitHooks{}
+	ctx := context.WithValue(context.Background(), hardExitHooksKey{}, hooks)
+	stuck := make(chan struct{})
+	defer close(stuck)
+	BeforeHardExit(ctx, func(int) { <-stuck })
+
+	exited := make(chan int, 1)
+	go escalation(hooks, 10*time.Millisecond, func(code int) { exited <- code })(syscall.SIGINT)
+	select {
+	case code := <-exited:
+		if code != 130 {
+			t.Errorf("exited %d, want 130", code)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("a stuck hook held the hard exit past its budget")
+	}
 }
 
 // TestExitCode pins the 128+signum contract for the escalation exit code.

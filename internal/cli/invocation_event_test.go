@@ -2,7 +2,10 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -12,6 +15,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
+	"github.com/promptctl/primitives/filelock"
 )
 
 // isolateEvents gives the test its own XDG_STATE_HOME, so the events file it
@@ -85,12 +89,44 @@ func TestEveryInvocationLeavesOneEvent(t *testing.T) {
 		if ev.Sink != eventsSink || ev.PID != os.Getpid() || ev.Cwd != wantCwd {
 			t.Errorf("sink, pid, cwd = %q, %d, %q; want %q, %d, %q", ev.Sink, ev.PID, ev.Cwd, eventsSink, os.Getpid(), wantCwd)
 		}
+		if ev.SinkRotation != telemetry.RotationNone || ev.SinkRotationError != "" {
+			t.Errorf("sink_rotation = %q %q, want none: the file is far under its cap", ev.SinkRotation, ev.SinkRotationError)
+		}
 		if ev.StartedAt.IsZero() || ev.DurationMS < 0 {
 			t.Errorf("started_at, duration_ms = %v, %d; want a start and a non-negative duration", ev.StartedAt, ev.DurationMS)
 		}
 	}
 	if events[0].TraceID == events[1].TraceID {
 		t.Errorf("both invocations carry trace id %q", events[0].TraceID)
+	}
+	// An event's error can quote what was typed, so only its owner reads it.
+	for path, want := range map[string]os.FileMode{eventsPath(t): 0o600, filepath.Dir(eventsPath(t)): 0o700} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != want {
+			t.Errorf("%s mode = %o, want %o", path, got, want)
+		}
+	}
+}
+
+// The root parses its own flags, so its event names them as a leaf's does:
+// `lit --help` and a bare `lit` are told apart.
+func TestTheRootRecordsItsFlags(t *testing.T) {
+	isolateEvents(t)
+	dir := t.TempDir()
+	for _, tc := range []struct {
+		args  []string
+		flags string
+	}{
+		{[]string{"--help"}, "help"},
+		{[]string{}, ""},
+	} {
+		runCLIInDir(t, dir, tc.args...)
+		if ev := lastEvent(t); ev.Event != "lit" || strings.Join(ev.Flags, ",") != tc.flags {
+			t.Errorf("Run(%v) event, flags = %q, %q; want lit, [%s]", tc.args, ev.Event, ev.Flags, tc.flags)
+		}
 	}
 }
 
@@ -184,8 +220,86 @@ func TestTheEventsFileRotatesPastItsCap(t *testing.T) {
 	if err != nil || !bytes.Equal(kept, full) {
 		t.Fatalf("previous generation = %d bytes, %v; want the full file moved aside", len(kept), err)
 	}
-	if events := readEvents(t); len(events) != 1 || events[0].Event != "lit version" {
-		t.Errorf("fresh events file = %+v, want the one new event", events)
+	if events := readEvents(t); len(events) != 1 || events[0].Event != "lit version" || events[0].SinkRotation != telemetry.RotationRotated {
+		t.Errorf("fresh events file = %+v, want the one new event, recording the rotation", events)
+	}
+}
+
+// The size check and the rename are one step under the log's lock: while
+// another process holds it, the log is not moved, and once it is released the
+// rotation goes ahead.
+func TestRotationWaitsForTheLogsLock(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	if err := os.WriteFile(path, []byte("over the cap"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	release, acquired, err := filelock.Acquire(context.Background(), path+".lock", true, 1, 0)
+	if err != nil || !acquired {
+		t.Fatalf("hold the log's lock: acquired %v, %v", acquired, err)
+	}
+	type result struct {
+		rotated bool
+		err     error
+	}
+	done := make(chan result, 1)
+	go func() {
+		rotated, err := rotateLog(path, 1)
+		done <- result{rotated, err}
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+	if _, err := os.Stat(path + ".1"); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("the log was rotated while another process held its lock (stat .1: %v)", err)
+	}
+	if err := release(); err != nil {
+		t.Fatal(err)
+	}
+	if got := <-done; !got.rotated || got.err != nil {
+		t.Fatalf("rotateLog after the release = %v, %v; want rotated", got.rotated, got.err)
+	}
+	if _, err := os.Stat(path + ".1"); err != nil {
+		t.Errorf("no previous generation after the rotation: %v", err)
+	}
+}
+
+// A rotation that cannot run is said on the event that grew the file past its
+// cap, and on stderr, and the event is still written.
+func TestAFailedRotationIsRecordedOnTheEvent(t *testing.T) {
+	isolateEvents(t)
+	path := eventsPath(t)
+	// A non-empty directory where the previous generation goes: the rename
+	// onto it fails.
+	if err := os.MkdirAll(filepath.Join(path+".1", "occupied"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, bytes.Repeat([]byte("x"), eventsMaxBytes+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out := runCLIInDir(t, t.TempDir(), "version")
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ev telemetry.Event
+	if err := json.Unmarshal(raw[eventsMaxBytes+1:], &ev); err != nil {
+		t.Fatalf("no event appended past the oversized file: %v", err)
+	}
+	if ev.Event != "lit version" || ev.SinkRotation != telemetry.RotationFailed || !strings.Contains(ev.SinkRotationError, path+".1") {
+		t.Errorf("event = %q, sink_rotation %q %q; want lit version, failed, naming %s.1", ev.Event, ev.SinkRotation, ev.SinkRotationError, path)
+	}
+	if !strings.Contains(out, "rotation failed") {
+		t.Errorf("stderr does not report the failed rotation:\n%s", out)
+	}
+}
+
+// An invocation the interrupt guard hard-exits is recorded as interrupted,
+// with the exit code the guard exits with.
+func TestAHardExitedInvocationEndsAsInterrupted(t *testing.T) {
+	at := time.Now()
+	end := interruptedEnd(at, 143)
+	if end.Outcome != telemetry.OutcomeInterrupted || end.ExitCode != 143 || !strings.Contains(end.Error, "143") || end.Reason != "" || !end.At.Equal(at) {
+		t.Errorf("interruptedEnd = %+v, want interrupted at exit 143", end)
 	}
 }
 

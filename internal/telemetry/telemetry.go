@@ -31,6 +31,24 @@ const (
 	// OutcomePanic is an invocation that panicked; the event is written before
 	// the panic carries on.
 	OutcomePanic Outcome = "panic"
+	// OutcomeInterrupted is an invocation still running when the interrupt
+	// guard's grace ran out, ended by a hard exit that never unwound its stack.
+	OutcomeInterrupted Outcome = "interrupted"
+)
+
+// Rotation is what the export edge did about the events file's size cap
+// before appending the event.
+type Rotation string
+
+const (
+	// RotationNone is a file under its cap, appended to as it was.
+	RotationNone Rotation = "none"
+	// RotationRotated is a file moved aside at its cap; the event is the first
+	// line of the new one.
+	RotationRotated Rotation = "rotated"
+	// RotationFailed is a rotation that could not run, so the file grows past
+	// its cap; sink_rotation_error says why.
+	RotationFailed Rotation = "failed"
 )
 
 // Event is one invocation's record, in the field names every unit of work
@@ -59,7 +77,13 @@ type Event struct {
 	// its exit code; empty on success.
 	Reason string `json:"reason,omitempty"`
 	Error  string `json:"error,omitempty"`
-	Sink   string `json:"sink"`
+	// Sink, SinkRotation, and SinkRotationError are the export edge's own
+	// facts, set as it writes the event: where the event went, and what became
+	// of the file's size cap on the way. [LAW:nothing-unseen] a telemetry
+	// failure is itself telemetry.
+	Sink              string   `json:"sink"`
+	SinkRotation      Rotation `json:"sink_rotation"`
+	SinkRotationError string   `json:"sink_rotation_error,omitempty"`
 	// Counts holds the command's counts, zeros included: a zero says the
 	// command ran and found none, which an absent key cannot.
 	Counts map[string]int `json:"counts"`
@@ -70,8 +94,9 @@ type Event struct {
 
 // Recorder is one invocation's event while it is still open.
 type Recorder struct {
-	mu sync.Mutex
-	ev Event
+	mu     sync.Mutex
+	ev     Event
+	closed bool
 }
 
 // Begin opens an invocation's event from its identity — everything known
@@ -91,14 +116,21 @@ type End struct {
 	ExitCode int
 	Reason   string
 	Error    string
-	Sink     string
 }
 
-// Finish closes the event and returns it, complete.
-func (r *Recorder) Finish(end End) Event {
+// Finish closes the event and returns it, complete, with closed true. An
+// invocation can end two ways at once — its stack unwinding just as the
+// interrupt guard's hard exit fires — and its event is one record, so only
+// the first Finish closes it; a later one returns closed false and no event.
+// [LAW:one-source-of-truth]
+func (r *Recorder) Finish(end End) (ev Event, closed bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	ev := r.ev
+	if r.closed {
+		return Event{}, false
+	}
+	r.closed = true
+	ev = r.ev
 	// The duration is read before StartedAt is moved to UTC, which drops the
 	// monotonic clock reading a wall-clock step would otherwise corrupt.
 	ev.DurationMS = end.At.Sub(ev.StartedAt).Milliseconds()
@@ -107,11 +139,10 @@ func (r *Recorder) Finish(end End) Event {
 	ev.ExitCode = end.ExitCode
 	ev.Reason = end.Reason
 	ev.Error = end.Error
-	ev.Sink = end.Sink
 	ev.Flags = append([]string{}, ev.Flags...)
 	ev.Counts = maps.Clone(ev.Counts)
 	ev.Facts = maps.Clone(ev.Facts)
-	return ev
+	return ev, true
 }
 
 // Line is the event as one line of JSONL.
@@ -148,6 +179,15 @@ func Command(ctx context.Context, path string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.ev.Event = path
+}
+
+// EventName is the command the invocation has reached so far, by its full
+// path: the name its event carries.
+func EventName(ctx context.Context) string {
+	r := from(ctx)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.ev.Event
 }
 
 // Subcommand extends the command path by the subcommand dispatch resolved

@@ -13,11 +13,14 @@ The file is `$XDG_STATE_HOME/links-issue-tracker/events.jsonl`, or
 There is one file per user, not per repository: every checkout and every
 repository on the machine appends to it, and so does an invocation outside any
 repository, such as `lit version`. The `cwd` on each line says where it ran.
+Only you can read the file: it is created with mode `0600`, in a directory
+created with mode `0700`.
 
 Each line is one complete JSON object, written in a single append, so lines
 from commands finishing at the same moment never interleave. Once the file
 grows past 8 MiB, the next invocation renames it to `events.jsonl.1`, replacing
-any earlier `.1`, and starts a new file.
+any earlier `.1`, and starts a new file. Invocations take turns at this through
+a lock file, `events.jsonl.lock`, so two of them never both rotate.
 
 If lit cannot write the line, it prints a warning on stderr and the command's
 own result is unchanged.
@@ -42,6 +45,7 @@ lines here for reading:
   "outcome": "ok",
   "exit_code": 0,
   "sink": "file",
+  "sink_rotation": "none",
   "counts": {"next.rows_gathered": 1},
   "facts": {
     "next.outcome": "served_from_new_lane",
@@ -65,11 +69,13 @@ lines here for reading:
 | `pid`, `cwd` | The process and the directory it ran in. |
 | `flags` | The names of the flags given, in alphabetical order. Flag values are never recorded, because a value can be a ticket title, a comment body, or a pasted secret. |
 | `started_at`, `duration_ms` | When the invocation started, in UTC, and how long it ran. |
-| `outcome` | `ok`, `error`, or `panic`. |
-| `exit_code` | The process's exit code, the same one a failed command prints on its error line; `2` for a panic. |
+| `outcome` | `ok`, `error`, `panic`, or `interrupted`: still running when the grace after a Ctrl-C or `SIGTERM` ran out, so lit exited without finishing. |
+| `exit_code` | The process's exit code, the same one a failed command prints on its error line; `2` for a panic; `130` or `143` for an interrupted invocation (128 plus the signal number). |
 | `reason` | Present only on a failure: the reason token printed beside the exit code (see the [CLI reference](cli-reference.md)). |
-| `error` | Present only on a failure or panic: the error message, or the panic value. |
+| `error` | Present unless the outcome is `ok`: the error message as lit printed it, which can quote a value you typed, the panic value, or why an interrupted invocation exited. |
 | `sink` | Where the line was written. Always `file`. |
+| `sink_rotation` | What happened to the file's size cap before this line was appended: `none`, `rotated` (this is the first line of a new file), or `failed` (the file keeps growing past its cap). |
+| `sink_rotation_error` | Present only when `sink_rotation` is `failed`: why. |
 | `counts` | The command's counts. A count of zero is written as `0`, so "ran and found none" is distinguishable from a command that does not count that thing. |
 | `facts` | What the command decided, under keys prefixed with the command's name. |
 
@@ -77,7 +83,9 @@ A command that records no counts or facts writes `{}` for each.
 
 ## What `lit next` records
 
-`lit next` writes every key below on every run, empty when it does not apply.
+Every `lit next` that reaches a decision writes every key below, empty when it
+does not apply. A run that fails before deciding, such as one given an invalid
+filter, writes `"outcome": "error"` and none of these keys.
 
 | Key | Meaning |
 | --- | --- |

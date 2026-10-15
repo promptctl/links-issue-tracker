@@ -21,8 +21,7 @@ import (
 const eventsFileName = "events.jsonl"
 
 // eventsMaxBytes caps the events file. Rotation keeps one previous
-// generation, so at roughly half a kilobyte an event the two hold the last
-// thirty thousand or so invocations.
+// generation, so the two together hold at most about twice this.
 const eventsMaxBytes = 8 * 1024 * 1024
 
 // eventsSink is where recordInvocation writes: the local file.
@@ -54,7 +53,7 @@ func beginInvocation(now time.Time) *telemetry.Recorder {
 // prints for the same error, read from the same two functions.
 // [LAW:one-source-of-truth]
 func invocationEnd(at time.Time, err error, panicked any) telemetry.End {
-	end := telemetry.End{At: at, Outcome: telemetry.OutcomeOK, ExitCode: ExitCode(err), Sink: eventsSink}
+	end := telemetry.End{At: at, Outcome: telemetry.OutcomeOK, ExitCode: ExitCode(err)}
 	switch {
 	case panicked != nil:
 		end.Outcome = telemetry.OutcomePanic
@@ -66,6 +65,17 @@ func invocationEnd(at time.Time, err error, panicked any) telemetry.End {
 		end.Error = err.Error()
 	}
 	return end
+}
+
+// interruptedEnd is an invocation the interrupt guard hard-exited with code:
+// it was still running when the grace after an interrupt ran out.
+func interruptedEnd(at time.Time, code int) telemetry.End {
+	return telemetry.End{
+		At:       at,
+		Outcome:  telemetry.OutcomeInterrupted,
+		ExitCode: code,
+		Error:    fmt.Sprintf("still running when the grace after an interrupt ran out; hard-exited with %d", code),
+	}
 }
 
 // recordInvocation is the export edge: the one place an invocation's event
@@ -83,18 +93,23 @@ func writeEvent(stderr io.Writer, ev telemetry.Event) error {
 	if err != nil {
 		return err
 	}
+	// Owner-only: an event's error can quote what was typed on the command
+	// line, and its cwd says where its owner works.
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("create state directory: %w", err)
+	}
+	path := filepath.Join(dir, eventsFileName)
+	rotated, rotateErr := rotateLog(path, eventsMaxBytes)
+	ev.Sink = eventsSink
+	ev.SinkRotation, ev.SinkRotationError = rotationFacts(rotated, rotateErr)
+	if rotateErr != nil {
+		fmt.Fprintf(stderr, "lit: %s rotation failed (%v); the file keeps growing past its cap\n", path, rotateErr)
+	}
 	line, err := telemetry.Line(ev)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("create state directory: %w", err)
-	}
-	path := filepath.Join(dir, eventsFileName)
-	if err := rotateLog(path, eventsMaxBytes); err != nil {
-		fmt.Fprintf(stderr, "lit: %s rotation failed (%v); the file keeps growing past its cap\n", path, err)
-	}
-	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return fmt.Errorf("open events file: %w", err)
 	}
@@ -106,4 +121,15 @@ func writeEvent(stderr io.Writer, ev telemetry.Event) error {
 		return fmt.Errorf("write events file: %w", err)
 	}
 	return nil
+}
+
+// rotationFacts is what rotateLog's result puts on the event.
+func rotationFacts(rotated bool, err error) (telemetry.Rotation, string) {
+	switch {
+	case err != nil:
+		return telemetry.RotationFailed, err.Error()
+	case rotated:
+		return telemetry.RotationRotated, ""
+	}
+	return telemetry.RotationNone, ""
 }
