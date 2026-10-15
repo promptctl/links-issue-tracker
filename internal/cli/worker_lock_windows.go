@@ -10,3 +10,6 @@ import "os"
 // question this build cannot answer. lit has no Windows build today (see
 // detach_windows.go).
 func holdWorkerLock(string) ([]*os.File, error) { return nil, nil }
+
+// keepWorkerHoldFromChildren has nothing to keep: a Windows worker holds no lock.
+func keepWorkerHoldFromChildren() {}

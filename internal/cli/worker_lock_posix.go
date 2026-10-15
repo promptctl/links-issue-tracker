@@ -28,8 +28,8 @@ func workerLockPath(storageDir string) string {
 // holdWorkerLock takes the shared hold a spawner hands to a detached worker as
 // an inherited fd. An flock belongs to the open file description, which the
 // child shares from the moment it exists, so the kernel releases the hold only
-// once every process sharing it is gone: the worker, and any child of the
-// worker's that inherited the fd.
+// once the worker is gone (keepWorkerHoldFromChildren keeps it from the
+// worker's own children).
 func holdWorkerLock(storageDir string) ([]*os.File, error) {
 	file, err := os.OpenFile(workerLockPath(storageDir), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
@@ -40,6 +40,14 @@ func holdWorkerLock(storageDir string) ([]*os.File, error) {
 	}
 	return []*os.File{file}, nil
 }
+
+// workerHoldFD is where a worker finds its hold: os/exec numbers ExtraFiles
+// from fd 3, and spawnDetachedWorker passes the hold as the only one.
+const workerHoldFD = 3
+
+// keepWorkerHoldFromChildren marks the inherited hold close-on-exec, which the
+// dup into fd 3 cleared, so no process this worker starts inherits it.
+func keepWorkerHoldFromChildren() { syscall.CloseOnExec(workerHoldFD) }
 
 // JoinDetachedWorkers waits up to patience until no detached worker spawned for
 // the store at storageDir is alive. The exclusive hold is granted only once

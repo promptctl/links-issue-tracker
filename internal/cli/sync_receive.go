@@ -116,19 +116,17 @@ func receiveEnv() []string {
 // the mirror-pending claim and the beacon are the ordering witnesses, not a
 // sleep.
 func backgroundReceiveLeaf() wsLeaf {
-	fs := newCobraFlagSet("sync " + backgroundReceiveSubcommand)
-	parentPID := fs.Int("parent-pid", 0, "PID of the spawning command; the receive waits for it to exit")
-	return wsLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, _ []string) error {
+	return detachedWorkerLeaf(backgroundReceiveSubcommand, "PID of the spawning command; the receive waits for it to exit", func(ctx context.Context, stdout io.Writer, ws workspace.Info, parentPID int) error {
 		start := time.Now()
 		pid := os.Getpid()
 		fmt.Fprintf(stdout, "%s receive start pid=%d deadline=%s\n", start.UTC().Format(time.RFC3339), pid, store.ReceiveDeadline)
-		mirrorWait := receiveWhenQuiet(ctx, ws, *parentPID)
+		mirrorWait := receiveWhenQuiet(ctx, ws, parentPID)
 		// The decision is in the receive's sync trace; this line is the worker's
 		// own lifetime, which the trace does not carry.
 		fmt.Fprintf(stdout, "%s receive end pid=%d mirror_wait=%s elapsed=%s\n", time.Now().UTC().Format(time.RFC3339), pid,
 			mirrorWait.Round(time.Millisecond), time.Since(start).Round(time.Millisecond))
 		return nil
-	}}
+	})
 }
 
 // receiveWhenQuiet runs one receive once the spawning command has exited and
