@@ -632,7 +632,7 @@ func TestRunNextUnderAFilterServesPastTheTicketItHid(t *testing.T) {
 	if strings.Contains(text, "no ready work in") {
 		t.Fatalf("next --type bug = %q, want the epic not called exhausted — %s is ready in it", text, second.ID)
 	}
-	want := second.ID + " is the next ticket on your path, and this run's filter leaves it out — run `lit next` without --type, --status, --labels or --assignee to be handed it\nor take the top ready ticket the filter selects, which is off your path: run `lit start " + bug.ID + "`"
+	want := "`lit next` without --type, --status, --labels or --assignee hands you " + second.ID + ", which this run's filter leaves out\nor take the top ready ticket the filter selects, outside the work you hold: run `lit start " + bug.ID + "`"
 	if !strings.Contains(text, want) {
 		t.Fatalf("next --type bug = %q, want it to contain %q", text, want)
 	}

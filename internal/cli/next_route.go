@@ -150,14 +150,16 @@ type ServedPastExhaustion struct {
 	Exhaustion Exhausted
 }
 
-// Narrowed is routing step 3 reached only because of the filter: steps 1-2b
-// serve nothing the filter selects, but the same steps over the whole queue
-// would serve Hidden. The scope is not exhausted, and saying so would be false
-// — the question was narrowed, not the work. Hidden is that unfiltered pick, so
-// the agent learns exactly which ticket dropping the filter hands it.
+// Narrowed is a run that hands back nothing only because of its filter: no
+// step serves a row the filter selects, but the same steps over the whole queue
+// would serve Hidden — the held scope's next ticket at step 3, or the pool's
+// top ready ticket at step 4 for a checkout holding no lane. Neither the scope
+// nor the backlog is out of work, and saying so would be false — the question
+// was narrowed, not the work. Hidden is that unfiltered pick, so the agent
+// learns exactly which ticket dropping the filter hands it.
 //
-// It is an error on the same terms as Exhausted, for when the pool has nothing
-// the filter selects either.
+// It is an error on the same terms as Exhausted and NoWork, whose answers it
+// replaces when the filter is the reason for them.
 // [LAW:types-are-the-program] [LAW:no-silent-failure]
 type Narrowed struct{ Hidden annotation.AnnotatedIssue }
 
@@ -185,6 +187,12 @@ type ServedPastNarrowing struct {
 // never claimed of rows the pool was not asked about; with no focus active it
 // is empty, and on ServedPastExhaustion, whose pool did offer a row.
 //
+// Narrowing is set when the pool offered nothing the filter selects but would
+// serve a row over the whole queue: the filter, not the backlog, is why nothing
+// outside the scope is on offer, and that row is what `lit next` without the
+// filter hands over. OffPath is then empty, as on ServedPastExhaustion, since
+// the unfiltered pool did offer a row.
+//
 // It is also an error, for the same reason HelpRequestedError is: it is an
 // answer, not a failure, and the error channel is the only channel runNext has
 // for an answer that hands back no row. Being the error itself — rather than
@@ -192,10 +200,11 @@ type ServedPastNarrowing struct {
 // sinks reading the routing verdict rather than a copy of it that could drift
 // from these fields. [LAW:one-source-of-truth]
 type Exhausted struct {
-	Epics   []string
-	Blocked []rowReach
-	Held    []rowReach
-	OffPath []rowReach
+	Epics     []string
+	Blocked   []rowReach
+	Held      []rowReach
+	OffPath   []rowReach
+	Narrowing *Narrowed
 }
 
 // reachKind is what one row is to this checkout right now — the one fact both
@@ -437,10 +446,11 @@ func ownScope(standings claims.Standings, self model.Attribution) (map[model.Lan
 // rows is the whole workable queue and asked is the filter the run was given
 // (--type/--status/--labels/--assignee). The filter decides which rows may be
 // SERVED and nothing else: every walk reads every row, so a dependency is found
-// through a ticket the filter leaves out, and "is the scope exhausted" is asked
-// of the scope rather than of the part of it the filter kept. A filter applied
-// to the rows before routing would make both answers false at once: under
-// --type bug, a ready task of ours would read as an exhausted epic.
+// through a ticket the filter leaves out, and "is the scope exhausted" — or
+// "is anything ready" — is asked of the queue rather than of the part of it the
+// filter kept. A filter applied to the rows before routing would make those
+// answers false: under --type bug, a ready task of ours would read as an
+// exhausted epic, and a backlog of ready tasks as no ready work.
 //
 // The focus scope narrows STEP 4 AND NOTHING ELSE. Steps 1-3 route over lanes
 // this checkout already holds, and ownScope takes pains to read that from the
@@ -492,11 +502,18 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 	}
 
 	// Step 4's pick, shared by the step that falls through to it. The pool is
-	// the filtered, focus-scoped one — see the step 4 comment below.
-	pool, offPath := scope.partition(slices.DeleteFunc(slices.Clone(rows), func(row annotation.AnnotatedIssue) bool { return !selected(row) }))
-	fromPool := func() (annotation.AnnotatedIssue, bool) {
-		row, _, ok := pickFrom(pool, anyRow, func(model.LaneID) bool { return true }, serveWork)
+	// the focus-scoped one — see the step 4 comment below — and, as at every
+	// step, serves admits what may be served from it: the filter for the run's
+	// answer, every row for the answer the filter would otherwise have got.
+	pool, offPath := scope.partition(rows)
+	fromPool := func(serves func(annotation.AnnotatedIssue) bool) (annotation.AnnotatedIssue, bool) {
+		row, _, ok := pickFrom(pool, serves, func(model.LaneID) bool { return true }, serveWork)
 		return row, ok
+	}
+	// The diagnostics name only rows the filter selects: what they report is
+	// why this run's question got no row.
+	selectedOf := func(from []annotation.AnnotatedIssue) []annotation.AnnotatedIssue {
+		return slices.DeleteFunc(slices.Clone(from), func(row annotation.AnnotatedIssue) bool { return !selected(row) })
 	}
 
 	ownLanes, ownEpics := ownScope(standings, self)
@@ -552,11 +569,11 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 		}
 		// Step 3 — loud, and never a silent hop. The pool's pick is outside our
 		// scope by construction: steps 1 and 2 took every serveWork row the
-		// filter selects in our lanes and our epic, and the pool holds only
+		// filter selects in our lanes and our epic, and the pick serves only
 		// rows it selects.
 		if _, hidden, ok := ownSteps(anyRow); ok {
 			narrowing := Narrowed{Hidden: hidden}
-			if row, ok := fromPool(); ok {
+			if row, ok := fromPool(selected); ok {
 				return ServedPastNarrowing{Row: row, Lane: laneOf(row), Narrowing: narrowing}
 			}
 			return narrowing
@@ -567,13 +584,20 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 			Blocked: blockedRows(gating),
 			Held:    heldByThemselves(rows, ours, reachFor),
 		}
-		if row, ok := fromPool(); ok {
+		if row, ok := fromPool(selected); ok {
 			return ServedPastExhaustion{Row: row, Lane: laneOf(row), Exhaustion: exhausted}
+		}
+		// Nothing outside our scope is ready that the filter selects. Over the
+		// whole queue the pool may still serve a row, and then the filter is why
+		// nothing outside is on offer: "nothing ready outside it" would be false.
+		if hidden, ok := fromPool(anyRow); ok {
+			exhausted.Narrowing = &Narrowed{Hidden: hidden}
+			return exhausted
 		}
 		// The pool offered nothing, so what the focus kept from it is the rest
 		// of the answer: the withheld rows outside our scope — ours were walked
 		// by steps 1-2b, focus or not.
-		exhausted.OffPath = withheldByScope(slices.DeleteFunc(slices.Clone(offPath), ours))
+		exhausted.OffPath = withheldByScope(slices.DeleteFunc(selectedOf(offPath), ours))
 		return exhausted
 	}
 
@@ -586,10 +610,16 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 	// "nothing on your focus path is startable" are different answers, and a
 	// pool that quietly served an off-path row instead would be substituting a
 	// similar-looking query for the one asked. [LAW:no-silent-failure]
-	if row, ok := fromPool(); ok {
+	//
+	// "No ready work" is asked of the queue, as exhaustion is: when only the
+	// filter emptied the pool, the answer is the ticket it hid.
+	if row, ok := fromPool(selected); ok {
 		return ServedFromNewLane{Row: row, Lane: laneOf(row)}
 	}
-	return NoWork{Unreachable: append(passedOver(pool, reachFor), withheldByScope(offPath)...)}
+	if hidden, ok := fromPool(anyRow); ok {
+		return Narrowed{Hidden: hidden}
+	}
+	return NoWork{Unreachable: append(passedOver(selectedOf(pool), reachFor), withheldByScope(selectedOf(offPath))...)}
 }
 
 // withheldByScope classifies the rows the focus scope kept out of the pool. They
@@ -840,11 +870,11 @@ func onPathDependency(deps []gatedDep, serves func(annotation.AnnotatedIssue) bo
 	return ServedFromDependency{}, false
 }
 
-// Error names the ticket the filter hid and the run that hands it over. The
+// Error names the ticket the filter hid by the run that hands it over. The
 // four flags are named rather than "the filter" because routing never learns
 // which of them the run was given, and every one of them narrows the same way.
 func (o Narrowed) Error() string {
-	return fmt.Sprintf("%s is the next ticket on your path, and this run's filter leaves it out — run `lit next` without --type, --status, --labels or --assignee to be handed it", o.Hidden.ID)
+	return fmt.Sprintf("`lit next` without --type, --status, --labels or --assignee hands you %s, which this run's filter leaves out", o.Hidden.ID)
 }
 
 // Error renders Exhausted as the loud diagnostic it is when the pool offered
@@ -869,11 +899,14 @@ func (o Exhausted) why() string {
 	return fmt.Sprintf("no ready work in %s — %s", o.scope(), strings.Join(stops, "; "))
 }
 
-// outside is what the pool held beyond the scope when it offered nothing: no
-// ready row at all, or rows a focus label kept it from asking about, named so
-// the agent can widen the question rather than read their absence as none.
-// [LAW:no-silent-failure]
+// outside is what the pool held beyond the scope when it offered nothing: a
+// ready row the filter left out, no ready row at all, or rows a focus label
+// kept it from asking about, named so the agent can widen the question rather
+// than read their absence as none. [LAW:no-silent-failure]
 func (o Exhausted) outside() string {
+	if o.Narrowing != nil {
+		return o.Narrowing.Error()
+	}
 	if len(o.OffPath) == 0 {
 		return "`lit next` has nothing ready outside it either"
 	}

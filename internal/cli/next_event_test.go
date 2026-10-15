@@ -211,8 +211,9 @@ func TestNextLeavesTheRowsItWentPastOnTheEvent(t *testing.T) {
 	}
 }
 
-// A scope stopped by the filter rather than by its work records the ticket the
-// filter hid, served past or not; a scope that really is exhausted records none.
+// A run the filter stopped records the ticket it hid — whether it served past
+// it, served nothing, or found the scope exhausted with only the filter keeping
+// the pool from it; a run the filter did not stop records none.
 func TestNextRecordsTheTicketAFilterHidFromTheScope(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
@@ -234,6 +235,20 @@ func TestNextRecordsTheTicketAFilterHidFromTheScope(t *testing.T) {
 			wantOutcome: "narrowed",
 			wantPicked:  nil,
 			wantHidden:  "test-ours",
+		},
+		{
+			name:        "an exhausted scope whose pool the filter emptied",
+			outcome:     Exhausted{Epics: []string{"test-epic"}, Narrowing: &Narrowed{Hidden: rowFor("test-theirs")}},
+			wantOutcome: "exhausted",
+			wantPicked:  nil,
+			wantHidden:  "test-theirs",
+		},
+		{
+			name:        "an exhausted scope with nothing ready anywhere",
+			outcome:     Exhausted{Epics: []string{"test-epic"}},
+			wantOutcome: "exhausted",
+			wantPicked:  nil,
+			wantHidden:  nil,
 		},
 		{
 			name:        "an exhausted scope hid nothing",
@@ -280,7 +295,7 @@ func TestNextUnderAFilterNamesTheTicketItHidFromTheHeldEpic(t *testing.T) {
 	if strings.Contains(err.Error(), "no ready work in") {
 		t.Fatalf("lit next --type bug = %q, want the epic not called exhausted — %s is ready in it", err.Error(), second)
 	}
-	if !strings.Contains(err.Error(), second+" is the next ticket on your path, and this run's filter leaves it out") {
+	if !strings.Contains(err.Error(), "`lit next` without --type, --status, --labels or --assignee hands you "+second+", which this run's filter leaves out") {
 		t.Fatalf("lit next --type bug = %q, want it to name %s as the ticket the filter hid", err.Error(), second)
 	}
 	ev := lastEvent(t)
@@ -292,5 +307,30 @@ func TestNextUnderAFilterNamesTheTicketItHidFromTheHeldEpic(t *testing.T) {
 	}
 	if n, ok := ev.Counts["next.rows_gathered"]; !ok || n != 0 {
 		t.Errorf("counts[next.rows_gathered] = %d, %v; want 0 — no row is a bug", n, ok)
+	}
+}
+
+// A checkout holding no lane asks for bugs in a backlog of ready tasks. The
+// filter emptied the pool, not the backlog, so the answer names the task
+// `lit next` would hand over rather than reading as no ready work.
+func TestNextUnderAFilterNamesThePoolTicketItHid(t *testing.T) {
+	isolateEvents(t)
+	repo := newInitTestRepo(t)
+	epic := newEpicInDir(t, repo, "Home")
+	task := extractTicketID(t, runCLIInDir(t, repo, "new", "--type", "task", "--parent", epic, "--title", "Ready", "--topic", "demo"))
+
+	_, err := runCLIInDirAllowError(t, repo, "next", "--type", "bug")
+	if err == nil {
+		t.Fatal("lit next --type bug served a ticket from a backlog holding no bug")
+	}
+	if want := "`lit next` without --type, --status, --labels or --assignee hands you " + task + ", which this run's filter leaves out"; err.Error() != want {
+		t.Fatalf("lit next --type bug = %q, want %q", err.Error(), want)
+	}
+	ev := lastEvent(t)
+	if ev.ExitCode != ExitNoWork || ev.Reason != string(reasonScopeNarrowed) {
+		t.Errorf("event exit %d reason %q, want %d %q", ev.ExitCode, ev.Reason, ExitNoWork, reasonScopeNarrowed)
+	}
+	if ev.Facts["next.outcome"] != "narrowed" || ev.Facts["next.hidden_by_filter"] != task {
+		t.Errorf("next.outcome, next.hidden_by_filter = %v, %v; want narrowed, %s", ev.Facts["next.outcome"], ev.Facts["next.hidden_by_filter"], task)
 	}
 }

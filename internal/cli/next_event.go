@@ -45,8 +45,9 @@ func reachFacts(rows []rowReach) []reachFact {
 // walk went through — then the dependency it is work toward. Its length is how
 // deep the walk went to find the pick.
 //
-// HiddenByFilter is the ticket the run's filter left out when it stopped the
-// scope — the one routing over the whole queue would have handed over.
+// HiddenByFilter is the ticket the run's filter left out when that is why the
+// run served past its scope or served nothing — the one routing over the whole
+// queue would have handed over.
 type nextDecision struct {
 	Outcome        string
 	Picked         *string
@@ -79,7 +80,11 @@ func decideNextEvent(outcome NextOutcome) nextDecision {
 	case ServedPastNarrowing:
 		return nextDecision{Outcome: "served_past_narrowing", Picked: picked(o.Row.ID), HiddenByFilter: picked(o.Narrowing.Hidden.ID)}
 	case Exhausted:
-		return nextDecision{Outcome: "exhausted", Exhaustion: o}
+		decision := nextDecision{Outcome: "exhausted", Exhaustion: o}
+		if o.Narrowing != nil {
+			decision.HiddenByFilter = picked(o.Narrowing.Hidden.ID)
+		}
+		return decision
 	case Narrowed:
 		return nextDecision{Outcome: "narrowed", HiddenByFilter: picked(o.Hidden.ID)}
 	case NoWork:
@@ -90,10 +95,11 @@ func decideNextEvent(outcome NextOutcome) nextDecision {
 
 // recordNextEvent puts what routeNext decided on the invocation's event: the
 // outcome, the ticket it picked and the chain a dependency pick was reached
-// through, the ticket a filter hid from its scope, every row its diagnostics named with what this checkout may do about
-// each, whether it offered the route that stays in the scope, and how many rows
-// it routed over. Its stdout says the same in prose,
-// for the session that ran it; this is what is left of it afterwards.
+// through, the ticket a filter hid, every row its diagnostics named with what
+// this checkout may do about each, whether it offered the route that stays in
+// the scope, and how many rows it chose among — the ones the filter selects,
+// though routing reads the whole queue. Its stdout says the same in prose, for
+// the session that ran it; this is what is left of it afterwards.
 // [LAW:nothing-unseen]
 func recordNextEvent(ctx context.Context, outcome NextOutcome, gathered int) {
 	decision := decideNextEvent(outcome)

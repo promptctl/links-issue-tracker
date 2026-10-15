@@ -828,6 +828,86 @@ func TestRouteNextStillReportsAnExhaustedScopeUnderAFilter(t *testing.T) {
 	}
 }
 
+// A scope that really is stuck, under a filter that also hides the only ready
+// ticket outside it: the epic is exhausted, and what lies outside is the task
+// the filter left out — not "nothing ready outside it". The control drops that
+// task, and the same run then truly has nothing ready outside the epic.
+func TestRouteNextExhaustedNamesThePoolTicketAFilterHid(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		readyTask  bool
+		wantHidden bool
+	}{
+		{name: "the filter hid the pool's ready task", readyTask: true, wantHidden: true},
+		{name: "nothing ready outside the epic at all", readyTask: false, wantHidden: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newReadyTestHarness(t)
+			epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
+			a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
+			epicD := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic D", Topic: "next", IssueType: "epic", Priority: 1})
+			dep := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Their task", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicD.ID})
+			h.addDependency(a1.ID, dep.ID)
+			var b1 model.Issue
+			if tc.readyTask {
+				epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
+				b1 = h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
+			}
+
+			rows, details, epics := h.gather()
+			standings := claims.Standings{
+				model.LaneOf(a1, &epicA):                     heldBy(selfAttribution),
+				laneOf(t, details, rowByID(t, rows, dep.ID)): heldBy(otherAttribution),
+			}
+
+			outcome := routeNext(rows, details, epics, standings, selfAttribution, focusScope{}, onlyBugs(t))
+			exhausted, ok := outcome.(Exhausted)
+			if !ok {
+				t.Fatalf("routeNext = %#v (%T), want Exhausted — nothing the filter selects is ready anywhere", outcome, outcome)
+			}
+			msg := exhausted.Error()
+			if !tc.wantHidden {
+				if exhausted.Narrowing != nil || !strings.Contains(msg, "`lit next` has nothing ready outside it either") {
+					t.Fatalf("narrowing = %#v, message %q; want none, and nothing ready outside the epic", exhausted.Narrowing, msg)
+				}
+				return
+			}
+			if exhausted.Narrowing == nil || exhausted.Narrowing.Hidden.ID != b1.ID {
+				t.Fatalf("narrowing = %#v, want %q hidden by the filter", exhausted.Narrowing, b1.ID)
+			}
+			if strings.Contains(msg, "nothing ready outside it either") {
+				t.Fatalf("message %q says nothing is ready outside the epic, but %s is", msg, b1.ID)
+			}
+			if want := "`lit next` without --type, --status, --labels or --assignee hands you " + b1.ID + ", which this run's filter leaves out"; !strings.Contains(msg, want) {
+				t.Fatalf("message %q, want it to contain %q", msg, want)
+			}
+		})
+	}
+}
+
+// A checkout holding no lane, asking for bugs in a backlog whose one ready
+// ticket is a task: the filter emptied the pool, not the backlog, so the answer
+// is Narrowed naming the task. The control adds a ready bug, which is served.
+func TestRouteNextNarrowedForACheckoutHoldingNoLane(t *testing.T) {
+	h := newReadyTestHarness(t)
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "next", IssueType: "epic", Priority: 1})
+	task := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Task", Topic: "next", IssueType: "task", Priority: 0, ParentID: epic.ID, Lane: "task"})
+
+	rows, details, epics := h.gather()
+	outcome := routeNext(rows, details, epics, claims.Standings{}, selfAttribution, focusScope{}, onlyBugs(t))
+	narrowed, ok := outcome.(Narrowed)
+	if !ok || narrowed.Hidden.ID != task.ID {
+		t.Fatalf("routeNext = %#v (%T), want Narrowed naming %q", outcome, outcome, task.ID)
+	}
+
+	bug := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Bug", Topic: "next", IssueType: "bug", Priority: 0, ParentID: epic.ID, Lane: "bug"})
+	rows, details, epics = h.gather()
+	outcome = routeNext(rows, details, epics, claims.Standings{}, selfAttribution, focusScope{}, onlyBugs(t))
+	if served, ok := outcome.(ServedFromNewLane); !ok || served.Row.ID != bug.ID {
+		t.Fatalf("routeNext = %#v (%T), want ServedFromNewLane serving %q", outcome, outcome, bug.ID)
+	}
+}
+
 // The filter narrows what is served, never what the walks read: a bug of ours
 // waits on a task, which waits on a ready bug. Under --type bug the task is
 // not servable, but the walk still goes through it to the bug it waits on.

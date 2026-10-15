@@ -86,8 +86,8 @@ func nextLeaf() appLeaf {
 }
 
 // renderNextOutcome prints the row routeNext selected — or, for Exhausted,
-// Narrowed and NoWork, returns the loud diagnostic instead of printing a ticket that
-// was never picked. A claim this pick WOULD establish (EpicLane, NewLane,
+// Narrowed and NoWork, returns the loud diagnostic instead of printing a ticket
+// that was never picked. A claim this pick WOULD establish (EpicLane, NewLane,
 // Dependency) is named above the row, so the commitment is visible before it
 // is made (design-docs/work-claims.md, Routing step 4); a lane already held
 // names nothing to commit — nothing at all for ServedFromClaim, and the state
@@ -131,8 +131,8 @@ func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[string]stor
 	// question gets.
 	case ServedPastNarrowing:
 		row = o.Row
-		announce = o.Narrowing.Error() + "\nor take the top ready ticket the filter selects, which is off your path: " + startAdvice(o.Row, o.Lane) + "\n"
-	// The two terminal outcomes travel outward AS THEMSELVES. Rendering them
+		announce = o.Narrowing.Error() + "\nor take the top ready ticket the filter selects, outside the work you hold: " + startAdvice(o.Row, o.Lane) + "\n"
+	// The three terminal outcomes travel outward AS THEMSELVES. Rendering them
 	// into an untyped error here would discard the very discriminator routing
 	// has just established, so both sinks — ExitCode and commandErrorReason —
 	// would fall through to "command_failed", whose remediation tells the agent
