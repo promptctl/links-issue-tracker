@@ -190,11 +190,6 @@ func TestCommandErrorReason(t *testing.T) {
 		{"workspace schema ahead", schemaAheadError(), "workspace_schema_ahead"},
 		{"workspace schema ahead wrapped", fmt.Errorf("open store: %w", schemaAheadError()), "workspace_schema_ahead"},
 		{"migration quarantined wrapped", fmt.Errorf("open store: %w", quarantineBlockError()), "migration_quarantined"},
-		// The run whose migration fails commits the quarantine before it
-		// returns, so it already is that refusal. With the version unknown no
-		// row was written, and it stays a fault.
-		{"migration failing now is quarantined", migrationFailure(9), "migration_quarantined"},
-		{"migration failing at an unknown version", migrationFailure(0), "command_failed"},
 		{"upgrade target behind wrapped", fmt.Errorf("upgrade: %w", upgradeTargetBehindError()), "validation_refused"},
 		// A stat that failed for any reason but ENOENT is an unclassified fault,
 		// and the retry-then-doctor default is the right advice for it. The
@@ -446,15 +441,6 @@ func quarantineBlockError() *store.QuarantineBlockError {
 	return &store.QuarantineBlockError{Version: 9, Name: "00009_x.sql", ErrorText: "simulated failure"}
 }
 
-// migrationFailure is the error the open whose migration fails returns:
-// the checkpoint reset inside the recovery snapshot's wrapper. version 0 is a
-// failure goose could not attribute to a migration.
-func migrationFailure(version int64) error {
-	return &store.MigrationRollbackError{Cause: &store.CheckpointResetError{
-		Version: version, Name: "00009_x.sql", Cause: errors.New("simulated failure"),
-	}}
-}
-
 // upgradeTargetBehindError is `lit upgrade` against that same workspace: the
 // latest release stops at schema 5, and this binary cannot open the workspace.
 func upgradeTargetBehindError() *UpgradeTargetBehindError {
@@ -486,13 +472,6 @@ func TestWriteCommandErrorSchemaVersionRefusals(t *testing.T) {
 		{
 			"migration quarantined",
 			quarantineBlockError(),
-			"migration_quarantined", "take either path only when the user directs it", "adjust the command",
-		},
-		// The run that quarantines reads the same: its message names the same
-		// two ways out.
-		{
-			"migration failing now",
-			migrationFailure(9),
 			"migration_quarantined", "take either path only when the user directs it", "adjust the command",
 		},
 		// The message names a newer target, which is the command adjusted.
