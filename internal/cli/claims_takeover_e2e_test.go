@@ -51,10 +51,17 @@ func TestStartRefusesAndThenTakesOverAFreshForeignClaim(t *testing.T) {
 	runGit(t, bravo, "config", "user.name", "bravo")
 	runCLIInDir(t, bravo, "init", "--skip-hooks", "--skip-agents")
 
+	// A start that cannot land is refused before the takeover gate, so the
+	// caller is never sent to --take for a start that would still fail.
+	out, err := runCLIInDirAllowError(t, bravo, "start", ticket, "--by", "Doe, J")
+	if err == nil || !strings.Contains(err.Error(), "cannot contain commas") || strings.Contains(out+err.Error(), "--take") {
+		t.Fatalf("start %s --by %q = %q, %v; want the comma refusal ahead of the takeover gate", ticket, "Doe, J", out, err)
+	}
+
 	// Fresh foreign claim, no --take: refused, and the refusal names the
 	// holder and instructs the flag rather than failing silently.
 	// [LAW:no-silent-failure]
-	out, err := runCLIInDirAllowError(t, bravo, "start", ticket, "--by", "bravo-agent")
+	out, err = runCLIInDirAllowError(t, bravo, "start", ticket, "--by", "bravo-agent")
 	if err == nil {
 		t.Fatalf("start %s without --take = %q, want a refusal (alpha's claim is fresh)", ticket, out)
 	}

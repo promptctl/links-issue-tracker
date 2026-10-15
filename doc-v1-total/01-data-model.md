@@ -17,7 +17,7 @@ An issue carries these persisted fields (`internal/model/model.go`):
 | `priority` | int | `0` = normal, `1` = urgent; the only two values |
 | `issue_type` | string | `task`, `feature`, `bug`, `chore`, or `epic` |
 | `topic` | string | slug embedded in the ID; see [Identifiers](#identifiers) |
-| `assignee` | string | owner identity; orthogonal to status and preserved across every transition (`model.go`) |
+| `assignee` | string | owner identity; orthogonal to status and preserved across every transition (`model.go`). Trimmed, empty meaning unassigned; a comma is refused by every command that sets one, because every assignee filter reads a comma as the separator between names (`internal/model/assignee.go`) |
 | `rank` | string | fractional-index ordering key; `""` means unranked; see [Ranking](#ranking) |
 | `lane` | string | partitions an epic's children into parallel sequences; see [Lanes](#lanes) |
 | `labels` | []string | normalized lowercase; see [Labels](#labels) |

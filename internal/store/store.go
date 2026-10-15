@@ -532,6 +532,10 @@ func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (m
 	if err != nil {
 		return model.Issue{}, err
 	}
+	assignee, err := model.NormalizeAssignee(in.Assignee)
+	if err != nil {
+		return model.Issue{}, err
+	}
 	createdBy := "links"
 	issue := model.Issue{
 		Title:       strings.TrimSpace(in.Title),
@@ -542,7 +546,7 @@ func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (m
 		Topic:       topic,
 		Lane:        strings.TrimSpace(in.Lane),
 		Labels:      labels,
-		Assignee:    strings.TrimSpace(in.Assignee),
+		Assignee:    assignee,
 		FollowsUp:   strings.TrimSpace(in.FollowsUp),
 		CreatedAt:   now,
 		UpdatedAt:   now,

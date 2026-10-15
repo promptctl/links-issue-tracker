@@ -37,6 +37,10 @@ func (e *Engine) createIssue(in storage.CreateIssueInput) (model.Issue, error) {
 	if err != nil {
 		return model.Issue{}, err
 	}
+	assignee, err := model.NormalizeAssignee(in.Assignee)
+	if err != nil {
+		return model.Issue{}, err
+	}
 	// [LAW:dataflow-not-control-flow] The zero value is data meaning
 	// "unspecified"; resolving it to the product default here keeps every
 	// caller's input flowing through the one construction below.
@@ -86,7 +90,7 @@ func (e *Engine) createIssue(in storage.CreateIssueInput) (model.Issue, error) {
 		prompt:      strings.TrimSpace(in.Prompt),
 		issueType:   issueType,
 		topic:       topic,
-		assignee:    strings.TrimSpace(in.Assignee),
+		assignee:    assignee,
 		lane:        strings.TrimSpace(in.Lane),
 		priority:    in.Priority,
 		followsUp:   followsUp,

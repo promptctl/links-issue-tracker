@@ -105,6 +105,25 @@ func TestApplyTargetStateOnLeafProducesTargetState(t *testing.T) {
 	}
 }
 
+// TestApplyRefusesAStartWhoseAssigneeNoFilterCanSelect: every assignee filter
+// splits on commas, so a start by "Doe, J" is refused as a ValidationError
+// (exit 3) naming the start, while the same name without the comma starts.
+func TestApplyRefusesAStartWhoseAssigneeNoFilterCanSelect(t *testing.T) {
+	leaf := hydratedIssue(t, Issue{ID: "leaf", IssueType: "task"}, StateOpen)
+
+	_, err := leaf.Apply(Start{Assignee: "Doe, J"})
+	var refused ValidationError
+	if !errors.As(err, &refused) {
+		t.Fatalf("Apply(start by %q) error = %v; want a ValidationError", "Doe, J", err)
+	}
+	if !strings.Contains(err.Error(), "a start assigns the issue to whoever starts it") {
+		t.Errorf("Apply(start by %q) error = %q; want it to say the start is what assigns", "Doe, J", err)
+	}
+	if _, err := leaf.Apply(Start{Assignee: "Doe J"}); err != nil {
+		t.Errorf("Apply(start by %q) error = %v; want success", "Doe J", err)
+	}
+}
+
 // TestApplyCloseOutcomeSurfacesThroughResolutionValue pins the issue-level
 // accessor chain for the payload threading: a Close's outcome, having traveled
 // through the state machine into the closed leaf, must surface through

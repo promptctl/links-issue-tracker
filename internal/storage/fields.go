@@ -146,7 +146,14 @@ var issueFields = []issueField{
 		// [LAW:decomposition] Assignee is an issue-level field independent of
 		// the lifecycle; reassigning is a plain field write, not a status
 		// mutation.
-		func(issue *model.Issue, v string) error { issue.Assignee = strings.TrimSpace(v); return nil },
+		func(issue *model.Issue, v string) error {
+			assignee, err := model.NormalizeAssignee(v)
+			if err != nil {
+				return err
+			}
+			issue.Assignee = assignee
+			return nil
+		},
 		func(issue model.Issue) string { return issue.AssigneeValue() }),
 	patchField("lane", ShortText,
 		func(in UpdateIssueInput) *string { return in.Lane },
