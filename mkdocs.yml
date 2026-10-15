@@ -32,6 +32,7 @@ nav:
       - Sync and remotes: dolt-remote-sync.md
       - Agent setup & workflow: agent-setup.md
       - Workflows (guidance injection): workflows.md
+      - Statusline file: statusline.md
       - Troubleshooting: troubleshooting.md
   - CLI reference:
       - Commands: cli-reference.md
