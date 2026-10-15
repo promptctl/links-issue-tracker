@@ -672,7 +672,7 @@ Handler `doctorLeaf` — `doctor.go`. Access mode is resolved from the args BEFO
 - `rank` → `repairer.FixRankInversions(ctx)`; prints `Re-ranked <n> issue(s) to place every dependency above its dependent.` only when `n > 0` (`doctor.go`).
 
 `allDoctorFixNames()` returns them sorted (`doctor.go`) → `integrity, rank`.
-`--fix` (bare, i.e. `all`) runs every fix in sorted order; a comma list runs the named ones in the given order (`doctor.go`). An unknown name → `fmt.Errorf("unknown fix %q; available: integrity, rank")`, exit 1 (`doctor.go`). **Fix progress writes to `os.Stderr`, not stdout** (`doctor.go`).
+`--fix` (bare, i.e. `all`) runs every fix in sorted order; a comma list runs the named ones in the given order (`doctor.go`). An unknown name → `fmt.Errorf("unknown fix %q; available: integrity, rank")`, exit 1 (`doctor.go`). **Fix progress writes to `os.Stderr`, not stdout** (`doctor.go`). `diagnoseThenRepair` returns a `doctorRun` — the re-read `HealthReport` and `repairErr`, the first failing fix's error; a failure stops the fixes after it but not the re-read, and `doctorLeaf` prints the full report (`printDoctorReport`) before returning `repairErr`, ahead of the corruption and divergence exits; an error from `printDoctorReport` is returned as `errors.Join(repairErr, err)` (`doctor.go`).
 The repair capability is asked once, up front: `storage.Repair.Of(ap.Store)`; a decline aborts the whole command (`doctor.go`).
 
 ### 4.2 Checks and output (stdout, in order)
@@ -682,8 +682,9 @@ The repair capability is asked once, up front: `storage.Repair.Of(ap.Store)`; a 
    Then `printPrefixMismatch` (`doctor.go`), printed only when `census.mismatch(Stored())` — readable ids exist and none carries the stored prefix: `prefix: issue_prefix "<p>" matches none of this store's issue ids (<census>) — run 'lit prefix set <adoptable>' to preview the change`, where `<adoptable>` is `census.adoptable()` (`prefix_census.go`): the first census prefix, in count order, for which `workspace.ConfiguredPrefix` succeeds and returns it unchanged, else the literal `<prefix>`.
 2. `resolveBuildStatusNote(time.Now())` on its own line (`doctor.go`).
 3. `integrity_check=<v> foreign_key_issues=<n> invalid_related_rows=<n> orphan_history_rows=<n> rank_inversions=<n|unchecked> dependency_cycle=<none|a->b->c|unchecked> parent_cycle=<none|a->b->c> wait_loops=<n|unchecked>` (`doctor.go`). Fields named in `HealthReport.Unchecked` render as `unchecked`; `wait_loops` comes from `doctorWaitLoops` (`wait_loops.go`), which is `unchecked` when `ParentCycle` is non-empty and otherwise counts `findWaitLoops`.
-4. `printWaitLoops` (`wait_loops.go`) — one line per loop: `wait loop: <clause>, <clause>, … — none of these is ready until one of the links is removed or one of the issues is closed`. Each clause is one `waitHop`, every link between one pair: `<waiter> <phrase> <prereq>[ and <phrase> <prereq>]`, with the phrase from `waitPhrases` by the link's `waitKind`: `is blocked by`, `waits on its child`, `waits on earlier sibling`. The links are `fetchWaitGraph` over every open or in-progress issue, less the inherited ones `settleWaits` drops (`heldAgainst`), so no inherited link is on a loop. `stuck` peels off every issue whose prereqs can all finish; `loopsIn` walks the rest in id order and gives each one on no loop already named the shortest loop through it.
-5. `printSyncFreshness` (`doctor.go`) — one line:
+4. `printReportWarnings` (`doctor.go`) — one line per `HealthReport.Warnings` entry, in report order: `warning: <entry>`. The entries are the store's (`internal/store/import_export.go`): invalid related-to rows, orphan event rows, the two containment findings, rank inversions, the blocked-by cycle.
+5. `printWaitLoops` (`wait_loops.go`) — one line per loop: `wait loop: <clause>, <clause>, … — none of these is ready until one of the links is removed or one of the issues is closed`. Each clause is one `waitHop`, every link between one pair: `<waiter> <phrase> <prereq>[ and <phrase> <prereq>]`, with the phrase from `waitPhrases` by the link's `waitKind`: `is blocked by`, `waits on its child`, `waits on earlier sibling`. The links are `fetchWaitGraph` over every open or in-progress issue, less the inherited ones `settleWaits` drops (`heldAgainst`), so no inherited link is on a loop. `stuck` peels off every issue whose prereqs can all finish; `loopsIn` walks the rest in id order and gives each one on no loop already named the shortest loop through it.
+6. `printSyncFreshness` (`doctor.go`) — one line:
    - no remote → `sync: no git remote configured — ticket history stays on this machine; add a remote and run 'lit sync push' to share it`
    - unresolved → `sync: freshness unavailable — <detail>`
    - `SyncNeverSynced` → `sync: never synced with <r>/<b> — run 'lit sync push' to publish local tickets ('lit sync pull' to receive remote ones)`
@@ -692,7 +693,7 @@ The repair capability is asked once, up front: `storage.Repair.Of(ap.Store)`; a 
    - `SyncBehind` → `sync: behind <r>/<b> by <n> change(s) not pulled, as of last fetch — run 'lit sync pull' [ahead=0 behind=<n>]`
    - `SyncDiverged` → `sync: diverged from <r>/<b> as of last fetch — <a> local change(s) not pushed, <b> remote change(s) not pulled; run 'lit sync pull' to reconcile [ahead=<a> behind=<b>]`
    - an unhandled state → `fmt.Errorf("unhandled sync freshness state %q")`, exit 1 (`doctor.go`).
-6. `printPushOutcomeHealth` (`doctor.go`) — printed only when the last push attempt `failed()`:
+7. `printPushOutcomeHealth` (`doctor.go`) — printed only when the last push attempt `failed()`:
    `sync: last push attempt FAILED <age> ago: <oneLineReason>[ — mirror log: <StorageDir>/mirror.log (last written <age> ago)]`. The log clause appears only if `mirror.log` stats successfully.
 
 ### 4.3 Freshness resolution and refusals

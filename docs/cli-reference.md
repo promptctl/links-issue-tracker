@@ -878,6 +878,12 @@ lit doctor [--fix[=<area,...>]]
 Health check. Bare `--fix` applies all available fixes; `--fix rank` (comma-separated)
 scopes them. Run `lit doctor --fix` before escalating any persistent error.
 
+After the status line, each warning the health check finds prints as its own
+`warning:` line, with the repair that clears it where one exists: a ticket outside
+an epic or under a parent that is not an epic names the `lit parent set` that moves
+it, and a dependency cycle names the `lit dep rm` that breaks it. A `--fix` repair
+that fails still prints the full report, then exits on the repair's error.
+
 The report also includes a `sync:` line reporting freshness against the configured
 remote — ahead (local ticket changes not pushed), behind (remote changes not pulled,
 as of the last fetch), diverged, up to date, or never synced — and names the
