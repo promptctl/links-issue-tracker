@@ -6,6 +6,7 @@ import (
 	"io"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
+	"github.com/promptctl/links-issue-tracker/internal/statusline"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -36,6 +37,9 @@ func purgeLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
+		// The statusline file holds titles, and a ticket is often purged for
+		// what its text says.
+		ap.Statusline.Record(statusline.Invalidated{ID: result.Purge.IssueID})
 		_, err = fmt.Fprintf(stdout, "purged %s (comments=%d labels=%d edges=%d events=%d)\n",
 			result.Purge.IssueID, result.Comments, result.Labels, result.Relations, result.Events)
 		return err

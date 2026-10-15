@@ -156,6 +156,10 @@ func runWithApp(ctx context.Context, stdout io.Writer, accessMode app.AccessMode
 		defer ap.Close()
 		return run(ctx, ap)
 	}()
+	// After the close, so the write happens outside the workspace lock, and
+	// before the error check, because a fact recorded before a failure is still
+	// true: `lit next` reports finding nothing as an error, and that is the fact.
+	recordStatusline(ws, ap.Statusline)
 	if runErr != nil {
 		return runErr
 	}
@@ -846,6 +850,11 @@ type workableFilter struct {
 	Labels     []string
 }
 
+// narrows reports whether any filter flag was given.
+func (f workableFilter) narrows() bool {
+	return len(f.Assignees) > 0 || len(f.IssueTypes) > 0 || f.Status != "" || len(f.Labels) > 0
+}
+
 // criteria expresses this filter in the storage layer's own selection
 // vocabulary, so the pipeline narrows rows it already holds with the rule
 // storage defines rather than a second similar-looking one written here.
@@ -1339,7 +1348,7 @@ func updateLeaf() appLeaf {
 		if in.IsEmpty() {
 			return UsageError{Message: "lit update requires at least one field flag; " + usage}
 		}
-		issue, err := ap.Store.Apply(ctx, positional[0], in)
+		issue, err := applyChange(ctx, ap, positional[0], in)
 		if err != nil {
 			return err
 		}
@@ -1816,7 +1825,7 @@ func transitionLeaf(spec transitionSpec) appLeaf {
 			return err
 		}
 
-		issue, err := ap.Store.Apply(ctx, issueID, storage.Change{Action: action, Actor: actor, Reason: *reason})
+		issue, err := applyChange(ctx, ap, issueID, storage.Change{Action: action, Actor: actor, Reason: *reason})
 		if err != nil {
 			return err
 		}
