@@ -35,3 +35,15 @@ linters:
           deny:
             - pkg: "github.com/promptctl/links-issue-tracker/internal/model/lifecycle"
               desc: "lifecycle internals are owned by internal/model; use model hydration and capability APIs"
+        # [LAW:effects-at-boundaries] the statusline writer runs on every
+        # command that records a fact and must never wait on another process,
+        # so it takes plain paths and values and imports only the standard
+        # library. An allow-list rather than a deny-list of internal/store,
+        # internal/storage and the lock code: a new package that opens the store
+        # is refused too, without anyone remembering to list it.
+        statusline-stdlib-only:
+          list-mode: strict
+          files:
+            - "**/internal/statusline/**"
+          allow:
+            - $gostd

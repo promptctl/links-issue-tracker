@@ -156,6 +156,10 @@ func runWithApp(ctx context.Context, stdout io.Writer, accessMode app.AccessMode
 		defer ap.Close()
 		return run(ctx, ap)
 	}()
+	// After the close, so the write happens outside the workspace lock, and
+	// before the error check, because a fact recorded before a failure is still
+	// true: `lit next` reports finding nothing as an error, and that is the fact.
+	recordStatusline(ws, ap.Statusline)
 	if runErr != nil {
 		return runErr
 	}
@@ -844,6 +848,11 @@ type workableFilter struct {
 	IssueTypes []model.IssueType
 	Status     model.State
 	Labels     []string
+}
+
+// narrows reports whether any filter flag was given.
+func (f workableFilter) narrows() bool {
+	return len(f.Assignees) > 0 || len(f.IssueTypes) > 0 || f.Status != "" || len(f.Labels) > 0
 }
 
 // criteria expresses this filter in the storage layer's own selection
@@ -1820,6 +1829,7 @@ func transitionLeaf(spec transitionSpec) appLeaf {
 		if err != nil {
 			return err
 		}
+		ap.Statusline.Record(transitionStatuslineFact(action, issue))
 
 		// [LAW:single-enforcer] runTransition is the one status-transition path
 		// (start/done/close/open all arrive here), so it is the one place that
