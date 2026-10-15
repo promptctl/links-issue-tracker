@@ -2,6 +2,8 @@ package storage
 
 import (
 	"fmt"
+	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/issueid"
@@ -14,12 +16,14 @@ import (
 // file the store would refuse at its third document is refused whole, with
 // nothing written, by judging up front everything that can be judged without
 // a read: every reference names a document in the file, every field parses
-// by the gate a create parses by, the references form no cycle, and the
+// by the gate a create parses by, the references form no cycle, the
 // hierarchy the file describes obeys containment (RejectLeafWithoutParent,
-// RejectParentThatIsNotAContainer). A parent named by a real id is judged by
-// the create that reads it. Both engines take their write order from these
-// gates, so a file is accepted or refused the same way whichever engine
-// opens it, and no engine can write a file the gate has not judged.
+// RejectParentThatIsNotAContainer), and no blocked_by runs along that
+// hierarchy (RejectBlocksAlongHierarchy). A parent or blocked_by named by a
+// real id is judged by the write that reads it. Both engines take their
+// write order from these gates, so a file is accepted or refused the same
+// way whichever engine opens it, and no engine can write a file the gate has
+// not judged.
 // [LAW:single-enforcer] [LAW:one-source-of-truth] [LAW:parse-dont-validate]
 //
 // Every refusal here is a model.ValidationError: the file is what is wrong,
@@ -31,9 +35,9 @@ func ImportTreeWriteOrder(specs []ImportTreeSpec) ([]int, error) {
 	if err := validateImportTreeSpecs(specs); err != nil {
 		return nil, err
 	}
-	return writeOrder("import", specs, func(spec ImportTreeSpec) (string, string, []string) {
+	return judgeReferences("import", resolveFileReferences(specs, func(spec ImportTreeSpec) (string, string, []string) {
 		return spec.LocalID, spec.Parent, spec.BlockedBy
-	})
+	}))
 }
 
 // BulkWriteOrder gates a bulk file and returns the order its documents are
@@ -42,55 +46,90 @@ func BulkWriteOrder(specs []BulkIssueSpec) ([]int, error) {
 	if err := validateBulkSpecs(specs); err != nil {
 		return nil, err
 	}
-	return writeOrder("bulk", specs, func(spec BulkIssueSpec) (string, string, []string) {
+	return judgeReferences("bulk", resolveFileReferences(specs, func(spec BulkIssueSpec) (string, string, []string) {
 		return spec.LocalID, spec.Parent, spec.BlockedBy
-	})
+	}))
+}
+
+// fileReferences is the graph a file draws among its own documents, indexed
+// by document position, since a bulk create need not carry a local_id. A
+// reference matching no local_id in the file is not an edge: it names a real
+// issue, and the write that receives it judges it.
+type fileReferences struct {
+	localIDs  []string
+	parent    [][]int // document -> its parent in the file, if it has one
+	blockedBy [][]int // document -> the documents in the file it is blocked by
+}
+
+func resolveFileReferences[S any](specs []S, refsOf func(S) (localID, parent string, blockedBy []string)) fileReferences {
+	refs := fileReferences{localIDs: make([]string, len(specs)), parent: make([][]int, len(specs)), blockedBy: make([][]int, len(specs))}
+	indexByLocal := make(map[string]int, len(specs))
+	for i, spec := range specs {
+		localID, _, _ := refsOf(spec)
+		refs.localIDs[i] = localID
+		if localID != "" {
+			indexByLocal[localID] = i
+		}
+	}
+	for i, spec := range specs {
+		_, parent, blockedBy := refsOf(spec)
+		if j, inFile := indexByLocal[parent]; inFile {
+			refs.parent[i] = []int{j}
+		}
+		for _, dep := range blockedBy {
+			if j, inFile := indexByLocal[dep]; inFile {
+				refs.blockedBy[i] = append(refs.blockedBy[i], j)
+			}
+		}
+	}
+	return refs
+}
+
+// judgeReferences refuses a file whose references break a rule over the
+// graph they draw, and otherwise returns the order its documents are written
+// in.
+func judgeReferences(format string, refs fileReferences) ([]int, error) {
+	order, err := writeOrder(format, refs)
+	if err != nil {
+		return nil, err
+	}
+	if err := rejectBlocksAlongFileHierarchy(format, refs); err != nil {
+		return nil, err
+	}
+	return order, nil
 }
 
 // writeOrder is a depth-first topological sort of a file's documents over
 // their parent and blocked_by references, so each document is written after
-// every document it names. A reference matching no local_id in the file is
-// not an edge: it names a real issue, and the write that receives it judges
-// it. A cycle among the file's own references is refused.
-func writeOrder[S any](format string, specs []S, refsOf func(S) (localID, parent string, blockedBy []string)) ([]int, error) {
-	localIDs := make([]string, len(specs))
-	refs := make([][]string, len(specs))
-	indexByLocal := make(map[string]int, len(specs))
-	for i, spec := range specs {
-		localID, parent, blockedBy := refsOf(spec)
-		localIDs[i], refs[i] = localID, append([]string{parent}, blockedBy...)
-		if localIDs[i] != "" {
-			indexByLocal[localIDs[i]] = i
-		}
-	}
+// every document it names. A cycle among the file's own references is
+// refused.
+func writeOrder(format string, refs fileReferences) ([]int, error) {
 	const (
 		unvisited = iota
 		visiting
 		done
 	)
-	state := make([]int, len(specs))
-	order := make([]int, 0, len(specs))
+	state := make([]int, len(refs.localIDs))
+	order := make([]int, 0, len(refs.localIDs))
 	var visit func(int) error
 	visit = func(i int) error {
 		switch state[i] {
 		case done:
 			return nil
 		case visiting:
-			return model.ValidationError{Message: fmt.Sprintf("%s: cycle detected involving %q", format, localIDs[i])}
+			return model.ValidationError{Message: fmt.Sprintf("%s: cycle detected involving %q", format, refs.localIDs[i])}
 		}
 		state[i] = visiting
-		for _, ref := range refs[i] {
-			if j, internal := indexByLocal[ref]; internal {
-				if err := visit(j); err != nil {
-					return err
-				}
+		for _, j := range slices.Concat(refs.parent[i], refs.blockedBy[i]) {
+			if err := visit(j); err != nil {
+				return err
 			}
 		}
 		state[i] = done
 		order = append(order, i)
 		return nil
 	}
-	for i := range specs {
+	for i := range refs.localIDs {
 		if err := visit(i); err != nil {
 			return nil, err
 		}
@@ -98,8 +137,34 @@ func writeOrder[S any](format string, specs []S, refsOf func(S) (localID, parent
 	return order, nil
 }
 
-// validateImportTreeSpecs judges a tree-import file by every rule but the
-// cycle check, which writeOrder makes.
+// rejectBlocksAlongFileHierarchy holds the file's own blocked_by edges to
+// the rule every blocked-by write meets, over the hierarchy the file
+// describes, so a document blocked by an epic it sits under in the file (or
+// the reverse) is refused before the first create rather than at its edge,
+// after the last. Every parent in the file is an epic by now — the
+// validators refused any other — so every parent edge is one the rule
+// climbs. An edge whose climb would leave the file through a real id is the
+// write's to judge. [LAW:single-enforcer]
+func rejectBlocksAlongFileHierarchy(format string, refs fileReferences) error {
+	node := strconv.Itoa
+	epicParentOf := make(map[string][]string, len(refs.parent))
+	for i, parents := range refs.parent {
+		for _, p := range parents {
+			epicParentOf[node(i)] = append(epicParentOf[node(i)], node(p))
+		}
+	}
+	for i, deps := range refs.blockedBy {
+		for _, j := range deps {
+			if err := RejectBlocksAlongHierarchy(epicParentOf, node(i), node(j)); err != nil {
+				return fmt.Errorf("%s: blocked_by doc %d -> %q: %w", format, i, refs.localIDs[j], err)
+			}
+		}
+	}
+	return nil
+}
+
+// validateImportTreeSpecs judges a tree-import file by every rule but those
+// over the graph its references draw, which judgeReferences makes.
 func validateImportTreeSpecs(specs []ImportTreeSpec) error {
 	if len(specs) == 0 {
 		return model.ValidationError{Message: "import: no issues in input"}
@@ -174,7 +239,8 @@ func validateImportTreeSpecs(specs []ImportTreeSpec) error {
 	return nil
 }
 
-// validateBulkSpecs judges a bulk file by every rule but the cycle check:
+// validateBulkSpecs judges a bulk file by every rule but those over the
+// graph its references draw, which judgeReferences makes:
 // every document is a create or an update by whether it names an id, and each
 // shape admits exactly the fields its verb owns. A create document's parent
 // may be a local_id in the file or a real id; only the first can be judged
