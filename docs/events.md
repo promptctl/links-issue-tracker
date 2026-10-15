@@ -125,14 +125,14 @@ none), and `reach` is what this checkout can do about it:
 
 ## What a statusline-file write records
 
-Every command that opens the store of the workspace it runs in records what it
-did to the checkout's [statusline file](statusline.md) once it has run, even
-when it ends in an error. A command that learned nothing for the file writes
-nothing to it and records zero bytes and no changed slots. None of these keys
-is written by a line whose `outcome` is `panic` or `interrupted`, which never
-reached the write; by a command that never opens that store, such as
-`lit version`; or by one that reads stores by their storage directory, such as
-`lit stores --counts` and `lit ls --at`.
+Every command that works on the tickets of the checkout it runs in, such as
+`lit next`, `lit start` or `lit show`, records what it did to the checkout's
+[statusline file](statusline.md) once it has run, even when it ends in an
+error. A command that learned nothing for the file writes nothing to it and
+records zero bytes and no changed slots. The keys are present exactly when the
+command reached that write: a line without them is either a command that does
+not work on this checkout's tickets, such as `lit sync push`, `lit init` or
+`lit ls --at`, or one whose `outcome` is `panic` or `interrupted`.
 
 | Key | Meaning |
 | --- | --- |
