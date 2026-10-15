@@ -97,7 +97,7 @@ filter, writes `"outcome": "error"` and none of these keys.
 | --- | --- |
 | `next.outcome` | How the pick was reached: `served_from_claim`, `resumed_own_work`, `served_from_epic_lane`, `served_from_new_lane`, `served_from_dependency`, `served_past_exhaustion`, `exhausted`, or `no_work`. |
 | `next.picked` | The ticket id it printed, or `null` when it picked nothing. |
-| `next.dependency_path` | For `served_from_dependency`, how the pick clears the way: the ticket of yours it unblocks, each dependency between, then the dependency the pick is work toward, which is the pick itself or the epic it sits under. Empty for every other outcome. |
+| `next.dependency_path` | For `served_from_dependency`, how the pick clears the way: the ticket of yours it unblocks, each prerequisite between — an epic followed by the ticket under it the walk went through — then the dependency the pick is work toward, which is the pick itself or the epic it sits under. Empty for every other outcome. |
 | `next.exhausted_epics` | The epics whose open work it found unreachable. |
 | `next.blocked` | The dependencies blocking those epics. |
 | `next.held` | Tickets in those epics held by something about the ticket itself, such as a reserved label. |

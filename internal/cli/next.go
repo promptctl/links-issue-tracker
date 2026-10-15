@@ -196,8 +196,8 @@ func resumeAdvice(row annotation.AnnotatedIssue, actingAs string) string {
 // epic that blocks names the epic, because the row itself has no edge to the
 // ticket it frees. "On your path" rather than "in a lane you hold", because
 // step 2b's gated row may sit in a sibling lane of the epic. A pick that gates
-// it only through further dependencies names them, nearest the gated row
-// first, since `lit show` on the pick lists the last of them and not the row.
+// it only through further prerequisites names them, nearest the gated row
+// first, since the pick's own edge reaches the last of them and not the row.
 // [LAW:dataflow-not-control-flow] the last inch of rendering, where the two
 // arms are different sentences.
 func dependencyReason(o ServedFromDependency) string {
@@ -209,11 +209,15 @@ func dependencyReason(o ServedFromDependency) string {
 
 // viaClause renders the chain between a dependency and the row it gates, or
 // nothing when the dependency is the row's own.
-func viaClause(via []string) string {
+func viaClause(via []hop) string {
 	if len(via) == 0 {
 		return ""
 	}
-	return ", through " + strings.Join(via, ", ")
+	names := make([]string, len(via))
+	for i, h := range via {
+		names[i] = h.name()
+	}
+	return ", through " + strings.Join(names, ", ")
 }
 
 // startAdvice is the line every pick that would establish a claim prints above

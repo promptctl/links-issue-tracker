@@ -310,9 +310,13 @@ step, so each step below says only which lanes it looks in:
    in backlog order, including its prerequisites: a dependency outside the
    claimed lane that gates it, at any depth, is on the path and is offered on
    the same terms, announced as the second lane its start claims. A dependency
-   that cannot be started is cleared by clearing its own, so the walk descends
-   it to theirs, and the announcement names each dependency between the pick
-   and the row it gates — "(gates B.2, which is on your path, through C.1)".
+   that cannot be started is cleared by clearing its own prerequisites — its
+   dependencies and the earlier ticket of its lane — so the walk descends it to
+   theirs; a ticket already in flight is past its prerequisites and is not
+   descended. The announcement names each prerequisite between the pick and
+   the row it gates, an epic by the ticket under it the walk went through —
+   "(gates B.2, which is on your path, through C.1)", or "through C.1 under
+   C" when C is an epic.
    Each row of the lane is taken in backlog order and its chain walked to the
    end before the next row's, nearest dependency first within it, so the pick
    serves the highest-ranked blocked row. An epic cannot be started, so a
@@ -338,8 +342,10 @@ step, so each step below says only which lanes it looks in:
    The ticket goes under the epic, ranked first — even when the block is
    declared on the epic itself, since an epic's blocker never holds back a
    child it waits on. The agent chooses. Staying is named only
-   against a block — an epic whose remaining work is only underway elsewhere
-   has nothing a new ticket could clear. Only when the global pool has nothing
+   against a block a new ticket could clear — not an epic whose remaining work
+   is only underway elsewhere, nor one whose every chain ends at an event
+   outside the repository, since a blocker waiting on the next link clears
+   only when that link does. Only when the global pool has nothing
    ready either is the diagnostic the whole answer; under a `focus` label it
    then names the rows outside the epic that the focus withheld, since those
    were never asked about. It once never fell through to a leaf outside the

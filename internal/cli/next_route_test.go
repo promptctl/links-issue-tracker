@@ -896,8 +896,9 @@ func TestExhaustionNamesABlockerOutsideThisViewAsSuch(t *testing.T) {
 // walk descends to the further dependency and offers nothing, so the diagnostic
 // is the whole answer, and it names each link by its own reach — the blocker as
 // not startable, never as held, since its lane is unclaimed, and the further
-// dependency as held.
-func TestExhaustionNamesAnUnreadyBlockerWithoutNamingAHolder(t *testing.T) {
+// dependency as held. That end is held, not awaiting an outside event, so the
+// route to stay is still offered against it.
+func TestExhaustionNamesEachLinkOfAStuckChainByItsOwnReach(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
@@ -944,6 +945,9 @@ func TestExhaustionNamesAnUnreadyBlockerWithoutNamingAHolder(t *testing.T) {
 	}
 	if strings.Contains(msg, "`lit start` it") {
 		t.Fatalf("exhausted.Error() = %q, want no instruction to start %q — it is blocked by %q", msg, dep.ID, deeper.ID)
+	}
+	if !strings.Contains(msg, "to stay, file the ticket that clears a blocker") {
+		t.Fatalf("exhausted.Error() = %q, want the route to stay — the chain ends at %q, which an outside event does not hold", msg, deeper.ID)
 	}
 }
 

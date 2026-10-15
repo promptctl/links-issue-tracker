@@ -377,10 +377,61 @@ func TestRunNextServesAReadyTicketBehindABlockerThatIsNotStartable(t *testing.T)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want ServedFromDependency", outcome, outcome)
 	}
-	if served.Row.ID != blockersBlocker.ID || served.Blocker != blockersBlocker.ID || served.Gates != gated.ID || !slices.Equal(served.Via, []string{blocker.ID}) {
+	if served.Row.ID != blockersBlocker.ID || served.Blocker != blockersBlocker.ID || served.Gates != gated.ID || !slices.Equal(served.Via, []hop{{Prerequisite: blocker.ID, Through: blocker.ID}}) {
 		t.Fatalf("served %s blocking %s, gating %s via %v; want %s blocking itself, gating %s via [%s]", served.Row.ID, served.Blocker, served.Gates, served.Via, blockersBlocker.ID, gated.ID, blocker.ID)
 	}
 	if text, want := h.runNextText(), "(gates "+gated.ID+", which is on your path, through "+blocker.ID+")"; !strings.Contains(text, want) {
+		t.Fatalf("next output = %q, want it to contain %q", text, want)
+	}
+}
+
+// A blocker held behind the earlier ticket of its own lane is cleared by that
+// ticket, just as by a dependency, so a ready earlier lane-mate is on the path
+// and is served — the lane a ticket waits in is as much a prerequisite as an
+// edge it declares.
+func TestRunNextServesTheEarlierTicketOfABlockersOwnLane(t *testing.T) {
+	h := newReadyTestHarness(t)
+	otherEpic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Other epic", Topic: "next", IssueType: "epic", Priority: 1})
+	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Ready elsewhere", Topic: "next", IssueType: "task", Priority: 1, ParentID: otherEpic.ID})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Our epic", Topic: "next", IssueType: "epic", Priority: 1})
+	finished := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "First", Topic: "next", IssueType: "task", Priority: 1, ParentID: epic.ID})
+	gated := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Second", Topic: "next", IssueType: "task", Priority: 1, ParentID: epic.ID})
+	outside := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Outside epic", Topic: "next", IssueType: "epic", Priority: 0})
+	earlier := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Earlier in the blocker's lane", Topic: "next", IssueType: "task", Priority: 0, ParentID: outside.ID, Lane: "shared"})
+	blocker := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Outside dependency", Topic: "next", IssueType: "task", Priority: 0, ParentID: outside.ID, Lane: "shared"})
+	h.addDependency(gated.ID, blocker.ID)
+	h.applyAction(finished.ID, model.Done{}, "finished")
+
+	served, ok := h.runNextOutcome().(ServedFromDependency)
+	if !ok || served.Row.ID != earlier.ID || served.Gates != gated.ID || !slices.Equal(served.Via, []hop{{Prerequisite: blocker.ID, Through: blocker.ID}}) {
+		t.Fatalf("served %+v, want %s gating %s through %s, the ticket its lane holds behind it", served, earlier.ID, gated.ID, blocker.ID)
+	}
+}
+
+// A chain that passes through an epic passes through a ticket under it, and the
+// announcement names both: `lit show` on our row lists the epic, `lit show` on
+// the pick lists the ticket, and naming either alone leaves a link the reader
+// cannot find.
+func TestRunNextNamesTheTicketUnderAnEpicTheChainPassesThrough(t *testing.T) {
+	h := newReadyTestHarness(t)
+	otherEpic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Other epic", Topic: "next", IssueType: "epic", Priority: 1})
+	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Ready elsewhere", Topic: "next", IssueType: "task", Priority: 1, ParentID: otherEpic.ID})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Our epic", Topic: "next", IssueType: "epic", Priority: 1})
+	finished := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "First", Topic: "next", IssueType: "task", Priority: 1, ParentID: epic.ID})
+	gated := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Second", Topic: "next", IssueType: "task", Priority: 1, ParentID: epic.ID})
+	blockingEpic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Blocking epic", Topic: "next", IssueType: "epic", Priority: 0})
+	under := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Its only ticket", Topic: "next", IssueType: "task", Priority: 0, ParentID: blockingEpic.ID})
+	upstreamEpic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Upstream epic", Topic: "next", IssueType: "epic", Priority: 0})
+	upstream := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Ready upstream", Topic: "next", IssueType: "task", Priority: 0, ParentID: upstreamEpic.ID})
+	h.addDependency(gated.ID, blockingEpic.ID)
+	h.addDependency(under.ID, upstream.ID)
+	h.applyAction(finished.ID, model.Done{}, "finished")
+
+	served, ok := h.runNextOutcome().(ServedFromDependency)
+	if !ok || served.Row.ID != upstream.ID || !slices.Equal(served.Via, []hop{{Prerequisite: blockingEpic.ID, Through: under.ID}}) {
+		t.Fatalf("served %+v, want %s through %s under %s", served, upstream.ID, under.ID, blockingEpic.ID)
+	}
+	if text, want := h.runNextText(), "(gates "+gated.ID+", which is on your path, through "+under.ID+" under "+blockingEpic.ID+")"; !strings.Contains(text, want) {
 		t.Fatalf("next output = %q, want it to contain %q", text, want)
 	}
 }
@@ -420,7 +471,9 @@ func TestRunNextServesTheChainOfOurHighestRankedRowFirst(t *testing.T) {
 // event outside this repository, so nothing along the chain is ours to take:
 // that is what forecloses routing steps 1b and 2b and leaves the epic
 // exhausted. The walk reaches the end of the chain, so the diagnostic names
-// every link by what it is to this checkout.
+// every link by what it is to this checkout — and offers no route to stay,
+// since the chain's only end awaits that event and the link before it clears
+// only when it does.
 func TestRunNextServesPastAnEpicWhoseWorkIsAllBlocked(t *testing.T) {
 	h := newReadyTestHarness(t)
 	otherEpic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Other epic", Topic: "next", IssueType: "epic", Priority: 1})
@@ -455,12 +508,14 @@ func TestRunNextServesPastAnEpicWhoseWorkIsAllBlocked(t *testing.T) {
 		"no ready work in epic(s) " + epic.ID,
 		blocker.ID + " (on your path but not startable right now",
 		upstream.ID + " (on your path but waiting on an event outside this repository",
-		"to stay, file the ticket that clears a blocker under the epic with `lit new --parent " + epic.ID + " --top`, then make that blocker blocked by it with `lit dep add <blocker> --blocked-by <new>`",
-		"or move on to the top ready ticket outside it: run `lit start " + elsewhere.ID + "`",
+		"\nmove on to the top ready ticket outside it: run `lit start " + elsewhere.ID + "`",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("next output = %q, want it to contain %q", text, want)
 		}
+	}
+	if strings.Contains(text, "to stay, file") {
+		t.Fatalf("next output = %q, want no route to stay — no ticket filed here clears %s, and %s waits only on it", text, upstream.ID, blocker.ID)
 	}
 }
 

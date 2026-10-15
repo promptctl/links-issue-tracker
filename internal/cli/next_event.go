@@ -40,8 +40,9 @@ func reachFacts(rows []rowReach) []reachFact {
 // nothing of that kind, and a nil Picked says it picked nothing.
 //
 // DependencyPath is a dependency pick's whole chain: the row of ours it gates,
-// every dependency between, then the dependency it is work toward. Its length
-// is how deep the walk went to find the pick.
+// every prerequisite between — an epic followed by the ticket under it the
+// walk went through — then the dependency it is work toward. Its length is how
+// deep the walk went to find the pick.
 type nextDecision struct {
 	Outcome        string
 	Picked         *string
@@ -62,7 +63,11 @@ func decideNextEvent(outcome NextOutcome) nextDecision {
 	case ServedFromNewLane:
 		return nextDecision{Outcome: "served_from_new_lane", Picked: picked(o.Row.ID)}
 	case ServedFromDependency:
-		path := append(append([]string{o.Gates}, o.Via...), o.Blocker)
+		path := []string{o.Gates}
+		for _, h := range o.Via {
+			path = append(path, h.ids()...)
+		}
+		path = append(path, o.Blocker)
 		return nextDecision{Outcome: "served_from_dependency", Picked: picked(o.Row.ID), DependencyPath: path}
 	case ServedPastExhaustion:
 		return nextDecision{Outcome: "served_past_exhaustion", Picked: picked(o.Row.ID), Exhaustion: o.Exhaustion}

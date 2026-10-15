@@ -76,7 +76,7 @@ type ServedFromNewLane struct {
 // lane we hold (1b), or anywhere in our epic (2b). Blocker is that dependency —
 // Row's own id when it is a leaf, or an epic Row sits under, since an epic
 // cannot be started — and Gates is the row of ours it holds back. Via is the
-// chain of dependencies between them, nearest Gates first, when Blocker gates
+// chain of prerequisites between them, nearest Gates first, when Blocker gates
 // Gates only through prerequisites that cannot be started themselves; it is
 // empty when Blocker is one of Gates' own. Like
 // ServedFromNewLane it establishes a claim on a lane this checkout does not
@@ -102,9 +102,32 @@ type ServedFromDependency struct {
 	Row     annotation.AnnotatedIssue
 	Lane    model.LaneID
 	Gates   string
-	Via     []string
+	Via     []hop
 	Blocker string
 }
+
+// hop is one link of a prerequisite chain: the prerequisite, and the ticket the
+// walk went on through toward the next — the prerequisite itself when it is a
+// ticket, or one under it when it is an epic, since an epic has no prerequisite
+// edges of its own to follow. Both are kept because each is half of what a
+// reader checks: `lit show` on the gated row lists the epic, and `lit show` on
+// the next link lists the ticket.
+type hop struct {
+	Prerequisite string
+	Through      string
+}
+
+// ids is the hop as the ids it passes, the epic before the ticket under it.
+func (h hop) ids() []string {
+	if h.Through == h.Prerequisite {
+		return []string{h.Prerequisite}
+	}
+	return []string{h.Prerequisite, h.Through}
+}
+
+// name is how an announcement names the hop. [LAW:one-source-of-truth]
+// workName is the one phrasing of work under an epic.
+func (h hop) name() string { return workName(h.Prerequisite, h.Through) }
 
 // ServedPastExhaustion is routing step 3 with somewhere to go: this checkout's
 // own scope has nothing reachable (Exhaustion says why), and the global pool
@@ -213,11 +236,16 @@ type rowReach struct {
 // `lit show` acts on the ticket, since an epic cannot be started, and the epic
 // is what blocks. Every other entry is its own id. [LAW:dataflow-not-control-flow]
 // the last inch of rendering, where the two arms are different phrases.
-func (r rowReach) name() string {
-	if r.Row.ID == "" || r.Row.ID == r.ID {
-		return r.ID
+func (r rowReach) name() string { return workName(r.ID, r.Row.ID) }
+
+// workName names a dependency by the work read through it: "<work> under
+// <dependency>" when the work is a ticket under it, and the dependency's own id
+// when the work is the dependency itself or there is none in view.
+func workName(dependency, work string) string {
+	if work == "" || work == dependency {
+		return dependency
 	}
-	return fmt.Sprintf("%s under %s", r.Row.ID, r.ID)
+	return fmt.Sprintf("%s under %s", work, dependency)
 }
 
 // reachOf classifies one row, consuming capacityFor rather than re-deriving
@@ -547,7 +575,7 @@ func passedOver(rows []annotation.AnnotatedIssue, reachFor func(annotation.Annot
 type gatedDep struct {
 	rowReach
 	Gates string
-	Via   []string
+	Via   []hop
 }
 
 // heldByThemselves collects, in rank order, the rows in scope that routing
@@ -613,10 +641,14 @@ func workTowardEach(rows []annotation.AnnotatedIssue, details, epics map[string]
 // checkout holds reads as held, not as outside the view. With no work in view
 // it is reachOutOfView, which every row's kind outranks.
 //
-// That work is on the path too, so its own dependencies are walked the same
+// That work is on the path too, so its own prerequisites are walked the same
 // way: a blocker that cannot be started is cleared by whatever clears its own
-// prerequisites, and a walk that stopped one hop down would report as stuck a
-// path with a ready ticket further along it. The rows in scope are taken in
+// prerequisites — its dependencies, and the earlier ticket of its lane, which
+// readiness holds it behind just the same — and a walk that stopped one hop
+// down would report as stuck a path with a ready ticket further along it. Work
+// already in flight is past its prerequisites (capacityFor), so the walk does
+// not descend it: it is takeable or held, never cleared from below. The rows in
+// scope are taken in
 // rank order and each one's chain is walked to its end before the next row's
 // begins, so the first takeable dependency is the one gating our highest-ranked
 // row, however far down its chain it sits: rank is the one ordering routing
@@ -635,12 +667,12 @@ func workTowardEach(rows []annotation.AnnotatedIssue, details, epics map[string]
 // an edge lit refuses inside one epic — and a sibling edge can still exist,
 // written by an import or before that rule.
 func gatingDependencies(rows []annotation.AnnotatedIssue, laneOf func(annotation.AnnotatedIssue) model.LaneID, inScope func(model.LaneID) bool, reachFor func(annotation.AnnotatedIssue) reachKind, workToward map[string][]annotation.AnnotatedIssue) []gatedDep {
-	// onPath is a row whose dependencies gate the scope: an in-scope row, or
-	// work toward a dependency its chain already collected, carrying the
-	// dependencies between the two.
+	// onPath is a row whose prerequisites gate the scope: an in-scope row, or
+	// work toward a prerequisite its chain already collected, carrying the hops
+	// between the two.
 	type onPath struct {
 		row annotation.AnnotatedIssue
-		via []string
+		via []hop
 	}
 	seen := map[string]bool{}
 	var deps []gatedDep
@@ -654,7 +686,7 @@ func gatingDependencies(rows []annotation.AnnotatedIssue, laneOf func(annotation
 			if at.row.State() != model.StateOpen {
 				continue
 			}
-			for _, id := range ClassifyReadiness(at.row.Annotations).DependencyIDs() {
+			for _, id := range ClassifyReadiness(at.row.Annotations).PrerequisiteIDs() {
 				if seen[id] {
 					continue
 				}
@@ -678,9 +710,8 @@ func gatingDependencies(rows []annotation.AnnotatedIssue, laneOf func(annotation
 				// would put an unbounded list in a one-line announcement.
 				// [LAW:polishing-by-subtraction]
 				deps = append(deps, gatedDep{rowReach: dep, Gates: gated.ID, Via: at.via})
-				via := append(slices.Clone(at.via), id)
 				for _, work := range workToward[id] {
-					chain = append(chain, onPath{row: work, via: via})
+					chain = append(chain, onPath{row: work, via: append(slices.Clone(at.via), hop{Prerequisite: id, Through: work.ID})})
 				}
 			}
 		}
@@ -752,14 +783,19 @@ func (o Exhausted) outside() string {
 // one so both renderers join it beside the others unconditionally. It exists
 // only against a block a ticket filed here could clear: with Blocked empty the
 // rest of the scope is work already underway, and a blocker awaiting an outside
-// event is cleared by that event, never by a ticket here. Filing alone clears
+// event is cleared by that event, never by a ticket here. Nor is a blocker that
+// waits only on other open tickets: the walk is transitive, so each of those
+// is in Blocked beside it or held in the scope, and the blocker clears exactly
+// when they do — a chain whose every end awaits an outside event has nothing
+// here to file against. Filing alone clears
 // nothing either — the blocked work still waits on its blocker — so the route
 // names the edge too, and names it exactly: the blocker waits on the new
 // ticket. The blocker to name is one outside the scope; lit refuses a
 // blocked-by edge between two tickets of one epic.
 func (o Exhausted) stay() []string {
 	clearable := slices.ContainsFunc(o.Blocked, func(blocker rowReach) bool {
-		return blocker.Kind != reachAwaitingOutside
+		passesThrough := blocker.Kind == reachNotReady && !ClassifyReadiness(blocker.Row.Annotations).HeldByItself()
+		return blocker.Kind != reachAwaitingOutside && !passesThrough
 	})
 	if !clearable {
 		return nil

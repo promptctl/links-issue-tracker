@@ -111,6 +111,21 @@ func (r IssueReadiness) DependencyIDs() []string {
 	return ids
 }
 
+// PrerequisiteIDs returns the ids of every open ticket among the blocking
+// reasons — the dependencies DependencyIDs returns, and an earlier same-lane
+// sibling — so finishing them is everything that stands between this issue and
+// ready but the reasons about the issue itself. [LAW:one-source-of-truth]
+// waitsOnOtherWork is the one list of which reasons those are.
+func (r IssueReadiness) PrerequisiteIDs() []string {
+	var ids []string
+	for _, reason := range r.blocking {
+		if reason.waitsOnOtherWork() {
+			ids = append(ids, reason.Detail)
+		}
+	}
+	return ids
+}
+
 // waitsOnOtherWork reports whether the reason is another ticket still open — a
 // dependency or an earlier same-lane sibling — rather than a fact about the
 // issue itself, such as a reserved label or a missing field.

@@ -143,8 +143,13 @@ func TestNextRecordsTheChainADependencyPickWasReachedThrough(t *testing.T) {
 		},
 		{
 			name:    "a ready ticket under an epic behind a blocker that is not startable",
-			outcome: ServedFromDependency{Row: rowFor("test-epic.1"), Gates: "test-ours", Via: []string{"test-stuck"}, Blocker: "test-epic"},
+			outcome: ServedFromDependency{Row: rowFor("test-epic.1"), Gates: "test-ours", Via: []hop{{Prerequisite: "test-stuck", Through: "test-stuck"}}, Blocker: "test-epic"},
 			want:    []any{"test-ours", "test-stuck", "test-epic"},
+		},
+		{
+			name:    "a ready ticket behind a ticket under an epic that gates our row",
+			outcome: ServedFromDependency{Row: rowFor("test-up"), Gates: "test-ours", Via: []hop{{Prerequisite: "test-gate", Through: "test-gate.1"}}, Blocker: "test-up"},
+			want:    []any{"test-ours", "test-gate", "test-gate.1", "test-up"},
 		},
 		{
 			name:    "a pick from the pool",
