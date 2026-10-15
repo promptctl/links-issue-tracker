@@ -102,7 +102,7 @@ filter, writes `"outcome": "error"` and none of these keys.
 | `next.blocked` | The prerequisites from outside those epics that block them, at any depth: dependencies, and the earlier ticket of a blocker's own lane. |
 | `next.held` | Tickets in those epics held by something about the ticket itself, such as a reserved label. |
 | `next.off_path` | Tickets a focus label kept out of the pick. |
-| `next.hidden_by_filter` | For `served_past_narrowing` and `narrowed`, the ticket on your path that the `--type`, `--status`, `--labels` or `--assignee` filter left out: the one `lit next` without the filter would hand you. `null` for every other outcome. |
+| `next.hidden_by_filter` | The ticket the `--type`, `--status`, `--labels` or `--assignee` filter left out when that is why the run served past its epic or served nothing: the one `lit next` without the filter would hand you. Always set for `served_past_narrowing` and `narrowed`, set for `exhausted` when the filter hid every ready ticket outside the epic, and `null` otherwise. |
 | `next.unreachable` | When it found nothing at all, every ticket it went past. |
 | `next.stay_offered` | Whether its output offered filing a ticket to unblock the epic instead of moving on. |
 | `counts.next.rows_gathered` | How many tickets it chose among: the workable tickets its filter selects. |

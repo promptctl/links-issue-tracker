@@ -1381,8 +1381,8 @@ Lane for the claim line is `model.LaneOf(entry.Issue, details[entry.ID].Parent)`
 | `ServedFromDependency` | `Row`, `Lane model.LaneID`, `Gates string` | step 1b's or 2b's on-path dependency; `Gates` is the id of the blocked row it unblocks, so the pick explains itself (`next_route.go`) |
 | `ServedPastExhaustion` | `Row`, `Lane model.LaneID`, `Exhaustion Exhausted` | the checkout's own epic(s) have open work, none of it reachable, and the global pool has a ready ticket outside them — step 3 (`next_route.go`) |
 | `ServedPastNarrowing` | `Row`, `Lane model.LaneID`, `Narrowing Narrowed` | steps 1–2b serve nothing the filter selects, the same steps over the whole queue would serve `Narrowing.Hidden`, and the global pool has a ready ticket the filter selects — step 3 (`next_route.go`) |
-| `Exhausted` | `Epics []string`, `Blocked []rowReach`, `Held []rowReach`, `OffPath []rowReach` | the same, with nothing ready in the global pool either — step 3; `OffPath` is the rows outside the scope a focus label withheld from the pool, set only on the terminal answer (`next_route.go`) |
-| `Narrowed` | `Hidden annotation.AnnotatedIssue` | the same, with nothing the filter selects ready in the global pool either — step 3 (`next_route.go`) |
+| `Exhausted` | `Epics []string`, `Blocked []rowReach`, `Held []rowReach`, `OffPath []rowReach`, `Narrowing *Narrowed` | the same, with nothing the filter selects ready in the global pool either — step 3; `Narrowing` is the pool's pick over the whole queue, if any, and `OffPath`, set only when there is none, is the rows outside the scope a focus label withheld from the pool (`next_route.go`) |
+| `Narrowed` | `Hidden annotation.AnnotatedIssue` | no step serves a row the filter selects, and the same steps over the whole queue serve `Hidden` — step 3, with nothing the filter selects ready in the global pool either, or step 4 (`next_route.go`) |
 | `NoWork` | `Unreachable []rowReach` | the global pool produced nothing — step 4 (`next_route.go`) |
 
 `Exhausted`, `Narrowed` and `NoWork` implement `error` and travel outward as themselves
@@ -1422,10 +1422,9 @@ and, once the checkout holds a lane,
 `workToward = workTowardEach(rows, details, epics)` (`next_route.go`), the
 gathered rows indexed by each id they are work toward: their own, and every
 epic above them.
-`pickFrom(from, inScope, accept ...capacity)` keeps the first row of `from`, in
-rank order, whose lane `inScope` admits and whose verdict is in `accept`
-(`next_route.go`); `pick` is `pickFrom` over all `rows`
-(`next_route.go`). `accept` is a **set**, never a preference order —
+`pickFrom(from, serves, inScope, accept ...capacity)` keeps the first row of
+`from`, in rank order, that `serves` admits, whose lane `inScope` admits and
+whose verdict is in `accept` (`next_route.go`). `accept` is a **set**, never a preference order —
 rank order is the only tiebreak routing applies (`next_route.go`).
 `ownScope(standings, self)` yields `ownLanes` and `ownEpics`, read from the
 **standings** and not from the gathered rows (`next_route.go`);
@@ -1462,15 +1461,18 @@ serves nothing, over every row; both dependency walks read every row either way:
    `withheldByScope` over the focus-excluded rows whose lane `ourScope` does
    not admit. If step 4's pick finds a row →
    **`ServedPastExhaustion{Row, Lane: laneOf(row), Exhaustion: exhausted}`**;
-   else → **`exhausted`**. The pick is outside our epic by construction.
+   else, if the pool over every row picks one, `Narrowing` is set to
+   `&Narrowed{Hidden: row}` in place of `OffPath`; → **`exhausted`**. The pick
+   is outside our epic by construction.
 
 Step 4 is reached directly by a checkout holding no lanes:
 
-4. **The global pool, filtered and focus-scoped.** `pool, offPath := scope.partition(<rows asked selects>)`
+4. **The global pool, focus-scoped.** `pool, offPath := scope.partition(rows)`
    (`next_route.go`, `ready_state.go`), then
-   `pickFrom(pool, func(model.LaneID) bool { return true }, serveWork)` →
+   `pickFrom(pool, selected, func(model.LaneID) bool { return true }, serveWork)` →
    **`ServedFromNewLane{Row, Lane: laneOf(row)}`**.
-   Else → **`NoWork{Unreachable: append(passedOver(pool, reachFor), withheldByScope(offPath)...)}`**
+   Else, the same pick over every row → **`Narrowed{Hidden: row}`**.
+   Else → **`NoWork{Unreachable: append(passedOver(<pool rows asked selects>, reachFor), withheldByScope(<offPath rows asked selects>)...)}`**
    (`next_route.go`), where `passedOver` stamps every walked pool row with
    `reachFor(row)` (`next_route.go`) and `withheldByScope` stamps
    every scope-excluded row `reachOffFocusPath` (`next_route.go`).
@@ -1520,8 +1522,8 @@ when `Epics` is empty, else `"under the epic with "` +
 - `"no ready work in <scope> — <clauses>"`, the clauses being the non-empty ones of `describeReach(Blocked, "blocked by ", exhaustedNotes)` and `describeReach(Held, "held here: ", exhaustedNotes)`, joined by `"; "`
 - Both empty: `"no ready work in <scope> — nothing else is queued behind what's already in progress"`
 
-`Exhausted.outside()`: ``"`lit next` has nothing ready outside it either"``
-when `OffPath` is empty, else
+`Exhausted.outside()`: `Narrowing.Error()` when `Narrowing` is set, else
+``"`lit next` has nothing ready outside it either"`` when `OffPath` is empty, else
 `"nothing on the focus path outside it is ready either: <describeReach(OffPath, "", poolNotes)>"`.
 
 `Exhausted.Error()`: `"<why()>; <outside()>"`, then each `stay()` route,
@@ -1550,7 +1552,7 @@ Both map to `ExitNoWork` = **6** (`exit.go`), with reasons
   `" (gates %s, which is on your path)"` on `Gates` when `Blocker == Row.ID`,
   else `" (it is in epic %s, which gates %s on your path)"` on `Blocker`, `Gates`.
 - `ServedPastExhaustion` → `"<why()>\n"`, then the `stay()` routes followed by `"move on to the top ready ticket outside it: <startAdvice(o.Row, o.Lane)>"`, joined by `"\nor "`, then `"\n"`.
-- `ServedPastNarrowing` → `"<o.Narrowing.Error()>\nor take the top ready ticket the filter selects, which is off your path: <startAdvice(o.Row, o.Lane)>\n"`.
+- `ServedPastNarrowing` → `"<o.Narrowing.Error()>\nor take the top ready ticket the filter selects, outside the work you hold: <startAdvice(o.Row, o.Lane)>\n"`.
 - `Exhausted`, `Narrowed`, `NoWork` → returned as themselves; no ticket printed.
 - Any other outcome type → panic.
 

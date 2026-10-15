@@ -81,7 +81,7 @@ the code it arrives on:
 | `owner_approval_required` | 5 | `lit sync reconcile take` would discard one side's issues and needs the owner's approval |
 | `no_ready_work` | 6 | `lit next` had no ticket for you |
 | `scope_exhausted` | 6 | `lit next` found open work in your claimed epic but none you can reach; the message names what stops it |
-| `scope_narrowed` | 6 | `lit next`'s filter left out the next ticket on your path, and nothing it selects is ready; the message names the ticket |
+| `scope_narrowed` | 6 | `lit next`'s filter left out the ticket it would otherwise hand you, and nothing it selects is ready; the message names the ticket |
 | `state_already_holds` | 6 | The state the command asked for already holds |
 | `corruption_detected` | 7 | The store failed an integrity check |
 
@@ -253,12 +253,15 @@ checkout holding no claims of its own starts straight at the global pool.
 
 A filter narrows which ticket `next` hands you, never what it reads to decide.
 A dependency is still found through a ticket the filter leaves out, and an epic
-is called out of work only when it is out of work. When the epic's next ticket
-is one the filter leaves out — a task, under `--type bug` — `next` names that
-ticket and says that running it without the filter hands it over, then serves
-the top ready ticket the filter selects outside the epic. When nothing the
-filter selects is ready, it exits with that line alone (reason
-`scope_narrowed`).
+is called out of work, or the backlog empty of ready work, only when it is.
+When the epic's next ticket is one the filter leaves out — a task, under
+`--type bug` — `next` names that ticket and says that running it without the
+filter hands it over, then serves the top ready ticket the filter selects
+outside the epic. When nothing the filter selects is ready, it exits with that
+line alone (reason `scope_narrowed`), as a checkout holding no lane does when
+the filter hid every ready ticket. An epic that is out of work, under a filter
+that hid every ready ticket outside it, names the one `next` would serve in
+place of saying nothing outside it is ready.
 See design-docs/work-claims.md for the full precedence.
 
 `next` is read-only. It claims nothing and starts nothing — `lit start` does both
