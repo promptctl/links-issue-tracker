@@ -1006,12 +1006,12 @@ func TestWriteEngineRecordsItselfAsTheJournalHolder(t *testing.T) {
 }
 
 // TestASweepDoesNotRestartTheWait pins that only an arrival is progress. A
-// dead record left by a SIGKILLed holder sits under the lock; the contender's
-// own notice tick sweeps it mid-wait, and that departure must not restart the
+// holder dies mid-wait without retiring its record; the contender's own
+// notice tick sweeps the record, and that departure must not restart the
 // clock — a contender whose wait is prolonged by its own housekeeping fails
 // later than the contract says, and by an amount nobody can predict.
 func TestASweepDoesNotRestartTheWait(t *testing.T) {
-	captureLockNotices(t, 50*time.Millisecond, time.Hour)
+	captureLockNotices(t, 10*time.Millisecond, 10*time.Millisecond)
 	ctx := context.Background()
 	lockPath := filepath.Join(t.TempDir(), "test.lock")
 	const wait = 300 * time.Millisecond
@@ -1025,24 +1025,34 @@ func TestASweepDoesNotRestartTheWait(t *testing.T) {
 			t.Errorf("release holder: %v", err)
 		}
 	}()
-	// A record nothing holds: what a holder killed mid-hold leaves behind.
-	dead := filepath.Join(lockHolderDir(storageDirOf(lockPath), lockPath), lockHolderRecordPrefix+"99999-1")
-	if err := os.WriteFile(dead, []byte(`{"pid":99999,"command":"lit dead","since":"2026-01-01T00:00:00Z"}`), 0o600); err != nil {
-		t.Fatalf("plant dead record: %v", err)
+	// A second holder's record, live for as long as the test holds its
+	// flock, so the contender's first reading of who is there includes it
+	// whenever the notice reporter runs.
+	dying := filepath.Join(lockHolderDir(storageDirOf(lockPath), lockPath), lockHolderRecordPrefix+"99999-1")
+	if err := os.WriteFile(dying, []byte(`{"pid":99999,"command":"lit dying","since":"2026-01-01T00:00:00Z"}`), 0o600); err != nil {
+		t.Fatalf("plant record: %v", err)
+	}
+	dies, alive, err := filelock.Acquire(ctx, dying, true, 1, 0)
+	if err != nil || !alive {
+		t.Fatalf("hold the planted record: acquired=%v err=%v", alive, err)
 	}
 
-	// The sweep runs on the notice reporter's own schedule; the first poll
-	// waits for it, so it lands mid-wait however slowly the machine runs.
+	// At the first poll the holder dies without retiring its record, and the
+	// poll waits for the reporter's next tick to sweep it, so the sweep lands
+	// mid-wait however slowly the machine runs.
 	clock := newStepClock(t, storeLockPollInterval, func(read int) {
 		if read != 1 {
 			return
 		}
+		if err := dies(); err != nil {
+			t.Fatalf("release the planted record: %v", err)
+		}
 		for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(5 * time.Millisecond) {
-			if _, statErr := os.Stat(dead); errors.Is(statErr, os.ErrNotExist) {
+			if _, statErr := os.Stat(dying); errors.Is(statErr, os.ErrNotExist) {
 				return
 			}
 			if time.Now().After(deadline) {
-				t.Fatalf("the dead record was not swept during the wait; the test did not exercise a sweep")
+				t.Fatalf("the dead holder's record was not swept during the wait; the test did not exercise a sweep")
 			}
 		}
 	})
@@ -1051,6 +1061,6 @@ func TestASweepDoesNotRestartTheWait(t *testing.T) {
 		t.Fatalf("contended acquireStoreLockOn() error = %v, want ErrWorkspaceBusy", err)
 	}
 	if got := clock.elapsed(); got != wait {
-		t.Fatalf("contender gave up %s in against a %s wait; the sweep of a dead record restarted its clock", got, wait)
+		t.Fatalf("contender gave up %s in against a %s wait; the sweep of a dead holder's record restarted its clock", got, wait)
 	}
 }
