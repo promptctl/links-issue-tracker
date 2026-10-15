@@ -284,11 +284,6 @@ Defaults are set in `Load` (`internal/config/config.go`).
 
 | Key | Go type | Default | Notes / validation |
 |---|---|---|---|
-| `logging.verbose` | bool | `false` | `internal/config/config.go` |
-| `logging.file` | string | `""` | `internal/config/config.go` |
-| `init.install_hooks` | bool | `true` | `internal/config/config.go` |
-| `init.install_agents` | bool | `true` | `internal/config/config.go` |
-| `migration.auto_apply` | bool | `false` | `internal/config/config.go` |
 | `ready.required_fields` | []string | `[]` | `internal/config/config.go`; also fed by legacy top-level `required_fields` |
 | `quickstart.soil_mode` | bool | `false` | `internal/config/config.go` |
 | `snapshot.retention_budget` | int | `5` | `internal/config/config.go`; **must be > 0** or `Load` fails with `config: snapshot.retention_budget must be > 0, got %d` |

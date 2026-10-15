@@ -80,11 +80,6 @@ Defaults set in `Load` (`config.go`):
 
 | Key | Type | Default | Validation |
 |---|---|---|---|
-| `logging.verbose` | bool | `false` | |
-| `logging.file` | string | `""` | |
-| `init.install_hooks` | bool | `true` | |
-| `init.install_agents` | bool | `true` | |
-| `migration.auto_apply` | bool | `false` | |
 | `ready.required_fields` | []string | `[]` | also fed by legacy top-level `required_fields` |
 | `quickstart.soil_mode` | bool | `false` | |
 | `snapshot.retention_budget` | int | `5` | must be > 0 or `Load` fails (`config.go`) |
@@ -92,6 +87,8 @@ Defaults set in `Load` (`config.go`):
 | `sync.receive` | bool | `true` | |
 | `sync.owner_notify_cmd` | string | `""` | empty = no owner-notification channel |
 | `claims.freshness_window` | duration string | `"6h"` | read as a string and parsed by `time.ParseDuration`; a bare number or non-positive duration fails `Load` (`config.go`) |
+
+A key the table does not list is ignored: `Load` decodes with viper's `Unmarshal`, which drops keys `Config` does not declare without an error (`config.go`).
 
 Cadence semantics (`config.go`): `on-push` mirrors only when the managed pre-push git hook runs; `on-change` (default) mirrors after every mutating command. `shouldSyncAfterMutation` is true only for write access + `on-change` (`sync_cadence.go`). `maybeAutoSyncAfterCommand` returns immediately under `LIT_DISABLE_AUTO_SYNC`; on an unreadable config it prints `lit: automatic sync skipped, config unreadable: %v` and returns; otherwise it prints any pending receive block, runs mirror coverage per cadence, schedules the receive worker per `sync.receive`, and runs inline compaction for write commands (`sync_cadence.go`). Timing constants: receive debounce 5 minutes, remote-absent recheck 10 seconds (`sync_cadence.go`).
 

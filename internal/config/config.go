@@ -15,28 +15,11 @@ import (
 
 // Config holds user-level settings loaded from ~/.config/links-issue-tracker/config.toml.
 type Config struct {
-	Logging    LoggingConfig    `mapstructure:"logging"`
-	Init       InitConfig       `mapstructure:"init"`
-	Migration  MigrationConfig  `mapstructure:"migration"`
 	Ready      ReadyConfig      `mapstructure:"ready"`
 	Quickstart QuickstartConfig `mapstructure:"quickstart"`
 	Snapshot   SnapshotConfig   `mapstructure:"snapshot"`
 	Sync       SyncConfig       `mapstructure:"sync"`
 	Claims     ClaimsConfig     `mapstructure:"claims"`
-}
-
-type LoggingConfig struct {
-	Verbose bool   `mapstructure:"verbose"`
-	File    string `mapstructure:"file"`
-}
-
-type InitConfig struct {
-	InstallHooks  bool `mapstructure:"install_hooks"`
-	InstallAgents bool `mapstructure:"install_agents"`
-}
-
-type MigrationConfig struct {
-	AutoApply bool `mapstructure:"auto_apply"`
 }
 
 type ReadyConfig struct {
@@ -231,11 +214,6 @@ func (l layers) merge(v *viper.Viper) ([]string, error) {
 func Load(workspaceRoot pathspec.PathSpec) (Config, error) {
 	v := viper.New()
 
-	v.SetDefault("logging.verbose", false)
-	v.SetDefault("logging.file", "")
-	v.SetDefault("init.install_hooks", true)
-	v.SetDefault("init.install_agents", true)
-	v.SetDefault("migration.auto_apply", false)
 	v.SetDefault("ready.required_fields", []string{})
 	v.SetDefault("quickstart.soil_mode", false)
 	v.SetDefault("snapshot.retention_budget", 5)
