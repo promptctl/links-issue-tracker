@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
@@ -89,6 +90,7 @@ func TestNextRecordsWhatAnExhaustedScopeNamed(t *testing.T) {
 				],
 				"next.held": [{"id": "test-held", "ticket": "test-held", "reach": "not_ready"}],
 				"next.off_path": [],
+				"next.hidden_by_filter": null,
 				"next.unreachable": [],
 				"next.stay_offered": true
 			}`,
@@ -108,6 +110,7 @@ func TestNextRecordsWhatAnExhaustedScopeNamed(t *testing.T) {
 				"next.blocked": [{"id": "test-ext", "ticket": "test-ext", "reach": "awaiting_outside"}],
 				"next.held": [],
 				"next.off_path": [],
+				"next.hidden_by_filter": null,
 				"next.unreachable": [],
 				"next.stay_offered": false
 			}`,
@@ -205,5 +208,89 @@ func TestNextLeavesTheRowsItWentPastOnTheEvent(t *testing.T) {
 	want := decodeJSON(t, `{"unreachable": [{"id": "`+waiting+`", "ticket": "`+waiting+`", "reach": "awaiting_outside"}]}`)["unreachable"]
 	if ev.Facts["next.outcome"] != "no_work" || !reflect.DeepEqual(ev.Facts["next.unreachable"], want) {
 		t.Errorf("next.outcome, next.unreachable = %v, %v; want no_work, %v", ev.Facts["next.outcome"], ev.Facts["next.unreachable"], want)
+	}
+}
+
+// A scope stopped by the filter rather than by its work records the ticket the
+// filter hid, served past or not; a scope that really is exhausted records none.
+func TestNextRecordsTheTicketAFilterHidFromTheScope(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		outcome     NextOutcome
+		wantOutcome string
+		wantPicked  any
+		wantHidden  any
+	}{
+		{
+			name:        "served past the hidden ticket",
+			outcome:     ServedPastNarrowing{Row: rowFor("test-bug"), Narrowing: Narrowed{Hidden: rowFor("test-ours")}},
+			wantOutcome: "served_past_narrowing",
+			wantPicked:  "test-bug",
+			wantHidden:  "test-ours",
+		},
+		{
+			name:        "nothing the filter selects is ready",
+			outcome:     Narrowed{Hidden: rowFor("test-ours")},
+			wantOutcome: "narrowed",
+			wantPicked:  nil,
+			wantHidden:  "test-ours",
+		},
+		{
+			name:        "an exhausted scope hid nothing",
+			outcome:     ServedPastExhaustion{Row: rowFor("test-bug"), Exhaustion: Exhausted{Epics: []string{"test-epic"}}},
+			wantOutcome: "served_past_exhaustion",
+			wantPicked:  "test-bug",
+			wantHidden:  nil,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := telemetry.Begin(telemetry.Event{})
+			recordNextEvent(telemetry.With(context.Background(), recorder), tc.outcome, 1)
+			facts := writtenFacts(t, recorder.Finish(telemetry.End{}))
+			if facts["next.outcome"] != tc.wantOutcome || facts["next.picked"] != tc.wantPicked {
+				t.Errorf("next.outcome, next.picked = %v, %v; want %v, %v", facts["next.outcome"], facts["next.picked"], tc.wantOutcome, tc.wantPicked)
+			}
+			if hidden, ok := facts["next.hidden_by_filter"]; !ok || hidden != tc.wantHidden {
+				t.Errorf("next.hidden_by_filter = %v (present %v), want %v", hidden, ok, tc.wantHidden)
+			}
+		})
+	}
+}
+
+// Driven through the real command, because the defect lived in what `lit next`
+// handed routing: a held lane's only ready ticket is a task, and `--type bug`
+// must name it as hidden rather than report the epic exhausted — on stderr, on
+// the exit code and reason, and on the event. rows_gathered counts the rows the
+// filter selected, which is none, not the queue routing read.
+func TestNextUnderAFilterNamesTheTicketItHidFromTheHeldEpic(t *testing.T) {
+	isolateEvents(t)
+	repo := newInitTestRepo(t)
+	epic := newEpicInDir(t, repo, "Home")
+	first := extractTicketID(t, runCLIInDir(t, repo, "new", "--type", "task", "--parent", epic, "--title", "First", "--topic", "demo"))
+	second := extractTicketID(t, runCLIInDir(t, repo, "new", "--type", "task", "--parent", epic, "--title", "Second", "--topic", "demo"))
+	// Finishing the first ticket leaves the epic's lane held by this checkout
+	// with the second ready in it.
+	runCLIInDir(t, repo, "start", first)
+	runCLIInDir(t, repo, "done", first)
+
+	_, err := runCLIInDirAllowError(t, repo, "next", "--type", "bug")
+	if err == nil {
+		t.Fatal("lit next --type bug served a ticket from a backlog holding no bug")
+	}
+	if strings.Contains(err.Error(), "no ready work in") {
+		t.Fatalf("lit next --type bug = %q, want the epic not called exhausted — %s is ready in it", err.Error(), second)
+	}
+	if !strings.Contains(err.Error(), second+" is the next ticket on your path, and this run's filter leaves it out") {
+		t.Fatalf("lit next --type bug = %q, want it to name %s as the ticket the filter hid", err.Error(), second)
+	}
+	ev := lastEvent(t)
+	if ev.ExitCode != ExitNoWork || ev.Reason != string(reasonScopeNarrowed) {
+		t.Errorf("event exit %d reason %q, want %d %q", ev.ExitCode, ev.Reason, ExitNoWork, reasonScopeNarrowed)
+	}
+	if ev.Facts["next.outcome"] != "narrowed" || ev.Facts["next.hidden_by_filter"] != second {
+		t.Errorf("next.outcome, next.hidden_by_filter = %v, %v; want narrowed, %s", ev.Facts["next.outcome"], ev.Facts["next.hidden_by_filter"], second)
+	}
+	if n, ok := ev.Counts["next.rows_gathered"]; !ok || n != 0 {
+		t.Errorf("counts[next.rows_gathered] = %d, %v; want 0 — no row is a bug", n, ok)
 	}
 }

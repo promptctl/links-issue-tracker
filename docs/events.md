@@ -95,16 +95,17 @@ filter, writes `"outcome": "error"` and none of these keys.
 
 | Key | Meaning |
 | --- | --- |
-| `next.outcome` | How the pick was reached: `served_from_claim`, `resumed_own_work`, `served_from_epic_lane`, `served_from_new_lane`, `served_from_dependency`, `served_past_exhaustion`, `exhausted`, or `no_work`. |
+| `next.outcome` | How the pick was reached: `served_from_claim`, `resumed_own_work`, `served_from_epic_lane`, `served_from_new_lane`, `served_from_dependency`, `served_past_exhaustion`, `served_past_narrowing`, `exhausted`, `narrowed`, or `no_work`. |
 | `next.picked` | The ticket id it printed, or `null` when it picked nothing. |
 | `next.dependency_path` | For `served_from_dependency`, how the pick clears the way: the ticket of yours it unblocks, each prerequisite between — an epic followed by the ticket under it the walk went through — then the dependency the pick is work toward, which is the pick itself or the epic it sits under. Empty for every other outcome. |
 | `next.exhausted_epics` | The epics whose open work it found unreachable. |
 | `next.blocked` | The prerequisites from outside those epics that block them, at any depth: dependencies, and the earlier ticket of a blocker's own lane. |
 | `next.held` | Tickets in those epics held by something about the ticket itself, such as a reserved label. |
 | `next.off_path` | Tickets a focus label kept out of the pick. |
+| `next.hidden_by_filter` | For `served_past_narrowing` and `narrowed`, the ticket on your path that the `--type`, `--status`, `--labels` or `--assignee` filter left out: the one `lit next` without the filter would hand you. `null` for every other outcome. |
 | `next.unreachable` | When it found nothing at all, every ticket it went past. |
 | `next.stay_offered` | Whether its output offered filing a ticket to unblock the epic instead of moving on. |
-| `counts.next.rows_gathered` | How many tickets it chose among. |
+| `counts.next.rows_gathered` | How many tickets it chose among: the workable tickets its filter selects. |
 
 Each entry in the four ticket lists has the same shape:
 
@@ -123,7 +124,7 @@ none), and `reach` is what this checkout can do about it:
 | `held_by_itself` | Not held elsewhere, but held by something about the ticket itself, such as a reserved label or a missing field. |
 | `not_ready` | Not held elsewhere, but blocked by further open tickets and nothing about itself. |
 | `awaiting_outside` | Labeled `external`: it waits on an event outside this repository. |
-| `out_of_view` | Nothing that would clear it was among the tickets this run read, for example because a filter hid them. |
+| `out_of_view` | Nothing that would clear it was among the tickets this run read, for example an epic with no open ticket under it. A filter never causes it: `lit next` reads every workable ticket and filters only what it hands you. |
 | `off_focus_path` | Outside the focus label's scope, so the pick never considered it. |
 
 ## What a statusline-file write records

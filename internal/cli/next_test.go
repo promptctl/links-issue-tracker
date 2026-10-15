@@ -34,7 +34,7 @@ func (h readyTestHarness) runNextOutcome() NextOutcome {
 	// The gathered scope, not focusScope{}: this helper stands in for `lit next`
 	// itself, and handing routing an empty scope here would quietly answer every
 	// focus test from the unfocused path — green, and about a command nobody runs.
-	return routeNext(gathered.rows, gathered.details, gathered.epics, cc.standings, cc.self, gathered.scope)
+	return routeNext(gathered.rows, gathered.details, gathered.epics, cc.standings, cc.self, gathered.scope, storage.IssueCriteria{})
 }
 
 // runNextRow narrows an outcome to the row it served, for the ordering and
@@ -75,6 +75,8 @@ func servedRow(outcome NextOutcome) (annotation.AnnotatedIssue, bool) {
 		return served.Row, true
 	case ServedPastExhaustion:
 		return served.Row, true
+	case ServedPastNarrowing:
+		return served.Row, true
 	}
 	return annotation.AnnotatedIssue{}, false
 }
@@ -98,14 +100,18 @@ func TestServedRowIsTotalOverTheSealedSum(t *testing.T) {
 		{"the global pool", ServedFromNewLane{Row: row}, true},
 		{"the on-path dependency", ServedFromDependency{Row: row, Gates: "test-gated-1", Blocker: row.ID}, true},
 		{"past an exhausted scope", ServedPastExhaustion{Row: row, Exhaustion: Exhausted{Epics: []string{"test-epic-1"}}}, true},
+		{"past a scope the filter narrowed", ServedPastNarrowing{Row: row, Narrowing: Narrowed{Hidden: annotation.AnnotatedIssue{Issue: model.Issue{ID: "test-hidden-1"}}}}, true},
 		{"exhausted carries none", Exhausted{}, false},
+		// Hidden is the ticket the filter kept from being served, so it must
+		// not read as the row this outcome hands over.
+		{"narrowed carries none", Narrowed{Hidden: row}, false},
 		{"no work carries none", NoWork{}, false},
 	}
-	// The sum is sealed at eight cases (isNextOutcome, next_route.go). Counting
+	// The sum is sealed at ten cases (isNextOutcome, next_route.go). Counting
 	// them here is what makes an added variant fail loudly at this table instead
 	// of passing unnoticed because nobody thought to cover it.
-	if len(cases) != 8 {
-		t.Fatalf("table covers %d outcomes, want all 8 NextOutcome variants — add the new one", len(cases))
+	if len(cases) != 10 {
+		t.Fatalf("table covers %d outcomes, want all 10 NextOutcome variants — add the new one", len(cases))
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -608,6 +614,30 @@ func TestRunNextTypeFilterPicksMatchingLeaf(t *testing.T) {
 	}
 }
 
+// A held lane whose ready ticket is a task, asked for bugs: the bug elsewhere
+// is served beneath a line naming the task the filter hid, and nothing calls
+// the epic out of work. Driven through runNext, since the defect was in what
+// the command handed routing.
+func TestRunNextUnderAFilterServesPastTheTicketItHid(t *testing.T) {
+	h := newReadyTestHarness(t)
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
+	first := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 1, ParentID: epicA.ID})
+	second := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 1, ParentID: epicA.ID})
+	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
+	bug := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "bug", Priority: 1, ParentID: epicB.ID})
+	h.applyAction(first.ID, model.Start{Assignee: "tester"}, "")
+	h.applyAction(first.ID, model.Done{}, "")
+
+	text := h.runNextText("--type", "bug")
+	if strings.Contains(text, "no ready work in") {
+		t.Fatalf("next --type bug = %q, want the epic not called exhausted — %s is ready in it", text, second.ID)
+	}
+	want := second.ID + " is the next ticket on your path, and this run's filter leaves it out — run `lit next` without --type, --status, --labels or --assignee to be handed it\nor take the top ready ticket the filter selects, which is off your path: run `lit start " + bug.ID + "`"
+	if !strings.Contains(text, want) {
+		t.Fatalf("next --type bug = %q, want it to contain %q", text, want)
+	}
+}
+
 // --limit and --columns stay off next: a single-row summary has no row count
 // or column set to vary, so accepting them would be accepting input the
 // command cannot honor.
@@ -705,7 +735,7 @@ func TestRunNextErrorsWhenNoReadyWork(t *testing.T) {
 }
 
 // TestRenderNextOutcomeTerminalOutcomesKeepTheirType pins that
-// renderNextOutcome renders the router's two terminal outcomes as TYPED errors,
+// renderNextOutcome renders the router's terminal outcomes as TYPED errors,
 // keeping the discriminator routeNext established to keep the exhaustion case
 // distinguishable. Both sinks dispatch by type, so an untyped error falls
 // through to "command_failed", whose remediation tells the agent to retry an
@@ -735,6 +765,12 @@ func TestRenderNextOutcomeTerminalOutcomesKeepTheirType(t *testing.T) {
 			outcome:    Exhausted{Epics: []string{"links-epic-abcd"}},
 			wantReason: "scope_exhausted",
 			wantAct:    "finish or hand off what you already hold",
+		},
+		{
+			name:       "narrowed",
+			outcome:    Narrowed{Hidden: annotation.AnnotatedIssue{Issue: model.Issue{ID: "links-hidden-abcd"}}},
+			wantReason: "scope_narrowed",
+			wantAct:    "without the filter",
 		},
 		{
 			name:       "no work",

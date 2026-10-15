@@ -54,6 +54,7 @@ const (
 	reasonRemoteUnreachable       commandReason = "remote_unreachable"
 	reasonRetiredCommand          commandReason = "retired_command"
 	reasonScopeExhausted          commandReason = "scope_exhausted"
+	reasonScopeNarrowed           commandReason = "scope_narrowed"
 	reasonStateAlreadyHolds       commandReason = "state_already_holds"
 	reasonStoredPrefixRefused     commandReason = "stored_prefix_refused"
 	reasonSyncDivergence          commandReason = "sync_divergence"
@@ -148,15 +149,20 @@ func commandErrorReason(err error) commandReason {
 		}
 		return reasonValidationRefused
 	}
-	// The router's two terminal answers. Neither is a fault: routing asked a
+	// The router's three terminal answers. None is a fault: routing asked a
 	// well-formed question and the honest reply was "nothing to hand you". They
 	// are separate reasons because the act each calls for is different — one
-	// asks you to move work you already hold, the other to widen the question or
-	// create work — and a single reason could only name one of them.
+	// asks you to move work you already hold, one to drop the filter that hid
+	// your scope's next ticket, the other to widen the question or create work
+	// — and a single reason could only name one of them.
 	// [LAW:one-type-per-behavior]
 	var exhausted Exhausted
 	if errors.As(err, &exhausted) {
 		return reasonScopeExhausted
+	}
+	var narrowed Narrowed
+	if errors.As(err, &narrowed) {
+		return reasonScopeNarrowed
 	}
 	var noWork NoWork
 	if errors.As(err, &noWork) {
@@ -319,6 +325,11 @@ func commandErrorRemediation(reason commandReason) string {
 		// "mechanical, run it without asking", and deciding what unblocks a
 		// scope is the opposite of mechanical.
 		return "Do not retry unchanged — routing is deterministic and repeats this answer until the work named above moves. Act on what the message names — the route it offers, or the rows off your focus path — or finish or hand off what you already hold."
+	case reasonScopeNarrowed:
+		// The message names the ticket and the flags; what it cannot say is
+		// that the answer is a property of the question, so a retry with the
+		// same flags gets it again.
+		return "Do not retry unchanged — routing is deterministic and repeats this answer while the filter stays. Run `lit next` without the filter, as the message says, to be handed the ticket it names."
 	case reasonNoReadyWork:
 		// NoWork carries the rows the pool walk went past, and the message names
 		// them — so what is left here is the act for each, and the standing rule

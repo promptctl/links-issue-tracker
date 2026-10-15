@@ -36,6 +36,7 @@ var reasonCodes = map[commandReason]int{
 	"remote_unreachable":        1,
 	"retired_command":           3,
 	"scope_exhausted":           6,
+	"scope_narrowed":            6,
 	"state_already_holds":       6,
 	"stored_prefix_refused":     3,
 	"sync_divergence":           5,
@@ -139,9 +140,10 @@ func TestCommandErrorReason(t *testing.T) {
 			"workspace_busy",
 		},
 		// The router's terminal answers are answers, not faults, and each names
-		// a different act — so each is its own reason rather than both sharing
-		// one, and neither may fall through to "command_failed".
+		// a different act — so each is its own reason rather than sharing one,
+		// and none may fall through to "command_failed".
 		{"router scope exhausted", Exhausted{Epics: []string{"links-epic-abcd"}}, "scope_exhausted"},
+		{"router scope narrowed", Narrowed{}, "scope_narrowed"},
 		{"router no ready work", NoWork{}, "no_ready_work"},
 		// A repository `lit init` has never run in is terminal: no rerun makes
 		// the workspace exist. Both the bare sentinel and a wrapped one are
