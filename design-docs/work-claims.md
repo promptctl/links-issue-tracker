@@ -307,15 +307,25 @@ step, so each step below says only which lanes it looks in:
 1. **The checkout's own live claims come first**: ready tickets within claimed
    lanes and the work already in flight there — a ticket in progress in the
    checkout's own lane is handed back to resume rather than started fresh —
-   in backlog order, including its direct prerequisites: a dependency outside
-   the claimed lane that gates one inside it is on the path and is offered on
-   the same terms, announced as the second lane its start claims. An epic
-   cannot be started, so a dependency that is an epic is offered as the ticket
-   under it, at any depth, and the announcement names the epic.
+   in backlog order, including its prerequisites: a dependency outside the
+   claimed lane that gates it, at any depth, is on the path and is offered on
+   the same terms, announced as the second lane its start claims. A dependency
+   that cannot be started is cleared by clearing its own prerequisites — its
+   dependencies and the earlier ticket of its lane — so the walk descends it to
+   theirs; a ticket already in flight is past its prerequisites and is not
+   descended. The announcement names each prerequisite between the pick and
+   the row it gates, an epic by the ticket under it the walk went through —
+   "(gates B.2, which is on your path, through C.1)", or "through C.1 under
+   C" when C is an epic.
+   Each row of the lane is taken in backlog order and its chain walked to the
+   end before the next row's, nearest dependency first within it, so the pick
+   serves the highest-ranked blocked row. An epic cannot be started, so a
+   dependency that is an epic is offered as the ticket under it, at any depth,
+   and the announcement names the epic.
 2. **Then the rest of its epic**: the claimed lane's epic's other lanes,
    before any lane of any other epic — the GRANULARITY RULING above, expressed
-   as a routing step rather than a bias. Then the whole epic's direct
-   prerequisites: a dependency outside it that gates any of its lanes is
+   as a routing step rather than a bias. Then the whole epic's prerequisites:
+   a dependency outside it that gates any of its lanes, at any depth, is
    offered as step 1's is, ahead of anything outside the epic, because clearing
    it is how the epic moves again. A parentless (solo) claim has no epic to
    continue into and falls straight to step 3 once its own lane has nothing
@@ -332,8 +342,10 @@ step, so each step below says only which lanes it looks in:
    The ticket goes under the epic, ranked first — even when the block is
    declared on the epic itself, since an epic's blocker never holds back a
    child it waits on. The agent chooses. Staying is named only
-   against a block — an epic whose remaining work is only underway elsewhere
-   has nothing a new ticket could clear. Only when the global pool has nothing
+   against a block a new ticket could clear — not an epic whose remaining work
+   is only underway elsewhere, nor one whose every chain ends at an event
+   outside the repository, since a blocker waiting on the next link clears
+   only when that link does. Only when the global pool has nothing
    ready either is the diagnostic the whole answer; under a `focus` label it
    then names the rows outside the epic that the focus withheld, since those
    were never asked about. It once never fell through to a leaf outside the

@@ -81,6 +81,7 @@ func TestNextRecordsWhatAnExhaustedScopeNamed(t *testing.T) {
 			want: `{
 				"next.outcome": "exhausted",
 				"next.picked": null,
+				"next.dependency_path": [],
 				"next.exhausted_epics": ["test-epic"],
 				"next.blocked": [
 					{"id": "test-dep", "ticket": "test-dep-leaf", "reach": "held_fresh"},
@@ -102,6 +103,7 @@ func TestNextRecordsWhatAnExhaustedScopeNamed(t *testing.T) {
 			want: `{
 				"next.outcome": "exhausted",
 				"next.picked": null,
+				"next.dependency_path": [],
 				"next.exhausted_epics": ["test-epic"],
 				"next.blocked": [{"id": "test-ext", "ticket": "test-ext", "reach": "awaiting_outside"}],
 				"next.held": [],
@@ -120,6 +122,46 @@ func TestNextRecordsWhatAnExhaustedScopeNamed(t *testing.T) {
 			}
 			if n, ok := ev.Counts["next.rows_gathered"]; !ok || n != tc.gathered {
 				t.Errorf("counts[next.rows_gathered] = %d, %v; want %d", n, ok, tc.gathered)
+			}
+		})
+	}
+}
+
+// A dependency pick records the chain it was reached through, from the row of
+// ours it gates down to the dependency it is work toward — the walk's depth is
+// its length — and every other outcome records an empty one.
+func TestNextRecordsTheChainADependencyPickWasReachedThrough(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		outcome NextOutcome
+		want    []any
+	}{
+		{
+			name:    "a dependency of our row",
+			outcome: ServedFromDependency{Row: rowFor("test-dep"), Gates: "test-ours", Blocker: "test-dep"},
+			want:    []any{"test-ours", "test-dep"},
+		},
+		{
+			name:    "a ready ticket under an epic behind a blocker that is not startable",
+			outcome: ServedFromDependency{Row: rowFor("test-epic.1"), Gates: "test-ours", Via: []hop{{Prerequisite: "test-stuck", Through: "test-stuck"}}, Blocker: "test-epic"},
+			want:    []any{"test-ours", "test-stuck", "test-epic"},
+		},
+		{
+			name:    "a ready ticket behind a ticket under an epic that gates our row",
+			outcome: ServedFromDependency{Row: rowFor("test-up"), Gates: "test-ours", Via: []hop{{Prerequisite: "test-gate", Through: "test-gate.1"}}, Blocker: "test-up"},
+			want:    []any{"test-ours", "test-gate", "test-gate.1", "test-up"},
+		},
+		{
+			name:    "a pick from the pool",
+			outcome: ServedFromNewLane{Row: rowFor("test-fresh")},
+			want:    []any{},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := telemetry.Begin(telemetry.Event{})
+			recordNextEvent(telemetry.With(context.Background(), recorder), tc.outcome, 1)
+			if got := writtenFacts(t, recorder.Finish(telemetry.End{}))["next.dependency_path"]; !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("next.dependency_path = %#v, want %#v", got, tc.want)
 			}
 		})
 	}

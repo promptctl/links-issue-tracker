@@ -830,6 +830,117 @@ func TestRouteNextRoutesAroundOnPathDependencyHeldFresh(t *testing.T) {
 	}
 }
 
+// Whether a hidden ticket is inside the scope does not depend on which chain
+// reaches it first. Here our higher-ranked row's chain reaches it through an
+// outside blocker's dependency edge, which says nothing of its lane, before our
+// other row's lane says it is ours: it is still never named as a blocker, and
+// the outside blocker, which clears when our own ticket does, draws no route
+// to stay.
+func TestExhaustionPlacesAHiddenLaneMateWhicheverChainReachesItFirst(t *testing.T) {
+	h := newReadyTestHarness(t)
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
+	first := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Ranked first", Topic: "next", IssueType: "bug", Priority: 0, ParentID: epicA.ID, Lane: "x"})
+	hidden := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Earlier in lane l", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "l"})
+	later := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Later in lane l", Topic: "next", IssueType: "bug", Priority: 0, ParentID: epicA.ID, Lane: "l"})
+	epicX := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic X", Topic: "next", IssueType: "epic", Priority: 1})
+	outside := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Outside blocker", Topic: "next", IssueType: "bug", Priority: 0, ParentID: epicX.ID})
+	h.addDependency(first.ID, outside.ID)
+	h.addDependency(outside.ID, hidden.ID)
+
+	rows, details, epics := h.gather()
+	standings := claims.Standings{
+		laneOf(t, details, rowByID(t, rows, first.ID)): heldBy(selfAttribution),
+		laneOf(t, details, rowByID(t, rows, later.ID)): heldBy(selfAttribution),
+	}
+	var inView []annotation.AnnotatedIssue
+	for _, row := range rows {
+		if row.ID != hidden.ID {
+			inView = append(inView, row)
+		}
+	}
+
+	exhausted, ok := routeNext(inView, details, epics, standings, selfAttribution, focusScope{}).(Exhausted)
+	if !ok {
+		t.Fatal("routeNext did not answer Exhausted — every row in view waits on other work")
+	}
+	if len(exhausted.Blocked) != 1 || exhausted.Blocked[0].ID != outside.ID || exhausted.Blocked[0].Kind != reachNotReady {
+		t.Fatalf("exhausted.Blocked = %+v, want only %s, not ready — %s sits in our lane l", exhausted.Blocked, outside.ID, hidden.ID)
+	}
+	if msg := exhausted.Error(); strings.Contains(msg, "to stay, file") {
+		t.Fatalf("exhausted.Error() = %q, want no route to stay — %s clears when our own %s does", msg, outside.ID, hidden.ID)
+	}
+}
+
+// An epic blocking us is reported by the ticket under it that something here
+// can move. One of its tickets waits only on an outside event, another is held
+// by a label on itself: the epic reads as held by itself, through that ticket,
+// and the route to stay is offered, since settling that ticket is work here.
+func TestExhaustionReportsAnEpicBlockerByItsTicketHeldByItself(t *testing.T) {
+	h := newReadyTestHarness(t)
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
+	ours := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a"})
+	epicE := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic E", Topic: "next", IssueType: "epic", Priority: 1})
+	waits := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "E.1 waits", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicE.ID, Lane: "e1"})
+	held := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "E.2 needs design", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicE.ID, Lane: "e2", Labels: []string{NeedsDesignLabel}})
+	epicU := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic U", Topic: "next", IssueType: "epic", Priority: 1})
+	upstream := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Upstream release", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicU.ID, Labels: []string{ExternalLabel}})
+	h.addDependency(ours.ID, epicE.ID)
+	h.addDependency(waits.ID, upstream.ID)
+
+	rows, details, epics := h.gather()
+	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, ours.ID)): heldBy(selfAttribution)}
+
+	exhausted, ok := routeNext(rows, details, epics, standings, selfAttribution, focusScope{}).(Exhausted)
+	if !ok {
+		t.Fatal("routeNext did not answer Exhausted — nothing on the path is takeable")
+	}
+	if got := exhausted.Blocked[0]; got.ID != epicE.ID || got.Row.ID != held.ID || got.Kind != reachHeldByItself {
+		t.Fatalf("exhausted.Blocked[0] = {%s via %s, %v}, want {%s via %s, held by itself}", got.ID, got.Row.ID, got.Kind, epicE.ID, held.ID)
+	}
+	if msg := exhausted.Error(); !strings.Contains(msg, "to stay, file the ticket that clears a blocker") {
+		t.Fatalf("exhausted.Error() = %q, want the route to stay — %s is held by a label someone here can settle", msg, held.ID)
+	}
+}
+
+// A row of ours waiting behind an earlier ticket of its own lane waits on our
+// own work, even when a filter keeps that ticket out of view: its lane is the
+// row's own, so it is inside the scope and never a blocker to clear from
+// outside. Collected, it would draw a route to stay that files a ticket in our
+// epic and asks for a blocked-by edge lit refuses between two of its tickets.
+func TestExhaustionNeverNamesAnEarlierLaneMateOutOfViewAsABlocker(t *testing.T) {
+	h := newReadyTestHarness(t)
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
+	earlier := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Earlier in our lane", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "ours"})
+	later := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Later in our lane", Topic: "next", IssueType: "bug", Priority: 0, ParentID: epicA.ID, Lane: "ours"})
+
+	rows, details, epics := h.gather()
+	standings := claims.Standings{
+		laneOf(t, details, rowByID(t, rows, later.ID)): heldBy(selfAttribution),
+	}
+	// The narrowed gather `lit next --type bug` makes: the earlier ticket is
+	// open and ready, and simply not in this run's rows.
+	var inView []annotation.AnnotatedIssue
+	for _, row := range rows {
+		if row.ID != earlier.ID {
+			inView = append(inView, row)
+		}
+	}
+
+	outcome := routeNext(inView, details, epics, standings, selfAttribution, focusScope{})
+	exhausted, ok := outcome.(Exhausted)
+	if !ok {
+		t.Fatalf("routeNext = %#v (%T), want Exhausted — the only row in view waits on our own lane", outcome, outcome)
+	}
+	for _, blocked := range exhausted.Blocked {
+		if blocked.ID == earlier.ID {
+			t.Fatalf("exhausted.Blocked = %+v, want no %s — it is the earlier ticket of our own lane", exhausted.Blocked, earlier.ID)
+		}
+	}
+	if msg := exhausted.Error(); strings.Contains(msg, "to stay, file") {
+		t.Fatalf("exhausted.Error() = %q, want no route to stay — nothing outside the scope blocks it", msg)
+	}
+}
+
 // A blocker this run cannot see. gatherWorkableAnnotated narrows rows by
 // --type/--labels/--assignee and to leaves, while the OpenDependency
 // annotation comes from the store, so `lit next --type bug` can be gated by a
@@ -891,12 +1002,14 @@ func TestExhaustionNamesABlockerOutsideThisViewAsSuch(t *testing.T) {
 	}
 }
 
-// A blocker nobody holds, blocked by a further dependency of its own. It is
-// unreachable for a readiness reason, not a claims reason, so the diagnostic
-// must not name a holder — the agent's next move is down the chain, not to
-// stand down. The further dependency's lane is held elsewhere, so nothing
-// outside the epic is ready and the diagnostic is the whole answer.
-func TestExhaustionNamesAnUnreadyBlockerWithoutNamingAHolder(t *testing.T) {
+// A blocker nobody holds, blocked by a further dependency of its own whose lane
+// another checkout holds: a chain with nothing takeable anywhere along it. The
+// walk descends to the further dependency and offers nothing, so the diagnostic
+// is the whole answer, and it names each link by its own reach — the blocker as
+// not startable, never as held, since its lane is unclaimed, and the further
+// dependency as held. That end is held, not awaiting an outside event, so the
+// route to stay is still offered against it.
+func TestExhaustionNamesEachLinkOfAStuckChainByItsOwnReach(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
@@ -935,14 +1048,17 @@ func TestExhaustionNamesAnUnreadyBlockerWithoutNamingAHolder(t *testing.T) {
 		t.Fatalf("exhausted.Blocked = %v, want it to name %q", exhausted.Blocked, dep.ID)
 	}
 	msg := exhausted.Error()
-	if !strings.Contains(msg, "not startable right now") {
-		t.Fatalf("exhausted.Error() = %q, want %q named as not startable", msg, dep.ID)
+	if want := "blocked by " + dep.ID + " (on your path but not startable right now"; !strings.Contains(msg, want) {
+		t.Fatalf("exhausted.Error() = %q, want %q", msg, want)
 	}
-	if strings.Contains(msg, "claimed by another checkout") {
-		t.Fatalf("exhausted.Error() = %q, want no holder named for %q — its lane is unclaimed", msg, dep.ID)
+	if want := "blocked by " + deeper.ID + " (on your path but claimed by another checkout right now)"; !strings.Contains(msg, want) {
+		t.Fatalf("exhausted.Error() = %q, want %q — the walk reaches the blocker's own blocker and names who holds it", msg, want)
 	}
 	if strings.Contains(msg, "`lit start` it") {
 		t.Fatalf("exhausted.Error() = %q, want no instruction to start %q — it is blocked by %q", msg, dep.ID, deeper.ID)
+	}
+	if !strings.Contains(msg, "to stay, file the ticket that clears a blocker") {
+		t.Fatalf("exhausted.Error() = %q, want the route to stay — the chain ends at %q, which an outside event does not hold", msg, deeper.ID)
 	}
 }
 
@@ -956,7 +1072,7 @@ func TestExhaustionNamesTheScopesOwnTicketHeldByALabel(t *testing.T) {
 		note  string
 	}{
 		{label: ExternalLabel, note: "on your path but waiting on an event outside this repository"},
-		{label: NeedsDesignLabel, note: "on your path but not startable right now"},
+		{label: NeedsDesignLabel, note: "on your path but held by something about the ticket itself"},
 	} {
 		t.Run(tc.label, func(t *testing.T) {
 			h := newReadyTestHarness(t)
@@ -1527,8 +1643,8 @@ func TestEveryReachKindHasWordsInBothDiagnostics(t *testing.T) {
 	// passedOver sees; and it asks reachOf about gathered rows only. So
 	// reachOutOfView is unreachable there, and words for it would describe an
 	// answer that walk can never give.
-	exhaustedSpeaks := []reachKind{reachHeldFresh, reachNotReady, reachAwaitingOutside, reachOutOfView}
-	poolSpeaks := []reachKind{reachHeldFresh, reachNotReady, reachAwaitingOutside, reachOffFocusPath}
+	exhaustedSpeaks := []reachKind{reachHeldFresh, reachHeldByItself, reachNotReady, reachAwaitingOutside, reachOutOfView}
+	poolSpeaks := []reachKind{reachHeldFresh, reachHeldByItself, reachNotReady, reachAwaitingOutside, reachOffFocusPath}
 
 	// reachTakeable is the one kind routing acts on instead of reporting: steps
 	// 1b and 2b serve it. It means something without a walk that says it.

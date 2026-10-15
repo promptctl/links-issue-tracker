@@ -12,6 +12,7 @@ import (
 var reachKindNames = [reachKindCount]string{
 	reachTakeable:        "takeable",
 	reachHeldFresh:       "held_fresh",
+	reachHeldByItself:    "held_by_itself",
 	reachNotReady:        "not_ready",
 	reachAwaitingOutside: "awaiting_outside",
 	reachOutOfView:       "out_of_view",
@@ -38,11 +39,17 @@ func reachFacts(rows []rowReach) []reachFact {
 // nextDecision is what one routeNext answer puts on the invocation's event.
 // Every field is recorded on every run, so an empty list says the walk named
 // nothing of that kind, and a nil Picked says it picked nothing.
+//
+// DependencyPath is a dependency pick's whole chain: the row of ours it gates,
+// every prerequisite between — an epic followed by the ticket under it the
+// walk went through — then the dependency it is work toward. Its length is how
+// deep the walk went to find the pick.
 type nextDecision struct {
-	Outcome     string
-	Picked      *string
-	Exhaustion  Exhausted
-	Unreachable []rowReach
+	Outcome        string
+	Picked         *string
+	DependencyPath []string
+	Exhaustion     Exhausted
+	Unreachable    []rowReach
 }
 
 func decideNextEvent(outcome NextOutcome) nextDecision {
@@ -57,7 +64,12 @@ func decideNextEvent(outcome NextOutcome) nextDecision {
 	case ServedFromNewLane:
 		return nextDecision{Outcome: "served_from_new_lane", Picked: picked(o.Row.ID)}
 	case ServedFromDependency:
-		return nextDecision{Outcome: "served_from_dependency", Picked: picked(o.Row.ID)}
+		path := []string{o.Gates}
+		for _, h := range o.Via {
+			path = append(path, h.ids()...)
+		}
+		path = append(path, o.Blocker)
+		return nextDecision{Outcome: "served_from_dependency", Picked: picked(o.Row.ID), DependencyPath: path}
 	case ServedPastExhaustion:
 		return nextDecision{Outcome: "served_past_exhaustion", Picked: picked(o.Row.ID), Exhaustion: o.Exhaustion}
 	case Exhausted:
@@ -69,15 +81,17 @@ func decideNextEvent(outcome NextOutcome) nextDecision {
 }
 
 // recordNextEvent puts what routeNext decided on the invocation's event: the
-// outcome, the ticket it picked, every row its diagnostics named with what this
-// checkout may do about each, whether it offered the route that stays in the
-// scope, and how many rows it routed over. Its stdout says the same in prose,
+// outcome, the ticket it picked and the chain a dependency pick was reached
+// through, every row its diagnostics named with what this checkout may do about
+// each, whether it offered the route that stays in the scope, and how many rows
+// it routed over. Its stdout says the same in prose,
 // for the session that ran it; this is what is left of it afterwards.
 // [LAW:nothing-unseen]
 func recordNextEvent(ctx context.Context, outcome NextOutcome, gathered int) {
 	decision := decideNextEvent(outcome)
 	telemetry.Set(ctx, "next.outcome", decision.Outcome)
 	telemetry.Set(ctx, "next.picked", decision.Picked)
+	telemetry.Set(ctx, "next.dependency_path", append([]string{}, decision.DependencyPath...))
 	telemetry.Set(ctx, "next.exhausted_epics", append([]string{}, decision.Exhaustion.Epics...))
 	telemetry.Set(ctx, "next.blocked", reachFacts(decision.Exhaustion.Blocked))
 	telemetry.Set(ctx, "next.held", reachFacts(decision.Exhaustion.Held))
