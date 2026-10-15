@@ -316,9 +316,9 @@ func TestAdaptedCommandsKeepTheirUsageSentence(t *testing.T) {
 //
 // It reads the shipped flag set, through the same --help block the caller is
 // shown, and refuses to pass having looked at nothing. A FRESH cobraFlagSet
-// per path would hold only cobra's auto-added help flag — which the filter
-// below skips — so it would inspect zero real flags and pass no matter what any
-// leaf declared. [LAW:verifiable-goals]
+// per path would hold only the help flag newCobraFlagSet declares — which the
+// filter below skips — so it would inspect zero real flags and pass no matter
+// what any leaf declared. [LAW:verifiable-goals]
 func TestNoValueTakingShorthandExists(t *testing.T) {
 	t.Parallel()
 	// Cobra renders a shorthand as "  -f, --field string".
@@ -337,7 +337,7 @@ func TestNoValueTakingShorthandExists(t *testing.T) {
 		inspected++
 		for _, m := range shorthand.FindAllStringSubmatch(rendered, -1) {
 			if m[2] == "help" {
-				// Cobra's own -h: a boolean, so it consumes nothing and cannot
+				// The help flag's -h: a boolean, so it consumes nothing and cannot
 				// make a cluster ambiguous.
 				continue
 			}

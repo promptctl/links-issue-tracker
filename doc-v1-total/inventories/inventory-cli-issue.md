@@ -117,16 +117,16 @@ into* one of those, the call and its observable effect are recorded here.
 
 ### 1.6 Per-command flag parsing (`cobraFlagSet`)
 
-- `newCobraFlagSet(use)` builds a throwaway cobra command with a default `--help`
-  flag installed and all output discarded (`cli.go`).
+- `newCobraFlagSet(use)` builds a throwaway cobra command that declares its own
+  `-h`/`--help` bool flag, with all output discarded (`flagset.go`).
 - Registration helpers: `String`, `Bool`, `Int` (`cli.go`), `StringArray`
   (repeatable, never comma-split — `cli.go`), `StringOptional`
   (`--flag` with no value takes `defaultIfPresent`, absent takes
   `defaultIfAbsent` — `cli.go`).
 - `parseFlagSet(fs, args, stdout)` (`flagset.go`) is the single parse boundary:
-  - On `pflag.ErrHelp` it prints `"Usage of <use>:\n"` followed by
-    `PrintDefaults()` **to stdout** and returns `errHelpHandled` → exit 0
-    (`cli.go`, printer at `cli.go`).
+  - A `--help` or `-h` that parses as true prints `"Usage of <use>:\n"`
+    followed by `PrintDefaults()` **to stdout** and returns `errHelpHandled`
+    → exit 0 (`flagset.go`); `--help=false` and `-h=false` are no request.
   - A `*pflag.NotExistError` whose parsed name the leaf declared retired with
     `fs.Retire` (from `--name` or `--name=<x>`; not `--namex`, and not `-name`,
     which pflag reads as a shorthand group) → `UnsupportedError` carrying that
@@ -139,8 +139,6 @@ into* one of those, the call and its observable effect are recorded here.
     syntax — → `UsageError{Message: err.Error()}` → exit 2 (`flagset.go`).
     A leaf-position `--output` is an ordinary unknown flag here; only
     `parseGlobalArgs` maps `--output` to `UnsupportedError`.
-  - A parsed-and-changed `--help` flag also prints help and returns
-    `errHelpHandled` (`cli.go`).
 
 ### 1.7 Positional/flag splitting (`splitArgs`)
 
@@ -1911,7 +1909,7 @@ updated <n> issues
   `PrefixState.Stored()`, never `Mintable()`, so it is the repair
   `stored_prefix_refused` names.
 - `prefixFamily` (`prefix.go`), dispatched by `resolve` (`register.go`): a
-  first argument of `-h`/`--help` answers help; any other invocation whose
+  first argument of `-h`/`--help` that parses as true answers help; any other invocation whose
   `args[0]` is not the literal `set` (including no args) →
   `UsageError{"usage: lit prefix set <new-prefix> [--apply]"}` → exit 2.
 - `prefixSetLeaf` (`prefix.go`): one positional, flag `--apply` (bool, false,

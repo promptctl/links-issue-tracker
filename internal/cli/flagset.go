@@ -34,6 +34,11 @@ type cobraFlagSet struct {
 	// [LAW:one-source-of-truth] The help answer is carried whole by the value
 	// that renders it; nothing points outward at a file to finish the sentence.
 	detail string
+	// help is the parsed value of this command's -h/--help flag. Its value is
+	// the help request, not its presence: `--help=false` sets the flag and asks
+	// for nothing, exactly as the root reads its own help flag.
+	// [LAW:one-source-of-truth] the parsed bool is the request.
+	help *bool
 	// retired maps each flag this command no longer accepts to the sentence
 	// naming what to run instead. A retirement belongs to the command it was
 	// retired from, so `lit show --assignee` stays an ordinary unknown flag
@@ -47,17 +52,21 @@ func newCobraFlagSet(use string) *cobraFlagSet {
 		SilenceErrors: true,
 		SilenceUsage:  true,
 	}
-	cmd.InitDefaultHelpFlag()
-	// Cobra writes that flag's text from cmd.Name(), which is the FIRST word of
-	// Use — so every multi-word leaf would describe itself by its family: `rank
-	// set` advertising "help for rank", `dep add` "help for dep". A leaf's name
-	// here is its whole invocation path, which is what the caller typed and what
-	// the surrounding "Usage of rank set:" line already says.
-	cmd.Flags().Lookup("help").Usage = "help for " + use
+	// Declared here rather than by cobra's InitDefaultHelpFlag, whose text comes
+	// from cmd.Name(), the FIRST word of Use — so every multi-word leaf would
+	// describe itself by its family: `rank set` advertising "help for rank",
+	// `dep add` "help for dep". A leaf's name here is its whole invocation path,
+	// which is what the caller typed and what the surrounding "Usage of rank
+	// set:" line already says.
+	// [LAW:no-silent-failure] exception: unlike the Bools below it accepts a
+	// repeat, keeping the last value, because rewriteHelpCommand adds one to
+	// whatever the caller typed, so `lit help ls --help` reaches the leaf
+	// holding two. The root's help flag accepts a repeat the same way.
+	help := cmd.Flags().BoolP("help", "h", false, "help for "+use)
 	cmd.SetOut(io.Discard)
 	cmd.SetErr(io.Discard)
 	cmd.Flags().SetOutput(io.Discard)
-	return &cobraFlagSet{cmd: cmd, retired: map[string]string{}}
+	return &cobraFlagSet{cmd: cmd, help: help, retired: map[string]string{}}
 }
 
 func (fs *cobraFlagSet) SetOutput(w io.Writer) {
@@ -178,14 +187,7 @@ func (fs *cobraFlagSet) printHelp(helpOutput io.Writer) error {
 func parseFlagSet(fs *cobraFlagSet, args []string, stdout io.Writer) error {
 	fs.SetOutput(io.Discard)
 	if err := fs.Parse(args); err != nil {
-		if errors.Is(err, pflag.ErrHelp) {
-			// [LAW:single-enforcer] Flag help rendering is normalized in one Cobra parser path.
-			if helpErr := fs.printHelp(stdout); helpErr != nil {
-				return helpErr
-			}
-			return errHelpHandled
-		}
-		// Past ErrHelp, pflag's Parse fails only with its four typed errors — an
+		// pflag's Parse fails only with its four typed errors — an
 		// unknown flag, a missing value, an invalid value, bad syntax — and every
 		// one is the caller mis-writing the command line. So all of them are one
 		// UsageError, the same answer the root FlagErrorFunc gives. Classifying
@@ -203,8 +205,10 @@ func parseFlagSet(fs *cobraFlagSet, args []string, stdout io.Writer) error {
 		}
 		return UsageError{Message: err.Error()}
 	}
-	if helpFlag := fs.cmd.Flags().Lookup("help"); helpFlag != nil && helpFlag.Changed {
-		// [LAW:single-enforcer] Parsed help flags follow the same Cobra help rendering path as explicit help errors.
+	// pflag answers ErrHelp only for a help flag the set does not declare, and
+	// newCobraFlagSet declares both -h and --help, so this is the one place a
+	// leaf recognises help. [LAW:single-enforcer]
+	if *fs.help {
 		if helpErr := fs.printHelp(stdout); helpErr != nil {
 			return helpErr
 		}
@@ -247,9 +251,9 @@ func (fs *cobraFlagSet) flagTakesValue(token string) bool {
 		// A cluster like `-abc` matches no arm and so consumes nothing. That is
 		// correct for this binary and checked rather than assumed: lit declares
 		// no value-taking shorthand at all (TestNoValueTakingShorthandExists),
-		// and cobra's own -h is boolean. The first `-v <value>` anyone adds would
-		// need this arm to understand clusters, which is why the test names the
-		// condition instead of leaving it to be rediscovered.
+		// and the help flag's -h is boolean. The first `-v <value>` anyone adds
+		// would need this arm to understand clusters, which is why the test names
+		// the condition instead of leaving it to be rediscovered.
 	}
 	if flag == nil {
 		return false

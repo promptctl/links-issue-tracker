@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A command's help flag is read for its value, at every level. A command such as `lit ls` printed its help page whenever `-h` or `--help` was given, whatever its value, so `lit ls --help=false` printed `Usage of ls:` instead of listing; a command group recognised only the bare spellings, so `lit dep --help=true` was refused as a usage error and `lit workflows --help=true` printed a bare flag table in place of the workflows help. Now `--help=true` and `-h=true` answer exactly as `--help` does, and `--help=false` runs the command as if the flag were absent. (links-cli-b67u)
+
 ## [0.17.0] - 2026-10-15
 
 ### Changed

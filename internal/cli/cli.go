@@ -218,11 +218,19 @@ func resolveWorkspaceFromWD(requested workspace.PrefixRequest) (workspace.Info, 
 // A topic naming no command is rewritten like any other: `lit nosuchcmd --help`
 // reaches the root, which refuses the name with lit's typed error — the exit
 // code and remediation cobra's bare "Unknown help topic" never carried.
+//
+// The --help lands ahead of any `--` terminator, the last place it is still a
+// flag: `lit help ls -- x` asks for ls's help, not for a positional "--help".
 func rewriteHelpCommand(args []string) []string {
 	if len(args) < 2 || args[0] != "help" || strings.HasPrefix(args[1], "-") {
 		return args
 	}
-	return append(slices.Clone(args[1:]), "--help")
+	topic := slices.Clone(args[1:])
+	terminator := slices.Index(topic, "--")
+	if terminator < 0 {
+		terminator = len(topic)
+	}
+	return slices.Insert(topic, terminator, "--help")
 }
 
 func parseGlobalArgs(args []string) ([]string, error) {
