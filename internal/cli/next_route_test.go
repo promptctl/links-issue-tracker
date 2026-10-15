@@ -885,6 +885,61 @@ func TestRouteNextExhaustedNamesThePoolTicketAFilterHid(t *testing.T) {
 	}
 }
 
+// The diagnostics answer the run's question, so under a filter they name only
+// rows it selects. Off the focus path lie a ready bug and a ready task; asked
+// for bugs, the exhausted epic names the bug and not the task.
+func TestRouteNextExhaustionUnderAFilterNamesOnlyWithheldRowsItSelects(t *testing.T) {
+	h := newReadyTestHarness(t)
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
+	h.transition(a1.ID, model.Start{Assignee: "tester"})
+	h.transition(a1.ID, model.Done{})
+	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
+	epicX := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic X", Topic: "next", IssueType: "epic", Priority: 1})
+	offBug := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Bug off the path", Topic: "next", IssueType: "bug", Priority: 0, ParentID: epicX.ID, Lane: "bug"})
+	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Task off the path", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicX.ID, Lane: "task"})
+
+	rows, details, epics := h.gather()
+	standings := claims.Standings{
+		model.LaneOf(a1, &epicA):                    heldBy(selfAttribution),
+		laneOf(t, details, rowByID(t, rows, a2.ID)): heldBy(otherAttribution),
+	}
+	focused := focusScope{goals: []string{"test-goal"}}
+
+	outcome := routeNext(rows, details, epics, standings, selfAttribution, focused, onlyBugs(t))
+	exhausted, ok := outcome.(Exhausted)
+	if !ok {
+		t.Fatalf("routeNext = %#v (%T), want Exhausted — the focus path holds nothing ready", outcome, outcome)
+	}
+	if len(exhausted.OffPath) != 1 || exhausted.OffPath[0].ID != offBug.ID {
+		t.Fatalf("exhausted.OffPath = %+v, want exactly [%s] — the task off the path is not what this run asked for", exhausted.OffPath, offBug.ID)
+	}
+}
+
+// With nothing ready anywhere, NoWork under a filter names the rows it walked
+// past that the filter selects: the bug another checkout holds, not the task.
+func TestRouteNextNoWorkUnderAFilterNamesOnlyRowsItSelects(t *testing.T) {
+	h := newReadyTestHarness(t)
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "next", IssueType: "epic", Priority: 1})
+	bug := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Their bug", Topic: "next", IssueType: "bug", Priority: 0, ParentID: epic.ID, Lane: "bug"})
+	task := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Their task", Topic: "next", IssueType: "task", Priority: 0, ParentID: epic.ID, Lane: "task"})
+
+	rows, details, epics := h.gather()
+	standings := claims.Standings{
+		laneOf(t, details, rowByID(t, rows, bug.ID)):  heldBy(otherAttribution),
+		laneOf(t, details, rowByID(t, rows, task.ID)): heldBy(otherAttribution),
+	}
+
+	outcome := routeNext(rows, details, epics, standings, selfAttribution, focusScope{}, onlyBugs(t))
+	noWork, ok := outcome.(NoWork)
+	if !ok {
+		t.Fatalf("routeNext = %#v (%T), want NoWork — nothing is ready, filter or not", outcome, outcome)
+	}
+	if len(noWork.Unreachable) != 1 || noWork.Unreachable[0].ID != bug.ID {
+		t.Fatalf("unreachable = %+v, want exactly [%s] — the task is not what this run asked for", noWork.Unreachable, bug.ID)
+	}
+}
+
 // A checkout holding no lane, asking for bugs in a backlog whose one ready
 // ticket is a task: the filter emptied the pool, not the backlog, so the answer
 // is Narrowed naming the task. The control adds a ready bug, which is served.
