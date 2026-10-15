@@ -57,12 +57,14 @@ func newCobraFlagSet(use string) *cobraFlagSet {
 	// describe itself by its family: `rank set` advertising "help for rank",
 	// `dep add` "help for dep". A leaf's name here is its whole invocation path,
 	// which is what the caller typed and what the surrounding "Usage of rank
-	// set:" line already says.
-	help := cmd.Flags().BoolP("help", "h", false, "help for "+use)
+	// set:" line already says. It is a single-value flag like every Bool below,
+	// so a repeat is refused rather than decided by position.
+	fs := &cobraFlagSet{cmd: cmd, help: cmd.Flags().BoolP("help", "h", false, "help for "+use), retired: map[string]string{}}
+	fs.once("help")
 	cmd.SetOut(io.Discard)
 	cmd.SetErr(io.Discard)
 	cmd.Flags().SetOutput(io.Discard)
-	return &cobraFlagSet{cmd: cmd, help: help, retired: map[string]string{}}
+	return fs
 }
 
 func (fs *cobraFlagSet) SetOutput(w io.Writer) {
@@ -247,9 +249,9 @@ func (fs *cobraFlagSet) flagTakesValue(token string) bool {
 		// A cluster like `-abc` matches no arm and so consumes nothing. That is
 		// correct for this binary and checked rather than assumed: lit declares
 		// no value-taking shorthand at all (TestNoValueTakingShorthandExists),
-		// and cobra's own -h is boolean. The first `-v <value>` anyone adds would
-		// need this arm to understand clusters, which is why the test names the
-		// condition instead of leaving it to be rediscovered.
+		// and the help flag's -h is boolean. The first `-v <value>` anyone adds
+		// would need this arm to understand clusters, which is why the test names
+		// the condition instead of leaving it to be rediscovered.
 	}
 	if flag == nil {
 		return false

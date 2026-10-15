@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- A command's `--help=false` or `-h=false` is no longer a help request. Every command except `lit` itself printed its help page and exited 0 whenever the help flag was given, whatever its value, so `lit ls --help=false` printed `Usage of ls:` instead of listing, while `lit --help=false` already read the value. Every command now reads it: `--help=false` runs the command as if the flag were absent, and `--help`, `-h` and `--help=true` still print the help page. (links-cli-b67u)
+- A command's help flag is read for its value, at every level. A command such as `lit ls` printed its help page whenever `-h` or `--help` was given, whatever its value, so `lit ls --help=false` printed `Usage of ls:` instead of listing; a command group recognised only the bare spellings, so `lit dep --help=true` was refused as a usage error and `lit workflows --help=true` printed a bare flag table in place of the workflows help. Now `--help=true` and `-h=true` answer exactly as `--help` does, `--help=false` runs the command as if the flag were absent, and a repeated help flag (`lit ls --help --help`) is refused like any other repeated flag. (links-cli-b67u)
 
 ## [0.17.0] - 2026-10-15
 

@@ -192,14 +192,16 @@ func TestLeafHelpAnswersWithoutAcquiringResources(t *testing.T) {
 	}
 }
 
-// A leaf's help flag is a request only when its value is true (links-cli-b67u):
-// `lit ls --help=false` lists rather than answering with the help page, the same
-// reading the root gives `lit --help=false`. Every leaf parses through the one
-// parseFlagSet over a flag set newCobraFlagSet declared, so `ls` stands for all
-// of them. Outside a repo a listing cannot succeed, which tells "ran the command"
-// (an error, no help page) apart from "answered help" (nil, the page); the true
-// spellings are the other side of the pair. [LAW:behavior-not-structure]
-func TestLeafHelpFlagFollowsItsValue(t *testing.T) {
+// The help flag's value is the help request, at every level (links-cli-b67u):
+// a leaf and every command group answer `--help=true` exactly as they answer
+// `--help`, and `--help=false` is no request at all. Outside a repo nothing can
+// run, which tells "answered help" (nil, the page) apart from "did not" (an
+// error, nothing on stdout); a leaf's `--help=false` is pinned to the workspace
+// refusal, which only running the listing can produce. `ls` stands for every
+// leaf, since all of them parse through parseFlagSet over the set
+// newCobraFlagSet declared; the groups come from the registry.
+// [LAW:behavior-not-structure]
+func TestHelpFlagFollowsItsValue(t *testing.T) {
 	prevWD, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("Getwd() error = %v", err)
@@ -209,30 +211,42 @@ func TestLeafHelpFlagFollowsItsValue(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chdir(prevWD) })
 
-	for _, tc := range []struct {
-		flag     string
-		wantHelp bool
-	}{
-		{"--help", true},
-		{"-h", true},
-		{"--help=true", true},
-		{"-h=true", true},
-		{"--help=false", false},
-		{"-h=false", false},
-	} {
-		args := []string{"ls", tc.flag}
+	run := func(args ...string) (string, error) {
 		var stdout, stderr bytes.Buffer
-		runErr := Run(context.Background(), &stdout, &stderr, args)
-		named, answeredHelp := leafHelpSubject(stdout.String())
-		if tc.wantHelp {
-			if runErr != nil || !answeredHelp || named != "ls" {
-				t.Errorf("Run(%v) = (err %v, stdout %q), want the ls help page at success", args, runErr, stdout.String())
-			}
-			continue
+		err := Run(context.Background(), &stdout, &stderr, args)
+		return stdout.String(), err
+	}
+	with := func(path []string, flag string) []string {
+		return append(append([]string{}, path...), flag)
+	}
+
+	for _, path := range append([][]string{{"ls"}}, commandGroupPaths()...) {
+		page, err := run(with(path, "--help")...)
+		if err != nil || page == "" {
+			t.Fatalf("Run(%v) = (err %v, stdout %q), want the help page at success", with(path, "--help"), err, page)
 		}
+		for _, flag := range []string{"-h", "--help=true", "-h=true"} {
+			if got, err := run(with(path, flag)...); err != nil || got != page {
+				t.Errorf("Run(%v) = (err %v, stdout %q), want the page `--help` answers: %q", with(path, flag), err, got, page)
+			}
+		}
+		for _, flag := range []string{"--help=false", "-h=false"} {
+			if got, err := run(with(path, flag)...); err == nil || got != "" {
+				t.Errorf("Run(%v) = (err %v, stdout %q), want no help answered: an error and nothing on stdout", with(path, flag), err, got)
+			}
+		}
+	}
+
+	var outside OutsideWorkspaceError
+	if _, err := run("ls", "--help=false"); !errors.As(err, &outside) {
+		t.Errorf("Run([ls --help=false]) error = %v, want the listing run: OutsideWorkspaceError", err)
+	}
+	// Its value being the request, a repeated help flag is refused like any
+	// other single-value flag, in either order. [LAW:no-silent-failure]
+	for _, args := range [][]string{{"ls", "--help", "--help=false"}, {"ls", "--help=false", "--help"}} {
 		var usage UsageError
-		if runErr == nil || errors.As(runErr, &usage) || strings.Contains(stdout.String(), "Usage of ") {
-			t.Errorf("Run(%v) = (err %v, stdout %q), want the listing attempted: a non-usage error outside a repo and no help page", args, runErr, stdout.String())
+		if got, err := run(args...); !errors.As(err, &usage) || got != "" {
+			t.Errorf("Run(%v) = (err %v, stdout %q), want a UsageError refusing the repeat", args, err, got)
 		}
 	}
 }

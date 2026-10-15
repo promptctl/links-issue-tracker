@@ -1909,7 +1909,7 @@ updated <n> issues
   `PrefixState.Stored()`, never `Mintable()`, so it is the repair
   `stored_prefix_refused` names.
 - `prefixFamily` (`prefix.go`), dispatched by `resolve` (`register.go`): a
-  first argument of `-h`/`--help` answers help; any other invocation whose
+  first argument of `-h`/`--help` that parses as true answers help; any other invocation whose
   `args[0]` is not the literal `set` (including no args) →
   `UsageError{"usage: lit prefix set <new-prefix> [--apply]"}` → exit 2.
 - `prefixSetLeaf` (`prefix.go`): one positional, flag `--apply` (bool, false,

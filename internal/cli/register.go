@@ -165,10 +165,14 @@ func (f commandFamily[P]) resolve(args []string) (P, error) {
 	return zero, UsageError{Message: f.usage}
 }
 
-// isHelpFlag is the one definition of what a help-shaped argv token is; both
-// recognition points in resolve read it. [LAW:one-source-of-truth]
+// isHelpFlag is the one definition of a help request at a family's argv
+// position: the token parsed by the help flag every leaf declares, so its value
+// is the request at every level — `--help=true` asks, `--help=false` does not.
+// A token that does not parse as that flag is no request, and falls through to
+// the family's own refusal. [LAW:one-source-of-truth]
 func isHelpFlag(arg string) bool {
-	return arg == "-h" || arg == "--help"
+	fs := newCobraFlagSet("")
+	return fs.Parse([]string{arg}) == nil && *fs.help
 }
 
 // visibleSubcommands projects the family's advertised first-argument names for
