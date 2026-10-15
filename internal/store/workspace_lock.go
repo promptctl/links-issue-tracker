@@ -10,8 +10,6 @@ import (
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/promptctl/primitives/filelock"
-
-	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // [LAW:single-enforcer] Workspace-exclusivity lock acquisition lives here so
@@ -358,6 +356,15 @@ var errLockHeld = errors.New("lock held")
 // ran out in the wait learns who it was waiting on.
 // [LAW:single-enforcer]
 func acquireStoreLock(ctx context.Context, storageDir, lockPath string, exclusive bool, wait time.Duration) (func() error, error) {
+	return acquireStoreLockOn(ctx, time.Now, storageDir, lockPath, exclusive, wait)
+}
+
+// acquireStoreLockOn is acquireStoreLock with the wait measured on now, the
+// one input every contender shares and a test replaces: a test that steps its
+// own clock drives the whole acquisition, policy and all, through instants it
+// chose, so no assertion about the wait depends on how fast the machine runs.
+// [LAW:effects-at-boundaries]
+func acquireStoreLockOn(ctx context.Context, now func() time.Time, storageDir, lockPath string, exclusive bool, wait time.Duration) (func() error, error) {
 	// Deferred, not called after the acquire: the reporter is a goroutine
 	// whose only other exit is ctx.Done(), and callers pass
 	// context.Background(), so a panic in the acquire would strand it waking
@@ -369,7 +376,7 @@ func acquireStoreLock(ctx context.Context, storageDir, lockPath string, exclusiv
 	// tries, or from filelock's own entry check on the next try — and this is
 	// what still knows a holder was in front of it.
 	var sawHeld bool
-	policy := newHoldWait(storageDir, lockPath, func() time.Duration { return wait }, storage.SystemClock)
+	policy := newHoldWait(storageDir, lockPath, func() time.Duration { return wait }, now)
 	err := backoff.Retry(func() error {
 		acquiredRelease, acquired, err := filelock.Acquire(ctx, lockPath, exclusive, 1, 0)
 		if err != nil {

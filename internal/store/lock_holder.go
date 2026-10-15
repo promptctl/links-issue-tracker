@@ -15,8 +15,6 @@ import (
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/promptctl/primitives/filelock"
-
-	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // This file answers the one question an flock cannot: WHO is holding it. The
@@ -466,19 +464,20 @@ func renderHolderCommand(command string) string {
 type holdWait struct {
 	dir   string
 	wait  func() time.Duration
-	now   storage.Clock
+	now   func() time.Time
 	known map[string]struct{}
 	since time.Time
 }
 
-// newHoldWait builds the policy for one lock. wait is read at Reset, not at
-// construction, so a policy built into a long-lived connector still waits the
-// figure a test has since shrunk. [LAW:one-source-of-truth] now is the clock
-// the wait is measured on: every contender passes storage.SystemClock, and a
-// test passes one it advances itself, so the rule is pinned by the instants
-// it is handed rather than by how fast a loaded machine runs.
+// newHoldWait builds the policy for one lock. wait is read at each poll, not
+// at construction, so a policy built into a long-lived connector still waits
+// the figure a test has since shrunk. [LAW:one-source-of-truth] now is the
+// clock the wait is measured on: every contender passes time.Now, whose
+// readings carry the monotonic clock, so a wall-clock step cannot shorten or
+// stretch a wait; a test passes one it advances itself, so the rule is pinned
+// by the instants it is handed rather than by how fast a loaded machine runs.
 // [LAW:effects-at-boundaries]
-func newHoldWait(storageDir, lockPath string, wait func() time.Duration, now storage.Clock) *holdWait {
+func newHoldWait(storageDir, lockPath string, wait func() time.Duration, now func() time.Time) *holdWait {
 	return &holdWait{dir: lockHolderDir(storageDir, lockPath), wait: wait, now: now}
 }
 
@@ -491,11 +490,14 @@ func (w *holdWait) Reset() {
 // NextBackOff is called after each failed attempt: it restarts the clock when
 // a holder has arrived since the last reading, and stops the retry when the
 // holders in front have stood for the whole wait.
+// One reading of the clock serves the whole decision, so the arrival and the
+// elapsed figure are measured at the same instant.
 func (w *holdWait) NextBackOff() time.Duration {
+	now := w.now()
 	if w.arrivals() {
-		w.since = w.now()
+		w.since = now
 	}
-	if w.now().Sub(w.since) >= w.wait() {
+	if now.Sub(w.since) >= w.wait() {
 		return backoff.Stop
 	}
 	return storeLockPollInterval
