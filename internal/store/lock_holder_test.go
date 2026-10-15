@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cenkalti/backoff/v4"
 	"github.com/promptctl/primitives/filelock"
 )
 
@@ -806,9 +807,16 @@ func treeUnder(t *testing.T, root string) []string {
 // counts from the last holder to arrive at the lock, not from the contender's
 // arrival. Shared holders hand the lock along for far longer than the wait,
 // each acquiring before the last releases so the lock is never free, and the
-// exclusive contender must still get it when the churn ends — the queue of
+// policy must keep the contender waiting for as long as they do — the queue of
 // short holders that sixteen concurrent `lit new` are, waited out rather than
-// refused. A pure elapsed budget fails this contender at the wait.
+// refused. A pure elapsed budget stops this contender at the wait. Once the
+// last holder stands still, the policy stops exactly one wait after it
+// arrived: no sooner, which is what shows the clock restarted on that arrival.
+//
+// The policy reads the instants this test hands it, so every gap between
+// arrivals is exactly the cadence however slowly the machine runs; the
+// holder records are real ones, minted by real acquisitions.
+// [LAW:no-ambient-temporal-coupling]
 func TestWaitOutlastsHoldersThatKeepChanging(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -818,49 +826,42 @@ func TestWaitOutlastsHoldersThatKeepChanging(t *testing.T) {
 		cadence = 100 * time.Millisecond
 		steps   = 8
 	)
+	instant := time.Unix(0, 0)
+	policy := newHoldWait(storageDirOf(lockPath), lockPath,
+		func() time.Duration { return wait }, func() time.Time { return instant })
 
-	churnDone := make(chan error, 1)
-	go func() {
-		previous, err := acquireStoreLock(ctx, storageDirOf(lockPath), lockPath, false, 0)
-		if err != nil {
-			churnDone <- err
-			return
-		}
-		for i := 0; i < steps; i++ {
-			time.Sleep(cadence)
-			next, err := acquireStoreLock(ctx, storageDirOf(lockPath), lockPath, false, 0)
-			if err != nil {
-				churnDone <- errors.Join(err, previous())
-				return
-			}
-			if err := previous(); err != nil {
-				churnDone <- errors.Join(err, next())
-				return
-			}
-			previous = next
-		}
-		time.Sleep(cadence)
-		churnDone <- previous()
-	}()
-
-	// Let the first shared holder land before contending, so the contender
-	// never wins an empty lock and the test's premise — a lock that is never
-	// free while the holders change — holds.
-	time.Sleep(cadence / 2)
-	start := time.Now()
-	release, err := acquireStoreLock(ctx, storageDirOf(lockPath), lockPath, true, wait)
-	elapsed := time.Since(start)
-	if churnErr := <-churnDone; churnErr != nil {
-		t.Fatalf("churning holders: %v", churnErr)
-	}
+	holder, err := acquireStoreLock(ctx, storageDirOf(lockPath), lockPath, false, 0)
 	if err != nil {
-		t.Fatalf("contender error = %v after %s; the wait gave up on holders that were making progress", err, elapsed)
+		t.Fatalf("first holder: %v", err)
 	}
-	if err := release(); err != nil {
-		t.Errorf("release: %v", err)
+	defer func() {
+		if err := holder(); err != nil {
+			t.Errorf("release last holder: %v", err)
+		}
+	}()
+	policy.Reset()
+	for step := 1; step <= steps; step++ {
+		instant = instant.Add(cadence)
+		next, err := acquireStoreLock(ctx, storageDirOf(lockPath), lockPath, false, 0)
+		if err != nil {
+			t.Fatalf("holder %d: %v", step+1, err)
+		}
+		if err := holder(); err != nil {
+			t.Fatalf("release holder %d: %v", step, err)
+		}
+		holder = next
+		if policy.NextBackOff() == backoff.Stop {
+			t.Fatalf("the wait stopped %s in, with a new holder arriving every %s against a %s wait; it gave up on holders that were making progress", time.Duration(step)*cadence, cadence, wait)
+		}
 	}
-	if elapsed < steps*cadence {
-		t.Fatalf("contender acquired after %s, before the churn (%s) ended; the lock was free when the premise says it never is", elapsed, steps*cadence)
+
+	instant = instant.Add(wait - time.Nanosecond)
+	if policy.NextBackOff() == backoff.Stop {
+		t.Fatalf("the wait stopped before the last holder had stood still for %s; it counted from an earlier arrival", wait)
+	}
+	instant = instant.Add(time.Nanosecond)
+	if got := policy.NextBackOff(); got != backoff.Stop {
+		t.Fatalf("NextBackOff() = %s once the last holder had stood still for %s, want backoff.Stop", got, wait)
 	}
 }
 

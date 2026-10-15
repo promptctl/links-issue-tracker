@@ -15,6 +15,8 @@ import (
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/promptctl/primitives/filelock"
+
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // This file answers the one question an flock cannot: WHO is holding it. The
@@ -464,20 +466,25 @@ func renderHolderCommand(command string) string {
 type holdWait struct {
 	dir   string
 	wait  func() time.Duration
+	now   storage.Clock
 	known map[string]struct{}
 	since time.Time
 }
 
 // newHoldWait builds the policy for one lock. wait is read at Reset, not at
 // construction, so a policy built into a long-lived connector still waits the
-// figure a test has since shrunk. [LAW:one-source-of-truth]
-func newHoldWait(storageDir, lockPath string, wait func() time.Duration) *holdWait {
-	return &holdWait{dir: lockHolderDir(storageDir, lockPath), wait: wait}
+// figure a test has since shrunk. [LAW:one-source-of-truth] now is the clock
+// the wait is measured on: every contender passes storage.SystemClock, and a
+// test passes one it advances itself, so the rule is pinned by the instants
+// it is handed rather than by how fast a loaded machine runs.
+// [LAW:effects-at-boundaries]
+func newHoldWait(storageDir, lockPath string, wait func() time.Duration, now storage.Clock) *holdWait {
+	return &holdWait{dir: lockHolderDir(storageDir, lockPath), wait: wait, now: now}
 }
 
 // Reset starts the clock and takes the first reading of who is there.
 func (w *holdWait) Reset() {
-	w.known, w.since = map[string]struct{}{}, time.Now()
+	w.known, w.since = map[string]struct{}{}, w.now()
 	w.arrivals()
 }
 
@@ -486,9 +493,9 @@ func (w *holdWait) Reset() {
 // holders in front have stood for the whole wait.
 func (w *holdWait) NextBackOff() time.Duration {
 	if w.arrivals() {
-		w.since = time.Now()
+		w.since = w.now()
 	}
-	if time.Since(w.since) >= w.wait() {
+	if w.now().Sub(w.since) >= w.wait() {
 		return backoff.Stop
 	}
 	return storeLockPollInterval

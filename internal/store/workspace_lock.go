@@ -10,6 +10,8 @@ import (
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/promptctl/primitives/filelock"
+
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // [LAW:single-enforcer] Workspace-exclusivity lock acquisition lives here so
@@ -367,7 +369,7 @@ func acquireStoreLock(ctx context.Context, storageDir, lockPath string, exclusiv
 	// tries, or from filelock's own entry check on the next try — and this is
 	// what still knows a holder was in front of it.
 	var sawHeld bool
-	policy := newHoldWait(storageDir, lockPath, func() time.Duration { return wait })
+	policy := newHoldWait(storageDir, lockPath, func() time.Duration { return wait }, storage.SystemClock)
 	err := backoff.Retry(func() error {
 		acquiredRelease, acquired, err := filelock.Acquire(ctx, lockPath, exclusive, 1, 0)
 		if err != nil {

@@ -3152,7 +3152,7 @@ func awaitEngineOpen(ctx context.Context, doltRootDir string, open func(context.
 // per connector — backoff state is per-open, and the connector Resets it
 // before each engine open. [LAW:one-source-of-truth]
 func newEngineOpenBackOff(doltRootDir string) backoff.BackOff {
-	return newHoldWait(workspaceStorageDir(doltRootDir), DoltJournalLockPath(doltRootDir), coResidentHolderWaitNow)
+	return newHoldWait(workspaceStorageDir(doltRootDir), DoltJournalLockPath(doltRootDir), coResidentHolderWaitNow, storage.SystemClock)
 }
 
 // coResidentHolderWaitNow reads the wait at the moment a contender needs it,
