@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
@@ -160,5 +161,70 @@ func TestRunDoctorSurfacesUnresolvedFreshness(t *testing.T) {
 	}
 	if !strings.Contains(got, "sync: freshness unavailable") {
 		t.Fatalf("runDoctor() output missing unresolved freshness line: %q", got)
+	}
+}
+
+// A ticket outside an epic has no field on the status line, so the warning line
+// is the only place doctor names it. One ticket is left with no parent and one is
+// put under a task, the two shapes no write accepts, planted the way a recovery
+// rebuild or a lit older than v7 leaves them; doctor prints each by id with the
+// `lit parent set` that moves it, and drops none of the report's warnings.
+func TestDoctorPrintsEachTicketOutsideAnEpic(t *testing.T) {
+	h := newReadyTestHarness(t)
+	epic := h.createIssue(storage.CreateIssueInput{Title: "E", Topic: "hier", IssueType: "epic"})
+	loose := h.createIssue(storage.CreateIssueInput{Title: "loose", Topic: "hier", IssueType: "task", ParentID: epic.ID})
+	host := h.createIssue(storage.CreateIssueInput{Title: "host", Topic: "hier", IssueType: "task", ParentID: epic.ID})
+	under := h.createIssue(storage.CreateIssueInput{Title: "under", Topic: "hier", IssueType: "task", ParentID: epic.ID})
+
+	var clean bytes.Buffer
+	if err := runDoctor(h.ctx, &clean, h.ap, nil); err != nil {
+		t.Fatalf("runDoctor() on a contained hierarchy error = %v", err)
+	}
+	if strings.Contains(clean.String(), "warning: ") {
+		t.Fatalf("doctor on a contained hierarchy should print no warning; got:\n%s", clean.String())
+	}
+
+	raw, err := storage.TestSupport.Of(h.ap.Store)
+	if err != nil {
+		t.Fatalf("TestSupport: %v", err)
+	}
+	if err := raw.ExecRawForTest(h.ctx, `DELETE FROM relations WHERE type = 'parent-child' AND src_id IN (?, ?)`, loose.ID, under.ID); err != nil {
+		t.Fatalf("detach the tickets: %v", err)
+	}
+	if err := raw.ExecRawForTest(h.ctx,
+		`INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, 'parent-child', ?, 'import')`,
+		under.ID, host.ID, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatalf("plant a ticket under a task: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := runDoctor(h.ctx, &buf, h.ap, nil); err != nil {
+		t.Fatalf("runDoctor() error = %v, want exit 0: every read still answers over a ticket outside an epic", err)
+	}
+	got := buf.String()
+	for _, want := range []string{
+		"warning: tickets outside an epic: " + loose.ID + " (task) (every ticket except an epic lives inside one; move each into the epic it belongs to with 'lit parent set --child <id> --parent <epic-id>')\n",
+		"warning: tickets under a parent that is not an epic: " + under.ID + " under " + host.ID + " (task) (only an epic contains tickets; move each into the epic it belongs to with 'lit parent set --child <id> --parent <epic-id>')\n",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("doctor output missing %q:\n%s", want, got)
+		}
+	}
+	repairer, err := storage.Repair.Of(h.ap.Store)
+	if err != nil {
+		t.Fatalf("Repair: %v", err)
+	}
+	report, err := repairer.Doctor(h.ctx)
+	if err != nil {
+		t.Fatalf("Doctor() error = %v", err)
+	}
+	printed := 0
+	for line := range strings.Lines(got) {
+		if strings.HasPrefix(line, "warning: ") {
+			printed++
+		}
+	}
+	if printed != len(report.Warnings) {
+		t.Fatalf("doctor printed %d warning line(s) for a report holding %d: %v\n%s", printed, len(report.Warnings), report.Warnings, got)
 	}
 }

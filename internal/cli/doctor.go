@@ -327,6 +327,20 @@ func doctorFieldValue(report storage.HealthReport, field, value string) string {
 	return value
 }
 
+// printReportWarnings writes one `warning:` line per warning the health report
+// carries. The status line holds only counts, so a finding with no field there
+// (a ticket outside an epic) reaches the operator here or nowhere, and a finding
+// with one (a dependency cycle) gains the repair the field cannot name.
+// [LAW:no-silent-failure]
+func printReportWarnings(w io.Writer, warnings []string) error {
+	for _, warning := range warnings {
+		if _, err := fmt.Fprintf(w, "warning: %s\n", warning); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // diagnoseThenRepair runs the health check, then such repairs as it is safe to
 // run, and reports the state left behind.
 //
@@ -444,6 +458,9 @@ func doctorLeaf() appLeaf {
 			return err
 		}
 		if _, err := fmt.Fprintf(stdout, "integrity_check=%s foreign_key_issues=%d invalid_related_rows=%d orphan_history_rows=%d rank_inversions=%s dependency_cycle=%s parent_cycle=%s wait_loops=%s\n", report.IntegrityCheck, report.ForeignKeyIssues, report.InvalidRelatedRows, report.OrphanHistoryRows, rankInversions, dependencyCycle, parentCycle, waitLoopCount); err != nil {
+			return err
+		}
+		if err := printReportWarnings(stdout, report.Warnings); err != nil {
 			return err
 		}
 		if err := printWaitLoops(stdout, loops); err != nil {

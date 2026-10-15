@@ -175,6 +175,7 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/07-ops-commands-and-sync-engine.md", Text: "lit downgrade", Src: "usage: lit downgrade --to <version>"},
 	{Doc: "doc-v1-total/07-ops-commands-and-sync-engine.md", Text: "lit lifeboat", Src: "usage: lit lifeboat dump"},
 	{Doc: "doc-v1-total/07-ops-commands-and-sync-engine.md", Text: "lit ls --at <store-dir>", Src: "use `lit ls --at <store-dir>`"},
+	{Doc: "doc-v1-total/07-ops-commands-and-sync-engine.md", Text: "lit parent set", Src: "usage: lit parent set --child <id> --parent <id>"},
 	{Doc: "doc-v1-total/07-ops-commands-and-sync-engine.md", Text: "lit prefix set", Src: "usage: lit prefix set <new-prefix> [--apply]"},
 	{Doc: "doc-v1-total/07-ops-commands-and-sync-engine.md", Text: "lit quickstart", Src: "deeper guidance: lit quickstart "},
 	{Doc: "doc-v1-total/07-ops-commands-and-sync-engine.md", Text: "lit quickstart doctor", Src: "internal/templates/defaults/quickstart.md"},
