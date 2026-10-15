@@ -157,6 +157,7 @@ var cases = []engineCase{
 	{"create_under_missing_parent_is_not_found", createUnderMissingParent},
 	{"get_missing_issue_is_not_found", getMissingIssue},
 	{"apply_field_patch", applyFieldPatch},
+	{"an_assignee_no_filter_can_select_is_refused", anAssigneeNoFilterCanSelectIsRefused},
 	{"apply_status_transition", applyStatusTransition},
 	{"apply_missing_issue_is_not_found", applyMissingIssue},
 	{"apply_to_container_is_refused", applyToContainer},
@@ -381,6 +382,37 @@ func applyFieldPatch(t *testing.T, ctx context.Context, st storage.Store, clk *c
 	}
 	if read.Title != "after" {
 		t.Errorf("patch did not persist: Title = %q", read.Title)
+	}
+}
+
+// anAssigneeNoFilterCanSelectIsRefused pins that no write stores an assignee
+// carrying a comma. Every assignee filter reads a comma as the separator
+// between names, so "Doe, J" stored would select Doe's and J's tickets and
+// never this one. Create, the field update, and start are each tried, and each
+// refusal is checked on the stored row: a write that errored and still landed
+// would pass an error-only check.
+func anAssigneeNoFilterCanSelectIsRefused(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "work", Topic: "core", Assignee: "ada", ParentID: epic.ID})
+	before := mustList(t, ctx, st, storage.ListIssuesFilter{IncludeDeleted: true, IncludeArchived: true})
+	comma := "Doe, J"
+
+	_, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "comma", Topic: "core", Assignee: comma, ParentID: epic.ID, Prefix: prefix})
+	assertRefused(t, err, "CreateIssue(assignee "+comma+")")
+	_, err = st.Apply(ctx, issue.ID, storage.Change{Actor: "ada", Fields: storage.UpdateIssueInput{Assignee: &comma}})
+	assertRefused(t, err, "Apply(update assignee "+comma+")")
+	_, err = st.Apply(ctx, issue.ID, storage.Change{Action: model.Start{Assignee: comma}, Actor: comma})
+	assertRefused(t, err, "Apply(start as "+comma+")")
+
+	if after := mustList(t, ctx, st, storage.ListIssuesFilter{IncludeDeleted: true, IncludeArchived: true}); len(after) != len(before) {
+		t.Errorf("issues after the refused create = %d, want %d", len(after), len(before))
+	}
+	read, err := st.GetIssue(ctx, issue.ID)
+	if err != nil {
+		t.Fatalf("GetIssue error = %v", err)
+	}
+	if read.Assignee != "ada" || read.State() != model.StateOpen {
+		t.Errorf("after the refused update and start: assignee %q, state %q; want ada, open", read.Assignee, read.State())
 	}
 }
 
@@ -2244,6 +2276,7 @@ func anImportFileThatBreaksARuleIsRefusedWhole(t *testing.T, ctx context.Context
 	before := mustList(t, ctx, st, storage.ListIssuesFilter{IncludeDeleted: true, IncludeArchived: true})
 	title, topic, epicType, shortTopic, blank := "imported", "core", "epic", "x", " "
 	commaLabel := []string{"a,b"}
+	commaAssignee := "Doe, J"
 	lands := storage.ImportTreeSpec{LocalID: "e", Title: "lands", IssueType: "epic", Topic: "core"}
 	tree := func(specs ...storage.ImportTreeSpec) func() error {
 		return func() error { _, err := st.ImportTree(ctx, prefix, specs); return err }
@@ -2273,6 +2306,9 @@ func anImportFileThatBreaksARuleIsRefusedWhole(t *testing.T, ctx context.Context
 		{"ImportTree(a label the create refuses, after one that would land)", tree(lands,
 			storage.ImportTreeSpec{LocalID: "a", Title: "comma label", IssueType: "epic", Topic: "core", Labels: commaLabel},
 		)},
+		{"ImportTree(an assignee the create refuses, after one that would land)", tree(lands,
+			storage.ImportTreeSpec{LocalID: "a", Title: "comma assignee", IssueType: "epic", Topic: "core", Assignee: commaAssignee},
+		)},
 		{"ImportTree(a duplicate local_id)", tree(
 			storage.ImportTreeSpec{LocalID: "a", Title: "one", IssueType: "epic", Topic: "core"},
 			storage.ImportTreeSpec{LocalID: "a", Title: "two", IssueType: "epic", Topic: "core"},
@@ -2292,6 +2328,10 @@ func anImportFileThatBreaksARuleIsRefusedWhole(t *testing.T, ctx context.Context
 			storage.BulkIssueSpec{ID: existing.ID, Title: &blank})},
 		{"BulkApply(an update with a label the update refuses, after a create that would land)", bulk(epic("e", ""),
 			storage.BulkIssueSpec{ID: existing.ID, Labels: &commaLabel})},
+		{"BulkApply(an assignee the create refuses, after a create that would land)", bulk(epic("e", ""),
+			storage.BulkIssueSpec{Title: &title, Topic: &topic, IssueType: &epicType, Assignee: &commaAssignee})},
+		{"BulkApply(an update with an assignee the update refuses, after a create that would land)", bulk(epic("e", ""),
+			storage.BulkIssueSpec{ID: existing.ID, Assignee: &commaAssignee})},
 		{"BulkApply(a duplicate local_id)", bulk(epic("a", ""), epic("a", ""))},
 		{"BulkApply(a blocked_by cycle)", bulk(epic("a", "b"), epic("b", "a"))},
 	} {

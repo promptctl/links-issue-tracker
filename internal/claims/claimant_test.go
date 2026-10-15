@@ -1,6 +1,7 @@
 package claims_test
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -182,8 +183,8 @@ func TestAfterPreservesOwnershipForEveryStatusVerbButStart(t *testing.T) {
 			// one verb that does move the claimant, and has its own cases below.
 			continue
 		}
-		if got := heldByA.After(action, streamB); got != heldByA {
-			t.Errorf("After(%q, %s) = %+v, want ownership unchanged at %+v", name, streamB.Stream(), got, heldByA)
+		if got, err := heldByA.After(action, streamB); err != nil || got != heldByA {
+			t.Errorf("After(%q, %s) = %+v, %v; want ownership unchanged at %+v", name, streamB.Stream(), got, err, heldByA)
 		}
 	}
 }
@@ -200,8 +201,21 @@ func TestAfterStartInstallsTheTakingCheckout(t *testing.T) {
 	// shell can pad and the claimant is compared for equality: an untrimmed
 	// " bob " would read as a transfer away from "bob" on every re-run.
 	want := claims.Claimant{Established: true, Assignee: "bob", Checkout: streamB}
-	if got := heldByA.After(model.Start{Assignee: "  bob  "}, streamB); got != want {
-		t.Errorf("After(start, %s) = %+v, want %+v", streamB.Stream(), got, want)
+	if got, err := heldByA.After(model.Start{Assignee: "  bob  "}, streamB); err != nil || got != want {
+		t.Errorf("After(start, %s) = %+v, %v; want %+v", streamB.Stream(), got, err, want)
+	}
+}
+
+// TestAfterStartRefusesAnAssigneeNoFilterCanSelect: every assignee filter
+// splits on commas, so a start that would write "Doe, J" is refused before
+// either engine writes it, as a ValidationError (exit 3).
+func TestAfterStartRefusesAnAssigneeNoFilterCanSelect(t *testing.T) {
+	heldByA := claims.Claimant{Established: true, Assignee: "ada", Checkout: streamA}
+
+	_, err := heldByA.After(model.Start{Assignee: "Doe, J"}, streamB)
+	var refused model.ValidationError
+	if !errors.As(err, &refused) {
+		t.Fatalf("After(start as %q) error = %v; want a ValidationError", "Doe, J", err)
 	}
 }
 
@@ -213,7 +227,10 @@ func TestAfterStartInstallsTheTakingCheckout(t *testing.T) {
 func TestAfterStartEstablishesAnUnheldClaimant(t *testing.T) {
 	preset := claims.Claimant{Assignee: "ada"}
 
-	got := preset.After(model.Start{Assignee: "ada"}, model.Attribution{})
+	got, err := preset.After(model.Start{Assignee: "ada"}, model.Attribution{})
+	if err != nil {
+		t.Fatalf("After(start, absent) error = %v", err)
+	}
 	want := claims.Claimant{Established: true, Assignee: "ada"}
 	if got != want {
 		t.Errorf("After(start, absent) = %+v, want %+v", got, want)

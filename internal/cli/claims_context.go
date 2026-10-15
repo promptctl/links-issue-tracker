@@ -172,7 +172,10 @@ func transferNotice(ctx context.Context, ap *app.App, issueID string, start mode
 	if err != nil {
 		return "", err
 	}
-	taker := prior.After(start, ownAttribution(ap))
+	taker, err := prior.After(start, ownAttribution(ap))
+	if err != nil {
+		return "", err
+	}
 	if !prior.Held() || taker == prior {
 		return "", nil
 	}

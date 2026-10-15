@@ -94,7 +94,10 @@ func (e *Engine) planStatus(current model.Issue, actor, reason string, action mo
 	// that takes a ticket, so it is the one that moves the pair; that rule lives
 	// in Claimant.After, where both engines read it.
 	prior := claims.ClaimantOf(current, e.eventsFor(current.ID))
-	post := prior.After(action, e.attribution)
+	post, err := prior.After(action, e.attribution)
+	if err != nil {
+		return model.Issue{}, nil, err
+	}
 	updated.Assignee = post.Assignee
 	// A call whose target state and resulting claimant both already hold is
 	// the documented no-op: history records mutations that happened, not calls

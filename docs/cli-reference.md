@@ -105,6 +105,9 @@ Only `lit start` writes that identity into the assignee field. Field-writing
 commands — `new`, `followup`, `update` — honor an explicit `--assignee`
 verbatim and never substitute the caller's identity; on `lit update`, an empty
 `--assignee ""` clears the assignee, returning the issue to unassigned.
+An assignee containing a comma is refused (exit 3) on every write, `lit start
+--by` and `lit import` included, because every assignee filter reads a comma as
+the separator between names.
 
 ### Transition guidance
 

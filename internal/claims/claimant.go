@@ -1,8 +1,6 @@
 package claims
 
 import (
-	"strings"
-
 	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
@@ -74,10 +72,17 @@ func (c Claimant) Held() bool { return c.Established }
 // reason the pair exists, and it is why a `done` re-run against an already-done
 // ticket still records nothing from a new checkout: done does not take, so the
 // claimant it installs is the one already there.
-func (c Claimant) After(action model.StatusAction, taker model.Attribution) Claimant {
+//
+// The new assignee is refused here, before either engine writes it, when it is
+// one no assignee filter could select (model.NormalizeAssignee).
+func (c Claimant) After(action model.StatusAction, taker model.Attribution) (Claimant, error) {
 	start, ok := action.(model.Start)
 	if !ok {
-		return c
+		return c, nil
 	}
-	return Claimant{Established: true, Assignee: strings.TrimSpace(start.Assignee), Checkout: taker}
+	assignee, err := model.NormalizeAssignee(start.Assignee)
+	if err != nil {
+		return Claimant{}, err
+	}
+	return Claimant{Established: true, Assignee: assignee, Checkout: taker}, nil
 }

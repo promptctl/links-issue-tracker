@@ -115,13 +115,16 @@ func validateImportTreeSpecs(specs []ImportTreeSpec) error {
 		if strings.TrimSpace(spec.Title) == "" {
 			return model.ValidationError{Message: fmt.Sprintf("import: spec %q missing title", spec.LocalID)}
 		}
-		// Topic and labels parse by the parsers the create runs, so a file
-		// the create would refuse is refused here, before anything lands.
-		// [LAW:single-enforcer]
+		// Topic, labels, and assignee parse by the parsers the create runs,
+		// so a file the create would refuse is refused here, before anything
+		// lands. [LAW:single-enforcer]
 		if _, err := issueid.NormalizeTopicForCreate(spec.Topic); err != nil {
 			return fmt.Errorf("import: spec %q: %w", spec.LocalID, err)
 		}
 		if _, err := model.CanonicalizeLabels(spec.Labels); err != nil {
+			return fmt.Errorf("import: spec %q: %w", spec.LocalID, err)
+		}
+		if _, err := model.NormalizeAssignee(spec.Assignee); err != nil {
 			return fmt.Errorf("import: spec %q: %w", spec.LocalID, err)
 		}
 		// Membership comes from the one ParseIssueType gate; specs are
@@ -201,10 +204,15 @@ func validateBulkSpecs(specs []BulkIssueSpec) error {
 				return model.ValidationError{Message: fmt.Sprintf("bulk: doc %d (local_id %q) cannot depend on itself", i, spec.LocalID)}
 			}
 		}
-		// A create and an update both write labels, by the one parser either
-		// write runs. [LAW:single-enforcer]
+		// A create and an update both write labels and the assignee, by the
+		// one parser either write runs. [LAW:single-enforcer]
 		if spec.Labels != nil {
 			if _, err := model.CanonicalizeLabels(*spec.Labels); err != nil {
+				return fmt.Errorf("bulk: doc %d: %w", i, err)
+			}
+		}
+		if spec.Assignee != nil {
+			if _, err := model.NormalizeAssignee(*spec.Assignee); err != nil {
 				return fmt.Errorf("bulk: doc %d: %w", i, err)
 			}
 		}

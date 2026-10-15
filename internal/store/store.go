@@ -532,6 +532,10 @@ func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (m
 	if err != nil {
 		return model.Issue{}, err
 	}
+	assignee, err := model.NormalizeAssignee(in.Assignee)
+	if err != nil {
+		return model.Issue{}, err
+	}
 	createdBy := "links"
 	issue := model.Issue{
 		Title:       strings.TrimSpace(in.Title),
@@ -542,7 +546,7 @@ func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (m
 		Topic:       topic,
 		Lane:        strings.TrimSpace(in.Lane),
 		Labels:      labels,
-		Assignee:    strings.TrimSpace(in.Assignee),
+		Assignee:    assignee,
 		FollowsUp:   strings.TrimSpace(in.FollowsUp),
 		CreatedAt:   now,
 		UpdatedAt:   now,
@@ -1546,7 +1550,10 @@ func (s *Store) planStatusTransition(ctx context.Context, issue model.Issue, act
 		return transitionWrite{}, err
 	}
 	prior := claims.ClaimantOf(issue, events)
-	post := prior.After(action, s.attribution)
+	post, err := prior.After(action, s.attribution)
+	if err != nil {
+		return transitionWrite{}, err
+	}
 	updated.Assignee = post.Assignee
 	fromStatus := issue.StatusValue()
 	toStatus := updated.StatusValue()
