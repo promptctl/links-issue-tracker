@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-10-15
+
 ### Changed
 
 - `lit show` prints each comment's id, so `lit comment rm <comment-id>` can be run from what `lit show` prints. A comment row read `- [author] body` with no id, so past the output of the `lit comment add` that created it, only `lit export` or `lit lifeboat dump` showed a comment's id. A row now reads `- <comment-id> [author] body`. `lit quickstart` now says what the bracketed name is: `claude_<session id>` from a Claude Code session, otherwise the `--by` name, or `unknown`. It called it the workspace's git identity, which lit never reads. (links-cli-7nix)
