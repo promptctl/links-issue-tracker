@@ -1,14 +1,20 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/statusline"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
+	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
 // readStatusline reads the checkout's statusline file the way a statusline
@@ -133,5 +139,127 @@ func TestStatuslineFileFollowsEachCheckoutsOwnWork(t *testing.T) {
 	}
 	if status := gitStatus(t, main); !strings.Contains(status, ".lit/config.toml") {
 		t.Fatalf("git status no longer shows an edit to the committed .lit/config.toml:\n%s", status)
+	}
+}
+
+// statuslineEvent is what the last invocation's event says its statusline
+// write did: the statusline.* facts and the byte count.
+func statuslineEvent(t *testing.T) (map[string]any, int) {
+	t.Helper()
+	ev := lastEvent(t)
+	facts := map[string]any{}
+	for key, value := range writtenFacts(t, ev) {
+		if strings.HasPrefix(key, "statusline.") {
+			facts[key] = value
+		}
+	}
+	bytes, ok := ev.Counts["statusline.bytes"]
+	if !ok {
+		t.Fatalf("%s event has no statusline.bytes count: %v", ev.Event, ev.Counts)
+	}
+	return facts, bytes
+}
+
+// Every command that writes the statusline file puts what the write did on its
+// own event — the slots it changed, the bytes it wrote, whether it created the
+// file and its exclude entry, and whether it replaced an unreadable file — and
+// a command that wrote nothing says so with zeros.
+func TestEachStatuslineWriteRecordsItsFactsOnTheEvent(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	isolateEvents(t)
+	dir := t.TempDir()
+	runGit(t, dir, "init")
+	runGit(t, dir, "config", "user.email", "m@m.co")
+	runGit(t, dir, "config", "user.name", "main")
+	runGit(t, dir, "commit", "--allow-empty", "-m", "seed")
+	runCLIInDir(t, dir, "init", "--skip-hooks", "--skip-agents")
+	epic := newEpicInDir(t, dir, "statusline epic")
+	first := extractTicketID(t, runCLIInDir(t, dir, "new", "--title", "First", "--topic", "demo", "--type", "task", "--parent", epic))
+	second := extractTicketID(t, runCLIInDir(t, dir, "new", "--title", "Second", "--topic", "demo", "--type", "task", "--parent", epic))
+	file := filepath.Join(dir, ".lit", "statusline.json")
+
+	type step struct {
+		args                  []string
+		changed               string
+		created, excludeAdded bool
+	}
+	check := func(s step) {
+		t.Helper()
+		runCLIInDir(t, dir, s.args...)
+		facts, bytes := statuslineEvent(t)
+		want := decodeJSON(t, fmt.Sprintf(`{"statusline.changed": %s, "statusline.created": %t, "statusline.exclude_added": %t, "statusline.replaced": null, "statusline.error": null}`, s.changed, s.created, s.excludeAdded))
+		if !reflect.DeepEqual(facts, want) {
+			t.Fatalf("lit %v event facts = %v\nwant %v", s.args, facts, want)
+		}
+		// The file's size on disk, or zero before any command has written it.
+		wantBytes := 0
+		if info, err := os.Stat(file); err == nil {
+			wantBytes = int(info.Size())
+		} else if !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		if bytes != wantBytes {
+			t.Fatalf("lit %v event statusline.bytes = %d, want %d (the file's size)", s.args, bytes, wantBytes)
+		}
+	}
+	for _, s := range []step{
+		{[]string{"show", first}, `[]`, false, false},
+		{[]string{"next"}, `["next"]`, true, true},
+		{[]string{"start", first, "--by", "agent"}, `["working_on"]`, false, false},
+		{[]string{"update", first, "--title", "First, renamed"}, `["working_on", "next"]`, false, false},
+		{[]string{"done", first}, `["working_on", "next"]`, false, false},
+		{[]string{"start", second, "--by", "agent"}, `["working_on"]`, false, false},
+		{[]string{"purge", second, "--yes"}, `["working_on"]`, false, false},
+	} {
+		check(s)
+	}
+
+	// Recreating the file finds the exclude entry already there. A retitle of
+	// a ticket the new file does not name changes no slot of it.
+	if err := os.Remove(file); err != nil {
+		t.Fatal(err)
+	}
+	check(step{[]string{"update", first, "--title", "First, again"}, `[]`, true, false})
+
+	// A file this lit cannot read is replaced, and the event says why.
+	if err := os.WriteFile(file, []byte("{working_on"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCLIInDirAllowError(t, dir, "next")
+	facts, _ := statuslineEvent(t)
+	if replaced, ok := facts["statusline.replaced"].(string); !ok || !strings.Contains(replaced, file) {
+		t.Fatalf("next over an unreadable file: statusline.replaced = %v; want the reason, naming %s", facts["statusline.replaced"], file)
+	}
+	if got := facts["statusline.changed"]; !reflect.DeepEqual(got, []any{"next"}) {
+		t.Fatalf("next over an unreadable file: statusline.changed = %v; want [next]", got)
+	}
+}
+
+// A statusline write that fails is on the event with its error, beside what
+// the write had done before it failed; the command itself does not fail.
+func TestAFailedStatuslineWriteIsRecordedOnTheEvent(t *testing.T) {
+	root := t.TempDir()
+	litDir := filepath.Join(root, ".lit")
+	if err := os.MkdirAll(litDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(litDir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(litDir, 0o755) })
+	rec := telemetry.Begin(telemetry.Event{Event: "lit start"})
+	ctx := telemetry.With(context.Background(), rec)
+	ws := workspace.Info{RootDir: root, Location: workspace.Location{GitCommonDir: filepath.Join(root, "git")}}
+	recordStatusline(ctx, ws, statusline.Facts{statusline.Started{Ticket: statusline.Ticket{ID: "t-1", Title: "One"}}})
+	ev := rec.Finish(telemetry.End{At: time.Now(), Outcome: telemetry.OutcomeOK})
+	facts := writtenFacts(t, ev)
+	if text, ok := facts["statusline.error"].(string); !ok || !strings.Contains(text, "statusline") {
+		t.Fatalf("statusline.error = %v; want the write's error", facts["statusline.error"])
+	}
+	if facts["statusline.created"] != true || facts["statusline.exclude_added"] != true || ev.Counts["statusline.bytes"] != 0 {
+		t.Fatalf("failed write recorded created=%v exclude_added=%v bytes=%d; want true, true, 0", facts["statusline.created"], facts["statusline.exclude_added"], ev.Counts["statusline.bytes"])
+	}
+	if got := facts["statusline.changed"]; !reflect.DeepEqual(got, []any{}) {
+		t.Fatalf("failed write recorded statusline.changed = %v; want []", got)
 	}
 }

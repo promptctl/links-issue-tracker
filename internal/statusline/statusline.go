@@ -18,6 +18,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -153,8 +154,13 @@ func LocationOf(checkoutRoot, gitCommonDir string) Location {
 	}
 }
 
-// Outcome is what one Write did.
+// Outcome is what one Write did. A write that fails part way returns what it
+// had done by then: an exclude entry added before the file could not be
+// written stays added, and the Outcome says so.
 type Outcome struct {
+	// Changed names the file's slots, by their field names in the file, whose
+	// records this write changed; empty when nothing was written.
+	Changed []string
 	// Bytes is the size of the file written; zero when nothing was written.
 	Bytes int
 	// Created is true when the file did not exist before this write.
@@ -204,19 +210,33 @@ func Write(loc Location, facts Facts, now time.Time) (Outcome, error) {
 	if out.Created {
 		out.ExcludeAdded, err = ensureExcluded(loc.Exclude)
 		if err != nil {
-			return Outcome{}, err
+			return out, err
 		}
 	}
-	payload, err := json.MarshalIndent(facts.applyTo(prior, now.UTC()), "", "  ")
+	written := facts.applyTo(prior, now.UTC())
+	payload, err := json.MarshalIndent(written, "", "  ")
 	if err != nil {
-		return Outcome{}, fmt.Errorf("encode statusline file: %w", err)
+		return out, fmt.Errorf("encode statusline file: %w", err)
 	}
 	payload = append(payload, '\n')
 	if err := replaceFile(loc.File, payload); err != nil {
-		return Outcome{}, err
+		return out, err
 	}
+	out.Changed = changedSlots(prior, written)
 	out.Bytes = len(payload)
 	return out, nil
+}
+
+// changedSlots names the slots whose records differ between before and after.
+func changedSlots(before, after File) []string {
+	changed := []string{}
+	if !reflect.DeepEqual(before.WorkingOn, after.WorkingOn) {
+		changed = append(changed, "working_on")
+	}
+	if !reflect.DeepEqual(before.Next, after.Next) {
+		changed = append(changed, "next")
+	}
+	return changed
 }
 
 // parse reads a file this lit wrote. A file of another schema version is not

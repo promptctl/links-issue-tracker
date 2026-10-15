@@ -133,7 +133,9 @@ matters to you.
   lost until something records them again.
 - **A failed write.** If lit cannot write the file, it prints
   `warning: statusline file not written:` on stderr. The command itself still
-  succeeds, and the file keeps its previous contents.
+  succeeds, and the file keeps its previous contents. Each command's line in
+  the [events file](events.md#what-a-statusline-file-write-records) also
+  records what its write did, or why it failed.
 
 ## `schema_version`
 
