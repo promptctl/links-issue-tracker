@@ -72,7 +72,7 @@ lines here for reading:
 | `outcome` | `ok`, `error`, `panic`, or `interrupted`: still running when the grace after a Ctrl-C or `SIGTERM` ran out, so lit exited without finishing. |
 | `exit_code` | The process's exit code, the same one a failed command prints on its error line; `2` for a panic; `130` or `143` for an interrupted invocation (128 plus the signal number). |
 | `reason` | Present only on a failure: the reason token printed beside the exit code (see the [CLI reference](cli-reference.md)). |
-| `error` | Present unless the outcome is `ok`: the error message as lit printed it, which can quote a value you typed, the panic value, or why an interrupted invocation exited. |
+| `error` | Present unless the outcome is `ok`: the error message as lit printed it, which can quote a value you typed, the panic value, or, for an interrupted invocation, the signal (`SIGINT` or `SIGTERM`) whose grace ran out. |
 | `sink` | Where the line was written. Always `file`. |
 | `sink_rotation` | What happened to the file's size cap before this line was appended: `none`, `rotated` (this is the first line of a new file), or `failed` (the file keeps growing past its cap). |
 | `sink_rotation_error` | Present only when `sink_rotation` is `failed`: why. |

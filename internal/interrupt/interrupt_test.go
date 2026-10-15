@@ -135,17 +135,17 @@ func TestWatchNormalExitDoesNotEscalate(t *testing.T) {
 }
 
 // The hard exit runs what the guarded work registered, in order and with the
-// exit code, before the process exits.
+// signal's name and the exit code, before the process exits.
 func TestEscalationRunsTheHooksBeforeExiting(t *testing.T) {
 	hooks := &hardExitHooks{}
 	ctx := context.WithValue(context.Background(), hardExitHooksKey{}, hooks)
 	var calls []string
-	BeforeHardExit(ctx, func(code int) { calls = append(calls, fmt.Sprintf("first %d", code)) })
-	BeforeHardExit(ctx, func(code int) { calls = append(calls, fmt.Sprintf("second %d", code)) })
+	BeforeHardExit(ctx, func(signal string, code int) { calls = append(calls, fmt.Sprintf("first %s %d", signal, code)) })
+	BeforeHardExit(ctx, func(signal string, code int) { calls = append(calls, fmt.Sprintf("second %s %d", signal, code)) })
 
 	escalation(hooks, time.Hour, func(code int) { calls = append(calls, fmt.Sprintf("exit %d", code)) })(syscall.SIGTERM)
 
-	if got, want := strings.Join(calls, ", "), "first 143, second 143, exit 143"; got != want {
+	if got, want := strings.Join(calls, ", "), "first SIGTERM 143, second SIGTERM 143, exit 143"; got != want {
 		t.Errorf("escalation ran %q, want %q", got, want)
 	}
 }
@@ -157,7 +157,7 @@ func TestAStuckHookDoesNotStopTheHardExit(t *testing.T) {
 	ctx := context.WithValue(context.Background(), hardExitHooksKey{}, hooks)
 	stuck := make(chan struct{})
 	defer close(stuck)
-	BeforeHardExit(ctx, func(int) { <-stuck })
+	BeforeHardExit(ctx, func(string, int) { <-stuck })
 
 	exited := make(chan int, 1)
 	go escalation(hooks, 10*time.Millisecond, func(code int) { exited <- code })(syscall.SIGINT)

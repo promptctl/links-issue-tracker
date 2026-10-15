@@ -17,6 +17,7 @@ package interrupt
 
 import (
 	"context"
+	"maps"
 	"os"
 	"os/signal"
 	"slices"
@@ -37,8 +38,10 @@ const DefaultGrace = 5 * time.Second
 // interruptSignals is the graceful-shutdown signal set: an interactive Ctrl-C
 // (SIGINT) and a supervisor's terminate (SIGTERM). Both mean "stop now, cleanly
 // if you can". SIGKILL is deliberately absent — it cannot be caught, and the
-// escalation path exists precisely so the process never REQUIRES it.
-var interruptSignals = []os.Signal{syscall.SIGINT, syscall.SIGTERM}
+// escalation path exists precisely so the process never REQUIRES it. Each is
+// keyed to its conventional name, which is how a hard exit reports it.
+// [LAW:one-source-of-truth] the set caught and the names reported are one table.
+var interruptSignals = map[os.Signal]string{syscall.SIGINT: "SIGINT", syscall.SIGTERM: "SIGTERM"}
 
 // Guard installs interrupt→cancel over parent and returns the derived context
 // plus a stop func the entrypoint defers for the normal (no-signal) exit path.
@@ -55,7 +58,7 @@ var interruptSignals = []os.Signal{syscall.SIGINT, syscall.SIGTERM}
 // releases the internal goroutine. It is a no-op if an interrupt already fired.
 func Guard(parent context.Context, grace time.Duration) (context.Context, func()) {
 	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, interruptSignals...)
+	signal.Notify(sigs, slices.Collect(maps.Keys(interruptSignals))...)
 	hooks := &hardExitHooks{}
 	ctx, cancel := context.WithCancel(context.WithValue(parent, hardExitHooksKey{}, hooks))
 	done := make(chan struct{})
@@ -87,13 +90,14 @@ type hardExitHooksKey struct{}
 // leaving a last word.
 type hardExitHooks struct {
 	mu  sync.Mutex
-	fns []func(code int)
+	fns []func(signal string, code int)
 }
 
-// BeforeHardExit registers fn to run, with the exit code, before the guard
+// BeforeHardExit registers fn to run, with the name of the interrupt that
+// started the shutdown (SIGINT, SIGTERM) and the exit code, before the guard
 // hard-exits the process. A context no Guard derived is never hard-exited, so
 // there is no exit for fn to precede and nothing is registered.
-func BeforeHardExit(ctx context.Context, fn func(code int)) {
+func BeforeHardExit(ctx context.Context, fn func(signal string, code int)) {
 	hooks, guarded := ctx.Value(hardExitHooksKey{}).(*hardExitHooks)
 	if !guarded {
 		return
@@ -104,7 +108,7 @@ func BeforeHardExit(ctx context.Context, fn func(code int)) {
 }
 
 // run calls every registered hook in order, waiting at most budget for them.
-func (h *hardExitHooks) run(code int, budget time.Duration) {
+func (h *hardExitHooks) run(signal string, code int, budget time.Duration) {
 	h.mu.Lock()
 	fns := slices.Clone(h.fns)
 	h.mu.Unlock()
@@ -112,7 +116,7 @@ func (h *hardExitHooks) run(code int, budget time.Duration) {
 	go func() {
 		defer close(finished)
 		for _, fn := range fns {
-			fn(code)
+			fn(signal, code)
 		}
 	}()
 	timer := time.NewTimer(budget)
@@ -128,7 +132,7 @@ func (h *hardExitHooks) run(code int, budget time.Duration) {
 func escalation(hooks *hardExitHooks, budget time.Duration, exit func(int)) func(os.Signal) {
 	return func(sig os.Signal) {
 		code := exitCode(sig)
-		hooks.run(code, budget)
+		hooks.run(interruptSignals[sig], code, budget)
 		exit(code)
 	}
 }

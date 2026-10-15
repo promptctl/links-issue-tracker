@@ -38,7 +38,7 @@ import (
 func Run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string) (err error) {
 	recorder := beginInvocation(time.Now())
 	record := &invocationRecord{recorder: recorder, stderr: stderr}
-	interrupt.BeforeHardExit(ctx, func(code int) { record.close(interruptedEnd(time.Now(), code)) })
+	interrupt.BeforeHardExit(ctx, func(signal string, code int) { record.close(interruptedEnd(time.Now(), signal, code)) })
 	defer func() {
 		panicked := recover()
 		record.close(invocationEnd(time.Now(), err, panicked))

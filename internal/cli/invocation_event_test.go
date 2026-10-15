@@ -303,7 +303,7 @@ func TestASecondEndWaitsForTheFirstEndsWrite(t *testing.T) {
 
 	record := &invocationRecord{recorder: telemetry.Begin(telemetry.Event{Event: "lit sync push"}), stderr: io.Discard}
 	written := make(chan bool, 2)
-	for _, end := range []telemetry.End{{Outcome: telemetry.OutcomeOK}, interruptedEnd(time.Now(), 143)} {
+	for _, end := range []telemetry.End{{Outcome: telemetry.OutcomeOK}, interruptedEnd(time.Now(), "SIGTERM", 143)} {
 		go func() {
 			record.close(end)
 			// Written: the oversized file rotated away and the event begun a
@@ -358,12 +358,12 @@ func TestAFailedRotationIsRecordedOnTheEvent(t *testing.T) {
 }
 
 // An invocation the interrupt guard hard-exits is recorded as interrupted,
-// with the exit code the guard exits with.
+// naming the signal and the exit code the guard exits with.
 func TestAHardExitedInvocationEndsAsInterrupted(t *testing.T) {
 	at := time.Now()
-	end := interruptedEnd(at, 143)
-	if end.Outcome != telemetry.OutcomeInterrupted || end.ExitCode != 143 || !strings.Contains(end.Error, "143") || end.Reason != "" || !end.At.Equal(at) {
-		t.Errorf("interruptedEnd = %+v, want interrupted at exit 143", end)
+	end := interruptedEnd(at, "SIGTERM", 143)
+	if end.Outcome != telemetry.OutcomeInterrupted || end.ExitCode != 143 || !strings.Contains(end.Error, "SIGTERM") || !strings.Contains(end.Error, "143") || end.Reason != "" || !end.At.Equal(at) {
+		t.Errorf("interruptedEnd = %+v, want interrupted by SIGTERM at exit 143", end)
 	}
 }
 

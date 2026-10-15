@@ -69,13 +69,13 @@ func invocationEnd(at time.Time, err error, panicked any) telemetry.End {
 }
 
 // interruptedEnd is an invocation the interrupt guard hard-exited with code:
-// it was still running when the grace after an interrupt ran out.
-func interruptedEnd(at time.Time, code int) telemetry.End {
+// it was still running when the grace after signal ran out.
+func interruptedEnd(at time.Time, signal string, code int) telemetry.End {
 	return telemetry.End{
 		At:       at,
 		Outcome:  telemetry.OutcomeInterrupted,
 		ExitCode: code,
-		Error:    fmt.Sprintf("still running when the grace after an interrupt ran out; hard-exited with %d", code),
+		Error:    fmt.Sprintf("still running when the grace after %s ran out; hard-exited with %d", signal, code),
 	}
 }
 
