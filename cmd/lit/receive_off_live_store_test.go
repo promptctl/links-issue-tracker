@@ -132,9 +132,6 @@ func TestReceiveFetchLeavesTheLiveStoreFree(t *testing.T) {
 			t.Fatalf("the receive worker did not finish:\n%s", receiveLog(t, ws))
 		}
 	}
-	// A reconcile that committed may have spawned a mirror; it must not race
-	// the TempDir sweep.
-	awaitMirrorQuiescence(t, consumer)
 	backlog := mustLit(consumer, quiet, "backlog")
 	for _, title := range []string{"first-ticket", "peer-ticket", "local-ticket"} {
 		if !strings.Contains(backlog, title) {

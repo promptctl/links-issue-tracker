@@ -96,6 +96,22 @@ func spawnBackgroundMirror(ws workspace.Info, parentPID int) error {
 	return spawnDetachedWorker(ws, backgroundMirrorSubcommand, mirrorLogName, mirrorEnv(), parentPID)
 }
 
+// detachedWorkerLeaf is the worker side of spawnDetachedWorker, the one entry
+// every detached worker runs through: its --parent-pid flag, and the inherited
+// hold made this process's alone before work runs. The worker waits for its own
+// children, so close-on-exec drops only descendants that outlive it — a
+// backgrounded owner-notify hook, a git credential daemon — which would keep the
+// lock held, and every join waiting, long after this worker is gone.
+// [LAW:single-enforcer]
+func detachedWorkerLeaf(subcommand, parentPIDUsage string, work func(ctx context.Context, stdout io.Writer, ws workspace.Info, parentPID int) error) wsLeaf {
+	fs := newCobraFlagSet("sync " + subcommand)
+	parentPID := fs.Int("parent-pid", 0, parentPIDUsage)
+	return wsLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, _ []string) error {
+		keepWorkerHoldFromChildren()
+		return work(ctx, stdout, ws, *parentPID)
+	}}
+}
+
 // spawnDetachedWorker starts one of the hidden `lit sync` worker subcommands
 // as a detached process of its own, told which process spawned it so it can
 // wait for that process's engine to be released, and returns without waiting.
@@ -107,9 +123,19 @@ func spawnDetachedWorker(ws workspace.Info, subcommand, logName string, env []st
 	if err != nil {
 		return fmt.Errorf("resolve lit binary: %w", err)
 	}
+	// The worker is joinable from before it exists: the shared hold is taken
+	// here and inherited, so there is no instant at which the worker is alive
+	// and unheld. A worker nobody can join is the race the hold exists to
+	// close, so a hold that cannot be taken fails the spawn.
+	// [LAW:no-ambient-temporal-coupling]
+	holds, err := holdWorkerLock(ws.StorageDir)
+	if err != nil {
+		return err
+	}
 	cmd := exec.Command(self, "sync", subcommand, "--parent-pid", strconv.Itoa(parentPID))
 	cmd.Dir = ws.RootDir
 	cmd.Stdin = nil
+	cmd.ExtraFiles = holds
 	// Route the detached worker's output to a durable log. [LAW:no-silent-failure]
 	// If the log cannot be opened, surface that on the command's terminal-attached
 	// stderr and still spawn with discarded streams — the worker's run matters
@@ -132,6 +158,12 @@ func spawnDetachedWorker(ws workspace.Info, subcommand, logName string, env []st
 		// The child inherited its own dup of the fd at exec; the parent's copy is
 		// no longer needed. Closing it cannot affect the child's logging.
 		_ = logFile.Close()
+	}
+	// The child shares each hold's open file description, so closing the
+	// parent's copy leaves the lock held by the worker; after a failed start
+	// it is the release.
+	for _, hold := range holds {
+		_ = hold.Close()
 	}
 	return startErr
 }
@@ -181,9 +213,7 @@ func workerEnv(strip []string, set ...string) []string {
 // the loser still exits without opening a store, writing a trace, or creating a
 // file — the quiescence property test cleanups rely on.
 func backgroundMirrorLeaf() wsLeaf {
-	fs := newCobraFlagSet("sync " + backgroundMirrorSubcommand)
-	parentPID := fs.Int("parent-pid", 0, "PID of the spawning command; the mirror waits for it to exit")
-	return wsLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
+	return detachedWorkerLeaf(backgroundMirrorSubcommand, "PID of the spawning command; the mirror waits for it to exit", func(ctx context.Context, stdout io.Writer, ws workspace.Info, parentPID int) error {
 		// A live mirror IS the coverage the claim protocol counts on, and its
 		// liveness is proven by the kernel: hold the beacon shared from entry —
 		// before the parent-exit wait, so mutations claiming during that wait read
@@ -223,13 +253,13 @@ func backgroundMirrorLeaf() wsLeaf {
 		// precondition is unmet — abort rather than race a live engine. A wait cut
 		// short by teardown is not that failure: it ends as a teardown, below.
 		// [LAW:no-ambient-temporal-coupling]
-		if !waitForParentExit(ctx, *parentPID, os.Getppid, workerParentWaitTimeout, workerParentPollDelay) {
+		if !waitForParentExit(ctx, parentPID, os.Getppid, workerParentWaitTimeout, workerParentPollDelay) {
 			if ctx.Err() != nil {
 				return teardownMirror(ws, ctx.Err(), stopAnswering)
 			}
 			return completeMirrorWithoutAttempt(ctx, ws, fmt.Errorf(
 				"spawning command (pid %d) still running after %s; skipping mirror to avoid racing its engine",
-				*parentPID, workerParentWaitTimeout), stopAnswering)
+				parentPID, workerParentWaitTimeout), stopAnswering)
 		}
 
 		for {
@@ -287,7 +317,7 @@ func backgroundMirrorLeaf() wsLeaf {
 			// cycle runs the same path; only the marker decides whether another
 			// begins.
 		}
-	}}
+	})
 }
 
 // teardownMirror is the ending for a mirror dismantled by its own context (the

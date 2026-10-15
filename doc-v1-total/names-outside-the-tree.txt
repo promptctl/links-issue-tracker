@@ -13,7 +13,6 @@ json.Encoder          encoding/json; writeJSON builds one with json.NewEncoder
 LimitedReader         io.LimitedReader, unwrapped by *os.File.ReadFrom
 os.File.ReadFrom      os package
 QueryRow              database/sql
-syscall.Flock         syscall; called inside github.com/promptctl/primitives/filelock
 
 # Third-party modules this repository imports but does not carry.
 fd.Close              github.com/promptctl/primitives/filelock

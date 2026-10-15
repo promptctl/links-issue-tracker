@@ -116,19 +116,17 @@ func receiveEnv() []string {
 // the mirror-pending claim and the beacon are the ordering witnesses, not a
 // sleep.
 func backgroundReceiveLeaf() wsLeaf {
-	fs := newCobraFlagSet("sync " + backgroundReceiveSubcommand)
-	parentPID := fs.Int("parent-pid", 0, "PID of the spawning command; the receive waits for it to exit")
-	return wsLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, _ []string) error {
+	return detachedWorkerLeaf(backgroundReceiveSubcommand, "PID of the spawning command; the receive waits for it to exit", func(ctx context.Context, stdout io.Writer, ws workspace.Info, parentPID int) error {
 		start := time.Now()
 		pid := os.Getpid()
 		fmt.Fprintf(stdout, "%s receive start pid=%d deadline=%s\n", start.UTC().Format(time.RFC3339), pid, store.ReceiveDeadline)
-		mirrorWait := receiveWhenQuiet(ctx, ws, *parentPID)
+		mirrorWait := receiveWhenQuiet(ctx, ws, parentPID)
 		// The decision is in the receive's sync trace; this line is the worker's
 		// own lifetime, which the trace does not carry.
 		fmt.Fprintf(stdout, "%s receive end pid=%d mirror_wait=%s elapsed=%s\n", time.Now().UTC().Format(time.RFC3339), pid,
 			mirrorWait.Round(time.Millisecond), time.Since(start).Round(time.Millisecond))
 		return nil
-	}}
+	})
 }
 
 // receiveWhenQuiet runs one receive once the spawning command has exited and
@@ -177,7 +175,7 @@ const mirrorQuietPoll = 100 * time.Millisecond
 
 // awaitNoLiveMirror waits until no mirror is owed or live and returns how long
 // that took. Two witnesses cover a mirror's whole life between them, with no
-// gap: the mirror-pending claim a mutating command leaves (MirrorOwed) stands
+// gap: the mirror-pending claim a mutating command leaves (mirrorOwed) stands
 // from before that command exits until the mirror clears it inside its clone
 // hold, and the liveness beacon is held from the mirror's entry to its exit.
 // The beacon alone is not enough: a just-spawned mirror may not hold it yet
@@ -193,7 +191,7 @@ func awaitNoLiveMirror(ctx context.Context, ws workspace.Info, bound time.Durati
 		// The beacon is probed only once nothing is owed: while a claim stands
 		// the answer cannot end the wait, and each probe's brief hold is one
 		// more chance to mislead a claimant probing at the same instant.
-		live, err := MirrorOwed(ws)
+		live, err := mirrorOwed(ws)
 		if err != nil {
 			return time.Since(start), err
 		}

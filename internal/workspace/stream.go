@@ -13,7 +13,7 @@ import (
 // streamTokenFile is the write-once file holding a checkout's stream id, and it
 // lives in the checkout's PRIVATE git directory — never the common one. That
 // placement is the entire lifecycle design, and it is the deliberate mirror of
-// deriveLocation: the store is derived from --git-common-dir so every worktree
+// Locate: the store is derived from --git-common-dir so every worktree
 // of a repository reaches ONE backlog, while identity is derived from --git-dir
 // so every worktree carries a DISTINCT token. Git owns both facts, so identity
 // needs no lifecycle of ours: it is created with the worktree, is never shared

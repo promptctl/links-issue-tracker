@@ -34,6 +34,9 @@ func TestMain(m *testing.M) {
 		}
 		os.Exit(0)
 	}
+	if os.Getenv(workerOutlivedByChildEnv) != "" {
+		runWorkerOutlivedByChild()
+	}
 	if err := os.Setenv(DisableAutoSyncEnvVar, "1"); err != nil {
 		panic("set " + DisableAutoSyncEnvVar + ": " + err.Error())
 	}

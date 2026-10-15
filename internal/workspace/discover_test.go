@@ -19,7 +19,7 @@ func addLitStore(t *testing.T, repoDir string) {
 }
 
 // wantStore computes a repository's canonical StorageDir independently of
-// deriveLocation, so the assertion is a genuine oracle rather than the code
+// Locate, so the assertion is a genuine oracle rather than the code
 // checking itself.
 func wantStore(t *testing.T, repoDir string) string {
 	t.Helper()
