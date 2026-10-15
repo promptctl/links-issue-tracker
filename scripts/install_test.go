@@ -35,7 +35,7 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	schemaReleaseCheck = filepath.Join(dir, "schema-release-check")
-	build := exec.Command("go", "build", "-o", schemaReleaseCheck, "../tools/schema-release-check")
+	build := exec.Command("go", "build", "-buildvcs=false", "-o", schemaReleaseCheck, "../tools/schema-release-check")
 	if out, err := build.CombinedOutput(); err != nil {
 		panic(fmt.Sprintf("build schema-release-check: %v\n%s", err, out))
 	}
@@ -44,10 +44,12 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-// release is a tag in a fixture repo whose migration registry reaches schema.
+// release is a tag in a fixture repo whose registry is this tree's migrations
+// 1..schema. A diverged release holds different bytes for its highest one.
 type release struct {
-	tag    string
-	schema int64
+	tag      string
+	schema   int64
+	diverged bool
 }
 
 // treeSchema is the schema of the tree these tests run in.
@@ -61,9 +63,21 @@ func treeSchema(t *testing.T) int64 {
 }
 
 // initFixtureRepo makes root a git repo carrying one commit and tag per
-// release, each commit's internal/store/migrations holding versions 1..schema.
+// release, each commit's internal/store/migrations holding this tree's
+// migrations 1..schema.
 func initFixtureRepo(t *testing.T, root string, releases []release) {
 	t.Helper()
+	const treeRegistry = "../internal/store/migrations"
+	entries, err := os.ReadDir(treeRegistry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	migrationFiles := map[int64]string{}
+	for _, e := range entries {
+		if v, ok := migrations.ParseVersion(e.Name()); ok && strings.HasSuffix(e.Name(), ".sql") {
+			migrationFiles[v] = e.Name()
+		}
+	}
 	git := func(args ...string) {
 		t.Helper()
 		cmd := exec.Command("git", append([]string{"-c", "user.name=t", "-c", "user.email=t@t", "-c", "tag.gpgSign=false", "-c", "commit.gpgSign=false"}, args...)...)
@@ -83,7 +97,11 @@ func initFixtureRepo(t *testing.T, root string, releases []release) {
 			t.Fatal(err)
 		}
 		for v := int64(1); v <= r.schema; v++ {
-			writeFile(t, filepath.Join(registry, fmt.Sprintf("%05d_m.sql", v)), "", 0o644)
+			content := readFile(t, filepath.Join(treeRegistry, migrationFiles[v]))
+			if r.diverged && v == r.schema {
+				content += "\n-- not this tree's bytes\n"
+			}
+			writeFile(t, filepath.Join(registry, migrationFiles[v]), content, 0o644)
 		}
 		writeFile(t, filepath.Join(registry, "README.md"), "", 0o644)
 		git("add", "-A", "internal")
@@ -102,17 +120,19 @@ type installRun struct {
 	err            error
 }
 
-// runSourceInstall runs the real install.sh, copied into a fixture repo carrying
-// releases, in its default source mode. A stub `go` on PATH stands in for both
+// runSourceInstall runs the real install.sh, copied into checkout, a directory
+// of a fixture repo carrying releases, in its default source mode. checkout ""
+// is the repo itself; any other names a tree with no .git of its own inside the
+// repo, as a source tarball unpacked there is. A stub `go` on PATH stands in for both
 // builds: the schema checker gets the real one built in TestMain, and lit gets
 // built, written in place to whatever path follows -o, so a build aimed at the
 // installed file keeps that file's inode. The two helper scripts install.sh
 // sources for the lit build are replaced by stubs; they set up a real Go build,
 // and the build is not what these tests are about.
-func runSourceInstall(t *testing.T, built string, releases []release) installRun {
+func runSourceInstall(t *testing.T, built string, releases []release, checkout string) installRun {
 	t.Helper()
 	root := t.TempDir()
-	scriptDir := filepath.Join(root, "scripts")
+	scriptDir := filepath.Join(root, checkout, "scripts")
 	stubBin := filepath.Join(root, "stub-bin")
 	targetDir := filepath.Join(root, "target-bin")
 	for _, d := range []string{scriptDir, stubBin, targetDir} {
@@ -206,18 +226,25 @@ func TestInstallComparesTheTreeSchemaWithTheNewestRelease(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		releases   []release
+		checkout   string
 		exit       int
 		comparison string
 		refusal    []string
 	}{{
 		name:       "a tree ahead of the release is refused",
-		releases:   []release{{"v0.1.0", tree - 1}},
+		releases:   []release{{tag: "v0.1.0", schema: tree - 1}},
 		exit:       3,
 		comparison: fmt.Sprintf("tree=%d release_tag=v0.1.0 release_schema=%d verdict=refuse", tree, tree-1),
-		refusal:    []string{fmt.Sprintf("reach schema %d", tree), "v0.1.0, supports schema " + fmt.Sprint(tree-1), "scripts/install.sh --latest-release"},
+		refusal:    []string{fmt.Sprintf("reach schema %d", tree), "v0.1.0, supports schema " + fmt.Sprint(tree-1), "v0.1.0 does not carry these migrations", "scripts/install.sh --latest-release"},
+	}, {
+		name:       "a tree whose migration differs from the release's at the same version is refused",
+		releases:   []release{{tag: "v0.1.0", schema: tree, diverged: true}},
+		exit:       3,
+		comparison: fmt.Sprintf("tree=%d release_tag=v0.1.0 release_schema=%d verdict=refuse", tree, tree),
+		refusal:    []string{fmt.Sprintf("%05d_", tree), "v0.1.0 does not carry these migrations", "scripts/install.sh --latest-release"},
 	}, {
 		name:       "a tree level with the release installs",
-		releases:   []release{{"v0.1.0", tree}},
+		releases:   []release{{tag: "v0.1.0", schema: tree}},
 		comparison: fmt.Sprintf("tree=%d release_tag=v0.1.0 release_schema=%d verdict=install", tree, tree),
 	}, {
 		name:       "a repo with no release tag is refused",
@@ -225,18 +252,25 @@ func TestInstallComparesTheTreeSchemaWithTheNewestRelease(t *testing.T) {
 		comparison: fmt.Sprintf("tree=%d release_tag=none release_schema=none verdict=refuse", tree),
 		refusal:    []string{"no release tag", "scripts/install.sh --latest-release"},
 	}, {
+		name:       "a tree with no .git of its own reads no tags, even inside a repo that has them",
+		releases:   []release{{tag: "v0.1.0", schema: tree}},
+		checkout:   "src",
+		exit:       1,
+		comparison: fmt.Sprintf("tree=%d release_tag=none release_schema=none verdict=refuse", tree),
+		refusal:    []string{"no release tag", "scripts/install.sh --latest-release"},
+	}, {
 		name:       "a non-release tag is not a release",
-		releases:   []release{{"v0.1.0", tree - 1}, {"v0.1.0.1", tree}},
+		releases:   []release{{tag: "v0.1.0", schema: tree - 1}, {tag: "v0.1.0.1", schema: tree}},
 		exit:       3,
 		comparison: fmt.Sprintf("tree=%d release_tag=v0.1.0 release_schema=%d verdict=refuse", tree, tree-1),
 	}, {
 		name:       "the newest release is the highest version, not the last name",
-		releases:   []release{{"v0.10.0", tree}, {"v0.9.0", tree - 1}},
+		releases:   []release{{tag: "v0.10.0", schema: tree}, {tag: "v0.9.0", schema: tree - 1}},
 		comparison: fmt.Sprintf("tree=%d release_tag=v0.10.0 release_schema=%d verdict=install", tree, tree),
 	}} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			run := runSourceInstall(t, newLit, tc.releases)
+			run := runSourceInstall(t, newLit, tc.releases, tc.checkout)
 			if got := run.exitCode(t); got != tc.exit {
 				t.Fatalf("exit = %d, want %d\nstdout:\n%s\nstderr:\n%s", got, tc.exit, run.stdout, run.stderr)
 			}
@@ -304,7 +338,7 @@ func TestReleaseModeAcceptsExactlyTheReleaseTags(t *testing.T) {
 // its inode, and the version line reports the binary that was installed.
 func TestInstallRenamesTheStagedBuildOverTheInstalledLit(t *testing.T) {
 	t.Parallel()
-	run := runSourceInstall(t, newLit, []release{{"v0.1.0", treeSchema(t)}})
+	run := runSourceInstall(t, newLit, []release{{tag: "v0.1.0", schema: treeSchema(t)}}, "")
 	if run.err != nil {
 		t.Fatalf("install failed: %v\nstdout:\n%s\nstderr:\n%s", run.err, run.stdout, run.stderr)
 	}
@@ -324,7 +358,7 @@ func TestInstallRenamesTheStagedBuildOverTheInstalledLit(t *testing.T) {
 // script says where that lit was left.
 func TestInstallLeavesTheInstalledLitWhenTheStagedBuildCannotRun(t *testing.T) {
 	t.Parallel()
-	run := runSourceInstall(t, brokenLit, []release{{"v0.1.0", treeSchema(t)}})
+	run := runSourceInstall(t, brokenLit, []release{{tag: "v0.1.0", schema: treeSchema(t)}}, "")
 	var exitErr *exec.ExitError
 	if !errors.As(run.err, &exitErr) {
 		t.Fatalf("install err = %v, want a non-zero exit\nstdout:\n%s", run.err, run.stdout)

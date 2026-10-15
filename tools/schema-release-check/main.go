@@ -3,19 +3,22 @@
 // it before building lit, passing the newest release tag in this checkout as
 // its one argument: the empty string when the checkout has none.
 //
-// The tree's schema is migrations.MaxVersion(): this binary is built from the
-// same tree as the lit about to be installed, so it embeds the same registry.
-// The release's schema is the highest migration in the tag's
-// internal/store/migrations, the files that release's binary embedded.
+// A tree is released when every migration it embeds is in the tag's
+// internal/store/migrations byte for byte: the files that release's binary
+// embedded. This binary is built from the same tree as the lit about to be
+// installed, so it embeds the same registry. Comparing bytes, not only the
+// highest version, refuses a tree whose migration shares a version with the
+// release's but not its SQL: a lit built from it would record that version for
+// SQL no release ran.
 //
 // Every run prints one comparison line on stdout, whatever the verdict:
 //
 //	schema-release-check: tree=10 release_tag=v0.18.0 release_schema=9 verdict=refuse
 //
-// Exit codes: 0, install; 3, the tree's schema is ahead of the newest release;
-// 1, the tree cannot be shown released (no release tag, or the comparison could
-// not be made). CI's install step accepts 3 and nothing else, because a merged
-// migration leaves master ahead until its release is cut.
+// Exit codes: 0, install; 3, the tree carries a migration the newest release
+// does not; 1, the tree cannot be shown released (no release tag, or the
+// comparison could not be made). CI's install step accepts 3 and nothing else,
+// because a merged migration leaves master ahead until its release is cut.
 package main
 
 import (
@@ -23,8 +26,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
+	"path"
+	"slices"
 	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
@@ -77,19 +83,20 @@ func compare(tag string, stderr io.Writer) outcome {
 	if tag == "" {
 		return outcome{tree: fmt.Sprint(tree), tag: "none", schema: "none", exit: exitUnknown,
 			refusal: fmt.Sprintf("error: this checkout has no release tag (vX.Y.Z), so nothing shows its schema (%d) is released; lit was not installed.\n"+
-				"       Fetch the release tags (git fetch origin --tags), or install a release: %s\n", tree, latestRelease)}
+				"       In a git clone, fetch the release tags (git fetch origin --tags); or install a release: %s\n", tree, latestRelease)}
 	}
-	released, err := releaseSchema(tag, stderr)
+	released, unreleased, err := releaseSchema(tag, stderr)
 	if err != nil {
 		return outcome{tree: fmt.Sprint(tree), tag: tag, schema: "unknown", exit: exitUnknown,
 			refusal: fmt.Sprintf("error: schema-release-check: %v\n", err)}
 	}
 	o := outcome{tree: fmt.Sprint(tree), tag: tag, schema: fmt.Sprint(released), exit: exitInstall}
-	if tree > released {
+	if len(unreleased) > 0 {
 		o.exit = exitTreeAhead
 		o.refusal = fmt.Sprintf("error: this tree's migrations reach schema %d, and the newest release, %s, supports schema %d at most.\n"+
-			"       A lit built from it would migrate a workspace to a schema no release can open, so it was not installed.\n"+
-			"       Install a release: %s\n", tree, tag, released, latestRelease)
+			"       %s does not carry these migrations as this tree has them: %s.\n"+
+			"       A lit built from this tree would migrate a workspace to a schema no release supports, so it was not installed.\n"+
+			"       Install a release: %s\n", tree, tag, released, tag, strings.Join(unreleased, ", "), latestRelease)
 	}
 	return o
 }
@@ -101,19 +108,87 @@ func or(s, empty string) string {
 	return s
 }
 
-// releaseSchema is the highest migration version in tag's registry.
-func releaseSchema(tag string, stderr io.Writer) (int64, error) {
+// releaseSchema is the highest migration version in tag's registry, and the
+// migrations this tree embeds that tag's registry does not hold byte for byte.
+func releaseSchema(tag string, stderr io.Writer) (int64, []string, error) {
 	var out bytes.Buffer
-	cmd := exec.Command("git", "ls-tree", "--name-only", "refs/tags/"+tag, "--", registryInTree)
+	cmd := exec.Command("git", "ls-tree", "-z", "refs/tags/"+tag, "--", registryInTree)
 	cmd.Stdout, cmd.Stderr = &out, stderr
 	if err := cmd.Run(); err != nil {
-		return 0, fmt.Errorf("list %s at %s: %w", registryInTree, tag, err)
+		return 0, nil, fmt.Errorf("list %s at %s: %w", registryInTree, tag, err)
 	}
-	v, err := maxSchema(strings.Fields(out.String()))
+	release, err := parseLsTree(out.String())
 	if err != nil {
-		return 0, fmt.Errorf("%s at %s: %w", registryInTree, tag, err)
+		return 0, nil, fmt.Errorf("%s at %s: %w", registryInTree, tag, err)
 	}
-	return v, nil
+	v, err := maxSchema(slices.Collect(maps.Keys(release)))
+	if err != nil {
+		return 0, nil, fmt.Errorf("%s at %s: %w", registryInTree, tag, err)
+	}
+	tree, err := treeRegistry(stderr)
+	if err != nil {
+		return 0, nil, err
+	}
+	return v, unreleasedMigrations(tree, release), nil
+}
+
+// blobIDs maps a migration file's name to its git blob id.
+type blobIDs map[string]string
+
+// parseLsTree reads `git ls-tree -z` output: NUL-terminated
+// "<mode> <type> <id>\t<path>" entries.
+func parseLsTree(out string) (blobIDs, error) {
+	ids := blobIDs{}
+	for _, entry := range strings.Split(strings.TrimSuffix(out, "\x00"), "\x00") {
+		if entry == "" {
+			continue
+		}
+		meta, file, ok := strings.Cut(entry, "\t")
+		fields := strings.Fields(meta)
+		if !ok || len(fields) != 3 {
+			return nil, fmt.Errorf("unreadable git ls-tree entry %q", entry)
+		}
+		ids[path.Base(file)] = fields[2]
+	}
+	return ids, nil
+}
+
+// treeRegistry is the blob id of every migration this binary embeds, as git
+// hashes them. --no-filters hashes the embedded bytes as they are.
+func treeRegistry(stderr io.Writer) (blobIDs, error) {
+	entries, err := migrations.FS.ReadDir(".")
+	if err != nil {
+		return nil, fmt.Errorf("read the embedded migration registry: %w", err)
+	}
+	ids := blobIDs{}
+	for _, e := range entries {
+		content, err := migrations.FS.ReadFile(e.Name())
+		if err != nil {
+			return nil, fmt.Errorf("read embedded migration %s: %w", e.Name(), err)
+		}
+		var out bytes.Buffer
+		cmd := exec.Command("git", "hash-object", "--no-filters", "--stdin")
+		cmd.Stdin, cmd.Stdout, cmd.Stderr = bytes.NewReader(content), &out, stderr
+		if err := cmd.Run(); err != nil {
+			return nil, fmt.Errorf("hash embedded migration %s: %w", e.Name(), err)
+		}
+		ids[e.Name()] = strings.TrimSpace(out.String())
+	}
+	return ids, nil
+}
+
+// unreleasedMigrations is every tree migration the release lacks or holds
+// different bytes for, in name order. Empty exactly when the release carries
+// the whole tree's registry, which bounds the tree's schema by the release's.
+func unreleasedMigrations(tree, release blobIDs) []string {
+	var unreleased []string
+	for name, id := range tree {
+		if release[name] != id {
+			unreleased = append(unreleased, name)
+		}
+	}
+	slices.Sort(unreleased)
+	return unreleased
 }
 
 // maxSchema applies migrations.MaxVersion's registry rule to file names: the
@@ -121,7 +196,7 @@ func releaseSchema(tag string, stderr io.Writer) (int64, error) {
 // empty. [LAW:one-source-of-truth] migrations.ParseVersion reads each version;
 // TestMaxSchemaAgreesWithTheEmbeddedRegistry holds this rule to MaxVersion's.
 func maxSchema(names []string) (int64, error) {
-	var highest int64
+	var versions []int64
 	for _, name := range names {
 		if !strings.HasSuffix(name, ".sql") {
 			continue
@@ -130,10 +205,10 @@ func maxSchema(names []string) (int64, error) {
 		if !ok {
 			return 0, fmt.Errorf("migration file %q does not begin with a numeric version", name)
 		}
-		highest = max(highest, v)
+		versions = append(versions, v)
 	}
-	if highest == 0 {
+	if len(versions) == 0 {
 		return 0, errors.New("migration registry is empty")
 	}
-	return highest, nil
+	return slices.Max(versions), nil
 }

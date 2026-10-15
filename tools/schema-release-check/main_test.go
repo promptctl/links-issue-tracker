@@ -38,6 +38,7 @@ func TestMaxSchemaShape(t *testing.T) {
 	}{
 		{names: []string{"m/00002_b.sql", "m/00010_c.sql", "m/00001_a.sql"}, want: 10},
 		{names: []string{"m/00001_a.sql", "m/README.md", "m/bounds.go"}, want: 1},
+		{names: []string{"m/00000_a.sql"}, want: 0},
 		{names: []string{"m/00001_a.sql", "m/notes.sql"}, err: `"m/notes.sql" does not begin with a numeric version`},
 		{names: []string{"m/README.md"}, err: "registry is empty"},
 		{names: nil, err: "registry is empty"},

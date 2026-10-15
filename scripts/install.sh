@@ -10,8 +10,8 @@
 # owns a `lit` if any; otherwise $GOBIN) and run the same stale-binary
 # detector. Switching modes is a single flag, not a different script.
 #
-# The source build refuses a tree whose migrations reach a schema the newest
-# local vX.Y.Z tag does not (exit 3), and a checkout with no such tag (exit 1);
+# The source build refuses a tree carrying a migration the newest local
+# vX.Y.Z tag does not (exit 3), and a checkout with no such tag (exit 1);
 # install a release instead. A tree no release supports is for go test and
 # scratch workspaces only (CONTRIBUTING.md).
 #
@@ -207,25 +207,32 @@ case "$mode" in
         # Refuse a tree whose schema no release supports, before lit is built:
         # an installed lit runs inside real workspaces, and a migration no
         # release carries would move a workspace's schema past every release.
-        # The newest local release tag is the comparison's "released"; a stale
-        # tag list only lowers it, so it can refuse a tree it should pass and
-        # never passes one that is ahead. The checker prints the comparison on
-        # every run and exits 3 when the tree is ahead, 1 when the tree cannot
-        # be shown released. It is built, not `go run`, because `go run`
-        # reports every failure as 1. [LAW:single-enforcer]
+        # The newest local release tag is the comparison's "released". A tag
+        # missing from the local list only makes it refuse a tree it could
+        # pass; every local vX.Y.Z tag is trusted as published, and only the
+        # release pipeline makes one. The tags are this checkout's own: a tree
+        # with no .git of its own (a source tarball, even one unpacked inside
+        # another repo) has none, and is refused. The checker prints the
+        # comparison on every run and exits 3 when the tree carries a migration
+        # the release does not, 1 when the tree cannot be shown released. It
+        # is built, not `go run`, because `go run` reports every failure as 1.
+        # [LAW:single-enforcer]
         # shellcheck source=scripts/release-tags.sh
         . "$ROOT_DIR/scripts/release-tags.sh"
-        newest_tag="$(git tag --list | newest_release_tag)"
-        GOFLAGS="${GOFLAGS:+$GOFLAGS }-buildvcs=false" go build -o "$tmp/schema-release-check" ./tools/schema-release-check
-        "$tmp/schema-release-check" "$newest_tag"
+        tags=""
+        if [ -e "$ROOT_DIR/.git" ]; then
+            tags="$(git tag --list)"
+        fi
+        newest_tag="$(printf '%s\n' "$tags" | newest_release_tag)"
+        checker="$tmp/schema-release-check${BIN_NAME#lit}"
+        GOFLAGS="${GOFLAGS:+$GOFLAGS }-buildvcs=false" go build -o "$checker" ./tools/schema-release-check
+        "$checker" "$newest_tag"
         # ldflag-stamp the build so `lit version` reports meaningful identity
         # for source builds (releases stamp via goreleaser; this is the
-        # equivalent for ad-hoc checkouts). If we have NO git metadata
-        # (checkout from a tarball, broken repo, etc.), leave Version EMPTY
-        # so `lit version` honestly reports `lit dev (...)`. A spoofed
-        # placeholder like "dev" would make version.IsDev report FALSE and
-        # mislead downstream tooling.
-        ver="$(git describe --tags --always --dirty 2>/dev/null || true)"
+        # equivalent for ad-hoc checkouts). The guard above has already
+        # refused a tree with no git metadata, so describe always has a
+        # commit to name.
+        ver="$(git describe --tags --always --dirty)"
         # Strip a leading `v` so the source-build Version matches goreleaser's
         # convention. goreleaser's `.Version` template emits `0.1.0` for tag
         # `v0.1.0`; downstream consumers (the manifest, archive filenames,
@@ -235,8 +242,8 @@ case "$mode" in
         # `lit v0.1.0` while a release build reports `lit 0.1.0`.
         # [LAW:one-source-of-truth] one canonical format for Version across
         # both producers; the source-build adapter aligns to the release form.
-        # Empty input passes through unchanged (no leading `v` to strip); bare
-        # SHAs from `git describe --always` are hex and never start with `v`.
+        # Bare SHAs from `git describe --always` are hex and never start
+        # with `v`.
         ver="${ver#v}"
         pkg="github.com/promptctl/links-issue-tracker/internal/version"
         # Put ICU/zstd on the cgo search path for the embedded Dolt engine. This
