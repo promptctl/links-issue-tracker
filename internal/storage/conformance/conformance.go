@@ -207,6 +207,7 @@ var cases = []engineCase{
 	{"an_import_file_that_breaks_a_rule_is_refused_whole", anImportFileThatBreaksARuleIsRefusedWhole},
 	{"the_hierarchy_stays_a_tree", theHierarchyStaysATree},
 	{"blocks_never_runs_along_the_hierarchy", blocksNeverRunsAlongTheHierarchy},
+	{"blocks_never_orders_two_leaves_of_one_epic", blocksNeverOrdersTwoLeavesOfOneEpic},
 	{"topics_derive_from_issues", topicsDeriveFromIssues},
 	{"issue_identities_cover_every_row", issueIdentitiesCoverEveryRow},
 	{"export_carries_whole_store", exportCarriesWholeStore},
@@ -2231,11 +2232,12 @@ func labelsRoundtrip(t *testing.T, ctx context.Context, st storage.Store, clk *c
 }
 
 func relationsRoundtrip(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	// Siblings under one epic: a blocked-by edge between branches of one tree is
-	// allowed, only one along the hierarchy is not.
+	// The dependency lives in another epic: between two leaves of one epic,
+	// rank orders the work and a blocked-by edge is refused.
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+	upstream := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "upstream epic", Topic: "core", IssueType: model.TypeEpic})
 	dependent := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "dependent", Topic: "core", ParentID: epic.ID})
-	dependency := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "dependency", Topic: "core", ParentID: epic.ID})
+	dependency := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "dependency", Topic: "core", ParentID: upstream.ID})
 	peer := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "peer", Topic: "core", ParentID: epic.ID})
 
 	rel, err := st.AddRelation(ctx, storage.AddRelationInput{
@@ -2441,6 +2443,10 @@ func anImportFileThatBreaksARuleIsRefusedWhole(t *testing.T, ctx context.Context
 			storage.ImportTreeSpec{LocalID: "s", Title: "s", IssueType: "epic", Topic: "core", Parent: "e"},
 			storage.ImportTreeSpec{LocalID: "t", Title: "t", IssueType: "task", Topic: "core", Parent: "s", BlockedBy: []string{"e"}},
 		)},
+		{"ImportTree(a task blocked by a task beside it under one epic)", tree(lands,
+			storage.ImportTreeSpec{LocalID: "a", Title: "a", IssueType: "task", Topic: "core", Parent: "e"},
+			storage.ImportTreeSpec{LocalID: "b", Title: "b", IssueType: "task", Topic: "core", Parent: "e", BlockedBy: []string{"a"}},
+		)},
 		{"BulkApply(no documents)", bulk()},
 		{"BulkApply(a create missing its topic)", bulk(storage.BulkIssueSpec{Title: &title, IssueType: &epicType})},
 		{"BulkApply(a topic too short to be one, after a create that would land)", bulk(epic("e", ""),
@@ -2461,6 +2467,9 @@ func anImportFileThatBreaksARuleIsRefusedWhole(t *testing.T, ctx context.Context
 			storage.BulkIssueSpec{Title: &title, Topic: &topic, IssueType: &epicType, BlockedBy: []string{existing.ID, existing.ID}})},
 		{"BulkApply(a task with no local_id blocked by the epic it sits under)", bulk(epic("e", ""),
 			storage.BulkIssueSpec{Title: &title, Topic: &topic, IssueType: &taskType, Parent: "e", BlockedBy: []string{"e"}})},
+		{"BulkApply(a task blocked by a task beside it under one epic)", bulk(epic("e", ""),
+			storage.BulkIssueSpec{LocalID: "a", Title: &title, Topic: &topic, IssueType: &taskType, Parent: "e"},
+			storage.BulkIssueSpec{Title: &title, Topic: &topic, IssueType: &taskType, Parent: "e", BlockedBy: []string{"a"}})},
 	} {
 		assertRefused(t, imp.do(), imp.what)
 	}
@@ -2730,6 +2739,67 @@ func blocksNeverRunsAlongTheHierarchy(t *testing.T, ctx context.Context, st stor
 	assertHierarchyBlocksRefused(t, err, "BulkApply(a leaf depending on its grandparent epic)")
 }
 
+// blocksNeverOrdersTwoLeavesOfOneEpic pins the other half of the same-epic
+// rule: a blocked-by edge between two leaves directly under one epic is
+// refused on each write path that can create one — AddRelation, and both
+// import formats whether the file names the epic by local_id or by real id.
+// Edges that order work units stay legal: a leaf against the sub-epic beside
+// it, either way round, and leaves of two different epics.
+func blocksNeverOrdersTwoLeavesOfOneEpic(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+	first := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "first", Topic: "core", ParentID: epic.ID})
+	second := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "second", Topic: "core", IssueType: model.TypeBug, ParentID: epic.ID})
+	sub := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "sub-epic", Topic: "core", IssueType: model.TypeEpic, ParentID: epic.ID})
+	other := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "other epic", Topic: "core", IssueType: model.TypeEpic})
+	elsewhere := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "elsewhere", Topic: "core", ParentID: other.ID})
+
+	_, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: second.ID, DstID: first.ID, Type: model.RelBlockedBy})
+	assertHierarchyBlocksRefused(t, err, "AddRelation(a leaf blocked by the leaf beside it)")
+	edges, err := st.ListRelationsForIssue(ctx, second.ID, model.RelBlockedBy)
+	if err != nil {
+		t.Fatalf("ListRelationsForIssue(%s) error = %v", second.ID, err)
+	}
+	if len(edges) != 0 {
+		t.Errorf("blocked-by edges at %s after the refusal = %+v, want none", second.ID, edges)
+	}
+
+	_, err = st.ImportTree(ctx, prefix, []storage.ImportTreeSpec{
+		{LocalID: "e", Title: "imported epic", IssueType: "epic", Topic: "core"},
+		{LocalID: "a", Title: "imported first", IssueType: "task", Topic: "core", Parent: "e"},
+		{LocalID: "b", Title: "imported second", IssueType: "task", Topic: "core", Parent: "e", BlockedBy: []string{"a"}},
+	})
+	assertHierarchyBlocksRefused(t, err, "ImportTree(a leaf blocked by the leaf beside it)")
+
+	title, topic, epicType, taskType := "bulk", "core", "epic", "task"
+	_, err = st.BulkApply(ctx, prefix, "ada", []storage.BulkIssueSpec{
+		{LocalID: "e", Title: &title, Topic: &topic, IssueType: &epicType},
+		{LocalID: "a", Title: &title, Topic: &topic, IssueType: &taskType, Parent: "e"},
+		{Title: &title, Topic: &topic, IssueType: &taskType, Parent: "e", BlockedBy: []string{"a"}},
+	})
+	assertHierarchyBlocksRefused(t, err, "BulkApply(a leaf blocked by the leaf beside it, epic in the file)")
+	_, err = st.BulkApply(ctx, prefix, "ada", []storage.BulkIssueSpec{
+		{Title: &title, Topic: &topic, IssueType: &taskType, Parent: epic.ID, BlockedBy: []string{first.ID}},
+	})
+	assertHierarchyBlocksRefused(t, err, "BulkApply(a leaf blocked by an existing leaf beside it)")
+
+	accepted := []struct {
+		what                  string
+		dependent, dependency string
+	}{
+		{"a leaf blocked by the sub-epic beside it", first.ID, sub.ID},
+		{"a sub-epic blocked by the leaf beside it", sub.ID, first.ID},
+		{"a leaf blocked by a leaf of another epic", first.ID, elsewhere.ID},
+	}
+	for _, a := range accepted {
+		if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: a.dependent, DstID: a.dependency, Type: model.RelBlockedBy}); err != nil {
+			t.Errorf("AddRelation(%s) error = %v; it orders work units, not two leaves of one epic", a.what, err)
+		}
+		if err := st.RemoveRelation(ctx, a.dependent, a.dependency, model.RelBlockedBy); err != nil {
+			t.Fatalf("RemoveRelation(%s) error = %v", a.what, err)
+		}
+	}
+}
+
 func assertHierarchyBlocksRefused(t *testing.T, err error, what string) {
 	t.Helper()
 	if err == nil {
@@ -2967,9 +3037,10 @@ func importTreeMapsLocalIDs(t *testing.T, ctx context.Context, st storage.Store,
 	// The file lists dependents first: other depends on leaf, and both parent
 	// to root, so creation must reverse the file order — the asserted sequence
 	// below fails for an engine that reports file order instead of creation
-	// order.
+	// order. other is a sub-epic: between two leaves of one epic a blocked_by
+	// is refused, since rank orders them.
 	result, err := st.ImportTree(ctx, prefix, []storage.ImportTreeSpec{
-		{LocalID: "other", Title: "other", IssueType: "task", Topic: "core", Parent: "root", BlockedBy: []string{"leaf"}},
+		{LocalID: "other", Title: "other", IssueType: "epic", Topic: "core", Parent: "root", BlockedBy: []string{"leaf"}},
 		{LocalID: "leaf", Title: "leaf", IssueType: "task", Topic: "core", Parent: "root"},
 		{LocalID: "root", Title: "root", IssueType: "epic", Topic: "core"},
 	})

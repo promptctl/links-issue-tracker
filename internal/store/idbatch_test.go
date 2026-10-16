@@ -244,11 +244,17 @@ func newBatchedRelationFixture(t *testing.T, ctx context.Context, st *Store) bat
 		}
 		subjects = append(subjects, issue.ID)
 	}
-	sink, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Sink", Topic: "batch", IssueType: "task", ParentID: epic.ID})
+	// Sink and source sit in an epic of their own: between two leaves of one
+	// epic a blocked-by edge is refused.
+	ends, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Ends epic", Topic: "batch", IssueType: "epic"})
+	if err != nil {
+		t.Fatalf("CreateIssue(ends epic) error = %v", err)
+	}
+	sink, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Sink", Topic: "batch", IssueType: "task", ParentID: ends.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue(sink) error = %v", err)
 	}
-	source, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Source", Topic: "batch", IssueType: "task", ParentID: epic.ID})
+	source, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Source", Topic: "batch", IssueType: "task", ParentID: ends.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue(source) error = %v", err)
 	}

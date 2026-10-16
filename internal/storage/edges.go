@@ -1,44 +1,80 @@
 package storage
 
-import "github.com/promptctl/links-issue-tracker/internal/model"
+import (
+	"slices"
+
+	"github.com/promptctl/links-issue-tracker/internal/model"
+)
 
 // SameEpicBlocksRejectionMessage refuses a blocked-by edge that would order work
 // inside one epic, where rank is already the ordering signal.
 // [LAW:one-source-of-truth] The text is user-facing contract and asserted
-// verbatim in tests; the CLI's sibling check and both engines' ancestry check
-// read it from here so the two halves of the rule cannot drift apart.
+// verbatim in tests; RejectBlocksWithinEpic is the one rule that refuses with it.
 const SameEpicBlocksRejectionMessage = "Do not set blocked-by relationships between two issues in the same epic.  Use rank to specify that one issue must be completed before another issue"
 
-// RejectBlocksAlongHierarchy refuses a blocked-by edge whose endpoints sit one
-// inside the other's epic, at any depth. epicParentOf maps each child to every
-// parent it can climb to that is an epic; a parent that is not an epic is left
-// out, so the walk ends there, where readiness's own climb (epicsAbove) ends.
+// EpicTree is the containment the same-epic blocks rule reads: every issue
+// that sits directly under an epic, with those epics and its own type. An
+// issue under no epic has no entry. A parent that is not an epic is left out,
+// so a climb ends there, where readiness's own climb (epicsAbove) ends.
+type EpicTree map[string]EpicPlacement
+
+// EpicPlacement is one issue's entry in an EpicTree. Epics holds more than one
+// id only in restored data, which the single-parent rule never gated.
+type EpicPlacement struct {
+	Epics []string
+	Type  model.IssueType
+}
+
+// Place records that child, of childType, sits directly under epic.
+func (t EpicTree) Place(child string, childType model.IssueType, epic string) {
+	placement := t[child]
+	placement.Type = childType
+	placement.Epics = append(placement.Epics, epic)
+	t[child] = placement
+}
+
+// RejectBlocksWithinEpic refuses a blocked-by edge that orders work inside one
+// epic, which is rank's job. Two shapes do that:
 //
-// Either direction closes a wait loop through containment: an epic's blockers
-// hold back everything beneath it, so an issue blocking an epic it sits under
-// waits on itself, and an epic blocking something it contains waits on its own
-// work. Both are intra-epic ordering, which is rank's job.
+//   - One endpoint sits inside the other's epic, at any depth. Either direction
+//     closes a wait loop through containment: an epic's blockers hold back
+//     everything beneath it, so an issue blocking an epic it sits under waits
+//     on itself, and an epic blocking something it contains waits on its own
+//     work.
+//   - Both endpoints are leaves directly under one epic. Edges between epics
+//     stay legal, sub-epics of one epic included, as does an edge between a
+//     leaf and the sub-epic beside it: those order work units, where the
+//     leaves of one epic are rank's to order.
 //
-// Both engines call this where every blocked-by edge is written, so `lit dep add`
-// and both import formats meet the same rule. A reparent can still leave the
-// shape behind; readiness reads the workspace as it is and stays correct.
+// Both engines call this where every blocked-by edge is written, and the file
+// gate calls it over a file's own hierarchy, so `lit dep add` and both import
+// formats meet the same rule. A reparent can still leave the shape behind;
+// readiness reads the workspace as it is and stays correct.
 // [LAW:single-enforcer] [LAW:one-source-of-truth]
-func RejectBlocksAlongHierarchy(epicParentOf map[string][]string, dependent, dependency string) error {
-	if climbsTo(epicParentOf, dependent, dependency) || climbsTo(epicParentOf, dependency, dependent) {
+func RejectBlocksWithinEpic(tree EpicTree, dependent, dependency string) error {
+	if climbsTo(tree, dependent, dependency) || climbsTo(tree, dependency, dependent) || leafSiblings(tree, dependent, dependency) {
 		return model.ValidationError{Message: SameEpicBlocksRejectionMessage}
 	}
 	return nil
 }
 
-// climbsTo reports whether walking up epicParentOf from `from` reaches `to`.
+// leafSiblings reports whether a and b are both leaves directly under one
+// epic. An issue under no epic has the zero placement, which shares no epic.
+func leafSiblings(tree EpicTree, a, b string) bool {
+	placeA, placeB := tree[a], tree[b]
+	return !placeA.Type.IsContainer() && !placeB.Type.IsContainer() &&
+		slices.ContainsFunc(placeA.Epics, func(epic string) bool { return slices.Contains(placeB.Epics, epic) })
+}
+
+// climbsTo reports whether walking up tree from `from` reaches `to`.
 // seen bounds the walk, because data written before the parent-cycle rule can
 // already hold a loop, and this check must not be what hangs on it.
-func climbsTo(epicParentOf map[string][]string, from, to string) bool {
+func climbsTo(tree EpicTree, from, to string) bool {
 	seen := map[string]struct{}{from: {}}
 	for stack := []string{from}; len(stack) > 0; {
 		at := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
-		for _, parent := range epicParentOf[at] {
+		for _, parent := range tree[at].Epics {
 			if parent == to {
 				return true
 			}

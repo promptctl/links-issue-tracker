@@ -223,24 +223,27 @@ func (e *Engine) rejectCycle(relType model.RelationType, srcID, dstID string) er
 		if err := e.rejectBlocksCycle(srcID, dstID); err != nil {
 			return err
 		}
-		return storage.RejectBlocksAlongHierarchy(e.epicParentOf(), srcID, dstID)
+		return storage.RejectBlocksWithinEpic(e.epicTree(), srcID, dstID)
 	case model.RelParentChild:
 		return e.rejectParentCycle(srcID, dstID)
 	}
 	return nil
 }
 
-// epicParentOf maps each child to its parents that are epics — the Dolt
-// engine's loadEpicParentEdges, rendered over this engine's slices. An edge
-// whose parent has no record is dropped, as that engine's join on issues drops it.
-func (e *Engine) epicParentOf() map[string][]string {
-	epicParentOf := map[string][]string{}
+// epicTree places each child under its parents that are epics — the Dolt
+// engine's loadEpicTree, rendered over this engine's slices. An edge with
+// either endpoint missing its record is dropped, as that engine's joins on
+// issues drop it.
+func (e *Engine) epicTree() storage.EpicTree {
+	tree := storage.EpicTree{}
 	for _, rel := range e.relations {
-		if parent, ok := e.issues[rel.DstID]; ok && rel.Type == model.RelParentChild && parent.issueType.IsContainer() {
-			epicParentOf[rel.SrcID] = append(epicParentOf[rel.SrcID], rel.DstID)
+		child, childOK := e.issues[rel.SrcID]
+		parent, parentOK := e.issues[rel.DstID]
+		if childOK && parentOK && rel.Type == model.RelParentChild && parent.issueType.IsContainer() {
+			tree.Place(rel.SrcID, child.issueType, rel.DstID)
 		}
 	}
-	return epicParentOf
+	return tree
 }
 
 // rejectParentCycle refuses an edge that would close a loop in the hierarchy.

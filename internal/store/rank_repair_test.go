@@ -285,6 +285,39 @@ func createRankTestIssue(t *testing.T, ctx context.Context, st *Store, epic, tit
 	return issue.ID
 }
 
+// addBlocksWithinEpic stores dependent blocked-by dependency where both are
+// leaves of one epic. Writing that edge is refused, so it is stored the way a
+// workspace comes to hold one: written while dependent sits in another epic,
+// and kept when dependent moves back. A reparent changes no rank, so every
+// rank a test set stands, and rank repair meets the edge as it would in a
+// workspace. The epic dependent waited in is purged, leaving nothing else.
+func addBlocksWithinEpic(t *testing.T, ctx context.Context, st *Store, dependent, dependency string) {
+	t.Helper()
+	detail, err := st.GetIssueDetail(ctx, dependent)
+	if err != nil {
+		t.Fatalf("GetIssueDetail(%s) error = %v", dependent, err)
+	}
+	if detail.Parent == nil {
+		t.Fatalf("%s has no epic to keep the edge inside", dependent)
+	}
+	holder, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Holder", Topic: "rank", IssueType: "epic"})
+	if err != nil {
+		t.Fatalf("CreateIssue(holder) error = %v", err)
+	}
+	if _, err := st.SetParent(ctx, storage.SetParentInput{ChildID: dependent, ParentID: holder.ID, CreatedBy: "tester"}); err != nil {
+		t.Fatalf("SetParent(%s into the holder) error = %v", dependent, err)
+	}
+	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: dependent, DstID: dependency, Type: "blocked-by", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("AddRelation(%s blocked by %s) error = %v", dependent, dependency, err)
+	}
+	if _, err := st.SetParent(ctx, storage.SetParentInput{ChildID: dependent, ParentID: detail.Parent.ID, CreatedBy: "tester"}); err != nil {
+		t.Fatalf("SetParent(%s back into its epic) error = %v", dependent, err)
+	}
+	if _, err := st.Purge(ctx, storage.PurgeInput{IssueID: holder.ID, Actor: "tester"}); err != nil {
+		t.Fatalf("Purge(holder) error = %v", err)
+	}
+}
+
 // End to end through the store: a backlog in a known deliberate order with
 // exactly one inversion comes back with exactly one ticket moved, every other
 // ticket holding the byte-identical rank it went in with, and no inversions
@@ -309,9 +342,7 @@ func TestFixRankInversionsMovesOnlyTheInvertedTicket(t *testing.T) {
 	// One inversion: the ticket at position 1 depends on the ticket at
 	// position 4, which is ranked below it.
 	dependent, dependency := deliberate[1], deliberate[4]
-	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: dependent, DstID: dependency, Type: "blocked-by", CreatedBy: "tester"}); err != nil {
-		t.Fatalf("AddRelation(%s blocked by %s) error = %v", dependent, dependency, err)
-	}
+	addBlocksWithinEpic(t, ctx, st, dependent, dependency)
 	report, err := st.Doctor(ctx)
 	if err != nil {
 		t.Fatalf("Doctor(before) error = %v", err)
@@ -381,9 +412,7 @@ func TestFixRankInversionsPreservesTheBandBlockingOneGate(t *testing.T) {
 	before := ranksByID(t, ctx, st, deliberate)
 
 	for _, dependency := range band {
-		if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: gate, DstID: dependency, Type: "blocked-by", CreatedBy: "tester"}); err != nil {
-			t.Fatalf("AddRelation(gate blocked by %s) error = %v", dependency, err)
-		}
+		addBlocksWithinEpic(t, ctx, st, gate, dependency)
 	}
 
 	fixed, err := st.FixRankInversions(ctx)
@@ -535,9 +564,7 @@ func TestFixRankInversionsTwiceWritesNothingWithSmoothing(t *testing.T) {
 		{ids[1], ids[3]},
 		{ids[5], ids[7]},
 	} {
-		if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: edge.dependent, DstID: edge.dependency, Type: "blocked-by", CreatedBy: "tester"}); err != nil {
-			t.Fatalf("AddRelation(%s blocked by %s) error = %v", edge.dependent, edge.dependency, err)
-		}
+		addBlocksWithinEpic(t, ctx, st, edge.dependent, edge.dependency)
 	}
 	report, err := st.Doctor(ctx)
 	if err != nil {
