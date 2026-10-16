@@ -218,24 +218,36 @@ type SchemaMigrator interface {
 }
 
 // Downgraded is what a Downgrade did: the shape version it read under the lock
-// and decided from, how many down-migrations it applied, and the recovery
-// snapshot it took first. A Downgrade that stops before a step leaves that
-// step's field zero: a refusal or a target equal to the applied version
-// reverses nothing and takes no snapshot.
+// and decided from, how many down-migrations it applied, the recovery snapshot
+// it took first, and why rolling older recovery snapshots off afterwards
+// failed, if it did. A Downgrade that stops before a step leaves that step's
+// field zero: a refusal or a target equal to the applied version reverses
+// nothing and takes no snapshot.
 // [LAW:one-source-of-truth] the read that made the decision is the one
 // reported; a caller never reads the version again to describe it.
+// [LAW:types-are-the-program] PruneErr is a field, not Downgrade's error: the
+// prune runs after the reverse has committed, so its failure leaves the
+// workspace at the target shape. Downgrade's error means the shape is not
+// where the caller asked for it; a caller that stops on that error must not
+// stop on a leftover snapshot.
 type Downgraded struct {
 	From     int64
 	Reversed int
 	Snapshot string
+	PruneErr error
 }
 
 // EventRecord is the downgrade as event facts and counts, so the success and
 // every failure after the read name the same facts under the same keys.
 func (d Downgraded) EventRecord() (map[string]any, map[string]int) {
+	pruneErr := ""
+	if d.PruneErr != nil {
+		pruneErr = d.PruneErr.Error()
+	}
 	return map[string]any{
-			"downgrade.workspace_schema": d.From,
-			"downgrade.snapshot":         d.Snapshot,
+			"downgrade.workspace_schema":     d.From,
+			"downgrade.snapshot":             d.Snapshot,
+			"downgrade.snapshot_prune_error": pruneErr,
 		}, map[string]int{
 			"downgrade.reversed": d.Reversed,
 		}

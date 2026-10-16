@@ -400,10 +400,14 @@ func TestDowngradeSnapshotFailureReportsTheVersionItRead(t *testing.T) {
 	}
 }
 
-// A prune that fails after the reverse committed still reports the reverse:
-// the workspace is down, and the event must say so.
+// A prune that fails after the reverse committed does not fail the downgrade:
+// the workspace is at the target, so Downgrade reports the reverse with no
+// error and carries the prune failure on what it reports.
 func TestDowngradePruneFailureReportsTheCommittedReverse(t *testing.T) {
 	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("removal-permission injection has no effect as root")
+	}
 	ctx := context.Background()
 	st, doltRoot := openWorkspaceForDowngrade(t)
 	registryMax, err := migrations.MaxVersion()
@@ -434,14 +438,20 @@ func TestDowngradePruneFailureReportsTheCommittedReverse(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chmod(stuck, 0o755) })
 
 	done, err := st.Downgrade(ctx, registryMax-1)
-	if err == nil || !strings.Contains(err.Error(), "prune downgrade snapshots") {
-		t.Fatalf("err = %v, want the prune failure", err)
+	if err != nil {
+		t.Fatalf("Downgrade() error = %v, want the reverse reported without one", err)
 	}
 	if done == nil || !IsDowngradeSnapshotName(done.Snapshot) || done.Snapshot == filepath.Base(stuck) {
 		t.Fatalf("Downgrade reported %+v, want the snapshot it took", done)
 	}
-	if want := (storage.Downgraded{From: registryMax, Reversed: 1, Snapshot: done.Snapshot}); *done != want {
+	if done.PruneErr == nil || !strings.Contains(done.PruneErr.Error(), "prune downgrade snapshots") {
+		t.Fatalf("PruneErr = %v, want the prune failure", done.PruneErr)
+	}
+	if want := (storage.Downgraded{From: registryMax, Reversed: 1, Snapshot: done.Snapshot, PruneErr: done.PruneErr}); *done != want {
 		t.Fatalf("Downgrade reported %+v, want %+v", done, want)
+	}
+	if applied, err := st.AppliedSchemaVersion(ctx); err != nil || applied != registryMax-1 {
+		t.Fatalf("AppliedSchemaVersion() = %d, %v; want %d", applied, err, registryMax-1)
 	}
 }
 

@@ -101,12 +101,13 @@ func newerCurrentInfo() version.Info {
 
 // runDowngradeRecorded is downgrade's parse and work under a recorder the test
 // keeps, ended the way the dispatcher ends it, so it can read the facts and
-// counts the invocation's event carries — those an error records included.
-func runDowngradeRecorded(t *testing.T, scope downgradeScope, res release.Resolver, inst release.Installer) (map[string]any, map[string]int, error) {
+// counts the invocation's event carries — those an error records included —
+// and what it printed.
+func runDowngradeRecorded(t *testing.T, scope downgradeScope, res release.Resolver, inst release.Installer, binPath func() (string, error)) (map[string]any, map[string]int, string, error) {
 	t.Helper()
 	recorder := telemetry.Begin(telemetry.Event{})
 	ctx := telemetry.With(context.Background(), recorder)
-	l := downgradeLeafWith(res, inst, fixedBinPath("/p/lit", nil))
+	l := downgradeLeafWith(res, inst, binPath)
 	var out bytes.Buffer
 	positional, err := parseLeaf(ctx, l, []string{"--to", "v0.4.1"}, &out)
 	if err != nil {
@@ -114,7 +115,7 @@ func runDowngradeRecorded(t *testing.T, scope downgradeScope, res release.Resolv
 	}
 	err = l.work(ctx, &out, scope, positional)
 	ev := recorder.Finish(invocationEnd(time.Now(), err, nil))
-	return writtenFacts(t, ev), ev.Counts, err
+	return writtenFacts(t, ev), ev.Counts, out.String(), err
 }
 
 func fixedBinPath(path string, err error) func() (string, error) {
@@ -202,18 +203,19 @@ func TestRunDowngradeWithSchemaErrorSkipsInstall(t *testing.T) {
 // snapshot it took first.
 func TestRunDowngradeRecordsWhatItReversedAndInstalled(t *testing.T) {
 	t.Parallel()
-	facts, counts, err := runDowngradeRecorded(t, downgradeScope{schema: &stubDowngrader{done: reversedFromV4()}, current: newerCurrentInfo()}, &stubResolver{target: newFakeTarget()}, &stubInstaller{})
+	facts, counts, _, err := runDowngradeRecorded(t, downgradeScope{schema: &stubDowngrader{done: reversedFromV4()}, current: newerCurrentInfo()}, &stubResolver{target: newFakeTarget()}, &stubInstaller{}, fixedBinPath("/p/lit", nil))
 	if err != nil {
 		t.Fatalf("downgrade: %v", err)
 	}
 	want := map[string]any{
-		"downgrade.tag":                "v0.4.1",
-		"downgrade.installed_path":     "/p/lit",
-		"downgrade.workspace_schema":   float64(4),
-		"downgrade.snapshot":           "1700000000000000000-lit-downgrade-1700000000000000001",
-		"downgrade.target_schema_max":  float64(3),
-		"downgrade.running_schema_min": float64(1),
-		"downgrade.running_schema_max": float64(4),
+		"downgrade.tag":                  "v0.4.1",
+		"downgrade.installed_path":       "/p/lit",
+		"downgrade.workspace_schema":     float64(4),
+		"downgrade.snapshot":             "1700000000000000000-lit-downgrade-1700000000000000001",
+		"downgrade.snapshot_prune_error": "",
+		"downgrade.target_schema_max":    float64(3),
+		"downgrade.running_schema_min":   float64(1),
+		"downgrade.running_schema_max":   float64(4),
 	}
 	if !reflect.DeepEqual(facts, want) {
 		t.Errorf("facts = %v; want %v", facts, want)
@@ -231,10 +233,11 @@ func TestRunDowngradeRecordsWhatItReversedAndInstalled(t *testing.T) {
 // reading the workspace's version records none of the reverse's facts.
 func TestRunDowngradeRecordsWhatTheReverseReportedOnEveryOutcome(t *testing.T) {
 	t.Parallel()
-	afterTheReverse := errors.New("prune downgrade snapshots: disk full")
+	afterTheReverse := errors.New("commit downgrade revert of v4: connection reset")
 	reversed := map[string]any{
-		"downgrade.workspace_schema": float64(4),
-		"downgrade.snapshot":         "1700000000000000000-lit-downgrade-1700000000000000001",
+		"downgrade.workspace_schema":     float64(4),
+		"downgrade.snapshot":             "1700000000000000000-lit-downgrade-1700000000000000001",
+		"downgrade.snapshot_prune_error": "",
 	}
 	tests := []struct {
 		name       string
@@ -248,9 +251,10 @@ func TestRunDowngradeRecordsWhatTheReverseReportedOnEveryOutcome(t *testing.T) {
 			dg:   &stubDowngrader{done: &storage.Downgraded{From: 3}},
 			inst: &stubInstaller{},
 			wantFacts: map[string]any{
-				"downgrade.workspace_schema": float64(3),
-				"downgrade.snapshot":         "",
-				"downgrade.installed_path":   "/p/lit",
+				"downgrade.workspace_schema":     float64(3),
+				"downgrade.snapshot":             "",
+				"downgrade.snapshot_prune_error": "",
+				"downgrade.installed_path":       "/p/lit",
 			},
 			wantCounts: map[string]int{"downgrade.reversed": 0},
 		},
@@ -280,7 +284,7 @@ func TestRunDowngradeRecordsWhatTheReverseReportedOnEveryOutcome(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			facts, counts, _ := runDowngradeRecorded(t, downgradeScope{schema: tc.dg, current: newerCurrentInfo()}, &stubResolver{target: newFakeTarget()}, tc.inst)
+			facts, counts, _, _ := runDowngradeRecorded(t, downgradeScope{schema: tc.dg, current: newerCurrentInfo()}, &stubResolver{target: newFakeTarget()}, tc.inst, fixedBinPath("/p/lit", nil))
 			want := map[string]any{
 				"downgrade.tag":                "v0.4.1",
 				"downgrade.target_schema_max":  float64(3),
@@ -303,7 +307,7 @@ func TestRunDowngradeRecordsWhatTheReverseReportedOnEveryOutcome(t *testing.T) {
 func TestRunDowngradeRecordsTheTagOfAReleaseThatDoesNotResolve(t *testing.T) {
 	t.Parallel()
 	res := &stubResolver{err: errors.New("release v0.4.1 not found")}
-	facts, _, err := runDowngradeRecorded(t, downgradeScope{schema: &stubDowngrader{}, current: newerCurrentInfo()}, res, &stubInstaller{})
+	facts, _, _, err := runDowngradeRecorded(t, downgradeScope{schema: &stubDowngrader{}, current: newerCurrentInfo()}, res, &stubInstaller{}, fixedBinPath("/p/lit", nil))
 	if err == nil {
 		t.Fatal("an unresolvable release must fail the downgrade")
 	}
@@ -346,7 +350,7 @@ func TestRunDowngradeOnAWorkspacePastRunningSupportIsSchemaAhead(t *testing.T) {
 	}
 
 	inst := &stubInstaller{}
-	facts, counts, err := runDowngradeRecorded(t, downgradeScope{schema: migrator, current: current}, &stubResolver{target: newFakeTarget()}, inst)
+	facts, counts, _, err := runDowngradeRecorded(t, downgradeScope{schema: migrator, current: current}, &stubResolver{target: newFakeTarget()}, inst, fixedBinPath("/p/lit", nil))
 	if err == nil {
 		t.Fatal("a downgrade past this binary's support must be refused")
 	}
@@ -360,18 +364,88 @@ func TestRunDowngradeOnAWorkspacePastRunningSupportIsSchemaAhead(t *testing.T) {
 		t.Error("installer must not run when the reverse is refused")
 	}
 	want := map[string]any{
-		"downgrade.tag":                "v0.4.1",
-		"downgrade.workspace_schema":   float64(ahead),
-		"downgrade.snapshot":           "",
-		"downgrade.target_schema_max":  float64(3),
-		"downgrade.running_schema_min": float64(current.Schema.Min),
-		"downgrade.running_schema_max": float64(current.Schema.Max),
+		"downgrade.tag":                  "v0.4.1",
+		"downgrade.workspace_schema":     float64(ahead),
+		"downgrade.snapshot":             "",
+		"downgrade.snapshot_prune_error": "",
+		"downgrade.target_schema_max":    float64(3),
+		"downgrade.running_schema_min":   float64(current.Schema.Min),
+		"downgrade.running_schema_max":   float64(current.Schema.Max),
 	}
 	if !reflect.DeepEqual(facts, want) {
 		t.Errorf("facts = %v; want %v", facts, want)
 	}
 	if want := map[string]int{"downgrade.reversed": 0}; !reflect.DeepEqual(counts, want) {
 		t.Errorf("counts = %v; want %v", counts, want)
+	}
+}
+
+// A downgrade whose reverse committed installs the release it reversed for
+// even when rolling old downgrade snapshots off then failed: otherwise the
+// newer binary stays installed and its next open migrates the workspace
+// forward again. Nothing is printed before the install, and the prune failure
+// ends whichever output ends the command, success or failure.
+func TestRunDowngradeInstallsWhenTheSnapshotPruneFails(t *testing.T) {
+	t.Parallel()
+	pruneErr := errors.New("prune downgrade snapshots: permission denied")
+	warning := "\nwarning: old downgrade snapshots were not removed: " + pruneErr.Error()
+	notInstalled := "downgrade: schema reversed to v3 but installing prior binary failed: "
+	tests := []struct {
+		name          string
+		binPath       func() (string, error)
+		installErr    error
+		wantInstalled bool
+		wantOut       string
+		wantErrPrefix string // "" when the command succeeds
+		wantPath      any
+	}{
+		{
+			name:          "install succeeds",
+			binPath:       fixedBinPath("/p/lit", nil),
+			wantInstalled: true,
+			wantOut:       "downgraded to v0.4.1 (schema v3) installed at /p/lit\nre-run `lit version` to confirm." + warning + "\n",
+			wantPath:      "/p/lit",
+		},
+		{
+			name:          "install fails",
+			binPath:       fixedBinPath("/p/lit", nil),
+			installErr:    errors.New("rename: read-only file system"),
+			wantInstalled: true,
+			wantErrPrefix: notInstalled + "rename: read-only file system\n\nrecover by either:",
+		},
+		{
+			name:          "binary path fails",
+			binPath:       fixedBinPath("", errors.New("executable: not found")),
+			wantErrPrefix: notInstalled + "resolve current binary: executable: not found\n\nrecover by either:",
+		},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			done := reversedFromV4()
+			done.PruneErr = pruneErr
+			inst := &stubInstaller{err: tc.installErr}
+			facts, _, out, err := runDowngradeRecorded(t, downgradeScope{schema: &stubDowngrader{done: done}, current: newerCurrentInfo()}, &stubResolver{target: newFakeTarget()}, inst, tc.binPath)
+			if inst.called != tc.wantInstalled {
+				t.Errorf("installer called = %v; want %v", inst.called, tc.wantInstalled)
+			}
+			if out != tc.wantOut {
+				t.Errorf("stdout = %q; want %q", out, tc.wantOut)
+			}
+			switch {
+			case tc.wantErrPrefix == "" && err != nil:
+				t.Errorf("err = %v; want nil", err)
+			case tc.wantErrPrefix != "" && (err == nil || !strings.HasPrefix(err.Error(), tc.wantErrPrefix) || !strings.HasSuffix(err.Error(), warning)):
+				t.Errorf("err = %v; want it to start with %q and end with %q", err, tc.wantErrPrefix, warning)
+			}
+			if got := facts["downgrade.snapshot_prune_error"]; got != pruneErr.Error() {
+				t.Errorf("downgrade.snapshot_prune_error = %v; want %q", got, pruneErr.Error())
+			}
+			if got := facts["downgrade.installed_path"]; got != tc.wantPath {
+				t.Errorf("downgrade.installed_path = %v; want %v", got, tc.wantPath)
+			}
+		})
 	}
 }
 

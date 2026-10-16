@@ -248,6 +248,7 @@ the ones it had.
 | `downgrade.workspace_schema` | The workspace's applied schema version, as the reverse read it under the workspace lock and decided from. Set once the reverse has read it, whether the command then succeeds, refuses, or fails; absent, with the snapshot and the count, when it failed before that read. |
 | `downgrade.snapshot` | The recovery snapshot taken before the first down-migration, or `""` when none was taken. |
 | `counts.downgrade.reversed` | The down-migrations applied. `0` when none ran; on a reverse that failed part-way, those applied before it stopped. |
+| `downgrade.snapshot_prune_error` | Why older downgrade snapshots could not be removed after the reverse, or `""` when nothing failed. The downgrade prints the failure as a `warning:` line and still installs the `--to` release. |
 | `downgrade.installed_path` | The path the `--to` release was installed to. Absent when nothing was installed. |
 
 ## Reading the file

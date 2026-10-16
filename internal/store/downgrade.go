@@ -216,7 +216,8 @@ func (e *DowngradeIncompleteError) Error() string {
 //
 // On a down-migration failure after the snapshot is taken, the returned error
 // is a DowngradeRollbackError carrying the snapshot name and the literal
-// recovery command.
+// recovery command. A prune failure after the reverse committed is not an
+// error: it is reported as Downgraded.PruneErr.
 //
 // [LAW:single-enforcer] This is the sole reverse-migration boundary; migrate()
 // owns only forward convergence. They share primitives (newGooseProvider, the
@@ -285,8 +286,13 @@ func (s *Store) downgradeLocked(ctx context.Context, targetSchemaVersion int64) 
 	// snapshots. IsDowngradeSnapshotName is disjoint from
 	// IsMigrationSnapshotName, so this sweep cannot collect migration
 	// snapshots and migrate()'s sweep cannot collect downgrade ones.
+	//
+	// The reverse has committed, so a prune failure is reported on done rather
+	// than returned: the workspace is at the target, and the caller still has
+	// to install the binary that reads it. The workspace never reads a
+	// snapshot, so one left over changes nothing it does.
 	if err := dbsnapshot.PruneMatching(s.doltRootDir, downgradeSnapshotRetention, IsDowngradeSnapshotName); err != nil {
-		return done, fmt.Errorf("prune downgrade snapshots: %w", err)
+		done.PruneErr = fmt.Errorf("prune downgrade snapshots: %w", err)
 	}
 	return done, nil
 }
