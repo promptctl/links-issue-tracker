@@ -120,6 +120,14 @@ type SchemaSupport struct {
 	Max int64 `json:"max"`
 }
 
+// Covers reports whether every schema version from lo through hi lies within
+// this support. A reverse from hi down to lo runs one down-migration per
+// version it crosses, so only a binary whose support covers that span carries
+// them all.
+func (s SchemaSupport) Covers(lo, hi int64) bool {
+	return s.Min <= lo && hi <= s.Max
+}
+
 // Get returns this binary's Info. It performs one ReadDir over the embedded
 // migration registry to derive SchemaSupport.Max; cheap but not free, so
 // callers that fan out (e.g., a tight loop) should cache the result.

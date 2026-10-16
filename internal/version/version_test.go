@@ -230,3 +230,28 @@ func TestStaleSourceBuildShapeTable(t *testing.T) {
 		})
 	}
 }
+
+// Covers holds exactly when both ends of the span fall inside the support:
+// each bound is checked at the edge it allows and one step past it.
+func TestSchemaSupportCoversOnlyASpanInsideBothBounds(t *testing.T) {
+	t.Parallel()
+	support := SchemaSupport{Min: 3, Max: 7}
+	tests := []struct {
+		lo, hi int64
+		want   bool
+	}{
+		{3, 7, true},  // the whole support
+		{4, 6, true},  // strictly inside
+		{5, 5, true},  // a single version
+		{2, 7, false}, // lo one below Min
+		{3, 8, false}, // hi one past Max
+		{2, 8, false}, // past both
+		{8, 9, false}, // entirely above
+		{1, 2, false}, // entirely below
+	}
+	for _, tc := range tests {
+		if got := support.Covers(tc.lo, tc.hi); got != tc.want {
+			t.Errorf("SchemaSupport{3,7}.Covers(%d, %d) = %v; want %v", tc.lo, tc.hi, got, tc.want)
+		}
+	}
+}

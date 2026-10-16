@@ -513,7 +513,8 @@ All geometry git calls use `context.Background()` deliberately (`internal/worksp
 - `Info{Version, Commit, Date, IsDev, FromSource, Schema}` with JSON tags
   `version/commit/date/is_dev/schema_support`; `FromSource` is tagged `json:"-"` and never
   reaches the wire (the tag).
-- `SchemaSupport{Min int64 "min", Max int64 "max"}`.
+- `SchemaSupport{Min int64 "min", Max int64 "max"}`. `Covers(lo, hi)` is `Min <= lo && hi <= Max`:
+  the support holds every version a reverse from `hi` down to `lo` crosses.
 - `Get()` derives `Schema.Max` from `migrations.MaxVersion()` (one ReadDir over the embedded
   registry) and `Schema.Min` from `migrations.Baseline`; `IsDev = (Version == "")`;
   `FromSource = (Origin != OriginRelease)`.
