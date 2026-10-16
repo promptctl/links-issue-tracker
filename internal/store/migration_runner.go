@@ -15,6 +15,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/version"
 )
 
@@ -132,12 +133,17 @@ type UnsupportedSchemaVersionError struct {
 	WorkspaceVersion int64
 	MaxSupported     int64
 	MissingBaseline  []string
-	// SnapshotName is the most recent migration-recovery snapshot present in
-	// this workspace, when one exists. Populating it offers the user a lossy
-	// rollback path; emptying it means no such snapshot is available.
+	// SnapshotName is the newest migration-recovery snapshot holding a schema
+	// at or below MaxSupported (rollbackSnapshotName), when one exists.
+	// Populating it offers the user a lossy rollback path; emptying it means
+	// no snapshot this binary can open exists.
 	// [LAW:types-are-the-program] Which rollback line the message emits is
 	// encoded by whether the optional field is populated, not by a flag.
 	SnapshotName string
+	// SnapshotLookupErr is why the snapshots could not be read, when they
+	// could not; SnapshotName is then empty. [LAW:no-silent-failure] a failed
+	// lookup is reported as one, never as "no snapshot exists".
+	SnapshotLookupErr error
 }
 
 func (e *UnsupportedSchemaVersionError) Error() string {
@@ -163,12 +169,15 @@ func (e *UnsupportedSchemaVersionError) Error() string {
 	fmt.Fprintf(&b,
 		"\n\nto operate this workspace, install a lit that supports schema version %d:\n  lit upgrade\n\n(this is the supported path — `lit upgrade` runs even from this too-old binary, installs the latest release, and refuses a release that cannot operate this workspace.)",
 		e.WorkspaceVersion)
-	if e.SnapshotName != "" {
+	switch {
+	case e.SnapshotLookupErr != nil:
+		fmt.Fprintf(&b, "\n\ncould not look for a snapshot to roll this workspace back to: %v", e.SnapshotLookupErr)
+	case e.SnapshotName != "":
 		fmt.Fprintf(&b,
 			"\n\nif you are stuck and need to roll back this workspace to match this binary:\n  lit snapshots restore %s\n\nthis is a LOSSY recovery — any data written under the newer binary will be discarded.",
 			e.SnapshotName)
-	} else {
-		b.WriteString("\n\nno pre-upgrade snapshot available; lossy rollback is not possible from this workspace.")
+	default:
+		fmt.Fprintf(&b, "\n\nno snapshot of this workspace holds schema version %d or below; lossy rollback is not possible from this workspace.", e.MaxSupported)
 	}
 	return b.String()
 }
@@ -273,12 +282,18 @@ func (st migrationState) willMutate() bool {
 // [LAW:single-enforcer] Store-level Open routes all schema convergence through
 // this one boundary; the snapshot/prune budget lives here, not at callsites.
 func (s *Store) migrate(ctx context.Context) error {
+	assessment, err := s.assessMigration(ctx)
+	if err != nil {
+		return err
+	}
+	// The guard fires before runMigration's first schema write, so the
+	// snapshot holds the assessed version, and its name records that.
 	guard := newSnapshotGuard(
 		s.doltRootDir,
 		migrationSnapshotsDir(s.doltRootDir),
-		formatMigrationSnapshotLabel(time.Now()),
+		formatMigrationSnapshotLabel(assessment.state.appliedVersion),
 	)
-	if err := s.runMigration(ctx, guard); err != nil {
+	if err := s.runMigration(ctx, guard, assessment); err != nil {
 		if snap, ok := guard.took(); ok {
 			return &MigrationRollbackError{Snapshot: snap, Cause: err}
 		}
@@ -389,8 +404,8 @@ func (s *Store) assessMigration(ctx context.Context) (migrationAssessment, error
 	}
 }
 
-// runMigration classifies the workspace once, snapshots before the first
-// write, adopts a pre-goose workspace if needed, then applies pending
+// runMigration acts on the workspace's one assessment: it snapshots before the
+// first write, adopts a pre-goose workspace if needed, then applies pending
 // migrations one Dolt commit each.
 //
 // [LAW:single-enforcer] One runner owns migration ordering and the snapshot/
@@ -399,11 +414,7 @@ func (s *Store) assessMigration(ctx context.Context) (migrationAssessment, error
 // [LAW:dataflow-not-control-flow] The same assess -> repair -> snapshot ->
 // adopt -> apply sequence runs every Open; variability lives in the phase and
 // the set of pending versions, not in whether stages execute.
-func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard) error {
-	assessment, err := s.assessMigration(ctx)
-	if err != nil {
-		return err
-	}
+func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard, assessment migrationAssessment) error {
 	state := assessment.state
 	// A detected content mismatch is not a terminal refusal: it is the signal
 	// to self-heal. Unlike ensureQuarantineTable's detect-then-recreate
@@ -886,11 +897,17 @@ func (s *Store) refuseIfBaselineMissing(ctx context.Context, state migrationStat
 		return err
 	}
 	if present == 0 || len(missing) > 0 {
+		snapshot, lookupErr := rollbackSnapshotName(migrationSnapshotsDir(s.doltRootDir), state.registryMaxVers)
+		// [LAW:nothing-unseen] which rollback the refusal offered, if any,
+		// lands on the command's event: a snapshot name, or none; a failed
+		// lookup is on the event's error.
+		telemetry.Set(ctx, "schema_ahead.rollback_snapshot", snapshot)
 		return &UnsupportedSchemaVersionError{
-			WorkspaceVersion: state.appliedVersion,
-			MaxSupported:     state.registryMaxVers,
-			MissingBaseline:  missing,
-			SnapshotName:     s.mostRecentMigrationSnapshotName(),
+			WorkspaceVersion:  state.appliedVersion,
+			MaxSupported:      state.registryMaxVers,
+			MissingBaseline:   missing,
+			SnapshotName:      snapshot,
+			SnapshotLookupErr: lookupErr,
 		}
 	}
 	return nil
@@ -1362,29 +1379,6 @@ func sortedKeys(m map[string][]string) []string {
 	}
 	sort.Strings(keys)
 	return keys
-}
-
-// mostRecentMigrationSnapshotName returns the name of the newest snapshot in
-// this workspace that was stamped by the migration system, or "" if none
-// exists. Used by refuseIfBaselineMissing to populate the lossy-rollback hint
-// on UnsupportedSchemaVersionError. Errors listing the directory degrade to
-// "" — the refusal message must still surface, with the snapshot line absent.
-//
-// [LAW:one-source-of-truth] IsMigrationSnapshotName is the kind discriminator
-// shared with pruning; this lookup does not re-encode the naming rule.
-// [LAW:dataflow-not-control-flow] Caller always asks; the data (presence /
-// absence of a matching snapshot) decides which line the message emits.
-func (s *Store) mostRecentMigrationSnapshotName() string {
-	snaps, err := dbsnapshot.List(migrationSnapshotsDir(s.doltRootDir))
-	if err != nil {
-		return ""
-	}
-	for _, snap := range snaps {
-		if IsMigrationSnapshotName(snap.Name) {
-			return snap.Name
-		}
-	}
-	return ""
 }
 
 // recordProducerBinaryVersion stamps this binary's version into meta as the

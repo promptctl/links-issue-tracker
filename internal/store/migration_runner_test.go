@@ -3,12 +3,14 @@ package store
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/doltcli"
 	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/version"
 )
 
@@ -349,13 +351,14 @@ func TestUnsupportedSchemaVersionMessageShape(t *testing.T) {
 	}
 	const upgradeHead = "please upgrade lit (your workspace is at schema version 7; this binary supports up to 3"
 
-	// No recovery data: the supported path and the unavailable rollback, pinned
+	// No snapshot this binary opens: the supported path and the unavailable
+	// rollback, naming the schema a snapshot would have to hold, pinned
 	// by exact equality so the remedy cannot silently change shape.
 	bare := (&UnsupportedSchemaVersionError{WorkspaceVersion: 7, MaxSupported: 3}).Error()
 	const wantBare = upgradeHead + ")" +
 		"\n\nto operate this workspace, install a lit that supports schema version 7:\n  lit upgrade" +
 		"\n\n(this is the supported path — `lit upgrade` runs even from this too-old binary, installs the latest release, and refuses a release that cannot operate this workspace.)" +
-		"\n\nno pre-upgrade snapshot available; lossy rollback is not possible from this workspace."
+		"\n\nno snapshot of this workspace holds schema version 3 or below; lossy rollback is not possible from this workspace."
 	if bare != wantBare {
 		t.Fatalf("bare Error() = %q, want %q", bare, wantBare)
 	}
@@ -381,12 +384,12 @@ func TestUnsupportedSchemaVersionMessageShape(t *testing.T) {
 	withSnap := (&UnsupportedSchemaVersionError{
 		WorkspaceVersion: 7,
 		MaxSupported:     3,
-		SnapshotName:     "1700000000-pre-migrate-1700000000",
+		SnapshotName:     "1700000000-pre-migrate-schema-3",
 	}).Error()
 	for _, want := range []string{
 		upgradeHead,
 		"install a lit that supports schema version 7:\n  lit upgrade\n",
-		"lit snapshots restore 1700000000-pre-migrate-1700000000",
+		"lit snapshots restore 1700000000-pre-migrate-schema-3",
 		"LOSSY",
 	} {
 		if !strings.Contains(withSnap, want) {
@@ -396,10 +399,28 @@ func TestUnsupportedSchemaVersionMessageShape(t *testing.T) {
 	if strings.Index(withSnap, "lit upgrade\n") > strings.Index(withSnap, "lit snapshots restore") {
 		t.Errorf("snapshot message placed the lossy rollback ahead of the supported upgrade path: %q", withSnap)
 	}
-	if strings.Contains(withSnap, "no pre-upgrade snapshot available") {
+	if strings.Contains(withSnap, "lossy rollback is not possible") {
 		t.Errorf("snapshot message also declared the snapshot unavailable: %q", withSnap)
 	}
 	assertForbiddenAbsent(t, withSnap)
+
+	// Snapshots unreadable: the failure is named, never reported as "no
+	// snapshot exists", and the supported upgrade path still leads.
+	lookupFailed := (&UnsupportedSchemaVersionError{
+		WorkspaceVersion:  7,
+		MaxSupported:      3,
+		SnapshotLookupErr: errors.New("list snapshots: permission denied"),
+	}).Error()
+	if !strings.HasSuffix(lookupFailed, "\n\ncould not look for a snapshot to roll this workspace back to: list snapshots: permission denied") {
+		t.Errorf("lookup-failure message did not end by naming the failure: %q", lookupFailed)
+	}
+	if !strings.HasPrefix(lookupFailed, upgradeHead) {
+		t.Errorf("lookup-failure message lost the supported upgrade path: %q", lookupFailed)
+	}
+	if strings.Contains(lookupFailed, "lossy rollback is not possible") {
+		t.Errorf("lookup-failure message claimed no snapshot exists: %q", lookupFailed)
+	}
+	assertForbiddenAbsent(t, lookupFailed)
 }
 
 // TestRefusalSurfacesRecoveryDataFromWorkspace pins the runtime wiring of the
@@ -440,13 +461,17 @@ func TestRefusalSurfacesRecoveryDataFromWorkspace(t *testing.T) {
 
 	stampGooseVersionAhead(t, ctx, doltRoot)
 
-	_, err := Open(ctx, doltRoot, "test-workspace-id")
+	rec := telemetry.Begin(telemetry.Event{})
+	_, err := Open(telemetry.With(ctx, rec), doltRoot, "test-workspace-id")
 	if err == nil {
 		t.Fatal("Open() returned nil; want UnsupportedSchemaVersionError")
 	}
 	var refusal *UnsupportedSchemaVersionError
 	if !errors.As(err, &refusal) {
 		t.Fatalf("Open() error = %v (%T); want *UnsupportedSchemaVersionError", err, err)
+	}
+	if got := rec.Finish(telemetry.End{}).Facts["schema_ahead.rollback_snapshot"]; got != refusal.SnapshotName {
+		t.Errorf("event fact schema_ahead.rollback_snapshot = %v, want the offered snapshot %q", got, refusal.SnapshotName)
 	}
 	if refusal.SnapshotName == "" {
 		t.Errorf("SnapshotName empty; want a migration-recovery snapshot name (one was taken on fresh Open)")
@@ -460,6 +485,44 @@ func TestRefusalSurfacesRecoveryDataFromWorkspace(t *testing.T) {
 	}
 	if !strings.Contains(msg, "lit snapshots restore "+refusal.SnapshotName) {
 		t.Errorf("Error() did not surface the snapshot name verbatim: %q", msg)
+	}
+}
+
+// TestRefusalReportsUnreadableSnapshots pins that a refusal whose snapshot
+// lookup fails says so — on the error and on the command's event — instead of
+// reading as "no snapshot exists".
+func TestRefusalReportsUnreadableSnapshots(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	withStore(t, ctx, doltRoot, func(st *Store) {
+		mustExec(t, ctx, st, `ALTER TABLE issues DROP COLUMN title`)
+		mustCommit(t, ctx, st, "test: corrupt baseline shape")
+	})
+	stampGooseVersionAhead(t, ctx, doltRoot)
+	// A file where the snapshots directory belongs makes the listing fail.
+	snapshotsDir := migrationSnapshotsDir(doltRoot)
+	if err := os.RemoveAll(snapshotsDir); err != nil {
+		t.Fatalf("remove snapshots dir: %v", err)
+	}
+	if err := os.WriteFile(snapshotsDir, nil, 0o644); err != nil {
+		t.Fatalf("write file at snapshots dir: %v", err)
+	}
+
+	rec := telemetry.Begin(telemetry.Event{})
+	_, err := Open(telemetry.With(ctx, rec), doltRoot, "test-workspace-id")
+	var refusal *UnsupportedSchemaVersionError
+	if !errors.As(err, &refusal) {
+		t.Fatalf("Open() error = %v (%T); want *UnsupportedSchemaVersionError", err, err)
+	}
+	if refusal.SnapshotLookupErr == nil {
+		t.Fatalf("SnapshotLookupErr = nil; want the listing failure (SnapshotName = %q)", refusal.SnapshotName)
+	}
+	if msg := refusal.Error(); !strings.Contains(msg, "could not look for a snapshot") || strings.Contains(msg, "lossy rollback is not possible") {
+		t.Errorf("Error() did not report the failed lookup as one: %q", msg)
+	}
+	if got, ok := rec.Finish(telemetry.End{}).Facts["schema_ahead.rollback_snapshot"]; !ok || got != "" {
+		t.Errorf("event fact schema_ahead.rollback_snapshot = %v (present %v), want \"\" (no snapshot offered)", got, ok)
 	}
 }
 
