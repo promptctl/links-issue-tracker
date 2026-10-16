@@ -181,7 +181,7 @@ func TestFileEncodesTheDocumentedShape(t *testing.T) {
 			"lane":        map[string]any{"done": float64(1), "total": float64(4)},
 			"recorded_at": "2026-10-15T09:30:00Z",
 		},
-		"next":           map[string]any{"ticket": nil, "recorded_at": "2026-10-15T09:30:00Z"},
+		"next": map[string]any{"ticket": nil, "recorded_at": "2026-10-15T09:30:00Z"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("file = %s\nwant %v", raw, want)
