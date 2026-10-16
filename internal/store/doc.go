@@ -123,7 +123,9 @@
 // acquireStoreLock publishes one — a uniquely-named file under <storage
 // dir>/.links-lock-holders/<lock file name>/, held SHARED for exactly the
 // life of the hold it describes — so a contender can name the pid,
-// command, and age of what is blocking it instead of guessing. They sit
+// command, and age of what is blocking it instead of guessing — and first
+// retires every record there whose holder is gone, so the directory holds
+// the live holders and those gone since the last acquisition. They sit
 // under the storage dir and never beside the lock, because one lock
 // (Dolt's journal LOCK) lives in a directory lit does not own, and lit's
 // records do not go there. They are descriptive only: the kernel remains
