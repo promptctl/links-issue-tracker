@@ -148,22 +148,31 @@ opened engines run concurrently exactly as before. This protects any lit
 path that opens multiple stores in one process (the cross-project rollup,
 parallel tests).
 
-### Patch 6 — the session outlives the dial context (`connector.go`)
+### Patch 6 — each statement runs on its caller's context (`connector.go`, `conn.go`, `statement.go`)
 
 Upstream's `Connector.Connect` built the connection's session
-(`se.NewLocalContext(ctx)`) on the context it was handed, and every statement,
-transaction and row read on that connection runs on that session. But
-`database/sql` hands `Connect` the context of whichever call first needed a
-connection, and `driver.Connector` documents that context as serving the dial
-alone, never to be stored. Retaining it bound the connection to one caller:
-once that caller cancelled, every later query on the connection failed with
-`Error 1105: context canceled`. lit's store holds a single connection for its
-whole life, so cancelling the context a store was opened under broke the
-store, including the checkpoint reset after a failed migration.
+(`se.NewLocalContext(ctx)`) on the context it was handed, and implemented only
+the context-free `Exec` and `Query`, so every statement, transaction and row
+read on the connection ran on that one context. `database/sql` hands
+`Connect` the context of whichever call first needed a connection, and
+`driver.Connector` documents that context as serving the dial alone, never to
+be stored. Two things followed. Once that first caller cancelled, every later
+query on the connection failed with `Error 1105: context canceled`; lit's
+store holds a single connection for its whole life, so cancelling the
+context a store was opened under broke the store, including the checkpoint
+reset after a failed migration. And the context a caller passed to
+`ExecContext` or `QueryContext` was never read, so a deadline could bound a
+statement only by being present when the connection was opened.
 
-The patch builds the session on `context.Background()`. The engine open
-before it still runs on the dial context, so a cancelled caller can still
-abandon an open in progress.
+The patch builds the session on `context.Background()`, and `doltStmt` and
+`doltMultiStmt` implement `StmtExecContext` and `StmtQueryContext`, running
+each statement (and reading its rows) on `session.WithContext(ctx)` for the
+caller's `ctx`. `Exec` and `Query` run through the same path with
+`context.Background()`. `BeginTx` runs `BEGIN` on its `ctx`; `Commit` and
+`Rollback` run on the session's own context, because `database/sql` rolls a
+transaction back after its context is cancelled. The engine open still runs
+on the `Connect` context, so a cancelled caller can still abandon an open in
+progress.
 
 ## Refreshing this copy
 
@@ -205,10 +214,15 @@ When bumping the `dolthub/driver` version pinned in the top-level `go.mod`:
      `internal/store` suite under `go test -short -race`, which fails with
      construction-time DATA RACE warnings if the fence is missing.
    - Patch 6: in `Connector.Connect`, build the session with
-     `newLocalContext(se, context.Background())` rather than the Connect
-     context. Confirm with lit's `internal/store`
-     `TestMigrationFailureResetSurvivesCallerCancel`, which fails with
-     `Error 1105: context canceled` if the session holds the dial context.
+     `newLocalContext(se, context.Background())`; re-add `ExecContext` and
+     `QueryContext` to `doltStmt` and `doltMultiStmt` in `statement.go`
+     (each runs on `session.WithContext(ctx)`, with `Exec` and `Query`
+     delegating to them), and run `BEGIN` on `BeginTx`'s ctx in `conn.go`.
+     Confirm with lit's `internal/store`
+     `TestStoreOutlivesTheContextItWasOpenedUnder` (a commit fails with
+     `Error 1105: context canceled` if the session holds the Connect context)
+     and `internal/cli` `TestMirrorPushHoldsNothingOnTheLiveStore` (the run
+     is unbounded if a statement ignores its own deadline).
 4. Update the `replace` directive's version comment in the top-level
    `go.mod` to match.
 

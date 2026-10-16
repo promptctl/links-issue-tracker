@@ -15,7 +15,9 @@
 package embedded
 
 import (
+	"context"
 	"database/sql/driver"
+	"errors"
 	"io"
 	"strconv"
 
@@ -33,7 +35,11 @@ type doltMultiStmt struct {
 	stmts []*doltStmt
 }
 
-var _ driver.Stmt = (*doltMultiStmt)(nil)
+var (
+	_ driver.Stmt             = (*doltMultiStmt)(nil)
+	_ driver.StmtExecContext  = (*doltMultiStmt)(nil)
+	_ driver.StmtQueryContext = (*doltMultiStmt)(nil)
+)
 
 func (d doltMultiStmt) Close() error {
 	var retErr error
@@ -50,9 +56,14 @@ func (d doltMultiStmt) NumInput() int {
 	return -1
 }
 
-func (d doltMultiStmt) Exec(args []driver.Value) (result driver.Result, err error) {
+func (d doltMultiStmt) Exec(args []driver.Value) (driver.Result, error) {
+	return d.ExecContext(context.Background(), valuesToNamedValues(args))
+}
+
+// ExecContext executes every statement in turn on ctx, stopping at the first error.
+func (d doltMultiStmt) ExecContext(ctx context.Context, named []driver.NamedValue) (result driver.Result, err error) {
 	for _, stmt := range d.stmts {
-		result, err = stmt.Exec(args)
+		result, err = stmt.ExecContext(ctx, named)
 		if err != nil {
 			// If any error occurs, return the error and don't execute any more statements
 			return nil, err
@@ -64,10 +75,15 @@ func (d doltMultiStmt) Exec(args []driver.Value) (result driver.Result, err erro
 }
 
 func (d doltMultiStmt) Query(args []driver.Value) (driver.Rows, error) {
+	return d.QueryContext(context.Background(), valuesToNamedValues(args))
+}
+
+// QueryContext runs every statement on ctx and returns their result sets.
+func (d doltMultiStmt) QueryContext(ctx context.Context, named []driver.NamedValue) (driver.Rows, error) {
 	var ret doltMultiRows
 	for _, stmt := range d.stmts {
 		ret.rowSets = append(ret.rowSets, func() *doltRows {
-			rows, err := stmt.Query(args)
+			rows, err := stmt.QueryContext(ctx, named)
 			if err != nil {
 				return &doltRows{err: err}
 			}
@@ -92,13 +108,24 @@ func (d doltMultiStmt) Query(args []driver.Value) (driver.Rows, error) {
 }
 
 // doltStmt represents a single statement to be executed against a Dolt database.
+//
+// [LAW:no-ambient-temporal-coupling] Modified by lit (README.lit-patch.md,
+// Patch 6): session is the connection's session context, and each execution
+// runs on session.WithContext(ctx) for the ctx its caller passed, so a
+// caller's cancellation or deadline governs that statement and no other.
+// Upstream implemented only Exec and Query, which ran every statement on the
+// context Connect was called with.
 type doltStmt struct {
-	se     *engine.SqlEngine
-	gmsCtx *gms.Context
-	query  string
+	se      *engine.SqlEngine
+	session *gms.Context
+	query   string
 }
 
-var _ driver.Stmt = (*doltStmt)(nil)
+var (
+	_ driver.Stmt             = (*doltStmt)(nil)
+	_ driver.StmtExecContext  = (*doltStmt)(nil)
+	_ driver.StmtQueryContext = (*doltStmt)(nil)
+)
 
 // Close closes the statement.
 func (stmt *doltStmt) Close() error {
@@ -131,14 +158,48 @@ func argsToBindings(args []driver.Value) (map[string]sqlparser.Expr, error) {
 	return bindings, nil
 }
 
+// valuesToNamedValues gives positional arguments the ordinals database/sql
+// would, so the context-free Exec and Query run through the context path.
+func valuesToNamedValues(args []driver.Value) []driver.NamedValue {
+	named := make([]driver.NamedValue, len(args))
+	for i, v := range args {
+		named[i] = driver.NamedValue{Ordinal: i + 1, Value: v}
+	}
+	return named
+}
+
+// namedValuesToValues refuses named parameters, which the statement's
+// positional bindings (v1, v2, ...) cannot carry, as database/sql does for a
+// driver that takes only positional arguments.
+func namedValuesToValues(named []driver.NamedValue) ([]driver.Value, error) {
+	args := make([]driver.Value, len(named))
+	for i, nv := range named {
+		if nv.Name != "" {
+			return nil, errors.New("sql: driver does not support the use of Named Parameters")
+		}
+		args[i] = nv.Value
+	}
+	return args, nil
+}
+
 // Exec executes a query that doesn't return rows, such as an INSERT or UPDATE.
 func (stmt *doltStmt) Exec(args []driver.Value) (driver.Result, error) {
-	sch, itr, err := stmt.execWithArgs(args)
+	return stmt.ExecContext(context.Background(), valuesToNamedValues(args))
+}
+
+// ExecContext executes a query that doesn't return rows on ctx.
+func (stmt *doltStmt) ExecContext(ctx context.Context, named []driver.NamedValue) (driver.Result, error) {
+	args, err := namedValuesToValues(named)
+	if err != nil {
+		return nil, err
+	}
+	gmsCtx := stmt.session.WithContext(ctx)
+	sch, itr, err := stmt.execWithArgs(gmsCtx, args)
 	if err != nil {
 		return nil, translateError(err)
 	}
 
-	res := newResult(stmt.gmsCtx, sch, itr)
+	res := newResult(gmsCtx, sch, itr)
 	if res.err != nil {
 		return nil, res.err
 	}
@@ -146,13 +207,13 @@ func (stmt *doltStmt) Exec(args []driver.Value) (driver.Result, error) {
 	return res, nil
 }
 
-func (stmt *doltStmt) execWithArgs(args []driver.Value) (gms.Schema, gms.RowIter, error) {
+func (stmt *doltStmt) execWithArgs(gmsCtx *gms.Context, args []driver.Value) (gms.Schema, gms.RowIter, error) {
 	bindings, err := argsToBindings(args)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	sch, itr, _, err := stmt.se.GetUnderlyingEngine().QueryWithBindings(stmt.gmsCtx, stmt.query, nil, bindings, nil)
+	sch, itr, _, err := stmt.se.GetUnderlyingEngine().QueryWithBindings(gmsCtx, stmt.query, nil, bindings, nil)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -161,14 +222,23 @@ func (stmt *doltStmt) execWithArgs(args []driver.Value) (gms.Schema, gms.RowIter
 
 // Query executes a query that may return rows, such as a SELECT
 func (stmt *doltStmt) Query(args []driver.Value) (driver.Rows, error) {
+	return stmt.QueryContext(context.Background(), valuesToNamedValues(args))
+}
+
+// QueryContext executes a query that may return rows on ctx; the rows are read on ctx too.
+func (stmt *doltStmt) QueryContext(ctx context.Context, named []driver.NamedValue) (driver.Rows, error) {
+	args, err := namedValuesToValues(named)
+	if err != nil {
+		return nil, err
+	}
+	gmsCtx := stmt.session.WithContext(ctx)
 	var sch gms.Schema
 	var rowIter gms.RowIter
-	var err error
 
 	if len(args) != 0 {
-		sch, rowIter, err = stmt.execWithArgs(args)
+		sch, rowIter, err = stmt.execWithArgs(gmsCtx, args)
 	} else {
-		sch, rowIter, _, err = stmt.se.Query(stmt.gmsCtx, stmt.query)
+		sch, rowIter, _, err = stmt.se.Query(gmsCtx, stmt.query)
 	}
 	if err != nil {
 		return nil, translateError(err)
@@ -180,12 +250,12 @@ func (stmt *doltStmt) Query(args []driver.Value) (driver.Rows, error) {
 	// and future statements in a multi-statement query that depend on those results would fail.
 	// If an error does occur, we want that error to be returned in the Next() codepath, not here.
 	peekIter := peekableRowIter{iter: rowIter}
-	row, peekErr := peekIter.Peek(stmt.gmsCtx)
+	row, peekErr := peekIter.Peek(gmsCtx)
 
 	return &doltRows{
 		sch:              sch,
 		rowIter:          &peekIter,
-		gmsCtx:           stmt.gmsCtx,
+		gmsCtx:           gmsCtx,
 		isQueryResultSet: isQueryResultSet(row),
 		err:              peekResultError(peekErr),
 	}, nil

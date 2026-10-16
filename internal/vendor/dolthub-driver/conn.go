@@ -61,9 +61,9 @@ func (d *DoltConn) Prepare(query string) (driver.Stmt, error) {
 // prepareSingleStatement creates a doltStmt from |query|.
 func (d *DoltConn) prepareSingleStatement(query string) (*doltStmt, error) {
 	return &doltStmt{
-		query:  query,
-		se:     d.se,
-		gmsCtx: d.gmsCtx,
+		query:   query,
+		se:      d.se,
+		session: d.gmsCtx,
 	}, nil
 }
 
@@ -102,7 +102,7 @@ func (d *DoltConn) Close() error {
 //
 // Deprecated: Use BeginTx instead
 func (d *DoltConn) Begin() (driver.Tx, error) {
-	return d.BeginTx(d.gmsCtx, driver.TxOptions{
+	return d.BeginTx(context.Background(), driver.TxOptions{
 		Isolation: driver.IsolationLevel(sql.LevelSerializable),
 		ReadOnly:  false,
 	})
@@ -115,7 +115,11 @@ func (d *DoltConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.T
 		return nil, fmt.Errorf("isolation level not supported '%d'", opts.Isolation)
 	}
 
-	_, _, _, err := d.se.Query(d.gmsCtx, "BEGIN;")
+	// [LAW:no-ambient-temporal-coupling] Modified by lit (README.lit-patch.md,
+	// Patch 6): BEGIN runs on ctx. Commit and Rollback run on the session's own
+	// context, because database/sql rolls a transaction back after ctx is
+	// cancelled, and that rollback must not inherit the cancellation.
+	_, _, _, err := d.se.Query(d.gmsCtx.WithContext(ctx), "BEGIN;")
 	if err != nil {
 		return nil, translateError(err)
 	}

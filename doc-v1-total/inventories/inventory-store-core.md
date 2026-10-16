@@ -5379,7 +5379,7 @@ Tests: `parse_dsn_test.go` basics param names are case-insensitive requires comm
 
 `NewConnector(cfg)` (`connector.go`) validates: `config.Directory is required` (`connector.go`), `config.CommitName is required` (`connector.go`), `config.CommitEmail is required` (`connector.go`); defaults `cfg.Version` to `defaultDoltVersion = "0.40.17"` (`connector.go`); re-validates the directory with the same two messages (`connector.go`).
 
-`Connect(ctx)` (`connector.go`): `getOrOpenEngine(ctx)` → `newLocalContext(se, context.Background())` — the session never holds the Connect context, so cancelling it does not fail later queries on the connection → `SetCurrentDatabase(cfg.Database)` when non-empty (`connector.go`) → if `ClientFoundRows`, OR `mysql.CapabilityClientFoundRows` into the session client capabilities (`connector.go`) → returns a `*DoltConn`.
+`Connect(ctx)` (`connector.go`): `getOrOpenEngine(ctx)` → `newLocalContext(se, context.Background())` — the session never holds the Connect context → `SetCurrentDatabase(cfg.Database)` when non-empty (`connector.go`) → if `ClientFoundRows`, OR `mysql.CapabilityClientFoundRows` into the session client capabilities (`connector.go`) → returns a `*DoltConn`.
 
 `getOrOpenEngine` (`connector.go`): a single shared engine per connector, guarded by `c.mu` plus an `openCh` channel so concurrent Connects wait on the in-flight open rather than racing. `connector is closed` (`connector.go`) if `Close` already ran; a waiter aborts on `ctx.Done()` returning `ctx.Err()` (`connector.go`). If the open succeeds after `Close`, the engine is immediately closed (`connector.go`).
 
@@ -5423,7 +5423,7 @@ Tests: `parse_dsn_test.go` basics param names are case-insensitive requires comm
 
 9. **`newResult` error precedence** — `result.go`: the iteration error wins over a `Close` failure; a close failure is only reported when iteration succeeded.
 
-10. **Session built on its own context** ("Patch 6") — `connector.go`: `Connect` builds the session with `newLocalContext(se, context.Background())`; upstream built it on the Connect context, so cancelling the call that first opened the connection failed every later query on it with `Error 1105: context canceled`. Pinned by lit's `internal/store` `TestMigrationFailureResetSurvivesCallerCancel`.
+10. **Each statement runs on its caller's context** ("Patch 6") — `connector.go`, `statement.go`, `conn.go`: `Connect` builds the session with `newLocalContext(se, context.Background())`; `doltStmt` and `doltMultiStmt` implement `ExecContext`/`QueryContext`, running the statement and its row reads on `session.WithContext(ctx)`, and `Exec`/`Query` delegate with `context.Background()`; named parameters are refused with `sql: driver does not support the use of Named Parameters`. `BeginTx` runs `BEGIN` on its ctx; `Commit`/`Rollback` run on the session's own context. Upstream ran every statement on the Connect context, so cancelling the call that first opened the connection failed every later query with `Error 1105: context canceled`, and a per-call ctx was never read. Pinned by lit's `internal/store` `TestStoreOutlivesTheContextItWasOpenedUnder` and `internal/cli` `TestMirrorPushHoldsNothingOnTheLiveStore`.
 
 #### 8.6 Query, statement, and rows behavior
 

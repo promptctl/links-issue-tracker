@@ -110,9 +110,9 @@ func (c *Connector) Connect(ctx context.Context) (driver.Conn, error) {
 	// Patch 6): the session is built on a context of its own, not on ctx.
 	// database/sql passes Connect the context of whichever call first needed a
 	// connection, and driver.Connector's contract is that it serves the dial
-	// alone and is not stored. Every statement runs on this session, so a
-	// stored ctx would bind the connection's lifetime to that one caller's:
-	// once it was cancelled, every later query failed with "context canceled".
+	// alone and is not stored. Each statement runs on the session with its own
+	// caller's ctx (doltStmt.ExecContext), so no caller's cancellation outlives
+	// its call.
 	gmsCtx, err := newLocalContext(se, context.Background())
 	if err != nil {
 		return nil, err
