@@ -75,10 +75,10 @@ lifecycle change clears it, as described under
 | `working_on` | object or `null` | The ticket this checkout is working on. `null` when nothing is recorded. |
 | `working_on.ticket.id` | string | The ticket's id. |
 | `working_on.ticket.title` | string | The ticket's title. |
-| `working_on.rollup_progress` | object or `null` | The progress of the ticket's lane. `null` when the command that recorded `working_on` did not count the lane, as a lit older than this field does not. |
+| `working_on.rollup_progress` | object or `null` | The progress of the ticket's lane. `null` when the command that recorded `working_on` did not count the lane. A lit older than this field writes no `rollup_progress` key at all. |
 | `working_on.rollup_progress.rollup_completed_count` | integer | How many of the lane's tickets are closed: the `N` of the `N/M done` on that lane's claim line in `lit backlog`. Archived and deleted tickets are not counted. |
 | `working_on.rollup_progress.rollup_total_count` | integer | How many tickets the lane holds, not counting archived or deleted ones: the `M` of that `N/M done`. |
-| `working_on.phase` | string or `null` | Where the work on the ticket stands: `plan`, `impl`, `review` or `merge`, as `lit show` prints it on the ticket's `phase:` line. `null` when the command that recorded `working_on` did not read the phase, as a lit older than this field does not. |
+| `working_on.phase` | string or `null` | Where the work on the ticket stands: `plan`, `impl`, `review` or `merge`, as `lit show` prints it on the ticket's `phase:` line. `null` when the command that recorded `working_on` did not read the phase. A lit older than this field writes no `phase` key at all. |
 | `working_on.recorded_at` | string | When lit recorded this ticket as worked on. |
 | `next` | object or `null` | The last plain `lit next` answer. `null` when no answer is recorded. |
 | `next.ticket` | object or `null` | The ticket that `lit next` picked, with `id` and `title` as above. `null` means `lit next` ran and found nothing to pick. |
@@ -222,8 +222,8 @@ file.
 ## A minimal statusline
 
 This script prints the ticket being worked on, with its rollup progress and
-phase, and the next pick. It prints nothing when the file is missing, has a schema version it
-does not know, or records nothing:
+phase, and the next pick. It prints nothing when the file is missing, has a
+schema version it does not know, or records nothing:
 
 ```sh
 #!/bin/sh

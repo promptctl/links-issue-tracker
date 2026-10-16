@@ -372,6 +372,47 @@ func TestTheStatuslinePhaseMatchesTheTicketsPhase(t *testing.T) {
 	matches("reclaiming the first ticket", first, "review")
 }
 
+// A checkout that takes over a ticket another checkout moved to review records
+// review, the phase lit show prints there: the takeover keeps the phase the
+// work had reached rather than starting it over in plan.
+func TestATakeoverRecordsThePhaseTheWorkHadReached(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	base := t.TempDir()
+	runGit(t, base, "init", "--bare", "remote.git")
+	remote := filepath.Join(base, "remote.git")
+
+	alpha := filepath.Join(base, "alpha")
+	runGit(t, base, "clone", remote, "alpha")
+	runGit(t, alpha, "config", "user.email", "a@a.co")
+	runGit(t, alpha, "config", "user.name", "alpha")
+	runGit(t, alpha, "commit", "--allow-empty", "-m", "seed")
+	runGit(t, alpha, "push", "origin", "HEAD")
+	runCLIInDir(t, alpha, "init", "--skip-hooks", "--skip-agents")
+	epic := newEpicInDir(t, alpha, "statusline epic")
+	ticket := extractTicketID(t, runCLIInDir(t, alpha, "new", "--title", "First", "--topic", "demo", "--type", "task", "--parent", epic))
+	runCLIInDir(t, alpha, "start", ticket, "--by", "alpha-agent")
+	runCLIInDir(t, alpha, "phase", ticket, "--to", "review")
+	runCLIInDir(t, alpha, "sync", "push", "--set-upstream")
+
+	bravo := filepath.Join(base, "bravo")
+	runGit(t, base, "clone", remote, "bravo")
+	runGit(t, bravo, "config", "user.email", "b@b.co")
+	runGit(t, bravo, "config", "user.name", "bravo")
+	runCLIInDir(t, bravo, "init", "--skip-hooks", "--skip-agents")
+	if out := runCLIInDir(t, bravo, "start", ticket, "--by", "bravo-agent", "--take"); !strings.Contains(out, "claim transferred") {
+		t.Fatalf("start %s --take = %q, want the transfer announced", ticket, out)
+	}
+
+	got := readStatusline(t, bravo)
+	shown := strings.TrimSpace(runCLIInDir(t, bravo, "show", ticket, "--field", "phase"))
+	if workingOnID(got) != ticket || got.WorkingOn.Phase == nil || *got.WorkingOn.Phase != "review" || shown != "review" {
+		t.Fatalf("after the takeover: working_on = %+v, lit show phase %q; want %s in review in both", got.WorkingOn, shown, ticket)
+	}
+}
+
 func mustAtoi(t *testing.T, s string) int {
 	t.Helper()
 	n, err := strconv.Atoi(s)

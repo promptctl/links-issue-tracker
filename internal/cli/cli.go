@@ -1796,24 +1796,24 @@ var (
 
 // authorizePhase gates nothing — Issue.PlanPhase, which both engines run, is
 // the phase rule — and owes the move it made: the line saying where the
-// ticket's phase now stands, the phase it tells the statusline file, and on
-// the command's event the phase left, the phase entered, and whether anything
-// changed. A refused move fails Apply, so
-// its event carries the refusal instead. The phase left is the one
-// transitionLeaf read before Apply on the same write Store the move is planned
-// on, whose engine holds Dolt's LOCK for the whole command, so both reads
-// answer from one history. [LAW:nothing-unseen]
+// ticket's phase now stands, and on the command's event the phase left, the
+// phase entered, and whether anything changed. The statusline file hears of
+// the move from the store's change observer, as it hears of every change. A
+// refused move fails Apply, so its event carries the refusal instead. The
+// phase left is the one transitionLeaf read before Apply on the same write
+// Store the move is planned on, whose engine holds Dolt's LOCK for the whole
+// command, so both reads answer from one history. [LAW:nothing-unseen]
 func authorizePhase(ctx context.Context, _ io.Writer, _ *app.App, _ string, prior ticketState, action model.Action) (afterApply, error) {
 	set, ok := action.(model.SetPhase)
 	if !ok {
 		return nil, fmt.Errorf("phase: authorize hook received a %T action", action)
 	}
 	move := model.PhaseChange{From: prior.phase, To: set.Phase}
-	return func(written ticketState) (string, statusline.Facts) {
+	return func(ticketState) (string, statusline.Facts) {
 		telemetry.Set(ctx, "phase.from", string(move.From))
 		telemetry.Set(ctx, "phase.to", string(move.To))
 		telemetry.Set(ctx, "phase.changed", move.Changed())
-		return phaseNotice(move), statusline.Facts{phaseRead(written)}
+		return phaseNotice(move), nil
 	}, nil
 }
 
@@ -1879,8 +1879,14 @@ func readTicketState(ctx context.Context, st storage.Store, issue model.Issue) (
 	if err != nil {
 		return ticketState{}, err
 	}
+	return ticketStateOf(issue, events), nil
+}
+
+// ticketStateOf is where issue stands given its history: the row, and the
+// phase events put it in, empty when it is not in progress.
+func ticketStateOf(issue model.Issue, events []model.IssueEvent) ticketState {
 	phase, _ := model.PhaseOf(issue, events)
-	return ticketState{issue: issue, phase: phase}, nil
+	return ticketState{issue: issue, phase: phase}
 }
 
 func transitionLeaf(spec transitionSpec) appLeaf {

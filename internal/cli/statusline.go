@@ -72,16 +72,15 @@ func recordStatuslineEvent(ctx context.Context, out statusline.Outcome, err erro
 // nextStatuslineFacts is what a `lit next` outcome tells the statusline file.
 // Work handed back to this checkout is what it is working on, whatever narrowed
 // the question, and its rollup progress and phase are read from the evidence
-// routing read. The pick is "what's next" only when the question was the plain one: a
-// filtered or --all `lit next` answers a different question.
+// routing read. The pick is "what's next" only when the question was the plain
+// one: a filtered or --all `lit next` answers a different question.
 func nextStatuslineFacts(outcome NextOutcome, plain bool, evidence claims.Evidence) statusline.Facts {
 	var facts statusline.Facts
 	var picked *statusline.Ticket
 	switch o := outcome.(type) {
 	case ResumedOwnWork:
 		picked = statuslineTicketRef(o.Row.Issue)
-		phase, _ := model.PhaseOf(o.Row.Issue, evidence.IssueEvents(o.Row.Issue.ID))
-		facts.Record(statusline.Started{Ticket: *picked}, rollupCounted(evidence, o.Row.Issue), phaseRead(ticketState{issue: o.Row.Issue, phase: phase}))
+		facts.Record(statusline.Started{Ticket: *picked}, rollupCounted(evidence, o.Row.Issue), phaseRead(ticketStateOf(o.Row.Issue, evidence.IssueEvents(o.Row.Issue.ID))))
 	case ServedFromClaim:
 		picked = statuslineTicketRef(o.Row.Issue)
 	case ServedFromEpicLane:
