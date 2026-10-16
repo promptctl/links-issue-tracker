@@ -75,9 +75,9 @@ jobs:
           # heading exists at HEAD, so the newest occurrence-change is the
           # addition that made it live, and a reverted-then-re-promoted
           # version measures from its live promotion, not a stale first
-          # attempt. Not CHANGELOG.md's latest commit either: ticket PRs
-          # touch [Unreleased] too, and measuring from those would quietly
-          # reset the clock while the release stays stuck.
+          # attempt. Not CHANGELOG.md's latest commit either: any later
+          # commit touching the file would quietly reset the clock while the
+          # release stays stuck.
           # [LAW:one-source-of-truth]
           promoted_at=$(git log -1 --format=%ct -S "## [$VER]" -- CHANGELOG.md)
           if [ -z "$promoted_at" ]; then

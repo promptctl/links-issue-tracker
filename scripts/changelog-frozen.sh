@@ -2,14 +2,10 @@
 # changelog-frozen.sh — a CHANGELOG section that has shipped is immutable, and
 # this is the proof.
 #
-# The defect it exists to stop: a ticket PR branched while `## [Unreleased]` is
-# the live heading writes its entry there, exactly as RELEASING.md requires. A
-# release promotion then renames that heading to `## [X.Y.Z]` and opens a fresh
-# empty `## [Unreleased]` above it. The ticket PR merges with no conflict and
-# its addition lands under the RELEASED heading — an insertion never reads the
-# heading it lands beneath. The tagged notes then describe code the tag does not
-# contain, and the pending section loses the entry: one bullet, two wrong
-# releases.
+# The rule it enforces: a release's section is written once, whole, in the
+# chore(release) PR that cuts it, and is never edited after its tag ships — not
+# corrected, reworded, or brought up to date (RELEASING.md). A tagged section
+# that changes stops being the record of what the tag shipped.
 #
 # The check: origin's newest release tag is the authority on what shipped, and
 # HEAD's CHANGELOG is a map of it. Everything from that tag's own version
@@ -28,7 +24,7 @@
 # A pending release is free by construction, with no case for it here: under a
 # `pending X.Y.Z` state the newest TAG is still the previous release, so the
 # not-yet-tagged `## [X.Y.Z]` section sits ABOVE the frozen region and the
-# promotion PR writes it freely. The tag is a value that moves the region's
+# release PR writes it freely. The tag is a value that moves the region's
 # boundary, never a condition selecting a code path.
 # [LAW:dataflow-not-control-flow]
 #
@@ -121,7 +117,7 @@ if ! diff -u "$TMP/shipped" "$TMP/current" > "$TMP/drift"; then
   # Drop diff's own ---/+++ header lines; the two above name the sides in the
   # terms that matter here, rather than by temp-file path.
   sed -n '3,$p' "$TMP/drift" >&2
-  echo "::error::A ticket entry belongs under '## [Unreleased]'. A shipped section never changes: the tag is the record of what that release contained, and editing the section makes the record lie in both directions — the tag gains notes for code it does not have, and the pending release loses them." >&2
+  echo "::error::A shipped section never changes: the tag is the record of what that release contained. Revert this edit to the released notes. A release's changelog section is written once, whole, in the chore(release) PR that cuts it (RELEASING.md)." >&2
   exit 1
 fi
 
