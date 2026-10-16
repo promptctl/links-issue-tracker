@@ -815,7 +815,7 @@ Family usage `usage: lit backup <create|list|restore> ...` (`backup.go`). Access
 ## 8. `lit snapshots` (Dolt filesystem-level database snapshots)
 
 Family usage `usage: lit snapshots <new|list|restore> ...` (`snapshots.go`); rows `new`, `list`, `restore` (`snapshots.go`). Workspace-mode (`register.go`).
-Snapshot directory `<StorageDir>/snapshots` (`snapshots.go`).
+Snapshot directory `<StorageDir>/snapshots` (`dbsnapshot.DirFor`, `internal/dbsnapshot/snapshot.go`).
 
 ### 8.1 `lit snapshots new`
 

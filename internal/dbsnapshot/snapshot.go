@@ -26,9 +26,8 @@
 //
 // Distinct from those store-owned preconditions, the package acquires its own
 // producer beacon (an flock inside the snapshots directory, see
-// producerBeaconName): Take
-// holds it shared, residue collection probes it exclusive, and it is always
-// the innermost hold — after the workspace, journal, and commit locks — taken by
+// producerBeaconName): Take holds it shared, residue collection probes it
+// exclusive, and it is always the innermost hold — after the workspace, journal, and commit locks — taken by
 // code that already holds nothing else it could wait on, so it cannot extend
 // any lock cycle.
 package dbsnapshot
@@ -70,9 +69,8 @@ func DirFor(databaseDir string) string {
 var ErrSnapshotMissing = errors.New("dbsnapshot: snapshot not found")
 
 // producerBeaconName is the flock-backed liveness beacon inside the snapshots
-// directory.
-// Every Take holds it SHARED for its whole reserve→copy→rename window;
-// collectOrphanedResidue probes it EXCLUSIVE, so holding exclusively is
+// directory. Every Take holds it SHARED for its whole reserve→copy→rename
+// window; collectOrphanedResidue probes it EXCLUSIVE, so holding exclusively is
 // kernel proof (surviving SIGKILL, panics, and os.Exit alike) that every
 // producer artifact in the directory belongs to a dead producer. The name
 // contains a dot, which sanitizeLabel maps out of every legal snapshot name,
@@ -100,8 +98,7 @@ func producerBeaconPath(snapshotsDir string) string {
 var ErrSnapshotsBusy = errors.New("snapshot producer beacon busy")
 
 // Take clones databaseDir into <DirFor(databaseDir)>/<name>/ and returns the
-// snapshot.
-// label is optional ("" = no suffix); non-safe characters are normalized.
+// snapshot. label is optional ("" = no suffix); non-safe characters are normalized.
 // Atomicity: the clone lands in <name>.tmp first, then renames to <name> on
 // success — an interrupt leaves no half-snapshot in the listing, and whatever
 // .tmp/.reserve residue an uncleanable death (SIGKILL, the interrupt guard's
@@ -281,10 +278,10 @@ func pathFree(p string) (bool, error) {
 	}
 }
 
-// List returns the snapshots of the database at databaseDir, newest-first. Entries that don't
-// match the <unix-ns>[-<label>] naming scheme are silently skipped so leftover
-// directories from prior (incompatible) snapshot implementations don't pollute
-// the listing.
+// List returns the snapshots of the database at databaseDir, newest-first.
+// Entries that don't match the <unix-ns>[-<label>] naming scheme are silently
+// skipped so leftover directories from prior (incompatible) snapshot
+// implementations don't pollute the listing.
 //
 // [LAW:one-source-of-truth] formatName and parseName are inverses; no other
 // code parses or constructs snapshot directory names.
@@ -319,8 +316,8 @@ func List(databaseDir string) ([]Snapshot, error) {
 	return snapshots, nil
 }
 
-// Restore moves <DirFor(databaseDir)>/<name>/ into databaseDir, after rotating any
-// existing databaseDir to <databaseDir>.pre-restore-<unix-ns> for operator
+// Restore moves <DirFor(databaseDir)>/<name>/ into databaseDir, after rotating
+// any existing databaseDir to <databaseDir>.pre-restore-<unix-ns> for operator
 // undo. Returns the rotated path (or "" if databaseDir didn't exist).
 //
 // [LAW:no-defensive-null-guards] Caller-must-not-hold-open-Dolt-connection is
@@ -330,6 +327,9 @@ func Restore(databaseDir, name string) (string, error) {
 	if err := validateSnapshotName(name); err != nil {
 		return "", err
 	}
+	// Cleaned so the rotation path below is a sibling for every spelling DirFor
+	// accepts; "<db>/" would otherwise rotate the directory into its own child.
+	databaseDir = filepath.Clean(databaseDir)
 	snapshotPath := filepath.Join(DirFor(databaseDir), name)
 	// Lstat (not Stat) so a symlink at snapshotPath fails the IsDir check rather
 	// than being followed to whatever the attacker pointed it at. os.Rename
@@ -428,8 +428,8 @@ func formatName(t time.Time, label string) string {
 }
 
 // validateSnapshotName rejects user-supplied names that would let Restore
-// target anything outside the canonical <DirFor(databaseDir)>/<name> path. The two
-// checks compose:
+// target anything outside the canonical <DirFor(databaseDir)>/<name> path. The
+// two checks compose:
 //   - name == filepath.Base(name): rejects path separators, "..", and absolute
 //     paths (filepath.Base collapses them to a final component).
 //   - parseName(name) ok: rejects ".tmp" leftovers, legacy snap-<ts>-<hash>/

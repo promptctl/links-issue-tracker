@@ -327,7 +327,7 @@ func (s *Store) migrate(ctx context.Context) error {
 		// [LAW:one-source-of-truth] Migration retention bounds migration
 		// snapshots only; user snapshots share the directory under an
 		// independent budget. IsMigrationSnapshotName is the kind discriminator.
-		if err := dbsnapshot.PruneMatching(guard.databaseDir, migrationSnapshotRetention, IsMigrationSnapshotName); err != nil {
+		if err := dbsnapshot.PruneMatching(s.doltRootDir, migrationSnapshotRetention, IsMigrationSnapshotName); err != nil {
 			return fmt.Errorf("prune migration snapshots: %w", err)
 		}
 	}

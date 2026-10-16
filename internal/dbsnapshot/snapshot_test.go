@@ -18,10 +18,19 @@ func TestTake_RejectsMissingSource(t *testing.T) {
 	if err == nil {
 		t.Fatalf("Take against missing source should error")
 	}
-	entries, _ := os.ReadDir(DirFor(db))
-	for _, e := range entries {
-		if strings.HasSuffix(e.Name(), ".tmp") {
-			t.Fatalf("leftover .tmp directory after failed Take: %s", e.Name())
+	if _, err := os.Stat(DirFor(db)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a refused Take must leave no snapshots directory behind, stat err=%v", err)
+	}
+}
+
+// The location is the on-disk contract every released lit binary reads
+// snapshots from, so the expectations are literals, not DirFor's own output.
+func TestDirFor_IsTheDatabaseSiblingNamedSnapshots(t *testing.T) {
+	t.Parallel()
+	want := filepath.FromSlash("/w/.links/snapshots")
+	for _, db := range []string{"/w/.links/dolt", "/w/.links/dolt/", "/w/.links/./dolt"} {
+		if got := DirFor(filepath.FromSlash(db)); got != want {
+			t.Errorf("DirFor(%q) = %q, want %q", db, got, want)
 		}
 	}
 }
@@ -138,6 +147,26 @@ func TestRestore_RoundTrip(t *testing.T) {
 	}
 	if got, err := os.ReadFile(filepath.Join(rotated, "top.txt")); err != nil || string(got) != "MUTATED" {
 		t.Fatalf("rotated top.txt: %q err=%v", got, err)
+	}
+}
+
+func TestRestore_TrailingSeparatorRotatesToSibling(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	src := filepath.Join(root, "db")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := Take(context.Background(), src, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotated, err := Restore(src+string(filepath.Separator), snap.Name)
+	if err != nil {
+		t.Fatalf("Restore with a trailing separator: %v", err)
+	}
+	if filepath.Dir(rotated) != root || !strings.HasPrefix(filepath.Base(rotated), "db.pre-restore-") {
+		t.Fatalf("rotated path %q must be a db.pre-restore-* sibling in %q", rotated, root)
 	}
 }
 

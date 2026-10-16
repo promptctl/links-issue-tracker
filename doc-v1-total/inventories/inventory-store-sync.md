@@ -758,7 +758,7 @@ Test hooks: `migrationUpByOneForTest` (`migration_runner.go`) applies **only** t
 1. `guard := newSnapshotGuard(s.doltRootDir, formatMigrationSnapshotLabel(time.Now()))`.
 2. `s.runMigration(ctx, guard)`.
 3. On error: if `guard.took()` → wrap as `&MigrationRollbackError{Snapshot: snap, Cause: err}`; otherwise return the raw error (`migration_runner.go`).
-4. On success: if a snapshot was taken → `dbsnapshot.PruneMatching(guard.databaseDir, 10, IsMigrationSnapshotName)`; a prune failure **is** promoted here: `"prune migration snapshots: %w"` (`migration_runner.go`).
+4. On success: if a snapshot was taken → `dbsnapshot.PruneMatching(s.doltRootDir, 10, IsMigrationSnapshotName)`; a prune failure **is** promoted here: `"prune migration snapshots: %w"` (`migration_runner.go`).
 
 ### 8.4 `runMigration` — the full sequence
 
@@ -1725,7 +1725,7 @@ Sibling artifact names in the same directory:
 
 Restore-time artifact, created next to the database dir (**not** in `snapshotsDir`): `<databaseDir>.pre-restore-<unix-ns>` via `fmt.Sprintf("%s.pre-restore-%d", databaseDir, time.Now().UTC().UnixNano())` (`snapshot.go`).
 
-Where `snapshotsDir` comes from: every exported function takes only `databaseDir` and derives `snapshotsDir = DirFor(databaseDir)` — the sibling of `databaseDir` named `snapshots` — itself (`internal/dbsnapshot/snapshot.go`); no caller passes a snapshots directory.
+Where `snapshotsDir` comes from: no exported function takes a snapshots directory; each one that touches it takes `databaseDir` and derives `snapshotsDir = DirFor(databaseDir)` — the sibling of `databaseDir` named `snapshots` — itself (`internal/dbsnapshot/snapshot.go`); no caller passes a snapshots directory.
 
 ### 13.5 Name grammar — mint side
 
@@ -1830,15 +1830,16 @@ Tests: `snapshot_test.go` (3 takes, newest-first); `snapshot_test.go` (`snap-old
 
 `snapshot.go`, in order:
 1. `validateSnapshotName(name)`; error returned.
-2. `snapshotPath = filepath.Join(DirFor(databaseDir), name)`.
-3. **`os.Lstat`**, not `Stat` — a symlink is not followed. `fs.ErrNotExist` → **bare `ErrSnapshotMissing`**, not wrapped; other error → `"stat snapshot: %w"`.
-4. `!info.Mode().IsDir()` → `"snapshot is not a directory: %s"` — this is what rejects a symlink.
-5. **Rotate the existing database dir.** `os.Stat(databaseDir)`:
+2. `databaseDir = filepath.Clean(databaseDir)` — so a trailing separator cannot make the step-5 rotation path a child of the directory it renames.
+3. `snapshotPath = filepath.Join(DirFor(databaseDir), name)`.
+4. **`os.Lstat`**, not `Stat` — a symlink is not followed. `fs.ErrNotExist` → **bare `ErrSnapshotMissing`**, not wrapped; other error → `"stat snapshot: %w"`.
+5. `!info.Mode().IsDir()` → `"snapshot is not a directory: %s"` — this is what rejects a symlink.
+6. **Rotate the existing database dir.** `os.Stat(databaseDir)`:
    - exists → `rotatedPath = fmt.Sprintf("%s.pre-restore-%d", databaseDir, time.Now().UTC().UnixNano())`, then `os.Rename(databaseDir, rotatedPath)`; rename error → `("", "rotate existing database dir: %w")`.
    - `fs.ErrNotExist` → no rotation, `rotatedPath` stays `""`.
    - other stat error → `("", "stat database dir: %w")`.
-6. `os.Rename(snapshotPath, databaseDir)` — this **moves** the snapshot directory; **the snapshot no longer exists in `snapshotsDir` afterwards**. Error → `(rotatedPath, "install snapshot at database dir: %w")` — note the rotated path *is* returned alongside the error so the caller can undo.
-7. Return `(rotatedPath, nil)`.
+7. `os.Rename(snapshotPath, databaseDir)` — this **moves** the snapshot directory; **the snapshot no longer exists in `snapshotsDir` afterwards**. Error → `(rotatedPath, "install snapshot at database dir: %w")` — note the rotated path *is* returned alongside the error so the caller can undo.
+8. Return `(rotatedPath, nil)`.
 
 `validateSnapshotName` (`snapshot.go`): empty → `"dbsnapshot: snapshot name is empty"`; `name != filepath.Base(name)` → `"dbsnapshot: snapshot name must be a single path component: %q"`; `parseName` not ok → `"dbsnapshot: snapshot name does not match the <unix-ns>[-<label>] scheme: %q"`.
 
