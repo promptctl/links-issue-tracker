@@ -25,8 +25,8 @@ func workflowsDryRunLeaf() wsLeaf {
 	fs := newCobraFlagSet("workflows dry-run")
 	event := fs.String("event", "", "Semantic event the hypothetical occasion fires (see the event catalog in 'lit workflows')")
 	labels := fs.StringArray("label", "Label the hypothetical ticket carries (repeatable)")
-	enter := fs.String("enter", "", "State the hypothetical ticket enters")
-	exit := fs.String("exit", "", "State the hypothetical ticket exits")
+	enter := fs.StringArray("enter", "State the hypothetical ticket enters (repeatable: a start enters in_progress and plan)")
+	exit := fs.StringArray("exit", "State the hypothetical ticket exits (repeatable)")
 	issue := fs.String("issue", "", "Issue id to interpolate into <id> in previewed bodies")
 	return wsLeaf{fs: fs, positionals: 0, usage: workflowsUsage, work: func(_ context.Context, stdout io.Writer, ws workspace.Info, _ []string) error {
 
@@ -49,7 +49,7 @@ func workflowsDryRunLeaf() wsLeaf {
 
 func printDryRunOccasion(w io.Writer, o workflows.Occasion) error {
 	_, err := fmt.Fprintf(w, "occasion: event=%s labels=%s entered=%s exited=%s issue=%s\n\n",
-		orDash(string(o.Event)), orDash(strings.Join(o.Labels, ",")), orDash(o.Entered), orDash(o.Exited), orDash(o.IssueID))
+		orDash(string(o.Event)), orDash(strings.Join(o.Labels, ",")), orDash(strings.Join(o.Entered, ",")), orDash(strings.Join(o.Exited, ",")), orDash(o.IssueID))
 	return err
 }
 

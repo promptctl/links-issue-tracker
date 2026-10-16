@@ -86,7 +86,7 @@ lines here for reading:
 | `sink_rotation` | What happened to the file's size cap before this line was appended: `none`, `rotated` (this is the first line of a new file), or `failed` (the file keeps growing past its cap). |
 | `sink_rotation_error` | Present only when `sink_rotation` is `failed`: why. |
 | `counts` | The command's counts. A count of zero is written as `0`, so "ran and found none" is distinguishable from a command that does not count that thing. |
-| `facts` | What the command decided, under keys prefixed with the command's name, with `statusline.` for what it wrote to the statusline file, or with `schema_ahead.` for a refusal because the workspace's schema is ahead of this lit. |
+| `facts` | What the command decided, under keys prefixed with the command's name, with `statusline.` for what it wrote to the statusline file, with `workflows.` for the workflow occasion it fired, or with `schema_ahead.` for a refusal because the workspace's schema is ahead of this lit. |
 
 A command that records no counts or facts writes `{}` for each.
 
@@ -192,6 +192,22 @@ set and carries its refusal instead.
 | `phase.from` | The phase the issue was in. |
 | `phase.to` | The phase the command moved it to, the one `--to` names. |
 | `phase.changed` | `false` when the issue was already in that phase, so nothing was recorded; `true` otherwise. |
+
+## What a workflow occasion records
+
+A command that fires a [workflow](workflows.md) occasion records it:
+`lit new`, `lit followup`, `lit show`, `lit update`, `lit comment add`,
+`lit next` when it hands back a ticket, `lit backlog`, and the lifecycle
+transitions `lit start`, `lit done`, `lit close`, `lit open` and `lit phase`.
+A command that failed before the occasion fired, such as a refused transition,
+has none of these keys.
+
+| Key | Meaning |
+| --- | --- |
+| `workflows.event` | The event the occasion fired, such as `work_started` or `phase_set`. |
+| `workflows.entered` | The states the ticket entered, outermost first: `["in_progress", "plan"]` for a start from `open`, `["review"]` for a phase move to `review`. `[]` when the command moved no state. |
+| `workflows.exited` | The states the ticket left, in the same order: `["in_progress", "review"]` for a `lit done` from `review`. `[]` when the command moved no state. |
+| `workflows.fired` | The ids of the definitions that fired, in the order their guidance was printed; `[]` when none did. |
 
 ## What `lit upgrade` records
 

@@ -1050,13 +1050,14 @@ Mutation commands point back here at the moment of need: the text success output
 ### `lit workflows`
 
 ```text
-lit workflows [show <id> | edit <id-or-point> | dry-run [--event <name>] [--label <name>]... [--enter <state>] [--exit <state>] [--issue <id>]]
+lit workflows [show <id> | edit <id-or-point> | dry-run [--event <name>] [--label <name>]... [--enter <state>]... [--exit <state>]... [--issue <id>]]
 ```
 
 See [Workflows](workflows.md) for what the feature is, and run `lit workflows --help`
 for the definition format, the activation rules, and the event catalog.
-Bare `lit workflows` prints the lifecycle spine (every dispatched event, the three
-built-in states with enter/exit, and any bound labels) annotated with the definitions
+Bare `lit workflows` prints the lifecycle spine (every dispatched event, the
+built-in states and the phases inside `in_progress` with enter/exit, and any bound
+labels) annotated with the definitions
 active at each point and their source layer; `show <id>` resolves one definition
 fully. `edit <id-or-point>` scaffolds a project-layer override (an existing
 definition's id) or a fresh definition (an event name, a state name optionally
@@ -1064,6 +1065,8 @@ suffixed `:enter`/`:exit`, or — falling through — a label), always prints it
 and additionally opens it in `$EDITOR` when stdout is a terminal and `$EDITOR` is set.
 `dry-run` explains a hypothetical occasion built from flags: which definitions would
 fire, why, and the body each would inject — without anything actually firing.
+`--enter` and `--exit` repeat, because one transition can enter several states:
+`lit start` from open enters `in_progress` and `plan`.
 
 ### `lit completion`
 

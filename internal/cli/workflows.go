@@ -19,7 +19,7 @@ import (
 // definitions itself — that stays match.go/load.go's job — so this file is
 // pure presentation over an already-resolved Set. [LAW:single-enforcer]
 
-const workflowsUsage = "usage: lit workflows [show <id> | edit <id-or-point> | dry-run [--event <name>] [--label <name>]... [--enter <state>] [--exit <state>] [--issue <id>]]"
+const workflowsUsage = "usage: lit workflows [show <id> | edit <id-or-point> | dry-run [--event <name>] [--label <name>]... [--enter <state>]... [--exit <state>]... [--issue <id>]]"
 
 // workflowsFamily is the named surface under `workflows`: one definition
 // resolved (`show <id>`), an override scaffolded or opened (`edit
@@ -88,10 +88,19 @@ func workflowsEditLeaf() wsLeaf {
 }
 
 // builtinStates is the lifecycle's own state order — the spine every
-// workspace has, with or without a single workflow file authored against it.
-var builtinStates = []string{string(model.StateOpen), string(model.StateInProgress), string(model.StateClosed)}
+// workspace has, with or without a single workflow file authored against it:
+// the statuses, with the phases in work order inside in_progress, where the
+// work passes through them. [LAW:one-source-of-truth] the phases are
+// model.Phases(), never a second list.
+var builtinStates = func() []string {
+	states := []string{string(model.StateOpen), string(model.StateInProgress)}
+	for _, phase := range model.Phases() {
+		states = append(states, string(phase))
+	}
+	return append(states, string(model.StateClosed))
+}()
 
-// spineStates returns the states the overview walks: the built-in three, in
+// spineStates returns the states the overview walks: the built-in states, in
 // lifecycle order, followed by any custom stage a loaded definition binds to
 // that isn't one of them, alphabetically. Custom stages are first-class by
 // design (states are open strings, never a closed enum — see workflows.go),

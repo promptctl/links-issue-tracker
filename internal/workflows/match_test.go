@@ -53,26 +53,50 @@ func TestMatchesSingleDimensions(t *testing.T) {
 		{
 			name:     "states: enter matches entered",
 			def:      Definition{States: []StateActivation{{State: "in_progress", When: WhenEnter}}},
-			occasion: Occasion{Entered: "in_progress", Exited: "open"},
+			occasion: Occasion{Entered: []string{"in_progress"}, Exited: []string{"open"}},
 			want:     true,
 		},
 		{
 			name:     "states: enter does not match exited",
 			def:      Definition{States: []StateActivation{{State: "open", When: WhenEnter}}},
-			occasion: Occasion{Entered: "in_progress", Exited: "open"},
+			occasion: Occasion{Entered: []string{"in_progress"}, Exited: []string{"open"}},
 			want:     false,
 		},
 		{
 			name:     "states: exit matches exited",
 			def:      Definition{States: []StateActivation{{State: "open", When: WhenExit}}},
-			occasion: Occasion{Entered: "in_progress", Exited: "open"},
+			occasion: Occasion{Entered: []string{"in_progress"}, Exited: []string{"open"}},
 			want:     true,
 		},
 		{
 			name:     "states: custom stage names are just names",
 			def:      Definition{States: []StateActivation{{State: "ready-to-pull", When: WhenEnter}}},
-			occasion: Occasion{Entered: "ready-to-pull", Exited: "design"},
+			occasion: Occasion{Entered: []string{"ready-to-pull"}, Exited: []string{"design"}},
 			want:     true,
+		},
+		{
+			name:     "states: enter matches a state nested inside another the transition entered",
+			def:      Definition{States: []StateActivation{{State: "plan", When: WhenEnter}}},
+			occasion: Occasion{Entered: []string{"in_progress", "plan"}, Exited: []string{"open"}},
+			want:     true,
+		},
+		{
+			name:     "states: enter matches the outer state of a nested entry",
+			def:      Definition{States: []StateActivation{{State: "in_progress", When: WhenEnter}}},
+			occasion: Occasion{Entered: []string{"in_progress", "plan"}, Exited: []string{"open"}},
+			want:     true,
+		},
+		{
+			name:     "states: exit matches every state a transition left",
+			def:      Definition{States: []StateActivation{{State: "review", When: WhenExit}}},
+			occasion: Occasion{Entered: []string{"closed"}, Exited: []string{"in_progress", "review"}},
+			want:     true,
+		},
+		{
+			name:     "states: a nested state on one side does not satisfy the other",
+			def:      Definition{States: []StateActivation{{State: "plan", When: WhenExit}}},
+			occasion: Occasion{Entered: []string{"in_progress", "plan"}, Exited: []string{"open"}},
+			want:     false,
 		},
 		{
 			name:     "states: no transition on the occasion never satisfies a state binding",
@@ -126,14 +150,14 @@ func TestMatchesAllThreeDimensions(t *testing.T) {
 	full := Occasion{
 		Event:   EventWorkStarted,
 		Labels:  []string{"epic-child"},
-		Entered: "in_progress",
-		Exited:  "open",
+		Entered: []string{"in_progress"},
+		Exited:  []string{"open"},
 	}
 	if !def.Matches(full) {
 		t.Fatalf("Matches(%+v) = false, want all three dimensions satisfied", full)
 	}
 	missingTransition := full
-	missingTransition.Entered, missingTransition.Exited = "", ""
+	missingTransition.Entered, missingTransition.Exited = nil, nil
 	if def.Matches(missingTransition) {
 		t.Fatal("Matches() = true with the states dimension unsatisfied")
 	}
@@ -167,7 +191,7 @@ func TestMatchReasonsNamesEveryDeclaredDimensionThatMatched(t *testing.T) {
 	occasion := Occasion{
 		Event:   EventWorkFinished,
 		Labels:  []string{"needs-design"},
-		Entered: "closed",
+		Entered: []string{"closed"},
 	}
 	got := def.MatchReasons(occasion)
 	want := []string{"event:work_finished", "label:needs-design", "state:closed(enter)"}

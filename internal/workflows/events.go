@@ -23,6 +23,9 @@ const (
 	// EventWorkStarted fires when the agent claims a ticket and begins work
 	// (today: `lit start`).
 	EventWorkStarted Event = "work_started"
+	// EventPhaseSet fires when the agent sets where an in-progress ticket's
+	// work stands (today: `lit phase`), whether or not the phase moves.
+	EventPhaseSet Event = "phase_set"
 	// EventWorkFinished fires when claimed work finishes on the success path
 	// (today: `lit done`).
 	EventWorkFinished Event = "work_finished"
@@ -44,13 +47,14 @@ const (
 )
 
 // Catalog returns every event lit can dispatch, in lifecycle display order:
-// discovery, viewing, claiming, finishing, and mutation.
+// discovery, viewing, claiming, working, finishing, and mutation.
 func Catalog() []Event {
 	return []Event{
 		EventShowBacklog,
 		EventNextPulled,
 		EventShowTicket,
 		EventWorkStarted,
+		EventPhaseSet,
 		EventWorkFinished,
 		EventTicketClosed,
 		EventTicketReopened,

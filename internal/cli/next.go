@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"time"
 
@@ -81,7 +80,7 @@ func nextLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		return workflows.Dispatch(stdout, os.Stderr, ap.Workspace, occasion)
+		return dispatchOccasion(ctx, stdout, ap.Workspace, occasion)
 	}}
 }
 

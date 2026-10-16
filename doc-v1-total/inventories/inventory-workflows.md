@@ -128,9 +128,11 @@ Rules:
 - **State names are open strings, deliberately not a closed enum** (`internal/workflows/workflows.go`).
   Custom stage names are legal and require no code change. A state name may contain a colon or a
   comma (`internal/cli/workflows_test.go` scaffolds a state literally named `foo,bar`).
-- The built-in three states are `open`, `in_progress`, `closed`
-  (`internal/model/lifecycle/lifecycle.go`, surfaced as `builtinStates` at
-  `internal/cli/workflows.go`).
+- The built-in states are `open`, `in_progress`, `closed`
+  (`internal/model/lifecycle/lifecycle.go`) and the phases `plan`, `impl`, `review`, `merge`,
+  states inside `in_progress` (`internal/model/lifecycle/phase.go`), surfaced in that lifecycle
+  order — `open`, `in_progress`, the phases, `closed` — as `builtinStates` at
+  `internal/cli/workflows.go`.
 
 Duplicate activations for the same state with different `when` are allowed and preserved as two
 entries (`internal/workflows/parse_test.go`: `open(enter)`, `in_progress(enter)`,
@@ -267,7 +269,7 @@ A malformed file is skipped; other files in the same layer still load
 
 ## 3. The complete event catalog
 
-Ten events, defined as string constants at `internal/workflows/events.go`:
+Eleven events, defined as string constants at `internal/workflows/events.go`:
 
 | Event constant name | Wire name | Fires when | Command |
 |---|---|---|---|
@@ -275,6 +277,7 @@ Ten events, defined as string constants at `internal/workflows/events.go`:
 | `EventShowTicket` | `show_ticket` | agent views one ticket's details | `lit show` — `internal/workflows/events.go` |
 | `EventNextPulled` | `next_pulled` | agent asks for the next workable ticket | `lit next` — `internal/workflows/events.go` |
 | `EventWorkStarted` | `work_started` | a ticket is claimed and work begins | `lit start` — `internal/workflows/events.go` |
+| `EventPhaseSet` | `phase_set` | an in-progress ticket's phase is set, whether or not it moves | `lit phase` — `internal/workflows/events.go` |
 | `EventWorkFinished` | `work_finished` | claimed work finishes on the success path | `lit done` — `internal/workflows/events.go` |
 | `EventTicketClosed` | `ticket_closed` | a ticket is closed without finishing (wontfix/obsolete/duplicate) | `lit close` — `internal/workflows/events.go` |
 | `EventTicketReopened` | `ticket_reopened` | a closed ticket is reopened | `lit open` — `internal/workflows/events.go` |
@@ -283,7 +286,7 @@ Ten events, defined as string constants at `internal/workflows/events.go`:
 | `EventCommentAdded` | `comment_added` | a comment lands on a ticket | `lit comment` — `internal/workflows/events.go` |
 
 `Catalog()` returns them in **display order**, which differs from declaration order:
-`show_backlog, next_pulled, show_ticket, work_started, work_finished, ticket_closed,
+`show_backlog, next_pulled, show_ticket, work_started, phase_set, work_finished, ticket_closed,
 ticket_reopened, ticket_created, ticket_updated, comment_added`
 (`internal/workflows/events.go`). This is the order `lit workflows` prints the Events spine
 in (`internal/cli/workflows.go`).
@@ -305,8 +308,8 @@ renamed freely, the event name is what user definitions bind to
 | `Event Event` | the semantic event, or zero when none | `internal/workflows/match.go` |
 | `IssueID string` | acted-on ticket id; empty for backlog-wide moments. **Never read by matching** — used only for `<id>` interpolation, display, and tracing | `internal/workflows/match.go` |
 | `Labels []string` | the ticket's labels in canonical form; nil when no single ticket | `internal/workflows/match.go` |
-| `Entered string` | state the ticket entered, if a transition happened | `internal/workflows/match.go` |
-| `Exited string` | state the ticket exited, if a transition happened | `internal/workflows/match.go` |
+| `Entered []string` | states the ticket entered, if a transition happened; several when a state inside another moves with it | `internal/workflows/match.go` |
+| `Exited []string` | states the ticket exited, if a transition happened | `internal/workflows/match.go` |
 
 ### 3.2 Per-event payloads, as actually built
 
@@ -320,16 +323,21 @@ Builders live in `internal/cli/workflow_events.go`:
 | `ticket_created` | `ticketCreatedOccasion` `internal/cli/workflow_events.go` | Event, IssueID, Labels (the labels it was created with). |
 | `ticket_updated` | `ticketUpdatedOccasion` `internal/cli/workflow_events.go` | Event, IssueID, Labels. **Never carries a transition** — `lit update` rejects `--status` (`internal/cli/workflow_events.go`; pinned `internal/cli/workflow_events_test.go`). |
 | `comment_added` | `commentAddedOccasion` `internal/cli/workflow_events.go` | Event, IssueID, Labels. |
-| `work_started` / `work_finished` / `ticket_closed` / `ticket_reopened` | `transitionOccasion` `internal/cli/workflow_events.go` | Event (from the action), IssueID, Labels (post-transition), `Entered = issue.State()` (post), `Exited = prior.State()` (pre). |
+| `work_started` / `work_finished` / `ticket_closed` / `ticket_reopened` | `transitionOccasion` `internal/cli/workflow_events.go` | Event (from the action), IssueID, Labels (post-transition), `Entered` = the post state then its phase if any, `Exited` = the pre state then its phase if any (`ticketState.states`). |
+| `phase_set` | `transitionOccasion` `internal/cli/workflow_events.go` | Event, IssueID, Labels (post-transition), `Entered` = the post phase, `Exited` = the pre phase (`ticketState.phases`); never the status. |
 
 Status-action → event mapping (`internal/cli/workflow_events.go`):
 `ActionStart→work_started`, `ActionDone→work_finished`, `ActionClose→ticket_closed`,
 `ActionReopen→ticket_reopened`. A `StatusAction` with no map entry **panics**:
 `workflow_events: no event mapped for status action %q` (`internal/cli/workflow_events.go`).
+`model.SetPhase` maps to `phase_set`; an action variant the builder's type switch does not name
+panics with `workflow_events: no occasion decided for action %T` (`internal/cli/workflow_events.go`).
+The phase on each side is `model.PhaseOf` over the issue's events, read by `readTicketState`
+before and after `Store.Apply` (`internal/cli/cli.go`).
 
-Retention actions (archive/unarchive/delete/restore) are **not** `StatusAction`s and therefore fire
-**no event at all** — the type assertion at `internal/cli/cli.go` excludes them
-(`internal/cli/workflow_events.go`; pinned `internal/cli/workflow_events_test.go`).
+Retention actions (archive/unarchive/delete/restore) fire **no event at all** — `transitionOccasion`
+returns `fires = false` for a `RetentionAction` (`internal/cli/workflow_events.go`; pinned
+`internal/cli/workflow_events_test.go`).
 
 ### 3.3 Dispatch call sites — where each event is actually fired
 
@@ -339,7 +347,7 @@ Retention actions (archive/unarchive/delete/restore) are **not** `StatusAction`s
 | `internal/cli/cli.go` (`followupLeaf`) | `ticket_created` | after create, before summary/breadcrumb (`internal/cli/cli.go`) |
 | `internal/cli/cli.go` (`showLeaf`) | `show_ticket` | after `GetIssueDetail`, **before** either the `--field` output or the full detail view — fires for both (`internal/cli/cli.go`) |
 | `internal/cli/cli.go` (`updateLeaf`) | `ticket_updated` | after `Store.Apply`, before summary/breadcrumb |
-| `internal/cli/cli.go` (`transitionLeaf`) | one of the four transition events | after `Store.Apply` and after `authorize`; **before** the claim-transfer notice at `internal/cli/cli.go`. Guarded by `action.(model.StatusAction)` (`internal/cli/cli.go`) |
+| `internal/cli/cli.go` (`transitionLeaf`) | one of the four status transition events, or `phase_set` | after `Store.Apply` and after `authorize`; **before** the claim-transfer notice at `internal/cli/cli.go`. Guarded by `transitionOccasion`'s `fires` (`internal/cli/cli.go`) |
 | `internal/cli/cli.go` (`commentAddLeaf`) | `comment_added` | after `AddComment`, before `printComment` |
 | `internal/cli/next.go` (`nextLeaf`) | `next_pulled` | **last** — after the start advice and `printNextSummary` (`internal/cli/next.go`). Only reached when a row was actually served; `Exhausted`/`NoWork` return an error before any occasion is built (`internal/cli/next.go`) |
 | `internal/cli/workable.go` (`workableLeaf`) | `show_backlog` | **last** — after the table render (`internal/cli/workable.go`) |
@@ -371,8 +379,8 @@ otherwise: matchEvents(d.Events, o.Event) AND matchLabels(d.Labels, o.Labels) AN
   `internal/workflows/match.go`).
 - `matchStates` (`internal/workflows/match.go`) → `StateActivation.matches`
   (`internal/workflows/match.go`): the activation picks the occasion side matching its `When`
-  (`Entered` for `enter`, `Exited` for `exit`), and requires that side to be **non-empty and exactly
-  equal** to the activation's state name. "No transition happened" never satisfies a state binding.
+  (`Entered` for `enter`, `Exited` for `exit`), and requires the activation's state name to be
+  **exactly one of** the states listed on that side. "No transition happened" never satisfies a state binding.
 
 **There are no wildcards, no globs, no regexes, and no negation** anywhere in matching. The only
 "match everything" construct is *omitting* a dimension. Verify by reading the whole of
@@ -407,8 +415,11 @@ This is the single shared "why" computation behind both the real firing trace an
 
 ## 5. Dispatch mechanics
 
-`workflows.Dispatch(w io.Writer, errOut io.Writer, ws workspace.Info, o Occasion) error`
-(`internal/workflows/dispatch.go`).
+`workflows.Dispatch(w io.Writer, errOut io.Writer, ws workspace.Info, o Occasion) ([]Definition, error)`
+(`internal/workflows/dispatch.go`). It returns the definitions that fired, with a write error too.
+Every CLI call site reaches it through `dispatchOccasion` (`internal/cli/workflow_dispatch.go`),
+which sets the facts `workflows.event`, `workflows.entered`, `workflows.exited` and
+`workflows.fired` (fired ids, `[]` when none) on the command's event.
 
 - **Synchronous, in-process, called directly from the command path — no bus, no async queue, no
   subscriber list; there is exactly one `Dispatch`, not a registry**
@@ -488,8 +499,8 @@ plus a trailing newline (`internal/workflows/trace.go`):
   "event": "show_ticket",        // omitempty
   "issue_id": "lit-42",          // omitempty
   "labels": ["needs-design"],    // omitempty
-  "entered": "closed",           // omitempty
-  "exited": "in_progress",       // omitempty
+  "entered": ["closed"],                // omitempty
+  "exited": ["in_progress", "review"],  // omitempty
   "fired": [
     { "id": "needs-design-note", "source": "project", "path": "needs-design.md",
       "reasons": ["event:show_ticket", "label:needs-design"] }
@@ -518,7 +529,7 @@ Registered as a workspace-only command (no store access) at `internal/cli/regist
 Usage string (`internal/cli/workflows.go`):
 
 ```
-usage: lit workflows [show <id> | edit <id-or-point> | dry-run [--event <name>] [--label <name>]... [--enter <state>] [--exit <state>] [--issue <id>]]
+usage: lit workflows [show <id> | edit <id-or-point> | dry-run [--event <name>] [--label <name>]... [--enter <state>]... [--exit <state>]... [--issue <id>]]
 ```
 
 Routing (`internal/cli/workflows.go`): a help flag gives the family usage;
@@ -559,8 +570,8 @@ nothing is bound there, else `<label>  [<ref>, <ref>, …]` where each ref is `f
 
 Spine composition:
 
-- **States spine** = the three built-ins in lifecycle order (`open`, `in_progress`, `closed` —
-  `internal/cli/workflows.go`), followed by any **custom** state a loaded definition binds to,
+- **States spine** = the built-in states in lifecycle order (`open`, `in_progress`, `plan`, `impl`,
+  `review`, `merge`, `closed` — `internal/cli/workflows.go`), followed by any **custom** state a loaded definition binds to,
   sorted alphabetically (`internal/cli/workflows.go`; pinned
   `internal/cli/workflows_test.go`).
 - **Labels spine** = every label any loaded definition binds to, deduped and sorted — not every label
@@ -605,8 +616,8 @@ events: <comma-space joined, or ->
 |---|---|---|
 | `--event <name>` | string | "Semantic event the hypothetical occasion fires (see the event catalog in 'lit workflows')" |
 | `--label <name>` | **string array, repeatable** | "Label the hypothetical ticket carries (repeatable)" |
-| `--enter <state>` | string | "State the hypothetical ticket enters" |
-| `--exit <state>` | string | "State the hypothetical ticket exits" |
+| `--enter <state>` | **string array, repeatable** | "State the hypothetical ticket enters (repeatable: a start enters in_progress and plan)" |
+| `--exit <state>` | **string array, repeatable** | "State the hypothetical ticket exits (repeatable)" |
 | `--issue <id>` | string | "Issue id to interpolate into `<id>` in previewed bodies" |
 
 Any stray positional after `dry-run` is a `UsageError` with `workflowsUsage`
@@ -621,7 +632,7 @@ Needs-Design` will not match a canonicalized definition label.)
 Output (`internal/cli/workflows_dryrun.go`):
 
 ```
-occasion: event=<e|-> labels=<comma-joined|-> entered=<s|-> exited=<s|-> issue=<id|->
+occasion: event=<e|-> labels=<comma-joined|-> entered=<comma-joined|-> exited=<comma-joined|-> issue=<id|->
 <blank line>
 Fired (<n>)
 ```
@@ -702,7 +713,7 @@ order**:
 2. **A name in the event catalog** (`workflows.Event(point).Known()`) → dimension `events`, live
    line `events: ["<point>"]` (`internal/cli/workflows_edit.go`; pinned
    `internal/cli/workflows_test.go`).
-3. **One of the three built-in states, bare** → dimension `states`, defaulting to `enter`
+3. **One of the built-in states or phases, bare** → dimension `states`, defaulting to `enter`
    (`internal/cli/workflows_edit.go`, `isBuiltinState` at compares
    lowercased+trimmed against `builtinStates`).
 4. **Anything else** → dimension `labels`, live line `labels: ["<point>"]`

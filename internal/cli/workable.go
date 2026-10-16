@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"time"
 
@@ -215,7 +214,7 @@ func workableLeaf(view workableView) appLeaf {
 		if err := view.render(stdout, knobs.columns, rows, gathered.facts, gathered.details, readinessColumnsFor(rows, gathered.details), cc, notice); err != nil {
 			return err
 		}
-		return workflows.Dispatch(stdout, os.Stderr, ap.Workspace, view.occasion(rows))
+		return dispatchOccasion(ctx, stdout, ap.Workspace, view.occasion(rows))
 	}}
 }
 

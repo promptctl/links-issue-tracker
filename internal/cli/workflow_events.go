@@ -12,8 +12,9 @@ import (
 // semantic event, so the payload a command hands to workflows.Dispatch is
 // unit-testable with no store, no app, no mocks. [LAW:effects-at-boundaries]
 // The commands themselves (cli.go, workable.go) call these and dispatch the
-// result at the point their mutation or read already succeeded — a rename of
-// the command touches only its registration, never the event it fires.
+// result, through dispatchOccasion, at the point their mutation or read
+// already succeeded — a rename of the command touches only its registration,
+// never the event it fires.
 // [LAW:one-source-of-truth]
 
 // showTicketOccasion is what `lit show` fires: it always names one ticket, so
@@ -56,7 +57,7 @@ func ticketCreatedOccasion(issue model.Issue) workflows.Occasion {
 
 // ticketUpdatedOccasion is what `lit update` fires. Status never moves
 // through update (runUpdate rejects --status), so this never carries a
-// transition — Entered/Exited stay zero.
+// transition — Entered/Exited stay empty.
 func ticketUpdatedOccasion(issue model.Issue) workflows.Occasion {
 	return workflows.Occasion{
 		Event:   workflows.EventTicketUpdated,
@@ -76,10 +77,7 @@ func commentAddedOccasion(issue model.Issue) workflows.Occasion {
 }
 
 // statusTransitionEvents maps the four status-changing actions to the events
-// they fire. Archive/Unarchive/Delete/Restore are RetentionActions, not
-// StatusActions, so they cannot reach this map's caller in the first place
-// (see transitionOccasion) — there is no "no event" entry to maintain here.
-// [LAW:one-source-of-truth] mirrors events.go's catalog exactly.
+// they fire. [LAW:one-source-of-truth] mirrors events.go's catalog exactly.
 var statusTransitionEvents = map[model.ActionName]workflows.Event{
 	model.ActionStart:  workflows.EventWorkStarted,
 	model.ActionDone:   workflows.EventWorkFinished,
@@ -87,33 +85,76 @@ var statusTransitionEvents = map[model.ActionName]workflows.Event{
 	model.ActionReopen: workflows.EventTicketReopened,
 }
 
-// transitionOccasion is the single builder every status transition
-// (start/done/close/open) routes through — runTransition in cli.go is
-// already the one enforcer of the transition itself; this is the one place
-// that turns a completed transition into the event it fires.
-// [LAW:single-enforcer] prior and issue are the pre- and post-transition
-// reads runTransition already has on hand, so no extra store round-trip.
-//
-// action.Name() is guaranteed to be a key in statusTransitionEvents: both are
-// sealed to the lifecycle package, and its four StatusAction implementations
-// are exactly this map's four keys. A miss means a StatusAction variant was
-// added there without a matching entry here — a maintenance bug, not a state
-// runTransition can construct today — so it panics rather than dispatching
-// an eventless occasion. [LAW:no-silent-failure]
-func transitionOccasion(action model.StatusAction, prior, issue model.Issue) workflows.Occasion {
-	event, ok := statusTransitionEvents[action.Name()]
-	if !ok {
-		// string(), not Verb(): this names the EVENT MAPPING's key, which is the
-		// persisted encoding, and it is a developer diagnostic rather than
-		// guidance an agent will run. The conversion is written out so the gate
-		// in internal/model/lifecycle can hold one rule with no exceptions.
-		panic(fmt.Sprintf("workflow_events: no event mapped for status action %q", string(action.Name())))
+// ticketState is where a ticket stands at one moment: its row, which carries
+// its status, and the phase its history puts it in — empty when it has none,
+// which is every ticket not in progress.
+type ticketState struct {
+	issue model.Issue
+	phase model.Phase
+}
+
+// states is every state the ticket is in, outermost first: its status, then
+// the phase inside it.
+func (t ticketState) states() []string {
+	return append([]string{string(t.issue.State())}, t.phases()...)
+}
+
+// phases is the ticket's phase as the states of the phase level: one, or none.
+func (t ticketState) phases() []string {
+	if t.phase == "" {
+		return nil
 	}
+	return []string{string(t.phase)}
+}
+
+// transitionOccasion is the single builder every lifecycle transition routes
+// through — transitionLeaf in cli.go is already the one enforcer of the
+// transition itself; this is the one place that turns a completed transition
+// into the event it fires. [LAW:single-enforcer] before and after are where
+// the ticket stood on either side of the write.
+//
+// The states a transition exits and enters are read as a statechart reads
+// nested states, a phase being a state inside in_progress. A status action
+// moves the whole ticket, so it exits every state the ticket was in and
+// enters every state it is in now: a start from open enters in_progress and
+// plan, a done from review exits in_progress and review. A phase move stays
+// inside in_progress, so it exits and enters phases alone. A move to where the
+// ticket already is re-enters it, as a reclaim re-enters in_progress.
+//
+// A retention action (archive/unarchive/delete/restore) is no lifecycle
+// transition and fires nothing, so fires is false. Action is a sealed sum, so
+// a variant this switch does not name is one added to the lifecycle package
+// without a decision here — a maintenance bug, not a state transitionLeaf can
+// construct today — and it panics rather than dispatching or skipping
+// silently, as an unmapped status action does. [LAW:no-silent-failure]
+func transitionOccasion(action model.Action, before, after ticketState) (occasion workflows.Occasion, fires bool) {
+	switch action := action.(type) {
+	case model.StatusAction:
+		event, ok := statusTransitionEvents[action.Name()]
+		if !ok {
+			// string(), not Verb(): this names the EVENT MAPPING's key, which is the
+			// persisted encoding, and it is a developer diagnostic rather than
+			// guidance an agent will run. The conversion is written out so the gate
+			// in internal/model/lifecycle can hold one rule with no exceptions.
+			panic(fmt.Sprintf("workflow_events: no event mapped for status action %q", string(action.Name())))
+		}
+		return movedOccasion(event, after.issue, before.states(), after.states()), true
+	case model.SetPhase:
+		return movedOccasion(workflows.EventPhaseSet, after.issue, before.phases(), after.phases()), true
+	case model.RetentionAction:
+		return workflows.Occasion{}, false
+	}
+	panic(fmt.Sprintf("workflow_events: no occasion decided for action %T", action))
+}
+
+// movedOccasion is the occasion of a transition that moved issue out of the
+// exited states and into the entered ones.
+func movedOccasion(event workflows.Event, issue model.Issue, exited, entered []string) workflows.Occasion {
 	return workflows.Occasion{
 		Event:   event,
 		IssueID: issue.ID,
 		Labels:  issue.Labels,
-		Entered: string(issue.State()),
-		Exited:  string(prior.State()),
+		Entered: entered,
+		Exited:  exited,
 	}
 }
