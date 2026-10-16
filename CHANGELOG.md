@@ -17,7 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `scripts/install.sh` (and `just install`) no longer installs a lit built from a tree whose schema no published release supports. A lit like that, run in a real workspace, migrates the workspace's store to a schema that no release can open. Before building lit, the source install checks that the newest `vX.Y.Z` tag in your checkout carries every migration in the tree, byte for byte. It prints the comparison on every run, as `schema-release-check: tree=… release_tag=… release_schema=… verdict=…`. It refuses a tree carrying a migration that release does not (exit 3) and a checkout with no release tag of its own, an unpacked source tarball included (exit 1), and points you at `scripts/install.sh --latest-release`. To develop a migration, use `go test`, and run `go build` binaries only in a scratch workspace; CONTRIBUTING.md has the details. (links-schema-release-fuof.h2n)
 
-- `lit` no longer records `meta.producer_binary_version` when it migrates a workspace, so a migrating open no longer makes the extra `migrate: record producer binary version` commit. The row was kept for older `lit` binaries, which named it in their own schema-ahead refusal, but the only releases whose code reads it are v0.9.0.1 through v0.14.0.1, and none of those ships a binary. A workspace that already has the row keeps it, and nothing reads it. (links-schema-release-fuof.6xr)
+### Removed
+
+- `lit` no longer records `meta.producer_binary_version` when it migrates a workspace, so a migrating open no longer makes the extra `migrate: record producer binary version` commit. lit v0.1.0.1 through v0.14.0.1 read the row to name the release to upgrade to when a workspace is too new for them, and none of those releases ships a binary. A workspace that already has the row keeps it until the first migration past schema v9, which deletes it: every lit that wrote the row stops at v9, so past it the row would name a lit that cannot open the workspace either. (links-schema-release-fuof.6xr)
 
 ### Fixed
 

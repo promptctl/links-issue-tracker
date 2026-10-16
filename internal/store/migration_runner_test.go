@@ -515,6 +515,51 @@ func TestRefusalReportsUnreadableSnapshots(t *testing.T) {
 	}
 }
 
+// lastProducerStampedSchemaVersion is the newest schema that any lit which
+// wrote meta.producer_binary_version supports. Every writer, from v0.1.0.1
+// through v0.18.0, stops at v9. This is a fact about past releases, so it is
+// not read from the migration registry.
+const lastProducerStampedSchemaVersion = 9
+
+// TestFirstSchemaPastTheStampedOnesDropsProducerBinaryVersion pins when the
+// orphaned meta.producer_binary_version row stops being true. lit v0.1.0.1
+// through v0.14.0.1 read it, and when a workspace is too new for them they
+// print `lit upgrade --to <row>`. Every lit that wrote the row supports v9, so
+// on a workspace at v9 that target can open it and the row stays. Past v9 the
+// target is a lit that refuses the workspace too, so the first migration past
+// v9 must delete the row, leaving those readers their plain "please upgrade
+// lit".
+func TestFirstSchemaPastTheStampedOnesDropsProducerBinaryVersion(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	const stamped = "0.18.0"
+
+	withStore(t, ctx, doltRoot, func(st *Store) {
+		if _, err := st.Downgrade(ctx, lastProducerStampedSchemaVersion); err != nil {
+			t.Fatalf("Downgrade(%d) error = %v", lastProducerStampedSchemaVersion, err)
+		}
+		mustExec(t, ctx, st, `INSERT INTO meta(meta_key, meta_value) VALUES ('producer_binary_version', ?)`, stamped)
+		mustCommit(t, ctx, st, "seed a workspace a v0.18.0 lit migrated")
+	})
+
+	head := headVersion(t)
+	want := stamped
+	if head > lastProducerStampedSchemaVersion {
+		want = ""
+	}
+	withStore(t, ctx, doltRoot, func(st *Store) {
+		got, err := st.getMeta(ctx, nil, "producer_binary_version")
+		if err != nil {
+			t.Fatalf("getMeta error = %v", err)
+		}
+		if got != want {
+			t.Errorf("at schema v%d, meta.producer_binary_version = %q, want %q: the row stays through v%d, and the first migration past v%d deletes it",
+				head, got, want, lastProducerStampedSchemaVersion, lastProducerStampedSchemaVersion)
+		}
+	})
+}
+
 // TestOpenAllowsWorkspaceExactlyAtMax pins the boundary on the allow side: a
 // workspace stamped exactly at the registry max opens cleanly as a no-op (the
 // guard refuses strictly-greater only).

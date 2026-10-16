@@ -14,12 +14,12 @@
 # scripts/install.sh's source mode both source this and nowhere else computes
 # these three strings, so they cannot drift apart.
 #
-# Deliberately does NOT set Version. internal/version.Version == "" is the
-# IsDev discriminator (internal/version/version.go): `lit version` reports
-# such a binary as a dev build, and `lit upgrade` never calls it already
-# current — see TestOnlyTheJustfileOmitsVersion. Only scripts/install.sh's own
-# `git describe`-derived Version deliberately opts a checkout out of dev mode;
-# `just build` must not.
+# Deliberately does NOT set Version, and TestOnlyTheJustfileOmitsVersion pins
+# that. internal/version.Version == "" is the IsDev discriminator
+# (internal/version/version.go): `lit version` reports such a binary as a dev
+# build, and `lit upgrade` never calls it already current. Only
+# scripts/install.sh's own `git describe`-derived Version deliberately opts a
+# checkout out of dev mode; `just build` must not.
 
 # This file is meant to be sourced, not executed: it must export into the
 # caller's shell. Executing it would set vars in a child that immediately exits.
