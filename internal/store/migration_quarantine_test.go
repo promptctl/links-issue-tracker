@@ -660,14 +660,14 @@ func TestQuarantineTableRefusesToDiscardStaleShapeHistory(t *testing.T) {
 
 // TestFailedMigrationReportsCheckpointPruneFailure pins that a checkpoint
 // prune failing on the migration-failure path reaches the caller beside the
-// migration failure. Cancelling the context inside the failing step makes the
-// reset and the prune that follow it fail too.
+// migration failure, while the reset before it succeeded.
 func TestFailedMigrationReportsCheckpointPruneFailure(t *testing.T) {
 	// serial: no t.Parallel — installs the package-level migrationUpByOneForTest
-	// hook.
+	// and migrationCheckpointPruneForTest hooks.
+	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	first, err := Open(context.Background(), doltRoot, "test-workspace-id")
+	first, err := Open(ctx, doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
@@ -675,26 +675,31 @@ func TestFailedMigrationReportsCheckpointPruneFailure(t *testing.T) {
 		t.Fatalf("Close(first) error = %v", err)
 	}
 
-	withGooseHistoryDropped(t, context.Background(), doltRoot)
+	withGooseHistoryDropped(t, ctx, doltRoot)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	sentinel := errors.New("simulated migration failure")
+	migrationFailure := errors.New("simulated migration failure")
+	pruneFailure := errors.New("simulated prune failure")
 	migrationUpByOneForTest = func(context.Context, *goose.Provider) (*goose.MigrationResult, error) {
-		cancel()
-		return nil, sentinel
+		return nil, migrationFailure
 	}
-	t.Cleanup(func() { migrationUpByOneForTest = nil })
+	migrationCheckpointPruneForTest = func() error { return pruneFailure }
+	t.Cleanup(func() {
+		migrationUpByOneForTest = nil
+		migrationCheckpointPruneForTest = nil
+	})
 
 	_, openErr := Open(ctx, doltRoot, "test-workspace-id")
-	migrationUpByOneForTest = nil
 	if openErr == nil {
 		t.Fatal("Open() returned nil error; expected the migration failure")
 	}
-	if !errors.Is(openErr, sentinel) {
+	var resetErr *CheckpointResetError
+	if !errors.As(openErr, &resetErr) {
+		t.Errorf("error = %v; expected a CheckpointResetError (the reset succeeded)", openErr)
+	}
+	if !errors.Is(openErr, migrationFailure) {
 		t.Errorf("error = %v; expected it to carry the migration failure", openErr)
 	}
-	if !strings.Contains(openErr.Error(), "prune migration checkpoints") {
-		t.Errorf("error = %v; expected the failed checkpoint prune to be reported", openErr)
+	if !errors.Is(openErr, pruneFailure) {
+		t.Errorf("error = %v; expected it to carry the checkpoint prune failure", openErr)
 	}
 }

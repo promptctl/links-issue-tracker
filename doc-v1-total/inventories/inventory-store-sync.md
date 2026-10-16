@@ -330,9 +330,9 @@ Fields (`sync_schema_guard.go`): `Remote`, `Branch`, `RemoteVersion int64`, `Bin
 3. else `guardCommitSchemaAhead(remote, branch, head)`.
 
 `guardCommitSchemaAhead(ctx, remote, branch, commitHash)` (`sync_schema_guard.go`) — shared core, also called directly by the reconcile with its already-captured `remoteHead`:
-1. `migrations.MaxVersion()` → `registryMax`.
+1. `version.CarriedSchemaSupport()` → `support`.
 2. `remoteHeadSchema(commitHash)` → `remoteVersion`.
-3. `remoteVersion <= registryMax` → nil.
+3. `remoteVersion <= support.Max` → nil.
 4. else `&RemoteSchemaAheadError{...}`.
 
 `trackingHeadHash` (`sync_schema_guard.go`): `SELECT COUNT(*) FROM dolt_remote_branches WHERE name = ?` on `remotes/<remote>/<branch>`; count 0 → `("", false, nil)`; else `commitHashOfRef`.
@@ -735,7 +735,7 @@ The schema fact this rests on: every child table is `ON DELETE CASCADE` from iss
 - `migrationSnapshotRetention = 10` (`/Users/bmf/code/links-issue-tracker/internal/store/migrate_snapshot.go`)
 - `migrationSnapshotLabel = "pre-migrate"` (`migrate_snapshot.go`)
 
-Test hooks: `migrationUpByOneForTest` (`migration_runner.go`) applies **only** to `applyPendingMigrations`, never the reconcile lift; `migrationPostSnapshotHookForTest` (`migrate_snapshot.go`) fires inside `runMigration` after the snapshot guard.
+Test hooks: `migrationUpByOneForTest` (`migration_runner.go`) applies **only** to `applyPendingMigrations`, never the reconcile lift; `migrationCheckpointPruneForTest` (`migration_runner.go`) replaces that function's checkpoint prune; `migrationPostSnapshotHookForTest` (`migrate_snapshot.go`) fires inside `runMigration` after the snapshot guard.
 
 ### 8.2 Phases
 
@@ -791,9 +791,10 @@ Test hooks: `migrationUpByOneForTest` (`migration_runner.go`) applies **only** t
 1. `newGooseProvider(s.db)` — constructed **before** the checkpoint so a construction failure leaves no orphan branch. Failure → `"construct migration provider: %w"` (`migration_runner.go`).
 2. `checkpoint, err := s.CreateCheckpoint(ctx, "pre-migrate")`; failure → `"create migration checkpoint: %w"` (`migration_runner.go`).
 3. `step` closure: uses `migrationUpByOneForTest` when set, else `s.upByOne(ctx, provider)` (`migration_runner.go`).
-4. Loop:
-   - `errors.Is(gooseErr, goose.ErrNoNextVersion)` → `s.PruneCheckpoints(ctx, "pre-migrate", 5)`; a prune failure IS returned as `"prune migration checkpoints: %w"`; then return nil (`migration_runner.go`).
-   - other `gooseErr != nil` → `cpErr := s.handleMigrationFailure(...)`, then `_ = s.PruneCheckpoints(ctx, "pre-migrate", 5)` (error **deliberately ignored**), return `cpErr` (`migration_runner.go`).
+4. `prune` closure: uses `migrationCheckpointPruneForTest` when set, else `s.PruneCheckpoints(ctx, "pre-migrate", 5)` (`migration_runner.go`).
+5. Loop:
+   - `errors.Is(gooseErr, goose.ErrNoNextVersion)` → `prune(ctx)`; a prune failure IS returned as `"prune migration checkpoints: %w"`; then return nil (`migration_runner.go`).
+   - other `gooseErr != nil` → `cpErr := s.handleMigrationFailure(...)`, then `prune(ctx)`; a prune failure is returned as `errors.Join(cpErr, "prune migration checkpoints: %w")`, else `cpErr` (`migration_runner.go`).
    - success → `s.commitWorkingSet(ctx, migrationCommitMessage(result))`; failure → `"commit migration v%d: %w"` (`migration_runner.go`).
 
 `upByOne(ctx, provider)` (`migration_runner.go`) is bare `provider.UpByOne(ctx)` — the ONE shared forward-step; the test hook wraps it only at the `applyPendingMigrations` call site (`migration_runner.go`).
@@ -1723,7 +1724,7 @@ Sibling artifact names in the same directory:
 
 Restore-time artifact, created next to the database dir (**not** in `snapshotsDir`): `<databaseDir>.pre-restore-<unix-ns>` via `fmt.Sprintf("%s.pre-restore-%d", databaseDir, time.Now().UTC().UnixNano())` (`snapshot.go`).
 
-Where `snapshotsDir` comes from: CLI uses `filepath.Join(ws.StorageDir, "snapshots")` (`/Users/bmf/code/links-issue-tracker/internal/cli/snapshots.go`); the store's migration path uses `filepath.Join(filepath.Dir(filepath.Clean(databaseDir)), "snapshots")` (`/Users/bmf/code/links-issue-tracker/internal/store/migrate_snapshot.go`).
+Where `snapshotsDir` comes from: the CLI (`internal/cli/snapshots.go`) and the store both pass `dbsnapshot.DirFor(databaseDir)` (`internal/dbsnapshot/snapshot.go`).
 
 ### 13.5 Name grammar — mint side
 
