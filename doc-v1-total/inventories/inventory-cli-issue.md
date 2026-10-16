@@ -441,6 +441,9 @@ prefix (`cli.go`).
 - States: `open, in_progress, closed`; `in-progress` is normalized to
   `in_progress`; error `invalid status "<x>" (valid: open, in_progress, closed)`
   (`internal/model/lifecycle/lifecycle.go`).
+- Phases: `plan, impl, review, merge`, in work order; `ParsePhase` lowercases
+  and trims; error `invalid phase "<x>" (valid: plan, impl, review, merge)`
+  (`internal/model/lifecycle/phase.go`).
 - Resolutions: `duplicate, superseded, obsolete, wontfix`; error
   `"resolution must be one of: duplicate, superseded, obsolete, wontfix"`
   (`internal/model/lifecycle/resolution.go`).

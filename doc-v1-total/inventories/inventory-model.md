@@ -70,6 +70,7 @@ Complete value set (`lifecycle.go`):
 | `ActionUnarchive` | `"unarchive"` | retention |
 | `ActionDelete` | `"delete"` | retention |
 | `ActionRestore` | `"restore"` | retention |
+| `ActionPhase` | `"phase"` | phase (`phase.go`) |
 
 ### `(ActionName).Verb() string` — `lifecycle.go`
 `ActionName` is documented as the persisted event verb — the encoding written
@@ -77,8 +78,8 @@ into the events table. `Verb()` returns a different name for the same action:
 the word a caller types to invoke it.
 
 `var actionVerbs = map[ActionName]string` — `lifecycle.go` — has an entry
-for every one of the eight actions, including the seven whose two names are
-identical: `start`, `done`, `close`, `archive`, `unarchive`, `delete`,
+for every one of the nine actions, including the eight whose two names are
+identical: `start`, `done`, `close`, `phase`, `archive`, `unarchive`, `delete`,
 `restore`. `ActionReopen` is the only action whose two names differ: persisted
 as `"reopen"`, invoked as `"open"` (the command is `lit open`; there is no
 `lit reopen`).

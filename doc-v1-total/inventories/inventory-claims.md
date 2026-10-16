@@ -185,6 +185,8 @@ var establishing = map[model.ActionName]bool{
 	model.ActionUnarchive: false,
 	model.ActionDelete:    false,
 	model.ActionRestore:   false,
+	// A phase move is work on a ticket already held; it takes nothing.
+	model.ActionPhase: false,
 }
 ```
 `internal/claims/establish.go`.
@@ -297,7 +299,7 @@ establisher, found := LatestEstablisher(admissible)
 if !found { return Unclaimed{} }
 holder := establisher.Attribution
 ```
-`internal/claims/derive.go`. `LatestEstablisher` is exported and lives in `internal/claims/establish.go`, not `derive.go` — it scans the whole slice for the newest event by `byRecency` for which `establishes` is true, **regardless of attribution**.
+`internal/claims/derive.go`. `LatestEstablisher` is exported and lives in `internal/claims/establish.go`, not `derive.go` — it scans the whole slice for the newest event by `model.CompareEventRecency` (in `internal/model/phase.go`, shared with phase derivation) for which `establishes` is true, **regardless of attribution**.
 
 **The derivation stops at the latest establisher, attributed or not; it never scans back to an older ancestor** (`internal/claims/derive.go`). An establishing event with no attribution belongs to the public checkout — `model.Attribution`'s zero value — and holds the lane exactly like any other holder: an older attributed event is positively known to be superseded, so scanning past the newest establisher would hand the lane to a checkout that has demonstrably moved on. Pinned by `TestUnattributedLatestStopsRatherThanScanning` (`internal/claims/claims_test.go`): A starts then completes T1, then the public checkout starts T2 later — the lane reads `Held{By: public}` with A contesting, **not** `Held{By: A}`. Contrast with a *void* event, which is disproven rather than merely superseded and therefore falls through at leg 4, before leg 2 ever runs (`internal/claims/local.go`).
 
