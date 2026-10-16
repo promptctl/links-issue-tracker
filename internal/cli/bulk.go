@@ -177,7 +177,7 @@ func bulkCloseLeaf() appLeaf {
 		}
 		actor := resolveActor()
 		return runBulkOver(stdout, issueIDs, func(issueID string) error {
-			_, err := applyChange(ctx, ap, issueID, storage.Change{
+			_, err := ap.Store.Apply(ctx, issueID, storage.Change{
 				Action: model.Close{Outcome: outcome},
 				Actor:  actor,
 				Reason: *reason,
@@ -203,7 +203,7 @@ func bulkTransitionLeaf(action model.Action) appLeafFn {
 			}
 			actor := resolveActor()
 			return runBulkOver(stdout, issueIDs, func(issueID string) error {
-				_, err := applyChange(ctx, ap, issueID, storage.Change{Action: action, Actor: actor, Reason: *reason})
+				_, err := ap.Store.Apply(ctx, issueID, storage.Change{Action: action, Actor: actor, Reason: *reason})
 				return err
 			})
 		}}

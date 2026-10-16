@@ -39,6 +39,9 @@ type Engine struct {
 	workspaceID string
 	attribution model.Attribution
 
+	// observers hear every change apply makes; see storage.ChangeObserver.
+	observers []func(storage.Change, model.Issue)
+
 	// clock is where this engine learns the instant it stamps a write with.
 	// It is taken at construction rather than read from the write path, so a
 	// caller that needs two issues whose timestamps no real clock would hand
@@ -142,6 +145,14 @@ func (e *Engine) AttributeTo(streamToken string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.attribution = model.NewAttribution(streamToken, e.workspaceID)
+}
+
+// ObserveChanges adds observe to the observers apply calls, which is every
+// change this engine makes to an issue: BulkApply's updates go through apply.
+func (e *Engine) ObserveChanges(observe func(storage.Change, model.Issue)) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.observers = append(e.observers, observe)
 }
 
 // Close releases what the engine holds, which is nothing: its state is Go

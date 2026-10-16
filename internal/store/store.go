@@ -75,6 +75,10 @@ type Store struct {
 	// (app.Open) rather than an ambient assumption about call order.
 	attribution model.Attribution
 
+	// observers hear every change Apply makes; see storage.ChangeObserver.
+	// None is the zero value, and Apply calls each one there is.
+	observers []func(storage.Change, model.Issue)
+
 	// applyPreMutationHookForTest, if non-nil, fires inside Apply after the
 	// change is fully planned and before withMutation acquires the commit lock.
 	// Production callers leave it nil; the concurrency regression test sets it to
@@ -261,6 +265,12 @@ func OpenForRead(ctx context.Context, doltRootDir string, workspaceID string) (_
 // attributed by anything here, and would need to answer that question for itself.
 func (s *Store) AttributeTo(streamToken string) {
 	s.attribution = model.NewAttribution(streamToken, s.workspaceID)
+}
+
+// ObserveChanges adds observe to the observers Apply calls, which is every
+// change this store makes to an issue: BulkApply's updates go through Apply.
+func (s *Store) ObserveChanges(observe func(storage.Change, model.Issue)) {
+	s.observers = append(s.observers, observe)
 }
 
 // EnsureDatabase bootstraps the database for standalone callers (lit init's
@@ -1379,7 +1389,14 @@ func (s *Store) Apply(ctx context.Context, id string, c storage.Change) (model.I
 			return model.Issue{}, err
 		}
 	}
-	return s.GetIssue(ctx, id)
+	issue, err := s.GetIssue(ctx, id)
+	if err != nil {
+		return model.Issue{}, err
+	}
+	for _, observe := range s.observers {
+		observe(c, issue)
+	}
+	return issue, nil
 }
 
 // AddComment returns the commented-on issue alongside the comment: it already

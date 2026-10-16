@@ -55,7 +55,14 @@ func (e *Engine) apply(id string, c storage.Change) (model.Issue, error) {
 	e.writeLabels(rec.id, patch, now)
 	e.recordEvents(rec.id, actionEvents, now)
 	e.recordEvents(rec.id, patch.events, now)
-	return e.hydrate(rec, e.positions())
+	issue, err := e.hydrate(rec, e.positions())
+	if err != nil {
+		return model.Issue{}, err
+	}
+	for _, observe := range e.observers {
+		observe(c, issue)
+	}
+	return issue, nil
 }
 
 // planLifecycle plans whichever axis the action drives. The two subsets

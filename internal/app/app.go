@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/promptctl/links-issue-tracker/internal/engine"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/statusline"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
@@ -123,9 +124,39 @@ func (e StoreOpenError) Unwrap() error { return e.Err }
 // exactly the identity the App reports as Stream, so the attribution on this
 // checkout's writes and the "us" that claim routing compares against cannot
 // differ. [LAW:single-enforcer]
+//
+// New also has the store tell Statusline of every change it applies, so the
+// statusline file hears of each change whichever command made it, a lone
+// update or one document of an import. [LAW:single-enforcer]
 func New(ws workspace.Info, st storage.Store, stream workspace.StreamID) *App {
 	st.AttributeTo(stream.Value())
-	return &App{Workspace: ws, Store: st, Stream: stream}
+	a := &App{Workspace: ws, Store: st, Stream: stream}
+	st.ObserveChanges(func(change storage.Change, issue model.Issue) {
+		a.Statusline.Record(changeStatuslineFacts(change.Action, issue)...)
+	})
+	return a
+}
+
+// StatuslineTicket is issue as the statusline file shows it.
+func StatuslineTicket(issue model.Issue) statusline.Ticket {
+	return statusline.Ticket{ID: issue.ID, Title: issue.Title}
+}
+
+// changeStatuslineFacts is what a change tells the statusline file. Every
+// change leaves the ticket with the title it now has. A start is this checkout
+// taking the ticket on; every other transition moves the ticket out of what
+// the file can say about it; a change of fields alone moves it nowhere.
+func changeStatuslineFacts(action model.Action, issue model.Issue) statusline.Facts {
+	ticket := StatuslineTicket(issue)
+	facts := statusline.Facts{statusline.Retitled{Ticket: ticket}}
+	switch action.(type) {
+	case nil:
+	case model.Start:
+		facts.Record(statusline.Started{Ticket: ticket})
+	default:
+		facts.Record(statusline.Invalidated{ID: issue.ID})
+	}
+	return facts
 }
 
 // OpenLocationForRead opens the store at an already-derived Location strictly
