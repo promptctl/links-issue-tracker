@@ -56,18 +56,19 @@ type File struct {
 // handed back to it as its own work in flight.
 type WorkingOn struct {
 	Ticket Ticket `json:"ticket"`
-	// Lane is the progress of the ticket's lane, counted by the command that
-	// made the record; nil when that command counted none.
-	Lane       *LaneProgress `json:"lane"`
-	RecordedAt time.Time     `json:"recorded_at"`
+	// RollupProgress is the progress of the ticket's lane, counted by the
+	// command that made the record; nil when that command counted none.
+	RollupProgress *RollupProgress `json:"rollup_progress"`
+	RecordedAt     time.Time       `json:"recorded_at"`
 }
 
-// LaneProgress is how far along a lane is: how many of its tickets are
-// closed, out of how many it holds — the "N/M done" of a lit backlog claim
-// line.
-type LaneProgress struct {
-	Done  int `json:"done"`
-	Total int `json:"total"`
+// RollupProgress is how far along a ticket's lane is: how many of the lane's
+// tickets are closed, out of how many it holds — the "N/M done" of a lit
+// backlog claim line. The two counts are separate fields so a reader renders
+// them however it shows a fraction.
+type RollupProgress struct {
+	CompletedCount int `json:"rollup_completed_count"`
+	TotalCount     int `json:"rollup_total_count"`
 }
 
 // Next is what the last plain `lit next` in this checkout picked. A nil Ticket
@@ -97,11 +98,11 @@ type Picked struct{ Ticket *Ticket }
 // shows that title from here on; when the record was made does not change.
 type Retitled struct{ Ticket Ticket }
 
-// LaneCounted says the lane ticket ID is in stands at Lane, so the record of
-// working on ID shows that progress.
-type LaneCounted struct {
-	ID   string
-	Lane LaneProgress
+// RollupCounted says the lane ticket ID is in stands at Progress, so the
+// record of working on ID shows that progress.
+type RollupCounted struct {
+	ID       string
+	Progress RollupProgress
 }
 
 // Invalidated says ticket ID has left the state the file's records describe —
@@ -139,10 +140,10 @@ func (r Retitled) apply(f File, _ time.Time) File {
 	return f
 }
 
-func (c LaneCounted) apply(f File, _ time.Time) File {
+func (c RollupCounted) apply(f File, _ time.Time) File {
 	if f.WorkingOn != nil && f.WorkingOn.Ticket.ID == c.ID {
-		working, lane := *f.WorkingOn, c.Lane
-		working.Lane = &lane
+		working, progress := *f.WorkingOn, c.Progress
+		working.RollupProgress = &progress
 		f.WorkingOn = &working
 	}
 	return f
@@ -204,9 +205,10 @@ type Outcome struct {
 	Changed []string
 	// Bytes is the size of the file written; zero when nothing was written.
 	Bytes int
-	// Lane is the lane progress the written file's working_on shows; nil when
-	// nothing was written, or the file shows no working_on or no count for it.
-	Lane *LaneProgress
+	// RollupProgress is the rollup progress the written file's working_on
+	// shows; nil when nothing was written, or the file shows no working_on or
+	// no count for it.
+	RollupProgress *RollupProgress
 	// Created is true when the file did not exist before this write.
 	Created bool
 	// ExcludeAdded is true when this write added the exclude entry.
@@ -275,7 +277,7 @@ func Write(loc Location, facts Facts, now time.Time) (Outcome, error) {
 	out.Changed = changedSlots(before, written)
 	out.Bytes = len(payload)
 	if written.WorkingOn != nil {
-		out.Lane = written.WorkingOn.Lane
+		out.RollupProgress = written.WorkingOn.RollupProgress
 	}
 	return out, nil
 }

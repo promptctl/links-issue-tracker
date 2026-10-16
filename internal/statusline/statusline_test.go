@@ -16,7 +16,7 @@ var (
 	// alphaRenamed is alpha after a retitle.
 	alphaRenamed = Ticket{ID: "t-alpha", Title: "Alpha, renamed"}
 	at           = time.Date(2026, 10, 15, 9, 30, 0, 0, time.UTC)
-	lane         = LaneProgress{Done: 1, Total: 4}
+	progress     = RollupProgress{CompletedCount: 1, TotalCount: 4}
 )
 
 func testLocation(t *testing.T) Location {
@@ -51,7 +51,9 @@ func write(t *testing.T, loc Location, facts ...Fact) Outcome {
 // carries every slot's latest record whichever command recorded it.
 func TestWritesFoldFactsIntoTheFile(t *testing.T) {
 	working := func(ticket Ticket) *WorkingOn { return &WorkingOn{Ticket: ticket, RecordedAt: at} }
-	counted := func(ticket Ticket) *WorkingOn { return &WorkingOn{Ticket: ticket, Lane: &lane, RecordedAt: at} }
+	counted := func(ticket Ticket) *WorkingOn {
+		return &WorkingOn{Ticket: ticket, RollupProgress: &progress, RecordedAt: at}
+	}
 	next := func(ticket *Ticket) *Next { return &Next{Ticket: ticket, RecordedAt: at} }
 	cases := []struct {
 		name   string
@@ -109,23 +111,23 @@ func TestWritesFoldFactsIntoTheFile(t *testing.T) {
 			want:   File{SchemaVersion: SchemaVersion, Next: next(nil)},
 		},
 		{
-			name:   "a lane count shows on the work it names",
-			writes: [][]Fact{{Started{alpha}, LaneCounted{alpha.ID, lane}}},
+			name:   "a rollup count shows on the work it names",
+			writes: [][]Fact{{Started{alpha}, RollupCounted{alpha.ID, progress}}},
 			want:   File{SchemaVersion: SchemaVersion, WorkingOn: counted(alpha)},
 		},
 		{
-			name:   "a lane count for another ticket shows nowhere",
-			writes: [][]Fact{{Started{alpha}, Picked{&bravo}, LaneCounted{bravo.ID, lane}}},
+			name:   "a rollup count for another ticket shows nowhere",
+			writes: [][]Fact{{Started{alpha}, Picked{&bravo}, RollupCounted{bravo.ID, progress}}},
 			want:   File{SchemaVersion: SchemaVersion, WorkingOn: working(alpha), Next: next(&bravo)},
 		},
 		{
-			name:   "a retitle keeps the lane count",
-			writes: [][]Fact{{Started{alpha}, LaneCounted{alpha.ID, lane}}, {Retitled{alphaRenamed}}},
+			name:   "a retitle keeps the rollup count",
+			writes: [][]Fact{{Started{alpha}, RollupCounted{alpha.ID, progress}}, {Retitled{alphaRenamed}}},
 			want:   File{SchemaVersion: SchemaVersion, WorkingOn: counted(alphaRenamed)},
 		},
 		{
-			name:   "a new start drops the last ticket's lane count",
-			writes: [][]Fact{{Started{alpha}, LaneCounted{alpha.ID, lane}}, {Started{bravo}}},
+			name:   "a new start drops the last ticket's rollup count",
+			writes: [][]Fact{{Started{alpha}, RollupCounted{alpha.ID, progress}}, {Started{bravo}}},
 			want:   File{SchemaVersion: SchemaVersion, WorkingOn: working(bravo)},
 		},
 		{
@@ -165,7 +167,7 @@ func TestARetitleKeepsWhenTheRecordWasMade(t *testing.T) {
 // own types.
 func TestFileEncodesTheDocumentedShape(t *testing.T) {
 	loc := testLocation(t)
-	write(t, loc, Started{alpha}, LaneCounted{alpha.ID, lane}, Picked{nil})
+	write(t, loc, Started{alpha}, RollupCounted{alpha.ID, progress}, Picked{nil})
 	raw, err := os.ReadFile(loc.File)
 	if err != nil {
 		t.Fatal(err)
@@ -177,9 +179,9 @@ func TestFileEncodesTheDocumentedShape(t *testing.T) {
 	want := map[string]any{
 		"schema_version": float64(1),
 		"working_on": map[string]any{
-			"ticket":      map[string]any{"id": "t-alpha", "title": "Alpha"},
-			"lane":        map[string]any{"done": float64(1), "total": float64(4)},
-			"recorded_at": "2026-10-15T09:30:00Z",
+			"ticket":          map[string]any{"id": "t-alpha", "title": "Alpha"},
+			"rollup_progress": map[string]any{"rollup_completed_count": float64(1), "rollup_total_count": float64(4)},
+			"recorded_at":     "2026-10-15T09:30:00Z",
 		},
 		"next": map[string]any{"ticket": nil, "recorded_at": "2026-10-15T09:30:00Z"},
 	}
@@ -278,8 +280,8 @@ func TestAWriteNamesTheSlotsItChanged(t *testing.T) {
 		{[]Fact{Retitled{alphaRenamed}}, []string{"working_on"}},
 		{[]Fact{Invalidated{bravo.ID}}, []string{"next"}},
 		{[]Fact{Started{bravo}, Picked{&alpha}}, []string{"working_on", "next"}},
-		{[]Fact{LaneCounted{bravo.ID, lane}}, []string{"working_on"}},
-		{[]Fact{LaneCounted{bravo.ID, lane}}, []string{}},
+		{[]Fact{RollupCounted{bravo.ID, progress}}, []string{"working_on"}},
+		{[]Fact{RollupCounted{bravo.ID, progress}}, []string{}},
 		{[]Fact{Replaced{}}, []string{"working_on", "next"}},
 		{[]Fact{Replaced{}}, []string{}},
 	} {
@@ -293,23 +295,23 @@ func TestAWriteNamesTheSlotsItChanged(t *testing.T) {
 	}
 }
 
-// Each write reports the lane count the working_on it wrote shows, whichever
+// Each write reports the rollup progress the working_on it wrote shows, whichever
 // command counted it, and nothing when that record shows none or is null.
-func TestAWriteReportsTheLaneCountItsWorkingOnShows(t *testing.T) {
+func TestAWriteReportsTheRollupProgressItsWorkingOnShows(t *testing.T) {
 	loc := testLocation(t)
 	for _, step := range []struct {
 		facts []Fact
-		want  *LaneProgress
+		want  *RollupProgress
 	}{
 		{[]Fact{Picked{&bravo}}, nil},
 		{[]Fact{Started{alpha}}, nil},
-		{[]Fact{LaneCounted{alpha.ID, lane}}, &lane},
-		{[]Fact{Retitled{alphaRenamed}}, &lane},
+		{[]Fact{RollupCounted{alpha.ID, progress}}, &progress},
+		{[]Fact{Retitled{alphaRenamed}}, &progress},
 		{[]Fact{Invalidated{alpha.ID}}, nil},
 	} {
 		out := write(t, loc, step.facts...)
-		if !reflect.DeepEqual(out.Lane, step.want) {
-			t.Fatalf("Write(%v).Lane = %v, want %v", step.facts, out.Lane, step.want)
+		if !reflect.DeepEqual(out.RollupProgress, step.want) {
+			t.Fatalf("Write(%v).RollupProgress = %v, want %v", step.facts, out.RollupProgress, step.want)
 		}
 	}
 }

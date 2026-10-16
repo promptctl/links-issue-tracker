@@ -68,7 +68,7 @@ func relationOf(standing claims.Standing, self model.Attribution) laneRelation {
 // Its result is what the start owes after Apply (transitionSpec.authorize):
 // the transfer notice when the lane was held, ours or another's, and the
 // claimant changes hands, the empty string otherwise; and the lane's count for
-// the statusline file. A lane nobody holds has no claim to transfer, so the
+// the statusline file's rollup progress. A lane nobody holds has no claim to transfer, so the
 // notice is not even asked for there — the gate is the one read that knows the
 // lane's standing, and asking transferNotice to re-derive it would gather every
 // event a second time. The count is that same evidence with the written ticket
@@ -102,7 +102,7 @@ func authorizeStart(ctx context.Context, stdout io.Writer, ap *app.App, issueID 
 		return nil, err
 	}
 	return func(written model.Issue) (string, statusline.Facts) {
-		return notice, statusline.Facts{laneCounted(written.ID, cc.evidence.LaneProgressWith(lane, written))}
+		return notice, statusline.Facts{rollupCounted(written.ID, cc.evidence.LaneProgressWith(lane, written))}
 	}, nil
 }
 

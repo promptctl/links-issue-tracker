@@ -44,9 +44,9 @@ started it, in a lane where one of four tickets was already closed:
       "id": "links-auth-k2p",
       "title": "Refresh tokens survive a clock skew"
     },
-    "lane": {
-      "done": 1,
-      "total": 4
+    "rollup_progress": {
+      "rollup_completed_count": 1,
+      "rollup_total_count": 4
     },
     "recorded_at": "2026-10-15T13:59:25.711166Z"
   },
@@ -73,7 +73,9 @@ lifecycle change clears it, as described under
 | `working_on` | object or `null` | The ticket this checkout is working on. `null` when nothing is recorded. |
 | `working_on.ticket.id` | string | The ticket's id. |
 | `working_on.ticket.title` | string | The ticket's title. |
-| `working_on.lane` | object or `null` | The progress of the ticket's lane: `done` is how many of its tickets are closed, out of `total`. It is the count in the `N/M done` of that lane's claim line in `lit backlog`. `null` when the command that recorded `working_on` did not count the lane, as a lit older than this field does not. |
+| `working_on.rollup_progress` | object or `null` | The progress of the ticket's lane. `null` when the command that recorded `working_on` did not count the lane, as a lit older than this field does not. |
+| `working_on.rollup_progress.rollup_completed_count` | integer | How many of the lane's tickets are closed: the `N` of the `N/M done` on that lane's claim line in `lit backlog`. |
+| `working_on.rollup_progress.rollup_total_count` | integer | How many tickets the lane holds: the `M` of that `N/M done`. |
 | `working_on.recorded_at` | string | When lit recorded this ticket as worked on. |
 | `next` | object or `null` | The last plain `lit next` answer. `null` when no answer is recorded. |
 | `next.ticket` | object or `null` | The ticket that `lit next` picked, with `id` and `title` as above. `null` means `lit next` ran and found nothing to pick. |
@@ -92,12 +94,12 @@ seconds.
 
 **`working_on`** is set by:
 
-- `lit start <id>`, which records the ticket it started and its lane's count
-  once the start has landed. Starting a closed ticket takes it out of the
-  `done` count.
+- `lit start <id>`, which records the ticket it started and its
+  `rollup_progress` once the start has landed. Starting a closed ticket takes
+  it out of `rollup_completed_count`.
 - `lit next`, when it hands back a ticket that is already in progress in a lane
   this checkout holds. This happens with or without filter flags, and it also
-  counts the lane again and updates `recorded_at`.
+  counts `rollup_progress` again and updates `recorded_at`.
 
 **`next`** is set by a plain `lit next`: one that neither narrows the pick with
 `--assignee`, `--type`, `--status` or `--labels` nor turns on `--all`. A flag
@@ -133,7 +135,7 @@ matters to you.
   holds for `lit purge` too: the purged ticket's title stays in every other
   checkout's file. To remove the title, delete that checkout's file; a missing
   file reads as nothing recorded.
-- **The lane count is a snapshot.** `working_on.lane` is counted when
+- **`rollup_progress` is a snapshot.** `working_on.rollup_progress` is counted when
   `working_on` is recorded. Tickets closed, reopened or filed in that lane
   afterwards, here or in another checkout, do not change it until the next
   `lit start` or `lit next` records `working_on` again.
@@ -166,7 +168,7 @@ it does.
 
 ## A minimal statusline
 
-This script prints the ticket being worked on, with its lane's count, and the
+This script prints the ticket being worked on, with its rollup progress, and the
 next pick. It prints nothing when the file is missing, has a schema version it
 does not know, or records nothing:
 
@@ -177,7 +179,7 @@ f="$(git rev-parse --show-toplevel 2>/dev/null)/.lit/statusline.json"
 jq -r '
   select(.schema_version == 1)
   | [ (.working_on | if . then "working: \(.ticket.id) \(.ticket.title)"
-                             + (.lane | if . then " (\(.done)/\(.total) done)" else "" end)
+                             + (.rollup_progress | if . then " (\(.rollup_completed_count)/\(.rollup_total_count) done)" else "" end)
                    else empty end),
       (.next | if . == null then empty
                elif .ticket == null then "next: nothing ready"

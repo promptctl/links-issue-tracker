@@ -12,7 +12,7 @@ import (
 
 // Each `lit next` outcome tells the file what it holds: the pick when the
 // question was the plain one, and the checkout's own work in flight, with its
-// lane's count, whatever narrowed it.
+// rollup progress, whatever narrowed it.
 func TestNextOutcomesBecomeStatuslineFacts(t *testing.T) {
 	epic := model.Issue{ID: "t-epic", IssueType: model.TypeEpic}
 	inFlight := hydratedIssue(t, "t-1", nil, model.StateInProgress)
@@ -29,7 +29,7 @@ func TestNextOutcomesBecomeStatuslineFacts(t *testing.T) {
 	row := annotation.AnnotatedIssue{Issue: inFlight}
 	resumed := ResumedOwnWork{Row: row, Lane: model.LaneOf(inFlight, &epic)}
 	ticket := statusline.Ticket{ID: "t-1", Title: "One"}
-	counted := statusline.LaneCounted{ID: "t-1", Lane: statusline.LaneProgress{Done: 1, Total: 3}}
+	counted := statusline.RollupCounted{ID: "t-1", Progress: statusline.RollupProgress{CompletedCount: 1, TotalCount: 3}}
 	cases := []struct {
 		name    string
 		outcome NextOutcome

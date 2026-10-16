@@ -40,14 +40,15 @@ func recordStatuslineEvent(ctx context.Context, out statusline.Outcome, err erro
 	telemetry.Set(ctx, "statusline.changed", out.Changed)
 	telemetry.Set(ctx, "statusline.created", out.Created)
 	telemetry.Set(ctx, "statusline.exclude_added", out.ExcludeAdded)
-	telemetry.Set(ctx, "statusline.lane", out.Lane)
+	telemetry.Set(ctx, "statusline.rollup_progress", out.RollupProgress)
 	telemetry.Set(ctx, "statusline.replaced", telemetry.ErrorText(out.Replaced))
 	telemetry.Set(ctx, "statusline.error", telemetry.ErrorText(err))
 }
 
 // nextStatuslineFacts is what a `lit next` outcome tells the statusline file.
 // Work handed back to this checkout is what it is working on, whatever narrowed
-// the question, and its lane is counted from the evidence routing read. The
+// the question, and its rollup progress is counted from the evidence routing
+// read. The
 // pick is "what's next" only when the question was the plain one: a filtered or
 // --all `lit next` answers a different question.
 func nextStatuslineFacts(outcome NextOutcome, plain bool, evidence claims.Evidence) statusline.Facts {
@@ -56,7 +57,7 @@ func nextStatuslineFacts(outcome NextOutcome, plain bool, evidence claims.Eviden
 	switch o := outcome.(type) {
 	case ResumedOwnWork:
 		picked = statuslineTicketRef(o.Row.Issue)
-		facts.Record(statusline.Started{Ticket: *picked}, laneCounted(o.Row.ID, evidence.LaneProgress(o.Lane)))
+		facts.Record(statusline.Started{Ticket: *picked}, rollupCounted(o.Row.ID, evidence.LaneProgress(o.Lane)))
 	case ServedFromClaim:
 		picked = statuslineTicketRef(o.Row.Issue)
 	case ServedFromEpicLane:
@@ -84,9 +85,9 @@ func statuslineTicketRef(issue model.Issue) *statusline.Ticket {
 	return &ticket
 }
 
-// laneCounted is a lane's progress as the statusline file records it for the
-// ticket being worked on. It is the count the claim line renders, so the file
-// and lit backlog cannot disagree about it. [LAW:one-source-of-truth]
-func laneCounted(id string, progress claims.LaneProgress) statusline.LaneCounted {
-	return statusline.LaneCounted{ID: id, Lane: statusline.LaneProgress{Done: progress.Done, Total: progress.Total}}
+// rollupCounted is a lane's progress as the statusline file records it for
+// the ticket being worked on. It is the count the claim line renders, so the
+// file and lit backlog cannot disagree about it. [LAW:one-source-of-truth]
+func rollupCounted(id string, progress claims.LaneProgress) statusline.RollupCounted {
+	return statusline.RollupCounted{ID: id, Progress: statusline.RollupProgress{CompletedCount: progress.Done, TotalCount: progress.Total}}
 }

@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `.lit/statusline.json` now shows how far along the lane is that you are working in. `working_on` has a `lane` field, `{"done": 1, "total": 4}`, with the same count as the `N/M done` on that lane's claim line in `lit backlog`. `lit start` records it once the start has landed, so starting a closed ticket takes it out of `done`. `lit next` counts it again when it hands your in-progress work back. The count is not updated when other tickets in the lane change later; the next `lit start` or `lit next` that records `working_on` counts it again. `schema_version` stays `1`. The minimal statusline in docs/statusline.md prints the count, and each command's event records the file's count as `statusline.lane`. (links-statusline-e9pl.9ym)
+- `.lit/statusline.json` now shows how far along the lane is that you are working in. `working_on` has a `rollup_progress` field, `{"rollup_completed_count": 1, "rollup_total_count": 4}`, with the same counts as the `N/M done` on that lane's claim line in `lit backlog`. `lit start` records it once the start has landed, so starting a closed ticket takes it out of `rollup_completed_count`. `lit next` counts it again when it hands your in-progress work back. The count is not updated when other tickets in the lane change later; the next `lit start` or `lit next` that records `working_on` counts it again. `schema_version` stays `1`. The minimal statusline in docs/statusline.md prints the count, and each command's event records the file's count as `statusline.rollup_progress`. (links-statusline-e9pl.9ym)
 
 ### Changed
 
