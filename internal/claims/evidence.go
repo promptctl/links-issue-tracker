@@ -34,6 +34,7 @@ import (
 // placed in its lane, and every event placed in the lane of the issue it
 // touched. "Complete" is the whole point of the type — see NewEvidence.
 type Evidence struct {
+	lanes   map[string]model.LaneID
 	members map[model.LaneID][]model.Issue
 	events  map[model.LaneID][]model.IssueEvent
 }
@@ -60,6 +61,7 @@ type Evidence struct {
 func NewEvidence(issues []model.Issue, parents map[string]*model.Issue, events []model.IssueEvent) (Evidence, error) {
 	lanes := make(map[string]model.LaneID, len(issues))
 	ev := Evidence{
+		lanes:   lanes,
 		members: make(map[model.LaneID][]model.Issue),
 		events:  make(map[model.LaneID][]model.IssueEvent),
 	}
@@ -106,7 +108,9 @@ func (e Evidence) Lanes() []model.LaneID {
 
 // LaneProgress is the "how is it going" half of a lane's dossier: how many of
 // its member issues are closed, out of how many total, and which member (if
-// any) is the one actually in progress right now. Active is its own field
+// any) is the one actually in progress right now. Only members still in the
+// flow count: an archived or deleted ticket has left the lane's work, so it is
+// neither done nor outstanding. Active is its own field
 // rather than something a caller infers from Done/Total because an
 // epic-major lane can hold several sibling issues — the one a listing
 // happens to be rendering is not necessarily the one the claimant is
@@ -120,8 +124,25 @@ type LaneProgress struct {
 // saw reports the zero LaneProgress (Total 0), which formats as nothing —
 // the same total-map-read convention Standings.Of uses.
 func (e Evidence) LaneProgress(lane model.LaneID) LaneProgress {
+	return progressOf(e.members[lane])
+}
+
+// LaneProgressWith reports the progress of the lane written is in, as this
+// evidence partitioned it, with written counted in place of the version this
+// evidence read. A command that gathered the evidence before its own write
+// learns the progress after it this way, without gathering again; and because
+// written itself is counted, the progress it reports is never the empty lane's.
+func (e Evidence) LaneProgressWith(written model.Issue) LaneProgress {
+	members := slices.DeleteFunc(slices.Clone(e.members[e.lanes[written.ID]]), func(member model.Issue) bool { return member.ID == written.ID })
+	return progressOf(append(members, written))
+}
+
+func progressOf(members []model.Issue) LaneProgress {
 	var progress LaneProgress
-	for _, issue := range e.members[lane] {
+	// [LAW:one-source-of-truth] Frozen is the program's one answer to "has this
+	// left the flow", the same one readiness and claim derivation ask.
+	inFlow := slices.DeleteFunc(slices.Clone(members), func(member model.Issue) bool { return model.Frozen(member.Retention()) })
+	for _, issue := range inFlow {
 		progress.Total++
 		switch issue.State() {
 		case model.StateClosed:

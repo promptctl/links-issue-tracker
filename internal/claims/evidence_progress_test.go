@@ -56,6 +56,90 @@ func TestLaneProgressWithNoInProgressMemberNamesNoActiveTicket(t *testing.T) {
 	}
 }
 
+// LaneProgressWith counts the written ticket in place of the version the
+// evidence read, so a command that wrote after gathering learns the lane as it
+// now stands — and the evidence it asked still reads as it did.
+func TestLaneProgressWithCountsTheWrittenTicketInPlaceOfTheOneRead(t *testing.T) {
+	children := []model.Issue{
+		leaf(t, "T1", "lane", model.StateClosed),
+		leaf(t, "T2", "lane", model.StateOpen),
+	}
+	issues, parents := epicOf(t, children...)
+	evidence, err := claims.NewEvidence(issues, parents, nil)
+	if err != nil {
+		t.Fatalf("NewEvidence() error = %v", err)
+	}
+	lane := laneIn(epicID, "lane")
+	cases := []struct {
+		name        string
+		written     model.Issue
+		done, total int
+	}{
+		{"starting an open ticket leaves the done count", leaf(t, "T2", "lane", model.StateInProgress), 1, 2},
+		{"starting a closed ticket takes it out of the done count", leaf(t, "T1", "lane", model.StateInProgress), 0, 2},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			progress := evidence.LaneProgressWith(tc.written)
+			if progress.Done != tc.done || progress.Total != tc.total {
+				t.Fatalf("LaneProgressWith = {Done:%d Total:%d}, want {Done:%d Total:%d}", progress.Done, progress.Total, tc.done, tc.total)
+			}
+			if progress.Active == nil || progress.Active.ID != tc.written.ID {
+				t.Fatalf("LaneProgressWith.Active = %v, want %s", progress.Active, tc.written.ID)
+			}
+			if read := evidence.LaneProgress(lane); read.Done != 1 || read.Total != 2 || read.Active != nil {
+				t.Fatalf("LaneProgress after LaneProgressWith = %+v, want the evidence as read: {Done:1 Total:2}, nothing active", read)
+			}
+		})
+	}
+}
+
+// An archived or deleted ticket has left the lane's work, closed or not, so it
+// is neither done nor outstanding: a deleted open ticket would otherwise hold
+// the lane short of finished for good. The same tickets live count, which is
+// what makes the frozen ones' absence the rule rather than a miscount.
+func TestLaneProgressCountsOnlyMembersInTheFlow(t *testing.T) {
+	frozen := func(issue model.Issue, retention model.Retention) model.Issue {
+		issue.SetRetention(retention)
+		return issue
+	}
+	live := []model.Issue{
+		leaf(t, "T1", "lane", model.StateClosed),
+		leaf(t, "T2", "lane", model.StateOpen),
+		leaf(t, "T3", "lane", model.StateOpen),
+		leaf(t, "T4", "lane", model.StateClosed),
+		leaf(t, "T5", "lane", model.StateInProgress),
+	}
+	cases := []struct {
+		name        string
+		children    []model.Issue
+		done, total int
+		active      bool
+	}{
+		{"all live", live, 2, 5, true},
+		{"archived and deleted members left out", []model.Issue{
+			live[0],
+			live[1],
+			frozen(live[2], model.Deleted{}),
+			frozen(live[3], model.Archived{}),
+			frozen(live[4], model.Archived{}),
+		}, 1, 2, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			issues, parents := epicOf(t, tc.children...)
+			evidence, err := claims.NewEvidence(issues, parents, nil)
+			if err != nil {
+				t.Fatalf("NewEvidence() error = %v", err)
+			}
+			progress := evidence.LaneProgress(laneIn(epicID, "lane"))
+			if progress.Done != tc.done || progress.Total != tc.total || (progress.Active != nil) != tc.active {
+				t.Fatalf("LaneProgress = %+v, want {Done:%d Total:%d}, active member %t", progress, tc.done, tc.total, tc.active)
+			}
+		})
+	}
+}
+
 // TestLaneProgressOfUnseenLaneIsZero mirrors Standings.Of's total-map-read
 // convention: a lane the evidence never partitioned reports the zero value
 // rather than panicking on a missing map entry.

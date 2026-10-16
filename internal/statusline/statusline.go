@@ -55,8 +55,20 @@ type File struct {
 // WorkingOn is the ticket this checkout last started, or that `lit next` last
 // handed back to it as its own work in flight.
 type WorkingOn struct {
-	Ticket     Ticket    `json:"ticket"`
-	RecordedAt time.Time `json:"recorded_at"`
+	Ticket Ticket `json:"ticket"`
+	// RollupProgress is the progress of the ticket's lane, counted by the
+	// command that made the record; nil when that command counted none.
+	RollupProgress *RollupProgress `json:"rollup_progress"`
+	RecordedAt     time.Time       `json:"recorded_at"`
+}
+
+// RollupProgress is how far along a ticket's lane is: how many of the lane's
+// tickets are closed, out of how many it holds — the "N/M done" of a lit
+// backlog claim line. The two counts are separate fields so a reader renders
+// them however it shows a fraction.
+type RollupProgress struct {
+	CompletedCount int `json:"rollup_completed_count"`
+	TotalCount     int `json:"rollup_total_count"`
 }
 
 // Next is what the last plain `lit next` in this checkout picked. A nil Ticket
@@ -86,6 +98,13 @@ type Picked struct{ Ticket *Ticket }
 // shows that title from here on; when the record was made does not change.
 type Retitled struct{ Ticket Ticket }
 
+// RollupCounted says the lane ticket ID is in stands at Progress, so the
+// record of working on ID shows that progress.
+type RollupCounted struct {
+	ID       string
+	Progress RollupProgress
+}
+
 // Invalidated says ticket ID has left the state the file's records describe —
 // finished, closed, reopened, archived, deleted, or purged — so any record
 // naming it no longer stands.
@@ -105,13 +124,27 @@ func (p Picked) apply(f File, at time.Time) File {
 	return f
 }
 
+// Records are copied before they change, never edited in place: the file
+// being folded may share them with the one it was folded from.
 func (r Retitled) apply(f File, _ time.Time) File {
 	if f.WorkingOn != nil && f.WorkingOn.Ticket.ID == r.Ticket.ID {
-		f.WorkingOn = &WorkingOn{Ticket: r.Ticket, RecordedAt: f.WorkingOn.RecordedAt}
+		working := *f.WorkingOn
+		working.Ticket = r.Ticket
+		f.WorkingOn = &working
 	}
 	if f.Next != nil && f.Next.Ticket != nil && f.Next.Ticket.ID == r.Ticket.ID {
-		ticket := r.Ticket
-		f.Next = &Next{Ticket: &ticket, RecordedAt: f.Next.RecordedAt}
+		next, ticket := *f.Next, r.Ticket
+		next.Ticket = &ticket
+		f.Next = &next
+	}
+	return f
+}
+
+func (c RollupCounted) apply(f File, _ time.Time) File {
+	if f.WorkingOn != nil && f.WorkingOn.Ticket.ID == c.ID {
+		working, progress := *f.WorkingOn, c.Progress
+		working.RollupProgress = &progress
+		f.WorkingOn = &working
 	}
 	return f
 }
@@ -172,6 +205,10 @@ type Outcome struct {
 	Changed []string
 	// Bytes is the size of the file written; zero when nothing was written.
 	Bytes int
+	// RollupProgress is the rollup progress the written file's working_on
+	// shows; nil when nothing was written, or the file shows no working_on or
+	// no count for it.
+	RollupProgress *RollupProgress
 	// Created is true when the file did not exist before this write.
 	Created bool
 	// ExcludeAdded is true when this write added the exclude entry.
@@ -239,6 +276,9 @@ func Write(loc Location, facts Facts, now time.Time) (Outcome, error) {
 	out.Replaced = replaced
 	out.Changed = changedSlots(before, written)
 	out.Bytes = len(payload)
+	if written.WorkingOn != nil {
+		out.RollupProgress = written.WorkingOn.RollupProgress
+	}
 	return out, nil
 }
 
