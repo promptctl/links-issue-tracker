@@ -289,7 +289,8 @@ func (s *Store) downgradeLocked(ctx context.Context, targetSchemaVersion int64) 
 	//
 	// The reverse has committed, so a prune failure is reported on done rather
 	// than returned: the workspace is at the target, and the caller still has
-	// to install the binary that reads it. A leftover snapshot is inert.
+	// to install the binary that reads it. The workspace never reads a
+	// snapshot, so one left over changes nothing it does.
 	if err := dbsnapshot.PruneMatching(s.doltRootDir, downgradeSnapshotRetention, IsDowngradeSnapshotName); err != nil {
 		done.PruneErr = fmt.Errorf("prune downgrade snapshots: %w", err)
 	}

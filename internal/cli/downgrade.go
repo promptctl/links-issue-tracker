@@ -153,12 +153,8 @@ func downgradeLeafWith(
 		// prune succeeded, ending whichever output ends the command.
 		pruneWarning := downgradePruneWarning(done.PruneErr)
 
-		binPath, err := binPathFn()
+		binPath, err := installOverCurrentBinary(ctx, installer, binPathFn, target)
 		if err != nil {
-			return fmt.Errorf("downgrade: resolve current binary: %w%s", err, pruneWarning)
-		}
-
-		if err := installer.Install(ctx, target, binPath); err != nil {
 			// [LAW:no-silent-failure] schema is already downgraded at this point;
 			// surface the install failure with the exact recovery the operator
 			// needs (run the prior binary themselves, or restore the snapshot).
@@ -180,6 +176,18 @@ func downgradeLeafWith(
 		)
 		return err
 	}}
+}
+
+// installOverCurrentBinary installs target over the running binary and
+// returns the path it installed to. Resolving that path is part of the
+// install, so a downgrade that cannot resolve it reports the one failure a
+// reversed workspace without its binary gets, recovery included.
+func installOverCurrentBinary(ctx context.Context, installer release.Installer, binPathFn func() (string, error), target *release.Target) (string, error) {
+	binPath, err := binPathFn()
+	if err != nil {
+		return "", fmt.Errorf("resolve current binary: %w", err)
+	}
+	return binPath, installer.Install(ctx, target, binPath)
 }
 
 // downgradePruneWarning is the line a downgrade adds to its result when

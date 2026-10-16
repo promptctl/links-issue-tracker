@@ -389,19 +389,35 @@ func TestRunDowngradeInstallsWhenTheSnapshotPruneFails(t *testing.T) {
 	t.Parallel()
 	pruneErr := errors.New("prune downgrade snapshots: permission denied")
 	warning := "\nwarning: old downgrade snapshots were not removed: " + pruneErr.Error()
+	notInstalled := "downgrade: schema reversed to v3 but installing prior binary failed: "
 	tests := []struct {
-		name       string
-		binPath    func() (string, error)
-		installErr error
-		wantOut    string
+		name          string
+		binPath       func() (string, error)
+		installErr    error
+		wantInstalled bool
+		wantOut       string
+		wantErrPrefix string // "" when the command succeeds
+		wantPath      any
 	}{
 		{
-			name:    "install succeeds",
-			binPath: fixedBinPath("/p/lit", nil),
-			wantOut: "downgraded to v0.4.1 (schema v3) installed at /p/lit\nre-run `lit version` to confirm." + warning + "\n",
+			name:          "install succeeds",
+			binPath:       fixedBinPath("/p/lit", nil),
+			wantInstalled: true,
+			wantOut:       "downgraded to v0.4.1 (schema v3) installed at /p/lit\nre-run `lit version` to confirm." + warning + "\n",
+			wantPath:      "/p/lit",
 		},
-		{name: "install fails", binPath: fixedBinPath("/p/lit", nil), installErr: errors.New("rename: read-only file system")},
-		{name: "binary path fails", binPath: fixedBinPath("", errors.New("executable: not found"))},
+		{
+			name:          "install fails",
+			binPath:       fixedBinPath("/p/lit", nil),
+			installErr:    errors.New("rename: read-only file system"),
+			wantInstalled: true,
+			wantErrPrefix: notInstalled + "rename: read-only file system\n\nrecover by either:",
+		},
+		{
+			name:          "binary path fails",
+			binPath:       fixedBinPath("", errors.New("executable: not found")),
+			wantErrPrefix: notInstalled + "resolve current binary: executable: not found\n\nrecover by either:",
+		},
 	}
 	for _, tc := range tests {
 		tc := tc
@@ -409,15 +425,25 @@ func TestRunDowngradeInstallsWhenTheSnapshotPruneFails(t *testing.T) {
 			t.Parallel()
 			done := reversedFromV4()
 			done.PruneErr = pruneErr
-			facts, _, out, err := runDowngradeRecorded(t, downgradeScope{schema: &stubDowngrader{done: done}, current: newerCurrentInfo()}, &stubResolver{target: newFakeTarget()}, &stubInstaller{err: tc.installErr}, tc.binPath)
+			inst := &stubInstaller{err: tc.installErr}
+			facts, _, out, err := runDowngradeRecorded(t, downgradeScope{schema: &stubDowngrader{done: done}, current: newerCurrentInfo()}, &stubResolver{target: newFakeTarget()}, inst, tc.binPath)
+			if inst.called != tc.wantInstalled {
+				t.Errorf("installer called = %v; want %v", inst.called, tc.wantInstalled)
+			}
 			if out != tc.wantOut {
 				t.Errorf("stdout = %q; want %q", out, tc.wantOut)
 			}
-			if tc.wantOut == "" && (err == nil || !strings.HasSuffix(err.Error(), warning)) {
-				t.Errorf("err = %v; want it to end with %q", err, warning)
+			switch {
+			case tc.wantErrPrefix == "" && err != nil:
+				t.Errorf("err = %v; want nil", err)
+			case tc.wantErrPrefix != "" && (err == nil || !strings.HasPrefix(err.Error(), tc.wantErrPrefix) || !strings.HasSuffix(err.Error(), warning)):
+				t.Errorf("err = %v; want it to start with %q and end with %q", err, tc.wantErrPrefix, warning)
 			}
 			if got := facts["downgrade.snapshot_prune_error"]; got != pruneErr.Error() {
 				t.Errorf("downgrade.snapshot_prune_error = %v; want %q", got, pruneErr.Error())
+			}
+			if got := facts["downgrade.installed_path"]; got != tc.wantPath {
+				t.Errorf("downgrade.installed_path = %v; want %v", got, tc.wantPath)
 			}
 		})
 	}
