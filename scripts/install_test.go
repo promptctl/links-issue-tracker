@@ -5,8 +5,10 @@ package scripts
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -425,6 +427,71 @@ func TestReleaseModeAcceptsExactlyTheReleaseTags(t *testing.T) {
 		}
 	}
 }
+
+// TestInstallFetchesTheReleaseURLsLitUpgradeFetches holds install.sh's release
+// URLs to release.HTTPResolver's defaults by what each one requests: the same
+// latest-release feed, and downloads from the same <base>/<tag> directory. Stub
+// transports record each request and fail it, so nothing reaches the network.
+func TestInstallFetchesTheReleaseURLsLitUpgradeFetches(t *testing.T) {
+	t.Parallel()
+	const tag = "v1.2.3"
+	root := t.TempDir()
+	stubBin := filepath.Join(root, "stub-bin")
+	if err := os.MkdirAll(stubBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	requests := filepath.Join(root, "curl-requests")
+	writeFile(t, filepath.Join(stubBin, "curl"), "#!/bin/sh\nfor arg; do case $arg in *://*) echo \"$arg\" >>'"+requests+"';; esac; done\nexit 22\n", 0o755)
+	writeFile(t, filepath.Join(stubBin, "jq"), "#!/bin/sh\ncat >/dev/null\n", 0o755)
+	installRequest := func(args ...string) string {
+		t.Helper()
+		if err := os.WriteFile(requests, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		install := exec.Command("bash", append([]string{"install.sh"}, args...)...)
+		install.Env = []string{"PATH=" + stubBin + ":/usr/bin:/bin", "HOME=" + root, "GOBIN=" + filepath.Join(root, "bin")}
+		out, _ := install.CombinedOutput()
+		lines := strings.Fields(readFile(t, requests))
+		if len(lines) != 1 {
+			t.Fatalf("install.sh %v: want exactly one curl request before the stub's failure stops it, got %q\n%s", args, lines, out)
+		}
+		return lines[0]
+	}
+
+	var litRequests []string
+	resolver := &litrelease.HTTPResolver{Client: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		litRequests = append(litRequests, req.URL.String())
+		return nil, errors.New("stub transport")
+	})}}
+	if _, err := resolver.LatestTag(context.Background()); err == nil {
+		t.Fatal("LatestTag succeeded through a transport that fails every request")
+	}
+	parsed, err := litrelease.ParseTag(tag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resolver.Resolve(context.Background(), parsed, "linux/amd64"); err == nil {
+		t.Fatal("Resolve succeeded through a transport that fails every request")
+	}
+	if len(litRequests) != 2 {
+		t.Fatalf("want one request each from LatestTag and Resolve, got %q", litRequests)
+	}
+
+	if install, lit := installRequest("--latest-release"), litRequests[0]; install != lit {
+		t.Errorf("latest-release feed: install.sh requests %q, lit upgrade requests %q", install, lit)
+	}
+	if install, lit := directory(installRequest("--from-release", tag)), directory(litRequests[1]); install != lit {
+		t.Errorf("release %s download directory: install.sh fetches from %q, lit upgrade from %q", tag, install, lit)
+	}
+}
+
+// directory is url up to its last "/", which a release download URL puts
+// before the file name.
+func directory(url string) string { return url[:strings.LastIndex(url, "/")] }
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
 
 // TestInstallRenamesTheStagedBuildOverTheInstalledLit pins the swap: a new
 // file takes the installed path, so a process still running the old lit keeps
