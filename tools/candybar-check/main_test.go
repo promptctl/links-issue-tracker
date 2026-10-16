@@ -2,10 +2,13 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"maps"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/statusline"
@@ -35,10 +38,11 @@ func TestCellsRefusesAPrintItCannotRead(t *testing.T) {
 	const ok = "✓ /c.json5: config OK\n"
 	for name, printed := range map[string]string{
 		"nothing printed":   "",
-		"no config OK line": "[🍫](x)  phase plan\n",
+		"no config OK line": "[🍫](x) \ue0b0 phase plan\n",
 		"two bar lines":     ok + "\x1b]8;;m\x1b\\🍫\x1b]8;;\x1b\\\nphase plan\n",
-		"no menu cell":      ok + "phase plan  next nothing ready\n",
-		"unread escape":     ok + "\x1b]8;;m\x1b\\🍫\x1b]8;;\x1b\\  \x1b[2Kphase plan\n",
+		"no menu cell":      ok + "\ue0b0 phase plan \ue0b0 next nothing ready \ue0b0\n",
+		"no closing arrow":  ok + "\ue0b0 \x1b]8;;m\x1b\\🍫\x1b]8;;\x1b\\ \ue0b0 phase plan\n",
+		"unread escape":     ok + "\x1b]8;;m\x1b\\🍫\x1b]8;;\x1b\\ \ue0b0 \x1b[2Kphase plan\n",
 	} {
 		if got, err := cells(printed); err == nil {
 			t.Errorf("%s: cells = %q, want an error", name, got)
@@ -74,5 +78,51 @@ func TestOlderLitWritesWorkingOnWithoutAPhaseKey(t *testing.T) {
 	want := []string{"recorded_at", "rollup_progress", "ticket"}
 	if file.SchemaVersion != 1 || !slices.Equal(got, want) {
 		t.Fatalf("schema_version %d, working_on keys %q; want 1 and %q", file.SchemaVersion, got, want)
+	}
+}
+
+// A segment whose template renders only spaces is drawn as a blank cell
+// between two arrows, as cc-candybar 1.130.5 draws it; it reads as a cell, so
+// a case expecting the segment hidden fails.
+func TestCellsKeepsABlankCell(t *testing.T) {
+	printed := "\u2713 /c.json5: config OK\n\ue0b0 \x1b]8;;m\x1b\\🍫\x1b]8;;\x1b\\ \ue0b0   \ue0b0 next nothing ready \ue0b0\n"
+	got, err := cells(printed)
+	if err != nil {
+		t.Fatalf("cells: %v", err)
+	}
+	if want := []string{"", "next nothing ready"}; !slices.Equal(got, want) {
+		t.Fatalf("cells = %q, want %q", got, want)
+	}
+}
+
+// The run's verdicts are its gate: a case that renders other cells, or does
+// not render, fails the run, and every case still prints its line.
+func TestCheckFailsTheRunOnAnyCaseThatDoesNotRender(t *testing.T) {
+	cases := []renderCase{
+		{name: "renders", cells: []string{"phase plan"}},
+		{name: "other-cells", cells: []string{"phase plan"}},
+		{name: "no-render", cells: []string{}},
+	}
+	rendered := map[string][]string{"renders": {"phase plan"}, "other-cells": {}}
+	render := func(c renderCase) ([]string, error) {
+		if got, ok := rendered[c.name]; ok {
+			return got, nil
+		}
+		return nil, errors.New("plugin did not load")
+	}
+	var stdout strings.Builder
+	if code := check(&stdout, io.Discard, cases, render); code != 1 {
+		t.Errorf("exit %d, want 1", code)
+	}
+	want := `candybar-check: case=renders verdict=ok cells=["phase plan"]
+candybar-check: case=other-cells verdict=mismatch cells=[]
+candybar-check: case=no-render verdict=error cells=[]
+candybar-check: cc-candybar=1.130.5 cases=3 failed=2
+`
+	if stdout.String() != want {
+		t.Errorf("stdout:\n%s\nwant:\n%s", stdout.String(), want)
+	}
+	if code := check(io.Discard, io.Discard, cases[:1], render); code != 0 {
+		t.Errorf("every case rendered: exit %d, want 0", code)
 	}
 }

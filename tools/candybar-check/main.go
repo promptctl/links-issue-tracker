@@ -124,18 +124,22 @@ func olderLitWrites(facts ...statusline.Fact) func(statusline.Location) error {
 		if err != nil {
 			return err
 		}
-		var file struct {
-			SchemaVersion int                        `json:"schema_version"`
-			WorkingOn     map[string]json.RawMessage `json:"working_on"`
-			Next          json.RawMessage            `json:"next"`
-		}
+		// Raw messages keep every key this lit writes but the one dropped, so
+		// the file tracks statusline.File without restating its shape.
+		var file, workingOn map[string]json.RawMessage
 		if err := json.Unmarshal(raw, &file); err != nil {
 			return err
 		}
-		if _, ok := file.WorkingOn["phase"]; !ok {
+		if err := json.Unmarshal(file["working_on"], &workingOn); err != nil {
+			return err
+		}
+		if _, ok := workingOn["phase"]; !ok {
 			return errors.New("the facts recorded no working_on with a phase key to drop")
 		}
-		delete(file.WorkingOn, "phase")
+		delete(workingOn, "phase")
+		if file["working_on"], err = json.Marshal(workingOn); err != nil {
+			return err
+		}
 		older, err := json.MarshalIndent(file, "", "  ")
 		if err != nil {
 			return err
@@ -163,9 +167,17 @@ func run(stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "error: candybar-check: install cc-candybar %s: %v\n", candybarVersion, err)
 		return 1
 	}
+	return check(stdout, stderr, cases, func(c renderCase) ([]string, error) {
+		return render(candybar, filepath.Join(dir, c.name), c)
+	})
+}
+
+// check renders every case, prints each one's verdict and then the summary,
+// and returns the exit code: 1 when any case did not render its cells.
+func check(stdout, stderr io.Writer, cases []renderCase, render func(renderCase) ([]string, error)) int {
 	failed := 0
 	for _, c := range cases {
-		got, err := render(candybar, filepath.Join(dir, c.name), c)
+		got, err := render(c)
 		verdict := "ok"
 		switch {
 		case err != nil:
@@ -223,8 +235,10 @@ func render(candybar, root string, c renderCase) ([]string, error) {
 	var stdout, stderr strings.Builder
 	cmd := exec.Command(candybar, "check", "--render", config)
 	cmd.Dir = checkout
-	cmd.Env = append(os.Environ(),
-		"HOME="+home, "XDG_DATA_HOME="+data, "XDG_CONFIG_HOME="+filepath.Join(home, ".config"))
+	// PATH finds node, which cc-candybar's command runs under; nothing else
+	// of this process's environment reaches the render.
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH"),
+		"HOME=" + home, "XDG_DATA_HOME=" + data, "XDG_CONFIG_HOME=" + filepath.Join(home, ".config")}
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
 		return nil, fmt.Errorf("cc-candybar check --render: %v\n%s", err, stderr.String())
@@ -240,7 +254,7 @@ var (
 	hyperlink = regexp.MustCompile("\x1b\\]8;[^;\x1b]*;([^\x1b]*)\x1b\\\\([^\x1b]*)\x1b\\]8;;\x1b\\\\")
 	// separator is a powerline arrow between cells: the solid one where the
 	// colour changes, the thin one between two cells of one colour.
-	separator = regexp.MustCompile("[]")
+	separator = regexp.MustCompile("[\ue0b0\ue0b1]")
 )
 
 // menuCell opens every bar cc-candybar draws: its settings menu, which no
@@ -259,13 +273,18 @@ func cells(printed string) ([]string, error) {
 	if strings.Contains(bar, "\x1b") {
 		return nil, fmt.Errorf("bar holds an escape sequence this check does not read: %q", bar)
 	}
-	drawn := []string{}
-	for _, cell := range separator.Split(bar, -1) {
-		if cell = strings.TrimSpace(cell); cell != "" {
-			drawn = append(drawn, cell)
-		}
+	// The bar opens and closes on an arrow, so the text before the first and
+	// after the last is empty; every piece between is a drawn cell, and one
+	// whose template rendered only spaces is kept, blank, not read as hidden.
+	pieces := separator.Split(bar, -1)
+	if len(pieces) < 3 || strings.TrimSpace(pieces[0]) != "" || strings.TrimSpace(pieces[len(pieces)-1]) != "" {
+		return nil, fmt.Errorf("bar %q does not open and close on an arrow", bar)
 	}
-	if len(drawn) == 0 || !strings.HasPrefix(drawn[0], "["+menuCell+"](") {
+	drawn := []string{}
+	for _, cell := range pieces[1 : len(pieces)-1] {
+		drawn = append(drawn, strings.TrimSpace(cell))
+	}
+	if !strings.HasPrefix(drawn[0], "["+menuCell+"](") {
 		return nil, fmt.Errorf("bar %q does not open with cc-candybar's %s menu cell", bar, menuCell)
 	}
 	return drawn[1:], nil
