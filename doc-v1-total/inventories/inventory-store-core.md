@@ -4446,14 +4446,16 @@ The placement rule is documented at `store.go`: a pre-lock check is stale becaus
 
 External callers: `internal/cli/snapshots.go`, `internal/cli/init_sync.go`.
 
-### 1.8 `LocalHasTickets(ctx, doltRootDir, workspaceID) (bool, error)` — `adopt.go`
+### 1.8 `LocalHasTickets(ctx, doltRootDir, workspaceID) (bool, storage.Migrated, error)` — `adopt.go`
+
+The `storage.Migrated` is what the read open did to the stored shape; it is the zero value on every return before step 4 and on an open error.
 
 Ordered:
-1. `validateDoltRootDir(doltRootDir)`; error returns `(false, err)` (`adopt.go`).
-2. `requireNoPendingAdopt(cleanRoot)`: if the error `errors.Is(err, errAdoptPending)` → returns `(false, nil)` — residue is "nothing to lose" **without opening it**; any other (I/O) error → `(false, err)` (`adopt.go`).
-3. `if !dirExists(filepath.Join(cleanRoot, doltDatabaseName))` → `(false, nil)`; **does not create the store** (`adopt.go`).
+1. `validateDoltRootDir(doltRootDir)`; error returns `(false, {}, err)` (`adopt.go`).
+2. `requireNoPendingAdopt(cleanRoot)`: if the error `errors.Is(err, errAdoptPending)` → returns `(false, {}, nil)` — residue is "nothing to lose" **without opening it**; any other (I/O) error → `(false, {}, err)` (`adopt.go`).
+3. `if !dirExists(filepath.Join(cleanRoot, doltDatabaseName))` → `(false, {}, nil)`; **does not create the store** (`adopt.go`).
 4. `OpenForRead(ctx, cleanRoot, workspaceID)`, `defer s.Close()` (`adopt.go`).
-5. `s.LocalIssueCount(ctx)` (defined `internal/store/sync.go`); returns `(count > 0, nil)` (`adopt.go`).
+5. `s.LocalIssueCount(ctx)` (defined `internal/store/sync.go`); returns `(count > 0, s.Migrated(), err)` (`adopt.go`).
 
 External caller: `internal/cli/init_sync.go`.
 

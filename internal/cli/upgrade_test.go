@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -623,7 +622,7 @@ func TestRunUpgradeOnAnOpenableWorkspacePastRunningSupportNamesNoDowngrade(t *te
 
 	res := &stubResolver{target: newFakeTarget()} // Schema.Max == 3
 	inst := &stubInstaller{}
-	facts, err := runUpgradeRecorded(t, workspaceSchemaReader{ws: ws, out: io.Discard}, []string{"--to", "v0.9.0"}, current, res, inst)
+	facts, err := runUpgradeRecorded(t, workspaceSchemaReader{ws: ws}, []string{"--to", "v0.9.0"}, current, res, inst)
 
 	var behind *UpgradeTargetBehindError
 	if !errors.As(err, &behind) {

@@ -157,21 +157,23 @@ not work on this checkout's tickets, such as `lit sync push`, `lit init` or
 
 ## What opening a store records
 
-A command that opens a store records what the open did to the store's schema.
-An open that finds the schema behind this lit migrates it forward, taking a
-recovery snapshot first, then removes the oldest migration snapshots past the
-ten it keeps.
+A command that opens a store to read or change its tickets records what the
+open did to the store's schema. An open that finds the schema behind this lit
+migrates it forward, taking a recovery snapshot first, then removes the oldest
+migration snapshots past the ten it keeps. For `lit ls --at`, that store is the
+one `--at` names, not the working directory's.
 
 | Key | Meaning |
 | --- | --- |
 | `migration.snapshot` | The recovery snapshot the open took before migrating, or `""` when there was nothing to migrate. |
-| `migration.snapshot_prune_error` | Why older migration snapshots could not be removed after the migration, or `null`. The command runs all the same, and its output begins with a `warning: old migration snapshots were not removed:` line. |
+| `migration.snapshot_prune_error` | Why older migration snapshots could not be removed after the migration, or `null`. The command runs all the same, and prints a `warning: old migration snapshots were not removed:` line on stderr. |
 
-`lit stores --counts` opens every store it finds, so it records a count
+`lit stores --counts` opens every store it finds, so it records counts
 instead.
 
 | Key | Meaning |
 | --- | --- |
+| `counts.stores.migrated` | The stores whose open migrated them. |
 | `counts.stores.snapshot_prune_failures` | The stores whose open migrated them and then could not remove older migration snapshots. Each gets a `~ <storage dir>: warning: old migration snapshots were not removed:` line after the table. |
 
 ## What a schema-ahead refusal records

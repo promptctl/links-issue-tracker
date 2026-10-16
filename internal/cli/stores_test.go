@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -247,9 +248,10 @@ func TestPrintCrossProjectRollupCloseWarningKeepsCounts(t *testing.T) {
 func TestPrintCrossProjectRollupNotesAFailedSnapshotPrune(t *testing.T) {
 	t.Parallel()
 	rows := []projectRollup{
-		{Label: "alpha", StorageDir: "/repos/alpha/.git/links", Ready: 3, PruneErr: errors.New("prune migration snapshots: stuck")},
-		{Label: "beta", StorageDir: "/repos/beta/.git/links", Err: errors.New("unreadable"), PruneErr: errors.New("prune migration snapshots: stuck")},
-		{Label: "gamma", StorageDir: "/repos/gamma/.git/links", Ready: 1},
+		{Label: "alpha", StorageDir: "/repos/alpha/.git/links", Ready: 3, Migrated: storage.Migrated{Snapshot: "a-pre-migrate-1", PruneErr: errors.New("prune migration snapshots: stuck")}},
+		{Label: "beta", StorageDir: "/repos/beta/.git/links", Err: errors.New("unreadable"), Migrated: storage.Migrated{Snapshot: "b-pre-migrate-1", PruneErr: errors.New("prune migration snapshots: stuck")}},
+		{Label: "gamma", StorageDir: "/repos/gamma/.git/links", Ready: 1, Migrated: storage.Migrated{Snapshot: "g-pre-migrate-1"}},
+		{Label: "delta", StorageDir: "/repos/delta/.git/links", Ready: 2},
 	}
 	var out bytes.Buffer
 	if err := printCrossProjectRollup(&out, rows); err != nil {
@@ -262,11 +264,14 @@ func TestPrintCrossProjectRollupNotesAFailedSnapshotPrune(t *testing.T) {
 			t.Errorf("output %q missing %q", got, want)
 		}
 	}
-	if strings.Contains(got, "~ /repos/gamma") {
-		t.Errorf("output %q notes a store whose open pruned cleanly", got)
+	for _, dir := range []string{"/repos/gamma", "/repos/delta"} {
+		if strings.Contains(got, "~ "+dir) {
+			t.Errorf("output %q notes %s, whose open did not fail a prune", got, dir)
+		}
 	}
-	if n := countPruneFailures(rows); n != 2 {
-		t.Errorf("countPruneFailures() = %d, want 2", n)
+	want := map[string]int{"stores.migrated": 3, "stores.snapshot_prune_failures": 2}
+	if got := rollupMigrationCounts(rows); !reflect.DeepEqual(got, want) {
+		t.Errorf("rollupMigrationCounts() = %v, want %v", got, want)
 	}
 }
 

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,27 +14,63 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/version"
+	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
 // A command whose open migrates the workspace and then cannot roll an old
-// migration snapshot off still runs: it exits 0, its output begins with the
-// warning, and its event names the snapshot and the failure. The command is a
-// read, so this also drives the read open's hand-off to the write open that
-// migrates.
+// migration snapshot off still runs: it exits 0, its stdout is its own output
+// alone, the warning is on stderr, and its event names the snapshot and the
+// failure. The command is a read, so this also drives the read open's hand-off
+// to the write open that migrates.
 func TestACommandWhoseMigratingOpenCannotPruneStillRuns(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("removal-permission injection has no effect as root")
 	}
 	isolateEvents(t)
-	repo, stuck := workspaceWhosePruneWillFail(t)
+	repo, _, stuck := workspaceWhosePruneWillFail(t)
 
-	out, err := runCLIInDirAllowError(t, repo, "ls")
+	var out string
+	var err error
+	stderr := captureStderr(t, func() { out, err = runCLIInDirAllowError(t, repo, "export") })
 	if err != nil {
-		t.Fatalf("lit ls error = %v, want it to run\noutput:\n%s", err, out)
+		t.Fatalf("lit export error = %v, want it to run\noutput:\n%s", err, out)
 	}
-	if !strings.HasPrefix(out, "warning: old migration snapshots were not removed: prune migration snapshots: ") {
-		t.Errorf("lit ls output = %q, want it to begin with the prune warning", out)
+	var export map[string]any
+	if jerr := json.Unmarshal([]byte(out), &export); jerr != nil {
+		t.Errorf("lit export stdout is not the export alone: %v\n%s", jerr, out)
 	}
+	if !strings.HasPrefix(stderr, "warning: old migration snapshots were not removed: prune migration snapshots: ") {
+		t.Errorf("stderr = %q, want it to begin with the prune warning", stderr)
+	}
+	assertMigrationPruneFailureRecorded(t, stuck)
+}
+
+// lit init's adopt gate counts the local tickets through a read open, which
+// migrates a store behind this binary: the gate records that open's migration
+// and warns of a failed prune like any other open.
+func TestInitsAdoptGateReportsItsOpensMigration(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("removal-permission injection has no effect as root")
+	}
+	isolateEvents(t)
+	repo, _, stuck := workspaceWhosePruneWillFail(t)
+
+	var out string
+	var err error
+	stderr := captureStderr(t, func() { out, err = runCLIInDirAllowError(t, repo, "init") })
+	if err != nil {
+		t.Fatalf("lit init error = %v, want it to run\noutput:\n%s", err, out)
+	}
+	if !strings.Contains(stderr, "warning: old migration snapshots were not removed: prune migration snapshots: ") {
+		t.Errorf("stderr = %q, want the prune warning", stderr)
+	}
+	assertMigrationPruneFailureRecorded(t, stuck)
+}
+
+// assertMigrationPruneFailureRecorded is the last command's event naming the
+// snapshot its open took and the prune that then failed on stuck.
+func assertMigrationPruneFailureRecorded(t *testing.T, stuck string) {
+	t.Helper()
 	ev := lastEvent(t)
 	if ev.Outcome != telemetry.OutcomeOK {
 		t.Errorf("event outcome = %q, want ok", ev.Outcome)
@@ -53,27 +90,30 @@ func TestTheRollupCountsStoresWhoseMigratingOpenCannotPrune(t *testing.T) {
 		t.Skip("removal-permission injection has no effect as root")
 	}
 	isolateEvents(t)
-	repo, _ := workspaceWhosePruneWillFail(t)
+	repo, ws, _ := workspaceWhosePruneWillFail(t)
 
 	out, err := runCLIInDirAllowError(t, repo, "stores", "--counts", repo)
 	if err != nil {
 		t.Fatalf("lit stores --counts error = %v\noutput:\n%s", err, out)
 	}
-	if !strings.Contains(out, ": warning: old migration snapshots were not removed: prune migration snapshots: ") {
-		t.Errorf("lit stores --counts output = %q, want the prune note", out)
+	if want := "~ " + ws.StorageDir + ": warning: old migration snapshots were not removed: prune migration snapshots: "; !strings.Contains(out, want) {
+		t.Errorf("lit stores --counts output = %q, want the prune note %q", out, want)
 	}
-	if got := lastEvent(t).Counts["stores.snapshot_prune_failures"]; got != 1 {
-		t.Errorf("counts.stores.snapshot_prune_failures = %d, want 1", got)
+	counts := lastEvent(t).Counts
+	for key, want := range map[string]int{"stores.migrated": 1, "stores.snapshot_prune_failures": 1} {
+		if counts[key] != want {
+			t.Errorf("counts.%s = %d, want %d", key, counts[key], want)
+		}
 	}
 }
 
 // workspaceWhosePruneWillFail is a workspace one migration behind this binary,
 // holding more old migration snapshots than the store keeps, the oldest of
 // which cannot be removed: the next open migrates, and its prune fails on that
-// snapshot, which it returns.
-func workspaceWhosePruneWillFail(t *testing.T) (repo string, stuck string) {
+// snapshot. It returns the repo, its workspace, and that snapshot.
+func workspaceWhosePruneWillFail(t *testing.T) (repo string, ws workspace.Info, stuck string) {
 	t.Helper()
-	repo, ws := initBootstrapTestRepo(t)
+	repo, ws = initBootstrapTestRepo(t)
 	info, err := version.Get()
 	if err != nil {
 		t.Fatalf("version.Get() error = %v", err)
@@ -111,5 +151,5 @@ func workspaceWhosePruneWillFail(t *testing.T) (repo string, stuck string) {
 		t.Fatalf("chmod stuck snapshot: %v", err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(stuck, 0o755) })
-	return repo, stuck
+	return repo, ws, stuck
 }

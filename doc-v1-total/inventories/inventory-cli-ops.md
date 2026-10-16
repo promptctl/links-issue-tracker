@@ -128,7 +128,7 @@ Outcome struct fields JSON-tagged `state`, `remote`, `branch`, `error` (`init_sy
 - `adoptRemoteTicketsOnInit` prints progress `init: checking whether a git remote already carries a lit backlog` (`init_sync.go`), runs the adopt in a goroutine, and on deadline returns `initSyncFailed` with the message beginning `"adopting the remote backlog exceeded 120s and was aborted — the store is not usable yet…"` including "Pushing from this workspace would risk the remote backlog…", "Retry `lit init` — the interrupted download's leftovers are set aside automatically on retry" (`init_sync.go`). Abandoned goroutine is reclaimed at process exit (`init_sync.go`).
 - Planning (`planRemoteAdopt`, `init_sync.go`), in order:
   1. `store.PendingAdopt(ws.DatabasePath)` read; if residue exists, every *benign* terminal below is converted into `initSyncFailed` carrying the residue error (`init_sync.go`).
-  2. `store.LocalHasTickets` error → `failed`; `true` → `has_local_tickets` (`init_sync.go`).
+  2. `store.LocalHasTickets`; its `storage.Migrated` goes to `reportOpenMigration` whatever the result; error → `failed`; `true` → `has_local_tickets` (`init_sync.go`).
   3. `workspace.GitRemotes` error → `failed` (`init_sync.go`).
   4. `resolveSyncRemote("", workspace.UpstreamRemote(...), gitRemotes)` error → `failed`; empty → `not_configured` (`init_sync.go`).
   5. `workspace.RemoteHasRefs` error → `failed`; false → `remote_empty` (`init_sync.go`).

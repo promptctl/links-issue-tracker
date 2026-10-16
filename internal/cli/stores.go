@@ -8,6 +8,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
@@ -48,7 +49,7 @@ func runStores(ctx context.Context, stdout io.Writer, args []string) error {
 		if err != nil {
 			return err
 		}
-		telemetry.Count(ctx, "stores.snapshot_prune_failures", countPruneFailures(rows))
+		telemetry.Record(ctx, nil, rollupMigrationCounts(rows))
 		return printCrossProjectRollup(stdout, rows)
 	}
 	locations, err := workspace.Discover(roots)
@@ -85,10 +86,9 @@ type projectRollup struct {
 	Blocked    int
 	Err        error // store unreadable — counts unset
 	CloseErr   error // read succeeded (counts valid) but read-only close warned
-	// PruneErr is the open migrating the store and then failing to roll old
-	// migration snapshots off. It is independent of both errors above: the
-	// migration committed before either could happen.
-	PruneErr error
+	// Migrated is what the open did to the store's shape. It is independent of
+	// both errors above: a migration committed before either could happen.
+	Migrated storage.Migrated
 }
 
 // gatherCrossProjectRollup discovers every lit store beneath roots and rolls each
@@ -129,7 +129,7 @@ func rollupLocation(ctx context.Context, loc workspace.Location) (row projectRol
 		row.Err = err
 		return row
 	}
-	row.PruneErr = openMigration(st).PruneErr
+	row.Migrated = openMigration(st)
 	// [LAW:no-silent-failure] A read-only close failure (e.g. the embedded Dolt
 	// engine failing to release its locks) surfaces as CloseErr rather than being
 	// discarded — and only when no substantive error already occurred, so it never
@@ -161,16 +161,20 @@ func rollupLocation(ctx context.Context, loc workspace.Location) (row projectRol
 	return row
 }
 
-// countPruneFailures is how many of the rolled-up stores were migrated by
-// their open and then could not roll old migration snapshots off.
-func countPruneFailures(rows []projectRollup) int {
-	n := 0
+// rollupMigrationCounts is how many of the rolled-up stores their open
+// migrated, and how many of those could not then roll old migration snapshots
+// off.
+func rollupMigrationCounts(rows []projectRollup) map[string]int {
+	counts := map[string]int{"stores.migrated": 0, "stores.snapshot_prune_failures": 0}
 	for _, row := range rows {
-		if row.PruneErr != nil {
-			n++
+		if row.Migrated.Snapshot != "" {
+			counts["stores.migrated"]++
+		}
+		if row.Migrated.PruneErr != nil {
+			counts["stores.snapshot_prune_failures"]++
 		}
 	}
-	return n
+	return counts
 }
 
 // printCrossProjectRollup renders the gathered projects as an aligned table —
@@ -243,8 +247,8 @@ func printCrossProjectRollup(w io.Writer, rows []projectRollup) error {
 	// Every row, readable or not: the open that migrated the store came before
 	// any read that could fail.
 	for _, row := range rows {
-		if row.PruneErr != nil {
-			if _, err := fmt.Fprintf(w, "~ %s: %s", row.StorageDir, migrationPruneWarning(row.PruneErr)); err != nil {
+		if row.Migrated.PruneErr != nil {
+			if _, err := fmt.Fprintf(w, "~ %s: %s", row.StorageDir, migrationPruneWarning(row.Migrated.PruneErr)); err != nil {
 				return err
 			}
 		}
