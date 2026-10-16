@@ -76,11 +76,17 @@ func initFixtureRepo(t *testing.T, root string, releases []release) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	migrationFiles := map[int64]string{}
+	var names []string
 	for _, e := range entries {
-		if v, ok := migrations.ParseVersion(e.Name()); ok && strings.HasSuffix(e.Name(), ".sql") {
-			migrationFiles[v] = e.Name()
-		}
+		names = append(names, e.Name())
+	}
+	tree, err := migrations.ParseRegistry(names)
+	if err != nil {
+		t.Fatal(err)
+	}
+	migrationFiles := map[int64]string{}
+	for _, m := range tree.Migrations() {
+		migrationFiles[m.Version] = m.Name
 	}
 	git := func(args ...string) {
 		t.Helper()

@@ -297,18 +297,17 @@ func TestDowngradeHappyPathSteppedAndCommitted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dolt log = %v", err)
 	}
-	entries, err := migrations.FS.ReadDir(".")
+	registry, err := migrations.Embedded()
 	if err != nil {
-		t.Fatalf("read migration registry: %v", err)
+		t.Fatal(err)
 	}
 	reverted := 0
-	for _, e := range entries {
-		v, ok := migrations.ParseVersion(e.Name())
-		if !ok || v <= target {
+	for _, m := range registry.Migrations() {
+		if m.Version <= target {
 			continue
 		}
 		reverted++
-		want := fmt.Sprintf("downgrade: revert v%d %s", v, e.Name())
+		want := fmt.Sprintf("downgrade: revert v%d %s", m.Version, m.Name)
 		if !strings.Contains(log, want) {
 			t.Fatalf("dolt log missing per-step commit %q:\n%s", want, log)
 		}

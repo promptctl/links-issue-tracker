@@ -63,22 +63,22 @@ const (
 	kindRenamed                         // a pinned version's content matches but its filename changed
 	kindUnpinned                        // an on-disk non-baseline version has no pin
 	kindDeleted                         // a pinned version is gone from disk
-	kindDuplicate                       // two on-disk files claim the same version
 )
 
 // reuseFinding is one detected divergence. pinned carries the released identity
 // (set for kindContentChanged, kindRenamed, and kindDeleted); onDisk carries the
-// current file(s) at that version (one for kindContentChanged/kindRenamed/
-// kindUnpinned, two-or-more for kindDuplicate, none for kindDeleted).
+// current file at that version (set for kindContentChanged, kindRenamed, and
+// kindUnpinned).
 type reuseFinding struct {
 	kind    reuseKind
 	version int64
 	pinned  pinnedMigration
-	onDisk  []migrationFile
+	onDisk  migrationFile
 }
 
 // detectVersionReuse reports every way onDisk diverges from the pinned identities.
-// It is pure — no filesystem, no globals — so its accept/reject behavior is pinned
+// onDisk holds one file per version: ParseRegistry refuses a version claimed
+// twice. It is pure — no filesystem, no globals — so its accept/reject behavior is pinned
 // against synthetic fixtures in TestDetectVersionReuse.
 //
 // [LAW:effects-at-boundaries] the FS read and the hashing live in the test edge;
@@ -86,36 +86,29 @@ type reuseFinding struct {
 // [LAW:dataflow-not-control-flow] a clean registry flows through the same
 // enumeration as a broken one and simply yields an empty finding set.
 func detectVersionReuse(pinned map[int64]pinnedMigration, onDisk []migrationFile) []reuseFinding {
-	byVersion := map[int64][]migrationFile{}
+	byVersion := map[int64]migrationFile{}
 	for _, f := range onDisk {
-		byVersion[f.version] = append(byVersion[f.version], f)
+		byVersion[f.version] = f
 	}
 
 	var findings []reuseFinding
-	for version, files := range byVersion {
-		if len(files) > 1 {
-			// Two files sharing a version number is a reuse-in-tree; it is the
-			// overriding fault, so we don't also content-check the pair.
-			findings = append(findings, reuseFinding{kind: kindDuplicate, version: version, onDisk: files})
-			continue
-		}
-		f := files[0]
+	for version, f := range byVersion {
 		pin, ok := pinned[version]
 		if !ok {
-			findings = append(findings, reuseFinding{kind: kindUnpinned, version: version, onDisk: files})
+			findings = append(findings, reuseFinding{kind: kindUnpinned, version: version, onDisk: f})
 			continue
 		}
 		if f.sha256 != pin.sha256 {
 			// Content drift is the dangerous, workspace-bricking case; it takes
 			// priority over a filename difference on the same version.
-			findings = append(findings, reuseFinding{kind: kindContentChanged, version: version, pinned: pin, onDisk: files})
+			findings = append(findings, reuseFinding{kind: kindContentChanged, version: version, pinned: pin, onDisk: f})
 			continue
 		}
 		if f.name != pin.file {
 			// [LAW:one-source-of-truth] the pinned filename is authoritative, not a
 			// decorative copy: enforcing it keeps pin.file from silently drifting
 			// from the on-disk name (which explain() reports).
-			findings = append(findings, reuseFinding{kind: kindRenamed, version: version, pinned: pin, onDisk: files})
+			findings = append(findings, reuseFinding{kind: kindRenamed, version: version, pinned: pin, onDisk: f})
 		}
 	}
 	for version, pin := range pinned {
@@ -139,7 +132,7 @@ func detectVersionReuse(pinned map[int64]pinnedMigration, onDisk []migrationFile
 func (f reuseFinding) explain() string {
 	switch f.kind {
 	case kindContentChanged:
-		got := f.onDisk[0]
+		got := f.onDisk
 		return fmt.Sprintf(`version %d has been REUSED under different content.
   released as: %s (sha256 %s)
   now on disk: %s (sha256 %s)
@@ -155,7 +148,7 @@ shipped, and add your change as the next free version number (a new NNNNN_*.sql)
 pinned here in the same PR.`,
 			f.version, f.pinned.file, f.pinned.sha256, got.name, got.sha256, f.version, f.version)
 	case kindRenamed:
-		got := f.onDisk[0]
+		got := f.onDisk
 		return fmt.Sprintf(`version %d kept its content but was RENAMED: %s -> %s.
 
 A released migration's filename is part of its frozen identity; renaming it obscures
@@ -164,7 +157,7 @@ name %s. If the rename is deliberate, update this version's %q field in
 pinnedVersionContent in the same PR.`,
 			f.version, f.pinned.file, got.name, f.pinned.file, "file")
 	case kindUnpinned:
-		got := f.onDisk[0]
+		got := f.onDisk
 		return fmt.Sprintf(`version %d (%s) is not pinned in pinnedVersionContent.
 
 Every released, non-baseline migration must be pinned so this gate can refuse a later
@@ -180,18 +173,6 @@ freeing that number invites a future file to reuse it under different content. R
 the file. Retiring a version number is a schema decision that must not happen via a
 silent deletion — raise it explicitly.`,
 			f.version, f.pinned.file, f.pinned.sha256)
-	case kindDuplicate:
-		names := make([]string, len(f.onDisk))
-		for i, m := range f.onDisk {
-			names[i] = m.name
-		}
-		sort.Strings(names)
-		return fmt.Sprintf(`version %d is claimed by %d files: %s.
-
-Two files with the same leading version number are the same reuse collision by another
-route — goose applies only one and the other's content is silently lost. Renumber all
-but one to the next free version(s).`,
-			f.version, len(f.onDisk), strings.Join(names, ", "))
 	default:
 		return fmt.Sprintf("unhandled reuse finding kind %d for version %d — add a message in reuseFinding.explain", f.kind, f.version)
 	}
@@ -207,29 +188,22 @@ but one to the next free version(s).`,
 // stops the build with a message naming the collision, so the drift can never reach a
 // workspace unnoticed.
 func TestReleasedMigrationsAreContentPinned(t *testing.T) {
-	entries, err := FS.ReadDir(".")
+	registry, err := Embedded()
 	if err != nil {
-		t.Fatalf("read embedded registry: %v", err)
+		t.Fatal(err)
 	}
 	var onDisk []migrationFile
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
-			continue
-		}
-		v, ok := ParseVersion(e.Name())
-		if !ok {
-			t.Fatalf("registry file %q does not begin with a numeric version", e.Name())
-		}
-		if v == Baseline {
+	for _, m := range registry.Migrations() {
+		if m.Version == Baseline {
 			// [LAW:single-enforcer] v1's content is pinned by baseline_frozen_test.go.
 			continue
 		}
-		data, err := FS.ReadFile(e.Name())
+		data, err := FS.ReadFile(m.Name)
 		if err != nil {
-			t.Fatalf("read %q: %v", e.Name(), err)
+			t.Fatalf("read %q: %v", m.Name, err)
 		}
 		sum := sha256.Sum256(data)
-		onDisk = append(onDisk, migrationFile{version: v, name: e.Name(), sha256: hex.EncodeToString(sum[:])})
+		onDisk = append(onDisk, migrationFile{version: m.Version, name: m.Name, sha256: hex.EncodeToString(sum[:])})
 	}
 	for _, finding := range detectVersionReuse(pinnedVersionContent, onDisk) {
 		t.Errorf("%s", finding.explain())
@@ -308,12 +282,6 @@ func TestDetectVersionReuse(t *testing.T) {
 			want:   []reuseFinding{{kind: kindDeleted, version: 4}},
 		},
 		{
-			name:   "duplicate — two files claim v2",
-			pinned: base,
-			onDisk: []migrationFile{file(2, "00002_add_lane.sql", "aaa"), file(2, "00002_add_lane_again.sql", "zzz"), file(3, "00003_add_resolution.sql", "bbb"), file(4, "00004_add_redirect_target.sql", "ccc")},
-			want:   []reuseFinding{{kind: kindDuplicate, version: 2}},
-		},
-		{
 			name:   "combined — a reuse and a deletion reported together, version-ordered",
 			pinned: base,
 			onDisk: []migrationFile{file(2, "00002_add_lane.sql", "DIFFERENT"), file(3, "00003_add_resolution.sql", "bbb")},
@@ -345,13 +313,10 @@ func TestDetectVersionReuse(t *testing.T) {
 // a reviewer can't act on; this keeps that unrepresentable.
 func TestEveryReuseKindHasMessage(t *testing.T) {
 	pin := pinnedMigration{file: "00007_x.sql", sha256: "cafef00d"}
-	one := []migrationFile{{version: 7, name: "00007_x.sql", sha256: "deadbeef"}}
-	two := []migrationFile{{version: 7, name: "00007_x.sql", sha256: "deadbeef"}, {version: 7, name: "00007_y.sql", sha256: "beefcafe"}}
+	one := migrationFile{version: 7, name: "00007_x.sql", sha256: "deadbeef"}
 
-	// Each fixture mirrors exactly what detectVersionReuse produces for that kind —
-	// so explain() is exercised against the real onDisk/pinned shapes, and a future
-	// explain() that over-indexes (onDisk[0] on a deleted finding, onDisk[1] on a
-	// single-file finding) panics HERE instead of only in production.
+	// Each fixture mirrors exactly what detectVersionReuse produces for that kind,
+	// so explain() is exercised against the real onDisk/pinned shapes.
 	cases := []struct {
 		kind    reuseKind
 		finding reuseFinding
@@ -360,7 +325,6 @@ func TestEveryReuseKindHasMessage(t *testing.T) {
 		{kindRenamed, reuseFinding{kind: kindRenamed, version: 7, pinned: pin, onDisk: one}},
 		{kindUnpinned, reuseFinding{kind: kindUnpinned, version: 7, onDisk: one}},
 		{kindDeleted, reuseFinding{kind: kindDeleted, version: 7, pinned: pin}},
-		{kindDuplicate, reuseFinding{kind: kindDuplicate, version: 7, onDisk: two}},
 	}
 	for _, tc := range cases {
 		msg := tc.finding.explain()

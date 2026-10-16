@@ -1,7 +1,6 @@
 package store
 
 import (
-	"io/fs"
 	"regexp"
 	"sort"
 
@@ -329,26 +328,23 @@ var migrationDroppedCols = scanMigrationDrops()
 
 func scanMigrationDrops() map[ColumnRef]string {
 	out := map[ColumnRef]string{}
-	entries, err := fs.ReadDir(migrations.FS, ".")
+	registry, err := migrations.Embedded()
 	if err != nil {
 		// The corpus is embedded at build time; a read failure here is an
 		// impossible state, not a runtime condition to recover from.
-		panic("scan migration drops: read embedded registry: " + err.Error())
+		panic("scan migration drops: " + err.Error())
 	}
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		data, err := migrations.FS.ReadFile(entry.Name())
+	for _, m := range registry.Migrations() {
+		data, err := migrations.FS.ReadFile(m.Name)
 		if err != nil {
-			panic("scan migration drops: read " + entry.Name() + ": " + err.Error())
+			panic("scan migration drops: read " + m.Name + ": " + err.Error())
 		}
 		// [LAW:one-source-of-truth] Only the forward (Up) section records intended
 		// drops. A goose Down section is the inverse of Up — it DROPs the columns Up
 		// ADDs — so scanning it would misclassify a kept column as an intended drop
 		// and could justify discarding live data.
 		for _, ref := range parseDroppedColumns(gooseUpSection(string(data))) {
-			out[ref] = entry.Name()
+			out[ref] = m.Name
 		}
 	}
 	return out
