@@ -820,10 +820,19 @@ where they are written: `ParseIssueType` / `ParsePriority` /
 `Refusal` (`validation.go`) is the interface the CLI actually matches: `error`
 plus a marker method `RefusesCommand()`. `ValidationError` implements it, and so
 does any refusal type that carries its own fields and declares the method beside
-itself: `store.DowngradeTargetAheadError` and `store.DowngradeBelowBaselineError`
-(`downgrade.go`), `cli.UpgradeTargetBehindError` (`upgrade.go`), and
+itself: `store.DowngradeTargetAheadError`, `store.DowngradeBelowBaselineError`
+and `store.DowngradeSpanUnsupportedError` (`downgrade.go`), `cli.UpgradeTargetBehindError` (`upgrade.go`), and
 `model.FrozenIssueError` (`model.go`), each with a compile-time
 `var _ model.Refusal` assertion.
+
+`RecordedError` (`validation.go`) is `error` plus `EventRecord() (facts
+map[string]any, counts map[string]int)`: the facts and counts a failed command's
+event carries for that error. The CLI's `errorRecord` (`invocation_event.go`)
+reads the first error in the chain implementing it, and records nothing for an
+error that does not. Implementers: `store.UnsupportedSchemaVersionError`
+(`migration_runner.go`, the `schema_ahead.*` keys) and
+`store.DowngradeSpanUnsupportedError` (`downgrade.go`, the `downgrade.*` keys),
+each with a compile-time `var _ model.RecordedError` assertion.
 
 ---
 

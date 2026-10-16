@@ -31,6 +31,16 @@ type Refusal interface {
 	RefusesCommand()
 }
 
+// RecordedError is every error that carries what it decided and counted onto
+// the failed command's event, as facts and counts under keys its type names.
+// The record is declared beside the type, like its message, so the one sink
+// that writes events reads it through this interface rather than through an
+// arm per error type. [LAW:single-enforcer] [LAW:nothing-unseen]
+type RecordedError interface {
+	error
+	EventRecord() (facts map[string]any, counts map[string]int)
+}
+
 // StateRequestError answers a command that asked for a state: Satisfied when
 // the state already holds, so the command ran correctly and had nothing to do,
 // and a refusal of the command as issued otherwise. The CLI maps the first to

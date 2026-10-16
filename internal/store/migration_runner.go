@@ -13,6 +13,7 @@ import (
 	"github.com/pressly/goose/v3"
 	"github.com/pressly/goose/v3/database"
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
 	"github.com/promptctl/links-issue-tracker/internal/version"
@@ -185,6 +186,24 @@ func (e *UnsupportedSchemaVersionError) Error() string {
 	}
 	return b.String()
 }
+
+// EventRecord is which snapshot the refusal offered as the lossy rollback —
+// "" when none — why snapshots could not be read, and how many it read.
+func (e *UnsupportedSchemaVersionError) EventRecord() (map[string]any, map[string]int) {
+	var lookupErr any
+	if e.SnapshotLookupErr != nil {
+		lookupErr = e.SnapshotLookupErr.Error()
+	}
+	return map[string]any{
+			"schema_ahead.rollback_snapshot":     e.SnapshotName,
+			"schema_ahead.rollback_lookup_error": lookupErr,
+		}, map[string]int{
+			"schema_ahead.snapshots_examined":   e.SnapshotsExamined,
+			"schema_ahead.snapshots_unreadable": e.SnapshotsUnreadable,
+		}
+}
+
+var _ model.RecordedError = (*UnsupportedSchemaVersionError)(nil)
 
 // VersionContentMismatchError is returned by verifyAppliedVersionsMatchRegistry
 // when it finds a goose-applied migration version whose CURRENT registry

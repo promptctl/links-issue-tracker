@@ -145,7 +145,21 @@ func (e *DowngradeSpanUnsupportedError) Error() string {
 // [LAW:single-enforcer]
 func (*DowngradeSpanUnsupportedError) RefusesCommand() {}
 
-var _ model.Refusal = (*DowngradeSpanUnsupportedError)(nil)
+// EventRecord is the span the refusal was asked to reverse and the support
+// that does not cover it.
+func (e *DowngradeSpanUnsupportedError) EventRecord() (map[string]any, map[string]int) {
+	return map[string]any{
+		"downgrade.workspace_schema":   e.Current,
+		"downgrade.target_schema":      e.Target,
+		"downgrade.schema_support_min": e.Support.Min,
+		"downgrade.schema_support_max": e.Support.Max,
+	}, nil
+}
+
+var (
+	_ model.Refusal       = (*DowngradeSpanUnsupportedError)(nil)
+	_ model.RecordedError = (*DowngradeSpanUnsupportedError)(nil)
+)
 
 // DowngradeRollbackError wraps a downgrade failure that occurred after the
 // recovery snapshot was taken. Parallel in shape and intent to

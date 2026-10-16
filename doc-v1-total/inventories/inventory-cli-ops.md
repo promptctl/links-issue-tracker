@@ -1092,6 +1092,7 @@ All eight are also the payload of `lit quickstart --eject`, written to `<config.
 | Pending migration quarantined after a failed attempt | any command that opens the store with that migration pending | `*store.QuarantineBlockError`, exit 3, reason `migration_quarantined` | `migration_runner.go`, `exit.go` |
 | Backward-move upgrade target | `upgrade` | `*UpgradeTargetBehindError`, exit 3, nothing installed | `upgrade.go` |
 | Forward-move or below-baseline downgrade target | `downgrade` | `*store.DowngradeTargetAheadError` / `*store.DowngradeBelowBaselineError`, exit 3, before any snapshot | `downgrade.go` |
+| Workspace schema past this binary's schema support | `downgrade` | `*store.DowngradeSpanUnsupportedError`, exit 3, before any snapshot; the event records `downgrade.workspace_schema`, `downgrade.target_schema`, `downgrade.schema_support_min`, `downgrade.schema_support_max` | `downgrade.go` |
 | Empty/invalid `--to` | `upgrade`, `downgrade` | `ValidationError`, exit 3 | `downgrade.go` |
 | Unknown `--fix` name | `doctor` | `unknown fix %q; available: integrity, rank`, exit 1 | `doctor.go` |
 | Unknown quickstart topic | `quickstart` | `UsageError`, exit 2 | `cli.go` |
