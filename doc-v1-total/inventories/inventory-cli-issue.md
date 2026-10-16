@@ -110,8 +110,9 @@ into* one of those, the call and its observable effect are recorded here.
   matches no row, it returns `errors.New(f.usage)` — a plain error, **not** a
   `UsageError`, so the exit code is `ExitGeneric` (1), not 2. Matching is exact
   string equality; no trimming.
-- `visibleSubcommands()` drops `hidden` rows for the completion projection
-  (`register.go`).
+- `subcommandSpecs()` projects every row with `Hidden` and `Retired` stated;
+  a retired row is `Hidden` (`register.go`). `visibleSubcommands(subs)` drops
+  `Hidden` rows at every depth for the completion projection (`completion.go`).
 - `nestUnder(subs, name, children)` panics if `name` is absent
   (`register.go`).
 
@@ -1985,7 +1986,7 @@ updated <n> issues
 
 - Registration `register.go`. Group `guidance`. Summary: "Generate shell
   completion script". Its own advertised subcommands come from
-  `completionFamily.visibleSubcommands()`.
+  `completionFamily.subcommandSpecs()`.
 - `completionFamily` — usage `"usage: lit completion <bash|zsh|fish>"`, rows
   `bash`, `zsh`, `fish` (`cli.go`).
 - `runCompletion(ctx, stdout, args)` (`cli.go`): a missing or unknown shell →
