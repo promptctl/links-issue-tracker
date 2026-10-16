@@ -348,34 +348,50 @@ func TestReleaseTagParsesExactlyTheReleaseTags(t *testing.T) {
 func TestReleaseKindCutsExactlyTheReleaseTags(t *testing.T) {
 	t.Parallel()
 	for _, tag := range releaseTagSamples {
-		root := t.TempDir()
-		origin := filepath.Join(root, "origin.git")
-		checkout := filepath.Join(root, "checkout")
-		for _, args := range [][]string{{"init", "-q", "--bare", origin}, {"init", "-q", checkout}, {"-C", checkout, "remote", "add", "origin", origin}} {
-			if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
-				t.Fatalf("git %v: %v\n%s", args, err, out)
-			}
-		}
-		if err := os.MkdirAll(filepath.Join(checkout, "scripts"), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		for _, name := range []string{"release-kind.sh", "release-tags.sh"} {
-			writeFile(t, filepath.Join(checkout, "scripts", name), readFile(t, name), 0o755)
-		}
 		version := strings.TrimPrefix(tag, "v")
-		writeFile(t, filepath.Join(checkout, "CHANGELOG.md"), "# Changelog\n\n## [Unreleased]\n\n## ["+version+"] - 2026-10-16\n", 0o644)
-		kind := exec.Command("bash", "scripts/release-kind.sh")
-		kind.Dir = checkout
-		out, err := kind.CombinedOutput()
-		pending := err == nil && string(out) == "pending "+version+"\n"
-		malformed := err != nil && strings.Contains(string(out), "release heading is malformed")
-		if !pending && !malformed {
-			t.Fatalf("release-kind.sh on [%s] neither reported it pending nor refused it as malformed (err %v):\n%s", version, err, out)
-		}
+		pending := releaseKindCuts(t, "## ["+version+"] - 2026-10-16", version)
 		if selects := releaseTagsSelects(t, tag); pending != selects {
 			t.Errorf("heading [%s]: release-kind.sh cuts it = %v, newest_release_tag accepts v%s = %v", version, pending, version, selects)
 		}
 	}
+	// The heading around the version is held too: a date is optional, and
+	// anything else after the bracket is malformed.
+	for heading, want := range map[string]bool{"## [0.5.0]": true, "## [0.5.0]junk": false, "## [0.5.0] 2026-10-16": false} {
+		if got := releaseKindCuts(t, heading, "0.5.0"); got != want {
+			t.Errorf("heading %q: release-kind.sh cuts it = %v; want %v", heading, got, want)
+		}
+	}
+}
+
+// releaseKindCuts runs release-kind.sh on a CHANGELOG whose newest release
+// heading is heading, against an origin with no tags, and reports whether it
+// calls version a pending release; it fails the test unless the verdict is
+// that or a malformed-heading refusal.
+func releaseKindCuts(t *testing.T, heading, version string) bool {
+	t.Helper()
+	root := t.TempDir()
+	origin := filepath.Join(root, "origin.git")
+	checkout := filepath.Join(root, "checkout")
+	for _, args := range [][]string{{"init", "-q", "--bare", origin}, {"init", "-q", checkout}, {"-C", checkout, "remote", "add", "origin", origin}} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(checkout, "scripts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"release-kind.sh", "release-tags.sh"} {
+		writeFile(t, filepath.Join(checkout, "scripts", name), readFile(t, name), 0o755)
+	}
+	writeFile(t, filepath.Join(checkout, "CHANGELOG.md"), "# Changelog\n\n## [Unreleased]\n\n"+heading+"\n", 0o644)
+	kind := exec.Command("bash", "scripts/release-kind.sh")
+	kind.Dir = checkout
+	out, err := kind.CombinedOutput()
+	pending := err == nil && string(out) == "pending "+version+"\n"
+	if malformed := err != nil && strings.Contains(string(out), "release heading is malformed"); !pending && !malformed {
+		t.Fatalf("release-kind.sh on %q neither reported %s pending nor refused the heading as malformed (err %v):\n%s", heading, version, err, out)
+	}
+	return pending
 }
 
 // TestReleaseModeAcceptsExactlyTheReleaseTags holds install.sh's release-mode

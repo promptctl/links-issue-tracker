@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"maps"
 	"reflect"
 	"strings"
@@ -422,6 +423,11 @@ func TestNormalizeReleaseTag(t *testing.T) {
 				// error framing surfaces here rather than silently.
 				if err != nil && !strings.HasPrefix(err.Error(), verb+":") {
 					t.Errorf("normalizeReleaseTag(%q, %q) err = %q; want %q-prefixed", c.in, verb, err, verb)
+				}
+				// A refused tag is quoted as the user gave it, not as normalized,
+				// so the message names input the user can find in their command.
+				if c.wantErr == "is not a release tag" && err != nil && !strings.Contains(err.Error(), fmt.Sprintf("--to %q", c.in)) {
+					t.Errorf("normalizeReleaseTag(%q, %q) err = %q; want it to quote the input as given", c.in, verb, err)
 				}
 				// Both flavors of bad --to input are the same failure class and
 				// must exit alike: model.ValidationError (exit 3), never a plain error
