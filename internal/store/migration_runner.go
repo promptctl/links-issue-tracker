@@ -1026,33 +1026,25 @@ type migrationColumnAdds struct {
 // number. That gap between "recorded applied" and "current registered
 // content" is exactly what verifyAppliedVersionsMatchRegistry checks for.
 func registryColumnAddsThroughVersion(maxVersion int64) ([]migrationColumnAdds, error) {
-	entries, err := migrations.FS.ReadDir(".")
+	registry, err := migrations.Embedded()
 	if err != nil {
-		return nil, fmt.Errorf("read migration registry: %w", err)
+		return nil, err
 	}
 	var out []migrationColumnAdds
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
+	for _, m := range registry.Migrations() {
+		if m.Version <= baselineVersion || m.Version > maxVersion {
 			continue
 		}
-		v, ok := migrations.ParseVersion(entry.Name())
-		if !ok {
-			return nil, fmt.Errorf("migration file %q does not begin with a numeric version", entry.Name())
-		}
-		if v <= baselineVersion || v > maxVersion {
-			continue
-		}
-		data, err := migrations.FS.ReadFile(entry.Name())
+		data, err := migrations.FS.ReadFile(m.Name)
 		if err != nil {
-			return nil, fmt.Errorf("read migration %q: %w", entry.Name(), err)
+			return nil, fmt.Errorf("read migration %q: %w", m.Name, err)
 		}
-		adds, err := parseAddColumnTargets(entry.Name(), gooseUpSection(string(data)))
+		adds, err := parseAddColumnTargets(m.Name, gooseUpSection(string(data)))
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, migrationColumnAdds{version: v, name: entry.Name(), adds: adds})
+		out = append(out, migrationColumnAdds{version: m.Version, name: m.Name, adds: adds})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].version < out[j].version })
 	return out, nil
 }
 

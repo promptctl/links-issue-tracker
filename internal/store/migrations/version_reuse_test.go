@@ -207,29 +207,22 @@ but one to the next free version(s).`,
 // stops the build with a message naming the collision, so the drift can never reach a
 // workspace unnoticed.
 func TestReleasedMigrationsAreContentPinned(t *testing.T) {
-	entries, err := FS.ReadDir(".")
+	registry, err := Embedded()
 	if err != nil {
-		t.Fatalf("read embedded registry: %v", err)
+		t.Fatal(err)
 	}
 	var onDisk []migrationFile
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
-			continue
-		}
-		v, ok := ParseVersion(e.Name())
-		if !ok {
-			t.Fatalf("registry file %q does not begin with a numeric version", e.Name())
-		}
-		if v == Baseline {
+	for _, m := range registry.Migrations() {
+		if m.Version == Baseline {
 			// [LAW:single-enforcer] v1's content is pinned by baseline_frozen_test.go.
 			continue
 		}
-		data, err := FS.ReadFile(e.Name())
+		data, err := FS.ReadFile(m.Name)
 		if err != nil {
-			t.Fatalf("read %q: %v", e.Name(), err)
+			t.Fatalf("read %q: %v", m.Name, err)
 		}
 		sum := sha256.Sum256(data)
-		onDisk = append(onDisk, migrationFile{version: v, name: e.Name(), sha256: hex.EncodeToString(sum[:])})
+		onDisk = append(onDisk, migrationFile{version: m.Version, name: m.Name, sha256: hex.EncodeToString(sum[:])})
 	}
 	for _, finding := range detectVersionReuse(pinnedVersionContent, onDisk) {
 		t.Errorf("%s", finding.explain())

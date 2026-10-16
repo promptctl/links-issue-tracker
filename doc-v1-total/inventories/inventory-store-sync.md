@@ -868,12 +868,10 @@ Tests: `TestParseAddColumnTargetsRecognizesPlainForm` (`migration_runner_test.go
 `migrationColumnAdds{version int64; name string; adds []tableColumnTarget}` (`migration_runner.go`).
 
 `registryColumnAddsThroughVersion(maxVersion)` (`migration_runner.go`):
-1. `migrations.FS.ReadDir(".")`; error → `"read migration registry: %w"`.
-2. Skip directories and non-`.sql` entries.
-3. `migrations.ParseVersion(entry.Name())`; `!ok` → error `"migration file %q does not begin with a numeric version"`.
-4. **Skip `v <= baselineVersion` and `v > maxVersion`** (`migration_runner.go`).
-5. Read the file, `parseAddColumnTargets(name, gooseUpSection(string(data)))`.
-6. Sort ascending by version (`migration_runner.go`).
+1. `migrations.Embedded()`; its error is returned as is.
+2. Walk the registry's migrations, already in ascending version order (`bounds.go`).
+3. **Skip `v <= baselineVersion` and `v > maxVersion`** (`migration_runner.go`).
+4. Read the file, `parseAddColumnTargets(name, gooseUpSection(string(data)))`.
 
 `missingVersionContent(ctx, appliedVersion)` (`migration_runner.go`): for each registered target, look up (and cache per table) `s.tableColumns(target.table)`; a target whose column is absent becomes a `missingContentTarget{version, name, table, column, stmt}` (`migration_runner.go`). Returned in ascending version order with each version's targets contiguous.
 
@@ -1305,7 +1303,7 @@ Base: `/Users/bmf/code/links-issue-tracker/internal/store/migrations/`.
 - `-- +goose Down` begins the down section (`00001_baseline.sql`, `00002_add_lane.sql`, `00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00005_add_event_attribution.sql`, `00006_add_follows_up.sql`, `00007_every_ticket_inside_a_container.sql`, `00008_blocked_by_edge.sql`, `00009_purges.sql`).
 - `-- +goose StatementBegin` / `-- +goose StatementEnd` wrap each individual statement (e.g. `00001_baseline.sql`, `00005_add_event_attribution.sql`). **Every executable statement in every file, in both sections, is inside exactly one such pair** — there are no bare statements (`00001_baseline.sql`, `00002_add_lane.sql`, `00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00005_add_event_attribution.sql`, `00006_add_follows_up.sql`, `00007_every_ticket_inside_a_container.sql`, `00008_blocked_by_edge.sql`, `00009_purges.sql`).
 
-**Naming/numbering.** `<NNNNN>_<name>.sql`, 5-digit zero-padded, `00001_baseline.sql` … `00009_purges.sql`; the accept-shape is enforced by `bounds.go`. `embed.go` states subsequent migrations append with strictly ascending versions and that only SQL migrations are wired — the embed (`//go:embed *.sql`) and `MaxVersion` (`bounds.go`) both read only `*.sql` entries.
+**Naming/numbering.** `<NNNNN>_<name>.sql`, 5-digit zero-padded, `00001_baseline.sql` … `00009_purges.sql`; the accept-shape is enforced by `bounds.go`. `embed.go` states subsequent migrations append with strictly ascending versions and that only SQL migrations are wired — the embed (`//go:embed *.sql`) and `ParseRegistry` (`bounds.go`) both read only `*.sql` entries.
 
 **Idempotency, per statement.**
 - **Up sections: no DDL is guarded.** Every `CREATE TABLE` is bare, no `IF NOT EXISTS` (`00001_baseline.sql`, `00009_purges.sql`), and so is the one `CREATE TEMPORARY TABLE` (`00006_add_follows_up.sql`). Every `CREATE INDEX` is bare (`00001_baseline.sql`). Every `ALTER TABLE ... ADD COLUMN` is bare (`00002_add_lane.sql`, `00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00005_add_event_attribution.sql`, `00006_add_follows_up.sql`). Every `ADD CONSTRAINT` is bare (`00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00008_blocked_by_edge.sql`). Two migrations guard data instead: `00006_add_follows_up.sql` moves no child onto an edge it already holds, and `00007_every_ticket_inside_a_container.sql` mints the unfiled epic only when no row holds its id and writes no edge a child already holds.
@@ -1524,9 +1522,15 @@ Package `migrations` (`embed.go`), imports `"embed"`. Embed directive `//go:embe
 5. `(version, true)`.
 The doc justifies the exactness against `fmt.Sscanf("%d")`, which would accept leading whitespace, signs, or `"00001a"`.
 
-`MaxVersion() (int64, error)` (`bounds.go`): `FS.ReadDir(".")`; error wrapped `"read migration registry: %w"`. Skips `entry.IsDir()` and non-`.sql` names. A remaining name `ParseVersion` rejects is a **hard error**: `"migration file %q does not begin with a numeric version"`. Empty version list → `errors.New("migration registry is empty")`. Sorts ascending, returns the last. With the current registry: **9**.
+`Migration{Version int64; Name string}` and `Registry` (`bounds.go`): a `Registry` holds unexported `[]Migration`; `ParseRegistry` is its only constructor.
 
-`BaselineFileName() (string, error)` (`bounds.go`): same `ReadDir` and wrapped error, same dir/`.sql` skip; returns the first entry whose `ParseVersion` equals `Baseline` — currently `00001_baseline.sql`. Not found → `"no baseline migration (v%d) found in registry"`. **Unlike `MaxVersion`, a non-parseable `.sql` name is silently skipped here rather than erroring**.
+`ParseRegistry(names []string) (Registry, error)` (`bounds.go`): skips names without the `.sql` suffix. A remaining name `ParseVersion` rejects is a **hard error**: `"migration file %q does not begin with a numeric version"`. No `.sql` names → `errors.New("migration registry is empty")`. Stable-sorts ascending by version. `Registry.Migrations()` returns a copy of that list; `Registry.MaxVersion()` returns the last version.
+
+`Embedded() (Registry, error)` (`bounds.go`): `FS.ReadDir(".")` (error wrapped `"read migration registry: %w"`), then `ParseRegistry` over the entry names. The store's registry readers (`registryColumnAddsThroughVersion`, `scanMigrationDrops`) and `tools/schema-release-check` read the embedded registry through it.
+
+`MaxVersion() (int64, error)` (`bounds.go`): `Embedded()`, then `Registry.MaxVersion()`. With the current registry: **9**.
+
+`BaselineFileName() (string, error)` (`bounds.go`): `Embedded()`; returns the first migration whose version equals `Baseline` — currently `00001_baseline.sql`. Not found → `"no baseline migration (v%d) found in registry"`.
 
 Nothing in `bounds.go` enforces monotonicity or gap-freeness; version identity is enforced entirely by the tests below.
 
@@ -1546,7 +1550,7 @@ Nothing in `bounds.go` enforces monotonicity or gap-freeness; version identity i
 
 `earliest(a, b, c int) (int, string)`: smallest non-negative index among the three, tagged `"--"`, `"#"`, or `"/*"`; ties resolve to the first in the fixed order `{a,"--"}, {b,"#"}, {c,"/*"}` because the comparison is strict `<`. All negative → `(-1, "")`.
 
-`TestEveryMigrationHasDownSection`: `FS.ReadDir(".")`, error → Fatalf; skips dirs and non-`.sql`, counting the rest in `sqlFiles`; each must satisfy `hasDownSection`, failure being a `t.Errorf` stating the Down section must contain at least one non-empty non-comment SQL statement between `-- +goose Down` and EOF (or the next `-- +goose Up`), that loss-making migrations should reconstruct the schema with documented loss or document the loss contract, and that "The presence of the Down section itself is non-negotiable". `sqlFiles == 0` → `t.Fatal("no *.sql files found in embedded registry")`. **No count is pinned to a specific number.** The doc names the runtime sibling `TestEveryMigrationDownIsExercised` in `internal/store`, which proves the section actually runs.
+`TestEveryMigrationHasDownSection`: `Embedded()`, error → Fatal; each of its migrations must satisfy `hasDownSection`, failure being a `t.Errorf` stating the Down section must contain at least one non-empty non-comment SQL statement between `-- +goose Down` and EOF (or the next `-- +goose Up`), that loss-making migrations should reconstruct the schema with documented loss or document the loss contract, and that "The presence of the Down section itself is non-negotiable". **No count is pinned to a specific number.** The doc names the runtime sibling `TestEveryMigrationDownIsExercised` in `internal/store`, which proves the section actually runs.
 
 `TestHasDownSectionRejectsMissingShapes` — fifteen fixtures:
 
@@ -1598,7 +1602,7 @@ Version 1 is deliberately absent — `baseline_frozen_test.go` is its content en
 
 `(reuseFinding).explain()` — one message per kind, all naming the version. Key literal steering text: `kindContentChanged` — "version %d has been REUSED under different content." with `released as:` / `now on disk:` lines, "goose keys migrations by version NUMBER, not by content", and "DO NOT change this version's pin in pinnedVersionContent to match the new bytes". `kindRenamed` — "version %d kept its content but was RENAMED: %s -> %s.", instructing restore-the-name or update-the-pin's-`"file"`-field in the same PR. `kindUnpinned` — "version %d (%s) is not pinned in pinnedVersionContent." plus the exact line to add, `  %d: {file: %q, sha256: %q},`. `kindDeleted` — "version %d was released as %s (sha256 %s) but is now MISSING from the registry." / "A released migration must never be deleted". `kindDuplicate` — "version %d is claimed by %d files: %s." with names sorted, "Renumber all but one to the next free version(s).". `default` — `"unhandled reuse finding kind %d for version %d — add a message in reuseFinding.explain"`.
 
-`TestReleasedMigrationsAreContentPinned`: `FS.ReadDir(".")`, error → Fatalf; skips dirs and non-`.sql`; a `.sql` name `ParseVersion` rejects → `t.Fatalf("registry file %q does not begin with a numeric version", …)`; `v == Baseline` skipped entirely; each remaining file sha256'd into a `migrationFile`; every `detectVersionReuse` finding becomes a `t.Errorf(finding.explain())`.
+`TestReleasedMigrationsAreContentPinned`: `Embedded()`, error → Fatal; `v == Baseline` skipped entirely; each remaining file sha256'd into a `migrationFile`; every `detectVersionReuse` finding becomes a `t.Errorf(finding.explain())`.
 
 `TestDetectVersionReuse` — base pins `2:{"00002_add_lane.sql","aaa"}`, `3:{"00003_add_resolution.sql","bbb"}`, `4:{"00004_add_redirect_target.sql","ccc"}`; `clean` mirrors them. Nine cases, compared by **kind + version only**:
 
@@ -1639,7 +1643,7 @@ Length mismatch → `t.Fatalf`; per-index kind/version mismatch → `t.Errorf`.
 
 ok-mismatch → `t.Errorf("ParseVersion(%q) ok = %v, want %v")` then `continue`; value mismatch when ok → `t.Errorf("ParseVersion(%q) = %d, want %d")`.
 
-`TestMaxVersionReflectsEmbeddedRegistry`: calls `MaxVersion()`, error → Fatalf; independently rescans `FS.ReadDir(".")` skipping dirs and non-`.sql`, taking the max `ParseVersion` result, with an unparseable name → `t.Fatalf("registry contains non-parseable filename %q")`; asserts `max == expected` and `max >= Baseline`. Deliberately pins agreement with a fresh scan, **not** a hard-coded value — no literal `5` appears.
+`TestParseRegistryShape`: a 6-row table over `ParseRegistry` — names out of order come back ascending; `README.md` and `bounds.go` are not migrations; `00000_a.sql` is version 0; `notes.sql` is an error naming the file; no `.sql` names, or none at all, is `"registry is empty"`. Each accepted row also asserts `MaxVersion()` is the last version.
 
 `TestBaselineFileNameMatches`: `BaselineFileName()` must not error; its result must be accepted by `ParseVersion`; the parsed version must equal `Baseline`; `FS.ReadFile(name)` must succeed.
 
@@ -1651,7 +1655,7 @@ ok-mismatch → `t.Errorf("ParseVersion(%q) ok = %v, want %v")` then `continue`;
 | v2+ bytes never change; filename never changes; never deleted; never duplicated; always pinned | `TestReleasedMigrationsAreContentPinned` (`version_reuse_test.go`) via `detectVersionReuse` | eight pins at `version_reuse_test.go` |
 | every `.sql` has a non-empty non-comment Down section | `TestEveryMigrationHasDownSection` (`down_section_test.go`) | none pinned; registry must be non-empty |
 | filename → version parse shape | `TestParseVersionShape` (`bounds_test.go`) over `ParseVersion` (`bounds.go`) | 12-row table |
-| `MaxVersion()` equals a fresh FS scan and is ≥ `Baseline` | `TestMaxVersionReflectsEmbeddedRegistry` (`bounds_test.go`) | `Baseline = 1` (`bounds.go`) |
+| registry rule over file names: `.sql` only, every one versioned, at least one, ascending | `TestParseRegistryShape` (`bounds_test.go`) over `ParseRegistry` (`bounds.go`) | 6-row table |
 | `BaselineFileName()` round-trips to `Baseline` and is readable | `TestBaselineFileNameMatches` (`bounds_test.go`) | — |
 | `explain()` is exhaustive over `reuseKind` | `TestEveryReuseKindHasMessage` (`version_reuse_test.go`) | version `7`, shas `cafef00d`/`deadbeef`/`beefcafe` |
 

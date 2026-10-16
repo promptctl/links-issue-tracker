@@ -2072,7 +2072,7 @@ Because `simpleEmitter` reads `tf.canonical`, the effective transform per recogn
 
 #### 3.4 `migrationDroppedCols` — scanned from the embedded migration corpus
 
-`var migrationDroppedCols = scanMigrationDrops()` (shapemap_known.go). `scanMigrationDrops` reads every non-directory entry of `migrations.FS` (shapemap_known.go), takes `gooseUpSection(string(data))` of each file (shapemap_known.go), runs `parseDroppedColumns` on it, and maps each `ColumnRef` to the migration **file name** (shapemap_known.go).
+`var migrationDroppedCols = scanMigrationDrops()` (shapemap_known.go). `scanMigrationDrops` reads every migration of `migrations.Embedded()`, panicking on its error (shapemap_known.go), takes `gooseUpSection(string(data))` of each file (shapemap_known.go), runs `parseDroppedColumns` on it, and maps each `ColumnRef` to the migration **file name** (shapemap_known.go).
 
 Regexes (shapemap_known.go):
 - `alterTableRE = (?is)ALTER\s+TABLE\s+`?(\w+)`?([^;]*)` — group 1 = table, group 2 = statement body up to `;` or EOF.

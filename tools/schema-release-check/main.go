@@ -23,7 +23,6 @@ package main
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -75,17 +74,18 @@ func run(tag string, stdout, stderr io.Writer) int {
 }
 
 func compare(tag string, stderr io.Writer) outcome {
-	tree, err := migrations.MaxVersion()
+	embedded, err := migrations.Embedded()
 	if err != nil {
 		return outcome{tree: "unknown", tag: or(tag, "none"), schema: "unknown", exit: exitUnknown,
 			refusal: fmt.Sprintf("error: schema-release-check: %v\n", err)}
 	}
+	tree := embedded.MaxVersion()
 	if tag == "" {
 		return outcome{tree: fmt.Sprint(tree), tag: "none", schema: "none", exit: exitUnknown,
 			refusal: fmt.Sprintf("error: this checkout has no release tag (vX.Y.Z), so nothing shows its schema (%d) is released; lit was not installed.\n"+
 				"       In a git clone, fetch the release tags (git fetch origin --tags); or install a release: %s\n", tree, latestRelease)}
 	}
-	released, unreleased, err := releaseSchema(tag, stderr)
+	released, unreleased, err := releaseSchema(tag, embedded, stderr)
 	if err != nil {
 		return outcome{tree: fmt.Sprint(tree), tag: tag, schema: "unknown", exit: exitUnknown,
 			refusal: fmt.Sprintf("error: schema-release-check: %v\n", err)}
@@ -110,7 +110,7 @@ func or(s, empty string) string {
 
 // releaseSchema is the highest migration version in tag's registry, and the
 // migrations this tree embeds that tag's registry does not hold byte for byte.
-func releaseSchema(tag string, stderr io.Writer) (int64, []string, error) {
+func releaseSchema(tag string, embedded migrations.Registry, stderr io.Writer) (int64, []string, error) {
 	var out bytes.Buffer
 	cmd := exec.Command("git", "ls-tree", "-z", "refs/tags/"+tag, "--", registryInTree)
 	cmd.Stdout, cmd.Stderr = &out, stderr
@@ -121,15 +121,17 @@ func releaseSchema(tag string, stderr io.Writer) (int64, []string, error) {
 	if err != nil {
 		return 0, nil, fmt.Errorf("%s at %s: %w", registryInTree, tag, err)
 	}
-	v, err := maxSchema(slices.Collect(maps.Keys(release)))
+	// [LAW:one-source-of-truth] the release's registry is read by the rule the
+	// runner's is: migrations.ParseRegistry.
+	releaseRegistry, err := migrations.ParseRegistry(slices.Collect(maps.Keys(release)))
 	if err != nil {
 		return 0, nil, fmt.Errorf("%s at %s: %w", registryInTree, tag, err)
 	}
-	tree, err := treeRegistry(stderr)
+	tree, err := treeRegistry(embedded, stderr)
 	if err != nil {
 		return 0, nil, err
 	}
-	return v, unreleasedMigrations(tree, release), nil
+	return releaseRegistry.MaxVersion(), unreleasedMigrations(tree, release), nil
 }
 
 // blobIDs maps a migration file's name to its git blob id.
@@ -155,24 +157,20 @@ func parseLsTree(out string) (blobIDs, error) {
 
 // treeRegistry is the blob id of every migration this binary embeds, as git
 // hashes them. --no-filters hashes the embedded bytes as they are.
-func treeRegistry(stderr io.Writer) (blobIDs, error) {
-	entries, err := migrations.FS.ReadDir(".")
-	if err != nil {
-		return nil, fmt.Errorf("read the embedded migration registry: %w", err)
-	}
+func treeRegistry(embedded migrations.Registry, stderr io.Writer) (blobIDs, error) {
 	ids := blobIDs{}
-	for _, e := range entries {
-		content, err := migrations.FS.ReadFile(e.Name())
+	for _, m := range embedded.Migrations() {
+		content, err := migrations.FS.ReadFile(m.Name)
 		if err != nil {
-			return nil, fmt.Errorf("read embedded migration %s: %w", e.Name(), err)
+			return nil, fmt.Errorf("read embedded migration %s: %w", m.Name, err)
 		}
 		var out bytes.Buffer
 		cmd := exec.Command("git", "hash-object", "--no-filters", "--stdin")
 		cmd.Stdin, cmd.Stdout, cmd.Stderr = bytes.NewReader(content), &out, stderr
 		if err := cmd.Run(); err != nil {
-			return nil, fmt.Errorf("hash embedded migration %s: %w", e.Name(), err)
+			return nil, fmt.Errorf("hash embedded migration %s: %w", m.Name, err)
 		}
-		ids[e.Name()] = strings.TrimSpace(out.String())
+		ids[m.Name] = strings.TrimSpace(out.String())
 	}
 	return ids, nil
 }
@@ -189,26 +187,4 @@ func unreleasedMigrations(tree, release blobIDs) []string {
 	}
 	slices.Sort(unreleased)
 	return unreleased
-}
-
-// maxSchema applies migrations.MaxVersion's registry rule to file names: the
-// registry is the *.sql files, every one carries a version, and it is never
-// empty. [LAW:one-source-of-truth] migrations.ParseVersion reads each version;
-// TestMaxSchemaAgreesWithTheEmbeddedRegistry holds this rule to MaxVersion's.
-func maxSchema(names []string) (int64, error) {
-	var versions []int64
-	for _, name := range names {
-		if !strings.HasSuffix(name, ".sql") {
-			continue
-		}
-		v, ok := migrations.ParseVersion(name)
-		if !ok {
-			return 0, fmt.Errorf("migration file %q does not begin with a numeric version", name)
-		}
-		versions = append(versions, v)
-	}
-	if len(versions) == 0 {
-		return 0, errors.New("migration registry is empty")
-	}
-	return slices.Max(versions), nil
 }

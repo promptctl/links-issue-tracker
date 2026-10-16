@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"testing"
 
@@ -95,26 +95,14 @@ func TestEveryMigrationDownIsExercised(t *testing.T) {
 // runtime gate iterates — not a synthetic range — so a non-contiguous
 // registry is exercised correctly.
 func registryVersionsDescending() ([]int64, error) {
-	entries, err := migrations.FS.ReadDir(".")
+	registry, err := migrations.Embedded()
 	if err != nil {
 		return nil, err
 	}
 	var versions []int64
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
-			continue
-		}
-		v, ok := migrations.ParseVersion(e.Name())
-		if !ok {
-			// [LAW:one-source-of-truth] Match migrations.MaxVersion's
-			// strictness: a non-parseable *.sql in the registry is a
-			// registry-shape error, not a skip. Allowing it through here
-			// would let a misnamed file evade the runtime gate silently.
-			return nil, fmt.Errorf("migration file %q does not begin with a numeric version", e.Name())
-		}
-		versions = append(versions, v)
+	for _, m := range slices.Backward(registry.Migrations()) {
+		versions = append(versions, m.Version)
 	}
-	sort.Slice(versions, func(i, j int) bool { return versions[i] > versions[j] })
 	return versions, nil
 }
 
@@ -148,14 +136,11 @@ func assertBaselineTablesAbsent(t *testing.T, ctx context.Context, st *Store) {
 }
 
 func versionTestName(v int64) string {
-	entries, err := migrations.FS.ReadDir(".")
+	registry, err := migrations.Embedded()
 	if err == nil {
-		for _, e := range entries {
-			if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
-				continue
-			}
-			if pv, ok := migrations.ParseVersion(e.Name()); ok && pv == v {
-				return e.Name()
+		for _, m := range registry.Migrations() {
+			if m.Version == v {
+				return m.Name
 			}
 		}
 	}

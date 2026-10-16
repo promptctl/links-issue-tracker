@@ -150,19 +150,14 @@ func earliest(a, b, c int) (int, string) {
 // (TestEveryMigrationDownIsExercised, in internal/store) proves the section
 // is not merely present but also actually runs.
 func TestEveryMigrationHasDownSection(t *testing.T) {
-	entries, err := FS.ReadDir(".")
+	registry, err := Embedded()
 	if err != nil {
-		t.Fatalf("read embedded registry: %v", err)
+		t.Fatal(err)
 	}
-	var sqlFiles int
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
-			continue
-		}
-		sqlFiles++
-		data, err := FS.ReadFile(entry.Name())
+	for _, m := range registry.Migrations() {
+		data, err := FS.ReadFile(m.Name)
 		if err != nil {
-			t.Fatalf("read %q: %v", entry.Name(), err)
+			t.Fatalf("read %q: %v", m.Name, err)
 		}
 		if !hasDownSection(data) {
 			t.Errorf(`migration %q has no `+"`+goose Down`"+` section, or its Down body is empty / comment-only.
@@ -177,11 +172,8 @@ If this migration loses information (e.g. drops a column), the Down
 section should either reconstruct the schema with documented loss, or
 the migration's loss contract should be documented in
 internal/store/migrations/README.md. The presence of the Down section
-itself is non-negotiable.`, entry.Name())
+itself is non-negotiable.`, m.Name)
 		}
-	}
-	if sqlFiles == 0 {
-		t.Fatal("no *.sql files found in embedded registry")
 	}
 }
 
