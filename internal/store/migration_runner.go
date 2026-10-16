@@ -20,16 +20,6 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/version"
 )
 
-// producerBinaryVersionMetaKey names the meta row that records the lit
-// version which last successfully advanced this workspace's schema. This binary
-// only writes it: the readers are older lit binaries, whose workspace-ahead
-// refusal names the recorded version as an upgrade target. Keeping the row
-// current keeps that hint pointing at the build that actually wrote the schema.
-//
-// [LAW:one-source-of-truth] Producer version lives in this one meta row,
-// not derived from migration history heuristics.
-const producerBinaryVersionMetaKey = "producer_binary_version"
-
 const migrationCheckpointPrefix = "pre-migrate"
 const migrationCheckpointRetention = 5
 
@@ -561,23 +551,7 @@ func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard) error {
 			return fmt.Errorf("commit adoption stamp: %w", err)
 		}
 	}
-	if err := s.applyPendingMigrations(ctx); err != nil {
-		return err
-	}
-	// [LAW:one-source-of-truth] After every successful schema-advancing
-	// migrate, stamp this binary's version into meta. An older binary that
-	// later refuses this workspace reads it to name an upgrade target; this
-	// binary's own refusal does not read it.
-	// [LAW:dataflow-not-control-flow] Always called; the value decides
-	// whether anything is written (dev builds with no stamped Version skip).
-	wrote, err := s.recordProducerBinaryVersion(ctx)
-	if err != nil {
-		return err
-	}
-	if !wrote {
-		return nil
-	}
-	return s.commitWorkingSet(ctx, "migrate: record producer binary version")
+	return s.applyPendingMigrations(ctx)
 }
 
 // upByOne applies the single next pending migration via goose. It is the ONE
@@ -1431,25 +1405,4 @@ func sortedKeys(m map[string][]string) []string {
 	}
 	sort.Strings(keys)
 	return keys
-}
-
-// recordProducerBinaryVersion stamps this binary's version into meta as the
-// most recent producer of the workspace's schema. Called at the tail of a
-// successful migrate(); a dev build (Version == "") records no row so a stray
-// dev binary does not overwrite a real release stamp.
-//
-// [LAW:one-source-of-truth] One writer (this function), one row in meta — the
-// producer-version field has a single canonical representation.
-func (s *Store) recordProducerBinaryVersion(ctx context.Context) (wrote bool, err error) {
-	info, err := version.Get()
-	if err != nil {
-		return false, fmt.Errorf("read version info: %w", err)
-	}
-	if info.IsDev {
-		return false, nil
-	}
-	if err := s.setMeta(ctx, nil, producerBinaryVersionMetaKey, info.Version); err != nil {
-		return false, fmt.Errorf("record producer binary version: %w", err)
-	}
-	return true, nil
 }

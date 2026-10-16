@@ -11,7 +11,6 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
 	"github.com/promptctl/links-issue-tracker/internal/doltcli"
 	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
-	"github.com/promptctl/links-issue-tracker/internal/version"
 )
 
 // headVersion is the registry's max migration version — the version a freshly
@@ -437,41 +436,25 @@ func TestUnsupportedSchemaVersionMessageShape(t *testing.T) {
 }
 
 // TestRefusalSurfacesRecoveryDataFromWorkspace pins the runtime wiring of the
-// remediation hints: when a binary built from a known release version opens a
-// workspace, it stamps meta.producer_binary_version on a successful migrate;
-// when a later refusal fires, refuseIfBaselineMissing finds the migration-
-// recovery snapshot holding the workspace's data and surfaces it verbatim, while
-// the recorded producer build stays out of the message — the remedy names a
-// schema requirement, not a build. Without this end-to-end probe the unit test for
-// Error() rendering passes while the lookup layer that populates the fields
-// could regress silently.
+// remediation hints: when a refusal fires, refuseIfBaselineMissing finds the
+// migration-recovery snapshot holding the workspace's data and surfaces it
+// verbatim. Without this end-to-end probe the unit test for Error() rendering
+// passes while the lookup layer that populates the fields could regress
+// silently.
 func TestRefusalSurfacesRecoveryDataFromWorkspace(t *testing.T) {
-	// serial: no t.Parallel — rewrites the process-global version.Version.
-	const sentinel = "vSENTINEL-0.4.2"
-	prev := version.Version
-	version.Version = sentinel
-	t.Cleanup(func() { version.Version = prev })
-
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
 	// Fresh open: runs the baseline migration -> takes a recovery snapshot of
-	// the empty workspace AND writes meta.producer_binary_version = sentinel.
-	// A downgrade and the open after it leave a recovery snapshot holding data.
+	// the empty workspace. A downgrade and the open after it leave a recovery
+	// snapshot holding data.
 	withStore(t, ctx, doltRoot, func(st *Store) {
 		if _, err := st.Downgrade(ctx, 3); err != nil {
 			t.Fatalf("Downgrade(3) error = %v", err)
 		}
 	})
 	withStore(t, ctx, doltRoot, func(st *Store) {
-		got, err := st.getMeta(ctx, nil, producerBinaryVersionMetaKey)
-		if err != nil {
-			t.Fatalf("getMeta(%q) error = %v", producerBinaryVersionMetaKey, err)
-		}
-		if got != sentinel {
-			t.Errorf("meta.%s = %q, want %q (recordProducerBinaryVersion did not run on fresh migrate)",
-				producerBinaryVersionMetaKey, got, sentinel)
-		}
 		// Corrupt the baseline so the next Open's reconcile path classifies
 		// the workspace as genuinely incompatible.
 		mustExec(t, ctx, st, `ALTER TABLE issues DROP COLUMN title`)
@@ -494,11 +477,7 @@ func TestRefusalSurfacesRecoveryDataFromWorkspace(t *testing.T) {
 	if !IsMigrationSnapshotName(refusal.SnapshotName) {
 		t.Errorf("SnapshotName %q does not match the migration-stamped shape", refusal.SnapshotName)
 	}
-	msg := refusal.Error()
-	if strings.Contains(msg, sentinel) {
-		t.Errorf("Error() named the recorded producer build %q; the remedy must name a schema requirement: %q", sentinel, msg)
-	}
-	if !strings.Contains(msg, "lit snapshots restore "+refusal.SnapshotName) {
+	if msg := refusal.Error(); !strings.Contains(msg, "lit snapshots restore "+refusal.SnapshotName) {
 		t.Errorf("Error() did not surface the snapshot name verbatim: %q", msg)
 	}
 }
@@ -534,30 +513,6 @@ func TestRefusalReportsUnreadableSnapshots(t *testing.T) {
 	if msg := refusal.Error(); !strings.Contains(msg, "some snapshots could not be read") || strings.Contains(msg, "lossy rollback is not possible") {
 		t.Errorf("Error() did not report the failed lookup as one: %q", msg)
 	}
-}
-
-// TestProducerBinaryVersionUnstampedForDevBuild pins the dev-build guard: a
-// binary with no link-time Version (IsDev == true) must NOT write a producer
-// row, so a stray local build does not overwrite a real release stamp.
-func TestProducerBinaryVersionUnstampedForDevBuild(t *testing.T) {
-	// serial: no t.Parallel — rewrites the process-global version.Version.
-	prev := version.Version
-	version.Version = ""
-	t.Cleanup(func() { version.Version = prev })
-
-	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
-
-	withStore(t, ctx, doltRoot, func(st *Store) {
-		got, err := st.getMeta(ctx, nil, producerBinaryVersionMetaKey)
-		if err != nil {
-			t.Fatalf("getMeta error = %v", err)
-		}
-		if got != "" {
-			t.Errorf("meta.%s = %q on dev build; want empty (no stamp)",
-				producerBinaryVersionMetaKey, got)
-		}
-	})
 }
 
 // TestOpenAllowsWorkspaceExactlyAtMax pins the boundary on the allow side: a

@@ -15,12 +15,11 @@
 # these three strings, so they cannot drift apart.
 #
 # Deliberately does NOT set Version. internal/version.Version == "" is the
-# IsDev discriminator (internal/version/version.go) that
-# internal/store/migration_runner.go's producer-binary-version guard relies
-# on so an ordinary local dev build never overwrites a real release's
-# downgrade stamp — see TestProducerBinaryVersionUnstampedForDevBuild. Only
-# scripts/install.sh's own `git describe`-derived Version deliberately opts a
-# checkout out of that guard; `just build` must not.
+# IsDev discriminator (internal/version/version.go): `lit version` reports
+# such a binary as a dev build, and `lit upgrade` never calls it already
+# current — see TestOnlyTheJustfileOmitsVersion. Only scripts/install.sh's own
+# `git describe`-derived Version deliberately opts a checkout out of dev mode;
+# `just build` must not.
 
 # This file is meant to be sourced, not executed: it must export into the
 # caller's shell. Executing it would set vars in a child that immediately exits.

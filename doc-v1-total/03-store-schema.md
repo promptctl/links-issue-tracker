@@ -54,7 +54,7 @@ Both are zero-byte kernel flocks with **no** stale/PID/mtime heuristics — proc
 
 ### Producers and pinning
 
-Exactly four producers of live DDL exist: the goose baseline migration `00001_baseline.sql` (v1), goose migrations v2–v9 (`add_lane`, `add_resolution`, `add_redirect_target`, `add_event_attribution`, `add_follows_up`, `every_ticket_inside_a_container`, `blocked_by_edge`, `purges`), the pre-goose reconciler (`schema_reconcile.go`), and the quarantine-table bootstrap (`migration_runner.go`) — plus goose's own `goose_db_version` bookkeeping table. The baseline file is **byte-frozen** by a SHA-256 canary test (`e86c1aa3…ad1fbb`); no schema hash is stored in the database — the recorded version is the integer in `goose_db_version` plus a `producer_binary_version` string in `meta`. The converged schema is pinned as a byte-compared `SHOW CREATE TABLE` golden file (`schema_snapshot.sql`), regenerated only via a test flag; the dump enumerates live tables, so a leftover table is drift.
+Exactly four producers of live DDL exist: the goose baseline migration `00001_baseline.sql` (v1), goose migrations v2–v9 (`add_lane`, `add_resolution`, `add_redirect_target`, `add_event_attribution`, `add_follows_up`, `every_ticket_inside_a_container`, `blocked_by_edge`, `purges`), the pre-goose reconciler (`schema_reconcile.go`), and the quarantine-table bootstrap (`migration_runner.go`) — plus goose's own `goose_db_version` bookkeeping table. The baseline file is **byte-frozen** by a SHA-256 canary test (`e86c1aa3…ad1fbb`); no schema hash is stored in the database — the recorded version is the integer in `goose_db_version`. The converged schema is pinned as a byte-compared `SHOW CREATE TABLE` golden file (`schema_snapshot.sql`), regenerated only via a test flag; the dump enumerates live tables, so a leftover table is drift.
 
 All application tables are InnoDB, `utf8mb4_0900_bin`, no `AUTO_INCREMENT` anywhere except `goose_db_version.id`.
 
@@ -98,7 +98,7 @@ The other tables:
 
 Ordinary issue deletion is a soft `deleted_at` stamp; the one CRUD path that deletes an issue row is `Purge` (below), and the ON DELETE CASCADEs fire from it.
 
-`meta` keys used in production: `workspace_id`, `producer_binary_version`, `last_sync_path`, `last_sync_hash`. `GetSyncState`/`RecordSyncState` read/write the last two (`store.go`).
+`meta` keys used in production: `workspace_id`, `last_sync_path`, `last_sync_hash`. `GetSyncState`/`RecordSyncState` read/write the last two (`store.go`).
 
 A legacy `issue_history` table (columns `id, issue_id, action, reason, from_status, to_status, created_at, created_by`) no longer exists in any current schema; its presence on disk is the marker of a pre-goose workspace.
 

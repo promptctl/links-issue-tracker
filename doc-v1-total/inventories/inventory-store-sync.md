@@ -726,7 +726,6 @@ The schema fact this rests on: every child table is `ON DELETE CASCADE` from iss
 
 ### 8.1 Constants and keys
 
-- `producerBinaryVersionMetaKey = "producer_binary_version"` (`migration_runner.go`)
 - `migrationCheckpointPrefix = "pre-migrate"` (`migration_runner.go`)
 - `migrationCheckpointRetention = 5` (`migration_runner.go`)
 - `migrationDriftRepairCheckpointPrefix = "pre-drift-repair"` (`migration_runner.go`)
@@ -783,7 +782,6 @@ Test hooks: `migrationUpByOneForTest` (`migration_runner.go`) applies **only** t
     c. `s.adoptPreGooseWorkspace(ctx)`.
     d. `s.commitWorkingSet(ctx, fmt.Sprintf("migrate: adopt pre-goose workspace at v%d", baselineVersion))`; failure → `"commit adoption stamp: %w"`.
 11. `s.applyPendingMigrations(ctx)`.
-12. `wrote, err := s.recordProducerBinaryVersion(ctx)`; `!wrote` → return nil; else `s.commitWorkingSet(ctx, "migrate: record producer binary version")` (`migration_runner.go`).
 
 ### 8.5 `applyPendingMigrations` — the goose loop
 
@@ -940,9 +938,7 @@ Tests: `TestOpenToleratesAheadOfRegistryWhenBaselineIntact` (`migration_runner_t
 
 Tests: `TestPreGooseAdoptionStampsWithoutRerunningBaseline` (`migration_runner_test.go`), `TestAdoptionDeletesLegacySchemaVersionKey`.
 
-### 8.12 Producer-version stamp
-
-`recordProducerBinaryVersion(ctx)` (`migration_runner.go`): `version.Get()`; error → `"read version info: %w"`. `info.IsDev` → `(false, nil)` — a **dev build records no row**. Otherwise `s.setMeta(ctx, nil, "producer_binary_version", info.Version)` → `(true, nil)`; error → `"record producer binary version: %w"`. Test `TestProducerBinaryVersionUnstampedForDevBuild` (`migration_runner_test.go`). Nothing in this binary reads the row.
+### 8.12 Rollback snapshot search
 
 `searchRollbackSnapshot(ctx, maxSupported)` (`migrate_snapshot.go`) returns a `rollbackSearch{snapshot string; examined, unreadable int; err error}`. `dbsnapshot.List(dbsnapshot.DirFor(s.doltRootDir))`; a listing error → `err: "list snapshots: %w"`. For each entry passing `IsMigrationSnapshotName`, newest first: `snapshotOperable`; then a canceled `ctx` → `"stopped looking for a rollback snapshot: %w"` ends the search, counting nothing for that entry; otherwise `examined++`, and an error → `unreadable++`, `"read the schema snapshot %s holds: %w"` kept, the entry passed over; the first operable entry is the `snapshot`. The kept errors are joined into `err`.
 

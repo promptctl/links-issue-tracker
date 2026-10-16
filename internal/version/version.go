@@ -85,9 +85,9 @@ type Info struct {
 	// of it: `just install` stamps a `git describe` Version, so the binary
 	// agents run has IsDev == false while being exactly the locally-built
 	// binary whose age matters. "Was a Version stamped" (what the upgrade
-	// resolver and the migration runner's producer-stamp guard ask) and "can
-	// this binary be behind its own tree" are different questions, and each
-	// gets its own field instead of one field answering both wrongly.
+	// resolver asks) and "can this binary be behind its own tree" are
+	// different questions, and each gets its own field instead of one field
+	// answering both wrongly.
 	// [LAW:one-source-of-truth]
 	//
 	// Never serialized. Info's only JSON encoding is release.Manifest, and
