@@ -30,7 +30,7 @@ A definition is a markdown file with optional YAML frontmatter (`internal/workfl
 
 **Body substitution**: exactly one substitution exists — every literal `<id>` in the body is replaced with the occasion's issue ID at injection time, unconditionally; when the occasion carries no issue ID (e.g. `show_backlog`) it is replaced with the empty string (`dispatch.go`). A prior mechanism's `<token>` substitution is not supported (`dispatch.go`).
 
-The one shipped default, embedded in the binary (`internal/workflows/defaults/done.md`):
+The shipped defaults are embedded in the binary (`internal/workflows/defaults/`). Four are bound to entering a phase — `phase-plan.md` (`states: [plan]`), `phase-impl.md`, `phase-review.md`, `phase-merge.md` — and each body names the command that records the next move: `lit phase <id> --to impl`, `--to review`, `--to merge`, and from `merge`, `lit done <id>`. The fifth is `done.md`:
 
 ```
 ---
@@ -47,7 +47,7 @@ Definitions load from three layers, nearest first (`load.go`):
 
 1. **Project** — `<workspaceRoot>/.lit/workflows/`
 2. **Global** — `<config-dir>/workflows/`, where the config dir is `$XDG_CONFIG_HOME/links-issue-tracker` if set, else `$HOME/.config/links-issue-tracker`; if no home dir can be determined the layer contributes nothing (`internal/config/config.go`, `load.go`)
-3. **Embedded** — compiled into the binary via `go:embed`; today exactly one file, `done.md` (`load.go`)
+3. **Embedded** — compiled into the binary via `go:embed`; today five files, `done.md` and the four `phase-*.md` (`load.go`)
 
 Within a layer, discovery walks the root recursively; a file participates iff its path ends in `.md` (case-sensitive — `.MD` does not); the folder hierarchy carries no activation meaning and only seeds the default ID; walk order is lexical, making within-layer conflicts deterministic (`load.go`).
 

@@ -30,6 +30,18 @@ func isolate(t *testing.T) (workspaceRoot string, globalWorkflows string) {
 	return t.TempDir(), filepath.Join(xdgRoot, "links-issue-tracker", "workflows")
 }
 
+// authored drops the embedded defaults every Load() carries, so a test of the
+// project and global layers asserts on exactly the definitions it wrote.
+func authored(set Set) []Definition {
+	var out []Definition
+	for _, def := range set.Definitions {
+		if def.Source != templates.SourceEmbedded {
+			out = append(out, def)
+		}
+	}
+	return out
+}
+
 // findDefinition looks up one definition by id, so tests that authored their
 // own definitions can assert on those without also enumerating the embedded
 // defaults every Load() carries alongside them.
@@ -57,12 +69,10 @@ func TestLoadRecursiveDiscoveryUnderArbitraryHierarchy(t *testing.T) {
 		t.Fatalf("Warnings = %v, want none", set.Warnings)
 	}
 	var ids []string
-	for _, def := range set.Definitions {
+	for _, def := range authored(set) {
 		ids = append(ids, def.ID)
 	}
-	// "done" is the embedded default every Load() carries alongside whatever
-	// the project/global layers authored.
-	want := []string{"a/deep/nested/leaf", "done", "top", "with_space/file_name"}
+	want := []string{"a/deep/nested/leaf", "top", "with_space/file_name"}
 	if strings.Join(ids, ",") != strings.Join(want, ",") {
 		t.Fatalf("Definitions ids = %v, want %v (sorted)", ids, want)
 	}
@@ -78,10 +88,8 @@ func TestLoadProjectOverridesGlobalByID(t *testing.T) {
 	writeWorkflow(t, globalWorkflows, "only-global.md", "---\nevents: [show_backlog]\n---\nglobal only")
 
 	set := Load(workspaceRoot)
-	// The authored "shared" and "only-global", plus the embedded "done"
-	// default neither layer overrides here.
-	if len(set.Definitions) != 3 {
-		t.Fatalf("Definitions = %+v, want exactly 3", set.Definitions)
+	if len(authored(set)) != 2 {
+		t.Fatalf("Definitions = %+v, want shared and only-global beside the embedded defaults", set.Definitions)
 	}
 	byID := map[string]Definition{}
 	for _, def := range set.Definitions {
@@ -108,10 +116,8 @@ func TestLoadSameRelativePathOverridesWithoutExplicitID(t *testing.T) {
 	writeWorkflow(t, globalWorkflows, "review/design.md", "---\nevents: [show_ticket]\n---\nglobal")
 
 	set := Load(workspaceRoot)
-	// The project "review/design" override, plus the embedded "done" default
-	// at its own, unrelated id.
-	if len(set.Definitions) != 2 {
-		t.Fatalf("Definitions = %+v, want the project one plus the embedded default", set.Definitions)
+	if len(authored(set)) != 1 {
+		t.Fatalf("Definitions = %+v, want the project one beside the embedded defaults", set.Definitions)
 	}
 	def, ok := findDefinition(set, "review/design")
 	if !ok || def.Source != templates.SourceProject || def.Body != "project" {
@@ -127,9 +133,8 @@ func TestLoadDuplicateIDWithinLayerWarnsFirstWins(t *testing.T) {
 	writeWorkflow(t, project, "b/dup.md", "---\nid: dup\nevents: [show_ticket]\n---\nsecond")
 
 	set := Load(workspaceRoot)
-	// The surviving "dup" definition plus the embedded "done" default.
-	if len(set.Definitions) != 2 {
-		t.Fatalf("Definitions = %+v, want the surviving file plus the embedded default", set.Definitions)
+	if len(authored(set)) != 1 {
+		t.Fatalf("Definitions = %+v, want the surviving file beside the embedded defaults", set.Definitions)
 	}
 	if dup, ok := findDefinition(set, "dup"); !ok || dup.Body != "first" {
 		t.Fatalf("Definitions = %+v, want dup's body to be \"first\"", set.Definitions)
@@ -151,15 +156,20 @@ func TestLoadAbsentLayersYieldsOnlyEmbeddedDefaults(t *testing.T) {
 	if len(set.Warnings) != 0 {
 		t.Fatalf("Load() warnings = %v, want none", set.Warnings)
 	}
-	done, ok := findDefinition(set, "done")
-	if !ok || done.Source != templates.SourceEmbedded {
-		t.Fatalf("Load() definitions = %+v, want the embedded \"done\" default", set.Definitions)
-	}
 	// An absent workspace root means the project layer contributes nothing,
 	// but the embedded layer doesn't depend on it.
-	set = Load("")
-	if len(set.Definitions) != 1 || set.Definitions[0].ID != "done" || set.Definitions[0].Source != templates.SourceEmbedded {
-		t.Fatalf("Load(\"\") = %+v, want only the embedded \"done\" default", set.Definitions)
+	want := []string{"done", "phase-impl", "phase-merge", "phase-plan", "phase-review"}
+	for _, root := range []string{workspaceRoot, ""} {
+		var ids []string
+		for _, def := range Load(root).Definitions {
+			if def.Source != templates.SourceEmbedded {
+				t.Fatalf("Load(%q) holds %+v, want only embedded defaults", root, def)
+			}
+			ids = append(ids, def.ID)
+		}
+		if strings.Join(ids, ",") != strings.Join(want, ",") {
+			t.Fatalf("Load(%q) ids = %v, want the shipped defaults %v", root, ids, want)
+		}
 	}
 }
 
@@ -170,9 +180,8 @@ func TestLoadMalformedFileWarnsAndSkipsWithoutBreakingOthers(t *testing.T) {
 	writeWorkflow(t, project, "broken.md", "---\nlabels: 17\n---\nbad")
 
 	set := Load(workspaceRoot)
-	// The surviving "good" definition plus the embedded "done" default.
-	if len(set.Definitions) != 2 {
-		t.Fatalf("Definitions = %+v, want the good file plus the embedded default", set.Definitions)
+	if len(authored(set)) != 1 {
+		t.Fatalf("Definitions = %+v, want the good file beside the embedded defaults", set.Definitions)
 	}
 	if _, ok := findDefinition(set, "good"); !ok {
 		t.Fatalf("Definitions = %+v, want \"good\" to have loaded", set.Definitions)
@@ -195,8 +204,8 @@ func TestLoadInertFileLoadsWithWarningAndNeverFires(t *testing.T) {
 	if len(set.Warnings) != 1 || !strings.Contains(set.Warnings[0].Message, "inert") {
 		t.Fatalf("Warnings = %v, want one inert warning", set.Warnings)
 	}
-	// The inert definition fires nowhere, whatever the embedded "done"
-	// default legitimately matches (work_finished) alongside it.
+	// The inert definition fires nowhere, whatever the embedded defaults
+	// legitimately match alongside it.
 	for _, event := range Catalog() {
 		for _, matched := range set.Matching(Occasion{Event: event}) {
 			if matched.ID == "readme" {

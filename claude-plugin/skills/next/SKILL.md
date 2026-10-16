@@ -178,6 +178,8 @@ A mature engineer knows when to ask for help, and it isn't at the slightest hint
 
 4. **State the plan in one paragraph, then start.** What the ticket asks for, how you'll verify it's done (the machine-verifiable criterion), and the first concrete step. Then begin.
 
+5. **Record the phase as the work moves.** `lit start` put the ticket in `plan`.  Run `lit phase <id> --to impl` when you start writing its code, `lit phase <id> --to review` when its PR opens, and `lit phase <id> --to merge` when review is done and the merge is under way; then `lit done <id>` once it has merged.  A statusline and other sessions read the phase to see where the work stands, so it is only as current as the last `lit phase` you ran.
+
 ## When to stop and ask
 
 To be honest, rarely. You should be capable of figuring this stuff out. 

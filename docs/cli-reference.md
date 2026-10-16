@@ -140,7 +140,11 @@ An `in_progress` issue also has a phase, which says where its work stands:
 `plan`, `impl`, `review` or `merge`, in that order. `lit start` enters `plan`,
 `lit phase` moves it, and leaving `in_progress` ends it. The phase is read off
 the issue's history, so a start or phase move synced from another checkout
-moves it too.
+moves it too. As the work enters each phase, `lit start` or `lit phase` prints
+the command that records the next move, `lit phase <id> --to <next>` or, from
+`merge`, `lit done <id>`. That text comes from the [workflow](workflows.md)
+definitions `phase-plan`, `phase-impl`, `phase-review` and `phase-merge` that
+lit ships, so `lit workflows edit phase-impl` overrides one.
 
 ---
 

@@ -17,7 +17,9 @@ and shared with the team; a `workflows/` directory under your own `lit` config; 
 defaults shipped inside the binary. The nearest layer wins outright — a project file
 replaces a global or embedded one carrying the same id whole, never field by field —
 so customizing the guidance `lit` ships with means copying that definition down into
-the repository and editing it there.
+the repository and editing it there. `lit` ships `done`, which fires on `lit done`, and
+one definition for entering each phase — `phase-plan`, `phase-impl`, `phase-review`,
+`phase-merge` — that names the command recording the work's next move.
 
 Run `lit workflows --help` for the rest: the frontmatter keys and what a minimal
 definition looks like, how the three activation dimensions combine (alternatives within
