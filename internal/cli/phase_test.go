@@ -160,8 +160,8 @@ func TestPhaseMovesAnInProgressTicket(t *testing.T) {
 		{"review", "impl", true, "phase: impl → review\n"},
 		{"impl", "review", true, "phase: review → impl\n"},
 	} {
-		if out := runCLIInDir(t, dir, "phase", first, "--to", step.to); !strings.Contains(out, step.notice+first+" ") {
-			t.Fatalf("lit phase --to %s printed %q, want the line %q just before the ticket's summary", step.to, out, step.notice)
+		if out := runCLIInDir(t, dir, "phase", first, "--to", step.to); !strings.HasPrefix(out, step.notice) {
+			t.Fatalf("lit phase --to %s printed %q, want it to open with the line %q", step.to, out, step.notice)
 		}
 		want := map[string]any{"phase.from": step.from, "phase.to": step.to, "phase.changed": step.changed}
 		if got := phaseFacts(t); !reflect.DeepEqual(got, want) {

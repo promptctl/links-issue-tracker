@@ -301,10 +301,10 @@ The eight embedded assets (all also ejectable):
 
 | Asset | Written by | Destination | Role |
 |---|---|---|---|
-| `agents-section.md` | `ensureLinksAgentFiles` | managed region of `AGENTS.md`/`CLAUDE.md` | 8 lines telling the agent to run `lit quickstart` first |
+| `agents-section.md` | `ensureLinksAgentFiles` | managed region of `AGENTS.md`/`CLAUDE.md` | 10 lines telling the agent to run `lit quickstart` first and naming the command that records each phase move |
 | `pre-push-hook.sh` | `installHooks` | managed region of the git `pre-push` hook | runs `lit sync push --remote <r>` with `LNKS_AUTOMATION_TRIGGER=git-pre-push` and a trace-ref file; on failure prints an `<agent-instructions>` warning with the trace path; always exits 0 so a sync failure never blocks the git push |
 | `quickstart.md` | bare `lit` / `lit quickstart` | stdout | 18-line router over the five topics plus a fastpath (`lit next` / `lit start` / `lit workflows`) |
-| `quickstart-work.md` | `lit quickstart work` | stdout | finding/starting work: `ls`, `next`, `backlog`, `show`, claims-first selection, `start --take` |
+| `quickstart-work.md` | `lit quickstart work` | stdout | finding/starting work: `ls`, `next`, `backlog`, `show`, claims-first selection, `start --take`, recording each phase move |
 | `quickstart-new.md` | `lit quickstart new` | stdout | `lit new` flags, description/topic notes, `import --path` |
 | `quickstart-update.md` | `lit quickstart update` | stdout | `update`, `import`, `rank`, `label add/rm`, `parent set`, `dep add`, `comment add` |
 | `quickstart-done.md` | `lit quickstart done` | stdout | `done`, `close --resolution …`, `followup`, `workflows edit done`, commit reminder |

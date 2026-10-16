@@ -520,7 +520,7 @@ func TestWorkflowsOverviewWalksThePhasesInsideInProgress(t *testing.T) {
 	}
 	shipped := map[string]string{
 		"plan":   `phase-plan "Record when the code starts"`,
-		"impl":   `phase-impl "Record when the PR opens"`,
+		"impl":   `phase-impl "Record when the PR is up for review"`,
 		"review": `phase-review "Record when the merge is under way"`,
 		"merge":  `phase-merge "Close the ticket once it has merged"`,
 	}
