@@ -147,17 +147,15 @@ func downgradeLeafWith(
 			return err
 		}
 		// [LAW:no-silent-failure] the reverse has committed, so a prune failure
-		// does not stop the install; it is said here, before the install, so
-		// it is on the output whether the install then succeeds or fails.
-		if done.PruneErr != nil {
-			if _, err := fmt.Fprintf(stdout, "warning: old downgrade snapshots were not removed: %v\n", done.PruneErr); err != nil {
-				return err
-			}
-		}
+		// does not stop the install. Nothing is written before the install, so
+		// no write can stand between the reverse and the binary that reads it;
+		// [LAW:dataflow-not-control-flow] the warning is a value, "" when the
+		// prune succeeded, ending whichever output ends the command.
+		pruneWarning := downgradePruneWarning(done.PruneErr)
 
 		binPath, err := binPathFn()
 		if err != nil {
-			return fmt.Errorf("downgrade: resolve current binary: %w", err)
+			return fmt.Errorf("downgrade: resolve current binary: %w%s", err, pruneWarning)
 		}
 
 		if err := installer.Install(ctx, target, binPath); err != nil {
@@ -165,8 +163,8 @@ func downgradeLeafWith(
 			// surface the install failure with the exact recovery the operator
 			// needs (run the prior binary themselves, or restore the snapshot).
 			return fmt.Errorf(
-				"downgrade: schema reversed to v%d but installing prior binary failed: %w\n\nrecover by either:\n  - installing %s manually (download from %s), then re-running lit; or\n  - restoring the pre-downgrade snapshot via `lit snapshots list` + `lit snapshots restore <name>`",
-				target.Manifest.Schema.Max, err, tag, target.Artifact.URL,
+				"downgrade: schema reversed to v%d but installing prior binary failed: %w\n\nrecover by either:\n  - installing %s manually (download from %s), then re-running lit; or\n  - restoring the pre-downgrade snapshot via `lit snapshots list` + `lit snapshots restore <name>`%s",
+				target.Manifest.Schema.Max, err, tag, target.Artifact.URL, pruneWarning,
 			)
 		}
 		telemetry.Set(ctx, "downgrade.installed_path", binPath)
@@ -177,11 +175,21 @@ func downgradeLeafWith(
 		// benefit — the rename has already happened, the user's next shell
 		// prompt runs the prior binary.
 		_, err = fmt.Fprintf(stdout,
-			"downgraded to %s (schema v%d) installed at %s\nre-run `lit version` to confirm.\n",
-			tag, target.Manifest.Schema.Max, binPath,
+			"downgraded to %s (schema v%d) installed at %s\nre-run `lit version` to confirm.%s\n",
+			tag, target.Manifest.Schema.Max, binPath, pruneWarning,
 		)
 		return err
 	}}
+}
+
+// downgradePruneWarning is the line a downgrade adds to its result when
+// rolling old downgrade snapshots off failed after the reverse committed, with
+// its leading newline, or "" when nothing failed.
+func downgradePruneWarning(pruneErr error) string {
+	if pruneErr == nil {
+		return ""
+	}
+	return fmt.Sprintf("\nwarning: old downgrade snapshots were not removed: %v", pruneErr)
 }
 
 // normalizeReleaseTag is the shared --to normalizer for both version-traversal

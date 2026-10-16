@@ -103,11 +103,11 @@ func newerCurrentInfo() version.Info {
 // keeps, ended the way the dispatcher ends it, so it can read the facts and
 // counts the invocation's event carries — those an error records included —
 // and what it printed.
-func runDowngradeRecorded(t *testing.T, scope downgradeScope, res release.Resolver, inst release.Installer) (map[string]any, map[string]int, string, error) {
+func runDowngradeRecorded(t *testing.T, scope downgradeScope, res release.Resolver, inst release.Installer, binPath func() (string, error)) (map[string]any, map[string]int, string, error) {
 	t.Helper()
 	recorder := telemetry.Begin(telemetry.Event{})
 	ctx := telemetry.With(context.Background(), recorder)
-	l := downgradeLeafWith(res, inst, fixedBinPath("/p/lit", nil))
+	l := downgradeLeafWith(res, inst, binPath)
 	var out bytes.Buffer
 	positional, err := parseLeaf(ctx, l, []string{"--to", "v0.4.1"}, &out)
 	if err != nil {
@@ -203,7 +203,7 @@ func TestRunDowngradeWithSchemaErrorSkipsInstall(t *testing.T) {
 // snapshot it took first.
 func TestRunDowngradeRecordsWhatItReversedAndInstalled(t *testing.T) {
 	t.Parallel()
-	facts, counts, _, err := runDowngradeRecorded(t, downgradeScope{schema: &stubDowngrader{done: reversedFromV4()}, current: newerCurrentInfo()}, &stubResolver{target: newFakeTarget()}, &stubInstaller{})
+	facts, counts, _, err := runDowngradeRecorded(t, downgradeScope{schema: &stubDowngrader{done: reversedFromV4()}, current: newerCurrentInfo()}, &stubResolver{target: newFakeTarget()}, &stubInstaller{}, fixedBinPath("/p/lit", nil))
 	if err != nil {
 		t.Fatalf("downgrade: %v", err)
 	}
@@ -284,7 +284,7 @@ func TestRunDowngradeRecordsWhatTheReverseReportedOnEveryOutcome(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			facts, counts, _, _ := runDowngradeRecorded(t, downgradeScope{schema: tc.dg, current: newerCurrentInfo()}, &stubResolver{target: newFakeTarget()}, tc.inst)
+			facts, counts, _, _ := runDowngradeRecorded(t, downgradeScope{schema: tc.dg, current: newerCurrentInfo()}, &stubResolver{target: newFakeTarget()}, tc.inst, fixedBinPath("/p/lit", nil))
 			want := map[string]any{
 				"downgrade.tag":                "v0.4.1",
 				"downgrade.target_schema_max":  float64(3),
@@ -307,7 +307,7 @@ func TestRunDowngradeRecordsWhatTheReverseReportedOnEveryOutcome(t *testing.T) {
 func TestRunDowngradeRecordsTheTagOfAReleaseThatDoesNotResolve(t *testing.T) {
 	t.Parallel()
 	res := &stubResolver{err: errors.New("release v0.4.1 not found")}
-	facts, _, _, err := runDowngradeRecorded(t, downgradeScope{schema: &stubDowngrader{}, current: newerCurrentInfo()}, res, &stubInstaller{})
+	facts, _, _, err := runDowngradeRecorded(t, downgradeScope{schema: &stubDowngrader{}, current: newerCurrentInfo()}, res, &stubInstaller{}, fixedBinPath("/p/lit", nil))
 	if err == nil {
 		t.Fatal("an unresolvable release must fail the downgrade")
 	}
@@ -350,7 +350,7 @@ func TestRunDowngradeOnAWorkspacePastRunningSupportIsSchemaAhead(t *testing.T) {
 	}
 
 	inst := &stubInstaller{}
-	facts, counts, _, err := runDowngradeRecorded(t, downgradeScope{schema: migrator, current: current}, &stubResolver{target: newFakeTarget()}, inst)
+	facts, counts, _, err := runDowngradeRecorded(t, downgradeScope{schema: migrator, current: current}, &stubResolver{target: newFakeTarget()}, inst, fixedBinPath("/p/lit", nil))
 	if err == nil {
 		t.Fatal("a downgrade past this binary's support must be refused")
 	}
@@ -383,17 +383,25 @@ func TestRunDowngradeOnAWorkspacePastRunningSupportIsSchemaAhead(t *testing.T) {
 // A downgrade whose reverse committed installs the release it reversed for
 // even when rolling old downgrade snapshots off then failed: otherwise the
 // newer binary stays installed and its next open migrates the workspace
-// forward again. The prune failure is on the output and the event whether the
-// install then succeeds or fails.
+// forward again. Nothing is printed before the install, and the prune failure
+// ends whichever output ends the command, success or failure.
 func TestRunDowngradeInstallsWhenTheSnapshotPruneFails(t *testing.T) {
 	t.Parallel()
 	pruneErr := errors.New("prune downgrade snapshots: permission denied")
+	warning := "\nwarning: old downgrade snapshots were not removed: " + pruneErr.Error()
 	tests := []struct {
 		name       string
+		binPath    func() (string, error)
 		installErr error
+		wantOut    string
 	}{
-		{name: "install succeeds"},
-		{name: "install fails", installErr: errors.New("rename: read-only file system")},
+		{
+			name:    "install succeeds",
+			binPath: fixedBinPath("/p/lit", nil),
+			wantOut: "downgraded to v0.4.1 (schema v3) installed at /p/lit\nre-run `lit version` to confirm." + warning + "\n",
+		},
+		{name: "install fails", binPath: fixedBinPath("/p/lit", nil), installErr: errors.New("rename: read-only file system")},
+		{name: "binary path fails", binPath: fixedBinPath("", errors.New("executable: not found"))},
 	}
 	for _, tc := range tests {
 		tc := tc
@@ -401,16 +409,12 @@ func TestRunDowngradeInstallsWhenTheSnapshotPruneFails(t *testing.T) {
 			t.Parallel()
 			done := reversedFromV4()
 			done.PruneErr = pruneErr
-			inst := &stubInstaller{err: tc.installErr}
-			facts, _, out, err := runDowngradeRecorded(t, downgradeScope{schema: &stubDowngrader{done: done}, current: newerCurrentInfo()}, &stubResolver{target: newFakeTarget()}, inst)
-			if !errors.Is(err, tc.installErr) {
-				t.Fatalf("downgrade err = %v; want %v", err, tc.installErr)
+			facts, _, out, err := runDowngradeRecorded(t, downgradeScope{schema: &stubDowngrader{done: done}, current: newerCurrentInfo()}, &stubResolver{target: newFakeTarget()}, &stubInstaller{err: tc.installErr}, tc.binPath)
+			if out != tc.wantOut {
+				t.Errorf("stdout = %q; want %q", out, tc.wantOut)
 			}
-			if !inst.called {
-				t.Error("installer must run when the reverse committed and only the prune failed")
-			}
-			if want := "warning: old downgrade snapshots were not removed: " + pruneErr.Error() + "\n"; !strings.HasPrefix(out, want) {
-				t.Errorf("stdout = %q; want it to start with %q", out, want)
+			if tc.wantOut == "" && (err == nil || !strings.HasSuffix(err.Error(), warning)) {
+				t.Errorf("err = %v; want it to end with %q", err, warning)
 			}
 			if got := facts["downgrade.snapshot_prune_error"]; got != pruneErr.Error() {
 				t.Errorf("downgrade.snapshot_prune_error = %v; want %q", got, pruneErr.Error())
