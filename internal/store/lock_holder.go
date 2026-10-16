@@ -136,13 +136,20 @@ var (
 	lockHolderRecordSeq atomic.Uint64
 )
 
-// lockHolderRecordNames draws the two names one acquisition lives under: the
-// private one only its own holder ever touches, and the one a reader sweeps.
+// lockHolderRecordNames draws the two names this process's next acquisition
+// lives under: the private one only its own holder ever touches, and the one
+// a reader sweeps.
+func lockHolderRecordNames(dir string) (privatePath, recordPath string) {
+	return lockHolderRecordNamesFor(dir, os.Getpid(), lockHolderProcessNonce, lockHolderRecordSeq.Add(1))
+}
+
+// lockHolderRecordNamesFor cuts both names of the record a process with this
+// pid and nonce mints as its seq'th, whatever process that is.
 // [LAW:one-source-of-truth] Both are cut from a single suffix here, which is
 // what lets a sweep read the split backwards to find a dead record's private
 // sibling; privateNameFor is that inverse.
-func lockHolderRecordNames(dir string) (privatePath, recordPath string) {
-	suffix := fmt.Sprintf("%d-%s-%d", os.Getpid(), lockHolderProcessNonce, lockHolderRecordSeq.Add(1))
+func lockHolderRecordNamesFor(dir string, pid int, nonce string, seq uint64) (privatePath, recordPath string) {
+	suffix := fmt.Sprintf("%d-%s-%d", pid, nonce, seq)
 	return filepath.Join(dir, lockHolderPrivatePrefix+suffix),
 		filepath.Join(dir, lockHolderRecordPrefix+suffix)
 }
@@ -181,10 +188,18 @@ type lockHolderRecord struct {
 // hold to process exit by design, as a mirror-beacon claimant does — has
 // nobody else to collect it: a contender reads the directory only when it
 // has waited long enough to report, which an uncontended lock never does. The
-// publisher is the one reader every acquisition has, so the directory holds
-// at most the live holders plus those gone since the last acquisition.
+// publisher is the one reader every acquisition has, so no record outlives
+// its holder past the next acquisition. (A private name stranded by a
+// publisher killed before it links is the exception lockHolderPrivatePrefix
+// accounts for: no sweep may touch a private name.)
 // [LAW:dataflow-not-control-flow] The sweep runs on every acquisition; an
 // empty directory is simply a sweep with nothing to retire.
+//
+// That sweep is also what demotes a failed retirement at release, the way a
+// failed publish is demoted: a record this release could not remove has lost
+// its hold, so the next acquisition proves it unheld and retires it. On
+// Windows that failure needs nothing worse than a concurrent sweep's probe
+// holding the file open, since filelock's open denies the delete right.
 func recordLockHolder(storageDir, lockPath string, lockRelease func() error) func() error {
 	if err := retireDeadLockHolders(storageDir, lockPath); err != nil {
 		fmt.Fprintf(lockWaitNoticeWriter, "lit: could not retire the records of holders gone from %s (the lock is held; a later acquisition retries them): %v\n", lockPath, err)
@@ -198,7 +213,10 @@ func recordLockHolder(storageDir, lockPath string, lockRelease func() error) fun
 		// Retire the record BEFORE dropping the lock, so no instant exists in
 		// which the next acquirer holds the lock while this record still
 		// answers for it.
-		return errors.Join(releaseRecord(), lockRelease())
+		if err := releaseRecord(); err != nil {
+			fmt.Fprintf(lockWaitNoticeWriter, "lit: could not retire this process's holder record for %s (the lock is still released; a later acquisition retires the record): %v\n", lockPath, err)
+		}
+		return lockRelease()
 	}
 }
 

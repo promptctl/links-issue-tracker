@@ -358,7 +358,7 @@ func (s *Store) ExecRawForTest(ctx context.Context, query string, args ...any) e
 // holds LOCK while this record still answers for it — the order
 // recordLockHolder keeps for every lit-minted lock. The driver's benign
 // shutdown cancellation is normalized on the close alone, before the join,
-// so a record that failed to retire is never hidden behind it.
+// so it can never hide the record release's own failure.
 // [LAW:single-enforcer] one close contract for every path that ends an
 // engine: Close, and the open paths that fail after the engine came up.
 // [LAW:no-silent-failure]
