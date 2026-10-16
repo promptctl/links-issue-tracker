@@ -37,23 +37,3 @@ func TestNextOutcomesBecomeStatuslineFacts(t *testing.T) {
 		})
 	}
 }
-
-// Every change leaves the file showing the ticket's current title. A start
-// takes the ticket on, every other transition invalidates what the file says
-// about it, and a change of fields alone does neither.
-func TestChangesBecomeStatuslineFacts(t *testing.T) {
-	issue := model.Issue{ID: "t-1", Title: "One"}
-	ticket := statusline.Ticket{ID: "t-1", Title: "One"}
-	retitled := statusline.Retitled{Ticket: ticket}
-	if got, want := changeStatuslineFacts(nil, issue), (statusline.Facts{retitled}); !reflect.DeepEqual(got, want) {
-		t.Fatalf("fields alone = %#v, want %#v", got, want)
-	}
-	if got, want := changeStatuslineFacts(model.Start{Assignee: "me"}, issue), (statusline.Facts{retitled, statusline.Started{Ticket: ticket}}); !reflect.DeepEqual(got, want) {
-		t.Fatalf("start = %#v, want %#v", got, want)
-	}
-	for _, action := range []model.Action{model.Done{}, model.Close{Outcome: model.Wontfix{}}, model.Reopen{}, model.Archive{}, model.Unarchive{}, model.Delete{}, model.Restore{}} {
-		if got, want := changeStatuslineFacts(action, issue), (statusline.Facts{retitled, statusline.Invalidated{ID: "t-1"}}); !reflect.DeepEqual(got, want) {
-			t.Fatalf("%T = %#v, want %#v", action, got, want)
-		}
-	}
-}

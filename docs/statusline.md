@@ -99,8 +99,9 @@ plain. A filtered `lit next`, or one with `--all`, answers a different question
 and leaves `next` alone. A focus scope configured for the repository does not
 count as a filter.
 
-**Titles.** After `lit update --title`, every value naming that ticket shows the
-new title. Its `recorded_at` does not change.
+**Titles.** After any command in this checkout changes a ticket's title, such as
+`lit update --title` or a `lit import` document that sets `title`, every value
+naming that ticket shows the new title. Its `recorded_at` does not change.
 
 **Clearing.** A value becomes `null` when this checkout moves the ticket it names
 through any lifecycle change other than a start: `lit done`, `lit close`,

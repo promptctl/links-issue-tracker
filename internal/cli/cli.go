@@ -1389,7 +1389,7 @@ func updateLeaf() appLeaf {
 		if in.IsEmpty() {
 			return UsageError{Message: "lit update requires at least one field flag; " + usage}
 		}
-		issue, err := applyChange(ctx, ap, positional[0], in)
+		issue, err := ap.Store.Apply(ctx, positional[0], in)
 		if err != nil {
 			return err
 		}
@@ -1866,7 +1866,7 @@ func transitionLeaf(spec transitionSpec) appLeaf {
 			return err
 		}
 
-		issue, err := applyChange(ctx, ap, issueID, storage.Change{Action: action, Actor: actor, Reason: *reason})
+		issue, err := ap.Store.Apply(ctx, issueID, storage.Change{Action: action, Actor: actor, Reason: *reason})
 		if err != nil {
 			return err
 		}

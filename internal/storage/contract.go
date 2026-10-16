@@ -248,6 +248,21 @@ type Attributor interface {
 	AttributeTo(streamToken string)
 }
 
+// ChangeObserver lets a caller hear every change the engine applies to an
+// issue, with the issue as that change left it.
+//
+// Like attribution, this is the store's and not each caller's: an engine calls
+// its observers from its single change path, so a change made inside a bulk
+// batch is heard exactly as a lone Apply is, including a change that landed
+// before its batch failed. Hearing every change is then a property of the write
+// path rather than an obligation on every command that writes.
+// [LAW:single-enforcer]
+type ChangeObserver interface {
+	// ObserveChanges adds observe to the observers called after each change
+	// this engine applies from here on.
+	ObserveChanges(observe func(Change, model.Issue))
+}
+
 // Store is the whole storage contract: everything lit needs from any engine,
 // and nothing an engine happens to have.
 //
@@ -269,6 +284,7 @@ type Store interface {
 	BulkWriter
 	Exporter
 	Attributor
+	ChangeObserver
 
 	// Close releases whatever the engine holds. It is in the contract because
 	// callers must always be able to hand the resource back without knowing

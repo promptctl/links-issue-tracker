@@ -213,6 +213,7 @@ var cases = []engineCase{
 	{"bulk_apply_compensates_a_failed_batch", bulkApplyCompensatesFailure},
 	{"import_tree_maps_local_ids", importTreeMapsLocalIDs},
 	{"attribution_stamps_events", attributionStampsEvents},
+	{"observers_hear_every_change", observersHearEveryChange},
 	{"local_issue_count_tracks_creates", localIssueCountTracksCreates},
 }
 
@@ -2955,6 +2956,45 @@ func attributionStampsEvents(t *testing.T, ctx context.Context, st storage.Store
 		if e.Attribution.Workspace() == "" {
 			t.Errorf("event %q has a stream but no workspace", e.ID)
 		}
+	}
+}
+
+func observersHearEveryChange(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+	task := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "task", Topic: "core", ParentID: epic.ID})
+	type heard struct {
+		action model.Action
+		id     string
+		title  string
+	}
+	var got []heard
+	st.ObserveChanges(func(c storage.Change, issue model.Issue) {
+		got = append(got, heard{c.Action, issue.ID, issue.Title})
+	})
+
+	retitle := func(title string) storage.UpdateIssueInput { return storage.UpdateIssueInput{Title: &title} }
+	if _, err := st.Apply(ctx, task.ID, storage.Change{Actor: "ada", Fields: retitle("by apply")}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Apply(ctx, task.ID, storage.Change{Actor: "ada", Action: model.Start{Assignee: "ada"}}); err != nil {
+		t.Fatal(err)
+	}
+	// The observer hears a bulk batch's update as it hears a lone Apply, and
+	// a change that landed before its batch failed is heard: it stays made.
+	bulkTitle, neverTitle := "by bulk", "never"
+	if _, err := st.BulkApply(ctx, "", "ada", []storage.BulkIssueSpec{
+		{ID: task.ID, Title: &bulkTitle},
+		{ID: task.ID + "-missing", Title: &neverTitle},
+	}); err == nil {
+		t.Fatal("BulkApply naming a missing issue succeeded; want an error")
+	}
+	want := []heard{
+		{nil, task.ID, "by apply"},
+		{model.Start{Assignee: "ada"}, task.ID, "by apply"},
+		{nil, task.ID, "by bulk"},
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("observer heard %+v\nwant %+v", got, want)
 	}
 }
 

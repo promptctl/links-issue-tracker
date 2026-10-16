@@ -228,6 +228,43 @@ func TestEachStatuslineWriteRecordsItsFactsOnTheEvent(t *testing.T) {
 	}
 }
 
+// A retitle reaches the file by whichever command makes it, lit import as
+// surely as lit update — and a retitle an import makes before its batch fails
+// stays made, so the file shows it too.
+func TestAnImportRetitleReachesTheStatuslineFile(t *testing.T) {
+	isolateEvents(t)
+	dir, first, _ := statuslineCheckout(t)
+	runCLIInDir(t, dir, "next")
+	runCLIInDir(t, dir, "start", first, "--by", "agent")
+	importFile := func(body string) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "batch.yaml")
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	titles := func(want string) {
+		t.Helper()
+		got := readStatusline(t, dir)
+		if workingOnID(got) != first || got.WorkingOn.Ticket.Title != want || nextID(got) != first || got.Next.Ticket.Title != want {
+			t.Fatalf("file = %+v / %+v; want both records of %s titled %q", got.WorkingOn, got.Next, first, want)
+		}
+	}
+
+	runCLIInDir(t, dir, "import", "--path", importFile(fmt.Sprintf("id: %s\ntitle: Renamed\n", first)))
+	titles("Renamed")
+	if facts, _ := statuslineEvent(t); !reflect.DeepEqual(facts["statusline.changed"], []any{"working_on", "next"}) {
+		t.Fatalf("import retitle: statusline.changed = %v; want [working_on next]", facts["statusline.changed"])
+	}
+
+	runCLIInDirAllowError(t, dir, "import", "--path", importFile(fmt.Sprintf("id: %s\ntitle: Renamed again\n---\nid: %s-nope\ntitle: Never\n", first, first)))
+	if title := strings.TrimSpace(runCLIInDir(t, dir, "show", first, "--field", "title")); title != "Renamed again" {
+		t.Fatalf("the failed batch left %s titled %q; the test needs its first update to land", first, title)
+	}
+	titles("Renamed again")
+}
+
 // A statusline write that fails is on the event with its error, beside what
 // the write had done before it failed; the command itself does not fail.
 func TestAFailedStatuslineWriteIsRecordedOnTheEvent(t *testing.T) {
