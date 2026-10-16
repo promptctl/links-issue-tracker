@@ -1,4 +1,6 @@
-package cli
+// Package storagetest holds fixtures that build workspace shapes through the
+// storage.Store contract, for tests in any package that holds a store.
+package storagetest
 
 import (
 	"context"
@@ -7,13 +9,13 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
-// storeBlocksWithinEpic stores dependent blocked-by dependency where both are
+// StoreBlocksWithinEpic stores dependent blocked-by dependency where both are
 // leaves of one epic. Writing that edge is refused, so it is stored the way a
 // workspace comes to hold one: written while dependent sits in another epic,
-// and kept when dependent moves back. A reparent changes no rank, so the
-// fixture's order stands, and every view meets the edge as it would in a
+// and kept when dependent moves back. A reparent changes no rank, so every
+// rank a test set stands, and every view meets the edge as it would in a
 // workspace. The epic dependent waited in is purged, leaving nothing else.
-func storeBlocksWithinEpic(t testing.TB, ctx context.Context, st storage.Store, prefix, dependent, dependency string) {
+func StoreBlocksWithinEpic(t testing.TB, ctx context.Context, st storage.Store, prefix, dependent, dependency string) {
 	t.Helper()
 	detail, err := st.GetIssueDetail(ctx, dependent)
 	if err != nil {

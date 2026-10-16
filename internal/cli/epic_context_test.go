@@ -10,6 +10,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/claims"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/storage/storagetest"
 )
 
 // epicFixture builds an epic and returns the app plus a helper to add children
@@ -95,7 +96,7 @@ func (f epicFixture) blockWithinEpic(blocked, blocker string) {
 	if err != nil {
 		f.t.Fatalf("Mintable() error = %v", err)
 	}
-	storeBlocksWithinEpic(f.t, f.ctx, f.ap.Store, prefix.Value(), blocked, blocker)
+	storagetest.StoreBlocksWithinEpic(f.t, f.ctx, f.ap.Store, prefix.Value(), blocked, blocker)
 }
 
 func (f epicFixture) render(focused string) string {

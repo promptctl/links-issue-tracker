@@ -11,6 +11,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/claims"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/storage/storagetest"
 )
 
 // backlogTestHarness mirrors readyTestHarness so the two surfaces can be
@@ -69,7 +70,7 @@ func (h backlogTestHarness) addDependencyWithinEpic(dependentID, dependencyID st
 	if err != nil {
 		h.t.Fatalf("Mintable() error = %v", err)
 	}
-	storeBlocksWithinEpic(h.t, h.ctx, h.ap.Store, prefix.Value(), dependentID, dependencyID)
+	storagetest.StoreBlocksWithinEpic(h.t, h.ctx, h.ap.Store, prefix.Value(), dependentID, dependencyID)
 }
 
 // runBacklogIDs renders the backlog and extracts the issue ID leading each row,

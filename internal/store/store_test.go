@@ -15,6 +15,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/doltcli"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/storage/storagetest"
 )
 
 func openIssueStore(t testing.TB, ctx context.Context) *Store {
@@ -314,8 +315,8 @@ func TestFixRankInversionsConvergesWhenDependencyBlocksMultipleIssues(t *testing
 		t.Fatalf("CreateIssue(blocker) error = %v", err)
 	}
 
-	addBlocksWithinEpic(t, ctx, st, dependentA.ID, blocker.ID)
-	addBlocksWithinEpic(t, ctx, st, dependentB.ID, blocker.ID)
+	storagetest.StoreBlocksWithinEpic(t, ctx, st, "test", dependentA.ID, blocker.ID)
+	storagetest.StoreBlocksWithinEpic(t, ctx, st, "test", dependentB.ID, blocker.ID)
 
 	before, err := st.Doctor(ctx)
 	if err != nil {
@@ -364,8 +365,8 @@ func TestFixRankInversionsConvergesWhenPassCreatesNewInversion(t *testing.T) {
 		t.Fatalf("CreateIssue(blocker) error = %v", err)
 	}
 
-	addBlocksWithinEpic(t, ctx, st, dependent.ID, blocker.ID)
-	addBlocksWithinEpic(t, ctx, st, blocker.ID, upstream.ID)
+	storagetest.StoreBlocksWithinEpic(t, ctx, st, "test", dependent.ID, blocker.ID)
+	storagetest.StoreBlocksWithinEpic(t, ctx, st, "test", blocker.ID, upstream.ID)
 
 	before, err := st.Doctor(ctx)
 	if err != nil {
@@ -508,7 +509,7 @@ func TestFixRankInversionsIgnoresDeletedIssues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(blocker) error = %v", err)
 	}
-	addBlocksWithinEpic(t, ctx, st, dependent.ID, blocker.ID)
+	storagetest.StoreBlocksWithinEpic(t, ctx, st, "test", dependent.ID, blocker.ID)
 	if _, err := st.Apply(ctx, blocker.ID, storage.Change{Action: model.Delete{}, Reason: "removed", Actor: "tester"}); err != nil {
 		t.Fatalf("Apply(delete blocker) error = %v", err)
 	}
