@@ -1234,7 +1234,7 @@ func showLeaf() appLeaf {
 		// --field is the compact, edit-oriented view: exactly the requested
 		// fields, none of the parent/epic/siblings context below. [LAW:dataflow-not-control-flow]
 		if fields := splitCSV(*fieldsExpr); len(fields) > 0 {
-			return printIssueFields(stdout, detail.Issue, fields)
+			return printIssueFields(stdout, detail, fields)
 		}
 		// Resolved before the body is printed, so the body and the plan block are
 		// all-or-nothing: a slice that cannot be built fails without a body, rather
@@ -1764,12 +1764,62 @@ var (
 		},
 		authorize: noAuthorize,
 	}
-	openSpec      = transitionSpec{name: "open", registerFlags: fixedAction(model.Reopen{}), authorize: noAuthorize}
+	openSpec  = transitionSpec{name: "open", registerFlags: fixedAction(model.Reopen{}), authorize: noAuthorize}
+	phaseSpec = transitionSpec{
+		name: "phase",
+		registerFlags: func(fs *cobraFlagSet) func(string) (model.Action, error) {
+			to := fs.String("to", "", "Phase to move the ticket to (required): "+phaseNames())
+			return func(string) (model.Action, error) {
+				phase, err := model.ParsePhase(*to)
+				if err != nil {
+					return nil, UsageError{Message: fmt.Sprintf("usage: lit phase <id> --to <%s> [--reason <text>]\n%v", strings.ReplaceAll(phaseNames(), ", ", "|"), err)}
+				}
+				return model.SetPhase{Phase: phase}, nil
+			}
+		},
+		authorize: func(*cobraFlagSet) func(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, prior model.Issue, action model.Action) (afterApply, error) {
+			return authorizePhase
+		},
+	}
 	archiveSpec   = transitionSpec{name: "archive", registerFlags: fixedAction(model.Archive{}), authorize: noAuthorize}
 	unarchiveSpec = transitionSpec{name: "unarchive", registerFlags: fixedAction(model.Unarchive{}), authorize: noAuthorize}
 	deleteSpec    = transitionSpec{name: "delete", registerFlags: fixedAction(model.Delete{}), authorize: noAuthorize}
 	restoreSpec   = transitionSpec{name: "restore", registerFlags: fixedAction(model.Restore{}), authorize: noAuthorize}
 )
+
+// phaseNames lists the phases in work order, for help and usage text.
+func phaseNames() string {
+	names := make([]string, 0, len(model.Phases()))
+	for _, phase := range model.Phases() {
+		names = append(names, string(phase))
+	}
+	return strings.Join(names, ", ")
+}
+
+// authorizePhase gates nothing — Issue.PlanPhase, which both engines run, is
+// the phase rule — and owes the command's event the move it made: the phase
+// left, the phase entered, and whether anything changed. A refused move fails
+// Apply, so its event carries the refusal instead. The phase left is read
+// before Apply, from the history the move is planned against in the same
+// command; a write from another checkout landing between the two reads can
+// only stale this fact, never the move. [LAW:nothing-unseen]
+func authorizePhase(ctx context.Context, _ io.Writer, ap *app.App, issueID string, prior model.Issue, action model.Action) (afterApply, error) {
+	set, ok := action.(model.SetPhase)
+	if !ok {
+		return nil, fmt.Errorf("phase: authorize hook received a %T action", action)
+	}
+	events, err := ap.Store.ListEvents(ctx, issueID)
+	if err != nil {
+		return nil, err
+	}
+	from, _ := model.PhaseOf(prior, events)
+	return func(model.Issue) (string, statusline.Facts) {
+		telemetry.Set(ctx, "phase.from", string(from))
+		telemetry.Set(ctx, "phase.to", string(set.Phase))
+		telemetry.Set(ctx, "phase.changed", from != set.Phase)
+		return "", nil
+	}, nil
+}
 
 // registerCloseOutcomeFlags declares the close-outcome flags shared by `lit
 // close` and `lit bulk close`, so the two boundaries expose the same surface.

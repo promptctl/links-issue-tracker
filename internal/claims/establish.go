@@ -44,6 +44,8 @@ var establishing = map[model.ActionName]bool{
 	model.ActionUnarchive: false,
 	model.ActionDelete:    false,
 	model.ActionRestore:   false,
+	// A phase move is work on a ticket already held; it takes nothing.
+	model.ActionPhase: false,
 }
 
 // establishes reports whether an event takes or transfers a lane. IssueEvent
@@ -56,8 +58,8 @@ func establishes(event model.IssueEvent) bool {
 }
 
 // LatestEstablisher returns the newest event among events that takes or
-// transfers a lane, and reports whether there was one. "Newest" is byRecency,
-// the one order this package means by later.
+// transfers a lane, and reports whether there was one. "Newest" is
+// model.CompareEventRecency, the one order lit means by later.
 //
 // It scans for the maximum rather than walking a sorted slice backwards, so it
 // answers the same for a lane's ordered run as for a caller holding an issue's
@@ -68,7 +70,7 @@ func LatestEstablisher(events []model.IssueEvent) (model.IssueEvent, bool) {
 	var latest model.IssueEvent
 	found := false
 	for _, event := range events {
-		if establishes(event) && (!found || byRecency(latest, event) < 0) {
+		if establishes(event) && (!found || model.CompareEventRecency(latest, event) < 0) {
 			latest, found = event, true
 		}
 	}

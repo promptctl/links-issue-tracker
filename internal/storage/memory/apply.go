@@ -65,7 +65,7 @@ func (e *Engine) apply(id string, c storage.Change) (model.Issue, error) {
 	return issue, nil
 }
 
-// planLifecycle plans whichever axis the action drives. The two subsets
+// planLifecycle plans whichever axis the action drives. The three subsets
 // partition the sealed action sum, so a retention action reaching the status
 // machine — or the reverse — is unrepresentable rather than guarded against.
 // A nil action is no transition at all, which the type carries as data.
@@ -78,11 +78,34 @@ func (e *Engine) planLifecycle(current model.Issue, actor, reason string, action
 		return e.planStatus(current, actor, reason, a, now)
 	case model.RetentionAction:
 		return planRetention(current, actor, reason, a, now)
+	case model.SetPhase:
+		return e.planPhase(current, actor, reason, a, now)
 	default:
-		// [LAW:no-silent-failure] The sealed sum has no third axis; only an
+		// [LAW:no-silent-failure] The sealed sum has no fourth axis; only an
 		// impostor Action reaches here.
 		panic(fmt.Sprintf("illegal Action value %T", action))
 	}
+}
+
+// planPhase moves an in-progress ticket's phase through Issue.PlanPhase, the
+// rule both engines share; the move's whole record is its event, and the row
+// moves only updated_at. [LAW:single-enforcer]
+func (e *Engine) planPhase(current model.Issue, actor, reason string, action model.SetPhase, now time.Time) (model.Issue, []eventSpec, error) {
+	move, err := current.PlanPhase(e.eventsFor(current.ID), action.Phase)
+	if err != nil {
+		return model.Issue{}, nil, err
+	}
+	if !move.Changed() {
+		return current, nil, nil
+	}
+	updated := current
+	updated.UpdatedAt = now
+	return updated, []eventSpec{{
+		action:  string(action.Name()),
+		reason:  reason,
+		actor:   actor,
+		changes: move.FieldChanges(),
+	}}, nil
 }
 
 // planStatus walks the status state machine. Every rejection it can produce is

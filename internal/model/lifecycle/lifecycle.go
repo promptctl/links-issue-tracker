@@ -55,6 +55,9 @@ const (
 	ActionUnarchive ActionName = "unarchive"
 	ActionDelete    ActionName = "delete"
 	ActionRestore   ActionName = "restore"
+
+	// ActionPhase moves an in-progress ticket's phase (phase.go).
+	ActionPhase ActionName = "phase"
 )
 
 // actionVerbs pairs each action's persisted event encoding with the word a
@@ -80,6 +83,7 @@ var actionVerbs = map[ActionName]string{
 	ActionUnarchive: "unarchive",
 	ActionDelete:    "delete",
 	ActionRestore:   "restore",
+	ActionPhase:     "phase",
 }
 
 // Verb is the word a caller types to invoke this action: the name to use in
@@ -201,10 +205,10 @@ func DefaultOpen(value string) State {
 }
 
 // Actions returns the sealed set of transition verbs in canonical order — the
-// status four followed by the retention four. It exists so that consumers which
+// status four, the retention four, then the phase move. It exists so that consumers which
 // must decide something for *every* action can assert they have covered the set
 // rather than hoping: claim derivation classifies each verb as establishing or
-// not, and a ninth action added here without a claims decision fails that
+// not, and an action added here without a claims decision fails that
 // package's coverage test instead of silently defaulting.
 //
 // [LAW:one-source-of-truth] ParseAction's admissible set derives from this list,
@@ -216,11 +220,12 @@ func Actions() []ActionName {
 	return []ActionName{
 		ActionStart, ActionDone, ActionClose, ActionReopen,
 		ActionArchive, ActionUnarchive, ActionDelete, ActionRestore,
+		ActionPhase,
 	}
 }
 
 // ParseAction maps an untrusted action string into the sealed set of all
-// eight transition actions.
+// transition actions.
 // [LAW:single-enforcer] The only string-to-ActionName gate; all trust
 // boundaries call this instead of carrying their own string comparisons.
 func ParseAction(value string) (ActionName, error) {

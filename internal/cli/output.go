@@ -152,7 +152,17 @@ func printIssueDetail(w io.Writer, detail model.IssueDetail) error {
 	// answer to leaf-vs-container; the printer dispatches once on that single
 	// shape signal rather than asking IsContainer or comparing issue types.
 	if caps := issue.Capabilities(); caps.Status != nil {
-		if _, err := fmt.Fprintf(w, "status: %s\nassignee: %s\n", caps.Status.Value, emptyDash(issue.AssigneeValue())); err != nil {
+		if _, err := fmt.Fprintf(w, "status: %s\n", caps.Status.Value); err != nil {
+			return err
+		}
+		// Only an in-progress ticket has a phase, so the line appears exactly
+		// then, derived from the history the detail already carries.
+		if phase, ok := model.PhaseOf(issue, detail.Events); ok {
+			if _, err := fmt.Fprintf(w, "phase: %s\n", phase); err != nil {
+				return err
+			}
+		}
+		if _, err := fmt.Fprintf(w, "assignee: %s\n", emptyDash(issue.AssigneeValue())); err != nil {
 			return err
 		}
 		// Resolution is closed-only optional data; the line appears exactly when a
@@ -264,22 +274,31 @@ func printIssueDetail(w io.Writer, detail model.IssueDetail) error {
 // differ is why `--columns` must name the ones it rejects — `status` and
 // `description` are field names a caller reasonably tries as columns.
 // [LAW:one-source-of-truth]
-var issueFieldNames = map[string]func(model.Issue) string{
-	"id":          func(i model.Issue) string { return i.ID },
-	"title":       func(i model.Issue) string { return i.Title },
-	"description": func(i model.Issue) string { return i.Description },
-	"prompt":      func(i model.Issue) string { return i.Prompt },
-	"type":        func(i model.Issue) string { return string(i.IssueType) },
-	"topic":       func(i model.Issue) string { return i.Topic },
-	"priority":    func(i model.Issue) string { return i.Priority.String() },
-	"status":      func(i model.Issue) string { return string(i.State()) },
-	"assignee":    func(i model.Issue) string { return i.AssigneeValue() },
-	"labels":      func(i model.Issue) string { return strings.Join(i.Labels, ",") },
-	"rank":        func(i model.Issue) string { return i.Rank },
-	"lane":        func(i model.Issue) string { return i.Lane },
-	"follows_up":  func(i model.Issue) string { return i.FollowsUp },
-	"created_at":  func(i model.Issue) string { return i.CreatedAt.Format(time.RFC3339) },
-	"updated_at":  func(i model.Issue) string { return i.UpdatedAt.Format(time.RFC3339) },
+var issueFieldNames = map[string]func(model.IssueDetail) string{
+	"id":          func(d model.IssueDetail) string { return d.Issue.ID },
+	"title":       func(d model.IssueDetail) string { return d.Issue.Title },
+	"description": func(d model.IssueDetail) string { return d.Issue.Description },
+	"prompt":      func(d model.IssueDetail) string { return d.Issue.Prompt },
+	"type":        func(d model.IssueDetail) string { return string(d.Issue.IssueType) },
+	"topic":       func(d model.IssueDetail) string { return d.Issue.Topic },
+	"priority":    func(d model.IssueDetail) string { return d.Issue.Priority.String() },
+	"status":      func(d model.IssueDetail) string { return string(d.Issue.State()) },
+	"phase":       detailPhase,
+	"assignee":    func(d model.IssueDetail) string { return d.Issue.AssigneeValue() },
+	"labels":      func(d model.IssueDetail) string { return strings.Join(d.Issue.Labels, ",") },
+	"rank":        func(d model.IssueDetail) string { return d.Issue.Rank },
+	"lane":        func(d model.IssueDetail) string { return d.Issue.Lane },
+	"follows_up":  func(d model.IssueDetail) string { return d.Issue.FollowsUp },
+	"created_at":  func(d model.IssueDetail) string { return d.Issue.CreatedAt.Format(time.RFC3339) },
+	"updated_at":  func(d model.IssueDetail) string { return d.Issue.UpdatedAt.Format(time.RFC3339) },
+}
+
+// detailPhase is the ticket's phase as its own history puts it, empty when
+// the ticket has none: a bare --field value has no "-" placeholder, the same
+// as an unassigned assignee.
+func detailPhase(d model.IssueDetail) string {
+	phase, _ := model.PhaseOf(d.Issue, d.Events)
+	return string(phase)
 }
 
 // sortedIssueFieldNames lists the valid --field names for the unknown-field
@@ -303,7 +322,7 @@ func sortedIssueFieldNames() []string {
 // the output round-trips directly into `lit update --description` and
 // similar; multiple fields print as "name: value" lines so a multi-line
 // value stays attributable to its field.
-func printIssueFields(w io.Writer, issue model.Issue, fields []string) error {
+func printIssueFields(w io.Writer, detail model.IssueDetail, fields []string) error {
 	type resolvedField struct {
 		name  string
 		value string
@@ -315,7 +334,7 @@ func printIssueFields(w io.Writer, issue model.Issue, fields []string) error {
 		if !ok {
 			return UsageError{Message: fmt.Sprintf("unknown --field %q; valid fields: %s", field, strings.Join(sortedIssueFieldNames(), ", "))}
 		}
-		resolved = append(resolved, resolvedField{name: name, value: getValue(issue)})
+		resolved = append(resolved, resolvedField{name: name, value: getValue(detail)})
 	}
 	if len(resolved) == 1 {
 		_, err := fmt.Fprintln(w, resolved[0].value)
