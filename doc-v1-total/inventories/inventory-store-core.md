@@ -4331,7 +4331,7 @@ Constants (`internal/store/migration_runner.go`):
 - `migrationCheckpointRetention = 5` (`migration_runner.go`)
 - `migrationDriftRepairCheckpointPrefix = "pre-drift-repair"` (`migration_runner.go`) — deliberately distinct so the two retained sets prune independently (`migration_runner.go`).
 
-**Startup migration path** `applyPendingMigrations` (`migration_runner.go`): builds the goose provider first so a provider failure leaves no orphan branch (`migration_runner.go`, error `construct migration provider: %w`); then `CreateCheckpoint(ctx, "pre-migrate")` before any mutation, error `create migration checkpoint: %w` (`migration_runner.go`). On `goose.ErrNoNextVersion` (success) it calls `PruneCheckpoints(ctx, "pre-migrate", 5)`, error `prune migration checkpoints: %w` (`migration_runner.go`). On a goose failure it calls `handleMigrationFailure` and also prunes; a prune failure is joined to the migration failure with `errors.Join`, as `prune migration checkpoints: %w` (`migration_runner.go`). Each successful step commits with `migrationCommitMessage(result)` and, on failure, `commit migration v%d: %w` (`migration_runner.go`).
+**Startup migration path** `applyPendingMigrations` (`migration_runner.go`): builds the goose provider first so a provider failure leaves no orphan branch (`migration_runner.go`, error `construct migration provider: %w`); then `CreateCheckpoint(ctx, "pre-migrate")` before any mutation, error `create migration checkpoint: %w` (`migration_runner.go`). On `goose.ErrNoNextVersion` (success) it calls `PruneCheckpoints(ctx, "pre-migrate", 5)`, error `prune migration checkpoints: %w` (`migration_runner.go`). On a goose failure it calls `handleMigrationFailure` and also prunes, both on `context.WithoutCancel(ctx)` so a caller's cancellation cannot stop the recovery; a prune failure is joined to the migration failure with `errors.Join`, as `prune migration checkpoints: %w` (`migration_runner.go`). Each successful step commits with `migrationCommitMessage(result)` and, on failure, `commit migration v%d: %w` (`migration_runner.go`).
 
 **Failure handling** `handleMigrationFailure` (`migration_runner.go`): reset first, quarantine second (`migration_runner.go`). `ResetToCheckpoint(checkpoint.Name)` failure yields `migration v%d failed and Dolt reset to %q failed (%v); restore from dbsnapshot. Root cause: %w` (`migration_runner.go`). A quarantine insert failure yields `migration v%d failed (reset to %q); quarantine insert failed (%v); restore from dbsnapshot. Root cause: %w` (`migration_runner.go`). The quarantine record is committed with the message `fmt.Sprintf("migrate: quarantine v%d %s", version, name)` (`migration_runner.go`), whose failure yields `migration v%d failed (reset to %q); quarantine commit failed (%v); ...` (`migration_runner.go`).
 
@@ -5379,7 +5379,7 @@ Tests: `parse_dsn_test.go` basics param names are case-insensitive requires comm
 
 `NewConnector(cfg)` (`connector.go`) validates: `config.Directory is required` (`connector.go`), `config.CommitName is required` (`connector.go`), `config.CommitEmail is required` (`connector.go`); defaults `cfg.Version` to `defaultDoltVersion = "0.40.17"` (`connector.go`); re-validates the directory with the same two messages (`connector.go`).
 
-`Connect(ctx)` (`connector.go`): `getOrOpenEngine` → `newLocalContext` → `SetCurrentDatabase(cfg.Database)` when non-empty (`connector.go`) → if `ClientFoundRows`, OR `mysql.CapabilityClientFoundRows` into the session client capabilities (`connector.go`) → returns a `*DoltConn`.
+`Connect(ctx)` (`connector.go`): `getOrOpenEngine(ctx)` → `newLocalContext(se, context.Background())` — the session never holds the Connect context, so cancelling it does not fail later queries on the connection → `SetCurrentDatabase(cfg.Database)` when non-empty (`connector.go`) → if `ClientFoundRows`, OR `mysql.CapabilityClientFoundRows` into the session client capabilities (`connector.go`) → returns a `*DoltConn`.
 
 `getOrOpenEngine` (`connector.go`): a single shared engine per connector, guarded by `c.mu` plus an `openCh` channel so concurrent Connects wait on the in-flight open rather than racing. `connector is closed` (`connector.go`) if `Close` already ran; a waiter aborts on `ctx.Done()` returning `ctx.Err()` (`connector.go`). If the open succeeds after `Close`, the engine is immediately closed (`connector.go`).
 
@@ -5422,6 +5422,8 @@ Tests: `parse_dsn_test.go` basics param names are case-insensitive requires comm
 8. **Test seams left as package vars** (production leaves them nil): `newLocalContextForConnector` (`connector.go`) and `openSqlEngineForConnector` (`driver.go`).
 
 9. **`newResult` error precedence** — `result.go`: the iteration error wins over a `Close` failure; a close failure is only reported when iteration succeeded.
+
+10. **Session built on its own context** ("Patch 6") — `connector.go`: `Connect` builds the session with `newLocalContext(se, context.Background())`; upstream built it on the Connect context, so cancelling the call that first opened the connection failed every later query on it with `Error 1105: context canceled`. Pinned by lit's `internal/store` `TestMigrationFailureResetSurvivesCallerCancel`.
 
 #### 8.6 Query, statement, and rows behavior
 

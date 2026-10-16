@@ -792,7 +792,7 @@ Test hooks: `migrationUpByOneForTest` (`migration_runner.go`) applies **only** t
 4. `prune` closure: uses `migrationCheckpointPruneForTest` when set, else `s.PruneCheckpoints(ctx, "pre-migrate", 5)` (`migration_runner.go`).
 5. Loop:
    - `errors.Is(gooseErr, goose.ErrNoNextVersion)` → `prune(ctx)`; a prune failure IS returned as `"prune migration checkpoints: %w"`; then return nil (`migration_runner.go`).
-   - other `gooseErr != nil` → `cpErr := s.handleMigrationFailure(...)`, then `prune(ctx)`; a prune failure is returned as `errors.Join(cpErr, "prune migration checkpoints: %w")`, else `cpErr` (`migration_runner.go`).
+   - other `gooseErr != nil` → `recoveryCtx := context.WithoutCancel(ctx)`, `cpErr := s.handleMigrationFailure(recoveryCtx, ...)`, then `prune(recoveryCtx)`; a prune failure is returned as `errors.Join(cpErr, "prune migration checkpoints: %w")`, else `cpErr` (`migration_runner.go`).
    - success → `s.commitWorkingSet(ctx, migrationCommitMessage(result))`; failure → `"commit migration v%d: %w"` (`migration_runner.go`).
 
 `upByOne(ctx, provider)` (`migration_runner.go`) is bare `provider.UpByOne(ctx)` — the ONE shared forward-step; the test hook wraps it only at the `applyPendingMigrations` call site (`migration_runner.go`).

@@ -671,7 +671,13 @@ func (s *Store) applyPendingMigrations(ctx context.Context) error {
 			return nil
 		}
 		if gooseErr != nil {
-			cpErr := s.handleMigrationFailure(ctx, result, gooseErr, checkpoint)
+			// Recovery restores the workspace the failed step left half-migrated,
+			// so it runs to the end on a context the caller cannot cancel: a
+			// caller that gave up (lit init's adopt timeout cancels the context
+			// Open ran under) must not leave the step unreset.
+			// [LAW:no-ambient-temporal-coupling]
+			recoveryCtx := context.WithoutCancel(ctx)
+			cpErr := s.handleMigrationFailure(recoveryCtx, result, gooseErr, checkpoint)
 			// Prune on the failure path too: normal failures insert a quarantine row
 			// so future Opens are blocked before creating a new checkpoint, but
 			// nil-result failures skip quarantine insertion, leaving the door open
@@ -679,7 +685,7 @@ func (s *Store) applyPendingMigrations(ctx context.Context) error {
 			// failure stays the error callers classify; a prune failure rides
 			// beside it, since it is the only sign those branches are piling up.
 			// [LAW:no-silent-failure]
-			if pruneErr := prune(ctx); pruneErr != nil {
+			if pruneErr := prune(recoveryCtx); pruneErr != nil {
 				return errors.Join(cpErr, fmt.Errorf("prune migration checkpoints: %w", pruneErr))
 			}
 			return cpErr

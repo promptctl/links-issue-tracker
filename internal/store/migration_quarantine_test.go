@@ -418,6 +418,53 @@ func TestMigrationCheckpointRetentionBounded(t *testing.T) {
 	}
 }
 
+// TestMigrationFailureResetSurvivesCallerCancel pins that recovery from a
+// failed migration runs to the end when the caller gives up mid-step: the
+// step cancels the context Open was called with, then fails, and Open still
+// returns the CheckpointResetError of a completed reset. lit init's adopt
+// timeout cancels exactly that context (init_sync.go), so a cancelled caller
+// must not leave a failed migration unreset.
+func TestMigrationFailureResetSurvivesCallerCancel(t *testing.T) {
+	// serial: no t.Parallel — installs the package-level migrationUpByOneForTest
+	// hook.
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	first, err := Open(context.Background(), doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open(first) error = %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("Close(first) error = %v", err)
+	}
+	withGooseHistoryDropped(t, context.Background(), doltRoot)
+
+	failVersion := headVersion(t) + 1
+	sentinel := errors.New("simulated migration body error")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	migrationUpByOneForTest = func(context.Context, *goose.Provider) (*goose.MigrationResult, error) {
+		cancel()
+		return &goose.MigrationResult{
+			Source: &goose.Source{Version: failVersion, Path: fmt.Sprintf("%05d_test.sql", failVersion)},
+		}, sentinel
+	}
+	t.Cleanup(func() { migrationUpByOneForTest = nil })
+
+	_, openErr := Open(ctx, doltRoot, "test-workspace-id")
+	migrationUpByOneForTest = nil
+	var cpErr *CheckpointResetError
+	if !errors.As(openErr, &cpErr) {
+		t.Fatalf("Open() error = %v; want a *CheckpointResetError from a reset that completed", openErr)
+	}
+	// The checkpoint prune after the reset is recovery too: no step of it may
+	// stop on the caller's cancellation.
+	if errors.Is(openErr, context.Canceled) {
+		t.Errorf("Open() error = %v; a recovery step stopped on the caller's cancellation", openErr)
+	}
+	if cpErr.Version != failVersion || !errors.Is(cpErr.Cause, sentinel) {
+		t.Errorf("CheckpointResetError = {Version: %d, Cause: %v}, want {Version: %d, Cause: %v}", cpErr.Version, cpErr.Cause, failVersion, sentinel)
+	}
+}
+
 // TestCheckpointResetErrorUnknownVersion pins that CheckpointResetError.Error
 // emits a "version unknown" message (without a quarantine-clear SQL instruction)
 // when goose returns a nil MigrationResult so Version stays 0. Without this

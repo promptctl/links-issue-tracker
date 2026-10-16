@@ -10,7 +10,7 @@ instead of on a remote host, so the patch travels with the PR that needed it.
 
 ## Why this exists
 
-This copy carries **five** independent patches. When refreshing (below), all
+This copy carries **six** independent patches. When refreshing (below), all
 must be re-applied.
 
 ### Patch 1 — telemetry removal (`connector.go`, `driver.go`)
@@ -148,6 +148,23 @@ opened engines run concurrently exactly as before. This protects any lit
 path that opens multiple stores in one process (the cross-project rollup,
 parallel tests).
 
+### Patch 6 — the session outlives the dial context (`connector.go`)
+
+Upstream's `Connector.Connect` built the connection's session
+(`se.NewLocalContext(ctx)`) on the context it was handed, and every statement,
+transaction and row read on that connection runs on that session. But
+`database/sql` hands `Connect` the context of whichever call first needed a
+connection, and `driver.Connector` documents that context as serving the dial
+alone, never to be stored. Retaining it bound the connection to one caller:
+once that caller cancelled, every later query on the connection failed with
+`Error 1105: context canceled`. lit's store holds a single connection for its
+whole life, so cancelling the context a store was opened under broke the
+store, including the checkpoint reset after a failed migration.
+
+The patch builds the session on `context.Background()`. The engine open
+before it still runs on the dial context, so a cancelled caller can still
+abandon an open in progress.
+
 ## Refreshing this copy
 
 When bumping the `dolthub/driver` version pinned in the top-level `go.mod`:
@@ -157,7 +174,7 @@ When bumping the `dolthub/driver` version pinned in the top-level `go.mod`:
    `replace` directive temporarily removed).
 2. Diff `$(go env GOMODCACHE)/github.com/dolthub/driver@<version>` against
    this directory to see what upstream changed.
-3. Re-apply **all five** patches against the new version, copying the rest
+3. Re-apply **all six** patches against the new version, copying the rest
    of upstream's changes through untouched:
    - Patch 1: delete `emitUsageEvent` and its supporting machinery in
      `connector.go`, and the `go emitUsageEvent(...)` call in `driver.go`.
@@ -187,6 +204,11 @@ When bumping the `dolthub/driver` version pinned in the top-level `go.mod`:
      phases stay outside the fence. Confirm with lit's parallelized
      `internal/store` suite under `go test -short -race`, which fails with
      construction-time DATA RACE warnings if the fence is missing.
+   - Patch 6: in `Connector.Connect`, build the session with
+     `newLocalContext(se, context.Background())` rather than the Connect
+     context. Confirm with lit's `internal/store`
+     `TestMigrationFailureResetSurvivesCallerCancel`, which fails with
+     `Error 1105: context canceled` if the session holds the dial context.
 4. Update the `replace` directive's version comment in the top-level
    `go.mod` to match.
 
