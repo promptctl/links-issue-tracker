@@ -370,7 +370,7 @@ Covered in §2.2. Type declarations at `internal/app/app.go`.
 2. `workspace.Resolve(cwd)` → error returned as-is.
 3. `engine.Open(ctx, contract.mode, ws.DatabasePath, ws.WorkspaceID)` → error returned as-is.
 4. `contract.resolveStream(ws.PrivateGitDir)` — resolved **after** the store opens, so a command that cannot reach its store mints nothing.
-5. On identity failure: `return nil, errors.Join(err, st.Close())` — the store must be closed because `Store.Close` also releases the workspace lock; joined so a stranded lock is visible too.
+5. On identity failure: `return nil, errors.Join(err, storage.OpenMigration(st).PruneErr, st.Close())` — the store must be closed because `Store.Close` also releases the workspace lock; joined so a stranded lock is visible too, and so is a failed migration-snapshot prune, which no App is returned to report.
 6. `st.AttributeTo(stream.Value())` — called unconditionally for both modes; only the value varies.
 7. `return &App{Workspace: ws, Store: st, Stream: stream}, nil`.
 

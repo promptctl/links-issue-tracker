@@ -253,6 +253,67 @@ func TestMigrateSnapshotPruneEnforcesRetention(t *testing.T) {
 	}
 }
 
+// A migrating open whose snapshot prune fails after the migration committed
+// opens: the command it serves runs, and the failure is on what the open
+// reports rather than its error.
+func TestMigratingOpenReportsAFailedSnapshotPrune(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("removal-permission injection has no effect as root")
+	}
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	first, err := Open(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open(first) error = %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("Close(first) error = %v", err)
+	}
+	// Leave exactly a full retention budget of migration snapshots, the oldest
+	// of which cannot be removed: the open's own snapshot pushes it out, and
+	// the prune fails on it.
+	dir := dbsnapshot.DirFor(doltRoot)
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatalf("clear snapshots: %v", err)
+	}
+	const base = int64(1700000000000000000)
+	var stuck string
+	for i := int64(0); i < migrationSnapshotRetention; i++ {
+		path := filepath.Join(dir, fmt.Sprintf("%d-%s-%d", base+i, migrationSnapshotLabel, base+i))
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("plant snapshot: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(path, "held"), nil, 0o644); err != nil {
+			t.Fatalf("plant snapshot file: %v", err)
+		}
+		if i == 0 {
+			stuck = path
+		}
+	}
+	if err := os.Chmod(stuck, 0o555); err != nil {
+		t.Fatalf("chmod stuck snapshot: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(stuck, 0o755) })
+	withGooseHistoryDropped(t, ctx, doltRoot)
+
+	st, err := Open(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open() error = %v, want the migration reported without one", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	done := st.Migrated()
+	if !IsMigrationSnapshotName(done.Snapshot) || done.Snapshot == filepath.Base(stuck) {
+		t.Fatalf("Migrated() = %+v, want the snapshot the open took", done)
+	}
+	if done.PruneErr == nil || !strings.Contains(done.PruneErr.Error(), "prune migration snapshots") {
+		t.Fatalf("PruneErr = %v, want the prune failure", done.PruneErr)
+	}
+	if _, err := os.Stat(stuck); err != nil {
+		t.Fatalf("stuck snapshot: %v; want it left in place", err)
+	}
+}
+
 // countMigrationSnapshots is a test helper that returns the number of
 // snapshots of the database at databaseDir whose name satisfies
 // IsMigrationSnapshotName.

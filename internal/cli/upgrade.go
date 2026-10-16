@@ -187,6 +187,7 @@ func (r workspaceSchemaReader) AppliedSchemaVersion(ctx context.Context) (applie
 			err = cerr
 		}
 	}()
+	reportOpenMigration(ctx, storage.OpenMigration(st))
 	migrator, err := storage.SchemaMigration.Of(st)
 	if err != nil {
 		return 0, err

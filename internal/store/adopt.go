@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/dbfactory"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // adoptPendingMarkerName is the durable adopt-lifecycle sentinel. It lives
@@ -163,10 +164,13 @@ func PendingAdopt(databasePath string) error {
 // question WITHOUT creating the store, so a fresh init can clone straight into
 // the target path. [LAW:no-defensive-null-guards] absence is a real domain value
 // (pristine workspace), matched here rather than papered over.
-func LocalHasTickets(ctx context.Context, doltRootDir, workspaceID string) (bool, error) {
+//
+// It also reports what opening the store to count did to its stored shape: the
+// read open migrates a store behind this binary, and the caller records that.
+func LocalHasTickets(ctx context.Context, doltRootDir, workspaceID string) (bool, storage.Migrated, error) {
 	cleanRoot, err := validateDoltRootDir(doltRootDir)
 	if err != nil {
-		return false, err
+		return false, storage.Migrated{}, err
 	}
 	// An interrupted adopt's residue is "nothing to lose" BY CONSTRUCTION: the
 	// marker is only ever written after this same gate confirmed the store
@@ -182,23 +186,20 @@ func LocalHasTickets(ctx context.Context, doltRootDir, workspaceID string) (bool
 	// confirmed. [LAW:parse-dont-validate] [LAW:no-silent-failure]
 	if err := requireNoPendingAdopt(cleanRoot); err != nil {
 		if errors.Is(err, errAdoptPending) {
-			return false, nil
+			return false, storage.Migrated{}, nil
 		}
-		return false, err
+		return false, storage.Migrated{}, err
 	}
 	if !dirExists(filepath.Join(cleanRoot, doltDatabaseName)) {
-		return false, nil
+		return false, storage.Migrated{}, nil
 	}
 	s, err := OpenForRead(ctx, cleanRoot, workspaceID)
 	if err != nil {
-		return false, err
+		return false, storage.Migrated{}, err
 	}
 	defer s.Close()
 	count, err := s.LocalIssueCount(ctx)
-	if err != nil {
-		return false, err
-	}
-	return count > 0, nil
+	return count > 0, s.Migrated(), err
 }
 
 // AdoptRemoteByClone bootstraps the local store by CLONING the remote's history

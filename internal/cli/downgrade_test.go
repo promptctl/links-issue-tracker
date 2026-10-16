@@ -212,7 +212,7 @@ func TestRunDowngradeRecordsWhatItReversedAndInstalled(t *testing.T) {
 		"downgrade.installed_path":       "/p/lit",
 		"downgrade.workspace_schema":     float64(4),
 		"downgrade.snapshot":             "1700000000000000000-lit-downgrade-1700000000000000001",
-		"downgrade.snapshot_prune_error": "",
+		"downgrade.snapshot_prune_error": nil,
 		"downgrade.target_schema_max":    float64(3),
 		"downgrade.running_schema_min":   float64(1),
 		"downgrade.running_schema_max":   float64(4),
@@ -237,7 +237,7 @@ func TestRunDowngradeRecordsWhatTheReverseReportedOnEveryOutcome(t *testing.T) {
 	reversed := map[string]any{
 		"downgrade.workspace_schema":     float64(4),
 		"downgrade.snapshot":             "1700000000000000000-lit-downgrade-1700000000000000001",
-		"downgrade.snapshot_prune_error": "",
+		"downgrade.snapshot_prune_error": nil,
 	}
 	tests := []struct {
 		name       string
@@ -253,7 +253,7 @@ func TestRunDowngradeRecordsWhatTheReverseReportedOnEveryOutcome(t *testing.T) {
 			wantFacts: map[string]any{
 				"downgrade.workspace_schema":     float64(3),
 				"downgrade.snapshot":             "",
-				"downgrade.snapshot_prune_error": "",
+				"downgrade.snapshot_prune_error": nil,
 				"downgrade.installed_path":       "/p/lit",
 			},
 			wantCounts: map[string]int{"downgrade.reversed": 0},
@@ -367,7 +367,7 @@ func TestRunDowngradeOnAWorkspacePastRunningSupportIsSchemaAhead(t *testing.T) {
 		"downgrade.tag":                  "v0.4.1",
 		"downgrade.workspace_schema":     float64(ahead),
 		"downgrade.snapshot":             "",
-		"downgrade.snapshot_prune_error": "",
+		"downgrade.snapshot_prune_error": nil,
 		"downgrade.target_schema_max":    float64(3),
 		"downgrade.running_schema_min":   float64(current.Schema.Min),
 		"downgrade.running_schema_max":   float64(current.Schema.Max),

@@ -18,7 +18,7 @@ func TestLocalHasTicketsDoesNotCreateStore(t *testing.T) {
 	ctx := context.Background()
 	root := filepath.Join(t.TempDir(), "dolt")
 
-	has, err := LocalHasTickets(ctx, root, "ws")
+	has, _, err := LocalHasTickets(ctx, root, "ws")
 	if err != nil {
 		t.Fatalf("LocalHasTickets(absent): %v", err)
 	}
@@ -32,7 +32,7 @@ func TestLocalHasTicketsDoesNotCreateStore(t *testing.T) {
 	if _, err := EnsureDatabase(ctx, root, "ws"); err != nil {
 		t.Fatalf("EnsureDatabase: %v", err)
 	}
-	has, err = LocalHasTickets(ctx, root, "ws")
+	has, _, err = LocalHasTickets(ctx, root, "ws")
 	if err != nil {
 		t.Fatalf("LocalHasTickets(empty): %v", err)
 	}
@@ -62,7 +62,7 @@ func TestAdoptRemoteByCloneBootstrapsAndReAdopts(t *testing.T) {
 		t.Fatalf("AdoptRemoteByClone(first): %v", err)
 	}
 	assertHasIssueAfterAdopt(t, ctx, consumer, id)
-	if has, err := LocalHasTickets(ctx, consumer, "ws"); err != nil || !has {
+	if has, _, err := LocalHasTickets(ctx, consumer, "ws"); err != nil || !has {
 		t.Fatalf("LocalHasTickets(after adopt) = %v, %v; want true, nil", has, err)
 	}
 
@@ -151,7 +151,7 @@ func TestAdoptRemoteByCloneHealsAbandonedAdoptResidue(t *testing.T) {
 		t.Fatalf("WriteFile(marker): %v", err)
 	}
 
-	has, err := LocalHasTickets(ctx, consumer, "ws")
+	has, _, err := LocalHasTickets(ctx, consumer, "ws")
 	if err != nil {
 		t.Fatalf("LocalHasTickets(residue) = %v, want nil — the gate must consume the marker, not open the junk", err)
 	}

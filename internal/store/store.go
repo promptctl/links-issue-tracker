@@ -96,6 +96,9 @@ type Store struct {
 	// exactly once, proving a retry resumes at versioning instead of re-running
 	// the staged mutation body. Same per-Store seam rationale as above.
 	commitWorkingSetHookForTest func() error
+
+	// migrated is what Open's migrate did; see Migrated.
+	migrated storage.Migrated
 }
 
 func Open(ctx context.Context, doltRootDir string, workspaceID string) (_ *Store, err error) {
@@ -155,7 +158,9 @@ func Open(ctx context.Context, doltRootDir string, workspaceID string) (_ *Store
 		if err := ensureMasterDefaultBranch(ctx, s.db); err != nil {
 			return wrapEngineOpenContention(err, doltRootDir)
 		}
-		return s.migrate(ctx)
+		migrated, err := s.migrate(ctx)
+		s.migrated = migrated
+		return err
 	}); err != nil {
 		if closeErr := s.closeEngine(); closeErr != nil {
 			err = errors.Join(err, closeErr)

@@ -199,7 +199,8 @@ func planRemoteAdopt(ctx context.Context, ws workspace.Info) (*adoptClonePlan, i
 	// adopt, because adopt-by-clone replaces the store wholesale. The check does
 	// not create the store, so a fresh init leaves the target path untouched for
 	// the clone to be its first writer. [LAW:no-silent-failure]
-	hasTickets, err := store.LocalHasTickets(ctx, ws.DatabasePath, ws.WorkspaceID)
+	hasTickets, migrated, err := store.LocalHasTickets(ctx, ws.DatabasePath, ws.WorkspaceID)
+	reportOpenMigration(ctx, migrated)
 	if err != nil {
 		return nil, initSyncOutcome{State: initSyncFailed, Error: err.Error()}
 	}

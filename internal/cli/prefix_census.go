@@ -62,6 +62,7 @@ func readWorkspaceIDPrefixCensus(ctx context.Context, ws workspace.Info) (census
 			err = cerr
 		}
 	}()
+	reportOpenMigration(ctx, storage.OpenMigration(st))
 	return readIDPrefixCensus(ctx, st)
 }
 

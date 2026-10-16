@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -237,6 +238,40 @@ func TestPrintCrossProjectRollupCloseWarningKeepsCounts(t *testing.T) {
 	}
 	if strings.Contains(got, "! /repos/alpha") {
 		t.Fatalf("a close warning must not render as a '!' error row:\n%s", got)
+	}
+}
+
+// A store whose open migrated it and then could not roll old migration
+// snapshots off gets a `~` note, whether its read went on to succeed or fail:
+// the migration committed before the read, and the count on the event says
+// how many stores it happened to.
+func TestPrintCrossProjectRollupNotesAFailedSnapshotPrune(t *testing.T) {
+	t.Parallel()
+	rows := []projectRollup{
+		{Label: "alpha", StorageDir: "/repos/alpha/.git/links", Ready: 3, Migrated: storage.Migrated{Snapshot: "a-pre-migrate-1", PruneErr: errors.New("prune migration snapshots: stuck")}},
+		{Label: "beta", StorageDir: "/repos/beta/.git/links", Err: errors.New("unreadable"), Migrated: storage.Migrated{Snapshot: "b-pre-migrate-1", PruneErr: errors.New("prune migration snapshots: stuck")}},
+		{Label: "gamma", StorageDir: "/repos/gamma/.git/links", Ready: 1, Migrated: storage.Migrated{Snapshot: "g-pre-migrate-1"}},
+		{Label: "delta", StorageDir: "/repos/delta/.git/links", Ready: 2},
+	}
+	var out bytes.Buffer
+	if err := printCrossProjectRollup(&out, rows); err != nil {
+		t.Fatalf("printCrossProjectRollup() error = %v", err)
+	}
+	got := out.String()
+	for _, dir := range []string{"/repos/alpha/.git/links", "/repos/beta/.git/links"} {
+		want := "~ " + dir + ": warning: old migration snapshots were not removed: prune migration snapshots: stuck\n"
+		if !strings.Contains(got, want) {
+			t.Errorf("output %q missing %q", got, want)
+		}
+	}
+	for _, dir := range []string{"/repos/gamma", "/repos/delta"} {
+		if strings.Contains(got, "~ "+dir) {
+			t.Errorf("output %q notes %s, whose open did not fail a prune", got, dir)
+		}
+	}
+	want := map[string]int{"stores.migrated": 3, "stores.snapshot_prune_failures": 2}
+	if got := rollupMigrationCounts(rows); !reflect.DeepEqual(got, want) {
+		t.Errorf("rollupMigrationCounts() = %v, want %v", got, want)
 	}
 }
 
@@ -472,7 +507,7 @@ func TestRunStoresCountsRendersRollup(t *testing.T) {
 	_, wantPrefix := seedDiscoverableStore(t, repo, "real", "real-workspace-id")
 
 	var counts bytes.Buffer
-	if err := runStores(context.Background(), &counts, []string{"--counts", root}); err != nil {
+	if err := runStores(underInvocation(context.Background()), &counts, []string{"--counts", root}); err != nil {
 		t.Fatalf("runStores --counts error = %v", err)
 	}
 	got := counts.String()
