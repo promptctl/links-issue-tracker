@@ -151,12 +151,15 @@ not work on this checkout's tickets, such as `lit sync push`, `lit init` or
 
 A command refused because the workspace's schema is ahead of this lit (reason
 `workspace_schema_ahead`) records which snapshot the refusal offered as a lossy
-rollback. Both keys are present exactly when the command ended in that refusal.
+rollback, and how many migration snapshots it read to decide. Every key is
+present exactly when the command ended in that refusal.
 
 | Key | Meaning |
 | --- | --- |
-| `schema_ahead.rollback_snapshot` | The migration snapshot the refusal offered to `lit snapshots restore`, or `""` when no migration snapshot holds the workspace's data at a schema this lit supports. |
-| `schema_ahead.rollback_lookup_error` | Why the snapshots could not be read, or `null`. When it is set, `schema_ahead.rollback_snapshot` is `""`. |
+| `schema_ahead.rollback_snapshot` | The migration snapshot the refusal offered to `lit snapshots restore`, or `""` when it found none holding data this lit opens. |
+| `schema_ahead.rollback_lookup_error` | Why snapshots could not be listed or read, or why the search stopped, or `null`. Set beside an offered snapshot when a newer one could not be read. |
+| `counts.schema_ahead.snapshots_examined` | The migration snapshots the refusal read, newest first, until it found one to offer. |
+| `counts.schema_ahead.snapshots_unreadable` | Those of them it could not read. |
 
 ## Reading the file
 

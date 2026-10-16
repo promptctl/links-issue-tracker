@@ -380,28 +380,46 @@ func TestAPanickingInvocationEndsAsAPanic(t *testing.T) {
 }
 
 // A schema-ahead refusal's event records which snapshot it offered as the
-// lossy rollback — none is an empty name — or why the snapshots could not be
-// read, and a wrapped refusal records the same.
+// lossy rollback — none is an empty name — why snapshots could not be read, and
+// how many it read, and a wrapped refusal records the same.
 func TestASchemaAheadRefusalRecordsItsRollbackOffer(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
 		snapshot      string
 		lookupErr     error
 		wantLookupErr any
+		examined      int
+		unreadable    int
 	}{
-		{name: "offered", snapshot: "1700000000-pre-migrate-1700000000", wantLookupErr: nil},
-		{name: "none", snapshot: "", wantLookupErr: nil},
+		{name: "offered", snapshot: "1700000000-pre-migrate-1700000000", wantLookupErr: nil, examined: 2},
+		{name: "none", snapshot: "", wantLookupErr: nil, examined: 3},
+		{name: "offered past an unreadable snapshot", snapshot: "1700000000-pre-migrate-1700000000", lookupErr: errors.New("read the schema snapshot x holds: bad manifest"), wantLookupErr: "read the schema snapshot x holds: bad manifest", examined: 2, unreadable: 1},
 		{name: "lookup failed", lookupErr: errors.New("list snapshots: permission denied"), wantLookupErr: "list snapshots: permission denied"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			refusal := &store.UnsupportedSchemaVersionError{WorkspaceVersion: 7, MaxSupported: 3, SnapshotName: tc.snapshot, SnapshotLookupErr: tc.lookupErr}
+			refusal := &store.UnsupportedSchemaVersionError{WorkspaceVersion: 7, MaxSupported: 3, SnapshotName: tc.snapshot, SnapshotLookupErr: tc.lookupErr, SnapshotsExamined: tc.examined, SnapshotsUnreadable: tc.unreadable}
 			end := invocationEnd(time.Now(), fmt.Errorf("open store: %w", refusal), nil)
-			facts := writtenFacts(t, telemetry.Begin(telemetry.Event{}).Finish(end))
-			if got := facts["schema_ahead.rollback_snapshot"]; got != tc.snapshot {
+			line, err := telemetry.Line(telemetry.Begin(telemetry.Event{}).Finish(end))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var written struct {
+				Facts  map[string]any `json:"facts"`
+				Counts map[string]int `json:"counts"`
+			}
+			if err := json.Unmarshal(line, &written); err != nil {
+				t.Fatal(err)
+			}
+			if got := written.Facts["schema_ahead.rollback_snapshot"]; got != tc.snapshot {
 				t.Errorf("schema_ahead.rollback_snapshot = %#v, want %q", got, tc.snapshot)
 			}
-			if got, ok := facts["schema_ahead.rollback_lookup_error"]; !ok || got != tc.wantLookupErr {
+			if got, ok := written.Facts["schema_ahead.rollback_lookup_error"]; !ok || got != tc.wantLookupErr {
 				t.Errorf("schema_ahead.rollback_lookup_error = %#v (present %v), want %#v", got, ok, tc.wantLookupErr)
+			}
+			for key, want := range map[string]int{"schema_ahead.snapshots_examined": tc.examined, "schema_ahead.snapshots_unreadable": tc.unreadable} {
+				if got, ok := written.Counts[key]; !ok || got != want {
+					t.Errorf("counts.%s = %d (present %v), want a recorded %d", key, got, ok, want)
+				}
 			}
 		})
 	}

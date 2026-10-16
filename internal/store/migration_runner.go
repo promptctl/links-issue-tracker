@@ -132,10 +132,10 @@ type UnsupportedSchemaVersionError struct {
 	WorkspaceVersion int64
 	MaxSupported     int64
 	MissingBaseline  []string
-	// SnapshotName is the newest migration-recovery snapshot holding this
-	// workspace's data at schema MaxSupported or below (rollbackSnapshotName),
-	// when one exists. Populating it offers the user a lossy rollback path;
-	// emptying it means no snapshot this binary can open exists.
+	// SnapshotName is the newest migration-recovery snapshot holding a
+	// workspace this binary operates (searchRollbackSnapshot), when one exists.
+	// Populating it offers the user a lossy rollback path; emptying it means no
+	// snapshot this binary can open was found.
 	// [LAW:types-are-the-program] Which rollback line the message emits is
 	// encoded by whether the optional field is populated, not by a flag.
 	SnapshotName string
@@ -144,6 +144,9 @@ type UnsupportedSchemaVersionError struct {
 	// been a closer rollback. [LAW:no-silent-failure] a failed read is reported
 	// as one, never as "no snapshot exists".
 	SnapshotLookupErr error
+	// SnapshotsExamined counts the migration snapshots the search read, and
+	// SnapshotsUnreadable those it could not.
+	SnapshotsExamined, SnapshotsUnreadable int
 }
 
 func (e *UnsupportedSchemaVersionError) Error() string {
@@ -891,21 +894,36 @@ func (s *Store) recordQuarantine(ctx context.Context, version int64, name, error
 // [LAW:dataflow-not-control-flow] The verify result (present count and missing
 // list) is the data that drives proceed-vs-refuse; no flag, no mutation.
 func (s *Store) refuseIfBaselineMissing(ctx context.Context, state migrationState) error {
-	present, missing, err := s.verifyBaselineShape(ctx)
+	missing, carried, err := s.baselineCarried(ctx)
 	if err != nil {
 		return err
 	}
-	if present == 0 || len(missing) > 0 {
-		snapshot, lookupErr := s.rollbackSnapshotName(ctx, state.registryMaxVers)
+	if !carried {
+		search := s.searchRollbackSnapshot(ctx, state.registryMaxVers)
 		return &UnsupportedSchemaVersionError{
-			WorkspaceVersion:  state.appliedVersion,
-			MaxSupported:      state.registryMaxVers,
-			MissingBaseline:   missing,
-			SnapshotName:      snapshot,
-			SnapshotLookupErr: lookupErr,
+			WorkspaceVersion:    state.appliedVersion,
+			MaxSupported:        state.registryMaxVers,
+			MissingBaseline:     missing,
+			SnapshotName:        search.snapshot,
+			SnapshotLookupErr:   search.err,
+			SnapshotsExamined:   search.examined,
+			SnapshotsUnreadable: search.unreadable,
 		}
 	}
 	return nil
+}
+
+// baselineCarried reports whether the live schema carries the baseline shape
+// this binary operates against, naming what is missing when it does not —
+// what lets this binary operate a workspace whose goose log is ahead of its
+// registry. [LAW:single-enforcer] the refusal and the rollback search
+// (snapshotOperable) apply this one rule.
+func (s *Store) baselineCarried(ctx context.Context) (missing []string, carried bool, err error) {
+	present, missing, err := s.verifyBaselineShape(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	return missing, present > 0 && len(missing) == 0, nil
 }
 
 // classifyMigrationState derives the workspace phase using only reads,

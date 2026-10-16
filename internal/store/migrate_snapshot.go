@@ -187,53 +187,90 @@ func formatMigrationSnapshotLabel(t time.Time) string {
 	return fmt.Sprintf("%s-%d", migrationSnapshotLabel, t.UTC().UnixNano())
 }
 
-// rollbackSnapshotName returns the newest migration snapshot holding this
-// workspace's data at schema maxSupported or below — a workspace a lit whose
-// registry tops out there opens — or "" when none does. The empty workspace
-// the fresh-open snapshot captured holds no data, so it is never offered.
-// A snapshot that cannot be read is passed over, and why is returned beside the
-// name: whether it was a better rollback than the one offered is unknown.
-// [LAW:no-silent-failure]
+// rollbackSearch is what the refusal's search for a lossy rollback found.
+type rollbackSearch struct {
+	// snapshot is the newest migration snapshot this lit operates, or "".
+	snapshot string
+	// examined counts the migration snapshots the search read to an answer or
+	// failed to read; unreadable counts the failures.
+	examined, unreadable int
+	// err is why snapshots could not be listed or read, or why the search
+	// stopped early; nil when every snapshot it reached was read.
+	err error
+}
+
+// searchRollbackSnapshot finds the newest migration snapshot holding a
+// workspace a lit whose registry tops out at maxSupported operates
+// (snapshotOperable). A snapshot that cannot be read is passed over and counted,
+// and why is kept: whether it was a closer rollback than the one offered is
+// unknown. [LAW:no-silent-failure] A canceled ctx ends the search; it is not a
+// fact about the snapshot being read.
 //
-// [LAW:one-source-of-truth] the schema a snapshot holds is read from its own
-// goose log, through the classifier the live workspace's open uses, so every
-// migration snapshot answers alike whichever lit minted it, and its name is
-// left in the shape every released lit classifies.
-func (s *Store) rollbackSnapshotName(ctx context.Context, maxSupported int64) (string, error) {
+// [LAW:one-source-of-truth] what a snapshot holds is read from the snapshot
+// itself, so every migration snapshot answers alike whichever lit minted it,
+// and its name is left in the shape every released lit classifies.
+func (s *Store) searchRollbackSnapshot(ctx context.Context, maxSupported int64) rollbackSearch {
 	snaps, err := dbsnapshot.List(migrationSnapshotsDir(s.doltRootDir))
 	if err != nil {
-		return "", fmt.Errorf("list snapshots: %w", err)
+		return rollbackSearch{err: fmt.Errorf("list snapshots: %w", err)}
 	}
-	var unread []error
+	var search rollbackSearch
+	var errs []error
 	for _, snap := range snaps {
 		if !IsMigrationSnapshotName(snap.Name) {
 			continue
 		}
-		state, err := snapshotMigrationState(ctx, snap.Path, s.workspaceID)
+		operable, err := snapshotOperable(ctx, snap.Path, s.workspaceID, maxSupported)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			errs = append(errs, fmt.Errorf("stopped looking for a rollback snapshot: %w", ctxErr))
+			break
+		}
+		search.examined++
 		if err != nil {
-			unread = append(unread, fmt.Errorf("read the schema snapshot %s holds: %w", snap.Name, err))
+			search.unreadable++
+			errs = append(errs, fmt.Errorf("read the schema snapshot %s holds: %w", snap.Name, err))
 			continue
 		}
-		if state.phase != phaseFresh && state.appliedVersion <= maxSupported {
-			return snap.Name, errors.Join(unread...)
+		if operable {
+			search.snapshot = snap.Name
+			break
 		}
 	}
-	return "", errors.Join(unread...)
+	search.err = errors.Join(errs...)
+	return search
 }
 
-// snapshotMigrationState classifies the workspace a snapshot holds, read in
-// place by a read engine. Dolt rewrites its journal bookkeeping when an engine
-// opens a store, here as on the first open after the snapshot is restored; the
-// data the snapshot holds is unchanged. A clone would avoid that rewrite at
-// the price of a full copy on a filesystem with no copy-on-write, and of a
-// store-sized tree stranded by a hard exit.
-func snapshotMigrationState(ctx context.Context, snapshotPath, workspaceID string) (_ migrationState, err error) {
+// snapshotOperable reports whether a lit whose registry tops out at
+// maxSupported operates the workspace a snapshot holds, by the rule its open
+// applies: a schema at or below maxSupported, or one ahead of it whose live
+// schema still carries the baseline (baselineCarried, which the refusal uses).
+// The empty workspace the fresh-open snapshot captured holds no data, so it is
+// never a rollback.
+//
+// The snapshot is read in place by a read engine. Dolt rewrites its journal
+// bookkeeping when an engine opens a store, here as on the first open after
+// the snapshot is restored; the data the snapshot holds is unchanged. A clone
+// would avoid that rewrite at the price of a full copy on a filesystem with no
+// copy-on-write, and of a store-sized tree stranded by a hard exit.
+func snapshotOperable(ctx context.Context, snapshotPath, workspaceID string, maxSupported int64) (_ bool, err error) {
 	snap, err := openStoreConnection(ctx, snapshotPath, workspaceID, engineRead)
 	if err != nil {
-		return migrationState{}, err
+		return false, err
 	}
 	defer func() { err = errors.Join(err, snap.Close()) }()
-	return snap.classifyMigrationState(ctx)
+	state, err := snap.classifyMigrationState(ctx)
+	if err != nil {
+		return false, err
+	}
+	switch {
+	case state.phase == phaseFresh:
+		return false, nil
+	case state.appliedVersion <= maxSupported:
+		return true, nil
+	default:
+		_, carried, err := snap.baselineCarried(ctx)
+		return carried, err
+	}
 }
 
 // asMigrationRollbackError unwraps err to find a *MigrationRollbackError if
