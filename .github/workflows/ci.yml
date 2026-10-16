@@ -183,6 +183,27 @@ jobs:
         with:
           version: v2.8.0
 
+  # lit's cc-candybar plugin rendered by cc-candybar itself. The plugin's
+  # segments are Go templates only cc-candybar evaluates, so a broken one
+  # passes every Go test and ships to every bar. tools/candybar-check pins the
+  # cc-candybar it installs; node is the one toolchain it needs that the other
+  # jobs do not, which is why it is a job of its own.
+  candybar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Render lit's cc-candybar plugin
+        run: go run ./tools/candybar-check
+
   # Gate docs: a missing page or a link outside docs_dir fails the build under
   # --strict, so nav regressions can't land silently. Versions pinned for a
   # deterministic gate (mkdocs-material 2.0 is a breaking release).
