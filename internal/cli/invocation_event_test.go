@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/config"
+	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/primitives/filelock"
 )
@@ -374,5 +376,33 @@ func TestAPanickingInvocationEndsAsAPanic(t *testing.T) {
 	end := invocationEnd(at, nil, "index out of range")
 	if end.Outcome != telemetry.OutcomePanic || end.ExitCode != goPanicExitCode || end.Error != "index out of range" || end.Reason != "" || !end.At.Equal(at) {
 		t.Errorf("invocationEnd(panic) = %+v, want a panic at exit %d carrying its value", end, goPanicExitCode)
+	}
+}
+
+// A schema-ahead refusal's event records which snapshot it offered as the
+// lossy rollback — none is an empty name — or why the snapshots could not be
+// read, and a wrapped refusal records the same.
+func TestASchemaAheadRefusalRecordsItsRollbackOffer(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		snapshot      string
+		lookupErr     error
+		wantLookupErr any
+	}{
+		{name: "offered", snapshot: "1700000000-pre-migrate-1700000000", wantLookupErr: nil},
+		{name: "none", snapshot: "", wantLookupErr: nil},
+		{name: "lookup failed", lookupErr: errors.New("list snapshots: permission denied"), wantLookupErr: "list snapshots: permission denied"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			refusal := &store.UnsupportedSchemaVersionError{WorkspaceVersion: 7, MaxSupported: 3, SnapshotName: tc.snapshot, SnapshotLookupErr: tc.lookupErr}
+			end := invocationEnd(time.Now(), fmt.Errorf("open store: %w", refusal), nil)
+			facts := writtenFacts(t, telemetry.Begin(telemetry.Event{}).Finish(end))
+			if got := facts["schema_ahead.rollback_snapshot"]; got != tc.snapshot {
+				t.Errorf("schema_ahead.rollback_snapshot = %#v, want %q", got, tc.snapshot)
+			}
+			if got, ok := facts["schema_ahead.rollback_lookup_error"]; !ok || got != tc.wantLookupErr {
+				t.Errorf("schema_ahead.rollback_lookup_error = %#v (present %v), want %#v", got, ok, tc.wantLookupErr)
+			}
+		})
 	}
 }

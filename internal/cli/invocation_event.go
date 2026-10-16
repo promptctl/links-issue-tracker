@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/config"
+	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/version"
 )
@@ -64,8 +65,24 @@ func invocationEnd(at time.Time, err error, panicked any) telemetry.End {
 		end.Outcome = telemetry.OutcomeError
 		end.Reason = string(commandErrorReason(err))
 		end.Error = err.Error()
+		end.Facts = errorFacts(err)
 	}
 	return end
+}
+
+// errorFacts are the decisions a failed command's typed error carries, as
+// event facts, so they are countable without parsing the error's message.
+// [LAW:nothing-unseen] A schema-ahead refusal decides which snapshot, if any,
+// it offers as the lossy rollback, or that the snapshots could not be read.
+func errorFacts(err error) map[string]any {
+	var schemaAhead *store.UnsupportedSchemaVersionError
+	if !errors.As(err, &schemaAhead) {
+		return nil
+	}
+	return map[string]any{
+		"schema_ahead.rollback_snapshot":     schemaAhead.SnapshotName,
+		"schema_ahead.rollback_lookup_error": errorText(schemaAhead.SnapshotLookupErr),
+	}
 }
 
 // interruptedEnd is an invocation the interrupt guard hard-exited with code:
