@@ -191,6 +191,9 @@ func formatMigrationSnapshotLabel(t time.Time) string {
 // workspace's data at schema maxSupported or below — a workspace a lit whose
 // registry tops out there opens — or "" when none does. The empty workspace
 // the fresh-open snapshot captured holds no data, so it is never offered.
+// A snapshot that cannot be read is passed over, and why is returned beside the
+// name: whether it was a better rollback than the one offered is unknown.
+// [LAW:no-silent-failure]
 //
 // [LAW:one-source-of-truth] the schema a snapshot holds is read from its own
 // goose log, through the classifier the live workspace's open uses, so every
@@ -201,19 +204,21 @@ func (s *Store) rollbackSnapshotName(ctx context.Context, maxSupported int64) (s
 	if err != nil {
 		return "", fmt.Errorf("list snapshots: %w", err)
 	}
+	var unread []error
 	for _, snap := range snaps {
 		if !IsMigrationSnapshotName(snap.Name) {
 			continue
 		}
 		state, err := snapshotMigrationState(ctx, snap.Path, s.workspaceID)
 		if err != nil {
-			return "", fmt.Errorf("read the schema snapshot %s holds: %w", snap.Name, err)
+			unread = append(unread, fmt.Errorf("read the schema snapshot %s holds: %w", snap.Name, err))
+			continue
 		}
 		if state.phase != phaseFresh && state.appliedVersion <= maxSupported {
-			return snap.Name, nil
+			return snap.Name, errors.Join(unread...)
 		}
 	}
-	return "", nil
+	return "", errors.Join(unread...)
 }
 
 // snapshotMigrationState classifies the workspace a snapshot holds, read in

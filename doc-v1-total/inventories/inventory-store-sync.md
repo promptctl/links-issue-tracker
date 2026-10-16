@@ -941,7 +941,7 @@ Tests: `TestPreGooseAdoptionStampsWithoutRerunningBaseline` (`migration_runner_t
 
 `recordProducerBinaryVersion(ctx)` (`migration_runner.go`): `version.Get()`; error → `"read version info: %w"`. `info.IsDev` → `(false, nil)` — a **dev build records no row**. Otherwise `s.setMeta(ctx, nil, "producer_binary_version", info.Version)` → `(true, nil)`; error → `"record producer binary version: %w"`. Test `TestProducerBinaryVersionUnstampedForDevBuild` (`migration_runner_test.go`). Nothing in this binary reads the row.
 
-`rollbackSnapshotName(ctx, maxSupported)` (`migrate_snapshot.go`): `dbsnapshot.List(migrationSnapshotsDir(s.doltRootDir))`; a listing error → `"list snapshots: %w"`. For each entry passing `IsMigrationSnapshotName`, newest first: `snapshotMigrationState`; an error → `"read the schema snapshot %s holds: %w"`; the first whose phase is not `phaseFresh` and whose `appliedVersion <= maxSupported` is returned; none → `""`.
+`rollbackSnapshotName(ctx, maxSupported)` (`migrate_snapshot.go`): `dbsnapshot.List(migrationSnapshotsDir(s.doltRootDir))`; a listing error → `"list snapshots: %w"`. For each entry passing `IsMigrationSnapshotName`, newest first: `snapshotMigrationState`; an error → `"read the schema snapshot %s holds: %w"` is kept and the entry passed over; the first whose phase is not `phaseFresh` and whose `appliedVersion <= maxSupported` is returned, else `""`, either way with the kept errors joined.
 
 `snapshotMigrationState(ctx, snapshotPath, workspaceID)` (`migrate_snapshot.go`): `openStoreConnection(ctx, snapshotPath, workspaceID, engineRead)` on the snapshot in place, then `classifyMigrationState`; the store is closed and a close error joined. Dolt rewrites the snapshot's journal bookkeeping (`journal.idx`, `manifest`, the journal file) on that open; the data it holds is unchanged.
 
@@ -960,7 +960,8 @@ Tests: `TestPreGooseAdoptionStampsWithoutRerunningBaseline` (`migration_runner_t
 2. If `len(MissingBaseline) > 0`: `"; the live schema is also missing baseline shape: %s"` (comma-joined).
 3. `")"`.
 4. Always: `"\n\nto operate this workspace, install a lit that supports schema version %d:\n  lit upgrade\n\n(this is the supported path — `lit upgrade` runs even from this too-old binary, installs the latest release, and refuses a release that cannot operate this workspace.)"` (`WorkspaceVersion`).
-5. If `SnapshotLookupErr != nil` → `"\n\ncould not look for a snapshot to roll this workspace back to: %v"`; else if `SnapshotName != ""` → `"\n\nif you are stuck and need to roll back this workspace to match this binary:\n  lit snapshots restore %s\n\nthis is a LOSSY recovery — any data written under the newer binary will be discarded."`; else → `"\n\nno migration snapshot holds this workspace's data at schema version %d or below; lossy rollback is not possible from this workspace."` (`MaxSupported`).
+5. If `SnapshotName != ""` → `"\n\nif you are stuck and need to roll back this workspace to match this binary:\n  lit snapshots restore %s\n\nthis is a LOSSY recovery — any data written under the newer binary will be discarded."`; else if `SnapshotLookupErr == nil` → `"\n\nno migration snapshot holds this workspace's data at schema version %d or below; lossy rollback is not possible from this workspace."` (`MaxSupported`).
+6. If `SnapshotLookupErr != nil`, after either: `"\n\nsome snapshots could not be read while looking for one to roll this workspace back to: %v"`.
 Tests: `TestUnsupportedSchemaVersionMessageShape` (`migration_runner_test.go`), `TestRefusalSurfacesRecoveryDataFromWorkspace`, `TestRefusalReportsUnreadableSnapshots`.
 
 ### 8.14 The transient schema lift
@@ -992,7 +993,7 @@ So the full shape is `<unix-ns>-<label>-<unix-ns>`.
 
 Three disjoint classifiers share it: `IsMigrationSnapshotName` (label `"pre-migrate"`, `migrate_snapshot.go`), `IsDowngradeSnapshotName`, and `IsReconcileSnapshotName` (label `"pre-reconcile"`, `sync_reconcile.go`). Because the labels differ, the three retention budgets never collect each other's snapshots (`migrate_snapshot.go`).
 
-Tests: `TestIsMigrationSnapshotNameRejectsUserCollisions` (`migrate_snapshot_test.go`), `TestMigrationPruneSparesUserSnapshots` (`migrate_snapshot_test.go`), `TestRollbackSnapshotIsOneTheOlderLitOpens` (`migrate_snapshot_test.go`), `TestIsReconcileSnapshotNameDisjoint` (`sync_reconcile_schema_skew_test.go`).
+Tests: `TestIsMigrationSnapshotNameRejectsUserCollisions` (`migrate_snapshot_test.go`), `TestMigrationPruneSparesUserSnapshots` (`migrate_snapshot_test.go`), `TestRollbackSnapshotIsOneTheOlderLitOpens` (`migrate_snapshot_test.go`), `TestRollbackSnapshotPassesOverAnUnreadableSnapshot` (`migrate_snapshot_test.go`), `TestIsReconcileSnapshotNameDisjoint` (`sync_reconcile_schema_skew_test.go`).
 
 ### 9.2 `snapshotGuard`
 

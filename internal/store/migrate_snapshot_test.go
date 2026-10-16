@@ -654,3 +654,48 @@ func TestRollbackSnapshotIsOneTheOlderLitOpens(t *testing.T) {
 		}
 	})
 }
+
+// TestRollbackSnapshotPassesOverAnUnreadableSnapshot pins that a migration
+// snapshot the lookup cannot read does not hide an older one it can offer, and
+// that the unreadable one is reported beside the offer.
+func TestRollbackSnapshotPassesOverAnUnreadableSnapshot(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	withStore(t, ctx, doltRoot, func(st *Store) {
+		if err := st.Downgrade(ctx, 3); err != nil {
+			t.Fatalf("Downgrade(3) error = %v", err)
+		}
+	})
+	withStore(t, ctx, doltRoot, func(*Store) {}) // migrates forward from v3, snapshotting it
+	listed, err := dbsnapshot.List(migrationSnapshotsDir(doltRoot))
+	if err != nil {
+		t.Fatalf("List error = %v", err)
+	}
+	if len(listed) == 0 || !IsMigrationSnapshotName(listed[0].Name) {
+		t.Fatalf("newest snapshot is not the migration snapshot from v3: %+v", listed)
+	}
+	fromV3 := listed[0].Name
+
+	// Newer than every snapshot taken: a copy of the v3 snapshot under a
+	// migration-shaped name, its Dolt manifest overwritten so no engine opens it.
+	now := time.Now().UnixNano()
+	unreadable := fmt.Sprintf("%d-%s", now, formatMigrationSnapshotLabel(time.Unix(0, now)))
+	unreadableDir := filepath.Join(migrationSnapshotsDir(doltRoot), unreadable)
+	if err := dbsnapshot.CloneTree(ctx, listed[0].Path, unreadableDir); err != nil {
+		t.Fatalf("clone %s: %v", fromV3, err)
+	}
+	if err := os.WriteFile(filepath.Join(unreadableDir, doltDatabaseName, ".dolt", "noms", "manifest"), []byte("not a manifest"), 0o644); err != nil {
+		t.Fatalf("corrupt the manifest: %v", err)
+	}
+
+	withStore(t, ctx, doltRoot, func(st *Store) {
+		got, err := st.rollbackSnapshotName(ctx, 3)
+		if got != fromV3 {
+			t.Errorf("rollbackSnapshotName(max 3) = %q, want %q past the unreadable %q", got, fromV3, unreadable)
+		}
+		if err == nil || !strings.Contains(err.Error(), unreadable) {
+			t.Errorf("rollbackSnapshotName error = %v; want the unreadable snapshot %q named", err, unreadable)
+		}
+	})
+}

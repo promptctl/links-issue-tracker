@@ -139,9 +139,10 @@ type UnsupportedSchemaVersionError struct {
 	// [LAW:types-are-the-program] Which rollback line the message emits is
 	// encoded by whether the optional field is populated, not by a flag.
 	SnapshotName string
-	// SnapshotLookupErr is why the snapshots could not be read, when they
-	// could not; SnapshotName is then empty. [LAW:no-silent-failure] a failed
-	// lookup is reported as one, never as "no snapshot exists".
+	// SnapshotLookupErr is why snapshots could not be read, when some could
+	// not: the listing, or a snapshot newer than SnapshotName that may have
+	// been a closer rollback. [LAW:no-silent-failure] a failed read is reported
+	// as one, never as "no snapshot exists".
 	SnapshotLookupErr error
 }
 
@@ -169,14 +170,15 @@ func (e *UnsupportedSchemaVersionError) Error() string {
 		"\n\nto operate this workspace, install a lit that supports schema version %d:\n  lit upgrade\n\n(this is the supported path — `lit upgrade` runs even from this too-old binary, installs the latest release, and refuses a release that cannot operate this workspace.)",
 		e.WorkspaceVersion)
 	switch {
-	case e.SnapshotLookupErr != nil:
-		fmt.Fprintf(&b, "\n\ncould not look for a snapshot to roll this workspace back to: %v", e.SnapshotLookupErr)
 	case e.SnapshotName != "":
 		fmt.Fprintf(&b,
 			"\n\nif you are stuck and need to roll back this workspace to match this binary:\n  lit snapshots restore %s\n\nthis is a LOSSY recovery — any data written under the newer binary will be discarded.",
 			e.SnapshotName)
-	default:
+	case e.SnapshotLookupErr == nil:
 		fmt.Fprintf(&b, "\n\nno migration snapshot holds this workspace's data at schema version %d or below; lossy rollback is not possible from this workspace.", e.MaxSupported)
+	}
+	if e.SnapshotLookupErr != nil {
+		fmt.Fprintf(&b, "\n\nsome snapshots could not be read while looking for one to roll this workspace back to: %v", e.SnapshotLookupErr)
 	}
 	return b.String()
 }

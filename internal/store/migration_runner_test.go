@@ -410,7 +410,8 @@ func TestUnsupportedSchemaVersionMessageShape(t *testing.T) {
 		MaxSupported:      3,
 		SnapshotLookupErr: errors.New("list snapshots: permission denied"),
 	}).Error()
-	if !strings.HasSuffix(lookupFailed, "\n\ncould not look for a snapshot to roll this workspace back to: list snapshots: permission denied") {
+	const lookupLine = "\n\nsome snapshots could not be read while looking for one to roll this workspace back to: list snapshots: permission denied"
+	if !strings.HasSuffix(lookupFailed, lookupLine) {
 		t.Errorf("lookup-failure message did not end by naming the failure: %q", lookupFailed)
 	}
 	if !strings.HasPrefix(lookupFailed, upgradeHead) {
@@ -420,6 +421,18 @@ func TestUnsupportedSchemaVersionMessageShape(t *testing.T) {
 		t.Errorf("lookup-failure message claimed no snapshot exists: %q", lookupFailed)
 	}
 	assertForbiddenAbsent(t, lookupFailed)
+
+	// An offer found past an unreadable snapshot: the offer, then the read
+	// failure, since the unreadable one may have been a closer rollback.
+	offeredPastUnread := (&UnsupportedSchemaVersionError{
+		WorkspaceVersion:  7,
+		MaxSupported:      3,
+		SnapshotName:      "1700000000-pre-migrate-1700000000",
+		SnapshotLookupErr: errors.New("list snapshots: permission denied"),
+	}).Error()
+	if !strings.Contains(offeredPastUnread, "lit snapshots restore 1700000000-pre-migrate-1700000000") || !strings.HasSuffix(offeredPastUnread, lookupLine) {
+		t.Errorf("offer past an unreadable snapshot did not show both the offer and the read failure: %q", offeredPastUnread)
+	}
 }
 
 // TestRefusalSurfacesRecoveryDataFromWorkspace pins the runtime wiring of the
@@ -517,7 +530,7 @@ func TestRefusalReportsUnreadableSnapshots(t *testing.T) {
 	if refusal.SnapshotLookupErr == nil {
 		t.Fatalf("SnapshotLookupErr = nil; want the listing failure (SnapshotName = %q)", refusal.SnapshotName)
 	}
-	if msg := refusal.Error(); !strings.Contains(msg, "could not look for a snapshot") || strings.Contains(msg, "lossy rollback is not possible") {
+	if msg := refusal.Error(); !strings.Contains(msg, "some snapshots could not be read") || strings.Contains(msg, "lossy rollback is not possible") {
 		t.Errorf("Error() did not report the failed lookup as one: %q", msg)
 	}
 }
