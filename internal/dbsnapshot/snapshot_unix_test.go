@@ -73,8 +73,8 @@ func TestTake_CloneFailureLeavesNoResidue(t *testing.T) {
 	if err := syscall.Mkfifo(filepath.Join(src, "fifo"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	snapshotsDir := filepath.Join(root, "snapshots")
-	_, err := Take(context.Background(), src, snapshotsDir, "")
+	snapshotsDir := DirFor(src)
+	_, err := Take(context.Background(), src, "")
 	if err == nil {
 		// Darwin's Clonefile clones FIFOs wholesale; only the walk-based
 		// paths refuse them. Either outcome is legal — the residue contract

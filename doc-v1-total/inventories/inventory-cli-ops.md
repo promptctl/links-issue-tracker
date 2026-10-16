@@ -830,7 +830,7 @@ Snapshot directory `<StorageDir>/snapshots` (`snapshots.go`).
 - `takeUserSnapshot` (`snapshots.go`) runs `dbsnapshot.Take` inside `withDoltDirectoryHeld` (`snapshots.go`), which takes three holds in order — workspace shared (`store.LockWorkspaceShared`), Dolt journal exclusive (`store.LockDoltJournalExclusive`), commit lock (`withCommitLock`) — releasing LIFO; every release failure is joined into the returned error (`snapshots.go`).
 - Between the workspace hold and the journal hold it checks `store.PendingAdopt(ws.DatabasePath)`; a pending-adopt marker refuses the snapshot (`snapshots.go`).
 - **The record prints the moment it exists** — before the prune and even beside a later failure: `<name> <path>` to stdout whenever the take produced a snapshot; a print error is joined to `err` (`snapshots.go`).
-- Retention prune runs AFTER the workspace hold is released, under the commit lock only, and only over user snapshots: `dbsnapshot.PruneMatching(snapshotsDir, cfg.Snapshot.RetentionBudget, isUserSnapshotName)` (`snapshots.go`). `isUserSnapshotName` excludes migration, downgrade, and reconcile snapshot names (`snapshots.go`).
+- Retention prune runs AFTER the workspace hold is released, under the commit lock only, and only over user snapshots: `dbsnapshot.PruneMatching(ws.DatabasePath, cfg.Snapshot.RetentionBudget, isUserSnapshotName)` (`snapshots.go`). `isUserSnapshotName` excludes migration, downgrade, and reconcile snapshot names (`snapshots.go`).
 
 ### 8.2 `lit snapshots list`
 
@@ -841,7 +841,7 @@ Snapshot directory `<StorageDir>/snapshots` (`snapshots.go`).
 `snapshotsRestoreLeaf` — `snapshots.go`. Declares `positionals: 1` (`snapshots.go`); `parseLeaf` splits the positional off before flag parsing.
 - Not exactly one positional, or leftover args → `UsageError{"usage: lit snapshots restore <name>"}` (`snapshots.go`); an all-whitespace name gets the same error (`snapshots.go`).
 - Holds `store.LockWorkspaceExclusive` for the whole restore; a release failure is joined into the return via `errors.Join` (`snapshots.go`).
-- `dbsnapshot.Restore(DatabasePath, snapshotsDir, name)` runs under `withCommitLock` (`snapshots.go`).
+- `dbsnapshot.Restore(ws.DatabasePath, name)` runs under `withCommitLock` (`snapshots.go`).
 - If the restore failed but a directory was rotated aside, the error is wrapped: `the pre-restore database directory was moved aside to <rotated> before this failure and holds the workspace's data: <err>` (`snapshots.go`).
 - On success prints `restored <name>` or, when a rotation happened, `restored <name> rotated_to=<path>`; a print error is joined (`snapshots.go`).
 

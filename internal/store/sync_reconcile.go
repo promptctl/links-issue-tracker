@@ -449,7 +449,7 @@ func (s *Store) replayUnderGuard(ctx context.Context, remote, branch, remoteHead
 	}
 	s.sweepStaleReconcileScratch(ctx)
 	scratchBranch := newReconcileScratch()
-	guard := newSnapshotGuard(s.doltRootDir, dbsnapshot.DirFor(s.doltRootDir), formatReconcileSnapshotLabel(time.Now()))
+	guard := newSnapshotGuard(s.doltRootDir, formatReconcileSnapshotLabel(time.Now()))
 	return retryTransientGCContention(ctx, func(ctx context.Context) error {
 		return body(ctx, guard, scratchBranch)
 	}, s.reconnect)
@@ -995,7 +995,7 @@ func (s *Store) commitReplayAndAdvance(ctx context.Context, guard *snapshotGuard
 	// scratch branch cleanupReconcileScratch tolerates, so the failure is surfaced to
 	// stderr but not promoted. [LAW:no-silent-failure] loud, but not a false failure
 	// over a durable success.
-	if err := dbsnapshot.PruneMatching(dbsnapshot.DirFor(s.doltRootDir), reconcileSnapshotRetention, IsReconcileSnapshotName); err != nil {
+	if err := dbsnapshot.PruneMatching(s.doltRootDir, reconcileSnapshotRetention, IsReconcileSnapshotName); err != nil {
 		fmt.Fprintf(os.Stderr, "lit: reconcile could not prune old recovery snapshots (replay already committed): %v\n", err)
 	}
 	return replayLanding{replayed: replayed, rehomed: rehomed}, nil

@@ -13,7 +13,7 @@ import (
 	"github.com/promptctl/primitives/filelock"
 )
 
-// CollectOrphanedResidue reclaims producer artifacts (.tmp copies, .reserve
+// collectOrphanedResidue reclaims producer artifacts (.tmp copies, .reserve
 // claims, .condemned corpses) stranded in snapshotsDir by producers that died
 // without cleanup — a SIGKILL, a crash, or the interrupt guard's post-grace
 // hard exit mid-copy. Such residue is invisible to List and untouchable by
@@ -48,7 +48,7 @@ import (
 // it needs no lock; a death between rename and delete just leaves it for the
 // next collection, and two collectors reaping concurrently converge because
 // RemoveAll tolerates entries vanishing under it.
-func CollectOrphanedResidue(snapshotsDir string) error {
+func collectOrphanedResidue(snapshotsDir string) error {
 	// A workspace that has never snapshotted has nothing to collect; probing
 	// the beacon here would create the directory as a side effect.
 	if _, err := os.Stat(snapshotsDir); err != nil {

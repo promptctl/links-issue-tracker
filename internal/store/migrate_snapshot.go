@@ -106,17 +106,15 @@ func isAllDigits(s string) bool {
 // distinguishes "we have a recovery point" from "we don't"; the rollback
 // error and the tail-end Prune both branch on this single field.
 type snapshotGuard struct {
-	databaseDir  string
-	snapshotsDir string
-	label        string
-	taken        *dbsnapshot.Snapshot
+	databaseDir string
+	label       string
+	taken       *dbsnapshot.Snapshot
 }
 
-func newSnapshotGuard(databaseDir, snapshotsDir, label string) *snapshotGuard {
+func newSnapshotGuard(databaseDir, label string) *snapshotGuard {
 	return &snapshotGuard{
-		databaseDir:  databaseDir,
-		snapshotsDir: snapshotsDir,
-		label:        label,
+		databaseDir: databaseDir,
+		label:       label,
 	}
 }
 
@@ -126,7 +124,7 @@ func (g *snapshotGuard) ensure(ctx context.Context) (dbsnapshot.Snapshot, error)
 	if g.taken != nil {
 		return *g.taken, nil
 	}
-	snap, err := dbsnapshot.Take(ctx, g.databaseDir, g.snapshotsDir, g.label)
+	snap, err := dbsnapshot.Take(ctx, g.databaseDir, g.label)
 	if err != nil {
 		return dbsnapshot.Snapshot{}, fmt.Errorf("snapshot before migration: %w", err)
 	}
@@ -196,7 +194,7 @@ type rollbackSearch struct {
 // itself, so every migration snapshot answers alike whichever lit minted it,
 // and its name is left in the shape every released lit classifies.
 func (s *Store) searchRollbackSnapshot(ctx context.Context, maxSupported int64) rollbackSearch {
-	snaps, err := dbsnapshot.List(dbsnapshot.DirFor(s.doltRootDir))
+	snaps, err := dbsnapshot.List(s.doltRootDir)
 	if err != nil {
 		return rollbackSearch{err: fmt.Errorf("list snapshots: %w", err)}
 	}

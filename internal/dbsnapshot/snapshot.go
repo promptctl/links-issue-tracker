@@ -25,7 +25,8 @@
 // precondition, not an acquired one.)
 //
 // Distinct from those store-owned preconditions, the package acquires its own
-// producer beacon (an flock inside snapshotsDir, see producerBeaconName): Take
+// producer beacon (an flock inside the snapshots directory, see
+// producerBeaconName): Take
 // holds it shared, residue collection probes it exclusive, and it is always
 // the innermost hold — after the workspace, journal, and commit locks — taken by
 // code that already holds nothing else it could wait on, so it cannot extend
@@ -68,9 +69,10 @@ func DirFor(databaseDir string) string {
 // ErrSnapshotMissing is returned by Restore when the named snapshot doesn't exist.
 var ErrSnapshotMissing = errors.New("dbsnapshot: snapshot not found")
 
-// producerBeaconName is the flock-backed liveness beacon inside snapshotsDir.
+// producerBeaconName is the flock-backed liveness beacon inside the snapshots
+// directory.
 // Every Take holds it SHARED for its whole reserve→copy→rename window;
-// CollectOrphanedResidue probes it EXCLUSIVE, so holding exclusively is
+// collectOrphanedResidue probes it EXCLUSIVE, so holding exclusively is
 // kernel proof (surviving SIGKILL, panics, and os.Exit alike) that every
 // producer artifact in the directory belongs to a dead producer. The name
 // contains a dot, which sanitizeLabel maps out of every legal snapshot name,
@@ -97,7 +99,8 @@ func producerBeaconPath(snapshotsDir string) string {
 // message text as context guidance rather than the contract.
 var ErrSnapshotsBusy = errors.New("snapshot producer beacon busy")
 
-// Take clones databaseDir into <snapshotsDir>/<name>/ and returns the snapshot.
+// Take clones databaseDir into <DirFor(databaseDir)>/<name>/ and returns the
+// snapshot.
 // label is optional ("" = no suffix); non-safe characters are normalized.
 // Atomicity: the clone lands in <name>.tmp first, then renames to <name> on
 // success — an interrupt leaves no half-snapshot in the listing, and whatever
@@ -116,7 +119,7 @@ var ErrSnapshotsBusy = errors.New("snapshot producer beacon busy")
 // copy whose retry must first reclaim a dead predecessor's store-sized corpse
 // is the motivating regime, and any wiring downstream of a successful take
 // (the retention tail, say) is unreachable in exactly that regime.
-func Take(ctx context.Context, databaseDir, snapshotsDir, label string) (Snapshot, error) {
+func Take(ctx context.Context, databaseDir, label string) (Snapshot, error) {
 	// One explicit gate so a pre-canceled ctx refuses identically on every
 	// platform — Darwin's single-syscall Clonefile fast path would otherwise
 	// mint a snapshot the walk-based platforms refuse.
@@ -130,6 +133,7 @@ func Take(ctx context.Context, databaseDir, snapshotsDir, label string) (Snapsho
 	if !info.IsDir() {
 		return Snapshot{}, fmt.Errorf("database dir is not a directory: %s", databaseDir)
 	}
+	snapshotsDir := DirFor(databaseDir)
 	if err := os.MkdirAll(snapshotsDir, 0o755); err != nil {
 		return Snapshot{}, fmt.Errorf("create snapshots dir: %w", err)
 	}
@@ -141,7 +145,7 @@ func Take(ctx context.Context, databaseDir, snapshotsDir, label string) (Snapsho
 	// channel as the reconcile prune's post-durable-success demotion in
 	// sync_reconcile.go). [LAW:no-silent-failure] loud, but never a false
 	// failure of work that can still succeed.
-	if collectErr := CollectOrphanedResidue(snapshotsDir); collectErr != nil {
+	if collectErr := collectOrphanedResidue(snapshotsDir); collectErr != nil {
 		fmt.Fprintf(os.Stderr, "lit: could not collect orphaned snapshot residue (the take proceeds; collection retries next take): %v\n", collectErr)
 	}
 	releaseBeacon, acquired, err := filelock.Acquire(ctx, producerBeaconPath(snapshotsDir), false, producerBeaconRetryAttempts, producerBeaconRetryDelay)
@@ -277,14 +281,15 @@ func pathFree(p string) (bool, error) {
 	}
 }
 
-// List returns snapshots in snapshotsDir, newest-first. Entries that don't
+// List returns the snapshots of the database at databaseDir, newest-first. Entries that don't
 // match the <unix-ns>[-<label>] naming scheme are silently skipped so leftover
 // directories from prior (incompatible) snapshot implementations don't pollute
 // the listing.
 //
 // [LAW:one-source-of-truth] formatName and parseName are inverses; no other
 // code parses or constructs snapshot directory names.
-func List(snapshotsDir string) ([]Snapshot, error) {
+func List(databaseDir string) ([]Snapshot, error) {
+	snapshotsDir := DirFor(databaseDir)
 	entries, err := os.ReadDir(snapshotsDir)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -314,18 +319,18 @@ func List(snapshotsDir string) ([]Snapshot, error) {
 	return snapshots, nil
 }
 
-// Restore moves <snapshotsDir>/<name>/ into databaseDir, after rotating any
+// Restore moves <DirFor(databaseDir)>/<name>/ into databaseDir, after rotating any
 // existing databaseDir to <databaseDir>.pre-restore-<unix-ns> for operator
 // undo. Returns the rotated path (or "" if databaseDir didn't exist).
 //
 // [LAW:no-defensive-null-guards] Caller-must-not-hold-open-Dolt-connection is
 // a documented invariant; we don't detect or close on the caller's behalf. The
 // CLI wires this via r.wsCmd, which structurally cannot open a connection.
-func Restore(databaseDir, snapshotsDir, name string) (string, error) {
+func Restore(databaseDir, name string) (string, error) {
 	if err := validateSnapshotName(name); err != nil {
 		return "", err
 	}
-	snapshotPath := filepath.Join(snapshotsDir, name)
+	snapshotPath := filepath.Join(DirFor(databaseDir), name)
 	// Lstat (not Stat) so a symlink at snapshotPath fails the IsDir check rather
 	// than being followed to whatever the attacker pointed it at. os.Rename
 	// would otherwise install the symlink itself as the database directory.
@@ -362,8 +367,8 @@ func Restore(databaseDir, snapshotsDir, name string) (string, error) {
 // Operates on the entire snapshots directory. Use PruneMatching when the
 // directory holds multiple producers (e.g. user snapshots + migration
 // snapshots) so each producer's retention budget is bounded independently.
-func Prune(snapshotsDir string, keep int) error {
-	return PruneMatching(snapshotsDir, keep, nil)
+func Prune(databaseDir string, keep int) error {
+	return PruneMatching(databaseDir, keep, nil)
 }
 
 // PruneMatching removes oldest snapshots whose name satisfies match, until at
@@ -379,7 +384,7 @@ func Prune(snapshotsDir string, keep int) error {
 // [LAW:types-are-the-program] The kind discriminator (which producer
 // owns this snapshot) is carried in the name and read by match; the
 // directory traversal is fixed.
-func PruneMatching(snapshotsDir string, keep int, match func(name string) bool) error {
+func PruneMatching(databaseDir string, keep int, match func(name string) bool) error {
 	if keep <= 0 {
 		return fmt.Errorf("dbsnapshot: keep must be > 0")
 	}
@@ -389,7 +394,7 @@ func PruneMatching(snapshotsDir string, keep int, match func(name string) bool) 
 	// a dead predecessor's corpse is the whole point, and a collection
 	// failure here would disable retention for every producer at once.
 	// Collection lives at Take's entry instead.
-	snapshots, err := List(snapshotsDir)
+	snapshots, err := List(databaseDir)
 	if err != nil {
 		return err
 	}
@@ -423,7 +428,7 @@ func formatName(t time.Time, label string) string {
 }
 
 // validateSnapshotName rejects user-supplied names that would let Restore
-// target anything outside the canonical <snapshotsDir>/<name> path. The two
+// target anything outside the canonical <DirFor(databaseDir)>/<name> path. The two
 // checks compose:
 //   - name == filepath.Base(name): rejects path separators, "..", and absolute
 //     paths (filepath.Base collapses them to a final component).

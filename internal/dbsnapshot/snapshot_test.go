@@ -13,12 +13,12 @@ import (
 
 func TestTake_RejectsMissingSource(t *testing.T) {
 	t.Parallel()
-	snapshotsDir := t.TempDir()
-	_, err := Take(context.Background(), filepath.Join(snapshotsDir, "nonexistent"), snapshotsDir, "")
+	db := filepath.Join(t.TempDir(), "nonexistent")
+	_, err := Take(context.Background(), db, "")
 	if err == nil {
 		t.Fatalf("Take against missing source should error")
 	}
-	entries, _ := os.ReadDir(snapshotsDir)
+	entries, _ := os.ReadDir(DirFor(db))
 	for _, e := range entries {
 		if strings.HasSuffix(e.Name(), ".tmp") {
 			t.Fatalf("leftover .tmp directory after failed Take: %s", e.Name())
@@ -36,13 +36,12 @@ func TestTakeAndList_NewestFirst(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(src, "a.txt"), []byte("hello"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	snapshotsDir := filepath.Join(root, "snapshots")
 	for i := 0; i < 3; i++ {
-		if _, err := Take(context.Background(), src, snapshotsDir, ""); err != nil {
+		if _, err := Take(context.Background(), src, ""); err != nil {
 			t.Fatalf("Take %d: %v", i, err)
 		}
 	}
-	list, err := List(snapshotsDir)
+	list, err := List(src)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +55,8 @@ func TestTakeAndList_NewestFirst(t *testing.T) {
 
 func TestList_IgnoresUnrecognizedNames(t *testing.T) {
 	t.Parallel()
-	snapshotsDir := t.TempDir()
+	db := filepath.Join(t.TempDir(), "db")
+	snapshotsDir := DirFor(db)
 	// Names that don't start with <digits>: leftover from prior snapshot designs.
 	for _, junk := range []string{"snap-old-junk", "backup_2024", "README.txt"} {
 		path := filepath.Join(snapshotsDir, junk)
@@ -70,7 +70,7 @@ func TestList_IgnoresUnrecognizedNames(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	list, err := List(snapshotsDir)
+	list, err := List(db)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +81,8 @@ func TestList_IgnoresUnrecognizedNames(t *testing.T) {
 
 func TestList_IgnoresTmpAndReserveDirectories(t *testing.T) {
 	t.Parallel()
-	snapshotsDir := t.TempDir()
+	db := filepath.Join(t.TempDir(), "db")
+	snapshotsDir := DirFor(db)
 	// Crash-leftovers: a .tmp from a mid-clone crash, and a .reserve sentinel
 	// from a crash between reservation and clone start.
 	for _, leaf := range []string{"1700000000000000000.tmp", "1700000000000000000.reserve"} {
@@ -89,7 +90,7 @@ func TestList_IgnoresTmpAndReserveDirectories(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	list, err := List(snapshotsDir)
+	list, err := List(db)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,8 +112,7 @@ func TestRestore_RoundTrip(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(src, "sub", "deep.txt"), []byte("deep"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	snapshotsDir := filepath.Join(root, "snapshots")
-	snap, err := Take(context.Background(), src, snapshotsDir, "")
+	snap, err := Take(context.Background(), src, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +123,7 @@ func TestRestore_RoundTrip(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(src, "top.txt"), []byte("MUTATED"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	rotated, err := Restore(src, snapshotsDir, snap.Name)
+	rotated, err := Restore(src, snap.Name)
 	if err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
@@ -151,15 +151,14 @@ func TestRestore_SurvivesMissingDatabaseDir(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(src, "a.txt"), []byte("a"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	snapshotsDir := filepath.Join(root, "snapshots")
-	snap, err := Take(context.Background(), src, snapshotsDir, "")
+	snap, err := Take(context.Background(), src, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := os.RemoveAll(src); err != nil {
 		t.Fatal(err)
 	}
-	rotated, err := Restore(src, snapshotsDir, snap.Name)
+	rotated, err := Restore(src, snap.Name)
 	if err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
@@ -178,7 +177,6 @@ func TestRestore_RejectsUnsafeNames(t *testing.T) {
 	if err := os.MkdirAll(src, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	snapshotsDir := filepath.Join(root, "snapshots")
 	// Pre-create an irrelevant sibling so a successful traversal would
 	// have something to hit; the assertion is that Restore refuses to look.
 	sibling := filepath.Join(root, "sibling")
@@ -199,7 +197,7 @@ func TestRestore_RejectsUnsafeNames(t *testing.T) {
 		"trailing/",
 	}
 	for _, name := range cases {
-		_, err := Restore(src, snapshotsDir, name)
+		_, err := Restore(src, name)
 		if err == nil {
 			t.Fatalf("Restore(%q) accepted unsafe name", name)
 		}
@@ -213,7 +211,7 @@ func TestRestore_RejectsSymlinkAtSnapshotPath(t *testing.T) {
 	if err := os.MkdirAll(src, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	snapshotsDir := filepath.Join(root, "snapshots")
+	snapshotsDir := DirFor(src)
 	if err := os.MkdirAll(snapshotsDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -227,7 +225,7 @@ func TestRestore_RejectsSymlinkAtSnapshotPath(t *testing.T) {
 	if err := os.Symlink(target, filepath.Join(snapshotsDir, symlinkName)); err != nil {
 		t.Fatal(err)
 	}
-	_, err := Restore(src, snapshotsDir, symlinkName)
+	_, err := Restore(src, symlinkName)
 	if err == nil {
 		t.Fatal("Restore should refuse a symlink at the snapshot path")
 	}
@@ -248,7 +246,7 @@ func TestRestore_MissingSnapshotReturnsSentinel(t *testing.T) {
 	if err := os.MkdirAll(src, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	_, err := Restore(src, filepath.Join(root, "snapshots"), "1700000000000000000")
+	_, err := Restore(src, "1700000000000000000")
 	if !errors.Is(err, ErrSnapshotMissing) {
 		t.Fatalf("want ErrSnapshotMissing, got %v", err)
 	}
@@ -264,16 +262,16 @@ func TestPrune_KeepsExactlyN(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(src, "x"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	snapshotsDir := filepath.Join(root, "snapshots")
+	snapshotsDir := DirFor(src)
 	for i := 0; i < 7; i++ {
-		if _, err := Take(context.Background(), src, snapshotsDir, ""); err != nil {
+		if _, err := Take(context.Background(), src, ""); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := Prune(snapshotsDir, 3); err != nil {
+	if err := Prune(src, 3); err != nil {
 		t.Fatal(err)
 	}
-	list, err := List(snapshotsDir)
+	list, err := List(src)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,17 +292,22 @@ func TestPrune_KeepsExactlyN(t *testing.T) {
 
 func TestPrune_RejectsNonPositive(t *testing.T) {
 	t.Parallel()
-	if err := Prune(t.TempDir(), 0); err == nil {
+	db := filepath.Join(t.TempDir(), "db")
+	if err := Prune(db, 0); err == nil {
 		t.Fatal("want error for keep=0")
 	}
-	if err := Prune(t.TempDir(), -1); err == nil {
+	if err := Prune(db, -1); err == nil {
 		t.Fatal("want error for keep=-1")
 	}
 }
 
 func TestPrune_EmptyDirIsNoop(t *testing.T) {
 	t.Parallel()
-	if err := Prune(t.TempDir(), 5); err != nil {
+	db := filepath.Join(t.TempDir(), "db")
+	if err := os.MkdirAll(DirFor(db), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := Prune(db, 5); err != nil {
 		t.Fatalf("Prune on empty dir: %v", err)
 	}
 }
@@ -325,27 +328,26 @@ func TestPruneMatching_KindAwareRetention(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(src, "x"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	snapshotsDir := filepath.Join(root, "snapshots")
 
 	// Six matching snapshots (label="kind-a") and five non-matching
 	// (label="kind-b"). With keep=2 against an "a" matcher, only "a"
 	// snapshots should be pruned, leaving 2 of them; every "b" must remain.
 	for i := 0; i < 6; i++ {
-		if _, err := Take(context.Background(), src, snapshotsDir, "kind-a"); err != nil {
+		if _, err := Take(context.Background(), src, "kind-a"); err != nil {
 			t.Fatal(err)
 		}
 	}
 	for i := 0; i < 5; i++ {
-		if _, err := Take(context.Background(), src, snapshotsDir, "kind-b"); err != nil {
+		if _, err := Take(context.Background(), src, "kind-b"); err != nil {
 			t.Fatal(err)
 		}
 	}
 	match := func(name string) bool { return strings.Contains(name, "-kind-a") }
-	if err := PruneMatching(snapshotsDir, 2, match); err != nil {
+	if err := PruneMatching(src, 2, match); err != nil {
 		t.Fatal(err)
 	}
 
-	list, err := List(snapshotsDir)
+	list, err := List(src)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -378,16 +380,15 @@ func TestPruneMatching_NilMatchPrunesAll(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(src, "x"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	snapshotsDir := filepath.Join(root, "snapshots")
 	for i := 0; i < 5; i++ {
-		if _, err := Take(context.Background(), src, snapshotsDir, ""); err != nil {
+		if _, err := Take(context.Background(), src, ""); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := PruneMatching(snapshotsDir, 2, nil); err != nil {
+	if err := PruneMatching(src, 2, nil); err != nil {
 		t.Fatal(err)
 	}
-	list, err := List(snapshotsDir)
+	list, err := List(src)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -403,7 +404,7 @@ func TestTake_LabelAppearsInName(t *testing.T) {
 	if err := os.MkdirAll(src, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	snap, err := Take(context.Background(), src, filepath.Join(root, "snapshots"), "pre-migration #5 / foo!")
+	snap, err := Take(context.Background(), src, "pre-migration #5 / foo!")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -464,10 +465,9 @@ func TestTake_HandlesRapidConsecutive(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(src, "a"), []byte("a"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	snapshotsDir := filepath.Join(root, "snapshots")
 	seen := map[string]bool{}
 	for i := 0; i < 50; i++ {
-		s, err := Take(context.Background(), src, snapshotsDir, "")
+		s, err := Take(context.Background(), src, "")
 		if err != nil {
 			t.Fatalf("Take %d: %v", i, err)
 		}
@@ -476,7 +476,7 @@ func TestTake_HandlesRapidConsecutive(t *testing.T) {
 		}
 		seen[s.Name] = true
 	}
-	list, err := List(snapshotsDir)
+	list, err := List(src)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -495,7 +495,6 @@ func TestTake_ConcurrentNoCollisions(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(src, "a"), []byte("a"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	snapshotsDir := filepath.Join(root, "snapshots")
 	const N = 20
 	results := make(chan Snapshot, N)
 	errs := make(chan error, N)
@@ -504,7 +503,7 @@ func TestTake_ConcurrentNoCollisions(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			s, err := Take(context.Background(), src, snapshotsDir, "")
+			s, err := Take(context.Background(), src, "")
 			if err != nil {
 				errs <- err
 				return
@@ -528,7 +527,7 @@ func TestTake_ConcurrentNoCollisions(t *testing.T) {
 	if len(seen) != N {
 		t.Fatalf("got %d distinct snapshots, want %d", len(seen), N)
 	}
-	list, err := List(snapshotsDir)
+	list, err := List(src)
 	if err != nil {
 		t.Fatal(err)
 	}

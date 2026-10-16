@@ -270,12 +270,7 @@ func (s *Store) downgradeLocked(ctx context.Context, targetSchemaVersion int64) 
 		return done, &DowngradeSpanUnsupportedError{Current: done.From, Target: targetSchemaVersion, Support: state.support}
 	}
 
-	snapshotsDir := dbsnapshot.DirFor(s.doltRootDir)
-	guard := newSnapshotGuard(
-		s.doltRootDir,
-		snapshotsDir,
-		formatDowngradeSnapshotLabel(time.Now()),
-	)
+	guard := newSnapshotGuard(s.doltRootDir, formatDowngradeSnapshotLabel(time.Now()))
 	snap, err := guard.ensure(ctx)
 	if err != nil {
 		return done, fmt.Errorf("downgrade: %w", err)
@@ -290,7 +285,7 @@ func (s *Store) downgradeLocked(ctx context.Context, targetSchemaVersion int64) 
 	// snapshots. IsDowngradeSnapshotName is disjoint from
 	// IsMigrationSnapshotName, so this sweep cannot collect migration
 	// snapshots and migrate()'s sweep cannot collect downgrade ones.
-	if err := dbsnapshot.PruneMatching(snapshotsDir, downgradeSnapshotRetention, IsDowngradeSnapshotName); err != nil {
+	if err := dbsnapshot.PruneMatching(s.doltRootDir, downgradeSnapshotRetention, IsDowngradeSnapshotName); err != nil {
 		return done, fmt.Errorf("prune downgrade snapshots: %w", err)
 	}
 	return done, nil

@@ -46,8 +46,8 @@ func TestCollectOrphanedResidue_RemovesDeadResidue(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(src, "x"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	snapshotsDir := filepath.Join(root, "snapshots")
-	snap, err := Take(context.Background(), src, snapshotsDir, "keep-me")
+	snapshotsDir := DirFor(src)
+	snap, err := Take(context.Background(), src, "keep-me")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,8 +61,8 @@ func TestCollectOrphanedResidue_RemovesDeadResidue(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := CollectOrphanedResidue(snapshotsDir); err != nil {
-		t.Fatalf("CollectOrphanedResidue: %v", err)
+	if err := collectOrphanedResidue(snapshotsDir); err != nil {
+		t.Fatalf("collectOrphanedResidue: %v", err)
 	}
 
 	entries, err := os.ReadDir(snapshotsDir)
@@ -98,7 +98,7 @@ func TestCollectOrphanedResidue_SkipsWhileProducerLive(t *testing.T) {
 		t.Fatalf("simulated producer hold: acquired=%v err=%v", acquired, err)
 	}
 
-	if err := CollectOrphanedResidue(snapshotsDir); err != nil {
+	if err := collectOrphanedResidue(snapshotsDir); err != nil {
 		t.Fatalf("collection while producer live must skip cleanly, got %v", err)
 	}
 	if _, err := os.Stat(tmpPath); err != nil {
@@ -112,7 +112,7 @@ func TestCollectOrphanedResidue_SkipsWhileProducerLive(t *testing.T) {
 		t.Fatalf("release simulated producer hold: %v", err)
 	}
 
-	if err := CollectOrphanedResidue(snapshotsDir); err != nil {
+	if err := collectOrphanedResidue(snapshotsDir); err != nil {
 		t.Fatalf("collection after producer death: %v", err)
 	}
 	if _, err := os.Stat(tmpPath); !errors.Is(err, os.ErrNotExist) {
@@ -128,7 +128,7 @@ func TestCollectOrphanedResidue_SkipsWhileProducerLive(t *testing.T) {
 func TestCollectOrphanedResidue_MissingDirIsNoop(t *testing.T) {
 	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "never-created")
-	if err := CollectOrphanedResidue(dir); err != nil {
+	if err := collectOrphanedResidue(dir); err != nil {
 		t.Fatalf("missing dir must be a noop, got %v", err)
 	}
 	if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
@@ -153,13 +153,13 @@ func TestTake_CollectsResidueAtEntry(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(src, "x"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	snapshotsDir := filepath.Join(root, "snapshots")
+	snapshotsDir := DirFor(src)
 	if err := os.MkdirAll(snapshotsDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	tmpPath, reservePath := fabricateDeadResidue(t, snapshotsDir, "1700000000000000004")
 
-	snap, err := Take(context.Background(), src, snapshotsDir, "")
+	snap, err := Take(context.Background(), src, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,8 +209,8 @@ func TestCollectOrphanedResidue_SparesForeignNames(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := CollectOrphanedResidue(snapshotsDir); err != nil {
-		t.Fatalf("CollectOrphanedResidue: %v", err)
+	if err := collectOrphanedResidue(snapshotsDir); err != nil {
+		t.Fatalf("collectOrphanedResidue: %v", err)
 	}
 
 	for _, name := range spared {
@@ -243,8 +243,8 @@ func TestCollectOrphanedResidue_LongLabelResidueStillCondemnable(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := CollectOrphanedResidue(snapshotsDir); err != nil {
-		t.Fatalf("CollectOrphanedResidue: %v", err)
+	if err := collectOrphanedResidue(snapshotsDir); err != nil {
+		t.Fatalf("collectOrphanedResidue: %v", err)
 	}
 	if _, err := os.Stat(residue); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("long-label residue must be collected, stat err=%v", err)
@@ -268,8 +268,8 @@ func TestCollectOrphanedResidue_ConvergesOnStampReuse(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := CollectOrphanedResidue(snapshotsDir); err != nil {
-		t.Fatalf("CollectOrphanedResidue: %v", err)
+	if err := collectOrphanedResidue(snapshotsDir); err != nil {
+		t.Fatalf("collectOrphanedResidue: %v", err)
 	}
 	entries, err := os.ReadDir(snapshotsDir)
 	if err != nil {
@@ -299,7 +299,7 @@ func TestTake_CollectionFailureDoesNotFailTake(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(src, "x"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	snapshotsDir := filepath.Join(root, "snapshots")
+	snapshotsDir := DirFor(src)
 	tmpPath, _ := fabricateDeadResidue(t, snapshotsDir, "1700000000000000008")
 	nested := filepath.Join(tmpPath, "nested")
 	if err := os.Chmod(nested, 0o555); err != nil {
@@ -307,7 +307,7 @@ func TestTake_CollectionFailureDoesNotFailTake(t *testing.T) {
 	}
 	t.Cleanup(func() { restoreCondemnedPerms(t, snapshotsDir) })
 
-	snap, err := Take(context.Background(), src, snapshotsDir, "")
+	snap, err := Take(context.Background(), src, "")
 	if err != nil {
 		t.Fatalf("Take must succeed despite a collection failure: %v", err)
 	}
@@ -347,10 +347,10 @@ func TestTake_CanceledContextRefusesCleanly(t *testing.T) {
 	if err := os.MkdirAll(src, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	snapshotsDir := filepath.Join(root, "snapshots")
+	snapshotsDir := DirFor(src)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err := Take(ctx, src, snapshotsDir, "")
+	_, err := Take(ctx, src, "")
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("want context.Canceled, got %v", err)
 	}
@@ -410,7 +410,7 @@ func TestTake_HoldsBeaconSharedForConcurrentProducers(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(src, "x"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	snapshotsDir := filepath.Join(root, "snapshots")
+	snapshotsDir := DirFor(src)
 	if err := os.MkdirAll(snapshotsDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -427,7 +427,7 @@ func TestTake_HoldsBeaconSharedForConcurrentProducers(t *testing.T) {
 	// exclusive probe must skip (any of it could be the live producer's own
 	// in-flight paths), and the take itself must still proceed.
 	tmpPath, _ := fabricateDeadResidue(t, snapshotsDir, "1700000000000000009")
-	if _, err := Take(context.Background(), src, snapshotsDir, ""); err != nil {
+	if _, err := Take(context.Background(), src, ""); err != nil {
 		t.Fatalf("Take must coexist with another live producer's shared hold: %v", err)
 	}
 	if _, err := os.Stat(tmpPath); err != nil {
@@ -454,7 +454,7 @@ func TestCollectOrphanedResidue_ErrorNamesThePath(t *testing.T) {
 	}
 	t.Cleanup(func() { restoreCondemnedPerms(t, snapshotsDir) })
 
-	err := CollectOrphanedResidue(snapshotsDir)
+	err := collectOrphanedResidue(snapshotsDir)
 	if err == nil {
 		t.Fatal("collection must fail loudly when residue cannot be removed")
 	}
@@ -463,7 +463,7 @@ func TestCollectOrphanedResidue_ErrorNamesThePath(t *testing.T) {
 	}
 	// Convergence: fixing the permission lets the next collection finish.
 	restoreCondemnedPerms(t, snapshotsDir)
-	if err := CollectOrphanedResidue(snapshotsDir); err != nil {
+	if err := collectOrphanedResidue(snapshotsDir); err != nil {
 		t.Fatalf("collection after fixing perms: %v", err)
 	}
 }

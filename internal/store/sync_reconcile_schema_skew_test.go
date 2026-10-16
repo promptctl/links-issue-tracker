@@ -168,7 +168,7 @@ func TestSyncReconcileHealsSchemaSkew(t *testing.T) {
 
 	// Snapshot-first: the mutating reconcile left a recovery point so the
 	// automatic data-branch advance is reversible.
-	snaps, err := dbsnapshot.List(dbsnapshot.DirFor(syncB.doltRootDir))
+	snaps, err := dbsnapshot.List(syncB.doltRootDir)
 	if err != nil {
 		t.Fatalf("list snapshots: %v", err)
 	}
