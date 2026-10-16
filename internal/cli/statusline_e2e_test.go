@@ -178,14 +178,14 @@ func TestEachStatuslineWriteRecordsItsFactsOnTheEvent(t *testing.T) {
 
 	type step struct {
 		args                                   []string
-		changed, rollup                        string
+		changed, rollup, phase                 string
 		created, excludeAdded, pluginInstalled bool
 	}
 	check := func(s step) {
 		t.Helper()
 		runCLIInDir(t, dir, s.args...)
 		facts, bytes := statuslineEvent(t)
-		want := decodeJSON(t, fmt.Sprintf(`{"statusline.changed": %s, "statusline.rollup_progress": %s, "statusline.created": %t, "statusline.exclude_added": %t, "statusline.replaced": null, "statusline.error": null, "statusline.plugin_installed": %t, "statusline.plugin_error": null}`, s.changed, s.rollup, s.created, s.excludeAdded, s.pluginInstalled))
+		want := decodeJSON(t, fmt.Sprintf(`{"statusline.changed": %s, "statusline.rollup_progress": %s, "statusline.phase": %s, "statusline.created": %t, "statusline.exclude_added": %t, "statusline.replaced": null, "statusline.error": null, "statusline.plugin_installed": %t, "statusline.plugin_error": null}`, s.changed, s.rollup, s.phase, s.created, s.excludeAdded, s.pluginInstalled))
 		if !reflect.DeepEqual(facts, want) {
 			t.Fatalf("lit %v event facts = %v\nwant %v", s.args, facts, want)
 		}
@@ -201,13 +201,14 @@ func TestEachStatuslineWriteRecordsItsFactsOnTheEvent(t *testing.T) {
 		}
 	}
 	for _, s := range []step{
-		{[]string{"show", first}, `[]`, `null`, false, false, false},
-		{[]string{"next"}, `["next"]`, `null`, true, true, true},
-		{[]string{"start", first, "--by", "agent"}, `["working_on"]`, `{"rollup_completed_count": 0, "rollup_total_count": 2}`, false, false, false},
-		{[]string{"update", first, "--title", "First, renamed"}, `["working_on", "next"]`, `{"rollup_completed_count": 0, "rollup_total_count": 2}`, false, false, false},
-		{[]string{"done", first}, `["working_on", "next"]`, `null`, false, false, false},
-		{[]string{"start", second, "--by", "agent"}, `["working_on"]`, `{"rollup_completed_count": 1, "rollup_total_count": 2}`, false, false, false},
-		{[]string{"purge", second, "--yes"}, `["working_on"]`, `null`, false, false, false},
+		{[]string{"show", first}, `[]`, `null`, `null`, false, false, false},
+		{[]string{"next"}, `["next"]`, `null`, `null`, true, true, true},
+		{[]string{"start", first, "--by", "agent"}, `["working_on"]`, `{"rollup_completed_count": 0, "rollup_total_count": 2}`, `"plan"`, false, false, false},
+		{[]string{"update", first, "--title", "First, renamed"}, `["working_on", "next"]`, `{"rollup_completed_count": 0, "rollup_total_count": 2}`, `"plan"`, false, false, false},
+		{[]string{"phase", first, "--to", "impl"}, `["working_on"]`, `{"rollup_completed_count": 0, "rollup_total_count": 2}`, `"impl"`, false, false, false},
+		{[]string{"done", first}, `["working_on", "next"]`, `null`, `null`, false, false, false},
+		{[]string{"start", second, "--by", "agent"}, `["working_on"]`, `{"rollup_completed_count": 1, "rollup_total_count": 2}`, `"plan"`, false, false, false},
+		{[]string{"purge", second, "--yes"}, `["working_on"]`, `null`, `null`, false, false, false},
 	} {
 		check(s)
 	}
@@ -220,13 +221,13 @@ func TestEachStatuslineWriteRecordsItsFactsOnTheEvent(t *testing.T) {
 	if err := os.Remove(file); err != nil {
 		t.Fatal(err)
 	}
-	check(step{[]string{"update", first, "--title", "First, again"}, `[]`, `null`, true, false, false})
+	check(step{[]string{"update", first, "--title", "First, again"}, `[]`, `null`, `null`, true, false, false})
 
 	// A removed plugin is installed again by the next write.
 	if err := os.Remove(plugin); err != nil {
 		t.Fatal(err)
 	}
-	check(step{[]string{"update", first, "--title", "First, a third time"}, `[]`, `null`, false, false, true})
+	check(step{[]string{"update", first, "--title", "First, a third time"}, `[]`, `null`, `null`, false, false, true})
 
 	// A file this lit cannot read is replaced, and the event says why.
 	if err := os.WriteFile(file, []byte("{working_on"), 0o644); err != nil {
@@ -335,6 +336,81 @@ func TestTheStatuslineRollupProgressMatchesTheClaimLine(t *testing.T) {
 	matches("lit next handing the first ticket back", statusline.RollupProgress{CompletedCount: 1, TotalCount: 2})
 	runCLIInDir(t, dir, "start", second, "--by", "agent")
 	matches("starting the closed ticket", statusline.RollupProgress{CompletedCount: 0, TotalCount: 2})
+}
+
+// After each command that records the work, the file's phase is the phase lit
+// show prints for the ticket it names — through a start, a phase move, a move
+// of a ticket the file does not name, lit next handing work back, and a
+// reclaim that keeps the phase the work had reached.
+func TestTheStatuslinePhaseMatchesTheTicketsPhase(t *testing.T) {
+	isolateEvents(t)
+	dir, first, second := statuslineCheckout(t)
+	matches := func(after, id, want string) {
+		t.Helper()
+		got := readStatusline(t, dir)
+		if workingOnID(got) != id || got.WorkingOn.Phase == nil {
+			t.Fatalf("after %s: working_on = %+v; want %s with a phase", after, got.WorkingOn, id)
+		}
+		shown := strings.TrimSpace(runCLIInDir(t, dir, "show", id, "--field", "phase"))
+		if *got.WorkingOn.Phase != shown || shown != want {
+			t.Fatalf("after %s: file phase = %q, lit show %q; want both %q", after, *got.WorkingOn.Phase, shown, want)
+		}
+	}
+
+	runCLIInDir(t, dir, "start", first, "--by", "agent")
+	matches("starting the first ticket", first, "plan")
+	runCLIInDir(t, dir, "phase", first, "--to", "impl")
+	matches("moving it to impl", first, "impl")
+	runCLIInDir(t, dir, "start", second, "--by", "agent")
+	matches("starting the second ticket", second, "plan")
+	runCLIInDir(t, dir, "phase", first, "--to", "review")
+	matches("moving the first ticket, which the file does not name", second, "plan")
+	runCLIInDir(t, dir, "done", second)
+	runCLIInDir(t, dir, "next")
+	matches("lit next handing the first ticket back", first, "review")
+	runCLIInDir(t, dir, "start", first, "--by", "agent")
+	matches("reclaiming the first ticket", first, "review")
+}
+
+// A checkout that takes over a ticket another checkout moved to review records
+// review, the phase lit show prints there: the takeover keeps the phase the
+// work had reached rather than starting it over in plan.
+func TestATakeoverRecordsThePhaseTheWorkHadReached(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	base := t.TempDir()
+	runGit(t, base, "init", "--bare", "remote.git")
+	remote := filepath.Join(base, "remote.git")
+
+	alpha := filepath.Join(base, "alpha")
+	runGit(t, base, "clone", remote, "alpha")
+	runGit(t, alpha, "config", "user.email", "a@a.co")
+	runGit(t, alpha, "config", "user.name", "alpha")
+	runGit(t, alpha, "commit", "--allow-empty", "-m", "seed")
+	runGit(t, alpha, "push", "origin", "HEAD")
+	runCLIInDir(t, alpha, "init", "--skip-hooks", "--skip-agents")
+	epic := newEpicInDir(t, alpha, "statusline epic")
+	ticket := extractTicketID(t, runCLIInDir(t, alpha, "new", "--title", "First", "--topic", "demo", "--type", "task", "--parent", epic))
+	runCLIInDir(t, alpha, "start", ticket, "--by", "alpha-agent")
+	runCLIInDir(t, alpha, "phase", ticket, "--to", "review")
+	runCLIInDir(t, alpha, "sync", "push", "--set-upstream")
+
+	bravo := filepath.Join(base, "bravo")
+	runGit(t, base, "clone", remote, "bravo")
+	runGit(t, bravo, "config", "user.email", "b@b.co")
+	runGit(t, bravo, "config", "user.name", "bravo")
+	runCLIInDir(t, bravo, "init", "--skip-hooks", "--skip-agents")
+	if out := runCLIInDir(t, bravo, "start", ticket, "--by", "bravo-agent", "--take"); !strings.Contains(out, "claim transferred") {
+		t.Fatalf("start %s --take = %q, want the transfer announced", ticket, out)
+	}
+
+	got := readStatusline(t, bravo)
+	shown := strings.TrimSpace(runCLIInDir(t, bravo, "show", ticket, "--field", "phase"))
+	if workingOnID(got) != ticket || got.WorkingOn.Phase == nil || *got.WorkingOn.Phase != "review" || shown != "review" {
+		t.Fatalf("after the takeover: working_on = %+v, lit show phase %q; want %s in review in both", got.WorkingOn, shown, ticket)
+	}
 }
 
 func mustAtoi(t *testing.T, s string) int {
@@ -512,13 +588,14 @@ func TestDocumentedStatuslineRendersTheFileWithNoLitProcess(t *testing.T) {
 		want  string
 	}{
 		{"no file yet", func() {}, ""},
-		{"after start", func() { runCLIInDir(t, dir, "start", first, "--by", "agent") }, "working: " + first + " First (0/2 done)\n"},
+		{"after start", func() { runCLIInDir(t, dir, "start", first, "--by", "agent") }, "working: " + first + " First (0/2 done) [plan]\n"},
+		{"after a phase move", func() { runCLIInDir(t, dir, "phase", first, "--to", "impl") }, "working: " + first + " First (0/2 done) [impl]\n"},
 		{"after done", func() { runCLIInDir(t, dir, "done", first) }, ""},
 		{"after next", func() { runCLIInDir(t, dir, "next") }, "next: " + second + "\n"},
-		{"after start of the pick", func() { runCLIInDir(t, dir, "start", second, "--by", "agent") }, "working: " + second + " Second (1/2 done)  |  next: " + second + "\n"},
+		{"after start of the pick", func() { runCLIInDir(t, dir, "start", second, "--by", "agent") }, "working: " + second + " Second (1/2 done) [plan]  |  next: " + second + "\n"},
 		{"after done of the pick", func() { runCLIInDir(t, dir, "done", second) }, ""},
 		{"after next on an empty backlog", func() { runCLIInDirAllowError(t, dir, "next") }, "next: nothing ready\n"},
-		{"a record with no rollup progress, as an older lit writes", func() {
+		{"a record with no rollup progress or phase, as an older lit writes", func() {
 			if err := os.WriteFile(file, []byte(`{"schema_version": 1, "working_on": {"ticket": {"id": "x-1", "title": "X"}, "recorded_at": "2026-10-15T09:30:00Z"}, "next": null}`), 0o644); err != nil {
 				t.Fatal(err)
 			}

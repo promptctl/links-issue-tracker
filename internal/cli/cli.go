@@ -1705,18 +1705,18 @@ type transitionSpec struct {
 
 // afterApply is what a transition owes once Apply has written the issue: the
 // line it prints and the facts it tells the statusline file. The authorize hook
-// decides both on the state it read; the issue Apply wrote completes them. An
-// empty notice and no facts are the identity values for "nothing owed", so
-// runTransition prints and records the result unconditionally.
-// [LAW:dataflow-not-control-flow]
-type afterApply func(written model.Issue) (notice string, facts statusline.Facts)
+// decides both on the state it read; where the write left the ticket — its row
+// and its phase — completes them. An empty notice and no facts are the
+// identity values for "nothing owed", so runTransition prints and records the
+// result unconditionally. [LAW:dataflow-not-control-flow]
+type afterApply func(written ticketState) (notice string, facts statusline.Facts)
 
 // noAuthorize is the authorize hook of every transition that gates nothing
 // beyond the ordinary state-machine check store.Apply already performs, and
 // owes nothing after it.
 func noAuthorize(*cobraFlagSet) func(context.Context, io.Writer, *app.App, string, ticketState, model.Action) (afterApply, error) {
 	return func(context.Context, io.Writer, *app.App, string, ticketState, model.Action) (afterApply, error) {
-		return func(model.Issue) (string, statusline.Facts) { return "", nil }, nil
+		return func(ticketState) (string, statusline.Facts) { return "", nil }, nil
 	}
 }
 
@@ -1797,18 +1797,19 @@ var (
 // authorizePhase gates nothing — Issue.PlanPhase, which both engines run, is
 // the phase rule — and owes the move it made: the line saying where the
 // ticket's phase now stands, and on the command's event the phase left, the
-// phase entered, and whether anything changed. A refused move fails Apply, so
-// its event carries the refusal instead. The phase left is the one
-// transitionLeaf read before Apply on the same write Store the move is planned
-// on, whose engine holds Dolt's LOCK for the whole command, so both reads
-// answer from one history. [LAW:nothing-unseen]
+// phase entered, and whether anything changed. The statusline file hears of
+// the move from the store's change observer, as it hears of every change. A
+// refused move fails Apply, so its event carries the refusal instead. The
+// phase left is the one transitionLeaf read before Apply on the same write
+// Store the move is planned on, whose engine holds Dolt's LOCK for the whole
+// command, so both reads answer from one history. [LAW:nothing-unseen]
 func authorizePhase(ctx context.Context, _ io.Writer, _ *app.App, _ string, prior ticketState, action model.Action) (afterApply, error) {
 	set, ok := action.(model.SetPhase)
 	if !ok {
 		return nil, fmt.Errorf("phase: authorize hook received a %T action", action)
 	}
 	move := model.PhaseChange{From: prior.phase, To: set.Phase}
-	return func(model.Issue) (string, statusline.Facts) {
+	return func(ticketState) (string, statusline.Facts) {
 		telemetry.Set(ctx, "phase.from", string(move.From))
 		telemetry.Set(ctx, "phase.to", string(move.To))
 		telemetry.Set(ctx, "phase.changed", move.Changed())
@@ -1878,8 +1879,14 @@ func readTicketState(ctx context.Context, st storage.Store, issue model.Issue) (
 	if err != nil {
 		return ticketState{}, err
 	}
+	return ticketStateOf(issue, events), nil
+}
+
+// ticketStateOf is where issue stands given its history: the row, and the
+// phase events put it in, empty when it is not in progress.
+func ticketStateOf(issue model.Issue, events []model.IssueEvent) ticketState {
 	phase, _ := model.PhaseOf(issue, events)
-	return ticketState{issue: issue, phase: phase}, nil
+	return ticketState{issue: issue, phase: phase}
 }
 
 func transitionLeaf(spec transitionSpec) appLeaf {
@@ -1956,7 +1963,7 @@ func transitionLeaf(spec transitionSpec) appLeaf {
 		}
 		// Recorded after Apply, so these facts follow the ones the store's
 		// change observer recorded for this same write.
-		notice, facts := owed(issue)
+		notice, facts := owed(written)
 		ap.Statusline.Record(facts...)
 
 		// [LAW:single-enforcer] transitionLeaf is the one lifecycle-transition

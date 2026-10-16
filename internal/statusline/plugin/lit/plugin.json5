@@ -5,7 +5,8 @@
 // docs/statusline.md. Every lit that writes the file installs this definition
 // beside it, as $XDG_DATA_HOME/cc-candybar/plugins/lit/plugin.json5, so the
 // reader on disk is the one the writer shipped with. Its folder, `lit`, is its
-// name: placed as `plugins.lit.ticket` and `plugins.lit.next`.
+// name: placed as `plugins.lit.ticket`, `plugins.lit.phase` and
+// `plugins.lit.next`.
 {
   data: { checkout: ".lit/statusline.json" },
   segments: {
@@ -22,6 +23,14 @@
       settings: {
         title: { label: "title chars", domain: { min: 0, max: 80, step: 10 }, default: 0 },
       },
+    },
+    phase: {
+      group: "activity",
+      description: "Where the work on the lit ticket this checkout is working on stands: plan, impl, review or merge.",
+      // phase is null when the command that recorded working_on read none,
+      // and missing when an older lit wrote the file: the cell then hides.
+      when: '{{ with .plugins.lit.data }}{{ template "plugins.lit.schema" . }}{{ with .working_on }}{{ if hasKey . "phase" }}{{ if .phase }}true{{ else }}false{{ end }}{{ else }}false{{ end }}{{ else }}false{{ end }}{{ else }}false{{ end }}',
+      template: 'phase {{ .plugins.lit.data.working_on.phase }}',
     },
     next: {
       group: "activity",

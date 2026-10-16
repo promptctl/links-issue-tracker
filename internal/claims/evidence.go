@@ -126,6 +126,12 @@ func (e Evidence) LaneProgressWith(written model.Issue) LaneProgress {
 	return progressOf(append(members, written))
 }
 
+// IssueEvents is every event of the issue with id, oldest first: the issue's
+// whole history, since the evidence holds every event of every issue.
+func (e Evidence) IssueEvents(id string) []model.IssueEvent {
+	return slices.DeleteFunc(slices.Clone(e.events[e.lanes[id]]), func(event model.IssueEvent) bool { return event.IssueID != id })
+}
+
 func progressOf(members []model.Issue) LaneProgress {
 	var progress LaneProgress
 	// [LAW:one-source-of-truth] Frozen is the program's one answer to "has this

@@ -67,13 +67,14 @@ func relationOf(standing claims.Standing, self model.Attribution) laneRelation {
 //
 // Its result is what the start owes after Apply (transitionSpec.authorize):
 // the transfer notice when the lane was held, ours or another's, and the
-// claimant changes hands, the empty string otherwise; and the lane's count for
-// the statusline file's rollup progress. A lane nobody holds has no claim to
-// transfer, so the notice is not even asked for there — the gate is the one
-// read that knows the lane's standing, and asking transferNotice to re-derive
-// it would gather every event a second time. The count is that same evidence with the written ticket
-// in place of the one read, so it costs no second gather either, and a start
-// that reopens a closed ticket counts it as no longer done.
+// claimant changes hands, the empty string otherwise; and, for the statusline
+// file, the lane's count for its rollup progress and the phase the start left
+// the ticket in. A lane nobody holds has no claim to transfer, so the notice
+// is not even asked for there — the gate is the one read that knows the lane's
+// standing, and asking transferNotice to re-derive it would gather every event
+// a second time. The count is that same evidence with the written ticket in
+// place of the one read, so it costs no second gather either, and a start that
+// reopens a closed ticket counts it as no longer done.
 // [LAW:one-source-of-truth]
 //
 // Enforcement lives here and only here per [LAW:single-enforcer]: `lit
@@ -101,8 +102,8 @@ func authorizeStart(ctx context.Context, stdout io.Writer, ap *app.App, issueID 
 	if err != nil {
 		return nil, err
 	}
-	return func(written model.Issue) (string, statusline.Facts) {
-		return notice, statusline.Facts{rollupCounted(cc.evidence, written)}
+	return func(written ticketState) (string, statusline.Facts) {
+		return notice, statusline.Facts{rollupCounted(cc.evidence, written.issue), phaseRead(written)}
 	}, nil
 }
 
