@@ -120,8 +120,21 @@ type LaneProgress struct {
 // saw reports the zero LaneProgress (Total 0), which formats as nothing —
 // the same total-map-read convention Standings.Of uses.
 func (e Evidence) LaneProgress(lane model.LaneID) LaneProgress {
+	return progressOf(e.members[lane])
+}
+
+// LaneProgressWith reports the lane's progress once written has been written
+// into it: written counts as the member with its id, in place of the version
+// this evidence read. A command that gathered the evidence before its own write
+// learns the progress after it this way, without gathering again.
+func (e Evidence) LaneProgressWith(lane model.LaneID, written model.Issue) LaneProgress {
+	members := slices.DeleteFunc(slices.Clone(e.members[lane]), func(member model.Issue) bool { return member.ID == written.ID })
+	return progressOf(append(members, written))
+}
+
+func progressOf(members []model.Issue) LaneProgress {
 	var progress LaneProgress
-	for _, issue := range e.members[lane] {
+	for _, issue := range members {
 		progress.Total++
 		switch issue.State() {
 		case model.StateClosed:

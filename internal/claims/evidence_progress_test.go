@@ -56,6 +56,44 @@ func TestLaneProgressWithNoInProgressMemberNamesNoActiveTicket(t *testing.T) {
 	}
 }
 
+// LaneProgressWith counts the written ticket in place of the version the
+// evidence read, so a command that wrote after gathering learns the lane as it
+// now stands — and the evidence it asked still reads as it did.
+func TestLaneProgressWithCountsTheWrittenTicketInPlaceOfTheOneRead(t *testing.T) {
+	children := []model.Issue{
+		leaf(t, "T1", "lane", model.StateClosed),
+		leaf(t, "T2", "lane", model.StateOpen),
+	}
+	issues, parents := epicOf(t, children...)
+	evidence, err := claims.NewEvidence(issues, parents, nil)
+	if err != nil {
+		t.Fatalf("NewEvidence() error = %v", err)
+	}
+	lane := laneIn(epicID, "lane")
+	cases := []struct {
+		name        string
+		written     model.Issue
+		done, total int
+	}{
+		{"starting an open ticket leaves the done count", leaf(t, "T2", "lane", model.StateInProgress), 1, 2},
+		{"starting a closed ticket takes it out of the done count", leaf(t, "T1", "lane", model.StateInProgress), 0, 2},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			progress := evidence.LaneProgressWith(lane, tc.written)
+			if progress.Done != tc.done || progress.Total != tc.total {
+				t.Fatalf("LaneProgressWith = {Done:%d Total:%d}, want {Done:%d Total:%d}", progress.Done, progress.Total, tc.done, tc.total)
+			}
+			if progress.Active == nil || progress.Active.ID != tc.written.ID {
+				t.Fatalf("LaneProgressWith.Active = %v, want %s", progress.Active, tc.written.ID)
+			}
+			if read := evidence.LaneProgress(lane); read.Done != 1 || read.Total != 2 || read.Active != nil {
+				t.Fatalf("LaneProgress after LaneProgressWith = %+v, want the evidence as read: {Done:1 Total:2}, nothing active", read)
+			}
+		})
+	}
+}
+
 // TestLaneProgressOfUnseenLaneIsZero mirrors Standings.Of's total-map-read
 // convention: a lane the evidence never partitioned reports the zero value
 // rather than panicking on a missing map entry.

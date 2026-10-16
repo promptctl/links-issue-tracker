@@ -12,6 +12,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/claims"
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/statusline"
 )
 
 // laneRelation is what a lane's standing means TO THIS CHECKOUT — the single
@@ -64,35 +65,50 @@ func relationOf(standing claims.Standing, self model.Attribution) laneRelation {
 // exactly as "no confirmation, no warning, no ceremony on the happy path"
 // demands.
 //
-// Its result is the line the start owes after Apply (transitionSpec.authorize):
+// Its result is what the start owes after Apply (transitionSpec.authorize):
 // the transfer notice when the lane was held, ours or another's, and the
-// claimant changes hands; the empty string otherwise. A lane nobody holds has
-// no claim to transfer, so the notice is not even asked for there — the gate
-// is the one read that knows the lane's standing, and asking transferNotice
-// to re-derive it would gather every event a second time.
+// claimant changes hands, the empty string otherwise; and the lane's count for
+// the statusline file. A lane nobody holds has no claim to transfer, so the
+// notice is not even asked for there — the gate is the one read that knows the
+// lane's standing, and asking transferNotice to re-derive it would gather every
+// event a second time. The count is that same evidence with the written ticket
+// in place of the one read, so it costs no second gather either, and a start
+// that reopens a closed ticket counts it as no longer done.
 // [LAW:one-source-of-truth]
 //
 // Enforcement lives here and only here per [LAW:single-enforcer]: `lit
 // start` is the one command that transfers a claim, so it is the one place
 // that gates the transfer.
-func authorizeStart(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, prior model.Issue, start model.Start, take bool) (notice string, err error) {
+func authorizeStart(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, prior model.Issue, start model.Start, take bool) (afterApply, error) {
 	// A takeover is worth confirming only for a start that can land. Issue.Apply
 	// refuses a frozen issue and a container whoever holds the lane, so its
 	// refusal answers first; gating first would send the caller to --take and
 	// then to this same refusal. Store.Apply runs it again on the row it writes.
 	// [LAW:single-enforcer]
 	if _, err := prior.Apply(start); err != nil {
-		return "", err
+		return nil, err
 	}
 	relations, err := ap.Store.GetRelationsByIDs(ctx, []string{issueID})
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	lane := model.LaneOf(prior, relations[issueID].Parent)
 	cc, err := gatherClaimContext(ctx, stdout, ap)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
+	notice, err := gateTakeover(ctx, stdout, ap, issueID, start, take, cc, lane)
+	if err != nil {
+		return nil, err
+	}
+	return func(written model.Issue) (string, statusline.Facts) {
+		return notice, statusline.Facts{laneCounted(written.ID, cc.evidence.LaneProgressWith(lane, written))}
+	}, nil
+}
+
+// gateTakeover confirms a takeover when another checkout holds the lane, and
+// returns the transfer notice the start owes.
+func gateTakeover(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, start model.Start, take bool, cc claimContext, lane model.LaneID) (string, error) {
 	switch relationOf(cc.standings.Of(lane), cc.self) {
 	case laneHeldForeign:
 		if err := confirmFreshTakeover(stdout, cc, lane, take); err != nil {

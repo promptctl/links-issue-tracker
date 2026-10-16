@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `.lit/statusline.json` now shows how far along the lane is that you are working in. `working_on` has a `lane` field, `{"done": 1, "total": 4}`, with the same count as the `N/M done` on that lane's claim line in `lit backlog`. `lit start` records it once the start has landed, so starting a closed ticket takes it out of `done`. `lit next` counts it again when it hands your in-progress work back. The count is not updated when other tickets in the lane change later; the next `lit start` or `lit next` that records `working_on` counts it again. `schema_version` stays `1`. The minimal statusline in docs/statusline.md prints the count, and each command's event records the file's count as `statusline.lane`. (links-statusline-e9pl.9ym)
+
 ### Changed
 
 - `scripts/install.sh` (and `just install`) no longer installs a lit built from a tree whose schema no published release supports. A lit like that, run in a real workspace, migrates the workspace's store to a schema that no release can open. Before building lit, the source install checks that the newest `vX.Y.Z` tag in your checkout carries every migration in the tree, byte for byte. It prints the comparison on every run, as `schema-release-check: tree=… release_tag=… release_schema=… verdict=…`. It refuses a tree carrying a migration that release does not (exit 3) and a checkout with no release tag of its own, an unpacked source tarball included (exit 1), and points you at `scripts/install.sh --latest-release`. To develop a migration, use `go test`, and run `go build` binaries only in a scratch workspace; CONTRIBUTING.md has the details. (links-schema-release-fuof.h2n)

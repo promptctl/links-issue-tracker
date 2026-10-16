@@ -20,6 +20,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/pathspec"
 	"github.com/promptctl/links-issue-tracker/internal/query"
+	"github.com/promptctl/links-issue-tracker/internal/statusline"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workflows"
@@ -1686,25 +1687,31 @@ type transitionSpec struct {
 	// for per-transition authorization, rather than a type switch on the
 	// built action scattered through runTransition.
 	//
-	// Its string result is the line the transition owes AFTER Apply, decided
-	// on the pre-Apply state the hook just read, and the empty string when it
-	// owes none — the identity value for "nothing to say", so runTransition
-	// writes it unconditionally. [LAW:dataflow-not-control-flow] For `start`
-	// that line is the transfer notice, and it is decided here rather than
-	// beside Apply because only this read knows whether anybody held the lane:
-	// a start on a lane nobody holds hands nothing over, whatever the row's
-	// history says about who once started it, since an expired claim is not a
-	// claim, and reading the lane again for the notice would be a second gather
-	// of every event in the store. [LAW:one-source-of-truth]
-	authorize func(fs *cobraFlagSet) func(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, prior model.Issue, action model.Action) (notice string, err error)
+	// Its result is what the transition owes AFTER Apply, decided on the
+	// pre-Apply state the hook just read. For `start` that is the transfer
+	// notice and the count of the lane, and both are decided here rather than
+	// beside Apply because only this read knows the lane: a start on a lane
+	// nobody holds hands nothing over, whatever the row's history says about
+	// who once started it, since an expired claim is not a claim, and reading
+	// the lane again would be a second gather of every event in the store.
+	// [LAW:one-source-of-truth]
+	authorize func(fs *cobraFlagSet) func(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, prior model.Issue, action model.Action) (afterApply, error)
 }
+
+// afterApply is what a transition owes once Apply has written the issue: the
+// line it prints and the facts it tells the statusline file. The authorize hook
+// decides both on the state it read; the issue Apply wrote completes them. An
+// empty notice and no facts are the identity values for "nothing owed", so
+// runTransition prints and records the result unconditionally.
+// [LAW:dataflow-not-control-flow]
+type afterApply func(written model.Issue) (notice string, facts statusline.Facts)
 
 // noAuthorize is the authorize hook of every transition that gates nothing
 // beyond the ordinary state-machine check store.Apply already performs, and
-// owes no line after it.
-func noAuthorize(*cobraFlagSet) func(context.Context, io.Writer, *app.App, string, model.Issue, model.Action) (string, error) {
-	return func(context.Context, io.Writer, *app.App, string, model.Issue, model.Action) (string, error) {
-		return "", nil
+// owes nothing after it.
+func noAuthorize(*cobraFlagSet) func(context.Context, io.Writer, *app.App, string, model.Issue, model.Action) (afterApply, error) {
+	return func(context.Context, io.Writer, *app.App, string, model.Issue, model.Action) (afterApply, error) {
+		return func(model.Issue) (string, statusline.Facts) { return "", nil }, nil
 	}
 }
 
@@ -1728,15 +1735,15 @@ var (
 				return model.Start{Assignee: actor}, nil
 			}
 		},
-		authorize: func(fs *cobraFlagSet) func(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, prior model.Issue, action model.Action) (string, error) {
+		authorize: func(fs *cobraFlagSet) func(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, prior model.Issue, action model.Action) (afterApply, error) {
 			take := fs.Bool("take", false, "Confirm taking over a lane another checkout claims right now (required for non-interactive callers; without it an interactive terminal is prompted instead)")
-			return func(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, prior model.Issue, action model.Action) (string, error) {
+			return func(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, prior model.Issue, action model.Action) (afterApply, error) {
 				// registerFlags above builds every action this hook sees, so a
 				// different variant is a wiring error, not a caller's mistake.
 				// [LAW:no-silent-failure]
 				start, ok := action.(model.Start)
 				if !ok {
-					return "", fmt.Errorf("start: authorize hook received a %T action", action)
+					return nil, fmt.Errorf("start: authorize hook received a %T action", action)
 				}
 				return authorizeStart(ctx, stdout, ap, issueID, prior, start, *take)
 			}
@@ -1859,9 +1866,10 @@ func transitionLeaf(spec transitionSpec) appLeaf {
 		// [LAW:single-enforcer] The one gate every transition's authorization
 		// passes through, ahead of Apply — a no-op for every transition but
 		// `start`. See transitionSpec.authorize and authorizeStart
-		// (claims_takeover.go). The line it hands back is decided on pre-Apply
-		// state and rendered after Apply, so a failed Apply announces nothing.
-		notice, err := authorize(ctx, stdout, ap, issueID, prior, action)
+		// (claims_takeover.go). What it owes is decided on pre-Apply state and
+		// completed after Apply, so a failed Apply announces and records
+		// nothing.
+		owed, err := authorize(ctx, stdout, ap, issueID, prior, action)
 		if err != nil {
 			return err
 		}
@@ -1870,6 +1878,10 @@ func transitionLeaf(spec transitionSpec) appLeaf {
 		if err != nil {
 			return err
 		}
+		// Recorded after Apply, so these facts follow the ones the store's
+		// change observer recorded for this same write.
+		notice, facts := owed(issue)
+		ap.Statusline.Record(facts...)
 
 		// [LAW:single-enforcer] runTransition is the one status-transition path
 		// (start/done/close/open all arrive here), so it is the one place that

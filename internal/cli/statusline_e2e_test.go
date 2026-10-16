@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -173,14 +175,14 @@ func TestEachStatuslineWriteRecordsItsFactsOnTheEvent(t *testing.T) {
 
 	type step struct {
 		args                  []string
-		changed               string
+		changed, lane         string
 		created, excludeAdded bool
 	}
 	check := func(s step) {
 		t.Helper()
 		runCLIInDir(t, dir, s.args...)
 		facts, bytes := statuslineEvent(t)
-		want := decodeJSON(t, fmt.Sprintf(`{"statusline.changed": %s, "statusline.created": %t, "statusline.exclude_added": %t, "statusline.replaced": null, "statusline.error": null}`, s.changed, s.created, s.excludeAdded))
+		want := decodeJSON(t, fmt.Sprintf(`{"statusline.changed": %s, "statusline.lane": %s, "statusline.created": %t, "statusline.exclude_added": %t, "statusline.replaced": null, "statusline.error": null}`, s.changed, s.lane, s.created, s.excludeAdded))
 		if !reflect.DeepEqual(facts, want) {
 			t.Fatalf("lit %v event facts = %v\nwant %v", s.args, facts, want)
 		}
@@ -196,13 +198,13 @@ func TestEachStatuslineWriteRecordsItsFactsOnTheEvent(t *testing.T) {
 		}
 	}
 	for _, s := range []step{
-		{[]string{"show", first}, `[]`, false, false},
-		{[]string{"next"}, `["next"]`, true, true},
-		{[]string{"start", first, "--by", "agent"}, `["working_on"]`, false, false},
-		{[]string{"update", first, "--title", "First, renamed"}, `["working_on", "next"]`, false, false},
-		{[]string{"done", first}, `["working_on", "next"]`, false, false},
-		{[]string{"start", second, "--by", "agent"}, `["working_on"]`, false, false},
-		{[]string{"purge", second, "--yes"}, `["working_on"]`, false, false},
+		{[]string{"show", first}, `[]`, `null`, false, false},
+		{[]string{"next"}, `["next"]`, `null`, true, true},
+		{[]string{"start", first, "--by", "agent"}, `["working_on"]`, `{"done": 0, "total": 2}`, false, false},
+		{[]string{"update", first, "--title", "First, renamed"}, `["working_on", "next"]`, `{"done": 0, "total": 2}`, false, false},
+		{[]string{"done", first}, `["working_on", "next"]`, `null`, false, false},
+		{[]string{"start", second, "--by", "agent"}, `["working_on"]`, `{"done": 1, "total": 2}`, false, false},
+		{[]string{"purge", second, "--yes"}, `["working_on"]`, `null`, false, false},
 	} {
 		check(s)
 	}
@@ -212,7 +214,7 @@ func TestEachStatuslineWriteRecordsItsFactsOnTheEvent(t *testing.T) {
 	if err := os.Remove(file); err != nil {
 		t.Fatal(err)
 	}
-	check(step{[]string{"update", first, "--title", "First, again"}, `[]`, true, false})
+	check(step{[]string{"update", first, "--title", "First, again"}, `[]`, `null`, true, false})
 
 	// A file this lit cannot read is replaced, and the event says why.
 	if err := os.WriteFile(file, []byte("{working_on"), 0o644); err != nil {
@@ -286,6 +288,50 @@ func TestABackupRestoreClearsTheStatuslineFile(t *testing.T) {
 	if facts, _ := statuslineEvent(t); !reflect.DeepEqual(facts["statusline.changed"], []any{"working_on", "next"}) {
 		t.Fatalf("restore: statusline.changed = %v; want [working_on next]", facts["statusline.changed"])
 	}
+}
+
+// After each start, and after a lit next hands the work back, the file's lane
+// count is the "N/M done" the lit backlog claim line prints for that lane at
+// that moment — including a start that takes a closed ticket out of the done
+// count.
+func TestTheStatuslineLaneCountMatchesTheClaimLine(t *testing.T) {
+	isolateEvents(t)
+	dir, first, second := statuslineCheckout(t)
+	claimCount := regexp.MustCompile(`(?m)^\s*claimed here: .* (\d+)/(\d+) done$`)
+	matches := func(after string, want statusline.Lane) {
+		t.Helper()
+		got := readStatusline(t, dir)
+		if got.WorkingOn == nil || got.WorkingOn.Lane == nil {
+			t.Fatalf("after %s: working_on = %+v; want a lane count", after, got.WorkingOn)
+		}
+		backlog := runCLIInDir(t, dir, "backlog")
+		line := claimCount.FindAllStringSubmatch(backlog, -1)
+		if len(line) != 1 {
+			t.Fatalf("after %s: lit backlog printed %d claim lines with a count; want 1:\n%s", after, len(line), backlog)
+		}
+		printed := statusline.Lane{Done: mustAtoi(t, line[0][1]), Total: mustAtoi(t, line[0][2])}
+		if *got.WorkingOn.Lane != printed || printed != want {
+			t.Fatalf("after %s: file lane = %+v, claim line %+v; want both %+v", after, *got.WorkingOn.Lane, printed, want)
+		}
+	}
+
+	runCLIInDir(t, dir, "start", first, "--by", "agent")
+	matches("starting the first ticket", statusline.Lane{Done: 0, Total: 2})
+	runCLIInDir(t, dir, "start", second, "--by", "agent")
+	runCLIInDir(t, dir, "done", second)
+	runCLIInDir(t, dir, "next")
+	matches("lit next handing the first ticket back", statusline.Lane{Done: 1, Total: 2})
+	runCLIInDir(t, dir, "start", second, "--by", "agent")
+	matches("starting the closed ticket", statusline.Lane{Done: 0, Total: 2})
+}
+
+func mustAtoi(t *testing.T, s string) int {
+	t.Helper()
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
 }
 
 // A statusline write that fails is on the event with its error, beside what
@@ -416,12 +462,17 @@ func TestDocumentedStatuslineRendersTheFileWithNoLitProcess(t *testing.T) {
 		want  string
 	}{
 		{"no file yet", func() {}, ""},
-		{"after start", func() { runCLIInDir(t, dir, "start", first, "--by", "agent") }, "working: " + first + " First\n"},
+		{"after start", func() { runCLIInDir(t, dir, "start", first, "--by", "agent") }, "working: " + first + " First (0/2 done)\n"},
 		{"after done", func() { runCLIInDir(t, dir, "done", first) }, ""},
 		{"after next", func() { runCLIInDir(t, dir, "next") }, "next: " + second + "\n"},
-		{"after start of the pick", func() { runCLIInDir(t, dir, "start", second, "--by", "agent") }, "working: " + second + " Second  |  next: " + second + "\n"},
+		{"after start of the pick", func() { runCLIInDir(t, dir, "start", second, "--by", "agent") }, "working: " + second + " Second (1/2 done)  |  next: " + second + "\n"},
 		{"after done of the pick", func() { runCLIInDir(t, dir, "done", second) }, ""},
 		{"after next on an empty backlog", func() { runCLIInDirAllowError(t, dir, "next") }, "next: nothing ready\n"},
+		{"a record with no lane count, as an older lit writes", func() {
+			if err := os.WriteFile(file, []byte(`{"schema_version": 1, "working_on": {"ticket": {"id": "x-1", "title": "X"}, "recorded_at": "2026-10-15T09:30:00Z"}, "next": null}`), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}, "working: x-1 X\n"},
 		{"an unknown schema_version", func() {
 			if err := os.WriteFile(file, []byte(`{"schema_version": 2, "working_on": {"ticket": {"id": "x-1", "title": "X"}}, "next": null}`), 0o644); err != nil {
 				t.Fatal(err)

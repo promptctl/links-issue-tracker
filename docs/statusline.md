@@ -34,7 +34,7 @@ always sees a complete file. Reading it needs no lock.
 ## Example
 
 This is the file after `lit next` picked `links-auth-k2p` and `lit start` then
-started it:
+started it, in a lane where one of four tickets was already closed:
 
 ```json
 {
@@ -43,6 +43,10 @@ started it:
     "ticket": {
       "id": "links-auth-k2p",
       "title": "Refresh tokens survive a clock skew"
+    },
+    "lane": {
+      "done": 1,
+      "total": 4
     },
     "recorded_at": "2026-10-15T13:59:25.711166Z"
   },
@@ -69,6 +73,7 @@ lifecycle change clears it, as described under
 | `working_on` | object or `null` | The ticket this checkout is working on. `null` when nothing is recorded. |
 | `working_on.ticket.id` | string | The ticket's id. |
 | `working_on.ticket.title` | string | The ticket's title. |
+| `working_on.lane` | object or `null` | The progress of the ticket's lane: `done` is how many of its tickets are closed, out of `total`. It is the count in the `N/M done` of that lane's claim line in `lit backlog`. `null` when the command that recorded `working_on` did not count the lane, as a lit older than this field does not. |
 | `working_on.recorded_at` | string | When lit recorded this ticket as worked on. |
 | `next` | object or `null` | The last plain `lit next` answer. `null` when no answer is recorded. |
 | `next.ticket` | object or `null` | The ticket that `lit next` picked, with `id` and `title` as above. `null` means `lit next` ran and found nothing to pick. |
@@ -87,10 +92,12 @@ seconds.
 
 **`working_on`** is set by:
 
-- `lit start <id>`, which records the ticket it started.
+- `lit start <id>`, which records the ticket it started and its lane's count
+  once the start has landed. Starting a closed ticket takes it out of the
+  `done` count.
 - `lit next`, when it hands back a ticket that is already in progress in a lane
   this checkout holds. This happens with or without filter flags, and it also
-  updates `recorded_at`.
+  counts the lane again and updates `recorded_at`.
 
 **`next`** is set by a plain `lit next`: one that neither narrows the pick with
 `--assignee`, `--type`, `--status` or `--labels` nor turns on `--all`. A flag
@@ -126,6 +133,10 @@ matters to you.
   holds for `lit purge` too: the purged ticket's title stays in every other
   checkout's file. To remove the title, delete that checkout's file; a missing
   file reads as nothing recorded.
+- **The lane count is a snapshot.** `working_on.lane` is counted when
+  `working_on` is recorded. Tickets closed, reopened or filed in that lane
+  afterwards, here or in another checkout, do not change it until the next
+  `lit start` or `lit next` records `working_on` again.
 - **`next` is a snapshot.** It is the answer as of `next.recorded_at`. Tickets
   filed, ranked or finished since then can change what `lit next` would pick, and
   nothing reruns it.
@@ -155,9 +166,9 @@ it does.
 
 ## A minimal statusline
 
-This script prints the ticket being worked on and the next pick. It prints
-nothing when the file is missing, has a schema version it does not know, or
-records nothing:
+This script prints the ticket being worked on, with its lane's count, and the
+next pick. It prints nothing when the file is missing, has a schema version it
+does not know, or records nothing:
 
 ```sh
 #!/bin/sh
@@ -165,7 +176,9 @@ f="$(git rev-parse --show-toplevel 2>/dev/null)/.lit/statusline.json"
 [ -r "$f" ] || exit 0
 jq -r '
   select(.schema_version == 1)
-  | [ (.working_on | if . then "working: \(.ticket.id) \(.ticket.title)" else empty end),
+  | [ (.working_on | if . then "working: \(.ticket.id) \(.ticket.title)"
+                             + (.lane | if . then " (\(.done)/\(.total) done)" else "" end)
+                   else empty end),
       (.next | if . == null then empty
                elif .ticket == null then "next: nothing ready"
                else "next: \(.ticket.id)" end) ]
