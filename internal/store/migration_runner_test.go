@@ -10,7 +10,6 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/doltcli"
 	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
-	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/version"
 )
 
@@ -461,17 +460,13 @@ func TestRefusalSurfacesRecoveryDataFromWorkspace(t *testing.T) {
 
 	stampGooseVersionAhead(t, ctx, doltRoot)
 
-	rec := telemetry.Begin(telemetry.Event{})
-	_, err := Open(telemetry.With(ctx, rec), doltRoot, "test-workspace-id")
+	_, err := Open(ctx, doltRoot, "test-workspace-id")
 	if err == nil {
 		t.Fatal("Open() returned nil; want UnsupportedSchemaVersionError")
 	}
 	var refusal *UnsupportedSchemaVersionError
 	if !errors.As(err, &refusal) {
 		t.Fatalf("Open() error = %v (%T); want *UnsupportedSchemaVersionError", err, err)
-	}
-	if got := rec.Finish(telemetry.End{}).Facts["schema_ahead.rollback_snapshot"]; got != refusal.SnapshotName {
-		t.Errorf("event fact schema_ahead.rollback_snapshot = %v, want the offered snapshot %q", got, refusal.SnapshotName)
 	}
 	if refusal.SnapshotName == "" {
 		t.Errorf("SnapshotName empty; want a migration-recovery snapshot name (one was taken on fresh Open)")
@@ -489,8 +484,7 @@ func TestRefusalSurfacesRecoveryDataFromWorkspace(t *testing.T) {
 }
 
 // TestRefusalReportsUnreadableSnapshots pins that a refusal whose snapshot
-// lookup fails says so — on the error and on the command's event — instead of
-// reading as "no snapshot exists".
+// lookup fails says so instead of reading as "no snapshot exists".
 func TestRefusalReportsUnreadableSnapshots(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -509,8 +503,7 @@ func TestRefusalReportsUnreadableSnapshots(t *testing.T) {
 		t.Fatalf("write file at snapshots dir: %v", err)
 	}
 
-	rec := telemetry.Begin(telemetry.Event{})
-	_, err := Open(telemetry.With(ctx, rec), doltRoot, "test-workspace-id")
+	_, err := Open(ctx, doltRoot, "test-workspace-id")
 	var refusal *UnsupportedSchemaVersionError
 	if !errors.As(err, &refusal) {
 		t.Fatalf("Open() error = %v (%T); want *UnsupportedSchemaVersionError", err, err)
@@ -520,9 +513,6 @@ func TestRefusalReportsUnreadableSnapshots(t *testing.T) {
 	}
 	if msg := refusal.Error(); !strings.Contains(msg, "could not look for a snapshot") || strings.Contains(msg, "lossy rollback is not possible") {
 		t.Errorf("Error() did not report the failed lookup as one: %q", msg)
-	}
-	if got, ok := rec.Finish(telemetry.End{}).Facts["schema_ahead.rollback_snapshot"]; !ok || got != "" {
-		t.Errorf("event fact schema_ahead.rollback_snapshot = %v (present %v), want \"\" (no snapshot offered)", got, ok)
 	}
 }
 

@@ -15,7 +15,6 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
-	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/version"
 )
 
@@ -898,10 +897,6 @@ func (s *Store) refuseIfBaselineMissing(ctx context.Context, state migrationStat
 	}
 	if present == 0 || len(missing) > 0 {
 		snapshot, lookupErr := rollbackSnapshotName(migrationSnapshotsDir(s.doltRootDir), state.registryMaxVers)
-		// [LAW:nothing-unseen] which rollback the refusal offered, if any,
-		// lands on the command's event: a snapshot name, or none; a failed
-		// lookup is on the event's error.
-		telemetry.Set(ctx, "schema_ahead.rollback_snapshot", snapshot)
 		return &UnsupportedSchemaVersionError{
 			WorkspaceVersion:  state.appliedVersion,
 			MaxSupported:      state.registryMaxVers,
