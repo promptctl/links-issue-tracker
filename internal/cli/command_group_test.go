@@ -66,11 +66,11 @@ func commandGroupPaths() [][]string {
 		}
 	}
 	for _, spec := range commandSpecs(context.Background(), io.Discard, io.Discard) {
-		if spec.Hidden || len(spec.Subcommands) == 0 {
+		if spec.Hidden || len(visibleSubcommands(spec.Subcommands)) == 0 {
 			continue
 		}
 		paths = append(paths, []string{spec.Name})
-		walk([]string{spec.Name}, spec.Subcommands)
+		walk([]string{spec.Name}, visibleSubcommands(spec.Subcommands))
 	}
 	return paths
 }
@@ -100,11 +100,11 @@ func commandLeafPaths() [][]string {
 		if spec.Hidden || spec.Retired {
 			continue
 		}
-		if len(spec.Subcommands) == 0 {
+		if len(visibleSubcommands(spec.Subcommands)) == 0 {
 			paths = append(paths, []string{spec.Name})
 			continue
 		}
-		walk([]string{spec.Name}, spec.Subcommands)
+		walk([]string{spec.Name}, visibleSubcommands(spec.Subcommands))
 	}
 	return paths
 }

@@ -16,14 +16,16 @@ import (
 // the registry has nor invent one it lacks. [LAW:one-source-of-truth]
 func commandCompletionModel() []CommandSpec {
 	specs := commandSpecs(context.Background(), io.Discard, io.Discard)
-	// Hidden specs (retired commands kept dispatchable for their pointer) are off
-	// the advertised surface, so they are off completion too — the same Hidden bit
-	// cobra reads for `--help`. [LAW:one-source-of-truth]
+	// Hidden specs and subcommands (retired ones kept dispatchable for their
+	// pointer, and the background sync entrypoints) are off the advertised
+	// surface, so they are off completion too — the same Hidden bit cobra reads
+	// for `--help`. [LAW:one-source-of-truth]
 	visible := make([]CommandSpec, 0, len(specs)+1)
 	for _, s := range specs {
 		if s.Hidden {
 			continue
 		}
+		s.Subcommands = visibleSubcommands(s.Subcommands)
 		visible = append(visible, s)
 	}
 	specs = visible
@@ -32,6 +34,19 @@ func commandCompletionModel() []CommandSpec {
 	// registry does not own. Listing it keeps completion faithful to the actual
 	// command surface rather than to the registry alone.
 	return append(specs, CommandSpec{Name: "help", Summary: "Help about any command"})
+}
+
+// visibleSubcommands drops the Hidden rows of a subcommand tree at every depth.
+func visibleSubcommands(subs []SubcommandSpec) []SubcommandSpec {
+	visible := make([]SubcommandSpec, 0, len(subs))
+	for _, s := range subs {
+		if s.Hidden {
+			continue
+		}
+		s.Subcommands = visibleSubcommands(s.Subcommands)
+		visible = append(visible, s)
+	}
+	return visible
 }
 
 func renderBashCompletion() string { return generateBashCompletion(commandCompletionModel()) }

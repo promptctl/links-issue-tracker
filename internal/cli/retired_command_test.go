@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -119,12 +120,17 @@ func TestBulkImportRetiredPointsToBackupRestore(t *testing.T) {
 			t.Errorf("bulk import error = %q, want it to mention %q", err.Error(), want)
 		}
 	}
-	// It is dropped from the advertised bulk subcommand surface (completion/usage)
-	// while staying dispatchable. [LAW:one-source-of-truth]
-	for _, sub := range bulkFamily.visibleSubcommands() {
-		if sub.Name == "import" {
-			t.Errorf("bulk import must not appear in the advertised subcommand surface")
-		}
+	// The projection states it Retired and Hidden, so it is dropped from the
+	// advertised bulk subcommand surface (completion/usage) while staying
+	// dispatchable and visible to the template dispatch gate.
+	// [LAW:one-source-of-truth]
+	subs := bulkFamily.subcommandSpecs()
+	i := slices.IndexFunc(subs, func(s SubcommandSpec) bool { return s.Name == "import" })
+	if i < 0 || !subs[i].Retired || !subs[i].Hidden {
+		t.Errorf("bulk family projection %+v must carry import as Retired and Hidden", subs)
+	}
+	if slices.ContainsFunc(visibleSubcommands(subs), func(s SubcommandSpec) bool { return s.Name == "import" }) {
+		t.Errorf("bulk import must not appear in the advertised subcommand surface")
 	}
 }
 

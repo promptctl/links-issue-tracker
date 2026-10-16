@@ -19,12 +19,10 @@ var bulkFamily = commandFamily[appSubcommand]{
 		{name: "archive", payload: appSubcommand{access: app.AccessWrite, declare: bulkTransitionLeaf(model.Archive{})}},
 		// `bulk import` is retired: it would be a second name for the
 		// export-restore `backup restore` owns, and it is the odd verb out in a
-		// family of per-`--ids` fan-out ops. Kept hidden+dispatchable so an old
+		// family of per-`--ids` fan-out ops. Kept dispatchable so an old
 		// invocation returns the documented pointer instead of the bare family
-		// usage error. The pointer is the row's own data, so it reaches the
-		// caller ahead of any parse or workspace open, like the top-level
-		// retirements. [LAW:no-silent-failure]
-		retiredSubcommand("bulk", "import", bulkImportRetirementGuidance),
+		// usage error. [LAW:no-silent-failure]
+		retiredSubcommand[appSubcommand]("bulk", "import", bulkImportRetirementGuidance),
 	},
 }
 

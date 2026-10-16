@@ -18,9 +18,6 @@ func runAppFamily(f commandFamily[appSubcommand], ctx context.Context, stdout io
 	if err != nil {
 		return err
 	}
-	if sub.retired != nil {
-		return *sub.retired
-	}
 	return runLeaf(sub.declare(), ctx, stdout, ap, args[1:])
 }
 

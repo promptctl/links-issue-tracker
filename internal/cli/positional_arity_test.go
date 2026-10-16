@@ -92,7 +92,7 @@ func leafPaths(t *testing.T) []invocablePath {
 			// arity check, which is the documented behaviour tested elsewhere.
 			continue
 		}
-		walk([]string{spec.Name}, spec.Subcommands)
+		walk([]string{spec.Name}, visibleSubcommands(spec.Subcommands))
 	}
 	if len(paths) == 0 {
 		t.Fatal("registry produced no command paths; the walk is broken, not the CLI")
