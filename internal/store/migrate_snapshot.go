@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -166,19 +165,6 @@ func (e *MigrationRollbackError) Error() string {
 
 func (e *MigrationRollbackError) Unwrap() error { return e.Cause }
 
-// migrationSnapshotsDir returns the workspace snapshots directory derived
-// from the Dolt root path. Mirrors the convention used by cli/snapshots.go's
-// snapshotsDirFor (sibling of <storageDir>/dolt) and by commitLockPathForDolt
-// (sibling of <storageDir>/dolt for the lock file).
-//
-// [LAW:one-source-of-truth] The snapshots-directory location lives in two
-// callers (cli and store); both derive it from the same sibling-of-database
-// convention so they cannot drift.
-func migrationSnapshotsDir(databaseDir string) string {
-	cleaned := filepath.Clean(databaseDir)
-	return filepath.Join(filepath.Dir(cleaned), "snapshots")
-}
-
 // formatMigrationSnapshotLabel returns the label used for migration-recovery
 // snapshots. The trailing timestamp is purely cosmetic — dbsnapshot.Take
 // already encodes the take-time in the directory name — but it makes the
@@ -210,7 +196,7 @@ type rollbackSearch struct {
 // itself, so every migration snapshot answers alike whichever lit minted it,
 // and its name is left in the shape every released lit classifies.
 func (s *Store) searchRollbackSnapshot(ctx context.Context, maxSupported int64) rollbackSearch {
-	snaps, err := dbsnapshot.List(migrationSnapshotsDir(s.doltRootDir))
+	snaps, err := dbsnapshot.List(dbsnapshot.DirFor(s.doltRootDir))
 	if err != nil {
 		return rollbackSearch{err: fmt.Errorf("list snapshots: %w", err)}
 	}

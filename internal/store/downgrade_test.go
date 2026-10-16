@@ -42,7 +42,7 @@ func openWorkspaceForDowngrade(t *testing.T) (*Store, string) {
 // artifact scan keeps that cleanup invariant pinned.
 func snapshotCount(t *testing.T, doltRoot string) int {
 	t.Helper()
-	dir := migrationSnapshotsDir(doltRoot)
+	dir := dbsnapshot.DirFor(doltRoot)
 	entries, err := os.ReadDir(dir)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("readdir snapshots: %v", err)

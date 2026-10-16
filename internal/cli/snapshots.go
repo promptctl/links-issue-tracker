@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"path/filepath"
 	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/config"
@@ -22,13 +21,6 @@ var snapshotsFamily = commandFamily[wsSubcommand]{
 		{name: "list", payload: wsSubcommand{declare: snapshotsListLeaf}},
 		{name: "restore", payload: wsSubcommand{declare: snapshotsRestoreLeaf}},
 	},
-}
-
-// snapshotsDirFor returns the workspace's filesystem-snapshot directory.
-// [LAW:one-source-of-truth] All snapshot-path construction flows through this
-// helper; callers don't compose <storageDir>/snapshots themselves.
-func snapshotsDirFor(ws workspace.Info) string {
-	return filepath.Join(ws.StorageDir, "snapshots")
 }
 
 // isUserSnapshotName reports whether name is a user snapshot (i.e. produced
@@ -120,7 +112,7 @@ func snapshotsNewLeaf() wsLeaf {
 		// filter, `lit snapshots new` could evict a recovery snapshot the
 		// migration system is depending on.
 		return withCommitLock(ctx, ws, func() error {
-			return dbsnapshot.PruneMatching(snapshotsDirFor(ws), cfg.Snapshot.RetentionBudget, isUserSnapshotName)
+			return dbsnapshot.PruneMatching(dbsnapshot.DirFor(ws.DatabasePath), cfg.Snapshot.RetentionBudget, isUserSnapshotName)
 		})
 	}}
 }
@@ -130,7 +122,7 @@ func snapshotsNewLeaf() wsLeaf {
 // extends the exclusion window past the last directory read.
 func takeUserSnapshot(ctx context.Context, ws workspace.Info, label string) (snap dbsnapshot.Snapshot, err error) {
 	err = withDoltDirectoryHeld(ctx, ws, func() error {
-		s, err := dbsnapshot.Take(ctx, ws.DatabasePath, snapshotsDirFor(ws), label)
+		s, err := dbsnapshot.Take(ctx, ws.DatabasePath, dbsnapshot.DirFor(ws.DatabasePath), label)
 		if err != nil {
 			return err
 		}
@@ -202,7 +194,7 @@ func withDoltDirectoryHeld(ctx context.Context, ws workspace.Info, fn func() err
 func snapshotsListLeaf() wsLeaf {
 	fs := newCobraFlagSet("snapshots list")
 	return wsLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
-		snapshots, err := dbsnapshot.List(snapshotsDirFor(ws))
+		snapshots, err := dbsnapshot.List(dbsnapshot.DirFor(ws.DatabasePath))
 		if err != nil {
 			return err
 		}
@@ -254,7 +246,7 @@ func snapshotsRestoreLeaf() wsLeaf {
 			// beside an error means the pre-restore directory was already moved
 			// aside (Restore's install step failed after its rotation step), and
 			// that path is the operator's only pointer to their displaced data.
-			r, restoreErr := dbsnapshot.Restore(ws.DatabasePath, snapshotsDirFor(ws), name)
+			r, restoreErr := dbsnapshot.Restore(ws.DatabasePath, dbsnapshot.DirFor(ws.DatabasePath), name)
 			rotated = r
 			restored = restoreErr == nil
 			return restoreErr

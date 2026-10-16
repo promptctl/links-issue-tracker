@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
 	"github.com/promptctl/links-issue-tracker/internal/doltcli"
 	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
 	"github.com/promptctl/links-issue-tracker/internal/version"
@@ -514,7 +515,7 @@ func TestRefusalReportsUnreadableSnapshots(t *testing.T) {
 	})
 	stampGooseVersionAhead(t, ctx, doltRoot)
 	// A file where the snapshots directory belongs makes the listing fail.
-	snapshotsDir := migrationSnapshotsDir(doltRoot)
+	snapshotsDir := dbsnapshot.DirFor(doltRoot)
 	if err := os.RemoveAll(snapshotsDir); err != nil {
 		t.Fatalf("remove snapshots dir: %v", err)
 	}

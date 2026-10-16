@@ -657,3 +657,49 @@ func TestQuarantineTableRefusesToDiscardStaleShapeHistory(t *testing.T) {
 		t.Errorf("error message = %q; want it to name the non-canonical shape and the row count", msg)
 	}
 }
+
+// TestFailedMigrationReportsCheckpointPruneFailure pins that a checkpoint
+// prune failing on the migration-failure path reaches the caller beside the
+// migration failure, while the reset before it succeeded.
+func TestFailedMigrationReportsCheckpointPruneFailure(t *testing.T) {
+	// serial: no t.Parallel — installs the package-level migrationUpByOneForTest
+	// and migrationCheckpointPruneForTest hooks.
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+
+	first, err := Open(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open(first) error = %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("Close(first) error = %v", err)
+	}
+
+	withGooseHistoryDropped(t, ctx, doltRoot)
+
+	migrationFailure := errors.New("simulated migration failure")
+	pruneFailure := errors.New("simulated prune failure")
+	migrationUpByOneForTest = func(context.Context, *goose.Provider) (*goose.MigrationResult, error) {
+		return nil, migrationFailure
+	}
+	migrationCheckpointPruneForTest = func() error { return pruneFailure }
+	t.Cleanup(func() {
+		migrationUpByOneForTest = nil
+		migrationCheckpointPruneForTest = nil
+	})
+
+	_, openErr := Open(ctx, doltRoot, "test-workspace-id")
+	if openErr == nil {
+		t.Fatal("Open() returned nil error; expected the migration failure")
+	}
+	var resetErr *CheckpointResetError
+	if !errors.As(openErr, &resetErr) {
+		t.Errorf("error = %v; expected a CheckpointResetError (the reset succeeded)", openErr)
+	}
+	if !errors.Is(openErr, migrationFailure) {
+		t.Errorf("error = %v; expected it to carry the migration failure", openErr)
+	}
+	if !errors.Is(openErr, pruneFailure) {
+		t.Errorf("error = %v; expected it to carry the checkpoint prune failure", openErr)
+	}
+}

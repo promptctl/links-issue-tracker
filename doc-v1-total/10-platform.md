@@ -142,7 +142,7 @@ Each release publishes `release-manifest.json`: the `version.Info` fields plus a
 
 ### Installer
 
-`Install` (`internal/release/installer.go`) determines the format from the URL (`.tar.gz` → binary `lit`; `.zip` → `lit.exe`; anything else rejected), creates the temp file (`.lit-downgrade-*.tmp`) in the target directory *before* downloading (so an unwritable dir fails fast), downloads with SHA-256 verification, extracts, chmods 0755, and renames atomically into place; any pre-rename failure removes the temp file. Hardening caps and checks (`installer.go`):
+`Install` (`internal/release/installer.go`) determines the format from the URL (`.tar.gz` → binary `lit`; `.zip` → `lit.exe`; anything else rejected), creates the temp file (`.lit-install-*.tmp`) in the target directory *before* downloading (so an unwritable dir fails fast), downloads with SHA-256 verification, extracts, chmods 0755, and renames atomically into place; any pre-rename failure removes the temp file. Hardening caps and checks (`installer.go`):
 
 - 256 MiB compressed cap, 256 MiB per-entry uncompressed cap, 512 MiB whole-stream cap; 5-minute default timeout.
 - The expected SHA-256 must be a 64-char hex digest, checked before downloading; the download is capped and teed into the hash; mismatch is fatal.

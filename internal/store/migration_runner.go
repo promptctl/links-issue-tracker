@@ -48,6 +48,11 @@ const migrationDriftRepairCheckpointPrefix = "pre-drift-repair"
 // only to the caller that needs it, not to every consumer of the shared stepper.
 var migrationUpByOneForTest func(ctx context.Context, provider *goose.Provider) (*goose.MigrationResult, error)
 
+// migrationCheckpointPruneForTest, if non-nil, replaces the checkpoint prune
+// inside applyPendingMigrations, so a test can fail the prune while the reset
+// before it succeeds.
+var migrationCheckpointPruneForTest func() error
+
 // CheckpointResetError is returned when a migration body failure triggers an
 // automatic Dolt checkpoint reset. The error message names the checkpoint so
 // the operator can use it as a lightweight forensics anchor alongside the
@@ -312,7 +317,7 @@ func (st migrationState) willMutate() bool {
 func (s *Store) migrate(ctx context.Context) error {
 	guard := newSnapshotGuard(
 		s.doltRootDir,
-		migrationSnapshotsDir(s.doltRootDir),
+		dbsnapshot.DirFor(s.doltRootDir),
 		formatMigrationSnapshotLabel(time.Now()),
 	)
 	if err := s.runMigration(ctx, guard); err != nil {
@@ -675,12 +680,18 @@ func (s *Store) applyPendingMigrations(ctx context.Context) error {
 		}
 		return s.upByOne(ctx, provider)
 	}
+	prune := func(ctx context.Context) error {
+		if hook := migrationCheckpointPruneForTest; hook != nil {
+			return hook()
+		}
+		return s.PruneCheckpoints(ctx, migrationCheckpointPrefix, migrationCheckpointRetention)
+	}
 
 	for {
 		result, gooseErr := step()
 		if errors.Is(gooseErr, goose.ErrNoNextVersion) {
 			// Success: prune old checkpoints to the retention count.
-			if err := s.PruneCheckpoints(ctx, migrationCheckpointPrefix, migrationCheckpointRetention); err != nil {
+			if err := prune(ctx); err != nil {
 				return fmt.Errorf("prune migration checkpoints: %w", err)
 			}
 			return nil
@@ -690,9 +701,13 @@ func (s *Store) applyPendingMigrations(ctx context.Context) error {
 			// Prune on the failure path too: normal failures insert a quarantine row
 			// so future Opens are blocked before creating a new checkpoint, but
 			// nil-result failures skip quarantine insertion, leaving the door open
-			// for repeated manual retries to accumulate branches. Error ignored —
-			// the migration failure is the primary concern.
-			_ = s.PruneCheckpoints(ctx, migrationCheckpointPrefix, migrationCheckpointRetention)
+			// for repeated manual retries to accumulate branches. The migration
+			// failure stays the error callers classify; a prune failure rides
+			// beside it, since it is the only sign those branches are piling up.
+			// [LAW:no-silent-failure]
+			if pruneErr := prune(ctx); pruneErr != nil {
+				return errors.Join(cpErr, fmt.Errorf("prune migration checkpoints: %w", pruneErr))
+			}
 			return cpErr
 		}
 		// commitWorkingSet (not ...Once) so each migration commit gets the

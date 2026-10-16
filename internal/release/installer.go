@@ -48,7 +48,7 @@ const maxArchiveBytes = 256 << 20
 
 // HTTPInstaller is the default Installer.
 type HTTPInstaller struct {
-	Client *http.Client // nil defaults to http.DefaultClient
+	Client *http.Client // nil defaults to a client bounded by defaultInstallerTimeout
 }
 
 // Install fetches target.Artifact.URL, verifies it against target.Artifact.SHA256,
@@ -82,7 +82,7 @@ func (i *HTTPInstaller) Install(ctx context.Context, target *Target, targetPath 
 	// installed anyway. Temp file lives on the same filesystem as targetPath
 	// so the eventual os.Rename is genuinely atomic.
 	targetDir := filepath.Dir(targetPath)
-	tmp, err := os.CreateTemp(targetDir, ".lit-downgrade-*.tmp")
+	tmp, err := os.CreateTemp(targetDir, ".lit-install-*.tmp")
 	if err != nil {
 		return fmt.Errorf("release: create temp file in %s: %w", targetDir, err)
 	}
@@ -180,7 +180,7 @@ const maxUncompressedBytes = 256 << 20
 // per-platform archives are ~15 MiB today; 5 minutes is generous on a slow
 // link without allowing an indefinite hang. CLI passes context.Background()
 // at time of writing, so without this bound a stalled server would wedge
-// `lit downgrade` forever.
+// `lit upgrade` or `lit downgrade` forever.
 //
 // [LAW:types-are-the-program] The accept shape of "an HTTP archive download"
 // includes a deadline. http.DefaultClient has none; the boundary needs

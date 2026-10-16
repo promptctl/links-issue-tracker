@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
 	"github.com/promptctl/links-issue-tracker/internal/engine"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
@@ -291,7 +292,7 @@ func TestDataMutations_ProduceZeroSnapshots(t *testing.T) {
 // initBootstrapTestRepo's bootstrap Open.
 func snapshotsOnDisk(t *testing.T, ws workspace.Info) []string {
 	t.Helper()
-	entries, err := os.ReadDir(snapshotsDirFor(ws))
+	entries, err := os.ReadDir(dbsnapshot.DirFor(ws.DatabasePath))
 	if err != nil && !os.IsNotExist(err) {
 		t.Fatalf("read snapshots dir: %v", err)
 	}
@@ -506,7 +507,7 @@ func TestSnapshotsNew_RejectsPositionalArgs(t *testing.T) {
 // "nothing was created" must see partial artifacts too.
 func rawSnapshotDirEntries(t *testing.T, ws workspace.Info) []string {
 	t.Helper()
-	entries, err := os.ReadDir(snapshotsDirFor(ws))
+	entries, err := os.ReadDir(dbsnapshot.DirFor(ws.DatabasePath))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
@@ -566,7 +567,7 @@ func TestSnapshotsNew_CollectsInterruptOrphanedResidue(t *testing.T) {
 	repo, ws := initBootstrapTestRepo(t)
 	chdir(t, repo)
 
-	snapshotsDir := snapshotsDirFor(ws)
+	snapshotsDir := dbsnapshot.DirFor(ws.DatabasePath)
 	tmpResidue := filepath.Join(snapshotsDir, "1700000000000000001.tmp")
 	reserveResidue := filepath.Join(snapshotsDir, "1700000000000000001.reserve")
 	if err := os.MkdirAll(filepath.Join(tmpResidue, "nested"), 0o755); err != nil {
@@ -639,7 +640,7 @@ func TestSnapshotsNew_RecordSurvivesPruneFailure(t *testing.T) {
 	for range 5 {
 		captureRun(t, "snapshots", "new")
 	}
-	dir := snapshotsDirFor(ws)
+	dir := dbsnapshot.DirFor(ws.DatabasePath)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatal(err)

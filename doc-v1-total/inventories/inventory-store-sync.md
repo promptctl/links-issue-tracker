@@ -330,9 +330,9 @@ Fields (`sync_schema_guard.go`): `Remote`, `Branch`, `RemoteVersion int64`, `Bin
 3. else `guardCommitSchemaAhead(remote, branch, head)`.
 
 `guardCommitSchemaAhead(ctx, remote, branch, commitHash)` (`sync_schema_guard.go`) — shared core, also called directly by the reconcile with its already-captured `remoteHead`:
-1. `migrations.MaxVersion()` → `registryMax`.
+1. `version.CarriedSchemaSupport()` → `support`.
 2. `remoteHeadSchema(commitHash)` → `remoteVersion`.
-3. `remoteVersion <= registryMax` → nil.
+3. `remoteVersion <= support.Max` → nil.
 4. else `&RemoteSchemaAheadError{...}`.
 
 `trackingHeadHash` (`sync_schema_guard.go`): `SELECT COUNT(*) FROM dolt_remote_branches WHERE name = ?` on `remotes/<remote>/<branch>`; count 0 → `("", false, nil)`; else `commitHashOfRef`.
@@ -453,7 +453,7 @@ Fields (`sync_schema_guard.go`): `Remote`, `Branch`, `RemoteVersion int64`, `Bin
 1. `s.guardCommitSchemaAhead(ctx, remote, branch, remoteHead)` — **before any write**, using the captured `remoteHead` so a concurrent fetch cannot shift the decision.
 2. `s.sweepStaleReconcileScratch(ctx)`.
 3. `scratchBranch := newReconcileScratch()`.
-4. `guard := newSnapshotGuard(s.doltRootDir, migrationSnapshotsDir(s.doltRootDir), formatReconcileSnapshotLabel(time.Now()))` — **one** guard carried across all retries, so exactly one snapshot is taken however many attempts run.
+4. `guard := newSnapshotGuard(s.doltRootDir, dbsnapshot.DirFor(s.doltRootDir), formatReconcileSnapshotLabel(time.Now()))` — **one** guard carried across all retries, so exactly one snapshot is taken however many attempts run.
 5. `retryTransientGCContention(body, s.reconnect)`.
 
 `sweepStaleReconcileScratch(ctx)` (`sync_reconcile.go`): `SELECT name FROM dolt_branches WHERE name LIKE ?` with `"links-reconcile-scratch-%"`; every match is deleted with `CALL DOLT_BRANCH('-D', name)`. Every failure (list, scan, iterate, delete) prints to stderr with the messages at `sync_reconcile.go` and **never fails the reconcile**. The commit lock guarantees every such branch is an orphan (`sync_reconcile.go`).
@@ -546,7 +546,7 @@ Errors: `"read folded chain %s..%s: %w"`, `"scan folded chain commit: %w"`, `"it
 10. **Snapshot-first**: `guard.ensure(ctx)`; failure → `"snapshot before reconcile: %w"`, aborting **before** the data branch moves (`sync_reconcile.go`).
 11. `CALL DOLT_CHECKOUT(dataBranch)`; error `"return to data branch %q: %w"`.
 12. `CALL DOLT_RESET('--hard', replayedCommit)` — **the single atomic advance of the data branch**; error `"advance %q to replayed commit: %w"` (`sync_reconcile.go`).
-13. `dbsnapshot.PruneMatching(migrationSnapshotsDir(s.doltRootDir), 10, IsReconcileSnapshotName)`. A failure prints `"lit: reconcile could not prune old recovery snapshots (replay already committed): %v"` to stderr and is **not** promoted — the replay already committed (`sync_reconcile.go`).
+13. `dbsnapshot.PruneMatching(dbsnapshot.DirFor(s.doltRootDir), 10, IsReconcileSnapshotName)`. A failure prints `"lit: reconcile could not prune old recovery snapshots (replay already committed): %v"` to stderr and is **not** promoted — the replay already committed (`sync_reconcile.go`).
 14. Return `replayLanding{replayed, rehomed}`.
 
 Invariant: the data branch is at its pre-reconcile head before step 12 and at the complete replayed spine after — never in between.
@@ -638,7 +638,7 @@ Test `TestSyncResolveUnrelatedOwnerApprovalBindsForkAndSide` (`sync_unrelated_te
 `takeRemoteHead(ctx, result, guard, trackingRef)` (`sync_unrelated_take.go`):
 1. `guard.ensure(ctx)`; failure → `"snapshot before take-remote: %w"`.
 2. `resetHardToRef(ctx, s.db, trackingRef)`.
-3. `dbsnapshot.PruneMatching(migrationSnapshotsDir(...), 10, IsReconcileSnapshotName)`; failure prints `"lit: take-remote could not prune old recovery snapshots (reset already done): %v"` to stderr, **not** promoted.
+3. `dbsnapshot.PruneMatching(dbsnapshot.DirFor(...), 10, IsReconcileSnapshotName)`; failure prints `"lit: take-remote could not prune old recovery snapshots (reset already done): %v"` to stderr, **not** promoted.
 4. `result.State = SyncReconcileTookRemote`.
 Idempotent under retry (cached snapshot, fixed ref). The session's working set is left at the adopted head's own schema; the next `Open` lifts it. Tests `TestSyncResolveUnrelatedTakeRemote` (`sync_unrelated_test.go`), `TestSyncResolveUnrelatedTakeRemoteAdoptsAPrePurgeRemote` "nothing to carry" (`sync_unrelated_purge_test.go`).
 
@@ -735,7 +735,7 @@ The schema fact this rests on: every child table is `ON DELETE CASCADE` from iss
 - `migrationSnapshotRetention = 10` (`/Users/bmf/code/links-issue-tracker/internal/store/migrate_snapshot.go`)
 - `migrationSnapshotLabel = "pre-migrate"` (`migrate_snapshot.go`)
 
-Test hooks: `migrationUpByOneForTest` (`migration_runner.go`) applies **only** to `applyPendingMigrations`, never the reconcile lift; `migrationPostSnapshotHookForTest` (`migrate_snapshot.go`) fires inside `runMigration` after the snapshot guard.
+Test hooks: `migrationUpByOneForTest` (`migration_runner.go`) applies **only** to `applyPendingMigrations`, never the reconcile lift; `migrationCheckpointPruneForTest` (`migration_runner.go`) replaces that function's checkpoint prune; `migrationPostSnapshotHookForTest` (`migrate_snapshot.go`) fires inside `runMigration` after the snapshot guard.
 
 ### 8.2 Phases
 
@@ -756,7 +756,7 @@ Test hooks: `migrationUpByOneForTest` (`migration_runner.go`) applies **only** t
 ### 8.3 `migrate` — the outer boundary
 
 `(*Store).migrate(ctx)` (`migration_runner.go`):
-1. `guard := newSnapshotGuard(s.doltRootDir, migrationSnapshotsDir(s.doltRootDir), formatMigrationSnapshotLabel(time.Now()))`.
+1. `guard := newSnapshotGuard(s.doltRootDir, dbsnapshot.DirFor(s.doltRootDir), formatMigrationSnapshotLabel(time.Now()))`.
 2. `s.runMigration(ctx, guard)`.
 3. On error: if `guard.took()` → wrap as `&MigrationRollbackError{Snapshot: snap, Cause: err}`; otherwise return the raw error (`migration_runner.go`).
 4. On success: if a snapshot was taken → `dbsnapshot.PruneMatching(guard.snapshotsDir, 10, IsMigrationSnapshotName)`; a prune failure **is** promoted here: `"prune migration snapshots: %w"` (`migration_runner.go`).
@@ -791,9 +791,10 @@ Test hooks: `migrationUpByOneForTest` (`migration_runner.go`) applies **only** t
 1. `newGooseProvider(s.db)` — constructed **before** the checkpoint so a construction failure leaves no orphan branch. Failure → `"construct migration provider: %w"` (`migration_runner.go`).
 2. `checkpoint, err := s.CreateCheckpoint(ctx, "pre-migrate")`; failure → `"create migration checkpoint: %w"` (`migration_runner.go`).
 3. `step` closure: uses `migrationUpByOneForTest` when set, else `s.upByOne(ctx, provider)` (`migration_runner.go`).
-4. Loop:
-   - `errors.Is(gooseErr, goose.ErrNoNextVersion)` → `s.PruneCheckpoints(ctx, "pre-migrate", 5)`; a prune failure IS returned as `"prune migration checkpoints: %w"`; then return nil (`migration_runner.go`).
-   - other `gooseErr != nil` → `cpErr := s.handleMigrationFailure(...)`, then `_ = s.PruneCheckpoints(ctx, "pre-migrate", 5)` (error **deliberately ignored**), return `cpErr` (`migration_runner.go`).
+4. `prune` closure: uses `migrationCheckpointPruneForTest` when set, else `s.PruneCheckpoints(ctx, "pre-migrate", 5)` (`migration_runner.go`).
+5. Loop:
+   - `errors.Is(gooseErr, goose.ErrNoNextVersion)` → `prune(ctx)`; a prune failure IS returned as `"prune migration checkpoints: %w"`; then return nil (`migration_runner.go`).
+   - other `gooseErr != nil` → `cpErr := s.handleMigrationFailure(...)`, then `prune(ctx)`; a prune failure is returned as `errors.Join(cpErr, "prune migration checkpoints: %w")`, else `cpErr` (`migration_runner.go`).
    - success → `s.commitWorkingSet(ctx, migrationCommitMessage(result))`; failure → `"commit migration v%d: %w"` (`migration_runner.go`).
 
 `upByOne(ctx, provider)` (`migration_runner.go`) is bare `provider.UpByOne(ctx)` — the ONE shared forward-step; the test hook wraps it only at the `applyPendingMigrations` call site (`migration_runner.go`).
@@ -943,7 +944,7 @@ Tests: `TestPreGooseAdoptionStampsWithoutRerunningBaseline` (`migration_runner_t
 
 `recordProducerBinaryVersion(ctx)` (`migration_runner.go`): `version.Get()`; error → `"read version info: %w"`. `info.IsDev` → `(false, nil)` — a **dev build records no row**. Otherwise `s.setMeta(ctx, nil, "producer_binary_version", info.Version)` → `(true, nil)`; error → `"record producer binary version: %w"`. Test `TestProducerBinaryVersionUnstampedForDevBuild` (`migration_runner_test.go`). Nothing in this binary reads the row.
 
-`searchRollbackSnapshot(ctx, maxSupported)` (`migrate_snapshot.go`) returns a `rollbackSearch{snapshot string; examined, unreadable int; err error}`. `dbsnapshot.List(migrationSnapshotsDir(s.doltRootDir))`; a listing error → `err: "list snapshots: %w"`. For each entry passing `IsMigrationSnapshotName`, newest first: `snapshotOperable`; then a canceled `ctx` → `"stopped looking for a rollback snapshot: %w"` ends the search, counting nothing for that entry; otherwise `examined++`, and an error → `unreadable++`, `"read the schema snapshot %s holds: %w"` kept, the entry passed over; the first operable entry is the `snapshot`. The kept errors are joined into `err`.
+`searchRollbackSnapshot(ctx, maxSupported)` (`migrate_snapshot.go`) returns a `rollbackSearch{snapshot string; examined, unreadable int; err error}`. `dbsnapshot.List(dbsnapshot.DirFor(s.doltRootDir))`; a listing error → `err: "list snapshots: %w"`. For each entry passing `IsMigrationSnapshotName`, newest first: `snapshotOperable`; then a canceled `ctx` → `"stopped looking for a rollback snapshot: %w"` ends the search, counting nothing for that entry; otherwise `examined++`, and an error → `unreadable++`, `"read the schema snapshot %s holds: %w"` kept, the entry passed over; the first operable entry is the `snapshot`. The kept errors are joined into `err`.
 
 `snapshotOperable(ctx, snapshotPath, workspaceID, maxSupported)` (`migrate_snapshot.go`): `openStoreConnection(ctx, snapshotPath, workspaceID, engineRead)` on the snapshot in place, then `classifyMigrationState`: `phaseFresh` → false; `appliedVersion <= maxSupported` → true; otherwise `baselineCarried`. The store is closed and a close error joined. Dolt rewrites the snapshot's journal bookkeeping (`journal.idx`, `manifest`, the journal file) on that open; the data it holds is unchanged.
 
@@ -1009,7 +1010,7 @@ Helpers must not call `dbsnapshot.Take` directly (`migrate_snapshot.go`).
 
 ### 9.3 Paths and labels
 
-`migrationSnapshotsDir(databaseDir)` (`migrate_snapshot.go`) = `filepath.Join(filepath.Dir(filepath.Clean(databaseDir)), "snapshots")` — a **sibling** of the dolt directory, matching the commit-lock's sibling convention.
+`dbsnapshot.DirFor(databaseDir)` (`internal/dbsnapshot/snapshot.go`) = `filepath.Join(filepath.Dir(filepath.Clean(databaseDir)), "snapshots")` — a **sibling** of the dolt directory, matching the commit-lock's sibling convention.
 
 `formatMigrationSnapshotLabel(t)` (`migrate_snapshot.go`) = `fmt.Sprintf("pre-migrate-%d", t.UTC().UnixNano())`.
 
@@ -1723,7 +1724,7 @@ Sibling artifact names in the same directory:
 
 Restore-time artifact, created next to the database dir (**not** in `snapshotsDir`): `<databaseDir>.pre-restore-<unix-ns>` via `fmt.Sprintf("%s.pre-restore-%d", databaseDir, time.Now().UTC().UnixNano())` (`snapshot.go`).
 
-Where `snapshotsDir` comes from: CLI uses `filepath.Join(ws.StorageDir, "snapshots")` (`/Users/bmf/code/links-issue-tracker/internal/cli/snapshots.go`); the store's migration path uses `filepath.Join(filepath.Dir(filepath.Clean(databaseDir)), "snapshots")` (`/Users/bmf/code/links-issue-tracker/internal/store/migrate_snapshot.go`).
+Where `snapshotsDir` comes from: the CLI (`internal/cli/snapshots.go`) and the store both pass `dbsnapshot.DirFor(databaseDir)` (`internal/dbsnapshot/snapshot.go`).
 
 ### 13.5 Name grammar — mint side
 

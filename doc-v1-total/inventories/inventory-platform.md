@@ -597,7 +597,7 @@ manifests (`internal/release/manifest.go`). `Signature` is reserved and unverifi
   1. `archiveFormatForURL(url)`: `.tar.gz` ⇒ tar/gzip + binary name `lit`; `.zip` ⇒ zip +
      `lit.exe`; anything else ⇒
      `release: unsupported archive extension in %q (want .tar.gz or .zip)`.
-  2. Create the temp file `.lit-downgrade-*.tmp` **in the target directory first**, before
+  2. Create the temp file `.lit-install-*.tmp` **in the target directory first**, before
      downloading, so an unwritable install dir fails fast.
   3. `downloadAndVerify`.
   4. `extractBinary` into the temp file, `Chmod(0o755)`, `Close`, `os.Rename` into place
