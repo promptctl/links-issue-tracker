@@ -379,6 +379,33 @@ func TestAPanickingInvocationEndsAsAPanic(t *testing.T) {
 	}
 }
 
+// A schema ahead of this binary ends the invocation's event with one exit code
+// and one reason whichever boundary refused: the workspace on open, or the
+// remote on a sync write, which reaches the sink as the sync-failure block.
+func TestASchemaAheadRefusalEndsTheEventAsSchemaAheadAtEitherBoundary(t *testing.T) {
+	for name, refusal := range map[string]error{
+		"workspace": fmt.Errorf("open store: %w", &store.UnsupportedSchemaVersionError{WorkspaceVersion: 7, MaxSupported: 3}),
+		"remote":    asSyncFailure(&store.RemoteSchemaAheadError{Remote: "origin", Branch: "master", RemoteVersion: 7, BinarySupportedMax: 3}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			line, err := telemetry.Line(telemetry.Begin(telemetry.Event{}).Finish(invocationEnd(time.Now(), refusal, nil)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var written struct {
+				ExitCode int    `json:"exit_code"`
+				Reason   string `json:"reason"`
+			}
+			if err := json.Unmarshal(line, &written); err != nil {
+				t.Fatal(err)
+			}
+			if written.ExitCode != ExitValidation || written.Reason != "workspace_schema_ahead" {
+				t.Errorf("event ended exit_code=%d reason=%q, want %d workspace_schema_ahead", written.ExitCode, written.Reason, ExitValidation)
+			}
+		})
+	}
+}
+
 // A schema-ahead refusal's event records which snapshot it offered as the
 // lossy rollback — none is an empty name — why snapshots could not be read, and
 // how many it read, and a wrapped refusal records the same.

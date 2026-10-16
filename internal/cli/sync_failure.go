@@ -32,7 +32,8 @@ const (
 	// syncFailureRemoteSchemaAhead: the remote head is at a schema version this
 	// binary cannot produce, so no sync write may author a commit below it. Unlike
 	// a divergence, this never clears by retrying — it clears only by upgrading the
-	// binary. Remedy: `lit upgrade`, which installs the latest release.
+	// binary. Remedy: `lit upgrade`, which installs the latest release, run when
+	// the user directs it: the refusal is model.SchemaAhead, like the local one.
 	syncFailureRemoteSchemaAhead syncFailureClass = "remote_schema_ahead"
 	// syncFailureUnrelatedHistories: the local backlog and the remote share no
 	// common ancestor (independently-created or re-inited stores), so there is no
@@ -100,13 +101,13 @@ type SyncFailure struct {
 	// it cannot read as the whole (ignorable) message. Its text can carry
 	// what a remote server sent, so it renders fenced, through quoteRemote.
 	Cause error
-	// RemoteSchemaVersion and LocalSupportedMax are populated only for
-	// syncFailureRemoteSchemaAhead: the remote head's applied schema version and
-	// this binary's registry max. [LAW:types-are-the-program] the fields present
-	// name which class rendered, so a consumer cannot read a remote-schema-ahead
-	// block without the versions that make it actionable.
-	RemoteSchemaVersion int64
-	LocalSupportedMax   int64
+	// RemoteAhead is the store's refusal, populated only for
+	// syncFailureRemoteSchemaAhead: it carries the remote head's applied schema
+	// version and this binary's support max, and SyncFailureError unwraps to it
+	// so the refusal keeps its own classification. [LAW:types-are-the-program]
+	// the field present names which class rendered, so a consumer cannot read a
+	// remote-schema-ahead block without the versions that make it actionable.
+	RemoteAhead *store.RemoteSchemaAheadError
 	// Inventory carries the both-sides issue-id partition (only-local, only-remote,
 	// on-both), populated only for syncFailureUnrelatedHistories. Before choosing to
 	// take one side wholesale or union the two, the operator must see what each side
@@ -144,18 +145,17 @@ func remoteSchemaAheadFailure(err error) (SyncFailure, bool) {
 		return SyncFailure{}, false
 	}
 	return SyncFailure{
-		Class:               syncFailureRemoteSchemaAhead,
-		Remote:              ahead.Remote,
-		Branch:              ahead.Branch,
-		RemoteSchemaVersion: ahead.RemoteVersion,
-		LocalSupportedMax:   ahead.BinarySupportedMax,
-		BuildNote:           resolveBuildStatusNote(time.Now()),
+		Class:       syncFailureRemoteSchemaAhead,
+		Remote:      ahead.Remote,
+		Branch:      ahead.Branch,
+		RemoteAhead: ahead,
+		BuildNote:   resolveBuildStatusNote(time.Now()),
 	}, true
 }
 
 // asSyncFailure converts a store *RemoteSchemaAheadError into the returnable
-// sync-failure contract (so the command exits ExitConflict and prints the block),
-// or returns err unchanged. The explicit sync commands route their store error
+// sync-failure contract (so the command prints the block, and exits as the
+// schema-ahead refusal it unwraps to), or returns err unchanged. The explicit sync commands route their store error
 // through this one adapter so none of them renders the raw refusal instead of the
 // contract. [LAW:single-enforcer]
 func asSyncFailure(err error) error {
@@ -187,6 +187,16 @@ type SyncFailureError struct {
 
 func (e SyncFailureError) Error() string {
 	return e.Failure.blockString()
+}
+
+// Unwrap is the store refusal the block renders, when there is one, so a
+// remote-schema-ahead block exits and is advised as the schema-ahead refusal it
+// is, not as a divergence. The other classes wrap no typed refusal.
+func (e SyncFailureError) Unwrap() error {
+	if e.Failure.RemoteAhead == nil {
+		return nil
+	}
+	return e.Failure.RemoteAhead
 }
 
 // blockString renders the one authoritative sync-failure block: an
@@ -272,7 +282,7 @@ func (f SyncFailure) whatLine() string {
 	case syncFailureRemoteSchemaAhead:
 		return fmt.Sprintf(
 			"%s has advanced to schema version %d, but this lit binary supports only through version %d. Pushing or reconciling from here would author a commit BELOW the remote's schema — regressing the shared backlog and dropping every field the newer schema added — so this binary will not write to %s until it is upgraded.",
-			ref, f.RemoteSchemaVersion, f.LocalSupportedMax, ref)
+			ref, f.RemoteAhead.RemoteVersion, f.RemoteAhead.BinarySupportedMax, ref)
 	case syncFailureUnrelatedHistories:
 		return fmt.Sprintf(
 			"the local backlog and %s share no common history — they were created independently, or one was re-initialized — so there is no shared ancestor to merge against. The field-aware reconcile combines a divergence relative to a common base; with no base it cannot merge these automatically, and it committed nothing rather than pick a side. Keeping both backlogs requires taking one side wholesale or unioning them.",
@@ -309,7 +319,7 @@ func (f SyncFailure) resolutionSteps() []string {
 		// Bare `lit upgrade` installs the latest release. No `--to <producer>`: a
 		// build identity can be unresolvable, or older than the running binary.
 		return []string{
-			fmt.Sprintf("lit upgrade               # install a lit that supports schema v%d, then retry", f.RemoteSchemaVersion),
+			fmt.Sprintf("lit upgrade               # install a lit that supports schema v%d, then retry", f.RemoteAhead.RemoteVersion),
 		}
 	case syncFailureUnrelatedHistories:
 		// All three resolutions exist: the two wholesale takes (destructive of the
@@ -355,9 +365,12 @@ func (f SyncFailure) escalationLine() string {
 	// it will NOT clear on the next command or with time, only with an upgrade. So
 	// its escalation is fixed by the class, not derived from age/span, which would
 	// otherwise read as "recent, still routine" and invite the very wait-and-retry
-	// the epic kills. [LAW:dataflow-not-control-flow] the class selects the line.
+	// the epic kills. The upgrade is gated on the user the way the local
+	// schema-ahead refusal gates it, because the passive surfaces print this
+	// block with no remediation line after it. [LAW:dataflow-not-control-flow]
+	// the class selects the line.
 	if f.Class == syncFailureRemoteSchemaAhead {
-		return "ESCALATION — BLOCKED: this will not clear by waiting or retrying; the binary must be upgraded first. Treat the workspace as blocked for writes to the remote until you run the upgrade above, or surface it to the user as blocking."
+		return "ESCALATION — BLOCKED: this will not clear by waiting or retrying; only a lit whose schema support reaches the remote's can write to it. " + installReplacesLit + ": run the upgrade above only when the user directs it, and until then surface this to the user as blocking."
 	}
 	// Unrelated histories, like a schema-ahead remote, never merge on a retry — there
 	// is no base and never will be one for this pair. So its escalation is fixed by

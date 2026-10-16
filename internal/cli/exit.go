@@ -51,6 +51,16 @@ func ExitCode(err error) int {
 	if errors.As(err, &mergeConflict) {
 		return ExitConflict
 	}
+	// A binary too old for the schema it was asked to operate on — the
+	// workspace's or the remote's — is a self-fixable precondition no retry
+	// changes, not "lit is broken". The act it asks for — a different lit, not
+	// a different command — is carried by the reason. The remote refusal
+	// arrives wrapped in the sync-failure block, so this arm precedes the
+	// block's conflict exit. [LAW:no-mode-explosion]
+	var schemaAhead model.SchemaAhead
+	if errors.As(err, &schemaAhead) {
+		return ExitValidation
+	}
 	// A non-transient sync divergence the agent must resolve is a conflict-class
 	// exit — the same code an unresolved reconcile already uses, so the held-conflict
 	// exit contract is one value across `lit sync pull` and `lit sync reconcile`.
@@ -160,14 +170,6 @@ func ExitCode(err error) int {
 		return ExitValidation
 	}
 	if errors.Is(err, store.ErrWorkspaceNotInitialized) {
-		return ExitValidation
-	}
-	// A binary too old for the workspace is a self-fixable precondition no
-	// retry changes, not "lit is broken". The act it asks for — a different
-	// lit, not a different command — is carried by the reason.
-	// [LAW:no-mode-explosion]
-	var schemaAhead model.SchemaAhead
-	if errors.As(err, &schemaAhead) {
 		return ExitValidation
 	}
 	// A quarantined migration is the same kind of precondition: no retry

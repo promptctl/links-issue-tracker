@@ -28,9 +28,9 @@ This table is the corpus's single source for the code-to-error-type mapping; `07
 | 0 | `ExitOK` | nil error, including a handled `--help` |
 | 1 | `ExitGeneric` | `BulkFailureError`, transient GC contention, everything else |
 | 2 | `ExitUsage` | `UsageError` |
-| 3 | `ExitValidation` | `UnknownCommandError`, `RetiredCommandError`, any `model.Refusal` (`model.ValidationError`, `model.FrozenIssueError`, and the upgrade/downgrade target refusals), `UnsupportedError`, `templateShapeError`, `OutsideWorkspaceError`, `store.ErrWorkspaceNotInitialized`, `*store.UnsupportedSchemaVersionError`, `*store.QuarantineBlockError`, `workspace.ErrIssuePrefixRefused`, any `model.StateRequestError` (`model.ContainerActionError`, `lifecycle.RetentionError`) when not `Satisfied()`, `takeoverUnconfirmedError`, `purgeUnconfirmedError` |
+| 3 | `ExitValidation` | `UnknownCommandError`, `RetiredCommandError`, any `model.Refusal` (`model.ValidationError`, `model.FrozenIssueError`, and the upgrade/downgrade target refusals), `UnsupportedError`, `templateShapeError`, `OutsideWorkspaceError`, `store.ErrWorkspaceNotInitialized`, any `model.SchemaAhead` (`*store.UnsupportedSchemaVersionError`, `*store.DowngradeSpanUnsupportedError`, `*store.RemoteSchemaAheadError`, which a remote-schema-ahead `SyncFailureError` unwraps to), `*store.QuarantineBlockError`, `workspace.ErrIssuePrefixRefused`, any `model.StateRequestError` (`model.ContainerActionError`, `lifecycle.RetentionError`) when not `Satisfied()`, `takeoverUnconfirmedError`, `purgeUnconfirmedError` |
 | 4 | `ExitNotFound` | `storage.NotFoundError`, `VersionNotFoundError` |
-| 5 | `ExitConflict` | `MergeConflictError`, `SyncFailureError`, owner-approval refusal |
+| 5 | `ExitConflict` | `MergeConflictError`, `SyncFailureError` (except one that unwraps to a `model.SchemaAhead`), owner-approval refusal |
 | 6 | `ExitNoWork` | `Exhausted`, `NoWork`, any `model.StateRequestError` when `Satisfied()` |
 | 7 | `ExitCorruption` | `CorruptionError` |
 

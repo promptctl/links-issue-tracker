@@ -209,18 +209,21 @@ func TestSyncFailureErrorExitAndRemediation(t *testing.T) {
 // A remote-schema-ahead block routes to `lit upgrade` and — unlike a divergence —
 // frames the state as BLOCKED-until-upgrade, never an age-based "still routine"
 // line that would invite the wait-and-retry the epic kills.
-// The remedy names the schema requirement, never a `--to` build target.
+// The remedy names the schema requirement, never a `--to` build target, and the
+// upgrade waits on the user, as the local schema-ahead refusal's does: the
+// passive surfaces print this block with no remediation line to gate it.
 func TestSyncFailureBlockRemoteSchemaAhead(t *testing.T) {
 	t.Parallel()
 	block := SyncFailure{
-		Class:               syncFailureRemoteSchemaAhead,
-		Remote:              "origin",
-		Branch:              "master",
-		RemoteSchemaVersion: 7,
-		LocalSupportedMax:   4,
+		Class:  syncFailureRemoteSchemaAhead,
+		Remote: "origin",
+		Branch: "master",
+		RemoteAhead: &store.RemoteSchemaAheadError{
+			Remote: "origin", Branch: "master", RemoteVersion: 7, BinarySupportedMax: 4,
+		},
 	}.blockString()
 	assertContractElements(t, block, "lit upgrade")
-	for _, want := range []string{"origin/master", "schema version 7", "version 4", "BLOCKED"} {
+	for _, want := range []string{"origin/master", "schema version 7", "version 4", "BLOCKED", installReplacesLit, "only when the user directs it"} {
 		if !strings.Contains(block, want) {
 			t.Errorf("remote-schema-ahead block missing %q:\n%s", want, block)
 		}
@@ -265,9 +268,10 @@ func TestSyncFailureBlockOmitsBuildStatusWhenUnset(t *testing.T) {
 }
 
 // remoteSchemaAheadFailure/asSyncFailure adapt the store's typed remote-ahead
-// refusal into the one contract error, exiting ExitConflict — so every surface
-// renders the identical block from the same store error. A non-matching error
-// passes through asSyncFailure untouched. [LAW:single-enforcer]
+// refusal into the one contract error — so every surface renders the identical
+// block from the same store error — which still exits as the schema-ahead
+// refusal it wraps. A non-matching error passes through asSyncFailure
+// untouched. [LAW:single-enforcer]
 func TestRemoteSchemaAheadFailureMapping(t *testing.T) {
 	t.Parallel()
 	storeErr := &store.RemoteSchemaAheadError{
@@ -278,8 +282,7 @@ func TestRemoteSchemaAheadFailureMapping(t *testing.T) {
 	if !ok {
 		t.Fatal("remoteSchemaAheadFailure did not recognize the store error")
 	}
-	if failure.Class != syncFailureRemoteSchemaAhead || failure.RemoteSchemaVersion != 7 ||
-		failure.LocalSupportedMax != 4 {
+	if failure.Class != syncFailureRemoteSchemaAhead || failure.RemoteAhead != storeErr {
 		t.Fatalf("mapped failure = %+v", failure)
 	}
 	// The construction boundary must resolve build status itself — a bare
@@ -293,8 +296,8 @@ func TestRemoteSchemaAheadFailureMapping(t *testing.T) {
 	if !errors.As(converted, &syncFailure) {
 		t.Fatalf("asSyncFailure did not return a SyncFailureError: %T", converted)
 	}
-	if code := ExitCode(converted); code != ExitConflict {
-		t.Fatalf("ExitCode = %d, want %d (ExitConflict)", code, ExitConflict)
+	if code := ExitCode(converted); code != ExitValidation {
+		t.Fatalf("ExitCode = %d, want %d (ExitValidation)", code, ExitValidation)
 	}
 	// A plain error is returned unchanged.
 	plain := errors.New("some other failure")
