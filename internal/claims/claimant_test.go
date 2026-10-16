@@ -146,6 +146,9 @@ var everyAction = map[model.ActionName]model.Action{
 	model.ActionUnarchive: model.Unarchive{},
 	model.ActionDelete:    model.Delete{},
 	model.ActionRestore:   model.Restore{},
+	// A phase move is not a StatusAction, so After cannot be handed one: the
+	// claimant of a ticket whose phase moves is whoever held it before.
+	model.ActionPhase: model.SetPhase{Phase: model.PhaseImpl},
 }
 
 func TestEveryActionHasASample(t *testing.T) {

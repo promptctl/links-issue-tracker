@@ -164,6 +164,7 @@ var cases = []engineCase{
 	{"apply_to_frozen_names_the_thaw", applyToFrozenNamesTheThaw},
 	{"container_state_follows_live_children", containerStateFollowsLiveChildren},
 	{"history_records_mutations", historyRecordsMutations},
+	{"a_phase_move_records_its_event", aPhaseMoveRecordsItsEvent},
 	{"every_editable_field_records_history", everyEditableFieldRecordsHistory},
 	{"a_new_checkout_taking_a_ticket_records", takeoverByANewCheckoutRecords},
 	{"one_issues_history_matches_the_whole_log", oneIssuesHistoryMatchesTheWholeLog},
@@ -536,6 +537,109 @@ func containerStateFollowsLiveChildren(t *testing.T, ctx context.Context, st sto
 		t.Fatalf("Apply archive epic error = %v", err)
 	}
 	assertState(t, ctx, st, epic.ID, model.StateInProgress, "an archived epic keeps its whole child set")
+}
+
+// aPhaseMoveRecordsItsEvent: a phase lives in an in-progress ticket's history.
+// A start enters plan; a move records one `phase` event naming the phase left
+// and the phase entered, and stamps updated_at; a move to the phase the ticket
+// is already in records nothing; a ticket with no phase refuses the move; and
+// a fresh start after a reopen enters plan again, whatever phase the earlier
+// run reached.
+func aPhaseMoveRecordsItsEvent(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "phased", Topic: "core", ParentID: epic.ID})
+	phaseOf := func() (model.Phase, bool) {
+		t.Helper()
+		detail, err := st.GetIssueDetail(ctx, issue.ID)
+		if err != nil {
+			t.Fatalf("GetIssueDetail error = %v", err)
+		}
+		return model.PhaseOf(detail.Issue, detail.Events)
+	}
+	move := func(to model.Phase) (model.Issue, error) {
+		return st.Apply(ctx, issue.ID, storage.Change{Action: model.SetPhase{Phase: to}, Actor: "ada"})
+	}
+	var refused model.ValidationError
+
+	if _, err := move(model.PhaseImpl); !errors.As(err, &refused) {
+		t.Fatalf("phase move on an open ticket error = %v, want a ValidationError", err)
+	}
+	if phase, ok := phaseOf(); ok {
+		t.Errorf("open ticket has phase %q, want none", phase)
+	}
+	// Pinned from the start on: a phase is the newest event that set one, so
+	// every event here has to be stamped on the one clock the case controls.
+	clk.Pin(earlierInstant)
+	if _, err := st.Apply(ctx, issue.ID, storage.Change{Action: model.Start{Assignee: "ada"}, Actor: "ada"}); err != nil {
+		t.Fatalf("Apply start error = %v", err)
+	}
+	if phase, ok := phaseOf(); !ok || phase != model.PhasePlan {
+		t.Errorf("phase after start = %q (%v), want plan", phase, ok)
+	}
+
+	clk.Pin(laterInstant)
+	before := len(mustEvents(t, ctx, st))
+	moved, err := move(model.PhaseReview)
+	if err != nil {
+		t.Fatalf("phase move error = %v", err)
+	}
+	events := mustEvents(t, ctx, st)
+	if len(events) != before+1 {
+		t.Fatalf("phase move wrote %d events, want 1", len(events)-before)
+	}
+	var recorded *model.IssueEvent
+	for i := range events {
+		if events[i].Action == string(model.ActionPhase) {
+			recorded = &events[i]
+		}
+	}
+	if recorded == nil {
+		t.Fatalf("no %q event among %+v", model.ActionPhase, events)
+	}
+	want := []model.FieldChange{{Field: model.PhaseField, From: string(model.PhasePlan), To: string(model.PhaseReview)}}
+	if !slices.Equal(recorded.Changes, want) {
+		t.Errorf("phase event changes = %+v, want %+v", recorded.Changes, want)
+	}
+	if !moved.UpdatedAt.Equal(laterInstant) {
+		t.Errorf("UpdatedAt after phase move = %v, want %v", moved.UpdatedAt, laterInstant)
+	}
+	if phase, _ := phaseOf(); phase != model.PhaseReview {
+		t.Errorf("phase after move = %q, want review", phase)
+	}
+
+	before = len(mustEvents(t, ctx, st))
+	if _, err := move(model.PhaseReview); err != nil {
+		t.Fatalf("repeated phase move error = %v", err)
+	}
+	if after := len(mustEvents(t, ctx, st)); after != before {
+		t.Errorf("a phase move that changed nothing wrote %d events, want none", after-before)
+	}
+
+	// A move stamped at the instant the row already holds still lands: the
+	// clock has not moved since the review move, so updated_at does not change.
+	if _, err := move(model.PhaseImpl); err != nil {
+		t.Errorf("a phase move at the row's own updated_at error = %v, want it to land", err)
+	}
+
+	if _, err := st.Apply(ctx, epic.ID, storage.Change{Action: model.SetPhase{Phase: model.PhaseImpl}, Actor: "ada"}); !errors.As(err, &refused) {
+		t.Errorf("phase move on an epic error = %v, want a ValidationError", err)
+	}
+
+	if _, err := st.Apply(ctx, issue.ID, storage.Change{Action: model.Reopen{}, Actor: "ada"}); err != nil {
+		t.Fatalf("Apply reopen error = %v", err)
+	}
+	if _, err := move(model.PhaseImpl); !errors.As(err, &refused) {
+		t.Errorf("phase move on a reopened ticket error = %v, want a ValidationError", err)
+	}
+	// Later than every event above: on a tie the newer of two events is the one
+	// with the greater id, which no case can choose.
+	clk.Pin(laterInstant.Add(time.Second))
+	if _, err := st.Apply(ctx, issue.ID, storage.Change{Action: model.Start{Assignee: "ada"}, Actor: "ada"}); err != nil {
+		t.Fatalf("Apply restart error = %v", err)
+	}
+	if phase, _ := phaseOf(); phase != model.PhasePlan {
+		t.Errorf("phase after a fresh start = %q, want plan", phase)
+	}
 }
 
 func historyRecordsMutations(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {

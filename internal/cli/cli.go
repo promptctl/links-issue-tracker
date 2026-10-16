@@ -1234,7 +1234,7 @@ func showLeaf() appLeaf {
 		// --field is the compact, edit-oriented view: exactly the requested
 		// fields, none of the parent/epic/siblings context below. [LAW:dataflow-not-control-flow]
 		if fields := splitCSV(*fieldsExpr); len(fields) > 0 {
-			return printIssueFields(stdout, detail.Issue, fields)
+			return printIssueFields(stdout, detail, fields)
 		}
 		// Resolved before the body is printed, so the body and the plan block are
 		// all-or-nothing: a slice that cannot be built fails without a body, rather
@@ -1671,19 +1671,25 @@ var transitionBreadcrumbTopics = map[model.ActionName]string{
 // its parsed flags become the typed action value. Each command registers only
 // the flags its action consumes, so flag misuse on any other transition is the
 // parser's unknown-flag error. [LAW:types-are-the-program]
-// [LAW:one-type-per-behavior] The eight transition commands are instances of
-// one spec, not eight handlers; variability lives in the spec value.
+// [LAW:one-type-per-behavior] The nine transition commands are instances of
+// one spec, not nine handlers; variability lives in the spec value.
 type transitionSpec struct {
 	name string
+	// synopsis is the command's own arguments between the id and --reason,
+	// each preceded by a space; empty for a transition that takes none. The
+	// command's one usage line is built from it.
+	synopsis string
 	// registerFlags declares the action's own flags on fs and returns the
 	// builder invoked after parsing, which turns the flag values and the
-	// invocation's resolved identity into the sealed action variant.
-	registerFlags func(fs *cobraFlagSet) func(actor string) (model.Action, error)
+	// invocation's resolved identity into the sealed action variant. A flag
+	// value it refuses is a UsageError quoting usage, the command's one usage
+	// line. [LAW:one-source-of-truth]
+	registerFlags func(fs *cobraFlagSet, usage string) func(actor string) (model.Action, error)
 	// authorize, when set, runs after the action is built and before Apply,
-	// and may abort the transition by returning an error. Only `start`
-	// supplies one — the fresh-claim takeover gate
-	// (design-docs/work-claims.md, links-claims-1ihf.7) — so it costs the
-	// other seven transitions nothing. [LAW:single-enforcer] one hook point
+	// and may abort the transition by returning an error. `start` supplies
+	// the fresh-claim takeover gate (design-docs/work-claims.md,
+	// links-claims-1ihf.7) and `phase` the facts of its move; every other
+	// transition supplies noAuthorize. [LAW:single-enforcer] one hook point
 	// for per-transition authorization, rather than a type switch on the
 	// built action scattered through runTransition.
 	//
@@ -1717,8 +1723,8 @@ func noAuthorize(*cobraFlagSet) func(context.Context, io.Writer, *app.App, strin
 
 // fixedAction is the registerFlags of every transition whose action carries no
 // payload and therefore consumes no flags.
-func fixedAction(action model.Action) func(*cobraFlagSet) func(string) (model.Action, error) {
-	return func(*cobraFlagSet) func(string) (model.Action, error) {
+func fixedAction(action model.Action) func(*cobraFlagSet, string) func(string) (model.Action, error) {
+	return func(*cobraFlagSet, string) func(string) (model.Action, error) {
 		return func(string) (model.Action, error) { return action, nil }
 	}
 }
@@ -1730,7 +1736,7 @@ var (
 		// assignee: whoever performs the start is who it assigns.
 		// [LAW:one-source-of-truth] the assignee is the actor transitionLeaf
 		// resolves once from the one --by flag, never a flag of its own.
-		registerFlags: func(*cobraFlagSet) func(actor string) (model.Action, error) {
+		registerFlags: func(*cobraFlagSet, string) func(actor string) (model.Action, error) {
 			return func(actor string) (model.Action, error) {
 				return model.Start{Assignee: actor}, nil
 			}
@@ -1751,11 +1757,12 @@ var (
 	}
 	doneSpec  = transitionSpec{name: "done", registerFlags: fixedAction(model.Done{}), authorize: noAuthorize}
 	closeSpec = transitionSpec{
-		name: "close",
-		registerFlags: func(fs *cobraFlagSet) func(string) (model.Action, error) {
+		name:     "close",
+		synopsis: " --resolution <duplicate|superseded|obsolete|wontfix> [--of <canonical-id>]",
+		registerFlags: func(fs *cobraFlagSet, usage string) func(string) (model.Action, error) {
 			resolution, target := registerCloseOutcomeFlags(fs)
 			return func(string) (model.Action, error) {
-				outcome, err := closeOutcomeFromFlags(*resolution, *target, "usage: lit close <id> --resolution <duplicate|superseded|obsolete|wontfix> [--of <canonical-id>] [--reason <text>]")
+				outcome, err := closeOutcomeFromFlags(*resolution, *target, usage)
 				if err != nil {
 					return nil, err
 				}
@@ -1764,12 +1771,65 @@ var (
 		},
 		authorize: noAuthorize,
 	}
-	openSpec      = transitionSpec{name: "open", registerFlags: fixedAction(model.Reopen{}), authorize: noAuthorize}
+	openSpec  = transitionSpec{name: "open", registerFlags: fixedAction(model.Reopen{}), authorize: noAuthorize}
+	phaseSpec = transitionSpec{
+		name:     "phase",
+		synopsis: " --to <" + model.JoinPhases("|") + ">",
+		registerFlags: func(fs *cobraFlagSet, usage string) func(string) (model.Action, error) {
+			to := fs.String("to", "", "Phase to move the ticket to (required): "+model.JoinPhases(", "))
+			return func(string) (model.Action, error) {
+				phase, err := model.ParsePhase(*to)
+				if err != nil {
+					return nil, UsageError{Message: fmt.Sprintf("%s\n%v", usage, err)}
+				}
+				return model.SetPhase{Phase: phase}, nil
+			}
+		},
+		authorize: func(*cobraFlagSet) func(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, prior model.Issue, action model.Action) (afterApply, error) {
+			return authorizePhase
+		},
+	}
 	archiveSpec   = transitionSpec{name: "archive", registerFlags: fixedAction(model.Archive{}), authorize: noAuthorize}
 	unarchiveSpec = transitionSpec{name: "unarchive", registerFlags: fixedAction(model.Unarchive{}), authorize: noAuthorize}
 	deleteSpec    = transitionSpec{name: "delete", registerFlags: fixedAction(model.Delete{}), authorize: noAuthorize}
 	restoreSpec   = transitionSpec{name: "restore", registerFlags: fixedAction(model.Restore{}), authorize: noAuthorize}
 )
+
+// authorizePhase gates nothing — Issue.PlanPhase, which both engines run, is
+// the phase rule — and owes the move it made: the line saying where the
+// ticket's phase now stands, and on the command's event the phase left, the
+// phase entered, and whether anything changed. A refused move fails Apply, so
+// its event carries the refusal instead. The phase left is read before Apply
+// on the same write Store the move is planned on, whose engine holds Dolt's
+// LOCK for the whole command, so both reads answer from one history.
+// [LAW:nothing-unseen]
+func authorizePhase(ctx context.Context, _ io.Writer, ap *app.App, issueID string, prior model.Issue, action model.Action) (afterApply, error) {
+	set, ok := action.(model.SetPhase)
+	if !ok {
+		return nil, fmt.Errorf("phase: authorize hook received a %T action", action)
+	}
+	events, err := ap.Store.ListEvents(ctx, issueID)
+	if err != nil {
+		return nil, err
+	}
+	from, _ := model.PhaseOf(prior, events)
+	move := model.PhaseChange{From: from, To: set.Phase}
+	return func(model.Issue) (string, statusline.Facts) {
+		telemetry.Set(ctx, "phase.from", string(move.From))
+		telemetry.Set(ctx, "phase.to", string(move.To))
+		telemetry.Set(ctx, "phase.changed", move.Changed())
+		return phaseNotice(move), nil
+	}, nil
+}
+
+// phaseNotice is the line `lit phase` prints before the ticket's summary: the
+// move as history records it, or the phase the ticket was already in.
+func phaseNotice(move model.PhaseChange) string {
+	if !move.Changed() {
+		return fmt.Sprintf("phase: %s (unchanged)\n", move.To)
+	}
+	return fmt.Sprintf("phase: %s → %s\n", move.From, move.To)
+}
 
 // registerCloseOutcomeFlags declares the close-outcome flags shared by `lit
 // close` and `lit bulk close`, so the two boundaries expose the same surface.
@@ -1820,16 +1880,16 @@ func transitionLeaf(spec transitionSpec) appLeaf {
 	fs := newCobraFlagSet(spec.name)
 	reason := fs.String("reason", "", "Transition reason")
 	resolveActor := registerActor(fs)
-	buildAction := spec.registerFlags(fs)
-	authorize := spec.authorize(fs)
 	// The issue id, declared: the declared channel carries it and parseLeaf
 	// refuses a second id rather than this leaf discovering it.
 	// [LAW:one-source-of-truth]
-	// One sentence, read by both the seam and the body. Hoisted out of the work
-	// because the arity refusal in parseLeaf runs BEFORE any work does, so a
-	// usage line computed inside the closure is a line the enforcer can never
-	// see. [LAW:one-source-of-truth]
-	usage := fmt.Sprintf("usage: lit %s <id> [--reason <text>]", spec.name)
+	// One sentence, read by the seam, the body and the action's own flag
+	// parsing. Hoisted out of the work because the arity refusal in parseLeaf
+	// runs BEFORE any work does, so a usage line computed inside the closure is
+	// a line the enforcer can never see. [LAW:one-source-of-truth]
+	usage := fmt.Sprintf("usage: lit %s <id>%s [--reason <text>]", spec.name, spec.synopsis)
+	buildAction := spec.registerFlags(fs, usage)
+	authorize := spec.authorize(fs)
 	return appLeaf{fs: fs, positionals: 1, usage: usage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		if len(positional) != 1 {
 			// UsageError, not errors.New: a missing id is the caller mis-writing
@@ -1843,22 +1903,24 @@ func transitionLeaf(spec transitionSpec) appLeaf {
 
 		issueID := positional[0]
 
+		// [LAW:single-enforcer] One resolution serves the action and the event:
+		// the agent's session wins, else --by. History must record who actually
+		// performed the transition (claude_<session>), not the shell user, and
+		// the assignee `start` writes is that same value.
+		// The action is built before the store is read: a mis-written command
+		// line is a usage error whatever the id names. [LAW:parse-dont-validate]
+		actor := resolveActor()
+		action, err := buildAction(actor)
+		if err != nil {
+			return err
+		}
+
 		// The pre-transition read is the state `authorize` gates on and the
 		// before-half of the workflow occasion below. It is the ROW only: the
 		// claim-transfer notice needs the issue's history too, and `authorize`
 		// reads it after the gate, because that is the read the gate can
 		// invalidate.
 		prior, err := ap.Store.GetIssue(ctx, issueID)
-		if err != nil {
-			return err
-		}
-
-		// [LAW:single-enforcer] One resolution serves the action and the event:
-		// the agent's session wins, else --by. History must record who actually
-		// performed the transition (claude_<session>), not the shell user, and
-		// the assignee `start` writes is that same value.
-		actor := resolveActor()
-		action, err := buildAction(actor)
 		if err != nil {
 			return err
 		}

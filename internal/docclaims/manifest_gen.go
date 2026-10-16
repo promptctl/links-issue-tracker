@@ -116,7 +116,7 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/05-sync-merge-compaction.md", Text: "type IN ('blocked-by','parent-child','related-to')", Src: "internal/store/migrations/00008_blocked_by_edge.sql"},
 	{Doc: "doc-v1-total/06-issue-commands.md", Text: "(backlog empty)", Src: "(backlog empty)"},
 	{Doc: "doc-v1-total/06-issue-commands.md", Text: "--at <store-dir>", Src: "use `lit ls --at <store-dir>`"},
-	{Doc: "doc-v1-total/06-issue-commands.md", Text: "--of <canonical-id>", Src: "usage: lit close <id> --resolution <duplicate|superseded|obsolete|wontfix> [--of <canonical-id>] [--reason <text>]"},
+	{Doc: "doc-v1-total/06-issue-commands.md", Text: "--of <canonical-id>", Src: " --resolution <duplicate|superseded|obsolete|wontfix> [--of <canonical-id>]"},
 	{Doc: "doc-v1-total/06-issue-commands.md", Text: "--version <field>@<n>", Src: "usage: lit history <id> [--version <field>@<n>]"},
 	{Doc: "doc-v1-total/06-issue-commands.md", Text: "Blocked from outside the epic", Src: "Blocked from outside the epic"},
 	{Doc: "doc-v1-total/06-issue-commands.md", Text: "Blocks outside the epic", Src: "Blocks outside the epic"},

@@ -23,7 +23,6 @@
 package claims
 
 import (
-	"cmp"
 	"fmt"
 	"slices"
 
@@ -82,19 +81,9 @@ func NewEvidence(issues []model.Issue, parents map[string]*model.Issue, events [
 	// the data rather than the order a caller happened to read it in.
 	// [LAW:single-enforcer]
 	for lane := range ev.events {
-		slices.SortFunc(ev.events[lane], byRecency)
+		slices.SortFunc(ev.events[lane], model.CompareEventRecency)
 	}
 	return ev, nil
-}
-
-// byRecency is the total order over events this package means by "newer": when
-// it happened, then by id to break a tie — arbitrary, but total and stable,
-// which is what a predicate reading "the latest" needs. It is one function
-// because NewEvidence's sort and LatestEstablisher's scan must agree on which
-// of two events is later; two spellings of that could differ on a tie and hand
-// one lane two holders. [LAW:single-enforcer]
-func byRecency(a, b model.IssueEvent) int {
-	return cmp.Or(a.CreatedAt.Compare(b.CreatedAt), cmp.Compare(a.ID, b.ID))
 }
 
 // Lanes lists every lane the evidence covers, in no particular order.

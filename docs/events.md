@@ -181,6 +181,18 @@ Every key is present exactly when the command ended in that refusal.
 | `schema_ahead.remote_schema` | The schema version of the remote branch's head. |
 | `schema_ahead.running_schema_max` | The highest schema version this lit supports. |
 
+## What `lit phase` records
+
+A phase move reads the phase the issue is in, then moves it. A refused move,
+such as one on an issue that is not `in_progress`, fails before these keys are
+set and carries its refusal instead.
+
+| Key | Meaning |
+| --- | --- |
+| `phase.from` | The phase the issue was in. |
+| `phase.to` | The phase the command moved it to, the one `--to` names. |
+| `phase.changed` | `false` when the issue was already in that phase, so nothing was recorded; `true` otherwise. |
+
 ## What `lit upgrade` records
 
 An upgrade resolves a release, the one `--to` names or the latest published one,

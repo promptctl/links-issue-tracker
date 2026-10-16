@@ -1481,9 +1481,10 @@ type lifecycleWrite interface {
 
 // planLifecycleAction plans any lifecycle action by its axis: StatusActions
 // travel the status state machine, RetentionActions travel the Retain
-// transition table. The two subsets partition the sealed sum, so the dispatch
-// is the sum's own structure — a retention action reaching the status machine,
-// or vice versa, is unrepresentable. [LAW:types-are-the-program]
+// transition table, and SetPhase moves an in-progress ticket's phase. The
+// three partition the sealed sum, so the dispatch is the sum's own structure —
+// a retention action reaching the status machine, or vice versa, is
+// unrepresentable. [LAW:types-are-the-program]
 func (s *Store) planLifecycleAction(ctx context.Context, issue model.Issue, actor string, reason string, action model.Action) (lifecycleWrite, error) {
 	switch a := action.(type) {
 	case model.StatusAction:
@@ -1498,11 +1499,80 @@ func (s *Store) planLifecycleAction(ctx context.Context, issue model.Issue, acto
 			return nil, err
 		}
 		return w, nil
+	case model.SetPhase:
+		w, err := s.planPhaseMove(ctx, issue, actor, reason, a)
+		if err != nil {
+			return nil, err
+		}
+		return w, nil
 	default:
-		// [LAW:no-silent-failure] The sealed sum has no third axis; only an
+		// [LAW:no-silent-failure] The sealed sum has no fourth axis; only an
 		// impostor Action reaches here.
 		panic(fmt.Sprintf("illegal Action value %T", action))
 	}
+}
+
+// phaseWrite is a planned phase move. The phase is derived from the issue's
+// history (model.PhaseOf), so the move's whole record is its event; the row
+// moves only updated_at, at the event's instant, under a guard that the issue
+// is still in progress — a done landing between the plan and the write fails
+// the move loudly instead of recording a phase on a closed ticket.
+// [LAW:no-silent-failure]
+type phaseWrite struct {
+	move  model.PhaseChange
+	event model.IssueEvent
+	post  model.Issue
+}
+
+func (w phaseWrite) postIssue() model.Issue { return w.post }
+func (w phaseWrite) isNoop() bool           { return !w.move.Changed() }
+
+func (w phaseWrite) applyTx(ctx context.Context, s *Store, tx *sql.Tx) error {
+	result, err := tx.ExecContext(ctx, `UPDATE issues SET updated_at = ? WHERE id = ? AND status = ?`,
+		w.event.CreatedAt.Format(time.RFC3339Nano), w.event.IssueID, string(model.StateInProgress))
+	if err != nil {
+		return fmt.Errorf("update issue for phase move: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read phase move result: %w", err)
+	}
+	// The engine counts rows it changed, not rows it matched, so a move stamped
+	// at the instant the row already holds changes none while still matching.
+	// The status is the guard's question, so no row changed is answered by
+	// reading it rather than by the count.
+	if affected == 0 {
+		currentStatus, lookupErr := currentStatusTx(ctx, tx, w.event.IssueID)
+		if lookupErr != nil {
+			return lookupErr
+		}
+		if currentStatus != string(model.StateInProgress) {
+			return fmt.Errorf("phase conflict: issue status is %q", currentStatus)
+		}
+	}
+	return insertEventTx(ctx, tx, w.event)
+}
+
+// planPhaseMove reads the issue's history and plans the move through
+// Issue.PlanPhase, the rule both engines share. [LAW:single-enforcer] A move
+// mints its event here, so the post-move issue a following field write
+// baselines on carries the event's instant, as the memory engine's does.
+func (s *Store) planPhaseMove(ctx context.Context, issue model.Issue, actor, reason string, action model.SetPhase) (phaseWrite, error) {
+	events, err := s.ListEvents(ctx, issue.ID)
+	if err != nil {
+		return phaseWrite{}, err
+	}
+	move, err := issue.PlanPhase(events, action.Phase)
+	if err != nil {
+		return phaseWrite{}, err
+	}
+	if !move.Changed() {
+		return phaseWrite{move: move, post: issue}, nil
+	}
+	event := s.newEvent(issue.ID, string(model.ActionPhase), reason, actor, move.FieldChanges())
+	post := issue
+	post.UpdatedAt = event.CreatedAt
+	return phaseWrite{move: move, event: event, post: post}, nil
 }
 
 // transitionWrite is a fully-planned status transition, ready to execute

@@ -18,7 +18,7 @@ func TestPrintIssueFieldsSingleFieldPrintsBareValue(t *testing.T) {
 	issue := model.Issue{ID: "test.1", Title: "A title", Description: "Multi-line\ndescription body"}
 
 	var buf bytes.Buffer
-	if err := printIssueFields(&buf, issue, []string{"description"}); err != nil {
+	if err := printIssueFields(&buf, model.IssueDetail{Issue: issue}, []string{"description"}); err != nil {
 		t.Fatalf("printIssueFields() error = %v", err)
 	}
 
@@ -35,7 +35,7 @@ func TestPrintIssueFieldsMultipleFieldsPrintsLabeledLines(t *testing.T) {
 	issue := model.Issue{ID: "test.1", Title: "A title", Description: "The body"}
 
 	var buf bytes.Buffer
-	if err := printIssueFields(&buf, issue, []string{"title", "description"}); err != nil {
+	if err := printIssueFields(&buf, model.IssueDetail{Issue: issue}, []string{"title", "description"}); err != nil {
 		t.Fatalf("printIssueFields() error = %v", err)
 	}
 
@@ -53,7 +53,7 @@ func TestPrintIssueFieldsUnknownFieldReturnsUsageErrorWithNoOutput(t *testing.T)
 	issue := model.Issue{ID: "test.1", Title: "A title", Description: "The body"}
 
 	var buf bytes.Buffer
-	err := printIssueFields(&buf, issue, []string{"title", "descriptoin"})
+	err := printIssueFields(&buf, model.IssueDetail{Issue: issue}, []string{"title", "descriptoin"})
 	var usageErr UsageError
 	if !errors.As(err, &usageErr) {
 		t.Fatalf("printIssueFields() error = %v, want UsageError", err)
