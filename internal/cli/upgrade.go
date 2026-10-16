@@ -239,7 +239,7 @@ func upgradeLeafWith(
 	binPathFn func() (string, error),
 ) upgradeLeafShape {
 	fs := newCobraFlagSet("upgrade")
-	to := fs.String("to", "", "Target binary version (v-prefixed git tag, e.g. v0.9.0); omit to upgrade to the latest release")
+	to := fs.String("to", "", "Target binary version (release tag vX.Y.Z, e.g. v0.9.0); omit to upgrade to the latest release")
 	const usageLine = "usage: lit upgrade [--to <version>]"
 	return upgradeLeafShape{fs: fs, usage: usageLine, positionals: 0, work: func(ctx context.Context, stdout io.Writer, scope upgradeScope, _ []string) error {
 		// [LAW:parse-dont-validate] --to's default value is the latest published

@@ -17,6 +17,7 @@ import (
 
 	litrelease "github.com/promptctl/links-issue-tracker/internal/release"
 	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
+	"golang.org/x/mod/semver"
 )
 
 const (
@@ -297,13 +298,14 @@ func TestInstallComparesTheTreeSchemaWithTheNewestRelease(t *testing.T) {
 	}
 }
 
-// releaseTagSamples is the input both copies of release-tags.sh's pattern are
-// held to it over: each piece of ^v[0-9]+\.[0-9]+\.[0-9]+$ broken once (prefix,
-// a missing or extra part, a non-digit, an empty part, a suffix), beside
-// accepted shapes including the unprefixed form a user types and a leading
-// zero the pattern admits.
+// releaseTagSamples is the input every consumer of release-tags.sh's pattern is
+// held to it over: each piece of vX.Y.Z broken once (prefix, a missing or extra
+// part, a non-digit, an empty part, a leading zero in each part, a suffix),
+// beside accepted shapes including the unprefixed form a user types and the
+// zero and multi-digit parts a leading-zero rule must still admit.
 var releaseTagSamples = []string{
-	"v0.18.0", "0.18.0", "v10.0.12", "v01.2.3",
+	"v0.18.0", "0.18.0", "v10.0.12", "v0.0.0",
+	"v01.2.3", "v1.02.3", "v1.2.03", "v00.1.0",
 	"v0.2.0.1", "v0.2", "V0.2.0", "v0.2.0-rc1", "v0.2.0+build", "v0.2.0^{}",
 	"vx.y.z", "v0..2", "v0.2.0a", "v0.2.0/../x",
 }
@@ -321,13 +323,57 @@ func releaseTagsSelects(t *testing.T, tag string) bool {
 }
 
 // TestReleaseTagParsesExactlyTheReleaseTags holds release.ParseTag — the gate
-// behind lit upgrade --to and lit downgrade --to — to release-tags.sh.
+// behind lit upgrade --to and lit downgrade --to — to release-tags.sh, and
+// holds every tag it accepts to valid semver: lit upgrade decides "already
+// current" by semver order, under which an invalid tag sorts below every
+// release.
 func TestReleaseTagParsesExactlyTheReleaseTags(t *testing.T) {
 	t.Parallel()
 	for _, tag := range releaseTagSamples {
-		_, err := litrelease.ParseTag("v" + strings.TrimPrefix(tag, "v"))
+		parsed, err := litrelease.ParseTag("v" + strings.TrimPrefix(tag, "v"))
 		if parses, selects := err == nil, releaseTagsSelects(t, tag); parses != selects {
 			t.Errorf("tag %q: release.ParseTag accepts = %v, newest_release_tag accepts = %v", tag, parses, selects)
+		}
+		if err == nil && !semver.IsValid(parsed.String()) {
+			t.Errorf("tag %q: release.ParseTag accepts %q, which semver cannot order", tag, parsed)
+		}
+	}
+}
+
+// TestReleaseKindCutsExactlyTheReleaseTags holds release-kind.sh — which
+// decides the version release-validate.yml cuts a tag for — to release-tags.sh:
+// a newest CHANGELOG heading is a pending release exactly when v<version> is a
+// release tag, and is refused as malformed otherwise, so the pipeline never
+// cuts a tag every consumer would refuse.
+func TestReleaseKindCutsExactlyTheReleaseTags(t *testing.T) {
+	t.Parallel()
+	for _, tag := range releaseTagSamples {
+		root := t.TempDir()
+		origin := filepath.Join(root, "origin.git")
+		checkout := filepath.Join(root, "checkout")
+		for _, args := range [][]string{{"init", "-q", "--bare", origin}, {"init", "-q", checkout}, {"-C", checkout, "remote", "add", "origin", origin}} {
+			if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+				t.Fatalf("git %v: %v\n%s", args, err, out)
+			}
+		}
+		if err := os.MkdirAll(filepath.Join(checkout, "scripts"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range []string{"release-kind.sh", "release-tags.sh"} {
+			writeFile(t, filepath.Join(checkout, "scripts", name), readFile(t, name), 0o755)
+		}
+		version := strings.TrimPrefix(tag, "v")
+		writeFile(t, filepath.Join(checkout, "CHANGELOG.md"), "# Changelog\n\n## [Unreleased]\n\n## ["+version+"] - 2026-10-16\n", 0o644)
+		kind := exec.Command("bash", "scripts/release-kind.sh")
+		kind.Dir = checkout
+		out, err := kind.CombinedOutput()
+		pending := err == nil && string(out) == "pending "+version+"\n"
+		malformed := err != nil && strings.Contains(string(out), "release heading is malformed")
+		if !pending && !malformed {
+			t.Fatalf("release-kind.sh on [%s] neither reported it pending nor refused it as malformed (err %v):\n%s", version, err, out)
+		}
+		if selects := releaseTagsSelects(t, tag); pending != selects {
+			t.Errorf("heading [%s]: release-kind.sh cuts it = %v, newest_release_tag accepts v%s = %v", version, pending, version, selects)
 		}
 	}
 }

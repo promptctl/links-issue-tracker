@@ -372,7 +372,7 @@ func splitArgs(args []string, positionalCount int, fs *cobraFlagSet) ([]string, 
 			//
 			// Declining to pair when the next token begins with a dash would
 			// assume pflag then refuses the flag; pflag pairs anyway (`lit
-			// upgrade --to --help` fetches a release tagged `v--help`), so the
+			// upgrade --to --help` refuses `--help` as not a release tag), so the
 			// two would disagree about which token is a value, and every
 			// consequence of that disagreement is a misfiled token: a positional
 			// pulled into the flag stream and then refused (`lit start --reason

@@ -109,7 +109,7 @@ func downgradeLeafWith(
 	binPathFn func() (string, error),
 ) downgradeLeafShape {
 	fs := newCobraFlagSet("downgrade")
-	to := fs.String("to", "", "Target binary version (v-prefixed git tag, e.g. v0.4.1)")
+	to := fs.String("to", "", "Target binary version (release tag vX.Y.Z, e.g. v0.4.1)")
 	// --to is required, not optional, and the derived sentence cannot say so:
 	// "values are passed as flags: --to" reads exactly like a flag you may omit.
 	// Requiredness is the leaf's own knowledge. [LAW:one-source-of-truth]
@@ -199,7 +199,7 @@ func normalizeReleaseTag(in string, verb string) (release.Tag, error) {
 		// [LAW:one-type-per-behavior] An invalid tag is the same class of failure
 		// as a missing one — bad --to input — so both return model.ValidationError
 		// (exit 3), refused before the resolver makes any request.
-		return release.Tag{}, model.ValidationError{Message: fmt.Sprintf("%s: --to: %v", verb, err)}
+		return release.Tag{}, model.ValidationError{Message: fmt.Sprintf("%s: --to %q: %v", verb, in, err)}
 	}
 	return tag, nil
 }

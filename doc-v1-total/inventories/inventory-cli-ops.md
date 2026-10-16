@@ -718,13 +718,13 @@ Handler `upgradeLeaf` — `upgrade.go`; production deps `workspaceSchemaReader`,
 
 | Flag | Default | Effect | Line |
 |---|---|---|---|
-| `--to` | `""` | "Target binary version (v-prefixed git tag, e.g. v0.9.0); omit to upgrade to the latest release" | `upgrade.go` |
+| `--to` | `""` | "Target binary version (release tag vX.Y.Z, e.g. v0.9.0); omit to upgrade to the latest release" | `upgrade.go` |
 
 `withWorkspaceSchema` (`upgrade.go`) reads this binary's `version.Get()` before the work runs; error → `upgrade: read this binary's version info: %w`.
 
 Refusals and sequence (`upgradeLeafWith`, `upgrade.go`):
 1. Any positional → refused by the shared `refuseSurplusPositionals` (`register.go`) under the leaf's usage `usage: lit upgrade [--to <version>]`, exit 2.
-2. The tag: when `--to` was given (`fs.Changed("to")`), `normalizeReleaseTag(*to, "upgrade")` (shared with downgrade, `downgrade.go`): empty/whitespace → `ValidationError{"upgrade: --to requires a non-empty version"}` (exit 3); a missing `v` prefix is added; a tag `release.ParseTag` refuses (anything but `vX.Y.Z`) → `ValidationError{"upgrade: --to: \"<tag>\" is not a release tag (a release tag is vX.Y.Z, e.g. v0.4.1)"}` (exit 3), before any request. When `--to` is omitted, `resolver.LatestTag(ctx)` supplies the latest published release. Either error is returned as-is. The event records the tag as `upgrade.tag` (`upgrade.go`).
+2. The tag: when `--to` was given (`fs.Changed("to")`), `normalizeReleaseTag(*to, "upgrade")` (shared with downgrade, `downgrade.go`): empty/whitespace → `ValidationError{"upgrade: --to requires a non-empty version"}` (exit 3); a missing `v` prefix is added; a tag `release.ParseTag` refuses (anything but `vX.Y.Z`) → `ValidationError{"upgrade: --to \"<as given>\": \"<tag>\" is not a release tag (a release tag is vX.Y.Z, e.g. v0.4.1)"}` (exit 3), before any request. When `--to` is omitted, `resolver.LatestTag(ctx)` supplies the latest published release. Either error is returned as-is. The event records the tag as `upgrade.tag` (`upgrade.go`).
 3. `resolver.Resolve(ctx, tag, release.CurrentPlatform())`; error returned as-is (`upgrade.go`).
 4. `schema.AppliedSchemaVersion(ctx)`; error → `upgrade: read workspace schema version: %w` (`upgrade.go`). The reader opens the store `engine.ReadOnly` (`upgrade.go`); a `*store.UnsupportedSchemaVersionError` is tolerated — its `WorkspaceVersion` becomes the applied version (`upgrade.go`). Any other open error propagates. On a clean open the store's close error is surfaced only when no read error already occurred (`upgrade.go`).
 5. The event records `upgrade.target_schema_max`, `upgrade.running_schema_min`, and `upgrade.running_schema_max` (this binary's `Schema`) once the target resolves, and `upgrade.workspace_schema` once the read succeeds (`upgrade.go`).
@@ -748,7 +748,7 @@ Handler `downgradeLeaf` — `downgrade.go`. App-mode, `app.AccessWrite` (`regist
 
 | Flag | Default | Effect | Line |
 |---|---|---|---|
-| `--to` | `""` | "Target binary version (v-prefixed git tag, e.g. v0.4.1)" | `downgrade.go` |
+| `--to` | `""` | "Target binary version (release tag vX.Y.Z, e.g. v0.4.1)" | `downgrade.go` |
 
 Sequence (`downgradeLeafWith`, `downgrade.go`):
 1. Any positional → refused by the shared `refuseSurplusPositionals` (`register.go`) under the leaf's usage `usage: lit downgrade --to <version>`, exit 2 (`downgrade.go`).

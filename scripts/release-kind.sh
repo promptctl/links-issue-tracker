@@ -33,13 +33,18 @@ set -euo pipefail
 # can no longer reach it.
 test -f CHANGELOG.md || { echo "::error::CHANGELOG.md not found at repo root — broken checkout or moved file; refusing to resolve release state." >&2; exit 1; }
 CAND=$(grep -E '^## \[' CHANGELOG.md | grep -vE '^## \[Unreleased\]' | head -1 || true)
+# [LAW:one-source-of-truth] the heading's version is well-formed exactly when
+# v<version> is a release tag by release-tags.sh, so this never cuts a tag that
+# every consumer of that definition would refuse as not a release.
+# shellcheck source=scripts/release-tags.sh
+. "$(dirname "$0")/release-tags.sh"
+VER=$(printf '%s\n' "$CAND" | sed -nE 's/^## \[([^]]*)\]( - .*)?$/\1/p')
 if [ -z "$CAND" ]; then
   echo "snapshot"
-elif ! echo "$CAND" | grep -qE '^## \[[0-9]+\.[0-9]+\.[0-9]+\]( - .*)?$'; then
+elif ! printf 'v%s\n' "$VER" | grep -qE "$RELEASE_TAG_ERE"; then
   echo "::error::newest CHANGELOG release heading is malformed: '$CAND' (expected '## [X.Y.Z] - <date>')" >&2
   exit 1
 else
-  VER=$(echo "$CAND" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
   # [LAW:no-silent-failure] `git ls-remote --exit-code` is a three-way signal,
   # not a boolean: 0 = tag present, 2 = no matching ref, anything else (128
   # network/auth/missing-remote) = a real failure. An `if` collapses 2 AND
