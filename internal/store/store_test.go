@@ -15,6 +15,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/doltcli"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/storage/storagetest"
 )
 
 func openIssueStore(t testing.TB, ctx context.Context) *Store {
@@ -58,7 +59,9 @@ func TestStoreCreateEpicAndRelations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue child error = %v", err)
 	}
-	related, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Guard shared buffers", Topic: "renderer", IssueType: "feature", Priority: 0, ParentID: epic.ID})
+	// A sub-epic: a leaf may wait on the sub-epic beside it, where an edge
+	// between two leaves of one epic is refused.
+	related, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Guard shared buffers", Topic: "renderer", IssueType: "epic", Priority: 0, ParentID: epic.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue related error = %v", err)
 	}
@@ -312,12 +315,8 @@ func TestFixRankInversionsConvergesWhenDependencyBlocksMultipleIssues(t *testing
 		t.Fatalf("CreateIssue(blocker) error = %v", err)
 	}
 
-	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: dependentA.ID, DstID: blocker.ID, Type: "blocked-by", CreatedBy: "tester"}); err != nil {
-		t.Fatalf("AddRelation(A blocks blocker) error = %v", err)
-	}
-	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: dependentB.ID, DstID: blocker.ID, Type: "blocked-by", CreatedBy: "tester"}); err != nil {
-		t.Fatalf("AddRelation(B blocks blocker) error = %v", err)
-	}
+	storagetest.StoreBlocksWithinEpic(t, ctx, st, "test", dependentA.ID, blocker.ID)
+	storagetest.StoreBlocksWithinEpic(t, ctx, st, "test", dependentB.ID, blocker.ID)
 
 	before, err := st.Doctor(ctx)
 	if err != nil {
@@ -366,12 +365,8 @@ func TestFixRankInversionsConvergesWhenPassCreatesNewInversion(t *testing.T) {
 		t.Fatalf("CreateIssue(blocker) error = %v", err)
 	}
 
-	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: dependent.ID, DstID: blocker.ID, Type: "blocked-by", CreatedBy: "tester"}); err != nil {
-		t.Fatalf("AddRelation(dependent blocks blocker) error = %v", err)
-	}
-	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: blocker.ID, DstID: upstream.ID, Type: "blocked-by", CreatedBy: "tester"}); err != nil {
-		t.Fatalf("AddRelation(blocker blocks upstream) error = %v", err)
-	}
+	storagetest.StoreBlocksWithinEpic(t, ctx, st, "test", dependent.ID, blocker.ID)
+	storagetest.StoreBlocksWithinEpic(t, ctx, st, "test", blocker.ID, upstream.ID)
 
 	before, err := st.Doctor(ctx)
 	if err != nil {
@@ -514,9 +509,7 @@ func TestFixRankInversionsIgnoresDeletedIssues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(blocker) error = %v", err)
 	}
-	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: dependent.ID, DstID: blocker.ID, Type: "blocked-by", CreatedBy: "tester"}); err != nil {
-		t.Fatalf("AddRelation(dependent blocks blocker) error = %v", err)
-	}
+	storagetest.StoreBlocksWithinEpic(t, ctx, st, "test", dependent.ID, blocker.ID)
 	if _, err := st.Apply(ctx, blocker.ID, storage.Change{Action: model.Delete{}, Reason: "removed", Actor: "tester"}); err != nil {
 		t.Fatalf("Apply(delete blocker) error = %v", err)
 	}
@@ -614,7 +607,13 @@ func TestAddRelationRejectsBlocksCycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(A) error = %v", err)
 	}
-	b, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "B", Topic: "cycle", IssueType: "task", Priority: 0, ParentID: epic.ID})
+	// B sits in an epic of its own: between two leaves of one epic a
+	// blocked-by edge is refused whether or not it closes a cycle.
+	other, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Other epic", Topic: "cycle", IssueType: "epic", Priority: 1})
+	if err != nil {
+		t.Fatalf("CreateIssue(other epic) error = %v", err)
+	}
+	b, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "B", Topic: "cycle", IssueType: "task", Priority: 0, ParentID: other.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue(B) error = %v", err)
 	}
@@ -642,12 +641,13 @@ func TestAddRelationRejectsTransitiveBlocksCycle(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
-	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "cycle", IssueType: "epic", Priority: 1})
-	if err != nil {
-		t.Fatalf("CreateIssue(epic) error = %v", err)
-	}
-
+	// Each issue sits in an epic of its own: between two leaves of one epic a
+	// blocked-by edge is refused whether or not it closes a cycle.
 	mk := func(title string) string {
+		epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: title + " epic", Topic: "cycle", IssueType: "epic", Priority: 1})
+		if err != nil {
+			t.Fatalf("CreateIssue(%s epic) error = %v", title, err)
+		}
 		issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "cycle", IssueType: "task", Priority: 0, ParentID: epic.ID})
 		if err != nil {
 			t.Fatalf("CreateIssue(%s) error = %v", title, err)
@@ -663,6 +663,8 @@ func TestAddRelationRejectsTransitiveBlocksCycle(t *testing.T) {
 	}
 	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: c, DstID: a, Type: "blocked-by", CreatedBy: "tester"}); err == nil {
 		t.Fatal("AddRelation(C blocks A) = nil, want transitive cycle rejection")
+	} else if !strings.Contains(err.Error(), "cycle") {
+		t.Fatalf("AddRelation(C blocks A) error = %v, want transitive cycle rejection", err)
 	}
 }
 
@@ -2027,7 +2029,9 @@ func TestGetIssueDetailRelationSidesAreHydrated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(related) error = %v", err)
 	}
-	blocked, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Blocked by subject", Topic: "detail", IssueType: "task", Priority: 0, ParentID: parent.ID})
+	// Under another epic than subject's: between two leaves of one epic a
+	// blocked-by edge is refused.
+	blocked, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Blocked by subject", Topic: "detail", IssueType: "task", Priority: 0, ParentID: related.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue(blocked) error = %v", err)
 	}

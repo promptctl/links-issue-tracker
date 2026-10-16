@@ -10,6 +10,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/claims"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/storage/storagetest"
 )
 
 // epicFixture builds an epic and returns the app plus a helper to add children
@@ -87,6 +88,17 @@ func (f epicFixture) block(blocked, blocker string) {
 	}
 }
 
+// blockWithinEpic is block for two leaves of one epic, an edge only a
+// reparent leaves behind (see storeBlocksWithinEpic).
+func (f epicFixture) blockWithinEpic(blocked, blocker string) {
+	f.t.Helper()
+	prefix, err := f.ap.Workspace.IssuePrefix.Mintable()
+	if err != nil {
+		f.t.Fatalf("Mintable() error = %v", err)
+	}
+	storagetest.StoreBlocksWithinEpic(f.t, f.ctx, f.ap.Store, prefix.Value(), blocked, blocker)
+}
+
 func (f epicFixture) render(focused string) string {
 	f.t.Helper()
 	ec, err := buildEpicContext(f.ctx, f.ap.Store, f.requiredFields, f.epicID, focused)
@@ -131,7 +143,7 @@ func TestRenderEpicContextFrozenBlockerStopsBlocking(t *testing.T) {
 	f := newEpicFixture(t, "Blocker epic", "one dead blocker")
 	blocker := f.addChild("The blocker")
 	dependent := f.addChild("The dependent")
-	f.block(dependent, blocker)
+	f.blockWithinEpic(dependent, blocker)
 
 	f.transition(blocker, model.Delete{})
 
@@ -194,7 +206,7 @@ func TestRenderEpicContextMixedStatesWithFocus(t *testing.T) {
 
 	f.transition(closed, model.Done{})
 	f.transition(inProgress, model.Start{Assignee: "test"})
-	f.block(blocked, ready) // blocked depends on the still-open ready child
+	f.blockWithinEpic(blocked, ready) // blocked depends on the still-open ready child
 
 	out := f.render(ready)
 
@@ -373,7 +385,7 @@ func TestRenderEpicContextChildBlockedBySibling(t *testing.T) {
 	f := newEpicFixture(t, "Sibling block", "deps")
 	blocker := f.addChild("Blocker sibling")
 	blocked := f.addChild("Blocked sibling")
-	f.block(blocked, blocker)
+	f.blockWithinEpic(blocked, blocker)
 
 	out := f.render("")
 	want := "[blocked: blocker " + blocker + " still open; earlier sibling " + blocker + " still open] " + blocked + "  Blocked sibling"
@@ -405,7 +417,7 @@ func TestRenderEpicContextClosedBlockerUnblocks(t *testing.T) {
 	f := newEpicFixture(t, "Closed blocker", "deps")
 	blocker := f.addChild("Done blocker")
 	blocked := f.addChild("Now ready")
-	f.block(blocked, blocker)
+	f.blockWithinEpic(blocked, blocker)
 	f.transition(blocker, model.Done{})
 
 	out := f.render("")
@@ -436,7 +448,7 @@ func TestRenderEpicContextNoCrossEpicEdges(t *testing.T) {
 	f := newEpicFixture(t, "No cross edges", "deps")
 	a := f.addChild("Child A")
 	b := f.addChild("Child B")
-	f.block(b, a) // same-epic edge: conveyed by rank, never the cross-epic section
+	f.blockWithinEpic(b, a) // same-epic edge: conveyed by rank, never the cross-epic section
 
 	out := f.render("")
 	if strings.Contains(out, "Cross-epic dependencies") {

@@ -402,7 +402,7 @@ func TestRouteNextExhaustionNeverNamesASiblingAsTheBlocker(t *testing.T) {
 	h.transition(a1.ID, model.Done{})
 	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2, theirs", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
 	a3 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.3", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a3"})
-	h.addDependency(a3.ID, a2.ID)
+	h.addDependencyWithinEpic(a3.ID, a2.ID)
 
 	rows, details, epics := h.gather()
 	standings := claims.Standings{
@@ -433,7 +433,7 @@ func TestRouteNextExhaustionNamesTheOutsideBlockerBehindASibling(t *testing.T) {
 	a3 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.3", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a3"})
 	epicX := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic X", Topic: "next", IssueType: "epic", Priority: 1})
 	blocker := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Outside, theirs", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicX.ID})
-	h.addDependency(a3.ID, a2.ID)
+	h.addDependencyWithinEpic(a3.ID, a2.ID)
 	h.addDependency(a2.ID, blocker.ID)
 
 	rows, details, epics := h.gather()
@@ -1262,7 +1262,7 @@ func TestExhaustionNamesEachLinkOfAStuckChainByItsOwnReach(t *testing.T) {
 	dep := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "External blocker", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicX.ID, Lane: "dep"})
 	deeper := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Blocker's blocker", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicX.ID, Lane: "deeper"})
 	h.addDependency(a2.ID, dep.ID)
-	h.addDependency(dep.ID, deeper.ID)
+	h.addDependencyWithinEpic(dep.ID, deeper.ID)
 
 	rows, details, epics := h.gather()
 	standings := claims.Standings{
@@ -1935,7 +1935,7 @@ func TestNoWorkNamesEachRowThePoolWalkWentPast(t *testing.T) {
 	// thing holding it — and the whole pool is unstartable without either
 	// row being takeable, for two different reasons.
 	gated := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Ours to want, not to start", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "gated"})
-	h.addDependency(gated.ID, held.ID)
+	h.addDependencyWithinEpic(gated.ID, held.ID)
 
 	rows, details, epics := h.gather()
 	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, held.ID)): heldBy(otherAttribution)}

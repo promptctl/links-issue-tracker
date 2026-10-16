@@ -19,8 +19,11 @@ import (
 func aPurgeRemovesTheIssueAndEverythingItOwns(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
 	doomed := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "doomed", Topic: "core", ParentID: epic.ID, Labels: []string{"leak"}})
-	blocker := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "blocker", Topic: "core", ParentID: epic.ID})
-	waiter := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "waiter", Topic: "core", ParentID: epic.ID})
+	// The blocked-by neighbors live in another epic: between two leaves of one
+	// epic, rank orders the work and the edge is refused.
+	neighbors := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "neighbors", Topic: "core", IssueType: model.TypeEpic})
+	blocker := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "blocker", Topic: "core", ParentID: neighbors.ID})
+	waiter := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "waiter", Topic: "core", ParentID: neighbors.ID})
 	followUp := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "follow-up", Topic: "core", ParentID: epic.ID, FollowsUp: doomed.ID})
 	duplicate := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "duplicate", Topic: "core", ParentID: epic.ID})
 

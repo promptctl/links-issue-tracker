@@ -13,6 +13,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/engine"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/storage/storagetest"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -314,11 +315,7 @@ func seedDiscoverableStore(t *testing.T, repoDir, prefix, workspaceID string) (s
 	blocked := newLeaf("blocked")
 	// blocked depends on the still-unfinished in-progress leaf, so it is blocked
 	// without adding a second ready leaf that would perturb the asserted counts.
-	if _, err := st.AddRelation(ctx, storage.AddRelationInput{
-		SrcID: blocked.ID, DstID: wip.ID, Type: "blocked-by", CreatedBy: "tester",
-	}); err != nil {
-		t.Fatalf("AddRelation(blocks) error = %v", err)
-	}
+	storagetest.StoreBlocksWithinEpic(t, ctx, st, prefix, blocked.ID, wip.ID)
 	if err := st.Close(); err != nil {
 		t.Fatalf("store.Close() error = %v", err)
 	}
@@ -427,11 +424,7 @@ func TestGatherCrossProjectRollupCountsIgnoreTheFocusScope(t *testing.T) {
 	// A focused goal and the one prerequisite on its path: +1 ready, +1 blocked.
 	goal := newLeaf("focused goal")
 	prereq := newLeaf("on the focus path")
-	if _, err := st.AddRelation(ctx, storage.AddRelationInput{
-		SrcID: goal.ID, DstID: prereq.ID, Type: "blocked-by", CreatedBy: "tester",
-	}); err != nil {
-		t.Fatalf("AddRelation(blocks) error = %v", err)
-	}
+	storagetest.StoreBlocksWithinEpic(t, ctx, st, "real", goal.ID, prereq.ID)
 	labels := []string{FocusLabel}
 	if _, err := st.Apply(ctx, goal.ID, storage.Change{Fields: storage.UpdateIssueInput{Labels: &labels}}); err != nil {
 		t.Fatalf("Apply(labels) error = %v", err)

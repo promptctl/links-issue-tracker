@@ -904,7 +904,7 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 ### 2.13 Bulk / import (`internal/storage/memory/bulk.go`)
 
 **`BulkApply(ctx, prefix, actor, specs)`**
-1. `order, err := storage.BulkWriteOrder(specs)` (`internal/storage/import_validate.go`, shared with the Dolt engine) — the entire file is gated before any document is applied, and the gate returns the order the documents are written in. Its error is returned as is.
+1. `parentTypes` maps each id among `storage.BulkParentRefs(specs)` that names an issue in `e.issues` to its type; `order, err := storage.BulkWriteOrder(specs, parentTypes)` (`internal/storage/import_validate.go`, shared with the Dolt engine) — the entire file is gated before any document is applied, and the gate returns the order the documents are written in. Its error is returned as is.
 2. Walks documents in topological order:
    - `spec.ID != ""` (update): `bulkUpdateChange(spec, actor)` then `e.apply(spec.ID, change)`. On apply failure → `e.compensate(batch, fmt.Errorf("bulk: update %q: %w", spec.ID, err))`. Appends `issue.ID` to `result.Updated`.
    - Otherwise (create): `bulkCreateInput(spec, prefix, batch)` then `e.createIssue(in)`. On failure → `e.compensate(batch, fmt.Errorf("bulk: create doc %d: %w", index, err))`. Records into the batch, and into `result.Created` under `spec.LocalID` if set, else under the new real id.
@@ -943,7 +943,7 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 - `IssueType` and `Priority` are parsed into pointers; parse errors → `fmt.Errorf("bulk: update %q: %w", spec.ID, err)`.
 - Returns `storage.Change{Actor: actor, Fields: fields}` — **an update document never carries an Action**.
 
-**`storage.BulkWriteOrder(specs)`** / **`storage.ImportTreeWriteOrder(specs)`** (`internal/storage/import_validate.go`) — run `validateBulkSpecs` / `validateImportTreeSpecs`, then `storage.writeOrder(format, specs, refsOf)` (`internal/storage/import_validate.go`) with `format` `"bulk"` / `"import"` and each spec's references as `Parent` followed by `BlockedBy`. Every refusal either returns is a `model.ValidationError`; the `%w` rows below wrap the containment helpers' own `ValidationError`.
+**`storage.BulkWriteOrder(specs, existingParentTypes)`** / **`storage.ImportTreeWriteOrder(specs)`** (`internal/storage/import_validate.go`) — run `validateBulkSpecs` / `validateImportTreeSpecs`, then `storage.writeOrder(format, specs, refsOf)` (`internal/storage/import_validate.go`) with `format` `"bulk"` / `"import"` and each spec's references as `Parent` followed by `BlockedBy`. Every refusal either returns is a `model.ValidationError`; the `%w` rows below wrap the containment helpers' own `ValidationError`.
 
 `storage.writeOrder(format, specs, refsOf)` (`internal/storage/import_validate.go`) — DFS topological sort over intra-file references only. States `unvisited`/`visiting`/`done`; re-entering `visiting` → `model.ValidationError{Message: fmt.Sprintf("%s: cycle detected involving %q", format, localIDs[i])}`. A reference matching no local_id is not an edge.
 
@@ -1025,9 +1025,9 @@ Stated in `internal/storage/memory/doc.go`:
 - Rule for what may be asserted: only what a caller can observe through the contract; no case may reach past the interface into engine internals (`internal/storage/conformance/conformance.go`).
 - Dolt's behavior is the tiebreak where a behavior was ambiguous; where the second engine answered better, it was moved to match rather than the contract moved to meet it (`internal/storage/conformance/conformance.go`).
 
-### 3.2 The 62 registered cases (`internal/storage/conformance/conformance.go`)
+### 3.2 The 67 registered cases (`internal/storage/conformance/conformance.go`)
 
-`create_read_roundtrip`, `create_defaults`, `create_requires_title`, `create_normalizes_topic`, `create_under_missing_parent_is_not_found`, `get_missing_issue_is_not_found`, `apply_field_patch`, `apply_status_transition`, `apply_missing_issue_is_not_found`, `apply_to_container_is_refused`, `apply_to_frozen_names_the_thaw`, `container_state_follows_live_children`, `history_records_mutations`, `every_editable_field_records_history`, `a_new_checkout_taking_a_ticket_records`, `one_issues_history_matches_the_whole_log`, `list_defaults_to_rank_order`, `list_filters_select`, `list_by_parent`, `list_hides_archived_and_deleted`, `list_sorts_and_limits`, `list_breaks_sort_ties_by_id`, `list_accepts_exactly_the_contract_sort_fields`, `list_sorts_status_by_derived_state`, `stamps_come_from_the_clock_the_engine_was_given`, `list_orders_timestamps_by_instant_not_spelling`, `events_are_totally_ordered`, `rank_intents_reorder`, `rank_intents_resolve_across_frames`, `rank_to_edge_stays_inside_its_frame`, `rank_to_edge_ignores_a_deleted_frame_mate`, `create_at_top_files_inside_its_frame`, `create_at_top_of_an_empty_frame_takes_a_distinct_key`, `placing_at_a_frame_edge_keeps_the_key_beside_its_frame`, `a_relative_move_keeps_every_rank_distinct`, `rank_set_imposes_order`, `rank_set_stays_inside_its_frame`, `rank_set_over_a_whole_frame_permutes_its_keys`, `rank_verbs_refuse_a_deleted_issue`, `a_container_lists_before_everything_inside_it`, `close_redirects_to_a_canonical`, `follow_ups_link_both_ways`, `a_purge_removes_the_issue_and_everything_it_owns`, `a_purge_refuses_a_container_that_holds_tickets`, `a_purge_of_a_missing_issue_is_not_found`, `a_purged_id_is_never_minted_again`, `comments_roundtrip`, `labels_roundtrip`, `relations_roundtrip`, `relations_batch_buckets_edges`, `parent_wiring`, `every_ticket_lives_inside_a_container`, `the_hierarchy_stays_a_tree`, `blocks_never_runs_along_the_hierarchy`, `topics_derive_from_issues`, `issue_identities_cover_every_row`, `export_carries_whole_store`, `bulk_apply_creates_and_updates`, `bulk_apply_compensates_a_failed_batch`, `import_tree_maps_local_ids`, `attribution_stamps_events`, `local_issue_count_tracks_creates`.
+`create_read_roundtrip`, `create_defaults`, `create_requires_title`, `create_normalizes_topic`, `create_under_missing_parent_is_not_found`, `get_missing_issue_is_not_found`, `apply_field_patch`, `an_assignee_no_filter_can_select_is_refused`, `apply_status_transition`, `apply_missing_issue_is_not_found`, `apply_to_container_is_refused`, `apply_to_frozen_names_the_thaw`, `container_state_follows_live_children`, `history_records_mutations`, `a_phase_move_records_its_event`, `every_editable_field_records_history`, `a_new_checkout_taking_a_ticket_records`, `one_issues_history_matches_the_whole_log`, `list_defaults_to_rank_order`, `list_filters_select`, `list_by_parent`, `list_hides_archived_and_deleted`, `list_sorts_and_limits`, `list_breaks_sort_ties_by_id`, `list_accepts_exactly_the_contract_sort_fields`, `list_sorts_status_by_derived_state`, `stamps_come_from_the_clock_the_engine_was_given`, `list_orders_timestamps_by_instant_not_spelling`, `events_are_totally_ordered`, `rank_intents_reorder`, `rank_intents_resolve_across_frames`, `rank_to_edge_stays_inside_its_frame`, `rank_to_edge_ignores_a_deleted_frame_mate`, `create_at_top_files_inside_its_frame`, `create_at_top_of_an_empty_frame_takes_a_distinct_key`, `placing_at_a_frame_edge_keeps_the_key_beside_its_frame`, `a_relative_move_keeps_every_rank_distinct`, `rank_set_imposes_order`, `rank_set_stays_inside_its_frame`, `rank_set_over_a_whole_frame_permutes_its_keys`, `rank_verbs_refuse_a_deleted_issue`, `a_container_lists_before_everything_inside_it`, `close_redirects_to_a_canonical`, `follow_ups_link_both_ways`, `a_purge_removes_the_issue_and_everything_it_owns`, `a_purge_refuses_a_container_that_holds_tickets`, `a_purge_of_a_missing_issue_is_not_found`, `a_purged_id_is_never_minted_again`, `comments_roundtrip`, `labels_roundtrip`, `relations_roundtrip`, `relations_batch_buckets_edges`, `parent_wiring`, `every_ticket_lives_inside_a_container`, `an_import_file_that_breaks_a_rule_is_refused_whole`, `the_hierarchy_stays_a_tree`, `blocks_never_runs_along_the_hierarchy`, `blocks_never_orders_two_leaves_of_one_epic`, `topics_derive_from_issues`, `issue_identities_cover_every_row`, `export_carries_whole_store`, `bulk_apply_creates_and_updates`, `bulk_apply_compensates_a_failed_batch`, `import_tree_maps_local_ids`, `attribution_stamps_events`, `observers_hear_every_change`, `local_issue_count_tracks_creates`.
 
 ### 3.3 Every enforced invariant, by case
 
@@ -1065,6 +1065,10 @@ Stated in `internal/storage/memory/doc.go`:
 - A field the patch never mentions (`Assignee`) is untouched — the whole reason the patch is pointers.
 - The patch persists: a subsequent `GetIssue` shows the new title.
 
+**`an_assignee_no_filter_can_select_is_refused`**
+- Fixture: epic `epic` with `issue` (assignee `ada`) under it. Each of these is a `model.ValidationError`: `CreateIssue` with `Assignee: "Doe, J"`; `Apply` of a field update setting `Assignee` to `"Doe, J"`; `Apply` of `Start{Assignee: "Doe, J"}`.
+- Afterwards the issue count (listing with `IncludeDeleted` and `IncludeArchived`) is unchanged, and `issue` still has assignee `ada` and state `open`.
+
 **`apply_status_transition`**
 - `model.Start{Assignee: "ada"}` → `State() == in_progress` and `Assignee == "ada"`; Start is the one action that rewrites ownership.
 - `model.Done{}` → `State() == closed`.
@@ -1092,6 +1096,14 @@ Stated in `internal/storage/memory/doc.go`:
 - Every event's `IssueID` matches the issue mutated.
 - A field write records a change row with `Field == "title"`.
 - Events are oldest-first by `CreatedAt`.
+
+**`a_phase_move_records_its_event`**
+- Fixture: epic `epic` with `issue` under it. `Apply` of `SetPhase{Phase: PhaseImpl}` on the open `issue` is a `model.ValidationError`, and `model.PhaseOf` over its detail reports no phase.
+- After `Start{Assignee: "ada"}`, the phase is `plan`.
+- `SetPhase{PhaseReview}` writes exactly one event; the event with action `phase` carries the one change `{Field: model.PhaseField, From: "plan", To: "review"}`; the returned `UpdatedAt` is the pinned clock's instant; the phase reads `review`.
+- `SetPhase{PhaseReview}` again succeeds and writes no event. `SetPhase{PhaseImpl}` with the clock unmoved, at the row's own `updated_at`, succeeds.
+- `SetPhase{PhaseImpl}` on `epic` is a `model.ValidationError`.
+- After `Reopen`, `SetPhase{PhaseImpl}` is a `model.ValidationError`; after a later `Start`, the phase is `plan`.
 
 **`every_editable_field_records_history`**
 - For each of eight fields, a fresh `TypeTask` child of one epic is created and given a one-field `UpdateIssueInput` patch (`Actor: "ada"`); each `Apply` succeeds.
@@ -1359,6 +1371,12 @@ Stated in `internal/storage/memory/doc.go`:
 - `ClearParent(nested)` then returns `NotFoundError{Entity: "parent relation"}`.
 - `RemoveRelation(leaf, nested, RelParentChild)` returns `NotFoundError{Entity: "relation"}`.
 
+**`an_import_file_that_breaks_a_rule_is_refused_whole`**
+- Fixture: epic `existing`. Each of these imports is a `model.ValidationError`:
+  - `ImportTree`: no specs; a spec missing its title; after a spec that would land, a spec missing its topic, with topic `"x"`, with label `"a,b"`, or with assignee `"Doe, J"`; a duplicate local_id; a parent no spec names; a blocked_by cycle; a blocked_by naming one record twice; a task blocked by the epic it sits under; a task blocked by an epic two levels above it; a task blocked by a task beside it under one epic.
+  - `BulkApply`: no documents; a create missing its topic; after a create that would land, a create with topic `"x"` or label `"a,b"`, an update emptying `existing`'s title, an update setting its label `"a,b"`, a create with assignee `"Doe, J"`, or an update setting that assignee; a duplicate local_id; a blocked_by cycle; a blocked_by naming `existing` twice; a task with no local_id blocked by the epic it sits under; a task blocked by a task beside it under one epic; an update retitling `existing`, then two tasks under `existing`, one blocked by the other.
+- Afterwards the issue count (listing with `IncludeDeleted` and `IncludeArchived`) is unchanged, and `existing`'s title is still `"existing"`.
+
 **`the_hierarchy_stays_a_tree`**
 - Fixture: epic `root`, epic `mid` under `root`, `leaf` under `mid`. Before any refusal, `root`'s children are exactly mid and `mid`'s children are exactly leaf (listing with `IncludeArchived` and `IncludeDeleted`).
 - For each of (child `root`, parent `mid`), (child `root`, parent `leaf`), (child `mid`, parent `leaf`): `SetParent{ChildID, ParentID}` is an error, and `AddRelation{SrcID: child, DstID: parent, Type: RelParentChild}` is an error.
@@ -1372,6 +1390,13 @@ Stated in `internal/storage/memory/doc.go`:
 - With epic `holder` added under `root` and `held` under `holder`, each of these `RelBlockedBy` edges is accepted (each removed again before the next): (holder, mid), (mid, held), (held, mid).
 - `ImportTree` of epic `e` > epic `s` > task `l` with `l` `BlockedBy: ["e"]` is a `model.ValidationError` whose message contains `storage.SameEpicBlocksRejectionMessage`.
 - `BulkApply` of one task with `Parent: mid.ID` and `BlockedBy: [root.ID]` is a `model.ValidationError` whose message contains `storage.SameEpicBlocksRejectionMessage`.
+
+**`blocks_never_orders_two_leaves_of_one_epic`**
+- Fixture: epic `epic` with task `first`, bug `second` and epic `sub` under it; epic `other` with task `elsewhere` under it.
+- `AddRelation{SrcID: second, DstID: first, Type: RelBlockedBy}` is a `model.ValidationError` whose message contains `storage.SameEpicBlocksRejectionMessage`, and `ListRelationsForIssue(second, RelBlockedBy)` is empty afterwards.
+- Each of these is a `model.ValidationError` whose message contains `storage.SameEpicBlocksRejectionMessage`: `ImportTree` of epic `e` with tasks `a` and `b` under it, `b` `BlockedBy: ["a"]`; `BulkApply` of the same shape by local_id; `BulkApply` of one task with `Parent: epic.ID` and `BlockedBy: [first.ID]`.
+- Each of these `RelBlockedBy` edges is accepted (each removed again before the next): (first, sub), (sub, first), (first, elsewhere).
+- With `second` moved under `other`, `AddRelation{SrcID: second, DstID: first, Type: RelBlockedBy}` succeeds, and `second` is moved back under `epic`. `AddRelation{SrcID: first, DstID: second, Type: RelBlockedBy}`, which would also close a cycle, is a `model.ValidationError` whose message contains `storage.SameEpicBlocksRejectionMessage`.
 
 **`topics_derive_from_issues`**
 - Three issues across two topics yield exactly `["parser","renderer"]` — distinct, ascending, never a stored list that could disagree with the issues.
@@ -1410,6 +1435,11 @@ Stated in `internal/storage/memory/doc.go`:
 - **Every** event that mutation produced carries attribution — it is stamped at the store's one insertion point, not by call sites that remembered.
 - `Attribution.Stream() == "stream-token"`.
 - `Attribution.Workspace()` is non-empty — the pair is complete or absent.
+
+**`observers_hear_every_change`**
+- Fixture: epic `epic` with `task` under it, and one function registered with `ObserveChanges` that records each call's `Change.Action`, issue id and issue title.
+- `Apply` of a title update to `"by apply"`; `Apply` of `Start{Assignee: "ada"}`; then `BulkApply` of an update retitling `task` to `"by bulk"` followed by an update naming `task.ID + "-missing"`, which is an error.
+- The observer heard exactly, in order: (no action, `task`, `"by apply"`), (`Start{Assignee: "ada"}`, `task`, `"by apply"`), (no action, `task`, `"by bulk"`).
 
 **`local_issue_count_tracks_creates`**
 - A fresh engine reports 0 rather than failing.

@@ -14,17 +14,20 @@ func TestBulkApplyCreatesEpicWithChildAndDep(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	title := func(s string) *string { return &s }
+	// t1 sits in an epic of its own: between two leaves of one epic a
+	// blocked_by is refused, since rank orders them.
 	specs := []storage.BulkIssueSpec{
+		{LocalID: "e0", Title: title("Upstream"), IssueType: title("epic"), Topic: title("bulk")},
 		{LocalID: "e1", Title: title("Epic"), IssueType: title("epic"), Topic: title("bulk")},
-		{LocalID: "t1", Title: title("First"), IssueType: title("task"), Topic: title("bulk"), Parent: "e1"},
+		{LocalID: "t1", Title: title("First"), IssueType: title("task"), Topic: title("bulk"), Parent: "e0"},
 		{LocalID: "t2", Title: title("Second"), IssueType: title("task"), Topic: title("bulk"), Parent: "e1", BlockedBy: []string{"t1"}},
 	}
 	result, err := st.BulkApply(ctx, "test", "agent", specs)
 	if err != nil {
 		t.Fatalf("BulkApply() error = %v", err)
 	}
-	if len(result.Created) != 3 {
-		t.Fatalf("Created = %v, want 3 entries", result.Created)
+	if len(result.Created) != 4 {
+		t.Fatalf("Created = %v, want 4 entries", result.Created)
 	}
 	t1 := createdIDByRef(t, result.Created, "t1")
 	t2 := createdIDByRef(t, result.Created, "t2")

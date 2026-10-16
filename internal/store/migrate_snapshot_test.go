@@ -416,14 +416,25 @@ func TestDataSurvivesFailedMigrationSnapshotRestore(t *testing.T) {
 		t.Fatalf("StartIssue(A) error = %v", err)
 	}
 
-	// Issue B: task, receives a comment.
+	// Issue B: task, receives a comment. It sits in an epic of its own, since
+	// A waits on it and between two leaves of one epic a blocked-by edge is
+	// refused.
+	upstream, err := st.CreateIssue(ctx, storage.CreateIssueInput{
+		Prefix:    "test",
+		Title:     "Upstream epic",
+		Topic:     "seed",
+		IssueType: "epic",
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue(upstream epic) error = %v", err)
+	}
 	issueB, err := st.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix:    "test",
 		Title:     "Beta task",
 		Topic:     "backend",
 		IssueType: "task",
 		Priority:  model.PriorityNormal,
-		ParentID:  epic.ID,
+		ParentID:  upstream.ID,
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue(B) error = %v", err)

@@ -824,6 +824,7 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "bulk: duplicate local_id %q", Src: "bulk: duplicate local_id %q"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "bulk: no issues in input", Src: "bulk: no issues in input"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "bulk: parse spec: %w", Src: "bulk: parse spec: %w"},
+	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "bulk: read parents: %w", Src: "bulk: read parents: %w"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "bulk: update %q: %w", Src: "bulk: update %q: %w"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "bulk: update %q: %w (rollback leaked %d: %s)", Src: "bulk: update %q: %w (rollback leaked %d: %s)"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "checkpoint: %w", Src: "checkpoint: %w"},

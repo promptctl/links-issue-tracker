@@ -11,6 +11,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/claims"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/storage/storagetest"
 )
 
 // backlogTestHarness mirrors readyTestHarness so the two surfaces can be
@@ -59,6 +60,17 @@ func (h backlogTestHarness) addDependency(dependentID, dependencyID string) {
 	}); err != nil {
 		h.t.Fatalf("AddRelation(blocks) error = %v", err)
 	}
+}
+
+// addDependencyWithinEpic is addDependency for two leaves of one epic, an
+// edge only a reparent leaves behind (see storeBlocksWithinEpic).
+func (h backlogTestHarness) addDependencyWithinEpic(dependentID, dependencyID string) {
+	h.t.Helper()
+	prefix, err := h.ap.Workspace.IssuePrefix.Mintable()
+	if err != nil {
+		h.t.Fatalf("Mintable() error = %v", err)
+	}
+	storagetest.StoreBlocksWithinEpic(h.t, h.ctx, h.ap.Store, prefix.Value(), dependentID, dependencyID)
 }
 
 // runBacklogIDs renders the backlog and extracts the issue ID leading each row,
@@ -124,9 +136,9 @@ func TestBacklogUnblocksLinesSurviveTheFocusScope(t *testing.T) {
 	offPath := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Off-path dependent", Topic: "noise", IssueType: "task", ParentID: epic, Lane: "off"})
 	goal := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Goal", Topic: "goal", IssueType: "task", ParentID: epic, Lane: "goal", Labels: []string{FocusLabel}})
 	onPath := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Path work", Topic: "goal", IssueType: "task", ParentID: epic, Lane: "path"})
-	h.addDependency(goal, onPath)
+	h.addDependencyWithinEpic(goal, onPath)
 	// Off the focused path, and unblocked by an on-path row all the same.
-	h.addDependency(offPath, onPath)
+	h.addDependencyWithinEpic(offPath, onPath)
 
 	text := h.runBacklogText()
 	if !unblocksLineNames(text, offPath) {
@@ -145,7 +157,7 @@ func TestBacklogUnblocksLinesSurviveLimit(t *testing.T) {
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic", Priority: 1})
 	first := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Blocker", Topic: "lim", IssueType: "task", ParentID: epic, Lane: "first"})
 	second := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Dependent", Topic: "lim", IssueType: "task", ParentID: epic, Lane: "second"})
-	h.addDependency(second, first)
+	h.addDependencyWithinEpic(second, first)
 
 	// --limit 1 cuts the dependent's own row, not the fact that it is a dependent.
 	text := h.runBacklogText("--limit", "1")
@@ -162,7 +174,7 @@ func TestBacklogKeepsBlockedItemsInRankOrder(t *testing.T) {
 	a := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A urgent", Topic: "blk", IssueType: "task", Priority: 1, ParentID: epic, Lane: "a"})
 	b := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B urgent", Topic: "blk", IssueType: "task", Priority: 1, ParentID: epic, Lane: "b"})
 	c := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "C normal", Topic: "blk", IssueType: "task", Priority: 0, ParentID: epic, Lane: "c"})
-	h.addDependency(b, a) // b is blocked
+	h.addDependencyWithinEpic(b, a) // b is blocked
 
 	got := h.runBacklogIDs()
 	wantOrder := []string{a, b, c}
@@ -184,7 +196,7 @@ func TestBacklogTextShowsBlockedReasonsInline(t *testing.T) {
 	blocked := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Blocked", Topic: "blk", IssueType: "task", Priority: 1, ParentID: epic, Lane: "blocked"})
 	flagged := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Needs design", Topic: "blk", IssueType: "task", Priority: 0, ParentID: epic, Lane: "flagged", Labels: []string{NeedsDesignLabel}})
 	outside := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Upstream fix lands", Topic: "blk", IssueType: "task", Priority: 0, ParentID: epic, Lane: "outside", Labels: []string{ExternalLabel}})
-	h.addDependency(blocked, blocker)
+	h.addDependencyWithinEpic(blocked, blocker)
 
 	text := h.runBacklogText()
 	if !strings.Contains(text, "blocked by: "+blocker) {
@@ -456,7 +468,7 @@ func TestBacklogUnblocksLinesSurviveTheStoreSideNarrowings(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newBacklogTestHarness(t)
 			prerequisite, dependent := tc.build(h)
-			h.addDependency(dependent, prerequisite)
+			h.addDependencyWithinEpic(dependent, prerequisite)
 
 			// The premise: unnarrowed, the prerequisite's row carries the line.
 			// Without this the case below could pass by printing nothing at all.
@@ -485,7 +497,7 @@ func TestRankInversionCountIsIndependentOfTheStoreSideNarrowings(t *testing.T) {
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic", Priority: 1})
 	dependent := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Dependent", Topic: "inv", IssueType: "bug", ParentID: epic, Lane: "dependent"})
 	prerequisite := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Prerequisite", Topic: "inv", IssueType: "task", ParentID: epic, Lane: "prerequisite"})
-	h.addDependency(dependent, prerequisite)
+	h.addDependencyWithinEpic(dependent, prerequisite)
 
 	whole := rankInversionWarning(h.runBacklogText())
 	if whole == "" {

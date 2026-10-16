@@ -82,15 +82,6 @@ func depAddLeaf() appLeaf {
 		if issueID == otherID {
 			return model.ValidationError{Message: fmt.Sprintf("dep add: self-loop rejected (%s %s %s)", issueID, rt, otherID)}
 		}
-		// [LAW:single-enforcer] Sibling blocked-by edges are rejected at the CLI
-		// policy boundary, and only here: import's blocked_by may still order
-		// siblings. Within one epic, rank is the canonical ordering; a blocked-by
-		// edge would duplicate that signal.
-		if rt == model.RelBlockedBy {
-			if err := rejectSameEpicBlocks(ctx, ap, issueID, otherID); err != nil {
-				return err
-			}
-		}
 		rel, err := ap.Store.AddRelation(ctx, storage.AddRelationInput{SrcID: issueID, DstID: otherID, Type: rt, CreatedBy: resolveActor()})
 		if err != nil {
 			return err
@@ -154,45 +145,6 @@ func depLsLeaf() appLeaf {
 		}
 		return nil
 	}}
-}
-
-// rejectSameEpicBlocks errors when both endpoints are leaves of one epic —
-// siblings, which rank already orders. The other half of the rule, an edge
-// between an issue and an epic it sits under, is the store's: it refuses that
-// shape on every blocked-by write, imports included, with the same message.
-func rejectSameEpicBlocks(ctx context.Context, ap *app.App, fromID, toID string) error {
-	relations, err := ap.Store.GetRelationsByIDs(ctx, []string{fromID, toID})
-	if err != nil {
-		return err
-	}
-	fromEpic, err := leafEpicID(relations, fromID)
-	if err != nil {
-		return err
-	}
-	toEpic, err := leafEpicID(relations, toID)
-	if err != nil {
-		return err
-	}
-	if fromEpic != "" && fromEpic == toEpic {
-		return model.ValidationError{Message: storage.SameEpicBlocksRejectionMessage}
-	}
-	return nil
-}
-
-// leafEpicID returns the epic a leaf issue belongs to: its parent's ID when the
-// parent is a container, otherwise "" (floating, or itself a container — an
-// epic's ordering against its own children is the store's ancestry rule).
-// GetRelationsByIDs omits an id that names no issue, so its absence is the
-// NotFoundError a detail read would have returned.
-func leafEpicID(relations map[string]storage.IssueRelations, issueID string) (string, error) {
-	rel, ok := relations[issueID]
-	if !ok {
-		return "", storage.NotFoundError{Entity: "issue", ID: issueID}
-	}
-	if !rel.Issue.IsContainer() && rel.Parent != nil && rel.Parent.IsContainer() {
-		return rel.Parent.ID, nil
-	}
-	return "", nil
 }
 
 // depRelationLine renders an edge as the sentence it records, endpoints in

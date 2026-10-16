@@ -1747,19 +1747,16 @@ Family `depFamily`, usage `"usage: lit dep <add|rm|ls> ..."` (`dependency.go`).
   3. Self-loop `id == value` → `model.ValidationError{Message: fmt.Sprintf("dep add: self-loop rejected (%s %s %s)")}`
      (issue, relation type, other) → exit 3 (`dependency.go`). A transitive
      cycle is refused by the store's `AddRelation`, not here.
-  4. For `blocked-by` only: `rejectSameEpicBlocks` — if both endpoints are leaves of
-     the same epic, `ValidationError{storage.SameEpicBlocksRejectionMessage}` →
-     exit 3 (`dependency.go`). Verbatim message:
+  4. For `blocked-by` only, the store's `AddRelation` refuses an edge that
+     orders work inside one epic — both endpoints non-container issues
+     directly under one epic, or an endpoint inside the other's epic at any
+     depth, climbing only through epic parents — with
+     `ValidationError{storage.SameEpicBlocksRejectionMessage}` → exit 3
+     (`storage.RejectBlocksWithinEpic`, `internal/storage/edges.go`). Verbatim
+     message:
      "Do not set blocked-by relationships between two issues in the same epic.  Use
      rank to specify that one issue must be completed before another issue"
      (`internal/storage/edges.go` — note the double space).
-     Both endpoints are read in one `GetRelationsByIDs`; an id it omits is
-     `storage.NotFoundError{Entity: "issue"}`. Leaf epic: the parent's ID if the
-     issue is not a container and its parent is, else `""` (`leafEpicID`,
-     `dependency.go`). Two floating issues are not
-     same-epic (`dependency.go`). An endpoint inside the other's epic at any
-     depth, climbing only through epic parents, is refused with the same message by the store's `AddRelation`
-     (`storage.RejectBlocksAlongHierarchy`, `internal/storage/edges.go`).
 - Endpoint orientation: the positional is `SrcID` and the flag's value `DstID`,
   the stored order — `lit dep add A --blocked-by B` stores
   "A blocked-by B" (`dependency.go`, `internal/model/relation_type.go`).

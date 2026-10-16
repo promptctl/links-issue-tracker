@@ -74,7 +74,7 @@ func TestDoctorNamesEveryLinkBetweenAPair(t *testing.T) {
 	c := h.createIssue(storage.CreateIssueInput{Title: "C", Topic: "loop", IssueType: "task", ParentID: e.ID})
 	f := h.createIssue(storage.CreateIssueInput{Title: "F", Topic: "loop", IssueType: "epic"})
 	x := h.createIssue(storage.CreateIssueInput{Title: "X", Topic: "loop", IssueType: "task", ParentID: f.ID})
-	h.addDependency(c.ID, b.ID)
+	h.addDependencyWithinEpic(c.ID, b.ID)
 	h.addDependency(b.ID, f.ID)
 	h.addDependency(x.ID, c.ID)
 

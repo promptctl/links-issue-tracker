@@ -62,7 +62,7 @@ func TestFocusPathWalkReusesFetchedRelations(t *testing.T) {
 	c2 := h.createIssue(storage.CreateIssueInput{Prefix: "test",
 		Title: "Step 2", Topic: "goal", IssueType: "task", ParentID: epic.ID,
 	})
-	h.addDependency(c2.ID, c1.ID)
+	h.addDependencyWithinEpic(c2.ID, c1.ID)
 	h.setLabels(epic.ID, FocusLabel)
 
 	// Unseeded walk: the canonical result, and proof the memo fetches each

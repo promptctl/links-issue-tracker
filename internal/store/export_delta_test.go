@@ -357,7 +357,9 @@ func buildDeltaScenarioStates(t *testing.T, ctx context.Context) []deltaScenario
 	if err != nil {
 		t.Fatalf("CreateIssue(first): %v", err)
 	}
-	second, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Second", Topic: "delta", IssueType: "task", ParentID: epic.ID, Placement: storage.RankBottom})
+	// A sub-epic, so first may be blocked by it below: between two leaves of
+	// one epic a blocked-by edge is refused.
+	second, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Second", Topic: "delta", IssueType: "epic", ParentID: epic.ID, Placement: storage.RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(second): %v", err)
 	}

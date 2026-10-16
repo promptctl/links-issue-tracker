@@ -381,15 +381,17 @@ func rejectCycleTx(ctx context.Context, tx *sql.Tx, rel model.Relation) error {
 	case model.RelBlockedBy:
 		// A rank order is a total order, and one that honors every blocked-by edge
 		// exists iff there is no cycle, so a cycle is an unsatisfiable
-		// constraint set rather than an awkward shape.
-		if err := rejectBlocksCycle(ctx, tx, rel.SrcID, rel.DstID); err != nil {
-			return err
-		}
-		epicParentOf, err := loadEpicParentEdges(ctx, tx)
+		// constraint set rather than an awkward shape. The same-epic rule is
+		// judged first, as the import gate judges it: an edge inside one epic
+		// that also closes a cycle is refused by the rule that names the fix.
+		tree, err := loadEpicTree(ctx, tx)
 		if err != nil {
 			return fmt.Errorf("blocks hierarchy check: %w", err)
 		}
-		return storage.RejectBlocksAlongHierarchy(epicParentOf, rel.SrcID, rel.DstID)
+		if err := storage.RejectBlocksWithinEpic(tree, rel.SrcID, rel.DstID); err != nil {
+			return err
+		}
+		return rejectBlocksCycle(ctx, tx, rel.SrcID, rel.DstID)
 	case model.RelParentChild:
 		return rejectParentCycle(ctx, tx, rel.SrcID, rel.DstID)
 	}
@@ -621,24 +623,46 @@ func parentCycle(parentOf map[string][]string) []string {
 // and the detector exists for precisely that data.
 // [LAW:types-are-the-program] The strongest theorem that is still true.
 func loadParentEdges(ctx context.Context, q rowQueryer) (map[string][]string, error) {
-	return queryParentEdges(ctx, q, "TRUE")
+	edges, err := queryParentEdges(ctx, q, "TRUE")
+	if err != nil {
+		return nil, err
+	}
+	parentOf := make(map[string][]string, len(edges))
+	for _, edge := range edges {
+		parentOf[edge.child] = append(parentOf[edge.child], edge.parent)
+	}
+	return parentOf, nil
 }
 
 // epicParentPredicate keeps the parent edges whose parent is an epic.
 var epicParentPredicate = fmt.Sprintf("p.issue_type IN (%s)", quotedIssueTypeList(model.ContainerTypes()))
 
-// loadEpicParentEdges is loadParentEdges narrowed to edges whose parent is an
-// epic: the containment an epic's blockers reach down through, and the only
-// containment storage.RejectBlocksAlongHierarchy climbs.
-func loadEpicParentEdges(ctx context.Context, q rowQueryer) (map[string][]string, error) {
-	return queryParentEdges(ctx, q, epicParentPredicate)
+// loadEpicTree is loadParentEdges narrowed to edges whose parent is an epic,
+// with each child's type: the containment an epic's blockers reach down
+// through, and what storage.RejectBlocksWithinEpic reads.
+func loadEpicTree(ctx context.Context, q rowQueryer) (storage.EpicTree, error) {
+	edges, err := queryParentEdges(ctx, q, epicParentPredicate)
+	if err != nil {
+		return nil, err
+	}
+	tree := make(storage.EpicTree, len(edges))
+	for _, edge := range edges {
+		tree.Place(edge.child, edge.childType, edge.parent)
+	}
+	return tree, nil
 }
 
-// queryParentEdges reads child -> parents for the parent edges parentFilter
-// keeps; `p` is the parent's issues row. [LAW:one-source-of-truth] One query
-// body, so the full and epic-only readings cannot drift apart.
-func queryParentEdges(ctx context.Context, q rowQueryer, parentFilter string) (map[string][]string, error) {
-	rows, err := q.QueryContext(ctx, `SELECT r.src_id, r.dst_id FROM relations r
+// parentEdge is one stored parent-child row, with its child's type.
+type parentEdge struct {
+	child, parent string
+	childType     model.IssueType
+}
+
+// queryParentEdges reads the parent edges parentFilter keeps; `p` is the
+// parent's issues row. [LAW:one-source-of-truth] One query body, so the full
+// and epic-only readings cannot drift apart.
+func queryParentEdges(ctx context.Context, q rowQueryer, parentFilter string) ([]parentEdge, error) {
+	rows, err := q.QueryContext(ctx, `SELECT r.src_id, i.issue_type, r.dst_id FROM relations r
 		JOIN issues i ON i.id = r.src_id
 		JOIN issues p ON p.id = r.dst_id
 		WHERE r.type = 'parent-child' AND `+parentFilter+`
@@ -647,18 +671,18 @@ func queryParentEdges(ctx context.Context, q rowQueryer, parentFilter string) (m
 		return nil, fmt.Errorf("query parent edges: %w", err)
 	}
 	defer rows.Close()
-	parentOf := make(map[string][]string)
+	var edges []parentEdge
 	for rows.Next() {
-		var child, parent string
-		if err := rows.Scan(&child, &parent); err != nil {
+		var edge parentEdge
+		if err := rows.Scan(&edge.child, &edge.childType, &edge.parent); err != nil {
 			return nil, fmt.Errorf("scan parent edge: %w", err)
 		}
-		parentOf[child] = append(parentOf[child], parent)
+		edges = append(edges, edge)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("parent edge rows: %w", err)
 	}
-	return parentOf, nil
+	return edges, nil
 }
 
 func (s *Store) RemoveRelation(ctx context.Context, srcID, dstID string, relType model.RelationType) error {

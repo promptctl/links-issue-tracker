@@ -13,6 +13,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/rank"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/storage/storagetest"
 )
 
 // seq turns a deliberate order into the rankedIssue sequence the repair reads,
@@ -309,9 +310,7 @@ func TestFixRankInversionsMovesOnlyTheInvertedTicket(t *testing.T) {
 	// One inversion: the ticket at position 1 depends on the ticket at
 	// position 4, which is ranked below it.
 	dependent, dependency := deliberate[1], deliberate[4]
-	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: dependent, DstID: dependency, Type: "blocked-by", CreatedBy: "tester"}); err != nil {
-		t.Fatalf("AddRelation(%s blocked by %s) error = %v", dependent, dependency, err)
-	}
+	storagetest.StoreBlocksWithinEpic(t, ctx, st, "test", dependent, dependency)
 	report, err := st.Doctor(ctx)
 	if err != nil {
 		t.Fatalf("Doctor(before) error = %v", err)
@@ -381,9 +380,7 @@ func TestFixRankInversionsPreservesTheBandBlockingOneGate(t *testing.T) {
 	before := ranksByID(t, ctx, st, deliberate)
 
 	for _, dependency := range band {
-		if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: gate, DstID: dependency, Type: "blocked-by", CreatedBy: "tester"}); err != nil {
-			t.Fatalf("AddRelation(gate blocked by %s) error = %v", dependency, err)
-		}
+		storagetest.StoreBlocksWithinEpic(t, ctx, st, "test", gate, dependency)
 	}
 
 	fixed, err := st.FixRankInversions(ctx)
@@ -535,9 +532,7 @@ func TestFixRankInversionsTwiceWritesNothingWithSmoothing(t *testing.T) {
 		{ids[1], ids[3]},
 		{ids[5], ids[7]},
 	} {
-		if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: edge.dependent, DstID: edge.dependency, Type: "blocked-by", CreatedBy: "tester"}); err != nil {
-			t.Fatalf("AddRelation(%s blocked by %s) error = %v", edge.dependent, edge.dependency, err)
-		}
+		storagetest.StoreBlocksWithinEpic(t, ctx, st, "test", edge.dependent, edge.dependency)
 	}
 	report, err := st.Doctor(ctx)
 	if err != nil {

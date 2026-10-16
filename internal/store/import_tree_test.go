@@ -12,17 +12,20 @@ func TestImportTreeCreatesEpicWithChildAndDep(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
+	// t1 sits in an epic of its own: between two leaves of one epic a
+	// blocked_by is refused, since rank orders them.
 	specs := []storage.ImportTreeSpec{
+		{LocalID: "e0", Title: "Upstream", IssueType: "epic", Topic: "tree", Priority: 0},
 		{LocalID: "e1", Title: "Epic", IssueType: "epic", Topic: "tree", Priority: 0},
-		{LocalID: "t1", Title: "First", IssueType: "task", Topic: "tree", Priority: 0, Parent: "e1"},
+		{LocalID: "t1", Title: "First", IssueType: "task", Topic: "tree", Priority: 0, Parent: "e0"},
 		{LocalID: "t2", Title: "Second", IssueType: "task", Topic: "tree", Priority: 0, Parent: "e1", BlockedBy: []string{"t1"}},
 	}
 	result, err := st.ImportTree(ctx, "test", specs)
 	if err != nil {
 		t.Fatalf("ImportTree() error = %v", err)
 	}
-	if len(result.Created) != 3 {
-		t.Fatalf("Created = %v, want 3 entries", result.Created)
+	if len(result.Created) != 4 {
+		t.Fatalf("Created = %v, want 4 entries", result.Created)
 	}
 	t1 := createdIDByRef(t, result.Created, "t1")
 	t2 := createdIDByRef(t, result.Created, "t2")
@@ -50,8 +53,9 @@ func TestImportTreeRejectsCycle(t *testing.T) {
 	st := openIssueStore(t, ctx)
 	specs := []storage.ImportTreeSpec{
 		{LocalID: "e", Title: "E", IssueType: "epic", Topic: "demo", Priority: 0},
+		{LocalID: "f", Title: "F", IssueType: "epic", Topic: "demo", Priority: 0},
 		{LocalID: "a", Title: "A", IssueType: "task", Topic: "demo", Priority: 0, Parent: "e", BlockedBy: []string{"b"}},
-		{LocalID: "b", Title: "B", IssueType: "task", Topic: "demo", Priority: 0, Parent: "e", BlockedBy: []string{"a"}},
+		{LocalID: "b", Title: "B", IssueType: "task", Topic: "demo", Priority: 0, Parent: "f", BlockedBy: []string{"a"}},
 	}
 	if _, err := st.ImportTree(ctx, "test", specs); err == nil || !strings.Contains(err.Error(), "cycle") {
 		t.Fatalf("ImportTree(cycle) error = %v, want cycle error", err)
@@ -89,8 +93,9 @@ func TestParseImportTreeSpecsValidFlatFormImports(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	flat := []byte(`[
+		{"local_id":"e0","title":"Upstream","type":"epic","topic":"tree","priority":0},
 		{"local_id":"e1","title":"Epic","type":"epic","topic":"tree","priority":0},
-		{"local_id":"t1","title":"First","type":"task","topic":"tree","priority":0,"parent":"e1"},
+		{"local_id":"t1","title":"First","type":"task","topic":"tree","priority":0,"parent":"e0"},
 		{"local_id":"t2","title":"Second","type":"task","topic":"tree","priority":0,"parent":"e1","blocked_by":["t1"]}
 	]`)
 	specs, err := storage.ParseImportTreeSpecs(flat)
@@ -101,8 +106,8 @@ func TestParseImportTreeSpecsValidFlatFormImports(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ImportTree() error = %v", err)
 	}
-	if len(result.Created) != 3 {
-		t.Fatalf("Created = %v, want 3 entries", result.Created)
+	if len(result.Created) != 4 {
+		t.Fatalf("Created = %v, want 4 entries", result.Created)
 	}
 	detail, err := st.GetIssueDetail(ctx, createdIDByRef(t, result.Created, "t2"))
 	if err != nil {

@@ -375,7 +375,7 @@ func TestRunNextServesAReadyTicketBehindABlockerThatIsNotStartable(t *testing.T)
 	blocker := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Outside dependency", Topic: "next", IssueType: "task", Priority: 0, ParentID: outside.ID, Lane: "blocker"})
 	blockersBlocker := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Deeper still", Topic: "next", IssueType: "task", Priority: 0, ParentID: outside.ID, Lane: "deeper"})
 	h.addDependency(gated.ID, blocker.ID)
-	h.addDependency(blocker.ID, blockersBlocker.ID)
+	h.addDependencyWithinEpic(blocker.ID, blockersBlocker.ID)
 	h.applyAction(finished.ID, model.Done{}, "finished")
 
 	outcome := h.runNextOutcome()
@@ -490,7 +490,7 @@ func TestRunNextServesTheChainOfOurHighestRankedRowFirst(t *testing.T) {
 	stuck := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Stuck", Topic: "next", IssueType: "task", Priority: 0, ParentID: outside.ID, Lane: "stuck"})
 	deep := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Deep", Topic: "next", IssueType: "task", Priority: 0, ParentID: outside.ID, Lane: "deep"})
 	h.addDependency(first.ID, stuck.ID)
-	h.addDependency(stuck.ID, deep.ID)
+	h.addDependencyWithinEpic(stuck.ID, deep.ID)
 	h.addDependency(second.ID, near.ID)
 	h.applyAction(finished.ID, model.Done{}, "finished")
 
@@ -525,7 +525,7 @@ func TestRunNextServesPastAnEpicWhoseWorkIsAllBlocked(t *testing.T) {
 	blocker := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Outside dependency", Topic: "next", IssueType: "task", Priority: 0, ParentID: outside.ID, Lane: "blocker"})
 	upstream := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Upstream release", Topic: "next", IssueType: "task", Priority: 0, ParentID: outside.ID, Lane: "upstream", Labels: []string{ExternalLabel}})
 	h.addDependency(gated.ID, blocker.ID)
-	h.addDependency(blocker.ID, upstream.ID)
+	h.addDependencyWithinEpic(blocker.ID, upstream.ID)
 	h.applyAction(finished.ID, model.Done{}, "finished")
 
 	outcome := h.runNextOutcome()
@@ -569,7 +569,7 @@ func TestRunNextSkipsBlockedLeaf(t *testing.T) {
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "next", IssueType: "epic", Priority: 1})
 	blocker := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Blocker", Topic: "next", IssueType: "task", Priority: 1, ParentID: epic.ID, Lane: "blocker"})
 	dependent := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Dependent", Topic: "next", IssueType: "task", Priority: 0, ParentID: epic.ID, Lane: "dependent"})
-	h.addDependency(dependent.ID, blocker.ID)
+	h.addDependencyWithinEpic(dependent.ID, blocker.ID)
 	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Unblocked third", Topic: "next", IssueType: "task", Priority: 0, ParentID: epic.ID, Lane: "third"})
 
 	got := h.runNextRow()
@@ -588,7 +588,7 @@ func TestRunNextSkipsATicketWaitingOnAnOutsideEvent(t *testing.T) {
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "next", IssueType: "epic", Priority: 1})
 	upstream := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Upstream fix lands", Topic: "next", IssueType: "task", Priority: 0, ParentID: epic.ID, Lane: "upstream", Labels: []string{ExternalLabel}})
 	waiting := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Adopt the upstream fix", Topic: "next", IssueType: "task", Priority: 0, ParentID: epic.ID, Lane: "waiting"})
-	h.addDependency(waiting.ID, upstream.ID)
+	h.addDependencyWithinEpic(waiting.ID, upstream.ID)
 	workable := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Workable here", Topic: "next", IssueType: "task", Priority: 0, ParentID: epic.ID, Lane: "workable"})
 
 	if got := h.runNextRow(); got.ID != workable.ID {
