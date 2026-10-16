@@ -4785,7 +4785,7 @@ Helpers: `copyTree` (pure-Go recursive copy preserving `info.Mode().Perm()`, `pr
 |---|---|---|
 | `downgradeSnapshotLabel` | `"lit-downgrade"` | `downgrade.go` |
 | `downgradeSnapshotRetention` | `10` | `downgrade.go` |
-| (comparison) `migrationSnapshotLabel` | `"pre-migrate-schema"` | `internal/store/migrate_snapshot.go` |
+| (comparison) `migrationSnapshotLabel` | `"pre-migrate"` | `internal/store/migrate_snapshot.go` |
 | (comparison) `migrationSnapshotRetention` | `10` | `internal/store/migrate_snapshot.go` |
 
 Test hook: `var migrationDownForTest func(ctx context.Context, provider *goose.Provider) (*goose.MigrationResult, error)` — when non-nil it replaces `provider.Down(ctx)` inside `applyDownMigrations` (`downgrade.go`).

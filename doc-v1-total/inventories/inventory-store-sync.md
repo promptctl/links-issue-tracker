@@ -733,8 +733,7 @@ The schema fact this rests on: every child table is `ON DELETE CASCADE` from iss
 - `gooseVersionTable = "goose_db_version"` (`migration_runner.go`)
 - `baselineVersion = migrations.Baseline` (`migration_runner.go`)
 - `migrationSnapshotRetention = 10` (`/Users/bmf/code/links-issue-tracker/internal/store/migrate_snapshot.go`)
-- `migrationSnapshotLabel = "pre-migrate-schema"` (`migrate_snapshot.go`)
-- `legacyMigrationSnapshotLabel = "pre-migrate"` (`migrate_snapshot.go`) — the label lits minted before the schema version was recorded
+- `migrationSnapshotLabel = "pre-migrate"` (`migrate_snapshot.go`)
 
 Test hooks: `migrationUpByOneForTest` (`migration_runner.go`) applies **only** to `applyPendingMigrations`, never the reconcile lift; `migrationPostSnapshotHookForTest` (`migrate_snapshot.go`) fires inside `runMigration` after the snapshot guard.
 
@@ -757,15 +756,14 @@ Test hooks: `migrationUpByOneForTest` (`migration_runner.go`) applies **only** t
 ### 8.3 `migrate` — the outer boundary
 
 `(*Store).migrate(ctx)` (`migration_runner.go`):
-1. `assessment := s.assessMigration(ctx)`; an error is returned as-is.
-2. `guard := newSnapshotGuard(s.doltRootDir, migrationSnapshotsDir(s.doltRootDir), formatMigrationSnapshotLabel(assessment.state.appliedVersion))` — the snapshot's name records the assessed schema version, which is what the snapshot holds.
-3. `s.runMigration(ctx, guard, assessment)`.
-4. On error: if `guard.took()` → wrap as `&MigrationRollbackError{Snapshot: snap, Cause: err}`; otherwise return the raw error (`migration_runner.go`).
-5. On success: if a snapshot was taken → `dbsnapshot.PruneMatching(guard.snapshotsDir, 10, IsMigrationSnapshotName)`; a prune failure **is** promoted here: `"prune migration snapshots: %w"` (`migration_runner.go`).
+1. `guard := newSnapshotGuard(s.doltRootDir, migrationSnapshotsDir(s.doltRootDir), formatMigrationSnapshotLabel(time.Now()))`.
+2. `s.runMigration(ctx, guard)`.
+3. On error: if `guard.took()` → wrap as `&MigrationRollbackError{Snapshot: snap, Cause: err}`; otherwise return the raw error (`migration_runner.go`).
+4. On success: if a snapshot was taken → `dbsnapshot.PruneMatching(guard.snapshotsDir, 10, IsMigrationSnapshotName)`; a prune failure **is** promoted here: `"prune migration snapshots: %w"` (`migration_runner.go`).
 
 ### 8.4 `runMigration` — the full sequence
 
-`runMigration(ctx, guard, assessment)` (`migration_runner.go`) acts on `migrate`'s one assessment; steps 1–2 and the detection half of step 3 run in `assessMigration`. In exact order:
+`runMigration(ctx, guard)` (`migration_runner.go`), in exact order:
 
 1. `state = classifyMigrationState(ctx)`.
 2. **Ahead-of-registry check**: `state.appliedVersion > state.registryMaxVers` → `return s.refuseIfBaselineMissing(ctx, state)`. **No bookkeeping mutation ever happens on this path** — trimming the goose log would destroy true information (`migration_runner.go`).
@@ -925,7 +923,7 @@ Tests: `TestOpenRepairsVersionSlotReuseContentMismatch` (`migration_runner_test.
 `tableColumns(ctx, table)` (`migration_runner.go`): `SELECT column_name FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ?`, lowercasing each name. An absent table yields an empty set.
 `tableExists(ctx, table)` (`migration_runner.go`): `SELECT 1 FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ? LIMIT 1`; `sql.ErrNoRows` → `false, nil`.
 
-`refuseIfBaselineMissing(ctx, state)` (`migration_runner.go`): `verifyBaselineShape`; refuses when `present == 0 || len(missing) > 0`, returning `&UnsupportedSchemaVersionError{WorkspaceVersion: state.appliedVersion, MaxSupported: state.registryMaxVers, MissingBaseline: missing, SnapshotName, SnapshotLookupErr}` from `rollbackSnapshotName(migrationSnapshotsDir(s.doltRootDir), state.registryMaxVers)`. **Performs no write.**
+`refuseIfBaselineMissing(ctx, state)` (`migration_runner.go`): `verifyBaselineShape`; refuses when `present == 0 || len(missing) > 0`, returning `&UnsupportedSchemaVersionError{WorkspaceVersion: state.appliedVersion, MaxSupported: state.registryMaxVers, MissingBaseline: missing, SnapshotName, SnapshotLookupErr}` from `s.rollbackSnapshotName(ctx, state.registryMaxVers)`. **Performs no write.**
 
 Tests: `TestOpenToleratesAheadOfRegistryWhenBaselineIntact` (`migration_runner_test.go`), `TestOpenToleratesGooseLogWithOnlyAheadRow`, `TestOpenRefusesAheadOfRegistryWhenBaselineCorrupt`, `TestOpenAllowsWorkspaceExactlyAtMax`, `TestOpenToleratesHealthyManagedWorkspace`.
 
@@ -943,7 +941,9 @@ Tests: `TestPreGooseAdoptionStampsWithoutRerunningBaseline` (`migration_runner_t
 
 `recordProducerBinaryVersion(ctx)` (`migration_runner.go`): `version.Get()`; error → `"read version info: %w"`. `info.IsDev` → `(false, nil)` — a **dev build records no row**. Otherwise `s.setMeta(ctx, nil, "producer_binary_version", info.Version)` → `(true, nil)`; error → `"record producer binary version: %w"`. Test `TestProducerBinaryVersionUnstampedForDevBuild` (`migration_runner_test.go`). Nothing in this binary reads the row.
 
-`rollbackSnapshotName(snapshotsDir, maxSupported)` (`migrate_snapshot.go`): `dbsnapshot.List(snapshotsDir)`; a listing error → `"list snapshots: %w"`; otherwise the first entry (the list is newest-first) whose `migrationSnapshotSchemaVersion` is recorded and `<= maxSupported`, else `""`. A legacy migration snapshot records no version and is never returned.
+`rollbackSnapshotName(ctx, maxSupported)` (`migrate_snapshot.go`): `dbsnapshot.List(migrationSnapshotsDir(s.doltRootDir))`; a listing error → `"list snapshots: %w"`. For each entry passing `IsMigrationSnapshotName`, newest first: `snapshotMigrationState`; an error → `"read the schema snapshot %s holds: %w"`; the first whose phase is not `phaseFresh` and whose `appliedVersion <= maxSupported` is returned; none → `""`.
+
+`snapshotMigrationState(ctx, snapshotPath, workspaceID)` (`migrate_snapshot.go`): `openStoreConnection(ctx, snapshotPath, workspaceID, engineRead)` on the snapshot in place, then `classifyMigrationState`; the store is closed and a close error joined. Dolt rewrites the snapshot's journal bookkeeping (`journal.idx`, `manifest`, the journal file) on that open; the data it holds is unchanged.
 
 ### 8.13 Migration error types
 
@@ -960,7 +960,7 @@ Tests: `TestPreGooseAdoptionStampsWithoutRerunningBaseline` (`migration_runner_t
 2. If `len(MissingBaseline) > 0`: `"; the live schema is also missing baseline shape: %s"` (comma-joined).
 3. `")"`.
 4. Always: `"\n\nto operate this workspace, install a lit that supports schema version %d:\n  lit upgrade\n\n(this is the supported path — `lit upgrade` runs even from this too-old binary, installs the latest release, and refuses a release that cannot operate this workspace.)"` (`WorkspaceVersion`).
-5. If `SnapshotLookupErr != nil` → `"\n\ncould not look for a snapshot to roll this workspace back to: %v"`; else if `SnapshotName != ""` → `"\n\nif you are stuck and need to roll back this workspace to match this binary:\n  lit snapshots restore %s\n\nthis is a LOSSY recovery — any data written under the newer binary will be discarded."`; else → `"\n\nno snapshot of this workspace holds schema version %d or below; lossy rollback is not possible from this workspace."` (`MaxSupported`).
+5. If `SnapshotLookupErr != nil` → `"\n\ncould not look for a snapshot to roll this workspace back to: %v"`; else if `SnapshotName != ""` → `"\n\nif you are stuck and need to roll back this workspace to match this binary:\n  lit snapshots restore %s\n\nthis is a LOSSY recovery — any data written under the newer binary will be discarded."`; else → `"\n\nno migration snapshot holds this workspace's data at schema version %d or below; lossy rollback is not possible from this workspace."` (`MaxSupported`).
 Tests: `TestUnsupportedSchemaVersionMessageShape` (`migration_runner_test.go`), `TestRefusalSurfacesRecoveryDataFromWorkspace`, `TestRefusalReportsUnreadableSnapshots`.
 
 ### 8.14 The transient schema lift
@@ -979,22 +979,20 @@ It **commits nothing to Dolt, takes no checkpoint, and takes no snapshot** (`mig
 
 ### 9.1 Snapshot naming and classification
 
-Snapshot names follow dbsnapshot's `<unix-ns>[-<label>]` scheme; the system stamps the label as `"<label>-<digits>"` — a Unix-ns timestamp for downgrade and reconcile snapshots, the schema version the snapshot holds for migration snapshots (`migrate_snapshot.go`).
+Snapshot names follow dbsnapshot's `<unix-ns>[-<label>]` scheme; the system stamps the label as `"<label>-<unix-ns>"` (`migrate_snapshot.go`).
 
-`isStampedSnapshotName(name, label)` (`migrate_snapshot.go`) reports whether `stampedSnapshotSuffix(name, label)` finds the shared shape:
+`isStampedSnapshotName(name, label)` (`migrate_snapshot.go`) — the shared shape rule:
 1. Find the first `'-'`; absent → false.
 2. `head` (before it) must be all digits.
 3. `rest` must have prefix `label + "-"`.
 4. The remainder after that prefix must be all digits.
-So the full shape is `<unix-ns>-<label>-<digits>`; `stampedSnapshotSuffix` returns the digits.
+So the full shape is `<unix-ns>-<label>-<unix-ns>`.
 
 `isAllDigits(s)` (`migrate_snapshot.go`): non-empty and every rune in `'0'..'9'`.
 
-Three disjoint classifiers share it: `IsMigrationSnapshotName` (label `"pre-migrate-schema"`, or the legacy `"pre-migrate"`, `migrate_snapshot.go`), `IsDowngradeSnapshotName`, and `IsReconcileSnapshotName` (label `"pre-reconcile"`, `sync_reconcile.go`). Because the labels differ, the three retention budgets never collect each other's snapshots (`migrate_snapshot.go`).
+Three disjoint classifiers share it: `IsMigrationSnapshotName` (label `"pre-migrate"`, `migrate_snapshot.go`), `IsDowngradeSnapshotName`, and `IsReconcileSnapshotName` (label `"pre-reconcile"`, `sync_reconcile.go`). Because the labels differ, the three retention budgets never collect each other's snapshots (`migrate_snapshot.go`).
 
-`migrationSnapshotSchemaVersion(name)` (`migrate_snapshot.go`): the `stampedSnapshotSuffix` under `"pre-migrate-schema"` parsed as an `int64`; `ok` is false for every other name, including a legacy migration snapshot.
-
-Tests: `TestIsMigrationSnapshotNameRejectsUserCollisions` (`migrate_snapshot_test.go`), `TestMigrationPruneSparesUserSnapshots` (`migrate_snapshot_test.go`), `TestRollbackSnapshotIsOneTheOlderLitOpens` (`migrate_snapshot_test.go`), `TestRollbackSnapshotNoneWhenEverySnapshotIsAheadOrUnrecorded` (`migrate_snapshot_test.go`), `TestIsReconcileSnapshotNameDisjoint` (`sync_reconcile_schema_skew_test.go`).
+Tests: `TestIsMigrationSnapshotNameRejectsUserCollisions` (`migrate_snapshot_test.go`), `TestMigrationPruneSparesUserSnapshots` (`migrate_snapshot_test.go`), `TestRollbackSnapshotIsOneTheOlderLitOpens` (`migrate_snapshot_test.go`), `TestIsReconcileSnapshotNameDisjoint` (`sync_reconcile_schema_skew_test.go`).
 
 ### 9.2 `snapshotGuard`
 
@@ -1010,7 +1008,7 @@ Helpers must not call `dbsnapshot.Take` directly (`migrate_snapshot.go`).
 
 `migrationSnapshotsDir(databaseDir)` (`migrate_snapshot.go`) = `filepath.Join(filepath.Dir(filepath.Clean(databaseDir)), "snapshots")` — a **sibling** of the dolt directory, matching the commit-lock's sibling convention.
 
-`formatMigrationSnapshotLabel(schemaVersion)` (`migrate_snapshot.go`) = `fmt.Sprintf("pre-migrate-schema-%d", schemaVersion)`.
+`formatMigrationSnapshotLabel(t)` (`migrate_snapshot.go`) = `fmt.Sprintf("pre-migrate-%d", t.UTC().UnixNano())`.
 
 ### 9.4 `MigrationRollbackError`
 

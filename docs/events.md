@@ -83,7 +83,7 @@ lines here for reading:
 | `sink_rotation` | What happened to the file's size cap before this line was appended: `none`, `rotated` (this is the first line of a new file), or `failed` (the file keeps growing past its cap). |
 | `sink_rotation_error` | Present only when `sink_rotation` is `failed`: why. |
 | `counts` | The command's counts. A count of zero is written as `0`, so "ran and found none" is distinguishable from a command that does not count that thing. |
-| `facts` | What the command decided, under keys prefixed with the command's name, or with `statusline.` for what it wrote to the statusline file. |
+| `facts` | What the command decided, under keys prefixed with the command's name, with `statusline.` for what it wrote to the statusline file, or with `schema_ahead.` for a refusal because the workspace's schema is ahead of this lit. |
 
 A command that records no counts or facts writes `{}` for each.
 
@@ -146,6 +146,17 @@ not work on this checkout's tickets, such as `lit sync push`, `lit init` or
 | `statusline.replaced` | Why the file already on disk could not be read and was rewritten from this command's facts alone, or `null`. |
 | `statusline.error` | Why the write failed, or `null`. The command's own result is unchanged; the other keys say what the write had done before it failed. |
 | `counts.statusline.bytes` | The size of the file written; `0` when nothing was written. |
+
+## What a schema-ahead refusal records
+
+A command refused because the workspace's schema is ahead of this lit (reason
+`workspace_schema_ahead`) records which snapshot the refusal offered as a lossy
+rollback. Both keys are present exactly when the command ended in that refusal.
+
+| Key | Meaning |
+| --- | --- |
+| `schema_ahead.rollback_snapshot` | The migration snapshot the refusal offered to `lit snapshots restore`, or `""` when no migration snapshot holds the workspace's data at a schema this lit supports. |
+| `schema_ahead.rollback_lookup_error` | Why the snapshots could not be read, or `null`. When it is set, `schema_ahead.rollback_snapshot` is `""`. |
 
 ## Reading the file
 
