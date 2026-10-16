@@ -48,8 +48,9 @@ type LatestResolver interface {
 // and publishes release-manifest.json under <base>/<tag>/release-manifest.json,
 // so the consumer fetches the manifest from the same base.
 //
-// [LAW:one-source-of-truth] Same value as scripts/install.sh's
-// REPO_DOWNLOAD_BASE. If the repo moves, both move together.
+// [LAW:one-source-of-truth] exception: scripts/install.sh's
+// REPO_DOWNLOAD_BASE is a copy. TestInstallFetchesTheReleaseURLsLitUpgradeFetches
+// fails when the two request different URLs.
 const DefaultBaseURL = "https://github.com/promptctl/links-issue-tracker/releases/download"
 
 // DefaultLatestReleaseURL is the release-feed endpoint that names the latest
@@ -57,8 +58,9 @@ const DefaultBaseURL = "https://github.com/promptctl/links-issue-tracker/release
 // non-prerelease, non-draft release; its `tag_name` field is the tag lit
 // installs when the user names none.
 //
-// [LAW:one-source-of-truth] Same value as scripts/install.sh's
-// REPO_LATEST_API. If the repo moves, both move together.
+// [LAW:one-source-of-truth] exception: scripts/install.sh's
+// REPO_LATEST_API is a copy. TestInstallFetchesTheReleaseURLsLitUpgradeFetches
+// fails when the two request different URLs.
 const DefaultLatestReleaseURL = "https://api.github.com/repos/promptctl/links-issue-tracker/releases/latest"
 
 // HTTPResolver is the default Resolver and LatestResolver. It HTTP-GETs the

@@ -26,6 +26,11 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+# [LAW:one-source-of-truth] exception: release.DefaultBaseURL and
+# release.DefaultLatestReleaseURL, copied because release-download mode runs
+# piped from curl with no checkout to read them from.
+# TestInstallFetchesTheReleaseURLsLitUpgradeFetches fails when lit upgrade and
+# this script request different URLs.
 REPO_DOWNLOAD_BASE="https://github.com/promptctl/links-issue-tracker/releases/download"
 REPO_LATEST_API="https://api.github.com/repos/promptctl/links-issue-tracker/releases/latest"
 
