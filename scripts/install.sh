@@ -320,7 +320,7 @@ case "$mode" in
         # pattern, copied because this mode runs piped from curl with no
         # checkout to source it from. TestReleaseModeAcceptsExactlyTheReleaseTags
         # holds the copy to the same accept-set.
-        if [[ ! "$release_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        if [[ ! "$release_tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
             echo "error: release tag '$release_tag' is not a canonical semver release tag (expected vX.Y.Z)" >&2
             echo "       --from-release accepts only tags published by the release pipeline" >&2
             exit 1

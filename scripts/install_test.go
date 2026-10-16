@@ -15,7 +15,9 @@ import (
 	"syscall"
 	"testing"
 
+	litrelease "github.com/promptctl/links-issue-tracker/internal/release"
 	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
+	"golang.org/x/mod/semver"
 )
 
 const (
@@ -296,6 +298,102 @@ func TestInstallComparesTheTreeSchemaWithTheNewestRelease(t *testing.T) {
 	}
 }
 
+// releaseTagSamples is the input every consumer of release-tags.sh's pattern is
+// held to it over: each piece of vX.Y.Z broken once (prefix, a missing or extra
+// part, a non-digit, an empty part, a leading zero in each part, a suffix),
+// beside accepted shapes including the unprefixed form a user types and the
+// zero and multi-digit parts a leading-zero rule must still admit.
+var releaseTagSamples = []string{
+	"v0.18.0", "0.18.0", "v10.0.12", "v0.0.0",
+	"v01.2.3", "v1.02.3", "v1.2.03", "v00.1.0",
+	"v0.2.0.1", "v0.2", "V0.2.0", "v0.2.0-rc1", "v0.2.0+build", "v0.2.0^{}",
+	"vx.y.z", "v0..2", "v0.2.0a", "v0.2.0/../x",
+}
+
+// releaseTagsSelects reports whether release-tags.sh's newest_release_tag
+// selects tag, in the v-prefixed form every copy is handed after normalizing.
+func releaseTagsSelects(t *testing.T, tag string) bool {
+	t.Helper()
+	selection := exec.Command("bash", "-c", `. ./release-tags.sh && printf '%s\n' "$1" | newest_release_tag`, "_", "v"+strings.TrimPrefix(tag, "v"))
+	selected, err := selection.Output()
+	if err != nil {
+		t.Fatalf("newest_release_tag(%q): %v", tag, err)
+	}
+	return len(selected) > 0
+}
+
+// TestReleaseTagParsesExactlyTheReleaseTags holds release.ParseTag — the gate
+// behind lit upgrade --to and lit downgrade --to — to release-tags.sh, and
+// holds every tag it accepts to valid semver: lit upgrade decides "already
+// current" by semver order, under which an invalid tag sorts below every
+// release.
+func TestReleaseTagParsesExactlyTheReleaseTags(t *testing.T) {
+	t.Parallel()
+	for _, tag := range releaseTagSamples {
+		parsed, err := litrelease.ParseTag("v" + strings.TrimPrefix(tag, "v"))
+		if parses, selects := err == nil, releaseTagsSelects(t, tag); parses != selects {
+			t.Errorf("tag %q: release.ParseTag accepts = %v, newest_release_tag accepts = %v", tag, parses, selects)
+		}
+		if err == nil && !semver.IsValid(parsed.String()) {
+			t.Errorf("tag %q: release.ParseTag accepts %q, which semver cannot order", tag, parsed)
+		}
+	}
+}
+
+// TestReleaseKindCutsExactlyTheReleaseTags holds release-kind.sh — which
+// decides the version release-validate.yml cuts a tag for — to release-tags.sh:
+// a newest CHANGELOG heading is a pending release exactly when v<version> is a
+// release tag, and is refused as malformed otherwise, so the pipeline never
+// cuts a tag every consumer would refuse.
+func TestReleaseKindCutsExactlyTheReleaseTags(t *testing.T) {
+	t.Parallel()
+	for _, tag := range releaseTagSamples {
+		version := strings.TrimPrefix(tag, "v")
+		pending := releaseKindCuts(t, "## ["+version+"] - 2026-10-16", version)
+		if selects := releaseTagsSelects(t, tag); pending != selects {
+			t.Errorf("heading [%s]: release-kind.sh cuts it = %v, newest_release_tag accepts v%s = %v", version, pending, version, selects)
+		}
+	}
+	// The heading around the version is held too: a date is optional, and
+	// anything else after the bracket is malformed.
+	for heading, want := range map[string]bool{"## [0.5.0]": true, "## [0.5.0]junk": false, "## [0.5.0] 2026-10-16": false} {
+		if got := releaseKindCuts(t, heading, "0.5.0"); got != want {
+			t.Errorf("heading %q: release-kind.sh cuts it = %v; want %v", heading, got, want)
+		}
+	}
+}
+
+// releaseKindCuts runs release-kind.sh on a CHANGELOG whose newest release
+// heading is heading, against an origin with no tags, and reports whether it
+// calls version a pending release; it fails the test unless the verdict is
+// that or a malformed-heading refusal.
+func releaseKindCuts(t *testing.T, heading, version string) bool {
+	t.Helper()
+	root := t.TempDir()
+	origin := filepath.Join(root, "origin.git")
+	checkout := filepath.Join(root, "checkout")
+	for _, args := range [][]string{{"init", "-q", "--bare", origin}, {"init", "-q", checkout}, {"-C", checkout, "remote", "add", "origin", origin}} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(checkout, "scripts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"release-kind.sh", "release-tags.sh"} {
+		writeFile(t, filepath.Join(checkout, "scripts", name), readFile(t, name), 0o755)
+	}
+	writeFile(t, filepath.Join(checkout, "CHANGELOG.md"), "# Changelog\n\n## [Unreleased]\n\n"+heading+"\n", 0o644)
+	kind := exec.Command("bash", "scripts/release-kind.sh")
+	kind.Dir = checkout
+	out, err := kind.CombinedOutput()
+	pending := err == nil && string(out) == "pending "+version+"\n"
+	if malformed := err != nil && strings.Contains(string(out), "release heading is malformed"); !pending && !malformed {
+		t.Fatalf("release-kind.sh on %q neither reported %s pending nor refused the heading as malformed (err %v):\n%s", heading, version, err, out)
+	}
+	return pending
+}
+
 // TestReleaseModeAcceptsExactlyTheReleaseTags holds install.sh's release-mode
 // copy of the release-tag pattern to release-tags.sh: --from-release accepts a
 // tag exactly when newest_release_tag selects it. A stub curl ends every
@@ -308,7 +406,7 @@ func TestReleaseModeAcceptsExactlyTheReleaseTags(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeFile(t, filepath.Join(stubBin, "curl"), "#!/bin/sh\necho 'stub curl' >&2\nexit 22\n", 0o755)
-	for _, tag := range []string{"v0.18.0", "0.18.0", "v10.0.12", "v0.2.0.1", "v0.2", "v0.2.0-rc1", "v0.2.0^{}", "vx.y.z", "v0.2.0/../x"} {
+	for _, tag := range releaseTagSamples {
 		install := exec.Command("bash", "install.sh", "--from-release", tag)
 		install.Env = []string{"PATH=" + stubBin + ":/usr/bin:/bin", "HOME=" + root, "GOBIN=" + filepath.Join(root, "bin")}
 		out, _ := install.CombinedOutput()
@@ -322,12 +420,7 @@ func TestReleaseModeAcceptsExactlyTheReleaseTags(t *testing.T) {
 			t.Fatalf("install.sh --from-release %q neither refused the tag nor began a download:\n%s", tag, out)
 		}
 
-		selection := exec.Command("bash", "-c", `. ./release-tags.sh && printf '%s\n' "$1" | newest_release_tag`, "_", "v"+strings.TrimPrefix(tag, "v"))
-		selected, err := selection.Output()
-		if err != nil {
-			t.Fatalf("newest_release_tag(%q): %v", tag, err)
-		}
-		if selectionAccepts := len(selected) > 0; installAccepts != selectionAccepts {
+		if selectionAccepts := releaseTagsSelects(t, tag); installAccepts != selectionAccepts {
 			t.Errorf("tag %q: install.sh --from-release accepts = %v, newest_release_tag accepts = %v\ninstall.sh output:\n%s", tag, installAccepts, selectionAccepts, out)
 		}
 	}

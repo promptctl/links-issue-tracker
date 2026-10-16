@@ -5,17 +5,19 @@
 #     source scripts/release-tags.sh
 #     newest="$(git tag --list | newest_release_tag)"
 #
-# A release tag is exactly `vX.Y.Z`, the shape release-validate.yml cuts. origin
-# also carries `v0.2.0.1`-shaped tags; those are not releases, and matching the
-# shape exactly is what drops them. [LAW:one-source-of-truth] changelog-frozen.sh,
-# next-version.sh, and install.sh's source mode all select through this file.
+# A release tag is exactly `vX.Y.Z` with each part a semver numeric identifier
+# (no leading zero), the shape release-validate.yml cuts — so every release tag
+# orders by semver. origin also carries `v0.2.0.1`-shaped tags; those are not
+# releases, and matching the shape exactly is what drops them.
+# [LAW:one-source-of-truth] changelog-frozen.sh, next-version.sh, release-kind.sh,
+# and install.sh's source mode all select through this file.
 
 if [ "${BASH_SOURCE[0]:-}" = "${0}" ]; then
     echo "release-tags.sh is meant to be sourced: 'source scripts/release-tags.sh'" >&2
     exit 64
 fi
 
-RELEASE_TAG_ERE='^v[0-9]+\.[0-9]+\.[0-9]+$'
+RELEASE_TAG_ERE='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
 
 # newest_release_tag reads tag names on stdin, one per line, and prints the
 # newest release tag by version order, or nothing when none is a release. grep's

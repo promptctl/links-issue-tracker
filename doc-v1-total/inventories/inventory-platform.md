@@ -569,12 +569,12 @@ manifests (`internal/release/manifest.go`). `Signature` is reserved and unverifi
 - `DefaultBaseURL = "https://github.com/promptctl/links-issue-tracker/releases/download"`
 .
 - URL fetched: `<base>/<tag>/release-manifest.json` (trailing `/` trimmed from base).
-- Tag validation, in `acceptTag`, applied by `Resolve` before any fetch
-:
-  - must start with `v` ⇒ else `release: tag must be v-prefixed (got %q)`;
-  - must match `^v[A-Za-z0-9._+-]+$` (`tagAcceptPattern`) ⇒ else
-    `release: tag %q must match %s (v-prefix + alphanumerics, dots, dashes, underscores, plus)`;
-  - must not contain `..` ⇒ else `release: tag %q contains path-traversal sequence`.
+- `Resolve` takes a `Tag` (`internal/release/tag.go`), a struct with one unexported field that only
+  `ParseTag` fills: it must match `^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$` (`tagPattern`, a copy of
+  `scripts/release-tags.sh`'s `RELEASE_TAG_ERE`) ⇒ else
+  `%q is not a release tag (a release tag is vX.Y.Z with no leading zeros, e.g. v0.4.1)`.
+- `LatestTag` parses the feed's `tag_name` through `ParseTag`; a refusal ⇒
+  `release: latest release feed at %s: %w`.
 - Default HTTP client timeout `defaultResolverTimeout = 60 * time.Second` when `Client` is nil
 .
 - Non-200 ⇒ `release: fetch %s: HTTP %d: %s` with the first 256 body bytes.
@@ -628,13 +628,13 @@ manifests (`internal/release/manifest.go`). `Signature` is reserved and unverifi
 
 ### 7.5 `lit downgrade` (`internal/cli/downgrade.go`)
 
-- One flag: `--to` (`downgrade: Target binary version (v-prefixed git tag, e.g. v0.4.1)`,
+- One flag: `--to` (`downgrade: Target binary version (release tag vX.Y.Z, e.g. v0.4.1)`,
   `internal/cli/downgrade.go`). Any positional arg ⇒ `usage: lit downgrade --to <version>`
 .
 - `normalizeReleaseTag`: blank ⇒
   `ValidationError{"<verb>: --to requires a non-empty version"}`; a missing leading `v` is added;
-  a value containing `/`, `\`, `..`, or whitespace ⇒
-  `ValidationError{"<verb>: --to %q is not a valid release tag"}`.
+  the result is parsed by `release.ParseTag`; a refusal ⇒
+  `ValidationError{"<verb>: --to \"<as given>\": <ParseTag error>"}`, before any request.
 - Pipeline: require the store to expose `storage.SchemaMigration`;
   resolve `Target` via `release.HTTPResolver{}` at `release.CurrentPlatform()`;
   `store.Downgrade(ctx, target.Manifest.Schema.Max)`; resolve the running binary via
@@ -678,7 +678,7 @@ Three modes, one target-resolution rule (`scripts/install.sh`):
   - Requires `curl`; `--latest-release` additionally requires `jq` and reads
     `.tag_name` from the GitHub API.
   - Tag normalization: strip then re-add a leading `v`, then require
-    `^v[0-9]+\.[0-9]+\.[0-9]+$` else
+    `^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$` else
     `error: release tag '<tag>' is not a canonical semver release tag (expected vX.Y.Z)`.
   - Archive name `lit_${tag#v}_${os}_${arch}.${ext}`; arch map
     `x86_64|amd64→amd64`, `arm64|aarch64→arm64`, else
@@ -1000,8 +1000,9 @@ setup-go@v5 (`cache: true`) → `go mod download` → `go run ./tools/licenses -
 3. `go mod download`.
 4. **`Resolve build kind`** (`id: kind`): requires `CHANGELOG.md` to exist
    (`::error::CHANGELOG.md not found at repo root…`, exit 1); takes the first `## [` heading that
-   is not `## [Unreleased]`; none ⇒ `release=false`; a heading not matching
-   `^## \[[0-9]+\.[0-9]+\.[0-9]+\]( - .*)?$` ⇒ `::error::newest CHANGELOG release heading is malformed`
+   is not `## [Unreleased]`; none ⇒ `release=false`; a heading not shaped
+   `## [<version>]` or `## [<version>] - …` with `v<version>` matching `release-tags.sh`'s
+   `RELEASE_TAG_ERE` ⇒ `::error::newest CHANGELOG release heading is malformed`
    and exit 1; otherwise `git ls-remote --exit-code --tags origin refs/tags/v$VER` with a
    three-way branch on the exit code — `0` ⇒ `release=false`, `2` ⇒ `release=true` +
    `version=$VER`, anything else ⇒ `::error::git ls-remote failed (exit $r)…` and exit 1.

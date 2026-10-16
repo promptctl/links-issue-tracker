@@ -44,7 +44,7 @@ import (
 type UpgradeTargetBehindError struct {
 	Current int64
 	Target  int64
-	Tag     string
+	Tag     release.Tag
 	// Running is the running binary's schema support (version.Info.Schema):
 	// the migrations it carries, and so the only ones it can reverse.
 	Running version.SchemaSupport
@@ -239,7 +239,7 @@ func upgradeLeafWith(
 	binPathFn func() (string, error),
 ) upgradeLeafShape {
 	fs := newCobraFlagSet("upgrade")
-	to := fs.String("to", "", "Target binary version (v-prefixed git tag, e.g. v0.9.0); omit to upgrade to the latest release")
+	to := fs.String("to", "", "Target binary version (release tag vX.Y.Z, e.g. v0.9.0); omit to upgrade to the latest release")
 	const usageLine = "usage: lit upgrade [--to <version>]"
 	return upgradeLeafShape{fs: fs, usage: usageLine, positionals: 0, work: func(ctx context.Context, stdout io.Writer, scope upgradeScope, _ []string) error {
 		// [LAW:parse-dont-validate] --to's default value is the latest published
@@ -250,7 +250,7 @@ func upgradeLeafWith(
 		// an unrequested "latest". pinned also decides whether already-current is
 		// a no-op or a reinstall.
 		pinned := fs.Changed("to")
-		var tag string
+		var tag release.Tag
 		var err error
 		if pinned {
 			tag, err = normalizeReleaseTag(*to, "upgrade")
@@ -264,7 +264,7 @@ func upgradeLeafWith(
 		// installs, keeps the binary past, or refuses — and the schema versions
 		// the refusal and its remedy are decided from, each set as soon as it is
 		// known so an exit before the decision still carries them.
-		telemetry.Set(ctx, "upgrade.tag", tag)
+		telemetry.Set(ctx, "upgrade.tag", tag.String())
 
 		platform := release.CurrentPlatform()
 		target, err := resolver.Resolve(ctx, tag, platform)
@@ -303,16 +303,12 @@ func upgradeLeafWith(
 		// default path's doing. A pinned --to falls through and installs — the
 		// explicit tag is a command, and the reinstall path for a damaged binary.
 		// A dev build always proceeds: IsDev is the typed fact, so the guarantee
-		// does not rest on version-string comparisons. The tag must be orderable
-		// (strict semver) for the no-op to fire at all: acceptTag deliberately
-		// admits looser v-tags, and semver.Compare sorts any invalid operand
-		// below every valid one, so without IsValid an unorderable feed tag would
-		// read as "behind" and a real release would be kept-past silently —
-		// unorderable installs as asked, failing toward action. This check runs
+		// does not rest on version-string comparisons. A release.Tag is always
+		// vX.Y.Z, so it orders against the running version. This check runs
 		// AFTER the backward-move refusal: a workspace ahead of even the latest
 		// release must be refused loudly (naming both schema ranges), never
 		// soothed with "already current".
-		alreadyCurrent := !pinned && !scope.current.IsDev && semver.IsValid(tag) && semver.Compare("v"+scope.current.Version, tag) >= 0
+		alreadyCurrent := !pinned && !scope.current.IsDev && semver.Compare("v"+scope.current.Version, tag.String()) >= 0
 		// [LAW:nothing-unseen] keeping the binary and installing one both exit 0.
 		telemetry.Set(ctx, "upgrade.already_current", alreadyCurrent)
 		if alreadyCurrent {

@@ -976,7 +976,7 @@ lit upgrade [--to <vX.Y.Z>]
 Atomically installs a `lit` binary, checksum-verified against the release manifest.
 Bare `lit upgrade` resolves its own target — the latest published release — so every
 upgrade suggestion lit prints runs exactly as printed; `--to` pins any specific
-schema-compatible v-prefixed git tag instead, not necessarily a newer one (at the
+schema-compatible release tag (`vX.Y.Z`) instead, not necessarily a newer one (at the
 running version it doubles as a reinstall of a damaged binary). A bare invocation
 already at or ahead of the latest release is a no-op that names the version it kept —
 the feed names the most recently created release, so a backport tag can be "latest"
@@ -993,7 +993,7 @@ lit downgrade --to <vX.Y.Z>
 ```
 
 Reverses schema migrations and atomically installs the prior `lit` binary for the given
-v-prefixed git tag — the rollback path for a bad upgrade. Unlike `lit upgrade`, the
+release tag (`vX.Y.Z`) — the rollback path for a bad upgrade. Unlike `lit upgrade`, the
 target is always explicit: a backward move stays deliberate, so there is no "latest"
 to resolve.
 
