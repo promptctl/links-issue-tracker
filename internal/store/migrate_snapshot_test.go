@@ -607,7 +607,7 @@ func rollbackHistory(t *testing.T, ctx context.Context, doltRoot string) []dbsna
 	withStore(t, ctx, doltRoot, func(*Store) {}) // fresh: migrates from an empty workspace
 	for _, from := range []int64{3, 5} {
 		withStore(t, ctx, doltRoot, func(st *Store) {
-			if err := st.Downgrade(ctx, from); err != nil {
+			if _, err := st.Downgrade(ctx, from); err != nil {
 				t.Fatalf("Downgrade(%d) error = %v", from, err)
 			}
 		})
@@ -703,7 +703,7 @@ func TestRollbackSnapshotPassesOverAnUnreadableSnapshot(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 	withStore(t, ctx, doltRoot, func(st *Store) {
-		if err := st.Downgrade(ctx, 3); err != nil {
+		if _, err := st.Downgrade(ctx, 3); err != nil {
 			t.Fatalf("Downgrade(3) error = %v", err)
 		}
 	})

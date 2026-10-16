@@ -47,7 +47,7 @@ func TestLiftWorkingSetToRegistryRecoversDowngradedSchema(t *testing.T) {
 
 	// Drop below the resolution migration (00003). baselineVersion+1 = v2, which
 	// predates resolution.
-	if err := st.Downgrade(ctx, baselineVersion+1); err != nil {
+	if _, err := st.Downgrade(ctx, baselineVersion+1); err != nil {
 		t.Fatalf("Downgrade to v%d: %v", baselineVersion+1, err)
 	}
 
@@ -401,7 +401,7 @@ func seedOldSchemaRemote(t *testing.T, ctx context.Context, root, remoteURL stri
 	if err != nil {
 		t.Fatalf("CreateIssue(seed): %v", err)
 	}
-	if err := st.Downgrade(ctx, baselineVersion+1); err != nil {
+	if _, err := st.Downgrade(ctx, baselineVersion+1); err != nil {
 		t.Fatalf("Downgrade(seed) to v%d: %v", baselineVersion+1, err)
 	}
 	if err := st.Close(); err != nil {
@@ -431,7 +431,7 @@ func advanceOldSchemaRemote(t *testing.T, ctx context.Context, root, id string, 
 	if err != nil {
 		t.Fatalf("Open(advance %s): %v", root, err)
 	}
-	if err := st.Downgrade(ctx, baselineVersion+1); err != nil {
+	if _, err := st.Downgrade(ctx, baselineVersion+1); err != nil {
 		t.Fatalf("Downgrade(advance) to v%d: %v", baselineVersion+1, err)
 	}
 	if err := st.Close(); err != nil {

@@ -639,6 +639,7 @@ func TestRunUpgradeOnAnOpenableWorkspacePastRunningSupportNamesNoDowngrade(t *te
 		t.Error("installer must not run when the target is behind the workspace")
 	}
 	want := map[string]any{
+		"upgrade.tag":                "v0.9.0",
 		"upgrade.workspace_schema":   float64(ahead),
 		"upgrade.target_schema_max":  float64(3),
 		"upgrade.running_schema_min": float64(current.Schema.Min),
@@ -682,6 +683,38 @@ func TestRunUpgradeRecordsWhetherItWasAlreadyCurrent(t *testing.T) {
 	}
 }
 
+// An unpinned upgrade resolves the latest release itself, so the event records
+// which release that was — the one it installed, and where it installed it,
+// or the one it kept the binary past.
+func TestRunUpgradeRecordsTheReleaseItResolvedAndWhereItInstalled(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name          string
+		current       version.Info
+		wantInstalled any
+	}{
+		{"installs the latest release", olderCurrentInfo(), "/p/lit"},
+		{"keeps a binary already on it", version.Info{Version: "0.4.1", Schema: version.SchemaSupport{Min: 1, Max: 3}}, nil},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			res := &stubResolver{latestTag: "v0.4.1", target: newFakeTarget()}
+			facts, err := runUpgradeRecorded(t, &stubSchemaReader{version: 2}, []string{}, tc.current, res, &stubInstaller{})
+			if err != nil {
+				t.Fatalf("bare upgrade: %v", err)
+			}
+			if got := facts["upgrade.tag"]; got != "v0.4.1" {
+				t.Errorf("upgrade.tag = %v; want v0.4.1", got)
+			}
+			if got := facts["upgrade.installed_path"]; got != tc.wantInstalled {
+				t.Errorf("upgrade.installed_path = %v; want %v", got, tc.wantInstalled)
+			}
+		})
+	}
+}
+
 // A workspace read that fails still leaves the event the schema versions known
 // before it: the target's and this binary's, and no workspace version.
 func TestRunUpgradeSchemaReadErrorKeepsTheVersionsKnownBeforeIt(t *testing.T) {
@@ -693,6 +726,7 @@ func TestRunUpgradeSchemaReadErrorKeepsTheVersionsKnownBeforeIt(t *testing.T) {
 		t.Fatal("a failed workspace read must fail the upgrade")
 	}
 	want := map[string]any{
+		"upgrade.tag":                "v0.9.0",
 		"upgrade.target_schema_max":  float64(3),
 		"upgrade.running_schema_min": float64(1),
 		"upgrade.running_schema_max": float64(2),

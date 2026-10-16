@@ -233,6 +233,16 @@ func Count(ctx context.Context, key string, n int) {
 	r.ev.Counts[key] = n
 }
 
+// Record records facts and counts a value declared about itself, such as a
+// result's EventRecord, as if each were Set or Counted.
+func Record(ctx context.Context, facts map[string]any, counts map[string]int) {
+	r := from(ctx)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	maps.Copy(r.ev.Facts, facts)
+	maps.Copy(r.ev.Counts, counts)
+}
+
 // newTraceID is a W3C Trace Context trace id: 16 random bytes in lowercase hex.
 func newTraceID() string {
 	var id [16]byte

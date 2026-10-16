@@ -4802,10 +4802,12 @@ Test hook: `var migrationDownForTest func(ctx context.Context, provider *goose.P
 |---|---|---|---|
 | `downgradeMigrationFailedError` (unexported) | `Version int64`, `Cause error` | `"down-migrate v%d: %v"` (Version, Cause); `Unwrap() → Cause` | `downgrade.go` |
 | `DowngradeTargetAheadError` | `Current int64`, `Target int64` | `"cannot downgrade to v%d: workspace is already at v%d — that is a forward move; use ` + "`lit upgrade`" + ` instead"` (Target, Current) | `downgrade.go` |
-| `DowngradeBelowBaselineError` | `Target int64` | `"cannot downgrade to v%d: baseline is v%d — going below it would destroy the workspace; restore a pre-upgrade snapshot via ` + "`lit snapshots restore <name>`" + ` instead"` (Target, `baselineVersion`) | `downgrade.go` |
+| `DowngradeBelowBaselineError` | `Current int64`, `Target int64` | `"cannot downgrade to v%d: baseline is v%d — going below it would destroy the workspace; restore a pre-upgrade snapshot via ` + "`lit snapshots restore <name>`" + ` instead"` (Target, `baselineVersion`) | `downgrade.go` |
 | `DowngradeSpanUnsupportedError` | `Current int64`, `Target int64`, `Support version.SchemaSupport` | `"cannot downgrade to v%d: this workspace is at schema v%d and this lit's schema support (v%d–v%d) does not cover v%d–v%d, so it does not carry the down-migrations that reverse it — upgrade to a release whose schema support reaches v%d (` + "`lit upgrade`" + `), then run this downgrade again from it"` (Target, Current, Support.Min, Support.Max, Target, Current, Current) | `downgrade.go` |
-| `DowngradeRollbackError` | `Snapshot dbsnapshot.Snapshot`, `Cause error` | `"downgrade: %v\n\nthe workspace state before this downgrade is preserved at:\n  %s\n\nto restore, run:\n  lit snapshots restore %s"` (Cause, Snapshot.Path, Snapshot.Name); `Unwrap() → Cause` | `downgrade.go` |
+| `DowngradeRollbackError` | `From int64`, `Reversed int`, `Snapshot dbsnapshot.Snapshot`, `Cause error` | `"downgrade: %v\n\nthe workspace state before this downgrade is preserved at:\n  %s\n\nto restore, run:\n  lit snapshots restore %s"` (Cause, Snapshot.Path, Snapshot.Name); `Unwrap() → Cause` | `downgrade.go` |
 | `DowngradeIncompleteError` | `Current int64`, `Target int64` | `"downgrade incomplete: goose has no more reversible migrations but recorded version v%d still above target v%d"` (Current, Target) | `downgrade.go` |
+
+`DowngradeTargetAheadError`, `DowngradeBelowBaselineError`, `DowngradeSpanUnsupportedError`, and `DowngradeRollbackError` are `model.RecordedError`s: each `EventRecord` is `storage.Downgraded{From, Reversed, Snapshot}.EventRecord()` built from its own fields — the refusals with `From: Current` and nothing reversed, the rollback with `From`, `Reversed`, and `Snapshot.Name` (`downgrade.go`).
 
 Additional inline error strings:
 - Phase guard: `"downgrade: workspace is not goose-managed (no goose_db_version table); run Open first to adopt or initialize"` (`downgrade.go`).
@@ -4820,29 +4822,33 @@ Additional inline error strings:
 
 `Downgrade` wraps the entire pipeline in `s.withCommitLock(ctx...)` (`downgrade.go`; lock impl `internal/store/commit_lock.go`). Documented: "classify, snapshot, and the Down loop are serialized against every other writer just like migrate()'s mutations are. Acquisition is reentrant: the per-step commitWorkingSet calls inside applyDownMigrations short-circuit because the lock is already held" (`downgrade.go`). No workspace lock is taken here.
 
-### 4.6 `downgradeLocked(ctx, targetSchemaVersion int64) error` — `downgrade.go`
+### 4.6 `downgradeLocked(ctx, targetSchemaVersion int64) (storage.Downgraded, error)` — `downgrade.go`
+
+`Downgrade` returns what this reports: `storage.Downgraded{From, Reversed, Snapshot}` (`internal/storage/capabilities.go`), whose `EventRecord()` is facts `downgrade.workspace_schema` (From) and `downgrade.snapshot`, and count `downgrade.reversed`. Every error return carries a zero `Downgraded`.
 
 Ordered:
 1. `state, err := s.classifyMigrationState(ctx)` (impl `internal/store/migration_runner.go`); error propagated unwrapped (`downgrade.go`).
 2. **Refusal**: `state.phase != phaseManaged` → the plain "not goose-managed" error, **no snapshot taken** (`downgrade.go`).
-3. **No-op**: `targetSchemaVersion == state.appliedVersion` → `return nil`, no snapshot (`downgrade.go`).
+3. **No-op**: `targetSchemaVersion == state.appliedVersion` → `storage.Downgraded{From: appliedVersion}`, no snapshot (`downgrade.go`).
 4. **Refusal**: `targetSchemaVersion > state.appliedVersion` → `&DowngradeTargetAheadError{Current: state.appliedVersion, Target: targetSchemaVersion}` (`downgrade.go`).
-5. **Refusal**: `targetSchemaVersion < baselineVersion` → `&DowngradeBelowBaselineError{Target: targetSchemaVersion}` — refused **before invoking goose**, so the destructive baseline Down is unreachable from this entry point (`downgrade.go`, rationale).
+5. **Refusal**: `targetSchemaVersion < baselineVersion` → `&DowngradeBelowBaselineError{Current: state.appliedVersion, Target: targetSchemaVersion}` — refused **before invoking goose**, so the destructive baseline Down is unreachable from this entry point (`downgrade.go`, rationale).
 6. **Refusal**: `!state.support.Covers(targetSchemaVersion, state.appliedVersion)` → `&DowngradeSpanUnsupportedError{Current: state.appliedVersion, Target: targetSchemaVersion, Support: state.support}`, no snapshot. `state.support` is `version.CarriedSchemaSupport()` as `classifyMigrationState` read it (`migration_runner.go`); `Covers(lo, hi)` is `s.Min <= lo && hi <= s.Max` (`internal/version/version.go`), the same predicate `UpgradeTargetBehindError` selects its remedy with (`upgrade.go`). Step 5 runs first, so this step refuses only an applied version above `support.Max` (`downgrade.go`).
 7. `snapshotsDir := dbsnapshot.DirFor(s.doltRootDir)` — the **same directory** migration snapshots use (`downgrade.go`).
 8. `guard := newSnapshotGuard(s.doltRootDir, snapshotsDir, formatDowngradeSnapshotLabel(time.Now()))`; `snap, err := guard.ensure(ctx)` → `dbsnapshot.Take(ctx, databaseDir, snapshotsDir, label)` (`downgrade.go`; guard at `migrate_snapshot.go`). Error → `"downgrade: %w"` (which itself wraps `"snapshot before migration: %w"`, `migrate_snapshot.go`).
-9. `s.applyDownMigrations(ctx, targetSchemaVersion)`; on **any** error → `&DowngradeRollbackError{Snapshot: snap, Cause: err}` (`downgrade.go`).
-10. `dbsnapshot.PruneMatching(snapshotsDir, downgradeSnapshotRetention, IsDowngradeSnapshotName)` (impl `internal/dbsnapshot/snapshot.go`); error → `"prune downgrade snapshots: %w"` (`downgrade.go`).
-11. `return nil`.
+9. `reversed, err := s.applyDownMigrations(ctx, targetSchemaVersion)`; on **any** error → `&DowngradeRollbackError{From: state.appliedVersion, Reversed: reversed, Snapshot: snap, Cause: err}` (`downgrade.go`).
+10. `dbsnapshot.PruneMatching(snapshotsDir, downgradeSnapshotRetention, IsDowngradeSnapshotName)` (impl `internal/dbsnapshot/snapshot.go`); error → `"prune downgrade snapshots: %w"`, returned beside the filled `Downgraded` (`downgrade.go`).
+11. Return `storage.Downgraded{From: state.appliedVersion, Reversed: reversed, Snapshot: snap.Name}`.
 
-Summarized refusal contract, verbatim from the doc comment (`downgrade.go`): "Refusals (no snapshot taken): target == current applied: no-op, returns nil. target > current applied: DowngradeTargetAheadError. target < baselineVersion: DowngradeBelowBaselineError. this binary's schema support does not cover target through current applied: DowngradeSpanUnsupportedError. workspace not in phaseManaged: a plain error (no goose log to reverse)."
+Summarized refusal contract, verbatim from the doc comment (`downgrade.go`): "Refusals (no snapshot taken): target == current applied: no-op, reverses nothing. target > current applied: DowngradeTargetAheadError. target < baselineVersion: DowngradeBelowBaselineError. this binary's schema support does not cover target through current applied: DowngradeSpanUnsupportedError. workspace not in phaseManaged: a plain error (no goose log to reverse)."
 
-### 4.7 `applyDownMigrations(ctx, target int64) error` — `downgrade.go`
+### 4.7 `applyDownMigrations(ctx, target int64) (int, error)` — `downgrade.go`
+
+Returns how many Down steps it committed; on an error, the steps committed before it.
 
 1. `provider, err := newGooseProvider(s.db)` (impl `internal/store/migration_runner.go`); error → `"construct downgrade provider: %w"`.
-2. Unbounded loop:
+2. Unbounded loop, counting `reversed` from 0, incremented after each committed step:
    a. `current, err := s.recordedMigrationVersion(ctx)` (impl `migration_runner.go`); error propagated (`downgrade.go`).
-   b. `if current <= target` → `return nil` (`downgrade.go`).
+   b. `if current <= target` → `return reversed, nil` (`downgrade.go`).
    c. `downOne := provider.Down`, replaced by `migrationDownForTest` when non-nil (`downgrade.go`).
    d. `result, err := downOne(ctx)`.
       - `errors.Is(err, goose.ErrNoNextVersion)` → `&DowngradeIncompleteError{Current: current, Target: target}` (`downgrade.go`).
@@ -4850,7 +4856,7 @@ Summarized refusal contract, verbatim from the doc comment (`downgrade.go`): "Re
    e. `result == nil` → `"down-migrate v%d: goose returned nil result"` (current) (`downgrade.go`).
    f. `result.Source == nil` → `"down-migrate v%d: goose result has nil Source"` (current) (`downgrade.go`).
    g. `s.commitWorkingSet(ctx, downgradeCommitMessage(result))` (impl `internal/store/commit_lock.go`); error → `"commit downgrade revert of v%d: %w"` (`result.Source.Version`, err) (`downgrade.go`).
-   h. Loop repeats — the loop re-reads the recorded version each iteration rather than counting.
+   h. Loop repeats — the loop re-reads the recorded version each iteration to decide whether to continue; the count only reports.
 
 Commit message: `downgradeCommitMessage(result) = fmt.Sprintf("downgrade: revert v%d %s", result.Source.Version, filepath.Base(result.Source.Path))` (`downgrade.go`), stated as symmetric with `migrationCommitMessage`'s `migrate: v<N> <file>` shape (`downgrade.go`).
 
@@ -4867,13 +4873,15 @@ Fixture `openWorkspaceForDowngrade` opens a fresh workspace at registry-max via 
 
 - `TestAppliedSchemaVersionMatchesRecorded`: `AppliedSchemaVersion` == `recordedMigrationVersion`, and the recorded version is `> 0`.
 - `TestAppliedSchemaVersionZeroForNonManaged`: after `DROP TABLE goose_db_version`, `AppliedSchemaVersion` must be **0**.
-- `TestDowngradeTargetEqualIsNoOp`: `Downgrade(ctx, current)` returns nil and the snapshot-count delta is **0**.
+- `TestDowngradeTargetEqualIsNoOp`: `Downgrade(ctx, current)` returns `storage.Downgraded{From: current}` and a nil error, and the snapshot-count delta is **0**.
 - `TestDowngradeTargetAheadRefused`: `Downgrade(ctx, current+5)` → `errors.As` a `*DowngradeTargetAheadError` with `Current == current` and `Target == current+5`; snapshot delta **0**.
-- `TestDowngradeBelowBaselineRefused`: `Downgrade(ctx, baselineVersion-1)` → `*DowngradeBelowBaselineError` with `Target == baselineVersion-1`; message must contain `"would destroy the workspace"`; snapshot delta **0**.
-- `TestDowngradeRollbackOnFailure` (**not parallel** — installs the package-level hook): `Downgrade(ctx, registryMax-1)`, hook returns `errors.New("synthetic down failure")`; result must be `*DowngradeRollbackError` that `errors.Is` the synthetic cause; `rb.Snapshot.Name` and `rb.Snapshot.Path` non-empty; `os.Stat(rb.Snapshot.Path)` must succeed; `rb.Error()` must contain the literal `"lit snapshots restore "+rb.Snapshot.Name`.
-- `TestDowngradeHappyPathSteppedAndCommitted` (parallel): `Downgrade(ctx, registryMax-2)` with the real Down sections. Asserts: recorded version lands exactly at `registryMax-2`; snapshot-count delta exactly **1**; `doltcli.Run(ctx, filepath.Join(doltRoot, "links"), "log", "--oneline")` output contains, for each registry file whose version is above the target, `fmt.Sprintf("downgrade: revert v%d %s", v, e.Name())`; and exactly 2 such files exist.
+- `TestDowngradeBelowBaselineRefused`: `Downgrade(ctx, baselineVersion-1)` → `*DowngradeBelowBaselineError` with `Current == current` and `Target == baselineVersion-1`; message must contain `"would destroy the workspace"`; snapshot delta **0**.
+- `TestDowngradeRollbackOnFailure` (**not parallel** — installs the package-level hook): `Downgrade(ctx, registryMax-1)`, hook returns `errors.New("synthetic down failure")`; result must be `*DowngradeRollbackError` with `From == registryMax` and `Reversed == 0` that `errors.Is` the synthetic cause; `rb.Snapshot.Name` and `rb.Snapshot.Path` non-empty; `os.Stat(rb.Snapshot.Path)` must succeed; `rb.Error()` must contain the literal `"lit snapshots restore "+rb.Snapshot.Name`.
+- `TestDowngradeHappyPathSteppedAndCommitted` (parallel): `Downgrade(ctx, registryMax-2)` with the real Down sections. Asserts: recorded version lands exactly at `registryMax-2`; snapshot-count delta exactly **1**; the returned `Downgraded` is `{From: registryMax, Reversed: 2, Snapshot: <the one name dbsnapshot.List gained>}`; `doltcli.Run(ctx, filepath.Join(doltRoot, "links"), "log", "--oneline")` output contains, for each registry file whose version is above the target, `fmt.Sprintf("downgrade: revert v%d %s", v, e.Name())`; and exactly 2 such files exist.
+- `TestDowngradeRollbackCountsTheStepsBeforeTheFailure` (**not parallel**): hook runs the real `provider.Down` once, then fails; `Downgrade(ctx, registryMax-2)` → `*DowngradeRollbackError` with `From == registryMax`, `Reversed == 1`; recorded version is `registryMax-1`.
+- `TestDowngradeErrorsRecordTheVersionTheyWereDecidedFrom`: `Downgrade` to `current+1` and to `baselineVersion-1` each yield a `model.RecordedError` whose record is facts `{downgrade.workspace_schema: current, downgrade.snapshot: ""}` and counts `{downgrade.reversed: 0}`; a hand-built `DowngradeRollbackError{From: 9, Reversed: 2, Snapshot: {Name: "snap"}}` records 9, `"snap"`, and 2.
 - `TestDowngradeIncompleteWhenGooseExhausted` (**not parallel**): hook returns `goose.ErrNoNextVersion`; `Downgrade(ctx, registryMax-1)`'s error is a `*DowngradeRollbackError` whose `Cause` is `errors.As`-able to `*DowngradeIncompleteError` with `Current == registryMax`, `Target == registryMax-1`.
-- `TestDowngradeSpanUnsupportedRefused`: `stampGooseVersionAhead` (`migration_runner_test.go`) records `registryMax+1` and commits; `Open` succeeds; `Downgrade(ctx, registryMax)` → `*DowngradeSpanUnsupportedError` equal to `{Current: registryMax+1, Target: registryMax, Support: {Min: baselineVersion, Max: registryMax}}`; snapshot delta **0**; recorded version still `registryMax+1`.
+- `TestDowngradeSpanUnsupportedRefused`: `stampGooseVersionAhead` (`migration_runner_test.go`) records `registryMax+1` and commits; `Open` succeeds; `Downgrade(ctx, registryMax)` → `*DowngradeSpanUnsupportedError` equal to `{Current: registryMax+1, Target: registryMax, Support: {Min: baselineVersion, Max: registryMax}}`; its `EventRecord` facts carry `downgrade.workspace_schema == registryMax+1`; snapshot delta **0**; recorded version still `registryMax+1`.
 - `TestIsDowngradeSnapshotNameSymmetry`: with `migName = "1700000000000000000-pre-migrate-1700000000000000001"` and `dgName = "1700000000000000000-lit-downgrade-1700000000000000001"` — `IsMigrationSnapshotName(migName)` true / `IsDowngradeSnapshotName(migName)` false; `IsDowngradeSnapshotName(dgName)` true / `IsMigrationSnapshotName(dgName)` false.
 - `TestDowngradeUntouchedOpen`: a no-op `Downgrade`, `Close`, then re-`Open` yields the identical recorded version.
 - `TestDowngradeRequiresGooseManaged`: after `DROP TABLE goose_db_version` + a commit, `Downgrade(ctx, baselineVersion)` errors with a message containing `"not goose-managed"`; snapshot delta **0**; and the error must **not** be `errors.As`-able to `*DowngradeRollbackError`.

@@ -181,6 +181,24 @@ Every key is present exactly when the command ended in that refusal.
 | `schema_ahead.remote_schema` | The schema version of the remote branch's head. |
 | `schema_ahead.running_schema_max` | The highest schema version this lit supports. |
 
+## What `lit upgrade` records
+
+An upgrade resolves a release, the one `--to` names or the latest published one,
+then either keeps this binary (a bare run already on that release), refuses (the
+release's schema support ends below the workspace's schema), or installs it. Each
+key is set as soon as the command knows it, so a run that stops early still
+carries the ones it had.
+
+| Key | Meaning |
+| --- | --- |
+| `upgrade.tag` | The release the command resolved: the one it installed, kept the binary past, or refused. Set once the tag is known. |
+| `upgrade.target_schema_max` | The highest schema version that release supports. Set once the release resolves. |
+| `upgrade.running_schema_min` | The lowest schema version this lit supports. Set with the target. |
+| `upgrade.running_schema_max` | The highest schema version this lit supports. Set with the target. |
+| `upgrade.workspace_schema` | The workspace's applied schema version. Set once it is read, before the install. |
+| `upgrade.already_current` | `true` when a bare run kept this binary because it is already on the latest release; `false` when the command went on to install. |
+| `upgrade.installed_path` | The path the release was installed to. Absent when nothing was installed. |
+
 ## What `lit downgrade` records
 
 A downgrade reverses the workspace's schema from its applied version down to the
@@ -193,10 +211,14 @@ the ones it had.
 
 | Key | Meaning |
 | --- | --- |
+| `downgrade.tag` | The `--to` release. Set once the tag is known. |
 | `downgrade.target_schema_max` | The schema version of the `--to` release. Set once the release resolves. |
 | `downgrade.running_schema_min` | The lowest schema version this lit supports. Set with the target. |
 | `downgrade.running_schema_max` | The highest schema version this lit supports. Set with the target. |
-| `downgrade.workspace_schema` | The workspace's applied schema version. Set once it is read, before the reverse. |
+| `downgrade.workspace_schema` | The workspace's applied schema version, as the reverse read it under the workspace lock and decided from. Set when the reverse runs or refuses. |
+| `downgrade.snapshot` | The recovery snapshot taken before the first down-migration, or `""` when none was taken (a refusal, or a target the workspace is already at). |
+| `counts.downgrade.reversed` | The down-migrations that committed. `0` for a refusal or a target the workspace is already at; on a failed reverse, those that committed before the failure. |
+| `downgrade.installed_path` | The path the `--to` release was installed to. Absent when nothing was installed. |
 
 ## Reading the file
 

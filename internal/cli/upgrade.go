@@ -266,9 +266,11 @@ func upgradeLeafWith(
 		if err != nil {
 			return err
 		}
-		// [LAW:nothing-unseen] the schema versions the refusal and its remedy
-		// are decided from, each set as soon as it is known so an exit before
-		// the decision still carries them.
+		// [LAW:nothing-unseen] the release the command resolved — the one it
+		// installs, or keeps the binary past — and the schema versions the
+		// refusal and its remedy are decided from, each set as soon as it is
+		// known so an exit before the decision still carries them.
+		telemetry.Set(ctx, "upgrade.tag", tag)
 		telemetry.Set(ctx, "upgrade.target_schema_max", target.Manifest.Schema.Max)
 		telemetry.Set(ctx, "upgrade.running_schema_min", scope.current.Schema.Min)
 		telemetry.Set(ctx, "upgrade.running_schema_max", scope.current.Schema.Max)
@@ -325,6 +327,7 @@ func upgradeLeafWith(
 		if err != nil {
 			return fmt.Errorf("upgrade: resolve current binary: %w", err)
 		}
+		telemetry.Set(ctx, "upgrade.installed_path", binPath)
 
 		if err := installer.Install(ctx, target, binPath); err != nil {
 			// [LAW:no-silent-failure] Nothing about the workspace schema has changed

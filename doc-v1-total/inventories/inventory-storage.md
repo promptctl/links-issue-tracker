@@ -436,7 +436,7 @@ They live beside the specs rather than in an engine because the schema is the co
 
 #### `SchemaMigrator` (`internal/storage/capabilities.go`)
 - `AppliedSchemaVersion(ctx) (int64, error)` — the shape version the store is currently at
-- `Downgrade(ctx, targetSchemaVersion int64) error` — moves the store back to an older shape so a binary that predates the current one can open it
+- `Downgrade(ctx, targetSchemaVersion int64) (Downgraded, error)` — moves the store back to an older shape so a binary that predates the current one can open it, and reports what it reversed: `Downgraded{From int64, Reversed int, Snapshot string}` — the version it read under the lock and decided from, the down-migrations it ran, and the recovery snapshot (`""` when nothing was reversed). `Downgraded.EventRecord()` is facts `downgrade.workspace_schema`, `downgrade.snapshot` and count `downgrade.reversed`
 
 #### `Importer` (`internal/storage/capabilities.go`)
 - `ReplaceFromExport(ctx, export model.Export) ([]Rehomed, error)` — replaces the store's entire contents with an export, and names the tickets it moved into an epic on the way in (`HomeStranded`, `internal/storage/rehome.go`). Only the import half is optional; `Export` is core.
