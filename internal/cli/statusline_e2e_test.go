@@ -318,8 +318,10 @@ func TestDocumentedStatuslineRendersTheFileWithNoLitProcess(t *testing.T) {
 	if err := os.WriteFile(script, []byte(minimalStatuslineScript(t)), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// The shim leaves a mark however the script redirects or ignores it.
 	shim := t.TempDir()
-	if err := os.WriteFile(filepath.Join(shim, "lit"), []byte("#!/bin/sh\necho \"the statusline ran lit $*\" >&2\nexit 1\n"), 0o755); err != nil {
+	ranLit := filepath.Join(shim, "ran")
+	if err := os.WriteFile(filepath.Join(shim, "lit"), []byte("#!/bin/sh\ntouch \""+ranLit+"\"\nexit 1\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	dir, first, second := statuslineCheckout(t)
@@ -337,6 +339,9 @@ func TestDocumentedStatuslineRendersTheFileWithNoLitProcess(t *testing.T) {
 		start := time.Now()
 		if err := cmd.Run(); err != nil || stderr.Len() > 0 {
 			t.Fatalf("documented statusline: err=%v stderr=%q", err, stderr.String())
+		}
+		if _, err := os.Stat(ranLit); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("the documented statusline ran lit (%v)", err)
 		}
 		t.Logf("rendered %q in %v", stdout.String(), time.Since(start))
 		return stdout.String()
