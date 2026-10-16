@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"strconv"
 	"strings"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
 )
@@ -25,31 +25,23 @@ const migrationSnapshotRetention = 10
 var migrationPostSnapshotHookForTest func() error
 
 // migrationSnapshotLabel is the label prefix every migration-recovery snapshot
-// carries; the schema version the snapshot holds follows it (see
-// formatMigrationSnapshotLabel), so the name is where that version is recorded.
-// legacyMigrationSnapshotLabel is the prefix lits minted before the version was
-// recorded, a Unix-ns timestamp following it instead. Snapshots of that shape
-// stay on disk until retention rolls them off, so they still classify as
-// migration snapshots; what schema they hold is unknown.
-const (
-	migrationSnapshotLabel       = "pre-migrate-schema"
-	legacyMigrationSnapshotLabel = "pre-migrate"
-)
+// carries. The pre-restore rotation in dbsnapshot.Restore uses the directory
+// itself, not the label, so the label is purely human-facing.
+const migrationSnapshotLabel = "pre-migrate"
 
 // IsMigrationSnapshotName reports whether name was stamped by the migration
 // system (vs. produced by `lit snapshots new` or some future user flow).
 //
 // Snapshot names follow dbsnapshot's <unix-ns>[-<label>] scheme. The
-// migration system stamps the label as
+// migration system always stamps the label as
 //
-//	"<migrationSnapshotLabel>-<schema version>"
+//	"<migrationSnapshotLabel>-<unix-ns>"
 //
-// (see formatMigrationSnapshotLabel); lits before it stamped
-// "<legacyMigrationSnapshotLabel>-<unix-ns>". A plain substring match on the
-// label would misclassify a user-created snapshot whose --label happened to
-// contain "pre-migrate"; instead, recognize the exact stamped shapes: the
-// label component equals one of the two prefixes followed by '-' and an
-// all-digit suffix. A user reproducing that shape verbatim is
+// (see formatMigrationSnapshotLabel). A plain substring match on the label
+// would misclassify a user-created snapshot whose --label happened to
+// contain "pre-migrate"; instead, recognize the exact stamped shape:
+// the label component equals migrationSnapshotLabel followed by '-' and an
+// all-digit timestamp suffix. A user reproducing that shape verbatim is
 // indistinguishable from a real migration snapshot — that is the strongest
 // signal a name-based classifier can carry without restructuring the
 // snapshots-directory layout.
@@ -61,57 +53,31 @@ const (
 // migration system stamps; "matches by accident" is impossible without a
 // user deliberately mimicking the format.
 func IsMigrationSnapshotName(name string) bool {
-	_, recorded := stampedSnapshotSuffix(name, migrationSnapshotLabel)
-	_, legacy := stampedSnapshotSuffix(name, legacyMigrationSnapshotLabel)
-	return recorded || legacy
-}
-
-// migrationSnapshotSchemaVersion returns the schema version a migration
-// snapshot's name records — the version the workspace was at when the snapshot
-// was taken. ok is false for any other name, including a legacy migration
-// snapshot, which recorded none.
-// [LAW:one-source-of-truth] the name is the one record of that version: it is
-// written once, by formatMigrationSnapshotLabel where migrate takes the
-// snapshot, and read only here.
-func migrationSnapshotSchemaVersion(name string) (int64, bool) {
-	suffix, ok := stampedSnapshotSuffix(name, migrationSnapshotLabel)
-	if !ok {
-		return 0, false
-	}
-	v, err := strconv.ParseInt(suffix, 10, 64)
-	return v, err == nil
+	return isStampedSnapshotName(name, migrationSnapshotLabel)
 }
 
 // isStampedSnapshotName reports whether name has the exact shape a system-stamped
 // snapshot carries for the given label: dbsnapshot's <unix-ns> head, then the
-// label, then an all-digit suffix — i.e. "<unix-ns>-<label>-<digits>".
+// label, then an all-digit timestamp suffix — i.e. "<unix-ns>-<label>-<unix-ns>".
 // The migration, downgrade, and reconcile systems each stamp a distinct label,
 // so their disjoint predicates (IsMigrationSnapshotName / IsDowngradeSnapshotName
 // / IsReconcileSnapshotName) share this one shape check and cannot collect each
 // other's snapshots. [LAW:one-source-of-truth] the stamped-shape rule lives once;
 // [LAW:one-type-per-behavior] three labels, one predicate.
 func isStampedSnapshotName(name, label string) bool {
-	_, ok := stampedSnapshotSuffix(name, label)
-	return ok
-}
-
-// stampedSnapshotSuffix returns the all-digit suffix following label in a
-// system-stamped snapshot name, and whether name has that stamped shape at all.
-func stampedSnapshotSuffix(name, label string) (string, bool) {
 	idx := strings.IndexByte(name, '-')
 	if idx < 0 {
-		return "", false
+		return false
 	}
 	head, rest := name[:idx], name[idx+1:]
 	if !isAllDigits(head) {
-		return "", false
+		return false
 	}
 	prefix := label + "-"
 	if !strings.HasPrefix(rest, prefix) {
-		return "", false
+		return false
 	}
-	suffix := rest[len(prefix):]
-	return suffix, isAllDigits(suffix)
+	return isAllDigits(rest[len(prefix):])
 }
 
 // isAllDigits returns true iff s is a non-empty string of ASCII digits. The
@@ -213,29 +179,56 @@ func migrationSnapshotsDir(databaseDir string) string {
 	return filepath.Join(filepath.Dir(cleaned), "snapshots")
 }
 
-// formatMigrationSnapshotLabel returns the label for a migration-recovery
-// snapshot of a workspace at schemaVersion. Recording the version in the name
-// is what lets a later, older lit tell whether restoring the snapshot gives it
-// a workspace it can open (see rollbackSnapshotName).
-func formatMigrationSnapshotLabel(schemaVersion int64) string {
-	return fmt.Sprintf("%s-%d", migrationSnapshotLabel, schemaVersion)
+// formatMigrationSnapshotLabel returns the label used for migration-recovery
+// snapshots. The trailing timestamp is purely cosmetic — dbsnapshot.Take
+// already encodes the take-time in the directory name — but it makes the
+// label readable in operator-facing listings.
+func formatMigrationSnapshotLabel(t time.Time) string {
+	return fmt.Sprintf("%s-%d", migrationSnapshotLabel, t.UTC().UnixNano())
 }
 
-// rollbackSnapshotName returns the newest migration snapshot whose recorded
-// schema version is at or below maxSupported — the newest one a lit whose
-// registry tops out there can open — or "" when none is. A snapshot recording
-// no version is never offered: whether it is still ahead is unknown.
-func rollbackSnapshotName(snapshotsDir string, maxSupported int64) (string, error) {
-	snaps, err := dbsnapshot.List(snapshotsDir)
+// rollbackSnapshotName returns the newest migration snapshot holding this
+// workspace's data at schema maxSupported or below — a workspace a lit whose
+// registry tops out there opens — or "" when none does. The empty workspace
+// the fresh-open snapshot captured holds no data, so it is never offered.
+//
+// [LAW:one-source-of-truth] the schema a snapshot holds is read from its own
+// goose log, through the classifier the live workspace's open uses, so every
+// migration snapshot answers alike whichever lit minted it, and its name is
+// left in the shape every released lit classifies.
+func (s *Store) rollbackSnapshotName(ctx context.Context, maxSupported int64) (string, error) {
+	snaps, err := dbsnapshot.List(migrationSnapshotsDir(s.doltRootDir))
 	if err != nil {
 		return "", fmt.Errorf("list snapshots: %w", err)
 	}
 	for _, snap := range snaps {
-		if v, ok := migrationSnapshotSchemaVersion(snap.Name); ok && v <= maxSupported {
+		if !IsMigrationSnapshotName(snap.Name) {
+			continue
+		}
+		state, err := snapshotMigrationState(ctx, snap.Path, s.workspaceID)
+		if err != nil {
+			return "", fmt.Errorf("read the schema snapshot %s holds: %w", snap.Name, err)
+		}
+		if state.phase != phaseFresh && state.appliedVersion <= maxSupported {
 			return snap.Name, nil
 		}
 	}
 	return "", nil
+}
+
+// snapshotMigrationState classifies the workspace a snapshot holds, read in
+// place by a read engine. Dolt rewrites its journal bookkeeping when an engine
+// opens a store, here as on the first open after the snapshot is restored; the
+// data the snapshot holds is unchanged. A clone would avoid that rewrite at
+// the price of a full copy on a filesystem with no copy-on-write, and of a
+// store-sized tree stranded by a hard exit.
+func snapshotMigrationState(ctx context.Context, snapshotPath, workspaceID string) (_ migrationState, err error) {
+	snap, err := openStoreConnection(ctx, snapshotPath, workspaceID, engineRead)
+	if err != nil {
+		return migrationState{}, err
+	}
+	defer func() { err = errors.Join(err, snap.Close()) }()
+	return snap.classifyMigrationState(ctx)
 }
 
 // asMigrationRollbackError unwraps err to find a *MigrationRollbackError if

@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -230,7 +229,7 @@ func TestMigrateSnapshotPruneEnforcesRetention(t *testing.T) {
 	// labels here must satisfy IsMigrationSnapshotName for the prune to
 	// touch them at all.
 	for i := 0; i < migrationSnapshotRetention+5; i++ {
-		label := formatMigrationSnapshotLabel(int64(i))
+		label := formatMigrationSnapshotLabel(time.Now().Add(time.Duration(i) * time.Nanosecond))
 		if _, err := dbsnapshot.Take(context.Background(), doltRoot, snapshotsDir, label); err != nil {
 			t.Fatalf("Take migration-shaped snapshot %d error = %v", i, err)
 		}
@@ -302,7 +301,7 @@ func TestMigrationPruneSparesUserSnapshots(t *testing.T) {
 		}
 	}
 	for i := 0; i < migrationSnapshotRetention+5; i++ {
-		label := formatMigrationSnapshotLabel(int64(i))
+		label := formatMigrationSnapshotLabel(time.Now().Add(time.Duration(i) * time.Nanosecond))
 		if _, err := dbsnapshot.Take(context.Background(), doltRoot, snapshotsDir, label); err != nil {
 			t.Fatalf("Take migration snapshot %d: %v", i, err)
 		}
@@ -341,10 +340,8 @@ func TestMigrationPruneSparesUserSnapshots(t *testing.T) {
 // TestIsMigrationSnapshotNameRejectsUserCollisions pins the classifier's
 // precision: a user `lit snapshots new --label <foo>` that happens to
 // embed "pre-migrate" must NOT be misclassified as a migration snapshot.
-// Only names matching the exact "<unix-ns>-pre-migrate-schema-<version>" stamp
-// produced by formatMigrationSnapshotLabel, or the legacy
-// "<unix-ns>-pre-migrate-<unix-ns>" stamp lits minted before it, are migration
-// snapshots.
+// Only names matching the exact "<unix-ns>-pre-migrate-<unix-ns>" stamp
+// produced by formatMigrationSnapshotLabel are migration snapshots.
 func TestIsMigrationSnapshotNameRejectsUserCollisions(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -352,12 +349,7 @@ func TestIsMigrationSnapshotNameRejectsUserCollisions(t *testing.T) {
 		want bool
 	}{
 		// Real migration snapshot — produced by formatMigrationSnapshotLabel.
-		{"1779217187547513000-pre-migrate-schema-7", true},
-		// Legacy migration snapshot — minted before the version was recorded.
 		{"1779217187547513000-pre-migrate-1779217187516039000", true},
-		{"1779217187547513000-pre-migrate-schema", false},
-		{"1779217187547513000-pre-migrate-schema-", false},
-		{"1779217187547513000-pre-migrate-schema-7a", false},
 		// User snapshot with no --label (bare timestamp).
 		{"1779217187547513000", false},
 		// User --label that contains the substring but isn't the stamped shape.
@@ -608,14 +600,14 @@ func withGooseHistoryDropped(t *testing.T, ctx context.Context, doltRoot string)
 
 // TestRollbackSnapshotIsOneTheOlderLitOpens is the two-step history: a
 // workspace migrated forward from v3, then again from v5, holds migration
-// snapshots at v3 and v5, and the newest is still ahead of a lit whose
-// registry tops out at v3 or v4. The snapshots here are minted by real
-// migrations, so the test also pins that each records the version it holds.
+// snapshots of its data at v3 and v5, and the newest is still ahead of a lit
+// whose registry tops out at v3 or v4. The oldest migration snapshot is the
+// empty workspace the fresh open captured, which no lit is offered: restoring
+// it would discard every issue.
 func TestRollbackSnapshotIsOneTheOlderLitOpens(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
-	snapshotsDir := migrationSnapshotsDir(doltRoot)
 
 	withStore(t, ctx, doltRoot, func(*Store) {}) // fresh: migrates from an empty workspace
 	for _, from := range []int64{3, 5} {
@@ -627,62 +619,38 @@ func TestRollbackSnapshotIsOneTheOlderLitOpens(t *testing.T) {
 		withStore(t, ctx, doltRoot, func(*Store) {}) // migrates forward from `from`
 	}
 
-	listed, err := dbsnapshot.List(snapshotsDir)
+	listed, err := dbsnapshot.List(migrationSnapshotsDir(doltRoot))
 	if err != nil {
 		t.Fatalf("List error = %v", err)
 	}
-	byVersion := map[int64]string{}
-	var recorded []int64
+	var migrationSnaps []string
 	for _, snap := range listed {
-		if v, ok := migrationSnapshotSchemaVersion(snap.Name); ok {
-			byVersion[v] = snap.Name
-			recorded = append(recorded, v)
+		if IsMigrationSnapshotName(snap.Name) {
+			migrationSnaps = append(migrationSnaps, snap.Name)
 		}
 	}
-	if want := []int64{5, 3, 0}; !slices.Equal(recorded, want) {
-		t.Fatalf("migration snapshots record versions %v newest-first, want %v (listing %+v)", recorded, want, listed)
+	if len(migrationSnaps) != 3 {
+		t.Fatalf("migration snapshots = %v, want 3 (from v5, from v3, fresh) in listing %+v", migrationSnaps, listed)
 	}
+	fromV5, fromV3 := migrationSnaps[0], migrationSnaps[1]
 
-	for _, c := range []struct {
-		maxSupported int64
-		want         string
-	}{
-		{maxSupported: 3, want: byVersion[3]},
-		{maxSupported: 4, want: byVersion[3]},
-		{maxSupported: 5, want: byVersion[5]},
-		{maxSupported: 2, want: byVersion[0]},
-	} {
-		got, err := rollbackSnapshotName(snapshotsDir, c.maxSupported)
-		if err != nil {
-			t.Fatalf("rollbackSnapshotName(max %d) error = %v", c.maxSupported, err)
+	withStore(t, ctx, doltRoot, func(st *Store) {
+		for _, c := range []struct {
+			maxSupported int64
+			want         string
+		}{
+			{maxSupported: 3, want: fromV3},
+			{maxSupported: 4, want: fromV3},
+			{maxSupported: 5, want: fromV5},
+			{maxSupported: 2, want: ""},
+		} {
+			got, err := st.rollbackSnapshotName(ctx, c.maxSupported)
+			if err != nil {
+				t.Fatalf("rollbackSnapshotName(max %d) error = %v", c.maxSupported, err)
+			}
+			if got != c.want {
+				t.Errorf("rollbackSnapshotName(max %d) = %q, want %q", c.maxSupported, got, c.want)
+			}
 		}
-		if got != c.want {
-			t.Errorf("rollbackSnapshotName(max %d) = %q, want %q", c.maxSupported, got, c.want)
-		}
-	}
-}
-
-// TestRollbackSnapshotNoneWhenEverySnapshotIsAheadOrUnrecorded pins the empty
-// answer: a snapshot recording a schema above the binary's support is not
-// offered, and neither is a legacy one that recorded no schema at all, even
-// when it is the newest.
-func TestRollbackSnapshotNoneWhenEverySnapshotIsAheadOrUnrecorded(t *testing.T) {
-	t.Parallel()
-	snapshotsDir := t.TempDir()
-	for _, name := range []string{
-		"1700000000000000001-pre-migrate-schema-5",
-		"1700000000000000002-pre-migrate-1700000000000000002",
-		"1700000000000000003-user",
-	} {
-		if err := os.Mkdir(filepath.Join(snapshotsDir, name), 0o755); err != nil {
-			t.Fatalf("mkdir %s: %v", name, err)
-		}
-	}
-	got, err := rollbackSnapshotName(snapshotsDir, 4)
-	if err != nil {
-		t.Fatalf("rollbackSnapshotName error = %v", err)
-	}
-	if got != "" {
-		t.Errorf("rollbackSnapshotName(max 4) = %q, want none", got)
-	}
+	})
 }

@@ -132,10 +132,10 @@ type UnsupportedSchemaVersionError struct {
 	WorkspaceVersion int64
 	MaxSupported     int64
 	MissingBaseline  []string
-	// SnapshotName is the newest migration-recovery snapshot holding a schema
-	// at or below MaxSupported (rollbackSnapshotName), when one exists.
-	// Populating it offers the user a lossy rollback path; emptying it means
-	// no snapshot this binary can open exists.
+	// SnapshotName is the newest migration-recovery snapshot holding this
+	// workspace's data at schema MaxSupported or below (rollbackSnapshotName),
+	// when one exists. Populating it offers the user a lossy rollback path;
+	// emptying it means no snapshot this binary can open exists.
 	// [LAW:types-are-the-program] Which rollback line the message emits is
 	// encoded by whether the optional field is populated, not by a flag.
 	SnapshotName string
@@ -176,7 +176,7 @@ func (e *UnsupportedSchemaVersionError) Error() string {
 			"\n\nif you are stuck and need to roll back this workspace to match this binary:\n  lit snapshots restore %s\n\nthis is a LOSSY recovery — any data written under the newer binary will be discarded.",
 			e.SnapshotName)
 	default:
-		fmt.Fprintf(&b, "\n\nno snapshot of this workspace holds schema version %d or below; lossy rollback is not possible from this workspace.", e.MaxSupported)
+		fmt.Fprintf(&b, "\n\nno migration snapshot holds this workspace's data at schema version %d or below; lossy rollback is not possible from this workspace.", e.MaxSupported)
 	}
 	return b.String()
 }
@@ -281,18 +281,12 @@ func (st migrationState) willMutate() bool {
 // [LAW:single-enforcer] Store-level Open routes all schema convergence through
 // this one boundary; the snapshot/prune budget lives here, not at callsites.
 func (s *Store) migrate(ctx context.Context) error {
-	assessment, err := s.assessMigration(ctx)
-	if err != nil {
-		return err
-	}
-	// The guard fires before runMigration's first schema write, so the
-	// snapshot holds the assessed version, and its name records that.
 	guard := newSnapshotGuard(
 		s.doltRootDir,
 		migrationSnapshotsDir(s.doltRootDir),
-		formatMigrationSnapshotLabel(assessment.state.appliedVersion),
+		formatMigrationSnapshotLabel(time.Now()),
 	)
-	if err := s.runMigration(ctx, guard, assessment); err != nil {
+	if err := s.runMigration(ctx, guard); err != nil {
 		if snap, ok := guard.took(); ok {
 			return &MigrationRollbackError{Snapshot: snap, Cause: err}
 		}
@@ -403,8 +397,8 @@ func (s *Store) assessMigration(ctx context.Context) (migrationAssessment, error
 	}
 }
 
-// runMigration acts on the workspace's one assessment: it snapshots before the
-// first write, adopts a pre-goose workspace if needed, then applies pending
+// runMigration classifies the workspace once, snapshots before the first
+// write, adopts a pre-goose workspace if needed, then applies pending
 // migrations one Dolt commit each.
 //
 // [LAW:single-enforcer] One runner owns migration ordering and the snapshot/
@@ -413,7 +407,11 @@ func (s *Store) assessMigration(ctx context.Context) (migrationAssessment, error
 // [LAW:dataflow-not-control-flow] The same assess -> repair -> snapshot ->
 // adopt -> apply sequence runs every Open; variability lives in the phase and
 // the set of pending versions, not in whether stages execute.
-func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard, assessment migrationAssessment) error {
+func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard) error {
+	assessment, err := s.assessMigration(ctx)
+	if err != nil {
+		return err
+	}
 	state := assessment.state
 	// A detected content mismatch is not a terminal refusal: it is the signal
 	// to self-heal. Unlike ensureQuarantineTable's detect-then-recreate
@@ -896,7 +894,7 @@ func (s *Store) refuseIfBaselineMissing(ctx context.Context, state migrationStat
 		return err
 	}
 	if present == 0 || len(missing) > 0 {
-		snapshot, lookupErr := rollbackSnapshotName(migrationSnapshotsDir(s.doltRootDir), state.registryMaxVers)
+		snapshot, lookupErr := s.rollbackSnapshotName(ctx, state.registryMaxVers)
 		return &UnsupportedSchemaVersionError{
 			WorkspaceVersion:  state.appliedVersion,
 			MaxSupported:      state.registryMaxVers,

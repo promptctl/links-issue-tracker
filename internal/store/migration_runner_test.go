@@ -357,7 +357,7 @@ func TestUnsupportedSchemaVersionMessageShape(t *testing.T) {
 	const wantBare = upgradeHead + ")" +
 		"\n\nto operate this workspace, install a lit that supports schema version 7:\n  lit upgrade" +
 		"\n\n(this is the supported path — `lit upgrade` runs even from this too-old binary, installs the latest release, and refuses a release that cannot operate this workspace.)" +
-		"\n\nno snapshot of this workspace holds schema version 3 or below; lossy rollback is not possible from this workspace."
+		"\n\nno migration snapshot holds this workspace's data at schema version 3 or below; lossy rollback is not possible from this workspace."
 	if bare != wantBare {
 		t.Fatalf("bare Error() = %q, want %q", bare, wantBare)
 	}
@@ -383,12 +383,12 @@ func TestUnsupportedSchemaVersionMessageShape(t *testing.T) {
 	withSnap := (&UnsupportedSchemaVersionError{
 		WorkspaceVersion: 7,
 		MaxSupported:     3,
-		SnapshotName:     "1700000000-pre-migrate-schema-3",
+		SnapshotName:     "1700000000-pre-migrate-1700000000",
 	}).Error()
 	for _, want := range []string{
 		upgradeHead,
 		"install a lit that supports schema version 7:\n  lit upgrade\n",
-		"lit snapshots restore 1700000000-pre-migrate-schema-3",
+		"lit snapshots restore 1700000000-pre-migrate-1700000000",
 		"LOSSY",
 	} {
 		if !strings.Contains(withSnap, want) {
@@ -425,10 +425,10 @@ func TestUnsupportedSchemaVersionMessageShape(t *testing.T) {
 // TestRefusalSurfacesRecoveryDataFromWorkspace pins the runtime wiring of the
 // remediation hints: when a binary built from a known release version opens a
 // workspace, it stamps meta.producer_binary_version on a successful migrate;
-// when a later refusal fires, refuseIfBaselineMissing finds the most recent
-// migration-recovery snapshot and surfaces it verbatim, while the recorded
-// producer build stays out of the message — the remedy names a schema
-// requirement, not a build. Without this end-to-end probe the unit test for
+// when a later refusal fires, refuseIfBaselineMissing finds the migration-
+// recovery snapshot holding the workspace's data and surfaces it verbatim, while
+// the recorded producer build stays out of the message — the remedy names a
+// schema requirement, not a build. Without this end-to-end probe the unit test for
 // Error() rendering passes while the lookup layer that populates the fields
 // could regress silently.
 func TestRefusalSurfacesRecoveryDataFromWorkspace(t *testing.T) {
@@ -441,8 +441,14 @@ func TestRefusalSurfacesRecoveryDataFromWorkspace(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	// Fresh open: runs the baseline migration -> takes a recovery snapshot
-	// AND writes meta.producer_binary_version = sentinel.
+	// Fresh open: runs the baseline migration -> takes a recovery snapshot of
+	// the empty workspace AND writes meta.producer_binary_version = sentinel.
+	// A downgrade and the open after it leave a recovery snapshot holding data.
+	withStore(t, ctx, doltRoot, func(st *Store) {
+		if err := st.Downgrade(ctx, 3); err != nil {
+			t.Fatalf("Downgrade(3) error = %v", err)
+		}
+	})
 	withStore(t, ctx, doltRoot, func(st *Store) {
 		got, err := st.getMeta(ctx, nil, producerBinaryVersionMetaKey)
 		if err != nil {
@@ -469,7 +475,7 @@ func TestRefusalSurfacesRecoveryDataFromWorkspace(t *testing.T) {
 		t.Fatalf("Open() error = %v (%T); want *UnsupportedSchemaVersionError", err, err)
 	}
 	if refusal.SnapshotName == "" {
-		t.Errorf("SnapshotName empty; want a migration-recovery snapshot name (one was taken on fresh Open)")
+		t.Errorf("SnapshotName empty; want the migration-recovery snapshot the open after the downgrade took")
 	}
 	if !IsMigrationSnapshotName(refusal.SnapshotName) {
 		t.Errorf("SnapshotName %q does not match the migration-stamped shape", refusal.SnapshotName)
