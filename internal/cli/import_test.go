@@ -93,9 +93,15 @@ func TestRunImportRefusesARuleBreakingFileWithoutRetryAdvice(t *testing.T) {
 			{"local_id":"a","title":"a","type":"epic","topic":"demo","blocked_by":["b"]},
 			{"local_id":"b","title":"b","type":"epic","topic":"demo","blocked_by":["a"]}
 		]`, "import: cycle detected involving"},
+		{"tree spec ordering two leaves of one epic", "x.json", `[
+			{"local_id":"e","title":"e","type":"epic","topic":"demo"},
+			{"local_id":"a","title":"a","type":"task","topic":"demo","parent":"e"},
+			{"local_id":"b","title":"b","type":"task","topic":"demo","parent":"e","blocked_by":["a"]}
+		]`, `import: spec "b" blocked_by "a": ` + storage.SameEpicBlocksRejectionMessage},
 		{"bulk file missing a topic", "x.yaml", "title: x\ntype: task\n", "bulk: doc 0 missing topic"},
 		{"bulk update that empties a title", "x.yaml", "id: demo-1\ntitle: \" \"\n", `bulk: doc 0 (id "demo-1") sets an empty title`},
 		{"bulk file with a cycle", "x.yaml", "local_id: a\ntitle: a\ntype: epic\ntopic: demo\nblocked_by: [b]\n---\nlocal_id: b\ntitle: b\ntype: epic\ntopic: demo\nblocked_by: [a]\n", "bulk: cycle detected involving"},
+		{"bulk file ordering two leaves of one epic", "x.yaml", "local_id: e\ntitle: e\ntype: epic\ntopic: demo\n---\nlocal_id: a\ntitle: a\ntype: task\ntopic: demo\nparent: e\n---\ntitle: b\ntype: bug\ntopic: demo\nparent: e\nblocked_by: [a]\n", `bulk: doc 2 blocked_by "a": ` + storage.SameEpicBlocksRejectionMessage},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ap := newTestCLIApp(t)
@@ -174,13 +180,14 @@ func mappingRefs(t *testing.T, output string) []string {
 // before dependents — t1 before t2 even though the file lists t2 first),
 // not the file order and never Go's randomized map order.
 // With five entries a map-ordered print would match by luck ~1/120 runs, so
-// a regression fails loudly rather than flaking.
+// a regression fails loudly rather than flaking. t1 is a sub-epic: between
+// two leaves of one epic a blocked_by is refused, since rank orders them.
 func TestRunImportTreeJSONMappingOrderIsDeterministic(t *testing.T) {
 	ctx := context.Background()
 	content := `[
 		{"local_id":"e1","title":"Epic","type":"epic","topic":"import","priority":0},
 		{"local_id":"t2","title":"Second","type":"task","topic":"import","priority":0,"parent":"e1","blocked_by":["t1"]},
-		{"local_id":"t1","title":"First","type":"task","topic":"import","priority":0,"parent":"e1"},
+		{"local_id":"t1","title":"First","type":"epic","topic":"import","priority":0,"parent":"e1"},
 		{"local_id":"t3","title":"Third","type":"task","topic":"import","priority":0,"parent":"e1"},
 		{"local_id":"t4","title":"Fourth","type":"task","topic":"import","priority":0,"parent":"e1"}
 	]`
@@ -215,7 +222,7 @@ blocked_by: [t1]
 ---
 local_id: t1
 title: First
-type: task
+type: epic
 topic: import
 parent: e1
 ---

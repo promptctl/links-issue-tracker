@@ -158,6 +158,17 @@ func (h readyTestHarness) addDependency(dependentID, dependencyID string) {
 	}
 }
 
+// addDependencyWithinEpic is addDependency for two leaves of one epic, an
+// edge only a reparent leaves behind (see storeBlocksWithinEpic).
+func (h readyTestHarness) addDependencyWithinEpic(dependentID, dependencyID string) {
+	h.t.Helper()
+	prefix, err := h.ap.Workspace.IssuePrefix.Mintable()
+	if err != nil {
+		h.t.Fatalf("Mintable() error = %v", err)
+	}
+	storeBlocksWithinEpic(h.t, h.ctx, h.ap.Store, prefix.Value(), dependentID, dependencyID)
+}
+
 // runWorkableAnnotated reproduces what the workable views compute: the
 // shared gather, which is focus-neutral — it returns the scope beside the rows
 // for a view to narrow by, and orders nothing by it — plus the limit, returning
@@ -222,7 +233,7 @@ func TestRunReadyAnnotatesBlockedIssues(t *testing.T) {
 		ParentID:  epic.ID,
 		Lane:      "b",
 	})
-	h.addDependency(openB.ID, openA.ID)
+	h.addDependencyWithinEpic(openB.ID, openA.ID)
 
 	closed := h.createIssue(storage.CreateIssueInput{Prefix: "test",
 		Title:     "Already done",
@@ -298,7 +309,7 @@ func TestRunReadyBlocksOnlyOnDependenciesStillInPlay(t *testing.T) {
 				ParentID:  epic.ID,
 				Lane:      "dependent",
 			})
-			h.addDependency(dependent.ID, blocker.ID)
+			h.addDependencyWithinEpic(dependent.ID, blocker.ID)
 			// The live arm leaves the blocker where it started, so the four arms
 			// differ only in which exit the blocker took.
 			if tc.action != nil {
@@ -565,7 +576,7 @@ func TestRunReadyAnnotatesRankInversion(t *testing.T) {
 		Lane:      "second",
 	})
 	// first depends on second — second (dependency) has worse rank → inversion.
-	h.addDependency(first.ID, second.ID)
+	h.addDependencyWithinEpic(first.ID, second.ID)
 
 	got := h.runWorkableAnnotated(workableFilter{}, 0)
 
@@ -614,7 +625,7 @@ func TestRunReadyNoRankInversionWhenDependencyRankedAbove(t *testing.T) {
 		Lane:      "second",
 	})
 	// second depends on first — first (dependency) ranked above second → no inversion.
-	h.addDependency(second.ID, first.ID)
+	h.addDependencyWithinEpic(second.ID, first.ID)
 
 	got := h.runWorkableAnnotated(workableFilter{}, 0)
 
@@ -650,7 +661,7 @@ func TestRunReadyTextOutputShowsRankInversions(t *testing.T) {
 		Lane:      "second",
 	})
 	// first depends on second — second (dependency) has worse rank → inversion.
-	h.addDependency(first.ID, second.ID)
+	h.addDependencyWithinEpic(first.ID, second.ID)
 
 	text := h.runWorkableText()
 	if !strings.Contains(text, "rank inversion") {
@@ -1009,8 +1020,8 @@ func TestFocusPathFollowsExplicitDependenciesTransitively(t *testing.T) {
 	goal := h.createIssue(storage.CreateIssueInput{Prefix: "test",
 		Title: "Goal", Topic: "chain", IssueType: "task", ParentID: chain.ID, Lane: "goal",
 	})
-	h.addDependency(goal.ID, a.ID)
-	h.addDependency(a.ID, b.ID)
+	h.addDependencyWithinEpic(goal.ID, a.ID)
+	h.addDependencyWithinEpic(a.ID, b.ID)
 	h.setLabels(goal.ID, FocusLabel)
 
 	// Focus follows explicit dependency edges transitively (goal→a→b), so the
@@ -1041,7 +1052,7 @@ func TestFocusRemovalRestoresTheWholePoolAndUrgentDoesNotPropagate(t *testing.T)
 	goal := h.createIssue(storage.CreateIssueInput{Prefix: "test",
 		Title: "Urgent goal", Topic: "chain", IssueType: "task", Priority: 1, ParentID: chain.ID, Lane: "goal",
 	})
-	h.addDependency(goal.ID, prereq.ID)
+	h.addDependencyWithinEpic(goal.ID, prereq.ID)
 
 	// Urgent goal, no focus: the standing-urgent item is next; the goal's
 	// prerequisite does NOT inherit the goal's urgency, so it does not surface.

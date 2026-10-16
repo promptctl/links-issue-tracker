@@ -45,14 +45,20 @@ func TestListRelationColumns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(child): %v", err)
 	}
-	// The blocking pairs live in a second epic, each row in a lane of its own,
-	// so `blocked` can only come from the dependency edge and never from a
-	// sibling ranked ahead in a shared lane.
+	// The blocking pairs live in two more epics, each row in a lane of its
+	// own, so `blocked` can only come from the dependency edge and never from
+	// a sibling ranked ahead in a shared lane. The blockers sit in an epic
+	// apart from what they block: between two leaves of one epic a
+	// blocked-by edge is refused.
 	other, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "rel", Title: "Other epic", Topic: "rel", IssueType: "epic", Priority: 1})
 	if err != nil {
 		t.Fatalf("CreateIssue(other): %v", err)
 	}
-	openBlocker, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "rel", Title: "Open blocker", Topic: "rel", IssueType: "task", Priority: 0, ParentID: other.ID, Lane: "open-blocker"})
+	upstream, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "rel", Title: "Upstream epic", Topic: "rel", IssueType: "epic", Priority: 1})
+	if err != nil {
+		t.Fatalf("CreateIssue(upstream): %v", err)
+	}
+	openBlocker, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "rel", Title: "Open blocker", Topic: "rel", IssueType: "task", Priority: 0, ParentID: upstream.ID, Lane: "open-blocker"})
 	if err != nil {
 		t.Fatalf("CreateIssue(openBlocker): %v", err)
 	}
@@ -60,7 +66,7 @@ func TestListRelationColumns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(blockedByOpen): %v", err)
 	}
-	closedBlocker, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "rel", Title: "Closed blocker", Topic: "rel", IssueType: "task", Priority: 0, ParentID: other.ID, Lane: "closed-blocker"})
+	closedBlocker, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "rel", Title: "Closed blocker", Topic: "rel", IssueType: "task", Priority: 0, ParentID: upstream.ID, Lane: "closed-blocker"})
 	if err != nil {
 		t.Fatalf("CreateIssue(closedBlocker): %v", err)
 	}
@@ -95,7 +101,7 @@ func TestListRelationColumns(t *testing.T) {
 	}{
 		{epic.ID, "-", "-"}, // top-level: nothing above it
 		{child.ID, epic.ID, "-"},
-		{openBlocker.ID, other.ID, "-"},
+		{openBlocker.ID, upstream.ID, "-"},
 		{blockedByOpen.ID, other.ID, "blocked"},
 		{blockedByClosed.ID, other.ID, "-"}, // blocker is closed → not live → not blocked
 	}
@@ -174,7 +180,10 @@ func TestListDerivedColumnsLoadsOnlyWhatIsProjected(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	epic := seedEpicRaw(t, ctx, ap, "Gate", "gate")
-	blocker, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "gate", Title: "Blocker", Topic: "gate", IssueType: "task", Priority: 0, ParentID: epic, Lane: "blocker"})
+	// The blocker sits in an epic of its own: between two leaves of one epic a
+	// blocked-by edge is refused.
+	upstream := seedEpicRaw(t, ctx, ap, "Upstream", "gate")
+	blocker, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "gate", Title: "Blocker", Topic: "gate", IssueType: "task", Priority: 0, ParentID: upstream, Lane: "blocker"})
 	if err != nil {
 		t.Fatalf("CreateIssue(blocker): %v", err)
 	}

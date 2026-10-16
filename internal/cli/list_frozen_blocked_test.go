@@ -48,7 +48,7 @@ func TestBlockedColumnOnFrozenRows(t *testing.T) {
 			gated := h.createIssue(storage.CreateIssueInput{
 				Prefix: "frozen", Title: "Gated", Topic: "frozen", IssueType: "task", Description: "d", ParentID: epic.ID, Lane: "gated",
 			})
-			h.addDependency(gated.ID, blocker.ID)
+			h.addDependencyWithinEpic(gated.ID, blocker.ID)
 			ungated := h.createIssue(storage.CreateIssueInput{
 				Prefix: "frozen", Title: "Ungated", Topic: "frozen", IssueType: "task", Description: "d", ParentID: epic.ID, Lane: "ungated",
 			})

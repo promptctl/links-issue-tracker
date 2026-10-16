@@ -86,7 +86,7 @@ func TestBlockedColumnAgreesAcrossSurfaces(t *testing.T) {
 	byDependency := h.createIssue(storage.CreateIssueInput{
 		Prefix: "agree", Title: "Blocked by a dependency", Topic: "agree", IssueType: "task", Description: "d", ParentID: home.ID, Lane: "by-dependency",
 	})
-	h.addDependency(byDependency.ID, depBlocker.ID)
+	h.addDependencyWithinEpic(byDependency.ID, depBlocker.ID)
 
 	// The sibling gate: two children of one epic, the later one gated by the
 	// earlier. Both carry a description so the field gate stays out of it.

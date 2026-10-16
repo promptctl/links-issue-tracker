@@ -151,8 +151,8 @@ func TestTopRankReachesTheTopOfTheFocusedView(t *testing.T) {
 	late := h.createIssue(storage.CreateIssueInput{Prefix: "test",
 		Title: "Path step two", Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: "late",
 	})
-	h.addDependency(goal.ID, early.ID)
-	h.addDependency(goal.ID, late.ID)
+	h.addDependencyWithinEpic(goal.ID, early.ID)
+	h.addDependencyWithinEpic(goal.ID, late.ID)
 	h.setLabels(goal.ID, FocusLabel)
 
 	// Ranked to the top of the view it is aimed at, and it lands there.
@@ -193,8 +193,8 @@ func TestBacklogNoticeReportsTheLimitTrimNotJustTheScope(t *testing.T) {
 	_ = h.createIssue(storage.CreateIssueInput{Prefix: "test",
 		Title: "Unrelated", Topic: "noise", IssueType: "task", ParentID: noise.ID,
 	})
-	h.addDependency(goal.ID, prereqA.ID)
-	h.addDependency(goal.ID, prereqB.ID)
+	h.addDependencyWithinEpic(goal.ID, prereqA.ID)
+	h.addDependencyWithinEpic(goal.ID, prereqB.ID)
 
 	// Unfocused and untrimmed: the strong completeness sentence is true, and the
 	// trim clause is absent rather than reading "0 more row(s)".
@@ -293,7 +293,7 @@ func TestFocusedBacklogNamesItsScopeAndItsEscape(t *testing.T) {
 	off := h.createIssue(storage.CreateIssueInput{Prefix: "test",
 		Title: "Unrelated", Topic: "noise", IssueType: "task", ParentID: noise.ID,
 	})
-	h.addDependency(goal.ID, prereq.ID)
+	h.addDependencyWithinEpic(goal.ID, prereq.ID)
 
 	// Unfocused: the view states its own completeness, and every row is there.
 	text := h.runWorkableText()
@@ -385,8 +385,8 @@ func TestNextRefusesToSubstituteOffPathWorkForAStuckFocusPath(t *testing.T) {
 	off := h.createIssue(storage.CreateIssueInput{Prefix: "test",
 		Title: "Unrelated ready work", Topic: "noise", IssueType: "task", ParentID: noise.ID,
 	})
-	h.addDependency(goal.ID, blocked.ID)
-	h.addDependency(blocked.ID, gate.ID)
+	h.addDependencyWithinEpic(goal.ID, blocked.ID)
+	h.addDependencyWithinEpic(blocked.ID, gate.ID)
 	h.setLabels(gate.ID, NeedsDesignLabel)
 	h.setLabels(goal.ID, FocusLabel)
 
@@ -442,7 +442,7 @@ func TestFocusPathDeadEndDoesNotClaimOffPathWorkIsStartable(t *testing.T) {
 	gate := h.createIssue(storage.CreateIssueInput{Prefix: "test",
 		Title: "Design gate", Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: "gate",
 	})
-	h.addDependency(goal.ID, gate.ID)
+	h.addDependencyWithinEpic(goal.ID, gate.ID)
 	h.setLabels(gate.ID, NeedsDesignLabel)
 	h.setLabels(goal.ID, FocusLabel)
 
@@ -457,7 +457,7 @@ func TestFocusPathDeadEndDoesNotClaimOffPathWorkIsStartable(t *testing.T) {
 	offGate := h.createIssue(storage.CreateIssueInput{Prefix: "test",
 		Title: "Off-path blocker", Topic: "noise", IssueType: "task", ParentID: noise.ID, Lane: "off-gate",
 	})
-	h.addDependency(off.ID, offGate.ID)
+	h.addDependencyWithinEpic(off.ID, offGate.ID)
 	h.setLabels(offGate.ID, NeedsDesignLabel)
 
 	err := h.runNextErr()
@@ -530,7 +530,7 @@ func TestFocusScopeNeverHidesThisCheckoutsOwnWork(t *testing.T) {
 	mine := h.createIssue(storage.CreateIssueInput{Prefix: "test",
 		Title: "My in-flight work", Topic: "elsewhere", IssueType: "task", ParentID: elsewhere.ID,
 	})
-	h.addDependency(goal.ID, onPath.ID)
+	h.addDependencyWithinEpic(goal.ID, onPath.ID)
 
 	// This checkout starts work off the path, then a goal is focused.
 	h.transition(mine.ID, model.Start{Assignee: "tester"})
