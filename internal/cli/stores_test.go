@@ -507,7 +507,7 @@ func TestRunStoresCountsRendersRollup(t *testing.T) {
 	_, wantPrefix := seedDiscoverableStore(t, repo, "real", "real-workspace-id")
 
 	var counts bytes.Buffer
-	if err := runStores(context.Background(), &counts, []string{"--counts", root}); err != nil {
+	if err := runStores(underInvocation(context.Background()), &counts, []string{"--counts", root}); err != nil {
 		t.Fatalf("runStores --counts error = %v", err)
 	}
 	got := counts.String()

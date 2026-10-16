@@ -89,7 +89,7 @@ func TestAdoptRemoteTicketsOnInitGates(t *testing.T) {
 			t.Fatalf("workspace.Resolve() error = %v", err)
 		}
 		progress := captureProgress(t)
-		outcome := adoptRemoteTicketsOnInit(context.Background(), ws)
+		outcome := adoptRemoteTicketsOnInit(underInvocation(context.Background()), ws)
 		if outcome.State != initSyncHasLocalTickets {
 			t.Fatalf("outcome.State = %q, want %q", outcome.State, initSyncHasLocalTickets)
 		}
@@ -108,7 +108,7 @@ func TestAdoptRemoteTicketsOnInitGates(t *testing.T) {
 			t.Fatalf("workspace.Resolve() error = %v", err)
 		}
 		progress := captureProgress(t)
-		outcome := adoptRemoteTicketsOnInit(context.Background(), ws)
+		outcome := adoptRemoteTicketsOnInit(underInvocation(context.Background()), ws)
 		if outcome.State != initSyncNotConfigured {
 			t.Fatalf("outcome.State = %q, want %q", outcome.State, initSyncNotConfigured)
 		}
@@ -469,7 +469,7 @@ func TestInitAdoptHardStopsOnTimeout(t *testing.T) {
 	}
 	adoptRemoteTimeout = 20 * time.Millisecond
 
-	outcome := adoptRemoteTicketsOnInit(context.Background(), workspace.Info{})
+	outcome := adoptRemoteTicketsOnInit(underInvocation(context.Background()), workspace.Info{})
 
 	select {
 	case <-started:
