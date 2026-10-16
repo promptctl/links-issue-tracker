@@ -129,7 +129,7 @@ func rollupLocation(ctx context.Context, loc workspace.Location) (row projectRol
 		row.Err = err
 		return row
 	}
-	row.Migrated = openMigration(st)
+	row.Migrated = storage.OpenMigration(st)
 	// [LAW:no-silent-failure] A read-only close failure (e.g. the embedded Dolt
 	// engine failing to release its locks) surfaces as CloseErr rather than being
 	// discarded — and only when no substantive error already occurred, so it never

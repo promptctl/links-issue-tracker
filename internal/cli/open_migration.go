@@ -25,16 +25,6 @@ func reportOpenMigration(ctx context.Context, done storage.Migrated) {
 	fmt.Fprint(os.Stderr, migrationPruneWarning(done.PruneErr))
 }
 
-// openMigration is what opening st did to its stored shape. An engine whose
-// data has no versioned shape has nothing to migrate, so it migrated nothing.
-func openMigration(st storage.Store) storage.Migrated {
-	migrator, err := storage.SchemaMigration.Of(st)
-	if err != nil {
-		return storage.Migrated{}
-	}
-	return migrator.Migrated()
-}
-
 // migrationPruneWarning is the line an open's migration adds to the command's
 // output when rolling old migration snapshots off failed after the migration
 // committed, or "" when nothing failed.

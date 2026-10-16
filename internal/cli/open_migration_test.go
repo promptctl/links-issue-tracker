@@ -45,6 +45,30 @@ func TestACommandWhoseMigratingOpenCannotPruneStillRuns(t *testing.T) {
 	assertMigrationPruneFailureRecorded(t, stuck)
 }
 
+// An open that migrates and then fails on the checkout's identity returns no
+// App, so nothing reads the migration's report: the failed prune rides the
+// command's error instead of vanishing, since the next open migrates nothing.
+func TestAnOpenThatFailsAfterMigratingCarriesThePruneFailure(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("removal-permission injection has no effect as root")
+	}
+	isolateEvents(t)
+	repo, ws, _ := workspaceWhosePruneWillFail(t)
+	if err := os.WriteFile(filepath.Join(ws.PrivateGitDir, "lit-stream"), []byte("not a token"), 0o644); err != nil {
+		t.Fatalf("damage stream token: %v", err)
+	}
+
+	out, err := runCLIInDirAllowError(t, repo, "ls")
+	if err == nil {
+		t.Fatalf("lit ls succeeded over a damaged identity\noutput:\n%s", out)
+	}
+	for _, want := range []string{"malformed", "prune migration snapshots: "} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("lit ls error = %q, want it to contain %q", err, want)
+		}
+	}
+}
+
 // lit init's adopt gate counts the local tickets through a read open, which
 // migrates a store behind this binary: the gate records that open's migration
 // and warns of a failed prune like any other open.

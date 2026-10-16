@@ -234,6 +234,16 @@ type Migrated struct {
 	PruneErr error
 }
 
+// OpenMigration is what opening st did to its stored shape. An engine whose
+// data has no versioned shape has nothing to migrate, so it migrated nothing.
+func OpenMigration(st Store) Migrated {
+	migrator, err := SchemaMigration.Of(st)
+	if err != nil {
+		return Migrated{}
+	}
+	return migrator.Migrated()
+}
+
 // EventRecord is the open's migration as event facts.
 func (m Migrated) EventRecord() map[string]any {
 	return map[string]any{

@@ -166,7 +166,7 @@ one `--at` names, not the working directory's.
 | Key | Meaning |
 | --- | --- |
 | `migration.snapshot` | The recovery snapshot the open took before migrating, or `""` when there was nothing to migrate. |
-| `migration.snapshot_prune_error` | Why older migration snapshots could not be removed after the migration, or `null`. The command runs all the same, and prints a `warning: old migration snapshots were not removed:` line on stderr. |
+| `migration.snapshot_prune_error` | Why older migration snapshots could not be removed after the migration, or `null`. The command runs all the same, and prints a `warning: old migration snapshots were not removed:` line on stderr. A command whose open fails after migrating records neither key, and its error includes the failure. |
 
 `lit stores --counts` opens every store it finds, so it records counts
 instead.
