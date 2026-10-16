@@ -45,18 +45,29 @@ func TestMain(m *testing.M) {
 		os.Exit(0)
 	}
 	// Every lit this suite runs appends its invocation event under
-	// XDG_STATE_HOME, and the child processes inherit this environment: point
-	// it at a directory the suite owns, never the developer's own events file.
-	stateHome, err := os.MkdirTemp("", "lit-cmd-state-")
-	if err != nil {
-		panic("create isolated XDG_STATE_HOME: " + err.Error())
-	}
-	if err := os.Setenv("XDG_STATE_HOME", stateHome); err != nil {
-		panic("set XDG_STATE_HOME: " + err.Error())
-	}
+	// XDG_STATE_HOME and installs lit's cc-candybar plugin under XDG_DATA_HOME
+	// when it writes the statusline file, and the child processes inherit this
+	// environment: point both at directories the suite owns, never the
+	// developer's own events file or installed plugin.
+	homes := []string{isolateXDGHome("XDG_STATE_HOME", "lit-cmd-state-"), isolateXDGHome("XDG_DATA_HOME", "lit-cmd-data-")}
 	code := m.Run()
-	_ = os.RemoveAll(stateHome)
+	for _, dir := range homes {
+		_ = os.RemoveAll(dir)
+	}
 	os.Exit(code)
+}
+
+// isolateXDGHome points the XDG base directory key names at a fresh directory
+// for the rest of the process.
+func isolateXDGHome(key, prefix string) string {
+	dir, err := os.MkdirTemp("", prefix)
+	if err != nil {
+		panic("create isolated " + key + ": " + err.Error())
+	}
+	if err := os.Setenv(key, dir); err != nil {
+		panic("set " + key + ": " + err.Error())
+	}
+	return dir
 }
 
 // TestSIGTERMDuringWedgedSyncExitsCleanly is the acceptance pin: a SIGTERM

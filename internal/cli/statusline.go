@@ -8,6 +8,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/claims"
+	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/statusline"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
@@ -15,12 +16,23 @@ import (
 )
 
 // recordStatusline writes the facts a command recorded to its checkout's
-// statusline file, and puts what the write did on the command's event. A
-// failed write is a warning and never the command's failure: the command's own
-// work is already done, and the file is a record of it, not part of it.
+// statusline file, installs the cc-candybar plugin that reads it once the file
+// is written, and puts what both did on the command's event. A failure of
+// either is a warning and never the command's failure: the command's own work
+// is already done, and the file is a record of it, not part of it.
 func recordStatusline(ctx context.Context, ws workspace.Info, facts statusline.Facts) {
 	out, err := statusline.Write(statusline.LocationOf(ws.RootDir, ws.GitCommonDir), facts, time.Now())
 	recordStatuslineEvent(ctx, out, err)
+	var installed bool
+	var pluginErr error
+	if out.Bytes > 0 {
+		installed, pluginErr = installStatuslinePlugin()
+	}
+	telemetry.Set(ctx, "statusline.plugin_installed", installed)
+	telemetry.Set(ctx, "statusline.plugin_error", telemetry.ErrorText(pluginErr))
+	if pluginErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: cc-candybar plugin not installed: %v\n", pluginErr)
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: statusline file not written: %v\n", err)
 		return
@@ -28,6 +40,17 @@ func recordStatusline(ctx context.Context, ws workspace.Info, facts statusline.F
 	if out.Replaced != nil {
 		fmt.Fprintf(os.Stderr, "warning: statusline file was unreadable and has been rewritten: %v\n", out.Replaced)
 	}
+}
+
+// installStatuslinePlugin installs the definition this lit reads its file with
+// in the user's XDG data home, where cc-candybar discovers installed plugins,
+// so the bar can show the file on a machine where nothing but lit was set up.
+func installStatuslinePlugin() (bool, error) {
+	dataHome, err := config.DataHome()
+	if err != nil {
+		return false, err
+	}
+	return statusline.InstallPlugin(statusline.PluginPath(dataHome))
 }
 
 // recordStatuslineEvent puts one statusline write on the command's event.

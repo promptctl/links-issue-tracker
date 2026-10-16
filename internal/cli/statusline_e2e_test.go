@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -166,23 +167,25 @@ func statuslineEvent(t *testing.T) (map[string]any, int) {
 
 // Every command that writes the statusline file puts what the write did on its
 // own event — the slots it changed, the bytes it wrote, whether it created the
-// file and its exclude entry, and whether it replaced an unreadable file — and
-// a command that wrote nothing says so with zeros.
+// file and its exclude entry, whether it replaced an unreadable file, and
+// whether it installed the cc-candybar plugin — and a command that wrote
+// nothing says so with zeros.
 func TestEachStatuslineWriteRecordsItsFactsOnTheEvent(t *testing.T) {
 	isolateEvents(t)
 	dir, first, second := statuslineCheckout(t)
 	file := filepath.Join(dir, ".lit", "statusline.json")
+	plugin := statusline.PluginPath(os.Getenv("XDG_DATA_HOME"))
 
 	type step struct {
-		args                  []string
-		changed, rollup       string
-		created, excludeAdded bool
+		args                                   []string
+		changed, rollup                        string
+		created, excludeAdded, pluginInstalled bool
 	}
 	check := func(s step) {
 		t.Helper()
 		runCLIInDir(t, dir, s.args...)
 		facts, bytes := statuslineEvent(t)
-		want := decodeJSON(t, fmt.Sprintf(`{"statusline.changed": %s, "statusline.rollup_progress": %s, "statusline.created": %t, "statusline.exclude_added": %t, "statusline.replaced": null, "statusline.error": null}`, s.changed, s.rollup, s.created, s.excludeAdded))
+		want := decodeJSON(t, fmt.Sprintf(`{"statusline.changed": %s, "statusline.rollup_progress": %s, "statusline.created": %t, "statusline.exclude_added": %t, "statusline.replaced": null, "statusline.error": null, "statusline.plugin_installed": %t, "statusline.plugin_error": null}`, s.changed, s.rollup, s.created, s.excludeAdded, s.pluginInstalled))
 		if !reflect.DeepEqual(facts, want) {
 			t.Fatalf("lit %v event facts = %v\nwant %v", s.args, facts, want)
 		}
@@ -198,15 +201,18 @@ func TestEachStatuslineWriteRecordsItsFactsOnTheEvent(t *testing.T) {
 		}
 	}
 	for _, s := range []step{
-		{[]string{"show", first}, `[]`, `null`, false, false},
-		{[]string{"next"}, `["next"]`, `null`, true, true},
-		{[]string{"start", first, "--by", "agent"}, `["working_on"]`, `{"rollup_completed_count": 0, "rollup_total_count": 2}`, false, false},
-		{[]string{"update", first, "--title", "First, renamed"}, `["working_on", "next"]`, `{"rollup_completed_count": 0, "rollup_total_count": 2}`, false, false},
-		{[]string{"done", first}, `["working_on", "next"]`, `null`, false, false},
-		{[]string{"start", second, "--by", "agent"}, `["working_on"]`, `{"rollup_completed_count": 1, "rollup_total_count": 2}`, false, false},
-		{[]string{"purge", second, "--yes"}, `["working_on"]`, `null`, false, false},
+		{[]string{"show", first}, `[]`, `null`, false, false, false},
+		{[]string{"next"}, `["next"]`, `null`, true, true, true},
+		{[]string{"start", first, "--by", "agent"}, `["working_on"]`, `{"rollup_completed_count": 0, "rollup_total_count": 2}`, false, false, false},
+		{[]string{"update", first, "--title", "First, renamed"}, `["working_on", "next"]`, `{"rollup_completed_count": 0, "rollup_total_count": 2}`, false, false, false},
+		{[]string{"done", first}, `["working_on", "next"]`, `null`, false, false, false},
+		{[]string{"start", second, "--by", "agent"}, `["working_on"]`, `{"rollup_completed_count": 1, "rollup_total_count": 2}`, false, false, false},
+		{[]string{"purge", second, "--yes"}, `["working_on"]`, `null`, false, false, false},
 	} {
 		check(s)
+	}
+	if raw, err := os.ReadFile(plugin); err != nil || !bytes.Equal(raw, statusline.PluginDefinition) {
+		t.Fatalf("installed plugin at %s = %q, %v; want the embedded definition", plugin, raw, err)
 	}
 
 	// Recreating the file finds the exclude entry already there. A retitle of
@@ -214,7 +220,13 @@ func TestEachStatuslineWriteRecordsItsFactsOnTheEvent(t *testing.T) {
 	if err := os.Remove(file); err != nil {
 		t.Fatal(err)
 	}
-	check(step{[]string{"update", first, "--title", "First, again"}, `[]`, `null`, true, false})
+	check(step{[]string{"update", first, "--title", "First, again"}, `[]`, `null`, true, false, false})
+
+	// A removed plugin is installed again by the next write.
+	if err := os.Remove(plugin); err != nil {
+		t.Fatal(err)
+	}
+	check(step{[]string{"update", first, "--title", "First, a third time"}, `[]`, `null`, false, false, true})
 
 	// A file this lit cannot read is replaced, and the event says why.
 	if err := os.WriteFile(file, []byte("{working_on"), 0o644); err != nil {
@@ -349,6 +361,8 @@ func TestAFailedStatuslineWriteIsRecordedOnTheEvent(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(litDir, 0o755) })
+	dataHome := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dataHome)
 	rec := telemetry.Begin(telemetry.Event{Event: "lit start"})
 	ctx := telemetry.With(context.Background(), rec)
 	ws := workspace.Info{RootDir: root, Location: workspace.Location{GitCommonDir: filepath.Join(root, "git")}}
@@ -364,16 +378,52 @@ func TestAFailedStatuslineWriteIsRecordedOnTheEvent(t *testing.T) {
 	if got := facts["statusline.changed"]; !reflect.DeepEqual(got, []any{}) {
 		t.Fatalf("failed write recorded statusline.changed = %v; want []", got)
 	}
+	// With no file written there is nothing for the plugin to show, so it is
+	// not installed.
+	if facts["statusline.plugin_installed"] != false || facts["statusline.plugin_error"] != nil {
+		t.Fatalf("failed write recorded plugin_installed=%v plugin_error=%v; want false, null", facts["statusline.plugin_installed"], facts["statusline.plugin_error"])
+	}
+	if _, err := os.Stat(statusline.PluginPath(dataHome)); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("failed write left the plugin stat err = %v; want no plugin installed", err)
+	}
+}
+
+// A plugin that cannot be installed is on the event with its error, and the
+// statusline file it would read is written all the same.
+func TestAFailedPluginInstallIsRecordedOnTheEvent(t *testing.T) {
+	root := t.TempDir()
+	notADir := filepath.Join(t.TempDir(), "data-home")
+	if err := os.WriteFile(notADir, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_DATA_HOME", notADir)
+	rec := telemetry.Begin(telemetry.Event{Event: "lit start"})
+	ctx := telemetry.With(context.Background(), rec)
+	ws := workspace.Info{RootDir: root, Location: workspace.Location{GitCommonDir: filepath.Join(root, "git")}}
+	recordStatusline(ctx, ws, statusline.Facts{statusline.Started{Ticket: statusline.Ticket{ID: "t-1", Title: "One"}}})
+	ev := rec.Finish(telemetry.End{At: time.Now(), Outcome: telemetry.OutcomeOK})
+	facts := writtenFacts(t, ev)
+	if text, ok := facts["statusline.plugin_error"].(string); !ok || !strings.Contains(text, "cc-candybar plugin") {
+		t.Fatalf("statusline.plugin_error = %v; want the install's error", facts["statusline.plugin_error"])
+	}
+	if facts["statusline.plugin_installed"] != false || facts["statusline.error"] != nil || ev.Counts["statusline.bytes"] == 0 {
+		t.Fatalf("failed install recorded plugin_installed=%v error=%v bytes=%d; want false, null, the file's size", facts["statusline.plugin_installed"], facts["statusline.error"], ev.Counts["statusline.bytes"])
+	}
+	if got := readStatusline(t, root); workingOnID(got) != "t-1" {
+		t.Fatalf("file after a failed install = %+v; want working_on t-1", got.WorkingOn)
+	}
 }
 
 // statuslineCheckout is a fresh git checkout with lit initialised and two
-// tasks, First and Second, under one epic, in a HOME of its own so neither lit
-// nor the tools a statusline runs read this machine's config.
+// tasks, First and Second, under one epic, in a HOME and XDG homes of its own
+// so neither lit nor the tools a statusline runs read this machine's config,
+// and the plugin lit installs lands in a data home the test owns.
 func statuslineCheckout(t *testing.T) (dir, first, second string) {
 	t.Helper()
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	dir = t.TempDir()
 	runGit(t, dir, "init")
 	runGit(t, dir, "config", "user.email", "m@m.co")
