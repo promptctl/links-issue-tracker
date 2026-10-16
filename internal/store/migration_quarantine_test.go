@@ -358,6 +358,78 @@ func TestMigrationFailureCheckpointPath(t *testing.T) {
 	}
 }
 
+// TestRealMigrationFailureIsQuarantined pins that a migration goose itself
+// fails is quarantined: no test hook stands in for the step. Goose returns a
+// failed step's result only inside a *goose.PartialError, so this is the one
+// test that sees goose's own failure shape.
+func TestRealMigrationFailureIsQuarantined(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	// 00009_purges.sql creates the purges table, so running it again on a
+	// workspace that has the table fails.
+	const failVersion, failName = int64(9), "00009_purges.sql"
+	withStore(t, ctx, doltRoot, func(st *Store) {
+		if err := st.ExecRawForTest(ctx, fmt.Sprintf(`DELETE FROM goose_db_version WHERE version_id >= %d`, failVersion)); err != nil {
+			t.Fatalf("delete goose rows from v%d error = %v", failVersion, err)
+		}
+		if err := st.commitWorkingSet(ctx, "forget goose history from the failing migration for test"); err != nil {
+			t.Fatalf("commitWorkingSet error = %v", err)
+		}
+	})
+
+	_, openErr := Open(ctx, doltRoot, "test-workspace-id")
+	var cpErr *CheckpointResetError
+	if !errors.As(openErr, &cpErr) {
+		t.Fatalf("Open() error = %v; want a *CheckpointResetError", openErr)
+	}
+	if cpErr.Version != failVersion || cpErr.Name != failName || !cpErr.Quarantined {
+		t.Errorf("CheckpointResetError = {Version: %d, Name: %q, Quarantined: %t}, want {Version: %d, Name: %q, Quarantined: true}", cpErr.Version, cpErr.Name, cpErr.Quarantined, failVersion, failName)
+	}
+
+	_, reopenErr := Open(ctx, doltRoot, "test-workspace-id")
+	var qErr *QuarantineBlockError
+	if !errors.As(reopenErr, &qErr) || qErr.Version != failVersion {
+		t.Fatalf("reopen error = %v; want the *QuarantineBlockError of v%d", reopenErr, failVersion)
+	}
+}
+
+// TestTransientMigrationFailureIsNotQuarantined pins that a step goose fails
+// with online-GC contention is reset without a quarantine, so the next open
+// runs it again: the contention says nothing against the migration. The hook
+// fails the way goose does, a nil result and a *goose.PartialError, so the
+// failed version is identified from goose's own failure shape.
+func TestTransientMigrationFailureIsNotQuarantined(t *testing.T) {
+	// serial: no t.Parallel — installs the package-level migrationUpByOneForTest
+	// hook.
+	doltRoot := migratedWorkspaceWithGooseHistoryDropped(t)
+	failVersion := headVersion(t) + 1
+	migrationUpByOneForTest = func(context.Context, *goose.Provider) (*goose.MigrationResult, error) {
+		return nil, &goose.PartialError{
+			Failed: &goose.MigrationResult{Source: &goose.Source{Version: failVersion, Path: fmt.Sprintf("%05d_test.sql", failVersion)}},
+			Err:    errors.New("cannot update manifest: database is read only"),
+		}
+	}
+	t.Cleanup(func() { migrationUpByOneForTest = nil })
+
+	_, openErr := Open(context.Background(), doltRoot, "test-workspace-id")
+	migrationUpByOneForTest = nil
+	var cpErr *CheckpointResetError
+	if !errors.As(openErr, &cpErr) {
+		t.Fatalf("Open() error = %v; want a *CheckpointResetError", openErr)
+	}
+	if cpErr.Version != failVersion || cpErr.Quarantined {
+		t.Errorf("CheckpointResetError = {Version: %d, Quarantined: %t}, want {Version: %d, Quarantined: false}", cpErr.Version, cpErr.Quarantined, failVersion)
+	}
+	reopened, err := Open(context.Background(), doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("reopen after a transient migration failure error = %v; want the migration run again", err)
+	}
+	if err := reopened.Close(); err != nil {
+		t.Fatalf("Close(reopened) error = %v", err)
+	}
+}
+
 // TestMigrationCheckpointCreatedByFreshOpen pins that a fresh-workspace Open
 // creates at least one pre-migrate checkpoint branch as part of applying the
 // baseline migration.
@@ -579,8 +651,9 @@ func assertCancelledRunResetWithoutQuarantine(t *testing.T, openErr error, failV
 
 // TestCheckpointResetErrorUnknownVersion pins that CheckpointResetError.Error
 // emits a "version unknown" message (without a quarantine-clear SQL instruction)
-// when goose returns a nil MigrationResult so Version stays 0, and says the
-// next open runs the migration again, since nothing quarantined it. Otherwise
+// when goose fails before any step starts, naming no migration, so Version
+// stays 0, and says the next open runs the migration again, since nothing
+// quarantined it. Otherwise
 // the operator would see misleading output like v0 "" and a DELETE targeting a
 // quarantine row that was never inserted.
 func TestCheckpointResetErrorUnknownVersion(t *testing.T) {

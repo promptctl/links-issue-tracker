@@ -585,7 +585,22 @@ func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard) error {
 // consume the same embedded registry via newGooseProvider, so neither mints a
 // second schema-adaptation path.
 func (s *Store) upByOne(ctx context.Context, provider *goose.Provider) (*goose.MigrationResult, error) {
-	return provider.UpByOne(ctx)
+	return stepResult(provider.UpByOne(ctx))
+}
+
+// stepResult is a goose step's outcome with the step's result beside its error
+// even when the step failed: goose returns a nil result on failure and names
+// the migration that failed only in the *goose.PartialError, so the result is
+// taken from there. Without it a failing migration reaches earnsQuarantine as
+// version 0 and is never quarantined. A failure goose hits before any step
+// starts (preparing it, listing migrations) carries no PartialError and stays
+// unidentified.
+func stepResult(result *goose.MigrationResult, err error) (*goose.MigrationResult, error) {
+	var partial *goose.PartialError
+	if errors.As(err, &partial) {
+		return partial.Failed, err
+	}
+	return result, err
 }
 
 // liftWorkingSetToRegistry advances the live working set to the registry's max
@@ -664,12 +679,13 @@ func (s *Store) applyPendingMigrations(ctx context.Context) error {
 	}
 
 	// The startup path is the only one that injects synthetic goose failures
-	// (for the checkpoint/quarantine recovery tests); the hook is applied here,
-	// wrapping the shared pure stepper, so the transient reconcile lift never
-	// sees it. [LAW:composability]
+	// (for the checkpoint/quarantine recovery tests); the hook stands in for
+	// goose's step here, so the transient reconcile lift never sees it, and
+	// its outcome passes through stepResult like goose's own.
+	// [LAW:composability] [LAW:single-enforcer]
 	step := func() (*goose.MigrationResult, error) {
 		if hook := migrationUpByOneForTest; hook != nil {
-			return hook(ctx, provider)
+			return stepResult(hook(ctx, provider))
 		}
 		return s.upByOne(ctx, provider)
 	}
@@ -713,7 +729,7 @@ func (s *Store) applyPendingMigrations(ctx context.Context) error {
 			return nil
 		}
 		if gooseErr != nil {
-			return recoverFrom(result, gooseErr, earnsQuarantine(ctx, result))
+			return recoverFrom(result, gooseErr, earnsQuarantine(ctx, result, gooseErr))
 		}
 		// commitWorkingSet (not ...Once) so each migration commit gets the
 		// transient-manifest retry — startup migration is a critical path and a
@@ -729,12 +745,14 @@ func (s *Store) applyPendingMigrations(ctx context.Context) error {
 }
 
 // earnsQuarantine says whether a failed migration step earns a quarantine: it
-// does for a version goose identified, whose body failed while its caller still
-// wanted it run. A step cut short by the caller's cancellation says nothing
-// against the migration, so it earns none and the next open runs it again.
-func earnsQuarantine(ctx context.Context, result *goose.MigrationResult) bool {
+// does for a version goose identified, whose step failed while its caller still
+// wanted it run. A step cut short by the caller's cancellation, or by online-GC
+// contention (goose wraps every error inside a step, the database's as well as
+// the migration's), says nothing against the migration, so it earns none and
+// the next open runs it again.
+func earnsQuarantine(ctx context.Context, result *goose.MigrationResult, cause error) bool {
 	version, _ := migrationIdentity(result)
-	return version != 0 && ctx.Err() == nil
+	return version != 0 && ctx.Err() == nil && !isTransientGCContentionError(cause)
 }
 
 // migrationIdentity is the version and file name goose reported for a step, or
