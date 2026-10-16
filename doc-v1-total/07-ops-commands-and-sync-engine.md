@@ -85,7 +85,7 @@ Subcommands: `status`, `remote ls`, `fetch`, `pull`, `push`, `compact`, `reconci
 
 Flags: `--remote` (default: upstream → single-remote fallback), `--verbose`. Sequence (`sync.go`): reconcile remotes → resolve remote (none → traced `no_sync_remote`, exit 0, silent unless verbose) → remote has refs? (none → the first-push skip message, always printed: "Skipping lit sync: remote has no refs yet. This is normal ONLY for the very first push to a brand-new empty repo…") → resolve branch → `SyncPull`. Outcomes:
 
-- Pull error → traced, converted by `asSyncFailure` (a remote-schema-ahead becomes the blocking contract, exit 5).
+- Pull error → traced, converted by `asSyncFailure` (a remote-schema-ahead becomes the blocking contract, exit 3, reason `workspace_schema_ahead`).
 - Held outcomes: prose-pending → `SyncFailureError` class `prose_held`; unrelated histories → class `unrelated_histories`. Both exit 5, record a held trace, and notify the owner (`sync.go`).
 - `never_synced` state → skipped with `next_command: lit sync push --remote <r> --set-upstream` guidance. Up-to-date/fast-forwarded/linearized/ahead → `pulled` (verbose: `pulled <r>/<b> (<state>)`). An unrecognized state always prints "…this is a bug — please report it" (`sync.go`).
 
@@ -320,7 +320,7 @@ The eight embedded assets (all also ejectable):
 | `--output` before the command name; `--continue` | any command | `UnsupportedError` | 3 |
 | Stray positional | `init`, `version`, `hooks install`, `snapshots new`, `lifeboat *`, `upgrade`, `downgrade`, `sync reconcile` rows | `UsageError` | 2 |
 | Adopt could not confirm workspace state | `init` | refusal, no store created | 1 |
-| Remote schema ahead | push/pull/reconcile, automatic receive, mirror | `SyncFailureError` block (mirror: stderr only; automatic receive: printed by the next command) | 5 |
+| Remote schema ahead | push/pull/reconcile, automatic receive, mirror | `SyncFailureError` block (mirror: stderr only; automatic receive: printed by the next command) | 3 |
 | Held prose conflict | `sync pull` / reconcile rows | `SyncFailureError` / `MergeConflictError` | 5 |
 | Unrelated histories | `sync pull`, reconcile rows | `SyncFailureError` | 5 |
 | `take` without owner approval | `sync reconcile take` | refusal block | 5 |

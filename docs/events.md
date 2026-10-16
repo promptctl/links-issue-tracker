@@ -155,10 +155,13 @@ not work on this checkout's tickets, such as `lit sync push`, `lit init` or
 
 ## What a schema-ahead refusal records
 
-A command refused because the workspace's schema is ahead of this lit (reason
-`workspace_schema_ahead`) records which snapshot the refusal offered as a lossy
-rollback, and how many migration snapshots it read to decide. Every key is
-present exactly when the command ended in that refusal.
+A command ends with reason `workspace_schema_ahead` when a schema it was asked
+to operate on is ahead of this lit: the workspace's, or the sync remote's. Which
+keys it records says which.
+
+A command refused because the workspace's schema is ahead records which snapshot
+the refusal offered as a lossy rollback, and how many migration snapshots it read
+to decide. Every key is present exactly when the command ended in that refusal.
 
 | Key | Meaning |
 | --- | --- |
@@ -166,6 +169,17 @@ present exactly when the command ended in that refusal.
 | `schema_ahead.rollback_lookup_error` | Why snapshots could not be listed or read, or why the search stopped, or `null`. Set beside an offered snapshot when a newer one could not be read. |
 | `counts.schema_ahead.snapshots_examined` | The migration snapshots the refusal read, newest first, until it found one to offer. |
 | `counts.schema_ahead.snapshots_unreadable` | Those of them it could not read. |
+
+A sync command refused because the remote's schema is ahead, so this lit will
+not push to or reconcile with it, records the remote and both schema versions.
+Every key is present exactly when the command ended in that refusal.
+
+| Key | Meaning |
+| --- | --- |
+| `schema_ahead.remote` | The remote whose schema is ahead. |
+| `schema_ahead.branch` | The branch on that remote. |
+| `schema_ahead.remote_schema` | The schema version of the remote branch's head. |
+| `schema_ahead.running_schema_max` | The highest schema version this lit supports. |
 
 ## What `lit downgrade` records
 

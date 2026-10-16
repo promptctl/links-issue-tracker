@@ -89,6 +89,18 @@ func commandErrorReason(err error) commandReason {
 	if errors.As(err, &mergeConflict) {
 		return reasonMergeConflict
 	}
+	// A schema ahead of this binary: a workspace it refuses to open or cannot
+	// downgrade, or a remote it will not write below. Terminal for the binary
+	// that raised it — no rerun changes which lit is installed — so it must not
+	// reach the default's retry advice. Not validation_refused: the command is
+	// not what is wrong, so "adjust the command" would be false advice. The
+	// remote refusal arrives wrapped in the sync-failure block that renders it,
+	// so this arm precedes the block's: the block is how it reads, not what it
+	// is. [LAW:one-type-per-behavior]
+	var schemaAhead model.SchemaAhead
+	if errors.As(err, &schemaAhead) {
+		return reasonWorkspaceSchemaAhead
+	}
 	var syncFailure SyncFailureError
 	if errors.As(err, &syncFailure) {
 		return reasonSyncDivergence
@@ -203,16 +215,6 @@ func commandErrorReason(err error) commandReason {
 	if errors.Is(err, store.ErrWorkspaceNotInitialized) {
 		return reasonWorkspaceNotInitialized
 	}
-	// A workspace whose schema is ahead of this binary: one it refuses to open,
-	// or one it opens but cannot downgrade. Terminal for the binary that raised
-	// it — no rerun changes which lit is installed — so it must not reach the
-	// default's retry advice. Not validation_refused: the command is not what
-	// is wrong, so "adjust the command" would be false advice.
-	// [LAW:one-type-per-behavior]
-	var schemaAhead model.SchemaAhead
-	if errors.As(err, &schemaAhead) {
-		return reasonWorkspaceSchemaAhead
-	}
 	// A pending migration that failed and is quarantined: on the run that
 	// failed, or any open after it. Every open that has it pending refuses
 	// until the quarantine row is cleared or a snapshot from before the
@@ -269,6 +271,11 @@ func commandErrorReason(err error) commandReason {
 	}
 	return reasonCommandFailed
 }
+
+// installReplacesLit is why installing a lit is the user's call: the
+// workspace_schema_ahead remediation and the remote-schema-ahead sync block
+// both gate `lit upgrade` on it. [LAW:one-source-of-truth]
+const installReplacesLit = "Installing a different lit replaces it for every workspace on this machine"
 
 func commandErrorRemediation(reason commandReason) string {
 	switch reason {
@@ -416,7 +423,7 @@ func commandErrorRemediation(reason commandReason) string {
 		// neither on its own, the way takeover_unconfirmed gates `--take`. The
 		// rollback is named conditionally because the message offers it only
 		// when a recovery snapshot exists.
-		return "Do not retry unchanged — this lit is older than the workspace's schema, and rerunning the command with the same binary repeats this refusal. The message above names the supported path. " + agentInstructionsOpen + "Installing a different lit replaces it for every workspace on this machine, and any snapshot rollback the message offers discards data: take such a path only when the user directs it, and until then surface this refusal to the user as blocking." + agentInstructionsClose
+		return "Do not retry unchanged — this lit is older than the schema it was asked to operate on, this workspace's or the remote's it syncs with, and rerunning the command with the same binary repeats this refusal. The message above names the supported path. " + agentInstructionsOpen + installReplacesLit + ", and any snapshot rollback the message offers discards data: take such a path only when the user directs it, and until then surface this refusal to the user as blocking." + agentInstructionsClose
 	case reasonMigrationQuarantined:
 		// The message names both ways out, so this line defers to it rather
 		// than restating either. [LAW:one-source-of-truth] It does say which

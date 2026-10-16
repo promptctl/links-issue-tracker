@@ -8,6 +8,7 @@ import (
 
 	embedded "github.com/dolthub/driver"
 
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/version"
 )
 
@@ -26,9 +27,9 @@ import (
 // (RemoteVersion, BinarySupportedMax) — never inferred from a query happening to
 // succeed or fail on a column. It is the REMOTE mirror of
 // UnsupportedSchemaVersionError (the LOCAL workspace-ahead refusal): each names the
-// same remedy, install the newer binary, for the boundary it guards.
-// [LAW:one-type-per-behavior] one refusal shape per boundary, both routing to
-// `lit upgrade`.
+// same remedy, install the newer binary, for the boundary it guards, and both are
+// model.SchemaAhead, so the CLI gives them one exit code, one reason and one
+// install-gating policy. [LAW:one-type-per-behavior]
 type RemoteSchemaAheadError struct {
 	Remote             string
 	Branch             string
@@ -44,6 +45,26 @@ func (e *RemoteSchemaAheadError) Error() string {
 		e.Remote, e.Branch, e.RemoteVersion, e.BinarySupportedMax, e.RemoteVersion,
 	)
 }
+
+// SchemaAheadOfBinary: no rerun of this binary writes to the remote; only a lit
+// whose schema support reaches the remote head's can.
+func (*RemoteSchemaAheadError) SchemaAheadOfBinary() {}
+
+// EventRecord is the remote that refused and both schema versions, so an event
+// whose reason is workspace_schema_ahead says which boundary refused it.
+func (e *RemoteSchemaAheadError) EventRecord() (map[string]any, map[string]int) {
+	return map[string]any{
+		"schema_ahead.remote":             e.Remote,
+		"schema_ahead.branch":             e.Branch,
+		"schema_ahead.remote_schema":      e.RemoteVersion,
+		"schema_ahead.running_schema_max": e.BinarySupportedMax,
+	}, nil
+}
+
+var (
+	_ model.SchemaAhead   = (*RemoteSchemaAheadError)(nil)
+	_ model.RecordedError = (*RemoteSchemaAheadError)(nil)
+)
 
 // guardRemoteSchemaAhead refuses when the remote-tracking head's schema exceeds
 // this binary's schema support, so no push authors a commit below the remote head's

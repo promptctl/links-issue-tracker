@@ -190,6 +190,10 @@ func TestCommandErrorReason(t *testing.T) {
 		// are model.Refusal and take validation_refused.
 		{"workspace schema ahead", schemaAheadError(), "workspace_schema_ahead"},
 		{"workspace schema ahead wrapped", fmt.Errorf("open store: %w", schemaAheadError()), "workspace_schema_ahead"},
+		// A remote ahead of this binary is the same condition at the sync
+		// boundary: it reads as the sync-failure block and classifies as the
+		// refusal the block wraps, never as sync_divergence.
+		{"remote schema ahead", asSyncFailure(remoteSchemaAheadError()), "workspace_schema_ahead"},
 		{"migration quarantined wrapped", fmt.Errorf("open store: %w", quarantineBlockError()), "migration_quarantined"},
 		{"upgrade target behind wrapped", fmt.Errorf("upgrade: %w", upgradeTargetBehindError()), "validation_refused"},
 		// A stat that failed for any reason but ENOENT is an unclassified fault,
@@ -436,6 +440,12 @@ func schemaAheadError() *store.UnsupportedSchemaVersionError {
 	return &store.UnsupportedSchemaVersionError{WorkspaceVersion: 999, MaxSupported: 5, MissingBaseline: []string{"issues.title"}}
 }
 
+// remoteSchemaAheadError is a push or reconcile against a remote whose head is
+// at schema 999, from a binary that supports up to 5.
+func remoteSchemaAheadError() *store.RemoteSchemaAheadError {
+	return &store.RemoteSchemaAheadError{Remote: "origin", Branch: "master", RemoteVersion: 999, BinarySupportedMax: 5}
+}
+
 // quarantineBlockError is the refusal every open returns once migration v9
 // has failed and been quarantined.
 func quarantineBlockError() *store.QuarantineBlockError {
@@ -469,6 +479,9 @@ func TestWriteCommandErrorSchemaVersionRefusals(t *testing.T) {
 		// Both paths the message names change more than this command, so the
 		// agent is told to wait for the user rather than take either.
 		{"workspace schema ahead", schemaAheadError(), "workspace_schema_ahead", "take such a path only when the user directs it", "adjust the command"},
+		// The same condition at the sync boundary gets the same contract, and
+		// its message is the sync-failure block.
+		{"remote schema ahead", asSyncFailure(remoteSchemaAheadError()), "workspace_schema_ahead", "take such a path only when the user directs it", "adjust the command"},
 		// Same shape: the command is not what is wrong, and both ways out the
 		// message names change more than it, so neither is the agent's to take.
 		{

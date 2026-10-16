@@ -317,7 +317,7 @@ Test `TestSyncCompactRunsCleanlyAndPreservesData` (`sync_test.go`).
 
 ### 4.1 `RemoteSchemaAheadError`
 
-Fields (`sync_schema_guard.go`): `Remote`, `Branch`, `RemoteVersion int64`, `BinarySupportedMax int64`.
+Fields (`sync_schema_guard.go`): `Remote`, `Branch`, `RemoteVersion int64`, `BinarySupportedMax int64`. It declares `SchemaAheadOfBinary()`, so it is a `model.SchemaAhead` (`sync_schema_guard.go`).
 
 `Error()` (`sync_schema_guard.go`) renders:
 `"remote %s/%s is at schema version %d but this binary supports only up to %d; refusing to write a commit below the remote head's schema — run `lit upgrade` to install a lit that supports schema version %d"` (Remote, Branch, RemoteVersion, BinarySupportedMax, RemoteVersion).

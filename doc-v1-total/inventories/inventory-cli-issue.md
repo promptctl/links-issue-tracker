@@ -176,28 +176,29 @@ Constants (`exit.go`):
 1. `storage.NotFoundError` → 4 (`exit.go`)
 2. `VersionNotFoundError` → 4 (`exit.go`)
 3. `MergeConflictError` → 5 (`exit.go`)
-4. `SyncFailureError` → 5 (`exit.go`)
-5. `templateShapeError` → 3 (`exit.go`)
-6. `ownerApprovalRefusalError` → 5 (`exit.go`)
-7. `CorruptionError` → 7 (`exit.go`)
-8. `UsageError` → 2 (`exit.go`)
-9. `UnknownCommandError` → 3 (`exit.go`)
-10. `RetiredCommandError` → 3 (`exit.go`)
-11. `model.Refusal` (every `model.ValidationError`, `model.FrozenIssueError`, and the upgrade/downgrade target refusals) → 3 (`exit.go`)
-12. `model.StateRequestError` (`model.ContainerActionError`, `lifecycle.RetentionError`) → 6 when `Satisfied()`, else 3 (`exit.go`)
-13. `UnsupportedError` → 3 (`exit.go`)
-14. `takeoverUnconfirmedError` → 3 (`exit.go`)
-15. `purgeUnconfirmedError` → 3 (`exit.go`)
-16. `Exhausted` → 6 (`exit.go`)
-17. `NoWork` → 6 (`exit.go`)
-18. `OutsideWorkspaceError` → 3 (`exit.go`)
-19. `errors.Is(err, store.ErrWorkspaceNotInitialized)` → 3 (`exit.go`)
-20. `model.SchemaAhead` (`*store.UnsupportedSchemaVersionError`, `*store.DowngradeSpanUnsupportedError`) → 3 (`exit.go`)
-21. `*store.QuarantineBlockError` → 3 (`exit.go`)
-22. `errors.Is(err, workspace.ErrIssuePrefixRefused)` → 3 (`exit.go`)
-23. `BulkFailureError` → 1 (`exit.go`)
-24. `errors.Is(err, store.ErrTransientGCContention)` → 1 (`exit.go`)
-25. anything else → 1 (`exit.go`)
+4. `model.SchemaAhead` (`*store.UnsupportedSchemaVersionError`, `*store.DowngradeSpanUnsupportedError`, `*store.RemoteSchemaAheadError`, which a remote-schema-ahead `SyncFailureError` unwraps to) → 3 (`exit.go`)
+5. `SyncFailureError` → 5 (`exit.go`)
+6. `templateShapeError` → 3 (`exit.go`)
+7. `ownerApprovalRefusalError` → 5 (`exit.go`)
+8. `CorruptionError` → 7 (`exit.go`)
+9. `UsageError` → 2 (`exit.go`)
+10. `UnknownCommandError` → 3 (`exit.go`)
+11. `RetiredCommandError` → 3 (`exit.go`)
+12. `model.Refusal` (every `model.ValidationError`, `model.FrozenIssueError`, and the upgrade/downgrade target refusals) → 3 (`exit.go`)
+13. `model.StateRequestError` (`model.ContainerActionError`, `lifecycle.RetentionError`) → 6 when `Satisfied()`, else 3 (`exit.go`)
+14. `UnsupportedError` → 3 (`exit.go`)
+15. `takeoverUnconfirmedError` → 3 (`exit.go`)
+16. `purgeUnconfirmedError` → 3 (`exit.go`)
+17. `Exhausted` → 6 (`exit.go`)
+18. `Narrowed` → 6 (`exit.go`)
+19. `NoWork` → 6 (`exit.go`)
+20. `OutsideWorkspaceError` → 3 (`exit.go`)
+21. `errors.Is(err, store.ErrWorkspaceNotInitialized)` → 3 (`exit.go`)
+22. `*store.QuarantineBlockError` → 3 (`exit.go`)
+23. `errors.Is(err, workspace.ErrIssuePrefixRefused)` → 3 (`exit.go`)
+24. `BulkFailureError` → 1 (`exit.go`)
+25. `errors.Is(err, store.ErrTransientGCContention)` → 1 (`exit.go`)
+26. anything else → 1 (`exit.go`)
 
 Error types defined in `cli.go`: `MergeConflictError` (`cli.go`),
 `CorruptionError` (`cli.go`), `UsageError` (`cli.go`),
@@ -223,29 +224,29 @@ several of these types gets the reason of the earliest one:
 1. `storage.NotFoundError` → `entity_not_found`
 2. `VersionNotFoundError` → `version_not_found`
 3. `MergeConflictError` → `merge_conflict`
-4. `SyncFailureError` → `sync_divergence`
-5. `store.RemoteUnreachableError` → `remote_unreachable`
-6. `ownerApprovalRefusalError` → `owner_approval_required`
-7. `CorruptionError` → `corruption_detected`
-8. `UnknownCommandError` → `unknown_command`
-9. `RetiredCommandError` → `retired_command`
-10. `UsageError` → `usage_error`
-11. any error implementing `model.Refusal` → `validation_refused`
-12. `templateShapeError` → `template_shape_refused`
-13. `model.StateRequestError` → `state_already_holds` when its `Satisfied()`
+4. `model.SchemaAhead` (`*store.UnsupportedSchemaVersionError`, `*store.DowngradeSpanUnsupportedError`, `*store.RemoteSchemaAheadError`, which a remote-schema-ahead `SyncFailureError` unwraps to) → `workspace_schema_ahead`
+5. `SyncFailureError` → `sync_divergence`
+6. `store.RemoteUnreachableError` → `remote_unreachable`
+7. `ownerApprovalRefusalError` → `owner_approval_required`
+8. `CorruptionError` → `corruption_detected`
+9. `UnknownCommandError` → `unknown_command`
+10. `RetiredCommandError` → `retired_command`
+11. `UsageError` → `usage_error`
+12. any error implementing `model.Refusal` → `validation_refused`
+13. `templateShapeError` → `template_shape_refused`
+14. `model.StateRequestError` → `state_already_holds` when its `Satisfied()`
     is true (for `ContainerActionError`: the epic has at least one child, its
     derived state already equals the requested one, and no child remains
     unfinished; for `RetentionError`: the `Retain` cell says so), otherwise
     `validation_refused`
-14. `Exhausted` → `scope_exhausted`
-15. `Narrowed` → `scope_narrowed`
-16. `NoWork` → `no_ready_work`
-17. `UnsupportedError` → `unsupported_flag`
-18. `takeoverUnconfirmedError` → `takeover_unconfirmed`
-19. `purgeUnconfirmedError` → `purge_unconfirmed`
-20. `OutsideWorkspaceError` → `outside_git_workspace`
-21. `errors.Is(err, store.ErrWorkspaceNotInitialized)` → `workspace_not_initialized`
-22. `model.SchemaAhead` (`*store.UnsupportedSchemaVersionError`, `*store.DowngradeSpanUnsupportedError`) → `workspace_schema_ahead`
+15. `Exhausted` → `scope_exhausted`
+16. `Narrowed` → `scope_narrowed`
+17. `NoWork` → `no_ready_work`
+18. `UnsupportedError` → `unsupported_flag`
+19. `takeoverUnconfirmedError` → `takeover_unconfirmed`
+20. `purgeUnconfirmedError` → `purge_unconfirmed`
+21. `OutsideWorkspaceError` → `outside_git_workspace`
+22. `errors.Is(err, store.ErrWorkspaceNotInitialized)` → `workspace_not_initialized`
 23. `*store.QuarantineBlockError` → `migration_quarantined`
 24. `workspace.StoredPrefixError` → `stored_prefix_refused`
 25. `errors.Is(err, workspace.ErrIssuePrefixRefused)` → `validation_refused`
@@ -285,7 +286,7 @@ empty string means no `remediation:` line is printed:
 - `purge_unconfirmed`: "Rerun with `--yes` to purge it, or run `lit delete <id>` to remove it reversibly. \<agent-instructions>A purge cannot be undone and reaches every store lit syncs with: pass `--yes` only when the user directs the purge.\</agent-instructions>"
 - `outside_git_workspace`: "Run the command inside a git repository/worktree with links initialized."
 - `workspace_not_initialized`: "Do not retry unchanged — this repository has no lit workspace, and retrying this command cannot create one. Run `lit init` here to create it, or change to a directory that already has one."
-- `workspace_schema_ahead`: "Do not retry unchanged — this lit is older than the workspace's schema, and rerunning the command with the same binary repeats this refusal. The message above names the supported path. \<agent-instructions>Installing a different lit replaces it for every workspace on this machine, and any snapshot rollback the message offers discards data: take such a path only when the user directs it, and until then surface this refusal to the user as blocking.\</agent-instructions>"
+- `workspace_schema_ahead`: "Do not retry unchanged — this lit is older than the schema it was asked to operate on, this workspace's or the remote's it syncs with, and rerunning the command with the same binary repeats this refusal. The message above names the supported path. \<agent-instructions>Installing a different lit replaces it for every workspace on this machine, and any snapshot rollback the message offers discards data: take such a path only when the user directs it, and until then surface this refusal to the user as blocking.\</agent-instructions>"
 - `migration_quarantined`: "Do not retry unchanged — a migration this workspace has pending failed and is quarantined, and every command that opens the store refuses until the quarantine is cleared or a snapshot taken before the failure is restored. The message above names both. \<agent-instructions>Restoring a snapshot discards everything written since it was taken, and clearing the quarantine lets a migration that already failed run again: take either path only when the user directs it, and until then surface this refusal to the user as blocking.\</agent-instructions>"
 - `bulk_partial_failure`: "Some items failed; see the per-item errors above. Re-run the command for only the failed IDs after addressing each error."
 - default: "Retry the command. If it still fails, run `lit doctor` for diagnostics."
