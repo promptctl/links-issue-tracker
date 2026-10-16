@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -481,10 +480,14 @@ func TestInstallFetchesTheReleaseURLsLitUpgradeFetches(t *testing.T) {
 	if install, lit := installRequest("--latest-release"), litRequests[0]; install != lit {
 		t.Errorf("latest-release feed: install.sh requests %q, lit upgrade requests %q", install, lit)
 	}
-	if install, lit := path.Dir(installRequest("--from-release", tag)), path.Dir(litRequests[1]); install != lit {
+	if install, lit := directory(installRequest("--from-release", tag)), directory(litRequests[1]); install != lit {
 		t.Errorf("release %s download directory: install.sh fetches from %q, lit upgrade from %q", tag, install, lit)
 	}
 }
+
+// directory is url up to its last "/", which a release download URL puts
+// before the file name.
+func directory(url string) string { return url[:strings.LastIndex(url, "/")] }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
