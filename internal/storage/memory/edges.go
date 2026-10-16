@@ -219,11 +219,13 @@ func (e *Engine) rejectCycle(relType model.RelationType, srcID, dstID string) er
 		// constraint set rather than an awkward shape. Rejecting the
 		// cycle-closing edge at this write boundary is what makes the state
 		// unrepresentable rather than something a later repair pass notices.
-		// [LAW:types-are-the-program]
-		if err := e.rejectBlocksCycle(srcID, dstID); err != nil {
+		// The same-epic rule is judged first, as the import gate judges it: an
+		// edge inside one epic that also closes a cycle is refused by the rule
+		// that names the fix. [LAW:types-are-the-program]
+		if err := storage.RejectBlocksWithinEpic(e.epicTree(), srcID, dstID); err != nil {
 			return err
 		}
-		return storage.RejectBlocksWithinEpic(e.epicTree(), srcID, dstID)
+		return e.rejectBlocksCycle(srcID, dstID)
 	case model.RelParentChild:
 		return e.rejectParentCycle(srcID, dstID)
 	}

@@ -2807,6 +2807,21 @@ func blocksNeverOrdersTwoLeavesOfOneEpic(t *testing.T, ctx context.Context, st s
 			t.Fatalf("RemoveRelation(%s) error = %v", a.what, err)
 		}
 	}
+
+	// A reparent can leave an edge between two leaves of one epic behind. The
+	// reverse edge then also closes a cycle, and is refused as an edge inside
+	// the epic, the refusal that names the fix.
+	if _, err := st.SetParent(ctx, storage.SetParentInput{ChildID: second.ID, ParentID: other.ID}); err != nil {
+		t.Fatalf("SetParent(%s into the other epic) error = %v", second.ID, err)
+	}
+	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: second.ID, DstID: first.ID, Type: model.RelBlockedBy}); err != nil {
+		t.Fatalf("AddRelation(%s blocked by %s, across epics) error = %v", second.ID, first.ID, err)
+	}
+	if _, err := st.SetParent(ctx, storage.SetParentInput{ChildID: second.ID, ParentID: epic.ID}); err != nil {
+		t.Fatalf("SetParent(%s back into its epic) error = %v", second.ID, err)
+	}
+	_, err = st.AddRelation(ctx, storage.AddRelationInput{SrcID: first.ID, DstID: second.ID, Type: model.RelBlockedBy})
+	assertHierarchyBlocksRefused(t, err, "AddRelation(a leaf blocked by the leaf beside it, closing a cycle)")
 }
 
 func assertHierarchyBlocksRefused(t *testing.T, err error, what string) {

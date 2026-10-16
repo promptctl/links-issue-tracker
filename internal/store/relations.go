@@ -381,15 +381,17 @@ func rejectCycleTx(ctx context.Context, tx *sql.Tx, rel model.Relation) error {
 	case model.RelBlockedBy:
 		// A rank order is a total order, and one that honors every blocked-by edge
 		// exists iff there is no cycle, so a cycle is an unsatisfiable
-		// constraint set rather than an awkward shape.
-		if err := rejectBlocksCycle(ctx, tx, rel.SrcID, rel.DstID); err != nil {
-			return err
-		}
+		// constraint set rather than an awkward shape. The same-epic rule is
+		// judged first, as the import gate judges it: an edge inside one epic
+		// that also closes a cycle is refused by the rule that names the fix.
 		tree, err := loadEpicTree(ctx, tx)
 		if err != nil {
 			return fmt.Errorf("blocks hierarchy check: %w", err)
 		}
-		return storage.RejectBlocksWithinEpic(tree, rel.SrcID, rel.DstID)
+		if err := storage.RejectBlocksWithinEpic(tree, rel.SrcID, rel.DstID); err != nil {
+			return err
+		}
+		return rejectBlocksCycle(ctx, tx, rel.SrcID, rel.DstID)
 	case model.RelParentChild:
 		return rejectParentCycle(ctx, tx, rel.SrcID, rel.DstID)
 	}
