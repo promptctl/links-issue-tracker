@@ -27,7 +27,7 @@ func TestNextOutcomesBecomeStatuslineFacts(t *testing.T) {
 		t.Fatal(err)
 	}
 	row := annotation.AnnotatedIssue{Issue: inFlight}
-	resumed := ResumedOwnWork{Row: row, Lane: model.LaneOf(inFlight, &epic)}
+	resumed := ResumedOwnWork{Row: row}
 	ticket := statusline.Ticket{ID: "t-1", Title: "One"}
 	counted := statusline.RollupCounted{ID: "t-1", Progress: statusline.RollupProgress{CompletedCount: 1, TotalCount: 3}}
 	cases := []struct {

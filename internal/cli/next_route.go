@@ -35,13 +35,7 @@ type ServedFromClaim struct{ Row annotation.AnnotatedIssue }
 // state rather than an act. Routing does not gate servability on
 // model.StateOpen: an in_progress row would then be servable to nobody, which
 // would hide every orphan and the very ticket the checkout is working on.
-//
-// It carries its Lane because the statusline file records that lane's progress
-// with the work in flight.
-type ResumedOwnWork struct {
-	Row  annotation.AnnotatedIssue
-	Lane model.LaneID
-}
+type ResumedOwnWork struct{ Row annotation.AnnotatedIssue }
 
 // ServedFromEpicLane is a pick from a different lane of the same epic this
 // checkout already holds a lane in — the GRANULARITY RULING's new step 2,
@@ -547,7 +541,7 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 			// alike, whichever the backlog ranks first.
 			if row, how, ok := pickFrom(rows, serves, mine, serveWork, resumeWork); ok {
 				if how == resumeWork {
-					return ResumedOwnWork{Row: row, Lane: laneOf(row)}, row, true
+					return ResumedOwnWork{Row: row}, row, true
 				}
 				return ServedFromClaim{Row: row}, row, true
 			}

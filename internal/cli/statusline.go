@@ -48,16 +48,15 @@ func recordStatuslineEvent(ctx context.Context, out statusline.Outcome, err erro
 // nextStatuslineFacts is what a `lit next` outcome tells the statusline file.
 // Work handed back to this checkout is what it is working on, whatever narrowed
 // the question, and its rollup progress is counted from the evidence routing
-// read. The
-// pick is "what's next" only when the question was the plain one: a filtered or
-// --all `lit next` answers a different question.
+// read. The pick is "what's next" only when the question was the plain one: a
+// filtered or --all `lit next` answers a different question.
 func nextStatuslineFacts(outcome NextOutcome, plain bool, evidence claims.Evidence) statusline.Facts {
 	var facts statusline.Facts
 	var picked *statusline.Ticket
 	switch o := outcome.(type) {
 	case ResumedOwnWork:
 		picked = statuslineTicketRef(o.Row.Issue)
-		facts.Record(statusline.Started{Ticket: *picked}, rollupCounted(o.Row.ID, evidence.LaneProgress(o.Lane)))
+		facts.Record(statusline.Started{Ticket: *picked}, rollupCounted(evidence, o.Row.Issue))
 	case ServedFromClaim:
 		picked = statuslineTicketRef(o.Row.Issue)
 	case ServedFromEpicLane:
@@ -85,9 +84,11 @@ func statuslineTicketRef(issue model.Issue) *statusline.Ticket {
 	return &ticket
 }
 
-// rollupCounted is a lane's progress as the statusline file records it for
-// the ticket being worked on. It is the count the claim line renders, so the
-// file and lit backlog cannot disagree about it. [LAW:one-source-of-truth]
-func rollupCounted(id string, progress claims.LaneProgress) statusline.RollupCounted {
-	return statusline.RollupCounted{ID: id, Progress: statusline.RollupProgress{CompletedCount: progress.Done, TotalCount: progress.Total}}
+// rollupCounted is the progress of the lane the worked-on ticket is in, as the
+// statusline file records it. It is the count the claim line renders, read
+// from the same evidence, so the file and lit backlog agree when the file is
+// written; docs/statusline.md says when it goes stale. [LAW:one-source-of-truth]
+func rollupCounted(evidence claims.Evidence, worked model.Issue) statusline.RollupCounted {
+	progress := evidence.LaneProgressWith(worked)
+	return statusline.RollupCounted{ID: worked.ID, Progress: statusline.RollupProgress{CompletedCount: progress.Done, TotalCount: progress.Total}}
 }
