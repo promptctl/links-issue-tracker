@@ -176,7 +176,7 @@ This is why a plain markdown file with no frontmatter loads but never fires
 
 ### 1.10 A complete, valid example file
 
-The one file shipped as an embedded default, `internal/workflows/defaults/done.md`:
+One of the five files shipped as embedded defaults, `internal/workflows/defaults/done.md`:
 
 ```
 ---
@@ -208,7 +208,11 @@ Ticket <id> has been closed. Before moving on, take a moment to review related t
 3. **Embedded**: compiled into the binary via `//go:embed defaults/*.md`
    (`internal/workflows/load.go`), rooted at `defaults` so entries walk with root-relative
    paths identical to the other two layers → `templates.SourceEmbedded`
-   (`internal/templates/templates.go`). Today the tree contains exactly one file, `done.md`.
+   (`internal/templates/templates.go`). Today the tree contains five files: `done.md`
+   (`events: [work_finished]`), and `phase-plan.md`, `phase-impl.md`, `phase-review.md` and
+   `phase-merge.md`, each bound to entering its phase (`states: [plan]` and so on), whose
+   bodies name the command that records the next move — `lit phase <id> --to impl`,
+   `lit phase <id> --to review`, `lit phase <id> --to merge`, and `lit done <id>`.
 
 ### 2.2 Discovery within a layer
 

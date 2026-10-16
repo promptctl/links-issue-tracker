@@ -497,7 +497,8 @@ func TestWorkflowsDryRunEntersEveryRepeatedState(t *testing.T) {
 	}
 	for _, want := range []string{
 		`occasion: event=work_started labels=- entered=["in_progress","plan"] exited=["open"] issue=lit-7` + "\n",
-		"Fired (2)\n",
+		"Fired (3)\n",
+		`phase-plan "Record when the code starts" (embedded)  [state:plan(enter)]` + "\n",
 		"plan-note (project)  [state:plan(enter)]\n",
 		"working-note (project)  [state:in_progress(enter)]\n",
 	} {
@@ -508,7 +509,8 @@ func TestWorkflowsDryRunEntersEveryRepeatedState(t *testing.T) {
 }
 
 // The phases are built-in states: the overview walks them after in_progress,
-// in work order, before closed, with nothing bound to them.
+// in work order, before closed, each with the embedded default bound to
+// entering it.
 func TestWorkflowsOverviewWalksThePhasesInsideInProgress(t *testing.T) {
 	chdirTempRepo(t)
 
@@ -516,9 +518,19 @@ func TestWorkflowsOverviewWalksThePhasesInsideInProgress(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run(workflows) error = %v", err)
 	}
+	shipped := map[string]string{
+		"plan":   `phase-plan "Record when the code starts"`,
+		"impl":   `phase-impl "Record when the PR is up for review"`,
+		"review": `phase-review "Record when the merge is under way"`,
+		"merge":  `phase-merge "Close the ticket once it has merged"`,
+	}
 	var spine strings.Builder
 	for _, state := range []string{"open", "in_progress", "plan", "impl", "review", "merge", "closed"} {
-		spine.WriteString("  " + state + "\n    enter\n    exit\n")
+		enter := "    enter\n"
+		if def, ok := shipped[state]; ok {
+			enter = "    enter  [" + def + " (embedded)]\n"
+		}
+		spine.WriteString("  " + state + "\n" + enter + "    exit\n")
 	}
 	if !strings.Contains(output, "\nStates\n"+spine.String()) {
 		t.Fatalf("workflows output = %q, want the States spine %q", output, spine.String())

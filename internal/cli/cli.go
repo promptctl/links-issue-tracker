@@ -1966,6 +1966,15 @@ func transitionLeaf(spec transitionSpec) appLeaf {
 		notice, facts := owed(written)
 		ap.Statusline.Record(facts...)
 
+		// What the transition did is said first, ahead of any guidance about
+		// what to do next: a hand-off and a phase move say it out loud, every
+		// other transition says it as the empty string, so this write always
+		// runs and only its value varies. The authorize hook holds the rule.
+		// [LAW:dataflow-not-control-flow]
+		if _, err := io.WriteString(stdout, notice); err != nil {
+			return err
+		}
+
 		// [LAW:single-enforcer] transitionLeaf is the one lifecycle-transition
 		// path (start/done/close/open and phase all arrive here), so it is the
 		// one place that dispatches their events — no per-command
@@ -1978,13 +1987,6 @@ func transitionLeaf(spec transitionSpec) appLeaf {
 			if err := dispatchOccasion(ctx, stdout, ap.Workspace, occasion); err != nil {
 				return err
 			}
-		}
-
-		// A hand-off is said out loud; every other transition has nothing to say and
-		// says it as the empty string, so this write always runs and only its value
-		// varies. The authorize hook holds the rule. [LAW:dataflow-not-control-flow]
-		if _, err := io.WriteString(stdout, notice); err != nil {
-			return err
 		}
 
 		if err := printIssueSummary(stdout, issue); err != nil {
