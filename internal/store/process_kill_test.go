@@ -131,7 +131,7 @@ func TestMidMutationProcessKillRecovers(t *testing.T) {
 // TestHelperKillMidMigrationStep is not a real test — it is re-executed as a
 // separate OS process by TestMidMigrationStepProcessKillRecovers. It installs
 // migrationUpByOneForTest (migration_runner.go) to run the REAL goose step
-// (the same s.upByOne production code takes) and then SIGKILL the process
+// (the same provider.UpByOne production code takes) and then SIGKILL the process
 // immediately after — before applyPendingMigrations' loop reaches that
 // step's own commitWorkingSet call. The step's DDL (and goose's own
 // bookkeeping row in goose_db_version) land in the working set exactly as
