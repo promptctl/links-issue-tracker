@@ -418,15 +418,61 @@ func TestMigrationCheckpointRetentionBounded(t *testing.T) {
 	}
 }
 
-// TestMigrationFailureResetSurvivesCallerCancel pins that recovery from a
-// failed migration runs to the end when the caller gives up mid-step: the
-// step cancels the context Open was called with, then fails, and Open still
-// returns the CheckpointResetError of a completed reset. lit init's adopt
-// timeout cancels exactly that context (init_sync.go), so a cancelled caller
-// must not leave a failed migration unreset.
+// TestMigrationFailureResetSurvivesCallerCancel pins that a migration step the
+// caller cancels mid-way is reset to the end and is not quarantined: the step
+// cancels the context Open was called with and fails with that cancellation,
+// as a real step's statements do, and Open returns the CheckpointResetError of
+// a completed reset that carries no quarantine, so the next open runs the
+// migration again. lit init's adopt timeout cancels exactly that context
+// (init_sync.go).
 func TestMigrationFailureResetSurvivesCallerCancel(t *testing.T) {
 	// serial: no t.Parallel — installs the package-level migrationUpByOneForTest
 	// hook.
+	doltRoot := migratedWorkspaceWithGooseHistoryDropped(t)
+	failVersion := headVersion(t) + 1
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	migrationUpByOneForTest = func(ctx context.Context, _ *goose.Provider) (*goose.MigrationResult, error) {
+		cancel()
+		return &goose.MigrationResult{
+			Source: &goose.Source{Version: failVersion, Path: fmt.Sprintf("%05d_test.sql", failVersion)},
+		}, fmt.Errorf("simulated migration statement: %w", ctx.Err())
+	}
+	t.Cleanup(func() { migrationUpByOneForTest = nil })
+
+	_, openErr := Open(ctx, doltRoot, "test-workspace-id")
+	migrationUpByOneForTest = nil
+	assertCancelledRunResetWithoutQuarantine(t, openErr, failVersion, doltRoot)
+}
+
+// TestMigrationCommitCancelResetsWithoutQuarantine pins that a cancellation
+// landing after a step succeeds but before its Dolt commit resets the working
+// set too, rather than leaving the step applied and unversioned, and earns no
+// quarantine: the migration did nothing wrong.
+func TestMigrationCommitCancelResetsWithoutQuarantine(t *testing.T) {
+	// serial: no t.Parallel — installs the package-level migrationUpByOneForTest
+	// hook.
+	doltRoot := migratedWorkspaceWithGooseHistoryDropped(t)
+	failVersion := headVersion(t) + 1
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	migrationUpByOneForTest = func(context.Context, *goose.Provider) (*goose.MigrationResult, error) {
+		cancel()
+		return &goose.MigrationResult{
+			Source: &goose.Source{Version: failVersion, Path: fmt.Sprintf("%05d_test.sql", failVersion)},
+		}, nil
+	}
+	t.Cleanup(func() { migrationUpByOneForTest = nil })
+
+	_, openErr := Open(ctx, doltRoot, "test-workspace-id")
+	migrationUpByOneForTest = nil
+	assertCancelledRunResetWithoutQuarantine(t, openErr, failVersion, doltRoot)
+}
+
+// migratedWorkspaceWithGooseHistoryDropped bootstraps a workspace, then drops
+// its goose history so the next Open runs applyPendingMigrations.
+func migratedWorkspaceWithGooseHistoryDropped(t *testing.T) string {
+	t.Helper()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 	first, err := Open(context.Background(), doltRoot, "test-workspace-id")
 	if err != nil {
@@ -436,32 +482,35 @@ func TestMigrationFailureResetSurvivesCallerCancel(t *testing.T) {
 		t.Fatalf("Close(first) error = %v", err)
 	}
 	withGooseHistoryDropped(t, context.Background(), doltRoot)
+	return doltRoot
+}
 
-	failVersion := headVersion(t) + 1
-	sentinel := errors.New("simulated migration body error")
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	migrationUpByOneForTest = func(context.Context, *goose.Provider) (*goose.MigrationResult, error) {
-		cancel()
-		return &goose.MigrationResult{
-			Source: &goose.Source{Version: failVersion, Path: fmt.Sprintf("%05d_test.sql", failVersion)},
-		}, sentinel
-	}
-	t.Cleanup(func() { migrationUpByOneForTest = nil })
-
-	_, openErr := Open(ctx, doltRoot, "test-workspace-id")
-	migrationUpByOneForTest = nil
+// assertCancelledRunResetWithoutQuarantine checks the outcome of an Open whose
+// migration run the caller cancelled: a completed reset for failVersion, caused
+// by the cancellation, with no recovery step stopped by it, no quarantine on
+// the error the CLI classifies, and a reopen that is not refused.
+func assertCancelledRunResetWithoutQuarantine(t *testing.T, openErr error, failVersion int64, doltRoot string) {
+	t.Helper()
 	var cpErr *CheckpointResetError
 	if !errors.As(openErr, &cpErr) {
 		t.Fatalf("Open() error = %v; want a *CheckpointResetError from a reset that completed", openErr)
 	}
-	// The checkpoint prune after the reset is recovery too: no step of it may
-	// stop on the caller's cancellation.
-	if errors.Is(openErr, context.Canceled) {
-		t.Errorf("Open() error = %v; a recovery step stopped on the caller's cancellation", openErr)
+	if cpErr.Version != failVersion || !errors.Is(cpErr.Cause, context.Canceled) {
+		t.Errorf("CheckpointResetError = {Version: %d, Cause: %v}, want {Version: %d, Cause: context canceled}", cpErr.Version, cpErr.Cause, failVersion)
 	}
-	if cpErr.Version != failVersion || !errors.Is(cpErr.Cause, sentinel) {
-		t.Errorf("CheckpointResetError = {Version: %d, Cause: %v}, want {Version: %d, Cause: %v}", cpErr.Version, cpErr.Cause, failVersion, sentinel)
+	if strings.Contains(openErr.Error(), "prune migration checkpoints") {
+		t.Errorf("Open() error = %v; the checkpoint prune stopped on the caller's cancellation", openErr)
+	}
+	var quarantined *QuarantineBlockError
+	if errors.As(openErr, &quarantined) {
+		t.Errorf("Open() error carries a quarantine of v%d; a cancelled run says nothing against the migration", quarantined.Version)
+	}
+	reopened, err := Open(context.Background(), doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("reopen after a cancelled migration run error = %v; want the migration run again", err)
+	}
+	if err := reopened.Close(); err != nil {
+		t.Fatalf("Close(reopened) error = %v", err)
 	}
 }
 

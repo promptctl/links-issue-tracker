@@ -216,9 +216,12 @@ When bumping the `dolthub/driver` version pinned in the top-level `go.mod`:
    - Patch 6: in `Connector.Connect`, build the session with
      `newLocalContext(se, context.Background())`; re-add `ExecContext` and
      `QueryContext` to `doltStmt` and `doltMultiStmt` in `statement.go`
-     (each runs on `session.WithContext(ctx)`, with `Exec` and `Query`
-     delegating to them), and run `BEGIN` on `BeginTx`'s ctx in `conn.go`.
-     Confirm with lit's `internal/store`
+     (each runs on `session.WithContext(ctx)`; `Exec` and `Query` share
+     their path with `context.Background()`), and run `BEGIN` on
+     `BeginTx`'s ctx in `conn.go`. Confirm with this directory's
+     `cancellation_test.go` (a statement cut short by its ctx lands nothing
+     and leaves no transaction behind; it fails if a statement ignores its
+     ctx), lit's `internal/store`
      `TestStoreOutlivesTheContextItWasOpenedUnder` (a commit fails with
      `Error 1105: context canceled` if the session holds the Connect context)
      and `internal/cli` `TestMirrorPushHoldsNothingOnTheLiveStore` (the run

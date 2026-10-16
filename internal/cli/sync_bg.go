@@ -556,7 +556,8 @@ func (p pushedHead) landed() bool { return p.head != "" }
 // that stalls would stop pushes for as long as it cared to. The deadline
 // bounds the clone session's open and its push alike: each statement runs on
 // the ctx it is called with, so the push's deadline reaches the engine's git
-// subprocesses. Completion effects (the outcome marker, the
+// subprocesses (TestMirrorPushHoldsNothingOnTheLiveStore cuts a wedged
+// `git push` this way). Completion effects (the outcome marker, the
 // owner-notify hook) run under the parent ctx: a cut push needs them most at
 // exactly the moment its own deadline has expired.
 // [LAW:no-ambient-temporal-coupling]

@@ -239,6 +239,7 @@ Local modifications versus upstream, all behavior-affecting:
 6. **Relative-path fix** — the filesystem is already rooted at the directory, so `"."` is passed; re-applying the directory would double the path.
 7. **Peek errors carried, not dropped** — a non-EOF peek error is surfaced from `Next()` rather than re-driving the iterator, which could silently convert a real error into an empty result set.
 8. Package-var test seams (nil in production), and result-construction error precedence (iteration error wins over close failure).
+9. **Each statement runs on its caller's context** — the session is built on `context.Background()`, never on the `Connect` context, and every statement, its row reads and `BEGIN` run on the context their caller passed; `Commit`/`Rollback` run on the session's own context. Upstream ran everything on the `Connect` context, so cancelling the first caller broke the connection and a per-call deadline was never read.
 
 Query behavior worth pinning: transactions accept only `LevelSerializable`/`LevelDefault` and run literal `BEGIN;`/`COMMIT;`/`ROLLBACK;`; positional args become named bindings `v1, v2...`; `Query` peeks eagerly because some DML executes inside the iterator; multi-statement support splits with the gms parser (a standalone quote/paren-aware `QuerySplitter` also exists but is unused by the conn); enum/set columns convert to their string forms; `Exec` over multiple statements stops at the first error and returns the last result (`conn.go`; `statement.go`; `rows.go`).
 

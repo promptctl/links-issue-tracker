@@ -230,7 +230,7 @@ The shapemap is the declarative bridge used by recovery (chapter 04): it maps a 
 
 ## The vendored Dolt driver
 
-`internal/vendor/dolthub-driver` is a vendored copy of DoltHub's embedded SQL driver with local modifications (inventory, final section): DoltHub telemetry deleted outright; a process-wide mutex fencing engine construction against dolt global state; an MIT-licensed `MySQLError` replacing the MPL-2.0 `go-sql-driver/mysql` type; retryable-open plumbing (backoff on `nbs.ErrDatabaseLocked` / deadline errors); a forced eager DB load so lock errors reach the backoff instead of panicking; a relative-path fix; and iterator error-carry fixes.
+`internal/vendor/dolthub-driver` is a vendored copy of DoltHub's embedded SQL driver with local modifications (inventory, final section): DoltHub telemetry deleted outright; a process-wide mutex fencing engine construction against dolt global state; an MIT-licensed `MySQLError` replacing the MPL-2.0 `go-sql-driver/mysql` type; retryable-open plumbing (backoff on `nbs.ErrDatabaseLocked` / deadline errors); a forced eager DB load so lock errors reach the backoff instead of panicking; a relative-path fix; iterator error-carry fixes; and each statement running on its caller's context rather than the one the connection was opened with.
 
 ## Test-fixture constraints worth knowing
 

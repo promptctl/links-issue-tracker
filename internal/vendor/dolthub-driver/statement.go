@@ -57,13 +57,21 @@ func (d doltMultiStmt) NumInput() int {
 }
 
 func (d doltMultiStmt) Exec(args []driver.Value) (driver.Result, error) {
-	return d.ExecContext(context.Background(), valuesToNamedValues(args))
+	return d.execValues(context.Background(), args)
 }
 
 // ExecContext executes every statement in turn on ctx, stopping at the first error.
-func (d doltMultiStmt) ExecContext(ctx context.Context, named []driver.NamedValue) (result driver.Result, err error) {
+func (d doltMultiStmt) ExecContext(ctx context.Context, named []driver.NamedValue) (driver.Result, error) {
+	args, err := namedValuesToValues(named)
+	if err != nil {
+		return nil, err
+	}
+	return d.execValues(ctx, args)
+}
+
+func (d doltMultiStmt) execValues(ctx context.Context, args []driver.Value) (result driver.Result, err error) {
 	for _, stmt := range d.stmts {
-		result, err = stmt.ExecContext(ctx, named)
+		result, err = stmt.execValues(ctx, args)
 		if err != nil {
 			// If any error occurs, return the error and don't execute any more statements
 			return nil, err
@@ -75,19 +83,27 @@ func (d doltMultiStmt) ExecContext(ctx context.Context, named []driver.NamedValu
 }
 
 func (d doltMultiStmt) Query(args []driver.Value) (driver.Rows, error) {
-	return d.QueryContext(context.Background(), valuesToNamedValues(args))
+	return d.queryValues(context.Background(), args)
 }
 
 // QueryContext runs every statement on ctx and returns their result sets.
 func (d doltMultiStmt) QueryContext(ctx context.Context, named []driver.NamedValue) (driver.Rows, error) {
+	args, err := namedValuesToValues(named)
+	if err != nil {
+		return nil, err
+	}
+	return d.queryValues(ctx, args)
+}
+
+func (d doltMultiStmt) queryValues(ctx context.Context, args []driver.Value) (driver.Rows, error) {
 	var ret doltMultiRows
 	for _, stmt := range d.stmts {
 		ret.rowSets = append(ret.rowSets, func() *doltRows {
-			rows, err := stmt.QueryContext(ctx, named)
+			rows, err := stmt.queryValues(ctx, args)
 			if err != nil {
 				return &doltRows{err: err}
 			}
-			return rows.(*doltRows)
+			return rows
 		})
 	}
 	for ret.currentIdx = 0; ret.currentIdx < len(ret.rowSets); ret.currentIdx++ {
@@ -158,16 +174,6 @@ func argsToBindings(args []driver.Value) (map[string]sqlparser.Expr, error) {
 	return bindings, nil
 }
 
-// valuesToNamedValues gives positional arguments the ordinals database/sql
-// would, so the context-free Exec and Query run through the context path.
-func valuesToNamedValues(args []driver.Value) []driver.NamedValue {
-	named := make([]driver.NamedValue, len(args))
-	for i, v := range args {
-		named[i] = driver.NamedValue{Ordinal: i + 1, Value: v}
-	}
-	return named
-}
-
 // namedValuesToValues refuses named parameters, which the statement's
 // positional bindings (v1, v2, ...) cannot carry, as database/sql does for a
 // driver that takes only positional arguments.
@@ -184,7 +190,7 @@ func namedValuesToValues(named []driver.NamedValue) ([]driver.Value, error) {
 
 // Exec executes a query that doesn't return rows, such as an INSERT or UPDATE.
 func (stmt *doltStmt) Exec(args []driver.Value) (driver.Result, error) {
-	return stmt.ExecContext(context.Background(), valuesToNamedValues(args))
+	return stmt.execValues(context.Background(), args)
 }
 
 // ExecContext executes a query that doesn't return rows on ctx.
@@ -193,6 +199,10 @@ func (stmt *doltStmt) ExecContext(ctx context.Context, named []driver.NamedValue
 	if err != nil {
 		return nil, err
 	}
+	return stmt.execValues(ctx, args)
+}
+
+func (stmt *doltStmt) execValues(ctx context.Context, args []driver.Value) (driver.Result, error) {
 	gmsCtx := stmt.session.WithContext(ctx)
 	sch, itr, err := stmt.execWithArgs(gmsCtx, args)
 	if err != nil {
@@ -222,7 +232,7 @@ func (stmt *doltStmt) execWithArgs(gmsCtx *gms.Context, args []driver.Value) (gm
 
 // Query executes a query that may return rows, such as a SELECT
 func (stmt *doltStmt) Query(args []driver.Value) (driver.Rows, error) {
-	return stmt.QueryContext(context.Background(), valuesToNamedValues(args))
+	return stmt.queryValues(context.Background(), args)
 }
 
 // QueryContext executes a query that may return rows on ctx; the rows are read on ctx too.
@@ -231,9 +241,14 @@ func (stmt *doltStmt) QueryContext(ctx context.Context, named []driver.NamedValu
 	if err != nil {
 		return nil, err
 	}
+	return stmt.queryValues(ctx, args)
+}
+
+func (stmt *doltStmt) queryValues(ctx context.Context, args []driver.Value) (*doltRows, error) {
 	gmsCtx := stmt.session.WithContext(ctx)
 	var sch gms.Schema
 	var rowIter gms.RowIter
+	var err error
 
 	if len(args) != 0 {
 		sch, rowIter, err = stmt.execWithArgs(gmsCtx, args)

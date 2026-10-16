@@ -831,8 +831,10 @@ func (s *Store) mergeAndReplay(ctx context.Context, result *storage.SyncReconcil
 // runs body on them, and — whatever body returns — returns the session to the data
 // branch and drops both. Cleanup recovers a failed switch-back by
 // rotating the connection; only if THAT also fails is the store left unusable, and
-// then the failure is promoted to body's result (when it would not otherwise mask a
-// durable error) rather than swallowed. [LAW:no-silent-failure] Every operation body
+// then the failure is joined to body's result rather than swallowed. Cleanup runs
+// to the end on a context the caller cannot cancel: the deadline that cut body
+// short must not also strand the store on a scratch branch.
+// [LAW:no-silent-failure] [LAW:no-ambient-temporal-coupling] Every operation body
 // runs happens on a scratch branch, so the data branch never leaves localHead until
 // body advances it with one atomic reset. [LAW:single-enforcer] the scratch lifecycle
 // is written once, shared by the three-way reconcile and the take-one resolver.
@@ -849,8 +851,8 @@ func (s *Store) runOnReconcileScratch(ctx context.Context, dataBranch string, sc
 	// those and never warns about one that was never made.
 	var created []string
 	defer func() {
-		if cleanupErr := s.cleanupReconcileScratch(ctx, dataBranch, created); cleanupErr != nil && err == nil {
-			err = cleanupErr
+		if cleanupErr := s.cleanupReconcileScratch(context.WithoutCancel(ctx), dataBranch, created); cleanupErr != nil {
+			err = errors.Join(err, cleanupErr)
 		}
 	}()
 	// -B recreates each branch if a prior retry of this same run left it behind.
