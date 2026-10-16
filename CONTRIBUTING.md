@@ -114,17 +114,17 @@ The install story is the same one end users follow — see
 ### Developing a migration
 
 `./scripts/install.sh` (and `just install`) installs only a tree whose schema a
-published release supports. Before building lit, it compares the tree's highest
-migration with the highest in the newest local `vX.Y.Z` tag, and prints the
+published release supports. Before building lit, it checks that the newest local
+`vX.Y.Z` tag carries every migration in the tree, byte for byte, and prints the
 comparison on every run:
 
 ```text
 schema-release-check: tree=10 release_tag=v0.18.0 release_schema=9 verdict=refuse
 ```
 
-It refuses a tree that is ahead (exit 3) and a checkout with no release tag
-(exit 1). A tree that adds a migration stays ahead until the epic's release
-ships it. Until then:
+It refuses a tree carrying a migration that release does not (exit 3) and a
+checkout with no release tag of its own (exit 1). A tree that adds a migration
+stays refused until the epic's release ships it. Until then:
 
 - Develop the migration with `go test`.
 - Run a `go build` or `just build` binary only in a scratch workspace: `lit
@@ -133,9 +133,10 @@ ships it. Until then:
   this binary would migrate it to a schema no release can open. Nothing
   enforces this rule. The install guard covers only `install.sh`.
 
-The guard reads local tags. A stale tag list can refuse a tree that a newer
-release supports (`git fetch origin --tags` fixes that), but it never passes a
-tree that is ahead.
+The guard reads local tags and trusts every `vX.Y.Z` tag as a published release;
+only the release pipeline makes one, so never make one by hand. A stale tag list
+can refuse a tree that a newer release supports (`git fetch origin --tags` fixes
+that).
 
 ## Performance envelope
 

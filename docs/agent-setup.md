@@ -52,8 +52,8 @@ paths for you. Full matrix, manual download, version pinning, and the macOS ICU/
 build notes are in [introduction/installation.md](introduction/installation.md).
 
 The source build installs only a tree whose schema a published release supports. It prints
-the comparison it made, and refuses when the tree's highest migration is above the newest
-`vX.Y.Z` tag's, or when the checkout has no release tag. A binary built from a tree no
+the comparison it made, and refuses when the newest `vX.Y.Z` tag lacks one of the tree's
+migrations byte for byte, or when the checkout has no release tag. A binary built from a tree no
 release supports (a `go build` or `just build` while a migration is in development) runs
 only in a scratch workspace, never in a real one. See section 6 for why.
 
