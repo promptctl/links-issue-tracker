@@ -831,11 +831,8 @@ event carries for that error. The CLI's `errorRecord` (`invocation_event.go`)
 reads the first error in the chain implementing it, and records nothing for an
 error that does not. Implementers: `store.UnsupportedSchemaVersionError`
 (`migration_runner.go`) and `store.RemoteSchemaAheadError`
-(`sync_schema_guard.go`), the `schema_ahead.*` keys; and
-`store.DowngradeTargetAheadError`, `store.DowngradeBelowBaselineError`,
-`store.DowngradeSpanUnsupportedError`, and `store.DowngradeRollbackError`
-(`downgrade.go`), the `downgrade.*` keys of `storage.Downgraded.EventRecord`.
-Each has a compile-time `var _ model.RecordedError` assertion.
+(`sync_schema_guard.go`), the `schema_ahead.*` keys, each with a compile-time
+`var _ model.RecordedError` assertion.
 
 `SchemaAhead` (`validation.go`) is `error` plus a marker method
 `SchemaAheadOfBinary()`: an error raised because the workspace's schema is past

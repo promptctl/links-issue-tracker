@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"maps"
 	"reflect"
 	"strings"
 	"testing"
@@ -64,13 +65,13 @@ func (s *stubInstaller) Install(_ context.Context, t *release.Target, path strin
 }
 
 type stubDowngrader struct {
-	done         storage.Downgraded
+	done         *storage.Downgraded
 	err          error
 	called       bool
 	gotTargetVer int64
 }
 
-func (s *stubDowngrader) Downgrade(_ context.Context, target int64) (storage.Downgraded, error) {
+func (s *stubDowngrader) Downgrade(_ context.Context, target int64) (*storage.Downgraded, error) {
 	s.called = true
 	s.gotTargetVer = target
 	return s.done, s.err
@@ -78,8 +79,8 @@ func (s *stubDowngrader) Downgrade(_ context.Context, target int64) (storage.Dow
 
 // reversedFromV4 is the store's report of a reverse from v4 to newFakeTarget's
 // v3: one down-migration, after one recovery snapshot.
-func reversedFromV4() storage.Downgraded {
-	return storage.Downgraded{From: 4, Reversed: 1, Snapshot: "1700000000000000000-lit-downgrade-1700000000000000001"}
+func reversedFromV4() *storage.Downgraded {
+	return &storage.Downgraded{From: 4, Reversed: 1, Snapshot: "1700000000000000000-lit-downgrade-1700000000000000001"}
 }
 
 // newerCurrentInfo is a running binary whose schema support covers the span
@@ -212,19 +213,92 @@ func TestRunDowngradeRecordsWhatItReversedAndInstalled(t *testing.T) {
 	}
 }
 
-// A target the workspace is already at reverses nothing, and its event says so
-// with a zero, not by leaving the count out.
-func TestRunDowngradeToTheAppliedVersionRecordsZeroReversed(t *testing.T) {
+// Whatever the reverse reports lands on the event, beside the facts set before
+// it, whether or not the command then fails; and only an install that
+// succeeded records where it installed. A target the workspace is already at
+// says it reversed nothing with a zero, not by leaving the count out; a reverse
+// that failed after committing says how far it got; a store that failed before
+// reading the workspace's version records none of the reverse's facts.
+func TestRunDowngradeRecordsWhatTheReverseReportedOnEveryOutcome(t *testing.T) {
 	t.Parallel()
-	facts, counts, err := runDowngradeRecorded(t, downgradeScope{schema: &stubDowngrader{done: storage.Downgraded{From: 3}}, current: newerCurrentInfo()}, &stubResolver{target: newFakeTarget()}, &stubInstaller{})
-	if err != nil {
-		t.Fatalf("downgrade: %v", err)
+	afterTheReverse := errors.New("prune downgrade snapshots: disk full")
+	reversed := map[string]any{
+		"downgrade.workspace_schema": float64(4),
+		"downgrade.snapshot":         "1700000000000000000-lit-downgrade-1700000000000000001",
 	}
-	if facts["downgrade.workspace_schema"] != float64(3) || facts["downgrade.snapshot"] != "" {
-		t.Errorf("facts = %v; want workspace_schema 3 and no snapshot", facts)
+	tests := []struct {
+		name       string
+		dg         *stubDowngrader
+		inst       *stubInstaller
+		wantFacts  map[string]any
+		wantCounts map[string]int
+	}{
+		{
+			name: "already at the target",
+			dg:   &stubDowngrader{done: &storage.Downgraded{From: 3}},
+			inst: &stubInstaller{},
+			wantFacts: map[string]any{
+				"downgrade.workspace_schema": float64(3),
+				"downgrade.snapshot":         "",
+				"downgrade.installed_path":   "/p/lit",
+			},
+			wantCounts: map[string]int{"downgrade.reversed": 0},
+		},
+		{
+			name:       "reverse fails after committing",
+			dg:         &stubDowngrader{done: reversedFromV4(), err: afterTheReverse},
+			inst:       &stubInstaller{},
+			wantFacts:  reversed,
+			wantCounts: map[string]int{"downgrade.reversed": 1},
+		},
+		{
+			name:       "install fails",
+			dg:         &stubDowngrader{done: reversedFromV4()},
+			inst:       &stubInstaller{err: errors.New("network down")},
+			wantFacts:  reversed,
+			wantCounts: map[string]int{"downgrade.reversed": 1},
+		},
+		{
+			name:       "store fails before reading the workspace",
+			dg:         &stubDowngrader{err: errors.New("open workspace: locked")},
+			inst:       &stubInstaller{},
+			wantFacts:  map[string]any{},
+			wantCounts: map[string]int{},
+		},
 	}
-	if n, ok := counts["downgrade.reversed"]; !ok || n != 0 {
-		t.Errorf("counts = %v; want downgrade.reversed present and 0", counts)
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			facts, counts, _ := runDowngradeRecorded(t, downgradeScope{schema: tc.dg, current: newerCurrentInfo()}, &stubResolver{target: newFakeTarget()}, tc.inst)
+			want := map[string]any{
+				"downgrade.tag":                "v0.4.1",
+				"downgrade.target_schema_max":  float64(3),
+				"downgrade.running_schema_min": float64(1),
+				"downgrade.running_schema_max": float64(4),
+			}
+			maps.Copy(want, tc.wantFacts)
+			if !reflect.DeepEqual(facts, want) {
+				t.Errorf("facts = %v; want %v", facts, want)
+			}
+			if !reflect.DeepEqual(counts, tc.wantCounts) {
+				t.Errorf("counts = %v; want %v", counts, tc.wantCounts)
+			}
+		})
+	}
+}
+
+// A release that does not resolve still leaves the event the tag the command
+// asked for, the one fact known before Resolve.
+func TestRunDowngradeRecordsTheTagOfAReleaseThatDoesNotResolve(t *testing.T) {
+	t.Parallel()
+	res := &stubResolver{err: errors.New("release v0.4.1 not found")}
+	facts, _, err := runDowngradeRecorded(t, downgradeScope{schema: &stubDowngrader{}, current: newerCurrentInfo()}, res, &stubInstaller{})
+	if err == nil {
+		t.Fatal("an unresolvable release must fail the downgrade")
+	}
+	if want := map[string]any{"downgrade.tag": "v0.4.1"}; !reflect.DeepEqual(facts, want) {
+		t.Errorf("facts = %v; want %v", facts, want)
 	}
 }
 

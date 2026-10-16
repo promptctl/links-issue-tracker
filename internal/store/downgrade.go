@@ -94,16 +94,7 @@ func (e *DowngradeTargetAheadError) Error() string {
 // RefusesCommand: the same --to is refused on every run. [LAW:single-enforcer]
 func (*DowngradeTargetAheadError) RefusesCommand() {}
 
-// EventRecord is the applied version the refusal was decided from; nothing
-// was reversed.
-func (e *DowngradeTargetAheadError) EventRecord() (map[string]any, map[string]int) {
-	return storage.Downgraded{From: e.Current}.EventRecord()
-}
-
-var (
-	_ model.Refusal       = (*DowngradeTargetAheadError)(nil)
-	_ model.RecordedError = (*DowngradeTargetAheadError)(nil)
-)
+var _ model.Refusal = (*DowngradeTargetAheadError)(nil)
 
 // DowngradeBelowBaselineError reports that the requested target sits below the
 // embedded baseline. Running Down past baseline drops every table; Downgrade
@@ -111,8 +102,7 @@ var (
 // from this entry point. Recovery is the same `lit snapshots restore` command
 // the runtime rollback path advertises.
 type DowngradeBelowBaselineError struct {
-	Current int64
-	Target  int64
+	Target int64
 }
 
 func (e *DowngradeBelowBaselineError) Error() string {
@@ -126,16 +116,7 @@ func (e *DowngradeBelowBaselineError) Error() string {
 // RefusesCommand: the same --to is refused on every run. [LAW:single-enforcer]
 func (*DowngradeBelowBaselineError) RefusesCommand() {}
 
-// EventRecord is the applied version the refusal was decided from; nothing
-// was reversed.
-func (e *DowngradeBelowBaselineError) EventRecord() (map[string]any, map[string]int) {
-	return storage.Downgraded{From: e.Current}.EventRecord()
-}
-
-var (
-	_ model.Refusal       = (*DowngradeBelowBaselineError)(nil)
-	_ model.RecordedError = (*DowngradeBelowBaselineError)(nil)
-)
+var _ model.Refusal = (*DowngradeBelowBaselineError)(nil)
 
 // DowngradeSpanUnsupportedError reports that this binary's schema support does
 // not reach the workspace's applied version, so it does not carry the
@@ -166,16 +147,7 @@ func (e *DowngradeSpanUnsupportedError) Error() string {
 // a lit whose support reaches the workspace's can run the reverse.
 func (*DowngradeSpanUnsupportedError) SchemaAheadOfBinary() {}
 
-// EventRecord is the applied version the refusal was decided from; nothing
-// was reversed.
-func (e *DowngradeSpanUnsupportedError) EventRecord() (map[string]any, map[string]int) {
-	return storage.Downgraded{From: e.Current}.EventRecord()
-}
-
-var (
-	_ model.SchemaAhead   = (*DowngradeSpanUnsupportedError)(nil)
-	_ model.RecordedError = (*DowngradeSpanUnsupportedError)(nil)
-)
+var _ model.SchemaAhead = (*DowngradeSpanUnsupportedError)(nil)
 
 // DowngradeRollbackError wraps a downgrade failure that occurred after the
 // recovery snapshot was taken. Parallel in shape and intent to
@@ -185,8 +157,6 @@ var (
 // [LAW:single-enforcer] The recovery-instruction format lives here so every
 // downgrade caller sees the same words, mirroring the migrate side.
 type DowngradeRollbackError struct {
-	From     int64
-	Reversed int
 	Snapshot dbsnapshot.Snapshot
 	Cause    error
 }
@@ -199,15 +169,6 @@ func (e *DowngradeRollbackError) Error() string {
 }
 
 func (e *DowngradeRollbackError) Unwrap() error { return e.Cause }
-
-// EventRecord is the version the downgrade started from, how many
-// down-migrations committed before the failure, and the snapshot that holds
-// the state before the first of them.
-func (e *DowngradeRollbackError) EventRecord() (map[string]any, map[string]int) {
-	return storage.Downgraded{From: e.From, Reversed: e.Reversed, Snapshot: e.Snapshot.Name}.EventRecord()
-}
-
-var _ model.RecordedError = (*DowngradeRollbackError)(nil)
 
 // DowngradeIncompleteError reports that goose ran out of reversible
 // migrations before reaching target — recorded version remains above target
@@ -240,8 +201,10 @@ func (e *DowngradeIncompleteError) Error() string {
 // per-step commitWorkingSet calls inside applyDownMigrations short-circuit
 // because the lock is already held.
 //
-// It returns what it did as a storage.Downgraded: the applied version it read
-// under the lock, the down-migrations it ran, and the snapshot it took.
+// It returns what it did as a storage.Downgraded — the applied version it read
+// under the lock, the down-migrations it applied, and the snapshot it took —
+// beside every error raised after that read, so a refusal or a failure
+// part-way reports how far it got. [LAW:one-source-of-truth]
 //
 // Refusals (no snapshot taken):
 //   - target == current applied: no-op, reverses nothing.
@@ -265,8 +228,8 @@ func (e *DowngradeIncompleteError) Error() string {
 // [LAW:one-source-of-truth] goose_db_version remains the applied-state
 // authority for both directions; this loop reads it via recordedMigrationVersion
 // and lets goose mutate it the same way Up does.
-func (s *Store) Downgrade(ctx context.Context, targetSchemaVersion int64) (storage.Downgraded, error) {
-	var done storage.Downgraded
+func (s *Store) Downgrade(ctx context.Context, targetSchemaVersion int64) (*storage.Downgraded, error) {
+	var done *storage.Downgraded
 	err := s.withCommitLock(ctx, func(ctx context.Context) error {
 		var err error
 		done, err = s.downgradeLocked(ctx, targetSchemaVersion)
@@ -278,31 +241,33 @@ func (s *Store) Downgrade(ctx context.Context, targetSchemaVersion int64) (stora
 // downgradeLocked is the body of Downgrade executed under the commit lock.
 // Split out so the lock acquisition stays a thin wrapper and the pipeline
 // itself reads as the residue of its constraints.
-func (s *Store) downgradeLocked(ctx context.Context, targetSchemaVersion int64) (storage.Downgraded, error) {
+func (s *Store) downgradeLocked(ctx context.Context, targetSchemaVersion int64) (*storage.Downgraded, error) {
 	state, err := s.classifyMigrationState(ctx)
 	if err != nil {
-		return storage.Downgraded{}, err
+		return nil, err
 	}
 	if state.phase != phaseManaged {
-		return storage.Downgraded{}, fmt.Errorf(
+		return nil, fmt.Errorf(
 			"downgrade: workspace is not goose-managed (no goose_db_version table); run Open first to adopt or initialize",
 		)
 	}
-	from := state.appliedVersion
-	if targetSchemaVersion == from {
-		return storage.Downgraded{From: from}, nil
+	// [LAW:dataflow-not-control-flow] the report fills in as the pipeline
+	// advances; every return from here carries it, at whatever step it stopped.
+	done := &storage.Downgraded{From: state.appliedVersion}
+	if targetSchemaVersion == done.From {
+		return done, nil
 	}
-	if targetSchemaVersion > from {
-		return storage.Downgraded{}, &DowngradeTargetAheadError{Current: from, Target: targetSchemaVersion}
+	if targetSchemaVersion > done.From {
+		return done, &DowngradeTargetAheadError{Current: done.From, Target: targetSchemaVersion}
 	}
 	if targetSchemaVersion < baselineVersion {
-		return storage.Downgraded{}, &DowngradeBelowBaselineError{Current: from, Target: targetSchemaVersion}
+		return done, &DowngradeBelowBaselineError{Target: targetSchemaVersion}
 	}
 	// Below-baseline is refused first: no lit reverses past the baseline, so
 	// that target is wrong whichever binary runs it. What can still fail
 	// Covers here is the top of the span — a workspace a newer lit migrated.
-	if !state.support.Covers(targetSchemaVersion, from) {
-		return storage.Downgraded{}, &DowngradeSpanUnsupportedError{Current: from, Target: targetSchemaVersion, Support: state.support}
+	if !state.support.Covers(targetSchemaVersion, done.From) {
+		return done, &DowngradeSpanUnsupportedError{Current: done.From, Target: targetSchemaVersion, Support: state.support}
 	}
 
 	snapshotsDir := dbsnapshot.DirFor(s.doltRootDir)
@@ -313,14 +278,14 @@ func (s *Store) downgradeLocked(ctx context.Context, targetSchemaVersion int64) 
 	)
 	snap, err := guard.ensure(ctx)
 	if err != nil {
-		return storage.Downgraded{}, fmt.Errorf("downgrade: %w", err)
+		return done, fmt.Errorf("downgrade: %w", err)
 	}
+	done.Snapshot = snap.Name
 
-	reversed, err := s.applyDownMigrations(ctx, targetSchemaVersion)
+	done.Reversed, err = s.applyDownMigrations(ctx, targetSchemaVersion)
 	if err != nil {
-		return storage.Downgraded{}, &DowngradeRollbackError{From: from, Reversed: reversed, Snapshot: snap, Cause: err}
+		return done, &DowngradeRollbackError{Snapshot: snap, Cause: err}
 	}
-	done := storage.Downgraded{From: from, Reversed: reversed, Snapshot: snap.Name}
 	// [LAW:single-enforcer] Downgrade owns the prune budget for its own
 	// snapshots. IsDowngradeSnapshotName is disjoint from
 	// IsMigrationSnapshotName, so this sweep cannot collect migration
@@ -333,7 +298,10 @@ func (s *Store) downgradeLocked(ctx context.Context, targetSchemaVersion int64) 
 
 // applyDownMigrations steps the workspace from its recorded version down to
 // target, one migration at a time, with one Dolt commit per reversed step, and
-// returns how many steps it committed — on failure, those before it.
+// returns how many steps goose applied — on failure, those before it, counting
+// a step whose Dolt commit then failed: its Down already moved the working
+// set's recorded version, so the count matches what recordedMigrationVersion
+// reads.
 // Symmetric with applyPendingMigrations: a single goose provider drives the
 // loop and commitWorkingSet records each step. The commit lock is already
 // held by Downgrade, so commitWorkingSet's withCommitLock short-circuits.
@@ -347,7 +315,8 @@ func (s *Store) applyDownMigrations(ctx context.Context, target int64) (int, err
 	if err != nil {
 		return 0, fmt.Errorf("construct downgrade provider: %w", err)
 	}
-	for reversed := 0; ; reversed++ {
+	reversed := 0
+	for {
 		current, err := s.recordedMigrationVersion(ctx)
 		if err != nil {
 			return reversed, err
@@ -368,6 +337,7 @@ func (s *Store) applyDownMigrations(ctx context.Context, target int64) (int, err
 			}
 			return reversed, &downgradeMigrationFailedError{Version: current, Cause: err}
 		}
+		reversed++
 		if result == nil {
 			return reversed, fmt.Errorf("down-migrate v%d: goose returned nil result", current)
 		}

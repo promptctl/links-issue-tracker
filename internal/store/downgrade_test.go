@@ -12,7 +12,6 @@ import (
 	"github.com/pressly/goose/v3"
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
 	"github.com/promptctl/links-issue-tracker/internal/doltcli"
-	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
 	"github.com/promptctl/links-issue-tracker/internal/version"
@@ -59,20 +58,6 @@ func snapshotCount(t *testing.T, doltRoot string) int {
 		t.Fatalf("list snapshots: %v", err)
 	}
 	return len(list)
-}
-
-// newSnapshotName is the one snapshot in after that before does not hold.
-func newSnapshotName(before, after []dbsnapshot.Snapshot) string {
-	held := map[string]bool{}
-	for _, s := range before {
-		held[s.Name] = true
-	}
-	for _, s := range after {
-		if !held[s.Name] {
-			return s.Name
-		}
-	}
-	return ""
 }
 
 // TestAppliedSchemaVersionMatchesRecorded pins the exported reader `lit upgrade`
@@ -151,7 +136,7 @@ func TestDowngradeTargetEqualIsNoOp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Downgrade(current) = %v, want nil", err)
 	}
-	if want := (storage.Downgraded{From: current}); done != want {
+	if want := (storage.Downgraded{From: current}); done == nil || *done != want {
 		t.Fatalf("Downgrade(current) = %+v, want %+v", done, want)
 	}
 	if delta := snapshotCount(t, doltRoot) - before; delta != 0 {
@@ -171,7 +156,10 @@ func TestDowngradeTargetAheadRefused(t *testing.T) {
 		t.Fatalf("recordedMigrationVersion() = %v", err)
 	}
 	before := snapshotCount(t, doltRoot)
-	_, err = st.Downgrade(ctx, current+5)
+	done, err := st.Downgrade(ctx, current+5)
+	if want := (storage.Downgraded{From: current}); done == nil || *done != want {
+		t.Fatalf("Downgrade(current+5) reported %+v, want %+v", done, want)
+	}
 	var ahead *DowngradeTargetAheadError
 	if !errors.As(err, &ahead) {
 		t.Fatalf("err = %v, want *DowngradeTargetAheadError", err)
@@ -198,14 +186,16 @@ func TestDowngradeBelowBaselineRefused(t *testing.T) {
 		t.Fatalf("recordedMigrationVersion() = %v", err)
 	}
 	before := snapshotCount(t, doltRoot)
-	_, err = st.Downgrade(ctx, baselineVersion-1)
+	done, err := st.Downgrade(ctx, baselineVersion-1)
+	if want := (storage.Downgraded{From: current}); done == nil || *done != want {
+		t.Fatalf("Downgrade(baseline-1) reported %+v, want %+v", done, want)
+	}
 	var below *DowngradeBelowBaselineError
 	if !errors.As(err, &below) {
 		t.Fatalf("err = %v, want *DowngradeBelowBaselineError", err)
 	}
-	if below.Current != current || below.Target != baselineVersion-1 {
-		t.Fatalf("err fields = {Current:%d Target:%d}, want {%d %d}",
-			below.Current, below.Target, current, baselineVersion-1)
+	if below.Target != baselineVersion-1 {
+		t.Fatalf("err.Target = %d, want %d", below.Target, baselineVersion-1)
 	}
 	if !strings.Contains(err.Error(), "would destroy the workspace") {
 		t.Fatalf("err message missing destructive warning: %v", err)
@@ -240,13 +230,13 @@ func TestDowngradeRollbackOnFailure(t *testing.T) {
 	}
 	t.Cleanup(func() { migrationDownForTest = nil })
 
-	_, err = st.Downgrade(ctx, registryMax-1)
+	done, err := st.Downgrade(ctx, registryMax-1)
 	var rb *DowngradeRollbackError
 	if !errors.As(err, &rb) {
 		t.Fatalf("err = %v, want *DowngradeRollbackError", err)
 	}
-	if rb.From != registryMax || rb.Reversed != 0 {
-		t.Fatalf("rollback = {From:%d Reversed:%d}, want {%d 0}", rb.From, rb.Reversed, registryMax)
+	if want := (storage.Downgraded{From: registryMax, Snapshot: rb.Snapshot.Name}); done == nil || *done != want {
+		t.Fatalf("Downgrade reported %+v, want %+v", done, want)
 	}
 	if !errors.Is(rb, want) {
 		t.Fatalf("rollback error does not wrap synthetic cause: %v", rb)
@@ -280,10 +270,7 @@ func TestDowngradeHappyPathSteppedAndCommitted(t *testing.T) {
 		t.Fatalf("MaxVersion() = %v", err)
 	}
 	target := registryMax - 2
-	before, err := dbsnapshot.List(dbsnapshot.DirFor(doltRoot))
-	if err != nil {
-		t.Fatalf("list snapshots: %v", err)
-	}
+	before := snapshotCount(t, doltRoot)
 	done, err := st.Downgrade(ctx, target)
 	if err != nil {
 		t.Fatalf("Downgrade(%d) = %v, want nil", target, err)
@@ -295,16 +282,16 @@ func TestDowngradeHappyPathSteppedAndCommitted(t *testing.T) {
 	if got != target {
 		t.Fatalf("recorded version after downgrade = %d, want %d", got, target)
 	}
-	after, err := dbsnapshot.List(dbsnapshot.DirFor(doltRoot))
-	if err != nil {
-		t.Fatalf("list snapshots: %v", err)
+	if delta := snapshotCount(t, doltRoot) - before; delta != 1 {
+		t.Fatalf("happy-path took %d snapshot(s); want exactly 1", delta)
 	}
-	if len(after)-len(before) != 1 || snapshotCount(t, doltRoot) != len(after) {
-		t.Fatalf("happy-path took %d snapshot(s); want exactly 1", len(after)-len(before))
+	// A fresh workspace holds no downgrade snapshot, so the one Downgrade
+	// names is the one it took.
+	if want := (storage.Downgraded{From: registryMax, Reversed: 2, Snapshot: done.Snapshot}); *done != want || !IsDowngradeSnapshotName(done.Snapshot) {
+		t.Fatalf("Downgrade(%d) reported %+v, want %+v naming a downgrade snapshot", target, done, want)
 	}
-	taken := newSnapshotName(before, after)
-	if want := (storage.Downgraded{From: registryMax, Reversed: 2, Snapshot: taken}); done != want {
-		t.Fatalf("Downgrade(%d) = %+v, want %+v", target, done, want)
+	if _, err := os.Stat(filepath.Join(dbsnapshot.DirFor(doltRoot), done.Snapshot)); err != nil {
+		t.Fatalf("reported snapshot %q: %v", done.Snapshot, err)
 	}
 	log, err := doltcli.Run(ctx, filepath.Join(doltRoot, "links"), "log", "--oneline")
 	if err != nil {
@@ -331,67 +318,131 @@ func TestDowngradeHappyPathSteppedAndCommitted(t *testing.T) {
 	}
 }
 
-// A down step that fails after earlier steps committed reports how many did,
-// so the event of a half-reversed workspace says how far the reverse got.
-func TestDowngradeRollbackCountsTheStepsBeforeTheFailure(t *testing.T) {
+// A reverse that fails part-way reports how many down-migrations goose
+// applied before it stopped, counting one whose Down ran before its step
+// failed, so the count matches the recorded version the workspace is left at.
+func TestDowngradeFailurePartWayReportsTheStepsApplied(t *testing.T) {
 	// serial: no t.Parallel — installs the package-level migrationDownForTest
 	// hook.
-	ctx := context.Background()
-	st, _ := openWorkspaceForDowngrade(t)
-	registryMax, err := migrations.MaxVersion()
-	if err != nil {
-		t.Fatalf("MaxVersion() = %v", err)
-	}
-	calls := 0
-	migrationDownForTest = func(ctx context.Context, provider *goose.Provider) (*goose.MigrationResult, error) {
-		calls++
-		if calls == 1 {
+	failSecond := func(ctx context.Context, provider *goose.Provider, call int) (*goose.MigrationResult, error) {
+		if call == 1 {
 			return provider.Down(ctx)
 		}
 		return nil, errors.New("synthetic second-step failure")
 	}
-	t.Cleanup(func() { migrationDownForTest = nil })
+	applyThenFail := func(ctx context.Context, provider *goose.Provider, call int) (*goose.MigrationResult, error) {
+		if _, err := provider.Down(ctx); err != nil {
+			return nil, err
+		}
+		return &goose.MigrationResult{}, nil // no Source: the step fails after its Down ran
+	}
+	tests := []struct {
+		name string
+		hook func(context.Context, *goose.Provider, int) (*goose.MigrationResult, error)
+	}{
+		{"the second Down fails", failSecond},
+		{"the first step fails after its Down", applyThenFail},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			st, _ := openWorkspaceForDowngrade(t)
+			registryMax, err := migrations.MaxVersion()
+			if err != nil {
+				t.Fatalf("MaxVersion() = %v", err)
+			}
+			calls := 0
+			migrationDownForTest = func(ctx context.Context, provider *goose.Provider) (*goose.MigrationResult, error) {
+				calls++
+				return tc.hook(ctx, provider, calls)
+			}
+			t.Cleanup(func() { migrationDownForTest = nil })
 
-	_, err = st.Downgrade(ctx, registryMax-2)
-	var rb *DowngradeRollbackError
-	if !errors.As(err, &rb) {
-		t.Fatalf("err = %v, want *DowngradeRollbackError", err)
-	}
-	if rb.From != registryMax || rb.Reversed != 1 {
-		t.Fatalf("rollback = {From:%d Reversed:%d}, want {%d 1}", rb.From, rb.Reversed, registryMax)
-	}
-	if got, err := st.recordedMigrationVersion(ctx); err != nil || got != registryMax-1 {
-		t.Fatalf("recorded version = %d, %v; want %d, one step reversed", got, err, registryMax-1)
+			done, err := st.Downgrade(ctx, registryMax-2)
+			var rb *DowngradeRollbackError
+			if !errors.As(err, &rb) {
+				t.Fatalf("err = %v, want *DowngradeRollbackError", err)
+			}
+			if want := (storage.Downgraded{From: registryMax, Reversed: 1, Snapshot: rb.Snapshot.Name}); done == nil || *done != want {
+				t.Fatalf("Downgrade reported %+v, want %+v", done, want)
+			}
+			if got, err := st.recordedMigrationVersion(ctx); err != nil || got != registryMax-1 {
+				t.Fatalf("recorded version = %d, %v; want %d, one step applied", got, err, registryMax-1)
+			}
+		})
 	}
 }
 
-// Every error Downgrade raises after reading the applied version records that
-// version on the failed command's event, and how far the reverse got, so a
-// refusal's event says what it was decided from.
-func TestDowngradeErrorsRecordTheVersionTheyWereDecidedFrom(t *testing.T) {
+// A snapshot that cannot be taken stops the downgrade before any
+// down-migration, and the report still names the version it read.
+func TestDowngradeSnapshotFailureReportsTheVersionItRead(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, _ := openWorkspaceForDowngrade(t)
-	current, err := st.recordedMigrationVersion(ctx)
+	st, doltRoot := openWorkspaceForDowngrade(t)
+	registryMax, err := migrations.MaxVersion()
 	if err != nil {
-		t.Fatalf("recordedMigrationVersion() = %v", err)
+		t.Fatalf("MaxVersion() = %v", err)
 	}
-	for _, target := range []int64{current + 1, baselineVersion - 1} {
-		_, err := st.Downgrade(ctx, target)
-		var recorded model.RecordedError
-		if !errors.As(err, &recorded) {
-			t.Fatalf("Downgrade(%d) err = %v, want a model.RecordedError", target, err)
+	dir := dbsnapshot.DirFor(doltRoot)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir snapshots: %v", err)
+	}
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatalf("chmod snapshots: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+
+	done, err := st.Downgrade(ctx, registryMax-1)
+	if err == nil {
+		t.Fatal("Downgrade with an unwritable snapshots dir returned nil")
+	}
+	if want := (storage.Downgraded{From: registryMax}); done == nil || *done != want {
+		t.Fatalf("Downgrade reported %+v, want %+v", done, want)
+	}
+}
+
+// A prune that fails after the reverse committed still reports the reverse:
+// the workspace is down, and the event must say so.
+func TestDowngradePruneFailureReportsTheCommittedReverse(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st, doltRoot := openWorkspaceForDowngrade(t)
+	registryMax, err := migrations.MaxVersion()
+	if err != nil {
+		t.Fatalf("MaxVersion() = %v", err)
+	}
+	// A full retention budget of older downgrade snapshots, the oldest of
+	// which cannot be removed: the new snapshot pushes it out, and the prune
+	// fails on it.
+	dir := dbsnapshot.DirFor(doltRoot)
+	const base = int64(1700000000000000000)
+	var stuck string
+	for i := int64(0); i < downgradeSnapshotRetention; i++ {
+		path := filepath.Join(dir, fmt.Sprintf("%d-lit-downgrade-%d", base+i, base+i))
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("plant snapshot: %v", err)
 		}
-		facts, counts := recorded.EventRecord()
-		wantFacts := map[string]any{"downgrade.workspace_schema": current, "downgrade.snapshot": ""}
-		if fmt.Sprint(facts) != fmt.Sprint(wantFacts) || counts["downgrade.reversed"] != 0 || len(counts) != 1 {
-			t.Errorf("Downgrade(%d) record = %v %v; want %v reversed=0", target, facts, counts, wantFacts)
+		if err := os.WriteFile(filepath.Join(path, "held"), nil, 0o644); err != nil {
+			t.Fatalf("plant snapshot file: %v", err)
+		}
+		if i == 0 {
+			stuck = path
 		}
 	}
-	rollback := &DowngradeRollbackError{From: 9, Reversed: 2, Snapshot: dbsnapshot.Snapshot{Name: "snap"}}
-	facts, counts := rollback.EventRecord()
-	if facts["downgrade.workspace_schema"] != int64(9) || facts["downgrade.snapshot"] != "snap" || counts["downgrade.reversed"] != 2 {
-		t.Errorf("rollback record = %v %v; want workspace_schema=9 snapshot=snap reversed=2", facts, counts)
+	if err := os.Chmod(stuck, 0o555); err != nil {
+		t.Fatalf("chmod stuck snapshot: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(stuck, 0o755) })
+
+	done, err := st.Downgrade(ctx, registryMax-1)
+	if err == nil || !strings.Contains(err.Error(), "prune downgrade snapshots") {
+		t.Fatalf("err = %v, want the prune failure", err)
+	}
+	if done == nil || !IsDowngradeSnapshotName(done.Snapshot) || done.Snapshot == filepath.Base(stuck) {
+		t.Fatalf("Downgrade reported %+v, want the snapshot it took", done)
+	}
+	if want := (storage.Downgraded{From: registryMax, Reversed: 1, Snapshot: done.Snapshot}); *done != want {
+		t.Fatalf("Downgrade reported %+v, want %+v", done, want)
 	}
 }
 
@@ -449,7 +500,10 @@ func TestDowngradeSpanUnsupportedRefused(t *testing.T) {
 	}
 
 	before := snapshotCount(t, doltRoot)
-	_, err = st.Downgrade(ctx, registryMax)
+	done, err := st.Downgrade(ctx, registryMax)
+	if want := (storage.Downgraded{From: ahead}); done == nil || *done != want {
+		t.Fatalf("Downgrade reported %+v, want %+v", done, want)
+	}
 	var unsupported *DowngradeSpanUnsupportedError
 	if !errors.As(err, &unsupported) {
 		t.Fatalf("err = %v, want *DowngradeSpanUnsupportedError", err)
@@ -457,9 +511,6 @@ func TestDowngradeSpanUnsupportedRefused(t *testing.T) {
 	want := DowngradeSpanUnsupportedError{Current: ahead, Target: registryMax, Support: version.SchemaSupport{Min: baselineVersion, Max: registryMax}}
 	if *unsupported != want {
 		t.Fatalf("err fields = %+v, want %+v", *unsupported, want)
-	}
-	if facts, _ := unsupported.EventRecord(); facts["downgrade.workspace_schema"] != ahead {
-		t.Fatalf("record workspace_schema = %v, want %d", facts["downgrade.workspace_schema"], ahead)
 	}
 	if delta := snapshotCount(t, doltRoot) - before; delta != 0 {
 		t.Fatalf("span-unsupported refusal took %d snapshot(s); want 0", delta)

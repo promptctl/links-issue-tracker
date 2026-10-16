@@ -684,26 +684,28 @@ func TestRunUpgradeRecordsWhetherItWasAlreadyCurrent(t *testing.T) {
 }
 
 // An unpinned upgrade resolves the latest release itself, so the event records
-// which release that was — the one it installed, and where it installed it,
-// or the one it kept the binary past.
+// which release that was — the one it installed, or kept the binary past —
+// and, only once the install succeeded, where it installed it.
 func TestRunUpgradeRecordsTheReleaseItResolvedAndWhereItInstalled(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name          string
 		current       version.Info
+		installErr    error
 		wantInstalled any
 	}{
-		{"installs the latest release", olderCurrentInfo(), "/p/lit"},
-		{"keeps a binary already on it", version.Info{Version: "0.4.1", Schema: version.SchemaSupport{Min: 1, Max: 3}}, nil},
+		{"installs the latest release", olderCurrentInfo(), nil, "/p/lit"},
+		{"keeps a binary already on it", version.Info{Version: "0.4.1", Schema: version.SchemaSupport{Min: 1, Max: 3}}, nil, nil},
+		{"fails to install it", olderCurrentInfo(), errors.New("network down"), nil},
 	}
 	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			res := &stubResolver{latestTag: "v0.4.1", target: newFakeTarget()}
-			facts, err := runUpgradeRecorded(t, &stubSchemaReader{version: 2}, []string{}, tc.current, res, &stubInstaller{})
-			if err != nil {
-				t.Fatalf("bare upgrade: %v", err)
+			facts, err := runUpgradeRecorded(t, &stubSchemaReader{version: 2}, []string{}, tc.current, res, &stubInstaller{err: tc.installErr})
+			if (err != nil) != (tc.installErr != nil) {
+				t.Fatalf("bare upgrade err = %v; want an error only when the install fails", err)
 			}
 			if got := facts["upgrade.tag"]; got != "v0.4.1" {
 				t.Errorf("upgrade.tag = %v; want v0.4.1", got)
@@ -712,6 +714,21 @@ func TestRunUpgradeRecordsTheReleaseItResolvedAndWhereItInstalled(t *testing.T) 
 				t.Errorf("upgrade.installed_path = %v; want %v", got, tc.wantInstalled)
 			}
 		})
+	}
+}
+
+// A release that does not resolve still leaves the event the tag the command
+// asked for — the latest one it looked up, for a bare run — the one fact known
+// before Resolve.
+func TestRunUpgradeRecordsTheTagOfAReleaseThatDoesNotResolve(t *testing.T) {
+	t.Parallel()
+	res := &stubResolver{latestTag: "v0.4.1", err: errors.New("release v0.4.1 not found")}
+	facts, err := runUpgradeRecorded(t, &stubSchemaReader{version: 2}, []string{}, olderCurrentInfo(), res, &stubInstaller{})
+	if err == nil {
+		t.Fatal("an unresolvable release must fail the upgrade")
+	}
+	if want := map[string]any{"upgrade.tag": "v0.4.1"}; !reflect.DeepEqual(facts, want) {
+		t.Errorf("facts = %v; want %v", facts, want)
 	}
 }
 

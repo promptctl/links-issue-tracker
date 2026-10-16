@@ -215,9 +215,9 @@ the ones it had.
 | `downgrade.target_schema_max` | The schema version of the `--to` release. Set once the release resolves. |
 | `downgrade.running_schema_min` | The lowest schema version this lit supports. Set with the target. |
 | `downgrade.running_schema_max` | The highest schema version this lit supports. Set with the target. |
-| `downgrade.workspace_schema` | The workspace's applied schema version, as the reverse read it under the workspace lock and decided from. Set when the reverse runs or refuses. |
-| `downgrade.snapshot` | The recovery snapshot taken before the first down-migration, or `""` when none was taken (a refusal, or a target the workspace is already at). |
-| `counts.downgrade.reversed` | The down-migrations that committed. `0` for a refusal or a target the workspace is already at; on a failed reverse, those that committed before the failure. |
+| `downgrade.workspace_schema` | The workspace's applied schema version, as the reverse read it under the workspace lock and decided from. Set once the reverse has read it, whether the command then succeeds, refuses, or fails; absent, with the snapshot and the count, when it failed before that read. |
+| `downgrade.snapshot` | The recovery snapshot taken before the first down-migration, or `""` when none was taken. |
+| `counts.downgrade.reversed` | The down-migrations applied. `0` when none ran; on a reverse that failed part-way, those applied before it stopped. |
 | `downgrade.installed_path` | The path the `--to` release was installed to. Absent when nothing was installed. |
 
 ## Reading the file

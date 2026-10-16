@@ -76,12 +76,12 @@ func withSchemaMigrator(declare func() downgradeLeafShape) appLeafFn {
 // substitute a fake.
 //
 // [LAW:types-are-the-program] The CLI doesn't need the full storage.Store API
-// for downgrade; it needs exactly the reverse, which reports the applied
-// version it was decided from. Narrowing the dependency to it makes the
-// pipeline testable without a real Dolt workspace and prevents callers from
-// coupling to incidental Store methods.
+// for downgrade; it needs exactly the reverse, which reports what it did.
+// Narrowing the dependency to it makes the pipeline testable without a real
+// Dolt workspace and prevents callers from coupling to incidental Store
+// methods.
 type schemaDowngrader interface {
-	Downgrade(ctx context.Context, targetSchemaVersion int64) (storage.Downgraded, error)
+	Downgrade(ctx context.Context, targetSchemaVersion int64) (*storage.Downgraded, error)
 }
 
 // downgradeScope is what downgrade's work runs against: the store's schema
@@ -118,6 +118,11 @@ func downgradeLeafWith(
 		if err != nil {
 			return err
 		}
+		// [LAW:nothing-unseen] the release the command installs and the schema
+		// versions the reverse is decided from — the same ones `lit upgrade`
+		// records for its mirror decision — each set as soon as it is known, so
+		// an exit before the decision still carries them.
+		telemetry.Set(ctx, "downgrade.tag", tag)
 
 		platform := release.CurrentPlatform()
 		target, err := resolver.Resolve(ctx, tag, platform)
@@ -125,29 +130,27 @@ func downgradeLeafWith(
 			return err
 		}
 
-		// [LAW:nothing-unseen] the release the command installs and the schema
-		// versions the reverse is decided from — the same ones `lit upgrade`
-		// records for its mirror decision — each set as soon as it is known, so
-		// an exit before the decision still carries them. The workspace's
-		// version is the store's own read under the workspace lock: the reverse
-		// reports it, and each refusal records it on the error.
-		telemetry.Set(ctx, "downgrade.tag", tag)
 		telemetry.Set(ctx, "downgrade.target_schema_max", target.Manifest.Schema.Max)
 		telemetry.Set(ctx, "downgrade.running_schema_min", scope.current.Schema.Min)
 		telemetry.Set(ctx, "downgrade.running_schema_max", scope.current.Schema.Max)
 
+		// What the reverse did is recorded before its error is: the workspace's
+		// version as the store read it under the workspace lock and decided
+		// from, and how far a reverse that stopped part-way got. done is nil
+		// only when the store failed before that read.
 		done, err := scope.schema.Downgrade(ctx, target.Manifest.Schema.Max)
+		if done != nil {
+			facts, counts := done.EventRecord()
+			telemetry.Record(ctx, facts, counts)
+		}
 		if err != nil {
 			return err
 		}
-		facts, counts := done.EventRecord()
-		telemetry.Record(ctx, facts, counts)
 
 		binPath, err := binPathFn()
 		if err != nil {
 			return fmt.Errorf("downgrade: resolve current binary: %w", err)
 		}
-		telemetry.Set(ctx, "downgrade.installed_path", binPath)
 
 		if err := installer.Install(ctx, target, binPath); err != nil {
 			// [LAW:no-silent-failure] schema is already downgraded at this point;
@@ -158,6 +161,7 @@ func downgradeLeafWith(
 				target.Manifest.Schema.Max, err, tag, target.Artifact.URL,
 			)
 		}
+		telemetry.Set(ctx, "downgrade.installed_path", binPath)
 
 		// [LAW:dataflow-not-control-flow] The post-install step is a single
 		// print. Re-exec'ing into the prior binary on Unix or printing a human
