@@ -96,18 +96,17 @@ func TestEveryProducerStampsOrigin(t *testing.T) {
 
 // TestOnlyTheJustfileOmitsVersion pins the omission the IsDev discriminator is
 // built on. `just build` deliberately does not stamp Version; that is what
-// leaves internal/version.Version empty, and so IsDev true, which
-// internal/store/migration_runner.go's producer-binary-version guard relies on
-// to keep an ordinary local build from overwriting a real release's downgrade
-// stamp. The other two producers must stamp it — scripts/install.sh from
-// `git describe`, goreleaser from the tag — each opting its own binary out of
-// that guard on purpose.
+// leaves internal/version.Version empty, and so IsDev true: `lit version`
+// reports the binary as a dev build, and `lit upgrade` never calls it already
+// current. The other two producers must stamp it — scripts/install.sh from
+// `git describe`, goreleaser from the tag — so their binaries carry a version
+// `lit upgrade` can compare against the latest release.
 //
 // Both halves are asserted because only one of them is the interesting failure
 // today and either is fatal. An edit adding -X .../version.Version=… to the
 // build recipe would flip every `just build` binary out of dev mode; an edit
-// dropping it from install.sh would put every installed binary INTO dev mode
-// and back under a guard it is meant to be exempt from. A test that checked
+// dropping it from install.sh would put every installed binary INTO dev mode,
+// where `lit upgrade` reinstalls over it on every run. A test that checked
 // only the omission would pass through the second one unchanged.
 func TestOnlyTheJustfileOmitsVersion(t *testing.T) {
 	t.Parallel()
@@ -117,7 +116,7 @@ func TestOnlyTheJustfileOmitsVersion(t *testing.T) {
 	justfile := repoFile(t, "Justfile")
 	for _, form := range []string{"${pkg}.Version=", "internal/version.Version="} {
 		if strings.Contains(justfile, form) {
-			t.Errorf("the Justfile stamps %s — `just build` would stop being IsDev, and the migration runner's producer guard would treat a local build as a release", form)
+			t.Errorf("the Justfile stamps %s — `just build` would stop being IsDev, and `lit version` would stop reporting a local build as one", form)
 		}
 	}
 
@@ -126,7 +125,7 @@ func TestOnlyTheJustfileOmitsVersion(t *testing.T) {
 		{".goreleaser.yml", "internal/version.Version="},
 	} {
 		if !strings.Contains(repoFile(t, site.file), site.want) {
-			t.Errorf("%s no longer stamps %s — the binaries it produces would read as dev builds and fall back under the downgrade guard they are meant to be exempt from", site.file, site.want)
+			t.Errorf("%s no longer stamps %s — the binaries it produces would read as dev builds, and `lit upgrade` would reinstall over them on every run", site.file, site.want)
 		}
 	}
 }

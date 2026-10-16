@@ -1266,7 +1266,6 @@ step in reconcile's list).
 - Written through `INSERT ... ON DUPLICATE KEY UPDATE meta_value = VALUES(meta_value)` (`internal/store/store.go`); read at `internal/store/store.go`, absent key yields `""` not an error (`internal/store/store.go`).
 - Keys observed in production code:
   - `workspace_id` — written by reconcile via `ensureMetaValue` (`internal/store/schema_reconcile.go`).
-  - `producer_binary_version` — const at `internal/store/migration_runner.go`, written at `internal/store/migration_runner.go`; nothing in the tree reads it.
   - `last_sync_path`, `last_sync_hash` — read at `internal/store/store.go`, written at `internal/store/store.go`.
 
 ### 2.8 `migration_quarantine`
@@ -1389,7 +1388,7 @@ edits (`internal/store/migrations/baseline_frozen_test.go`).
 This hash is the only content fingerprint in the schema system. There is **no**
 schema-version hash or fingerprint stored in the database. The recorded schema
 version in the database is the integer `version_id` in `goose_db_version`
-(§2.9), plus the `producer_binary_version` string row in `meta` (§2.7).
+(§2.9).
 
 ---
 
