@@ -358,6 +358,42 @@ func TestMigrationFailureCheckpointPath(t *testing.T) {
 	}
 }
 
+// TestRealMigrationFailureIsQuarantined pins that a migration goose itself
+// fails is quarantined: no test hook stands in for the step. Goose returns a
+// failed step's result only inside a *goose.PartialError, so this is the one
+// test that sees goose's own failure shape.
+func TestRealMigrationFailureIsQuarantined(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	// 00009_purges.sql creates the purges table, so running it again on a
+	// workspace that has the table fails.
+	const failVersion, failName = int64(9), "00009_purges.sql"
+	withStore(t, ctx, doltRoot, func(st *Store) {
+		if err := st.ExecRawForTest(ctx, fmt.Sprintf(`DELETE FROM goose_db_version WHERE version_id >= %d`, failVersion)); err != nil {
+			t.Fatalf("delete goose rows from v%d error = %v", failVersion, err)
+		}
+		if err := st.commitWorkingSet(ctx, "forget goose history from the failing migration for test"); err != nil {
+			t.Fatalf("commitWorkingSet error = %v", err)
+		}
+	})
+
+	_, openErr := Open(ctx, doltRoot, "test-workspace-id")
+	var cpErr *CheckpointResetError
+	if !errors.As(openErr, &cpErr) {
+		t.Fatalf("Open() error = %v; want a *CheckpointResetError", openErr)
+	}
+	if cpErr.Version != failVersion || cpErr.Name != failName || !cpErr.Quarantined {
+		t.Errorf("CheckpointResetError = {Version: %d, Name: %q, Quarantined: %t}, want {Version: %d, Name: %q, Quarantined: true}", cpErr.Version, cpErr.Name, cpErr.Quarantined, failVersion, failName)
+	}
+
+	_, reopenErr := Open(ctx, doltRoot, "test-workspace-id")
+	var qErr *QuarantineBlockError
+	if !errors.As(reopenErr, &qErr) || qErr.Version != failVersion {
+		t.Fatalf("reopen error = %v; want the *QuarantineBlockError of v%d", reopenErr, failVersion)
+	}
+}
+
 // TestMigrationCheckpointCreatedByFreshOpen pins that a fresh-workspace Open
 // creates at least one pre-migrate checkpoint branch as part of applying the
 // baseline migration.

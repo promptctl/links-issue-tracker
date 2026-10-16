@@ -584,8 +584,19 @@ func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard) error {
 // [LAW:single-enforcer] one goose stepper; [LAW:one-source-of-truth] both
 // consume the same embedded registry via newGooseProvider, so neither mints a
 // second schema-adaptation path.
+//
+// A failed step returns its result beside the error, as migrationUpByOneForTest
+// does: goose returns a nil result on failure and names the migration that
+// failed only in the *goose.PartialError, so the result is taken from there.
+// Without it a failing migration reaches earnsQuarantine as version 0 and is
+// never quarantined.
 func (s *Store) upByOne(ctx context.Context, provider *goose.Provider) (*goose.MigrationResult, error) {
-	return provider.UpByOne(ctx)
+	result, err := provider.UpByOne(ctx)
+	var partial *goose.PartialError
+	if errors.As(err, &partial) {
+		return partial.Failed, err
+	}
+	return result, err
 }
 
 // liftWorkingSetToRegistry advances the live working set to the registry's max
