@@ -441,7 +441,7 @@ func TestInstallFetchesTheReleaseURLsLitUpgradeFetches(t *testing.T) {
 		t.Fatal(err)
 	}
 	requests := filepath.Join(root, "curl-requests")
-	writeFile(t, filepath.Join(stubBin, "curl"), "#!/bin/sh\nfor url; do :; done\necho \"$url\" >>'"+requests+"'\nexit 22\n", 0o755)
+	writeFile(t, filepath.Join(stubBin, "curl"), "#!/bin/sh\nfor arg; do case $arg in *://*) echo \"$arg\" >>'"+requests+"';; esac; done\nexit 22\n", 0o755)
 	writeFile(t, filepath.Join(stubBin, "jq"), "#!/bin/sh\ncat >/dev/null\n", 0o755)
 	installRequest := func(args ...string) string {
 		t.Helper()
