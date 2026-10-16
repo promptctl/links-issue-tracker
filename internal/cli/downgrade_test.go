@@ -28,24 +28,33 @@ type stubResolver struct {
 	gotTag string
 	// latest-lookup side, exercised only by upgrade's bare invocation;
 	// downgrade never calls LatestTag (its dependency is Resolver alone).
-	latestTag    string
+	latestTag    release.Tag
 	latestErr    error
 	latestCalled bool
 }
 
-func (s *stubResolver) Resolve(_ context.Context, tag, _ string) (*release.Target, error) {
+// mustTag parses a release tag a test names as a literal.
+func mustTag(s string) release.Tag {
+	tag, err := release.ParseTag(s)
+	if err != nil {
+		panic(err)
+	}
+	return tag
+}
+
+func (s *stubResolver) Resolve(_ context.Context, tag release.Tag, _ string) (*release.Target, error) {
 	s.called = true
-	s.gotTag = tag
+	s.gotTag = tag.String()
 	if s.err != nil {
 		return nil, s.err
 	}
 	return s.target, nil
 }
 
-func (s *stubResolver) LatestTag(_ context.Context) (string, error) {
+func (s *stubResolver) LatestTag(_ context.Context) (release.Tag, error) {
 	s.latestCalled = true
 	if s.latestErr != nil {
-		return "", s.latestErr
+		return release.Tag{}, s.latestErr
 	}
 	return s.latestTag, nil
 }
@@ -365,6 +374,22 @@ func TestRunDowngradeOnAWorkspacePastRunningSupportIsSchemaAhead(t *testing.T) {
 	}
 }
 
+// The mirror of TestRunUpgradeRefusesANonReleaseTagBeforeResolving: downgrade
+// parses --to through the same normalizeReleaseTag, before any request.
+func TestRunDowngradeRefusesANonReleaseTagBeforeResolving(t *testing.T) {
+	t.Parallel()
+	res := &stubResolver{target: newFakeTarget()}
+	inst := &stubInstaller{}
+	var out bytes.Buffer
+	err := runDowngradeWith(context.Background(), &out, downgradeScope{}, []string{"--to", "v0.14.0.1"}, res, inst, fixedBinPath("/p/lit", nil))
+	if code := ExitCode(err); code != ExitValidation {
+		t.Fatalf("exit = %d (err %v); want %d", code, err, ExitValidation)
+	}
+	if res.called || inst.called {
+		t.Errorf("a non-release --to reached resolve=%v install=%v; want both false", res.called, inst.called)
+	}
+}
+
 func TestNormalizeReleaseTag(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -377,9 +402,11 @@ func TestNormalizeReleaseTag(t *testing.T) {
 		{" v0.4.1 ", "v0.4.1", ""},
 		{"", "", "non-empty version"},
 		{"   ", "", "non-empty version"}, // whitespace-only trims to empty, same class as missing
-		{"v0.4.1/etc", "", "not a valid"},
-		{"v0.4..1", "", "not a valid"},
-		{"v0 .4.1", "", "not a valid"},
+		{"v0.4.1/etc", "", "is not a release tag"},
+		{"v0.4..1", "", "is not a release tag"},
+		{"v0 .4.1", "", "is not a release tag"},
+		{"v0.14.0.1", "", "is not a release tag"}, // a published GitHub release with no assets
+		{"0.4.1-rc1", "", "is not a release tag"},
 	}
 	// Exercise BOTH verbs: the accept/reject shape is verb-independent, but verb
 	// colours the error text, so a regression in either direction's message must
@@ -409,7 +436,7 @@ func TestNormalizeReleaseTag(t *testing.T) {
 				t.Errorf("normalizeReleaseTag(%q, %q) err = %v; want nil", c.in, verb, err)
 				continue
 			}
-			if got != c.want {
+			if got.String() != c.want {
 				t.Errorf("normalizeReleaseTag(%q, %q) = %q; want %q", c.in, verb, got, c.want)
 			}
 		}

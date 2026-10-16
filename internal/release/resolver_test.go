@@ -3,6 +3,7 @@ package release
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -51,7 +52,7 @@ func newManifestServer(t *testing.T, tag string, m Manifest, status int) *httpte
 func TestHTTPResolverResolvesPlatformArtifact(t *testing.T) {
 	srv := newManifestServer(t, "v0.4.1", fixtureManifest(), 0)
 	r := &HTTPResolver{BaseURL: srv.URL}
-	tgt, err := r.Resolve(context.Background(), "v0.4.1", "darwin/arm64")
+	tgt, err := r.Resolve(context.Background(), mustTag(t, "v0.4.1"), "darwin/arm64")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -69,7 +70,7 @@ func TestHTTPResolverResolvesPlatformArtifact(t *testing.T) {
 func TestHTTPResolverUnknownPlatformErrors(t *testing.T) {
 	srv := newManifestServer(t, "v0.4.1", fixtureManifest(), 0)
 	r := &HTTPResolver{BaseURL: srv.URL}
-	_, err := r.Resolve(context.Background(), "v0.4.1", "freebsd/riscv64")
+	_, err := r.Resolve(context.Background(), mustTag(t, "v0.4.1"), "freebsd/riscv64")
 	if err == nil {
 		t.Fatal("expected error for unsupported platform, got nil")
 	}
@@ -78,14 +79,6 @@ func TestHTTPResolverUnknownPlatformErrors(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "darwin/arm64") {
 		t.Errorf("error should list available platforms: %v", err)
-	}
-}
-
-func TestHTTPResolverRejectsUnprefixedTag(t *testing.T) {
-	r := &HTTPResolver{BaseURL: "http://example.invalid"}
-	_, err := r.Resolve(context.Background(), "0.4.1", "darwin/arm64")
-	if err == nil || !strings.Contains(err.Error(), "v-prefixed") {
-		t.Fatalf("expected v-prefix rejection, got %v", err)
 	}
 }
 
@@ -108,7 +101,7 @@ func TestHTTPResolverToleratesFieldsFromANewerProducer(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	r := &HTTPResolver{BaseURL: srv.URL}
-	target, err := r.Resolve(context.Background(), "v0.4.1", "darwin/arm64")
+	target, err := r.Resolve(context.Background(), mustTag(t, "v0.4.1"), "darwin/arm64")
 	if err != nil {
 		t.Fatalf("a manifest from a newer producer must still resolve, got %v", err)
 	}
@@ -146,26 +139,9 @@ func TestHTTPResolverRejectsTrailingData(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	r := &HTTPResolver{BaseURL: srv.URL}
-	_, err := r.Resolve(context.Background(), "v0.4.1", "darwin/arm64")
+	_, err := r.Resolve(context.Background(), mustTag(t, "v0.4.1"), "darwin/arm64")
 	if err == nil || !strings.Contains(err.Error(), "trailing") {
 		t.Fatalf("expected trailing-data rejection, got %v", err)
-	}
-}
-
-func TestHTTPResolverRejectsURLMetacharsInTag(t *testing.T) {
-	r := &HTTPResolver{BaseURL: "http://example.invalid"}
-	for _, bad := range []string{
-		"v0.4.1?inject=1",
-		"v0.4.1#frag",
-		"v0.4.1%2F..",
-		"v0.4.1 ",
-		"v",     // empty after prefix
-		"v..",   // path-traversal-shaped
-		"v/0.1", // separator
-	} {
-		if _, err := r.Resolve(context.Background(), bad, "darwin/arm64"); err == nil {
-			t.Errorf("Resolve(%q) accepted; want refusal", bad)
-		}
 	}
 }
 
@@ -181,7 +157,7 @@ func TestHTTPResolverLatestTagResolvesFromFeed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LatestTag: %v", err)
 	}
-	if tag != "v0.5.0" {
+	if tag.String() != "v0.5.0" {
 		t.Errorf("LatestTag = %q; want v0.5.0", tag)
 	}
 }
@@ -199,16 +175,18 @@ func TestHTTPResolverLatestTagRefusesMissingTagName(t *testing.T) {
 	}
 }
 
-// A feed-served tag passes through the same accept shape as a user's --to;
-// a malformed one is refused, never interpolated into a manifest URL.
-func TestHTTPResolverLatestTagRefusesMalformedTag(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"tag_name":"0.5.0/../evil"}`))
-	}))
-	t.Cleanup(srv.Close)
-	r := &HTTPResolver{LatestURL: srv.URL}
-	if _, err := r.LatestTag(context.Background()); err == nil {
-		t.Fatal("expected malformed feed tag to be refused")
+// A feed-served tag is parsed by the same ParseTag as a user's --to; one that
+// is not a release is refused, never interpolated into a manifest URL.
+func TestHTTPResolverLatestTagRefusesANonReleaseTag(t *testing.T) {
+	for _, feedTag := range []string{"0.5.0/../evil", "v0.14.0.1", "vnightly"} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = fmt.Fprintf(w, `{"tag_name":%q}`, feedTag)
+		}))
+		r := &HTTPResolver{LatestURL: srv.URL}
+		if _, err := r.LatestTag(context.Background()); err == nil || !strings.Contains(err.Error(), "is not a release tag") {
+			t.Errorf("feed tag %q: err = %v; want a not-a-release-tag refusal", feedTag, err)
+		}
+		srv.Close()
 	}
 }
 
@@ -227,7 +205,7 @@ func TestHTTPResolverLatestTagSurfacesHTTPFailure(t *testing.T) {
 func TestHTTPResolver404IsSurfaced(t *testing.T) {
 	srv := newManifestServer(t, "v0.4.2", fixtureManifest(), http.StatusNotFound)
 	r := &HTTPResolver{BaseURL: srv.URL}
-	_, err := r.Resolve(context.Background(), "v0.4.1", "darwin/arm64") // tag mismatch → 404
+	_, err := r.Resolve(context.Background(), mustTag(t, "v0.4.1"), "darwin/arm64") // tag mismatch → 404
 	if err == nil {
 		t.Fatal("expected error for 404")
 	}

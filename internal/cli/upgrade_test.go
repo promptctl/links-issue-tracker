@@ -283,6 +283,27 @@ func TestRunUpgradeWithSchemaReadErrorSkipsInstall(t *testing.T) {
 	}
 }
 
+// A --to that release-tags.sh does not call a release — v0.14.0.1 is a GitHub
+// release with no assets — is refused as bad input before the resolver makes
+// any request, so the user never sees a manifest download fail.
+func TestRunUpgradeRefusesANonReleaseTagBeforeResolving(t *testing.T) {
+	t.Parallel()
+	res := &stubResolver{target: newFakeTarget()}
+	sr := &stubSchemaReader{version: 2}
+	inst := &stubInstaller{}
+	var out bytes.Buffer
+	err := runUpgradeWith(context.Background(), &out, sr, []string{"--to", "v0.14.0.1"}, olderCurrentInfo(), res, inst, fixedBinPath("/p/lit", nil))
+	if code := ExitCode(err); code != ExitValidation {
+		t.Fatalf("exit = %d (err %v); want %d", code, err, ExitValidation)
+	}
+	if !strings.Contains(err.Error(), `"v0.14.0.1" is not a release tag`) {
+		t.Errorf("err = %q; want it to name the tag as not a release", err)
+	}
+	if res.called || sr.called || inst.called {
+		t.Errorf("a non-release --to reached resolve=%v read=%v install=%v; want all false", res.called, sr.called, inst.called)
+	}
+}
+
 func TestRunUpgradeExtraArgsIsUsageError(t *testing.T) {
 	t.Parallel()
 	res := &stubResolver{target: newFakeTarget()}
@@ -309,7 +330,7 @@ func TestRunUpgradeExtraArgsIsUsageError(t *testing.T) {
 // (links-upgrade-8ynx).
 func TestRunUpgradeBareResolvesLatestAndInstalls(t *testing.T) {
 	t.Parallel()
-	res := &stubResolver{latestTag: "v0.9.0", target: newFakeTarget()}
+	res := &stubResolver{latestTag: mustTag("v0.9.0"), target: newFakeTarget()}
 	sr := &stubSchemaReader{version: 2}
 	inst := &stubInstaller{}
 	var out bytes.Buffer
@@ -335,7 +356,7 @@ func TestRunUpgradeBareResolvesLatestAndInstalls(t *testing.T) {
 // the kept version named, nothing installed.
 func TestRunUpgradeBareAlreadyCurrentKeepsBinary(t *testing.T) {
 	t.Parallel()
-	res := &stubResolver{latestTag: "v0.4.1", target: newFakeTarget()} // manifest Version 0.4.1
+	res := &stubResolver{latestTag: mustTag("v0.4.1"), target: newFakeTarget()} // manifest Version 0.4.1
 	sr := &stubSchemaReader{version: 2}
 	inst := &stubInstaller{}
 	current := version.Info{Version: "0.4.1", Schema: version.SchemaSupport{Min: 1, Max: 3}}
@@ -360,7 +381,7 @@ func TestRunUpgradeBareBinaryAheadOfLatestKeepsBinary(t *testing.T) {
 	t.Parallel()
 	tgt := newFakeTarget()
 	tgt.Manifest.Version = "0.9.5"
-	res := &stubResolver{latestTag: "v0.9.5", target: tgt}
+	res := &stubResolver{latestTag: mustTag("v0.9.5"), target: tgt}
 	sr := &stubSchemaReader{version: 2}
 	inst := &stubInstaller{}
 	current := version.Info{Version: "0.10.0", Schema: version.SchemaSupport{Min: 1, Max: 5}}
@@ -374,28 +395,6 @@ func TestRunUpgradeBareBinaryAheadOfLatestKeepsBinary(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "keeping v0.10.0") || !strings.Contains(out.String(), "v0.9.5") {
 		t.Errorf("no-op line must name the kept version and the feed's latest: %q", out.String())
-	}
-}
-
-// A feed tag that passes acceptTag but is not strict semver cannot be ordered
-// against the running version; semver.Compare would sort it below any valid
-// version and the no-op would silently keep the binary past a real release.
-// Unorderable installs as asked — the guard fails toward action.
-func TestRunUpgradeBareUnorderableLatestStillInstalls(t *testing.T) {
-	t.Parallel()
-	res := &stubResolver{latestTag: "vnightly", target: newFakeTarget()}
-	sr := &stubSchemaReader{version: 2}
-	inst := &stubInstaller{}
-	current := version.Info{Version: "0.10.0", Schema: version.SchemaSupport{Min: 1, Max: 5}}
-	var out bytes.Buffer
-	if err := runUpgradeWith(context.Background(), &out, sr, []string{}, current, res, inst, fixedBinPath("/p/lit", nil)); err != nil {
-		t.Fatalf("unorderable latest tag must install, got %v", err)
-	}
-	if !inst.called {
-		t.Error("installer must run for an unorderable feed tag; the no-op requires an orderable one")
-	}
-	if strings.Contains(out.String(), "already current") {
-		t.Errorf("unorderable tag wrongly treated as already current: %q", out.String())
 	}
 }
 
@@ -424,8 +423,8 @@ func TestRunUpgradePinnedSameVersionStillInstalls(t *testing.T) {
 // release. The refusal outranks the no-op.
 func TestRunUpgradeBareLatestBehindWorkspaceRefused(t *testing.T) {
 	t.Parallel()
-	res := &stubResolver{latestTag: "v0.4.1", target: newFakeTarget()} // Schema.Max == 3
-	sr := &stubSchemaReader{version: 7}                                // workspace ahead of latest
+	res := &stubResolver{latestTag: mustTag("v0.4.1"), target: newFakeTarget()} // Schema.Max == 3
+	sr := &stubSchemaReader{version: 7}                                         // workspace ahead of latest
 	inst := &stubInstaller{}
 	current := version.Info{Version: "0.4.1", Schema: version.SchemaSupport{Min: 1, Max: 3}}
 	var out bytes.Buffer
@@ -523,7 +522,7 @@ func TestRunUpgradeBareEndToEndOverHTTP(t *testing.T) {
 func TestRunUpgradeExplicitEmptyToIsRejected(t *testing.T) {
 	t.Parallel()
 	for _, args := range [][]string{{"--to", ""}, {"--to", "   "}} {
-		res := &stubResolver{latestTag: "v0.9.0", target: newFakeTarget()}
+		res := &stubResolver{latestTag: mustTag("v0.9.0"), target: newFakeTarget()}
 		sr := &stubSchemaReader{version: 2}
 		inst := &stubInstaller{}
 		var out bytes.Buffer
@@ -547,7 +546,7 @@ func TestRunUpgradeBareDevBuildAlwaysInstalls(t *testing.T) {
 	t.Parallel()
 	tgt := newFakeTarget()
 	tgt.Manifest.Version = "" // degenerate: equal to the dev build's Version
-	res := &stubResolver{latestTag: "v0.9.0", target: tgt}
+	res := &stubResolver{latestTag: mustTag("v0.9.0"), target: tgt}
 	sr := &stubSchemaReader{version: 2}
 	inst := &stubInstaller{}
 	current := version.Info{IsDev: true, Schema: version.SchemaSupport{Min: 1, Max: 5}}
@@ -667,7 +666,7 @@ func TestRunUpgradeRecordsWhetherItWasAlreadyCurrent(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			res := &stubResolver{latestTag: "v0.4.1", target: newFakeTarget()} // manifest Version 0.4.1
+			res := &stubResolver{latestTag: mustTag("v0.4.1"), target: newFakeTarget()} // manifest Version 0.4.1
 			inst := &stubInstaller{}
 			facts, err := runUpgradeRecorded(t, &stubSchemaReader{version: 2}, []string{}, tc.current, res, inst)
 			if err != nil {
@@ -702,7 +701,7 @@ func TestRunUpgradeRecordsTheReleaseItResolvedAndWhereItInstalled(t *testing.T) 
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			res := &stubResolver{latestTag: "v0.4.1", target: newFakeTarget()}
+			res := &stubResolver{latestTag: mustTag("v0.4.1"), target: newFakeTarget()}
 			facts, err := runUpgradeRecorded(t, &stubSchemaReader{version: 2}, []string{}, tc.current, res, &stubInstaller{err: tc.installErr})
 			if (err != nil) != (tc.installErr != nil) {
 				t.Fatalf("bare upgrade err = %v; want an error only when the install fails", err)
@@ -722,7 +721,7 @@ func TestRunUpgradeRecordsTheReleaseItResolvedAndWhereItInstalled(t *testing.T) 
 // before Resolve.
 func TestRunUpgradeRecordsTheTagOfAReleaseThatDoesNotResolve(t *testing.T) {
 	t.Parallel()
-	res := &stubResolver{latestTag: "v0.4.1", err: errors.New("release v0.4.1 not found")}
+	res := &stubResolver{latestTag: mustTag("v0.4.1"), err: errors.New("release v0.4.1 not found")}
 	facts, err := runUpgradeRecorded(t, &stubSchemaReader{version: 2}, []string{}, olderCurrentInfo(), res, &stubInstaller{})
 	if err == nil {
 		t.Fatal("an unresolvable release must fail the upgrade")

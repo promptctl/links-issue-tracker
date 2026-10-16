@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"testing"
 
+	litrelease "github.com/promptctl/links-issue-tracker/internal/release"
 	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
 )
 
@@ -296,6 +297,41 @@ func TestInstallComparesTheTreeSchemaWithTheNewestRelease(t *testing.T) {
 	}
 }
 
+// releaseTagSamples is the input both copies of release-tags.sh's pattern are
+// held to it over: each piece of ^v[0-9]+\.[0-9]+\.[0-9]+$ broken once (prefix,
+// a missing or extra part, a non-digit, an empty part, a suffix), beside
+// accepted shapes including the unprefixed form a user types and a leading
+// zero the pattern admits.
+var releaseTagSamples = []string{
+	"v0.18.0", "0.18.0", "v10.0.12", "v01.2.3",
+	"v0.2.0.1", "v0.2", "V0.2.0", "v0.2.0-rc1", "v0.2.0+build", "v0.2.0^{}",
+	"vx.y.z", "v0..2", "v0.2.0a", "v0.2.0/../x",
+}
+
+// releaseTagsSelects reports whether release-tags.sh's newest_release_tag
+// selects tag, in the v-prefixed form every copy is handed after normalizing.
+func releaseTagsSelects(t *testing.T, tag string) bool {
+	t.Helper()
+	selection := exec.Command("bash", "-c", `. ./release-tags.sh && printf '%s\n' "$1" | newest_release_tag`, "_", "v"+strings.TrimPrefix(tag, "v"))
+	selected, err := selection.Output()
+	if err != nil {
+		t.Fatalf("newest_release_tag(%q): %v", tag, err)
+	}
+	return len(selected) > 0
+}
+
+// TestReleaseTagParsesExactlyTheReleaseTags holds release.ParseTag — the gate
+// behind lit upgrade --to and lit downgrade --to — to release-tags.sh.
+func TestReleaseTagParsesExactlyTheReleaseTags(t *testing.T) {
+	t.Parallel()
+	for _, tag := range releaseTagSamples {
+		_, err := litrelease.ParseTag("v" + strings.TrimPrefix(tag, "v"))
+		if parses, selects := err == nil, releaseTagsSelects(t, tag); parses != selects {
+			t.Errorf("tag %q: release.ParseTag accepts = %v, newest_release_tag accepts = %v", tag, parses, selects)
+		}
+	}
+}
+
 // TestReleaseModeAcceptsExactlyTheReleaseTags holds install.sh's release-mode
 // copy of the release-tag pattern to release-tags.sh: --from-release accepts a
 // tag exactly when newest_release_tag selects it. A stub curl ends every
@@ -308,7 +344,7 @@ func TestReleaseModeAcceptsExactlyTheReleaseTags(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeFile(t, filepath.Join(stubBin, "curl"), "#!/bin/sh\necho 'stub curl' >&2\nexit 22\n", 0o755)
-	for _, tag := range []string{"v0.18.0", "0.18.0", "v10.0.12", "v0.2.0.1", "v0.2", "v0.2.0-rc1", "v0.2.0^{}", "vx.y.z", "v0.2.0/../x"} {
+	for _, tag := range releaseTagSamples {
 		install := exec.Command("bash", "install.sh", "--from-release", tag)
 		install.Env = []string{"PATH=" + stubBin + ":/usr/bin:/bin", "HOME=" + root, "GOBIN=" + filepath.Join(root, "bin")}
 		out, _ := install.CombinedOutput()
@@ -322,12 +358,7 @@ func TestReleaseModeAcceptsExactlyTheReleaseTags(t *testing.T) {
 			t.Fatalf("install.sh --from-release %q neither refused the tag nor began a download:\n%s", tag, out)
 		}
 
-		selection := exec.Command("bash", "-c", `. ./release-tags.sh && printf '%s\n' "$1" | newest_release_tag`, "_", "v"+strings.TrimPrefix(tag, "v"))
-		selected, err := selection.Output()
-		if err != nil {
-			t.Fatalf("newest_release_tag(%q): %v", tag, err)
-		}
-		if selectionAccepts := len(selected) > 0; installAccepts != selectionAccepts {
+		if selectionAccepts := releaseTagsSelects(t, tag); installAccepts != selectionAccepts {
 			t.Errorf("tag %q: install.sh --from-release accepts = %v, newest_release_tag accepts = %v\ninstall.sh output:\n%s", tag, installAccepts, selectionAccepts, out)
 		}
 	}

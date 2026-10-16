@@ -122,7 +122,7 @@ func downgradeLeafWith(
 		// versions the reverse is decided from — the same ones `lit upgrade`
 		// records for its mirror decision — each set as soon as it is known, so
 		// an exit before the decision still carries them.
-		telemetry.Set(ctx, "downgrade.tag", tag)
+		telemetry.Set(ctx, "downgrade.tag", tag.String())
 
 		platform := release.CurrentPlatform()
 		target, err := resolver.Resolve(ctx, tag, platform)
@@ -178,15 +178,13 @@ func downgradeLeafWith(
 
 // normalizeReleaseTag is the shared --to normalizer for both version-traversal
 // commands (downgrade and upgrade): it accepts either "v0.4.1" or "0.4.1" and
-// returns the v-prefixed form the resolver requires. verb ("downgrade" /
-// "upgrade") only colours the error text — the accept shape is identical because
-// the target is one thing (a release tag), whichever direction the traversal
-// runs. Mirrors mkmanifest's tag/version distinction: the v-prefixed tag is the
-// URL path segment.
-// [LAW:one-source-of-truth] one tag grammar, not a per-command copy that could
-// drift on what a legal tag is; both callsites invoke it directly, so there is
-// no per-direction wrapper to echo this rule.
-func normalizeReleaseTag(in string, verb string) (string, error) {
+// parses the v-prefixed form into the release.Tag the resolver requires. verb
+// ("downgrade" / "upgrade") only colours the error text — the accept shape is
+// identical because the target is one thing (a release tag), whichever
+// direction the traversal runs.
+// [LAW:one-source-of-truth] release.ParseTag is the one tag grammar; this adds
+// only the leniency a typed flag deserves (surrounding space, a missing v).
+func normalizeReleaseTag(in string, verb string) (release.Tag, error) {
 	t := strings.TrimSpace(in)
 	if t == "" {
 		// One message covers both an omitted flag (default "") and a
@@ -194,19 +192,16 @@ func normalizeReleaseTag(in string, verb string) (string, error) {
 		// [LAW:dataflow-not-control-flow]. "requires a non-empty version" is
 		// true for either, where "is required" would wrongly imply the flag was
 		// absent.
-		return "", model.ValidationError{Message: verb + ": --to requires a non-empty version"}
+		return release.Tag{}, model.ValidationError{Message: verb + ": --to requires a non-empty version"}
 	}
-	if !strings.HasPrefix(t, "v") {
-		t = "v" + t
+	tag, err := release.ParseTag("v" + strings.TrimPrefix(t, "v"))
+	if err != nil {
+		// [LAW:one-type-per-behavior] An invalid tag is the same class of failure
+		// as a missing one — bad --to input — so both return model.ValidationError
+		// (exit 3), refused before the resolver makes any request.
+		return release.Tag{}, model.ValidationError{Message: fmt.Sprintf("%s: --to: %v", verb, err)}
 	}
-	// Reject obvious URL-path foot-guns; resolver re-validates the v-prefix.
-	// [LAW:one-type-per-behavior] An invalid tag is the same class of failure as a
-	// missing one — bad --to input — so both return model.ValidationError (exit 3), not
-	// a plain error that would dispatch to the generic exit 1.
-	if strings.ContainsAny(t, "/\\") || strings.Contains(t, "..") || strings.ContainsAny(t, " \t\r\n") {
-		return "", model.ValidationError{Message: fmt.Sprintf("%s: --to %q is not a valid release tag", verb, in)}
-	}
-	return t, nil
+	return tag, nil
 }
 
 // currentBinaryPath returns the absolute path of the running binary after

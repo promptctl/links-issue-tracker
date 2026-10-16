@@ -569,12 +569,12 @@ manifests (`internal/release/manifest.go`). `Signature` is reserved and unverifi
 - `DefaultBaseURL = "https://github.com/promptctl/links-issue-tracker/releases/download"`
 .
 - URL fetched: `<base>/<tag>/release-manifest.json` (trailing `/` trimmed from base).
-- Tag validation, in `acceptTag`, applied by `Resolve` before any fetch
-:
-  - must start with `v` ⇒ else `release: tag must be v-prefixed (got %q)`;
-  - must match `^v[A-Za-z0-9._+-]+$` (`tagAcceptPattern`) ⇒ else
-    `release: tag %q must match %s (v-prefix + alphanumerics, dots, dashes, underscores, plus)`;
-  - must not contain `..` ⇒ else `release: tag %q contains path-traversal sequence`.
+- `Resolve` takes a `Tag` (`internal/release/tag.go`), a struct with one unexported field that only
+  `ParseTag` fills: it must match `^v[0-9]+\.[0-9]+\.[0-9]+$` (`tagPattern`, a copy of
+  `scripts/release-tags.sh`'s `RELEASE_TAG_ERE`) ⇒ else
+  `%q is not a release tag (a release tag is vX.Y.Z, e.g. v0.4.1)`.
+- `LatestTag` parses the feed's `tag_name` through `ParseTag`; a refusal ⇒
+  `release: latest release feed at %s: %w`.
 - Default HTTP client timeout `defaultResolverTimeout = 60 * time.Second` when `Client` is nil
 .
 - Non-200 ⇒ `release: fetch %s: HTTP %d: %s` with the first 256 body bytes.
@@ -633,8 +633,8 @@ manifests (`internal/release/manifest.go`). `Signature` is reserved and unverifi
 .
 - `normalizeReleaseTag`: blank ⇒
   `ValidationError{"<verb>: --to requires a non-empty version"}`; a missing leading `v` is added;
-  a value containing `/`, `\`, `..`, or whitespace ⇒
-  `ValidationError{"<verb>: --to %q is not a valid release tag"}`.
+  the result is parsed by `release.ParseTag`; a refusal ⇒
+  `ValidationError{"<verb>: --to: <ParseTag error>"}`, before any request.
 - Pipeline: require the store to expose `storage.SchemaMigration`;
   resolve `Target` via `release.HTTPResolver{}` at `release.CurrentPlatform()`;
   `store.Downgrade(ctx, target.Manifest.Schema.Max)`; resolve the running binary via

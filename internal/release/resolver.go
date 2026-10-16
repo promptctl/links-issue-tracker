@@ -7,25 +7,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"regexp"
 	"strings"
 	"time"
 )
-
-// tagAcceptPattern enforces a URL-safe single-path-segment shape: leading
-// "v" followed by one or more characters from a fixed whitelist
-// ([A-Za-z0-9._+-]). It does NOT enforce strict semver — `vfoo` and
-// `v1.2.bar` pass the check; the resolver's job is URL safety, and any
-// shape-not-published-by-the-pipeline 404s when fetched. mkmanifest's
-// producer-side validator is the semver authority; this is the consumer
-// mirror that guarantees what gets interpolated into the URL can't be a
-// URL metacharacter (?, #, %, etc.), whitespace, or a path-traversal
-// sequence.
-//
-// [LAW:types-are-the-program] Whitelist > denylist for boundary types:
-// "what survives URL interpolation cleanly" is finite; "what doesn't" is
-// infinite and can never be enumerated correctly.
-var tagAcceptPattern = regexp.MustCompile(`^v[A-Za-z0-9._+-]+$`)
 
 // defaultResolverTimeout bounds a single resolver fetch (the release feed or
 // a manifest). Both are small JSON documents (well under 1 MiB); 60s is
@@ -45,7 +29,7 @@ const defaultResolverTimeout = 60 * time.Second
 // platform artifact." The downgrade CLI never composes manifest URLs itself
 // or fishes a specific artifact out of a Manifest.
 type Resolver interface {
-	Resolve(ctx context.Context, tag, platform string) (*Target, error)
+	Resolve(ctx context.Context, tag Tag, platform string) (*Target, error)
 }
 
 // LatestResolver names the latest published release tag, for a caller that
@@ -56,7 +40,7 @@ type Resolver interface {
 // (DefaultLatestReleaseURL), the same authority scripts/install.sh's
 // --latest-release consults — not by any local heuristic over tags.
 type LatestResolver interface {
-	LatestTag(ctx context.Context) (string, error)
+	LatestTag(ctx context.Context) (Tag, error)
 }
 
 // DefaultBaseURL is the GitHub Release download root for published lit
@@ -86,30 +70,6 @@ type HTTPResolver struct {
 	Client    *http.Client // nil defaults to a client bounded by defaultResolverTimeout
 }
 
-// acceptTag refuses any tag that cannot be interpolated into a URL path
-// segment safely — the one accept shape for tags, whichever door they arrive
-// through (a user's --to via Resolve, or the release feed via LatestTag).
-//
-// [LAW:single-enforcer] The resolver is the boundary that owns URL safety.
-// The CLI happens to validate before calling, but refusing here means no
-// in-process caller can smuggle path traversal, fragment injection, or
-// whitespace through the segment — and a malformed feed response is refused
-// by the same rule as a malformed flag.
-// [LAW:types-are-the-program] mkmanifest's -tag flag enforces the same
-// accept shape; this is the consumer mirror.
-func acceptTag(tag string) error {
-	if !strings.HasPrefix(tag, "v") {
-		return fmt.Errorf("release: tag must be v-prefixed (got %q)", tag)
-	}
-	if !tagAcceptPattern.MatchString(tag) {
-		return fmt.Errorf("release: tag %q must match %s (v-prefix + alphanumerics, dots, dashes, underscores, plus)", tag, tagAcceptPattern)
-	}
-	if strings.Contains(tag, "..") {
-		return fmt.Errorf("release: tag %q contains path-traversal sequence", tag)
-	}
-	return nil
-}
-
 // httpClient returns the configured client or the bounded default.
 func (r *HTTPResolver) httpClient() *http.Client {
 	if r.Client != nil {
@@ -119,25 +79,25 @@ func (r *HTTPResolver) httpClient() *http.Client {
 	return &http.Client{Timeout: defaultResolverTimeout}
 }
 
-// LatestTag fetches the release feed and returns the latest release's tag,
-// refused through the same accept shape as an explicitly named tag.
-func (r *HTTPResolver) LatestTag(ctx context.Context) (string, error) {
+// LatestTag fetches the release feed and parses the latest release's tag
+// through the same ParseTag as an explicitly named one.
+func (r *HTTPResolver) LatestTag(ctx context.Context) (Tag, error) {
 	url := r.LatestURL
 	if url == "" {
 		url = DefaultLatestReleaseURL
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return "", err
+		return Tag{}, err
 	}
 	resp, err := r.httpClient().Do(req)
 	if err != nil {
-		return "", fmt.Errorf("release: fetch latest release from %s: %w", url, err)
+		return Tag{}, fmt.Errorf("release: fetch latest release from %s: %w", url, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
-		return "", fmt.Errorf("release: fetch latest release from %s: HTTP %d: %s", url, resp.StatusCode, strings.TrimSpace(string(body)))
+		return Tag{}, fmt.Errorf("release: fetch latest release from %s: HTTP %d: %s", url, resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 	// The feed is a third-party API that grows fields freely, so unlike the
 	// manifest decode this one must tolerate unknown fields; tag_name is the
@@ -146,25 +106,23 @@ func (r *HTTPResolver) LatestTag(ctx context.Context) (string, error) {
 		TagName string `json:"tag_name"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&feed); err != nil {
-		return "", fmt.Errorf("release: decode latest release from %s: %w", url, err)
+		return Tag{}, fmt.Errorf("release: decode latest release from %s: %w", url, err)
 	}
 	// [LAW:no-silent-failure] A 200 with no tag_name is a feed-shape change,
 	// not "no releases" — refuse loudly rather than hand back an empty tag
 	// that would fail later, far from its cause.
 	if feed.TagName == "" {
-		return "", fmt.Errorf("release: latest release feed at %s returned no tag_name", url)
+		return Tag{}, fmt.Errorf("release: latest release feed at %s returned no tag_name", url)
 	}
-	if err := acceptTag(feed.TagName); err != nil {
-		return "", err
+	tag, err := ParseTag(feed.TagName)
+	if err != nil {
+		return Tag{}, fmt.Errorf("release: latest release feed at %s: %w", url, err)
 	}
-	return feed.TagName, nil
+	return tag, nil
 }
 
 // Resolve fetches and parses the manifest, then selects the platform artifact.
-func (r *HTTPResolver) Resolve(ctx context.Context, tag, platform string) (*Target, error) {
-	if err := acceptTag(tag); err != nil {
-		return nil, err
-	}
+func (r *HTTPResolver) Resolve(ctx context.Context, tag Tag, platform string) (*Target, error) {
 	base := r.BaseURL
 	if base == "" {
 		base = DefaultBaseURL
