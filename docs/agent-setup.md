@@ -51,6 +51,12 @@ On macOS the source build links keg-only Homebrew ICU/zstd; install them first w
 paths for you. Full matrix, manual download, version pinning, and the macOS ICU/zstd
 build notes are in [introduction/installation.md](introduction/installation.md).
 
+The source build installs only a tree whose schema a published release supports. It prints
+the comparison it made, and refuses when the newest `vX.Y.Z` tag lacks one of the tree's
+migrations byte for byte, or when the checkout has no release tag. A binary built from a tree no
+release supports (a `go build` or `just build` while a migration is in development) runs
+only in a scratch workspace, never in a real one. See section 6 for why.
+
 ## 3. Initialize the workspace (once per clone)
 
 Run this from inside the target repository:
@@ -136,6 +142,11 @@ lit doctor [--fix]        # health check; run --fix yourself before escalating a
   bare `go build` stamps neither, and a binary built without them cannot tell you its own
   age, so `lit next` and `lit backlog` lose the warning that would have caught this for
   you next time.
+- **A binary built from unreleased schema migrates the workspace you run it in.** Section 2's
+  rule has no guard of its own: `install.sh` refuses such a tree, but `go build` and
+  `just build` do not. Because the store follows your cwd, running that binary anywhere in a
+  real repo, this checkout included, migrates that repo's store to a schema no release can
+  open. Run it only in a scratch workspace: `lit init` in a temporary git repo.
 
 ## 7. Finishing
 

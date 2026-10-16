@@ -10,6 +10,11 @@
 # owns a `lit` if any; otherwise $GOBIN) and run the same stale-binary
 # detector. Switching modes is a single flag, not a different script.
 #
+# The source build refuses a tree carrying a migration the newest local
+# vX.Y.Z tag does not (exit 3), and a checkout with no such tag (exit 1);
+# install a release instead. A tree no release supports is for go test and
+# scratch workspaces only (CONTRIBUTING.md).
+#
 # [LAW:single-enforcer] One installer, one target-resolution rule, one stale
 # detector. The "what to install" varies; "where + safety checks" do not.
 # [LAW:one-source-of-truth] Source builds inject version/commit/date/origin via
@@ -125,7 +130,7 @@ while [ $# -gt 0 ]; do
             shift
             ;;
         -h|--help)
-            sed -n '3,15p' "$0"
+            sed -n '3,16p' "$0"
             exit 0
             ;;
         *)
@@ -199,14 +204,35 @@ trap 'rm -rf "$tmp"' EXIT
 
 case "$mode" in
     source)
+        # Refuse a tree whose schema no release supports, before lit is built:
+        # an installed lit runs inside real workspaces, and a migration no
+        # release carries would move a workspace's schema past every release.
+        # The newest local release tag is the comparison's "released". A tag
+        # missing from the local list only makes it refuse a tree it could
+        # pass; every local vX.Y.Z tag is trusted as published, and only the
+        # release pipeline makes one. The tags are this checkout's own: a tree
+        # with no .git of its own (a source tarball, even one unpacked inside
+        # another repo) has none, and is refused. The checker prints the
+        # comparison on every run and exits 3 when the tree carries a migration
+        # the release does not, 1 when the tree cannot be shown released. It
+        # is built, not `go run`, because `go run` reports every failure as 1.
+        # [LAW:single-enforcer]
+        # shellcheck source=scripts/release-tags.sh
+        . "$ROOT_DIR/scripts/release-tags.sh"
+        tags=""
+        if [ -e "$ROOT_DIR/.git" ]; then
+            tags="$(git tag --list)"
+        fi
+        newest_tag="$(printf '%s\n' "$tags" | newest_release_tag)"
+        checker="$tmp/schema-release-check${BIN_NAME#lit}"
+        GOFLAGS="${GOFLAGS:+$GOFLAGS }-buildvcs=false" go build -o "$checker" ./tools/schema-release-check
+        "$checker" "$newest_tag"
         # ldflag-stamp the build so `lit version` reports meaningful identity
         # for source builds (releases stamp via goreleaser; this is the
-        # equivalent for ad-hoc checkouts). If we have NO git metadata
-        # (checkout from a tarball, broken repo, etc.), leave Version EMPTY
-        # so `lit version` honestly reports `lit dev (...)`. A spoofed
-        # placeholder like "dev" would make version.IsDev report FALSE and
-        # mislead downstream tooling.
-        ver="$(git describe --tags --always --dirty 2>/dev/null || true)"
+        # equivalent for ad-hoc checkouts). The guard above has already
+        # refused a tree with no git metadata, so describe always has a
+        # commit to name.
+        ver="$(git describe --tags --always --dirty)"
         # Strip a leading `v` so the source-build Version matches goreleaser's
         # convention. goreleaser's `.Version` template emits `0.1.0` for tag
         # `v0.1.0`; downstream consumers (the manifest, archive filenames,
@@ -216,8 +242,8 @@ case "$mode" in
         # `lit v0.1.0` while a release build reports `lit 0.1.0`.
         # [LAW:one-source-of-truth] one canonical format for Version across
         # both producers; the source-build adapter aligns to the release form.
-        # Empty input passes through unchanged (no leading `v` to strip); bare
-        # SHAs from `git describe --always` are hex and never start with `v`.
+        # Bare SHAs from `git describe --always` are hex and never start
+        # with `v`.
         ver="${ver#v}"
         pkg="github.com/promptctl/links-issue-tracker/internal/version"
         # Put ICU/zstd on the cgo search path for the embedded Dolt engine. This
@@ -290,6 +316,10 @@ case "$mode" in
         # [LAW:types-are-the-program] reject illegal tag shapes at the
         # boundary so downstream code can trust that release_tag is a
         # safe, expected canonical value.
+        # [LAW:one-source-of-truth] exception: this is release-tags.sh's
+        # pattern, copied because this mode runs piped from curl with no
+        # checkout to source it from. TestReleaseModeAcceptsExactlyTheReleaseTags
+        # holds the copy to the same accept-set.
         if [[ ! "$release_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "error: release tag '$release_tag' is not a canonical semver release tag (expected vX.Y.Z)" >&2
             echo "       --from-release accepts only tags published by the release pipeline" >&2
@@ -389,7 +419,7 @@ case "$mode" in
                 while IFS= read -r name; do
                     [ -z "$name" ] && continue
                     case "$name" in
-                        .|..|*/*|/*)
+                        .|..|*/*)
                             echo "error: archive entry has unsafe path: $name" >&2
                             exit 1 ;;
                     esac
@@ -416,7 +446,7 @@ case "$mode" in
                 while IFS= read -r name; do
                     [ -z "$name" ] && continue
                     case "$name" in
-                        .|..|*/*|/*|*\\*)
+                        .|..|*/*|*\\*)
                             echo "error: archive entry has unsafe path: $name" >&2
                             exit 1 ;;
                     esac

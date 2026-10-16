@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `scripts/install.sh` (and `just install`) no longer installs a lit built from a tree whose schema no published release supports. A lit like that, run in a real workspace, migrates the workspace's store to a schema that no release can open. Before building lit, the source install checks that the newest `vX.Y.Z` tag in your checkout carries every migration in the tree, byte for byte. It prints the comparison on every run, as `schema-release-check: tree=… release_tag=… release_schema=… verdict=…`. It refuses a tree carrying a migration that release does not (exit 3) and a checkout with no release tag of its own, an unpacked source tarball included (exit 1), and points you at `scripts/install.sh --latest-release`. To develop a migration, use `go test`, and run `go build` binaries only in a scratch workspace; CONTRIBUTING.md has the details. (links-schema-release-fuof.h2n)
+
 ### Fixed
 
 - A workspace whose pending migration is quarantined no longer draws advice to retry and run `lit doctor`. The command whose migration fails quarantines it, and every command after that opens the store with it pending refuses with `migration v<N> "<name>" is quarantined after a previous failure`; both messages name two ways out: restore a snapshot, or clear the quarantine row. Both exited 1 with a remediation to retry, and a retry only reaches the refusal, which repeats every time. Both now exit 3 with reason `migration_quarantined`, and the remediation points at the two paths the message names, says the snapshot must predate the failure, and tells an agent to take neither unless the user directs it: a restore discards what was written since the snapshot, and clearing the row lets a migration that already failed run again. (links-cli-errors-31yq)

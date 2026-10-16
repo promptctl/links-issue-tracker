@@ -89,6 +89,15 @@ cd links-issue-tracker
 With no flags, `install.sh` builds `lit` from the checkout, installs it onto
 your `PATH`, and warns about any stale `lit` binaries that would shadow it.
 
+It installs only a checkout whose migrations a published release carries. On a
+`master` that holds a migration no release has shipped yet, it refuses (exit 3).
+To build a release from source, check out its tag first:
+
+```sh
+git checkout v<version>
+./scripts/install.sh
+```
+
 ### macOS Homebrew note
 
 Building from source on macOS links ICU and zstd, which Homebrew installs

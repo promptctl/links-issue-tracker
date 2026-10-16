@@ -152,8 +152,11 @@ jobs:
       - name: Verify install disables VCS stamping
         run: grep -q -- "-buildvcs=false" scripts/install.sh
 
+      # Exit 3 is install.sh refusing a tree whose schema no release supports,
+      # the right outcome on master between a migration merging and its
+      # release; every other failure fails the step.
       - name: Install lit via repo script
-        run: bash scripts/install.sh
+        run: bash scripts/install.sh || [ $? -eq 3 ]
 
   # golangci-lint enforces the depguard lifecycle-boundary rule (.golangci.yml).
   # The lint version is pinned so the gate is deterministic — a new linter
