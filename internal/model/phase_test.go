@@ -118,6 +118,8 @@ func TestPlanPhase(t *testing.T) {
 	}
 	archived := hydratedIssue(t, Issue{ID: "T", IssueType: "task"}, StateInProgress)
 	archived.SetRetention(Archived{At: at(0)})
+	archivedOpen := hydratedIssue(t, Issue{ID: "T", IssueType: "task"}, StateOpen)
+	archivedOpen.SetRetention(Archived{At: at(0)})
 	for _, tc := range []struct {
 		name  string
 		issue Issue
@@ -126,6 +128,9 @@ func TestPlanPhase(t *testing.T) {
 		{"not in progress", open, "cannot set the phase of T: it is open, and only an in-progress ticket has a phase — `lit start T` enters plan"},
 		{"an epic", epic, "cannot set the phase of epic E: an epic's state derives from its children, and only an in-progress ticket has a phase"},
 		{"frozen", archived, "issue T is archived, so its phase cannot change: run `lit unarchive T` first"},
+		// Not in progress is the refusal that names the next working step:
+		// `lit start` itself names the unarchive it also needs.
+		{"frozen and not in progress", archivedOpen, "cannot set the phase of T: it is open, and only an in-progress ticket has a phase — `lit start T` enters plan"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := tc.issue.PlanPhase(history, PhaseImpl)

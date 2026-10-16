@@ -32,13 +32,16 @@ func TestPhaseMovesAnInProgressTicket(t *testing.T) {
 		to      string
 		from    string
 		changed bool
+		notice  string
 	}{
-		{"impl", "plan", true},
-		{"impl", "impl", false},
-		{"review", "impl", true},
-		{"impl", "review", true},
+		{"impl", "plan", true, "phase: plan → impl\n"},
+		{"impl", "impl", false, "phase: impl (unchanged)\n"},
+		{"review", "impl", true, "phase: impl → review\n"},
+		{"impl", "review", true, "phase: review → impl\n"},
 	} {
-		runCLIInDir(t, dir, "phase", first, "--to", step.to)
+		if out := runCLIInDir(t, dir, "phase", first, "--to", step.to); !strings.HasPrefix(out, step.notice+first+" ") {
+			t.Fatalf("lit phase --to %s printed %q, want the line %q before the ticket's summary", step.to, out, step.notice)
+		}
 		want := map[string]any{"phase.from": step.from, "phase.to": step.to, "phase.changed": step.changed}
 		if got := phaseFacts(t); !reflect.DeepEqual(got, want) {
 			t.Fatalf("lit phase --to %s event facts = %v, want %v", step.to, got, want)
@@ -64,5 +67,25 @@ func TestPhaseMovesAnInProgressTicket(t *testing.T) {
 	}
 	if got := runCLIInDir(t, dir, "show", second, "--field", "phase"); got != "\n" {
 		t.Errorf("show --field phase on an open ticket = %q, want an empty value", got)
+	}
+}
+
+// A mis-written `lit phase` is a usage error whatever the id names, and every
+// usage line it prints is the command's one line, naming the required --to.
+func TestPhaseUsageNamesTheRequiredPhase(t *testing.T) {
+	dir, _, _ := statuslineCheckout(t)
+	const usage = "usage: lit phase <id> --to <plan|impl|review|merge> [--reason <text>]"
+	for _, args := range [][]string{
+		{"phase"},
+		{"phase", "no-such-id"},
+		{"phase", "no-such-id", "--to", "shipping"},
+	} {
+		out, err := runCLIInDirAllowError(t, dir, args...)
+		if got := ExitCode(err); got != ExitUsage {
+			t.Errorf("lit %v exit = %d (%v), want %d, a usage error", args, got, err, ExitUsage)
+		}
+		if !strings.Contains(out+err.Error(), usage) {
+			t.Errorf("lit %v = %q, %v; want the usage line %q", args, out, err, usage)
+		}
 	}
 }

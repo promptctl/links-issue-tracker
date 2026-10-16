@@ -627,7 +627,7 @@ Status lifecycle (Agent Operations):
 | `lit done` | any non-closed → `closed` | | Success path; prints post-close capture guidance. Transitions are target-state: the verb names the destination, whatever the current status. |
 | `lit close` | any non-closed → `closed` | `--resolution <duplicate\|superseded\|obsolete\|wontfix> [--of <canonical-id>]` | Closing without finishing; `--of` names the canonical ticket for the redirecting resolutions (required for those, unrepresentable otherwise). |
 | `lit open` | any non-open → `open` | | Returns the issue to the backlog; ownership (assignee) is untouched — only `start` rewrites it. |
-| `lit phase` | `in_progress` → `in_progress`, phase → the `--to` phase | `--to <plan\|impl\|review\|merge>` | Records where the work stands; the status does not change. Any phase may follow any other, so `review` back to `impl` after review findings is one move. A move to the phase the issue is already in records nothing. Refused for an issue that is not `in_progress` and for an epic. |
+| `lit phase` | `in_progress` → `in_progress`, phase → the `--to` phase | `--to <plan\|impl\|review\|merge>` | Records where the work stands; the status does not change. Any phase may follow any other, so `review` back to `impl` after review findings is one move. A move to the phase the issue is already in records nothing. Prints `phase: impl → review`, or `phase: review (unchanged)`, before the issue's summary. Refused for an issue that is not `in_progress` and for an epic. |
 
 Retention (Issue Retention):
 

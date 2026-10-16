@@ -1519,20 +1519,17 @@ func (s *Store) planLifecycleAction(ctx context.Context, issue model.Issue, acto
 // the move loudly instead of recording a phase on a closed ticket.
 // [LAW:no-silent-failure]
 type phaseWrite struct {
-	issueID string
-	move    model.PhaseChange
-	reason  string
-	actor   string
-	post    model.Issue
+	move  model.PhaseChange
+	event model.IssueEvent
+	post  model.Issue
 }
 
 func (w phaseWrite) postIssue() model.Issue { return w.post }
 func (w phaseWrite) isNoop() bool           { return !w.move.Changed() }
 
 func (w phaseWrite) applyTx(ctx context.Context, s *Store, tx *sql.Tx) error {
-	event := s.newEvent(w.issueID, string(model.ActionPhase), w.reason, w.actor, w.move.FieldChanges())
 	result, err := tx.ExecContext(ctx, `UPDATE issues SET updated_at = ? WHERE id = ? AND status = ?`,
-		event.CreatedAt.Format(time.RFC3339Nano), w.issueID, string(model.StateInProgress))
+		w.event.CreatedAt.Format(time.RFC3339Nano), w.event.IssueID, string(model.StateInProgress))
 	if err != nil {
 		return fmt.Errorf("update issue for phase move: %w", err)
 	}
@@ -1545,7 +1542,7 @@ func (w phaseWrite) applyTx(ctx context.Context, s *Store, tx *sql.Tx) error {
 	// The status is the guard's question, so no row changed is answered by
 	// reading it rather than by the count.
 	if affected == 0 {
-		currentStatus, lookupErr := currentStatusTx(ctx, tx, w.issueID)
+		currentStatus, lookupErr := currentStatusTx(ctx, tx, w.event.IssueID)
 		if lookupErr != nil {
 			return lookupErr
 		}
@@ -1553,11 +1550,13 @@ func (w phaseWrite) applyTx(ctx context.Context, s *Store, tx *sql.Tx) error {
 			return fmt.Errorf("phase conflict: issue status is %q", currentStatus)
 		}
 	}
-	return insertEventTx(ctx, tx, event)
+	return insertEventTx(ctx, tx, w.event)
 }
 
 // planPhaseMove reads the issue's history and plans the move through
-// Issue.PlanPhase, the rule both engines share. [LAW:single-enforcer]
+// Issue.PlanPhase, the rule both engines share. [LAW:single-enforcer] A move
+// mints its event here, so the post-move issue a following field write
+// baselines on carries the event's instant, as the memory engine's does.
 func (s *Store) planPhaseMove(ctx context.Context, issue model.Issue, actor, reason string, action model.SetPhase) (phaseWrite, error) {
 	events, err := s.ListEvents(ctx, issue.ID)
 	if err != nil {
@@ -1567,7 +1566,13 @@ func (s *Store) planPhaseMove(ctx context.Context, issue model.Issue, actor, rea
 	if err != nil {
 		return phaseWrite{}, err
 	}
-	return phaseWrite{issueID: issue.ID, move: move, reason: reason, actor: actor, post: issue}, nil
+	if !move.Changed() {
+		return phaseWrite{move: move, post: issue}, nil
+	}
+	event := s.newEvent(issue.ID, string(model.ActionPhase), reason, actor, move.FieldChanges())
+	post := issue
+	post.UpdatedAt = event.CreatedAt
+	return phaseWrite{move: move, event: event, post: post}, nil
 }
 
 // transitionWrite is a fully-planned status transition, ready to execute

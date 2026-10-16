@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 	"github.com/spf13/cobra"
@@ -707,7 +708,7 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 			Run: r.transitionCmd(closeSpec)},
 		{Name: openSpec.name, Summary: "Reopen issue(s)", GroupID: "operations",
 			Run: r.transitionCmd(openSpec)},
-		{Name: phaseSpec.name, Summary: "Move an in-progress ticket to a phase: " + phaseNames(), GroupID: "operations",
+		{Name: phaseSpec.name, Summary: "Move an in-progress ticket to a phase: " + model.JoinPhases(", "), GroupID: "operations",
 			Run: r.transitionCmd(phaseSpec)},
 		// Retention quartet: distinct RetentionAction transitions, grouped apart
 		// from the status lifecycle so the core verbs stay prominent. Each stays a

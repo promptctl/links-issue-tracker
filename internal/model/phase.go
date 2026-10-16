@@ -22,6 +22,7 @@ const (
 var (
 	Phases     = lifecycle.Phases
 	ParsePhase = lifecycle.ParsePhase
+	JoinPhases = lifecycle.JoinPhases
 )
 
 // PhaseField is the change-row field a phase move records, on an event whose
@@ -95,16 +96,18 @@ func (c PhaseChange) FieldChanges() []FieldChange {
 // PlanPhase plans moving i to phase to, given i's own history. It refuses a
 // ticket that has no phase — an epic, or a leaf that is not in progress — and
 // one that has left the flow. Any phase may follow any other: review back to
-// impl after findings is routine work, not an error.
+// impl after findings is routine work, not an error. Having no phase is
+// refused first: its remedy is `lit start`, whose own gate names the thaw a
+// frozen ticket also needs, so each refusal names the next step that works.
 // [LAW:single-enforcer] Both storage engines plan a phase move here, so the
 // rule and its refusals have one home.
 func (i Issue) PlanPhase(events []IssueEvent, to Phase) (PhaseChange, error) {
-	if thaw, frozen := lifecycle.Thaw(i.Retention()); frozen {
-		return PhaseChange{}, ValidationError{Message: fmt.Sprintf("issue %s is %s, so its phase cannot change: run `lit %s %s` first", i.ID, lifecycle.RetentionName(i.Retention()), thaw.Name().Verb(), i.ID)}
-	}
 	from, ok := PhaseOf(i, events)
 	if !ok {
 		return PhaseChange{}, ValidationError{Message: phaseRefusal(i)}
+	}
+	if thaw, frozen := lifecycle.Thaw(i.Retention()); frozen {
+		return PhaseChange{}, ValidationError{Message: fmt.Sprintf("issue %s is %s, so its phase cannot change: run `lit %s %s` first", i.ID, lifecycle.RetentionName(i.Retention()), thaw.Name().Verb(), i.ID)}
 	}
 	return PhaseChange{From: from, To: to}, nil
 }

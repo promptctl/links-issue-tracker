@@ -32,15 +32,17 @@ func ParsePhase(value string) (Phase, error) {
 			return normalized, nil
 		}
 	}
-	return "", fmt.Errorf("invalid phase %q (valid: %s)", value, phaseList())
+	return "", fmt.Errorf("invalid phase %q (valid: %s)", value, JoinPhases(", "))
 }
 
-func phaseList() string {
+// JoinPhases lists the phases in work order, separated by sep: every message
+// that names the phases spells them from here.
+func JoinPhases(sep string) string {
 	names := make([]string, 0, len(Phases()))
 	for _, phase := range Phases() {
 		names = append(names, string(phase))
 	}
-	return strings.Join(names, ", ")
+	return strings.Join(names, sep)
 }
 
 // SetPhase moves an in-progress ticket to Phase. It acts on neither the status
