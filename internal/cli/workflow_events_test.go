@@ -86,8 +86,8 @@ func TestCommentAddedOccasion(t *testing.T) {
 // TestTransitionOccasionMovesBothLevels: every lifecycle transition fires its
 // event with the states it moved the ticket out of and into. A status action
 // exits and enters the phase inside in_progress along with in_progress
-// itself; a phase move exits and enters phases alone; a move to where the
-// ticket already is re-enters it.
+// itself; a phase move exits and enters phases alone; a call that leaves the
+// ticket where it was exits and enters nothing.
 func TestTransitionOccasionMovesBothLevels(t *testing.T) {
 	t.Parallel()
 	at := func(state model.State, phase model.Phase) ticketState {
@@ -105,7 +105,7 @@ func TestTransitionOccasionMovesBothLevels(t *testing.T) {
 		{"start", model.Start{Assignee: "claude"}, at(model.StateOpen, ""), at(model.StateInProgress, model.PhasePlan),
 			workflows.EventWorkStarted, []string{"open"}, []string{"in_progress", "plan"}},
 		{"reclaim", model.Start{Assignee: "claude"}, at(model.StateInProgress, model.PhaseReview), at(model.StateInProgress, model.PhaseReview),
-			workflows.EventWorkStarted, []string{"in_progress", "review"}, []string{"in_progress", "review"}},
+			workflows.EventWorkStarted, nil, nil},
 		{"done", model.Done{}, at(model.StateInProgress, model.PhaseMerge), at(model.StateClosed, ""),
 			workflows.EventWorkFinished, []string{"in_progress", "merge"}, []string{"closed"}},
 		{"close", model.Close{Outcome: model.Wontfix{}}, at(model.StateOpen, ""), at(model.StateClosed, ""),
@@ -115,7 +115,7 @@ func TestTransitionOccasionMovesBothLevels(t *testing.T) {
 		{"phase", model.SetPhase{Phase: model.PhaseReview}, at(model.StateInProgress, model.PhaseImpl), at(model.StateInProgress, model.PhaseReview),
 			workflows.EventPhaseSet, []string{"impl"}, []string{"review"}},
 		{"phase unchanged", model.SetPhase{Phase: model.PhaseReview}, at(model.StateInProgress, model.PhaseReview), at(model.StateInProgress, model.PhaseReview),
-			workflows.EventPhaseSet, []string{"review"}, []string{"review"}},
+			workflows.EventPhaseSet, nil, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -424,6 +424,28 @@ func TestWorkflowsDryRunNoMatchesReportsNone(t *testing.T) {
 	}
 }
 
+// A state name is an open string that can carry a comma, so the occasion
+// line keeps one state named foo,bar apart from the two states foo and bar.
+func TestWorkflowsDryRunOccasionLineSeparatesStates(t *testing.T) {
+	chdirTempRepo(t)
+
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--enter", "foo,bar"}, `entered=["foo,bar"] exited=[]`},
+		{[]string{"--enter", "foo", "--enter", "bar"}, `entered=["foo","bar"] exited=[]`},
+	} {
+		output, err := runLit(t, append([]string{"workflows", "dry-run"}, tc.args...)...)
+		if err != nil {
+			t.Fatalf("Run(workflows dry-run %v) error = %v", tc.args, err)
+		}
+		if !strings.Contains(output, tc.want) {
+			t.Errorf("dry-run %v output = %q, want it to contain %q", tc.args, output, tc.want)
+		}
+	}
+}
+
 // TestWorkflowsEditRejectsOversuppliedArguments guards the same silent-
 // swallow shape TestWorkflowsRejectsOversuppliedArguments pins for `show`.
 func TestWorkflowsEditRejectsOversuppliedArguments(t *testing.T) {
@@ -474,7 +496,7 @@ func TestWorkflowsDryRunEntersEveryRepeatedState(t *testing.T) {
 		t.Fatalf("Run(workflows dry-run) error = %v", err)
 	}
 	for _, want := range []string{
-		"occasion: event=work_started labels=- entered=in_progress,plan exited=open issue=lit-7\n",
+		`occasion: event=work_started labels=- entered=["in_progress","plan"] exited=["open"] issue=lit-7` + "\n",
 		"Fired (2)\n",
 		"plan-note (project)  [state:plan(enter)]\n",
 		"working-note (project)  [state:in_progress(enter)]\n",

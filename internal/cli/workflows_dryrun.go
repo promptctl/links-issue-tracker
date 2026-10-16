@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/workflows"
@@ -49,8 +50,20 @@ func workflowsDryRunLeaf() wsLeaf {
 
 func printDryRunOccasion(w io.Writer, o workflows.Occasion) error {
 	_, err := fmt.Fprintf(w, "occasion: event=%s labels=%s entered=%s exited=%s issue=%s\n\n",
-		orDash(string(o.Event)), orDash(strings.Join(o.Labels, ",")), orDash(strings.Join(o.Entered, ",")), orDash(strings.Join(o.Exited, ",")), orDash(o.IssueID))
+		orDash(string(o.Event)), orDash(strings.Join(o.Labels, ",")), stateList(o.Entered), stateList(o.Exited), orDash(o.IssueID))
 	return err
+}
+
+// stateList renders states as a list of quoted names, [] when there are none.
+// Labels can join on a bare comma because a label cannot contain one; a state
+// name is an open string that can, so each name is quoted to keep one state
+// named "foo,bar" apart from the two states foo and bar.
+func stateList(states []string) string {
+	quoted := make([]string, len(states))
+	for i, state := range states {
+		quoted[i] = strconv.Quote(state)
+	}
+	return "[" + strings.Join(quoted, ",") + "]"
 }
 
 func printDryRunMatches(w io.Writer, matched []workflows.Definition, o workflows.Occasion) error {

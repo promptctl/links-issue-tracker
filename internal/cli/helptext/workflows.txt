@@ -69,9 +69,10 @@ Activation
            with it: lit start from open enters in_progress and plan,
            lit done exits the ticket's phase along with in_progress,
            and lit phase exits one phase and enters another without
-           leaving in_progress. A transition to where the ticket already
-           is re-enters it. A moment carrying no transition never
-           satisfies a state binding.
+           leaving in_progress. A call that leaves the ticket where it
+           was, such as a move to the phase it is in, enters and exits
+           nothing. A moment carrying no transition never satisfies a
+           state binding.
 
   events   Fires when a listed semantic event is dispatched. Commands
            dispatch events and definitions bind to events, never to
@@ -108,11 +109,11 @@ The subcommands
 
   Bare lit workflows prints the lifecycle spine — every catalog event; the
   built-in states, with the phases after in_progress, plus any custom stage
-  a loaded definition binds to, each with its enter and exit sides; and every label a loaded definition
-  binds to — annotated with the definitions active at each point and the
-  layer each resolved from, then a Warnings section naming every file that
-  loaded but cannot fully fire: inert, unknown event, malformed
-  frontmatter, duplicate id.
+  a loaded definition binds to, each with its enter and exit sides; and
+  every label a loaded definition binds to — annotated with the
+  definitions active at each point and the layer each resolved from, then
+  a Warnings section naming every file that loaded but cannot fully fire:
+  inert, unknown event, malformed frontmatter, duplicate id.
 
   show <id> prints one resolved definition: id, name, source layer, path,
   its three activation dimensions, and its body.
@@ -149,8 +150,9 @@ The subcommands
   Pass --event to exercise an event-bound definition and --enter or --exit
   for a state-bound one; both repeat, since one transition can enter or
   exit several states (--enter in_progress --enter plan is a start). A
-  dimension left unset satisfies no definition that declares it. A hypothetical matching nothing exits cleanly with
-  Fired (0). dry-run writes nothing and reads no ticket data.
+  dimension left unset satisfies no definition that declares it. A
+  hypothetical matching nothing exits cleanly with Fired (0). dry-run
+  writes nothing and reads no ticket data.
 
   A real occasion that fires at least one definition records a JSON trace —
   the occasion, every definition that fired, and the same reasons dry-run

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/workflows"
@@ -76,10 +77,12 @@ func commentAddedOccasion(issue model.Issue) workflows.Occasion {
 	}
 }
 
-// statusTransitionEvents maps the four status-changing actions to the events
-// they fire. [LAW:one-source-of-truth] mirrors events.go's catalog exactly.
-var statusTransitionEvents = map[model.ActionName]workflows.Event{
+// transitionEvents maps every lifecycle action to the event it fires: the
+// four status actions and the phase move. Retention actions fire nothing and
+// have no entry (see transitionOccasion).
+var transitionEvents = map[model.ActionName]workflows.Event{
 	model.ActionStart:  workflows.EventWorkStarted,
+	model.ActionPhase:  workflows.EventPhaseSet,
 	model.ActionDone:   workflows.EventWorkFinished,
 	model.ActionClose:  workflows.EventTicketClosed,
 	model.ActionReopen: workflows.EventTicketReopened,
@@ -96,15 +99,11 @@ type ticketState struct {
 // states is every state the ticket is in, outermost first: its status, then
 // the phase inside it.
 func (t ticketState) states() []string {
-	return append([]string{string(t.issue.State())}, t.phases()...)
-}
-
-// phases is the ticket's phase as the states of the phase level: one, or none.
-func (t ticketState) phases() []string {
-	if t.phase == "" {
-		return nil
+	states := []string{string(t.issue.State())}
+	if t.phase != "" {
+		states = append(states, string(t.phase))
 	}
-	return []string{string(t.phase)}
+	return states
 }
 
 // transitionOccasion is the single builder every lifecycle transition routes
@@ -113,48 +112,43 @@ func (t ticketState) phases() []string {
 // into the event it fires. [LAW:single-enforcer] before and after are where
 // the ticket stood on either side of the write.
 //
-// The states a transition exits and enters are read as a statechart reads
-// nested states, a phase being a state inside in_progress. A status action
-// moves the whole ticket, so it exits every state the ticket was in and
-// enters every state it is in now: a start from open enters in_progress and
-// plan, a done from review exits in_progress and review. A phase move stays
-// inside in_progress, so it exits and enters phases alone. A move to where the
-// ticket already is re-enters it, as a reclaim re-enters in_progress.
+// The states are read as a statechart reads nested states, a phase being a
+// state inside in_progress: a transition exits the states the ticket was in
+// and no longer is, and enters the ones it is in now and was not. So a start
+// from open enters in_progress and plan, a done from review exits in_progress
+// and review, and a phase move exits and enters one phase each, never leaving
+// in_progress. A call that leaves the ticket where it was — a reclaim, a move
+// to the phase it is in — exits and enters nothing, while its event still
+// fires: history records mutations that happened, not calls that were made.
 //
 // A retention action (archive/unarchive/delete/restore) is no lifecycle
-// transition and fires nothing, so fires is false. Action is a sealed sum, so
-// a variant this switch does not name is one added to the lifecycle package
+// transition and fires nothing, so fires is false. Any other action without
+// an entry in transitionEvents is a variant added to the lifecycle package
 // without a decision here — a maintenance bug, not a state transitionLeaf can
-// construct today — and it panics rather than dispatching or skipping
-// silently, as an unmapped status action does. [LAW:no-silent-failure]
+// construct today — so it panics rather than dispatching an eventless
+// occasion or skipping silently. [LAW:no-silent-failure]
 func transitionOccasion(action model.Action, before, after ticketState) (occasion workflows.Occasion, fires bool) {
-	switch action := action.(type) {
-	case model.StatusAction:
-		event, ok := statusTransitionEvents[action.Name()]
-		if !ok {
-			// string(), not Verb(): this names the EVENT MAPPING's key, which is the
-			// persisted encoding, and it is a developer diagnostic rather than
-			// guidance an agent will run. The conversion is written out so the gate
-			// in internal/model/lifecycle can hold one rule with no exceptions.
-			panic(fmt.Sprintf("workflow_events: no event mapped for status action %q", string(action.Name())))
-		}
-		return movedOccasion(event, after.issue, before.states(), after.states()), true
-	case model.SetPhase:
-		return movedOccasion(workflows.EventPhaseSet, after.issue, before.phases(), after.phases()), true
-	case model.RetentionAction:
+	if _, retention := action.(model.RetentionAction); retention {
 		return workflows.Occasion{}, false
 	}
-	panic(fmt.Sprintf("workflow_events: no occasion decided for action %T", action))
-}
-
-// movedOccasion is the occasion of a transition that moved issue out of the
-// exited states and into the entered ones.
-func movedOccasion(event workflows.Event, issue model.Issue, exited, entered []string) workflows.Occasion {
+	event, ok := transitionEvents[action.Name()]
+	if !ok {
+		// string(), not Verb(): this names the EVENT MAPPING's key, which is the
+		// persisted encoding, and it is a developer diagnostic rather than
+		// guidance an agent will run. The conversion is written out so the gate
+		// in internal/model/lifecycle can hold one rule with no exceptions.
+		panic(fmt.Sprintf("workflow_events: no event mapped for lifecycle action %q", string(action.Name())))
+	}
 	return workflows.Occasion{
 		Event:   event,
-		IssueID: issue.ID,
-		Labels:  issue.Labels,
-		Entered: entered,
-		Exited:  exited,
-	}
+		IssueID: after.issue.ID,
+		Labels:  after.issue.Labels,
+		Exited:  difference(before.states(), after.states()),
+		Entered: difference(after.states(), before.states()),
+	}, true
+}
+
+// difference is the set difference from \ to, kept in from's order.
+func difference(from, to []string) []string {
+	return slices.DeleteFunc(slices.Clone(from), func(state string) bool { return slices.Contains(to, state) })
 }

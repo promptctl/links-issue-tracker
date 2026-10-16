@@ -35,7 +35,8 @@ func workflowFacts(t *testing.T) map[string]any {
 // Workflow definitions bound to a phase fire as the work moves through it:
 // lit start enters plan inside in_progress, a phase move exits one phase and
 // enters the next without leaving in_progress, a move to the phase the ticket
-// is in re-enters it, and lit done exits the phase along with in_progress.
+// is in exits and enters nothing, and lit done exits the phase along with
+// in_progress.
 // The command's event names the occasion and what fired on it.
 func TestPhaseMovesFireStateBoundWorkflows(t *testing.T) {
 	isolateEvents(t)
@@ -61,7 +62,7 @@ func TestPhaseMovesFireStateBoundWorkflows(t *testing.T) {
 		{[]string{"start", first, "--by", "agent"}, "work_started", []any{"open"}, []any{"in_progress", "plan"}, []any{"enter-plan", "working"}},
 		{[]string{"phase", first, "--to", "impl"}, "phase_set", []any{"plan"}, []any{"impl"}, []any{}},
 		{[]string{"phase", first, "--to", "review"}, "phase_set", []any{"impl"}, []any{"review"}, []any{"enter-review", "exit-impl"}},
-		{[]string{"phase", first, "--to", "review"}, "phase_set", []any{"review"}, []any{"review"}, []any{"enter-review", "exit-review"}},
+		{[]string{"phase", first, "--to", "review"}, "phase_set", []any{}, []any{}, []any{}},
 		{[]string{"done", first}, "work_finished", []any{"in_progress", "review"}, []any{"closed"}, []any{"done", "exit-review"}},
 	} {
 		out := runCLIInDir(t, dir, step.args...)

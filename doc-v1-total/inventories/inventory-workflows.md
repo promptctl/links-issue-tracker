@@ -323,15 +323,13 @@ Builders live in `internal/cli/workflow_events.go`:
 | `ticket_created` | `ticketCreatedOccasion` `internal/cli/workflow_events.go` | Event, IssueID, Labels (the labels it was created with). |
 | `ticket_updated` | `ticketUpdatedOccasion` `internal/cli/workflow_events.go` | Event, IssueID, Labels. **Never carries a transition** — `lit update` rejects `--status` (`internal/cli/workflow_events.go`; pinned `internal/cli/workflow_events_test.go`). |
 | `comment_added` | `commentAddedOccasion` `internal/cli/workflow_events.go` | Event, IssueID, Labels. |
-| `work_started` / `work_finished` / `ticket_closed` / `ticket_reopened` | `transitionOccasion` `internal/cli/workflow_events.go` | Event (from the action), IssueID, Labels (post-transition), `Entered` = the post state then its phase if any, `Exited` = the pre state then its phase if any (`ticketState.states`). |
-| `phase_set` | `transitionOccasion` `internal/cli/workflow_events.go` | Event, IssueID, Labels (post-transition), `Entered` = the post phase, `Exited` = the pre phase (`ticketState.phases`); never the status. |
+| `work_started` / `work_finished` / `ticket_closed` / `ticket_reopened` / `phase_set` | `transitionOccasion` `internal/cli/workflow_events.go` | Event (from the action), IssueID, Labels (post-transition), `Entered` = `difference(after, before)`, `Exited` = `difference(before, after)`, over `ticketState.states` (the status, then its phase if any), each in that order. A reclaim or a move to the current phase yields `[]` for both. |
 
-Status-action → event mapping (`internal/cli/workflow_events.go`):
-`ActionStart→work_started`, `ActionDone→work_finished`, `ActionClose→ticket_closed`,
-`ActionReopen→ticket_reopened`. A `StatusAction` with no map entry **panics**:
-`workflow_events: no event mapped for status action %q` (`internal/cli/workflow_events.go`).
-`model.SetPhase` maps to `phase_set`; an action variant the builder's type switch does not name
-panics with `workflow_events: no occasion decided for action %T` (`internal/cli/workflow_events.go`).
+Lifecycle-action → event mapping, `transitionEvents` (`internal/cli/workflow_events.go`):
+`ActionStart→work_started`, `ActionPhase→phase_set`, `ActionDone→work_finished`,
+`ActionClose→ticket_closed`, `ActionReopen→ticket_reopened`. A non-retention action with no map
+entry **panics**: `workflow_events: no event mapped for lifecycle action %q`
+(`internal/cli/workflow_events.go`).
 The phase on each side is `model.PhaseOf` over the issue's events, read by `readTicketState`
 before and after `Store.Apply` (`internal/cli/cli.go`).
 
@@ -632,7 +630,7 @@ Needs-Design` will not match a canonicalized definition label.)
 Output (`internal/cli/workflows_dryrun.go`):
 
 ```
-occasion: event=<e|-> labels=<comma-joined|-> entered=<comma-joined|-> exited=<comma-joined|-> issue=<id|->
+occasion: event=<e|-> labels=<comma-joined|-> entered=<["state",...]|[]> exited=<["state",...]|[]> issue=<id|->
 <blank line>
 Fired (<n>)
 ```

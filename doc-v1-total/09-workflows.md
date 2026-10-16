@@ -95,12 +95,11 @@ The single payload type is `Occasion` (`match.go`): `Event` (zero when none), `I
 | `show_ticket`, `next_pulled`, `ticket_created`, `comment_added` | Event, IssueID, Labels |
 | `show_backlog` | Event only — no IssueID, no Labels, no transition |
 | `ticket_updated` | Event, IssueID, Labels; never a transition — `lit update` rejects `--status` (`workflow_events.go`) |
-| `work_started`/`work_finished`/`ticket_closed`/`ticket_reopened` | Event, IssueID, post-transition Labels, `Entered` = every state after (the status, then the phase while in progress), `Exited` = every state before (`workflow_events.go`) |
-| `phase_set` | Event, IssueID, post-transition Labels, `Entered` = the phase after, `Exited` = the phase before; never the status, which the move leaves at `in_progress` (`workflow_events.go`) |
+| `work_started`/`work_finished`/`ticket_closed`/`ticket_reopened`/`phase_set` | Event, IssueID, post-transition Labels, `Entered` = the states after (the status, then the phase while in progress) that were not states before, `Exited` = the states before that are not states after (`workflow_events.go`) |
 
-So `lit start` from open exits `[open]` and enters `[in_progress, plan]`; `lit done` from `review` exits `[in_progress, review]` and enters `[closed]`; `lit phase --to review` from `impl` exits `[impl]` and enters `[review]`. A transition to where the ticket already is — a reclaim, a move to the current phase — exits and re-enters the same states. Both sides are read on the write store, the phase through `model.PhaseOf`, before and after `Apply` (`cli.go`).
+So `lit start` from open exits `[open]` and enters `[in_progress, plan]`; `lit done` from `review` exits `[in_progress, review]` and enters `[closed]`; `lit phase --to review` from `impl` exits `[impl]` and enters `[review]`, never the status, which the move leaves at `in_progress`. A call that leaves the ticket where it was — a reclaim, a move to the current phase — exits and enters `[]`, and its event still fires. Both sides are read on the write store, the phase through `model.PhaseOf`, before and after `Apply` (`cli.go`).
 
-The status-action→event map is `start→work_started`, `done→work_finished`, `close→ticket_closed`, `reopen→ticket_reopened`; an unmapped status action panics, as does an action variant the occasion builder does not name (`workflow_events.go`). Retention actions (archive/unarchive/delete/restore) fire **no event at all** (`internal/cli/cli.go`, `workflow_events.go`).
+The lifecycle-action→event map is `start→work_started`, `phase→phase_set`, `done→work_finished`, `close→ticket_closed`, `reopen→ticket_reopened`; a non-retention action with no entry panics (`workflow_events.go`). Retention actions (archive/unarchive/delete/restore) fire **no event at all** (`internal/cli/cli.go`, `workflow_events.go`).
 
 ### Dispatch call sites
 
