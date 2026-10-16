@@ -28,7 +28,6 @@ import (
 	"slices"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
-	"github.com/promptctl/links-issue-tracker/internal/model/lifecycle"
 )
 
 // Evidence is a complete lane-partitioned reading of the backlog: every issue
@@ -142,7 +141,7 @@ func progressOf(members []model.Issue) LaneProgress {
 	var progress LaneProgress
 	// [LAW:one-source-of-truth] Frozen is the program's one answer to "has this
 	// left the flow", the same one readiness and claim derivation ask.
-	inFlow := slices.DeleteFunc(slices.Clone(members), func(member model.Issue) bool { return lifecycle.Frozen(member.Retention()) })
+	inFlow := slices.DeleteFunc(slices.Clone(members), func(member model.Issue) bool { return model.Frozen(member.Retention()) })
 	for _, issue := range inFlow {
 		progress.Total++
 		switch issue.State() {
