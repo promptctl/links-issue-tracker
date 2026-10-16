@@ -202,7 +202,7 @@ type lockHolderRecord struct {
 // holding the file open, since filelock's open denies the delete right.
 func recordLockHolder(storageDir, lockPath string, lockRelease func() error) func() error {
 	if err := retireDeadLockHolders(storageDir, lockPath); err != nil {
-		fmt.Fprintf(lockWaitNoticeWriter, "lit: could not retire the records of holders gone from %s (the lock is held; a later acquisition retries them): %v\n", lockPath, err)
+		fmt.Fprintf(lockWaitNoticeWriter, "lit: could not retire the records of holders gone from %s (the lock is held; every acquisition retries, so this repeats until they can be retired): %v\n", lockPath, err)
 	}
 	releaseRecord, err := publishLockHolder(storageDir, lockPath)
 	if err != nil {
