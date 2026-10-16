@@ -67,6 +67,30 @@ func TestInstallPluginReportsAnUnreadableDefinition(t *testing.T) {
 	}
 }
 
+// A definition that cannot be replaced is an error and reports nothing written,
+// and the copy already there is left as it was.
+func TestInstallPluginReportsAFailedWrite(t *testing.T) {
+	path := PluginPath(t.TempDir())
+	stale := []byte("{ segments: {} }\n")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, stale, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Dir(path), 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(filepath.Dir(path), 0o755) })
+	wrote, err := InstallPlugin(path)
+	if err == nil || !strings.HasPrefix(err.Error(), "install cc-candybar plugin: ") || wrote {
+		t.Fatalf("InstallPlugin into a read-only folder = %t, %v; want false and an install error", wrote, err)
+	}
+	if raw, err := os.ReadFile(path); err != nil || !bytes.Equal(raw, stale) {
+		t.Fatalf("plugin after a failed install = %q, %v; want the copy that was there", raw, err)
+	}
+}
+
 // The definition checks the schema_version SchemaVersion writes, and names it
 // in the warning it shows for any other, so changing the schema without the
 // definition that reads it fails here.

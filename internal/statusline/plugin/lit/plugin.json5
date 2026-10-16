@@ -40,7 +40,7 @@
     // A schema_version this definition was not written for may mean any
     // field: the cell says so (⚠) rather than guess. The version is the one
     // internal/statusline.SchemaVersion writes, and a test holds them equal.
-    schema: '{{ if ne (toString .schema_version) "1" }}{{ fail (printf "lit statusline.json is schema_version %v; this plugin reads 1 — run a lit command to reinstall the plugin" .schema_version) }}{{ end }}',
+    schema: '{{ if ne (toString .schema_version) "1" }}{{ fail (printf "lit statusline.json is schema_version %v; this plugin reads 1 — run lit next in this checkout to reinstall the plugin" .schema_version) }}{{ end }}',
     title: '{{ if gt (int .width) 0 }} {{ abbrev (int .width) .title }}{{ end }}',
   },
   actions: {
