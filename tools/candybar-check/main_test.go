@@ -33,16 +33,25 @@ func TestCellsReadsTheBarCandybarPrints(t *testing.T) {
 }
 
 // A print the check cannot read as a bar fails the case rather than passing it
-// with whatever cells it could make out.
+// with whatever cells it could make out. Each print is the readable one but
+// for the one fault it is named for.
 func TestCellsRefusesAPrintItCannotRead(t *testing.T) {
-	const ok = "✓ /c.json5: config OK\n"
+	const (
+		ok   = "✓ /c.json5: config OK\n"
+		menu = "\ue0b0 \x1b]8;;m\x1b\\🍫\x1b]8;;\x1b\\ \ue0b0"
+		bar  = menu + " phase plan \ue0b0\n"
+	)
+	if got, err := cells(ok + bar); err != nil || !slices.Equal(got, []string{"phase plan"}) {
+		t.Fatalf("the readable print: cells = %q, %v; want [\"phase plan\"]", got, err)
+	}
 	for name, printed := range map[string]string{
 		"nothing printed":   "",
-		"no config OK line": "[🍫](x) \ue0b0 phase plan\n",
-		"two bar lines":     ok + "\x1b]8;;m\x1b\\🍫\x1b]8;;\x1b\\\nphase plan\n",
+		"no config OK line": "✓ /c.json5: config failed\n" + bar,
+		"two bar lines":     ok + bar + bar,
 		"no menu cell":      ok + "\ue0b0 phase plan \ue0b0 next nothing ready \ue0b0\n",
-		"no closing arrow":  ok + "\ue0b0 \x1b]8;;m\x1b\\🍫\x1b]8;;\x1b\\ \ue0b0 phase plan\n",
-		"unread escape":     ok + "\x1b]8;;m\x1b\\🍫\x1b]8;;\x1b\\ \ue0b0 \x1b[2Kphase plan\n",
+		"no opening arrow":  ok + "\x1b]8;;m\x1b\\🍫\x1b]8;;\x1b\\ \ue0b0 phase plan \ue0b0\n",
+		"no closing arrow":  ok + menu + " phase plan\n",
+		"unread escape":     ok + menu + " \x1b[2Kphase plan \ue0b0\n",
 	} {
 		if got, err := cells(printed); err == nil {
 			t.Errorf("%s: cells = %q, want an error", name, got)
@@ -85,7 +94,7 @@ func TestOlderLitWritesWorkingOnWithoutAPhaseKey(t *testing.T) {
 // between two arrows, as cc-candybar 1.130.5 draws it; it reads as a cell, so
 // a case expecting the segment hidden fails.
 func TestCellsKeepsABlankCell(t *testing.T) {
-	printed := "\u2713 /c.json5: config OK\n\ue0b0 \x1b]8;;m\x1b\\🍫\x1b]8;;\x1b\\ \ue0b0   \ue0b0 next nothing ready \ue0b0\n"
+	printed := "✓ /c.json5: config OK\n\ue0b0 \x1b]8;;m\x1b\\🍫\x1b]8;;\x1b\\ \ue0b0   \ue0b0 next nothing ready \ue0b0\n"
 	got, err := cells(printed)
 	if err != nil {
 		t.Fatalf("cells: %v", err)
