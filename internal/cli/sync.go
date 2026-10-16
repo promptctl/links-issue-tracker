@@ -230,7 +230,8 @@ func syncPullLeaf() syncLeaf {
 			// surfaced as a command error, not swallowed the way the background
 			// receive tolerates a transient hiccup. [LAW:no-silent-failure] A remote
 			// schema ahead of this binary surfaces as the one sync-failure contract
-			// (exit ExitConflict, naming `lit upgrade`), not the raw store refusal.
+			// (exit ExitValidation as the schema-ahead refusal it wraps, naming
+			// `lit upgrade`), not the raw store refusal.
 			return asSyncFailure(err)
 		}
 		// SyncPull succeeding means its internal SyncReceive fetched the remote
@@ -402,8 +403,9 @@ func syncPushLeaf() syncLeaf {
 		recordPushedAdvertisement(ws, outcome.proven)
 		if outcome.pushErr != nil {
 			// A remote schema ahead of this binary surfaces as the one sync-failure
-			// contract (exit ExitConflict, naming `lit upgrade`) rather than the raw
-			// non-fast-forward/refusal string. [LAW:single-enforcer]
+			// contract (exit ExitValidation as the schema-ahead refusal it wraps,
+			// naming `lit upgrade`) rather than the raw non-fast-forward/refusal
+			// string. [LAW:single-enforcer]
 			return asSyncFailure(outcome.pushErr)
 		}
 		return printSyncPushOutcome(stdout, outcome, *verbose)

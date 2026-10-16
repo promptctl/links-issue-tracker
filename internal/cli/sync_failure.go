@@ -178,7 +178,8 @@ func (f SyncFailure) persistent() bool {
 
 // SyncFailureError makes a SyncFailure returnable from a command: its Error() is
 // the full contract block, so the top-level error sink prints the same block a
-// passive surface prints inline, and ExitCode maps it to the conflict exit. One
+// passive surface prints inline, and ExitCode maps it to the conflict exit, or,
+// for a remote-schema-ahead block, to the schema-ahead exit it unwraps to. One
 // value, one rendering, whether it flows out as an error or is printed directly.
 // [LAW:single-enforcer]
 type SyncFailureError struct {
@@ -318,8 +319,10 @@ func (f SyncFailure) resolutionSteps() []string {
 	case syncFailureRemoteSchemaAhead:
 		// Bare `lit upgrade` installs the latest release. No `--to <producer>`: a
 		// build identity can be unresolvable, or older than the running binary.
+		// The step carries the user gate itself, so a reader who acts on the
+		// first command it sees still meets the gate before running it.
 		return []string{
-			fmt.Sprintf("lit upgrade               # install a lit that supports schema v%d, then retry", f.RemoteAhead.RemoteVersion),
+			fmt.Sprintf("lit upgrade               # only when the user directs it: install a lit that supports schema v%d, then retry", f.RemoteAhead.RemoteVersion),
 		}
 	case syncFailureUnrelatedHistories:
 		// All three resolutions exist: the two wholesale takes (destructive of the

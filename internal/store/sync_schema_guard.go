@@ -50,7 +50,21 @@ func (e *RemoteSchemaAheadError) Error() string {
 // whose schema support reaches the remote head's can.
 func (*RemoteSchemaAheadError) SchemaAheadOfBinary() {}
 
-var _ model.SchemaAhead = (*RemoteSchemaAheadError)(nil)
+// EventRecord is the remote that refused and both schema versions, so an event
+// whose reason is workspace_schema_ahead says which boundary refused it.
+func (e *RemoteSchemaAheadError) EventRecord() (map[string]any, map[string]int) {
+	return map[string]any{
+		"schema_ahead.remote":             e.Remote,
+		"schema_ahead.branch":             e.Branch,
+		"schema_ahead.remote_schema":      e.RemoteVersion,
+		"schema_ahead.running_schema_max": e.BinarySupportedMax,
+	}, nil
+}
+
+var (
+	_ model.SchemaAhead   = (*RemoteSchemaAheadError)(nil)
+	_ model.RecordedError = (*RemoteSchemaAheadError)(nil)
+)
 
 // guardRemoteSchemaAhead refuses when the remote-tracking head's schema exceeds
 // this binary's schema support, so no push authors a commit below the remote head's

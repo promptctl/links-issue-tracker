@@ -228,6 +228,13 @@ func TestSyncFailureBlockRemoteSchemaAhead(t *testing.T) {
 			t.Errorf("remote-schema-ahead block missing %q:\n%s", want, block)
 		}
 	}
+	// The upgrade step carries the gate itself: a reader acting on the first
+	// command the block names meets it before the escalation line.
+	for _, line := range strings.Split(block, "\n") {
+		if strings.HasPrefix(line, "  lit upgrade ") && !strings.Contains(line, "only when the user directs it") {
+			t.Errorf("remote-schema-ahead upgrade step %q does not carry the user gate", line)
+		}
+	}
 	// The remedy is the requirement, never a build to install by name.
 	if strings.Contains(block, "--to ") {
 		t.Errorf("remote-schema-ahead block named a --to target:\n%s", block)

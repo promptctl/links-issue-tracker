@@ -74,7 +74,7 @@ the code it arrives on:
 | `purge_unconfirmed` | 3 | `lit purge` was not confirmed: `--yes` was not passed, or the prompt was declined |
 | `outside_git_workspace` | 3 | The working directory is not in a git repository/worktree |
 | `workspace_not_initialized` | 3 | The repository has no lit workspace (`lit init` has never run) |
-| `workspace_schema_ahead` | 3 | The workspace's schema is newer than this `lit` supports |
+| `workspace_schema_ahead` | 3 | The schema of the workspace, or of the sync remote, is newer than this `lit` supports |
 | `migration_quarantined` | 3 | A migration this workspace has pending failed and is quarantined, on the run that failed and every one after; the message names both ways to recover |
 | `entity_not_found` | 4 | The named issue or resource does not exist |
 | `version_not_found` | 4 | `lit history --version` named a version past the ones the issue's history records |

@@ -381,26 +381,57 @@ func TestAPanickingInvocationEndsAsAPanic(t *testing.T) {
 
 // A schema ahead of this binary ends the invocation's event with one exit code
 // and one reason whichever boundary refused: the workspace on open, or the
-// remote on a sync write, which reaches the sink as the sync-failure block.
+// remote on a sync write, which reaches the sink as the sync-failure block. The
+// facts say which: the workspace refusal records its rollback offer, the remote
+// one the remote and both schema versions, and neither records the other's.
 func TestASchemaAheadRefusalEndsTheEventAsSchemaAheadAtEitherBoundary(t *testing.T) {
-	for name, refusal := range map[string]error{
-		"workspace": fmt.Errorf("open store: %w", &store.UnsupportedSchemaVersionError{WorkspaceVersion: 7, MaxSupported: 3}),
-		"remote":    asSyncFailure(&store.RemoteSchemaAheadError{Remote: "origin", Branch: "master", RemoteVersion: 7, BinarySupportedMax: 3}),
+	for _, tc := range []struct {
+		name      string
+		refusal   error
+		wantFacts map[string]any
+		otherKey  string
+	}{
+		{
+			name:      "workspace",
+			refusal:   fmt.Errorf("open store: %w", &store.UnsupportedSchemaVersionError{WorkspaceVersion: 7, MaxSupported: 3}),
+			wantFacts: map[string]any{"schema_ahead.rollback_snapshot": ""},
+			otherKey:  "schema_ahead.remote",
+		},
+		{
+			name:    "remote",
+			refusal: asSyncFailure(&store.RemoteSchemaAheadError{Remote: "origin", Branch: "master", RemoteVersion: 7, BinarySupportedMax: 3}),
+			wantFacts: map[string]any{
+				"schema_ahead.remote":             "origin",
+				"schema_ahead.branch":             "master",
+				"schema_ahead.remote_schema":      float64(7),
+				"schema_ahead.running_schema_max": float64(3),
+			},
+			otherKey: "schema_ahead.rollback_snapshot",
+		},
 	} {
-		t.Run(name, func(t *testing.T) {
-			line, err := telemetry.Line(telemetry.Begin(telemetry.Event{}).Finish(invocationEnd(time.Now(), refusal, nil)))
+		t.Run(tc.name, func(t *testing.T) {
+			line, err := telemetry.Line(telemetry.Begin(telemetry.Event{}).Finish(invocationEnd(time.Now(), tc.refusal, nil)))
 			if err != nil {
 				t.Fatal(err)
 			}
 			var written struct {
-				ExitCode int    `json:"exit_code"`
-				Reason   string `json:"reason"`
+				ExitCode int            `json:"exit_code"`
+				Reason   string         `json:"reason"`
+				Facts    map[string]any `json:"facts"`
 			}
 			if err := json.Unmarshal(line, &written); err != nil {
 				t.Fatal(err)
 			}
 			if written.ExitCode != ExitValidation || written.Reason != "workspace_schema_ahead" {
 				t.Errorf("event ended exit_code=%d reason=%q, want %d workspace_schema_ahead", written.ExitCode, written.Reason, ExitValidation)
+			}
+			for key, want := range tc.wantFacts {
+				if got, ok := written.Facts[key]; !ok || got != want {
+					t.Errorf("%s = %#v (present %v), want %#v", key, got, ok, want)
+				}
+			}
+			if got, ok := written.Facts[tc.otherKey]; ok {
+				t.Errorf("%s = %#v recorded by the other boundary's refusal", tc.otherKey, got)
 			}
 		})
 	}
