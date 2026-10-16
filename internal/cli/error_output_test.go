@@ -16,6 +16,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/version"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -445,7 +446,7 @@ func quarantineBlockError() *store.QuarantineBlockError {
 // latest release stops at schema 5, and the workspace is past this binary's
 // schema support.
 func upgradeTargetBehindError() *UpgradeTargetBehindError {
-	return &UpgradeTargetBehindError{Current: 999, Target: 5, Tag: "v0.14.0", RunningMax: 5}
+	return &UpgradeTargetBehindError{Current: 999, Target: 5, Tag: "v0.14.0", Running: version.SchemaSupport{Min: 1, Max: 5}}
 }
 
 // TestWriteCommandErrorSchemaVersionRefusals pins the surface an agent reads

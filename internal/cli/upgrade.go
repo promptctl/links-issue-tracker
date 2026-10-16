@@ -22,21 +22,21 @@ import (
 // support ends BELOW the workspace's current applied schema — installing it
 // would leave a binary that cannot even open this workspace. Upgrade refuses
 // rather than stranding the user; the remedy is whichever traversal can run
-// from here, and that is decided by where the RUNNING binary's schema support
-// (RunningMax) ends relative to the workspace:
+// from here, and that is decided by whether the RUNNING binary's schema support
+// (Running) covers every version from Target up to Current — the span a reverse
+// crosses, one down-migration per version:
 //
-//   - Current <= RunningMax: this binary carries every migration between the
-//     target and the workspace, so this is a plain backward move — `lit
-//     downgrade` CAN run (it reverses the schema, then installs the older
-//     binary). Point at it.
-//   - Current > RunningMax: the workspace was migrated by a newer lit, and its
-//     down-migrations live only in that lit. `lit downgrade` cannot reverse
-//     them from here, whether or not this binary can open the workspace (an
-//     ahead goose log over an intact baseline opens fine). The remedy is a
-//     NEWER target, never a reverse.
+//   - covered: this binary carries every migration between the target and the
+//     workspace, so this is a plain backward move — `lit downgrade` CAN run (it
+//     reverses the schema, then installs the older binary). Point at it.
+//   - not covered: either the workspace was migrated by a newer lit, whose
+//     down-migrations live only in that lit (whether or not this binary can
+//     open the workspace — an ahead goose log over an intact baseline opens
+//     fine), or the target sits below this binary's baseline, which no reverse
+//     here reaches. The remedy is a NEWER target, never a reverse.
 //
-// [LAW:types-are-the-program] The remedy is derived from the two schema
-// versions it depends on, not from a proxy such as whether the open succeeded —
+// [LAW:types-are-the-program] The remedy is derived from the schema versions
+// it depends on, not from a proxy such as whether the open succeeded —
 // an open that succeeds does not mean this binary holds the down-migrations.
 // It is the mirror of store.DowngradeTargetAheadError: each direction refuses
 // the other's job, so version traversal has exactly two entry points and
@@ -45,23 +45,23 @@ type UpgradeTargetBehindError struct {
 	Current int64
 	Target  int64
 	Tag     string
-	// RunningMax is the running binary's schema support ceiling
-	// (version.Info.Schema.Max): the highest migration it can reverse.
-	RunningMax int64
+	// Running is the running binary's schema support (version.Info.Schema):
+	// the migrations it carries, and so the only ones it can reverse.
+	Running version.SchemaSupport
 }
 
 func (e *UpgradeTargetBehindError) Error() string {
 	// [LAW:dataflow-not-control-flow] the schema versions select the remediation
 	// text; the refusal itself (target below workspace) is the same fact either way.
-	if e.Current <= e.RunningMax {
+	if e.Running.Covers(e.Target, e.Current) {
 		return fmt.Sprintf(
 			"cannot upgrade to %s: its schema support ends at v%d but this workspace is already at v%d — that is a backward move; use `lit downgrade --to %s` instead (it reverses the schema before installing the older binary)",
 			e.Tag, e.Target, e.Current, e.Tag,
 		)
 	}
 	return fmt.Sprintf(
-		"cannot upgrade to %s: it supports only through schema v%d but this workspace is at v%d, past this binary's schema support (v%d) — pick an upgrade target whose schema support reaches v%d or newer (this binary carries no migrations past v%d, so it cannot reverse the schema to an older target)",
-		e.Tag, e.Target, e.Current, e.RunningMax, e.Current, e.RunningMax,
+		"cannot upgrade to %s: it supports only through schema v%d but this workspace is at v%d — pick an upgrade target whose schema support reaches v%d or newer (this binary's schema support, v%d–v%d, does not cover v%d–v%d, so it cannot reverse the schema to this target)",
+		e.Tag, e.Target, e.Current, e.Current, e.Running.Min, e.Running.Max, e.Target, e.Current,
 	)
 }
 
@@ -221,8 +221,8 @@ func appliedVersionFromOpenErr(err error) (version int64, handled bool) {
 //  2. Resolve the tag through the release manifest → typed Target.
 //  3. Read the workspace schema; refuse a target whose schema support ends below
 //     it (a backward move — UpgradeTargetBehindError names the right remedy from
-//     whether this binary's schema support reaches the workspace: a reverse, or a
-//     newer target).
+//     whether this binary's schema support covers the span from the target up
+//     to the workspace: a reverse, or a newer target).
 //  4. An unpinned invocation that is already on the resolved release keeps it:
 //     a friendly no-op naming the version. A pinned --to always installs — the
 //     explicit tag is a command (and the reinstall path for a damaged binary).
@@ -266,28 +266,30 @@ func upgradeLeafWith(
 		if err != nil {
 			return err
 		}
+		// [LAW:nothing-unseen] the schema versions the refusal and its remedy
+		// are decided from, each set as soon as it is known so an exit before
+		// the decision still carries them.
+		telemetry.Set(ctx, "upgrade.target_schema_max", target.Manifest.Schema.Max)
+		telemetry.Set(ctx, "upgrade.running_schema_min", scope.current.Schema.Min)
+		telemetry.Set(ctx, "upgrade.running_schema_max", scope.current.Schema.Max)
 
 		// [LAW:no-silent-failure] Read the workspace schema BEFORE installing so a
 		// backward-move request is refused without having overwritten the binary.
 		// A target whose schema support ends below the workspace could not open it,
 		// so installing it would strand the user; the refusal names the right remedy
 		// (downgrade vs. a newer target) from whether this binary's schema support
-		// reaches the workspace.
+		// covers the span from the target up to the workspace.
 		applied, err := scope.schema.AppliedSchemaVersion(ctx)
 		if err != nil {
 			return fmt.Errorf("upgrade: read workspace schema version: %w", err)
 		}
-		// [LAW:nothing-unseen] the three schema versions the refusal and its
-		// remedy are decided from.
 		telemetry.Set(ctx, "upgrade.workspace_schema", applied)
-		telemetry.Set(ctx, "upgrade.target_schema_max", target.Manifest.Schema.Max)
-		telemetry.Set(ctx, "upgrade.running_schema_max", scope.current.Schema.Max)
 		if target.Manifest.Schema.Max < applied {
 			return &UpgradeTargetBehindError{
-				Current:    applied,
-				Target:     target.Manifest.Schema.Max,
-				Tag:        tag,
-				RunningMax: scope.current.Schema.Max,
+				Current: applied,
+				Target:  target.Manifest.Schema.Max,
+				Tag:     tag,
+				Running: scope.current.Schema,
 			}
 		}
 
@@ -308,7 +310,10 @@ func upgradeLeafWith(
 		// AFTER the backward-move refusal: a workspace ahead of even the latest
 		// release must be refused loudly (naming both schema ranges), never
 		// soothed with "already current".
-		if !pinned && !scope.current.IsDev && semver.IsValid(tag) && semver.Compare("v"+scope.current.Version, tag) >= 0 {
+		alreadyCurrent := !pinned && !scope.current.IsDev && semver.IsValid(tag) && semver.Compare("v"+scope.current.Version, tag) >= 0
+		// [LAW:nothing-unseen] keeping the binary and installing one both exit 0.
+		telemetry.Set(ctx, "upgrade.already_current", alreadyCurrent)
+		if alreadyCurrent {
 			_, err = fmt.Fprintf(stdout,
 				"already current: keeping v%s (latest published release is %s); nothing to install.\n",
 				scope.current.Version, tag,
