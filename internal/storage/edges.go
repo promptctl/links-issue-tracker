@@ -58,11 +58,12 @@ func RejectBlocksWithinEpic(tree EpicTree, dependent, dependency string) error {
 	return nil
 }
 
-// leafSiblings reports whether a and b are both leaves directly under one
-// epic. An issue under no epic has the zero placement, which shares no epic.
+// leafSiblings reports whether a and b are two leaves directly under one
+// epic. An issue is not its own sibling; a self-edge is the cycle check's to
+// refuse. An issue under no epic has the zero placement, which shares no epic.
 func leafSiblings(tree EpicTree, a, b string) bool {
 	placeA, placeB := tree[a], tree[b]
-	return !placeA.Type.IsContainer() && !placeB.Type.IsContainer() &&
+	return a != b && !placeA.Type.IsContainer() && !placeB.Type.IsContainer() &&
 		slices.ContainsFunc(placeA.Epics, func(epic string) bool { return slices.Contains(placeB.Epics, epic) })
 }
 

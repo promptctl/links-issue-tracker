@@ -2764,6 +2764,12 @@ func blocksNeverOrdersTwoLeavesOfOneEpic(t *testing.T, ctx context.Context, st s
 
 	_, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: second.ID, DstID: first.ID, Type: model.RelBlockedBy})
 	assertHierarchyBlocksRefused(t, err, "AddRelation(a leaf blocked by the leaf beside it)")
+	// A leaf is not its own sibling: its self-edge is refused as a self-edge.
+	_, err = st.AddRelation(ctx, storage.AddRelationInput{SrcID: first.ID, DstID: first.ID, Type: model.RelBlockedBy})
+	assertRefused(t, err, "AddRelation(a leaf blocked by itself)")
+	if want := first.ID + " cannot be blocked by itself"; err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("AddRelation(a leaf blocked by itself) error = %v, want it to carry %q", err, want)
+	}
 	edges, err := st.ListRelationsForIssue(ctx, second.ID, model.RelBlockedBy)
 	if err != nil {
 		t.Fatalf("ListRelationsForIssue(%s) error = %v", second.ID, err)
