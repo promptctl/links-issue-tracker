@@ -19,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
-- `lit` no longer records `meta.producer_binary_version` when it migrates a workspace, so a migrating open no longer makes the extra `migrate: record producer binary version` commit. lit v0.1.0.1 through v0.14.0.1 read the row to name the release to upgrade to when a workspace is too new for them, and none of those releases ships a binary. A workspace that already has the row keeps it until the first migration past schema v9, which deletes it: every lit that wrote the row stops at v9, so past it the row would name a lit that cannot open the workspace either. (links-schema-release-fuof.6xr)
+- `lit` no longer records `meta.producer_binary_version` when it migrates a workspace, so a migrating open no longer makes the extra `migrate: record producer binary version` commit. lit v0.1.0.1 through v0.14.0.1 read the row to name the release to upgrade to when a workspace is too new for them, and none of those releases ships a binary. A workspace that already has the row keeps it. No migration deletes it yet; the first migration past schema v9 will, and a test fails until it does, because every lit that wrote the row stops at v9, so past it the row would name a lit that cannot open the workspace either. (links-schema-release-fuof.6xr)
 
 ### Fixed
 
