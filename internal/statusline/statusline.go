@@ -58,13 +58,14 @@ type WorkingOn struct {
 	Ticket Ticket `json:"ticket"`
 	// Lane is the progress of the ticket's lane, counted by the command that
 	// made the record; nil when that command counted none.
-	Lane       *Lane     `json:"lane"`
-	RecordedAt time.Time `json:"recorded_at"`
+	Lane       *LaneProgress `json:"lane"`
+	RecordedAt time.Time     `json:"recorded_at"`
 }
 
-// Lane is the progress of a lane: how many of its tickets are closed, out of
-// how many it holds — the "N/M done" of a lit backlog claim line.
-type Lane struct {
+// LaneProgress is how far along a lane is: how many of its tickets are
+// closed, out of how many it holds — the "N/M done" of a lit backlog claim
+// line.
+type LaneProgress struct {
 	Done  int `json:"done"`
 	Total int `json:"total"`
 }
@@ -100,7 +101,7 @@ type Retitled struct{ Ticket Ticket }
 // working on ID shows that progress.
 type LaneCounted struct {
 	ID   string
-	Lane Lane
+	Lane LaneProgress
 }
 
 // Invalidated says ticket ID has left the state the file's records describe —
@@ -205,7 +206,7 @@ type Outcome struct {
 	Bytes int
 	// Lane is the lane progress the written file's working_on shows; nil when
 	// nothing was written, or the file shows no working_on or no count for it.
-	Lane *Lane
+	Lane *LaneProgress
 	// Created is true when the file did not exist before this write.
 	Created bool
 	// ExcludeAdded is true when this write added the exclude entry.

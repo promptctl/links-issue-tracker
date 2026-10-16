@@ -16,7 +16,7 @@ var (
 	// alphaRenamed is alpha after a retitle.
 	alphaRenamed = Ticket{ID: "t-alpha", Title: "Alpha, renamed"}
 	at           = time.Date(2026, 10, 15, 9, 30, 0, 0, time.UTC)
-	lane         = Lane{Done: 1, Total: 4}
+	lane         = LaneProgress{Done: 1, Total: 4}
 )
 
 func testLocation(t *testing.T) Location {
@@ -299,7 +299,7 @@ func TestAWriteReportsTheLaneCountItsWorkingOnShows(t *testing.T) {
 	loc := testLocation(t)
 	for _, step := range []struct {
 		facts []Fact
-		want  *Lane
+		want  *LaneProgress
 	}{
 		{[]Fact{Picked{&bravo}}, nil},
 		{[]Fact{Started{alpha}}, nil},

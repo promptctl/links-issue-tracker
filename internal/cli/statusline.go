@@ -88,5 +88,5 @@ func statuslineTicketRef(issue model.Issue) *statusline.Ticket {
 // ticket being worked on. It is the count the claim line renders, so the file
 // and lit backlog cannot disagree about it. [LAW:one-source-of-truth]
 func laneCounted(id string, progress claims.LaneProgress) statusline.LaneCounted {
-	return statusline.LaneCounted{ID: id, Lane: statusline.Lane{Done: progress.Done, Total: progress.Total}}
+	return statusline.LaneCounted{ID: id, Lane: statusline.LaneProgress{Done: progress.Done, Total: progress.Total}}
 }

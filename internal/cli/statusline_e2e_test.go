@@ -298,7 +298,7 @@ func TestTheStatuslineLaneCountMatchesTheClaimLine(t *testing.T) {
 	isolateEvents(t)
 	dir, first, second := statuslineCheckout(t)
 	claimCount := regexp.MustCompile(`(?m)^\s*claimed here: .* (\d+)/(\d+) done$`)
-	matches := func(after string, want statusline.Lane) {
+	matches := func(after string, want statusline.LaneProgress) {
 		t.Helper()
 		got := readStatusline(t, dir)
 		if got.WorkingOn == nil || got.WorkingOn.Lane == nil {
@@ -309,20 +309,20 @@ func TestTheStatuslineLaneCountMatchesTheClaimLine(t *testing.T) {
 		if len(line) != 1 {
 			t.Fatalf("after %s: lit backlog printed %d claim lines with a count; want 1:\n%s", after, len(line), backlog)
 		}
-		printed := statusline.Lane{Done: mustAtoi(t, line[0][1]), Total: mustAtoi(t, line[0][2])}
+		printed := statusline.LaneProgress{Done: mustAtoi(t, line[0][1]), Total: mustAtoi(t, line[0][2])}
 		if *got.WorkingOn.Lane != printed || printed != want {
 			t.Fatalf("after %s: file lane = %+v, claim line %+v; want both %+v", after, *got.WorkingOn.Lane, printed, want)
 		}
 	}
 
 	runCLIInDir(t, dir, "start", first, "--by", "agent")
-	matches("starting the first ticket", statusline.Lane{Done: 0, Total: 2})
+	matches("starting the first ticket", statusline.LaneProgress{Done: 0, Total: 2})
 	runCLIInDir(t, dir, "start", second, "--by", "agent")
 	runCLIInDir(t, dir, "done", second)
 	runCLIInDir(t, dir, "next")
-	matches("lit next handing the first ticket back", statusline.Lane{Done: 1, Total: 2})
+	matches("lit next handing the first ticket back", statusline.LaneProgress{Done: 1, Total: 2})
 	runCLIInDir(t, dir, "start", second, "--by", "agent")
-	matches("starting the closed ticket", statusline.Lane{Done: 0, Total: 2})
+	matches("starting the closed ticket", statusline.LaneProgress{Done: 0, Total: 2})
 }
 
 func mustAtoi(t *testing.T, s string) int {
