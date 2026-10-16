@@ -14,6 +14,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/backup"
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/statusline"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/syncfile"
 )
@@ -188,6 +189,7 @@ func restoreFromExport(ctx context.Context, ap *app.App, path string, force bool
 	if err != nil {
 		return nil, err
 	}
+	ap.Statusline.Record(statusline.Replaced{})
 	// The moves are committed from here on, so every later failure still
 	// returns them: the trace records what the store now holds, not what the
 	// command finished.

@@ -258,11 +258,34 @@ func TestAnImportRetitleReachesTheStatuslineFile(t *testing.T) {
 		t.Fatalf("import retitle: statusline.changed = %v; want [working_on next]", facts["statusline.changed"])
 	}
 
-	runCLIInDirAllowError(t, dir, "import", "--path", importFile(fmt.Sprintf("id: %s\ntitle: Renamed again\n---\nid: %s-nope\ntitle: Never\n", first, first)))
+	if _, err := runCLIInDirAllowError(t, dir, "import", "--path", importFile(fmt.Sprintf("id: %s\ntitle: Renamed again\n---\nid: %s-nope\ntitle: Never\n", first, first))); err == nil {
+		t.Fatalf("an import naming %s-nope succeeded; the test needs its batch to fail", first)
+	}
 	if title := strings.TrimSpace(runCLIInDir(t, dir, "show", first, "--field", "title")); title != "Renamed again" {
 		t.Fatalf("the failed batch left %s titled %q; the test needs its first update to land", first, title)
 	}
 	titles("Renamed again")
+}
+
+// A backup restore replaces the store the file's records describe, so it
+// clears both of them and keeps the schema version.
+func TestABackupRestoreClearsTheStatuslineFile(t *testing.T) {
+	isolateEvents(t)
+	dir, first, _ := statuslineCheckout(t)
+	runCLIInDir(t, dir, "next")
+	runCLIInDir(t, dir, "start", first, "--by", "agent")
+	runCLIInDir(t, dir, "backup", "create")
+	if got := readStatusline(t, dir); workingOnID(got) != first || nextID(got) != first {
+		t.Fatalf("before the restore the file = %+v / %+v; the test needs both records of %s", got.WorkingOn, got.Next, first)
+	}
+
+	runCLIInDir(t, dir, "backup", "restore", "--latest")
+	if got := readStatusline(t, dir); got.WorkingOn != nil || got.Next != nil || got.SchemaVersion != statusline.SchemaVersion {
+		t.Fatalf("after a restore the file = %+v; want schema_version %d and both records null", got, statusline.SchemaVersion)
+	}
+	if facts, _ := statuslineEvent(t); !reflect.DeepEqual(facts["statusline.changed"], []any{"working_on", "next"}) {
+		t.Fatalf("restore: statusline.changed = %v; want [working_on next]", facts["statusline.changed"])
+	}
 }
 
 // A statusline write that fails is on the event with its error, beside what

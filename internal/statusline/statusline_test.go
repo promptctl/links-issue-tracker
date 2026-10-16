@@ -252,6 +252,8 @@ func TestAWriteNamesTheSlotsItChanged(t *testing.T) {
 		{[]Fact{Retitled{alphaRenamed}}, []string{"working_on"}},
 		{[]Fact{Invalidated{bravo.ID}}, []string{"next"}},
 		{[]Fact{Started{bravo}, Picked{&alpha}}, []string{"working_on", "next"}},
+		{[]Fact{Replaced{}}, []string{"working_on", "next"}},
+		{[]Fact{Replaced{}}, []string{}},
 	} {
 		out, err := Write(loc, step.facts, at.Add(time.Duration(i)*time.Minute))
 		if err != nil {

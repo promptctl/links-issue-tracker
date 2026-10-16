@@ -91,6 +91,10 @@ type Retitled struct{ Ticket Ticket }
 // naming it no longer stands.
 type Invalidated struct{ ID string }
 
+// Replaced says the store the file's records describe was replaced wholesale,
+// as a backup restore does, so none of them stands.
+type Replaced struct{}
+
 func (s Started) apply(f File, at time.Time) File {
 	f.WorkingOn = &WorkingOn{Ticket: s.Ticket, RecordedAt: at}
 	return f
@@ -119,6 +123,11 @@ func (i Invalidated) apply(f File, _ time.Time) File {
 	if f.Next != nil && f.Next.Ticket != nil && f.Next.Ticket.ID == i.ID {
 		f.Next = nil
 	}
+	return f
+}
+
+func (Replaced) apply(f File, _ time.Time) File {
+	f.WorkingOn, f.Next = nil, nil
 	return f
 }
 

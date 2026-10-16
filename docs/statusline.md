@@ -107,7 +107,9 @@ naming that ticket shows the new title. Its `recorded_at` does not change.
 through any lifecycle change other than a start: `lit done`, `lit close`,
 `lit open`, `lit archive`, `lit unarchive`, `lit delete`, `lit restore`,
 `lit purge`, `lit bulk close` and `lit bulk archive`. After `lit done` on the
-ticket in the example above, both values are `null`.
+ticket in the example above, both values are `null`. `lit backup restore`
+replaces every ticket in the store, so it sets both values to `null` whichever
+tickets they named.
 
 Commands that record nothing, such as `lit show`, `lit ls` or `lit sync pull`,
 leave the file untouched.

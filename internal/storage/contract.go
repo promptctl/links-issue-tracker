@@ -248,14 +248,17 @@ type Attributor interface {
 	AttributeTo(streamToken string)
 }
 
-// ChangeObserver lets a caller hear every change the engine applies to an
-// issue, with the issue as that change left it.
+// ChangeObserver lets a caller hear every Change the engine applies, with the
+// issue as that Change left it. Writes that are not a Change, such as a create,
+// a purge or a restore, are not heard.
 //
 // Like attribution, this is the store's and not each caller's: an engine calls
-// its observers from its single change path, so a change made inside a bulk
-// batch is heard exactly as a lone Apply is, including a change that landed
-// before its batch failed. Hearing every change is then a property of the write
-// path rather than an obligation on every command that writes.
+// its observers from its single change path, so a Change made inside a bulk
+// batch is heard exactly as a lone Apply is, including a Change that landed
+// before its batch failed. Hearing every Change is then a property of the write
+// path rather than an obligation on every command that writes. An observer is
+// called from inside that path, which may still hold the engine's lock, so it
+// must not call back into the store.
 // [LAW:single-enforcer]
 type ChangeObserver interface {
 	// ObserveChanges adds observe to the observers called after each change
