@@ -69,7 +69,7 @@ func TestWorkflowsOverviewPlacesProjectDefinitionAtEveryBoundDimension(t *testin
 }
 
 // TestWorkflowsOverviewSurfacesCustomStateOnTheSpine confirms a definition
-// bound to a state that isn't one of the three built-ins still puts that
+// bound to a state that isn't one of the built-ins still puts that
 // state on the spine — custom stages are the same shape as built-in ones by
 // design (states are open strings, not a closed enum).
 func TestWorkflowsOverviewSurfacesCustomStateOnTheSpine(t *testing.T) {
@@ -424,6 +424,28 @@ func TestWorkflowsDryRunNoMatchesReportsNone(t *testing.T) {
 	}
 }
 
+// A state name is an open string that can carry a comma, so the occasion
+// line keeps one state named foo,bar apart from the two states foo and bar.
+func TestWorkflowsDryRunOccasionLineSeparatesStates(t *testing.T) {
+	chdirTempRepo(t)
+
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--enter", "foo,bar"}, `entered=["foo,bar"] exited=[]`},
+		{[]string{"--enter", "foo", "--enter", "bar"}, `entered=["foo","bar"] exited=[]`},
+	} {
+		output, err := runLit(t, append([]string{"workflows", "dry-run"}, tc.args...)...)
+		if err != nil {
+			t.Fatalf("Run(workflows dry-run %v) error = %v", tc.args, err)
+		}
+		if !strings.Contains(output, tc.want) {
+			t.Errorf("dry-run %v output = %q, want it to contain %q", tc.args, output, tc.want)
+		}
+	}
+}
+
 // TestWorkflowsEditRejectsOversuppliedArguments guards the same silent-
 // swallow shape TestWorkflowsRejectsOversuppliedArguments pins for `show`.
 func TestWorkflowsEditRejectsOversuppliedArguments(t *testing.T) {
@@ -458,5 +480,91 @@ func TestWorkflowsDryRunNeverRecordsAFiringTrace(t *testing.T) {
 	traceDir := filepath.Join(root, ".lit", "traces", "workflows")
 	if _, statErr := os.Stat(traceDir); !os.IsNotExist(statErr) {
 		t.Fatalf("Stat(%s) error = %v, want the trace dir to not exist (dry-run never records)", traceDir, statErr)
+	}
+}
+
+// A start enters in_progress and plan at once, and dry-run can say so: --enter
+// repeats, the occasion line lists every state entered, and each definition
+// names the one state that matched it.
+func TestWorkflowsDryRunEntersEveryRepeatedState(t *testing.T) {
+	root := chdirTempRepo(t)
+	writeCLIWorkflow(t, root, "plan.md", "---\nid: plan-note\nstates: [plan]\n---\nPlan <id> first.")
+	writeCLIWorkflow(t, root, "working.md", "---\nid: working-note\nstates: [in_progress]\n---\nWorking on <id>.")
+
+	output, err := runLit(t, "workflows", "dry-run", "--event", "work_started", "--exit", "open", "--enter", "in_progress", "--enter", "plan", "--issue", "lit-7")
+	if err != nil {
+		t.Fatalf("Run(workflows dry-run) error = %v", err)
+	}
+	for _, want := range []string{
+		`occasion: event=work_started labels=- entered=["in_progress","plan"] exited=["open"] issue=lit-7` + "\n",
+		"Fired (2)\n",
+		"plan-note (project)  [state:plan(enter)]\n",
+		"working-note (project)  [state:in_progress(enter)]\n",
+	} {
+		if !strings.Contains(output, want) {
+			t.Errorf("dry-run output = %q, want it to contain %q", output, want)
+		}
+	}
+}
+
+// The phases are built-in states: the overview walks them after in_progress,
+// in work order, before closed, with nothing bound to them.
+func TestWorkflowsOverviewWalksThePhasesInsideInProgress(t *testing.T) {
+	chdirTempRepo(t)
+
+	output, err := runLit(t, "workflows")
+	if err != nil {
+		t.Fatalf("Run(workflows) error = %v", err)
+	}
+	var spine strings.Builder
+	for _, state := range []string{"open", "in_progress", "plan", "impl", "review", "merge", "closed"} {
+		spine.WriteString("  " + state + "\n    enter\n    exit\n")
+	}
+	if !strings.Contains(output, "\nStates\n"+spine.String()) {
+		t.Fatalf("workflows output = %q, want the States spine %q", output, spine.String())
+	}
+}
+
+// A phase named bare is a built-in state, so edit scaffolds it as one, on the
+// enter side, rather than as a label.
+func TestWorkflowsEditScaffoldsABarePhaseAsAState(t *testing.T) {
+	root := chdirTempRepo(t)
+
+	if _, err := runLit(t, "workflows", "edit", "review"); err != nil {
+		t.Fatalf("Run(workflows edit review) error = %v", err)
+	}
+	path := filepath.Join(root, ".lit", "workflows", "review.md")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%s) error = %v", path, err)
+	}
+	if !strings.Contains(string(content), "\nstates: [\"review\"]\n") {
+		t.Fatalf("scaffolded content = %q, want the live states line for review", content)
+	}
+}
+
+// lit workflows --help names every state and event a definition can bind to:
+// each phase among the built-in states, and each catalog event in the event
+// catalog with the command that dispatches it.
+func TestWorkflowsHelpNamesThePhasesAndEveryEvent(t *testing.T) {
+	chdirTempRepo(t)
+
+	page, err := runLit(t, "workflows", "--help")
+	if err != nil {
+		t.Fatalf("Run(workflows --help) error = %v", err)
+	}
+	flowed := strings.Join(strings.Fields(page), " ")
+	phases := make([]string, 0, len(model.Phases()))
+	for _, phase := range model.Phases() {
+		phases = append(phases, string(phase))
+	}
+	listed := strings.Join(phases[:len(phases)-1], ", ") + " and " + phases[len(phases)-1]
+	if want := "the phases " + listed + " inside in_progress"; !strings.Contains(flowed, want) {
+		t.Errorf("workflows --help does not say %q:\n%s", want, page)
+	}
+	for _, event := range workflows.Catalog() {
+		if !strings.Contains(page, "\n    "+string(event)+" ") {
+			t.Errorf("workflows --help event catalog does not list %s:\n%s", event, page)
+		}
 	}
 }

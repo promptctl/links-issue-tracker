@@ -1,8 +1,8 @@
 # Workflows
 
 Workflows are guidance you write yourself, which `lit` injects into its own output at
-declared moments in the work lifecycle — a ticket entering `in_progress`, a `lit done`
-closing one, an agent viewing the backlog. One definition is a markdown file with YAML
+declared moments in the work lifecycle — a ticket entering `in_progress`, its work
+moving into `review`, a `lit done` closing one, an agent viewing the backlog. One definition is a markdown file with YAML
 frontmatter: the frontmatter says when to fire, the body says what to inject. Nothing
 here is enforced. A definition only adds text to what a command already prints; it
 never blocks or gates anything.

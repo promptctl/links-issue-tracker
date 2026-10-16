@@ -22,7 +22,7 @@ A definition is a markdown file with optional YAML frontmatter (`internal/workfl
 
 **`labels`**: each entry is normalized exactly as stored labels are — lowercased, trimmed, empty rejected, commas forbidden (`internal/model/label.go`). Entries that trim to empty are silently dropped; a comma-bearing entry is dropped with the warning `label %q can never match: <err>` (`parse.go`). Because both sides are canonical, downstream matching is exact-string yet case-insensitive by construction (`parse.go`).
 
-**`states`**: an entry is either a bare state name (meaning `when: enter`) or a mapping `{name: <state>, when: enter|exit}` (`parse.go`). `when` is lowercased and trimmed; absent means `enter`; any other value is a parse error (`when must be "enter" or "exit", got %q`) that skips the whole file (`parse.go`). A mapping with an empty name (`state entry mapping requires a non-empty name`) or any other YAML node kind (`state entry must be a state name or a {name, when} mapping`) is likewise a file-skipping parse error (`parse.go`). State names are lowercased and trimmed (`parse.go`); bare empty entries are dropped without warning (`parse.go`). State names are open strings, deliberately not a closed enum — custom stage names (which may contain colons or commas) are legal with no code change (`workflows.go`); the built-in three are `open`, `in_progress`, `closed`. Duplicate activations for one state with different `when` are preserved as two entries.
+**`states`**: an entry is either a bare state name (meaning `when: enter`) or a mapping `{name: <state>, when: enter|exit}` (`parse.go`). `when` is lowercased and trimmed; absent means `enter`; any other value is a parse error (`when must be "enter" or "exit", got %q`) that skips the whole file (`parse.go`). A mapping with an empty name (`state entry mapping requires a non-empty name`) or any other YAML node kind (`state entry must be a state name or a {name, when} mapping`) is likewise a file-skipping parse error (`parse.go`). State names are lowercased and trimmed (`parse.go`); bare empty entries are dropped without warning (`parse.go`). State names are open strings, deliberately not a closed enum — custom stage names (which may contain colons or commas) are legal with no code change (`workflows.go`); the built-in states are `open`, `in_progress`, `closed`, and the phases `plan`, `impl`, `review`, `merge`, which are states inside `in_progress` (`internal/cli/workflows.go`). Duplicate activations for one state with different `when` are preserved as two entries.
 
 **`events`**: entries are lowercased and trimmed; empties dropped (`parse.go`). An event not in this binary's catalog still loads, preserved as authored, with the warning `unknown event %q: not in this lit's catalog, will never fire here` (`parse.go`).
 
@@ -68,7 +68,7 @@ Within a layer, discovery walks the root recursively; a file participates iff it
 
 ## The event catalog
 
-Ten events, defined as string constants (`internal/workflows/events.go`). Event names are a stable contract deliberately decoupled from command names — commands may be renamed; the event name is what definitions bind to (`events.go`). Names are contractually lowercase snake_case (pinned by test).
+Eleven events, defined as string constants (`internal/workflows/events.go`). Event names are a stable contract deliberately decoupled from command names — commands may be renamed; the event name is what definitions bind to (`events.go`). Names are contractually lowercase snake_case (pinned by test).
 
 | Wire name | Fires when | Command |
 |---|---|---|
@@ -76,6 +76,7 @@ Ten events, defined as string constants (`internal/workflows/events.go`). Event 
 | `show_ticket` | agent views one ticket's details | `lit show` |
 | `next_pulled` | agent asks for the next workable ticket | `lit next` |
 | `work_started` | a ticket is claimed and work begins | `lit start` |
+| `phase_set` | an in-progress ticket's phase is set, whether or not it moves | `lit phase` |
 | `work_finished` | claimed work finishes on the success path | `lit done` |
 | `ticket_closed` | a ticket is closed without finishing | `lit close` |
 | `ticket_reopened` | a closed ticket is reopened | `lit open` |
@@ -83,20 +84,22 @@ Ten events, defined as string constants (`internal/workflows/events.go`). Event 
 | `ticket_updated` | an existing ticket's fields change | `lit update` |
 | `comment_added` | a comment lands on a ticket | `lit comment` |
 
-`Catalog()` returns display order — `show_backlog, next_pulled, show_ticket, work_started, work_finished, ticket_closed, ticket_reopened, ticket_created, ticket_updated, comment_added` — which differs from declaration order and is the order `lit workflows` prints (`events.go`).
+`Catalog()` returns display order — `show_backlog, next_pulled, show_ticket, work_started, phase_set, work_finished, ticket_closed, ticket_reopened, ticket_created, ticket_updated, comment_added` — which differs from declaration order and is the order `lit workflows` prints (`events.go`).
 
 ### The occasion payload
 
-The single payload type is `Occasion` (`match.go`): `Event` (zero when none), `IssueID` (never read by matching — used only for `<id>` interpolation, display, tracing), `Labels` (canonical form; nil when no single ticket), `Entered` and `Exited` (states, set only when a transition happened). Per-event payloads as actually built (`internal/cli/workflow_events.go`):
+The single payload type is `Occasion` (`match.go`): `Event` (zero when none), `IssueID` (never read by matching — used only for `<id>` interpolation, display, tracing), `Labels` (canonical form; nil when no single ticket), `Entered` and `Exited` (lists of states, set only when a transition happened; one transition can enter or exit several, since a phase is a state inside `in_progress`). Per-event payloads as actually built (`internal/cli/workflow_events.go`):
 
 | Event | Payload set |
 |---|---|
 | `show_ticket`, `next_pulled`, `ticket_created`, `comment_added` | Event, IssueID, Labels |
 | `show_backlog` | Event only — no IssueID, no Labels, no transition |
 | `ticket_updated` | Event, IssueID, Labels; never a transition — `lit update` rejects `--status` (`workflow_events.go`) |
-| `work_started`/`work_finished`/`ticket_closed`/`ticket_reopened` | Event, IssueID, post-transition Labels, `Entered` = post state, `Exited` = pre state (`workflow_events.go`) |
+| `work_started`/`work_finished`/`ticket_closed`/`ticket_reopened`/`phase_set` | Event, IssueID, post-transition Labels, `Entered` = the states after (the status, then the phase while in progress) that were not states before, `Exited` = the states before that are not states after (`workflow_events.go`) |
 
-The status-action→event map is `start→work_started`, `done→work_finished`, `close→ticket_closed`, `reopen→ticket_reopened`; an unmapped status action panics (`workflow_events.go`). Retention actions (archive/unarchive/delete/restore) are not status actions and fire **no event at all** (`internal/cli/cli.go`, `workflow_events.go`).
+So `lit start` from open exits `[open]` and enters `[in_progress, plan]`; `lit done` from `review` exits `[in_progress, review]` and enters `[closed]`; `lit phase --to review` from `impl` exits `[impl]` and enters `[review]`, never the status, which the move leaves at `in_progress`. A call that leaves the ticket where it was — a reclaim, a move to the current phase — exits and enters `[]`, and its event still fires. Both sides are read on the write store, the phase through `model.PhaseOf`, before and after `Apply` (`cli.go`).
+
+The lifecycle-action→event map is `start→work_started`, `phase→phase_set`, `done→work_finished`, `close→ticket_closed`, `reopen→ticket_reopened`; a non-retention action with no entry panics (`workflow_events.go`). Retention actions (archive/unarchive/delete/restore) fire **no event at all** (`internal/cli/cli.go`, `workflow_events.go`).
 
 ### Dispatch call sites
 
@@ -107,7 +110,7 @@ Where each event actually fires, and where in the command's output the injected 
 | `lit new` (`cli.go`), `lit followup` (`cli.go`) | `ticket_created` | after create succeeds, before the issue summary and breadcrumb |
 | `lit show` (`cli.go`) | `show_ticket` | after detail load, before either `--field` output or the full view — fires for both |
 | `lit update` (`cli.go`) | `ticket_updated` | after apply, before summary |
-| transitions (`cli.go`) | one of the four transition events | after apply and authorize, before the claim-transfer notice |
+| transitions (`cli.go`) | one of the four status transition events, or `phase_set` | after apply and authorize, before the claim-transfer notice |
 | `lit comment` (`cli.go`) | `comment_added` | after the comment is stored, before it is printed |
 | `lit next` (`internal/cli/next.go`) | `next_pulled` | last, after the start advice and summary; only when a row was actually served — exhausted/no-work paths return before any occasion is built |
 | `lit backlog` (`internal/cli/workable.go`) | `show_backlog` | last, after the table render |
@@ -118,7 +121,7 @@ Where each event actually fires, and where in the command's output the injected 
 
 - **Events** (`match.go`): empty bound list → unconstrained; otherwise the fired event must be non-empty and in the bound list, so an event-bound definition can never fire on an eventless occasion.
 - **Labels** (`match.go`): empty → unconstrained; otherwise at least one bound label must appear among the occasion's labels (OR — there is no way to require ALL labels). Exact string comparison; both sides are pre-canonicalized.
-- **States** (`match.go`): each activation reads the occasion side its `when` selects (`Entered` for enter, `Exited` for exit) and requires it to be non-empty and exactly equal to the activation's state name. An occasion with no transition never satisfies a state binding.
+- **States** (`match.go`): each activation reads the occasion side its `when` selects (`Entered` for enter, `Exited` for exit) and requires the activation's state name to be exactly one of the states listed there. An occasion with no transition never satisfies a state binding.
 
 There are **no wildcards, globs, regexes, or negation** anywhere in matching; the only "match everything" construct is omitting a dimension. There is **no precedence between simultaneous matches** — every matching definition fires, in ID-ascending order (`match.go`). The only precedence in the system is the load-time layer/ID override, which guarantees at most one definition per ID.
 
@@ -133,6 +136,7 @@ There are **no wildcards, globs, regexes, or negation** anywhere in matching; th
 - A write failure aborts and propagates as the command's error; since that is the only error path, in practice a workflow can never fail a command, and a malformed file degrades to a load warning rather than breaking any invocation.
 - Load warnings are deliberately never printed by dispatch (so authoring diagnostics don't appear on every command); they surface only in `lit workflows` (`dispatch.go`).
 - A trace-write failure never fails dispatch: the guidance was already written, and the failure goes to stderr as `lit: workflow firing trace could not be recorded (<err>); guidance was still injected` (`dispatch.go`).
+- It returns the definitions that fired, with a write error too. Every CLI call site reaches it through `dispatchOccasion` (`internal/cli/workflow_dispatch.go`), which records on the command's event `workflows.event`, `workflows.entered`, `workflows.exited` and `workflows.fired`, the fired definitions' ids, `[]` when none fired.
 - Exit codes are unaffected by workflow firing. The general CLI mapping is the exit-code table in `06-issue-commands.md`, which is where it is maintained; restating it here is what let this line drift to a set missing exit 6.
 
 ## Firing traces
@@ -151,8 +155,8 @@ Record shape (`internal/workflows/trace.go`), marshaled indented with a trailing
   "event": "show_ticket",
   "issue_id": "lit-42",
   "labels": ["needs-design"],
-  "entered": "closed",
-  "exited": "in_progress",
+  "entered": ["closed"],
+  "exited": ["in_progress", "review"],
   "fired": [
     { "id": "needs-design-note", "source": "project", "path": "needs-design.md",
       "reasons": ["event:show_ticket", "label:needs-design"] }
@@ -165,16 +169,16 @@ Record shape (`internal/workflows/trace.go`), marshaled indented with a trailing
 Registered as a workspace-only command — it resolves a workspace from the working directory but never opens the store (`internal/cli/register.go`). Usage:
 
 ```
-lit workflows [show <id> | edit <id-or-point> | dry-run [--event <name>] [--label <name>]... [--enter <state>] [--exit <state>] [--issue <id>]]
+lit workflows [show <id> | edit <id-or-point> | dry-run [--event <name>] [--label <name>]... [--enter <state>]... [--exit <state>]... [--issue <id>]]
 ```
 
 Routing: no positionals → overview; `show <id>`; `edit <id-or-point>`; `dry-run`; anything else is a usage error (exit 2) (`internal/cli/workflows.go`). Overview, show, and edit take no flags — any flag-shaped token there is a usage error.
 
-**Overview** (`workflows.go`) prints, in order: the header `lit workflows — work lifecycle guidance (project > global > embedded)`; an `Events` spine (the full catalog, always, bound or not, in catalog order); a `States` spine (the three built-ins in lifecycle order, then any custom state a loaded definition binds, alphabetically, each with `enter`/`exit` sub-lines); a `Labels` spine (every label any definition binds — not every label used on tickets — deduped and sorted, or `(none bound)`); then warnings. Each spine point shows the bound definitions as `<id> "<name>" (<source>)` refs; a definition appears at every point it binds. The warnings section, printed only on the overview and only when non-empty, is headed `Warnings (loaded but not fully active)` with each warning collapsed to one line.
+**Overview** (`workflows.go`) prints, in order: the header `lit workflows — work lifecycle guidance (project > global > embedded)`; an `Events` spine (the full catalog, always, bound or not, in catalog order); a `States` spine (the built-in states in lifecycle order — `open`, `in_progress`, the four phases in work order, `closed` — then any custom state a loaded definition binds, alphabetically, each with `enter`/`exit` sub-lines); a `Labels` spine (every label any definition binds — not every label used on tickets — deduped and sorted, or `(none bound)`); then warnings. Each spine point shows the bound definitions as `<id> "<name>" (<source>)` refs; a definition appears at every point it binds. The warnings section, printed only on the overview and only when non-empty, is headed `Warnings (loaded but not fully active)` with each warning collapsed to one line.
 
 **`show <id>`** prints exactly `id:`, `name:` (`-` when empty), `source:`, `path:`, `labels:`, `states:` (as `state(when)`), `events:`, a `---` separator, then the body (`workflows.go`). Unknown ID → validation error naming the id, exit 3; missing ID → usage error.
 
-**`dry-run`** builds a hypothetical occasion from `--event`, repeatable `--label`, `--enter`, `--exit`, `--issue` — **verbatim, with no canonicalization**, so `--label Needs-Design` will not match a canonicalized definition label (`workflows_dryrun.go`). Output: an `occasion:` line summarizing the inputs (`-` for unset), then `Fired (<n>)` with `(none)` or, per match, the definition ref, its match reasons, and its interpolated body indented 4 spaces. Dry-run never writes a firing trace and never reads the store (`workflows_dryrun.go`). Stray positionals and unknown flags are usage errors.
+**`dry-run`** builds a hypothetical occasion from `--event`, repeatable `--label`, repeatable `--enter`, repeatable `--exit`, `--issue` — **verbatim, with no canonicalization**, so `--label Needs-Design` will not match a canonicalized definition label (`workflows_dryrun.go`). Output: an `occasion:` line summarizing the inputs (`-` for unset), then `Fired (<n>)` with `(none)` or, per match, the definition ref, its match reasons, and its interpolated body indented 4 spaces. Dry-run never writes a firing trace and never reads the store (`workflows_dryrun.go`). Stray positionals and unknown flags are usage errors.
 
 ## `lit workflows edit` — scaffolding
 

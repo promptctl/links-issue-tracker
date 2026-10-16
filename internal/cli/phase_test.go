@@ -2,6 +2,7 @@ package cli
 
 import (
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -16,6 +17,66 @@ func phaseFacts(t *testing.T) map[string]any {
 		}
 	}
 	return facts
+}
+
+// workflowFacts is what the last invocation's event says about the workflow
+// occasion it fired.
+func workflowFacts(t *testing.T) map[string]any {
+	t.Helper()
+	facts := map[string]any{}
+	for key, value := range writtenFacts(t, lastEvent(t)) {
+		if strings.HasPrefix(key, "workflows.") {
+			facts[key] = value
+		}
+	}
+	return facts
+}
+
+// Workflow definitions bound to a phase fire as the work moves through it:
+// lit start enters plan inside in_progress, a phase move exits one phase and
+// enters the next without leaving in_progress, a move to the phase the ticket
+// is in exits and enters nothing, and lit done exits the phase along with
+// in_progress.
+// The command's event names the occasion and what fired on it.
+func TestPhaseMovesFireStateBoundWorkflows(t *testing.T) {
+	isolateEvents(t)
+	dir, first, _ := statuslineCheckout(t)
+	bound := map[string]string{
+		"enter-plan":   "states: [plan]",
+		"enter-review": "states: [review]",
+		"exit-impl":    "states: [{name: impl, when: exit}]",
+		"exit-review":  "states: [{name: review, when: exit}]",
+		"working":      "states: [in_progress]",
+	}
+	for id, activation := range bound {
+		writeCLIWorkflow(t, dir, id+".md", "---\n"+activation+"\n---\nFIRED "+id+" on <id>")
+	}
+
+	for _, step := range []struct {
+		args    []string
+		event   string
+		exited  []any
+		entered []any
+		fired   []any
+	}{
+		{[]string{"start", first, "--by", "agent"}, "work_started", []any{"open"}, []any{"in_progress", "plan"}, []any{"enter-plan", "working"}},
+		{[]string{"phase", first, "--to", "impl"}, "phase_set", []any{"plan"}, []any{"impl"}, []any{}},
+		{[]string{"phase", first, "--to", "review"}, "phase_set", []any{"impl"}, []any{"review"}, []any{"enter-review", "exit-impl"}},
+		{[]string{"phase", first, "--to", "review"}, "phase_set", []any{}, []any{}, []any{}},
+		{[]string{"done", first}, "work_finished", []any{"in_progress", "review"}, []any{"closed"}, []any{"done", "exit-review"}},
+	} {
+		out := runCLIInDir(t, dir, step.args...)
+		for id := range bound {
+			body := "FIRED " + id + " on " + first
+			if want := slices.Contains(step.fired, any(id)); strings.Contains(out, body) != want {
+				t.Errorf("lit %v printed %q; want %q printed: %v", step.args, out, body, want)
+			}
+		}
+		want := map[string]any{"workflows.event": step.event, "workflows.exited": step.exited, "workflows.entered": step.entered, "workflows.fired": step.fired}
+		if got := workflowFacts(t); !reflect.DeepEqual(got, want) {
+			t.Errorf("lit %v event facts = %v, want %v", step.args, got, want)
+		}
+	}
 }
 
 // lit phase moves an in-progress ticket's phase: the event names the phase

@@ -360,14 +360,15 @@ Occasion builders (`workflow_events.go`):
 - `ticketUpdatedOccasion` → `EventTicketUpdated`; never carries Entered/Exited
   because `update` rejects `--status`
 - `commentAddedOccasion` → `EventCommentAdded`
-- `transitionOccasion(action, prior, issue)` → looks up
-  `statusTransitionEvents` (`start`→`EventWorkStarted`, `done`→`EventWorkFinished`,
-  `close`→`EventTicketClosed`, `open`→`EventTicketReopened`), sets
-  `Entered = issue.State()`, `Exited = prior.State()`; **panics** on an unmapped
-  action name.
+- `transitionOccasion(action, before, after)` → looks up
+  `transitionEvents` (`start`→`EventWorkStarted`, `phase`→`EventPhaseSet`,
+  `done`→`EventWorkFinished`, `close`→`EventTicketClosed`,
+  `open`→`EventTicketReopened`), sets `Entered` to the states after that were not
+  states before and `Exited` to the reverse, a phase counting as a state inside
+  `in_progress`; **panics** on a non-retention action with no entry.
 
-Retention actions (archive/unarchive/delete/restore) are not `StatusAction`s and
-fire no event (`cli.go`). `purge` fires none either (`purge.go`).
+Retention actions (archive/unarchive/delete/restore) fire no event:
+`transitionOccasion` returns `fires = false` for them (`workflow_events.go`). `purge` fires none either (`purge.go`).
 
 ### 1.15 Prefix / ID resolution
 
@@ -2144,7 +2145,7 @@ a successful run (§1.4).
 7. **Three functions panic on unreachable states** and would abort the process:
    `ClassifyReadiness` on an unclassified annotation kind (`readiness.go`),
    `renderNextOutcome` on an unhandled outcome type (`next.go`),
-   `transitionOccasion` on an unmapped status action (`workflow_events.go`),
+   `transitionOccasion` on an unmapped lifecycle action (`workflow_events.go`),
    `emitBreadcrumb`/`quickstartBreadcrumb` on an unknown topic
    (`quickstart_topics.go`), `completionRenderer` on an unknown shell
    (`completion.go`), `nestUnder` on a missing nest point (`register.go`),

@@ -27,11 +27,14 @@ type Occasion struct {
 	// parse time, so comparison here is exact). Nil when the moment has no
 	// single acted-on ticket (e.g. a backlog-wide view).
 	Labels []string
-	// Entered and Exited name the states of the ticket's transition, when one
-	// happened: a transition between two states is exit-of-one plus
-	// enter-of-the-other. Both zero when no transition occurred.
-	Entered string
-	Exited  string
+	// Entered and Exited name the states the ticket's transition moved it into
+	// and out of, when one happened: a transition is exit-of-some plus
+	// enter-of-others. A transition can enter or exit several states at once,
+	// because a state can sit inside another — a phase is a state inside
+	// in_progress, so a start enters both. Both empty when no transition
+	// occurred.
+	Entered []string
+	Exited  []string
 }
 
 // Matches reports whether the definition fires on the occasion. Composition
@@ -88,11 +91,12 @@ func matchStates(bound []StateActivation, o Occasion) bool {
 }
 
 // matches reports whether the occasion's transition satisfies one state
-// activation. The occasion side must be non-empty: "no transition happened"
-// never satisfies a state binding, whatever the activation says.
+// activation: the activation's state is among those the transition entered,
+// or exited, as the activation's side says. "No transition happened" is an
+// empty side, so it never satisfies a state binding.
 func (a StateActivation) matches(o Occasion) bool {
-	observed := map[When]string{WhenEnter: o.Entered, WhenExit: o.Exited}[a.When]
-	return observed != "" && observed == a.State
+	observed := map[When][]string{WhenEnter: o.Entered, WhenExit: o.Exited}[a.When]
+	return slices.Contains(observed, a.State)
 }
 
 // MatchReasons returns, for a definition that fires on the occasion, which

@@ -57,12 +57,16 @@ import (
 // which definition) is promptctl-orchestration-ffqz.4's job ("the see-it
 // surface"); a partial version here would leave two places deciding how
 // workflow warnings render. [LAW:single-enforcer]
-func Dispatch(w io.Writer, errOut io.Writer, ws workspace.Info, o Occasion) error {
+//
+// It returns the definitions that fired, so the caller can say on its own
+// record what fired; they are returned with a write error too, since they
+// fired whether or not their bodies reached w.
+func Dispatch(w io.Writer, errOut io.Writer, ws workspace.Info, o Occasion) ([]Definition, error) {
 	set := Load(ws.RootDir)
 	matched := set.Matching(o)
 	for _, def := range matched {
 		if _, err := fmt.Fprintln(w, Interpolate(def.Body, o.IssueID)); err != nil {
-			return err
+			return matched, err
 		}
 	}
 	if len(matched) > 0 && filepath.IsAbs(ws.StorageDir) {
@@ -70,7 +74,7 @@ func Dispatch(w io.Writer, errOut io.Writer, ws workspace.Info, o Occasion) erro
 			fmt.Fprintf(errOut, "lit: workflow firing trace could not be recorded (%v); guidance was still injected\n", err)
 		}
 	}
-	return nil
+	return matched, nil
 }
 
 // Interpolate replaces the <id> placeholder in an injected body with the

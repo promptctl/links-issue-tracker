@@ -192,7 +192,7 @@ func scaffoldFilenameSlug(input string) string {
 //  1. Explicit `<state>:enter` / `<state>:exit` — states are open strings by
 //     design, so this needs no validation against a known set.
 //  2. A name in the event catalog — an event.
-//  3. One of the three built-in lifecycle states, bare (defaults to enter).
+//  3. One of the built-in lifecycle states or phases, bare (defaults to enter).
 //  4. Anything else — a label; labels are open vocabulary too.
 //
 // [LAW:dataflow-not-control-flow] one function, one ordered set of checks;

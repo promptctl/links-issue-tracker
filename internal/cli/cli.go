@@ -23,7 +23,6 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/statusline"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
-	"github.com/promptctl/links-issue-tracker/internal/workflows"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -334,7 +333,7 @@ func newLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		if err := workflows.Dispatch(stdout, os.Stderr, ap.Workspace, ticketCreatedOccasion(issue)); err != nil {
+		if err := dispatchOccasion(ctx, stdout, ap.Workspace, ticketCreatedOccasion(issue)); err != nil {
 			return err
 		}
 		if err := printIssueSummary(stdout, issue); err != nil {
@@ -437,7 +436,7 @@ func followupLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		if err := workflows.Dispatch(stdout, os.Stderr, ap.Workspace, ticketCreatedOccasion(issue)); err != nil {
+		if err := dispatchOccasion(ctx, stdout, ap.Workspace, ticketCreatedOccasion(issue)); err != nil {
 			return err
 		}
 		if err := printIssueSummary(stdout, issue); err != nil {
@@ -1228,7 +1227,7 @@ func showLeaf() appLeaf {
 			return err
 		}
 		// The agent viewed the ticket's details either way, --field or full view.
-		if err := workflows.Dispatch(stdout, os.Stderr, ap.Workspace, showTicketOccasion(detail.Issue)); err != nil {
+		if err := dispatchOccasion(ctx, stdout, ap.Workspace, showTicketOccasion(detail.Issue)); err != nil {
 			return err
 		}
 		// --field is the compact, edit-oriented view: exactly the requested
@@ -1394,7 +1393,7 @@ func updateLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		if err := workflows.Dispatch(stdout, os.Stderr, ap.Workspace, ticketUpdatedOccasion(issue)); err != nil {
+		if err := dispatchOccasion(ctx, stdout, ap.Workspace, ticketUpdatedOccasion(issue)); err != nil {
 			return err
 		}
 		if err := printIssueSummary(stdout, issue); err != nil {
@@ -1701,7 +1700,7 @@ type transitionSpec struct {
 	// who once started it, since an expired claim is not a claim, and reading
 	// the lane again would be a second gather of every event in the store.
 	// [LAW:one-source-of-truth]
-	authorize func(fs *cobraFlagSet) func(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, prior model.Issue, action model.Action) (afterApply, error)
+	authorize func(fs *cobraFlagSet) func(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, prior ticketState, action model.Action) (afterApply, error)
 }
 
 // afterApply is what a transition owes once Apply has written the issue: the
@@ -1715,8 +1714,8 @@ type afterApply func(written model.Issue) (notice string, facts statusline.Facts
 // noAuthorize is the authorize hook of every transition that gates nothing
 // beyond the ordinary state-machine check store.Apply already performs, and
 // owes nothing after it.
-func noAuthorize(*cobraFlagSet) func(context.Context, io.Writer, *app.App, string, model.Issue, model.Action) (afterApply, error) {
-	return func(context.Context, io.Writer, *app.App, string, model.Issue, model.Action) (afterApply, error) {
+func noAuthorize(*cobraFlagSet) func(context.Context, io.Writer, *app.App, string, ticketState, model.Action) (afterApply, error) {
+	return func(context.Context, io.Writer, *app.App, string, ticketState, model.Action) (afterApply, error) {
 		return func(model.Issue) (string, statusline.Facts) { return "", nil }, nil
 	}
 }
@@ -1741,9 +1740,9 @@ var (
 				return model.Start{Assignee: actor}, nil
 			}
 		},
-		authorize: func(fs *cobraFlagSet) func(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, prior model.Issue, action model.Action) (afterApply, error) {
+		authorize: func(fs *cobraFlagSet) func(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, prior ticketState, action model.Action) (afterApply, error) {
 			take := fs.Bool("take", false, "Confirm taking over a lane another checkout claims right now (required for non-interactive callers; without it an interactive terminal is prompted instead)")
-			return func(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, prior model.Issue, action model.Action) (afterApply, error) {
+			return func(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, prior ticketState, action model.Action) (afterApply, error) {
 				// registerFlags above builds every action this hook sees, so a
 				// different variant is a wiring error, not a caller's mistake.
 				// [LAW:no-silent-failure]
@@ -1751,7 +1750,7 @@ var (
 				if !ok {
 					return nil, fmt.Errorf("start: authorize hook received a %T action", action)
 				}
-				return authorizeStart(ctx, stdout, ap, issueID, prior, start, *take)
+				return authorizeStart(ctx, stdout, ap, issueID, prior.issue, start, *take)
 			}
 		},
 	}
@@ -1785,7 +1784,7 @@ var (
 				return model.SetPhase{Phase: phase}, nil
 			}
 		},
-		authorize: func(*cobraFlagSet) func(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, prior model.Issue, action model.Action) (afterApply, error) {
+		authorize: func(*cobraFlagSet) func(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, prior ticketState, action model.Action) (afterApply, error) {
 			return authorizePhase
 		},
 	}
@@ -1799,21 +1798,16 @@ var (
 // the phase rule — and owes the move it made: the line saying where the
 // ticket's phase now stands, and on the command's event the phase left, the
 // phase entered, and whether anything changed. A refused move fails Apply, so
-// its event carries the refusal instead. The phase left is read before Apply
-// on the same write Store the move is planned on, whose engine holds Dolt's
-// LOCK for the whole command, so both reads answer from one history.
-// [LAW:nothing-unseen]
-func authorizePhase(ctx context.Context, _ io.Writer, ap *app.App, issueID string, prior model.Issue, action model.Action) (afterApply, error) {
+// its event carries the refusal instead. The phase left is the one
+// transitionLeaf read before Apply on the same write Store the move is planned
+// on, whose engine holds Dolt's LOCK for the whole command, so both reads
+// answer from one history. [LAW:nothing-unseen]
+func authorizePhase(ctx context.Context, _ io.Writer, _ *app.App, _ string, prior ticketState, action model.Action) (afterApply, error) {
 	set, ok := action.(model.SetPhase)
 	if !ok {
 		return nil, fmt.Errorf("phase: authorize hook received a %T action", action)
 	}
-	events, err := ap.Store.ListEvents(ctx, issueID)
-	if err != nil {
-		return nil, err
-	}
-	from, _ := model.PhaseOf(prior, events)
-	move := model.PhaseChange{From: from, To: set.Phase}
+	move := model.PhaseChange{From: prior.phase, To: set.Phase}
 	return func(model.Issue) (string, statusline.Facts) {
 		telemetry.Set(ctx, "phase.from", string(move.From))
 		telemetry.Set(ctx, "phase.to", string(move.To))
@@ -1876,6 +1870,18 @@ func closeOutcomeFromFlags(resolution, target, usage string) (model.Outcome, err
 	return nil, fmt.Errorf("resolution %q has no close outcome", parsed)
 }
 
+// readTicketState reads where issue stands: the phase its history puts it in,
+// beside the row already read. [LAW:one-source-of-truth] the phase is never
+// stored, so every reader derives it through model.PhaseOf from the events.
+func readTicketState(ctx context.Context, st storage.Store, issue model.Issue) (ticketState, error) {
+	events, err := st.ListEvents(ctx, issue.ID)
+	if err != nil {
+		return ticketState{}, err
+	}
+	phase, _ := model.PhaseOf(issue, events)
+	return ticketState{issue: issue, phase: phase}, nil
+}
+
 func transitionLeaf(spec transitionSpec) appLeaf {
 	fs := newCobraFlagSet(spec.name)
 	reason := fs.String("reason", "", "Transition reason")
@@ -1916,11 +1922,15 @@ func transitionLeaf(spec transitionSpec) appLeaf {
 		}
 
 		// The pre-transition read is the state `authorize` gates on and the
-		// before-half of the workflow occasion below. It is the ROW only: the
-		// claim-transfer notice needs the issue's history too, and `authorize`
-		// reads it after the gate, because that is the read the gate can
-		// invalidate.
-		prior, err := ap.Store.GetIssue(ctx, issueID)
+		// before-half of the workflow occasion below: the row, and the phase
+		// the ticket's history puts it in. The claim-transfer notice reads the
+		// issue's claim again, after the gate, because that is the read the gate
+		// can invalidate.
+		priorIssue, err := ap.Store.GetIssue(ctx, issueID)
+		if err != nil {
+			return err
+		}
+		prior, err := readTicketState(ctx, ap.Store, priorIssue)
 		if err != nil {
 			return err
 		}
@@ -1940,21 +1950,25 @@ func transitionLeaf(spec transitionSpec) appLeaf {
 		if err != nil {
 			return err
 		}
+		written, err := readTicketState(ctx, ap.Store, issue)
+		if err != nil {
+			return err
+		}
 		// Recorded after Apply, so these facts follow the ones the store's
 		// change observer recorded for this same write.
 		notice, facts := owed(issue)
 		ap.Statusline.Record(facts...)
 
-		// [LAW:single-enforcer] runTransition is the one status-transition path
-		// (start/done/close/open all arrive here), so it is the one place that
-		// dispatches their events — no per-command re-derivation. Retention
-		// actions (archive/unarchive/delete/restore) are not StatusActions, so
-		// the type assertion excludes them the same way the close-adjacency
-		// block below does. Dispatch is also where any matching workflow
-		// definition's guidance is injected — `done`'s embedded default is what
-		// prints the post-close capture reminder below.
-		if statusAction, ok := action.(model.StatusAction); ok {
-			if err := workflows.Dispatch(stdout, os.Stderr, ap.Workspace, transitionOccasion(statusAction, prior, issue)); err != nil {
+		// [LAW:single-enforcer] transitionLeaf is the one lifecycle-transition
+		// path (start/done/close/open and phase all arrive here), so it is the
+		// one place that dispatches their events — no per-command
+		// re-derivation. transitionOccasion decides which actions fire;
+		// retention actions (archive/unarchive/delete/restore) fire nothing.
+		// Dispatch is also where any matching workflow definition's guidance is
+		// injected — `done`'s embedded default is what prints the post-close
+		// capture reminder below.
+		if occasion, fires := transitionOccasion(action, prior, written); fires {
+			if err := dispatchOccasion(ctx, stdout, ap.Workspace, occasion); err != nil {
 				return err
 			}
 		}
@@ -2021,7 +2035,7 @@ func commentAddLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		if err := workflows.Dispatch(stdout, os.Stderr, ap.Workspace, commentAddedOccasion(issue)); err != nil {
+		if err := dispatchOccasion(ctx, stdout, ap.Workspace, commentAddedOccasion(issue)); err != nil {
 			return err
 		}
 		return printComment(stdout, comment)

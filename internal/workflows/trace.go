@@ -33,8 +33,8 @@ type FiringRecord struct {
 	Event       string            `json:"event,omitempty"`
 	IssueID     string            `json:"issue_id,omitempty"`
 	Labels      []string          `json:"labels,omitempty"`
-	Entered     string            `json:"entered,omitempty"`
-	Exited      string            `json:"exited,omitempty"`
+	Entered     []string          `json:"entered,omitempty"`
+	Exited      []string          `json:"exited,omitempty"`
 	Fired       []FiredDefinition `json:"fired"`
 }
 
