@@ -132,12 +132,21 @@ type UnsupportedSchemaVersionError struct {
 	WorkspaceVersion int64
 	MaxSupported     int64
 	MissingBaseline  []string
-	// SnapshotName is the most recent migration-recovery snapshot present in
-	// this workspace, when one exists. Populating it offers the user a lossy
-	// rollback path; emptying it means no such snapshot is available.
+	// SnapshotName is the newest migration-recovery snapshot holding a
+	// workspace this binary operates (searchRollbackSnapshot), when one exists.
+	// Populating it offers the user a lossy rollback path; emptying it means no
+	// snapshot this binary can open was found.
 	// [LAW:types-are-the-program] Which rollback line the message emits is
 	// encoded by whether the optional field is populated, not by a flag.
 	SnapshotName string
+	// SnapshotLookupErr is why snapshots could not be read, when some could
+	// not: the listing, or a snapshot newer than SnapshotName that may have
+	// been a closer rollback. [LAW:no-silent-failure] a failed read is reported
+	// as one, never as "no snapshot exists".
+	SnapshotLookupErr error
+	// SnapshotsExamined counts the migration snapshots the search read, and
+	// SnapshotsUnreadable those it could not.
+	SnapshotsExamined, SnapshotsUnreadable int
 }
 
 func (e *UnsupportedSchemaVersionError) Error() string {
@@ -163,12 +172,16 @@ func (e *UnsupportedSchemaVersionError) Error() string {
 	fmt.Fprintf(&b,
 		"\n\nto operate this workspace, install a lit that supports schema version %d:\n  lit upgrade\n\n(this is the supported path — `lit upgrade` runs even from this too-old binary, installs the latest release, and refuses a release that cannot operate this workspace.)",
 		e.WorkspaceVersion)
-	if e.SnapshotName != "" {
+	switch {
+	case e.SnapshotName != "":
 		fmt.Fprintf(&b,
 			"\n\nif you are stuck and need to roll back this workspace to match this binary:\n  lit snapshots restore %s\n\nthis is a LOSSY recovery — any data written under the newer binary will be discarded.",
 			e.SnapshotName)
-	} else {
-		b.WriteString("\n\nno pre-upgrade snapshot available; lossy rollback is not possible from this workspace.")
+	case e.SnapshotLookupErr == nil:
+		fmt.Fprintf(&b, "\n\nno migration snapshot holds this workspace's data at schema version %d or below; lossy rollback is not possible from this workspace.", e.MaxSupported)
+	}
+	if e.SnapshotLookupErr != nil {
+		fmt.Fprintf(&b, "\n\nsome snapshots could not be read while looking for one to roll this workspace back to: %v", e.SnapshotLookupErr)
 	}
 	return b.String()
 }
@@ -881,19 +894,36 @@ func (s *Store) recordQuarantine(ctx context.Context, version int64, name, error
 // [LAW:dataflow-not-control-flow] The verify result (present count and missing
 // list) is the data that drives proceed-vs-refuse; no flag, no mutation.
 func (s *Store) refuseIfBaselineMissing(ctx context.Context, state migrationState) error {
-	present, missing, err := s.verifyBaselineShape(ctx)
+	missing, carried, err := s.baselineCarried(ctx)
 	if err != nil {
 		return err
 	}
-	if present == 0 || len(missing) > 0 {
+	if !carried {
+		search := s.searchRollbackSnapshot(ctx, state.registryMaxVers)
 		return &UnsupportedSchemaVersionError{
-			WorkspaceVersion: state.appliedVersion,
-			MaxSupported:     state.registryMaxVers,
-			MissingBaseline:  missing,
-			SnapshotName:     s.mostRecentMigrationSnapshotName(),
+			WorkspaceVersion:    state.appliedVersion,
+			MaxSupported:        state.registryMaxVers,
+			MissingBaseline:     missing,
+			SnapshotName:        search.snapshot,
+			SnapshotLookupErr:   search.err,
+			SnapshotsExamined:   search.examined,
+			SnapshotsUnreadable: search.unreadable,
 		}
 	}
 	return nil
+}
+
+// baselineCarried reports whether the live schema carries the baseline shape
+// this binary operates against, naming what is missing when it does not —
+// what lets this binary operate a workspace whose goose log is ahead of its
+// registry. [LAW:single-enforcer] the refusal and the rollback search
+// (snapshotOperable) apply this one rule.
+func (s *Store) baselineCarried(ctx context.Context) (missing []string, carried bool, err error) {
+	present, missing, err := s.verifyBaselineShape(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	return missing, present > 0 && len(missing) == 0, nil
 }
 
 // classifyMigrationState derives the workspace phase using only reads,
@@ -1362,29 +1392,6 @@ func sortedKeys(m map[string][]string) []string {
 	}
 	sort.Strings(keys)
 	return keys
-}
-
-// mostRecentMigrationSnapshotName returns the name of the newest snapshot in
-// this workspace that was stamped by the migration system, or "" if none
-// exists. Used by refuseIfBaselineMissing to populate the lossy-rollback hint
-// on UnsupportedSchemaVersionError. Errors listing the directory degrade to
-// "" — the refusal message must still surface, with the snapshot line absent.
-//
-// [LAW:one-source-of-truth] IsMigrationSnapshotName is the kind discriminator
-// shared with pruning; this lookup does not re-encode the naming rule.
-// [LAW:dataflow-not-control-flow] Caller always asks; the data (presence /
-// absence of a matching snapshot) decides which line the message emits.
-func (s *Store) mostRecentMigrationSnapshotName() string {
-	snaps, err := dbsnapshot.List(migrationSnapshotsDir(s.doltRootDir))
-	if err != nil {
-		return ""
-	}
-	for _, snap := range snaps {
-		if IsMigrationSnapshotName(snap.Name) {
-			return snap.Name
-		}
-	}
-	return ""
 }
 
 // recordProducerBinaryVersion stamps this binary's version into meta as the

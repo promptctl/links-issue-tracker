@@ -115,6 +115,10 @@ type End struct {
 	ExitCode int
 	Reason   string
 	Error    string
+	// Facts and Counts are what the error the invocation ended with decided
+	// and counted, recorded beside those the command set while it ran.
+	Facts  map[string]any
+	Counts map[string]int
 }
 
 // Finish closes the event and returns it, complete.
@@ -133,6 +137,8 @@ func (r *Recorder) Finish(end End) Event {
 	ev.Flags = append([]string{}, ev.Flags...)
 	ev.Counts = maps.Clone(ev.Counts)
 	ev.Facts = maps.Clone(ev.Facts)
+	maps.Copy(ev.Facts, end.Facts)
+	maps.Copy(ev.Counts, end.Counts)
 	return ev
 }
 

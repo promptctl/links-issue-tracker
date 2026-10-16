@@ -597,3 +597,162 @@ func withGooseHistoryDropped(t *testing.T, ctx context.Context, doltRoot string)
 		t.Fatalf("withGooseHistoryDropped Close error = %v", err)
 	}
 }
+
+// rollbackHistory is the two-step history: a workspace migrated forward from
+// v3, then again from v5. It returns its migration snapshots newest first —
+// the one holding v5, the one holding v3, and the empty workspace the fresh
+// open captured — so a test can break one before searching.
+func rollbackHistory(t *testing.T, ctx context.Context, doltRoot string) []dbsnapshot.Snapshot {
+	t.Helper()
+	withStore(t, ctx, doltRoot, func(*Store) {}) // fresh: migrates from an empty workspace
+	for _, from := range []int64{3, 5} {
+		withStore(t, ctx, doltRoot, func(st *Store) {
+			if err := st.Downgrade(ctx, from); err != nil {
+				t.Fatalf("Downgrade(%d) error = %v", from, err)
+			}
+		})
+		withStore(t, ctx, doltRoot, func(*Store) {}) // migrates forward from `from`
+	}
+	listed, err := dbsnapshot.List(migrationSnapshotsDir(doltRoot))
+	if err != nil {
+		t.Fatalf("List error = %v", err)
+	}
+	var migrationSnaps []dbsnapshot.Snapshot
+	for _, snap := range listed {
+		if IsMigrationSnapshotName(snap.Name) {
+			migrationSnaps = append(migrationSnaps, snap)
+		}
+	}
+	if len(migrationSnaps) != 3 {
+		t.Fatalf("migration snapshots = %+v, want 3 (from v5, from v3, fresh) in listing %+v", migrationSnaps, listed)
+	}
+	return migrationSnaps
+}
+
+// breakSnapshotBaseline drops a baseline column inside a snapshot, as a later
+// migration that rewrote the baseline would leave it.
+func breakSnapshotBaseline(t *testing.T, ctx context.Context, snapshotPath string) {
+	t.Helper()
+	snap, err := openStoreConnection(ctx, snapshotPath, "test-workspace-id", engineWrite)
+	if err != nil {
+		t.Fatalf("open snapshot %s: %v", snapshotPath, err)
+	}
+	mustExec(t, ctx, snap, `ALTER TABLE issues DROP COLUMN title`)
+	mustCommit(t, ctx, snap, "test: break the snapshot's baseline")
+	if err := snap.Close(); err != nil {
+		t.Fatalf("close snapshot %s: %v", snapshotPath, err)
+	}
+}
+
+// TestRollbackSnapshotIsOneTheOlderLitOpens runs the search over the two-step
+// history by the rule a lit's open applies: a snapshot ahead of the lit is
+// offered while its baseline is intact, since the lit operates it and it is
+// the closest rollback; one whose baseline is broken is passed over; the empty
+// workspace the fresh open captured is never offered, since restoring it would
+// discard every issue.
+func TestRollbackSnapshotIsOneTheOlderLitOpens(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	snaps := rollbackHistory(t, ctx, doltRoot)
+	fromV5, fromV3 := snaps[0], snaps[1]
+
+	type want struct {
+		snapshot string
+		examined int
+	}
+	search := func(stage string, cases map[int64]want) {
+		t.Helper()
+		withStore(t, ctx, doltRoot, func(st *Store) {
+			for maxSupported, w := range cases {
+				got := st.searchRollbackSnapshot(ctx, maxSupported)
+				if got.err != nil || got.unreadable != 0 {
+					t.Errorf("%s: search(max %d) err = %v, unreadable = %d; want every snapshot read", stage, maxSupported, got.err, got.unreadable)
+				}
+				if got.snapshot != w.snapshot || got.examined != w.examined {
+					t.Errorf("%s: search(max %d) = %q after %d examined, want %q after %d", stage, maxSupported, got.snapshot, got.examined, w.snapshot, w.examined)
+				}
+			}
+		})
+	}
+
+	search("baselines intact", map[int64]want{
+		2: {fromV5.Name, 1},
+		3: {fromV5.Name, 1},
+		5: {fromV5.Name, 1},
+	})
+	breakSnapshotBaseline(t, ctx, fromV5.Path)
+	search("v5 baseline broken", map[int64]want{
+		2: {fromV3.Name, 2},
+		3: {fromV3.Name, 2},
+		4: {fromV3.Name, 2},
+		5: {fromV5.Name, 1},
+	})
+	breakSnapshotBaseline(t, ctx, fromV3.Path)
+	search("v3 and v5 baselines broken", map[int64]want{
+		2: {"", 3},
+		3: {fromV3.Name, 2},
+	})
+}
+
+// TestRollbackSnapshotPassesOverAnUnreadableSnapshot pins that a migration
+// snapshot the search cannot read does not hide an older one it can offer, and
+// that the unreadable one is counted and named beside the offer.
+func TestRollbackSnapshotPassesOverAnUnreadableSnapshot(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	withStore(t, ctx, doltRoot, func(st *Store) {
+		if err := st.Downgrade(ctx, 3); err != nil {
+			t.Fatalf("Downgrade(3) error = %v", err)
+		}
+	})
+	withStore(t, ctx, doltRoot, func(*Store) {}) // migrates forward from v3, snapshotting it
+	listed, err := dbsnapshot.List(migrationSnapshotsDir(doltRoot))
+	if err != nil {
+		t.Fatalf("List error = %v", err)
+	}
+	if len(listed) == 0 || !IsMigrationSnapshotName(listed[0].Name) {
+		t.Fatalf("newest snapshot is not the migration snapshot from v3: %+v", listed)
+	}
+	fromV3 := listed[0].Name
+
+	// Newer than every snapshot taken: a copy of the v3 snapshot under a
+	// migration-shaped name, its Dolt manifest overwritten so no engine opens it.
+	now := time.Now().UnixNano()
+	unreadable := fmt.Sprintf("%d-%s", now, formatMigrationSnapshotLabel(time.Unix(0, now)))
+	unreadableDir := filepath.Join(migrationSnapshotsDir(doltRoot), unreadable)
+	if err := dbsnapshot.CloneTree(ctx, listed[0].Path, unreadableDir); err != nil {
+		t.Fatalf("clone %s: %v", fromV3, err)
+	}
+	if err := os.WriteFile(filepath.Join(unreadableDir, doltDatabaseName, ".dolt", "noms", "manifest"), []byte("not a manifest"), 0o644); err != nil {
+		t.Fatalf("corrupt the manifest: %v", err)
+	}
+
+	withStore(t, ctx, doltRoot, func(st *Store) {
+		got := st.searchRollbackSnapshot(ctx, 3)
+		if got.snapshot != fromV3 || got.examined != 2 || got.unreadable != 1 {
+			t.Errorf("search(max 3) = %q after %d examined, %d unreadable; want %q past the unreadable %q, 2 examined, 1 unreadable", got.snapshot, got.examined, got.unreadable, fromV3, unreadable)
+		}
+		if got.err == nil || !strings.Contains(got.err.Error(), unreadable) {
+			t.Errorf("search err = %v; want the unreadable snapshot %q named", got.err, unreadable)
+		}
+	})
+}
+
+// TestRollbackSnapshotSearchStopsWhenCanceled pins that a canceled search ends
+// as a cancellation, never as snapshots that could not be read.
+func TestRollbackSnapshotSearchStopsWhenCanceled(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	rollbackHistory(t, ctx, doltRoot)
+	withStore(t, ctx, doltRoot, func(st *Store) {
+		canceled, cancel := context.WithCancel(ctx)
+		cancel()
+		got := st.searchRollbackSnapshot(canceled, 3)
+		if !errors.Is(got.err, context.Canceled) || got.unreadable != 0 || got.examined != 0 || got.snapshot != "" {
+			t.Errorf("canceled search = %+v; want only the cancellation, nothing examined or unreadable", got)
+		}
+	})
+}
