@@ -5,6 +5,44 @@ All notable changes to `links-issue-tracker` (the `lit` CLI) are documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.0] - 2026-10-16
+
+### Added
+
+- `lit phase <id> --to <plan|impl|review|merge>` records where the work on an in-progress ticket stands. `lit start` puts the ticket in `plan`, and `lit done` ends its phase. Only an in-progress ticket that is not an epic has a phase. The phase is read from the ticket's history, so the store gains no column, and an older lit reads and syncs a store that holds phase moves. (links-statusline-e9pl.6sp)
+- Workflow definitions fire on entering or leaving a phase. The phases are states inside `in_progress`: `lit start` from open enters both `in_progress` and `plan`, and `lit phase` exits one phase and enters another without firing a definition bound to `in_progress`. Every `lit phase` dispatches a `phase_set` event, and a call that leaves the ticket where it was enters and exits nothing. (links-statusline-e9pl.gii)
+- Four shipped workflow definitions, `phase-plan`, `phase-impl`, `phase-review` and `phase-merge`, print the command for the next move as a ticket enters each phase. `lit quickstart work`, the agents section `lit init` writes, and the `/next` skill name the same commands, and the Claude Code plugin is at 0.7.0. A transition prints its own `phase: a → b` notice before any workflow guidance. (links-statusline-e9pl.i2h)
+- `working_on` in `.lit/statusline.json` carries the ticket's `phase`, `null` when the recording command read none, and the lane's `rollup_progress`, the same counts as the `N/M done` on that lane's claim line in `lit backlog`. (links-statusline-e9pl.f3n, links-statusline-e9pl.9ym)
+- Whenever lit writes a statusline file, it installs its cc-candybar plugin at `$XDG_DATA_HOME/cc-candybar/plugins/lit/plugin.json5` unless that file already holds it, so cc-candybar offers the segments `plugins.lit.ticket`, `plugins.lit.phase` and `plugins.lit.next` on any machine where lit runs. (links-statusline-e9pl.yjx)
+- `lit upgrade` and `lit downgrade` record on their `events.jsonl` line the tag they resolved and the path they installed; a downgrade also records the versions it reversed and the snapshot it took. (links-schema-release-fuof.ge0)
+- `scripts/install.sh` in source mode refuses with exit 3 to build a tree whose migrations no release tag carries, and prints a `schema-release-check:` line naming the tree's schema, the release tag and its schema. A checkout with no release tag refuses with exit 1. (links-schema-release-fuof.h2n)
+
+### Changed
+
+- `--type`, `--labels` and `--assignee` narrow which tickets `lit next` serves, while routing reads the whole queue. When the filter hides the ticket routing would pick, `lit next` names it; if it serves nothing, it exits 6 with `scope_narrowed`. The event records the hidden ticket as `next.hidden_by_filter`. (links-next-10h8)
+- `lit next` follows a blocker it cannot start to that blocker's own prerequisites, and serves a ready ticket anywhere down the chain, announced as `(gates B.2, which is on your path, through C.1)`. The event records the chain as `next.dependency_path`. A ticket held by something about itself, such as a reserved label, is reported as "held by something about the ticket itself", and the advice to file a ticket that clears a blocker appears only when a new ticket could clear one. (links-next-0thk)
+- `lit sync` against a remote whose schema is ahead of this lit exits 3 with `workspace_schema_ahead`, the exit code and remediation of a workspace ahead of it. The event's `schema_ahead.remote` and `schema_ahead.branch` say the remote refused. (links-schema-release-fuof.el1)
+- A failed migration, and every open its quarantine refuses, exits 3 with `migration_quarantined`. The message names the two ways out, clearing the quarantine row or restoring a snapshot taken before the failure, and tells an agent to take neither unless the user directs it. (links-cli-errors-31yq)
+
+### Removed
+
+- A migrating open writes no `meta.producer_binary_version` row and makes no Dolt commit for one. (links-schema-release-fuof.6xr)
+
+### Fixed
+
+- `scripts/install.sh` builds or downloads lit into a staging directory on the target filesystem, checks that the staged binary runs `lit version`, and installs it with one rename, so a session running lit during an install keeps the binary it started with. (links-unfiled-fc79.pm2v)
+- A migration that fails inside goose is quarantined. Contention from Dolt's online garbage collection is exempt and resets without quarantine. (links-release-d6dq.a42)
+- The reset after a failed migration runs to the end even when the command that opened the store is canceled, as by `lit init`'s adopt timeout. (links-schema-release-fuof.a1c)
+- A migrating open whose snapshot prune fails still opens, and prints `warning: old migration snapshots were not removed:` on stderr so output such as `lit export` stays parseable. `lit stores --counts` notes each store this happened to. (links-schema-release-fuof.2es)
+- When lit is too old for a workspace, its refusal offers the newest migration snapshot this lit can open, passes over any it cannot read, and names the read failure beside the offer. (links-schema-release-fuof.uij)
+- `lit upgrade --to <older tag>` names `lit downgrade` as the remedy only when this binary's schema support reaches the workspace. (links-schema-release-fuof.hnp)
+- `lit downgrade` refuses with exit 3 and `workspace_schema_ahead`, before taking its snapshot, when this lit's schema support does not cover the versions it would reverse. (links-schema-release-fuof.7tq)
+- `lit downgrade` installs the `--to` release whenever the schema reverse has committed. If pruning old downgrade snapshots then fails, `warning: old downgrade snapshots were not removed:` ends the output. (links-schema-release-fuof.bzu)
+- `lit upgrade --to` and `lit downgrade --to` accept only release tags of the form `vX.Y.Z` with no leading zeros, and refuse anything else with exit 3 before making any request. (links-schema-release-fuof.5g8)
+- `lit import` refuses a `blocked_by` between two leaves directly under one epic, in both the JSON and YAML formats, as `lit dep add` does. (links-import-prn3)
+- A title changed by `lit import` reaches `.lit/statusline.json`, as every change the store applies does, and `lit backup restore` sets both records to `null`. (links-statusline-e9pl.mvs)
+- Every lock acquisition removes the holder records of processes that have exited, and a holder record's name stays unique when the OS reuses a pid, so publishing a record never fails with "file exists". (links-locking-6xbk)
+
 ## [0.18.0] - 2026-10-15
 
 ### Added
