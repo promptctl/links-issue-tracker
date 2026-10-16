@@ -114,7 +114,7 @@ Behaviors that define the reference semantics (each mirrored by Dolt unless note
 
 ## What conformance requires — and doesn't
 
-The suite runs 62 cases (`conformance.go`), each against a fresh engine, asserting only what a caller can observe through the contract. Where behavior was ambiguous, Dolt's answer was the tie-break (`conformance.go`).
+The suite runs 67 cases (`conformance.go`), each against a fresh engine, asserting only what a caller can observe through the contract. Where behavior was ambiguous, Dolt's answer was the tie-break (`conformance.go`).
 
 Not required by the suite (each is engine-tested or unexercised) — relevant when judging what v1 actually guarantees across engines:
 

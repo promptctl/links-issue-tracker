@@ -3812,7 +3812,7 @@ Note the create branch does **not** require `LocalID` (unlike ImportTree), and d
 
 `BulkApply(ctx, prefix, actor string, specs)` (`import_bulk.go`):
 
-1. `order, err := storage.BulkWriteOrder(specs)` — whole file validated before anything is written, and the topological write order returned (§4.4); a cycle reads `bulk: cycle detected involving "x"` (`internal/storage/import_validate.go`).
+1. `s.getIssuesByIDs(ctx, storage.BulkParentRefs(specs))` reads the parents the file names (error → `bulk: read parents: %w`), and `parentTypes` maps each found id to its type; `order, err := storage.BulkWriteOrder(specs, parentTypes)` — whole file validated before anything is written, and the topological write order returned (§4.4); a cycle reads `bulk: cycle detected involving "x"` (`internal/storage/import_validate.go`).
 2. `result := storage.BulkApplyResult{Created: map[string]string{}}`; `createdRealID` (index-parallel), `createdIDs` (ordered), `localRealID` map (`import_bulk.go`).
 3. Loop in topo order (`import_bulk.go`):
    - **Update branch** (`spec.ID != ""`): `bulkUpdateChange(spec, actor)` then `s.Apply(ctx, spec.ID, change)`. `bulkUpdateChange` error is returned **without** a rollback (`import_bulk.go`). `Apply` error → rollback then `"bulk: update %q: %w (rollback leaked %d: %s)"`. On success append `issue.ID` to `result.Updated`.

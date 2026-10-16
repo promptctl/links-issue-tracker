@@ -661,8 +661,8 @@ and exactly one relation flag; `ls` prints each edge the same way
 same edge from both ends: under `blocked_by` on the issue that waits, and under
 `blocks` on the issue it waits for. `blocked-by` edges are not allowed between two
 issues in the same epic, or between an issue and any epic above it at any depth —
-within an epic, rank is the ordering signal. `lit import` refuses that ancestor
-edge in `blocked_by` too. A `blocked-by` edge onto an
+within an epic, rank is the ordering signal. `lit import` refuses both in
+`blocked_by` too. A `blocked-by` edge onto an
 epic holds back every issue in that epic and in epics nested inside it, in every
 lane: `lit next` offers none of them until the blocker closes, and `lit backlog` shows
 the blocker on each one as `blocked by: <id> (via epic)`. The one exception is an
