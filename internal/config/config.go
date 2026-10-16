@@ -183,6 +183,20 @@ func StateDir() (string, error) {
 	return filepath.Join(home, ".local", "state", appDirName), nil
 }
 
+// DataHome returns the base directory for user data files: XDG_DATA_HOME, by
+// default ~/.local/share. It is the base, not a directory of lit's own: what
+// lit puts there is another program's, under that program's name.
+func DataHome() (string, error) {
+	if xdg := os.Getenv("XDG_DATA_HOME"); xdg != "" {
+		return xdg, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve data directory: %w", err)
+	}
+	return filepath.Join(home, ".local", "share"), nil
+}
+
 // layers is the config precedence chain: merged in slice order, so later
 // layers override earlier ones. [LAW:one-source-of-truth] This ordering is
 // the only encoding of global-vs-project precedence.

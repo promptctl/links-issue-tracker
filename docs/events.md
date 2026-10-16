@@ -62,7 +62,9 @@ lines here for reading:
     "statusline.created": false,
     "statusline.exclude_added": false,
     "statusline.replaced": null,
-    "statusline.error": null
+    "statusline.error": null,
+    "statusline.plugin_installed": false,
+    "statusline.plugin_error": null
   }
 }
 ```
@@ -147,6 +149,8 @@ not work on this checkout's tickets, such as `lit sync push`, `lit init` or
 | `statusline.exclude_added` | Whether this write added the file's entry to the repository's `info/exclude`. Only a write that creates the file adds it, and only when the entry is missing. |
 | `statusline.replaced` | Why the file already on disk could not be read and was rewritten from this command's facts alone, or `null`. |
 | `statusline.error` | Why the write failed, or `null`. The command's own result is unchanged; the other keys say what the write had done before it failed. |
+| `statusline.plugin_installed` | Whether this write installed lit's [cc-candybar plugin](statusline.md#showing-it-in-cc-candybar), because no copy of this lit's definition was there. `false` when the definition was already installed, and when nothing was written, since the plugin is installed only after the file is. |
+| `statusline.plugin_error` | Why the plugin could not be installed, or `null`. The file is written all the same. |
 | `counts.statusline.bytes` | The size of the file written; `0` when nothing was written. |
 
 ## What a schema-ahead refusal records

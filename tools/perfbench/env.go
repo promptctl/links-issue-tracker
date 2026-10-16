@@ -16,11 +16,14 @@ import "strings"
 // `quickstart`, a control, renders. Every invocation also appends its event to
 // $XDG_STATE_HOME/links-issue-tracker/events.jsonl, whose size decides whether a
 // write rotates it, and a measured run must not fill a developer's own file.
+// A command that writes the statusline file installs lit's cc-candybar plugin
+// under $XDG_DATA_HOME, whose existing copy decides whether it writes, and a
+// measured lit must not overwrite the developer's installed one.
 // LIT_DISABLE_AUTO_SYNC skips the post-command maintenance outright, and
 // CLAUDE_CODE_SESSION_ID changes what the write probe records as its
-// assignee. So: XDG_CONFIG_HOME and XDG_STATE_HOME are pointed at empty
-// directories the run owns, and every LIT_* variable and the session id are
-// dropped.
+// assignee. So: XDG_CONFIG_HOME, XDG_STATE_HOME and XDG_DATA_HOME are pointed
+// at empty directories the run owns, and every LIT_* variable and the session
+// id are dropped.
 // [LAW:one-source-of-truth] the generated store's own .lit/config.toml is then
 // the only configuration in force, at every size, on every machine.
 //
@@ -29,14 +32,14 @@ import "strings"
 //
 // Pure — a function of the environment it is handed — so what it strips is
 // testable without a process. [LAW:effects-at-boundaries]
-func hermeticEnv(environ []string, configHome, stateHome string) []string {
-	out := make([]string, 0, len(environ)+2)
+func hermeticEnv(environ []string, configHome, stateHome, dataHome string) []string {
+	out := make([]string, 0, len(environ)+3)
 	for _, kv := range environ {
 		key, _, _ := strings.Cut(kv, "=")
-		if key == "XDG_CONFIG_HOME" || key == "XDG_STATE_HOME" || key == "CLAUDE_CODE_SESSION_ID" || strings.HasPrefix(key, "LIT_") {
+		if key == "XDG_CONFIG_HOME" || key == "XDG_STATE_HOME" || key == "XDG_DATA_HOME" || key == "CLAUDE_CODE_SESSION_ID" || strings.HasPrefix(key, "LIT_") {
 			continue
 		}
 		out = append(out, kv)
 	}
-	return append(out, "XDG_CONFIG_HOME="+configHome, "XDG_STATE_HOME="+stateHome)
+	return append(out, "XDG_CONFIG_HOME="+configHome, "XDG_STATE_HOME="+stateHome, "XDG_DATA_HOME="+dataHome)
 }

@@ -1,0 +1,50 @@
+// lit's cc-candybar plugin: the bar shows the ticket a checkout is working on
+// without running lit. lit writes `.lit/statusline.json` at the root of every
+// checkout it runs in — each worktree its own — saying what that checkout is
+// working on and what `lit next` last picked; the file's shape is lit's
+// docs/statusline.md. Every lit that writes the file installs this definition
+// beside it, as $XDG_DATA_HOME/cc-candybar/plugins/lit/plugin.json5, so the
+// reader on disk is the one the writer shipped with. Its folder, `lit`, is its
+// name: placed as `plugins.lit.ticket` and `plugins.lit.next`.
+{
+  data: { checkout: ".lit/statusline.json" },
+  segments: {
+    ticket: {
+      group: "activity",
+      description: "The lit ticket this checkout is working on, and how many of its lane's tickets are done; click the id to copy it.",
+      // No file yet reads as no fields, and `with` skips an empty document:
+      // the cell hides until lit records something.
+      when: '{{ with .plugins.lit.data }}{{ template "plugins.lit.schema" . }}{{ if .working_on }}true{{ else }}false{{ end }}{{ else }}false{{ end }}',
+      // rollup_progress is null when the command that recorded working_on did
+      // not count the lane, and missing when an older lit wrote the file; the
+      // cell then shows no count.
+      template: '{{ with .plugins.lit.data.working_on }}🎫 {{ action "plugins.lit.copyWorking" .ticket.id }}{{ template "plugins.lit.title" (dict "title" .ticket.title "width" $.settings.title) }}{{ if hasKey . "rollup_progress" }}{{ with .rollup_progress }} {{ .rollup_completed_count }}/{{ .rollup_total_count }}{{ end }}{{ end }}{{ end }}',
+      settings: {
+        title: { label: "title chars", domain: { min: 0, max: 80, step: 10 }, default: 0 },
+      },
+    },
+    next: {
+      group: "activity",
+      description: "The ticket lit next last picked for this checkout, unless it is the one being worked; click the id to copy it.",
+      // `next` is null until a plain `lit next` runs here, and still names
+      // the ticket after `lit start` takes it: shown only when it says
+      // something `ticket` does not.
+      when: '{{ with .plugins.lit.data }}{{ template "plugins.lit.schema" . }}{{ if not .next }}false{{ else if not .next.ticket }}true{{ else if .working_on }}{{ ne .next.ticket.id .working_on.ticket.id }}{{ else }}true{{ end }}{{ else }}false{{ end }}',
+      template: 'next {{ with .plugins.lit.data.next.ticket }}{{ action "plugins.lit.copyNext" .id }}{{ template "plugins.lit.title" (dict "title" .title "width" $.settings.title) }}{{ else }}nothing ready{{ end }}',
+      settings: {
+        title: { label: "title chars", domain: { min: 0, max: 80, step: 10 }, default: 0 },
+      },
+    },
+  },
+  helpers: {
+    // A schema_version this definition was not written for may mean any
+    // field: the cell says so (⚠) rather than guess. The version is the one
+    // internal/statusline.SchemaVersion writes, and a test holds them equal.
+    schema: '{{ if ne (toString .schema_version) "1" }}{{ fail (printf "lit statusline.json is schema_version %v; this plugin reads 1 — run a lit command to reinstall the plugin" .schema_version) }}{{ end }}',
+    title: '{{ if gt (int .width) 0 }} {{ abbrev (int .width) .title }}{{ end }}',
+  },
+  actions: {
+    copyWorking: { copy: "{{ .plugins.lit.data.working_on.ticket.id }}" },
+    copyNext: { copy: "{{ .plugins.lit.data.next.ticket.id }}" },
+  },
+}

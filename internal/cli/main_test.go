@@ -40,23 +40,27 @@ func TestMain(m *testing.M) {
 	if err := os.Setenv(DisableAutoSyncEnvVar, "1"); err != nil {
 		panic("set " + DisableAutoSyncEnvVar + ": " + err.Error())
 	}
-	stateHome := isolateStateHome("lit-cli-state-")
+	stateHome := isolateXDGHome("XDG_STATE_HOME", "lit-cli-state-")
+	dataHome := isolateXDGHome("XDG_DATA_HOME", "lit-cli-data-")
 	code := m.Run()
 	_ = os.RemoveAll(stateHome)
+	_ = os.RemoveAll(dataHome)
 	os.Exit(code)
 }
 
-// isolateStateHome points XDG_STATE_HOME at a fresh directory for the rest of
-// the process: every Run appends its invocation event there, and a test run's
-// events belong in a directory the suite owns, never in the developer's own
-// events file. The detached workers a test spawns inherit it.
-func isolateStateHome(prefix string) string {
+// isolateXDGHome points the XDG base directory key names at a fresh directory
+// for the rest of the process, and the detached workers a test spawns inherit
+// it. Every Run appends its invocation event under XDG_STATE_HOME, and every
+// statusline write installs lit's cc-candybar plugin under XDG_DATA_HOME: what
+// a test run writes belongs in directories the suite owns, never in the
+// developer's own events file or installed plugin.
+func isolateXDGHome(key, prefix string) string {
 	dir, err := os.MkdirTemp("", prefix)
 	if err != nil {
-		panic("create isolated XDG_STATE_HOME: " + err.Error())
+		panic("create isolated " + key + ": " + err.Error())
 	}
-	if err := os.Setenv("XDG_STATE_HOME", dir); err != nil {
-		panic("set XDG_STATE_HOME: " + err.Error())
+	if err := os.Setenv(key, dir); err != nil {
+		panic("set " + key + ": " + err.Error())
 	}
 	return dir
 }

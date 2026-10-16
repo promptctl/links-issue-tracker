@@ -271,7 +271,7 @@ func Write(loc Location, facts Facts, now time.Time) (Outcome, error) {
 	}
 	payload = append(payload, '\n')
 	if err := replaceFile(loc.File, payload); err != nil {
-		return out, err
+		return out, fmt.Errorf("write statusline file: %w", err)
 	}
 	out.Replaced = replaced
 	out.Changed = changedSlots(before, written)
@@ -338,17 +338,19 @@ func ensureExcluded(path string) (bool, error) {
 	return true, nil
 }
 
-// replaceFile writes payload to a temporary sibling and renames it over path.
-// There is no fsync: the file is rebuilt from the next command's facts, so a
-// crash that loses the newest version costs nothing a sync would be worth.
+// replaceFile writes payload to a temporary sibling and renames it over path,
+// creating path's directory if it is missing. There is no fsync: each file it
+// writes is rewritten by the next command that writes it, so a crash that
+// loses the newest version costs nothing a sync would be worth. Its errors name
+// the step that failed; the caller says which file it was writing.
 func replaceFile(path string, payload []byte) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("create statusline directory: %w", err)
+		return fmt.Errorf("create directory: %w", err)
 	}
 	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".*")
 	if err != nil {
-		return fmt.Errorf("create statusline temp file: %w", err)
+		return fmt.Errorf("create temp file: %w", err)
 	}
 	_, writeErr := tmp.Write(payload)
 	err = errors.Join(writeErr, tmp.Close(), os.Chmod(tmp.Name(), 0o644))
@@ -356,7 +358,7 @@ func replaceFile(path string, payload []byte) error {
 		err = os.Rename(tmp.Name(), path)
 	}
 	if err != nil {
-		return errors.Join(fmt.Errorf("write statusline file: %w", err), removeIfPresent(tmp.Name()))
+		return errors.Join(err, removeIfPresent(tmp.Name()))
 	}
 	return nil
 }
