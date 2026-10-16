@@ -266,6 +266,12 @@ type migrationState struct {
 	registryMaxVers int64
 }
 
+// schemaSupport is this binary's schema support as the classified state saw
+// it: the registry's baseline through its highest migration.
+func (st migrationState) schemaSupport() version.SchemaSupport {
+	return version.SchemaSupport{Min: baselineVersion, Max: st.registryMaxVers}
+}
+
 // willMutate reports whether this Open will write. Fresh and adopt always
 // write (baseline apply / version stamp); a managed workspace writes only when
 // it trails the registry. The snapshot guard fires exactly when this is true.

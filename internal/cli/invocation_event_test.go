@@ -18,6 +18,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
+	"github.com/promptctl/links-issue-tracker/internal/version"
 	"github.com/promptctl/primitives/filelock"
 )
 
@@ -422,5 +423,36 @@ func TestASchemaAheadRefusalRecordsItsRollbackOffer(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A downgrade refused for want of schema support records the span it was asked
+// to reverse and the support that does not cover it, wrapped or not.
+func TestASpanUnsupportedDowngradeRecordsItsSpanAndSupport(t *testing.T) {
+	refusal := &store.DowngradeSpanUnsupportedError{Current: 10, Target: 8, Support: version.SchemaSupport{Min: 1, Max: 9}}
+	end := invocationEnd(time.Now(), fmt.Errorf("downgrade: %w", refusal), nil)
+	line, err := telemetry.Line(telemetry.Begin(telemetry.Event{}).Finish(end))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var written struct {
+		Reason string         `json:"reason"`
+		Facts  map[string]any `json:"facts"`
+	}
+	if err := json.Unmarshal(line, &written); err != nil {
+		t.Fatal(err)
+	}
+	if written.Reason != string(reasonValidationRefused) {
+		t.Errorf("reason = %q, want %q", written.Reason, reasonValidationRefused)
+	}
+	for key, want := range map[string]float64{
+		"downgrade.workspace_schema":   10,
+		"downgrade.target_schema":      8,
+		"downgrade.schema_support_min": 1,
+		"downgrade.schema_support_max": 9,
+	} {
+		if got, ok := written.Facts[key]; !ok || got != want {
+			t.Errorf("facts.%s = %#v (present %v), want %v", key, got, ok, want)
+		}
 	}
 }

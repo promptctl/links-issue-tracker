@@ -112,9 +112,11 @@ type Info struct {
 // migration. Both are derived from internal/store/migrations at call time.
 //
 // [LAW:one-source-of-truth] These bounds are the same numbers the migration
-// runner uses to decide forward-compat. Code that needs the bounds reads them
-// from internal/store/migrations directly; this struct exists to expose them
-// alongside the binary identity, not as a parallel source.
+// runner uses to decide forward-compat; every holder of a SchemaSupport builds
+// it from internal/store/migrations, never from a parallel source.
+// [LAW:single-enforcer] Covers is the one answer to whether a binary can
+// reverse a span: `lit downgrade` refuses on it and `lit upgrade` picks its
+// remedy on it.
 type SchemaSupport struct {
 	Min int64 `json:"min"`
 	Max int64 `json:"max"`

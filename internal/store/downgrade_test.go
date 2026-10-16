@@ -10,10 +10,10 @@ import (
 	"testing"
 
 	"github.com/pressly/goose/v3"
-	"github.com/pressly/goose/v3/database"
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
 	"github.com/promptctl/links-issue-tracker/internal/doltcli"
 	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
+	"github.com/promptctl/links-issue-tracker/internal/version"
 )
 
 // openWorkspaceForDowngrade opens a fresh workspace at registry-max — every
@@ -195,11 +195,9 @@ func TestDowngradeBelowBaselineRefused(t *testing.T) {
 // DowngradeRollbackError naming the snapshot, and the snapshot exists on disk
 // for `lit snapshots restore` to consume.
 //
-// To exercise a failing Down without a multi-migration registry we (a) seed a
-// fake "applied" row in goose_db_version one above registry-max so the
-// classify step admits us into the loop, and (b) inject a Down hook that
-// returns a real-looking error. The hook is invoked AFTER the snapshot guard
-// fires, so DowngradeRollbackError must wrap the failure.
+// The span (registry-max down to registry-max-1) is one this binary covers, so
+// the refusals admit it into the loop; the injected Down hook then fails AFTER
+// the snapshot guard fires, so DowngradeRollbackError must wrap the failure.
 func TestDowngradeRollbackOnFailure(t *testing.T) {
 	// serial: no t.Parallel — installs the package-level migrationDownForTest
 	// hook.
@@ -210,9 +208,6 @@ func TestDowngradeRollbackOnFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MaxVersion() = %v", err)
 	}
-	// Stamp one fake version above the registry so applyDownMigrations enters
-	// the loop with current > target and the hook runs at least once.
-	stampGooseVersion(t, ctx, st, registryMax+1)
 
 	want := errors.New("synthetic down failure")
 	migrationDownForTest = func(ctx context.Context, _ *goose.Provider) (*goose.MigrationResult, error) {
@@ -220,7 +215,7 @@ func TestDowngradeRollbackOnFailure(t *testing.T) {
 	}
 	t.Cleanup(func() { migrationDownForTest = nil })
 
-	err = st.Downgrade(ctx, registryMax)
+	err = st.Downgrade(ctx, registryMax-1)
 	var rb *DowngradeRollbackError
 	if !errors.As(err, &rb) {
 		t.Fatalf("err = %v, want *DowngradeRollbackError", err)
@@ -243,13 +238,12 @@ func TestDowngradeRollbackOnFailure(t *testing.T) {
 // applied above target, every Down runs, recorded version lands at target,
 // one Dolt commit per reversed migration.
 //
-// We simulate the multi-step world the registry will reach later: stamp two
-// fake versions above target, inject a Down hook that "reverses" the highest
-// applied row, and assert (a) the recorded version walks down to target, and
-// (b) the dolt log carries the expected per-step commit messages.
+// It reverses the registry's top two migrations with their real Down
+// sections — a span this binary covers — and asserts (a) the recorded version
+// walks down to target, and (b) the dolt log carries one commit per reversed
+// file, named by the registry's own file names.
 func TestDowngradeHappyPathSteppedAndCommitted(t *testing.T) {
-	// serial: no t.Parallel — installs the package-level migrationDownForTest
-	// hook.
+	t.Parallel()
 	ctx := context.Background()
 	st, doltRoot := openWorkspaceForDowngrade(t)
 
@@ -257,59 +251,43 @@ func TestDowngradeHappyPathSteppedAndCommitted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MaxVersion() = %v", err)
 	}
-	vA, vB := registryMax+1, registryMax+2
-	stampGooseVersion(t, ctx, st, vA)
-	stampGooseVersion(t, ctx, st, vB)
-	if err := st.commitWorkingSet(ctx, "test: seed fake applied versions"); err != nil {
-		t.Fatalf("commit seed = %v", err)
-	}
-
-	migrationDownForTest = func(ctx context.Context, _ *goose.Provider) (*goose.MigrationResult, error) {
-		current, err := st.recordedMigrationVersion(ctx)
-		if err != nil {
-			return nil, err
-		}
-		gs, err := database.NewStore(goose.DialectMySQL, gooseVersionTable)
-		if err != nil {
-			return nil, err
-		}
-		if err := gs.Delete(ctx, st.db, current); err != nil {
-			return nil, err
-		}
-		return &goose.MigrationResult{
-			Source: &goose.Source{
-				Version: current,
-				Path:    fmt.Sprintf("/test/%05d_fake.sql", current),
-			},
-		}, nil
-	}
-	t.Cleanup(func() { migrationDownForTest = nil })
-
-	if err := st.Downgrade(ctx, registryMax); err != nil {
-		t.Fatalf("Downgrade(%d) = %v, want nil", registryMax, err)
+	target := registryMax - 2
+	before := snapshotCount(t, doltRoot)
+	if err := st.Downgrade(ctx, target); err != nil {
+		t.Fatalf("Downgrade(%d) = %v, want nil", target, err)
 	}
 	got, err := st.recordedMigrationVersion(ctx)
 	if err != nil {
 		t.Fatalf("recordedMigrationVersion() = %v", err)
 	}
-	if got != registryMax {
-		t.Fatalf("recorded version after downgrade = %d, want %d", got, registryMax)
+	if got != target {
+		t.Fatalf("recorded version after downgrade = %d, want %d", got, target)
 	}
-	// Happy path must take exactly one downgrade snapshot on top of Open's
-	// migration snapshot.
-	if delta := snapshotCount(t, doltRoot) - 1; delta != 1 {
-		t.Fatalf("happy-path took %d snapshot(s) above the migration snapshot; want exactly 1",
-			delta)
+	if delta := snapshotCount(t, doltRoot) - before; delta != 1 {
+		t.Fatalf("happy-path took %d snapshot(s); want exactly 1", delta)
 	}
 	log, err := doltcli.Run(ctx, filepath.Join(doltRoot, "links"), "log", "--oneline")
 	if err != nil {
 		t.Fatalf("dolt log = %v", err)
 	}
-	for _, v := range []int64{vA, vB} {
-		want := fmt.Sprintf("downgrade: revert v%d %05d_fake.sql", v, v)
+	entries, err := migrations.FS.ReadDir(".")
+	if err != nil {
+		t.Fatalf("read migration registry: %v", err)
+	}
+	reverted := 0
+	for _, e := range entries {
+		v, ok := migrations.ParseVersion(e.Name())
+		if !ok || v <= target {
+			continue
+		}
+		reverted++
+		want := fmt.Sprintf("downgrade: revert v%d %s", v, e.Name())
 		if !strings.Contains(log, want) {
 			t.Fatalf("dolt log missing per-step commit %q:\n%s", want, log)
 		}
+	}
+	if reverted != 2 {
+		t.Fatalf("registry holds %d migration(s) above v%d, want 2 — the span under test", reverted, target)
 	}
 }
 
@@ -327,16 +305,12 @@ func TestDowngradeIncompleteWhenGooseExhausted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MaxVersion() = %v", err)
 	}
-	stampGooseVersion(t, ctx, st, registryMax+1)
-	if err := st.commitWorkingSet(ctx, "test: seed fake version"); err != nil {
-		t.Fatalf("commit seed = %v", err)
-	}
 	migrationDownForTest = func(ctx context.Context, _ *goose.Provider) (*goose.MigrationResult, error) {
 		return nil, goose.ErrNoNextVersion
 	}
 	t.Cleanup(func() { migrationDownForTest = nil })
 
-	err = st.Downgrade(ctx, registryMax)
+	err = st.Downgrade(ctx, registryMax-1)
 	var rb *DowngradeRollbackError
 	if !errors.As(err, &rb) {
 		t.Fatalf("err = %v, want *DowngradeRollbackError wrapping DowngradeIncompleteError", err)
@@ -345,9 +319,46 @@ func TestDowngradeIncompleteWhenGooseExhausted(t *testing.T) {
 	if !errors.As(rb.Cause, &incomplete) {
 		t.Fatalf("rb.Cause = %v, want *DowngradeIncompleteError", rb.Cause)
 	}
-	if incomplete.Current != registryMax+1 || incomplete.Target != registryMax {
+	if incomplete.Current != registryMax || incomplete.Target != registryMax-1 {
 		t.Fatalf("incomplete = {Current:%d Target:%d}, want {%d %d}",
-			incomplete.Current, incomplete.Target, registryMax+1, registryMax)
+			incomplete.Current, incomplete.Target, registryMax, registryMax-1)
+	}
+}
+
+// TestDowngradeSpanUnsupportedRefused pins the refusal for a workspace a newer
+// lit migrated: this binary opens it (its baseline is intact) but does not
+// carry the down-migrations above its own registry, so Downgrade refuses with
+// the span and this binary's support, before any snapshot is taken.
+func TestDowngradeSpanUnsupportedRefused(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	ahead := stampGooseVersionAhead(t, ctx, doltRoot)
+	st, err := Open(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open() on a workspace past the registry = %v, want it to open", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	registryMax, err := migrations.MaxVersion()
+	if err != nil {
+		t.Fatalf("MaxVersion() = %v", err)
+	}
+
+	before := snapshotCount(t, doltRoot)
+	err = st.Downgrade(ctx, registryMax)
+	var unsupported *DowngradeSpanUnsupportedError
+	if !errors.As(err, &unsupported) {
+		t.Fatalf("err = %v, want *DowngradeSpanUnsupportedError", err)
+	}
+	want := DowngradeSpanUnsupportedError{Current: ahead, Target: registryMax, Support: version.SchemaSupport{Min: baselineVersion, Max: registryMax}}
+	if *unsupported != want {
+		t.Fatalf("err fields = %+v, want %+v", *unsupported, want)
+	}
+	if delta := snapshotCount(t, doltRoot) - before; delta != 0 {
+		t.Fatalf("span-unsupported refusal took %d snapshot(s); want 0", delta)
+	}
+	if got, err := st.recordedMigrationVersion(ctx); err != nil || got != ahead {
+		t.Fatalf("recorded version after refusal = %d, %v; want %d untouched", got, err, ahead)
 	}
 }
 
@@ -456,20 +467,6 @@ func TestDowngradeRequiresGooseManaged(t *testing.T) {
 	var rb *DowngradeRollbackError
 	if errors.As(err, &rb) {
 		t.Fatalf("phase refusal must not produce DowngradeRollbackError: %v", rb)
-	}
-}
-
-// stampGooseVersion inserts a fake applied row into goose_db_version at
-// `version`. Used by tests that need to simulate "applied above registry-max"
-// without standing up a real second migration.
-func stampGooseVersion(t *testing.T, ctx context.Context, st *Store, version int64) {
-	t.Helper()
-	gs, err := database.NewStore(goose.DialectMySQL, gooseVersionTable)
-	if err != nil {
-		t.Fatalf("goose store = %v", err)
-	}
-	if err := gs.Insert(ctx, st.db, database.InsertRequest{Version: version}); err != nil {
-		t.Fatalf("stamp goose version %d: %v", version, err)
 	}
 }
 
