@@ -53,7 +53,7 @@ func snapshotCount(t *testing.T, doltRoot string) int {
 			t.Fatalf("stranded producer artifact in snapshots dir: %s", e.Name())
 		}
 	}
-	list, err := dbsnapshot.List(dir)
+	list, err := dbsnapshot.List(doltRoot)
 	if err != nil {
 		t.Fatalf("list snapshots: %v", err)
 	}

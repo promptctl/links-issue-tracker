@@ -453,7 +453,7 @@ Fields (`sync_schema_guard.go`): `Remote`, `Branch`, `RemoteVersion int64`, `Bin
 1. `s.guardCommitSchemaAhead(ctx, remote, branch, remoteHead)` — **before any write**, using the captured `remoteHead` so a concurrent fetch cannot shift the decision.
 2. `s.sweepStaleReconcileScratch(ctx)`.
 3. `scratchBranch := newReconcileScratch()`.
-4. `guard := newSnapshotGuard(s.doltRootDir, dbsnapshot.DirFor(s.doltRootDir), formatReconcileSnapshotLabel(time.Now()))` — **one** guard carried across all retries, so exactly one snapshot is taken however many attempts run.
+4. `guard := newSnapshotGuard(s.doltRootDir, formatReconcileSnapshotLabel(time.Now()))` — **one** guard carried across all retries, so exactly one snapshot is taken however many attempts run.
 5. `retryTransientGCContention(body, s.reconnect)`.
 
 `sweepStaleReconcileScratch(ctx)` (`sync_reconcile.go`): `SELECT name FROM dolt_branches WHERE name LIKE ?` with `"links-reconcile-scratch-%"`; every match is deleted with `CALL DOLT_BRANCH('-D', name)`. Every failure (list, scan, iterate, delete) prints to stderr with the messages at `sync_reconcile.go` and **never fails the reconcile**. The commit lock guarantees every such branch is an orphan (`sync_reconcile.go`).
@@ -546,7 +546,7 @@ Errors: `"read folded chain %s..%s: %w"`, `"scan folded chain commit: %w"`, `"it
 10. **Snapshot-first**: `guard.ensure(ctx)`; failure → `"snapshot before reconcile: %w"`, aborting **before** the data branch moves (`sync_reconcile.go`).
 11. `CALL DOLT_CHECKOUT(dataBranch)`; error `"return to data branch %q: %w"`.
 12. `CALL DOLT_RESET('--hard', replayedCommit)` — **the single atomic advance of the data branch**; error `"advance %q to replayed commit: %w"` (`sync_reconcile.go`).
-13. `dbsnapshot.PruneMatching(dbsnapshot.DirFor(s.doltRootDir), 10, IsReconcileSnapshotName)`. A failure prints `"lit: reconcile could not prune old recovery snapshots (replay already committed): %v"` to stderr and is **not** promoted — the replay already committed (`sync_reconcile.go`).
+13. `dbsnapshot.PruneMatching(s.doltRootDir, 10, IsReconcileSnapshotName)`. A failure prints `"lit: reconcile could not prune old recovery snapshots (replay already committed): %v"` to stderr and is **not** promoted — the replay already committed (`sync_reconcile.go`).
 14. Return `replayLanding{replayed, rehomed}`.
 
 Invariant: the data branch is at its pre-reconcile head before step 12 and at the complete replayed spine after — never in between.
@@ -638,7 +638,7 @@ Test `TestSyncResolveUnrelatedOwnerApprovalBindsForkAndSide` (`sync_unrelated_te
 `takeRemoteHead(ctx, result, guard, trackingRef)` (`sync_unrelated_take.go`):
 1. `guard.ensure(ctx)`; failure → `"snapshot before take-remote: %w"`.
 2. `resetHardToRef(ctx, s.db, trackingRef)`.
-3. `dbsnapshot.PruneMatching(dbsnapshot.DirFor(...), 10, IsReconcileSnapshotName)`; failure prints `"lit: take-remote could not prune old recovery snapshots (reset already done): %v"` to stderr, **not** promoted.
+3. `dbsnapshot.PruneMatching(s.doltRootDir, 10, IsReconcileSnapshotName)`; failure prints `"lit: take-remote could not prune old recovery snapshots (reset already done): %v"` to stderr, **not** promoted.
 4. `result.State = SyncReconcileTookRemote`.
 Idempotent under retry (cached snapshot, fixed ref). The session's working set is left at the adopted head's own schema; the next `Open` lifts it. Tests `TestSyncResolveUnrelatedTakeRemote` (`sync_unrelated_test.go`), `TestSyncResolveUnrelatedTakeRemoteAdoptsAPrePurgeRemote` "nothing to carry" (`sync_unrelated_purge_test.go`).
 
@@ -755,10 +755,10 @@ Test hooks: `migrationUpByOneForTest` (`migration_runner.go`) applies **only** t
 ### 8.3 `migrate` — the outer boundary
 
 `(*Store).migrate(ctx)` (`migration_runner.go`):
-1. `guard := newSnapshotGuard(s.doltRootDir, dbsnapshot.DirFor(s.doltRootDir), formatMigrationSnapshotLabel(time.Now()))`.
+1. `guard := newSnapshotGuard(s.doltRootDir, formatMigrationSnapshotLabel(time.Now()))`.
 2. `s.runMigration(ctx, guard)`.
 3. On error: if `guard.took()` → wrap as `&MigrationRollbackError{Snapshot: snap, Cause: err}`; otherwise return the raw error (`migration_runner.go`).
-4. On success: if a snapshot was taken → `dbsnapshot.PruneMatching(guard.snapshotsDir, 10, IsMigrationSnapshotName)`; a prune failure **is** promoted here: `"prune migration snapshots: %w"` (`migration_runner.go`).
+4. On success: if a snapshot was taken → `dbsnapshot.PruneMatching(s.doltRootDir, 10, IsMigrationSnapshotName)`; a prune failure **is** promoted here: `"prune migration snapshots: %w"` (`migration_runner.go`).
 
 ### 8.4 `runMigration` — the full sequence
 
@@ -940,7 +940,7 @@ Tests: `TestPreGooseAdoptionStampsWithoutRerunningBaseline` (`migration_runner_t
 
 ### 8.12 Rollback snapshot search
 
-`searchRollbackSnapshot(ctx, maxSupported)` (`migrate_snapshot.go`) returns a `rollbackSearch{snapshot string; examined, unreadable int; err error}`. `dbsnapshot.List(dbsnapshot.DirFor(s.doltRootDir))`; a listing error → `err: "list snapshots: %w"`. For each entry passing `IsMigrationSnapshotName`, newest first: `snapshotOperable`; then a canceled `ctx` → `"stopped looking for a rollback snapshot: %w"` ends the search, counting nothing for that entry; otherwise `examined++`, and an error → `unreadable++`, `"read the schema snapshot %s holds: %w"` kept, the entry passed over; the first operable entry is the `snapshot`. The kept errors are joined into `err`.
+`searchRollbackSnapshot(ctx, maxSupported)` (`migrate_snapshot.go`) returns a `rollbackSearch{snapshot string; examined, unreadable int; err error}`. `dbsnapshot.List(s.doltRootDir)`; a listing error → `err: "list snapshots: %w"`. For each entry passing `IsMigrationSnapshotName`, newest first: `snapshotOperable`; then a canceled `ctx` → `"stopped looking for a rollback snapshot: %w"` ends the search, counting nothing for that entry; otherwise `examined++`, and an error → `unreadable++`, `"read the schema snapshot %s holds: %w"` kept, the entry passed over; the first operable entry is the `snapshot`. The kept errors are joined into `err`.
 
 `snapshotOperable(ctx, snapshotPath, workspaceID, maxSupported)` (`migrate_snapshot.go`): `openStoreConnection(ctx, snapshotPath, workspaceID, engineRead)` on the snapshot in place, then `classifyMigrationState`: `phaseFresh` → false; `appliedVersion <= maxSupported` → true; otherwise `baselineCarried`. The store is closed and a close error joined. Dolt rewrites the snapshot's journal bookkeeping (`journal.idx`, `manifest`, the journal file) on that open; the data it holds is unchanged.
 
@@ -993,9 +993,9 @@ Tests: `TestIsMigrationSnapshotNameRejectsUserCollisions` (`migrate_snapshot_tes
 
 ### 9.2 `snapshotGuard`
 
-`snapshotGuard{databaseDir, snapshotsDir, label string; taken *dbsnapshot.Snapshot}` (`migrate_snapshot.go`); `newSnapshotGuard` (`migrate_snapshot.go`).
+`snapshotGuard{databaseDir, label string; taken *dbsnapshot.Snapshot}` (`migrate_snapshot.go`); `newSnapshotGuard` (`migrate_snapshot.go`).
 
-`ensure(ctx)` (`migrate_snapshot.go`): if `taken != nil` return the cached snapshot. Otherwise `dbsnapshot.Take(ctx, databaseDir, snapshotsDir, label)`; failure → `"snapshot before migration: %w"`. **Idempotent within one invocation** — this is what makes exactly one snapshot per reconcile survive N GC-contention retries.
+`ensure(ctx)` (`migrate_snapshot.go`): if `taken != nil` return the cached snapshot. Otherwise `dbsnapshot.Take(ctx, databaseDir, label)`; failure → `"snapshot before migration: %w"`. **Idempotent within one invocation** — this is what makes exactly one snapshot per reconcile survive N GC-contention retries.
 
 `took()` (`migrate_snapshot.go`): `(Snapshot, bool)` discriminating "we have a recovery point" from "no mutation happened".
 
@@ -1684,15 +1684,15 @@ External dependency `github.com/promptctl/primitives/filelock` (`snapshot.go`, `
 - `type Snapshot struct { Path string \`json:"path"\`; Name string \`json:"name"\`; Created time.Time \`json:"created"\` }` — `snapshot.go`
 - `var ErrSnapshotMissing = errors.New("dbsnapshot: snapshot not found")` — `snapshot.go`
 - `var ErrSnapshotsBusy = errors.New("snapshot producer beacon busy")` — `snapshot.go`
-- `func Take(ctx context.Context, databaseDir, snapshotsDir, label string) (Snapshot, error)` — `snapshot.go`
-- `func List(snapshotsDir string) ([]Snapshot, error)` — `snapshot.go`
-- `func Restore(databaseDir, snapshotsDir, name string) (string, error)` — `snapshot.go`
-- `func Prune(snapshotsDir string, keep int) error` — `snapshot.go`
-- `func PruneMatching(snapshotsDir string, keep int, match func(name string) bool) error` — `snapshot.go`
+- `func DirFor(databaseDir string) string` — `snapshot.go`
+- `func Take(ctx context.Context, databaseDir, label string) (Snapshot, error)` — `snapshot.go`
+- `func List(databaseDir string) ([]Snapshot, error)` — `snapshot.go`
+- `func Restore(databaseDir, name string) (string, error)` — `snapshot.go`
+- `func Prune(databaseDir string, keep int) error` — `snapshot.go`
+- `func PruneMatching(databaseDir string, keep int, match func(name string) bool) error` — `snapshot.go`
 - `func IsProducerArtifactName(name string) bool` — `snapshot.go`
-- `func CollectOrphanedResidue(snapshotsDir string) error` — `residue.go`
 
-Unexported: `reservedPaths{created time.Time; name, finalPath, tmpPath, reservePath string}` (`snapshot.go`); `producerBeaconPath`; `reserveSnapshotPaths`; `pathFree`; `formatName`; `validateSnapshotName`; `isCollectibleResidue`; `isCollectibleArtifactName`; `isCollectorCondemnedName`; `parseName`; `parsePositiveDigits`; `isMintableLabel`; `sanitizeLabel`; `isDoltJournalLockRel`; `walkAndCopy`; `plainFileCopy`; `copyWithContext`; `condemnResidue` (`residue.go`); `ficloneOrCopy` (Linux, `clone_linux.go`).
+Unexported: `reservedPaths{created time.Time; name, finalPath, tmpPath, reservePath string}` (`snapshot.go`); `producerBeaconPath`; `reserveSnapshotPaths`; `pathFree`; `formatName`; `validateSnapshotName`; `isCollectibleResidue`; `isCollectibleArtifactName`; `isCollectorCondemnedName`; `parseName`; `parsePositiveDigits`; `isMintableLabel`; `sanitizeLabel`; `isDoltJournalLockRel`; `walkAndCopy`; `plainFileCopy`; `copyWithContext`; `collectOrphanedResidue`, `condemnResidue` (`residue.go`); `ficloneOrCopy` (Linux, `clone_linux.go`).
 
 ### 13.3 Constants
 
@@ -1711,7 +1711,7 @@ Unexported: `reservedPaths{created time.Time; name, finalPath, tmpPath, reserveP
 
 ### 13.4 On-disk layout
 
-A snapshot is a **directory** directly under `snapshotsDir`, named `<unix-ns>` or `<unix-ns>-<label>`:
+A snapshot is a **directory** directly under `DirFor(databaseDir)` (`snapshotsDir` below), named `<unix-ns>` or `<unix-ns>-<label>`:
 - Base component is `strconv.FormatInt(t.UnixNano(), 10)` — decimal nanoseconds since the Unix epoch, no padding (`snapshot.go`).
 - `t` is `time.Now().UTC()` at reservation, possibly incremented by whole nanoseconds on collision (`snapshot.go`).
 - Non-empty sanitized label → `base + "-" + clean` (`snapshot.go`).
@@ -1725,7 +1725,7 @@ Sibling artifact names in the same directory:
 
 Restore-time artifact, created next to the database dir (**not** in `snapshotsDir`): `<databaseDir>.pre-restore-<unix-ns>` via `fmt.Sprintf("%s.pre-restore-%d", databaseDir, time.Now().UTC().UnixNano())` (`snapshot.go`).
 
-Where `snapshotsDir` comes from: the CLI (`internal/cli/snapshots.go`) and the store both pass `dbsnapshot.DirFor(databaseDir)` (`internal/dbsnapshot/snapshot.go`).
+Where `snapshotsDir` comes from: no exported function takes a snapshots directory; each one that touches it takes `databaseDir` and derives `snapshotsDir = DirFor(databaseDir)` — the sibling of `databaseDir` named `snapshots` — itself (`internal/dbsnapshot/snapshot.go`); no caller passes a snapshots directory.
 
 ### 13.5 Name grammar — mint side
 
@@ -1756,13 +1756,13 @@ Where `snapshotsDir` comes from: the CLI (`internal/cli/snapshots.go`) and the s
 
 ### 13.7 `Take` — full ordered behavior
 
-`Take(ctx, databaseDir, snapshotsDir, label)` (`snapshot.go`):
+`Take(ctx, databaseDir, label)` (`snapshot.go`):
 
 1. **ctx gate.** `if ctxErr := ctx.Err(); ctxErr != nil { return Snapshot{}, ctxErr }` — the raw ctx error, unwrapped. Exists so Darwin's single-syscall `Clonefile` path cannot mint a snapshot a pre-canceled call should refuse. `snapshot_test.go` asserts `errors.Is(err, context.Canceled)` and that `snapshotsDir` was **not created**.
 2. **Stat source.** `os.Stat(databaseDir)`; error → `"stat database dir: %w"`. `snapshot_test.go` asserts a missing source errors and leaves no `.tmp` entry.
 3. `!info.IsDir()` → `"database dir is not a directory: %s"`.
-4. `os.MkdirAll(snapshotsDir, 0o755)`; error → `"create snapshots dir: %w"`.
-5. **Residue collection.** `CollectOrphanedResidue(snapshotsDir)`; on error prints to **stderr** `"lit: could not collect orphaned snapshot residue (the take proceeds; collection retries next take): %v\n"` and continues — never fails the take. Runs **before** the beacon is held, because holding it shared would make the collector's exclusive probe self-skip. Pinned by `residue_test.go`.
+4. `snapshotsDir := DirFor(databaseDir)`; `os.MkdirAll(snapshotsDir, 0o755)`; error → `"create snapshots dir: %w"`.
+5. **Residue collection.** `collectOrphanedResidue(snapshotsDir)`; on error prints to **stderr** `"lit: could not collect orphaned snapshot residue (the take proceeds; collection retries next take): %v\n"` and continues — never fails the take. Runs **before** the beacon is held, because holding it shared would make the collector's exclusive probe self-skip. Pinned by `residue_test.go`.
 6. **Acquire beacon SHARED.** `filelock.Acquire(ctx, producerBeaconPath(snapshotsDir), false, 20, 50ms)`.
    - Real error → `"acquire snapshot producer beacon: %w"`.
    - Contention after 20 attempts → `"dbsnapshot: residue collection is holding the snapshots directory at %s and did not finish within its budget; retry: %w"` wrapping `ErrSnapshotsBusy`. Total wait bound ≈ 20 × 50 ms = 1s.
@@ -1822,7 +1822,7 @@ Tests: `snapshot_test.go` (reserve, materialize `finalPath`, reserve again → d
 
 ### 13.10 `List`
 
-`snapshot.go`: `os.ReadDir(snapshotsDir)`; `fs.ErrNotExist` → `([]Snapshot{}, nil)` (empty, non-nil slice); any other error → `"read snapshots dir: %w"`. Skips **non-directory** entries — so the beacon file and any regular file is skipped. Skips entries where `parseName(name)` is not ok. Builds `Snapshot{Path: filepath.Join(snapshotsDir, name), Name: name, Created: created}`. Sorts **newest-first** by `Created.After` via non-stable `sort.Slice`.
+`snapshot.go`: `snapshotsDir := DirFor(databaseDir)`; `os.ReadDir(snapshotsDir)`; `fs.ErrNotExist` → `([]Snapshot{}, nil)` (empty, non-nil slice); any other error → `"read snapshots dir: %w"`. Skips **non-directory** entries — so the beacon file and any regular file is skipped. Skips entries where `parseName(name)` is not ok. Builds `Snapshot{Path: filepath.Join(snapshotsDir, name), Name: name, Created: created}`. Sorts **newest-first** by `Created.After` via non-stable `sort.Slice`.
 
 Tests: `snapshot_test.go` (3 takes, newest-first); `snapshot_test.go` (`snap-old-junk` dir, `backup_2024` dir, `README.txt` file → 0 results); `snapshot_test.go` (`1700000000000000000.tmp` and `.reserve` dirs → 0 results).
 
@@ -1830,15 +1830,16 @@ Tests: `snapshot_test.go` (3 takes, newest-first); `snapshot_test.go` (`snap-old
 
 `snapshot.go`, in order:
 1. `validateSnapshotName(name)`; error returned.
-2. `snapshotPath = filepath.Join(snapshotsDir, name)`.
-3. **`os.Lstat`**, not `Stat` — a symlink is not followed. `fs.ErrNotExist` → **bare `ErrSnapshotMissing`**, not wrapped; other error → `"stat snapshot: %w"`.
-4. `!info.Mode().IsDir()` → `"snapshot is not a directory: %s"` — this is what rejects a symlink.
-5. **Rotate the existing database dir.** `os.Stat(databaseDir)`:
+2. `databaseDir = filepath.Clean(databaseDir)` — so a trailing separator cannot make the step-5 rotation path a child of the directory it renames.
+3. `snapshotPath = filepath.Join(DirFor(databaseDir), name)`.
+4. **`os.Lstat`**, not `Stat` — a symlink is not followed. `fs.ErrNotExist` → **bare `ErrSnapshotMissing`**, not wrapped; other error → `"stat snapshot: %w"`.
+5. `!info.Mode().IsDir()` → `"snapshot is not a directory: %s"` — this is what rejects a symlink.
+6. **Rotate the existing database dir.** `os.Stat(databaseDir)`:
    - exists → `rotatedPath = fmt.Sprintf("%s.pre-restore-%d", databaseDir, time.Now().UTC().UnixNano())`, then `os.Rename(databaseDir, rotatedPath)`; rename error → `("", "rotate existing database dir: %w")`.
    - `fs.ErrNotExist` → no rotation, `rotatedPath` stays `""`.
    - other stat error → `("", "stat database dir: %w")`.
-6. `os.Rename(snapshotPath, databaseDir)` — this **moves** the snapshot directory; **the snapshot no longer exists in `snapshotsDir` afterwards**. Error → `(rotatedPath, "install snapshot at database dir: %w")` — note the rotated path *is* returned alongside the error so the caller can undo.
-7. Return `(rotatedPath, nil)`.
+7. `os.Rename(snapshotPath, databaseDir)` — this **moves** the snapshot directory; **the snapshot no longer exists in `snapshotsDir` afterwards**. Error → `(rotatedPath, "install snapshot at database dir: %w")` — note the rotated path *is* returned alongside the error so the caller can undo.
+8. Return `(rotatedPath, nil)`.
 
 `validateSnapshotName` (`snapshot.go`): empty → `"dbsnapshot: snapshot name is empty"`; `name != filepath.Base(name)` → `"dbsnapshot: snapshot name must be a single path component: %q"`; `parseName` not ok → `"dbsnapshot: snapshot name does not match the <unix-ns>[-<label>] scheme: %q"`.
 
@@ -1846,11 +1847,11 @@ Tests: `snapshot_test.go` (round trip — source mutated after the snapshot, sub
 
 ### 13.12 `Prune` / `PruneMatching`
 
-`Prune(snapshotsDir, keep)` = `PruneMatching(snapshotsDir, keep, nil)` (`snapshot.go`).
+`Prune(databaseDir, keep)` = `PruneMatching(databaseDir, keep, nil)` (`snapshot.go`).
 
 `PruneMatching` (`snapshot.go`):
 1. `keep <= 0` → `"dbsnapshot: keep must be > 0"`.
-2. `List(snapshotsDir)`; error propagated verbatim.
+2. `List(databaseDir)`; error propagated verbatim.
 3. `match == nil` ⇒ every snapshot matches; otherwise filter by `match(s.Name)` **preserving newest-first order**.
 4. `len(matched) <= keep` → nil, nothing removed.
 5. For each `matched[keep:]` (the oldest), `os.RemoveAll(snapshot.Path)`; the first error → `"remove snapshot %s: %w"`, aborting the rest.
@@ -1871,7 +1872,7 @@ This is the mechanism behind the three disjoint store-side retention budgets (`m
 
 The design rule stated in-code (`snapshot.go`): **reject broadly (`IsProducerArtifactName`), delete narrowly (`isCollectibleResidue`)** — a foreign `backup.tmp` or `backup.condemned` an operator parked in the directory is untouchable, because a suffix is never provenance over a directory lit does not own.
 
-**`CollectOrphanedResidue`** (`residue.go`):
+**`collectOrphanedResidue(snapshotsDir)`** (`residue.go`; its one caller is `Take`):
 1. `os.Stat(snapshotsDir)`: `fs.ErrNotExist` → `nil` (no-op; probing the beacon would otherwise create the directory as a side effect); other error → `"stat snapshots dir: %w"`.
 2. `filelock.Acquire(context.Background(), producerBeaconPath(snapshotsDir), true /*exclusive*/, 1 /*attempt*/, 0 /*delay*/)` — a single non-sleeping probe.
    - Real error → `"probe snapshot producer beacon: %w"`.
@@ -1895,7 +1896,7 @@ The design rule stated in-code (`snapshot.go`): **reject broadly (`IsProducerArt
 - `residue_test.go`: residue whose label is 300 `x` (truncated by `formatName`) is still condemnable and collected — the condemnation rename stays inside NAME_MAX.
 - `residue_test.go`: stamp reuse — a fresh `<stamp>.tmp` plus an old `<stamp>.tmp.1700000000000000001.condemned` are both removed by one collection.
 - `residue_test.go`: with `nested` chmod'd to `0555` so the corpse cannot be removed, `Take` still succeeds and the snapshot exists (skipped when `os.Getuid() == 0`).
-- `residue_test.go`: the same unremovable-corpse setup makes `CollectOrphanedResidue` return a non-nil error whose text contains `"condemned"`; after fixing permissions, the next collection succeeds (convergence). Also skipped as root.
+- `residue_test.go`: the same unremovable-corpse setup makes `collectOrphanedResidue` return a non-nil error whose text contains `"condemned"`; after fixing permissions, the next collection succeeds (convergence). Also skipped as root.
 - `residue_test.go` `restoreCondemnedPerms` re-chmods `*.condemned/nested` and `*.tmp/nested` back to 0755 for TempDir cleanup.
 
 ### 13.14 Complete error/abort catalog for `dbsnapshot`

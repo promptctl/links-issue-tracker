@@ -316,11 +316,7 @@ func (st migrationState) willMutate() bool {
 // [LAW:single-enforcer] Store-level Open routes all schema convergence through
 // this one boundary; the snapshot/prune budget lives here, not at callsites.
 func (s *Store) migrate(ctx context.Context) error {
-	guard := newSnapshotGuard(
-		s.doltRootDir,
-		dbsnapshot.DirFor(s.doltRootDir),
-		formatMigrationSnapshotLabel(time.Now()),
-	)
+	guard := newSnapshotGuard(s.doltRootDir, formatMigrationSnapshotLabel(time.Now()))
 	if err := s.runMigration(ctx, guard); err != nil {
 		if snap, ok := guard.took(); ok {
 			return &MigrationRollbackError{Snapshot: snap, Cause: err}
@@ -331,7 +327,7 @@ func (s *Store) migrate(ctx context.Context) error {
 		// [LAW:one-source-of-truth] Migration retention bounds migration
 		// snapshots only; user snapshots share the directory under an
 		// independent budget. IsMigrationSnapshotName is the kind discriminator.
-		if err := dbsnapshot.PruneMatching(guard.snapshotsDir, migrationSnapshotRetention, IsMigrationSnapshotName); err != nil {
+		if err := dbsnapshot.PruneMatching(s.doltRootDir, migrationSnapshotRetention, IsMigrationSnapshotName); err != nil {
 			return fmt.Errorf("prune migration snapshots: %w", err)
 		}
 	}
