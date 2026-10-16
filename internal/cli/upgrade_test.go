@@ -14,11 +14,15 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/engine"
 	"github.com/promptctl/links-issue-tracker/internal/release"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/version"
 )
 
@@ -50,22 +54,17 @@ func TestAppliedVersionFromOpenErr(t *testing.T) {
 	}
 }
 
-// stubSchemaReader returns a fixed workspace schema — no Dolt. The upgrade
-// pipeline reads it once to decide the backward-move refusal and which
-// remediation the refusal names.
+// stubSchemaReader returns a fixed applied schema version — no Dolt. The
+// upgrade pipeline reads it once to decide the backward-move refusal.
 type stubSchemaReader struct {
-	version  int64
-	openable bool
-	err      error
-	called   bool
+	version int64
+	err     error
+	called  bool
 }
 
-func (s *stubSchemaReader) ReadWorkspaceSchema(_ context.Context) (workspaceSchema, error) {
+func (s *stubSchemaReader) AppliedSchemaVersion(_ context.Context) (int64, error) {
 	s.called = true
-	if s.err != nil {
-		return workspaceSchema{}, s.err
-	}
-	return workspaceSchema{AppliedVersion: s.version, Openable: s.openable}, nil
+	return s.version, s.err
 }
 
 // newFakeTarget (downgrade_test.go) reports Schema{Min:1, Max:3}. A workspace at
@@ -73,7 +72,7 @@ func (s *stubSchemaReader) ReadWorkspaceSchema(_ context.Context) (workspaceSche
 func TestRunUpgradeWithHappyPath(t *testing.T) {
 	t.Parallel()
 	res := &stubResolver{target: newFakeTarget()}
-	sr := &stubSchemaReader{version: 2, openable: true}
+	sr := &stubSchemaReader{version: 2}
 	inst := &stubInstaller{}
 	var out bytes.Buffer
 	err := runUpgradeWith(context.Background(), &out, sr, []string{"--to", "v0.9.0"}, olderCurrentInfo(), res, inst, fixedBinPath("/usr/local/bin/lit", nil))
@@ -102,38 +101,40 @@ func TestRunUpgradeWithHappyPath(t *testing.T) {
 	}
 }
 
-// A target below the workspace, when this binary CAN open the workspace, is a
-// plain backward move: refuse before installing, and name lit downgrade (which
-// can run here — it reverses the schema, then installs the older binary).
-func TestRunUpgradeWithTargetBehindOpenableNamesDowngrade(t *testing.T) {
+// A target below the workspace, when this binary's schema support reaches the
+// workspace, is a plain backward move: refuse before installing, and name lit
+// downgrade (which can run here — this binary holds the down-migrations, so it
+// reverses the schema, then installs the older binary).
+func TestRunUpgradeWithTargetBehindWithinRunningSupportNamesDowngrade(t *testing.T) {
 	t.Parallel()
-	res := &stubResolver{target: newFakeTarget()}       // Schema.Max == 3
-	sr := &stubSchemaReader{version: 5, openable: true} // workspace ahead of the target, but openable
+	res := &stubResolver{target: newFakeTarget()} // Schema.Max == 3
+	sr := &stubSchemaReader{version: 5}           // workspace ahead of the target
+	current := version.Info{Version: "0.3.0", Schema: version.SchemaSupport{Min: 1, Max: 5}}
 	inst := &stubInstaller{}
 	var out bytes.Buffer
-	err := runUpgradeWith(context.Background(), &out, sr, []string{"--to", "v0.9.0"}, olderCurrentInfo(), res, inst, fixedBinPath("/p/lit", nil))
+	err := runUpgradeWith(context.Background(), &out, sr, []string{"--to", "v0.9.0"}, current, res, inst, fixedBinPath("/p/lit", nil))
 	var behind *UpgradeTargetBehindError
 	if !errors.As(err, &behind) {
 		t.Fatalf("err = %v (%T); want *UpgradeTargetBehindError", err, err)
 	}
-	if behind.Current != 5 || behind.Target != 3 || !behind.WorkspaceOpenable {
-		t.Errorf("err fields = {Current:%d Target:%d Openable:%v}; want {5 3 true}", behind.Current, behind.Target, behind.WorkspaceOpenable)
+	if behind.Current != 5 || behind.Target != 3 || behind.RunningMax != 5 {
+		t.Errorf("err fields = {Current:%d Target:%d RunningMax:%d}; want {5 3 5}", behind.Current, behind.Target, behind.RunningMax)
 	}
 	if !strings.Contains(behind.Error(), "lit downgrade --to v0.9.0") {
-		t.Errorf("openable backward-move error must name lit downgrade: %q", behind.Error())
+		t.Errorf("a backward move within this binary's schema support must name lit downgrade: %q", behind.Error())
 	}
 	if inst.called {
 		t.Error("installer must not run when the target is behind the workspace")
 	}
 }
 
-// A target below the workspace, when this binary CANNOT open the workspace (the
-// version was recovered from a schema-ahead refusal), must NOT name lit downgrade
-// — downgrade would hit the same refusal on open. The remedy is a newer target.
-func TestRunUpgradeWithTargetBehindNotOpenableNamesNewerTarget(t *testing.T) {
+// A target below the workspace, when the workspace is past this binary's schema
+// support, must NOT name lit downgrade — this binary does not carry the
+// down-migrations a reverse needs. The remedy is a newer target.
+func TestRunUpgradeWithTargetBehindPastRunningSupportNamesNewerTarget(t *testing.T) {
 	t.Parallel()
-	res := &stubResolver{target: newFakeTarget()}        // Schema.Max == 3
-	sr := &stubSchemaReader{version: 7, openable: false} // workspace ahead; this binary can't open it
+	res := &stubResolver{target: newFakeTarget()} // Schema.Max == 3
+	sr := &stubSchemaReader{version: 7}           // workspace past olderCurrentInfo's Schema.Max == 2
 	inst := &stubInstaller{}
 	var out bytes.Buffer
 	err := runUpgradeWith(context.Background(), &out, sr, []string{"--to", "v0.9.0"}, olderCurrentInfo(), res, inst, fixedBinPath("/p/lit", nil))
@@ -141,15 +142,15 @@ func TestRunUpgradeWithTargetBehindNotOpenableNamesNewerTarget(t *testing.T) {
 	if !errors.As(err, &behind) {
 		t.Fatalf("err = %v (%T); want *UpgradeTargetBehindError", err, err)
 	}
-	if behind.WorkspaceOpenable {
-		t.Errorf("WorkspaceOpenable = true; want false (version came from the schema-ahead refusal)")
+	if behind.RunningMax != 2 {
+		t.Errorf("RunningMax = %d; want 2 (this binary's schema support)", behind.RunningMax)
 	}
 	msg := behind.Error()
 	if strings.Contains(msg, "lit downgrade") {
-		t.Errorf("not-openable refusal must NOT suggest lit downgrade (dead here): %q", msg)
+		t.Errorf("a refusal past this binary's schema support must NOT suggest lit downgrade (it cannot run here): %q", msg)
 	}
-	if !strings.Contains(msg, "pick an upgrade target") || !strings.Contains(msg, "cannot open") {
-		t.Errorf("not-openable refusal must point at a newer target: %q", msg)
+	if !strings.Contains(msg, "pick an upgrade target whose schema support reaches v7") || !strings.Contains(msg, "past this binary's schema support (v2)") {
+		t.Errorf("a refusal past this binary's schema support must point at a newer target: %q", msg)
 	}
 	if inst.called {
 		t.Error("installer must not run when the target is behind the workspace")
@@ -162,7 +163,7 @@ func TestRunUpgradeWithTargetBehindNotOpenableNamesNewerTarget(t *testing.T) {
 func TestRunUpgradeWithTargetEqualCurrentInstalls(t *testing.T) {
 	t.Parallel()
 	res := &stubResolver{target: newFakeTarget()} // Schema.Max == 3
-	sr := &stubSchemaReader{version: 3, openable: true}
+	sr := &stubSchemaReader{version: 3}
 	inst := &stubInstaller{}
 	var out bytes.Buffer
 	if err := runUpgradeWith(context.Background(), &out, sr, []string{"--to", "v0.9.0"}, olderCurrentInfo(), res, inst, fixedBinPath("/p/lit", nil)); err != nil {
@@ -176,7 +177,7 @@ func TestRunUpgradeWithTargetEqualCurrentInstalls(t *testing.T) {
 func TestRunUpgradeWithInstallFailureSurfacesRecovery(t *testing.T) {
 	t.Parallel()
 	res := &stubResolver{target: newFakeTarget()}
-	sr := &stubSchemaReader{version: 2, openable: true}
+	sr := &stubSchemaReader{version: 2}
 	inst := &stubInstaller{err: errors.New("network down")}
 	var out bytes.Buffer
 	err := runUpgradeWith(context.Background(), &out, sr, []string{"--to", "v0.9.0"}, olderCurrentInfo(), res, inst, fixedBinPath("/p/lit", nil))
@@ -233,7 +234,7 @@ func TestRunUpgradeWithSchemaReadErrorSkipsInstall(t *testing.T) {
 func TestRunUpgradeExtraArgsIsUsageError(t *testing.T) {
 	t.Parallel()
 	res := &stubResolver{target: newFakeTarget()}
-	sr := &stubSchemaReader{version: 2, openable: true}
+	sr := &stubSchemaReader{version: 2}
 	inst := &stubInstaller{}
 	var out bytes.Buffer
 	err := runUpgradeWith(context.Background(), &out, sr, []string{"--to", "v0.9.0", "extra"}, olderCurrentInfo(), res, inst, fixedBinPath("/p/lit", nil))
@@ -257,7 +258,7 @@ func TestRunUpgradeExtraArgsIsUsageError(t *testing.T) {
 func TestRunUpgradeBareResolvesLatestAndInstalls(t *testing.T) {
 	t.Parallel()
 	res := &stubResolver{latestTag: "v0.9.0", target: newFakeTarget()}
-	sr := &stubSchemaReader{version: 2, openable: true}
+	sr := &stubSchemaReader{version: 2}
 	inst := &stubInstaller{}
 	var out bytes.Buffer
 	err := runUpgradeWith(context.Background(), &out, sr, []string{}, olderCurrentInfo(), res, inst, fixedBinPath("/p/lit", nil))
@@ -283,7 +284,7 @@ func TestRunUpgradeBareResolvesLatestAndInstalls(t *testing.T) {
 func TestRunUpgradeBareAlreadyCurrentKeepsBinary(t *testing.T) {
 	t.Parallel()
 	res := &stubResolver{latestTag: "v0.4.1", target: newFakeTarget()} // manifest Version 0.4.1
-	sr := &stubSchemaReader{version: 2, openable: true}
+	sr := &stubSchemaReader{version: 2}
 	inst := &stubInstaller{}
 	current := version.Info{Version: "0.4.1", Schema: version.SchemaSupport{Min: 1, Max: 3}}
 	var out bytes.Buffer
@@ -308,7 +309,7 @@ func TestRunUpgradeBareBinaryAheadOfLatestKeepsBinary(t *testing.T) {
 	tgt := newFakeTarget()
 	tgt.Manifest.Version = "0.9.5"
 	res := &stubResolver{latestTag: "v0.9.5", target: tgt}
-	sr := &stubSchemaReader{version: 2, openable: true}
+	sr := &stubSchemaReader{version: 2}
 	inst := &stubInstaller{}
 	current := version.Info{Version: "0.10.0", Schema: version.SchemaSupport{Min: 1, Max: 5}}
 	var out bytes.Buffer
@@ -331,7 +332,7 @@ func TestRunUpgradeBareBinaryAheadOfLatestKeepsBinary(t *testing.T) {
 func TestRunUpgradeBareUnorderableLatestStillInstalls(t *testing.T) {
 	t.Parallel()
 	res := &stubResolver{latestTag: "vnightly", target: newFakeTarget()}
-	sr := &stubSchemaReader{version: 2, openable: true}
+	sr := &stubSchemaReader{version: 2}
 	inst := &stubInstaller{}
 	current := version.Info{Version: "0.10.0", Schema: version.SchemaSupport{Min: 1, Max: 5}}
 	var out bytes.Buffer
@@ -352,7 +353,7 @@ func TestRunUpgradeBareUnorderableLatestStillInstalls(t *testing.T) {
 func TestRunUpgradePinnedSameVersionStillInstalls(t *testing.T) {
 	t.Parallel()
 	res := &stubResolver{target: newFakeTarget()} // manifest Version 0.4.1
-	sr := &stubSchemaReader{version: 2, openable: true}
+	sr := &stubSchemaReader{version: 2}
 	inst := &stubInstaller{}
 	current := version.Info{Version: "0.4.1", Schema: version.SchemaSupport{Min: 1, Max: 3}}
 	var out bytes.Buffer
@@ -372,7 +373,7 @@ func TestRunUpgradePinnedSameVersionStillInstalls(t *testing.T) {
 func TestRunUpgradeBareLatestBehindWorkspaceRefused(t *testing.T) {
 	t.Parallel()
 	res := &stubResolver{latestTag: "v0.4.1", target: newFakeTarget()} // Schema.Max == 3
-	sr := &stubSchemaReader{version: 7, openable: false}               // workspace ahead of latest
+	sr := &stubSchemaReader{version: 7}                                // workspace ahead of latest
 	inst := &stubInstaller{}
 	current := version.Info{Version: "0.4.1", Schema: version.SchemaSupport{Min: 1, Max: 3}}
 	var out bytes.Buffer
@@ -446,7 +447,7 @@ func TestRunUpgradeBareEndToEndOverHTTP(t *testing.T) {
 	}
 
 	res := &release.HTTPResolver{BaseURL: srv.URL + "/dl", LatestURL: srv.URL + "/feed"}
-	sr := &stubSchemaReader{version: 2, openable: true}
+	sr := &stubSchemaReader{version: 2}
 	var out bytes.Buffer
 	err := runUpgradeWith(context.Background(), &out, sr, []string{}, olderCurrentInfo(), res, &release.HTTPInstaller{}, fixedBinPath(binPath, nil))
 	if err != nil {
@@ -471,7 +472,7 @@ func TestRunUpgradeExplicitEmptyToIsRejected(t *testing.T) {
 	t.Parallel()
 	for _, args := range [][]string{{"--to", ""}, {"--to", "   "}} {
 		res := &stubResolver{latestTag: "v0.9.0", target: newFakeTarget()}
-		sr := &stubSchemaReader{version: 2, openable: true}
+		sr := &stubSchemaReader{version: 2}
 		inst := &stubInstaller{}
 		var out bytes.Buffer
 		err := runUpgradeWith(context.Background(), &out, sr, args, olderCurrentInfo(), res, inst, fixedBinPath("/p/lit", nil))
@@ -495,7 +496,7 @@ func TestRunUpgradeBareDevBuildAlwaysInstalls(t *testing.T) {
 	tgt := newFakeTarget()
 	tgt.Manifest.Version = "" // degenerate: equal to the dev build's Version
 	res := &stubResolver{latestTag: "v0.9.0", target: tgt}
-	sr := &stubSchemaReader{version: 2, openable: true}
+	sr := &stubSchemaReader{version: 2}
 	inst := &stubInstaller{}
 	current := version.Info{IsDev: true, Schema: version.SchemaSupport{Min: 1, Max: 5}}
 	var out bytes.Buffer
@@ -526,5 +527,70 @@ func TestRunUpgradeLatestTagErrorStopsPipeline(t *testing.T) {
 	}
 	if res.called || sr.called || inst.called {
 		t.Errorf("latest-lookup failure leaked: resolve=%v read=%v install=%v; want all false", res.called, sr.called, inst.called)
+	}
+}
+
+// The case the open-succeeded proxy got wrong: a newer lit migrated the
+// workspace past this binary's registry, but the baseline shape is intact, so
+// this binary opens it cleanly. A downgrade from here would need the newer
+// lit's down-migrations, so the refusal must name a newer target, never `lit
+// downgrade`. The workspace is real and read through the production reader, so
+// this also pins that a clean open yields the ahead version. The invocation's
+// event carries the three schema versions the refusal was decided from.
+func TestRunUpgradeOnAnOpenableWorkspacePastRunningSupportNamesNoDowngrade(t *testing.T) {
+	_, ws := initBootstrapTestRepo(t)
+	current, err := version.Get()
+	if err != nil {
+		t.Fatalf("version.Get() error = %v", err)
+	}
+	ahead := current.Schema.Max + 1
+	ctx := context.Background()
+	st, err := engine.Open(ctx, engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)
+	if err != nil {
+		t.Fatalf("engine.Open() error = %v", err)
+	}
+	raw, err := storage.TestSupport.Of(st)
+	if err != nil {
+		t.Fatalf("test support: %v", err)
+	}
+	if err := raw.ExecRawForTest(ctx, "INSERT INTO goose_db_version (version_id, is_applied) VALUES (?, 1)", ahead); err != nil {
+		t.Fatalf("stamp ahead version: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("store.Close() error = %v", err)
+	}
+
+	res := &stubResolver{target: newFakeTarget()} // Schema.Max == 3
+	inst := &stubInstaller{}
+	recorder := telemetry.Begin(telemetry.Event{})
+	ctx = telemetry.With(ctx, recorder)
+	l := upgradeLeafWith(res, inst, fixedBinPath("/p/lit", nil))
+	var out bytes.Buffer
+	positional, err := parseLeaf(ctx, l, []string{"--to", "v0.9.0"}, &out)
+	if err != nil {
+		t.Fatalf("parseLeaf: %v", err)
+	}
+	err = l.work(ctx, &out, upgradeScope{schema: workspaceSchemaReader{ws: ws}, current: current}, positional)
+
+	var behind *UpgradeTargetBehindError
+	if !errors.As(err, &behind) {
+		t.Fatalf("err = %v (%T); want *UpgradeTargetBehindError", err, err)
+	}
+	if behind.Current != ahead || behind.RunningMax != current.Schema.Max {
+		t.Errorf("err fields = {Current:%d RunningMax:%d}; want {%d %d}", behind.Current, behind.RunningMax, ahead, current.Schema.Max)
+	}
+	if msg := behind.Error(); strings.Contains(msg, "lit downgrade") {
+		t.Errorf("refusal names lit downgrade, which cannot reverse migrations this binary does not carry: %q", msg)
+	}
+	if inst.called {
+		t.Error("installer must not run when the target is behind the workspace")
+	}
+	want := map[string]any{
+		"upgrade.workspace_schema":   float64(ahead),
+		"upgrade.target_schema_max":  float64(3),
+		"upgrade.running_schema_max": float64(current.Schema.Max),
+	}
+	if got := writtenFacts(t, recorder.Finish(telemetry.End{})); !reflect.DeepEqual(got, want) {
+		t.Errorf("facts = %v; want %v", got, want)
 	}
 }

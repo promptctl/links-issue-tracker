@@ -442,9 +442,10 @@ func quarantineBlockError() *store.QuarantineBlockError {
 }
 
 // upgradeTargetBehindError is `lit upgrade` against that same workspace: the
-// latest release stops at schema 5, and this binary cannot open the workspace.
+// latest release stops at schema 5, and the workspace is past this binary's
+// schema support.
 func upgradeTargetBehindError() *UpgradeTargetBehindError {
-	return &UpgradeTargetBehindError{Current: 999, Target: 5, Tag: "v0.14.0", WorkspaceOpenable: false}
+	return &UpgradeTargetBehindError{Current: 999, Target: 5, Tag: "v0.14.0", RunningMax: 5}
 }
 
 // TestWriteCommandErrorSchemaVersionRefusals pins the surface an agent reads
