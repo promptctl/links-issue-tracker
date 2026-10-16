@@ -639,6 +639,7 @@ func TestRunUpgradeOnAnOpenableWorkspacePastRunningSupportNamesNoDowngrade(t *te
 		t.Error("installer must not run when the target is behind the workspace")
 	}
 	want := map[string]any{
+		"upgrade.tag":                "v0.9.0",
 		"upgrade.workspace_schema":   float64(ahead),
 		"upgrade.target_schema_max":  float64(3),
 		"upgrade.running_schema_min": float64(current.Schema.Min),
@@ -682,6 +683,55 @@ func TestRunUpgradeRecordsWhetherItWasAlreadyCurrent(t *testing.T) {
 	}
 }
 
+// An unpinned upgrade resolves the latest release itself, so the event records
+// which release that was — the one it installed, or kept the binary past —
+// and, only once the install succeeded, where it installed it.
+func TestRunUpgradeRecordsTheReleaseItResolvedAndWhereItInstalled(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name          string
+		current       version.Info
+		installErr    error
+		wantInstalled any
+	}{
+		{"installs the latest release", olderCurrentInfo(), nil, "/p/lit"},
+		{"keeps a binary already on it", version.Info{Version: "0.4.1", Schema: version.SchemaSupport{Min: 1, Max: 3}}, nil, nil},
+		{"fails to install it", olderCurrentInfo(), errors.New("network down"), nil},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			res := &stubResolver{latestTag: "v0.4.1", target: newFakeTarget()}
+			facts, err := runUpgradeRecorded(t, &stubSchemaReader{version: 2}, []string{}, tc.current, res, &stubInstaller{err: tc.installErr})
+			if (err != nil) != (tc.installErr != nil) {
+				t.Fatalf("bare upgrade err = %v; want an error only when the install fails", err)
+			}
+			if got := facts["upgrade.tag"]; got != "v0.4.1" {
+				t.Errorf("upgrade.tag = %v; want v0.4.1", got)
+			}
+			if got := facts["upgrade.installed_path"]; got != tc.wantInstalled {
+				t.Errorf("upgrade.installed_path = %v; want %v", got, tc.wantInstalled)
+			}
+		})
+	}
+}
+
+// A release that does not resolve still leaves the event the tag the command
+// asked for — the latest one it looked up, for a bare run — the one fact known
+// before Resolve.
+func TestRunUpgradeRecordsTheTagOfAReleaseThatDoesNotResolve(t *testing.T) {
+	t.Parallel()
+	res := &stubResolver{latestTag: "v0.4.1", err: errors.New("release v0.4.1 not found")}
+	facts, err := runUpgradeRecorded(t, &stubSchemaReader{version: 2}, []string{}, olderCurrentInfo(), res, &stubInstaller{})
+	if err == nil {
+		t.Fatal("an unresolvable release must fail the upgrade")
+	}
+	if want := map[string]any{"upgrade.tag": "v0.4.1"}; !reflect.DeepEqual(facts, want) {
+		t.Errorf("facts = %v; want %v", facts, want)
+	}
+}
+
 // A workspace read that fails still leaves the event the schema versions known
 // before it: the target's and this binary's, and no workspace version.
 func TestRunUpgradeSchemaReadErrorKeepsTheVersionsKnownBeforeIt(t *testing.T) {
@@ -693,6 +743,7 @@ func TestRunUpgradeSchemaReadErrorKeepsTheVersionsKnownBeforeIt(t *testing.T) {
 		t.Fatal("a failed workspace read must fail the upgrade")
 	}
 	want := map[string]any{
+		"upgrade.tag":                "v0.9.0",
 		"upgrade.target_schema_max":  float64(3),
 		"upgrade.running_schema_min": float64(1),
 		"upgrade.running_schema_max": float64(2),

@@ -10,6 +10,7 @@ import (
 	"github.com/pressly/goose/v3"
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/version"
 )
 
@@ -200,8 +201,13 @@ func (e *DowngradeIncompleteError) Error() string {
 // per-step commitWorkingSet calls inside applyDownMigrations short-circuit
 // because the lock is already held.
 //
+// It returns what it did as a storage.Downgraded — the applied version it read
+// under the lock, the down-migrations it applied, and the snapshot it took —
+// beside every error raised after that read, so a refusal or a failure
+// part-way reports how far it got. [LAW:one-source-of-truth]
+//
 // Refusals (no snapshot taken):
-//   - target == current applied: no-op, returns nil.
+//   - target == current applied: no-op, reverses nothing.
 //   - target > current applied: DowngradeTargetAheadError.
 //   - target < baselineVersion: DowngradeBelowBaselineError.
 //   - this binary's schema support does not cover target through current
@@ -222,39 +228,46 @@ func (e *DowngradeIncompleteError) Error() string {
 // [LAW:one-source-of-truth] goose_db_version remains the applied-state
 // authority for both directions; this loop reads it via recordedMigrationVersion
 // and lets goose mutate it the same way Up does.
-func (s *Store) Downgrade(ctx context.Context, targetSchemaVersion int64) error {
-	return s.withCommitLock(ctx, func(ctx context.Context) error {
-		return s.downgradeLocked(ctx, targetSchemaVersion)
+func (s *Store) Downgrade(ctx context.Context, targetSchemaVersion int64) (*storage.Downgraded, error) {
+	var done *storage.Downgraded
+	err := s.withCommitLock(ctx, func(ctx context.Context) error {
+		var err error
+		done, err = s.downgradeLocked(ctx, targetSchemaVersion)
+		return err
 	})
+	return done, err
 }
 
 // downgradeLocked is the body of Downgrade executed under the commit lock.
 // Split out so the lock acquisition stays a thin wrapper and the pipeline
 // itself reads as the residue of its constraints.
-func (s *Store) downgradeLocked(ctx context.Context, targetSchemaVersion int64) error {
+func (s *Store) downgradeLocked(ctx context.Context, targetSchemaVersion int64) (*storage.Downgraded, error) {
 	state, err := s.classifyMigrationState(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if state.phase != phaseManaged {
-		return fmt.Errorf(
+		return nil, fmt.Errorf(
 			"downgrade: workspace is not goose-managed (no goose_db_version table); run Open first to adopt or initialize",
 		)
 	}
-	if targetSchemaVersion == state.appliedVersion {
-		return nil
+	// [LAW:dataflow-not-control-flow] the report fills in as the pipeline
+	// advances; every return from here carries it, at whatever step it stopped.
+	done := &storage.Downgraded{From: state.appliedVersion}
+	if targetSchemaVersion == done.From {
+		return done, nil
 	}
-	if targetSchemaVersion > state.appliedVersion {
-		return &DowngradeTargetAheadError{Current: state.appliedVersion, Target: targetSchemaVersion}
+	if targetSchemaVersion > done.From {
+		return done, &DowngradeTargetAheadError{Current: done.From, Target: targetSchemaVersion}
 	}
 	if targetSchemaVersion < baselineVersion {
-		return &DowngradeBelowBaselineError{Target: targetSchemaVersion}
+		return done, &DowngradeBelowBaselineError{Target: targetSchemaVersion}
 	}
 	// Below-baseline is refused first: no lit reverses past the baseline, so
 	// that target is wrong whichever binary runs it. What can still fail
 	// Covers here is the top of the span — a workspace a newer lit migrated.
-	if !state.support.Covers(targetSchemaVersion, state.appliedVersion) {
-		return &DowngradeSpanUnsupportedError{Current: state.appliedVersion, Target: targetSchemaVersion, Support: state.support}
+	if !state.support.Covers(targetSchemaVersion, done.From) {
+		return done, &DowngradeSpanUnsupportedError{Current: done.From, Target: targetSchemaVersion, Support: state.support}
 	}
 
 	snapshotsDir := dbsnapshot.DirFor(s.doltRootDir)
@@ -265,24 +278,30 @@ func (s *Store) downgradeLocked(ctx context.Context, targetSchemaVersion int64) 
 	)
 	snap, err := guard.ensure(ctx)
 	if err != nil {
-		return fmt.Errorf("downgrade: %w", err)
+		return done, fmt.Errorf("downgrade: %w", err)
 	}
+	done.Snapshot = snap.Name
 
-	if err := s.applyDownMigrations(ctx, targetSchemaVersion); err != nil {
-		return &DowngradeRollbackError{Snapshot: snap, Cause: err}
+	done.Reversed, err = s.applyDownMigrations(ctx, targetSchemaVersion)
+	if err != nil {
+		return done, &DowngradeRollbackError{Snapshot: snap, Cause: err}
 	}
 	// [LAW:single-enforcer] Downgrade owns the prune budget for its own
 	// snapshots. IsDowngradeSnapshotName is disjoint from
 	// IsMigrationSnapshotName, so this sweep cannot collect migration
 	// snapshots and migrate()'s sweep cannot collect downgrade ones.
 	if err := dbsnapshot.PruneMatching(snapshotsDir, downgradeSnapshotRetention, IsDowngradeSnapshotName); err != nil {
-		return fmt.Errorf("prune downgrade snapshots: %w", err)
+		return done, fmt.Errorf("prune downgrade snapshots: %w", err)
 	}
-	return nil
+	return done, nil
 }
 
 // applyDownMigrations steps the workspace from its recorded version down to
-// target, one migration at a time, with one Dolt commit per reversed step.
+// target, one migration at a time, with one Dolt commit per reversed step, and
+// returns how many steps goose applied — on failure, those before it, counting
+// a step whose Dolt commit then failed: its Down already moved the working
+// set's recorded version, so the count matches what recordedMigrationVersion
+// reads.
 // Symmetric with applyPendingMigrations: a single goose provider drives the
 // loop and commitWorkingSet records each step. The commit lock is already
 // held by Downgrade, so commitWorkingSet's withCommitLock short-circuits.
@@ -291,18 +310,19 @@ func (s *Store) downgradeLocked(ctx context.Context, targetSchemaVersion int64) 
 // registry-vs-target mismatch, not a successful exit; it raises
 // DowngradeIncompleteError so the operator sees that the target was never
 // reached.
-func (s *Store) applyDownMigrations(ctx context.Context, target int64) error {
+func (s *Store) applyDownMigrations(ctx context.Context, target int64) (int, error) {
 	provider, err := newGooseProvider(s.db)
 	if err != nil {
-		return fmt.Errorf("construct downgrade provider: %w", err)
+		return 0, fmt.Errorf("construct downgrade provider: %w", err)
 	}
+	reversed := 0
 	for {
 		current, err := s.recordedMigrationVersion(ctx)
 		if err != nil {
-			return err
+			return reversed, err
 		}
 		if current <= target {
-			return nil
+			return reversed, nil
 		}
 		downOne := provider.Down
 		if hook := migrationDownForTest; hook != nil {
@@ -313,18 +333,19 @@ func (s *Store) applyDownMigrations(ctx context.Context, target int64) error {
 		result, err := downOne(ctx)
 		if err != nil {
 			if errors.Is(err, goose.ErrNoNextVersion) {
-				return &DowngradeIncompleteError{Current: current, Target: target}
+				return reversed, &DowngradeIncompleteError{Current: current, Target: target}
 			}
-			return &downgradeMigrationFailedError{Version: current, Cause: err}
+			return reversed, &downgradeMigrationFailedError{Version: current, Cause: err}
 		}
+		reversed++
 		if result == nil {
-			return fmt.Errorf("down-migrate v%d: goose returned nil result", current)
+			return reversed, fmt.Errorf("down-migrate v%d: goose returned nil result", current)
 		}
 		if result.Source == nil {
-			return fmt.Errorf("down-migrate v%d: goose result has nil Source", current)
+			return reversed, fmt.Errorf("down-migrate v%d: goose result has nil Source", current)
 		}
 		if err := s.commitWorkingSet(ctx, downgradeCommitMessage(result)); err != nil {
-			return fmt.Errorf("commit downgrade revert of v%d: %w", result.Source.Version, err)
+			return reversed, fmt.Errorf("commit downgrade revert of v%d: %w", result.Source.Version, err)
 		}
 	}
 }

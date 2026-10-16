@@ -459,7 +459,7 @@ func TestRefusalSurfacesRecoveryDataFromWorkspace(t *testing.T) {
 	// the empty workspace AND writes meta.producer_binary_version = sentinel.
 	// A downgrade and the open after it leave a recovery snapshot holding data.
 	withStore(t, ctx, doltRoot, func(st *Store) {
-		if err := st.Downgrade(ctx, 3); err != nil {
+		if _, err := st.Downgrade(ctx, 3); err != nil {
 			t.Fatalf("Downgrade(3) error = %v", err)
 		}
 	})

@@ -260,7 +260,7 @@ func seedPrePurgeRemote(t *testing.T, ctx context.Context, root, remoteURL strin
 	if err != nil {
 		t.Fatalf("CreateIssue(seed): %v", err)
 	}
-	if err := st.Downgrade(ctx, 8); err != nil {
+	if _, err := st.Downgrade(ctx, 8); err != nil {
 		t.Fatalf("Downgrade(seed) to v8: %v", err)
 	}
 	if err := st.Close(); err != nil {

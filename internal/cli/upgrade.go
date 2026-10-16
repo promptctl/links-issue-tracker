@@ -260,15 +260,17 @@ func upgradeLeafWith(
 		if err != nil {
 			return err
 		}
+		// [LAW:nothing-unseen] the release the command resolved — the one it
+		// installs, keeps the binary past, or refuses — and the schema versions
+		// the refusal and its remedy are decided from, each set as soon as it is
+		// known so an exit before the decision still carries them.
+		telemetry.Set(ctx, "upgrade.tag", tag)
 
 		platform := release.CurrentPlatform()
 		target, err := resolver.Resolve(ctx, tag, platform)
 		if err != nil {
 			return err
 		}
-		// [LAW:nothing-unseen] the schema versions the refusal and its remedy
-		// are decided from, each set as soon as it is known so an exit before
-		// the decision still carries them.
 		telemetry.Set(ctx, "upgrade.target_schema_max", target.Manifest.Schema.Max)
 		telemetry.Set(ctx, "upgrade.running_schema_min", scope.current.Schema.Min)
 		telemetry.Set(ctx, "upgrade.running_schema_max", scope.current.Schema.Max)
@@ -335,6 +337,7 @@ func upgradeLeafWith(
 				tag, err, tag, target.Artifact.URL,
 			)
 		}
+		telemetry.Set(ctx, "upgrade.installed_path", binPath)
 
 		// [LAW:dataflow-not-control-flow] One print, every invocation. The forward
 		// migration (if the workspace trails the new registry) is the installed

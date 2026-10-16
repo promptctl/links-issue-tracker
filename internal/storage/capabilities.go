@@ -211,8 +211,34 @@ type SchemaMigrator interface {
 	AppliedSchemaVersion(ctx context.Context) (int64, error)
 
 	// Downgrade moves the store back to an older shape, so a binary that
-	// predates the current one can open it.
-	Downgrade(ctx context.Context, targetSchemaVersion int64) error
+	// predates the current one can open it. It reports what it did on every
+	// return once it has read the applied version — a success, a refusal, and
+	// a failure part-way alike — and nil only when it failed before that read.
+	Downgrade(ctx context.Context, targetSchemaVersion int64) (*Downgraded, error)
+}
+
+// Downgraded is what a Downgrade did: the shape version it read under the lock
+// and decided from, how many down-migrations it applied, and the recovery
+// snapshot it took first. A Downgrade that stops before a step leaves that
+// step's field zero: a refusal or a target equal to the applied version
+// reverses nothing and takes no snapshot.
+// [LAW:one-source-of-truth] the read that made the decision is the one
+// reported; a caller never reads the version again to describe it.
+type Downgraded struct {
+	From     int64
+	Reversed int
+	Snapshot string
+}
+
+// EventRecord is the downgrade as event facts and counts, so the success and
+// every failure after the read name the same facts under the same keys.
+func (d Downgraded) EventRecord() (map[string]any, map[string]int) {
+	return map[string]any{
+			"downgrade.workspace_schema": d.From,
+			"downgrade.snapshot":         d.Snapshot,
+		}, map[string]int{
+			"downgrade.reversed": d.Reversed,
+		}
 }
 
 // Importer replaces the store's entire contents with an export, and names the

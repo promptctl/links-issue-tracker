@@ -829,8 +829,9 @@ itself: `store.DowngradeTargetAheadError` and `store.DowngradeBelowBaselineError
 map[string]any, counts map[string]int)`: the facts and counts a failed command's
 event carries for that error. The CLI's `errorRecord` (`invocation_event.go`)
 reads the first error in the chain implementing it, and records nothing for an
-error that does not. Implementer: `store.UnsupportedSchemaVersionError`
-(`migration_runner.go`, the `schema_ahead.*` keys), with a compile-time
+error that does not. Implementers: `store.UnsupportedSchemaVersionError`
+(`migration_runner.go`) and `store.RemoteSchemaAheadError`
+(`sync_schema_guard.go`), the `schema_ahead.*` keys, each with a compile-time
 `var _ model.RecordedError` assertion.
 
 `SchemaAhead` (`validation.go`) is `error` plus a marker method
