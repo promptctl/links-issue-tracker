@@ -615,6 +615,12 @@ func aPhaseMoveRecordsItsEvent(t *testing.T, ctx context.Context, st storage.Sto
 		t.Errorf("a phase move that changed nothing wrote %d events, want none", after-before)
 	}
 
+	// A move stamped at the instant the row already holds still lands: the
+	// clock has not moved since the review move, so updated_at does not change.
+	if _, err := move(model.PhaseImpl); err != nil {
+		t.Errorf("a phase move at the row's own updated_at error = %v, want it to land", err)
+	}
+
 	if _, err := st.Apply(ctx, epic.ID, storage.Change{Action: model.SetPhase{Phase: model.PhaseImpl}, Actor: "ada"}); !errors.As(err, &refused) {
 		t.Errorf("phase move on an epic error = %v, want a ValidationError", err)
 	}

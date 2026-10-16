@@ -70,8 +70,12 @@ func TestPhaseOf(t *testing.T) {
 			[]IssueEvent{startEvent("e1", 1), phaseEvent("e2", 2, PhasePlan, PhaseReview), reclaimEvent("e3", 3)}, PhaseReview, true},
 		{"the newest wins whatever order the slice holds", inProgress,
 			[]IssueEvent{phaseEvent("e3", 3, PhaseImpl, PhaseReview), startEvent("e1", 1), phaseEvent("e2", 2, PhasePlan, PhaseImpl)}, PhaseReview, true},
+		// Both orders, so neither "the first found wins" nor "the last found
+		// wins" passes for the id rule.
 		{"a tie on time goes to the greater id", inProgress,
 			[]IssueEvent{phaseEvent("e9", 2, PhasePlan, PhaseMerge), phaseEvent("e1", 2, PhasePlan, PhaseImpl)}, PhaseMerge, true},
+		{"a tie on time goes to the greater id, listed the other way", inProgress,
+			[]IssueEvent{phaseEvent("e1", 2, PhasePlan, PhaseImpl), phaseEvent("e9", 2, PhasePlan, PhaseMerge)}, PhaseMerge, true},
 		{"a phase change row on an event that is not a phase move sets nothing", inProgress,
 			[]IssueEvent{startEvent("e1", 1), {ID: "e2", CreatedAt: at(2), Changes: []FieldChange{{Field: PhaseField, From: "plan", To: "merge"}}}}, PhasePlan, true},
 		{"a phase a newer lit named reads as recorded", inProgress,
