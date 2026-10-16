@@ -27,6 +27,9 @@ You need:
   [dolthub/dolt](https://github.com/dolthub/dolt) (CI pins the exact version it
   installs in
   [`.github/actions/install-dolt/action.yml`](.github/actions/install-dolt/action.yml)).
+- **`jq`** — *only for running the test suite.* A test runs the example
+  statusline in [docs/statusline.md](docs/statusline.md), which is a `jq`
+  program.
 - **Node.js (`npx`)** — *only for agents using the browser.* The repo's
   [`.mcp.json`](.mcp.json) registers `chrome-devtools-mcp` as a project MCP
   server, launched with `npx`. It is pinned to an exact version, so upgrading it

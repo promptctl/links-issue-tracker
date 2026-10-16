@@ -3,7 +3,9 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -165,17 +167,8 @@ func statuslineEvent(t *testing.T) (map[string]any, int) {
 // file and its exclude entry, and whether it replaced an unreadable file — and
 // a command that wrote nothing says so with zeros.
 func TestEachStatuslineWriteRecordsItsFactsOnTheEvent(t *testing.T) {
-	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
 	isolateEvents(t)
-	dir := t.TempDir()
-	runGit(t, dir, "init")
-	runGit(t, dir, "config", "user.email", "m@m.co")
-	runGit(t, dir, "config", "user.name", "main")
-	runGit(t, dir, "commit", "--allow-empty", "-m", "seed")
-	runCLIInDir(t, dir, "init", "--skip-hooks", "--skip-agents")
-	epic := newEpicInDir(t, dir, "statusline epic")
-	first := extractTicketID(t, runCLIInDir(t, dir, "new", "--title", "First", "--topic", "demo", "--type", "task", "--parent", epic))
-	second := extractTicketID(t, runCLIInDir(t, dir, "new", "--title", "Second", "--topic", "demo", "--type", "task", "--parent", epic))
+	dir, first, second := statuslineCheckout(t)
 	file := filepath.Join(dir, ".lit", "statusline.json")
 
 	type step struct {
@@ -264,5 +257,120 @@ func TestAFailedStatuslineWriteIsRecordedOnTheEvent(t *testing.T) {
 	}
 	if got := facts["statusline.changed"]; !reflect.DeepEqual(got, []any{}) {
 		t.Fatalf("failed write recorded statusline.changed = %v; want []", got)
+	}
+}
+
+// statuslineCheckout is a fresh git checkout with lit initialised and two
+// tasks, First and Second, under one epic, in a HOME of its own so neither lit
+// nor the tools a statusline runs read this machine's config.
+func statuslineCheckout(t *testing.T) (dir, first, second string) {
+	t.Helper()
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	dir = t.TempDir()
+	runGit(t, dir, "init")
+	runGit(t, dir, "config", "user.email", "m@m.co")
+	runGit(t, dir, "config", "user.name", "main")
+	runGit(t, dir, "commit", "--allow-empty", "-m", "seed")
+	runCLIInDir(t, dir, "init", "--skip-hooks", "--skip-agents")
+	epic := newEpicInDir(t, dir, "statusline epic")
+	first = extractTicketID(t, runCLIInDir(t, dir, "new", "--title", "First", "--topic", "demo", "--type", "task", "--parent", epic))
+	second = extractTicketID(t, runCLIInDir(t, dir, "new", "--title", "Second", "--topic", "demo", "--type", "task", "--parent", epic))
+	return dir, first, second
+}
+
+// minimalStatuslineScript is the shell script docs/statusline.md gives under
+// "A minimal statusline". The test runs the doc's own text, so the example a
+// reader copies is the one proven here. [LAW:one-source-of-truth]
+func minimalStatuslineScript(t *testing.T) string {
+	t.Helper()
+	doc, err := os.ReadFile(filepath.Join("..", "..", "docs", "statusline.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, section, ok := strings.Cut(string(doc), "\n## A minimal statusline\n")
+	if !ok {
+		t.Fatal(`docs/statusline.md has no "## A minimal statusline" section`)
+	}
+	section, _, _ = strings.Cut(section, "\n## ")
+	_, block, ok := strings.Cut(section, "```sh\n")
+	if !ok {
+		t.Fatal(`docs/statusline.md's "A minimal statusline" section has no sh code block`)
+	}
+	script, _, ok := strings.Cut(block, "```")
+	if !ok {
+		t.Fatal(`docs/statusline.md's "A minimal statusline" sh block is not closed`)
+	}
+	return script
+}
+
+// The documented statusline renders what this checkout's commands recorded —
+// the ticket being worked on, the next pick, nothing ready, and nothing at all
+// when the file is missing, records nothing, or has a schema version it does
+// not know — with no lit process: a lit first on its PATH fails any render
+// that runs it, so no lit lock can hold the statusline up.
+func TestDocumentedStatuslineRendersTheFileWithNoLitProcess(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Fatalf("the documented statusline is a jq program, and jq is not on PATH: %v", err)
+	}
+	script := filepath.Join(t.TempDir(), "statusline.sh")
+	if err := os.WriteFile(script, []byte(minimalStatuslineScript(t)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The shim leaves a mark however the script redirects or ignores it.
+	shim := t.TempDir()
+	ranLit := filepath.Join(shim, "ran")
+	if err := os.WriteFile(filepath.Join(shim, "lit"), []byte("#!/bin/sh\ntouch \""+ranLit+"\"\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dir, first, second := statuslineCheckout(t)
+	file := filepath.Join(dir, ".lit", "statusline.json")
+
+	render := func() string {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "sh", script)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), "PATH="+shim+string(os.PathListSeparator)+os.Getenv("PATH"))
+		var stdout, stderr strings.Builder
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+		start := time.Now()
+		if err := cmd.Run(); err != nil || stderr.Len() > 0 {
+			t.Fatalf("documented statusline: err=%v stderr=%q", err, stderr.String())
+		}
+		if _, err := os.Stat(ranLit); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("the documented statusline ran lit (%v)", err)
+		}
+		t.Logf("rendered %q in %v", stdout.String(), time.Since(start))
+		return stdout.String()
+	}
+
+	if _, err := os.Stat(file); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("statusline file before any command wrote it: %v; want it absent", err)
+	}
+	for _, step := range []struct {
+		name  string
+		setup func()
+		want  string
+	}{
+		{"no file yet", func() {}, ""},
+		{"after start", func() { runCLIInDir(t, dir, "start", first, "--by", "agent") }, "working: " + first + " First\n"},
+		{"after done", func() { runCLIInDir(t, dir, "done", first) }, ""},
+		{"after next", func() { runCLIInDir(t, dir, "next") }, "next: " + second + "\n"},
+		{"after start of the pick", func() { runCLIInDir(t, dir, "start", second, "--by", "agent") }, "working: " + second + " Second  |  next: " + second + "\n"},
+		{"after done of the pick", func() { runCLIInDir(t, dir, "done", second) }, ""},
+		{"after next on an empty backlog", func() { runCLIInDirAllowError(t, dir, "next") }, "next: nothing ready\n"},
+		{"an unknown schema_version", func() {
+			if err := os.WriteFile(file, []byte(`{"schema_version": 2, "working_on": {"ticket": {"id": "x-1", "title": "X"}}, "next": null}`), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}, ""},
+	} {
+		step.setup()
+		if got := render(); got != step.want {
+			t.Fatalf("%s: the documented statusline printed %q, want %q", step.name, got, step.want)
+		}
 	}
 }
