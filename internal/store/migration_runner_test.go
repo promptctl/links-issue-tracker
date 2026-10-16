@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -715,6 +716,47 @@ func TestRepairVersionContentDriftWithRollbackResetsOnFailure(t *testing.T) {
 		}
 		if len(cps) == 0 {
 			t.Error("no drift-repair checkpoint recorded; want one created before the failed repair attempt")
+		}
+	})
+}
+
+// TestVersionContentDriftResetSurvivesCallerCancel pins that a drift repair the
+// caller cancels mid-way is still reset to its checkpoint: the repair applies a
+// schema change, cancels the context it runs on and fails with that
+// cancellation, and the reset discards the change and reports a completed
+// reset rather than a reset that stopped on the cancellation.
+func TestVersionContentDriftResetSurvivesCallerCancel(t *testing.T) {
+	// serial: no t.Parallel — installs the package-level
+	// versionContentDriftRepairForTest hook.
+	bg := context.Background()
+	withStore(t, bg, filepath.Join(t.TempDir(), "dolt"), func(st *Store) {
+		applied, err := st.recordedMigrationVersion(bg)
+		if err != nil {
+			t.Fatalf("recordedMigrationVersion() error = %v", err)
+		}
+		ctx, cancel := context.WithCancel(bg)
+		defer cancel()
+		versionContentDriftRepairForTest = func(ctx context.Context) ([]string, error) {
+			if _, err := st.db.ExecContext(ctx, `ALTER TABLE issues ADD COLUMN drift_repair_probe INT`); err != nil {
+				return nil, err
+			}
+			cancel()
+			return nil, fmt.Errorf("simulated repair statement: %w", ctx.Err())
+		}
+		t.Cleanup(func() { versionContentDriftRepairForTest = nil })
+
+		mismatch := &VersionContentMismatchError{Version: 2, Name: "00002_add_lane.sql", Missing: []string{"issues.lane"}}
+		err = st.repairVersionContentDriftWithRollback(ctx, applied, mismatch)
+		versionContentDriftRepairForTest = nil
+		if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "working set reset to checkpoint") {
+			t.Fatalf("repairVersionContentDriftWithRollback() error = %v; want the cancelled repair reported with a completed reset", err)
+		}
+		cols, err := st.tableColumns(bg, "issues")
+		if err != nil {
+			t.Fatalf("tableColumns(issues) error = %v", err)
+		}
+		if cols["drift_repair_probe"] {
+			t.Error("issues still has the column the cancelled repair added; the reset did not run")
 		}
 	})
 }

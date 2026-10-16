@@ -109,6 +109,9 @@ type doltRows struct {
 	sch     gms.Schema
 	rowIter gms.RowIter
 	gmsCtx  *gms.Context
+	// session is the connection's own context, which Close runs on, as
+	// newResult's close does (README.lit-patch.md, Patch 6).
+	session *gms.Context
 
 	columns []string
 
@@ -143,7 +146,7 @@ func (rows *doltRows) Close() error {
 		return nil
 	}
 
-	return translateError(rows.rowIter.Close(rows.gmsCtx))
+	return translateError(rows.rowIter.Close(rows.session))
 }
 
 // Next is called to populate the next row of data into the provided slice. The provided slice will be the same size as

@@ -553,11 +553,11 @@ func (p pushedHead) landed() bool { return p.head != "" }
 // runs under store.MirrorPushDeadline. Nothing on the live store waits on it,
 // but the mirror process holds the single-flight lock for its whole run and
 // every mirror spawned meanwhile loses that race and exits, so a transport
-// that stalls would stop pushes for as long as it cared to. The deadline must
-// wrap the ctx the clone's session is OPENED with, not just the push's: the
-// embedded driver builds the connection's execution context at Connect, and
-// only a deadline present there reaches the engine's git subprocesses; a
-// per-query deadline is inert. Completion effects (the outcome marker, the
+// that stalls would stop pushes for as long as it cared to. The deadline
+// bounds the clone session's open and its push alike: each statement runs on
+// the ctx it is called with, so the push's deadline reaches the engine's git
+// subprocesses (TestMirrorPushHoldsNothingOnTheLiveStore cuts a wedged
+// `git push` this way). Completion effects (the outcome marker, the
 // owner-notify hook) run under the parent ctx: a cut push needs them most at
 // exactly the moment its own deadline has expired.
 // [LAW:no-ambient-temporal-coupling]

@@ -418,11 +418,171 @@ func TestMigrationCheckpointRetentionBounded(t *testing.T) {
 	}
 }
 
+// TestMigrationFailureResetSurvivesCallerCancel pins that a migration step the
+// caller cancels mid-way is reset to the end and is not quarantined: the step
+// cancels the context Open was called with and fails with that cancellation,
+// as a real step's statements do, and Open returns the CheckpointResetError of
+// a completed reset that carries no quarantine, so the next open runs the
+// migration again. lit init's adopt timeout cancels exactly that context
+// (init_sync.go).
+func TestMigrationFailureResetSurvivesCallerCancel(t *testing.T) {
+	// serial: no t.Parallel — installs the package-level migrationUpByOneForTest
+	// hook.
+	doltRoot := migratedWorkspaceWithGooseHistoryDropped(t)
+	failVersion := headVersion(t) + 1
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	migrationUpByOneForTest = func(ctx context.Context, _ *goose.Provider) (*goose.MigrationResult, error) {
+		cancel()
+		return &goose.MigrationResult{
+			Source: &goose.Source{Version: failVersion, Path: fmt.Sprintf("%05d_test.sql", failVersion)},
+		}, fmt.Errorf("simulated migration statement: %w", ctx.Err())
+	}
+	t.Cleanup(func() { migrationUpByOneForTest = nil })
+
+	_, openErr := Open(ctx, doltRoot, "test-workspace-id")
+	migrationUpByOneForTest = nil
+	assertCancelledRunResetWithoutQuarantine(t, openErr, failVersion, doltRoot)
+}
+
+// TestMigrationCommitCancelResetsWithoutQuarantine pins that a cancellation
+// landing after a step succeeds but before its Dolt commit resets the working
+// set too, rather than leaving the step applied and unversioned, and earns no
+// quarantine: the migration did nothing wrong.
+func TestMigrationCommitCancelResetsWithoutQuarantine(t *testing.T) {
+	// serial: no t.Parallel — installs the package-level migrationUpByOneForTest
+	// hook.
+	doltRoot := migratedWorkspaceWithGooseHistoryDropped(t)
+	failVersion := headVersion(t) + 1
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	migrationUpByOneForTest = func(context.Context, *goose.Provider) (*goose.MigrationResult, error) {
+		cancel()
+		return &goose.MigrationResult{
+			Source: &goose.Source{Version: failVersion, Path: fmt.Sprintf("%05d_test.sql", failVersion)},
+		}, nil
+	}
+	t.Cleanup(func() { migrationUpByOneForTest = nil })
+
+	_, openErr := Open(ctx, doltRoot, "test-workspace-id")
+	migrationUpByOneForTest = nil
+	assertCancelledRunResetWithoutQuarantine(t, openErr, failVersion, doltRoot)
+}
+
+// TestVersionContentDriftCommitCancelResets pins that a drift repair whose
+// commit fails after its ALTERs applied — here because the caller cancelled
+// between them — is reset to its checkpoint, not left applied for the next
+// unrelated commit to version under its own message.
+func TestVersionContentDriftCommitCancelResets(t *testing.T) {
+	// serial: no t.Parallel — installs the package-level
+	// versionContentDriftRepairForTest hook.
+	bg := context.Background()
+	withStore(t, bg, filepath.Join(t.TempDir(), "dolt"), func(st *Store) {
+		applied, err := st.recordedMigrationVersion(bg)
+		if err != nil {
+			t.Fatalf("recordedMigrationVersion() error = %v", err)
+		}
+		ctx, cancel := context.WithCancel(bg)
+		defer cancel()
+		versionContentDriftRepairForTest = func(ctx context.Context) ([]string, error) {
+			if _, err := st.db.ExecContext(ctx, `ALTER TABLE issues ADD COLUMN drift_repair_probe INT`); err != nil {
+				return nil, err
+			}
+			cancel()
+			return []string{"issues.drift_repair_probe"}, nil
+		}
+		t.Cleanup(func() { versionContentDriftRepairForTest = nil })
+
+		mismatch := &VersionContentMismatchError{Version: 2, Name: "00002_add_lane.sql", Missing: []string{"issues.lane"}}
+		err = st.repairVersionContentDriftWithRollback(ctx, applied, mismatch)
+		versionContentDriftRepairForTest = nil
+		if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "working set reset to checkpoint") {
+			t.Fatalf("repairVersionContentDriftWithRollback() error = %v; want the failed commit reported with a completed reset", err)
+		}
+		cols, err := st.tableColumns(bg, "issues")
+		if err != nil {
+			t.Fatalf("tableColumns(issues) error = %v", err)
+		}
+		if cols["drift_repair_probe"] {
+			t.Error("issues still has the column the uncommitted repair added; the reset did not run")
+		}
+	})
+}
+
+// TestMigrationSuccessPruneSurvivesCallerCancel pins that a migration run whose
+// last step has landed finishes its bookkeeping when the caller cancels then:
+// the checkpoint prune does not stop on the cancellation, so a migrated
+// workspace is not reported as a failed migration.
+func TestMigrationSuccessPruneSurvivesCallerCancel(t *testing.T) {
+	// serial: no t.Parallel — installs the package-level migrationUpByOneForTest
+	// hook.
+	doltRoot := migratedWorkspaceWithGooseHistoryDropped(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	migrationUpByOneForTest = func(context.Context, *goose.Provider) (*goose.MigrationResult, error) {
+		cancel()
+		return nil, goose.ErrNoNextVersion
+	}
+	t.Cleanup(func() { migrationUpByOneForTest = nil })
+
+	_, openErr := Open(ctx, doltRoot, "test-workspace-id")
+	migrationUpByOneForTest = nil
+	if openErr != nil && strings.Contains(openErr.Error(), "prune migration checkpoints") {
+		t.Fatalf("Open() error = %v; the success-path prune stopped on the caller's cancellation", openErr)
+	}
+}
+
+// migratedWorkspaceWithGooseHistoryDropped bootstraps a workspace, then drops
+// its goose history so the next Open runs applyPendingMigrations.
+func migratedWorkspaceWithGooseHistoryDropped(t *testing.T) string {
+	t.Helper()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	first, err := Open(context.Background(), doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open(first) error = %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("Close(first) error = %v", err)
+	}
+	withGooseHistoryDropped(t, context.Background(), doltRoot)
+	return doltRoot
+}
+
+// assertCancelledRunResetWithoutQuarantine checks the outcome of an Open whose
+// migration run the caller cancelled: a completed reset for failVersion, caused
+// by the cancellation, with no recovery step stopped by it, no quarantine on
+// the error the CLI classifies, and a reopen that is not refused.
+func assertCancelledRunResetWithoutQuarantine(t *testing.T, openErr error, failVersion int64, doltRoot string) {
+	t.Helper()
+	var cpErr *CheckpointResetError
+	if !errors.As(openErr, &cpErr) {
+		t.Fatalf("Open() error = %v; want a *CheckpointResetError from a reset that completed", openErr)
+	}
+	if cpErr.Version != failVersion || !errors.Is(cpErr.Cause, context.Canceled) {
+		t.Errorf("CheckpointResetError = {Version: %d, Cause: %v}, want {Version: %d, Cause: context canceled}", cpErr.Version, cpErr.Cause, failVersion)
+	}
+	if strings.Contains(openErr.Error(), "prune migration checkpoints") {
+		t.Errorf("Open() error = %v; the checkpoint prune stopped on the caller's cancellation", openErr)
+	}
+	var quarantined *QuarantineBlockError
+	if errors.As(openErr, &quarantined) {
+		t.Errorf("Open() error carries a quarantine of v%d; a cancelled run says nothing against the migration", quarantined.Version)
+	}
+	reopened, err := Open(context.Background(), doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("reopen after a cancelled migration run error = %v; want the migration run again", err)
+	}
+	if err := reopened.Close(); err != nil {
+		t.Fatalf("Close(reopened) error = %v", err)
+	}
+}
+
 // TestCheckpointResetErrorUnknownVersion pins that CheckpointResetError.Error
 // emits a "version unknown" message (without a quarantine-clear SQL instruction)
-// when goose returns a nil MigrationResult so Version stays 0. Without this
-// branch, the operator would see misleading output like v0 "" and a DELETE
-// targeting a quarantine row that was never inserted.
+// when goose returns a nil MigrationResult so Version stays 0, and says the
+// next open runs the migration again, since nothing quarantined it. Otherwise
+// the operator would see misleading output like v0 "" and a DELETE targeting a
+// quarantine row that was never inserted.
 func TestCheckpointResetErrorUnknownVersion(t *testing.T) {
 	// serial: no t.Parallel — installs the package-level migrationUpByOneForTest
 	// hook.
@@ -475,8 +635,8 @@ func TestCheckpointResetErrorUnknownVersion(t *testing.T) {
 	if strings.Contains(msg, "DELETE FROM migration_quarantine") {
 		t.Errorf("error message must not contain quarantine-clear SQL when version is unknown: %s", msg)
 	}
-	if !strings.Contains(msg, "recovery snapshot") {
-		t.Errorf("error message missing 'recovery snapshot' instruction: %s", msg)
+	if !strings.Contains(msg, "the next open runs it again") {
+		t.Errorf("error message does not say the next open runs the migration again: %s", msg)
 	}
 }
 

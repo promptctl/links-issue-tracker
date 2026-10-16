@@ -264,3 +264,28 @@ func TestWriteOpenNamesTheJournalHolder(t *testing.T) {
 		t.Fatalf("Open() took %s to fail against a held journal lock; the contract is a refusal within seconds", elapsed)
 	}
 }
+
+// TestStoreOutlivesTheContextItWasOpenedUnder pins that a store's life is its
+// own, not its opener's: once the context Open ran under is cancelled, a
+// mutation on a fresh context still begins, stages and commits. The
+// connection is opened inside Open, so a connection that kept Open's context
+// would fail every later commit with "context canceled".
+func TestStoreOutlivesTheContextItWasOpenedUnder(t *testing.T) {
+	t.Parallel()
+	openCtx, cancel := context.WithCancel(context.Background())
+	st, err := Open(openCtx, migratedDoltDir(t), "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer st.Close()
+	cancel()
+
+	ctx := context.Background()
+	created, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "after the opener gave up", Topic: "ctx", IssueType: "epic"})
+	if err != nil {
+		t.Fatalf("CreateIssue() after cancelling the open context error = %v", err)
+	}
+	if _, err := st.GetIssue(ctx, created.ID); err != nil {
+		t.Fatalf("GetIssue(%s) error = %v; the committed issue is not readable", created.ID, err)
+	}
+}

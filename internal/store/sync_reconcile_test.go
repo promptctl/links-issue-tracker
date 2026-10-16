@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -675,5 +676,38 @@ func assertIssuePresentAsOf(t *testing.T, ctx context.Context, st *Store, commit
 	}
 	if got := count == 1; got != want {
 		t.Fatalf("issue %s present at %s = %v, want %v", issueID, commit, got, want)
+	}
+}
+
+// TestReconcileScratchCleanupSurvivesCallerCancel pins that the scratch
+// cleanup runs to the end when the deadline bounding a reconcile cuts its body
+// short: the body cancels the context the reconcile runs on and fails with
+// that cancellation, and the session still returns to the data branch with
+// both scratch branches dropped, the body's error reported.
+func TestReconcileScratchCleanupSurvivesCallerCancel(t *testing.T) {
+	t.Parallel()
+	bg := context.Background()
+	st, err := Open(bg, migratedDoltDir(t), "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer st.Close()
+	dataBranch, err := activeBranch(bg, st.db)
+	if err != nil {
+		t.Fatalf("read active branch: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(bg)
+	defer cancel()
+	err = st.runOnReconcileScratch(ctx, dataBranch, newReconcileScratch(), headCommit(t, bg, st), func() error {
+		cancel()
+		return ctx.Err()
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("runOnReconcileScratch() error = %v; want the body's cancellation", err)
+	}
+	assertScratchBranchCleanedUp(t, bg, st)
+	if branch, err := activeBranch(bg, st.db); err != nil || branch != dataBranch {
+		t.Fatalf("active branch = %q (%v); want the data branch %q", branch, err, dataBranch)
 	}
 }

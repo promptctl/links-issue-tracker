@@ -10,7 +10,7 @@ instead of on a remote host, so the patch travels with the PR that needed it.
 
 ## Why this exists
 
-This copy carries **five** independent patches. When refreshing (below), all
+This copy carries **six** independent patches. When refreshing (below), all
 must be re-applied.
 
 ### Patch 1 — telemetry removal (`connector.go`, `driver.go`)
@@ -148,6 +148,37 @@ opened engines run concurrently exactly as before. This protects any lit
 path that opens multiple stores in one process (the cross-project rollup,
 parallel tests).
 
+### Patch 6 — each statement runs on its caller's context (`connector.go`, `conn.go`, `statement.go`, `result.go`, `rows.go`)
+
+Upstream's `Connector.Connect` built the connection's session
+(`se.NewLocalContext(ctx)`) on the context it was handed, and implemented only
+the context-free `Exec` and `Query`, so every statement, transaction and row
+read on the connection ran on that one context. `database/sql` hands
+`Connect` the context of whichever call first needed a connection, and
+`driver.Connector` documents that context as serving the dial alone, never to
+be stored. Two things followed. Once that first caller cancelled, every later
+query on the connection failed with `Error 1105: context canceled`; lit's
+store holds a single connection for its whole life, so cancelling the
+context a store was opened under broke the store, including the checkpoint
+reset after a failed migration. And the context a caller passed to
+`ExecContext` or `QueryContext` was never read, so a deadline could bound a
+statement only by being present when the connection was opened.
+
+The patch builds the session on `context.Background()`, and `doltStmt` and
+`doltMultiStmt` implement `StmtExecContext` and `StmtQueryContext`, running
+each statement (and reading its rows) on `session.WithContext(ctx)` for the
+caller's `ctx`. `Exec` and `Query` run through the same path with
+`context.Background()`. `BeginTx` runs `BEGIN` on its `ctx`; `Commit` and
+`Rollback` run on the session's own context, because `database/sql` rolls a
+transaction back after its context is cancelled. A statement's row iterator
+is closed on the session's own context too: an autocommit statement commits
+its implicit transaction inside that close, and go-mysql-server leaves the
+transaction on the session when the commit fails, so a close on a cancelled
+caller's context would report the cancellation for a statement whose writes
+the next statement then commits. The engine open still runs
+on the `Connect` context, so a cancelled caller can still abandon an open in
+progress.
+
 ## Refreshing this copy
 
 When bumping the `dolthub/driver` version pinned in the top-level `go.mod`:
@@ -157,7 +188,7 @@ When bumping the `dolthub/driver` version pinned in the top-level `go.mod`:
    `replace` directive temporarily removed).
 2. Diff `$(go env GOMODCACHE)/github.com/dolthub/driver@<version>` against
    this directory to see what upstream changed.
-3. Re-apply **all five** patches against the new version, copying the rest
+3. Re-apply **all six** patches against the new version, copying the rest
    of upstream's changes through untouched:
    - Patch 1: delete `emitUsageEvent` and its supporting machinery in
      `connector.go`, and the `go emitUsageEvent(...)` call in `driver.go`.
@@ -187,6 +218,21 @@ When bumping the `dolthub/driver` version pinned in the top-level `go.mod`:
      phases stay outside the fence. Confirm with lit's parallelized
      `internal/store` suite under `go test -short -race`, which fails with
      construction-time DATA RACE warnings if the fence is missing.
+   - Patch 6: in `Connector.Connect`, build the session with
+     `newLocalContext(se, context.Background())`; re-add `ExecContext` and
+     `QueryContext` to `doltStmt` and `doltMultiStmt` in `statement.go`
+     (each runs on `session.WithContext(ctx)`; `Exec` and `Query` share
+     their path with `context.Background()`), close each statement's row
+     iterator on the session's own context (`newResult` in `result.go`,
+     `doltRows.Close` in `rows.go`), and run `BEGIN` on `BeginTx`'s ctx in
+     `conn.go`. Confirm with this directory's
+     `cancellation_test.go` (a statement cut at any point of its run lands
+     nothing and leaves no transaction behind; it fails if a statement
+     ignores its ctx or closes on it), lit's `internal/store`
+     `TestStoreOutlivesTheContextItWasOpenedUnder` (a commit fails with
+     `Error 1105: context canceled` if the session holds the Connect context)
+     and `internal/cli` `TestMirrorPushHoldsNothingOnTheLiveStore` (the run
+     is unbounded if a statement ignores its own deadline).
 4. Update the `replace` directive's version comment in the top-level
    `go.mod` to match.
 
