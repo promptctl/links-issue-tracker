@@ -127,7 +127,7 @@ func TestHTTPInstallerAtomicReplacesBinary(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), ".lit-downgrade-") {
+		if strings.HasPrefix(e.Name(), ".lit-install-") {
 			t.Errorf("orphan temp file left behind: %s", e.Name())
 		}
 	}
@@ -164,7 +164,7 @@ func TestHTTPInstallerSHA256MismatchRefuses(t *testing.T) {
 	// No leftover temp.
 	entries, _ := os.ReadDir(dir)
 	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), ".lit-downgrade-") {
+		if strings.HasPrefix(e.Name(), ".lit-install-") {
 			t.Errorf("orphan temp file left behind: %s", e.Name())
 		}
 	}

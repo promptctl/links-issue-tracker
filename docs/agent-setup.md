@@ -128,7 +128,7 @@ lit close <id>            # close without finishing (wontfix / obsolete / duplic
 lit doctor [--fix]        # health check; run --fix yourself before escalating any error
 ```
 
-## 6. Two things that will bite you
+## 6. Things that will bite you
 
 - **The store you see depends on your current directory.** `lit` selects the database from
   `git rev-parse --git-common-dir` of your cwd. If you `cd` into a different repo (or a

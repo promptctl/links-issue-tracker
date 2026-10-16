@@ -55,6 +55,16 @@ type Snapshot struct {
 	Created time.Time `json:"created"`
 }
 
+// DirFor is the snapshots directory of the database at databaseDir: its
+// sibling, named "snapshots". Every producer and reader of a workspace's
+// snapshots — the user's `lit snapshots` commands and the store's migration,
+// reconcile, and downgrade guards — locates the directory here, so a snapshot
+// one of them names is one the others can list and restore.
+// [LAW:one-source-of-truth]
+func DirFor(databaseDir string) string {
+	return filepath.Join(filepath.Dir(filepath.Clean(databaseDir)), "snapshots")
+}
+
 // ErrSnapshotMissing is returned by Restore when the named snapshot doesn't exist.
 var ErrSnapshotMissing = errors.New("dbsnapshot: snapshot not found")
 

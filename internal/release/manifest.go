@@ -4,11 +4,10 @@
 //
 // This package owns the schema only. It is consumed by:
 //   - tools/mkmanifest (writes the manifest after goreleaser builds artifacts).
-//   - `lit downgrade` (downgrade epic .4, not yet built): fetches the target
-//     version's manifest from the GitHub Release, resolves the current
-//     platform's Artifact, verifies SHA256.
-//   - The refusal-message upgrade (downgrade epic .5, not yet built):
-//     consults a manifest to name a concrete prior version.
+//   - `lit upgrade` and `lit downgrade`: fetch the target release's manifest
+//     and read its schema support — upgrade to refuse a release that cannot
+//     operate the workspace, downgrade for the schema version to reverse to —
+//     then install the current platform's Artifact after verifying its SHA256.
 //
 // [LAW:one-source-of-truth] One schema definition. The bytes mkmanifest writes
 // and the bytes a downgrade client reads share this Go type — there is no

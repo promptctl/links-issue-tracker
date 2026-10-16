@@ -204,7 +204,7 @@ func (s *Store) applyUnrelatedTake(ctx context.Context, result *storage.SyncReco
 		// binary gets the newer data), not a regression. A stale binary holding a
 		// purge the remote lacks is refused instead, since carrying it writes below
 		// the newer schema; upgrading lit is the way on.
-		guard := newSnapshotGuard(s.doltRootDir, migrationSnapshotsDir(s.doltRootDir), formatReconcileSnapshotLabel(time.Now()))
+		guard := newSnapshotGuard(s.doltRootDir, dbsnapshot.DirFor(s.doltRootDir), formatReconcileSnapshotLabel(time.Now()))
 		trackingRef := fmt.Sprintf("remotes/%s/%s", remote, branch)
 		return retryTransientGCContention(ctx, func(ctx context.Context) error {
 			return s.takeRemoteHead(ctx, result, guard, trackingRef)
@@ -245,7 +245,7 @@ func (s *Store) takeRemoteHead(ctx context.Context, result *storage.SyncReconcil
 	// Prune runs AFTER the durable reset, so a prune failure must not fail a completed
 	// take (a retry would find nothing to do). A leftover snapshot is inert.
 	// [LAW:no-silent-failure] surfaced, not promoted.
-	if err := dbsnapshot.PruneMatching(migrationSnapshotsDir(s.doltRootDir), reconcileSnapshotRetention, IsReconcileSnapshotName); err != nil {
+	if err := dbsnapshot.PruneMatching(dbsnapshot.DirFor(s.doltRootDir), reconcileSnapshotRetention, IsReconcileSnapshotName); err != nil {
 		fmt.Fprintf(os.Stderr, "lit: take-remote could not prune old recovery snapshots (reset already done): %v\n", err)
 	}
 	result.State = storage.SyncReconcileTookRemote

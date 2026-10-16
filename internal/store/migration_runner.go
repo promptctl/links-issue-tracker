@@ -312,7 +312,7 @@ func (st migrationState) willMutate() bool {
 func (s *Store) migrate(ctx context.Context) error {
 	guard := newSnapshotGuard(
 		s.doltRootDir,
-		migrationSnapshotsDir(s.doltRootDir),
+		dbsnapshot.DirFor(s.doltRootDir),
 		formatMigrationSnapshotLabel(time.Now()),
 	)
 	if err := s.runMigration(ctx, guard); err != nil {
@@ -690,9 +690,13 @@ func (s *Store) applyPendingMigrations(ctx context.Context) error {
 			// Prune on the failure path too: normal failures insert a quarantine row
 			// so future Opens are blocked before creating a new checkpoint, but
 			// nil-result failures skip quarantine insertion, leaving the door open
-			// for repeated manual retries to accumulate branches. Error ignored —
-			// the migration failure is the primary concern.
-			_ = s.PruneCheckpoints(ctx, migrationCheckpointPrefix, migrationCheckpointRetention)
+			// for repeated manual retries to accumulate branches. The migration
+			// failure stays the error callers classify; a prune failure rides
+			// beside it, since it is the only sign those branches are piling up.
+			// [LAW:no-silent-failure]
+			if pruneErr := s.PruneCheckpoints(ctx, migrationCheckpointPrefix, migrationCheckpointRetention); pruneErr != nil {
+				return errors.Join(cpErr, fmt.Errorf("prune migration checkpoints: %w", pruneErr))
+			}
 			return cpErr
 		}
 		// commitWorkingSet (not ...Once) so each migration commit gets the

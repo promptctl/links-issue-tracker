@@ -657,3 +657,44 @@ func TestQuarantineTableRefusesToDiscardStaleShapeHistory(t *testing.T) {
 		t.Errorf("error message = %q; want it to name the non-canonical shape and the row count", msg)
 	}
 }
+
+// TestFailedMigrationReportsCheckpointPruneFailure pins that a checkpoint
+// prune failing on the migration-failure path reaches the caller beside the
+// migration failure. Cancelling the context inside the failing step makes the
+// reset and the prune that follow it fail too.
+func TestFailedMigrationReportsCheckpointPruneFailure(t *testing.T) {
+	// serial: no t.Parallel — installs the package-level migrationUpByOneForTest
+	// hook.
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+
+	first, err := Open(context.Background(), doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open(first) error = %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("Close(first) error = %v", err)
+	}
+
+	withGooseHistoryDropped(t, context.Background(), doltRoot)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sentinel := errors.New("simulated migration failure")
+	migrationUpByOneForTest = func(context.Context, *goose.Provider) (*goose.MigrationResult, error) {
+		cancel()
+		return nil, sentinel
+	}
+	t.Cleanup(func() { migrationUpByOneForTest = nil })
+
+	_, openErr := Open(ctx, doltRoot, "test-workspace-id")
+	migrationUpByOneForTest = nil
+	if openErr == nil {
+		t.Fatal("Open() returned nil error; expected the migration failure")
+	}
+	if !errors.Is(openErr, sentinel) {
+		t.Errorf("error = %v; expected it to carry the migration failure", openErr)
+	}
+	if !strings.Contains(openErr.Error(), "prune migration checkpoints") {
+		t.Errorf("error = %v; expected the failed checkpoint prune to be reported", openErr)
+	}
+}

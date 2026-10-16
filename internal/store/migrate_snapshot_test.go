@@ -34,7 +34,7 @@ func TestMigrateSnapshotFreshDBOpenTakesExactlyOneSnapshot(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 
-	snaps, err := dbsnapshot.List(migrationSnapshotsDir(doltRoot))
+	snaps, err := dbsnapshot.List(dbsnapshot.DirFor(doltRoot))
 	if err != nil {
 		t.Fatalf("List snapshots error = %v", err)
 	}
@@ -62,7 +62,7 @@ func TestMigrateSnapshotNoOpOpenTakesNoSnapshot(t *testing.T) {
 	if err := first.Close(); err != nil {
 		t.Fatalf("Close(first) error = %v", err)
 	}
-	snapsBefore, err := dbsnapshot.List(migrationSnapshotsDir(doltRoot))
+	snapsBefore, err := dbsnapshot.List(dbsnapshot.DirFor(doltRoot))
 	if err != nil {
 		t.Fatalf("List snapshots after first open error = %v", err)
 	}
@@ -74,7 +74,7 @@ func TestMigrateSnapshotNoOpOpenTakesNoSnapshot(t *testing.T) {
 	if err := second.Close(); err != nil {
 		t.Fatalf("Close(second) error = %v", err)
 	}
-	snapsAfter, err := dbsnapshot.List(migrationSnapshotsDir(doltRoot))
+	snapsAfter, err := dbsnapshot.List(dbsnapshot.DirFor(doltRoot))
 	if err != nil {
 		t.Fatalf("List snapshots after second open error = %v", err)
 	}
@@ -129,7 +129,7 @@ func TestMigrateSnapshotRestoreRoundTripsPreMutationState(t *testing.T) {
 	// migrationPostSnapshotHookForTest hook.
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
-	snapshotsDir := migrationSnapshotsDir(doltRoot)
+	snapshotsDir := dbsnapshot.DirFor(doltRoot)
 
 	// First Open creates the workspace + retains its pre-migrate snapshot.
 	first, err := Open(ctx, doltRoot, "test-workspace-id")
@@ -214,7 +214,7 @@ func TestMigrateSnapshotPruneEnforcesRetention(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
-	snapshotsDir := migrationSnapshotsDir(doltRoot)
+	snapshotsDir := dbsnapshot.DirFor(doltRoot)
 
 	first, err := Open(ctx, doltRoot, "test-workspace-id")
 	if err != nil {
@@ -281,7 +281,7 @@ func TestMigrationPruneSparesUserSnapshots(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
-	snapshotsDir := migrationSnapshotsDir(doltRoot)
+	snapshotsDir := dbsnapshot.DirFor(doltRoot)
 
 	// Bootstrap the workspace so the snapshots dir exists.
 	first, err := Open(ctx, doltRoot, "test-workspace-id")
@@ -383,7 +383,7 @@ func TestDataSurvivesFailedMigrationSnapshotRestore(t *testing.T) {
 	// migrationPostSnapshotHookForTest hook.
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
-	snapshotsDir := migrationSnapshotsDir(doltRoot)
+	snapshotsDir := dbsnapshot.DirFor(doltRoot)
 
 	// Step 1: Seed the workspace with rich data covering all required fields.
 	st, err := Open(ctx, doltRoot, "test-workspace-id")
@@ -613,7 +613,7 @@ func rollbackHistory(t *testing.T, ctx context.Context, doltRoot string) []dbsna
 		})
 		withStore(t, ctx, doltRoot, func(*Store) {}) // migrates forward from `from`
 	}
-	listed, err := dbsnapshot.List(migrationSnapshotsDir(doltRoot))
+	listed, err := dbsnapshot.List(dbsnapshot.DirFor(doltRoot))
 	if err != nil {
 		t.Fatalf("List error = %v", err)
 	}
@@ -708,7 +708,7 @@ func TestRollbackSnapshotPassesOverAnUnreadableSnapshot(t *testing.T) {
 		}
 	})
 	withStore(t, ctx, doltRoot, func(*Store) {}) // migrates forward from v3, snapshotting it
-	listed, err := dbsnapshot.List(migrationSnapshotsDir(doltRoot))
+	listed, err := dbsnapshot.List(dbsnapshot.DirFor(doltRoot))
 	if err != nil {
 		t.Fatalf("List error = %v", err)
 	}
@@ -721,7 +721,7 @@ func TestRollbackSnapshotPassesOverAnUnreadableSnapshot(t *testing.T) {
 	// migration-shaped name, its Dolt manifest overwritten so no engine opens it.
 	now := time.Now().UnixNano()
 	unreadable := fmt.Sprintf("%d-%s", now, formatMigrationSnapshotLabel(time.Unix(0, now)))
-	unreadableDir := filepath.Join(migrationSnapshotsDir(doltRoot), unreadable)
+	unreadableDir := filepath.Join(dbsnapshot.DirFor(doltRoot), unreadable)
 	if err := dbsnapshot.CloneTree(ctx, listed[0].Path, unreadableDir); err != nil {
 		t.Fatalf("clone %s: %v", fromV3, err)
 	}

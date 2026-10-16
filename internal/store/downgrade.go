@@ -191,8 +191,8 @@ func (e *DowngradeIncompleteError) Error() string {
 
 // Downgrade reverses migrations to bring the workspace to targetSchemaVersion,
 // taking a recovery snapshot first and committing one Dolt commit per reversed
-// migration. It is invoked only by the future `lit downgrade` command (ticket
-// .4); no Open-path code reaches it.
+// migration. Its one caller is the `lit downgrade` command; no Open-path code
+// reaches it.
 //
 // The entire pipeline runs under the store's writer-exclusion commit lock —
 // classify, snapshot, and the Down loop are serialized against every other
@@ -257,7 +257,7 @@ func (s *Store) downgradeLocked(ctx context.Context, targetSchemaVersion int64) 
 		return &DowngradeSpanUnsupportedError{Current: state.appliedVersion, Target: targetSchemaVersion, Support: state.support}
 	}
 
-	snapshotsDir := migrationSnapshotsDir(s.doltRootDir)
+	snapshotsDir := dbsnapshot.DirFor(s.doltRootDir)
 	guard := newSnapshotGuard(
 		s.doltRootDir,
 		snapshotsDir,

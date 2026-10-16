@@ -8,7 +8,7 @@ import (
 
 	embedded "github.com/dolthub/driver"
 
-	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
+	"github.com/promptctl/links-issue-tracker/internal/version"
 )
 
 // RemoteSchemaAheadError reports that the remote-tracking head records a schema
@@ -71,14 +71,14 @@ func (s *Store) guardRemoteSchemaAhead(ctx context.Context, remote, branch strin
 }
 
 // guardCommitSchemaAhead is the shared core: it reads the schema version recorded
-// at commitHash as data and refuses when it is above this binary's registry max.
+// at commitHash as data and refuses when it is above this binary's schema support.
 // The reconcile calls it with the remote head anchor it already captured (no second
 // read); the push calls it via guardRemoteSchemaAhead after resolving the tracking
 // head. [LAW:no-ambient-temporal-coupling] the version is read from a fixed commit
 // hash, so the decision cannot shift under a concurrent fetch. remote and branch
 // are carried only to name the failure for the sync-failure contract.
 func (s *Store) guardCommitSchemaAhead(ctx context.Context, remote, branch, commitHash string) error {
-	registryMax, err := migrations.MaxVersion()
+	support, err := version.CarriedSchemaSupport()
 	if err != nil {
 		return err
 	}
@@ -88,14 +88,14 @@ func (s *Store) guardCommitSchemaAhead(ctx context.Context, remote, branch, comm
 	}
 	// [LAW:dataflow-not-control-flow] The comparison runs every call; the two
 	// versions are the values that decide block-vs-proceed, not a mode.
-	if remoteVersion <= registryMax {
+	if remoteVersion <= support.Max {
 		return nil
 	}
 	return &RemoteSchemaAheadError{
 		Remote:             remote,
 		Branch:             branch,
 		RemoteVersion:      remoteVersion,
-		BinarySupportedMax: registryMax,
+		BinarySupportedMax: support.Max,
 	}
 }
 
