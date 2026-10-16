@@ -754,11 +754,11 @@ Test hooks: `migrationUpByOneForTest` (`migration_runner.go`) applies **only** t
 
 ### 8.3 `migrate` — the outer boundary
 
-`(*Store).migrate(ctx)` (`migration_runner.go`):
+`(*Store).migrate(ctx) (storage.Migrated, error)` (`migration_runner.go`):
 1. `guard := newSnapshotGuard(s.doltRootDir, formatMigrationSnapshotLabel(time.Now()))`.
 2. `s.runMigration(ctx, guard)`.
 3. On error: if `guard.took()` → wrap as `&MigrationRollbackError{Snapshot: snap, Cause: err}`; otherwise return the raw error (`migration_runner.go`).
-4. On success: if a snapshot was taken → `dbsnapshot.PruneMatching(s.doltRootDir, 10, IsMigrationSnapshotName)`; a prune failure **is** promoted here: `"prune migration snapshots: %w"` (`migration_runner.go`).
+4. On success with no snapshot taken → the zero `storage.Migrated`. With one → `Migrated{Snapshot: snap.Name}`, then `dbsnapshot.PruneMatching(s.doltRootDir, 10, IsMigrationSnapshotName)`; a prune failure is **not** the returned error, because the migration has committed: it is `Migrated.PruneErr`, `"prune migration snapshots: %w"` (`migration_runner.go`). `Open` keeps the report on the handle, read back through `(*Store).Migrated()`; a sync open, and a read open that migrated nothing, report the zero value (`store.go`, `migration_runner.go`).
 
 ### 8.4 `runMigration` — the full sequence
 

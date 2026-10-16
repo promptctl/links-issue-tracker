@@ -59,7 +59,7 @@ func prefixSetLeaf() wsLeaf {
 			// [LAW:no-silent-failure]
 			return model.ValidationError{Message: fmt.Sprintf("invalid prefix %q: %v", requested, err)}
 		}
-		census, err := readWorkspaceIDPrefixCensus(ctx, ws)
+		census, err := readWorkspaceIDPrefixCensus(ctx, stdout, ws)
 		if err != nil {
 			return err
 		}

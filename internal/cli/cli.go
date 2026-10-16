@@ -179,6 +179,9 @@ func runWithApp(ctx context.Context, stdout io.Writer, accessMode app.AccessMode
 	ws := ap.Workspace
 	runErr := func() error {
 		defer ap.Close()
+		if err := reportOpenMigration(ctx, stdout, ap.Store); err != nil {
+			return err
+		}
 		return run(ctx, ap)
 	}()
 	// After the close, so the write happens outside the workspace lock, and
@@ -526,6 +529,9 @@ func runList(ctx context.Context, stdout io.Writer, surface listSurface, args []
 			return fmt.Errorf("open store at %q read-only: %w", *atDir, markEngineOpenContention(err, infoForLocation(loc)))
 		}
 		defer func() { _ = st.Close() }()
+		if err := reportOpenMigration(ctx, stdout, st); err != nil {
+			return err
+		}
 		// noReadyPolicy, for the reason gatherCrossProjectRollup states at its own
 		// foreign-store call: a Location carries no repo root, so there is no ready
 		// policy to read. It opts out of ONLY the field-presence gate; every

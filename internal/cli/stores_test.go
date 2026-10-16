@@ -240,6 +240,36 @@ func TestPrintCrossProjectRollupCloseWarningKeepsCounts(t *testing.T) {
 	}
 }
 
+// A store whose open migrated it and then could not roll old migration
+// snapshots off gets a `~` note, whether its read went on to succeed or fail:
+// the migration committed before the read, and the count on the event says
+// how many stores it happened to.
+func TestPrintCrossProjectRollupNotesAFailedSnapshotPrune(t *testing.T) {
+	t.Parallel()
+	rows := []projectRollup{
+		{Label: "alpha", StorageDir: "/repos/alpha/.git/links", Ready: 3, PruneErr: errors.New("prune migration snapshots: stuck")},
+		{Label: "beta", StorageDir: "/repos/beta/.git/links", Err: errors.New("unreadable"), PruneErr: errors.New("prune migration snapshots: stuck")},
+		{Label: "gamma", StorageDir: "/repos/gamma/.git/links", Ready: 1},
+	}
+	var out bytes.Buffer
+	if err := printCrossProjectRollup(&out, rows); err != nil {
+		t.Fatalf("printCrossProjectRollup() error = %v", err)
+	}
+	got := out.String()
+	for _, dir := range []string{"/repos/alpha/.git/links", "/repos/beta/.git/links"} {
+		want := "~ " + dir + ": warning: old migration snapshots were not removed: prune migration snapshots: stuck\n"
+		if !strings.Contains(got, want) {
+			t.Errorf("output %q missing %q", got, want)
+		}
+	}
+	if strings.Contains(got, "~ /repos/gamma") {
+		t.Errorf("output %q notes a store whose open pruned cleanly", got)
+	}
+	if n := countPruneFailures(rows); n != 2 {
+		t.Errorf("countPruneFailures() = %d, want 2", n)
+	}
+}
+
 // TestGatherCrossProjectRollupUnreadableStoreIsErrorRow drives the gather path:
 // a tree of two discovered-but-unopenable stores yields two error rows rather
 // than a fatal error, so one broken store never aborts the whole overview.

@@ -311,27 +311,39 @@ func (st migrationState) willMutate() bool {
 // migrate is the single startup migration boundary. It owns the snapshot
 // guard: runMigration takes exactly one recovery snapshot before its first
 // write, migrate wraps any post-snapshot failure with the operator restore
-// command, and prunes migration snapshots at the tail of a mutating Open.
+// command, and prunes migration snapshots at the tail of a mutating Open. It
+// reports what it did as a storage.Migrated; a prune failure is reported there,
+// not as its error, because the migration has already committed.
 //
 // [LAW:single-enforcer] Store-level Open routes all schema convergence through
 // this one boundary; the snapshot/prune budget lives here, not at callsites.
-func (s *Store) migrate(ctx context.Context) error {
+func (s *Store) migrate(ctx context.Context) (storage.Migrated, error) {
 	guard := newSnapshotGuard(s.doltRootDir, formatMigrationSnapshotLabel(time.Now()))
 	if err := s.runMigration(ctx, guard); err != nil {
 		if snap, ok := guard.took(); ok {
-			return &MigrationRollbackError{Snapshot: snap, Cause: err}
+			return storage.Migrated{}, &MigrationRollbackError{Snapshot: snap, Cause: err}
 		}
-		return err
+		return storage.Migrated{}, err
 	}
-	if _, ok := guard.took(); ok {
-		// [LAW:one-source-of-truth] Migration retention bounds migration
-		// snapshots only; user snapshots share the directory under an
-		// independent budget. IsMigrationSnapshotName is the kind discriminator.
-		if err := dbsnapshot.PruneMatching(s.doltRootDir, migrationSnapshotRetention, IsMigrationSnapshotName); err != nil {
-			return fmt.Errorf("prune migration snapshots: %w", err)
-		}
+	snap, ok := guard.took()
+	if !ok {
+		return storage.Migrated{}, nil
 	}
-	return nil
+	done := storage.Migrated{Snapshot: snap.Name}
+	// [LAW:one-source-of-truth] Migration retention bounds migration
+	// snapshots only; user snapshots share the directory under an
+	// independent budget. IsMigrationSnapshotName is the kind discriminator.
+	if err := dbsnapshot.PruneMatching(s.doltRootDir, migrationSnapshotRetention, IsMigrationSnapshotName); err != nil {
+		done.PruneErr = fmt.Errorf("prune migration snapshots: %w", err)
+	}
+	return done, nil
+}
+
+// Migrated reports what this handle's open did to the stored shape. A handle
+// opened for sync, or a read open that found nothing to migrate, reports the
+// zero value.
+func (s *Store) Migrated() storage.Migrated {
+	return s.migrated
 }
 
 // migrationAssessment is what a workspace's live schema is relative to this

@@ -155,6 +155,25 @@ not work on this checkout's tickets, such as `lit sync push`, `lit init` or
 | `statusline.plugin_error` | Why the plugin could not be installed, or `null`. The file is written all the same. |
 | `counts.statusline.bytes` | The size of the file written; `0` when nothing was written. |
 
+## What opening a store records
+
+A command that opens a store records what the open did to the store's schema.
+An open that finds the schema behind this lit migrates it forward, taking a
+recovery snapshot first, then removes the oldest migration snapshots past the
+ten it keeps.
+
+| Key | Meaning |
+| --- | --- |
+| `migration.snapshot` | The recovery snapshot the open took before migrating, or `""` when there was nothing to migrate. |
+| `migration.snapshot_prune_error` | Why older migration snapshots could not be removed after the migration, or `null`. The command runs all the same, and its output begins with a `warning: old migration snapshots were not removed:` line. |
+
+`lit stores --counts` opens every store it finds, so it records a count
+instead.
+
+| Key | Meaning |
+| --- | --- |
+| `counts.stores.snapshot_prune_failures` | The stores whose open migrated them and then could not remove older migration snapshots. Each gets a `~ <storage dir>: warning: old migration snapshots were not removed:` line after the table. |
+
 ## What a schema-ahead refusal records
 
 A command ends with reason `workspace_schema_ahead` when a schema it was asked
@@ -248,7 +267,7 @@ the ones it had.
 | `downgrade.workspace_schema` | The workspace's applied schema version, as the reverse read it under the workspace lock and decided from. Set once the reverse has read it, whether the command then succeeds, refuses, or fails; absent, with the snapshot and the count, when it failed before that read. |
 | `downgrade.snapshot` | The recovery snapshot taken before the first down-migration, or `""` when none was taken. |
 | `counts.downgrade.reversed` | The down-migrations applied. `0` when none ran; on a reverse that failed part-way, those applied before it stopped. |
-| `downgrade.snapshot_prune_error` | Why older downgrade snapshots could not be removed after the reverse, or `""` when nothing failed. The downgrade prints the failure as a `warning:` line and still installs the `--to` release. |
+| `downgrade.snapshot_prune_error` | Why older downgrade snapshots could not be removed after the reverse, or `null`. The downgrade prints the failure as a `warning:` line and still installs the `--to` release. |
 | `downgrade.installed_path` | The path the `--to` release was installed to. Absent when nothing was installed. |
 
 ## Reading the file

@@ -7,6 +7,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/merge"
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 )
 
 // Capabilities are what an engine may offer beyond [Store], and the line
@@ -215,6 +216,30 @@ type SchemaMigrator interface {
 	// return once it has read the applied version — a success, a refusal, and
 	// a failure part-way alike — and nil only when it failed before that read.
 	Downgrade(ctx context.Context, targetSchemaVersion int64) (*Downgraded, error)
+
+	// Migrated reports what opening this handle did to the stored shape.
+	Migrated() Migrated
+}
+
+// Migrated is what an open did to the stored shape: the recovery snapshot it
+// took before migrating, "" when it found nothing to migrate, and why rolling
+// older recovery snapshots off afterwards failed, if it did.
+// [LAW:types-are-the-program] PruneErr is a field, not the open's error: the
+// prune runs after the migration has committed, so its failure leaves the
+// store at the shape this binary reads. An open that failed on it would stop
+// the command over a leftover snapshot, and the next open, finding nothing to
+// migrate, would succeed without retrying the prune.
+type Migrated struct {
+	Snapshot string
+	PruneErr error
+}
+
+// EventRecord is the open's migration as event facts.
+func (m Migrated) EventRecord() map[string]any {
+	return map[string]any{
+		"migration.snapshot":             m.Snapshot,
+		"migration.snapshot_prune_error": telemetry.ErrorText(m.PruneErr),
+	}
 }
 
 // Downgraded is what a Downgrade did: the shape version it read under the lock
@@ -240,14 +265,10 @@ type Downgraded struct {
 // EventRecord is the downgrade as event facts and counts, so the success and
 // every failure after the read name the same facts under the same keys.
 func (d Downgraded) EventRecord() (map[string]any, map[string]int) {
-	pruneErr := ""
-	if d.PruneErr != nil {
-		pruneErr = d.PruneErr.Error()
-	}
 	return map[string]any{
 			"downgrade.workspace_schema":     d.From,
 			"downgrade.snapshot":             d.Snapshot,
-			"downgrade.snapshot_prune_error": pruneErr,
+			"downgrade.snapshot_prune_error": telemetry.ErrorText(d.PruneErr),
 		}, map[string]int{
 			"downgrade.reversed": d.Reversed,
 		}

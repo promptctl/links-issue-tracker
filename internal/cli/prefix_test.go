@@ -212,7 +212,7 @@ func TestPrefixSetApplyReportsThePrefixItReplaced(t *testing.T) {
 		t.Fatalf("Parse(--apply) error = %v", err)
 	}
 	var out bytes.Buffer
-	if err := leaf.work(context.Background(), &out, stale, []string{"newproj"}); err != nil {
+	if err := leaf.work(underInvocation(context.Background()), &out, stale, []string{"newproj"}); err != nil {
 		t.Fatalf("prefix set --apply error = %v\n%s", err, out.String())
 	}
 	if want := "issue_prefix: between -> newproj (applied)"; !strings.Contains(out.String(), want) {

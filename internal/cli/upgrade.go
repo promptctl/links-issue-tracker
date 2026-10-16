@@ -131,7 +131,7 @@ func withWorkspaceSchema(declare func() upgradeLeafShape) wsLeafFn {
 			if err != nil {
 				return fmt.Errorf("upgrade: read this binary's version info: %w", err)
 			}
-			return l.work(ctx, stdout, upgradeScope{schema: workspaceSchemaReader{ws: ws}, current: current}, positional)
+			return l.work(ctx, stdout, upgradeScope{schema: workspaceSchemaReader{ws: ws, out: stdout}, current: current}, positional)
 		})
 	}
 }
@@ -168,6 +168,8 @@ type schemaReader interface {
 // happening to succeed.
 type workspaceSchemaReader struct {
 	ws workspace.Info
+	// out is the command's output, where a warning from the open goes.
+	out io.Writer
 }
 
 func (r workspaceSchemaReader) AppliedSchemaVersion(ctx context.Context) (applied int64, err error) {
@@ -187,6 +189,9 @@ func (r workspaceSchemaReader) AppliedSchemaVersion(ctx context.Context) (applie
 			err = cerr
 		}
 	}()
+	if err := reportOpenMigration(ctx, r.out, st); err != nil {
+		return 0, err
+	}
 	migrator, err := storage.SchemaMigration.Of(st)
 	if err != nil {
 		return 0, err

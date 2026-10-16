@@ -8,6 +8,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -47,6 +48,7 @@ func runStores(ctx context.Context, stdout io.Writer, args []string) error {
 		if err != nil {
 			return err
 		}
+		telemetry.Count(ctx, "stores.snapshot_prune_failures", countPruneFailures(rows))
 		return printCrossProjectRollup(stdout, rows)
 	}
 	locations, err := workspace.Discover(roots)
@@ -83,6 +85,10 @@ type projectRollup struct {
 	Blocked    int
 	Err        error // store unreadable — counts unset
 	CloseErr   error // read succeeded (counts valid) but read-only close warned
+	// PruneErr is the open migrating the store and then failing to roll old
+	// migration snapshots off. It is independent of both errors above: the
+	// migration committed before either could happen.
+	PruneErr error
 }
 
 // gatherCrossProjectRollup discovers every lit store beneath roots and rolls each
@@ -123,6 +129,7 @@ func rollupLocation(ctx context.Context, loc workspace.Location) (row projectRol
 		row.Err = err
 		return row
 	}
+	row.PruneErr = openMigration(st).PruneErr
 	// [LAW:no-silent-failure] A read-only close failure (e.g. the embedded Dolt
 	// engine failing to release its locks) surfaces as CloseErr rather than being
 	// discarded — and only when no substantive error already occurred, so it never
@@ -152,6 +159,18 @@ func rollupLocation(ctx context.Context, loc workspace.Location) (row projectRol
 	row.InFlight = len(inProgress)
 	row.Blocked = len(blocked)
 	return row
+}
+
+// countPruneFailures is how many of the rolled-up stores were migrated by
+// their open and then could not roll old migration snapshots off.
+func countPruneFailures(rows []projectRollup) int {
+	n := 0
+	for _, row := range rows {
+		if row.PruneErr != nil {
+			n++
+		}
+	}
+	return n
 }
 
 // printCrossProjectRollup renders the gathered projects as an aligned table —
@@ -217,6 +236,15 @@ func printCrossProjectRollup(w io.Writer, rows []projectRollup) error {
 	for _, row := range readable {
 		if row.CloseErr != nil {
 			if _, err := fmt.Fprintf(w, "~ %s: close warning: %v\n", row.StorageDir, row.CloseErr); err != nil {
+				return err
+			}
+		}
+	}
+	// Every row, readable or not: the open that migrated the store came before
+	// any read that could fail.
+	for _, row := range rows {
+		if row.PruneErr != nil {
+			if _, err := fmt.Fprintf(w, "~ %s: %s", row.StorageDir, migrationPruneWarning(row.PruneErr)); err != nil {
 				return err
 			}
 		}
