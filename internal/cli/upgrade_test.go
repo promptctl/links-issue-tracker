@@ -681,3 +681,23 @@ func TestRunUpgradeRecordsWhetherItWasAlreadyCurrent(t *testing.T) {
 		})
 	}
 }
+
+// A workspace read that fails still leaves the event the schema versions known
+// before it: the target's and this binary's, and no workspace version.
+func TestRunUpgradeSchemaReadErrorKeepsTheVersionsKnownBeforeIt(t *testing.T) {
+	t.Parallel()
+	res := &stubResolver{target: newFakeTarget()} // Schema.Max == 3
+	inst := &stubInstaller{}
+	facts, err := runUpgradeRecorded(t, &stubSchemaReader{err: errors.New("dolt locked")}, []string{"--to", "v0.9.0"}, olderCurrentInfo(), res, inst)
+	if err == nil {
+		t.Fatal("a failed workspace read must fail the upgrade")
+	}
+	want := map[string]any{
+		"upgrade.target_schema_max":  float64(3),
+		"upgrade.running_schema_min": float64(1),
+		"upgrade.running_schema_max": float64(2),
+	}
+	if !reflect.DeepEqual(facts, want) {
+		t.Errorf("facts = %v; want %v", facts, want)
+	}
+}
