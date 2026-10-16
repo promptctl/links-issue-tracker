@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -354,16 +353,6 @@ func TestDowngradeSpanUnsupportedRefused(t *testing.T) {
 	want := DowngradeSpanUnsupportedError{Current: ahead, Target: registryMax, Support: version.SchemaSupport{Min: baselineVersion, Max: registryMax}}
 	if *unsupported != want {
 		t.Fatalf("err fields = %+v, want %+v", *unsupported, want)
-	}
-	facts, counts := unsupported.EventRecord()
-	wantFacts := map[string]any{
-		"downgrade.workspace_schema":   ahead,
-		"downgrade.target_schema":      registryMax,
-		"downgrade.schema_support_min": baselineVersion,
-		"downgrade.schema_support_max": registryMax,
-	}
-	if !reflect.DeepEqual(facts, wantFacts) || counts != nil {
-		t.Fatalf("EventRecord() = %v, %v; want %v, no counts", facts, counts, wantFacts)
 	}
 	if delta := snapshotCount(t, doltRoot) - before; delta != 0 {
 		t.Fatalf("span-unsupported refusal took %d snapshot(s); want 0", delta)

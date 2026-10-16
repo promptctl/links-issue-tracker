@@ -31,6 +31,17 @@ type Refusal interface {
 	RefusesCommand()
 }
 
+// SchemaAhead is every error raised because the workspace's schema is past
+// this binary's schema support. No change to the command and no rerun of this
+// binary clears it: only a lit whose support reaches the workspace's can. So
+// it is not a Refusal, whose advice is to adjust the command. The CLI maps it
+// to exit 3 and to advice that leaves installing a different lit to the user.
+// A type opts in by declaring the method beside itself. [LAW:single-enforcer]
+type SchemaAhead interface {
+	error
+	SchemaAheadOfBinary()
+}
+
 // RecordedError is every error that carries what it decided and counted onto
 // the failed command's event, as facts and counts under keys its type names.
 // The record is declared beside the type, like its message, so the one sink

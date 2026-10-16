@@ -141,25 +141,12 @@ func (e *DowngradeSpanUnsupportedError) Error() string {
 	)
 }
 
-// RefusesCommand: the same --to is refused on every run of this binary.
-// [LAW:single-enforcer]
-func (*DowngradeSpanUnsupportedError) RefusesCommand() {}
+// SchemaAheadOfBinary: every --to is refused while the workspace is past this
+// binary's support, because the top of the span is what Covers fails on; only
+// a lit whose support reaches the workspace's can run the reverse.
+func (*DowngradeSpanUnsupportedError) SchemaAheadOfBinary() {}
 
-// EventRecord is the span the refusal was asked to reverse and the support
-// that does not cover it.
-func (e *DowngradeSpanUnsupportedError) EventRecord() (map[string]any, map[string]int) {
-	return map[string]any{
-		"downgrade.workspace_schema":   e.Current,
-		"downgrade.target_schema":      e.Target,
-		"downgrade.schema_support_min": e.Support.Min,
-		"downgrade.schema_support_max": e.Support.Max,
-	}, nil
-}
-
-var (
-	_ model.Refusal       = (*DowngradeSpanUnsupportedError)(nil)
-	_ model.RecordedError = (*DowngradeSpanUnsupportedError)(nil)
-)
+var _ model.SchemaAhead = (*DowngradeSpanUnsupportedError)(nil)
 
 // DowngradeRollbackError wraps a downgrade failure that occurred after the
 // recovery snapshot was taken. Parallel in shape and intent to
@@ -266,8 +253,8 @@ func (s *Store) downgradeLocked(ctx context.Context, targetSchemaVersion int64) 
 	// Below-baseline is refused first: no lit reverses past the baseline, so
 	// that target is wrong whichever binary runs it. What can still fail
 	// Covers here is the top of the span — a workspace a newer lit migrated.
-	if support := state.schemaSupport(); !support.Covers(targetSchemaVersion, state.appliedVersion) {
-		return &DowngradeSpanUnsupportedError{Current: state.appliedVersion, Target: targetSchemaVersion, Support: support}
+	if !state.support.Covers(targetSchemaVersion, state.appliedVersion) {
+		return &DowngradeSpanUnsupportedError{Current: state.appliedVersion, Target: targetSchemaVersion, Support: state.support}
 	}
 
 	snapshotsDir := migrationSnapshotsDir(s.doltRootDir)

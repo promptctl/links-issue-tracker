@@ -192,7 +192,7 @@ Constants (`exit.go`):
 17. `NoWork` → 6 (`exit.go`)
 18. `OutsideWorkspaceError` → 3 (`exit.go`)
 19. `errors.Is(err, store.ErrWorkspaceNotInitialized)` → 3 (`exit.go`)
-20. `*store.UnsupportedSchemaVersionError` → 3 (`exit.go`)
+20. `model.SchemaAhead` (`*store.UnsupportedSchemaVersionError`, `*store.DowngradeSpanUnsupportedError`) → 3 (`exit.go`)
 21. `*store.QuarantineBlockError` → 3 (`exit.go`)
 22. `errors.Is(err, workspace.ErrIssuePrefixRefused)` → 3 (`exit.go`)
 23. `BulkFailureError` → 1 (`exit.go`)
@@ -245,7 +245,7 @@ several of these types gets the reason of the earliest one:
 19. `purgeUnconfirmedError` → `purge_unconfirmed`
 20. `OutsideWorkspaceError` → `outside_git_workspace`
 21. `errors.Is(err, store.ErrWorkspaceNotInitialized)` → `workspace_not_initialized`
-22. `*store.UnsupportedSchemaVersionError` → `workspace_schema_ahead`
+22. `model.SchemaAhead` (`*store.UnsupportedSchemaVersionError`, `*store.DowngradeSpanUnsupportedError`) → `workspace_schema_ahead`
 23. `*store.QuarantineBlockError` → `migration_quarantined`
 24. `workspace.StoredPrefixError` → `stored_prefix_refused`
 25. `errors.Is(err, workspace.ErrIssuePrefixRefused)` → `validation_refused`

@@ -39,17 +39,8 @@ func recordStatuslineEvent(ctx context.Context, out statusline.Outcome, err erro
 	telemetry.Set(ctx, "statusline.changed", out.Changed)
 	telemetry.Set(ctx, "statusline.created", out.Created)
 	telemetry.Set(ctx, "statusline.exclude_added", out.ExcludeAdded)
-	telemetry.Set(ctx, "statusline.replaced", errorText(out.Replaced))
-	telemetry.Set(ctx, "statusline.error", errorText(err))
-}
-
-// errorText is err's message, or nil for no error, as the event records it.
-func errorText(err error) *string {
-	if err == nil {
-		return nil
-	}
-	text := err.Error()
-	return &text
+	telemetry.Set(ctx, "statusline.replaced", telemetry.ErrorText(out.Replaced))
+	telemetry.Set(ctx, "statusline.error", telemetry.ErrorText(err))
 }
 
 // nextStatuslineFacts is what a `lit next` outcome tells the statusline file.

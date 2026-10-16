@@ -203,12 +203,13 @@ func commandErrorReason(err error) commandReason {
 	if errors.Is(err, store.ErrWorkspaceNotInitialized) {
 		return reasonWorkspaceNotInitialized
 	}
-	// A workspace whose schema is ahead of this binary. Terminal for the binary
-	// that raised it — no rerun changes which lit is installed — so it must not
-	// reach the default's retry advice. Not validation_refused: the command is
-	// not what is wrong, so "adjust the command" would be false advice.
+	// A workspace whose schema is ahead of this binary: one it refuses to open,
+	// or one it opens but cannot downgrade. Terminal for the binary that raised
+	// it — no rerun changes which lit is installed — so it must not reach the
+	// default's retry advice. Not validation_refused: the command is not what
+	// is wrong, so "adjust the command" would be false advice.
 	// [LAW:one-type-per-behavior]
-	var schemaAhead *store.UnsupportedSchemaVersionError
+	var schemaAhead model.SchemaAhead
 	if errors.As(err, &schemaAhead) {
 		return reasonWorkspaceSchemaAhead
 	}

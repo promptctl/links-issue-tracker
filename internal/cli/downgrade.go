@@ -12,6 +12,8 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/release"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
+	"github.com/promptctl/links-issue-tracker/internal/version"
 )
 
 // downgradeLeaf composes the schema-side Downgrade boundary (internal/store)
@@ -43,7 +45,7 @@ func downgradeLeaf() appLeaf {
 }
 
 // withSchemaMigrator adapts a downgrade leaf to the app pipeline, asking the
-// opened store for the one verb the work needs.
+// opened store for the schema verbs the work needs.
 // [LAW:parse-dont-validate] Schema migration is a capability: an engine whose
 // data has no shape versioned apart from the data itself has nothing to
 // downgrade. Asking here yields the migrator, which already satisfies the
@@ -55,12 +57,16 @@ func downgradeLeaf() appLeaf {
 func withSchemaMigrator(declare func() downgradeLeafShape) appLeafFn {
 	return func() appLeaf {
 		l := declare()
-		return adaptLeaf[schemaDowngrader, *app.App](l, func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+		return adaptLeaf[downgradeScope, *app.App](l, func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 			migrator, err := storage.SchemaMigration.Of(ap.Store)
 			if err != nil {
 				return err
 			}
-			return l.work(ctx, stdout, migrator, positional)
+			current, err := version.Get()
+			if err != nil {
+				return fmt.Errorf("downgrade: read this binary's version info: %w", err)
+			}
+			return l.work(ctx, stdout, downgradeScope{schema: migrator, current: current}, positional)
 		})
 	}
 }
@@ -70,18 +76,28 @@ func withSchemaMigrator(declare func() downgradeLeafShape) appLeafFn {
 // substitute a fake.
 //
 // [LAW:types-are-the-program] The CLI doesn't need the full storage.Store API
-// for downgrade; it needs exactly this verb. Narrowing the dependency to the
-// one method that's used makes the pipeline testable without a real Dolt
-// workspace and prevents callers from coupling to incidental Store methods.
+// for downgrade; it needs exactly these verbs: the reverse, and the applied
+// version the event records it was decided from. Narrowing the dependency to
+// them makes the pipeline testable without a real Dolt workspace and prevents
+// callers from coupling to incidental Store methods.
 type schemaDowngrader interface {
+	schemaReader
 	Downgrade(ctx context.Context, targetSchemaVersion int64) error
 }
 
-// downgradeLeafShape is downgrade's leaf over the one verb its work needs,
-// rather than over a whole opened app. [LAW:types-are-the-program] the narrow
+// downgradeScope is what downgrade's work runs against: the store's schema
+// verbs, and this binary's identity, whose schema support decides whether the
+// reverse can run. It mirrors upgradeScope.
+type downgradeScope struct {
+	schema  schemaDowngrader
+	current version.Info
+}
+
+// downgradeLeafShape is downgrade's leaf over the verbs its work needs, rather
+// than over a whole opened app. [LAW:types-are-the-program] the narrow
 // resource is what lets a test drive the real declaration→parse→work path
 // against a fake, with no store and no app anywhere in the picture.
-type downgradeLeafShape = leaf[schemaDowngrader]
+type downgradeLeafShape = leaf[downgradeScope]
 
 // downgradeLeafWith is the leaf parameterised over the typed dependencies so
 // tests can substitute fakes. downgradeLeaf picks the production
@@ -98,7 +114,7 @@ func downgradeLeafWith(
 	// --to is required, not optional, and the derived sentence cannot say so:
 	// "values are passed as flags: --to" reads exactly like a flag you may omit.
 	// Requiredness is the leaf's own knowledge. [LAW:one-source-of-truth]
-	return downgradeLeafShape{fs: fs, positionals: 0, usage: "usage: lit downgrade --to <version>", work: func(ctx context.Context, stdout io.Writer, store schemaDowngrader, _ []string) error {
+	return downgradeLeafShape{fs: fs, positionals: 0, usage: "usage: lit downgrade --to <version>", work: func(ctx context.Context, stdout io.Writer, scope downgradeScope, _ []string) error {
 		tag, err := normalizeReleaseTag(*to, "downgrade")
 		if err != nil {
 			return err
@@ -110,7 +126,21 @@ func downgradeLeafWith(
 			return err
 		}
 
-		if err := store.Downgrade(ctx, target.Manifest.Schema.Max); err != nil {
+		// [LAW:nothing-unseen] the schema versions the reverse is decided from —
+		// the same four `lit upgrade` records for its mirror decision — each set
+		// as soon as it is known, so an exit before the decision still carries
+		// them. The store decides from its own read under the workspace lock;
+		// this one is the event's.
+		telemetry.Set(ctx, "downgrade.target_schema_max", target.Manifest.Schema.Max)
+		telemetry.Set(ctx, "downgrade.running_schema_min", scope.current.Schema.Min)
+		telemetry.Set(ctx, "downgrade.running_schema_max", scope.current.Schema.Max)
+		applied, err := scope.schema.AppliedSchemaVersion(ctx)
+		if err != nil {
+			return fmt.Errorf("downgrade: read workspace schema version: %w", err)
+		}
+		telemetry.Set(ctx, "downgrade.workspace_schema", applied)
+
+		if err := scope.schema.Downgrade(ctx, target.Manifest.Schema.Max); err != nil {
 			return err
 		}
 

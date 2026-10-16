@@ -213,6 +213,18 @@ func Set(ctx context.Context, key string, value any) {
 	r.ev.Facts[key] = value
 }
 
+// ErrorText is err as a fact value: its message, or nil for no error, so the
+// event says null rather than an empty string when nothing failed. Every fact
+// that records an error records it through this one encoding.
+// [LAW:one-source-of-truth]
+func ErrorText(err error) *string {
+	if err == nil {
+		return nil
+	}
+	text := err.Error()
+	return &text
+}
+
 // Count records one of the command's counts.
 func Count(ctx context.Context, key string, n int) {
 	r := from(ctx)

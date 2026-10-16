@@ -112,8 +112,8 @@ type Info struct {
 // migration. Both are derived from internal/store/migrations at call time.
 //
 // [LAW:one-source-of-truth] These bounds are the same numbers the migration
-// runner uses to decide forward-compat; every holder of a SchemaSupport builds
-// it from internal/store/migrations, never from a parallel source.
+// runner uses to decide forward-compat; every holder of this binary's support
+// gets it from CarriedSchemaSupport, never from a parallel construction.
 // [LAW:single-enforcer] Covers is the one answer to whether a binary can
 // reverse a span: `lit downgrade` refuses on it and `lit upgrade` picks its
 // remedy on it.
@@ -134,7 +134,7 @@ func (s SchemaSupport) Covers(lo, hi int64) bool {
 // migration registry to derive SchemaSupport.Max; cheap but not free, so
 // callers that fan out (e.g., a tight loop) should cache the result.
 func Get() (Info, error) {
-	max, err := migrations.MaxVersion()
+	schema, err := CarriedSchemaSupport()
 	if err != nil {
 		return Info{}, err
 	}
@@ -144,8 +144,22 @@ func Get() (Info, error) {
 		Date:       Date,
 		IsDev:      Version == "",
 		FromSource: Origin != OriginRelease,
-		Schema:     SchemaSupport{Min: migrations.Baseline, Max: max},
+		Schema:     schema,
 	}, nil
+}
+
+// CarriedSchemaSupport is the schema support of the migrations compiled into
+// this binary: the registry's baseline through its highest migration. It is
+// the one place a SchemaSupport is built from the registry, so every holder
+// of this binary's support — `lit version`, a release manifest, and the
+// store's own forward-compat and downgrade checks — holds the same range.
+// [LAW:one-source-of-truth]
+func CarriedSchemaSupport() (SchemaSupport, error) {
+	max, err := migrations.MaxVersion()
+	if err != nil {
+		return SchemaSupport{}, err
+	}
+	return SchemaSupport{Min: migrations.Baseline, Max: max}, nil
 }
 
 // BuildAge reports how long ago i.Date was stamped, relative to now. ok is

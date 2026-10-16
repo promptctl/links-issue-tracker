@@ -740,11 +740,11 @@ Test hooks: `migrationUpByOneForTest` (`migration_runner.go`) applies **only** t
 ### 8.2 Phases
 
 `migrationPhase` (`migration_runner.go`) with `phaseFresh`(0), `phaseAdopt`(1), `phaseManaged`(2) (`migration_runner.go`).
-`migrationState{phase; appliedVersion int64; registryMaxVers int64}` (`migration_runner.go`).
-`willMutate()` (`migration_runner.go`): `phaseManaged` → `appliedVersion < registryMaxVers`; every other phase → **true**.
+`migrationState{phase; appliedVersion int64; support version.SchemaSupport}` (`migration_runner.go`).
+`willMutate()` (`migration_runner.go`): `phaseManaged` → `appliedVersion < support.Max`; every other phase → **true**.
 
 `classifyMigrationState(ctx)` (`migration_runner.go`) — reads only, in this order:
-1. `migrations.MaxVersion()` → `registryMax`.
+1. `version.CarriedSchemaSupport()` → `support`.
 2. `tableExists("issue_history")` — the **legacy marker**. Present → `phaseAdopt` immediately, **regardless of what goose_db_version claims** (`migration_runner.go`). Rationale: `issue_history` is a pre-goose-only table the baseline never creates and `reconcileToBaseline` drops; its presence is conclusive evidence of a pre-goose canonical shape, and this re-routes "buggy older binary fabricated goose rows on a pre-goose workspace" back into `phaseAdopt` (`migration_runner.go`).
 3. `tableExists("goose_db_version")` → present → `phaseManaged` with `appliedVersion = recordedMigrationVersion(ctx)`.
 4. `verifyBaselineShape(ctx)` → `present == 0` → `phaseFresh`; otherwise `phaseAdopt`.
@@ -766,7 +766,7 @@ Test hooks: `migrationUpByOneForTest` (`migration_runner.go`) applies **only** t
 `runMigration(ctx, guard)` (`migration_runner.go`), in exact order:
 
 1. `state = classifyMigrationState(ctx)`.
-2. **Ahead-of-registry check**: `state.appliedVersion > state.registryMaxVers` → `return s.refuseIfBaselineMissing(ctx, state)`. **No bookkeeping mutation ever happens on this path** — trimming the goose log would destroy true information (`migration_runner.go`).
+2. **Ahead-of-registry check**: `state.appliedVersion > state.support.Max` → `return s.refuseIfBaselineMissing(ctx, state)`. **No bookkeeping mutation ever happens on this path** — trimming the goose log would destroy true information (`migration_runner.go`).
 3. **Version-content drift check** — `state.phase == phaseManaged` only, and run **independently of `willMutate`** (`migration_runner.go`):
    - `verifyAppliedVersionsMatchRegistry(ctx, state.appliedVersion)`.
    - A non-`*VersionContentMismatchError` error is returned as-is.
@@ -923,7 +923,7 @@ Tests: `TestOpenRepairsVersionSlotReuseContentMismatch` (`migration_runner_test.
 `tableColumns(ctx, table)` (`migration_runner.go`): `SELECT column_name FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ?`, lowercasing each name. An absent table yields an empty set.
 `tableExists(ctx, table)` (`migration_runner.go`): `SELECT 1 FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ? LIMIT 1`; `sql.ErrNoRows` → `false, nil`.
 
-`refuseIfBaselineMissing(ctx, state)` (`migration_runner.go`): `baselineCarried`; refuses when it is false, returning `&UnsupportedSchemaVersionError{WorkspaceVersion: state.appliedVersion, MaxSupported: state.registryMaxVers, MissingBaseline: missing, SnapshotName, SnapshotLookupErr, SnapshotsExamined, SnapshotsUnreadable}` from `s.searchRollbackSnapshot(ctx, state.registryMaxVers)`. **Performs no write.**
+`refuseIfBaselineMissing(ctx, state)` (`migration_runner.go`): `baselineCarried`; refuses when it is false, returning `&UnsupportedSchemaVersionError{WorkspaceVersion: state.appliedVersion, MaxSupported: state.support.Max, MissingBaseline: missing, SnapshotName, SnapshotLookupErr, SnapshotsExamined, SnapshotsUnreadable}` from `s.searchRollbackSnapshot(ctx, state.support.Max)`. **Performs no write.**
 
 `baselineCarried(ctx)` (`migration_runner.go`): `verifyBaselineShape`; returns `missing` and `present > 0 && len(missing) == 0`.
 

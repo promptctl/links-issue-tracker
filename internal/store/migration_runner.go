@@ -16,6 +16,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/version"
 )
 
@@ -190,20 +191,23 @@ func (e *UnsupportedSchemaVersionError) Error() string {
 // EventRecord is which snapshot the refusal offered as the lossy rollback —
 // "" when none — why snapshots could not be read, and how many it read.
 func (e *UnsupportedSchemaVersionError) EventRecord() (map[string]any, map[string]int) {
-	var lookupErr any
-	if e.SnapshotLookupErr != nil {
-		lookupErr = e.SnapshotLookupErr.Error()
-	}
 	return map[string]any{
 			"schema_ahead.rollback_snapshot":     e.SnapshotName,
-			"schema_ahead.rollback_lookup_error": lookupErr,
+			"schema_ahead.rollback_lookup_error": telemetry.ErrorText(e.SnapshotLookupErr),
 		}, map[string]int{
 			"schema_ahead.snapshots_examined":   e.SnapshotsExamined,
 			"schema_ahead.snapshots_unreadable": e.SnapshotsUnreadable,
 		}
 }
 
-var _ model.RecordedError = (*UnsupportedSchemaVersionError)(nil)
+// SchemaAheadOfBinary: only a lit whose schema support reaches the
+// workspace's opens it.
+func (*UnsupportedSchemaVersionError) SchemaAheadOfBinary() {}
+
+var (
+	_ model.RecordedError = (*UnsupportedSchemaVersionError)(nil)
+	_ model.SchemaAhead   = (*UnsupportedSchemaVersionError)(nil)
+)
 
 // VersionContentMismatchError is returned by verifyAppliedVersionsMatchRegistry
 // when it finds a goose-applied migration version whose CURRENT registry
@@ -280,15 +284,10 @@ const (
 // migrationState is the classified migration position plus the recorded version
 // (meaningful only for phaseManaged).
 type migrationState struct {
-	phase           migrationPhase
-	appliedVersion  int64
-	registryMaxVers int64
-}
-
-// schemaSupport is this binary's schema support as the classified state saw
-// it: the registry's baseline through its highest migration.
-func (st migrationState) schemaSupport() version.SchemaSupport {
-	return version.SchemaSupport{Min: baselineVersion, Max: st.registryMaxVers}
+	phase          migrationPhase
+	appliedVersion int64
+	// support is this binary's schema support as the classified state saw it.
+	support version.SchemaSupport
 }
 
 // willMutate reports whether this Open will write. Fresh and adopt always
@@ -297,7 +296,7 @@ func (st migrationState) schemaSupport() version.SchemaSupport {
 func (st migrationState) willMutate() bool {
 	switch st.phase {
 	case phaseManaged:
-		return st.appliedVersion < st.registryMaxVers
+		return st.appliedVersion < st.support.Max
 	default:
 		return true
 	}
@@ -368,7 +367,7 @@ func (a migrationAssessment) String() string {
 	case a.drift != nil:
 		return fmt.Sprintf("applied schema v%d missing registered content (%s)", a.drift.Version, strings.Join(a.drift.Missing, ", "))
 	case a.state.phase == phaseManaged:
-		return fmt.Sprintf("schema v%d behind this binary's v%d", a.state.appliedVersion, a.state.registryMaxVers)
+		return fmt.Sprintf("schema v%d behind this binary's v%d", a.state.appliedVersion, a.state.support.Max)
 	case a.state.phase == phaseAdopt:
 		return "a pre-goose schema awaiting adoption"
 	default:
@@ -406,7 +405,7 @@ func (s *Store) assessMigration(ctx context.Context) (migrationAssessment, error
 	// the gap named. There is no bookkeeping mutation: trimming the log would
 	// destroy true "these migrations ran" information and leave the live schema
 	// ahead of a reset log, the landmine a later registry catch-up detonates.
-	if state.appliedVersion > state.registryMaxVers {
+	if state.appliedVersion > state.support.Max {
 		if err := s.refuseIfBaselineMissing(ctx, state); err != nil {
 			return migrationAssessment{}, err
 		}
@@ -924,10 +923,10 @@ func (s *Store) refuseIfBaselineMissing(ctx context.Context, state migrationStat
 		return err
 	}
 	if !carried {
-		search := s.searchRollbackSnapshot(ctx, state.registryMaxVers)
+		search := s.searchRollbackSnapshot(ctx, state.support.Max)
 		return &UnsupportedSchemaVersionError{
 			WorkspaceVersion:    state.appliedVersion,
-			MaxSupported:        state.registryMaxVers,
+			MaxSupported:        state.support.Max,
 			MissingBaseline:     missing,
 			SnapshotName:        search.snapshot,
 			SnapshotLookupErr:   search.err,
@@ -975,7 +974,7 @@ func (s *Store) baselineCarried(ctx context.Context) (missing []string, carried 
 // the workspace; the runner reacts to them. No flags, no modes, no
 // "what kind of corruption is this" guessing.
 func (s *Store) classifyMigrationState(ctx context.Context) (migrationState, error) {
-	registryMax, err := migrations.MaxVersion()
+	support, err := version.CarriedSchemaSupport()
 	if err != nil {
 		return migrationState{}, err
 	}
@@ -999,7 +998,7 @@ func (s *Store) classifyMigrationState(ctx context.Context) (migrationState, err
 		return migrationState{}, err
 	}
 	if legacyMarker {
-		return migrationState{phase: phaseAdopt, registryMaxVers: registryMax}, nil
+		return migrationState{phase: phaseAdopt, support: support}, nil
 	}
 	gooseManaged, err := s.tableExists(ctx, gooseVersionTable)
 	if err != nil {
@@ -1010,16 +1009,16 @@ func (s *Store) classifyMigrationState(ctx context.Context) (migrationState, err
 		if err != nil {
 			return migrationState{}, err
 		}
-		return migrationState{phase: phaseManaged, appliedVersion: applied, registryMaxVers: registryMax}, nil
+		return migrationState{phase: phaseManaged, appliedVersion: applied, support: support}, nil
 	}
 	present, _, err := s.verifyBaselineShape(ctx)
 	if err != nil {
 		return migrationState{}, err
 	}
 	if present == 0 {
-		return migrationState{phase: phaseFresh, registryMaxVers: registryMax}, nil
+		return migrationState{phase: phaseFresh, support: support}, nil
 	}
-	return migrationState{phase: phaseAdopt, registryMaxVers: registryMax}, nil
+	return migrationState{phase: phaseAdopt, support: support}, nil
 }
 
 // migrationColumnAdds is one registry migration's version/name plus the

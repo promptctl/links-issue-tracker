@@ -397,6 +397,8 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "default branch of remote %q is not known on this machine: git names none in refs/remotes/%s/HEAD and no sync here has learned it from the remote; the next sync that reaches the remote learns it", Src: "default branch of remote %q is not known on this machine: git names none in refs/remotes/%s/HEAD and no sync here has learned it from the remote; the next sync that reaches the remote learns it"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "discard candidate scratch after promotion: %w", Src: "discard candidate scratch after promotion: %w"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "discover stores: %w", Src: "discover stores: %w"},
+	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "downgrade: read this binary's version info: %w", Src: "downgrade: read this binary's version info: %w"},
+	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "downgrade: read workspace schema version: %w", Src: "downgrade: read workspace schema version: %w"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "downgrade: resolve current binary: %w", Src: "downgrade: resolve current binary: %w"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "eject: empty selection", Src: "eject: empty selection"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "ensure storage dir for debounce marker", Src: "ensure storage dir for debounce marker: %w"},

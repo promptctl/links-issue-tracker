@@ -175,14 +175,14 @@ func runUpgradeWith(
 func runDowngradeWith(
 	ctx context.Context,
 	stdout io.Writer,
-	store schemaDowngrader,
+	scope downgradeScope,
 	args []string,
 	resolver release.Resolver,
 	installer release.Installer,
 	binPathFn func() (string, error),
 ) error {
 	l := downgradeLeafWith(resolver, installer, binPathFn)
-	return runLeaf(l, ctx, stdout, store, args)
+	return runLeaf(l, ctx, stdout, scope, args)
 }
 
 // runListWithStore drives `ls` against a store the test has already opened —

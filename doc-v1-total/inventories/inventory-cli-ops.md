@@ -38,7 +38,7 @@ data — described as assets, not as documentation of behavior).
 | 0 | `ExitOK` (`exit.go`) | nil error |
 | 1 | `ExitGeneric` (`exit.go`) | default; also `BulkFailureError` (`exit.go`), `store.ErrTransientGCContention` (`exit.go`) |
 | 2 | `ExitUsage` (`exit.go`) | `UsageError` (`exit.go`) |
-| 3 | `ExitValidation` (`exit.go`) | `templateShapeError` (`exit.go`), `UnknownCommandError` (`exit.go`), `RetiredCommandError` (`exit.go`), any `model.Refusal` — `model.ValidationError`, `model.FrozenIssueError`, and the upgrade/downgrade target refusals (`exit.go`), any `model.StateRequestError` — `model.ContainerActionError`, `lifecycle.RetentionError` — when not `Satisfied()` (`exit.go`), `UnsupportedError` (`exit.go`), `takeoverUnconfirmedError` (`exit.go`), `purgeUnconfirmedError` (`exit.go`), `OutsideWorkspaceError` (`exit.go`), `store.ErrWorkspaceNotInitialized` (`exit.go`), `*store.UnsupportedSchemaVersionError` (`exit.go`), `*store.QuarantineBlockError` (`exit.go`), `workspace.ErrIssuePrefixRefused` (`exit.go`) |
+| 3 | `ExitValidation` (`exit.go`) | `templateShapeError` (`exit.go`), `UnknownCommandError` (`exit.go`), `RetiredCommandError` (`exit.go`), any `model.Refusal` — `model.ValidationError`, `model.FrozenIssueError`, and the upgrade/downgrade target refusals (`exit.go`), any `model.StateRequestError` — `model.ContainerActionError`, `lifecycle.RetentionError` — when not `Satisfied()` (`exit.go`), `UnsupportedError` (`exit.go`), `takeoverUnconfirmedError` (`exit.go`), `purgeUnconfirmedError` (`exit.go`), `OutsideWorkspaceError` (`exit.go`), `store.ErrWorkspaceNotInitialized` (`exit.go`), any `model.SchemaAhead` — `*store.UnsupportedSchemaVersionError`, `*store.DowngradeSpanUnsupportedError` (`exit.go`), `*store.QuarantineBlockError` (`exit.go`), `workspace.ErrIssuePrefixRefused` (`exit.go`) |
 | 4 | `ExitNotFound` (`exit.go`) | `storage.NotFoundError` (`exit.go`), `VersionNotFoundError` (`exit.go`) |
 | 5 | `ExitConflict` (`exit.go`) | `MergeConflictError` (`exit.go`), `SyncFailureError` (`exit.go`), `ownerApprovalRefusalError` (`exit.go`) |
 | 6 | `ExitNoWork` (`exit.go`) | `Exhausted` (`exit.go`), `NoWork` (`exit.go`), any `model.StateRequestError` when `Satisfied()` (`exit.go`) |
@@ -744,7 +744,7 @@ Upgrade never touches the schema — forward migrations live in the target binar
 
 ## 6. `lit downgrade`
 
-Handler `downgradeLeaf` — `downgrade.go`. App-mode, `app.AccessWrite` (`register.go`). `withSchemaMigrator` requires the `storage.SchemaMigration` capability up front; a decline aborts (`downgrade.go`).
+Handler `downgradeLeaf` — `downgrade.go`. App-mode, `app.AccessWrite` (`register.go`). `withSchemaMigrator` requires the `storage.SchemaMigration` capability up front; a decline aborts (`downgrade.go`). It then reads `version.Get()`; error → `downgrade: read this binary's version info: %w` (`downgrade.go`).
 
 | Flag | Default | Effect | Line |
 |---|---|---|---|
@@ -754,10 +754,12 @@ Sequence (`downgradeLeafWith`, `downgrade.go`):
 1. Any positional → refused by the shared `refuseSurplusPositionals` (`register.go`) under the leaf's usage `usage: lit downgrade --to <version>`, exit 2 (`downgrade.go`).
 2. `normalizeReleaseTag(*to, "downgrade")` — same rules as §5 step 2 (`downgrade.go`).
 3. `resolver.Resolve(ctx, tag, release.CurrentPlatform())` (`downgrade.go`).
-4. `store.Downgrade(ctx, target.Manifest.Schema.Max)` — **schema is reversed before the binary is installed**; pre-snapshot refusals propagate verbatim, post-snapshot failures arrive as `*DowngradeRollbackError` whose message carries the restore instruction (`downgrade.go`).
-5. `currentBinaryPath()`; error → `downgrade: resolve current binary: %w` (`downgrade.go`).
-6. `installer.Install`; error → `downgrade: schema reversed to v<N> but installing prior binary failed: <err>\n\nrecover by either:\n  - installing <tag> manually (download from <url>), then re-running lit; or\n  - restoring the pre-downgrade snapshot via \`lit snapshots list\` + \`lit snapshots restore <name>\`` (`downgrade.go`).
-7. Success stdout: `downgraded to <tag> (schema v<N>) installed at <binPath>` newline `re-run \`lit version\` to confirm.` (`downgrade.go`). No re-exec (`downgrade.go`).
+4. The event records `downgrade.target_schema_max`, `downgrade.running_schema_min`, and `downgrade.running_schema_max` (this binary's `Schema`) once the target resolves (`downgrade.go`).
+5. `schema.AppliedSchemaVersion(ctx)` on the opened store's migrator; error → `downgrade: read workspace schema version: %w`; on success the event records `downgrade.workspace_schema` (`downgrade.go`).
+6. `schema.Downgrade(ctx, target.Manifest.Schema.Max)` — **schema is reversed before the binary is installed**; pre-snapshot refusals propagate verbatim, post-snapshot failures arrive as `*DowngradeRollbackError` whose message carries the restore instruction (`downgrade.go`).
+7. `currentBinaryPath()`; error → `downgrade: resolve current binary: %w` (`downgrade.go`).
+8. `installer.Install`; error → `downgrade: schema reversed to v<N> but installing prior binary failed: <err>\n\nrecover by either:\n  - installing <tag> manually (download from <url>), then re-running lit; or\n  - restoring the pre-downgrade snapshot via \`lit snapshots list\` + \`lit snapshots restore <name>\`` (`downgrade.go`).
+9. Success stdout: `downgraded to <tag> (schema v<N>) installed at <binPath>` newline `re-run \`lit version\` to confirm.` (`downgrade.go`). No re-exec (`downgrade.go`).
 
 There is deliberately no `--dry-run`, `--force`, or `--skip-snapshot` (`downgrade.go`; upgrade the same, `upgrade.go`).
 
@@ -1092,7 +1094,7 @@ All eight are also the payload of `lit quickstart --eject`, written to `<config.
 | Pending migration quarantined after a failed attempt | any command that opens the store with that migration pending | `*store.QuarantineBlockError`, exit 3, reason `migration_quarantined` | `migration_runner.go`, `exit.go` |
 | Backward-move upgrade target | `upgrade` | `*UpgradeTargetBehindError`, exit 3, nothing installed | `upgrade.go` |
 | Forward-move or below-baseline downgrade target | `downgrade` | `*store.DowngradeTargetAheadError` / `*store.DowngradeBelowBaselineError`, exit 3, before any snapshot | `downgrade.go` |
-| Workspace schema past this binary's schema support | `downgrade` | `*store.DowngradeSpanUnsupportedError`, exit 3, before any snapshot; the event records `downgrade.workspace_schema`, `downgrade.target_schema`, `downgrade.schema_support_min`, `downgrade.schema_support_max` | `downgrade.go` |
+| Workspace schema past this binary's schema support | `downgrade` | `*store.DowngradeSpanUnsupportedError`, exit 3, reason `workspace_schema_ahead`, before any snapshot | `downgrade.go`, `exit.go`, `error_output.go` |
 | Empty/invalid `--to` | `upgrade`, `downgrade` | `ValidationError`, exit 3 | `downgrade.go` |
 | Unknown `--fix` name | `doctor` | `unknown fix %q; available: integrity, rank`, exit 1 | `doctor.go` |
 | Unknown quickstart topic | `quickstart` | `UsageError`, exit 2 | `cli.go` |
