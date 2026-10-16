@@ -45,13 +45,13 @@ func TestCellsRefusesAPrintItCannotRead(t *testing.T) {
 		t.Fatalf("the readable print: cells = %q, %v; want [\"phase plan\"]", got, err)
 	}
 	for name, printed := range map[string]string{
-		"nothing printed":   "",
-		"no config OK line": "✓ /c.json5: config failed\n" + bar,
-		"two bar lines":     ok + bar + bar,
-		"no menu cell":      ok + "\ue0b0 phase plan \ue0b0 next nothing ready \ue0b0\n",
-		"no opening arrow":  ok + "\x1b]8;;m\x1b\\🍫\x1b]8;;\x1b\\ \ue0b0 phase plan \ue0b0\n",
-		"no closing arrow":  ok + menu + " phase plan\n",
-		"unread escape":     ok + menu + " \x1b[2Kphase plan \ue0b0\n",
+		"nothing printed":             "",
+		"no config OK line":           "✓ /c.json5: config failed\n" + bar,
+		"two bar lines":               ok + bar + bar,
+		"no menu cell":                ok + "\ue0b0 phase plan \ue0b0 next nothing ready \ue0b0\n",
+		"text before the first arrow": ok + "x" + menu + " phase plan \ue0b0\n",
+		"no closing arrow":            ok + menu + " phase plan\n",
+		"unread escape":               ok + menu + " \x1b[2Kphase plan \ue0b0\n",
 	} {
 		if got, err := cells(printed); err == nil {
 			t.Errorf("%s: cells = %q, want an error", name, got)
