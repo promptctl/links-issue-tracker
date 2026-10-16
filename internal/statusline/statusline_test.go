@@ -17,6 +17,7 @@ var (
 	alphaRenamed = Ticket{ID: "t-alpha", Title: "Alpha, renamed"}
 	at           = time.Date(2026, 10, 15, 9, 30, 0, 0, time.UTC)
 	progress     = RollupProgress{CompletedCount: 1, TotalCount: 4}
+	review       = "review"
 )
 
 func testLocation(t *testing.T) Location {
@@ -53,6 +54,9 @@ func TestWritesFoldFactsIntoTheFile(t *testing.T) {
 	working := func(ticket Ticket) *WorkingOn { return &WorkingOn{Ticket: ticket, RecordedAt: at} }
 	counted := func(ticket Ticket) *WorkingOn {
 		return &WorkingOn{Ticket: ticket, RollupProgress: &progress, RecordedAt: at}
+	}
+	inPhase := func(ticket Ticket, phase string) *WorkingOn {
+		return &WorkingOn{Ticket: ticket, Phase: &phase, RecordedAt: at}
 	}
 	next := func(ticket *Ticket) *Next { return &Next{Ticket: ticket, RecordedAt: at} }
 	cases := []struct {
@@ -131,6 +135,41 @@ func TestWritesFoldFactsIntoTheFile(t *testing.T) {
 			want:   File{SchemaVersion: SchemaVersion, WorkingOn: working(bravo)},
 		},
 		{
+			name:   "a phase shows on the work it names",
+			writes: [][]Fact{{Started{alpha}, PhaseRead{alpha.ID, "plan"}}},
+			want:   File{SchemaVersion: SchemaVersion, WorkingOn: inPhase(alpha, "plan")},
+		},
+		{
+			name:   "a later phase replaces the one recorded",
+			writes: [][]Fact{{Started{alpha}, PhaseRead{alpha.ID, "plan"}}, {PhaseRead{alpha.ID, "impl"}}},
+			want:   File{SchemaVersion: SchemaVersion, WorkingOn: inPhase(alpha, "impl")},
+		},
+		{
+			name:   "a phase for another ticket shows nowhere",
+			writes: [][]Fact{{Started{alpha}, Picked{&bravo}, PhaseRead{bravo.ID, "impl"}}},
+			want:   File{SchemaVersion: SchemaVersion, WorkingOn: working(alpha), Next: next(&bravo)},
+		},
+		{
+			name:   "a phase with no work recorded shows nowhere",
+			writes: [][]Fact{{PhaseRead{alpha.ID, "impl"}}},
+			want:   File{SchemaVersion: SchemaVersion},
+		},
+		{
+			name:   "a retitle keeps the phase",
+			writes: [][]Fact{{Started{alpha}, PhaseRead{alpha.ID, "review"}}, {Retitled{alphaRenamed}}},
+			want:   File{SchemaVersion: SchemaVersion, WorkingOn: inPhase(alphaRenamed, "review")},
+		},
+		{
+			name:   "a new start drops the last ticket's phase",
+			writes: [][]Fact{{Started{alpha}, PhaseRead{alpha.ID, "review"}}, {Started{bravo}}},
+			want:   File{SchemaVersion: SchemaVersion, WorkingOn: working(bravo)},
+		},
+		{
+			name:   "invalidating the work clears its phase with it",
+			writes: [][]Fact{{Started{alpha}, PhaseRead{alpha.ID, "merge"}}, {Invalidated{alpha.ID}}},
+			want:   File{SchemaVersion: SchemaVersion},
+		},
+		{
 			name:   "facts apply in the order the command learned them",
 			writes: [][]Fact{{Started{alpha}, Invalidated{alpha.ID}, Started{bravo}}},
 			want:   File{SchemaVersion: SchemaVersion, WorkingOn: working(bravo)},
@@ -167,7 +206,7 @@ func TestARetitleKeepsWhenTheRecordWasMade(t *testing.T) {
 // own types.
 func TestFileEncodesTheDocumentedShape(t *testing.T) {
 	loc := testLocation(t)
-	write(t, loc, Started{alpha}, RollupCounted{alpha.ID, progress}, Picked{nil})
+	write(t, loc, Started{alpha}, RollupCounted{alpha.ID, progress}, PhaseRead{alpha.ID, "impl"}, Picked{nil})
 	raw, err := os.ReadFile(loc.File)
 	if err != nil {
 		t.Fatal(err)
@@ -181,6 +220,7 @@ func TestFileEncodesTheDocumentedShape(t *testing.T) {
 		"working_on": map[string]any{
 			"ticket":          map[string]any{"id": "t-alpha", "title": "Alpha"},
 			"rollup_progress": map[string]any{"rollup_completed_count": float64(1), "rollup_total_count": float64(4)},
+			"phase":           "impl",
 			"recorded_at":     "2026-10-15T09:30:00Z",
 		},
 		"next": map[string]any{"ticket": nil, "recorded_at": "2026-10-15T09:30:00Z"},
@@ -312,6 +352,47 @@ func TestAWriteReportsTheRollupProgressItsWorkingOnShows(t *testing.T) {
 		out := write(t, loc, step.facts...)
 		if !reflect.DeepEqual(out.RollupProgress, step.want) {
 			t.Fatalf("Write(%v).RollupProgress = %v, want %v", step.facts, out.RollupProgress, step.want)
+		}
+	}
+}
+
+// A working_on no command read a phase for encodes it as null, not as a
+// missing field: missing is what an older lit's file says.
+func TestAnUnreadPhaseEncodesAsNull(t *testing.T) {
+	loc := testLocation(t)
+	write(t, loc, Started{alpha})
+	raw, err := os.ReadFile(loc.File)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		WorkingOn map[string]any `json:"working_on"`
+	}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if phase, ok := got.WorkingOn["phase"]; !ok || phase != nil {
+		t.Fatalf("working_on.phase = %v (present %t) in %s; want null", phase, ok, raw)
+	}
+}
+
+// Each write reports the phase the working_on it wrote shows, whichever command
+// read it, and nothing when that record shows none or is null.
+func TestAWriteReportsThePhaseItsWorkingOnShows(t *testing.T) {
+	loc := testLocation(t)
+	for _, step := range []struct {
+		facts []Fact
+		want  *string
+	}{
+		{[]Fact{Picked{&bravo}}, nil},
+		{[]Fact{Started{alpha}}, nil},
+		{[]Fact{PhaseRead{alpha.ID, review}}, &review},
+		{[]Fact{Retitled{alphaRenamed}}, &review},
+		{[]Fact{Invalidated{alpha.ID}}, nil},
+	} {
+		out := write(t, loc, step.facts...)
+		if !reflect.DeepEqual(out.Phase, step.want) {
+			t.Fatalf("Write(%v).Phase = %v, want %v", step.facts, out.Phase, step.want)
 		}
 	}
 }

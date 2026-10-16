@@ -64,14 +64,15 @@ func recordStatuslineEvent(ctx context.Context, out statusline.Outcome, err erro
 	telemetry.Set(ctx, "statusline.created", out.Created)
 	telemetry.Set(ctx, "statusline.exclude_added", out.ExcludeAdded)
 	telemetry.Set(ctx, "statusline.rollup_progress", out.RollupProgress)
+	telemetry.Set(ctx, "statusline.phase", out.Phase)
 	telemetry.Set(ctx, "statusline.replaced", telemetry.ErrorText(out.Replaced))
 	telemetry.Set(ctx, "statusline.error", telemetry.ErrorText(err))
 }
 
 // nextStatuslineFacts is what a `lit next` outcome tells the statusline file.
 // Work handed back to this checkout is what it is working on, whatever narrowed
-// the question, and its rollup progress is counted from the evidence routing
-// read. The pick is "what's next" only when the question was the plain one: a
+// the question, and its rollup progress and phase are read from the evidence
+// routing read. The pick is "what's next" only when the question was the plain one: a
 // filtered or --all `lit next` answers a different question.
 func nextStatuslineFacts(outcome NextOutcome, plain bool, evidence claims.Evidence) statusline.Facts {
 	var facts statusline.Facts
@@ -79,7 +80,8 @@ func nextStatuslineFacts(outcome NextOutcome, plain bool, evidence claims.Eviden
 	switch o := outcome.(type) {
 	case ResumedOwnWork:
 		picked = statuslineTicketRef(o.Row.Issue)
-		facts.Record(statusline.Started{Ticket: *picked}, rollupCounted(evidence, o.Row.Issue))
+		phase, _ := model.PhaseOf(o.Row.Issue, evidence.IssueEvents(o.Row.Issue.ID))
+		facts.Record(statusline.Started{Ticket: *picked}, rollupCounted(evidence, o.Row.Issue), phaseRead(ticketState{issue: o.Row.Issue, phase: phase}))
 	case ServedFromClaim:
 		picked = statuslineTicketRef(o.Row.Issue)
 	case ServedFromEpicLane:
@@ -114,4 +116,12 @@ func statuslineTicketRef(issue model.Issue) *statusline.Ticket {
 func rollupCounted(evidence claims.Evidence, worked model.Issue) statusline.RollupCounted {
 	progress := evidence.LaneProgressWith(worked)
 	return statusline.RollupCounted{ID: worked.ID, Progress: statusline.RollupProgress{CompletedCount: progress.Done, TotalCount: progress.Total}}
+}
+
+// phaseRead is the phase the worked-on ticket's history puts it in, as the
+// statusline file records it. It is the phase model.PhaseOf derives, the one
+// lit show prints, so the file and lit agree when the file is written;
+// docs/statusline.md says when it goes stale. [LAW:one-source-of-truth]
+func phaseRead(worked ticketState) statusline.PhaseRead {
+	return statusline.PhaseRead{ID: worked.issue.ID, Phase: string(worked.phase)}
 }

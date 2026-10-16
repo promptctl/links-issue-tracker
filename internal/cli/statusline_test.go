@@ -3,6 +3,7 @@ package cli
 import (
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
 	"github.com/promptctl/links-issue-tracker/internal/claims"
@@ -12,7 +13,7 @@ import (
 
 // Each `lit next` outcome tells the file what it holds: the pick when the
 // question was the plain one, and the checkout's own work in flight, with its
-// rollup progress, whatever narrowed it.
+// rollup progress and its phase, whatever narrowed it.
 func TestNextOutcomesBecomeStatuslineFacts(t *testing.T) {
 	epic := model.Issue{ID: "t-epic", IssueType: model.TypeEpic}
 	inFlight := hydratedIssue(t, "t-1", nil, model.StateInProgress)
@@ -22,7 +23,13 @@ func TestNextOutcomesBecomeStatuslineFacts(t *testing.T) {
 	for _, issue := range lanemates {
 		parents[issue.ID] = &epic
 	}
-	evidence, err := claims.NewEvidence(lanemates, parents, nil)
+	// The in-flight ticket's history moves it to review; a lanemate's newer
+	// event names another phase, which is not the in-flight ticket's.
+	events := []model.IssueEvent{
+		{ID: "e-1", IssueID: "t-1", Action: string(model.ActionPhase), Changes: []model.FieldChange{{Field: model.PhaseField, From: "plan", To: "review"}}, CreatedAt: time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC)},
+		{ID: "e-2", IssueID: "t-3", Action: string(model.ActionPhase), Changes: []model.FieldChange{{Field: model.PhaseField, From: "plan", To: "merge"}}, CreatedAt: time.Date(2026, 10, 16, 10, 0, 0, 0, time.UTC)},
+	}
+	evidence, err := claims.NewEvidence(lanemates, parents, events)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,6 +37,7 @@ func TestNextOutcomesBecomeStatuslineFacts(t *testing.T) {
 	resumed := ResumedOwnWork{Row: row}
 	ticket := statusline.Ticket{ID: "t-1", Title: "One"}
 	counted := statusline.RollupCounted{ID: "t-1", Progress: statusline.RollupProgress{CompletedCount: 1, TotalCount: 3}}
+	phased := statusline.PhaseRead{ID: "t-1", Phase: "review"}
 	cases := []struct {
 		name    string
 		outcome NextOutcome
@@ -38,8 +46,8 @@ func TestNextOutcomesBecomeStatuslineFacts(t *testing.T) {
 	}{
 		{"a fresh pick", ServedFromNewLane{Row: row}, true, statusline.Facts{statusline.Picked{Ticket: &ticket}}},
 		{"a narrowed fresh pick", ServedFromNewLane{Row: row}, false, nil},
-		{"own work handed back", resumed, true, statusline.Facts{statusline.Started{Ticket: ticket}, counted, statusline.Picked{Ticket: &ticket}}},
-		{"own work handed back to a narrowed question", resumed, false, statusline.Facts{statusline.Started{Ticket: ticket}, counted}},
+		{"own work handed back", resumed, true, statusline.Facts{statusline.Started{Ticket: ticket}, counted, phased, statusline.Picked{Ticket: &ticket}}},
+		{"own work handed back to a narrowed question", resumed, false, statusline.Facts{statusline.Started{Ticket: ticket}, counted, phased}},
 		{"nothing to pick", NoWork{}, true, statusline.Facts{statusline.Picked{}}},
 		{"a scope with nothing left", Exhausted{}, true, statusline.Facts{statusline.Picked{}}},
 		{"nothing to pick for a narrowed question", NoWork{}, false, nil},

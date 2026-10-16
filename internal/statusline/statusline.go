@@ -59,7 +59,11 @@ type WorkingOn struct {
 	// RollupProgress is the progress of the ticket's lane, counted by the
 	// command that made the record; nil when that command counted none.
 	RollupProgress *RollupProgress `json:"rollup_progress"`
-	RecordedAt     time.Time       `json:"recorded_at"`
+	// Phase is where the ticket's work stands — plan, impl, review or merge —
+	// as the ticket's history put it when a command last read it; nil when
+	// the command that made the record read none.
+	Phase      *string   `json:"phase"`
+	RecordedAt time.Time `json:"recorded_at"`
 }
 
 // RollupProgress is how far along a ticket's lane is: how many of the lane's
@@ -105,6 +109,13 @@ type RollupCounted struct {
 	Progress RollupProgress
 }
 
+// PhaseRead says ticket ID's history puts it in Phase, so the record of
+// working on ID shows that phase.
+type PhaseRead struct {
+	ID    string
+	Phase string
+}
+
 // Invalidated says ticket ID has left the state the file's records describe —
 // finished, closed, reopened, archived, deleted, or purged — so any record
 // naming it no longer stands.
@@ -144,6 +155,15 @@ func (c RollupCounted) apply(f File, _ time.Time) File {
 	if f.WorkingOn != nil && f.WorkingOn.Ticket.ID == c.ID {
 		working, progress := *f.WorkingOn, c.Progress
 		working.RollupProgress = &progress
+		f.WorkingOn = &working
+	}
+	return f
+}
+
+func (r PhaseRead) apply(f File, _ time.Time) File {
+	if f.WorkingOn != nil && f.WorkingOn.Ticket.ID == r.ID {
+		working, phase := *f.WorkingOn, r.Phase
+		working.Phase = &phase
 		f.WorkingOn = &working
 	}
 	return f
@@ -209,6 +229,9 @@ type Outcome struct {
 	// shows; nil when nothing was written, or the file shows no working_on or
 	// no count for it.
 	RollupProgress *RollupProgress
+	// Phase is the phase the written file's working_on shows; nil when
+	// nothing was written, or the file shows no working_on or no phase for it.
+	Phase *string
 	// Created is true when the file did not exist before this write.
 	Created bool
 	// ExcludeAdded is true when this write added the exclude entry.
@@ -278,6 +301,7 @@ func Write(loc Location, facts Facts, now time.Time) (Outcome, error) {
 	out.Bytes = len(payload)
 	if written.WorkingOn != nil {
 		out.RollupProgress = written.WorkingOn.RollupProgress
+		out.Phase = written.WorkingOn.Phase
 	}
 	return out, nil
 }

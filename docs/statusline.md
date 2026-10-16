@@ -33,8 +33,9 @@ always sees a complete file. Reading it needs no lock.
 
 ## Example
 
-This is the file after `lit next` picked `links-auth-k2p` and `lit start` then
-started it, in a lane where one of four tickets was already closed:
+This is the file after `lit next` picked `links-auth-k2p`, `lit start` started
+it, and `lit phase links-auth-k2p --to impl` moved it out of planning, in a lane
+where one of four tickets was already closed:
 
 ```json
 {
@@ -48,6 +49,7 @@ started it, in a lane where one of four tickets was already closed:
       "rollup_completed_count": 1,
       "rollup_total_count": 4
     },
+    "phase": "impl",
     "recorded_at": "2026-10-15T13:59:25.711166Z"
   },
   "next": {
@@ -76,6 +78,7 @@ lifecycle change clears it, as described under
 | `working_on.rollup_progress` | object or `null` | The progress of the ticket's lane. `null` when the command that recorded `working_on` did not count the lane, as a lit older than this field does not. |
 | `working_on.rollup_progress.rollup_completed_count` | integer | How many of the lane's tickets are closed: the `N` of the `N/M done` on that lane's claim line in `lit backlog`. Archived and deleted tickets are not counted. |
 | `working_on.rollup_progress.rollup_total_count` | integer | How many tickets the lane holds, not counting archived or deleted ones: the `M` of that `N/M done`. |
+| `working_on.phase` | string or `null` | Where the work on the ticket stands: `plan`, `impl`, `review` or `merge`, as `lit show` prints it on the ticket's `phase:` line. `null` when the command that recorded `working_on` did not read the phase, as a lit older than this field does not. |
 | `working_on.recorded_at` | string | When lit recorded this ticket as worked on. |
 | `next` | object or `null` | The last plain `lit next` answer. `null` when no answer is recorded. |
 | `next.ticket` | object or `null` | The ticket that `lit next` picked, with `id` and `title` as above. `null` means `lit next` ran and found nothing to pick. |
@@ -99,7 +102,25 @@ seconds.
   it out of `rollup_completed_count`.
 - `lit next`, when it hands back a ticket that is already in progress in a lane
   this checkout holds. This happens with or without filter flags, and it also
-  counts `rollup_progress` again and updates `recorded_at`.
+  counts `rollup_progress` again, reads `phase` again and updates
+  `recorded_at`.
+
+**`working_on.phase`** is the phase the ticket's history puts it in when one of
+those commands records `working_on`, and `lit phase` changes it:
+
+- `plan` is set by `lit start`, which enters plan when it moves a ticket into
+  progress. Starting a ticket that is already in progress, as a takeover from
+  another checkout does, keeps the phase its work had reached.
+- `impl`, `review` and `merge`, and `plan` again, are set by
+  `lit phase <id> --to <phase>`. Any phase can follow any other, so moving back
+  from `review` to `impl` after review findings is a normal move. A move that
+  names the phase the ticket is already in changes nothing in the file.
+
+`lit phase` does not change `recorded_at`, which stays the time `working_on`
+was recorded, and it changes nothing in the file when it moves a ticket other
+than the one `working_on` names. A phase that a newer lit wrote under a name
+this lit does not know is recorded as written, so a script should show a value
+it does not recognise rather than drop it.
 
 **`next`** is set by a plain `lit next`: one that neither narrows the pick with
 `--assignee`, `--type`, `--status` or `--labels` nor turns on `--all`. A flag
@@ -135,6 +156,9 @@ matters to you.
   holds for `lit purge` too: the purged ticket's title stays in every other
   checkout's file. To remove the title, delete that checkout's file; a missing
   file reads as nothing recorded.
+- **`phase` follows this checkout only.** A `lit phase` run in another
+  checkout, on the ticket this one is working on, does not change this file
+  until a command here records `working_on` again.
 - **`rollup_progress` is a snapshot.** `working_on.rollup_progress` is counted when
   `working_on` is recorded. Tickets closed, reopened or filed in that lane
   afterwards, here or in another checkout, do not change it until the next
@@ -170,10 +194,12 @@ it does.
 
 lit carries a [cc-candybar](https://github.com/promptctl/cc-candybar) plugin
 that reads this file, and installs it the first time a command writes the file.
-After that, cc-candybar's add-segment library lists two segments:
+After that, cc-candybar's add-segment library lists three segments:
 
 - `plugins.lit.ticket` shows the ticket being worked on, followed by the lane's
   `rollup_completed_count/rollup_total_count` when the file records them.
+- `plugins.lit.phase` shows `phase` and the phase of the ticket being worked
+  on, such as `phase review`, when the file records one.
 - `plugins.lit.next` shows the ticket `lit next` last picked when it differs
   from the one being worked on, and `nothing ready` when that `lit next` found
   nothing.
@@ -195,8 +221,8 @@ file.
 
 ## A minimal statusline
 
-This script prints the ticket being worked on, with its rollup progress, and the
-next pick. It prints nothing when the file is missing, has a schema version it
+This script prints the ticket being worked on, with its rollup progress and
+phase, and the next pick. It prints nothing when the file is missing, has a schema version it
 does not know, or records nothing:
 
 ```sh
@@ -207,6 +233,7 @@ jq -r '
   select(.schema_version == 1)
   | [ (.working_on | if . then "working: \(.ticket.id) \(.ticket.title)"
                              + (.rollup_progress | if . then " (\(.rollup_completed_count)/\(.rollup_total_count) done)" else "" end)
+                             + (.phase | if . then " [\(.)]" else "" end)
                    else empty end),
       (.next | if . == null then empty
                elif .ticket == null then "next: nothing ready"

@@ -59,6 +59,7 @@ lines here for reading:
     "next.stay_offered": false,
     "statusline.changed": ["next"],
     "statusline.rollup_progress": null,
+    "statusline.phase": null,
     "statusline.created": false,
     "statusline.exclude_added": false,
     "statusline.replaced": null,
@@ -145,6 +146,7 @@ not work on this checkout's tickets, such as `lit sync push`, `lit init` or
 | --- | --- |
 | `statusline.changed` | The file's slots whose records this write changed: `working_on`, `next`, both, or `[]`. A slot re-recorded with the ticket it already held is listed, since its `recorded_at` moved; a slot the command's facts did not reach is not. When the file was replaced, both are listed. |
 | `statusline.rollup_progress` | The rollup progress the file's `working_on` shows after this write, as `{"rollup_completed_count": N, "rollup_total_count": M}`, whichever command counted it; `null` when nothing was written or `working_on` is `null` or carries no count. |
+| `statusline.phase` | The phase the file's `working_on` shows after this write, such as `"impl"`, whichever command read it; `null` when nothing was written or `working_on` is `null` or carries no phase. |
 | `statusline.created` | Whether the file did not exist before this write. |
 | `statusline.exclude_added` | Whether this write added the file's entry to the repository's `info/exclude`. Only a write that creates the file adds it, and only when the entry is missing. |
 | `statusline.replaced` | Why the file already on disk could not be read and was rewritten from this command's facts alone, or `null`. |
