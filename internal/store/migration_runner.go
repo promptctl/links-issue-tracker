@@ -68,30 +68,22 @@ type CheckpointResetError struct {
 	Quarantine *QuarantineBlockError
 }
 
+// Error names the migration (goose may not have identified it) and gives the
+// next step the committed quarantine implies: clear it to retry, or, with none
+// committed, nothing to do, since the next open runs the migration again.
 func (e *CheckpointResetError) Error() string {
-	switch {
-	case e.Quarantine != nil:
-		return fmt.Sprintf(
-			"migration v%d %q failed: %v\n\n"+
-				"the working set was automatically reset to Dolt checkpoint %q\n"+
-				"to retry after fixing the migration, clear the quarantine:\n"+
-				"  DELETE FROM migration_quarantine WHERE version = %d",
-			e.Version, e.Name, e.Cause, e.Checkpoint.Name, e.Version,
-		)
-	case e.Version == 0:
-		return fmt.Sprintf(
-			"migration failed (version unknown): %v\n\n"+
-				"the working set was automatically reset to Dolt checkpoint %q\n"+
-				"restore from the pre-migration recovery snapshot",
-			e.Cause, e.Checkpoint.Name,
-		)
-	default:
-		return fmt.Sprintf(
-			"migration v%d %q did not complete: %v\n\n"+
-				"the working set was automatically reset to Dolt checkpoint %q; the next open runs it again",
-			e.Version, e.Name, e.Cause, e.Checkpoint.Name,
-		)
+	migration := "migration (version unknown)"
+	if e.Version != 0 {
+		migration = fmt.Sprintf("migration v%d %q", e.Version, e.Name)
 	}
+	next := "the next open runs it again"
+	if e.Quarantine != nil {
+		next = fmt.Sprintf("to retry after fixing the migration, clear the quarantine:\n  DELETE FROM migration_quarantine WHERE version = %d", e.Quarantine.Version)
+	}
+	return fmt.Sprintf(
+		"%s failed: %v\n\nthe working set was automatically reset to Dolt checkpoint %q\n%s",
+		migration, e.Cause, e.Checkpoint.Name, next,
+	)
 }
 
 // Unwrap exposes the cause and the quarantine handleMigrationFailure committed,
@@ -1228,7 +1220,8 @@ func migrationDriftRepairCommitMessage(repaired []string) string {
 // the same checkpoint-then-reset-on-failure discipline applyPendingMigrations
 // gives ordinary migrations: a repair that applies one target's ALTER and
 // then fails on the next must not leave the working set half-repaired with no
-// way back. mismatch names the version/file that triggered the repair, for
+// way back, and a repair whose commit fails must not leave its ALTERs applied
+// for the next unrelated commit to version. mismatch names the version/file that triggered the repair, for
 // the error message only — the repair itself sweeps every gap through
 // appliedVersion, not just mismatch's earliest one.
 //
@@ -1246,6 +1239,11 @@ func (s *Store) repairVersionContentDriftWithRollback(ctx context.Context, appli
 		return s.repairVersionContentDrift(ctx, appliedVersion)
 	}
 	repaired, repairErr := repair()
+	if repairErr == nil {
+		if commitErr := s.commitWorkingSet(ctx, migrationDriftRepairCommitMessage(repaired)); commitErr != nil {
+			repairErr = fmt.Errorf("commit version-content drift repair: %w", commitErr)
+		}
+	}
 	if repairErr != nil {
 		// The reset runs to the end on a context the caller cannot cancel, as
 		// applyPendingMigrations' recovery does. [LAW:no-ambient-temporal-coupling]
@@ -1259,9 +1257,6 @@ func (s *Store) repairVersionContentDriftWithRollback(ctx context.Context, appli
 			"repair version-content drift (detected at v%d %q) failed: %w (working set reset to checkpoint %q)",
 			mismatch.Version, mismatch.Name, repairErr, checkpoint.Name,
 		)
-	}
-	if err := s.commitWorkingSet(ctx, migrationDriftRepairCommitMessage(repaired)); err != nil {
-		return fmt.Errorf("commit version-content drift repair: %w", err)
 	}
 	if err := s.PruneCheckpoints(ctx, migrationDriftRepairCheckpointPrefix, migrationCheckpointRetention); err != nil {
 		return fmt.Errorf("prune version-content drift repair checkpoints: %w", err)

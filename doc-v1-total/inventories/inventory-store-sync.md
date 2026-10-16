@@ -891,11 +891,10 @@ Tests: `TestParseAddColumnTargetsRecognizesPlainForm` (`migration_runner_test.go
 
 `repairVersionContentDriftWithRollback(ctx, appliedVersion, mismatch)` (`migration_runner.go`):
 1. `s.CreateCheckpoint(ctx, "pre-drift-repair")`; failure → `"create version-content drift repair checkpoint: %w"`.
-2. `repairVersionContentDrift`, or `versionContentDriftRepairForTest(ctx)` when that test hook is set. On failure the reset runs on `context.WithoutCancel(ctx)`:
+2. `repairVersionContentDrift`, or `versionContentDriftRepairForTest(ctx)` when that test hook is set; on success, `s.commitWorkingSet(ctx, migrationDriftRepairCommitMessage(repaired))`, whose failure becomes the repair's failure as `"commit version-content drift repair: %w"`. On either failure the reset runs on `context.WithoutCancel(ctx)`:
    - reset also fails → `"repair version-content drift (detected at v%d %q) failed (%v) and reset to checkpoint %q failed (%v); restore from dbsnapshot"` (`migration_runner.go`).
    - reset succeeds → `"repair version-content drift (detected at v%d %q) failed: %w (working set reset to checkpoint %q)"` (`migration_runner.go`).
-3. `s.commitWorkingSet(ctx, migrationDriftRepairCommitMessage(repaired))`; failure → `"commit version-content drift repair: %w"`.
-4. `s.PruneCheckpoints(ctx, "pre-drift-repair", 5)`; failure → `"prune version-content drift repair checkpoints: %w"` (**is** promoted).
+3. `s.PruneCheckpoints(ctx, "pre-drift-repair", 5)`; failure → `"prune version-content drift repair checkpoints: %w"` (**is** promoted).
 
 `migrationDriftRepairCommitMessage(repaired)` = `fmt.Sprintf("migrate: repair version-content drift (%s)", strings.Join(repaired, ", "))` (`migration_runner.go`).
 
@@ -947,10 +946,7 @@ Tests: `TestPreGooseAdoptionStampsWithoutRerunningBaseline` (`migration_runner_t
 
 ### 8.13 Migration error types
 
-`CheckpointResetError{Version int64; Name string; Checkpoint storage.Checkpoint; Cause error; Quarantine *QuarantineBlockError}` (`migration_runner.go`); `Quarantine` is the record `handleMigrationFailure` committed, or nil. `Error()` (`migration_runner.go`):
-- `Quarantine != nil` → `"migration v%d %q failed: %v\n\nthe working set was automatically reset to Dolt checkpoint %q\nto retry after fixing the migration, clear the quarantine:\n  DELETE FROM migration_quarantine WHERE version = %d"`.
-- `Version == 0` → `"migration failed (version unknown): %v\n\nthe working set was automatically reset to Dolt checkpoint %q\nrestore from the pre-migration recovery snapshot"`.
-- else → `"migration v%d %q did not complete: %v\n\nthe working set was automatically reset to Dolt checkpoint %q; the next open runs it again"`.
+`CheckpointResetError{Version int64; Name string; Checkpoint storage.Checkpoint; Cause error; Quarantine *QuarantineBlockError}` (`migration_runner.go`); `Quarantine` is the record `handleMigrationFailure` committed, or nil. `Error()` (`migration_runner.go`) is `"%s failed: %v\n\nthe working set was automatically reset to Dolt checkpoint %q\n%s"`: the migration is `migration v%d %q`, or `migration (version unknown)` when `Version == 0`; the last line is `to retry after fixing the migration, clear the quarantine:\n  DELETE FROM migration_quarantine WHERE version = %d` when `Quarantine != nil`, else `the next open runs it again`.
 `Unwrap() []error` (`migration_runner.go`): `Quarantine == nil` → `[Cause]`; else → `[Cause, Quarantine]`.
 
 `QuarantineBlockError{Version, Name, ErrorText}` (`migration_runner.go`). `Error()` (`migration_runner.go`):
