@@ -430,11 +430,12 @@ repo, hand it [docs/agent-setup.md](docs/agent-setup.md).
 
 ## Cutting a release
 
-A release ships once per **epic**, not per ticket. Ticket PRs accumulate their
-notes under `## [Unreleased]` in `CHANGELOG.md` and cut nothing on merge; no
-ticket PR, whatever its type, cuts a release on its own. When the epic's tickets
-are all merged, cut the release with a dedicated `chore(release)` PR that promotes
-the changelog version.
+A release ships once per **epic**, not per ticket. A ticket PR never touches
+`CHANGELOG.md` and cuts nothing on merge; no ticket PR, whatever its type, cuts a
+release on its own. When the epic's tickets are all merged, a dedicated
+`chore(release)` PR writes that release's changelog section, whole and stating
+only the new behavior, and cuts the release. Nobody audits the changelog.
 
-See [RELEASING.md](RELEASING.md) for the promotion steps, the CI mechanism, and
-the versioning policy — it is the single home for the release procedure.
+See [RELEASING.md](RELEASING.md) for the changelog rules, the release steps, the
+CI mechanism, and the versioning policy — it is the single home for the release
+procedure.

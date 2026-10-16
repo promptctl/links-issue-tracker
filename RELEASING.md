@@ -31,34 +31,71 @@ feature or any presumed-breaking change, **patch** = a pure bugfix.
 
 ## Cutting a release
 
-A release is cut entirely by CI when a release-promotion merges to `master`.
-Releases ship **once per epic**, not per ticket: ticket PRs only add notes under
-`## [Unreleased]` and cut nothing on merge. When an epic's tickets are all merged,
-cut the release with a dedicated `chore(release)` PR that promotes the changelog
-and flips the design-doc statuses that promotion makes true, and changes nothing
-else:
+A release is cut entirely by CI when a release PR merges to `master`. Releases
+ship **once per epic**, not per ticket: a ticket PR never touches `CHANGELOG.md`
+and cuts nothing on merge. When an epic's tickets are all merged, cut the release
+with a dedicated `chore(release)` PR that writes the release's changelog section
+and flips the design-doc statuses the release makes true, and changes nothing
+else.
 
-1. **In the `chore(release)` PR:** rename `## [Unreleased]` in
-   [`CHANGELOG.md`](CHANGELOG.md) to `## [<version>] - <YYYY-MM-DD>` (`<version>` =
-   `scripts/next-version.sh <minor|patch>` without the leading `v`) and add a fresh
-   empty `## [Unreleased]` above it. Then flip every `built (unreleased)` status
-   *value* under [`design-docs/`](design-docs/) to `built (v<version>)`: the bare
-   occurrences in a status line or a state table, never the backticked one in
-   design.md's convention paragraph, which defines the form and outlives every
-   release. A grep for the phrase returns both, and flipping the definition
-   turns it into gibberish. The version becomes a fact at this commit and
-   nowhere earlier, so this is the one place the two can be written down
-   together, and it is why a design doc never names the release it *expects* to
-   ship in.
+### The changelog is written once, whole, when the release is cut
+
+These are the owner's rules, and they hold for every release:
+
+1. **No changelog text before the release.** No ticket PR writes any part of
+   `CHANGELOG.md`: no entry, no note for later, no `## [Unreleased]` section.
+   The changelog is written only in the `chore(release)` PR.
+2. **Write the release's section whole.** One author writes the entire section
+   in one pass, from what merged since the last tag. It is not assembled from
+   per-ticket notes and does not start from an earlier draft.
+3. **State the new behavior, and only that.** Each entry says what lit does in
+   this release. It never describes the old behavior: no "used to", no
+   "previously", no "no longer", no before-and-after.
+4. **Never audit the changelog.** No sentence-by-sentence check, no verifying
+   claims against the previous tag or against `master`, no review pass over the
+   notes, in the release PR or anywhere else.
+5. **One optional rewrite, by a subagent, accepted as written.** If you don't
+   like the section you wrote, you may have a subagent write it instead, once.
+   Give it the version heading line to use. Whatever it returns goes into
+   `CHANGELOG.md` unchanged, however bad or good: you don't edit it, fix it,
+   audit it, or ask again.
+
+Rule 3 in practice:
+
+- WRONG: "`lit import` now refuses a `blocked_by` between two issues in one
+  epic. It used to write the edge."
+- RIGHT: "`lit import` refuses a `blocked_by` between two issues in one epic."
+
+The rules exist because writing an entry per ticket and then auditing those
+entries took more time than writing the code they described. The code is worth
+the time; the changelog is not. You will see a sentence in the notes that is
+wrong or vague and think *"released notes are permanent, so checking this one is
+the responsible thing."* That check is the audit rule 4 forbids. The section
+ships as written.
+
+### Steps
+
+1. **In the `chore(release)` PR:** add `## [<version>] - <YYYY-MM-DD>` to
+   [`CHANGELOG.md`](CHANGELOG.md) above the newest released section
+   (`<version>` = `scripts/next-version.sh <minor|patch>` without the leading
+   `v`), and write the release's section under it by the rules above. Then flip
+   every `built (unreleased)` status *value* under
+   [`design-docs/`](design-docs/) to `built (v<version>)`: the bare occurrences
+   in a status line or a state table, never the backticked one in design.md's
+   convention paragraph, which defines the form and outlives every release. A
+   grep for the phrase returns both, and flipping the definition turns it into
+   gibberish. The version becomes a fact at this commit and nowhere earlier, so
+   this is the one place the two can be written down together, and it is why a
+   design doc never names the release it *expects* to ship in.
 2. **Merge.** The master build
    ([`release-validate.yml`](.github/workflows/release-validate.yml)) sees the
    newest `CHANGELOG` version has no tag yet, builds + validates the real
    cross-platform artifact, then cuts the tag at that commit and publishes the
    release — all in one run. Watch it with `gh run watch`. No local tag push.
 
-No ticket PR, whatever its type, cuts a release on its own — leave
-`## [Unreleased]` as-is. Only the dedicated `chore(release)` promotion above,
-merged at the end of an epic, cuts one.
+No ticket PR, whatever its type, cuts a release or writes to `CHANGELOG.md`.
+Only the dedicated `chore(release)` PR above, merged at the end of an epic, does
+either.
 
 ### A tagged section never changes
 
@@ -69,16 +106,9 @@ CI's `verify` job on every PR and master push: everything from the newest tag's
 own heading down to end-of-file must be byte-identical to that region in the tag
 itself.
 
-The guard exists because nothing else can see the failure. A ticket PR branched
-before a promotion writes its entry under `## [Unreleased]`; the promotion
-renames that heading and opens a fresh one above it; the ticket PR then merges
-with no conflict and its entry lands in the *released* section. Both sides are
-correct alone, which is why review and every other gate pass over it. The result
-is a tag whose notes describe code it does not contain and a pending release
-carrying no note at all.
-
-If the guard fires, move the entry up to `## [Unreleased]`, where the change is
-genuinely pending. Never edit the released section to match the tree.
+A released section is never corrected, reworded, or brought up to date, even
+where it is wrong: that is an audit after the fact. If the guard fires, the PR
+edits a released section; revert that edit.
 
 ### How the pipeline is verified
 
