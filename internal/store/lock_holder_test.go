@@ -627,6 +627,198 @@ func TestSweepRetiresBothNamesOfADeadRecord(t *testing.T) {
 	}
 }
 
+// strandDeadRecord leaves the two linked names a holder that never ran its
+// release leaves behind — a SIGKILLed one, or a mirror-beacon claimant that
+// leaves its hold to process exit: content intact, hold gone.
+func strandDeadRecord(t *testing.T, dir, suffix string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir holder dir: %v", err)
+	}
+	payload, err := json.Marshal(lockHolderRecord{PID: 424242, Command: "lit comment add", Since: time.Now()})
+	if err != nil {
+		t.Fatalf("marshal record: %v", err)
+	}
+	record := filepath.Join(dir, lockHolderRecordPrefix+suffix)
+	if err := os.WriteFile(record, payload, 0o600); err != nil {
+		t.Fatalf("write record: %v", err)
+	}
+	if err := os.Link(record, privateNameFor(record)); err != nil {
+		t.Fatalf("link private name: %v", err)
+	}
+}
+
+// holderDirEntries lists every name under a lock's holder directory, private
+// ones included, without probing any of them.
+func holderDirEntries(t *testing.T, lockPath string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(lockHolderDir(storageDirOf(lockPath), lockPath))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("read holder dir: %v", err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	return names
+}
+
+// TestEveryAcquisitionRetiresTheRecordsOfDepartedHolders pins that a record
+// does not outlive its holder by more than one acquisition. A holder that
+// never runs its release leaves both names behind, and an uncontended lock has
+// no contender to read them, so before every acquisition swept, the mirror
+// beacon's directory grew by a record per spawning command, without bound.
+// The live holder is the other side of the contract: a sweep that took it too
+// would cost a holding process its name.
+func TestEveryAcquisitionRetiresTheRecordsOfDepartedHolders(t *testing.T) {
+	notices := captureLockNotices(t, time.Hour, time.Hour)
+	ctx := context.Background()
+	lockPath := filepath.Join(t.TempDir(), "test.lock")
+	storageDir := storageDirOf(lockPath)
+	dir := lockHolderDir(storageDir, lockPath)
+
+	live, err := acquireStoreLock(ctx, storageDir, lockPath, false, 0)
+	if err != nil {
+		t.Fatalf("live holder: %v", err)
+	}
+	for i := range 20 {
+		strandDeadRecord(t, dir, fmt.Sprintf("424242-%d", i))
+	}
+
+	for round := range 5 {
+		release, err := acquireStoreLock(ctx, storageDir, lockPath, false, 0)
+		if err != nil {
+			t.Fatalf("round %d: acquire: %v", round, err)
+		}
+		// Two holders, two names each: the live one and this acquisition.
+		if left := holderDirEntries(t, lockPath); len(left) != 4 {
+			t.Fatalf("round %d: holder dir = %v, want the two live holders' four names and nothing else", round, left)
+		}
+		if err := release(); err != nil {
+			t.Fatalf("round %d: release: %v", round, err)
+		}
+		strandDeadRecord(t, dir, fmt.Sprintf("424243-%d", round))
+	}
+	if holders, _ := readLockHolders(storageDir, lockPath); len(holders) != 1 {
+		t.Errorf("holders = %v, want the live holder still named after every sweep", holders)
+	}
+	if err := live(); err != nil {
+		t.Fatalf("release live holder: %v", err)
+	}
+	if printed := notices.String(); printed != "" {
+		t.Errorf("sweeping printed %q, want nothing", printed)
+	}
+}
+
+// TestAReusedPidPublishesPastItsPredecessorsNames pins that a process whose
+// pid the kernel handed out before can still name itself. A predecessor with
+// that pid may have stranded names nothing collects — a private name from a
+// kill before its link — and a process drawing the same names would have its
+// publish refused: the reported "create holder record: ... file exists".
+//
+// The predecessor is drawn through lockHolderRecordNamesFor itself, as a
+// process with this pid but its own nonce and a sequence starting over, so
+// the test follows whatever the names are made of.
+func TestAReusedPidPublishesPastItsPredecessorsNames(t *testing.T) {
+	notices := captureLockNotices(t, time.Hour, time.Hour)
+	lockPath := filepath.Join(t.TempDir(), "test.lock")
+	storageDir := storageDirOf(lockPath)
+	dir := lockHolderDir(storageDir, lockPath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir holder dir: %v", err)
+	}
+
+	for seq := range lockHolderRecordSeq.Load() + 50 {
+		private, _ := lockHolderRecordNamesFor(dir, os.Getpid(), "0dead0ff", seq+1)
+		if err := os.WriteFile(private, nil, 0o600); err != nil {
+			t.Fatalf("strand predecessor's private name: %v", err)
+		}
+	}
+
+	release, err := acquireStoreLock(context.Background(), storageDir, lockPath, true, 0)
+	if err != nil {
+		t.Fatalf("acquireStoreLock() error = %v", err)
+	}
+	account := describeLockHolders(storageDir, lockPath)
+	if err := release(); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	if printed := notices.String(); printed != "" {
+		t.Errorf("publishing printed %q, want this process to name itself", printed)
+	}
+	if named := fmt.Sprintf("pid %d ", os.Getpid()); !strings.Contains(account, named) {
+		t.Errorf("account = %q, want %q in it", account, named)
+	}
+}
+
+// TestASweepThatFailsIsReportedAndTheLockStillGranted pins the sweep's place
+// beside the publish it precedes: housekeeping on a diagnostic, so a failure
+// is loud but costs neither the lock nor this holder's own record.
+func TestASweepThatFailsIsReportedAndTheLockStillGranted(t *testing.T) {
+	notices := captureLockNotices(t, time.Hour, time.Hour)
+	lockPath := filepath.Join(t.TempDir(), "test.lock")
+	storageDir := storageDirOf(lockPath)
+	// A directory under a record's name: the probe cannot open it as a file,
+	// so the sweep fails on it.
+	if err := os.MkdirAll(filepath.Join(lockHolderDir(storageDir, lockPath), lockHolderRecordPrefix+"unprobeable"), 0o755); err != nil {
+		t.Fatalf("mkdir unprobeable record: %v", err)
+	}
+
+	release, err := acquireStoreLock(context.Background(), storageDir, lockPath, true, 0)
+	if err != nil {
+		t.Fatalf("acquireStoreLock() error = %v, want the lock despite a failed sweep", err)
+	}
+	account := describeLockHolders(storageDir, lockPath)
+	if err := release(); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	if printed := notices.String(); !strings.Contains(printed, "could not retire the records of holders gone") || !strings.Contains(printed, "unprobeable") {
+		t.Errorf("notices = %q, want the failed sweep reported, naming the record", printed)
+	}
+	if named := fmt.Sprintf("pid %d ", os.Getpid()); !strings.Contains(account, named) {
+		t.Errorf("account = %q, want this holder named despite the failed sweep", account)
+	}
+}
+
+// TestARecordThatWillNotRetireIsReportedAndTheReleaseStillLands pins the
+// release's half of that demotion: a record this release cannot remove costs a
+// notice, never the release, and the lock's own release result comes back
+// untouched — neither swallowed nor joined with the record's failure.
+func TestARecordThatWillNotRetireIsReportedAndTheReleaseStillLands(t *testing.T) {
+	notices := captureLockNotices(t, time.Hour, time.Hour)
+	lockPath := filepath.Join(t.TempDir(), "test.lock")
+	storageDir := storageDirOf(lockPath)
+	dir := lockHolderDir(storageDir, lockPath)
+	lockErr := errors.New("lock release result")
+	release := recordLockHolder(storageDir, lockPath, func() error { return lockErr })
+
+	// The swept name becomes a non-empty directory the release cannot remove,
+	// as on Windows it cannot remove a name a concurrent sweep's probe holds
+	// open.
+	var record string
+	for _, name := range holderDirEntries(t, lockPath) {
+		if strings.HasPrefix(name, lockHolderRecordPrefix) {
+			record = filepath.Join(dir, name)
+		}
+	}
+	if record == "" {
+		t.Fatal("no holder record was published")
+	}
+	if err := os.Remove(record); err != nil {
+		t.Fatalf("remove record name: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(record, "occupant"), 0o755); err != nil {
+		t.Fatalf("occupy record name: %v", err)
+	}
+
+	if err := release(); err != lockErr {
+		t.Fatalf("release() = %v, want exactly the lock's own release result", err)
+	}
+	if printed := notices.String(); !strings.Contains(printed, "could not retire this process's holder record") {
+		t.Errorf("notices = %q, want the failed retirement reported", printed)
+	}
+}
+
 // TestFillingARetiredRecordFailsRatherThanRecreatingIt pins the O_CREATE-less
 // open. A record retired in the instant before its hold landed must not be
 // written back into existence: the file would carry this holder's identity

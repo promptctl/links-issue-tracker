@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -104,31 +106,50 @@ const lockHolderRecordPrefix = "holder-"
 // private sibling on the strength of the same proof, since it is the same
 // inode). The one case the split gives up is a publisher killed before it
 // links, which leaves a private name no record name points at and so nothing
-// collects. A stray file nothing ever opens is the cheap end of this trade;
-// the holder it would otherwise cost is the expensive one.
+// collects. A stray file nothing ever opens is the cheap end of this trade —
+// and nothing does open it, because no later process can draw its name
+// (lockHolderProcessNonce) — while the holder it would otherwise cost is the
+// expensive one.
 const lockHolderPrivatePrefix = "private-"
 
-// lockHolderRecordSeq numbers this process's records, and with the pid it
-// makes a record's names unique among every record that can be live at once:
-// two live processes cannot share a pid, and one process cannot draw the same
-// number twice. What keeps a live record safe against the rest — a pid reused
-// after a killed holder, whose un-swept record still squats the name a fresh
-// process would draw — is not the draw but the publish: both names are created
-// by primitives that refuse to replace (O_EXCL, and link), so a collision
-// costs a loud publish failure and never a silently overwritten record.
+// lockHolderProcessNonce and lockHolderRecordSeq, with the pid, make a
+// record's names unique among every record ever minted, not only among those
+// live at once. The pid alone is not enough: the kernel reuses it, and the
+// sequence restarts in every process, so a pid that once died holding a
+// record would draw that record's name again. The nonce is what a reused pid
+// does not repeat. Both names are still created by primitives that refuse to
+// replace (O_EXCL, and link), so were a name ever drawn twice the publish
+// would fail loudly rather than overwrite.
 //
-// [LAW:no-shared-mutable-globals] One writer, one operation, one invariant:
-// every read is an Add, and the value means nothing except that it differs
-// from the last.
-var lockHolderRecordSeq atomic.Uint64
+// [LAW:no-shared-mutable-globals] The nonce is drawn once and never written
+// again. The sequence has one writer, one operation, one invariant: every
+// read is an Add, and the value means nothing except that it differs from
+// the last.
+var (
+	lockHolderProcessNonce = func() string {
+		var nonce [4]byte
+		// crypto/rand.Read never returns an error; it crashes the program on
+		// the one platform failure it cannot recover from.
+		_, _ = rand.Read(nonce[:])
+		return hex.EncodeToString(nonce[:])
+	}()
+	lockHolderRecordSeq atomic.Uint64
+)
 
-// lockHolderRecordNames draws the two names one acquisition lives under: the
-// private one only its own holder ever touches, and the one a reader sweeps.
+// lockHolderRecordNames draws the two names this process's next acquisition
+// lives under: the private one only its own holder ever touches, and the one
+// a reader sweeps.
+func lockHolderRecordNames(dir string) (privatePath, recordPath string) {
+	return lockHolderRecordNamesFor(dir, os.Getpid(), lockHolderProcessNonce, lockHolderRecordSeq.Add(1))
+}
+
+// lockHolderRecordNamesFor cuts both names of the record a process with this
+// pid and nonce mints as its seq'th, whatever process that is.
 // [LAW:one-source-of-truth] Both are cut from a single suffix here, which is
 // what lets a sweep read the split backwards to find a dead record's private
 // sibling; privateNameFor is that inverse.
-func lockHolderRecordNames(dir string) (privatePath, recordPath string) {
-	suffix := fmt.Sprintf("%d-%d", os.Getpid(), lockHolderRecordSeq.Add(1))
+func lockHolderRecordNamesFor(dir string, pid int, nonce string, seq uint64) (privatePath, recordPath string) {
+	suffix := fmt.Sprintf("%d-%s-%d", pid, nonce, seq)
 	return filepath.Join(dir, lockHolderPrivatePrefix+suffix),
 		filepath.Join(dir, lockHolderRecordPrefix+suffix)
 }
@@ -161,7 +182,28 @@ type lockHolderRecord struct {
 // one over a message nobody had asked for. Same demotion, and the same reason,
 // as SettleCommitLockRelease's post-success release failure.
 // [LAW:no-silent-failure] loud, but not a false failure.
+//
+// Every publish first retires the records of holders that are gone. A record
+// whose holder never ran its release — one SIGKILLed, or one that leaves its
+// hold to process exit by design, as a mirror-beacon claimant does — has
+// nobody else to collect it: a contender reads the directory only when it
+// has waited long enough to report, which an uncontended lock never does. The
+// publisher is the one reader every acquisition has, so no record outlives
+// its holder past the next acquisition. (A private name stranded by a
+// publisher killed before it links is the exception lockHolderPrivatePrefix
+// accounts for: no sweep may touch a private name.)
+// [LAW:dataflow-not-control-flow] The sweep runs on every acquisition; an
+// empty directory is simply a sweep with nothing to retire.
+//
+// That sweep is also what demotes a failed retirement at release, the way a
+// failed publish is demoted: a record this release could not remove has lost
+// its hold, so the next acquisition proves it unheld and retires it. On
+// Windows that failure needs nothing worse than a concurrent sweep's probe
+// holding the file open, since filelock's open denies the delete right.
 func recordLockHolder(storageDir, lockPath string, lockRelease func() error) func() error {
+	if err := retireDeadLockHolders(storageDir, lockPath); err != nil {
+		fmt.Fprintf(lockWaitNoticeWriter, "lit: could not retire the records of holders gone from %s (the lock is held; every acquisition retries, so this repeats until they can be retired): %v\n", lockPath, err)
+	}
 	releaseRecord, err := publishLockHolder(storageDir, lockPath)
 	if err != nil {
 		fmt.Fprintf(lockWaitNoticeWriter, "lit: could not record this process as the holder of %s (the lock is held; only the diagnostic naming this holder is missing): %v\n", lockPath, err)
@@ -171,7 +213,10 @@ func recordLockHolder(storageDir, lockPath string, lockRelease func() error) fun
 		// Retire the record BEFORE dropping the lock, so no instant exists in
 		// which the next acquirer holds the lock while this record still
 		// answers for it.
-		return errors.Join(releaseRecord(), lockRelease())
+		if err := releaseRecord(); err != nil {
+			fmt.Fprintf(lockWaitNoticeWriter, "lit: could not retire this process's holder record for %s (the lock is still released; a later acquisition retires the record): %v\n", lockPath, err)
+		}
+		return lockRelease()
 	}
 }
 
@@ -204,9 +249,9 @@ func publishLockHolder(storageDir, lockPath string) (func() error, error) {
 // half-made one.
 func mintHeldRecord(dir string, payload []byte) (func() error, error) {
 	privatePath, recordPath := lockHolderRecordNames(dir)
-	// O_EXCL so a name already on disk — a private sibling stranded by a
-	// publisher killed before it linked, under a since-reused pid — is refused
-	// here rather than adopted as this holder's record.
+	// O_EXCL so a name already on disk is refused here rather than adopted as
+	// this holder's record. lockHolderProcessNonce keeps any name from being
+	// drawn twice; this is what makes a breach of that loud.
 	// [LAW:no-silent-failure]
 	created, err := os.OpenFile(privatePath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
@@ -320,35 +365,72 @@ func unnamedHolder(problems []string) string {
 }
 
 // readLockHolders returns the live records under lockPath's holder directory,
-// plus an account of everything that went wrong reading them. Liveness is
-// decided the one way this package's discipline permits — by acquiring, which
-// is right on every death mode including SIGKILL — never by a PID probe or an
-// age threshold. A record whose hold this call takes had no live owner, so it
-// is retired here — and that is safe to conclude only because no publisher
-// ever works under a name this loop can see: a record arrives under its own
-// name finished and held, by link (lockHolderPrivatePrefix).
+// plus an account of everything that went wrong reading them, retiring each
+// dead record it meets (probeLockHolder).
 //
 // [LAW:no-silent-failure] Read failures travel back beside the holders instead
 // of shrinking the account silently: a diagnostic that quietly reports fewer
 // holders than exist is worse than the silence this whole file exists to end.
 func readLockHolders(storageDir, lockPath string) ([]lockHolderRecord, []string) {
 	dir := lockHolderDir(storageDir, lockPath)
-	entries, err := os.ReadDir(dir)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
+	names, err := holderRecordNames(dir)
+	if err != nil {
 		return nil, []string{fmt.Sprintf("holder records unreadable: %v", err)}
 	}
 	var holders []lockHolderRecord
 	var problems []string
-	for _, entry := range entries {
-		if !strings.HasPrefix(entry.Name(), lockHolderRecordPrefix) {
-			continue
-		}
-		recordPath := filepath.Join(dir, entry.Name())
-		holder, problem := readLockHolder(recordPath)
+	for _, name := range names {
+		holder, problem := readLockHolder(filepath.Join(dir, name))
 		holders = append(holders, holder...)
 		problems = append(problems, problem...)
 	}
 	return holders, problems
+}
+
+// retireDeadLockHolders retires every record under lockPath's holder directory
+// whose holder is gone, and reads nothing else: the sweep a publisher runs,
+// which wants no account, only the directory cleared of the dead.
+func retireDeadLockHolders(storageDir, lockPath string) error {
+	dir := lockHolderDir(storageDir, lockPath)
+	names, err := holderRecordNames(dir)
+	if err != nil {
+		return err
+	}
+	errs := make([]error, 0, len(names))
+	for _, name := range names {
+		_, probeErr := probeLockHolder(filepath.Join(dir, name))
+		errs = append(errs, probeErr)
+	}
+	return errors.Join(errs...)
+}
+
+// probeLockHolder decides whether the record at recordPath still has a live
+// holder, and retires the record when it does not — both its names, since
+// the one proof covers the inode they share.
+//
+// Liveness is decided the one way this package's discipline permits — by
+// acquiring, which is right on every death mode including SIGKILL — never by
+// a PID probe or an age threshold. A record whose hold the probe takes had no
+// live owner, and that is safe to conclude only because no publisher ever
+// works under a name a sweep can see: a record arrives under its swept name
+// finished and held, by link (lockHolderPrivatePrefix).
+//
+// [LAW:single-enforcer] The one place a record is judged dead, for the
+// account a contender reads and the sweep a publisher runs alike.
+func probeLockHolder(recordPath string) (live bool, err error) {
+	// maxAttempts 1 keeps this a probe: it decides liveness and takes custody
+	// of nothing, so no process ever waits on a holder record.
+	release, acquired, err := filelock.Acquire(context.Background(), recordPath, true, 1, 0)
+	if err != nil {
+		return false, fmt.Errorf("holder record %s unprobeable: %w", filepath.Base(recordPath), err)
+	}
+	if !acquired {
+		return true, nil
+	}
+	if err := errors.Join(release(), retireRecord(recordPath), retireRecord(privateNameFor(recordPath))); err != nil {
+		return false, fmt.Errorf("retiring dead holder record %s: %w", filepath.Base(recordPath), err)
+	}
+	return false, nil
 }
 
 // readLockHolder resolves one record file into at most one live holder. The
@@ -357,18 +439,12 @@ func readLockHolders(storageDir, lockPath string) ([]lockHolderRecord, []string)
 // would, on Windows, lock out the read it is deciding about.
 func readLockHolder(recordPath string) ([]lockHolderRecord, []string) {
 	payload, readErr := os.ReadFile(recordPath)
-	// maxAttempts 1 keeps this a probe: it decides liveness and takes custody
-	// of nothing, so no process ever waits on a holder record.
-	release, acquired, err := filelock.Acquire(context.Background(), recordPath, true, 1, 0)
+	live, err := probeLockHolder(recordPath)
 	if err != nil {
-		return nil, []string{fmt.Sprintf("holder record %s unprobeable: %v", filepath.Base(recordPath), err)}
+		return nil, []string{err.Error()}
 	}
-	if acquired {
-		// Nobody held it: the recorder died without releasing. Retire it —
-		// both its names, since this one proof covers the inode they share.
-		return nil, describeProblem(
-			errors.Join(release(), retireRecord(recordPath), retireRecord(privateNameFor(recordPath))),
-			"retiring dead holder record "+filepath.Base(recordPath))
+	if !live {
+		return nil, nil
 	}
 	if readErr != nil {
 		return nil, []string{fmt.Sprintf("a holder is live but its record %s is unreadable: %v", filepath.Base(recordPath), readErr)}
@@ -388,17 +464,6 @@ func readLockHolder(recordPath string) ([]lockHolderRecord, []string) {
 		return nil, []string{fmt.Sprintf("a holder is live but its record %s does not parse: %v", filepath.Base(recordPath), err)}
 	}
 	return []lockHolderRecord{holder}, nil
-}
-
-// describeProblem renders an error as the account's problem list, and renders
-// no problem when there was none — so a caller appends its result
-// unconditionally instead of guarding on success.
-// [LAW:dataflow-not-control-flow]
-func describeProblem(err error, doing string) []string {
-	if err == nil {
-		return nil
-	}
-	return []string{fmt.Sprintf("%s: %v", doing, err)}
 }
 
 // holderCommandLimit caps a rendered command line. A holder's argv is another
@@ -507,7 +572,11 @@ func (w *holdWait) NextBackOff() time.Duration {
 // wait, remembering every name it sees.
 func (w *holdWait) arrivals() bool {
 	arrived := false
-	for _, name := range holderRecordNames(w.dir) {
+	// An unreadable directory reads as no names here; the failure surfaces
+	// where the account is rendered (readLockHolders), which every exhausted
+	// wait reaches.
+	names, _ := holderRecordNames(w.dir)
+	for _, name := range names {
 		if _, seen := w.known[name]; !seen {
 			w.known[name] = struct{}{}
 			arrived = true
@@ -516,16 +585,19 @@ func (w *holdWait) arrivals() bool {
 	return arrived
 }
 
-// holderRecordNames lists the record names under a lock's holder directory.
-// Nothing is opened or probed: liveness is describeLockHolders's business, at
-// the moment a contender reports; here the names' identity is all that is
-// read. A directory that does not exist yet has no holders; a directory that
-// cannot be read reads the same way, and the failure surfaces where the
-// account is rendered (readLockHolders), which every exhausted wait reaches.
-func holderRecordNames(dir string) []string {
+// holderRecordNames lists the record names under a lock's holder directory —
+// the swept names only, never a private one. Nothing is opened or probed;
+// liveness is probeLockHolder's business. A directory that does not exist yet
+// has no holders.
+// [LAW:one-source-of-truth] The one listing the account, the sweep and the
+// wait all read.
+func holderRecordNames(dir string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	var names []string
 	for _, entry := range entries {
@@ -533,7 +605,7 @@ func holderRecordNames(dir string) []string {
 			names = append(names, entry.Name())
 		}
 	}
-	return names
+	return names, nil
 }
 
 var (
