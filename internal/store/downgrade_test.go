@@ -405,6 +405,9 @@ func TestDowngradeSnapshotFailureReportsTheVersionItRead(t *testing.T) {
 // error and carries the prune failure on what it reports.
 func TestDowngradePruneFailureReportsTheCommittedReverse(t *testing.T) {
 	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("removal-permission injection has no effect as root")
+	}
 	ctx := context.Background()
 	st, doltRoot := openWorkspaceForDowngrade(t)
 	registryMax, err := migrations.MaxVersion()

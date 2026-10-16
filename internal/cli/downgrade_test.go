@@ -6,14 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
 	"github.com/promptctl/links-issue-tracker/internal/engine"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/release"
@@ -384,66 +381,41 @@ func TestRunDowngradeOnAWorkspacePastRunningSupportIsSchemaAhead(t *testing.T) {
 }
 
 // A downgrade whose reverse committed installs the release it reversed for
-// even when rolling old downgrade snapshots off then fails: otherwise the
+// even when rolling old downgrade snapshots off then failed: otherwise the
 // newer binary stays installed and its next open migrates the workspace
-// forward again. The workspace and the reverse are real, and the prune fails
-// on a full budget of older downgrade snapshots, the oldest of which cannot be
-// removed; the command succeeds, and the failure is on its output and event.
+// forward again. The prune failure is on the output and the event whether the
+// install then succeeds or fails.
 func TestRunDowngradeInstallsWhenTheSnapshotPruneFails(t *testing.T) {
-	_, ws := initBootstrapTestRepo(t)
-	current, err := version.Get()
-	if err != nil {
-		t.Fatalf("version.Get() error = %v", err)
+	t.Parallel()
+	pruneErr := errors.New("prune downgrade snapshots: permission denied")
+	tests := []struct {
+		name       string
+		installErr error
+	}{
+		{name: "install succeeds"},
+		{name: "install fails", installErr: errors.New("rename: read-only file system")},
 	}
-	ctx := context.Background()
-	st, err := engine.Open(ctx, engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)
-	if err != nil {
-		t.Fatalf("engine.Open() error = %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	migrator, err := storage.SchemaMigration.Of(st)
-	if err != nil {
-		t.Fatalf("schema migration: %v", err)
-	}
-	dir := dbsnapshot.DirFor(ws.DatabasePath)
-	const base = int64(1700000000000000000)
-	stuck := filepath.Join(dir, fmt.Sprintf("%d-lit-downgrade-%d", base, base))
-	for i := int64(0); i < 10; i++ { // the store's downgrade-snapshot retention budget
-		path := filepath.Join(dir, fmt.Sprintf("%d-lit-downgrade-%d", base+i, base+i))
-		if err := os.MkdirAll(path, 0o755); err != nil {
-			t.Fatalf("plant snapshot: %v", err)
-		}
-		if err := os.WriteFile(filepath.Join(path, "held"), nil, 0o644); err != nil {
-			t.Fatalf("plant snapshot file: %v", err)
-		}
-	}
-	if err := os.Chmod(stuck, 0o555); err != nil {
-		t.Fatalf("chmod stuck snapshot: %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(stuck, 0o755) })
-
-	target := newFakeTarget()
-	target.Manifest.Schema.Max = current.Schema.Max - 1
-	inst := &stubInstaller{}
-	facts, counts, out, err := runDowngradeRecorded(t, downgradeScope{schema: migrator, current: current}, &stubResolver{target: target}, inst)
-	if err != nil {
-		t.Fatalf("downgrade: %v", err)
-	}
-	if !inst.called || inst.gotTargetPath != "/p/lit" {
-		t.Errorf("installer called=%v path=%q; want called=true path=/p/lit", inst.called, inst.gotTargetPath)
-	}
-	if !strings.Contains(out, "warning: old downgrade snapshots were not removed: prune downgrade snapshots:") {
-		t.Errorf("stdout does not report the prune failure: %q", out)
-	}
-	pruneErr, _ := facts["downgrade.snapshot_prune_error"].(string)
-	if !strings.HasPrefix(pruneErr, "prune downgrade snapshots:") {
-		t.Errorf("downgrade.snapshot_prune_error = %q; want the prune failure", pruneErr)
-	}
-	if got := facts["downgrade.installed_path"]; got != "/p/lit" {
-		t.Errorf("downgrade.installed_path = %v; want /p/lit", got)
-	}
-	if want := map[string]int{"downgrade.reversed": 1}; !reflect.DeepEqual(counts, want) {
-		t.Errorf("counts = %v; want %v", counts, want)
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			done := reversedFromV4()
+			done.PruneErr = pruneErr
+			inst := &stubInstaller{err: tc.installErr}
+			facts, _, out, err := runDowngradeRecorded(t, downgradeScope{schema: &stubDowngrader{done: done}, current: newerCurrentInfo()}, &stubResolver{target: newFakeTarget()}, inst)
+			if !errors.Is(err, tc.installErr) {
+				t.Fatalf("downgrade err = %v; want %v", err, tc.installErr)
+			}
+			if !inst.called {
+				t.Error("installer must run when the reverse committed and only the prune failed")
+			}
+			if want := "warning: old downgrade snapshots were not removed: " + pruneErr.Error() + "\n"; !strings.HasPrefix(out, want) {
+				t.Errorf("stdout = %q; want it to start with %q", out, want)
+			}
+			if got := facts["downgrade.snapshot_prune_error"]; got != pruneErr.Error() {
+				t.Errorf("downgrade.snapshot_prune_error = %v; want %q", got, pruneErr.Error())
+			}
+		})
 	}
 }
 
