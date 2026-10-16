@@ -199,8 +199,7 @@ mkdir -p "$TARGET_DIR"
 # mode dispatch installs it. The staging dir is on the SAME filesystem as
 # TARGET_DIR, so that rename is atomic (cross-FS mv is a copy+unlink): a
 # process already running the old lit keeps its inode, and nothing ever execs
-# a half-written file. Writing the build straight to "$TARGET_DIR/$BIN_NAME"
-# rewrites the file other sessions on this machine are running.
+# a half-written file.
 # [LAW:single-enforcer] one install step; the modes differ only in what they stage.
 tmp="$(mktemp -d "$TARGET_DIR/.lit-install.XXXXXX")"
 trap 'rm -rf "$tmp"' EXIT
