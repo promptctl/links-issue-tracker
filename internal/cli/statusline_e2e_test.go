@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,7 +15,6 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/statusline"
-	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
@@ -167,17 +167,8 @@ func statuslineEvent(t *testing.T) (map[string]any, int) {
 // file and its exclude entry, and whether it replaced an unreadable file — and
 // a command that wrote nothing says so with zeros.
 func TestEachStatuslineWriteRecordsItsFactsOnTheEvent(t *testing.T) {
-	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
 	isolateEvents(t)
-	dir := t.TempDir()
-	runGit(t, dir, "init")
-	runGit(t, dir, "config", "user.email", "m@m.co")
-	runGit(t, dir, "config", "user.name", "main")
-	runGit(t, dir, "commit", "--allow-empty", "-m", "seed")
-	runCLIInDir(t, dir, "init", "--skip-hooks", "--skip-agents")
-	epic := newEpicInDir(t, dir, "statusline epic")
-	first := extractTicketID(t, runCLIInDir(t, dir, "new", "--title", "First", "--topic", "demo", "--type", "task", "--parent", epic))
-	second := extractTicketID(t, runCLIInDir(t, dir, "new", "--title", "Second", "--topic", "demo", "--type", "task", "--parent", epic))
+	dir, first, second := statuslineCheckout(t)
 	file := filepath.Join(dir, ".lit", "statusline.json")
 
 	type step struct {
@@ -269,6 +260,26 @@ func TestAFailedStatuslineWriteIsRecordedOnTheEvent(t *testing.T) {
 	}
 }
 
+// statuslineCheckout is a fresh git checkout with lit initialised and two
+// tasks, First and Second, under one epic, in a HOME of its own so neither lit
+// nor the tools a statusline runs read this machine's config.
+func statuslineCheckout(t *testing.T) (dir, first, second string) {
+	t.Helper()
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	dir = t.TempDir()
+	runGit(t, dir, "init")
+	runGit(t, dir, "config", "user.email", "m@m.co")
+	runGit(t, dir, "config", "user.name", "main")
+	runGit(t, dir, "commit", "--allow-empty", "-m", "seed")
+	runCLIInDir(t, dir, "init", "--skip-hooks", "--skip-agents")
+	epic := newEpicInDir(t, dir, "statusline epic")
+	first = extractTicketID(t, runCLIInDir(t, dir, "new", "--title", "First", "--topic", "demo", "--type", "task", "--parent", epic))
+	second = extractTicketID(t, runCLIInDir(t, dir, "new", "--title", "Second", "--topic", "demo", "--type", "task", "--parent", epic))
+	return dir, first, second
+}
+
 // minimalStatuslineScript is the shell script docs/statusline.md gives under
 // "A minimal statusline". The test runs the doc's own text, so the example a
 // reader copies is the one proven here. [LAW:one-source-of-truth]
@@ -282,6 +293,7 @@ func minimalStatuslineScript(t *testing.T) string {
 	if !ok {
 		t.Fatal(`docs/statusline.md has no "## A minimal statusline" section`)
 	}
+	section, _, _ = strings.Cut(section, "\n## ")
 	_, block, ok := strings.Cut(section, "```sh\n")
 	if !ok {
 		t.Fatal(`docs/statusline.md's "A minimal statusline" section has no sh code block`)
@@ -295,9 +307,10 @@ func minimalStatuslineScript(t *testing.T) string {
 
 // The documented statusline renders what this checkout's commands recorded —
 // the ticket being worked on, the next pick, nothing ready, and nothing at all
-// for a missing, empty or unknown-version file — while the workspace lock is
-// held exclusively, so no lit read could run. It reads the file and never lit.
-func TestDocumentedStatuslineRendersTheFileWhileTheWorkspaceIsLocked(t *testing.T) {
+// when the file is missing, records nothing, or has a schema version it does
+// not know — with no lit process: a lit first on its PATH fails any render
+// that runs it, so no lit lock can hold the statusline up.
+func TestDocumentedStatuslineRendersTheFileWithNoLitProcess(t *testing.T) {
 	if _, err := exec.LookPath("jq"); err != nil {
 		t.Fatalf("the documented statusline is a jq program, and jq is not on PATH: %v", err)
 	}
@@ -305,47 +318,20 @@ func TestDocumentedStatuslineRendersTheFileWhileTheWorkspaceIsLocked(t *testing.
 	if err := os.WriteFile(script, []byte(minimalStatuslineScript(t)), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
-	dir := t.TempDir()
-	runGit(t, dir, "init")
-	runGit(t, dir, "config", "user.email", "m@m.co")
-	runGit(t, dir, "config", "user.name", "main")
-	runGit(t, dir, "commit", "--allow-empty", "-m", "seed")
-	runCLIInDir(t, dir, "init", "--skip-hooks", "--skip-agents")
-	ws, err := workspace.Resolve(dir)
-	if err != nil {
+	shim := t.TempDir()
+	if err := os.WriteFile(filepath.Join(shim, "lit"), []byte("#!/bin/sh\necho \"the statusline ran lit $*\" >&2\nexit 1\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	epic := newEpicInDir(t, dir, "statusline epic")
-	first := extractTicketID(t, runCLIInDir(t, dir, "new", "--title", "First", "--topic", "demo", "--type", "task", "--parent", epic))
+	dir, first, second := statuslineCheckout(t)
 	file := filepath.Join(dir, ".lit", "statusline.json")
 
 	render := func() string {
 		t.Helper()
-		release, err := store.LockWorkspaceExclusive(context.Background(), ws.DatabasePath)
-		if err != nil {
-			t.Fatalf("LockWorkspaceExclusive: %v", err)
-		}
-		defer func() {
-			if err := release(); err != nil {
-				t.Errorf("release exclusive: %v", err)
-			}
-		}()
-		// The control: the shared hold every store open takes cannot be had
-		// right now, so a render that went through lit could not finish.
-		readCtx, cancelRead := context.WithTimeout(context.Background(), 200*time.Millisecond)
-		releaseReader, err := store.LockWorkspaceShared(readCtx, ws.DatabasePath)
-		cancelRead()
-		if !errors.Is(err, context.DeadlineExceeded) {
-			if err == nil {
-				_ = releaseReader()
-			}
-			t.Fatalf("a store open's shared hold under the exclusive hold: err=%v; want it still waiting at its deadline", err)
-		}
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		cmd := exec.CommandContext(ctx, "sh", script)
 		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), "PATH="+shim+string(os.PathListSeparator)+os.Getenv("PATH"))
 		var stdout, stderr strings.Builder
 		cmd.Stdout, cmd.Stderr = &stdout, &stderr
 		start := time.Now()
@@ -356,15 +342,20 @@ func TestDocumentedStatuslineRendersTheFileWhileTheWorkspaceIsLocked(t *testing.
 		return stdout.String()
 	}
 
+	if _, err := os.Stat(file); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("statusline file before any command wrote it: %v; want it absent", err)
+	}
 	for _, step := range []struct {
 		name  string
 		setup func()
 		want  string
 	}{
 		{"no file yet", func() {}, ""},
-		{"after next", func() { runCLIInDir(t, dir, "next") }, "next: " + first + "\n"},
-		{"after start", func() { runCLIInDir(t, dir, "start", first, "--by", "agent") }, "working: " + first + " First  |  next: " + first + "\n"},
+		{"after start", func() { runCLIInDir(t, dir, "start", first, "--by", "agent") }, "working: " + first + " First\n"},
 		{"after done", func() { runCLIInDir(t, dir, "done", first) }, ""},
+		{"after next", func() { runCLIInDir(t, dir, "next") }, "next: " + second + "\n"},
+		{"after start of the pick", func() { runCLIInDir(t, dir, "start", second, "--by", "agent") }, "working: " + second + " Second  |  next: " + second + "\n"},
+		{"after done of the pick", func() { runCLIInDir(t, dir, "done", second) }, ""},
 		{"after next on an empty backlog", func() { runCLIInDirAllowError(t, dir, "next") }, "next: nothing ready\n"},
 		{"an unknown schema_version", func() {
 			if err := os.WriteFile(file, []byte(`{"schema_version": 2, "working_on": {"ticket": {"id": "x-1", "title": "X"}}, "next": null}`), 0o644); err != nil {
