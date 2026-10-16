@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/statusline"
+	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
@@ -264,5 +266,115 @@ func TestAFailedStatuslineWriteIsRecordedOnTheEvent(t *testing.T) {
 	}
 	if got := facts["statusline.changed"]; !reflect.DeepEqual(got, []any{}) {
 		t.Fatalf("failed write recorded statusline.changed = %v; want []", got)
+	}
+}
+
+// minimalStatuslineScript is the shell script docs/statusline.md gives under
+// "A minimal statusline". The test runs the doc's own text, so the example a
+// reader copies is the one proven here. [LAW:one-source-of-truth]
+func minimalStatuslineScript(t *testing.T) string {
+	t.Helper()
+	doc, err := os.ReadFile(filepath.Join("..", "..", "docs", "statusline.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, section, ok := strings.Cut(string(doc), "\n## A minimal statusline\n")
+	if !ok {
+		t.Fatal(`docs/statusline.md has no "## A minimal statusline" section`)
+	}
+	_, block, ok := strings.Cut(section, "```sh\n")
+	if !ok {
+		t.Fatal(`docs/statusline.md's "A minimal statusline" section has no sh code block`)
+	}
+	script, _, ok := strings.Cut(block, "```")
+	if !ok {
+		t.Fatal(`docs/statusline.md's "A minimal statusline" sh block is not closed`)
+	}
+	return script
+}
+
+// The documented statusline renders what this checkout's commands recorded —
+// the ticket being worked on, the next pick, nothing ready, and nothing at all
+// for a missing, empty or unknown-version file — while the workspace lock is
+// held exclusively, so no lit read could run. It reads the file and never lit.
+func TestDocumentedStatuslineRendersTheFileWhileTheWorkspaceIsLocked(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Fatalf("the documented statusline is a jq program, and jq is not on PATH: %v", err)
+	}
+	script := filepath.Join(t.TempDir(), "statusline.sh")
+	if err := os.WriteFile(script, []byte(minimalStatuslineScript(t)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	dir := t.TempDir()
+	runGit(t, dir, "init")
+	runGit(t, dir, "config", "user.email", "m@m.co")
+	runGit(t, dir, "config", "user.name", "main")
+	runGit(t, dir, "commit", "--allow-empty", "-m", "seed")
+	runCLIInDir(t, dir, "init", "--skip-hooks", "--skip-agents")
+	ws, err := workspace.Resolve(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	epic := newEpicInDir(t, dir, "statusline epic")
+	first := extractTicketID(t, runCLIInDir(t, dir, "new", "--title", "First", "--topic", "demo", "--type", "task", "--parent", epic))
+	file := filepath.Join(dir, ".lit", "statusline.json")
+
+	render := func() string {
+		t.Helper()
+		release, err := store.LockWorkspaceExclusive(context.Background(), ws.DatabasePath)
+		if err != nil {
+			t.Fatalf("LockWorkspaceExclusive: %v", err)
+		}
+		defer func() {
+			if err := release(); err != nil {
+				t.Errorf("release exclusive: %v", err)
+			}
+		}()
+		// The control: the shared hold every store open takes cannot be had
+		// right now, so a render that went through lit could not finish.
+		readCtx, cancelRead := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		releaseReader, err := store.LockWorkspaceShared(readCtx, ws.DatabasePath)
+		cancelRead()
+		if !errors.Is(err, context.DeadlineExceeded) {
+			if err == nil {
+				_ = releaseReader()
+			}
+			t.Fatalf("a store open's shared hold under the exclusive hold: err=%v; want it still waiting at its deadline", err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "sh", script)
+		cmd.Dir = dir
+		var stdout, stderr strings.Builder
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+		start := time.Now()
+		if err := cmd.Run(); err != nil || stderr.Len() > 0 {
+			t.Fatalf("documented statusline: err=%v stderr=%q", err, stderr.String())
+		}
+		t.Logf("rendered %q in %v", stdout.String(), time.Since(start))
+		return stdout.String()
+	}
+
+	for _, step := range []struct {
+		name  string
+		setup func()
+		want  string
+	}{
+		{"no file yet", func() {}, ""},
+		{"after next", func() { runCLIInDir(t, dir, "next") }, "next: " + first + "\n"},
+		{"after start", func() { runCLIInDir(t, dir, "start", first, "--by", "agent") }, "working: " + first + " First  |  next: " + first + "\n"},
+		{"after done", func() { runCLIInDir(t, dir, "done", first) }, ""},
+		{"after next on an empty backlog", func() { runCLIInDirAllowError(t, dir, "next") }, "next: nothing ready\n"},
+		{"an unknown schema_version", func() {
+			if err := os.WriteFile(file, []byte(`{"schema_version": 2, "working_on": {"ticket": {"id": "x-1", "title": "X"}}, "next": null}`), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}, ""},
+	} {
+		step.setup()
+		if got := render(); got != step.want {
+			t.Fatalf("%s: the documented statusline printed %q, want %q", step.name, got, step.want)
+		}
 	}
 }
