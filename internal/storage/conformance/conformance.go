@@ -2389,7 +2389,7 @@ func parentWiring(t *testing.T, ctx context.Context, st storage.Store, clk *cloc
 func anImportFileThatBreaksARuleIsRefusedWhole(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	existing := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "existing", Topic: "core", IssueType: model.TypeEpic})
 	before := mustList(t, ctx, st, storage.ListIssuesFilter{IncludeDeleted: true, IncludeArchived: true})
-	title, topic, epicType, taskType, shortTopic, blank := "imported", "core", "epic", "task", "x", " "
+	title, topic, epicType, taskType, shortTopic, blank, renamed := "imported", "core", "epic", "task", "x", " ", "renamed"
 	commaLabel := []string{"a,b"}
 	commaAssignee := "Doe, J"
 	lands := storage.ImportTreeSpec{LocalID: "e", Title: "lands", IssueType: "epic", Topic: "core"}
@@ -2470,12 +2470,21 @@ func anImportFileThatBreaksARuleIsRefusedWhole(t *testing.T, ctx context.Context
 		{"BulkApply(a task blocked by a task beside it under one epic)", bulk(epic("e", ""),
 			storage.BulkIssueSpec{LocalID: "a", Title: &title, Topic: &topic, IssueType: &taskType, Parent: "e"},
 			storage.BulkIssueSpec{Title: &title, Topic: &topic, IssueType: &taskType, Parent: "e", BlockedBy: []string{"a"}})},
+		{"BulkApply(an update, then a task blocked by a task beside it under an existing epic)", bulk(
+			storage.BulkIssueSpec{ID: existing.ID, Title: &renamed},
+			storage.BulkIssueSpec{LocalID: "a", Title: &title, Topic: &topic, IssueType: &taskType, Parent: existing.ID},
+			storage.BulkIssueSpec{Title: &title, Topic: &topic, IssueType: &taskType, Parent: existing.ID, BlockedBy: []string{"a"}})},
 	} {
 		assertRefused(t, imp.do(), imp.what)
 	}
 	after := mustList(t, ctx, st, storage.ListIssuesFilter{IncludeDeleted: true, IncludeArchived: true})
 	if len(after) != len(before) {
 		t.Errorf("issues after the refused imports = %d, want %d: a file the gate refuses writes nothing", len(after), len(before))
+	}
+	// A refusal at a write cannot take back an update, so only the gate keeps
+	// one from landing.
+	if got := mustGet(t, ctx, st, existing.ID); got.Title != "existing" {
+		t.Errorf("existing title after the refused imports = %q, want %q: a file the gate refuses writes nothing", got.Title, "existing")
 	}
 }
 

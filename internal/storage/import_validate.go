@@ -18,8 +18,11 @@ import (
 // by the gate a create parses by, the references form no cycle, the
 // hierarchy the file describes obeys containment (RejectLeafWithoutParent,
 // RejectParentThatIsNotAContainer), and no blocked_by orders work inside one
-// of its epics (RejectBlocksWithinEpic). A parent or blocked_by named by a
-// real id is judged by the write that reads it. Both engines take their
+// of its epics (RejectBlocksWithinEpic), including an existing epic two of its
+// documents name as their parent. That one rule reads the type of each
+// existing parent, which the engine reads and hands in; every other rule
+// about a parent or blocked_by named by a real id is judged by the write that
+// reads it. Both engines take their
 // write order from these gates, so a file is accepted or refused the same
 // way whichever engine opens it, and no engine can write a file the gate has
 // not judged.
@@ -35,21 +38,37 @@ func ImportTreeWriteOrder(specs []ImportTreeSpec) ([]int, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A tree file's every parent is one of its own documents, so it names no
+	// existing parent and there are no types to read.
 	return judgeReferences("import", resolveFileReferences(specs, func(i int, spec ImportTreeSpec) fileDocument {
 		return fileDocument{name: fmt.Sprintf("spec %q", spec.LocalID), localID: spec.LocalID, issueType: types[i], parent: spec.Parent, blockedBy: spec.BlockedBy}
-	}))
+	}), nil)
 }
 
 // BulkWriteOrder gates a bulk file and returns the order its documents are
-// written in.
-func BulkWriteOrder(specs []BulkIssueSpec) ([]int, error) {
-	createTypes, err := validateBulkSpecs(specs)
+// written in. existingParentTypes holds the type of each existing issue among
+// BulkParentRefs(specs); an id naming no issue is absent.
+func BulkWriteOrder(specs []BulkIssueSpec, existingParentTypes map[string]model.IssueType) ([]int, error) {
+	types, err := validateBulkSpecs(specs)
 	if err != nil {
 		return nil, err
 	}
 	return judgeReferences("bulk", resolveFileReferences(specs, func(i int, spec BulkIssueSpec) fileDocument {
-		return fileDocument{name: fmt.Sprintf("doc %d", i), localID: spec.LocalID, issueType: createTypes[i], parent: spec.Parent, blockedBy: spec.BlockedBy}
-	}))
+		return fileDocument{name: fmt.Sprintf("doc %d", i), localID: spec.LocalID, issueType: types[i], parent: spec.Parent, blockedBy: spec.BlockedBy}
+	}), existingParentTypes)
+}
+
+// BulkParentRefs lists every parent a bulk file names, by local_id or by real
+// id: the ids whose types an engine reads for BulkWriteOrder. A local_id among
+// them names no existing issue, or is resolved to its document first.
+func BulkParentRefs(specs []BulkIssueSpec) []string {
+	refs := make([]string, 0, len(specs))
+	for _, spec := range specs {
+		if spec.Parent != "" {
+			refs = append(refs, spec.Parent)
+		}
+	}
+	return refs
 }
 
 // fileDocument is what the reference rules read from one document: its
@@ -65,15 +84,18 @@ type fileDocument struct {
 // fileReferences is the graph a file draws among its own documents, indexed
 // by document position, since a bulk create need not carry a local_id. A
 // reference matching no local_id in the file is not an edge: it names a real
-// issue, and the write that receives it judges it.
+// issue, and the write that receives it judges it. A parent named that way is
+// still kept, because two documents under one existing epic are leaves of one
+// epic before either is written.
 type fileReferences struct {
-	docs      []fileDocument
-	parent    map[int]int // document -> its parent, for a parent in the file
-	blockedBy [][]int     // document -> the documents in the file it is blocked by
+	docs           []fileDocument
+	parent         map[int]int    // document -> its parent, for a parent in the file
+	existingParent map[int]string // document -> its parent, for a parent named by real id
+	blockedBy      [][]int        // document -> the documents in the file it is blocked by
 }
 
 func resolveFileReferences[S any](specs []S, documentOf func(int, S) fileDocument) fileReferences {
-	refs := fileReferences{docs: make([]fileDocument, len(specs)), parent: make(map[int]int, len(specs)), blockedBy: make([][]int, len(specs))}
+	refs := fileReferences{docs: make([]fileDocument, len(specs)), parent: make(map[int]int, len(specs)), existingParent: make(map[int]string), blockedBy: make([][]int, len(specs))}
 	indexByLocal := make(map[string]int, len(specs))
 	for i, spec := range specs {
 		refs.docs[i] = documentOf(i, spec)
@@ -84,6 +106,8 @@ func resolveFileReferences[S any](specs []S, documentOf func(int, S) fileDocumen
 	for i, doc := range refs.docs {
 		if j, inFile := indexByLocal[doc.parent]; inFile {
 			refs.parent[i] = j
+		} else if doc.parent != "" {
+			refs.existingParent[i] = doc.parent
 		}
 		for _, dep := range doc.blockedBy {
 			if j, inFile := indexByLocal[dep]; inFile {
@@ -99,8 +123,8 @@ func resolveFileReferences[S any](specs []S, documentOf func(int, S) fileDocumen
 // in. The hierarchy rule is judged first: an epic blocked by something under
 // it is also a cycle in write order, and the rule's own refusal is the one
 // that names the fix.
-func judgeReferences(format string, refs fileReferences) ([]int, error) {
-	if err := rejectBlocksWithinFileEpics(format, refs); err != nil {
+func judgeReferences(format string, refs fileReferences, existingParentTypes map[string]model.IssueType) ([]int, error) {
+	if err := rejectBlocksWithinFileEpics(format, refs, existingParentTypes); err != nil {
 		return nil, err
 	}
 	return writeOrder(format, refs)
@@ -155,13 +179,20 @@ func writeOrder(format string, refs fileReferences) ([]int, error) {
 // by a document under it, or a leaf blocked by another leaf of its epic is
 // refused before the first create rather than at its edge, after the last.
 // Every parent in the file is an epic by now — the validators refused any
-// other — so every parent edge is one the rule climbs. An edge whose judgment
-// needs a real id's place is the write's to judge. [LAW:single-enforcer]
-func rejectBlocksWithinFileEpics(format string, refs fileReferences) error {
+// other — so every parent edge is one the rule climbs. An existing parent is
+// placed only if it is an epic, as the engines' own trees place it, and keyed
+// apart from the documents, whatever its id spells. An edge whose judgment
+// needs a real id's own place is the write's to judge. [LAW:single-enforcer]
+func rejectBlocksWithinFileEpics(format string, refs fileReferences, existingParentTypes map[string]model.IssueType) error {
 	node := strconv.Itoa
-	tree := make(EpicTree, len(refs.parent))
+	tree := make(EpicTree, len(refs.parent)+len(refs.existingParent))
 	for i, p := range refs.parent {
 		tree.Place(node(i), refs.docs[i].issueType, node(p))
+	}
+	for i, id := range refs.existingParent {
+		if existingParentTypes[id].IsContainer() {
+			tree.Place(node(i), refs.docs[i].issueType, "existing "+id)
+		}
 	}
 	for i, deps := range refs.blockedBy {
 		for _, j := range deps {
@@ -260,14 +291,15 @@ func validateImportTreeSpecs(specs []ImportTreeSpec) ([]model.IssueType, error) 
 // every document is a create or an update by whether it names an id, and each
 // shape admits exactly the fields its verb owns. A create document's parent
 // may be a local_id in the file or a real id; only the first can be judged
-// here. It returns each create document's parsed type, keyed by position.
-func validateBulkSpecs(specs []BulkIssueSpec) (map[int]model.IssueType, error) {
+// here. It returns each document's parsed type by position, empty for an
+// update.
+func validateBulkSpecs(specs []BulkIssueSpec) ([]model.IssueType, error) {
 	if len(specs) == 0 {
 		return nil, model.ValidationError{Message: "bulk: no issues in input"}
 	}
 	seenID := make(map[string]struct{}, len(specs))
 	localTypes := make(map[string]model.IssueType, len(specs))
-	createTypes := make(map[int]model.IssueType, len(specs))
+	docTypes := make([]model.IssueType, len(specs))
 	for i, spec := range specs {
 		if spec.ID != strings.TrimSpace(spec.ID) {
 			return nil, model.ValidationError{Message: fmt.Sprintf("bulk: doc %d id %q has surrounding whitespace", i, spec.ID)}
@@ -314,7 +346,7 @@ func validateBulkSpecs(specs []BulkIssueSpec) (map[int]model.IssueType, error) {
 		if err != nil {
 			return nil, err
 		}
-		createTypes[i] = issueType
+		docTypes[i] = issueType
 		if spec.LocalID != "" {
 			if _, dup := localTypes[spec.LocalID]; dup {
 				return nil, model.ValidationError{Message: fmt.Sprintf("bulk: duplicate local_id %q", spec.LocalID)}
@@ -323,11 +355,10 @@ func validateBulkSpecs(specs []BulkIssueSpec) (map[int]model.IssueType, error) {
 		}
 	}
 	for i, spec := range specs {
-		issueType, creates := createTypes[i]
-		if !creates {
+		if spec.ID != "" {
 			continue
 		}
-		if err := RejectLeafWithoutParent(issueType, spec.Parent); err != nil {
+		if err := RejectLeafWithoutParent(docTypes[i], spec.Parent); err != nil {
 			return nil, fmt.Errorf("bulk: doc %d: %w", i, err)
 		}
 		if parentType, inFile := localTypes[spec.Parent]; inFile {
@@ -336,7 +367,7 @@ func validateBulkSpecs(specs []BulkIssueSpec) (map[int]model.IssueType, error) {
 			}
 		}
 	}
-	return createTypes, nil
+	return docTypes, nil
 }
 
 // validateBulkCreateDoc admits a create document and returns its parsed type,

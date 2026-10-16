@@ -22,7 +22,13 @@ func (e *Engine) BulkApply(ctx context.Context, prefix, actor string, specs []st
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	order, err := storage.BulkWriteOrder(specs)
+	parentTypes := map[string]model.IssueType{}
+	for _, id := range storage.BulkParentRefs(specs) {
+		if parent, ok := e.issues[id]; ok {
+			parentTypes[id] = parent.issueType
+		}
+	}
+	order, err := storage.BulkWriteOrder(specs, parentTypes)
 	if err != nil {
 		return storage.BulkApplyResult{}, err
 	}

@@ -19,7 +19,15 @@ import (
 // resolution and create/update dispatch; the order it writes in is the one
 // storage.BulkWriteOrder hands back once it has judged the file.
 func (s *Store) BulkApply(ctx context.Context, prefix, actor string, specs []storage.BulkIssueSpec) (storage.BulkApplyResult, error) {
-	order, err := storage.BulkWriteOrder(specs)
+	parents, err := s.getIssuesByIDs(ctx, storage.BulkParentRefs(specs))
+	if err != nil {
+		return storage.BulkApplyResult{}, fmt.Errorf("bulk: read parents: %w", err)
+	}
+	parentTypes := make(map[string]model.IssueType, len(parents))
+	for id, parent := range parents {
+		parentTypes[id] = parent.IssueType
+	}
+	order, err := storage.BulkWriteOrder(specs, parentTypes)
 	if err != nil {
 		return storage.BulkApplyResult{}, err
 	}
