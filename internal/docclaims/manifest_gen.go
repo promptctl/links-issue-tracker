@@ -580,7 +580,7 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/inventories/inventory-model.md", Text: "updated-after cannot be greater than updated-before", Src: "updated-after cannot be greater than updated-before"},
 	{Doc: "doc-v1-total/inventories/inventory-model.md", Text: "write %s trace: %w", Src: "write %s trace: %w"},
 	{Doc: "doc-v1-total/inventories/inventory-platform.md", Text: "#!/usr/bin/env bash", Src: "#!/usr/bin/env bash\n"},
-	{Doc: "doc-v1-total/inventories/inventory-platform.md", Text: "%q is not a release tag (a release tag is vX.Y.Z, e.g. v0.4.1)", Src: "%q is not a release tag (a release tag is vX.Y.Z, e.g. v0.4.1)"},
+	{Doc: "doc-v1-total/inventories/inventory-platform.md", Text: "%q is not a release tag (a release tag is vX.Y.Z with no leading zeros, e.g. v0.4.1)", Src: "%q is not a release tag (a release tag is vX.Y.Z with no leading zeros, e.g. v0.4.1)"},
 	{Doc: "doc-v1-total/inventories/inventory-platform.md", Text: ") to refresh", Src: "run `just build` (or `just install`) to refresh"},
 	{Doc: "doc-v1-total/inventories/inventory-platform.md", Text: "canonicalize git-common-dir %q: %w", Src: "canonicalize git-common-dir %q: %w"},
 	{Doc: "doc-v1-total/inventories/inventory-platform.md", Text: "config: claims.freshness_window must be a duration with a unit, like \"72h\" or \"90m\" (got %q): %w", Src: "config: claims.freshness_window must be a duration with a unit, like \"72h\" or \"90m\" (got %q): %w"},

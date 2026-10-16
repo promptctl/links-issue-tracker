@@ -572,7 +572,7 @@ manifests (`internal/release/manifest.go`). `Signature` is reserved and unverifi
 - `Resolve` takes a `Tag` (`internal/release/tag.go`), a struct with one unexported field that only
   `ParseTag` fills: it must match `^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$` (`tagPattern`, a copy of
   `scripts/release-tags.sh`'s `RELEASE_TAG_ERE`) ⇒ else
-  `%q is not a release tag (a release tag is vX.Y.Z, e.g. v0.4.1)`.
+  `%q is not a release tag (a release tag is vX.Y.Z with no leading zeros, e.g. v0.4.1)`.
 - `LatestTag` parses the feed's `tag_name` through `ParseTag`; a refusal ⇒
   `release: latest release feed at %s: %w`.
 - Default HTTP client timeout `defaultResolverTimeout = 60 * time.Second` when `Client` is nil

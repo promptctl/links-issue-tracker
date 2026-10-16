@@ -27,7 +27,7 @@ type Tag struct{ s string }
 // ParseTag accepts s exactly when release-tags.sh calls it a release tag.
 func ParseTag(s string) (Tag, error) {
 	if !tagPattern.MatchString(s) {
-		return Tag{}, fmt.Errorf("%q is not a release tag (a release tag is vX.Y.Z, e.g. v0.4.1)", s)
+		return Tag{}, fmt.Errorf("%q is not a release tag (a release tag is vX.Y.Z with no leading zeros, e.g. v0.4.1)", s)
 	}
 	return Tag{s: s}, nil
 }
