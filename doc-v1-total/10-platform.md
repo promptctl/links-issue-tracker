@@ -193,6 +193,8 @@ Every compile recipe sources `cgo-env.sh` first (`Justfile`).
 
 **`tools/schema-release-check <tag>`** — the install guard `scripts/install.sh` runs in source mode, with the newest release tag or the empty string. The tree's schema is the `MaxVersion` of its own embedded registry, `migrations.Embedded()`; the release's is the `MaxVersion` of `migrations.ParseRegistry` over the file names `git ls-tree` lists in the tag's `internal/store/migrations/`, so both sides are read by one registry rule. The tree passes only when every embedded migration's `git hash-object --no-filters` id is the tag's id for the same file. Every run prints `schema-release-check: tree=<n> release_tag=<tag|none> release_schema=<n|none|unknown> verdict=<install|refuse>` on stdout. Exits 0 to install, 3 when the tag lacks a tree migration or holds different bytes for it, 1 when there is no tag or either side cannot be read; a refusal names `scripts/install.sh --latest-release` (`tools/schema-release-check/main.go`).
 
+**`tools/candybar-check`** — installs the pinned `@promptctl/cc-candybar@1.130.5` with `npm install --prefix` into a temp dir, then renders six cases with `cc-candybar check --render`, each in its own checkout (`git init`) under an environment of only `PATH` and its own `HOME`, `XDG_DATA_HOME` and `XDG_CONFIG_HOME`. Each case's `.lit/statusline.json` is written by `statusline.Write` from facts, except `no-phase-key`, whose `working_on` has the `phase` key removed, as a lit from before phases wrote it, and `no-file`, which has no file; the plugin is installed by `statusline.InstallPlugin` at `statusline.PluginPath`. The config makes `plugins.lit.ticket`, `plugins.lit.phase` and `plugins.lit.next` the whole `root`. The printed bar is read as cells: SGR sequences stripped, OSC 8 hyperlinks written `[text](url)`, split on U+E0B0 and U+E0B1, every piece between the first and last arrow a cell (a blank one kept), and the leading 🍫 menu cell dropped; any other print (no `config OK` line, more than one bar line, an unread escape, a bar that does not open and close on an arrow, no menu cell) fails the case. Each case prints `candybar-check: case=<name> verdict=<ok|mismatch|error> cells=<cells>`, and the run ends with `candybar-check: cc-candybar=<version> cases=<n> failed=<n>`. Exits 1 when any case fails or the install fails, 0 otherwise (`tools/candybar-check/main.go`).
+
 **`tools/licenses`** — three modes (`-check` and `-graph` are mutually exclusive): generate (default; writes `THIRD_PARTY_LICENSES`, `LICENSE-REPORT.md`, optional CycloneDX SBOM over `go list -deps` plus curated native C libraries), `-check` (the CI license-policy gate against `tools/licenses/policy.json`; exits non-zero on violations, writes nothing), `-graph` (audits the whole `go list -m all` build list; reports without gating). The graph acceptance test only runs when `LIT_LICENSE_GRAPH_AUDIT` is set (`tools/licenses/main.go`).
 
 `tools/session-analysis` exists in the tree but is referenced by no Justfile target or workflow.
@@ -208,13 +210,14 @@ Every compile recipe sources `cgo-env.sh` first (`Justfile`).
 
 ### `ci.yml` — merge gate
 
-Push to `master` and PRs targeting `master`; concurrency-cancelled per ref; `ubuntu-latest` only, no matrix. Five parallel jobs (`.github/workflows/ci.yml`):
+Push to `master` and PRs targeting `master`; concurrency-cancelled per ref; `ubuntu-latest` only, no matrix. Six parallel jobs (`.github/workflows/ci.yml`):
 
 1. **build-and-test** — build, then `go test -short -json ./... | go run ./tools/testbudget` under `shell: bash` (pipefail load-bearing); no `-timeout` override by policy.
 2. **race** — `go test -short -race -timeout 30m ./cmd/... ./internal/...` (tools excluded deliberately; no budget pipe). The timeout is sized above internal/cli's testbudget ceiling as the detector inflates it, so slowness fails build-and-test's budget check, not this lane's timeout.
 3. **verify** — `go mod tidy` must be a no-op (`git diff --exit-code`); `install.sh` must contain `-buildvcs=false`; then actually runs `install.sh`, passing on exit 0 or on exit 3, the schema guard's refusal of a tree no release supports, which master is between a migration merging and its release.
 4. **lint** — golangci-lint pinned to v2.8.0.
 5. **docs** — `mkdocs build --strict` (mkdocs 1.6.1 / material 9.7.6), so a missing docs page or broken nav link fails the merge gate. (`mkdocs.yml` defines the `links` material-theme site with a seven-entry nav.)
+6. **candybar** — Go plus Node 22 (`actions/setup-node`), then `go run ./tools/candybar-check`, so a lit cc-candybar plugin that does not render each case's cells fails the merge gate.
 
 The composite action `.github/actions/install-dolt` installs the pinned Dolt CLI v1.81.10 — used as a test-only oracle, not shipped.
 

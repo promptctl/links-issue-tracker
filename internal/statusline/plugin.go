@@ -13,6 +13,9 @@ import (
 // PluginDefinition is lit's cc-candybar plugin: the segments that show this
 // file on cc-candybar's bar. It ships in the binary that writes the file, so a
 // SchemaVersion change and the definition that reads it cannot ship apart.
+// Only cc-candybar can say whether its templates render; tools/candybar-check
+// renders it on a pinned cc-candybar (`go run ./tools/candybar-check`, which
+// needs npm).
 //
 //go:embed plugin/lit/plugin.json5
 var PluginDefinition []byte
