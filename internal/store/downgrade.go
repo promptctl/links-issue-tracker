@@ -10,6 +10,7 @@ import (
 	"github.com/pressly/goose/v3"
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/version"
 )
 
 // migrationDownForTest, if non-nil, replaces provider.Down(ctx) inside
@@ -116,6 +117,37 @@ func (*DowngradeBelowBaselineError) RefusesCommand() {}
 
 var _ model.Refusal = (*DowngradeBelowBaselineError)(nil)
 
+// DowngradeSpanUnsupportedError reports that this binary's schema support does
+// not reach the workspace's applied version, so it does not carry the
+// down-migrations a reverse from Current to Target would run: the workspace was
+// migrated by a newer lit, and only a lit whose support reaches Current can
+// reverse it. Downgrade refuses before the snapshot, because goose would fail
+// the first Down step on a version missing from this registry.
+//
+// [LAW:single-enforcer] Support.Covers is the one predicate that decides
+// whether this binary can reverse a span; `lit upgrade` reads the same
+// predicate (UpgradeTargetBehindError) to choose between naming `lit downgrade`
+// and naming a newer target, so the two never disagree about what can run.
+type DowngradeSpanUnsupportedError struct {
+	Current int64
+	Target  int64
+	Support version.SchemaSupport
+}
+
+func (e *DowngradeSpanUnsupportedError) Error() string {
+	return fmt.Sprintf(
+		"cannot downgrade to v%d: this workspace is at schema v%d and this lit's schema support (v%d–v%d) does not cover v%d–v%d, so it does not carry the down-migrations that reverse it — upgrade to a release whose schema support reaches v%d (`lit upgrade`), then run this downgrade again from it",
+		e.Target, e.Current, e.Support.Min, e.Support.Max, e.Target, e.Current, e.Current,
+	)
+}
+
+// SchemaAheadOfBinary: every --to is refused while the workspace is past this
+// binary's support, because the top of the span is what Covers fails on; only
+// a lit whose support reaches the workspace's can run the reverse.
+func (*DowngradeSpanUnsupportedError) SchemaAheadOfBinary() {}
+
+var _ model.SchemaAhead = (*DowngradeSpanUnsupportedError)(nil)
+
 // DowngradeRollbackError wraps a downgrade failure that occurred after the
 // recovery snapshot was taken. Parallel in shape and intent to
 // MigrationRollbackError — the operator-facing recovery instruction is the
@@ -172,6 +204,8 @@ func (e *DowngradeIncompleteError) Error() string {
 //   - target == current applied: no-op, returns nil.
 //   - target > current applied: DowngradeTargetAheadError.
 //   - target < baselineVersion: DowngradeBelowBaselineError.
+//   - this binary's schema support does not cover target through current
+//     applied: DowngradeSpanUnsupportedError.
 //   - workspace not in phaseManaged: a plain error (no goose log to reverse).
 //
 // On a down-migration failure after the snapshot is taken, the returned error
@@ -215,6 +249,12 @@ func (s *Store) downgradeLocked(ctx context.Context, targetSchemaVersion int64) 
 	}
 	if targetSchemaVersion < baselineVersion {
 		return &DowngradeBelowBaselineError{Target: targetSchemaVersion}
+	}
+	// Below-baseline is refused first: no lit reverses past the baseline, so
+	// that target is wrong whichever binary runs it. What can still fail
+	// Covers here is the top of the span — a workspace a newer lit migrated.
+	if !state.support.Covers(targetSchemaVersion, state.appliedVersion) {
+		return &DowngradeSpanUnsupportedError{Current: state.appliedVersion, Target: targetSchemaVersion, Support: state.support}
 	}
 
 	snapshotsDir := migrationSnapshotsDir(s.doltRootDir)

@@ -57,7 +57,6 @@ import (
 	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/release"
-	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
 	"github.com/promptctl/links-issue-tracker/internal/version"
 )
 
@@ -113,7 +112,7 @@ func main() {
 		die("%v", err)
 	}
 
-	max, err := migrations.MaxVersion()
+	schema, err := version.CarriedSchemaSupport()
 	if err != nil {
 		die("read migration registry: %v", err)
 	}
@@ -136,7 +135,7 @@ func main() {
 			// and is set here so the value this tool means is on the page next
 			// to the one it writes.
 			FromSource: false,
-			Schema:     version.SchemaSupport{Min: migrations.Baseline, Max: max},
+			Schema:     schema,
 		},
 		Artifacts: artifacts,
 	}

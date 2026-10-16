@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/config"
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/version"
 )
@@ -72,21 +72,14 @@ func invocationEnd(at time.Time, err error, panicked any) telemetry.End {
 
 // errorRecord is what a failed command's typed error decided and counted, as
 // event facts and counts, so it is countable without parsing the error's
-// message. [LAW:nothing-unseen] A schema-ahead refusal decides which snapshot,
-// if any, it offers as the lossy rollback, and counts the snapshots it read to
-// decide.
+// message. Each error type declares its own record (model.RecordedError);
+// an error that declares none records nothing here. [LAW:nothing-unseen]
 func errorRecord(err error) (map[string]any, map[string]int) {
-	var schemaAhead *store.UnsupportedSchemaVersionError
-	if !errors.As(err, &schemaAhead) {
+	var recorded model.RecordedError
+	if !errors.As(err, &recorded) {
 		return nil, nil
 	}
-	return map[string]any{
-			"schema_ahead.rollback_snapshot":     schemaAhead.SnapshotName,
-			"schema_ahead.rollback_lookup_error": errorText(schemaAhead.SnapshotLookupErr),
-		}, map[string]int{
-			"schema_ahead.snapshots_examined":   schemaAhead.SnapshotsExamined,
-			"schema_ahead.snapshots_unreadable": schemaAhead.SnapshotsUnreadable,
-		}
+	return recorded.EventRecord()
 }
 
 // interruptedEnd is an invocation the interrupt guard hard-exited with code:

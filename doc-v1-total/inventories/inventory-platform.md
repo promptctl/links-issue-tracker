@@ -515,8 +515,10 @@ All geometry git calls use `context.Background()` deliberately (`internal/worksp
   reaches the wire (the tag).
 - `SchemaSupport{Min int64 "min", Max int64 "max"}`. `Covers(lo, hi)` is `Min <= lo && hi <= Max`:
   the support holds every version a reverse from `hi` down to `lo` crosses.
-- `Get()` derives `Schema.Max` from `migrations.MaxVersion()` (one ReadDir over the embedded
-  registry) and `Schema.Min` from `migrations.Baseline`; `IsDev = (Version == "")`;
+- `CarriedSchemaSupport()` is `{Min: migrations.Baseline, Max: migrations.MaxVersion()}`
+  (one ReadDir over the embedded registry); its error is `MaxVersion`'s. `Get()` takes
+  `Schema` from it, as do `tools/mkmanifest` and the store's `classifyMigrationState`;
+  `IsDev = (Version == "")`;
   `FromSource = (Origin != OriginRelease)`.
 - `BuildAge(now)` returns `(0,false)` when `Date` is empty, unparseable as RFC3339, or in the
   future; otherwise `now.Sub(stamped)`.
@@ -797,7 +799,7 @@ the Justfile or any workflow file in `.github/workflows/`.
   (`tools/mkmanifest/main.go`). `-dist` is trimmed too.
 - `validateVerTag` (`tools/mkmanifest/main.go`): `-tag` must start with `v`; `-version`
   must **not**; `-tag` must contain no `/`, `\`, `..`, or whitespace.
-- Schema range comes from `migrations.Baseline` and `migrations.MaxVersion()`
+- Schema range comes from `version.CarriedSchemaSupport()`
   (`tools/mkmanifest/main.go`); `IsDev` is hard-coded `false`, and
   `FromSource` is stated `false` beside it but cannot reach the file (rationale).
 - `collectArtifacts` (`tools/mkmanifest/main.go`) parses `<dist>/checksums.txt`:

@@ -63,4 +63,3 @@ YYYYMMDDThhmmss.nnnnnnnnnZ  reading of the timestamp layout 20060102T150405.0000
 engine.NewSqlEngine   Dolt's sqle engine package, not internal/engine
 store.CreateVersionTable  a goose database.Store variable named store in migration_runner.go, not the store package
 store.Insert          a goose database.Store variable named store in migration_runner.go, not the store package
-Source.Path           the Source field of goose.MigrationResult, not this tree's Source type

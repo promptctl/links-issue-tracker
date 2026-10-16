@@ -161,6 +161,23 @@ present exactly when the command ended in that refusal.
 | `counts.schema_ahead.snapshots_examined` | The migration snapshots the refusal read, newest first, until it found one to offer. |
 | `counts.schema_ahead.snapshots_unreadable` | Those of them it could not read. |
 
+## What `lit downgrade` records
+
+A downgrade reverses the workspace's schema from its applied version down to the
+`--to` release's, and it can do that only when this lit's schema support covers
+every version in between. When the workspace is past that support (a newer lit
+migrated it, and only that newer lit carries the down-migrations), the command
+refuses before it takes a snapshot, with reason `workspace_schema_ahead`. Each key
+is set as soon as the command knows it, so a run that stops early still carries
+the ones it had.
+
+| Key | Meaning |
+| --- | --- |
+| `downgrade.target_schema_max` | The schema version of the `--to` release. Set once the release resolves. |
+| `downgrade.running_schema_min` | The lowest schema version this lit supports. Set with the target. |
+| `downgrade.running_schema_max` | The highest schema version this lit supports. Set with the target. |
+| `downgrade.workspace_schema` | The workspace's applied schema version. Set once it is read, before the reverse. |
+
 ## Reading the file
 
 `jq` answers most questions directly. The last ten `lit next` decisions made in

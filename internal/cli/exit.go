@@ -166,7 +166,7 @@ func ExitCode(err error) int {
 	// retry changes, not "lit is broken". The act it asks for — a different
 	// lit, not a different command — is carried by the reason.
 	// [LAW:no-mode-explosion]
-	var schemaAhead *store.UnsupportedSchemaVersionError
+	var schemaAhead model.SchemaAhead
 	if errors.As(err, &schemaAhead) {
 		return ExitValidation
 	}

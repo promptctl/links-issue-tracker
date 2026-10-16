@@ -825,6 +825,22 @@ itself: `store.DowngradeTargetAheadError` and `store.DowngradeBelowBaselineError
 `model.FrozenIssueError` (`model.go`), each with a compile-time
 `var _ model.Refusal` assertion.
 
+`RecordedError` (`validation.go`) is `error` plus `EventRecord() (facts
+map[string]any, counts map[string]int)`: the facts and counts a failed command's
+event carries for that error. The CLI's `errorRecord` (`invocation_event.go`)
+reads the first error in the chain implementing it, and records nothing for an
+error that does not. Implementer: `store.UnsupportedSchemaVersionError`
+(`migration_runner.go`, the `schema_ahead.*` keys), with a compile-time
+`var _ model.RecordedError` assertion.
+
+`SchemaAhead` (`validation.go`) is `error` plus a marker method
+`SchemaAheadOfBinary()`: an error raised because the workspace's schema is past
+this binary's schema support. It is not a `Refusal`. The CLI maps it to exit 3
+and reason `workspace_schema_ahead` (`exit.go`, `error_output.go`).
+Implementers: `store.UnsupportedSchemaVersionError` (`migration_runner.go`) and
+`store.DowngradeSpanUnsupportedError` (`downgrade.go`), each with a
+compile-time `var _ model.SchemaAhead` assertion.
+
 ---
 
 # 3. `internal/issueid`
