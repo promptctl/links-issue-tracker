@@ -509,6 +509,29 @@ func TestVersionContentDriftCommitCancelResets(t *testing.T) {
 	})
 }
 
+// TestMigrationSuccessPruneSurvivesCallerCancel pins that a migration run whose
+// last step has landed finishes its bookkeeping when the caller cancels then:
+// the checkpoint prune does not stop on the cancellation, so a migrated
+// workspace is not reported as a failed migration.
+func TestMigrationSuccessPruneSurvivesCallerCancel(t *testing.T) {
+	// serial: no t.Parallel — installs the package-level migrationUpByOneForTest
+	// hook.
+	doltRoot := migratedWorkspaceWithGooseHistoryDropped(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	migrationUpByOneForTest = func(context.Context, *goose.Provider) (*goose.MigrationResult, error) {
+		cancel()
+		return nil, goose.ErrNoNextVersion
+	}
+	t.Cleanup(func() { migrationUpByOneForTest = nil })
+
+	_, openErr := Open(ctx, doltRoot, "test-workspace-id")
+	migrationUpByOneForTest = nil
+	if openErr != nil && strings.Contains(openErr.Error(), "prune migration checkpoints") {
+		t.Fatalf("Open() error = %v; the success-path prune stopped on the caller's cancellation", openErr)
+	}
+}
+
 // migratedWorkspaceWithGooseHistoryDropped bootstraps a workspace, then drops
 // its goose history so the next Open runs applyPendingMigrations.
 func migratedWorkspaceWithGooseHistoryDropped(t *testing.T) string {

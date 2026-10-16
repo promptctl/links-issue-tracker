@@ -61,11 +61,11 @@ type CheckpointResetError struct {
 	Name       string
 	Checkpoint storage.Checkpoint
 	Cause      error
-	// Quarantine is the record handleMigrationFailure committed for Version,
-	// or nil when none was: the version is unknown, or the run stopped for a
-	// reason that says nothing against the migration and the next open runs
-	// it again (see migrationQuarantine).
-	Quarantine *QuarantineBlockError
+	// Quarantined says handleMigrationFailure committed a quarantine for
+	// Version. It is false when the version is unknown, or the run stopped
+	// for a reason that says nothing against the migration and the next open
+	// runs it again (see earnsQuarantine).
+	Quarantined bool
 }
 
 // Error names the migration (goose may not have identified it) and gives the
@@ -77,8 +77,8 @@ func (e *CheckpointResetError) Error() string {
 		migration = fmt.Sprintf("migration v%d %q", e.Version, e.Name)
 	}
 	next := "the next open runs it again"
-	if e.Quarantine != nil {
-		next = fmt.Sprintf("to retry after fixing the migration, clear the quarantine:\n  DELETE FROM migration_quarantine WHERE version = %d", e.Quarantine.Version)
+	if e.Quarantined {
+		next = fmt.Sprintf("to retry after fixing the migration, clear the quarantine:\n  DELETE FROM migration_quarantine WHERE version = %d", e.Version)
 	}
 	return fmt.Sprintf(
 		"%s failed: %v\n\nthe working set was automatically reset to Dolt checkpoint %q\n%s",
@@ -92,10 +92,10 @@ func (e *CheckpointResetError) Error() string {
 // with, and a caller classifying it sees one state, not two.
 // [LAW:one-source-of-truth]
 func (e *CheckpointResetError) Unwrap() []error {
-	if e.Quarantine == nil {
+	if !e.Quarantined {
 		return []error{e.Cause}
 	}
-	return []error{e.Cause, e.Quarantine}
+	return []error{e.Cause, &QuarantineBlockError{Version: e.Version, Name: e.Name, ErrorText: e.Cause.Error()}}
 }
 
 // QuarantineBlockError is returned when Open finds a pending migration version
@@ -677,7 +677,7 @@ func (s *Store) applyPendingMigrations(ctx context.Context) error {
 	// a context the caller cannot cancel: a caller that gave up (lit init's
 	// adopt timeout cancels the context Open ran under) must not leave the
 	// workspace half-migrated. [LAW:no-ambient-temporal-coupling]
-	recoverFrom := func(result *goose.MigrationResult, cause error, quarantine *QuarantineBlockError) error {
+	recoverFrom := func(result *goose.MigrationResult, cause error, quarantine bool) error {
 		recoveryCtx := context.WithoutCancel(ctx)
 		cpErr := s.handleMigrationFailure(recoveryCtx, result, cause, quarantine, checkpoint)
 		// Prune on the failure path too: a quarantined failure blocks future
@@ -695,14 +695,17 @@ func (s *Store) applyPendingMigrations(ctx context.Context) error {
 	for {
 		result, gooseErr := step()
 		if errors.Is(gooseErr, goose.ErrNoNextVersion) {
-			// Success: prune old checkpoints to the retention count.
-			if err := prune(ctx); err != nil {
+			// Success: prune old checkpoints to the retention count. The run's
+			// outcome is settled, so a caller that gives up now cannot turn a
+			// migrated workspace into a failed Open.
+			// [LAW:no-ambient-temporal-coupling]
+			if err := prune(context.WithoutCancel(ctx)); err != nil {
 				return fmt.Errorf("prune migration checkpoints: %w", err)
 			}
 			return nil
 		}
 		if gooseErr != nil {
-			return recoverFrom(result, gooseErr, migrationQuarantine(ctx, result, gooseErr))
+			return recoverFrom(result, gooseErr, earnsQuarantine(ctx, result))
 		}
 		// commitWorkingSet (not ...Once) so each migration commit gets the
 		// transient-manifest retry — startup migration is a critical path and a
@@ -712,21 +715,18 @@ func (s *Store) applyPendingMigrations(ctx context.Context) error {
 		// reset like any other stop; it says nothing against the migration, so
 		// it earns no quarantine.
 		if err := s.commitWorkingSet(ctx, migrationCommitMessage(result)); err != nil {
-			return recoverFrom(result, fmt.Errorf("commit migration v%d: %w", result.Source.Version, err), nil)
+			return recoverFrom(result, fmt.Errorf("commit migration v%d: %w", result.Source.Version, err), false)
 		}
 	}
 }
 
-// migrationQuarantine is the quarantine record a failed migration step earns:
-// one for a version goose identified, whose body failed while its caller still
+// earnsQuarantine says whether a failed migration step earns a quarantine: it
+// does for a version goose identified, whose body failed while its caller still
 // wanted it run. A step cut short by the caller's cancellation says nothing
 // against the migration, so it earns none and the next open runs it again.
-func migrationQuarantine(ctx context.Context, result *goose.MigrationResult, cause error) *QuarantineBlockError {
-	version, name := migrationIdentity(result)
-	if version == 0 || ctx.Err() != nil {
-		return nil
-	}
-	return &QuarantineBlockError{Version: version, Name: name, ErrorText: cause.Error()}
+func earnsQuarantine(ctx context.Context, result *goose.MigrationResult) bool {
+	version, _ := migrationIdentity(result)
+	return version != 0 && ctx.Err() == nil
 }
 
 // migrationIdentity is the version and file name goose reported for a step, or
@@ -745,7 +745,7 @@ func migrationIdentity(result *goose.MigrationResult) (int64, string) {
 // Ordering: reset first, quarantine second — the reset discards all working-set
 // changes since the checkpoint, but the quarantine table itself was committed
 // before the checkpoint, so it survives and the post-reset INSERT lands cleanly.
-func (s *Store) handleMigrationFailure(ctx context.Context, result *goose.MigrationResult, cause error, quarantine *QuarantineBlockError, checkpoint storage.Checkpoint) error {
+func (s *Store) handleMigrationFailure(ctx context.Context, result *goose.MigrationResult, cause error, quarantine bool, checkpoint storage.Checkpoint) error {
 	version, name := migrationIdentity(result)
 
 	if resetErr := s.ResetToCheckpoint(ctx, checkpoint.Name); resetErr != nil {
@@ -755,8 +755,8 @@ func (s *Store) handleMigrationFailure(ctx context.Context, result *goose.Migrat
 		)
 	}
 
-	if quarantine != nil {
-		if recordErr := s.recordQuarantine(ctx, quarantine.Version, quarantine.Name, quarantine.ErrorText); recordErr != nil {
+	if quarantine {
+		if recordErr := s.recordQuarantine(ctx, version, name, cause.Error()); recordErr != nil {
 			return fmt.Errorf(
 				"migration v%d failed (reset to %q); quarantine insert failed (%v); restore from dbsnapshot. Root cause: %w",
 				version, checkpoint.Name, recordErr, cause,
@@ -771,11 +771,11 @@ func (s *Store) handleMigrationFailure(ctx context.Context, result *goose.Migrat
 	}
 
 	return &CheckpointResetError{
-		Version:    version,
-		Name:       name,
-		Checkpoint: checkpoint,
-		Cause:      cause,
-		Quarantine: quarantine,
+		Version:     version,
+		Name:        name,
+		Checkpoint:  checkpoint,
+		Cause:       cause,
+		Quarantined: quarantine,
 	}
 }
 
@@ -1258,7 +1258,7 @@ func (s *Store) repairVersionContentDriftWithRollback(ctx context.Context, appli
 			mismatch.Version, mismatch.Name, repairErr, checkpoint.Name,
 		)
 	}
-	if err := s.PruneCheckpoints(ctx, migrationDriftRepairCheckpointPrefix, migrationCheckpointRetention); err != nil {
+	if err := s.PruneCheckpoints(context.WithoutCancel(ctx), migrationDriftRepairCheckpointPrefix, migrationCheckpointRetention); err != nil {
 		return fmt.Errorf("prune version-content drift repair checkpoints: %w", err)
 	}
 	return nil

@@ -53,6 +53,13 @@ jobs:
         shell: bash
         run: go test -short -json ./... | go run ./tools/testbudget
 
+      # internal/vendor/dolthub-driver is its own Go module, so the ./... above
+      # never reaches its tests, the patch guards README.lit-patch.md names
+      # among them. They run here, under the same budget.
+      - name: Test vendored driver
+        shell: bash
+        run: go -C internal/vendor/dolthub-driver test -short -json ./... | go run ./tools/testbudget
+
   # The race detector's own lane. "Do the tests pass, and fast enough?" and "are
   # there data races?" are two questions, so they are two jobs
   # ([LAW:decomposition]) running in parallel, not one flag added to the step

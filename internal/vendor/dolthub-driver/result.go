@@ -30,7 +30,18 @@ type doltResult struct {
 	err      error
 }
 
-func newResult(gmsCtx *gms.Context, sch gms.Schema, rowItr gms.RowIter) *doltResult {
+// newResult drains rowItr on gmsCtx, the statement's caller's context, and
+// closes it on session, the connection's own.
+//
+// [LAW:no-ambient-temporal-coupling] Modified by lit (README.lit-patch.md,
+// Patch 6): an autocommit statement commits its implicit transaction inside
+// Close, and go-mysql-server leaves the transaction on the session when that
+// commit fails. Closed on a cancelled caller's context, a statement whose rows
+// were all written would report the cancellation while its transaction stayed
+// behind for the next statement to adopt and commit. On session the close
+// always finishes, so a cancellation lands either in the work, which writes
+// nothing, or after it, and the statement completes.
+func newResult(gmsCtx, session *gms.Context, sch gms.Schema, rowItr gms.RowIter) *doltResult {
 	var resultErr error
 	var affected int64
 	var last int64
@@ -55,7 +66,7 @@ func newResult(gmsCtx *gms.Context, sch gms.Schema, rowItr gms.RowIter) *doltRes
 	// The iteration error is what the caller cares about (a table-not-found or constraint
 	// violation); a Close failure is a secondary resource-cleanup error, so it never masks
 	// a real iteration error that's already in hand.
-	closeErr := rowItr.Close(gmsCtx)
+	closeErr := rowItr.Close(session)
 	if resultErr != nil {
 		return &doltResult{err: resultErr}
 	}

@@ -9,7 +9,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -17,50 +16,48 @@ import (
 // cancelOnNthDone is a context that cancels itself on the nth call to Done,
 // so a test can cut a statement short at a chosen point in its run without
 // racing a timer. n == 0 never cancels, and counts the calls a whole run makes.
+// Done hands out the channel of the context.WithCancel it wraps, so the
+// contexts go-mysql-server derives from it attach to that cancelCtx directly
+// rather than through a propagation goroutine whose own Done call would land
+// at an unscheduled point in the count.
 type cancelOnNthDone struct {
 	context.Context
-	n int
+	cancel context.CancelFunc
+	n      int
 
-	mu     sync.Mutex
-	calls  int
-	done   chan struct{}
-	closed bool
+	mu    sync.Mutex
+	calls int
 }
 
 func newCancelOnNthDone(n int) *cancelOnNthDone {
-	return &cancelOnNthDone{Context: context.Background(), n: n, done: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	return &cancelOnNthDone{Context: ctx, cancel: cancel, n: n}
 }
 
 func (c *cancelOnNthDone) Done() <-chan struct{} {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.calls++
-	if c.n > 0 && c.calls >= c.n && !c.closed {
-		close(c.done)
-		c.closed = true
+	if c.n > 0 && c.calls >= c.n {
+		c.cancel()
 	}
-	return c.done
+	return c.Context.Done()
 }
 
-func (c *cancelOnNthDone) Err() error {
+func (c *cancelOnNthDone) doneCalls() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.closed {
-		return context.Canceled
-	}
-	return nil
+	return c.calls
 }
-
-func (c *cancelOnNthDone) Deadline() (time.Time, bool) { return time.Time{}, false }
 
 // TestCancelledStatementLandsNothing pins what Patch 6's per-statement contexts
 // rest on: a statement cut short by its own ctx fails with "context canceled",
 // lands none of its writes, and leaves no transaction on the session for the
 // next statement or BEGIN to adopt. It cancels a 200-row autocommit UPDATE at
-// points spread across its whole run — analysis and row loop alike — and
-// requires every run to have either completed whole or been cancelled with
-// nothing written. A driver that ran statements on any context but their
-// caller's would cancel none of them.
+// every point of its run — analysis, row loop and the commit inside its
+// close — and requires every run to have either completed whole or been
+// cancelled with nothing written. A driver that ran statements on any context
+// but their caller's would cancel none of them.
 func TestCancelledStatementLandsNothing(t *testing.T) {
 	conn, cleanup := initializeTestDatabaseConnection(t, false)
 	defer cleanup()
@@ -89,7 +86,7 @@ func TestCancelledStatementLandsNothing(t *testing.T) {
 			defer stmt.Close()
 			cc := newCancelOnNthDone(n)
 			_, execErr = stmt.(driver.StmtExecContext).ExecContext(cc, nil)
-			calls = cc.calls
+			calls = cc.doneCalls()
 			txLeft = c.gmsCtx.GetTransaction() != nil
 			return nil
 		}))
@@ -104,20 +101,24 @@ func TestCancelledStatementLandsNothing(t *testing.T) {
 	// The calls an UPDATE that matches nothing makes are its fixed cost, so a
 	// cancellation past that count lands in the row loop.
 	_, fixedCost, _ := run("UPDATE t SET v = 1 WHERE v = -1", 0)
-	_, wholeRun, _ := run("UPDATE t SET v = 0", 0)
-	require.Greater(t, wholeRun, fixedCost, "the statement does not consult its own ctx: a 200-row UPDATE made %d Done calls, an empty one %d", wholeRun, fixedCost)
 
+	// Cancel at every Done call in turn, from the first until n passes the
+	// end of the run: every point of the statement's run, analysis, row loop
+	// and the commit inside its close alike, gets cut once. A cut inside the
+	// close lands after the work is done, so the statement completes.
 	cancelledInRowLoop := 0
-	step := max(1, wholeRun/40)
-	for n := 1; n <= wholeRun+step; n += step {
+	for n := 1; ; n++ {
 		_, err := conn.ExecContext(ctx, "UPDATE t SET v = 0")
 		require.NoError(t, err)
 
-		execErr, _, txLeft := run("UPDATE t SET v = 1", n)
+		execErr, calls, txLeft := run("UPDATE t SET v = 1", n)
 		require.False(t, txLeft, "cancel at Done call %d left a transaction on the session", n)
 		updated := countUpdated()
 		if execErr == nil {
-			require.Equal(t, rowCount, updated, "uncancelled run at Done call %d", n)
+			require.Equal(t, rowCount, updated, "completed run cut at Done call %d", n)
+			if calls < n {
+				break
+			}
 			continue
 		}
 		require.Contains(t, execErr.Error(), context.Canceled.Error(), "run cut at Done call %d", n)
@@ -131,5 +132,5 @@ func TestCancelledStatementLandsNothing(t *testing.T) {
 		require.NoError(t, tx.Commit())
 		require.Zero(t, countUpdated(), "BEGIN after a cancel at Done call %d committed part of the UPDATE", n)
 	}
-	require.Positive(t, cancelledInRowLoop, "no cancellation landed in the row loop (fixed cost %d of %d Done calls)", fixedCost, wholeRun)
+	require.Positive(t, cancelledInRowLoop, "no cancellation landed past the fixed cost of %d Done calls: the statement does not consult its own ctx", fixedCost)
 }

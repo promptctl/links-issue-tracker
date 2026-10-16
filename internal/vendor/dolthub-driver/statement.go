@@ -209,7 +209,7 @@ func (stmt *doltStmt) execValues(ctx context.Context, args []driver.Value) (driv
 		return nil, translateError(err)
 	}
 
-	res := newResult(gmsCtx, sch, itr)
+	res := newResult(gmsCtx, stmt.session, sch, itr)
 	if res.err != nil {
 		return nil, res.err
 	}
@@ -271,6 +271,7 @@ func (stmt *doltStmt) queryValues(ctx context.Context, args []driver.Value) (*do
 		sch:              sch,
 		rowIter:          &peekIter,
 		gmsCtx:           gmsCtx,
+		session:          stmt.session,
 		isQueryResultSet: isQueryResultSet(row),
 		err:              peekResultError(peekErr),
 	}, nil
