@@ -168,10 +168,17 @@ func downgradeLeafWith(
 		// re-run line on Windows would add a platform mode for no measurable
 		// benefit — the rename has already happened, the user's next shell
 		// prompt runs the prior binary.
-		_, err = fmt.Fprintf(stdout,
+		if _, err := fmt.Fprintf(stdout,
 			"downgraded to %s (schema v%d) installed at %s\nre-run `lit version` to confirm.\n",
 			tag, target.Manifest.Schema.Max, binPath,
-		)
+		); err != nil {
+			return err
+		}
+		// [LAW:no-silent-failure] the downgrade is complete, so a prune failure
+		// does not fail the command; it is said here and on the event.
+		if done.PruneErr != nil {
+			_, err = fmt.Fprintf(stdout, "warning: old downgrade snapshots were not removed: %v\n", done.PruneErr)
+		}
 		return err
 	}}
 }
