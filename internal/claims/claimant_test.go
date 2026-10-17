@@ -159,6 +159,37 @@ func TestHandoverTo(t *testing.T) {
 	}
 }
 
+// TestHandoverLive pins that a handover passes on a claim only when the lane
+// still names its predecessor. The ticket's record keeps naming whoever last
+// started it after the claim is over, so every row but the matching ones holds
+// a handover the record really did make.
+func TestHandoverLive(t *testing.T) {
+	heldBy := func(by model.Attribution) claims.Standing { return claims.Held{Tenure: claims.Tenure{By: by}} }
+	fromA := claims.Handover{From: claims.Claimant{Established: true, Checkout: streamA}, To: claims.Claimant{Established: true, Checkout: streamB}}
+	fromPublic := claims.Handover{From: claims.Claimant{Established: true}, To: claims.Claimant{Established: true, Checkout: streamB}}
+
+	cases := []struct {
+		name     string
+		handover claims.Handover
+		lane     claims.Standing
+		want     bool
+	}{
+		{"the lane's holder is the predecessor", fromA, heldBy(streamA), true},
+		{"a later start elsewhere in the lane superseded the predecessor", fromA, heldBy(streamB), false},
+		{"the predecessor's claim is over: expired or finished", fromA, claims.Unclaimed{}, false},
+		{"the public checkout holds the lane it is predecessor on", fromPublic, heldBy(model.Attribution{}), true},
+		{"a minted predecessor on a lane the public checkout holds", fromA, heldBy(model.Attribution{}), false},
+		{"the public checkout predecessor on a lane a minted checkout holds", fromPublic, heldBy(streamA), false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := c.handover.Live(c.lane); got != c.want {
+				t.Errorf("Live(%+v) = %v, want %v", c.lane, got, c.want)
+			}
+		})
+	}
+}
+
 // everyAction is one sample value per verb in the sealed lifecycle sum, keyed by
 // the verb it persists as. After asks the sum exactly one question — is this a
 // Start — and answers "ownership does not move" for every other variant through

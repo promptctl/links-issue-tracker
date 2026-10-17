@@ -11,7 +11,8 @@ import (
 )
 
 // startFacts is what the last invocation's event says about the claim its
-// start took: whether the lane was held, and whether Apply reported a handover.
+// start took: whether the lane was held, whether Apply reported a handover,
+// and whether the start announced it.
 func startFacts(t *testing.T) map[string]any {
 	t.Helper()
 	facts := map[string]any{}
@@ -123,7 +124,7 @@ func TestStartRefusesAndThenTakesOverAFreshForeignClaim(t *testing.T) {
 	if streams[1] == streams[2] {
 		t.Fatalf("transfer notice = %q, want two different streams: alpha and bravo are different checkouts", out)
 	}
-	if got, want := startFacts(t), map[string]any{"start.lane_held": true, "start.handover": true}; !reflect.DeepEqual(got, want) {
+	if got, want := startFacts(t), map[string]any{"start.lane_held": true, "start.handover": true, "start.transfer_announced": true}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("takeover start event facts = %v, want %v", got, want)
 	}
 
@@ -133,7 +134,7 @@ func TestStartRefusesAndThenTakesOverAFreshForeignClaim(t *testing.T) {
 	if strings.Contains(out, "claimed") || strings.Contains(out, "--take") {
 		t.Fatalf("start %s on bravo's own lane = %q, want no takeover ceremony", ticket, out)
 	}
-	if got, want := startFacts(t), map[string]any{"start.lane_held": true, "start.handover": false}; !reflect.DeepEqual(got, want) {
+	if got, want := startFacts(t), map[string]any{"start.lane_held": true, "start.handover": false, "start.transfer_announced": false}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("own-lane start event facts = %v, want %v", got, want)
 	}
 }
@@ -184,7 +185,7 @@ func TestStartOnAnExpiredForeignClaimIsSilent(t *testing.T) {
 	out := runCLIInDir(t, bravo, "start", ticket, "--by", "bravo-agent")
 	// The write still hands alpha's record over to bravo; it is the lane's
 	// standing that keeps the handover unannounced, and the event says which.
-	if got, want := startFacts(t), map[string]any{"start.lane_held": false, "start.handover": true}; !reflect.DeepEqual(got, want) {
+	if got, want := startFacts(t), map[string]any{"start.lane_held": false, "start.handover": true, "start.transfer_announced": false}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("start over an expired claim event facts = %v, want %v", got, want)
 	}
 	// "--take", "take over" and "taking over" rather than a bare "take": the

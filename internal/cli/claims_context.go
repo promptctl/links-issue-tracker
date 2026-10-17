@@ -107,7 +107,9 @@ func readEvidence(ctx context.Context, ap *app.App) (claims.Evidence, error) {
 
 // ownAttribution is the attribution this checkout's own work carries — the
 // pair every claim comparison in this package tests against, spelled once.
-// [LAW:one-source-of-truth]
+// Store.AttributeTo derives the pair the store stamps on its events from the
+// same stream token, which is what makes the takeover gate's "ours" the
+// checkout the start is recorded under. [LAW:one-source-of-truth]
 //
 // NewAttribution collapses an absent stream (a checkout that has never mutated)
 // to the zero Attribution, the public checkout's. No branch is needed for that
@@ -124,13 +126,14 @@ func ownAttribution(ap *app.App) model.Attribution {
 //
 // The handover is the one Apply reports, read off the comparison that decided
 // whether the start owed a write, so the line names exactly the transfer the
-// history records. [LAW:one-source-of-truth] laneHeld is the takeover gate's
-// reading of the lane: a lane nobody holds has no claim to hand over — it was
-// never started, is finished, or its claim expired — and the notice would be
-// wrong whatever the row's own history records about who last started it,
-// because an expired claim is not a claim.
-func transferNotice(laneHeld bool, handover *claims.Handover) string {
-	if !laneHeld || handover == nil {
+// history records. [LAW:one-source-of-truth] It describes the ticket's own
+// record, though, and a claim is held per lane: lane is the standing the
+// takeover gate read, and the line is owed only when that standing names the
+// handover's predecessor as the holder (Handover.Live). Otherwise the
+// predecessor held nothing to hand over, because an expired claim is not a
+// claim.
+func transferNotice(lane claims.Standing, handover *claims.Handover) string {
+	if handover == nil || !handover.Live(lane) {
 		return ""
 	}
 	return fmt.Sprintf("claim transferred: %s -> %s\n", describeClaimant(handover.From), describeClaimant(handover.To))

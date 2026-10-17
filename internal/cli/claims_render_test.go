@@ -218,7 +218,9 @@ func TestTransferNoticeNamesAPredecessorThatMintedNoToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Apply takeover error = %v", err)
 	}
-	notice := transferNotice(true, applied.Handover)
+	// The standing the gate read before Apply: the unattributed start holds the
+	// lane.
+	notice := transferNotice(claims.Held{Tenure: claims.Tenure{By: model.Attribution{}}}, applied.Handover)
 	want := fmt.Sprintf("claim transferred: the public checkout -> bravo-agent (%s)\n", nameCheckout(ownAttribution(h.ap)))
 	if notice != want {
 		t.Fatalf("transferNotice = %q, want %q", notice, want)

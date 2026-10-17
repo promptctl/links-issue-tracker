@@ -707,12 +707,12 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 7. `writeIssue`, `writeLabels`, `recordEvents(actionEvents)`, `recordEvents(patch.events)` — in that order.
 8. Returns `storage.Applied{Issue: hydrate(rec, e.positions()), Handover: handover}`.
 
-**`planLifecycle`** (`internal/storage/memory/apply.go`) — a type switch on the sealed `model.Action` sum: `nil` → no transition (`current, nil, nil, nil`); `model.StatusAction` → `planStatus`; `model.RetentionAction` → `planRetention`, with a nil handover; `default` → **panics** with `fmt.Sprintf("illegal Action value %T", action)` (only an impostor `Action` reaches here).
+**`planLifecycle`** (`internal/storage/memory/apply.go`) — a type switch on the sealed `model.Action` sum: `nil` → no transition (`current, nil, nil, nil`); `model.StatusAction` → `planStatus`; `model.RetentionAction` → `planRetention` and `model.SetPhase` → `planPhase`, each with a nil handover; `default` → **panics** with `fmt.Sprintf("illegal Action value %T", action)` (only an impostor `Action` reaches here).
 
 **`planStatus`** (`internal/storage/memory/apply.go`)
 - `current.Apply(action)` — the state machine's own rejections propagate, among them `model.FrozenIssueError` for an archived or deleted issue.
-- Assignee rule: `postAssignee = priorAssignee` except for `model.Start`, where it is `strings.TrimSpace(start.Assignee)`. Start is the one variant carrying a new owner.
-- **No-op rule**: if `updated.StatusValue() == current.StatusValue() && postAssignee == priorAssignee` → return `(current, nil, nil)` with no event. A same-state start with a NEW assignee is the agent reclaim path and falls through, recording the ownership change.
+- Claimant rule: `prior := claims.ClaimantOf(current, e.eventsFor(current.ID))`, `post := prior.After(action, e.attribution)`, and `updated.Assignee = post.Assignee`. Start is the one variant that moves the (assignee, checkout) pair.
+- **No-op rule**: if `updated.StatusValue() == current.StatusValue() && post == prior` → return `(current, nil, nil, nil)` with no event. A same-state start that moves the claimant — a new assignee, or a new checkout under the same identity — is the reclaim path and falls through, recording the ownership change.
 - The no-op is decided BEFORE the redirect target is checked, because the check guards a write and there is no write here to guard.
 - `validateRedirectTarget(updated)`.
 - Sets `updated.UpdatedAt = now`; emits one event with `action: string(action.Name())`, the change's `reason`, the `actor`, and `statusChanges(current, updated)`, and returns `prior.HandoverTo(post)` as the handover.
