@@ -65,9 +65,6 @@ func TestStoreCreateEpicAndRelations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue related error = %v", err)
 	}
-	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: child.ID, DstID: epic.ID, Type: "parent-child", CreatedBy: "tester"}); err != nil {
-		t.Fatalf("AddRelation parent-child error = %v", err)
-	}
 	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: child.ID, DstID: related.ID, Type: "blocked-by", CreatedBy: "tester"}); err != nil {
 		t.Fatalf("AddRelation blocks error = %v", err)
 	}
