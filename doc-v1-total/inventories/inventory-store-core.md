@@ -194,18 +194,17 @@ Behavioral evidence:
 
 #### 2.4 `EnsureDatabase(ctx, doltRootDir, workspaceID) (bool, error)`
 
-`store.go`. `validateOpenArgs` → `acquireWorkspaceShared` (deferred unconditional release, `errors.Join`ed into the named return, `store.go`) → `requireNoPendingAdopt` → `ensureDoltDatabase`. Returns `ensureDoltDatabase`'s created-flag. Doc states `Open`/`OpenSync` do **not** call it because they already hold the lock (`store.go`).
+`store.go`. `validateOpenArgs` → `acquireWorkspaceShared` (deferred unconditional release, `errors.Join`ed into the named return, `store.go`) → `requireNoPendingAdopt` → `ensureDoltDatabase`. Returns `ensureDoltDatabase`'s `storage.Bootstrap`. Doc states `Open`/`OpenSync` do **not** call it because they already hold the lock (`store.go`).
 
-#### 2.5 `ensureDoltDatabase(ctx, doltRootDir, workspaceID) (bool, error)`
+#### 2.5 `ensureDoltDatabase(ctx, doltRootDir, workspaceID) (storage.Bootstrap, error)`
 
 `store.go`:
 1. `root := filepath.Clean(doltRootDir)` (`store.go`).
-2. If `dirExists(filepath.Join(root, "links", ".dolt"))` → returns `(false, nil)` immediately, doing nothing (`store.go`).
-3. `created := !dirExists(root)` (`store.go`).
-4. `os.MkdirAll(root, 0o755)`; on failure `fmt.Errorf("create dolt root dir: %w", err)` (`store.go`).
-5. First bootstrap pool: `openDoltPool(root, workspaceID, "", engineWrite)` (empty database name), `defer db.Close()` inside a closure so it closes before the next open (`store.go`); runs `CREATE DATABASE IF NOT EXISTS links` (`store.go`); failure → `fmt.Errorf("create dolt database: %w", err)` then `wrapEngineOpenContention` (`store.go`).
-6. Second pool: `openDoltPool(root, workspaceID, "links", engineWrite)`, `defer db.Close()`, then `ensureMasterDefaultBranch` wrapped in `wrapEngineOpenContention` (`store.go`).
-7. Returns `(created, nil)`.
+2. `acquireBootstrapLock(ctx, root)`: `acquireStoreLock` exclusive on `.links-bootstrap.lock` beside the dolt root, wait `coResidentHolderWait`; contention → `a lit process is creating this workspace's database; retry after it completes: %w` wrapping `ErrWorkspaceBusy` (`workspace_lock.go`). Released by a deferred call whose error is `errors.Join`ed into the named return (`store.go`).
+3. Under the lock: if `dirExists(filepath.Join(root, "links", ".dolt"))` → returns `(storage.BootstrapNone, nil)` (`store.go`).
+4. `discardDeadBuilds(staging, root/links)` with `staging` = `.links-bootstrap` beside the dolt root (`workspace_lock.go`): `os.Lstat` each — present → `storage.BootstrapBuiltOverDeadBuild` and `os.RemoveAll` (`remove a dead build's leftover: %w`); another stat error → `stat a build's path for a dead build's leftover: %w`; none present → `storage.BootstrapBuilt`. Then `buildDoltRoot`: `os.MkdirAll(staging, 0o755)` (`create bootstrap staging root: %w`); first pool `openDoltPool(staging, workspaceID, "", engineWrite)` closed inside a closure before the next open, running `CREATE DATABASE IF NOT EXISTS links` (failure → `create dolt database: %w`, then `wrapEngineOpenContention`); second pool `openDoltPool(staging, workspaceID, "links", engineWrite)`, then `ensureMasterDefaultBranch` wrapped in `wrapEngineOpenContention` (`store.go`).
+5. `installDoltRoot(staging, root)`: `forgetReceivedRefs(root)`; then `os.Rename(staging, root)` when `dirExists(root)` is false, else `os.Rename(staging/links, root/links)` (`install bootstrapped database: %w`); then `os.RemoveAll(staging)` (`remove emptied bootstrap staging root: %w`) (`store.go`).
+6. A `discardDeadBuilds` failure is returned as is; a `buildDoltRoot` or step-5 failure is `errors.Join`ed with `os.RemoveAll(staging)`. Returns `discardDeadBuilds`' `storage.Bootstrap`.
 
 The two pools run strictly sequentially — the explicit close of the first is the ordering owner (`store.go`).
 
@@ -4984,7 +4983,7 @@ return release, nil
 `internal/store/doc.go` — outermost to innermost:
 
 ```
-workspace → Dolt's own .dolt/noms/LOCK → commit → snapshot producer beacon
+workspace → bootstrap → Dolt's own .dolt/noms/LOCK → commit → snapshot producer beacon
 ```
 
 A holder of an inner lock never waits on an outer one (`internal/store/doc.go`). Two locks sit outside the order: the sync-push lock, because every acquisition of it is a non-blocking probe so nothing ever waits on it (`internal/store/doc.go`); and the mirror liveness beacon, whose acquisitions all happen holding nothing (`internal/store/doc.go`).

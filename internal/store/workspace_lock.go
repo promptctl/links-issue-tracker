@@ -137,6 +137,35 @@ func LockWorkspaceExclusive(ctx context.Context, doltRootDir string) (func() err
 	return release, nil
 }
 
+// bootstrapLockPath is the lock whose holder alone decides that a workspace
+// has no database and builds one, a sibling of the Dolt directory for the
+// same rotation-surviving reason as the workspace lock. It guards that
+// decision, not engine exclusion — Dolt's own LOCK is the one lock on that —
+// and its holder's engines open on bootstrapStagingPath, a path no other
+// process opens. [LAW:one-source-of-truth]
+func bootstrapLockPath(databasePath string) string {
+	return filepath.Join(workspaceStorageDir(databasePath), ".links-bootstrap.lock")
+}
+
+// bootstrapStagingPath is where the bootstrap lock's holder builds a Dolt
+// root before renaming it into place: beside the Dolt directory, so the
+// rename never crosses a filesystem. One fixed name serves every builder,
+// since only the lock's holder ever writes it.
+func bootstrapStagingPath(databasePath string) string {
+	return filepath.Join(workspaceStorageDir(databasePath), ".links-bootstrap")
+}
+
+// acquireBootstrapLock takes the bootstrap lock exclusively, waiting out a
+// builder for coResidentHolderWait — a build is two engine opens, well inside
+// it — and naming a holder that outlasts the wait.
+func acquireBootstrapLock(ctx context.Context, doltRootDir string) (func() error, error) {
+	release, err := acquireStoreLock(ctx, workspaceStorageDir(doltRootDir), bootstrapLockPath(doltRootDir), true, coResidentHolderWait)
+	if errors.Is(err, ErrWorkspaceBusy) {
+		return nil, fmt.Errorf("a lit process is creating this workspace's database; retry after it completes: %w", err)
+	}
+	return release, err
+}
+
 // SyncPushLockPath returns the single-flight lock path for the background
 // mirror, a sibling of the Dolt directory at
 // <dirname(databasePath)>/.links-sync-push.lock — the same position as the

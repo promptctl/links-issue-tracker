@@ -54,7 +54,8 @@ func OpenSync(ctx context.Context, doltRootDir string, workspaceID string) (_ *S
 		return nil, err
 	}
 	// [LAW:single-enforcer] Sync bootstrap reuses the Store database initializer so first-run sync and regular store opens share one creation boundary.
-	if _, err = ensureDoltDatabase(ctx, doltRootDir, workspaceID); err != nil {
+	bootstrap, err := ensureDoltDatabase(ctx, doltRootDir, workspaceID)
+	if err != nil {
 		return nil, err
 	}
 	// OpenSync is the on-change mirror's own engine open, so this is exactly
@@ -67,6 +68,7 @@ func OpenSync(ctx context.Context, doltRootDir string, workspaceID string) (_ *S
 		return nil, err
 	}
 	s.releaseWorkspaceLock = release
+	s.migrated = storage.Migrated{Bootstrap: bootstrap}
 	// Same per-open branch normalization Store.Open runs: the bootstrap only
 	// normalizes at creation, so a pre-made database (an adopt's clone) gets
 	// renamed to master here on the mirror's own engine. The decision is a

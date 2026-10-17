@@ -221,17 +221,60 @@ type SchemaMigrator interface {
 	Migrated() Migrated
 }
 
-// Migrated is what an open did to the stored shape: the recovery snapshot it
-// took before migrating, "" when it found nothing to migrate, and why rolling
-// older recovery snapshots off afterwards failed, if it did.
+// Migrated is what an open did to the stored shape: whether it had to build
+// the database first, the recovery snapshot it took before migrating, "" when
+// it found nothing to migrate, and why rolling older recovery snapshots off
+// afterwards failed, if it did.
 // [LAW:types-are-the-program] PruneErr is a field, not the open's error: the
 // prune runs after the migration has committed, so its failure leaves the
 // store at the shape this binary reads. An open that failed on it would stop
 // the command over a leftover snapshot, and the next open, finding nothing to
 // migrate, would succeed without retrying the prune.
 type Migrated struct {
-	Snapshot string
-	PruneErr error
+	Bootstrap Bootstrap
+	Snapshot  string
+	PruneErr  error
+}
+
+// Bootstrap is what an open did to make its database exist.
+// [LAW:types-are-the-program] one value, not a built flag beside a discarded
+// flag: a discarded leftover is a fact about a build, so "discarded but built
+// nothing" has no value to be.
+type Bootstrap int
+
+const (
+	// BootstrapNone: the database was already there, or the open is one that
+	// never builds.
+	BootstrapNone Bootstrap = iota
+	// BootstrapBuilt: the open found no database and built it.
+	BootstrapBuilt
+	// BootstrapBuiltOverDeadBuild: the open built the database after
+	// discarding what a builder that died mid-build left behind.
+	BootstrapBuiltOverDeadBuild
+)
+
+// Built reports whether the open built the database.
+func (b Bootstrap) Built() bool {
+	return b != BootstrapNone
+}
+
+// String is the bootstrap as its event fact value.
+func (b Bootstrap) String() string {
+	switch b {
+	case BootstrapNone:
+		return "none"
+	case BootstrapBuilt:
+		return "built"
+	case BootstrapBuiltOverDeadBuild:
+		return "built_over_dead_build"
+	default:
+		return fmt.Sprintf("Bootstrap(%d)", int(b))
+	}
+}
+
+// EventRecord is the bootstrap as event facts.
+func (b Bootstrap) EventRecord() map[string]any {
+	return map[string]any{"bootstrap": b.String()}
 }
 
 // OpenMigration is what opening st did to its stored shape. An engine whose
@@ -246,10 +289,10 @@ func OpenMigration(st Store) Migrated {
 
 // EventRecord is the open's migration as event facts.
 func (m Migrated) EventRecord() map[string]any {
-	return map[string]any{
-		"migration.snapshot":             m.Snapshot,
-		"migration.snapshot_prune_error": telemetry.ErrorText(m.PruneErr),
-	}
+	facts := m.Bootstrap.EventRecord()
+	facts["migration.snapshot"] = m.Snapshot
+	facts["migration.snapshot_prune_error"] = telemetry.ErrorText(m.PruneErr)
+	return facts
 }
 
 // Downgraded is what a Downgrade did: the shape version it read under the lock

@@ -34,10 +34,14 @@
 //
 // ONE ACQUISITION ORDER, outermost to innermost:
 //
-//	workspace → Dolt's own .dolt/noms/LOCK → commit → snapshot producer beacon
+//	workspace → bootstrap → Dolt's own .dolt/noms/LOCK → commit → snapshot producer beacon
 //
-// A holder of an inner lock never waits on an outer one. Two entries need
-// spelling out, because no lit call site shows them:
+// A holder of an inner lock never waits on an outer one. The bootstrap lock
+// is held only inside ensureDoltDatabase, by an opener that holds the
+// workspace lock and no engine yet; the engines its holder opens are on a
+// staging path no other process opens, so it waits on no lock any other
+// holder takes. Two entries need spelling out, because no lit call site
+// shows them:
 //
 // Dolt's LOCK is ordinarily acquired by the embedded driver, not by lit: an
 // engine takes it when it opens and holds it until it closes. A write

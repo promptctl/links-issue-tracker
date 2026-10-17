@@ -105,6 +105,7 @@ func withSyncStore(declare syncLeafFn) wsLeafFn {
 				return markEngineOpenContention(err, ws)
 			}
 			defer closeStore()
+			reportOpenMigration(ctx, storage.OpenMigration(session.engine))
 			return l.work(ctx, stdout, syncScope{ws: ws, session: session}, positional)
 		})
 	}

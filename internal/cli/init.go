@@ -9,6 +9,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -119,12 +120,16 @@ func initLeaf() (wsLeaf, wsAcquire) {
 		// the create runs on a single value (did we adopt?), not a scatter of cases.
 		dbCreated := true
 		if syncOutcome.State != initSyncAdopted {
-			created, err := store.EnsureDatabase(ctx, ws.DatabasePath, ws.WorkspaceID)
+			bootstrap, err := store.EnsureDatabase(ctx, ws.DatabasePath, ws.WorkspaceID)
 			if err != nil {
 				return err
 			}
-			dbCreated = created
+			// Recorded after any earlier open's report, so the event carries
+			// the bootstrap of the one call here that can build.
+			telemetry.Record(ctx, bootstrap.EventRecord(), nil)
+			dbCreated = bootstrap.Built()
 		}
+		telemetry.Set(ctx, "init.db_created", dbCreated)
 
 		report := initReport{
 			Status:       "initialized",

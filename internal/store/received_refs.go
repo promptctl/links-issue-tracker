@@ -21,6 +21,9 @@ import (
 // the record as the hold is taken (LockWorkspaceExclusive); the record can
 // then lag the directory beside it but never lead it. [LAW:single-enforcer]
 // one boundary every rotation crosses, so no rotator can forget to forget.
+// A database that appears where there was none is not a rotation: the
+// bootstrap's install forgets the record as it puts the new one in place
+// (installDoltRoot).
 const receivedRefsMarkerName = "received-refs.last"
 
 // ReceivedRefsPath is the record's path for a Dolt root directory: a sibling of
