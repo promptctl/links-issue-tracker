@@ -1,20 +1,5 @@
 #!/usr/bin/env bash
 #
-# install.sh — install `lit` from one of three sources:
-#
-#   (default)              build from this checkout's source (go build, ldflag-stamped)
-#   --from-release <tag>   download the published release archive for that tag
-#   --latest-release       download the latest published release archive
-#
-# All modes write to the same target directory (the dir on $PATH that already
-# owns a `lit` if any; otherwise $GOBIN) and run the same stale-binary
-# detector. Switching modes is a single flag, not a different script.
-#
-# The source build refuses a tree carrying a migration the newest local
-# vX.Y.Z tag does not (exit 3), and a checkout with no such tag (exit 1);
-# install a release instead. A tree no release supports is for go test and
-# scratch workspaces only (CONTRIBUTING.md).
-#
 # [LAW:single-enforcer] One installer, one target-resolution rule, one stale
 # detector. The "what to install" varies; "where + safety checks" do not.
 # [LAW:one-source-of-truth] Source builds inject version/commit/date/origin via
@@ -22,6 +7,28 @@
 # checkouts; release-download mode trusts the prebuilt binary's already-baked
 # stamps (set by goreleaser).
 set -euo pipefail
+
+# The help --help prints, and this script's description. A heredoc, not this
+# file's header read back through $0: piped from curl the script is no file.
+usage() {
+    cat <<'EOF'
+install.sh — install `lit` from one of three sources:
+
+  (default)              build from this checkout's source (go build, ldflag-stamped)
+  --from-release <tag>   download the published release archive for that tag
+  --latest-release       download the latest published release archive
+
+All modes write to the same target directory (the dir on $PATH that already
+owns a `lit` if any; otherwise $GOBIN) and run the same stale-binary
+detector. Switching modes is a single flag, not a different script.
+
+The source build refuses a tree carrying a migration the newest local
+vX.Y.Z tag does not (exit 3), and a checkout with no such tag (exit 1);
+install a release instead. A tree no release supports is for go test and
+scratch workspaces only (CONTRIBUTING.md).
+EOF
+}
+USAGE_LINE="usage: install.sh [--from-release <tag>|--latest-release]"
 
 # [LAW:one-source-of-truth] exception: release.DefaultBaseURL and
 # release.DefaultLatestReleaseURL, copied because release-download mode runs
@@ -109,7 +116,7 @@ while [ $# -gt 0 ]; do
         --from-release)
             if [ -n "$mode_flag_seen" ]; then
                 echo "error: cannot combine $mode_flag_seen with --from-release" >&2
-                echo "usage: $0 [--from-release <tag>|--latest-release]" >&2
+                echo "$USAGE_LINE" >&2
                 exit 2
             fi
             mode_flag_seen="--from-release"
@@ -124,7 +131,7 @@ while [ $# -gt 0 ]; do
         --latest-release)
             if [ -n "$mode_flag_seen" ]; then
                 echo "error: cannot combine $mode_flag_seen with --latest-release" >&2
-                echo "usage: $0 [--from-release <tag>|--latest-release]" >&2
+                echo "$USAGE_LINE" >&2
                 exit 2
             fi
             mode_flag_seen="--latest-release"
@@ -132,16 +139,34 @@ while [ $# -gt 0 ]; do
             shift
             ;;
         -h|--help)
-            sed -n '3,16p' "$0"
+            usage
             exit 0
             ;;
         *)
             echo "error: unknown flag: $1" >&2
-            echo "usage: $0 [--from-release <tag>|--latest-release]" >&2
+            echo "$USAGE_LINE" >&2
             exit 2
             ;;
     esac
 done
+
+# --- the checkout a source build reads ---------------------------------------
+#
+# The source build builds the lit checkout this script sits in, from its root.
+# Read from stdin, as curl | bash runs it, the script sits in no file, and "/"
+# stands in for its directory; a copy outside a checkout (a download, or
+# bash <(curl ...)) sits beside no lit source. Both are refused here, before
+# anything touches the filesystem. The release modes read nothing from a
+# checkout and run where they were invoked. [LAW:no-silent-failure]
+LIT_MODULE="github.com/promptctl/links-issue-tracker"
+if [ "$mode" = source ]; then
+    ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-/}")/.." && pwd)"
+    if ! grep -sqx "module $LIT_MODULE" "$ROOT_DIR/go.mod"; then
+        echo "error: the source build builds the lit checkout holding this script, and this script is in none; run bash <checkout>/scripts/install.sh, or install a release with --from-release <tag> or --latest-release" >&2
+        exit 1
+    fi
+    cd "$ROOT_DIR"
+fi
 
 # --- target-dir resolution: identical across all modes -----------------------
 #
@@ -167,10 +192,12 @@ if [ -z "$TARGET_DIR" ]; then
     TARGET_DIR="${GOBIN:-}"
 fi
 
+# GOBIN and GOPATH are the user's settings, read from "/": inside a module, the
+# module's go line can switch the go command to another toolchain, or fail it.
 if [ -z "$TARGET_DIR" ] && command -v go >/dev/null 2>&1; then
-    TARGET_DIR="$(go env GOBIN 2>/dev/null || true)"
+    TARGET_DIR="$(cd / && go env GOBIN 2>/dev/null || true)"
     if [ -z "$TARGET_DIR" ]; then
-        GOPATH_BIN="$(go env GOPATH 2>/dev/null | cut -d: -f1)"
+        GOPATH_BIN="$(cd / && go env GOPATH 2>/dev/null | cut -d: -f1)"
         if [ -n "$GOPATH_BIN" ]; then
             TARGET_DIR="$GOPATH_BIN/bin"
         fi
@@ -206,16 +233,6 @@ trap 'rm -rf "$tmp"' EXIT
 
 case "$mode" in
     source)
-        # The source build runs from the checkout this script sits in. Piped
-        # from curl there is no script file and so no checkout: BASH_SOURCE is
-        # empty, and the release modes, which read nothing from a checkout,
-        # are the way to install. [LAW:no-silent-failure]
-        if [ -z "${BASH_SOURCE[0]:-}" ]; then
-            echo "error: the source build runs from a checkout (bash scripts/install.sh); piped from curl, pass --from-release <tag> or --latest-release" >&2
-            exit 1
-        fi
-        ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-        cd "$ROOT_DIR"
         # Refuse a tree whose schema no release supports, before lit is built:
         # an installed lit runs inside real workspaces, and a migration no
         # release carries would move a workspace's schema past every release.
@@ -257,7 +274,7 @@ case "$mode" in
         # Bare SHAs from `git describe --always` are hex and never start
         # with `v`.
         ver="${ver#v}"
-        pkg="github.com/promptctl/links-issue-tracker/internal/version"
+        pkg="$LIT_MODULE/internal/version"
         # Put ICU/zstd on the cgo search path for the embedded Dolt engine. This
         # is the single source of truth for those flags (a no-op off macOS), so
         # the source build here and the Justfile recipes never drift apart.

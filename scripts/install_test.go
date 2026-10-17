@@ -151,6 +151,7 @@ func runSourceInstall(t *testing.T, built string, releases []release, checkout s
 		}
 	}
 	initFixtureRepo(t, root, releases)
+	writeFile(t, filepath.Join(root, checkout, "go.mod"), "module github.com/promptctl/links-issue-tracker\n\ngo 1.25\n", 0o644)
 	for _, name := range []string{"install.sh", "release-tags.sh"} {
 		writeFile(t, filepath.Join(scriptDir, name), readFile(t, name), 0o755)
 	}
@@ -434,12 +435,102 @@ func TestReleaseModeAcceptsExactlyTheReleaseTags(t *testing.T) {
 	}
 }
 
-// TestInstallPipedFromStdinSpeaksFirst runs install.sh as curl-piped installs
-// do, read from stdin outside any checkout, in every mode: the first thing on
-// stderr is the script's own, a stub curl's failure for a download or the
-// source build's refusal to run without a checkout.
+// TestInstallPipedFromStdinSpeaksFirst runs install.sh's release modes as
+// curl-piped installs do, read from stdin outside any checkout: the first thing
+// on stderr is the script's own, here a stub curl's failure.
 func TestInstallPipedFromStdinSpeaksFirst(t *testing.T) {
 	t.Parallel()
+	for _, args := range [][]string{{"--from-release", "v1.2.3"}, {"--latest-release"}} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			t.Parallel()
+			root, env := outsideACheckout(t)
+			install := exec.Command("bash", append([]string{"-s", "--"}, args...)...)
+			install.Dir, install.Env, install.Stdin = root, env, openFile(t, "install.sh")
+			var stderr bytes.Buffer
+			install.Stderr = &stderr
+			if err := install.Run(); err == nil {
+				t.Errorf("exited 0 through a curl that fails every request")
+			}
+			if !strings.HasPrefix(stderr.String(), "stub curl") {
+				t.Errorf("stderr opens with something other than the stub curl's failure:\n%s", stderr.String())
+			}
+		})
+	}
+}
+
+// TestInstallSourceBuildRefusesOutsideACheckout runs the source build from
+// every place a script with no lit checkout around it can run: stdin, a
+// process substitution, and a copy on disk. Each is refused, in the script's
+// own words and before the install directory exists.
+func TestInstallSourceBuildRefusesOutsideACheckout(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		command func(t *testing.T, root string) *exec.Cmd
+	}{
+		{"read from stdin", func(t *testing.T, _ string) *exec.Cmd {
+			install := exec.Command("bash", "-s")
+			install.Stdin = openFile(t, "install.sh")
+			return install
+		}},
+		{"a process substitution", func(t *testing.T, _ string) *exec.Cmd {
+			return exec.Command("bash", "-c", `bash <(cat "$1")`, "_", mustAbs(t, "install.sh"))
+		}},
+		{"a copy outside a checkout", func(t *testing.T, root string) *exec.Cmd {
+			copied := filepath.Join(root, "dl", "install.sh")
+			if err := os.MkdirAll(filepath.Dir(copied), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			writeFile(t, copied, readFile(t, "install.sh"), 0o755)
+			return exec.Command("bash", copied)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			root, env := outsideACheckout(t)
+			install := tc.command(t, root)
+			install.Dir, install.Env = root, env
+			var stderr bytes.Buffer
+			install.Stderr = &stderr
+			var exitErr *exec.ExitError
+			if err := install.Run(); !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+				t.Errorf("run = %v, want exit 1", err)
+			}
+			if want := "error: the source build builds the lit checkout holding this script"; !strings.HasPrefix(stderr.String(), want) {
+				t.Errorf("stderr opens with something other than %q:\n%s", want, stderr.String())
+			}
+			if _, err := os.Stat(filepath.Join(root, "bin")); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("the refused install touched its install directory: stat = %v", err)
+			}
+		})
+	}
+}
+
+// TestInstallPipedHelpPrintsTheHelp runs `bash -s -- --help` as a curl pipe
+// would: the help reaches stdout with nothing on stderr.
+func TestInstallPipedHelpPrintsTheHelp(t *testing.T) {
+	t.Parallel()
+	root, env := outsideACheckout(t)
+	install := exec.Command("bash", "-s", "--", "--help")
+	install.Dir, install.Env, install.Stdin = root, env, openFile(t, "install.sh")
+	var stdout, stderr bytes.Buffer
+	install.Stdout, install.Stderr = &stdout, &stderr
+	if err := install.Run(); err != nil {
+		t.Fatalf("--help: %v\nstderr:\n%s", err, stderr.String())
+	}
+	if want := "install.sh — install `lit` from one of three sources:\n"; !strings.HasPrefix(stdout.String(), want) {
+		t.Errorf("stdout opens with something other than %q:\n%s", want, stdout.String())
+	}
+	if stderr.Len() != 0 {
+		t.Errorf("stderr is not empty:\n%s", stderr.String())
+	}
+}
+
+// outsideACheckout is a directory in no lit checkout and the environment
+// install.sh runs under there: PATH holds a curl that fails every request and
+// a jq that reads its input, and GOBIN names root/bin, which does not exist.
+func outsideACheckout(t *testing.T) (string, []string) {
+	t.Helper()
 	root := t.TempDir()
 	stubBin := filepath.Join(root, "stub-bin")
 	if err := os.MkdirAll(stubBin, 0o755); err != nil {
@@ -447,33 +538,26 @@ func TestInstallPipedFromStdinSpeaksFirst(t *testing.T) {
 	}
 	writeFile(t, filepath.Join(stubBin, "curl"), "#!/bin/sh\necho 'stub curl' >&2\nexit 22\n", 0o755)
 	writeFile(t, filepath.Join(stubBin, "jq"), "#!/bin/sh\ncat >/dev/null\n", 0o755)
-	for _, tc := range []struct {
-		args       []string
-		firstWords string
-	}{
-		{[]string{"--from-release", "v1.2.3"}, "stub curl"},
-		{[]string{"--latest-release"}, "stub curl"},
-		{nil, "error: the source build runs from a checkout"},
-	} {
-		script, err := os.Open("install.sh")
-		if err != nil {
-			t.Fatal(err)
-		}
-		install := exec.Command("bash", append([]string{"-s", "--"}, tc.args...)...)
-		install.Dir = root
-		install.Stdin = script
-		install.Env = []string{"PATH=" + stubBin + ":/usr/bin:/bin", "HOME=" + root, "GOBIN=" + filepath.Join(root, "bin")}
-		var stderr bytes.Buffer
-		install.Stderr = &stderr
-		runErr := install.Run()
-		script.Close()
-		if runErr == nil {
-			t.Errorf("piped install.sh %v exited 0 through a curl that fails every request", tc.args)
-		}
-		if !strings.HasPrefix(stderr.String(), tc.firstWords) {
-			t.Errorf("piped install.sh %v: stderr opens with something other than %q:\n%s", tc.args, tc.firstWords, stderr.String())
-		}
+	return root, []string{"PATH=" + stubBin + ":/usr/bin:/bin", "HOME=" + root, "GOBIN=" + filepath.Join(root, "bin")}
+}
+
+func openFile(t *testing.T, name string) *os.File {
+	t.Helper()
+	f, err := os.Open(name)
+	if err != nil {
+		t.Fatal(err)
 	}
+	t.Cleanup(func() { f.Close() })
+	return f
+}
+
+func mustAbs(t *testing.T, name string) string {
+	t.Helper()
+	abs, err := filepath.Abs(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return abs
 }
 
 // TestInstallFetchesTheReleaseURLsLitUpgradeFetches holds install.sh's release
