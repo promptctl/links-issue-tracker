@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 const (
@@ -41,11 +43,11 @@ func TestHelperBootstrapRacer(t *testing.T) {
 	if _, _, err := LocalHasTickets(ctx, root, "test-workspace-id"); err != nil {
 		t.Fatalf("LocalHasTickets() error = %v", err)
 	}
-	created, err := EnsureDatabase(ctx, root, "test-workspace-id")
+	bootstrap, err := EnsureDatabase(ctx, root, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("EnsureDatabase() error = %v", err)
 	}
-	fmt.Printf("created=%t\n", created)
+	fmt.Printf("created=%t\n", bootstrap.Built())
 }
 
 // readTheFirstDatabaseToAppear opens root for reading as soon as it is not
@@ -117,9 +119,15 @@ func TestRacingFirstOpensBuildOneDatabase(t *testing.T) {
 				t.Fatalf("signal racer start: %v", err)
 			}
 		}
-		built := 0
+		// Every racer is waited for before any verdict, so a failed round
+		// leaves no racer running past the test.
+		waitErrs := make([]error, len(cmds))
 		for i, cmd := range cmds {
-			if err := cmd.Wait(); err != nil {
+			waitErrs[i] = cmd.Wait()
+		}
+		built := 0
+		for i, err := range waitErrs {
+			if err != nil {
 				t.Fatalf("round %d racer %d failed: %v\n%s", round, i, err, outs[i])
 			}
 			built += strings.Count(outs[i].String(), "created=true")
@@ -140,7 +148,8 @@ func TestRacingFirstOpensBuildOneDatabase(t *testing.T) {
 
 // A builder that died mid-build leaves its staging root behind. The next
 // bootstrap holds the lock that proves the builder is gone, so it discards
-// the leftover, builds, and leaves nothing at the staging path.
+// the leftover, builds, says it built over a dead builder's staging, and
+// leaves nothing at the staging path.
 func TestBootstrapDiscardsADeadBuildersStaging(t *testing.T) {
 	t.Parallel()
 	root := filepath.Join(t.TempDir(), "dolt")
@@ -151,9 +160,9 @@ func TestBootstrapDiscardsADeadBuildersStaging(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(leftover, "repo_state.json"), []byte("half-written"), 0o644); err != nil {
 		t.Fatalf("WriteFile() = %v", err)
 	}
-	created, err := EnsureDatabase(context.Background(), root, "test-workspace-id")
-	if err != nil || !created {
-		t.Fatalf("EnsureDatabase() = %t, %v; want it to build the database", created, err)
+	bootstrap, err := EnsureDatabase(context.Background(), root, "test-workspace-id")
+	if err != nil || bootstrap != storage.BootstrapBuiltOverDeadStaging {
+		t.Fatalf("EnsureDatabase() = %v, %v; want %v", bootstrap, err, storage.BootstrapBuiltOverDeadStaging)
 	}
 	assertNoBootstrapStaging(t, root)
 	st, err := Open(context.Background(), root, "test-workspace-id")
@@ -165,36 +174,66 @@ func TestBootstrapDiscardsADeadBuildersStaging(t *testing.T) {
 	}
 }
 
-// A root directory with no database in it is built into only when it is
-// empty. One holding anything else is refused by name and left untouched.
-func TestBootstrapBuildsIntoAnEmptyRootAndRefusesAnOccupiedOne(t *testing.T) {
+// A root directory that is already there but holds no database, empty or
+// holding other files, gets the database built into it, and the files it
+// held are still there after.
+func TestBootstrapBuildsIntoARootThatHoldsNoDatabase(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
+	for _, stray := range []string{"", ".links-adopt-pending.tmp-123"} {
+		root := filepath.Join(t.TempDir(), "dolt")
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			t.Fatalf("MkdirAll() = %v", err)
+		}
+		if stray != "" {
+			if err := os.WriteFile(filepath.Join(root, stray), []byte("lit's own"), 0o644); err != nil {
+				t.Fatalf("WriteFile() = %v", err)
+			}
+		}
+		bootstrap, err := EnsureDatabase(ctx, root, "test-workspace-id")
+		if err != nil || bootstrap != storage.BootstrapBuilt {
+			t.Fatalf("EnsureDatabase(root holding %q) = %v, %v; want %v", stray, bootstrap, err, storage.BootstrapBuilt)
+		}
+		if stray != "" {
+			if got, err := os.ReadFile(filepath.Join(root, stray)); err != nil || string(got) != "lit's own" {
+				t.Fatalf("%s after the build = %q, %v; want it untouched", stray, got, err)
+			}
+		}
+		assertNoBootstrapStaging(t, root)
+		st, err := Open(ctx, root, "test-workspace-id")
+		if err != nil {
+			t.Fatalf("Open(root holding %q) = %v", stray, err)
+		}
+		if err := st.Close(); err != nil {
+			t.Fatalf("Close() = %v", err)
+		}
+	}
+}
 
-	empty := filepath.Join(t.TempDir(), "dolt")
-	if err := os.Mkdir(empty, 0o755); err != nil {
-		t.Fatalf("Mkdir() = %v", err)
+// A received-refs record describes the database it was written beside. A
+// bootstrap that builds a new database forgets it, and one that finds the
+// database there leaves it alone.
+func TestBootstrapForgetsReceivedRefsOnlyWhenItBuilds(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	root := filepath.Join(t.TempDir(), "dolt")
+	record := []byte("refs of a database that is gone")
+	for _, want := range []storage.Bootstrap{storage.BootstrapBuilt, storage.BootstrapNone} {
+		if err := WriteReceivedRefs(root, record); err != nil {
+			t.Fatalf("WriteReceivedRefs() = %v", err)
+		}
+		bootstrap, err := EnsureDatabase(ctx, root, "test-workspace-id")
+		if err != nil || bootstrap != want {
+			t.Fatalf("EnsureDatabase() = %v, %v; want %v", bootstrap, err, want)
+		}
+		got, err := ReadReceivedRefs(root)
+		if err != nil {
+			t.Fatalf("ReadReceivedRefs() = %v", err)
+		}
+		if kept := got != nil; kept != !want.Built() {
+			t.Fatalf("after a bootstrap that did %v, received-refs record = %q; want it kept only when nothing was built", want, got)
+		}
 	}
-	if created, err := EnsureDatabase(ctx, empty, "test-workspace-id"); err != nil || !created {
-		t.Fatalf("EnsureDatabase(empty root) = %t, %v; want it to build the database", created, err)
-	}
-
-	occupied := filepath.Join(t.TempDir(), "dolt")
-	stray := filepath.Join(occupied, "notes.txt")
-	if err := os.MkdirAll(occupied, 0o755); err != nil {
-		t.Fatalf("MkdirAll() = %v", err)
-	}
-	if err := os.WriteFile(stray, []byte("not lit's"), 0o644); err != nil {
-		t.Fatalf("WriteFile() = %v", err)
-	}
-	_, err := EnsureDatabase(ctx, occupied, "test-workspace-id")
-	if err == nil || !strings.Contains(err.Error(), "holds no database but is not empty") {
-		t.Fatalf("EnsureDatabase(occupied root) error = %v, want the not-empty refusal", err)
-	}
-	if got, err := os.ReadFile(stray); err != nil || string(got) != "not lit's" {
-		t.Fatalf("the stray file after the refusal = %q, %v; want it untouched", got, err)
-	}
-	assertNoBootstrapStaging(t, occupied)
 }
 
 func assertNoBootstrapStaging(t *testing.T, root string) {

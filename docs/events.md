@@ -159,14 +159,17 @@ not work on this checkout's tickets, such as `lit sync push`, `lit init` or
 
 ## What opening a store records
 
-A command that opens a store to read or change its tickets records what the
-open did to the store's schema. An open that finds the schema behind this lit
+A command that opens a store to read or change its tickets, and every `lit
+sync` command, records what the open did to the store: whether it had to build
+the database, and what it did to the store's schema. An open that finds the
+schema behind this lit
 migrates it forward, taking a recovery snapshot first, then removes the oldest
 migration snapshots past the ten it keeps. For `lit ls --at`, that store is the
 one `--at` names, not the working directory's.
 
 | Key | Meaning |
 | --- | --- |
+| `bootstrap` | `built` when the open found no database and built it; `built_over_dead_staging` when it built it after removing the half-built one a lit process that died while building left behind; `none` when the database was already there, and for opens that only read. |
 | `migration.snapshot` | The recovery snapshot the open took before migrating, or `""` when there was nothing to migrate. |
 | `migration.snapshot_prune_error` | Why older migration snapshots could not be removed after the migration, or `null`. The command runs all the same, and prints a `warning: old migration snapshots were not removed:` line on stderr. A command whose open fails after migrating records neither key, and its error includes the failure. |
 
@@ -214,6 +217,7 @@ before then carries its refusal instead.
 | Key | Meaning |
 | --- | --- |
 | `init.db_created` | `true` when this init built the database or adopted the remote's; `false` when the database was already there, including one another init built while this one waited for it. |
+| `bootstrap` | As for [opening a store](#what-opening-a-store-records), for the init's own build: `none` when it adopted the remote's database or found one there. |
 
 ## What `lit start` records
 

@@ -105,10 +105,11 @@ func Open(ctx context.Context, doltRootDir string, workspaceID string) (_ *Store
 		return nil, err
 	}
 	// [LAW:single-enforcer] Workspace shared lock is acquired BEFORE
-	// EnsureDatabase because ensureDoltDatabase opens Dolt SQL connections
-	// to create/initialize the database. Acquiring after would leave a
-	// window in which `lit snapshots restore` could rotate the Dolt
-	// directory while those bootstrap connections were live.
+	// ensureDoltDatabase because its "is there a database" check and the
+	// rename that installs one are decisions about the Dolt directory.
+	// Acquiring after would leave a window in which `lit snapshots restore`
+	// or an adopt could rotate the directory between the check and the
+	// install.
 	release, err := acquireWorkspaceShared(ctx, doltRootDir)
 	if err != nil {
 		return nil, err
@@ -139,7 +140,8 @@ func Open(ctx context.Context, doltRootDir string, workspaceID string) (_ *Store
 	if err = requireNoPendingAdopt(doltRootDir); err != nil {
 		return nil, err
 	}
-	if _, err = ensureDoltDatabase(ctx, doltRootDir, workspaceID); err != nil {
+	bootstrap, err := ensureDoltDatabase(ctx, doltRootDir, workspaceID)
+	if err != nil {
 		return nil, err
 	}
 	s, err := openStoreConnection(ctx, doltRootDir, workspaceID, engineWrite)
@@ -158,6 +160,7 @@ func Open(ctx context.Context, doltRootDir string, workspaceID string) (_ *Store
 			return wrapEngineOpenContention(err, doltRootDir)
 		}
 		migrated, err := s.migrate(ctx)
+		migrated.Bootstrap = bootstrap
 		s.migrated = migrated
 		return err
 	}); err != nil {
@@ -289,13 +292,13 @@ func (s *Store) ObserveChanges(observe func(storage.Change, model.Issue)) {
 // the lock is never re-entered.
 // [LAW:single-enforcer] one lock discipline for every write-capable
 // bootstrap, owned at the entry points that hold it.
-func EnsureDatabase(ctx context.Context, doltRootDir string, workspaceID string) (_ bool, err error) {
+func EnsureDatabase(ctx context.Context, doltRootDir string, workspaceID string) (_ storage.Bootstrap, err error) {
 	if err := validateOpenArgs(doltRootDir, workspaceID); err != nil {
-		return false, err
+		return storage.BootstrapNone, err
 	}
 	release, err := acquireWorkspaceShared(ctx, doltRootDir)
 	if err != nil {
-		return false, err
+		return storage.BootstrapNone, err
 	}
 	defer func() {
 		if relErr := release(); relErr != nil {
@@ -306,7 +309,7 @@ func EnsureDatabase(ctx context.Context, doltRootDir string, workspaceID string)
 	// adopt's residue — CREATE DATABASE IF NOT EXISTS would bless it as a
 	// fresh store. [LAW:no-ambient-temporal-coupling]
 	if err := requireNoPendingAdopt(doltRootDir); err != nil {
-		return false, err
+		return storage.BootstrapNone, err
 	}
 	return ensureDoltDatabase(ctx, doltRootDir, workspaceID)
 }
@@ -2891,11 +2894,11 @@ func nullableStringPtr(value *string) any {
 }
 
 // ensureDoltDatabase makes the workspace's database exist. A database comes
-// into existence in one step: the whole Dolt root is built in a staging
-// directory beside it and renamed into place, so every reader of "is there a
-// database" — this function, OpenForRead's initialized check, LocalHasTickets'
-// directory check — sees either no root or a complete one, never a database
-// another process is still laying down. [LAW:one-source-of-truth] the root's
+// into existence in one step: it is built in a staging root beside the Dolt
+// root and renamed into place (installDoltRoot), so every reader of "is there
+// a database" — this function, OpenForRead's initialized check, LocalHasTickets'
+// directory check — sees either none or a complete one, never a database
+// another process is still laying down. [LAW:one-source-of-truth] the path's
 // existence is the one map of the database's, and the rename keeps it true.
 //
 // The bootstrap lock owns the decision to build: its holder alone answers
@@ -2909,12 +2912,12 @@ func nullableStringPtr(value *string) any {
 // that arrive pre-made, like an adopt's clone, so the two bootstrap engines
 // are paid for only by the call that builds. [LAW:carrying-cost]
 //
-// Reports whether this call installed the database.
-func ensureDoltDatabase(ctx context.Context, doltRootDir string, workspaceID string) (_ bool, err error) {
+// Reports what this call did to make the database exist.
+func ensureDoltDatabase(ctx context.Context, doltRootDir string, workspaceID string) (_ storage.Bootstrap, err error) {
 	root := filepath.Clean(doltRootDir)
 	release, err := acquireBootstrapLock(ctx, root)
 	if err != nil {
-		return false, err
+		return storage.BootstrapNone, err
 	}
 	defer func() {
 		if relErr := release(); relErr != nil {
@@ -2922,28 +2925,37 @@ func ensureDoltDatabase(ctx context.Context, doltRootDir string, workspaceID str
 		}
 	}()
 	if dirExists(filepath.Join(root, doltDatabaseName, ".dolt")) {
-		return false, nil
+		return storage.BootstrapNone, nil
 	}
 	staging := bootstrapStagingPath(root)
-	if err := buildDoltRoot(ctx, staging, workspaceID); err != nil {
-		return false, errors.Join(err, os.RemoveAll(staging))
+	bootstrap, err := buildDoltRoot(ctx, staging, workspaceID)
+	if err != nil {
+		return storage.BootstrapNone, errors.Join(err, os.RemoveAll(staging))
 	}
 	if err := installDoltRoot(staging, root); err != nil {
-		return false, errors.Join(err, os.RemoveAll(staging))
+		return storage.BootstrapNone, errors.Join(err, os.RemoveAll(staging))
 	}
-	return true, nil
+	return bootstrap, nil
 }
 
 // buildDoltRoot lays a fresh Dolt root down at staging: the database created
 // and its default branch named master. Whatever stands at staging is a dead
 // builder's leftover — the caller holds the bootstrap lock, the kernel's proof
-// that no live builder owns it — so it is removed first.
-func buildDoltRoot(ctx context.Context, staging string, workspaceID string) error {
-	if err := os.RemoveAll(staging); err != nil {
-		return fmt.Errorf("remove a dead bootstrap's staging root: %w", err)
+// that no live builder owns it — so it is removed first, and the build says
+// so.
+func buildDoltRoot(ctx context.Context, staging string, workspaceID string) (storage.Bootstrap, error) {
+	bootstrap := storage.BootstrapBuilt
+	switch _, err := os.Lstat(staging); {
+	case err == nil:
+		bootstrap = storage.BootstrapBuiltOverDeadStaging
+		if err := os.RemoveAll(staging); err != nil {
+			return storage.BootstrapNone, fmt.Errorf("remove a dead bootstrap's staging root: %w", err)
+		}
+	case !errors.Is(err, os.ErrNotExist):
+		return storage.BootstrapNone, fmt.Errorf("stat bootstrap staging root: %w", err)
 	}
 	if err := os.MkdirAll(staging, 0o755); err != nil {
-		return fmt.Errorf("create bootstrap staging root: %w", err)
+		return storage.BootstrapNone, fmt.Errorf("create bootstrap staging root: %w", err)
 	}
 	// The two bootstrap pools run strictly one-after-another: with the singleton
 	// cache bypassed, each pool owns a real engine whose journal lock lives until
@@ -2964,39 +2976,45 @@ func buildDoltRoot(ctx context.Context, staging string, workspaceID string) erro
 		// The bootstrap pools open their engines at first exec, so a foreign
 		// journal-lock holder surfaces here; the wrapper names the holder,
 		// every other failure passes through untouched.
-		return wrapEngineOpenContention(err, staging)
+		return storage.BootstrapNone, wrapEngineOpenContention(err, staging)
 	}
 	db, err := openDoltPool(staging, workspaceID, doltDatabaseName, engineWrite)
 	if err != nil {
-		return err
+		return storage.BootstrapNone, err
 	}
 	defer db.Close()
 	if err := ensureMasterDefaultBranch(ctx, db); err != nil {
-		return wrapEngineOpenContention(err, staging)
+		return storage.BootstrapNone, wrapEngineOpenContention(err, staging)
 	}
-	return nil
+	return bootstrap, nil
 }
 
-// installDoltRoot moves a built root into place with one rename. A root
-// directory that is already there holds no database (the caller checked), so
-// an empty one is removed to make way — a rename onto a directory is refused
-// on Windows — and one with contents is refused: lit does not build a
-// database over files it cannot account for. [LAW:no-silent-failure]
+// installDoltRoot moves a built database into place with one rename, onto
+// the path its readers key on. OpenForRead keys on the Dolt root itself, so
+// with no root yet the whole staged root is renamed in and the root arrives
+// with its database inside. A root that is already there (the caller checked
+// it holds no database) keeps lit's own files beside the database, such as
+// an adopt's marker, so only the database directory is renamed into it and
+// those files stay where they are. The staging root, emptied by the second
+// kind of install, is then removed.
+//
+// A database built here has received nothing from the remote, so a
+// received-refs record standing beside it describes a database that is gone,
+// and is forgotten before the new one appears: a record may lag the database
+// beside it but never lead it (received_refs.go). [LAW:one-source-of-truth]
 func installDoltRoot(staging, root string) error {
-	entries, err := os.ReadDir(root)
-	switch {
-	case errors.Is(err, os.ErrNotExist):
-	case err != nil:
-		return fmt.Errorf("read dolt root: %w", err)
-	case len(entries) > 0:
-		return fmt.Errorf("dolt root %s holds no database but is not empty; move its contents aside and retry", root)
-	default:
-		if err := os.Remove(root); err != nil {
-			return fmt.Errorf("remove empty dolt root: %w", err)
-		}
+	if err := forgetReceivedRefs(root); err != nil {
+		return err
 	}
-	if err := os.Rename(staging, root); err != nil {
-		return fmt.Errorf("install bootstrapped dolt root: %w", err)
+	from, to := staging, root
+	if dirExists(root) {
+		from, to = filepath.Join(staging, doltDatabaseName), filepath.Join(root, doltDatabaseName)
+	}
+	if err := os.Rename(from, to); err != nil {
+		return fmt.Errorf("install bootstrapped database: %w", err)
+	}
+	if err := os.RemoveAll(staging); err != nil {
+		return fmt.Errorf("remove emptied bootstrap staging root: %w", err)
 	}
 	return nil
 }

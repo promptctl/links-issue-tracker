@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/templates"
+	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
 // The embedded-default source path is pinned by TestInitHumanOutputShowsAgentsSource,
@@ -281,10 +282,48 @@ func TestInitEventSaysWhetherItBuiltTheDatabase(t *testing.T) {
 	isolateEvents(t)
 	dir := t.TempDir()
 	runGit(t, dir, "init")
-	for _, want := range []bool{true, false} {
+	for _, want := range []struct {
+		created   bool
+		bootstrap string
+	}{{true, "built"}, {false, "none"}} {
 		runCLIInDir(t, dir, "init", "--skip-hooks", "--skip-agents")
-		if got := writtenFacts(t, lastEvent(t))["init.db_created"]; got != want {
-			t.Fatalf("init event init.db_created = %v, want %v", got, want)
+		facts := writtenFacts(t, lastEvent(t))
+		if facts["init.db_created"] != want.created || facts["bootstrap"] != want.bootstrap {
+			t.Fatalf("init event init.db_created, bootstrap = %v, %v; want %v, %v",
+				facts["init.db_created"], facts["bootstrap"], want.created, want.bootstrap)
+		}
+	}
+}
+
+// A command whose open finds the database gone builds it again and says so on
+// its event, a write command and a sync command alike; a command that finds it
+// there says it built nothing.
+func TestAnOpenThatBuildsTheDatabaseSaysSoOnItsEvent(t *testing.T) {
+	isolateEvents(t)
+	dir := t.TempDir()
+	runGit(t, dir, "init")
+	runCLIInDir(t, dir, "init", "--skip-hooks", "--skip-agents")
+	ws, err := workspace.Resolve(dir)
+	if err != nil {
+		t.Fatalf("workspace.Resolve() error = %v", err)
+	}
+	for _, step := range []struct {
+		removeDatabase bool
+		args           []string
+		want           string
+	}{
+		{true, []string{"new", "--title", "rebuilt", "--topic", "demo", "--type", "epic"}, "built"},
+		{false, []string{"sync", "status"}, "none"},
+		{true, []string{"sync", "status"}, "built"},
+	} {
+		if step.removeDatabase {
+			if err := os.RemoveAll(ws.DatabasePath); err != nil {
+				t.Fatalf("remove the database: %v", err)
+			}
+		}
+		runCLIInDir(t, dir, step.args...)
+		if got := writtenFacts(t, lastEvent(t))["bootstrap"]; got != step.want {
+			t.Fatalf("lit %s event bootstrap = %v, want %v", strings.Join(step.args, " "), got, step.want)
 		}
 	}
 }

@@ -340,8 +340,8 @@ func (s *Store) migrate(ctx context.Context) (storage.Migrated, error) {
 }
 
 // Migrated reports what this handle's open did to the stored shape. A handle
-// opened for sync, or a read open that found nothing to migrate, reports the
-// zero value.
+// opened for sync reports its bootstrap and no migration; a read open, which
+// never builds, reports no bootstrap and whatever its migration did.
 func (s *Store) Migrated() storage.Migrated {
 	return s.migrated
 }
