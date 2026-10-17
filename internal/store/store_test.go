@@ -823,8 +823,8 @@ func TestStorePromptRoundTripCreateUpdateAndSearch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Apply() error = %v", err)
 	}
-	if updated.Prompt != newPrompt {
-		t.Fatalf("Apply prompt = %q, want %q", updated.Prompt, newPrompt)
+	if updated.Issue.Prompt != newPrompt {
+		t.Fatalf("Apply prompt = %q, want %q", updated.Issue.Prompt, newPrompt)
 	}
 
 	matches, err := st.ListIssues(ctx, storage.ListIssuesFilter{SearchTerms: []string{"headless"}})
@@ -847,8 +847,8 @@ func TestStorePromptRoundTripCreateUpdateAndSearch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Apply(clear prompt) error = %v", err)
 	}
-	if cleared2.Prompt != "" {
-		t.Fatalf("Apply(clear) prompt = %q, want empty", cleared2.Prompt)
+	if cleared2.Issue.Prompt != "" {
+		t.Fatalf("Apply(clear) prompt = %q, want empty", cleared2.Issue.Prompt)
 	}
 }
 
@@ -1284,8 +1284,8 @@ func TestStoreLabelsAreWritableFirstClassData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Apply() error = %v", err)
 	}
-	if len(updated.Labels) != 2 || updated.Labels[0] != "critical" || updated.Labels[1] != "renderer" {
-		t.Fatalf("updated.Labels = %#v", updated.Labels)
+	if len(updated.Issue.Labels) != 2 || updated.Issue.Labels[0] != "critical" || updated.Issue.Labels[1] != "renderer" {
+		t.Fatalf("updated.Labels = %#v", updated.Issue.Labels)
 	}
 
 	labels, err = st.RemoveLabel(ctx, issue.ID, "critical")
@@ -1425,22 +1425,22 @@ func TestIssueLifecycleTracksReasonHistory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Apply(close) error = %v", err)
 	}
-	if closed.State() != model.StateClosed || closed.ClosedAtValue() == nil {
-		t.Fatalf("closed = %#v", closed)
+	if closed.Issue.State() != model.StateClosed || closed.Issue.ClosedAtValue() == nil {
+		t.Fatalf("closed = %#v", closed.Issue)
 	}
 	reopened, err := st.Apply(ctx, issue.ID, storage.Change{Action: model.Reopen{}, Actor: "tester", Reason: "follow-up work"})
 	if err != nil {
 		t.Fatalf("Apply(reopen) error = %v", err)
 	}
-	if reopened.State() != model.StateOpen || reopened.ClosedAtValue() != nil {
-		t.Fatalf("reopened = %#v", reopened)
+	if reopened.Issue.State() != model.StateOpen || reopened.Issue.ClosedAtValue() != nil {
+		t.Fatalf("reopened = %#v", reopened.Issue)
 	}
 	archived, err := st.Apply(ctx, issue.ID, storage.Change{Action: model.Archive{}, Reason: "inactive", Actor: "tester"})
 	if err != nil {
 		t.Fatalf("Apply(archive) error = %v", err)
 	}
-	if _, ok := archived.Retention().(model.Archived); !ok {
-		t.Fatalf("archived = %#v", archived)
+	if _, ok := archived.Issue.Retention().(model.Archived); !ok {
+		t.Fatalf("archived = %#v", archived.Issue)
 	}
 
 	// The archived leaf leaves the default listing; its epic, still live, is
@@ -1501,8 +1501,8 @@ func TestCloseTransitionAllowsEmptyReason(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Apply(close, empty reason) error = %v", err)
 	}
-	if closed.State() != model.StateClosed {
-		t.Fatalf("closed.State() = %q, want closed", closed.State())
+	if closed.Issue.State() != model.StateClosed {
+		t.Fatalf("closed.State() = %q, want closed", closed.Issue.State())
 	}
 	detail, err := st.GetIssueDetail(ctx, issue.ID)
 	if err != nil {
@@ -1573,8 +1573,8 @@ func TestApplyEveryTargetStateRecordsOneEvent(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Apply(%s -> %s) error = %v", tc.from, tc.action.Target(), err)
 			}
-			if updated.State() != tc.action.Target() {
-				t.Fatalf("updated.State() = %q, want %q", updated.State(), tc.action.Target())
+			if updated.Issue.State() != tc.action.Target() {
+				t.Fatalf("updated.State() = %q, want %q", updated.Issue.State(), tc.action.Target())
 			}
 
 			after, err := st.GetIssueDetail(ctx, issue.ID)
@@ -1695,8 +1695,8 @@ func TestApplySameStateSameAssigneeRecordsNothing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Apply(same-state same-assignee start) error = %v, want no-op success", err)
 	}
-	if result.State() != model.StateInProgress {
-		t.Fatalf("result.State() = %q, want in_progress", result.State())
+	if result.Issue.State() != model.StateInProgress {
+		t.Fatalf("result.State() = %q, want in_progress", result.Issue.State())
 	}
 
 	after, err := st.GetIssueDetail(ctx, issue.ID)
@@ -1732,8 +1732,8 @@ func TestIssueStatusClaimAndDoneAreDeterministic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Apply(start agent-a) error = %v", err)
 	}
-	if started.State() != model.StateInProgress {
-		t.Fatalf("started.State() = %q, want in_progress", started.State())
+	if started.Issue.State() != model.StateInProgress {
+		t.Fatalf("started.State() = %q, want in_progress", started.Issue.State())
 	}
 
 	// Under the target-state lifecycle, `start --by` is sugar for
@@ -1761,8 +1761,8 @@ func TestIssueStatusClaimAndDoneAreDeterministic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Apply(done) error = %v", err)
 	}
-	if done.State() != model.StateClosed || done.ClosedAtValue() == nil {
-		t.Fatalf("done = %#v, want closed with ClosedAt", done)
+	if done.Issue.State() != model.StateClosed || done.Issue.ClosedAtValue() == nil {
+		t.Fatalf("done = %#v, want closed with ClosedAt", done.Issue)
 	}
 
 	openIssues, err := st.ListIssues(ctx, storage.ListIssuesFilter{Statuses: []model.State{model.StateOpen}})
@@ -2378,7 +2378,7 @@ func TestConflictNamesTheVerbTheCallerTyped(t *testing.T) {
 	}
 	// Plan the reopen against the CLOSED snapshot, then move the row out from
 	// under it, so the guarded UPDATE matches nothing and reports the conflict.
-	w, err := st.planStatusTransition(ctx, closed, "tester", "", model.Reopen{})
+	w, err := st.planStatusTransition(ctx, closed.Issue, "tester", "", model.Reopen{})
 	if err != nil {
 		t.Fatalf("planStatusTransition(stale reopen) error = %v", err)
 	}
@@ -2465,9 +2465,9 @@ func TestArchiveReturnsHydratedIssue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Apply(archive) error = %v", err)
 	}
-	progress := archived.Progress()
-	if _, ok := archived.Retention().(model.Archived); !ok || !archived.IsContainer() || progress.Total != 1 {
-		t.Fatalf("archived issue = retention:%#v container:%v progress:%#v, want hydrated archived epic", archived.Retention(), archived.IsContainer(), progress)
+	progress := archived.Issue.Progress()
+	if _, ok := archived.Issue.Retention().(model.Archived); !ok || !archived.Issue.IsContainer() || progress.Total != 1 {
+		t.Fatalf("archived issue = retention:%#v container:%v progress:%#v, want hydrated archived epic", archived.Issue.Retention(), archived.Issue.IsContainer(), progress)
 	}
 }
 
@@ -2497,7 +2497,7 @@ func TestArchivedEpicProgressIncludesArchivedChildren(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Apply(archive epic) error = %v", err)
 	}
-	if progress := archivedEpic.Progress(); progress.Total != 1 || progress.Open != 1 {
+	if progress := archivedEpic.Issue.Progress(); progress.Total != 1 || progress.Open != 1 {
 		t.Fatalf("archived epic Progress() = %#v, want archived child snapshot included", progress)
 	}
 }
@@ -2518,15 +2518,15 @@ func TestReopenClearsClosedAt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Apply(close) error = %v", err)
 	}
-	if closed.ClosedAtValue() == nil {
+	if closed.Issue.ClosedAtValue() == nil {
 		t.Fatalf("ClosedAtValue() = nil after close")
 	}
 	reopened, err := st.Apply(ctx, issue.ID, storage.Change{Action: model.Reopen{}, Actor: "tester"})
 	if err != nil {
 		t.Fatalf("Apply(reopen) error = %v", err)
 	}
-	if reopened.StatusValue() != string(model.StateOpen) || reopened.ClosedAtValue() != nil {
-		t.Fatalf("reopened status/closed_at = %q/%#v, want open/nil", reopened.StatusValue(), reopened.ClosedAtValue())
+	if reopened.Issue.StatusValue() != string(model.StateOpen) || reopened.Issue.ClosedAtValue() != nil {
+		t.Fatalf("reopened status/closed_at = %q/%#v, want open/nil", reopened.Issue.StatusValue(), reopened.Issue.ClosedAtValue())
 	}
 	loaded, err := st.GetIssue(ctx, issue.ID)
 	if err != nil {
@@ -2560,7 +2560,7 @@ func TestCloseAsDuplicateRecordsRedirectTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Apply(close duplicate) error = %v", err)
 	}
-	if got := closed.ResolutionValue(); got == nil || *got != model.ResolutionDuplicate {
+	if got := closed.Issue.ResolutionValue(); got == nil || *got != model.ResolutionDuplicate {
 		t.Fatalf("ResolutionValue() = %v, want duplicate", got)
 	}
 	detail, err := st.GetIssueDetail(ctx, dup.ID)
@@ -2582,7 +2582,7 @@ func TestCloseAsDuplicateRecordsRedirectTarget(t *testing.T) {
 			t.Fatalf("Relations = %#v, want no related-to edge — the redirect is a column, not an edge", detail.Relations)
 		}
 	}
-	if got := closed.RedirectTargetValue(); got == nil || *got != canonical.ID {
+	if got := closed.Issue.RedirectTargetValue(); got == nil || *got != canonical.ID {
 		t.Fatalf("RedirectTargetValue() = %v, want %s", got, canonical.ID)
 	}
 }
@@ -2605,7 +2605,7 @@ func TestCloseAsObsoleteRecordsNoRedirect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Apply(close obsolete) error = %v", err)
 	}
-	if got := closed.ResolutionValue(); got == nil || *got != model.ResolutionObsolete {
+	if got := closed.Issue.ResolutionValue(); got == nil || *got != model.ResolutionObsolete {
 		t.Fatalf("ResolutionValue() = %v, want obsolete", got)
 	}
 	detail, err := st.GetIssueDetail(ctx, issue.ID)
@@ -2703,7 +2703,7 @@ func TestCloseRedirectToArchivedCanonicalAllowed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Apply(close duplicate-of archived canonical) error = %v, want success", err)
 	}
-	if got := closed.RedirectTargetValue(); got == nil || *got != canonical.ID {
+	if got := closed.Issue.RedirectTargetValue(); got == nil || *got != canonical.ID {
 		t.Fatalf("RedirectTargetValue() = %v, want %s", got, canonical.ID)
 	}
 }
@@ -2927,8 +2927,8 @@ func TestArchiveSecondCallErrorsAlreadyArchived(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Apply(archive) error = %v", err)
 	}
-	if _, ok := archived.Retention().(model.Archived); !ok {
-		t.Fatalf("archived issue retention = %#v, want Archived", archived.Retention())
+	if _, ok := archived.Issue.Retention().(model.Archived); !ok {
+		t.Fatalf("archived issue retention = %#v, want Archived", archived.Issue.Retention())
 	}
 	_, err = st.Apply(ctx, epic.ID, storage.Change{Action: model.Archive{}, Actor: "tester"})
 	if err == nil || err.Error() != "issue is already archived" {
@@ -3164,14 +3164,14 @@ func TestDeleteArchivedIssueDropsArchiveStamp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Apply(delete) on archived issue error = %v", err)
 	}
-	if _, ok := deleted.Retention().(model.Deleted); !ok {
-		t.Fatalf("delete on archived issue = %#v, want Deleted", deleted.Retention())
+	if _, ok := deleted.Issue.Retention().(model.Deleted); !ok {
+		t.Fatalf("delete on archived issue = %#v, want Deleted", deleted.Issue.Retention())
 	}
 	restored, err := st.Apply(ctx, issue.ID, storage.Change{Action: model.Restore{}, Actor: "tester"})
 	if err != nil {
 		t.Fatalf("Apply(restore) error = %v", err)
 	}
-	if _, ok := restored.Retention().(model.Live); !ok {
-		t.Fatalf("restore after delete-on-archived = %#v, want Live", restored.Retention())
+	if _, ok := restored.Issue.Retention().(model.Live); !ok {
+		t.Fatalf("restore after delete-on-archived = %#v, want Live", restored.Issue.Retention())
 	}
 }

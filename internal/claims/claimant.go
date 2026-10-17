@@ -81,3 +81,24 @@ func (c Claimant) After(action model.StatusAction, taker model.Attribution) Clai
 	}
 	return Claimant{Established: true, Assignee: strings.TrimSpace(start.Assignee), Checkout: taker}
 }
+
+// Handover is a ticket's claim passing from one holder to another: the
+// claimant the record named before a start, and the one that start installed.
+type Handover struct {
+	From, To Claimant
+}
+
+// HandoverTo is the handover a write moving the claimant from c to next
+// records, and nil when it records none: nobody had taken the ticket, so there
+// was no claim to pass on, or the holder did not change.
+//
+// A storage engine asks it of the same pair it compares to decide whether the
+// write is owed, and reports the answer, so the handover a caller announces is
+// the one the history holds rather than a second reading of the rule.
+// [LAW:one-source-of-truth]
+func (c Claimant) HandoverTo(next Claimant) *Handover {
+	if !c.Held() || next == c {
+		return nil
+	}
+	return &Handover{From: c, To: next}
+}

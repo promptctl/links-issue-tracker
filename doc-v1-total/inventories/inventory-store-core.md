@@ -654,18 +654,18 @@ The `c.field ASC` sort is deliberate so two reads of an unchanged event compare 
 
 ### 6. Update path
 
-#### 6.1 `Apply(ctx, id string, c storage.Change) (model.Issue, error)`
+#### 6.1 `Apply(ctx, id string, c storage.Change) (storage.Applied, error)`
 
 `store.go`, the single execution path for issue-record changes:
 1. `current, err := s.GetIssue(ctx, id)` — a not-found id fails here (`store.go`).
 2. `actor := strings.TrimSpace(c.Actor)`; if empty → `"unknown"` (`store.go`).
 3. `baseline := current` (`store.go`).
-4. If `c.Action != nil`: `lw, err = s.planLifecycleAction(ctx, current, actor, strings.TrimSpace(c.Reason), c.Action)`; on error, returns immediately with **no** writes; then `baseline = lw.postIssue()` so a following field write diffs against the post-action issue (`store.go`).
+4. If `c.Action != nil`: `lw, err = s.planLifecycleAction(ctx, current, actor, strings.TrimSpace(c.Reason), c.Action)`; on error, returns immediately with **no** writes; then `baseline = lw.postIssue()` so a following field write diffs against the post-action issue, and `handover = lw.handover()` (`store.go`).
 5. `hasFields := !c.Fields.IsEmpty()`; if true, `fw, err = planFieldUpdate(baseline, c.Fields, actor)` — a validation error returns before any write (`store.go`).
 6. `needsActionWrite := lw != nil && !lw.isNoop()` (`store.go`).
 7. `applyPreMutationHookForTest` fires here if set (`store.go`).
 8. If `needsActionWrite || hasFields`: one `withMutation(ctx, "apply update"...)` running `lw.applyTx` then `s.applyFieldsTx`, both in the **same** tx and therefore one Dolt commit (`store.go`).
-9. Returns `s.GetIssue(ctx, id)` — a fresh re-read, always (`store.go`).
+9. Returns `storage.Applied{Issue: s.GetIssue(ctx, id), Handover: handover}` — the issue a fresh re-read, always (`store.go`).
 
 Evidence: transition + field lands as exactly one Dolt commit with both halves visible (`update_atomicity_test.go`); an invalid field (empty title) paired with a valid transition leaves state, title, and event count **wholly** unchanged (`update_atomicity_test.go`); the full IssueType × flag-combination matrix shows container transitions rejected with `model.ContainerActionError` and nothing written, field writes succeeding on every type, and zero transition events for field-only cells (`update_matrix_test.go`).
 
@@ -676,7 +676,7 @@ Evidence: transition + field lands as exactly one Dolt commit with both halves v
 - `model.RetentionAction` → `planRetentionTransition(...)` (a free function, no store);
 - anything else → **panic** `fmt.Sprintf("illegal Action value %T", action)` (`store.go`).
 
-`lifecycleWrite` interface (`store.go`): `applyTx(ctx, s *Store, tx *sql.Tx) error`, `postIssue() model.Issue`, `isNoop() bool`.
+`lifecycleWrite` interface (`store.go`): `applyTx(ctx, s *Store, tx *sql.Tx) error`, `postIssue() model.Issue`, `isNoop() bool`, `handover() *claims.Handover` (nil for every write but a status transition whose plan set one).
 
 #### 6.3 The guard: `Issue.Apply`
 
@@ -686,7 +686,7 @@ Evidence: conformance case `apply_to_frozen_names_the_thaw` (`conformance.go`).
 
 #### 6.4 `transitionWrite` and `planStatusTransition`
 
-`transitionWrite` fields (`store.go`): `issueID, fromStatus, toStatus, postAssignee string; now time.Time; closedAtArg, resolutionArg, redirectTargetArg any; action model.ActionName; reason, actor string; changes []model.FieldChange; post model.Issue; noop bool`. Methods at `store.go`.
+`transitionWrite` fields (`store.go`): `issueID, fromStatus, toStatus, postAssignee string; now time.Time; closedAtArg, resolutionArg, redirectTargetArg any; action model.ActionName; reason, actor string; changes []model.FieldChange; post model.Issue; noop bool; claimHandover *claims.Handover` (`prior.HandoverTo(post)`, left nil on a no-op). Methods at `store.go`.
 
 `planStatusTransition(ctx, issue, actor, reason, action) (transitionWrite, error)` (`store.go`):
 1. `issue.Apply(action)` → `updated` or the rejection.

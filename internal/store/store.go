@@ -1336,10 +1336,10 @@ func (s *Store) applyFieldsTx(ctx context.Context, tx *sql.Tx, w fieldWrite) err
 // history queries. The claimant is the (assignee, checkout) pair, never the assignee alone: two
 // checkouts of one identity taking a lane from each other move nothing on the row and everything on
 // the record.
-func (s *Store) Apply(ctx context.Context, id string, c storage.Change) (model.Issue, error) {
+func (s *Store) Apply(ctx context.Context, id string, c storage.Change) (storage.Applied, error) {
 	current, err := s.GetIssue(ctx, id)
 	if err != nil {
-		return model.Issue{}, err
+		return storage.Applied{}, err
 	}
 	// [LAW:no-ambient-temporal-coupling] The combined transition+field update has
 	// exactly one atomicity owner: this method plans both writes (pure: reads,
@@ -1355,21 +1355,23 @@ func (s *Store) Apply(ctx context.Context, id string, c storage.Change) (model.I
 	}
 	baseline := current
 	var lw lifecycleWrite
+	var handover *claims.Handover
 	if c.Action != nil {
 		lw, err = s.planLifecycleAction(ctx, current, actor, strings.TrimSpace(c.Reason), c.Action)
 		if err != nil {
-			return model.Issue{}, err
+			return storage.Applied{}, err
 		}
 		// The field write starts from the post-action issue so a start's new
 		// assignee is restated, not overwritten, and the diff sees it as prior.
 		baseline = lw.postIssue()
+		handover = lw.handover()
 	}
 	var fw fieldWrite
 	hasFields := !c.Fields.IsEmpty()
 	if hasFields {
 		fw, err = planFieldUpdate(baseline, c.Fields, actor)
 		if err != nil {
-			return model.Issue{}, err
+			return storage.Applied{}, err
 		}
 	}
 	needsActionWrite := lw != nil && !lw.isNoop()
@@ -1391,17 +1393,17 @@ func (s *Store) Apply(ctx context.Context, id string, c storage.Change) (model.I
 			}
 			return nil
 		}); err != nil {
-			return model.Issue{}, err
+			return storage.Applied{}, err
 		}
 	}
 	issue, err := s.GetIssue(ctx, id)
 	if err != nil {
-		return model.Issue{}, err
+		return storage.Applied{}, err
 	}
 	for _, observe := range s.observers {
 		observe(c, issue)
 	}
-	return issue, nil
+	return storage.Applied{Issue: issue, Handover: handover}, nil
 }
 
 // AddComment returns the commented-on issue alongside the comment: it already
@@ -1482,6 +1484,9 @@ type lifecycleWrite interface {
 	postIssue() model.Issue
 	// isNoop reports that the plan owes no write.
 	isNoop() bool
+	// handover is the claim the planned write hands from one holder to
+	// another, nil for every plan that hands none.
+	handover() *claims.Handover
 }
 
 // planLifecycleAction plans any lifecycle action by its axis: StatusActions
@@ -1529,8 +1534,9 @@ type phaseWrite struct {
 	post  model.Issue
 }
 
-func (w phaseWrite) postIssue() model.Issue { return w.post }
-func (w phaseWrite) isNoop() bool           { return !w.move.Changed() }
+func (w phaseWrite) postIssue() model.Issue     { return w.post }
+func (w phaseWrite) isNoop() bool               { return !w.move.Changed() }
+func (w phaseWrite) handover() *claims.Handover { return nil }
 
 func (w phaseWrite) applyTx(ctx context.Context, s *Store, tx *sql.Tx) error {
 	result, err := tx.ExecContext(ctx, `UPDATE issues SET updated_at = ? WHERE id = ? AND status = ?`,
@@ -1606,13 +1612,15 @@ type transitionWrite struct {
 	changes           []model.FieldChange
 	post              model.Issue
 	noop              bool
+	claimHandover     *claims.Handover
 }
 
 func (w transitionWrite) applyTx(ctx context.Context, s *Store, tx *sql.Tx) error {
 	return s.applyTransitionTx(ctx, tx, w)
 }
-func (w transitionWrite) postIssue() model.Issue { return w.post }
-func (w transitionWrite) isNoop() bool           { return w.noop }
+func (w transitionWrite) postIssue() model.Issue     { return w.post }
+func (w transitionWrite) isNoop() bool               { return w.noop }
+func (w transitionWrite) handover() *claims.Handover { return w.claimHandover }
 
 func (s *Store) planStatusTransition(ctx context.Context, issue model.Issue, actor string, reason string, action model.StatusAction) (transitionWrite, error) {
 	updated, err := issue.Apply(action)
@@ -1635,8 +1643,9 @@ func (s *Store) planStatusTransition(ctx context.Context, issue model.Issue, act
 	// establisher somebody else, forcing the write. It can only stale the
 	// assignee half, which likewise pushes the pair toward inequality. What
 	// survives is a spurious write whose assignee FieldChange names a stale
-	// From — audit precision, not a lost claim. Closing it means computing the
-	// pair in-tx (links-claims-3cey).
+	// From — audit precision, not a lost claim — and the handover Apply reports
+	// carries the same From. Closing it means computing the pair in-tx
+	// (links-scale-dy46.w61).
 	events, err := s.ListEvents(ctx, issue.ID)
 	if err != nil {
 		return transitionWrite{}, err
@@ -1728,6 +1737,7 @@ func (s *Store) planStatusTransition(ctx context.Context, issue model.Issue, act
 		actor:             actor,
 		changes:           changes,
 		post:              updated,
+		claimHandover:     prior.HandoverTo(post),
 	}, nil
 }
 
@@ -1802,7 +1812,8 @@ type retentionWrite struct {
 	post          model.Issue
 }
 
-func (w retentionWrite) postIssue() model.Issue { return w.post }
+func (w retentionWrite) postIssue() model.Issue     { return w.post }
+func (w retentionWrite) handover() *claims.Handover { return nil }
 
 // isNoop is always false: the Retain table has no same-state success cell —
 // re-archiving an archived issue is a rejection, not a silent no-op — so every

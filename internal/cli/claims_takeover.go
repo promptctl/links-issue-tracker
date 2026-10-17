@@ -13,6 +13,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/claims"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/statusline"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 )
 
 // laneRelation is what a lane's standing means TO THIS CHECKOUT — the single
@@ -66,15 +67,14 @@ func relationOf(standing claims.Standing, self model.Attribution) laneRelation {
 // demands.
 //
 // Its result is what the start owes after Apply (transitionSpec.authorize):
-// the transfer notice when the lane was held, ours or another's, and the
-// claimant changes hands, the empty string otherwise; and, for the statusline
-// file, the lane's count for its rollup progress and the phase the start left
-// the ticket in. A lane nobody holds has no claim to transfer, so the notice
-// is not even asked for there — the gate is the one read that knows the lane's
-// standing, and asking transferNotice to re-derive it would gather every event
-// a second time. The count is that same evidence with the written ticket in
-// place of the one read, so it costs no second gather either, and a start that
-// reopens a closed ticket counts it as no longer done.
+// the transfer notice when the lane was held, ours or another's, and Apply
+// reports the claim changed hands, the empty string otherwise; and, for the
+// statusline file, the lane's count for its rollup progress and the phase the
+// start left the ticket in. A lane nobody holds has no claim to transfer, so a
+// handover Apply reports there goes unannounced — the gate is the one read
+// that knows the lane's standing. The count is that same evidence with the
+// written ticket in place of the one read, so it costs no second gather, and a
+// start that reopens a closed ticket counts it as no longer done.
 // [LAW:one-source-of-truth]
 //
 // Enforcement lives here and only here per [LAW:single-enforcer]: `lit
@@ -98,27 +98,18 @@ func authorizeStart(ctx context.Context, stdout io.Writer, ap *app.App, issueID 
 	if err != nil {
 		return nil, err
 	}
-	notice, err := gateTakeover(ctx, stdout, ap, issueID, start, take, cc, lane)
-	if err != nil {
-		return nil, err
-	}
-	return func(written ticketState) (string, statusline.Facts) {
-		return notice, statusline.Facts{rollupCounted(cc.evidence, written.issue), phaseRead(written)}
-	}, nil
-}
-
-// gateTakeover confirms a takeover when another checkout holds the lane, and
-// returns the transfer notice the start owes.
-func gateTakeover(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, start model.Start, take bool, cc claimContext, lane model.LaneID) (string, error) {
-	switch relationOf(cc.standings.Of(lane), cc.self) {
-	case laneHeldForeign:
+	relation := relationOf(cc.standings.Of(lane), cc.self)
+	if relation == laneHeldForeign {
 		if err := confirmFreshTakeover(stdout, cc, lane, take); err != nil {
-			return "", err
+			return nil, err
 		}
-	case laneUnclaimed:
-		return "", nil
 	}
-	return transferNotice(ctx, ap, issueID, start)
+	laneHeld := relation != laneUnclaimed
+	return func(written ticketState, handover *claims.Handover) (string, statusline.Facts) {
+		telemetry.Set(ctx, "start.lane_held", laneHeld)
+		telemetry.Set(ctx, "start.handover", handover != nil)
+		return transferNotice(laneHeld, handover), statusline.Facts{rollupCounted(cc.evidence, written.issue), phaseRead(written)}
+	}, nil
 }
 
 // confirmFreshTakeover is the deliberate act the design demands before a

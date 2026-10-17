@@ -15,21 +15,21 @@ import (
 // value carries all the variability — a nil Action is no transition, an empty
 // patch is no field write — so the body below is one straight pipe with no
 // verb-shaped branches in it. [LAW:dataflow-not-control-flow]
-func (e *Engine) Apply(ctx context.Context, id string, c storage.Change) (model.Issue, error) {
+func (e *Engine) Apply(ctx context.Context, id string, c storage.Change) (storage.Applied, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.apply(id, c)
 }
 
-func (e *Engine) apply(id string, c storage.Change) (model.Issue, error) {
+func (e *Engine) apply(id string, c storage.Change) (storage.Applied, error) {
 	rec, err := e.mustRecord(id)
 	if err != nil {
-		return model.Issue{}, err
+		return storage.Applied{}, err
 	}
 	pos := e.positions()
 	current, err := e.hydrate(rec, pos)
 	if err != nil {
-		return model.Issue{}, err
+		return storage.Applied{}, err
 	}
 	// [LAW:one-source-of-truth] One change has one author, normalized once and
 	// recorded on every event the change produces.
@@ -42,13 +42,13 @@ func (e *Engine) apply(id string, c storage.Change) (model.Issue, error) {
 	// The field write baselines on the POST-action issue, so a start's new
 	// assignee is what the patch diffs against rather than a second assignee
 	// change row restating what the transition already recorded.
-	afterAction, actionEvents, err := e.planLifecycle(current, actor, strings.TrimSpace(c.Reason), c.Action, now)
+	afterAction, actionEvents, handover, err := e.planLifecycle(current, actor, strings.TrimSpace(c.Reason), c.Action, now)
 	if err != nil {
-		return model.Issue{}, err
+		return storage.Applied{}, err
 	}
 	patch, err := planFields(afterAction, c.Fields, actor, now)
 	if err != nil {
-		return model.Issue{}, err
+		return storage.Applied{}, err
 	}
 
 	e.writeIssue(rec, patch.issue)
@@ -57,29 +57,32 @@ func (e *Engine) apply(id string, c storage.Change) (model.Issue, error) {
 	e.recordEvents(rec.id, patch.events, now)
 	issue, err := e.hydrate(rec, e.positions())
 	if err != nil {
-		return model.Issue{}, err
+		return storage.Applied{}, err
 	}
 	for _, observe := range e.observers {
 		observe(c, issue)
 	}
-	return issue, nil
+	return storage.Applied{Issue: issue, Handover: handover}, nil
 }
 
 // planLifecycle plans whichever axis the action drives. The three subsets
 // partition the sealed action sum, so a retention action reaching the status
 // machine — or the reverse — is unrepresentable rather than guarded against.
-// A nil action is no transition at all, which the type carries as data.
-// [LAW:types-are-the-program]
-func (e *Engine) planLifecycle(current model.Issue, actor, reason string, action model.Action, now time.Time) (model.Issue, []eventSpec, error) {
+// A nil action is no transition at all, which the type carries as data. Only
+// the status machine can take a ticket, so it is the one axis that can hand
+// a claim over. [LAW:types-are-the-program]
+func (e *Engine) planLifecycle(current model.Issue, actor, reason string, action model.Action, now time.Time) (model.Issue, []eventSpec, *claims.Handover, error) {
 	switch a := action.(type) {
 	case nil:
-		return current, nil, nil
+		return current, nil, nil, nil
 	case model.StatusAction:
 		return e.planStatus(current, actor, reason, a, now)
 	case model.RetentionAction:
-		return planRetention(current, actor, reason, a, now)
+		post, events, err := planRetention(current, actor, reason, a, now)
+		return post, events, nil, err
 	case model.SetPhase:
-		return e.planPhase(current, actor, reason, a, now)
+		post, events, err := e.planPhase(current, actor, reason, a, now)
+		return post, events, nil, err
 	default:
 		// [LAW:no-silent-failure] The sealed sum has no fourth axis; only an
 		// impostor Action reaches here.
@@ -112,10 +115,10 @@ func (e *Engine) planPhase(current model.Issue, actor, reason string, action mod
 // the machine's own — frozen work is out of the flow, a container's state is
 // its children's — and the engine adds only the claimant rule and the
 // integrity floor under a redirecting close.
-func (e *Engine) planStatus(current model.Issue, actor, reason string, action model.StatusAction, now time.Time) (model.Issue, []eventSpec, error) {
+func (e *Engine) planStatus(current model.Issue, actor, reason string, action model.StatusAction, now time.Time) (model.Issue, []eventSpec, *claims.Handover, error) {
 	updated, err := current.Apply(action)
 	if err != nil {
-		return model.Issue{}, nil, err
+		return model.Issue{}, nil, nil, err
 	}
 	// Who holds the ticket is the (assignee, checkout) pair claims owns, read
 	// from this issue's own history — never the assignee alone, because lane
@@ -137,10 +140,10 @@ func (e *Engine) planStatus(current model.Issue, actor, reason string, action mo
 	// would make a call that changes nothing fail on the state of an issue it
 	// was never going to touch.
 	if updated.StatusValue() == current.StatusValue() && post == prior {
-		return current, nil, nil
+		return current, nil, nil, nil
 	}
 	if err := e.validateRedirectTarget(updated); err != nil {
-		return model.Issue{}, nil, err
+		return model.Issue{}, nil, nil, err
 	}
 	updated.UpdatedAt = now
 	return updated, []eventSpec{{
@@ -148,7 +151,7 @@ func (e *Engine) planStatus(current model.Issue, actor, reason string, action mo
 		reason:  reason,
 		actor:   actor,
 		changes: statusChanges(current, updated),
-	}}, nil
+	}}, prior.HandoverTo(post), nil
 }
 
 // planRetention moves the retention axis. The legal moves and every rejection

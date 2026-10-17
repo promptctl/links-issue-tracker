@@ -1132,16 +1132,17 @@ positional is required; otherwise `errors.New("usage: lit <name> <id> [--reason 
 1. `GetIssue(issueID)` pre-read (`cli.go`) — missing → exit 4.
 2. `buildAction()` (`cli.go`).
 3. `authorize(ctx, stdout, ap, issueID, prior)` — §2.11 (`cli.go`).
-4. `transferNotice(ctx, ap, issueID, action)` (`cli.go`, implementation
-   `claims_context.go`): for a `model.Start` whose prior claimant was
-   held and actually changes hands, `"claim transferred: %s -> %s\n"` with
-   both sides rendered by `describeClaimant` (`claims_render.go`),
+4. The `afterApply` the hook returned is called after step 5 with the
+   written ticket and the `Handover` `Apply` reported. For `start` its notice
+   is `transferNotice(laneHeld, handover)` (`claims_context.go`): when the
+   lane was held and `Apply` reported a handover,
+   `"claim transferred: %s -> %s\n"` with both sides rendered by
+   `describeClaimant` (`claims_render.go`),
    which names the assignee when there is one, the checkout via `nameCheckout`
    (`claims_render.go`) when there isn't or alongside it, and the
    literal `"the public checkout"` — never `"(unassigned)"` — for a prior
-   claimant with no assignee and no minted token. Computed here, on
-   pre-Apply state, but not written out until step 7 — a failed `Apply`
-   must announce nothing.
+   claimant with no assignee and no minted token. A failed `Apply` returns
+   before it, so it announces nothing.
 5. `actor := resolveActor()`; `Store.Apply(ctx, issueID, Change{Action, Actor, Reason})`
    (`cli.go`).
 6. If the action is a `StatusAction`, dispatch the transition occasion
@@ -1218,12 +1219,11 @@ positional is required; otherwise `errors.New("usage: lit <name> <id> [--reason 
        `"read confirmation: %w"`; an answer not starting with `y`
        (case-insensitive, trimmed) → `takeoverUnconfirmedError` "takeover declined" → exit 3,
        reason `takeover_unconfirmed`.
-4. Returns the line the start owes after Apply: from a held lane, ours or another's,
-   `transferNotice(ctx, ap, issueID, start)` (`claims_context.go`), which is
-   `claim transferred: <old> -> <new>` when the recorded claimant changes hands and
-   empty otherwise; from an unclaimed lane, `""` without asking. `transitionLeaf` writes
-   the hook's string after Apply (`cli.go`), so a start on a lane whose claim has
-   expired announces no transfer, whatever the row's history records.
+4. Returns what the start owes after Apply: `transferNotice(laneHeld, handover)`
+   (`claims_context.go`), which is `claim transferred: <old> -> <new>` when the lane
+   was held, ours or another's, and `Apply` reported a handover, and empty otherwise.
+   `transitionLeaf` writes it after Apply (`cli.go`), so a start on a lane whose claim
+   has expired announces no transfer, whatever the row's history records.
 
 There is no "stale-informed" path. Until links-claims-y6yz an expired claim derived
 its own standing, and `start` on such a lane printed the lapsed holder's claim line

@@ -46,6 +46,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/claims"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
@@ -167,6 +168,7 @@ var cases = []engineCase{
 	{"a_phase_move_records_its_event", aPhaseMoveRecordsItsEvent},
 	{"every_editable_field_records_history", everyEditableFieldRecordsHistory},
 	{"a_new_checkout_taking_a_ticket_records", takeoverByANewCheckoutRecords},
+	{"a_reported_handover_is_the_one_recorded", aReportedHandoverIsTheOneRecorded},
 	{"one_issues_history_matches_the_whole_log", oneIssuesHistoryMatchesTheWholeLog},
 	{"list_defaults_to_rank_order", listDefaultsToRankOrder},
 	{"list_filters_select", listFiltersSelect},
@@ -370,13 +372,13 @@ func applyFieldPatch(t *testing.T, ctx context.Context, st storage.Store, clk *c
 	if err != nil {
 		t.Fatalf("Apply field patch error = %v", err)
 	}
-	if updated.Title != "after" || updated.Priority != model.PriorityUrgent {
-		t.Errorf("Apply returned %q/%v, want after/urgent", updated.Title, updated.Priority)
+	if updated.Issue.Title != "after" || updated.Issue.Priority != model.PriorityUrgent {
+		t.Errorf("Apply returned %q/%v, want after/urgent", updated.Issue.Title, updated.Issue.Priority)
 	}
 	// A nil pointer means "leave alone", so an untouched field survives a patch
 	// that never mentions it. This is the whole reason the patch is pointers.
-	if updated.Assignee != "ada" {
-		t.Errorf("Assignee = %q, want the untouched ada", updated.Assignee)
+	if updated.Issue.Assignee != "ada" {
+		t.Errorf("Assignee = %q, want the untouched ada", updated.Issue.Assignee)
 	}
 
 	read, err := st.GetIssue(ctx, issue.ID)
@@ -427,29 +429,29 @@ func applyStatusTransition(t *testing.T, ctx context.Context, st storage.Store, 
 	if err != nil {
 		t.Fatalf("Apply start error = %v", err)
 	}
-	if started.State() != model.StateInProgress {
-		t.Errorf("State after start = %q, want in_progress", started.State())
+	if started.Issue.State() != model.StateInProgress {
+		t.Errorf("State after start = %q, want in_progress", started.Issue.State())
 	}
 	// Start is the one action that rewrites ownership, which is why it is the
 	// one variant carrying an assignee.
-	if started.Assignee != "ada" {
-		t.Errorf("Assignee after start = %q, want ada", started.Assignee)
+	if started.Issue.Assignee != "ada" {
+		t.Errorf("Assignee after start = %q, want ada", started.Issue.Assignee)
 	}
 
 	done, err := st.Apply(ctx, issue.ID, storage.Change{Action: model.Done{}, Actor: "ada"})
 	if err != nil {
 		t.Fatalf("Apply done error = %v", err)
 	}
-	if done.State() != model.StateClosed {
-		t.Errorf("State after done = %q, want closed", done.State())
+	if done.Issue.State() != model.StateClosed {
+		t.Errorf("State after done = %q, want closed", done.Issue.State())
 	}
 
 	reopened, err := st.Apply(ctx, issue.ID, storage.Change{Action: model.Reopen{}, Actor: "ada"})
 	if err != nil {
 		t.Fatalf("Apply reopen error = %v", err)
 	}
-	if reopened.State() != model.StateOpen {
-		t.Errorf("State after reopen = %q, want open", reopened.State())
+	if reopened.Issue.State() != model.StateOpen {
+		t.Errorf("State after reopen = %q, want open", reopened.Issue.State())
 	}
 }
 
@@ -557,7 +559,7 @@ func aPhaseMoveRecordsItsEvent(t *testing.T, ctx context.Context, st storage.Sto
 		}
 		return model.PhaseOf(detail.Issue, detail.Events)
 	}
-	move := func(to model.Phase) (model.Issue, error) {
+	move := func(to model.Phase) (storage.Applied, error) {
 		return st.Apply(ctx, issue.ID, storage.Change{Action: model.SetPhase{Phase: to}, Actor: "ada"})
 	}
 	var refused model.ValidationError
@@ -601,8 +603,8 @@ func aPhaseMoveRecordsItsEvent(t *testing.T, ctx context.Context, st storage.Sto
 	if !slices.Equal(recorded.Changes, want) {
 		t.Errorf("phase event changes = %+v, want %+v", recorded.Changes, want)
 	}
-	if !moved.UpdatedAt.Equal(laterInstant) {
-		t.Errorf("UpdatedAt after phase move = %v, want %v", moved.UpdatedAt, laterInstant)
+	if !moved.Issue.UpdatedAt.Equal(laterInstant) {
+		t.Errorf("UpdatedAt after phase move = %v, want %v", moved.Issue.UpdatedAt, laterInstant)
 	}
 	if phase, _ := phaseOf(); phase != model.PhaseReview {
 		t.Errorf("phase after move = %q, want review", phase)
@@ -681,8 +683,8 @@ func historyRecordsMutations(t *testing.T, ctx context.Context, st storage.Store
 	if err != nil {
 		t.Fatalf("Apply reclaim error = %v", err)
 	}
-	if reclaimed.Assignee != "grace" {
-		t.Errorf("Assignee after reclaim = %q, want grace", reclaimed.Assignee)
+	if reclaimed.Issue.Assignee != "grace" {
+		t.Errorf("Assignee after reclaim = %q, want grace", reclaimed.Issue.Assignee)
 	}
 	if len(mustEvents(t, ctx, st)) == before {
 		t.Error("a reclaim wrote no event; the ownership change is the audit substrate")
@@ -766,6 +768,98 @@ func everyEditableFieldRecordsHistory(t *testing.T, ctx context.Context, st stor
 		if row := got[index]; row.To != edit.want {
 			t.Errorf("%s change row To = %q, want %q", edit.field, row.To, edit.want)
 		}
+	}
+}
+
+// aReportedHandoverIsTheOneRecorded holds Apply's report to the history it
+// wrote. A caller announces "claim transferred: X -> Y" from the handover
+// Apply returns, so the handover has to name the holder the record named
+// before the start and the holder the start recorded — each half checked
+// against the events, not against a second reading of the claim rule.
+//
+// The walk crosses every way a start can stand toward a claim: the first start
+// of a ticket whose assignee was preset, which takes it from nobody; the holder
+// starting it again; a second checkout taking it under the same assignee, so
+// only the checkout moves; that checkout handing it to a new assignee, so only
+// the assignee moves; and a done, which records a write and takes nothing.
+func aReportedHandoverIsTheOneRecorded(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "contested", Topic: "core", ParentID: epic.ID, Assignee: "ada"})
+	start := func(assignee string) storage.Applied {
+		t.Helper()
+		applied, err := st.Apply(ctx, issue.ID, storage.Change{Action: model.Start{Assignee: assignee}, Actor: assignee})
+		if err != nil {
+			t.Fatalf("Apply start as %s error = %v", assignee, err)
+		}
+		return applied
+	}
+	// recordedStart is the newest start event the stream wrote, found by
+	// attribution rather than by position among the issue's events.
+	recordedStart := func(stream string) model.IssueEvent {
+		t.Helper()
+		events, err := st.ListEvents(ctx, issue.ID)
+		if err != nil {
+			t.Fatalf("ListEvents error = %v", err)
+		}
+		var found []model.IssueEvent
+		for _, event := range events {
+			if event.Action == string(model.ActionStart) && event.Attribution.Stream() == stream {
+				found = append(found, event)
+			}
+		}
+		if len(found) == 0 {
+			t.Fatalf("no start event carries stream %q among %+v", stream, events)
+		}
+		return found[len(found)-1]
+	}
+
+	st.AttributeTo("checkout-a")
+	if first := start("ada"); first.Handover != nil {
+		t.Errorf("the first start of a preset assignee reported handover %+v; nobody had taken the ticket to hand it over", *first.Handover)
+	}
+	byA := recordedStart("checkout-a")
+	if again := start("ada"); again.Handover != nil {
+		t.Errorf("the holder starting its own ticket again reported handover %+v", *again.Handover)
+	}
+
+	st.AttributeTo("checkout-b")
+	taken := start("ada")
+	byB := recordedStart("checkout-b")
+	if byB.Attribution == byA.Attribution {
+		t.Fatalf("both start events carry %+v; the store did not record the second checkout", byA.Attribution)
+	}
+	want := claims.Handover{
+		From: claims.Claimant{Established: true, Assignee: "ada", Checkout: byA.Attribution},
+		To:   claims.Claimant{Established: true, Assignee: "ada", Checkout: byB.Attribution},
+	}
+	if taken.Handover == nil || *taken.Handover != want {
+		t.Errorf("a second checkout's takeover reported %+v, want %+v: the checkouts on the two recorded start events", taken.Handover, want)
+	}
+
+	handed := start("grace")
+	var assigneeRow model.FieldChange
+	for _, change := range recordedStart("checkout-b").Changes {
+		if change.Field == "assignee" {
+			assigneeRow = change
+		}
+	}
+	if assigneeRow != (model.FieldChange{Field: "assignee", From: "ada", To: "grace"}) {
+		t.Fatalf("the hand-off to grace recorded assignee row %+v, want ada -> grace", assigneeRow)
+	}
+	want = claims.Handover{
+		From: claims.Claimant{Established: true, Assignee: assigneeRow.From, Checkout: byB.Attribution},
+		To:   claims.Claimant{Established: true, Assignee: assigneeRow.To, Checkout: byB.Attribution},
+	}
+	if handed.Handover == nil || *handed.Handover != want {
+		t.Errorf("a hand-off to a new assignee reported %+v, want %+v: the assignee row the start recorded", handed.Handover, want)
+	}
+
+	done, err := st.Apply(ctx, issue.ID, storage.Change{Action: model.Done{}, Actor: "grace"})
+	if err != nil {
+		t.Fatalf("Apply done error = %v", err)
+	}
+	if done.Handover != nil {
+		t.Errorf("a done reported handover %+v; finishing a ticket takes nothing", *done.Handover)
 	}
 }
 
@@ -2066,8 +2160,8 @@ func followUpsLinkBothWays(t *testing.T, ctx context.Context, st storage.Store, 
 	if err != nil {
 		t.Fatalf("Apply error = %v", err)
 	}
-	if retitled.FollowsUp != origin.ID {
-		t.Errorf("FollowsUp after a field write = %q, want %q", retitled.FollowsUp, origin.ID)
+	if retitled.Issue.FollowsUp != origin.ID {
+		t.Errorf("FollowsUp after a field write = %q, want %q", retitled.Issue.FollowsUp, origin.ID)
 	}
 
 	export, err := st.Export(ctx)
@@ -2105,18 +2199,18 @@ func closeRedirectsToCanonical(t *testing.T, ctx context.Context, st storage.Sto
 	if err != nil {
 		t.Fatalf("Apply close-as-duplicate error = %v", err)
 	}
-	if closed.State() != model.StateClosed {
-		t.Errorf("State after close = %q, want closed", closed.State())
+	if closed.Issue.State() != model.StateClosed {
+		t.Errorf("State after close = %q, want closed", closed.Issue.State())
 	}
 	// The outcome travels through the state machine into the closed leaf, so
 	// both halves come back off the issue rather than out of a second write.
-	if resolution := closed.ResolutionValue(); resolution == nil || *resolution != model.ResolutionDuplicate {
+	if resolution := closed.Issue.ResolutionValue(); resolution == nil || *resolution != model.ResolutionDuplicate {
 		t.Errorf("Resolution after close = %v, want duplicate", resolution)
 	}
-	if target := closed.RedirectTargetValue(); target == nil || *target != canonical.ID {
+	if target := closed.Issue.RedirectTargetValue(); target == nil || *target != canonical.ID {
 		t.Errorf("RedirectTarget after close = %v, want %s", target, canonical.ID)
 	}
-	if closed.ClosedAtValue() == nil {
+	if closed.Issue.ClosedAtValue() == nil {
 		t.Error("ClosedAt after close is nil; a close must record when")
 	}
 
@@ -2127,9 +2221,9 @@ func closeRedirectsToCanonical(t *testing.T, ctx context.Context, st storage.Sto
 	// Reopening clears the whole close payload together — a live issue
 	// carrying a stale resolution or redirect is a state no reader could make
 	// sense of.
-	if reopened.ResolutionValue() != nil || reopened.RedirectTargetValue() != nil || reopened.ClosedAtValue() != nil {
+	if reopened.Issue.ResolutionValue() != nil || reopened.Issue.RedirectTargetValue() != nil || reopened.Issue.ClosedAtValue() != nil {
 		t.Errorf("reopen left a close payload: resolution=%v redirect=%v closedAt=%v",
-			reopened.ResolutionValue(), reopened.RedirectTargetValue(), reopened.ClosedAtValue())
+			reopened.Issue.ResolutionValue(), reopened.Issue.RedirectTargetValue(), reopened.Issue.ClosedAtValue())
 	}
 
 	_, err = st.Apply(ctx, duplicate.ID, storage.Change{
