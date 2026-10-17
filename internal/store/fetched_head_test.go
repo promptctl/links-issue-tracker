@@ -295,12 +295,13 @@ func TestLandFetchedHeadLeavesTheLiveStoreAloneForAnAbsentBranch(t *testing.T) {
 	}
 }
 
-// TestRemoteCacheLandingCopiesOnlyWhatTheCloneAdded drives the git half with
-// plain git: the clone's mirror gained a ref and the commit behind it, and a
-// ref both mirrors hold differs. The live mirror gains the new ref and its
-// objects and keeps its own value of the shared ref; a mirror only the clone
-// has is moved over whole.
-func TestRemoteCacheLandingCopiesOnlyWhatTheCloneAdded(t *testing.T) {
+// TestRemoteCacheLandingCopiesEveryRefTheCloneHoldsDifferently drives the git
+// half with plain git: the clone's mirror gained a ref, moved its last-known
+// ref onto an unrelated commit — a non-fast-forward, as a remote that was reset
+// produces — and shares one ref unchanged. The live mirror gains the new ref
+// and the clone's last-known value with their objects, and the unchanged ref
+// stays as it was; a mirror only the clone has is moved over whole.
+func TestRemoteCacheLandingCopiesEveryRefTheCloneHoldsDifferently(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
@@ -339,10 +340,13 @@ func TestRemoteCacheLandingCopiesOnlyWhatTheCloneAdded(t *testing.T) {
 			t.Fatalf("git init %s: %v\n%s", dir, err, out)
 		}
 	}
-	const shared = "refs/dolt/remotes/origin/dolt/data/shared"
+	const lastKnown = lastKnownRefNamespace + "origin/dolt/data"
+	const unchanged = "refs/dolt/remotes/origin/dolt/data/unchanged"
 	const added = "refs/dolt/remotes/origin/dolt/data/added"
-	liveShared := commitOn(liveRepo, shared, "live's value")
-	commitOn(cloneRepo, shared, "clone's value")
+	commitOn(liveRepo, lastKnown, "where live last saw the remote")
+	cloneLastKnown := commitOn(cloneRepo, lastKnown, "where the clone's fetch saw it")
+	liveUnchanged := commitOn(liveRepo, unchanged, "both hold this")
+	git(cloneRepo, "fetch", "--quiet", liveRepo, unchanged+":"+unchanged)
 	addedOID := commitOn(cloneRepo, added, "what the clone fetched")
 
 	plan, err := planRemoteCacheLanding(ctx, liveBase, cloneBase)
@@ -358,8 +362,14 @@ func TestRemoteCacheLandingCopiesOnlyWhatTheCloneAdded(t *testing.T) {
 	if got := git(liveRepo, "cat-file", "-t", addedOID); got != "commit" {
 		t.Fatalf("live mirror holds %s as %q, want its commit", addedOID, got)
 	}
-	if got := git(liveRepo, "rev-parse", shared); got != liveShared {
-		t.Fatalf("landing overwrote the live mirror's %s with %s; want its own %s kept", shared, got, liveShared)
+	if got := git(liveRepo, "rev-parse", lastKnown); got != cloneLastKnown {
+		t.Fatalf("live mirror's %s = %s, want the clone's %s", lastKnown, got, cloneLastKnown)
+	}
+	if got := git(liveRepo, "rev-parse", unchanged); got != liveUnchanged {
+		t.Fatalf("live mirror's %s = %s, want it left at %s", unchanged, got, liveUnchanged)
+	}
+	if len(plan.copies) != 1 || len(plan.copies[0].refspecs) != 2 {
+		t.Fatalf("plan copies = %+v, want one mirror carrying exactly the two refs that differ", plan.copies)
 	}
 	if _, err := os.Stat(filepath.Join(liveBase, onlyCloneKey, "repo.git")); err != nil {
 		t.Fatalf("the mirror only the clone had was not moved into the live store: %v", err)

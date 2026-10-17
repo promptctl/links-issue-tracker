@@ -654,6 +654,7 @@ func (s *Store) SyncCompactAndPush(ctx context.Context, remote string, branch st
 	var result storage.SyncPushResult
 	var attempt compactionAttempt
 	var depthErr error
+	var sweep refSweepOutcome
 	err := s.runSyncMutation(ctx, func(ctx context.Context) error {
 		// Measured inside the lock, where no other mutation can grow the
 		// journal between the reading and the pass it selects.
@@ -664,6 +665,14 @@ func (s *Store) SyncCompactAndPush(ctx context.Context, remote string, branch st
 		if compactErr != nil {
 			return compactErr
 		}
+		// The one moment orphaned instance refs can be told from live ones:
+		// compaction's reconnect just closed every remote database this
+		// process held, and the push below has not opened one yet, while
+		// Dolt's LOCK keeps every other write engine off the store. Before
+		// the push, too, so the push fetches against the mirror as it will
+		// be kept rather than against refs about to be deleted.
+		// [LAW:no-ambient-temporal-coupling]
+		sweep = sweep.plus(s.sweepOrphanedInstanceRefs(ctx))
 		pushed, pushErr := s.pushWithinLock(ctx, remote, branch, setUpstream, force)
 		result = pushed
 		return pushErr
@@ -688,7 +697,7 @@ func (s *Store) SyncCompactAndPush(ctx context.Context, remote string, branch st
 		// gated on the push succeeding for a real reason: the prune needs the
 		// push to have opened the live mirror so its derivation has something
 		// true to check against. Compaction depends on nothing the push does.
-		return storage.SyncPushResult{}, annotateWithMaintenance(err, compactionReport(attempt, depthErr))
+		return storage.SyncPushResult{}, annotateWithMaintenance(err, joinMaintenance(compactionReport(attempt, depthErr), sweep.Report()))
 	}
 	// DOLT_GC above compacts `noms`; this collects the other half of the store's
 	// local footprint, the abandoned git remote mirrors.
@@ -710,10 +719,11 @@ func (s *Store) SyncCompactAndPush(ctx context.Context, remote string, branch st
 	// costs disk, while a failed `lit sync push` costs the user their sync.
 	// [LAW:dataflow-not-control-flow] the prune runs every time and reports as a
 	// value; nothing branches on whether it did.
-	// Two maintenance jobs share one operator-facing channel, each reporting
+	// The maintenance jobs share one operator-facing channel, each reporting
 	// only what is worth saying. [LAW:one-type-per-behavior]
 	result.Maintenance = joinMaintenance(
 		compactionReport(attempt, depthErr),
+		sweep.Report(),
 		s.pruneRemoteCache(ctx).Report(),
 	)
 	return result, nil

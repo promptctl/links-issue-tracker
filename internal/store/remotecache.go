@@ -190,22 +190,28 @@ func plural(n int, one, many string) string {
 	return many
 }
 
-// remoteCachePruneOutcome is what one prune attempt has to say for itself. It is
-// produced on every path — success, refusal, and I/O failure alike — because a
-// prune must never retract a push that already succeeded, and must never go
-// quiet either. [LAW:dataflow-not-control-flow] the caller runs the same steps
-// every time and renders this value; it does not branch on whether a prune ran.
-type remoteCachePruneOutcome struct {
+// remoteCacheCollection is what one collection job over the remote cache has to
+// say for itself: how much it removed, the bytes that freed, and why it stopped
+// short, if it did. It is produced on every path — success, refusal, and I/O
+// failure alike — because a collection rides on a push that already succeeded
+// or is about to, must never retract it, and must never go quiet either.
+// [LAW:dataflow-not-control-flow] the caller runs the same steps every time and
+// renders this value; it does not branch on whether a collection ran.
+//
+// Each job is its own named type over this shape (remoteCachePruneOutcome,
+// refSweepOutcome), so the type a caller holds says which job it is reporting
+// on and the rendering below is written once. [LAW:one-type-per-behavior]
+type remoteCacheCollection struct {
 	Removed   int
 	Reclaimed int64
-	// Problem is why the prune did not run to completion, empty when it did. It
+	// Problem is why the job did not run to completion, empty when it did. It
 	// carries refusals and I/O failures alike: from the caller's seat both mean
 	// "the cache was not collected this run, and here is why".
 	Problem string
 }
 
-// Report renders the line a caller surfaces, and is empty exactly when the prune
-// looked and found nothing to do.
+// report renders the line a caller surfaces, naming the job and what it
+// removes, and is empty exactly when the job looked and found nothing to do.
 //
 // Empty is not a swallowed failure here: every state that matters — work
 // performed, work declined, I/O failure — renders non-empty, so nothing a reader
@@ -213,28 +219,37 @@ type remoteCachePruneOutcome struct {
 // this line rides on every push, and "nothing abandoned" repeated forever is how
 // a channel stops being read before the one message that mattered arrives.
 //
-// A problem does not erase confirmed work. Removing a directory is not undone by
-// a later error, so a run that collected two mirrors and then failed on the third
+// A problem does not erase confirmed work. A removal is not undone by a later
+// error, so a run that collected two things and then failed on the third
 // reports both facts in that order. [LAW:no-silent-failure] the earlier arm must
 // not swallow what the loop already proved.
-func (o remoteCachePruneOutcome) Report() string {
+func (o remoteCacheCollection) report(job, one, many string) string {
 	switch {
 	case o.Problem != "" && o.Removed > 0:
-		return fmt.Sprintf("remote-cache prune: removed %d abandoned mirror%s (%s), then failed: %s",
-			o.Removed, plural(o.Removed, "", "s"), humanBytes(o.Reclaimed), o.Problem)
+		return fmt.Sprintf("%s: removed %d %s (%s), then failed: %s",
+			job, o.Removed, plural(o.Removed, one, many), humanBytes(o.Reclaimed), o.Problem)
 	case o.Problem != "":
-		return "remote-cache prune: " + o.Problem
+		return job + ": " + o.Problem
 	case o.Removed > 0:
-		return fmt.Sprintf("remote-cache prune: removed %d abandoned mirror%s, reclaimed %s",
-			o.Removed, plural(o.Removed, "", "s"), humanBytes(o.Reclaimed))
+		return fmt.Sprintf("%s: removed %d %s, reclaimed %s",
+			job, o.Removed, plural(o.Removed, one, many), humanBytes(o.Reclaimed))
 	default:
 		return ""
 	}
 }
 
+// remoteCachePruneOutcome is what one prune of abandoned mirrors has to say for
+// itself.
+type remoteCachePruneOutcome remoteCacheCollection
+
+// Report renders the prune's line; see remoteCacheCollection.report.
+func (o remoteCachePruneOutcome) Report() string {
+	return remoteCacheCollection(o).report("remote-cache prune", "abandoned mirror", "abandoned mirrors")
+}
+
 // humanBytes renders a byte count for operator-facing output. Package-private,
 // and shared by both of this package's maintenance reporters — compaction's
-// footprintDelta and the remote-cache prune's Report — so the two cannot
+// footprintDelta and the remote-cache collections' report — so the two cannot
 // disagree about how a size is spelled. The CLI renders no size of its own; it
 // prints the accounts these reporters already produced, which is why one
 // spelling here is enough to make every spelling agree.
