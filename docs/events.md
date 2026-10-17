@@ -169,7 +169,7 @@ one `--at` names, not the working directory's.
 
 | Key | Meaning |
 | --- | --- |
-| `bootstrap` | `built` when the open found no database and built it; `built_over_dead_staging` when it built it after removing the half-built one a lit process that died while building left behind; `none` when the database was already there, and for opens that only read. |
+| `bootstrap` | `built` when the open found no database and built it; `built_over_dead_build` when it built it after removing what a lit process that died while building left behind; `none` when the database was already there, and for opens that only read. |
 | `migration.snapshot` | The recovery snapshot the open took before migrating, or `""` when there was nothing to migrate. |
 | `migration.snapshot_prune_error` | Why older migration snapshots could not be removed after the migration, or `null`. The command runs all the same, and prints a `warning: old migration snapshots were not removed:` line on stderr. A command whose open fails after migrating records neither key, and its error includes the failure. |
 

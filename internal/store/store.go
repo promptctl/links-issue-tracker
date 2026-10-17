@@ -2928,8 +2928,11 @@ func ensureDoltDatabase(ctx context.Context, doltRootDir string, workspaceID str
 		return storage.BootstrapNone, nil
 	}
 	staging := bootstrapStagingPath(root)
-	bootstrap, err := buildDoltRoot(ctx, staging, workspaceID)
+	bootstrap, err := discardDeadBuilds(staging, filepath.Join(root, doltDatabaseName))
 	if err != nil {
+		return storage.BootstrapNone, err
+	}
+	if err := buildDoltRoot(ctx, staging, workspaceID); err != nil {
 		return storage.BootstrapNone, errors.Join(err, os.RemoveAll(staging))
 	}
 	if err := installDoltRoot(staging, root); err != nil {
@@ -2938,24 +2941,35 @@ func ensureDoltDatabase(ctx context.Context, doltRootDir string, workspaceID str
 	return bootstrap, nil
 }
 
-// buildDoltRoot lays a fresh Dolt root down at staging: the database created
-// and its default branch named master. Whatever stands at staging is a dead
-// builder's leftover — the caller holds the bootstrap lock, the kernel's proof
-// that no live builder owns it — so it is removed first, and the build says
-// so.
-func buildDoltRoot(ctx context.Context, staging string, workspaceID string) (storage.Bootstrap, error) {
+// discardDeadBuilds clears the paths a build writes of what a builder that
+// died mid-build left there: the staging root, and a database directory with
+// no .dolt in it, which is what a lit from before staged builds left when it
+// died laying a database down in place. The caller holds the bootstrap lock
+// and found no database, so no builder that takes the lock owns either path,
+// and with both cleared the build and its install write onto nothing. The
+// "is there a database" check and the install's rename then agree on what
+// the database is. Reports whether there was anything to discard.
+func discardDeadBuilds(paths ...string) (storage.Bootstrap, error) {
 	bootstrap := storage.BootstrapBuilt
-	switch _, err := os.Lstat(staging); {
-	case err == nil:
-		bootstrap = storage.BootstrapBuiltOverDeadStaging
-		if err := os.RemoveAll(staging); err != nil {
-			return storage.BootstrapNone, fmt.Errorf("remove a dead bootstrap's staging root: %w", err)
+	for _, path := range paths {
+		switch _, err := os.Lstat(path); {
+		case err == nil:
+			bootstrap = storage.BootstrapBuiltOverDeadBuild
+			if err := os.RemoveAll(path); err != nil {
+				return storage.BootstrapNone, fmt.Errorf("remove a dead build's leftover: %w", err)
+			}
+		case !errors.Is(err, os.ErrNotExist):
+			return storage.BootstrapNone, fmt.Errorf("stat a build's path for a dead build's leftover: %w", err)
 		}
-	case !errors.Is(err, os.ErrNotExist):
-		return storage.BootstrapNone, fmt.Errorf("stat bootstrap staging root: %w", err)
 	}
+	return bootstrap, nil
+}
+
+// buildDoltRoot lays a fresh Dolt root down at staging, which the caller has
+// cleared: the database created and its default branch named master.
+func buildDoltRoot(ctx context.Context, staging string, workspaceID string) error {
 	if err := os.MkdirAll(staging, 0o755); err != nil {
-		return storage.BootstrapNone, fmt.Errorf("create bootstrap staging root: %w", err)
+		return fmt.Errorf("create bootstrap staging root: %w", err)
 	}
 	// The two bootstrap pools run strictly one-after-another: with the singleton
 	// cache bypassed, each pool owns a real engine whose journal lock lives until
@@ -2976,17 +2990,17 @@ func buildDoltRoot(ctx context.Context, staging string, workspaceID string) (sto
 		// The bootstrap pools open their engines at first exec, so a foreign
 		// journal-lock holder surfaces here; the wrapper names the holder,
 		// every other failure passes through untouched.
-		return storage.BootstrapNone, wrapEngineOpenContention(err, staging)
+		return wrapEngineOpenContention(err, staging)
 	}
 	db, err := openDoltPool(staging, workspaceID, doltDatabaseName, engineWrite)
 	if err != nil {
-		return storage.BootstrapNone, err
+		return err
 	}
 	defer db.Close()
 	if err := ensureMasterDefaultBranch(ctx, db); err != nil {
-		return storage.BootstrapNone, wrapEngineOpenContention(err, staging)
+		return wrapEngineOpenContention(err, staging)
 	}
-	return bootstrap, nil
+	return nil
 }
 
 // installDoltRoot moves a built database into place with one rename, onto

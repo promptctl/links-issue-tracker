@@ -238,8 +238,8 @@ type Migrated struct {
 
 // Bootstrap is what an open did to make its database exist.
 // [LAW:types-are-the-program] one value, not a built flag beside a discarded
-// flag: a discarded staging root is a fact about a build, so "discarded but
-// built nothing" has no value to be.
+// flag: a discarded leftover is a fact about a build, so "discarded but built
+// nothing" has no value to be.
 type Bootstrap int
 
 const (
@@ -248,9 +248,9 @@ const (
 	BootstrapNone Bootstrap = iota
 	// BootstrapBuilt: the open found no database and built it.
 	BootstrapBuilt
-	// BootstrapBuiltOverDeadStaging: the open built the database after
-	// discarding the half-built root a builder that died mid-build left.
-	BootstrapBuiltOverDeadStaging
+	// BootstrapBuiltOverDeadBuild: the open built the database after
+	// discarding what a builder that died mid-build left behind.
+	BootstrapBuiltOverDeadBuild
 )
 
 // Built reports whether the open built the database.
@@ -265,8 +265,8 @@ func (b Bootstrap) String() string {
 		return "none"
 	case BootstrapBuilt:
 		return "built"
-	case BootstrapBuiltOverDeadStaging:
-		return "built_over_dead_staging"
+	case BootstrapBuiltOverDeadBuild:
+		return "built_over_dead_build"
 	default:
 		return fmt.Sprintf("Bootstrap(%d)", int(b))
 	}

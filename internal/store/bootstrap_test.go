@@ -146,31 +146,37 @@ func TestRacingFirstOpensBuildOneDatabase(t *testing.T) {
 	}
 }
 
-// A builder that died mid-build leaves its staging root behind. The next
-// bootstrap holds the lock that proves the builder is gone, so it discards
-// the leftover, builds, says it built over a dead builder's staging, and
-// leaves nothing at the staging path.
-func TestBootstrapDiscardsADeadBuildersStaging(t *testing.T) {
+// A builder that died mid-build leaves its partial work behind: a staging
+// root, or, from a lit that built in place, a database directory with no
+// .dolt in it. The next bootstrap holds the lock that proves no builder owns
+// either, so it discards the leftover, builds, says it built over a dead
+// build, and leaves nothing at the staging path.
+func TestBootstrapDiscardsADeadBuildsLeftover(t *testing.T) {
 	t.Parallel()
-	root := filepath.Join(t.TempDir(), "dolt")
-	leftover := filepath.Join(bootstrapStagingPath(root), doltDatabaseName, ".dolt")
-	if err := os.MkdirAll(leftover, 0o755); err != nil {
-		t.Fatalf("MkdirAll() = %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(leftover, "repo_state.json"), []byte("half-written"), 0o644); err != nil {
-		t.Fatalf("WriteFile() = %v", err)
-	}
-	bootstrap, err := EnsureDatabase(context.Background(), root, "test-workspace-id")
-	if err != nil || bootstrap != storage.BootstrapBuiltOverDeadStaging {
-		t.Fatalf("EnsureDatabase() = %v, %v; want %v", bootstrap, err, storage.BootstrapBuiltOverDeadStaging)
-	}
-	assertNoBootstrapStaging(t, root)
-	st, err := Open(context.Background(), root, "test-workspace-id")
-	if err != nil {
-		t.Fatalf("Open() = %v", err)
-	}
-	if err := st.Close(); err != nil {
-		t.Fatalf("Close() = %v", err)
+	for _, leftover := range []func(root string) string{
+		func(root string) string { return filepath.Join(bootstrapStagingPath(root), doltDatabaseName, ".dolt") },
+		func(root string) string { return filepath.Join(root, doltDatabaseName, "partial") },
+	} {
+		root := filepath.Join(t.TempDir(), "dolt")
+		dir := leftover(root)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("MkdirAll() = %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "repo_state.json"), []byte("half-written"), 0o644); err != nil {
+			t.Fatalf("WriteFile() = %v", err)
+		}
+		bootstrap, err := EnsureDatabase(context.Background(), root, "test-workspace-id")
+		if err != nil || bootstrap != storage.BootstrapBuiltOverDeadBuild {
+			t.Fatalf("EnsureDatabase() over %s = %v, %v; want %v", dir, bootstrap, err, storage.BootstrapBuiltOverDeadBuild)
+		}
+		assertNoBootstrapStaging(t, root)
+		st, err := Open(context.Background(), root, "test-workspace-id")
+		if err != nil {
+			t.Fatalf("Open() after building over %s = %v", dir, err)
+		}
+		if err := st.Close(); err != nil {
+			t.Fatalf("Close() = %v", err)
+		}
 	}
 }
 
