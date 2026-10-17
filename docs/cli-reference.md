@@ -449,8 +449,9 @@ status and any cross-epic dependencies. Exits 4 if the ID doesn't exist.
 
 ```text
 lit new --title <text> --topic <slug> --parent <epic-id> [--type task|feature|bug|chore]
-        [--description <text>] [--lane <key>] [--priority normal|urgent]
-        [--labels <csv>] [--assignee <a>] [--prompt <text>] [--top]
+        [--description <text> | --description-file <path|->] [--lane <key>]
+        [--priority normal|urgent] [--labels <csv>] [--assignee <a>]
+        [--prompt <text> | --prompt-file <path|->] [--top]
 lit new --title <text> --topic <slug> --type epic [--parent <epic-id>] [...]
 ```
 
@@ -473,6 +474,12 @@ partitions an epic's children into parallel rank-ordered sub-sequences: a shared
 serializes, distinct lanes parallelize. `--prompt` stores a reusable agent prompt for
 the work the issue captures.
 
+`--description-file <path>` and `--prompt-file <path>` read those fields from a file,
+or from stdin when the path is `-`, so a long text never passes through shell
+quoting. Giving a field both ways (`--description` and `--description-file`) is a
+usage error, as is a path that cannot be read. `lit update` and `lit followup` take
+the same pairs.
+
 `--priority` takes the word every read surface prints — `normal` or `urgent`, as
 `lit show` and the issue rows render it — so a priority you read back can be pasted
 straight into the flag that sets it. The numeric spelling `lit export` writes and the
@@ -483,7 +490,8 @@ value. Anything else is refused: the domain has exactly these two levels, so
 ### `lit update`
 
 ```text
-lit update <id> [--title <text>] [--description <text>] [--prompt <text>]
+lit update <id> [--title <text>] [--description <text> | --description-file <path|->]
+           [--prompt <text> | --prompt-file <path|->]
            [--type <t>] [--priority normal|urgent] [--assignee <a>] [--labels <csv>]
            [--lane <key>] [--reason <text>]
 ```
@@ -500,11 +508,13 @@ the issue to unassigned. `--reason` is recorded on the field-change event.
 ### `lit comment add` / `lit comment rm`
 
 ```text
-lit comment add <id> --body <text>
+lit comment add <id> (--body <text> | --body-file <path|->)
 lit comment rm <comment-id>
 ```
 
-Comments are the work trail: plans, findings, hand-off notes. Removal takes the
+Comments are the work trail: plans, findings, hand-off notes. `--body-file` reads the
+body from a file, or from stdin when the path is `-`, so a multi-paragraph comment
+never passes through shell quoting; give `--body` or `--body-file`, not both. Removal takes the
 comment's own ID (shown in `lit show`), not the issue ID.
 
 ### `lit label add` / `lit label rm`
