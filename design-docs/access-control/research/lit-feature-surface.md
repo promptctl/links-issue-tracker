@@ -123,7 +123,8 @@ currently a fixed placeholder constant, identical for every issue in every
 workspace — it carries zero attributive information, so no historical
 creator signal exists for issues anywhere, not even approximately in the
 id.) A child id is its parent's id
-plus a sequence number, so ids alone reveal parentage and sibling count. Ids
+plus a hash of its own, so ids alone reveal the parent each issue was created
+under. Ids
 appear everywhere: every output, every relation row, every trace, and in
 branch names derived from tickets.
 

@@ -377,9 +377,11 @@ The current code, mapped so the design's claims are checkable:
   schema-derived or dissolve into the engine — resolved with the storage
   substrate, not before.
 - **Ranking's two-level frame** ("a child's stand-in is its epic,"
-  `internal/store/ranking.go:212-251`), **lanes** as epic-scoped by
-  definition (`model.go:212`), and **ID minting** (`parent.<n>`,
-  `issue_ids.go:14`) all assume one containment level. §open carries them.
+  `internal/store/ranking.go:212-251`) and **lanes** as epic-scoped by
+  definition (`model.go:212`) both assume one containment level. **ID
+  minting** (`<parent>.<hash>`, `issue_ids.go:17`) works at any depth, but
+  writes the parent a ticket was created under into its id. §open carries all
+  three.
 
 ## Where the schema lives, and the road
 
@@ -421,9 +423,11 @@ cache — and nothing in this design may take a dependency that dies with Dolt
    at each level compose (likely — rank is per-sibling-set), and what does a
    lane generalize to (a per-work-unit sub-grouping?)? Needs its own design
    pass with the rank machinery open.
-2. **ID minting at depth.** `parent.<n>` nests legibly
-   (`feat-x.2.3`), but reparenting and unit moves interact with ID identity.
-   Position wanted before the storage design.
+2. **ID minting at depth.** A child id is its parent's id plus a hash
+   segment, so a grandchild reads like `feat-x.k3f.9qa` and every id spells
+   out the ancestry it was created under. Reparenting and unit moves change
+   that ancestry but not the id, so they interact with ID identity. Position
+   wanted before the storage design.
 3. **Type identity vs display name.** Is the type name the stable ID policy
    references (rename = new type + migration), or do types carry a separate
    immutable ID? Leaning name-is-ID for legibility; revisit with RBAC.
