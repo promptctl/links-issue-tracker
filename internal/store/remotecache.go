@@ -66,8 +66,8 @@ const (
 // TestRemoteCacheKeyMatchesDoltLayout pins it against a cache directory Dolt
 // itself created, so a scheme change upstream fails a test rather than producing
 // quiet nonsense. And planRemoteCachePrune declines to delete anything once the
-// derivation has failed to account for a configured remote, so a copy that HAS
-// drifted stops the prune instead of misdirecting it — which matters, because
+// derivation has failed to account for a configured remote that has been
+// opened, so a copy that HAS drifted stops the prune instead of misdirecting it — which matters, because
 // the drift this guards against is not hypothetical: a home-relative scp URL
 // normalizes to `ssh://git@host/./path`, and dropping that `/./` yields a
 // perfectly plausible key that points at no directory on disk.
@@ -107,14 +107,34 @@ func isRemoteCacheKey(name string) bool {
 	return err == nil
 }
 
+// expectedMirror is one configured git-backed remote as the prune sees it: the
+// name a refusal reports, and whether this store proves the remote has never
+// been opened.
+type expectedMirror struct {
+	remote string
+	// neverOpened is true only on evidence: this store holds no tracking branch
+	// under the remote's name. Dolt sets `remotes/<remote>/<branch>` on every
+	// push and fetch that lands, and writes a mirror only when a remote is
+	// used, so a remote with no tracking branch has no mirror anywhere for a
+	// derivation to miss. The evidence is keyed by the remote's name, never by
+	// its URL, so a wrong key derivation cannot forge it. The zero value claims
+	// nothing: an entry built without the evidence counts as opened and keeps
+	// the refusal armed.
+	neverOpened bool
+}
+
 // remoteCachePlan names the cache directories no configured remote maps to. It
-// exists only when the derivation accounted for every configured remote, so
-// holding one is itself the proof that the keys matched reality.
+// exists only when the derivation accounted for every remote that has been
+// opened, so holding one is itself the proof that the keys matched reality.
 // [LAW:parse-dont-validate] the plan is a type that could not have been
 // constructed before the check ran; nothing downstream re-asks whether deleting
 // is safe.
 type remoteCachePlan struct {
 	abandoned []string
+	// neverOpened names the remotes with no directory that the plan excused on
+	// the evidence that they have never been opened. Without it, each one would
+	// have refused the plan.
+	neverOpened []string
 }
 
 // planRemoteCachePrune decides which cache keys are abandoned.
@@ -127,23 +147,23 @@ type remoteCachePlan struct {
 // wrong and never produced the live key. Left collapsed, a broken derivation
 // reads as evidence about the disk: the prune deletes the live mirror, the next
 // push silently re-clones it, and the feature inverts into a per-push churn of
-// the entire cache with no error raised anywhere. So when some configured remote
-// has no directory AND there is something to delete, the two cases cannot be
-// told apart and the prune declines wholesale. [LAW:no-silent-failure]
+// the entire cache with no error raised anywhere. A broken derivation shows
+// itself as a remote that has been opened and has no directory, so when such a
+// remote exists AND there is something to delete, the prune declines wholesale.
+// [LAW:no-silent-failure]
 //
-// A missing directory is itself two facts wearing one shape — a broken
-// derivation, or a remote nothing has opened yet, since Dolt writes a mirror on
-// first use and not when a remote is configured. The refusal deliberately does
-// NOT try to separate them by narrowing to the remote being pushed. That reading
-// looks safe and is not: derivation drift is URL-shape-specific, which is the
-// only kind this code has met, so verifying the pushed remote's key says nothing
-// about a differently-shaped sibling — and under a narrowed gate that sibling's
-// LIVE mirror is exactly what lands in `abandoned` and gets deleted. Refusing on
-// either cause costs disk that nobody loses; separating them costs the mirror.
+// A remote that has never been opened is excused: it has no mirror for a broken
+// derivation to miss, and the evidence for that (expectedMirror.neverOpened)
+// does not pass through the derivation. The refusal is NOT narrowed to the
+// remote being pushed instead. That reading looks safe and is not: derivation
+// drift is URL-shape-specific, which is the only kind this code has met, so
+// verifying the pushed remote's key says nothing about a differently-shaped
+// sibling — and under a narrowed gate that sibling's LIVE mirror is exactly
+// what lands in `abandoned` and gets deleted.
 //
 // A store that has never pushed trips nothing: it has no directories, so there
-// is nothing to delete and the unaccounted keys are just a cache not yet built.
-func planRemoteCachePrune(expected map[string]string, onDisk []string) (remoteCachePlan, error) {
+// is nothing to delete.
+func planRemoteCachePrune(expected map[string]expectedMirror, onDisk []string) (remoteCachePlan, error) {
 	present := make(map[string]struct{}, len(onDisk))
 	for _, key := range onDisk {
 		present[key] = struct{}{}
@@ -157,30 +177,36 @@ func planRemoteCachePrune(expected map[string]string, onDisk []string) (remoteCa
 	}
 	sort.Strings(abandoned)
 
-	unaccounted := make([]string, 0, len(expected))
-	for key, remoteName := range expected {
-		if _, found := present[key]; !found {
-			unaccounted = append(unaccounted, fmt.Sprintf("%s→%s", remoteName, key))
+	var unaccounted, neverOpened []string
+	for key, mirror := range expected {
+		if _, found := present[key]; found {
+			continue
 		}
+		if mirror.neverOpened {
+			neverOpened = append(neverOpened, mirror.remote)
+			continue
+		}
+		unaccounted = append(unaccounted, fmt.Sprintf("%s→%s", mirror.remote, key))
 	}
 	sort.Strings(unaccounted)
+	sort.Strings(neverOpened)
 
 	if len(abandoned) > 0 && len(unaccounted) > 0 {
 		return remoteCachePlan{}, fmt.Errorf(
-			"declining to prune: %d cache director%s match no configured remote, but %d configured "+
-				"remote%s also %s no directory (%s). That is two possible facts wearing one shape, and "+
-				"this code cannot tell which it is looking at: either the key derivation disagrees with "+
-				"what Dolt actually wrote, or those remotes have simply never been opened — Dolt writes "+
-				"a mirror on first use, never when a remote is configured. While both readings stand an "+
-				"unmatched directory cannot be told apart from a live mirror this code failed to find, "+
-				"so nothing was deleted. One `lit sync push --remote <name>` or `lit sync fetch --remote "+
-				"<name>` through each remote named above creates its directory and settles it",
+			"declining to prune: %d cache director%s match no configured remote, but %d remote%s this "+
+				"store holds tracking branches for also %s no directory (%s). Either the key derivation "+
+				"disagrees with what Dolt actually wrote, or the mirror was built outside this store — a "+
+				"push from a copy of this store, as the background mirror makes, records the tracking branch "+
+				"here and keeps the mirror in the copy. While both readings stand an unmatched directory "+
+				"cannot be told apart from a live mirror this code failed to find, so nothing was deleted. "+
+				"One `lit sync push --remote <name>` or `lit sync fetch --remote <name>` through each remote "+
+				"named above creates its directory here and settles it",
 			len(abandoned), plural(len(abandoned), "y", "ies"),
 			len(unaccounted), plural(len(unaccounted), "", "s"),
 			plural(len(unaccounted), "has", "have"),
 			strings.Join(unaccounted, ", "))
 	}
-	return remoteCachePlan{abandoned: abandoned}, nil
+	return remoteCachePlan{abandoned: abandoned, neverOpened: neverOpened}, nil
 }
 
 func plural(n int, one, many string) string {
@@ -224,13 +250,16 @@ type remoteCacheCollection struct {
 // reports both facts in that order. [LAW:no-silent-failure] the earlier arm must
 // not swallow what the loop already proved.
 func (o remoteCacheCollection) report(job, one, many string) string {
+	// Bytes freed with nothing removed is a sibling prune that finished a
+	// directory this one was part-way through: confirmed work all the same.
+	didWork := o.Removed > 0 || o.Reclaimed > 0
 	switch {
-	case o.Problem != "" && o.Removed > 0:
+	case o.Problem != "" && didWork:
 		return fmt.Sprintf("%s: removed %d %s (%s), then failed: %s",
 			job, o.Removed, plural(o.Removed, one, many), humanBytes(o.Reclaimed), o.Problem)
 	case o.Problem != "":
 		return job + ": " + o.Problem
-	case o.Removed > 0:
+	case didWork:
 		return fmt.Sprintf("%s: removed %d %s, reclaimed %s",
 			job, o.Removed, plural(o.Removed, one, many), humanBytes(o.Reclaimed))
 	default:
@@ -239,12 +268,27 @@ func (o remoteCacheCollection) report(job, one, many string) string {
 }
 
 // remoteCachePruneOutcome is what one prune of abandoned mirrors has to say for
-// itself.
-type remoteCachePruneOutcome remoteCacheCollection
+// itself, including the remotes it excused as never opened.
+type remoteCachePruneOutcome struct {
+	remoteCacheCollection
+	// NeverOpened is the plan's neverOpened: remotes with no directory that the
+	// prune went ahead beside rather than refusing over.
+	NeverOpened []string
+}
 
-// Report renders the prune's line; see remoteCacheCollection.report.
+// Report renders the prune's line; see remoteCacheCollection.report. The
+// excused remotes ride on a line that already speaks, because excusing one
+// matters only when the prune acted on the plan, and it must never make a
+// quiet run speak.
 func (o remoteCachePruneOutcome) Report() string {
-	return remoteCacheCollection(o).report("remote-cache prune", "abandoned mirror", "abandoned mirrors")
+	line := o.report("remote-cache prune", "abandoned mirror", "abandoned mirrors")
+	if line == "" || len(o.NeverOpened) == 0 {
+		return line
+	}
+	n := len(o.NeverOpened)
+	return fmt.Sprintf("%s; excused %s %s: this store holds no tracking branch for %s, so %s never been opened",
+		line, plural(n, "remote", "remotes"), strings.Join(o.NeverOpened, ", "),
+		plural(n, "it", "them"), plural(n, "it has", "they have"))
 }
 
 // humanBytes renders a byte count for operator-facing output. Package-private,
@@ -302,8 +346,8 @@ func listRemoteCacheKeys(base string) ([]string, error) {
 	return keys, nil
 }
 
-// dirSize totals the bytes under root, so an outcome reports what pruning
-// actually reclaimed rather than how many directories it touched.
+// dirSize totals the bytes under root, so an outcome reports what collecting
+// actually reclaimed rather than how many things it touched.
 func dirSize(root string) (int64, error) {
 	var total int64
 	err := filepath.WalkDir(root, func(_ string, entry fs.DirEntry, err error) error {
@@ -324,10 +368,11 @@ func dirSize(root string) (int64, error) {
 }
 
 // expectedRemoteCacheKeys derives the cache key of every git-backed remote,
-// mapped to the remote's name so a refusal can say which remote it could not
-// account for.
-func expectedRemoteCacheKeys(remotes []storage.SyncRemote) (map[string]string, error) {
-	expected := make(map[string]string, len(remotes))
+// mapped to the names of the remotes that derive it — usually one, and more
+// only when two remotes are spelled alike — so a refusal can say which remote
+// it could not account for.
+func expectedRemoteCacheKeys(remotes []storage.SyncRemote) (map[string][]string, error) {
+	expected := make(map[string][]string, len(remotes))
 	for _, remote := range remotes {
 		key, gitBacked, err := remoteCacheKey(remote.URL)
 		if err != nil {
@@ -336,9 +381,76 @@ func expectedRemoteCacheKeys(remotes []storage.SyncRemote) (map[string]string, e
 		if !gitBacked {
 			continue
 		}
-		expected[key] = remote.Name
+		expected[key] = append(expected[key], remote.Name)
 	}
 	return expected, nil
+}
+
+// expectedMirrors pairs each expected key with the evidence of whether it has
+// been opened, read from trackingBranches — this store's
+// `remotes/<remote>/<branch>` names. A key's mirror has never been opened only
+// if none of the remotes deriving it has a tracking branch.
+func expectedMirrors(keys map[string][]string, trackingBranches []string) map[string]expectedMirror {
+	opened := func(remote string) bool {
+		// A prefix can only err toward "opened": remote `a` also claims the
+		// branches of a remote named `a/b`, which keeps the refusal armed and
+		// never disarms it.
+		prefix := "remotes/" + remote + "/"
+		return slices.ContainsFunc(trackingBranches, func(b string) bool { return strings.HasPrefix(b, prefix) })
+	}
+	mirrors := make(map[string]expectedMirror, len(keys))
+	for key, remotes := range keys {
+		mirrors[key] = expectedMirror{
+			remote:      strings.Join(remotes, " and "),
+			neverOpened: !slices.ContainsFunc(remotes, opened),
+		}
+	}
+	return mirrors
+}
+
+// trackingBranchNames lists this store's remote-tracking branches, each named
+// `remotes/<remote>/<branch>`.
+func (s *Store) trackingBranchNames(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT name FROM dolt_remote_branches`)
+	if err != nil {
+		return nil, fmt.Errorf("list remote-tracking branches: %w", err)
+	}
+	defer rows.Close()
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, fmt.Errorf("scan remote-tracking branch: %w", err)
+		}
+		names = append(names, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate remote-tracking branches: %w", err)
+	}
+	return names, nil
+}
+
+// readRemoteCachePlan reads the plan's three inputs as they stand now — the
+// configured remotes, the tracking branches that say which have been opened,
+// and the directories on disk — and plans from them.
+func (s *Store) readRemoteCachePlan(ctx context.Context, base string) (remoteCachePlan, error) {
+	remotes, err := s.SyncListRemotes(ctx)
+	if err != nil {
+		return remoteCachePlan{}, err
+	}
+	branches, err := s.trackingBranchNames(ctx)
+	if err != nil {
+		return remoteCachePlan{}, err
+	}
+	keys, err := expectedRemoteCacheKeys(remotes)
+	if err != nil {
+		return remoteCachePlan{}, err
+	}
+	onDisk, err := listRemoteCacheKeys(base)
+	if err != nil {
+		return remoteCachePlan{}, err
+	}
+	return planRemoteCachePrune(expectedMirrors(keys, branches), onDisk)
 }
 
 // pruneRemoteCache collects the mirrors no configured remote maps to.
@@ -350,14 +462,16 @@ func expectedRemoteCacheKeys(remotes []storage.SyncRemote) (map[string]string, e
 // it stays abandoned. [LAW:no-ambient-temporal-coupling] the rule owns this
 // safety, not a lock some caller has to remember to still be holding.
 //
-// "For as long as it stays abandoned" is the entire caveat, and it is why
-// eligibility is re-asked per directory instead of trusted from the plan. The
-// plan is a snapshot and this loop has no bound on how long it runs; a sibling
-// process that re-spells a remote back to a spelling this cache still holds and
-// pushes through it makes Dolt write a LIVE mirror at a key this loop is already
-// carrying. Deleting on the snapshot would be the live-mirror deletion this
-// whole feature exists to prevent, reached through a clock instead of a bad
-// derivation.
+// "For as long as it stays abandoned" is the entire caveat, and it is why the
+// plan is taken again before each directory instead of trusted from the start.
+// The plan is a snapshot and this loop has no bound on how long it runs. A
+// sibling process that re-spells a remote back to a spelling this cache still
+// holds and pushes through it makes Dolt write a LIVE mirror at a key this loop
+// is already carrying; a first push through a remote the plan excused as never
+// opened takes away the evidence it was excused on. Deleting on the snapshot
+// would be the live-mirror deletion this whole feature exists to prevent,
+// reached through a clock instead of a bad derivation. [LAW:one-source-of-truth]
+// the decision that deletes reads the inputs, not a copy of them.
 //
 // A directory removed in error costs a re-clone on the
 // next open — dbfactory.ensureBareRepo re-creates a missing cache — and never a
@@ -365,119 +479,109 @@ func expectedRemoteCacheKeys(remotes []storage.SyncRemote) (map[string]string, e
 // touches. That is why the prune reports rather than fails; it cannot damage
 // anything a push has not already made durable on the remote.
 func (s *Store) pruneRemoteCache(ctx context.Context) remoteCachePruneOutcome {
-	remotes, err := s.SyncListRemotes(ctx)
-	if err != nil {
-		return remoteCachePruneOutcome{Problem: err.Error()}
-	}
-	expected, err := expectedRemoteCacheKeys(remotes)
-	if err != nil {
-		return remoteCachePruneOutcome{Problem: err.Error()}
-	}
 	base := s.remoteCacheBase()
-	onDisk, err := listRemoteCacheKeys(base)
+	plan, err := s.readRemoteCachePlan(ctx, base)
 	if err != nil {
-		return remoteCachePruneOutcome{Problem: err.Error()}
-	}
-	plan, err := planRemoteCachePrune(expected, onDisk)
-	if err != nil {
-		return remoteCachePruneOutcome{Problem: err.Error()}
+		return remoteCachePruneOutcome{remoteCacheCollection: remoteCacheCollection{Problem: err.Error()}}
 	}
 
-	outcome := remoteCachePruneOutcome{}
+	outcome := remoteCachePruneOutcome{NeverOpened: plan.neverOpened}
 	var problems []string
 	for _, key := range plan.abandoned {
-		// Ask again, in the moment before deleting, against the remotes as they
-		// stand now rather than as the plan found them. A key that has come back
-		// to life since is somebody's live mirror.
-		abandoned, err := s.remoteCacheKeyIsStillAbandoned(ctx, key)
+		now, err := s.readRemoteCachePlan(ctx, base)
 		if err != nil {
-			problems = append(problems, err.Error())
-			continue
+			// A plan that cannot be taken, or now refuses, closes the gate for
+			// every key still to come, not only this one.
+			problems = append(problems, fmt.Errorf("re-check abandoned mirror %s: %w", key, err).Error())
+			break
 		}
-		if !abandoned {
+		if !slices.Contains(now.abandoned, key) {
 			continue
 		}
 		reclaimed, collected, err := collectAbandonedMirror(base, key)
+		outcome.Reclaimed += reclaimed
 		if err != nil {
 			problems = append(problems, err.Error())
 			continue
 		}
-		if !collected {
-			continue
+		if collected {
+			outcome.Removed++
 		}
-		outcome.Removed++
-		outcome.Reclaimed += reclaimed
 	}
-	// Every entry is attempted and a failure records itself rather than ending
-	// the walk. Returning on the first error would make one permanently
-	// unremovable directory a head-of-line blocker: plan.abandoned is sorted, so
-	// that same entry is reached first on every push forever and nothing
-	// sorting after it is ever attempted again, however removable it is.
-	// [LAW:dataflow-not-control-flow] which entries get visited does not
+	// Every entry is attempted and a failure to remove one records itself
+	// rather than ending the walk. Returning on the first error would make one
+	// permanently unremovable directory a head-of-line blocker: plan.abandoned
+	// is sorted, so that same entry is reached first on every push forever and
+	// nothing sorting after it is ever attempted again, however removable it
+	// is. [LAW:dataflow-not-control-flow] which entries get visited does not
 	// depend on what the earlier ones did.
 	outcome.Problem = strings.Join(problems, "; ")
 	return outcome
 }
 
-// remoteCacheKeyIsStillAbandoned re-asks the plan's question about one key
-// against the remote list as it stands right now. The plan answered it once, for
-// every key at once, at a time that recedes as the loop runs.
+// collectAbandonedMirror removes one abandoned mirror and reports what this
+// call itself did: the bytes of every file it unlinked, and whether it
+// unlinked the mirror's directory. Its bytes stand even when it fails part-way,
+// because a later failure does not restore them.
 //
-// [LAW:one-source-of-truth] the remote list is the authority on what is live,
-// and the plan is a derived copy of it that starts going stale the moment it is
-// taken — so the decision that actually deletes reads the authority, not the
-// copy.
-func (s *Store) remoteCacheKeyIsStillAbandoned(ctx context.Context, key string) (bool, error) {
-	remotes, err := s.SyncListRemotes(ctx)
+// Ownership is per unlink. Two explicit pushes are not serialized against each
+// other — the single-flight lock belongs to the background mirror and is a
+// non-blocking probe, not mutual exclusion — so a sibling prune can be
+// collecting the same directory at the same moment. A file is unlinked once,
+// by one of them, so each byte is counted by exactly one prune and the figures
+// of two overlapping prunes add up to what they removed between them. A path
+// already gone is a sibling's work: neither an error nor a reclaim of this
+// call's, since reporting it as either would invent a failure or a figure out
+// of someone else's success. [LAW:no-silent-failure]
+//
+// A crash part-way leaves the directory still named by its key, so the next
+// prune classifies it and finishes the job. Nothing is ever staged under a name
+// isRemoteCacheKey refuses, which is what would strand it.
+func collectAbandonedMirror(base, key string) (reclaimed int64, collected bool, err error) {
+	reclaimed, collected, err = removeTreeCounting(filepath.Join(base, key))
 	if err != nil {
-		return false, fmt.Errorf("re-check abandoned mirror %s: %w", key, err)
+		return reclaimed, false, fmt.Errorf("remove abandoned mirror %s: %w", key, err)
 	}
-	expected, err := expectedRemoteCacheKeys(remotes)
-	if err != nil {
-		return false, fmt.Errorf("re-check abandoned mirror %s: %w", key, err)
-	}
-	_, wanted := expected[key]
-	return !wanted, nil
+	return reclaimed, collected, nil
 }
 
-// collectAbandonedMirror measures and removes one abandoned mirror, and has
-// three things it can report: collected, with the bytes it reclaimed; already
-// gone; or a failure naming the key.
-//
-// Already gone is the one worth explaining, and it is not an error. Two explicit
-// pushes are not serialized against each other — the single-flight lock belongs
-// to the background mirror and is a non-blocking probe, not mutual exclusion —
-// so a sibling prune can take this directory between the plan and this call.
-// That is the state this code was trying to reach, so reporting it would be
-// inventing a failure out of a success. [LAW:no-silent-failure] cuts both ways
-// here: the refusal this outcome carries only works if it is believed, and a
-// prune that cries wolf whenever two pushes overlap spends exactly the
-// credibility the refusal depends on.
-//
-// One window this deliberately does NOT close: a sibling that takes the
-// directory between the walk below and the unlink after it. os.RemoveAll returns
-// nil for a path that is already gone, so both prunes then report the same bytes
-// reclaimed, and the reclaim figure is knowingly approximate across concurrent
-// prunes. Proving ownership needs a rename-as-claim, and a crash between the
-// rename and the delete strands a staged directory that isRemoteCacheKey refuses
-// to classify and nothing ever collects — a permanent leak of exactly the kind
-// of directory this feature exists to collect, bought to correct a byte count.
-// links-storage-bd8w.1.1 carries the design that would make it exact.
-func collectAbandonedMirror(base, key string) (reclaimed int64, collected bool, err error) {
-	dir := filepath.Join(base, key)
-	// Size first: once the directory is gone there is nothing left to measure,
-	// and a reclaim figure nobody can check is worth nothing.
-	size, err := dirSize(dir)
+// removeTreeCounting removes path and everything under it, depth first,
+// returning the bytes of the files this call unlinked and whether it unlinked
+// path itself. A path already gone was removed by someone else and counts for
+// nothing here.
+func removeTreeCounting(path string) (freed int64, removed bool, err error) {
+	info, err := os.Lstat(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return 0, false, nil
 	}
 	if err != nil {
-		return 0, false, fmt.Errorf("measure abandoned mirror %s: %w", key, err)
+		return 0, false, err
 	}
-	if err := os.RemoveAll(dir); err != nil {
-		return 0, false, fmt.Errorf("remove abandoned mirror %s: %w", key, err)
+	if info.IsDir() {
+		entries, err := os.ReadDir(path)
+		if errors.Is(err, fs.ErrNotExist) {
+			return 0, false, nil
+		}
+		if err != nil {
+			return 0, false, err
+		}
+		for _, entry := range entries {
+			n, _, err := removeTreeCounting(filepath.Join(path, entry.Name()))
+			freed += n
+			if err != nil {
+				return freed, false, err
+			}
+		}
 	}
-	return size, true, nil
+	if err := os.Remove(path); errors.Is(err, fs.ErrNotExist) {
+		return freed, false, nil
+	} else if err != nil {
+		return freed, false, err
+	}
+	if !info.IsDir() {
+		freed += info.Size()
+	}
+	return freed, true, nil
 }
 
 // SyncRemoteMirrorHolds reports whether this store's git mirror of remote —

@@ -319,20 +319,13 @@ func gitInDir(t *testing.T, dir string, args ...string) {
 	}
 }
 
-// TestRemoteCacheKeyIsStillAbandonedFollowsTheRemotesNotASnapshot pins the
-// re-check the delete loop leans on. The plan answers "is this abandoned?" once,
-// for every key, at a moment that recedes as the loop runs; this asks it again of
-// the authority in the moment before a directory is removed. The third case is
-// the one that matters: the same key changes answer when the remote list
-// changes, which is exactly what a snapshot cannot do.
-func TestRemoteCacheKeyIsStillAbandonedFollowsTheRemotesNotASnapshot(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	base := t.TempDir()
-
-	remote := seedBareGitRemote(t, base)
+// pushedSyncStore opens a sync store that has pushed one commit through a
+// git-backed remote named origin, so it holds origin's mirror and tracking
+// branch.
+func pushedSyncStore(t *testing.T, ctx context.Context) *Store {
+	t.Helper()
+	remote := seedBareGitRemote(t, t.TempDir())
 	doltRoot := migratedDoltDir(t)
-
 	st, err := Open(ctx, doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
@@ -341,45 +334,135 @@ func TestRemoteCacheKeyIsStillAbandonedFollowsTheRemotesNotASnapshot(t *testing.
 	if err := st.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
-
 	sync, err := OpenSync(ctx, doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("OpenSync() error = %v", err)
 	}
-	defer sync.Close()
+	t.Cleanup(func() { _ = sync.Close() })
 	if err := sync.SyncAddRemote(ctx, "origin", GitBackedRemoteURL(remote)); err != nil {
 		t.Fatalf("SyncAddRemote() error = %v", err)
 	}
 	if _, err := sync.SyncCompactAndPush(ctx, "origin", "master", true, false); err != nil {
 		t.Fatalf("SyncCompactAndPush() error = %v", err)
 	}
+	return sync
+}
 
-	keys, err := listRemoteCacheKeys(sync.remoteCacheBase())
-	if err != nil {
-		t.Fatalf("listRemoteCacheKeys() error = %v", err)
+// plantOrphanMirror writes a well-formed cache directory no remote derives,
+// carrying 4096 bytes: the shape an org rename or a URL re-spelling leaves.
+func plantOrphanMirror(t *testing.T, base, key string) {
+	t.Helper()
+	repo := filepath.Join(base, key, "repo.git")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatalf("plant orphan %s: %v", key, err)
 	}
-	if len(keys) != 1 {
-		t.Fatalf("cache keys after push = %v, want exactly the live mirror", keys)
+	if err := os.WriteFile(filepath.Join(repo, "packed-refs"), make([]byte, 4096), 0o644); err != nil {
+		t.Fatalf("plant orphan payload %s: %v", key, err)
 	}
-	mirrorKey := keys[0]
+}
 
-	// A key origin derives is not abandoned, whatever a stale plan believed.
-	if abandoned, err := sync.remoteCacheKeyIsStillAbandoned(ctx, mirrorKey); err != nil || abandoned {
-		t.Fatalf("remoteCacheKeyIsStillAbandoned(live) = (%v, %v), want (false, nil)", abandoned, err)
+// TestReadRemoteCachePlanFollowsTheRemotesNotASnapshot pins the re-check the
+// delete loop leans on. The loop plans again before every directory, so the
+// answer for a key has to change when the remotes change, which a snapshot
+// cannot do.
+func TestReadRemoteCachePlanFollowsTheRemotesNotASnapshot(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	sync := pushedSyncStore(t, ctx)
+	base := sync.remoteCacheBase()
+	keys, err := listRemoteCacheKeys(base)
+	if err != nil || len(keys) != 1 {
+		t.Fatalf("cache keys after push = %v (err %v), want exactly the live mirror", keys, err)
 	}
-	// A key no remote derives is.
-	if abandoned, err := sync.remoteCacheKeyIsStillAbandoned(ctx, strings.Repeat("ab", 32)); err != nil || !abandoned {
-		t.Fatalf("remoteCacheKeyIsStillAbandoned(orphan) = (%v, %v), want (true, nil)", abandoned, err)
+
+	plan, err := sync.readRemoteCachePlan(ctx, base)
+	if err != nil || len(plan.abandoned) != 0 {
+		t.Fatalf("readRemoteCachePlan() with origin configured = (%v, %v), want nothing abandoned", plan.abandoned, err)
 	}
-	// Drop the remote and the same key changes answer. A plan taken before this
-	// point still calls it live; the re-check does not, because it reads the
-	// remote list rather than remembering it.
 	if err := sync.SyncRemoveRemote(ctx, "origin"); err != nil {
 		t.Fatalf("SyncRemoveRemote() error = %v", err)
 	}
-	if abandoned, err := sync.remoteCacheKeyIsStillAbandoned(ctx, mirrorKey); err != nil || !abandoned {
-		t.Fatalf("after removing origin: remoteCacheKeyIsStillAbandoned(%s) = (%v, %v), want (true, nil) — "+
-			"the answer must follow the remotes, not a snapshot", mirrorKey, abandoned, err)
+	plan, err = sync.readRemoteCachePlan(ctx, base)
+	if err != nil || len(plan.abandoned) != 1 || plan.abandoned[0] != keys[0] {
+		t.Fatalf("readRemoteCachePlan() after removing origin = (%v, %v), want [%s] — "+
+			"the answer must follow the remotes, not a snapshot", plan.abandoned, err, keys[0])
+	}
+}
+
+// TestPruneRemoteCacheCollectsBesideANeverOpenedRemote is the workspace this
+// ticket was filed for: a second remote configured and never pushed or fetched
+// through, so it has no directory. The orphan is collected anyway, and the
+// line the trace records says which remote was excused and why.
+func TestPruneRemoteCacheCollectsBesideANeverOpenedRemote(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	sync := pushedSyncStore(t, ctx)
+	if err := sync.SyncAddRemote(ctx, "backup", GitBackedRemoteURL(seedBareGitRemote(t, t.TempDir()))); err != nil {
+		t.Fatalf("SyncAddRemote(backup) error = %v", err)
+	}
+	orphan := strings.Repeat("ab", 32)
+	plantOrphanMirror(t, sync.remoteCacheBase(), orphan)
+
+	outcome := sync.pruneRemoteCache(ctx)
+	if outcome.Problem != "" {
+		t.Fatalf("prune declined beside a never-opened remote: %s", outcome.Problem)
+	}
+	if outcome.Removed != 1 {
+		t.Fatalf("Removed = %d, want 1 (the planted orphan)", outcome.Removed)
+	}
+	if _, err := os.Stat(filepath.Join(sync.remoteCacheBase(), orphan)); !os.IsNotExist(err) {
+		t.Fatalf("orphan %s survived the prune (stat err = %v)", orphan, err)
+	}
+	if report := outcome.Report(); !strings.Contains(report, "excused remote backup") {
+		t.Fatalf("Report() = %q, want it to name backup as excused", report)
+	}
+}
+
+// TestPruneRemoteCacheKeepsAnOpenedRemotesMirrorItCannotFind is the other half
+// of the ticket: excusing never-opened remotes must not cost a live mirror. The
+// store pushes through backup, so backup has been opened and holds a mirror;
+// that mirror is then moved to a key no remote derives, which is exactly how a
+// directory Dolt wrote under a key the derivation fails to produce looks. The
+// prune must refuse and leave it.
+func TestPruneRemoteCacheKeepsAnOpenedRemotesMirrorItCannotFind(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	sync := pushedSyncStore(t, ctx)
+	backupURL := GitBackedRemoteURL(seedBareGitRemote(t, t.TempDir()))
+	if err := sync.SyncAddRemote(ctx, "backup", backupURL); err != nil {
+		t.Fatalf("SyncAddRemote(backup) error = %v", err)
+	}
+	if _, err := sync.SyncCompactAndPush(ctx, "backup", "master", false, false); err != nil {
+		t.Fatalf("SyncCompactAndPush(backup) error = %v", err)
+	}
+	remotes, err := sync.SyncListRemotes(ctx)
+	if err != nil {
+		t.Fatalf("SyncListRemotes() error = %v", err)
+	}
+	var backupKey string
+	for _, remote := range remotes {
+		if remote.Name == "backup" {
+			backupKey, _, err = remoteCacheKey(remote.URL)
+		}
+	}
+	if err != nil || backupKey == "" {
+		t.Fatalf("derive backup's key: %q, %v", backupKey, err)
+	}
+	base := sync.remoteCacheBase()
+	drifted := filepath.Join(base, strings.Repeat("cd", 32))
+	if err := os.Rename(filepath.Join(base, backupKey), drifted); err != nil {
+		t.Fatalf("move backup's mirror off its derived key: %v", err)
+	}
+
+	outcome := sync.pruneRemoteCache(ctx)
+	if !strings.Contains(outcome.Problem, "declining to prune") || !strings.Contains(outcome.Problem, "backup") {
+		t.Fatalf("Problem = %q, want a refusal naming backup — it has been opened and its mirror is unmatched", outcome.Problem)
+	}
+	if outcome.Removed != 0 {
+		t.Fatalf("Removed = %d, want 0", outcome.Removed)
+	}
+	if _, err := os.Stat(drifted); err != nil {
+		t.Fatalf("backup's live mirror was deleted: %v", err)
 	}
 }
 
