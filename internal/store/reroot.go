@@ -31,6 +31,11 @@ const ReRootHoldBudget = 15 * time.Second
 // refused and the branch left where it was.
 var ErrSideLineAcrossCut = errors.New("a side line forks below the cut and merges above it")
 
+// ErrReRootNotReleased marks a re-root whose branch move landed and whose hold
+// on the live store then failed to release: the branch is on the rewritten
+// head, and the result returned with the error describes it.
+var ErrReRootNotReleased = errors.New("the branch moved to its rewritten head and a hold on the live store did not release")
+
 // reRootRef is the ref the parentless root is committed to and deleted from
 // within one re-root. Dolt builds a commit with no parents only by committing
 // to a ref that has no head, which is how it makes its own init commit
@@ -101,7 +106,7 @@ func (r ReRooted) EventRecord() (map[string]any, map[string]int) {
 // It contacts no network and opens no SQL engine; the hold is
 // holdForRefWrite's, under ReRootHoldBudget. Deciding when to re-root, and
 // where, is the caller's.
-func ReRoot(ctx context.Context, doltRootDir, branch, cut string) (reRooted ReRooted, err error) {
+func ReRoot(ctx context.Context, doltRootDir, branch, cut string) (ReRooted, error) {
 	root, err := validateDoltRootDir(doltRootDir)
 	if err != nil {
 		return ReRooted{}, err
@@ -114,6 +119,14 @@ func ReRoot(ctx context.Context, doltRootDir, branch, cut string) (reRooted ReRo
 	if !isDoltCommitHash(trimmedCut) {
 		return ReRooted{}, fmt.Errorf("re-root %s: %q is not a Dolt commit hash", trimmedBranch, cut)
 	}
+	reRooted, err := reRootUnderHold(ctx, root, trimmedBranch, trimmedCut)
+	return settleReRoot(reRooted, err, trimmedBranch, trimmedCut)
+}
+
+// reRootUnderHold is ReRoot's work under the live store's holds, both
+// released before it returns. Its result's Head is set exactly when the
+// branch moved, whatever the error.
+func reRootUnderHold(ctx context.Context, root, branch, cut string) (reRooted ReRooted, err error) {
 	release, err := acquireLiveStoreHold(ctx, root)
 	if err != nil {
 		return ReRooted{}, err
@@ -122,14 +135,27 @@ func ReRoot(ctx context.Context, doltRootDir, branch, cut string) (reRooted ReRo
 	err = holdForRefWrite(ctx, root, ReRootHoldBudget, func(holdCtx context.Context, ddb *doltdb.DoltDB) error {
 		start := time.Now()
 		var rewriteErr error
-		reRooted, rewriteErr = reRootBranch(holdCtx, ddb, ref.NewBranchRef(trimmedBranch), hash.Parse(trimmedCut))
+		reRooted, rewriteErr = reRootBranch(holdCtx, ddb, ref.NewBranchRef(branch), hash.Parse(cut))
 		reRooted.Elapsed = time.Since(start)
 		return rewriteErr
 	})
-	if err != nil {
-		return ReRooted{}, fmt.Errorf("re-root %s at %s: %w", trimmedBranch, trimmedCut, err)
+	return reRooted, err
+}
+
+// settleReRoot says what a re-root's error left standing. A move that landed
+// stands even when a hold's release failed after it: the result describes the
+// move and the error wraps ErrReRootNotReleased, as RecordPushedHead's
+// ErrReceivedRefsNotRecorded does for its own landed write. Anything else
+// moved nothing. [LAW:no-silent-failure]
+func settleReRoot(r ReRooted, err error, branch, cut string) (ReRooted, error) {
+	switch {
+	case err == nil:
+		return r, nil
+	case r.Head == "":
+		return ReRooted{}, fmt.Errorf("re-root %s at %s: %w", branch, cut, err)
+	default:
+		return r, fmt.Errorf("%w: re-root %s at %s moved it to %s: %w", ErrReRootNotReleased, branch, cut, r.Head, err)
 	}
-	return reRooted, nil
 }
 
 // historyCommit is one commit of the branch's history as the re-root reads it.

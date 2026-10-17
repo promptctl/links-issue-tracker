@@ -381,3 +381,32 @@ func exportOf(t *testing.T, ctx context.Context, root string) model.Export {
 	export.ExportedAt = time.Time{}
 	return export
 }
+
+// TestSettleReRootKeepsAMoveThatLandedBeforeAFailedRelease pins what a
+// re-root's error leaves standing: a move that landed is described even when
+// a hold's release failed after it, and a refusal describes nothing.
+func TestSettleReRootKeepsAMoveThatLandedBeforeAFailedRelease(t *testing.T) {
+	released := errors.New("release the commit lock: lock file gone")
+	moved := ReRooted{Cut: "c", Root: "r", Head: "h", Rewritten: map[string]string{"c": "r"}, Dropped: 2}
+
+	got, err := settleReRoot(moved, released, "master", "c")
+	if !errors.Is(err, ErrReRootNotReleased) || !errors.Is(err, released) || !strings.Contains(err.Error(), "moved it to h") {
+		t.Fatalf("a landed move with a failed release: error = %v, want %v naming head h and wrapping %v", err, ErrReRootNotReleased, released)
+	}
+	if got.Head != "h" || got.Root != "r" || got.Dropped != 2 || got.Kept() != 1 {
+		t.Fatalf("a landed move with a failed release: result = %+v, want %+v", got, moved)
+	}
+
+	refused := fmt.Errorf("%w: t1 reaches the history below the cut", ErrSideLineAcrossCut)
+	got, err = settleReRoot(ReRooted{Elapsed: time.Millisecond}, refused, "master", "c")
+	if !errors.Is(err, ErrSideLineAcrossCut) || errors.Is(err, ErrReRootNotReleased) {
+		t.Fatalf("a refusal: error = %v, want %v and not %v", err, ErrSideLineAcrossCut, ErrReRootNotReleased)
+	}
+	if got.Head != "" || got.Kept() != 0 {
+		t.Fatalf("a refusal: result = %+v, want none", got)
+	}
+
+	if got, err = settleReRoot(moved, nil, "master", "c"); err != nil || got.Head != "h" {
+		t.Fatalf("a clean re-root: result, error = %+v, %v; want %+v, nil", got, err, moved)
+	}
+}
