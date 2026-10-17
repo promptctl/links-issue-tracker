@@ -5243,10 +5243,7 @@ Classification predicates:
 Dolt gives every **git-backed** remote its own bare-repo mirror at
 `<db>/.dolt/git-remote-cache/<sha256(url|ref)>/repo.git`, and never deletes one (`remotecache.go`).
 
-Constants:
-- `remoteCacheDirName = "git-remote-cache"` (`remotecache.go`)
-- `defaultGitRemoteRef = "refs/dolt/data"` (`remotecache.go`) — mirrors dbfactory's `defaultGitRef`; lit never supplies `GitRefParam`.
-- `gitBackedURLSchemePrefix = "git+"` (`remotecache.go`)
+Constant: `remoteCacheDirName = "git-remote-cache"` (`remotecache.go`).
 
 Base path (`remotecache.go`):
 ```go
@@ -5258,63 +5255,39 @@ The middle segment is `doltDatabaseName`, **not** the workspace id (`remotecache
 
 #### 7.2 Key derivation
 
-`remoteCacheKey(remoteURL) (key string, gitBacked bool, err error)` (`remotecache.go`):
-1. `url.Parse(strings.TrimSpace(remoteURL))`; failure → `parse dolt remote url %q: %w` (`remotecache.go`).
-2. Lower-case the scheme (`remotecache.go`). If it does **not** start with `git+`, return `("", false, nil)` — not an error, just no mirror (`remotecache.go`).
-3. Copy the URL, strip `git+` from the scheme, clear `RawQuery` and `Fragment` (`remotecache.go`).
-4. `sha256.Sum256([]byte(underlying.String() + "|" + defaultGitRemoteRef))`, hex-encoded lowercase (`remotecache.go`).
-
-Three distinct outcomes by design (`remotecache.go`): git-backed → key; non-`git+` → no key, prune carries on; unparseable → failure.
+lit does not derive a key itself. `(*Store).remoteMirrorKeys(ctx)` (`remotecache.go`) runs `SELECT name, url, params FROM dolt_remotes` and maps each git-backed remote's **name** → `dbfactory.GitRemoteCacheKey(url, params)`, Dolt's own derivation of the directory name (fork patch 8, `FORKS.md`), so the remote's `--ref`, which is part of the hash, is honored. A `NULL` params column is no params; otherwise it is JSON-decoded. A remote whose URL does not resolve to the git factory has no entry. Errors wrap as `list dolt remotes: %w`, `scan dolt remote: %w`, `decode params of remote %q: %w`, `derive cache key of remote %q (%s): %w`, `iterate dolt remotes: %w`.
 
 `isRemoteCacheKey(name)` (`remotecache.go`): length must equal `sha256.Size*2` = **64**, the name must equal its own lower-casing, and it must hex-decode. Anything else was not written by dbfactory and is never deleted.
 
-`expectedRemoteCacheKeys(remotes []storage.SyncRemote)` (`remotecache.go`) maps key → remote **name**; non-git-backed remotes are skipped; a parse error aborts.
-
 `listRemoteCacheKeys(base)` (`remotecache.go`): `os.ReadDir(base)`; `fs.ErrNotExist` → `(nil, nil)` (a store that never opened a git remote); other errors → `read git remote cache %s: %w`. Only entries that are directories **and** pass `isRemoteCacheKey` are returned.
 
-#### 7.3 The plan
+#### 7.3 Live and abandoned
 
-`type remoteCachePlan struct { abandoned []string }` (`remotecache.go`).
+`splitMirrors(keys map[string]string, onDisk []string) (live, abandoned []string)` (`remotecache.go`): a directory is live when some configured remote's key names it and abandoned otherwise; both are sorted. A configured remote with no directory changes neither. The prune deletes from `abandoned`; the ref sweep (7.7) sweeps `live`.
 
-`planRemoteCachePrune(expected map[string]string, onDisk []string) (remoteCachePlan, error)` (`remotecache.go`):
-- One rule: a directory is abandoned when no configured remote derives its key (`remotecache.go`). `abandoned` is sorted (`remotecache.go`).
-- `unaccounted` is every expected key with no directory on disk, rendered `"<remoteName>→<key>"` and sorted (`remotecache.go`).
-- **Refusal**: if `len(abandoned) > 0 && len(unaccounted) > 0`, returns a zero plan and the error (`remotecache.go`):
-
-> `declining to prune: %d cache director%s match no configured remote, but %d configured remote%s also %s no directory (%s). That is two possible facts wearing one shape, and this code cannot tell which it is looking at: either the key derivation disagrees with what Dolt actually wrote, or those remotes have simply never been opened — Dolt writes a mirror on first use, never when a remote is configured. While both readings stand an unmatched directory cannot be told apart from a live mirror this code failed to find, so nothing was deleted. One \`lit sync push --remote <name>\` or \`lit sync fetch --remote <name>\` through each remote named above creates its directory and settles it`
-
-with pluralizations `y`/`ies`, ``/`s`, `has`/`have` supplied by `plural(n, one, many)` (`remotecache.go`).
-
-The refusal is deliberately **not** narrowed to the remote being pushed (`remotecache.go`).
-
-A store that has never pushed trips nothing: no directories → nothing to delete (`remotecache.go`; pinned at `remotecache_plan_test.go`).
+`(*Store).readAbandonedMirrors(ctx, base)` (`remotecache.go`) reads `remoteMirrorKeys` and `listRemoteCacheKeys(base)`, returning the first error, and returns `splitMirrors`'s `abandoned`.
 
 #### 7.4 Execution
 
-`(*Store).pruneRemoteCache(ctx)` (`remotecache.go`) — **runs without the commit lock** (`remotecache.go`):
-1. `s.SyncListRemotes(ctx)` → on error, outcome with `Problem = err.Error()`.
-2. `expectedRemoteCacheKeys(remotes)` → same.
-3. `s.remoteCacheBase()`, `listRemoteCacheKeys(base)` → same.
-4. `planRemoteCachePrune(expected, onDisk)` → same.
-5. For each key in `plan.abandoned` (sorted): re-ask `s.remoteCacheKeyIsStillAbandoned(ctx, key)`; skip if it has come back to life; else `collectAbandonedMirror(base, key)`; increment `Removed` and add to `Reclaimed` when collected.
-6. **Every entry is attempted**; a failure appends to `problems` and the loop continues, so one permanently unremovable directory is not a head-of-line blocker (`remotecache.go`). `outcome.Problem = strings.Join(problems, "; ")` (`remotecache.go`).
+`(*Store).pruneRemoteCache(ctx)` (`remotecache.go`) — **runs without the commit lock** (`remotecache.go`): takes `readAbandonedMirrors` (on error, outcome with `Problem = err.Error()`), then returns `collectAbandonedMirrors(base, abandoned, read)` with `read` reading the abandoned set again.
 
-`remoteCacheKeyIsStillAbandoned(ctx, key)` (`remotecache.go`) re-lists remotes and re-derives keys; errors wrap as `re-check abandoned mirror %s: %w` (`remotecache.go`). Pinned at `remotecache_test.go`.
+`collectAbandonedMirrors(base, abandoned, reread)` (`remotecache.go`):
+1. For each key in `abandoned` (sorted): call `reread()`; on error append `re-check abandoned mirror %s: %w` and **stop** the loop; skip the key if the fresh read does not name it; else `collectAbandonedMirror(base, key)`, add its bytes to `Reclaimed` whatever it returned, and increment `Removed` when collected.
+2. A removal failure appends to `problems` and the loop continues, so one permanently unremovable directory is not a head-of-line blocker (`remotecache.go`). `outcome.Problem = strings.Join(problems, "; ")` (`remotecache.go`).
 
-`collectAbandonedMirror(base, key) (reclaimed int64, collected bool, err error)` (`remotecache.go`):
-- `dirSize(dir)` **first** so the reclaim figure is measurable (`remotecache.go`).
-- `fs.ErrNotExist` → `(0, false, nil)` — already gone is **not** an error (`remotecache.go`).
-- Other measure failure → `measure abandoned mirror %s: %w` (`remotecache.go`).
-- `os.RemoveAll(dir)` failure → `remove abandoned mirror %s: %w` (`remotecache.go`).
-- Success → `(size, true, nil)`.
-- Known open window (`remotecache.go`): a sibling taking the directory between the walk and the unlink means both prunes report the same bytes; the reclaim figure is knowingly approximate across concurrent prunes.
+`collectAbandonedMirror(base, key)`, add its bytes to `Reclaimed` whatever it returned, and increment `Removed` when collected.
+3. A removal failure appends to `problems` and the loop continues, so one permanently unremovable directory is not a head-of-line blocker (`remotecache.go`). `outcome.Problem = strings.Join(problems, "; ")` (`remotecache.go`).
 
-`dirSize(root)` (`remotecache.go`) walks with `filepath.WalkDir` and sums `info.Size()` of non-directory entries.
+`collectAbandonedMirror(base, key) (reclaimed int64, collected bool, err error)` (`remotecache.go`) calls `removeTreeCounting(base/key)`; a failure → `remove abandoned mirror %s: %w`, with the bytes freed before it still returned.
+
+`removeTreeCounting(path)` (`remotecache.go`) removes depth first with `os.Lstat`, `os.ReadDir` and `os.Remove`, returning the sizes of the non-directory entries this call unlinked and whether it unlinked `path`. A child that fails does not stop its siblings: every child is attempted, and the failures are returned joined (`errors.Join`) with `path` left in place. A path already gone (`fs.ErrNotExist` at any step) counts for nothing and is not an error.
+
+`dirSize(root)` (`remotecache.go`) walks with `filepath.WalkDir` and sums `info.Size()` of non-directory entries; the ref sweep measures with it.
 
 `(*Store).SyncRemoteMirrorHolds(ctx, remote, commits)` (`remotecache.go`) — no network:
 1. Empty `commits` → `(false, nil)`.
 2. `s.SyncListRemotes(ctx)`; a name not configured → `remote %q is not configured on this store`.
-3. `remoteCacheKey(url)`: parse error → the error; not git-backed → `(false, nil)`.
+3. `remoteMirrorKeys(ctx)`: an error → the error; no key for the remote (not git-backed) → `(false, nil)`.
 4. `<remoteCacheBase>/<key>/repo.git` absent → `(false, nil)`; other stat failure → `stat git mirror of remote %q: %w`.
 5. `gitDirHoldsCommits`: one `git --git-dir <dir> cat-file --batch-check` over the commits, one per stdin line; git failing → `ask git mirror %s for %d commit(s): %w`; an answer count that differs from the input → `ask git mirror %s: %d answer(s) for %d commit(s): %q`; true only when every answer starts `<commit> commit `.
 
@@ -5331,9 +5304,9 @@ type remoteCachePruneOutcome remoteCacheCollection
 (`remotecache.go`)
 
 `remoteCacheCollection.report(job, one, many)` (`remotecache.go`) — four exact branches, shared by the prune and the ref sweep (7.7):
-- `Problem != "" && Removed > 0`: `%s: removed %d %s (%s), then failed: %s` (job, count, `one`/`many`, reclaimed, problem)
+- `Problem != "" && (Removed > 0 || Reclaimed > 0)`: `%s: removed %d %s (%s), then failed: %s` (job, count, `one`/`many`, reclaimed, problem)
 - `Problem != ""`: `job + ": " + o.Problem`
-- `Removed > 0`: `%s: removed %d %s, reclaimed %s`
+- `Removed > 0 || Reclaimed > 0`: `%s: removed %d %s, reclaimed %s`
 - default: `""` (empty exactly when the job looked and found nothing to do)
 
 `remoteCachePruneOutcome.Report()` (`remotecache.go`) = `report("remote-cache prune", "abandoned mirror", "abandoned mirrors")`.
@@ -5342,20 +5315,21 @@ type remoteCachePruneOutcome remoteCacheCollection
 
 #### 7.6 Tests pinning remote-cache behavior
 
-- `remotecache_test.go` `TestRemoteCacheKeyMatchesDoltLayout` — pins the derivation against a cache directory Dolt itself created.
+- `remotecache_test.go` `TestRemoteCacheKeyMatchesDoltLayout` — `remoteMirrorKeys` names the cache directory Dolt itself created for a real push.
 - `remotecache_test.go` keeps the live mirror.
 - `remotecache_test.go` collects abandoned mirrors.
 - `remotecache_test.go` is not blocked by one stuck mirror.
-- `remotecache_test.go` re-check follows the remotes, not a snapshot.
-- `remotecache_plan_test.go` collects only unmatched dirs.
-- `remotecache_plan_test.go` declines when the derivation misses the live mirror.
-- `remotecache_plan_test.go` the refusal names up to both causes.
+- `remotecache_test.go` the abandoned set follows the remotes, not a snapshot.
+- `remotecache_test.go` collects beside a configured remote never pushed or fetched through.
+- `remotecache_test.go` keeps the mirror a failed first push left behind.
+- `remotecache_test.go` keeps the mirror of a remote added with `--ref`.
+- `remotecache_plan_test.go` `splitMirrors` abandons only what no remote names, and every mirror when no remote is configured.
 - `remotecache_plan_test.go` already-gone directory is treated as done.
 - `remotecache_plan_test.go` reclaims what it removes.
 - `remotecache_plan_test.go` a failure names the key.
-- `remotecache_plan_test.go` collects when no remote is configured.
-- `remotecache_plan_test.go` `TestRemoteCacheKeyPreservesHomeRelativePath` — a home-relative scp URL normalizes to `ssh://git@host/./path` and the `/./` must be preserved (`remotecache.go`).
-- `remotecache_plan_test.go` separates non-git remotes from bad URLs.
+- `remotecache_plan_test.go` a stuck file does not stop its siblings, and the bytes freed before a failure are kept.
+- `remotecache_plan_test.go` the loop deletes only what the fresh read abandons, and stops when the read fails.
+- `remotecache_plan_test.go` `TestGitRemoteCacheKeyPreservesHomeRelativePath` — this repository's own home-relative `git+ssh://git@github.com/./…` remote keys to the directory Dolt wrote for it.
 - `remotecache_plan_test.go` `isRemoteCacheKey` rejects foreign names.
 - `remotecache_plan_test.go` `Report()` semantics.
 
@@ -5365,7 +5339,7 @@ Dolt's git blobstore names two refs per open instance with the instance's UUID �
 
 `parseInstanceRef(ref)` (`remotecache_refs.go`): the name must start with one of `instanceRefNamespaces` (`trackingRefNamespace` `refs/dolt/remotes/`, `localRefNamespace` `refs/dolt/blobstore/`), have a non-empty `<remote>/<ref>` before its last `/`, and end in a UUID that round-trips through `uuid.Parse` to the identical canonical string (braced, URN and undashed spellings are refused). The instance's last-known ref is `lastKnownRefNamespace` (`refs/dolt/last-known/`) + that `<remote>/<ref>`. Anything else is not an instance ref and is never deleted.
 
-`(*Store).sweepOrphanedInstanceRefs(ctx)` (`remotecache_refs.go`) → `refSweepOutcome`: lists configured remotes, derives their cache keys (`expectedRemoteCacheKeys`), and sweeps the on-disk mirrors those keys name, sorted; mirrors of unconfigured remotes are left to the prune. Every mirror is attempted; each failure is recorded as `mirror <key>: <error>` and the problems are joined with `"; "`. A remote-list, key-derivation or cache-listing failure returns an outcome carrying only that problem.
+`(*Store).sweepOrphanedInstanceRefs(ctx)` (`remotecache_refs.go`) → `refSweepOutcome`: reads `remoteMirrorKeys` and `listRemoteCacheKeys`, and sweeps `splitMirrors`'s `live` mirrors, sorted; mirrors of unconfigured remotes are left to the prune. Every mirror is attempted; each failure is recorded as `mirror <key>: <error>` and the problems are joined with `"; "`. A key-reading or cache-listing failure returns an outcome carrying only that problem.
 
 `sweepMirror(ctx, gitDir)` (`remotecache_refs.go`) for one mirror:
 1. `listMirrorRefs(ctx, gitDir)` (`fetched_head.go`: `git for-each-ref --sort=-committerdate --format=%(refname) %(objectname) refs/dolt/`); no instance refs → `(0, 0, nil)` with nothing else run.

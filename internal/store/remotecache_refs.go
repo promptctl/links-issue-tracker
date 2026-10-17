@@ -116,11 +116,7 @@ func (o refSweepOutcome) plus(next refSweepOutcome) refSweepOutcome {
 // removes it whole after the push; collecting it first would repack a directory
 // about to be deleted.
 func (s *Store) sweepOrphanedInstanceRefs(ctx context.Context) refSweepOutcome {
-	remotes, err := s.SyncListRemotes(ctx)
-	if err != nil {
-		return refSweepOutcome{Problem: err.Error()}
-	}
-	expected, err := expectedRemoteCacheKeys(remotes)
+	keys, err := s.remoteMirrorKeys(ctx)
 	if err != nil {
 		return refSweepOutcome{Problem: err.Error()}
 	}
@@ -129,11 +125,7 @@ func (s *Store) sweepOrphanedInstanceRefs(ctx context.Context) refSweepOutcome {
 	if err != nil {
 		return refSweepOutcome{Problem: err.Error()}
 	}
-	configured := slices.DeleteFunc(onDisk, func(key string) bool {
-		_, wanted := expected[key]
-		return !wanted
-	})
-	slices.Sort(configured)
+	configured, _ := splitMirrors(keys, onDisk)
 
 	var outcome refSweepOutcome
 	var problems []string

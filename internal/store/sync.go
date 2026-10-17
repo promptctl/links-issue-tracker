@@ -689,55 +689,43 @@ func (s *Store) SyncCompactAndPush(ctx context.Context, remote string, branch st
 		result = pushed
 		return pushErr
 	})
-	if err != nil {
-		// A pass that ran is reported even though the call failed: a push
-		// failing afterwards does not un-rewrite the store, and reporting only
-		// on the success path would lose a deep collection entirely whenever
-		// the push it preceded failed — which is exactly what explains an
-		// attempt that took minutes before failing. The failure is where an
-		// operator looks when a command fails, so that is where the account
-		// goes. [LAW:no-silent-failure]
-		//
-		// Whether a pass ran is the attempt's to answer, not this call site's.
-		// The error arriving here may come from the compaction itself or from
-		// the push after it, and this code cannot tell them apart — assuming the
-		// latter would announce a full pass in the same breath as the error
-		// saying the full pass had failed. compactionReport holds that filter.
-		// [LAW:one-source-of-truth]
-		//
-		// This is deliberately not the prune's arrangement below, which is
-		// gated on the push succeeding for a real reason: the prune needs the
-		// push to have opened the live mirror so its derivation has something
-		// true to check against. Compaction depends on nothing the push does.
-		return storage.SyncPushResult{}, annotateWithMaintenance(err, joinMaintenance(compactionReport(attempt, depthErr), sweep.Report()))
-	}
-	// DOLT_GC above compacts `noms`; this collects the other half of the store's
-	// local footprint, the abandoned git remote mirrors.
+	// DOLT_GC above compacts `noms`; the prune collects the other half of the
+	// store's local footprint, the abandoned git remote mirrors. All three jobs
+	// report whether or not the push landed. A pass that ran is reported even
+	// though the call failed: a push failing afterwards does not un-rewrite the
+	// store, and reporting only on the success path would lose a deep
+	// collection entirely whenever the push it preceded failed — which is
+	// exactly what explains an attempt that took minutes before failing. The
+	// failure is where an operator looks when a command fails, so that is where
+	// the account goes. [LAW:no-silent-failure] Whether a pass ran is the
+	// attempt's to answer: the error may come from the compaction or from the
+	// push after it, and compactionReport holds that filter.
+	// [LAW:one-source-of-truth]
 	//
-	// It runs AFTER the push, and OUTSIDE the commit lock, and both halves of
-	// that are load-bearing. After the push, because the push has just opened
-	// the live mirror — so that directory provably exists on disk and the key
-	// derivation has something true to check itself against. Outside the lock,
-	// because the lock was never what made the removal safe: a directory is
-	// eligible only when NO configured remote derives its key, and every open
-	// reaches a cache through a configured remote's key, so an abandoned mirror
-	// is unreachable by construction. Holding the cross-process writer-exclusion
-	// lock across an unbounded filesystem walk would block every other lit
-	// mutation on this workspace — `lit new`, `lit done`, all of them — to buy
-	// nothing. Nothing bounds how many mirrors a long-lived workspace accumulates.
+	// The prune runs OUTSIDE the commit lock, because the lock was never what
+	// made the removal safe: a directory is eligible only when NO configured
+	// remote's key names it, and every open reaches a cache through a
+	// configured remote's key, so an abandoned mirror is unreachable by
+	// construction. Holding the cross-process writer-exclusion lock across an
+	// unbounded filesystem walk would block every other lit mutation on this
+	// workspace — `lit new`, `lit done`, all of them — to buy nothing. Nothing
+	// bounds how many mirrors a long-lived workspace accumulates.
 	//
-	// Its outcome is carried, never raised. The push has already succeeded and
-	// its success is not the prune's to retract — a cache that failed to collect
-	// costs disk, while a failed `lit sync push` costs the user their sync.
-	// [LAW:dataflow-not-control-flow] the prune runs every time and reports as a
-	// value; nothing branches on whether it did.
-	// The maintenance jobs share one operator-facing channel, each reporting
-	// only what is worth saying. [LAW:one-type-per-behavior]
-	result.Maintenance = joinMaintenance(
+	// Every outcome is carried, never raised: a cache that failed to collect
+	// costs disk, while failing `lit sync push` over it would cost the user
+	// their sync. [LAW:dataflow-not-control-flow] the jobs run every time and
+	// report as values; nothing branches on whether they did. The maintenance
+	// jobs share one operator-facing channel, each reporting only what is
+	// worth saying. [LAW:one-type-per-behavior]
+	maintenance := joinMaintenance(
 		compactionReport(attempt, depthErr),
 		sweep.Report(),
 		s.pruneRemoteCache(ctx).Report(),
 	)
+	if err != nil {
+		return storage.SyncPushResult{}, annotateWithMaintenance(err, maintenance)
+	}
+	result.Maintenance = maintenance
 	return result, nil
 }
 
