@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -299,6 +300,31 @@ func TestSyncPushFromCloneFollowsAReRootedRemote(t *testing.T) {
 		t.Fatalf("push = %+v, want bravo's re-rooted head %s landed", pushed, headCommit(t, ctx, st))
 	}
 	r.assertFollowed(t, st, storage.SyncEntryPush)
+}
+
+// TestTakeFollowsAReRootedRemoteBeforeItCanDiscardASide asks to take the
+// remote's side of what the tracking ref shows as unrelated histories. The
+// take follows the re-root first, finds the histories shared, and refuses as
+// it refuses any mergeable divergence: no approval is asked for and bravo's
+// edit stays.
+func TestTakeFollowsAReRootedRemoteBeforeItCanDiscardASide(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	r := newReRootedRemote(t, ctx, true)
+	bravo := openSyncOrFatal(t, ctx, r.bravo)
+	defer func() { _ = bravo.Close() }()
+	if err := bravo.SyncFetch(ctx, "origin", false); err != nil {
+		t.Fatalf("SyncFetch(bravo) error = %v", err)
+	}
+	_, err := bravo.SyncResolveUnrelated(ctx, "origin", "master", storage.TakeRemote, "")
+	var approval OwnerApprovalRequiredError
+	if err == nil || errors.As(err, &approval) || !strings.Contains(err.Error(), "shares history") {
+		t.Fatalf("take over a re-rooted remote error = %v, want the shared-history refusal", err)
+	}
+	r.assertFollowed(t, bravo, storage.SyncEntryReconcile)
+	if got := getIssueOrFatal(t, ctx, bravo, r.ticket).Title; got != bravoTitle {
+		t.Fatalf("ticket title = %q after the refused take, want bravo's %q", got, bravoTitle)
+	}
 }
 
 // TestSyncFollowsARemoteReRootedAboveItsOwnCut covers two checkouts that
