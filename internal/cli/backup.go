@@ -109,14 +109,14 @@ func backupRestoreLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		rehomed, err := restoreFromExportPath(ctx, ap, restorePath, *force)
+		landing, err := restoreFromExportPath(ctx, ap, restorePath, *force)
 		if err != nil {
 			return err
 		}
 		if _, err := fmt.Fprintf(stdout, "restored %s\n", restorePath); err != nil {
 			return err
 		}
-		return writeRehomed(stdout, "the backup", rehomed)
+		return writeLanding(stdout, "the backup", landing)
 	}}
 }
 
@@ -125,19 +125,19 @@ func syncBasePath(ap *app.App) string {
 }
 
 // restoreFromExportPath restores the store from the export at path and returns
-// the tickets the restore moved into an epic. Every restore leaves one sync
-// trace record, failed or not: it rewrites the sync base the next push compares
-// against, and the record carries the moves. [LAW:nothing-unseen]
-func restoreFromExportPath(ctx context.Context, ap *app.App, path string, force bool) (rehomed []storage.Rehomed, err error) {
+// what the restore changed to land it. Every restore leaves one sync trace
+// record, failed or not: it rewrites the sync base the next push compares
+// against, and the record carries the changes. [LAW:nothing-unseen]
+func restoreFromExportPath(ctx context.Context, ap *app.App, path string, force bool) (landing storage.Landing, err error) {
 	defer func() {
 		metadata := map[string]string{"path": filepath.Clean(path)}
-		rehomedMetadata(metadata, rehomed)
+		landingMetadata(metadata, landing)
 		recordSyncCommandTrace(ap.Workspace, "lit backup restore", "restored", err, metadata)
 	}()
 	return restoreFromExport(ctx, ap, path, force)
 }
 
-func restoreFromExport(ctx context.Context, ap *app.App, path string, force bool) ([]storage.Rehomed, error) {
+func restoreFromExport(ctx context.Context, ap *app.App, path string, force bool) (storage.Landing, error) {
 	restorePath := filepath.Clean(path)
 	// [LAW:parse-dont-validate] A restore needs two capabilities: the sync state
 	// it compares the local workspace against, and the import that replaces the
@@ -146,66 +146,66 @@ func restoreFromExport(ctx context.Context, ap *app.App, path string, force bool
 	// half-done. What comes back is the interface, so nothing below re-asks.
 	syncer, err := storage.Sync.Of(ap.Store)
 	if err != nil {
-		return nil, err
+		return storage.Landing{}, err
 	}
 	importer, err := storage.Import.Of(ap.Store)
 	if err != nil {
-		return nil, err
+		return storage.Landing{}, err
 	}
 	targetExport, _, err := syncfile.Read(restorePath)
 	if err != nil {
-		return nil, err
+		return storage.Landing{}, err
 	}
 	localExport, err := ap.Store.Export(ctx)
 	if err != nil {
-		return nil, err
+		return storage.Landing{}, err
 	}
 	state, err := syncer.GetSyncState(ctx)
 	if err != nil {
-		return nil, err
+		return storage.Landing{}, err
 	}
 	if state.ContentHash != "" && !force {
 		baseHash, hashErr := syncfile.HashFile(syncBasePath(ap))
 		if hashErr != nil {
-			return nil, hashErr
+			return storage.Landing{}, hashErr
 		}
 		if baseHash != "" {
 			localHash, localHashErr := hashExport(localExport)
 			if localHashErr != nil {
-				return nil, localHashErr
+				return storage.Landing{}, localHashErr
 			}
 			if localHash != baseHash {
-				return nil, MergeConflictError{Message: "restore conflict: local workspace has unsynced changes since last sync base"}
+				return storage.Landing{}, MergeConflictError{Message: "restore conflict: local workspace has unsynced changes since last sync base"}
 			}
 		}
 	}
 	if _, err := backup.Create(ap.Workspace.StorageDir, localExport); err != nil {
-		return nil, err
+		return storage.Landing{}, err
 	}
 	if err := backup.Prune(ap.Workspace.StorageDir, 20); err != nil {
-		return nil, err
+		return storage.Landing{}, err
 	}
-	rehomed, err := importer.ReplaceFromExport(ctx, targetExport)
+	landing, err := importer.ReplaceFromExport(ctx, targetExport)
 	if err != nil {
-		return nil, err
+		return storage.Landing{}, err
 	}
 	ap.Statusline.Record(statusline.Replaced{})
-	// The moves are committed from here on, so every later failure still
-	// returns them: the trace records what the store now holds, not what the
+	// The landing is committed from here on, so every later failure still
+	// returns it: the trace records what the store now holds, not what the
 	// command finished.
 	// [LAW:single-enforcer] Restored sync base is serialized from the store so container lifecycles pass through the hydration boundary before JSON output.
 	restoredExport, err := ap.Store.Export(ctx)
 	if err != nil {
-		return rehomed, err
+		return landing, err
 	}
 	if _, err := syncfile.WriteAtomic(syncBasePath(ap), restoredExport); err != nil {
-		return rehomed, err
+		return landing, err
 	}
 	hash, err := syncfile.HashFile(restorePath)
 	if err != nil {
-		return rehomed, err
+		return landing, err
 	}
-	return rehomed, syncer.RecordSyncState(ctx, storage.SyncState{
+	return landing, syncer.RecordSyncState(ctx, storage.SyncState{
 		Path:        restorePath,
 		ContentHash: hash,
 	})

@@ -657,10 +657,10 @@ func performInlineReconcile(ctx context.Context, session syncSession, ws workspa
 		"state":       string(result.State),
 		"replayed":    strconv.Itoa(result.Replayed),
 	}
-	rehomedMetadata(traceMetadata, result.Rehomed)
+	landingMetadata(traceMetadata, result.Landing)
 	// The receive settles silently on success, so its moves go to the worker's
 	// own log as well as the trace: a ticket moved out of sight is still named.
-	if err := writeRehomed(os.Stderr, "the merged backlog", result.Rehomed); err != nil {
+	if err := writeLanding(os.Stderr, "the merged backlog", result.Landing); err != nil {
 		fmt.Fprintf(os.Stderr, "lit: automatic reconcile moves not reported: %v\n", err)
 	}
 	traceStatus := "ok"

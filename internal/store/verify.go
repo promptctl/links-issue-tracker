@@ -283,41 +283,29 @@ func idStabilityFindings(dump RawDump, m ShapeMapping, export model.Export) []Ve
 }
 
 // rankFindings checks that the rebuilt ranks form a valid permutation: among
-// ranked issues, every rank is a well-formed lexorank value and all are distinct,
-// which is exactly a strict total order over those issues.
+// ranked issues, every rank is a well-formed lexorank value, and among the
+// issues a rank verb places, all are distinct, which is exactly a strict total
+// order over those issues. A deleted issue's key may be minted again
+// (placedIssues), so a source that holds one twice is one the verbs wrote.
 //
 // [LAW:types-are-the-program] This is the intrinsic, mapping-independent law, and
 // it is what catches a value mis-map the round-trip laws cannot: priority values
 // landing in rank ("0", "1", ...) collide, so distinctness fails. Empty ranks are
 // unranked issues — legitimately many — so only non-empty ranks are checked.
 func rankFindings(export model.Export) []VerifyFinding {
-	idsByRank := map[string][]string{}
 	var malformed []string
 	for _, issue := range export.Issues {
-		if issue.Rank == "" {
-			continue
-		}
-		if !rank.Valid(issue.Rank) {
+		if issue.Rank != "" && !rank.Valid(issue.Rank) {
 			malformed = append(malformed, fmt.Sprintf("%s=%q", issue.ID, issue.Rank))
 		}
-		idsByRank[issue.Rank] = append(idsByRank[issue.Rank], issue.ID)
 	}
-
-	var collisions []string
-	for r, ids := range idsByRank {
-		if len(ids) > 1 {
-			sort.Strings(ids)
-			collisions = append(collisions, fmt.Sprintf("%q shared by %s", r, strings.Join(ids, ", ")))
-		}
-	}
-	sort.Strings(collisions)
 	sort.Strings(malformed)
 
 	var out []VerifyFinding
-	if len(collisions) > 0 {
+	if collisions := rankCollisions(placedIssues(export)); len(collisions) > 0 {
 		out = append(out, VerifyFinding{
 			Law:    LawRank,
-			Detail: fmt.Sprintf("ranks are not distinct (a valid order needs one rank per issue): %s", strings.Join(collisions, "; ")),
+			Detail: fmt.Sprintf("ranks are not distinct (a valid order needs one rank per issue): %s", describeRankCollisions(collisions)),
 		})
 	}
 	if len(malformed) > 0 {

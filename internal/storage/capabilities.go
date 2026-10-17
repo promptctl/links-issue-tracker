@@ -284,8 +284,8 @@ func (d Downgraded) EventRecord() (map[string]any, map[string]int) {
 		}
 }
 
-// Importer replaces the store's entire contents with an export, and names the
-// tickets it moved into an epic on the way in (HomeStranded).
+// Importer replaces the store's entire contents with an export, and says what
+// it changed on the way in to land it under the store's rules (Landing).
 //
 // Its counterpart, Export, is core rather than a capability: the campaign's
 // differential oracle compares two engines through it, so every engine must
@@ -293,7 +293,7 @@ func (d Downgraded) EventRecord() (map[string]any, map[string]int) {
 // readable-out without being replaceable-in.
 // (design-docs/event-store/design.md §migration)
 type Importer interface {
-	ReplaceFromExport(ctx context.Context, export model.Export) ([]Rehomed, error)
+	ReplaceFromExport(ctx context.Context, export model.Export) (Landing, error)
 }
 
 // RawExecutor runs an engine-native statement against the store.

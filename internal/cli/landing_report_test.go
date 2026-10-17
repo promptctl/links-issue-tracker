@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -45,9 +46,45 @@ func TestWriteRehomedNamesEachMoveAndIsSilentWithoutOne(t *testing.T) {
 	}
 
 	metadata := map[string]string{}
-	rehomedMetadata(metadata, nil)
-	if metadata["rehomed"] != "0" {
-		t.Errorf("metadata rehomed = %q, want %q: zero moves is recorded, not omitted", metadata["rehomed"], "0")
+	landingMetadata(metadata, storage.Landing{})
+	for _, key := range []string{"rehomed", "rekeyed"} {
+		if metadata[key] != "0" {
+			t.Errorf("metadata %s = %q, want %q: zero changes is recorded, not omitted", key, metadata[key], "0")
+		}
+	}
+}
+
+func TestWriteLandingNamesEachRekeyAndIsSilentWithoutOne(t *testing.T) {
+	var none bytes.Buffer
+	if err := writeLanding(&none, "the backup", storage.Landing{}); err != nil {
+		t.Fatalf("writeLanding(empty) error = %v", err)
+	}
+	if none.Len() != 0 {
+		t.Errorf("writeLanding(empty) printed %q, want nothing", none.String())
+	}
+
+	landing := storage.Landing{Rekeyed: []storage.Rekeyed{
+		{IssueID: "acme-core-bb22", From: "V", Rank: "U"},
+		{IssueID: "acme-core-cc33", From: "a-1", Rank: "W"},
+	}}
+	var out bytes.Buffer
+	if err := writeLanding(&out, "the merged backlog", landing); err != nil {
+		t.Fatalf("writeLanding error = %v", err)
+	}
+	line := strings.TrimSuffix(out.String(), "\n")
+	for _, part := range []string{"gave 2 ticket(s) in the merged backlog a new rank key so that no two share one;", "acme-core-bb22", "acme-core-cc33"} {
+		if !strings.Contains(line, part) {
+			t.Errorf("output %q lacks %q", line, part)
+		}
+	}
+	if strings.Contains(line, "\n") {
+		t.Errorf("output %q is more than one line", out.String())
+	}
+
+	metadata := map[string]string{}
+	landingMetadata(metadata, landing)
+	if want := `acme-core-bb22 "V" -> "U", acme-core-cc33 "a-1" -> "W"`; metadata["rekeyed"] != "2" || metadata["rekeyed_moves"] != want {
+		t.Errorf("metadata = %v, want rekeyed=2 and rekeyed_moves %s", metadata, want)
 	}
 }
 
@@ -146,4 +183,53 @@ func restoreTraceRecord(t *testing.T, repo string) syncTraceRecord {
 		t.Fatalf("no sync trace record for lit backup restore")
 	}
 	return *restore
+}
+
+// TestBackupRestoreNamesTheTicketsItGivesAKeyOfTheirOwn drives `lit backup
+// restore` over a backup in which two epics hold one rank key. The restore
+// gives the one listed first a new key, prints which, and records the move on
+// the restore's trace.
+func TestBackupRestoreNamesTheTicketsItGivesAKeyOfTheirOwn(t *testing.T) {
+	repo := newInitTestRepo(t)
+	first := newEpicInDir(t, repo, "First")
+	second := newEpicInDir(t, repo, "Second")
+	created := strings.Fields(runCLIInDir(t, repo, "backup", "create"))
+	if len(created) != 2 {
+		t.Fatalf("backup create printed %v, want a name and a path", created)
+	}
+	payload, err := os.ReadFile(created[1])
+	if err != nil {
+		t.Fatalf("read backup: %v", err)
+	}
+	var backup map[string]any
+	if err := json.Unmarshal(payload, &backup); err != nil {
+		t.Fatalf("decode backup: %v", err)
+	}
+	issues, _ := backup["issues"].([]any)
+	if len(issues) != 2 {
+		t.Fatalf("backup holds %d issue(s), want the two epics", len(issues))
+	}
+	shared, _ := issues[0].(map[string]any)["rank"].(string)
+	issues[1].(map[string]any)["rank"] = shared
+	moved := min(first, second)
+	edited, err := json.Marshal(backup)
+	if err != nil {
+		t.Fatalf("encode backup: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "shared-key.json")
+	if err := os.WriteFile(path, edited, 0o644); err != nil {
+		t.Fatalf("write backup: %v", err)
+	}
+
+	out := runCLIInDir(t, repo, "backup", "restore", "--path", path, "--force")
+	if want := "gave 1 ticket(s) in the backup a new rank key so that no two share one; every listing keeps its order: " + quoteRemote(moved).inline() + "\n"; !strings.Contains(out, want) {
+		t.Errorf("restore output %q lacks %q", out, want)
+	}
+	if doctor := runCLIInDir(t, repo, "doctor"); !strings.Contains(doctor, " duplicate_ranks=0 ") {
+		t.Errorf("doctor after the restore:\n%s\nwant duplicate_ranks=0", doctor)
+	}
+	restore := restoreTraceRecord(t, repo)
+	if want := fmt.Sprintf("%s %q -> ", moved, shared); restore.Metadata["rekeyed"] != "1" || !strings.HasPrefix(restore.Metadata["rekeyed_moves"], want) {
+		t.Errorf("restore trace metadata = %v, want rekeyed=1 and a move starting %s", restore.Metadata, want)
+	}
 }

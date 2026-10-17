@@ -132,7 +132,7 @@ func (s *Store) Doctor(ctx context.Context) (storage.HealthReport, error) {
 		// The checks below never run, and the report says so rather than leaving
 		// their zero values to be read as findings of nothing.
 		// [LAW:no-silent-failure]
-		report.Unchecked = []string{storage.CheckRankInversions, storage.CheckDependencyCycle}
+		report.Unchecked = []string{storage.CheckRankInversions, storage.CheckDuplicateRanks, storage.CheckDependencyCycle}
 		// An error, not a warning: this is reported through the arm that makes
 		// `lit doctor` exit nonzero, so the zeros left on the unrun checks below
 		// can never be read as a clean bill of health. [LAW:no-silent-failure]
@@ -175,6 +175,16 @@ func (s *Store) Doctor(ctx context.Context) (storage.HealthReport, error) {
 	report.RankInversions = len(invertedEdges(order, edges))
 	if report.RankInversions > 0 {
 		report.Warnings = append(report.Warnings, fmt.Sprintf("rank inversions: %d (dependencies ranked below dependents)", report.RankInversions))
+	}
+	// No rank verb places a key one live issue holds onto another, and a
+	// landing separates the keys it brings in, so this names what neither stood
+	// in front of: data stored before either did. [LAW:single-enforcer]
+	// rankCollisions is the one definition of a duplicate, and the rank repair
+	// leaves none behind among the issues this order holds.
+	duplicates := rankCollisions(order)
+	report.DuplicateRanks = len(duplicates)
+	if report.DuplicateRanks > 0 {
+		report.Warnings = append(report.Warnings, fmt.Sprintf("duplicate rank keys: %d (%s; each key's holders list by id instead of by rank — 'lit doctor --fix rank' gives each its own key without changing the order)", report.DuplicateRanks, describeRankCollisions(duplicates)))
 	}
 	// A blocked-by dependency cycle is the root cause behind a rank inversion that
 	// --fix can never clear: it is unsatisfiable by any rank order. Surface the
@@ -263,29 +273,33 @@ ORDER BY 1, 3`)
 
 // ReplaceFromExport is the restore: it clears the live tables and rewrites them
 // from export as the store's rules stand now, under the ordinary self-retrying
-// mutation pipeline, and names the tickets it moved into an epic. Two rules
-// apply that the backup itself cannot know: a restore never un-purges, and every
-// ticket lives inside an epic — a backup taken before v7 holds top-level leaves,
-// and one taken before a purge can hold a child of the purged epic, which the
-// cut leaves with no parent. [LAW:single-enforcer] the cut is ApplyPurges and
-// the homing is HomeStranded, the same two a sync landing applies.
-func (s *Store) ReplaceFromExport(ctx context.Context, export model.Export) ([]storage.Rehomed, error) {
-	var rehomed []storage.Rehomed
+// mutation pipeline, and says what landing it changed. Three rules apply that
+// the backup itself cannot know: a restore never un-purges, every ticket lives
+// inside an epic — a backup taken before v7 holds top-level leaves, and one
+// taken before a purge can hold a child of the purged epic, which the cut
+// leaves with no parent — and every rank key orders one issue.
+// [LAW:single-enforcer] the cut is ApplyPurges and the rest is landExport, the
+// same a sync landing applies.
+func (s *Store) ReplaceFromExport(ctx context.Context, export model.Export) (storage.Landing, error) {
+	var landing storage.Landing
 	err := s.withStampedMutation(ctx, commitStamp{Message: "replace from export"}, func(ctx context.Context, tx *sql.Tx) error {
 		cut, err := cutByHeldPurges(ctx, tx, export)
 		if err != nil {
 			return err
 		}
-		// Assigned on every attempt, so a retried mutation reports the moves of
-		// the attempt that committed.
-		var contained model.Export
-		contained, rehomed = storage.HomeStranded(cut)
-		return writeWholeExportTx(ctx, tx, contained)
+		// Assigned on every attempt, so a retried mutation reports the changes
+		// of the attempt that committed.
+		var landed model.Export
+		landed, landing, err = landExport(cut)
+		if err != nil {
+			return err
+		}
+		return writeWholeExportTx(ctx, tx, landed)
 	})
 	if err != nil {
-		return nil, err
+		return storage.Landing{}, err
 	}
-	return rehomed, nil
+	return landing, nil
 }
 
 // rebuildFromExport writes export as it stands, cut only by purges, for the

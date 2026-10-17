@@ -23,7 +23,7 @@ func TestUncheckedNamesMatchJSONTags(t *testing.T) {
 	if len(tags) == 0 {
 		t.Fatal("no json tags found on HealthReport; the check below would be vacuous")
 	}
-	for _, name := range []string{CheckRankInversions, CheckDependencyCycle} {
+	for _, name := range []string{CheckRankInversions, CheckDuplicateRanks, CheckDependencyCycle} {
 		if !tags[name] {
 			t.Errorf("Unchecked name %q is not a json tag on HealthReport; a reader cannot map it to a field", name)
 		}

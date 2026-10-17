@@ -209,10 +209,10 @@ type SyncPullResult struct {
 	// reconcile that refused the merge, so the pull surface prints the same two
 	// tickets `lit sync reconcile` does. [LAW:one-source-of-truth]
 	Collisions []merge.Collision `json:"collisions,omitempty"`
-	// Rehomed carries the tickets the reconcile moved into an epic, straight
-	// off the reconcile that settled the pull, so the pull names the same moves
-	// `lit sync reconcile` does. [LAW:one-source-of-truth]
-	Rehomed []Rehomed `json:"rehomed,omitempty"`
+	// Landing carries what the reconcile that settled the pull changed on the
+	// way in, straight off it, so the pull names the same changes `lit sync
+	// reconcile` does. [LAW:one-source-of-truth]
+	Landing
 }
 
 // GCMode is how deep a compaction pass collects. The depths nest rather than
@@ -468,11 +468,13 @@ type SyncReconcileResult struct {
 	// remote head. Nonzero means local is ahead of the remote by the commit that
 	// carries them, and the next push delivers them; zero for every other outcome.
 	CarriedPurges int
-	// Rehomed names each ticket the settled backlog held outside an epic and
-	// the epic it now lives in (HomeStranded): a purge on one side can drop the
-	// epic a ticket on the other side was just filed under. Empty when nothing
-	// was stranded, and for every non-mutating outcome.
-	Rehomed []Rehomed
+	// Landing names what the settled backlog had to change on the way in: each
+	// ticket it held outside an epic and the epic it now lives in (a purge on one
+	// side can drop the epic a ticket on the other side was just filed under),
+	// and each ticket that shared its rank key and the key it holds now (two
+	// sides that each ranked a different pair can merge two rows onto one key).
+	// Empty when the backlog kept both rules, and for every non-mutating outcome.
+	Landing
 	// ProseRecorded counts the change rows the agent's merged text added to
 	// history on a resolved finalize: one per resolved field whose merged text
 	// differs from the provisional value the replay carried. Zero for every

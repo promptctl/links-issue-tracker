@@ -17,6 +17,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -294,9 +295,10 @@ var doctorFixes = map[string]doctorFix{
 		if fixed > 0 {
 			// The count is issues MOVED, not dependencies hoisted: the repair
 			// writes whichever issues fall outside the run it keeps, and that
-			// can be either end of an edge. Naming one side would misreport
-			// which end of the edge the run actually touched.
-			_, err = fmt.Fprintf(w, "Re-ranked %d issue(s) to place every dependency above its dependent.\n", fixed)
+			// can be either end of an edge — or a holder of a key another
+			// issue shares, since the run it keeps ascends strictly. Naming one
+			// cause would misreport why the run touched an issue.
+			_, err = fmt.Fprintf(w, "Re-ranked %d issue(s): every dependency sits above its dependent, and every issue holds a rank key of its own.\n", fixed)
 		}
 		return err
 	}},
@@ -365,11 +367,12 @@ func printDoctorReport(ctx context.Context, stdout io.Writer, ap *app.App, repor
 	// states a clean check rather than leaving its absence to be read as one.
 	parentCycle := doctorFieldValue(report, "parent_cycle", joinCycle(report.ParentCycle))
 	rankInversions := doctorFieldValue(report, storage.CheckRankInversions, strconv.Itoa(report.RankInversions))
+	duplicateRanks := doctorFieldValue(report, storage.CheckDuplicateRanks, strconv.Itoa(report.DuplicateRanks))
 	waitLoopCount, loops, err := doctorWaitLoops(ctx, ap.Store, report)
 	if err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(stdout, "integrity_check=%s foreign_key_issues=%d invalid_related_rows=%d orphan_history_rows=%d rank_inversions=%s dependency_cycle=%s parent_cycle=%s wait_loops=%s\n", report.IntegrityCheck, report.ForeignKeyIssues, report.InvalidRelatedRows, report.OrphanHistoryRows, rankInversions, dependencyCycle, parentCycle, waitLoopCount); err != nil {
+	if _, err := fmt.Fprintf(stdout, "integrity_check=%s foreign_key_issues=%d invalid_related_rows=%d orphan_history_rows=%d rank_inversions=%s duplicate_ranks=%s dependency_cycle=%s parent_cycle=%s wait_loops=%s\n", report.IntegrityCheck, report.ForeignKeyIssues, report.InvalidRelatedRows, report.OrphanHistoryRows, rankInversions, duplicateRanks, dependencyCycle, parentCycle, waitLoopCount); err != nil {
 		return err
 	}
 	if err := printReportWarnings(stdout, report.Warnings); err != nil {
@@ -488,6 +491,9 @@ func doctorLeaf() appLeaf {
 			return err
 		}
 		report := run.report
+		// The status line's own rendering, so a check a parent cycle withheld
+		// reads "unchecked" here too rather than a clean 0. [LAW:nothing-unseen]
+		telemetry.Set(ctx, "doctor.duplicate_ranks", doctorFieldValue(report, storage.CheckDuplicateRanks, strconv.Itoa(report.DuplicateRanks)))
 		// [LAW:effects-at-boundaries] Freshness resolution shells out to git and
 		// reads the store, so it runs here, at the boundary, before the pure text
 		// rendering below.

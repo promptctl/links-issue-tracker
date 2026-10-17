@@ -108,7 +108,7 @@ Sequence (`sync.go`):
    - `SyncReceiveFastForwarded` → `SyncPullFastForwarded`
    - `SyncReceiveAhead` → `SyncPullAhead`
    - `SyncReceiveNeverSynced` → `SyncPullNeverSynced`
-   - `SyncReceiveDiverged` → run `s.SyncReconcile(ctx, remote, branch)`, copy its `Ahead`, `Behind` and `Rehomed`, and map its state:
+   - `SyncReceiveDiverged` → run `s.SyncReconcile(ctx, remote, branch)`, copy its `Ahead`, `Behind` and `Landing`, and map its state:
      - `SyncReconcileLinearized` → `SyncPullLinearized`, then **re-read** `SyncFreshness` and overwrite `Ahead`, `Behind`, `OldestDivergedUnix` from it (`sync.go`).
      - `SyncReconcileProsePending` → `SyncPullProsePending`, `result.Pending = rec.Pending` (`sync.go`).
      - `SyncReconcileUnrelated` → `SyncPullUnrelated`, `result.Unrelated = rec.Unrelated`; the receive's ahead/behind and fork timestamp ride along unchanged (`sync.go`).
@@ -495,7 +495,7 @@ Only ever run on a scratch branch.
 6. `chain = readFoldedChain(ctx, s.db, remoteHead, localHead)`.
 7. `stepper = foldStepper{store, readBranch: scratch.read, chain, base, theirs}`.
 8. `landing = commitReplayAndAdvance(guard, dataBranch, scratch, remoteHead, message, export, stepper)`.
-9. `result.State = settledState`; `result.Pending = nil`; `result.Replayed = landing.replayed`; `result.Rehomed = landing.rehomed`.
+9. `result.State = settledState`; `result.Pending = nil`; `result.Replayed = landing.replayed`; `result.Landing = landing.landing`.
 
 `reconcileFromAnchors` (`sync_reconcile.go`) = `runOnReconcileScratch` + `base := exportAtCommit(scratch.read, baseCommit)` + `mergeAndReplay(..., base, reconcileCommitMessage, SyncReconcileLinearized)`.
 
@@ -526,34 +526,34 @@ Errors: `"read folded chain %s..%s: %w"`, `"scan folded chain commit: %w"`, `"it
 
 `newSpineWriter(ctx, branch)` (`sync_reconcile.go`): `CALL DOLT_CHECKOUT(branch)` (error `"switch to reconcile spine branch %q: %w"`), then `s.Export(ctx)` to seed `landed` from a real read (error `"read reconcile spine base state: %w"`).
 
-`land(ctx, next, stamp) ([]storage.Rehomed, error)` (`sync_reconcile.go`): unconditional `CALL DOLT_CHECKOUT(w.branch)` first, then `contained, rehomed := storage.HomeStranded(next)` (`01-data-model.md`), then `replayDeltaOnScratch(diffExports(w.landed, contained), stamp)`; `w.landed = contained` **only on success**, and `rehomed` is returned. Every sync write lands here, so no landing commits a ticket outside an epic. Test evidence: `TestSyncReconcileHomesAChildOfAnEpicPurgedOnTheOtherSide` (`rehome_test.go`).
+`land(ctx, next, stamp) (storage.Landing, error)` (`sync_reconcile.go`): unconditional `CALL DOLT_CHECKOUT(w.branch)` first, then `landed, landing, err := landExport(next)` (`rank_collisions.go`: `storage.HomeStranded`, then `separateRankCollisions`; `01-data-model.md`, `04-store-operations.md`), a separation error returned as is, then `replayDeltaOnScratch(diffExports(w.landed, landed), stamp)`; `w.landed = landed` **only on success**, and `landing` is returned. Every sync write lands here, so no landing commits a ticket outside an epic or a rank key two issues hold. Test evidence: `TestSyncReconcileHomesAChildOfAnEpicPurgedOnTheOtherSide` (`rehome_test.go`); `TestSyncReconcileSeparatesTheKeyTwoReplicasMintedAlike` (`rank_collisions_test.go`).
 
 `replayDeltaOnScratch(ctx, delta, stamp)` (`sync_reconcile.go`): inside `withCommitLock` (re-entrant): `BeginTx` → `defer tx.Rollback()` → `applyExportDelta(ctx, tx, delta)` → `tx.Commit()` → `commitWorkingSetOnce(ctx, stamp)`. **A single attempt, deliberately without the self-rotating transient retry** — a rotation would open a fresh connection on the DEFAULT branch and resume committing onto the data branch (`sync_reconcile.go`). A transient failure bubbles to `replayUnderGuard`'s outer retry, whose next attempt re-creates both scratch branches as its first op and rebuilds the whole spine from the fixed anchors. Errors: `"begin %s tx: %w"`, `"commit %s tx: %w"`. Test evidence: `TestSyncReconcileCombineRecoversFromTransientFailureMidReplay` (`sync_unrelated_test.go`).
 
 ### 5.16 `commitReplayAndAdvance` — the safe replay, step by step
 
-`commitReplayAndAdvance(ctx, guard, dataBranch, scratch, remoteHead, message, export, stepper) (replayLanding, error)` (`sync_reconcile.go`), where `replayLanding{replayed int; rehomed []storage.Rehomed}`:
+`commitReplayAndAdvance(ctx, guard, dataBranch, scratch, remoteHead, message, export, stepper) (replayLanding, error)` (`sync_reconcile.go`), where `replayLanding{replayed int; landing storage.Landing}`:
 
 1. `CALL DOLT_CHECKOUT(scratch.spine)`; error `"switch to reconcile spine branch %q: %w"`.
 2. `s.resetAndLift(ctx, remoteHead)`; error `"adopt remote head %q on scratch: %w"`. This is the spine's **one and only** reset.
 3. `s.commitWorkingSetOnce(ctx, commitStamp{Message: reconcileLiftCommitMessage})` — the schema-lift DDL and bookkeeping land as their own named commit, or **no commit at all** on a current-schema head (empty diff). Error `"commit schema lift of %q: %w"` (`sync_reconcile.go`).
 4. `liftedBase = readDoltHead(ctx, s.db)`; error `"read lifted base: %w"`.
 5. `writer = newSpineWriter(ctx, scratch.spine)` — constructed **after** the lift commit.
-6. Loop `i = 0 .. stepper.len()-1`: `step = stepper.step(ctx, i)`; `writer.land(step.export, step.stamp)`, its moves discarded; landing error wrapped `"replay folded commit %q: %w"` naming the step's message (`sync_reconcile.go`). One step is read and landed before the next is read — bounded memory.
-7. `rehomed = writer.land(ctx, export, commitStamp{Message: message, AllowEmpty: true})` — the marker commit is **unconditional** (`sync_reconcile.go`).
+6. Loop `i = 0 .. stepper.len()-1`: `step = stepper.step(ctx, i)`; `writer.land(step.export, step.stamp)`, its landing discarded; landing error wrapped `"replay folded commit %q: %w"` naming the step's message (`sync_reconcile.go`). One step is read and landed before the next is read — bounded memory.
+7. `landing = writer.land(ctx, export, commitStamp{Message: message, AllowEmpty: true})` — the marker commit is **unconditional** (`sync_reconcile.go`).
 8. `replayedCommit = readDoltHead(ctx, s.db)`; error `"read replayed commit: %w"`.
 9. `landed = countCommitsInRange(ctx, s.db, liftedBase, replayedCommit)`; `replayed = landed - 1` (subtracting the marker) (`sync_reconcile.go`). `countCommitsInRange` (`sync_reconcile.go`) = `SELECT COUNT(*) FROM dolt_log(?)` over `foldedChainRange(exclusiveBase, head)`; error `"count replayed commits %s..%s: %w"`.
 10. **Snapshot-first**: `guard.ensure(ctx)`; failure → `"snapshot before reconcile: %w"`, aborting **before** the data branch moves (`sync_reconcile.go`).
 11. `CALL DOLT_CHECKOUT(dataBranch)`; error `"return to data branch %q: %w"`.
 12. `CALL DOLT_RESET('--hard', replayedCommit)` — **the single atomic advance of the data branch**; error `"advance %q to replayed commit: %w"` (`sync_reconcile.go`).
 13. `dbsnapshot.PruneMatching(s.doltRootDir, 10, IsReconcileSnapshotName)`. A failure prints `"lit: reconcile could not prune old recovery snapshots (replay already committed): %v"` to stderr and is **not** promoted — the replay already committed (`sync_reconcile.go`).
-14. Return `replayLanding{replayed, rehomed}`.
+14. Return `replayLanding{replayed, landing}`.
 
 Invariant: the data branch is at its pre-reconcile head before step 12 and at the complete replayed spine after — never in between.
 
 ### 5.17 Reconcile result vocabulary
 
-`SyncReconcileResult` at `/Users/bmf/code/links-issue-tracker/internal/storage/sync.go`: `State`, `Ahead`, `Behind`, `LocalHead`, `RemoteHead`, `BaseCommit`, `Pending []merge.ProsePending`, `Collisions []merge.Collision`, `Unrelated *UnrelatedInventory`, `Replayed int`, `CarriedPurges int`, `Rehomed []Rehomed`, `ProseRecorded int`.
+`SyncReconcileResult` at `/Users/bmf/code/links-issue-tracker/internal/storage/sync.go`: `State`, `Ahead`, `Behind`, `LocalHead`, `RemoteHead`, `BaseCommit`, `Pending []merge.ProsePending`, `Collisions []merge.Collision`, `Unrelated *UnrelatedInventory`, `Replayed int`, `CarriedPurges int`, the embedded `Landing` (`Rehomed []Rehomed`, `Rekeyed []Rekeyed`), `ProseRecorded int`.
 
 States and their string values (`storage/sync.go`):
 - `SyncReconcileNotDiverged = "not_diverged"`
@@ -568,7 +568,7 @@ States and their string values (`storage/sync.go`):
 
 `CarriedPurges` counts the local purge records a take-remote carried onto the remote head; nonzero means local is ahead of the remote by the commit carrying them, which the next push delivers; zero for every other outcome (`storage/sync.go`).
 
-`Rehomed` names each ticket the settling landing moved into an epic and the epic it now lives in (`storage.HomeStranded`); empty when nothing was stranded and for every non-mutating outcome (`storage/sync.go`). `mergeAndReplay`, take-remote with carried purges and take-local set it from the landing.
+`Landing` names each ticket the settling landing moved into an epic and the epic it now lives in (`storage.HomeStranded`), and each ticket it gave a new rank key, with the key it held and the key it holds now (`separateRankCollisions`); both empty when the backlog kept both rules and for every non-mutating outcome (`storage/sync.go`). `mergeAndReplay`, take-remote with carried purges and take-local set it from the landing.
 
 Tests: `TestSyncReconcileLinearizesDivergenceAndFastForwardPushes` (`sync_reconcile_test.go`), `TestSyncReconcileHoldsProseDivergenceForAgent` (`sync_reconcile_test.go`), `TestSyncReconcileResolvedFinalizesWithAgentText` (`sync_reconcile_test.go`), `TestSyncReconcileHealsSchemaSkew` (`sync_reconcile_schema_skew_test.go`), `TestSyncReconcileCombineIsBoundedOnALargeFoldedChain` (`sync_reconcile_scale_test.go`), `TestSyncReconcileCombinePreservesFoldedProvenance` (`sync_unrelated_test.go`).
 
@@ -646,7 +646,7 @@ Idempotent under retry (cached snapshot, fixed ref). The session's working set i
 1. `local = exportAtCommit(scratch.read, localHead)`; `theirs = exportAtCommit(scratch.read, remoteHead)` (each lifted to the current schema).
 2. `terminal = theirs.ApplyPurges(model.UnionPurges(theirs.Purges, local.Purges))`.
 3. `commitReplayAndAdvance(ctx, guard, dataBranch, scratch, remoteHead, takeRemotePurgesCommitMessage, terminal, foldStepper{store: s, readBranch: scratch.read, base: model.Export{}, theirs: theirs})` — an empty chain, so the spine is the lift commit (none on a current-schema head) and the marker.
-4. `result.State = SyncReconcileTookRemote`; `result.Rehomed = landing.rehomed`.
+4. `result.State = SyncReconcileTookRemote`; `result.Landing = landing.landing`.
 Tests `TestSyncResolveUnrelatedTakeRemoteCarriesTheLocalPurge`, `TestSyncResolveUnrelatedTakeRemoteAdoptsAPrePurgeRemote` "a purge to carry" (`sync_unrelated_purge_test.go`).
 
 `purgesMissingAt(ctx, commit)` (`sync_unrelated_take.go`): `listPurges(ctx, s.db)` (error returned as is), then `purgesAtCommit(ctx, s.db, commit)` (error → `"read the remote head's purge records: %w"`; a head with no `purges` table holds none); returns the local records whose `Key()` none of the commit's records has.
@@ -659,7 +659,7 @@ Tests `TestSyncResolveUnrelatedTakeRemoteCarriesTheLocalPurge`, `TestSyncResolve
 3. `chain = readFoldedChain(remoteHead, localHead)`.
 4. `stepper = foldStepper{base: model.Export{}, theirs: theirs...}` — the **same no-base union projection combine uses**, so mid-chain history stays a whole backlog (`sync_unrelated_take.go`).
 5. `commitReplayAndAdvance(guard, dataBranch, scratch, remoteHead, takeLocalCommitMessage, terminal, stepper)` with `terminal = local.ApplyPurges(model.UnionPurges(local.Purges, theirs.Purges))` — the terminal export is **local's content, not the union**, cut by both sides' purge records and carrying them, so the marker commit holds the remote's records and no row they name, and its diff is the discard of the remote-only issues (`sync_unrelated_take.go`).
-6. `result.State = SyncReconcileTookLocal`; `result.Replayed = landing.replayed`; `result.Rehomed = landing.rehomed`.
+6. `result.State = SyncReconcileTookLocal`; `result.Replayed = landing.replayed`; `result.Landing = landing.landing`.
 
 Tests: `TestSyncResolveUnrelatedTakeLocal` (`sync_unrelated_test.go`), `TestSyncResolveUnrelatedTakeLocalPreservesFoldedProvenance` (`sync_unrelated_test.go`), `TestSyncResolveUnrelatedTakeLocalKeepsTheRemotesPurge` (`sync_unrelated_purge_test.go`).
 

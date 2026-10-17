@@ -336,7 +336,7 @@ func reportTakeOutcome(stdout io.Writer, ws workspace.Info, command string, remo
 	// nothing. [LAW:dataflow-not-control-flow] recorded unconditionally.
 	metadata := map[string]string{"remote": remote, "sync_branch": branch, "replayed": strconv.Itoa(result.Replayed),
 		"carried_purges": strconv.Itoa(result.CarriedPurges), "purged": strconv.Itoa(len(purgedIDs(result.Unrelated)))}
-	rehomedMetadata(metadata, result.Rehomed)
+	landingMetadata(metadata, result.Landing)
 	decision := string(result.State)
 	status := "ok"
 	// [LAW:one-source-of-truth] a dedicated mapping, not reconcileReasonForState:
@@ -370,7 +370,7 @@ func reportTakeOutcome(stdout io.Writer, ws workspace.Info, command string, remo
 			state, describeIDSet(discardedIDs(result.Unrelated, storage.TakeRemote)), describeIDSet(purgedIDs(result.Unrelated))); err != nil {
 			return err
 		}
-		return writeRehomed(stdout, "the adopted backlog", result.Rehomed)
+		return writeLanding(stdout, "the adopted backlog", result.Landing)
 	case storage.SyncReconcileTookLocal:
 		endDivergenceEpisode(ws)
 		if _, err := fmt.Fprintf(stdout,
@@ -378,7 +378,7 @@ func reportTakeOutcome(stdout io.Writer, ws workspace.Info, command string, remo
 			ref, describeReplayed(result.Replayed), describeIDSet(discardedIDs(result.Unrelated, storage.TakeLocal)), describeIDSet(purgedIDs(result.Unrelated))); err != nil {
 			return err
 		}
-		return writeRehomed(stdout, "your backlog", result.Rehomed)
+		return writeLanding(stdout, "your backlog", result.Landing)
 	case storage.SyncReconcileNotDiverged:
 		endDivergenceEpisode(ws)
 		_, err := fmt.Fprintln(stdout, "nothing to reconcile: the clone is not diverged from the remote")
@@ -443,7 +443,7 @@ func reportReconcileResult(ctx context.Context, stdout io.Writer, ws workspace.I
 	// "replayed" mirrors reportTakeOutcome: the provenance-replay count is part
 	// of the durable trace for every outcome, zero included.
 	metadata := map[string]string{"remote": remote, "sync_branch": branch, "replayed": strconv.Itoa(result.Replayed)}
-	rehomedMetadata(metadata, result.Rehomed)
+	landingMetadata(metadata, result.Landing)
 	metadata["prose_recorded"] = strconv.Itoa(result.ProseRecorded)
 	switch result.State {
 	case storage.SyncReconcileIDCollision:
@@ -529,7 +529,7 @@ func reportReconcileResult(ctx context.Context, stdout io.Writer, ws workspace.I
 		if _, err := fmt.Fprintf(stdout, "reconciled: the divergence merged into linear history — %s replayed with original messages and timestamps; the next push fast-forwards\n", describeReplayed(result.Replayed)); err != nil {
 			return err
 		}
-		if err := writeRehomed(stdout, "the merged backlog", result.Rehomed); err != nil {
+		if err := writeLanding(stdout, "the merged backlog", result.Landing); err != nil {
 			return err
 		}
 		// The histories that just merged are exactly the moment
@@ -561,7 +561,7 @@ func reportReconcileResult(ctx context.Context, stdout io.Writer, ws workspace.I
 			describeIDSet(inv.Purged)); err != nil {
 			return err
 		}
-		if err := writeRehomed(stdout, "the combined backlog", result.Rehomed); err != nil {
+		if err := writeLanding(stdout, "the combined backlog", result.Landing); err != nil {
 			return err
 		}
 		return reportContestedLanes(ctx, stdout, ws, session.engine)
