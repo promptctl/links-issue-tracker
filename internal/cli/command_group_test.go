@@ -65,12 +65,12 @@ func commandGroupPaths() [][]string {
 			walk(path, sub.Subcommands)
 		}
 	}
-	for _, spec := range commandSpecs(context.Background(), io.Discard, io.Discard) {
-		if spec.Hidden || len(visibleSubcommands(spec.Subcommands)) == 0 {
+	for _, spec := range advertisedCommandSpecs(commandSpecs(context.Background(), io.Discard, io.Discard)) {
+		if len(spec.Subcommands) == 0 {
 			continue
 		}
 		paths = append(paths, []string{spec.Name})
-		walk([]string{spec.Name}, visibleSubcommands(spec.Subcommands))
+		walk([]string{spec.Name}, spec.Subcommands)
 	}
 	return paths
 }
@@ -93,18 +93,15 @@ func commandLeafPaths() [][]string {
 			walk(path, sub.Subcommands)
 		}
 	}
-	for _, spec := range commandSpecs(context.Background(), io.Discard, io.Discard) {
-		// Hidden rows are off the advertised surface, and a retired row answers
-		// every invocation — help included — with its replacement pointer rather
-		// than a flag surface, which is the documented break, not a help answer.
-		if spec.Hidden || spec.Retired {
-			continue
-		}
-		if len(visibleSubcommands(spec.Subcommands)) == 0 {
+	// A retired row is Hidden, so it is off this surface: it answers every
+	// invocation — help included — with its replacement pointer rather than a
+	// flag surface, which is the documented break, not a help answer.
+	for _, spec := range advertisedCommandSpecs(commandSpecs(context.Background(), io.Discard, io.Discard)) {
+		if len(spec.Subcommands) == 0 {
 			paths = append(paths, []string{spec.Name})
 			continue
 		}
-		walk([]string{spec.Name}, visibleSubcommands(spec.Subcommands))
+		walk([]string{spec.Name}, spec.Subcommands)
 	}
 	return paths
 }

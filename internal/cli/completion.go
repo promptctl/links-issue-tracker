@@ -15,12 +15,21 @@ import (
 // subcommand names are declared, so a generated script cannot omit a command
 // the registry has nor invent one it lacks. [LAW:one-source-of-truth]
 func commandCompletionModel() []CommandSpec {
-	specs := commandSpecs(context.Background(), io.Discard, io.Discard)
-	// Hidden specs and subcommands (retired ones kept dispatchable for their
-	// pointer, and the background sync entrypoints) are off the advertised
-	// surface, so they are off completion too — the same Hidden bit cobra reads
-	// for `--help`. [LAW:one-source-of-truth]
-	visible := make([]CommandSpec, 0, len(specs)+1)
+	specs := advertisedCommandSpecs(commandSpecs(context.Background(), io.Discard, io.Discard))
+	// help is cobra's built-in command (only the default completion command is
+	// disabled on root, not help), so it is a real invocable command the
+	// registry does not own. Listing it keeps completion faithful to the actual
+	// command surface rather than to the registry alone.
+	return append(specs, CommandSpec{Name: "help", Summary: "Help about any command"})
+}
+
+// advertisedCommandSpecs is the surface lit advertises in usage, help and
+// completion: Hidden specs and Hidden subcommand rows (retired ones kept
+// dispatchable for their pointer, and the background sync entrypoints) dropped
+// at every depth — the same Hidden bit cobra reads for `--help`.
+// [LAW:one-source-of-truth]
+func advertisedCommandSpecs(specs []CommandSpec) []CommandSpec {
+	visible := make([]CommandSpec, 0, len(specs))
 	for _, s := range specs {
 		if s.Hidden {
 			continue
@@ -28,12 +37,7 @@ func commandCompletionModel() []CommandSpec {
 		s.Subcommands = visibleSubcommands(s.Subcommands)
 		visible = append(visible, s)
 	}
-	specs = visible
-	// help is cobra's built-in command (only the default completion command is
-	// disabled on root, not help), so it is a real invocable command the
-	// registry does not own. Listing it keeps completion faithful to the actual
-	// command surface rather than to the registry alone.
-	return append(specs, CommandSpec{Name: "help", Summary: "Help about any command"})
+	return visible
 }
 
 // visibleSubcommands drops the Hidden rows of a subcommand tree at every depth.

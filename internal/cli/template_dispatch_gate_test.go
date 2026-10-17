@@ -59,12 +59,34 @@ func undispatchedLitTokens(templateName string, content []byte, surface taughtSu
 	var bad []string
 	for _, region := range regions {
 		for _, m := range litToken.FindAllStringSubmatch(region, -1) {
-			if path, refused := surface.refusedPath(strings.Fields(m[1])); refused && !slices.Contains(bad, path) {
-				bad = append(bad, path)
+			for _, words := range invocations(m[1]) {
+				if path, refused := surface.refusedPath(words); refused && !slices.Contains(bad, path) {
+					bad = append(bad, path)
+				}
 			}
 		}
 	}
 	return bad
+}
+
+// invocations splits one captured word run at each later `lit`: the run of
+// `lit next then lit ready` is two taught invocations, and read as one it would
+// hide the retired `ready` behind the live `next`. A `lit` followed by no
+// command-shaped word teaches nothing, as for litToken itself.
+func invocations(run string) [][]string {
+	var out [][]string
+	var words []string
+	for _, w := range append(strings.Fields(run), "lit") {
+		if w != "lit" {
+			words = append(words, w)
+			continue
+		}
+		if len(words) > 0 {
+			out = append(out, words)
+		}
+		words = nil
+	}
+	return out
 }
 
 // taughtSurface is what a template may name, as the registry states it: the
@@ -192,6 +214,9 @@ func TestGateRefusesRetiredAndUnknownTokens(t *testing.T) {
 		{"retired subcommand in shell text", "t.sh", "lit bulk import --path x.json || exit 1", []string{"bulk import"}},
 		{"live subcommand of the same family", "t.md", "`lit bulk close --ids a,b`", nil},
 		{"positional where a family takes one", "t.md", "`lit rank links-abc --top`", nil},
+		{"retired command after a live one in one span", "t.md", "`lit next then lit ready`", []string{"ready"}},
+		{"retired subcommand after a live one in shell text", "t.sh", "printf 'run lit sync push or lit bulk import'", []string{"bulk import"}},
+		{"trailing lit before a placeholder", "t.md", "`lit next then lit <id>`", nil},
 		{"live command", "t.md", "Run `lit next` and start the ticket.", nil},
 		{"live command with subcommand and flags", "t.md", "`lit quickstart work` then `lit sync push --remote origin`", nil},
 		{"guidance command taught by the quickstart", "t.md", "`lit workflows` — see the lifecycle", nil},

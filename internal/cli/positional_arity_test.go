@@ -7,6 +7,7 @@ import (
 	"io"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -72,6 +73,9 @@ func leafPaths(t *testing.T) []invocablePath {
 	var paths []invocablePath
 	var walk func(prefix []string, subs []SubcommandSpec)
 	walk = func(prefix []string, subs []SubcommandSpec) {
+		// A retired subcommand answers its pointer before any arity check, as a
+		// retired command does; a hidden one still dispatches, so it is walked.
+		subs = slices.DeleteFunc(slices.Clone(subs), func(s SubcommandSpec) bool { return s.Retired })
 		if len(subs) == 0 {
 			paths = append(paths, invocablePath{path: prefix})
 			return
@@ -92,7 +96,7 @@ func leafPaths(t *testing.T) []invocablePath {
 			// arity check, which is the documented behaviour tested elsewhere.
 			continue
 		}
-		walk([]string{spec.Name}, visibleSubcommands(spec.Subcommands))
+		walk([]string{spec.Name}, spec.Subcommands)
 	}
 	if len(paths) == 0 {
 		t.Fatal("registry produced no command paths; the walk is broken, not the CLI")

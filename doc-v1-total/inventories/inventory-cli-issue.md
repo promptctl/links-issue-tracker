@@ -83,9 +83,8 @@ into* one of those, the call and its observable effect are recorded here.
 - `r.wsCmd(fn)` → `acquireFromWD` (workspace metadata only, no store)
   (`register.go`).
 - `r.familyCmd(family)` resolves `args[0]` against the family table *before*
-  opening anything; a row carrying `retired` returns that error before any
-  parse or workspace open, and every other row parses its leaf, then opens the
-  app in the row's access mode (`register.go`).
+  opening anything, then parses the row's leaf and opens the app in the row's
+  access mode (`register.go`).
 - `r.wsFamilyCmd(family)` same, but workspace-mode (`register.go`).
 - `r.transitionCmd(spec)` → `transitionLeaf(spec)` under `app.AccessWrite`
   (`register.go`).
@@ -109,7 +108,9 @@ into* one of those, the call and its observable effect are recorded here.
 - `resolve(args)` (`register.go`): with **zero args**, or an args[0] that
   matches no row, it returns `errors.New(f.usage)` — a plain error, **not** a
   `UsageError`, so the exit code is `ExitGeneric` (1), not 2. Matching is exact
-  string equality; no trimming.
+  string equality; no trimming. A matched row carrying `retired` returns that
+  `RetiredCommandError` before its `nestedUsage` help check and before its
+  payload is read, in a family of any row type (`register.go`).
 - `subcommandSpecs()` projects every row with `Hidden` and `Retired` stated;
   a retired row is `Hidden` (`register.go`). `visibleSubcommands(subs)` drops
   `Hidden` rows at every depth for the completion projection (`completion.go`).
@@ -1792,7 +1793,7 @@ Family `depFamily`, usage `"usage: lit dep <add|rm|ls> ..."` (`dependency.go`).
 Family `bulkFamily`, usage `"usage: lit bulk <label|close|archive> ..."`
 (`bulk.go`). Group `operations` (`register.go`).
 Rows: `label` (write), `close` (write), `archive` (write), and hidden
-`import` (`retiredSubcommand`, retired).
+`import` (`retiredSubcommand`: retired, projected `Hidden`).
 
 **Shared `--ids`** — `registerBulkIDs` (`bulk.go`), declared once for every
 bulk row: a string array, comma-separated and/or repeated, read by
@@ -1852,8 +1853,8 @@ before any id is acted on.
 → exit 3 (`bulk.go`). Guidance verbatim:
 "use `lit backup restore --path <export.json>` — it owns the same export-restore
 mechanism `bulk import` duplicated" (`register.go`). The row is built by
-`retiredSubcommand` (`register.go`), and a row carrying a `retired` error
-returns it before any parse or workspace open, so the pointer is returned even
+`retiredSubcommand` (`register.go`), and `resolve` returns a row's `retired`
+error before any parse or workspace open, so the pointer is returned even
 outside a git repository (`register.go`; asserted in `retired_command_test.go`).
 
 ### 2.22 `lit export`
