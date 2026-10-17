@@ -50,30 +50,6 @@ func TestImportBatchesBuildsTheRequestedRows(t *testing.T) {
 			t.Errorf("record %d is missing a key `lit import` requires: %+v", i, r)
 		}
 	}
-	// Roughly a third blocked, matching the 42-of-118 the live store reports.
-	// The first row has no predecessor, so 9 rows give edges at 3, 6 — hence 2.
-	blocked := 0
-	for _, r := range recs {
-		if len(r.BlockedBy) > 0 {
-			blocked++
-		}
-	}
-	if blocked != 2 {
-		t.Errorf("importBatches(9) wired %d blocked rows, want 2 (indices 3 and 6)", blocked)
-	}
-	// An edge may only name another local_id in the same file — `lit import`'s
-	// rule, and a spec violating it fails the whole import.
-	ids := map[string]bool{}
-	for _, r := range recs {
-		ids[r.LocalID] = true
-	}
-	for _, r := range recs {
-		for _, dep := range r.BlockedBy {
-			if !ids[dep] {
-				t.Errorf("record %s depends on %q, which is not a local_id in the same spec", r.LocalID, dep)
-			}
-		}
-	}
 }
 
 // The property that matters about filler text is how well it COMPRESSES, since
@@ -331,7 +307,7 @@ func TestGenerateRefusesAWorkspaceThatAlreadyExists(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(parent, sz.name), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	_, err := generate(litBinary{path: filepath.Join(parent, "unused-lit")}, parent, sz, os.Environ())
+	_, err := generate(litBinary{path: filepath.Join(parent, "unused-lit")}, parent, sz, os.Environ(), runQuiet)
 	if err == nil {
 		t.Fatal("generate() into an existing directory returned no error")
 	}

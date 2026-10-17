@@ -183,8 +183,9 @@ with nothing on screen to mark it. Comparing two runs means two paths.
 Reach for `just perf` whenever a claim is about latency a user feels or about
 store size, and for `go test -bench` when it is about the cost of a pass. The
 end-to-end figures are the ones that caught what the microbenchmarks
-structurally cannot see: process start plus store open is ~0.14s, which on a
-590-row store is most of what `lit backlog` spends.
+structurally cannot see: process start plus store open is ~0.09s, what `lit
+ls` costs at 0 rows and at 590 alike (measured 2026-10-17), and a third of what
+`lit backlog` spends on the 590-row store.
 
 Read the table the way it is built. Each probe runs once unrecorded as a
 warm-up, then five times round-robin, and the reported figure is the

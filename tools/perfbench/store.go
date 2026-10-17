@@ -40,6 +40,7 @@ type importRecord struct {
 	Type        string   `json:"type"`
 	Topic       string   `json:"topic"`
 	Description string   `json:"description"`
+	Parent      string   `json:"parent,omitempty"`
 	BlockedBy   []string `json:"blocked_by,omitempty"`
 }
 
@@ -52,7 +53,9 @@ type importRecord struct {
 // because nothing would compare the two. `lit init` plus `lit import` is the
 // bulk-ingest path lit already offers its users, so the store measured here is
 // a store lit itself produced. [LAW:one-source-of-truth]
-func generate(bin litBinary, parent string, sz size, env []string) (generatedStore, error) {
+// Each step runs through run, which is runQuiet everywhere but the test that
+// proves lit accepts the plan, where it is lit's own entry point in-process.
+func generate(bin litBinary, parent string, sz size, env []string, run stepRunner) (generatedStore, error) {
 	root := filepath.Join(parent, sz.name)
 	// os.Mkdir, never MkdirAll: an existing directory must fail here rather
 	// than be reused. lit init is idempotent and lit import appends, so
@@ -81,7 +84,7 @@ func generate(bin litBinary, parent string, sz size, env []string) (generatedSto
 		specs = append(specs, specPath)
 	}
 	for _, st := range generationSteps(bin, sz, specs) {
-		if err := runQuiet(root, env, st); err != nil {
+		if err := run(root, env, st); err != nil {
 			return generatedStore{}, err
 		}
 	}
@@ -144,6 +147,12 @@ func generationSteps(bin litBinary, sz size, specs []string) []step {
 // but zero imports. Expressing that as a list length keeps it out of the caller
 // as a branch: the loop over batches runs zero times, and the operation that
 // runs is the same one at every size. [LAW:dataflow-not-control-flow]
+//
+// The rows come in groups of rowsPerEpic: an epic, then the tasks inside it,
+// because lit refuses a ticket outside an epic. A dependency joins a task to
+// the task at the same position in the previous group — an edge between two
+// epics' children, the form lit accepts; lit refuses a blocked_by between two
+// children of one epic, whose order is their rank.
 func importBatches(rows int) [][]importRecord {
 	records := make([]importRecord, 0, rows)
 	for i := range rows {
@@ -153,16 +162,20 @@ func importBatches(rows int) [][]importRecord {
 		// compresses the two together would store the row cheaper than a real
 		// one whose title is independent prose.
 		rec := importRecord{
-			LocalID:     fmt.Sprintf("r%d", i),
+			LocalID:     localID(i),
 			Title:       fmt.Sprintf("generated row %d %s", i, filler(^i, titleBytes))[:titleBytes],
-			Type:        "task",
+			Type:        "epic",
 			Topic:       "bench",
 			Description: filler(i, descriptionBytes),
 		}
-		// The first row has no predecessor to depend on, which is why the
-		// blocked share is "roughly" a third rather than exactly one.
-		if i > 0 && i%blockedEveryNth == 0 {
-			rec.BlockedBy = []string{fmt.Sprintf("r%d", i-1)}
+		if i%rowsPerEpic != 0 {
+			rec.Type = "task"
+			rec.Parent = localID(i - i%rowsPerEpic)
+			// The first group has no group before it to depend on, which is
+			// why the blocked share is "roughly" a third rather than exactly.
+			if i >= rowsPerEpic && i%blockedEveryNth == 0 {
+				rec.BlockedBy = []string{localID(i - rowsPerEpic)}
+			}
 		}
 		records = append(records, rec)
 	}
@@ -171,6 +184,9 @@ func importBatches(rows int) [][]importRecord {
 	}
 	return [][]importRecord{records}
 }
+
+// localID is the name row i goes by inside its import spec.
+func localID(i int) string { return fmt.Sprintf("r%d", i) }
 
 // proseWords is the vocabulary filler text is drawn from. Its content is
 // irrelevant; its job is to make generated rows compress like the rows a real
@@ -295,6 +311,9 @@ func storeBytes(dir string) (int64, error) {
 // allowed to continue past one. [LAW:no-silent-failure]
 //
 // It carries the same runBudget the probes do, and for a stronger reason.
+// stepRunner performs one generation step in dir under env.
+type stepRunner func(dir string, env []string, st step) error
+
 // runBudget exists because this epic's subject is a write path that can wait
 // fifteen minutes on a lock; generation is ENTIRELY write path, so an import
 // wedged behind a lock is at least as likely here as in any probe. Unbudgeted,

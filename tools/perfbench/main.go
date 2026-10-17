@@ -111,7 +111,7 @@ func run(args []string, out, progress io.Writer) error {
 	results := make([]result, 0, len(sizes))
 	for _, sz := range sizes {
 		fmt.Fprintf(progress, "generating %s store (%d rows) ...\n", sz.name, sz.rows)
-		store, err := generate(bin, workDir, sz, env)
+		store, err := generate(bin, workDir, sz, env, runQuiet)
 		if err != nil {
 			return err
 		}
