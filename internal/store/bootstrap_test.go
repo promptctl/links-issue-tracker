@@ -11,14 +11,20 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
-const bootstrapRacerRootEnvVar = "LIT_TEST_BOOTSTRAP_RACER_ROOT"
+const (
+	bootstrapRacerRootEnvVar   = "LIT_TEST_BOOTSTRAP_RACER_ROOT"
+	bootstrapRacerReaderEnvVar = "LIT_TEST_BOOTSTRAP_RACER_READER"
+)
 
 // TestHelperBootstrapRacer is one racer in TestRacingFirstOpensBuildOneDatabase,
-// run in its own process: it blocks until the parent closes its stdin, then
-// does what `lit init` does to a fresh workspace — ask whether the local store
-// holds tickets, then make the database exist — and prints whether it built it.
+// run in its own process. It blocks until the parent closes its stdin, then
+// either does what `lit init` does to a fresh workspace — ask whether the local
+// store holds tickets, then make the database exist — and prints whether it
+// built it, or, as the reader, opens the workspace for reading the moment
+// there is one to open.
 func TestHelperBootstrapRacer(t *testing.T) {
 	root := os.Getenv(bootstrapRacerRootEnvVar)
 	if root == "" {
@@ -28,6 +34,10 @@ func TestHelperBootstrapRacer(t *testing.T) {
 		t.Fatalf("wait for the start signal: %v", err)
 	}
 	ctx := context.Background()
+	if os.Getenv(bootstrapRacerReaderEnvVar) != "" {
+		readTheFirstDatabaseToAppear(t, ctx, root)
+		return
+	}
 	if _, _, err := LocalHasTickets(ctx, root, "test-workspace-id"); err != nil {
 		t.Fatalf("LocalHasTickets() error = %v", err)
 	}
@@ -38,10 +48,37 @@ func TestHelperBootstrapRacer(t *testing.T) {
 	fmt.Printf("created=%t\n", created)
 }
 
+// readTheFirstDatabaseToAppear opens root for reading as soon as it is not
+// uninitialized, so a root that appears before its database is whole is read
+// in that state. A build takes about a second here; the deadline only ever
+// fires on a hang.
+func readTheFirstDatabaseToAppear(t *testing.T, ctx context.Context, root string) {
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		st, err := OpenForRead(ctx, root, "test-workspace-id")
+		if errors.Is(err, ErrWorkspaceNotInitialized) {
+			if time.Now().After(deadline) {
+				t.Fatal("no database appeared before the deadline")
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("OpenForRead() on the first root to appear: %v", err)
+		}
+		if _, err := st.LocalIssueCount(ctx); err != nil {
+			t.Fatalf("LocalIssueCount() on the first root to appear: %v", err)
+		}
+		if err := st.Close(); err != nil {
+			t.Fatalf("Close() = %v", err)
+		}
+		return
+	}
+}
+
 // Processes that bootstrap one fresh workspace at the same moment all succeed,
 // exactly one of them builds the database, and what they leave behind opens
-// for writing. Each racer first reads the workspace the way init does, so a
-// racer that sees a database another is still laying down fails here too.
+// for writing. A reader racing them reads the first database to appear, so a
+// database that is visible before it is whole fails the round.
 // The racers are processes, not goroutines: the embedded driver serializes
 // engines within one process, which hides the race. Closing every racer's
 // stdin at once is the starting gun.
@@ -51,15 +88,19 @@ func TestRacingFirstOpensBuildOneDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("os.Executable() = %v", err)
 	}
-	const rounds, racers = 4, 3
+	const rounds, builders = 4, 3
 	for round := range rounds {
 		root := filepath.Join(t.TempDir(), "dolt")
-		cmds := make([]*exec.Cmd, racers)
-		outs := make([]*bytes.Buffer, racers)
-		starts := make([]io.Closer, racers)
+		// The last racer is the reader.
+		cmds := make([]*exec.Cmd, builders+1)
+		outs := make([]*bytes.Buffer, len(cmds))
+		starts := make([]io.Closer, len(cmds))
 		for i := range cmds {
 			cmd := exec.Command(self, "-test.run=^TestHelperBootstrapRacer$", "-test.v")
 			cmd.Env = append(os.Environ(), bootstrapRacerRootEnvVar+"="+root)
+			if i == builders {
+				cmd.Env = append(cmd.Env, bootstrapRacerReaderEnvVar+"=1")
+			}
 			outs[i] = &bytes.Buffer{}
 			cmd.Stdout, cmd.Stderr = outs[i], outs[i]
 			start, err := cmd.StdinPipe()
@@ -76,15 +117,15 @@ func TestRacingFirstOpensBuildOneDatabase(t *testing.T) {
 				t.Fatalf("signal racer start: %v", err)
 			}
 		}
-		builders := 0
+		built := 0
 		for i, cmd := range cmds {
 			if err := cmd.Wait(); err != nil {
 				t.Fatalf("round %d racer %d failed: %v\n%s", round, i, err, outs[i])
 			}
-			builders += strings.Count(outs[i].String(), "created=true")
+			built += strings.Count(outs[i].String(), "created=true")
 		}
-		if builders != 1 {
-			t.Fatalf("round %d: %d racers report building the database, want exactly 1", round, builders)
+		if built != 1 {
+			t.Fatalf("round %d: %d racers report building the database, want exactly 1", round, built)
 		}
 		assertNoBootstrapStaging(t, root)
 		st, err := Open(context.Background(), root, "test-workspace-id")
