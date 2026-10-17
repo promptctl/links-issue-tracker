@@ -387,10 +387,11 @@ func printHistoryEvents(w io.Writer, events []model.IssueEvent, versions map[str
 
 // singleLine holds a value to the one row it is printed on: its printable
 // lines joined by quotedBreak, the CLI's one rendering of a break inside a
-// one-line value. No part of the value can start a row of its own and read as
-// another event or change. [LAW:one-source-of-truth]
+// one-line value, with any quotedBreak the value already held defused so the
+// token means only a break. No part of the value can start a row of its own
+// and read as another event or change. [LAW:one-source-of-truth]
 func singleLine(s string) string {
-	return strings.Join(textLines(s), quotedBreak)
+	return strings.Join(textLines(strings.ReplaceAll(s, quotedBreak, defusedBreak)), quotedBreak)
 }
 
 // printIssueHistory renders the standalone `lit history` view: an identifying

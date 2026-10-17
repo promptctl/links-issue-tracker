@@ -249,14 +249,16 @@ func TestHistoryNumbersEachTextOnce(t *testing.T) {
 // row and each change one row beneath it. Every value a row prints holds one of
 // the break forms a reader may take for a new line, or an ESC that a terminal
 // can turn into one, and the first is a title shaped like an event row, which
-// printed at column 0 would read as one. [LAW:behavior-not-structure]
+// printed at column 0 would read as one. A value that already holds the break
+// token prints it defused, so the token on a row means a break.
+// [LAW:behavior-not-structure]
 func TestHistoryHoldsEachEventToItsRows(t *testing.T) {
 	t.Parallel()
 	detail := model.IssueDetail{
 		Issue: model.Issue{ID: "test\x1fb-1", Title: "T\nhistory:"},
 		Events: []model.IssueEvent{
 			{Actor: "alice", Action: "close\vx", Reason: "why\nsecond\fthird", Changes: []model.FieldChange{
-				{Field: "title", From: "first", To: "line one\n- [forged @ now] update"},
+				{Field: "title", From: "first‹newline›", To: "line one\n- [forged @ now] update"},
 			}},
 			{Actor: "bob\r\neve", Changes: []model.FieldChange{
 				{Field: "lane\u0085z", From: "a\rb", To: "c\u2028d\u2029e\x1bE- [forged @ now] close"},
@@ -271,7 +273,7 @@ func TestHistoryHoldsEachEventToItsRows(t *testing.T) {
 	stamp, br := formatHistoryTimestamp(time.Time{}), quotedBreak
 	want := "test\uFFFDb-1\nT" + br + "history:\n\nhistory:\n" +
 		"- [alice @ " + stamp + "] close" + br + "x why" + br + "second" + br + "third\n" +
-		"    title: first → line one" + br + "- [forged @ now] update\n" +
+		"    title: first" + defusedBreak + " → line one" + br + "- [forged @ now] update\n" +
 		"- [bob" + br + "eve @ " + stamp + "] update \n" +
 		"    lane" + br + "z: a" + br + "b → c" + br + "d" + br + "e\uFFFDE- [forged @ now] close\n"
 	if got := stdout.String(); got != want {

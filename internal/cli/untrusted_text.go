@@ -27,7 +27,12 @@ const (
 
 // quotedBreak stands in for a line break the inline rendering cannot honour, so
 // a multi-line value reads as one token instead of fabricating structure.
-const quotedBreak = "‹newline›"
+// defusedBreak is what a quotedBreak already in the text becomes, so wherever
+// the token is printed it means a break and nothing else.
+const (
+	quotedBreak  = "‹newline›"
+	defusedBreak = "[newline]"
+)
 
 // quotedInlineOpen and quotedInlineClose bound an inline value. An id is as
 // unconstrained as any other remote field, so one whose text reads as a sentence
@@ -57,7 +62,7 @@ var (
 	delimiterDefuser = strings.NewReplacer(
 		agentInstructionsOpen, "‹agent-instructions›",
 		agentInstructionsClose, "‹/agent-instructions›",
-		quotedBreak, "[newline]",
+		quotedBreak, defusedBreak,
 		quotedInlineOpen, "[[",
 		quotedInlineClose, "]]",
 	)
