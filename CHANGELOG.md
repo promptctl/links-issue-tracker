@@ -5,6 +5,31 @@ All notable changes to `links-issue-tracker` (the `lit` CLI) are documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.0] - 2026-10-17
+
+### Added
+
+- `lit comment add --body-file <path>` reads the comment body from a file, and `--body-file -` reads it from stdin. `--description-file` and `--prompt-file` do the same for `--description` and `--prompt` on `lit new`, `lit followup` and `lit update`. The text is read before the workspace opens. Giving both forms of one field, an unreadable path, blank text, or stdin for two fields is a usage error (exit 2). The event records `text_source.<name>` as `absent`, `inline`, `file` or `stdin`. (links-cli-joc7)
+- `lit next`'s exhaustion message says how far the stopped scope had come, as in `no ready work in epic(s) E (5/9 done)`, counting closed tickets and leaving out archived or deleted ones. The event records it as `next.exhausted_progress`. A scope with no open ticket left says "nothing in it is left to do". The Claude Code plugin is at 0.8.0. (links-next-s5o5)
+
+### Changed
+
+- `lit dep add` for an edge the graph already holds, and `lit parent set` to a child's only parent, exit 6 with `state_already_holds` and no retry advice, on both storage engines. (links-unfiled-fc79.8f0u)
+- `scripts/install.sh --from-release` and `--latest-release` install the artifact the release's `release-manifest.json` lists for this machine's platform and verify the manifest's SHA256. Both need `jq`. A platform the manifest does not list is refused, naming the platforms it does. (links-public-release-api.vot)
+- `lit doctor` reports rank keys two issues share as `duplicate_ranks`, and warns with `interleaved:` about epics whose tasks wait on each other's tasks in a way no tree order satisfies. Its event carries `doctor.rank_inversions`, `doctor.dependency_cycle`, `doctor.interleaved`, `doctor.reranked` and `doctor.duplicate_ranks`. (links-rank-8s8c, links-rank-qkf6)
+- The stay route in `lit next`'s exhaustion message prints one `lit dep add <id> --blocked-by <new>` for each blocker a ticket filed here could free, and none for a blocker waiting on an outside event or on other open tickets. The event records `clearable` on each `next.blocked` entry. The Claude Code plugin is at 0.8.1. (links-next-kliw)
+
+### Fixed
+
+- Two `lit init` runs racing in a fresh repository build one database. A write open builds a missing database under an exclusive bootstrap lock in a staging directory and renames it into place, so a reader never sees it half built. Every open records `bootstrap` on its event, and `lit init` records `init.db_created`. (links-locking-raow)
+- `lit history` prints every value on its own row: a line break inside a value prints as `‹newline›`, and control characters print as U+FFFD. (links-cli-e8aw)
+- `scripts/install.sh` piped through `bash -s`, as the README's curl install runs it, starts without an error. A source build outside a lit checkout exits 1 naming `--from-release <tag>` and `--latest-release`. (links-public-release-api.4y7)
+- A restore and every sync landing give each issue its own rank key, keeping every listing's order, and `lit doctor --fix rank` separates shared keys, including one a closed issue holds. (links-rank-8s8c, links-rank-qkf6)
+- Rank inversions are read in tree order everywhere: the queue's `rank_inversion` annotation and `lit doctor` compare an edge's issues through their representatives in the frame that holds both, and an edge between an issue and its own container or descendant is never an inversion. `lit doctor --fix rank` refuses a dependency cycle. (links-rank-qkf6)
+- `lit start` announces `claim transferred: X -> Y` only for the handover the store recorded, and only while the predecessor still held the lane. Its event carries `start.lane_held`, `start.handover` and `start.transfer_announced`. (links-claims-3cey)
+- The template dispatch gate refuses a shipped template that teaches a retired subcommand such as `lit bulk import`. (links-workflow-mrb6)
+- The memory engine reads one issue's history without scanning the whole store's. (links-storage-4hmy)
+
 ## [0.19.0] - 2026-10-16
 
 ### Added
