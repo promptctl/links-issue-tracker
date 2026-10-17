@@ -13,6 +13,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/engine"
 	"github.com/promptctl/links-issue-tracker/internal/precedence"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
@@ -71,7 +72,21 @@ func openSyncSessionAt(ctx context.Context, databasePath, workspaceID string) (s
 		// [LAW:no-silent-failure]
 		return syncSession{}, nil, errors.Join(err, st.Close())
 	}
-	return syncSession{engine: st, syncer: syncer}, st.Close, nil
+	return syncSession{engine: st, syncer: syncer}, func() error {
+		reportFollowedReRoots(ctx, syncer.FollowedReRoots())
+		return st.Close()
+	}, nil
+}
+
+// reportFollowedReRoots records each re-root a sync session's engine applied
+// to follow its remote on the command's event. Every sync session closes
+// through openSyncSessionAt, so no entry point has to remember to.
+// [LAW:nothing-unseen] [LAW:single-enforcer]
+func reportFollowedReRoots(ctx context.Context, followed []storage.FollowedReRoot) {
+	for _, f := range followed {
+		facts, counts := f.EventRecord()
+		telemetry.Record(ctx, facts, counts)
+	}
 }
 
 // syncScope is what a sync leaf's work runs against: the workspace plus the

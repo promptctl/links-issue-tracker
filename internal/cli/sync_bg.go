@@ -536,6 +536,10 @@ type pushedHead struct {
 	// proven is what the push proved it left the remote advertising, recorded
 	// on the live store with the head; zero when it proved nothing.
 	proven remoteAdvertisement
+	// followedReRoot says the clone followed a re-root of the remote before
+	// the push landed, so head is a rewritten commit the live store does not
+	// hold, and the live store must follow the same re-root to reach it.
+	followedReRoot bool
 }
 
 // landed reports whether a push landed and its head is known.
@@ -629,7 +633,16 @@ func mirrorCycle(ctx context.Context, log io.Writer, ws workspace.Info, stopAnsw
 
 	var recordHeld time.Duration
 	var record store.PushedHeadRecord
-	if landed.landed() {
+	// A push of a re-root the clone followed is received on the live store
+	// rather than recorded: the live store holds none of the rewritten
+	// commits, so it lands the clone's fetch and follows the same re-root,
+	// which arrives at the hashes the clone pushed. [LAW:one-source-of-truth]
+	// the tracking ref still says where the remote is, through the receive's
+	// own landing.
+	if landed.landed() && landed.followedReRoot {
+		receivePushedReRoot(ctx, ws, clone.liveClone, landed)
+	}
+	if landed.landed() && !landed.followedReRoot {
 		recordStart := time.Now()
 		var recordErr error
 		record, recordErr = store.RecordPushedHead(ctx, ws.DatabasePath, landed.remote, landed.branch, landed.head, landed.proven.record())
@@ -659,6 +672,27 @@ func mirrorCycle(ctx context.Context, log io.Writer, ws workspace.Info, stopAnsw
 		time.Now().UTC().Format(time.RFC3339), attempted, deadlineCut,
 		clone.held.Round(time.Millisecond), recordHeld.Round(time.Millisecond), record, openElapsed.Round(time.Millisecond), pushElapsed.Round(time.Millisecond), time.Since(start).Round(time.Millisecond))
 	return attempted
+}
+
+// receivePushedReRoot brings the live store to a push its clone made after
+// following a re-root of the remote: the clone's fetch is landed and settled
+// on the live store exactly as the automatic receive does it
+// (performSyncReceive), and the settle follows the re-root the clone followed.
+// What it established is surfaced through the receive's one contract.
+func receivePushedReRoot(ctx context.Context, ws workspace.Info, clone liveClone, landed pushedHead) {
+	target := syncTarget{remote: landed.remote, branch: landed.branch, skip: syncTargetReady}
+	outcome, closeLive, err := performSyncReceive(ctx, ws, clone, receiveFetch{target: target})
+	if err != nil {
+		recordReceiveError(ws, fmt.Errorf("receive the re-rooted push on the live store: %w", err))
+		return
+	}
+	if err := closeLive(); err != nil {
+		fmt.Fprintf(os.Stderr, "lit: on-change mirror: live store not closed cleanly after receiving its re-rooted push: %v\n", err)
+	}
+	if outcome.traceErr != nil {
+		fmt.Fprintf(os.Stderr, "lit: on-change mirror: receive trace not recorded: %v\n", outcome.traceErr)
+	}
+	surfaceReceiveOutcome(ctx, ws, outcome, time.Now())
 }
 
 // holdBudgetCutExplanation is the one wording of "the holder cut itself
@@ -754,7 +788,7 @@ func mirrorOnce(ctx, completionCtx context.Context, session syncSession, ws work
 	// The head the push reports is the clone's HEAD — the push is
 	// HEAD:<branch> and the clone is frozen, so nothing moved it. The live
 	// store learns it through RecordPushedHead.
-	return pushedHead{remote: outcome.remote, branch: outcome.branch, head: outcome.head, proven: outcome.proven}, nil
+	return pushedHead{remote: outcome.remote, branch: outcome.branch, head: outcome.head, proven: outcome.proven, followedReRoot: len(session.syncer.FollowedReRoots()) > 0}, nil
 }
 
 // waitForParentExit blocks until the spawning command has exited, returning

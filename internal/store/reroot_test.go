@@ -70,7 +70,7 @@ func TestReRootGivesTheSameHashesInEveryStore(t *testing.T) {
 	wantDropped := logLength(t, ctx, stores[0], cut.String()) - 1
 	wantKept := total - wantDropped
 
-	var results [2]ReRooted
+	var results [2]storage.ReRooted
 	for i, root := range stores {
 		got, err := ReRoot(ctx, root, "master", cut.String())
 		if err != nil {
@@ -386,7 +386,7 @@ func exportOf(t *testing.T, ctx context.Context, root string) model.Export {
 // a hold's release failed after it, and a refusal carries only its hold time.
 func TestSettleReRootKeepsAMoveThatLandedBeforeAFailedRelease(t *testing.T) {
 	released := errors.New("release the commit lock: lock file gone")
-	moved := ReRooted{Cut: "c", Root: "r", Head: "h", Rewritten: map[string]string{"c": "r"}, Dropped: 2}
+	moved := storage.ReRooted{Cut: "c", Root: "r", Head: "h", Rewritten: map[string]string{"c": "r"}, Dropped: 2}
 
 	got, err := settleReRoot(moved, released, "master", "c")
 	if !errors.Is(err, ErrReRootLandedThenFailed) || !errors.Is(err, released) || !strings.Contains(err.Error(), "moved it to h") {
@@ -397,11 +397,11 @@ func TestSettleReRootKeepsAMoveThatLandedBeforeAFailedRelease(t *testing.T) {
 	}
 
 	refused := fmt.Errorf("%w: t1 reaches the history below the cut", ErrSideLineAcrossCut)
-	got, err = settleReRoot(ReRooted{Elapsed: time.Millisecond}, refused, "master", "c")
+	got, err = settleReRoot(storage.ReRooted{Elapsed: time.Millisecond}, refused, "master", "c")
 	if !errors.Is(err, ErrSideLineAcrossCut) || errors.Is(err, ErrReRootLandedThenFailed) {
 		t.Fatalf("a refusal: error = %v, want %v and not %v", err, ErrSideLineAcrossCut, ErrReRootLandedThenFailed)
 	}
-	if want := (ReRooted{Elapsed: time.Millisecond}); got.Head != "" || got.Kept() != 0 || got.Elapsed != want.Elapsed {
+	if want := (storage.ReRooted{Elapsed: time.Millisecond}); got.Head != "" || got.Kept() != 0 || got.Elapsed != want.Elapsed {
 		t.Fatalf("a refusal: result = %+v, want %+v", got, want)
 	}
 
@@ -422,13 +422,13 @@ func TestWhereTheMoveLeftAsksTheBranch(t *testing.T) {
 	withChunkStore(t, doltRoot, func(ddb *doltdb.DoltDB) {
 		at := branchHead(t, ctx, ddb, "master").String()
 
-		landed := ReRooted{Cut: "c", Root: "r", Head: at, Dropped: 1}
+		landed := storage.ReRooted{Cut: "c", Root: "r", Head: at, Dropped: 1}
 		got, err := whereTheMoveLeft(ctx, ddb, ref.NewBranchRef("master"), landed, moveErr)
 		if !errors.Is(err, moveErr) || got.Head != at || got.Root != "r" {
 			t.Fatalf("master on the rewritten head: result, error = %+v, %v; want %+v wrapping %v", got, err, landed, moveErr)
 		}
 
-		elsewhere := ReRooted{Cut: "c", Root: "r", Head: "s9fpkfkdq4pb0nk2nq8r6n0e4u2hb4ue"}
+		elsewhere := storage.ReRooted{Cut: "c", Root: "r", Head: "s9fpkfkdq4pb0nk2nq8r6n0e4u2hb4ue"}
 		got, err = whereTheMoveLeft(ctx, ddb, ref.NewBranchRef("master"), elsewhere, moveErr)
 		if !errors.Is(err, moveErr) || got.Head != "" {
 			t.Fatalf("master off the rewritten head: result, error = %+v, %v; want none, wrapping %v", got, err, moveErr)

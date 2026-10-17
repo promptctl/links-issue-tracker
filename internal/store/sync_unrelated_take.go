@@ -111,6 +111,11 @@ func (s *Store) SyncResolveUnrelated(ctx context.Context, remote string, branch 
 		// silently do nothing; reject it at the boundary with the legal values.
 		return storage.SyncReconcileResult{}, fmt.Errorf("resolve unrelated histories: unknown side %q (want %q or %q)", choice, storage.TakeLocal, storage.TakeRemote)
 	}
+	// A re-root this branch can follow is not an unrelated history, so it is
+	// followed before the take can discard either side of it.
+	if _, err := s.followRemoteReRoot(ctx, trimmedRemote, trimmedBranch, storage.SyncEntryReconcile); err != nil {
+		return storage.SyncReconcileResult{}, err
+	}
 
 	var result storage.SyncReconcileResult
 	err = s.withCommitLock(ctx, func(ctx context.Context) error {

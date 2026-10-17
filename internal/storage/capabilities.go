@@ -112,6 +112,13 @@ type Syncer interface {
 	CompactIfDue(ctx context.Context) (CompactionOutcome, error)
 	SyncCompactAndPush(ctx context.Context, remote string, branch string, setUpstream bool, force bool) (SyncPushResult, error)
 
+	// FollowedReRoots is every re-root the engine applied to its own branch,
+	// since it opened, to follow a remote another checkout re-rooted: the sync
+	// verbs follow before they settle, so none of them meets such a remote as
+	// unrelated histories. An engine whose history is never re-rooted follows
+	// nothing and returns none.
+	FollowedReRoots() []FollowedReRoot
+
 	// GetSyncState and RecordSyncState carry the staleness marker across
 	// commands: what the store's content was at the last sync, so a later
 	// command can tell whether anything has happened since.
