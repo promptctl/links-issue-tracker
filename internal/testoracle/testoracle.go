@@ -1,11 +1,13 @@
 // Package testoracle locates the external CLIs the test suite uses as
 // oracles — independent checkers such as `dolt` and `claude` whose verdict a
-// test trusts over its own reading of the code. Neither ships with lit, so a
-// developer without one gets a skip. CI installs every oracle in every
-// workflow that runs tests (`.github/actions/install-<name>`), so there a
-// missing oracle is a broken workflow and fails the test: a skip would turn
-// off the gate and leave the run green. [LAW:no-silent-failure]
-// [LAW:single-enforcer] Every oracle test resolves its binary here.
+// test trusts over its own reading of the code — for the tests that skip when
+// their oracle is missing. Neither CLI ships with lit, so a developer without
+// one gets the skip. CI installs every oracle in every workflow that runs
+// tests (`.github/actions/install-<name>`), so there a missing oracle is a
+// broken workflow and fails the test: a skip would turn off the gate and
+// leave the run green. [LAW:no-silent-failure] [LAW:single-enforcer] Every
+// oracle skip is decided here; a test that runs `dolt` through
+// internal/doltcli fails without it everywhere and needs no decision.
 package testoracle
 
 import (
