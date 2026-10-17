@@ -149,23 +149,21 @@ func followReRoot(ctx context.Context, ddb *doltdb.DoltDB, branch, tracking ref.
 	if err != nil {
 		return storage.ReRooted{}, false, err
 	}
-	if followed.Root != cut.remoteRoot.String() {
-		return followed, true, fmt.Errorf("the re-root at %s wrote the root %s, not the remote's %s it was recognized by", cut.local, followed.Root, cut.remoteRoot)
-	}
 	return followed, true, nil
 }
 
 // reRootCut is a recognized re-root: the local commit whose parentless
-// re-commit is the remote's root.
+// re-commit is the remote's root. The re-root at it writes that same
+// re-commit, so it arrives at the remote's root.
 type reRootCut struct {
-	local      hash.Hash
-	remoteRoot hash.Hash
+	local hash.Hash
 }
 
 // recognizeReRootCut finds the commit of branch's history whose parentless
 // re-commit is the one root of tracking's history. ok is false when tracking's
-// history has more than one root, when branch already holds the root (the two
-// share history), or when not exactly one local commit rebuilds to it.
+// history has more than one root, or when not exactly one local commit rebuilds
+// to it. The caller has read that the two histories share no commit, so the
+// local history does not hold the root itself.
 //
 // Rebuilding a candidate writes its parentless commit, as the re-root that
 // follows would; a candidate that does not match leaves that commit dangling
@@ -201,9 +199,6 @@ func recognizeReRootCut(ctx context.Context, ddb *doltdb.DoltDB, branch, trackin
 	if err != nil {
 		return reRootCut{}, false, fmt.Errorf("read the local history: %w", err)
 	}
-	if _, holds := localHistory[root.addr]; holds {
-		return reRootCut{}, false, nil
-	}
 	var matches []hash.Hash
 	for addr, c := range localHistory {
 		meta, err := c.commit.GetCommitMeta(ctx)
@@ -231,7 +226,7 @@ func recognizeReRootCut(ctx context.Context, ddb *doltdb.DoltDB, branch, trackin
 	if len(matches) != 1 {
 		return reRootCut{}, false, nil
 	}
-	return reRootCut{local: matches[0], remoteRoot: root.addr}, true, nil
+	return reRootCut{local: matches[0]}, true, nil
 }
 
 // resolveRefHash is the commit r names.
