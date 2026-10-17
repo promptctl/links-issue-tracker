@@ -31,10 +31,11 @@ const ReRootHoldBudget = 15 * time.Second
 // refused and the branch left where it was.
 var ErrSideLineAcrossCut = errors.New("a side line forks below the cut and merges above it")
 
-// ErrReRootNotReleased marks a re-root whose branch move landed and whose hold
-// on the live store then failed to release: the branch is on the rewritten
-// head, and the result returned with the error describes it.
-var ErrReRootNotReleased = errors.New("the branch moved to its rewritten head and a hold on the live store did not release")
+// ErrReRootLandedThenFailed marks a re-root whose branch move landed and that
+// failed after it, in Dolt's read-back of the moved branch or in a hold's
+// release: the branch is on the rewritten head, and the result returned with
+// the error describes it.
+var ErrReRootLandedThenFailed = errors.New("the branch moved to its rewritten head, then the re-root failed")
 
 // reRootRef is the ref the parentless root is committed to and deleted from
 // within one re-root. Dolt builds a commit with no parents only by committing
@@ -143,10 +144,10 @@ func reRootUnderHold(ctx context.Context, root, branch, cut string) (reRooted Re
 }
 
 // settleReRoot says what a re-root's error left standing. A move that landed
-// stands even when a hold's release failed after it: the result describes the
-// move and the error wraps ErrReRootNotReleased, as RecordPushedHead's
-// ErrReceivedRefsNotRecorded does for its own landed write. Anything else
-// moved nothing, and its result carries only the time it held, as
+// stands even when the re-root failed after it: the result describes the
+// move and the error wraps ErrReRootLandedThenFailed, as RecordPushedHead's
+// ErrReceivedRefsNotRecorded does for its own landed write. Anything else is
+// not known to have moved, and its result carries only the time it held, as
 // LandFetchedHead's carries Held. [LAW:no-silent-failure]
 func settleReRoot(r ReRooted, err error, branch, cut string) (ReRooted, error) {
 	switch {
@@ -155,7 +156,7 @@ func settleReRoot(r ReRooted, err error, branch, cut string) (ReRooted, error) {
 	case r.Head == "":
 		return r, fmt.Errorf("re-root %s at %s: %w", branch, cut, err)
 	default:
-		return r, fmt.Errorf("%w: re-root %s at %s moved it to %s: %w", ErrReRootNotReleased, branch, cut, r.Head, err)
+		return r, fmt.Errorf("%w: re-root %s at %s moved it to %s: %w", ErrReRootLandedThenFailed, branch, cut, r.Head, err)
 	}
 }
 
@@ -221,9 +222,26 @@ func reRootBranch(ctx context.Context, ddb *doltdb.DoltDB, branch ref.DoltRef, c
 	result.Root = result.Rewritten[result.Cut]
 	result.Head = result.Rewritten[head.String()]
 	if err := ddb.SetHeadToCommit(ctx, branch, rewritten[head]); err != nil {
-		return ReRooted{}, fmt.Errorf("move the branch to the rewritten head: %w", err)
+		return whereTheMoveLeft(ctx, ddb, branch, result, err)
 	}
 	return result, nil
+}
+
+// whereTheMoveLeft reads where a branch move that returned moveErr left the
+// branch. Dolt reads the dataset back after its manifest lands, so the error
+// does not say the branch stayed: the branch says. On the rewritten head, the
+// result stands beside the error; anywhere else, or unreadable, it does not.
+// The read runs past the hold's budget, since a cut is one way to get here.
+func whereTheMoveLeft(ctx context.Context, ddb *doltdb.DoltDB, branch ref.DoltRef, result ReRooted, moveErr error) (ReRooted, error) {
+	err := fmt.Errorf("move the branch to the rewritten head %s: %w", result.Head, moveErr)
+	at, readErr := ddb.ResolveCommitRef(context.WithoutCancel(ctx), branch)
+	if readErr != nil {
+		return ReRooted{}, errors.Join(err, fmt.Errorf("read where the branch is: %w", readErr))
+	}
+	if addr, _ := at.HashOf(); addr.String() == result.Head {
+		return result, err
+	}
+	return ReRooted{}, err
 }
 
 // rewriteStep is one commit after the cut and the parents it keeps, by their
@@ -273,8 +291,8 @@ func planReRoot(above map[hash.Hash]historyCommit, head, cut hash.Hash) ([]rewri
 }
 
 // readHistory reads every commit from reaches, stopping at the commits in
-// stop. A ghost commit — one a shallow clone holds only by hash — is refused:
-// its root value and metadata are not here to copy.
+// stop. A ghost commit is refused: its root value and metadata are not here
+// to copy.
 func readHistory(ctx context.Context, ddb *doltdb.DoltDB, from hash.Hash, stop map[hash.Hash]historyCommit) (map[hash.Hash]historyCommit, error) {
 	read := map[hash.Hash]historyCommit{}
 	pending := []hash.Hash{from}
@@ -287,13 +305,9 @@ func readHistory(ctx context.Context, ddb *doltdb.DoltDB, from hash.Hash, stop m
 		if _, stopped := stop[addr]; stopped {
 			continue
 		}
-		optional, err := ddb.ReadCommit(ctx, addr)
+		commit, err := readFullCommit(ctx, ddb, addr)
 		if err != nil {
 			return nil, fmt.Errorf("read commit %s: %w", addr, err)
-		}
-		commit, ok := optional.ToCommit()
-		if !ok {
-			return nil, fmt.Errorf("read commit %s: the store holds it only as a ghost commit", addr)
 		}
 		height, err := commit.Height()
 		if err != nil {
@@ -350,9 +364,8 @@ func recommit(ctx context.Context, ddb *doltdb.DoltDB, c *doltdb.Commit, parents
 	return nc, nil
 }
 
-// commitContent is what a rewrite copies from c: its root value's address,
-// read from the commit itself rather than by loading the value, and its
-// metadata, both verbatim.
+// commitContent is what a rewrite copies from c: its root value's address
+// and its metadata, both verbatim.
 func commitContent(ctx context.Context, c *doltdb.Commit) (hash.Hash, *datas.CommitMeta, error) {
 	value, err := datas.GetCommitRootHash(c.Value())
 	if err != nil {

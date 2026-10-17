@@ -97,6 +97,16 @@ Fast-forward is the only local-data-touching outcome. State constants and their 
 2. `landTrackingRef`: the fetched head must read as a non-ghost commit; the ref already naming it → `FetchedHeadUnchanged`; otherwise `SetHead` → `FetchedHeadMoved`, whatever the two heads' relation.
 3. The cache plan's `apply`: `os.Rename` for each move; one `git --git-dir <live repo.git> fetch --no-tags --quiet <clone repo.git> +<ref>:<ref>…` (forced) for each copy. A planning or apply failure is returned after the hold as `ErrRemoteCacheNotLanded` wrapping it, with the result.
 
+### 1.6b `ReRoot` — the sync branch's history cut at a commit
+
+`ReRoot(ctx, doltRootDir, branch, cut) (ReRooted, error)` at `reroot.go`; no network, no SQL engine. `ReRooted` carries `Cut`, `Root` (the parentless commit carrying the cut's root value and metadata), `Head` (the branch's head after the move), `Rewritten` (every kept commit, old hash to new), `Dropped` (the cut's ancestors) and `Elapsed`; `Kept()` is `len(Rewritten)`, and `EventRecord()` gives facts `reroot.cut`, `reroot.root`, `reroot.head`, `reroot.elapsed_ms` and counts `reroot.kept`, `reroot.dropped`. A cut that is not a Dolt commit hash is refused before any hold. Under `acquireLiveStoreHold` (workspace shared lock, `requireInitializedWorkspace`, `requireNoPendingAdopt`), runs inside `holdForRefWrite` under `ReRootHoldBudget` (15s):
+1. Reads every commit at or below the cut, then every commit the head reaches above it, through `readFullCommit` (a ghost commit is refused).
+2. `planReRoot` orders the commits above the cut by height and keeps, for each, the parents that are the cut or above it. A cut the head does not reach is refused (`"the cut is not an ancestor of the branch head %s"`); a commit left with no kept parent is refused as `ErrSideLineAcrossCut`. Nothing is written before the plan stands.
+3. `commitRoot` commits the cut's root value and metadata to `refs/internal/reroot` (a leftover of that ref is deleted first) and deletes the ref; each planned commit is recommitted, oldest first, onto its kept parents' rewrites with its own root value and metadata (`CommitDanglingWithParentCommits`).
+4. `SetHeadToCommit` moves the branch. Only the branch moves; every other ref keeps its target. A move that returns an error is judged by re-reading the branch (`whereTheMoveLeft`).
+
+A move that landed and a failure after it (the branch's read-back or a hold's release) returns the result with an error wrapping `ErrReRootLandedThenFailed`; any other failure returns only `Elapsed`. A cut at the budget wraps `ErrHoldCut`.
+
 ### 1.7 `SyncPull` — receive, then reconcile only on divergence
 
 `SyncPull(ctx, remote, branch) (storage.SyncPullResult, error)` at `sync.go`. The whole converge runs under **one** `s.withCommitLock` (`sync.go`); nested acquisitions short-circuit because `acquireCommitLock` is context-reentrant (`commit_lock.go`).

@@ -211,9 +211,12 @@ func TestReRootKeepsEveryMergeAboveTheCutAndRefusesALineAroundIt(t *testing.T) {
 	if _, err := ReRoot(ctx, doltRoot, "master", c["C"].String()); !errors.Is(err, ErrSideLineAcrossCut) || !strings.Contains(err.Error(), c["t1"].String()) {
 		t.Fatalf("ReRoot(C) with m2 at the head error = %v, want %v naming t1 %s", err, ErrSideLineAcrossCut, c["t1"])
 	}
-	for _, notOnBranch := range []string{"s9fpkfkdq4pb0nk2nq8r6n0e4u2hb4ue", "not-a-hash"} {
-		if _, err := ReRoot(ctx, doltRoot, "master", notOnBranch); err == nil {
-			t.Fatalf("ReRoot(%s) error = nil, want a refusal", notOnBranch)
+	for cut, refusal := range map[string]string{
+		"s9fpkfkdq4pb0nk2nq8r6n0e4u2hb4ue": "read commit s9fpkfkdq4pb0nk2nq8r6n0e4u2hb4ue: ",
+		"not-a-hash":                       `"not-a-hash" is not a Dolt commit hash`,
+	} {
+		if _, err := ReRoot(ctx, doltRoot, "master", cut); err == nil || !strings.Contains(err.Error(), refusal) {
+			t.Fatalf("ReRoot(%s) error = %v, want the refusal %q", cut, err, refusal)
 		}
 	}
 	withChunkStore(t, doltRoot, func(ddb *doltdb.DoltDB) {
@@ -289,13 +292,9 @@ func withChunkStore(t *testing.T, root string, fn func(ddb *doltdb.DoltDB)) {
 
 func readCommit(t *testing.T, ctx context.Context, ddb *doltdb.DoltDB, addr hash.Hash) *doltdb.Commit {
 	t.Helper()
-	optional, err := ddb.ReadCommit(ctx, addr)
+	commit, err := readFullCommit(ctx, ddb, addr)
 	if err != nil {
 		t.Fatalf("read commit %s: %v", addr, err)
-	}
-	commit, ok := optional.ToCommit()
-	if !ok {
-		t.Fatalf("commit %s is a ghost", addr)
 	}
 	return commit
 }
@@ -390,8 +389,8 @@ func TestSettleReRootKeepsAMoveThatLandedBeforeAFailedRelease(t *testing.T) {
 	moved := ReRooted{Cut: "c", Root: "r", Head: "h", Rewritten: map[string]string{"c": "r"}, Dropped: 2}
 
 	got, err := settleReRoot(moved, released, "master", "c")
-	if !errors.Is(err, ErrReRootNotReleased) || !errors.Is(err, released) || !strings.Contains(err.Error(), "moved it to h") {
-		t.Fatalf("a landed move with a failed release: error = %v, want %v naming head h and wrapping %v", err, ErrReRootNotReleased, released)
+	if !errors.Is(err, ErrReRootLandedThenFailed) || !errors.Is(err, released) || !strings.Contains(err.Error(), "moved it to h") {
+		t.Fatalf("a landed move with a failed release: error = %v, want %v naming head h and wrapping %v", err, ErrReRootLandedThenFailed, released)
 	}
 	if got.Head != "h" || got.Root != "r" || got.Dropped != 2 || got.Kept() != 1 {
 		t.Fatalf("a landed move with a failed release: result = %+v, want %+v", got, moved)
@@ -399,8 +398,8 @@ func TestSettleReRootKeepsAMoveThatLandedBeforeAFailedRelease(t *testing.T) {
 
 	refused := fmt.Errorf("%w: t1 reaches the history below the cut", ErrSideLineAcrossCut)
 	got, err = settleReRoot(ReRooted{Elapsed: time.Millisecond}, refused, "master", "c")
-	if !errors.Is(err, ErrSideLineAcrossCut) || errors.Is(err, ErrReRootNotReleased) {
-		t.Fatalf("a refusal: error = %v, want %v and not %v", err, ErrSideLineAcrossCut, ErrReRootNotReleased)
+	if !errors.Is(err, ErrSideLineAcrossCut) || errors.Is(err, ErrReRootLandedThenFailed) {
+		t.Fatalf("a refusal: error = %v, want %v and not %v", err, ErrSideLineAcrossCut, ErrReRootLandedThenFailed)
 	}
 	if want := (ReRooted{Elapsed: time.Millisecond}); got.Head != "" || got.Kept() != 0 || got.Elapsed != want.Elapsed {
 		t.Fatalf("a refusal: result = %+v, want %+v", got, want)
@@ -409,4 +408,30 @@ func TestSettleReRootKeepsAMoveThatLandedBeforeAFailedRelease(t *testing.T) {
 	if got, err = settleReRoot(moved, nil, "master", "c"); err != nil || got.Head != "h" {
 		t.Fatalf("a clean re-root: result, error = %+v, %v; want %+v, nil", got, err, moved)
 	}
+}
+
+// TestWhereTheMoveLeftAsksTheBranch pins that a branch move which returned an
+// error is judged by where the branch is, not by the error: Dolt reads the
+// moved dataset back after its manifest lands, so an error can follow a move
+// that landed.
+func TestWhereTheMoveLeftAsksTheBranch(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	doltRoot := migratedDoltDir(t)
+	moveErr := errors.New("read the dataset back: context deadline exceeded")
+	withChunkStore(t, doltRoot, func(ddb *doltdb.DoltDB) {
+		at := branchHead(t, ctx, ddb, "master").String()
+
+		landed := ReRooted{Cut: "c", Root: "r", Head: at, Dropped: 1}
+		got, err := whereTheMoveLeft(ctx, ddb, ref.NewBranchRef("master"), landed, moveErr)
+		if !errors.Is(err, moveErr) || got.Head != at || got.Root != "r" {
+			t.Fatalf("master on the rewritten head: result, error = %+v, %v; want %+v wrapping %v", got, err, landed, moveErr)
+		}
+
+		elsewhere := ReRooted{Cut: "c", Root: "r", Head: "s9fpkfkdq4pb0nk2nq8r6n0e4u2hb4ue"}
+		got, err = whereTheMoveLeft(ctx, ddb, ref.NewBranchRef("master"), elsewhere, moveErr)
+		if !errors.Is(err, moveErr) || got.Head != "" {
+			t.Fatalf("master off the rewritten head: result, error = %+v, %v; want none, wrapping %v", got, err, moveErr)
+		}
+	})
 }

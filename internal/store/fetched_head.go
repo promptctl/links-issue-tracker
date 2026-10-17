@@ -174,12 +174,8 @@ func LandFetchedHead(ctx context.Context, doltRootDir, cloneRootDir, remote, bra
 // why). It reads fetched as a commit first, so a copy that did not land it is
 // refused rather than pointed at.
 func landTrackingRef(ctx context.Context, ddb *doltdb.DoltDB, trackingRef ref.DoltRef, fetched hash.Hash) (FetchedHeadRecord, error) {
-	value, err := ddb.ReadCommit(ctx, fetched)
-	if err != nil {
+	if _, err := readFullCommit(ctx, ddb, fetched); err != nil {
 		return 0, fmt.Errorf("land fetched head %s: the copied chunks do not hold it as a commit: %w", fetched, err)
-	}
-	if _, ok := value.ToCommit(); !ok {
-		return 0, fmt.Errorf("land fetched head %s: the live store holds it only as a ghost commit", fetched)
 	}
 	current, found, err := resolveTrackingHead(ctx, ddb, trackingRef)
 	if err != nil {
