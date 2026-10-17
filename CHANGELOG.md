@@ -5,6 +5,18 @@ All notable changes to `links-issue-tracker` (the `lit` CLI) are documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.1] - 2026-10-17
+
+### Changed
+
+- lit builds against the promptctl/dolt fork at patch 8. `FORKS.md` lists every patch the fork carries and when to retire it. (links-storage-bd8w.qif, links-storage-bd8w.1.1)
+
+### Fixed
+
+- `lit sync pull`, `lit sync fetch` and a background receive close the remote they open, so the remote-cache mirror keeps one `refs/dolt/last-known/<remote>/dolt/data` ref per remote and no per-fetch refs. A fetch negotiates from that ref and downloads only what changed. Every compaction, from `lit sync push`, `lit sync compact` or the backstop, deletes leftover per-fetch refs and runs `git gc --prune=now` on the mirror, reported on the push's `Maintenance` line and in the compaction's detail. (links-storage-bd8w.qif)
+- The remote-cache prune names each mirror with Dolt's own key for the remote's URL and params, including a remote added with `--ref`, and removes only directories no configured remote names. A configured remote with no mirror directory leaves the prune running. A push that fails also prunes, and its error carries the prune's line. The reclaimed figure counts the files this prune unlinked. (links-storage-bd8w.1.1)
+- `just perf` runs to completion at every size: the generated store files every task inside an epic, ten rows to an epic, and the write probe files an epic. (links-scale-dy46.2)
+
 ## [0.20.0] - 2026-10-17
 
 ### Added
