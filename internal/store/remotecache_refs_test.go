@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+
+	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
 )
 
 // TestRemoteOperationsLeaveTheMirrorHoldingOnlyItsLastKnownRef pins what a
@@ -286,5 +288,72 @@ func TestSyncCompactAndPushReportsTheSweep(t *testing.T) {
 	want := []string{lastKnownRefNamespace + "origin/dolt/data " + gitRevParse(t, remote, "refs/dolt/data")}
 	if got := mirrorRefValues(t, mirror); strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("mirror refs after the push = %v, want %v", got, want)
+	}
+}
+
+// TestBackgroundReceiveLandsTheClonesLastKnownRef drives the automatic
+// receive's shape over a git-backed remote: a peer moves the remote, a clone of
+// the live store fetches it, and LandFetchedHead carries the fetch back. The
+// live mirror must end as its own fetch would have left it — only its
+// last-known ref, at the remote's new head, with the objects behind it — or
+// every later receive's clone starts from a mirror that never learned what the
+// last one fetched.
+func TestBackgroundReceiveLandsTheClonesLastKnownRef(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	live, remote, mirror := pushedMirror(t)
+	base := t.TempDir()
+	copyOf := func(name string) string {
+		dst := filepath.Join(base, name, "dolt")
+		if err := dbsnapshot.CloneTree(ctx, live, dst); err != nil {
+			t.Fatalf("CloneTree(%s) error = %v", name, err)
+		}
+		return dst
+	}
+
+	peer := copyOf("peer")
+	st, err := Open(ctx, peer, "ws")
+	if err != nil {
+		t.Fatalf("Open(peer) error = %v", err)
+	}
+	commitPayload(t, ctx, st, "peer")
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close(peer) error = %v", err)
+	}
+	peerSync, err := OpenSync(ctx, peer, "ws")
+	if err != nil {
+		t.Fatalf("OpenSync(peer) error = %v", err)
+	}
+	_, pushErr := peerSync.SyncPush(ctx, "origin", "master", false, false)
+	if err := peerSync.Close(); err != nil {
+		t.Fatalf("Close(peer sync) error = %v", err)
+	}
+	if pushErr != nil {
+		t.Fatalf("SyncPush(peer) error = %v", pushErr)
+	}
+	head := gitRevParse(t, remote, "refs/dolt/data")
+
+	clone := copyOf("clone")
+	cloneSync, err := OpenSync(ctx, clone, "ws")
+	if err != nil {
+		t.Fatalf("OpenSync(clone) error = %v", err)
+	}
+	fetchErr := cloneSync.SyncFetch(ctx, "origin", false)
+	if err := cloneSync.Close(); err != nil {
+		t.Fatalf("Close(clone) error = %v", err)
+	}
+	if fetchErr != nil {
+		t.Fatalf("SyncFetch(clone) error = %v", fetchErr)
+	}
+	if _, err := LandFetchedHead(ctx, live, clone, "origin", "master"); err != nil {
+		t.Fatalf("LandFetchedHead() error = %v", err)
+	}
+
+	want := []string{lastKnownRefNamespace + "origin/dolt/data " + head}
+	if got := mirrorRefValues(t, mirror); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("live mirror refs after the landing = %v, want %v", got, want)
+	}
+	if got := gitAt(t, mirror, nil, "", "cat-file", "-t", head); got != "commit" {
+		t.Fatalf("live mirror holds %s as %q, want the fetched commit", head, got)
 	}
 }

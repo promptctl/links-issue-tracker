@@ -5321,19 +5321,22 @@ A store that has never pushed trips nothing: no directories → nothing to delet
 #### 7.5 Outcome and reporting
 
 ```go
-type remoteCachePruneOutcome struct {
+type remoteCacheCollection struct {
     Removed   int
     Reclaimed int64
     Problem   string
 }
+type remoteCachePruneOutcome remoteCacheCollection
 ```
 (`remotecache.go`)
 
-`Report()` (`remotecache.go`) — four exact branches:
-- `Problem != "" && Removed > 0`: `remote-cache prune: removed %d abandoned mirror%s (%s), then failed: %s`
-- `Problem != ""`: `"remote-cache prune: " + o.Problem`
-- `Removed > 0`: `remote-cache prune: removed %d abandoned mirror%s, reclaimed %s`
-- default: `""` (empty exactly when the prune looked and found nothing to do)
+`remoteCacheCollection.report(job, one, many)` (`remotecache.go`) — four exact branches, shared by the prune and the ref sweep (7.7):
+- `Problem != "" && Removed > 0`: `%s: removed %d %s (%s), then failed: %s` (job, count, `one`/`many`, reclaimed, problem)
+- `Problem != ""`: `job + ": " + o.Problem`
+- `Removed > 0`: `%s: removed %d %s, reclaimed %s`
+- default: `""` (empty exactly when the job looked and found nothing to do)
+
+`remoteCachePruneOutcome.Report()` (`remotecache.go`) = `report("remote-cache prune", "abandoned mirror", "abandoned mirrors")`.
 
 `humanBytes(n int64)` (`remotecache.go`): below `1024` renders `%d B`; otherwise divides by 1024 repeatedly and renders `%.1f %ciB` with the unit letter drawn from `"KMGTPE"` — i.e. `KiB`, `MiB`, `GiB`, `TiB`, `PiB`, `EiB`. Shared with compaction's `footprintDelta` so both maintenance reporters spell sizes identically.
 
@@ -5355,6 +5358,26 @@ type remoteCachePruneOutcome struct {
 - `remotecache_plan_test.go` separates non-git remotes from bad URLs.
 - `remotecache_plan_test.go` `isRemoteCacheKey` rejects foreign names.
 - `remotecache_plan_test.go` `Report()` semantics.
+
+#### 7.7 Orphaned instance-ref sweep
+
+Dolt's git blobstore names two refs per open instance with the instance's UUID — `refs/dolt/remotes/<remote>/<ref>/<uuid>` and `refs/dolt/blobstore/<remote>/<ref>/<uuid>` — and on `Close` publishes its tracking ref to `refs/dolt/last-known/<remote>/<ref>`, then deletes both (fork patch 7, `FORKS.md`). Between operations a mirror therefore holds only its last-known refs; an instance ref on disk belongs to an instance that never closed (`remotecache_refs.go`).
+
+`parseInstanceRef(name, object)` (`remotecache_refs.go`): the name must start with one of `instanceRefNamespaces` (`refs/dolt/remotes/`, `refs/dolt/blobstore/`), have a non-empty `<remote>/<ref>` before its last `/`, and end in a UUID that round-trips through `uuid.Parse` to the identical canonical string (braced, URN and undashed spellings are refused). The instance's last-known ref is `lastKnownRefNamespace` (`refs/dolt/last-known/`) + that `<remote>/<ref>`. Anything else is not an instance ref and is never deleted.
+
+`(*Store).sweepOrphanedInstanceRefs(ctx)` (`remotecache_refs.go`) → `refSweepOutcome`: lists configured remotes, derives their cache keys (`expectedRemoteCacheKeys`), and sweeps the on-disk mirrors those keys name, sorted; mirrors of unconfigured remotes are left to the prune. Every mirror is attempted; each failure is recorded as `mirror <key>: <error>` and the problems are joined with `"; "`. A remote-list, key-derivation or cache-listing failure returns an outcome carrying only that problem.
+
+`sweepMirror(ctx, gitDir)` (`remotecache_refs.go`) for one mirror:
+1. `git for-each-ref --sort=-committerdate --format=%(refname) %(objectname) refs/dolt/`; no instance refs → `(0, 0, nil)` with nothing else run.
+2. One `git update-ref --stdin` transaction: `create <last-known> <object>` for each remote whose last-known ref is absent, taking the newest (first-listed) instance ref's object; then `delete <ref> <object>` for every instance ref. Failure → `delete %d orphaned ref(s): %w: <output>`.
+3. `git gc --prune=now --quiet`. Failure → `git gc after removing %d orphaned ref(s): %w: <output>`, reported with the removed count.
+4. `Reclaimed` = `dirSize(gitDir)` before step 2 minus after step 3.
+
+Called only from `SyncCompactAndPush`, between `compactWithinLock` (whose last act is `reconnect`, closing every remote database the previous engine held) and `pushWithinLock`, under the commit lock (`sync.go`).
+
+`refSweepOutcome` is a named type over `remoteCacheCollection`; `Report()` renders through `report("remote-cache ref sweep", "orphaned ref", "orphaned refs")`. `plus(next)` sums `Removed` and `Reclaimed` and joins non-empty problems with `"; "`, so a second run of the mutation body under the GC-contention retry does not replace the first run's account (`remotecache_refs.go`).
+
+Tests (`remotecache_refs_test.go`): `TestRemoteOperationsLeaveTheMirrorHoldingOnlyItsLastKnownRef` (push, fetch, pull and receive sessions each leave exactly `refs/dolt/last-known/origin/dolt/data` at the remote's `refs/dolt/data`); `TestSweepCollectsOrphanedInstanceRefsAndKeepsTheNewestAsLastKnown`; `TestSweepKeepsAnExistingLastKnownRef`; `TestSyncCompactAndPushReportsTheSweep`.
 
 ---
 

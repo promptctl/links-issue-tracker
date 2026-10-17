@@ -92,10 +92,10 @@ Fast-forward is the only local-data-touching outcome. State constants and their 
 
 ### 1.6a `LandFetchedHead` — a clone's fetch carried to the live store
 
-`LandFetchedHead(ctx, doltRootDir, cloneRootDir, remote, branch) (LandedFetch, error)` at `fetched_head.go`; no network, no SQL engine. `LandedFetch` carries `Record` (`FetchedHeadRecord`: `moved` / `unchanged` / `absent`) and `Held`, the landing's work under the hold. Opens the clone's chunk store (`openCloneChunkStore`: journal on, singleton cache off, no lock wait; error `"open the clone's chunk store at %s: %w"`) and reads its `refs/remotes/<remote>/<branch>` (`resolveTrackingHead`); absent → `FetchedHeadAbsent` with nothing written. Before any hold, `planRemoteCacheLanding` lists `<db>/links/.dolt/git-remote-cache` of both stores: a cache key the live store lacks is planned as a whole-directory move; a key both hold is planned as a copy of the clone's `refs/dolt/` refs the live mirror does not hold (two `git for-each-ref` per key); a key with nothing new is skipped. Then, under the workspace shared lock, `requireInitializedWorkspace` and `requireNoPendingAdopt`, runs inside `holdForRefWrite` (`pushed_head.go`; the hold `RecordPushedHead` also takes: chunk-store open with LOCK waited out for `coResidentHolderWait`, then a budget — here `ReceiveDeadline`, for `RecordPushedHead` `MirrorHoldBudget` — then the commit lock; a cut wraps `ErrMirrorHoldCut`):
+`LandFetchedHead(ctx, doltRootDir, cloneRootDir, remote, branch) (LandedFetch, error)` at `fetched_head.go`; no network, no SQL engine. `LandedFetch` carries `Record` (`FetchedHeadRecord`: `moved` / `unchanged` / `absent`) and `Held`, the landing's work under the hold. Opens the clone's chunk store (`openCloneChunkStore`: journal on, singleton cache off, no lock wait; error `"open the clone's chunk store at %s: %w"`) and reads its `refs/remotes/<remote>/<branch>` (`resolveTrackingHead`); absent → `FetchedHeadAbsent` with nothing written. Before any hold, `planRemoteCacheLanding` lists `<db>/links/.dolt/git-remote-cache` of both stores: a cache key the live store lacks is planned as a whole-directory move; a key both hold is planned as a copy of every clone `refs/dolt/` ref the live mirror lacks or holds at a different object (two `git for-each-ref --format=%(refname) %(objectname)` per key) — in practice the clone's `refs/dolt/last-known/<remote>/dolt/data`; a key whose refs all match is skipped. Then, under the workspace shared lock, `requireInitializedWorkspace` and `requireNoPendingAdopt`, runs inside `holdForRefWrite` (`pushed_head.go`; the hold `RecordPushedHead` also takes: chunk-store open with LOCK waited out for `coResidentHolderWait`, then a budget — here `ReceiveDeadline`, for `RecordPushedHead` `MirrorHoldBudget` — then the commit lock; a cut wraps `ErrMirrorHoldCut`):
 1. `PullChunks` from the clone into the live store for the fetched head, temp files under `<db>/links/.dolt/temptf` (error `"copy the fetched chunks of %s into the live store: %w"`).
 2. `landTrackingRef`: the fetched head must read as a non-ghost commit; the ref already naming it → `FetchedHeadUnchanged`; otherwise `SetHead` → `FetchedHeadMoved`, whatever the two heads' relation.
-3. The cache plan's `apply`: `os.Rename` for each move; one `git --git-dir <live repo.git> fetch --no-tags --quiet <clone repo.git> <ref>:<ref>…` for each copy. A planning or apply failure is returned after the hold as `ErrRemoteCacheNotLanded` wrapping it, with the result.
+3. The cache plan's `apply`: `os.Rename` for each move; one `git --git-dir <live repo.git> fetch --no-tags --quiet <clone repo.git> +<ref>:<ref>…` (forced) for each copy. A planning or apply failure is returned after the hold as `ErrRemoteCacheNotLanded` wrapping it, with the result.
 
 ### 1.7 `SyncPull` — receive, then reconcile only on divergence
 
@@ -130,9 +130,10 @@ Tests: `TestSyncPullStateTransitions` (`sync_reconcile_schema_skew_test.go`), `T
 `SyncCompactAndPush(...)` (`sync.go`) — inside one `runSyncMutation`:
 1. `depth, depthErr = s.chooseCompactionDepth()` measured **inside** the lock (`sync.go`).
 2. `s.compactWithinLock(ctx, depth)` (`sync.go`).
-3. `s.pushWithinLock(...)` (`sync.go`).
-Then, **after** the push and **outside** the commit lock (`sync.go`):
-`result.Maintenance = joinMaintenance(compactionReport(depth, depthErr), s.pruneRemoteCache(ctx).Report())`. A prune failure never fails the push (`sync.go`).
+3. `sweep = sweep.plus(s.sweepOrphanedInstanceRefs(ctx))` — the orphaned instance-ref sweep (`inventory-store-core.md` 7.7) (`sync.go`).
+4. `s.pushWithinLock(...)` (`sync.go`).
+A failure returns `annotateWithMaintenance(err, joinMaintenance(compactionReport(attempt, depthErr), sweep.Report()))`. Otherwise, **after** the push and **outside** the commit lock (`sync.go`):
+`result.Maintenance = joinMaintenance(compactionReport(attempt, depthErr), sweep.Report(), s.pruneRemoteCache(ctx).Report())`. Neither a sweep nor a prune failure fails the push (`sync.go`).
 
 `pushWithinLock` (`sync.go`):
 1. `requireSyncArg("remote", remote)`; branch is only `strings.TrimSpace`d and **may be empty** (`sync.go`).
@@ -303,7 +304,7 @@ Test `TestSyncCompactRunsCleanlyAndPreservesData` (`sync_test.go`).
 - `remoteCacheBase()` (`remotecache.go`) = `filepath.Join(s.doltRootDir, doltDatabaseName, dbfactory.DoltDir, remoteCacheDirName)`.
 - `listRemoteCacheKeys(base)` (`remotecache.go`): a non-existent base returns `(nil, nil)`; otherwise directory entries that are dirs and pass `isRemoteCacheKey`.
 - **The legality rule** `planRemoteCachePrune(expected, onDisk)` (`remotecache.go`): a directory is abandoned when no configured remote derives its key. If `len(abandoned) > 0 && len(unaccounted) > 0` the prune **declines wholesale** with the long error at `remotecache.go` (names the counts and the `remote→key` pairs). Both lists are sorted (`remotecache.go`).
-- `remoteCachePruneOutcome{Removed int; Reclaimed int64; Problem string}` (`remotecache.go`). `Report()` (`remotecache.go`):
+- `remoteCachePruneOutcome`, a named type over `remoteCacheCollection{Removed int; Reclaimed int64; Problem string}` (`remotecache.go`). `Report()` (`remotecache.go`):
   - problem + removals → `"remote-cache prune: removed %d abandoned mirror%s (%s), then failed: %s"`
   - problem only → `"remote-cache prune: " + problem`
   - removals only → `"remote-cache prune: removed %d abandoned mirror%s, reclaimed %s"`
