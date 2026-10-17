@@ -893,18 +893,28 @@ func (o Exhausted) Error() string {
 }
 
 // why is what both exhaustion outcomes say first: which scope stopped, how far
-// it had come, and what stops it — the dependencies from outside it, then its own rows held by
-// themselves. Only with neither is the rest of the scope work already in
-// progress, and only then does it say so.
+// it had come, and what stops it — the dependencies from outside it, then its
+// own rows held by themselves. With neither, nothing stops the scope, and it
+// says what the scope's progress shows instead.
 func (o Exhausted) why() string {
 	stops := slices.DeleteFunc([]string{
 		describeReach(o.Blocked, "blocked by ", exhaustedNotes),
 		describeReach(o.Held, "held here: ", exhaustedNotes),
 	}, func(clause string) bool { return clause == "" })
 	if len(stops) == 0 {
-		stops = []string{"nothing else is queued behind what's already in progress"}
+		stops = []string{unstopped(o.Progress)}
 	}
 	return fmt.Sprintf("no ready work in %s (%s) — %s", o.scope(), formatProgress(o.Progress), strings.Join(stops, "; "))
+}
+
+// unstopped is what a scope nothing stops has left: no ticket at all, once
+// every one is closed — the commonest exhaustion, a checkout that has just
+// finished its epic's last ticket — or only work already underway.
+func unstopped(progress claims.Progress) string {
+	if progress.Done == progress.Total {
+		return "every ticket in it is done"
+	}
+	return "nothing else is queued behind what's already in progress"
 }
 
 // outside is what the pool held beyond the scope when it offered nothing: a

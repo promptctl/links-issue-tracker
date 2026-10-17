@@ -60,13 +60,13 @@ func rowFor(id string) annotation.AnnotatedIssue {
 
 // An exhausted scope's event says how far the scope had come, names every
 // blocker and held row with what this checkout may do about each, and whether
-// the route that stays in the scope
-// was offered — it is, exactly when some blocker is one a ticket filed here
-// could clear.
+// the route that stays in the scope was offered — it is, exactly when some
+// blocker is one a ticket filed here could clear. A pick served past the scope
+// records the same, since it prints the same.
 func TestNextRecordsWhatAnExhaustedScopeNamed(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
-		outcome  Exhausted
+		outcome  NextOutcome
 		gathered int
 		want     string
 	}{
@@ -119,6 +119,28 @@ func TestNextRecordsWhatAnExhaustedScopeNamed(t *testing.T) {
 				"next.hidden_by_filter": null,
 				"next.unreachable": [],
 				"next.stay_offered": false
+			}`,
+		},
+		{
+			name: "a pick served past the scope records how far the scope had come",
+			outcome: ServedPastExhaustion{Row: rowFor("test-bug"), Exhaustion: Exhausted{
+				Epics:    []string{"test-epic"},
+				Progress: claims.Progress{Done: 8, Total: 9},
+				Blocked:  []rowReach{{ID: "test-dep", Row: rowFor("test-dep"), Kind: reachHeldFresh}},
+			}},
+			gathered: 3,
+			want: `{
+				"next.outcome": "served_past_exhaustion",
+				"next.picked": "test-bug",
+				"next.dependency_path": [],
+				"next.exhausted_epics": ["test-epic"],
+				"next.exhausted_progress": {"done": 8, "total": 9},
+				"next.blocked": [{"id": "test-dep", "ticket": "test-dep", "reach": "held_fresh"}],
+				"next.held": [],
+				"next.off_path": [],
+				"next.hidden_by_filter": null,
+				"next.unreachable": [],
+				"next.stay_offered": true
 			}`,
 		},
 	} {

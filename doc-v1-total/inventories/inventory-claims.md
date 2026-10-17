@@ -536,7 +536,7 @@ Steps 1-3 walk every gathered row; step 4 walks the focus-scoped pool. The row s
 
 **`Exhausted.why()`**:
 - `no ready work in %s (%s) — %s`: `scope()`, then `formatProgress(o.Progress)`, then the non-empty clauses of `describeReach(o.Blocked, "blocked by ", exhaustedNotes)` and `describeReach(o.Held, "held here: ", exhaustedNotes)`, joined by `"; "`.
-- with both empty, the clauses are `nothing else is queued behind what's already in progress`.
+- with both empty, the clause is `unstopped(o.Progress)`: `every ticket in it is done` when `Done == Total`, else `nothing else is queued behind what's already in progress`.
 
 **`Exhausted.outside()`**:
 - `o.Narrowing != nil`: `o.Narrowing.Error()`

@@ -285,7 +285,7 @@ func TestRouteNextExhaustionIsTerminalWhenNothingElseIsReady(t *testing.T) {
 		t.Fatalf("routeNext = %#v (%T), want Exhausted — B.1's lane is held elsewhere, so nothing outside epic A is ready", outcome, outcome)
 	}
 	msg := exhausted.Error()
-	if want := "no ready work in epic(s) " + epicA.ID + " (1/1 done) — nothing else is queued behind what's already in progress; `lit next` has nothing ready outside it either"; msg != want {
+	if want := "no ready work in epic(s) " + epicA.ID + " (1/1 done) — every ticket in it is done; `lit next` has nothing ready outside it either"; msg != want {
 		t.Fatalf("exhausted.Error() = %q, want exactly %q", msg, want)
 	}
 }
