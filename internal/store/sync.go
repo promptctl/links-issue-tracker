@@ -666,10 +666,8 @@ func (s *Store) chooseCompactionDepth() (GCMode, error) {
 // embedded store read-only mid-run and collides with the engine state just
 // after a mutation, and reclaiming local disk is not worth that on every change.
 func (s *Store) SyncPush(ctx context.Context, remote string, branch string, setUpstream bool, force bool) (storage.SyncPushResult, error) {
-	push := func(ctx context.Context) (storage.SyncPushResult, error) {
-		return s.pushMutation(ctx, remote, branch, setUpstream, force)
-	}
-	result, refused, followErr := s.pushFollowingReRoot(ctx, remote, branch, setUpstream, force, push)
+	result, refused := s.pushMutation(ctx, remote, branch, setUpstream, force)
+	result, refused, followErr := s.retryPushAfterFollow(ctx, remote, branch, setUpstream, force, result, refused)
 	if err := pushRefusal(refused, followErr); err != nil {
 		return storage.SyncPushResult{}, err
 	}
@@ -700,23 +698,24 @@ func (s *Store) pushMutation(ctx context.Context, remote string, branch string, 
 	return result, nil
 }
 
-// pushFollowingReRoot runs push, and when the remote refuses it, fetches and
-// follows a re-root the fetch revealed (followRemoteReRoot). When the follow
-// moved the branch, the refusal was the re-root's and the follow removed it,
-// so the push runs once more, as a plain push; that push's outcome is the
-// result. Otherwise the refusal stands, returned as refused with the fetch
-// already run, so a caller judging it reads the remote as it stands now. err
-// is a fetch or follow that failed, beside the refusal it could not explain,
-// for the caller to word.
+// retryPushAfterFollow takes the outcome of a push the caller ran. A push the
+// remote refused is followed by a fetch and a follow of a re-root the fetch
+// revealed (followRemoteReRoot). When the follow moved the branch, the
+// refusal was the re-root's and the follow removed it, so the push runs once
+// more, as a plain push, and that push's outcome is the result. Otherwise the
+// refusal stands, returned as refused with the fetch already run, so a caller
+// judging it reads the remote as it stands now. err is a fetch or follow that
+// failed, beside the refusal it could not explain, for the caller to word. A
+// push that landed passes through untouched.
 //
 // A push with no branch names no tracking ref, so its refusal stands with
 // nothing fetched: there is no history on the other side to follow.
-func (s *Store) pushFollowingReRoot(ctx context.Context, remote, branch string, setUpstream, force bool, push func(ctx context.Context) (storage.SyncPushResult, error)) (result storage.SyncPushResult, refused error, err error) {
-	result, refused = push(ctx)
+func (s *Store) retryPushAfterFollow(ctx context.Context, remote, branch string, setUpstream, force bool, pushed storage.SyncPushResult, pushErr error) (result storage.SyncPushResult, refused error, err error) {
 	trimmedBranch := strings.TrimSpace(branch)
-	if refused == nil || trimmedBranch == "" {
-		return result, refused, nil
+	if pushErr == nil || trimmedBranch == "" {
+		return pushed, pushErr, nil
 	}
+	refused = pushErr
 	if err := s.SyncFetch(ctx, remote, false); err != nil {
 		return storage.SyncPushResult{}, refused, err
 	}
@@ -738,30 +737,31 @@ func (s *Store) SyncCompactAndPush(ctx context.Context, remote string, branch st
 	var attempt compactionAttempt
 	var depthErr error
 	var sweep refSweepOutcome
-	compactAndPush := func(ctx context.Context) (storage.SyncPushResult, error) {
-		var result storage.SyncPushResult
-		err := s.runSyncMutation(ctx, func(ctx context.Context) error {
-			// Measured inside the lock, where no other mutation can grow the
-			// journal between the reading and the pass it selects.
-			var depth GCMode
-			depth, depthErr = s.chooseCompactionDepth()
-			var swept refSweepOutcome
-			var compactErr error
-			attempt, swept, compactErr = s.compactWithinLock(ctx, depth)
-			sweep = sweep.plus(swept)
-			if compactErr != nil {
-				return compactErr
-			}
-			pushed, pushErr := s.pushWithinLock(ctx, remote, branch, setUpstream, force)
-			result = pushed
-			return pushErr
-		})
-		return result, err
+	var result storage.SyncPushResult
+	var compactErr, pushErr error
+	err := s.runSyncMutation(ctx, func(ctx context.Context) error {
+		// Measured inside the lock, where no other mutation can grow the
+		// journal between the reading and the pass it selects.
+		var depth GCMode
+		depth, depthErr = s.chooseCompactionDepth()
+		var swept refSweepOutcome
+		attempt, swept, compactErr = s.compactWithinLock(ctx, depth)
+		sweep = sweep.plus(swept)
+		if compactErr != nil {
+			return compactErr
+		}
+		result, pushErr = s.pushWithinLock(ctx, remote, branch, setUpstream, force)
+		return pushErr
+	})
+	// Only the remote's refusal of the push is followed; a compaction that
+	// failed sent nothing and stands as the failure. A push refused over a
+	// re-root it follows runs again without compacting: the store was
+	// compacted moments ago.
+	if compactErr == nil {
+		var refused, followErr error
+		result, refused, followErr = s.retryPushAfterFollow(ctx, remote, branch, setUpstream, force, result, err)
+		err = pushRefusal(refused, followErr)
 	}
-	// A push refused over a re-root it follows runs again without compacting:
-	// the store was compacted moments ago.
-	result, refused, followErr := s.pushFollowingReRoot(ctx, remote, branch, setUpstream, force, compactAndPush)
-	err := pushRefusal(refused, followErr)
 	// DOLT_GC above compacts `noms`; the prune collects the other half of the
 	// store's local footprint, the abandoned git remote mirrors. All three jobs
 	// report whether or not the push landed. A pass that ran is reported even
@@ -874,7 +874,7 @@ func (s *Store) headCommitWithinLock(ctx context.Context) (string, error) {
 
 // SyncPushFromClone pushes from a store that is a frozen clone of a live one,
 // and re-checks a rejection against the remote before reporting it. See the
-// storage.Syncer contract. The re-check is the fetch pushFollowingReRoot runs
+// storage.Syncer contract. The re-check is the fetch retryPushAfterFollow runs
 // on a refusal, then a freshness read on this store — the clone, which no
 // third party writes to or reads the tracking ref of, so nothing lands between
 // the rejection and the verdict. A fetch that fails leaves the rejection
@@ -892,10 +892,8 @@ func (s *Store) SyncPushFromClone(ctx context.Context, remote string, branch str
 	if err != nil {
 		return storage.SyncPushResult{}, err
 	}
-	push := func(ctx context.Context) (storage.SyncPushResult, error) {
-		return s.pushMutation(ctx, trimmedRemote, trimmedBranch, setUpstream, force)
-	}
-	result, pushErr, followErr := s.pushFollowingReRoot(ctx, trimmedRemote, trimmedBranch, setUpstream, force, push)
+	result, pushErr := s.pushMutation(ctx, trimmedRemote, trimmedBranch, setUpstream, force)
+	result, pushErr, followErr := s.retryPushAfterFollow(ctx, trimmedRemote, trimmedBranch, setUpstream, force, result, pushErr)
 	if pushErr == nil {
 		return result, nil
 	}

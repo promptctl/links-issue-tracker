@@ -639,10 +639,11 @@ func mirrorCycle(ctx context.Context, log io.Writer, ws workspace.Info, stopAnsw
 	// which arrives at the hashes the clone pushed. [LAW:one-source-of-truth]
 	// the tracking ref still says where the remote is, through the receive's
 	// own landing.
-	if landed.landed() && landed.followedReRoot {
+	switch {
+	case landed.landed() && landed.followedReRoot:
 		receivePushedReRoot(ctx, ws, clone.liveClone, landed)
-	}
-	if landed.landed() && !landed.followedReRoot {
+		fmt.Fprintf(log, "%s mirror received its re-rooted push on the live store\n", time.Now().UTC().Format(time.RFC3339))
+	case landed.landed():
 		recordStart := time.Now()
 		var recordErr error
 		record, recordErr = store.RecordPushedHead(ctx, ws.DatabasePath, landed.remote, landed.branch, landed.head, landed.proven.record())
@@ -786,8 +787,9 @@ func mirrorOnce(ctx, completionCtx context.Context, session syncSession, ws work
 		return pushedHead{}, nil
 	}
 	// The head the push reports is the clone's HEAD — the push is
-	// HEAD:<branch> and the clone is frozen, so nothing moved it. The live
-	// store learns it through RecordPushedHead.
+	// HEAD:<branch> and the clone is frozen, so nothing moved it but a follow
+	// of a re-rooted remote, which followedReRoot reports. The live store
+	// learns it through RecordPushedHead, or by receiving a re-rooted push.
 	return pushedHead{remote: outcome.remote, branch: outcome.branch, head: outcome.head, proven: outcome.proven, followedReRoot: len(session.syncer.FollowedReRoots()) > 0}, nil
 }
 

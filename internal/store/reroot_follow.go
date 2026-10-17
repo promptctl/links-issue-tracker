@@ -66,14 +66,17 @@ func (s *Store) followRemoteReRoot(ctx context.Context, remote, branch string, e
 	if !unrelated {
 		return false, nil
 	}
-	reRooted, ok, err := s.followWithEngineClosed(ctx, local, ref.NewRemoteRef(trimmedRemote, trimmedBranch))
-	if err != nil {
-		return false, fmt.Errorf("follow a re-root of %s/%s: %w", trimmedRemote, trimmedBranch, err)
-	}
-	if ok {
+	reRooted, moved, err := s.followWithEngineClosed(ctx, local, ref.NewRemoteRef(trimmedRemote, trimmedBranch))
+	// A branch that moved stands even when something after the move failed,
+	// as ReRoot's own result does, so the follow is recorded either way.
+	// [LAW:no-silent-failure]
+	if moved {
 		s.followed = append(s.followed, storage.FollowedReRoot{Entry: entry, ReRooted: reRooted})
 	}
-	return ok, nil
+	if err != nil {
+		return moved, fmt.Errorf("follow a re-root of %s/%s: %w", trimmedRemote, trimmedBranch, err)
+	}
+	return moved, nil
 }
 
 // SyncFollowReRoot is followRemoteReRoot for a caller that fetched and
@@ -113,16 +116,16 @@ func (s *Store) unrelatedToRemote(ctx context.Context, remote, branch string) (l
 // followWithEngineClosed closes this store's engine, follows under
 // holdForRefWrite — LOCK, then the commit lock — and reopens the engine
 // whatever happened, so the store is usable again on every return.
-func (s *Store) followWithEngineClosed(ctx context.Context, local string, tracking ref.DoltRef) (followed storage.ReRooted, ok bool, err error) {
+func (s *Store) followWithEngineClosed(ctx context.Context, local string, tracking ref.DoltRef) (followed storage.ReRooted, moved bool, err error) {
 	if err := s.closeEngine(); err != nil {
 		return storage.ReRooted{}, false, errors.Join(fmt.Errorf("close the engine: %w", err), s.reopenEngine(ctx))
 	}
 	holdErr := holdForRefWrite(ctx, s.doltRootDir, ReRootHoldBudget, func(holdCtx context.Context, ddb *doltdb.DoltDB) error {
 		var err error
-		followed, ok, err = followReRoot(holdCtx, ddb, ref.NewBranchRef(local), tracking)
+		followed, moved, err = followReRoot(holdCtx, ddb, ref.NewBranchRef(local), tracking)
 		return err
 	})
-	return followed, ok, errors.Join(holdErr, s.reopenEngine(ctx))
+	return followed, moved, errors.Join(holdErr, s.reopenEngine(ctx))
 }
 
 // reopenEngine opens the engine closeEngine closed, under the store's own
@@ -140,34 +143,28 @@ func (s *Store) reopenEngine(ctx context.Context) error {
 }
 
 // followReRoot is the follow inside the hold: recognize the cut, then re-root
-// branch at it. ok is false, with nothing written to any ref, when the
-// tracking ref's history is not a re-root branch can follow.
-func followReRoot(ctx context.Context, ddb *doltdb.DoltDB, branch, tracking ref.DoltRef) (storage.ReRooted, bool, error) {
+// branch at it. moved reports whether the branch moved, which a re-root that
+// failed after its move still did; it is false, with nothing written to any
+// ref, when the tracking ref's history is not a re-root branch can follow.
+func followReRoot(ctx context.Context, ddb *doltdb.DoltDB, branch, tracking ref.DoltRef) (followed storage.ReRooted, moved bool, err error) {
 	cut, ok, err := recognizeReRootCut(ctx, ddb, branch, tracking)
 	if err != nil || !ok {
 		return storage.ReRooted{}, false, err
 	}
-	followed, err := reRootBranch(ctx, ddb, branch, cut.local)
+	followed, err = reRootBranch(ctx, ddb, branch, cut)
 	if errors.Is(err, ErrSideLineAcrossCut) {
 		// A line of the local history goes around the cut, so no re-root of
 		// it reproduces the remote's: not a history this branch can follow.
 		return storage.ReRooted{}, false, nil
 	}
-	if err != nil {
-		return storage.ReRooted{}, false, err
-	}
-	return followed, true, nil
-}
-
-// reRootCut is a recognized re-root: the local commit whose parentless
-// re-commit is the remote's root. The re-root at it writes that same
-// re-commit, so it arrives at the remote's root.
-type reRootCut struct {
-	local hash.Hash
+	// reRootBranch sets Head exactly when the branch moved, whatever the error.
+	return followed, followed.Head != "", err
 }
 
 // recognizeReRootCut finds the commit of branch's history whose parentless
-// re-commit is the one root of tracking's history. ok is false when tracking's
+// re-commit is the one root of tracking's history: the cut, since the re-root
+// at it writes that same re-commit and so arrives at the remote's root. ok is
+// false when tracking's
 // history has more than one root, or when not exactly one local commit rebuilds
 // to it. The caller has read that the two histories share no commit, so the
 // local history does not hold the root itself.
@@ -175,18 +172,18 @@ type reRootCut struct {
 // Rebuilding a candidate writes its parentless commit, as the re-root that
 // follows would; a candidate that does not match leaves that commit dangling
 // for GC, and no ref names it.
-func recognizeReRootCut(ctx context.Context, ddb *doltdb.DoltDB, branch, tracking ref.DoltRef) (reRootCut, bool, error) {
+func recognizeReRootCut(ctx context.Context, ddb *doltdb.DoltDB, branch, tracking ref.DoltRef) (cut hash.Hash, ok bool, err error) {
 	localHead, err := resolveRefHash(ctx, ddb, branch)
 	if err != nil {
-		return reRootCut{}, false, err
+		return hash.Hash{}, false, err
 	}
 	remoteHead, err := resolveRefHash(ctx, ddb, tracking)
 	if err != nil {
-		return reRootCut{}, false, err
+		return hash.Hash{}, false, err
 	}
 	remoteHistory, err := readHistory(ctx, ddb, remoteHead, nil)
 	if err != nil {
-		return reRootCut{}, false, fmt.Errorf("read the remote's history: %w", err)
+		return hash.Hash{}, false, fmt.Errorf("read the remote's history: %w", err)
 	}
 	var roots []historyCommit
 	for _, c := range remoteHistory {
@@ -195,33 +192,33 @@ func recognizeReRootCut(ctx context.Context, ddb *doltdb.DoltDB, branch, trackin
 		}
 	}
 	if len(roots) != 1 {
-		return reRootCut{}, false, nil
+		return hash.Hash{}, false, nil
 	}
 	root := roots[0]
 	rootMeta, err := root.commit.GetCommitMeta(ctx)
 	if err != nil {
-		return reRootCut{}, false, err
+		return hash.Hash{}, false, err
 	}
 	localHistory, err := readHistory(ctx, ddb, localHead, nil)
 	if err != nil {
-		return reRootCut{}, false, fmt.Errorf("read the local history: %w", err)
+		return hash.Hash{}, false, fmt.Errorf("read the local history: %w", err)
 	}
 	var matches []hash.Hash
 	for addr, c := range localHistory {
 		meta, err := c.commit.GetCommitMeta(ctx)
 		if err != nil {
-			return reRootCut{}, false, err
+			return hash.Hash{}, false, err
 		}
 		if *meta != *rootMeta {
 			continue
 		}
 		rebuilt, err := commitRoot(ctx, ddb, c.commit)
 		if err != nil {
-			return reRootCut{}, false, err
+			return hash.Hash{}, false, err
 		}
 		rebuiltAddr, err := rebuilt.HashOf()
 		if err != nil {
-			return reRootCut{}, false, err
+			return hash.Hash{}, false, err
 		}
 		if rebuiltAddr == root.addr {
 			matches = append(matches, addr)
@@ -231,9 +228,9 @@ func recognizeReRootCut(ctx context.Context, ddb *doltdb.DoltDB, branch, trackin
 	// parents, and each would re-root the branch differently: no one cut is
 	// evidenced.
 	if len(matches) != 1 {
-		return reRootCut{}, false, nil
+		return hash.Hash{}, false, nil
 	}
-	return reRootCut{local: matches[0]}, true, nil
+	return matches[0], true, nil
 }
 
 // resolveRefHash is the commit r names.
