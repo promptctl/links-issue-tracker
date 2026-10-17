@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 )
@@ -249,4 +250,19 @@ func hasLaw(r VerifyReport, law ConservationLaw) bool {
 		}
 	}
 	return false
+}
+
+// A rebuild holding one key on a live issue and a deleted one is a source the
+// rank verbs wrote, since they pick neighbours past a deleted issue; the
+// same key on two live issues is not.
+func TestRankFindingsCountsADeletedHolderOfAKeyAsNoDuplicate(t *testing.T) {
+	deleted := model.Issue{ID: "i2", Rank: "V"}
+	deleted.SetRetention(model.Deleted{At: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)})
+	if findings := rankFindings(model.Export{Issues: []model.Issue{{ID: "i1", Rank: "V"}, deleted}}); len(findings) != 0 {
+		t.Errorf("rankFindings(live and deleted on one key) = %+v, want none", findings)
+	}
+	findings := rankFindings(model.Export{Issues: []model.Issue{{ID: "i1", Rank: "V"}, {ID: "i2", Rank: "V"}}})
+	if len(findings) != 1 || !strings.Contains(findings[0].Detail, `"V" shared by i1, i2`) {
+		t.Errorf("rankFindings(two live on one key) = %+v, want one finding naming both", findings)
+	}
 }
