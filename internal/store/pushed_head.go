@@ -44,11 +44,11 @@ func (r PushedHeadRecord) String() string {
 	return "unrecorded"
 }
 
-// ErrMirrorHoldCut marks a hold on the live store that ran past
-// MirrorHoldBudget and was cut. It is the discriminator the mirror reads to
-// say "the budget, not the work" in its durable trail; the wording of that
-// explanation is the mirror's. [LAW:one-source-of-truth]
-var ErrMirrorHoldCut = errors.New("mirror hold cut at its budget")
+// ErrHoldCut marks a hold on the live store (holdForRefWrite's) that ran
+// past its caller's budget and was cut. It is the discriminator a caller
+// reads to say "the budget, not the work"; the mirror's trail does, in a
+// wording that is the mirror's. [LAW:one-source-of-truth]
+var ErrHoldCut = errors.New("hold on the live store cut at its budget")
 
 // ErrReceivedRefsNotRecorded marks a RecordPushedHead whose ref write landed
 // and whose received-refs write did not: the push's bookkeeping stands, and
@@ -76,7 +76,7 @@ var ErrReceivedRefsNotRecorded = errors.New("received-refs record not written, s
 // The hold — everything from the open's success to the ref write — runs under
 // MirrorHoldBudget, the same deadline the clone step runs under: the lock
 // waits before it are waiting, not holding, and a ref write still running at
-// the budget is a stalled one. A cut is returned wrapping ErrMirrorHoldCut.
+// the budget is a stalled one. A cut is returned wrapping ErrHoldCut.
 // [LAW:no-ambient-temporal-coupling]
 //
 // Why it exists: the on-change mirror pushes from a clone so the live store is
@@ -134,24 +134,11 @@ func RecordPushedHead(ctx context.Context, doltRootDir string, remote string, br
 	if !isDoltCommitHash(trimmedHead) {
 		return 0, fmt.Errorf("record pushed head: %q is not a Dolt commit hash", head)
 	}
-	// The same shared hold every reader of the Dolt directory takes: a
-	// rotator (snapshots restore, adopt) must not swap the directory under
-	// the open below. [LAW:single-enforcer]
-	releaseWorkspace, err := acquireWorkspaceShared(ctx, root)
+	releaseWorkspace, err := acquireLiveStoreHold(ctx, root)
 	if err != nil {
 		return 0, err
 	}
-	defer func() {
-		if relErr := releaseWorkspace(); relErr != nil {
-			err = errors.Join(err, relErr)
-		}
-	}()
-	if err := requireInitializedWorkspace(root); err != nil {
-		return 0, err
-	}
-	if err := requireNoPendingAdopt(root); err != nil {
-		return 0, err
-	}
+	defer func() { err = errors.Join(err, releaseWorkspace()) }()
 	record, atHead, err := settlePushedHead(ctx, root, trimmedRemote, trimmedBranch, trimmedHead)
 	if err != nil {
 		return 0, err
@@ -175,13 +162,9 @@ func RecordPushedHead(ctx context.Context, doltRootDir string, remote string, br
 func settlePushedHead(ctx context.Context, root, trimmedRemote, trimmedBranch, trimmedHead string) (record PushedHeadRecord, atHead bool, err error) {
 	err = holdForRefWrite(ctx, root, MirrorHoldBudget, func(holdCtx context.Context, ddb *doltdb.DoltDB) error {
 		trackingRef := ref.NewRemoteRef(trimmedRemote, trimmedBranch)
-		pushed, err := ddb.ReadCommit(holdCtx, hash.Parse(trimmedHead))
+		pushedCommit, err := readFullCommit(holdCtx, ddb, hash.Parse(trimmedHead))
 		if err != nil {
 			return fmt.Errorf("record pushed head %s: this store does not hold it as a commit: %w", trimmedHead, err)
-		}
-		pushedCommit, ok := pushed.ToCommit()
-		if !ok {
-			return fmt.Errorf("record pushed head %s: this store holds it only as a ghost commit", trimmedHead)
 		}
 		// CanFastForward answers four ways for an existing ref: (true, nil) when
 		// the ref is a strict ancestor of head, ErrUpToDate when it IS head,
@@ -215,17 +198,54 @@ func settlePushedHead(ctx context.Context, root, trimmedRemote, trimmedBranch, t
 	return record, atHead, nil
 }
 
-// holdForRefWrite is the one hold a clone's bookkeeping takes on the live
-// store: the chunk-store open (Dolt's LOCK, waited out like any write open),
-// the commit lock, and write, all released before it returns. Both the mirror's
-// pushed-head record and the receive's landing of a fetch run through it, so the
-// two cannot drift on the lock order. [LAW:single-enforcer]
+// acquireLiveStoreHold is what a write to the live store from outside its
+// engine takes before holdForRefWrite: the same shared hold every reader of
+// the Dolt directory takes, so a rotator (snapshots restore, adopt) cannot
+// swap the directory under the open, on a workspace that is initialized and
+// has no adopt pending. The caller releases it once everything it writes
+// under the workspace has landed. [LAW:single-enforcer]
+func acquireLiveStoreHold(ctx context.Context, root string) (func() error, error) {
+	release, err := acquireWorkspaceShared(ctx, root)
+	if err != nil {
+		return nil, err
+	}
+	if err := requireInitializedWorkspace(root); err != nil {
+		return nil, errors.Join(err, release())
+	}
+	if err := requireNoPendingAdopt(root); err != nil {
+		return nil, errors.Join(err, release())
+	}
+	return release, nil
+}
+
+// readFullCommit reads the commit at addr, refusing a ghost commit, which a
+// shallow clone holds by hash alone with no root value or metadata to read.
+// [LAW:one-source-of-truth] the one place a ghost is refused.
+func readFullCommit(ctx context.Context, ddb *doltdb.DoltDB, addr hash.Hash) (*doltdb.Commit, error) {
+	optional, err := ddb.ReadCommit(ctx, addr)
+	if err != nil {
+		return nil, err
+	}
+	commit, ok := optional.ToCommit()
+	if !ok {
+		return nil, fmt.Errorf("the store holds %s only as a ghost commit", addr)
+	}
+	return commit, nil
+}
+
+// holdForRefWrite is the one hold a write to the live store from outside its
+// engine takes: the chunk-store open (Dolt's LOCK, waited out like any write
+// open), the commit lock, and write, all released before it returns. The
+// mirror's pushed-head record, the receive's landing of a fetch and a re-root
+// all run through it, so they cannot drift on the lock order.
+// [LAW:single-enforcer]
 //
 // The hold — everything from the open's success to the end of write — runs
 // under budget: the lock waits before it are waiting, not holding. A cut is
-// returned wrapping ErrMirrorHoldCut. What the budget is sized against is the
-// caller's to say, because the two writes' costs differ in kind: a ref write is
-// one journal append, a landing copies whatever the remote moved. The caller
+// returned wrapping ErrHoldCut. What the budget is sized against is the
+// caller's to say, because the writes' costs differ in kind: a ref write is one
+// journal append, a landing copies whatever the remote moved, a re-root
+// rewrites the history the bound keeps. The caller
 // holds the workspace shared lock around it, so a rotation of the Dolt
 // directory cannot land inside the hold.
 func holdForRefWrite(ctx context.Context, root string, budget time.Duration, write func(holdCtx context.Context, ddb *doltdb.DoltDB) error) (err error) {
@@ -246,7 +266,7 @@ func holdForRefWrite(ctx context.Context, root string, budget time.Duration, wri
 	defer cancelHold()
 	defer func() {
 		if err != nil && holdCtx.Err() != nil && ctx.Err() == nil {
-			err = fmt.Errorf("%w: %w", ErrMirrorHoldCut, err)
+			err = fmt.Errorf("%w: %w", ErrHoldCut, err)
 		}
 	}()
 	// Commit lock AFTER the open took LOCK — the package's order. It excludes

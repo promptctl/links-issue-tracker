@@ -346,7 +346,7 @@ func TestRecordPushedHeadNeverMovesTheTrackingRefBackwards(t *testing.T) {
 
 // TestRecordPushedHeadCutsAtTheHoldBudget pins that the record's hold on the
 // live store runs under MirrorHoldBudget and that a cut is stamped with
-// ErrMirrorHoldCut — the discriminator the mirror's trail reads. The budget is
+// ErrHoldCut — the discriminator the mirror's trail reads. The budget is
 // shrunk to nothing so the hold is cut the instant it starts; the lock waits
 // before it are not under the budget, so the open itself still succeeds.
 func TestRecordPushedHeadCutsAtTheHoldBudget(t *testing.T) {
@@ -368,8 +368,8 @@ func TestRecordPushedHeadCutsAtTheHoldBudget(t *testing.T) {
 	MirrorHoldBudget = time.Nanosecond
 	t.Cleanup(func() { MirrorHoldBudget = previous })
 	_, err = RecordPushedHead(ctx, doltRoot, "origin", "master", head, nil)
-	if !errors.Is(err, ErrMirrorHoldCut) {
-		t.Fatalf("RecordPushedHead() under a zero hold budget error = %v, want ErrMirrorHoldCut", err)
+	if !errors.Is(err, ErrHoldCut) {
+		t.Fatalf("RecordPushedHead() under a zero hold budget error = %v, want ErrHoldCut", err)
 	}
 }
 
@@ -406,8 +406,8 @@ func TestRecordPushedHeadCutInTheCommitLockWaitNamesTheHolder(t *testing.T) {
 	MirrorHoldBudget = 300 * time.Millisecond
 	t.Cleanup(func() { MirrorHoldBudget = previous })
 	_, err = RecordPushedHead(ctx, doltRoot, "origin", "master", head, nil)
-	if !errors.Is(err, ErrMirrorHoldCut) {
-		t.Fatalf("RecordPushedHead() against a held commit lock error = %v, want ErrMirrorHoldCut", err)
+	if !errors.Is(err, ErrHoldCut) {
+		t.Fatalf("RecordPushedHead() against a held commit lock error = %v, want ErrHoldCut", err)
 	}
 	if errors.Is(err, ErrWorkspaceBusy) {
 		t.Fatalf("RecordPushedHead() cut by its budget reports ErrWorkspaceBusy, a contention outcome its wait never reached: %v", err)

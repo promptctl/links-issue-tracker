@@ -640,7 +640,7 @@ func mirrorCycle(ctx context.Context, log io.Writer, ws workspace.Info, stopAnsw
 			// Loud in the trail, never a re-coloring of the push. A cut is
 			// named as the budget's doing, through the one wording the clone
 			// step uses. [LAW:no-silent-failure] [LAW:one-source-of-truth]
-			if errors.Is(recordErr, store.ErrMirrorHoldCut) {
+			if errors.Is(recordErr, store.ErrHoldCut) {
 				recordErr = fmt.Errorf("%w: %w", holdBudgetCutExplanation("recording the pushed head"), recordErr)
 			}
 			// Which write failed decides the consequence: the tracking ref's

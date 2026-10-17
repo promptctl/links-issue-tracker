@@ -137,24 +137,11 @@ func LandFetchedHead(ctx context.Context, doltRootDir, cloneRootDir, remote, bra
 	// last-writer-wins rule every close follows.
 	cachePlan, cacheErr := planRemoteCacheLanding(ctx, remoteCacheBaseAt(root), remoteCacheBaseAt(cloneRoot), trimmedRemote)
 
-	// The same shared hold every reader of the Dolt directory takes: a rotator
-	// (snapshots restore, adopt) must not swap the directory under the open.
-	// [LAW:single-enforcer]
-	releaseWorkspace, err := acquireWorkspaceShared(ctx, root)
+	releaseWorkspace, err := acquireLiveStoreHold(ctx, root)
 	if err != nil {
 		return LandedFetch{}, err
 	}
-	defer func() {
-		if relErr := releaseWorkspace(); relErr != nil {
-			err = errors.Join(err, relErr)
-		}
-	}()
-	if err := requireInitializedWorkspace(root); err != nil {
-		return LandedFetch{}, err
-	}
-	if err := requireNoPendingAdopt(root); err != nil {
-		return LandedFetch{}, err
-	}
+	defer func() { err = errors.Join(err, releaseWorkspace()) }()
 	err = holdForRefWrite(ctx, root, ReceiveDeadline, func(holdCtx context.Context, ddb *doltdb.DoltDB) error {
 		start := time.Now()
 		defer func() { landed.Held = time.Since(start) }()
@@ -187,12 +174,8 @@ func LandFetchedHead(ctx context.Context, doltRootDir, cloneRootDir, remote, bra
 // why). It reads fetched as a commit first, so a copy that did not land it is
 // refused rather than pointed at.
 func landTrackingRef(ctx context.Context, ddb *doltdb.DoltDB, trackingRef ref.DoltRef, fetched hash.Hash) (FetchedHeadRecord, error) {
-	value, err := ddb.ReadCommit(ctx, fetched)
-	if err != nil {
+	if _, err := readFullCommit(ctx, ddb, fetched); err != nil {
 		return 0, fmt.Errorf("land fetched head %s: the copied chunks do not hold it as a commit: %w", fetched, err)
-	}
-	if _, ok := value.ToCommit(); !ok {
-		return 0, fmt.Errorf("land fetched head %s: the live store holds it only as a ghost commit", fetched)
 	}
 	current, found, err := resolveTrackingHead(ctx, ddb, trackingRef)
 	if err != nil {
