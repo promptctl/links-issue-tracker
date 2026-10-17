@@ -44,6 +44,10 @@ type cobraFlagSet struct {
 	// retired from, so `lit show --assignee` stays an ordinary unknown flag
 	// while `lit start --assignee` is pointed at --by.
 	retired map[string]string
+	// longTexts is every long-text pair registerLongText declared here, in
+	// declaration order: the fields that may read stdin, and so the set a
+	// second reader of stdin is checked against.
+	longTexts []*longTextFlag
 }
 
 func newCobraFlagSet(use string) *cobraFlagSet {

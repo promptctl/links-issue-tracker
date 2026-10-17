@@ -304,8 +304,8 @@ func rankPlacement(top bool) storage.RankPlacement {
 func newLeaf() appLeaf {
 	fs := newCobraFlagSet("new")
 	title := fs.String("title", "", "Issue title")
-	description := fs.String("description", "", "Issue description")
-	prompt := fs.String("prompt", "", "Reusable agent prompt for the work this issue captures")
+	description := registerLongText(fs, "description", "Issue description")
+	prompt := registerLongText(fs, "prompt", "Reusable agent prompt for the work this issue captures")
 	issueType := fs.String("type", string(model.TypeTask), "Issue type: "+issueTypeChoices())
 	topic := fs.String("topic", "", "Required immutable issue topic slug (1-2 words; stable area of focus; e.g., 'refactor' or 'field-history')")
 	parentID := fs.String("parent", "", "Epic the ticket lives inside — required for every type but epic, which may be top-level or inside another epic; child IDs become parentID.<hash>")
@@ -328,7 +328,7 @@ func newLeaf() appLeaf {
 			return err
 		}
 		issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
-			Title: *title, Description: *description, Prompt: *prompt, IssueType: issueTypeValue, Topic: *topic, ParentID: *parentID, Priority: priorityValue, Assignee: strings.TrimSpace(*assignee), Labels: splitCSV(*labels), Lane: *lane,
+			Title: *title, Description: description.value(), Prompt: prompt.value(), IssueType: issueTypeValue, Topic: *topic, ParentID: *parentID, Priority: priorityValue, Assignee: strings.TrimSpace(*assignee), Labels: splitCSV(*labels), Lane: *lane,
 			Placement: rankPlacement(*top),
 			Prefix:    prefix.Value(),
 		})
@@ -366,8 +366,8 @@ func followupLeaf() appLeaf {
 	fs := newCobraFlagSet("followup")
 	on := fs.String("on", "", "Required id of the ticket this follows up (typically the just-closed ticket)")
 	title := fs.String("title", "", "Required follow-up title")
-	description := fs.String("description", "", "Optional description; defaults to a reference back to --on")
-	prompt := fs.String("prompt", "", "Optional reusable agent prompt for the follow-up")
+	description := registerLongText(fs, "description", "Optional description; defaults to a reference back to --on")
+	prompt := registerLongText(fs, "prompt", "Optional reusable agent prompt for the follow-up")
 	issueType := fs.String("type", string(model.TypeTask), "Issue type: "+issueTypeChoices())
 	parent := fs.String("parent", "", "Epic to file the follow-up in; defaults to the parent of --on, beside it")
 	topic := fs.String("topic", "", "Topic slug; inherits from --on when omitted")
@@ -379,7 +379,7 @@ func followupLeaf() appLeaf {
 	// and a value typed where no positional is taken. It is declared outside the
 	// work because the seam's arity check runs first and cannot reach a sentence
 	// written inside it. [LAW:one-source-of-truth]
-	usage := "usage: lit followup --on <id> --title <text> [--description <text>] [--topic <slug>] [--type <task|feature|bug|chore|epic>] [--parent <epic-id>] [--priority <" + priorityChoices() + ">] [--assignee <user>] [--labels <csv>] [--top]"
+	usage := "usage: lit followup --on <id> --title <text> [--description <text> | --description-file <path|->] [--prompt <text> | --prompt-file <path|->] [--topic <slug>] [--type <task|feature|bug|chore|epic>] [--parent <epic-id>] [--priority <" + priorityChoices() + ">] [--assignee <user>] [--labels <csv>] [--top]"
 	return appLeaf{fs: fs, positionals: 0, usage: usage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		onID := strings.TrimSpace(*on)
 		titleValue := strings.TrimSpace(*title)
@@ -405,7 +405,7 @@ func followupLeaf() appLeaf {
 		if resolvedTopic == "" {
 			resolvedTopic = origin.Issue.Topic
 		}
-		resolvedDescription := strings.TrimSpace(*description)
+		resolvedDescription := strings.TrimSpace(description.value())
 		if resolvedDescription == "" {
 			resolvedDescription = fmt.Sprintf("Follow-up surfaced at the close of %s: %s", origin.Issue.ID, origin.Issue.Title)
 		}
@@ -424,7 +424,7 @@ func followupLeaf() appLeaf {
 		issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
 			Title:       titleValue,
 			Description: resolvedDescription,
-			Prompt:      strings.TrimSpace(*prompt),
+			Prompt:      strings.TrimSpace(prompt.value()),
 			IssueType:   issueTypeValue,
 			Topic:       resolvedTopic,
 			ParentID:    parentID,
@@ -1305,8 +1305,8 @@ const statusViaVerbsGuidance = "lit update no longer changes status — the tran
 func updateLeaf() appLeaf {
 	fs := newCobraFlagSet("update")
 	title := fs.String("title", "", "Issue title")
-	description := fs.String("description", "", "Issue description")
-	prompt := fs.String("prompt", "", "Reusable agent prompt for the work this issue captures")
+	description := registerLongText(fs, "description", "Issue description")
+	prompt := registerLongText(fs, "prompt", "Reusable agent prompt for the work this issue captures")
 	issueType := fs.String("type", "", "Issue type: "+issueTypeChoices())
 	priority := fs.String("priority", model.PriorityNormal.String(), "Priority: "+priorityChoices()) // [LAW:one-source-of-truth] default derives from model constant; matches runNew/runFollowup
 	assignee := fs.String("assignee", "", "Assignee")
@@ -1318,10 +1318,10 @@ func updateLeaf() appLeaf {
 	fs.String("status", "", "(removed) change status with the transition verbs: lit start|done|close|open")
 	reason := fs.String("reason", "", "Reason recorded on the field-change event")
 	resolveActor := registerActor(fs)
-	// update takes nine value flags, past the point where the derived fallback
+	// update takes eleven value flags, past the point where the derived fallback
 	// stops naming them and points at --help. Its own sentence names them all, so
 	// it supplies it rather than taking the fallback. [LAW:one-source-of-truth]
-	usage := "usage: lit update <id> [--title <text>] [--description <text>] [--prompt <text>] [--type <task|feature|bug|chore|epic>] [--priority <" + priorityChoices() + ">] [--assignee <user>] [--labels <csv>] [--lane <key>] [--reason <text>]"
+	usage := "usage: lit update <id> [--title <text>] [--description <text> | --description-file <path|->] [--prompt <text> | --prompt-file <path|->] [--type <task|feature|bug|chore|epic>] [--priority <" + priorityChoices() + ">] [--assignee <user>] [--labels <csv>] [--lane <key>] [--reason <text>]"
 	return appLeaf{fs: fs, positionals: 1, usage: usage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		if len(positional) != 1 {
 			return UsageError{Message: usage}
@@ -1355,14 +1355,8 @@ func updateLeaf() appLeaf {
 			value := *title
 			in.Fields.Title = &value
 		}
-		if visited["description"] {
-			value := *description
-			in.Fields.Description = &value
-		}
-		if visited["prompt"] {
-			value := *prompt
-			in.Fields.Prompt = &value
-		}
+		in.Fields.Description = description.text
+		in.Fields.Prompt = prompt.text
 		if visited["type"] {
 			value, err := model.ParseIssueType(*issueType)
 			if err != nil {
@@ -2041,16 +2035,16 @@ var commentFamily = commandFamily[appSubcommand]{
 
 func commentAddLeaf() appLeaf {
 	fs := newCobraFlagSet("comment add")
-	body := fs.String("body", "", "Comment body")
+	body := registerLongText(fs, "body", "Comment body")
 	resolveActor := registerActor(fs)
-	const usage = "usage: lit comment add <id> --body <text>"
+	const usage = "usage: lit comment add <id> (--body <text> | --body-file <path|->)"
 	return appLeaf{fs: fs, positionals: 1, usage: usage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		if len(positional) != 1 {
 			return UsageError{Message: usage}
 		}
 		// [LAW:single-enforcer] A comment is a recorded event; its author resolves
 		// through the same identity rule as every other actor.
-		comment, issue, err := ap.Store.AddComment(ctx, storage.AddCommentInput{IssueID: positional[0], Body: *body, CreatedBy: resolveActor()})
+		comment, issue, err := ap.Store.AddComment(ctx, storage.AddCommentInput{IssueID: positional[0], Body: body.value(), CreatedBy: resolveActor()})
 		if err != nil {
 			return err
 		}

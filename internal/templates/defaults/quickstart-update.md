@@ -11,4 +11,4 @@ Focus a goal: `lit label add <id> focus` narrows what `lit backlog` lists, and t
 Set parent: `lit parent set --child <child-id> --parent <parent-id>`
 Set dependency: `lit dep add <waiting-id> --blocked-by <blocker-id>` — the command reads as the edge: the first issue waits until the second closes (not allowed between two issues in the same epic, or between an issue and any epic above it — within one epic, rank is the ordering signal; cross-epic and free-floating issues are unrestricted; blocking an epic holds back every issue under it)
 Set related: `lit dep add <issue-id> --related-to <peer-id>`
-Add comment: `lit comment add <issue-id> --body "Starting: <plan>"`
+Add comment: `lit comment add <issue-id> --body "Starting: <plan>"`; a long or multi-paragraph body goes in a file passed as `--body-file <path>` (or `--body-file -` to read stdin), so no shell quoting touches it — `--description-file` and `--prompt-file` do the same for `lit new`, `lit followup` and `lit update`

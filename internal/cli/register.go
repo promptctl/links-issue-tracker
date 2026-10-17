@@ -347,6 +347,11 @@ func parseLeaf[R any](ctx context.Context, l leaf[R], args []string, stdout io.W
 	if err := refuseSurplusPositionals(l.fs, l.positionals, l.usage); err != nil {
 		return nil, err
 	}
+	// A long text read from a file or stdin is input, not work: it is read
+	// here, before acquisition, so waiting on it never holds the workspace.
+	if err := readLongTexts(ctx, l.fs); err != nil {
+		return nil, err
+	}
 	return positional, nil
 }
 

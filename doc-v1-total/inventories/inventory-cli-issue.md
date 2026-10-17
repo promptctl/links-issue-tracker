@@ -612,6 +612,8 @@ else ready.
 | `--title` | string | `""` | Issue title. Help: "Issue title" |
 | `--description` | string | `""` | "Issue description" |
 | `--prompt` | string | `""` | "Reusable agent prompt for the work this issue captures" |
+| `--description-file` | string | `""` | "Read --description from this file, or from stdin when it is -" (`registerLongText`, `longtext.go`) |
+| `--prompt-file` | string | `""` | "Read --prompt from this file, or from stdin when it is -" |
 | `--type` | string | `task` | "Issue type: task\|feature\|bug\|chore\|epic" |
 | `--topic` | string | `""` | "Required immutable issue topic slug (1-2 words; stable area of focus; e.g., 'refactor' or 'field-history')" |
 | `--parent` | string | `""` | "Epic the ticket lives inside — required for every type but epic, which may be top-level or inside another epic; child IDs become parentID.\<hash>" |
@@ -649,11 +651,11 @@ else ready.
   (`cli.go`).
 - Flags (`cli.go`): `--on` (string, `""`, "Required id of the ticket this
   follows up (typically the just-closed ticket)"), `--title` (required), `--description`,
-  `--prompt`, `--type` (default `task`), `--parent` (string, `""`, "Epic to file
+  `--prompt`, `--description-file`, `--prompt-file`, `--type` (default `task`), `--parent` (string, `""`, "Epic to file
   the follow-up in; defaults to the parent of --on, beside it"), `--topic`,
   `--priority` (default 0), `--assignee`, `--labels`, `--top`. No `--lane`.
 - Refusal: blank `--on` or blank `--title` (after trim) →
-  `UsageError{"usage: lit followup --on <id> --title <text> [--description <text>] [--topic <slug>] [--type <task|feature|bug|chore|epic>] [--parent <epic-id>] [--priority <0|1>] [--assignee <user>] [--labels <csv>] [--top]"}`
+  `UsageError{"usage: lit followup --on <id> --title <text> [--description <text> | --description-file <path|->] [--prompt <text> | --prompt-file <path|->] [--topic <slug>] [--type <task|feature|bug|chore|epic>] [--parent <epic-id>] [--priority <normal|urgent>] [--assignee <user>] [--labels <csv>] [--top]"}`
   → exit 2 (`cli.go`).
 - Reads the `--on` ticket via `GetIssueDetail(onID)`; a missing ticket is not-found → exit 4
   (`cli.go`).
@@ -1009,14 +1011,14 @@ history:
 
 - Registration `register.go`, `app.AccessWrite`. Handler `updateLeaf`
   (`cli.go`).
-- Flags (`cli.go`): `--title`, `--description`, `--prompt`, `--type`
-  (default `""`), `--priority` (int, default 0), `--assignee`, `--labels`,
+- Flags (`cli.go`): `--title`, `--description`, `--prompt`, `--description-file`,
+  `--prompt-file`, `--type` (default `""`), `--priority` (int, default 0), `--assignee`, `--labels`,
   `--lane`, `--status` (registered only to intercept it; help text
   "(removed) change status with the transition verbs: lit start|done|close|open"),
   `--reason` ("Reason recorded on the field-change event"), and `--by`.
 - Refusals:
   - `len(positional) != 1` → `UsageError` with the usage line
-    `"usage: lit update <id> [--title <text>] [--description <text>] [--prompt <text>] [--type <task|feature|bug|chore|epic>] [--priority <0|1>] [--assignee <user>] [--labels <csv>] [--lane <key>] [--reason <text>]"`
+    `"usage: lit update <id> [--title <text>] [--description <text> | --description-file <path|->] [--prompt <text> | --prompt-file <path|->] [--type <task|feature|bug|chore|epic>] [--priority <normal|urgent>] [--assignee <user>] [--labels <csv>] [--lane <key>] [--reason <text>]"`
     (`cli.go`).
   - `--status` present (detected via `fs.Visit`) → `UsageError{statusViaVerbsGuidance}`
     → exit 2. Verbatim text: "lit update no longer changes status — the transition
@@ -1031,7 +1033,8 @@ history:
 - **Only visited flags are applied.** Each visited flag sets a pointer on
   `storage.UpdateIssueInput` (`cli.go`):
   - `--title` / `--description` / `--prompt` set the raw value (no trimming at
-    the CLI) (`cli.go`).
+    the CLI) (`cli.go`); `--description-file` / `--prompt-file` set the file's or
+    stdin's raw bytes the same way, refusing blank text (`longtext.go`).
   - `--type` parses via `model.ParseIssueType` → `model.ValidationError` on a bad
     value (`cli.go`).
   - `--priority` parses via `model.ParsePriorityName` (`cli.go`).
@@ -1658,11 +1661,22 @@ Family `commentFamily`, usage `"usage: lit comment <add|rm> ..."` (`cli.go`).
 Both subcommands are `app.AccessWrite`. Missing/unknown subcommand → the bare
 usage string as a `UsageError` → exit 2 (`resolve`, `register.go`).
 
-**`lit comment add <id> --body <text>`** (`commentAddLeaf`, `cli.go`):
-- Flags: `--body` (string, `""`, "Comment body"), `--by`.
+**`lit comment add <id> (--body <text> | --body-file <path|->)`** (`commentAddLeaf`, `cli.go`):
+- Flags: `--body` (string, `""`, "Comment body"), `--body-file` (string, `""`,
+  "Read --body from this file, or from stdin when it is -"), `--by`.
 - Refusal: `len(positional) != 1` →
-  `UsageError{"usage: lit comment add <id> --body <text>"}` → exit 2
+  `UsageError{"usage: lit comment add <id> (--body <text> | --body-file <path|->)"}` → exit 2
   (`cli.go`).
+- Refusals from `readLongTexts` (`longtext.go`), which `parseLeaf` runs before the workspace
+  opens, so these come before any store refusal, each a `UsageError` → exit 2:
+  both flags given → `"--body and --body-file both supply the same text; give one of them"`;
+  an unreadable path → `"read --body-file: <os error>"`; a file or stdin whose text is blank
+  (after trim) → `"--body-file <path> supplied no text"`;
+  two fields of one invocation naming stdin →
+  `"only one field can read stdin, and <flags> each name it; give the others a path"`. A failed
+  stdin read is a plain error → exit 1. The event records `text_source.body` as `absent`,
+  `inline`, `file` or `stdin`.
+  `lit new`, `lit followup` and `lit update` resolve `--description`/`--prompt` the same way.
 - Store refusal: a blank body (after trim) →
   `model.ValidationError{Message: "comment body is required"}` → exit 3
   (`internal/store/store.go`). A missing issue → exit 4
