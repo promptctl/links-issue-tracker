@@ -831,8 +831,8 @@ func takeoverByANewCheckoutRecords(t *testing.T, ctx context.Context, st storage
 // oneIssuesHistoryMatchesTheWholeLog holds ListEvents to the promise its
 // contract doc makes: one issue's events, "ordered exactly as ListAllEvents
 // orders the whole of it". Two engines answer it independently — the memory one
-// scans its event slice under a lock, the SQL one queries with a predicate — and
-// a divergence (the wrong issue's rows, an unsorted return, a dropped id
+// reads the issue's own run of history, the SQL one queries with a predicate —
+// and a divergence (the wrong issue's rows, an unsorted return, a dropped id
 // tie-break) would otherwise surface only as strange claim-transfer behavior
 // three layers up, never as a failure against the contract that promised it.
 //
@@ -842,6 +842,10 @@ func takeoverByANewCheckoutRecords(t *testing.T, ctx context.Context, st storage
 // records, and would then be pinning this test's memory of the engine rather
 // than the contract. [LAW:one-source-of-truth]
 func oneIssuesHistoryMatchesTheWholeLog(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	// Every event shares one instant, so only the id tie-break orders them.
+	// On a live clock no two events tie, recording order IS the contract's
+	// order, and a reader that returns its rows unsorted passes.
+	clk.Pin(earlierInstant)
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
 	subject := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "subject", Topic: "core", ParentID: epic.ID})
 	other := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "other", Topic: "core", ParentID: epic.ID})
