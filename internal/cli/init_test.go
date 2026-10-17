@@ -274,3 +274,17 @@ func readFileString(t *testing.T, path string) string {
 	}
 	return string(content)
 }
+
+// init's event says whether this run built the database: the first init in a
+// repository did, a second one found it there.
+func TestInitEventSaysWhetherItBuiltTheDatabase(t *testing.T) {
+	isolateEvents(t)
+	dir := t.TempDir()
+	runGit(t, dir, "init")
+	for _, want := range []bool{true, false} {
+		runCLIInDir(t, dir, "init", "--skip-hooks", "--skip-agents")
+		if got := writtenFacts(t, lastEvent(t))["init.db_created"]; got != want {
+			t.Fatalf("init event init.db_created = %v, want %v", got, want)
+		}
+	}
+}

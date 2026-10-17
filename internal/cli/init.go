@@ -9,6 +9,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -125,6 +126,7 @@ func initLeaf() (wsLeaf, wsAcquire) {
 			}
 			dbCreated = created
 		}
+		telemetry.Set(ctx, "init.db_created", dbCreated)
 
 		report := initReport{
 			Status:       "initialized",
