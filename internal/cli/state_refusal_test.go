@@ -13,12 +13,12 @@ import (
 
 // A blank comment or comment id, a rank naming a deleted issue or an impossible
 // frame, a rank set that would reverse a shared key, a retention move the
-// table has no cell for, and an edge the graph already holds are each answered
-// the same way on every run, so none may reach the "retry, then run lit
-// doctor" default. A refusal exits ExitValidation with validation_refused; a
-// retention move whose state already holds, and an edge already in place,
-// exit ExitNoWork with state_already_holds, since the command ran correctly
-// and had nothing to do.
+// table has no cell for, and an edge the graph already holds, a parent edge
+// included, are each answered the same way on every run, so none may reach the
+// "retry, then run lit doctor" default. A refusal exits ExitValidation with
+// validation_refused; a retention move whose state already holds, and an edge
+// already in place, exit ExitNoWork with state_already_holds, since the
+// command ran correctly and had nothing to do.
 //
 // Each case drives the real command handler and asserts the exact reason and
 // exit code, as TestFieldRefusalsAreDeterministicRefusals does.
@@ -57,14 +57,17 @@ func TestDeterministicAnswersAreNeverRetried(t *testing.T) {
 	if err := raw.ExecRawForTest(ctx, "UPDATE issues SET item_rank = 'M' WHERE id IN (?, ?)", tiedLow, tiedHigh); err != nil {
 		t.Fatalf("plant a shared key: %v", err)
 	}
-	// The dependency sits in another epic: inside one epic, rank orders the
-	// work and a blocked-by edge is refused before it could be found to exist.
+	// The dependency sits in another epic: between two leaves of one epic,
+	// rank orders the work and a blocked-by edge is refused.
 	dependency := create("dependency", "task", create("upstream", "epic", ""))
 	depAdd := func(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 		return runLeaf(depAddLeaf(), ctx, stdout, ap, args)
 	}
 	if err := depAdd(ctx, io.Discard, ap, []string{live, "--blocked-by", dependency}); err != nil {
 		t.Fatalf("dep add %s --blocked-by %s: %v", live, dependency, err)
+	}
+	parentSet := func(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+		return runLeaf(parentSetLeaf(), ctx, stdout, ap, args)
 	}
 	commentAdd := func(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 		return runLeaf(commentAddLeaf(), ctx, stdout, ap, args)
@@ -105,6 +108,7 @@ func TestDeterministicAnswersAreNeverRetried(t *testing.T) {
 		{"delete a deleted issue", transition(deleteSpec), []string{gone}, ExitNoWork, "state_already_holds"},
 		{"restore a live issue", transition(restoreSpec), []string{live}, ExitNoWork, "state_already_holds"},
 		{"dep add an edge that already exists", depAdd, []string{live, "--blocked-by", dependency}, ExitNoWork, "state_already_holds"},
+		{"parent set the parent it already has", parentSet, []string{"--child", live, "--parent", epic}, ExitNoWork, "state_already_holds"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

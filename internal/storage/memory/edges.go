@@ -183,6 +183,12 @@ func (e *Engine) addRelation(in storage.AddRelationInput) (model.Relation, error
 	if err != nil {
 		return model.Relation{}, err
 	}
+	// An edge already in place is answered before any rule that judges a
+	// write, as the Dolt engine's rejectExistingRelationTx is: it changes
+	// nothing, so no write rule has anything to judge. [LAW:one-source-of-truth]
+	if e.hasRelation(srcID, dstID, in.Type) {
+		return model.Relation{}, storage.RelationExistsError{SrcID: srcID, DstID: dstID, Type: in.Type}
+	}
 	if err := storage.RejectNonContainerParentEdge(in.Type, dstID, dst.issueType); err != nil {
 		return model.Relation{}, err
 	}
@@ -197,9 +203,6 @@ func (e *Engine) addRelation(in storage.AddRelationInput) (model.Relation, error
 		e.dropRelations(func(existing model.Relation) bool {
 			return existing.SrcID == rel.SrcID && existing.Type == rel.Type
 		})
-	}
-	if e.hasRelation(rel.SrcID, rel.DstID, rel.Type) {
-		return model.Relation{}, storage.RelationExistsError{SrcID: rel.SrcID, DstID: rel.DstID, Type: rel.Type}
 	}
 	e.relations = append(e.relations, rel)
 	return rel, nil

@@ -352,6 +352,9 @@ func addRelationTx(ctx context.Context, tx *sql.Tx, rel model.Relation) error {
 	if err != nil {
 		return err
 	}
+	if err := rejectExistingRelationTx(ctx, tx, rel); err != nil {
+		return err
+	}
 	if err := storage.RejectNonContainerParentEdge(rel.Type, rel.DstID, dstType); err != nil {
 		return err
 	}
@@ -368,16 +371,17 @@ func addRelationTx(ctx context.Context, tx *sql.Tx, rel model.Relation) error {
 	if rel.Type.SingleValuedFromSrc() {
 		return setSingleValuedEdgeTx(ctx, tx, rel)
 	}
-	if err := rejectExistingRelationTx(ctx, tx, rel); err != nil {
-		return err
-	}
 	return insertRelationTx(ctx, tx, rel)
 }
 
 // rejectExistingRelationTx answers an edge the graph already holds with the
 // contract's satisfied answer, as the memory engine does, rather than letting
-// the raw INSERT surface the primary-key violation. It sits here and not in
-// insertRelationTx, which stays the raw replay-faithful write.
+// the raw INSERT surface the primary-key violation or the single-valued
+// replace rewrite the row. It runs before every rule that judges a write: the
+// containment, same-epic and cycle rules govern what a new edge may change,
+// and an edge already in place changes nothing, so a shape a reparent left
+// behind is answered as held rather than refused as a write. It sits here and
+// not in insertRelationTx, which stays the raw replay-faithful write.
 // [LAW:one-source-of-truth] [LAW:types-are-the-program]
 func rejectExistingRelationTx(ctx context.Context, tx *sql.Tx, rel model.Relation) error {
 	var exists bool
