@@ -183,6 +183,12 @@ func (e *Engine) addRelation(in storage.AddRelationInput) (model.Relation, error
 	if err != nil {
 		return model.Relation{}, err
 	}
+	// A held state is answered before any rule that judges a write, as the
+	// Dolt engine's rejectHeldRelationTx is: it changes nothing, so no write
+	// rule has anything to judge. [LAW:one-source-of-truth]
+	if e.relationHeld(srcID, dstID, in.Type) {
+		return model.Relation{}, storage.RelationExistsError{SrcID: srcID, DstID: dstID, Type: in.Type}
+	}
 	if err := storage.RejectNonContainerParentEdge(in.Type, dstID, dst.issueType); err != nil {
 		return model.Relation{}, err
 	}
@@ -197,9 +203,6 @@ func (e *Engine) addRelation(in storage.AddRelationInput) (model.Relation, error
 		e.dropRelations(func(existing model.Relation) bool {
 			return existing.SrcID == rel.SrcID && existing.Type == rel.Type
 		})
-	}
-	if e.hasRelation(rel.SrcID, rel.DstID, rel.Type) {
-		return model.Relation{}, fmt.Errorf("relation %s->%s (%s) already exists", rel.SrcID, rel.DstID, rel.Type)
 	}
 	e.relations = append(e.relations, rel)
 	return rel, nil
@@ -482,6 +485,21 @@ func (e *Engine) incidentRelations(issueID string) []model.Relation {
 		}
 	}
 	return out
+}
+
+// relationHeld reports whether the state an add of src->dst asks for already
+// holds: the edges in its write's scope are exactly that one. The type's
+// cardinality sets the scope, every edge of the type from src for a
+// single-valued type and the identical edge otherwise, as the Dolt engine's
+// rejectHeldRelationTx reads it. [LAW:dataflow-not-control-flow]
+func (e *Engine) relationHeld(srcID, dstID string, relType model.RelationType) bool {
+	var inScope []string
+	for _, rel := range e.relations {
+		if rel.SrcID == srcID && rel.Type == relType && (relType.SingleValuedFromSrc() || rel.DstID == dstID) {
+			inScope = append(inScope, rel.DstID)
+		}
+	}
+	return slices.Equal(inScope, []string{dstID})
 }
 
 func (e *Engine) hasRelation(srcID, dstID string, relType model.RelationType) bool {

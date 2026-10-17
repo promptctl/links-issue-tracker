@@ -352,6 +352,9 @@ func addRelationTx(ctx context.Context, tx *sql.Tx, rel model.Relation) error {
 	if err != nil {
 		return err
 	}
+	if err := rejectHeldRelationTx(ctx, tx, rel); err != nil {
+		return err
+	}
 	if err := storage.RejectNonContainerParentEdge(rel.Type, rel.DstID, dstType); err != nil {
 		return err
 	}
@@ -369,6 +372,43 @@ func addRelationTx(ctx context.Context, tx *sql.Tx, rel model.Relation) error {
 		return setSingleValuedEdgeTx(ctx, tx, rel)
 	}
 	return insertRelationTx(ctx, tx, rel)
+}
+
+// rejectHeldRelationTx answers an add whose state already holds with the
+// contract's satisfied answer, as the memory engine's relationHeld does, rather
+// than letting the raw INSERT surface the primary-key violation or the
+// single-valued replace rewrite the row. The state an add asks for is that
+// the edges in its write's scope are exactly the one asked for, and the type's
+// cardinality sets the scope: every edge of the type from src for a
+// single-valued type, so a child holding a second parent is a replace still to
+// make, which is the repair doctor names; the identical edge alone otherwise.
+// It runs before every rule that judges a write: the containment, same-epic
+// and cycle rules govern what a new edge may change, and a held state changes
+// nothing, so a shape a reparent left behind is answered as held rather than
+// refused as a write. It sits here and not in insertRelationTx, which stays
+// the raw replay-faithful write.
+// [LAW:one-source-of-truth] [LAW:dataflow-not-control-flow]
+func rejectHeldRelationTx(ctx context.Context, tx *sql.Tx, rel model.Relation) error {
+	rows, err := tx.QueryContext(ctx, `SELECT dst_id FROM relations WHERE src_id = ? AND type = ? AND (? OR dst_id = ?)`, rel.SrcID, string(rel.Type), rel.Type.SingleValuedFromSrc(), rel.DstID)
+	if err != nil {
+		return fmt.Errorf("read relations %s (%s): %w", rel.SrcID, rel.Type, err)
+	}
+	defer rows.Close()
+	var inScope []string
+	for rows.Next() {
+		var dstID string
+		if err := rows.Scan(&dstID); err != nil {
+			return fmt.Errorf("scan relation %s (%s): %w", rel.SrcID, rel.Type, err)
+		}
+		inScope = append(inScope, dstID)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read relations %s (%s): %w", rel.SrcID, rel.Type, err)
+	}
+	if slices.Equal(inScope, []string{rel.DstID}) {
+		return storage.RelationExistsError{SrcID: rel.SrcID, DstID: rel.DstID, Type: rel.Type}
+	}
+	return nil
 }
 
 // rejectCycleTx refuses an edge whose type may not close a loop. Two types carry

@@ -2417,6 +2417,34 @@ func relationsRoundtrip(t *testing.T, ctx context.Context, st storage.Store, clk
 	}); err != nil {
 		t.Fatalf("AddRelation related-to error = %v", err)
 	}
+	// Adding an edge the graph already holds is answered, not faulted: the
+	// edge asked for is in place, so every engine returns the contract's
+	// satisfied answer naming it, for every type. related-to is undirected, so
+	// naming its ends against the stored order asks for the same edge, and the
+	// answer names the stored order. parent-child is single-valued, and its
+	// repeat is answered the same way rather than replaced by itself. The
+	// count below proves no repeat wrote a second row.
+	low, high := model.RelRelatedTo.CanonicalEndpoints(dependent.ID, peer.ID)
+	for _, repeat := range []storage.AddRelationInput{
+		{SrcID: dependent.ID, DstID: dependency.ID, Type: model.RelBlockedBy, CreatedBy: "ada"},
+		{SrcID: high, DstID: low, Type: model.RelRelatedTo, CreatedBy: "ada"},
+		{SrcID: dependent.ID, DstID: epic.ID, Type: model.RelParentChild, CreatedBy: "ada"},
+	} {
+		_, err := st.AddRelation(ctx, repeat)
+		var exists storage.RelationExistsError
+		if !errors.As(err, &exists) {
+			t.Fatalf("AddRelation(%+v) again error = %v, want storage.RelationExistsError", repeat, err)
+		}
+		wantSrc, wantDst := repeat.Type.CanonicalEndpoints(repeat.SrcID, repeat.DstID)
+		if exists != (storage.RelationExistsError{SrcID: wantSrc, DstID: wantDst, Type: repeat.Type}) || !exists.Satisfied() {
+			t.Errorf("AddRelation(%+v) again = %+v, want the satisfied answer naming %s->%s", repeat, exists, wantSrc, wantDst)
+		}
+	}
+	// SetParent is the other door onto the same write, so it gets the same answer.
+	_, err = st.SetParent(ctx, storage.SetParentInput{ChildID: dependent.ID, ParentID: epic.ID, CreatedBy: "ada"})
+	if want := (storage.RelationExistsError{SrcID: dependent.ID, DstID: epic.ID, Type: model.RelParentChild}); !errors.Is(err, want) {
+		t.Errorf("SetParent(%s under the epic it is already under) error = %v, want %+v", dependent.ID, err, want)
+	}
 
 	all, err := st.ListRelationsForIssue(ctx, dependent.ID)
 	if err != nil {
@@ -3094,6 +3122,12 @@ func blocksNeverOrdersTwoLeavesOfOneEpic(t *testing.T, ctx context.Context, st s
 	}
 	_, err = st.AddRelation(ctx, storage.AddRelationInput{SrcID: first.ID, DstID: second.ID, Type: model.RelBlockedBy})
 	assertHierarchyBlocksRefused(t, err, "AddRelation(a leaf blocked by the leaf beside it, closing a cycle)")
+	// The edge left behind is already held, so adding it again is answered as
+	// held: the same-epic rule judges writes, and this one would change nothing.
+	_, err = st.AddRelation(ctx, storage.AddRelationInput{SrcID: second.ID, DstID: first.ID, Type: model.RelBlockedBy})
+	if want := (storage.RelationExistsError{SrcID: second.ID, DstID: first.ID, Type: model.RelBlockedBy}); !errors.Is(err, want) {
+		t.Errorf("AddRelation(the edge a reparent left inside the epic, again) error = %v, want %+v", err, want)
+	}
 }
 
 func assertHierarchyBlocksRefused(t *testing.T, err error, what string) {

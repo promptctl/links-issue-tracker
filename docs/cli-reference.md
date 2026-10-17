@@ -670,7 +670,9 @@ issue the blocker already waits on, directly or through other issues, such as
 its own dependencies, its earlier lane-mates, or the blocker itself when it sits
 in that epic: holding that issue back would leave the two waiting on each other
 forever, so it stays free and the blocker waits on it. `related-to` is symmetric
-annotation with no scheduling effect.
+annotation with no scheduling effect. Adding an edge that already exists, a
+`related-to` named either way round included, exits 6 with
+`state_already_holds`: there is nothing to add.
 
 ### `lit parent set` / `lit parent clear`
 
@@ -689,7 +691,8 @@ above it, lifting it to the top level; on a task, feature, bug or chore it refus
 (exit 3), naming the `lit parent set --child <id> --parent <epic-id>` that moves the
 ticket instead, since detaching one would leave it outside every epic. `set` replaces
 whatever parent the child holds in one act, which is also how `lit doctor`'s
-two-parent finding is repaired.
+two-parent finding is repaired. Naming the parent that is already the child's
+only parent exits 6 with `state_already_holds`.
 
 `parent set` and `parent clear` are the only commands that write the parent-child
 edge. `parent set` prints it as `lit dep ls` does: `<child> child of <parent>`.

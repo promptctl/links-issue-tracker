@@ -756,6 +756,7 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "SELECT active_branch()", Src: "SELECT active_branch()"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "SELECT archived_at, deleted_at FROM issues WHERE id = ?", Src: "SELECT archived_at, deleted_at FROM issues WHERE id = ?"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "SELECT commit_hash FROM dolt_log() LIMIT 1", Src: "SELECT commit_hash FROM dolt_log() LIMIT 1"},
+	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "SELECT dst_id FROM relations WHERE src_id = ? AND type = ? AND (? OR dst_id = ?)", Src: "SELECT dst_id FROM relations WHERE src_id = ? AND type = ? AND (? OR dst_id = ?)"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "SELECT id FROM issues WHERE item_rank = '' ORDER BY status ASC, priority ASC, updated_at DESC, id ASC", Src: "SELECT id FROM issues WHERE item_rank = '' ORDER BY status ASC, priority ASC, updated_at DESC, id ASC"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "SELECT id, created_at FROM issues WHERE id = ?", Src: "SELECT id, created_at FROM issues WHERE id = ?"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "SELECT id, issue_id, body, created_at, created_by FROM comments ORDER BY created_at ASC", Src: "SELECT id, issue_id, body, created_at, created_by FROM comments ORDER BY created_at ASC"},

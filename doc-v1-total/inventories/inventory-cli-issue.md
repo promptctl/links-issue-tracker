@@ -187,7 +187,7 @@ Constants (`exit.go`):
 10. `UnknownCommandError` → 3 (`exit.go`)
 11. `RetiredCommandError` → 3 (`exit.go`)
 12. `model.Refusal` (every `model.ValidationError`, `model.FrozenIssueError`, and the upgrade/downgrade target refusals) → 3 (`exit.go`)
-13. `model.StateRequestError` (`model.ContainerActionError`, `lifecycle.RetentionError`) → 6 when `Satisfied()`, else 3 (`exit.go`)
+13. `model.StateRequestError` (`model.ContainerActionError`, `lifecycle.RetentionError`, `storage.RelationExistsError`) → 6 when `Satisfied()`, else 3 (`exit.go`)
 14. `UnsupportedError` → 3 (`exit.go`)
 15. `takeoverUnconfirmedError` → 3 (`exit.go`)
 16. `purgeUnconfirmedError` → 3 (`exit.go`)
@@ -1720,7 +1720,9 @@ Family `parentFamily`, usage `"usage: lit parent <set|clear> ..."`
   `UsageError{"usage: lit parent set --child <id> --parent <id>"}` → exit 2
   (`issue_relations.go`).
 - Calls `Store.SetParent(SetParentInput{ChildID, ParentID, CreatedBy})`
-  (`issue_relations.go`).
+  (`issue_relations.go`). A `--parent` already the child's only parent is
+  the store's `storage.RelationExistsError` → exit 6, `state_already_holds`
+  (`internal/storage/errors.go`).
 - Output: the edge rendered through the *same* sentence `dep` uses —
   `"<child> child of <parent>"` (`issue_relations.go`, via
   `depRelationLine`, `dependency.go`) —
@@ -1761,7 +1763,11 @@ Family `depFamily`, usage `"usage: lit dep <add|rm|ls> ..."` (`dependency.go`).
   3. Self-loop `id == value` → `model.ValidationError{Message: fmt.Sprintf("dep add: self-loop rejected (%s %s %s)")}`
      (issue, relation type, other) → exit 3 (`dependency.go`). A transitive
      cycle is refused by the store's `AddRelation`, not here.
-  4. For `blocked-by` only, the store's `AddRelation` refuses an edge that
+  4. An edge the graph already holds — a `related-to` named either way round
+     included — is the store's `storage.RelationExistsError`, a satisfied
+     `model.StateRequestError` → exit 6, `state_already_holds`
+     (`internal/storage/errors.go`), answered before the rule below judges it.
+  5. For `blocked-by` only, the store's `AddRelation` refuses an edge that
      orders work inside one epic — both endpoints non-container issues
      directly under one epic, or an endpoint inside the other's epic at any
      depth, climbing only through epic parents — with
