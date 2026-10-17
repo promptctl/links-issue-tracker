@@ -1466,8 +1466,8 @@ serves nothing, over every row; both dependency walks read every row either way:
    4's pick → **`ServedPastNarrowing{Row, Lane: laneOf(row), Narrowing: Narrowed{Hidden}}`**,
    else → **`Narrowed{Hidden}`**. Otherwise `exhausted := Exhausted{Epics, Blocked, Held}` (`next_route.go`), where
    `Epics` is `slices.Sorted(maps.Keys(ownEpics))` and `Blocked` is
-   `blockedRows(gating)` — the walk step 2b declined; `blockedRows` drops the
-   gated id. `Held` is `heldByThemselves` over the rows in `ourScope`: in rank order, the rows `reachOf` classifies `reachNotReady` or `reachAwaitingOutside` that `IssueReadiness.HeldByItself()` reports held by a reason about the row itself (a reserved label, a missing field) rather than by a dependency or an earlier sibling. When step 4's pick finds nothing, `OffPath` is set to
+   `blockersOf(gating, workToward)` — the walk step 2b declined; `blockersOf`
+   drops the gated id and marks each entry `Clearable`. `Held` is `heldByThemselves` over the rows in `ourScope`: in rank order, the rows `reachOf` classifies `reachNotReady` or `reachAwaitingOutside` that `IssueReadiness.HeldByItself()` reports held by a reason about the row itself (a reserved label, a missing field) rather than by a dependency or an earlier sibling. When step 4's pick finds nothing, `OffPath` is set to
    `withheldByScope` over the focus-excluded rows whose lane `ourScope` does
    not admit. If step 4's pick finds a row →
    **`ServedPastExhaustion{Row, Lane: laneOf(row), Exhaustion: exhausted}`**;
@@ -1517,7 +1517,7 @@ now: `reachTakeable`, `reachHeldFresh`, `reachNotReady`, `reachAwaitingOutside`,
 that has rows, joined by `"; "`, in `reachKind` declaration order
 (`next_route.go`). An entry's name is its `ID`, or `"<Row.ID> under <ID>"` when
 it carries a `Row` whose id differs — a dependency read through a ticket under it
-(`rowReach.name`, `next_route.go`). `nameIDs` names at most `maxNamedPerKind = 12` ids and
+(`rowReach.name`, `next_route.go`). `nameCapped` names at most `maxNamedPerKind = 12` items and
 otherwise appends `" and <n> more"` (`next_route.go`).
 
 **Terminal messages.** `Exhausted.scope()` (`next_route.go`) names the scope:
@@ -1525,9 +1525,14 @@ otherwise appends `" and <n> more"` (`next_route.go`).
 `"your claimed lane(s)"`. `Exhausted.home()` is ``"with `lit new --top`"``
 when `Epics` is empty, else `"under the epic with "` +
 ``"`lit new --parent <epic> --top`"`` for each epic, joined by `" or "`.
-`Exhausted.stay()` is empty when no entry of `Blocked` is anything but
-`reachAwaitingOutside` (so when `Blocked` is empty too), else the one route
-``"to stay, file the ticket that clears a blocker <home()>, then make that blocker blocked by it with `lit dep add <blocker> --blocked-by <new>`"``.
+`Exhausted.Blocked` (`blockersOf`) holds one `blockerReach` per gating
+dependency: its `rowReach`, and `Clearable`, true when none of its `workToward`
+rows has `AwaitsOutside()`, or is open with any `Prerequisites()`.
+`Exhausted.stay()` is empty when no `Blocked` entry is `Clearable` (so when
+`Blocked` is empty too), else the one route
+``"to stay, file the ticket that clears a blocker <home()>, then make that blocker blocked by it with <edges>"``,
+the edges being ``"`lit dep add <id> --blocked-by <new>`"`` for each
+`Clearable` entry, through `nameCapped` with `" or "`.
 `Exhausted.why()`:
 - `"no ready work in <scope> (<progress>) — <clauses>"`, the progress being `formatProgress(Progress)` — `"<done>/<total> done"` over every lane of the scope, closed tickets included and archived and deleted ones left out — and the clauses being the non-empty ones of `describeReach(Blocked, "blocked by ", exhaustedNotes)` and `describeReach(Held, "held here: ", exhaustedNotes)`, joined by `"; "`
 - Both empty: `"no ready work in <scope> (<progress>) — nothing in it is left to do"` when `Done == Total`, else `"no ready work in <scope> (<progress>) — nothing else is queued behind what's already in progress"`
