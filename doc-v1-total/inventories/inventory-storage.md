@@ -44,7 +44,7 @@ General contract: every method is a pure read from the caller's view; two identi
 - Ordered by `SortBy`, then — always, as the final key — by id ascending (`internal/storage/contract.go`).
 - With no `SortBy`: rank ascending, ties broken by id (`internal/storage/contract.go`).
 - The trailing id key is contract, not engine convenience: without it, a sort on any duplicated field value leaves tied rows in engine-incidental order and two engines diverge (`internal/storage/contract.go`).
-- `SortBy` may name only a `SortFields` member (`internal/storage/contract.go`).
+- `SortBy` may name only a key `sortKeys` holds (`internal/storage/contract.go`).
 
 **`ListTopics(ctx) ([]string, error)`** — `internal/storage/contract.go`
 - Distinct non-empty topics that *live* issues carry, ascending. Derived vocabulary, never stored (`internal/storage/contract.go`).
@@ -260,10 +260,21 @@ The field-axis patch. Only columns the field axis owns are representable, so a s
 #### `SortSpec` (`internal/storage/issues.go`)
 - `Field string`, `Desc bool`.
 
-#### `SortFields` — the closed set (`internal/storage/issues.go`)
-Exactly ten keys: `"id"`, `"title"`, `"status"`, `"priority"`, `"rank"`, `"type"`, `"topic"`, `"assignee"`, `"created_at"`, `"updated_at"`.
-- Exists because each engine binds these names to its own comparisons over hydrated `model.Issue` values (`SortBindings`, `internal/storage/ordering.go`); neither engine orders a listing in SQL. The set lives in the contract and each engine's binding is checked against it by the conformance suite (`internal/storage/issues.go`).
-- `"status"` orders the DERIVED lifecycle state — the reading the status FILTER takes — so one listing means one thing by the word. A container holds no stored status; it sorts among the leaves by the state its children give it (`internal/storage/issues.go`).
+#### `sortKeys(ancestry RankAncestry)` — the closed set (`internal/storage/ordering.go`)
+Exactly ten keys, each with its comparison. One table in the contract package; both engines order through it by calling `IssueOrdering` with their rank ancestry, and neither orders a listing in SQL. Every comparison reads a hydrated `model.Issue` or the ancestry (`internal/storage/ordering.go`).
+| Key | Comparison |
+|---|---|
+| `id` | `strings.Compare(a.ID, b.ID)` |
+| `title` | `strings.Compare(a.Title, b.Title)` |
+| `status` | `strings.Compare(string(a.State()), string(b.State()))` — the **DERIVED** state, as the `Statuses` filter compares |
+| `priority` | `cmp.Compare(a.Priority, b.Priority)` |
+| `rank` | `ancestry.Compare` — tree order (`storage.RankAncestry.Compare`, `internal/storage/rank.go`) |
+| `type` | `strings.Compare(string(a.IssueType), string(b.IssueType))` |
+| `topic` | `strings.Compare(a.Topic, b.Topic)` |
+| `assignee` | `strings.Compare(a.Assignee, b.Assignee)` |
+| `created_at` | `a.CreatedAt.Compare(b.CreatedAt)` |
+| `updated_at` | `a.UpdatedAt.Compare(b.UpdatedAt)` |
+- `"status"` orders the DERIVED lifecycle state — the reading the status FILTER takes — so one listing means one thing by the word. A container holds no stored status; it sorts among the leaves by the state its children give it. There is no stored-status comparator (`internal/storage/ordering.go`).
 
 #### `ListIssuesFilter` (`internal/storage/issues.go`)
 Rule for the whole struct: **every slice is an OR within itself and an AND against the other criteria**; every zero value means "do not constrain on this axis" (`internal/storage/issues.go`).
@@ -363,7 +374,7 @@ They live beside the specs rather than in an engine because the schema is the co
 - `"asc"` → `Desc=false`; `"desc"` → `Desc=true`; anything else → `ValidationError{Message: fmt.Sprintf("unsupported sort direction %q", direction)}` (`internal/storage/sort.go`).
 - Empty and whitespace-only expressions yield `nil, nil` (`internal/storage/sort.go`).
 - It is THE parser from sort expression to `[]SortSpec`; both the `--sort` flag and the `--query sort:` token route through it (`internal/storage/sort.go`).
-- Note: the field name is **not** validated against `SortFields` here — that rejection happens in the engine (`internal/storage/sort.go`; cf. `internal/storage/memory/list.go`).
+- Note: the field name is **not** validated against the sort keys here — that rejection happens in `IssueOrdering`, which each engine calls (`internal/storage/sort.go`; cf. `internal/storage/ordering.go`).
 
 ---
 
@@ -636,7 +647,7 @@ Order of checks is stated as contract: the parent must be resolved before the co
 Pipeline is fixed and every stage always runs: **hydrate → select → order → cap** (`internal/storage/memory/list.go`).
 
 1. `e.rankAncestry(pos)` over `e.positions()` — for each edge in `e.relations` that `frames` (a `RelParentChild` edge to a parent that is not deleted — the rule `parentOf` applies), a `storage.ParentLink{ChildID: rel.SrcID, ParentID: rel.DstID, ParentRank: rankAt(pos[rel.DstID])}`, handed to `storage.NewRankAncestry` (`internal/storage/memory/list.go`).
-2. `storage.IssueOrdering(filter.SortBy, issueSortKeys(ancestry))` — parsed before selection, so an unknown sort field errors before any hydration (`internal/storage/memory/list.go`).
+2. `storage.IssueOrdering(filter.SortBy, ancestry)` — parsed before selection, so an unknown sort field errors before any hydration (`internal/storage/memory/list.go`).
 3. `storage.ParseIssueCriteria(filter)` — canonicalizes the label criteria the same way stored labels are normalized, and is the one step of selection that can fail; everything after it answers yes or no.
 4. `e.mustRecord(id)` for each of `filter.ParentIDs`, in order — the first id with no record returns `NotFoundError`; a deleted record still exists.
 5. Hydrates **all** issues in `e.order` sequence.
@@ -674,25 +685,9 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 
 **`capLimit`** (`internal/storage/memory/list.go`) — `limit <= 0` or `len <= limit` → unchanged; else `issues[:limit]`. **A limit of zero is the absence of a limit, not a limit of zero**; truncation, never sampling.
 
-**`issueSortKeys(ancestry storage.RankAncestry)`** (`internal/storage/memory/list.go`) — returns exactly ten entries, matching `storage.SortFields`:
-| Key | Comparison |
-|---|---|
-| `id` | `strings.Compare(a.ID, b.ID)` |
-| `title` | `strings.Compare(a.Title, b.Title)` |
-| `status` | `strings.Compare(string(a.State()), string(b.State()))` — the **DERIVED** state, as the `Statuses` filter compares |
-| `priority` | `cmp.Compare(a.Priority, b.Priority)` |
-| `rank` | `ancestry.Compare` — tree order (`storage.RankAncestry.Compare`, `internal/storage/rank.go`) |
-| `type` | `strings.Compare(string(a.IssueType), string(b.IssueType))` |
-| `topic` | `strings.Compare(a.Topic, b.Topic)` |
-| `assignee` | `strings.Compare(a.Assignee, b.Assignee)` |
-| `created_at` | `a.CreatedAt.Compare(b.CreatedAt)` |
-| `updated_at` | `a.UpdatedAt.Compare(b.UpdatedAt)` |
-
-**`status` ordering** — `strings.Compare(string(a.State()), string(b.State()))`. It compares the **derived** state, the same reading `matchesStates` filters on, so an epic orders by the state its children compute rather than by a stored field it does not have. There is no separate stored-status comparator.
-
-**`storage.IssueOrdering`** (`internal/storage/ordering.go`), called with the memory engine's `issueSortKeys(ancestry)` (`internal/storage/memory/list.go`)
+**`storage.IssueOrdering`** (`internal/storage/ordering.go`), called with the memory engine's rank ancestry (`internal/storage/memory/list.go`)
 - No specs → `[]SortSpec{{Field: "rank"}}` — the canonical ordering expressed as the spec list it stands for.
-- Each spec's field is `strings.ToLower(strings.TrimSpace(...))` then looked up in the bindings; a miss → `model.ValidationError{Message: fmt.Sprintf("unsupported sort field %q", spec.Field)}`.
+- Each spec's field is `strings.ToLower(strings.TrimSpace(...))` then looked up in `sortKeys(ancestry)`; a miss → `model.ValidationError{Message: fmt.Sprintf("unsupported sort field %q", spec.Field)}`.
 - `Desc` negates the ascending comparator.
 - **`strings.Compare(a.ID, b.ID)` ascending is appended as the final key always** — so descending reverses only the named keys, never the tie-break.
 - The composed comparator returns the first non-zero result, else 0.
@@ -1032,7 +1027,7 @@ Stated in `internal/storage/memory/doc.go`:
 
 ### 3.2 The 67 registered cases (`internal/storage/conformance/conformance.go`)
 
-`create_read_roundtrip`, `create_defaults`, `create_requires_title`, `create_normalizes_topic`, `create_under_missing_parent_is_not_found`, `get_missing_issue_is_not_found`, `apply_field_patch`, `an_assignee_no_filter_can_select_is_refused`, `apply_status_transition`, `apply_missing_issue_is_not_found`, `apply_to_container_is_refused`, `apply_to_frozen_names_the_thaw`, `container_state_follows_live_children`, `history_records_mutations`, `a_phase_move_records_its_event`, `every_editable_field_records_history`, `a_new_checkout_taking_a_ticket_records`, `one_issues_history_matches_the_whole_log`, `list_defaults_to_rank_order`, `list_filters_select`, `list_by_parent`, `list_hides_archived_and_deleted`, `list_sorts_and_limits`, `list_breaks_sort_ties_by_id`, `list_accepts_exactly_the_contract_sort_fields`, `list_sorts_status_by_derived_state`, `stamps_come_from_the_clock_the_engine_was_given`, `list_orders_timestamps_by_instant_not_spelling`, `events_are_totally_ordered`, `rank_intents_reorder`, `rank_intents_resolve_across_frames`, `rank_to_edge_stays_inside_its_frame`, `rank_to_edge_ignores_a_deleted_frame_mate`, `create_at_top_files_inside_its_frame`, `create_at_top_of_an_empty_frame_takes_a_distinct_key`, `placing_at_a_frame_edge_keeps_the_key_beside_its_frame`, `a_relative_move_keeps_every_rank_distinct`, `rank_set_imposes_order`, `rank_set_stays_inside_its_frame`, `rank_set_over_a_whole_frame_permutes_its_keys`, `rank_verbs_refuse_a_deleted_issue`, `a_container_lists_before_everything_inside_it`, `close_redirects_to_a_canonical`, `follow_ups_link_both_ways`, `a_purge_removes_the_issue_and_everything_it_owns`, `a_purge_refuses_a_container_that_holds_tickets`, `a_purge_of_a_missing_issue_is_not_found`, `a_purged_id_is_never_minted_again`, `comments_roundtrip`, `labels_roundtrip`, `relations_roundtrip`, `relations_batch_buckets_edges`, `parent_wiring`, `every_ticket_lives_inside_a_container`, `an_import_file_that_breaks_a_rule_is_refused_whole`, `the_hierarchy_stays_a_tree`, `blocks_never_runs_along_the_hierarchy`, `blocks_never_orders_two_leaves_of_one_epic`, `topics_derive_from_issues`, `issue_identities_cover_every_row`, `export_carries_whole_store`, `bulk_apply_creates_and_updates`, `bulk_apply_compensates_a_failed_batch`, `import_tree_maps_local_ids`, `attribution_stamps_events`, `observers_hear_every_change`, `local_issue_count_tracks_creates`.
+`create_read_roundtrip`, `create_defaults`, `create_requires_title`, `create_normalizes_topic`, `create_under_missing_parent_is_not_found`, `get_missing_issue_is_not_found`, `apply_field_patch`, `an_assignee_no_filter_can_select_is_refused`, `apply_status_transition`, `apply_missing_issue_is_not_found`, `apply_to_container_is_refused`, `apply_to_frozen_names_the_thaw`, `container_state_follows_live_children`, `history_records_mutations`, `a_phase_move_records_its_event`, `every_editable_field_records_history`, `a_new_checkout_taking_a_ticket_records`, `one_issues_history_matches_the_whole_log`, `list_defaults_to_rank_order`, `list_filters_select`, `list_by_parent`, `list_hides_archived_and_deleted`, `list_sorts_and_limits`, `list_breaks_sort_ties_by_id`, `list_orders_by_each_value_key`, `list_sorts_status_by_derived_state`, `stamps_come_from_the_clock_the_engine_was_given`, `list_orders_timestamps_by_instant_not_spelling`, `events_are_totally_ordered`, `rank_intents_reorder`, `rank_intents_resolve_across_frames`, `rank_to_edge_stays_inside_its_frame`, `rank_to_edge_ignores_a_deleted_frame_mate`, `create_at_top_files_inside_its_frame`, `create_at_top_of_an_empty_frame_takes_a_distinct_key`, `placing_at_a_frame_edge_keeps_the_key_beside_its_frame`, `a_relative_move_keeps_every_rank_distinct`, `rank_set_imposes_order`, `rank_set_stays_inside_its_frame`, `rank_set_over_a_whole_frame_permutes_its_keys`, `rank_verbs_refuse_a_deleted_issue`, `a_container_lists_before_everything_inside_it`, `close_redirects_to_a_canonical`, `follow_ups_link_both_ways`, `a_purge_removes_the_issue_and_everything_it_owns`, `a_purge_refuses_a_container_that_holds_tickets`, `a_purge_of_a_missing_issue_is_not_found`, `a_purged_id_is_never_minted_again`, `comments_roundtrip`, `labels_roundtrip`, `relations_roundtrip`, `relations_batch_buckets_edges`, `parent_wiring`, `every_ticket_lives_inside_a_container`, `an_import_file_that_breaks_a_rule_is_refused_whole`, `the_hierarchy_stays_a_tree`, `blocks_never_runs_along_the_hierarchy`, `blocks_never_orders_two_leaves_of_one_epic`, `topics_derive_from_issues`, `issue_identities_cover_every_row`, `export_carries_whole_store`, `bulk_apply_creates_and_updates`, `bulk_apply_compensates_a_failed_batch`, `import_tree_maps_local_ids`, `attribution_stamps_events`, `observers_hear_every_change`, `local_issue_count_tracks_creates`.
 
 ### 3.3 Every enforced invariant, by case
 
@@ -1173,13 +1168,14 @@ Stated in `internal/storage/memory/doc.go`:
 - Sorting by an unknown field (`"nonsense"`) is an error.
 
 **`list_breaks_sort_ties_by_id`**
-- Three issues sharing one title: the result is ordered by id ascending.
+- Four issues sharing one title, the epic included: the result is ordered by id ascending.
 - Descending on the named key leaves the id tie-break **ascending**.
+- `SortBy: [{id, Desc: true}]` → the four ids in descending order.
 
-**`list_accepts_exactly_the_contract_sort_fields`**
-- **Every** field in `storage.SortFields` must be accepted.
-- These six must be **rejected**: `"description"`, `"lane"`, `"labels"`, `"issue_type"`, `"item_rank"`, `"state"` — real model fields the contract omits, plus the storage column names an engine binding its own schema would reach for.
-- The case self-guards: if any of those six is ever added to `SortFields`, the test fatals telling the author to move it.
+**`list_orders_by_each_value_key`**
+- One pair per key, under one epic. In each pair `second` is created with the clock pinned to `2026-01-01T00:00:00.12Z`, then `first` at `2026-01-01T00:00:00.123456789Z`; every other value a key reads is equal. Listings are narrowed to the pair and take `created_at` as their second key, in the first key's direction.
+- `title`: `"Zeta"` / `"alpha"`. `assignee`: `"Zed"` / `"ada"`. `topic`: `alpha` / `beta`. `type`: `bug` / `task`. `priority`: `normal` / `urgent` (first / second).
+- `SortBy: [{key}, {created_at}]` → first, second; `[{key, Desc: true}, {created_at, Desc: true}]` → second, first.
 
 **`list_sorts_status_by_derived_state`**
 - Fixture: epic `home` with children `closedLeaf` (then `Done{}`) and `openLeaf`; a second epic with one child that is then `Start{Assignee: "ada"}`. The second epic's `State()` is `in_progress`.
@@ -1192,9 +1188,9 @@ Stated in `internal/storage/memory/doc.go`:
 - The `CreatedAt` read back through `GetIssue` equals the pinned instant.
 
 **`list_orders_timestamps_by_instant_not_spelling`**
-- Fixture: an epic on the unpinned clock; then, under it, `later` created with the clock pinned to `2026-01-01T00:00:00.123456789Z`, then `earlier` created with the clock pinned to `2026-01-01T00:00:00.12Z`. Listings are narrowed to `IDs: [earlier, later]`.
-- `SortBy: [{created_at}]` → earlier, later; `{created_at, Desc: true}` → later, earlier.
-- `SortBy: [{updated_at}]` → earlier, later; `{updated_at, Desc: true}` → later, earlier.
+- Fixture: an epic on the unpinned clock; then, under it, `newer` created with the clock pinned to `2026-01-01T00:00:00.123456789Z`, then `older` created with the clock pinned to `2026-01-01T00:00:00.12Z`. A description patch then moves `newer`'s `UpdatedAt` to `2026-01-01T00:00:00.13Z` and `older`'s to `2026-01-01T00:00:00.1300001Z`. Listings are narrowed to `IDs: [older, newer]`.
+- `SortBy: [{created_at}, {updated_at}]` → older, newer; `[{created_at, Desc: true}, {updated_at, Desc: true}]` → newer, older.
+- `SortBy: [{updated_at}, {created_at}]` → newer, older; `[{updated_at, Desc: true}, {created_at, Desc: true}]` → older, newer.
 
 **`events_are_totally_ordered`**
 - After a create plus three title changes, `ListAllEvents` returns at least 4 events.

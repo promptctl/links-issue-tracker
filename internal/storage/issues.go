@@ -154,36 +154,6 @@ type SortSpec struct {
 	Desc  bool
 }
 
-// SortFields is the closed set of keys a listing may be ordered by, and the
-// contract's statement of what each one orders.
-//
-// [LAW:one-source-of-truth] It exists because each engine binds these names to
-// its own comparisons ([SortBindings]), and two private copies of the same
-// closed set are two maps of one territory, free to drift into an engine that
-// accepts a key the other rejects. The set lives here; an engine's binding is
-// checked against it by the conformance suite rather than trusted.
-//
-// Every key orders the issue's own recorded value except two. "status" orders
-// the DERIVED lifecycle state — the same reading the status FILTER takes, so
-// one listing means one thing by the word. [LAW:one-source-of-truth] A
-// container holds no stored status; its state is a reading of its children, so
-// an engine that ordered on the column would file every container at an end of
-// the listing whatever state it derives to. "rank" orders by tree order
-// ([RankAncestry.Compare]), because an issue's own key is comparable only
-// within its frame.
-var SortFields = []string{
-	"id",
-	"title",
-	"status",
-	"priority",
-	"rank",
-	"type",
-	"topic",
-	"assignee",
-	"created_at",
-	"updated_at",
-}
-
 // ListIssuesFilter is the whole variability of the issue listing surface,
 // carried as one value. Every slice is an OR within itself and an AND against
 // the other criteria; every zero value means "do not constrain on this axis",

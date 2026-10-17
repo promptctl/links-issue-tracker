@@ -51,9 +51,9 @@ Semantics fixed by the memory engine and conformance:
 
 ### Sort fields
 
-`SortFields` is a closed ten-key set: `id`, `title`, `status`, `priority`, `rank`, `type`, `topic`, `assignee`, `created_at`, `updated_at` (`issues.go`). Conformance requires every one accepted and requires rejection of `description`, `lane`, `labels`, `issue_type`, `item_rank`, `state` (`conformance.go`).
+The sort keys are a closed ten-key set: `id`, `title`, `status`, `priority`, `rank`, `type`, `topic`, `assignee`, `created_at`, `updated_at`. They and the comparison each one makes are one table, `sortKeys`, which both engines order through by calling `IssueOrdering` with their rank ancestry; any other name is a `ValidationError` (`ordering.go`). Text keys compare byte-wise, so `"Zeta"` sorts before `"alpha"`; `type` compares the token, so `bug` sorts before `task`; `created_at` and `updated_at` compare the instant, not its text (`ordering.go`; `conformance.go`).
 
-Sorting by `status` orders the **derived** lifecycle state, the same reading the status filter takes, compared as its name — ascending `closed`, `in_progress`, `open`. A container stores no status, so it sorts among the leaves by the state its children give it, not at an end of the listing; both engines bind the key to `State()` (`issues.go`; Dolt's `issueSortKeys`, `internal/store/store.go`; `memory/list.go`; `conformance.go`).
+Sorting by `status` orders the **derived** lifecycle state, the same reading the status filter takes, compared as its name — ascending `closed`, `in_progress`, `open`. A container stores no status, so it sorts among the leaves by the state its children give it, not at an end of the listing; the key compares `State()` (`ordering.go`; `conformance.go`).
 
 ### Rank intents
 

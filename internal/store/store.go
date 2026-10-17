@@ -1,7 +1,6 @@
 package store
 
 import (
-	"cmp"
 	"context"
 	"database/sql"
 	"errors"
@@ -687,12 +686,16 @@ func (s *Store) ListIssues(ctx context.Context, filter storage.ListIssuesFilter)
 	// Parsed before the listing query rather than after it, so an unsupported
 	// sort field costs only the ancestry read; the comparator it yields reads
 	// hydrated values, so the ordering itself cannot run until the rows are back
-	// and built.
+	// and built. No ORDER BY could stand in for it: a container's state is a
+	// reading of its children that no column holds — the status FILTER lives
+	// past hydration for the same reason (see filterByState) — and tree order
+	// reads the keys of containers the listing may have filtered out.
+	// [LAW:one-source-of-truth]
 	ancestry, err := loadRankAncestry(ctx, s.db)
 	if err != nil {
 		return nil, err
 	}
-	ordering, err := storage.IssueOrdering(filter.SortBy, issueSortKeys(ancestry))
+	ordering, err := storage.IssueOrdering(filter.SortBy, ancestry)
 	if err != nil {
 		return nil, err
 	}
@@ -2123,33 +2126,6 @@ func (s *Store) ensureMetaDefault(ctx context.Context, guard *snapshotGuard, key
 		return false, err
 	}
 	return true, nil
-}
-
-// issueSortKeys is this engine's reading of the contract's sort vocabulary; see
-// storage.SortFields for what each key orders.
-//
-// Every binding reads a HYDRATED model value, which is what forces a listing's
-// order out of the query and into this package: a container's state is a
-// reading of its children that no column holds. The status FILTER already lives
-// past that boundary (see filterByState); leaving the sort on the query side of
-// it would let one listing mean two different things by "status".
-// [LAW:one-source-of-truth]
-//
-// "rank" is the same: tree order reads the keys of containers the listing may
-// have filtered out, so no ORDER BY on the selected rows could express it.
-func issueSortKeys(ancestry storage.RankAncestry) storage.SortBindings {
-	return storage.SortBindings{
-		"id":         func(a, b model.Issue) int { return strings.Compare(a.ID, b.ID) },
-		"title":      func(a, b model.Issue) int { return strings.Compare(a.Title, b.Title) },
-		"status":     func(a, b model.Issue) int { return strings.Compare(string(a.State()), string(b.State())) },
-		"priority":   func(a, b model.Issue) int { return cmp.Compare(a.Priority, b.Priority) },
-		"rank":       ancestry.Compare,
-		"type":       func(a, b model.Issue) int { return strings.Compare(string(a.IssueType), string(b.IssueType)) },
-		"topic":      func(a, b model.Issue) int { return strings.Compare(a.Topic, b.Topic) },
-		"assignee":   func(a, b model.Issue) int { return strings.Compare(a.Assignee, b.Assignee) },
-		"created_at": func(a, b model.Issue) int { return a.CreatedAt.Compare(b.CreatedAt) },
-		"updated_at": func(a, b model.Issue) int { return a.UpdatedAt.Compare(b.UpdatedAt) },
-	}
 }
 
 func (s *Store) listAllLabels(ctx context.Context) ([]model.Label, error) {

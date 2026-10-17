@@ -26,15 +26,19 @@
 // [LAW:behavior-not-structure]
 //
 // The line falls at what the contract states versus what an engine decides. A
-// rule the contract writes down — a listing's default order, its trailing id
-// key — is normative rather than discovered, so both engines obey it through
-// one [storage.IssueOrdering] and neither restates it; duplicating THAT proves
-// nothing, because there was never a question of whether an engine would work
-// it out for itself. What this engine still answers alone is the part it could
-// get wrong alone: which comparison each sort key reads, passed in as its own
-// [storage.SortBindings] and checked against the contract's vocabulary by the
-// suite. Independence is the point everywhere the engine has a choice to make,
-// and nowhere it does not.
+// rule the contract writes down is normative rather than discovered, so both
+// engines obey it through one implementation and neither restates it;
+// duplicating THAT proves nothing, because there was never a question of
+// whether an engine would work it out for itself. A listing's order is the
+// whole of one such rule — its default, its trailing id key, and what each
+// sort key compares — and lives in [storage.IssueOrdering]. Every comparison
+// there reads a hydrated issue or the rank ancestry, and both are this
+// engine's own work, done before the ordering runs: the hydration, the state
+// derivation, and the ancestry it hands in stay independent and are what the
+// suite's listing cases exercise. Two copies of the comparisons themselves
+// would be one text twice, and a defect copied into both passes on both.
+// Independence is the point everywhere the engine has a choice to make, and
+// nowhere it does not.
 //
 // Where the suite under-pins a behavior, Dolt's current behavior is the
 // tiebreak rather than what would be tidier: S0's whole gate is that nothing

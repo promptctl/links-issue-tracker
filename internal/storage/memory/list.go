@@ -1,10 +1,8 @@
 package memory
 
 import (
-	"cmp"
 	"context"
 	"slices"
-	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
@@ -25,7 +23,7 @@ func (e *Engine) ListIssues(ctx context.Context, filter storage.ListIssuesFilter
 func (e *Engine) listIssues(filter storage.ListIssuesFilter) ([]model.Issue, error) {
 	pos := e.positions()
 	ancestry := e.rankAncestry(pos)
-	order, err := storage.IssueOrdering(filter.SortBy, issueSortKeys(ancestry))
+	order, err := storage.IssueOrdering(filter.SortBy, ancestry)
 	if err != nil {
 		return nil, err
 	}
@@ -122,22 +120,4 @@ func (e *Engine) rankAncestry(pos map[string]int) storage.RankAncestry {
 		}
 	}
 	return storage.NewRankAncestry(links)
-}
-
-// issueSortKeys is this engine's reading of the contract's sort vocabulary; see
-// storage.SortFields for what each key orders, which is why "status" compares
-// derived state and "rank" compares tree order rather than a field.
-func issueSortKeys(ancestry storage.RankAncestry) storage.SortBindings {
-	return storage.SortBindings{
-		"id":         func(a, b model.Issue) int { return strings.Compare(a.ID, b.ID) },
-		"title":      func(a, b model.Issue) int { return strings.Compare(a.Title, b.Title) },
-		"status":     func(a, b model.Issue) int { return strings.Compare(string(a.State()), string(b.State())) },
-		"priority":   func(a, b model.Issue) int { return cmp.Compare(a.Priority, b.Priority) },
-		"rank":       ancestry.Compare,
-		"type":       func(a, b model.Issue) int { return strings.Compare(string(a.IssueType), string(b.IssueType)) },
-		"topic":      func(a, b model.Issue) int { return strings.Compare(a.Topic, b.Topic) },
-		"assignee":   func(a, b model.Issue) int { return strings.Compare(a.Assignee, b.Assignee) },
-		"created_at": func(a, b model.Issue) int { return a.CreatedAt.Compare(b.CreatedAt) },
-		"updated_at": func(a, b model.Issue) int { return a.UpdatedAt.Compare(b.UpdatedAt) },
-	}
 }
