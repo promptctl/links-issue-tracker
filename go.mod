@@ -171,7 +171,7 @@ require (
 // newer upstream without silently restoring a copyleft import. Deliberately not
 // summarized here: the summary this replaced had gone stale.
 // [LAW:one-source-of-truth]
-replace github.com/dolthub/dolt/go => github.com/promptctl/dolt/go v0.40.5-0.20261017160027-9536dbe183e0
+replace github.com/dolthub/dolt/go => github.com/promptctl/dolt/go v0.40.5-0.20261017165712-c831be21bb2d
 
 replace github.com/dolthub/go-mysql-server => github.com/promptctl/go-mysql-server v0.20.1-0.20260821032251-ab5cb9ec3b69
 
