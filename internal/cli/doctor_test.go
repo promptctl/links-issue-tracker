@@ -214,10 +214,6 @@ func TestDoctorPrintsEachWarningItsHealthCheckFinds(t *testing.T) {
 	containment := []string{
 		"warning: tickets outside an epic: " + loose.ID + " (task) (every ticket except an epic lives inside one; move each into the epic it belongs to with 'lit parent set --child <id> --parent <epic-id>')",
 		"warning: tickets under a parent that is not an epic: " + under.ID + " under " + host.ID + " (task) (only an epic contains tickets; move each into the epic it belongs to with 'lit parent set --child <id> --parent <epic-id>')",
-		// The cycle's two edges run both ways between frame-mates, so no order
-		// of the two satisfies both: neither is counted as an inversion a
-		// repair could clear.
-		"warning: interleaved: " + strings.Join(sortedIDs(first.ID, second.ID), ", ") + " — work in each waits on work in another, so no rank order lists every dependency among them first; 'lit doctor --fix=rank' does not reorder them for those edges",
 	}
 	// The cycle may be named from either member; both rotations are the same cycle.
 	cycleLine := func(a, b string) string {

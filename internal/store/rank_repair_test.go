@@ -175,8 +175,9 @@ func TestRepairRankOrderGivesUnrankedIssuesARank(t *testing.T) {
 }
 
 // A held issue — one no listing reads — keeps its key and is stepped around,
-// whatever the sort does to the issues around it; it is written only where it
-// shares a key, and then one holder of that key keeps it.
+// whatever the sort does to the issues around it. It is written only where its
+// key cannot anchor: shared, where one holder keeps it, or all zeros, which
+// gets a real key. An unranked one holds no key and is never written.
 func TestRepairRankOrderWritesAHeldIssueOnlyWhereItSharesAKey(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -218,12 +219,19 @@ func TestRepairRankOrderWritesAHeldIssueOnlyWhereItSharesAKey(t *testing.T) {
 			listed:  []string{"a"},
 		},
 		{
-			name:    "a held issue with no key",
+			name:    "an unranked held issue, an all-zero one and a malformed one",
 			order:   []rankedIssue{{id: "a", rank: "a"}, {id: "b", rank: "b"}},
-			held:    []rankedIssue{{id: "unranked", rank: ""}, {id: "zero", rank: "00"}},
+			held:    []rankedIssue{{id: "unranked", rank: ""}, {id: "zero", rank: "00"}, {id: "malformed", rank: "c-"}},
 			edges:   []storage.DependencyEdge{{Dependent: "a", Dependency: "b"}},
-			written: []string{"b"},
+			written: []string{"b", "malformed", "zero"},
 			listed:  []string{"b", "a"},
+		},
+		{
+			name:    "an all-zero key two held issues share",
+			order:   []rankedIssue{{id: "a", rank: "a"}},
+			held:    []rankedIssue{{id: "x", rank: "0"}, {id: "y", rank: "0"}},
+			written: []string{"x", "y"},
+			listed:  []string{"a"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -299,7 +299,7 @@ var doctorFixes = map[string]doctorFix{
 			// can be either end of an edge — or a holder of a key another
 			// issue shares, since the run it keeps ascends strictly. Naming one
 			// cause would misreport why the run touched an issue.
-			_, err = fmt.Fprintf(w, "Re-ranked %d issue(s): every dependency sits above its dependent, and every issue holds a rank key of its own.\n", fixed)
+			_, err = fmt.Fprintf(w, "Re-ranked %d issue(s): no rank inversion remains, and every issue holds a rank key of its own.\n", fixed)
 		}
 		return err
 	}},

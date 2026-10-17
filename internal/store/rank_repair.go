@@ -267,13 +267,14 @@ func anchorRun(target []rankedIssue) []placement {
 // sequence's anchors, as an anchor itself: it keeps its key, and the movers
 // beside it are spaced around it. Where a key is already an anchor's, the held
 // issue that shares it is a mover just past that anchor, so one holder keeps
-// the key and the other is spaced into the gap above it. A held issue whose
-// significant rank is not rank.Valid holds no key a write could land on, and
-// no listing reads where it stands, so it is left out and never written.
+// the key and the other is spaced into the gap above it. A held key that
+// cannot anchor — malformed, or all zeros — is a mover and gets a real key, as
+// in a landing. An unranked held issue holds no key at all (rankCollisions), so
+// it is left out and never written.
 func holdKeys(sequence []placement, held []rankedIssue) []placement {
 	keyed := make([]rankedIssue, 0, len(held))
 	for _, item := range held {
-		if rank.Valid(rank.Significant(item.rank)) {
+		if item.rank != "" {
 			keyed = append(keyed, item)
 		}
 	}
@@ -286,8 +287,11 @@ func holdKeys(sequence []placement, held []rankedIssue) []placement {
 	mergeBelow := func(bound func(key string) bool) {
 		for ; next < len(keyed) && bound(rank.Significant(keyed[next].rank)); next++ {
 			key := rank.Significant(keyed[next].rank)
-			merged = append(merged, placement{rankedIssue: keyed[next], anchored: key > last})
-			last = max(last, key)
+			anchored := rank.Valid(key) && key > last
+			merged = append(merged, placement{rankedIssue: keyed[next], anchored: anchored})
+			if anchored {
+				last = key
+			}
 		}
 	}
 	for _, p := range sequence {

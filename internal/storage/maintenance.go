@@ -57,7 +57,8 @@ type HealthReport struct {
 	DuplicateRanks  int      `json:"duplicate_ranks"`
 	DependencyCycle []string `json:"dependency_cycle"`
 	// Interleaved names the groups of frame-mates whose issues wait on one
-	// another both ways ([DependencyOrder.Interleaved]): no rank order lists
+	// another both ways through no loop of their own edges
+	// ([DependencyOrder.Interleaved]): no rank order lists
 	// every dependency among them first, so their edges are not counted in
 	// RankInversions and the repair does not reorder them for those edges.
 	Interleaved [][]string `json:"interleaved"`

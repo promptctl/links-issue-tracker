@@ -32,7 +32,9 @@ type DependencyEdge struct {
 // every dependency first. Such frame-mates are interleaved: each strongly
 // connected set of the lifted edges is one group, and an edge lifted inside a
 // group is neither a rank inversion nor a constraint on the rank repair,
-// because every arrangement of the group's keys puts some edge in it wrong.
+// because every arrangement of the group's keys puts some edge in it wrong. A
+// group that a loop of the issues' own edges runs through is a dependency
+// cycle rather than an interleaved plan: no work in that loop can start.
 //
 // [LAW:single-enforcer] The one definition of a rank inversion and of what the
 // repair must satisfy: the queue's rank_inversion annotation, lit doctor's
@@ -40,6 +42,7 @@ type DependencyEdge struct {
 // for the queue to advertise the repair for.
 type DependencyOrder struct {
 	ancestry    RankAncestry
+	edges       map[DependencyEdge]struct{}
 	constraints []DependencyEdge
 	interleaved [][]string
 	group       map[string]int
@@ -48,21 +51,49 @@ type DependencyOrder struct {
 // NewDependencyOrder reads edges, the blocked-by edges between live issues, in
 // tree order.
 func NewDependencyOrder(ancestry RankAncestry, edges []DependencyEdge) DependencyOrder {
+	order := DependencyOrder{ancestry: ancestry, edges: make(map[DependencyEdge]struct{}, len(edges)), group: map[string]int{}}
+	liftedFrom := make(map[DependencyEdge]DependencyEdge, len(edges))
 	seen := make(map[DependencyEdge]struct{}, len(edges))
 	lifted := make([]DependencyEdge, 0, len(edges))
 	for _, e := range edges {
+		order.edges[e] = struct{}{}
 		dependent, dependency, comparable := ancestry.Representatives(e.Dependent, e.Dependency)
-		edge := DependencyEdge{Dependent: dependent, Dependency: dependency}
-		if _, dup := seen[edge]; dup || !comparable {
+		if !comparable {
 			continue
 		}
-		seen[edge] = struct{}{}
-		lifted = append(lifted, edge)
+		edge := DependencyEdge{Dependent: dependent, Dependency: dependency}
+		liftedFrom[e] = edge
+		if _, dup := seen[edge]; !dup {
+			seen[edge] = struct{}{}
+			lifted = append(lifted, edge)
+		}
 	}
-	order := DependencyOrder{ancestry: ancestry, interleaved: stronglyConnected(lifted), group: map[string]int{}}
-	for i, members := range order.interleaved {
+	groups := stronglyConnected(lifted)
+	for i, members := range groups {
 		for _, id := range members {
 			order.group[id] = i
+		}
+	}
+	// An edge on a loop of the issues' own edges joins two members of one
+	// strongly connected set of them; the group it lifts into is that loop
+	// seen from above, not an interleaving.
+	loop := map[string]int{}
+	for i, members := range stronglyConnected(edges) {
+		for _, id := range members {
+			loop[id] = i
+		}
+	}
+	looped := map[int]bool{}
+	for e, edge := range liftedFrom {
+		dependentLoop, onLoop := loop[e.Dependent]
+		dependencyLoop, alsoOnLoop := loop[e.Dependency]
+		if onLoop && alsoOnLoop && dependentLoop == dependencyLoop && order.together(edge.Dependent, edge.Dependency) {
+			looped[order.group[edge.Dependent]] = true
+		}
+	}
+	for i, members := range groups {
+		if !looped[i] {
+			order.interleaved = append(order.interleaved, members)
 		}
 	}
 	for _, edge := range lifted {
@@ -77,21 +108,25 @@ func NewDependencyOrder(ancestry RankAncestry, edges []DependencyEdge) Dependenc
 // some rank order would list it first: a rank inversion, a dependency ranked
 // below the work that waits on it, which the rank repair clears. An edge
 // between a container and an issue inside it is never one, because the tree
-// orders that pair and no key can; nor is an edge inside an interleaved group.
+// orders that pair and no key can; nor is an edge inside a group of
+// frame-mates whose lifted edges loop; nor is an edge the order was not built
+// from, so a closed issue's edges are none, as they are none of the repair's.
 func (o DependencyOrder) Inverted(dependent, dependency model.Issue) bool {
+	_, read := o.edges[DependencyEdge{Dependent: dependent.ID, Dependency: dependency.ID}]
 	dependentRep, dependencyRep, comparable := o.ancestry.Representatives(dependent.ID, dependency.ID)
-	return comparable && !o.together(dependentRep, dependencyRep) && o.ancestry.Compare(dependency, dependent) > 0
+	return read && comparable && !o.together(dependentRep, dependencyRep) && o.ancestry.Compare(dependency, dependent) > 0
 }
 
 // Constraints are the edges lifted onto frame-mates, deduped, that a rank order
-// can satisfy all at once: every one but those inside an interleaved group,
-// which leaves no cycle among them.
+// can satisfy all at once: every one but those inside a group, which leaves no
+// cycle among them.
 func (o DependencyOrder) Constraints() []DependencyEdge {
 	return o.constraints
 }
 
 // Interleaved lists the interleaved groups, each by member id, in order of
-// their first members.
+// their first members: every group of frame-mates whose lifted edges loop,
+// less those a loop of the issues' own edges runs through.
 func (o DependencyOrder) Interleaved() [][]string {
 	return o.interleaved
 }

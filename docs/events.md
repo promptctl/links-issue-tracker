@@ -290,11 +290,16 @@ the ones it had.
 ## What `lit doctor` records
 
 Doctor sets its keys once the report it prints is read, after any `--fix`
-repairs have run, so they describe the state the command left behind.
+repairs have run, so they describe the state the command left behind. The
+exception is `doctor.reranked`, which the repair sets as it runs.
 
 | Key | Meaning |
 | --- | --- |
 | `doctor.duplicate_ranks` | The rank keys more than one non-deleted issue holds, as the status line prints it: a count such as `"0"`, or `"unchecked"` when a parent cycle kept the check from running. |
+| `doctor.rank_inversions` | The blocked-by edges between live issues whose dependency tree order lists after its dependent, as the status line prints it: a count, or `"unchecked"`. Edges inside a group of frame-mates whose lifted edges loop are not counted. |
+| `doctor.dependency_cycle` | A loop of blocked-by edges between live issues, its members joined by `->` with the first repeated last, `"none"` when there is no loop, or `"unchecked"`. `--fix=rank` refuses while one stands. |
+| `doctor.interleaved` | How many interleaved groups the report names, or `"unchecked"`: frame-mates whose issues wait on one another both ways through no loop of their own edges. |
+| `doctor.reranked` | The issues `--fix=rank` gave a new rank key, as an integer. Present only when that repair runs. |
 
 ## Reading the file
 

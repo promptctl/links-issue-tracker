@@ -495,7 +495,7 @@ not `closed` (`cli.go`). Epics are therefore never workable rows.
    that is `InPlay()`, sorted by ID, emits `OpenDependency{Message: dep.ID}`;
    and additionally `RankInversion{Message: dep.ID}` when
    `dependencies.Inverted(issue, dep)` — tree order lists the dependency after
-   the issue, and the two do not sit in one interleaved group
+   the issue, the edge is one the order holds, and the two do not sit in one group
    (`storage.DependencyOrder`, read once per pass by `annotateIssues` through
    `Store.DependencyOrder`).
    Then, for each id from `ancestry.inheritedDependencies(detail)` not already
