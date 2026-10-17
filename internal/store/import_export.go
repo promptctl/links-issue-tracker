@@ -176,10 +176,11 @@ func (s *Store) Doctor(ctx context.Context) (storage.HealthReport, error) {
 	if report.RankInversions > 0 {
 		report.Warnings = append(report.Warnings, fmt.Sprintf("rank inversions: %d (dependencies ranked below dependents)", report.RankInversions))
 	}
-	// No rank verb writes a shared key and a landing separates one, so this
-	// names what neither stood in front of: data stored before either did. [LAW:single-enforcer] rankCollisions is the one definition
-	// of a duplicate, and the rank repair leaves none behind among the issues
-	// this order holds.
+	// No rank verb places a key one live issue holds onto another, and a
+	// landing separates the keys it brings in, so this names what neither stood
+	// in front of: data stored before either did. [LAW:single-enforcer]
+	// rankCollisions is the one definition of a duplicate, and the rank repair
+	// leaves none behind among the issues this order holds.
 	duplicates := rankCollisions(order)
 	report.DuplicateRanks = len(duplicates)
 	if report.DuplicateRanks > 0 {

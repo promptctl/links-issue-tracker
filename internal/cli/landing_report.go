@@ -22,10 +22,10 @@ func writeLanding(w io.Writer, backlog string, landing storage.Landing) error {
 
 // writeRehomed reports the tickets a landing found outside an epic and moved
 // into one: a header with the count, then one line per move, so a restore that
-// homes hundreds still reads and greps a move at a time. A move to a nearest epic is usually home already; a
-// move to the unfiled epic is a ticket waiting to be filed, so the line names
-// how. Ids may have arrived from a remote, so each is quoted like every
-// remote-authored id.
+// homes hundreds still reads and greps a move at a time. A move to a nearest
+// epic is usually home already; a move to the unfiled epic is a ticket waiting
+// to be filed, so the line names how. Ids may have arrived from a remote, so
+// each is quoted like every remote-authored id.
 func writeRehomed(w io.Writer, backlog string, rehomed []storage.Rehomed) error {
 	if len(rehomed) == 0 {
 		return nil
@@ -41,14 +41,14 @@ func writeRehomed(w io.Writer, backlog string, rehomed []storage.Rehomed) error 
 	return nil
 }
 
-// writeRekeyed reports the tickets a landing found sharing a rank key and gave
-// a key each of their own, on one line: no listing changed its order, so there
-// is nothing left for the reader to do but know it happened.
+// writeRekeyed reports the tickets a landing gave a new rank key so that no two
+// share one, on one line: no listing changed its order, so there is nothing
+// left for the reader to do but know it happened.
 func writeRekeyed(w io.Writer, backlog string, rekeyed []storage.Rekeyed) error {
 	if len(rekeyed) == 0 {
 		return nil
 	}
-	_, err := fmt.Fprintf(w, "gave %d ticket(s) that shared a rank key in %s a key each; every listing keeps its order: %s\n", len(rekeyed), backlog, strings.Join(rekeyedIDs(rekeyed, func(id string) string { return quoteRemote(id).inline() }), ", "))
+	_, err := fmt.Fprintf(w, "gave %d ticket(s) in %s a new rank key so that no two share one; every listing keeps its order: %s\n", len(rekeyed), backlog, strings.Join(rekeyedIDs(rekeyed, func(id string) string { return quoteRemote(id).inline() }), ", "))
 	return err
 }
 
@@ -60,7 +60,7 @@ func landingMetadata(metadata map[string]string, landing storage.Landing) {
 	metadata["rehomed"] = strconv.Itoa(len(landing.Rehomed))
 	metadata["rehomed_moves"] = strings.Join(describeMoves(landing.Rehomed, identity), ", ")
 	metadata["rekeyed"] = strconv.Itoa(len(landing.Rekeyed))
-	metadata["rekeyed_ids"] = strings.Join(rekeyedIDs(landing.Rekeyed, identity), ", ")
+	metadata["rekeyed_moves"] = strings.Join(describeRekeys(landing.Rekeyed), ", ")
 }
 
 // rekeyedIDs renders the id of each ticket a landing gave a key of its own.
@@ -70,6 +70,16 @@ func rekeyedIDs(rekeyed []storage.Rekeyed, render func(string) string) []string 
 		ids[i] = render(r.IssueID)
 	}
 	return ids
+}
+
+// describeRekeys renders each new key as "<ticket> <from> -> <rank>", each key
+// quoted: a key that arrived from a remote may be malformed.
+func describeRekeys(rekeyed []storage.Rekeyed) []string {
+	described := make([]string, len(rekeyed))
+	for i, r := range rekeyed {
+		described[i] = fmt.Sprintf("%s %q -> %q", r.IssueID, r.From, r.Rank)
+	}
+	return described
 }
 
 // describeMoves renders each move as "<ticket> into <epic>", or "<epic> to the

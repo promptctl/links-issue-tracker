@@ -568,7 +568,7 @@ States and their string values (`storage/sync.go`):
 
 `CarriedPurges` counts the local purge records a take-remote carried onto the remote head; nonzero means local is ahead of the remote by the commit carrying them, which the next push delivers; zero for every other outcome (`storage/sync.go`).
 
-`Landing` names each ticket the settling landing moved into an epic and the epic it now lives in (`storage.HomeStranded`), and each ticket that shared a rank key and the key it holds now (`separateRankCollisions`); both empty when the backlog kept both rules and for every non-mutating outcome (`storage/sync.go`). `mergeAndReplay`, take-remote with carried purges and take-local set it from the landing.
+`Landing` names each ticket the settling landing moved into an epic and the epic it now lives in (`storage.HomeStranded`), and each ticket it gave a new rank key, with the key it held and the key it holds now (`separateRankCollisions`); both empty when the backlog kept both rules and for every non-mutating outcome (`storage/sync.go`). `mergeAndReplay`, take-remote with carried purges and take-local set it from the landing.
 
 Tests: `TestSyncReconcileLinearizesDivergenceAndFastForwardPushes` (`sync_reconcile_test.go`), `TestSyncReconcileHoldsProseDivergenceForAgent` (`sync_reconcile_test.go`), `TestSyncReconcileResolvedFinalizesWithAgentText` (`sync_reconcile_test.go`), `TestSyncReconcileHealsSchemaSkew` (`sync_reconcile_schema_skew_test.go`), `TestSyncReconcileCombineIsBoundedOnALargeFoldedChain` (`sync_reconcile_scale_test.go`), `TestSyncReconcileCombinePreservesFoldedProvenance` (`sync_unrelated_test.go`).
 

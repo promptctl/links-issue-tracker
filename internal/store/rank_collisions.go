@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/model/lifecycle"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -73,48 +74,57 @@ func landExport(export model.Export) (model.Export, storage.Landing, error) {
 	return separated, storage.Landing{Rehomed: rehomed, Rekeyed: rekeyed}, nil
 }
 
-// separateRankCollisions returns export with every rank key held by one issue
-// alone, and names each issue it gave a new key, in listed order. An export
-// with no shared key comes back unchanged with nothing named.
+// placedIssues returns the ranked issues of export that a rank verb places
+// among: every one not deleted. A deleted issue lists nowhere, so the verbs'
+// neighbour lookups step past it (`deleted_at IS NULL`, ranking.go) and can
+// mint its key again; its key orders nothing. Doctor counts a narrower set,
+// the live issues, which an export cannot classify: an epic's state derives
+// from children only store hydration attaches.
+func placedIssues(export model.Export) []rankedIssue {
+	placed := make([]rankedIssue, 0, len(export.Issues))
+	for _, issue := range export.Issues {
+		if _, deleted := issue.Retention().(lifecycle.Deleted); deleted || issue.Rank == "" {
+			continue
+		}
+		placed = append(placed, rankedIssue{id: issue.ID, rank: issue.Rank})
+	}
+	return placed
+}
+
+// separateRankCollisions returns export with every rank key its placed issues
+// hold held by one of them alone, and names each issue it gave a new key, in
+// listed order. An export with no shared key comes back unchanged with nothing
+// named.
 //
 // Two issues reach one key at the boundaries no rank verb guards: a merge
 // resolves each row's rank on its own, so replicas that each swapped a
 // different pair can merge two rows onto one key, and a restore writes the keys
-// its export holds. Every holder of a shared key moves, and the issues whose key
-// is their own stay where they are: the movers are spaced, in the order they
-// list in now — key, then id — into the gap between the keys around them. So
-// every listing keeps its order, and only the key that tied changes.
+// its export holds. The order they list in now — key, then id — is the order
+// the separation realizes, by the repair `lit doctor --fix rank` makes
+// (rankRewrites): the longest run of keys that already ascend strictly stays,
+// so one holder of each shared key keeps it, and the rest are spaced into the
+// gaps that run leaves. So every listing keeps its order, and no key the
+// export holds — one with no room beside it, or a malformed one — leaves the
+// landing without a gap to fill.
 //
-// It is pure, and every key it writes derives from the export, so two clones
-// separating the same collision write the same rows. [LAW:effects-at-boundaries]
+// It is pure, so two clones landing the same export write the same rows.
+// [LAW:effects-at-boundaries]
 func separateRankCollisions(export model.Export) (model.Export, []storage.Rekeyed, error) {
-	order := make([]rankedIssue, 0, len(export.Issues))
-	for _, issue := range export.Issues {
-		if issue.Rank == "" {
-			continue
-		}
-		order = append(order, rankedIssue{id: issue.ID, rank: issue.Rank})
-	}
-	collisions := rankCollisions(order)
+	placed := placedIssues(export)
+	collisions := rankCollisions(placed)
 	if len(collisions) == 0 {
 		return export, nil, nil
 	}
-	shared := make(map[string]bool, len(collisions))
-	for _, c := range collisions {
-		shared[c.key] = true
-	}
-	slices.SortFunc(order, func(a, b rankedIssue) int {
+	slices.SortFunc(placed, func(a, b rankedIssue) int {
 		return cmp.Or(strings.Compare(a.rank, b.rank), strings.Compare(a.id, b.id))
 	})
-	target := make([]string, len(order))
-	rankOf := make(map[string]string, len(order))
-	anchored := make([]bool, len(order))
-	for i, issue := range order {
-		target[i] = issue.id
-		rankOf[issue.id] = issue.rank
-		anchored[i] = !shared[issue.rank]
+	listed := make([]string, len(placed))
+	from := make(map[string]string, len(placed))
+	for i, issue := range placed {
+		listed[i] = issue.id
+		from[issue.id] = issue.rank
 	}
-	rewrites, err := spaceMovers(target, rankOf, anchored)
+	rewrites, err := rankRewrites(placed, listed)
 	if err != nil {
 		return model.Export{}, nil, fmt.Errorf("separate shared rank keys (%s): %w", describeRankCollisions(collisions), err)
 	}
@@ -123,7 +133,7 @@ func separateRankCollisions(export model.Export) (model.Export, []storage.Rekeye
 	rekeyed := make([]storage.Rekeyed, len(rewrites))
 	for i, rewrite := range rewrites {
 		newRank[rewrite.id] = rewrite.newRank
-		rekeyed[i] = storage.Rekeyed{IssueID: rewrite.id, Shared: rankOf[rewrite.id], Rank: rewrite.newRank}
+		rekeyed[i] = storage.Rekeyed{IssueID: rewrite.id, From: from[rewrite.id], Rank: rewrite.newRank}
 	}
 	out := export
 	out.Issues = slices.Clone(export.Issues)

@@ -3,7 +3,6 @@ package store
 import (
 	"cmp"
 	"context"
-	"errors"
 	"fmt"
 	"math/rand"
 	"path/filepath"
@@ -11,47 +10,66 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/model/lifecycle"
 	"github.com/promptctl/links-issue-tracker/internal/rank"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
-// listedOrder is the ids of the ranked issues in export, in the order every
+// listedOrder is the ids of the placed issues in export, in the order every
 // listing puts them: key, then id.
 func listedOrder(export model.Export) []string {
-	ranked := slices.DeleteFunc(slices.Clone(export.Issues), func(issue model.Issue) bool { return issue.Rank == "" })
-	slices.SortFunc(ranked, func(a, b model.Issue) int {
-		return cmp.Or(strings.Compare(a.Rank, b.Rank), strings.Compare(a.ID, b.ID))
+	placed := placedIssues(export)
+	slices.SortFunc(placed, func(a, b rankedIssue) int {
+		return cmp.Or(strings.Compare(a.rank, b.rank), strings.Compare(a.id, b.id))
 	})
-	ids := make([]string, len(ranked))
-	for i, issue := range ranked {
-		ids[i] = issue.ID
+	ids := make([]string, len(placed))
+	for i, issue := range placed {
+		ids[i] = issue.id
 	}
 	return ids
 }
 
 // The separation's contract, checked over generated exports rather than a
-// handful of cases: afterwards no key has two holders, every listing keeps its
-// order, an issue whose key was its own keeps it, an unranked issue stays
-// unranked, and the issues named are exactly the holders of a shared key. The
-// key pool is small so collisions are common, adjacent shared keys occur, and
-// it holds "V" beside "V0" — distinct keys with no room between them, the pair
-// the unfiled epic's mint makes.
+// handful of cases: afterwards no key has two placed holders, every listing
+// keeps its order, an unranked or deleted issue keeps the key it had, the
+// issues named are exactly the ones whose key changed, with the key each held,
+// and an export with no shared key comes back as it was. Where every key is
+// well formed and no two keys differ only by trailing zeros, the separation is
+// as small as it can be: one holder of each shared key keeps it, and nobody
+// else moves.
+//
+// The key pool is small so collisions are common, adjacent shared keys occur,
+// and it holds "V" beside "V0" and "V00" — distinct keys with no room between
+// them, the pair the unfiled epic's mint makes — and "a-1", a malformed key.
 func TestSeparateRankCollisionsKeepsEveryListingInOrder(t *testing.T) {
-	pool := []string{"", "1", "5", "5z", "8", "V", "V0", "W", "h", "z"}
+	pool := []string{"", "1", "5", "5z", "8", "V", "V0", "V00", "W", "a-1", "h", "z"}
+	deletedAt := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	rng := rand.New(rand.NewSource(1))
-	sawShared := 0
-	for round := range 500 {
+	var sawShared, sawMinimal, sawDeletedShare, sawNoRoom int
+	for round := range 2000 {
 		n := 1 + rng.Intn(12)
 		export := model.Export{}
 		for _, id := range rng.Perm(n) {
-			export.Issues = append(export.Issues, model.Issue{ID: fmt.Sprintf("t-%02d", id), Rank: pool[rng.Intn(len(pool))]})
+			issue := model.Issue{ID: fmt.Sprintf("t-%02d", id), Rank: pool[rng.Intn(len(pool))]}
+			if rng.Intn(5) == 0 {
+				issue.SetRetention(lifecycle.Deleted{At: deletedAt})
+			}
+			export.Issues = append(export.Issues, issue)
 		}
 		before := slices.Clone(export.Issues)
-		holders := map[string]int{}
-		for _, issue := range before {
-			holders[issue.Rank]++
+		placedHolders := map[string]int{}
+		for _, issue := range placedIssues(export) {
+			placedHolders[issue.rank]++
+		}
+		var sharedKeys, wantMoves int
+		for _, count := range placedHolders {
+			if count > 1 {
+				sharedKeys++
+				wantMoves += count - 1
+			}
 		}
 
 		got, rekeyed, err := separateRankCollisions(export)
@@ -61,73 +79,107 @@ func TestSeparateRankCollisionsKeepsEveryListingInOrder(t *testing.T) {
 		if !reflect.DeepEqual(export.Issues, before) {
 			t.Fatalf("round %d: the input export was mutated", round)
 		}
-		if collisions := rankCollisions(rankedIssues(got)); len(collisions) != 0 {
+		if collisions := rankCollisions(placedIssues(got)); len(collisions) != 0 {
 			t.Errorf("round %d: %+v still shares keys: %s", round, got.Issues, describeRankCollisions(collisions))
 		}
 		if want, have := listedOrder(model.Export{Issues: before}), listedOrder(got); !slices.Equal(want, have) {
 			t.Errorf("round %d: listed order %v, want %v (from %+v)", round, have, want, before)
 		}
-		var wantNamed []string
+		changed := map[string]string{}
 		for i, issue := range before {
-			shared := issue.Rank != "" && holders[issue.Rank] > 1
-			if shared {
-				wantNamed = append(wantNamed, issue.ID)
-				continue
+			_, deleted := issue.Retention().(lifecycle.Deleted)
+			if (deleted || issue.Rank == "") && got.Issues[i].Rank != issue.Rank {
+				t.Errorf("round %d: %s (deleted %t) held %q and now holds %q", round, issue.ID, deleted, issue.Rank, got.Issues[i].Rank)
 			}
 			if got.Issues[i].Rank != issue.Rank {
-				t.Errorf("round %d: %s held %q alone and now holds %q", round, issue.ID, issue.Rank, got.Issues[i].Rank)
+				changed[issue.ID] = issue.Rank
 			}
 		}
-		var named []string
 		for _, r := range rekeyed {
-			named = append(named, r.IssueID)
-			if holders[r.Shared] < 2 {
-				t.Errorf("round %d: %s is named as sharing %q, which only it held", round, r.IssueID, r.Shared)
+			from, ok := changed[r.IssueID]
+			if !ok || r.From != from {
+				t.Errorf("round %d: %s is named as moving from %q; its key changed: %t, from %q", round, r.IssueID, r.From, ok, from)
 			}
 			if !rank.Valid(r.Rank) {
 				t.Errorf("round %d: %s was given %q, not a well-formed rank", round, r.IssueID, r.Rank)
 			}
+			delete(changed, r.IssueID)
 		}
-		slices.Sort(named)
-		slices.Sort(wantNamed)
-		if !slices.Equal(named, wantNamed) {
-			t.Errorf("round %d: named %v, want the holders of a shared key %v", round, named, wantNamed)
+		if len(changed) != 0 {
+			t.Errorf("round %d: keys changed without being named: %v", round, changed)
 		}
-		if len(wantNamed) > 0 {
-			sawShared++
+		if sharedKeys == 0 {
+			if len(rekeyed) != 0 || !reflect.DeepEqual(got.Issues, before) {
+				t.Errorf("round %d: no placed issue shared a key, yet the separation named %+v", round, rekeyed)
+			}
+			for _, issue := range before {
+				if _, deleted := issue.Retention().(lifecycle.Deleted); deleted && placedHolders[issue.Rank] > 0 {
+					sawDeletedShare++
+					break
+				}
+			}
+			continue
+		}
+		sawShared++
+		if placedHolders["V0"] > 1 && placedHolders["V"] > 0 && placedHolders["V00"] > 0 {
+			sawNoRoom++
+		}
+		if !keysSpaceApart(placedHolders) {
+			continue
+		}
+		sawMinimal++
+		if len(rekeyed) != wantMoves {
+			t.Errorf("round %d: named %d issue(s) %+v, want %d: one holder of each shared key keeps it (from %+v)", round, len(rekeyed), rekeyed, wantMoves, before)
+		}
+		for _, r := range rekeyed {
+			if placedHolders[r.From] < 2 {
+				t.Errorf("round %d: %s held %q alone and was moved", round, r.IssueID, r.From)
+			}
 		}
 	}
-	// Anti-vacuity: the properties above hold trivially of an export with no
-	// shared key.
-	if sawShared < 100 {
-		t.Fatalf("only %d of 500 generated exports shared a key; the generator is not testing separation", sawShared)
+	// Anti-vacuity: every property above holds trivially of an export that
+	// never exercises it.
+	for name, saw := range map[string]int{"shared a key": sawShared, "had keys spaced apart": sawMinimal, "held a deleted issue's key beside a placed one": sawDeletedShare, "shared a key with no room beside it": sawNoRoom} {
+		if saw < 20 {
+			t.Errorf("only %d of 2000 generated exports %s; the generator is not testing it", saw, name)
+		}
 	}
 }
 
-func rankedIssues(export model.Export) []rankedIssue {
-	out := make([]rankedIssue, len(export.Issues))
-	for i, issue := range export.Issues {
-		out[i] = rankedIssue{id: issue.ID, rank: issue.Rank}
+// keysSpaceApart reports whether every key is well formed and no two keys
+// differ only by trailing zeros — the exports in which a gap opens between any
+// two keys.
+func keysSpaceApart(holders map[string]int) bool {
+	significant := map[string]bool{}
+	for key := range holders {
+		if !rank.Valid(rank.Significant(key)) || significant[rank.Significant(key)] {
+			return false
+		}
+		significant[rank.Significant(key)] = true
 	}
-	return out
+	return true
 }
 
 // A shared key whose neighbours pad to the same value leaves nothing to space
-// its holders into. The separation refuses, naming the key and its holders,
-// rather than landing the tie.
-func TestSeparateRankCollisionsRefusesWhenNoKeyFitsBetweenTheNeighbours(t *testing.T) {
+// its holders into. The separation moves the neighbours too, so the landing
+// still keeps every listing's order rather than failing on data the rank
+// repair could mend.
+func TestSeparateRankCollisionsLandsAKeyWithNoRoomBesideIt(t *testing.T) {
 	export := model.Export{Issues: []model.Issue{
 		{ID: "t-1", Rank: "V"},
 		{ID: "t-2", Rank: "V0"},
 		{ID: "t-3", Rank: "V0"},
 		{ID: "t-4", Rank: "V00"},
 	}}
-	_, _, err := separateRankCollisions(export)
-	if !errors.Is(err, rank.ErrNoRoom) {
-		t.Fatalf("separateRankCollisions error = %v, want rank.ErrNoRoom", err)
+	got, _, err := separateRankCollisions(export)
+	if err != nil {
+		t.Fatalf("separateRankCollisions error = %v", err)
 	}
-	if !strings.Contains(err.Error(), `"V0" shared by t-2, t-3`) {
-		t.Errorf("error %q does not name the shared key and its holders", err)
+	if collisions := rankCollisions(placedIssues(got)); len(collisions) != 0 {
+		t.Errorf("%+v still shares keys: %s", got.Issues, describeRankCollisions(collisions))
+	}
+	if want, have := []string{"t-1", "t-2", "t-3", "t-4"}, listedOrder(got); !slices.Equal(have, want) {
+		t.Errorf("listed order %v, want %v", have, want)
 	}
 }
 
@@ -205,7 +257,7 @@ func TestDoctorCountsSharedRankKeysAndTheRepairSeparatesThemInOrder(t *testing.T
 }
 
 // A restore lands a backup's shared key as two keys, in the order the backup
-// listed them, and says which tickets it gave a key of their own.
+// listed them, and says which ticket it gave a new key.
 func TestRestoreSeparatesASharedRankKey(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -227,15 +279,8 @@ func TestRestoreSeparatesASharedRankKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReplaceFromExport: %v", err)
 	}
-	var named []string
-	for _, r := range landing.Rekeyed {
-		named = append(named, r.IssueID)
-		if r.Shared != shared {
-			t.Errorf("%s named as sharing %q, want %q", r.IssueID, r.Shared, shared)
-		}
-	}
-	if !slices.Equal(named, holders) {
-		t.Errorf("Rekeyed names %v, want the two holders %v", named, holders)
+	if len(landing.Rekeyed) != 1 || landing.Rekeyed[0].IssueID != holders[0] || landing.Rekeyed[0].From != shared {
+		t.Errorf("Rekeyed = %+v, want the holder listed first, %s, moved from %q", landing.Rekeyed, holders[0], shared)
 	}
 	if got := listedIDs(t, ctx, st); !slices.Equal(got, wantOrder) {
 		t.Errorf("listing after restore = %v, want the backup's order %v", got, wantOrder)
@@ -251,8 +296,8 @@ func TestRestoreSeparatesASharedRankKey(t *testing.T) {
 
 // Two replicas that each place a different epic between the same two
 // neighbours mint the same key, and the merge resolves each row's rank on its
-// own, so both land on it. The reconcile separates them, names them, and the
-// push carries the separated keys to the other replica.
+// own, so both land on it. The reconcile separates them, names the one it
+// moved, and the push carries the separated keys to the other replica.
 func TestSyncReconcileSeparatesTheKeyTwoReplicasMintedAlike(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -306,14 +351,10 @@ func TestSyncReconcileSeparatesTheKeyTwoReplicasMintedAlike(t *testing.T) {
 	if res.State != storage.SyncReconcileLinearized {
 		t.Fatalf("reconcile state = %q, want %q", res.State, storage.SyncReconcileLinearized)
 	}
-	var named []string
-	for _, r := range res.Rekeyed {
-		named = append(named, r.IssueID)
-	}
 	holders := []string{third, fourth}
 	slices.Sort(holders)
-	if !slices.Equal(named, holders) {
-		t.Fatalf("Rekeyed = %+v, want the two epics placed between the same neighbours %v", res.Rekeyed, holders)
+	if len(res.Rekeyed) != 1 || res.Rekeyed[0].IssueID != holders[0] {
+		t.Fatalf("Rekeyed = %+v, want %s, the first-listed of the two epics placed between the same neighbours %v", res.Rekeyed, holders[0], holders)
 	}
 	wantOrder := []string{first, holders[0], holders[1], second}
 	if got := listedIDs(t, ctx, syncB); !slices.Equal(got, wantOrder) {

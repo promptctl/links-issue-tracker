@@ -283,18 +283,18 @@ func idStabilityFindings(dump RawDump, m ShapeMapping, export model.Export) []Ve
 }
 
 // rankFindings checks that the rebuilt ranks form a valid permutation: among
-// ranked issues, every rank is a well-formed lexorank value and all are distinct,
-// which is exactly a strict total order over those issues.
+// ranked issues, every rank is a well-formed lexorank value, and among the
+// issues a rank verb places, all are distinct, which is exactly a strict total
+// order over those issues. A deleted issue's key may be minted again
+// (placedIssues), so a source that holds one twice is one the verbs wrote.
 //
 // [LAW:types-are-the-program] This is the intrinsic, mapping-independent law, and
 // it is what catches a value mis-map the round-trip laws cannot: priority values
 // landing in rank ("0", "1", ...) collide, so distinctness fails. Empty ranks are
 // unranked issues — legitimately many — so only non-empty ranks are checked.
 func rankFindings(export model.Export) []VerifyFinding {
-	ranked := make([]rankedIssue, len(export.Issues))
 	var malformed []string
-	for i, issue := range export.Issues {
-		ranked[i] = rankedIssue{id: issue.ID, rank: issue.Rank}
+	for _, issue := range export.Issues {
 		if issue.Rank != "" && !rank.Valid(issue.Rank) {
 			malformed = append(malformed, fmt.Sprintf("%s=%q", issue.ID, issue.Rank))
 		}
@@ -302,7 +302,7 @@ func rankFindings(export model.Export) []VerifyFinding {
 	sort.Strings(malformed)
 
 	var out []VerifyFinding
-	if collisions := rankCollisions(ranked); len(collisions) > 0 {
+	if collisions := rankCollisions(placedIssues(export)); len(collisions) > 0 {
 		out = append(out, VerifyFinding{
 			Law:    LawRank,
 			Detail: fmt.Sprintf("ranks are not distinct (a valid order needs one rank per issue): %s", describeRankCollisions(collisions)),

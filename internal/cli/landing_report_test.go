@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -63,15 +64,15 @@ func TestWriteLandingNamesEachRekeyAndIsSilentWithoutOne(t *testing.T) {
 	}
 
 	landing := storage.Landing{Rekeyed: []storage.Rekeyed{
-		{IssueID: "acme-core-bb22", Shared: "V", Rank: "U"},
-		{IssueID: "acme-core-cc33", Shared: "V", Rank: "W"},
+		{IssueID: "acme-core-bb22", From: "V", Rank: "U"},
+		{IssueID: "acme-core-cc33", From: "a-1", Rank: "W"},
 	}}
 	var out bytes.Buffer
 	if err := writeLanding(&out, "the merged backlog", landing); err != nil {
 		t.Fatalf("writeLanding error = %v", err)
 	}
 	line := strings.TrimSuffix(out.String(), "\n")
-	for _, part := range []string{"gave 2 ticket(s) that shared a rank key in the merged backlog a key each;", "acme-core-bb22", "acme-core-cc33"} {
+	for _, part := range []string{"gave 2 ticket(s) in the merged backlog a new rank key so that no two share one;", "acme-core-bb22", "acme-core-cc33"} {
 		if !strings.Contains(line, part) {
 			t.Errorf("output %q lacks %q", line, part)
 		}
@@ -82,8 +83,8 @@ func TestWriteLandingNamesEachRekeyAndIsSilentWithoutOne(t *testing.T) {
 
 	metadata := map[string]string{}
 	landingMetadata(metadata, landing)
-	if metadata["rekeyed"] != "2" || metadata["rekeyed_ids"] != "acme-core-bb22, acme-core-cc33" {
-		t.Errorf("metadata = %v, want rekeyed=2 naming both tickets", metadata)
+	if want := `acme-core-bb22 "V" -> "U", acme-core-cc33 "a-1" -> "W"`; metadata["rekeyed"] != "2" || metadata["rekeyed_moves"] != want {
+		t.Errorf("metadata = %v, want rekeyed=2 and rekeyed_moves %s", metadata, want)
 	}
 }
 
@@ -186,7 +187,8 @@ func restoreTraceRecord(t *testing.T, repo string) syncTraceRecord {
 
 // TestBackupRestoreNamesTheTicketsItGivesAKeyOfTheirOwn drives `lit backup
 // restore` over a backup in which two epics hold one rank key. The restore
-// lands a key for each, prints which, and records them on the restore's trace.
+// gives the one listed first a new key, prints which, and records the move on
+// the restore's trace.
 func TestBackupRestoreNamesTheTicketsItGivesAKeyOfTheirOwn(t *testing.T) {
 	repo := newInitTestRepo(t)
 	first := newEpicInDir(t, repo, "First")
@@ -207,7 +209,9 @@ func TestBackupRestoreNamesTheTicketsItGivesAKeyOfTheirOwn(t *testing.T) {
 	if len(issues) != 2 {
 		t.Fatalf("backup holds %d issue(s), want the two epics", len(issues))
 	}
-	issues[1].(map[string]any)["rank"] = issues[0].(map[string]any)["rank"]
+	shared, _ := issues[0].(map[string]any)["rank"].(string)
+	issues[1].(map[string]any)["rank"] = shared
+	moved := min(first, second)
 	edited, err := json.Marshal(backup)
 	if err != nil {
 		t.Fatalf("encode backup: %v", err)
@@ -218,14 +222,14 @@ func TestBackupRestoreNamesTheTicketsItGivesAKeyOfTheirOwn(t *testing.T) {
 	}
 
 	out := runCLIInDir(t, repo, "backup", "restore", "--path", path, "--force")
-	if !strings.Contains(out, "gave 2 ticket(s) that shared a rank key in the backup a key each;") || !strings.Contains(out, first) || !strings.Contains(out, second) {
-		t.Errorf("restore output %q does not name the two tickets it gave a key", out)
+	if want := "gave 1 ticket(s) in the backup a new rank key so that no two share one; every listing keeps its order: " + quoteRemote(moved).inline() + "\n"; !strings.Contains(out, want) {
+		t.Errorf("restore output %q lacks %q", out, want)
 	}
 	if doctor := runCLIInDir(t, repo, "doctor"); !strings.Contains(doctor, " duplicate_ranks=0 ") {
 		t.Errorf("doctor after the restore:\n%s\nwant duplicate_ranks=0", doctor)
 	}
 	restore := restoreTraceRecord(t, repo)
-	if restore.Metadata["rekeyed"] != "2" || !strings.Contains(restore.Metadata["rekeyed_ids"], first) || !strings.Contains(restore.Metadata["rekeyed_ids"], second) {
-		t.Errorf("restore trace metadata = %v, want rekeyed=2 naming %s and %s", restore.Metadata, first, second)
+	if want := fmt.Sprintf("%s %q -> ", moved, shared); restore.Metadata["rekeyed"] != "1" || !strings.HasPrefix(restore.Metadata["rekeyed_moves"], want) {
+		t.Errorf("restore trace metadata = %v, want rekeyed=1 and a move starting %s", restore.Metadata, want)
 	}
 }

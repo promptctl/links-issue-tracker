@@ -9,11 +9,11 @@ type Landing struct {
 	Rekeyed []Rekeyed `json:"rekeyed,omitempty"`
 }
 
-// Rekeyed is one ticket a landing found sharing its rank key with another, and
-// the key it holds now. Its place in every listing is unchanged: only the tie
-// that the id used to break is gone.
+// Rekeyed is one ticket a landing gave a new rank key so that no two tickets
+// share one: the key it held, and the key it holds now. Its place in every
+// listing is unchanged: only the tie that the id used to break is gone.
 type Rekeyed struct {
 	IssueID string `json:"issue_id"`
-	Shared  string `json:"shared"`
+	From    string `json:"from"`
 	Rank    string `json:"rank"`
 }

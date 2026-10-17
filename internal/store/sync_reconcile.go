@@ -715,10 +715,11 @@ func (s *Store) newSpineWriter(ctx context.Context, branch string) (*spineWriter
 }
 
 // land commits next onto the spine under stamp, with every ticket inside an
-// epic and every rank key held by one issue, and says what it had to change. It switches to the spine branch
-// first because the caller is expected to have just read history on the read
-// branch; the switch is unconditional so that no landing depends on which
-// branch a previous operation happened to leave the session on.
+// epic and every rank key held by one issue, and says what it had to change.
+// It switches to the spine branch first because the caller is expected to have
+// just read history on the read branch; the switch is unconditional so that no
+// landing depends on which branch a previous operation happened to leave the
+// session on.
 // [LAW:no-ambient-temporal-coupling]
 //
 // Every sync write lands through here — each folded commit's projection and

@@ -451,8 +451,8 @@ They live beside the specs rather than in an engine because the schema is the co
 
 - `HomeStranded(export model.Export) (model.Export, []Rehomed)` — pure; returns the export with every ticket inside an epic and the moves, sorted by id. The rule, the climb and the minted unfiled epic are described in `01-data-model.md`. Called through `landExport` by `spineWriter.land` and `ReplaceFromExport` (`internal/store`), never by `rebuildFromExport`.
 - `Rehomed{IssueID string; Epic string}` (json `issue_id`, `epic`) — a ticket moved and the epic it lives in now; `Epic` is empty only for an epic moved to the top level.
-- `Landing{Rehomed []Rehomed; Rekeyed []Rekeyed}` (json `rehomed,omitempty`, `rekeyed,omitempty`; `internal/storage/landing.go`) — what a write that lands an export whole had to change on the way in: the tickets it moved into an epic and the tickets it gave a rank key of their own; both empty when the export kept the rules.
-- `Rekeyed{IssueID string; Shared string; Rank string}` (json `issue_id`, `shared`, `rank`; `internal/storage/landing.go`) — a ticket a landing found sharing its rank key with another (`Shared`) and the key it holds now (`Rank`); its place in every listing is unchanged.
+- `Landing{Rehomed []Rehomed; Rekeyed []Rekeyed}` (json `rehomed,omitempty`, `rekeyed,omitempty`; `internal/storage/landing.go`) — what a write that lands an export whole had to change on the way in: the tickets it moved into an epic and the tickets it gave a new rank key; both empty when the export kept the rules.
+- `Rekeyed{IssueID string; From string; Rank string}` (json `issue_id`, `from`, `rank`; `internal/storage/landing.go`) — a ticket a landing gave a new rank key so that no two share one: the key it held (`From`) and the key it holds now (`Rank`); its place in every listing is unchanged.
 - `UnfiledEpicID(prefix string) string`, `UnfiledTitle = "Unfiled tickets"`, `UnfiledTopic = "unfiled"` — the first id of the unfiled epic's chain and its identity, the values migration v7 writes; `HomeStranded` walks the rest of the chain (`01-data-model.md`).
 
 ### 1.18 Sync/reconcile vocabulary (`internal/storage/sync.go`)
