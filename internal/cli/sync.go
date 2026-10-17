@@ -204,11 +204,20 @@ func syncFetchLeaf() syncLeaf {
 		if err := markFetchSuccess(ws); err != nil {
 			fmt.Fprintf(os.Stderr, "lit: fetch-success marker not written: %v\n", err)
 		}
+		// A fetch that brought a history another checkout re-rooted follows it
+		// here, so no read after it reports that re-root as a divergence.
+		branch, err := resolveSyncBranch(ctx, ws, remoteName)
+		if err != nil {
+			return err
+		}
+		if err := session.syncer.SyncFollowReRoot(ctx, remoteName, branch, storage.SyncEntryFetch); err != nil {
+			return err
+		}
 		if !*verbose {
 			_, err := fmt.Fprintln(stdout, "fetched")
 			return err
 		}
-		_, err := fmt.Fprintf(stdout, "fetched %s\n", remoteName)
+		_, err = fmt.Fprintf(stdout, "fetched %s\n", remoteName)
 		return err
 	}}
 }

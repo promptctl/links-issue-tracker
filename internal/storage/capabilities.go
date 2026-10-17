@@ -112,6 +112,14 @@ type Syncer interface {
 	CompactIfDue(ctx context.Context) (CompactionOutcome, error)
 	SyncCompactAndPush(ctx context.Context, remote string, branch string, setUpstream bool, force bool) (SyncPushResult, error)
 
+	// SyncFollowReRoot brings the local branch into the remote's history when
+	// another checkout re-rooted it, reading the tracking ref as the last fetch
+	// left it; it contacts no network. Every sync verb that settles or pushes
+	// follows on its own; this is for a caller that fetched and settles
+	// nothing, so the freshness a later read reports never shows a re-root it
+	// could follow as a divergence. entry names that caller.
+	SyncFollowReRoot(ctx context.Context, remote string, branch string, entry SyncEntry) error
+
 	// FollowedReRoots is every re-root the engine applied to its own branch,
 	// since it opened, to follow a remote another checkout re-rooted: the sync
 	// verbs follow before they settle, so none of them meets such a remote as

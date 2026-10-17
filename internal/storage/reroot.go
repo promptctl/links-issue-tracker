@@ -55,6 +55,8 @@ const (
 	// SyncEntryPush is a push the remote refused: `lit sync push`, or the
 	// on-change mirror's push.
 	SyncEntryPush SyncEntry = "push"
+	// SyncEntryFetch is `lit sync fetch`.
+	SyncEntryFetch SyncEntry = "fetch"
 )
 
 // FollowedReRoot is a re-root a store applied to its own branch to follow a

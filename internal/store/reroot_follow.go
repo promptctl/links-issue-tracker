@@ -76,6 +76,13 @@ func (s *Store) followRemoteReRoot(ctx context.Context, remote, branch string, e
 	return ok, nil
 }
 
+// SyncFollowReRoot is followRemoteReRoot for a caller that fetched and
+// settles nothing. See the storage.Syncer contract.
+func (s *Store) SyncFollowReRoot(ctx context.Context, remote, branch string, entry storage.SyncEntry) error {
+	_, err := s.followRemoteReRoot(ctx, remote, branch, entry)
+	return err
+}
+
 // FollowedReRoots is every re-root followRemoteReRoot applied on this store
 // since it opened, oldest first.
 func (s *Store) FollowedReRoots() []storage.FollowedReRoot {

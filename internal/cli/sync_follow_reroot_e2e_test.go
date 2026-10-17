@@ -145,9 +145,17 @@ func TestEverySyncEntryPointFollowsAReRootedRemote(t *testing.T) {
 	})
 	t.Run("reconcile", func(t *testing.T) {
 		r := newReRootedCheckouts(t, true)
-		runCLIInDir(t, r.bravo, "sync", "fetch")
 		runCLIInDir(t, r.bravo, "sync", "reconcile")
 		r.assertFollowedCleanly(t, "reconcile", true)
+	})
+	t.Run("fetch", func(t *testing.T) {
+		// A fetch settles nothing. With no write on the remote since bravo
+		// forked, the follow leaves bravo only ahead; what it must not leave
+		// is a freshness that reports the re-root as a divergence, which lit
+		// doctor refuses on.
+		r := newReRootedCheckouts(t, false)
+		runCLIInDir(t, r.bravo, "sync", "fetch")
+		r.assertFollowedCleanly(t, "fetch", false)
 	})
 	t.Run("push", func(t *testing.T) {
 		r := newReRootedCheckouts(t, false)
