@@ -200,12 +200,11 @@ Behavioral evidence:
 
 `store.go`:
 1. `root := filepath.Clean(doltRootDir)` (`store.go`).
-2. If `dirExists(filepath.Join(root, "links", ".dolt"))` → returns `(false, nil)` immediately, doing nothing (`store.go`).
-3. `created := !dirExists(root)` (`store.go`).
-4. `os.MkdirAll(root, 0o755)`; on failure `fmt.Errorf("create dolt root dir: %w", err)` (`store.go`).
-5. First bootstrap pool: `openDoltPool(root, workspaceID, "", engineWrite)` (empty database name), `defer db.Close()` inside a closure so it closes before the next open (`store.go`); runs `CREATE DATABASE IF NOT EXISTS links` (`store.go`); failure → `fmt.Errorf("create dolt database: %w", err)` then `wrapEngineOpenContention` (`store.go`).
-6. Second pool: `openDoltPool(root, workspaceID, "links", engineWrite)`, `defer db.Close()`, then `ensureMasterDefaultBranch` wrapped in `wrapEngineOpenContention` (`store.go`).
-7. Returns `(created, nil)`.
+2. `acquireBootstrapLock(ctx, root)`: `acquireStoreLock` exclusive on `.links-bootstrap.lock` beside the dolt root, wait `coResidentHolderWait`; contention → `a lit process is creating this workspace's database; retry after it completes: %w` wrapping `ErrWorkspaceBusy` (`workspace_lock.go`). Released by a deferred call whose error is `errors.Join`ed into the named return (`store.go`).
+3. Under the lock: if `dirExists(filepath.Join(root, "links", ".dolt"))` → returns `(false, nil)` (`store.go`).
+4. `buildDoltRoot` at `staging` = `.links-bootstrap` beside the dolt root (`workspace_lock.go`): `os.RemoveAll(staging)` (`remove a dead bootstrap's staging root: %w`), `os.MkdirAll(staging, 0o755)` (`create bootstrap staging root: %w`); first pool `openDoltPool(staging, workspaceID, "", engineWrite)` closed inside a closure before the next open, running `CREATE DATABASE IF NOT EXISTS links` (failure → `create dolt database: %w`, then `wrapEngineOpenContention`); second pool `openDoltPool(staging, workspaceID, "links", engineWrite)`, then `ensureMasterDefaultBranch` wrapped in `wrapEngineOpenContention` (`store.go`).
+5. `installDoltRoot(staging, root)`: `os.ReadDir(root)` — absent proceeds; another read error → `read dolt root: %w`; any entry → `dolt root %s holds no database but is not empty; move its contents aside and retry`; empty → `os.Remove(root)` (`remove empty dolt root: %w`). Then `os.Rename(staging, root)` (`install bootstrapped dolt root: %w`) (`store.go`).
+6. A failure in step 4 or 5 is `errors.Join`ed with `os.RemoveAll(staging)`. Returns `(true, nil)`.
 
 The two pools run strictly sequentially — the explicit close of the first is the ordering owner (`store.go`).
 
@@ -4984,7 +4983,7 @@ return release, nil
 `internal/store/doc.go` — outermost to innermost:
 
 ```
-workspace → Dolt's own .dolt/noms/LOCK → commit → snapshot producer beacon
+workspace → bootstrap → Dolt's own .dolt/noms/LOCK → commit → snapshot producer beacon
 ```
 
 A holder of an inner lock never waits on an outer one (`internal/store/doc.go`). Two locks sit outside the order: the sync-push lock, because every acquisition of it is a non-blocking probe so nothing ever waits on it (`internal/store/doc.go`); and the mirror liveness beacon, whose acquisitions all happen holding nothing (`internal/store/doc.go`).

@@ -15,11 +15,11 @@ If another process holds Dolt's journal lock (`<root>/links/.dolt/noms/LOCK`), t
 
 ### Open sequence
 
-`Open(ctx, doltRootDir, workspaceID)` (`store.go`), in order: validate args (both non-blank; the root is `filepath.Clean`ed) → acquire the **shared workspace flock** → refuse if an adopt is pending → bootstrap the database if absent (`CREATE DATABASE IF NOT EXISTS links` through a first pool that closes before the second opens, `store.go`) → open the write connection → under the **commit lock**: normalize the default branch to `master` (renaming a sole non-master branch via `DOLT_BRANCH('-m', …)`, `store.go`) and run migrations. Failure at any point releases everything and returns the error.
+`Open(ctx, doltRootDir, workspaceID)` (`store.go`), in order: validate args (both non-blank; the root is `filepath.Clean`ed) → acquire the **shared workspace flock** → refuse if an adopt is pending → make the database exist under the exclusive **bootstrap flock** (if `links/.dolt` is absent: build a whole Dolt root in the sibling `.links-bootstrap` — `CREATE DATABASE IF NOT EXISTS links` through a first pool that closes before the second opens, then the default branch normalized to `master` — and rename it into place, so the root appears whole or not at all, `store.go`) → open the write connection → under the **commit lock**: normalize the default branch to `master` (renaming a sole non-master branch via `DOLT_BRANCH('-m', …)`, `store.go`) and run migrations. Failure at any point releases everything and returns the error.
 
 `OpenForRead` differs in that it stats the directory first — a missing directory yields "repository not initialized with lit — run 'lit init' first" — never bootstraps, and takes **no** commit lock: it classifies and verifies the schema with reads alone (`assessMigration`, `migration_runner.go`) and serves when nothing would be written. A workspace whose schema trails the binary (a pending version, or applied-version content drift) is closed and reopened through `Open`, which migrates under the commit lock — so a read command still brings a stale workspace forward, but never applies DDL itself, and under a journal-lock holder it fails with the write open's contention refusal rather than a read-only DDL error (`store.go`). Re-opening a current-schema workspace adds **no** Dolt commit; migration is idempotent across opens.
 
-`EnsureDatabase` performs the same validate → lock → adopt-check → bootstrap sequence standalone, returning whether it created the root (`store.go`). `Close` closes the DB (releasing the journal lock) before releasing the workspace lock (`store.go`). `reconnect` — used by the transient-GC retry — opens a new pool, swaps it in, closes the old one, and pings (`store.go`); it is the one place the journal lock is taken while the commit lock is held.
+`EnsureDatabase` performs the same validate → lock → adopt-check → bootstrap sequence standalone, returning whether this call installed the database (`store.go`). `Close` closes the DB (releasing the journal lock) before releasing the workspace lock (`store.go`). `reconnect` — used by the transient-GC retry — opens a new pool, swaps it in, closes the old one, and pings (`store.go`); it is the one place the journal lock is taken while the commit lock is held.
 
 Two `Open`s on one root serialize: the second blocks until the first `Close`. After a SIGKILL mid-commit or mid-migration, a fresh open succeeds — no stale-lock state survives process death, because all locks are kernel flocks.
 
@@ -37,14 +37,15 @@ Every mutation routes through `withMutation(ctx, message, fn)` (`commit_lock.go`
 
 Store-level commit messages used verbatim: `record sync state`, `create issue`, `apply update`, `add comment`, `delete comment` (`store.go`), `purge issue` (`purge.go`), plus `add label`, `remove label`, `replace labels`, `add relation`, `remove relation`, `set parent`, `clear parent`, `rank to top`, `rank set`, `rank to bottom`, `rank above`, `rank below`, `fix rank inversions` from their subsystems (`labels.go`, `relations.go`, `ranking.go`).
 
-### The two locks
+### The three locks
 
 | Lock | Path | Mode | Budget | Notes |
 |---|---|---|---|---|
 | Workspace lock | `.links-workspace.lock` beside the store | shared on open (exclusive users covered in ch. 04) | — | held for the store's lifetime |
+| Bootstrap lock | `.links-bootstrap.lock` beside the store | exclusive | `coResidentHolderWait` of unchanged holders | held only across the existence check and, when the database is absent, its build and install |
 | Commit lock | `.links-commit-flock.lock` in the parent of the dolt root (`commit_lock.go`) | exclusive | `commitLockWaiterBudget()` = `coResidentHolderWait` + `rotationReserve()` = 5.6s of unchanged holders (`commit_lock.go`) | re-entrant via a context key (`commit_lock.go`) |
 
-Both are zero-byte kernel flocks with **no** stale/PID/mtime heuristics — process death is the only release. Contention on the commit lock wraps as "another lit process is writing to this workspace … retry after it completes". A panic inside a mutation still releases the lock; a release failure after a successful operation prints a warning to stderr and returns success (`commit_lock.go`). A cancelled context returns `context.Canceled` rather than burning the budget.
+All three are zero-byte kernel flocks with **no** stale/PID/mtime heuristics — process death is the only release. Contention on the commit lock wraps as "another lit process is writing to this workspace … retry after it completes". A panic inside a mutation still releases the lock; a release failure after a successful operation prints a warning to stderr and returns success (`commit_lock.go`). A cancelled context returns `context.Canceled` rather than burning the budget.
 
 ### Transient-retry classification
 

@@ -206,6 +206,15 @@ Every key is present exactly when the command ended in that refusal.
 | `schema_ahead.remote_schema` | The schema version of the remote branch's head. |
 | `schema_ahead.running_schema_max` | The highest schema version this lit supports. |
 
+## What `lit init` records
+
+Init sets its key once the workspace has a database, so an init that stops
+before then carries its refusal instead.
+
+| Key | Meaning |
+| --- | --- |
+| `init.db_created` | `true` when this init built the database or adopted the remote's; `false` when the database was already there, including one another init built while this one waited for it. |
+
 ## What `lit start` records
 
 A start reads who holds the ticket's lane, confirms a takeover when another
