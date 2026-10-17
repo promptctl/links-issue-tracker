@@ -299,11 +299,11 @@ Test `TestSyncCompactRunsCleanlyAndPreservesData` (`sync_test.go`).
 
 ### 3.7 Remote-cache prune (the other half of push maintenance)
 
-- Key derivation `remoteCacheKey(remoteURL)` (`remotecache.go`): parse URL; if the lowercased scheme lacks the `git+` prefix (`gitBackedURLSchemePrefix`) return `("", false, nil)`. Otherwise strip `git+` from the scheme, clear `RawQuery` and `Fragment`, and key = `hex(sha256(underlying.String() + "|" + defaultGitRemoteRef))` (`remotecache.go`).
+- Keys `remoteMirrorKeys(ctx)` (`remotecache.go`): each git-backed remote's name → `dbfactory.GitRemoteCacheKey(url, params)` over `dolt_remotes`' `url` and `params`, Dolt's own derivation of the directory name (fork patch 8, `FORKS.md`); a remote that is not git-backed has no entry.
 - `isRemoteCacheKey(name)` (`remotecache.go`): exactly 64 chars (`sha256.Size*2`), all-lowercase, valid hex.
 - `remoteCacheBase()` (`remotecache.go`) = `filepath.Join(s.doltRootDir, doltDatabaseName, dbfactory.DoltDir, remoteCacheDirName)`.
 - `listRemoteCacheKeys(base)` (`remotecache.go`): a non-existent base returns `(nil, nil)`; otherwise directory entries that are dirs and pass `isRemoteCacheKey`.
-- **The legality rule** `planRemoteCachePrune(expected, onDisk)` (`remotecache.go`): a directory is abandoned when no configured remote derives its key. If `len(abandoned) > 0 && len(unaccounted) > 0` the prune **declines wholesale** with the long error at `remotecache.go` (names the counts and the `remote→key` pairs). Both lists are sorted (`remotecache.go`).
+- **The legality rule** `splitMirrors(keys, onDisk)` (`remotecache.go`): a directory is abandoned when no configured remote's key names it, and live otherwise; a configured remote with no directory changes neither. Both lists are sorted (`remotecache.go`).
 - `remoteCachePruneOutcome`, a named type over `remoteCacheCollection{Removed int; Reclaimed int64; Problem string}` (`remotecache.go`). `Report()` (`remotecache.go`):
   `report("remote-cache prune", "abandoned mirror", "abandoned mirrors")` over `remoteCacheCollection.report(job, one, many)`:
   - problem + removals → `"%s: removed %d %s (%s), then failed: %s"`

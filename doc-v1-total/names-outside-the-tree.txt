@@ -26,8 +26,6 @@ tryLockFile           github.com/promptctl/primitives/filelock
 unlockFile            github.com/promptctl/primitives/filelock
 doltdb.ErrNoCommonAncestor  Dolt, libraries/doltcore/doltdb
 corruptIndexRecovery  Dolt fork, store/nbs/journal_writer.go
-defaultGitRef         Dolt fork, libraries/doltcore/dbfactory/git_remote.go
-GitRefParam           Dolt fork, libraries/doltcore/dbfactory/git_remote.go
 CollectDBs            Dolt fork, cmd/dolt/commands/engine
 cli.CliErr            Dolt's cmd/dolt/cli package, which lit imports as doltcli
 InitStatusVariables   go-mysql-server fork, sql/variables/status_variables.go
