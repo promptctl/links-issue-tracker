@@ -239,6 +239,12 @@ func TestDependencyOrderGroupsInterleavedFrameMates(t *testing.T) {
 		{ChildID: "f.1", ParentID: "f", ParentRank: "f"},
 		{ChildID: "f.2", ParentID: "f", ParentRank: "f"},
 		{ChildID: "g.1", ParentID: "g", ParentRank: "g"},
+		{ChildID: "h.1", ParentID: "h", ParentRank: "h"},
+		{ChildID: "h.2", ParentID: "h", ParentRank: "h"},
+		{ChildID: "h.3", ParentID: "h", ParentRank: "h"},
+		{ChildID: "k.1", ParentID: "k", ParentRank: "k"},
+		{ChildID: "k.2", ParentID: "k", ParentRank: "k"},
+		{ChildID: "k.3", ParentID: "k", ParentRank: "k"},
 	})
 	order := NewDependencyOrder(ancestry, []DependencyEdge{
 		{Dependent: "a.1", Dependency: "b.1"},     // a waits on b ...
@@ -253,8 +259,14 @@ func TestDependencyOrderGroupsInterleavedFrameMates(t *testing.T) {
 		{Dependent: "f.1", Dependency: "g.1"},     // f waits on g ...
 		{Dependent: "g.1", Dependency: "f.2"},     // ... and g on f: {f, g} ...
 		{Dependent: "f.2", Dependency: "f.1"},     // ... closed into a loop inside f
+		{Dependent: "h.1", Dependency: "k.1"},     // h waits on k ...
+		{Dependent: "k.2", Dependency: "h.2"},     // ... and k on h: {h, k}, no loop ...
+		{Dependent: "h.1", Dependency: "h.3"},     // ... though h.1 sits on a loop in h
+		{Dependent: "h.3", Dependency: "h.1"},
+		{Dependent: "k.1", Dependency: "k.3"}, // ... and k.1 on another in k
+		{Dependent: "k.3", Dependency: "k.1"},
 	})
-	want := [][]string{{"a", "b"}, {"c.1", "c.2", "c.3"}}
+	want := [][]string{{"a", "b"}, {"c.1", "c.2", "c.3"}, {"h", "k"}}
 	if got := order.Interleaved(); !slices.EqualFunc(got, want, slices.Equal) {
 		t.Errorf("Interleaved() = %v, want %v", got, want)
 	}
