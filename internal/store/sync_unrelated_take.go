@@ -276,7 +276,7 @@ func (s *Store) takeRemoteCarryingPurges(ctx context.Context, result *storage.Sy
 			return err
 		}
 		result.State = storage.SyncReconcileTookRemote
-		result.Rehomed = landing.rehomed
+		result.Landing = landing.landing
 		return nil
 	})
 }
@@ -337,7 +337,7 @@ func (s *Store) takeLocalOntoRemoteHead(ctx context.Context, result *storage.Syn
 		}
 		result.State = storage.SyncReconcileTookLocal
 		result.Replayed = landing.replayed
-		result.Rehomed = landing.rehomed
+		result.Landing = landing.landing
 		return nil
 	})
 }

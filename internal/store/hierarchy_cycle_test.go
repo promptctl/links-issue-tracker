@@ -203,7 +203,7 @@ func TestDoctorNamesAStoredParentCycle(t *testing.T) {
 	// The checks this report could not run say so. Otherwise their zero values
 	// are indistinguishable from a clean result, and the status line renders a
 	// check that never happened as a check that found nothing.
-	for _, want := range []string{storage.CheckRankInversions, storage.CheckDependencyCycle} {
+	for _, want := range []string{storage.CheckRankInversions, storage.CheckDuplicateRanks, storage.CheckDependencyCycle} {
 		if !slices.Contains(report.Unchecked, want) {
 			t.Errorf("Doctor().Unchecked = %v, want it to name %s as unrun", report.Unchecked, want)
 		}

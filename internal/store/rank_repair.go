@@ -136,7 +136,15 @@ func rankRewrites(order []rankedIssue, target []string) ([]rankRewrite, error) {
 	for _, at := range anchorRun(target, rankOf) {
 		anchored[at] = true
 	}
+	return spaceMovers(target, rankOf, anchored)
+}
 
+// spaceMovers returns a rank write for every issue in target that is not
+// anchored, spacing each run of them, in target's order, into the gap the
+// anchors on either side leave. The anchors keep their stored ranks, so target
+// is realized exactly when their ranks already ascend along it; a run between
+// two anchors whose ranks pad to the same value has no gap and fails.
+func spaceMovers(target []string, rankOf map[string]string, anchored []bool) ([]rankRewrite, error) {
 	rewrites := make([]rankRewrite, 0, len(target))
 	// Walk target as runs of movers delimited by anchors, closing the final run
 	// at the sentinel index past the end. An absent bound is the empty string,

@@ -1377,12 +1377,12 @@ func TestReplaceFromExportAndSyncState(t *testing.T) {
 			},
 		}},
 	}
-	rehomed, err := st.ReplaceFromExport(ctx, export)
+	landing, err := st.ReplaceFromExport(ctx, export)
 	if err != nil {
 		t.Fatalf("ReplaceFromExport() error = %v", err)
 	}
-	if len(rehomed) != 0 {
-		t.Fatalf("rehomed = %+v, want nothing: the task is inside its epic", rehomed)
+	if len(landing.Rehomed) != 0 {
+		t.Fatalf("rehomed = %+v, want nothing: the task is inside its epic", landing.Rehomed)
 	}
 
 	replaced := getIssueOrFatal(t, ctx, st, "issue-replaced")

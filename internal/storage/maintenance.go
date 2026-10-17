@@ -36,6 +36,7 @@ type Checkpoint struct {
 // pins each one to the tag it names. [LAW:one-source-of-truth]
 const (
 	CheckRankInversions  = "rank_inversions"
+	CheckDuplicateRanks  = "duplicate_ranks"
 	CheckDependencyCycle = "dependency_cycle"
 )
 
@@ -45,12 +46,16 @@ const (
 // rather than omitting them — an absent check and a clean check are different
 // facts, and the capability's presence already says which checks it runs.
 type HealthReport struct {
-	IntegrityCheck     string   `json:"integrity_check"`
-	ForeignKeyIssues   int      `json:"foreign_key_issues"`
-	InvalidRelatedRows int      `json:"invalid_related_rows"`
-	OrphanHistoryRows  int      `json:"orphan_history_rows"`
-	RankInversions     int      `json:"rank_inversions"`
-	DependencyCycle    []string `json:"dependency_cycle"`
+	IntegrityCheck     string `json:"integrity_check"`
+	ForeignKeyIssues   int    `json:"foreign_key_issues"`
+	InvalidRelatedRows int    `json:"invalid_related_rows"`
+	OrphanHistoryRows  int    `json:"orphan_history_rows"`
+	RankInversions     int    `json:"rank_inversions"`
+	// DuplicateRanks counts the rank keys more than one live issue holds. The
+	// order between the holders of one falls to the id tiebreak instead of to
+	// anything a caller ranked.
+	DuplicateRanks  int      `json:"duplicate_ranks"`
+	DependencyCycle []string `json:"dependency_cycle"`
 	// ParentCycle names the members of a loop in the hierarchy, which the write
 	// boundary refuses but older data can still hold. It is reported rather
 	// than repaired because which edge to cut is a judgment about what the

@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os/exec"
 	"slices"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -254,5 +256,64 @@ func TestDoctorPrintsEachWarningItsHealthCheckFinds(t *testing.T) {
 	err = runDoctor(h.ctx, refusingWriter{}, h.ap, []string{"--fix=rank"})
 	if err == nil || !strings.Contains(err.Error(), "stdout is gone") || !strings.Contains(err.Error(), "lit dep rm") {
 		t.Fatalf("runDoctor(--fix=rank) to a refusing stdout error = %v, want both the write failure and the rank repair's refusal", err)
+	}
+}
+
+// runDoctorRecorded is doctor's parse and work under a recorder the test keeps,
+// ended the way the dispatcher ends it, so it can read the facts the
+// invocation's event carries beside what it printed.
+func runDoctorRecorded(t *testing.T, h readyTestHarness, args ...string) (map[string]any, string) {
+	t.Helper()
+	recorder := telemetry.Begin(telemetry.Event{})
+	ctx := telemetry.With(h.ctx, recorder)
+	l := doctorLeaf()
+	var out bytes.Buffer
+	positional, err := parseLeaf(ctx, l, args, &out)
+	if err != nil {
+		t.Fatalf("parseLeaf: %v", err)
+	}
+	err = l.work(ctx, &out, h.ap, positional)
+	if err != nil {
+		t.Fatalf("doctor %v error = %v\n%s", args, err, out.String())
+	}
+	return writtenFacts(t, recorder.Finish(invocationEnd(time.Now(), err, nil))), out.String()
+}
+
+// A key two live tickets hold is named on the status line, in a warning line,
+// and on the invocation's event; `--fix rank` gives each holder its own key,
+// and the report it leaves says none is shared.
+func TestDoctorReportsASharedRankKeyAndFixSeparatesIt(t *testing.T) {
+	h := newReadyTestHarness(t)
+	first := h.createIssue(storage.CreateIssueInput{Title: "first", Topic: "rank", IssueType: "epic"})
+	h.createIssue(storage.CreateIssueInput{Title: "second", Topic: "rank", IssueType: "epic"})
+	third := h.createIssue(storage.CreateIssueInput{Title: "third", Topic: "rank", IssueType: "epic"})
+	raw, err := storage.TestSupport.Of(h.ap.Store)
+	if err != nil {
+		t.Fatalf("TestSupport: %v", err)
+	}
+	if err := raw.ExecRawForTest(h.ctx, `UPDATE issues SET item_rank = ? WHERE id = ?`, first.Rank, third.ID); err != nil {
+		t.Fatalf("plant the shared key: %v", err)
+	}
+	holders := []string{first.ID, third.ID}
+	slices.Sort(holders)
+
+	facts, out := runDoctorRecorded(t, h)
+	if !strings.Contains(out, " duplicate_ranks=1 ") {
+		t.Errorf("status line lacks duplicate_ranks=1:\n%s", out)
+	}
+	warning := fmt.Sprintf("warning: duplicate rank keys: 1 (%q shared by %s; ", first.Rank, strings.Join(holders, ", "))
+	if !strings.Contains(out, warning) {
+		t.Errorf("output lacks %q:\n%s", warning, out)
+	}
+	if facts["doctor.duplicate_ranks"] != "1" {
+		t.Errorf("event fact doctor.duplicate_ranks = %v, want \"1\"", facts["doctor.duplicate_ranks"])
+	}
+
+	facts, out = runDoctorRecorded(t, h, "--fix=rank")
+	if !strings.Contains(out, " duplicate_ranks=0 ") || strings.Contains(out, "warning: ") {
+		t.Errorf("after --fix=rank the report still names a shared key:\n%s", out)
+	}
+	if facts["doctor.duplicate_ranks"] != "0" {
+		t.Errorf("event fact doctor.duplicate_ranks after the fix = %v, want \"0\"", facts["doctor.duplicate_ranks"])
 	}
 }

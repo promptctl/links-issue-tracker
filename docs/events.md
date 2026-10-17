@@ -274,6 +274,15 @@ the ones it had.
 | `downgrade.snapshot_prune_error` | Why older downgrade snapshots could not be removed after the reverse, or `null`. The downgrade prints the failure as a `warning:` line and still installs the `--to` release. |
 | `downgrade.installed_path` | The path the `--to` release was installed to. Absent when nothing was installed. |
 
+## What `lit doctor` records
+
+Doctor sets its keys once the report it prints is read, after any `--fix`
+repairs have run, so they describe the state the command left behind.
+
+| Key | Meaning |
+| --- | --- |
+| `doctor.duplicate_ranks` | The rank keys more than one live issue holds, as the status line prints it: a count such as `"0"`, or `"unchecked"` when a parent cycle kept the check from running. |
+
 ## Reading the file
 
 `jq` answers most questions directly. The last ten `lit next` decisions made in

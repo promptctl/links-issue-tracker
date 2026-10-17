@@ -291,33 +291,21 @@ func idStabilityFindings(dump RawDump, m ShapeMapping, export model.Export) []Ve
 // landing in rank ("0", "1", ...) collide, so distinctness fails. Empty ranks are
 // unranked issues — legitimately many — so only non-empty ranks are checked.
 func rankFindings(export model.Export) []VerifyFinding {
-	idsByRank := map[string][]string{}
+	ranked := make([]rankedIssue, len(export.Issues))
 	var malformed []string
-	for _, issue := range export.Issues {
-		if issue.Rank == "" {
-			continue
-		}
-		if !rank.Valid(issue.Rank) {
+	for i, issue := range export.Issues {
+		ranked[i] = rankedIssue{id: issue.ID, rank: issue.Rank}
+		if issue.Rank != "" && !rank.Valid(issue.Rank) {
 			malformed = append(malformed, fmt.Sprintf("%s=%q", issue.ID, issue.Rank))
 		}
-		idsByRank[issue.Rank] = append(idsByRank[issue.Rank], issue.ID)
 	}
-
-	var collisions []string
-	for r, ids := range idsByRank {
-		if len(ids) > 1 {
-			sort.Strings(ids)
-			collisions = append(collisions, fmt.Sprintf("%q shared by %s", r, strings.Join(ids, ", ")))
-		}
-	}
-	sort.Strings(collisions)
 	sort.Strings(malformed)
 
 	var out []VerifyFinding
-	if len(collisions) > 0 {
+	if collisions := rankCollisions(ranked); len(collisions) > 0 {
 		out = append(out, VerifyFinding{
 			Law:    LawRank,
-			Detail: fmt.Sprintf("ranks are not distinct (a valid order needs one rank per issue): %s", strings.Join(collisions, "; ")),
+			Detail: fmt.Sprintf("ranks are not distinct (a valid order needs one rank per issue): %s", describeRankCollisions(collisions)),
 		})
 	}
 	if len(malformed) > 0 {

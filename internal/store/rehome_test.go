@@ -220,12 +220,12 @@ func TestRestoreHomesWhatTheBackupLeavesOutsideAnEpic(t *testing.T) {
 			t.Fatalf("Purge(%s): %v", gone.ID, err)
 		}
 
-		rehomed, err := st.ReplaceFromExport(ctx, backup)
+		landing, err := st.ReplaceFromExport(ctx, backup)
 		if err != nil {
 			t.Fatalf("ReplaceFromExport: %v", err)
 		}
-		if want := []storage.Rehomed{{IssueID: child.ID, Epic: testUnfiled}}; !reflect.DeepEqual(rehomed, want) {
-			t.Errorf("rehomed = %+v, want %+v", rehomed, want)
+		if want := []storage.Rehomed{{IssueID: child.ID, Epic: testUnfiled}}; !reflect.DeepEqual(landing.Rehomed, want) {
+			t.Errorf("rehomed = %+v, want %+v", landing.Rehomed, want)
 		}
 		assertHomedUnder(t, ctx, st, child.ID, testUnfiled)
 	})
@@ -241,12 +241,12 @@ func TestRestoreHomesWhatTheBackupLeavesOutsideAnEpic(t *testing.T) {
 		}
 		backup.Relations = nil
 
-		rehomed, err := st.ReplaceFromExport(ctx, backup)
+		landing, err := st.ReplaceFromExport(ctx, backup)
 		if err != nil {
 			t.Fatalf("ReplaceFromExport: %v", err)
 		}
-		if want := []storage.Rehomed{{IssueID: loose.ID, Epic: testUnfiled}}; !reflect.DeepEqual(rehomed, want) {
-			t.Errorf("rehomed = %+v, want %+v", rehomed, want)
+		if want := []storage.Rehomed{{IssueID: loose.ID, Epic: testUnfiled}}; !reflect.DeepEqual(landing.Rehomed, want) {
+			t.Errorf("rehomed = %+v, want %+v", landing.Rehomed, want)
 		}
 		assertHomedUnder(t, ctx, st, loose.ID, testUnfiled)
 	})

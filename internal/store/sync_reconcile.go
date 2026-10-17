@@ -715,7 +715,7 @@ func (s *Store) newSpineWriter(ctx context.Context, branch string) (*spineWriter
 }
 
 // land commits next onto the spine under stamp, with every ticket inside an
-// epic, and names the tickets it had to move. It switches to the spine branch
+// epic and every rank key held by one issue, and says what it had to change. It switches to the spine branch
 // first because the caller is expected to have just read history on the read
 // branch; the switch is unconditional so that no landing depends on which
 // branch a previous operation happened to leave the session on.
@@ -723,18 +723,22 @@ func (s *Store) newSpineWriter(ctx context.Context, branch string) (*spineWriter
 //
 // Every sync write lands through here — each folded commit's projection and
 // every settling export, merged or taken — so this is where a backlog the data
-// added up to is brought under containment: a purge on one side can drop the
-// epic a ticket on the other side was filed under. [LAW:single-enforcer]
-func (w *spineWriter) land(ctx context.Context, next model.Export, stamp commitStamp) ([]storage.Rehomed, error) {
+// added up to is brought under the store's rules: a purge on one side can drop
+// the epic a ticket on the other side was filed under, and two sides that each
+// ranked a different pair can merge two rows onto one key. [LAW:single-enforcer]
+func (w *spineWriter) land(ctx context.Context, next model.Export, stamp commitStamp) (storage.Landing, error) {
 	if err := execProcedureDiscard(ctx, w.store.db, "DOLT_CHECKOUT", w.branch); err != nil {
-		return nil, fmt.Errorf("switch to reconcile spine branch %q: %w", w.branch, err)
+		return storage.Landing{}, fmt.Errorf("switch to reconcile spine branch %q: %w", w.branch, err)
 	}
-	contained, rehomed := storage.HomeStranded(next)
-	if err := w.store.replayDeltaOnScratch(ctx, diffExports(w.landed, contained), stamp); err != nil {
-		return nil, err
+	landed, landing, err := landExport(next)
+	if err != nil {
+		return storage.Landing{}, err
 	}
-	w.landed = contained
-	return rehomed, nil
+	if err := w.store.replayDeltaOnScratch(ctx, diffExports(w.landed, landed), stamp); err != nil {
+		return storage.Landing{}, err
+	}
+	w.landed = landed
+	return landing, nil
 }
 
 // holdForCollisions is the ONE conversion from "an id names two tickets" to a
@@ -822,7 +826,7 @@ func (s *Store) mergeAndReplay(ctx context.Context, result *storage.SyncReconcil
 	result.State = settledState
 	result.Pending = nil
 	result.Replayed = landing.replayed
-	result.Rehomed = landing.rehomed
+	result.Landing = landing.landing
 	result.ProseRecorded = settled.proseRecorded
 	return nil
 }
@@ -936,14 +940,14 @@ func (s *Store) commitReplayAndAdvance(ctx context.Context, guard *snapshotGuard
 		if err != nil {
 			return replayLanding{}, err
 		}
-		// A step's moves are not reported: the settling export below is what
-		// the backlog holds once the replay is done, and its moves are the ones
-		// that stand.
+		// A step's landing is not reported: the settling export below is what
+		// the backlog holds once the replay is done, and its landing is the one
+		// that stands.
 		if _, err := writer.land(ctx, step.export, step.stamp); err != nil {
 			return replayLanding{}, fmt.Errorf("replay folded commit %q: %w", step.stamp.Message, err)
 		}
 	}
-	rehomed, err := writer.land(ctx, export, commitStamp{Message: message, AllowEmpty: true})
+	landing, err := writer.land(ctx, export, commitStamp{Message: message, AllowEmpty: true})
 	if err != nil {
 		return replayLanding{}, err
 	}
@@ -998,15 +1002,14 @@ func (s *Store) commitReplayAndAdvance(ctx context.Context, guard *snapshotGuard
 	if err := dbsnapshot.PruneMatching(s.doltRootDir, reconcileSnapshotRetention, IsReconcileSnapshotName); err != nil {
 		fmt.Fprintf(os.Stderr, "lit: reconcile could not prune old recovery snapshots (replay already committed): %v\n", err)
 	}
-	return replayLanding{replayed: replayed, rehomed: rehomed}, nil
+	return replayLanding{replayed: replayed, landing: landing}, nil
 }
 
 // replayLanding is what a replay landed: how many of the folded side's commits
-// landed ahead of the marker, and the tickets the settling export moved into an
-// epic.
+// landed ahead of the marker, and what landing the settling export changed.
 type replayLanding struct {
 	replayed int
-	rehomed  []storage.Rehomed
+	landing  storage.Landing
 }
 
 // countCommitsInRange counts the commits reachable from head but not from

@@ -3065,9 +3065,21 @@ Pure and DB-free, in `internal/store/rank_repair.go`; `FixRankInversions` suppli
 
 `stableTopoOrder(order, edges)` — `internal/store/rank_repair.go`: Kahn's algorithm over `projectEdges`, with the ready set held ascending by position in `order` (`slices.Insert` at `sort.SearchInts`), so each step emits the issue that stood earliest in the backlog among those whose dependencies are all placed. An issue falls behind one that stood after it only while it waits on a dependency, so an order that already satisfies every edge comes back unchanged. Ordering by position rather than by id is what keeps the tiebreak off id spelling. When Kahn stalls (`len(sorted) < len(order)`) it returns `&blocksCycleError{path: findBlocksCycle(constraints)}` rather than the partial sequence.
 
-`rankRewrites(order, target)` — `internal/store/rank_repair.go`: marks the indices `anchorRun` returns and walks `target` as runs of movers delimited by anchors, closing the final run at the sentinel index past the end. Each run is spaced into the open interval its neighbouring anchors bound, via `rank.SpacedRanksBetween(lower, upper, len(movers))`; an absent bound is `""`, which that primitive reads as "past that end", so a run at either extreme — and a target with no anchors at all — needs no special case. Error → `fmt.Errorf("space %d rank(s) between %q and %q: %w", len(movers), lower, upper, err)`.
+`rankRewrites(order, target)` — `internal/store/rank_repair.go`: builds `rankOf` from `order`, marks the indices `anchorRun` returns, and returns `spaceMovers(target, rankOf, anchored)`.
+
+`spaceMovers(target, rankOf, anchored)` — `internal/store/rank_repair.go`: a rank write for every unanchored issue in `target`; walks `target` as runs of movers delimited by anchors, closing the final run at the sentinel index past the end. Each run is spaced into the open interval its neighbouring anchors bound, via `rank.SpacedRanksBetween(lower, upper, len(movers))`; an absent bound is `""`, which that primitive reads as "past that end", so a run at either extreme — and a target with no anchors at all — needs no special case. Error → `fmt.Errorf("space %d rank(s) between %q and %q: %w", len(movers), lower, upper, err)`.
 
 `anchorRun(target, rankOf)` — `internal/store/rank_repair.go`: a longest subsequence of `target` strictly increasing by `rank.Significant` of the stored rank, by patience sort (`keys` computed once, `tails` + `prev`, `sort.Search` over `tails`). The repair does not write issues in the run, so they keep their place and their `updated_at`, and the rewrite count is the count of issues the new order actually moved; smoothing may still re-space their rank strings (see `FixRankInversions`). Movers are spaced into the gap two anchors bound, and two ranks with the same significant part (`"V"` and `"V0"`) leave none, so an anchor's significant rank must sort strictly above the one before it. It must also satisfy `rank.Valid`, which the empty significant rank of an unranked or all-zero issue does not; those issues are therefore always movers, which hands them a real rank on the way past.
+
+`rankCollision{key, ids}` — `internal/store/rank_collisions.go`: one rank key more than one issue holds, and its holders sorted by id.
+
+`rankCollisions(issues []rankedIssue) []rankCollision` — `internal/store/rank_collisions.go`: groups the issues by rank, skipping an empty rank (unranked, not a key), keeps each key with two or more holders, sorts each key's ids, and returns the collisions sorted by key (an empty, non-nil slice when none). The one definition of a duplicate rank: `Doctor` counts it, `separateRankCollisions` removes it, `rankFindings` refuses on it.
+
+`describeRankCollisions(collisions) string` — `internal/store/rank_collisions.go`: each collision as `%q shared by <ids joined by ", ">`, the collisions joined by `"; "`.
+
+`separateRankCollisions(export) (model.Export, []storage.Rekeyed, error)` — `internal/store/rank_collisions.go`: pure. Takes the issues with a non-empty rank as `rankedIssue`s; with no `rankCollisions`, returns `export` unchanged and nil. Otherwise sorts them by rank then id, anchors every issue whose key no other holds, leaves every holder of a shared key unanchored, and calls `spaceMovers`; an error → `fmt.Errorf("separate shared rank keys (%s): %w", describeRankCollisions(collisions), err)`. Returns a copy of the export with each mover's new rank, and one `storage.Rekeyed{IssueID, Shared, Rank}` per mover, in listed order. Every holder of a shared key moves; every listing keeps its order; two clones separating the same collision write the same keys. Test-pinned in `internal/store/rank_collisions_test.go`: a generated-export property test (no key shared afterwards, listed order kept, unshared keys and empty ranks untouched, exactly the holders named), and a refusal wrapping `rank.ErrNoRoom` when a shared key's neighbours pad to the same value.
+
+`landExport(export) (model.Export, storage.Landing, error)` — `internal/store/rank_collisions.go`: `storage.HomeStranded(export)`, then `separateRankCollisions` on its result (an error returned as is), returning `storage.Landing{Rehomed, Rekeyed}`. Called by `ReplaceFromExport` and `spineWriter.land`, never by `rebuildFromExport`.
 
 `Store.FixRankInversions(ctx) (int, error)` — `internal/store/ranking.go`:
 1. `liveIssueIDs(ctx)` **before** the transaction; error → `fmt.Errorf("fix rank inversions: snapshot live set: %w", err)`. The repair mutates only `item_rank`, so closure status is invariant across the write.
@@ -3449,7 +3461,7 @@ Delete error text: `execDelete` wraps as `"delete %s: %w"` and `"delete %s: rows
 
 `replayDeltaOnScratch(ctx, delta, stamp)` (`sync_reconcile.go`): under `withCommitLock`, `BeginTx` → `applyExportDelta` → `tx.Commit()` → `commitWorkingSetOnce(ctx, stamp)`. Deliberately a **single attempt** with no self-rotating transient retry (`sync_reconcile.go`); errors bubble to the outer scratch-rebuilding retry. Error texts: `"begin %s tx: %w"` and `"commit %s tx: %w"` with `stamp.Message` interpolated (`sync_reconcile.go`).
 
-`spineWriter.land` does `DOLT_CHECKOUT <spine branch>` first, unconditionally (`sync_reconcile.go`, error `"switch to reconcile spine branch %q: %w"`), then `contained, rehomed := storage.HomeStranded(next)`, then `replayDeltaOnScratch(ctx, diffExports(w.landed, contained), stamp)`, then advances `w.landed = contained` only on success and returns `rehomed` (`sync_reconcile.go`).
+`spineWriter.land` does `DOLT_CHECKOUT <spine branch>` first, unconditionally (`sync_reconcile.go`, error `"switch to reconcile spine branch %q: %w"`), then `landed, landing, err := landExport(next)` (an error returned as is), then `replayDeltaOnScratch(ctx, diffExports(w.landed, landed), stamp)`, then advances `w.landed = landed` only on success and returns `landing` (`sync_reconcile.go`).
 
 `commitStamp` (`internal/store/commit_lock.go`): `Message string`, `Date time.Time` (non-zero → `--date`, second-granular), `Author string` (non-empty → `--author "Name <email>"`), `AllowEmpty bool`.
 
@@ -3473,9 +3485,9 @@ Delete error text: `execDelete` wraps as `"delete %s: %w"` and `"delete %s: rows
 
 ### 3.1 Entry point and transaction
 
-`func (s *Store) ReplaceFromExport(ctx context.Context, export model.Export) ([]storage.Rehomed, error)` (`import_export.go`) is the restore. It runs under `withStampedMutation` with `commitStamp{Message: "replace from export"}` — the Dolt commit message for a restore is the literal string **`replace from export`** — i.e. under the commit lock, inside one `sql.Tx`, followed by `commitWorkingSetOnce`, with the transient-GC retry wrapping the whole staging+versioning unit (`commit_lock.go`). So it **is transactional** at the SQL level and **does commit** a Dolt commit. It returns the moves `storage.HomeStranded` made, assigned on every attempt so a retried mutation returns the committing attempt's.
+`func (s *Store) ReplaceFromExport(ctx context.Context, export model.Export) (storage.Landing, error)` (`import_export.go`) is the restore. It runs under `withStampedMutation` with `commitStamp{Message: "replace from export"}` — the Dolt commit message for a restore is the literal string **`replace from export`** — i.e. under the commit lock, inside one `sql.Tx`, followed by `commitWorkingSetOnce`, with the transient-GC retry wrapping the whole staging+versioning unit (`commit_lock.go`). So it **is transactional** at the SQL level and **does commit** a Dolt commit. It returns the `storage.Landing` `landExport` computed, assigned on every attempt so a retried mutation returns the committing attempt's; on error it returns the zero `storage.Landing`.
 
-`func (s *Store) rebuildFromExport(ctx context.Context, export model.Export, stamp commitStamp) error` (`import_export.go`) is the same transaction under the caller's stamp without the homing: `RebuildCandidate` writes the recovery candidate through it with `commitStamp{Message: "replace from export"}`, so the verify gate's row counts and id set compare against the dump, and tests plant states through it.
+`func (s *Store) rebuildFromExport(ctx context.Context, export model.Export, stamp commitStamp) error` (`import_export.go`) is the same transaction under the caller's stamp without `landExport`: `RebuildCandidate` writes the recovery candidate through it with `commitStamp{Message: "replace from export"}`, so the verify gate's row counts and id set compare against the dump, and tests plant states through it.
 
 ### 3.2 What it does
 
@@ -3486,9 +3498,12 @@ cut, err := cutByHeldPurges(ctx, tx, export)
 if err != nil {
     return err
 }
-var contained model.Export
-contained, rehomed = storage.HomeStranded(cut)
-return writeWholeExportTx(ctx, tx, contained)
+var landed model.Export
+landed, landing, err = landExport(cut)
+if err != nil {
+    return err
+}
+return writeWholeExportTx(ctx, tx, landed)
 ```
 
 The rebuild's is `cutByHeldPurges` then `writeWholeExportTx(ctx, tx, cut)`. `cutByHeldPurges` (`import_export.go`) is `held, err := listPurges(ctx, tx)` (error returned as is), then `export.ApplyPurges(model.UnionPurges(held, export.Purges))`. `writeWholeExportTx` (`import_export.go`):
@@ -3505,6 +3520,8 @@ return applyExportDelta(ctx, tx, diffExports(model.Export{}, export))
 A restore never un-purges: the store's own purge records are read before the clear, unioned with the export's, and the export is cut by the union (`ApplyPurges`), so a backup taken before a purge lands without the purged issue and every record survives the rewrite (`import_export.go`). Pinned by `TestRestoreNeverUnpurges` (`internal/store/purge_test.go`).
 
 A restore lands every ticket inside an epic: `storage.HomeStranded` (`01-data-model.md`) moves each ticket the cut export holds outside one — a backup from before migration v7 holds top-level leaves, and one taken before a purge can hold a child of the purged epic, whose edge the cut removed. Pinned by `TestRestoreHomesWhatTheBackupLeavesOutsideAnEpic` (`internal/store/rehome_test.go`).
+
+A restore lands every rank key held by one issue: `separateRankCollisions` gives each holder of a key the cut export shares a key of its own, in listed order, after the homing (`04-store-operations.md`). Pinned by `TestRestoreSeparatesASharedRankKey` (`internal/store/rank_collisions_test.go`).
 
 Deletion order is literally `labels, comments, relations, issues, purges`. `issue_events` and `issue_event_changes` are deliberately **not** named — they cascade from `issues` (`import_export.go`). Error text: `"clear labels: …"`, `"clear comments: …"`, etc.
 
@@ -3563,7 +3580,7 @@ Events (`insertEventTx`, `import_export.go`):
 
 ### 3.5 The surrounding CLI restore flow
 
-`restoreFromExportPath` (`internal/cli/backup.go`), in order: acquire `storage.Sync.Of(ap.Store)` and `storage.Import.Of(ap.Store)` capabilities up front; `syncfile.Read(restorePath)`; `ap.Store.Export(ctx)` for the local state; `syncer.GetSyncState`; if a sync state exists and `--force` was not passed, hash `last-sync-base.json` and compare against `hashExport(localExport)` — mismatch → `MergeConflictError{Message: "restore conflict: local workspace has unsynced changes since last sync base"}` (`backup.go`); `backup.Create` a pre-restore snapshot; `backup.Prune(dir, 20)`; `rehomed := importer.ReplaceFromExport`; re-`Export` and `syncfile.WriteAtomic(syncBasePath(ap), restoredExport)`; `syncfile.HashFile(restorePath)`; `syncer.RecordSyncState({Path, ContentHash})`; return `rehomed`. `restoreFromExportPath` wraps that sequence (`restoreFromExport`) and, on the way out whatever the outcome, records one sync trace record: `recordSyncCommandTrace(ws, "lit backup restore", "restored", err, metadata)` with metadata `path`, `rehomed`, `rehomed_moves` (`rehomedMetadata`, `internal/cli/rehomed_report.go`). The leaf prints `restored <path>`, then `writeRehomed(stdout, "the backup", rehomed)`.
+`restoreFromExportPath` (`internal/cli/backup.go`), in order: acquire `storage.Sync.Of(ap.Store)` and `storage.Import.Of(ap.Store)` capabilities up front; `syncfile.Read(restorePath)`; `ap.Store.Export(ctx)` for the local state; `syncer.GetSyncState`; if a sync state exists and `--force` was not passed, hash `last-sync-base.json` and compare against `hashExport(localExport)` — mismatch → `MergeConflictError{Message: "restore conflict: local workspace has unsynced changes since last sync base"}` (`backup.go`); `backup.Create` a pre-restore snapshot; `backup.Prune(dir, 20)`; `landing := importer.ReplaceFromExport`; re-`Export` and `syncfile.WriteAtomic(syncBasePath(ap), restoredExport)`; `syncfile.HashFile(restorePath)`; `syncer.RecordSyncState({Path, ContentHash})`; return `landing`. `restoreFromExportPath` wraps that sequence (`restoreFromExport`) and, on the way out whatever the outcome, records one sync trace record: `recordSyncCommandTrace(ws, "lit backup restore", "restored", err, metadata)` with metadata `path`, `rehomed`, `rehomed_moves`, `rekeyed`, `rekeyed_ids` (`landingMetadata`, `internal/cli/landing_report.go`). The leaf prints `restored <path>`, then `writeLanding(stdout, "the backup", landing)`.
 
 `hashExport` uses `json.MarshalIndent(export, "", "  ")` (`backup.go`) — note: **no trailing newline**, unlike `syncfile.marshalExport`.
 
@@ -3582,8 +3599,9 @@ Usage strings: `restoreUsage = "usage: lit backup restore (--latest | --path <ex
 - `SELECT COUNT(*) FROM issue_events e LEFT JOIN issues i ON i.id = e.issue_id WHERE i.id IS NULL` → `OrphanHistoryRows`; wrap `"count orphan event rows: %w"`; warning `"orphan issue event rows: %d"`.
 - `containmentFindings(ctx, s.db)` (`import_export.go`), error wrap `"containment check: %w"`: one query lists every non-epic with no parent-child edge and every parent-child edge onto a non-epic; warning `"tickets outside an epic: %s (every ticket except an epic lives inside one; move each into the epic it belongs to with 'lit parent set --child <id> --parent <epic-id>')"` naming each as `id (type)`, and warning `"tickets under a parent that is not an epic: %s (only an epic contains tickets; …)"` naming each as `id under parent (parent type)`. Column reads, so it runs before the parent-cycle check.
 - `loadRankAncestry(ctx, s.db)`, error wrap `"rank ancestry: %w"`; each `ancestry.Conflicts()` entry appends its `Finding()` as an error line, and the checks below still run.
-- `s.liveIssueIDs(ctx)`, `loadRankOrder(ctx, s.db, liveIDs)` and `loadBlocksEdges(ctx, s.db)`, loaded once for both rank checks; each error wraps `"rank checks: %w"`.
+- `s.liveIssueIDs(ctx)`, `loadRankOrder(ctx, s.db, liveIDs)` and `loadBlocksEdges(ctx, s.db)`, loaded once for the three rank checks; each error wraps `"rank checks: %w"`.
 - `RankInversions = len(invertedEdges(order, edges))`; warning `"rank inversions: %d (dependencies ranked below dependents)"`.
+- `duplicates := rankCollisions(order)`; `DuplicateRanks = len(duplicates)`; warning `"duplicate rank keys: %d (%s; each key's holders list by id instead of by rank — 'lit doctor --fix rank' gives each its own key without changing the order)"` with `describeRankCollisions(duplicates)`.
 - `blocksCycle(order, edges)` non-empty → `DependencyCycle`; warning `"blocked-by dependency cycle: %s (no rank order exists; remove one edge with 'lit dep rm' to break it)"` with members joined by `" -> "`.
 
 `FixIntegrity` (`import_export.go`) always runs the repair under `withMutation(ctx, "fix integrity", …)` — Dolt commit message literal **`fix integrity`** — executing exactly three statements:
@@ -3993,7 +4011,7 @@ Findings are **all treated identically** — any finding at all makes `Reconcile
 ### 1.4 Check family 1 — HEALTH (`healthFindings`, `verify.go`)
 
 - Input is `storage.HealthReport` (`internal/storage/maintenance.go`), whose fields are:
-  `IntegrityCheck string` (json `integrity_check`), `ForeignKeyIssues int` (`foreign_key_issues`), `InvalidRelatedRows int` (`invalid_related_rows`), `OrphanHistoryRows int` (`orphan_history_rows`), `RankInversions int` (`rank_inversions`), `DependencyCycle []string` (`dependency_cycle`), `ParentCycle []string` (`parent_cycle`), `Unchecked []string` (`unchecked`), `Errors []string` (`errors`), `Warnings []string` (`warnings`).
+  `IntegrityCheck string` (json `integrity_check`), `ForeignKeyIssues int` (`foreign_key_issues`), `InvalidRelatedRows int` (`invalid_related_rows`), `OrphanHistoryRows int` (`orphan_history_rows`), `RankInversions int` (`rank_inversions`), `DuplicateRanks int` (`duplicate_ranks`), `DependencyCycle []string` (`dependency_cycle`), `ParentCycle []string` (`parent_cycle`), `Unchecked []string` (`unchecked`), `Errors []string` (`errors`), `Warnings []string` (`warnings`).
 - Only `h.Errors` become findings; each error string becomes `VerifyFinding{Law: LawHealth, Detail: e}` verbatim (`verify.go`).
 - `h.Warnings` are **discarded** — explicitly, so a faithful rebuild of messy source is not rejected (`verify.go`). This is the one advisory-vs-fatal split in the whole gate.
 - The slice is preallocated `make([]VerifyFinding, 0, len(h.Errors))` — non-nil even when empty (`verify.go`).
@@ -4010,8 +4028,9 @@ The concrete checks whose text can appear as a `health` finding, in `Doctor`'s e
 4. **Orphan event rows.** SQL: `SELECT COUNT(*) FROM issue_events e LEFT JOIN issues i ON i.id = e.issue_id WHERE i.id IS NULL` (`import_export.go`). Error → `count orphan event rows: %w`. If > 0, **warning** `orphan issue event rows: %d` (`import_export.go`) — ignored by verify.
    **Containment.** `containmentFindings(ctx, s.db)` (`import_export.go`): a non-epic with no parent-child edge, or a parent-child edge onto a non-epic, is a **warning** naming each and the repair `lit parent set --child <id> --parent <epic-id>` — ignored by verify, so a faithful rebuild of a pre-v7 source is not refused.
 5. **Parent conflicts.** `loadRankAncestry(ctx, s.db)` (`import_export.go`); each child more than one framing edge claims (`ancestry.Conflicts()`) appends **error** `%s has %d parents (%s); it lists under %s, the lowest id, until one remains — ...` (`internal/storage/rank.go`). The checks below still run.
-6. **Rank inversions.** Computed in Go: `s.liveIssueIDs(ctx)`, `loadRankOrder(ctx, s.db, liveIDs)` and `loadBlocksEdges(ctx, s.db)` load once for this check and the next (`import_export.go`); each error → `rank checks: %w`. `RankInversions = len(invertedEdges(order, edges))` (`import_export.go`); if > 0, **warning** `rank inversions: %d (dependencies ranked below dependents)` (`import_export.go`) — ignored by verify.
-7. **Blocked-by dependency cycle.** `blocksCycle(order, edges)` over the same load (`import_export.go`). If non-empty, sets `DependencyCycle` and appends **warning** `blocked-by dependency cycle: %s (no rank order exists; remove one edge with 'lit dep rm' to break it)` with members joined by `" -> "` (`import_export.go`) — ignored by verify.
+6. **Rank inversions.** Computed in Go: `s.liveIssueIDs(ctx)`, `loadRankOrder(ctx, s.db, liveIDs)` and `loadBlocksEdges(ctx, s.db)` load once for this check and the next two (`import_export.go`); each error → `rank checks: %w`. `RankInversions = len(invertedEdges(order, edges))` (`import_export.go`); if > 0, **warning** `rank inversions: %d (dependencies ranked below dependents)` (`import_export.go`) — ignored by verify.
+7. **Duplicate rank keys.** `rankCollisions(order)` over the same live order (`import_export.go`); `DuplicateRanks` is its length, and if > 0, **warning** `duplicate rank keys: %d (<"key" shared by a, b; …>; each key's holders list by id instead of by rank — 'lit doctor --fix rank' gives each its own key without changing the order)` (`import_export.go`) — ignored by verify.
+8. **Blocked-by dependency cycle.** `blocksCycle(order, edges)` over the same load (`import_export.go`). If non-empty, sets `DependencyCycle` and appends **warning** `blocked-by dependency cycle: %s (no rank order exists; remove one edge with 'lit dep rm' to break it)` with members joined by `" -> "` (`import_export.go`) — ignored by verify.
 
 Net effect: only checks 1 and 2 (constraint violations, foreign-key violations) can ever fail the verify health half.
 
@@ -4055,10 +4074,10 @@ Test pin: `TestIDStabilityFindingsDetectsLostAndExtraIDs` requires exactly 2 fin
 ### 1.7 Check family 4 — RANK PERMUTATION (`rankFindings`, `verify.go`)
 
 Operates purely on `export.Issues`; the dump/mapping are not consulted (`verify.go`).
-- Issues with `Rank == ""` are skipped entirely — unranked is legal (`verify.go`).
+- Every issue becomes a `rankedIssue`; one with `Rank == ""` takes part in neither check — unranked is legal (`verify.go`, `rank_collisions.go`).
 - Well-formedness: `rank.Valid(issue.Rank)` (`verify.go`). `rank.Valid` returns false for the empty string and for any string containing a byte outside the base-62 alphabet `0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz` (`internal/rank/rank.go`, `rank.go`). Malformed entries are recorded as `%s=%q` (id, rank) (`verify.go`).
-- Distinctness: ranks are grouped into `idsByRank`; any rank with more than one id is a collision, rendered as `%q shared by %s` with the ids sorted and joined by `", "` (`verify.go`).
-- Both `collisions` and `malformed` are sorted before rendering, for determinism (`verify.go`).
+- Distinctness: `rankCollisions` (`rank_collisions.go`) groups the issues by rank; any rank with more than one id is a collision, and `describeRankCollisions` renders each as `%q shared by %s` with the ids sorted and joined by `", "`.
+- Collisions come back sorted by key and `malformed` is sorted before rendering, for determinism (`verify.go`, `rank_collisions.go`).
 - Findings emitted in this order, both `LawRank`:
   - collisions (`verify.go`): `ranks are not distinct (a valid order needs one rank per issue): %s` — collision clauses joined by `"; "`.
   - malformed (`verify.go`): `%d issue(s) carry a value that is not a well-formed rank: %s` — entries joined by `", "`.
