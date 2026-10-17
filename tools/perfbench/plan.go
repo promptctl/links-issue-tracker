@@ -105,7 +105,10 @@ var probes = []probe{
 // in rowsPerEpic is an epic, an epic's children wait on each other in rank
 // order, and blockedEveryNth wires a third of the tasks behind another epic's
 // work. `lit stores --counts` on a generated 590-row store reports 40 ready
-// and 491 blocked; on a 118-row store, 8 and 98.
+// and 491 blocked; on a 118-row store, 8 and 98. The live store's 118 open
+// rows are 47 ready, because its epics run children in parallel lanes, and
+// `lit import` sets no lane, so a generated epic is one lane, ready only at its
+// head.
 //
 // Both numbers matter and neither is this repository's directly. A generated
 // store is not a scale model of this repository and is not meant to be — it
@@ -122,8 +125,8 @@ type size struct {
 // invented here: `lit stores --counts` reports 118 workable rows today, and the
 // design target is 5x the largest local backlog. internal/cli's gather
 // benchmark and internal/store's list benchmarks are calibrated to the same
-// 118/590 pair, so a figure from this tool and a figure from `go test -bench`
-// describe the same store. [LAW:one-source-of-truth]
+// 118/590 pair, so this tool and `go test -bench` measure at the same points on
+// the row axis, over stores of different shape. [LAW:one-source-of-truth]
 //
 // The empty store is the control that separates fixed cost — store open, the
 // migration check — from per-row cost. It is the measurement the scale epic's
@@ -153,8 +156,10 @@ const rowsPerEpic = 10
 
 // blockedEveryNth wires every third generated task to depend on a task in the
 // previous epic, so roughly a third of the tasks wait on another epic's work.
-// A store with no dependency edges at all would time a gather that never
-// resolves a blocker — measuring a code path that does not exist in practice.
+// Rank order already holds every task behind its epic's head, so the edges
+// change readiness only at a head; they are here so the gather resolves
+// blocked_by edges, which a store gated by rank alone would never time — a
+// code path every real store exercises.
 const blockedEveryNth = 3
 
 // repeats is how many times each probe runs, and min-of-repeats is what gets

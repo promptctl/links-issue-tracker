@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // The empty store is zero imports, not an empty one: `lit import` refuses a
@@ -46,9 +48,48 @@ func TestImportBatchesBuildsTheRequestedRows(t *testing.T) {
 		if tail := strings.TrimPrefix(r.Title, fmt.Sprintf("generated row %d ", i)); strings.HasPrefix(r.Description, tail) {
 			t.Errorf("record %d title %q is a prefix of its own description", i, r.Title)
 		}
-		if r.LocalID == "" || r.Topic == "" || r.Type == "" {
+		if r.LocalID == "" || r.Topic == "" || r.IssueType == "" {
 			t.Errorf("record %d is missing a key `lit import` requires: %+v", i, r)
 		}
+	}
+}
+
+// Three groups are the smallest spec with a group before the last two, so it
+// holds every edge shape the generator writes. Every task lives inside an epic
+// of the same spec, and every dependency joins two tasks in different epics,
+// the one form of blocked_by lit accepts. Six of the 27 tasks are blocked: every
+// third task, past the first epic, which has no epic before it to wait on.
+func TestImportBatchesWiresTasksInsideEpicsAndAcrossThem(t *testing.T) {
+	recs := importBatches(30)[0]
+	byID := map[string]storage.ImportTreeSpec{}
+	for _, r := range recs {
+		byID[r.LocalID] = r
+	}
+	epics, blocked := 0, 0
+	for _, r := range recs {
+		if r.IssueType == "epic" {
+			epics++
+			if r.Parent != "" || len(r.BlockedBy) > 0 {
+				t.Errorf("epic %s has parent %q and blocked_by %v, want neither", r.LocalID, r.Parent, r.BlockedBy)
+			}
+			continue
+		}
+		if byID[r.Parent].IssueType != "epic" {
+			t.Errorf("task %s has parent %q, want an epic in the same spec", r.LocalID, r.Parent)
+		}
+		if len(r.BlockedBy) > 0 {
+			blocked++
+		}
+		for _, dep := range r.BlockedBy {
+			target, ok := byID[dep]
+			if !ok || target.IssueType != "task" || target.Parent == r.Parent {
+				t.Errorf("task %s (in %s) depends on %q (%+v), want a task in another epic of the same spec",
+					r.LocalID, r.Parent, dep, target)
+			}
+		}
+	}
+	if epics != 3 || blocked != 6 {
+		t.Errorf("importBatches(30) made %d epics and %d blocked tasks, want 3 and 6", epics, blocked)
 	}
 }
 
