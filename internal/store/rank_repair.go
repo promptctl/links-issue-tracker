@@ -36,30 +36,24 @@ type rankRewrite struct {
 type blocksCycleError struct{ path []string }
 
 func (e *blocksCycleError) Error() string {
-	return fmt.Sprintf("blocked-by dependency cycle %s — a cycle has no valid rank order (%s); break it by removing one edge with 'lit dep rm'", strings.Join(e.path, " -> "), cycleMembers)
+	return fmt.Sprintf("blocked-by dependency cycle %s — a cycle has no valid rank order; break it by removing one edge with 'lit dep rm'", strings.Join(e.path, " -> "))
 }
-
-// cycleMembers says what a cycle's path names. The repair sorts edges lifted
-// onto frame-mates, so two epics whose issues wait on each other's are a cycle
-// as surely as two issues are, and the path names the epics.
-// [LAW:one-source-of-truth] The refusal and Doctor's warning read it alike.
-const cycleMembers = "an epic on it stands for the issues inside it, which its rank orders as one"
 
 // repairRankOrder returns the rank writes that make every dependency outrank
 // its dependent in tree order: the fewest writes that realize the stable
 // topological order of order under constraints.
 //
-// order is every placed issue in key order, and constraints are the edges as
-// rankConstraints lifts them, so each joins two frame-mates. The writes leave
-// keys ascending along the sorted order, so every frame reads its share of
-// that order back, and each mover is spaced between its neighbours in key
-// order — inside its frame's gap, as a rank verb's room beside an anchor is —
-// so no two issues share a key.
+// order is every placed issue in key order, and constraints are
+// storage.DependencyOrder's, so each joins two frame-mates and none closes a
+// cycle. The writes leave keys ascending along the sorted order, so every
+// frame reads its share of that order back, and each mover is spaced between
+// its neighbours in key order — inside its frame's gap, as a rank verb's room
+// beside an anchor is — so no two issues share a key.
 //
 // [LAW:effects-at-boundaries] The new order and the writes that realize it are
 // values computed here; the caller owns the transaction that applies them, so
 // the whole repair is testable with no database.
-func repairRankOrder(order []rankedIssue, constraints []blocksEdge) ([]rankRewrite, error) {
+func repairRankOrder(order []rankedIssue, constraints []storage.DependencyEdge) ([]rankRewrite, error) {
 	target, err := stableTopoOrder(order, constraints)
 	if err != nil {
 		return nil, err
@@ -71,12 +65,12 @@ func repairRankOrder(order []rankedIssue, constraints []blocksEdge) ([]rankRewri
 // edge with an endpoint outside live — closed, archived, or deleted work —
 // says nothing about where live work sits, and one edge counted twice would
 // leave its dependent blocked by a dependency that is only placed once.
-func liveEdges(edges []blocksEdge, live map[string]struct{}) []blocksEdge {
-	seen := make(map[blocksEdge]struct{}, len(edges))
-	out := make([]blocksEdge, 0, len(edges))
+func liveEdges(edges []storage.DependencyEdge, live map[string]struct{}) []storage.DependencyEdge {
+	seen := make(map[storage.DependencyEdge]struct{}, len(edges))
+	out := make([]storage.DependencyEdge, 0, len(edges))
 	for _, e := range edges {
-		_, depLive := live[e.dependency]
-		_, dependentLive := live[e.dependent]
+		_, depLive := live[e.Dependency]
+		_, dependentLive := live[e.Dependent]
 		if _, dup := seen[e]; dup || !depLive || !dependentLive {
 			continue
 		}
@@ -86,37 +80,16 @@ func liveEdges(edges []blocksEdge, live map[string]struct{}) []blocksEdge {
 	return out
 }
 
-// rankConstraints lifts each edge onto the pair of frame-mates tree order
-// decides it by (storage.RankAncestry.Representatives), deduped: a key orders
-// an issue among its frame-mates alone, so an edge between two frames is kept
-// by ranking their representatives, as a rank verb asked about the same two
-// issues moves them. An edge between a container and an issue inside it is
-// dropped, because the tree orders that pair and no key can.
-func rankConstraints(edges []blocksEdge, ancestry storage.RankAncestry) []blocksEdge {
-	seen := make(map[blocksEdge]struct{}, len(edges))
-	out := make([]blocksEdge, 0, len(edges))
-	for _, e := range edges {
-		dependent, dependency, comparable := ancestry.Representatives(e.dependent, e.dependency)
-		lifted := blocksEdge{dependent: dependent, dependency: dependency}
-		if _, dup := seen[lifted]; dup || !comparable {
-			continue
-		}
-		seen[lifted] = struct{}{}
-		out = append(out, lifted)
-	}
-	return out
-}
-
 // projectEdges keeps the edges whose endpoints both stand in the given order:
 // live work is classified before the order is read, so an issue deleted in
 // between is in one and not the other. [LAW:parse-dont-validate] Settled
 // here, so everything downstream indexes the order directly: every edge it
 // sees is in range.
-func projectEdges(edges []blocksEdge, position map[string]int) []blocksEdge {
-	out := make([]blocksEdge, 0, len(edges))
+func projectEdges(edges []storage.DependencyEdge, position map[string]int) []storage.DependencyEdge {
+	out := make([]storage.DependencyEdge, 0, len(edges))
 	for _, e := range edges {
-		_, depInOrder := position[e.dependency]
-		_, dependentInOrder := position[e.dependent]
+		_, depInOrder := position[e.Dependency]
+		_, dependentInOrder := position[e.Dependent]
 		if depInOrder && dependentInOrder {
 			out = append(out, e)
 		}
@@ -131,13 +104,13 @@ func projectEdges(edges []blocksEdge, position map[string]int) []blocksEdge {
 // So an issue falls behind one that stood after it only while it waits on a
 // dependency, and an order that already satisfies every edge comes back
 // unchanged. Positions are compared, never ids.
-func stableTopoOrder(order []rankedIssue, edges []blocksEdge) ([]string, error) {
+func stableTopoOrder(order []rankedIssue, edges []storage.DependencyEdge) ([]string, error) {
 	position := positions(order)
 	constraints := projectEdges(edges, position)
 	dependents := make([][]int, len(order))
 	blockedBy := make([]int, len(order))
 	for _, e := range constraints {
-		dep, dependent := position[e.dependency], position[e.dependent]
+		dep, dependent := position[e.Dependency], position[e.Dependent]
 		dependents[dep] = append(dependents[dep], dependent)
 		blockedBy[dependent]++
 	}
@@ -266,35 +239,38 @@ func anchorRun(target []string, rankOf map[string]string) []int {
 	return run
 }
 
-// invertedEdges returns the edges tree order contradicts over the issues in
-// order: those whose dependency lists after the dependent it blocks.
+// invertedEdges returns the edges among the issues in order that dependencies
+// reads as rank inversions.
 //
-// [LAW:single-enforcer] storage.RankAncestry.Inverted decides, the predicate
+// [LAW:single-enforcer] storage.DependencyOrder.Inverted decides, the predicate
 // the queue's rank_inversion annotation reads, so Doctor's count and the queue
-// cannot disagree about what an inversion is; and repairRankOrder returns an
-// order for which this set is empty.
-func invertedEdges(order []rankedIssue, ancestry storage.RankAncestry, edges []blocksEdge) []blocksEdge {
+// cannot disagree about what an inversion is; and repairRankOrder over
+// dependencies' constraints returns an order for which this set is empty.
+func invertedEdges(order []rankedIssue, dependencies storage.DependencyOrder, edges []storage.DependencyEdge) []storage.DependencyEdge {
 	issues := make(map[string]model.Issue, len(order))
 	for _, item := range order {
 		issues[item.id] = model.Issue{ID: item.id, Rank: item.rank}
 	}
-	inverted := make([]blocksEdge, 0)
+	inverted := make([]storage.DependencyEdge, 0)
 	for _, e := range projectEdges(edges, positions(order)) {
-		if ancestry.Inverted(issues[e.dependent], issues[e.dependency]) {
+		if dependencies.Inverted(issues[e.Dependent], issues[e.Dependency]) {
 			inverted = append(inverted, e)
 		}
 	}
 	return inverted
 }
 
-// blocksCycle returns one blocked-by dependency cycle among the constraints
-// over order, as a repeated-endpoint path, or nil when they are acyclic.
+// blocksCycle returns one blocked-by dependency cycle among the issues in
+// order, as a repeated-endpoint path, or nil when the edges between them are
+// acyclic. These are the issues' own edges, not their lifted ones: a loop of
+// them is work none of which can start, where a loop of lifted edges is an
+// interleaved plan (storage.DependencyOrder).
 //
-// [LAW:single-enforcer] It asks findBlocksCycle about exactly the constraints
-// stableTopoOrder sorts, so Doctor reports a cycle precisely when the repair
-// refuses on one, and names the path the refusal names.
-func blocksCycle(order []rankedIssue, constraints []blocksEdge) []string {
-	return findBlocksCycle(projectEdges(constraints, positions(order)))
+// [LAW:single-enforcer] Doctor reports a cycle precisely when FixRankInversions
+// refuses on one, because both ask this, and the refusal names the path Doctor
+// names.
+func blocksCycle(order []rankedIssue, edges []storage.DependencyEdge) []string {
+	return findBlocksCycle(projectEdges(edges, positions(order)))
 }
 
 // positions maps each issue id in order to its index: the coordinate every

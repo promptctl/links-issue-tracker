@@ -214,11 +214,14 @@ func TestDoctorPrintsEachWarningItsHealthCheckFinds(t *testing.T) {
 	containment := []string{
 		"warning: tickets outside an epic: " + loose.ID + " (task) (every ticket except an epic lives inside one; move each into the epic it belongs to with 'lit parent set --child <id> --parent <epic-id>')",
 		"warning: tickets under a parent that is not an epic: " + under.ID + " under " + host.ID + " (task) (only an epic contains tickets; move each into the epic it belongs to with 'lit parent set --child <id> --parent <epic-id>')",
-		"warning: rank inversions: 1 (dependencies ranked below dependents)",
+		// The cycle's two edges run both ways between frame-mates, so no order
+		// of the two satisfies both: neither is counted as an inversion a
+		// repair could clear.
+		"warning: interleaved: " + strings.Join(sortedIDs(first.ID, second.ID), ", ") + " — work in each waits on work in another, so no rank order lists every dependency among them first; 'lit doctor --fix=rank' leaves their order as it stands",
 	}
 	// The cycle may be named from either member; both rotations are the same cycle.
 	cycleLine := func(a, b string) string {
-		return "warning: blocked-by dependency cycle: " + a + " -> " + b + " -> " + a + " (no rank order exists — an epic on it stands for the issues inside it, which its rank orders as one; remove one edge with 'lit dep rm' to break it)"
+		return "warning: blocked-by dependency cycle: " + a + " -> " + b + " -> " + a + " (no rank order exists; remove one edge with 'lit dep rm' to break it)"
 	}
 	assertWarnings := func(t *testing.T, got string) {
 		t.Helper()
@@ -280,7 +283,7 @@ func runDoctorRecorded(t *testing.T, h readyTestHarness, args ...string) (map[st
 }
 
 // A key two live tickets hold is named on the status line, in a warning line,
-// and on the invocation's event; `--fix rank` gives each holder its own key,
+// and on the invocation's event; `--fix=rank` gives each holder its own key,
 // and the report it leaves says none is shared.
 func TestDoctorReportsASharedRankKeyAndFixSeparatesIt(t *testing.T) {
 	h := newReadyTestHarness(t)
@@ -320,7 +323,7 @@ func TestDoctorReportsASharedRankKeyAndFixSeparatesIt(t *testing.T) {
 
 // A task waiting on a task in an epic listed after its own is a rank
 // inversion in the queue and in lit doctor alike, however the two tasks' own
-// keys compare; `--fix rank` clears it from both, and the invocation's event
+// keys compare; `--fix=rank` clears it from both, and the invocation's event
 // says what the check found, what the repair moved, and that no cycle stood in
 // its way. The two epics are filed one way and listed the other.
 func TestARankInversionAcrossEpicsIsFlaggedRepairedAndRecorded(t *testing.T) {
@@ -363,9 +366,11 @@ func TestARankInversionAcrossEpicsIsFlaggedRepairedAndRecorded(t *testing.T) {
 	}
 }
 
-// Two epics whose tasks wait on each other's are a cycle no rank order can
-// satisfy, and the invocation's event names it through the epics.
-func TestDoctorRecordsADependencyCycleThroughEpics(t *testing.T) {
+// Two epics whose tasks wait on each other's are interleaved: a workable plan
+// no order of the two epics lists every dependency first. The invocation's
+// event names the group and no cycle, the queue flags no inversion it would
+// send an agent to `lit doctor --fix` for, and the fix runs.
+func TestDoctorRecordsInterleavedEpicsAndNoCycle(t *testing.T) {
 	h := newReadyTestHarness(t)
 	first := h.createIssue(storage.CreateIssueInput{Title: "first", Topic: "rank", IssueType: "epic"})
 	second := h.createIssue(storage.CreateIssueInput{Title: "second", Topic: "rank", IssueType: "epic"})
@@ -376,9 +381,20 @@ func TestDoctorRecordsADependencyCycleThroughEpics(t *testing.T) {
 	h.addDependency(firstTask.ID, secondTask.ID)
 	h.addDependency(secondOther.ID, firstOther.ID)
 
-	facts, _ := runDoctorRecorded(t, h)
-	cycle := strings.Split(fmt.Sprint(facts["doctor.dependency_cycle"]), "->")
-	if len(cycle) != 3 || cycle[0] != cycle[2] || !slices.Contains(cycle, first.ID) || !slices.Contains(cycle, second.ID) {
-		t.Errorf("event fact doctor.dependency_cycle = %v, want a cycle through %s and %s", facts["doctor.dependency_cycle"], first.ID, second.ID)
+	for _, args := range [][]string{nil, {"--fix=rank"}} {
+		facts, out := runDoctorRecorded(t, h, args...)
+		for fact, want := range map[string]string{"doctor.interleaved": "1", "doctor.dependency_cycle": "none", "doctor.rank_inversions": "0"} {
+			if got := fmt.Sprint(facts[fact]); got != want {
+				t.Errorf("doctor %v: event fact %s = %v, want %q\n%s", args, fact, got, want, out)
+			}
+		}
 	}
+	if count := deriveQueueFacts(h.runWorkableAnnotated(workableFilter{}, 0)).RankInversions(); count != 0 {
+		t.Errorf("queue rank inversions = %d, want 0: no repair could clear them", count)
+	}
+}
+
+func sortedIDs(ids ...string) []string {
+	slices.Sort(ids)
+	return ids
 }

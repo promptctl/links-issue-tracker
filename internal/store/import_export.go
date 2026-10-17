@@ -168,15 +168,23 @@ func (s *Store) Doctor(ctx context.Context) (storage.HealthReport, error) {
 		return report, fmt.Errorf("rank checks: %w", err)
 	}
 	// [LAW:single-enforcer] This number and what `--fix` leaves behind read the
-	// same live edges (store.liveEdges), and storage.RankAncestry.Inverted is
-	// the one function that decides what "inverted" means.
-	// TestRepairRankOrderProperties asserts the join: the order the repair
-	// returns leaves invertedEdges empty, so this count going to zero is a
-	// property of the repair rather than a second opinion about it.
+	// same live edges (store.liveEdges) through one storage.DependencyOrder, the
+	// one definition of "inverted". TestRepairRankOrderProperties asserts the
+	// join: the order the repair returns leaves invertedEdges empty, so this
+	// count going to zero is a property of the repair rather than a second
+	// opinion about it.
 	live := liveEdges(edges, liveIDs)
-	report.RankInversions = len(invertedEdges(order, ancestry, live))
+	dependencies := storage.NewDependencyOrder(ancestry, live)
+	report.RankInversions = len(invertedEdges(order, dependencies, live))
 	if report.RankInversions > 0 {
 		report.Warnings = append(report.Warnings, fmt.Sprintf("rank inversions: %d (dependencies ranked below dependents)", report.RankInversions))
+	}
+	// An interleaved plan is workable, so it is named rather than refused; the
+	// warning says why a dependency it lists below its dependent is not counted
+	// above. [LAW:nothing-unseen]
+	report.Interleaved = dependencies.Interleaved()
+	for _, group := range report.Interleaved {
+		report.Warnings = append(report.Warnings, fmt.Sprintf("interleaved: %s — work in each waits on work in another, so no rank order lists every dependency among them first; 'lit doctor --fix=rank' leaves their order as it stands", strings.Join(group, ", ")))
 	}
 	// No rank verb places a key one placed issue holds onto another, and a
 	// landing separates the keys it brings in, so this names what neither stood
@@ -186,16 +194,16 @@ func (s *Store) Doctor(ctx context.Context) (storage.HealthReport, error) {
 	duplicates := rankCollisions(order)
 	report.DuplicateRanks = len(duplicates)
 	if report.DuplicateRanks > 0 {
-		report.Warnings = append(report.Warnings, fmt.Sprintf("duplicate rank keys: %d (%s; each key's holders list by id instead of by rank — 'lit doctor --fix rank' gives each its own key without changing the order)", report.DuplicateRanks, describeRankCollisions(duplicates)))
+		report.Warnings = append(report.Warnings, fmt.Sprintf("duplicate rank keys: %d (%s; each key's holders list by id instead of by rank — 'lit doctor --fix=rank' gives each its own key without changing the order)", report.DuplicateRanks, describeRankCollisions(duplicates)))
 	}
-	// A blocked-by dependency cycle is the root cause behind a rank inversion that
-	// --fix can never clear: it is unsatisfiable by any rank order. Surface the
-	// members so the operator knows exactly which edge to remove.
-	// [LAW:single-enforcer] blocksCycle reads the constraints the repair sorts,
-	// so this reports a cycle exactly when FixRankInversions refuses on one.
-	if cycle := blocksCycle(order, rankConstraints(live, ancestry)); len(cycle) > 0 {
+	// A blocked-by dependency cycle is work none of which can start, and it
+	// refuses the rank repair as a whole. Surface the members so the operator
+	// knows exactly which edge to remove.
+	// [LAW:single-enforcer] blocksCycle is what FixRankInversions refuses on,
+	// so this reports a cycle exactly when the repair refuses.
+	if cycle := blocksCycle(order, live); len(cycle) > 0 {
 		report.DependencyCycle = cycle
-		report.Warnings = append(report.Warnings, fmt.Sprintf("blocked-by dependency cycle: %s (no rank order exists — %s; remove one edge with 'lit dep rm' to break it)", strings.Join(cycle, " -> "), cycleMembers))
+		report.Warnings = append(report.Warnings, fmt.Sprintf("blocked-by dependency cycle: %s (no rank order exists; remove one edge with 'lit dep rm' to break it)", strings.Join(cycle, " -> ")))
 	}
 	return report, nil
 }

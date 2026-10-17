@@ -2806,7 +2806,7 @@ via `fmt.Sprintf` with placeholder lists from `repeatPlaceholder` (`internal/sto
 - Buckets rows per subject; a row whose src and dst are both the same subject is added once (`rel.DstID != rel.SrcID` guard).
 - Hydrates `s.getIssuesByIDs(ctx, mapKeys(needed))` (`mapKeys`, unspecified order).
 - Loads `loadRankAncestry(ctx, s.db)` once for every subject's groups.
-- For each subject present in `issuesByID`, produces `bucketRelations(id, bySubject[id], issuesByID, ancestry)` with `.Issue` set and `.RankInversions = ancestry.Inversions(issue, rel.BlockedBy)`; subjects that no longer exist are simply omitted from the result map.
+- For each subject present in `issuesByID`, produces `bucketRelations(id, bySubject[id], issuesByID, ancestry)` with `.Issue` set; subjects that no longer exist are simply omitted from the result map.
 - `TestGetRelationsByIDsMatchesIssueDetail` asserts parity with `GetIssueDetail` for Children/BlockedBy/Blocks/Parent, absence of a nonexistent subject, epic children in rank order, and the BlockedBy/Blocks orientation — `internal/store/relations_batch_test.go`.
 
 ### 4.11 Listing by parent
@@ -2893,22 +2893,9 @@ ORDER BY r.dst_id LIMIT 1
 
 `storage.FrameContainmentError` — `internal/storage/rank.go`, shared with the memory engine: fields `ContainerID`, `ContainedID`; `Error()` = `fmt.Sprintf("%s is inside %s; no comparable frame contains both, so neither can be ranked relative to the other — rank each against its own siblings instead", e.ContainedID, e.ContainerID)`; it is a `model.Refusal`.
 
-`resolveFrameRepresentatives(chains)` — `internal/store/ranking.go`:
-1. Builds per-chain membership maps id→index.
-2. Containment check: if any chain's head (`chain[0]`) appears in another chain at index > 0, returns `storage.FrameContainmentError{ContainerID: chain[0], ContainedID: chains[j][0]}`.
-3. LCA: the first element of `chains[0]` present in every other chain; `lcaID == ""` means no shared ancestor.
-4. Representatives: with no LCA, each chain's **root** (`chain[len-1]`); with an LCA, the element **one level below** the LCA in each chain: `chain[memberships[i][lcaID]-1]`. Frame-mates therefore resolve to themselves.
+`storage.FrameRepresentatives(chains)` — `internal/storage/rank.go`, shared with the memory engine and `storage.RankAncestry.Representatives`: each chain is self first, root last; a chain head found at index > 0 in another chain → `storage.FrameContainmentError{ContainerID: chain[0], ContainedID: chains[j][0]}`; otherwise each chain's element one level below the lowest common ancestor, or its root when there is none, with that ancestor as the frame (`storage.TopLevel` when none). Frame-mates therefore resolve to themselves. Pinned cases — `TestFrameRepresentatives`, `internal/storage/rank_test.go`.
 
-Pinned cases — `internal/store/ranking_frame_test.go`:
-- `{{x},{y},{z}}` → `[x y z]`
-- `{{c1,e},{c2,e},{c3,e}}` → `[c1 c2 c3]` (siblings rank directly)
-- `{{c1,e},{x},{c2,e}}` → `[e x e]`
-- `{{c1,e1,p},{c2,e2,p},{x}}` → `[p p x]`
-- `{{c1,e1,p},{c2,e2,p}}` → `[e1 e2]`
-- `{{g,s,e},{c,e}}` → `[s c]`
-- `{{c,e},{e}}`, `{{e},{g,s,e}}`, `{{e},{x},{c,e}}` → `storage.FrameContainmentError`
-
-`resolveComparableFrame(issueChain, targetChain)` — `internal/store/ranking.go`: wraps `resolveFrameRepresentatives` for the pair and returns its error unwrapped, so a containment reaches the caller as `storage.FrameContainmentError` in either direction. Returns `(reps[0], reps[1])` as `(movedID, anchorID)`.
+`resolveComparableFrame(issueChain, targetChain)` — `internal/store/ranking.go`: wraps `storage.FrameRepresentatives` for the pair and returns its error unwrapped, so a containment reaches the caller as `storage.FrameContainmentError` in either direction. Returns `(reps[0], reps[1])` as `(movedID, anchorID)`.
 
 Pinned pair cases — `internal/store/ranking_frame_test.go`: top-level pair unchanged; same-epic siblings unchanged; standalone vs child → `(x, e)`; child vs standalone → `(e, x)`; two epics' children → `(e1, e2)`; grandchild vs child of shared epic → `(s, c)`; either containment direction errors.
 
@@ -2958,7 +2945,7 @@ Frame behavior pinned by tests — `internal/store/ranking_frame_test.go`:
 
 **RankSet(ids)** — `internal/store/ranking.go`:
 - Validation `storage.ValidateRankSetIDs` — `internal/storage/rank.go`, shared with the memory engine: each refusal is a `model.ValidationError`: fewer than 2 ids → `"rank set: need at least 2 IDs to establish order"`; an empty-string id → `"rank set: empty ID in input"`; a repeated id → `"rank set: duplicate ID %q in input"`.
-- `resolveRankSet` — `internal/store/ranking.go`: per id, `GetIssue` then `ancestorChain`; `resolveFrameRepresentatives` errors are wrapped `fmt.Errorf("rank set: %w", err)`; `storage.RankSetResolutions(ids, reps)` (`internal/storage/rank.go`, shared with the memory engine) pairs each id with its representative, and two named ids collapsing to the same representative → `model.ValidationError`
+- `resolveRankSet` — `internal/store/ranking.go`: per id, `GetIssue` then `ancestorChain`; `storage.FrameRepresentatives` errors are wrapped `fmt.Errorf("rank set: %w", err)`; `storage.RankSetResolutions(ids, reps)` (`internal/storage/rank.go`, shared with the memory engine) pairs each id with its representative, and two named ids collapsing to the same representative → `model.ValidationError`
   `fmt.Sprintf("rank set: %s and %s both resolve to %s — their relative order is internal to %s and cannot be set against outside issues; run rank set among siblings instead", prior, id, reps[i], reps[i])`.
   Returns `[]storage.RankSetResolution{{NamedID, RankedID}}` parallel to the input order.
 - In `withMutation(ctx, "rank set", …)`, `unrankedAmongTx` first reads which representatives are live and hold no key, one `SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank = '' AND id IN (…)` per `idBatches` batch, error → `fmt.Errorf("read which of %v hold no key: %w", batch, err)` wrapped `fmt.Errorf("rank set: %w", err)`; each is placed at the frame's bottom by `bottomEdge.placeBeyondTx`, error wrapped `fmt.Errorf("rank set: %w", err)`. Then the frame's keys are read lowest first, ties by id:
@@ -3028,19 +3015,17 @@ Smoothing is invoked from `RankToTop`, `RankToBottom`, `RankSet` (when it places
 
 `liveEdges(edges, live)` — `internal/store/rank_repair.go`: keeps the edges whose two endpoints are both in `live`, deduped, in input order.
 
-`rankConstraints(edges, ancestry)` — `internal/store/rank_repair.go`: replaces each edge by `blocksEdge{dependent: rep, dependency: rep}` from `ancestry.Representatives(e.dependent, e.dependency)`, drops an edge whose `ok` is false (one endpoint contains the other), and dedupes the lifted edges. Every surviving edge joins two frame-mates.
-
 `projectEdges(edges, position)` — `internal/store/rank_repair.go`: drops any edge with an endpoint outside `position`, so every surviving edge indexes in range. The live set is classified before the order is read, so an issue deleted in between is in one and not the other.
 
 `positions(order)` — `internal/store/rank_repair.go`: maps each id in `order` to its index; `stableTopoOrder`, `invertedEdges` and `blocksCycle` all index through it.
 
-`invertedEdges(order, ancestry, edges)` — `internal/store/rank_repair.go`: over `projectEdges(edges, positions(order))` keeps every edge for which `ancestry.Inverted(model.Issue{ID, Rank} of the dependent, … of the dependency)` holds, ranks read from `order`. Pure; no DB access. Doctor counts `len(...)` of this over `liveEdges`; `FixRankInversions` produces an order for which it is empty (`TestRepairRankOrderPropertiesAcrossFrames`), so the reported count and the repaired state are one predicate rather than two kept in agreement.
+`invertedEdges(order, dependencies, edges)` — `internal/store/rank_repair.go`: over `projectEdges(edges, positions(order))` keeps every edge for which `dependencies.Inverted(model.Issue{ID, Rank} of the dependent, … of the dependency)` (`storage.DependencyOrder`) holds, ranks read from `order`. Pure; no DB access. Doctor counts `len(...)` of this over `liveEdges`; `FixRankInversions` produces an order for which it is empty (`TestRepairRankOrderPropertiesAcrossFrames`), so the reported count and the repaired state are one predicate rather than two kept in agreement.
 
-`blocksCycle(order, constraints)` — `internal/store/rank_repair.go`: `findBlocksCycle(projectEdges(constraints, positions(order)))`, the constraints `stableTopoOrder` sorts, so Doctor reports a cycle exactly when the repair refuses on one, and names the same path. Over `rankConstraints`, a path can run through epics: two epics whose tasks wait on each other's are a cycle with no cycle among the tasks. Pure; no DB access.
+`blocksCycle(order, edges)` — `internal/store/rank_repair.go`: `findBlocksCycle(projectEdges(edges, positions(order)))` over the issues' own edges, never lifted ones, so a path names only issues that wait on each other, an edge between an epic and its own task included; two epics whose tasks wait on each other's both ways are interleaved, not a cycle. Doctor and `FixRankInversions` both ask it over `liveEdges`, so Doctor reports a cycle exactly when the repair refuses on one, and names the same path. Pure; no DB access.
 
 ### 5.9 Blocks graph helpers
 
-`blocksEdge{dependent, dependency}` — `internal/store/ranking.go` (src = dependent, ranked below; dst = dependency, ranked above).
+`storage.DependencyEdge{Dependent, Dependency}` — `internal/storage/dependency_order.go` (src = dependent, ranked below; dst = dependency, ranked above); the store's edge type throughout.
 
 `loadBlocksEdges(ctx, q)` — `internal/store/ranking.go`:
 ```sql
@@ -3065,9 +3050,9 @@ Pure and DB-free, in `internal/store/rank_repair.go`; `FixRankInversions` suppli
 
 `rankRewrite{id, newRank}` — `internal/store/rank_repair.go`: one issue whose rank must change, and the value to write.
 
-`blocksCycleError{path}` — `internal/store/rank_repair.go`: `Error()` renders `blocked-by dependency cycle <a -> b -> … -> a> — a cycle has no valid rank order (an epic on it stands for the issues inside it, which its rank orders as one); break it by removing one edge with 'lit dep rm'`. The parenthesis is the const `cycleMembers`, which Doctor's cycle warning carries too.
+`blocksCycleError{path}` — `internal/store/rank_repair.go`: `Error()` renders `blocked-by dependency cycle <a -> b -> … -> a> — a cycle has no valid rank order; break it by removing one edge with 'lit dep rm'`.
 
-`repairRankOrder(order, constraints)` — `internal/store/rank_repair.go`: `stableTopoOrder(order, constraints)`, then `rankRewrites(order, target)`. `order` is every non-deleted issue in key order and `constraints` are `rankConstraints` over the live edges, so each joins two frame-mates; the keys ascend along `target`, so each frame reads its share of it back, and each mover is spaced between its neighbours in key order, which lie inside its frame's gap.
+`repairRankOrder(order, constraints)` — `internal/store/rank_repair.go`: `stableTopoOrder(order, constraints)`, then `rankRewrites(order, target)`. `order` is every non-deleted issue in key order and `constraints` are `storage.DependencyOrder.Constraints()` over the live edges, so each joins two frame-mates and none closes a cycle; the keys ascend along `target`, so each frame reads its share of it back, and each mover is spaced between its neighbours in key order, which lie inside its frame's gap.
 
 `stableTopoOrder(order, edges)` — `internal/store/rank_repair.go`: Kahn's algorithm over `projectEdges`, with the ready set held ascending by position in `order` (`slices.Insert` at `sort.SearchInts`), so each step emits the issue that stood earliest in the backlog among those whose dependencies are all placed. An issue falls behind one that stood after it only while it waits on a dependency, so an order that already satisfies every edge comes back unchanged. Ordering by position rather than by id is what keeps the tiebreak off id spelling. When Kahn stalls (`len(sorted) < len(order)`) it returns `&blocksCycleError{path: findBlocksCycle(constraints)}` rather than the partial sequence.
 
@@ -3087,13 +3072,16 @@ Pure and DB-free, in `internal/store/rank_repair.go`; `FixRankInversions` suppli
 
 `landExport(export) (model.Export, storage.Landing, error)` — `internal/store/rank_collisions.go`: `storage.HomeStranded(export)`, then `separateRankCollisions` on its result (an error returned as is), returning `storage.Landing{Rehomed, Rekeyed}`. Called by `ReplaceFromExport` and `spineWriter.land`, never by `rebuildFromExport`.
 
+`Store.DependencyOrder(ctx) (storage.DependencyOrder, error)` — `internal/store/ranking.go`: `liveIssueIDs(ctx)`, `loadRankAncestry(ctx, s.db)` and `loadBlocksEdges(ctx, s.db)`, each error wrapped `"dependency order: %w"`; returns `storage.NewDependencyOrder(ancestry, liveEdges(edges, liveIDs))`, the reading Doctor builds from the same three loads. The queue's annotation reads it once per gather.
+
 `Store.FixRankInversions(ctx) (int, error)` — `internal/store/ranking.go`:
 1. `liveIssueIDs(ctx)` **before** the transaction; error → `fmt.Errorf("fix rank inversions: snapshot live set: %w", err)`. The repair mutates only `item_rank`, so closure status is invariant across the write.
 2. In `withMutation(ctx, "fix rank inversions", …)`:
    - `loadRankOrder(ctx, tx)`; error → `fmt.Errorf("fix rank inversions: %w", err)`.
    - `loadRankAncestry(ctx, tx)`; error → `fmt.Errorf("fix rank inversions: %w", err)`.
    - `loadBlocksEdges(ctx, tx)`; error → `fmt.Errorf("fix rank inversions: load blocked-by edges: %w", err)`.
-   - `repairRankOrder(order, rankConstraints(liveEdges(edges, liveIDs), ancestry))`; error → `fmt.Errorf("fix rank inversions: %w", err)`. This is the arm a dependency cycle takes, a cycle through epics included.
+   - `live := liveEdges(edges, liveIDs)`; `blocksCycle(order, live)` non-empty → `fmt.Errorf("fix rank inversions: %w", &blocksCycleError{path})`, before any write.
+   - `repairRankOrder(order, storage.NewDependencyOrder(ancestry, live).Constraints())`; error → `fmt.Errorf("fix rank inversions: %w", err)`. Edges inside an interleaved group constrain nothing, so their order stands.
    - Every rewrite goes through `writeRanksTx` as a touched `rankWrite`, stamped `s.clock.Now().Format(time.RFC3339Nano)`; error → `fmt.Errorf("fix rank inversions: %w", err)`.
    - `smoothRanksIfNeededTx` per rewritten rank, in a second loop after every write has landed rather than interleaved with them: a pass that re-spaced a window mid-repair would move the anchor ranks the remaining placements were computed against. Error → `fmt.Errorf("fix rank inversions: smooth ranks: %w", err)`.
    - `rerankedCount = len(rewrites)`, assigned rather than accumulated, because `withStampedMutation` may re-run the function after a transient failure rolls its writes back.
@@ -3608,9 +3596,10 @@ Usage strings: `restoreUsage = "usage: lit backup restore (--latest | --path <ex
 - `containmentFindings(ctx, s.db)` (`import_export.go`), error wrap `"containment check: %w"`: one query lists every non-epic with no parent-child edge and every parent-child edge onto a non-epic; warning `"tickets outside an epic: %s (every ticket except an epic lives inside one; move each into the epic it belongs to with 'lit parent set --child <id> --parent <epic-id>')"` naming each as `id (type)`, and warning `"tickets under a parent that is not an epic: %s (only an epic contains tickets; …)"` naming each as `id under parent (parent type)`. Column reads, so it runs before the parent-cycle check.
 - `loadRankAncestry(ctx, s.db)`, error wrap `"rank ancestry: %w"`; each `ancestry.Conflicts()` entry appends its `Finding()` as an error line, and the checks below still run.
 - `s.liveIssueIDs(ctx)`, `loadRankOrder(ctx, s.db)` and `loadBlocksEdges(ctx, s.db)`, loaded once for the three rank checks; each error wraps `"rank checks: %w"`. `live := liveEdges(edges, liveIDs)`.
-- `RankInversions = len(invertedEdges(order, ancestry, live))`; warning `"rank inversions: %d (dependencies ranked below dependents)"`.
-- `duplicates := rankCollisions(order)`; `DuplicateRanks = len(duplicates)`; warning `"duplicate rank keys: %d (%s; each key's holders list by id instead of by rank — 'lit doctor --fix rank' gives each its own key without changing the order)"` with `describeRankCollisions(duplicates)`.
-- `blocksCycle(order, rankConstraints(live, ancestry))` non-empty → `DependencyCycle`; warning `"blocked-by dependency cycle: %s (no rank order exists — %s; remove one edge with 'lit dep rm' to break it)"` with members joined by `" -> "` and `cycleMembers`.
+- `dependencies := storage.NewDependencyOrder(ancestry, live)`; `RankInversions = len(invertedEdges(order, dependencies, live))`; warning `"rank inversions: %d (dependencies ranked below dependents)"`.
+- `Interleaved = dependencies.Interleaved()`; per group, warning `"interleaved: %s — work in each waits on work in another, so no rank order lists every dependency among them first; 'lit doctor --fix=rank' leaves their order as it stands"` with the members joined by `", "`.
+- `duplicates := rankCollisions(order)`; `DuplicateRanks = len(duplicates)`; warning `"duplicate rank keys: %d (%s; each key's holders list by id instead of by rank — 'lit doctor --fix=rank' gives each its own key without changing the order)"` with `describeRankCollisions(duplicates)`.
+- `blocksCycle(order, live)` non-empty → `DependencyCycle`; warning `"blocked-by dependency cycle: %s (no rank order exists; remove one edge with 'lit dep rm' to break it)"` with members joined by `" -> "`.
 
 `FixIntegrity` (`import_export.go`) always runs the repair under `withMutation(ctx, "fix integrity", …)` — Dolt commit message literal **`fix integrity`** — executing exactly three statements:
 ```sql
@@ -3943,7 +3932,7 @@ updated %d issues\n         (len(result.Updated))
 
 ## 7. Cross-cutting error-message index for this slice
 
-`import_export.go`: `verify constraints: %w`, `count foreign key issues: %w`, `count invalid related rows: %w`, `count orphan event rows: %w`, `rank ancestry: %w`, `rank checks: %w`, `parent cycle check: %w`, `constraint violations: %d`, `foreign key violations: %d`, `invalid related-to ordering rows: %d`, `orphan issue event rows: %d`, `rank inversions: %d (dependencies ranked below dependents)`, `blocked-by dependency cycle: %s (no rank order exists — %s; remove one edge with 'lit dep rm' to break it)`, `repair orphan events: %w`, `repair self related rows: %w`, `repair related ordering: %w`, `clear %s: %w`, `restore issue %s: %w`, `restore comment %s: %w`, `restore label %s:%s: %w`, `insert issue event %s: %w`, `issue event %s: field name cannot be empty`, `insert issue event change %s.%s: %w`.
+`import_export.go`: `verify constraints: %w`, `count foreign key issues: %w`, `count invalid related rows: %w`, `count orphan event rows: %w`, `rank ancestry: %w`, `rank checks: %w`, `parent cycle check: %w`, `constraint violations: %d`, `foreign key violations: %d`, `invalid related-to ordering rows: %d`, `orphan issue event rows: %d`, `rank inversions: %d (dependencies ranked below dependents)`, `interleaved: %s — work in each waits on work in another, so no rank order lists every dependency among them first; 'lit doctor --fix=rank' leaves their order as it stands`, `blocked-by dependency cycle: %s (no rank order exists; remove one edge with 'lit dep rm' to break it)`, `repair orphan events: %w`, `repair self related rows: %w`, `repair related ordering: %w`, `clear %s: %w`, `restore issue %s: %w`, `restore comment %s: %w`, `restore label %s:%s: %w`, `insert issue event %s: %w`, `issue event %s: field name cannot be empty`, `insert issue event change %s.%s: %w`.
 
 `import_validate.go` (tree gate): `import: no issues in input`, `import: spec %d missing local_id`, `import: spec %d local_id %q has surrounding whitespace`, `import: spec %q missing title`, `import: spec %q has invalid type %q`, `import: spec %q has invalid priority %d`, `import: duplicate local_id %q`, `import: spec %q parent %q has surrounding whitespace`, `import: spec %q references missing parent %q`, `import: spec %q blocked_by entry %q has surrounding whitespace`, `import: spec %q references missing blocked_by %q`, `import: spec %q cannot depend on itself`, `import: spec %q: %w`, and from `writeOrder` `%s: cycle detected involving %q` (`import` or `bulk`).
 
@@ -4037,9 +4026,9 @@ The concrete checks whose text can appear as a `health` finding, in `Doctor`'s e
 4. **Orphan event rows.** SQL: `SELECT COUNT(*) FROM issue_events e LEFT JOIN issues i ON i.id = e.issue_id WHERE i.id IS NULL` (`import_export.go`). Error → `count orphan event rows: %w`. If > 0, **warning** `orphan issue event rows: %d` (`import_export.go`) — ignored by verify.
    **Containment.** `containmentFindings(ctx, s.db)` (`import_export.go`): a non-epic with no parent-child edge, or a parent-child edge onto a non-epic, is a **warning** naming each and the repair `lit parent set --child <id> --parent <epic-id>` — ignored by verify, so a faithful rebuild of a pre-v7 source is not refused.
 5. **Parent conflicts.** `loadRankAncestry(ctx, s.db)` (`import_export.go`); each child more than one framing edge claims (`ancestry.Conflicts()`) appends **error** `%s has %d parents (%s); it lists under %s, the lowest id, until one remains — ...` (`internal/storage/rank.go`). The checks below still run.
-6. **Rank inversions.** Computed in Go: `s.liveIssueIDs(ctx)`, `loadRankOrder(ctx, s.db)` and `loadBlocksEdges(ctx, s.db)` load once for this check and the next two (`import_export.go`); each error → `rank checks: %w`. `RankInversions = len(invertedEdges(order, ancestry, liveEdges(edges, liveIDs)))` (`import_export.go`); if > 0, **warning** `rank inversions: %d (dependencies ranked below dependents)` (`import_export.go`) — ignored by verify.
-7. **Duplicate rank keys.** `rankCollisions(order)` over the same order, every non-deleted issue (`import_export.go`); `DuplicateRanks` is its length, and if > 0, **warning** `duplicate rank keys: %d (<"key" shared by a, b; …>; each key's holders list by id instead of by rank — 'lit doctor --fix rank' gives each its own key without changing the order)` (`import_export.go`) — ignored by verify.
-8. **Blocked-by dependency cycle.** `blocksCycle(order, rankConstraints(liveEdges(edges, liveIDs), ancestry))` over the same load (`import_export.go`). If non-empty, sets `DependencyCycle` and appends **warning** `blocked-by dependency cycle: %s (no rank order exists — %s; remove one edge with 'lit dep rm' to break it)` with members joined by `" -> "` and `cycleMembers` (`import_export.go`) — ignored by verify.
+6. **Rank inversions.** Computed in Go: `s.liveIssueIDs(ctx)`, `loadRankOrder(ctx, s.db)` and `loadBlocksEdges(ctx, s.db)` load once for this check and the next two (`import_export.go`); each error → `rank checks: %w`. `dependencies := storage.NewDependencyOrder(ancestry, liveEdges(edges, liveIDs))`; `RankInversions = len(invertedEdges(order, dependencies, liveEdges(edges, liveIDs)))` (`import_export.go`); if > 0, **warning** `rank inversions: %d (dependencies ranked below dependents)` (`import_export.go`). `Interleaved = dependencies.Interleaved()`, and each group appends **warning** `interleaved: <members joined by ", "> — work in each waits on work in another, so no rank order lists every dependency among them first; 'lit doctor --fix=rank' leaves their order as it stands` (`import_export.go`) — both ignored by verify.
+7. **Duplicate rank keys.** `rankCollisions(order)` over the same order, every non-deleted issue (`import_export.go`); `DuplicateRanks` is its length, and if > 0, **warning** `duplicate rank keys: %d (<"key" shared by a, b; …>; each key's holders list by id instead of by rank — 'lit doctor --fix=rank' gives each its own key without changing the order)` (`import_export.go`) — ignored by verify.
+8. **Blocked-by dependency cycle.** `blocksCycle(order, liveEdges(edges, liveIDs))` over the same load (`import_export.go`). If non-empty, sets `DependencyCycle` and appends **warning** `blocked-by dependency cycle: %s (no rank order exists; remove one edge with 'lit dep rm' to break it)` with members joined by `" -> "` (`import_export.go`) — ignored by verify.
 
 Net effect: only checks 1 and 2 (constraint violations, foreign-key violations) can ever fail the verify health half.
 

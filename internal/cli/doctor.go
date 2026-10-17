@@ -457,7 +457,7 @@ type doctorRun struct {
 
 func doctorLeaf() appLeaf {
 	fs := newCobraFlagSet("doctor")
-	fix := fs.String("fix", "", "Apply fixes: --fix (all) or --fix rank,thingA")
+	fix := fs.String("fix", "", "Apply fixes: --fix (all) or --fix=rank,thingA")
 	fs.cmd.Flags().Lookup("fix").NoOptDefVal = "all"
 	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		// [LAW:parse-dont-validate] Repair is a capability, not a duty every engine
@@ -497,6 +497,7 @@ func doctorLeaf() appLeaf {
 		telemetry.Set(ctx, "doctor.duplicate_ranks", doctorFieldValue(report, storage.CheckDuplicateRanks, strconv.Itoa(report.DuplicateRanks)))
 		telemetry.Set(ctx, "doctor.rank_inversions", doctorFieldValue(report, storage.CheckRankInversions, strconv.Itoa(report.RankInversions)))
 		telemetry.Set(ctx, "doctor.dependency_cycle", doctorFieldValue(report, storage.CheckDependencyCycle, joinCycle(report.DependencyCycle)))
+		telemetry.Set(ctx, "doctor.interleaved", doctorFieldValue(report, storage.CheckRankInversions, strconv.Itoa(len(report.Interleaved))))
 		// [LAW:effects-at-boundaries] Freshness resolution shells out to git and
 		// reads the store, so it runs here, at the boundary, before the pure text
 		// rendering below.

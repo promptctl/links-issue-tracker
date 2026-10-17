@@ -1110,9 +1110,16 @@ func annotateIssues(ctx context.Context, st storage.Store, requiredFields []stri
 	if err != nil {
 		return annotatedRows{}, err
 	}
+	// Which open dependencies are rank inversions is a reading of every live
+	// edge, not of these rows alone, so it is the store's one answer rather
+	// than one derived here. [LAW:single-enforcer]
+	dependencies, err := st.DependencyOrder(ctx)
+	if err != nil {
+		return annotatedRows{}, err
+	}
 	annotated, err := annotation.Annotate(ctx, subjects,
 		fieldAnnotator,
-		newBlockerAnnotator(details, held),
+		newBlockerAnnotator(details, held, dependencies),
 		newSiblingGateAnnotator(details, pendingSiblingsByEpic(held.ancestry.relations)),
 		newOrphanedAnnotator(orphanedThreshold),
 		newBlockingLabelAnnotator(),

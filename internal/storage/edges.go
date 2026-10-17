@@ -133,8 +133,4 @@ type IssueRelations struct {
 	Children  []model.Issue
 	BlockedBy []model.Issue
 	Blocks    []model.Issue
-	// RankInversions names the BlockedBy members tree order lists after Issue
-	// ([RankAncestry.Inverted]), read in the same snapshot as the ranks it
-	// compares.
-	RankInversions []string
 }

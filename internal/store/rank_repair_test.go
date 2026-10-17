@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/rank"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/storage/storagetest"
@@ -73,12 +72,12 @@ func rewrittenIDs(rewrites []rankRewrite) []string {
 func TestRepairRankOrderKeepsBandOrderWhileSinkingTheirDependent(t *testing.T) {
 	t.Parallel()
 	order := seq("zulu", "yankee", "xray", "gate", "whiskey", "victor")
-	edges := []blocksEdge{
-		{dependent: "gate", dependency: "zulu"},
-		{dependent: "gate", dependency: "yankee"},
-		{dependent: "gate", dependency: "xray"},
-		{dependent: "gate", dependency: "whiskey"},
-		{dependent: "gate", dependency: "victor"},
+	edges := []storage.DependencyEdge{
+		{Dependent: "gate", Dependency: "zulu"},
+		{Dependent: "gate", Dependency: "yankee"},
+		{Dependent: "gate", Dependency: "xray"},
+		{Dependent: "gate", Dependency: "whiskey"},
+		{Dependent: "gate", Dependency: "victor"},
 	}
 
 	rewrites, err := repairRankOrder(order, edges)
@@ -100,7 +99,7 @@ func TestRepairRankOrderMovesOnlyWhatTheEdgeForces(t *testing.T) {
 	t.Parallel()
 	order := seq("a", "b", "c", "d", "e", "f")
 	// b depends on e, so e must be placed first — the one constraint in the set.
-	rewrites, err := repairRankOrder(order, []blocksEdge{{dependent: "b", dependency: "e"}})
+	rewrites, err := repairRankOrder(order, []storage.DependencyEdge{{Dependent: "b", Dependency: "e"}})
 	if err != nil {
 		t.Fatalf("repairRankOrder() error = %v", err)
 	}
@@ -117,7 +116,7 @@ func TestRepairRankOrderMovesOnlyWhatTheEdgeForces(t *testing.T) {
 func TestRepairRankOrderWritesNothingWhenAlreadyOrdered(t *testing.T) {
 	t.Parallel()
 	order := seq("first", "second", "third")
-	rewrites, err := repairRankOrder(order, []blocksEdge{{dependent: "third", dependency: "first"}})
+	rewrites, err := repairRankOrder(order, []storage.DependencyEdge{{Dependent: "third", Dependency: "first"}})
 	if err != nil {
 		t.Fatalf("repairRankOrder() error = %v", err)
 	}
@@ -131,8 +130,8 @@ func TestRepairRankOrderWritesNothingWhenAlreadyOrdered(t *testing.T) {
 func TestRepairRankOrderToleratesDuplicateEdges(t *testing.T) {
 	t.Parallel()
 	order := seq("a", "b")
-	edge := blocksEdge{dependent: "a", dependency: "b"}
-	rewrites, err := repairRankOrder(order, []blocksEdge{edge, edge})
+	edge := storage.DependencyEdge{Dependent: "a", Dependency: "b"}
+	rewrites, err := repairRankOrder(order, []storage.DependencyEdge{edge, edge})
 	if err != nil {
 		t.Fatalf("repairRankOrder() error = %v", err)
 	}
@@ -146,9 +145,9 @@ func TestRepairRankOrderToleratesDuplicateEdges(t *testing.T) {
 func TestRepairRankOrderRefusesCycle(t *testing.T) {
 	t.Parallel()
 	order := seq("a", "b")
-	_, err := repairRankOrder(order, []blocksEdge{
-		{dependent: "a", dependency: "b"},
-		{dependent: "b", dependency: "a"},
+	_, err := repairRankOrder(order, []storage.DependencyEdge{
+		{Dependent: "a", Dependency: "b"},
+		{Dependent: "b", Dependency: "a"},
 	})
 	if err == nil {
 		t.Fatal("repairRankOrder() = nil error, want a cycle refusal")
@@ -182,24 +181,24 @@ func TestRepairRankOrderNeverAnchorsAGapWithNoRoom(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		order []rankedIssue
-		edge  blocksEdge
+		edge  storage.DependencyEdge
 		want  []string
 	}{
 		{
 			name:  "ranks differing only by trailing zeros",
 			order: []rankedIssue{{id: "u", rank: "U"}, {id: "v", rank: "V"}, {id: "v0", rank: "V0"}, {id: "w", rank: "W"}},
-			edge:  blocksEdge{dependent: "v0", dependency: "w"},
+			edge:  storage.DependencyEdge{Dependent: "v0", Dependency: "w"},
 			want:  []string{"u", "v", "w", "v0"},
 		},
 		{
 			name:  "an all-zero rank",
 			order: []rankedIssue{{id: "zero", rank: "0"}, {id: "one", rank: "1"}},
-			edge:  blocksEdge{dependent: "zero", dependency: "one"},
+			edge:  storage.DependencyEdge{Dependent: "zero", Dependency: "one"},
 			want:  []string{"one", "zero"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			rewrites, err := repairRankOrder(tc.order, []blocksEdge{tc.edge})
+			rewrites, err := repairRankOrder(tc.order, []storage.DependencyEdge{tc.edge})
 			if err != nil {
 				t.Fatalf("repairRankOrder() error = %v", err)
 			}
@@ -450,11 +449,11 @@ func TestRepairRankOrderProperties(t *testing.T) {
 		// set is satisfiable by construction and any refusal is a real defect
 		// rather than a fixture that asked for the impossible.
 		layer := rng.Perm(size)
-		var edges []blocksEdge
+		var edges []storage.DependencyEdge
 		for i := 0; i < size; i++ {
 			for j := 0; j < size; j++ {
 				if layer[i] < layer[j] && rng.Intn(12) == 0 {
-					edges = append(edges, blocksEdge{dependency: ids[i], dependent: ids[j]})
+					edges = append(edges, storage.DependencyEdge{Dependency: ids[i], Dependent: ids[j]})
 				}
 			}
 		}
@@ -475,7 +474,7 @@ func TestRepairRankOrderProperties(t *testing.T) {
 		if len(seen) != size {
 			t.Fatalf("trial %d: repaired order holds %d distinct ids, want %d", trial, len(seen), size)
 		}
-		if left := invertedEdges(repaired, storage.RankAncestry{}, edges); len(left) != 0 {
+		if left := invertedEdges(repaired, storage.NewDependencyOrder(storage.RankAncestry{}, edges), edges); len(left) != 0 {
 			t.Fatalf("trial %d: %d edge(s) still inverted after the repair, want 0", trial, len(left))
 		}
 		placed := make(map[string]int, size)
@@ -484,7 +483,7 @@ func TestRepairRankOrderProperties(t *testing.T) {
 		}
 		dependencies := make(map[string][]string, size)
 		for _, e := range edges {
-			dependencies[e.dependent] = append(dependencies[e.dependent], e.dependency)
+			dependencies[e.Dependent] = append(dependencies[e.Dependent], e.Dependency)
 		}
 		// seq ranks ids in slice order, so q ranging past p means q stood after p.
 		for i, p := range ids {
@@ -510,10 +509,13 @@ func TestRepairRankOrderProperties(t *testing.T) {
 // The repair's contract over a hierarchy: keys are read only among
 // frame-mates, so the properties are stated in tree order, with every
 // container's key read back from the repaired store. The edges are drawn
-// against a hidden tree order, so the lifted constraints are satisfiable by
-// construction, and the starting keys are shuffled, so no frame starts out
-// agreeing with it. Some edges join an issue to its own container or
-// descendant, which tree order decides and the repair must leave alone.
+// against a hidden order of the issues, so no issue waits on itself, as the
+// write boundary guarantees, while their lifted edges can run both ways
+// between frame-mates; and the starting keys are shuffled, so no frame starts
+// out agreeing with any order. Some edges join an issue to its own container
+// or descendant, which tree order decides and the repair must leave alone.
+// Whatever interleaves, the repair runs, leaves no inversion for the queue to
+// advertise it for, and writes nothing on a second run.
 func TestRepairRankOrderPropertiesAcrossFrames(t *testing.T) {
 	t.Parallel()
 	rng := rand.New(rand.NewSource(2))
@@ -527,6 +529,7 @@ func TestRepairRankOrderPropertiesAcrossFrames(t *testing.T) {
 		}
 		return storage.NewRankAncestry(links)
 	}
+	interleavedTrials := 0
 	for trial := 0; trial < 300; trial++ {
 		size := 1 + rng.Intn(40)
 		ids := make([]string, size)
@@ -537,32 +540,19 @@ func TestRepairRankOrderPropertiesAcrossFrames(t *testing.T) {
 				parent[ids[i]] = ids[rng.Intn(i)]
 			}
 		}
-		key, hidden := map[string]string{}, map[string]string{}
+		key := map[string]string{}
 		for i, at := range rng.Perm(size) {
 			key[ids[i]] = keyOf(size, at)
 		}
+		hiddenAt := map[string]int{}
 		for i, at := range rng.Perm(size) {
-			hidden[ids[i]] = keyOf(size, at)
+			hiddenAt[ids[i]] = at
 		}
-		hiddenOrder := ancestryOver(parent, hidden)
-		issuesBy := func(k map[string]string) []model.Issue {
-			out := make([]model.Issue, size)
-			for i, id := range ids {
-				out[i] = model.Issue{ID: id, Rank: k[id]}
-			}
-			return out
-		}
-		treeAt := map[string]int{}
-		hiddenIssues := issuesBy(hidden)
-		hiddenOrder.Sort(hiddenIssues)
-		for at, issue := range hiddenIssues {
-			treeAt[issue.ID] = at
-		}
-		var edges []blocksEdge
+		var edges []storage.DependencyEdge
 		for _, dependency := range ids {
 			for _, dependent := range ids {
-				if treeAt[dependency] < treeAt[dependent] && rng.Intn(8) == 0 {
-					edges = append(edges, blocksEdge{dependent: dependent, dependency: dependency})
+				if hiddenAt[dependency] < hiddenAt[dependent] && rng.Intn(8) == 0 {
+					edges = append(edges, storage.DependencyEdge{Dependent: dependent, Dependency: dependency})
 				}
 			}
 		}
@@ -573,10 +563,14 @@ func TestRepairRankOrderPropertiesAcrossFrames(t *testing.T) {
 		}
 		slices.SortFunc(order, compareRankedIssues)
 		ancestry := ancestryOver(parent, key)
-		constraints := rankConstraints(edges, ancestry)
+		dependencies := storage.NewDependencyOrder(ancestry, edges)
+		if len(dependencies.Interleaved()) > 0 {
+			interleavedTrials++
+		}
+		constraints := dependencies.Constraints()
 		rewrites, err := repairRankOrder(order, constraints)
 		if err != nil {
-			t.Fatalf("trial %d (size %d, %d edges): repairRankOrder() error = %v, want none for edges a tree order satisfies", trial, size, len(edges), err)
+			t.Fatalf("trial %d (size %d, %d edges): repairRankOrder() error = %v, want none: no issue waits on itself", trial, size, len(edges), err)
 		}
 
 		repairedKey := maps.Clone(key)
@@ -592,18 +586,19 @@ func TestRepairRankOrderPropertiesAcrossFrames(t *testing.T) {
 		}
 		repaired := applyToOrder(order, rewrites)
 		repairedAncestry := ancestryOver(parent, repairedKey)
-		if left := invertedEdges(repaired, repairedAncestry, edges); len(left) != 0 {
+		if left := invertedEdges(repaired, storage.NewDependencyOrder(repairedAncestry, edges), edges); len(left) != 0 {
 			t.Fatalf("trial %d: %v still inverted in tree order after the repair, want none", trial, left)
 		}
 		// Within a frame, an issue falls behind a frame-mate that stood after
 		// it only while it waits on a dependency placed no earlier than that one.
 		waitsOn := map[string][]string{}
 		for _, c := range constraints {
-			waitsOn[c.dependent] = append(waitsOn[c.dependent], c.dependency)
+			waitsOn[c.Dependent] = append(waitsOn[c.Dependent], c.Dependency)
 		}
 		for _, p := range ids {
 			for _, q := range ids {
-				if p == q || ancestry.Frame(p) != ancestry.Frame(q) || key[q] < key[p] {
+				pRep, qRep, comparable := ancestry.Representatives(p, q)
+				if !comparable || pRep != p || qRep != q || key[q] < key[p] {
 					continue
 				}
 				overtaken := repairedKey[q] < repairedKey[p]
@@ -613,13 +608,17 @@ func TestRepairRankOrderPropertiesAcrossFrames(t *testing.T) {
 				}
 			}
 		}
-		again, err := repairRankOrder(repaired, rankConstraints(edges, repairedAncestry))
+		again, err := repairRankOrder(repaired, storage.NewDependencyOrder(repairedAncestry, edges).Constraints())
 		if err != nil {
 			t.Fatalf("trial %d: second repairRankOrder() error = %v", trial, err)
 		}
 		if len(again) != 0 {
 			t.Fatalf("trial %d: second repair wrote %d rank(s), want 0 — the repair must be idempotent", trial, len(again))
 		}
+	}
+	// Both shapes must occur, or a property above held over only one of them.
+	if interleavedTrials == 0 || interleavedTrials == 300 {
+		t.Fatalf("%d of 300 trials interleaved, want some and not all", interleavedTrials)
 	}
 }
 

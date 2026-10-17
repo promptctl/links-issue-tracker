@@ -168,7 +168,7 @@ func fetchIssueRelations(ctx context.Context, st storage.Store, issues []model.I
 // issue already depends on directly is named once, as the direct edge. No
 // inherited edge is a rank inversion of this issue: rank hygiene of the epic's
 // own edge is a fact about the epic, which lit doctor's inversion pass orders.
-func newBlockerAnnotator(details map[string]storage.IssueRelations, ancestry heldAncestry) annotation.Annotator {
+func newBlockerAnnotator(details map[string]storage.IssueRelations, ancestry heldAncestry, dependencies storage.DependencyOrder) annotation.Annotator {
 	// [LAW:dataflow-not-control-flow] Dependency lookup runs for every issue;
 	// empty blockers list means no annotations, not a skipped operation.
 	return func(_ context.Context, issue model.Issue) ([]annotation.Annotation, error) {
@@ -196,7 +196,7 @@ func newBlockerAnnotator(details map[string]storage.IssueRelations, ancestry hel
 				Kind:    annotation.OpenDependency,
 				Message: dep.ID,
 			})
-			if slices.Contains(detail.RankInversions, dep.ID) {
+			if dependencies.Inverted(issue, dep) {
 				annotations = append(annotations, annotation.Annotation{
 					Kind:    annotation.RankInversion,
 					Message: dep.ID,

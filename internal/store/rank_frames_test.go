@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -44,13 +43,25 @@ func storedRanks(t *testing.T, ctx context.Context, st *Store) map[string]string
 	return ranks
 }
 
+// rankInversionsOf names the dependencies of id that DependencyOrder reads as
+// inverted, the question the queue's annotation asks of each row.
 func rankInversionsOf(t *testing.T, ctx context.Context, st *Store, id string) []string {
 	t.Helper()
+	order, err := st.DependencyOrder(ctx)
+	if err != nil {
+		t.Fatalf("DependencyOrder: %v", err)
+	}
 	relations, err := st.GetRelationsByIDs(ctx, []string{id})
 	if err != nil {
 		t.Fatalf("GetRelationsByIDs(%s): %v", id, err)
 	}
-	return relations[id].RankInversions
+	var inverted []string
+	for _, dependency := range relations[id].BlockedBy {
+		if order.Inverted(relations[id].Issue, dependency) {
+			inverted = append(inverted, dependency.ID)
+		}
+	}
+	return inverted
 }
 
 // A task waiting on a task in the epic listed after its own is inverted
@@ -169,11 +180,11 @@ func TestAnEdgeToAnIssuesOwnContainerIsNoRankInversion(t *testing.T) {
 	}
 }
 
-// Two epics whose tasks wait on each other's have no tree order that puts
-// each dependency first, though no edge closes a cycle among the tasks.
-// Doctor names the cycle through the epics, and the repair refuses on the
-// same path rather than writing an order that satisfies half of it.
-func TestEpicsWhoseTasksWaitOnEachOtherAreACycle(t *testing.T) {
+// Two epics whose tasks wait on each other's both ways are a workable plan no
+// order of the two epics shows: Doctor names them interleaved instead of
+// counting an inversion or a cycle, and the repair leaves their order as it
+// stands while it repairs the inversion between two other epics.
+func TestEpicsWhoseTasksWaitOnEachOtherAreInterleaved(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
@@ -182,25 +193,82 @@ func TestEpicsWhoseTasksWaitOnEachOtherAreACycle(t *testing.T) {
 	secondOther := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: "second other", Topic: "rank", IssueType: "task", ParentID: second.ID})
 	blockOrFatal(t, ctx, st, firstTask.ID, secondTask.ID)
 	blockOrFatal(t, ctx, st, secondOther.ID, firstOther.ID)
+	third := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: "third", Topic: "rank", IssueType: "epic", Placement: storage.RankBottom})
+	fourth := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: "fourth", Topic: "rank", IssueType: "epic", Placement: storage.RankBottom})
+	thirdTask := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: "third task", Topic: "rank", IssueType: "task", ParentID: third.ID})
+	fourthTask := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: "fourth task", Topic: "rank", IssueType: "task", ParentID: fourth.ID})
+	blockOrFatal(t, ctx, st, thirdTask.ID, fourthTask.ID)
 	before := storedRanks(t, ctx, st)
+	interleaved := []string{first.ID, second.ID}
+	slices.Sort(interleaved)
+
+	report, err := st.Doctor(ctx)
+	if err != nil {
+		t.Fatalf("Doctor: %v", err)
+	}
+	if len(report.DependencyCycle) != 0 {
+		t.Errorf("Doctor.DependencyCycle = %v, want none: no issue waits on itself", report.DependencyCycle)
+	}
+	if !slices.EqualFunc(report.Interleaved, [][]string{interleaved}, slices.Equal) {
+		t.Errorf("Doctor.Interleaved = %v, want [%v]", report.Interleaved, interleaved)
+	}
+	if report.RankInversions != 1 {
+		t.Errorf("Doctor.RankInversions = %d, want 1: %s waits on %s, and the interleaved edges are not counted", report.RankInversions, thirdTask.ID, fourthTask.ID)
+	}
+	if !slices.ContainsFunc(report.Warnings, func(w string) bool {
+		return strings.HasPrefix(w, "interleaved: "+strings.Join(interleaved, ", ")+" — ")
+	}) {
+		t.Errorf("Warnings = %v, want one naming %v interleaved", report.Warnings, interleaved)
+	}
+
+	if _, err := st.FixRankInversions(ctx); err != nil {
+		t.Fatalf("FixRankInversions: %v, want the inversion beside the interleaved epics repaired", err)
+	}
+	after := storedRanks(t, ctx, st)
+	for _, id := range []string{first.ID, second.ID, firstTask.ID, firstOther.ID, secondTask.ID, secondOther.ID} {
+		if after[id] != before[id] {
+			t.Errorf("rank of %s = %q after the repair, want it untouched %q", id, after[id], before[id])
+		}
+	}
+	if !(after[fourth.ID] < after[third.ID]) {
+		t.Errorf("ranks fourth=%q third=%q, want fourth listed first", after[fourth.ID], after[third.ID])
+	}
+	report, err = st.Doctor(ctx)
+	if err != nil {
+		t.Fatalf("Doctor after the repair: %v", err)
+	}
+	if report.RankInversions != 0 || !slices.EqualFunc(report.Interleaved, [][]string{interleaved}, slices.Equal) {
+		t.Errorf("after the repair RankInversions = %d, Interleaved = %v; want 0 and [%v]", report.RankInversions, report.Interleaved, interleaved)
+	}
+}
+
+// A loop of blocked-by edges is a dependency cycle even where one of its edges
+// joins an epic to its own task, which no key orders: the issues' own edges
+// are what loop, and none of the work on it can start. Doctor names it and the
+// repair refuses on it. The write boundary refuses these edges, so they are
+// planted as restored data would carry them.
+func TestADependencyCycleThroughAContainerIsReported(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	epic, task, _, _ := twoEpics(t, ctx, st)
+	sibling := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: "sibling", Topic: "rank", IssueType: "task", ParentID: epic.ID})
+	for _, edge := range [][2]string{{task.ID, sibling.ID}, {epic.ID, task.ID}, {sibling.ID, epic.ID}} {
+		if _, err := st.db.ExecContext(ctx, `INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, 'blocked-by', ?, 'import')`, edge[0], edge[1], "2026-01-01T00:00:00Z"); err != nil {
+			t.Fatalf("plant %s blocked by %s: %v", edge[0], edge[1], err)
+		}
+	}
 
 	report, err := st.Doctor(ctx)
 	if err != nil {
 		t.Fatalf("Doctor: %v", err)
 	}
 	cycle := report.DependencyCycle
-	if len(cycle) != 3 || cycle[0] != cycle[2] || !slices.Contains(cycle, first.ID) || !slices.Contains(cycle, second.ID) {
-		t.Fatalf("Doctor.DependencyCycle = %v, want the two epics", cycle)
+	if len(cycle) != 4 || cycle[0] != cycle[3] || !slices.Contains(cycle, epic.ID) || !slices.Contains(cycle, task.ID) || !slices.Contains(cycle, sibling.ID) {
+		t.Fatalf("Doctor.DependencyCycle = %v, want the loop through %s, %s and %s", cycle, epic.ID, task.ID, sibling.ID)
 	}
-	if !slices.ContainsFunc(report.Warnings, func(w string) bool { return strings.Contains(w, cycleMembers) }) {
-		t.Errorf("Warnings = %v, want the cycle's warning to say what an epic on it stands for", report.Warnings)
-	}
-	_, err = st.FixRankInversions(ctx)
-	if err == nil || !strings.Contains(err.Error(), strings.Join(cycle, " -> ")) {
+	if _, err := st.FixRankInversions(ctx); err == nil || !strings.Contains(err.Error(), strings.Join(cycle, " -> ")) {
 		t.Fatalf("FixRankInversions error = %v, want a refusal naming %v", err, cycle)
-	}
-	if after := storedRanks(t, ctx, st); !maps.Equal(after, before) {
-		t.Errorf("ranks after the refusal = %v, want them untouched %v", after, before)
 	}
 }
 
@@ -234,7 +302,7 @@ func TestTheRankRepairWritesNoKeyAClosedIssueHolds(t *testing.T) {
 		t.Fatalf("loadRankAncestry: %v", err)
 	}
 	live := slices.DeleteFunc(order, func(item rankedIssue) bool { return item.id == closed.ID })
-	liveOnly, err := repairRankOrder(live, rankConstraints([]blocksEdge{{dependent: p.ID, dependency: q.ID}}, ancestry))
+	liveOnly, err := repairRankOrder(live, storage.NewDependencyOrder(ancestry, []storage.DependencyEdge{{Dependent: p.ID, Dependency: q.ID}}).Constraints())
 	if err != nil || len(liveOnly) != 1 {
 		t.Fatalf("repair over live issues alone = %v, %v; want one write", liveOnly, err)
 	}

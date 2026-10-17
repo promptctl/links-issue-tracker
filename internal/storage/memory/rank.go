@@ -284,7 +284,7 @@ func (e *Engine) RankSet(ctx context.Context, ids []string) (storage.RankSetResu
 		}
 		chains[i] = chain
 	}
-	reps, err := frameRepresentatives(chains)
+	reps, _, err := storage.FrameRepresentatives(chains)
 	if err != nil {
 		return storage.RankSetResult{}, fmt.Errorf("rank set: %w", err)
 	}
@@ -359,7 +359,7 @@ func (e *Engine) resolveRankPair(issueID, targetID string) (storage.RankMove, er
 	if err != nil {
 		return storage.RankMove{}, err
 	}
-	reps, err := frameRepresentatives([][]string{issueChain, targetChain})
+	reps, _, err := storage.FrameRepresentatives([][]string{issueChain, targetChain})
 	if err != nil {
 		return storage.RankMove{}, err
 	}
@@ -419,61 +419,4 @@ func (e *Engine) frames(rel model.Relation) bool {
 	}
 	_, gone := parent.retention.(model.Deleted)
 	return !gone
-}
-
-// frameRepresentatives maps each ancestor chain onto its stand-in in the
-// chains' comparable frame.
-//
-// Rank meaning is frame-local: an issue's rank is only ever read against its
-// frame-mates, so issues from different frames resolve to their representatives
-// directly under the lowest common ancestor of all the chains — and to their
-// roots when the ancestries share none, the top level being the frame that
-// contains everything. Nothing inside any epic is reordered by a cross-frame
-// request. [LAW:types-are-the-program] A cross-frame position is an illegal
-// state of the order; this resolution is what makes every write a legal one.
-func frameRepresentatives(chains [][]string) ([]string, error) {
-	depths := make([]map[string]int, len(chains))
-	for i, chain := range chains {
-		depth := make(map[string]int, len(chain))
-		for index, id := range chain {
-			depth[id] = index
-		}
-		depths[i] = depth
-	}
-	for i, chain := range chains {
-		for j, depth := range depths {
-			if i == j {
-				continue
-			}
-			if index, inside := depth[chain[0]]; inside && index > 0 {
-				return nil, storage.FrameContainmentError{ContainerID: chain[0], ContainedID: chains[j][0]}
-			}
-		}
-	}
-	// Common ancestors form a shared suffix of every chain, so the first
-	// element of the first chain present in all the others is the lowest
-	// common ancestor.
-	lowestCommon := ""
-	for _, id := range chains[0] {
-		shared := true
-		for _, depth := range depths[1:] {
-			if _, ok := depth[id]; !ok {
-				shared = false
-				break
-			}
-		}
-		if shared {
-			lowestCommon = id
-			break
-		}
-	}
-	reps := make([]string, len(chains))
-	for i, chain := range chains {
-		if lowestCommon == "" {
-			reps[i] = chain[len(chain)-1]
-			continue
-		}
-		reps[i] = chain[depths[i][lowestCommon]-1]
-	}
-	return reps, nil
 }

@@ -241,67 +241,102 @@ func (a RankAncestry) Sort(issues []model.Issue) {
 	slices.SortFunc(issues, a.Compare)
 }
 
-// Frame is the frame tree order places id in: the container its path ends
-// at, or TopLevel for an issue no container holds.
-func (a RankAncestry) Frame(id string) Frame {
-	places := a.places[id]
-	if len(places) == 0 {
-		return TopLevel
+// FrameRepresentatives maps each ancestor chain (self first, root last) onto
+// its representative in the chains' comparable frame. Rank meaning is
+// frame-local: an issue's rank is only ever compared against its frame-mates
+// (siblings under the same container, or fellow top-level items), so issues
+// from different frames resolve to their representatives directly under the
+// lowest common ancestor of all chains — and to their roots when the
+// ancestries share none, the top level being the comparable frame. Nothing
+// inside any epic is ever reordered by a cross-frame request. A chain whose
+// issue is a container of another chain's is refused with
+// [FrameContainmentError]: tree order lists a container before everything
+// inside it, so no frame holds both.
+//
+// The frame the representatives live in comes back with them: it is the lowest
+// common ancestor the walk already found, and it is the scope every neighbor
+// lookup seeded by these representatives must be taken in. Returning it here
+// rather than re-deriving it at each callsite keeps the representatives and
+// their keyspace from ever disagreeing. [LAW:one-source-of-truth]
+//
+// [LAW:types-are-the-program] Cross-frame midpoints are an illegal state of
+// the rank keyspace; this resolution makes every write frame-coherent.
+// [LAW:single-enforcer] The one resolution core behind every rank verb in both
+// engines, and behind [RankAncestry.Representatives].
+func FrameRepresentatives(chains [][]string) ([]string, Frame, error) {
+	memberships := make([]map[string]int, len(chains))
+	for i, chain := range chains {
+		m := make(map[string]int, len(chain))
+		for idx, id := range chain {
+			m[id] = idx
+		}
+		memberships[i] = m
 	}
-	return Frame(places[len(places)-1].id)
+	for i, chain := range chains {
+		for j, m := range memberships {
+			if i == j {
+				continue
+			}
+			if idx, ok := m[chain[0]]; ok && idx > 0 {
+				return nil, TopLevel, FrameContainmentError{ContainerID: chain[0], ContainedID: chains[j][0]}
+			}
+		}
+	}
+	// Common ancestors form a shared suffix of every chain, so the first
+	// element of chains[0] present in all others is the lowest common ancestor.
+	lcaID := ""
+	for _, id := range chains[0] {
+		inAll := true
+		for _, m := range memberships[1:] {
+			if _, ok := m[id]; !ok {
+				inAll = false
+				break
+			}
+		}
+		if inAll {
+			lcaID = id
+			break
+		}
+	}
+	reps := make([]string, len(chains))
+	for i, chain := range chains {
+		if lcaID == "" {
+			reps[i] = chain[len(chain)-1]
+			continue
+		}
+		reps[i] = chain[memberships[i][lcaID]-1]
+	}
+	// No common ancestor means the representatives are roots, and the frame
+	// holding every root is the top level — which Frame spells as the same
+	// empty string lcaID already carries.
+	return reps, Frame(lcaID), nil
 }
 
 // Representatives resolves x and y to the frame-mates tree order decides them
-// by: each issue itself when the two share a frame, else its container
-// directly under the deepest container holding both, or its root when none
-// does. ok is false when one contains the other — tree order lists a container
-// before everything inside it whatever any key holds, so no frame holds both
-// and no key orders them. It is the resolution the rank verbs move
-// representatives by (resolveFrameRepresentatives), read off the ancestry.
+// by: [FrameRepresentatives] over their places in the ancestry. ok is false
+// when x and y are one issue or one contains the other, which tree order
+// orders and no key can.
 func (a RankAncestry) Representatives(x, y string) (xRep, yRep string, ok bool) {
-	xs, ys := a.path(x), a.path(y)
-	i := 0
-	for i < len(xs) && i < len(ys) && xs[i] == ys[i] {
-		i++
-	}
-	if i == len(xs) || i == len(ys) {
+	if x == y {
 		return "", "", false
 	}
-	return xs[i], ys[i], true
-}
-
-// Inverted reports whether tree order lists dependency after dependent: a rank
-// inversion, a dependency ranked below the work that waits on it. An edge
-// between a container and an issue inside it is never one, because no
-// arrangement of keys can put it right or wrong (see Representatives).
-// [LAW:single-enforcer] The one definition of a rank inversion: the queue's
-// annotation and lit doctor's count both read it, and the rank repair leaves
-// it false on every edge it can express.
-func (a RankAncestry) Inverted(dependent, dependency model.Issue) bool {
-	_, _, comparable := a.Representatives(dependent.ID, dependency.ID)
-	return comparable && a.Compare(dependency, dependent) > 0
-}
-
-// Inversions names, by id and in the order given, the dependencies among
-// blockedBy that tree order lists after issue.
-func (a RankAncestry) Inversions(issue model.Issue, blockedBy []model.Issue) []string {
-	inverted := []string{}
-	for _, dep := range blockedBy {
-		if a.Inverted(issue, dep) {
-			inverted = append(inverted, dep.ID)
-		}
+	reps, _, err := FrameRepresentatives([][]string{a.chain(x), a.chain(y)})
+	// Containment is the one refusal FrameRepresentatives makes.
+	if err != nil {
+		return "", "", false
 	}
-	return inverted
+	return reps[0], reps[1], true
 }
 
-// path is id's containers, outermost first, then id itself.
-func (a RankAncestry) path(id string) []string {
+// chain is id followed by its containers, innermost first.
+func (a RankAncestry) chain(id string) []string {
 	places := a.places[id]
-	ids := make([]string, len(places), len(places)+1)
-	for i, p := range places {
-		ids[i] = p.id
+	chain := make([]string, 0, len(places)+1)
+	chain = append(chain, id)
+	for i := len(places) - 1; i >= 0; i-- {
+		chain = append(chain, places[i].id)
 	}
-	return append(ids, id)
+	return chain
 }
 
 // placeAt is step i of an issue's path: its containers' places, then its own.

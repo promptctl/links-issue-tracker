@@ -97,7 +97,7 @@ func placedIssues(export model.Export) []rankedIssue {
 // resolves each row's rank on its own, so replicas that each swapped a
 // different pair can merge two rows onto one key, and a restore writes the keys
 // its export holds. The order they list in now — key, then id — is the order
-// the separation realizes, by the repair `lit doctor --fix rank` makes
+// the separation realizes, by the repair `lit doctor --fix=rank` makes
 // (rankRewrites): the longest run of keys that already ascend strictly stays,
 // so one holder of each shared key keeps it, and the rest are spaced into the
 // gaps that run leaves. So every listing keeps its order, and no key the

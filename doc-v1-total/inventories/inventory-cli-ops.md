@@ -666,7 +666,7 @@ Handler `doctorLeaf` — `doctor.go`. Access mode is resolved from the args BEFO
 
 | Flag | Default | `NoOptDefVal` | Effect | Line |
 |---|---|---|---|---|
-| `--fix` | `""` | `"all"` | "Apply fixes: --fix (all) or --fix rank,thingA" | `doctor.go` |
+| `--fix` | `""` | `"all"` | "Apply fixes: --fix (all) or --fix=rank,thingA" | `doctor.go` |
 
 ### 4.1 Fix registry
 
