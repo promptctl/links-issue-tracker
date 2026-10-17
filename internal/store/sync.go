@@ -494,8 +494,9 @@ func (s *Store) settleReceivedWithinLock(ctx context.Context, remote, branch str
 	return result, nil
 }
 
-// compactWithinLock runs DOLT_GC at the requested depth and rotates the
-// connection. The caller must already hold the commit lock; SyncCompact and
+// compactWithinLock runs DOLT_GC at the requested depth, rotates the
+// connection, and then sweeps the remote cache's orphaned instance refs. The
+// caller must already hold the commit lock; SyncCompact and
 // SyncCompactAndPush both compose over this helper so the compact step has one
 // implementation regardless of whether it runs as a standalone mutation or as
 // the first step of a larger one.
@@ -507,14 +508,23 @@ func (s *Store) settleReceivedWithinLock(ctx context.Context, remote, branch str
 // only this function can observe whether DOLT_GC landed — everything above it
 // sees one error and cannot tell a pass that never ran from a pass that ran and
 // was followed by a failure. [LAW:types-are-the-program]
-func (s *Store) compactWithinLock(ctx context.Context, mode GCMode) (compactionAttempt, error) {
+//
+// The sweep is here, after the reconnect, because this is the one moment
+// orphaned instance refs can be told from live ones: the reconnect just closed
+// every remote database this process held, nothing has opened one since, and
+// Dolt's LOCK and the commit lock keep every other writer of the mirrors —
+// another write engine, a receive's landing — off the store. So every path that
+// compacts collects the refs, and none can sweep without that moment.
+// [LAW:no-ambient-temporal-coupling] A sweep that fails reports in its outcome
+// rather than failing the compaction that already rewrote the store.
+func (s *Store) compactWithinLock(ctx context.Context, mode GCMode) (compactionAttempt, refSweepOutcome, error) {
 	attempt := compactionAttempt{Depth: mode}
 	args, err := gcProcedureArgs(mode)
 	if err != nil {
-		return attempt, err
+		return attempt, refSweepOutcome{}, err
 	}
 	if _, err := callIntProcedure(ctx, s.db, "DOLT_GC", args...); err != nil {
-		return attempt, fmt.Errorf("compact dolt store (%s): %w", mode, err)
+		return attempt, refSweepOutcome{}, fmt.Errorf("compact dolt store (%s): %w", mode, err)
 	}
 	// Recorded here, before the reconnect below and not after it: DOLT_GC has
 	// returned, so the store on disk is already rewritten and nothing that
@@ -522,7 +532,10 @@ func (s *Store) compactWithinLock(ctx context.Context, mode GCMode) (compactionA
 	// that never happened. [LAW:no-silent-failure]
 	attempt.Ran = true
 	// [LAW:single-enforcer] Online GC poisons the active SQL connection; the Store rotates it here so every downstream query contract is restored before lock release.
-	return attempt, s.reconnect(ctx)
+	if err := s.reconnect(ctx); err != nil {
+		return attempt, refSweepOutcome{}, err
+	}
+	return attempt, s.sweepOrphanedInstanceRefs(ctx), nil
 }
 
 // SyncCompact compacts the store at the requested depth, with no remote
@@ -545,10 +558,13 @@ func (s *Store) SyncCompact(ctx context.Context, mode GCMode) (storage.Compactio
 	}
 	before, beforeErr := s.measureFootprint()
 	var attempt compactionAttempt
+	var sweep refSweepOutcome
 	// [LAW:single-enforcer] Dolt garbage collection is exposed through a single Store entrypoint so every caller routes through the same commit-lock and retry wrapper.
 	err := s.runSyncMutation(ctx, func(ctx context.Context) error {
+		var swept refSweepOutcome
 		var compactErr error
-		attempt, compactErr = s.compactWithinLock(ctx, mode)
+		attempt, swept, compactErr = s.compactWithinLock(ctx, mode)
+		sweep = sweep.plus(swept)
 		return compactErr
 	})
 	// Measured on both paths, because a pass that ran and then failed to
@@ -556,7 +572,9 @@ func (s *Store) SyncCompact(ctx context.Context, mode GCMode) (storage.Compactio
 	// reading survives a dead connection: measureFootprint is one Stat and one
 	// ReadDir against the filesystem, with no engine and no lock involved.
 	after, afterErr := s.measureFootprint()
-	outcome := attempt.outcome(footprintDelta(before, after, errors.Join(beforeErr, afterErr)))
+	// The sweep's line joins the footprint's: both are this pass's account of
+	// what it changed on disk, and Detail is where that account goes.
+	outcome := attempt.outcome(joinMaintenance(footprintDelta(before, after, errors.Join(beforeErr, afterErr)), sweep.Report()))
 	if err != nil {
 		// The outcome is returned populated ALONGSIDE the error, because it
 		// describes the compaction and the compaction may well have happened —
@@ -576,7 +594,7 @@ func (s *Store) SyncCompact(ctx context.Context, mode GCMode) (storage.Compactio
 		// The error carries the same account for whoever is reading stderr
 		// rather than the trail, through the filter compactionReport already
 		// owns: a routine shallow pass stays silent, a deep one speaks.
-		return outcome, annotateWithMaintenance(err, compactionReport(attempt, nil))
+		return outcome, annotateWithMaintenance(err, joinMaintenance(compactionReport(attempt, nil), sweep.Report()))
 	}
 	return outcome, nil
 }
@@ -660,19 +678,13 @@ func (s *Store) SyncCompactAndPush(ctx context.Context, remote string, branch st
 		// journal between the reading and the pass it selects.
 		var depth GCMode
 		depth, depthErr = s.chooseCompactionDepth()
+		var swept refSweepOutcome
 		var compactErr error
-		attempt, compactErr = s.compactWithinLock(ctx, depth)
+		attempt, swept, compactErr = s.compactWithinLock(ctx, depth)
+		sweep = sweep.plus(swept)
 		if compactErr != nil {
 			return compactErr
 		}
-		// The one moment orphaned instance refs can be told from live ones:
-		// compaction's reconnect just closed every remote database this
-		// process held, and the push below has not opened one yet, while
-		// Dolt's LOCK keeps every other write engine off the store. Before
-		// the push, too, so the push fetches against the mirror as it will
-		// be kept rather than against refs about to be deleted.
-		// [LAW:no-ambient-temporal-coupling]
-		sweep = sweep.plus(s.sweepOrphanedInstanceRefs(ctx))
 		pushed, pushErr := s.pushWithinLock(ctx, remote, branch, setUpstream, force)
 		result = pushed
 		return pushErr

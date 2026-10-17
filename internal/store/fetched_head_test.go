@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
@@ -295,13 +297,14 @@ func TestLandFetchedHeadLeavesTheLiveStoreAloneForAnAbsentBranch(t *testing.T) {
 	}
 }
 
-// TestRemoteCacheLandingCopiesEveryRefTheCloneHoldsDifferently drives the git
-// half with plain git: the clone's mirror gained a ref, moved its last-known
-// ref onto an unrelated commit — a non-fast-forward, as a remote that was reset
-// produces — and shares one ref unchanged. The live mirror gains the new ref
-// and the clone's last-known value with their objects, and the unchanged ref
-// stays as it was; a mirror only the clone has is moved over whole.
-func TestRemoteCacheLandingCopiesEveryRefTheCloneHoldsDifferently(t *testing.T) {
+// TestRemoteCacheLandingCopiesTheLastKnownRefsTheCloneHoldsDifferently drives
+// the git half with plain git: the clone's mirror gained a last-known ref, moved
+// another onto an unrelated commit — a non-fast-forward, as a remote that was
+// reset produces — shares a third unchanged, and holds an instance ref the live
+// mirror has since swept. The live mirror gains the new last-known ref and the
+// clone's moved value with their objects, the unchanged ref stays as it was, and
+// the swept orphan stays swept; a mirror only the clone has is moved over whole.
+func TestRemoteCacheLandingCopiesTheLastKnownRefsTheCloneHoldsDifferently(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
@@ -341,13 +344,15 @@ func TestRemoteCacheLandingCopiesEveryRefTheCloneHoldsDifferently(t *testing.T) 
 		}
 	}
 	const lastKnown = lastKnownRefNamespace + "origin/dolt/data"
-	const unchanged = "refs/dolt/remotes/origin/dolt/data/unchanged"
-	const added = "refs/dolt/remotes/origin/dolt/data/added"
+	const unchanged = lastKnownRefNamespace + "other/dolt/data"
+	const added = lastKnownRefNamespace + "upstream/dolt/data"
+	orphan := trackingRefNamespace + "origin/dolt/data/" + uuid.NewString()
 	commitOn(liveRepo, lastKnown, "where live last saw the remote")
 	cloneLastKnown := commitOn(cloneRepo, lastKnown, "where the clone's fetch saw it")
 	liveUnchanged := commitOn(liveRepo, unchanged, "both hold this")
 	git(cloneRepo, "fetch", "--quiet", liveRepo, unchanged+":"+unchanged)
 	addedOID := commitOn(cloneRepo, added, "what the clone fetched")
+	commitOn(cloneRepo, orphan, "an orphan the clone copied before the live sweep")
 
 	plan, err := planRemoteCacheLanding(ctx, liveBase, cloneBase)
 	if err != nil {
@@ -368,8 +373,11 @@ func TestRemoteCacheLandingCopiesEveryRefTheCloneHoldsDifferently(t *testing.T) 
 	if got := git(liveRepo, "rev-parse", unchanged); got != liveUnchanged {
 		t.Fatalf("live mirror's %s = %s, want it left at %s", unchanged, got, liveUnchanged)
 	}
+	if out, err := exec.Command("git", "--git-dir", liveRepo, "rev-parse", "--verify", "--quiet", orphan).CombinedOutput(); err == nil {
+		t.Fatalf("landing put the swept orphan %s back in the live mirror at %s", orphan, strings.TrimSpace(string(out)))
+	}
 	if len(plan.copies) != 1 || len(plan.copies[0].refspecs) != 2 {
-		t.Fatalf("plan copies = %+v, want one mirror carrying exactly the two refs that differ", plan.copies)
+		t.Fatalf("plan copies = %+v, want one mirror carrying exactly the two last-known refs that differ", plan.copies)
 	}
 	if _, err := os.Stat(filepath.Join(liveBase, onlyCloneKey, "repo.git")); err != nil {
 		t.Fatalf("the mirror only the clone had was not moved into the live store: %v", err)

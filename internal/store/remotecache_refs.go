@@ -15,9 +15,10 @@ import (
 // with the instance's own UUID — a tracking ref under refs/dolt/remotes/ and a
 // local ref under refs/dolt/blobstore/ (RemoteTrackingRef and OwnedLocalRef in
 // the fork's store/blobstore/git_refs.go) — and deletes both when the instance
-// closes, after publishing its view of the remote to one shared last-known ref
-// (fork patch 7, FORKS.md). So between operations a mirror holds exactly its
-// last-known refs, and an instance ref on disk is one whose instance never
+// closes, after publishing its tracking ref to one shared last-known ref (fork
+// patch 7, FORKS.md). Every close publishes, so the last-known ref holds what
+// the last instance to close saw. So between operations a mirror holds exactly
+// its last-known refs, and an instance ref on disk is one whose instance never
 // closed: left by a lit built before patch 7, whose fetches never closed their
 // blobstore, or by a process that died holding one.
 //
@@ -28,16 +29,24 @@ const (
 	// lastKnownRefNamespace is where fork patch 7's LastKnownRemoteRef puts the
 	// one ref a mirror keeps per remote between operations.
 	lastKnownRefNamespace = "refs/dolt/last-known/"
+	// trackingRefNamespace holds each instance's view of the remote
+	// (RemoteTrackingRef): a state the remote really held.
+	trackingRefNamespace = "refs/dolt/remotes/"
+	// localRefNamespace holds each instance's local working ref
+	// (OwnedLocalRef), which can name a commit the remote never received — a
+	// push the remote refused, or a writer that died before pushing.
+	localRefNamespace = "refs/dolt/blobstore/"
 )
 
 // instanceRefNamespaces are the two namespaces Dolt names per-instance refs in,
 // each followed by `<remote>/<ref>/<uuid>`.
-var instanceRefNamespaces = [...]string{"refs/dolt/remotes/", "refs/dolt/blobstore/"}
+var instanceRefNamespaces = [...]string{trackingRefNamespace, localRefNamespace}
 
 // instanceRef is one blobstore instance's ref, read off its name.
 type instanceRef struct {
-	name   string
-	object string
+	mirrorRef
+	// namespace is which of instanceRefNamespaces the name sits in.
+	namespace string
 	// lastKnown is the ref this instance would have published to had it
 	// closed: the same `<remote>/<ref>` under lastKnownRefNamespace.
 	lastKnown string
@@ -49,9 +58,9 @@ type instanceRef struct {
 // delete. [LAW:parse-dont-validate] The UUID must be in exactly the canonical
 // form uuid.NewString writes — uuid.Parse also accepts braced, URN and
 // undashed spellings Dolt never produces — so the round trip is the test.
-func parseInstanceRef(name, object string) (instanceRef, bool) {
+func parseInstanceRef(ref mirrorRef) (instanceRef, bool) {
 	for _, namespace := range instanceRefNamespaces {
-		rest, found := strings.CutPrefix(name, namespace)
+		rest, found := strings.CutPrefix(ref.name, namespace)
 		if !found {
 			continue
 		}
@@ -63,7 +72,7 @@ func parseInstanceRef(name, object string) (instanceRef, bool) {
 		if err != nil || id.String() != rest[slash+1:] {
 			return instanceRef{}, false
 		}
-		return instanceRef{name: name, object: object, lastKnown: lastKnownRefNamespace + rest[:slash]}, true
+		return instanceRef{mirrorRef: ref, namespace: namespace, lastKnown: lastKnownRefNamespace + rest[:slash]}, true
 	}
 	return instanceRef{}, false
 }
@@ -148,30 +157,30 @@ func (s *Store) sweepOrphanedInstanceRefs(ctx context.Context) refSweepOutcome {
 // freed.
 //
 // Before deleting, it makes sure the mirror keeps one ref per remote: a remote
-// whose last-known ref is absent gets the newest of its instance refs published
+// whose last-known ref is absent gets the newest of its tracking refs published
 // there. That is the state a pre-patch-7 mirror is in — instance refs and
 // nothing else — and deleting them all would leave it negotiating its next
-// fetch with no haves, which downloads the whole remote snapshot again. A
-// last-known ref already present is kept as it is: it is the newest state a
-// closed instance saw, and an orphan is at best a peer of it.
+// fetch with no haves, which downloads the whole remote snapshot again. Only a
+// tracking ref is a candidate, because only it names a state the remote held;
+// a local ref can name a commit the remote never received. A last-known ref
+// already present is kept as it is: a closed instance published it, which is
+// the same standing any orphan would have.
 //
 // The publish and the deletes are one `git update-ref --stdin` transaction, each
 // conditioned on the value just listed, so the mirror is never seen with the
 // orphans gone and no last-known ref in their place.
 func sweepMirror(ctx context.Context, gitDir string) (removed int, reclaimed int64, err error) {
-	// Newest first, so the first instance ref seen for a remote is the one to
+	// Newest first, so the first tracking ref seen for a remote is the one to
 	// publish if it has no last-known ref.
-	out, err := exec.CommandContext(ctx, "git", "--git-dir", gitDir, "for-each-ref",
-		"--sort=-committerdate", "--format=%(refname) %(objectname)", "refs/dolt/").Output()
+	refs, err := listMirrorRefs(ctx, gitDir)
 	if err != nil {
-		return 0, 0, fmt.Errorf("list refs: %w", err)
+		return 0, 0, err
 	}
 	present := map[string]bool{}
 	var orphans []instanceRef
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		name, object, _ := strings.Cut(line, " ")
-		present[name] = true
-		if ref, ok := parseInstanceRef(name, object); ok {
+	for _, listed := range refs {
+		present[listed.name] = true
+		if ref, ok := parseInstanceRef(listed); ok {
 			orphans = append(orphans, ref)
 		}
 	}
@@ -181,9 +190,12 @@ func sweepMirror(ctx context.Context, gitDir string) (removed int, reclaimed int
 
 	var transaction strings.Builder
 	for _, ref := range orphans {
-		if !present[ref.lastKnown] {
-			// `create` fails if the ref exists, so a last-known ref that
-			// appeared since the listing is kept, not overwritten.
+		if ref.namespace == trackingRefNamespace && !present[ref.lastKnown] {
+			// `create` fails if the ref exists, and the whole transaction
+			// with it, so nothing is deleted. A last-known ref appearing
+			// since the listing means an instance closed on this mirror
+			// mid-sweep, which the precondition rules out; when it is
+			// broken, the orphans are no longer known to be orphans.
 			fmt.Fprintf(&transaction, "create %s %s\n", ref.lastKnown, ref.object)
 			present[ref.lastKnown] = true
 		}

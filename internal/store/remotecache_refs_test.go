@@ -180,14 +180,15 @@ func orphanSnapshot(t *testing.T, mirror string, size int) (commit, blob string)
 	return commit, blob
 }
 
-// TestSweepCollectsOrphanedInstanceRefsAndKeepsTheNewestAsLastKnown drives the
-// sweep over the mirror a pre-patch-7 lit leaves: instance refs in both of
-// Dolt's namespaces and no last-known ref. The newest orphan's snapshot becomes
-// the last-known ref, so the mirror keeps something to negotiate with; every
-// orphan goes, and so do the objects only an orphan reached, which is what the
-// reclaimed figure counts. A ref shaped almost like an instance ref is not one,
-// so it is not the sweep's to delete.
-func TestSweepCollectsOrphanedInstanceRefsAndKeepsTheNewestAsLastKnown(t *testing.T) {
+// TestSweepCollectsOrphanedInstanceRefsAndKeepsTheNewestTrackingRefAsLastKnown
+// drives the sweep over the mirror a pre-patch-7 lit leaves: instance refs in
+// both of Dolt's namespaces and no last-known ref. The newest tracking ref's
+// snapshot becomes the last-known ref, so the mirror keeps something to
+// negotiate with — not the newer-dated local ref, which names a commit the
+// remote never received. Every orphan goes, and so do the objects only an
+// orphan reached, which is what the reclaimed figure counts. A ref shaped
+// almost like an instance ref is not one, so it is not the sweep's to delete.
+func TestSweepCollectsOrphanedInstanceRefsAndKeepsTheNewestTrackingRefAsLastKnown(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	doltRoot, remote, mirror := pushedMirror(t)
@@ -197,13 +198,16 @@ func TestSweepCollectsOrphanedInstanceRefsAndKeepsTheNewestAsLastKnown(t *testin
 
 	const snapshotSize = 1 << 20
 	oldCommit, oldBlob := orphanSnapshot(t, mirror, snapshotSize)
+	// Dated after every tracking ref, as a writer's local commit made after
+	// its last fetch is, so a publish that considered local refs picks it.
+	unpushed := gitAt(t, mirror, []string{"GIT_COMMITTER_DATE=2099-01-01T00:00:00Z"}, "", "commit-tree", oldCommit+"^{tree}", "-m", "a commit the remote never received")
 	newestOrphan := "refs/dolt/remotes/origin/dolt/data/" + uuid.NewString()
 	oldOrphan := "refs/dolt/remotes/origin/dolt/data/" + uuid.NewString()
 	localOrphan := "refs/dolt/blobstore/origin/dolt/data/" + uuid.NewString()
 	notAnInstance := "refs/dolt/remotes/origin/dolt/data/{" + uuid.NewString() + "}"
 	gitAt(t, mirror, nil, "", "update-ref", newestOrphan, head)
 	gitAt(t, mirror, nil, "", "update-ref", oldOrphan, oldCommit)
-	gitAt(t, mirror, nil, "", "update-ref", localOrphan, oldCommit)
+	gitAt(t, mirror, nil, "", "update-ref", localOrphan, unpushed)
 	gitAt(t, mirror, nil, "", "update-ref", notAnInstance, head)
 
 	session, err := OpenSync(ctx, doltRoot, "ws")
@@ -231,8 +235,8 @@ func TestSweepCollectsOrphanedInstanceRefsAndKeepsTheNewestAsLastKnown(t *testin
 
 // TestSweepKeepsAnExistingLastKnownRef pins the other arm of the publish: a
 // mirror that already has a last-known ref keeps it, even when an orphan names
-// a different state, because the last-known ref is what a closed instance saw
-// and an orphan is at best a peer of it.
+// a newer-dated state, because a closed instance published it, which is the
+// same standing any orphan would have.
 func TestSweepKeepsAnExistingLastKnownRef(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -288,6 +292,38 @@ func TestSyncCompactAndPushReportsTheSweep(t *testing.T) {
 	want := []string{lastKnownRefNamespace + "origin/dolt/data " + gitRevParse(t, remote, "refs/dolt/data")}
 	if got := mirrorRefValues(t, mirror); strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("mirror refs after the push = %v, want %v", got, want)
+	}
+}
+
+// TestSyncCompactSweepsAndReportsItInDetail proves the sweep rides every
+// compaction, not only the push's: a workspace that never pushes compacts
+// through SyncCompact (`lit sync compact`, and the backstop), and its leaked refs
+// must be collected there too. The account lands in Detail, which the CLI prints
+// and writes into the compaction trace's "detail" key.
+func TestSyncCompactSweepsAndReportsItInDetail(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	doltRoot, remote, mirror := pushedMirror(t)
+	oldCommit, _ := orphanSnapshot(t, mirror, 1<<20)
+	gitAt(t, mirror, nil, "", "update-ref", "refs/dolt/remotes/origin/dolt/data/"+uuid.NewString(), oldCommit)
+
+	session, err := OpenSync(ctx, doltRoot, "ws")
+	if err != nil {
+		t.Fatalf("OpenSync() error = %v", err)
+	}
+	outcome, err := session.SyncCompact(ctx, GCNewGen)
+	if closeErr := session.Close(); closeErr != nil {
+		t.Fatalf("Close() error = %v", closeErr)
+	}
+	if err != nil {
+		t.Fatalf("SyncCompact() error = %v", err)
+	}
+	if !strings.Contains(outcome.Detail, "remote-cache ref sweep: removed 1 orphaned ref, reclaimed ") {
+		t.Fatalf("Detail = %q, want the sweep's account of the one orphaned ref", outcome.Detail)
+	}
+	want := []string{lastKnownRefNamespace + "origin/dolt/data " + gitRevParse(t, remote, "refs/dolt/data")}
+	if got := mirrorRefValues(t, mirror); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("mirror refs after the compaction = %v, want %v", got, want)
 	}
 }
 
