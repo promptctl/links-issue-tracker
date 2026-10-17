@@ -4,7 +4,6 @@ import (
 	"errors"
 	"reflect"
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/merge"
@@ -93,19 +92,28 @@ func TestAPatchStatingAnyOneFieldIsNotEmpty(t *testing.T) {
 	}
 }
 
-// TestABulkUpdateStatingAnyOneFieldIsNotReadAsEmpty: an update document that
-// states any one key is either refused for that key or admitted as a patch
-// that states it — never refused as stating nothing, which is the refusal a
-// key the patch translation forgot would get. The keys are read off the type,
-// so a key added to the document is held to this with no edit here.
-func TestABulkUpdateStatingAnyOneFieldIsNotReadAsEmpty(t *testing.T) {
+// TestABulkUpdateKeyStatesTheFieldItNames: an update document that states one
+// key is either refused for that key or admitted as a patch stating exactly
+// the field of that key's name — never refused as stating nothing, which is
+// the refusal a key the patch translation forgot would get, and never a patch
+// stating some other field, which is what a miswired row would make. The keys
+// are read off the type, so a key added to the document is held to this with
+// no edit here.
+func TestABulkUpdateKeyStatesTheFieldItNames(t *testing.T) {
 	samples := map[reflect.Type]any{
 		reflect.TypeFor[string]():   "task",
 		reflect.TypeFor[int]():      int(model.PriorityUrgent),
 		reflect.TypeFor[[]string](): []string{"label"},
 	}
+	// The gate's own refusal of a document stating nothing, so that verdict is
+	// recognised by what the gate says rather than by its wording.
+	empty := storage.BulkIssueSpec{ID: "links-x-1"}
+	_, emptyRefusal := storage.BulkWriteOrder([]storage.BulkIssueSpec{empty}, nil)
+	if emptyRefusal == nil {
+		t.Fatal("the gate admitted an update document stating nothing")
+	}
 	docType := reflect.TypeFor[storage.BulkIssueSpec]()
-	walked := 0
+	admitted := 0
 	for i := range docType.NumField() {
 		field := docType.Field(i)
 		if field.Type.Kind() != reflect.Pointer {
@@ -115,26 +123,40 @@ func TestABulkUpdateStatingAnyOneFieldIsNotReadAsEmpty(t *testing.T) {
 		if !ok {
 			t.Fatalf("no sample value for %s's type %s; add one", field.Name, field.Type.Elem())
 		}
-		walked++
-		doc := storage.BulkIssueSpec{ID: "links-x-1"}
+		doc := empty
 		value := reflect.New(field.Type.Elem())
 		value.Elem().Set(reflect.ValueOf(sample))
 		reflect.ValueOf(&doc).Elem().Field(i).Set(value)
 		_, err := storage.BulkWriteOrder([]storage.BulkIssueSpec{doc}, nil)
 		switch {
 		case err == nil:
+			admitted++
 			patch, err := storage.BulkUpdatePatch(doc)
 			if err != nil {
 				t.Fatalf("BulkUpdatePatch(%s) after the gate admitted it: %v", field.Name, err)
 			}
-			if patch.IsEmpty() {
-				t.Errorf("a document stating only %s was admitted as a patch stating nothing", field.Name)
+			if got := statedFields(patch); !slices.Equal(got, []string{field.Name}) {
+				t.Errorf("a document stating only %s became a patch stating %v", field.Name, got)
 			}
-		case strings.Contains(err.Error(), "has no fields to update"):
+		case err.Error() == emptyRefusal.Error():
 			t.Errorf("a document stating only %s is refused as stating nothing: %v", field.Name, err)
+		default:
+			// Refused for the key itself: a key an update does not own.
 		}
 	}
-	if walked == 0 {
-		t.Fatal("BulkIssueSpec has no pointer fields, so the walk checked nothing")
+	if admitted == 0 {
+		t.Fatal("the gate refused every one-key document, so no translation was checked")
 	}
+}
+
+// statedFields names the patch's non-nil pointers.
+func statedFields(patch storage.UpdateIssueInput) []string {
+	v := reflect.ValueOf(patch)
+	var stated []string
+	for i := range v.NumField() {
+		if v.Field(i).Kind() == reflect.Pointer && !v.Field(i).IsNil() {
+			stated = append(stated, v.Type().Field(i).Name)
+		}
+	}
+	return stated
 }
