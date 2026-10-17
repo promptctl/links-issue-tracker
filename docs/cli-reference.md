@@ -902,13 +902,16 @@ attempt leaves the workspace untouched.
 lit doctor [--fix[=<area,...>]]
 ```
 
-Health check. Bare `--fix` applies all available fixes; `--fix rank` (comma-separated)
+Health check. Bare `--fix` applies all available fixes; `--fix=rank` (comma-separated)
 scopes them. Run `lit doctor --fix` before escalating any persistent error.
 
 After the status line, each warning the health check finds prints as its own
 `warning:` line, with the repair that clears it where one exists: a ticket outside
 an epic or under a parent that is not an epic names the `lit parent set` that moves
-it, and a dependency cycle names the `lit dep rm` that breaks it. A `--fix` repair
+it, and a dependency cycle names the `lit dep rm` that breaks it. Issues that wait on
+one another both ways through the epics holding them print an `interleaved:` line:
+no rank order lists every one of their dependencies first, so those edges are not
+counted as rank inversions and `--fix=rank` does not reorder them for those edges. A `--fix` repair
 that fails still prints the full report, then exits on the repair's error.
 
 The report also includes a `sync:` line reporting freshness against the configured

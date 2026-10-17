@@ -166,6 +166,10 @@ type RelationStore interface {
 	// for edges they could read together.
 	GetRelationsByIDs(ctx context.Context, ids []string) (map[string]IssueRelations, error)
 
+	// DependencyOrder reads the blocked-by edges between live issues in tree
+	// order: the one answer to which of them are rank inversions.
+	DependencyOrder(ctx context.Context) (DependencyOrder, error)
+
 	// SetParent wires a child under a parent, replacing any existing parent in
 	// one act, and returns the edge it wrote. Both endpoints must exist and an
 	// issue may not be its own parent.

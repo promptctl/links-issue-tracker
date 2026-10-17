@@ -628,69 +628,6 @@ func TestRankToEdgeReportsAnUnmovableIssue(t *testing.T) {
 	}
 }
 
-func TestResolveFrameRepresentatives(t *testing.T) {
-	t.Parallel()
-	// wantFrame is asserted alongside the representatives because the frame is
-	// what every neighbor lookup seeded by them gets scoped to: representatives
-	// that are right in a frame that is wrong still write a key into the wrong
-	// keyspace.
-	cases := []struct {
-		name      string
-		chains    [][]string
-		want      []string
-		wantFrame storage.Frame
-		wantErr   bool
-	}{
-		{name: "all top-level", chains: [][]string{{"x"}, {"y"}, {"z"}}, want: []string{"x", "y", "z"}, wantFrame: storage.TopLevel},
-		{name: "siblings same epic", chains: [][]string{{"c1", "e"}, {"c2", "e"}, {"c3", "e"}}, want: []string{"c1", "c2", "c3"}, wantFrame: "e"},
-		{name: "children plus outsider resolve to roots", chains: [][]string{{"c1", "e"}, {"x"}, {"c2", "e"}}, want: []string{"e", "x", "e"}, wantFrame: storage.TopLevel},
-		{name: "children of two epics under shared parent with outsider", chains: [][]string{{"c1", "e1", "p"}, {"c2", "e2", "p"}, {"x"}}, want: []string{"p", "p", "x"}, wantFrame: storage.TopLevel},
-		{name: "children of two epics under shared parent", chains: [][]string{{"c1", "e1", "p"}, {"c2", "e2", "p"}}, want: []string{"e1", "e2"}, wantFrame: "p"},
-		{name: "grandchild vs child of shared epic", chains: [][]string{{"g", "s", "e"}, {"c", "e"}}, want: []string{"s", "c"}, wantFrame: "e"},
-		{name: "issue with its own container", chains: [][]string{{"c", "e"}, {"e"}}, wantErr: true},
-		{name: "container with deep descendant", chains: [][]string{{"e"}, {"g", "s", "e"}}, wantErr: true},
-		{name: "container alongside outsider and descendant", chains: [][]string{{"e"}, {"x"}, {"c", "e"}}, wantErr: true},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			reps, frame, err := resolveFrameRepresentatives(tc.chains)
-			if tc.wantErr {
-				var containment storage.FrameContainmentError
-				if !errors.As(err, &containment) {
-					t.Fatalf("resolveFrameRepresentatives() error = %v, want storage.FrameContainmentError", err)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("resolveFrameRepresentatives() error = %v", err)
-			}
-			if len(reps) != len(tc.want) {
-				t.Fatalf("resolveFrameRepresentatives() = %v, want %v", reps, tc.want)
-			}
-			for i := range reps {
-				if reps[i] != tc.want[i] {
-					t.Fatalf("resolveFrameRepresentatives() = %v, want %v", reps, tc.want)
-				}
-			}
-			if frame != tc.wantFrame {
-				t.Fatalf("resolveFrameRepresentatives() frame = %q, want %q", frame, tc.wantFrame)
-			}
-			// Every representative is a member of the frame it came back with,
-			// which is the property that makes scoping a query by that frame
-			// find exactly the rows these keys are compared against.
-			for i, chain := range tc.chains {
-				container := storage.TopLevel
-				if idx := slices.Index(chain, reps[i]); idx >= 0 && idx+1 < len(chain) {
-					container = storage.Frame(chain[idx+1])
-				}
-				if container != frame {
-					t.Fatalf("representative %s sits in frame %q, not the reported %q", reps[i], container, frame)
-				}
-			}
-		})
-	}
-}
-
 func TestResolveComparableFrame(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

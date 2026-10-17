@@ -171,12 +171,10 @@ func (e rankEdge) roomBesideTx(ctx context.Context, tx *sql.Tx, anchorRank, vaca
 // beside the issue that contains it, so it lands just past the container's own
 // key, which is also the one key an empty frame does offer to sit beside.
 //
-// A listing reads tree order, so it would list the child in the same place
-// whichever key it held. The dependency-order checks do not: they still
-// compare raw keys across frames, and a key beside the container is the one
-// that agrees with tree order when they do. [LAW:one-source-of-truth] The
-// memory engine says the same thing positionally, inserting immediately after
-// the container.
+// A listing and the dependency-order checks read tree order, so they would
+// place the child the same way whichever key it held.
+// [LAW:one-source-of-truth] The memory engine says the same thing
+// positionally, inserting immediately after the container.
 //
 // The top level names no containing issue, so it takes the fallback below
 // rather than a container's key. It is NOT answered with open bounds: that
@@ -557,7 +555,7 @@ func (e rankEdge) placeBeyondTx(ctx context.Context, tx *sql.Tx, f storage.Frame
 }
 
 // resolveRankSet maps the named IDs onto the frame-comparable representatives
-// a rank-set order is actually about (see resolveFrameRepresentatives). Two
+// a rank-set order is actually about (see storage.FrameRepresentatives). Two
 // named IDs collapsing onto one representative is rejected: the requested
 // total order places issues from inside one epic relative to outsiders, which
 // no frame-coherent write can express — honoring part of the order while
@@ -579,7 +577,7 @@ func resolveRankSet(ctx context.Context, q rowQueryer, ids []string) ([]storage.
 		}
 		chains[i] = chain
 	}
-	reps, f, err := resolveFrameRepresentatives(chains)
+	reps, f, err := storage.FrameRepresentatives(chains)
 	if err != nil {
 		return nil, storage.TopLevel, fmt.Errorf("rank set: %w", err)
 	}
@@ -800,81 +798,14 @@ func ancestorChain(ctx context.Context, q rowQueryer, id string) ([]string, erro
 	}
 }
 
-// resolveFrameRepresentatives maps each ancestor chain (self first, root
-// last) onto its representative in the chains' comparable frame. Rank meaning
-// is frame-local: an issue's rank is only ever compared against its
-// frame-mates (siblings under the same container, or fellow top-level items),
-// so issues from different frames resolve to their representatives directly
-// under the lowest common ancestor of all chains — and to their roots when
-// the ancestries share none, the top level being the comparable frame.
-// Nothing inside any epic is ever reordered by a cross-frame request.
-//
-// The frame the representatives live in comes back with them: it is the lowest
-// common ancestor the walk already found, and it is the scope every neighbor
-// lookup seeded by these representatives must be taken in. Returning it here
-// rather than re-deriving it at each callsite keeps the representatives and
-// their keyspace from ever disagreeing. [LAW:one-source-of-truth]
-//
-// [LAW:types-are-the-program] Cross-frame midpoints are an illegal state of
-// the rank keyspace; this resolution makes every write frame-coherent.
-// [LAW:single-enforcer] The one resolution core behind every rank verb.
-func resolveFrameRepresentatives(chains [][]string) ([]string, storage.Frame, error) {
-	memberships := make([]map[string]int, len(chains))
-	for i, chain := range chains {
-		m := make(map[string]int, len(chain))
-		for idx, id := range chain {
-			m[id] = idx
-		}
-		memberships[i] = m
-	}
-	for i, chain := range chains {
-		for j, m := range memberships {
-			if i == j {
-				continue
-			}
-			if idx, ok := m[chain[0]]; ok && idx > 0 {
-				return nil, storage.TopLevel, storage.FrameContainmentError{ContainerID: chain[0], ContainedID: chains[j][0]}
-			}
-		}
-	}
-	// Common ancestors form a shared suffix of every chain, so the first
-	// element of chains[0] present in all others is the lowest common ancestor.
-	lcaID := ""
-	for _, id := range chains[0] {
-		inAll := true
-		for _, m := range memberships[1:] {
-			if _, ok := m[id]; !ok {
-				inAll = false
-				break
-			}
-		}
-		if inAll {
-			lcaID = id
-			break
-		}
-	}
-	reps := make([]string, len(chains))
-	for i, chain := range chains {
-		if lcaID == "" {
-			reps[i] = chain[len(chain)-1]
-			continue
-		}
-		reps[i] = chain[memberships[i][lcaID]-1]
-	}
-	// No common ancestor means the representatives are roots, and the frame
-	// holding every root is the top level — which storage.Frame spells as the
-	// same empty string lcaID already carries.
-	return reps, storage.Frame(lcaID), nil
-}
-
 // resolveComparableFrame maps a relative rank request onto the pair it is
 // actually about: ranking a standalone ticket against an epic's child behaves
 // as ranking against the epic itself, and ranking the child against the
-// standalone moves the epic (see resolveFrameRepresentatives). Ranking an
+// standalone moves the epic (see storage.FrameRepresentatives). Ranking an
 // issue relative to its own container (or descendant) has no frame-coherent
 // meaning and is rejected. [LAW:no-silent-failure]
 func resolveComparableFrame(issueChain, targetChain []string) (movedID, anchorID string, f storage.Frame, err error) {
-	reps, f, err := resolveFrameRepresentatives([][]string{issueChain, targetChain})
+	reps, f, err := storage.FrameRepresentatives([][]string{issueChain, targetChain})
 	if err != nil {
 		return "", "", storage.TopLevel, err
 	}
@@ -1232,23 +1163,11 @@ func (s *Store) liveIssueIDs(ctx context.Context) (map[string]struct{}, error) {
 	return out, nil
 }
 
-// blocksEdge is one blocked-by relation hydrated as a precedence constraint: the
-// dependent must be ranked below the dependency, i.e. the dependency comes
-// first. A rank order is a total order over issues, and a total order that
-// satisfies every blocked-by edge exists if and only if the precedence graph is
-// acyclic. A cycle is therefore not a transient rank stall but an
-// unsatisfiable constraint set — no assignment can place every dependency
-// above its dependent once the dependencies form a loop.
-type blocksEdge struct {
-	dependent  string // src — ranked below
-	dependency string // dst — ranked above
-}
-
 // loadBlocksEdges returns every blocked-by relation whose endpoints are both
 // non-deleted. It does not filter on rank: the constraint graph is what it is
 // whatever the current ranks say, and every caller asks about the graph rather
 // than about placement.
-func loadBlocksEdges(ctx context.Context, q rowQueryer) ([]blocksEdge, error) {
+func loadBlocksEdges(ctx context.Context, q rowQueryer) ([]storage.DependencyEdge, error) {
 	// ORDER BY makes edge iteration — and therefore the adjacency order that
 	// findBlocksCycle's DFS follows — stable across runs and engines, so the
 	// reported cycle path is deterministic.
@@ -1262,10 +1181,10 @@ func loadBlocksEdges(ctx context.Context, q rowQueryer) ([]blocksEdge, error) {
 		return nil, fmt.Errorf("query blocked-by edges: %w", err)
 	}
 	defer rows.Close()
-	edges := make([]blocksEdge, 0)
+	edges := make([]storage.DependencyEdge, 0)
 	for rows.Next() {
-		var e blocksEdge
-		if err := rows.Scan(&e.dependent, &e.dependency); err != nil {
+		var e storage.DependencyEdge
+		if err := rows.Scan(&e.Dependent, &e.Dependency); err != nil {
 			return nil, fmt.Errorf("scan blocked-by edge: %w", err)
 		}
 		edges = append(edges, e)
@@ -1277,10 +1196,10 @@ func loadBlocksEdges(ctx context.Context, q rowQueryer) ([]blocksEdge, error) {
 }
 
 // blocksPrecedenceAdj builds the precedence adjacency dependency -> []dependent.
-func blocksPrecedenceAdj(edges []blocksEdge) map[string][]string {
+func blocksPrecedenceAdj(edges []storage.DependencyEdge) map[string][]string {
 	adj := make(map[string][]string, len(edges))
 	for _, e := range edges {
-		adj[e.dependency] = append(adj[e.dependency], e.dependent)
+		adj[e.Dependency] = append(adj[e.Dependency], e.Dependent)
 	}
 	return adj
 }
@@ -1313,7 +1232,7 @@ func blocksPrecedes(adj map[string][]string, from, to string) bool {
 // findBlocksCycle returns one cycle in the blocks precedence graph as an
 // ordered, repeated-endpoint path (a -> b -> ... -> a), or nil when the graph
 // is acyclic. Node iteration is sorted so the reported cycle is deterministic.
-func findBlocksCycle(edges []blocksEdge) []string {
+func findBlocksCycle(edges []storage.DependencyEdge) []string {
 	adj := blocksPrecedenceAdj(edges)
 	nodes := make([]string, 0, len(adj))
 	for n := range adj {
@@ -1359,42 +1278,62 @@ func findBlocksCycle(edges []blocksEdge) []string {
 	return nil
 }
 
-// loadRankOrder returns the live issues in the order the store ranks them:
-// item_rank ascending, with id breaking ties so the sequence is total even
-// where two rows share a rank. This sequence is both the repair's input order
-// and its membership test for which blocked-by edges constrain live work.
-func loadRankOrder(ctx context.Context, q rowQueryer, liveIDs map[string]struct{}) ([]rankedIssue, error) {
-	rows, err := q.QueryContext(ctx, `SELECT id, item_rank FROM issues WHERE deleted_at IS NULL ORDER BY item_rank ASC, id ASC`)
+// loadRankOrder returns every non-deleted issue in key order: item_rank
+// ascending, with id breaking ties so the sequence is total even where two rows
+// share a rank — within a frame, the order tree order lists them in. It is the
+// set every rank verb places among, so a repair spaced over it writes no key
+// any of them holds.
+func loadRankOrder(ctx context.Context, q rowQueryer) ([]rankedIssue, error) {
+	rows, err := q.QueryContext(ctx, `SELECT id, item_rank FROM issues WHERE deleted_at IS NULL`)
 	if err != nil {
 		return nil, fmt.Errorf("query rank order: %w", err)
 	}
 	defer rows.Close()
-	order := make([]rankedIssue, 0, len(liveIDs))
+	order := make([]rankedIssue, 0)
 	for rows.Next() {
 		var item rankedIssue
 		if err := rows.Scan(&item.id, &item.rank); err != nil {
 			return nil, fmt.Errorf("scan rank order: %w", err)
-		}
-		if _, live := liveIDs[item.id]; !live {
-			continue
 		}
 		order = append(order, item)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("rank order rows: %w", err)
 	}
+	slices.SortFunc(order, compareRankedIssues)
 	return order, nil
 }
 
+// DependencyOrder reads the blocked-by edges between live issues in tree order.
+func (s *Store) DependencyOrder(ctx context.Context) (storage.DependencyOrder, error) {
+	liveIDs, err := s.liveIssueIDs(ctx)
+	if err != nil {
+		return storage.DependencyOrder{}, fmt.Errorf("dependency order: %w", err)
+	}
+	ancestry, err := loadRankAncestry(ctx, s.db)
+	if err != nil {
+		return storage.DependencyOrder{}, fmt.Errorf("dependency order: %w", err)
+	}
+	edges, err := loadBlocksEdges(ctx, s.db)
+	if err != nil {
+		return storage.DependencyOrder{}, fmt.Errorf("dependency order: %w", err)
+	}
+	return storage.NewDependencyOrder(ancestry, liveEdges(edges, liveIDs)), nil
+}
+
 // FixRankInversions re-ranks the backlog so every dependency outranks its
-// dependent. It computes the stable topological order of the live rank
-// sequence (see repairRankOrder), rewrites the issues that order moved, and
-// returns how many it moved.
+// dependent in tree order wherever a rank order can: it sorts each frame by
+// the constraints storage.DependencyOrder reads off the blocked-by edges
+// between live issues (see repairRankOrder), rewrites the issues that order
+// moved, stepping around the keys of the issues no listing reads
+// (splitRankOrder), and returns how many it moved. A blocked-by dependency cycle between
+// live issues refuses the repair (blocksCycle).
 //
 // [LAW:single-enforcer] Doctor's rank_inversions count and this repair read the
-// same blocked-by edges over the same live set, so "no edge is inverted" is one
-// predicate seen twice: the count reports the edges that break it, and the
-// order this produces satisfies it by construction.
+// same blocked-by edges over the same live set through one DependencyOrder, so
+// "no edge is inverted" is one predicate seen twice: the count reports the
+// edges that break it, and the order this produces satisfies it by
+// construction.
 func (s *Store) FixRankInversions(ctx context.Context) (int, error) {
 	// Liveness is computed once before the tx: the repair only mutates
 	// item_rank, so closure status is invariant across the write. Re-classifying
@@ -1408,7 +1347,11 @@ func (s *Store) FixRankInversions(ctx context.Context) (int, error) {
 	}
 	rerankedCount := 0
 	if err := s.withMutation(ctx, "fix rank inversions", func(ctx context.Context, tx *sql.Tx) error {
-		order, err := loadRankOrder(ctx, tx, liveIDs)
+		order, err := loadRankOrder(ctx, tx)
+		if err != nil {
+			return fmt.Errorf("fix rank inversions: %w", err)
+		}
+		ancestry, err := loadRankAncestry(ctx, tx)
 		if err != nil {
 			return fmt.Errorf("fix rank inversions: %w", err)
 		}
@@ -1416,7 +1359,13 @@ func (s *Store) FixRankInversions(ctx context.Context) (int, error) {
 		if err != nil {
 			return fmt.Errorf("fix rank inversions: load blocked-by edges: %w", err)
 		}
-		rewrites, err := repairRankOrder(order, edges)
+		live := liveEdges(edges, liveIDs)
+		if cycle := blocksCycle(order, live); len(cycle) > 0 {
+			return fmt.Errorf("fix rank inversions: %w", &blocksCycleError{path: cycle})
+		}
+		constraints := storage.NewDependencyOrder(ancestry, live).Constraints()
+		ordered, held := splitRankOrder(order, liveIDs, constraints)
+		rewrites, err := repairRankOrder(ordered, held, constraints)
 		if err != nil {
 			return fmt.Errorf("fix rank inversions: %w", err)
 		}

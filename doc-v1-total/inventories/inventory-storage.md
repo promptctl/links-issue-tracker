@@ -119,6 +119,9 @@ Parentage gets its own two verbs rather than riding `AddRelation` because it is 
 **`GetRelationsByIDs(ctx, ids []string) (map[string]IssueRelations, error)`** — `internal/storage/contract.go`
 - The batch neighborhood read: one call for many issues, counterparts hydrated, avoiding `GetIssueDetail`'s per-issue comment and history cost (`internal/storage/contract.go`).
 
+**`DependencyOrder(ctx) (DependencyOrder, error)`** — `internal/storage/contract.go`
+- The blocked-by edges between live issues (listed open or in progress, archived excluded) read in tree order: the one answer to which are rank inversions (`internal/storage/contract.go`).
+
 **`SetParent(ctx, in SetParentInput) (model.Relation, error)`** — `internal/storage/contract.go`
 - Wires a child under a parent, replacing any existing parent in one act, returning the edge written. Both endpoints must exist and an issue may not be its own parent (`internal/storage/contract.go`).
 
@@ -153,6 +156,22 @@ Parentage gets its own two verbs rather than riding `AddRelation` because it is 
 - `Conflicts() []ParentConflict` — by child id; `Store.Doctor` appends each `Finding()`, `"%s has %d parents (%s); it lists under %s, the lowest id, until one remains — run 'lit parent set --child %s --parent <the epic it belongs under>', which replaces every parent it holds with that one"`, as an error.
 - `Compare(x, y model.Issue) int` — walks each issue's path (its containers' places, then its own `{Rank, ID}`) step by step, comparing key then id at every step; the path that runs out first sorts first: tree order. A container's path is a prefix of its descendants', so it sorts before them and its subtree sorts together, even across a key two frame-mates share. Two distinct issues never compare equal. Both engines bind the `rank` sort key to it.
 - `Sort(issues []model.Issue)` — `slices.SortFunc` by `Compare`; both engines' relation groups (`Children`, `BlockedBy`, `Blocks`, related) sort with it.
+- `Representatives(x, y string) (xRep, yRep string, ok bool)` — `FrameRepresentatives` over the two issues' chains (each id, then its containers innermost first): each issue itself when they share a frame, else its container directly under the deepest container holding both, or its root. `ok` is false when `x == y` or `FrameRepresentatives` refuses (one issue contains the other).
+
+**`FrameRepresentatives(chains [][]string) ([]string, Frame, error)`** — `internal/storage/rank.go`; both engines' rank verbs and `RankAncestry.Representatives` resolve through it.
+- Each chain is an issue then its containers, root last.
+- If any chain's head appears at depth > 0 in another chain, returns `FrameContainmentError{ContainerID: chain[0], ContainedID: chains[j][0]}`.
+- Finds the lowest common ancestor as the first element of chain 0 present in all others (common ancestors form a shared suffix of every chain).
+- With no common ancestor, each chain's representative is its **root**, and the frame is `TopLevel`.
+- Otherwise the representative is the element **one level below** the LCA in that chain, and the frame is the LCA.
+
+**`DependencyEdge`** — `struct{ Dependent, Dependency string }`, `internal/storage/dependency_order.go`: one blocked-by relation as a precedence constraint (`Dependent` = src, ranked below; `Dependency` = dst, ranked above).
+
+**`DependencyOrder`** — `internal/storage/dependency_order.go`; tree order's reading of the blocked-by edges between live issues.
+- `NewDependencyOrder(ancestry RankAncestry, edges []DependencyEdge) DependencyOrder` — lifts each edge onto `ancestry.Representatives(Dependent, Dependency)`, drops it when `ok` is false, and dedupes the lifted edges. The strongly connected sets of more than one node among the lifted edges (Tarjan) are the groups: frame-mates whose issues wait on one another both ways, which no order of them satisfies. A group is an **interleaved group** unless a raw edge whose two ends lie in one strongly connected set of the raw edges lifts inside it — a loop of the issues' own edges running through it.
+- `Inverted(dependent, dependency model.Issue) bool` — the raw edge `{dependent.ID, dependency.ID}` is one of `edges`, `Representatives` is ok, the two representatives are not in one group, and `ancestry.Compare(dependency, dependent) > 0`. The queue's `RankInversion` annotation and `Store.Doctor`'s `rank_inversions` count (through `invertedEdges`) both read it.
+- `Constraints() []DependencyEdge` — the lifted edges, deduped, in input order, less those inside a group; acyclic. `FixRankInversions` sorts by them.
+- `Interleaved() [][]string` — each group's members sorted by id, groups by first member.
 
 **`RankSetResolution`** — `internal/storage/rank.go`
 - `NamedID string` (json `named_id`), `RankedID string` (json `ranked_id`). Equal for frame-mates; when they differ the caller must surface the substitution (`internal/storage/rank.go`).
@@ -502,7 +521,7 @@ These types live in the contract, not in an engine, because a capability interfa
 
 - **`Checkpoint`** (`internal/storage/maintenance.go`) — `Name string` (format `"<prefix>-<unix-nano>"`), `Prefix string` (caller label, e.g. `"pre-migrate"`), `CreatedAt time.Time` (parsed from the unix-nano suffix in `Name`), `Anchor string` (opaque engine-side identity of the captured state; the contract requires only that handing it back names the same state, never that it is a hash or a commit).
   - The name encodes the prefix and timestamp so `ListCheckpoints` can reconstruct the set without external metadata storage (`internal/storage/maintenance.go`).
-- **`HealthReport`** (`internal/storage/maintenance.go`) — json keys: `integrity_check` (string), `foreign_key_issues` (int), `invalid_related_rows` (int), `orphan_history_rows` (int), `rank_inversions` (int), `duplicate_ranks` (int), `dependency_cycle` ([]string), `parent_cycle` ([]string), `unchecked` ([]string), `errors` ([]string), `warnings` ([]string).
+- **`HealthReport`** (`internal/storage/maintenance.go`) — json keys: `integrity_check` (string), `foreign_key_issues` (int), `invalid_related_rows` (int), `orphan_history_rows` (int), `rank_inversions` (int), `duplicate_ranks` (int), `dependency_cycle` ([]string), `interleaved` ([][]string), `parent_cycle` ([]string), `unchecked` ([]string), `errors` ([]string), `warnings` ([]string).
   - An engine reports **zeros** for checks it has no analogue for rather than omitting them (`internal/storage/maintenance.go`).
 
 ---
@@ -832,6 +851,9 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 - For each present id: hydrates the issue, buckets its incident relations, sets `bucketed.Issue = issue`.
 - `nil` input yields an empty (non-nil) map.
 
+**`DependencyOrder`**
+- Under the engine lock: `listIssues` with `Statuses: [open, in_progress]` is the live set; every `RelBlockedBy` relation with both ends live becomes a `storage.DependencyEdge`; returns `storage.NewDependencyOrder(e.rankAncestry(e.positions()), edges)` (`internal/storage/memory/edges.go`).
+
 **`SetParent`**
 - Blank child or parent (after trim) → `model.ValidationError{Message: "child and parent ids are required"}`.
 - `ChildID == ParentID` → `model.ValidationError{Message: "child and parent cannot be the same issue"}`.
@@ -872,7 +894,7 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 - `storage.ValidateRankSetIDs(ids)` (`internal/storage/rank.go`, shared with the Dolt store), each refusal a `model.ValidationError`: `len(ids) < 2` → `"rank set: need at least 2 IDs to establish order"`; empty id → `"rank set: empty ID in input"`; duplicate id → `"rank set: duplicate ID %q in input"`.
 - `mustRankable` per id, unwrapped.
 - Builds an ancestor chain per id (missing id → `NotFoundError` from `ancestorChain`).
-- `frameRepresentatives(chains)`; error wrapped as `fmt.Errorf("rank set: %w", err)`.
+- `storage.FrameRepresentatives(chains)`; error wrapped as `fmt.Errorf("rank set: %w", err)`.
 - `storage.RankSetResolutions(ids, reps)` (`internal/storage/rank.go`, shared with the Dolt store) pairs each id with its representative. **Two named ids collapsing onto one representative is refused** with a `model.ValidationError`: `"rank set: %s and %s both resolve to %s — their relative order is internal to %s and cannot be set against outside issues; run rank set among siblings instead"`.
 - Rewrites the frame's own slots in place with `storage.RankSetOrder` — the representatives first, in the order named, then every other frame-mate in its current order; nothing outside the frame moves (`internal/storage/rank.go`).
 - Returns one `RankSetResolution{NamedID, RankedID}` per input, in input order.
@@ -883,8 +905,8 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 **`resolveRankPair(issueID, targetID)`** — both relative verbs route through this one resolution, so cross-frame semantics cannot drift between above and below.
 - `issueID == targetID` → `model.ValidationError` `"cannot rank an issue relative to itself"`.
 - `mustRecord(targetID)` **before** `mustRecord(issueID)`.
-- Builds both ancestor chains, calls `frameRepresentatives`.
-- Any `frameRepresentatives` error is returned unwrapped, so a `storage.FrameContainmentError` reaches the caller as itself, whichever side of the pair contains the other.
+- Builds both ancestor chains, calls `storage.FrameRepresentatives`.
+- Any `storage.FrameRepresentatives` error is returned unwrapped, so a `storage.FrameContainmentError` reaches the caller as itself, whichever side of the pair contains the other.
 - Returns `RankMove{MovedID: reps[0], AnchorID: reps[1]}`.
 
 **`ancestorChain(id)`** — self first, root last, following only parents that are still there. Missing id → `NotFoundError`. A parent cycle → `fmt.Errorf("ancestor chain of %s: parent cycle at %s", id, parent)`.
@@ -892,14 +914,6 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 **`parentOf(childID)`** — the first `RelParentChild` edge whose `SrcID == childID` and whose parent record exists and is **not** `model.Deleted`. A deleted parent is skipped: work in the trash frames nothing.
 
 **`storage.FrameContainmentError{ContainerID, ContainedID}`** (`internal/storage/rank.go`, shared with the Dolt store) — `Error()` renders `"%s is inside %s; no comparable frame contains both, so neither can be ranked relative to the other — rank each against its own siblings instead"`; it is a `model.Refusal`.
-
-**`frameRepresentatives(chains)`**
-- Builds an id→depth map per chain.
-- If any chain's head appears at depth > 0 in another chain, returns `storage.FrameContainmentError{ContainerID: chain[0], ContainedID: chains[j][0]}`.
-- Finds the lowest common ancestor as the first element of chain 0 present in all others (common ancestors form a shared suffix of every chain).
-- With no common ancestor (`lowestCommon == ""`), each chain's representative is its **root** — the top level is the frame that contains everything.
-- Otherwise the representative is the element **one level below** the LCA in that chain: `chain[depths[i][lowestCommon]-1]`.
-- Nothing inside any epic is reordered by a cross-frame request.
 
 ### 2.13 Bulk / import (`internal/storage/memory/bulk.go`)
 
@@ -1346,6 +1360,16 @@ Stated in `internal/storage/memory/doc.go`:
 - The epic's `Children` is `[child]`.
 - The dependency's `Blocks` is `[child]` — `BlockedBy` and `Blocks` are the two readings of one edge set, with no second row existing.
 - `GetRelationsByIDs(nil)` returns an empty map, not an error.
+
+**`rank_inversions_read_tree_order`**
+- Epics `early`, `late`, `top`, each with one task; `late` then `top` ranked to the top; the listing is top, top task, late, late task, early, early task.
+- `late task` blocked by `early task`: `DependencyOrder().Inverted` is true — its dependency's epic lists after its own.
+- `early task` blocked by `top task`: `Inverted` is false.
+
+**`interleaved_epics_hold_no_rank_inversion`**
+- Epics `first` (tasks `later`, `base`) and `second` (task `middle`); `later` blocked by `middle`, `middle` blocked by `base`.
+- `Interleaved()` is the one group of the two epics; neither edge is `Inverted`; `Constraints()` is empty.
+- After `base` is started and done, `Interleaved()` is empty and `later` blocked by `middle` is `Inverted` — only live work is ordered.
 
 **`parent_wiring`**
 - `SetParent` wires a child under an epic; `mustChildren` (a `ListIssues` with `ParentIDs: [parent]`, `IncludeArchived` and `IncludeDeleted`) shows it.

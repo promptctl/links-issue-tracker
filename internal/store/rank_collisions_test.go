@@ -204,10 +204,10 @@ func listedIDs(t *testing.T, ctx context.Context, st *Store) []string {
 	return ids
 }
 
-// Doctor counts each key two live issues hold, and names the holders; a closed
-// issue holding a live issue's key orders nothing and is not counted. The rank
-// repair then gives every live holder its own key, and the listing it leaves is
-// the listing it found.
+// Doctor counts each key two placed issues hold — a closed one too, since the
+// next landing would separate it — and names the holders. The rank repair then
+// gives every holder its own key, and the listing it leaves is the listing it
+// found.
 func TestDoctorCountsSharedRankKeysAndTheRepairSeparatesThemInOrder(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -230,14 +230,16 @@ func TestDoctorCountsSharedRankKeysAndTheRepairSeparatesThemInOrder(t *testing.T
 	if err != nil {
 		t.Fatalf("Doctor: %v", err)
 	}
-	if report.DuplicateRanks != 1 {
-		t.Errorf("DuplicateRanks = %d, want 1: one key two live issues hold, the closed holder not counted", report.DuplicateRanks)
+	if report.DuplicateRanks != 2 {
+		t.Errorf("DuplicateRanks = %d, want 2: each planted key, the closed holder's included", report.DuplicateRanks)
 	}
-	holders := []string{epics[0].ID, epics[2].ID}
-	slices.Sort(holders)
-	want := fmt.Sprintf("%q shared by %s", epics[0].Rank, strings.Join(holders, ", "))
-	if !slices.ContainsFunc(report.Warnings, func(w string) bool { return strings.Contains(w, want) }) {
-		t.Errorf("Warnings = %v, want one naming %s", report.Warnings, want)
+	for _, pair := range [][2]model.Issue{{epics[0], epics[2]}, {epics[1], done}} {
+		holders := []string{pair[0].ID, pair[1].ID}
+		slices.Sort(holders)
+		want := fmt.Sprintf("%q shared by %s", pair[0].Rank, strings.Join(holders, ", "))
+		if !slices.ContainsFunc(report.Warnings, func(w string) bool { return strings.Contains(w, want) }) {
+			t.Errorf("Warnings = %v, want one naming %s", report.Warnings, want)
+		}
 	}
 
 	if _, err := st.FixRankInversions(ctx); err != nil {

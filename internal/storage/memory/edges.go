@@ -446,6 +446,32 @@ func (e *Engine) ClearParent(ctx context.Context, childID string) error {
 	return nil
 }
 
+// DependencyOrder reads the blocked-by edges between live issues in tree order:
+// live as the store's open and in-progress listing classifies it, the same
+// population the SQL engine reads.
+func (e *Engine) DependencyOrder(ctx context.Context) (storage.DependencyOrder, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	listed, err := e.listIssues(storage.ListIssuesFilter{Statuses: []model.State{model.StateOpen, model.StateInProgress}})
+	if err != nil {
+		return storage.DependencyOrder{}, err
+	}
+	live := make(map[string]struct{}, len(listed))
+	for _, issue := range listed {
+		live[issue.ID] = struct{}{}
+	}
+	var edges []storage.DependencyEdge
+	for _, rel := range e.relations {
+		_, srcLive := live[rel.SrcID]
+		_, dstLive := live[rel.DstID]
+		if rel.Type == model.RelBlockedBy && srcLive && dstLive {
+			edges = append(edges, storage.DependencyEdge{Dependent: rel.SrcID, Dependency: rel.DstID})
+		}
+	}
+	return storage.NewDependencyOrder(e.rankAncestry(e.positions()), edges), nil
+}
+
 // incidentRelations returns every edge touching issueID in either direction,
 // in the order the edges were written.
 func (e *Engine) incidentRelations(issueID string) []model.Relation {

@@ -204,6 +204,8 @@ var cases = []engineCase{
 	{"labels_roundtrip", labelsRoundtrip},
 	{"relations_roundtrip", relationsRoundtrip},
 	{"relations_batch_buckets_edges", relationsBatchBucketsEdges},
+	{"rank_inversions_read_tree_order", rankInversionsReadTreeOrder},
+	{"interleaved_epics_hold_no_rank_inversion", interleavedEpicsHoldNoRankInversion},
 	{"parent_wiring", parentWiring},
 	{"every_ticket_lives_inside_a_container", everyTicketLivesInsideAContainer},
 	{"an_import_file_that_breaks_a_rule_is_refused_whole", anImportFileThatBreaksARuleIsRefusedWhole},
@@ -2501,6 +2503,112 @@ func relationsBatchBucketsEdges(t *testing.T, ctx context.Context, st storage.St
 	if len(empty) != 0 {
 		t.Errorf("GetRelationsByIDs(nil) = %+v, want empty", empty)
 	}
+}
+
+// A dependency is ranked below the work waiting on it when tree order lists
+// it after that work — read through the epics that hold them, never by
+// comparing the two issues' own keys across frames. The two epics are filed
+// one way and listed the other, so the order each task was filed in is not
+// the order its epic lists in. A third epic, ranked above both, holds a
+// dependency that lists first.
+func rankInversionsReadTreeOrder(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	early := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "early", Topic: "core", IssueType: model.TypeEpic})
+	late := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "late", Topic: "core", IssueType: model.TypeEpic})
+	lateTask := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "late task", Topic: "core", ParentID: late.ID})
+	earlyTask := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "early task", Topic: "core", ParentID: early.ID})
+	top := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "top", Topic: "core", IssueType: model.TypeEpic})
+	topTask := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "top task", Topic: "core", ParentID: top.ID})
+	for _, id := range []string{late.ID, top.ID} {
+		if _, err := st.RankToTop(ctx, id); err != nil {
+			t.Fatalf("RankToTop(%s) error = %v", id, err)
+		}
+	}
+	mustBlock(t, ctx, st, lateTask.ID, earlyTask.ID)
+	mustBlock(t, ctx, st, earlyTask.ID, topTask.ID)
+	listed := mustListIDs(t, ctx, st, []string{top.ID, topTask.ID, late.ID, lateTask.ID, early.ID, earlyTask.ID})
+	order, err := st.DependencyOrder(ctx)
+	if err != nil {
+		t.Fatalf("DependencyOrder error = %v", err)
+	}
+	if !order.Inverted(listed[lateTask.ID], listed[earlyTask.ID]) {
+		t.Errorf("Inverted(%s blocked by %s) = false, want true: its dependency's epic lists after its own", lateTask.ID, earlyTask.ID)
+	}
+	if order.Inverted(listed[earlyTask.ID], listed[topTask.ID]) {
+		t.Errorf("Inverted(%s blocked by %s) = true, want false: its dependency's epic lists first", earlyTask.ID, topTask.ID)
+	}
+}
+
+// Two epics whose live tasks wait on each other's both ways are interleaved:
+// no order of the two epics lists every dependency first, so neither edge is a
+// rank inversion and the repair has nothing between them to satisfy. Closing
+// the task one way round ends it, because only live work is ordered.
+func interleavedEpicsHoldNoRankInversion(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	first := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "first", Topic: "core", IssueType: model.TypeEpic})
+	second := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "second", Topic: "core", IssueType: model.TypeEpic})
+	later := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "later", Topic: "core", ParentID: first.ID})
+	base := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "base", Topic: "core", ParentID: first.ID})
+	middle := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "middle", Topic: "core", ParentID: second.ID})
+	mustBlock(t, ctx, st, later.ID, middle.ID)
+	mustBlock(t, ctx, st, middle.ID, base.ID)
+	listed := mustListIDs(t, ctx, st, []string{first.ID, later.ID, base.ID, second.ID, middle.ID})
+	order, err := st.DependencyOrder(ctx)
+	if err != nil {
+		t.Fatalf("DependencyOrder error = %v", err)
+	}
+	epics := []string{first.ID, second.ID}
+	slices.Sort(epics)
+	if got := order.Interleaved(); !slices.EqualFunc(got, [][]string{epics}, slices.Equal) {
+		t.Errorf("Interleaved() = %v, want [%v]", got, epics)
+	}
+	for _, edge := range [][2]string{{later.ID, middle.ID}, {middle.ID, base.ID}} {
+		if order.Inverted(listed[edge[0]], listed[edge[1]]) {
+			t.Errorf("Inverted(%s blocked by %s) = true, want false: the epics are interleaved", edge[0], edge[1])
+		}
+	}
+	if got := order.Constraints(); len(got) != 0 {
+		t.Errorf("Constraints() = %v, want none: both lifted edges lie inside the group", got)
+	}
+
+	if _, err := st.Apply(ctx, base.ID, storage.Change{Action: model.Start{Assignee: "ada"}, Actor: "ada"}); err != nil {
+		t.Fatalf("Apply start error = %v", err)
+	}
+	if _, err := st.Apply(ctx, base.ID, storage.Change{Action: model.Done{}, Actor: "ada"}); err != nil {
+		t.Fatalf("Apply done error = %v", err)
+	}
+	order, err = st.DependencyOrder(ctx)
+	if err != nil {
+		t.Fatalf("DependencyOrder after done error = %v", err)
+	}
+	if got := order.Interleaved(); len(got) != 0 {
+		t.Errorf("Interleaved() after %s is done = %v, want none: only live work is ordered", base.ID, got)
+	}
+	if !order.Inverted(listed[later.ID], listed[middle.ID]) {
+		t.Errorf("Inverted(%s blocked by %s) after %s is done = false, want true: %s lists after %s", later.ID, middle.ID, base.ID, second.ID, first.ID)
+	}
+}
+
+// mustBlock records dependent blocked by dependency.
+func mustBlock(t *testing.T, ctx context.Context, st storage.Store, dependent, dependency string) {
+	t.Helper()
+	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: dependent, DstID: dependency, Type: model.RelBlockedBy, CreatedBy: "ada"}); err != nil {
+		t.Fatalf("AddRelation(%s blocked by %s) error = %v", dependent, dependency, err)
+	}
+}
+
+// mustListIDs lists every issue, asserts the listing is want, and returns the
+// listed issues by id.
+func mustListIDs(t *testing.T, ctx context.Context, st storage.Store, want []string) map[string]model.Issue {
+	t.Helper()
+	listed, err := st.ListIssues(ctx, storage.ListIssuesFilter{})
+	if err != nil {
+		t.Fatalf("ListIssues error = %v", err)
+	}
+	assertIssueIDs(t, "listing", listed, want)
+	byID := make(map[string]model.Issue, len(listed))
+	for _, issue := range listed {
+		byID[issue.ID] = issue
+	}
+	return byID
 }
 
 func parentWiring(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {

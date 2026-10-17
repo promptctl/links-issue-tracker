@@ -292,13 +292,14 @@ var doctorFixes = map[string]doctorFix{
 		if err != nil {
 			return err
 		}
+		telemetry.Set(ctx, "doctor.reranked", fixed)
 		if fixed > 0 {
 			// The count is issues MOVED, not dependencies hoisted: the repair
 			// writes whichever issues fall outside the run it keeps, and that
 			// can be either end of an edge — or a holder of a key another
 			// issue shares, since the run it keeps ascends strictly. Naming one
 			// cause would misreport why the run touched an issue.
-			_, err = fmt.Fprintf(w, "Re-ranked %d issue(s): every dependency sits above its dependent, and every issue holds a rank key of its own.\n", fixed)
+			_, err = fmt.Fprintf(w, "Re-ranked %d issue(s): no rank inversion remains, and every issue holds a rank key of its own.\n", fixed)
 		}
 		return err
 	}},
@@ -456,7 +457,7 @@ type doctorRun struct {
 
 func doctorLeaf() appLeaf {
 	fs := newCobraFlagSet("doctor")
-	fix := fs.String("fix", "", "Apply fixes: --fix (all) or --fix rank,thingA")
+	fix := fs.String("fix", "", "Apply fixes: --fix (all) or --fix=rank,thingA")
 	fs.cmd.Flags().Lookup("fix").NoOptDefVal = "all"
 	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		// [LAW:parse-dont-validate] Repair is a capability, not a duty every engine
@@ -494,6 +495,9 @@ func doctorLeaf() appLeaf {
 		// The status line's own rendering, so a check a parent cycle withheld
 		// reads "unchecked" here too rather than a clean 0. [LAW:nothing-unseen]
 		telemetry.Set(ctx, "doctor.duplicate_ranks", doctorFieldValue(report, storage.CheckDuplicateRanks, strconv.Itoa(report.DuplicateRanks)))
+		telemetry.Set(ctx, "doctor.rank_inversions", doctorFieldValue(report, storage.CheckRankInversions, strconv.Itoa(report.RankInversions)))
+		telemetry.Set(ctx, "doctor.dependency_cycle", doctorFieldValue(report, storage.CheckDependencyCycle, joinCycle(report.DependencyCycle)))
+		telemetry.Set(ctx, "doctor.interleaved", doctorFieldValue(report, storage.CheckRankInversions, strconv.Itoa(len(report.Interleaved))))
 		// [LAW:effects-at-boundaries] Freshness resolution shells out to git and
 		// reads the store, so it runs here, at the boundary, before the pure text
 		// rendering below.

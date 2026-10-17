@@ -491,9 +491,13 @@ not `closed` (`cli.go`). Epics are therefore never workable rows.
    `MissingField` annotation (`ready_state.go`). "Set" means: non-nil, and
    for strings non-blank, for arrays/maps non-empty; anything else counts as set
    (`isRequiredFieldSet`, `ready_state.go`).
-2. `newBlockerAnnotator(details, ancestry)` — for each `BlockedBy` that is
-   `InPlay()`, sorted by ID, emits `OpenDependency{Message: dep.ID}`; and
-   additionally `RankInversion{Message: dep.ID}` when `dep.Rank > issue.Rank`.
+2. `newBlockerAnnotator(details, ancestry, dependencies)` — for each `BlockedBy`
+   that is `InPlay()`, sorted by ID, emits `OpenDependency{Message: dep.ID}`;
+   and additionally `RankInversion{Message: dep.ID}` when
+   `dependencies.Inverted(issue, dep)` — tree order lists the dependency after
+   the issue, the edge is one the order holds, and the two do not sit in one group
+   (`storage.DependencyOrder`, read once per pass by `annotateIssues` through
+   `Store.DependencyOrder`).
    Then, for each id from `ancestry.inheritedDependencies(detail)` not already
    a direct dependency, emits `InheritedDependency{Message: dep.ID}` and no rank
    inversion (`ready_state.go`). `ancestry` is a `heldAncestry`

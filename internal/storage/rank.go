@@ -241,6 +241,104 @@ func (a RankAncestry) Sort(issues []model.Issue) {
 	slices.SortFunc(issues, a.Compare)
 }
 
+// FrameRepresentatives maps each ancestor chain (self first, root last) onto
+// its representative in the chains' comparable frame. Rank meaning is
+// frame-local: an issue's rank is only ever compared against its frame-mates
+// (siblings under the same container, or fellow top-level items), so issues
+// from different frames resolve to their representatives directly under the
+// lowest common ancestor of all chains — and to their roots when the
+// ancestries share none, the top level being the comparable frame. Nothing
+// inside any epic is ever reordered by a cross-frame request. A chain whose
+// issue is a container of another chain's is refused with
+// [FrameContainmentError]: tree order lists a container before everything
+// inside it, so no frame holds both.
+//
+// The frame the representatives live in comes back with them: it is the lowest
+// common ancestor the walk already found, and it is the scope every neighbor
+// lookup seeded by these representatives must be taken in. Returning it here
+// rather than re-deriving it at each callsite keeps the representatives and
+// their keyspace from ever disagreeing. [LAW:one-source-of-truth]
+//
+// [LAW:types-are-the-program] Cross-frame midpoints are an illegal state of
+// the rank keyspace; this resolution makes every write frame-coherent.
+// [LAW:single-enforcer] The one resolution core behind every rank verb in both
+// engines, and behind [RankAncestry.Representatives].
+func FrameRepresentatives(chains [][]string) ([]string, Frame, error) {
+	memberships := make([]map[string]int, len(chains))
+	for i, chain := range chains {
+		m := make(map[string]int, len(chain))
+		for idx, id := range chain {
+			m[id] = idx
+		}
+		memberships[i] = m
+	}
+	for i, chain := range chains {
+		for j, m := range memberships {
+			if i == j {
+				continue
+			}
+			if idx, ok := m[chain[0]]; ok && idx > 0 {
+				return nil, TopLevel, FrameContainmentError{ContainerID: chain[0], ContainedID: chains[j][0]}
+			}
+		}
+	}
+	// Common ancestors form a shared suffix of every chain, so the first
+	// element of chains[0] present in all others is the lowest common ancestor.
+	lcaID := ""
+	for _, id := range chains[0] {
+		inAll := true
+		for _, m := range memberships[1:] {
+			if _, ok := m[id]; !ok {
+				inAll = false
+				break
+			}
+		}
+		if inAll {
+			lcaID = id
+			break
+		}
+	}
+	reps := make([]string, len(chains))
+	for i, chain := range chains {
+		if lcaID == "" {
+			reps[i] = chain[len(chain)-1]
+			continue
+		}
+		reps[i] = chain[memberships[i][lcaID]-1]
+	}
+	// No common ancestor means the representatives are roots, and the frame
+	// holding every root is the top level — which Frame spells as the same
+	// empty string lcaID already carries.
+	return reps, Frame(lcaID), nil
+}
+
+// Representatives resolves x and y to the frame-mates tree order decides them
+// by: [FrameRepresentatives] over their places in the ancestry. ok is false
+// when x and y are one issue or one contains the other, which tree order
+// orders and no key can.
+func (a RankAncestry) Representatives(x, y string) (xRep, yRep string, ok bool) {
+	if x == y {
+		return "", "", false
+	}
+	reps, _, err := FrameRepresentatives([][]string{a.chain(x), a.chain(y)})
+	// Containment is the one refusal FrameRepresentatives makes.
+	if err != nil {
+		return "", "", false
+	}
+	return reps[0], reps[1], true
+}
+
+// chain is id followed by its containers, innermost first.
+func (a RankAncestry) chain(id string) []string {
+	places := a.places[id]
+	chain := make([]string, 0, len(places)+1)
+	chain = append(chain, id)
+	for i := len(places) - 1; i >= 0; i-- {
+		chain = append(chain, places[i].id)
+	}
+	return chain
+}
+
 // placeAt is step i of an issue's path: its containers' places, then its own.
 func placeAt(containers []rankPlace, issue model.Issue, i int) (rankPlace, bool) {
 	switch {

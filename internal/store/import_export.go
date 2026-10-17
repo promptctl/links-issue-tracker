@@ -150,15 +150,16 @@ func (s *Store) Doctor(ctx context.Context) (storage.HealthReport, error) {
 	for _, conflict := range ancestry.Conflicts() {
 		report.Errors = append(report.Errors, conflict.Finding())
 	}
-	// Rank inversions and a blocked-by dependency cycle are two questions about one
-	// snapshot — the live rank order and the blocked-by edges — so it is read once.
+	// Rank inversions, duplicate keys and a blocked-by dependency cycle are
+	// questions about one snapshot — the rank order and the blocked-by edges —
+	// so it is read once.
 	// Liveness is the lifecycle's classification, never a SQL filter; see
 	// liveIssueIDs.
 	liveIDs, err := s.liveIssueIDs(ctx)
 	if err != nil {
 		return report, fmt.Errorf("rank checks: %w", err)
 	}
-	order, err := loadRankOrder(ctx, s.db, liveIDs)
+	order, err := loadRankOrder(ctx, s.db)
 	if err != nil {
 		return report, fmt.Errorf("rank checks: %w", err)
 	}
@@ -167,16 +168,25 @@ func (s *Store) Doctor(ctx context.Context) (storage.HealthReport, error) {
 		return report, fmt.Errorf("rank checks: %w", err)
 	}
 	// [LAW:single-enforcer] This number and what `--fix` leaves behind read the
-	// same edges through the same projection (store.projectEdges), and
-	// store.invertedEdges is the one function that decides what "inverted"
-	// means. TestRepairRankOrderProperties asserts the join: the order the
-	// repair returns leaves invertedEdges empty, so this count going to zero is
-	// a property of the repair rather than a second opinion about it.
-	report.RankInversions = len(invertedEdges(order, edges))
+	// same live edges (store.liveEdges) through one storage.DependencyOrder, the
+	// one definition of "inverted". TestRepairRankOrderProperties asserts the
+	// join: the order the repair returns leaves invertedEdges empty, so this
+	// count going to zero is a property of the repair rather than a second
+	// opinion about it.
+	live := liveEdges(edges, liveIDs)
+	dependencies := storage.NewDependencyOrder(ancestry, live)
+	report.RankInversions = len(invertedEdges(order, dependencies, live))
 	if report.RankInversions > 0 {
 		report.Warnings = append(report.Warnings, fmt.Sprintf("rank inversions: %d (dependencies ranked below dependents)", report.RankInversions))
 	}
-	// No rank verb places a key one live issue holds onto another, and a
+	// An interleaved plan is workable, so it is named rather than refused; the
+	// warning says why a dependency it lists below its dependent is not counted
+	// above. [LAW:nothing-unseen]
+	report.Interleaved = dependencies.Interleaved()
+	for _, group := range report.Interleaved {
+		report.Warnings = append(report.Warnings, fmt.Sprintf("interleaved: %s — work in each waits on work in another, so no rank order lists every dependency among them first; 'lit doctor --fix=rank' does not reorder them for those edges", strings.Join(group, ", ")))
+	}
+	// No rank verb places a key one placed issue holds onto another, and a
 	// landing separates the keys it brings in, so this names what neither stood
 	// in front of: data stored before either did. [LAW:single-enforcer]
 	// rankCollisions is the one definition of a duplicate, and the rank repair
@@ -184,14 +194,14 @@ func (s *Store) Doctor(ctx context.Context) (storage.HealthReport, error) {
 	duplicates := rankCollisions(order)
 	report.DuplicateRanks = len(duplicates)
 	if report.DuplicateRanks > 0 {
-		report.Warnings = append(report.Warnings, fmt.Sprintf("duplicate rank keys: %d (%s; each key's holders list by id instead of by rank — 'lit doctor --fix rank' gives each its own key without changing the order)", report.DuplicateRanks, describeRankCollisions(duplicates)))
+		report.Warnings = append(report.Warnings, fmt.Sprintf("duplicate rank keys: %d (%s; each key's holders list by id instead of by rank — 'lit doctor --fix=rank' gives each its own key without changing the order)", report.DuplicateRanks, describeRankCollisions(duplicates)))
 	}
-	// A blocked-by dependency cycle is the root cause behind a rank inversion that
-	// --fix can never clear: it is unsatisfiable by any rank order. Surface the
-	// members so the operator knows exactly which edge to remove.
-	// [LAW:single-enforcer] blocksCycle reads the constraints the repair sorts,
-	// so this reports a cycle exactly when FixRankInversions refuses on one.
-	if cycle := blocksCycle(order, edges); len(cycle) > 0 {
+	// A blocked-by dependency cycle is work none of which can start, and it
+	// refuses the rank repair as a whole. Surface the members so the operator
+	// knows exactly which edge to remove.
+	// [LAW:single-enforcer] blocksCycle is what FixRankInversions refuses on,
+	// so this reports a cycle exactly when the repair refuses.
+	if cycle := blocksCycle(order, live); len(cycle) > 0 {
 		report.DependencyCycle = cycle
 		report.Warnings = append(report.Warnings, fmt.Sprintf("blocked-by dependency cycle: %s (no rank order exists; remove one edge with 'lit dep rm' to break it)", strings.Join(cycle, " -> ")))
 	}
