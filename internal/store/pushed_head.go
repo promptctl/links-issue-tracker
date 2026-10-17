@@ -134,24 +134,11 @@ func RecordPushedHead(ctx context.Context, doltRootDir string, remote string, br
 	if !isDoltCommitHash(trimmedHead) {
 		return 0, fmt.Errorf("record pushed head: %q is not a Dolt commit hash", head)
 	}
-	// The same shared hold every reader of the Dolt directory takes: a
-	// rotator (snapshots restore, adopt) must not swap the directory under
-	// the open below. [LAW:single-enforcer]
-	releaseWorkspace, err := acquireWorkspaceShared(ctx, root)
+	releaseWorkspace, err := acquireLiveStoreHold(ctx, root)
 	if err != nil {
 		return 0, err
 	}
-	defer func() {
-		if relErr := releaseWorkspace(); relErr != nil {
-			err = errors.Join(err, relErr)
-		}
-	}()
-	if err := requireInitializedWorkspace(root); err != nil {
-		return 0, err
-	}
-	if err := requireNoPendingAdopt(root); err != nil {
-		return 0, err
-	}
+	defer func() { err = errors.Join(err, releaseWorkspace()) }()
 	record, atHead, err := settlePushedHead(ctx, root, trimmedRemote, trimmedBranch, trimmedHead)
 	if err != nil {
 		return 0, err
@@ -213,6 +200,26 @@ func settlePushedHead(ctx context.Context, root, trimmedRemote, trimmedBranch, t
 		return 0, false, err
 	}
 	return record, atHead, nil
+}
+
+// acquireLiveStoreHold is what a write to the live store from outside its
+// engine takes before holdForRefWrite: the same shared hold every reader of
+// the Dolt directory takes, so a rotator (snapshots restore, adopt) cannot
+// swap the directory under the open, on a workspace that is initialized and
+// has no adopt pending. The caller releases it once everything it writes
+// under the workspace has landed. [LAW:single-enforcer]
+func acquireLiveStoreHold(ctx context.Context, root string) (func() error, error) {
+	release, err := acquireWorkspaceShared(ctx, root)
+	if err != nil {
+		return nil, err
+	}
+	if err := requireInitializedWorkspace(root); err != nil {
+		return nil, errors.Join(err, release())
+	}
+	if err := requireNoPendingAdopt(root); err != nil {
+		return nil, errors.Join(err, release())
+	}
+	return release, nil
 }
 
 // holdForRefWrite is the one hold a clone's bookkeeping takes on the live
