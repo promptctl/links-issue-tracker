@@ -287,6 +287,13 @@ func TestPruneRemoteCacheIsNotBlockedByOneStuckMirror(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(cacheBase, stuck)); err != nil {
 		t.Fatalf("the stuck orphan should still be there to report on: %v", err)
 	}
+	// The stuck orphan's payload sits in a writable repo.git, so it was
+	// unlinked before its key directory refused; those bytes are freed and
+	// count, beside the collectible orphan's.
+	if outcome.Reclaimed != 2*4096 {
+		t.Fatalf("Reclaimed = %d, want %d — both payloads were unlinked, the stuck one before its failure",
+			outcome.Reclaimed, 2*4096)
+	}
 }
 
 // seedBareGitRemote creates a bare git repo carrying one commit. The commit is

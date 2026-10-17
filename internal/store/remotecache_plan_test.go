@@ -414,3 +414,39 @@ func TestCollectAbandonedMirrorKeepsTheBytesItFreedBeforeAFailure(t *testing.T) 
 		t.Fatalf("reclaimed = %d, want 4096 — exactly the file it unlinked, not the one it could not", reclaimed)
 	}
 }
+
+// TestCollectAbandonedMirrorsDeletesOnlyWhatTheFreshPlanAbandons pins that the
+// loop decides each deletion on a plan taken just before it, not on the plan it
+// started from. Between the two, a key can come back to life, and a first push
+// through a remote excused as never opened can turn the refusal back on.
+func TestCollectAbandonedMirrorsDeletesOnlyWhatTheFreshPlanAbandons(t *testing.T) {
+	t.Parallel()
+	base := t.TempDir()
+	revived, abandoned := strings.Repeat("aa", 32), strings.Repeat("bb", 32)
+	for _, key := range []string{revived, abandoned} {
+		if err := os.MkdirAll(filepath.Join(base, key, "repo.git"), 0o755); err != nil {
+			t.Fatalf("plant %s: %v", key, err)
+		}
+	}
+	outcome := collectAbandonedMirrors(base,
+		remoteCachePlan{abandoned: []string{revived, abandoned}},
+		func() (remoteCachePlan, error) { return remoteCachePlan{abandoned: []string{abandoned}}, nil })
+	if outcome.Removed != 1 || outcome.Problem != "" {
+		t.Fatalf("outcome = %+v, want exactly one removal and no problem", outcome)
+	}
+	if _, err := os.Stat(filepath.Join(base, revived)); err != nil {
+		t.Fatalf("a key the fresh plan no longer abandons was deleted: %v", err)
+	}
+
+	refused := errors.New("declining to prune: backup has been opened since")
+	outcome = collectAbandonedMirrors(base,
+		remoteCachePlan{abandoned: []string{revived}},
+		func() (remoteCachePlan, error) { return remoteCachePlan{}, refused })
+	if outcome.Removed != 0 || !strings.Contains(outcome.Problem, "re-check abandoned mirror "+revived) ||
+		!strings.Contains(outcome.Problem, refused.Error()) {
+		t.Fatalf("outcome = %+v, want no removal and the refusal reported against %s", outcome, revived)
+	}
+	if _, err := os.Stat(filepath.Join(base, revived)); err != nil {
+		t.Fatalf("a key was deleted after the fresh plan refused: %v", err)
+	}
+}

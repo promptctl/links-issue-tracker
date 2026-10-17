@@ -480,15 +480,22 @@ func (s *Store) readRemoteCachePlan(ctx context.Context, base string) (remoteCac
 // anything a push has not already made durable on the remote.
 func (s *Store) pruneRemoteCache(ctx context.Context) remoteCachePruneOutcome {
 	base := s.remoteCacheBase()
-	plan, err := s.readRemoteCachePlan(ctx, base)
+	replan := func() (remoteCachePlan, error) { return s.readRemoteCachePlan(ctx, base) }
+	plan, err := replan()
 	if err != nil {
 		return remoteCachePruneOutcome{remoteCacheCollection: remoteCacheCollection{Problem: err.Error()}}
 	}
+	return collectAbandonedMirrors(base, plan, replan)
+}
 
+// collectAbandonedMirrors removes plan's abandoned mirrors under base, taking
+// the plan again through replan before each one and removing a key only if the
+// fresh plan still abandons it.
+func collectAbandonedMirrors(base string, plan remoteCachePlan, replan func() (remoteCachePlan, error)) remoteCachePruneOutcome {
 	outcome := remoteCachePruneOutcome{NeverOpened: plan.neverOpened}
 	var problems []string
 	for _, key := range plan.abandoned {
-		now, err := s.readRemoteCachePlan(ctx, base)
+		now, err := replan()
 		if err != nil {
 			// A plan that cannot be taken, or now refuses, closes the gate for
 			// every key still to come, not only this one.
