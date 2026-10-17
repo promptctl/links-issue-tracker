@@ -355,24 +355,30 @@ case "$mode" in
             exit 1
         fi
 
-        # Resolve current platform → goreleaser archive name. Must mirror
-        # .goreleaser.yml's name_template: lit_<version>_<goos>_<goarch>.<ext>
-        # where <version> is goreleaser's .Version — the tag with the leading
-        # `v` STRIPPED. We strip it here too.
+        # Resolve current platform → goreleaser archive name:
+        # lit_<version>_<goos>_<goarch>.<ext>, where <version> is goreleaser's
+        # .Version — the tag with the leading `v` STRIPPED.
+        # [LAW:one-source-of-truth] exception: .goreleaser.yml's builds and
+        # archives blocks name the archives; this copies them because this mode
+        # runs piped from curl with no checkout to read them from.
+        # TestInstallRequestsExactlyTheArchivesGoreleaserProduces holds the copy
+        # to what that config produces.
         archive_version="${release_tag#v}"
 
         os="$(uname -s | tr '[:upper:]' '[:lower:]')"
-        arch_raw="$(uname -m)"
-        case "$arch_raw" in
-            x86_64|amd64)  arch="amd64" ;;
-            arm64|aarch64) arch="arm64" ;;
-            *) echo "error: unsupported architecture: $arch_raw" >&2; exit 1 ;;
-        esac
-        case "$os" in
-            linux)  ext="tar.gz" ;;
-            darwin) ext="tar.gz" ;;
-            mingw*|msys*|cygwin*) os="windows"; ext="zip" ;;
-            *) echo "error: unsupported OS: $os" >&2; exit 1 ;;
+        arch="$(uname -m)"
+        case "$os" in mingw*|msys*|cygwin*) os="windows" ;; esac
+        case "$arch" in x86_64) arch="amd64" ;; aarch64) arch="arm64" ;; esac
+        # [LAW:single-enforcer] the platforms a release publishes an archive
+        # for; every other platform is refused here, before any download.
+        case "$os/$arch" in
+            linux/amd64|linux/arm64|darwin/amd64|darwin/arm64) ext="tar.gz" ;;
+            windows/amd64) ext="zip" ;;
+            *)
+                echo "error: no release archive is published for $os/$arch" >&2
+                echo "       use the source build: bash scripts/install.sh   (omit --from-release / --latest-release)" >&2
+                exit 1
+                ;;
         esac
         # Probe the extractor for the chosen ext explicitly so a missing
         # tool gets a targeted install hint instead of `set -e` surfacing

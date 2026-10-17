@@ -680,10 +680,11 @@ Three modes, one target-resolution rule (`scripts/install.sh`):
   - Tag normalization: strip then re-add a leading `v`, then require
     `^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$` else
     `error: release tag '<tag>' is not a canonical semver release tag (expected vX.Y.Z)`.
-  - Archive name `lit_${tag#v}_${os}_${arch}.${ext}`; arch map
-    `x86_64|amd64→amd64`, `arm64|aarch64→arm64`, else
-    `error: unsupported architecture`; OS map `linux|darwin→tar.gz`,
-    `mingw*|msys*|cygwin*→windows/zip`, else `error: unsupported OS`.
+  - Archive name `lit_${tag#v}_${os}_${arch}.${ext}`; `uname -s` lowercased,
+    `mingw*|msys*|cygwin*→windows`; `uname -m` with `x86_64→amd64`,
+    `aarch64→arm64`; `linux|darwin` × `amd64|arm64` → `tar.gz`,
+    `windows/amd64` → `zip`, any other pair
+    `error: no release archive is published for <os>/<arch>`.
   - Extractor probes: `tar` for `.tar.gz`, `unzip` for `.zip`.
   - Downloads `<base>/<tag>/<archive>` and `<base>/<tag>/checksums.txt` into the staging dir.
   - Expected checksum is extracted with `awk '$2 == want'` (exact field match, not grep)

@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
 	"os/exec"
@@ -16,10 +17,12 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"text/template"
 
 	litrelease "github.com/promptctl/links-issue-tracker/internal/release"
 	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
 	"golang.org/x/mod/semver"
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -615,6 +618,126 @@ func TestInstallFetchesTheReleaseURLsLitUpgradeFetches(t *testing.T) {
 	if install, lit := directory(installRequest("--from-release", tag)), directory(litRequests[1]); install != lit {
 		t.Errorf("release %s download directory: install.sh fetches from %q, lit upgrade from %q", tag, install, lit)
 	}
+}
+
+// TestInstallRequestsExactlyTheArchivesGoreleaserProduces holds install.sh's
+// copy of the archive name to .goreleaser.yml: across every platform uname can
+// report, each archive install.sh requests is one the release builds, and each
+// archive the release builds is requested on some platform. Stub uname reports
+// the platform; stub curl records the request and fails it.
+func TestInstallRequestsExactlyTheArchivesGoreleaserProduces(t *testing.T) {
+	t.Parallel()
+	const tag = "v1.2.3"
+	produced := goreleaserArchives(t, strings.TrimPrefix(tag, "v"))
+	root := t.TempDir()
+	stubBin := filepath.Join(root, "stub-bin")
+	if err := os.MkdirAll(stubBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	requests := filepath.Join(root, "curl-requests")
+	writeFile(t, filepath.Join(stubBin, "curl"), "#!/bin/sh\nfor arg; do case $arg in *://*) echo \"$arg\" >>'"+requests+"';; esac; done\nexit 22\n", 0o755)
+	writeFile(t, filepath.Join(stubBin, "uname"), "#!/bin/sh\ncase $1 in -s) echo \"$UNAME_S\";; -m) echo \"$UNAME_M\";; esac\n", 0o755)
+	// The extractor probes run before the first download; stubs make them
+	// pass on hosts that lack one.
+	for _, tool := range []string{"tar", "unzip"} {
+		writeFile(t, filepath.Join(stubBin, tool), "#!/bin/sh\nexit 1\n", 0o755)
+	}
+
+	requested := map[string]bool{}
+	for _, kernel := range []string{"Linux", "Darwin", "MINGW64_NT-10.0-22631", "MSYS_NT-10.0-22631", "CYGWIN_NT-10.0-22631", "FreeBSD"} {
+		for _, machine := range []string{"x86_64", "amd64", "aarch64", "arm64", "i686", "armv7l"} {
+			if err := os.WriteFile(requests, nil, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			install := exec.Command("bash", "install.sh", "--from-release", tag)
+			install.Env = []string{"PATH=" + stubBin + ":/usr/bin:/bin", "HOME=" + root, "GOBIN=" + filepath.Join(root, "bin"), "UNAME_S=" + kernel, "UNAME_M=" + machine}
+			out, _ := install.CombinedOutput()
+			lines := strings.Fields(readFile(t, requests))
+			switch {
+			case len(lines) == 0 && strings.Contains(string(out), "no release archive is published for"):
+				continue
+			case len(lines) != 1:
+				t.Fatalf("uname %s %s: want one curl request or the platform refusal, got requests %q\n%s", kernel, machine, lines, out)
+			}
+			archive := lines[0][strings.LastIndex(lines[0], "/")+1:]
+			if !produced[archive] {
+				t.Errorf("uname %s %s: install.sh requests %q, which .goreleaser.yml does not produce (it produces %v)", kernel, machine, archive, slices.Sorted(maps.Keys(produced)))
+			}
+			requested[archive] = true
+		}
+	}
+	for archive := range produced {
+		if !requested[archive] {
+			t.Errorf(".goreleaser.yml produces %q, which install.sh requests on no platform", archive)
+		}
+	}
+}
+
+// goreleaserTarget is one goos/goarch pair as .goreleaser.yml writes it.
+type goreleaserTarget struct {
+	Goos   string `yaml:"goos"`
+	Goarch string `yaml:"goarch"`
+}
+
+// goreleaserArchives is the set of archive file names .goreleaser.yml's one
+// build and one archive produce for version: name_template rendered for every
+// goos/goarch pair the build does not ignore, with that goos's format as the
+// extension. It renders the template with text/template, the engine goreleaser
+// templates are written in.
+func goreleaserArchives(t *testing.T, version string) map[string]bool {
+	t.Helper()
+	var config struct {
+		ProjectName string `yaml:"project_name"`
+		Builds      []struct {
+			Goos   []string           `yaml:"goos"`
+			Goarch []string           `yaml:"goarch"`
+			Ignore []goreleaserTarget `yaml:"ignore"`
+		} `yaml:"builds"`
+		Archives []struct {
+			NameTemplate    string   `yaml:"name_template"`
+			Formats         []string `yaml:"formats"`
+			FormatOverrides []struct {
+				Goos    string   `yaml:"goos"`
+				Formats []string `yaml:"formats"`
+			} `yaml:"format_overrides"`
+		} `yaml:"archives"`
+	}
+	if err := yaml.Unmarshal([]byte(readFile(t, "../.goreleaser.yml")), &config); err != nil {
+		t.Fatal(err)
+	}
+	if len(config.Builds) != 1 || len(config.Archives) != 1 {
+		t.Fatalf(".goreleaser.yml has %d builds and %d archives; this reading of it models exactly one of each", len(config.Builds), len(config.Archives))
+	}
+	build, archive := config.Builds[0], config.Archives[0]
+	name, err := template.New("name_template").Option("missingkey=error").Parse(archive.NameTemplate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	formats := map[string][]string{}
+	for _, o := range archive.FormatOverrides {
+		formats[o.Goos] = o.Formats
+	}
+	produced := map[string]bool{}
+	for _, goos := range build.Goos {
+		for _, goarch := range build.Goarch {
+			if slices.Contains(build.Ignore, goreleaserTarget{goos, goarch}) {
+				continue
+			}
+			format, ok := formats[goos]
+			if !ok {
+				format = archive.Formats
+			}
+			if len(format) != 1 {
+				t.Fatalf(".goreleaser.yml gives %s %d archive formats; this reading of it models exactly one", goos, len(format))
+			}
+			var b strings.Builder
+			if err := name.Execute(&b, map[string]string{"ProjectName": config.ProjectName, "Version": version, "Os": goos, "Arch": goarch}); err != nil {
+				t.Fatal(err)
+			}
+			produced[b.String()+"."+format[0]] = true
+		}
+	}
+	return produced
 }
 
 // directory is url up to its last "/", which a release download URL puts
