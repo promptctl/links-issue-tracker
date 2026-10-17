@@ -158,17 +158,17 @@ func TestApplyIssueTypeFlagMatrix(t *testing.T) {
 					t.Fatalf("Apply(%s, %s) error = %v, want success", issueType, combo.name, err)
 				}
 
-				if in.Fields.Title != nil && updated.Title != *in.Fields.Title {
-					t.Fatalf("Apply(%s, %s) title = %q, want %q", issueType, combo.name, updated.Title, *in.Fields.Title)
+				if in.Fields.Title != nil && updated.Issue.Title != *in.Fields.Title {
+					t.Fatalf("Apply(%s, %s) title = %q, want %q", issueType, combo.name, updated.Issue.Title, *in.Fields.Title)
 				}
-				if in.Fields.Description != nil && updated.Description != *in.Fields.Description {
-					t.Fatalf("Apply(%s, %s) description = %q, want %q", issueType, combo.name, updated.Description, *in.Fields.Description)
+				if in.Fields.Description != nil && updated.Issue.Description != *in.Fields.Description {
+					t.Fatalf("Apply(%s, %s) description = %q, want %q", issueType, combo.name, updated.Issue.Description, *in.Fields.Description)
 				}
-				if in.Fields.Priority != nil && updated.Priority != *in.Fields.Priority {
-					t.Fatalf("Apply(%s, %s) priority = %d, want %d", issueType, combo.name, updated.Priority, *in.Fields.Priority)
+				if in.Fields.Priority != nil && updated.Issue.Priority != *in.Fields.Priority {
+					t.Fatalf("Apply(%s, %s) priority = %d, want %d", issueType, combo.name, updated.Issue.Priority, *in.Fields.Priority)
 				}
-				if in.Fields.Labels != nil && strings.Join(updated.Labels, ",") != strings.Join(*in.Fields.Labels, ",") {
-					t.Fatalf("Apply(%s, %s) labels = %v, want %v", issueType, combo.name, updated.Labels, *in.Fields.Labels)
+				if in.Fields.Labels != nil && strings.Join(updated.Issue.Labels, ",") != strings.Join(*in.Fields.Labels, ",") {
+					t.Fatalf("Apply(%s, %s) labels = %v, want %v", issueType, combo.name, updated.Issue.Labels, *in.Fields.Labels)
 				}
 				// Every action-carrying combo drives the status machine, so the
 				// expected post-state is the variant's own Target. The matrix's
@@ -184,8 +184,8 @@ func TestApplyIssueTypeFlagMatrix(t *testing.T) {
 					}
 					target = statusAction.Target()
 				}
-				if carriesTransition && updated.State() != target {
-					t.Fatalf("Apply(%s, %s) state = %q, want %q", issueType, combo.name, updated.State(), target)
+				if carriesTransition && updated.Issue.State() != target {
+					t.Fatalf("Apply(%s, %s) state = %q, want %q", issueType, combo.name, updated.Issue.State(), target)
 				}
 
 				// A field-only cell records zero transition events on every

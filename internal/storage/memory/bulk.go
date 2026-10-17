@@ -42,11 +42,11 @@ func (e *Engine) BulkApply(ctx context.Context, prefix, actor string, specs []st
 			if err != nil {
 				return storage.BulkApplyResult{}, err
 			}
-			issue, err := e.apply(spec.ID, change)
+			applied, err := e.apply(spec.ID, change)
 			if err != nil {
 				return storage.BulkApplyResult{}, e.compensate(batch, fmt.Errorf("bulk: update %q: %w", spec.ID, err))
 			}
-			result.Updated = append(result.Updated, issue.ID)
+			result.Updated = append(result.Updated, applied.Issue.ID)
 			continue
 		}
 		in, err := bulkCreateInput(spec, prefix, batch)

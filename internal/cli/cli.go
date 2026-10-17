@@ -15,6 +15,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
 	"github.com/promptctl/links-issue-tracker/internal/app"
+	"github.com/promptctl/links-issue-tracker/internal/claims"
 	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/interrupt"
 	"github.com/promptctl/links-issue-tracker/internal/model"
@@ -1391,14 +1392,14 @@ func updateLeaf() appLeaf {
 		if in.IsEmpty() {
 			return UsageError{Message: "lit update requires at least one field flag; " + usage}
 		}
-		issue, err := ap.Store.Apply(ctx, positional[0], in)
+		applied, err := ap.Store.Apply(ctx, positional[0], in)
 		if err != nil {
 			return err
 		}
-		if err := dispatchOccasion(ctx, stdout, ap.Workspace, ticketUpdatedOccasion(issue)); err != nil {
+		if err := dispatchOccasion(ctx, stdout, ap.Workspace, ticketUpdatedOccasion(applied.Issue)); err != nil {
 			return err
 		}
-		if err := printIssueSummary(stdout, issue); err != nil {
+		if err := printIssueSummary(stdout, applied.Issue); err != nil {
 			return err
 		}
 		return emitBreadcrumb(stdout, "update")
@@ -1695,30 +1696,31 @@ type transitionSpec struct {
 	// built action scattered through runTransition.
 	//
 	// Its result is what the transition owes AFTER Apply, decided on the
-	// pre-Apply state the hook just read. For `start` that is the transfer
-	// notice and the count of the lane, and both are decided here rather than
-	// beside Apply because only this read knows the lane: a start on a lane
-	// nobody holds hands nothing over, whatever the row's history says about
-	// who once started it, since an expired claim is not a claim, and reading
-	// the lane again would be a second gather of every event in the store.
-	// [LAW:one-source-of-truth]
+	// pre-Apply state the hook just read. For `start` that is whether the
+	// handover Apply reports is announced, and the count of the lane, and both
+	// are decided here rather than beside Apply because only this read knows
+	// the lane: a start on a lane nobody holds hands nothing over, whatever the
+	// row's history says about who once started it, since an expired claim is
+	// not a claim, and reading the lane again would be a second gather of
+	// every event in the store. [LAW:one-source-of-truth]
 	authorize func(fs *cobraFlagSet) func(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, prior ticketState, action model.Action) (afterApply, error)
 }
 
 // afterApply is what a transition owes once Apply has written the issue: the
 // line it prints and the facts it tells the statusline file. The authorize hook
-// decides both on the state it read; where the write left the ticket — its row
-// and its phase — completes them. An empty notice and no facts are the
-// identity values for "nothing owed", so runTransition prints and records the
-// result unconditionally. [LAW:dataflow-not-control-flow]
-type afterApply func(written ticketState) (notice string, facts statusline.Facts)
+// decides both on the state it read; what the write did completes them — where
+// it left the ticket, its row and its phase, and the claim it handed over, as
+// Apply reported it. An empty notice and no facts are the identity values for
+// "nothing owed", so runTransition prints and records the result
+// unconditionally. [LAW:dataflow-not-control-flow]
+type afterApply func(written ticketState, handover *claims.Handover) (notice string, facts statusline.Facts)
 
 // noAuthorize is the authorize hook of every transition that gates nothing
 // beyond the ordinary state-machine check store.Apply already performs, and
 // owes nothing after it.
 func noAuthorize(*cobraFlagSet) func(context.Context, io.Writer, *app.App, string, ticketState, model.Action) (afterApply, error) {
 	return func(context.Context, io.Writer, *app.App, string, ticketState, model.Action) (afterApply, error) {
-		return func(ticketState) (string, statusline.Facts) { return "", nil }, nil
+		return func(ticketState, *claims.Handover) (string, statusline.Facts) { return "", nil }, nil
 	}
 }
 
@@ -1811,7 +1813,7 @@ func authorizePhase(ctx context.Context, _ io.Writer, _ *app.App, _ string, prio
 		return nil, fmt.Errorf("phase: authorize hook received a %T action", action)
 	}
 	move := model.PhaseChange{From: prior.phase, To: set.Phase}
-	return func(ticketState) (string, statusline.Facts) {
+	return func(ticketState, *claims.Handover) (string, statusline.Facts) {
 		telemetry.Set(ctx, "phase.from", string(move.From))
 		telemetry.Set(ctx, "phase.to", string(move.To))
 		telemetry.Set(ctx, "phase.changed", move.Changed())
@@ -1932,9 +1934,7 @@ func transitionLeaf(spec transitionSpec) appLeaf {
 
 		// The pre-transition read is the state `authorize` gates on and the
 		// before-half of the workflow occasion below: the row, and the phase
-		// the ticket's history puts it in. The claim-transfer notice reads the
-		// issue's claim again, after the gate, because that is the read the gate
-		// can invalidate.
+		// the ticket's history puts it in.
 		priorIssue, err := ap.Store.GetIssue(ctx, issueID)
 		if err != nil {
 			return err
@@ -1955,17 +1955,18 @@ func transitionLeaf(spec transitionSpec) appLeaf {
 			return err
 		}
 
-		issue, err := ap.Store.Apply(ctx, issueID, storage.Change{Action: action, Actor: actor, Reason: *reason})
+		applied, err := ap.Store.Apply(ctx, issueID, storage.Change{Action: action, Actor: actor, Reason: *reason})
 		if err != nil {
 			return err
 		}
+		issue := applied.Issue
 		written, err := readTicketState(ctx, ap.Store, issue)
 		if err != nil {
 			return err
 		}
 		// Recorded after Apply, so these facts follow the ones the store's
 		// change observer recorded for this same write.
-		notice, facts := owed(written)
+		notice, facts := owed(written, applied.Handover)
 		ap.Statusline.Record(facts...)
 
 		// What the transition did is said first, ahead of any guidance about

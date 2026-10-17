@@ -102,7 +102,7 @@ type IssueWriter interface {
 	// drift from this one. A pure no-op records nothing — history reflects
 	// actual mutations — and an illegal transition is refused rather than
 	// silently ignored. [LAW:dataflow-not-control-flow]
-	Apply(ctx context.Context, id string, c Change) (model.Issue, error)
+	Apply(ctx context.Context, id string, c Change) (Applied, error)
 
 	// Purge permanently removes an issue: its row, comments, labels, history,
 	// and every edge to or from it, in one write, leaving a model.Purge record

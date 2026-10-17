@@ -206,6 +206,19 @@ Every key is present exactly when the command ended in that refusal.
 | `schema_ahead.remote_schema` | The schema version of the remote branch's head. |
 | `schema_ahead.running_schema_max` | The highest schema version this lit supports. |
 
+## What `lit start` records
+
+A start reads who holds the ticket's lane, confirms a takeover when another
+checkout holds it, and then writes. `start.lane_held` is set before the
+takeover is confirmed, so a refused takeover carries it beside its refusal;
+the other two keys are set once the write has landed.
+
+| Key | Meaning |
+| --- | --- |
+| `start.lane_held` | `true` when a checkout held the lane, this one or another; `false` when nobody did, including when the last claim expired. |
+| `start.handover` | `true` when the write moved the ticket's claim from whoever last started it to a new holder: another checkout, or a new assignee on the same one. |
+| `start.transfer_announced` | `true` when the start printed `claim transferred`. That needs a handover and a lane that still named the previous holder, so it is `false` when that claim had expired, the ticket was finished, or a later start elsewhere in the lane had taken over. |
+
 ## What `lit phase` records
 
 A phase move reads the phase the issue is in, then moves it. A refused move,

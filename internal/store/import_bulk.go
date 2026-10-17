@@ -44,12 +44,12 @@ func (s *Store) BulkApply(ctx context.Context, prefix, actor string, specs []sto
 			if err != nil {
 				return storage.BulkApplyResult{}, err
 			}
-			issue, err := s.Apply(ctx, spec.ID, change)
+			applied, err := s.Apply(ctx, spec.ID, change)
 			if err != nil {
 				leaked := s.rollbackCreatedIssues(ctx, createdIDs)
 				return storage.BulkApplyResult{}, fmt.Errorf("bulk: update %q: %w (rollback leaked %d: %s)", spec.ID, err, len(leaked), strings.Join(leaked, ","))
 			}
-			result.Updated = append(result.Updated, issue.ID)
+			result.Updated = append(result.Updated, applied.Issue.ID)
 			continue
 		}
 		// validateBulkSpecs already required Title/Topic/IssueType present and

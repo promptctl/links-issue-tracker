@@ -81,3 +81,38 @@ func (c Claimant) After(action model.StatusAction, taker model.Attribution) Clai
 	}
 	return Claimant{Established: true, Assignee: strings.TrimSpace(start.Assignee), Checkout: taker}
 }
+
+// Handover is a ticket's claim passing from one holder to another: the
+// claimant the record named before a start, and the one that start installed.
+type Handover struct {
+	From, To Claimant
+}
+
+// HandoverTo is the handover a write moving the claimant from c to next
+// records, and nil when it records none: nobody had taken the ticket, so there
+// was no claim to pass on, or the holder did not change.
+//
+// A storage engine asks it of the same pair it compares to decide whether the
+// write is owed, and reports the answer, so the handover a caller announces is
+// the one the write was decided on rather than a second reading of the rule.
+// [LAW:one-source-of-truth]
+func (c Claimant) HandoverTo(next Claimant) *Handover {
+	if !c.Held() || next == c {
+		return nil
+	}
+	return &Handover{From: c, To: next}
+}
+
+// Live reports that the claim a handover passed on was still a claim: the
+// lane's standing names the handover's predecessor as its holder. A ticket's
+// record goes on naming whoever last started it after that claim is over —
+// it expired, the ticket finished, or a later start elsewhere in the lane
+// superseded it — and a predecessor who holds nothing hands nothing over.
+//
+// The public checkout matches like any holder: it is the predecessor's real
+// identity, not a claim of ownership by whoever asks, so the minted-token rule
+// that guards "is this lane mine" does not apply.
+func (h Handover) Live(lane Standing) bool {
+	held, ok := lane.(Held)
+	return ok && held.By == h.From.Checkout
+}

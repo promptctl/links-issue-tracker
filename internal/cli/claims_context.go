@@ -107,9 +107,9 @@ func readEvidence(ctx context.Context, ap *app.App) (claims.Evidence, error) {
 
 // ownAttribution is the attribution this checkout's own work carries — the
 // pair every claim comparison in this package tests against, spelled once.
-// [LAW:one-source-of-truth] The takeover gate and the transfer notice have to
-// mean the same checkout by "us", or a start could route as a takeover and then
-// report itself as nothing.
+// Store.AttributeTo derives the pair the store stamps on its events from the
+// same stream token, which is what makes the takeover gate's "ours" the
+// checkout the start is recorded under. [LAW:one-source-of-truth]
 //
 // NewAttribution collapses an absent stream (a checkout that has never mutated)
 // to the zero Attribution, the public checkout's. No branch is needed for that
@@ -119,70 +119,24 @@ func ownAttribution(ap *app.App) model.Attribution {
 	return model.NewAttribution(ap.Stream.Value(), ap.Workspace.WorkspaceID)
 }
 
-// readClaimant reads who the record currently names as holding one ticket. The
-// two halves come from two places — the assignee from the row, the checkout
-// from the history — so this is the one unit that gathers the pair, and callers
-// get a Claimant rather than the raw reads it took to build one.
-func readClaimant(ctx context.Context, ap *app.App, issueID string) (claims.Claimant, error) {
-	issue, err := ap.Store.GetIssue(ctx, issueID)
-	if err != nil {
-		return claims.Claimant{}, err
-	}
-	events, err := ap.Store.ListEvents(ctx, issueID)
-	if err != nil {
-		return claims.Claimant{}, err
-	}
-	return claims.ClaimantOf(issue, events), nil
-}
-
 // transferNotice is the line a start owes when it takes the ticket FROM
 // somebody, and the empty string when it owes none — the identity value for
 // "nothing to say", so the caller writes the result unconditionally instead of
 // guarding the write. [LAW:dataflow-not-control-flow]
 //
-// It is asked only by authorizeStart, and only once that gate has found the
-// ticket's lane held — by this checkout or another. A lane nobody holds has no
-// claim to hand over: it was never started, is finished, or its claim expired,
-// and the notice would be wrong whatever the row's own history records about
-// who last started it, because an expired claim is not a claim. The gate is the
-// one read that knows the lane's standing, so the question is asked there
-// rather than answered twice. The record's establisher still matters to the
-// store, which compares claimants to decide whether a same-state start owes a
-// write; this governs only what is announced.
-//
-// Asking is what costs: the claimant is two round trips, and `start` is the one
-// verb whose result anything reads. The other three status verbs cannot take a
-// ticket, and the four retention verbs (archive/unarchive/delete/restore) are
-// not status transitions at all — they move an issue on the orthogonal axis. So
-// which actions owe the read is a fact about the sealed sum, and the start
-// spec's authorize hook is where it is stated: once, beside the read, rather
-// than as another type assertion in runTransition's body.
-// [LAW:effects-at-boundaries]
-//
-// The decision is composed before Apply, because every input to it is a fact
-// about the state Apply is about to change — the prior claimant and the action
-// taking it. runTransition renders the result afterwards, so a failed Apply
-// still announces nothing.
-//
-// [LAW:no-silent-failure] Both conditions on the notice are load-bearing and
-// neither implies the other: Held is whether anything ever established a hold —
-// a fact NEITHER identity half carries, since both go empty on real holders, so
-// a ticket carrying `lit new --assignee X` that nobody has started is silent
-// (reading it off the checkout instead is the wrong definition; claimant.go
-// says why) — and the claimant comparison is whether that holder changed.
-// Comparing assignees alone would be silent for the two takeovers that matter
-// most: between two human checkouts (both assignees empty) and between two
-// worktrees of one agent session (both identical).
-func transferNotice(ctx context.Context, ap *app.App, issueID string, start model.Start) (string, error) {
-	prior, err := readClaimant(ctx, ap, issueID)
-	if err != nil {
-		return "", err
+// The handover is the one Apply reports, read off the comparison that decided
+// whether the start owed a write, so the line names exactly the transfer the
+// history records. [LAW:one-source-of-truth] It describes the ticket's own
+// record, though, and a claim is held per lane: lane is the standing the
+// takeover gate read, and the line is owed only when that standing names the
+// handover's predecessor as the holder (Handover.Live). Otherwise the
+// predecessor held nothing to hand over, because an expired claim is not a
+// claim.
+func transferNotice(lane claims.Standing, handover *claims.Handover) string {
+	if handover == nil || !handover.Live(lane) {
+		return ""
 	}
-	taker := prior.After(start, ownAttribution(ap))
-	if !prior.Held() || taker == prior {
-		return "", nil
-	}
-	return fmt.Sprintf("claim transferred: %s -> %s\n", describeClaimant(prior), describeClaimant(taker)), nil
+	return fmt.Sprintf("claim transferred: %s -> %s\n", describeClaimant(handover.From), describeClaimant(handover.To))
 }
 
 // addressesByAttribution indexes this machine's live checkouts by the

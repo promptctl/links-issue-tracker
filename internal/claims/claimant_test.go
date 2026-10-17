@@ -131,6 +131,65 @@ func TestHeld(t *testing.T) {
 	}
 }
 
+// TestHandoverTo walks the two conditions a handover needs, each against a
+// pair where the other condition holds, so neither can stand in for both: a
+// holder to pass the claim on from, and a holder that changed.
+func TestHandoverTo(t *testing.T) {
+	heldByA := claims.Claimant{Established: true, Assignee: "ada", Checkout: streamA}
+	heldByB := claims.Claimant{Established: true, Assignee: "ada", Checkout: streamB}
+	preset := claims.Claimant{Assignee: "ada"}
+
+	cases := []struct {
+		name        string
+		prior, next claims.Claimant
+		want        *claims.Handover
+	}{
+		{"a new checkout takes a held ticket", heldByA, heldByB, &claims.Handover{From: heldByA, To: heldByB}},
+		{"a pre-attribution holder is still somebody to hand over from", claims.Claimant{Established: true}, heldByB, &claims.Handover{From: claims.Claimant{Established: true}, To: heldByB}},
+		{"the holder starts its own ticket again", heldByA, heldByA, nil},
+		{"the first start of a preset assignee hands nothing over", preset, claims.Claimant{Established: true, Assignee: "ada"}, nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := c.prior.HandoverTo(c.next)
+			if (got == nil) != (c.want == nil) || (got != nil && *got != *c.want) {
+				t.Errorf("HandoverTo = %+v, want %+v", got, c.want)
+			}
+		})
+	}
+}
+
+// TestHandoverLive pins that a handover passes on a claim only when the lane
+// still names its predecessor. The ticket's record keeps naming whoever last
+// started it after the claim is over, so every row but the matching ones holds
+// a handover the record really did make.
+func TestHandoverLive(t *testing.T) {
+	heldBy := func(by model.Attribution) claims.Standing { return claims.Held{Tenure: claims.Tenure{By: by}} }
+	fromA := claims.Handover{From: claims.Claimant{Established: true, Checkout: streamA}, To: claims.Claimant{Established: true, Checkout: streamB}}
+	fromPublic := claims.Handover{From: claims.Claimant{Established: true}, To: claims.Claimant{Established: true, Checkout: streamB}}
+
+	cases := []struct {
+		name     string
+		handover claims.Handover
+		lane     claims.Standing
+		want     bool
+	}{
+		{"the lane's holder is the predecessor", fromA, heldBy(streamA), true},
+		{"a later start elsewhere in the lane superseded the predecessor", fromA, heldBy(streamB), false},
+		{"the predecessor's claim is over: expired or finished", fromA, claims.Unclaimed{}, false},
+		{"the public checkout holds the lane it is predecessor on", fromPublic, heldBy(model.Attribution{}), true},
+		{"a minted predecessor on a lane the public checkout holds", fromA, heldBy(model.Attribution{}), false},
+		{"the public checkout predecessor on a lane a minted checkout holds", fromPublic, heldBy(streamA), false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := c.handover.Live(c.lane); got != c.want {
+				t.Errorf("Live(%+v) = %v, want %v", c.lane, got, c.want)
+			}
+		})
+	}
+}
+
 // everyAction is one sample value per verb in the sealed lifecycle sum, keyed by
 // the verb it persists as. After asks the sum exactly one question — is this a
 // Start — and answers "ownership does not move" for every other variant through
@@ -227,7 +286,7 @@ func TestAfterStartEstablishesAnUnheldClaimant(t *testing.T) {
 }
 
 // TestClaimantEqualityDistinguishesEveryField pins the comparison both storage
-// engines' no-op decision and the CLI's transfer notice are made of — they ask
+// engines' no-op decision and the handover they report are made of — they ask
 // "is the claimant this action installs the one already standing" and nothing
 // else, so a field the comparison cannot see is a transfer that records
 // nothing and exits 0.

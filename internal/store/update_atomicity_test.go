@@ -59,14 +59,14 @@ func TestApplyTransitionAndFieldsCommitAsOneUnit(t *testing.T) {
 	}
 
 	// Both halves must be visible on the returned issue and on a fresh read.
-	if updated.State() != model.StateClosed {
-		t.Fatalf("Apply() state = %q, want %q", updated.State(), model.StateClosed)
+	if updated.Issue.State() != model.StateClosed {
+		t.Fatalf("Apply() state = %q, want %q", updated.Issue.State(), model.StateClosed)
 	}
-	if updated.Title != "Renamed" {
-		t.Fatalf("Apply() title = %q, want %q", updated.Title, "Renamed")
+	if updated.Issue.Title != "Renamed" {
+		t.Fatalf("Apply() title = %q, want %q", updated.Issue.Title, "Renamed")
 	}
-	if updated.Priority != model.PriorityUrgent {
-		t.Fatalf("Apply() priority = %d, want %d", updated.Priority, model.PriorityUrgent)
+	if updated.Issue.Priority != model.PriorityUrgent {
+		t.Fatalf("Apply() priority = %d, want %d", updated.Issue.Priority, model.PriorityUrgent)
 	}
 
 	after := doltCommitCount(t, ctx, st)

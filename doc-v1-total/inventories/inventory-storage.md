@@ -68,10 +68,11 @@ General contract: every method is a pure read from the caller's view; two identi
 **`CreateIssue(ctx, in CreateIssueInput) (model.Issue, error)`** — `internal/storage/contract.go`
 - Records a new issue and returns it as stored, with its id minted (`internal/storage/contract.go`).
 
-**`Apply(ctx, id string, c Change) (model.Issue, error)`** — `internal/storage/contract.go`
+**`Apply(ctx, id string, c Change) (Applied, error)`** — `internal/storage/contract.go`
 - The single execution path for issue-record changes; the `Change` value carries all variability, so there is no second mutation verb (`internal/storage/contract.go`).
 - A pure no-op records nothing in history (`internal/storage/contract.go`).
 - An illegal transition is refused rather than silently ignored (`internal/storage/contract.go`).
+- `Applied` carries the issue as the change left it and the `claims.Handover` the change recorded, nil for every change but a start taking a ticket somebody had already taken (`internal/storage/issues.go`).
 
 **`Purge(ctx, in PurgeInput) (PurgeResult, error)`** — `internal/storage/contract.go`
 - Permanently removes an issue — its row, comments, labels, history, and every edge to or from it — in one write, leaving a `model.Purge` record that names the ticket by its id and `created_at` and holds nothing of its content (`internal/storage/contract.go`; `internal/model/purge.go`).
@@ -703,20 +704,20 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 2. Hydrates `current`.
 3. `actor = strings.TrimSpace(c.Actor)`; empty → `"unknown"`.
 4. `now := e.now()`.
-5. `planLifecycle(current, actor, strings.TrimSpace(c.Reason), c.Action, now)` → `(afterAction, actionEvents, err)`.
+5. `planLifecycle(current, actor, strings.TrimSpace(c.Reason), c.Action, now)` → `(afterAction, actionEvents, handover, err)`.
 6. `planFields(afterAction, c.Fields, actor, now)` — **the field write baselines on the POST-action issue**, so a start's new assignee is what the patch diffs against rather than producing a second assignee change row.
 7. `writeIssue`, `writeLabels`, `recordEvents(actionEvents)`, `recordEvents(patch.events)` — in that order.
-8. Returns `hydrate(rec, e.positions())`.
+8. Returns `storage.Applied{Issue: hydrate(rec, e.positions()), Handover: handover}`.
 
-**`planLifecycle`** (`internal/storage/memory/apply.go`) — a type switch on the sealed `model.Action` sum: `nil` → no transition (`current, nil, nil`); `model.StatusAction` → `planStatus`; `model.RetentionAction` → `planRetention`; `default` → **panics** with `fmt.Sprintf("illegal Action value %T", action)` (only an impostor `Action` reaches here).
+**`planLifecycle`** (`internal/storage/memory/apply.go`) — a type switch on the sealed `model.Action` sum: `nil` → no transition (`current, nil, nil, nil`); `model.StatusAction` → `planStatus`; `model.RetentionAction` → `planRetention` and `model.SetPhase` → `planPhase`, each with a nil handover; `default` → **panics** with `fmt.Sprintf("illegal Action value %T", action)` (only an impostor `Action` reaches here).
 
 **`planStatus`** (`internal/storage/memory/apply.go`)
 - `current.Apply(action)` — the state machine's own rejections propagate, among them `model.FrozenIssueError` for an archived or deleted issue.
-- Assignee rule: `postAssignee = priorAssignee` except for `model.Start`, where it is `strings.TrimSpace(start.Assignee)`. Start is the one variant carrying a new owner.
-- **No-op rule**: if `updated.StatusValue() == current.StatusValue() && postAssignee == priorAssignee` → return `(current, nil, nil)` with no event. A same-state start with a NEW assignee is the agent reclaim path and falls through, recording the ownership change.
+- Claimant rule: `prior := claims.ClaimantOf(current, e.eventsFor(current.ID))`, `post := prior.After(action, e.attribution)`, and `updated.Assignee = post.Assignee`. Start is the one variant that moves the (assignee, checkout) pair.
+- **No-op rule**: if `updated.StatusValue() == current.StatusValue() && post == prior` → return `(current, nil, nil, nil)` with no event. A same-state start that moves the claimant — a new assignee, or a new checkout under the same identity — is the reclaim path and falls through, recording the ownership change.
 - The no-op is decided BEFORE the redirect target is checked, because the check guards a write and there is no write here to guard.
 - `validateRedirectTarget(updated)`.
-- Sets `updated.UpdatedAt = now`; emits one event with `action: string(action.Name())`, the change's `reason`, the `actor`, and `statusChanges(current, updated)`.
+- Sets `updated.UpdatedAt = now`; emits one event with `action: string(action.Name())`, the change's `reason`, the `actor`, and `statusChanges(current, updated)`, and returns `prior.HandoverTo(post)` as the handover.
 
 **`planRetention`** (`internal/storage/memory/apply.go`)
 - `model.Retain(current.Retention(), action, now)` — the legal moves and every rejection reason are the model's transition table.
