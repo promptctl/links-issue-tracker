@@ -1,11 +1,12 @@
 package store
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -51,8 +52,8 @@ type ReRooted struct {
 	// Dropped counts the commits the branch reached before the re-root and
 	// reaches no longer: the ancestors of Cut.
 	Dropped int
-	// Elapsed is the re-root's work under the hold, from the open's success
-	// to the branch move.
+	// Elapsed is the re-root's work inside the hold, from the commit lock's
+	// acquisition to the branch move.
 	Elapsed time.Duration
 }
 
@@ -65,6 +66,8 @@ func (r ReRooted) Kept() int {
 func (r ReRooted) EventRecord() (map[string]any, map[string]int) {
 	return map[string]any{
 			"reroot.cut":        r.Cut,
+			"reroot.root":       r.Root,
+			"reroot.head":       r.Head,
 			"reroot.elapsed_ms": r.Elapsed.Milliseconds(),
 		}, map[string]int{
 			"reroot.kept":    r.Kept(),
@@ -178,10 +181,8 @@ func reRootBranch(ctx context.Context, ddb *doltdb.DoltDB, branch ref.DoltRef, c
 			return ReRooted{}, err
 		}
 	}
-	if err := ddb.SetHeadToCommit(ctx, branch, rewritten[head]); err != nil {
-		return ReRooted{}, fmt.Errorf("move the branch to the rewritten head: %w", err)
-	}
-
+	// The result is read before the move, so nothing can fail after the
+	// branch has moved but the hold's release.
 	result := ReRooted{Cut: cut.String(), Rewritten: make(map[string]string, len(rewritten)), Dropped: len(below) - 1}
 	for old, nc := range rewritten {
 		addr, err := nc.HashOf()
@@ -192,6 +193,9 @@ func reRootBranch(ctx context.Context, ddb *doltdb.DoltDB, branch ref.DoltRef, c
 	}
 	result.Root = result.Rewritten[result.Cut]
 	result.Head = result.Rewritten[head.String()]
+	if err := ddb.SetHeadToCommit(ctx, branch, rewritten[head]); err != nil {
+		return ReRooted{}, fmt.Errorf("move the branch to the rewritten head: %w", err)
+	}
 	return result, nil
 }
 
@@ -217,18 +221,11 @@ func planReRoot(above map[hash.Hash]historyCommit, head, cut hash.Hash) ([]rewri
 	if !onBranch {
 		return nil, fmt.Errorf("the cut is not an ancestor of the branch head %s", head)
 	}
-	// Parents before children: a commit's height exceeds every parent's.
-	// The hash breaks ties only so the order is the same in every store; the
-	// hashes written do not depend on it.
-	order := make([]historyCommit, 0, len(above))
-	for _, c := range above {
-		order = append(order, c)
-	}
-	sort.Slice(order, func(i, j int) bool {
-		if order[i].height != order[j].height {
-			return order[i].height < order[j].height
-		}
-		return order[i].addr.String() < order[j].addr.String()
+	// Parents before children: a commit's height exceeds every parent's. How
+	// commits of one height are ordered is free; the hashes written do not
+	// depend on it.
+	order := slices.SortedFunc(maps.Values(above), func(a, b historyCommit) int {
+		return cmp.Compare(a.height, b.height)
 	})
 	kept := map[hash.Hash]bool{cut: true}
 	steps := make([]rewriteStep, 0, len(order))
@@ -326,14 +323,11 @@ func recommit(ctx context.Context, ddb *doltdb.DoltDB, c *doltdb.Commit, parents
 	return nc, nil
 }
 
-// commitContent is what a rewrite copies from c: its root value's address
-// and its metadata, both verbatim.
+// commitContent is what a rewrite copies from c: its root value's address,
+// read from the commit itself rather than by loading the value, and its
+// metadata, both verbatim.
 func commitContent(ctx context.Context, c *doltdb.Commit) (hash.Hash, *datas.CommitMeta, error) {
-	rootValue, err := c.GetRootValue(ctx)
-	if err != nil {
-		return hash.Hash{}, nil, err
-	}
-	value, err := rootValue.HashOf()
+	value, err := datas.GetCommitRootHash(c.Value())
 	if err != nil {
 		return hash.Hash{}, nil, err
 	}

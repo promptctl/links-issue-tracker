@@ -149,6 +149,9 @@ func TestReRootGivesTheSameHashesInEveryStore(t *testing.T) {
 	if ev.Facts["reroot.cut"] != cut.String() {
 		t.Errorf("reroot.cut = %v, want %s", ev.Facts["reroot.cut"], cut)
 	}
+	if ev.Facts["reroot.root"] != a.Root || ev.Facts["reroot.head"] != a.Head {
+		t.Errorf("reroot.root, reroot.head = %v, %v; want %s, %s", ev.Facts["reroot.root"], ev.Facts["reroot.head"], a.Root, a.Head)
+	}
 	if ev.Counts["reroot.kept"] != wantKept || ev.Counts["reroot.dropped"] != wantDropped {
 		t.Errorf("reroot.kept, reroot.dropped = %d, %d; want %d, %d", ev.Counts["reroot.kept"], ev.Counts["reroot.dropped"], wantKept, wantDropped)
 	}
@@ -226,8 +229,8 @@ func TestReRootKeepsEveryMergeAboveTheCutAndRefusesALineAroundIt(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	if _, err := ReRoot(ctx, doltRoot, "master", c["t1"].String()); err == nil || errors.Is(err, ErrSideLineAcrossCut) {
-		t.Fatalf("ReRoot(t1) with m at the head error = %v, want the cut named as off the branch", err)
+	if _, err := ReRoot(ctx, doltRoot, "master", c["t1"].String()); err == nil || !strings.Contains(err.Error(), "the cut is not an ancestor of the branch head "+c["m"].String()) {
+		t.Fatalf("ReRoot(t1) with m at the head error = %v, want the cut named as off the branch head m %s", err, c["m"])
 	}
 
 	wantDropped := logLength(t, ctx, doltRoot, c["C"].String()) - 1

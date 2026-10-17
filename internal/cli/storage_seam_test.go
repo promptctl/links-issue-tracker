@@ -124,7 +124,7 @@ var doltWorkspaceMachinery = map[string][]string{
 	// unattributed copy of a measured figure, which a re-measurement in store
 	// would leave behind. [LAW:one-source-of-truth]
 	//
-	// PushedHeadRecord, ErrMirrorHoldCut and ErrReceivedRefsNotRecorded are
+	// PushedHeadRecord, ErrHoldCut and ErrReceivedRefsNotRecorded are
 	// RecordPushedHead's answers the mirror's trail has to tell apart — which
 	// way the ref write went, that a failure was the hold budget's cut, and
 	// that only the received-refs write failed — and travel with it.
@@ -151,7 +151,7 @@ var doltWorkspaceMachinery = map[string][]string{
 	// machinery, deleted at S4 with the rest. [LAW:one-way-deps]
 	"mirror clone and push": {
 		"MirrorHoldBudget", "MirrorPushDeadline", "MirrorPushCancelLagObserved",
-		"RecordPushedHead", "PushedHeadRecord", "ErrMirrorHoldCut", "ErrReceivedRefsNotRecorded",
+		"RecordPushedHead", "PushedHeadRecord", "ErrHoldCut", "ErrReceivedRefsNotRecorded",
 		"ReceiveDeadline", "ReadReceivedRefs", "WriteReceivedRefs", "ReceivedRefsPath",
 		"LandFetchedHead", "LandedFetch", "ErrRemoteCacheNotLanded",
 	},

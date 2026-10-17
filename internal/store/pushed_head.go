@@ -44,11 +44,11 @@ func (r PushedHeadRecord) String() string {
 	return "unrecorded"
 }
 
-// ErrMirrorHoldCut marks a hold on the live store that ran past
-// MirrorHoldBudget and was cut. It is the discriminator the mirror reads to
-// say "the budget, not the work" in its durable trail; the wording of that
-// explanation is the mirror's. [LAW:one-source-of-truth]
-var ErrMirrorHoldCut = errors.New("mirror hold cut at its budget")
+// ErrHoldCut marks a hold on the live store (holdForRefWrite's) that ran
+// past its caller's budget and was cut. It is the discriminator a caller
+// reads to say "the budget, not the work"; the mirror's trail does, in a
+// wording that is the mirror's. [LAW:one-source-of-truth]
+var ErrHoldCut = errors.New("hold on the live store cut at its budget")
 
 // ErrReceivedRefsNotRecorded marks a RecordPushedHead whose ref write landed
 // and whose received-refs write did not: the push's bookkeeping stands, and
@@ -76,7 +76,7 @@ var ErrReceivedRefsNotRecorded = errors.New("received-refs record not written, s
 // The hold — everything from the open's success to the ref write — runs under
 // MirrorHoldBudget, the same deadline the clone step runs under: the lock
 // waits before it are waiting, not holding, and a ref write still running at
-// the budget is a stalled one. A cut is returned wrapping ErrMirrorHoldCut.
+// the budget is a stalled one. A cut is returned wrapping ErrHoldCut.
 // [LAW:no-ambient-temporal-coupling]
 //
 // Why it exists: the on-change mirror pushes from a clone so the live store is
@@ -230,7 +230,7 @@ func acquireLiveStoreHold(ctx context.Context, root string) (func() error, error
 //
 // The hold — everything from the open's success to the end of write — runs
 // under budget: the lock waits before it are waiting, not holding. A cut is
-// returned wrapping ErrMirrorHoldCut. What the budget is sized against is the
+// returned wrapping ErrHoldCut. What the budget is sized against is the
 // caller's to say, because the two writes' costs differ in kind: a ref write is
 // one journal append, a landing copies whatever the remote moved. The caller
 // holds the workspace shared lock around it, so a rotation of the Dolt
@@ -253,7 +253,7 @@ func holdForRefWrite(ctx context.Context, root string, budget time.Duration, wri
 	defer cancelHold()
 	defer func() {
 		if err != nil && holdCtx.Err() != nil && ctx.Err() == nil {
-			err = fmt.Errorf("%w: %w", ErrMirrorHoldCut, err)
+			err = fmt.Errorf("%w: %w", ErrHoldCut, err)
 		}
 	}()
 	// Commit lock AFTER the open took LOCK — the package's order. It excludes
