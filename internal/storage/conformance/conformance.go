@@ -2420,11 +2420,13 @@ func relationsRoundtrip(t *testing.T, ctx context.Context, st storage.Store, clk
 	// Adding an edge the graph already holds is answered, not faulted: the
 	// edge asked for is in place, so every engine returns the contract's
 	// satisfied answer naming it. related-to is undirected, so naming its ends
-	// the other way round asks for the same edge. The count below proves
-	// neither repeat wrote a second row.
+	// against the stored order asks for the same edge, and the answer names
+	// the stored order. The count below proves neither repeat wrote a second
+	// row.
+	low, high := model.RelRelatedTo.CanonicalEndpoints(dependent.ID, peer.ID)
 	for _, repeat := range []storage.AddRelationInput{
 		{SrcID: dependent.ID, DstID: dependency.ID, Type: model.RelBlockedBy, CreatedBy: "ada"},
-		{SrcID: peer.ID, DstID: dependent.ID, Type: model.RelRelatedTo, CreatedBy: "ada"},
+		{SrcID: high, DstID: low, Type: model.RelRelatedTo, CreatedBy: "ada"},
 	} {
 		_, err := st.AddRelation(ctx, repeat)
 		var exists storage.RelationExistsError
