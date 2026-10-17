@@ -87,9 +87,9 @@ func plural(n int, one, many string) string {
 
 // remoteCacheCollection is what one collection job over the remote cache has to
 // say for itself: how much it removed, the bytes that freed, and why it stopped
-// short, if it did. It is produced on every path — success, refusal, and I/O
-// failure alike — because a collection rides on a push that already succeeded
-// or is about to, must never retract it, and must never go quiet either.
+// short, if it did. It is produced on every path — success and failure alike —
+// because a collection rides on a push that already succeeded or is about to,
+// must never retract it, and must never go quiet either.
 // [LAW:dataflow-not-control-flow] the caller runs the same steps every time and
 // renders this value; it does not branch on whether a collection ran.
 //
@@ -99,8 +99,7 @@ func plural(n int, one, many string) string {
 type remoteCacheCollection struct {
 	Removed   int
 	Reclaimed int64
-	// Problem is why the job did not run to completion, empty when it did. It
-	// carries refusals and I/O failures alike: from the caller's seat both mean
+	// Problem is why the job did not run to completion, empty when it did:
 	// "the cache was not collected this run, and here is why".
 	Problem string
 }
@@ -109,7 +108,7 @@ type remoteCacheCollection struct {
 // removes, and is empty exactly when the job looked and found nothing to do.
 //
 // Empty is not a swallowed failure here: every state that matters — work
-// performed, work declined, I/O failure — renders non-empty, so nothing a reader
+// performed, I/O failure — renders non-empty, so nothing a reader
 // would act on can reach the empty value. The routine case earns silence because
 // this line rides on every push, and "nothing abandoned" repeated forever is how
 // a channel stops being read before the one message that mattered arrives.

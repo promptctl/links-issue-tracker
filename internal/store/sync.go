@@ -714,14 +714,10 @@ func (s *Store) SyncCompactAndPush(ctx context.Context, remote string, branch st
 	// DOLT_GC above compacts `noms`; this collects the other half of the store's
 	// local footprint, the abandoned git remote mirrors.
 	//
-	// It runs AFTER the push, and OUTSIDE the commit lock, and both halves of
-	// that are load-bearing. After the push, because the push has just opened
-	// the live mirror — so that directory provably exists on disk and the key
-	// derivation has something true to check itself against. Outside the lock,
-	// because the lock was never what made the removal safe: a directory is
-	// eligible only when NO configured remote derives its key, and every open
-	// reaches a cache through a configured remote's key, so an abandoned mirror
-	// is unreachable by construction. Holding the cross-process writer-exclusion
+	// It runs OUTSIDE the commit lock, because the lock was never what made the
+	// removal safe: a directory is eligible only when NO configured remote's
+	// key names it, and every open reaches a cache through a configured
+	// remote's key, so an abandoned mirror is unreachable by construction. Holding the cross-process writer-exclusion
 	// lock across an unbounded filesystem walk would block every other lit
 	// mutation on this workspace — `lit new`, `lit done`, all of them — to buy
 	// nothing. Nothing bounds how many mirrors a long-lived workspace accumulates.
