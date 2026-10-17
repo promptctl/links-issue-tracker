@@ -18,18 +18,22 @@ import (
 // history at all. A hand-maintained list is a map of the editable set that
 // only stays true while somebody remembers to redraw it.
 //
-// One row carries a field's whole story: where a patch states it, how it
-// lands on the issue, and how its value encodes into a change row. Apply and
-// diff walk the same rows, so a field cannot be written without being
-// recorded — the omission is unrepresentable rather than guarded against.
+// One row carries a field's whole story: where a patch states it, where a bulk
+// update document states it, how it lands on the issue, and how its value
+// encodes into a change row. Apply, diff, the patch's emptiness, and the bulk
+// translation walk the same rows, so a field cannot be written without being
+// recorded, nor stated without being seen as stated — the omission is
+// unrepresentable rather than guarded against.
 // [LAW:one-source-of-truth] [LAW:dataflow-not-control-flow]
 type issueField struct {
 	// name is the field's history vocabulary, which is the domain's own — the
 	// name the CLI accepts and prints, never a storage column's spelling.
-	name   string
-	text   FieldText
-	apply  func(*model.Issue, UpdateIssueInput) error
-	encode func(model.Issue) string
+	name     string
+	text     FieldText
+	stated   func(UpdateIssueInput) bool
+	fromBulk func(BulkIssueSpec, *UpdateIssueInput) error
+	apply    func(*model.Issue, UpdateIssueInput) error
+	encode   func(model.Issue) string
 }
 
 // FieldText is the shape a field's value takes for the person reading it.
@@ -70,8 +74,9 @@ func LongTextFields() []LongTextField {
 }
 
 // patchField builds a row from the parts that differ per field: the shape of
-// its text, which pointer on the patch states it, how a stated value lands on
-// the issue, and how the issue's value encodes for history.
+// its text, which pointer on the patch states it, what a bulk update document
+// states for it, how a stated value lands on the issue, and how the issue's
+// value encodes for history.
 //
 // A nil pointer means "leave this alone", and this is the one place that
 // sentence is written. Restating it per field in each engine would be eight
@@ -80,15 +85,25 @@ func LongTextFields() []LongTextField {
 func patchField[T any](
 	name string,
 	text FieldText,
-	stated func(UpdateIssueInput) *T,
+	slot func(*UpdateIssueInput) **T,
+	bulk func(BulkIssueSpec) (*T, error),
 	write func(*model.Issue, T) error,
 	encode func(model.Issue) string,
 ) issueField {
 	return issueField{
-		name: name,
-		text: text,
+		name:   name,
+		text:   text,
+		stated: func(in UpdateIssueInput) bool { return *slot(&in) != nil },
+		fromBulk: func(doc BulkIssueSpec, in *UpdateIssueInput) error {
+			value, err := bulk(doc)
+			if err != nil {
+				return err
+			}
+			*slot(in) = value
+			return nil
+		},
 		apply: func(issue *model.Issue, in UpdateIssueInput) error {
-			value := stated(in)
+			value := *slot(&in)
 			if value == nil {
 				return nil
 			}
@@ -98,11 +113,60 @@ func patchField[T any](
 	}
 }
 
+// bulkAsStated is the bulk side of a field whose document key carries the patch's
+// own type, so the document's pointer is the patch's.
+func bulkAsStated[T any](stated func(BulkIssueSpec) *T) func(BulkIssueSpec) (*T, error) {
+	return func(doc BulkIssueSpec) (*T, error) { return stated(doc), nil }
+}
+
+// bulkParsed is the bulk side of a field whose document key carries raw
+// input: a stated value goes through the field's one parse gate, and an
+// unstated one stays unstated.
+func bulkParsed[R, T any](stated func(BulkIssueSpec) *R, parse func(R) (T, error)) func(BulkIssueSpec) (*T, error) {
+	return func(doc BulkIssueSpec) (*T, error) {
+		raw := stated(doc)
+		if raw == nil {
+			return nil, nil
+		}
+		value, err := parse(*raw)
+		if err != nil {
+			return nil, err
+		}
+		return &value, nil
+	}
+}
+
+// IsEmpty reports whether the patch states no editable field. Reason is not a
+// field: it annotates the change a stated field makes.
+func (u UpdateIssueInput) IsEmpty() bool {
+	for _, field := range issueFields {
+		if field.stated(u) {
+			return false
+		}
+	}
+	return true
+}
+
+// BulkUpdatePatch is the field patch a bulk update document states, one
+// pointer per field the document sets. Each engine applies exactly this patch,
+// so a document means the same edit whichever engine opens the file.
+// [LAW:one-source-of-truth]
+func BulkUpdatePatch(doc BulkIssueSpec) (UpdateIssueInput, error) {
+	patch := UpdateIssueInput{Reason: strings.TrimSpace(doc.Reason)}
+	for _, field := range issueFields {
+		if err := field.fromBulk(doc, &patch); err != nil {
+			return UpdateIssueInput{}, fmt.Errorf("bulk: update %q: %w", doc.ID, err)
+		}
+	}
+	return patch, nil
+}
+
 // issueFields is the editable set, in the order history reports a change to
 // them — fixed, so two reads of one mutation describe it identically.
 var issueFields = []issueField{
 	patchField("title", ShortText,
-		func(in UpdateIssueInput) *string { return in.Title },
+		func(in *UpdateIssueInput) **string { return &in.Title },
+		bulkAsStated(func(doc BulkIssueSpec) *string { return doc.Title }),
 		func(issue *model.Issue, v string) error {
 			issue.Title = strings.TrimSpace(v)
 			if issue.Title == "" {
@@ -112,15 +176,18 @@ var issueFields = []issueField{
 		},
 		func(issue model.Issue) string { return issue.Title }),
 	patchField("description", LongText,
-		func(in UpdateIssueInput) *string { return in.Description },
+		func(in *UpdateIssueInput) **string { return &in.Description },
+		bulkAsStated(func(doc BulkIssueSpec) *string { return doc.Description }),
 		func(issue *model.Issue, v string) error { issue.Description = strings.TrimSpace(v); return nil },
 		func(issue model.Issue) string { return issue.Description }),
 	patchField("prompt", LongText,
-		func(in UpdateIssueInput) *string { return in.Prompt },
+		func(in *UpdateIssueInput) **string { return &in.Prompt },
+		bulkAsStated(func(doc BulkIssueSpec) *string { return doc.Prompt }),
 		func(issue *model.Issue, v string) error { issue.Prompt = strings.TrimSpace(v); return nil },
 		func(issue model.Issue) string { return issue.Prompt }),
 	patchField("issue_type", ShortText,
-		func(in UpdateIssueInput) *model.IssueType { return in.IssueType },
+		func(in *UpdateIssueInput) **model.IssueType { return &in.IssueType },
+		bulkParsed(func(doc BulkIssueSpec) *string { return doc.IssueType }, model.ParseIssueType),
 		func(issue *model.Issue, v model.IssueType) error {
 			// [LAW:single-enforcer] Container vs leaf decides which lifecycle
 			// expression backs the issue, so crossing that line would orphan
@@ -136,13 +203,15 @@ var issueFields = []issueField{
 		},
 		func(issue model.Issue) string { return string(issue.IssueType) }),
 	patchField("priority", ShortText,
-		func(in UpdateIssueInput) *model.Priority { return in.Priority },
+		func(in *UpdateIssueInput) **model.Priority { return &in.Priority },
+		bulkParsed(func(doc BulkIssueSpec) *int { return doc.Priority }, model.ParsePriority),
 		func(issue *model.Issue, v model.Priority) error { issue.Priority = v; return nil },
 		// The numeric wire encoding, not the display name: history keeps what
 		// the field stores, so a replay reads back the value that was written.
 		func(issue model.Issue) string { return strconv.Itoa(int(issue.Priority)) }),
 	patchField("assignee", ShortText,
-		func(in UpdateIssueInput) *string { return in.Assignee },
+		func(in *UpdateIssueInput) **string { return &in.Assignee },
+		bulkAsStated(func(doc BulkIssueSpec) *string { return doc.Assignee }),
 		// [LAW:decomposition] Assignee is an issue-level field independent of
 		// the lifecycle; reassigning is a plain field write, not a status
 		// mutation.
@@ -156,11 +225,13 @@ var issueFields = []issueField{
 		},
 		func(issue model.Issue) string { return issue.AssigneeValue() }),
 	patchField("lane", ShortText,
-		func(in UpdateIssueInput) *string { return in.Lane },
+		func(in *UpdateIssueInput) **string { return &in.Lane },
+		bulkAsStated(func(doc BulkIssueSpec) *string { return doc.Lane }),
 		func(issue *model.Issue, v string) error { issue.Lane = strings.TrimSpace(v); return nil },
 		func(issue model.Issue) string { return issue.Lane }),
 	patchField("labels", ShortText,
-		func(in UpdateIssueInput) *[]string { return in.Labels },
+		func(in *UpdateIssueInput) **[]string { return &in.Labels },
+		bulkAsStated(func(doc BulkIssueSpec) *[]string { return doc.Labels }),
 		func(issue *model.Issue, v []string) error {
 			labels, err := model.CanonicalizeLabels(v)
 			if err != nil {

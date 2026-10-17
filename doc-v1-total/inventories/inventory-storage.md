@@ -241,7 +241,7 @@ The field-axis patch. Only columns the field axis owns are representable, so a s
 | `Labels` | `*[]string` | `internal/storage/issues.go` |
 | `Reason` | `string` | Optional free text recorded on the field-change event (`internal/storage/issues.go`) |
 
-- `IsEmpty()` is true iff **all eight pointer fields** are nil; `Reason` is deliberately excluded from the emptiness test (`internal/storage/issues.go`).
+- `IsEmpty()` is true iff no row of `issueFields` states its field, i.e. every pointer field is nil; `Reason` is not a field and does not count (`internal/storage/fields.go`).
 
 #### `Change` (`internal/storage/issues.go`)
 | Field | Type | Semantics |
@@ -906,9 +906,9 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 **`BulkApply(ctx, prefix, actor, specs)`**
 1. `parentTypes` maps each id among `storage.BulkParentRefs(specs)` that names an issue in `e.issues` to its type; `order, err := storage.BulkWriteOrder(specs, parentTypes)` (`internal/storage/import_validate.go`, shared with the Dolt engine) — the entire file is gated before any document is applied, and the gate returns the order the documents are written in. Its error is returned as is.
 2. Walks documents in topological order:
-   - `spec.ID != ""` (update): `bulkUpdateChange(spec, actor)` then `e.apply(spec.ID, change)`. On apply failure → `e.compensate(batch, fmt.Errorf("bulk: update %q: %w", spec.ID, err))`. Appends `issue.ID` to `result.Updated`.
+   - `spec.ID != ""` (update): `storage.BulkUpdatePatch(spec)` then `e.apply(spec.ID, storage.Change{Actor: actor, Fields: fields})`. On apply failure → `e.compensate(batch, fmt.Errorf("bulk: update %q: %w", spec.ID, err))`. Appends `issue.ID` to `result.Updated`.
    - Otherwise (create): `bulkCreateInput(spec, prefix, batch)` then `e.createIssue(in)`. On failure → `e.compensate(batch, fmt.Errorf("bulk: create doc %d: %w", index, err))`. Records into the batch, and into `result.Created` under `spec.LocalID` if set, else under the new real id.
-   - Note: `bulkUpdateChange` and `bulkCreateInput` errors are returned **without** compensation.
+   - Note: `storage.BulkUpdatePatch` and `bulkCreateInput` errors are returned **without** compensation.
 3. **Second pass, in original spec order (not topological)**: wires every `BlockedBy` edge as `blocked-by` with `src = the document's own issue`, `dst = batch.resolve(dep)`. On failure → `e.compensate(batch, fmt.Errorf("bulk: blocked_by doc %d -> %q: %w", index, dep, err))`.
 
 **`ImportTree(ctx, prefix, specs)`**
@@ -936,12 +936,11 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 - Title and Topic are `strings.TrimSpace`'d; Description/Prompt/Assignee/Lane/Labels come from `valueOr(ptr, zero)`.
 - **`Placement` is left at its zero value**, so a batch keeps its file order in the ranked order, whichever authored format the file is.
 
-**`bulkUpdateChange`**
-- Builds `UpdateIssueInput` with `Reason: strings.TrimSpace(spec.Reason)`.
-- `Title`, `Description`, `Prompt`, `Assignee`, `Lane` go through `trimmedPointer` (nil stays nil; otherwise a pointer to the trimmed value).
-- `Labels` is passed through as the raw `*[]string`.
-- `IssueType` and `Priority` are parsed into pointers; parse errors → `fmt.Errorf("bulk: update %q: %w", spec.ID, err)`.
-- Returns `storage.Change{Actor: actor, Fields: fields}` — **an update document never carries an Action**.
+**`storage.BulkUpdatePatch(doc)`** (`internal/storage/fields.go`, shared with the Dolt engine)
+- Builds `UpdateIssueInput` with `Reason: strings.TrimSpace(doc.Reason)`, then lets each row of `issueFields` set its own pointer from the document.
+- `Title`, `Description`, `Prompt`, `Assignee`, `Lane`, `Labels` pass through as the document's pointers; trimming is the field's write in `ApplyIssueFields`.
+- `IssueType` and `Priority` are parsed by `model.ParseIssueType` / `model.ParsePriority`; parse errors → `fmt.Errorf("bulk: update %q: %w", doc.ID, err)`.
+- The engine applies `storage.Change{Actor: actor, Fields: patch}` — **an update document never carries an Action**.
 
 **`storage.BulkWriteOrder(specs, existingParentTypes)`** / **`storage.ImportTreeWriteOrder(specs)`** (`internal/storage/import_validate.go`) — run `validateBulkSpecs` / `validateImportTreeSpecs`, then `storage.writeOrder(format, specs, refsOf)` (`internal/storage/import_validate.go`) with `format` `"bulk"` / `"import"` and each spec's references as `Parent` followed by `BlockedBy`. Every refusal either returns is a `model.ValidationError`; the `%w` rows below wrap the containment helpers' own `ValidationError`.
 
@@ -971,7 +970,7 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 - `len(BlockedBy) > 0` → `"... sets blocked_by; wire dependencies with \`lit dep add\` instead"`.
 - `Title` set and trims to `""` → `"bulk: doc %d (id %q) sets an empty title"`.
 - Invalid type / priority → `"... has invalid type %q"` / `"... has invalid priority %d"`.
-- No updatable field stated → `"bulk: doc %d (id %q) has no fields to update"`. Updatable fields are exactly: `Title`, `Description`, `Prompt`, `IssueType`, `Priority`, `Assignee`, `Labels`, `Lane`.
+- `storage.BulkUpdatePatch(spec).IsEmpty()` → `"bulk: doc %d (id %q) has no fields to update"`; a `BulkUpdatePatch` error is returned as is. Updatable fields are exactly the rows of `issueFields`: `Title`, `Description`, `Prompt`, `IssueType`, `Priority`, `Assignee`, `Labels`, `Lane`.
 
 **`storage.validateImportTreeSpecs`** (`internal/storage/import_validate.go`)
 - Empty → `"import: no issues in input"`.

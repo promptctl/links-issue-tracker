@@ -3799,10 +3799,11 @@ Update-document checks (`validateBulkUpdateDoc`, `import_validate.go`), in order
 | `Title` set and trims to `""` | `bulk: doc %d (id %q) sets an empty title` |
 | `IssueType` set and unparseable | `bulk: doc %d (id %q) has invalid type %q` |
 | `Priority` set and unparseable | `bulk: doc %d (id %q) has invalid priority %d` |
-| `!bulkUpdateHasField(spec)` | `bulk: doc %d (id %q) has no fields to update` |
+| `storage.BulkUpdatePatch(spec)` fails | its error, as is |
+| `storage.BulkUpdatePatch(spec).IsEmpty()` | `bulk: doc %d (id %q) has no fields to update` |
 | id already seen | `bulk: duplicate id %q` (`import_validate.go`) |
 
-`bulkUpdateHasField` (`import_validate.go`) is true iff any of `Title, Description, Prompt, IssueType, Priority, Assignee, Labels, Lane` is non-nil. **`Reason` alone does not count** — hence "id set and reason set with no other field set" is rejected.
+The patch is empty iff none of `Title, Description, Prompt, IssueType, Priority, Assignee, Labels, Lane` is set (`UpdateIssueInput.IsEmpty`, `internal/storage/fields.go`). **`Reason` alone does not count** — hence "id set and reason set with no other field set" is rejected.
 
 Create-document checks (`validateBulkCreateDoc`, `import_validate.go`, which returns the parsed `model.IssueType`), in order:
 
@@ -3833,7 +3834,7 @@ Note the create branch does **not** require `LocalID` (unlike ImportTree), and d
 1. `s.getIssuesByIDs(ctx, storage.BulkParentRefs(specs))` reads the parents the file names (error → `bulk: read parents: %w`), and `parentTypes` maps each found id to its type; `order, err := storage.BulkWriteOrder(specs, parentTypes)` — whole file validated before anything is written, and the topological write order returned (§4.4); a cycle reads `bulk: cycle detected involving "x"` (`internal/storage/import_validate.go`).
 2. `result := storage.BulkApplyResult{Created: map[string]string{}}`; `createdRealID` (index-parallel), `createdIDs` (ordered), `localRealID` map (`import_bulk.go`).
 3. Loop in topo order (`import_bulk.go`):
-   - **Update branch** (`spec.ID != ""`): `bulkUpdateChange(spec, actor)` then `s.Apply(ctx, spec.ID, change)`. `bulkUpdateChange` error is returned **without** a rollback (`import_bulk.go`). `Apply` error → rollback then `"bulk: update %q: %w (rollback leaked %d: %s)"`. On success append `issue.ID` to `result.Updated`.
+   - **Update branch** (`spec.ID != ""`): `storage.BulkUpdatePatch(spec)` then `s.Apply(ctx, spec.ID, storage.Change{Actor: actor, Fields: fields})`. A `BulkUpdatePatch` error is returned **without** a rollback (`import_bulk.go`). `Apply` error → rollback then `"bulk: update %q: %w (rollback leaked %d: %s)"`. On success append `issue.ID` to `result.Updated`.
    - **Create branch**: re-parse type (`"bulk: doc %d: %w"`, no rollback, `import_bulk.go`); priority defaults to `model.PriorityNormal` and is re-parsed only if set (`"bulk: doc %d: %w"`, no rollback); then `CreateIssue` with `Title: TrimSpace(*spec.Title)`, `Description: derefOr(spec.Description, "")`, `Prompt: derefOr(spec.Prompt, "")`, `IssueType`, `Topic: TrimSpace(*spec.Topic)`, `ParentID: resolveBulkRef(spec.Parent, localRealID)`, `Priority`, `Assignee: derefOr(spec.Assignee, "")`, `Lane: derefOr(spec.Lane, "")`, `Labels: derefOr(spec.Labels, nil)`, `Prefix: prefix` (`import_bulk.go`). `Placement` deliberately left at its zero value `RankBottom` so file order is preserved, matching ImportTree (`import_bulk.go`). Failure → rollback then `"bulk: create doc %d: %w (rollback leaked %d: %s)"`.
    - Record `createdRealID[idx]`, append `createdIDs`. If `spec.LocalID != ""` → `localRealID[LocalID] = issue.ID` and `result.Created[LocalID] = issue.ID`; **else `result.Created[issue.ID] = issue.ID`** (self-keyed) (`import_bulk.go`).
 4. Second pass over `specs` in **file order**, skipping update docs (`import_bulk.go`): for each `dep`, `AddRelation({SrcID: createdRealID[i], DstID: resolveBulkRef(dep, localRealID), Type: model.RelBlockedBy, CreatedBy: "links"})`. Failure → rollback then `"bulk: blocked_by doc %d -> %q: %w (rollback leaked %d: %s)"`.
@@ -3842,7 +3843,7 @@ Note the create branch does **not** require `LocalID` (unlike ImportTree), and d
 
 `resolveBulkRef(ref, localRealID)` (`import_bulk.go`): a map hit returns the real id; **a miss returns `ref` unchanged**, to be validated downstream by `CreateIssue`/`AddRelation` as a real pre-existing issue id.
 
-`bulkUpdateChange(spec, actor)` (`import_bulk.go`) builds `storage.Change{Actor: actor, Fields: storage.UpdateIssueInput{...}}` with `Reason: strings.TrimSpace(spec.Reason)`. Each set pointer is copied into a fresh local and its address taken; `Title`, `Description`, `Prompt`, `Assignee`, `Lane` are `strings.TrimSpace`'d; `IssueType` and `Priority` go through `ParseIssueType`/`ParsePriority` again with errors `"bulk: update %q: %w"`; `Labels` is copied by value (`v := *spec.Labels; fields.Labels = &v`). **`Topic` is never carried** — it is unrepresentable in `UpdateIssueInput` (`internal/storage/issues.go`).
+`storage.BulkUpdatePatch(doc)` (`internal/storage/fields.go`, shared with the memory engine) builds the `storage.UpdateIssueInput` with `Reason: strings.TrimSpace(doc.Reason)`, each row of `issueFields` setting its own pointer: `Title`, `Description`, `Prompt`, `Assignee`, `Lane`, `Labels` pass through as the document's pointers, and `IssueType` and `Priority` go through `ParseIssueType`/`ParsePriority` again with errors `"bulk: update %q: %w"`. **`Topic` is never carried** — it is unrepresentable in `UpdateIssueInput` (`internal/storage/issues.go`).
 
 ### 5.4 Differences from the non-bulk (tree) path
 

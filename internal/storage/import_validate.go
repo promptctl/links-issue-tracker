@@ -446,14 +446,14 @@ func validateBulkUpdateDoc(i int, spec BulkIssueSpec) error {
 			return model.ValidationError{Message: fmt.Sprintf("bulk: doc %d (id %q) has invalid priority %d", i, spec.ID, *spec.Priority)}
 		}
 	}
-	if !bulkUpdateHasField(spec) {
+	// The document states a field exactly when the patch it becomes does, so
+	// the question is asked of that patch. [LAW:one-source-of-truth]
+	patch, err := BulkUpdatePatch(spec)
+	if err != nil {
+		return err
+	}
+	if patch.IsEmpty() {
 		return model.ValidationError{Message: fmt.Sprintf("bulk: doc %d (id %q) has no fields to update", i, spec.ID)}
 	}
 	return nil
-}
-
-func bulkUpdateHasField(spec BulkIssueSpec) bool {
-	return spec.Title != nil || spec.Description != nil || spec.Prompt != nil ||
-		spec.IssueType != nil || spec.Priority != nil || spec.Assignee != nil ||
-		spec.Labels != nil || spec.Lane != nil
 }

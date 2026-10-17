@@ -38,11 +38,11 @@ func (e *Engine) BulkApply(ctx context.Context, prefix, actor string, specs []st
 	for _, index := range order {
 		spec := specs[index]
 		if spec.ID != "" {
-			change, err := bulkUpdateChange(spec, actor)
+			fields, err := storage.BulkUpdatePatch(spec)
 			if err != nil {
 				return storage.BulkApplyResult{}, err
 			}
-			applied, err := e.apply(spec.ID, change)
+			applied, err := e.apply(spec.ID, storage.Change{Actor: actor, Fields: fields})
 			if err != nil {
 				return storage.BulkApplyResult{}, e.compensate(batch, fmt.Errorf("bulk: update %q: %w", spec.ID, err))
 			}
@@ -225,42 +225,6 @@ func bulkCreateInput(spec storage.BulkIssueSpec, prefix string, batch *batchIDs)
 		// authored formats the file is. [LAW:one-source-of-truth]
 		Prefix: prefix,
 	}, nil
-}
-
-// bulkUpdateChange turns an update document into the field patch it states:
-// one pointer per field the document set, which is the same "nil means leave
-// alone" the patch type carries everywhere else.
-func bulkUpdateChange(spec storage.BulkIssueSpec, actor string) (storage.Change, error) {
-	fields := storage.UpdateIssueInput{Reason: strings.TrimSpace(spec.Reason)}
-	fields.Title = trimmedPointer(spec.Title)
-	fields.Description = trimmedPointer(spec.Description)
-	fields.Prompt = trimmedPointer(spec.Prompt)
-	fields.Assignee = trimmedPointer(spec.Assignee)
-	fields.Lane = trimmedPointer(spec.Lane)
-	fields.Labels = spec.Labels
-	if spec.IssueType != nil {
-		issueType, err := model.ParseIssueType(*spec.IssueType)
-		if err != nil {
-			return storage.Change{}, fmt.Errorf("bulk: update %q: %w", spec.ID, err)
-		}
-		fields.IssueType = &issueType
-	}
-	if spec.Priority != nil {
-		priority, err := model.ParsePriority(*spec.Priority)
-		if err != nil {
-			return storage.Change{}, fmt.Errorf("bulk: update %q: %w", spec.ID, err)
-		}
-		fields.Priority = &priority
-	}
-	return storage.Change{Actor: actor, Fields: fields}, nil
-}
-
-func trimmedPointer(value *string) *string {
-	if value == nil {
-		return nil
-	}
-	trimmed := strings.TrimSpace(*value)
-	return &trimmed
 }
 
 func valueOr[T any](value *T, fallback T) T {
