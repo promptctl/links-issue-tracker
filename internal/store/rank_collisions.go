@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
-	"github.com/promptctl/links-issue-tracker/internal/model/lifecycle"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -83,7 +82,7 @@ func landExport(export model.Export) (model.Export, storage.Landing, error) {
 func placedIssues(export model.Export) []rankedIssue {
 	placed := make([]rankedIssue, 0, len(export.Issues))
 	for _, issue := range export.Issues {
-		if _, deleted := issue.Retention().(lifecycle.Deleted); deleted || issue.Rank == "" {
+		if _, deleted := issue.Retention().(model.Deleted); deleted || issue.Rank == "" {
 			continue
 		}
 		placed = append(placed, rankedIssue{id: issue.ID, rank: issue.Rank})

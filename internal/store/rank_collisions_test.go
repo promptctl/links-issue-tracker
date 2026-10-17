@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
-	"github.com/promptctl/links-issue-tracker/internal/model/lifecycle"
 	"github.com/promptctl/links-issue-tracker/internal/rank"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
@@ -55,7 +54,7 @@ func TestSeparateRankCollisionsKeepsEveryListingInOrder(t *testing.T) {
 		for _, id := range rng.Perm(n) {
 			issue := model.Issue{ID: fmt.Sprintf("t-%02d", id), Rank: pool[rng.Intn(len(pool))]}
 			if rng.Intn(5) == 0 {
-				issue.SetRetention(lifecycle.Deleted{At: deletedAt})
+				issue.SetRetention(model.Deleted{At: deletedAt})
 			}
 			export.Issues = append(export.Issues, issue)
 		}
@@ -87,7 +86,7 @@ func TestSeparateRankCollisionsKeepsEveryListingInOrder(t *testing.T) {
 		}
 		changed := map[string]string{}
 		for i, issue := range before {
-			_, deleted := issue.Retention().(lifecycle.Deleted)
+			_, deleted := issue.Retention().(model.Deleted)
 			if (deleted || issue.Rank == "") && got.Issues[i].Rank != issue.Rank {
 				t.Errorf("round %d: %s (deleted %t) held %q and now holds %q", round, issue.ID, deleted, issue.Rank, got.Issues[i].Rank)
 			}
@@ -113,7 +112,7 @@ func TestSeparateRankCollisionsKeepsEveryListingInOrder(t *testing.T) {
 				t.Errorf("round %d: no placed issue shared a key, yet the separation named %+v", round, rekeyed)
 			}
 			for _, issue := range before {
-				if _, deleted := issue.Retention().(lifecycle.Deleted); deleted && placedHolders[issue.Rank] > 0 {
+				if _, deleted := issue.Retention().(model.Deleted); deleted && placedHolders[issue.Rank] > 0 {
 					sawDeletedShare++
 					break
 				}

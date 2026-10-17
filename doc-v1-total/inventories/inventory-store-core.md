@@ -3073,7 +3073,7 @@ Pure and DB-free, in `internal/store/rank_repair.go`; `FixRankInversions` suppli
 
 `rankCollisions(issues []rankedIssue) []rankCollision` — `internal/store/rank_collisions.go`: groups the issues by rank, skipping an empty rank (unranked, not a key), keeps each key with two or more holders, sorts each key's ids, and returns the collisions sorted by key (an empty, non-nil slice when none). The one definition of a duplicate rank: `Doctor` counts it over the live rank order, `separateRankCollisions` removes it and `rankFindings` refuses on it over `placedIssues`.
 
-`placedIssues(export) []rankedIssue` — `internal/store/rank_collisions.go`: the export's issues with a non-empty rank whose retention is not `lifecycle.Deleted`, in export order — the population the rank verbs' neighbour lookups read (`deleted_at IS NULL`), so a deleted issue's key, which a verb may mint again, is never a duplicate.
+`placedIssues(export) []rankedIssue` — `internal/store/rank_collisions.go`: the export's issues with a non-empty rank whose retention is not `model.Deleted`, in export order — the population the rank verbs' neighbour lookups read (`deleted_at IS NULL`), so a deleted issue's key, which a verb may mint again, is never a duplicate.
 
 `describeRankCollisions(collisions) string` — `internal/store/rank_collisions.go`: each collision as `%q shared by <ids joined by ", ">`, the collisions joined by `"; "`.
 
