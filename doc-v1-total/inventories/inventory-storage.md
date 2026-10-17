@@ -540,11 +540,12 @@ These types live in the contract, not in an engine, because a capability interfa
 
 ### 2.3 Construction and concurrency
 
-**`New(workspaceID string) (*Engine, error)`** (`internal/storage/memory/engine.go`)
+**`New(workspaceID string, clock storage.Clock) (*Engine, error)`** (`internal/storage/memory/engine.go`)
 - Trims `workspaceID`; empty (after trim) → `errors.New("workspace id is required")` (`internal/storage/memory/engine.go`).
+- A nil `clock` → `errors.New("clock is required")`, refused at construction rather than surviving to the first write as a nil call (`internal/storage/memory/engine.go`).
 - Initializes `issues`, `labels`, and `events` maps; `order`, `relations`, `comments` start nil (`internal/storage/memory/engine.go`).
 - The workspace id is required rather than defaulted because attribution is a complete pair or nothing (`internal/storage/memory/engine.go`).
-- Tested: `New("")` and `New("   ")` both error (`internal/storage/memory/capabilities_test.go`).
+- Tested: `New("")`, `New("   ")`, and a nil clock all error (`internal/storage/memory/capabilities_test.go`).
 
 **Concurrency discipline** (`internal/storage/memory/engine.go`):
 - Every exported method locks the mutex and immediately delegates to an unexported one; no unexported method ever locks. That is what lets `BulkApply` drive `CreateIssue` and `Apply` for a whole batch under one hold without deadlocking on itself.

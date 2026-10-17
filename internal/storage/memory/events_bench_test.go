@@ -15,8 +15,10 @@ import (
 //
 // The axis is how much history the REST of the store holds. One issue's
 // history is read on every status transition, so its cost should track that
-// issue's events alone, as the Dolt engine's indexed query does: the two
-// benchmarks below report the same time per read.
+// issue's events alone, as the Dolt engine's indexed query does. Read the pair
+// against each other: about the same time per read is that property holding,
+// and a gap that widens with the row count is a scan of the whole store's
+// history come back.
 
 func benchListEvents(b *testing.B, rows int) {
 	engine := newEngine(b, storage.SystemClock)

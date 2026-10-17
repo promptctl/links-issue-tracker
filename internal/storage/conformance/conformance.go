@@ -832,8 +832,8 @@ func takeoverByANewCheckoutRecords(t *testing.T, ctx context.Context, st storage
 // contract doc makes: one issue's events, "ordered exactly as ListAllEvents
 // orders the whole of it". Two engines answer it independently — the memory one
 // reads the issue's own run of history, the SQL one queries with a predicate —
-// and a divergence (the wrong issue's rows, an unsorted return, a dropped id
-// tie-break) would otherwise surface only as strange claim-transfer behavior
+// and a divergence (the wrong issue's rows, an unsorted return, a dropped
+// ordering key) would otherwise surface only as strange claim-transfer behavior
 // three layers up, never as a failure against the contract that promised it.
 //
 // The expectation is DERIVED from ListAllEvents rather than written down,
@@ -842,10 +842,18 @@ func takeoverByANewCheckoutRecords(t *testing.T, ctx context.Context, st storage
 // records, and would then be pinning this test's memory of the engine rather
 // than the contract. [LAW:one-source-of-truth]
 func oneIssuesHistoryMatchesTheWholeLog(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	// Every event shares one instant, so only the id tie-break orders them.
-	// On a live clock no two events tie, recording order IS the contract's
-	// order, and a reader that returns its rows unsorted passes.
-	clk.Pin(earlierInstant)
+	// Two pinned instants, the LATER one recorded first: the history arrives
+	// out of instant order, as one merged from two checkouts does. A reader
+	// returning its rows as recorded fails here for certain, and so does one
+	// comparing the stamps' spelling, which orders this pair backwards. Inside
+	// each group every event shares one stamp, so only the id tie-break orders
+	// it. Ids are minted at random, so a reader ordering by id alone escapes
+	// only when every earlier-instant id of the subject's happens to sort below
+	// every later-instant one: seven of each, 1 run in C(14,7) = 3432.
+	//
+	// The creates are inside the later group, not before it: an unpinned create
+	// would stamp the real instant, later than either pinned one.
+	clk.Pin(laterInstant)
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
 	subject := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "subject", Topic: "core", ParentID: epic.ID})
 	other := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "other", Topic: "core", ParentID: epic.ID})
@@ -853,10 +861,19 @@ func oneIssuesHistoryMatchesTheWholeLog(t *testing.T, ctx context.Context, st st
 	// Interleaved on purpose. A reader that returns the wrong issue's events,
 	// and one that returns the right issue's in the wrong order, both survive a
 	// history in which one issue's events happen to be contiguous.
-	for _, title := range []string{"one", "two", "three"} {
-		for _, id := range []string{subject.ID, other.ID} {
-			if _, err := st.Apply(ctx, id, storage.Change{Fields: storage.UpdateIssueInput{Title: &title}, Actor: "conformance"}); err != nil {
-				t.Fatalf("Apply title %q to %s error = %v", title, id, err)
+	for _, group := range []struct {
+		at     time.Time
+		titles []string
+	}{
+		{laterInstant, []string{"one", "two", "three", "four", "five", "six"}},
+		{earlierInstant, []string{"seven", "eight", "nine", "ten", "eleven", "twelve"}},
+	} {
+		clk.Pin(group.at)
+		for _, title := range group.titles {
+			for _, id := range []string{subject.ID, other.ID} {
+				if _, err := st.Apply(ctx, id, storage.Change{Fields: storage.UpdateIssueInput{Title: &title}, Actor: "conformance"}); err != nil {
+					t.Fatalf("Apply title %q to %s error = %v", title, id, err)
+				}
 			}
 		}
 	}
