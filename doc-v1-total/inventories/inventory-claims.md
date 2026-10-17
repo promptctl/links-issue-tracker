@@ -165,11 +165,14 @@ type Evidence struct {
 ### 3.2 `LaneProgress`
 
 ```go
-type LaneProgress struct { Done, Total int; Active *model.Issue }
+type Progress struct{ Done, Total int }
+type LaneProgress struct { Progress; Active *model.Issue }
 ```
 `internal/claims/evidence.go`.
 
 `Evidence.LaneProgress(lane)` (`internal/claims/evidence.go`): iterate `members[lane]`; `Total++` for every member; `Done++` when `issue.State() == model.StateClosed`; `Active` set to a copy of the member whose state is `model.StateInProgress` (last such member wins, since it is assigned unconditionally in the loop). A lane the evidence never saw returns the zero value (`Total 0`), matching `Standings.Of`'s totality convention (`internal/claims/evidence.go`).
+
+`Evidence.ScopeProgress(inScope)` (`internal/claims/evidence.go`): the same count over the members of every lane `inScope` admits, as one set, returning only the `Progress` — no `Active`, since a scope can hold an in-progress member in each lane. `lit next` reads it for the scope an exhaustion names (`routeNext`, `internal/cli/next_route.go`).
 
 Pinned: closed+in-progress+open lane → `{Done:1, Total:3, Active:T2}` (`internal/claims/evidence_progress_test.go`); no in-progress member → `Active == nil`; unseen lane → zero.
 
@@ -532,8 +535,8 @@ Steps 1-3 walk every gathered row; step 4 walks the focus-scoped pool. The row s
 **`Exhausted.stay()`** is `nil` when every entry of `Blocked` is `reachAwaitingOutside`, which includes `Blocked` empty; otherwise the one route ``"to stay, file the ticket that clears a blocker " + home() + ", then make that blocker blocked by it with `lit dep add <blocker> --blocked-by <new>`"``.
 
 **`Exhausted.why()`**:
-- `no ready work in %s — %s`, the second being the non-empty clauses of `describeReach(o.Blocked, "blocked by ", exhaustedNotes)` and `describeReach(o.Held, "held here: ", exhaustedNotes)`, joined by `"; "`.
-- with both empty, the second is `nothing else is queued behind what's already in progress`.
+- `no ready work in %s (%s) — %s`: `scope()`, then `formatProgress(o.Progress)`, then the non-empty clauses of `describeReach(o.Blocked, "blocked by ", exhaustedNotes)` and `describeReach(o.Held, "held here: ", exhaustedNotes)`, joined by `"; "`.
+- with both empty, the clauses are `nothing else is queued behind what's already in progress`.
 
 **`Exhausted.outside()`**:
 - `o.Narrowing != nil`: `o.Narrowing.Error()`
@@ -631,8 +634,8 @@ No other command consults `claims.Standings`: the only readers of `cc.standings`
 
 `internal/cli/claims_render.go`:
 - `Total == 0` → `""`.
-- `Active != nil` → `fmt.Sprintf("%s in progress, %d/%d done", progress.Active.ID, progress.Done, progress.Total)`.
-- else → `fmt.Sprintf("%d/%d done", progress.Done, progress.Total)`.
+- `Active != nil` → `fmt.Sprintf("%s in progress, %s", progress.Active.ID, formatProgress(progress.Progress))`.
+- else → `formatProgress(progress.Progress)`, which is `fmt.Sprintf("%d/%d done", progress.Done, progress.Total)`.
 
 ### 10.4 `nameCheckout` / `nameCheckouts`
 

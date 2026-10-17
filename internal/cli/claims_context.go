@@ -43,35 +43,7 @@ func gatherClaimContext(ctx context.Context, stdout io.Writer, ap *app.App) (cla
 	if err != nil {
 		return claimContext{}, err
 	}
-	// IncludeArchived/IncludeDeleted: evidence.go is explicit that claim
-	// derivation needs every issue an event could name, closed ones
-	// included, because a checkout's hold on a lane can rest entirely on a
-	// `done` against a ticket no longer open — and a deleted or archived
-	// issue is exactly such a ticket, still named by its own historical
-	// events. The zero-value filter excludes both, so with it a repository
-	// holding even one deleted issue that ever carried an event would make
-	// NewEvidence fail outright on every `next` and `backlog` invocation.
-	allIssues, err := ap.Store.ListIssues(ctx, storage.ListIssuesFilter{IncludeArchived: true, IncludeDeleted: true})
-	if err != nil {
-		return claimContext{}, err
-	}
-	ids := make([]string, len(allIssues))
-	for i, issue := range allIssues {
-		ids[i] = issue.ID
-	}
-	relations, err := ap.Store.GetRelationsByIDs(ctx, ids)
-	if err != nil {
-		return claimContext{}, err
-	}
-	parents := make(map[string]*model.Issue, len(allIssues))
-	for _, issue := range allIssues {
-		parents[issue.ID] = relations[issue.ID].Parent
-	}
-	events, err := ap.Store.ListAllEvents(ctx)
-	if err != nil {
-		return claimContext{}, err
-	}
-	evidence, err := claims.NewEvidence(allIssues, parents, events)
+	evidence, err := readEvidence(ctx, ap)
 	if err != nil {
 		return claimContext{}, err
 	}
@@ -97,6 +69,40 @@ func gatherClaimContext(ctx context.Context, stdout io.Writer, ap *app.App) (cla
 	fresh := claims.Freshness{Now: time.Now(), Window: cfg.Claims.FreshnessWindow}
 	standings := claims.Derive(evidence, fresh, local)
 	return claimContext{standings: standings, evidence: evidence, self: ownAttribution(ap), addresses: addresses}, nil
+}
+
+// readEvidence reads the claim evidence out of the store: every issue, the
+// parent each sits under, and every event.
+func readEvidence(ctx context.Context, ap *app.App) (claims.Evidence, error) {
+	// IncludeArchived/IncludeDeleted: evidence.go is explicit that claim
+	// derivation needs every issue an event could name, closed ones
+	// included, because a checkout's hold on a lane can rest entirely on a
+	// `done` against a ticket no longer open — and a deleted or archived
+	// issue is exactly such a ticket, still named by its own historical
+	// events. The zero-value filter excludes both, so with it a repository
+	// holding even one deleted issue that ever carried an event would make
+	// NewEvidence fail outright on every `next` and `backlog` invocation.
+	allIssues, err := ap.Store.ListIssues(ctx, storage.ListIssuesFilter{IncludeArchived: true, IncludeDeleted: true})
+	if err != nil {
+		return claims.Evidence{}, err
+	}
+	ids := make([]string, len(allIssues))
+	for i, issue := range allIssues {
+		ids[i] = issue.ID
+	}
+	relations, err := ap.Store.GetRelationsByIDs(ctx, ids)
+	if err != nil {
+		return claims.Evidence{}, err
+	}
+	parents := make(map[string]*model.Issue, len(allIssues))
+	for _, issue := range allIssues {
+		parents[issue.ID] = relations[issue.ID].Parent
+	}
+	events, err := ap.Store.ListAllEvents(ctx)
+	if err != nil {
+		return claims.Evidence{}, err
+	}
+	return claims.NewEvidence(allIssues, parents, events)
 }
 
 // ownAttribution is the attribution this checkout's own work carries — the

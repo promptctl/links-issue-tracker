@@ -1529,8 +1529,8 @@ when `Epics` is empty, else `"under the epic with "` +
 `reachAwaitingOutside` (so when `Blocked` is empty too), else the one route
 ``"to stay, file the ticket that clears a blocker <home()>, then make that blocker blocked by it with `lit dep add <blocker> --blocked-by <new>`"``.
 `Exhausted.why()`:
-- `"no ready work in <scope> — <clauses>"`, the clauses being the non-empty ones of `describeReach(Blocked, "blocked by ", exhaustedNotes)` and `describeReach(Held, "held here: ", exhaustedNotes)`, joined by `"; "`
-- Both empty: `"no ready work in <scope> — nothing else is queued behind what's already in progress"`
+- `"no ready work in <scope> (<progress>) — <clauses>"`, the progress being `formatProgress(Progress)` — `"<done>/<total> done"` over every lane of the scope, closed tickets included — and the clauses being the non-empty ones of `describeReach(Blocked, "blocked by ", exhaustedNotes)` and `describeReach(Held, "held here: ", exhaustedNotes)`, joined by `"; "`
+- Both empty: `"no ready work in <scope> (<progress>) — nothing else is queued behind what's already in progress"`
 
 `Exhausted.outside()`: `Narrowing.Error()` when `Narrowing` is set, else
 ``"`lit next` has nothing ready outside it either"`` when `OffPath` is empty, else

@@ -289,7 +289,7 @@ func TestRenderEpicContextEarlierLaneMateHoldsSiblingBack(t *testing.T) {
 		t.Fatalf("gatherWorkableAnnotated error = %v", err)
 	}
 	rows, details, epics, focus := gathered.rows, gathered.details, gathered.epics, gathered.scope
-	outcome := routeNext(rows, details, epics, claims.Standings{}, selfAttribution, focus, storage.IssueCriteria{})
+	outcome := routeNext(rows, details, epics, claims.Standings{}, evidenceIn(t, f.ctx, f.ap), selfAttribution, focus, storage.IssueCriteria{})
 	served, ok := outcome.(ServedFromNewLane)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want ServedFromNewLane", outcome, outcome)

@@ -79,8 +79,14 @@ func formatLaneProgress(progress claims.LaneProgress) string {
 		return ""
 	}
 	if progress.Active != nil {
-		return fmt.Sprintf("%s in progress, %d/%d done", progress.Active.ID, progress.Done, progress.Total)
+		return fmt.Sprintf("%s in progress, %s", progress.Active.ID, formatProgress(progress.Progress))
 	}
+	return formatProgress(progress.Progress)
+}
+
+// formatProgress renders the fraction itself, the one spelling the claim line
+// and the exhaustion diagnostic share. [LAW:one-source-of-truth]
+func formatProgress(progress claims.Progress) string {
 	return fmt.Sprintf("%d/%d done", progress.Done, progress.Total)
 }
 

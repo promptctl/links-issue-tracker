@@ -331,8 +331,9 @@ step, so each step below says only which lanes it looks in:
    continue into and falls straight to step 3 once its own lane has nothing
    left to serve or resume.
 3. **Exhaustion is loud, and it is not a wall.** When steps 1 and 2 have both
-   found nothing, `next` says why: "no ready work in epic(s) E — blocked on
-   E.4 (on your path but claimed by another checkout right now)". Each blocker
+   found nothing, `next` says why, and how far the epic had come: "no ready
+   work in epic(s) E (5/9 done) — blocked on E.4 (on your path but claimed by
+   another checkout right now)". Each blocker
    is named by what it is to this checkout — held by another checkout, not
    startable yet, or outside the view this run gathered — so the diagnostic
    never recommends what `lit start` would refuse, and never asserts a

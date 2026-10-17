@@ -284,7 +284,7 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/inventories/inventory-claims.md", Text: "lit sync reconcile", Src: "lit sync reconcile"},
 	{Doc: "doc-v1-total/inventories/inventory-claims.md", Text: "lit sync reconcile resolve", Src: "lit sync reconcile resolve"},
 	{Doc: "doc-v1-total/inventories/inventory-claims.md", Text: "no ready work", Src: "no ready work"},
-	{Doc: "doc-v1-total/inventories/inventory-claims.md", Text: "no ready work in %s — %s", Src: "no ready work in %s — %s"},
+	{Doc: "doc-v1-total/inventories/inventory-claims.md", Text: "no ready work in %s (%s) — %s", Src: "no ready work in %s (%s) — %s"},
 	{Doc: "doc-v1-total/inventories/inventory-claims.md", Text: "no ready work on the focus path — the backlog is not empty, and each row below says why this run did not serve it: %s", Src: "no ready work on the focus path — the backlog is not empty, and each row below says why this run did not serve it: %s"},
 	{Doc: "doc-v1-total/inventories/inventory-claims.md", Text: "no ready work — the backlog is not empty, but nothing in it is startable here: %s", Src: "no ready work — the backlog is not empty, but nothing in it is startable here: %s"},
 	{Doc: "doc-v1-total/inventories/inventory-claims.md", Text: "not startable right now — `lit show` it names what blocks it", Src: "not startable right now — `lit show` it names what blocks it"},

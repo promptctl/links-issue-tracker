@@ -362,7 +362,7 @@ func TestBacklogNamesTheSiblingGateAndNextAgreesWithIt(t *testing.T) {
 		t.Fatalf("gatherWorkableAnnotated error = %v", err)
 	}
 	rows, details, epics := gathered.rows, gathered.details, gathered.epics
-	outcome := routeNext(rows, details, epics, claims.Standings{}, selfAttribution, focusScope{}, storage.IssueCriteria{})
+	outcome := routeNext(rows, details, epics, claims.Standings{}, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, storage.IssueCriteria{})
 	served, ok := outcome.(ServedFromNewLane)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want ServedFromNewLane", outcome, outcome)

@@ -187,6 +187,10 @@ type ServedPastNarrowing struct {
 // never claimed of rows the pool was not asked about; with no focus active it
 // is empty, and on ServedPastExhaustion, whose pool did offer a row.
 //
+// Progress is how far the stopped scope has come, counted over every lane of
+// it, closed tickets included: "blocked" and "eight-ninths done and blocked"
+// are different answers to an agent deciding whether to stay.
+//
 // Narrowing is set when the pool offered nothing the filter selects but would
 // serve a row over the whole queue: the filter, not the backlog, is why nothing
 // outside the scope is on offer, and that row is what `lit next` without the
@@ -201,6 +205,7 @@ type ServedPastNarrowing struct {
 // from these fields. [LAW:one-source-of-truth]
 type Exhausted struct {
 	Epics     []string
+	Progress  claims.Progress
 	Blocked   []rowReach
 	Held      []rowReach
 	OffPath   []rowReach
@@ -467,8 +472,10 @@ func ownScope(standings claims.Standings, self model.Attribution) (map[model.Lan
 // eligibility on its own.
 //
 // epics is the relations of the epics above the rows, keyed by epic id — what
-// epicsAbove climbs to tell which rows sit under an epic.
-func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.IssueRelations, epics map[string]storage.IssueRelations, standings claims.Standings, self model.Attribution, scope focusScope, asked storage.IssueCriteria) NextOutcome {
+// epicsAbove climbs to tell which rows sit under an epic. evidence is the
+// reading standings were derived from; routing counts a stopped scope's
+// progress from it, since rows hold no closed ticket to count.
+func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.IssueRelations, epics map[string]storage.IssueRelations, standings claims.Standings, evidence claims.Evidence, self model.Attribution, scope focusScope, asked storage.IssueCriteria) NextOutcome {
 	laneOf := func(row annotation.AnnotatedIssue) model.LaneID {
 		return model.LaneOf(row.Issue, details[row.ID].Parent)
 	}
@@ -580,9 +587,10 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 		}
 		ours := func(row annotation.AnnotatedIssue) bool { return ourScope(laneOf(row)) }
 		exhausted := Exhausted{
-			Epics:   slices.Sorted(maps.Keys(ownEpics)),
-			Blocked: blockedRows(gating),
-			Held:    heldByThemselves(rows, ours, reachFor),
+			Epics:    slices.Sorted(maps.Keys(ownEpics)),
+			Progress: evidence.ScopeProgress(ourScope),
+			Blocked:  blockedRows(gating),
+			Held:     heldByThemselves(rows, ours, reachFor),
 		}
 		if row, ok := fromPool(selected); ok {
 			return ServedPastExhaustion{Row: row, Lane: laneOf(row), Exhaustion: exhausted}
@@ -884,8 +892,8 @@ func (o Exhausted) Error() string {
 	return strings.Join(append([]string{o.why() + "; " + o.outside()}, o.stay()...), " — ")
 }
 
-// why is what both exhaustion outcomes say first: which scope stopped, and
-// what stops it — the dependencies from outside it, then its own rows held by
+// why is what both exhaustion outcomes say first: which scope stopped, how far
+// it had come, and what stops it — the dependencies from outside it, then its own rows held by
 // themselves. Only with neither is the rest of the scope work already in
 // progress, and only then does it say so.
 func (o Exhausted) why() string {
@@ -896,7 +904,7 @@ func (o Exhausted) why() string {
 	if len(stops) == 0 {
 		stops = []string{"nothing else is queued behind what's already in progress"}
 	}
-	return fmt.Sprintf("no ready work in %s — %s", o.scope(), strings.Join(stops, "; "))
+	return fmt.Sprintf("no ready work in %s (%s) — %s", o.scope(), formatProgress(o.Progress), strings.Join(stops, "; "))
 }
 
 // outside is what the pool held beyond the scope when it offered nothing: a

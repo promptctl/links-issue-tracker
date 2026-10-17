@@ -337,7 +337,7 @@ func TestRouteNextTreatsAnEpicsGateAsOnPath(t *testing.T) {
 
 	t.Run("holding the gated lane", func(t *testing.T) {
 		standings := claims.Standings{doneLane: heldBy(selfAttribution), gatedLane: heldBy(selfAttribution)}
-		outcome := routeNext(rows, details, epics, standings, selfAttribution, focusScope{}, storage.IssueCriteria{})
+		outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, storage.IssueCriteria{})
 		// An epic's gate reaches us through step 1b, so it arrives as the
 		// dependency outcome and says what it unblocks.
 		served, ok := outcome.(ServedFromDependency)
@@ -350,7 +350,7 @@ func TestRouteNextTreatsAnEpicsGateAsOnPath(t *testing.T) {
 	})
 	t.Run("holding only the epic", func(t *testing.T) {
 		standings := claims.Standings{doneLane: heldBy(selfAttribution)}
-		outcome := routeNext(rows, details, epics, standings, selfAttribution, focusScope{}, storage.IssueCriteria{})
+		outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, storage.IssueCriteria{})
 		// The gated child sits in a lane we do not hold, so the gate reaches us
 		// through step 2b rather than 1b — and still ahead of the unrelated
 		// ticket the pool would serve once the epic is exhausted.
@@ -395,7 +395,7 @@ func TestRouteNextDescendsAnEpicBlockerToItsWorkableChild(t *testing.T) {
 			bLane := laneOf(t, details, rowByID(t, rows, b2.ID))
 			aLane := laneOf(t, details, rowByID(t, rows, a1.ID))
 
-			outcome := routeNext(rows, details, epics, claims.Standings{bLane: heldBy(selfAttribution)}, selfAttribution, focusScope{}, storage.IssueCriteria{})
+			outcome := routeNext(rows, details, epics, claims.Standings{bLane: heldBy(selfAttribution)}, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, storage.IssueCriteria{})
 			served, ok := outcome.(ServedFromDependency)
 			if !ok || served.Row.ID != a1.ID {
 				t.Fatalf("routeNext = %#v (%T), want ServedFromDependency serving %s, the ready ticket under the blocking epic %s", outcome, outcome, a1.ID, epicA.ID)
@@ -411,7 +411,7 @@ func TestRouteNextDescendsAnEpicBlockerToItsWorkableChild(t *testing.T) {
 			// ticket is served past it — beside the exhaustion, which is what
 			// this half reads.
 			held := claims.Standings{bLane: heldBy(selfAttribution), aLane: heldBy(otherAttribution)}
-			past, ok := routeNext(rows, details, epics, held, selfAttribution, focusScope{}, storage.IssueCriteria{}).(ServedPastExhaustion)
+			past, ok := routeNext(rows, details, epics, held, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, storage.IssueCriteria{}).(ServedPastExhaustion)
 			if !ok {
 				t.Fatalf("with %s's lane held elsewhere, routeNext did not serve past the exhausted epic", a1.ID)
 			}
@@ -435,7 +435,7 @@ func TestRouteNextDescendsAnEpicBlockerToItsWorkableChild(t *testing.T) {
 			// is served — a1, the ticket `lit start` can act on, not A, which
 			// cannot be started, with A named as what gates b2.
 			b1Lane := model.LaneOf(b1, &epicB)
-			served, ok = routeNext(rows, details, epics, claims.Standings{b1Lane: heldBy(selfAttribution)}, selfAttribution, focusScope{}, storage.IssueCriteria{}).(ServedFromDependency)
+			served, ok = routeNext(rows, details, epics, claims.Standings{b1Lane: heldBy(selfAttribution)}, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, storage.IssueCriteria{}).(ServedFromDependency)
 			if !ok || served.Row.ID != a1.ID || served.Gates != b2.ID || served.Blocker != epicA.ID {
 				t.Fatalf("holding only %s's lane, routeNext = %#v, want step 2b serving %s through %s for %s", b1.ID, served, a1.ID, epicA.ID, b2.ID)
 			}

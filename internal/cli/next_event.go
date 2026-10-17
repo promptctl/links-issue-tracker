@@ -28,6 +28,12 @@ type reachFact struct {
 	Reach  string `json:"reach"`
 }
 
+// progressFact is a stopped scope's progress as the event records it.
+type progressFact struct {
+	Done  int `json:"done"`
+	Total int `json:"total"`
+}
+
 func reachFacts(rows []rowReach) []reachFact {
 	facts := make([]reachFact, len(rows))
 	for i, row := range rows {
@@ -95,7 +101,8 @@ func decideNextEvent(outcome NextOutcome) nextDecision {
 
 // recordNextEvent puts what routeNext decided on the invocation's event: the
 // outcome, the ticket it picked and the chain a dependency pick was reached
-// through, the ticket a filter hid, every row its diagnostics named with what
+// through, how far a stopped scope had come, the ticket a filter hid, every row
+// its diagnostics named with what
 // this checkout may do about each, whether it offered the route that stays in
 // the scope, and how many rows it chose among — the ones the filter selects,
 // though routing reads the whole queue. Its stdout says the same in prose, for
@@ -107,6 +114,7 @@ func recordNextEvent(ctx context.Context, outcome NextOutcome, gathered int) {
 	telemetry.Set(ctx, "next.picked", decision.Picked)
 	telemetry.Set(ctx, "next.dependency_path", append([]string{}, decision.DependencyPath...))
 	telemetry.Set(ctx, "next.exhausted_epics", append([]string{}, decision.Exhaustion.Epics...))
+	telemetry.Set(ctx, "next.exhausted_progress", progressFact{Done: decision.Exhaustion.Progress.Done, Total: decision.Exhaustion.Progress.Total})
 	telemetry.Set(ctx, "next.blocked", reachFacts(decision.Exhaustion.Blocked))
 	telemetry.Set(ctx, "next.held", reachFacts(decision.Exhaustion.Held))
 	telemetry.Set(ctx, "next.off_path", reachFacts(decision.Exhaustion.OffPath))
