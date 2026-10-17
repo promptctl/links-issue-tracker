@@ -234,10 +234,11 @@ set and carries its refusal instead.
 ## What a long-text field records
 
 `lit new`, `lit followup` and `lit update` record where their `--description` and
-`--prompt` came from, and `lit comment add` records its `--body` the same way. A
-field given both ways, or one of two fields naming stdin, is refused before its key
-is set; a field whose file or stdin text was blank carries its key beside the
-refusal.
+`--prompt` came from, and `lit comment add` records its `--body` the same way.
+Fields are read in that order, and a refusal stops the reading. A field given both
+ways, or one of two fields naming stdin, is refused before its key is set. A path
+that cannot be read, or a file or stdin whose text is blank, is refused with its
+key already set.
 
 | Key | Meaning |
 | --- | --- |

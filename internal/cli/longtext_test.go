@@ -193,21 +193,33 @@ func TestLongTextRefusesBlankTextAndASecondStdinReader(t *testing.T) {
 	}
 	blank := writeTextFile(t, " \n\n")
 
+	// facts is what the refused invocation's event says about each field: a
+	// refusal while reading carries the key of the field it refused, and a
+	// refusal of the flags themselves carries none.
 	for _, tc := range []struct {
 		name  string
 		stdin string
 		args  []string
 		want  string
+		facts map[string]any
 	}{
-		{"blank file", "", []string{"--description-file", blank}, "--description-file " + blank + " supplied no text; pass --description \"\" to give empty text on purpose"},
-		{"blank stdin", "\n", []string{"--prompt-file", "-"}, "--prompt-file - supplied no text; pass --prompt \"\" to give empty text on purpose"},
-		{"two stdin readers", "one text", []string{"--description-file", "-", "--prompt-file", "-"}, "only one field can read stdin, and --description-file and --prompt-file each name it; give the others a path"},
+		{"blank file", "", []string{"--description-file", blank}, "--description-file " + blank + " supplied no text",
+			map[string]any{"text_source.description": "file"}},
+		{"blank stdin", "\n", []string{"--prompt-file", "-"}, "--prompt-file - supplied no text",
+			map[string]any{"text_source.description": "absent", "text_source.prompt": "stdin"}},
+		{"unreadable path", "", []string{"--prompt-file", filepath.Join(t.TempDir(), "missing.md")}, "read --prompt-file: open ",
+			map[string]any{"text_source.description": "absent", "text_source.prompt": "file"}},
+		{"two stdin readers", "one text", []string{"--description-file", "-", "--prompt-file", "-"}, "only one field can read stdin, and --description-file and --prompt-file each name it; give the others a path",
+			map[string]any{}},
 	} {
 		withStdin(t, tc.stdin)
 		_, err := runCLIInDirAllowError(t, dir, append([]string{"update", id}, tc.args...)...)
 		var usage UsageError
-		if !errors.As(err, &usage) || usage.Message != tc.want {
-			t.Errorf("%s: update error = %v, want UsageError %q", tc.name, err, tc.want)
+		if !errors.As(err, &usage) || !strings.HasPrefix(usage.Message, tc.want) {
+			t.Errorf("%s: update error = %v, want a UsageError starting %q", tc.name, err, tc.want)
+		}
+		if got := sourceFacts(t); !reflect.DeepEqual(got, tc.facts) {
+			t.Errorf("%s: event facts = %v, want %v", tc.name, got, tc.facts)
 		}
 	}
 	if got := field("description"); got != "kept description" {

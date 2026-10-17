@@ -18,7 +18,8 @@ import (
 // every quote, backtick, dollar sign and newline in it is parsed by the shell
 // before lit sees a byte.
 // [LAW:one-type-per-behavior] every long-text field is one instance of this
-// pair, so no command grows a second convention for reading text from a file.
+// pair, so no long-text field grows a second convention for reading its text
+// from a file.
 type longTextFlag struct {
 	fs     *cobraFlagSet
 	name   string
@@ -105,7 +106,7 @@ func (f *longTextFlag) read(ctx context.Context) (*string, error) {
 	// purpose. [LAW:no-silent-failure]
 	text := string(data)
 	if strings.TrimSpace(text) == "" {
-		return nil, UsageError{Message: fmt.Sprintf("--%s-file %s supplied no text; pass --%s \"\" to give empty text on purpose", f.name, *f.file, f.name)}
+		return nil, UsageError{Message: fmt.Sprintf("--%s-file %s supplied no text", f.name, *f.file)}
 	}
 	return &text, nil
 }

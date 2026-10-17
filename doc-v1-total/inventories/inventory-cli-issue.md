@@ -1671,7 +1671,7 @@ usage string as a `UsageError` → exit 2 (`resolve`, `register.go`).
   opens, so these come before any store refusal, each a `UsageError` → exit 2:
   both flags given → `"--body and --body-file both supply the same text; give one of them"`;
   an unreadable path → `"read --body-file: <os error>"`; a file or stdin whose text is blank
-  (after trim) → `"--body-file <path> supplied no text; pass --body \"\" to give empty text on purpose"`;
+  (after trim) → `"--body-file <path> supplied no text"`;
   two fields of one invocation naming stdin →
   `"only one field can read stdin, and <flags> each name it; give the others a path"`. A failed
   stdin read is a plain error → exit 1. The event records `text_source.body` as `absent`,
