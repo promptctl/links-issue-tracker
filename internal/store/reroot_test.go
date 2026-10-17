@@ -167,7 +167,9 @@ func TestReRootGivesTheSameHashesInEveryStore(t *testing.T) {
 //
 // x merges a1, an ancestor of C, and drops it; m merges s1, a line that forked
 // at C, and keeps both parents. t1 forks at a1, below C, so with m2 as the
-// head the cut is refused and master is left where it was.
+// head the cut is refused and master is left where it was. The re-root at C
+// runs over the ref a re-root that died part-way leaves, and still writes a
+// parentless root.
 func TestReRootKeepsEveryMergeAboveTheCutAndRefusesALineAroundIt(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -215,10 +217,12 @@ func TestReRootKeepsEveryMergeAboveTheCutAndRefusesALineAroundIt(t *testing.T) {
 		if head := branchHead(t, ctx, ddb, "master"); head != c["m2"] {
 			t.Fatalf("a refused re-root moved master to %s, want m2 %s", head, c["m2"])
 		}
-		if leftover, err := ddb.HasRef(ctx, reRootRef); err != nil || leftover {
-			t.Fatalf("a refused re-root left %s: %v, %v", reRootRef, leftover, err)
-		}
 		if err := ddb.SetHead(ctx, ref.NewBranchRef("master"), c["m"]); err != nil {
+			t.Fatal(err)
+		}
+		// What a re-root that died between writing the root and deleting its
+		// ref leaves behind; committing onto it would give the root a parent.
+		if err := ddb.SetHead(ctx, reRootRef, c["H0"]); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -236,6 +240,9 @@ func TestReRootKeepsEveryMergeAboveTheCutAndRefusesALineAroundIt(t *testing.T) {
 	}
 	rewritten := func(name string) hash.Hash { return hash.Parse(got.Rewritten[c[name].String()]) }
 	withChunkStore(t, doltRoot, func(ddb *doltdb.DoltDB) {
+		if leftover, err := ddb.HasRef(ctx, reRootRef); err != nil || leftover {
+			t.Fatalf("the re-root left %s: %v, %v", reRootRef, leftover, err)
+		}
 		for name, want := range map[string][]hash.Hash{
 			"C":  nil,
 			"a2": {rewritten("C")},
