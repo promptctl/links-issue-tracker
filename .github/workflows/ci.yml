@@ -37,8 +37,6 @@ jobs:
 
       - uses: ./.github/actions/install-dolt
 
-      # Without `claude` on PATH the plugin-manifest validation test skips, so
-      # this job is the one place that test gates anything.
       - uses: ./.github/actions/install-claude
 
       - name: Build
@@ -96,6 +94,8 @@ jobs:
           go-version-file: go.mod
 
       - uses: ./.github/actions/install-dolt
+
+      - uses: ./.github/actions/install-claude
 
       # -short for the same reason the gate uses it: the scale tests exercise
       # generated volume through the same code paths the ordinary tests already

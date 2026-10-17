@@ -247,7 +247,7 @@ Complete grep of `os.Getenv` / `os.LookupEnv` / `os.Environ` across non-vendored
 
 | Variable | Where | Effect |
 |---|---|---|
-| `GITHUB_ACTIONS` | `tools/testbudget/main.go` | When `== "true"`, budget-violation lines are prefixed `::error::` so they become GHA annotations (`tools/testbudget/main.go`). |
+| `GITHUB_ACTIONS` | `tools/testbudget/main.go`, `internal/testoracle/testoracle.go` | When `== "true"`, budget-violation lines are prefixed `::error::` so they become GHA annotations (`tools/testbudget/main.go`), and a test whose oracle CLI (`dolt`, `claude`) is not on PATH fails instead of skipping (`internal/testoracle/testoracle.go`). |
 | `LIT_LICENSE_GRAPH_AUDIT` | `tools/licenses/graph_test.go` (via `graphAuditEnv`) | Empty ⇒ the whole-graph acceptance test is skipped; the license-graph-audit workflow sets it to `"1"` (`.github/workflows/license-graph-audit.yml`). |
 | `LIT_TEST_REEXEC` | `cmd/lit/main_signal_test.go` | `=1` makes the test binary run the real `main()` instead of the test suite. |
 | `USER`, `HOME` | `internal/workspace/stream_test.go` | Used only as negative-evidence material asserting stream tokens contain no username/home material. |
@@ -879,9 +879,12 @@ Justfile or any workflow in `.github/workflows/`.
 - Six jobs, all in parallel:
   1. **`build-and-test`**: checkout@v4 → setup-go@v5 (`go-version-file: go.mod`) →
      `./.github/actions/install-dolt` → `./.github/actions/install-claude` (§11.10) →
-     `go build ./cmd/lit` → `go test -short -json ./... | go run ./tools/testbudget` under `shell: bash` (pipefail is
-     load-bearing). No `-timeout` override by policy.
-  2. **`race`**: same setup; `go test -short -race -timeout 30m ./cmd/... ./internal/...` —
+     `go build ./cmd/lit` → `go test -short -json ./... | go run ./tools/testbudget` →
+     `go -C internal/vendor/dolthub-driver test -short -json ./... | go run ./tools/testbudget`
+     (the vendored driver is its own module, so `./...` never reaches it), both under
+     `shell: bash` (pipefail is load-bearing). No `-timeout` override by policy.
+  2. **`race`**: checkout@v4 → setup-go@v5 → `./.github/actions/install-dolt` →
+     `./.github/actions/install-claude` → `go test -short -race -timeout 30m ./cmd/... ./internal/...` —
      scope excludes `tools/` deliberately; no testbudget pipe. The `-timeout 30m`
      is sized above internal/cli's testbudget ceiling as the detector inflates
      it, so slowness fails build-and-test's budget check, not this lane's timeout.
@@ -908,7 +911,7 @@ then `dolt version`.
 - `permissions: contents: read`. Concurrency group
   `nightly-full-suite`, `cancel-in-progress: false`.
 - Job `full-suite`, `ubuntu-latest`, `timeout-minutes: 60`.
-  Steps: checkout → setup-go → install-dolt → `go build ./cmd/lit` →
+  Steps: checkout → setup-go → install-dolt → install-claude → `go build ./cmd/lit` →
   `go test -timeout 30m ./...` (no `-short`, so `testing.Short()` is false) →
   `go run ./tools/lawtokens-sync -check` (`if: ${{ !cancelled() }}`).
 - Job `report`, `needs: full-suite`,
@@ -1131,7 +1134,10 @@ Composite action (`.github/actions/report-to-lit/action.yml`). Inputs, all requi
 
 Composite action; installs the pinned Claude Code CLI used as a **test-only** oracle
 for `claude plugin validate --strict` (`.github/actions/install-claude/action.yml`):
-`npm install -g @anthropic-ai/claude-code@2.1.292`, then `claude --version`.
+setup-node@v4 (`node-version: '22'`, the package's `engines` floor) →
+`npm install -g @anthropic-ai/claude-code@2.1.292` → appends `DISABLE_AUTOUPDATER=1`
+to `$GITHUB_ENV` → `claude --version`. Used by every job that runs `go test`
+(ci.yml `build-and-test` and `race`, nightly.yml `full-suite`), as install-dolt is.
 
 ---
 

@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/promptctl/links-issue-tracker/internal/testoracle"
 )
 
 type marketplaceManifest struct {
@@ -129,16 +131,12 @@ func TestClaudePluginShipsNextSkill(t *testing.T) {
 // plugin manifests through the real `claude plugin validate --strict`, the
 // one checker that knows the manifest schema Claude Code actually loads —
 // hand-modeling that schema in Go would drift the moment the CLI adds or
-// retires a field. [LAW:verifiable-goals] Skips (not fails) when the CLI
-// isn't on PATH, as the `dolt`-oracle tests do; CI's build-and-test job
-// installs the pinned CLI (`.github/actions/install-claude`), so there this
-// test gates the merge.
+// retires a field. [LAW:verifiable-goals] testoracle.Path skips it where the
+// CLI isn't installed and fails it in CI, which installs the pinned CLI
+// (`.github/actions/install-claude`).
 func TestClaudePluginManifestsPassOfficialValidation(t *testing.T) {
 	t.Parallel()
-	claudeBin, err := exec.LookPath("claude")
-	if err != nil {
-		t.Skip("claude CLI not on PATH; skipping manifest validation")
-	}
+	claudeBin := testoracle.Path(t, "claude")
 	root := mustRepoRoot(t)
 
 	for _, target := range []string{".", "claude-plugin"} {

@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/promptctl/links-issue-tracker/internal/testoracle"
 )
 
 // TestEagerPushOnDefaultCadenceReachesRemoteWithoutExplicitPush is the
@@ -44,9 +46,7 @@ func TestEagerPushOnDefaultCadenceReachesRemoteWithoutExplicitPush(t *testing.T)
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
-	if _, err := exec.LookPath("dolt"); err != nil {
-		t.Skip("dolt not available")
-	}
+	testoracle.Path(t, "dolt")
 	t.Parallel()
 	self, err := os.Executable()
 	if err != nil {
