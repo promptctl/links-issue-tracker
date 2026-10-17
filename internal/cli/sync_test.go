@@ -378,8 +378,7 @@ func TestResolveSyncRemoteReturnsEmptyWhenNoEligibleRemote(t *testing.T) {
 }
 
 // TestPrintSyncPushOutcomeSurfacesMaintenanceInBothModes is the check the
-// remote-cache prune needs. The prune's whole safety story rests on a refusal
-// message reaching the operator when its key derivation disagrees with the disk;
+// remote-cache prune needs. A prune that failed says so only on this line;
 // plumbing that message into the payload and never rendering it is the same
 // silence, one layer further down. Both modes are asserted because a warning
 // visible only behind --verbose is still silent where it counts.
@@ -391,7 +390,7 @@ func TestResolveSyncRemoteReturnsEmptyWhenNoEligibleRemote(t *testing.T) {
 // slipped back inside a branch and rides along only when that branch is taken.
 func TestPrintSyncPushOutcomeSurfacesMaintenanceInBothModes(t *testing.T) {
 	t.Parallel()
-	const refusal = "remote-cache prune: declining to prune: 3 cache directories match no configured remote"
+	const failure = "remote-cache prune: removed 1 abandoned mirror (2.0 KiB), then failed: remove abandoned mirror ab12: permission denied"
 
 	// Each mode renders its own push line — plain mode says "pushed", verbose
 	// echoes the engine's raw output — and the maintenance line must precede
@@ -407,14 +406,14 @@ func TestPrintSyncPushOutcomeSurfacesMaintenanceInBothModes(t *testing.T) {
 			remote:      "origin",
 			branch:      "master",
 			message:     "Everything up-to-date.",
-			maintenance: refusal,
+			maintenance: failure,
 		}
 		var out bytes.Buffer
 		if err := printSyncPushOutcome(&out, outcome, tc.verbose); err != nil {
 			t.Fatalf("printSyncPushOutcome(verbose=%v) error = %v", tc.verbose, err)
 		}
 		lines := strings.Split(strings.TrimRight(out.String(), "\n"), "\n")
-		if lines[0] != refusal {
+		if lines[0] != failure {
 			t.Fatalf("printSyncPushOutcome(verbose=%v) = %q, want the maintenance line first, got %q",
 				tc.verbose, out.String(), lines[0])
 		}
@@ -446,19 +445,19 @@ func TestPrintSyncPushOutcomeAddsNoLineWhenMaintenanceIsEmpty(t *testing.T) {
 
 // TestSyncPushTraceMetadataCarriesTheMaintenanceReport is the check the durable
 // trace needs. `lit sync push` backs the pre-push hook, where stdout is
-// routinely swallowed, so the trace is the channel a prune refusal actually
+// routinely swallowed, so the trace is the channel a prune failure actually
 // survives on.
 func TestSyncPushTraceMetadataCarriesTheMaintenanceReport(t *testing.T) {
 	t.Parallel()
-	const refusal = "remote-cache prune: declining to prune: 3 cache directories match no configured remote"
+	const failure = "remote-cache prune: removed 1 abandoned mirror (2.0 KiB), then failed: remove abandoned mirror ab12: permission denied"
 
 	metadata := syncPushTraceMetadata("origin", "master", storage.SyncPushResult{
 		Message:     "Everything up-to-date.",
-		Maintenance: refusal,
+		Maintenance: failure,
 	}, nil)
 
-	if metadata["maintenance"] != refusal {
-		t.Fatalf("metadata[maintenance] = %q, want the refusal %q", metadata["maintenance"], refusal)
+	if metadata["maintenance"] != failure {
+		t.Fatalf("metadata[maintenance] = %q, want the failure %q", metadata["maintenance"], failure)
 	}
 	if metadata["message"] != "Everything up-to-date." {
 		t.Fatalf("metadata[message] = %q, want the engine's push output", metadata["message"])

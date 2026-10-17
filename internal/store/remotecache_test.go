@@ -480,6 +480,34 @@ func TestPruneRemoteCacheKeepsTheMirrorOfARemoteWithItsOwnRef(t *testing.T) {
 	}
 }
 
+// TestSyncCompactAndPushPrunesWhenThePushFails pins that the prune does not
+// ride on the push landing: nothing about collecting an abandoned mirror
+// depends on it, so a push that fails still collects one, and the failure
+// carries the prune's line where an operator looks.
+func TestSyncCompactAndPushPrunesWhenThePushFails(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	sync := pushedSyncStore(t, ctx)
+	empty := t.TempDir()
+	gitInDir(t, empty, "init", "--bare", "remote.git")
+	if err := sync.SyncAddRemote(ctx, "backup", GitBackedRemoteURL(filepath.Join(empty, "remote.git"))); err != nil {
+		t.Fatalf("SyncAddRemote(backup) error = %v", err)
+	}
+	orphan := strings.Repeat("ab", 32)
+	plantOrphanMirror(t, sync.remoteCacheBase(), orphan)
+
+	_, err := sync.SyncCompactAndPush(ctx, "backup", "master", false, false)
+	if err == nil {
+		t.Fatal("SyncCompactAndPush(backup) to a remote with no branches succeeded, want a failed push")
+	}
+	if !strings.Contains(err.Error(), "remote-cache prune: removed 1 abandoned mirror") {
+		t.Fatalf("error = %q, want it to carry the prune's report", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(sync.remoteCacheBase(), orphan)); !os.IsNotExist(statErr) {
+		t.Fatalf("orphan %s survived a prune that ran beside a failed push (stat err = %v)", orphan, statErr)
+	}
+}
+
 // TestSyncRemoteMirrorHoldsItsOwnPushNotAPeersLaterOne pins the one fact the
 // push's received-refs proof rests on: after a store's push lands, the
 // remote's head is a commit that store's git mirror holds, and a head written

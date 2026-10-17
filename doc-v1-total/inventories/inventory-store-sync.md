@@ -131,8 +131,8 @@ Tests: `TestSyncPullStateTransitions` (`sync_reconcile_schema_skew_test.go`), `T
 1. `depth, depthErr = s.chooseCompactionDepth()` measured **inside** the lock (`sync.go`).
 2. `attempt, swept, compactErr = s.compactWithinLock(ctx, depth)`; `sweep = sweep.plus(swept)` (`sync.go`).
 3. `s.pushWithinLock(...)` (`sync.go`).
-A failure returns `annotateWithMaintenance(err, joinMaintenance(compactionReport(attempt, depthErr), sweep.Report()))`. Otherwise, **after** the push and **outside** the commit lock (`sync.go`):
-`result.Maintenance = joinMaintenance(compactionReport(attempt, depthErr), sweep.Report(), s.pruneRemoteCache(ctx).Report())`. Neither a sweep nor a prune failure fails the push (`sync.go`).
+After the envelope, whether or not it failed, and **outside** the commit lock (`sync.go`):
+`maintenance := joinMaintenance(compactionReport(attempt, depthErr), sweep.Report(), s.pruneRemoteCache(ctx).Report())`. A failure returns `annotateWithMaintenance(err, maintenance)`; otherwise `result.Maintenance = maintenance`. Neither a sweep nor a prune failure fails the push (`sync.go`).
 
 `pushWithinLock` (`sync.go`):
 1. `requireSyncArg("remote", remote)`; branch is only `strings.TrimSpace`d and **may be empty** (`sync.go`).
