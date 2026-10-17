@@ -146,13 +146,14 @@ func reRootUnderHold(ctx context.Context, root, branch, cut string) (reRooted Re
 // stands even when a hold's release failed after it: the result describes the
 // move and the error wraps ErrReRootNotReleased, as RecordPushedHead's
 // ErrReceivedRefsNotRecorded does for its own landed write. Anything else
-// moved nothing. [LAW:no-silent-failure]
+// moved nothing, and its result carries only the time it held, as
+// LandFetchedHead's carries Held. [LAW:no-silent-failure]
 func settleReRoot(r ReRooted, err error, branch, cut string) (ReRooted, error) {
 	switch {
 	case err == nil:
 		return r, nil
 	case r.Head == "":
-		return ReRooted{}, fmt.Errorf("re-root %s at %s: %w", branch, cut, err)
+		return r, fmt.Errorf("re-root %s at %s: %w", branch, cut, err)
 	default:
 		return r, fmt.Errorf("%w: re-root %s at %s moved it to %s: %w", ErrReRootNotReleased, branch, cut, r.Head, err)
 	}

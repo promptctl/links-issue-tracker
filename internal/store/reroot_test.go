@@ -384,7 +384,7 @@ func exportOf(t *testing.T, ctx context.Context, root string) model.Export {
 
 // TestSettleReRootKeepsAMoveThatLandedBeforeAFailedRelease pins what a
 // re-root's error leaves standing: a move that landed is described even when
-// a hold's release failed after it, and a refusal describes nothing.
+// a hold's release failed after it, and a refusal carries only its hold time.
 func TestSettleReRootKeepsAMoveThatLandedBeforeAFailedRelease(t *testing.T) {
 	released := errors.New("release the commit lock: lock file gone")
 	moved := ReRooted{Cut: "c", Root: "r", Head: "h", Rewritten: map[string]string{"c": "r"}, Dropped: 2}
@@ -402,8 +402,8 @@ func TestSettleReRootKeepsAMoveThatLandedBeforeAFailedRelease(t *testing.T) {
 	if !errors.Is(err, ErrSideLineAcrossCut) || errors.Is(err, ErrReRootNotReleased) {
 		t.Fatalf("a refusal: error = %v, want %v and not %v", err, ErrSideLineAcrossCut, ErrReRootNotReleased)
 	}
-	if got.Head != "" || got.Kept() != 0 {
-		t.Fatalf("a refusal: result = %+v, want none", got)
+	if want := (ReRooted{Elapsed: time.Millisecond}); got.Head != "" || got.Kept() != 0 || got.Elapsed != want.Elapsed {
+		t.Fatalf("a refusal: result = %+v, want %+v", got, want)
 	}
 
 	if got, err = settleReRoot(moved, nil, "master", "c"); err != nil || got.Head != "h" {
