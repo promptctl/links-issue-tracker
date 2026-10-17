@@ -34,7 +34,7 @@ func (h readyTestHarness) runNextOutcome() NextOutcome {
 	// The gathered scope, not focusScope{}: this helper stands in for `lit next`
 	// itself, and handing routing an empty scope here would quietly answer every
 	// focus test from the unfocused path — green, and about a command nobody runs.
-	return routeNext(gathered.rows, gathered.details, gathered.epics, cc.standings, cc.self, gathered.scope, storage.IssueCriteria{})
+	return routeNext(gathered.rows, gathered.details, gathered.epics, cc.standings, evidenceIn(h.t, h.ctx, h.ap), cc.self, gathered.scope, storage.IssueCriteria{})
 }
 
 // runNextRow narrows an outcome to the row it served, for the ordering and
@@ -510,7 +510,8 @@ func TestRunNextServesTheChainOfOurHighestRankedRowFirst(t *testing.T) {
 // The gating dependency is itself blocked, and its own blocker waits on an
 // event outside this repository, so nothing along the chain is ours to take:
 // that is what forecloses routing steps 1b and 2b and leaves the epic
-// exhausted. The walk reaches the end of the chain, so the diagnostic names
+// exhausted. The diagnostic says how far the epic had come — First is done,
+// Second is not — and the walk reaches the end of the chain, so it names
 // every link by what it is to this checkout — and offers no route to stay,
 // since the chain's only end awaits that event and the link before it clears
 // only when it does.
@@ -545,7 +546,7 @@ func TestRunNextServesPastAnEpicWhoseWorkIsAllBlocked(t *testing.T) {
 
 	text := h.runNextText()
 	for _, want := range []string{
-		"no ready work in epic(s) " + epic.ID,
+		"no ready work in epic(s) " + epic.ID + " (1/2 done) — ",
 		blocker.ID + " (on your path but not startable right now",
 		upstream.ID + " (on your path but waiting on an event outside this repository",
 		"\nmove on to the top ready ticket outside it: run `lit start " + elsewhere.ID + "`",

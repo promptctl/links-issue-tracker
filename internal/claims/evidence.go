@@ -95,18 +95,21 @@ func (e Evidence) Lanes() []model.LaneID {
 	return lanes
 }
 
-// LaneProgress is the "how is it going" half of a lane's dossier: how many of
-// its member issues are closed, out of how many total, and which member (if
-// any) is the one actually in progress right now. Only members still in the
-// flow count: an archived or deleted ticket has left the lane's work, so it is
-// neither done nor outstanding. Active is its own field
+// Progress is how far a set of tickets has come: how many are closed, out of
+// how many are still in the flow. An archived or deleted ticket has left the
+// work, so it is neither done nor outstanding.
+type Progress struct{ Done, Total int }
+
+// LaneProgress is the "how is it going" half of a lane's dossier: the lane's
+// Progress, and which member (if any) is the one actually in progress right
+// now. Active is its own field
 // rather than something a caller infers from Done/Total because an
 // epic-major lane can hold several sibling issues — the one a listing
 // happens to be rendering is not necessarily the one the claimant is
 // actually working, and the dossier names that one explicitly.
 type LaneProgress struct {
-	Done, Total int
-	Active      *model.Issue
+	Progress
+	Active *model.Issue
 }
 
 // LaneProgress reports the given lane's progress. A lane this evidence never
@@ -114,6 +117,20 @@ type LaneProgress struct {
 // the same total-map-read convention Standings.Of uses.
 func (e Evidence) LaneProgress(lane model.LaneID) LaneProgress {
 	return progressOf(e.members[lane])
+}
+
+// ScopeProgress reports the progress of every lane inScope admits, counted as
+// one set of tickets — how far along a scope several lanes make up, such as
+// a whole epic, has come. It names no Active ticket: a scope can hold one in
+// progress in each of its lanes, and choosing one would be arbitrary.
+func (e Evidence) ScopeProgress(inScope func(model.LaneID) bool) Progress {
+	var members []model.Issue
+	for lane, laneMembers := range e.members {
+		if inScope(lane) {
+			members = append(members, laneMembers...)
+		}
+	}
+	return progressOf(members).Progress
 }
 
 // LaneProgressWith reports the progress of the lane written is in, as this

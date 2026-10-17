@@ -56,7 +56,7 @@ There is no standing for a claim whose evidence has aged out. The lane derives `
 - **Refuses a partial read**: an event whose issue is not among the supplied issues is an error — "claim derivation needs every issue the events touch, closed ones included", because a `done` on a now-closed ticket can be the sole establishing act (`evidence.go`).
 - Sorts each lane's events by `(created_at, id)` — total and stable, so derivation is independent of input order (`evidence.go`).
 
-`LaneProgress(lane)` counts a lane's members: `Total` = all members, `Done` = members whose state is closed, `Active` = the in-progress member (last such member wins if several). An unseen lane returns the zero value (`evidence.go`).
+`LaneProgress(lane)` counts a lane's members: `Total` = members neither archived nor deleted, `Done` = those whose state is closed, `Active` = the in-progress member (last such member wins if several). An unseen lane returns the zero value (`evidence.go`). `ScopeProgress(inScope)` is the same `Done`/`Total` count over every lane a predicate admits — the figure `lit next`'s exhaustion message prints for the stopped scope (`evidence.go`).
 
 **Establishing acts.** Exactly two of the nine lifecycle verbs establish a claim: `start` (taking work) and `done` (the neutral success close — a checkout that just completed a ticket mid-lane still holds the lane). `close` (with any outcome), `reopen`, `phase`, and the four retention verbs never establish; neither does a plain field update (empty action) or an unrecognized verb (`internal/claims/establish.go`). The classification is a map covering every verb so an action added to the vocabulary fails a coverage test rather than silently defaulting (`internal/claims/establish_internal_test.go`).
 

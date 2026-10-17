@@ -153,3 +153,43 @@ func TestLaneProgressOfUnseenLaneIsZero(t *testing.T) {
 		t.Fatalf("LaneProgress(unseen) = %+v, want zero value", progress)
 	}
 }
+
+// A scope's progress counts every lane the scope admits as one set of tickets
+// and nothing outside it: here the two lanes of epic E, and not epic F, whose
+// closed ticket would otherwise read as E's. A frozen member of an admitted
+// lane has left the work there as it has in a lane's own count.
+func TestScopeProgressCountsEveryAdmittedLaneAndNothingElse(t *testing.T) {
+	archived := leaf(t, "E3", "b", model.StateClosed)
+	archived.SetRetention(model.Archived{})
+	issues, parents := epicOf(t,
+		leaf(t, "E1", "a", model.StateClosed),
+		leaf(t, "E2", "a", model.StateOpen),
+		archived,
+		leaf(t, "E4", "b", model.StateClosed),
+		leaf(t, "E5", "b", model.StateInProgress),
+	)
+	other := leaf(t, "F1", "", model.StateClosed)
+	epicF := container(t, "F", other)
+	issues = append(issues, epicF, other)
+	parents[other.ID] = &epicF
+	evidence, err := claims.NewEvidence(issues, parents, nil)
+	if err != nil {
+		t.Fatalf("NewEvidence() error = %v", err)
+	}
+
+	for _, tc := range []struct {
+		name    string
+		inScope func(model.LaneID) bool
+		want    claims.Progress
+	}{
+		{"both lanes of E", func(lane model.LaneID) bool { return lane.Epic() == epicID }, claims.Progress{Done: 2, Total: 4}},
+		{"one lane of E", func(lane model.LaneID) bool { return lane == laneIn(epicID, "b") }, claims.Progress{Done: 1, Total: 2}},
+		{"no lane", func(model.LaneID) bool { return false }, claims.Progress{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := evidence.ScopeProgress(tc.inScope); got != tc.want {
+				t.Fatalf("ScopeProgress = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
