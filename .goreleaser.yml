@@ -154,9 +154,7 @@ archives:
   - id: lit
     # name_template MUST match tools/mkmanifest's platformFromFilename parser:
     # `lit_<version>_<goos>_<goarch>.<ext>` (underscore-separated). If this
-    # template changes, that parser changes in the same PR. scripts/install.sh
-    # builds the same names; TestInstallRequestsExactlyTheArchivesGoreleaserProduces
-    # holds it to this block and the builds block's targets.
+    # template changes, that parser changes in the same PR.
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     formats: [tar.gz]
     format_overrides:

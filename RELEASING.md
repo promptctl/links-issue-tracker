@@ -258,8 +258,9 @@ bash scripts/install.sh --from-release v0.1.0
 bash scripts/install.sh --latest-release
 ```
 
-Release-mode downloads the per-platform archive, fetches `checksums.txt`,
-verifies SHA256, and extracts. Every mode stages the binary in a temp dir
+Release-mode reads the release's `release-manifest.json`, downloads the
+archive it lists for the current platform, verifies the SHA256 it lists, and
+extracts. Every mode stages the binary in a temp dir
 beside the target, runs its `lit version`, and only then atomically renames
 it into place, so a binary that cannot run never replaces the installed one.
 Same target-directory resolution and stale-binary detector across all modes.

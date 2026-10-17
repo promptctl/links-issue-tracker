@@ -37,15 +37,26 @@ USAGE_LINE="usage: install.sh [--from-release <tag>|--latest-release]"
 # this script request different URLs.
 REPO_DOWNLOAD_BASE="https://github.com/promptctl/links-issue-tracker/releases/download"
 REPO_LATEST_API="https://api.github.com/repos/promptctl/links-issue-tracker/releases/latest"
+# Where a release-mode refusal points: release mode usually runs piped from
+# curl, with no checkout whose scripts/install.sh a bare path could name.
+SOURCE_BUILD_HINT="build from source instead: clone https://github.com/promptctl/links-issue-tracker and run bash <checkout>/scripts/install.sh"
+
+# This machine's platform as Go names it — what runtime.GOOS and runtime.GOARCH
+# report to a lit binary, and so what release.CurrentPlatform selects from a
+# release manifest. Windows shells (Git Bash/MSYS, Cygwin) report their own
+# kernel names; the Go platform is windows.
+goos="$(uname -s | tr '[:upper:]' '[:lower:]')"
+case "$goos" in mingw*|msys*|cygwin*) goos="windows" ;; esac
+goarch="$(uname -m)"
+case "$goarch" in x86_64) goarch="amd64" ;; aarch64) goarch="arm64" ;; i?86) goarch="386" ;; armv*) goarch="arm" ;; esac
 
 # [LAW:one-source-of-truth] One variable names the on-disk binary across every
 # mode: from-release extraction validation, the version check on the staged
 # binary, the atomic rename, and the stale-binary scan that walks PATH. On windows the
 # executable is `lit.exe` (goreleaser appends .exe for windows archives; Go
-# does the same when compiling for GOOS=windows). Detect once at script start
-# so downstream code does not branch on OS.
-case "$(uname -s | tr '[:upper:]' '[:lower:]')" in
-    mingw*|msys*|cygwin*) BIN_NAME="lit.exe" ;;
+# does the same when compiling for GOOS=windows).
+case "$goos" in
+    windows) BIN_NAME="lit.exe" ;;
     *) BIN_NAME="lit" ;;
 esac
 
@@ -302,17 +313,15 @@ case "$mode" in
         # instead of `set -e` surfacing a generic "command not found" on the
         # first curl invocation. Mirrors the sha256sum/shasum probe shape.
         if ! command -v curl >/dev/null 2>&1; then
-            echo "error: release-download mode requires curl (install curl, or use the source build: bash scripts/install.sh)" >&2
+            echo "error: release-download mode requires curl (install curl, or $SOURCE_BUILD_HINT)" >&2
+            exit 1
+        fi
+        # jq reads the release manifest, and --latest-release's API response.
+        if ! command -v jq >/dev/null 2>&1; then
+            echo "error: release-download mode requires jq (install jq, or $SOURCE_BUILD_HINT)" >&2
             exit 1
         fi
         if [ "$mode" = "latest" ]; then
-            # jq is needed ONLY to parse the GitHub API response for the
-            # latest-release tag lookup. --from-release <tag> does not need
-            # jq (the tag is provided directly), so check is scoped here.
-            if ! command -v jq >/dev/null 2>&1; then
-                echo "error: --latest-release requires jq (install jq, or use --from-release <tag>)" >&2
-                exit 1
-            fi
             release_tag="$(curl -fsSL "$REPO_LATEST_API" | jq -r .tag_name)"
             if [ -z "$release_tag" ] || [ "$release_tag" = "null" ]; then
                 echo "error: could not resolve latest release tag from $REPO_LATEST_API" >&2
@@ -326,10 +335,9 @@ case "$mode" in
         # how the user reads tags on the Releases page) and `0.1.0` (what
         # they get from `git describe --abbrev=0 --tags` minus the prefix)
         # and produces the canonical v-prefixed form the rest of the script
-        # speaks. Skipping this produces 404 download URLs when a user
+        # speaks. Skipping this produces a 404 manifest URL when a user
         # passes `--from-release 0.1.0`: the URL path segment is the *tag*,
-        # v-prefixed; the archive filename uses the *version*, v-stripped —
-        # see archive_version below. [LAW:types-are-the-program] the
+        # v-prefixed. [LAW:types-are-the-program] the
         # boundary normalizer makes the v-stripped input shape map to the
         # same canonical value as the v-prefixed input shape.
         release_tag="v${release_tag#v}"
@@ -338,10 +346,10 @@ case "$mode" in
         # release-validate.yml derives the release version from the CHANGELOG's
         # newest `## [X.Y.Z]` heading (numeric semver only), so the only tags
         # ever published are exactly `vX.Y.Z`. Reject anything else BEFORE the
-        # value flows into
-        # filepath / curl / mv — a `--from-release ../x` or an API response
-        # tainted with path separators would otherwise interpolate into
-        # `"$tmp/$archive"` and write outside the temp directory.
+        # value flows into the
+        # manifest URL — a `--from-release ../x` or an API response tainted
+        # with path separators would otherwise request a path outside the
+        # release's download directory.
         # [LAW:types-are-the-program] reject illegal tag shapes at the
         # boundary so downstream code can trust that release_tag is a
         # safe, expected canonical value.
@@ -355,28 +363,29 @@ case "$mode" in
             exit 1
         fi
 
-        # Resolve current platform → goreleaser archive name:
-        # lit_<version>_<goos>_<goarch>.<ext>, where <version> is goreleaser's
-        # .Version — the tag with the leading `v` STRIPPED.
-        # [LAW:one-source-of-truth] exception: .goreleaser.yml's builds and
-        # archives blocks name the archives; this copies them because this mode
-        # runs piped from curl with no checkout to read them from.
-        # TestInstallRequestsExactlyTheArchivesGoreleaserProduces holds the copy
-        # to what that config produces.
-        archive_version="${release_tag#v}"
-
-        os="$(uname -s | tr '[:upper:]' '[:lower:]')"
-        arch="$(uname -m)"
-        case "$os" in mingw*|msys*|cygwin*) os="windows" ;; esac
-        case "$arch" in x86_64) arch="amd64" ;; aarch64) arch="arm64" ;; esac
-        # [LAW:single-enforcer] the platforms a release publishes an archive
-        # for; every other platform is refused here, before any download.
-        case "$os/$arch" in
-            linux/amd64|linux/arm64|darwin/amd64|darwin/arm64) ext="tar.gz" ;;
-            windows/amd64) ext="zip" ;;
+        # [LAW:one-source-of-truth] The release's manifest lists the archives
+        # it published, one per platform, with each archive's URL and SHA256 —
+        # the same document lit upgrade installs from (release.HTTPResolver,
+        # release.SelectArtifact), so this script names no archive itself.
+        manifest_url="${REPO_DOWNLOAD_BASE}/${release_tag}/release-manifest.json"
+        echo "Downloading $manifest_url ..."
+        curl -fsSL -o "$tmp/release-manifest.json" "$manifest_url"
+        platform="$goos/$goarch"
+        artifact='first(.artifacts[] | select(.platform == $platform))'
+        url="$(jq -r --arg platform "$platform" "$artifact | .url" "$tmp/release-manifest.json")"
+        if [ -z "$url" ]; then
+            echo "error: release $release_tag has no artifact for platform $platform (available: $(jq -r '[.artifacts[].platform] | join(" ")' "$tmp/release-manifest.json"))" >&2
+            echo "       $SOURCE_BUILD_HINT" >&2
+            exit 1
+        fi
+        expected="$(jq -r --arg platform "$platform" "$artifact | .sha256" "$tmp/release-manifest.json")"
+        # The archive format is the artifact URL's suffix, as release.Installer
+        # derives it (archiveFormatForURL).
+        case "$url" in
+            *.tar.gz) ext="tar.gz" ;;
+            *.zip) ext="zip" ;;
             *)
-                echo "error: no release archive is published for $os/$arch" >&2
-                echo "       use the source build: bash scripts/install.sh   (omit --from-release / --latest-release)" >&2
+                echo "error: release $release_tag lists $url for $platform, which is neither a .tar.gz nor a .zip archive" >&2
                 exit 1
                 ;;
         esac
@@ -397,22 +406,12 @@ case "$mode" in
                 fi
                 ;;
         esac
-        archive="lit_${archive_version}_${os}_${arch}.${ext}"
-        url="${REPO_DOWNLOAD_BASE}/${release_tag}/${archive}"
-        checksums_url="${REPO_DOWNLOAD_BASE}/${release_tag}/checksums.txt"
-
+        # The download's file name here is fixed, not the URL's: a manifest
+        # URL is never trusted as a path inside the temp directory.
+        archive="release-archive.$ext"
         echo "Downloading $url ..."
         curl -fsSL -o "$tmp/$archive" "$url"
-        echo "Downloading checksums ..."
-        curl -fsSL -o "$tmp/checksums.txt" "$checksums_url"
 
-        # awk match against the FULL second field — avoids grep's regex
-        # interpretation (the dots in .tar.gz would otherwise be "any char").
-        expected="$(awk -v want="$archive" '$2 == want { print $1 }' "$tmp/checksums.txt")"
-        if [ -z "$expected" ]; then
-            echo "error: $archive not found in checksums.txt" >&2
-            exit 1
-        fi
         # sha256sum (GNU coreutils / Linux) or shasum -a 256 (Perl / macOS).
         # Fail loudly with a specific error if neither is present, rather than
         # letting `set -e` surface the second tool's "command not found" —
@@ -423,11 +422,11 @@ case "$mode" in
             actual="$(shasum -a 256 "$tmp/$archive" | awk '{print $1}')"
         else
             echo "error: install.sh release-download mode requires either 'sha256sum' (GNU coreutils) or 'shasum' (Perl, default on macOS)" >&2
-            echo "       install one of those tools, or use the source build: bash scripts/install.sh   (omit --from-release)" >&2
+            echo "       install one of those tools, or $SOURCE_BUILD_HINT" >&2
             exit 1
         fi
         if [ "$actual" != "$expected" ]; then
-            echo "error: SHA256 mismatch for $archive" >&2
+            echo "error: SHA256 mismatch for $url" >&2
             echo "  expected: $expected" >&2
             echo "  actual:   $actual" >&2
             exit 1
