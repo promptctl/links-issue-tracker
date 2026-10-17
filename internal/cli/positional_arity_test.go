@@ -7,6 +7,7 @@ import (
 	"io"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -72,6 +73,9 @@ func leafPaths(t *testing.T) []invocablePath {
 	var paths []invocablePath
 	var walk func(prefix []string, subs []SubcommandSpec)
 	walk = func(prefix []string, subs []SubcommandSpec) {
+		// A retired subcommand answers its pointer before any arity check, as a
+		// retired command does; a hidden one still dispatches, so it is walked.
+		subs = slices.DeleteFunc(slices.Clone(subs), func(s SubcommandSpec) bool { return s.Retired })
 		if len(subs) == 0 {
 			paths = append(paths, invocablePath{path: prefix})
 			return

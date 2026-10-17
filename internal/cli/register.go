@@ -62,9 +62,15 @@ type CommandSpec struct {
 // SubcommandSpec is one legal first-argument name plus its own nested tree
 // (e.g. `sync remote` carries `ls`). Names here are derived from the owning
 // commandFamily table, never restated. [LAW:one-source-of-truth]
+// Hidden and Retired mean what they mean on CommandSpec, and the tree carries
+// every row with both stated, as the registry carries every command: each
+// consumer filters for its own surface, so completion drops a hidden row while
+// the template dispatch gate still sees a retired one.
 type SubcommandSpec struct {
 	Name        string
 	Subcommands []SubcommandSpec
+	Hidden      bool
+	Retired     bool
 }
 
 // CommandRunner is the fully-wrapped passthrough handler. Each spec's Run
@@ -107,10 +113,18 @@ type subcommandRow[P any] struct {
 	payload P
 	// hidden keeps a real, dispatchable subcommand out of the advertised
 	// surface (usage, help, completion) without removing it from resolve. The
-	// background mirror entrypoint is the only such row. Visibility is a typed
+	// background sync entrypoints are the only such rows. Visibility is a typed
 	// property here, not a name omitted from a usage string by convention.
 	// [LAW:types-are-the-program]
 	hidden bool
+	// retired, when non-nil, withdraws the subcommand: resolve answers every
+	// invocation of it with this pointer, and the projection marks it Retired.
+	// The whole answer is carried, not just its guidance half: the invoked path
+	// the message names is the family's name joined to the row's, which
+	// resolve's argv cannot supply — args[0] is the bare subcommand token, so an
+	// error built from it would tell a caller who typed `lit bulk import` that
+	// "import" was retired.
+	retired *RetiredCommandError
 	// nestedUsage, when non-empty, marks this subcommand as itself a command
 	// group and carries that group's usage — always set by reference to the
 	// nested family's own usage field, never restated. [LAW:one-source-of-truth]
@@ -160,6 +174,12 @@ func (f commandFamily[P]) resolve(ctx context.Context, args []string) (P, error)
 	for _, s := range f.subcommands {
 		if s.name == args[0] {
 			telemetry.Subcommand(ctx, s.name)
+			// A retired row answers here, ahead of the parse and the workspace
+			// open every pipeline runs after resolve, so its pointer reaches the
+			// caller even outside a git repo. [LAW:no-silent-failure]
+			if s.retired != nil {
+				return zero, *s.retired
+			}
 			if s.nestedUsage != "" && len(args) > 1 && isHelpFlag(args[1]) {
 				return zero, HelpRequestedError{Usage: s.nestedUsage}
 			}
@@ -183,17 +203,15 @@ func isHelpFlag(arg string) bool {
 	return fs.Parse([]string{arg}) == nil && *fs.help
 }
 
-// visibleSubcommands projects the family's advertised first-argument names for
-// completion. Hidden rows are dropped, so the projection cannot leak the
-// background mirror, and the names come from the one table that resolve also
-// reads — completion and dispatch can never disagree. [LAW:one-source-of-truth]
-func (f commandFamily[P]) visibleSubcommands() []SubcommandSpec {
-	subs := make([]SubcommandSpec, 0, len(f.subcommands))
-	for _, s := range f.subcommands {
-		if s.hidden {
-			continue
-		}
-		subs = append(subs, SubcommandSpec{Name: s.name})
+// subcommandSpecs projects every row of the family, its visibility and
+// retirement stated, from the one table resolve also reads — so completion, the
+// template dispatch gate and dispatch can never disagree.
+// [LAW:one-source-of-truth] A retired row is Hidden by construction: a
+// withdrawn subcommand cannot still be advertised.
+func (f commandFamily[P]) subcommandSpecs() []SubcommandSpec {
+	subs := make([]SubcommandSpec, len(f.subcommands))
+	for i, s := range f.subcommands {
+		subs[i] = SubcommandSpec{Name: s.name, Hidden: s.hidden || s.retired != nil, Retired: s.retired != nil}
 	}
 	return subs
 }
@@ -221,33 +239,17 @@ func nestUnder(subs []SubcommandSpec, name string, children []SubcommandSpec) []
 type appSubcommand struct {
 	access  app.AccessMode
 	declare appLeafFn
-	// retired, when non-nil, is the answer a withdrawn subcommand gives every
-	// invocation. A retirement pointer must be reachable from anywhere — like
-	// the top-level retirements — so a row carrying one dispatches to the
-	// pointer and never to a leaf, ahead of any flag parse or workspace open.
-	// [LAW:dataflow-not-control-flow] retirement is data on the row, not a
-	// handler that happens to ignore its app. The whole answer is carried, not
-	// just its guidance half: the invoked path the message names is the family's
-	// name joined to the row's, which resolve's argv cannot supply — args[0] is
-	// the bare subcommand token, so an error built from it would tell a caller
-	// who typed `lit bulk import` that "import" was retired.
-	retired *RetiredCommandError
 }
 
 // retiredSubcommand builds the whole row for a subcommand retired from a
 // family's surface, mirroring retiredSpec at the top level: the path the error
-// names is this call's own two arguments joined, and the row is hidden so the
-// family's advertised surface — usage, help, completion — no longer lists it.
-// [LAW:single-enforcer] one authoring path for a subcommand retirement, so a
-// row cannot state the pointer without also leaving the surface.
-func retiredSubcommand(family, name, replacement string) subcommandRow[appSubcommand] {
-	return subcommandRow[appSubcommand]{
-		name:   name,
-		hidden: true,
-		payload: appSubcommand{retired: &RetiredCommandError{
-			Command:     family + " " + name,
-			Replacement: replacement,
-		}},
+// names is this call's own two arguments joined. The row carries no payload,
+// since resolve answers it before a payload is read. [LAW:single-enforcer] one
+// authoring path for a subcommand retirement, in a family of any row type.
+func retiredSubcommand[P any](family, name, replacement string) subcommandRow[P] {
+	return subcommandRow[P]{
+		name:    name,
+		retired: &RetiredCommandError{Command: family + " " + name, Replacement: replacement},
 	}
 }
 
@@ -500,12 +502,6 @@ func (r *commandRegistrar) familyCmd(f commandFamily[appSubcommand]) CommandRunn
 		if err != nil {
 			return err
 		}
-		// A retired subcommand answers before any parse or workspace open, so its
-		// pointer reaches the caller even outside a git repo — the break is
-		// reachable, never masked by a workspace error. [LAW:no-silent-failure]
-		if sub.retired != nil {
-			return *sub.retired
-		}
 		l := sub.declare()
 		positional, err := parseLeaf(r.ctx, l, args[1:], r.stdout)
 		if err != nil {
@@ -647,9 +643,9 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 	// completion projection carries the full `sync remote ls`, `sync reconcile
 	// <...>`, and `bulk label <...>` trees — every name still sourced from the
 	// owning family table. [LAW:one-source-of-truth]
-	syncSubcommands := nestUnder(syncFamily.visibleSubcommands(), "remote", syncRemoteFamily.visibleSubcommands())
-	syncSubcommands = nestUnder(syncSubcommands, "reconcile", reconcileFamily.visibleSubcommands())
-	bulkSubcommands := nestUnder(bulkFamily.visibleSubcommands(), "label", bulkLabelFamily.visibleSubcommands())
+	syncSubcommands := nestUnder(syncFamily.subcommandSpecs(), "remote", syncRemoteFamily.subcommandSpecs())
+	syncSubcommands = nestUnder(syncSubcommands, "reconcile", reconcileFamily.subcommandSpecs())
+	bulkSubcommands := nestUnder(bulkFamily.subcommandSpecs(), "label", bulkLabelFamily.subcommandSpecs())
 
 	return []CommandSpec{
 		{Name: "init", Summary: "Initialize links", GroupID: "bootstrap",
@@ -657,13 +653,13 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 		{Name: "quickstart", Summary: "Agent quickstart workflow", GroupID: "guidance",
 			Run: r.wsCmd(quickstartLeaf)},
 		{Name: "workflows", Summary: "See the work lifecycle and the guidance active at each point (`workflows show <id>` resolved, `edit <id-or-point>` to customize, `dry-run` to explain a hypothetical)", GroupID: "guidance",
-			Run: r.wsCmdPipeline(withWDAcquire(func(args []string) (wsLeaf, []string, error) { return workflowsDispatch(r.ctx, args) })), Subcommands: workflowsFamily.visibleSubcommands()},
+			Run: r.wsCmdPipeline(withWDAcquire(func(args []string) (wsLeaf, []string, error) { return workflowsDispatch(r.ctx, args) })), Subcommands: workflowsFamily.subcommandSpecs()},
 		{Name: "completion", Summary: "Generate shell completion script", GroupID: "guidance",
-			Run: completionRun, Subcommands: completionFamily.visibleSubcommands()},
+			Run: completionRun, Subcommands: completionFamily.subcommandSpecs()},
 		{Name: "version", Summary: "Print binary version, build metadata, and supported schema range", GroupID: "guidance",
 			Run: versionRun},
 		{Name: "hooks", Summary: "Install git hook automation", GroupID: "maintenance",
-			Run: r.wsFamilyCmd(hooksFamily), Subcommands: hooksFamily.visibleSubcommands()},
+			Run: r.wsFamilyCmd(hooksFamily), Subcommands: hooksFamily.subcommandSpecs()},
 		{Name: "sync", Summary: "Mirror Dolt data through git remotes", GroupID: "data",
 			Run: r.wsFamilyCmd(syncFamily), Subcommands: syncSubcommands},
 		{Name: "new", Summary: "Create an issue", GroupID: "operations",
@@ -724,17 +720,17 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 		{Name: "purge", Summary: "Permanently remove an issue and everything it owns", GroupID: "retention",
 			Run: r.appCmd(app.AccessWrite, purgeLeaf)},
 		{Name: "comment", Summary: "Add issue comments", GroupID: "operations",
-			Run: r.familyCmd(commentFamily), Subcommands: commentFamily.visibleSubcommands()},
+			Run: r.familyCmd(commentFamily), Subcommands: commentFamily.subcommandSpecs()},
 		{Name: "label", Summary: "Manage labels", GroupID: "operations",
-			Run: r.familyCmd(labelFamily), Subcommands: labelFamily.visibleSubcommands()},
+			Run: r.familyCmd(labelFamily), Subcommands: labelFamily.subcommandSpecs()},
 		{Name: "parent", Summary: "Manage parent relationships", GroupID: "structure",
-			Run: r.familyCmd(parentFamily), Subcommands: parentFamily.visibleSubcommands()},
+			Run: r.familyCmd(parentFamily), Subcommands: parentFamily.subcommandSpecs()},
 		// children is `ls --parent <id>` under its own name: the same leaf, so it
 		// takes every ls flag and cannot drift from ls. [LAW:one-type-per-behavior]
 		{Name: "children", Summary: "List an issue's direct children by rank (`lit ls --parent <id>`; takes every ls flag)", GroupID: "structure",
 			Run: func(args []string) error { return runList(ctx, stdout, childrenSurface, args) }},
 		{Name: "dep", Summary: "Manage dependency edges", GroupID: "structure",
-			Run: r.familyCmd(depFamily), Subcommands: depFamily.visibleSubcommands()},
+			Run: r.familyCmd(depFamily), Subcommands: depFamily.subcommandSpecs()},
 		// export/backup/snapshots are three snapshot-shaped names over two distinct
 		// mechanisms; the summaries below name the mechanism so a reader can tell the
 		// JSON data-export family (export → backup) from the Dolt filesystem/database
@@ -753,15 +749,15 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 		retiredSpec("ls-at", "maintenance", "use `lit ls --at <store-dir>`", lsAtRetirementGuidance),
 		retiredSpec("overview", "maintenance", "use `lit stores --counts`", overviewRetirementGuidance),
 		{Name: "prefix", Summary: "Manage the cosmetic issue ID prefix", GroupID: "maintenance",
-			Run: r.wsFamilyCmd(prefixFamily), Subcommands: prefixFamily.visibleSubcommands()},
+			Run: r.wsFamilyCmd(prefixFamily), Subcommands: prefixFamily.subcommandSpecs()},
 		{Name: "doctor", Summary: "Health check", GroupID: "maintenance",
 			Run: r.appCmdDynamic(resolveDoctorAccessMode, doctorLeaf)},
 		{Name: "backup", Summary: "Rotating JSON data-export backups — create/list/restore (wraps `export`; the data-recovery family, distinct from `snapshots`)", GroupID: "data",
-			Run: r.familyCmd(backupFamily), Subcommands: backupFamily.visibleSubcommands()},
+			Run: r.familyCmd(backupFamily), Subcommands: backupFamily.subcommandSpecs()},
 		{Name: "snapshots", Summary: "Dolt filesystem-level database snapshots — new/list/restore (the whole-database mechanism, distinct from JSON `backup`)", GroupID: "data",
-			Run: r.wsFamilyCmd(snapshotsFamily), Subcommands: snapshotsFamily.visibleSubcommands()},
+			Run: r.wsFamilyCmd(snapshotsFamily), Subcommands: snapshotsFamily.subcommandSpecs()},
 		{Name: "lifeboat", Summary: "Below-the-gate data recovery: dump a workspace's raw contents at any schema version, or recover it to a clean rebuild", GroupID: "maintenance",
-			Run: r.wsFamilyCmd(lifeboatFamily), Subcommands: lifeboatFamily.visibleSubcommands()},
+			Run: r.wsFamilyCmd(lifeboatFamily), Subcommands: lifeboatFamily.subcommandSpecs()},
 		{Name: "downgrade", Summary: "Reverse schema migrations and atomically install a prior lit binary", GroupID: "maintenance",
 			Run: r.appCmd(app.AccessWrite, downgradeLeaf)},
 		{Name: "upgrade", Summary: "Atomically install a newer lit binary to operate a workspace whose schema is ahead of this one", GroupID: "maintenance",

@@ -5,8 +5,11 @@ import (
 	"context"
 	"errors"
 	"os"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 )
 
 // Invoking a retired command yields a documented pointer, not silent success and
@@ -119,11 +122,40 @@ func TestBulkImportRetiredPointsToBackupRestore(t *testing.T) {
 			t.Errorf("bulk import error = %q, want it to mention %q", err.Error(), want)
 		}
 	}
-	// It is dropped from the advertised bulk subcommand surface (completion/usage)
-	// while staying dispatchable. [LAW:one-source-of-truth]
-	for _, sub := range bulkFamily.visibleSubcommands() {
-		if sub.Name == "import" {
-			t.Errorf("bulk import must not appear in the advertised subcommand surface")
+	// The projection states it Retired and Hidden, so it is dropped from the
+	// advertised bulk subcommand surface (completion/usage) while staying
+	// dispatchable and visible to the template dispatch gate.
+	// [LAW:one-source-of-truth]
+	subs := bulkFamily.subcommandSpecs()
+	i := slices.IndexFunc(subs, func(s SubcommandSpec) bool { return s.Name == "import" })
+	if i < 0 || !subs[i].Retired || !subs[i].Hidden {
+		t.Errorf("bulk family projection %+v must carry import as Retired and Hidden", subs)
+	}
+	if slices.ContainsFunc(visibleSubcommands(subs), func(s SubcommandSpec) bool { return s.Name == "import" }) {
+		t.Errorf("bulk import must not appear in the advertised subcommand surface")
+	}
+}
+
+// A retired row answers its pointer in a family of any row type, help request
+// included, and the invocation event names the retired path: the answer is
+// resolve's, not one pipeline's. A workspace family is the case `bulk import`
+// cannot reach, and its zero payload has no leaf to declare, so a retirement
+// that resolve stopped answering would panic here.
+func TestRetiredSubcommandAnswersInAnyFamily(t *testing.T) {
+	t.Parallel()
+	family := commandFamily[wsSubcommand]{
+		usage:       "usage: lit fam <old>",
+		subcommands: []subcommandRow[wsSubcommand]{retiredSubcommand[wsSubcommand]("fam", "old", "use `lit fam new`")},
+	}
+	for _, args := range [][]string{{"old"}, {"old", "--help"}} {
+		ctx := telemetry.With(context.Background(), telemetry.Begin(telemetry.Event{Event: "lit fam"}))
+		_, _, err := resolveWsLeaf(ctx, family, args)
+		var retired RetiredCommandError
+		if !errors.As(err, &retired) || retired.Command != "fam old" {
+			t.Errorf("resolveWsLeaf(%q) error = %v (%T), want RetiredCommandError for %q", args, err, err, "fam old")
+		}
+		if got := telemetry.EventName(ctx); got != "lit fam old" {
+			t.Errorf("resolveWsLeaf(%q) event = %q, want %q", args, got, "lit fam old")
 		}
 	}
 }

@@ -29,7 +29,7 @@ data — described as assets, not as documentation of behavior).
 - `internal/cli/cli.go` `StringOptional(name, defaultIfPresent, defaultIfAbsent, usage)` — used only by `quickstart --eject`.
 - `internal/cli/flagset.go` `splitArgs(args []string, positionalCount int, fs *cobraFlagSet)` splits leading positionals from flags; its one non-test call site is `parseLeaf` (`internal/cli/register.go`).
 - `internal/cli/register.go` `commandFamily.resolve`: a missing / unknown / flag-shaped first argument returns `errors.New(family.usage)` — a plain error → exit 1 (`internal/cli/exit.go`), not exit 2. Match is exact (no trimming).
-- `internal/cli/register.go` `visibleSubcommands()` drops `hidden` rows from help/completion.
+- `internal/cli/completion.go` `visibleSubcommands(subs)` drops `Hidden` rows from completion at every depth; `internal/cli/register.go` `subcommandSpecs()` marks a retired row `Hidden`.
 
 ### 0.3 Exit codes (constants `internal/cli/exit.go`, dispatch)
 
