@@ -12,9 +12,9 @@ compiled into the binary. It's only used as a test oracle when developing `lit`.
 ## Requirements
 
 - A git repository (or worktree) to track issues in.
-- For the prebuilt install: nothing else on most systems. The installer needs
-  `curl`, `tar`, and `sha256sum`/`shasum` (standard on Linux and macOS);
-  `--latest-release` also needs `jq` to read the GitHub API.
+- For the prebuilt install: the installer needs `curl`, `tar`, `jq`, and
+  `sha256sum`/`shasum`. `jq` reads the release's manifest, which lists the
+  archive for each platform.
 - For building from source: the **Go toolchain** (see [below](#build-from-source-fallback)).
 
 ## Install a prebuilt binary (recommended)
@@ -26,7 +26,7 @@ curl -fsSL https://raw.githubusercontent.com/promptctl/links-issue-tracker/maste
 ```
 
 This downloads the archive matching your OS and architecture from the latest
-GitHub Release, verifies its SHA-256 against the published `checksums.txt`,
+GitHub Release, verifies its SHA-256 against the release's manifest,
 installs `lit` onto your `PATH`, and warns about any stale `lit` binaries that
 would shadow it. Confirm it landed:
 

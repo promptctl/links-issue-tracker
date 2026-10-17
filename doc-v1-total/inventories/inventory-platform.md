@@ -675,19 +675,22 @@ Three modes, one target-resolution rule (`scripts/install.sh`):
   `scripts/version-ldflags.sh`; builds with
   `GOFLAGS=…-buildvcs=false go build -ldflags "-X <pkg>.Version=… -X <pkg>.Commit=… -X <pkg>.Date=… -X <pkg>.Origin=…" -o "$tmp/$BIN_NAME" ./cmd/lit`.
 - **Release/latest mode**:
-  - Requires `curl`; `--latest-release` additionally requires `jq` and reads
-    `.tag_name` from the GitHub API.
+  - Requires `curl` and `jq`; `--latest-release` reads `.tag_name` from the
+    GitHub API.
   - Tag normalization: strip then re-add a leading `v`, then require
     `^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$` else
     `error: release tag '<tag>' is not a canonical semver release tag (expected vX.Y.Z)`.
-  - Archive name `lit_${tag#v}_${os}_${arch}.${ext}`; arch map
-    `x86_64|amd64→amd64`, `arm64|aarch64→arm64`, else
-    `error: unsupported architecture`; OS map `linux|darwin→tar.gz`,
-    `mingw*|msys*|cygwin*→windows/zip`, else `error: unsupported OS`.
+  - Platform, read once at script start: `uname -s` lowercased,
+    `mingw*|msys*|cygwin*→windows`; `uname -m` with `x86_64→amd64`,
+    `aarch64→arm64`, `i?86→386`, `armv*→arm`; `BIN_NAME` is `lit.exe` on windows.
+  - Downloads `<base>/<tag>/release-manifest.json` into the staging dir and selects
+    with jq the first artifact whose `platform` is `<goos>/<goarch>`; none is
+    `error: release <tag> has no artifact for platform <goos>/<goarch> (available: <platforms>)`.
+  - Archive format from the artifact URL's suffix: `.tar.gz` or `.zip`, else
+    `error: release <tag> lists <url> for <platform>, which is neither a .tar.gz nor a .zip archive`.
   - Extractor probes: `tar` for `.tar.gz`, `unzip` for `.zip`.
-  - Downloads `<base>/<tag>/<archive>` and `<base>/<tag>/checksums.txt` into the staging dir.
-  - Expected checksum is extracted with `awk '$2 == want'` (exact field match, not grep)
-; digest computed by `sha256sum` or `shasum -a 256`, else an explicit error
+  - Downloads the artifact URL to `release-archive.<ext>` in the staging dir.
+  - Expected checksum is the artifact's `sha256`; digest computed by `sha256sum` or `shasum -a 256`, else an explicit error
     naming both tools; a mismatch prints expected/actual and exits 1.
   - **Structural archive validation before extraction**: tar entry names must be
     flat (`.`/`..`/`*/*`/`/*` rejected) and `tar -tvzf` column 1 must be `-` (regular) for every

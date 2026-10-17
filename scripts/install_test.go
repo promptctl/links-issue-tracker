@@ -4,8 +4,14 @@
 package scripts
 
 import (
+	"archive/tar"
+	"archive/zip"
 	"bytes"
+	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -560,34 +566,90 @@ func mustAbs(t *testing.T, name string) string {
 	return abs
 }
 
+// releaseServer is install.sh's network for one run: a stub curl on PATH that
+// answers a request for any URL ending in /<name> with files/<name> when that
+// file exists and fails it as a 404 otherwise, recording every requested URL.
+// jq is the host's, linked in, because install.sh's release mode reads the
+// manifest with it; nothing else on PATH can hold a lit.
+type releaseServer struct {
+	root, stubBin, files, requests string
+}
+
+func newReleaseServer(t *testing.T) *releaseServer {
+	t.Helper()
+	root := t.TempDir()
+	s := &releaseServer{root: root, stubBin: filepath.Join(root, "stub-bin"), files: filepath.Join(root, "files"), requests: filepath.Join(root, "curl-requests")}
+	for _, dir := range []string{s.stubBin, s.files} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile(t, filepath.Join(s.stubBin, "curl"), `#!/bin/sh
+out= url=
+while [ $# -gt 0 ]; do case $1 in -o) out=$2; shift;; *://*) url=$1;; esac; shift; done
+echo "$url" >>'`+s.requests+`'
+file='`+s.files+`'/${url##*/}
+[ -f "$file" ] || exit 22
+if [ -n "$out" ]; then cp "$file" "$out"; else cat "$file"; fi
+`, 0o755)
+	jq, err := exec.LookPath("jq")
+	if err != nil {
+		t.Fatalf("install.sh's release mode needs jq, and this host has none: %v", err)
+	}
+	if err := os.Symlink(jq, filepath.Join(s.stubBin, "jq")); err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+// serve makes name answerable.
+func (s *releaseServer) serve(t *testing.T, name string, body []byte) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(s.files, name), body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// serveManifest makes m the release manifest every tag answers with.
+func (s *releaseServer) serveManifest(t *testing.T, m litrelease.Manifest) {
+	t.Helper()
+	body, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.serve(t, "release-manifest.json", body)
+}
+
+// install runs install.sh with args against the server, installing into
+// root/bin, and returns its combined output and the URLs it requested.
+func (s *releaseServer) install(t *testing.T, env []string, args ...string) (string, []string, error) {
+	t.Helper()
+	install := exec.Command("bash", append([]string{"install.sh"}, args...)...)
+	install.Env = append([]string{"PATH=" + s.stubBin + ":/usr/bin:/bin", "HOME=" + s.root, "GOBIN=" + filepath.Join(s.root, "bin")}, env...)
+	out, err := install.CombinedOutput()
+	var requests []string
+	if body, readErr := os.ReadFile(s.requests); readErr == nil {
+		requests = strings.Fields(string(body))
+	} else if !errors.Is(readErr, os.ErrNotExist) {
+		t.Fatal(readErr)
+	}
+	return string(out), requests, err
+}
+
 // TestInstallFetchesTheReleaseURLsLitUpgradeFetches holds install.sh's release
-// URLs to release.HTTPResolver's defaults by what each one requests: the same
-// latest-release feed, and downloads from the same <base>/<tag> directory. Stub
-// transports record each request and fail it, so nothing reaches the network.
+// URLs to release.HTTPResolver's defaults by what each one requests first: the
+// same latest-release feed, and the same release manifest. Stub transports
+// record each request and fail it, so nothing reaches the network.
 func TestInstallFetchesTheReleaseURLsLitUpgradeFetches(t *testing.T) {
 	t.Parallel()
 	const tag = "v1.2.3"
-	root := t.TempDir()
-	stubBin := filepath.Join(root, "stub-bin")
-	if err := os.MkdirAll(stubBin, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	requests := filepath.Join(root, "curl-requests")
-	writeFile(t, filepath.Join(stubBin, "curl"), "#!/bin/sh\nfor arg; do case $arg in *://*) echo \"$arg\" >>'"+requests+"';; esac; done\nexit 22\n", 0o755)
-	writeFile(t, filepath.Join(stubBin, "jq"), "#!/bin/sh\ncat >/dev/null\n", 0o755)
 	installRequest := func(args ...string) string {
 		t.Helper()
-		if err := os.WriteFile(requests, nil, 0o644); err != nil {
-			t.Fatal(err)
+		out, requests, _ := newReleaseServer(t).install(t, nil, args...)
+		if len(requests) != 1 {
+			t.Fatalf("install.sh %v: want exactly one curl request before the stub's failure stops it, got %q\n%s", args, requests, out)
 		}
-		install := exec.Command("bash", append([]string{"install.sh"}, args...)...)
-		install.Env = []string{"PATH=" + stubBin + ":/usr/bin:/bin", "HOME=" + root, "GOBIN=" + filepath.Join(root, "bin")}
-		out, _ := install.CombinedOutput()
-		lines := strings.Fields(readFile(t, requests))
-		if len(lines) != 1 {
-			t.Fatalf("install.sh %v: want exactly one curl request before the stub's failure stops it, got %q\n%s", args, lines, out)
-		}
-		return lines[0]
+		return requests[0]
 	}
 
 	var litRequests []string
@@ -612,14 +674,185 @@ func TestInstallFetchesTheReleaseURLsLitUpgradeFetches(t *testing.T) {
 	if install, lit := installRequest("--latest-release"), litRequests[0]; install != lit {
 		t.Errorf("latest-release feed: install.sh requests %q, lit upgrade requests %q", install, lit)
 	}
-	if install, lit := directory(installRequest("--from-release", tag)), directory(litRequests[1]); install != lit {
-		t.Errorf("release %s download directory: install.sh fetches from %q, lit upgrade from %q", tag, install, lit)
+	if install, lit := installRequest("--from-release", tag), litRequests[1]; install != lit {
+		t.Errorf("release %s manifest: install.sh requests %q, lit upgrade requests %q", tag, install, lit)
 	}
 }
 
-// directory is url up to its last "/", which a release download URL puts
-// before the file name.
-func directory(url string) string { return url[:strings.LastIndex(url, "/")] }
+// TestInstallDownloadsTheArtifactTheReleaseManifestListsForItsPlatform holds
+// install.sh to the release manifest lit upgrade installs from: on every
+// platform, install.sh downloads the URL the manifest lists for that platform,
+// and refuses, having requested nothing but the manifest, when the manifest
+// lists none or lists an archive that is neither a .tar.gz nor a .zip. The
+// manifest is unlike any release goreleaser builds, so a table of platforms or
+// archive names inside install.sh cannot pass. Stub uname reports the platform.
+func TestInstallDownloadsTheArtifactTheReleaseManifestListsForItsPlatform(t *testing.T) {
+	t.Parallel()
+	const tag = "v1.2.3"
+	manifestURL := litrelease.DefaultBaseURL + "/" + tag + "/release-manifest.json"
+	const base = "https://downloads.invalid/any/path/"
+	manifest := litrelease.Manifest{Artifacts: []litrelease.Artifact{
+		{Platform: "linux/amd64", URL: base + "for-linux-amd64.tar.gz"},
+		{Platform: "darwin/arm64", URL: base + "for-darwin-arm64.tar.gz"},
+		{Platform: "windows/amd64", URL: base + "for-windows-amd64.zip"},
+		{Platform: "freebsd/amd64", URL: base + "for-freebsd-amd64.tar.gz"},
+		{Platform: "linux/386", URL: base + "for-linux-386.7z"},
+	}}
+	// What uname reports on each platform, as Go names that platform: the
+	// test's own knowledge, independent of install.sh's mapping.
+	kernels := map[string]string{
+		"Linux":                 "linux",
+		"Darwin":                "darwin",
+		"MINGW64_NT-10.0-22631": "windows",
+		"MSYS_NT-10.0-22631":    "windows",
+		"CYGWIN_NT-10.0-22631":  "windows",
+		"FreeBSD":               "freebsd",
+	}
+	machines := map[string]string{
+		"x86_64":  "amd64",
+		"amd64":   "amd64",
+		"aarch64": "arm64",
+		"arm64":   "arm64",
+		"i686":    "386",
+		"armv7l":  "arm",
+	}
+	for kernel, goos := range kernels {
+		for machine, goarch := range machines {
+			platform := goos + "/" + goarch
+			t.Run(kernel+" "+machine, func(t *testing.T) {
+				t.Parallel()
+				server := newReleaseServer(t)
+				server.serveManifest(t, manifest)
+				// The extractor probes run before the archive download; stubs
+				// make them pass on hosts that lack one.
+				for _, tool := range []string{"tar", "unzip"} {
+					writeFile(t, filepath.Join(server.stubBin, tool), "#!/bin/sh\nexit 1\n", 0o755)
+				}
+				writeFile(t, filepath.Join(server.stubBin, "uname"), "#!/bin/sh\ncase $1 in -s) echo '"+kernel+"';; -m) echo '"+machine+"';; esac\n", 0o755)
+				out, requests, _ := server.install(t, nil, "--from-release", tag)
+
+				wantRequests, wantOut := []string{manifestURL}, "has no artifact for platform "+platform+" (available"
+				if i := slices.IndexFunc(manifest.Artifacts, func(a litrelease.Artifact) bool { return a.Platform == platform }); i >= 0 {
+					switch url := manifest.Artifacts[i].URL; {
+					case strings.HasSuffix(url, ".tar.gz"), strings.HasSuffix(url, ".zip"):
+						wantRequests, wantOut = append(wantRequests, url), "Downloading "+url
+					default:
+						wantOut = "lists " + url + " for " + platform + ", which is neither a .tar.gz nor a .zip archive"
+					}
+				}
+				if !slices.Equal(requests, wantRequests) {
+					t.Errorf("%s: install.sh requests %q, want %q\n%s", platform, requests, wantRequests, out)
+				}
+				if !strings.Contains(out, wantOut) {
+					t.Errorf("%s: output lacks %q:\n%s", platform, wantOut, out)
+				}
+			})
+		}
+	}
+}
+
+// TestInstallFromReleaseInstallsOnlyTheArchiveTheManifestDigestNames runs
+// release mode end to end on this host's real platform, in each archive
+// format: the archive installs when its SHA256 is the one the manifest lists,
+// and nothing is installed when it is not. The zip case's tar reads nothing,
+// as GNU tar reads no zip.
+func TestInstallFromReleaseInstallsOnlyTheArchiveTheManifestDigestNames(t *testing.T) {
+	t.Parallel()
+	archives := map[string][]byte{
+		"lit-archive.tar.gz": tarGz(t, map[string]string{"lit": newLit}),
+		"lit-archive.zip":    zipArchive(t, map[string]string{"lit": newLit}),
+	}
+	listed := func(name string) string {
+		digest := sha256.Sum256(archives[name])
+		return hex.EncodeToString(digest[:])
+	}
+	for name, tc := range map[string]struct {
+		archive, sha256 string
+		install         bool
+	}{
+		"tar.gz, the listed digest": {archive: "lit-archive.tar.gz", sha256: listed("lit-archive.tar.gz"), install: true},
+		"zip, the listed digest":    {archive: "lit-archive.zip", sha256: listed("lit-archive.zip"), install: true},
+		"tar.gz, another digest":    {archive: "lit-archive.tar.gz", sha256: strings.Repeat("0", 64), install: false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			url := "https://downloads.invalid/v1.2.3/" + tc.archive
+			server := newReleaseServer(t)
+			server.serveManifest(t, litrelease.Manifest{Artifacts: []litrelease.Artifact{{Platform: litrelease.CurrentPlatform(), URL: url, SHA256: tc.sha256}}})
+			server.serve(t, tc.archive, archives[tc.archive])
+			if strings.HasSuffix(tc.archive, ".zip") {
+				writeFile(t, filepath.Join(server.stubBin, "tar"), "#!/bin/sh\necho 'tar: not a tar archive' >&2\nexit 2\n", 0o755)
+			}
+			out, _, err := server.install(t, nil, "--from-release", "v1.2.3")
+			installed := filepath.Join(server.root, "bin", "lit")
+			if tc.install {
+				if err != nil {
+					t.Fatalf("install.sh: %v\n%s", err, out)
+				}
+				if got := readFile(t, installed); got != newLit {
+					t.Errorf("%s holds %q, want the archive's lit %q", installed, got, newLit)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("install.sh succeeded on an archive whose digest the manifest does not list:\n%s", out)
+			}
+			if want := "error: SHA256 mismatch for " + url; !strings.Contains(out, want) {
+				t.Errorf("output lacks %q:\n%s", want, out)
+			}
+			if _, err := os.Stat(installed); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("%s exists after a digest mismatch (stat: %v)", installed, err)
+			}
+		})
+	}
+}
+
+// zipArchive is a zip of regular files, mode 0755, as goreleaser builds a
+// Windows release archive.
+func zipArchive(t *testing.T, files map[string]string) []byte {
+	t.Helper()
+	var b bytes.Buffer
+	zw := zip.NewWriter(&b)
+	for name, body := range files {
+		header := &zip.FileHeader{Name: name, Method: zip.Deflate}
+		header.SetMode(0o755)
+		w, err := zw.CreateHeader(header)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write([]byte(body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return b.Bytes()
+}
+
+// tarGz is a gzipped tar of regular files, mode 0755, as goreleaser builds a
+// release archive.
+func tarGz(t *testing.T, files map[string]string) []byte {
+	t.Helper()
+	var b bytes.Buffer
+	gz := gzip.NewWriter(&b)
+	tw := tar.NewWriter(gz)
+	for name, body := range files {
+		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o755, Size: int64(len(body)), Typeflag: tar.TypeReg}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte(body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return b.Bytes()
+}
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
