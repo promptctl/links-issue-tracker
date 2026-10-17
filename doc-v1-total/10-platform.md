@@ -61,7 +61,7 @@ Every variable the shipped binary reads:
 
 Variables the binary **writes** for children: the detached background mirror inherits the environment with the three `LNKS_AUTOMATION_*` variables stripped, then re-set to `TRIGGER=on-change` / `REASON=on-change cadence mirrored after a mutating command` (`internal/cli/sync_bg.go`). The owner-notify hook runs as `sh -c <hook>` in the repo root with `LIT_NOTIFY_KIND`, `LIT_NOTIFY_SUMMARY`, `LIT_NOTIFY_REMOTE`, `LIT_NOTIFY_BRANCH`, `LIT_NOTIFY_REPO` added, time-boxed with a `WaitDelay` so a backgrounded child cannot hold the pipe (`internal/cli/owner_notify.go`).
 
-Read only by tests/tooling: `GITHUB_ACTIONS` (testbudget emits `::error::` annotations), `LIT_LICENSE_GRAPH_AUDIT` (gates the whole-graph license test), `LIT_TEST_REEXEC` (test binary re-execs as real `lit`), plus test-only `USER`/`HOME` negative-evidence checks and a kill-helper coordination variable.
+Read only by tests/tooling: `GITHUB_ACTIONS` (testbudget emits `::error::` annotations; `internal/testoracle` fails, rather than skips, a test whose `dolt`/`claude` oracle is not on PATH), `LIT_LICENSE_GRAPH_AUDIT` (gates the whole-graph license test), `LIT_TEST_REEXEC` (test binary re-execs as real `lit`), plus test-only `USER`/`HOME` negative-evidence checks and a kill-helper coordination variable.
 
 ## Configuration
 
@@ -212,20 +212,20 @@ Every compile recipe sources `cgo-env.sh` first (`Justfile`).
 
 Push to `master` and PRs targeting `master`; concurrency-cancelled per ref; `ubuntu-latest` only, no matrix. Six parallel jobs (`.github/workflows/ci.yml`):
 
-1. **build-and-test** — build, then `go test -short -json ./... | go run ./tools/testbudget` under `shell: bash` (pipefail load-bearing); no `-timeout` override by policy.
-2. **race** — `go test -short -race -timeout 30m ./cmd/... ./internal/...` (tools excluded deliberately; no budget pipe). The timeout is sized above internal/cli's testbudget ceiling as the detector inflates it, so slowness fails build-and-test's budget check, not this lane's timeout.
+1. **build-and-test** — installs Dolt and Claude Code, builds, then runs `go test -short -json ./... | go run ./tools/testbudget` and the same for the vendored driver module (`go -C internal/vendor/dolthub-driver test …`), under `shell: bash` (pipefail load-bearing); no `-timeout` override by policy.
+2. **race** — installs Dolt and Claude Code, then `go test -short -race -timeout 30m ./cmd/... ./internal/...` (tools excluded deliberately; no budget pipe). The timeout is sized above internal/cli's testbudget ceiling as the detector inflates it, so slowness fails build-and-test's budget check, not this lane's timeout.
 3. **verify** — `go mod tidy` must be a no-op (`git diff --exit-code`); `install.sh` must contain `-buildvcs=false`; then actually runs `install.sh`, passing on exit 0 or on exit 3, the schema guard's refusal of a tree no release supports, which master is between a migration merging and its release.
 4. **lint** — golangci-lint pinned to v2.8.0.
 5. **docs** — `mkdocs build --strict` (mkdocs 1.6.1 / material 9.7.6), so a missing docs page or broken nav link fails the merge gate. (`mkdocs.yml` defines the `links` material-theme site with a seven-entry nav.)
 6. **candybar** — Go plus Node 22 (`actions/setup-node`), then `go run ./tools/candybar-check`, so a lit cc-candybar plugin that does not render each case's cells fails the merge gate.
 
-The composite action `.github/actions/install-dolt` installs the pinned Dolt CLI v1.81.10 — used as a test-only oracle, not shipped.
+The composite action `.github/actions/install-dolt` installs the pinned Dolt CLI v1.81.10 — used as a test-only oracle, not shipped. The composite action `.github/actions/install-claude` installs Node 22 and the pinned Claude Code CLI 2.1.292, with its auto-updater disabled for the rest of the job — the test-only oracle for `claude plugin validate --strict`. Every job that runs `go test` (build-and-test, race, nightly `full-suite`) runs both install actions, and under `GITHUB_ACTIONS=true` a test whose oracle is missing fails instead of skipping (`internal/testoracle`).
 
 The composite action `.github/actions/report-to-lit` (inputs `label`, `title`, `body`, `token`) files a scheduled workflow's red run into this repository's lit backlog: it sets a global git `extraheader` from the token (embedded Dolt runs git against its own cache repository), builds lit, runs `lit init` with `LIT_DISABLE_AUTO_SYNC=1` to adopt the remote backlog, then comments `Red again: <run URL>` on the first open or in-progress ticket carrying the label, or files an urgent `--top` bug with that label and topic inside epic `links-ci-alarm-z6sv`, and finishes with `lit sync push`. A refused push is followed by `lit sync pull` and another push, three pushes at most.
 
 ### `nightly.yml`
 
-Cron `17 9 * * *` + manual dispatch. Job `full-suite` (60 minutes, `contents: read`) runs the full suite (`go test -timeout 30m ./...`, no `-short`) and then `go run ./tools/lawtokens-sync -check`. Job `report` (`contents: write`) runs on a `master` run whenever `full-suite` did not succeed, timeout and cancellation included, and calls `report-to-lit` with label `nightly-failure` and title "Nightly full test lane is failing".
+Cron `17 9 * * *` + manual dispatch. Job `full-suite` (60 minutes, `contents: read`) installs Dolt and Claude Code, then runs the full suite (`go test -timeout 30m ./...`, no `-short`) and then `go run ./tools/lawtokens-sync -check`. Job `report` (`contents: write`) runs on a `master` run whenever `full-suite` did not succeed, timeout and cancellation included, and calls `report-to-lit` with label `nightly-failure` and title "Nightly full test lane is failing".
 
 ### `license-graph-audit.yml`
 
