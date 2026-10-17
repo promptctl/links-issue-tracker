@@ -64,6 +64,25 @@ func TestFactsAddedThroughTheContextLandOnTheFinishedEvent(t *testing.T) {
 	}
 }
 
+// A fact that can occur more than once keeps every occurrence, in order, and
+// a list nothing was appended to reads as empty rather than absent.
+func TestAppendKeepsEveryValueInOrder(t *testing.T) {
+	recorder := Begin(Event{})
+	ctx := With(context.Background(), recorder)
+	Append(ctx, "reroot.follows")
+	empty := recorder.Finish(End{})
+	Append(ctx, "reroot.follows", "push")
+	Append(ctx, "reroot.follows", "receive", "pull")
+	ev := recorder.Finish(End{})
+	if got, ok := empty.Facts["reroot.follows"].([]any); !ok || len(got) != 0 {
+		t.Errorf("after an empty Append, Facts[reroot.follows] = %#v; want an empty list", empty.Facts["reroot.follows"])
+	}
+	got, _ := ev.Facts["reroot.follows"].([]any)
+	if len(got) != 3 || got[0] != "push" || got[1] != "receive" || got[2] != "pull" {
+		t.Errorf("Facts[reroot.follows] = %#v; want [push receive pull]", ev.Facts["reroot.follows"])
+	}
+}
+
 // A finished event is a value: a fact added after Finish does not reach it.
 func TestAFinishedEventDoesNotChangeAfterwards(t *testing.T) {
 	recorder := Begin(Event{})

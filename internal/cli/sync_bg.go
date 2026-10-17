@@ -641,8 +641,8 @@ func mirrorCycle(ctx context.Context, log io.Writer, ws workspace.Info, stopAnsw
 	// own landing.
 	switch {
 	case landed.landed() && landed.followedReRoot:
-		receivePushedReRoot(ctx, ws, clone.liveClone, landed)
-		fmt.Fprintf(log, "%s mirror received its re-rooted push on the live store\n", time.Now().UTC().Format(time.RFC3339))
+		receiveErr := receivePushedReRoot(ctx, ws, clone.liveClone, landed)
+		fmt.Fprintf(log, "%s mirror step=receive_reroot received=%t err=%v\n", time.Now().UTC().Format(time.RFC3339), receiveErr == nil, receiveErr)
 	case landed.landed():
 		recordStart := time.Now()
 		var recordErr error
@@ -679,13 +679,15 @@ func mirrorCycle(ctx context.Context, log io.Writer, ws workspace.Info, stopAnsw
 // following a re-root of the remote: the clone's fetch is landed and settled
 // on the live store exactly as the automatic receive does it
 // (performSyncReceive), and the settle follows the re-root the clone followed.
-// What it established is surfaced through the receive's one contract.
-func receivePushedReRoot(ctx context.Context, ws workspace.Info, clone liveClone, landed pushedHead) {
+// What it established is surfaced through the receive's one contract, and a
+// receive that failed is recorded there and returned, for the mirror's log.
+func receivePushedReRoot(ctx context.Context, ws workspace.Info, clone liveClone, landed pushedHead) error {
 	target := syncTarget{remote: landed.remote, branch: landed.branch, skip: syncTargetReady}
 	outcome, closeLive, err := performSyncReceive(ctx, ws, clone, receiveFetch{target: target})
 	if err != nil {
-		recordReceiveError(ws, fmt.Errorf("receive the re-rooted push on the live store: %w", err))
-		return
+		err = fmt.Errorf("receive the re-rooted push on the live store: %w", err)
+		recordReceiveError(ws, err)
+		return err
 	}
 	if err := closeLive(); err != nil {
 		fmt.Fprintf(os.Stderr, "lit: on-change mirror: live store not closed cleanly after receiving its re-rooted push: %v\n", err)
@@ -694,6 +696,7 @@ func receivePushedReRoot(ctx context.Context, ws workspace.Info, clone liveClone
 		fmt.Fprintf(os.Stderr, "lit: on-change mirror: receive trace not recorded: %v\n", outcome.traceErr)
 	}
 	surfaceReceiveOutcome(ctx, ws, outcome, time.Now())
+	return nil
 }
 
 // holdBudgetCutExplanation is the one wording of "the holder cut itself

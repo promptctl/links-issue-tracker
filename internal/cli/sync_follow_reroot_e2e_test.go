@@ -86,7 +86,7 @@ func syncHeadAndBranch(t *testing.T, dir string) (head, branch string) {
 	if err != nil {
 		t.Fatalf("resolve %s: %v", dir, err)
 	}
-	session, closeStore, err := openSyncSession(context.Background(), ws)
+	session, closeStore, err := openSyncSession(underInvocation(context.Background()), ws)
 	if err != nil {
 		t.Fatalf("open sync session at %s: %v", dir, err)
 	}
@@ -99,14 +99,21 @@ func syncHeadAndBranch(t *testing.T, dir string) (head, branch string) {
 }
 
 // assertFollowedCleanly checks what an entry point left behind once it
-// followed: its event carries the follow, bravo holds both edits, nothing
-// surfaced the remote as unrelated or notified the owner, and lit doctor
-// exits clean.
-func (r reRootedCheckouts) assertFollowedCleanly(t *testing.T, entry string, wantDescription bool) {
+// followed: its event carries every follow it made, in order, bravo holds
+// both edits, nothing surfaced the remote as unrelated or notified the owner,
+// and lit doctor exits clean.
+func (r reRootedCheckouts) assertFollowedCleanly(t *testing.T, entries []string, wantDescription bool) {
 	t.Helper()
 	ev := lastEvent(t)
-	if ev.Facts["reroot.follow"] != entry || ev.Facts["reroot.cut"] != r.cut || ev.Facts["reroot.root"] != r.root || ev.Counts["reroot.kept"] < 2 {
-		t.Fatalf("event %q facts follow=%v cut=%v root=%v kept=%d; want follow=%s at %s to %s keeping the cut and bravo's edit", ev.Event, ev.Facts["reroot.follow"], ev.Facts["reroot.cut"], ev.Facts["reroot.root"], ev.Counts["reroot.kept"], entry, r.cut, r.root)
+	follows, _ := ev.Facts["reroot.follows"].([]any)
+	if len(follows) != len(entries) {
+		t.Fatalf("event %q reroot.follows = %v; want one follow for each of %v", ev.Event, ev.Facts["reroot.follows"], entries)
+	}
+	for i, entry := range entries {
+		follow, _ := follows[i].(map[string]any)
+		if kept, _ := follow["reroot.kept"].(float64); follow["reroot.follow"] != entry || follow["reroot.cut"] != r.cut || follow["reroot.root"] != r.root || kept < 2 {
+			t.Fatalf("event %q follow %d = %v; want follow=%s at %s to %s keeping the cut and bravo's edit", ev.Event, i, follow, entry, r.cut, r.root)
+		}
 	}
 	show := runCLIInDir(t, r.bravo, "show", r.ticket)
 	if !strings.Contains(show, "bravo-title") || strings.Contains(show, "alpha-description") != wantDescription {
@@ -136,17 +143,17 @@ func TestEverySyncEntryPointFollowsAReRootedRemote(t *testing.T) {
 	t.Run("pull", func(t *testing.T) {
 		r := newReRootedCheckouts(t, true)
 		runCLIInDir(t, r.bravo, "sync", "pull")
-		r.assertFollowedCleanly(t, "pull", true)
+		r.assertFollowedCleanly(t, []string{"pull"}, true)
 	})
 	t.Run("receive", func(t *testing.T) {
 		r := newReRootedCheckouts(t, true)
 		runCLIInDir(t, r.bravo, "sync", backgroundReceiveSubcommand, "--parent-pid", "0")
-		r.assertFollowedCleanly(t, "receive", true)
+		r.assertFollowedCleanly(t, []string{"receive"}, true)
 	})
 	t.Run("reconcile", func(t *testing.T) {
 		r := newReRootedCheckouts(t, true)
 		runCLIInDir(t, r.bravo, "sync", "reconcile")
-		r.assertFollowedCleanly(t, "reconcile", true)
+		r.assertFollowedCleanly(t, []string{"reconcile"}, true)
 	})
 	t.Run("fetch", func(t *testing.T) {
 		// A fetch settles nothing. With no write on the remote since bravo
@@ -155,12 +162,12 @@ func TestEverySyncEntryPointFollowsAReRootedRemote(t *testing.T) {
 		// doctor refuses on.
 		r := newReRootedCheckouts(t, false)
 		runCLIInDir(t, r.bravo, "sync", "fetch")
-		r.assertFollowedCleanly(t, "fetch", false)
+		r.assertFollowedCleanly(t, []string{"fetch"}, false)
 	})
 	t.Run("push", func(t *testing.T) {
 		r := newReRootedCheckouts(t, false)
 		runCLIInDir(t, r.bravo, "sync", "push")
-		r.assertFollowedCleanly(t, "push", false)
+		r.assertFollowedCleanly(t, []string{"push"}, false)
 		runCLIInDir(t, r.alpha, "sync", "pull")
 		if show := runCLIInDir(t, r.alpha, "show", r.ticket); !strings.Contains(show, "bravo-title") {
 			t.Fatalf("alpha missing bravo's pushed edit:\n%s", show)
@@ -170,9 +177,8 @@ func TestEverySyncEntryPointFollowsAReRootedRemote(t *testing.T) {
 		r := newReRootedCheckouts(t, false)
 		runCLIInDir(t, r.bravo, "sync", backgroundMirrorSubcommand, "--parent-pid", "0")
 		// The clone follows and pushes, and the live store receives that
-		// push by following the same re-root: the event carries the live
-		// store's follow, the one that moved this checkout.
-		r.assertFollowedCleanly(t, "receive", false)
+		// push by following the same re-root: the event carries both.
+		r.assertFollowedCleanly(t, []string{"push", "receive"}, false)
 		if bravoHead, _ := syncHeadAndBranch(t, r.bravo); bravoHead == r.cut {
 			t.Fatalf("bravo's head is still the cut %s", r.cut)
 		}

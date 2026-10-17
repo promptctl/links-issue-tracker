@@ -92,7 +92,10 @@ func (e OwnerApprovalRequiredError) Error() string {
 // ownerApproval is the owner-confirmation step: the take runs only when it matches
 // this exact fork+side's takeApprovalToken. Anything else — absent, stale, or issued
 // for the other side — returns OwnerApprovalRequiredError carrying the current token
-// and inventory, with nothing mutated. The check runs under the same commit lock as
+// and inventory, with nothing taken. Approval or not, a re-root this branch can follow
+// is followed first, as every sync verb follows one unasked: it discards no row of
+// either side, and it is not an unrelated history, so the take that meets it finds
+// shared history and refuses. The check runs under the same commit lock as
 // the mutation, so there is no gap between the state the owner approved and the state
 // destroyed. [LAW:no-ambient-temporal-coupling]
 // [LAW:single-enforcer] the gate lives on the destructive operation itself, not on

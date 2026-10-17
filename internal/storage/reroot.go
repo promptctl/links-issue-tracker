@@ -1,6 +1,9 @@
 package storage
 
-import "time"
+import (
+	"maps"
+	"time"
+)
 
 // ReRooted is what a re-root did to a branch: its history cut at a commit, the
 // commits below the cut dropped and every commit above it rewritten onto a
@@ -66,10 +69,17 @@ type FollowedReRoot struct {
 	ReRooted
 }
 
-// EventRecord is the follow as event facts and counts: the re-root's, and the
-// entry point under reroot.follow.
-func (f FollowedReRoot) EventRecord() (map[string]any, map[string]int) {
+// EventValue is the follow as one value of the event's reroot.follows list:
+// the re-root's facts and counts under their own keys, and the entry point
+// under reroot.follow. A list, because one invocation can follow more than
+// once — the mirror's clone and then its live store, or one long-lived mirror
+// across cycles.
+func (f FollowedReRoot) EventValue() map[string]any {
 	facts, counts := f.ReRooted.EventRecord()
-	facts["reroot.follow"] = string(f.Entry)
-	return facts, counts
+	value := map[string]any{"reroot.follow": string(f.Entry)}
+	maps.Copy(value, facts)
+	for key, n := range counts {
+		value[key] = n
+	}
+	return value
 }

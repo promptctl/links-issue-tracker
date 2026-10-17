@@ -525,7 +525,7 @@ These types live in the contract, not in an engine, because a capability interfa
 - Re-root vocabulary (`internal/storage/reroot.go`):
   - **`ReRooted`** — what a re-root did to a branch: `Cut`, `Root` (the parentless commit carrying the cut's root value and metadata), `Head`, `Rewritten map[string]string` (every kept commit, old hash to new), `Dropped int` (the cut's ancestors), `Elapsed time.Duration`. `Kept()` is `len(Rewritten)`. `EventRecord()` gives facts `reroot.cut`, `reroot.root`, `reroot.head`, `reroot.elapsed_ms` and counts `reroot.kept`, `reroot.dropped`.
   - **`SyncEntry`** string: `pull`, `receive` (the automatic receive, or the on-change mirror's receive of what it pushed), `reconcile`, `push` (a refused `lit sync push` or mirror push), `fetch`.
-  - **`FollowedReRoot{Entry SyncEntry; ReRooted}`** — a re-root a store applied to follow a re-rooted remote; `EventRecord()` is the re-root's plus fact `reroot.follow` = the entry.
+  - **`FollowedReRoot{Entry SyncEntry; ReRooted}`** — a re-root a store applied to follow a re-rooted remote; `EventValue()` is one value of the event's `reroot.follows` list: the re-root's facts and counts under their own keys, plus `reroot.follow` = the entry.
 
 ---
 

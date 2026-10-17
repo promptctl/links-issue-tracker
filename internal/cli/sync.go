@@ -78,15 +78,17 @@ func openSyncSessionAt(ctx context.Context, databasePath, workspaceID string) (s
 	}, nil
 }
 
-// reportFollowedReRoots records each re-root a sync session's engine applied
-// to follow its remote on the command's event. Every sync session closes
+// reportFollowedReRoots appends each re-root a sync session's engine applied
+// to follow its remote to the command's reroot.follows list, which a session
+// that followed nothing leaves empty but present. Every sync session closes
 // through openSyncSessionAt, so no entry point has to remember to.
 // [LAW:nothing-unseen] [LAW:single-enforcer]
 func reportFollowedReRoots(ctx context.Context, followed []storage.FollowedReRoot) {
-	for _, f := range followed {
-		facts, counts := f.EventRecord()
-		telemetry.Record(ctx, facts, counts)
+	values := make([]any, len(followed))
+	for i, f := range followed {
+		values[i] = f.EventValue()
 	}
+	telemetry.Append(ctx, "reroot.follows", values...)
 }
 
 // syncScope is what a sync leaf's work runs against: the workspace plus the
@@ -196,21 +198,9 @@ func syncFetchLeaf() syncLeaf {
 			return err
 		}
 		remoteName := strings.TrimSpace(*remote)
-		fetchErr := session.syncer.SyncFetch(ctx, remoteName, *prune)
-		recordSyncCommandTrace(ws, "lit sync fetch", "fetched", fetchErr, map[string]string{"remote": remoteName})
-		if fetchErr != nil {
-			return fetchErr
-		}
-		if err := markFetchSuccess(ws); err != nil {
-			fmt.Fprintf(os.Stderr, "lit: fetch-success marker not written: %v\n", err)
-		}
-		// A fetch that brought a history another checkout re-rooted follows it
-		// here, so no read after it reports that re-root as a divergence.
-		branch, err := resolveSyncBranch(ctx, ws, remoteName)
+		err := fetchAndFollow(ctx, session, ws, remoteName, *prune)
+		recordSyncCommandTrace(ws, "lit sync fetch", "fetched", err, map[string]string{"remote": remoteName})
 		if err != nil {
-			return err
-		}
-		if err := session.syncer.SyncFollowReRoot(ctx, remoteName, branch, storage.SyncEntryFetch); err != nil {
 			return err
 		}
 		if !*verbose {
@@ -220,6 +210,23 @@ func syncFetchLeaf() syncLeaf {
 		_, err = fmt.Fprintf(stdout, "fetched %s\n", remoteName)
 		return err
 	}}
+}
+
+// fetchAndFollow is `lit sync fetch`'s work, traced by its caller as one
+// decision: fetch remote, then follow a re-root the fetch brought on the sync
+// branch, so no read after it reports that re-root as a divergence.
+func fetchAndFollow(ctx context.Context, session syncSession, ws workspace.Info, remote string, prune bool) error {
+	if err := session.syncer.SyncFetch(ctx, remote, prune); err != nil {
+		return err
+	}
+	if err := markFetchSuccess(ws); err != nil {
+		fmt.Fprintf(os.Stderr, "lit: fetch-success marker not written: %v\n", err)
+	}
+	branch, err := resolveSyncBranch(ctx, ws, remote)
+	if err != nil {
+		return err
+	}
+	return session.syncer.SyncFollowReRoot(ctx, remote, branch, storage.SyncEntryFetch)
 }
 
 func syncPullLeaf() syncLeaf {
