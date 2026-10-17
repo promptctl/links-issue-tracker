@@ -91,11 +91,6 @@ type UpdateIssueInput struct {
 	Reason string
 }
 
-func (u UpdateIssueInput) IsEmpty() bool {
-	return u.Title == nil && u.Description == nil && u.Prompt == nil && u.IssueType == nil &&
-		u.Priority == nil && u.Assignee == nil && u.Lane == nil && u.Labels == nil
-}
-
 // Change is THE issue-record mutation input: an optional lifecycle action
 // paired with a field patch and the transition's provenance. nil Action means
 // no transition; empty Fields means no field mutations. The action variant

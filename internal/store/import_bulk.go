@@ -40,11 +40,11 @@ func (s *Store) BulkApply(ctx context.Context, prefix, actor string, specs []sto
 	for _, idx := range order {
 		spec := specs[idx]
 		if spec.ID != "" {
-			change, err := bulkUpdateChange(spec, actor)
+			fields, err := storage.BulkUpdatePatch(spec)
 			if err != nil {
 				return storage.BulkApplyResult{}, err
 			}
-			applied, err := s.Apply(ctx, spec.ID, change)
+			applied, err := s.Apply(ctx, spec.ID, storage.Change{Actor: actor, Fields: fields})
 			if err != nil {
 				leaked := s.rollbackCreatedIssues(ctx, createdIDs)
 				return storage.BulkApplyResult{}, fmt.Errorf("bulk: update %q: %w (rollback leaked %d: %s)", spec.ID, err, len(leaked), strings.Join(leaked, ","))
@@ -122,56 +122,6 @@ func resolveBulkRef(ref string, localRealID map[string]string) string {
 		return real
 	}
 	return ref
-}
-
-// bulkUpdateChange builds the field-patch Change for an update document: one
-// pointer copy per set field, mirroring `lit update`'s per-flag assembly.
-// validateBulkSpecs has already confirmed IssueType/Priority parse and that
-// at least one field is set; the parse errors are still propagated rather
-// than discarded, the same trust-but-verify convention BulkApply's create
-// branch and ImportTree both use for the same already-validated fields.
-// [LAW:no-silent-failure]
-func bulkUpdateChange(spec storage.BulkIssueSpec, actor string) (storage.Change, error) {
-	fields := storage.UpdateIssueInput{Reason: strings.TrimSpace(spec.Reason)}
-	if spec.Title != nil {
-		v := strings.TrimSpace(*spec.Title)
-		fields.Title = &v
-	}
-	if spec.Description != nil {
-		v := strings.TrimSpace(*spec.Description)
-		fields.Description = &v
-	}
-	if spec.Prompt != nil {
-		v := strings.TrimSpace(*spec.Prompt)
-		fields.Prompt = &v
-	}
-	if spec.IssueType != nil {
-		v, err := model.ParseIssueType(*spec.IssueType)
-		if err != nil {
-			return storage.Change{}, fmt.Errorf("bulk: update %q: %w", spec.ID, err)
-		}
-		fields.IssueType = &v
-	}
-	if spec.Priority != nil {
-		v, err := model.ParsePriority(*spec.Priority)
-		if err != nil {
-			return storage.Change{}, fmt.Errorf("bulk: update %q: %w", spec.ID, err)
-		}
-		fields.Priority = &v
-	}
-	if spec.Assignee != nil {
-		v := strings.TrimSpace(*spec.Assignee)
-		fields.Assignee = &v
-	}
-	if spec.Lane != nil {
-		v := strings.TrimSpace(*spec.Lane)
-		fields.Lane = &v
-	}
-	if spec.Labels != nil {
-		v := *spec.Labels
-		fields.Labels = &v
-	}
-	return storage.Change{Actor: actor, Fields: fields}, nil
 }
 
 func derefOr[T any](p *T, fallback T) T {
