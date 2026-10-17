@@ -216,7 +216,7 @@ the other two keys are set once the write has landed.
 | Key | Meaning |
 | --- | --- |
 | `start.lane_held` | `true` when a checkout held the lane, this one or another; `false` when nobody did, including when the last claim expired. |
-| `start.handover` | `true` when the write moved the ticket's claim from the checkout that last started it to this one. |
+| `start.handover` | `true` when the write moved the ticket's claim from whoever last started it to a new holder: another checkout, or a new assignee on the same one. |
 | `start.transfer_announced` | `true` when the start printed `claim transferred`. That needs a handover and a lane that still named the previous holder, so it is `false` when that claim had expired, the ticket was finished, or a later start elsewhere in the lane had taken over. |
 
 ## What `lit phase` records
