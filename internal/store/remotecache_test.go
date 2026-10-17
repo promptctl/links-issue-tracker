@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -12,14 +13,13 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
-// TestRemoteCacheKeyMatchesDoltLayout is the pin that makes remoteCacheKey's
-// duplication of dbfactory.cacheRepoPath safe to ship. It does a REAL
-// git-backed push against a REAL bare remote, lets Dolt create the cache
-// directory itself, and asserts our derivation names that exact directory. If
-// Dolt ever changes the key — a different hash, a different separator, a
-// different default ref — this fails instead of the prune quietly deleting a
-// live mirror. [LAW:behavior-not-structure] it asserts the contract our code
-// depends on (which directory a remote maps to), never how Dolt computes it.
+// TestRemoteCacheKeyMatchesDoltLayout does a REAL git-backed push against a
+// REAL bare remote, lets Dolt create the cache directory itself, and asserts
+// remoteMirrorKeys names that exact directory for the remote, read the way the
+// prune reads it: from dolt_remotes, through dbfactory.GitRemoteCacheKey. A key
+// that missed would leave the live mirror looking abandoned.
+// [LAW:behavior-not-structure] it asserts which directory a remote maps to,
+// never how the key is computed.
 // commitPayload gives the store something to push: an epic and one task
 // filed under it, since a task lives inside an epic.
 func commitPayload(t *testing.T, ctx context.Context, st *Store, title string) {
@@ -76,26 +76,13 @@ func TestRemoteCacheKeyMatchesDoltLayout(t *testing.T) {
 		t.Fatalf("after one git-backed push: cache keys on disk = %v, want exactly 1", onDisk)
 	}
 
-	// What we predict, derived from the URL Dolt reports for the remote — the
-	// same source pruneRemoteCache reads.
-	remotes, err := sync.SyncListRemotes(ctx)
+	keys, err := sync.remoteMirrorKeys(ctx)
 	if err != nil {
-		t.Fatalf("SyncListRemotes() error = %v", err)
+		t.Fatalf("remoteMirrorKeys() error = %v", err)
 	}
-	if len(remotes) != 1 {
-		t.Fatalf("configured remotes = %v, want exactly 1", remotes)
-	}
-	key, gitBackedRemote, err := remoteCacheKey(remotes[0].URL)
-	if err != nil {
-		t.Fatalf("remoteCacheKey(%q) error = %v", remotes[0].URL, err)
-	}
-	if !gitBackedRemote {
-		t.Fatalf("remoteCacheKey(%q) reported not git-backed, want git-backed", remotes[0].URL)
-	}
-	if key != onDisk[0] {
-		t.Fatalf("derived cache key = %q, but Dolt created %q for remote url %q.\n"+
-			"The derivation in remoteCacheKey no longer matches dbfactory.cacheRepoPath; "+
-			"pruning on it would delete live mirrors.", key, onDisk[0], remotes[0].URL)
+	if len(keys) != 1 || keys["origin"] != onDisk[0] {
+		t.Fatalf("remoteMirrorKeys() = %v, but Dolt created %q for origin; "+
+			"pruning on these keys would delete the live mirror", keys, onDisk[0])
 	}
 }
 
@@ -368,11 +355,11 @@ func plantOrphanMirror(t *testing.T, base, key string) {
 	}
 }
 
-// TestReadRemoteCachePlanFollowsTheRemotesNotASnapshot pins the re-check the
-// delete loop leans on. The loop plans again before every directory, so the
+// TestReadAbandonedMirrorsFollowsTheRemotesNotASnapshot pins the re-check the
+// delete loop leans on. The loop reads again before every directory, so the
 // answer for a key has to change when the remotes change, which a snapshot
 // cannot do.
-func TestReadRemoteCachePlanFollowsTheRemotesNotASnapshot(t *testing.T) {
+func TestReadAbandonedMirrorsFollowsTheRemotesNotASnapshot(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	sync := pushedSyncStore(t, ctx)
@@ -382,24 +369,23 @@ func TestReadRemoteCachePlanFollowsTheRemotesNotASnapshot(t *testing.T) {
 		t.Fatalf("cache keys after push = %v (err %v), want exactly the live mirror", keys, err)
 	}
 
-	plan, err := sync.readRemoteCachePlan(ctx, base)
-	if err != nil || len(plan.abandoned) != 0 {
-		t.Fatalf("readRemoteCachePlan() with origin configured = (%v, %v), want nothing abandoned", plan.abandoned, err)
+	abandoned, err := sync.readAbandonedMirrors(ctx, base)
+	if err != nil || len(abandoned) != 0 {
+		t.Fatalf("readAbandonedMirrors() with origin configured = (%v, %v), want nothing abandoned", abandoned, err)
 	}
 	if err := sync.SyncRemoveRemote(ctx, "origin"); err != nil {
 		t.Fatalf("SyncRemoveRemote() error = %v", err)
 	}
-	plan, err = sync.readRemoteCachePlan(ctx, base)
-	if err != nil || len(plan.abandoned) != 1 || plan.abandoned[0] != keys[0] {
-		t.Fatalf("readRemoteCachePlan() after removing origin = (%v, %v), want [%s] — "+
-			"the answer must follow the remotes, not a snapshot", plan.abandoned, err, keys[0])
+	abandoned, err = sync.readAbandonedMirrors(ctx, base)
+	if err != nil || len(abandoned) != 1 || abandoned[0] != keys[0] {
+		t.Fatalf("readAbandonedMirrors() after removing origin = (%v, %v), want [%s] — "+
+			"the answer must follow the remotes, not a snapshot", abandoned, err, keys[0])
 	}
 }
 
 // TestPruneRemoteCacheCollectsBesideANeverOpenedRemote is the workspace this
 // ticket was filed for: a second remote configured and never pushed or fetched
-// through, so it has no directory. The orphan is collected anyway, and the
-// line the trace records says which remote was excused and why.
+// through, so it has no directory. The orphan is collected anyway.
 func TestPruneRemoteCacheCollectsBesideANeverOpenedRemote(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -420,56 +406,77 @@ func TestPruneRemoteCacheCollectsBesideANeverOpenedRemote(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(sync.remoteCacheBase(), orphan)); !os.IsNotExist(err) {
 		t.Fatalf("orphan %s survived the prune (stat err = %v)", orphan, err)
 	}
-	if report := outcome.Report(); !strings.Contains(report, "excused remote backup") {
-		t.Fatalf("Report() = %q, want it to name backup as excused", report)
+}
+
+// TestPruneRemoteCacheKeepsTheMirrorOfAFailedFirstPush pins the mirror that
+// exists before any push or fetch has landed. Dolt creates a remote's directory
+// and initializes it before it asks the remote anything, so a first push to a
+// remote advertising no branches fails and leaves the directory behind, with
+// no tracking branch to show for it. It is backup's mirror all the same, and
+// the next open through backup reuses it, so the prune must leave it.
+func TestPruneRemoteCacheKeepsTheMirrorOfAFailedFirstPush(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	sync := pushedSyncStore(t, ctx)
+	empty := t.TempDir()
+	gitInDir(t, empty, "init", "--bare", "remote.git")
+	if err := sync.SyncAddRemote(ctx, "backup", GitBackedRemoteURL(filepath.Join(empty, "remote.git"))); err != nil {
+		t.Fatalf("SyncAddRemote(backup) error = %v", err)
+	}
+	base := sync.remoteCacheBase()
+	before, err := listRemoteCacheKeys(base)
+	if err != nil {
+		t.Fatalf("listRemoteCacheKeys() error = %v", err)
+	}
+	if _, err := sync.SyncCompactAndPush(ctx, "backup", "master", false, false); err == nil {
+		t.Fatal("SyncCompactAndPush(backup) to a remote with no branches succeeded, want the failed first push")
+	}
+	after, err := listRemoteCacheKeys(base)
+	if err != nil {
+		t.Fatalf("listRemoteCacheKeys() error = %v", err)
+	}
+	if len(after) != len(before)+1 {
+		t.Fatalf("cache keys before %v, after the failed push %v: want the failed push to have left one directory", before, after)
+	}
+
+	outcome := sync.pruneRemoteCache(ctx)
+	if outcome.Removed != 0 || outcome.Problem != "" {
+		t.Fatalf("outcome = %+v, want nothing removed and no problem", outcome)
+	}
+	survivors, err := listRemoteCacheKeys(base)
+	if err != nil || !slices.Equal(survivors, after) {
+		t.Fatalf("cache keys after the prune = %v (err %v), want %v — backup's mirror was deleted", survivors, err, after)
 	}
 }
 
-// TestPruneRemoteCacheKeepsAnOpenedRemotesMirrorItCannotFind is the other half
-// of the ticket: excusing never-opened remotes must not cost a live mirror. The
-// store pushes through backup, so backup has been opened and holds a mirror;
-// that mirror is then moved to a key no remote derives, which is exactly how a
-// directory Dolt wrote under a key the derivation fails to produce looks. The
-// prune must refuse and leave it.
-func TestPruneRemoteCacheKeepsAnOpenedRemotesMirrorItCannotFind(t *testing.T) {
+// TestPruneRemoteCacheKeepsTheMirrorOfARemoteWithItsOwnRef pins that a remote's
+// key is read with the remote's params. DOLT_REMOTE's --ref is part of what
+// Dolt hashes into the directory name, so a key derived without it names a
+// directory that does not exist and leaves the live one looking abandoned.
+func TestPruneRemoteCacheKeepsTheMirrorOfARemoteWithItsOwnRef(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	sync := pushedSyncStore(t, ctx)
 	backupURL := GitBackedRemoteURL(seedBareGitRemote(t, t.TempDir()))
-	if err := sync.SyncAddRemote(ctx, "backup", backupURL); err != nil {
-		t.Fatalf("SyncAddRemote(backup) error = %v", err)
+	if _, err := sync.db.ExecContext(ctx, "CALL DOLT_REMOTE('add', '--ref', 'refs/dolt/other', 'backup', ?)", backupURL); err != nil {
+		t.Fatalf("DOLT_REMOTE add --ref error = %v", err)
 	}
 	if _, err := sync.SyncCompactAndPush(ctx, "backup", "master", false, false); err != nil {
 		t.Fatalf("SyncCompactAndPush(backup) error = %v", err)
 	}
-	remotes, err := sync.SyncListRemotes(ctx)
-	if err != nil {
-		t.Fatalf("SyncListRemotes() error = %v", err)
-	}
-	var backupKey string
-	for _, remote := range remotes {
-		if remote.Name == "backup" {
-			backupKey, _, err = remoteCacheKey(remote.URL)
-		}
-	}
-	if err != nil || backupKey == "" {
-		t.Fatalf("derive backup's key: %q, %v", backupKey, err)
-	}
 	base := sync.remoteCacheBase()
-	drifted := filepath.Join(base, strings.Repeat("cd", 32))
-	if err := os.Rename(filepath.Join(base, backupKey), drifted); err != nil {
-		t.Fatalf("move backup's mirror off its derived key: %v", err)
+	mirrors, err := listRemoteCacheKeys(base)
+	if err != nil || len(mirrors) != 2 {
+		t.Fatalf("cache keys after pushing origin and backup = %v (err %v), want 2", mirrors, err)
 	}
 
 	outcome := sync.pruneRemoteCache(ctx)
-	if !strings.Contains(outcome.Problem, "declining to prune") || !strings.Contains(outcome.Problem, "backup") {
-		t.Fatalf("Problem = %q, want a refusal naming backup — it has been opened and its mirror is unmatched", outcome.Problem)
+	if outcome.Removed != 0 || outcome.Problem != "" {
+		t.Fatalf("outcome = %+v, want nothing removed and no problem", outcome)
 	}
-	if outcome.Removed != 0 {
-		t.Fatalf("Removed = %d, want 0", outcome.Removed)
-	}
-	if _, err := os.Stat(drifted); err != nil {
-		t.Fatalf("backup's live mirror was deleted: %v", err)
+	survivors, err := listRemoteCacheKeys(base)
+	if err != nil || !slices.Equal(survivors, mirrors) {
+		t.Fatalf("cache keys after the prune = %v (err %v), want %v — backup's mirror was deleted", survivors, err, mirrors)
 	}
 }
 

@@ -5,86 +5,32 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/dolthub/dolt/go/libraries/doltcore/dbfactory"
 )
 
 const (
 	liveKey   = "0a69e895025c221a9ea7a8570fba375f7f42b82be0f8478d65714c6f1c854737"
 	orphanKey = "cccde2fa0f53c5811038500d340d66284c897b14b164ae2c59864637af8ed562"
-	// missedKey is what remoteCacheKey produces for the live remote when the
-	// `/./` is dropped from the URL — a plausible key naming no directory.
-	missedKey = "f85e620f0560cadd1090ffeab0dd90dc06613c0a6024b5a6a740f9667f325ee3"
+	// unopenedKey is a configured remote's key with no directory on disk: a
+	// remote this store has not opened yet.
+	unopenedKey = "f85e620f0560cadd1090ffeab0dd90dc06613c0a6024b5a6a740f9667f325ee3"
 )
 
-// TestPlanRemoteCachePruneCollectsOnlyUnmatchedDirs is the ordinary case: the
-// derivation accounted for the live remote, so the leftover is abandoned.
-func TestPlanRemoteCachePruneCollectsOnlyUnmatchedDirs(t *testing.T) {
+// TestSplitMirrorsAbandonsOnlyWhatNoRemoteNames is the ordinary case: the
+// directory a configured remote's key names is live, the leftover is
+// abandoned, and a configured remote not yet opened here changes neither.
+func TestSplitMirrorsAbandonsOnlyWhatNoRemoteNames(t *testing.T) {
 	t.Parallel()
-	plan, err := planRemoteCachePrune(
-		map[string]expectedMirror{liveKey: {remote: "origin"}},
-		[]string{liveKey, orphanKey},
+	live, abandoned := splitMirrors(
+		map[string]string{"origin": liveKey, "backup": unopenedKey},
+		[]string{orphanKey, liveKey},
 	)
-	if err != nil {
-		t.Fatalf("planRemoteCachePrune() error = %v, want the plan", err)
-	}
-	if len(plan.abandoned) != 1 || plan.abandoned[0] != orphanKey {
-		t.Fatalf("abandoned = %v, want exactly [%s]", plan.abandoned, orphanKey)
-	}
-}
-
-// TestPlanRemoteCachePruneDeclinesWhenDerivationMissesTheLiveMirror is the
-// whole reason this code is shaped the way it is. The live remote's URL carries
-// a home-relative `/./`, a derivation that drops it yields missedKey, and
-// missedKey names no directory on disk. Under a plain set subtraction the live
-// mirror would be "unmatched" and deleted, the next push would silently
-// re-clone it, and the prune would churn the entire cache on every push while
-// reporting success. The plan must refuse instead.
-func TestPlanRemoteCachePruneDeclinesWhenDerivationMissesTheLiveMirror(t *testing.T) {
-	t.Parallel()
-	plan, err := planRemoteCachePrune(
-		map[string]expectedMirror{missedKey: {remote: "origin"}}, // what a drifted derivation predicts
-		[]string{liveKey, orphanKey},                             // what is actually on disk
-	)
-	if err == nil {
-		t.Fatalf("planRemoteCachePrune() returned a plan (%v), want a refusal — "+
-			"this plan would delete the live mirror", plan.abandoned)
-	}
-	if len(plan.abandoned) != 0 {
-		t.Fatalf("a refused plan carried %v, want nothing deletable", plan.abandoned)
-	}
-	if !strings.Contains(err.Error(), "origin") {
-		t.Fatalf("refusal = %q, want it to name the remote it could not account for", err)
-	}
-}
-
-// TestPlanRemoteCachePruneRefusalOwnsUpToBothCauses pins what the refusal is
-// allowed to claim. An opened remote with no directory is two facts wearing one
-// shape — a drifted derivation, or a mirror built outside this store, since a
-// push from a copy of the store records the tracking branch here and keeps the
-// mirror in the copy — and this code declines precisely because it cannot
-// separate them. Asserting the first as established fact sends a reader to
-// audit a derivation that is fine, so the message must carry both readings and
-// the action that settles them.
-func TestPlanRemoteCachePruneRefusalOwnsUpToBothCauses(t *testing.T) {
-	t.Parallel()
-	_, err := planRemoteCachePrune(
-		map[string]expectedMirror{missedKey: {remote: "backup"}, liveKey: {remote: "origin"}},
-		[]string{liveKey, orphanKey},
-	)
-	if err == nil {
-		t.Fatal("planRemoteCachePrune() returned a plan, want a refusal")
-	}
-	for _, want := range []string{
-		"derivation disagrees", // the alarming cause
-		"outside this store",   // the benign one it must not hide
-		"lit sync push",        // what clears the benign one
-		"nothing was deleted",  // what it did about it
-		"backup",               // which remote to act on
-	} {
-		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("refusal = %q, want it to mention %q", err, want)
-		}
+	if !slices.Equal(live, []string{liveKey}) || !slices.Equal(abandoned, []string{orphanKey}) {
+		t.Fatalf("splitMirrors() = (live %v, abandoned %v), want ([%s], [%s])", live, abandoned, liveKey, orphanKey)
 	}
 }
 
@@ -163,68 +109,28 @@ func TestCollectAbandonedMirrorReportsAFailureNamingTheKey(t *testing.T) {
 	}
 }
 
-// TestPlanRemoteCachePruneAcceptsAStoreThatHasNeverPushed proves the refusal does
-// not fire on a fresh store. Nothing is on disk, so the unaccounted remote is
-// just a cache not built yet and there is nothing to delete either way.
-func TestPlanRemoteCachePruneAcceptsAStoreThatHasNeverPushed(t *testing.T) {
+// TestSplitMirrorsAbandonsEveryMirrorWhenNoRemoteIsConfigured covers the store
+// whose remotes were all removed: no open can reach any mirror.
+func TestSplitMirrorsAbandonsEveryMirrorWhenNoRemoteIsConfigured(t *testing.T) {
 	t.Parallel()
-	plan, err := planRemoteCachePrune(map[string]expectedMirror{liveKey: {remote: "origin"}}, nil)
-	if err != nil {
-		t.Fatalf("planRemoteCachePrune() error = %v, want a no-op plan", err)
-	}
-	if len(plan.abandoned) != 0 {
-		t.Fatalf("abandoned = %v, want nothing", plan.abandoned)
+	live, abandoned := splitMirrors(nil, []string{orphanKey, liveKey})
+	if len(live) != 0 || !slices.Equal(abandoned, []string{liveKey, orphanKey}) {
+		t.Fatalf("splitMirrors() = (live %v, abandoned %v), want (none, both, sorted)", live, abandoned)
 	}
 }
 
-// TestPlanRemoteCachePruneCollectsWhenNoRemoteIsConfigured covers the store whose
-// remotes were all removed: every mirror is abandoned, and nothing is
-// unaccounted for, so collecting them is safe.
-func TestPlanRemoteCachePruneCollectsWhenNoRemoteIsConfigured(t *testing.T) {
+// TestGitRemoteCacheKeyPreservesHomeRelativePath pins the key against the value
+// Dolt actually produced for this repository's own remote, the URL whose `/./`
+// segment is the difference between naming the live 97 MB mirror and naming
+// nothing at all. It holds the fork to that across rebases.
+func TestGitRemoteCacheKeyPreservesHomeRelativePath(t *testing.T) {
 	t.Parallel()
-	plan, err := planRemoteCachePrune(nil, []string{liveKey, orphanKey})
+	key, gitBacked, err := dbfactory.GitRemoteCacheKey("git+ssh://git@github.com/./promptctl/links-issue-tracker.git", nil)
 	if err != nil {
-		t.Fatalf("planRemoteCachePrune() error = %v, want the plan", err)
+		t.Fatalf("GitRemoteCacheKey() error = %v", err)
 	}
-	if len(plan.abandoned) != 2 {
-		t.Fatalf("abandoned = %v, want both mirrors", plan.abandoned)
-	}
-}
-
-// TestRemoteCacheKeyPreservesHomeRelativePath pins the derivation against the
-// value Dolt actually produced for this repository's own remote — the URL whose
-// `/./` segment is the difference between naming the live 97 MB mirror and
-// naming nothing at all.
-func TestRemoteCacheKeyPreservesHomeRelativePath(t *testing.T) {
-	t.Parallel()
-	key, gitBacked, err := remoteCacheKey("git+ssh://git@github.com/./promptctl/links-issue-tracker.git")
-	if err != nil {
-		t.Fatalf("remoteCacheKey() error = %v", err)
-	}
-	if !gitBacked {
-		t.Fatalf("gitBacked = false, want true for a git+ssh url")
-	}
-	if key != liveKey {
-		t.Fatalf("key = %q, want %q — the home-relative `/./` must survive into the hash", key, liveKey)
-	}
-}
-
-// TestRemoteCacheKeySeparatesNonGitRemotesFromBadUrls pins the three-way split.
-// Folding the middle case either way is the enumeration gap: as an error, one
-// ordinary file remote disables the prune; as a key, the prune invents a
-// directory Dolt never wrote.
-func TestRemoteCacheKeySeparatesNonGitRemotesFromBadUrls(t *testing.T) {
-	t.Parallel()
-	key, gitBacked, err := remoteCacheKey("file:///srv/backups/lit")
-	if err != nil {
-		t.Fatalf("a non-git remote is not an error, got %v", err)
-	}
-	if gitBacked || key != "" {
-		t.Fatalf("file remote reported gitBacked=%v key=%q, want false and empty", gitBacked, key)
-	}
-
-	if _, _, err := remoteCacheKey("git+ssh://git@github.com/x\x7f.git"); err == nil {
-		t.Fatalf("an unparseable url must be an error, not a silent skip")
+	if !gitBacked || key != liveKey {
+		t.Fatalf("GitRemoteCacheKey() = (%q, %v), want (%q, true)", key, gitBacked, liveKey)
 	}
 }
 
@@ -259,9 +165,9 @@ func TestIsRemoteCacheKeyRejectsForeignNames(t *testing.T) {
 // surface that reports it.
 func TestPruneOutcomeReportKeepsConfirmedWorkAfterAProblem(t *testing.T) {
 	t.Parallel()
-	got := remoteCachePruneOutcome{remoteCacheCollection: remoteCacheCollection{
+	got := remoteCachePruneOutcome{
 		Removed: 2, Reclaimed: 3 << 20, Problem: "remove abandoned mirror abc: permission denied",
-	}}.Report()
+	}.Report()
 	for _, want := range []string{"removed 2", "3.0 MiB", "then failed", "permission denied"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("Report() = %q, want it to contain %q", got, want)
@@ -279,117 +185,29 @@ func TestPruneOutcomeReportIsEmptyOnlyWhenNothingHappened(t *testing.T) {
 	}
 	for name, collection := range map[string]remoteCacheCollection{
 		"work performed":     {Removed: 1, Reclaimed: 4096},
-		"declined":           {Problem: "declining to prune: ..."},
+		"re-check failed":    {Problem: "re-check abandoned mirror abc: list dolt remotes: ..."},
 		"io failure":         {Problem: "remove abandoned mirror abc: permission denied"},
 		"partial":            {Removed: 1, Reclaimed: 4096, Problem: "boom"},
 		"finished by a peer": {Reclaimed: 4096},
 	} {
-		if (remoteCachePruneOutcome{remoteCacheCollection: collection}).Report() == "" {
+		if remoteCachePruneOutcome(collection).Report() == "" {
 			t.Fatalf("Report() for %q was empty — an actionable state must never render silent", name)
 		}
 	}
 }
 
-// TestPlanRemoteCachePruneExcusesANeverOpenedRemote is the case this plan was
-// reshaped for: a workspace that keeps a second remote it has never pushed or
-// fetched through. That remote has no directory because Dolt writes a mirror on
-// first use, and the store's evidence says it was never used, so the orphan is
-// collected instead of the prune declining for the life of the remote.
-func TestPlanRemoteCachePruneExcusesANeverOpenedRemote(t *testing.T) {
-	t.Parallel()
-	plan, err := planRemoteCachePrune(
-		map[string]expectedMirror{liveKey: {remote: "origin"}, missedKey: {remote: "backup", neverOpened: true}},
-		[]string{liveKey, orphanKey},
-	)
-	if err != nil {
-		t.Fatalf("planRemoteCachePrune() error = %v, want the plan — backup has never been opened", err)
-	}
-	if len(plan.abandoned) != 1 || plan.abandoned[0] != orphanKey {
-		t.Fatalf("abandoned = %v, want exactly [%s]", plan.abandoned, orphanKey)
-	}
-	if len(plan.neverOpened) != 1 || plan.neverOpened[0] != "backup" {
-		t.Fatalf("neverOpened = %v, want [backup] — the excusal is a decision and the plan must carry it", plan.neverOpened)
-	}
-}
-
-// TestPlanRemoteCachePruneExcusingOneRemoteDoesNotNarrowTheGate pins that the
-// excusal is per remote and never a narrowing to the remote at hand. origin has
-// been opened and its derived key names nothing on disk, which is how drift
-// looks: its live mirror is one of the unmatched directories. backup being
-// never opened must not license deleting it.
-func TestPlanRemoteCachePruneExcusingOneRemoteDoesNotNarrowTheGate(t *testing.T) {
-	t.Parallel()
-	const backupKey = "dddde2fa0f53c5811038500d340d66284c897b14b164ae2c59864637af8ed562"
-	plan, err := planRemoteCachePrune(
-		map[string]expectedMirror{missedKey: {remote: "origin"}, backupKey: {remote: "backup", neverOpened: true}},
-		[]string{liveKey, orphanKey},
-	)
-	if err == nil {
-		t.Fatalf("planRemoteCachePrune() returned a plan (%v), want a refusal — "+
-			"this plan would delete origin's live mirror", plan.abandoned)
-	}
-	if !strings.Contains(err.Error(), "origin") || strings.Contains(err.Error(), "backup") {
-		t.Fatalf("refusal = %q, want it to name origin, the opened remote, and not backup", err)
-	}
-}
-
-// TestExpectedMirrorsReadsOpenedFromTrackingBranches pins where the evidence
-// comes from and which way its imprecision runs. A remote with a tracking
-// branch has been opened; one without has not; a key two remotes share is never
-// opened only if neither has been; and a remote whose name prefixes another's
-// path reads as opened, the direction that keeps the refusal armed.
-func TestExpectedMirrorsReadsOpenedFromTrackingBranches(t *testing.T) {
-	t.Parallel()
-	const sharedKey, prefixKey = "k-shared", "k-prefix"
-	got := expectedMirrors(
-		map[string][]string{liveKey: {"origin"}, missedKey: {"backup"}, sharedKey: {"fork", "origin"}, prefixKey: {"up"}},
-		[]string{"remotes/origin/master", "remotes/up/stream/master"},
-	)
-	for key, want := range map[string]expectedMirror{
-		liveKey:   {remote: "origin"},
-		missedKey: {remote: "backup", neverOpened: true},
-		sharedKey: {remote: "fork and origin"},
-		prefixKey: {remote: "up"},
-	} {
-		if got[key] != want {
-			t.Errorf("expectedMirrors()[%s] = %+v, want %+v", key, got[key], want)
-		}
-	}
-	if len(got) != 4 {
-		t.Errorf("expectedMirrors() = %v, want exactly the 4 keys it was given", got)
-	}
-}
-
-// TestPruneOutcomeReportNamesTheRemotesItExcused puts the excusal on the line
-// the trace records, when the prune acted under it, and keeps a run that did
-// nothing silent whatever it excused.
-func TestPruneOutcomeReportNamesTheRemotesItExcused(t *testing.T) {
-	t.Parallel()
-	acted := remoteCachePruneOutcome{
-		remoteCacheCollection: remoteCacheCollection{Removed: 1, Reclaimed: 4096},
-		NeverOpened:           []string{"backup", "fork"},
-	}.Report()
-	for _, want := range []string{"removed 1", "excused remotes backup, fork", "never been opened"} {
-		if !strings.Contains(acted, want) {
-			t.Fatalf("Report() = %q, want it to contain %q", acted, want)
-		}
-	}
-	if quiet := (remoteCachePruneOutcome{NeverOpened: []string{"backup"}}).Report(); quiet != "" {
-		t.Fatalf("Report() with nothing done = %q, want empty — an excusal alone is not news", quiet)
-	}
-}
-
-// TestCollectAbandonedMirrorKeepsTheBytesItFreedBeforeAFailure pins that the
-// reclaim figure counts unlinks, not a measurement. One file sits where it can
-// be unlinked and one where it cannot; the collection fails, and the bytes of
-// the first are still reported, because a later failure does not restore them.
-func TestCollectAbandonedMirrorKeepsTheBytesItFreedBeforeAFailure(t *testing.T) {
+// TestCollectAbandonedMirrorKeepsCollectingPastAStuckFile pins two things. The
+// reclaim figure counts unlinks, not a measurement, and a failure does not
+// erase it. And a file that cannot be unlinked does not stop its siblings: the
+// stuck one sorts first, so a walk that stopped at it would free nothing and
+// pin the rest of the mirror on every prune that reaches it.
+func TestCollectAbandonedMirrorKeepsCollectingPastAStuckFile(t *testing.T) {
 	t.Parallel()
 	if os.Geteuid() == 0 {
 		t.Skip("running as root: directory permissions do not block unlink")
 	}
 	base := t.TempDir()
-	free, stuck := filepath.Join(base, orphanKey, "a-free"), filepath.Join(base, orphanKey, "b-stuck")
+	stuck, free := filepath.Join(base, orphanKey, "a-stuck"), filepath.Join(base, orphanKey, "b-free")
 	for _, dir := range []string{free, stuck} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatalf("plant orphan: %v", err)
@@ -415,11 +233,10 @@ func TestCollectAbandonedMirrorKeepsTheBytesItFreedBeforeAFailure(t *testing.T) 
 	}
 }
 
-// TestCollectAbandonedMirrorsDeletesOnlyWhatTheFreshPlanAbandons pins that the
-// loop decides each deletion on a plan taken just before it, not on the plan it
-// started from. Between the two, a key can come back to life, and a first push
-// through a remote excused as never opened can turn the refusal back on.
-func TestCollectAbandonedMirrorsDeletesOnlyWhatTheFreshPlanAbandons(t *testing.T) {
+// TestCollectAbandonedMirrorsDeletesOnlyWhatTheFreshReadAbandons pins that the
+// loop decides each deletion on a read taken just before it, not on the read it
+// started from. Between the two, a key can come back to life.
+func TestCollectAbandonedMirrorsDeletesOnlyWhatTheFreshReadAbandons(t *testing.T) {
 	t.Parallel()
 	base := t.TempDir()
 	revived, abandoned := strings.Repeat("aa", 32), strings.Repeat("bb", 32)
@@ -428,25 +245,23 @@ func TestCollectAbandonedMirrorsDeletesOnlyWhatTheFreshPlanAbandons(t *testing.T
 			t.Fatalf("plant %s: %v", key, err)
 		}
 	}
-	outcome := collectAbandonedMirrors(base,
-		remoteCachePlan{abandoned: []string{revived, abandoned}},
-		func() (remoteCachePlan, error) { return remoteCachePlan{abandoned: []string{abandoned}}, nil })
+	outcome := collectAbandonedMirrors(base, []string{revived, abandoned},
+		func() ([]string, error) { return []string{abandoned}, nil })
 	if outcome.Removed != 1 || outcome.Problem != "" {
 		t.Fatalf("outcome = %+v, want exactly one removal and no problem", outcome)
 	}
 	if _, err := os.Stat(filepath.Join(base, revived)); err != nil {
-		t.Fatalf("a key the fresh plan no longer abandons was deleted: %v", err)
+		t.Fatalf("a key the fresh read no longer abandons was deleted: %v", err)
 	}
 
-	refused := errors.New("declining to prune: backup has been opened since")
-	outcome = collectAbandonedMirrors(base,
-		remoteCachePlan{abandoned: []string{revived}},
-		func() (remoteCachePlan, error) { return remoteCachePlan{}, refused })
+	failed := errors.New("list dolt remotes: connection closed")
+	outcome = collectAbandonedMirrors(base, []string{revived},
+		func() ([]string, error) { return nil, failed })
 	if outcome.Removed != 0 || !strings.Contains(outcome.Problem, "re-check abandoned mirror "+revived) ||
-		!strings.Contains(outcome.Problem, refused.Error()) {
-		t.Fatalf("outcome = %+v, want no removal and the refusal reported against %s", outcome, revived)
+		!strings.Contains(outcome.Problem, failed.Error()) {
+		t.Fatalf("outcome = %+v, want no removal and the failed read reported against %s", outcome, revived)
 	}
 	if _, err := os.Stat(filepath.Join(base, revived)); err != nil {
-		t.Fatalf("a key was deleted after the fresh plan refused: %v", err)
+		t.Fatalf("a key was deleted after the fresh read failed: %v", err)
 	}
 }
