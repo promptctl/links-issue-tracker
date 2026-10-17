@@ -461,7 +461,7 @@ func TestCompactWithinLockReportsWhetherThePassLanded(t *testing.T) {
 	var landed compactionAttempt
 	if err := syncStore.runSyncMutation(ctx, func(ctx context.Context) error {
 		var compactErr error
-		landed, compactErr = syncStore.compactWithinLock(ctx, GCNewGen)
+		landed, _, compactErr = syncStore.compactWithinLock(ctx, GCNewGen)
 		return compactErr
 	}); err != nil {
 		t.Fatalf("compactWithinLock() error = %v", err)
@@ -476,7 +476,7 @@ func TestCompactWithinLockReportsWhetherThePassLanded(t *testing.T) {
 	var refused compactionAttempt
 	err = syncStore.runSyncMutation(ctx, func(ctx context.Context) error {
 		var compactErr error
-		refused, compactErr = syncStore.compactWithinLock(ctx, GCMode(99))
+		refused, _, compactErr = syncStore.compactWithinLock(ctx, GCMode(99))
 		return compactErr
 	})
 	if err == nil {

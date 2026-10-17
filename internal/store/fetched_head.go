@@ -130,10 +130,12 @@ func LandFetchedHead(ctx context.Context, doltRootDir, cloneRootDir, remote, bra
 		return LandedFetch{Record: FetchedHeadAbsent}, nil
 	}
 	// Which mirror refs to copy is decided before the hold: the listing is two
-	// git subprocesses per mirror, and a ref the live mirror gains meanwhile
-	// has a name no clone ref shares (Dolt names one per blobstore instance),
-	// so the plan cannot go stale in a way that matters.
-	cachePlan, cacheErr := planRemoteCacheLanding(ctx, remoteCacheBaseAt(root), remoteCacheBaseAt(cloneRoot))
+	// git subprocesses per mirror. The plan names only the fetched remote's
+	// last-known refs, so a live ref that moves meanwhile is one a live
+	// instance republished on close, and the plan going stale there costs
+	// nothing: the copy sets the ref to the clone's value, the same
+	// last-writer-wins rule every close follows.
+	cachePlan, cacheErr := planRemoteCacheLanding(ctx, remoteCacheBaseAt(root), remoteCacheBaseAt(cloneRoot), trimmedRemote)
 
 	// The same shared hold every reader of the Dolt directory takes: a rotator
 	// (snapshots restore, adopt) must not swap the directory under the open.
@@ -246,7 +248,7 @@ func remoteCacheBaseAt(root string) string {
 	return filepath.Join(root, doltDatabaseName, dbfactory.DoltDir, remoteCacheDirName)
 }
 
-// remoteCacheLanding is what a fetch on the clone added to its mirrors of the
+// remoteCacheLanding is what a fetch on the clone changed in its mirrors of the
 // remote, to be copied into the live store's mirrors. A clone starts with a
 // copy of the live mirrors, so without this the live mirror would never learn
 // what the clone fetched, and every later clone would fetch it again, a little
@@ -254,7 +256,8 @@ func remoteCacheBaseAt(root string) string {
 type remoteCacheLanding struct {
 	// moves are mirrors the live store does not have yet, moved over whole.
 	moves []mirrorMove
-	// copies are mirrors both have, with the refs only the clone holds.
+	// copies are mirrors both have, with the fetched remote's last-known refs
+	// the clone holds at a value the live mirror does not.
 	copies []mirrorCopy
 }
 
@@ -267,12 +270,29 @@ type mirrorCopy struct {
 
 // planRemoteCacheLanding decides, for every mirror in the clone, whether it is
 // moved over whole or which of its refs are copied. A mirror the live store
-// has gets the refs the clone's fetch created — Dolt names one per blobstore
-// instance, so they are the refs the clone holds and the live mirror does not.
-// A ref both hold is left alone: the live mirror's value is at least as new as
-// the copy the clone started from. A mirror with nothing new costs nothing
-// under the hold. A mirror that cannot be listed is reported and skipped.
-func planRemoteCacheLanding(ctx context.Context, liveBase, cloneBase string) (remoteCacheLanding, error) {
+// has gets the clone's last-known refs of the fetched remote — what its
+// fetch's blobstore published on close (fork patch 7) — wherever the live
+// mirror lacks one or holds it at another value. Only last-known refs, because
+// they are the only refs a mirror keeps between operations: any instance ref
+// the clone holds is an orphan it copied from the live mirror when it was
+// taken, which the live store may have swept since, and landing it would put
+// back the snapshot the sweep released. Only the fetched remote's, because the
+// fetch published nothing else: every other ref the clone holds is the value
+// it copied from the live mirror, which carries no news and, if a live push
+// has moved the ref since, would wind it back.
+//
+// A differing ref is set to the clone's value, for the reason LandFetchedHead
+// sets the tracking ref: the value is where the remote was when the clone's
+// fetch looked, and recording that is what a fetch does. The live value may be
+// a later state — a live push closing after the clone's fetch — and is then
+// replaced by an earlier one: a last-known ref is the base the next fetch
+// negotiates from, not a record of the newest state, and any state the remote
+// held serves, an earlier one costing that fetch the delta again. Git cannot
+// tell which of two states is later, since the blobstore severs its history
+// chain periodically. A ref both hold at the same value costs nothing under
+// the hold. A mirror that cannot be listed is reported and skipped.
+func planRemoteCacheLanding(ctx context.Context, liveBase, cloneBase, remote string) (remoteCacheLanding, error) {
+	fetched := lastKnownRefNamespace + remote + "/"
 	keys, err := listRemoteCacheKeys(cloneBase)
 	if err != nil {
 		return remoteCacheLanding{}, err
@@ -289,20 +309,22 @@ func planRemoteCacheLanding(ctx context.Context, liveBase, cloneBase string) (re
 			errs = append(errs, fmt.Errorf("stat the live mirror %s: %w", key, err))
 			continue
 		}
-		cloneRefs, err := mirrorRefs(ctx, cloneRepo)
+		cloneRefs, err := refsUnder(ctx, cloneRepo, fetched)
 		if err != nil {
 			errs = append(errs, err)
 			continue
 		}
-		liveRefs, err := mirrorRefs(ctx, liveRepo)
+		liveRefs, err := refsUnder(ctx, liveRepo, fetched)
 		if err != nil {
 			errs = append(errs, err)
 			continue
 		}
 		var refspecs []string
-		for name := range cloneRefs {
-			if _, held := liveRefs[name]; !held {
-				refspecs = append(refspecs, name+":"+name)
+		for name, object := range cloneRefs {
+			if liveRefs[name] != object {
+				// Forced, because a last-known ref moves to wherever the
+				// remote was, which need not descend from where it had been.
+				refspecs = append(refspecs, "+"+name+":"+name)
 			}
 		}
 		if len(refspecs) > 0 {
@@ -336,15 +358,41 @@ func (p remoteCacheLanding) apply(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// mirrorRefs lists the refs under refs/dolt/ in one mirror.
-func mirrorRefs(ctx context.Context, gitDir string) (map[string]struct{}, error) {
-	out, err := exec.CommandContext(ctx, "git", "--git-dir", gitDir, "for-each-ref", "--format=%(refname)", "refs/dolt/").Output()
+// mirrorRef is one ref under refs/dolt/ in a mirror and the object it names.
+type mirrorRef struct {
+	name   string
+	object string
+}
+
+// listMirrorRefs lists the refs under refs/dolt/ in one mirror, newest commit
+// first. It is the one reading of a mirror's refs: the landing and the sweep
+// both read through it. [LAW:one-source-of-truth]
+func listMirrorRefs(ctx context.Context, gitDir string) ([]mirrorRef, error) {
+	out, err := exec.CommandContext(ctx, "git", "--git-dir", gitDir, "for-each-ref",
+		"--sort=-committerdate", "--format=%(refname) %(objectname)", "refs/dolt/").Output()
 	if err != nil {
 		return nil, fmt.Errorf("list the refs of mirror %s: %w", gitDir, err)
 	}
-	refs := map[string]struct{}{}
-	for _, name := range strings.Fields(string(out)) {
-		refs[name] = struct{}{}
+	var refs []mirrorRef
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if name, object, found := strings.Cut(line, " "); found {
+			refs = append(refs, mirrorRef{name: name, object: object})
+		}
 	}
 	return refs, nil
+}
+
+// refsUnder maps each ref under prefix in one mirror to the object it names.
+func refsUnder(ctx context.Context, gitDir, prefix string) (map[string]string, error) {
+	refs, err := listMirrorRefs(ctx, gitDir)
+	if err != nil {
+		return nil, err
+	}
+	under := map[string]string{}
+	for _, ref := range refs {
+		if strings.HasPrefix(ref.name, prefix) {
+			under[ref.name] = ref.object
+		}
+	}
+	return under, nil
 }

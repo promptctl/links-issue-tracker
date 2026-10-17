@@ -15,7 +15,7 @@ one below carries the condition that would let it be deleted.
 
 | Module in `go.mod` | Upstream | What `lit` builds | Branch | Current pin |
 | --- | --- | --- | --- | --- |
-| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20260903200716-5c905af3d959` |
+| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20261017165712-c831be21bb2d` |
 | `github.com/dolthub/go-mysql-server` | [dolthub/go-mysql-server](https://github.com/dolthub/go-mysql-server) | [promptctl/go-mysql-server](https://github.com/promptctl/go-mysql-server) | `lit` | `v0.20.1-0.20260821032251-ab5cb9ec3b69` |
 | `github.com/dolthub/driver` | [dolthub/driver](https://github.com/dolthub/driver) | [`internal/vendor/dolthub-driver`](internal/vendor/dolthub-driver) | — | `v0.2.1-0.20260314000741-0fe74e7ee31a` |
 
@@ -234,6 +234,41 @@ final flush best-effort (`select`/`default`), and the new test pins that
 **Retire it when** upstream fixes the emitStats shutdown ordering (no upstream
 PR exists yet) and the `require` line moves past it. Retiring the patch does
 not retire the fork.
+
+#### Patch 7 — close what fetch and pull open, and keep one last-known ref per remote
+
+`go/libraries/doltcore/sqle/dprocedures/dolt_fetch.go`,
+`go/libraries/doltcore/sqle/dprocedures/dolt_pull.go`,
+`go/store/blobstore/git_blobstore.go`, `go/store/blobstore/git_refs.go`, plus
+`go/store/blobstore/git_blobstore_last_known_ref_test.go` (a new file, not
+upstream's).
+
+`DOLT_FETCH` and `DOLT_PULL` open their remote through
+`GetRemoteDBWithoutCaching`, whose contract makes closing it the caller's job,
+and neither closed it. A git-backed remote's blobstore deletes the two refs it
+names with its own UUID only in `Close`, so every fetch and pull left a
+`refs/dolt/remotes/<remote>/dolt/data/<uuid>` ref in the store's
+`git-remote-cache` mirror, and each one pinned a whole superseded snapshot of
+the remote against `git gc`. `lit`'s own store had 2,049 of them and a 256 MB
+pack against 93 MB for the newest snapshot (`links-storage-bd8w.qif`). Both
+procedures now close the database they open.
+
+Closing alone would have traded the leak for a download. The UUID refs were
+the only refs the mirror held — `DOLT_PUSH`'s cached instance already deleted
+its own at engine close — so a mirror with them gone negotiates its next fetch
+with no haves and receives the whole snapshot again. `Close` therefore first
+publishes its tracking ref to `refs/dolt/last-known/<remote>/dolt/data`, the
+one ref a mirror keeps between operations, and a successful lease push moves
+the tracking ref to the pushed commit, as `git push` does, so a writer
+publishes what it pushed rather than what it fetched before pushing. The
+last-known ref sits outside `refs/dolt/remotes/` because git cannot hold a ref
+at a path other refs sit beneath.
+
+**Retire it when** upstream closes the remote database in both procedures and
+keeps a durable negotiation ref in the git blobstore, and the `require` line
+moves past that change. Retiring the patch does not retire the fork. A rebase
+that drops only the publish while keeping the closes is the download
+regression above, not a cleanup.
 
 ### promptctl/go-mysql-server
 
