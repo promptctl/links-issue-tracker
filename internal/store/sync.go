@@ -669,11 +669,21 @@ func (s *Store) SyncPush(ctx context.Context, remote string, branch string, setU
 	push := func(ctx context.Context) (storage.SyncPushResult, error) {
 		return s.pushMutation(ctx, remote, branch, setUpstream, force)
 	}
-	result, refused, err := s.pushFollowingReRoot(ctx, remote, branch, setUpstream, force, push)
-	if err = errors.Join(refused, err); err != nil {
+	result, refused, followErr := s.pushFollowingReRoot(ctx, remote, branch, setUpstream, force, push)
+	if err := pushRefusal(refused, followErr); err != nil {
 		return storage.SyncPushResult{}, err
 	}
 	return result, nil
+}
+
+// pushRefusal is a refused push as its caller reports it: the refusal, with
+// the fetch or follow that could not explain it joined, or nil when the push
+// landed.
+func pushRefusal(refused, followErr error) error {
+	if followErr != nil {
+		return fmt.Errorf("%w (and whether the remote re-rooted its history could not be checked: %w)", refused, followErr)
+	}
+	return refused
 }
 
 // pushMutation is one push as its own sync mutation.
@@ -696,7 +706,8 @@ func (s *Store) pushMutation(ctx context.Context, remote string, branch string, 
 // so the push runs once more, as a plain push; that push's outcome is the
 // result. Otherwise the refusal stands, returned as refused with the fetch
 // already run, so a caller judging it reads the remote as it stands now. err
-// is a fetch or follow that failed, beside the refusal it could not explain.
+// is a fetch or follow that failed, beside the refusal it could not explain,
+// for the caller to word.
 //
 // A push with no branch names no tracking ref, so its refusal stands with
 // nothing fetched: there is no history on the other side to follow.
@@ -707,7 +718,7 @@ func (s *Store) pushFollowingReRoot(ctx context.Context, remote, branch string, 
 		return result, refused, nil
 	}
 	if err := s.SyncFetch(ctx, remote, false); err != nil {
-		return storage.SyncPushResult{}, refused, fmt.Errorf("whether the remote re-rooted its history could not be checked: %w", err)
+		return storage.SyncPushResult{}, refused, err
 	}
 	followed, err := s.followRemoteReRoot(ctx, remote, trimmedBranch, storage.SyncEntryPush)
 	if err != nil || !followed {
@@ -750,7 +761,7 @@ func (s *Store) SyncCompactAndPush(ctx context.Context, remote string, branch st
 	// A push refused over a re-root it follows runs again without compacting:
 	// the store was compacted moments ago.
 	result, refused, followErr := s.pushFollowingReRoot(ctx, remote, branch, setUpstream, force, compactAndPush)
-	err := errors.Join(refused, followErr)
+	err := pushRefusal(refused, followErr)
 	// DOLT_GC above compacts `noms`; the prune collects the other half of the
 	// store's local footprint, the abandoned git remote mirrors. All three jobs
 	// report whether or not the push landed. A pass that ran is reported even
