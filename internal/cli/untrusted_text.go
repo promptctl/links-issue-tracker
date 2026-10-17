@@ -27,7 +27,12 @@ const (
 
 // quotedBreak stands in for a line break the inline rendering cannot honour, so
 // a multi-line value reads as one token instead of fabricating structure.
-const quotedBreak = "‹newline›"
+// defusedBreak is what a quotedBreak already in the text becomes, so wherever
+// the token is printed it means a break and nothing else.
+const (
+	quotedBreak  = "‹newline›"
+	defusedBreak = "[newline]"
+)
 
 // quotedInlineOpen and quotedInlineClose bound an inline value. An id is as
 // unconstrained as any other remote field, so one whose text reads as a sentence
@@ -57,7 +62,7 @@ var (
 	delimiterDefuser = strings.NewReplacer(
 		agentInstructionsOpen, "‹agent-instructions›",
 		agentInstructionsClose, "‹/agent-instructions›",
-		quotedBreak, "[newline]",
+		quotedBreak, defusedBreak,
 		quotedInlineOpen, "[[",
 		quotedInlineClose, "]]",
 	)
@@ -76,8 +81,9 @@ var (
 // override reorders that line just as effectively without being a control rune at
 // all, which is why the reject set is both categories and not a list of code
 // points that drifts as Unicode adds more. Tab survives: it moves no cursor.
-// Replaced rather than dropped, so stripping can never splice the halves of a
-// broken delimiter back into a live tag.
+// Replaced rather than dropped, so the reader sees that something stood there
+// and stripping never joins the text on either side into words its author did
+// not write.
 //
 // Cf costs legitimate rendering: ZWJ and ZWNJ go too, so an emoji sequence or
 // Persian text in a title comes out mangled. That is the deliberate trade \u2014 a
@@ -104,12 +110,24 @@ type quotedRemote struct{ lines []string }
 // agent-instruction envelope. Every renderer that embeds
 // one passes through here. [LAW:single-enforcer]
 func quoteRemote(text string) quotedRemote {
-	raw := strings.Split(lineBreakNormalizer.Replace(text), "\n")
-	lines := make([]string, 0, len(raw))
-	for _, line := range raw {
-		lines = append(lines, stripInvisibles(delimiterDefuser.Replace(line)))
+	lines := textLines(text)
+	for i, line := range lines {
+		lines[i] = delimiterDefuser.Replace(line)
 	}
 	return quotedRemote{lines: lines}
+}
+
+// textLines splits text at every code point a reader may take for a line break
+// and strips each line's invisibles, so no line it returns can move the cursor
+// or start a line of its own. It is the one definition of a value's printable
+// lines: quoteRemote defuses them for the envelope, singleLine joins them onto
+// one row. [LAW:one-source-of-truth]
+func textLines(text string) []string {
+	lines := strings.Split(lineBreakNormalizer.Replace(text), "\n")
+	for i, line := range lines {
+		lines[i] = stripInvisibles(line)
+	}
+	return lines
 }
 
 // inline renders the value as a single DELIMITED token for a sentence or a joined
