@@ -81,8 +81,9 @@ var (
 // override reorders that line just as effectively without being a control rune at
 // all, which is why the reject set is both categories and not a list of code
 // points that drifts as Unicode adds more. Tab survives: it moves no cursor.
-// Replaced rather than dropped, so stripping can never splice the halves of a
-// broken delimiter back into a live tag.
+// Replaced rather than dropped, so the reader sees that something stood there
+// and stripping never joins the text on either side into words its author did
+// not write.
 //
 // Cf costs legitimate rendering: ZWJ and ZWNJ go too, so an emoji sequence or
 // Persian text in a title comes out mangled. That is the deliberate trade \u2014 a
