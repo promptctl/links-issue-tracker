@@ -45,7 +45,7 @@ type SameEntity struct {
 //
 // A merge-base row is NOT the stronger evidence it looks like. A merge-base is a
 // COMMIT-level ancestor, while an id is hard-deleted (the import delta's
-// deleteIssueTx) and re-minted from the live-row maximum (newChildIssueID), so the
+// deleteIssueTx) and the mint can land on it again (issueid.Content), so the
 // base commit can still hold the row a deleted ticket wore: present, and a stranger
 // to both sides. A base that disagrees with the birth certificates is that re-mint,
 // never a drift to see past, so ancestorOf drops it instead of letting it answer

@@ -92,11 +92,12 @@ event that embeds a derived value forks truth into two homes:
 **Issue identity.** Ids are minted with no coordination, so they must be
 collision-proof by construction: an issue id derives from the creating event's
 `(writer-id, causal-position, content)` — opaque, and impossible for two
-offline checkouts to collide on. The current store's child scheme
-(`epic.<maxChild+1>` computed from the local view — see
-`newChildIssueID` in `internal/store/issue_ids.go`) is a guaranteed collision
-under concurrent filing and does not carry over as identity. Sequential child
-numbering survives as **fold-derived presentation**: the fold assigns display
+offline checkouts to collide on. The current store mints every id, a child's
+as `<parent>.<hash>`, from a truncated hash checked for uniqueness against the
+local store only (`newIssueID` in `internal/store/issue_ids.go`; its inputs
+are `issueid.Content`). Two offline checkouts are unlikely to collide but can,
+so these ids do not carry over as identity. Sequential child numbering is
+**fold-derived presentation**: the fold assigns display
 ordinals deterministically, so two children filed offline under one epic are
 two distinct issues that both survive and both get a number. Ordinals are
 deterministic at any event set but **not stable across time** — a concurrent

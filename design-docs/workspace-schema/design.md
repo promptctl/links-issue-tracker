@@ -376,10 +376,13 @@ The current code, mapped so the design's claims are checkable:
   (`schema_reconcile.go:95-107`): under a workspace schema these become
   schema-derived or dissolve into the engine — resolved with the storage
   substrate, not before.
-- **Ranking's two-level frame** ("a child's stand-in is its epic,"
-  `internal/store/ranking.go:212-251`), **lanes** as epic-scoped by
-  definition (`model.go:212`), and **ID minting** (`parent.<n>`,
-  `issue_ids.go:14`) all assume one containment level. §open carries them.
+- **Ranking** is per container at any depth: a key is compared only within
+  its frame, and listings read tree order (`storage.RankAncestry`,
+  `internal/storage/rank.go`). **Lanes** are epic-scoped by definition
+  (`model.LaneOf`) and assume one containment level. **ID minting**
+  (`<parent>.<hash>`, `issue_ids.go:17`) works at any depth, but writes the
+  parent's id at creation into each child's id. §open carries lanes and
+  minting.
 
 ## Where the schema lives, and the road
 
@@ -416,14 +419,15 @@ cache — and nothing in this design may take a dependency that dies with Dolt
 
 ## OPEN questions
 
-1. **Deep-hierarchy ranking and lanes.** Rank framing assumes one containment
-   level; lanes are epic-scoped. Under `feature → story → task`: does ranking
-   at each level compose (likely — rank is per-sibling-set), and what does a
-   lane generalize to (a per-work-unit sub-grouping?)? Needs its own design
-   pass with the rank machinery open.
-2. **ID minting at depth.** `parent.<n>` nests legibly
-   (`feat-x.2.3`), but reparenting and unit moves interact with ID identity.
-   Position wanted before the storage design.
+1. **Lanes at depth.** Ranking composes per container at any depth; lanes
+   are epic-scoped. Under `feature → story → task`, what does a lane
+   generalize to (a per-work-unit sub-grouping?)? Needs its own design pass
+   with the lane machinery open.
+2. **ID minting at depth.** A child id is its parent's id plus a hash
+   segment, so a grandchild reads like `links-rank-qkf6.pm2.9qa`, and each id
+   carries its parent's id as it stood when the child was created.
+   Reparenting and unit moves change the ancestry but not the ids, so they
+   interact with ID identity. Position wanted before the storage design.
 3. **Type identity vs display name.** Is the type name the stable ID policy
    references (rename = new type + migration), or do types carry a separate
    immutable ID? Leaning name-is-ID for legibility; revisit with RBAC.

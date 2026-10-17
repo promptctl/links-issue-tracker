@@ -383,9 +383,9 @@ const (
 	// a side.
 	SyncReconcileProsePending SyncReconcileState = "prose_pending"
 	// SyncReconcileIDCollision: at least one id names a DIFFERENT ticket on each
-	// side — two disconnected stores each minted it for their own job (child ids
-	// are the parent's highest child plus one, counted locally, so two stores
-	// holding the same fifteen children both compute the sixteenth). Nothing is
+	// side — two disconnected stores each minted it for their own job (an id is
+	// checked for uniqueness against the local store only, see issueid.Content,
+	// and children filed before hash minting were numbered locally). Nothing is
 	// committed and the local branch is left untouched, exactly as with held
 	// prose, but this is not a divergence anyone can merge: there is no shared
 	// intent behind the two rows, so combining their fields would invent a ticket

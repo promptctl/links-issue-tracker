@@ -122,9 +122,10 @@ and creation time — a commitment to the content. (The creator input is
 currently a fixed placeholder constant, identical for every issue in every
 workspace — it carries zero attributive information, so no historical
 creator signal exists for issues anywhere, not even approximately in the
-id.) A child id is its parent's id
-plus a sequence number, so ids alone reveal parentage and sibling count. Ids
-appear everywhere: every output, every relation row, every trace, and in
+id.) A child id is its parent's id plus a segment of its own: a hash, or a
+sequence number for a child filed before hash minting. So ids alone reveal the
+parent each issue was created under, and the older ones reveal sibling count.
+Ids appear everywhere: every output, every relation row, every trace, and in
 branch names derived from tickets.
 
 **Comments are rows, not a field** — each with its own id, body (free text),
