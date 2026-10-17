@@ -130,11 +130,9 @@ func TestClaudePluginShipsNextSkill(t *testing.T) {
 // one checker that knows the manifest schema Claude Code actually loads —
 // hand-modeling that schema in Go would drift the moment the CLI adds or
 // retires a field. [LAW:verifiable-goals] Skips (not fails) when the CLI
-// isn't on PATH: no workflow in this repo installs `claude`, so today this
-// is a local-only check, not a CI gate — unlike the `dolt` binary, which CI
-// actually installs (`.github/actions/install-dolt`) for the tests that use
-// it as an oracle. Wiring `claude` into CI too is future work, deliberately
-// left out here rather than adding a new network dependency to the suite.
+// isn't on PATH, as the `dolt`-oracle tests do; CI's build-and-test job
+// installs the pinned CLI (`.github/actions/install-claude`), so there this
+// test gates the merge.
 func TestClaudePluginManifestsPassOfficialValidation(t *testing.T) {
 	t.Parallel()
 	claudeBin, err := exec.LookPath("claude")

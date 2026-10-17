@@ -27,6 +27,11 @@ You need:
   [dolthub/dolt](https://github.com/dolthub/dolt) (CI pins the exact version it
   installs in
   [`.github/actions/install-dolt/action.yml`](.github/actions/install-dolt/action.yml)).
+- **The `claude` CLI** — *optional, for running the test suite.* A test runs
+  the plugin and marketplace manifests through `claude plugin validate
+  --strict` and skips when `claude` is not on PATH; CI installs the version
+  pinned in
+  [`.github/actions/install-claude/action.yml`](.github/actions/install-claude/action.yml).
 - **`jq`** — *only for running the test suite.* A test runs the example
   statusline in [docs/statusline.md](docs/statusline.md), which is a `jq`
   program.

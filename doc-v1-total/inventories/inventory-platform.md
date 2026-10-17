@@ -876,10 +876,10 @@ Justfile or any workflow in `.github/workflows/`.
 - `permissions: contents: read`. Concurrency group `ci-${{ github.ref }}` with
   `cancel-in-progress: true`. Linux (`ubuntu-latest`) only, no build matrix
 .
-- Five jobs, all in parallel:
+- Six jobs, all in parallel:
   1. **`build-and-test`**: checkout@v4 → setup-go@v5 (`go-version-file: go.mod`) →
-     `./.github/actions/install-dolt` → `go build ./cmd/lit` →
-     `go test -short -json ./... | go run ./tools/testbudget` under `shell: bash` (pipefail is
+     `./.github/actions/install-dolt` → `./.github/actions/install-claude` (§11.10) →
+     `go build ./cmd/lit` → `go test -short -json ./... | go run ./tools/testbudget` under `shell: bash` (pipefail is
      load-bearing). No `-timeout` override by policy.
   2. **`race`**: same setup; `go test -short -race -timeout 30m ./cmd/... ./internal/...` —
      scope excludes `tools/` deliberately; no testbudget pipe. The `-timeout 30m`
@@ -891,6 +891,8 @@ Justfile or any workflow in `.github/workflows/`.
   4. **`lint`**: `golangci/golangci-lint-action@v8` pinned to `version: v2.8.0`.
   5. **`docs`**: setup-python@v5 `3.x`; `pip install mkdocs==1.6.1 mkdocs-material==9.7.6`;
      `mkdocs build --strict`.
+  6. **`candybar`**: checkout@v4 → setup-go@v5 → setup-node@v4 (`node-version: '22'`) →
+     `go run ./tools/candybar-check`.
 
 ### 11.2 `.github/actions/install-dolt/action.yml`
 
@@ -1124,6 +1126,12 @@ Composite action (`.github/actions/report-to-lit/action.yml`). Inputs, all requi
   (`persist-credentials: false`) → `./.github/actions/report-to-lit` (§11.8) with label
   `release-stuck`, title `A promoted release is stuck: no tag published`, and a body
   naming the recovery `gh workflow run release-validate.yml --ref master`.
+
+### 11.10 `.github/actions/install-claude/action.yml`
+
+Composite action; installs the pinned Claude Code CLI used as a **test-only** oracle
+for `claude plugin validate --strict` (`.github/actions/install-claude/action.yml`):
+`npm install -g @anthropic-ai/claude-code@2.1.292`, then `claude --version`.
 
 ---
 

@@ -212,14 +212,14 @@ Every compile recipe sources `cgo-env.sh` first (`Justfile`).
 
 Push to `master` and PRs targeting `master`; concurrency-cancelled per ref; `ubuntu-latest` only, no matrix. Six parallel jobs (`.github/workflows/ci.yml`):
 
-1. **build-and-test** — build, then `go test -short -json ./... | go run ./tools/testbudget` under `shell: bash` (pipefail load-bearing); no `-timeout` override by policy.
+1. **build-and-test** — installs Dolt and Claude Code, builds, then runs `go test -short -json ./... | go run ./tools/testbudget` under `shell: bash` (pipefail load-bearing); no `-timeout` override by policy.
 2. **race** — `go test -short -race -timeout 30m ./cmd/... ./internal/...` (tools excluded deliberately; no budget pipe). The timeout is sized above internal/cli's testbudget ceiling as the detector inflates it, so slowness fails build-and-test's budget check, not this lane's timeout.
 3. **verify** — `go mod tidy` must be a no-op (`git diff --exit-code`); `install.sh` must contain `-buildvcs=false`; then actually runs `install.sh`, passing on exit 0 or on exit 3, the schema guard's refusal of a tree no release supports, which master is between a migration merging and its release.
 4. **lint** — golangci-lint pinned to v2.8.0.
 5. **docs** — `mkdocs build --strict` (mkdocs 1.6.1 / material 9.7.6), so a missing docs page or broken nav link fails the merge gate. (`mkdocs.yml` defines the `links` material-theme site with a seven-entry nav.)
 6. **candybar** — Go plus Node 22 (`actions/setup-node`), then `go run ./tools/candybar-check`, so a lit cc-candybar plugin that does not render each case's cells fails the merge gate.
 
-The composite action `.github/actions/install-dolt` installs the pinned Dolt CLI v1.81.10 — used as a test-only oracle, not shipped.
+The composite action `.github/actions/install-dolt` installs the pinned Dolt CLI v1.81.10 — used as a test-only oracle, not shipped. The composite action `.github/actions/install-claude` installs the pinned Claude Code CLI 2.1.292, the test-only oracle for `claude plugin validate --strict`; build-and-test is the only job that runs it, so the plugin-manifest test that skips without `claude` gates there.
 
 The composite action `.github/actions/report-to-lit` (inputs `label`, `title`, `body`, `token`) files a scheduled workflow's red run into this repository's lit backlog: it sets a global git `extraheader` from the token (embedded Dolt runs git against its own cache repository), builds lit, runs `lit init` with `LIT_DISABLE_AUTO_SYNC=1` to adopt the remote backlog, then comments `Red again: <run URL>` on the first open or in-progress ticket carrying the label, or files an urgent `--top` bug with that label and topic inside epic `links-ci-alarm-z6sv`, and finishes with `lit sync push`. A refused push is followed by `lit sync pull` and another push, three pushes at most.
 

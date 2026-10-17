@@ -1,0 +1,17 @@
+# The test suite shells out to `claude plugin validate --strict` as the oracle
+# for the plugin and marketplace manifests, so the `claude` CLI must be on PATH
+# before `go test` in the workflow that gates them. (It is a test-only oracle;
+# lit does not run it.) The validator needs no login, so a bare install is
+# enough. [LAW:one-source-of-truth] This action is the one home of the pinned
+# Claude Code version.
+name: Install Claude Code
+description: Install the pinned claude CLI the test suite uses as an oracle.
+runs:
+  using: composite
+  steps:
+    - name: Install Claude Code
+      shell: bash
+      run: |
+        set -euo pipefail
+        npm install -g @anthropic-ai/claude-code@2.1.292
+        claude --version

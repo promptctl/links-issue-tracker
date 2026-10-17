@@ -37,6 +37,10 @@ jobs:
 
       - uses: ./.github/actions/install-dolt
 
+      # Without `claude` on PATH the plugin-manifest validation test skips, so
+      # this job is the one place that test gates anything.
+      - uses: ./.github/actions/install-claude
+
       - name: Build
         run: go build ./cmd/lit
 
