@@ -18,7 +18,7 @@ func TestConformance(t *testing.T) {
 // newEngine mints a fresh engine for one case. Every case gets its own: a
 // suite whose cases shared a store would be pinning the order they run in as
 // much as the contract.
-func newEngine(t *testing.T, clock storage.Clock) *memory.Engine {
+func newEngine(t testing.TB, clock storage.Clock) *memory.Engine {
 	t.Helper()
 	engine, err := memory.New("memory-conformance", clock)
 	if err != nil {

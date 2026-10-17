@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -391,7 +392,7 @@ func (e *Engine) ListTopics(ctx context.Context) ([]string, error) {
 // ListAllEvents returns the whole history, oldest first, ties broken by event
 // id — the contract's ordering, on storage.IssueReader.ListAllEvents.
 //
-// The append-only slice already holds true recording order, which is a BETTER
+// Each issue's run already holds true recording order, which is a BETTER
 // answer, and it is deliberately not the one given. A same-tick tie is exactly
 // where the two engines would otherwise part company, and the differential
 // oracle compares whole event lists: an engine that is right where the other
@@ -401,7 +402,14 @@ func (e *Engine) ListTopics(ctx context.Context) ([]string, error) {
 func (e *Engine) ListAllEvents(ctx context.Context) ([]model.IssueEvent, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return sortEvents(cloneEvents(e.events)), nil
+	return e.allEvents(), nil
+}
+
+// allEvents is the whole history in the contract's order, for callers already
+// holding e.mu. Map iteration order does not reach the result: sortEvents
+// imposes a total order, since no two events share an id.
+func (e *Engine) allEvents() []model.IssueEvent {
+	return sortEvents(cloneEvents(slices.Concat(slices.Collect(maps.Values(e.events))...)))
 }
 
 // ListEvents is eventsFor behind the lock, for callers outside the engine.
@@ -443,11 +451,5 @@ func (e *Engine) LocalIssueCount(ctx context.Context) (int64, error) {
 }
 
 func (e *Engine) eventsFor(issueID string) []model.IssueEvent {
-	out := []model.IssueEvent{}
-	for _, event := range e.events {
-		if event.IssueID == issueID {
-			out = append(out, event)
-		}
-	}
-	return sortEvents(cloneEvents(out))
+	return sortEvents(cloneEvents(e.events[issueID]))
 }

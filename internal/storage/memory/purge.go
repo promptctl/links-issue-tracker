@@ -26,7 +26,8 @@ func (e *Engine) Purge(ctx context.Context, in storage.PurgeInput) (storage.Purg
 	var result storage.PurgeResult
 	e.comments, result.Comments = removeWhere(e.comments, func(c model.Comment) bool { return c.IssueID == id })
 	result.Relations = e.dropRelations(func(r model.Relation) bool { return r.SrcID == id || r.DstID == id })
-	e.events, result.Events = removeWhere(e.events, func(ev model.IssueEvent) bool { return ev.IssueID == id })
+	result.Events = len(e.events[id])
+	delete(e.events, id)
 	result.Labels = len(e.labels[id])
 	delete(e.labels, id)
 	e.detach(id)
