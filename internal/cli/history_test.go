@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/model"
@@ -240,6 +241,41 @@ func TestHistoryNumbersEachTextOnce(t *testing.T) {
 		if err := printFieldVersion(&out, detail, parsed); err != nil || out.String() != want {
 			t.Fatalf("printFieldVersion(%s) = %q, %v; want %q", ref, out.String(), err, want)
 		}
+	}
+}
+
+// TestHistoryHoldsEachEventToItsRows pins the trail's shape against the text
+// an event carries: each event is one row and each change one row beneath it.
+// The cases are the break forms a reader may take for a new line - \n, \r\n,
+// a bare \r, U+2028 - placed in every value a row prints, the first of them a
+// title shaped like an event row, which printed at column 0 would read as one.
+// Each break prints as a literal \n. [LAW:behavior-not-structure]
+func TestHistoryHoldsEachEventToItsRows(t *testing.T) {
+	t.Parallel()
+	detail := model.IssueDetail{
+		Issue: model.Issue{ID: "test-1", Title: "T"},
+		Events: []model.IssueEvent{
+			{Actor: "alice", Action: "update", Reason: "why\nsecond", Changes: []model.FieldChange{
+				{Field: "title", From: "first", To: "line one\n- [forged @ now] update"},
+			}},
+			{Actor: "bob\r\neve", Changes: []model.FieldChange{
+				{Field: "lane", From: "a\rb", To: "c\u2028d"},
+			}},
+		},
+	}
+
+	var stdout bytes.Buffer
+	if err := printIssueHistory(&stdout, detail); err != nil {
+		t.Fatalf("printIssueHistory() error = %v", err)
+	}
+	stamp := formatHistoryTimestamp(time.Time{})
+	want := "test-1\nT\n\nhistory:\n" +
+		"- [alice @ " + stamp + "] update why\\nsecond\n" +
+		"    title: first → line one\\n- [forged @ now] update\n" +
+		"- [bob\\neve @ " + stamp + "] update \n" +
+		"    lane: a\\nb → c\\nd\n"
+	if got := stdout.String(); got != want {
+		t.Fatalf("history trail:\n got %q\nwant %q", got, want)
 	}
 }
 

@@ -358,6 +358,9 @@ func printIssueFields(w io.Writer, detail model.IssueDetail, fields []string) er
 // is its only caller. [LAW:one-source-of-truth] one renderer, so the trail
 // can never render two ways; [LAW:decomposition] carved at the event/detail
 // joint, ready for any future surface that needs the same trail.
+//
+// Every value on a row goes through trailText, so each event is one row and
+// each change one row beneath it, whatever text the event carries.
 func printHistoryEvents(w io.Writer, events []model.IssueEvent, versions map[string][]string) error {
 	for _, event := range events {
 		// Plain field updates carry no Action; "update" is their display label.
@@ -366,7 +369,7 @@ func printHistoryEvents(w io.Writer, events []model.IssueEvent, versions map[str
 		if action == "" {
 			action = "update"
 		}
-		if _, err := fmt.Fprintf(w, "- [%s @ %s] %s %s\n", event.Actor, formatHistoryTimestamp(event.CreatedAt), action, strings.ReplaceAll(event.Reason, "\n", "\\n")); err != nil {
+		if _, err := fmt.Fprintf(w, "- [%s @ %s] %s %s\n", trailText(event.Actor), formatHistoryTimestamp(event.CreatedAt), trailText(action), trailText(event.Reason)); err != nil {
 			return err
 		}
 		for _, change := range event.Changes {
@@ -374,12 +377,20 @@ func printHistoryEvents(w io.Writer, events []model.IssueEvent, versions map[str
 			if texts, long := versions[change.Field]; long {
 				from, to = versionLabel(texts, change.From), versionLabel(texts, change.To)
 			}
-			if _, err := fmt.Fprintf(w, "    %s: %s → %s\n", change.Field, from, to); err != nil {
+			if _, err := fmt.Fprintf(w, "    %s: %s → %s\n", trailText(change.Field), trailText(from), trailText(to)); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
+}
+
+// trailText holds a value to the trail row it is printed on: every code point
+// a reader may take for a line break prints as a literal \n, so no line of an
+// event's text can start a row of its own and read as another event or
+// change. The break set is lineBreakNormalizer's. [LAW:one-source-of-truth]
+func trailText(s string) string {
+	return strings.ReplaceAll(lineBreakNormalizer.Replace(s), "\n", `\n`)
 }
 
 // printIssueHistory renders the standalone `lit history` view: an identifying
