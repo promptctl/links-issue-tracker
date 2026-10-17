@@ -359,7 +359,7 @@ func printIssueFields(w io.Writer, detail model.IssueDetail, fields []string) er
 // can never render two ways; [LAW:decomposition] carved at the event/detail
 // joint, ready for any future surface that needs the same trail.
 //
-// Every value on a row goes through trailText, so each event is one row and
+// Every value on a row goes through singleLine, so each event is one row and
 // each change one row beneath it, whatever text the event carries.
 func printHistoryEvents(w io.Writer, events []model.IssueEvent, versions map[string][]string) error {
 	for _, event := range events {
@@ -369,7 +369,7 @@ func printHistoryEvents(w io.Writer, events []model.IssueEvent, versions map[str
 		if action == "" {
 			action = "update"
 		}
-		if _, err := fmt.Fprintf(w, "- [%s @ %s] %s %s\n", trailText(event.Actor), formatHistoryTimestamp(event.CreatedAt), trailText(action), trailText(event.Reason)); err != nil {
+		if _, err := fmt.Fprintf(w, "- [%s @ %s] %s %s\n", singleLine(event.Actor), formatHistoryTimestamp(event.CreatedAt), singleLine(action), singleLine(event.Reason)); err != nil {
 			return err
 		}
 		for _, change := range event.Changes {
@@ -377,7 +377,7 @@ func printHistoryEvents(w io.Writer, events []model.IssueEvent, versions map[str
 			if texts, long := versions[change.Field]; long {
 				from, to = versionLabel(texts, change.From), versionLabel(texts, change.To)
 			}
-			if _, err := fmt.Fprintf(w, "    %s: %s → %s\n", trailText(change.Field), trailText(from), trailText(to)); err != nil {
+			if _, err := fmt.Fprintf(w, "    %s: %s → %s\n", singleLine(change.Field), singleLine(from), singleLine(to)); err != nil {
 				return err
 			}
 		}
@@ -385,12 +385,12 @@ func printHistoryEvents(w io.Writer, events []model.IssueEvent, versions map[str
 	return nil
 }
 
-// trailText holds a value to the trail row it is printed on: every code point
-// a reader may take for a line break prints as a literal \n, so no line of an
-// event's text can start a row of its own and read as another event or
-// change. The break set is lineBreakNormalizer's. [LAW:one-source-of-truth]
-func trailText(s string) string {
-	return strings.ReplaceAll(lineBreakNormalizer.Replace(s), "\n", `\n`)
+// singleLine holds a value to the one row it is printed on: its printable
+// lines joined by quotedBreak, the CLI's one rendering of a break inside a
+// one-line value. No part of the value can start a row of its own and read as
+// another event or change. [LAW:one-source-of-truth]
+func singleLine(s string) string {
+	return strings.Join(textLines(s), quotedBreak)
 }
 
 // printIssueHistory renders the standalone `lit history` view: an identifying
@@ -402,7 +402,8 @@ func trailText(s string) string {
 // empty Events slice honestly prints just the header rather than fabricating
 // a line.
 func printIssueHistory(w io.Writer, detail model.IssueDetail) error {
-	if _, err := fmt.Fprintf(w, "%s\n%s\n\nhistory:\n", detail.Issue.ID, detail.Issue.Title); err != nil {
+	id := singleLine(detail.Issue.ID)
+	if _, err := fmt.Fprintf(w, "%s\n%s\n\nhistory:\n", id, singleLine(detail.Issue.Title)); err != nil {
 		return err
 	}
 	versions := map[string][]string{}
@@ -412,7 +413,7 @@ func printIssueHistory(w io.Writer, detail model.IssueDetail) error {
 		versions[field.Name] = texts
 		current := field.Current(detail.Issue)
 		if slices.ContainsFunc(texts, func(text string) bool { return text != current }) {
-			superseded = append(superseded, fmt.Sprintf("    %s: %s — lit history %s --version %s@<n> prints one\n", field.Name, describeVersions(len(texts)), detail.Issue.ID, field.Name))
+			superseded = append(superseded, fmt.Sprintf("    %s: %s — lit history %s --version %s@<n> prints one\n", field.Name, describeVersions(len(texts)), id, field.Name))
 		}
 	}
 	if err := printHistoryEvents(w, detail.Events, versions); err != nil {

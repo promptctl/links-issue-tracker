@@ -104,12 +104,24 @@ type quotedRemote struct{ lines []string }
 // agent-instruction envelope. Every renderer that embeds
 // one passes through here. [LAW:single-enforcer]
 func quoteRemote(text string) quotedRemote {
-	raw := strings.Split(lineBreakNormalizer.Replace(text), "\n")
-	lines := make([]string, 0, len(raw))
-	for _, line := range raw {
-		lines = append(lines, stripInvisibles(delimiterDefuser.Replace(line)))
+	lines := textLines(text)
+	for i, line := range lines {
+		lines[i] = delimiterDefuser.Replace(line)
 	}
 	return quotedRemote{lines: lines}
+}
+
+// textLines splits text at every code point a reader may take for a line break
+// and strips each line's invisibles, so no line it returns can move the cursor
+// or start a line of its own. It is the one definition of a value's printable
+// lines: quoteRemote defuses them for the envelope, singleLine joins them onto
+// one row. [LAW:one-source-of-truth]
+func textLines(text string) []string {
+	lines := strings.Split(lineBreakNormalizer.Replace(text), "\n")
+	for i, line := range lines {
+		lines[i] = stripInvisibles(line)
+	}
+	return lines
 }
 
 // inline renders the value as a single DELIMITED token for a sentence or a joined
