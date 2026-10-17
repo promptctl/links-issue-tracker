@@ -44,7 +44,7 @@ General contract: every method is a pure read from the caller's view; two identi
 - Ordered by `SortBy`, then — always, as the final key — by id ascending (`internal/storage/contract.go`).
 - With no `SortBy`: rank ascending, ties broken by id (`internal/storage/contract.go`).
 - The trailing id key is contract, not engine convenience: without it, a sort on any duplicated field value leaves tied rows in engine-incidental order and two engines diverge (`internal/storage/contract.go`).
-- `SortBy` may name only a key `IssueOrdering` reads (`internal/storage/contract.go`).
+- `SortBy` may name only a key `sortKeys` holds (`internal/storage/contract.go`).
 
 **`ListTopics(ctx) ([]string, error)`** — `internal/storage/contract.go`
 - Distinct non-empty topics that *live* issues carry, ascending. Derived vocabulary, never stored (`internal/storage/contract.go`).
@@ -1173,9 +1173,9 @@ Stated in `internal/storage/memory/doc.go`:
 - `SortBy: [{id, Desc: true}]` → the four ids in descending order.
 
 **`list_orders_by_each_value_key`**
-- One pair per key, under one epic. In each pair `second` is created with the clock pinned to `2026-01-01T00:00:00.12Z`, then `first` at `2026-01-01T00:00:00.123456789Z`; every other value a key reads is equal. Listings are narrowed to the pair and take `created_at` as their second key.
+- One pair per key, under one epic. In each pair `second` is created with the clock pinned to `2026-01-01T00:00:00.12Z`, then `first` at `2026-01-01T00:00:00.123456789Z`; every other value a key reads is equal. Listings are narrowed to the pair and take `created_at` as their second key, in the first key's direction.
 - `title`: `"Zeta"` / `"alpha"`. `assignee`: `"Zed"` / `"ada"`. `topic`: `alpha` / `beta`. `type`: `bug` / `task`. `priority`: `normal` / `urgent` (first / second).
-- `SortBy: [{key}, {created_at}]` → first, second; `[{key, Desc: true}, {created_at}]` → second, first.
+- `SortBy: [{key}, {created_at}]` → first, second; `[{key, Desc: true}, {created_at, Desc: true}]` → second, first.
 
 **`list_sorts_status_by_derived_state`**
 - Fixture: epic `home` with children `closedLeaf` (then `Done{}`) and `openLeaf`; a second epic with one child that is then `Start{Assignee: "ada"}`. The second epic's `State()` is `in_progress`.
@@ -1189,8 +1189,8 @@ Stated in `internal/storage/memory/doc.go`:
 
 **`list_orders_timestamps_by_instant_not_spelling`**
 - Fixture: an epic on the unpinned clock; then, under it, `newer` created with the clock pinned to `2026-01-01T00:00:00.123456789Z`, then `older` created with the clock pinned to `2026-01-01T00:00:00.12Z`. A description patch then moves `newer`'s `UpdatedAt` to `2026-01-01T00:00:00.13Z` and `older`'s to `2026-01-01T00:00:00.1300001Z`. Listings are narrowed to `IDs: [older, newer]`.
-- `SortBy: [{created_at}, {updated_at}]` → older, newer; `[{created_at, Desc: true}, {updated_at}]` → newer, older.
-- `SortBy: [{updated_at}, {created_at}]` → newer, older; `[{updated_at, Desc: true}, {created_at}]` → older, newer.
+- `SortBy: [{created_at}, {updated_at}]` → older, newer; `[{created_at, Desc: true}, {updated_at, Desc: true}]` → newer, older.
+- `SortBy: [{updated_at}, {created_at}]` → newer, older; `[{updated_at, Desc: true}, {created_at, Desc: true}]` → older, newer.
 
 **`events_are_totally_ordered`**
 - After a create plus three title changes, `ListAllEvents` returns at least 4 events.

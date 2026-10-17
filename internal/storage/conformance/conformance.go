@@ -1202,9 +1202,9 @@ func listBreaksSortTiesByID(t *testing.T, ctx context.Context, st storage.Store,
 // Inside a pair every other value a key could read is equal, and the pair is
 // created in the reverse of the order the key puts it in — at the earlier
 // instant first — so rank and both timestamps all disagree with the key. Each
-// listing takes created_at as its second key, so a comparison that returns
-// nothing, or reads any other value, hands the order to created_at and gets
-// it backwards.
+// listing takes created_at as its second key, in the key's own direction, so a
+// comparison that returns nothing, or reads any other value, hands the order
+// to created_at and gets it backwards both ways.
 //
 // Where a key's comparison has a way to go wrong that still separates the
 // pair, the values are chosen to hit it. Byte-wise, an uppercase letter sorts
@@ -1245,7 +1245,7 @@ func listOrdersByEachValueKey(t *testing.T, ctx context.Context, st storage.Stor
 			mustList(t, ctx, st, storage.ListIssuesFilter{IDs: pair, SortBy: []storage.SortSpec{{Field: row.key}, {Field: "created_at"}}}),
 			[]string{first.ID, second.ID})
 		assertIssueIDs(t, "sorted by "+row.key+" descending",
-			mustList(t, ctx, st, storage.ListIssuesFilter{IDs: pair, SortBy: []storage.SortSpec{{Field: row.key, Desc: true}, {Field: "created_at"}}}),
+			mustList(t, ctx, st, storage.ListIssuesFilter{IDs: pair, SortBy: []storage.SortSpec{{Field: row.key, Desc: true}, {Field: "created_at", Desc: true}}}),
 			[]string{second.ID, first.ID})
 	}
 }
@@ -1332,9 +1332,9 @@ func stampsComeFromTheClock(t *testing.T, ctx context.Context, st storage.Store,
 // Each column's pair of stamps is spelled the way [earlierInstant] describes,
 // so text order is the reverse of instant order in both. The two columns order
 // the pair opposite ways, and each listing takes the other column as its
-// second key: a key that compares nothing, or reads the other column, hands
-// the order to that second key and gets it backwards. Both directions are
-// asserted because an engine comparing the wrong thing is wrong symmetrically.
+// second key, in the same direction: a key that compares nothing, or reads the
+// other column, hands the order to that second key and gets it backwards in
+// both directions.
 func listOrdersTimestampsByInstant(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	// The updates' pair repeats the creates' trap past both of them: ".13Z"
 	// sorts after ".1300001Z" as text while denoting the earlier instant.
@@ -1371,13 +1371,13 @@ func listOrdersTimestampsByInstant(t *testing.T, ctx context.Context, st storage
 		mustList(t, ctx, st, storage.ListIssuesFilter{IDs: pair, SortBy: []storage.SortSpec{{Field: "created_at"}, {Field: "updated_at"}}}),
 		[]string{older.ID, newer.ID})
 	assertIssueIDs(t, "sorted by created_at descending",
-		mustList(t, ctx, st, storage.ListIssuesFilter{IDs: pair, SortBy: []storage.SortSpec{{Field: "created_at", Desc: true}, {Field: "updated_at"}}}),
+		mustList(t, ctx, st, storage.ListIssuesFilter{IDs: pair, SortBy: []storage.SortSpec{{Field: "created_at", Desc: true}, {Field: "updated_at", Desc: true}}}),
 		[]string{newer.ID, older.ID})
 	assertIssueIDs(t, "sorted by updated_at ascending",
 		mustList(t, ctx, st, storage.ListIssuesFilter{IDs: pair, SortBy: []storage.SortSpec{{Field: "updated_at"}, {Field: "created_at"}}}),
 		[]string{newer.ID, older.ID})
 	assertIssueIDs(t, "sorted by updated_at descending",
-		mustList(t, ctx, st, storage.ListIssuesFilter{IDs: pair, SortBy: []storage.SortSpec{{Field: "updated_at", Desc: true}, {Field: "created_at"}}}),
+		mustList(t, ctx, st, storage.ListIssuesFilter{IDs: pair, SortBy: []storage.SortSpec{{Field: "updated_at", Desc: true}, {Field: "created_at", Desc: true}}}),
 		[]string{older.ID, newer.ID})
 }
 
