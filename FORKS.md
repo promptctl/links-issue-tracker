@@ -15,7 +15,7 @@ one below carries the condition that would let it be deleted.
 
 | Module in `go.mod` | Upstream | What `lit` builds | Branch | Current pin |
 | --- | --- | --- | --- | --- |
-| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20261017165712-c831be21bb2d` |
+| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20261017180803-c1afca53026d` |
 | `github.com/dolthub/go-mysql-server` | [dolthub/go-mysql-server](https://github.com/dolthub/go-mysql-server) | [promptctl/go-mysql-server](https://github.com/promptctl/go-mysql-server) | `lit` | `v0.20.1-0.20260821032251-ab5cb9ec3b69` |
 | `github.com/dolthub/driver` | [dolthub/driver](https://github.com/dolthub/driver) | [`internal/vendor/dolthub-driver`](internal/vendor/dolthub-driver) | — | `v0.2.1-0.20260314000741-0fe74e7ee31a` |
 
@@ -269,6 +269,24 @@ keeps a durable negotiation ref in the git blobstore, and the `require` line
 moves past that change. Retiring the patch does not retire the fork. A rebase
 that drops only the publish while keeping the closes is the download
 regression above, not a cleanup.
+
+#### Patch 8 — export the git remote cache key
+
+`go/libraries/doltcore/dbfactory/git_remote.go` and its test.
+
+`GitRemoteFactory` keeps each git remote's mirror at
+`.dolt/git-remote-cache/<sha256(url|ref)>`, and the derivation was
+unexported. `lit` prunes the mirrors no configured remote maps to, so it had
+to know each remote's directory name and re-derived it by hand, with a
+different URL parser and a fixed ref, and had to refuse to prune whenever its
+copy might have drifted. `GitRemoteCacheKey(url, params)` parses, picks the
+factory and hashes through the same helpers `CreateDB` uses, so the name
+`lit` computes is the name Dolt writes.
+
+**Retire it when** upstream exports the cache directory name (or a prune of
+its own) and the `require` line moves past that change. Dropping it without
+that leaves `internal/store/remotecache.go` with no way to recognize a live
+mirror.
 
 ### promptctl/go-mysql-server
 
