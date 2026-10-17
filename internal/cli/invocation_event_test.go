@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/config"
+	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/primitives/filelock"
@@ -154,6 +156,17 @@ func TestAFailedInvocationRecordsItsExitCodeAndReason(t *testing.T) {
 		if ev.Event != tc.event || ev.Outcome != telemetry.OutcomeError || ev.ExitCode != ExitCode(err) || ev.Reason != string(tc.reason) || ev.Error != err.Error() {
 			t.Errorf("Run(%v) event = %q %q %d %q %q; want %q error %d %q %q", tc.args, ev.Event, ev.Outcome, ev.ExitCode, ev.Reason, ev.Error, tc.event, ExitCode(err), tc.reason, err.Error())
 		}
+	}
+}
+
+// An add that found its edge already in place ends its event as the answer it
+// is, not a fault: the exit code and reason say the state already held, and
+// the error names the edge, so the repeats are countable and attributable.
+func TestAnExistingEdgeEndsTheEventAsAlreadyHolding(t *testing.T) {
+	exists := storage.RelationExistsError{SrcID: "test-a", DstID: "test-b", Type: model.RelBlockedBy}
+	end := invocationEnd(time.Now(), fmt.Errorf("add relation: %w", exists), nil)
+	if end.Outcome != telemetry.OutcomeError || end.ExitCode != ExitNoWork || end.Reason != string(reasonStateAlreadyHolds) || !strings.Contains(end.Error, exists.Error()) {
+		t.Errorf("invocationEnd(existing edge) = %+v, want exit %d %s naming the edge", end, ExitNoWork, reasonStateAlreadyHolds)
 	}
 }
 

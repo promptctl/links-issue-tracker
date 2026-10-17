@@ -2417,6 +2417,25 @@ func relationsRoundtrip(t *testing.T, ctx context.Context, st storage.Store, clk
 	}); err != nil {
 		t.Fatalf("AddRelation related-to error = %v", err)
 	}
+	// Adding an edge the graph already holds is answered, not faulted: the
+	// edge asked for is in place, so every engine returns the contract's
+	// satisfied answer naming it. related-to is undirected, so naming its ends
+	// the other way round asks for the same edge. The count below proves
+	// neither repeat wrote a second row.
+	for _, repeat := range []storage.AddRelationInput{
+		{SrcID: dependent.ID, DstID: dependency.ID, Type: model.RelBlockedBy, CreatedBy: "ada"},
+		{SrcID: peer.ID, DstID: dependent.ID, Type: model.RelRelatedTo, CreatedBy: "ada"},
+	} {
+		_, err := st.AddRelation(ctx, repeat)
+		var exists storage.RelationExistsError
+		if !errors.As(err, &exists) {
+			t.Fatalf("AddRelation(%+v) again error = %v, want storage.RelationExistsError", repeat, err)
+		}
+		wantSrc, wantDst := repeat.Type.CanonicalEndpoints(repeat.SrcID, repeat.DstID)
+		if exists != (storage.RelationExistsError{SrcID: wantSrc, DstID: wantDst, Type: repeat.Type}) || !exists.Satisfied() {
+			t.Errorf("AddRelation(%+v) again = %+v, want the satisfied answer naming %s->%s", repeat, exists, wantSrc, wantDst)
+		}
+	}
 
 	all, err := st.ListRelationsForIssue(ctx, dependent.ID)
 	if err != nil {

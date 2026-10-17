@@ -368,7 +368,26 @@ func addRelationTx(ctx context.Context, tx *sql.Tx, rel model.Relation) error {
 	if rel.Type.SingleValuedFromSrc() {
 		return setSingleValuedEdgeTx(ctx, tx, rel)
 	}
+	if err := rejectExistingRelationTx(ctx, tx, rel); err != nil {
+		return err
+	}
 	return insertRelationTx(ctx, tx, rel)
+}
+
+// rejectExistingRelationTx answers an edge the graph already holds with the
+// contract's satisfied answer, as the memory engine does, rather than letting
+// the raw INSERT surface the primary-key violation. It sits here and not in
+// insertRelationTx, which stays the raw replay-faithful write.
+// [LAW:one-source-of-truth] [LAW:types-are-the-program]
+func rejectExistingRelationTx(ctx context.Context, tx *sql.Tx, rel model.Relation) error {
+	var exists bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM relations WHERE src_id = ? AND dst_id = ? AND type = ?)`, rel.SrcID, rel.DstID, string(rel.Type)).Scan(&exists); err != nil {
+		return fmt.Errorf("read relation %s->%s (%s): %w", rel.SrcID, rel.DstID, rel.Type, err)
+	}
+	if exists {
+		return storage.RelationExistsError{SrcID: rel.SrcID, DstID: rel.DstID, Type: rel.Type}
+	}
+	return nil
 }
 
 // rejectCycleTx refuses an edge whose type may not close a loop. Two types carry

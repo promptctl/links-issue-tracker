@@ -187,7 +187,7 @@ Constants (`exit.go`):
 10. `UnknownCommandError` → 3 (`exit.go`)
 11. `RetiredCommandError` → 3 (`exit.go`)
 12. `model.Refusal` (every `model.ValidationError`, `model.FrozenIssueError`, and the upgrade/downgrade target refusals) → 3 (`exit.go`)
-13. `model.StateRequestError` (`model.ContainerActionError`, `lifecycle.RetentionError`) → 6 when `Satisfied()`, else 3 (`exit.go`)
+13. `model.StateRequestError` (`model.ContainerActionError`, `lifecycle.RetentionError`, `storage.RelationExistsError`) → 6 when `Satisfied()`, else 3 (`exit.go`)
 14. `UnsupportedError` → 3 (`exit.go`)
 15. `takeoverUnconfirmedError` → 3 (`exit.go`)
 16. `purgeUnconfirmedError` → 3 (`exit.go`)
@@ -1771,6 +1771,10 @@ Family `depFamily`, usage `"usage: lit dep <add|rm|ls> ..."` (`dependency.go`).
      "Do not set blocked-by relationships between two issues in the same epic.  Use
      rank to specify that one issue must be completed before another issue"
      (`internal/storage/edges.go` — note the double space).
+  5. An edge the graph already holds — a `related-to` named either way round
+     included — is the store's `storage.RelationExistsError`, a satisfied
+     `model.StateRequestError` → exit 6, `state_already_holds`
+     (`internal/storage/errors.go`).
 - Endpoint orientation: the positional is `SrcID` and the flag's value `DstID`,
   the stored order — `lit dep add A --blocked-by B` stores
   "A blocked-by B" (`dependency.go`, `internal/model/relation_type.go`).

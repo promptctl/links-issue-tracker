@@ -199,7 +199,7 @@ func (e *Engine) addRelation(in storage.AddRelationInput) (model.Relation, error
 		})
 	}
 	if e.hasRelation(rel.SrcID, rel.DstID, rel.Type) {
-		return model.Relation{}, fmt.Errorf("relation %s->%s (%s) already exists", rel.SrcID, rel.DstID, rel.Type)
+		return model.Relation{}, storage.RelationExistsError{SrcID: rel.SrcID, DstID: rel.DstID, Type: rel.Type}
 	}
 	e.relations = append(e.relations, rel)
 	return rel, nil
