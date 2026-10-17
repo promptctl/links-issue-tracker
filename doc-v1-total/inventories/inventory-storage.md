@@ -211,7 +211,7 @@ Interface-wide failure contract: **compensated, not transactional**. A batch tha
 
 **`RelationExistsError{SrcID, DstID string; Type model.RelationType}`** — `internal/storage/errors.go`
 - `Error()` renders `fmt.Sprintf("relation src=%s dst=%s type=%s already exists, so there is nothing to add", e.SrcID, e.DstID, e.Type)` (`internal/storage/errors.go`).
-- Every engine returns it from `AddRelation` and `SetParent` for an edge of any type the graph already holds, naming the canonical endpoints, before any rule that judges a write; pinned by conformance cases `relations_roundtrip` and `blocks_never_orders_two_leaves_of_one_epic` (`internal/storage/conformance/conformance.go`).
+- Every engine returns it from `AddRelation` and `SetParent` for an edge of any type the graph already holds — for `parent-child`, as the child's only parent — naming the canonical endpoints, before any rule that judges a write; pinned by conformance cases `relations_roundtrip` and `blocks_never_orders_two_leaves_of_one_epic` (`internal/storage/conformance/conformance.go`).
 - It is a `model.StateRequestError` whose `Satisfied()` is always true, so the CLI answers it with exit 6 and reason `state_already_holds`, never a retry (`internal/storage/errors.go`).
 
 **`model.ValidationError{Message string}`** — `internal/model/validation.go`
@@ -831,7 +831,7 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 1. `RelRelatedTo` with `SrcID == DstID` → `model.ValidationError{Message: "related-to cannot target itself"}`.
 2. `in.Type.CanonicalEndpoints(in.SrcID, in.DstID)` normalizes endpoint order.
 3. `mustRecord(srcID)` then `mustRecord(dstID)` → `NotFoundError`.
-4. If an identical `(src, dst, type)` edge exists → `storage.RelationExistsError{SrcID, DstID, Type}` naming the canonical endpoints, for every type.
+4. If `relationHeld(srcID, dstID, in.Type)` — the edges the write would replace (every edge of the type from src for a single-valued type, the identical edge otherwise) are exactly this one → `storage.RelationExistsError{SrcID, DstID, Type}` naming the canonical endpoints.
 5. `storage.RejectNonContainerParentEdge(in.Type, dstID, dst.issueType)`, then `rejectCycle`: for `RelBlockedBy`, `storage.RejectBlocksWithinEpic(e.epicTree(), srcID, dstID)` then `rejectBlocksCycle(srcID, dstID)`; for `RelParentChild`, `rejectParentCycle(srcID, dstID)`.
 6. Builds `model.Relation{SrcID, DstID, Type, CreatedAt: e.now(), CreatedBy: authorOr(in.CreatedBy)}`.
 7. If `in.Type.SingleValuedFromSrc()`, drops every existing edge with the same `SrcID` and `Type` — cardinality is read off the type, not off which method the caller reached for.

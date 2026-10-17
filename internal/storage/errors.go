@@ -24,9 +24,10 @@ func (e NotFoundError) Error() string {
 }
 
 // RelationExistsError is the contract's answer to adding an edge the graph
-// already holds. The edge asked for is in place, so the request is satisfied
-// rather than refused, and a rerun gets the same answer: there is nothing to
-// add and nothing to retry. Every engine returns it, so the CLI classifies
+// already holds: the edge asked for is in place and, for a single-valued
+// type, is its src's only edge of that type. The request is satisfied rather
+// than refused, and a rerun gets the same answer: there is nothing to add and
+// nothing to retry. Every engine returns it, so the CLI classifies
 // the answer by its type and never by an engine's message or SQL error code.
 // [LAW:types-are-the-program] [LAW:one-source-of-truth]
 type RelationExistsError struct {

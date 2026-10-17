@@ -139,7 +139,7 @@ Sequence: build the action from the verb's flags (a bad flag value → `UsageErr
 
 **`lit dep rm`** — same shape, no self-loop or same-epic check; prints `ok`. **`lit dep ls <id> [--type blocked-by|parent-child|related-to]`** — one line per relation, the same sentence in stored order (`<child> child of <parent>` for parent-child); empty output for none.
 
-**`lit parent set --child <id> --parent <id>`** / **`lit parent clear <child-id>`** (`issue_relations.go`): `set` prints the edge as `<child> child of <parent>`, answers a `--parent` the child already has with exit 6, `state_already_holds`, and refuses a `--parent` that is not an epic (exit 3); `clear` prints `ok` for an epic, which it lifts to the top level, and refuses a leaf (exit 3, "cannot detach X from its epic: a task lives inside an epic, so move it with lit parent set --child X --parent <epic-id>").
+**`lit parent set --child <id> --parent <id>`** / **`lit parent clear <child-id>`** (`issue_relations.go`): `set` prints the edge as `<child> child of <parent>`, answers a `--parent` that is already the child's only parent with exit 6, `state_already_holds`, and refuses a `--parent` that is not an epic (exit 3); `clear` prints `ok` for an epic, which it lifts to the top level, and refuses a leaf (exit 3, "cannot detach X from its epic: a task lives inside an epic, so move it with lit parent set --child X --parent <epic-id>").
 
 **`lit comment add <id> --body <text>`**: blank body → "comment body is required" (exit 3); comment IDs are `cmt-<uuid>`; prints `<issueID> <commentID>`; no breadcrumb. **`lit comment rm <comment-id>`**: blank ID → "comment id is required" (exit 3); unknown ID → exit 4; prints the deleted pair (`cli.go`).
 

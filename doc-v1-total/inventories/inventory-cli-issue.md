@@ -1720,8 +1720,8 @@ Family `parentFamily`, usage `"usage: lit parent <set|clear> ..."`
   `UsageError{"usage: lit parent set --child <id> --parent <id>"}` → exit 2
   (`issue_relations.go`).
 - Calls `Store.SetParent(SetParentInput{ChildID, ParentID, CreatedBy})`
-  (`issue_relations.go`). A `--parent` the child already has is the store's
-  `storage.RelationExistsError` → exit 6, `state_already_holds`
+  (`issue_relations.go`). A `--parent` already the child's only parent is
+  the store's `storage.RelationExistsError` → exit 6, `state_already_holds`
   (`internal/storage/errors.go`).
 - Output: the edge rendered through the *same* sentence `dep` uses —
   `"<child> child of <parent>"` (`issue_relations.go`, via
