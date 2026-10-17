@@ -8,10 +8,11 @@ import (
 )
 
 // plantCollision builds the defect's exact field shape: two disconnected stores
-// that each hold the same fifteen children of one epic and each mint `.16` for a
-// DIFFERENT job. Nothing races — both stores compute max+1 over their own rows
-// and both get 16 — so the two rows share a name and nothing else, including
-// their birth certificates.
+// that each hold the same fifteen children of one epic and each wear `.16` on a
+// DIFFERENT job. Nothing races — `.16` is the shape a child filed before hash
+// minting took, numbered from each store's own rows, so both stores reached it —
+// and the two rows share a name and nothing else, including their birth
+// certificates.
 func plantCollision(t *testing.T) (base, local, remote model.Export) {
 	t.Helper()
 	shared := leaf(t, "epic.1", model.StatusView{Value: model.StateClosed}, func(i *model.Issue) {

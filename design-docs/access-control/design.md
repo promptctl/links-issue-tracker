@@ -461,9 +461,9 @@ model, yields:
    id, top-level and child alike, is owned by the event-store design's
    §events, whose inputs include a per-writer component precisely so that
    offline writers cannot collide (a content hash alone collides on
-   duplicate filings, and a stored sequential child id collides under
-   uncoordinated writers). Child `.n` numbering survives as **display
-   only**: the ordinal is derived at render time, may renumber when a
+   duplicate filings, and an id checked for uniqueness against only the
+   local store can collide under uncoordinated writers). Child `.n`
+   numbering is **display only**: the ordinal is derived at render time, may renumber when a
    concurrent sibling syncs in late, and is never a durable reference — the
    opaque id is what agents store. Sequencing is explicit: this item is
    **realized by the event-store migration** — the id scheme flips with the
