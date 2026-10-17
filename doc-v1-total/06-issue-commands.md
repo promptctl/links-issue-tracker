@@ -143,7 +143,7 @@ Sequence: build the action from the verb's flags (a bad flag value → `UsageErr
 
 **`lit comment add <id> (--body <text> | --body-file <path|->)`**: blank body → "comment body is required" (exit 3); comment IDs are `cmt-<uuid>`; prints `<issueID> <commentID>`; no breadcrumb. **`lit comment rm <comment-id>`**: blank ID → "comment id is required" (exit 3); unknown ID → exit 4; prints the deleted pair (`cli.go`).
 
-Every long free-text flag — `--body`, `--description`, `--prompt` — has a `--<name>-file <path>` twin that reads the text from a file, or from stdin when the path is `-`; giving both forms of one field is a usage error (exit 2), and so is a path that cannot be read. The event records each field's `<name>.source` as `absent`, `inline`, `file` or `stdin` (`longtext.go`).
+Every long free-text flag — `--body`, `--description`, `--prompt` — has a `--<name>-file <path>` twin that reads the text from a file, or from stdin when the path is `-`; giving both forms of one field is a usage error (exit 2), and so are a path that cannot be read, a file or stdin whose text is blank ("--<name>-file <path> supplied no text; pass --<name> \"\" to give empty text on purpose"), and two fields of one invocation both naming stdin ("only one field can read stdin, and --description-file and --prompt-file each name it; give the others a path"). The event records each field's `text_source.<name>` as `absent`, `inline`, `file` or `stdin` (`longtext.go`).
 
 **`lit label add|rm <issue-id> <label>`**: normalizes through the label rules (chapter 01), prints the resulting full label set comma-joined. Reserved labels: `needs-design` and `external` block readiness; `focus` marks a focus-path goal (`issue_relations.go`).
 

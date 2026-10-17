@@ -68,7 +68,7 @@ func sourceFacts(t *testing.T) map[string]any {
 	t.Helper()
 	facts := map[string]any{}
 	for key, value := range writtenFacts(t, lastEvent(t)) {
-		if strings.HasSuffix(key, ".source") {
+		if strings.HasPrefix(key, "text_source.") {
 			facts[key] = value
 		}
 	}
@@ -83,16 +83,16 @@ func TestCommentAddTakesItsBodyInlineFromAFileOrFromStdin(t *testing.T) {
 	file := writeTextFile(t, shellHostileText+" (file)\n")
 
 	runCLIInDir(t, dir, "comment", "add", id, "--body", "inline body")
-	if got, want := sourceFacts(t), map[string]any{"body.source": "inline"}; !reflect.DeepEqual(got, want) {
+	if got, want := sourceFacts(t), map[string]any{"text_source.body": "inline"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("--body event facts = %v, want %v", got, want)
 	}
 	runCLIInDir(t, dir, "comment", "add", id, "--body-file", file)
-	if got, want := sourceFacts(t), map[string]any{"body.source": "file"}; !reflect.DeepEqual(got, want) {
+	if got, want := sourceFacts(t), map[string]any{"text_source.body": "file"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("--body-file <path> event facts = %v, want %v", got, want)
 	}
 	withStdin(t, shellHostileText+" (stdin)\n")
 	runCLIInDir(t, dir, "comment", "add", id, "--body-file", "-")
-	if got, want := sourceFacts(t), map[string]any{"body.source": "stdin"}; !reflect.DeepEqual(got, want) {
+	if got, want := sourceFacts(t), map[string]any{"text_source.body": "stdin"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("--body-file - event facts = %v, want %v", got, want)
 	}
 
@@ -142,7 +142,7 @@ func TestDescriptionAndPromptTakeAFileOrStdin(t *testing.T) {
 	}
 
 	created := extractTicketID(t, runCLIInDir(t, dir, "new", "--title", "Long", "--topic", "demo", "--parent", epic, "--description-file", description, "--prompt-file", prompt))
-	if got, want := sourceFacts(t), map[string]any{"description.source": "file", "prompt.source": "file"}; !reflect.DeepEqual(got, want) {
+	if got, want := sourceFacts(t), map[string]any{"text_source.description": "file", "text_source.prompt": "file"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("new event facts = %v, want %v", got, want)
 	}
 	if got := field(created, "description"); got != shellHostileText+" (description)" {
@@ -154,7 +154,7 @@ func TestDescriptionAndPromptTakeAFileOrStdin(t *testing.T) {
 
 	withStdin(t, shellHostileText+" (followup)\n")
 	followup := extractTicketID(t, runCLIInDir(t, dir, "followup", "--on", origin, "--title", "Next", "--description-file", "-"))
-	if got, want := sourceFacts(t), map[string]any{"description.source": "stdin", "prompt.source": "absent"}; !reflect.DeepEqual(got, want) {
+	if got, want := sourceFacts(t), map[string]any{"text_source.description": "stdin", "text_source.prompt": "absent"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("followup event facts = %v, want %v", got, want)
 	}
 	if got := field(followup, "description"); got != shellHostileText+" (followup)" {
@@ -163,7 +163,7 @@ func TestDescriptionAndPromptTakeAFileOrStdin(t *testing.T) {
 
 	withStdin(t, "revised prompt")
 	runCLIInDir(t, dir, "update", created, "--prompt-file", "-")
-	if got, want := sourceFacts(t), map[string]any{"description.source": "absent", "prompt.source": "stdin"}; !reflect.DeepEqual(got, want) {
+	if got, want := sourceFacts(t), map[string]any{"text_source.description": "absent", "text_source.prompt": "stdin"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("update event facts = %v, want %v", got, want)
 	}
 	if got := field(created, "prompt"); got != "revised prompt" {
@@ -177,5 +177,49 @@ func TestDescriptionAndPromptTakeAFileOrStdin(t *testing.T) {
 	var usage UsageError
 	if !errors.As(err, &usage) || usage.Message != "--description and --description-file both supply the same text; give one of them" {
 		t.Errorf("update with both description flags error = %v, want the both-flags UsageError", err)
+	}
+}
+
+// A file or stdin that carries no text is refused rather than emptying the
+// field, and so is a second field naming stdin, which would read what the
+// first left: nothing. Neither refusal writes, and an inline empty value still
+// empties a field on purpose.
+func TestLongTextRefusesBlankTextAndASecondStdinReader(t *testing.T) {
+	isolateEvents(t)
+	dir, id, _ := statuslineCheckout(t)
+	runCLIInDir(t, dir, "update", id, "--description", "kept description", "--prompt", "kept prompt")
+	field := func(name string) string {
+		return strings.TrimSuffix(runCLIInDir(t, dir, "show", id, "--field", name), "\n")
+	}
+	blank := writeTextFile(t, " \n\n")
+
+	for _, tc := range []struct {
+		name  string
+		stdin string
+		args  []string
+		want  string
+	}{
+		{"blank file", "", []string{"--description-file", blank}, "--description-file " + blank + " supplied no text; pass --description \"\" to give empty text on purpose"},
+		{"blank stdin", "\n", []string{"--prompt-file", "-"}, "--prompt-file - supplied no text; pass --prompt \"\" to give empty text on purpose"},
+		{"two stdin readers", "one text", []string{"--description-file", "-", "--prompt-file", "-"}, "only one field can read stdin, and --description-file and --prompt-file each name it; give the others a path"},
+	} {
+		withStdin(t, tc.stdin)
+		_, err := runCLIInDirAllowError(t, dir, append([]string{"update", id}, tc.args...)...)
+		var usage UsageError
+		if !errors.As(err, &usage) || usage.Message != tc.want {
+			t.Errorf("%s: update error = %v, want UsageError %q", tc.name, err, tc.want)
+		}
+	}
+	if got := field("description"); got != "kept description" {
+		t.Errorf("refused updates changed the description to %q", got)
+	}
+	if got := field("prompt"); got != "kept prompt" {
+		t.Errorf("refused updates changed the prompt to %q", got)
+	}
+
+	withStdin(t, "")
+	runCLIInDir(t, dir, "update", id, "--description", "")
+	if got := field("description"); got != "" {
+		t.Errorf("update --description \"\" left the description %q, want it empty", got)
 	}
 }

@@ -477,8 +477,9 @@ the work the issue captures.
 `--description-file <path>` and `--prompt-file <path>` read those fields from a file,
 or from stdin when the path is `-`, so a long text never passes through shell
 quoting. Giving a field both ways (`--description` and `--description-file`) is a
-usage error, as is a path that cannot be read. `lit update` and `lit followup` take
-the same pairs.
+usage error, as is a path that cannot be read, a file or stdin whose text is blank,
+and naming stdin for both fields: stdin carries one text. `--description ""` gives
+empty text on purpose. `lit update` and `lit followup` take the same pairs.
 
 `--priority` takes the word every read surface prints — `normal` or `urgent`, as
 `lit show` and the issue rows render it — so a priority you read back can be pasted
@@ -486,6 +487,21 @@ straight into the flag that sets it. The numeric spelling `lit export` writes an
 `lit import` payload carries (`0`, `1`) is accepted too, and the two are the same
 value. Anything else is refused: the domain has exactly these two levels, so
 `--priority 2` is an error rather than a silent coercion to `normal`.
+
+### `lit followup`
+
+```text
+lit followup --on <id> --title <text> [--description <text> | --description-file <path|->]
+             [--prompt <text> | --prompt-file <path|->] [--topic <slug>]
+             [--type task|feature|bug|chore|epic] [--parent <epic-id>]
+             [--priority normal|urgent] [--assignee <a>] [--labels <csv>] [--top]
+```
+
+Files a follow-up of the `--on` ticket, typically the one just closed, and prints its
+ID as `lit new` does. It lands beside `--on`, under the same parent, unless `--parent`
+names the epic to file it in. A blank `--topic` takes the topic of `--on`, and a blank
+description becomes `Follow-up surfaced at the close of <id>: <title>`. `lit show`
+lists the link on both tickets, under `follows_up:` and `follow_ups:`.
 
 ### `lit update`
 

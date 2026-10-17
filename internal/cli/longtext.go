@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 )
@@ -26,7 +27,7 @@ type longTextFlag struct {
 }
 
 // textSource is where an invocation's long text came from, and the value its
-// event records as <name>.source, so a body that landed wrong can be traced
+// event records as text_source.<name>, so a body that landed wrong can be traced
 // to the input path that carried it. [LAW:nothing-unseen]
 type textSource string
 
@@ -41,12 +42,14 @@ const (
 const stdinPath = "-"
 
 func registerLongText(fs *cobraFlagSet, name, usage string) longTextFlag {
-	return longTextFlag{
+	f := longTextFlag{
 		fs:     fs,
 		name:   name,
 		inline: fs.String(name, "", usage),
 		file:   fs.String(name+"-file", "", fmt.Sprintf("Read --%s from this file, or from stdin when it is %s", name, stdinPath)),
 	}
+	fs.longTexts = append(fs.longTexts, f)
+	return f
 }
 
 // resolve returns the text the invocation supplied, or nil when it supplied
@@ -59,7 +62,8 @@ func (f longTextFlag) resolve(ctx context.Context) (*string, error) {
 	if err != nil {
 		return nil, err
 	}
-	telemetry.Set(ctx, f.name+".source", string(source))
+	telemetry.Set(ctx, "text_source."+f.name, string(source))
+	var data []byte
 	switch source {
 	case textAbsent:
 		return nil, nil
@@ -67,22 +71,25 @@ func (f longTextFlag) resolve(ctx context.Context) (*string, error) {
 		text := *f.inline
 		return &text, nil
 	case textStdin:
-		data, err := io.ReadAll(os.Stdin)
-		if err != nil {
+		if data, err = io.ReadAll(os.Stdin); err != nil {
 			return nil, fmt.Errorf("read --%s-file from stdin: %w", f.name, err)
 		}
-		text := string(data)
-		return &text, nil
 	default:
 		// A path that cannot be read is an argument to correct, not a failure
 		// to retry, so it is refused as usage.
-		data, err := os.ReadFile(*f.file)
-		if err != nil {
+		if data, err = os.ReadFile(*f.file); err != nil {
 			return nil, UsageError{Message: fmt.Sprintf("read --%s-file: %v", f.name, err)}
 		}
-		text := string(data)
-		return &text, nil
 	}
+	// A file or stdin that carries no text is a missing heredoc or pipe far
+	// more often than a request for empty text, and an update would empty the
+	// field with it, so it is refused; the inline flag gives empty text on
+	// purpose. [LAW:no-silent-failure]
+	text := string(data)
+	if strings.TrimSpace(text) == "" {
+		return nil, UsageError{Message: fmt.Sprintf("--%s-file %s supplied no text; pass --%s \"\" to give empty text on purpose", f.name, *f.file, f.name)}
+	}
+	return &text, nil
 }
 
 // value is the supplied text, or "" when none was supplied: the value a
@@ -104,9 +111,24 @@ func (f longTextFlag) source() (textSource, error) {
 		return textInline, nil
 	case !file:
 		return textAbsent, nil
-	case *f.file == stdinPath:
-		return textStdin, nil
-	default:
+	case !f.readsStdin():
 		return textFile, nil
 	}
+	// stdin carries one text, so a second field reading it would get what the
+	// first left: nothing. Every reader is named, so the refusal reads the same
+	// whichever field resolves first.
+	readers := []string{}
+	for _, other := range f.fs.longTexts {
+		if other.readsStdin() {
+			readers = append(readers, "--"+other.name+"-file")
+		}
+	}
+	if len(readers) > 1 {
+		return "", UsageError{Message: fmt.Sprintf("only one field can read stdin, and %s each name it; give the others a path", strings.Join(readers, " and "))}
+	}
+	return textStdin, nil
+}
+
+func (f longTextFlag) readsStdin() bool {
+	return f.fs.Changed(f.name+"-file") && *f.file == stdinPath
 }

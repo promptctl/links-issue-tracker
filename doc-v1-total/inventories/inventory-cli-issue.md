@@ -655,7 +655,7 @@ else ready.
   the follow-up in; defaults to the parent of --on, beside it"), `--topic`,
   `--priority` (default 0), `--assignee`, `--labels`, `--top`. No `--lane`.
 - Refusal: blank `--on` or blank `--title` (after trim) →
-  `UsageError{"usage: lit followup --on <id> --title <text> [--description <text> | --description-file <path|->] [--topic <slug>] [--type <task|feature|bug|chore|epic>] [--parent <epic-id>] [--priority <normal|urgent>] [--assignee <user>] [--labels <csv>] [--top]"}`
+  `UsageError{"usage: lit followup --on <id> --title <text> [--description <text> | --description-file <path|->] [--prompt <text> | --prompt-file <path|->] [--topic <slug>] [--type <task|feature|bug|chore|epic>] [--parent <epic-id>] [--priority <normal|urgent>] [--assignee <user>] [--labels <csv>] [--top]"}`
   → exit 2 (`cli.go`).
 - Reads the `--on` ticket via `GetIssueDetail(onID)`; a missing ticket is not-found → exit 4
   (`cli.go`).
@@ -1034,7 +1034,7 @@ history:
   `storage.UpdateIssueInput` (`cli.go`):
   - `--title` / `--description` / `--prompt` set the raw value (no trimming at
     the CLI) (`cli.go`); `--description-file` / `--prompt-file` set the file's or
-    stdin's raw bytes the same way (`longtext.go`).
+    stdin's raw bytes the same way, refusing blank text (`longtext.go`).
   - `--type` parses via `model.ParseIssueType` → `model.ValidationError` on a bad
     value (`cli.go`).
   - `--priority` parses via `model.ParsePriorityName` (`cli.go`).
@@ -1669,8 +1669,12 @@ usage string as a `UsageError` → exit 2 (`resolve`, `register.go`).
   (`cli.go`).
 - Refusals from `longTextFlag.resolve` (`longtext.go`), each a `UsageError` → exit 2:
   both flags given → `"--body and --body-file both supply the same text; give one of them"`;
-  an unreadable path → `"read --body-file: <os error>"`. A failed stdin read is a plain
-  error → exit 1. The event records `body.source` as `absent`, `inline`, `file` or `stdin`.
+  an unreadable path → `"read --body-file: <os error>"`; a file or stdin whose text is blank
+  (after trim) → `"--body-file <path> supplied no text; pass --body \"\" to give empty text on purpose"`;
+  two fields of one invocation naming stdin →
+  `"only one field can read stdin, and <flags> each name it; give the others a path"`. A failed
+  stdin read is a plain error → exit 1. The event records `text_source.body` as `absent`,
+  `inline`, `file` or `stdin`.
   `lit new`, `lit followup` and `lit update` resolve `--description`/`--prompt` the same way.
 - Store refusal: a blank body (after trim) →
   `model.ValidationError{Message: "comment body is required"}` → exit 3

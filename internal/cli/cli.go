@@ -387,7 +387,7 @@ func followupLeaf() appLeaf {
 	// and a value typed where no positional is taken. It is declared outside the
 	// work because the seam's arity check runs first and cannot reach a sentence
 	// written inside it. [LAW:one-source-of-truth]
-	usage := "usage: lit followup --on <id> --title <text> [--description <text> | --description-file <path|->] [--topic <slug>] [--type <task|feature|bug|chore|epic>] [--parent <epic-id>] [--priority <" + priorityChoices() + ">] [--assignee <user>] [--labels <csv>] [--top]"
+	usage := "usage: lit followup --on <id> --title <text> [--description <text> | --description-file <path|->] [--prompt <text> | --prompt-file <path|->] [--topic <slug>] [--type <task|feature|bug|chore|epic>] [--parent <epic-id>] [--priority <" + priorityChoices() + ">] [--assignee <user>] [--labels <csv>] [--top]"
 	return appLeaf{fs: fs, positionals: 0, usage: usage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		onID := strings.TrimSpace(*on)
 		titleValue := strings.TrimSpace(*title)

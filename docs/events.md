@@ -231,6 +231,18 @@ set and carries its refusal instead.
 | `phase.to` | The phase the command moved it to, the one `--to` names. |
 | `phase.changed` | `false` when the issue was already in that phase, so nothing was recorded; `true` otherwise. |
 
+## What a long-text field records
+
+`lit new`, `lit followup` and `lit update` record where their `--description` and
+`--prompt` came from, and `lit comment add` records its `--body` the same way. A
+field given both ways, or one of two fields naming stdin, is refused before its key
+is set; a field whose file or stdin text was blank carries its key beside the
+refusal.
+
+| Key | Meaning |
+| --- | --- |
+| `text_source.<name>` | `inline` for `--<name>`, `file` for `--<name>-file <path>`, `stdin` for `--<name>-file -`, `absent` when the invocation gave neither. |
+
 ## What a workflow occasion records
 
 A command that fires a [workflow](workflows.md) occasion records it:
