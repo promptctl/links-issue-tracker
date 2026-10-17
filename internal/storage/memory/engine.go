@@ -57,12 +57,17 @@ type Engine struct {
 	// engine offers as a capability. [LAW:one-source-of-truth]
 	order []string
 
-	// The three edge tables and the history, each in the order it was
-	// written. Insertion order is oldest-first by construction, so no read
-	// re-derives "when did this happen" from a timestamp.
+	// The three edge tables, each in the order it was written. Insertion
+	// order is oldest-first by construction, so no read re-derives "when did
+	// this happen" from a timestamp.
 	relations []model.Relation
 	comments  []model.Comment
-	events    []model.IssueEvent
+
+	// events is the history, keyed by issue and each issue's run kept in the
+	// order it was written. One issue's history is the read the status path
+	// makes on every transition, so it costs that issue's events, as the Dolt
+	// engine's indexed query does, rather than a scan of the whole store's.
+	events map[string][]model.IssueEvent
 
 	// labels are keyed by issue and kept sorted by name, because the sorted
 	// set is what every label read returns and re-sorting on each read would
@@ -135,6 +140,7 @@ func New(workspaceID string, clock storage.Clock) (*Engine, error) {
 		clock:       clock,
 		issues:      map[string]*record{},
 		labels:      map[string][]model.Label{},
+		events:      map[string][]model.IssueEvent{},
 	}, nil
 }
 
@@ -315,7 +321,7 @@ func (e *Engine) recordEvent(issueID string, spec eventSpec, now time.Time) {
 	if actor == "" {
 		actor = "unknown"
 	}
-	e.events = append(e.events, model.IssueEvent{
+	e.events[issueID] = append(e.events[issueID], model.IssueEvent{
 		ID:          "evt-" + uuid.NewString(),
 		IssueID:     issueID,
 		Action:      strings.TrimSpace(spec.action),

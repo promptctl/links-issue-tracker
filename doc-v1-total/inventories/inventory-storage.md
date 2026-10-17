@@ -526,7 +526,7 @@ These types live in the contract, not in an engine, because a capability interfa
 | `order` | `[]string` | **THE** total rank order, top first. `Issue.Rank` is rendered from a position in this slice at read time and stored nowhere, so a rank that contradicts the order is unrepresentable — which is why nothing here needs the inversion repair Dolt offers |
 | `relations` | `[]model.Relation` | Edge table, insertion order (oldest-first by construction) |
 | `comments` | `[]model.Comment` | Comment table, insertion order |
-| `events` | `[]model.IssueEvent` | History, insertion order |
+| `events` | `map[string][]model.IssueEvent` | History, keyed by issue; each issue's run in insertion order, so one issue's history costs that issue's events rather than a scan of the store's |
 | `labels` | `map[string][]model.Label` | Keyed by issue, kept **sorted by name** because the sorted set is what every label read returns |
 | `purges` | `[]model.Purge` | The records of the tickets this engine has purged; a purged ticket holds no row anywhere above, and its id is never minted again |
 
@@ -540,16 +540,17 @@ These types live in the contract, not in an engine, because a capability interfa
 
 ### 2.3 Construction and concurrency
 
-**`New(workspaceID string) (*Engine, error)`** (`internal/storage/memory/engine.go`)
+**`New(workspaceID string, clock storage.Clock) (*Engine, error)`** (`internal/storage/memory/engine.go`)
 - Trims `workspaceID`; empty (after trim) → `errors.New("workspace id is required")` (`internal/storage/memory/engine.go`).
-- Initializes `issues` and `labels` maps; `order`, `relations`, `comments`, `events` start nil (`internal/storage/memory/engine.go`).
+- A nil `clock` → `errors.New("clock is required")`, refused at construction rather than surviving to the first write as a nil call (`internal/storage/memory/engine.go`).
+- Initializes `issues`, `labels`, and `events` maps; `order`, `relations`, `comments` start nil (`internal/storage/memory/engine.go`).
 - The workspace id is required rather than defaulted because attribution is a complete pair or nothing (`internal/storage/memory/engine.go`).
-- Tested: `New("")` and `New("   ")` both error (`internal/storage/memory/capabilities_test.go`).
+- Tested: `New("")`, `New("   ")`, and a nil clock all error (`internal/storage/memory/capabilities_test.go`).
 
 **Concurrency discipline** (`internal/storage/memory/engine.go`):
 - Every exported method locks the mutex and immediately delegates to an unexported one; no unexported method ever locks. That is what lets `BulkApply` drive `CreateIssue` and `Apply` for a whole batch under one hold without deadlocking on itself.
 - The mutex is a plain `sync.Mutex` (not RWMutex), so reads serialize with writes.
-- `Export` calls `sortEvents(cloneEvents(...))` rather than `ListAllEvents` precisely because the latter would deadlock on the non-reentrant mutex (`internal/storage/memory/export.go`).
+- `Export` calls `allEvents()` rather than `ListAllEvents` precisely because the latter would deadlock on the non-reentrant mutex (`internal/storage/memory/export.go`).
 - `TestConcurrentUseIsSerialized` runs 8 goroutines × 6 iterations of create/apply/list, then asserts `LocalIssueCount == 48`, that the listing holds the same count, and that no two issues share a `Rank` (`internal/storage/memory/engine_test.go`).
 
 **Ownership**: the engine owns every byte of its state and hands none out; each read composes a fresh model value, so a caller holding a previously-read issue cannot mutate the engine through it (`internal/storage/memory/engine.go`). The one value that would have aliased is `model.IssueEvent.Changes`, which `cloneEvents` copies one level deeper than the slice (`internal/storage/memory/engine.go`).
@@ -619,13 +620,13 @@ Order of checks is stated as contract: the parent must be resolved before the co
 
 **`ListIssueIdentities`** (`internal/storage/memory/issues.go`) — one `IssueIdentity{ID: rec.id, Topic: rec.topic}` per record in `issues`, retention ignored; `slices.SortFunc` by id.
 
-**`ListAllEvents`** (`internal/storage/memory/issues.go`) — `sortEvents(cloneEvents(e.events))`. The append-only slice already holds true recording order, which is a better answer, and it is deliberately not the one given, because a same-tick tie is where two engines would part company.
+**`ListAllEvents`** (`internal/storage/memory/issues.go`) — `allEvents()`: every issue's run concatenated, then `sortEvents(cloneEvents(...))`, so map iteration order does not reach the result. Each issue's run already holds true recording order, which is a better answer, and it is deliberately not the one given, because a same-tick tie is where two engines would part company.
 
 **`sortEvents`** (`internal/storage/memory/issues.go`) — `slices.SortStableFunc` on `cmp.Or(a.CreatedAt.Compare(b.CreatedAt), strings.Compare(a.ID, b.ID))`. It is the one place this engine orders history.
 
 **`LocalIssueCount`** (`internal/storage/memory/issues.go`) — `int64(len(e.issues))`; counts what would be lost, including archived and deleted.
 
-**`eventsFor(issueID)`** (`internal/storage/memory/issues.go`) — filters `events` by `IssueID`, then `sortEvents(cloneEvents(...))`.
+**`eventsFor(issueID)`** (`internal/storage/memory/issues.go`) — `sortEvents(cloneEvents(e.events[issueID]))`.
 
 ### 2.7 `ListIssues` (`internal/storage/memory/list.go`)
 
@@ -988,7 +989,7 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 
 - Locks, then builds issues via `listIssues(ListIssuesFilter{IncludeArchived: true, IncludeDeleted: true})` — **the WHOLE store**, out-of-flow work included, because an export honoring the listing default would silently drop exactly the rows a diff exists to notice.
 - Labels: flattened from the `labels` map, then sorted by `(IssueID, Name)` via `cmpThen`.
-- Returns `model.Export{Version: model.ExportVersion (4), WorkspaceID: e.workspaceID, ExportedAt: e.now(), Issues, Relations: slices.Clone(e.relations), Comments: slices.Clone(e.comments), Labels, Events: sortEvents(cloneEvents(e.events)), Purges: e.purgeList()}`.
+- Returns `model.Export{Version: model.ExportVersion (4), WorkspaceID: e.workspaceID, ExportedAt: e.now(), Issues, Relations: slices.Clone(e.relations), Comments: slices.Clone(e.comments), Labels, Events: e.allEvents(), Purges: e.purgeList()}`.
 - `Relations` and `Comments` come back in **write order** (cloned, unsorted); `Issues` in rank order; `Labels` in `(issue, name)` order; `Events` in `(created_at, id)` order; `Purges` in issue-id, then birth order (`purgeList` returns `model.UnionPurges(e.purges)`, `internal/storage/memory/purge.go`).
 - Every collection comes back in a total order so two stores holding the same facts serialize to the same bytes rather than to the same multiset.
 
@@ -997,7 +998,7 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 - Locks `e.mu` for the whole operation, so no reader sees the issue half gone.
 - Not a key of `e.issues` → `storage.NotFoundError{Entity: "issue", ID: id}`.
 - `storage.RejectPurgeOfOccupiedContainer(id, e.detachedChildren(id))` — `detachedChildren` returns one `storage.DetachedChild` per `RelParentChild` relation whose `DstID` is the issue, whatever the child's retention, with the child's type and `parentsLeftWithout(child, id)` — its count of other `RelParentChild` relations (`internal/storage/memory/edges.go`), the same count `RemoveRelation`'s detach check reads.
-- Removes, counting each: comments with `IssueID == id` and events with `IssueID == id` (`removeWhere`, which returns the slice and the number dropped); relations with `SrcID == id` or `DstID == id` (`dropRelations`, which counts through `removeWhere`); the issue's label set (counted by its length); its entry in `e.order` (`detach`); its `e.issues` record.
+- Removes, counting each: comments with `IssueID == id` (`removeWhere`, which returns the slice and the number dropped); the issue's events (counted by the length of its run); relations with `SrcID == id` or `DstID == id` (`dropRelations`, which counts through `removeWhere`); the issue's label set (counted by its length); its entry in `e.order` (`detach`); its `e.issues` record.
 - Builds `model.Purge{IssueID: id, IssueCreatedAt: <the record's createdAt>, PurgedAt: e.clock.Now(), PurgedBy: in.Actor}` before removing the `e.issues` record, appends it to `e.purges`, and returns it in `storage.PurgeResult` with the four counts.
 
 ### 2.15 Capabilities offered by the memory engine
@@ -1118,7 +1119,7 @@ Stated in `internal/storage/memory/doc.go`:
 - The last such event has `Action == "start"` (`model.ActionStart`).
 
 **`one_issues_history_matches_the_whole_log`**
-- Fixture: an epic, then children `subject` and `other`; for each title `"one"`, `"two"`, `"three"` in turn, a title patch to `subject` then to `other` (six patches, three per issue), then `Start{Assignee: "ada"}` on each.
+- Fixture: the clock pinned to one instant, so only the id tie-break orders the events; an epic, then children `subject` and `other`; for each title `"one"`, `"two"`, `"three"` in turn, a title patch to `subject` then to `other` (six patches, three per issue), then `Start{Assignee: "ada"}` on each.
 - The case fatals if every event in `ListAllEvents` belongs to `subject`.
 - `ListEvents(subject)` returns, by event `ID` and in order, exactly the `ListAllEvents` events with `IssueID == subject.ID`, sorted by `storage.EventOrdering`.
 
