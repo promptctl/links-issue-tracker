@@ -3,6 +3,7 @@ package store
 import (
 	"cmp"
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -41,24 +42,47 @@ func (e *blocksCycleError) Error() string {
 
 // repairRankOrder returns the rank writes that make every dependency outrank
 // its dependent in tree order: the fewest writes that realize the stable
-// topological order of order under constraints.
+// topological order of order under constraints, and give no key an issue in
+// held keeps.
 //
-// order is every placed issue in key order, and constraints are
-// storage.DependencyOrder's, so each joins two frame-mates and none closes a
-// cycle. The writes leave keys ascending along the sorted order, so every
-// frame reads its share of that order back, and each mover is spaced between
-// its neighbours in key order — inside its frame's gap, as a rank verb's room
-// beside an anchor is — so no two issues share a key.
+// order is every issue whose place in key order something reads, in key
+// order, and constraints are storage.DependencyOrder's, so each joins two of
+// them that share a frame and none closes a cycle. held is every other placed
+// issue (splitRankOrder): no listing reads where it stands, so the repair
+// steps around its key instead of reordering it, and writes it only where it
+// shares that key. The writes leave keys ascending along the sorted order, so
+// every frame reads its share of that order back, and each mover is spaced
+// between the keys beside it, so no two issues share a key.
 //
 // [LAW:effects-at-boundaries] The new order and the writes that realize it are
 // values computed here; the caller owns the transaction that applies them, so
 // the whole repair is testable with no database.
-func repairRankOrder(order []rankedIssue, constraints []storage.DependencyEdge) ([]rankRewrite, error) {
+func repairRankOrder(order, held []rankedIssue, constraints []storage.DependencyEdge) ([]rankRewrite, error) {
 	target, err := stableTopoOrder(order, constraints)
 	if err != nil {
 		return nil, err
 	}
-	return rankRewrites(order, target)
+	return rankRewrites(holdKeys(anchorRun(target), held))
+}
+
+// splitRankOrder divides order into the issues whose place the repair keeps —
+// live work, which every listing reads, and each issue a constraint names, a
+// container standing in for live work inside it — and the rest, which it
+// holds. Both keep order's key order.
+func splitRankOrder(order []rankedIssue, live map[string]struct{}, constraints []storage.DependencyEdge) (ordered, held []rankedIssue) {
+	read := maps.Clone(live)
+	for _, c := range constraints {
+		read[c.Dependent] = struct{}{}
+		read[c.Dependency] = struct{}{}
+	}
+	for _, item := range order {
+		if _, ok := read[item.id]; ok {
+			ordered = append(ordered, item)
+			continue
+		}
+		held = append(held, item)
+	}
+	return ordered, held
 }
 
 // liveEdges keeps the blocked-by edges between two live issues, deduped. An
@@ -97,14 +121,14 @@ func projectEdges(edges []storage.DependencyEdge, position map[string]int) []sto
 	return out
 }
 
-// stableTopoOrder returns the ids of order rearranged so that every dependency
+// stableTopoOrder returns order rearranged so that every dependency
 // precedes its dependent, choosing at each step the issue that stood earliest
 // in order among those whose dependencies are all placed.
 //
 // So an issue falls behind one that stood after it only while it waits on a
 // dependency, and an order that already satisfies every edge comes back
 // unchanged. Positions are compared, never ids.
-func stableTopoOrder(order []rankedIssue, edges []storage.DependencyEdge) ([]string, error) {
+func stableTopoOrder(order []rankedIssue, edges []storage.DependencyEdge) ([]rankedIssue, error) {
 	position := positions(order)
 	constraints := projectEdges(edges, position)
 	dependents := make([][]int, len(order))
@@ -123,11 +147,11 @@ func stableTopoOrder(order []rankedIssue, edges []storage.DependencyEdge) ([]str
 			ready = append(ready, at)
 		}
 	}
-	sorted := make([]string, 0, len(order))
+	sorted := make([]rankedIssue, 0, len(order))
 	for len(ready) > 0 {
 		at := ready[0]
 		ready = ready[1:]
-		sorted = append(sorted, order[at].id)
+		sorted = append(sorted, order[at])
 		for _, next := range dependents[at] {
 			blockedBy[next]--
 			if blockedBy[next] > 0 {
@@ -146,66 +170,63 @@ func stableTopoOrder(order []rankedIssue, edges []storage.DependencyEdge) ([]str
 	return sorted, nil
 }
 
-// rankRewrites returns the rank writes that realize target, one per issue the
-// new order actually moved.
-//
-// The issues whose stored ranks already ascend along target need no write: they
-// are in the right relative order, and rewriting them would touch — and restamp
-// updated_at on — rows that did not move. anchorRun chooses the longest such
-// run, comparing significant ranks; every issue outside it is spaced into the
-// gap its neighbouring anchors leave.
-func rankRewrites(order []rankedIssue, target []string) ([]rankRewrite, error) {
-	rankOf := make(map[string]string, len(order))
-	for _, item := range order {
-		rankOf[item.id] = item.rank
-	}
-	anchored := make([]bool, len(target))
-	for _, at := range anchorRun(target, rankOf) {
-		anchored[at] = true
-	}
+// placement is one issue in the sequence the writes realize, and whether it
+// keeps its key there: an anchor bounds the gap the movers beside it are
+// spaced into.
+type placement struct {
+	rankedIssue
+	anchored bool
+}
 
-	rewrites := make([]rankRewrite, 0, len(target))
-	// Walk target as runs of movers delimited by anchors, closing the final run
-	// at the sentinel index past the end. An absent bound is the empty string,
-	// which the spacing primitive already reads as "past that end" — so a run
-	// at either extreme, and a target with no anchors at all, need no special
-	// case here. [LAW:dataflow-not-control-flow]
+// rankRewrites returns the rank writes that realize sequence: every issue that
+// is not an anchor is spaced into the gap the anchors on either side of it
+// leave, in sequence order. The anchors' keys ascend strictly along sequence,
+// so the gaps are disjoint and no write lands on a key another issue holds.
+func rankRewrites(sequence []placement) ([]rankRewrite, error) {
+	rewrites := make([]rankRewrite, 0, len(sequence))
+	// Walk sequence as runs of movers delimited by anchors, closing the final
+	// run at the sentinel index past the end. An absent bound is the empty
+	// string, which the spacing primitive already reads as "past that end" — so
+	// a run at either extreme, and a sequence with no anchors at all, need no
+	// special case here. [LAW:dataflow-not-control-flow]
 	lower, start := "", 0
-	for at := 0; at <= len(target); at++ {
-		if at < len(target) && !anchored[at] {
+	for at := 0; at <= len(sequence); at++ {
+		if at < len(sequence) && !sequence[at].anchored {
 			continue
 		}
 		upper := ""
-		if at < len(target) {
-			upper = rankOf[target[at]]
+		if at < len(sequence) {
+			upper = sequence[at].rank
 		}
-		movers := target[start:at]
+		movers := sequence[start:at]
 		newRanks, err := rank.SpacedRanksBetween(lower, upper, len(movers))
 		if err != nil {
 			return nil, fmt.Errorf("space %d rank(s) between %q and %q: %w", len(movers), lower, upper, err)
 		}
-		for i, id := range movers {
-			rewrites = append(rewrites, rankRewrite{id: id, newRank: newRanks[i]})
+		for i, mover := range movers {
+			rewrites = append(rewrites, rankRewrite{id: mover.id, newRank: newRanks[i]})
 		}
 		lower, start = upper, at+1
 	}
 	return rewrites, nil
 }
 
-// anchorRun returns the indices in target whose stored ranks already ascend —
-// a longest subsequence of target strictly increasing by significant rank.
-// These are the issues the repair does not write, so the count of everything
-// else is the honest answer to "how many issues did this move".
+// anchorRun anchors, in target, a longest subsequence whose stored ranks
+// already ascend strictly by significant rank. The issues it anchors are the
+// ones the repair does not write, so the count of everything else is the
+// honest answer to "how many issues did this move": the ones already in the
+// right relative order stay, and rewriting them would restamp updated_at on
+// rows that did not move.
 //
 // The movers between two anchors are spaced into the gap they bound, and only
 // ranks whose significant parts differ leave one. [LAW:one-source-of-truth]
 // rank.Significant is that definition of room, so anchors are compared by it.
 // An issue whose significant rank is not rank.Valid — unranked, or all zeros —
 // bounds no gap at all, so it is always a mover and gets a real rank.
-func anchorRun(target []string, rankOf map[string]string) []int {
+func anchorRun(target []rankedIssue) []placement {
 	keys := make([]string, len(target))
-	for i, id := range target {
-		keys[i] = rank.Significant(rankOf[id])
+	for i, item := range target {
+		keys[i] = rank.Significant(item.rank)
 	}
 	// tails[k] is the index in target of the smallest-keyed issue that ends an
 	// ascending run of length k+1; prev[i] links i back to its predecessor in
@@ -229,14 +250,56 @@ func anchorRun(target []string, rankOf map[string]string) []int {
 		}
 		tails[k] = i
 	}
+	sequence := make([]placement, len(target))
+	for i, item := range target {
+		sequence[i] = placement{rankedIssue: item}
+	}
 	if len(tails) == 0 {
-		return nil
+		return sequence
 	}
-	run := make([]int, len(tails))
-	for i, at := len(tails)-1, tails[len(tails)-1]; i >= 0; i, at = i-1, prev[at] {
-		run[i] = at
+	for at := tails[len(tails)-1]; at >= 0; at = prev[at] {
+		sequence[at].anchored = true
 	}
-	return run
+	return sequence
+}
+
+// holdKeys merges held into sequence, each where its key falls among
+// sequence's anchors, as an anchor itself: it keeps its key, and the movers
+// beside it are spaced around it. Where a key is already an anchor's, the held
+// issue that shares it is a mover just past that anchor, so one holder keeps
+// the key and the other is spaced into the gap above it. A held issue whose
+// significant rank is not rank.Valid holds no key a write could land on, and
+// no listing reads where it stands, so it is left out and never written.
+func holdKeys(sequence []placement, held []rankedIssue) []placement {
+	keyed := make([]rankedIssue, 0, len(held))
+	for _, item := range held {
+		if rank.Valid(rank.Significant(item.rank)) {
+			keyed = append(keyed, item)
+		}
+	}
+	slices.SortFunc(keyed, compareRankedIssues)
+	merged := make([]placement, 0, len(sequence)+len(keyed))
+	// last is the significant key of the latest anchor merged; every held key
+	// still to merge is at or above it, because each was merged before the
+	// first anchor above it.
+	last, next := "", 0
+	mergeBelow := func(bound func(key string) bool) {
+		for ; next < len(keyed) && bound(rank.Significant(keyed[next].rank)); next++ {
+			key := rank.Significant(keyed[next].rank)
+			merged = append(merged, placement{rankedIssue: keyed[next], anchored: key > last})
+			last = max(last, key)
+		}
+	}
+	for _, p := range sequence {
+		if p.anchored {
+			key := rank.Significant(p.rank)
+			mergeBelow(func(k string) bool { return k < key })
+			last = key
+		}
+		merged = append(merged, p)
+	}
+	mergeBelow(func(string) bool { return true })
+	return merged
 }
 
 // invertedEdges returns the edges among the issues in order that dependencies

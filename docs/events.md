@@ -294,7 +294,7 @@ repairs have run, so they describe the state the command left behind.
 
 | Key | Meaning |
 | --- | --- |
-| `doctor.duplicate_ranks` | The rank keys more than one live issue holds, as the status line prints it: a count such as `"0"`, or `"unchecked"` when a parent cycle kept the check from running. |
+| `doctor.duplicate_ranks` | The rank keys more than one non-deleted issue holds, as the status line prints it: a count such as `"0"`, or `"unchecked"` when a parent cycle kept the check from running. |
 
 ## Reading the file
 

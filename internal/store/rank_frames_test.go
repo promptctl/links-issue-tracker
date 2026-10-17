@@ -302,7 +302,7 @@ func TestTheRankRepairWritesNoKeyAClosedIssueHolds(t *testing.T) {
 		t.Fatalf("loadRankAncestry: %v", err)
 	}
 	live := slices.DeleteFunc(order, func(item rankedIssue) bool { return item.id == closed.ID })
-	liveOnly, err := repairRankOrder(live, storage.NewDependencyOrder(ancestry, []storage.DependencyEdge{{Dependent: p.ID, Dependency: q.ID}}).Constraints())
+	liveOnly, err := repairRankOrder(live, nil, storage.NewDependencyOrder(ancestry, []storage.DependencyEdge{{Dependent: p.ID, Dependency: q.ID}}).Constraints())
 	if err != nil || len(liveOnly) != 1 {
 		t.Fatalf("repair over live issues alone = %v, %v; want one write", liveOnly, err)
 	}
@@ -322,5 +322,44 @@ func TestTheRankRepairWritesNoKeyAClosedIssueHolds(t *testing.T) {
 	}
 	if !(ranks[q.ID] < ranks[p.ID] && ranks[p.ID] < ranks[r.ID]) {
 		t.Errorf("ranks q=%q p=%q r=%q, want q, p, r in that order", ranks[q.ID], ranks[p.ID], ranks[r.ID])
+	}
+}
+
+// The sort lifts the dependency above both the work that waits on it and a
+// closed issue keyed between them; the closed issue keeps its key, and the
+// dependency is the one write.
+func TestTheRankRepairLeavesAClosedIssueItNeedNotMove(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	keys := map[string]string{}
+	epic := func(title, key string) model.Issue {
+		e := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "rank", IssueType: "epic", Placement: storage.RankBottom})
+		task := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: title + " task", Topic: "rank", IssueType: "task", ParentID: e.ID})
+		keys[e.ID], keys[task.ID] = key, "Z"+key
+		return e
+	}
+	a, c, b, holder := epic("a", "Ma"), epic("c", "Mc"), epic("b", "Md"), epic("holder", "Mz")
+	closed := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: "closed", Topic: "rank", IssueType: "task", ParentID: holder.ID})
+	keys[closed.ID] = "Mb"
+	for id, key := range keys {
+		plantRank(t, ctx, st, id, key)
+	}
+	if _, err := st.Apply(ctx, closed.ID, storage.Change{Action: model.Close{Outcome: model.Obsolete{}}, Actor: "tester"}); err != nil {
+		t.Fatalf("close %s: %v", closed.ID, err)
+	}
+	blockOrFatal(t, ctx, st, a.ID, b.ID)
+	blockOrFatal(t, ctx, st, c.ID, a.ID)
+
+	reranked, err := st.FixRankInversions(ctx)
+	if err != nil {
+		t.Fatalf("FixRankInversions: %v", err)
+	}
+	ranks := storedRanks(t, ctx, st)
+	if reranked != 1 || ranks[closed.ID] != "Mb" {
+		t.Fatalf("FixRankInversions reranked %d and left the closed issue at %q, want 1 and %q", reranked, ranks[closed.ID], "Mb")
+	}
+	if !(ranks[b.ID] < ranks[a.ID] && ranks[a.ID] < ranks[c.ID]) {
+		t.Errorf("ranks b=%q a=%q c=%q, want b, a, c in that order", ranks[b.ID], ranks[a.ID], ranks[c.ID])
 	}
 }

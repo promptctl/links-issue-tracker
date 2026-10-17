@@ -1325,7 +1325,8 @@ func (s *Store) DependencyOrder(ctx context.Context) (storage.DependencyOrder, e
 // dependent in tree order wherever a rank order can: it sorts each frame by
 // the constraints storage.DependencyOrder reads off the blocked-by edges
 // between live issues (see repairRankOrder), rewrites the issues that order
-// moved, and returns how many it moved. A blocked-by dependency cycle between
+// moved, stepping around the keys of the issues no listing reads
+// (splitRankOrder), and returns how many it moved. A blocked-by dependency cycle between
 // live issues refuses the repair (blocksCycle).
 //
 // [LAW:single-enforcer] Doctor's rank_inversions count and this repair read the
@@ -1362,7 +1363,9 @@ func (s *Store) FixRankInversions(ctx context.Context) (int, error) {
 		if cycle := blocksCycle(order, live); len(cycle) > 0 {
 			return fmt.Errorf("fix rank inversions: %w", &blocksCycleError{path: cycle})
 		}
-		rewrites, err := repairRankOrder(order, storage.NewDependencyOrder(ancestry, live).Constraints())
+		constraints := storage.NewDependencyOrder(ancestry, live).Constraints()
+		ordered, held := splitRankOrder(order, liveIDs, constraints)
+		rewrites, err := repairRankOrder(ordered, held, constraints)
 		if err != nil {
 			return fmt.Errorf("fix rank inversions: %w", err)
 		}

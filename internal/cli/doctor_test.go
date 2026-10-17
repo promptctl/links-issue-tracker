@@ -217,7 +217,7 @@ func TestDoctorPrintsEachWarningItsHealthCheckFinds(t *testing.T) {
 		// The cycle's two edges run both ways between frame-mates, so no order
 		// of the two satisfies both: neither is counted as an inversion a
 		// repair could clear.
-		"warning: interleaved: " + strings.Join(sortedIDs(first.ID, second.ID), ", ") + " — work in each waits on work in another, so no rank order lists every dependency among them first; 'lit doctor --fix=rank' leaves their order as it stands",
+		"warning: interleaved: " + strings.Join(sortedIDs(first.ID, second.ID), ", ") + " — work in each waits on work in another, so no rank order lists every dependency among them first; 'lit doctor --fix=rank' does not reorder them for those edges",
 	}
 	// The cycle may be named from either member; both rotations are the same cycle.
 	cycleLine := func(a, b string) string {

@@ -51,7 +51,7 @@ type HealthReport struct {
 	InvalidRelatedRows int    `json:"invalid_related_rows"`
 	OrphanHistoryRows  int    `json:"orphan_history_rows"`
 	RankInversions     int    `json:"rank_inversions"`
-	// DuplicateRanks counts the rank keys more than one live issue holds. The
+	// DuplicateRanks counts the rank keys more than one non-deleted issue holds. The
 	// order between the holders of one falls to the id tiebreak instead of to
 	// anything a caller ranked.
 	DuplicateRanks  int      `json:"duplicate_ranks"`
@@ -59,7 +59,7 @@ type HealthReport struct {
 	// Interleaved names the groups of frame-mates whose issues wait on one
 	// another both ways ([DependencyOrder.Interleaved]): no rank order lists
 	// every dependency among them first, so their edges are not counted in
-	// RankInversions and the repair leaves their order as it stands.
+	// RankInversions and the repair does not reorder them for those edges.
 	Interleaved [][]string `json:"interleaved"`
 	// ParentCycle names the members of a loop in the hierarchy, which the write
 	// boundary refuses but older data can still hold. It is reported rather

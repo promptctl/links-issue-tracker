@@ -184,7 +184,7 @@ func (s *Store) Doctor(ctx context.Context) (storage.HealthReport, error) {
 	// above. [LAW:nothing-unseen]
 	report.Interleaved = dependencies.Interleaved()
 	for _, group := range report.Interleaved {
-		report.Warnings = append(report.Warnings, fmt.Sprintf("interleaved: %s — work in each waits on work in another, so no rank order lists every dependency among them first; 'lit doctor --fix=rank' leaves their order as it stands", strings.Join(group, ", ")))
+		report.Warnings = append(report.Warnings, fmt.Sprintf("interleaved: %s — work in each waits on work in another, so no rank order lists every dependency among them first; 'lit doctor --fix=rank' does not reorder them for those edges", strings.Join(group, ", ")))
 	}
 	// No rank verb places a key one placed issue holds onto another, and a
 	// landing separates the keys it brings in, so this names what neither stood

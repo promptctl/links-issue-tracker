@@ -113,13 +113,11 @@ func separateRankCollisions(export model.Export) (model.Export, []storage.Rekeye
 		return export, nil, nil
 	}
 	slices.SortFunc(placed, compareRankedIssues)
-	listed := make([]string, len(placed))
 	from := make(map[string]string, len(placed))
-	for i, issue := range placed {
-		listed[i] = issue.id
+	for _, issue := range placed {
 		from[issue.id] = issue.rank
 	}
-	rewrites, err := rankRewrites(placed, listed)
+	rewrites, err := rankRewrites(anchorRun(placed))
 	if err != nil {
 		return model.Export{}, nil, fmt.Errorf("separate shared rank keys (%s): %w", describeRankCollisions(collisions), err)
 	}
