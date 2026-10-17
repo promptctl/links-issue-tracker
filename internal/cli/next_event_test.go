@@ -59,10 +59,10 @@ func rowFor(id string) annotation.AnnotatedIssue {
 }
 
 // An exhausted scope's event says how far the scope had come, names every
-// blocker and held row with what this checkout may do about each, and whether
-// the route that stays in the scope was offered — it is, exactly when some
-// blocker is one a ticket filed here could clear. A pick served past the scope
-// records the same, since it prints the same.
+// blocker and held row with what this checkout may do about each, whether a
+// ticket filed here could free each blocker, and whether the route that stays
+// in the scope was offered — it is, exactly when one could. A pick served past
+// the scope records the same, since it prints the same.
 func TestNextRecordsWhatAnExhaustedScopeNamed(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -75,9 +75,9 @@ func TestNextRecordsWhatAnExhaustedScopeNamed(t *testing.T) {
 			outcome: Exhausted{
 				Epics:    []string{"test-epic"},
 				Progress: claims.Progress{Done: 3, Total: 5},
-				Blocked: []rowReach{
-					{ID: "test-dep", Row: rowFor("test-dep-leaf"), Kind: reachHeldFresh},
-					{ID: "test-ext", Row: rowFor("test-ext"), Kind: reachAwaitingOutside},
+				Blocked: []blockerReach{
+					{rowReach: rowReach{ID: "test-dep", Row: rowFor("test-dep-leaf"), Kind: reachHeldFresh}, Clearable: true},
+					{rowReach: rowReach{ID: "test-ext", Row: rowFor("test-ext"), Kind: reachAwaitingOutside}},
 				},
 				Held: []rowReach{{ID: "test-held", Row: rowFor("test-held"), Kind: reachNotReady}},
 			},
@@ -89,8 +89,8 @@ func TestNextRecordsWhatAnExhaustedScopeNamed(t *testing.T) {
 				"next.exhausted_epics": ["test-epic"],
 				"next.exhausted_progress": {"done": 3, "total": 5},
 				"next.blocked": [
-					{"id": "test-dep", "ticket": "test-dep-leaf", "reach": "held_fresh"},
-					{"id": "test-ext", "ticket": "test-ext", "reach": "awaiting_outside"}
+					{"id": "test-dep", "ticket": "test-dep-leaf", "reach": "held_fresh", "clearable": true},
+					{"id": "test-ext", "ticket": "test-ext", "reach": "awaiting_outside", "clearable": false}
 				],
 				"next.held": [{"id": "test-held", "ticket": "test-held", "reach": "not_ready"}],
 				"next.off_path": [],
@@ -104,7 +104,7 @@ func TestNextRecordsWhatAnExhaustedScopeNamed(t *testing.T) {
 			outcome: Exhausted{
 				Epics:    []string{"test-epic"},
 				Progress: claims.Progress{Done: 0, Total: 2},
-				Blocked:  []rowReach{{ID: "test-ext", Row: rowFor("test-ext"), Kind: reachAwaitingOutside}},
+				Blocked:  []blockerReach{{rowReach: rowReach{ID: "test-ext", Row: rowFor("test-ext"), Kind: reachAwaitingOutside}}},
 			},
 			gathered: 2,
 			want: `{
@@ -113,7 +113,7 @@ func TestNextRecordsWhatAnExhaustedScopeNamed(t *testing.T) {
 				"next.dependency_path": [],
 				"next.exhausted_epics": ["test-epic"],
 				"next.exhausted_progress": {"done": 0, "total": 2},
-				"next.blocked": [{"id": "test-ext", "ticket": "test-ext", "reach": "awaiting_outside"}],
+				"next.blocked": [{"id": "test-ext", "ticket": "test-ext", "reach": "awaiting_outside", "clearable": false}],
 				"next.held": [],
 				"next.off_path": [],
 				"next.hidden_by_filter": null,
@@ -126,7 +126,7 @@ func TestNextRecordsWhatAnExhaustedScopeNamed(t *testing.T) {
 			outcome: ServedPastExhaustion{Row: rowFor("test-bug"), Exhaustion: Exhausted{
 				Epics:    []string{"test-epic"},
 				Progress: claims.Progress{Done: 8, Total: 9},
-				Blocked:  []rowReach{{ID: "test-dep", Row: rowFor("test-dep"), Kind: reachHeldFresh}},
+				Blocked:  []blockerReach{{rowReach: rowReach{ID: "test-dep", Row: rowFor("test-dep"), Kind: reachHeldFresh}, Clearable: true}},
 			}},
 			gathered: 3,
 			want: `{
@@ -135,7 +135,7 @@ func TestNextRecordsWhatAnExhaustedScopeNamed(t *testing.T) {
 				"next.dependency_path": [],
 				"next.exhausted_epics": ["test-epic"],
 				"next.exhausted_progress": {"done": 8, "total": 9},
-				"next.blocked": [{"id": "test-dep", "ticket": "test-dep", "reach": "held_fresh"}],
+				"next.blocked": [{"id": "test-dep", "ticket": "test-dep", "reach": "held_fresh", "clearable": true}],
 				"next.held": [],
 				"next.off_path": [],
 				"next.hidden_by_filter": null,

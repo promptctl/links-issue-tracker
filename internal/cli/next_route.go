@@ -206,7 +206,7 @@ type ServedPastNarrowing struct {
 type Exhausted struct {
 	Epics     []string
 	Progress  claims.Progress
-	Blocked   []rowReach
+	Blocked   []blockerReach
 	Held      []rowReach
 	OffPath   []rowReach
 	Narrowing *Narrowed
@@ -589,7 +589,7 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 		exhausted := Exhausted{
 			Epics:    slices.Sorted(maps.Keys(ownEpics)),
 			Progress: evidence.ScopeProgress(ourScope),
-			Blocked:  blockedRows(gating),
+			Blocked:  blockersOf(gating, workToward),
 			Held:     heldByThemselves(rows, ours, reachFor),
 		}
 		if row, ok := fromPool(selected); ok {
@@ -701,13 +701,53 @@ func heldByThemselves(rows []annotation.AnnotatedIssue, inScope func(annotation.
 	return held
 }
 
-// blockedRows drops the gated id, for Exhausted: that diagnostic reports WHICH
-// dependencies gate the epic, not which row each one gates.
-// [LAW:polishing-by-subtraction]
-func blockedRows(deps []gatedDep) []rowReach {
-	rows := make([]rowReach, 0, len(deps))
-	for _, dep := range deps {
-		rows = append(rows, dep.rowReach)
+// blockerReach is a dependency gating the scope, as Exhausted reports it: what
+// this checkout may do about it, and whether a ticket filed here could free it
+// — what the route to stay offers to clear. The second is a fact about the
+// blocker alone, so it sits beside the kind on the entry, where no other list's
+// row could claim it and no id could carry it that Blocked does not.
+// [LAW:types-are-the-program]
+type blockerReach struct {
+	rowReach
+	Clearable bool
+}
+
+// blockersOf reports the dependencies one walk found for Exhausted. It drops
+// the gated id — that diagnostic reports WHICH dependencies gate the epic, not
+// which row each one gates — and reads off the work toward each whether a
+// ticket filed here could free it.
+//
+// A dependency closes only when all of that work does — a leaf when it does,
+// an epic when every ticket under it does — so one ticket of it awaiting an
+// outside event leaves it to that event, never to a ticket here, and one still
+// waiting on other open tickets leaves it to them, whoever holds its lane and
+// whatever about itself also holds it. The walk is transitive, so each of
+// those tickets is named in Blocked beside it, named in Held, or underway in
+// our scope in another checkout — a chain whose every end awaits an outside
+// event has nothing here to file against. Prerequisites count as capacityFor
+// counts them: work in flight is past them, and the walk does not descend it,
+// while the external label holds work in every state. Read off all the work,
+// not the kind: the kind is the best of that work, and a held kind outranks
+// not-ready, so it keeps no trace of what the rest waits on. With no work in
+// view a dependency is reachOutOfView, and nothing seen holds it.
+func blockersOf(deps []gatedDep, workToward map[string][]annotation.AnnotatedIssue) []blockerReach {
+	blockers := make([]blockerReach, len(deps))
+	for i, dep := range deps {
+		waitsElsewhere := slices.ContainsFunc(workToward[dep.ID], func(work annotation.AnnotatedIssue) bool {
+			readiness := ClassifyReadiness(work.Annotations)
+			return readiness.AwaitsOutside() || work.State() == model.StateOpen && len(readiness.Prerequisites()) > 0
+		})
+		blockers[i] = blockerReach{rowReach: dep.rowReach, Clearable: !waitsElsewhere}
+	}
+	return blockers
+}
+
+// reachesOf is the blockers as the rows they are, for what reads every reported
+// row alike.
+func reachesOf(blockers []blockerReach) []rowReach {
+	rows := make([]rowReach, len(blockers))
+	for i, blocker := range blockers {
+		rows[i] = blocker.rowReach
 	}
 	return rows
 }
@@ -898,7 +938,7 @@ func (o Exhausted) Error() string {
 // says what the scope's progress shows instead.
 func (o Exhausted) why() string {
 	stops := slices.DeleteFunc([]string{
-		describeReach(o.Blocked, "blocked by ", exhaustedNotes),
+		describeReach(reachesOf(o.Blocked), "blocked by ", exhaustedNotes),
 		describeReach(o.Held, "held here: ", exhaustedNotes),
 	}, func(clause string) bool { return clause == "" })
 	if len(stops) == 0 {
@@ -935,26 +975,25 @@ func (o Exhausted) outside() string {
 
 // stay is the route that keeps the checkout in its scope, as a list of at most
 // one so both renderers join it beside the others unconditionally. It exists
-// only against a block a ticket filed here could clear: with Blocked empty the
-// rest of the scope is work already underway, and a blocker awaiting an outside
-// event is cleared by that event, never by a ticket here. Nor is a blocker that
-// is not ready only because it waits on other open tickets: the walk is
-// transitive, so each of those is named in Blocked beside it, named in Held, or
-// underway in our scope in another checkout, and the blocker clears exactly
-// when they do — a chain whose every end awaits an outside event has nothing
-// here to file against. Filing alone clears
-// nothing either — the blocked work still waits on its blocker — so the route
+// only against a block a ticket filed here could clear (blockersOf): with
+// Blocked empty the rest of the scope is work already underway. Filing alone
+// clears nothing — the blocked work still waits on its blocker — so the route
 // names the edge too, and names it exactly: the blocker waits on the new
-// ticket. The blocker to name is one outside the scope; lit refuses a
-// blocked-by edge between two tickets of one epic.
+// ticket, spelled as one command per blocker it could free, so the agent
+// copies an id rather than picking one of the ids after "blocked by", some of
+// which no new ticket frees. Every blocker is one outside the scope; lit
+// refuses a blocked-by edge between two tickets of one epic.
 func (o Exhausted) stay() []string {
-	clearable := slices.ContainsFunc(o.Blocked, func(blocker rowReach) bool {
-		return blocker.Kind != reachNotReady && blocker.Kind != reachAwaitingOutside
-	})
-	if !clearable {
+	var edges []string
+	for _, blocker := range o.Blocked {
+		if blocker.Clearable {
+			edges = append(edges, fmt.Sprintf("`lit dep add %s --blocked-by <new>`", blocker.ID))
+		}
+	}
+	if len(edges) == 0 {
 		return nil
 	}
-	return []string{"to stay, file the ticket that clears a blocker " + o.home() + ", then make that blocker blocked by it with `lit dep add <blocker> --blocked-by <new>`"}
+	return []string{"to stay, file the ticket that clears a blocker " + o.home() + ", then make that blocker blocked by it with " + nameCapped(edges, " or ")}
 }
 
 // home is where the unblocking ticket is filed, spelled as the command: under
@@ -1040,17 +1079,19 @@ var (
 // actionable; naming all of them is what makes it unreadable.
 const maxNamedPerKind = 12
 
-// nameIDs names at most maxNamedPerKind ids and states how many it left out, so
-// the clause reads the same at any pool size. The remainder is counted rather
+// nameCapped names at most maxNamedPerKind items, joined by sep, and states how
+// many it left out, so a clause reads the same at any pool size. The route to stay
+// spells its commands through it too, so no clause grows a second answer to how
+// long it may get. The remainder is counted rather
 // than dropped: an agent told "and 135 more" still learns the true scale of what
 // it cannot start. [LAW:no-silent-failure]
-func nameIDs(ids []string) string {
+func nameCapped(items []string, sep string) string {
 	// [LAW:dataflow-not-control-flow] the last inch of rendering, where the two
 	// arms are different sentences rather than an operation one of them skips.
-	if len(ids) <= maxNamedPerKind {
-		return strings.Join(ids, ", ")
+	if len(items) <= maxNamedPerKind {
+		return strings.Join(items, sep)
 	}
-	return fmt.Sprintf("%s and %d more", strings.Join(ids[:maxNamedPerKind], ", "), len(ids)-maxNamedPerKind)
+	return fmt.Sprintf("%s and %d more", strings.Join(items[:maxNamedPerKind], sep), len(items)-maxNamedPerKind)
 }
 
 // describeReach renders "<lead><ids> (<note>)" for each kind that has rows,
@@ -1070,7 +1111,7 @@ func describeReach(rows []rowReach, lead string, notes reachNotes) string {
 		if len(ids) == 0 {
 			continue
 		}
-		parts = append(parts, fmt.Sprintf("%s%s (%s)", lead, nameIDs(ids), note))
+		parts = append(parts, fmt.Sprintf("%s%s (%s)", lead, nameCapped(ids, ", "), note))
 	}
 	return strings.Join(parts, "; ")
 }
