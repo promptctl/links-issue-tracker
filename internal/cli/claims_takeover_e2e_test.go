@@ -287,15 +287,17 @@ func TestStartTakesOverALiveLaneUnderOneSharedIdentity(t *testing.T) {
 
 // TestStartOnAPresetAssigneeAnnouncesNoTransfer pins the distinction between an
 // assignee and a holder. `lit new --assignee X` writes a row field and no
-// establishing event, so nobody holds the lane — claims.Derive reads that state
-// as Unclaimed and authorizeStart asks for no ceremony. The first start must
-// agree and stay silent.
+// establishing event, so nobody holds the ticket, and its first start must
+// stay silent.
 //
-// Comparing the whole Claimant against its zero value would read "assignee
-// set at creation" as "previously held", and print
-// `claim transferred: alice -> alice` for a ticket's first-ever start. Every
-// other test here creates its ticket without --assignee, so the prior claimant
-// is the exact zero value and the branch never fires.
+// A sibling is started first so the lane is held when the preset ticket is:
+// on an unclaimed lane the notice is never asked for, and the case would pass
+// whatever the handover said. On a held lane it is the handover Apply reports
+// that has to be absent, and reading "assignee set at creation" as "previously
+// held" there prints `claim transferred: alice -> alice` for a ticket's
+// first-ever start. Every other test here creates its ticket without
+// --assignee, so the prior claimant is the exact zero value and the branch
+// never fires.
 func TestStartOnAPresetAssigneeAnnouncesNoTransfer(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
 	base := t.TempDir()
@@ -315,7 +317,9 @@ func TestStartOnAPresetAssigneeAnnouncesNoTransfer(t *testing.T) {
 	runCLIInDir(t, repo, "init", "--skip-hooks", "--skip-agents")
 
 	epic := extractTicketID(t, runCLIInDir(t, repo, "new", "--title", "takeover epic", "--topic", "takeover-e2e", "--type", "epic"))
+	sibling := extractTicketID(t, runCLIInDir(t, repo, "new", "--title", "sibling", "--topic", "takeover-e2e", "--type", "task", "--parent", epic))
 	ticket := extractTicketID(t, runCLIInDir(t, repo, "new", "--title", "preset", "--topic", "takeover-e2e", "--type", "task", "--parent", epic, "--assignee", "alice"))
+	runCLIInDir(t, repo, "start", sibling, "--by", "alice")
 
 	out := runCLIInDir(t, repo, "start", ticket, "--by", "alice")
 	if strings.Contains(out, "claim transferred") {
