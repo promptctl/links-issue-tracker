@@ -305,9 +305,10 @@ Test `TestSyncCompactRunsCleanlyAndPreservesData` (`sync_test.go`).
 - `listRemoteCacheKeys(base)` (`remotecache.go`): a non-existent base returns `(nil, nil)`; otherwise directory entries that are dirs and pass `isRemoteCacheKey`.
 - **The legality rule** `planRemoteCachePrune(expected, onDisk)` (`remotecache.go`): a directory is abandoned when no configured remote derives its key. If `len(abandoned) > 0 && len(unaccounted) > 0` the prune **declines wholesale** with the long error at `remotecache.go` (names the counts and the `remote→key` pairs). Both lists are sorted (`remotecache.go`).
 - `remoteCachePruneOutcome`, a named type over `remoteCacheCollection{Removed int; Reclaimed int64; Problem string}` (`remotecache.go`). `Report()` (`remotecache.go`):
-  - problem + removals → `"remote-cache prune: removed %d abandoned mirror%s (%s), then failed: %s"`
-  - problem only → `"remote-cache prune: " + problem`
-  - removals only → `"remote-cache prune: removed %d abandoned mirror%s, reclaimed %s"`
+  `report("remote-cache prune", "abandoned mirror", "abandoned mirrors")` over `remoteCacheCollection.report(job, one, many)`:
+  - problem + removals → `"%s: removed %d %s (%s), then failed: %s"`
+  - problem only → `job + ": " + problem`
+  - removals only → `"%s: removed %d %s, reclaimed %s"`
   - neither → `""`.
 - `dirSize(root)` (`remotecache.go`) walks and sums file sizes for the `Reclaimed` figure.
 - Eligibility is **re-asked per directory** inside the deletion loop rather than trusted from the plan snapshot (`remotecache.go`).
