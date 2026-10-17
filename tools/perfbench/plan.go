@@ -92,23 +92,29 @@ var probes = []probe{
 	{name: "stores --counts", args: []string{"stores", "--counts"}, okCodes: exits(0)},
 	{name: "doctor", args: []string{"doctor"}, okCodes: exits(0)},
 	{name: "workspace", args: []string{"workspace"}, okCodes: exits(0)},
+	// An epic, because it is the one ticket lit files with no parent: every
+	// other type names the epic it lives inside, and the empty control has
+	// none to name, so a task here would be a different invocation per size.
 	{name: "new (write)", args: []string{
-		"new", "--title", "perfbench write probe", "--type", "task", "--topic", "bench",
+		"new", "--title", "perfbench write probe", "--type", "epic", "--topic", "bench",
 	}, okCodes: exits(0), mutates: true},
 }
 
 // size is one store to generate and measure at. rows is the store's TOTAL row
-// count, and it is not the same as its workable count: every generated row is
-// open, but blockedEveryNth wires roughly a third of them behind a dependency,
-// so a 590-row store presents about 393 workable rows to `backlog` and `next`
-// and holds 590 for everything that walks the whole table.
+// count, epics included, and it is not the same as its workable count: one row
+// in rowsPerEpic is an epic, an epic's children wait on each other in rank
+// order, and blockedEveryNth wires a third of the tasks behind another epic's
+// work. `lit stores --counts` on a generated 590-row store reports 40 ready
+// and 491 blocked; on a 118-row store, 8 and 98. The live store's 118 open
+// rows are 47 ready, because its epics run children in parallel lanes, and
+// `lit import` sets no lane, so a generated epic is one lane, ready only at its
+// head.
 //
-// Both numbers matter and neither is this repository's directly. The live store
-// holds 827 rows of which 118 are workable, so a 590-row generated store is a
-// harder gather (393 workable against 118) over a smaller table (590 rows
-// against 827). It is not a scale model of this repository and is not meant to
-// be — it is a controlled point on the row axis, which is the axis the ceiling
-// and the latency budget are both argued in.
+// Both numbers matter and neither is this repository's directly. A generated
+// store is not a scale model of this repository and is not meant to be — it
+// is a controlled point on the row axis, which is the axis the ceiling and the
+// latency budget are both argued in. `lit backlog` reads every open row either
+// way, ready or not.
 type size struct {
 	name string
 	rows int
@@ -119,8 +125,8 @@ type size struct {
 // invented here: `lit stores --counts` reports 118 workable rows today, and the
 // design target is 5x the largest local backlog. internal/cli's gather
 // benchmark and internal/store's list benchmarks are calibrated to the same
-// 118/590 pair, so a figure from this tool and a figure from `go test -bench`
-// describe the same store. [LAW:one-source-of-truth]
+// 118/590 pair, so this tool and `go test -bench` measure at the same points on
+// the row axis, over stores of different shape. [LAW:one-source-of-truth]
 //
 // The empty store is the control that separates fixed cost — store open, the
 // migration check — from per-row cost. It is the measurement the scale epic's
@@ -141,11 +147,19 @@ const (
 	titleBytes       = 69
 )
 
-// blockedEveryNth wires every third generated row to depend on its predecessor,
-// so roughly a third of the queue is blocked. That ratio is measured, not
-// picked: `lit stores --counts` reports 42 blocked against 118 workable. A
-// store with no dependency edges at all would time a gather that never resolves
-// a blocker — measuring a code path that does not exist in practice.
+// rowsPerEpic is how many generated rows make one epic and its children: the
+// epic, then nine tasks. The ratio is this repository's own: 98 epics among 985
+// issues, a mean of 9.1 children each (median 4, since one catch-all epic holds
+// 391). The mean is the figure kept because it fixes how many of a store's rows
+// are epics, and every command that walks the whole table reads that mix.
+const rowsPerEpic = 10
+
+// blockedEveryNth wires every third generated task to depend on a task in the
+// previous epic, so roughly a third of the tasks wait on another epic's work.
+// Rank order already holds every task behind its epic's head, so the edges
+// change readiness only at a head; they are here so the gather resolves
+// blocked_by edges, which a store gated by rank alone would never time — a
+// code path every real store exercises.
 const blockedEveryNth = 3
 
 // repeats is how many times each probe runs, and min-of-repeats is what gets

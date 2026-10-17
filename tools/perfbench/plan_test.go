@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // The empty store is zero imports, not an empty one: `lit import` refuses a
@@ -46,33 +48,48 @@ func TestImportBatchesBuildsTheRequestedRows(t *testing.T) {
 		if tail := strings.TrimPrefix(r.Title, fmt.Sprintf("generated row %d ", i)); strings.HasPrefix(r.Description, tail) {
 			t.Errorf("record %d title %q is a prefix of its own description", i, r.Title)
 		}
-		if r.LocalID == "" || r.Topic == "" || r.Type == "" {
+		if r.LocalID == "" || r.Topic == "" || r.IssueType == "" {
 			t.Errorf("record %d is missing a key `lit import` requires: %+v", i, r)
 		}
 	}
-	// Roughly a third blocked, matching the 42-of-118 the live store reports.
-	// The first row has no predecessor, so 9 rows give edges at 3, 6 — hence 2.
-	blocked := 0
+}
+
+// Three groups are the smallest spec with a group before the last two, so it
+// holds every edge shape the generator writes. Every task lives inside an epic
+// of the same spec, and every dependency joins two tasks in different epics,
+// the one form of blocked_by lit accepts. Six of the 27 tasks are blocked: every
+// third task, past the first epic, which has no epic before it to wait on.
+func TestImportBatchesWiresTasksInsideEpicsAndAcrossThem(t *testing.T) {
+	recs := importBatches(30)[0]
+	byID := map[string]storage.ImportTreeSpec{}
 	for _, r := range recs {
+		byID[r.LocalID] = r
+	}
+	epics, blocked := 0, 0
+	for _, r := range recs {
+		if r.IssueType == "epic" {
+			epics++
+			if r.Parent != "" || len(r.BlockedBy) > 0 {
+				t.Errorf("epic %s has parent %q and blocked_by %v, want neither", r.LocalID, r.Parent, r.BlockedBy)
+			}
+			continue
+		}
+		if byID[r.Parent].IssueType != "epic" {
+			t.Errorf("task %s has parent %q, want an epic in the same spec", r.LocalID, r.Parent)
+		}
 		if len(r.BlockedBy) > 0 {
 			blocked++
 		}
-	}
-	if blocked != 2 {
-		t.Errorf("importBatches(9) wired %d blocked rows, want 2 (indices 3 and 6)", blocked)
-	}
-	// An edge may only name another local_id in the same file — `lit import`'s
-	// rule, and a spec violating it fails the whole import.
-	ids := map[string]bool{}
-	for _, r := range recs {
-		ids[r.LocalID] = true
-	}
-	for _, r := range recs {
 		for _, dep := range r.BlockedBy {
-			if !ids[dep] {
-				t.Errorf("record %s depends on %q, which is not a local_id in the same spec", r.LocalID, dep)
+			target, ok := byID[dep]
+			if !ok || target.IssueType != "task" || target.Parent == r.Parent {
+				t.Errorf("task %s (in %s) depends on %q (%+v), want a task in another epic of the same spec",
+					r.LocalID, r.Parent, dep, target)
 			}
 		}
+	}
+	if epics != 3 || blocked != 6 {
+		t.Errorf("importBatches(30) made %d epics and %d blocked tasks, want 3 and 6", epics, blocked)
 	}
 }
 
@@ -331,7 +348,7 @@ func TestGenerateRefusesAWorkspaceThatAlreadyExists(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(parent, sz.name), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	_, err := generate(litBinary{path: filepath.Join(parent, "unused-lit")}, parent, sz, os.Environ())
+	_, err := generate(litBinary{path: filepath.Join(parent, "unused-lit")}, parent, sz, os.Environ(), runQuiet)
 	if err == nil {
 		t.Fatal("generate() into an existing directory returned no error")
 	}

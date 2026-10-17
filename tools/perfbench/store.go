@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -31,18 +32,6 @@ type generatedStore struct {
 	env []string
 }
 
-// importRecord is one issue in the JSON tree spec `lit import` consumes. The
-// field names and the local_id/blocked_by referencing rules are that command's
-// contract, not this tool's invention.
-type importRecord struct {
-	LocalID     string   `json:"local_id"`
-	Title       string   `json:"title"`
-	Type        string   `json:"type"`
-	Topic       string   `json:"topic"`
-	Description string   `json:"description"`
-	BlockedBy   []string `json:"blocked_by,omitempty"`
-}
-
 // generate builds a workspace at the requested size under parent.
 //
 // WHY IT SHELLS OUT INSTEAD OF CALLING internal/store. Seeding through the
@@ -52,7 +41,9 @@ type importRecord struct {
 // because nothing would compare the two. `lit init` plus `lit import` is the
 // bulk-ingest path lit already offers its users, so the store measured here is
 // a store lit itself produced. [LAW:one-source-of-truth]
-func generate(bin litBinary, parent string, sz size, env []string) (generatedStore, error) {
+// Each step runs through run, which is runQuiet everywhere but the test that
+// proves lit accepts the plan, where it is lit's own entry point in-process.
+func generate(bin litBinary, parent string, sz size, env []string, run stepRunner) (generatedStore, error) {
 	root := filepath.Join(parent, sz.name)
 	// os.Mkdir, never MkdirAll: an existing directory must fail here rather
 	// than be reused. lit init is idempotent and lit import appends, so
@@ -81,7 +72,7 @@ func generate(bin litBinary, parent string, sz size, env []string) (generatedSto
 		specs = append(specs, specPath)
 	}
 	for _, st := range generationSteps(bin, sz, specs) {
-		if err := runQuiet(root, env, st); err != nil {
+		if err := run(root, env, st); err != nil {
 			return generatedStore{}, err
 		}
 	}
@@ -91,6 +82,9 @@ func generate(bin litBinary, parent string, sz size, env []string) (generatedSto
 	}
 	return generatedStore{size: sz, root: root, databasePath: info.DatabasePath, env: env}, nil
 }
+
+// stepRunner performs one generation step in dir under env.
+type stepRunner func(dir string, env []string, st step) error
 
 // step is one command generation runs, with the budget that bounds it.
 type step struct {
@@ -144,33 +138,50 @@ func generationSteps(bin litBinary, sz size, specs []string) []step {
 // but zero imports. Expressing that as a list length keeps it out of the caller
 // as a branch: the loop over batches runs zero times, and the operation that
 // runs is the same one at every size. [LAW:dataflow-not-control-flow]
-func importBatches(rows int) [][]importRecord {
-	records := make([]importRecord, 0, rows)
+//
+// Each row is a storage.ImportTreeSpec, the record `lit import` parses, so the
+// spec this tool writes cannot drift from the one lit reads.
+// [LAW:one-source-of-truth]
+//
+// The rows come in groups of rowsPerEpic: an epic, then the tasks inside it,
+// because lit refuses a ticket outside an epic. A dependency joins a task to
+// the task at the same position in the previous group — an edge between two
+// epics' children, the form lit accepts; lit refuses a blocked_by between two
+// children of one epic, whose order is their rank.
+func importBatches(rows int) [][]storage.ImportTreeSpec {
+	records := make([]storage.ImportTreeSpec, 0, rows)
 	for i := range rows {
 		// The title draws from its own stream (^i, distinct from every
 		// description's seed i >= 0): on a shared seed the title would be the
 		// first 50-odd bytes of its description verbatim, and a store that
 		// compresses the two together would store the row cheaper than a real
 		// one whose title is independent prose.
-		rec := importRecord{
-			LocalID:     fmt.Sprintf("r%d", i),
+		rec := storage.ImportTreeSpec{
+			LocalID:     localID(i),
 			Title:       fmt.Sprintf("generated row %d %s", i, filler(^i, titleBytes))[:titleBytes],
-			Type:        "task",
+			IssueType:   "epic",
 			Topic:       "bench",
 			Description: filler(i, descriptionBytes),
 		}
-		// The first row has no predecessor to depend on, which is why the
-		// blocked share is "roughly" a third rather than exactly one.
-		if i > 0 && i%blockedEveryNth == 0 {
-			rec.BlockedBy = []string{fmt.Sprintf("r%d", i-1)}
+		if i%rowsPerEpic != 0 {
+			rec.IssueType = "task"
+			rec.Parent = localID(i - i%rowsPerEpic)
+			// The first group has no group before it to depend on, which is
+			// why the blocked share is "roughly" a third rather than exactly.
+			if i >= rowsPerEpic && i%blockedEveryNth == 0 {
+				rec.BlockedBy = []string{localID(i - rowsPerEpic)}
+			}
 		}
 		records = append(records, rec)
 	}
 	if len(records) == 0 {
 		return nil
 	}
-	return [][]importRecord{records}
+	return [][]storage.ImportTreeSpec{records}
 }
+
+// localID is the name row i goes by inside its import spec.
+func localID(i int) string { return fmt.Sprintf("r%d", i) }
 
 // proseWords is the vocabulary filler text is drawn from. Its content is
 // irrelevant; its job is to make generated rows compress like the rows a real
