@@ -907,12 +907,14 @@ func (o Exhausted) why() string {
 	return fmt.Sprintf("no ready work in %s (%s) — %s", o.scope(), formatProgress(o.Progress), strings.Join(stops, "; "))
 }
 
-// unstopped is what a scope nothing stops has left: no ticket at all, once
-// every one is closed — the commonest exhaustion, a checkout that has just
-// finished its epic's last ticket — or only work already underway.
+// unstopped is what a scope nothing stops has left: nothing at all, once no
+// ticket in it is open — the commonest exhaustion, a checkout that has just
+// finished its epic's last ticket, and also a held lane whose tickets were all
+// archived or deleted, which is why it never says they were done — or only
+// work already underway.
 func unstopped(progress claims.Progress) string {
 	if progress.Done == progress.Total {
-		return "every ticket in it is done"
+		return "nothing in it is left to do"
 	}
 	return "nothing else is queued behind what's already in progress"
 }

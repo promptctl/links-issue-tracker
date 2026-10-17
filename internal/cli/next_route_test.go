@@ -285,7 +285,18 @@ func TestRouteNextExhaustionIsTerminalWhenNothingElseIsReady(t *testing.T) {
 		t.Fatalf("routeNext = %#v (%T), want Exhausted — B.1's lane is held elsewhere, so nothing outside epic A is ready", outcome, outcome)
 	}
 	msg := exhausted.Error()
-	if want := "no ready work in epic(s) " + epicA.ID + " (1/1 done) — every ticket in it is done; `lit next` has nothing ready outside it either"; msg != want {
+	if want := "no ready work in epic(s) " + epicA.ID + " (1/1 done) — nothing in it is left to do; `lit next` has nothing ready outside it either"; msg != want {
+		t.Fatalf("exhausted.Error() = %q, want exactly %q", msg, want)
+	}
+}
+
+// A held scope whose tickets were all archived or deleted counts 0/0, and
+// nothing stops it. Nothing in it was done and nothing is underway, so the
+// message claims neither.
+func TestExhaustionOfAnEmptiedScopeClaimsNothingWasDone(t *testing.T) {
+	exhausted := Exhausted{Epics: []string{"test-epic"}}
+	want := "no ready work in epic(s) test-epic (0/0 done) — nothing in it is left to do; `lit next` has nothing ready outside it either"
+	if msg := exhausted.Error(); msg != want {
 		t.Fatalf("exhausted.Error() = %q, want exactly %q", msg, want)
 	}
 }
