@@ -8,7 +8,7 @@ Day-to-day reads and writes are only half of what the store does; the other half
 
 | # | Data | Query semantics | Order |
 |---|---|---|---|
-| 1 | issues | `ListIssues` with `Limit: 0` (uncapped), `IncludeArchived` and `IncludeDeleted` both true — no WHERE clause at all, so **archived and soft-deleted issues are exported** | `item_rank ASC, id ASC` (`store.go`) |
+| 1 | issues | `ListIssues` with `Limit: 0` (uncapped), `IncludeArchived` and `IncludeDeleted` both true — no WHERE clause at all, so **archived and soft-deleted issues are exported** | tree order, then `id` — `ListIssues`'s default (`storage.IssueOrdering`) |
 | 2 | relations | `SELECT ... FROM relations` | `created_at ASC` (no tiebreak) |
 | 3 | comments | `SELECT ... FROM comments` | `created_at ASC` |
 | 4 | labels | `SELECT ... FROM labels` | `issue_id ASC, label ASC` |
@@ -75,9 +75,9 @@ The CLI restore flow (`lit backup restore`, `internal/cli/backup.go`): usage is 
 | invalid related-to ordering | `COUNT(*) ... type='related-to' AND src_id >= dst_id` | **warning** `invalid related-to ordering rows: %d` |
 | orphan event rows | events joined to missing issues | **warning** `orphan issue event rows: %d` |
 | containment | non-epics with no parent-child edge, and parent-child edges onto a non-epic (`containmentFindings`) | **warning** `tickets outside an epic: …` and `tickets under a parent that is not an epic: …`, naming each and `lit parent set --child <id> --parent <epic-id>` |
-| rank inversions | `len(invertedEdges(order, edges))` over the live rank order and blocked-by edges, loaded once for this row and the two after it (computed in Go) | **warning** `rank inversions: %d (dependencies ranked below dependents)` |
-| duplicate rank keys | `rankCollisions(order)` over the same live rank order: each key two or more live issues hold, an empty rank excluded | **warning** `duplicate rank keys: %d (<"key" shared by a, b; …>; each key's holders list by id instead of by rank — 'lit doctor --fix rank' gives each its own key without changing the order)` |
-| blocked-by cycle | `blocksCycle(order, edges)` — the constraints `FixRankInversions` refuses on | **warning** `blocked-by dependency cycle: <a -> b -> ...> (no rank order exists; remove one edge with 'lit dep rm' to break it)` |
+| rank inversions | `len(invertedEdges(order, ancestry, liveEdges(edges, liveIDs)))` over every non-deleted issue in key order and the blocked-by edges between live issues, loaded once for this row and the two after it (computed in Go): an edge whose dependency tree order lists after its dependent, an edge between an issue and its own container excepted (`storage.RankAncestry.Inverted`) | **warning** `rank inversions: %d (dependencies ranked below dependents)` |
+| duplicate rank keys | `rankCollisions(order)` over the same order: each key two or more non-deleted issues hold, an empty rank excluded | **warning** `duplicate rank keys: %d (<"key" shared by a, b; …>; each key's holders list by id instead of by rank — 'lit doctor --fix rank' gives each its own key without changing the order)` |
+| blocked-by cycle | `blocksCycle(order, rankConstraints(live, ancestry))` — the constraints `FixRankInversions` refuses on, each edge lifted onto the frame-mates tree order decides it by, so the path can name epics | **warning** `blocked-by dependency cycle: <a -> b -> ...> (no rank order exists — an epic on it stands for the issues inside it, which its rank orders as one; remove one edge with 'lit dep rm' to break it)` |
 
 `FixIntegrity` (`import_export.go`) runs under a mutation with Dolt commit message `fix integrity`, executing exactly three statements — delete orphan events, delete self-referential related-to rows, swap mis-ordered related-to endpoints — then returns a fresh `Doctor` report. It does not touch FK violations, rank inversions, or cycles.
 

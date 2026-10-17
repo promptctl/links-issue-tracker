@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"maps"
 	"math/rand"
 	"slices"
 	"sort"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/rank"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/storage/storagetest"
@@ -473,7 +475,7 @@ func TestRepairRankOrderProperties(t *testing.T) {
 		if len(seen) != size {
 			t.Fatalf("trial %d: repaired order holds %d distinct ids, want %d", trial, len(seen), size)
 		}
-		if left := invertedEdges(repaired, edges); len(left) != 0 {
+		if left := invertedEdges(repaired, storage.RankAncestry{}, edges); len(left) != 0 {
 			t.Fatalf("trial %d: %d edge(s) still inverted after the repair, want 0", trial, len(left))
 		}
 		placed := make(map[string]int, size)
@@ -496,6 +498,122 @@ func TestRepairRankOrderProperties(t *testing.T) {
 			}
 		}
 		again, err := repairRankOrder(repaired, edges)
+		if err != nil {
+			t.Fatalf("trial %d: second repairRankOrder() error = %v", trial, err)
+		}
+		if len(again) != 0 {
+			t.Fatalf("trial %d: second repair wrote %d rank(s), want 0 — the repair must be idempotent", trial, len(again))
+		}
+	}
+}
+
+// The repair's contract over a hierarchy: keys are read only among
+// frame-mates, so the properties are stated in tree order, with every
+// container's key read back from the repaired store. The edges are drawn
+// against a hidden tree order, so the lifted constraints are satisfiable by
+// construction, and the starting keys are shuffled, so no frame starts out
+// agreeing with it. Some edges join an issue to its own container or
+// descendant, which tree order decides and the repair must leave alone.
+func TestRepairRankOrderPropertiesAcrossFrames(t *testing.T) {
+	t.Parallel()
+	rng := rand.New(rand.NewSource(2))
+	keyOf := func(n, i int) string {
+		return fmt.Sprintf("%0*d", len(strconv.Itoa(n*10)), (i+1)*10)
+	}
+	ancestryOver := func(parent map[string]string, key map[string]string) storage.RankAncestry {
+		links := make([]storage.ParentLink, 0, len(parent))
+		for child, p := range parent {
+			links = append(links, storage.ParentLink{ChildID: child, ParentID: p, ParentRank: key[p]})
+		}
+		return storage.NewRankAncestry(links)
+	}
+	for trial := 0; trial < 300; trial++ {
+		size := 1 + rng.Intn(40)
+		ids := make([]string, size)
+		parent := map[string]string{}
+		for i := range ids {
+			ids[i] = fmt.Sprintf("t%03d", i)
+			if i > 0 && rng.Intn(3) > 0 {
+				parent[ids[i]] = ids[rng.Intn(i)]
+			}
+		}
+		key, hidden := map[string]string{}, map[string]string{}
+		for i, at := range rng.Perm(size) {
+			key[ids[i]] = keyOf(size, at)
+		}
+		for i, at := range rng.Perm(size) {
+			hidden[ids[i]] = keyOf(size, at)
+		}
+		hiddenOrder := ancestryOver(parent, hidden)
+		issuesBy := func(k map[string]string) []model.Issue {
+			out := make([]model.Issue, size)
+			for i, id := range ids {
+				out[i] = model.Issue{ID: id, Rank: k[id]}
+			}
+			return out
+		}
+		treeAt := map[string]int{}
+		hiddenIssues := issuesBy(hidden)
+		hiddenOrder.Sort(hiddenIssues)
+		for at, issue := range hiddenIssues {
+			treeAt[issue.ID] = at
+		}
+		var edges []blocksEdge
+		for _, dependency := range ids {
+			for _, dependent := range ids {
+				if treeAt[dependency] < treeAt[dependent] && rng.Intn(8) == 0 {
+					edges = append(edges, blocksEdge{dependent: dependent, dependency: dependency})
+				}
+			}
+		}
+
+		order := make([]rankedIssue, size)
+		for i, id := range ids {
+			order[i] = rankedIssue{id: id, rank: key[id]}
+		}
+		slices.SortFunc(order, compareRankedIssues)
+		ancestry := ancestryOver(parent, key)
+		constraints := rankConstraints(edges, ancestry)
+		rewrites, err := repairRankOrder(order, constraints)
+		if err != nil {
+			t.Fatalf("trial %d (size %d, %d edges): repairRankOrder() error = %v, want none for edges a tree order satisfies", trial, size, len(edges), err)
+		}
+
+		repairedKey := maps.Clone(key)
+		for _, rewrite := range rewrites {
+			repairedKey[rewrite.id] = rewrite.newRank
+		}
+		holders := map[string]string{}
+		for id, k := range repairedKey {
+			if other, taken := holders[k]; taken {
+				t.Fatalf("trial %d: %s and %s both hold %q after the repair", trial, other, id, k)
+			}
+			holders[k] = id
+		}
+		repaired := applyToOrder(order, rewrites)
+		repairedAncestry := ancestryOver(parent, repairedKey)
+		if left := invertedEdges(repaired, repairedAncestry, edges); len(left) != 0 {
+			t.Fatalf("trial %d: %v still inverted in tree order after the repair, want none", trial, left)
+		}
+		// Within a frame, an issue falls behind a frame-mate that stood after
+		// it only while it waits on a dependency placed no earlier than that one.
+		waitsOn := map[string][]string{}
+		for _, c := range constraints {
+			waitsOn[c.dependent] = append(waitsOn[c.dependent], c.dependency)
+		}
+		for _, p := range ids {
+			for _, q := range ids {
+				if p == q || ancestry.Frame(p) != ancestry.Frame(q) || key[q] < key[p] {
+					continue
+				}
+				overtaken := repairedKey[q] < repairedKey[p]
+				waiting := slices.ContainsFunc(waitsOn[p], func(d string) bool { return repairedKey[d] >= repairedKey[q] })
+				if overtaken && !waiting {
+					t.Fatalf("trial %d: %s now stands ahead of its frame-mate %s, yet %s waits on nothing placed at or after it", trial, q, p, p)
+				}
+			}
+		}
+		again, err := repairRankOrder(repaired, rankConstraints(edges, repairedAncestry))
 		if err != nil {
 			t.Fatalf("trial %d: second repairRankOrder() error = %v", trial, err)
 		}

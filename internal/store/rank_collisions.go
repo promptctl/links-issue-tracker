@@ -1,7 +1,6 @@
 package store
 
 import (
-	"cmp"
 	"fmt"
 	"slices"
 	"strings"
@@ -74,11 +73,10 @@ func landExport(export model.Export) (model.Export, storage.Landing, error) {
 }
 
 // placedIssues returns the ranked issues of export that a rank verb places
-// among: every one not deleted. A deleted issue lists nowhere, so the verbs'
-// neighbour lookups step past it (`deleted_at IS NULL`, ranking.go) and can
-// mint its key again; its key orders nothing. Doctor counts a narrower set,
-// the live issues, which an export cannot classify: an epic's state derives
-// from children only store hydration attaches.
+// among: every one not deleted, the set Doctor counts too (loadRankOrder). A
+// deleted issue lists nowhere, so the verbs' neighbour lookups step past it
+// (`deleted_at IS NULL`, ranking.go) and can mint its key again; its key
+// orders nothing.
 func placedIssues(export model.Export) []rankedIssue {
 	placed := make([]rankedIssue, 0, len(export.Issues))
 	for _, issue := range export.Issues {
@@ -114,9 +112,7 @@ func separateRankCollisions(export model.Export) (model.Export, []storage.Rekeye
 	if len(collisions) == 0 {
 		return export, nil, nil
 	}
-	slices.SortFunc(placed, func(a, b rankedIssue) int {
-		return cmp.Or(strings.Compare(a.rank, b.rank), strings.Compare(a.id, b.id))
-	})
+	slices.SortFunc(placed, compareRankedIssues)
 	listed := make([]string, len(placed))
 	from := make(map[string]string, len(placed))
 	for i, issue := range placed {

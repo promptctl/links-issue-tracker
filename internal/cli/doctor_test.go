@@ -218,7 +218,7 @@ func TestDoctorPrintsEachWarningItsHealthCheckFinds(t *testing.T) {
 	}
 	// The cycle may be named from either member; both rotations are the same cycle.
 	cycleLine := func(a, b string) string {
-		return "warning: blocked-by dependency cycle: " + a + " -> " + b + " -> " + a + " (no rank order exists; remove one edge with 'lit dep rm' to break it)"
+		return "warning: blocked-by dependency cycle: " + a + " -> " + b + " -> " + a + " (no rank order exists — an epic on it stands for the issues inside it, which its rank orders as one; remove one edge with 'lit dep rm' to break it)"
 	}
 	assertWarnings := func(t *testing.T, got string) {
 		t.Helper()
@@ -315,5 +315,70 @@ func TestDoctorReportsASharedRankKeyAndFixSeparatesIt(t *testing.T) {
 	}
 	if facts["doctor.duplicate_ranks"] != "0" {
 		t.Errorf("event fact doctor.duplicate_ranks after the fix = %v, want \"0\"", facts["doctor.duplicate_ranks"])
+	}
+}
+
+// A task waiting on a task in an epic listed after its own is a rank
+// inversion in the queue and in lit doctor alike, however the two tasks' own
+// keys compare; `--fix rank` clears it from both, and the invocation's event
+// says what the check found, what the repair moved, and that no cycle stood in
+// its way. The two epics are filed one way and listed the other.
+func TestARankInversionAcrossEpicsIsFlaggedRepairedAndRecorded(t *testing.T) {
+	h := newReadyTestHarness(t)
+	early := h.createIssue(storage.CreateIssueInput{Title: "early", Topic: "rank", IssueType: "epic"})
+	late := h.createIssue(storage.CreateIssueInput{Title: "late", Topic: "rank", IssueType: "epic"})
+	lateTask := h.createIssue(storage.CreateIssueInput{Title: "late task", Topic: "rank", IssueType: "task", ParentID: late.ID})
+	earlyTask := h.createIssue(storage.CreateIssueInput{Title: "early task", Topic: "rank", IssueType: "task", ParentID: early.ID})
+	if _, err := h.ap.Store.RankToTop(h.ctx, late.ID); err != nil {
+		t.Fatalf("RankToTop: %v", err)
+	}
+	h.addDependency(lateTask.ID, earlyTask.ID)
+	inversions := func() []string {
+		row := findRow(h.runWorkableAnnotated(workableFilter{}, 0), lateTask.ID)
+		return ClassifyReadiness(row.Annotations).RankInversions()
+	}
+	if got := inversions(); !slices.Equal(got, []string{earlyTask.ID}) {
+		t.Errorf("queue rank inversions of %s = %v, want [%s]", lateTask.ID, got, earlyTask.ID)
+	}
+
+	facts, out := runDoctorRecorded(t, h)
+	if !strings.Contains(out, " rank_inversions=1 ") {
+		t.Errorf("status line lacks rank_inversions=1:\n%s", out)
+	}
+	if facts["doctor.rank_inversions"] != "1" {
+		t.Errorf("event fact doctor.rank_inversions = %v, want \"1\"", facts["doctor.rank_inversions"])
+	}
+
+	facts, out = runDoctorRecorded(t, h, "--fix=rank")
+	if !strings.Contains(out, " rank_inversions=0 ") {
+		t.Errorf("after --fix=rank the status line lacks rank_inversions=0:\n%s", out)
+	}
+	for fact, want := range map[string]string{"doctor.reranked": "1", "doctor.rank_inversions": "0", "doctor.dependency_cycle": "none"} {
+		if got := fmt.Sprint(facts[fact]); got != want {
+			t.Errorf("event fact %s after the fix = %v, want %q", fact, got, want)
+		}
+	}
+	if got := inversions(); len(got) != 0 {
+		t.Errorf("queue rank inversions of %s after the fix = %v, want none", lateTask.ID, got)
+	}
+}
+
+// Two epics whose tasks wait on each other's are a cycle no rank order can
+// satisfy, and the invocation's event names it through the epics.
+func TestDoctorRecordsADependencyCycleThroughEpics(t *testing.T) {
+	h := newReadyTestHarness(t)
+	first := h.createIssue(storage.CreateIssueInput{Title: "first", Topic: "rank", IssueType: "epic"})
+	second := h.createIssue(storage.CreateIssueInput{Title: "second", Topic: "rank", IssueType: "epic"})
+	firstTask := h.createIssue(storage.CreateIssueInput{Title: "first task", Topic: "rank", IssueType: "task", ParentID: first.ID})
+	firstOther := h.createIssue(storage.CreateIssueInput{Title: "first other", Topic: "rank", IssueType: "task", ParentID: first.ID})
+	secondTask := h.createIssue(storage.CreateIssueInput{Title: "second task", Topic: "rank", IssueType: "task", ParentID: second.ID})
+	secondOther := h.createIssue(storage.CreateIssueInput{Title: "second other", Topic: "rank", IssueType: "task", ParentID: second.ID})
+	h.addDependency(firstTask.ID, secondTask.ID)
+	h.addDependency(secondOther.ID, firstOther.ID)
+
+	facts, _ := runDoctorRecorded(t, h)
+	cycle := strings.Split(fmt.Sprint(facts["doctor.dependency_cycle"]), "->")
+	if len(cycle) != 3 || cycle[0] != cycle[2] || !slices.Contains(cycle, first.ID) || !slices.Contains(cycle, second.ID) {
+		t.Errorf("event fact doctor.dependency_cycle = %v, want a cycle through %s and %s", facts["doctor.dependency_cycle"], first.ID, second.ID)
 	}
 }

@@ -95,3 +95,53 @@ func TestTreeOrderKeepsASubtreeWholeAcrossATiedKey(t *testing.T) {
 		t.Fatalf("tree order = %v, want %v", got, want)
 	}
 }
+
+// A rank inversion is read in tree order: the two issues' representatives in
+// the frame that holds both are compared, never their own keys across frames.
+// Each case names what its own keys alone would say, so a reading that
+// compared raw keys fails the cases where the two disagree. An issue and its
+// own container or descendant are never inverted, either way round.
+func TestInvertedReadsTreeOrder(t *testing.T) {
+	t.Parallel()
+	ancestry := NewRankAncestry([]ParentLink{
+		{ChildID: "e1.x", ParentID: "e1", ParentRank: "b"},
+		{ChildID: "e1.y", ParentID: "e1", ParentRank: "b"},
+		{ChildID: "e1.n", ParentID: "e1", ParentRank: "b"},
+		{ChildID: "e1.n.q", ParentID: "e1.n", ParentRank: "m"},
+		{ChildID: "e2.p", ParentID: "e2", ParentRank: "c"},
+	})
+	issue := map[string]model.Issue{}
+	for _, i := range []model.Issue{
+		{ID: "t", Rank: "a"}, {ID: "e1", Rank: "b"}, {ID: "e2", Rank: "c"}, {ID: "t2", Rank: "d"},
+		{ID: "e1.y", Rank: "a"}, {ID: "e1.n", Rank: "m"}, {ID: "e1.x", Rank: "z"},
+		{ID: "e1.n.q", Rank: "a"}, {ID: "e2.p", Rank: "a"},
+	} {
+		issue[i.ID] = i
+	}
+	cases := []struct {
+		dependent, dependency string
+		rawSays, want         bool
+	}{
+		{"e1.y", "e1.x", true, true},     // frame-mates: their own keys decide
+		{"e1.x", "e1.y", false, false},   // frame-mates, the other way round
+		{"e1.x", "e2.p", false, true},    // e2 lists after e1, whatever e2.p's key
+		{"e2.p", "e1.x", true, false},    // e1 lists before e2, whatever e1.x's key
+		{"t", "e1.y", false, true},       // a top-level issue against a child: e1 is after t
+		{"t2", "e1.y", false, false},     // e1 is before t2
+		{"e1.y", "e1.n.q", false, true},  // different depths: e1.n stands for e1.n.q, after e1.y
+		{"e1.x", "e1.n.q", false, false}, // e1.n is before e1.x
+		{"e1", "e1.x", true, false},      // a container waiting on its own child
+		{"e1.x", "e1", false, false},     // a child waiting on its own container
+		{"e1", "e1.n.q", false, false},   // containment more than one level down
+		{"e1.x", "e1.x", false, false},   // an issue and itself
+	}
+	for _, tc := range cases {
+		dependent, dependency := issue[tc.dependent], issue[tc.dependency]
+		if raw := dependency.Rank > dependent.Rank; raw != tc.rawSays {
+			t.Fatalf("%s blocked by %s: raw keys say %v, case claims %v — the case no longer tests what it says", tc.dependent, tc.dependency, raw, tc.rawSays)
+		}
+		if got := ancestry.Inverted(dependent, dependency); got != tc.want {
+			t.Errorf("Inverted(%s blocked by %s) = %v, want %v", tc.dependent, tc.dependency, got, tc.want)
+		}
+	}
+}

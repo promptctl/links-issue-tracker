@@ -196,8 +196,7 @@ func newBlockerAnnotator(details map[string]storage.IssueRelations, ancestry hel
 				Kind:    annotation.OpenDependency,
 				Message: dep.ID,
 			})
-			// Rank inversion: dependency should be ranked above (lower rank) the dependent.
-			if dep.Rank > issue.Rank {
+			if slices.Contains(detail.RankInversions, dep.ID) {
 				annotations = append(annotations, annotation.Annotation{
 					Kind:    annotation.RankInversion,
 					Message: dep.ID,

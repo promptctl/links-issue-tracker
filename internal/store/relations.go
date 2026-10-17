@@ -145,6 +145,7 @@ func (s *Store) GetRelationsByIDs(ctx context.Context, ids []string) (map[string
 		}
 		rel := bucketRelations(id, bySubject[id], issuesByID, ancestry)
 		rel.Issue = issue
+		rel.RankInversions = ancestry.Inversions(issue, rel.BlockedBy)
 		out[id] = rel
 	}
 	return out, nil

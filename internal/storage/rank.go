@@ -241,6 +241,69 @@ func (a RankAncestry) Sort(issues []model.Issue) {
 	slices.SortFunc(issues, a.Compare)
 }
 
+// Frame is the frame tree order places id in: the container its path ends
+// at, or TopLevel for an issue no container holds.
+func (a RankAncestry) Frame(id string) Frame {
+	places := a.places[id]
+	if len(places) == 0 {
+		return TopLevel
+	}
+	return Frame(places[len(places)-1].id)
+}
+
+// Representatives resolves x and y to the frame-mates tree order decides them
+// by: each issue itself when the two share a frame, else its container
+// directly under the deepest container holding both, or its root when none
+// does. ok is false when one contains the other — tree order lists a container
+// before everything inside it whatever any key holds, so no frame holds both
+// and no key orders them. It is the resolution the rank verbs move
+// representatives by (resolveFrameRepresentatives), read off the ancestry.
+func (a RankAncestry) Representatives(x, y string) (xRep, yRep string, ok bool) {
+	xs, ys := a.path(x), a.path(y)
+	i := 0
+	for i < len(xs) && i < len(ys) && xs[i] == ys[i] {
+		i++
+	}
+	if i == len(xs) || i == len(ys) {
+		return "", "", false
+	}
+	return xs[i], ys[i], true
+}
+
+// Inverted reports whether tree order lists dependency after dependent: a rank
+// inversion, a dependency ranked below the work that waits on it. An edge
+// between a container and an issue inside it is never one, because no
+// arrangement of keys can put it right or wrong (see Representatives).
+// [LAW:single-enforcer] The one definition of a rank inversion: the queue's
+// annotation and lit doctor's count both read it, and the rank repair leaves
+// it false on every edge it can express.
+func (a RankAncestry) Inverted(dependent, dependency model.Issue) bool {
+	_, _, comparable := a.Representatives(dependent.ID, dependency.ID)
+	return comparable && a.Compare(dependency, dependent) > 0
+}
+
+// Inversions names, by id and in the order given, the dependencies among
+// blockedBy that tree order lists after issue.
+func (a RankAncestry) Inversions(issue model.Issue, blockedBy []model.Issue) []string {
+	inverted := []string{}
+	for _, dep := range blockedBy {
+		if a.Inverted(issue, dep) {
+			inverted = append(inverted, dep.ID)
+		}
+	}
+	return inverted
+}
+
+// path is id's containers, outermost first, then id itself.
+func (a RankAncestry) path(id string) []string {
+	places := a.places[id]
+	ids := make([]string, len(places), len(places)+1)
+	for i, p := range places {
+		ids[i] = p.id
+	}
+	return append(ids, id)
+}
+
 // placeAt is step i of an issue's path: its containers' places, then its own.
 func placeAt(containers []rankPlace, issue model.Issue, i int) (rankPlace, bool) {
 	switch {

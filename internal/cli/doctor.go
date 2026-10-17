@@ -292,6 +292,7 @@ var doctorFixes = map[string]doctorFix{
 		if err != nil {
 			return err
 		}
+		telemetry.Set(ctx, "doctor.reranked", fixed)
 		if fixed > 0 {
 			// The count is issues MOVED, not dependencies hoisted: the repair
 			// writes whichever issues fall outside the run it keeps, and that
@@ -494,6 +495,8 @@ func doctorLeaf() appLeaf {
 		// The status line's own rendering, so a check a parent cycle withheld
 		// reads "unchecked" here too rather than a clean 0. [LAW:nothing-unseen]
 		telemetry.Set(ctx, "doctor.duplicate_ranks", doctorFieldValue(report, storage.CheckDuplicateRanks, strconv.Itoa(report.DuplicateRanks)))
+		telemetry.Set(ctx, "doctor.rank_inversions", doctorFieldValue(report, storage.CheckRankInversions, strconv.Itoa(report.RankInversions)))
+		telemetry.Set(ctx, "doctor.dependency_cycle", doctorFieldValue(report, storage.CheckDependencyCycle, joinCycle(report.DependencyCycle)))
 		// [LAW:effects-at-boundaries] Freshness resolution shells out to git and
 		// reads the store, so it runs here, at the boundary, before the pure text
 		// rendering below.

@@ -204,6 +204,7 @@ var cases = []engineCase{
 	{"labels_roundtrip", labelsRoundtrip},
 	{"relations_roundtrip", relationsRoundtrip},
 	{"relations_batch_buckets_edges", relationsBatchBucketsEdges},
+	{"rank_inversions_read_tree_order", rankInversionsReadTreeOrder},
 	{"parent_wiring", parentWiring},
 	{"every_ticket_lives_inside_a_container", everyTicketLivesInsideAContainer},
 	{"an_import_file_that_breaks_a_rule_is_refused_whole", anImportFileThatBreaksARuleIsRefusedWhole},
@@ -2500,6 +2501,42 @@ func relationsBatchBucketsEdges(t *testing.T, ctx context.Context, st storage.St
 	}
 	if len(empty) != 0 {
 		t.Errorf("GetRelationsByIDs(nil) = %+v, want empty", empty)
+	}
+}
+
+// A dependency is ranked below the work waiting on it when tree order lists
+// it after that work — read through the epics that hold them, never by
+// comparing the two issues' own keys across frames. The two epics are filed
+// one way and listed the other, so the order each task was filed in is not
+// the order its epic lists in.
+func rankInversionsReadTreeOrder(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	early := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "early", Topic: "core", IssueType: model.TypeEpic})
+	late := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "late", Topic: "core", IssueType: model.TypeEpic})
+	lateTask := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "late task", Topic: "core", ParentID: late.ID})
+	earlyTask := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "early task", Topic: "core", ParentID: early.ID})
+	lateOther := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "late other", Topic: "core", ParentID: late.ID})
+	if _, err := st.RankToTop(ctx, late.ID); err != nil {
+		t.Fatalf("RankToTop error = %v", err)
+	}
+	for _, edge := range [][2]string{{lateTask.ID, earlyTask.ID}, {earlyTask.ID, lateOther.ID}} {
+		if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: edge[0], DstID: edge[1], Type: model.RelBlockedBy, CreatedBy: "ada"}); err != nil {
+			t.Fatalf("AddRelation(%s blocked by %s) error = %v", edge[0], edge[1], err)
+		}
+	}
+	listed, err := st.ListIssues(ctx, storage.ListIssuesFilter{})
+	if err != nil {
+		t.Fatalf("ListIssues error = %v", err)
+	}
+	assertIssueIDs(t, "listing", listed, []string{late.ID, lateTask.ID, lateOther.ID, early.ID, earlyTask.ID})
+	byID, err := st.GetRelationsByIDs(ctx, []string{lateTask.ID, earlyTask.ID})
+	if err != nil {
+		t.Fatalf("GetRelationsByIDs error = %v", err)
+	}
+	if got := byID[lateTask.ID].RankInversions; !slices.Equal(got, []string{earlyTask.ID}) {
+		t.Errorf("%s RankInversions = %v, want [%s]: its dependency's epic lists after its own", lateTask.ID, got, earlyTask.ID)
+	}
+	if got := byID[earlyTask.ID].RankInversions; len(got) != 0 {
+		t.Errorf("%s RankInversions = %v, want none: its dependency's epic lists first", earlyTask.ID, got)
 	}
 }
 

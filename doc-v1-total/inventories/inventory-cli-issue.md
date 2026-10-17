@@ -493,7 +493,9 @@ not `closed` (`cli.go`). Epics are therefore never workable rows.
    (`isRequiredFieldSet`, `ready_state.go`).
 2. `newBlockerAnnotator(details, ancestry)` — for each `BlockedBy` that is
    `InPlay()`, sorted by ID, emits `OpenDependency{Message: dep.ID}`; and
-   additionally `RankInversion{Message: dep.ID}` when `dep.Rank > issue.Rank`.
+   additionally `RankInversion{Message: dep.ID}` when `detail.RankInversions`
+   holds `dep.ID` — tree order lists the dependency after the issue
+   (`storage.RankAncestry.Inverted`, set by `GetRelationsByIDs`).
    Then, for each id from `ancestry.inheritedDependencies(detail)` not already
    a direct dependency, emits `InheritedDependency{Message: dep.ID}` and no rank
    inversion (`ready_state.go`). `ancestry` is a `heldAncestry`

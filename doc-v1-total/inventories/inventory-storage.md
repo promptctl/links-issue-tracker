@@ -153,6 +153,10 @@ Parentage gets its own two verbs rather than riding `AddRelation` because it is 
 - `Conflicts() []ParentConflict` — by child id; `Store.Doctor` appends each `Finding()`, `"%s has %d parents (%s); it lists under %s, the lowest id, until one remains — run 'lit parent set --child %s --parent <the epic it belongs under>', which replaces every parent it holds with that one"`, as an error.
 - `Compare(x, y model.Issue) int` — walks each issue's path (its containers' places, then its own `{Rank, ID}`) step by step, comparing key then id at every step; the path that runs out first sorts first: tree order. A container's path is a prefix of its descendants', so it sorts before them and its subtree sorts together, even across a key two frame-mates share. Two distinct issues never compare equal. Both engines bind the `rank` sort key to it.
 - `Sort(issues []model.Issue)` — `slices.SortFunc` by `Compare`; both engines' relation groups (`Children`, `BlockedBy`, `Blocks`, related) sort with it.
+- `Frame(id string) Frame` — the id of the last container on `id`'s path, or `TopLevel` when `places` holds none.
+- `Representatives(x, y string) (xRep, yRep string, ok bool)` — walks both paths (containers outermost first, then the issue itself) past their common prefix and returns the first element of each that differs: each issue itself when they share a frame, else its container directly under the deepest container holding both, or its root. `ok` is false when one path is a prefix of the other — one issue contains the other, or the two are the same issue.
+- `Inverted(dependent, dependency model.Issue) bool` — `Representatives` is ok and `Compare(dependency, dependent) > 0`. The queue's `RankInversion` annotation (through `IssueRelations.RankInversions`) and `Store.Doctor`'s `rank_inversions` count (through `invertedEdges`) both read it.
+- `Inversions(issue model.Issue, blockedBy []model.Issue) []string` — the ids of the `blockedBy` members `Inverted(issue, dep)` holds for, in the order given; an empty, non-nil slice when none.
 
 **`RankSetResolution`** — `internal/storage/rank.go`
 - `NamedID string` (json `named_id`), `RankedID string` (json `ranked_id`). Equal for frame-mates; when they differ the caller must surface the substitution (`internal/storage/rank.go`).
@@ -305,7 +309,8 @@ Rule for the whole struct: **every slice is an OR within itself and an AND again
 - `SetParentInput{ChildID, ParentID, CreatedBy string}` — `internal/storage/edges.go`
 
 #### `IssueRelations` (`internal/storage/edges.go`)
-- `Issue model.Issue`, `Parent *model.Issue`, `Children []model.Issue`, `BlockedBy []model.Issue`, `Blocks []model.Issue`.
+- `Issue model.Issue`, `Parent *model.Issue`, `Children []model.Issue`, `BlockedBy []model.Issue`, `Blocks []model.Issue`, `RankInversions []string`.
+- `RankInversions` is set by `GetRelationsByIDs` in both engines to `ancestry.Inversions(issue, BlockedBy)`, over the rank ancestry the call loaded to sort its groups (`internal/store/relations.go`, `internal/storage/memory/edges.go`; conformance case `rank_inversions_read_tree_order`). `GetIssueDetail` does not read it.
 - Lightweight per-issue shape WITHOUT the comment/event/related payload `GetIssueDetail` loads (`internal/storage/edges.go`).
 - **Direction convention is contract**: a blocked-by edge reads "src blocked-by dst" (`src=dependent`, `dst=dependency`), so `BlockedBy` (the edges out) and `Blocks` (the edges in) are the two readings of one edge set. Two engines bucketing differently would disagree about which work is ready (`internal/storage/edges.go`).
 

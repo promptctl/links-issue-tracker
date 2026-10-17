@@ -171,12 +171,10 @@ func (e rankEdge) roomBesideTx(ctx context.Context, tx *sql.Tx, anchorRank, vaca
 // beside the issue that contains it, so it lands just past the container's own
 // key, which is also the one key an empty frame does offer to sit beside.
 //
-// A listing reads tree order, so it would list the child in the same place
-// whichever key it held. The dependency-order checks do not: they still
-// compare raw keys across frames, and a key beside the container is the one
-// that agrees with tree order when they do. [LAW:one-source-of-truth] The
-// memory engine says the same thing positionally, inserting immediately after
-// the container.
+// A listing and the dependency-order checks read tree order, so they would
+// place the child the same way whichever key it held.
+// [LAW:one-source-of-truth] The memory engine says the same thing
+// positionally, inserting immediately after the container.
 //
 // The top level names no containing issue, so it takes the fallback below
 // rather than a container's key. It is NOT answered with open bounds: that
@@ -1359,36 +1357,35 @@ func findBlocksCycle(edges []blocksEdge) []string {
 	return nil
 }
 
-// loadRankOrder returns the live issues in the order the store ranks them:
-// item_rank ascending, with id breaking ties so the sequence is total even
-// where two rows share a rank. This sequence is both the repair's input order
-// and its membership test for which blocked-by edges constrain live work.
-func loadRankOrder(ctx context.Context, q rowQueryer, liveIDs map[string]struct{}) ([]rankedIssue, error) {
-	rows, err := q.QueryContext(ctx, `SELECT id, item_rank FROM issues WHERE deleted_at IS NULL ORDER BY item_rank ASC, id ASC`)
+// loadRankOrder returns every non-deleted issue in key order: item_rank
+// ascending, with id breaking ties so the sequence is total even where two rows
+// share a rank — within a frame, the order tree order lists them in. It is the
+// set every rank verb places among, so a repair spaced over it writes no key
+// any of them holds.
+func loadRankOrder(ctx context.Context, q rowQueryer) ([]rankedIssue, error) {
+	rows, err := q.QueryContext(ctx, `SELECT id, item_rank FROM issues WHERE deleted_at IS NULL`)
 	if err != nil {
 		return nil, fmt.Errorf("query rank order: %w", err)
 	}
 	defer rows.Close()
-	order := make([]rankedIssue, 0, len(liveIDs))
+	order := make([]rankedIssue, 0)
 	for rows.Next() {
 		var item rankedIssue
 		if err := rows.Scan(&item.id, &item.rank); err != nil {
 			return nil, fmt.Errorf("scan rank order: %w", err)
-		}
-		if _, live := liveIDs[item.id]; !live {
-			continue
 		}
 		order = append(order, item)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("rank order rows: %w", err)
 	}
+	slices.SortFunc(order, compareRankedIssues)
 	return order, nil
 }
 
 // FixRankInversions re-ranks the backlog so every dependency outranks its
-// dependent. It computes the stable topological order of the live rank
-// sequence (see repairRankOrder), rewrites the issues that order moved, and
+// dependent in tree order. It sorts each frame by the blocked-by edges between
+// live issues (see repairRankOrder), rewrites the issues that order moved, and
 // returns how many it moved.
 //
 // [LAW:single-enforcer] Doctor's rank_inversions count and this repair read the
@@ -1408,7 +1405,11 @@ func (s *Store) FixRankInversions(ctx context.Context) (int, error) {
 	}
 	rerankedCount := 0
 	if err := s.withMutation(ctx, "fix rank inversions", func(ctx context.Context, tx *sql.Tx) error {
-		order, err := loadRankOrder(ctx, tx, liveIDs)
+		order, err := loadRankOrder(ctx, tx)
+		if err != nil {
+			return fmt.Errorf("fix rank inversions: %w", err)
+		}
+		ancestry, err := loadRankAncestry(ctx, tx)
 		if err != nil {
 			return fmt.Errorf("fix rank inversions: %w", err)
 		}
@@ -1416,7 +1417,7 @@ func (s *Store) FixRankInversions(ctx context.Context) (int, error) {
 		if err != nil {
 			return fmt.Errorf("fix rank inversions: load blocked-by edges: %w", err)
 		}
-		rewrites, err := repairRankOrder(order, edges)
+		rewrites, err := repairRankOrder(order, rankConstraints(liveEdges(edges, liveIDs), ancestry))
 		if err != nil {
 			return fmt.Errorf("fix rank inversions: %w", err)
 		}

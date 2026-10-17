@@ -395,6 +395,7 @@ func (e *Engine) GetRelationsByIDs(ctx context.Context, ids []string) (map[strin
 			return nil, err
 		}
 		bucketed.Issue = issue
+		bucketed.RankInversions = ancestry.Inversions(issue, bucketed.BlockedBy)
 		out[id] = bucketed
 	}
 	return out, nil
