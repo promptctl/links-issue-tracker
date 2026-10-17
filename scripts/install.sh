@@ -23,9 +23,6 @@
 # stamps (set by goreleaser).
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$ROOT_DIR"
-
 # [LAW:one-source-of-truth] exception: release.DefaultBaseURL and
 # release.DefaultLatestReleaseURL, copied because release-download mode runs
 # piped from curl with no checkout to read them from.
@@ -209,6 +206,16 @@ trap 'rm -rf "$tmp"' EXIT
 
 case "$mode" in
     source)
+        # The source build runs from the checkout this script sits in. Piped
+        # from curl there is no script file and so no checkout: BASH_SOURCE is
+        # empty, and the release modes, which read nothing from a checkout,
+        # are the way to install. [LAW:no-silent-failure]
+        if [ -z "${BASH_SOURCE[0]:-}" ]; then
+            echo "error: the source build runs from a checkout (bash scripts/install.sh); piped from curl, pass --from-release <tag> or --latest-release" >&2
+            exit 1
+        fi
+        ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+        cd "$ROOT_DIR"
         # Refuse a tree whose schema no release supports, before lit is built:
         # an installed lit runs inside real workspaces, and a migration no
         # release carries would move a workspace's schema past every release.

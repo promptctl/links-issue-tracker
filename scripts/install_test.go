@@ -434,6 +434,48 @@ func TestReleaseModeAcceptsExactlyTheReleaseTags(t *testing.T) {
 	}
 }
 
+// TestInstallPipedFromStdinSpeaksFirst runs install.sh as curl-piped installs
+// do, read from stdin outside any checkout, in every mode: the first thing on
+// stderr is the script's own, a stub curl's failure for a download or the
+// source build's refusal to run without a checkout.
+func TestInstallPipedFromStdinSpeaksFirst(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	stubBin := filepath.Join(root, "stub-bin")
+	if err := os.MkdirAll(stubBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(stubBin, "curl"), "#!/bin/sh\necho 'stub curl' >&2\nexit 22\n", 0o755)
+	writeFile(t, filepath.Join(stubBin, "jq"), "#!/bin/sh\ncat >/dev/null\n", 0o755)
+	for _, tc := range []struct {
+		args       []string
+		firstWords string
+	}{
+		{[]string{"--from-release", "v1.2.3"}, "stub curl"},
+		{[]string{"--latest-release"}, "stub curl"},
+		{nil, "error: the source build runs from a checkout"},
+	} {
+		script, err := os.Open("install.sh")
+		if err != nil {
+			t.Fatal(err)
+		}
+		install := exec.Command("bash", append([]string{"-s", "--"}, tc.args...)...)
+		install.Dir = root
+		install.Stdin = script
+		install.Env = []string{"PATH=" + stubBin + ":/usr/bin:/bin", "HOME=" + root, "GOBIN=" + filepath.Join(root, "bin")}
+		var stderr bytes.Buffer
+		install.Stderr = &stderr
+		runErr := install.Run()
+		script.Close()
+		if runErr == nil {
+			t.Errorf("piped install.sh %v exited 0 through a curl that fails every request", tc.args)
+		}
+		if !strings.HasPrefix(stderr.String(), tc.firstWords) {
+			t.Errorf("piped install.sh %v: stderr opens with something other than %q:\n%s", tc.args, tc.firstWords, stderr.String())
+		}
+	}
+}
+
 // TestInstallFetchesTheReleaseURLsLitUpgradeFetches holds install.sh's release
 // URLs to release.HTTPResolver's defaults by what each one requests: the same
 // latest-release feed, and downloads from the same <base>/<tag> directory. Stub
