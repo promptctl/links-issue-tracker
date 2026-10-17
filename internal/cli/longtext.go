@@ -24,6 +24,11 @@ type longTextFlag struct {
 	name   string
 	inline *string
 	file   *string
+	// text is what the invocation supplied, nil when it supplied nothing:
+	// readLongTexts fills it in the parse, before the workspace is opened, so
+	// a pipe or a terminal that is slow to close never holds the workspace
+	// lock, and a mistaken file is refused without opening a store.
+	text *string
 }
 
 // textSource is where an invocation's long text came from, and the value its
@@ -41,8 +46,8 @@ const (
 // stdinPath is the --<name>-file value that names stdin, as it does for gh.
 const stdinPath = "-"
 
-func registerLongText(fs *cobraFlagSet, name, usage string) longTextFlag {
-	f := longTextFlag{
+func registerLongText(fs *cobraFlagSet, name, usage string) *longTextFlag {
+	f := &longTextFlag{
 		fs:     fs,
 		name:   name,
 		inline: fs.String(name, "", usage),
@@ -52,12 +57,25 @@ func registerLongText(fs *cobraFlagSet, name, usage string) longTextFlag {
 	return f
 }
 
-// resolve returns the text the invocation supplied, or nil when it supplied
+// readLongTexts reads every long-text field the leaf declares, once its flags
+// have parsed. parseLeaf runs it for every leaf, so no command reads its text
+// after the open. [LAW:single-enforcer] [LAW:no-ambient-temporal-coupling]
+func readLongTexts(ctx context.Context, fs *cobraFlagSet) error {
+	for _, f := range fs.longTexts {
+		text, err := f.read(ctx)
+		if err != nil {
+			return err
+		}
+		f.text = text
+	}
+	return nil
+}
+
+// read returns the text the invocation supplied, or nil when it supplied
 // none, so a command that writes only the fields it was given can tell an
-// absent field from an emptied one. Call it after parseFlagSet has run.
-// Supplying both flags is a usage error: neither one silently outranks the
-// other. [LAW:no-silent-failure]
-func (f longTextFlag) resolve(ctx context.Context) (*string, error) {
+// absent field from an emptied one. Supplying both flags is a usage error:
+// neither one silently outranks the other. [LAW:no-silent-failure]
+func (f *longTextFlag) read(ctx context.Context) (*string, error) {
 	source, err := f.source()
 	if err != nil {
 		return nil, err
@@ -94,15 +112,14 @@ func (f longTextFlag) resolve(ctx context.Context) (*string, error) {
 
 // value is the supplied text, or "" when none was supplied: the value a
 // create carries for a field it was not given.
-func (f longTextFlag) value(ctx context.Context) (string, error) {
-	text, err := f.resolve(ctx)
-	if err != nil || text == nil {
-		return "", err
+func (f *longTextFlag) value() string {
+	if f.text == nil {
+		return ""
 	}
-	return *text, nil
+	return *f.text
 }
 
-func (f longTextFlag) source() (textSource, error) {
+func (f *longTextFlag) source() (textSource, error) {
 	inline, file := f.fs.Changed(f.name), f.fs.Changed(f.name+"-file")
 	switch {
 	case inline && file:
@@ -129,6 +146,6 @@ func (f longTextFlag) source() (textSource, error) {
 	return textStdin, nil
 }
 
-func (f longTextFlag) readsStdin() bool {
+func (f *longTextFlag) readsStdin() bool {
 	return f.fs.Changed(f.name+"-file") && *f.file == stdinPath
 }

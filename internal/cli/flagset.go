@@ -47,7 +47,7 @@ type cobraFlagSet struct {
 	// longTexts is every long-text pair registerLongText declared here, in
 	// declaration order: the fields that may read stdin, and so the set a
 	// second reader of stdin is checked against.
-	longTexts []longTextFlag
+	longTexts []*longTextFlag
 }
 
 func newCobraFlagSet(use string) *cobraFlagSet {

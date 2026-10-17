@@ -1667,7 +1667,8 @@ usage string as a `UsageError` → exit 2 (`resolve`, `register.go`).
 - Refusal: `len(positional) != 1` →
   `UsageError{"usage: lit comment add <id> (--body <text> | --body-file <path|->)"}` → exit 2
   (`cli.go`).
-- Refusals from `longTextFlag.resolve` (`longtext.go`), each a `UsageError` → exit 2:
+- Refusals from `readLongTexts` (`longtext.go`), which `parseLeaf` runs before the workspace
+  opens, so these come before any store refusal, each a `UsageError` → exit 2:
   both flags given → `"--body and --body-file both supply the same text; give one of them"`;
   an unreadable path → `"read --body-file: <os error>"`; a file or stdin whose text is blank
   (after trim) → `"--body-file <path> supplied no text; pass --body \"\" to give empty text on purpose"`;

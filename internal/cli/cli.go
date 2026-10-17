@@ -323,20 +323,12 @@ func newLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		descriptionText, err := description.value(ctx)
-		if err != nil {
-			return err
-		}
-		promptText, err := prompt.value(ctx)
-		if err != nil {
-			return err
-		}
 		prefix, err := ap.Workspace.IssuePrefix.Mintable()
 		if err != nil {
 			return err
 		}
 		issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
-			Title: *title, Description: descriptionText, Prompt: promptText, IssueType: issueTypeValue, Topic: *topic, ParentID: *parentID, Priority: priorityValue, Assignee: strings.TrimSpace(*assignee), Labels: splitCSV(*labels), Lane: *lane,
+			Title: *title, Description: description.value(), Prompt: prompt.value(), IssueType: issueTypeValue, Topic: *topic, ParentID: *parentID, Priority: priorityValue, Assignee: strings.TrimSpace(*assignee), Labels: splitCSV(*labels), Lane: *lane,
 			Placement: rankPlacement(*top),
 			Prefix:    prefix.Value(),
 		})
@@ -394,14 +386,6 @@ func followupLeaf() appLeaf {
 		if onID == "" || titleValue == "" {
 			return UsageError{Message: usage}
 		}
-		descriptionText, err := description.value(ctx)
-		if err != nil {
-			return err
-		}
-		promptText, err := prompt.value(ctx)
-		if err != nil {
-			return err
-		}
 		// The detail, not the bare issue: the follow-up's parent is the
 		// followed-up ticket's parent, which only the hierarchy knows.
 		origin, err := ap.Store.GetIssueDetail(ctx, onID)
@@ -421,7 +405,7 @@ func followupLeaf() appLeaf {
 		if resolvedTopic == "" {
 			resolvedTopic = origin.Issue.Topic
 		}
-		resolvedDescription := strings.TrimSpace(descriptionText)
+		resolvedDescription := strings.TrimSpace(description.value())
 		if resolvedDescription == "" {
 			resolvedDescription = fmt.Sprintf("Follow-up surfaced at the close of %s: %s", origin.Issue.ID, origin.Issue.Title)
 		}
@@ -440,7 +424,7 @@ func followupLeaf() appLeaf {
 		issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
 			Title:       titleValue,
 			Description: resolvedDescription,
-			Prompt:      strings.TrimSpace(promptText),
+			Prompt:      strings.TrimSpace(prompt.value()),
 			IssueType:   issueTypeValue,
 			Topic:       resolvedTopic,
 			ParentID:    parentID,
@@ -1371,13 +1355,8 @@ func updateLeaf() appLeaf {
 			value := *title
 			in.Fields.Title = &value
 		}
-		var err error
-		if in.Fields.Description, err = description.resolve(ctx); err != nil {
-			return err
-		}
-		if in.Fields.Prompt, err = prompt.resolve(ctx); err != nil {
-			return err
-		}
+		in.Fields.Description = description.text
+		in.Fields.Prompt = prompt.text
 		if visited["type"] {
 			value, err := model.ParseIssueType(*issueType)
 			if err != nil {
@@ -2063,13 +2042,9 @@ func commentAddLeaf() appLeaf {
 		if len(positional) != 1 {
 			return UsageError{Message: usage}
 		}
-		bodyText, err := body.value(ctx)
-		if err != nil {
-			return err
-		}
 		// [LAW:single-enforcer] A comment is a recorded event; its author resolves
 		// through the same identity rule as every other actor.
-		comment, issue, err := ap.Store.AddComment(ctx, storage.AddCommentInput{IssueID: positional[0], Body: bodyText, CreatedBy: resolveActor()})
+		comment, issue, err := ap.Store.AddComment(ctx, storage.AddCommentInput{IssueID: positional[0], Body: body.value(), CreatedBy: resolveActor()})
 		if err != nil {
 			return err
 		}

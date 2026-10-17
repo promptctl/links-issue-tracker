@@ -223,3 +223,16 @@ func TestLongTextRefusesBlankTextAndASecondStdinReader(t *testing.T) {
 		t.Errorf("update --description \"\" left the description %q, want it empty", got)
 	}
 }
+
+// Long text is read in the parse, before the workspace opens: a mistaken file
+// is refused where no workspace exists at all, so no command waits on a pipe
+// or a terminal while it holds the workspace.
+func TestLongTextIsReadBeforeTheWorkspaceOpens(t *testing.T) {
+	isolateEvents(t)
+	missing := filepath.Join(t.TempDir(), "missing.md")
+	_, err := runCLIInDirAllowError(t, t.TempDir(), "comment", "add", "any-id", "--body-file", missing)
+	var usage UsageError
+	if !errors.As(err, &usage) || !strings.HasPrefix(usage.Message, "read --body-file: open ") {
+		t.Errorf("comment add outside any workspace error = %v, want the unreadable-file UsageError", err)
+	}
+}
