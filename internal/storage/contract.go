@@ -37,9 +37,9 @@ type IssueReader interface {
 	// rather than as the under-specification it would actually be.
 	// [LAW:no-silent-failure]
 	//
-	// SortBy may name only a [SortFields] member; see it for what each key
-	// orders. The two rules above are applied by [IssueOrdering], which is
-	// where an engine gets them rather than restating them.
+	// SortBy may name only a key [IssueOrdering] reads; see it for what each
+	// key orders. It applies the two rules above too, and it is where an engine
+	// gets all of them rather than restating them.
 	ListIssues(ctx context.Context, filter ListIssuesFilter) ([]model.Issue, error)
 
 	// ListTopics returns the distinct non-empty topics live issues carry,

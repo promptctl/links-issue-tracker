@@ -176,7 +176,7 @@ var cases = []engineCase{
 	{"list_hides_archived_and_deleted", listHidesArchivedAndDeleted},
 	{"list_sorts_and_limits", listSortsAndLimits},
 	{"list_breaks_sort_ties_by_id", listBreaksSortTiesByID},
-	{"list_accepts_exactly_the_contract_sort_fields", listAcceptsContractSortFields},
+	{"list_orders_by_each_value_key", listOrdersByEachValueKey},
 	{"list_sorts_status_by_derived_state", listSortsStatusByDerivedState},
 	{"stamps_come_from_the_clock_the_engine_was_given", stampsComeFromTheClock},
 	{"list_orders_timestamps_by_instant_not_spelling", listOrdersTimestampsByInstant},
@@ -1188,44 +1188,65 @@ func listBreaksSortTiesByID(t *testing.T, ctx context.Context, st storage.Store,
 	assertIssueIDs(t, "tied titles descending still ordered by id",
 		mustList(t, ctx, st, storage.ListIssuesFilter{SortBy: []storage.SortSpec{{Field: "title", Desc: true}}}),
 		ascending)
+
+	// The id key itself, descending: the one listing the trailing id key cannot
+	// answer for it, since that key would put the rows back in ascending order.
+	assertIssueIDs(t, "sorted by id descending",
+		mustList(t, ctx, st, storage.ListIssuesFilter{SortBy: []storage.SortSpec{{Field: "id", Desc: true}}}),
+		[]string{ascending[3], ascending[2], ascending[1], ascending[0]})
 }
 
-// listAcceptsContractSortFields checks the engine's sort binding against
-// storage.SortFields in both directions. An engine that omits a key the
-// contract names is missing a listing the CLI can ask for; an engine that
-// accepts a key the contract does not name has grown a private vocabulary the
-// other engine will reject. Neither shows up in a case that sorts by one
-// hand-picked field. [LAW:one-source-of-truth]
-func listAcceptsContractSortFields(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "a", Topic: "core", ParentID: epic.ID})
-	mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "b", Topic: "core", ParentID: epic.ID})
+// listOrdersByEachValueKey pins what each key that reads one of an issue's
+// own values compares, one pair per key, against a literal order.
+//
+// Inside a pair every other value a key could read is equal, and the pair is
+// created in the reverse of the order the key puts it in — at the earlier
+// instant first — so rank and both timestamps all disagree with the key. Each
+// listing takes created_at as its second key, so a comparison that returns
+// nothing, or reads any other value, hands the order to created_at and gets
+// it backwards.
+//
+// Where a key's comparison has a way to go wrong that still separates the
+// pair, the values are chosen to hit it. Byte-wise, an uppercase letter sorts
+// before every lowercase one, so a case-folding collation reverses "Zeta" and
+// "alpha", and "Zed" and "ada". "bug" sorts before "task" as text and after it
+// in model.IssueTypes, the vocabulary's declared order.
+func listOrdersByEachValueKey(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "keys", IssueType: model.TypeEpic})
+	for _, row := range []struct {
+		key string
+		// first is the issue the key orders first ascending.
+		first, second storage.CreateIssueInput
+	}{
+		{"title",
+			storage.CreateIssueInput{Title: "Zeta", Topic: "keys"},
+			storage.CreateIssueInput{Title: "alpha", Topic: "keys"}},
+		{"assignee",
+			storage.CreateIssueInput{Title: "pair", Topic: "keys", Assignee: "Zed"},
+			storage.CreateIssueInput{Title: "pair", Topic: "keys", Assignee: "ada"}},
+		{"topic",
+			storage.CreateIssueInput{Title: "pair", Topic: "alpha"},
+			storage.CreateIssueInput{Title: "pair", Topic: "beta"}},
+		{"type",
+			storage.CreateIssueInput{Title: "pair", Topic: "keys", IssueType: model.TypeBug},
+			storage.CreateIssueInput{Title: "pair", Topic: "keys", IssueType: model.TypeTask}},
+		{"priority",
+			storage.CreateIssueInput{Title: "pair", Topic: "keys", Priority: model.PriorityNormal},
+			storage.CreateIssueInput{Title: "pair", Topic: "keys", Priority: model.PriorityUrgent}},
+	} {
+		row.first.ParentID, row.second.ParentID = epic.ID, epic.ID
+		clk.Pin(earlierInstant)
+		second := mustCreate(t, ctx, st, row.second)
+		clk.Pin(laterInstant)
+		first := mustCreate(t, ctx, st, row.first)
 
-	for _, field := range storage.SortFields {
-		if _, err := st.ListIssues(ctx, storage.ListIssuesFilter{SortBy: []storage.SortSpec{{Field: field}}}); err != nil {
-			t.Errorf("sorting by %q is in storage.SortFields but the engine rejected it: %v", field, err)
-		}
-	}
-
-	// The other direction, without which storage.SortFields would be a lower
-	// bound on each engine's vocabulary rather than the whole of it, and the
-	// two private bindings could still differ by anything they both add.
-	//
-	// A closed set's complement cannot be enumerated, so these are the near
-	// misses that would actually happen: real model fields the contract omits
-	// (description, lane, labels), and the storage column names an engine
-	// binding its own schema reaches for instead of the contract's spelling
-	// (issue_type for "type", item_rank for "rank"). An arbitrary literal —
-	// list_sorts_and_limits probes one — only catches an engine that validates
-	// nothing at all; an engine whose private map holds "item_rank" rejects the
-	// literal and diverges anyway.
-	for _, field := range []string{"description", "lane", "labels", "issue_type", "item_rank", "state"} {
-		if slices.Contains(storage.SortFields, field) {
-			t.Fatalf("%q was added to storage.SortFields, which leaves this case probing a key the contract now names — move it to the accepted direction above", field)
-		}
-		if _, err := st.ListIssues(ctx, storage.ListIssuesFilter{SortBy: []storage.SortSpec{{Field: field}}}); err == nil {
-			t.Errorf("sorting by %q is not in storage.SortFields but the engine accepted it", field)
-		}
+		pair := []string{first.ID, second.ID}
+		assertIssueIDs(t, "sorted by "+row.key+" ascending",
+			mustList(t, ctx, st, storage.ListIssuesFilter{IDs: pair, SortBy: []storage.SortSpec{{Field: row.key}, {Field: "created_at"}}}),
+			[]string{first.ID, second.ID})
+		assertIssueIDs(t, "sorted by "+row.key+" descending",
+			mustList(t, ctx, st, storage.ListIssuesFilter{IDs: pair, SortBy: []storage.SortSpec{{Field: row.key, Desc: true}, {Field: "created_at"}}}),
+			[]string{second.ID, first.ID})
 	}
 }
 
@@ -1308,34 +1329,56 @@ func stampsComeFromTheClock(t *testing.T, ctx context.Context, st storage.Store,
 // listOrdersTimestampsByInstant states that a timestamp sort key orders by the
 // instant a stamp denotes, never by the text an engine happens to hold it as.
 //
-// Both timestamp columns carry the pair, so neither sort key is pinned by
-// accident of the other, and both directions are asserted because an engine
-// comparing the wrong thing is wrong symmetrically. See [earlierInstant] for
-// what makes this pair the one worth writing down.
+// Each column's pair of stamps is spelled the way [earlierInstant] describes,
+// so text order is the reverse of instant order in both. The two columns order
+// the pair opposite ways, and each listing takes the other column as its
+// second key: a key that compares nothing, or reads the other column, hands
+// the order to that second key and gets it backwards. Both directions are
+// asserted because an engine comparing the wrong thing is wrong symmetrically.
 func listOrdersTimestampsByInstant(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	// The updates' pair repeats the creates' trap past both of them: ".13Z"
+	// sorts after ".1300001Z" as text while denoting the earlier instant.
+	touchedInstant := time.Date(2026, 1, 1, 0, 0, 0, 130_000_000, time.UTC)
+	retouchedInstant := time.Date(2026, 1, 1, 0, 0, 0, 130_000_100, time.UTC)
+
 	// The later instant is created FIRST, so recording order and instant order
 	// disagree. Creating them in instant order would let an engine that ignored
 	// the clock entirely pass — its real stamps would land in the same relative
 	// order the case asserts — and the case would be pinning nothing.
-	// CreateIssue stamps created_at and updated_at from one read of the clock,
-	// so pinning before each create sets both columns for that issue. The epic
-	// is stamped by the live clock, years past either pinned instant, and the
+	// CreateIssue stamps created_at and updated_at from one read of the clock;
+	// the description patches below then move updated_at alone. The epic is
+	// stamped by the live clock, years past every pinned instant, and the
 	// listings are narrowed to the pair so it decides nothing below.
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "clock", IssueType: model.TypeEpic})
 	clk.Pin(laterInstant)
-	later := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "later instant", Topic: "clock", ParentID: epic.ID})
+	newer := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "created later", Topic: "clock", ParentID: epic.ID})
 	clk.Pin(earlierInstant)
-	earlier := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "earlier instant", Topic: "clock", ParentID: epic.ID})
+	older := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "created earlier", Topic: "clock", ParentID: epic.ID})
 
-	pair := []string{earlier.ID, later.ID}
-	for _, field := range []string{"created_at", "updated_at"} {
-		assertIssueIDs(t, "sorted by "+field+" ascending",
-			mustList(t, ctx, st, storage.ListIssuesFilter{IDs: pair, SortBy: []storage.SortSpec{{Field: field}}}),
-			[]string{earlier.ID, later.ID})
-		assertIssueIDs(t, "sorted by "+field+" descending",
-			mustList(t, ctx, st, storage.ListIssuesFilter{IDs: pair, SortBy: []storage.SortSpec{{Field: field, Desc: true}}}),
-			[]string{later.ID, earlier.ID})
+	for _, touch := range []struct {
+		issue   model.Issue
+		instant time.Time
+	}{{newer, touchedInstant}, {older, retouchedInstant}} {
+		clk.Pin(touch.instant)
+		description := "touched"
+		if _, err := st.Apply(ctx, touch.issue.ID, storage.Change{Fields: storage.UpdateIssueInput{Description: &description}, Actor: "ada"}); err != nil {
+			t.Fatalf("Apply description error = %v", err)
+		}
 	}
+
+	pair := []string{older.ID, newer.ID}
+	assertIssueIDs(t, "sorted by created_at ascending",
+		mustList(t, ctx, st, storage.ListIssuesFilter{IDs: pair, SortBy: []storage.SortSpec{{Field: "created_at"}, {Field: "updated_at"}}}),
+		[]string{older.ID, newer.ID})
+	assertIssueIDs(t, "sorted by created_at descending",
+		mustList(t, ctx, st, storage.ListIssuesFilter{IDs: pair, SortBy: []storage.SortSpec{{Field: "created_at", Desc: true}, {Field: "updated_at"}}}),
+		[]string{newer.ID, older.ID})
+	assertIssueIDs(t, "sorted by updated_at ascending",
+		mustList(t, ctx, st, storage.ListIssuesFilter{IDs: pair, SortBy: []storage.SortSpec{{Field: "updated_at"}, {Field: "created_at"}}}),
+		[]string{newer.ID, older.ID})
+	assertIssueIDs(t, "sorted by updated_at descending",
+		mustList(t, ctx, st, storage.ListIssuesFilter{IDs: pair, SortBy: []storage.SortSpec{{Field: "updated_at", Desc: true}, {Field: "created_at"}}}),
+		[]string{older.ID, newer.ID})
 }
 
 // eventsAreTotallyOrdered pins the history ordering to (created_at, id), and
