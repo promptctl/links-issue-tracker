@@ -28,6 +28,9 @@ func TestPlanApprovalNamesWhatTheCurrentPlanLacks(t *testing.T) {
 	revised := []model.IssueEvent{created, wrote("author", "", first), wrote("author", first, second)}
 	reverted := []model.IssueEvent{created, wrote("author", "", first), wrote("author", first, second), wrote("author", second, first)}
 	revertedByReviewer := []model.IssueEvent{created, wrote("author", "", first), wrote("author", first, second), wrote("ada", second, first)}
+	// Two stores edited the plan at once and the merge kept the earlier edit:
+	// the later event wrote a text that is not the current one.
+	mergedConcurrent := []model.IssueEvent{created, wrote("author", "", first), wrote("ada", "", second)}
 
 	for _, tc := range []struct {
 		name     string
@@ -75,6 +78,9 @@ func TestPlanApprovalNamesWhatTheCurrentPlanLacks(t *testing.T) {
 		{name: "a plan returned to a passed text by its reviewer", plan: first, events: revertedByReviewer,
 			reviews: []model.PlanReview{review("r1", "ada", first, model.PlanPass)},
 			gap:     storage.PlanSelfReviewed{Plan: v1, Author: "ada"}},
+		{name: "concurrent edits merged to the earlier text", plan: first, events: mergedConcurrent,
+			reviews:  []model.PlanReview{review("r1", "ada", first, model.PlanPass)},
+			approved: "r1"},
 		{name: "the latest of several passes", plan: first, events: authored,
 			reviews:  []model.PlanReview{review("r1", "ada", first, model.PlanPass), review("r2", "author", first, model.PlanPass), review("r3", "grace", first, model.PlanPass)},
 			approved: "r3"},
