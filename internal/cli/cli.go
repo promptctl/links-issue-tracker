@@ -1766,7 +1766,13 @@ var (
 			}
 		},
 	}
-	doneSpec  = transitionSpec{name: "done", registerFlags: fixedAction(model.Done{}), authorize: noAuthorize}
+	doneSpec = transitionSpec{
+		name:          "done",
+		registerFlags: fixedAction(model.Done{}),
+		authorize: func(*cobraFlagSet) func(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, prior ticketState, action model.Action) (afterApply, error) {
+			return authorizeDone
+		},
+	}
 	closeSpec = transitionSpec{
 		name:     "close",
 		synopsis: " --resolution <duplicate|superseded|obsolete|wontfix> [--of <canonical-id>]",
@@ -1826,6 +1832,39 @@ func authorizePhase(ctx context.Context, _ io.Writer, _ *app.App, _ string, prio
 		telemetry.Set(ctx, "phase.to", string(move.To))
 		telemetry.Set(ctx, "phase.changed", move.Changed())
 		return phaseNotice(move), nil
+	}, nil
+}
+
+// authorizeDone is the plan gate: a ticket is finished only on a current plan
+// that storage.PlanApproval approves. A done the state machine refuses — on an
+// epic, whose state is its children's, or on frozen work — is answered by that
+// refusal, asked of Issue.Apply first, the rule Apply runs again. On success
+// it owes the approval it rested on; a refusal records which gap stopped it.
+// [LAW:single-enforcer] [LAW:nothing-unseen]
+func authorizeDone(ctx context.Context, _ io.Writer, ap *app.App, issueID string, prior ticketState, action model.Action) (afterApply, error) {
+	done, ok := action.(model.Done)
+	if !ok {
+		return nil, fmt.Errorf("done: authorize hook received a %T action", action)
+	}
+	if _, err := prior.issue.Apply(done); err != nil {
+		return nil, err
+	}
+	detail, err := ap.Store.GetIssueDetail(ctx, issueID)
+	if err != nil {
+		return nil, err
+	}
+	approval, err := storage.PlanApproval(detail.Issue, detail.Events, detail.PlanReviews)
+	var unapproved storage.PlanUnapprovedError
+	if errors.As(err, &unapproved) {
+		telemetry.Set(ctx, "done.plan_gap", unapproved.Gap.Kind())
+	}
+	if err != nil {
+		return nil, err
+	}
+	return func(ticketState, *claims.Handover) (string, statusline.Facts) {
+		telemetry.Set(ctx, "done.plan_digest", string(approval.PlanDigest))
+		telemetry.Set(ctx, "done.plan_review", approval.ID)
+		return "", nil
 	}, nil
 }
 

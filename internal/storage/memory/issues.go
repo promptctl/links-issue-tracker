@@ -128,7 +128,7 @@ func (e *Engine) createIssue(in storage.CreateIssueInput) (model.Issue, error) {
 	if rec.followsUp != "" {
 		changes = append(changes, model.FieldChange{Field: "follows_up", From: "", To: rec.followsUp})
 	}
-	e.recordEvent(id, eventSpec{action: "created", reason: "issue created", actor: createdBy, changes: changes}, now)
+	e.recordEvent(id, eventSpec{action: model.ActionCreated, reason: "issue created", actor: createdBy, changes: changes}, now)
 
 	return e.hydrate(rec, e.positions())
 }

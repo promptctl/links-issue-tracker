@@ -51,6 +51,7 @@ const (
 	reasonNoReadyWork             commandReason = "no_ready_work"
 	reasonOutsideGitWorkspace     commandReason = "outside_git_workspace"
 	reasonOwnerApprovalRequired   commandReason = "owner_approval_required"
+	reasonPlanNotApproved         commandReason = "plan_not_approved"
 	reasonPurgeUnconfirmed        commandReason = "purge_unconfirmed"
 	reasonRemoteUnreachable       commandReason = "remote_unreachable"
 	reasonRetiredCommand          commandReason = "retired_command"
@@ -197,6 +198,13 @@ func commandErrorReason(err error) commandReason {
 	var takeover takeoverUnconfirmedError
 	if errors.As(err, &takeover) {
 		return reasonTakeoverUnconfirmed
+	}
+	// A done whose ticket's current plan has not passed its law review. Not
+	// validation_refused: the command is right, and what clears it is a plan
+	// and a review the remediation has to name.
+	var planUnapproved storage.PlanUnapprovedError
+	if errors.As(err, &planUnapproved) {
+		return reasonPlanNotApproved
 	}
 	// A purge not confirmed. Its own reason for the same cause as takeover's:
 	// the adjustment that clears it is a flag the remediation has to name.
@@ -390,6 +398,10 @@ func commandErrorRemediation(reason commandReason) string {
 		// call the takeover is — an agent acts on this line, and --take
 		// overrides another checkout's live work.
 		return "Rerun with `--take` to take the lane over, or run `lit next` for work nobody else holds. " + agentInstructionsOpen + "Taking over a lane another checkout holds right now overrides that checkout's work: pass `--take` only when the user directs the takeover." + agentInstructionsClose
+	case reasonPlanNotApproved:
+		// Action-only: the message names the gap. The envelope says why the
+		// agent cannot close it alone: lit takes the reviewer from the session.
+		return "Write the plan with `lit update <id> --plan-file <path>`, or revise it after a fail; have a reviewer other than its author pass the current text with `/lit:review-plan <id>`; then run `lit done <id>` again. " + agentInstructionsOpen + "Do not record a verdict on a plan you wrote: lit records the session that runs `lit verdict` as the reviewer, so your pass counts as the author's own and approves nothing." + agentInstructionsClose
 	case reasonPurgeUnconfirmed:
 		// The reversible way out is named beside the flag, and the envelope says
 		// whose call a purge is: it cannot be undone and reaches every store.

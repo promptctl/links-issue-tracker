@@ -687,7 +687,7 @@ func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (m
 		if issue.FollowsUp != "" {
 			createChanges = append(createChanges, model.FieldChange{Field: "follows_up", From: "", To: issue.FollowsUp})
 		}
-		if err := s.recordEvent(ctx, tx, issue.ID, "created", "issue created", createdBy, createChanges); err != nil {
+		if err := s.recordEvent(ctx, tx, issue.ID, model.ActionCreated, "issue created", createdBy, createChanges); err != nil {
 			return err
 		}
 		return smoothRanksIfNeededTx(ctx, tx, issue.Rank)
