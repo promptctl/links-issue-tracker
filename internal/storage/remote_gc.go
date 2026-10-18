@@ -10,10 +10,10 @@ type RemoteGC struct {
 	// Outcome is empty when the GC stopped on an error before it learned
 	// whether the remote moved.
 	Outcome RemoteGCOutcome
-	// DroppedBranches counts the remote's branches other than the sync
+	// DroppedBranches names the remote's branches other than the sync
 	// branch that the GC's root write dropped: the collected files hold the
 	// sync branch's history alone.
-	DroppedBranches int
+	DroppedBranches []string
 	// BytesBefore is the table files the remote held when the GC read it;
 	// CollectedBytes, the collected table files, which the remote holds
 	// exactly once the GC replaced its table set. Zero until collected.

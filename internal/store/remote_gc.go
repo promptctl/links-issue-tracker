@@ -126,21 +126,21 @@ func collectRemoteView(ctx context.Context, remoteDB *doltdb.DoltDB, scratch, br
 	return gc, err
 }
 
-// datasetsAt reads every dataset root names: the commit keep names, and how
-// many other branches there are, none of which the collected files hold.
+// datasetsAt reads every dataset root names: the commit keep names, and the
+// other branches, none of which the collected files hold.
 // Anything else is an error, because the root the GC writes names keep
 // alone: the GC drops nothing until it can name everything it drops.
-func datasetsAt(ctx context.Context, db datas.Database, root hash.Hash, keep ref.DoltRef) (keepAt hash.Hash, others int, err error) {
+func datasetsAt(ctx context.Context, db datas.Database, root hash.Hash, keep ref.DoltRef) (keepAt hash.Hash, others []string, err error) {
 	datasets, err := db.DatasetsByRootHash(ctx, root)
 	if err != nil {
-		return keepAt, 0, fmt.Errorf("read the remote's datasets: %w", err)
+		return keepAt, nil, fmt.Errorf("read the remote's datasets: %w", err)
 	}
 	err = datasets.IterAll(ctx, func(id string, addr hash.Hash) error {
 		switch {
 		case id == keep.String():
 			keepAt = addr
 		case isBranch(id):
-			others++
+			others = append(others, id)
 		default:
 			return fmt.Errorf("the remote holds %s, which is not a branch the remote's GC can drop", id)
 		}

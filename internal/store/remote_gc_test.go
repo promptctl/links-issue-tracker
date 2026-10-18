@@ -4,6 +4,8 @@ import (
 	"context"
 	"os/exec"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -141,7 +143,7 @@ func TestAPushPastTheBoundCollectsTheRemote(t *testing.T) {
 	}
 	gc := fired.RemoteGC
 	_, bytes := dataTree(t, gitDir)
-	if gc.Outcome != storage.RemoteGCReplaced || gc.DroppedBranches != 1 {
+	if gc.Outcome != storage.RemoteGCReplaced || !slices.Equal(gc.DroppedBranches, []string{"refs/heads/other"}) {
 		t.Fatalf("the remote GC = %+v; want the table files replaced and the other branch dropped", gc)
 	}
 	if gc.CollectedBytes != bytes {
@@ -173,15 +175,17 @@ func TestAPushPastTheBoundCollectsTheRemote(t *testing.T) {
 
 	event := fired.EventValue()
 	want := map[string]any{
-		"remote_gc.outcome":          string(storage.RemoteGCReplaced),
-		"remote_gc.dropped_branches": 1,
-		"remote_gc.bytes_before":     gc.BytesBefore,
-		"remote_gc.collected_bytes":  bytes,
+		"remote_gc.outcome":         string(storage.RemoteGCReplaced),
+		"remote_gc.bytes_before":    gc.BytesBefore,
+		"remote_gc.collected_bytes": bytes,
 	}
 	for key, value := range want {
 		if event[key] != value {
 			t.Fatalf("event %s = %v, want %v (event %v)", key, event[key], value, event)
 		}
+	}
+	if dropped, _ := event["remote_gc.dropped_branches"].([]string); !slices.Equal(dropped, []string{"refs/heads/other"}) {
+		t.Fatalf("event remote_gc.dropped_branches = %v, want [refs/heads/other] (event %v)", event["remote_gc.dropped_branches"], event)
 	}
 }
 
@@ -232,7 +236,7 @@ func TestARemoteAPeerWroteToAfterTheReRootKeepsItsTableFiles(t *testing.T) {
 		err = closeErr
 	}
 	want := storage.RemoteGC{Outcome: storage.RemoteGCMoved, BytesBefore: bytes}
-	if err != nil || gc != want {
+	if err != nil || !reflect.DeepEqual(gc, want) {
 		t.Fatalf("collectRemote over a remote bravo pushed to = %+v, %v; want %+v", gc, err, want)
 	}
 	if gotFiles, gotBytes := dataTree(t, gitDir); gotFiles != files || gotBytes != bytes {
@@ -273,7 +277,7 @@ func TestAPeerWriteAfterTheGCReadTheRemoteKeepsEveryBranch(t *testing.T) {
 	bravoHead := headAt(t, ctx, bravo)
 
 	gc, err := collectRemoteView(ctx, view, t.TempDir(), "master", landed.Head)
-	if err != nil || gc.Outcome != storage.RemoteGCMoved || gc.DroppedBranches != 0 || gc.CollectedBytes == 0 {
+	if err != nil || gc.Outcome != storage.RemoteGCMoved || gc.DroppedBranches != nil || gc.CollectedBytes == 0 {
 		t.Fatalf("alpha's GC over the view it read before bravo's push = %+v, %v; want it collected and then moved", gc, err)
 	}
 	if master, other := remoteBranches(t, ctx, alpha); master != bravoHead || other != otherHead {
@@ -430,7 +434,7 @@ func TestARemoteHoldingATagKeepsEveryBranch(t *testing.T) {
 	if closeErr := st.Close(); closeErr != nil {
 		t.Fatal(closeErr)
 	}
-	if err == nil || !strings.Contains(err.Error(), "refs/tags/v1") || gc.Outcome != "" || gc.DroppedBranches != 0 {
+	if err == nil || !strings.Contains(err.Error(), "refs/tags/v1") || gc.Outcome != "" || gc.DroppedBranches != nil {
 		t.Fatalf("collectRemote over a remote holding a tag = %+v, %v; want an error naming the tag and nothing written", gc, err)
 	}
 	if _, other := remoteBranches(t, ctx, alpha); other != otherHead {
