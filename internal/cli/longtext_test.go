@@ -206,7 +206,7 @@ func TestLongTextRefusesBlankTextAndASecondStdinReader(t *testing.T) {
 		{"blank file", "", []string{"--description-file", blank}, "--description-file " + blank + " supplied no text",
 			map[string]any{"text_source.description": "file"}},
 		{"blank stdin", "\n", []string{"--prompt-file", "-"}, "--prompt-file - supplied no text",
-			map[string]any{"text_source.description": "absent", "text_source.prompt": "stdin", "text_source.plan": "absent"}},
+			map[string]any{"text_source.description": "absent", "text_source.prompt": "stdin"}},
 		{"unreadable path", "", []string{"--prompt-file", filepath.Join(t.TempDir(), "missing.md")}, "read --prompt-file: open ",
 			map[string]any{"text_source.description": "absent", "text_source.prompt": "file"}},
 		{"two stdin readers", "one text", []string{"--description-file", "-", "--prompt-file", "-"}, "only one field can read stdin, and --description-file and --prompt-file each name it; give the others a path",
