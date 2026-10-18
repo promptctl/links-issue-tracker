@@ -45,8 +45,10 @@ func (b HistoryBound) Fired() bool {
 
 // EventValue is the bound as one value of the event's history_bound.records
 // list: its own facts under history_bound.*, the re-root it published under
-// the reroot.* keys every re-root's facts use, the reclaim its follow ran
-// under collection.*, and the remote's GC under remote_gc.*.
+// the reroot.* keys every re-root's facts use, and the remote's GC under
+// remote_gc.*. The reclaim its follow ran is that follow's, on the event's
+// reroot.follows list under reroot.follow=bound, and only there.
+// [LAW:one-source-of-truth]
 func (b HistoryBound) EventValue() map[string]any {
 	value := map[string]any{
 		"history_bound.remote":    b.Remote,
@@ -61,7 +63,6 @@ func (b HistoryBound) EventValue() map[string]any {
 	}
 	facts, counts := b.ReRooted.EventRecord()
 	maps.Copy(value, facts)
-	maps.Copy(value, b.Collection.EventRecord())
 	maps.Copy(value, b.RemoteGC.EventRecord())
 	for key, n := range counts {
 		value[key] = n

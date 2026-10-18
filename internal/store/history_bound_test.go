@@ -178,7 +178,6 @@ func TestAPushPastTheBoundReRootsWithNoCommandRun(t *testing.T) {
 		"history_bound.fired":  true,
 		"history_bound.keep":   bound.keep,
 		"history_bound.lease":  string(storage.LeaseHeld),
-		"collection.ran":       true,
 		"reroot.cut":           fired.ReRooted.Cut,
 		"reroot.kept":          int(bound.keep),
 		"reroot.dropped":       fired.ReRooted.Dropped,
@@ -187,9 +186,6 @@ func TestAPushPastTheBoundReRootsWithNoCommandRun(t *testing.T) {
 		if event[key] != value {
 			t.Fatalf("event %s = %v, want %v (event %v)", key, event[key], value, event)
 		}
-	}
-	if c := fired.Collection; event["collection.bytes_before"] != c.BytesBefore || event["collection.bytes_after"] != c.BytesAfter {
-		t.Fatalf("event bytes = %v -> %v, want %d -> %d", event["collection.bytes_before"], event["collection.bytes_after"], c.BytesBefore, c.BytesAfter)
 	}
 }
 
