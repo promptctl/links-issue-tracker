@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -269,14 +270,17 @@ func (s *Store) remoteMirrorKeys(ctx context.Context) (map[string]string, error)
 
 // decodeRemoteParams is the params column dolt_remotes holds for the remote
 // name, as the map Dolt opens the remote with. A remote with none has an
-// empty map.
+// empty map: the column is SQL NULL, or JSON null where Dolt rendered a nil
+// map (dtables remotes_table.go), which decoding sets the map to.
 func decodeRemoteParams(name string, raw sql.NullString) (map[string]interface{}, error) {
-	params := map[string]interface{}{}
+	var decoded map[string]interface{}
 	if raw.Valid {
-		if err := json.Unmarshal([]byte(raw.String), &params); err != nil {
+		if err := json.Unmarshal([]byte(raw.String), &decoded); err != nil {
 			return nil, fmt.Errorf("decode params of remote %q: %w", name, err)
 		}
 	}
+	params := map[string]interface{}{}
+	maps.Copy(params, decoded)
 	return params, nil
 }
 

@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"slices"
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/dbfactory"
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
@@ -28,35 +27,145 @@ import (
 // table files, and the remote never runs a GC of its own, so without this the
 // remote keeps every write it ever took however short its history is.
 //
-// It writes, in a scratch store, the table files reachable from head named as
-// branch and nothing else (buildCollectedSet), and then replaces the remote's
-// table files with them (replaceRemoteTableFiles). The scratch goes however
-// that ended.
+// It runs under the commit lock, as every fetch and push does: the remote is
+// opened through the git mirror they all read and write. What keeps a peer's
+// write to the remote safe is not the lock but the remote's own manifest,
+// which takes each of the GC's writes only over the view it read
+// (collectRemoteView). The scratch store goes however the GC ended.
 func (s *Store) collectRemote(ctx context.Context, remote, branch, head string) (gc storage.RemoteGC, err error) {
 	scratch, err := os.MkdirTemp("", "lit-remote-gc-")
 	if err != nil {
 		return gc, fmt.Errorf("create the remote GC's scratch store: %w", err)
 	}
 	defer func() { err = errors.Join(err, os.RemoveAll(scratch)) }()
-	collected, err := s.buildCollectedSet(ctx, scratch, branch, head)
-	if err != nil {
-		return gc, err
-	}
-	defer func() { err = errors.Join(err, collected.Close()) }()
 	err = s.withCommitLock(ctx, func(ctx context.Context) error {
-		var err error
-		gc, err = s.replaceRemoteTableFiles(ctx, remote, branch, head, collected)
-		return err
+		remoteDB, err := s.openRemoteDB(ctx, remote)
+		if err != nil {
+			return err
+		}
+		var gcErr error
+		gc, gcErr = collectRemoteView(ctx, remoteDB, scratch, branch, head)
+		return errors.Join(gcErr, remoteDB.Close())
 	})
 	return gc, err
 }
 
+// collectRemoteView is the remote's GC over the view remoteDB read when it
+// opened. Every check reads that view, and every write lands only while the
+// remote still holds it, so a peer's write anywhere in between ends the GC
+// with the remote whole:
+//  1. unless the view's branch is at head the GC ends RemoteGCMoved having
+//     written nothing, and a dataset other than a branch is an error before
+//     any write (datasetsAt);
+//  2. it builds, in scratch, the table files head reaches named as branch
+//     alone (buildCollectedSet), from the remote itself, and uploads them;
+//  3. it points the remote's root at the scratch store's, which names branch
+//     and nothing else, while the remote's root is still the view's
+//     (pointRootAt): one write drops every other branch, or the GC ends
+//     RemoteGCMoved with every branch kept;
+//  4. it points the remote's manifest at exactly the collected table files
+//     (replaceTableFiles), while its lock is still step 3's.
+func collectRemoteView(ctx context.Context, remoteDB *doltdb.DoltDB, scratch, branch, head string) (gc storage.RemoteGC, err error) {
+	db := doltdb.ExposeDatabaseFromDoltDB(remoteDB)
+	// [LAW:parse-dont-validate] the one shape the GC can replace: a git
+	// remote's store is a single NomsBlockStore over its blobstore.
+	remote, ok := datas.ChunkStoreFromDatabase(db).(*nbs.NomsBlockStore)
+	if !ok {
+		return gc, fmt.Errorf("the remote's store is a %T; the remote's GC replaces the table files of a git remote's store", datas.ChunkStoreFromDatabase(db))
+	}
+	viewRoot, err := remote.Root(ctx)
+	if err != nil {
+		return gc, fmt.Errorf("read the remote's root: %w", err)
+	}
+	if gc.BytesBefore, err = storeBytesOf(ctx, remote); err != nil {
+		return gc, err
+	}
+	keepAt, others, err := datasetsAt(ctx, db, viewRoot, ref.NewBranchRef(branch))
+	if err != nil {
+		return gc, err
+	}
+	// [LAW:no-ambient-temporal-coupling] the view owns "a peer wrote first":
+	// every step below reads it or lands only over it.
+	if keepAt.String() != head {
+		gc.Outcome = storage.RemoteGCMoved
+		return gc, nil
+	}
+
+	collected, err := buildCollectedSet(ctx, scratch, remoteDB, branch, head)
+	if err != nil {
+		return gc, err
+	}
+	defer func() { err = errors.Join(err, collected.Close()) }()
+	collectedCS := datas.ChunkStoreFromDatabase(doltdb.ExposeDatabaseFromDoltDB(collected))
+	collectedFiles, ok := collectedCS.(chunks.TableFileStore)
+	if !ok {
+		return gc, fmt.Errorf("the remote GC's scratch store is a %T, which lists no table files", collectedCS)
+	}
+	if gc.CollectedBytes, err = storeBytesOf(ctx, collectedFiles); err != nil {
+		return gc, err
+	}
+	sources, err := collectedFiles.Sources(ctx)
+	if err != nil {
+		return gc, fmt.Errorf("list the collected table files: %w", err)
+	}
+	files, err := uploadTableFiles(ctx, sources, remote)
+	if err != nil {
+		return gc, err
+	}
+
+	pointed, err := pointRootAt(ctx, collectedCS, sources.Root, remote, viewRoot)
+	if err != nil {
+		return gc, err
+	}
+	if !pointed {
+		gc.Outcome = storage.RemoteGCMoved
+		return gc, nil
+	}
+	gc.DroppedBranches = others
+	gc.Outcome, err = replaceTableFiles(ctx, remote, files)
+	return gc, err
+}
+
+// datasetsAt reads every dataset root names: the commit keep names, and how
+// many other branches there are, none of which the collected files hold.
+// Anything else is an error, because the root the GC writes names keep
+// alone: the GC drops nothing until it can name everything it drops.
+func datasetsAt(ctx context.Context, db datas.Database, root hash.Hash, keep ref.DoltRef) (keepAt hash.Hash, others int, err error) {
+	datasets, err := db.DatasetsByRootHash(ctx, root)
+	if err != nil {
+		return keepAt, 0, fmt.Errorf("read the remote's datasets: %w", err)
+	}
+	err = datasets.IterAll(ctx, func(id string, addr hash.Hash) error {
+		switch {
+		case id == keep.String():
+			keepAt = addr
+		case isBranch(id):
+			others++
+		default:
+			return fmt.Errorf("the remote holds %s, which is not a branch the remote's GC can drop", id)
+		}
+		return nil
+	})
+	return keepAt, others, err
+}
+
+// isBranch reports whether a dataset id names a branch. ref.Parse reads an
+// id that is not a ref as a branch, so a working set or any other dataset
+// outside refs/ has to be told apart first.
+func isBranch(id string) bool {
+	if !ref.IsRef(id) {
+		return false
+	}
+	r, err := ref.Parse(id)
+	return err == nil && r.GetType() == ref.BranchRefType
+}
+
 // buildCollectedSet opens a fresh store in dir holding the chunks reachable
-// from head and a root that names head as branch and nothing else: the root
-// the remote holds once its other branches are gone, and table files holding
-// everything that root reaches. The store has no chunk journal, so every
-// chunk it holds is in a table file the remote can take.
-func (s *Store) buildCollectedSet(ctx context.Context, dir, branch, head string) (*doltdb.DoltDB, error) {
+// from head in source and a root that names head as branch and nothing else:
+// the root the remote holds once its other branches are gone, and table files
+// holding everything that root reaches. The store has no chunk journal, so
+// every chunk it holds is in a table file the remote can take.
+func buildCollectedSet(ctx context.Context, dir string, source *doltdb.DoltDB, branch, head string) (*doltdb.DoltDB, error) {
 	nomsDir := filepath.Join(dir, "noms")
 	tempDir := filepath.Join(dir, "tmp")
 	for _, d := range []string{nomsDir, tempDir} {
@@ -69,9 +178,7 @@ func (s *Store) buildCollectedSet(ctx context.Context, dir, branch, head string)
 		return nil, fmt.Errorf("open the remote GC's scratch store: %w", err)
 	}
 	addr := hash.Parse(head)
-	err = s.withEngineClosed(ctx, func(holdCtx context.Context, ddb *doltdb.DoltDB) error {
-		return collected.PullChunks(holdCtx, tempDir, ddb, []hash.Hash{addr}, nil, nil)
-	})
+	err = collected.PullChunks(ctx, tempDir, source, []hash.Hash{addr}, nil, nil)
 	if err == nil {
 		err = collected.SetHead(ctx, ref.NewBranchRef(branch), addr)
 	}
@@ -81,105 +188,12 @@ func (s *Store) buildCollectedSet(ctx context.Context, dir, branch, head string)
 	return collected, nil
 }
 
-// replaceRemoteTableFiles is the remote's GC proper, measured on either side
-// (collectAtHead). The caller holds the commit lock, so no other writer in
-// this checkout reaches the remote meanwhile.
-func (s *Store) replaceRemoteTableFiles(ctx context.Context, remote, branch, head string, collected *doltdb.DoltDB) (gc storage.RemoteGC, err error) {
-	remoteDB, err := s.openRemoteDB(ctx, remote)
-	if err != nil {
-		return gc, err
-	}
-	defer func() { err = errors.Join(err, remoteDB.Close()) }()
-	// [LAW:parse-dont-validate] the one shape the GC can replace: a git
-	// remote's store is a single NomsBlockStore over its blobstore.
-	remoteCS, ok := datas.ChunkStoreFromDatabase(doltdb.ExposeDatabaseFromDoltDB(remoteDB)).(*nbs.NomsBlockStore)
-	if !ok {
-		return gc, fmt.Errorf("remote %q's store is a %T; the remote's GC replaces the table files of a git remote's store", remote, datas.ChunkStoreFromDatabase(doltdb.ExposeDatabaseFromDoltDB(remoteDB)))
-	}
-	collectedCS, ok := datas.ChunkStoreFromDatabase(doltdb.ExposeDatabaseFromDoltDB(collected)).(chunks.TableFileStore)
-	if !ok {
-		return gc, fmt.Errorf("the remote GC's scratch store is a %T, which lists no table files", datas.ChunkStoreFromDatabase(doltdb.ExposeDatabaseFromDoltDB(collected)))
-	}
-
-	if gc.FilesBefore, gc.BytesBefore, err = tableSetOf(ctx, remoteCS); err != nil {
-		return gc, err
-	}
-	if gc.Outcome, gc.DroppedBranches, err = collectAtHead(ctx, remoteDB, remoteCS, collectedCS, branch, head); err != nil {
-		return gc, err
-	}
-	gc.FilesAfter, gc.BytesAfter, err = tableSetOf(ctx, remoteCS)
-	return gc, err
-}
-
-// collectAtHead runs the GC's writes in the order that leaves a remote a
-// peer has written to whole. Unless the remote's branch is still at head it
-// ends RemoteGCMoved having written nothing. Then it deletes every other
-// branch of the remote, which the collected files do not hold, and then,
-// while the remote's root is the one collected holds, writes collected's
-// table files to the remote and points its manifest at exactly those, under
-// a new GC generation (nbs.ReplaceStoreTableFiles, dolt patch 10). The new
-// generation is what keeps a writer whose view predates the GC from landing
-// table files that reference a chunk it dropped: that writer re-checks them
-// against the new files first.
-//
-// The remote's root is compared before the upload, and the manifest write
-// compares it again: a write that lands on the remote after the head check
-// moves the manifest's lock, and either check ends the GC as RemoteGCMoved
-// with the remote's table set whole.
-func collectAtHead(ctx context.Context, remoteDB *doltdb.DoltDB, remote *nbs.NomsBlockStore, collected chunks.TableFileStore, branch, head string) (storage.RemoteGCOutcome, int, error) {
-	refs, err := remoteDB.GetRefsWithHashes(ctx)
-	if err != nil {
-		return "", 0, fmt.Errorf("list the remote's refs: %w", err)
-	}
-	keep := ref.NewBranchRef(branch)
-	// [LAW:no-ambient-temporal-coupling] the head check owns "a peer wrote
-	// first": it runs before the GC's first write, so a moved remote is never
-	// half collected.
-	if !slices.ContainsFunc(refs, func(r doltdb.RefWithHash) bool { return ref.Equals(r.Ref, keep) && r.Hash.String() == head }) {
-		return storage.RemoteGCMoved, 0, nil
-	}
-	dropped, err := dropOtherBranches(ctx, remoteDB, refs, keep)
-	if err != nil {
-		return "", dropped, err
-	}
-	outcome, err := replaceWhileRootHolds(ctx, collected, remote)
-	return outcome, dropped, err
-}
-
-// replaceWhileRootHolds writes collected's table files to the remote and
-// points the remote's manifest at them, while the remote's root is
-// collected's.
-func replaceWhileRootHolds(ctx context.Context, collected chunks.TableFileStore, remote *nbs.NomsBlockStore) (storage.RemoteGCOutcome, error) {
-	sources, err := collected.Sources(ctx)
-	if err != nil {
-		return "", fmt.Errorf("list the collected table files: %w", err)
-	}
-	remoteRoot, err := remote.Root(ctx)
-	if err != nil {
-		return "", fmt.Errorf("read the remote's root: %w", err)
-	}
-	if remoteRoot != sources.Root {
-		return storage.RemoteGCMoved, nil
-	}
-	files, err := uploadTableFiles(ctx, sources, remote)
-	if err != nil {
-		return "", err
-	}
-	err = nbs.ReplaceStoreTableFiles(ctx, remote, files)
-	switch {
-	case errors.Is(err, nbs.ErrConcurrentManifestWriteDuringOverwrite):
-		return storage.RemoteGCMoved, nil
-	case err != nil:
-		return "", fmt.Errorf("point the remote's manifest at the collected table files: %w", err)
-	}
-	return storage.RemoteGCReplaced, nil
-}
-
 // uploadTableFiles writes every table file of sources to the remote, as
 // Dolt's clone writes a table file to its sink, and returns them as the
-// table set the remote's manifest takes. A chunk journal or an appendix is
-// not a shape the collected store writes, so either one is an error rather
-// than a file left behind.
+// table set the remote's manifest takes. Writing a table file does not touch
+// the remote's manifest. A chunk journal or an appendix is not a shape the
+// collected store writes, so either one is an error rather than a file left
+// behind.
 func uploadTableFiles(ctx context.Context, sources chunks.TableFileSources, remote *nbs.NomsBlockStore) (map[hash.Hash]uint32, error) {
 	if len(sources.AppendixTableFiles) > 0 {
 		return nil, fmt.Errorf("the collected store lists %d appendix table files, which the remote's GC does not write", len(sources.AppendixTableFiles))
@@ -199,40 +213,55 @@ func uploadTableFiles(ctx context.Context, sources chunks.TableFileSources, remo
 	return files, nil
 }
 
-// dropOtherBranches deletes every branch of refs but keep and returns how
-// many it deleted. Anything refs names that is not a branch is an error
-// before the first delete: the collected files hold keep's history alone,
-// and the GC drops nothing until it can name everything it drops.
-func dropOtherBranches(ctx context.Context, remoteDB *doltdb.DoltDB, refs []doltdb.RefWithHash, keep ref.DoltRef) (int, error) {
-	var drop []ref.DoltRef
-	for _, r := range refs {
-		switch {
-		case ref.Equals(r.Ref, keep):
-		case r.Ref.GetType() == ref.BranchRefType:
-			drop = append(drop, r.Ref)
-		default:
-			return 0, fmt.Errorf("the remote holds %s, which is not a branch the remote's GC can drop", r.Ref.String())
+// pointRootAt makes root, read from collected, the remote's root while the
+// remote's root is still last, and reports whether it did. It is one
+// compare-and-swap (nbs Commit, which never retries over another root), and
+// the remote checks root's references are chunks it holds before it lands.
+func pointRootAt(ctx context.Context, collected chunks.ChunkStore, root hash.Hash, remote *nbs.NomsBlockStore, last hash.Hash) (bool, error) {
+	chunk, err := collected.Get(ctx, root)
+	if err != nil {
+		return false, fmt.Errorf("read the collected root %s: %w", root, err)
+	}
+	getAddrs := func(c chunks.Chunk) chunks.GetAddrsCb {
+		return func(_ context.Context, addrs hash.HashSet, _ chunks.PendingRefExists) error {
+			return types.AddrsFromNomsValue(c, types.Format_Default, addrs)
 		}
 	}
-	for i, r := range drop {
-		if err := remoteDB.DeleteBranch(ctx, r, nil); err != nil {
-			return i, fmt.Errorf("delete the remote's branch %s: %w", r.GetPath(), err)
-		}
+	if err := remote.Put(ctx, chunk, getAddrs); err != nil {
+		return false, fmt.Errorf("write the collected root %s to the remote: %w", root, err)
 	}
-	return len(drop), nil
+	pointed, err := remote.Commit(ctx, root, last)
+	if err != nil {
+		return false, fmt.Errorf("point the remote's root at %s: %w", root, err)
+	}
+	return pointed, nil
 }
 
-// tableSetOf is the table files the store's manifest names, and their bytes.
-func tableSetOf(ctx context.Context, cs *nbs.NomsBlockStore) (int, int64, error) {
-	sources, err := cs.Sources(ctx)
-	if err != nil {
-		return 0, 0, fmt.Errorf("list the remote's table files: %w", err)
+// replaceTableFiles points the remote's manifest at exactly files, under a
+// new GC generation (nbs.ReplaceStoreTableFiles, dolt patch 10), while the
+// manifest's lock is the one the remote last wrote. A write that landed in
+// between leaves the table set whole, with the other branches already
+// dropped. The new generation is what keeps a writer whose view predates the
+// GC from landing table files that reference a chunk it dropped: that writer
+// re-checks them against the new files first.
+func replaceTableFiles(ctx context.Context, remote *nbs.NomsBlockStore, files map[hash.Hash]uint32) (storage.RemoteGCOutcome, error) {
+	err := nbs.ReplaceStoreTableFiles(ctx, remote, files)
+	switch {
+	case errors.Is(err, nbs.ErrConcurrentManifestWriteDuringOverwrite):
+		return storage.RemoteGCDropped, nil
+	case err != nil:
+		return storage.RemoteGCDropped, fmt.Errorf("point the remote's manifest at the collected table files: %w", err)
 	}
+	return storage.RemoteGCReplaced, nil
+}
+
+// storeBytesOf is the bytes of the table files the store's view holds.
+func storeBytesOf(ctx context.Context, cs chunks.TableFileStore) (int64, error) {
 	size, err := cs.Size(ctx)
 	if err != nil {
-		return 0, 0, fmt.Errorf("measure the remote's table files: %w", err)
+		return 0, fmt.Errorf("measure the table files: %w", err)
 	}
-	return len(sources.TableFiles), int64(size), nil
+	return int64(size), nil
 }
 
 // openRemoteDB opens remote's database the way Dolt's SQL provider opens it

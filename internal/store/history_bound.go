@@ -282,7 +282,7 @@ func historyBoundReport(b storage.HistoryBound) string {
 		parts = append(parts, "lease "+string(b.Lease))
 	}
 	if g := b.RemoteGC; g.Outcome != "" {
-		parts = append(parts, fmt.Sprintf("remote GC %s: %d table files (%s) -> %d (%s), %d other branches dropped", g.Outcome, g.FilesBefore, humanBytes(g.BytesBefore), g.FilesAfter, humanBytes(g.BytesAfter), g.DroppedBranches))
+		parts = append(parts, fmt.Sprintf("remote GC %s: %s of table files, %s collected, %d other branches dropped", g.Outcome, humanBytes(g.BytesBefore), humanBytes(g.CollectedBytes), g.DroppedBranches))
 	}
 	if b.Collected {
 		parts = append(parts, fmt.Sprintf("store %s -> %s", humanBytes(b.BytesBefore), humanBytes(b.BytesAfter)))

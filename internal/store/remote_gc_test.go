@@ -73,6 +73,43 @@ func dataTree(t *testing.T, gitDir string) (files int, bytes int64) {
 	return len(names), bytes
 }
 
+// pushOtherBranch pushes a branch named other from alpha to its remote, so
+// the remote holds a branch besides the sync branch, runs more calls after
+// it, and returns other's head.
+func pushOtherBranch(t *testing.T, ctx context.Context, alpha string, more ...[]string) string {
+	t.Helper()
+	st := openSyncOrFatal(t, ctx, alpha)
+	defer func() { _ = st.Close() }()
+	for _, call := range append([][]string{{"DOLT_BRANCH", "other"}, {"DOLT_PUSH", "origin", "other"}}, more...) {
+		if err := execProcedureDiscard(ctx, st.db, call[0], call[1:]...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	head, err := commitHashOfRef(ctx, st.db, "other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return head
+}
+
+// remoteBranches is the remote's sync branch head and its branch other, as a
+// pruning fetch from alpha finds them: other is empty once the remote no
+// longer has it.
+func remoteBranches(t *testing.T, ctx context.Context, alpha string) (master, other string) {
+	t.Helper()
+	st := openSyncOrFatal(t, ctx, alpha)
+	defer func() { _ = st.Close() }()
+	if err := st.SyncFetch(ctx, "origin", true); err != nil {
+		t.Fatal(err)
+	}
+	master, err := commitHashOfRef(ctx, st.db, "remotes/origin/master")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, _ = commitHashOfRef(ctx, st.db, "remotes/origin/other")
+	return master, other
+}
+
 // TestAPushPastTheBoundCollectsTheRemote drives a checkout's writes past a
 // small bound on a git remote that also holds a branch other than the sync
 // branch. The push that reaches the bound replaces the remote's table files
@@ -86,12 +123,8 @@ func TestAPushPastTheBoundCollectsTheRemote(t *testing.T) {
 	remoteURL, gitDir := gitRemote(t)
 	alpha := migratedDoltDir(t)
 	epic := seedReconcileRemote(t, ctx, alpha, remoteURL)
+	pushOtherBranch(t, ctx, alpha)
 	st := openSyncOrFatal(t, ctx, alpha)
-	for _, call := range [][]string{{"DOLT_BRANCH", "other"}, {"DOLT_PUSH", "origin", "other"}} {
-		if err := execProcedureDiscard(ctx, st.db, call[0], call[1:]...); err != nil {
-			t.Fatal(err)
-		}
-	}
 	seeded := heightOf(t, ctx, st, "HEAD")
 	if err := st.Close(); err != nil {
 		t.Fatal(err)
@@ -107,12 +140,12 @@ func TestAPushPastTheBoundCollectsTheRemote(t *testing.T) {
 		t.Fatalf("the push past the bound = %+v; want its re-root held and the checkout collected", fired)
 	}
 	gc := fired.RemoteGC
-	files, bytes := dataTree(t, gitDir)
+	_, bytes := dataTree(t, gitDir)
 	if gc.Outcome != storage.RemoteGCReplaced || gc.DroppedBranches != 1 {
 		t.Fatalf("the remote GC = %+v; want the table files replaced and the other branch dropped", gc)
 	}
-	if gc.FilesAfter != files || gc.BytesAfter != bytes {
-		t.Fatalf("the remote GC counts %d table files of %d bytes after; git counts %d of %d", gc.FilesAfter, gc.BytesAfter, files, bytes)
+	if gc.CollectedBytes != bytes {
+		t.Fatalf("the remote GC collected %d bytes of table files; git counts %d in the remote's tree", gc.CollectedBytes, bytes)
 	}
 	if gc.BytesBefore <= grown || bytes >= grown {
 		t.Fatalf("the remote held %d bytes before the push past the bound, the GC found %d and left %d; want it found more than the push before it left, and left less", grown, gc.BytesBefore, bytes)
@@ -128,15 +161,8 @@ func TestAPushPastTheBoundCollectsTheRemote(t *testing.T) {
 		t.Fatalf("the remote holds %d bytes after its GC; want no more than the collected store's %d plus one push's %d", bytes, fired.BytesAfter, onePush)
 	}
 
-	st = openSyncOrFatal(t, ctx, alpha)
-	defer func() { _ = st.Close() }()
-	// A pruning fetch drops the tracking ref of every branch the remote no
-	// longer has.
-	if err := st.SyncFetch(ctx, "origin", true); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := commitHashOfRef(ctx, st.db, "remotes/origin/other"); err == nil {
-		t.Fatal("the remote still holds the branch other; want the GC to have dropped it")
+	if _, other := remoteBranches(t, ctx, alpha); other != "" {
+		t.Fatalf("the remote still holds the branch other at %s; want the GC to have dropped it", other)
 	}
 
 	gamma := migratedDoltDir(t)
@@ -149,10 +175,8 @@ func TestAPushPastTheBoundCollectsTheRemote(t *testing.T) {
 	want := map[string]any{
 		"remote_gc.outcome":          string(storage.RemoteGCReplaced),
 		"remote_gc.dropped_branches": 1,
-		"remote_gc.files_before":     gc.FilesBefore,
-		"remote_gc.files_after":      files,
 		"remote_gc.bytes_before":     gc.BytesBefore,
-		"remote_gc.bytes_after":      bytes,
+		"remote_gc.collected_bytes":  bytes,
 	}
 	for key, value := range want {
 		if event[key] != value {
@@ -185,28 +209,16 @@ func landReRootWithoutGC(t *testing.T, ctx context.Context, alpha string, keep u
 // TestARemoteAPeerWroteToAfterTheReRootKeepsItsTableFiles has a peer follow
 // alpha's re-root and push on top of it before alpha's remote GC runs, on a
 // remote that also holds a branch other than the sync branch. The remote's
-// head is no longer the one alpha collected, so the GC writes nothing: the
-// remote's tree is untouched, the other branch is still there, and the
-// peer's push is the head.
+// head is no longer the one alpha re-rooted, so the GC collects nothing and
+// writes nothing: the remote's tree is untouched, the other branch is still
+// there, and the peer's push is the head.
 func TestARemoteAPeerWroteToAfterTheReRootKeepsItsTableFiles(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	remoteURL, gitDir := gitRemote(t)
 	alpha, bravo := migratedDoltDir(t), migratedDoltDir(t)
 	epic := seedReconcileRemote(t, ctx, alpha, remoteURL)
-	st := openSyncOrFatal(t, ctx, alpha)
-	for _, call := range [][]string{{"DOLT_BRANCH", "other"}, {"DOLT_PUSH", "origin", "other"}} {
-		if err := execProcedureDiscard(ctx, st.db, call[0], call[1:]...); err != nil {
-			t.Fatal(err)
-		}
-	}
-	otherHead, err := commitHashOfRef(ctx, st.db, "other")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := st.Close(); err != nil {
-		t.Fatal(err)
-	}
+	otherHead := pushOtherBranch(t, ctx, alpha)
 	createAndPush(t, ctx, alpha, epic, "a1")
 	landed := landReRootWithoutGC(t, ctx, alpha, 3)
 	adoptRemote(t, ctx, bravo, remoteURL)
@@ -214,28 +226,58 @@ func TestARemoteAPeerWroteToAfterTheReRootKeepsItsTableFiles(t *testing.T) {
 	bravoHead := headAt(t, ctx, bravo)
 	files, bytes := dataTree(t, gitDir)
 
-	st = openSyncOrFatal(t, ctx, alpha)
-	defer func() { _ = st.Close() }()
+	st := openSyncOrFatal(t, ctx, alpha)
 	gc, err := st.collectRemote(ctx, "origin", "master", landed.Head)
-	if err != nil || gc.Outcome != storage.RemoteGCMoved || gc.DroppedBranches != 0 {
-		t.Fatalf("collectRemote over a remote bravo pushed to = %+v, %v; want it moved", gc, err)
+	if closeErr := st.Close(); err == nil {
+		err = closeErr
 	}
-	if gc.FilesAfter != files || gc.BytesAfter != bytes || gc.FilesBefore != files || gc.BytesBefore != bytes {
-		t.Fatalf("the remote GC counts %+v; want %d table files of %d bytes before and after, as git counts them", gc, files, bytes)
+	want := storage.RemoteGC{Outcome: storage.RemoteGCMoved, BytesBefore: bytes}
+	if err != nil || gc != want {
+		t.Fatalf("collectRemote over a remote bravo pushed to = %+v, %v; want %+v", gc, err, want)
 	}
 	if gotFiles, gotBytes := dataTree(t, gitDir); gotFiles != files || gotBytes != bytes {
 		t.Fatalf("the remote's tree went from %d files of %d bytes to %d of %d; want it untouched", files, bytes, gotFiles, gotBytes)
 	}
-	// A pruning fetch drops the tracking ref of every branch the remote no
-	// longer has.
-	if err := st.SyncFetch(ctx, "origin", true); err != nil {
+	if master, other := remoteBranches(t, ctx, alpha); master != bravoHead || other != otherHead {
+		t.Fatalf("the remote holds master at %s and other at %s; want bravo's push %s and other kept at %s", master, other, bravoHead, otherHead)
+	}
+}
+
+// TestAPeerWriteAfterTheGCReadTheRemoteKeepsEveryBranch has bravo push after
+// alpha's GC read the remote, while the remote still carried alpha's re-root
+// and a branch other than the sync branch. Every check the GC makes reads
+// that view, so it collects and uploads; its root write lands only over the
+// view's root, which bravo's push replaced, so the GC ends moved with every
+// branch kept and bravo's push the head.
+func TestAPeerWriteAfterTheGCReadTheRemoteKeepsEveryBranch(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	remoteURL, _ := gitRemote(t)
+	alpha, bravo := migratedDoltDir(t), migratedDoltDir(t)
+	epic := seedReconcileRemote(t, ctx, alpha, remoteURL)
+	otherHead := pushOtherBranch(t, ctx, alpha)
+	createAndPush(t, ctx, alpha, epic, "a1")
+	landed := landReRootWithoutGC(t, ctx, alpha, 3)
+
+	st := openSyncOrFatal(t, ctx, alpha)
+	view, err := st.openRemoteDB(ctx, "origin")
+	if closeErr := st.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
 		t.Fatal(err)
 	}
-	if remote, err := commitHashOfRef(ctx, st.db, "remotes/origin/master"); err != nil || remote != bravoHead {
-		t.Fatalf("the remote's head is %s (%v); want bravo's push %s", remote, err, bravoHead)
+	defer func() { _ = view.Close() }()
+	adoptRemote(t, ctx, bravo, remoteURL)
+	createAndPush(t, ctx, bravo, epic, "b1")
+	bravoHead := headAt(t, ctx, bravo)
+
+	gc, err := collectRemoteView(ctx, view, t.TempDir(), "master", landed.Head)
+	if err != nil || gc.Outcome != storage.RemoteGCMoved || gc.DroppedBranches != 0 || gc.CollectedBytes == 0 {
+		t.Fatalf("alpha's GC over the view it read before bravo's push = %+v, %v; want it collected and then moved", gc, err)
 	}
-	if other, err := commitHashOfRef(ctx, st.db, "remotes/origin/other"); err != nil || other != otherHead {
-		t.Fatalf("the remote's branch other is at %s (%v); want it kept at %s", other, err, otherHead)
+	if master, other := remoteBranches(t, ctx, alpha); master != bravoHead || other != otherHead {
+		t.Fatalf("the remote holds master at %s and other at %s; want bravo's push %s and other kept at %s", master, other, bravoHead, otherHead)
 	}
 }
 
@@ -312,13 +354,12 @@ func TestAPushThatReadTheRemoteBeforeItsGCLandsAfterIt(t *testing.T) {
 	}
 }
 
-// TestAPeerWriteBetweenTheRootCheckAndTheManifestWriteKeepsTheTableFiles is
-// the narrower race: alpha's GC reads the remote while it still carries the
-// re-root alone, and bravo's push lands after that read and before the GC's
-// manifest write. The root alpha checked matches, so the collected files are
-// uploaded, and the manifest write refuses them: the GC ends moved and the
-// remote's tree is what bravo's push left.
-func TestAPeerWriteBetweenTheRootCheckAndTheManifestWriteKeepsTheTableFiles(t *testing.T) {
+// TestAPeerWriteAfterTheRootWriteKeepsTheTableSet is the race at the GC's
+// last write: alpha's root write has dropped the other branches, and bravo's
+// push lands before alpha replaces the remote's table files. The replacement
+// refuses the manifest bravo wrote, so the GC ends dropped and the remote's
+// tree is what bravo's push left.
+func TestAPeerWriteAfterTheRootWriteKeepsTheTableSet(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	remoteURL, gitDir := gitRemote(t)
@@ -329,29 +370,44 @@ func TestAPeerWriteBetweenTheRootCheckAndTheManifestWriteKeepsTheTableFiles(t *t
 
 	st := openSyncOrFatal(t, ctx, alpha)
 	defer func() { _ = st.Close() }()
-	collected, err := st.buildCollectedSet(ctx, t.TempDir(), "master", landed.Head)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = collected.Close() }()
 	remoteDB, err := st.openRemoteDB(ctx, "origin")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = remoteDB.Close() }()
-	remoteCS := datas.ChunkStoreFromDatabase(doltdb.ExposeDatabaseFromDoltDB(remoteDB)).(*nbs.NomsBlockStore)
-	collectedCS := datas.ChunkStoreFromDatabase(doltdb.ExposeDatabaseFromDoltDB(collected)).(chunks.TableFileStore)
+	remote := datas.ChunkStoreFromDatabase(doltdb.ExposeDatabaseFromDoltDB(remoteDB)).(*nbs.NomsBlockStore)
+	viewRoot, err := remote.Root(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	collected, err := buildCollectedSet(ctx, t.TempDir(), remoteDB, "master", landed.Head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = collected.Close() }()
+	collectedCS := datas.ChunkStoreFromDatabase(doltdb.ExposeDatabaseFromDoltDB(collected))
+	sources, err := collectedCS.(chunks.TableFileStore).Sources(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := uploadTableFiles(ctx, sources, remote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pointed, err := pointRootAt(ctx, collectedCS, sources.Root, remote, viewRoot); err != nil || !pointed {
+		t.Fatalf("pointRootAt over the view's root = %v, %v; want it pointed", pointed, err)
+	}
 
 	adoptRemote(t, ctx, bravo, remoteURL)
 	createAndPush(t, ctx, bravo, epic, "b1")
-	files, bytes := dataTree(t, gitDir)
+	treeFiles, treeBytes := dataTree(t, gitDir)
 
-	outcome, err := replaceWhileRootHolds(ctx, collectedCS, remoteCS)
-	if err != nil || outcome != storage.RemoteGCMoved {
-		t.Fatalf("the GC's manifest write after bravo's push = %q, %v; want moved", outcome, err)
+	outcome, err := replaceTableFiles(ctx, remote, files)
+	if err != nil || outcome != storage.RemoteGCDropped {
+		t.Fatalf("the GC's table-set replacement after bravo's push = %q, %v; want dropped", outcome, err)
 	}
-	if gotFiles, gotBytes := dataTree(t, gitDir); gotFiles != files || gotBytes != bytes {
-		t.Fatalf("the remote's tree went from %d files of %d bytes to %d of %d; want bravo's push's tree untouched", files, bytes, gotFiles, gotBytes)
+	if gotFiles, gotBytes := dataTree(t, gitDir); gotFiles != treeFiles || gotBytes != treeBytes {
+		t.Fatalf("the remote's tree went from %d files of %d bytes to %d of %d; want bravo's push's tree untouched", treeFiles, treeBytes, gotFiles, gotBytes)
 	}
 }
 
@@ -365,31 +421,19 @@ func TestARemoteHoldingATagKeepsEveryBranch(t *testing.T) {
 	remoteURL, _ := gitRemote(t)
 	alpha := migratedDoltDir(t)
 	epic := seedReconcileRemote(t, ctx, alpha, remoteURL)
-	st := openSyncOrFatal(t, ctx, alpha)
-	for _, call := range [][]string{{"DOLT_BRANCH", "other"}, {"DOLT_PUSH", "origin", "other"}, {"DOLT_TAG", "v1"}, {"DOLT_PUSH", "origin", "v1"}} {
-		if err := execProcedureDiscard(ctx, st.db, call[0], call[1:]...); err != nil {
-			t.Fatal(err)
-		}
-	}
-	otherHead, err := commitHashOfRef(ctx, st.db, "other")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := st.Close(); err != nil {
-		t.Fatal(err)
-	}
+	otherHead := pushOtherBranch(t, ctx, alpha, []string{"DOLT_TAG", "v1"}, []string{"DOLT_PUSH", "origin", "v1"})
 	createAndPush(t, ctx, alpha, epic, "a1")
 	landed := landReRootWithoutGC(t, ctx, alpha, 3)
 
-	st = openSyncOrFatal(t, ctx, alpha)
-	defer func() { _ = st.Close() }()
-	if gc, err := st.collectRemote(ctx, "origin", "master", landed.Head); err == nil || !strings.Contains(err.Error(), "refs/tags/v1") || gc.DroppedBranches != 0 {
-		t.Fatalf("collectRemote over a remote holding a tag = %+v, %v; want an error naming the tag and no branch dropped", gc, err)
+	st := openSyncOrFatal(t, ctx, alpha)
+	gc, err := st.collectRemote(ctx, "origin", "master", landed.Head)
+	if closeErr := st.Close(); closeErr != nil {
+		t.Fatal(closeErr)
 	}
-	if err := st.SyncFetch(ctx, "origin", true); err != nil {
-		t.Fatal(err)
+	if err == nil || !strings.Contains(err.Error(), "refs/tags/v1") || gc.Outcome != "" || gc.DroppedBranches != 0 {
+		t.Fatalf("collectRemote over a remote holding a tag = %+v, %v; want an error naming the tag and nothing written", gc, err)
 	}
-	if other, err := commitHashOfRef(ctx, st.db, "remotes/origin/other"); err != nil || other != otherHead {
-		t.Fatalf("the remote's branch other is at %s (%v); want it kept at %s", other, err, otherHead)
+	if _, other := remoteBranches(t, ctx, alpha); other != otherHead {
+		t.Fatalf("the remote's branch other is at %q; want it kept at %s", other, otherHead)
 	}
 }
