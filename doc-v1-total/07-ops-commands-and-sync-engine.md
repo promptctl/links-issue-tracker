@@ -79,7 +79,7 @@ Subcommands: `status`, `remote ls`, `fetch`, `pull`, `push`, `compact`, `reconci
 
 - `status` (no flags) prints one line: `version=<dolt> branch=<b> head=<commit[ msg]> git=<n> dolt=<n> added=<n> updated=<n> removed=<n>` (`sync.go`).
 - `remote ls` prints `git=<n> dolt=<n> added=<n> updated=<n> removed=<n>` — the add/update/remove sets from comparing git remotes to Dolt remotes (`sync.go`).
-- `fetch` (`--remote` default `origin`, `--prune`, `--verbose`): reconciles remotes, fetches, and on success writes the fetch-success marker (a marker failure is stderr-only), then resolves the sync branch and follows a re-root the fetch revealed (`SyncFollowReRoot`), so the freshness every later read reports never shows it as a divergence. One sync trace records the fetch and the follow together. Output `fetched` (or `fetched <remote>` verbose) (`sync.go`).
+- `fetch` (`--remote` default `origin`, `--prune`, `--verbose`): reconciles remotes, fetches, and on success writes the fetch-success marker (a marker failure is stderr-only), then follows a re-root on the remote and branch the freshness reads report on (`SyncFollowReRoot`), resolved as they resolve them with no network, so none of them shows it as a divergence. With no sync remote, or no default branch known on this machine, it follows nothing. One sync trace records the fetch and the follow together. Output `fetched` (or `fetched <remote>` verbose) (`sync.go`).
 
 ### `sync pull`
 
