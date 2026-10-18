@@ -103,7 +103,7 @@ The other tables:
 
 Ordinary issue deletion is a soft `deleted_at` stamp; the one CRUD path that deletes an issue row is `Purge` (below), and the ON DELETE CASCADEs fire from it.
 
-`meta` keys used in production: `workspace_id`, `last_sync_path`, `last_sync_hash`. `GetSyncState`/`RecordSyncState` read/write the last two (`store.go`).
+`meta` keys used in production: `workspace_id`, `last_sync_path`, `last_sync_hash`, `min_writer_schema`. `GetSyncState`/`RecordSyncState` read/write the second and third (`store.go`). `min_writer_schema` is set only by a migration that changes a write rule, and read only from a workspace ahead of the binary (`schema_operability.go`).
 
 A legacy `issue_history` table (columns `id, issue_id, action, reason, from_status, to_status, created_at, created_by`) no longer exists in any current schema; its presence on disk is the marker of a pre-goose workspace.
 

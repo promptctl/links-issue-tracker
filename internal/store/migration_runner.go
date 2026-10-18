@@ -140,8 +140,17 @@ type UnsupportedSchemaVersionError struct {
 	WorkspaceVersion int64
 	MaxSupported     int64
 	MissingBaseline  []string
+	// MinWriterSchema is the workspace's minimum writer schema, 0 when none
+	// was read. Above MaxSupported it is why this binary may read the
+	// workspace but not write to it: a migration this binary lacks changed a
+	// write rule.
+	MinWriterSchema int64
+	// MinWriterSchemaErr is why the workspace's minimum writer schema is not a
+	// schema version. The minimum is then unknown, so this binary reads the
+	// workspace but does not write to it.
+	MinWriterSchemaErr error
 	// SnapshotName is the newest migration-recovery snapshot holding a
-	// workspace this binary operates (searchRollbackSnapshot), when one exists.
+	// workspace this binary writes (searchRollbackSnapshot), when one exists.
 	// Populating it offers the user a lossy rollback path; emptying it means no
 	// snapshot this binary can open was found.
 	// [LAW:types-are-the-program] Which rollback line the message emits is
@@ -167,6 +176,14 @@ func (e *UnsupportedSchemaVersionError) Error() string {
 		fmt.Fprintf(&b, "; the live schema is also missing baseline shape: %s",
 			strings.Join(e.MissingBaseline, ", "))
 	}
+	if e.MinWriterSchema > e.MaxSupported {
+		fmt.Fprintf(&b, "; schema version %d changed a write rule this binary predates, so it reads this workspace but does not write to it or sync it",
+			e.MinWriterSchema)
+	}
+	if e.MinWriterSchemaErr != nil {
+		fmt.Fprintf(&b, "; its minimum writer schema cannot be read (%v), so this binary reads this workspace but does not write to it or sync it",
+			e.MinWriterSchemaErr)
+	}
 	b.WriteString(")")
 	// The workspace is ahead of this binary, so the lossless fix is a NEWER
 	// binary, never a schema reverse. The remedy names the schema version that
@@ -186,7 +203,7 @@ func (e *UnsupportedSchemaVersionError) Error() string {
 			"\n\nif you are stuck and need to roll back this workspace to match this binary:\n  lit snapshots restore %s\n\nthis is a LOSSY recovery — any data written under the newer binary will be discarded.",
 			e.SnapshotName)
 	case e.SnapshotLookupErr == nil:
-		fmt.Fprintf(&b, "\n\nno migration snapshot holds this workspace's data at schema version %d or below; lossy rollback is not possible from this workspace.", e.MaxSupported)
+		b.WriteString("\n\nno migration snapshot holds this workspace's data in a shape this binary writes; lossy rollback is not possible from this workspace.")
 	}
 	if e.SnapshotLookupErr != nil {
 		fmt.Fprintf(&b, "\n\nsome snapshots could not be read while looking for one to roll this workspace back to: %v", e.SnapshotLookupErr)
@@ -194,12 +211,17 @@ func (e *UnsupportedSchemaVersionError) Error() string {
 	return b.String()
 }
 
-// EventRecord is which snapshot the refusal offered as the lossy rollback —
-// "" when none — why snapshots could not be read, and how many it read.
+// EventRecord is the schema the refusal met, which snapshot it offered as the
+// lossy rollback — "" when none — why snapshots could not be read, and how
+// many it read.
 func (e *UnsupportedSchemaVersionError) EventRecord() (map[string]any, map[string]int) {
 	return map[string]any{
-			"schema_ahead.rollback_snapshot":     e.SnapshotName,
-			"schema_ahead.rollback_lookup_error": telemetry.ErrorText(e.SnapshotLookupErr),
+			"schema_ahead.workspace_schema":        e.WorkspaceVersion,
+			"schema_ahead.running_schema_max":      e.MaxSupported,
+			"schema_ahead.min_writer_schema":       e.MinWriterSchema,
+			"schema_ahead.min_writer_schema_error": telemetry.ErrorText(e.MinWriterSchemaErr),
+			"schema_ahead.rollback_snapshot":       e.SnapshotName,
+			"schema_ahead.rollback_lookup_error":   telemetry.ErrorText(e.SnapshotLookupErr),
 		}, map[string]int{
 			"schema_ahead.snapshots_examined":   e.SnapshotsExamined,
 			"schema_ahead.snapshots_unreadable": e.SnapshotsUnreadable,
@@ -319,17 +341,19 @@ func (st migrationState) willMutate() bool {
 // this one boundary; the snapshot/prune budget lives here, not at callsites.
 func (s *Store) migrate(ctx context.Context) (storage.Migrated, error) {
 	guard := newSnapshotGuard(s.doltRootDir, formatMigrationSnapshotLabel(time.Now()))
-	if err := s.runMigration(ctx, guard); err != nil {
+	op, err := s.runMigration(ctx, guard)
+	if err != nil {
 		if snap, ok := guard.took(); ok {
 			return storage.Migrated{}, &MigrationRollbackError{Snapshot: snap, Cause: err}
 		}
 		return storage.Migrated{}, err
 	}
+	done := storage.Migrated{SchemaAhead: op.schemaAhead()}
 	snap, ok := guard.took()
 	if !ok {
-		return storage.Migrated{}, nil
+		return done, nil
 	}
-	done := storage.Migrated{Snapshot: snap.Name}
+	done.Snapshot = snap.Name
 	// [LAW:one-source-of-truth] Migration retention bounds migration
 	// snapshots only; user snapshots share the directory under an
 	// independent budget. IsMigrationSnapshotName is the kind discriminator.
@@ -356,6 +380,8 @@ func (s *Store) Migrated() storage.Migrated {
 // the other lacks. [LAW:one-source-of-truth]
 type migrationAssessment struct {
 	state migrationState
+	// op is what this binary may do with the workspace.
+	op operability
 	// drift is nil when every applied version's registered content is
 	// present on the live schema.
 	drift *VersionContentMismatchError
@@ -391,9 +417,9 @@ func (a migrationAssessment) String() string {
 
 // assessMigration classifies the workspace and verifies it with reads only:
 // no snapshot, no commit, no lock beyond the engine's own. It refuses a
-// workspace whose schema is ahead of this binary and missing the baseline
-// shape, and surfaces any error other than content drift, which it carries as
-// data for the caller to act on.
+// workspace this binary may not read, carries whether it may write for the
+// write open to decide, and surfaces any error other than content drift,
+// which it carries as data for the caller to act on.
 //
 // [LAW:no-silent-failure] The content verification runs for every
 // phaseManaged workspace, independent of willMutate — a version-content
@@ -406,43 +432,29 @@ func (a migrationAssessment) String() string {
 // has none yet and phaseAdopt's pre-goose shape is verified by
 // verifyIssuesReconcilable/reconcileToBaseline instead.
 func (s *Store) assessMigration(ctx context.Context) (migrationAssessment, error) {
-	state, err := s.classifyMigrationState(ctx)
+	state, op, err := s.assessOperability(ctx)
 	if err != nil {
 		return migrationAssessment{}, err
 	}
-	// [LAW:types-are-the-program] A goose log recording a version above this
-	// binary's registry is not a recovery event. goose tolerates unknown-ahead
-	// rows as "nothing to apply", so an ahead log is advisory noise the binary
-	// operates alongside. The one fact that determines operability is whether
-	// the live schema still carries the baseline shape — verified read-only,
-	// then either proceed (the ahead log is honest; leave it) or refuse with
-	// the gap named. There is no bookkeeping mutation: trimming the log would
-	// destroy true "these migrations ran" information and leave the live schema
-	// ahead of a reset log, the landmine a later registry catch-up detonates.
-	if state.appliedVersion > state.support.Max {
-		if err := s.refuseIfBaselineMissing(ctx, state); err != nil {
-			return migrationAssessment{}, err
-		}
-		return migrationAssessment{state: state}, nil
-	}
-	if state.phase != phaseManaged {
-		return migrationAssessment{state: state}, nil
+	if op.ahead() || state.phase != phaseManaged {
+		return migrationAssessment{state: state, op: op}, nil
 	}
 	err = s.verifyAppliedVersionsMatchRegistry(ctx, state.appliedVersion)
 	var mismatch *VersionContentMismatchError
 	switch {
 	case err == nil:
-		return migrationAssessment{state: state}, nil
+		return migrationAssessment{state: state, op: op}, nil
 	case errors.As(err, &mismatch):
-		return migrationAssessment{state: state, drift: mismatch}, nil
+		return migrationAssessment{state: state, op: op, drift: mismatch}, nil
 	default:
 		return migrationAssessment{}, err
 	}
 }
 
-// runMigration classifies the workspace once, snapshots before the first
-// write, adopts a pre-goose workspace if needed, then applies pending
-// migrations one Dolt commit each.
+// runMigration classifies the workspace once, refuses one this binary may not
+// write, snapshots before the first write, adopts a pre-goose workspace if
+// needed, then applies pending migrations one Dolt commit each. It returns what
+// this binary may do with the workspace, for the open to report.
 //
 // [LAW:single-enforcer] One runner owns migration ordering and the snapshot/
 // commit boundary; goose is its only changeset registry and no other code
@@ -450,11 +462,19 @@ func (s *Store) assessMigration(ctx context.Context) (migrationAssessment, error
 // [LAW:dataflow-not-control-flow] The same assess -> repair -> snapshot ->
 // adopt -> apply sequence runs every Open; variability lives in the phase and
 // the set of pending versions, not in whether stages execute.
-func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard) error {
+func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard) (operability, error) {
 	assessment, err := s.assessMigration(ctx)
 	if err != nil {
-		return err
+		return operability{}, err
 	}
+	if err := s.refuseUnwritable(ctx, assessment.op); err != nil {
+		return operability{}, err
+	}
+	return assessment.op, s.applyMigration(ctx, guard, assessment)
+}
+
+// applyMigration is runMigration's work on a workspace this binary may write.
+func (s *Store) applyMigration(ctx context.Context, guard *snapshotGuard, assessment migrationAssessment) error {
 	state := assessment.state
 	// A detected content mismatch is not a terminal refusal: it is the signal
 	// to self-heal. Unlike ensureQuarantineTable's detect-then-recreate
@@ -951,58 +971,6 @@ func (s *Store) recordQuarantine(ctx context.Context, version int64, name, error
 		return fmt.Errorf("record quarantine for v%d: %w", version, err)
 	}
 	return nil
-}
-
-// refuseIfBaselineMissing handles a workspace whose goose log records a version
-// above this binary's registry. goose tolerates ahead rows as a no-op, so the
-// only question that matters is whether the live schema still carries the
-// baseline shape this binary operates against: intact → proceed (the ahead log
-// is honest and is left untouched), missing → refuse with the gap named. This
-// path performs no write — an ahead log needs no reconciliation, and the binary
-// that wrote it owns the lossless reverse via `lit downgrade`.
-//
-// [LAW:types-are-the-program] The discriminator is verifyBaselineShape, the
-// same predicate phaseAdopt uses to decide "is this workspace really at
-// baseline." Operability is a fact about the live schema, not about version
-// arithmetic — so the function reads the schema and reacts; it never mutates
-// bookkeeping to make the numbers agree.
-//
-// [LAW:no-silent-failure] A binary that cannot find its baseline shape
-// refuses loudly with the missing tables/columns named, rather than operating
-// against a schema it does not understand.
-// [LAW:dataflow-not-control-flow] The verify result (present count and missing
-// list) is the data that drives proceed-vs-refuse; no flag, no mutation.
-func (s *Store) refuseIfBaselineMissing(ctx context.Context, state migrationState) error {
-	missing, carried, err := s.baselineCarried(ctx)
-	if err != nil {
-		return err
-	}
-	if !carried {
-		search := s.searchRollbackSnapshot(ctx, state.support.Max)
-		return &UnsupportedSchemaVersionError{
-			WorkspaceVersion:    state.appliedVersion,
-			MaxSupported:        state.support.Max,
-			MissingBaseline:     missing,
-			SnapshotName:        search.snapshot,
-			SnapshotLookupErr:   search.err,
-			SnapshotsExamined:   search.examined,
-			SnapshotsUnreadable: search.unreadable,
-		}
-	}
-	return nil
-}
-
-// baselineCarried reports whether the live schema carries the baseline shape
-// this binary operates against, naming what is missing when it does not —
-// what lets this binary operate a workspace whose goose log is ahead of its
-// registry. [LAW:single-enforcer] the refusal and the rollback search
-// (snapshotOperable) apply this one rule.
-func (s *Store) baselineCarried(ctx context.Context) (missing []string, carried bool, err error) {
-	present, missing, err := s.verifyBaselineShape(ctx)
-	if err != nil {
-		return nil, false, err
-	}
-	return missing, present > 0 && len(missing) == 0, nil
 }
 
 // classifyMigrationState derives the workspace phase using only reads,

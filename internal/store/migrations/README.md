@@ -53,6 +53,38 @@ ALTER TABLE issues DROP COLUMN priority_band;
 -- +goose StatementEnd
 ```
 
+## A migration that changes a write rule
+
+A migration can change what may be written: v7 put every ticket inside a
+container, and a lit older than v7 still creates tickets with no parent in a
+store v7 migrated. Such a migration declares itself the store's **minimum
+writer schema**. A lit whose registry stops below that version refuses to
+write to the store, naming `lit upgrade`; it still reads the store
+(`operability`, `internal/store/schema_operability.go`).
+
+The Up section records the migration's own version:
+
+```sql
+-- +goose StatementBegin
+INSERT INTO meta (meta_key, meta_value) VALUES ('min_writer_schema', '12')
+ON DUPLICATE KEY UPDATE meta_value = '12';
+-- +goose StatementEnd
+```
+
+The Down section restores the version the previous declaring migration
+recorded, or, when no earlier migration declared one, deletes the row:
+
+```sql
+-- +goose StatementBegin
+DELETE FROM meta WHERE meta_key = 'min_writer_schema';
+-- +goose StatementEnd
+```
+
+Only a lit that reads the row is held to it. A lit built before the row
+existed writes regardless, whatever its registry: every release through
+v0.20.1 (schema 9), and builds of the schema 10 and 11 registries made before
+it.
+
 ## Released migrations are content-frozen
 
 goose keys migrations by version **number**, not by content: a workspace that has

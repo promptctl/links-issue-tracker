@@ -358,7 +358,7 @@ func TestUnsupportedSchemaVersionMessageShape(t *testing.T) {
 	const wantBare = upgradeHead + ")" +
 		"\n\nto operate this workspace, install a lit that supports schema version 7:\n  lit upgrade" +
 		"\n\n(this is the supported path — `lit upgrade` runs even from this too-old binary, installs the latest release, and refuses a release that cannot operate this workspace.)" +
-		"\n\nno migration snapshot holds this workspace's data at schema version 3 or below; lossy rollback is not possible from this workspace."
+		"\n\nno migration snapshot holds this workspace's data in a shape this binary writes; lossy rollback is not possible from this workspace."
 	if bare != wantBare {
 		t.Fatalf("bare Error() = %q, want %q", bare, wantBare)
 	}
@@ -437,7 +437,7 @@ func TestUnsupportedSchemaVersionMessageShape(t *testing.T) {
 }
 
 // TestRefusalSurfacesRecoveryDataFromWorkspace pins the runtime wiring of the
-// remediation hints: when a refusal fires, refuseIfBaselineMissing finds the
+// remediation hints: when a refusal fires, schemaAheadRefusal finds the
 // migration-recovery snapshot holding the workspace's data and surfaces it
 // verbatim. Without this end-to-end probe the unit test for Error() rendering
 // passes while the lookup layer that populates the fields could regress

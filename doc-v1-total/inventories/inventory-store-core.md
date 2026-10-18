@@ -1692,9 +1692,10 @@ failure: `"verify post-reconcile baseline shape: %w"`
 wrapped `"reconcile pre-goose workspace: %w"`
 (`internal/store/migration_runner.go`).
 
-`refuseIfBaselineMissing` (`internal/store/migration_runner.go`) uses
+`operability` (`internal/store/schema_operability.go`) uses
 the same shape check when the goose log records a version above the registry
-max, returning `UnsupportedSchemaVersionError` carrying `MissingBaseline`.
+max; `schemaAheadRefusal` returns `UnsupportedSchemaVersionError` carrying
+`MissingBaseline`.
 
 ### 5.12 Tables deliberately excluded from reconcile
 

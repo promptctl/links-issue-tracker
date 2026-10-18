@@ -1205,6 +1205,7 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/inventories/inventory-store-sync.md", Text: "SELECT id, created_at FROM issues AS OF '%s'", Src: "SELECT id, created_at FROM issues AS OF '%s'"},
 	{Doc: "doc-v1-total/inventories/inventory-store-sync.md", Text: "SELECT id, issue_id FROM issue_events AS OF", Src: "SELECT id, issue_id FROM issue_events AS OF '%s'"},
 	{Doc: "doc-v1-total/inventories/inventory-store-sync.md", Text: "SELECT issue_id, issue_created_at, purged_at, purged_by FROM purges AS OF '%s'", Src: "SELECT issue_id, issue_created_at, purged_at, purged_by FROM purges AS OF '%s'"},
+	{Doc: "doc-v1-total/inventories/inventory-store-sync.md", Text: "SELECT meta_value FROM meta WHERE meta_key = ?", Src: "SELECT meta_value FROM meta WHERE meta_key = ?"},
 	{Doc: "doc-v1-total/inventories/inventory-store-sync.md", Text: "SELECT name FROM dolt_branches WHERE name LIKE ?", Src: "SELECT name FROM dolt_branches WHERE name LIKE ?"},
 	{Doc: "doc-v1-total/inventories/inventory-store-sync.md", Text: "SELECT name, hash FROM dolt_branches", Src: "SELECT name, hash FROM dolt_branches"},
 	{Doc: "doc-v1-total/inventories/inventory-store-sync.md", Text: "SELECT name, hash FROM dolt_branches WHERE name LIKE ? ORDER BY name", Src: "SELECT name, hash FROM dolt_branches WHERE name LIKE ? ORDER BY name"},

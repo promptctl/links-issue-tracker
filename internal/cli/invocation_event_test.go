@@ -396,7 +396,8 @@ func TestAPanickingInvocationEndsAsAPanic(t *testing.T) {
 // and one reason whichever boundary refused: the workspace on open, or the
 // remote on a sync write, which reaches the sink as the sync-failure block. The
 // facts say which: the workspace refusal records its rollback offer, the remote
-// one the remote and both schema versions, and neither records the other's.
+// one the remote it refused, and neither records the other's; both record the
+// schema versions they compared.
 func TestASchemaAheadRefusalEndsTheEventAsSchemaAheadAtEitherBoundary(t *testing.T) {
 	for _, tc := range []struct {
 		name      string

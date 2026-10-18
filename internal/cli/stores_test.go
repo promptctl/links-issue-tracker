@@ -244,14 +244,16 @@ func TestPrintCrossProjectRollupCloseWarningKeepsCounts(t *testing.T) {
 // A store whose open migrated it and then could not roll old migration
 // snapshots off gets a `~` note, whether its read went on to succeed or fail:
 // the migration committed before the read, and the count on the event says
-// how many stores it happened to.
+// how many stores it happened to. The event also counts the stores newer than
+// this lit, and those of them it may read but not write.
 func TestPrintCrossProjectRollupNotesAFailedSnapshotPrune(t *testing.T) {
 	t.Parallel()
 	rows := []projectRollup{
 		{Label: "alpha", StorageDir: "/repos/alpha/.git/links", Ready: 3, Migrated: storage.Migrated{Snapshot: "a-pre-migrate-1", PruneErr: errors.New("prune migration snapshots: stuck")}},
 		{Label: "beta", StorageDir: "/repos/beta/.git/links", Err: errors.New("unreadable"), Migrated: storage.Migrated{Snapshot: "b-pre-migrate-1", PruneErr: errors.New("prune migration snapshots: stuck")}},
 		{Label: "gamma", StorageDir: "/repos/gamma/.git/links", Ready: 1, Migrated: storage.Migrated{Snapshot: "g-pre-migrate-1"}},
-		{Label: "delta", StorageDir: "/repos/delta/.git/links", Ready: 2},
+		{Label: "delta", StorageDir: "/repos/delta/.git/links", Ready: 2, Migrated: storage.Migrated{SchemaAhead: storage.SchemaAhead{WorkspaceSchema: 12}}},
+		{Label: "epsilon", StorageDir: "/repos/epsilon/.git/links", Ready: 2, Migrated: storage.Migrated{SchemaAhead: storage.SchemaAhead{WorkspaceSchema: 12, MinWriterSchema: 12, ReadOnly: true}}},
 	}
 	var out bytes.Buffer
 	if err := printCrossProjectRollup(&out, rows); err != nil {
@@ -269,7 +271,7 @@ func TestPrintCrossProjectRollupNotesAFailedSnapshotPrune(t *testing.T) {
 			t.Errorf("output %q notes %s, whose open did not fail a prune", got, dir)
 		}
 	}
-	want := map[string]int{"stores.migrated": 3, "stores.snapshot_prune_failures": 2}
+	want := map[string]int{"stores.migrated": 3, "stores.snapshot_prune_failures": 2, "stores.schema_ahead": 2, "stores.read_only": 1}
 	if got := rollupMigrationCounts(rows); !reflect.DeepEqual(got, want) {
 		t.Errorf("rollupMigrationCounts() = %v, want %v", got, want)
 	}
