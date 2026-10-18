@@ -19,18 +19,20 @@ import (
 	"github.com/dolthub/dolt/go/store/types"
 )
 
-// FetchedHeadRecord is what LandFetchedHead did to the live store's tracking
-// ref. [LAW:types-are-the-program] all three are successes, and a caller
-// tracing the receive must tell them apart.
+// FetchedHeadRecord is what LandFetchedHead did to one of the live store's
+// refs: the tracking ref, or its fork point. [LAW:types-are-the-program] all
+// three are successes, and a caller tracing the receive must tell them apart.
 type FetchedHeadRecord int
 
 const (
-	// FetchedHeadMoved: the ref now names the head the clone fetched.
+	// FetchedHeadMoved: the ref now names the clone's head for it.
 	FetchedHeadMoved FetchedHeadRecord = iota + 1
-	// FetchedHeadUnchanged: the ref already named the fetched head.
+	// FetchedHeadUnchanged: the ref already named the clone's head for it.
 	FetchedHeadUnchanged
-	// FetchedHeadAbsent: the clone's fetch found no such branch on the remote,
-	// so there was nothing to land and the live ref was not touched.
+	// FetchedHeadAbsent: the clone held no such ref — for the tracking ref,
+	// its fetch found no such branch on the remote; for the fork point, it
+	// recorded none — so there was nothing to land and the live ref was not
+	// touched.
 	FetchedHeadAbsent
 )
 

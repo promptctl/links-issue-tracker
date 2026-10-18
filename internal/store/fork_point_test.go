@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
@@ -34,12 +35,22 @@ const (
 
 func newForkBelowTheCut(t *testing.T, ctx context.Context) forkBelowTheCut {
 	t.Helper()
+	return newForkBelowTheCutAfter(t, ctx, func(f forkBelowTheCut) {
+		updateLocal(t, ctx, f.delta, f.ticket, storage.UpdateIssueInput{Title: strptr(deltaTitle)})
+	})
+}
+
+// newForkBelowTheCutAfter is newForkBelowTheCut with deltaWrites in place of
+// delta's title edit: what delta does between adopting the remote and alpha's
+// re-root.
+func newForkBelowTheCutAfter(t *testing.T, ctx context.Context, deltaWrites func(forkBelowTheCut)) forkBelowTheCut {
+	t.Helper()
 	f := forkBelowTheCut{alpha: migratedDoltDir(t), delta: migratedDoltDir(t), remoteURL: "file://" + filepath.Join(t.TempDir(), "remote")}
 	f.epic = seedReconcileRemote(t, ctx, f.alpha, f.remoteURL)
 	f.ticket = createAndPush(t, ctx, f.alpha, f.epic, "x")
 	adoptRemote(t, ctx, f.delta, f.remoteURL)
 	f.adopted = headAt(t, ctx, f.delta)
-	updateLocal(t, ctx, f.delta, f.ticket, storage.UpdateIssueInput{Title: strptr(deltaTitle)})
+	deltaWrites(f)
 
 	for _, title := range []string{"past-1", "past-2", "past-3"} {
 		createAndPush(t, ctx, f.alpha, f.epic, title)
@@ -152,6 +163,15 @@ func TestAForkPointOutlivesTheFetchThatJumpedPastIt(t *testing.T) {
 
 	delta := openSyncOrFatal(t, ctx, f.delta)
 	defer func() { _ = delta.Close() }()
+	// Ahead is delta's one edit since the fork point, not the history below it
+	// that the remote's cut dropped.
+	fresh, err := delta.SyncFreshness(ctx, "origin", "master")
+	if err != nil {
+		t.Fatalf("SyncFreshness(delta) error = %v", err)
+	}
+	if fresh.Ahead != 1 || fresh.State() != storage.SyncDiverged || fresh.Base.Source != storage.ReconcileBaseForkPoint {
+		t.Fatalf("freshness = ahead %d, %q, base %q; want ahead 1, %q, base %q", fresh.Ahead, fresh.State(), fresh.Base.Source, storage.SyncDiverged, storage.ReconcileBaseForkPoint)
+	}
 	pulled, err := delta.SyncPull(ctx, "origin", "master")
 	if err != nil {
 		t.Fatalf("SyncPull(delta) error = %v", err)
@@ -214,12 +234,163 @@ func TestARemoteThatDropsTheForkPointsTicketsStaysUnrelated(t *testing.T) {
 	if pulled.State != storage.SyncPullUnrelated {
 		t.Fatalf("pull state = %q, want %q", pulled.State, storage.SyncPullUnrelated)
 	}
-	want := storage.ReconcileBase{Source: storage.ReconcileBaseNone, ForkPoint: adopted, UnaccountedTickets: 2}
+	want := storage.ReconcileBase{Source: storage.ReconcileBaseNone, ForkPoint: adopted, UnaccountedTickets: 2, UnaccountedEvents: eventsAt(t, ctx, d, adopted)}
 	if bases := d.ReconcileBases(); len(bases) != 1 || bases[0] != want {
-		t.Fatalf("ReconcileBases() = %+v, want %+v: the epic and the ticket at the fork point, neither on the remote", bases, want)
+		t.Fatalf("ReconcileBases() = %+v, want %+v: the epic, the ticket and every event at the fork point, none on the remote", bases, want)
 	}
 	if issue := getIssueOrFatal(t, ctx, d, ticket); issue.Title != deltaTitle {
 		t.Fatalf("delta's ticket title = %q after the refused pull, want its own %q", issue.Title, deltaTitle)
+	}
+}
+
+// TestARemoteMissingAnEditAtTheForkPointStaysUnrelated force-pushes a
+// re-rooted history built by a checkout that never fetched the head delta
+// adopted. Every ticket is still on the remote, but the title edit at the
+// fork point is not, and a merge against the fork point would read that as
+// the remote reverting it. So the pull reports unrelated histories and
+// delta keeps the edit.
+func TestARemoteMissingAnEditAtTheForkPointStaysUnrelated(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	remoteURL := "file://" + filepath.Join(t.TempDir(), "remote")
+	alpha, bravo, delta := migratedDoltDir(t), migratedDoltDir(t), migratedDoltDir(t)
+	epic := seedReconcileRemote(t, ctx, alpha, remoteURL)
+	ticket := createAndPush(t, ctx, alpha, epic, "x")
+	adoptRemote(t, ctx, bravo, remoteURL)
+	const bravoTitle = "bravo-title"
+	updateAndPush(t, ctx, bravo, ticket, storage.UpdateIssueInput{Title: strptr(bravoTitle)})
+	adoptRemote(t, ctx, delta, remoteURL)
+	adopted := headAt(t, ctx, delta)
+	updateLocal(t, ctx, delta, ticket, storage.UpdateIssueInput{Description: strptr("delta-description")})
+
+	updateLocal(t, ctx, alpha, ticket, storage.UpdateIssueInput{Description: strptr("alpha-description")})
+	if _, err := ReRoot(ctx, alpha, "master", headAt(t, ctx, alpha)); err != nil {
+		t.Fatalf("ReRoot(alpha) error = %v", err)
+	}
+	sync := openSyncOrFatal(t, ctx, alpha)
+	if _, err := sync.SyncPush(ctx, "origin", "master", false, true); err != nil {
+		t.Fatalf("force push of alpha's re-rooted history error = %v", err)
+	}
+	if err := sync.Close(); err != nil {
+		t.Fatalf("Close(alpha force push) error = %v", err)
+	}
+
+	d := openSyncOrFatal(t, ctx, delta)
+	defer func() { _ = d.Close() }()
+	pulled, err := d.SyncPull(ctx, "origin", "master")
+	if err != nil {
+		t.Fatalf("SyncPull(delta) error = %v", err)
+	}
+	if pulled.State != storage.SyncPullUnrelated {
+		t.Fatalf("pull state = %q, want %q", pulled.State, storage.SyncPullUnrelated)
+	}
+	want := storage.ReconcileBase{Source: storage.ReconcileBaseNone, ForkPoint: adopted, UnaccountedEvents: 1}
+	if bases := d.ReconcileBases(); len(bases) != 1 || bases[0] != want {
+		t.Fatalf("ReconcileBases() = %+v, want %+v: bravo's edit is the one row at the fork point the remote lacks", bases, want)
+	}
+	if issue := getIssueOrFatal(t, ctx, d, ticket); issue.Title != bravoTitle {
+		t.Fatalf("delta's ticket title = %q after the refused pull, want bravo's %q", issue.Title, bravoTitle)
+	}
+}
+
+// TestAQuietForkBelowTheCutLandsOnTheRemoteHead is a checkout with nothing
+// of its own past its fork point. It is not behind, because no fast-forward
+// joins histories that share no commit; it is a divergence with nothing to
+// replay, and the reconcile lands the remote head and its marker.
+func TestAQuietForkBelowTheCutLandsOnTheRemoteHead(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := newForkBelowTheCutAfter(t, ctx, func(forkBelowTheCut) {})
+
+	delta := openSyncOrFatal(t, ctx, f.delta)
+	defer func() { _ = delta.Close() }()
+	if err := delta.SyncFetch(ctx, "origin", false); err != nil {
+		t.Fatalf("SyncFetch(delta) error = %v", err)
+	}
+	fresh, err := delta.SyncFreshness(ctx, "origin", "master")
+	if err != nil {
+		t.Fatalf("SyncFreshness(delta) error = %v", err)
+	}
+	if fresh.Ahead != 0 || fresh.Behind == 0 || fresh.State() != storage.SyncDiverged || fresh.OldestDivergedUnix == 0 {
+		t.Fatalf("freshness = ahead %d, behind %d, %q, oldest diverged %d; want ahead 0, behind > 0, %q, dated", fresh.Ahead, fresh.Behind, fresh.State(), fresh.OldestDivergedUnix, storage.SyncDiverged)
+	}
+	pulled, err := delta.SyncPull(ctx, "origin", "master")
+	if err != nil {
+		t.Fatalf("SyncPull(delta) error = %v", err)
+	}
+	if pulled.State != storage.SyncPullLinearized {
+		t.Fatalf("pull state = %q, want %q", pulled.State, storage.SyncPullLinearized)
+	}
+	if landed := commitsBetween(t, ctx, delta, f.remoteHead, headCommit(t, ctx, delta)); landed != 1 {
+		t.Fatalf("the reconcile put %d commits on the remote head, want its marker alone", landed)
+	}
+	if issue := getIssueOrFatal(t, ctx, delta, f.ticket); issue.Description != alphaPastCutDescribed {
+		t.Fatalf("ticket description = %q, want the remote's %q", issue.Description, alphaPastCutDescribed)
+	}
+}
+
+// TestAForkPointIsNoneWhenNothingWasShared fetches twice into a store whose
+// history shares no commit with the remote's: the second fetch has a tracking
+// ref to record and no history in common with it, and no fork point was ever
+// recorded, so the record says there is none rather than one kept.
+func TestAForkPointIsNoneWhenNothingWasShared(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	remoteURL := "file://" + filepath.Join(t.TempDir(), "remote")
+	seedReconcileRemote(t, ctx, migratedDoltDir(t), remoteURL)
+	other := openSyncOrFatal(t, ctx, unrelatedDoltDir(t))
+	defer func() { _ = other.Close() }()
+	if err := other.SyncAddRemote(ctx, "origin", remoteURL); err != nil {
+		t.Fatalf("SyncAddRemote(other) error = %v", err)
+	}
+	for range 2 {
+		if err := other.SyncFetch(ctx, "origin", false); err != nil {
+			t.Fatalf("SyncFetch(other) error = %v", err)
+		}
+	}
+	tracked, err := commitHashOfRef(ctx, other.db, "remotes/origin/master")
+	if err != nil {
+		t.Fatalf("read the tracking ref: %v", err)
+	}
+	want := storage.ForkPointRecord{Remote: "origin", Branch: "master", Head: tracked, Outcome: storage.ForkPointNone}
+	if records := other.ForkPointRecords(); len(records) != 1 || records[0] != want {
+		t.Fatalf("ForkPointRecords() = %+v, want only the second fetch's %+v", records, want)
+	}
+}
+
+// TestRemovingARemoteDropsItsForkPoints records a fork point, removes the
+// remote, and finds the fork point deleted with the tracking ref it guarded,
+// so nothing holds its commit's chunks through GC.
+func TestRemovingARemoteDropsItsForkPoints(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	remoteURL := "file://" + filepath.Join(t.TempDir(), "remote")
+	seedReconcileRemote(t, ctx, migratedDoltDir(t), remoteURL)
+	delta := migratedDoltDir(t)
+	adoptRemote(t, ctx, delta, remoteURL)
+	adopted := headAt(t, ctx, delta)
+
+	st := openSyncOrFatal(t, ctx, delta)
+	defer func() { _ = st.Close() }()
+	if err := st.SyncFetch(ctx, "origin", false); err != nil {
+		t.Fatalf("SyncFetch(delta) error = %v", err)
+	}
+	if err := st.SyncRemoveRemote(ctx, "origin"); err != nil {
+		t.Fatalf("SyncRemoveRemote(delta) error = %v", err)
+	}
+	want := []storage.ForkPointRecord{
+		{Remote: "origin", Branch: "master", Head: adopted, Outcome: storage.ForkPointRecorded},
+		{Remote: "origin", Branch: "master", Head: adopted, Outcome: storage.ForkPointDropped},
+	}
+	if records := st.ForkPointRecords(); !slices.Equal(records, want) {
+		t.Fatalf("ForkPointRecords() = %+v, want %+v", records, want)
+	}
+	left, err := refHeadsUnder(ctx, st.db, `SELECT name, hash FROM dolt_branches`, forkPointPrefix)
+	if err != nil {
+		t.Fatalf("list fork points: %v", err)
+	}
+	if len(left) != 0 {
+		t.Fatalf("fork points after the remote's removal = %v, want none", left)
 	}
 }
 
@@ -304,6 +475,16 @@ func commitsBetween(t *testing.T, ctx context.Context, st *Store, base, head str
 	var n int
 	if err := st.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM dolt_log(?, ?)`, head, "^"+base).Scan(&n); err != nil {
 		t.Fatalf("count commits from %s to %s: %v", base, head, err)
+	}
+	return n
+}
+
+// eventsAt counts the ticket events at commit, read straight off the table.
+func eventsAt(t *testing.T, ctx context.Context, st *Store, commit string) int {
+	t.Helper()
+	var n int
+	if err := st.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM issue_events AS OF '`+commit+`'`).Scan(&n); err != nil {
+		t.Fatalf("count the events at %s: %v", commit, err)
 	}
 	return n
 }

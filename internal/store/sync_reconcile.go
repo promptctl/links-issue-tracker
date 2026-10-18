@@ -358,10 +358,7 @@ func (s *Store) captureReconcilePlan(ctx context.Context, remote, branch string)
 	if err != nil {
 		return reconcilePlan{}, err
 	}
-	plan.base, err = s.reconcileBase(ctx, remote, branch, plan.localHead, plan.remoteHead, trackingRef)
-	if err != nil {
-		return reconcilePlan{}, err
-	}
+	plan.base = fresh.Base
 	s.reconcileBases = append(s.reconcileBases, plan.base)
 	return plan, nil
 }

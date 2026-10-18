@@ -32,11 +32,14 @@ type ReconcileBase struct {
 	// history with the local head.
 	ForkPoint string
 	// UnaccountedTickets counts the tickets at the fork point's base that the
-	// remote head holds neither a row nor a purge record for. The merge reads
-	// such a ticket as one the remote removed, so a remote that holds any is
-	// not taken to continue the history the fork point names, and Source is
-	// none.
+	// remote head holds neither a row nor a purge record for, and
+	// UnaccountedEvents the base's ticket events the remote head lacks whose
+	// ticket no purge record names. The merge reads a missing ticket as one the
+	// remote removed and a missing event's edit as one the remote reverted, so
+	// a remote that lacks any is not taken to continue the history the fork
+	// point names, and Source is none.
 	UnaccountedTickets int
+	UnaccountedEvents  int
 }
 
 // Found is the base commit and whether there is one.
@@ -51,6 +54,7 @@ func (b ReconcileBase) EventValue() map[string]any {
 		"reconcile.base_commit":         b.Commit,
 		"reconcile.fork_point":          b.ForkPoint,
 		"reconcile.unaccounted_tickets": b.UnaccountedTickets,
+		"reconcile.unaccounted_events":  b.UnaccountedEvents,
 	}
 }
 
@@ -66,13 +70,21 @@ const (
 	// ForkPointKept: the local branch shares no history with the tracking
 	// ref's head, so the fork point keeps the head it last recorded.
 	ForkPointKept ForkPointOutcome = "kept"
+	// ForkPointNone: the local branch shares no history with the tracking
+	// ref's head and no fork point was ever recorded, so there is none.
+	ForkPointNone ForkPointOutcome = "none"
+	// ForkPointDropped: the fetch left no tracking ref for the fork point, so
+	// it was deleted with it; Head is the head it held.
+	ForkPointDropped ForkPointOutcome = "dropped"
 )
 
 // ForkPointRecord is one tracking ref a fetch was about to move, and what it
-// did to that ref's fork point first.
+// did to that ref's fork point first, or one fork point deleted because its
+// tracking ref is gone.
 type ForkPointRecord struct {
 	Remote, Branch string
-	// Head is the tracking ref's head before the fetch.
+	// Head is the tracking ref's head before the fetch, or the head a dropped
+	// fork point held.
 	Head    string
 	Outcome ForkPointOutcome
 }

@@ -53,14 +53,16 @@ func (s *Store) recordForkPoints(ctx context.Context, remote string) ([]storage.
 	if err != nil {
 		return nil, err
 	}
+	// The records written before a failure are returned with it: each one
+	// moved a branch that stands. [LAW:nothing-unseen]
 	records := make([]storage.ForkPointRecord, 0, len(tracked))
 	for _, branch := range slices.Sorted(maps.Keys(tracked)) {
 		head := tracked[branch]
 		record := storage.ForkPointRecord{Remote: remote, Branch: branch, Head: head, Outcome: storage.ForkPointUnchanged}
-		if recorded[branch] != head {
-			record.Outcome, err = s.recordForkPoint(ctx, local, forkPointBranch(remote, branch), head)
+		if held, ok := recorded[branch]; held != head {
+			record.Outcome, err = s.recordForkPoint(ctx, local, forkPointBranch(remote, branch), head, ok)
 			if err != nil {
-				return nil, err
+				return records, err
 			}
 		}
 		records = append(records, record)
@@ -69,19 +71,49 @@ func (s *Store) recordForkPoints(ctx context.Context, remote string) ([]storage.
 }
 
 // recordForkPoint sets the fork point to head when the local branch shares
-// history with head, and otherwise leaves it as it was.
-func (s *Store) recordForkPoint(ctx context.Context, local, forkPoint, head string) (storage.ForkPointOutcome, error) {
+// history with head, and otherwise leaves it as it was: kept when one was
+// recorded, none when none ever was.
+func (s *Store) recordForkPoint(ctx context.Context, local, forkPoint, head string, held bool) (storage.ForkPointOutcome, error) {
 	base, err := mergeBase(ctx, s.db, local, head)
 	if err != nil {
 		return "", err
 	}
 	if _, shared := base.shared(); !shared {
-		return storage.ForkPointKept, nil
+		if held {
+			return storage.ForkPointKept, nil
+		}
+		return storage.ForkPointNone, nil
 	}
 	if err := execProcedureDiscard(ctx, s.db, "DOLT_BRANCH", "-f", forkPoint, head); err != nil {
 		return "", fmt.Errorf("record fork point %s at %s: %w", forkPoint, head, err)
 	}
 	return storage.ForkPointRecorded, nil
+}
+
+// dropOrphanForkPoints deletes every fork point of remote whose tracking ref
+// is gone — pruned by a fetch, or removed with the remote — so no fork point
+// keeps its commit's chunks through GC once nothing can read it. A fork point
+// lives exactly as long as its tracking ref. [LAW:one-source-of-truth]
+func (s *Store) dropOrphanForkPoints(ctx context.Context, remote string) ([]storage.ForkPointRecord, error) {
+	tracked, err := refHeadsUnder(ctx, s.db, `SELECT name, hash FROM dolt_remote_branches`, "remotes/"+remote+"/")
+	if err != nil {
+		return nil, err
+	}
+	recorded, err := refHeadsUnder(ctx, s.db, `SELECT name, hash FROM dolt_branches`, forkPointBranch(remote, ""))
+	if err != nil {
+		return nil, err
+	}
+	var dropped []storage.ForkPointRecord
+	for _, branch := range slices.Sorted(maps.Keys(recorded)) {
+		if _, ok := tracked[branch]; ok {
+			continue
+		}
+		if err := execProcedureDiscard(ctx, s.db, "DOLT_BRANCH", "-D", forkPointBranch(remote, branch)); err != nil {
+			return dropped, fmt.Errorf("drop fork point %s: %w", forkPointBranch(remote, branch), err)
+		}
+		dropped = append(dropped, storage.ForkPointRecord{Remote: remote, Branch: branch, Head: recorded[branch], Outcome: storage.ForkPointDropped})
+	}
+	return dropped, nil
 }
 
 // refHeadsUnder runs query, which selects (name, hash) rows, and maps every
@@ -114,14 +146,16 @@ func refHeadsUnder(ctx context.Context, db *sql.DB, query, prefix string) (map[s
 // merge base of the local head and the fork point of remotes/<remote>/<branch>,
 // provided the remote head continues that history.
 //
-// The remote continues it when every ticket at the base is still on the
-// remote head or is named by a purge record. That is the one thing a merge
-// against a base the remote does not descend from gets destructively wrong:
-// it reads a base ticket the remote lacks as a ticket the remote removed, and
-// drops it. A re-root keeps every ticket, and so passes; a remote replaced by
-// a history that never held this checkout's tickets fails, and stays the
-// unrelated-histories divergence it is today. [LAW:parse-dont-validate] the
-// result's Source is the evidence, and a refusal says why in its counts.
+// The remote continues it when every ticket and every ticket event at the base
+// is still on the remote head, or belongs to a ticket a purge record names.
+// That is what a merge against a base the remote does not descend from gets
+// destructively wrong: it reads a base ticket the remote lacks as one the
+// remote removed, and a base edit the remote lacks as one the remote reverted.
+// Tickets and events are the rows only a purge removes, so a re-root keeps
+// every one and passes; a remote replaced by a history that never held this
+// checkout's tickets or edits fails, and stays the unrelated-histories
+// divergence it is today. [LAW:parse-dont-validate] the result's Source is the
+// evidence, and a refusal says why in its counts.
 func (s *Store) forkPointBase(ctx context.Context, remote, branch, localHead, remoteHead string) (storage.ReconcileBase, error) {
 	unrelated := storage.ReconcileBase{Source: storage.ReconcileBaseNone}
 	recorded, err := refHeadsUnder(ctx, s.db, `SELECT name, hash FROM dolt_branches`, forkPointBranch(remote, ""))
@@ -141,49 +175,65 @@ func (s *Store) forkPointBase(ctx context.Context, remote, branch, localHead, re
 	if !shared {
 		return unrelated, nil
 	}
-	unrelated.UnaccountedTickets, err = s.unaccountedTickets(ctx, commit, localHead, remoteHead)
-	if err != nil || unrelated.UnaccountedTickets > 0 {
+	unrelated.UnaccountedTickets, unrelated.UnaccountedEvents, err = s.unaccountedRows(ctx, commit, localHead, remoteHead)
+	if err != nil || unrelated.UnaccountedTickets+unrelated.UnaccountedEvents > 0 {
 		return unrelated, err
 	}
 	return storage.ReconcileBase{Source: storage.ReconcileBaseForkPoint, Commit: commit, ForkPoint: forkPoint}, nil
 }
 
-// unaccountedTickets counts the tickets at base that remoteHead holds no row
-// for — the same ticket: its id and its birth — and that no purge record on
-// any of the three commits names. Purges from all three, because the merge
-// applies the union of them to every side before it compares a row.
-func (s *Store) unaccountedTickets(ctx context.Context, base, localHead, remoteHead string) (int, error) {
+// unaccountedRows counts the tickets at base that remoteHead holds no row for
+// — the same ticket: its id and its birth — and the events at base that
+// remoteHead holds no row for, leaving out each one whose ticket a purge
+// record on any of the three commits names. Purges from all three, because
+// the merge applies the union of them to every side before it compares a row.
+func (s *Store) unaccountedRows(ctx context.Context, base, localHead, remoteHead string) (tickets, events int, err error) {
 	atBase, err := issuesAtCommit(ctx, s.db, base)
 	if err != nil {
-		return 0, fmt.Errorf("read the fork point's tickets: %w", err)
+		return 0, 0, fmt.Errorf("read the fork point's tickets: %w", err)
 	}
 	atRemote, err := issuesAtCommit(ctx, s.db, remoteHead)
 	if err != nil {
-		return 0, fmt.Errorf("read the remote's tickets: %w", err)
+		return 0, 0, fmt.Errorf("read the remote's tickets: %w", err)
+	}
+	eventsAtBase, err := eventTicketsAtCommit(ctx, s.db, base)
+	if err != nil {
+		return 0, 0, fmt.Errorf("read the fork point's ticket events: %w", err)
+	}
+	eventsAtRemote, err := eventTicketsAtCommit(ctx, s.db, remoteHead)
+	if err != nil {
+		return 0, 0, fmt.Errorf("read the remote's ticket events: %w", err)
 	}
 	var purges []model.Purge
 	for _, commit := range []string{base, localHead, remoteHead} {
 		held, err := purgesAtCommit(ctx, s.db, commit)
 		if err != nil {
-			return 0, fmt.Errorf("read the purge records at %s: %w", commit, err)
+			return 0, 0, fmt.Errorf("read the purge records at %s: %w", commit, err)
 		}
 		purges = append(purges, held...)
 	}
-	return countUnaccounted(atBase, atRemote, purges), nil
+	tickets, events = countUnaccounted(atBase, atRemote, eventsAtBase, eventsAtRemote, purges)
+	return tickets, events, nil
 }
 
-// countUnaccounted is unaccountedTickets' count over rows already read.
-func countUnaccounted(base, remote map[string]model.Issue, purges []model.Purge) int {
-	unaccounted := 0
+// countUnaccounted is unaccountedRows' count over rows already read. The
+// events are keyed by event id, each naming its ticket's id.
+func countUnaccounted(base, remote map[string]model.Issue, baseEvents, remoteEvents map[string]string, purges []model.Purge) (tickets, events int) {
+	purged := func(ticket model.Issue) bool {
+		return slices.ContainsFunc(purges, func(p model.Purge) bool { return p.Names(ticket) })
+	}
 	for id, ticket := range base {
 		onRemote, held := remote[id]
-		kept := held && onRemote.CreatedAt.Equal(ticket.CreatedAt)
-		purged := slices.ContainsFunc(purges, func(p model.Purge) bool { return p.Names(ticket) })
-		if !kept && !purged {
-			unaccounted++
+		if !(held && onRemote.CreatedAt.Equal(ticket.CreatedAt)) && !purged(ticket) {
+			tickets++
 		}
 	}
-	return unaccounted
+	for id, ticketID := range baseEvents {
+		if _, held := remoteEvents[id]; !held && !purged(base[ticketID]) {
+			events++
+		}
+	}
+	return tickets, events
 }
 
 // ForkPointRecords is what every fetch since the store opened did to each fork

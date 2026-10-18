@@ -92,6 +92,12 @@ type SyncFreshness struct {
 	// [LAW:effects-at-boundaries] [LAW:types-are-the-program] a stored age would
 	// let the value contradict "now"; a timestamp cannot.
 	OldestDivergedUnix int64 `json:"oldest_diverged_unix"`
+	// Base is the divergence's base as the reconcile reads it, and Ahead counts
+	// the local commits it would replay: none that the remote head or Base
+	// reaches. Under a fork-point base the two heads share no commit, so the
+	// local commits below the fork are the remote's history before its cut, not
+	// local work. [LAW:one-source-of-truth] Ahead is the folded chain's length.
+	Base ReconcileBase `json:"-"`
 }
 
 // State derives the classification from the raw observations. Keeping it a
@@ -106,7 +112,10 @@ func (f SyncFreshness) State() SyncFreshnessState {
 		return SyncUpToDate
 	case f.Behind == 0:
 		return SyncAhead
-	case f.Ahead == 0:
+	case f.Ahead == 0 && f.Base.Source != ReconcileBaseForkPoint:
+		// Behind is what a fast-forward settles. Heads that share no commit
+		// cannot fast-forward, so a fork-point base with nothing to replay is
+		// still a divergence for the reconcile to land.
 		return SyncBehind
 	default:
 		return SyncDiverged
