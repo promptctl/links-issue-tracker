@@ -647,6 +647,8 @@ func TestRunUpgradeOnAnOpenableWorkspacePastRunningSupportNamesNoDowngrade(t *te
 		"bootstrap":                      "none",
 		"migration.snapshot":             "",
 		"migration.snapshot_prune_error": nil,
+		"migration.schema_ahead":         float64(ahead),
+		"migration.min_writer_schema":    float64(0),
 	}
 	if !reflect.DeepEqual(facts, want) {
 		t.Errorf("facts = %v; want %v", facts, want)

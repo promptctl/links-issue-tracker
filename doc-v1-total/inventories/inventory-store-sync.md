@@ -843,7 +843,7 @@ Test hooks: `migrationUpByOneForTest` (`migration_runner.go`) applies **only** t
 `runMigration(ctx, guard)` (`migration_runner.go`), in exact order:
 
 1. `state = classifyMigrationState(ctx)`.
-2. **Ahead-of-registry check**: `state.appliedVersion > state.support.Max` → `return s.refuseIfBaselineMissing(ctx, state)`. **No bookkeeping mutation ever happens on this path** — trimming the goose log would destroy true information (`migration_runner.go`).
+2. **Ahead-of-registry check**: `op = s.operability(ctx, state.appliedVersion, state.support.Max)`; `!op.readable()` → `return s.schemaAheadRefusal(ctx, op)`; `op.ahead()` → return the assessment. `runMigration` then refuses `!op.writable()` with the same `schemaAheadRefusal` before any write; `OpenForRead` does not. **No bookkeeping mutation ever happens on this path** — trimming the goose log would destroy true information (`migration_runner.go`).
 3. **Version-content drift check** — `state.phase == phaseManaged` only, and run **independently of `willMutate`** (`migration_runner.go`):
    - `verifyAppliedVersionsMatchRegistry(ctx, state.appliedVersion)`.
    - A non-`*VersionContentMismatchError` error is returned as-is.
@@ -1000,11 +1000,11 @@ Tests: `TestOpenRepairsVersionSlotReuseContentMismatch` (`migration_runner_test.
 `tableColumns(ctx, table)` (`migration_runner.go`): `SELECT column_name FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ?`, lowercasing each name. An absent table yields an empty set.
 `tableExists(ctx, table)` (`migration_runner.go`): `SELECT 1 FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ? LIMIT 1`; `sql.ErrNoRows` → `false, nil`.
 
-`refuseIfBaselineMissing(ctx, state)` (`migration_runner.go`): `baselineCarried`; refuses when it is false, returning `&UnsupportedSchemaVersionError{WorkspaceVersion: state.appliedVersion, MaxSupported: state.support.Max, MissingBaseline: missing, SnapshotName, SnapshotLookupErr, SnapshotsExamined, SnapshotsUnreadable}` from `s.searchRollbackSnapshot(ctx, state.support.Max)`. **Performs no write.**
+`operability(ctx, workspaceSchema, maxSupported)` (`schema_operability.go`): at or below `maxSupported` → `operability{}` with nothing read; otherwise `verifyBaselineShape` sets `missingBaseline`, and with it empty, `minWriterSchema` reads `SELECT meta_value FROM meta WHERE meta_key = ?` (`min_writer_schema`): no row → 0; a value `strconv.ParseInt` rejects → `"meta %s = %q is not a schema version: %w"`. `readable()` is `len(missingBaseline) == 0`; `writable()` is `readable() && minWriterSchema <= maxSupported`.
 
-`baselineCarried(ctx)` (`migration_runner.go`): `verifyBaselineShape`; returns `missing` and `present > 0 && len(missing) == 0`.
+`schemaAheadRefusal(ctx, op)` (`schema_operability.go`): `&UnsupportedSchemaVersionError{WorkspaceVersion, MaxSupported, MissingBaseline, MinWriterSchema, SnapshotName, SnapshotLookupErr, SnapshotsExamined, SnapshotsUnreadable}` from `s.searchRollbackSnapshot(ctx, op.maxSupported)`. **Performs no write.**
 
-Tests: `TestOpenToleratesAheadOfRegistryWhenBaselineIntact` (`migration_runner_test.go`), `TestOpenToleratesGooseLogWithOnlyAheadRow`, `TestOpenRefusesAheadOfRegistryWhenBaselineCorrupt`, `TestOpenAllowsWorkspaceExactlyAtMax`, `TestOpenToleratesHealthyManagedWorkspace`.
+Tests: `TestOpenToleratesAheadOfRegistryWhenBaselineIntact` (`migration_runner_test.go`), `TestOpenToleratesGooseLogWithOnlyAheadRow`, `TestOpenRefusesAheadOfRegistryWhenBaselineCorrupt`, `TestOpenAllowsWorkspaceExactlyAtMax`, `TestOpenToleratesHealthyManagedWorkspace`, `TestWriteOpenRefusesAWorkspaceWhoseWriteRulesItPredates` (`schema_operability_test.go`), `TestWriteOpenWritesAWorkspaceAheadWhoseWriteRulesItKeeps`, `TestOpenRefusesAMinWriterSchemaThatIsNotAVersion`.
 
 ### 8.11 Adoption
 
@@ -1020,7 +1020,7 @@ Tests: `TestPreGooseAdoptionStampsWithoutRerunningBaseline` (`migration_runner_t
 
 `searchRollbackSnapshot(ctx, maxSupported)` (`migrate_snapshot.go`) returns a `rollbackSearch{snapshot string; examined, unreadable int; err error}`. `dbsnapshot.List(s.doltRootDir)`; a listing error → `err: "list snapshots: %w"`. For each entry passing `IsMigrationSnapshotName`, newest first: `snapshotOperable`; then a canceled `ctx` → `"stopped looking for a rollback snapshot: %w"` ends the search, counting nothing for that entry; otherwise `examined++`, and an error → `unreadable++`, `"read the schema snapshot %s holds: %w"` kept, the entry passed over; the first operable entry is the `snapshot`. The kept errors are joined into `err`.
 
-`snapshotOperable(ctx, snapshotPath, workspaceID, maxSupported)` (`migrate_snapshot.go`): `openStoreConnection(ctx, snapshotPath, workspaceID, engineRead)` on the snapshot in place, then `classifyMigrationState`: `phaseFresh` → false; `appliedVersion <= maxSupported` → true; otherwise `baselineCarried`. The store is closed and a close error joined. Dolt rewrites the snapshot's journal bookkeeping (`journal.idx`, `manifest`, the journal file) on that open; the data it holds is unchanged.
+`snapshotOperable(ctx, snapshotPath, workspaceID, maxSupported)` (`migrate_snapshot.go`): `openStoreConnection(ctx, snapshotPath, workspaceID, engineRead)` on the snapshot in place, then `classifyMigrationState`: `phaseFresh` → false; otherwise `operability(ctx, appliedVersion, maxSupported).writable()`. The store is closed and a close error joined. Dolt rewrites the snapshot's journal bookkeeping (`journal.idx`, `manifest`, the journal file) on that open; the data it holds is unchanged.
 
 ### 8.13 Migration error types
 
@@ -1029,13 +1029,14 @@ Tests: `TestPreGooseAdoptionStampsWithoutRerunningBaseline` (`migration_runner_t
 `QuarantineBlockError{Version, Name, ErrorText}` (`migration_runner.go`). `Error()` (`migration_runner.go`):
 `"migration v%d %q is quarantined after a previous failure:\n  %s\n\nto recover, either:\n  (a) restore from a dbsnapshot: lit snapshots restore <name>\n  (b) clear the quarantine row (if transient): DELETE FROM migration_quarantine WHERE version = %d"`.
 
-`UnsupportedSchemaVersionError{WorkspaceVersion, MaxSupported int64; MissingBaseline []string; SnapshotName string; SnapshotLookupErr error; SnapshotsExamined, SnapshotsUnreadable int}` (`migration_runner.go`). `Error()` (`migration_runner.go`) composes:
+`UnsupportedSchemaVersionError{WorkspaceVersion, MaxSupported int64; MissingBaseline []string; MinWriterSchema int64; SnapshotName string; SnapshotLookupErr error; SnapshotsExamined, SnapshotsUnreadable int}` (`migration_runner.go`). `Error()` (`migration_runner.go`) composes:
 1. `"please upgrade lit (your workspace is at schema version %d; this binary supports up to %d"`.
 2. If `len(MissingBaseline) > 0`: `"; the live schema is also missing baseline shape: %s"` (comma-joined).
-3. `")"`.
-4. Always: `"\n\nto operate this workspace, install a lit that supports schema version %d:\n  lit upgrade\n\n(this is the supported path — `lit upgrade` runs even from this too-old binary, installs the latest release, and refuses a release that cannot operate this workspace.)"` (`WorkspaceVersion`).
-5. If `SnapshotName != ""` → `"\n\nif you are stuck and need to roll back this workspace to match this binary:\n  lit snapshots restore %s\n\nthis is a LOSSY recovery — any data written under the newer binary will be discarded."`; else if `SnapshotLookupErr == nil` → `"\n\nno migration snapshot holds this workspace's data at schema version %d or below; lossy rollback is not possible from this workspace."` (`MaxSupported`).
-6. If `SnapshotLookupErr != nil`, after either: `"\n\nsome snapshots could not be read while looking for one to roll this workspace back to: %v"`.
+3. If `MinWriterSchema > MaxSupported`: `"; schema version %d changed a write rule this binary predates, so it reads this workspace but does not write to it"` (`MinWriterSchema`).
+4. `")"`.
+5. Always: `"\n\nto operate this workspace, install a lit that supports schema version %d:\n  lit upgrade\n\n(this is the supported path — `lit upgrade` runs even from this too-old binary, installs the latest release, and refuses a release that cannot operate this workspace.)"` (`WorkspaceVersion`).
+6. If `SnapshotName != ""` → `"\n\nif you are stuck and need to roll back this workspace to match this binary:\n  lit snapshots restore %s\n\nthis is a LOSSY recovery — any data written under the newer binary will be discarded."`; else if `SnapshotLookupErr == nil` → `"\n\nno migration snapshot holds this workspace's data at schema version %d or below; lossy rollback is not possible from this workspace."` (`MaxSupported`).
+7. If `SnapshotLookupErr != nil`, after either: `"\n\nsome snapshots could not be read while looking for one to roll this workspace back to: %v"`.
 Tests: `TestUnsupportedSchemaVersionMessageShape` (`migration_runner_test.go`), `TestRefusalSurfacesRecoveryDataFromWorkspace`, `TestRefusalReportsUnreadableSnapshots`.
 
 ### 8.14 The transient schema lift

@@ -173,7 +173,7 @@ func formatMigrationSnapshotLabel(t time.Time) string {
 
 // rollbackSearch is what the refusal's search for a lossy rollback found.
 type rollbackSearch struct {
-	// snapshot is the newest migration snapshot this lit operates, or "".
+	// snapshot is the newest migration snapshot this lit writes, or "".
 	snapshot string
 	// examined counts the migration snapshots the search read to an answer or
 	// failed to read; unreadable counts the failures.
@@ -184,7 +184,7 @@ type rollbackSearch struct {
 }
 
 // searchRollbackSnapshot finds the newest migration snapshot holding a
-// workspace a lit whose registry tops out at maxSupported operates
+// workspace a lit whose registry tops out at maxSupported writes
 // (snapshotOperable). A snapshot that cannot be read is passed over and counted,
 // and why is kept: whether it was a closer rollback than the one offered is
 // unknown. [LAW:no-silent-failure] A canceled ctx ends the search; it is not a
@@ -225,11 +225,9 @@ func (s *Store) searchRollbackSnapshot(ctx context.Context, maxSupported int64) 
 }
 
 // snapshotOperable reports whether a lit whose registry tops out at
-// maxSupported operates the workspace a snapshot holds, by the rule its open
-// applies: a schema at or below maxSupported, or one ahead of it whose live
-// schema still carries the baseline (baselineCarried, which the refusal uses).
-// The empty workspace the fresh-open snapshot captured holds no data, so it is
-// never a rollback.
+// maxSupported writes the workspace a snapshot holds, by the rule its write
+// open applies (operability). The empty workspace the fresh-open snapshot
+// captured holds no data, so it is never a rollback.
 //
 // The snapshot is read in place by a read engine. Dolt rewrites its journal
 // bookkeeping when an engine opens a store, here as on the first open after
@@ -246,15 +244,11 @@ func snapshotOperable(ctx context.Context, snapshotPath, workspaceID string, max
 	if err != nil {
 		return false, err
 	}
-	switch {
-	case state.phase == phaseFresh:
+	if state.phase == phaseFresh {
 		return false, nil
-	case state.appliedVersion <= maxSupported:
-		return true, nil
-	default:
-		_, carried, err := snap.baselineCarried(ctx)
-		return carried, err
 	}
+	op, err := snap.operability(ctx, state.appliedVersion, maxSupported)
+	return op.writable(), err
 }
 
 // asMigrationRollbackError unwraps err to find a *MigrationRollbackError if

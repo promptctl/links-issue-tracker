@@ -437,7 +437,7 @@ func TestUnsupportedSchemaVersionMessageShape(t *testing.T) {
 }
 
 // TestRefusalSurfacesRecoveryDataFromWorkspace pins the runtime wiring of the
-// remediation hints: when a refusal fires, refuseIfBaselineMissing finds the
+// remediation hints: when a refusal fires, schemaAheadRefusal finds the
 // migration-recovery snapshot holding the workspace's data and surfaces it
 // verbatim. Without this end-to-end probe the unit test for Error() rendering
 // passes while the lookup layer that populates the fields could regress

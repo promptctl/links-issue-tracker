@@ -172,6 +172,8 @@ one `--at` names, not the working directory's.
 | `bootstrap` | `built` when the open found no database and built it; `built_over_dead_build` when it built it after removing what a lit process that died while building left behind; `none` when the database was already there, and for opens that only read. |
 | `migration.snapshot` | The recovery snapshot the open took before migrating, or `""` when there was nothing to migrate. |
 | `migration.snapshot_prune_error` | Why older migration snapshots could not be removed after the migration, or `null`. The command runs all the same, and prints a `warning: old migration snapshots were not removed:` line on stderr. A command whose open fails after migrating records neither key, and its error includes the failure. |
+| `migration.schema_ahead` | The workspace's schema version when it is newer than this lit supports and the open served it anyway, or `0` when it is not newer. |
+| `migration.min_writer_schema` | The oldest schema version a lit must support to write that newer workspace, as a migration this lit lacks recorded it, or `0` when none did or the workspace is not newer. A read open serves a workspace whose minimum is above this lit; a write open refuses it. |
 
 `lit stores --counts` opens every store it finds, so it records counts
 instead.
@@ -187,12 +189,16 @@ A command ends with reason `workspace_schema_ahead` when a schema it was asked
 to operate on is ahead of this lit: the workspace's, or the sync remote's. Which
 keys it records says which.
 
-A command refused because the workspace's schema is ahead records which snapshot
-the refusal offered as a lossy rollback, and how many migration snapshots it read
-to decide. Every key is present exactly when the command ended in that refusal.
+A command refused because the workspace's schema is ahead records both schema
+versions, the minimum writer schema, which snapshot the refusal offered as a
+lossy rollback, and how many migration snapshots it read to decide. Every key is
+present exactly when the command ended in that refusal.
 
 | Key | Meaning |
 | --- | --- |
+| `schema_ahead.workspace_schema` | The workspace's schema version. |
+| `schema_ahead.running_schema_max` | The highest schema version this lit supports. |
+| `schema_ahead.min_writer_schema` | The oldest schema version a lit must support to write the workspace. Above `running_schema_max`, it is why a write was refused: a migration this lit lacks changed a write rule. `0` when none was recorded, or when the refusal is that the workspace lacks the shape this lit reads. |
 | `schema_ahead.rollback_snapshot` | The migration snapshot the refusal offered to `lit snapshots restore`, or `""` when it found none holding data this lit opens. |
 | `schema_ahead.rollback_lookup_error` | Why snapshots could not be listed or read, or why the search stopped, or `null`. Set beside an offered snapshot when a newer one could not be read. |
 | `counts.schema_ahead.snapshots_examined` | The migration snapshots the refusal read, newest first, until it found one to offer. |

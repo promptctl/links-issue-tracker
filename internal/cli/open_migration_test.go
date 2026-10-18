@@ -177,3 +177,58 @@ func workspaceWhosePruneWillFail(t *testing.T) (repo string, ws workspace.Info, 
 	t.Cleanup(func() { _ = os.Chmod(stuck, 0o755) })
 	return repo, ws, stuck
 }
+
+// A workspace a newer lit migrated, whose migration changed a write rule this
+// lit predates, refuses this lit's writes as a schema-ahead workspace and
+// serves its reads, and each command's event says what its open met.
+func TestAWorkspaceWhoseWriteRulesThisLitPredatesServesReadsOnly(t *testing.T) {
+	isolateEvents(t)
+	repo, ws := initBootstrapTestRepo(t)
+	current, err := version.Get()
+	if err != nil {
+		t.Fatalf("version.Get() error = %v", err)
+	}
+	ahead := current.Schema.Max + 1
+	ctx := context.Background()
+	st, err := engine.Open(ctx, engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)
+	if err != nil {
+		t.Fatalf("engine.Open() error = %v", err)
+	}
+	raw, err := storage.TestSupport.Of(st)
+	if err != nil {
+		t.Fatalf("test support: %v", err)
+	}
+	for _, stmt := range []string{
+		fmt.Sprintf("INSERT INTO goose_db_version (version_id, is_applied) VALUES (%d, 1)", ahead),
+		fmt.Sprintf("INSERT INTO meta (meta_key, meta_value) VALUES ('min_writer_schema', '%d')", ahead),
+	} {
+		if err := raw.ExecRawForTest(ctx, stmt); err != nil {
+			t.Fatalf("%s: %v", stmt, err)
+		}
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("store.Close() error = %v", err)
+	}
+
+	out, err := runCLIInDirAllowError(t, repo, "new", "--type", "epic", "--topic", "aud", "--title", "Refused")
+	if err == nil {
+		t.Fatalf("lit new wrote to a workspace whose write rules it predates\noutput:\n%s", out)
+	}
+	ev := lastEvent(t)
+	if ev.Reason != "workspace_schema_ahead" || ev.ExitCode != ExitCode(err) {
+		t.Errorf("lit new ended %q exit %d, want workspace_schema_ahead exit %d", ev.Reason, ev.ExitCode, ExitCode(err))
+	}
+	if got := ev.Facts["schema_ahead.min_writer_schema"]; got != float64(ahead) {
+		t.Errorf("schema_ahead.min_writer_schema = %#v, want %d", got, ahead)
+	}
+
+	if out, err := runCLIInDirAllowError(t, repo, "ls"); err != nil {
+		t.Fatalf("lit ls error = %v, want the read served\noutput:\n%s", err, out)
+	}
+	ev = lastEvent(t)
+	for key, want := range map[string]any{"migration.schema_ahead": float64(ahead), "migration.min_writer_schema": float64(ahead)} {
+		if got := ev.Facts[key]; got != want {
+			t.Errorf("lit ls %s = %#v, want %v", key, got, want)
+		}
+	}
+}

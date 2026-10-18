@@ -239,6 +239,7 @@ func OpenForRead(ctx context.Context, doltRootDir string, workspaceID string) (_
 		return nil, errors.Join(err, s.Close())
 	}
 	if !assessment.needsWrite() {
+		s.migrated = storage.Migrated{SchemaAhead: assessment.op.schemaAhead()}
 		return s, nil
 	}
 	// The schema trails this binary. A read never applies a migration — its

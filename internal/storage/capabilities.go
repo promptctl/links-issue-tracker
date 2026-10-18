@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 
 	"github.com/promptctl/links-issue-tracker/internal/merge"
@@ -269,17 +270,35 @@ type SchemaMigrator interface {
 
 // Migrated is what an open did to the stored shape: whether it had to build
 // the database first, the recovery snapshot it took before migrating, "" when
-// it found nothing to migrate, and why rolling older recovery snapshots off
-// afterwards failed, if it did.
+// it found nothing to migrate, why rolling older recovery snapshots off
+// afterwards failed, if it did, and the newer schema it served, if it did.
 // [LAW:types-are-the-program] PruneErr is a field, not the open's error: the
 // prune runs after the migration has committed, so its failure leaves the
 // store at the shape this binary reads. An open that failed on it would stop
 // the command over a leftover snapshot, and the next open, finding nothing to
 // migrate, would succeed without retrying the prune.
 type Migrated struct {
-	Bootstrap Bootstrap
-	Snapshot  string
-	PruneErr  error
+	Bootstrap   Bootstrap
+	Snapshot    string
+	PruneErr    error
+	SchemaAhead SchemaAhead
+}
+
+// SchemaAhead is a workspace schema newer than the binary that served it: the
+// workspace's schema version, and the oldest a lit must support to write the
+// workspace, 0 when no migration set one. The zero value is a workspace that
+// was not ahead.
+type SchemaAhead struct {
+	WorkspaceSchema int64
+	MinWriterSchema int64
+}
+
+// EventRecord is the schema as event facts, both 0 when it was not ahead.
+func (a SchemaAhead) EventRecord() map[string]any {
+	return map[string]any{
+		"migration.schema_ahead":      a.WorkspaceSchema,
+		"migration.min_writer_schema": a.MinWriterSchema,
+	}
 }
 
 // Bootstrap is what an open did to make its database exist.
@@ -338,6 +357,7 @@ func (m Migrated) EventRecord() map[string]any {
 	facts := m.Bootstrap.EventRecord()
 	facts["migration.snapshot"] = m.Snapshot
 	facts["migration.snapshot_prune_error"] = telemetry.ErrorText(m.PruneErr)
+	maps.Copy(facts, m.SchemaAhead.EventRecord())
 	return facts
 }
 
