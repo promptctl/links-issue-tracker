@@ -105,6 +105,11 @@ func TestAPushPastTheBoundReRootsWithNoCommandRun(t *testing.T) {
 	if forkPoint := branchesUnder(t, ctx, st, forkPointPrefix)["origin/master"]; forkPoint != under.Head {
 		t.Fatalf("the fork point is %q; want it on the head %s the push under the bound left", forkPoint, under.Head)
 	}
+	// A re-root scratch a killed bound left behind, pinning the old history:
+	// the next bound to fire deletes it with its own.
+	if err := execProcedureDiscard(ctx, st.db, "DOLT_BRANCH", reRootScratchPrefix+"killed", under.Head); err != nil {
+		t.Fatal(err)
+	}
 	if err := st.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -372,10 +377,10 @@ func TestAHeldLeaseTheBranchCannotFollowIsTheBoundsError(t *testing.T) {
 	}
 }
 
-// TestAReRootPushWithNoVerdictLeavesNoScratch has the lease push fail
-// before it reaches the remote: the remote's path is a file, not a store.
-// The push reaches no verdict, and the scratch the re-root was written on is
-// gone anyway, so nothing keeps the history below the cut reachable.
+// TestAReRootPushWithNoVerdictLeavesNoScratch has the bound's lease push
+// fail before it reaches the remote: the remote's path is a file, not a
+// store. The push reaches no verdict, and the scratch the re-root was written
+// on is gone anyway, so nothing keeps the history below the cut reachable.
 func TestAReRootPushWithNoVerdictLeavesNoScratch(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -391,18 +396,12 @@ func TestAReRootPushWithNoVerdictLeavesNoScratch(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	b := boundAt(t, ctx, alpha, head, 3)
+	if b.Err == nil || b.Lease != "" || b.ReRooted.Head == "" {
+		t.Fatalf("the bound over a remote that is a file = %+v; want a re-root written, no verdict and an error", b)
+	}
 	st := openSyncOrFatal(t, ctx, alpha)
 	defer func() { _ = st.Close() }()
-	if _, err := st.reRootScratch(ctx, "master", head, 3); err != nil {
-		t.Fatalf("reRootScratch error = %v", err)
-	}
-	if left := branchesUnder(t, ctx, st, reRootScratchPrefix); len(left) != 1 {
-		t.Fatalf("scratch branches before the push = %v; want the re-root's one", left)
-	}
-	lease, err := st.publishReRoot(ctx, "origin", "master", head)
-	if err == nil || lease != "" {
-		t.Fatalf("the push to a remote that is a file = %q, %v; want no verdict and an error", lease, err)
-	}
 	if left := branchesUnder(t, ctx, st, reRootScratchPrefix); len(left) != 0 {
 		t.Fatalf("the re-root's scratch branch was left behind: %v", left)
 	}

@@ -95,10 +95,19 @@ func (s *Store) keepHistoryBound(ctx context.Context, b *storage.HistoryBound) (
 func (s *Store) publishBound(ctx context.Context, b *storage.HistoryBound) (refSweepOutcome, error) {
 	trackingRef := fmt.Sprintf("remotes/%s/%s", b.Remote, b.Branch)
 	var err error
-	if b.ReRooted, err = s.reRootScratch(ctx, b.Branch, b.Head, b.Keep); err != nil {
-		return refSweepOutcome{}, err
+	b.ReRooted, err = s.reRootScratch(ctx, b.Branch, b.Head, b.Keep)
+	if err == nil {
+		b.Lease, err = s.publishReRoot(ctx, b.Remote, b.Branch, b.Head)
 	}
-	if b.Lease, err = s.publishReRoot(ctx, b.Remote, b.Branch, b.Head); err != nil {
+	// The scratch lives only as long as the re-root and its push, and goes
+	// however they ended. A re-root is deterministic, so the next push past
+	// the bound writes the same commit again, while a scratch left behind
+	// would keep the whole history below the cut reachable through every GC
+	// until then. [LAW:single-enforcer] this is the one place it is deleted.
+	sweepErr := s.runSyncMutation(ctx, func(ctx context.Context) error {
+		return s.deleteBranchesUnder(ctx, reRootScratchPrefix)
+	})
+	if err = errors.Join(err, sweepErr); err != nil {
 		return refSweepOutcome{}, err
 	}
 	// [LAW:dataflow-not-control-flow] the fetch and the follow run whatever
@@ -130,8 +139,7 @@ func (s *Store) publishBound(ctx context.Context, b *storage.HistoryBound) (refS
 }
 
 // reRootScratch writes the re-root of head onto branch's scratch branch, cut
-// where head's first-parent line keeps keep commits. A re-root refused, for a
-// side line across the cut among other things, deletes the scratch again.
+// where head's first-parent line keeps keep commits.
 func (s *Store) reRootScratch(ctx context.Context, branch, head string, keep uint64) (storage.ReRooted, error) {
 	scratch := ref.NewBranchRef(reRootScratchPrefix + branch)
 	var reRooted storage.ReRooted
@@ -151,8 +159,7 @@ func (s *Store) reRootScratch(ctx context.Context, branch, head string, keep uin
 		reRooted, err = reRootBranch(holdCtx, ddb, scratch, cut)
 		reRooted.Elapsed = time.Since(start)
 		if err != nil {
-			err = fmt.Errorf("re-root %s at %s: %w", head, cut, err)
-			return errors.Join(err, ddb.DeleteBranch(holdCtx, scratch, nil))
+			return fmt.Errorf("re-root %s at %s: %w", head, cut, err)
 		}
 		return nil
 	})
@@ -182,26 +189,15 @@ func firstParentAncestor(ctx context.Context, ddb *doltdb.DoltDB, c *doltdb.Comm
 }
 
 // publishReRoot force-pushes branch's scratch to the remote's branch, landing
-// only while that branch still names head, and then deletes the scratch
-// however the push ended. The scratch lives only as long as the push's
-// retries: a re-root is deterministic, so the next push past the bound writes
-// the same commit again, while a scratch left behind would keep the whole
-// history below the cut reachable through every GC until then.
+// only while that branch still names head.
 func (s *Store) publishReRoot(ctx context.Context, remote, branch, head string) (storage.LeaseOutcome, error) {
-	scratch := reRootScratchPrefix + branch
 	var leased storage.LeasedPush
-	pushErr := s.runSyncMutation(ctx, func(ctx context.Context) error {
+	err := s.runSyncMutation(ctx, func(ctx context.Context) error {
 		var err error
-		leased, err = s.pushLeasedWithinLock(ctx, remote, scratch, branch, head)
+		leased, err = s.pushLeasedWithinLock(ctx, remote, reRootScratchPrefix+branch, branch, head)
 		return err
 	})
-	deleteErr := s.runSyncMutation(ctx, func(ctx context.Context) error {
-		if err := execProcedureDiscard(ctx, s.db, "DOLT_BRANCH", "-D", scratch); err != nil {
-			return fmt.Errorf("delete %s: %w", scratch, err)
-		}
-		return nil
-	})
-	return leased.Outcome, errors.Join(pushErr, deleteErr)
+	return leased.Outcome, err
 }
 
 // collectBelowTheCut reclaims the history below the cut once the sync branch
@@ -232,7 +228,7 @@ func (s *Store) collectBelowTheCut(ctx context.Context, b *storage.HistoryBound)
 				return err
 			}
 		}
-		if err := s.sweepStaleReconcileScratch(ctx); err != nil {
+		if err := s.deleteBranchesUnder(ctx, reconcileScratchPrefix+"-"); err != nil {
 			return err
 		}
 		attempt, swept, err := s.compactWithinLock(ctx, GCFull)
