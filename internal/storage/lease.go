@@ -7,8 +7,12 @@ const (
 	// LeaseHeld: the remote branch named the commit the lease expected, or
 	// already the one pushed, and now names the one pushed.
 	LeaseHeld LeaseOutcome = "held"
-	// LeaseStale: the remote branch had moved to some other commit, and the
-	// push left it there.
+	// LeaseStale: the remote branch named neither the commit the lease
+	// expected nor the one pushed, or did not exist, and the push left it
+	// there. It is the verdict of the push's last transport attempt, and an
+	// earlier attempt may have landed the pushed commit before a peer built
+	// on it, so whether the remote carries Pushed is answered by a fetch, as
+	// SyncPushFromClone answers it for a refused push.
 	LeaseStale LeaseOutcome = "stale"
 )
 

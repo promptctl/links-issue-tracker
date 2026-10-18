@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -9,6 +10,7 @@ import (
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
 )
 
 // TestLeasedPushLandsOnlyOverTheHeadItNames drives two checkouts sharing one
@@ -90,9 +92,10 @@ func TestLeasedPushLandsOnlyOverTheHeadItNames(t *testing.T) {
 		t.Fatalf("the same leased push again = %+v, want it held over its own landed head", again)
 	}
 
-	// A remote that cannot be reached gives no verdict on the lease, so it
-	// is an error and never a stale outcome. A file remote is created
-	// wherever it can be, so this one's directory becomes a regular file.
+	// A remote that cannot be opened gives no verdict on the lease, so it is
+	// the push failure every push reports, never a stale outcome. A file
+	// remote is created wherever it can be, so this one's directory becomes
+	// a regular file.
 	gone := filepath.Join(t.TempDir(), "remote")
 	if err := st.SyncAddRemote(ctx, "gone", "file://"+gone); err != nil {
 		t.Fatalf("SyncAddRemote(gone) error = %v", err)
@@ -105,12 +108,76 @@ func TestLeasedPushLandsOnlyOverTheHeadItNames(t *testing.T) {
 	}
 	err = st.runSyncMutation(ctx, func(ctx context.Context) error {
 		unreached, err := st.pushLeasedWithinLock(ctx, "gone", "master", "master", bravoHead)
-		if err == nil {
-			t.Errorf("leased push to an unreachable remote = %+v, want an error", unreached)
+		if !errors.As(err, new(pushRefusedError)) && !errors.As(err, new(RemoteUnreachableError)) {
+			t.Errorf("leased push to a remote that cannot be opened = %+v, %v; want the push failure classifyPushFailure reports", unreached, err)
 		}
 		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestLeasedPushRefusesToReplaceASchemaAheadHead names, as the lease's
+// expected head, a remote head at a schema above this binary's, while the
+// pusher's tracking ref still lags at the older schema. The lease would hold,
+// so the push is refused before it is sent and the remote keeps its head.
+func TestLeasedPushRefusesToReplaceASchemaAheadHead(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	remoteURL := "file://" + filepath.Join(t.TempDir(), "remote")
+	alpha, bravo := migratedDoltDir(t), migratedDoltDir(t)
+	seedReconcileRemote(t, ctx, alpha, remoteURL)
+	adoptRemote(t, ctx, bravo, remoteURL)
+
+	// bravo, as a newer binary would, advances the remote's schema.
+	registryMax, err := migrations.MaxVersion()
+	if err != nil {
+		t.Fatal(err)
+	}
+	newer, err := Open(ctx, bravo, "ws")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newer.db.ExecContext(ctx, `INSERT INTO goose_db_version (version_id, is_applied) VALUES (?, 1)`, registryMax+1); err != nil {
+		t.Fatal(err)
+	}
+	if err := newer.commitWorkingSet(ctx, "a newer binary's schema"); err != nil {
+		t.Fatal(err)
+	}
+	if err := newer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	pusher := openSyncOrFatal(t, ctx, bravo)
+	if _, err := pusher.SyncPush(ctx, "origin", "master", false, false); err != nil {
+		t.Fatalf("SyncPush(bravo) error = %v", err)
+	}
+	if err := pusher.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ahead := headAt(t, ctx, bravo)
+
+	// alpha reads the remote's head through a second name for it, so the
+	// head is in alpha's store while remotes/origin/master still lags.
+	st := openSyncOrFatal(t, ctx, alpha)
+	defer func() { _ = st.Close() }()
+	if err := st.SyncAddRemote(ctx, "mirror", remoteURL); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SyncFetch(ctx, "mirror", false); err != nil {
+		t.Fatal(err)
+	}
+	err = st.runSyncMutation(ctx, func(ctx context.Context) error {
+		_, err := st.pushLeasedWithinLock(ctx, "origin", "master", "master", ahead)
+		return err
+	})
+	if !errors.As(err, new(*RemoteSchemaAheadError)) {
+		t.Fatalf("leased push over a schema-ahead head = %v, want *RemoteSchemaAheadError", err)
+	}
+	if err := st.SyncFetch(ctx, "origin", false); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := commitHashOfRef(ctx, st.db, "remotes/origin/master"); err != nil || got != ahead {
+		t.Fatalf("remote head after the refusal = %s, %v; want the schema-ahead head %s", got, err, ahead)
 	}
 }

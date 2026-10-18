@@ -17,8 +17,11 @@ import (
 // is reserved for a push that reached no verdict. The caller holds the commit
 // lock (via runSyncMutation), as it does for pushWithinLock.
 //
-// A transport retry cannot misreport a landed push as stale: a remote branch
-// already at the pushed commit satisfies the lease (Patch 9 in FORKS.md).
+// A transport retry that finds its own earlier attempt landed reports it
+// held: a remote branch already at the pushed commit satisfies the lease
+// (Patch 9 in FORKS.md). The verdict is the last attempt's, so a peer that
+// built on a landed attempt before the retry reached the remote makes it
+// stale (see storage.LeaseStale).
 func (s *Store) pushLeasedWithinLock(ctx context.Context, remote, source, branch, expected string) (storage.LeasedPush, error) {
 	trimmedRemote, err := requireSyncArg("remote", remote)
 	if err != nil {
@@ -36,8 +39,11 @@ func (s *Store) pushLeasedWithinLock(ctx context.Context, remote, source, branch
 	if !isDoltCommitHash(trimmedExpected) {
 		return storage.LeasedPush{}, fmt.Errorf("leased push to %s/%s: %q is not a Dolt commit hash", trimmedRemote, trimmedBranch, expected)
 	}
-	// [LAW:single-enforcer] the same schema-ahead refusal every push runs.
-	if err := s.guardRemoteSchemaAhead(ctx, trimmedRemote, trimmedBranch); err != nil {
+	// [LAW:single-enforcer] the same schema-ahead refusal every push runs,
+	// on the one commit a held lease can replace: expected. The tracking ref
+	// may lag it, and a lease over a schema-ahead head would regress the
+	// shared remote to this binary's schema.
+	if err := s.guardCommitSchemaAhead(ctx, trimmedRemote, trimmedBranch, trimmedExpected); err != nil {
 		return storage.LeasedPush{}, err
 	}
 	pushed, err := commitHashOfRef(ctx, s.db, trimmedSource)
