@@ -352,6 +352,14 @@ type SyncPushResult struct {
 	// engine's verbatim push output. [LAW:one-source-of-truth]
 	Superseded string `json:"superseded,omitempty"`
 
+	// AfterPush is set, in the engine's own words, when the push's history
+	// bound wrote a re-root after it landed. The re-root's lease push and
+	// the fetch after it go through the store's git mirror, so the remote
+	// may carry the re-root in Head's place, and the mirror may hold writes
+	// later than this push's, a peer's among them. Empty when the bound
+	// wrote none, so this push's write is the last the mirror made.
+	AfterPush string `json:"after_push,omitempty"`
+
 	// Maintenance is what the engine did to reclaim local storage while
 	// servicing this push, in the engine's own words, and empty when it found
 	// nothing worth reporting — so an ordinary push carries no maintenance line

@@ -160,12 +160,21 @@ func receiveWhenQuiet(ctx context.Context, ws workspace.Info, parentPID int) tim
 }
 
 // receiveMirrorWait bounds the receive's wait for live mirrors: two whole
-// mirror pushes, which covers the cycle the spawning command started and one
-// more it may re-check into. Past it the mirrors are a burst, not the
-// command's own push, and the receive goes ahead. The wait costs no command
-// anything; it only delays the worker. A function because the push deadline it
-// derives from is the store's variable. [LAW:one-source-of-truth]
-func receiveMirrorWait() time.Duration { return 2 * store.MirrorPushDeadline }
+// mirror cycles' network work, which covers the cycle the spawning command
+// started and one more it may re-check into. Past it the mirrors are a burst,
+// not the command's own push, and the receive goes ahead. The wait costs no
+// command anything; it only delays the worker. A function because the push
+// deadline the cycle's derives from is the store's variable.
+// [LAW:one-source-of-truth]
+func receiveMirrorWait() time.Duration { return 2 * mirrorNetworkDeadline() }
+
+// mirrorNetworkDeadline is the longest one mirror cycle's network work runs:
+// the push under its deadline, then a landed push's history bound under its
+// own. The proof's deadline is not added: the proof runs only after a bound
+// that wrote no re-root, which reached no network. [LAW:one-source-of-truth]
+func mirrorNetworkDeadline() time.Duration {
+	return store.MirrorPushDeadline + historyBoundDeadline()
+}
 
 // mirrorQuietPoll is how often the receive re-reads the mirror liveness
 // beacon while it waits. Each read briefly takes the beacon exclusively, and a

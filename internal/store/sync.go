@@ -813,8 +813,10 @@ func (s *Store) retryPushAfterFollow(ctx context.Context, remote, branch string,
 // no other mutation interleaves between the garbage collection and the push and
 // the push reflects exactly the compacted state. [LAW:no-ambient-temporal-coupling]
 // The explicit `lit sync push` and the pre-push hook use this; the on-change
-// mirror uses the plain SyncPush. The two are distinct single-purpose
-// entrypoints, not one method with a compaction flag. [LAW:decomposition]
+// mirror uses SyncPushFromClone. They are distinct single-purpose entrypoints,
+// not one method with a compaction flag. [LAW:decomposition] Neither keeps the
+// history bound: the bound follows whichever push landed, through
+// SyncKeepHistoryBound.
 func (s *Store) SyncCompactAndPush(ctx context.Context, remote string, branch string, setUpstream bool, force bool) (storage.SyncPushResult, error) {
 	var attempt compactionAttempt
 	var depthErr error
@@ -841,13 +843,6 @@ func (s *Store) SyncCompactAndPush(ctx context.Context, remote string, branch st
 	// collection joins the maintenance account.
 	result, err, followed, followErr := s.retryPushAfterFollow(ctx, remote, branch, setUpstream, force, result, err)
 	err = joinFollowFailure(err, followErr)
-	// The bound keeps the history the push just published, so it runs once
-	// the push has landed and only then. Its outcome is carried with the
-	// other maintenance and never fails the push that landed before it.
-	var bound string
-	if err == nil {
-		bound = historyBoundReport(s.boundHistory(ctx, strings.TrimSpace(remote), strings.TrimSpace(branch)))
-	}
 	// DOLT_GC above compacts `noms`; the prune collects the other half of the
 	// store's local footprint, the abandoned git remote mirrors. All three jobs
 	// report whether or not the push landed. A pass that ran is reported even
@@ -880,7 +875,6 @@ func (s *Store) SyncCompactAndPush(ctx context.Context, remote string, branch st
 		compactionReport(attempt, depthErr),
 		sweep.Report(),
 		collectionReport(followed.Collection),
-		bound,
 		s.pruneRemoteCache(ctx).Report(),
 	)
 	if err != nil {

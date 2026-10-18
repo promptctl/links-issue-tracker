@@ -477,6 +477,9 @@ type syncPushOutcome struct {
 	// push output. [LAW:one-source-of-truth]
 	maintenance string
 	head        string // the commit the push sent as HEAD; empty on a skip or a failure
+	// afterPush is the push's SyncPushResult.AfterPush: what its history
+	// bound wrote after it, empty when nothing.
+	afterPush string
 	// proven is the advertisement this push proved it left the remote showing
 	// (provePushedAdvertisement); zero when it proved none.
 	proven   remoteAdvertisement
@@ -485,11 +488,29 @@ type syncPushOutcome struct {
 }
 
 // syncPushStep is the push the orchestrator runs once it has resolved the
-// remote and branch — store.Store.SyncPush (push only) or
-// store.Store.SyncCompactAndPush (compact + push, atomic). [LAW:dataflow-not-control-flow]
+// remote and branch — store.Store.SyncPushFromClone (the mirror's push from
+// its clone) or store.Store.SyncCompactAndPush (compact + push, atomic).
+// [LAW:dataflow-not-control-flow]
 // The variant is a value the caller supplies, so performSyncPush carries no
 // compaction branch and never compacts a push it skips.
 type syncPushStep func(ctx context.Context, remote, branch string, setUpstream, force bool) (storage.SyncPushResult, error)
+
+// historyBoundDeadline is the deadline a landed push's history bound runs
+// under. The bound crosses the network three times — the re-root's lease
+// push, the remote's GC, the fetch that learns what the remote carries — and
+// each leg is a transport of a push's kind, so each gets the push deadline.
+// The local legs ride in the stall factor's margin: the re-roots, whose cost
+// is reroot.elapsed_ms, and the follow's full GC, measured at 2.0s on an APFS
+// clone of this repository's 437 MB store. The remote GC's upload has not
+// been measured against a hosted remote; history_bound.elapsed_ms on the
+// push's event is the figure to re-measure from. A cut bound fails nothing:
+// the push landed. A cut before the re-root reaches the remote leaves the
+// next push past the bound to run it again; a cut after it leaves the
+// remote's history below the cut to the next re-root's GC, which collects it
+// with its own, since the remote's GC replaces nothing once a push lands on
+// top of the re-root. A function because the push deadline it derives from
+// is the store's variable. [LAW:one-source-of-truth]
+func historyBoundDeadline() time.Duration { return 3 * store.MirrorPushDeadline }
 
 // syncPushTraceMetadata is everything the durable record says about one push
 // attempt beyond its decision: where it went, what the engine said, what local
@@ -525,6 +546,10 @@ func syncPushTraceMetadata(remoteName, syncBranch string, result storage.SyncPus
 	// [LAW:no-silent-failure]
 	if superseded := strings.TrimSpace(result.Superseded); superseded != "" {
 		metadata["superseded"] = superseded
+	}
+	// Why a landed push carries no advertisement proof. [LAW:nothing-unseen]
+	if afterPush := strings.TrimSpace(result.AfterPush); afterPush != "" {
+		metadata["after_push"] = afterPush
 	}
 	if pushErr != nil {
 		metadata["error"] = pushErr.Error()
@@ -599,15 +624,31 @@ func performSyncPush(ctx, completionCtx context.Context, session syncSession, ws
 	if pushErr != nil && ctx.Err() != nil && completionCtx.Err() == nil {
 		pushErr = fmt.Errorf("%w: %w", pushDeadlineCutExplanation(), pushErr)
 	}
+	// Every push that lands keeps the history bound, whichever step landed
+	// it: `lit sync push` and the pre-push hook from the live store, the
+	// on-change mirror from its clone. A clone's bound publishes the re-root
+	// as any peer would, and the mirror's live store then follows it
+	// (receivePushedReRoot), so no network leg ever holds the live store.
+	// [LAW:single-enforcer] The bound runs under its own deadline off the
+	// completion lifetime, as the proof below does: the push's deadline
+	// is spent, and the bound's network legs need their own.
+	if pushErr == nil {
+		boundCtx, cancelBound := context.WithTimeout(completionCtx, historyBoundDeadline())
+		result = session.syncer.SyncKeepHistoryBound(boundCtx, remoteName, syncBranch, result)
+		cancelBound()
+	}
 	traceMetadata := syncPushTraceMetadata(remoteName, syncBranch, result, pushErr)
 	// A push that landed on its own moved the remote to its own write, and the
 	// next receive would fetch to learn nothing unless the push records that.
 	// Proving it costs one ls-remote. A failed or superseded push proves
-	// nothing, and the trace says which way the proof went. [LAW:nothing-unseen]
+	// nothing, nor does one its history bound re-rooted after (AfterPush):
+	// the mirror may hold a re-root the store's branch never followed, or a
+	// peer's push the bound's fetch brought in. The trace says which way the
+	// proof went. [LAW:nothing-unseen]
 	// The proof runs under its own deadline off the completion lifetime: the
 	// push has done its work, so the push's deadline is not the proof's.
 	var proven remoteAdvertisement
-	if pushErr == nil && result.Superseded == "" {
+	if pushErr == nil && result.Superseded == "" && result.AfterPush == "" {
 		proofCtx, cancelProof := context.WithTimeout(completionCtx, pushProofDeadline)
 		var unproven string
 		proven, unproven = provePushedAdvertisement(proofCtx, session.syncer, ws, remoteName, target.gitRemotes)
@@ -667,6 +708,7 @@ func performSyncPush(ctx, completionCtx context.Context, session syncSession, ws
 		message:     result.Message,
 		maintenance: result.Maintenance,
 		head:        result.Head,
+		afterPush:   result.AfterPush,
 		proven:      proven,
 		traceErr:    traceRecordErr,
 		pushErr:     pushErr,

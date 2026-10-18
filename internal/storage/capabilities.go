@@ -130,11 +130,21 @@ type Syncer interface {
 	// nothing and returns none.
 	FollowedReRoots() []FollowedReRoot
 
-	// HistoryBounds is what every compacting push since the engine opened did
-	// to keep the sync branch's history under its bound, oldest first: the
-	// remote head's height every time, and the re-root it published once that
-	// height reached the bound. An engine whose history has no bound to keep
-	// returns none.
+	// SyncKeepHistoryBound keeps the sync branch's history under its bound
+	// once pushed has landed on remote's branch, whichever push landed it,
+	// and returns pushed with AfterPush set once it wrote a re-root and the
+	// bound's account joined to its Maintenance.
+	// Below the bound it reads the remote head's height and nothing else;
+	// once the height reaches it, it publishes a re-root of that head, runs
+	// the remote's GC, and follows the re-root. The push landed whatever the
+	// bound did, so the bound fails nothing: where it stopped is on its
+	// record (HistoryBounds) and in the account.
+	SyncKeepHistoryBound(ctx context.Context, remote, branch string, pushed SyncPushResult) SyncPushResult
+
+	// HistoryBounds is what every SyncKeepHistoryBound since the engine
+	// opened did, oldest first: the remote head's height every time, and the
+	// re-root it published once that height reached the bound. An engine
+	// whose history has no bound to keep returns none.
 	HistoryBounds() []HistoryBound
 
 	// ForkPointRecords is what every fetch the engine ran since it opened did

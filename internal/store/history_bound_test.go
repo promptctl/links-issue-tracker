@@ -19,8 +19,8 @@ import (
 const historyCanBeReRootedVersion = 10
 
 // compactPush files a ticket under epic at root and pushes it the way `lit
-// sync push` and the pre-push hook do, under bound, returning what the push
-// did to keep it.
+// sync push` and the pre-push hook do, then keeps bound as every landed push
+// does, returning what that did.
 func compactPush(t *testing.T, ctx context.Context, root, epic, title string, bound historyBound) storage.HistoryBound {
 	t.Helper()
 	st, err := Open(ctx, root, "ws")
@@ -36,12 +36,24 @@ func compactPush(t *testing.T, ctx context.Context, root, epic, title string, bo
 	sync := openSyncOrFatal(t, ctx, root)
 	defer func() { _ = sync.Close() }()
 	sync.bound = bound
-	if _, err := sync.SyncCompactAndPush(ctx, "origin", "master", false, false); err != nil {
+	pushed, err := sync.SyncCompactAndPush(ctx, "origin", "master", false, false)
+	if err != nil {
 		t.Fatalf("SyncCompactAndPush(%s) error = %v", title, err)
 	}
+	kept := sync.SyncKeepHistoryBound(ctx, "origin", "master", pushed)
 	bounds := sync.HistoryBounds()
 	if len(bounds) != 1 {
 		t.Fatalf("HistoryBounds() after one push = %+v, want one", bounds)
+	}
+	// The kept push says the bound wrote a re-root after it exactly when the
+	// remote's tracking ref, which the bound's fetch leaves on whatever the
+	// remote carries, no longer names the pushed head.
+	remote, err := commitHashOfRef(ctx, sync.db, "remotes/origin/master")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if moved := remote != pushed.Head; moved != (kept.AfterPush != "") || kept.Head != pushed.Head {
+		t.Fatalf("the kept push = %+v over the pushed head %s, the remote at %s; want AfterPush set exactly when the remote moved off the pushed head, and the pushed head kept", kept, pushed.Head, remote)
 	}
 	return bounds[0]
 }
@@ -89,7 +101,7 @@ func TestAPushPastTheBoundReRootsWithNoCommandRun(t *testing.T) {
 	if checkpoints == 0 {
 		t.Fatalf("the migrated store holds no %s checkpoint, so the test cannot show the bound dropping one", migrationCheckpointPrefix)
 	}
-	bound := historyBound{reRootAt: seeded + 2, keep: 3}
+	bound := historyBound{ReRootAt: seeded + 2, Keep: 3}
 
 	under := compactPush(t, ctx, alpha, epic, "under", bound)
 	if under.Fired() || under.Height != seeded+1 || under.Err != nil || under.ReRooted.Head != "" || under.Lease != "" || under.Collection.Ran {
@@ -118,11 +130,11 @@ func TestAPushPastTheBoundReRootsWithNoCommandRun(t *testing.T) {
 	if fired.Err != nil {
 		t.Fatalf("the push past the bound stopped: %v", fired.Err)
 	}
-	if !fired.Fired() || fired.Height != bound.reRootAt || fired.Lease != storage.LeaseHeld || !fired.Collection.Ran {
-		t.Fatalf("the push past the bound = %+v; want fired at height %d, lease held, store collected", fired, bound.reRootAt)
+	if !fired.Fired() || fired.Height != bound.ReRootAt || fired.Lease != storage.LeaseHeld || !fired.Collection.Ran {
+		t.Fatalf("the push past the bound = %+v; want fired at height %d, lease held, store collected", fired, bound.ReRootAt)
 	}
-	if fired.ReRooted.Kept() != int(bound.keep) || fired.ReRooted.Dropped != int(fired.Height-bound.keep) {
-		t.Fatalf("the re-root kept %d and dropped %d commits; want %d kept and %d dropped", fired.ReRooted.Kept(), fired.ReRooted.Dropped, bound.keep, fired.Height-bound.keep)
+	if fired.ReRooted.Kept() != int(bound.Keep) || fired.ReRooted.Dropped != int(fired.Height-bound.Keep) {
+		t.Fatalf("the re-root kept %d and dropped %d commits; want %d kept and %d dropped", fired.ReRooted.Kept(), fired.ReRooted.Dropped, bound.Keep, fired.Height-bound.Keep)
 	}
 	if c := fired.Collection; c.BytesAfter >= c.BytesBefore {
 		t.Fatalf("the store went from %d to %d bytes across the GC; want it smaller", c.BytesBefore, c.BytesAfter)
@@ -145,8 +157,8 @@ func TestAPushPastTheBoundReRootsWithNoCommandRun(t *testing.T) {
 	if err := st.SyncFetch(ctx, "origin", false); err != nil {
 		t.Fatal(err)
 	}
-	if head != fired.ReRooted.Head || heightOf(t, ctx, st, "HEAD") != bound.keep {
-		t.Fatalf("alpha's head is %s at height %d; want the published head %s at the kept height %d", head, heightOf(t, ctx, st, "HEAD"), fired.ReRooted.Head, bound.keep)
+	if head != fired.ReRooted.Head || heightOf(t, ctx, st, "HEAD") != bound.Keep {
+		t.Fatalf("alpha's head is %s at height %d; want the published head %s at the kept height %d", head, heightOf(t, ctx, st, "HEAD"), fired.ReRooted.Head, bound.Keep)
 	}
 	if remote, err := commitHashOfRef(ctx, st.db, "remotes/origin/master"); err != nil || remote != head {
 		t.Fatalf("the remote's head is %s (%v); want alpha's re-rooted head %s", remote, err, head)
@@ -168,24 +180,27 @@ func TestAPushPastTheBoundReRootsWithNoCommandRun(t *testing.T) {
 	}
 
 	after := compactPush(t, ctx, alpha, epic, "after", bound)
-	if after.Fired() || after.Height != bound.keep+1 || after.Err != nil {
-		t.Fatalf("the push after the re-root = %+v; want an ordinary push at height %d", after, bound.keep+1)
+	if after.Fired() || after.Height != bound.Keep+1 || after.Err != nil {
+		t.Fatalf("the push after the re-root = %+v; want an ordinary push at height %d", after, bound.Keep+1)
 	}
 
 	event := fired.EventValue()
 	want := map[string]any{
 		"history_bound.height": fired.Height,
 		"history_bound.fired":  true,
-		"history_bound.keep":   bound.keep,
+		"history_bound.keep":   bound.Keep,
 		"history_bound.lease":  string(storage.LeaseHeld),
 		"reroot.cut":           fired.ReRooted.Cut,
-		"reroot.kept":          int(bound.keep),
+		"reroot.kept":          int(bound.Keep),
 		"reroot.dropped":       fired.ReRooted.Dropped,
 	}
 	for key, value := range want {
 		if event[key] != value {
 			t.Fatalf("event %s = %v, want %v (event %v)", key, event[key], value, event)
 		}
+	}
+	if elapsed := event["history_bound.elapsed_ms"]; elapsed != fired.Elapsed.Milliseconds() || fired.Elapsed < fired.ReRooted.Elapsed {
+		t.Fatalf("event history_bound.elapsed_ms = %v, bound elapsed %s; want the bound's whole work, which holds the re-root's %s", elapsed, fired.Elapsed, fired.ReRooted.Elapsed)
 	}
 }
 

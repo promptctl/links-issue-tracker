@@ -2,6 +2,7 @@ package storage
 
 import (
 	"maps"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 )
@@ -32,6 +33,9 @@ type HistoryBound struct {
 	// re-root the remote carries: the Collection of the bound's own follow,
 	// zero when the branch did not follow.
 	Collection Collection
+	// Elapsed is the bound's work end to end, from reading the head's height
+	// to the follow's collection.
+	Elapsed time.Duration
 	// Err is where the bound stopped, if it did. The push before it landed
 	// whatever Err says.
 	Err error
@@ -51,15 +55,16 @@ func (b HistoryBound) Fired() bool {
 // [LAW:one-source-of-truth]
 func (b HistoryBound) EventValue() map[string]any {
 	value := map[string]any{
-		"history_bound.remote":    b.Remote,
-		"history_bound.branch":    b.Branch,
-		"history_bound.head":      b.Head,
-		"history_bound.height":    b.Height,
-		"history_bound.reroot_at": b.ReRootAt,
-		"history_bound.keep":      b.Keep,
-		"history_bound.fired":     b.Fired(),
-		"history_bound.lease":     string(b.Lease),
-		"history_bound.error":     telemetry.ErrorText(b.Err),
+		"history_bound.remote":     b.Remote,
+		"history_bound.branch":     b.Branch,
+		"history_bound.head":       b.Head,
+		"history_bound.height":     b.Height,
+		"history_bound.reroot_at":  b.ReRootAt,
+		"history_bound.keep":       b.Keep,
+		"history_bound.fired":      b.Fired(),
+		"history_bound.lease":      string(b.Lease),
+		"history_bound.elapsed_ms": b.Elapsed.Milliseconds(),
+		"history_bound.error":      telemetry.ErrorText(b.Err),
 	}
 	facts, counts := b.ReRooted.EventRecord()
 	maps.Copy(value, facts)

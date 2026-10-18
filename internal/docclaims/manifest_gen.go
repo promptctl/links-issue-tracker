@@ -107,6 +107,7 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/05-sync-merge-compaction.md", Text: "labels(issue_id, label)", Src: "CREATE INDEX idx_labels_issue ON labels(issue_id, label);"},
 	{Doc: "doc-v1-total/05-sync-merge-compaction.md", Text: "lit snapshots restore <name>", Src: "usage: lit snapshots restore <name>"},
 	{Doc: "doc-v1-total/05-sync-merge-compaction.md", Text: "lit sync fetch", Src: "lit sync fetch"},
+	{Doc: "doc-v1-total/05-sync-merge-compaction.md", Text: "lit sync push", Src: "lit sync push"},
 	{Doc: "doc-v1-total/05-sync-merge-compaction.md", Text: "lit sync reconcile", Src: "lit sync reconcile"},
 	{Doc: "doc-v1-total/05-sync-merge-compaction.md", Text: "merged both sides' text in lit sync reconcile resolve", Src: "merged both sides' text in lit sync reconcile resolve"},
 	{Doc: "doc-v1-total/05-sync-merge-compaction.md", Text: "reconcile: carry local purge records over the adopted remote history", Src: "reconcile: carry local purge records over the adopted remote history"},
