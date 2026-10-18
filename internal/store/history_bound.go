@@ -221,8 +221,10 @@ func (s *Store) publishReRoot(ctx context.Context, remote, branch, head string) 
 // points onto the history their tracking refs now name, drops the migration
 // checkpoints, the reconcile scratch branches and any re-root scratch a
 // killed bound left, every one of which names a commit from before the
-// re-root, and runs the full GC. A ref it could not drop still pins that
-// history, so it stops the pass before the GC.
+// re-root, and runs the full GC. Every follow runs after a fetch moved the
+// tracking ref onto the re-rooted head; while that ref still named the old
+// head, the same GC freed nothing (links-storage-3k6u.ge9). A ref it could
+// not drop still pins that history, so it stops the pass before the GC.
 //
 // The store is measured around the pass, outside the lock, as SyncCompact
 // measures it: the two readings are an account of what happened and never an
