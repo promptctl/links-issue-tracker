@@ -28,79 +28,79 @@ func TestImportGateJudgesTheFilesReferences(t *testing.T) {
 		want string // "" when the gate accepts the file
 	}{
 		{"tree: a task blocked by the epic it sits under", func() error {
-			_, err := ImportTreeWriteOrder([]ImportTreeSpec{tree("e", "epic", ""), tree("t", "task", "e", "e")})
+			_, err := ParseImportTreeFile([]ImportTreeSpec{tree("e", "epic", ""), tree("t", "task", "e", "e")})
 			return err
 		}, `import: spec "t" blocked_by "e"` + sameEpic},
 		{"tree: an epic blocked by a task under it", func() error {
-			_, err := ImportTreeWriteOrder([]ImportTreeSpec{tree("e", "epic", "", "t"), tree("t", "task", "e")})
+			_, err := ParseImportTreeFile([]ImportTreeSpec{tree("e", "epic", "", "t"), tree("t", "task", "e")})
 			return err
 		}, `import: spec "e" blocked_by "t"` + sameEpic},
 		{"tree: a task blocked by an epic two levels up", func() error {
-			_, err := ImportTreeWriteOrder([]ImportTreeSpec{tree("e", "epic", ""), tree("s", "epic", "e"), tree("t", "task", "s", "e")})
+			_, err := ParseImportTreeFile([]ImportTreeSpec{tree("e", "epic", ""), tree("s", "epic", "e"), tree("t", "task", "s", "e")})
 			return err
 		}, `import: spec "t" blocked_by "e"` + sameEpic},
 		{"tree: two leaves of one epic, one blocked by the other", func() error {
-			_, err := ImportTreeWriteOrder([]ImportTreeSpec{tree("e", "epic", ""), tree("a", "task", "e"), tree("b", "bug", "e", "a")})
+			_, err := ParseImportTreeFile([]ImportTreeSpec{tree("e", "epic", ""), tree("a", "task", "e"), tree("b", "bug", "e", "a")})
 			return err
 		}, `import: spec "b" blocked_by "a"` + sameEpic},
 		{"tree: leaves of two epics, one blocked by the other, is accepted", func() error {
-			_, err := ImportTreeWriteOrder([]ImportTreeSpec{tree("e", "epic", ""), tree("f", "epic", ""), tree("a", "task", "e"), tree("b", "task", "f", "a")})
+			_, err := ParseImportTreeFile([]ImportTreeSpec{tree("e", "epic", ""), tree("f", "epic", ""), tree("a", "task", "e"), tree("b", "task", "f", "a")})
 			return err
 		}, ""},
 		{"tree: a leaf and the sub-epic beside it, each way round, is accepted", func() error {
-			_, err := ImportTreeWriteOrder([]ImportTreeSpec{tree("e", "epic", ""), tree("s", "epic", "e", "a"), tree("a", "task", "e"), tree("b", "task", "e", "s")})
+			_, err := ParseImportTreeFile([]ImportTreeSpec{tree("e", "epic", ""), tree("s", "epic", "e", "a"), tree("a", "task", "e"), tree("b", "task", "e", "s")})
 			return err
 		}, ""},
 		{"tree: two epics blocking each other is a cycle", func() error {
-			_, err := ImportTreeWriteOrder([]ImportTreeSpec{tree("a", "epic", "", "b"), tree("b", "epic", "", "a")})
+			_, err := ParseImportTreeFile([]ImportTreeSpec{tree("a", "epic", "", "b"), tree("b", "epic", "", "a")})
 			return err
 		}, `import: cycle detected involving "a"`},
 		{"tree: a blocked_by naming one record twice", func() error {
-			_, err := ImportTreeWriteOrder([]ImportTreeSpec{tree("a", "epic", ""), tree("b", "epic", "", "a", "a")})
+			_, err := ParseImportTreeFile([]ImportTreeSpec{tree("a", "epic", ""), tree("b", "epic", "", "a", "a")})
 			return err
 		}, `import: spec "b": blocked_by names "a" twice`},
 		{"tree: a blocked_by naming two records once each is accepted", func() error {
-			_, err := ImportTreeWriteOrder([]ImportTreeSpec{tree("a", "epic", ""), tree("c", "epic", ""), tree("b", "epic", "", "a", "c")})
+			_, err := ParseImportTreeFile([]ImportTreeSpec{tree("a", "epic", ""), tree("c", "epic", ""), tree("b", "epic", "", "a", "c")})
 			return err
 		}, ""},
 		{"bulk: a task with no local_id blocked by the epic it sits under", func() error {
-			_, err := BulkWriteOrder([]BulkIssueSpec{create("e", "epic", ""), create("", "task", "e", "e")}, nil)
+			_, err := ParseBulkFile([]BulkIssueSpec{create("e", "epic", ""), create("", "task", "e", "e")}, nil)
 			return err
 		}, `bulk: doc 1 blocked_by "e"` + sameEpic},
 		{"bulk: an epic blocked by a task under it", func() error {
-			_, err := BulkWriteOrder([]BulkIssueSpec{create("e", "epic", "", "t"), create("t", "task", "e")}, nil)
+			_, err := ParseBulkFile([]BulkIssueSpec{create("e", "epic", "", "t"), create("t", "task", "e")}, nil)
 			return err
 		}, `bulk: doc 0 blocked_by "t"` + sameEpic},
 		{"bulk: a task with no local_id blocked by a task beside it", func() error {
-			_, err := BulkWriteOrder([]BulkIssueSpec{create("e", "epic", ""), create("a", "task", "e"), create("", "chore", "e", "a")}, nil)
+			_, err := ParseBulkFile([]BulkIssueSpec{create("e", "epic", ""), create("a", "task", "e"), create("", "chore", "e", "a")}, nil)
 			return err
 		}, `bulk: doc 2 blocked_by "a"` + sameEpic},
 		{"bulk: two tasks under one existing epic, one blocked by the other", func() error {
-			_, err := BulkWriteOrder([]BulkIssueSpec{create("a", "task", "lit-epic"), create("", "bug", "lit-epic", "a")}, map[string]model.IssueType{"lit-epic": model.TypeEpic})
+			_, err := ParseBulkFile([]BulkIssueSpec{create("a", "task", "lit-epic"), create("", "bug", "lit-epic", "a")}, map[string]model.IssueType{"lit-epic": model.TypeEpic})
 			return err
 		}, `bulk: doc 1 blocked_by "a"` + sameEpic},
 		{"bulk: two tasks under one existing task, which is no epic and the create refuses, are accepted", func() error {
-			_, err := BulkWriteOrder([]BulkIssueSpec{create("a", "task", "lit-task"), create("", "task", "lit-task", "a")}, map[string]model.IssueType{"lit-task": model.TypeTask})
+			_, err := ParseBulkFile([]BulkIssueSpec{create("a", "task", "lit-task"), create("", "task", "lit-task", "a")}, map[string]model.IssueType{"lit-task": model.TypeTask})
 			return err
 		}, ""},
 		{"bulk: two tasks under one id naming no issue, which the create refuses, are accepted", func() error {
-			_, err := BulkWriteOrder([]BulkIssueSpec{create("a", "task", "lit-gone"), create("", "task", "lit-gone", "a")}, map[string]model.IssueType{})
+			_, err := ParseBulkFile([]BulkIssueSpec{create("a", "task", "lit-gone"), create("", "task", "lit-gone", "a")}, map[string]model.IssueType{})
 			return err
 		}, ""},
 		{"bulk: a task under an existing epic blocked by a task under another", func() error {
-			_, err := BulkWriteOrder([]BulkIssueSpec{create("a", "task", "lit-epic"), create("", "task", "lit-other", "a")}, map[string]model.IssueType{"lit-epic": model.TypeEpic, "lit-other": model.TypeEpic})
+			_, err := ParseBulkFile([]BulkIssueSpec{create("a", "task", "lit-epic"), create("", "task", "lit-other", "a")}, map[string]model.IssueType{"lit-epic": model.TypeEpic, "lit-other": model.TypeEpic})
 			return err
 		}, ""},
 		{"bulk: a task blocked by a real id, which the write judges, is accepted", func() error {
-			_, err := BulkWriteOrder([]BulkIssueSpec{create("e", "epic", ""), create("t", "task", "e", "lit-real-1")}, nil)
+			_, err := ParseBulkFile([]BulkIssueSpec{create("e", "epic", ""), create("t", "task", "e", "lit-real-1")}, nil)
 			return err
 		}, ""},
 		{"bulk: a create naming one real id twice in blocked_by", func() error {
-			_, err := BulkWriteOrder([]BulkIssueSpec{create("e", "epic", "", "lit-real-1", "lit-real-1")}, nil)
+			_, err := ParseBulkFile([]BulkIssueSpec{create("e", "epic", "", "lit-real-1", "lit-real-1")}, nil)
 			return err
 		}, `bulk: doc 0: blocked_by names "lit-real-1" twice`},
 		{"bulk: an update with a doubled blocked_by is told update takes none", func() error {
-			_, err := BulkWriteOrder([]BulkIssueSpec{{ID: "lit-real-1", Title: str("t"), BlockedBy: []string{"lit-real-2", "lit-real-2"}}}, nil)
+			_, err := ParseBulkFile([]BulkIssueSpec{{ID: "lit-real-1", Title: str("t"), BlockedBy: []string{"lit-real-2", "lit-real-2"}}}, nil)
 			return err
 		}, `bulk: doc 0 (id "lit-real-1") sets blocked_by; wire dependencies with ` + "`lit dep add`" + ` instead`},
 	}

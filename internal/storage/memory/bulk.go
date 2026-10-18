@@ -15,9 +15,10 @@ import (
 // Failure is compensated, not transactional, and the contract is about what
 // the caller is told: a batch that fails partway undoes the issues it created
 // and names every one it could not undo, so a partial application is always
-// reported rather than inferred. Updates already applied are not reverted,
-// which is why the error text is the caller's only complete account of what
-// happened. [LAW:no-silent-failure]
+// reported rather than inferred. Updates are applied last, so a failing create
+// or edge leaves none applied, but a failing update does not revert the ones
+// before it, which is why the error text is the caller's only complete account
+// of what happened. [LAW:no-silent-failure]
 func (e *Engine) BulkApply(ctx context.Context, prefix, actor string, specs []storage.BulkIssueSpec) (storage.BulkApplyResult, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -28,44 +29,33 @@ func (e *Engine) BulkApply(ctx context.Context, prefix, actor string, specs []st
 			parentTypes[id] = parent.issueType
 		}
 	}
-	order, err := storage.BulkWriteOrder(specs, parentTypes)
+	file, err := storage.ParseBulkFile(specs, parentTypes)
 	if err != nil {
 		return storage.BulkApplyResult{}, err
 	}
 
 	batch := newBatch(len(specs))
-	result := storage.BulkApplyResult{}
-	for _, index := range order {
-		spec := specs[index]
-		if spec.ID != "" {
-			fields, err := storage.BulkUpdatePatch(spec)
-			if err != nil {
-				return storage.BulkApplyResult{}, err
-			}
-			applied, err := e.apply(spec.ID, storage.Change{Actor: actor, Fields: fields})
-			if err != nil {
-				return storage.BulkApplyResult{}, e.compensate(batch, fmt.Errorf("bulk: update %q: %w", spec.ID, err))
-			}
-			result.Updated = append(result.Updated, applied.Issue.ID)
-			continue
-		}
-		in, err := bulkCreateInput(spec, prefix, batch)
+	for _, create := range file.Creates {
+		issue, err := e.createIssue(create.Input(batch.resolve(create.Parent), prefix))
 		if err != nil {
-			return storage.BulkApplyResult{}, err
+			return storage.BulkApplyResult{}, e.compensate(batch, fmt.Errorf("bulk: create doc %d: %w", create.Index, err))
 		}
-		issue, err := e.createIssue(in)
-		if err != nil {
-			return storage.BulkApplyResult{}, e.compensate(batch, fmt.Errorf("bulk: create doc %d: %w", index, err))
-		}
-		batch.created(index, spec.LocalID, issue.ID)
+		batch.created(create.Index, create.LocalID, issue.ID)
 	}
-	result.Created = batch.createdMappings()
-	for index, spec := range specs {
-		for _, dep := range spec.BlockedBy {
-			if err := e.wireDependency(batch.realID(index), batch.resolve(dep)); err != nil {
-				return storage.BulkApplyResult{}, e.compensate(batch, fmt.Errorf("bulk: blocked_by doc %d -> %q: %w", index, dep, err))
+	for _, create := range file.Creates {
+		for _, dep := range create.BlockedBy {
+			if err := e.wireDependency(batch.realID(create.Index), batch.resolve(dep)); err != nil {
+				return storage.BulkApplyResult{}, e.compensate(batch, fmt.Errorf("bulk: blocked_by doc %d -> %q: %w", create.Index, dep, err))
 			}
 		}
+	}
+	result := storage.BulkApplyResult{Created: batch.createdMappings()}
+	for _, update := range file.Updates {
+		applied, err := e.apply(update.ID, storage.Change{Actor: actor, Fields: update.Patch})
+		if err != nil {
+			return storage.BulkApplyResult{}, e.compensate(batch, fmt.Errorf("bulk: update %q: %w", update.ID, err))
+		}
+		result.Updated = append(result.Updated, applied.Issue.ID)
 	}
 	return result, nil
 }
@@ -77,46 +67,23 @@ func (e *Engine) ImportTree(ctx context.Context, prefix string, specs []storage.
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	order, err := storage.ImportTreeWriteOrder(specs)
+	creates, err := storage.ParseImportTreeFile(specs)
 	if err != nil {
 		return storage.ImportTreeResult{}, err
 	}
 
 	batch := newBatch(len(specs))
-	for _, index := range order {
-		spec := specs[index]
-		// The specs were gated before the first create; parsing again here is
-		// that same gate producing the typed value, not a second definition of
-		// what is valid.
-		issueType, err := model.ParseIssueType(spec.IssueType)
+	for _, create := range creates {
+		issue, err := e.createIssue(create.Input(batch.resolveLocal(create.Parent), prefix))
 		if err != nil {
-			return storage.ImportTreeResult{}, fmt.Errorf("import: spec %q: %w", spec.LocalID, err)
+			return storage.ImportTreeResult{}, e.compensate(batch, fmt.Errorf("import: create %q: %w", create.LocalID, err))
 		}
-		priority, err := model.ParsePriority(spec.Priority)
-		if err != nil {
-			return storage.ImportTreeResult{}, fmt.Errorf("import: spec %q: %w", spec.LocalID, err)
-		}
-		issue, err := e.createIssue(storage.CreateIssueInput{
-			Title:       spec.Title,
-			Description: spec.Description,
-			Prompt:      spec.Prompt,
-			IssueType:   issueType,
-			Topic:       spec.Topic,
-			Priority:    priority,
-			Assignee:    spec.Assignee,
-			Labels:      spec.Labels,
-			ParentID:    batch.resolveLocal(spec.Parent),
-			Prefix:      prefix,
-		})
-		if err != nil {
-			return storage.ImportTreeResult{}, e.compensate(batch, fmt.Errorf("import: create %q: %w", spec.LocalID, err))
-		}
-		batch.created(index, spec.LocalID, issue.ID)
+		batch.created(create.Index, create.LocalID, issue.ID)
 	}
-	for index, spec := range specs {
-		for _, dep := range spec.BlockedBy {
-			if err := e.wireDependency(batch.realID(index), batch.resolveLocal(dep)); err != nil {
-				return storage.ImportTreeResult{}, e.compensate(batch, fmt.Errorf("import: blocked_by %q -> %q: %w", spec.LocalID, dep, err))
+	for _, create := range creates {
+		for _, dep := range create.BlockedBy {
+			if err := e.wireDependency(batch.realID(create.Index), batch.resolveLocal(dep)); err != nil {
+				return storage.ImportTreeResult{}, e.compensate(batch, fmt.Errorf("import: blocked_by %q -> %q: %w", create.LocalID, dep, err))
 			}
 		}
 	}
@@ -194,42 +161,3 @@ func (b *batchIDs) resolve(ref string) string {
 func (b *batchIDs) resolveLocal(ref string) string { return b.byLocalID[ref] }
 
 func (b *batchIDs) createdMappings() []storage.IDMapping { return b.mappings }
-
-// --- create inputs --------------------------------------------------------
-
-func bulkCreateInput(spec storage.BulkIssueSpec, prefix string, batch *batchIDs) (storage.CreateIssueInput, error) {
-	issueType, err := model.ParseIssueType(*spec.IssueType)
-	if err != nil {
-		return storage.CreateIssueInput{}, fmt.Errorf("bulk: %w", err)
-	}
-	priority := model.PriorityNormal
-	if spec.Priority != nil {
-		priority, err = model.ParsePriority(*spec.Priority)
-		if err != nil {
-			return storage.CreateIssueInput{}, fmt.Errorf("bulk: %w", err)
-		}
-	}
-	return storage.CreateIssueInput{
-		Title:       strings.TrimSpace(*spec.Title),
-		Description: valueOr(spec.Description, ""),
-		Prompt:      valueOr(spec.Prompt, ""),
-		IssueType:   issueType,
-		Topic:       strings.TrimSpace(*spec.Topic),
-		ParentID:    batch.resolve(spec.Parent),
-		Priority:    priority,
-		Assignee:    valueOr(spec.Assignee, ""),
-		Lane:        valueOr(spec.Lane, ""),
-		Labels:      valueOr(spec.Labels, nil),
-		// Placement stays at its zero value, so a batch keeps its file order
-		// in the ranked order with no flag to remember, whichever of the two
-		// authored formats the file is. [LAW:one-source-of-truth]
-		Prefix: prefix,
-	}, nil
-}
-
-func valueOr[T any](value *T, fallback T) T {
-	if value == nil {
-		return fallback
-	}
-	return *value
-}

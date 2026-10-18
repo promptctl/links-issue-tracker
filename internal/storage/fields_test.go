@@ -108,7 +108,7 @@ func TestABulkUpdateKeyStatesTheFieldItNames(t *testing.T) {
 	// The gate's own refusal of a document stating nothing, so that verdict is
 	// recognised by what the gate says rather than by its wording.
 	empty := storage.BulkIssueSpec{ID: "links-x-1"}
-	_, emptyRefusal := storage.BulkWriteOrder([]storage.BulkIssueSpec{empty}, nil)
+	_, emptyRefusal := storage.ParseBulkFile([]storage.BulkIssueSpec{empty}, nil)
 	if emptyRefusal == nil {
 		t.Fatal("the gate admitted an update document stating nothing")
 	}
@@ -127,15 +127,14 @@ func TestABulkUpdateKeyStatesTheFieldItNames(t *testing.T) {
 		value := reflect.New(field.Type.Elem())
 		value.Elem().Set(reflect.ValueOf(sample))
 		reflect.ValueOf(&doc).Elem().Field(i).Set(value)
-		_, err := storage.BulkWriteOrder([]storage.BulkIssueSpec{doc}, nil)
+		file, err := storage.ParseBulkFile([]storage.BulkIssueSpec{doc}, nil)
 		switch {
 		case err == nil:
 			admitted++
-			patch, err := storage.BulkUpdatePatch(doc)
-			if err != nil {
-				t.Fatalf("BulkUpdatePatch(%s) after the gate admitted it: %v", field.Name, err)
+			if len(file.Updates) != 1 {
+				t.Fatalf("a document stating only %s parsed to %d updates, want 1", field.Name, len(file.Updates))
 			}
-			if got := statedFields(patch); !slices.Equal(got, []string{field.Name}) {
+			if got := statedFields(file.Updates[0].Patch); !slices.Equal(got, []string{field.Name}) {
 				t.Errorf("a document stating only %s became a patch stating %v", field.Name, got)
 			}
 		case err.Error() == emptyRefusal.Error():

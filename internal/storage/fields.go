@@ -121,8 +121,9 @@ func bulkAsStated[T any](stated func(BulkIssueSpec) *T) func(BulkIssueSpec) (*T,
 
 // bulkParsed is the bulk side of a field whose document key carries raw
 // input: a stated value goes through the field's one parse gate, and an
-// unstated one stays unstated.
-func bulkParsed[R, T any](stated func(BulkIssueSpec) *R, parse func(R) (T, error)) func(BulkIssueSpec) (*T, error) {
+// unstated one stays unstated. A refusal names the document key and the value
+// it held, so the author can find the line to fix.
+func bulkParsed[R, T any](key string, stated func(BulkIssueSpec) *R, parse func(R) (T, error)) func(BulkIssueSpec) (*T, error) {
 	return func(doc BulkIssueSpec) (*T, error) {
 		raw := stated(doc)
 		if raw == nil {
@@ -130,7 +131,7 @@ func bulkParsed[R, T any](stated func(BulkIssueSpec) *R, parse func(R) (T, error
 		}
 		value, err := parse(*raw)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("has invalid %s %#v: %w", key, *raw, err)
 		}
 		return &value, nil
 	}
@@ -147,15 +148,15 @@ func (u UpdateIssueInput) IsEmpty() bool {
 	return true
 }
 
-// BulkUpdatePatch is the field patch a bulk update document states, one
-// pointer per field the document sets. Each engine applies exactly this patch,
-// so a document means the same edit whichever engine opens the file.
-// [LAW:one-source-of-truth]
-func BulkUpdatePatch(doc BulkIssueSpec) (UpdateIssueInput, error) {
+// bulkUpdatePatch is the field patch a bulk update document states, one
+// pointer per field the document sets. The bulk gate hands each engine exactly
+// this patch, so a document means the same edit whichever engine opens the
+// file. [LAW:one-source-of-truth]
+func bulkUpdatePatch(doc BulkIssueSpec) (UpdateIssueInput, error) {
 	patch := UpdateIssueInput{Reason: strings.TrimSpace(doc.Reason)}
 	for _, field := range issueFields {
 		if err := field.fromBulk(doc, &patch); err != nil {
-			return UpdateIssueInput{}, fmt.Errorf("bulk: update %q: %w", doc.ID, err)
+			return UpdateIssueInput{}, err
 		}
 	}
 	return patch, nil
@@ -187,7 +188,7 @@ var issueFields = []issueField{
 		func(issue model.Issue) string { return issue.Prompt }),
 	patchField("issue_type", ShortText,
 		func(in *UpdateIssueInput) **model.IssueType { return &in.IssueType },
-		bulkParsed(func(doc BulkIssueSpec) *string { return doc.IssueType }, model.ParseIssueType),
+		bulkParsed("type", func(doc BulkIssueSpec) *string { return doc.IssueType }, model.ParseIssueType),
 		func(issue *model.Issue, v model.IssueType) error {
 			// [LAW:single-enforcer] Container vs leaf decides which lifecycle
 			// expression backs the issue, so crossing that line would orphan
@@ -204,7 +205,7 @@ var issueFields = []issueField{
 		func(issue model.Issue) string { return string(issue.IssueType) }),
 	patchField("priority", ShortText,
 		func(in *UpdateIssueInput) **model.Priority { return &in.Priority },
-		bulkParsed(func(doc BulkIssueSpec) *int { return doc.Priority }, model.ParsePriority),
+		bulkParsed("priority", func(doc BulkIssueSpec) *int { return doc.Priority }, model.ParsePriority),
 		func(issue *model.Issue, v model.Priority) error { issue.Priority = v; return nil },
 		// The numeric wire encoding, not the display name: history keeps what
 		// the field stores, so a replay reads back the value that was written.

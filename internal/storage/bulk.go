@@ -65,6 +65,46 @@ type BulkApplyResult struct {
 	Updated []string
 }
 
+// BulkFile is a bulk file the gate admitted, parsed: the issues it creates,
+// in the order they are written, and the patch each update document applies.
+// An engine writes exactly this, so a document means the same write whichever
+// engine opens the file, and no engine parses a document itself.
+// [LAW:parse-dont-validate] [LAW:one-source-of-truth]
+type BulkFile struct {
+	Creates []FileCreate
+	Updates []BulkUpdate
+}
+
+// BulkUpdate is one update document, parsed: the issue it names and the patch
+// of the fields it states.
+type BulkUpdate struct {
+	ID    string
+	Patch UpdateIssueInput
+}
+
+// FileCreate is one create document of an import file, parsed. Index is its
+// position in the file, which is how a bulk refusal names it; Parent and
+// BlockedBy are references, each a local_id in the file or a real id, which
+// only the write can resolve.
+type FileCreate struct {
+	Index     int
+	LocalID   string
+	Parent    string
+	BlockedBy []string
+	issue     CreateIssueInput
+}
+
+// Input is the create this document writes, given the two facts only the
+// write knows: the real id its parent reference resolved to, and the prefix of
+// the workspace it lands in. Taking them as arguments is what keeps a write
+// from landing with its parent unresolved. [LAW:types-are-the-program]
+func (c FileCreate) Input(parentID, prefix string) CreateIssueInput {
+	in := c.issue
+	in.ParentID = parentID
+	in.Prefix = prefix
+	return in
+}
+
 // ImportTreeSpec is a single record in a declarative tree-import file. LocalID
 // is opaque — it's used inside the spec to wire Parent and BlockedBy refs and
 // is replaced with the generated lit issue ID at import time.

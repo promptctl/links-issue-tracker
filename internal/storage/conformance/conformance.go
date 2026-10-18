@@ -209,6 +209,7 @@ var cases = []engineCase{
 	{"parent_wiring", parentWiring},
 	{"every_ticket_lives_inside_a_container", everyTicketLivesInsideAContainer},
 	{"an_import_file_that_breaks_a_rule_is_refused_whole", anImportFileThatBreaksARuleIsRefusedWhole},
+	{"a_bulk_file_refused_at_a_write_applies_no_update", aBulkFileRefusedAtAWriteAppliesNoUpdate},
 	{"the_hierarchy_stays_a_tree", theHierarchyStaysATree},
 	{"blocks_never_runs_along_the_hierarchy", blocksNeverRunsAlongTheHierarchy},
 	{"blocks_never_orders_two_leaves_of_one_epic", blocksNeverOrdersTwoLeavesOfOneEpic},
@@ -2779,6 +2780,39 @@ func anImportFileThatBreaksARuleIsRefusedWhole(t *testing.T, ctx context.Context
 	// one from landing.
 	if got := mustGet(t, ctx, st, existing.ID); got.Title != "existing" {
 		t.Errorf("existing title after the refused imports = %q, want %q: a file the gate refuses writes nothing", got.Title, "existing")
+	}
+}
+
+// aBulkFileRefusedAtAWriteAppliesNoUpdate pins the order a bulk file is
+// written in: its creates and their edges first, its updates last. A file the
+// gate admits can still be refused at a write the gate could not judge — a
+// parent or blocked_by naming a real id that names no issue — and the creates
+// before that write are rolled back, but an update cannot be. Written last, an
+// update document ahead of the refused create in the file never lands.
+func aBulkFileRefusedAtAWriteAppliesNoUpdate(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	existing := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "existing", Topic: "core", IssueType: model.TypeEpic})
+	title, topic, epicType, taskType, renamed := "imported", "core", "epic", "task", "renamed"
+	rename := storage.BulkIssueSpec{ID: existing.ID, Title: &renamed}
+	for _, file := range []struct {
+		what  string
+		specs []storage.BulkIssueSpec
+	}{
+		{"an update, then an epic blocked by an issue that does not exist", []storage.BulkIssueSpec{rename,
+			{LocalID: "e", Title: &title, Topic: &topic, IssueType: &epicType, BlockedBy: []string{"no-such-issue"}}}},
+		{"an update, then an epic, then a task under a parent that does not exist", []storage.BulkIssueSpec{rename,
+			{LocalID: "e", Title: &title, Topic: &topic, IssueType: &epicType},
+			{Title: &title, Topic: &topic, IssueType: &taskType, Parent: "no-such-issue"}}},
+	} {
+		before := mustList(t, ctx, st, storage.ListIssuesFilter{})
+		if _, err := st.BulkApply(ctx, prefix, "ada", file.specs); err == nil {
+			t.Fatalf("BulkApply(%s) succeeded; want the write naming a missing issue refused", file.what)
+		}
+		if after := mustList(t, ctx, st, storage.ListIssuesFilter{}); len(after) != len(before) {
+			t.Errorf("BulkApply(%s): live issues = %d, want %d: the creates before the refused write are rolled back", file.what, len(after), len(before))
+		}
+		if got := mustGet(t, ctx, st, existing.ID); got.Title != "existing" {
+			t.Errorf("BulkApply(%s): existing title = %q, want %q: an update is written after every create and edge", file.what, got.Title, "existing")
+		}
 	}
 }
 
