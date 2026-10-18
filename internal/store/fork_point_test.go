@@ -2,8 +2,10 @@ package store
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
@@ -440,6 +442,38 @@ func TestAPrunedTrackingRefTakesItsForkPointWithIt(t *testing.T) {
 	if _, ok := left["feature"]; ok || len(left) != 1 {
 		t.Fatalf("fork points after the prune = %v, want master's alone", left)
 	}
+}
+
+// TestARemotesNewURLKeepsItsForkPoint re-points delta's remote after the
+// fetch that brought the re-rooted history, as a git remote whose URL changed
+// does on every sync. The remote is the same remote, so its fork point stays
+// and the pull still merges against it.
+func TestARemotesNewURLKeepsItsForkPoint(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := newForkBelowTheCut(t, ctx)
+	link := filepath.Join(t.TempDir(), "remote-link")
+	if err := os.Symlink(strings.TrimPrefix(f.remoteURL, "file://"), link); err != nil {
+		t.Fatalf("link the remote: %v", err)
+	}
+
+	delta := openSyncOrFatal(t, ctx, f.delta)
+	defer func() { _ = delta.Close() }()
+	if err := delta.SyncFetch(ctx, "origin", false); err != nil {
+		t.Fatalf("SyncFetch(delta) error = %v", err)
+	}
+	if err := delta.SyncSetRemoteURL(ctx, "origin", "file://"+link); err != nil {
+		t.Fatalf("SyncSetRemoteURL(delta) error = %v", err)
+	}
+	pulled, err := delta.SyncPull(ctx, "origin", "master")
+	if err != nil {
+		t.Fatalf("SyncPull(delta) error = %v", err)
+	}
+	if pulled.State != storage.SyncPullLinearized {
+		t.Fatalf("pull state = %q, want %q", pulled.State, storage.SyncPullLinearized)
+	}
+	f.assertForkPointBase(t, delta)
+	f.assertMerged(t, ctx, delta)
 }
 
 // TestTheReceiveLandsTheClonesForkPoint drives the automatic receive's shape:

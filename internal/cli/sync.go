@@ -983,10 +983,7 @@ func syncDoltRemotesFromGit(ctx context.Context, session syncSession, ws workspa
 			continue
 		}
 		if strings.TrimSpace(currentURL) != desiredURL {
-			if err := session.syncer.SyncRemoveRemote(ctx, remote.Name); err != nil {
-				return remoteSyncState{}, err
-			}
-			if err := session.syncer.SyncAddRemote(ctx, remote.Name, desiredURL); err != nil {
+			if err := session.syncer.SyncSetRemoteURL(ctx, remote.Name, desiredURL); err != nil {
 				return remoteSyncState{}, err
 			}
 		}

@@ -56,6 +56,9 @@ import (
 type Syncer interface {
 	SyncAddRemote(ctx context.Context, name string, url string) error
 	SyncRemoveRemote(ctx context.Context, name string) error
+	// SyncSetRemoteURL points the remote name at url. The remote stays the
+	// same remote: unlike a removal, it keeps its fork points.
+	SyncSetRemoteURL(ctx context.Context, name string, url string) error
 	SyncListRemotes(ctx context.Context) ([]SyncRemote, error)
 
 	// SyncStatus reports the local side only — build, position, pending

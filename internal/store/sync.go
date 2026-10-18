@@ -185,6 +185,30 @@ func (s *Store) SyncRemoveRemote(ctx context.Context, name string) error {
 	})
 }
 
+// SyncSetRemoteURL re-points a remote in one mutation. Dolt has no set-url, so
+// it is a remove and an add; the fork points stay, because the name still
+// names the remote they record, and the next fetch brings its tracking refs
+// back (dropOrphanForkPoints runs only after that fetch).
+func (s *Store) SyncSetRemoteURL(ctx context.Context, name string, url string) error {
+	trimmedName, err := requireSyncArg("remote name", name)
+	if err != nil {
+		return err
+	}
+	trimmedURL, err := requireSyncArg("remote url", url)
+	if err != nil {
+		return err
+	}
+	return s.runSyncMutation(ctx, func(ctx context.Context) error {
+		if _, err := callIntProcedure(ctx, s.db, "DOLT_REMOTE", "remove", trimmedName); err != nil {
+			return fmt.Errorf("re-point dolt remote %q: remove: %w", trimmedName, err)
+		}
+		if _, err := callIntProcedure(ctx, s.db, "DOLT_REMOTE", "add", trimmedName, trimmedURL); err != nil {
+			return fmt.Errorf("re-point dolt remote %q: add %s: %w", trimmedName, trimmedURL, err)
+		}
+		return nil
+	})
+}
+
 func (s *Store) SyncFetch(ctx context.Context, remote string, prune bool) error {
 	trimmedRemote, err := requireSyncArg("remote", remote)
 	if err != nil {
@@ -1076,9 +1100,16 @@ func (s *Store) SyncFreshness(ctx context.Context, remote string, branch string)
 	// branch is actually diverged. An ahead-only or behind-only branch is not
 	// diverged, so it stays 0 rather than carrying a timestamp its state
 	// contradicts (the field name would otherwise lie on the wire). When
-	// diverged, the two ranges hold every commit past the base, so the earlier
-	// of their oldest commits dates the fork. [LAW:types-are-the-program] the
-	// field is populated iff the state it names holds.
+	// diverged, the earlier of the two ranges' oldest commits dates the fork.
+	// [LAW:types-are-the-program] the field is populated iff the state it
+	// names holds.
+	//
+	// Under a fork-point base, Behind is the remote's whole re-rooted history,
+	// since the local branch holds none of its hashes. For a fork below the
+	// cut that is exactly the commits past the base. For a fork above it,
+	// which reaches this base only when the follow refused, it also counts the
+	// re-root's copies of the commits between the cut and the base: a copy has
+	// its own hash, and nothing locally held tells it from a new commit.
 	if freshness.State() == storage.SyncDiverged {
 		freshness.OldestDivergedUnix = earlierValidUnix(aheadOldest, behindOldest)
 	}
