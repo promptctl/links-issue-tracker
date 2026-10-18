@@ -2,8 +2,14 @@ package store
 
 import (
 	"context"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
+	"github.com/dolthub/dolt/go/libraries/doltcore/ref"
+	"github.com/dolthub/dolt/go/store/hash"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
@@ -211,7 +217,7 @@ func boundAt(t *testing.T, ctx context.Context, alpha, head string, keep uint64)
 	st := openSyncOrFatal(t, ctx, alpha)
 	defer func() { _ = st.Close() }()
 	b := storage.HistoryBound{Remote: "origin", Branch: "master", Head: head, Keep: keep}
-	b.Err = st.publishBound(ctx, &b)
+	_, b.Err = st.publishBound(ctx, &b)
 	return b
 }
 
@@ -314,5 +320,90 @@ func TestAStaleLeaseOverTheLandedReRootStillFollowsIt(t *testing.T) {
 	}
 	if fresh.State() != storage.SyncBehind {
 		t.Fatalf("alpha against the remote = %q; want behind bravo's push", fresh.State())
+	}
+}
+
+// TestAHeldLeaseTheBranchCannotFollowIsTheBoundsError publishes a re-root
+// that lands, over a local branch the follow cannot recognize: past the
+// pushed head, alpha holds a second commit that rebuilds to the re-root's
+// root, so no one cut is evidenced. The remote carries the re-root and the
+// branch stays on the old history, unrelated to it, and the bound says so
+// rather than ending as though nothing were wrong.
+func TestAHeldLeaseTheBranchCannotFollowIsTheBoundsError(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	remoteURL := "file://" + filepath.Join(t.TempDir(), "remote")
+	alpha := migratedDoltDir(t)
+	epic := seedReconcileRemote(t, ctx, alpha, remoteURL)
+	createAndPush(t, ctx, alpha, epic, "a1")
+	head := headAt(t, ctx, alpha)
+	const keep = 3
+	withChunkStore(t, alpha, func(ddb *doltdb.DoltDB) {
+		branch := ref.NewBranchRef("master")
+		headCommit := readCommit(t, ctx, ddb, hash.Parse(head))
+		cut, err := firstParentAncestor(ctx, ddb, headCommit, keep-1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		value, meta, err := commitContent(ctx, readCommit(t, ctx, ddb, cut))
+		if err != nil {
+			t.Fatal(err)
+		}
+		twin, err := ddb.CommitDanglingWithParentCommits(ctx, value, []*doltdb.Commit{headCommit}, meta)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := ddb.SetHeadToCommit(ctx, branch, twin); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	b := boundAt(t, ctx, alpha, head, keep)
+	if b.Lease != storage.LeaseHeld || b.Collected {
+		t.Fatalf("the bound = %+v; want its re-root to land and nothing collected", b)
+	}
+	if b.Err == nil || !strings.Contains(b.Err.Error(), "carries a re-root the branch did not follow") {
+		t.Fatalf("the bound's error = %v; want the branch left unrelated to the remote reported", b.Err)
+	}
+	st := openSyncOrFatal(t, ctx, alpha)
+	defer func() { _ = st.Close() }()
+	if remote, err := commitHashOfRef(ctx, st.db, "remotes/origin/master"); err != nil || remote != b.ReRooted.Head {
+		t.Fatalf("the remote's head is %s (%v); want the re-root %s", remote, err, b.ReRooted.Head)
+	}
+}
+
+// TestAReRootPushWithNoVerdictLeavesNoScratch has the lease push fail
+// before it reaches the remote: the remote's path is a file, not a store.
+// The push reaches no verdict, and the scratch the re-root was written on is
+// gone anyway, so nothing keeps the history below the cut reachable.
+func TestAReRootPushWithNoVerdictLeavesNoScratch(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	remotePath := filepath.Join(t.TempDir(), "remote")
+	alpha := migratedDoltDir(t)
+	epic := seedReconcileRemote(t, ctx, alpha, "file://"+remotePath)
+	createAndPush(t, ctx, alpha, epic, "a1")
+	head := headAt(t, ctx, alpha)
+	if err := os.Rename(remotePath, remotePath+".gone"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(remotePath, []byte("not a store"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	st := openSyncOrFatal(t, ctx, alpha)
+	defer func() { _ = st.Close() }()
+	if _, err := st.reRootScratch(ctx, "master", head, 3); err != nil {
+		t.Fatalf("reRootScratch error = %v", err)
+	}
+	if left := branchesUnder(t, ctx, st, reRootScratchPrefix); len(left) != 1 {
+		t.Fatalf("scratch branches before the push = %v; want the re-root's one", left)
+	}
+	lease, err := st.publishReRoot(ctx, "origin", "master", head)
+	if err == nil || lease != "" {
+		t.Fatalf("the push to a remote that is a file = %q, %v; want no verdict and an error", lease, err)
+	}
+	if left := branchesUnder(t, ctx, st, reRootScratchPrefix); len(left) != 0 {
+		t.Fatalf("the re-root's scratch branch was left behind: %v", left)
 	}
 }
