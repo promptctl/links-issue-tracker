@@ -166,6 +166,58 @@ func TestSyncPullFollowsAReRootedRemote(t *testing.T) {
 	}
 }
 
+// TestAFollowCollectsTheHistoryBelowTheCut has bravo follow alpha's re-root
+// through `lit sync pull`, holding every kind of local ref that names a commit
+// below the cut: its migration checkpoints, the fork point its adopt recorded,
+// and a re-root scratch a killed bound left. The follow drops them and runs
+// the full GC, so neither bravo's old head nor the cut resolves in its store
+// any more, the store shrank, and the follow's event carries both sizes.
+func TestAFollowCollectsTheHistoryBelowTheCut(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	r := newReRootedRemote(t, ctx, true)
+
+	bravo := openSyncOrFatal(t, ctx, r.bravo)
+	defer func() { _ = bravo.Close() }()
+	oldHead := headCommit(t, ctx, bravo)
+	if err := execProcedureDiscard(ctx, bravo.db, "DOLT_BRANCH", reRootScratchPrefix+"killed", r.cut); err != nil {
+		t.Fatal(err)
+	}
+	pins := []string{migrationCheckpointPrefix + "-", migrationDriftRepairCheckpointPrefix + "-", reconcileScratchPrefix, reRootScratchPrefix}
+	if len(branchesUnder(t, ctx, bravo, migrationCheckpointPrefix+"-")) == 0 {
+		t.Fatalf("bravo holds no %s checkpoint, so the test cannot show the follow dropping one", migrationCheckpointPrefix)
+	}
+
+	if _, err := bravo.SyncPull(ctx, "origin", "master"); err != nil {
+		t.Fatalf("SyncPull(bravo) error = %v", err)
+	}
+	r.assertFollowed(t, bravo, storage.SyncEntryPull)
+	r.assertMerged(t, ctx, bravo)
+	for _, old := range []string{oldHead, r.cut} {
+		var n int
+		if err := bravo.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM dolt_log(?)`, old).Scan(&n); err == nil {
+			t.Fatalf("%s still resolves in bravo's store, with %d commits below it; want it collected", old, n)
+		}
+	}
+	for _, prefix := range pins {
+		if left := branchesUnder(t, ctx, bravo, prefix); len(left) != 0 {
+			t.Fatalf("branches under %q still pin the history below the cut: %v", prefix, left)
+		}
+	}
+	if forkPoint, remote := branchesUnder(t, ctx, bravo, forkPointPrefix)["origin/master"], r.alphaReRoot.Head; forkPoint != remote {
+		t.Fatalf("bravo's fork point is %q; want it moved onto the remote's re-rooted head %s", forkPoint, remote)
+	}
+
+	c := bravo.FollowedReRoots()[0].Collection
+	if !c.Ran || c.BytesAfter >= c.BytesBefore {
+		t.Fatalf("the follow's collection = %+v; want the GC run and the store smaller after it", c)
+	}
+	event := bravo.FollowedReRoots()[0].EventValue()
+	if event["collection.ran"] != true || event["collection.bytes_before"] != c.BytesBefore || event["collection.bytes_after"] != c.BytesAfter {
+		t.Fatalf("the follow's event = %v; want collection.ran true and %d -> %d bytes", event, c.BytesBefore, c.BytesAfter)
+	}
+}
+
 // TestSyncReceiveFollowsAReRootedRemote drives the receive: it follows the
 // re-root and reports the concurrent edits as an ordinary divergence, which
 // the reconcile the receive hands it to merges.

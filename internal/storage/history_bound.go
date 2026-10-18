@@ -28,11 +28,10 @@ type HistoryBound struct {
 	// RemoteGC is the remote's GC that follows the force push, whatever the
 	// lease said: the remote's root decides whether it replaces anything.
 	RemoteGC RemoteGC
-	// Collected is set once the full GC ran, which it does only after this
-	// checkout's branch followed the re-root onto the remote's history; the
-	// two byte counts are the store's size on disk around it.
-	Collected               bool
-	BytesBefore, BytesAfter int64
+	// Collection is what this checkout reclaimed once its branch followed the
+	// re-root the remote carries: the Collection of the bound's own follow,
+	// zero when the branch did not follow.
+	Collection Collection
 	// Err is where the bound stopped, if it did. The push before it landed
 	// whatever Err says.
 	Err error
@@ -46,25 +45,23 @@ func (b HistoryBound) Fired() bool {
 
 // EventValue is the bound as one value of the event's history_bound.records
 // list: its own facts under history_bound.*, the re-root it published under
-// the reroot.* keys every re-root's facts use, and the remote's GC under
-// remote_gc.*.
+// the reroot.* keys every re-root's facts use, the reclaim its follow ran
+// under collection.*, and the remote's GC under remote_gc.*.
 func (b HistoryBound) EventValue() map[string]any {
 	value := map[string]any{
-		"history_bound.remote":       b.Remote,
-		"history_bound.branch":       b.Branch,
-		"history_bound.head":         b.Head,
-		"history_bound.height":       b.Height,
-		"history_bound.reroot_at":    b.ReRootAt,
-		"history_bound.keep":         b.Keep,
-		"history_bound.fired":        b.Fired(),
-		"history_bound.lease":        string(b.Lease),
-		"history_bound.collected":    b.Collected,
-		"history_bound.bytes_before": b.BytesBefore,
-		"history_bound.bytes_after":  b.BytesAfter,
-		"history_bound.error":        telemetry.ErrorText(b.Err),
+		"history_bound.remote":    b.Remote,
+		"history_bound.branch":    b.Branch,
+		"history_bound.head":      b.Head,
+		"history_bound.height":    b.Height,
+		"history_bound.reroot_at": b.ReRootAt,
+		"history_bound.keep":      b.Keep,
+		"history_bound.fired":     b.Fired(),
+		"history_bound.lease":     string(b.Lease),
+		"history_bound.error":     telemetry.ErrorText(b.Err),
 	}
 	facts, counts := b.ReRooted.EventRecord()
 	maps.Copy(value, facts)
+	maps.Copy(value, b.Collection.EventRecord())
 	maps.Copy(value, b.RemoteGC.EventRecord())
 	for key, n := range counts {
 		value[key] = n

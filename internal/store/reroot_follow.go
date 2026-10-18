@@ -35,7 +35,14 @@ import (
 // Histories that share a commit, a remote never fetched, and an unrelated
 // remote that is not a re-root of this branch are all left exactly as they
 // are; the last stays the unrelated-histories divergence the reconcile
-// reports. A follow is recorded under entry, for FollowedReRoots.
+// reports.
+//
+// A branch that followed is across the cut, so the store then reclaims what
+// is below it (collectBelowTheCut): whichever checkout follows, the history
+// the re-root dropped leaves its store too, and not only the store of the
+// checkout whose push re-rooted it. The follow and its collection are
+// recorded under entry, for FollowedReRoots, and returned; the record is zero
+// when the branch did not move.
 //
 // Every public sync entry point that reads the tracking ref runs it first, so
 // none of them meets a re-root it could follow as a divergence; the private
@@ -44,45 +51,60 @@ import (
 // and reopening this store's own engine around it, so it refuses to run under
 // the commit lock: LOCK comes before the commit lock (doc.go).
 // [LAW:no-ambient-temporal-coupling]
-func (s *Store) followRemoteReRoot(ctx context.Context, remote, branch string, entry storage.SyncEntry) (followed bool, err error) {
+func (s *Store) followRemoteReRoot(ctx context.Context, remote, branch string, entry storage.SyncEntry) (storage.FollowedReRoot, error) {
 	trimmedRemote, err := requireSyncArg("remote", remote)
 	if err != nil {
-		return false, err
+		return storage.FollowedReRoot{}, err
 	}
 	trimmedBranch, err := requireSyncArg("branch", branch)
 	if err != nil {
-		return false, err
+		return storage.FollowedReRoot{}, err
 	}
 	if since, held := commitLockHeldSince(ctx); held {
-		return false, fmt.Errorf("follow a re-root of %s/%s: the commit lock is held (since %s), and the follow takes Dolt's LOCK, which is taken before the commit lock or not at all", trimmedRemote, trimmedBranch, since.Format("15:04:05.000"))
+		return storage.FollowedReRoot{}, fmt.Errorf("follow a re-root of %s/%s: the commit lock is held (since %s), and the follow takes Dolt's LOCK, which is taken before the commit lock or not at all", trimmedRemote, trimmedBranch, since.Format("15:04:05.000"))
 	}
 	local, unrelated, err := s.unrelatedToRemote(ctx, trimmedRemote, trimmedBranch)
 	if err != nil {
-		return false, err
+		return storage.FollowedReRoot{}, err
 	}
 	// The one branch is the relation the probe read: only histories that share
 	// no commit can be a re-root to follow, and finding out costs the engine.
 	// [LAW:dataflow-not-control-flow]
 	if !unrelated {
-		return false, nil
+		return storage.FollowedReRoot{}, nil
 	}
-	var reRooted storage.ReRooted
+	followed := storage.FollowedReRoot{Entry: entry}
 	var moved bool
 	err = s.withEngineClosed(ctx, func(holdCtx context.Context, ddb *doltdb.DoltDB) error {
 		var err error
-		reRooted, moved, err = followReRoot(holdCtx, ddb, ref.NewBranchRef(local), ref.NewRemoteRef(trimmedRemote, trimmedBranch))
+		followed.ReRooted, moved, err = followReRoot(holdCtx, ddb, ref.NewBranchRef(local), ref.NewRemoteRef(trimmedRemote, trimmedBranch))
 		return err
 	})
+	if !moved {
+		return storage.FollowedReRoot{}, wrapFollowErr(trimmedRemote, trimmedBranch, err)
+	}
 	// A branch that moved stands even when something after the move failed,
-	// as ReRoot's own result does, so the follow is recorded either way.
+	// as ReRoot's own result does, so the follow is recorded either way; only
+	// a follow that finished is across the cut and collects below it.
 	// [LAW:no-silent-failure]
-	if moved {
-		s.followed = append(s.followed, storage.FollowedReRoot{Entry: entry, ReRooted: reRooted})
+	if err == nil {
+		var collectErr error
+		followed.Collection, collectErr = s.collectBelowTheCut(ctx, trimmedRemote)
+		if collectErr != nil {
+			err = fmt.Errorf("collect below the cut: %w", collectErr)
+		}
 	}
-	if err != nil {
-		return moved, fmt.Errorf("follow a re-root of %s/%s: %w", trimmedRemote, trimmedBranch, err)
+	s.followed = append(s.followed, followed)
+	return followed, wrapFollowErr(trimmedRemote, trimmedBranch, err)
+}
+
+// wrapFollowErr is a follow's error as it reaches the entry point, naming the
+// remote branch it followed; nil stays nil.
+func wrapFollowErr(remote, branch string, err error) error {
+	if err == nil {
+		return nil
 	}
-	return moved, nil
+	return fmt.Errorf("follow a re-root of %s/%s: %w", remote, branch, err)
 }
 
 // SyncFollowReRoot is followRemoteReRoot for a caller that fetched and

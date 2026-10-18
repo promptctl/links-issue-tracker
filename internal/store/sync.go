@@ -800,7 +800,7 @@ func (s *Store) retryPushAfterFollow(ctx context.Context, remote, branch string,
 		return storage.SyncPushResult{}, pushErr, err
 	}
 	followed, err := s.followRemoteReRoot(ctx, remote, trimmedBranch, storage.SyncEntryPush)
-	if err != nil || !followed {
+	if err != nil || followed.Head == "" {
 		return storage.SyncPushResult{}, pushErr, err
 	}
 	result, pushErr = s.pushMutation(ctx, remote, trimmedBranch, setUpstream, force)
@@ -835,18 +835,15 @@ func (s *Store) SyncCompactAndPush(ctx context.Context, remote string, branch st
 		return pushErr
 	})
 	// A push refused over a re-root it follows runs again without
-	// compacting: the store was compacted moments ago.
+	// compacting: the follow collected the store below the cut.
 	result, err, followErr := s.retryPushAfterFollow(ctx, remote, branch, setUpstream, force, result, err)
 	err = joinFollowFailure(err, followErr)
 	// The bound keeps the history the push just published, so it runs once
 	// the push has landed and only then. Its outcome is carried with the
-	// other maintenance and never fails the push that landed before it, and
-	// its GC's sweep joins this push's.
+	// other maintenance and never fails the push that landed before it.
 	var bound string
 	if err == nil {
-		kept, boundSweep := s.boundHistory(ctx, strings.TrimSpace(remote), strings.TrimSpace(branch))
-		bound = historyBoundReport(kept)
-		sweep = sweep.plus(boundSweep)
+		bound = historyBoundReport(s.boundHistory(ctx, strings.TrimSpace(remote), strings.TrimSpace(branch)))
 	}
 	// DOLT_GC above compacts `noms`; the prune collects the other half of the
 	// store's local footprint, the abandoned git remote mirrors. All three jobs

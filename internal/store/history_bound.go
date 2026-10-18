@@ -57,8 +57,8 @@ const reRootScratchPrefix = "lit-reroot/"
 //     before a peer built on it (storage.LeaseStale), so the fetch is what
 //     says whether the remote carries the re-root; a remote a peer pushed to
 //     in between carries none, and the branch stays where it was;
-//  5. once the branch has followed, it drops the local refs that pin the
-//     history below the cut and runs the full GC (collectBelowTheCut).
+//  5. once the branch has followed, it reclaims the history below the cut,
+//     as every follow does (collectBelowTheCut).
 //
 // A branch that did not follow is left on the history it had, and the next
 // push past the bound tries again; that is only sound while the remote still
@@ -68,34 +68,31 @@ const reRootScratchPrefix = "lit-reroot/"
 // itself, so it cannot run inside the lease push's mutation.
 //
 // The bound is recorded for HistoryBounds whatever happened to it, and its
-// error is its own: the push before it landed. The GC's sweep of orphaned
-// instance refs is returned beside it, for the push's sweep account.
-// [LAW:nothing-unseen]
-func (s *Store) boundHistory(ctx context.Context, remote, branch string) (storage.HistoryBound, refSweepOutcome) {
+// error is its own: the push before it landed. [LAW:nothing-unseen]
+func (s *Store) boundHistory(ctx context.Context, remote, branch string) storage.HistoryBound {
 	b := storage.HistoryBound{Remote: remote, Branch: branch, ReRootAt: s.bound.reRootAt, Keep: s.bound.keep}
-	var sweep refSweepOutcome
-	sweep, b.Err = s.keepHistoryBound(ctx, &b)
+	b.Err = s.keepHistoryBound(ctx, &b)
 	s.bounds = append(s.bounds, b)
-	return b, sweep
+	return b
 }
 
 // keepHistoryBound runs boundHistory's steps, filling in b as each one lands.
-func (s *Store) keepHistoryBound(ctx context.Context, b *storage.HistoryBound) (refSweepOutcome, error) {
+func (s *Store) keepHistoryBound(ctx context.Context, b *storage.HistoryBound) error {
 	if _, err := requireSyncArg("branch", b.Branch); err != nil {
-		return refSweepOutcome{}, err
+		return err
 	}
 	trackingRef := fmt.Sprintf("remotes/%s/%s", b.Remote, b.Branch)
 	if err := s.db.QueryRowContext(ctx, `SELECT commit_hash, commit_order FROM dolt_log(?) LIMIT 1`, trackingRef).Scan(&b.Head, &b.Height); err != nil {
-		return refSweepOutcome{}, fmt.Errorf("read the height of %s: %w", trackingRef, err)
+		return fmt.Errorf("read the height of %s: %w", trackingRef, err)
 	}
 	if !b.Fired() {
-		return refSweepOutcome{}, nil
+		return nil
 	}
 	return s.publishBound(ctx, b)
 }
 
 // publishBound is boundHistory's steps once the bound fired at b.Head.
-func (s *Store) publishBound(ctx context.Context, b *storage.HistoryBound) (refSweepOutcome, error) {
+func (s *Store) publishBound(ctx context.Context, b *storage.HistoryBound) error {
 	trackingRef := fmt.Sprintf("remotes/%s/%s", b.Remote, b.Branch)
 	var err error
 	b.ReRooted, err = s.reRootScratch(ctx, b.Branch, b.Head, b.Keep)
@@ -106,12 +103,13 @@ func (s *Store) publishBound(ctx context.Context, b *storage.HistoryBound) (refS
 	// however they ended. A re-root is deterministic, so the next push past
 	// the bound writes the same commit again, while a scratch left behind
 	// would keep the whole history below the cut reachable through every GC
-	// until then. [LAW:single-enforcer] this is the one place it is deleted.
+	// until then. One a killed bound left goes with the next collection below
+	// a cut (collectBelowTheCut).
 	sweepErr := s.runSyncMutation(ctx, func(ctx context.Context) error {
 		return s.deleteBranchesUnder(ctx, reRootScratchPrefix)
 	})
 	if err = errors.Join(err, sweepErr); err != nil {
-		return refSweepOutcome{}, err
+		return err
 	}
 	// [LAW:dataflow-not-control-flow] the remote's GC, the fetch and the
 	// follow run whatever the lease said. The remote's root decides whether
@@ -125,23 +123,21 @@ func (s *Store) publishBound(ctx context.Context, b *storage.HistoryBound) (refS
 	if remoteGCErr != nil {
 		remoteGCErr = fmt.Errorf("collect %s: %w", trackingRef, remoteGCErr)
 	}
-	sweep, err := s.followPublishedReRoot(ctx, b, trackingRef)
-	return sweep, errors.Join(err, remoteGCErr)
+	return errors.Join(s.followPublishedReRoot(ctx, b, trackingRef), remoteGCErr)
 }
 
 // followPublishedReRoot is publishBound's steps after the remote's GC: fetch,
-// follow whatever re-root the remote carries, and collect below the cut once
-// the branch has followed.
-func (s *Store) followPublishedReRoot(ctx context.Context, b *storage.HistoryBound, trackingRef string) (refSweepOutcome, error) {
+// and follow whatever re-root the remote carries, collecting below the cut
+// as every follow does.
+func (s *Store) followPublishedReRoot(ctx context.Context, b *storage.HistoryBound, trackingRef string) error {
 	if err := s.SyncFetch(ctx, b.Remote, false); err != nil {
-		return refSweepOutcome{}, fmt.Errorf("fetch to learn whether %s carries the re-root: %w", trackingRef, err)
+		return fmt.Errorf("fetch to learn whether %s carries the re-root: %w", trackingRef, err)
 	}
 	followed, err := s.followRemoteReRoot(ctx, b.Remote, b.Branch, storage.SyncEntryBound)
-	if err != nil {
-		return refSweepOutcome{}, err
-	}
-	if followed {
-		return s.collectBelowTheCut(ctx, b)
+	b.Collection = followed.Collection
+	// The follow's record has a head exactly when the branch moved.
+	if err != nil || followed.Head != "" {
+		return err
 	}
 	// The follow declines a re-root it cannot recognize as this branch's, and
 	// at the other entry points the reconcile then reports the divergence. No
@@ -150,12 +146,12 @@ func (s *Store) followPublishedReRoot(ctx context.Context, b *storage.HistoryBou
 	// on history unrelated to it. [LAW:no-silent-failure]
 	_, stranded, err := s.unrelatedToRemote(ctx, b.Remote, b.Branch)
 	if err != nil {
-		return refSweepOutcome{}, fmt.Errorf("read whether the branch still shares history with %s: %w", trackingRef, err)
+		return fmt.Errorf("read whether the branch still shares history with %s: %w", trackingRef, err)
 	}
 	if stranded {
-		return refSweepOutcome{}, fmt.Errorf("%s carries a re-root the branch did not follow, so the branch is on history unrelated to it", trackingRef)
+		return fmt.Errorf("%s carries a re-root the branch did not follow, so the branch is on history unrelated to it", trackingRef)
 	}
-	return refSweepOutcome{}, nil
+	return nil
 }
 
 // reRootScratch writes the re-root of head onto branch's scratch branch, cut
@@ -221,24 +217,24 @@ func (s *Store) publishReRoot(ctx context.Context, remote, branch, head string) 
 }
 
 // collectBelowTheCut reclaims the history below the cut once the sync branch
-// has followed the re-root: under one commit lock, it moves remote's fork
+// has followed a re-root: under one commit lock, it moves remote's fork
 // points onto the history their tracking refs now name, drops the migration
-// checkpoints and the reconcile scratch branches, every one of which names a
-// commit from before the re-root, and runs the full GC. The push has moved
-// the tracking ref by now; while it still named the old head, the same GC
-// freed nothing (links-storage-3k6u.ge9). A ref it could not drop still pins
-// that history, so it stops the pass before the GC.
+// checkpoints, the reconcile scratch branches and any re-root scratch a
+// killed bound left, every one of which names a commit from before the
+// re-root, and runs the full GC. A ref it could not drop still pins that
+// history, so it stops the pass before the GC.
 //
 // The store is measured around the pass, outside the lock, as SyncCompact
 // measures it: the two readings are an account of what happened and never an
-// input to it, so a reading that fails joins the bound's error and stops
+// input to it, so a reading that fails joins the collection's error and stops
 // nothing.
-func (s *Store) collectBelowTheCut(ctx context.Context, b *storage.HistoryBound) (refSweepOutcome, error) {
+func (s *Store) collectBelowTheCut(ctx context.Context, remote string) (storage.Collection, error) {
+	var c storage.Collection
 	var beforeErr, afterErr error
-	b.BytesBefore, beforeErr = storeBytes(s.doltRootDir)
+	c.BytesBefore, beforeErr = storeBytes(s.doltRootDir)
 	var sweep refSweepOutcome
 	err := s.runSyncMutation(ctx, func(ctx context.Context) error {
-		forkPoints, err := s.recordForkPoints(ctx, b.Remote)
+		forkPoints, err := s.recordForkPoints(ctx, remote)
 		s.forkPoints = append(s.forkPoints, forkPoints...)
 		if err != nil {
 			return err
@@ -248,16 +244,19 @@ func (s *Store) collectBelowTheCut(ctx context.Context, b *storage.HistoryBound)
 				return err
 			}
 		}
-		if err := s.deleteBranchesUnder(ctx, reconcileScratchPrefix+"-"); err != nil {
-			return err
+		for _, prefix := range []string{reconcileScratchPrefix + "-", reRootScratchPrefix} {
+			if err := s.deleteBranchesUnder(ctx, prefix); err != nil {
+				return err
+			}
 		}
 		attempt, swept, err := s.compactWithinLock(ctx, GCFull)
-		b.Collected = attempt.Ran
+		c.Ran = attempt.Ran
 		sweep = sweep.plus(swept)
 		return err
 	})
-	b.BytesAfter, afterErr = storeBytes(s.doltRootDir)
-	return sweep, errors.Join(err, beforeErr, afterErr)
+	c.BytesAfter, afterErr = storeBytes(s.doltRootDir)
+	c.Sweep = sweep.Report()
+	return c, errors.Join(err, beforeErr, afterErr)
 }
 
 // HistoryBounds is every bound boundHistory kept on this store since it
@@ -284,8 +283,11 @@ func historyBoundReport(b storage.HistoryBound) string {
 	if g := b.RemoteGC; g.Outcome != "" {
 		parts = append(parts, fmt.Sprintf("remote GC %s: %s of table files, %s collected, %d other branches dropped", g.Outcome, humanBytes(g.BytesBefore), humanBytes(g.CollectedBytes), len(g.DroppedBranches)))
 	}
-	if b.Collected {
-		parts = append(parts, fmt.Sprintf("store %s -> %s", humanBytes(b.BytesBefore), humanBytes(b.BytesAfter)))
+	if c := b.Collection; c.Ran {
+		parts = append(parts, fmt.Sprintf("store %s -> %s", humanBytes(c.BytesBefore), humanBytes(c.BytesAfter)))
+	}
+	if b.Collection.Sweep != "" {
+		parts = append(parts, b.Collection.Sweep)
 	}
 	if b.Err != nil {
 		parts = append(parts, fmt.Sprintf("history bound not kept: %v", b.Err))
