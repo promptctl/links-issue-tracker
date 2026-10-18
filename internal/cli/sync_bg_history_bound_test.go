@@ -66,6 +66,39 @@ func TestTheMirrorAloneKeepsTheHistoryBound(t *testing.T) {
 	}
 }
 
+// TestAPushWhoseBoundFiredProvesNothing pushes alpha past the bound in the
+// foreground. The bound's re-root and fetch go through the store's git
+// mirror after the push, so the mirror holding the remote's head no longer
+// shows the push wrote it, and the received-refs record the earlier push
+// proved stands.
+func TestAPushWhoseBoundFiredProvesNothing(t *testing.T) {
+	r, _ := newSharedCheckouts(t)
+	isolateEvents(t)
+	runCLIInDir(t, r.alpha, "sync", "push")
+	seeded := boundRecordOf(t, lastEvent(t).Facts)["history_bound.height"].(float64)
+	alphaWS, err := workspace.Resolve(r.alpha)
+	if err != nil {
+		t.Fatalf("resolve alpha: %v", err)
+	}
+	proved, err := store.ReadReceivedRefs(alphaWS.DatabasePath)
+	if err != nil || proved == nil {
+		t.Fatalf("the seeding push's received-refs record = %q (%v); want the advertisement it proved", proved, err)
+	}
+
+	defaultBound := store.DefaultHistoryBound
+	t.Cleanup(func() { store.DefaultHistoryBound = defaultBound })
+	store.DefaultHistoryBound.ReRootAt = uint64(seeded) + 1
+	store.DefaultHistoryBound.Keep = 2
+	runCLIInDir(t, r.alpha, "new", "--title", "one", "--topic", "demo", "--type", "task", "--parent", r.epic)
+	runCLIInDir(t, r.alpha, "sync", "push")
+	if bound := boundRecordOf(t, lastEvent(t).Facts); bound["history_bound.fired"] != true || bound["history_bound.lease"] != "held" {
+		t.Fatalf("the push's bound = %v; want it fired and published", bound)
+	}
+	if after, err := store.ReadReceivedRefs(alphaWS.DatabasePath); err != nil || string(after) != string(proved) {
+		t.Fatalf("received-refs after the bound fired = %q (%v); want the seeding push's record %q left standing", after, err, proved)
+	}
+}
+
 // boundRecordOf is the one history bound an event's facts carry.
 func boundRecordOf(t *testing.T, facts map[string]any) map[string]any {
 	t.Helper()
@@ -96,4 +129,24 @@ func dirBytes(t *testing.T, root string) int64 {
 		t.Fatalf("measure %s: %v", root, err)
 	}
 	return total
+}
+
+// TestALandedPushIsLandedWithItsHeadUnknown: a history bound can leave a
+// landed push with no head the remote is known to carry, and the cycle still
+// reads it as landed, never as a push its deadline cut. Only the zero value,
+// no push at all, is not landed.
+func TestALandedPushIsLandedWithItsHeadUnknown(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		pushed pushedHead
+		landed bool
+	}{
+		{"no push", pushedHead{}, false},
+		{"head unknown", pushedHead{remote: "origin", branch: "master"}, true},
+		{"head known", pushedHead{remote: "origin", branch: "master", head: "abc"}, true},
+	} {
+		if got := tc.pushed.landed(); got != tc.landed {
+			t.Errorf("%s: landed() = %t; want %t", tc.name, got, tc.landed)
+		}
+	}
 }

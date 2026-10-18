@@ -634,13 +634,14 @@ func performSyncPush(ctx, completionCtx context.Context, session syncSession, ws
 	// A push that landed on its own moved the remote to its own write, and the
 	// next receive would fetch to learn nothing unless the push records that.
 	// Proving it costs one ls-remote. A failed or superseded push proves
-	// nothing, nor does one whose bound left no head the remote carries for
-	// the branch: the remote may advertise a re-root the store's branch never
-	// followed. The trace says which way the proof went. [LAW:nothing-unseen]
+	// nothing, nor does one whose session went through the git mirror after
+	// it (AfterPush): the mirror may hold a re-root the store's branch never
+	// followed, or a peer's push the bound's fetch brought in. The trace says
+	// which way the proof went. [LAW:nothing-unseen]
 	// The proof runs under its own deadline off the completion lifetime: the
 	// push has done its work, so the push's deadline is not the proof's.
 	var proven remoteAdvertisement
-	if pushErr == nil && result.Superseded == "" && result.Head != "" {
+	if pushErr == nil && result.Superseded == "" && result.AfterPush == "" {
 		proofCtx, cancelProof := context.WithTimeout(completionCtx, pushProofDeadline)
 		var unproven string
 		proven, unproven = provePushedAdvertisement(proofCtx, session.syncer, ws, remoteName, target.gitRemotes)

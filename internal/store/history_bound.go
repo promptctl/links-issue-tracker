@@ -82,11 +82,15 @@ func (s *Store) boundHistory(ctx context.Context, remote, branch string) storage
 
 // SyncKeepHistoryBound runs boundHistory after a push that landed, and
 // carries what it did into the push's result: the head the remote carries
-// once it is done, and its account in the push's maintenance. See the
-// storage.Syncer contract.
+// once it is done, the re-root it wrote through the git mirror after the
+// push, and its account in the push's maintenance. See the storage.Syncer
+// contract.
 func (s *Store) SyncKeepHistoryBound(ctx context.Context, remote, branch string, pushed storage.SyncPushResult) storage.SyncPushResult {
 	bound := s.boundHistory(ctx, strings.TrimSpace(remote), strings.TrimSpace(branch))
 	pushed.Head = bound.RemoteHead(pushed.Head)
+	if bound.ReRooted.Head != "" {
+		pushed.AfterPush = fmt.Sprintf("the history bound re-rooted %s/%s at %s through the store's git mirror", bound.Remote, bound.Branch, bound.ReRooted.Head)
+	}
 	pushed.Maintenance = joinMaintenance(pushed.Maintenance, historyBoundReport(bound))
 	return pushed
 }

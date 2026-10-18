@@ -50,6 +50,11 @@ func compactPush(t *testing.T, ctx context.Context, root, epic, title string, bo
 	if len(bounds) != 1 {
 		t.Fatalf("HistoryBounds() after one push = %+v, want one", bounds)
 	}
+	// A re-root goes out through the git mirror after the push, and the kept
+	// push says so.
+	if wrote := bounds[0].ReRooted.Head != ""; wrote != (kept.AfterPush != "") {
+		t.Fatalf("the kept push's AfterPush = %q with a re-root written: %t; want it set exactly when one was", kept.AfterPush, wrote)
+	}
 	return bounds[0]
 }
 

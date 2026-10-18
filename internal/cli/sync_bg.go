@@ -532,7 +532,9 @@ func (c mirrorClone) remove(log io.Writer) {
 type pushedHead struct {
 	remote string
 	branch string
-	head   string
+	// head is the head the remote carries for the branch, empty when a
+	// history bound that fired left none known (HistoryBound.RemoteHead).
+	head string
 	// proven is what the push proved it left the remote advertising, recorded
 	// on the live store with the head; zero when it proved nothing.
 	proven remoteAdvertisement
@@ -542,8 +544,8 @@ type pushedHead struct {
 	followedReRoot bool
 }
 
-// landed reports whether a push landed and its head is known.
-func (p pushedHead) landed() bool { return p.head != "" }
+// landed reports whether a push landed, its head known or not.
+func (p pushedHead) landed() bool { return p.remote != "" }
 
 // mirrorCycle is one full cycle of the mirror: take the clone under the live
 // store's locks and release them, push from the clone under the push
@@ -575,7 +577,9 @@ func (p pushedHead) landed() bool { return p.head != "" }
 // deadline bounds, and the close after them, which it does not — so a cut
 // reads against it directly; open= is the open's share of it, so a push=
 // that grew is attributable to the open or to the network from the log
-// alone. [LAW:nothing-unseen]
+// alone. [LAW:nothing-unseen] A landed push's history bound and proof run
+// inside push= too, under deadlines of their own; the bound's share is its
+// history_bound.elapsed_ms.
 // Only a cycle that holds the single-flight lock writes: a mirror that loses
 // the race stays silent, as the quiescence property requires.
 func mirrorCycle(ctx context.Context, log io.Writer, ws workspace.Info, stopAnswering func()) (attempted bool) {
@@ -643,7 +647,9 @@ func mirrorCycle(ctx context.Context, log io.Writer, ws workspace.Info, stopAnsw
 	case landed.landed() && landed.followedReRoot:
 		receiveErr := receivePushedReRoot(ctx, ws, clone.liveClone, landed)
 		fmt.Fprintf(log, "%s mirror step=receive_reroot received=%t err=%v\n", time.Now().UTC().Format(time.RFC3339), receiveErr == nil, receiveErr)
-	case landed.landed():
+	// A landed push with no head known records nothing: the next receive
+	// fetches and learns where the remote is.
+	case landed.head != "":
 		recordStart := time.Now()
 		var recordErr error
 		record, recordErr = store.RecordPushedHead(ctx, ws.DatabasePath, landed.remote, landed.branch, landed.head, landed.proven.record())
