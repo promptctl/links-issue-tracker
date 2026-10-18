@@ -15,7 +15,7 @@ one below carries the condition that would let it be deleted.
 
 | Module in `go.mod` | Upstream | What `lit` builds | Branch | Current pin |
 | --- | --- | --- | --- | --- |
-| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20261017180803-c1afca53026d` |
+| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20261018035346-ddfdcc7080ee` |
 | `github.com/dolthub/go-mysql-server` | [dolthub/go-mysql-server](https://github.com/dolthub/go-mysql-server) | [promptctl/go-mysql-server](https://github.com/promptctl/go-mysql-server) | `lit` | `v0.20.1-0.20260821032251-ab5cb9ec3b69` |
 | `github.com/dolthub/driver` | [dolthub/driver](https://github.com/dolthub/driver) | [`internal/vendor/dolthub-driver`](internal/vendor/dolthub-driver) | — | `v0.2.1-0.20260314000741-0fe74e7ee31a` |
 
@@ -287,6 +287,35 @@ factory and hashes through the same helpers `CreateDB` uses, so the name
 its own) and the `require` line moves past that change. Dropping it without
 that leaves `internal/store/remotecache.go` with no way to recognize a live
 mirror.
+
+#### Patch 9 — `DOLT_PUSH --force-with-lease`, a compare-and-swap on the pushed branch
+
+`go/store/datas/database.go`, `go/store/datas/database_common.go`,
+`go/libraries/doltcore/doltdb/doltdb.go`, `go/libraries/doltcore/ref/ref.go`,
+`go/libraries/doltcore/env/remotes.go`,
+`go/libraries/doltcore/env/actions/remotes.go`,
+`go/libraries/doltcore/sqle/dprocedures/dolt_push.go`,
+`go/cmd/dolt/cli/flags.go`, `go/cmd/dolt/cli/arg_parser_helpers.go`, plus
+`go/store/datas/database_lease_test.go` and
+`go/libraries/doltcore/env/push_lease_test.go` (new files, not upstream's).
+
+A forced push overwrote whatever the remote branch named: the root update
+behind it retries an optimistic-lock failure against the fresh root, so a
+peer's push that landed after the pusher last read the remote was lost.
+Publishing a re-rooted history (`links-storage-3k6u`) has to refuse instead.
+`--force-with-lease=<branch>:<commit>` checks the branch's head inside the
+root update, on every retry, and refuses with `datas.ErrStaleInfo` unless it
+is `<commit>` or already the pushed commit — the second so that a push
+retried after its first attempt landed does not report its own write as
+stale. The SQL boundary renders the error as text, so
+`internal/store/push_lease.go` recognizes a stale lease by the sentinel's
+own message.
+
+**Retire it when** upstream ships a conditional push (git's
+`--force-with-lease` or an equivalent compare-and-swap) and the `require`
+line moves past that change. Dropping it without that turns every leased
+push in `internal/store` into an error, and a bare `--force` in its place
+would overwrite a peer's push.
 
 ### promptctl/go-mysql-server
 
