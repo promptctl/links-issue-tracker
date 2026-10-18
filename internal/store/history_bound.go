@@ -80,16 +80,13 @@ func (s *Store) boundHistory(ctx context.Context, remote, branch string) storage
 	return b
 }
 
-// SyncKeepHistoryBound runs boundHistory after a push that landed, and
-// carries what it did into the push's result: the head the remote carries
-// once it is done, the re-root it wrote through the git mirror after the
-// push, and its account in the push's maintenance. See the storage.Syncer
-// contract.
+// SyncKeepHistoryBound runs boundHistory after a push that landed, says so
+// on the push's result once it wrote a re-root (AfterPush), and joins its
+// account to the push's maintenance. See the storage.Syncer contract.
 func (s *Store) SyncKeepHistoryBound(ctx context.Context, remote, branch string, pushed storage.SyncPushResult) storage.SyncPushResult {
 	bound := s.boundHistory(ctx, strings.TrimSpace(remote), strings.TrimSpace(branch))
-	pushed.Head = bound.RemoteHead(pushed.Head)
 	if bound.ReRooted.Head != "" {
-		pushed.AfterPush = fmt.Sprintf("the history bound re-rooted %s/%s at %s through the store's git mirror", bound.Remote, bound.Branch, bound.ReRooted.Head)
+		pushed.AfterPush = fmt.Sprintf("the history bound wrote re-root %s of %s after the push", bound.ReRooted.Head, bound.Head)
 	}
 	pushed.Maintenance = joinMaintenance(pushed.Maintenance, historyBoundReport(bound))
 	return pushed
@@ -152,10 +149,10 @@ func (s *Store) followPublishedReRoot(ctx context.Context, b *storage.HistoryBou
 	if err := s.SyncFetch(ctx, b.Remote, false); err != nil {
 		return fmt.Errorf("fetch to learn whether %s carries the re-root: %w", trackingRef, err)
 	}
-	var err error
-	b.Follow, err = s.followRemoteReRoot(ctx, b.Remote, b.Branch, storage.SyncEntryBound)
+	followed, err := s.followRemoteReRoot(ctx, b.Remote, b.Branch, storage.SyncEntryBound)
+	b.Collection = followed.Collection
 	// The follow's record has a head exactly when the branch moved.
-	if err != nil || b.Follow.Head != "" {
+	if err != nil || followed.Head != "" {
 		return err
 	}
 	// The follow declines a re-root it cannot recognize as this branch's, and
@@ -322,7 +319,7 @@ func historyBoundReport(b storage.HistoryBound) string {
 	if g := b.RemoteGC; g.Outcome != "" {
 		parts = append(parts, fmt.Sprintf("remote GC %s: %s of table files, %s collected, %d other branches dropped", g.Outcome, humanBytes(g.BytesBefore), humanBytes(g.CollectedBytes), len(g.DroppedBranches)))
 	}
-	parts = append(parts, collectionReport(b.Follow.Collection))
+	parts = append(parts, collectionReport(b.Collection))
 	if b.Err != nil {
 		parts = append(parts, fmt.Sprintf("history bound not kept: %v", b.Err))
 	}

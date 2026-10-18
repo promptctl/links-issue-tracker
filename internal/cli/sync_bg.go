@@ -532,20 +532,54 @@ func (c mirrorClone) remove(log io.Writer) {
 type pushedHead struct {
 	remote string
 	branch string
-	// head is the head the remote carries for the branch, empty when a
-	// history bound that fired left none known (HistoryBound.RemoteHead).
-	head string
+	head   string
 	// proven is what the push proved it left the remote advertising, recorded
 	// on the live store with the head; zero when it proved nothing.
 	proven remoteAdvertisement
-	// followedReRoot says the clone followed a re-root of the remote before
-	// the push landed, so head is a rewritten commit the live store does not
-	// hold, and the live store must follow the same re-root to reach it.
+	// followedReRoot says the clone followed a re-root of the remote, a
+	// peer's before the push or its own history bound's after it, so the
+	// live store must follow the same re-root to reach where the clone is.
 	followedReRoot bool
+	// reRootedAfter says the clone's history bound wrote a re-root after the
+	// push (SyncPushResult.AfterPush), so the remote may carry it in head's
+	// place.
+	reRootedAfter bool
 }
 
-// landed reports whether a push landed, its head known or not.
-func (p pushedHead) landed() bool { return p.remote != "" }
+// landed reports whether a push landed and its head is known.
+func (p pushedHead) landed() bool { return p.head != "" }
+
+// liveStoreStep is how the live store learns where a mirror cycle left the
+// remote. [LAW:types-are-the-program] the cycle's facts decide it once,
+// and mirrorCycle runs what it names.
+type liveStoreStep int
+
+const (
+	// liveStoreWaits leaves it to the next receive, which fetches.
+	liveStoreWaits liveStoreStep = iota
+	// liveStoreReceives lands the clone's fetch and follows its re-root.
+	liveStoreReceives
+	// liveStoreRecords records the pushed head on the live store.
+	liveStoreRecords
+)
+
+// liveStoreStep is the step for p: nothing landed waits; a clone that
+// followed a re-root is received, since the live store holds none of the
+// rewritten commits; a push its bound re-rooted after, with the clone not
+// following, waits, since the remote may no longer carry its head; any other
+// landed push records its head.
+func (p pushedHead) liveStoreStep() liveStoreStep {
+	switch {
+	case !p.landed():
+		return liveStoreWaits
+	case p.followedReRoot:
+		return liveStoreReceives
+	case p.reRootedAfter:
+		return liveStoreWaits
+	default:
+		return liveStoreRecords
+	}
+}
 
 // mirrorCycle is one full cycle of the mirror: take the clone under the live
 // store's locks and release them, push from the clone under the push
@@ -577,9 +611,8 @@ func (p pushedHead) landed() bool { return p.remote != "" }
 // deadline bounds, and the close after them, which it does not — so a cut
 // reads against it directly; open= is the open's share of it, so a push=
 // that grew is attributable to the open or to the network from the log
-// alone. [LAW:nothing-unseen] A landed push's history bound and proof run
-// inside push= too, under deadlines of their own; the bound's share is its
-// history_bound.elapsed_ms.
+// alone. [LAW:nothing-unseen] A landed push's history bound runs inside
+// push= too, under its own deadline; its share is history_bound.elapsed_ms.
 // Only a cycle that holds the single-flight lock writes: a mirror that loses
 // the race stays silent, as the quiescence property requires.
 func mirrorCycle(ctx context.Context, log io.Writer, ws workspace.Info, stopAnswering func()) (attempted bool) {
@@ -643,13 +676,11 @@ func mirrorCycle(ctx context.Context, log io.Writer, ws workspace.Info, stopAnsw
 	// which arrives at the hashes the clone pushed. [LAW:one-source-of-truth]
 	// the tracking ref still says where the remote is, through the receive's
 	// own landing.
-	switch {
-	case landed.landed() && landed.followedReRoot:
+	switch landed.liveStoreStep() {
+	case liveStoreReceives:
 		receiveErr := receivePushedReRoot(ctx, ws, clone.liveClone, landed)
 		fmt.Fprintf(log, "%s mirror step=receive_reroot received=%t err=%v\n", time.Now().UTC().Format(time.RFC3339), receiveErr == nil, receiveErr)
-	// A landed push with no head known records nothing: the next receive
-	// fetches and learns where the remote is.
-	case landed.head != "":
+	case liveStoreRecords:
 		recordStart := time.Now()
 		var recordErr error
 		record, recordErr = store.RecordPushedHead(ctx, ws.DatabasePath, landed.remote, landed.branch, landed.head, landed.proven.record())
@@ -802,7 +833,7 @@ func mirrorOnce(ctx, completionCtx context.Context, session syncSession, ws work
 	// of a re-root, a peer's or the one the clone's history bound published,
 	// which followedReRoot reports. The live store learns it through
 	// RecordPushedHead, or by receiving a re-rooted push.
-	return pushedHead{remote: outcome.remote, branch: outcome.branch, head: outcome.head, proven: outcome.proven, followedReRoot: len(session.syncer.FollowedReRoots()) > 0}, nil
+	return pushedHead{remote: outcome.remote, branch: outcome.branch, head: outcome.head, proven: outcome.proven, followedReRoot: len(session.syncer.FollowedReRoots()) > 0, reRootedAfter: outcome.afterPush != ""}, nil
 }
 
 // waitForParentExit blocks until the spawning command has exited, returning

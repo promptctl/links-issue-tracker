@@ -169,10 +169,11 @@ func receiveWhenQuiet(ctx context.Context, ws workspace.Info, parentPID int) tim
 func receiveMirrorWait() time.Duration { return 2 * mirrorNetworkDeadline() }
 
 // mirrorNetworkDeadline is the longest one mirror cycle's network work runs:
-// the push under its deadline, then a landed push's history bound and proof,
-// each under its own. [LAW:one-source-of-truth]
+// the push under its deadline, then a landed push's history bound under its
+// own. The proof's deadline is not added: the proof runs only after a bound
+// that wrote no re-root, which reached no network. [LAW:one-source-of-truth]
 func mirrorNetworkDeadline() time.Duration {
-	return store.MirrorPushDeadline + historyBoundDeadline() + pushProofDeadline
+	return store.MirrorPushDeadline + historyBoundDeadline()
 }
 
 // mirrorQuietPoll is how often the receive re-reads the mirror liveness

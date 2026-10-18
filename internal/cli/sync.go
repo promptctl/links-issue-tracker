@@ -477,6 +477,9 @@ type syncPushOutcome struct {
 	// push output. [LAW:one-source-of-truth]
 	maintenance string
 	head        string // the commit the push sent as HEAD; empty on a skip or a failure
+	// afterPush is the push's SyncPushResult.AfterPush: what its history
+	// bound wrote after it, empty when nothing.
+	afterPush string
 	// proven is the advertisement this push proved it left the remote showing
 	// (provePushedAdvertisement); zero when it proved none.
 	proven   remoteAdvertisement
@@ -543,6 +546,10 @@ func syncPushTraceMetadata(remoteName, syncBranch string, result storage.SyncPus
 	// [LAW:no-silent-failure]
 	if superseded := strings.TrimSpace(result.Superseded); superseded != "" {
 		metadata["superseded"] = superseded
+	}
+	// Why a landed push carries no advertisement proof. [LAW:nothing-unseen]
+	if afterPush := strings.TrimSpace(result.AfterPush); afterPush != "" {
+		metadata["after_push"] = afterPush
 	}
 	if pushErr != nil {
 		metadata["error"] = pushErr.Error()
@@ -634,10 +641,10 @@ func performSyncPush(ctx, completionCtx context.Context, session syncSession, ws
 	// A push that landed on its own moved the remote to its own write, and the
 	// next receive would fetch to learn nothing unless the push records that.
 	// Proving it costs one ls-remote. A failed or superseded push proves
-	// nothing, nor does one whose session went through the git mirror after
-	// it (AfterPush): the mirror may hold a re-root the store's branch never
-	// followed, or a peer's push the bound's fetch brought in. The trace says
-	// which way the proof went. [LAW:nothing-unseen]
+	// nothing, nor does one its history bound re-rooted after (AfterPush):
+	// the mirror may hold a re-root the store's branch never followed, or a
+	// peer's push the bound's fetch brought in. The trace says which way the
+	// proof went. [LAW:nothing-unseen]
 	// The proof runs under its own deadline off the completion lifetime: the
 	// push has done its work, so the push's deadline is not the proof's.
 	var proven remoteAdvertisement
@@ -701,6 +708,7 @@ func performSyncPush(ctx, completionCtx context.Context, session syncSession, ws
 		message:     result.Message,
 		maintenance: result.Maintenance,
 		head:        result.Head,
+		afterPush:   result.AfterPush,
 		proven:      proven,
 		traceErr:    traceRecordErr,
 		pushErr:     pushErr,
