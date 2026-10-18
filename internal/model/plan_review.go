@@ -69,7 +69,7 @@ func ParsePlanVerdict(raw string) (PlanVerdict, error) {
 }
 
 // Law is one law's token, the name a review cites it by: lower-case words
-// joined by hyphens, as a [LAW:<token>] citation spells it. lit does not hold
+// joined by hyphens, as a law citation in code spells it. lit does not hold
 // the list of laws — they belong to whoever reviews against them — so a token
 // is checked for its shape, not looked up.
 type Law string

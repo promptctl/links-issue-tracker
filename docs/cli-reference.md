@@ -77,7 +77,7 @@ the code it arrives on:
 | `workspace_schema_ahead` | 3 | The schema of the workspace, or of the sync remote, is newer than this `lit` supports |
 | `migration_quarantined` | 3 | A migration this workspace has pending failed and is quarantined, on the run that failed and every one after; the message names both ways to recover |
 | `entity_not_found` | 4 | The named issue or resource does not exist |
-| `version_not_found` | 4 | `lit history --version` named a version past the ones the issue's history records |
+| `version_not_found` | 4 | `lit history --version` or `lit verdict --version` named a version past the ones the issue's history records |
 | `merge_conflict` | 5 | A sync merge conflict |
 | `sync_divergence` | 5 | Local and remote diverged in a way the message tells you how to resolve |
 | `owner_approval_required` | 5 | `lit sync reconcile take` would discard one side's issues and needs the owner's approval |
@@ -431,13 +431,19 @@ lit show <id>
 ```
 
 Full detail for one issue: description, status, the phase of an `in_progress`
-issue, labels, and comments, each comment in the lines it was written in. The change trail is `lit history <id>`, whose entries
+issue, labels, and comments, each comment in the lines it was written in. A planned
+issue prints its plan under its version number, `plan (v2):`, followed by the
+reviews of that version (`lit verdict`); reviews of other versions are not
+listed there. The change trail is `lit history <id>`, whose entries
 include the actor and a human-readable timestamp in the user's current timezone.
-A change to a long text field (`description`, `prompt`) shows in the trail as a
+A change to a long text field (`description`, `prompt`, `plan`) shows in the trail as a
 step between numbered versions, `description: v1 → v2`, without the text;
 `lit history <id> --version description@1` prints the text a version held.
+Each plan review appears in the trail at the time it was recorded, naming the
+version it judged: `verdict fail on plan v1 — laws: one-source-of-truth`.
 The numbers follow the history's order, so a sync that merges in an older
-edit renumbers the versions after it.
+edit renumbers the versions after it; a review names the text it judged, so it
+keeps judging that text whatever number the text is shown under.
 For an issue inside an epic, also prints the epic plan — siblings in rank order with
 status and any cross-epic dependencies. Exits 4 if the ID doesn't exist.
 
@@ -451,7 +457,7 @@ status and any cross-epic dependencies. Exits 4 if the ID doesn't exist.
 lit new --title <text> --topic <slug> --parent <epic-id> [--type task|feature|bug|chore]
         [--description <text> | --description-file <path|->] [--lane <key>]
         [--priority normal|urgent] [--labels <csv>] [--assignee <a>]
-        [--prompt <text> | --prompt-file <path|->] [--top]
+        [--prompt <text> | --prompt-file <path|->] [--plan <text> | --plan-file <path|->] [--top]
 lit new --title <text> --topic <slug> --type epic [--parent <epic-id>] [...]
 ```
 
@@ -472,9 +478,10 @@ rather than promoting it, and a batch authored in order keeps that order with no
 level; `lit rank` moves one afterwards. A child's ID becomes `<parentID>.<hash>`. `--lane`
 partitions an epic's children into parallel rank-ordered sub-sequences: a shared lane
 serializes, distinct lanes parallelize. `--prompt` stores a reusable agent prompt for
-the work the issue captures.
+the work the issue captures. `--plan` stores how the work will be done, for a law
+review before it starts (`lit verdict`); every later edit of it is a new version.
 
-`--description-file <path>` and `--prompt-file <path>` read those fields from a file,
+`--description-file <path>`, `--prompt-file <path>` and `--plan-file <path>` read those fields from a file,
 or from stdin when the path is `-`, so a long text never passes through shell
 quoting. Giving a field both ways (`--description` and `--description-file`) is a
 usage error, as is a path that cannot be read, a file or stdin whose text is blank,
@@ -507,7 +514,7 @@ lists the link on both tickets, under `follows_up:` and `follow_ups:`.
 
 ```text
 lit update <id> [--title <text>] [--description <text> | --description-file <path|->]
-           [--prompt <text> | --prompt-file <path|->]
+           [--prompt <text> | --prompt-file <path|->] [--plan <text> | --plan-file <path|->]
            [--type <t>] [--priority normal|urgent] [--assignee <a>] [--labels <csv>]
            [--lane <key>] [--reason <text>]
 ```
@@ -532,6 +539,21 @@ Comments are the work trail: plans, findings, hand-off notes. `--body-file` read
 body from a file, or from stdin when the path is `-`, so a multi-paragraph comment
 never passes through shell quoting; give `--body` or `--body-file`, not both. Removal takes the
 comment's own ID (shown in `lit show`), not the issue ID.
+
+### `lit verdict`
+
+```text
+lit verdict <id> <pass|fail> --version <n> [--law <token>]...
+```
+
+Records a law review of one version of the issue's plan: the verdict, the laws it
+cites, and the reviewer, who is the acting identity (see Identity). `--version` names
+the version the review judged, by the number `lit show` and `lit history` give it,
+so a plan revised while the review ran is not passed on the strength of the text
+before it. `--law` names a law by its token, lower-case words joined by hyphens
+(`one-source-of-truth`); repeat it for each law. A `fail` cites at least one law.
+A review is never edited: a reviewer who changes their mind records another. A
+version past the ones the history records exits 4 with `version_not_found`.
 
 ### `lit label add` / `lit label rm`
 

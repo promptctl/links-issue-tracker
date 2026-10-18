@@ -566,7 +566,7 @@ WHERE clauses, appended in this exact order:
 | each canonicalized label in `filter.LabelsAll` | `EXISTS (SELECT 1 FROM labels l WHERE l.issue_id = i.id AND l.label = ?)` (one clause per label — AND semantics) | `store.go` |
 | `len(filter.ParentIDs) > 0` (after `requireIssues(ctx, filter.ParentIDs)` passes) | no clause of its own: `selectedIssueIDs` resolves the parents to their children's ids and folds them into the id filter below | `store.go` |
 | the id set `selectedIssueIDs` returns is non-empty | `i.id IN (?, ?)` joined with `", "`, one query per batch of at most `idBatchSize` ids | `store.go` |
-| each non-blank `filter.SearchTerms` term, lowercased & trimmed | `(LOWER(i.title) LIKE ? OR LOWER(i.description) LIKE ? OR LOWER(COALESCE(i.agent_prompt, '')) LIKE ? OR LOWER(i.topic) LIKE ?)` with `%term%` bound four times | `store.go` |
+| each non-blank `filter.SearchTerms` term, lowercased & trimmed | `(LOWER(i.title) LIKE ? OR LOWER(i.description) LIKE ? OR LOWER(COALESCE(i.agent_prompt, '')) LIKE ? OR LOWER(i.work_plan) LIKE ? OR LOWER(i.topic) LIKE ?)` with `%term%` bound five times | `store.go` |
 
 Clauses are joined with `" AND "` (`store.go`).
 

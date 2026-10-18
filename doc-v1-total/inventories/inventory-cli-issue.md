@@ -986,7 +986,7 @@ Cross-epic dependencies:
 
 history:
 ```
-  then `printHistoryEvents` (`output.go`): per event
+  then `printHistoryTrail` (`output.go`): per event
   `- [<actor> @ <Jan 2, 2006 3:04 PM MST, local>] <action> <reason>` with newlines
   in the reason escaped to `\n`; an event with no `Action` displays the literal
   `update` (`output.go`). Then per change,
@@ -999,8 +999,8 @@ history:
   (`1 version` when N is 1) (`output.go`).
 - An empty event slice prints just the header (`output.go`).
 - With `--version <field>@<n>`: prints version n's text bare, newline-terminated
-  (`printFieldVersion`, `output.go`). The versions are `textVersions`
-  (`output.go`): each distinct non-empty text the field's changes move
+  (`printFieldVersion`, `output.go`). The versions are `storage.TextVersions`
+  (`internal/storage/plan_review.go`): each distinct non-empty text the field's changes move
   between — `from`, then `to`, in event order — then the issue's current text
   if not already among them, so a field never changed holds one version. n
   past them is `VersionNotFoundError` → exit 4, reason `version_not_found`,
