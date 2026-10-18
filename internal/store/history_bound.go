@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
@@ -19,15 +20,17 @@ import (
 // above re-roots it, keeping the keep commits of the head's first-parent line.
 // It is a count, not an age, because the store grows linearly with its
 // commits while the rate of commits swings month to month (the decision on
-// links-storage-3k6u). keep is below reRootAt, so a re-root always drops
+// links-storage-3k6u). Keep is below ReRootAt, so a re-root always drops
 // something.
 type historyBound struct {
-	reRootAt, keep uint64
+	ReRootAt, Keep uint64
 }
 
-// defaultHistoryBound holds this repository's store between 35.8 MB and
-// 64.7 MB, measured on a copy of it (links-storage-3k6u.8ka).
-var defaultHistoryBound = historyBound{reRootAt: 2000, keep: 1000}
+// DefaultHistoryBound is the bound every store opens with. It holds this
+// repository's store between 35.8 MB and 64.7 MB, measured on a copy of it
+// (links-storage-3k6u.8ka). A package variable so a regression test can
+// shrink it to drive a push past it in a few writes.
+var DefaultHistoryBound = historyBound{ReRootAt: 2000, Keep: 1000}
 
 // reRootScratchPrefix names the branch a bound's re-root is written on before
 // it is published. The sync branch stays on the history the remote had until
@@ -43,7 +46,7 @@ const reRootScratchPrefix = "lit-reroot/"
 // push left, which is one row of dolt_log: its commit_order is the commit's
 // height. Below the bound that is all it does. Once the bound is reached:
 //
-//  1. it re-roots a scratch branch at that head, keeping s.bound.keep commits
+//  1. it re-roots a scratch branch at that head, keeping s.bound.Keep commits
 //     of the head's first-parent line (reRootScratch);
 //  2. it force-pushes the scratch to the remote's branch under a lease that
 //     names the head (publishReRoot);
@@ -69,10 +72,20 @@ const reRootScratchPrefix = "lit-reroot/"
 // The bound is recorded for HistoryBounds whatever happened to it, and its
 // error is its own: the push before it landed. [LAW:nothing-unseen]
 func (s *Store) boundHistory(ctx context.Context, remote, branch string) storage.HistoryBound {
-	b := storage.HistoryBound{Remote: remote, Branch: branch, ReRootAt: s.bound.reRootAt, Keep: s.bound.keep}
+	b := storage.HistoryBound{Remote: remote, Branch: branch, ReRootAt: s.bound.ReRootAt, Keep: s.bound.Keep}
+	start := time.Now()
 	b.Err = s.keepHistoryBound(ctx, &b)
+	b.Elapsed = time.Since(start)
 	s.bounds = append(s.bounds, b)
 	return b
+}
+
+// SyncKeepHistoryBound runs boundHistory after a push that landed, and joins
+// its account to the push's maintenance. See the storage.Syncer contract.
+func (s *Store) SyncKeepHistoryBound(ctx context.Context, remote, branch string, pushed storage.SyncPushResult) storage.SyncPushResult {
+	bound := s.boundHistory(ctx, strings.TrimSpace(remote), strings.TrimSpace(branch))
+	pushed.Maintenance = joinMaintenance(pushed.Maintenance, historyBoundReport(bound))
+	return pushed
 }
 
 // keepHistoryBound runs boundHistory's steps, filling in b as each one lands.
