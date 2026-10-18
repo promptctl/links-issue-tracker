@@ -1,6 +1,10 @@
 package cli
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -66,6 +70,34 @@ func TestEverySettlingEntryPointMergesAForkBelowTheCut(t *testing.T) {
 			r.assertFollowedCleanly(t, nil, true)
 		})
 	}
+}
+
+// TestAGitRemoteWithANewURLKeepsItsForkPoint changes bravo's git remote URL
+// after the fetch that brought the re-rooted history. The next sync re-points
+// the Dolt remote to match, and since it is the same remote the fork point
+// stays and the pull merges against it.
+func TestAGitRemoteWithANewURLKeepsItsForkPoint(t *testing.T) {
+	r, adopted := newForkedBelowTheCut(t)
+	runCLIInDir(t, r.bravo, "sync", "fetch")
+	assertForkPointRecorded(t, adopted)
+	url, err := exec.Command("git", "-C", r.bravo, "remote", "get-url", "origin").Output()
+	if err != nil {
+		t.Fatalf("read bravo's git remote: %v", err)
+	}
+	link := filepath.Join(t.TempDir(), "remote-link.git")
+	if err := os.Symlink(strings.TrimSpace(string(url)), link); err != nil {
+		t.Fatalf("link the remote: %v", err)
+	}
+	runGit(t, r.bravo, "remote", "set-url", "origin", link)
+	runCLIInDir(t, r.bravo, "sync", "pull")
+	bases, _ := lastEvent(t).Facts["reconcile.bases"].([]any)
+	if len(bases) != 1 {
+		t.Fatalf("reconcile.bases = %v; want the one reconcile's base", bases)
+	}
+	if base, _ := bases[0].(map[string]any); base["reconcile.base"] != "fork_point" || base["reconcile.fork_point"] != adopted {
+		t.Fatalf("base = %v; want fork_point at the adopted head %s", base, adopted)
+	}
+	r.assertFollowedCleanly(t, nil, true)
 }
 
 // assertForkPointRecorded checks the last command's event recorded the fork
