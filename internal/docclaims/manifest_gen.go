@@ -1188,6 +1188,7 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/inventories/inventory-store-sync.md", Text: "SELECT name, hash FROM dolt_remote_branches", Src: "SELECT name, hash FROM dolt_remote_branches"},
 	{Doc: "doc-v1-total/inventories/inventory-store-sync.md", Text: "SELECT name, url FROM dolt_remotes ORDER BY name", Src: "SELECT name, url FROM dolt_remotes ORDER BY name"},
 	{Doc: "doc-v1-total/inventories/inventory-store-sync.md", Text: "SELECT table_name, staged, status FROM dolt_status ORDER BY table_name, staged", Src: "SELECT table_name, staged, status FROM dolt_status ORDER BY table_name, staged"},
+	{Doc: "doc-v1-total/inventories/inventory-store-sync.md", Text: "SELECT url, params FROM dolt_remotes WHERE name = ?", Src: "SELECT url, params FROM dolt_remotes WHERE name = ?"},
 	{Doc: "doc-v1-total/inventories/inventory-store-sync.md", Text: "SELECT version, name, error_text FROM migration_quarantine WHERE version > ? ORDER BY version LIMIT 1", Src: "SELECT version, name, error_text FROM migration_quarantine WHERE version > ? ORDER BY version LIMIT 1"},
 	{Doc: "doc-v1-total/inventories/inventory-store-sync.md", Text: "SET @minted :=", Src: "internal/store/migrations/00007_every_ticket_inside_a_container.sql"},
 	{Doc: "doc-v1-total/inventories/inventory-store-sync.md", Text: "SHOW CREATE TABLE", Src: "internal/store/migrations/00001_baseline.sql"},

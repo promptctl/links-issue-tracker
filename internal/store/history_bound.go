@@ -48,13 +48,16 @@ const reRootScratchPrefix = "lit-reroot/"
 //     of the head's first-parent line (reRootScratch);
 //  2. it force-pushes the scratch to the remote's branch under a lease that
 //     names the head (publishReRoot);
-//  3. it fetches, and follows whatever re-root the remote now carries. A held
+//  3. it runs the remote's GC, which replaces the remote's table files with
+//     the ones the re-rooted head reaches while the remote carries it
+//     (collectRemote);
+//  4. it fetches, and follows whatever re-root the remote now carries. A held
 //     lease means the remote carries this one. A stale lease is only the last
 //     transport attempt's verdict, and an earlier attempt may have landed
 //     before a peer built on it (storage.LeaseStale), so the fetch is what
 //     says whether the remote carries the re-root; a remote a peer pushed to
 //     in between carries none, and the branch stays where it was;
-//  4. once the branch has followed, it drops the local refs that pin the
+//  5. once the branch has followed, it drops the local refs that pin the
 //     history below the cut and runs the full GC (collectBelowTheCut).
 //
 // A branch that did not follow is left on the history it had, and the next
@@ -110,9 +113,26 @@ func (s *Store) publishBound(ctx context.Context, b *storage.HistoryBound) (refS
 	if err = errors.Join(err, sweepErr); err != nil {
 		return refSweepOutcome{}, err
 	}
-	// [LAW:dataflow-not-control-flow] the fetch and the follow run whatever
-	// the lease said: what the remote carries decides whether the branch
-	// moves, and the follow is the one way a branch reaches re-rooted history.
+	// [LAW:dataflow-not-control-flow] the remote's GC, the fetch and the
+	// follow run whatever the lease said. The remote's root decides whether
+	// its GC replaces anything: only while the remote carries this re-root and
+	// nothing on top of it, a held lease and a stale verdict over an attempt
+	// that landed alike. Its error is the bound's, and stops nothing after it:
+	// this branch follows the re-root it published whatever became of the
+	// remote's table files.
+	var remoteGCErr error
+	b.RemoteGC, remoteGCErr = s.collectRemote(ctx, b.Remote, b.Branch, b.ReRooted.Head)
+	if remoteGCErr != nil {
+		remoteGCErr = fmt.Errorf("collect %s: %w", trackingRef, remoteGCErr)
+	}
+	sweep, err := s.followPublishedReRoot(ctx, b, trackingRef)
+	return sweep, errors.Join(err, remoteGCErr)
+}
+
+// followPublishedReRoot is publishBound's steps after the remote's GC: fetch,
+// follow whatever re-root the remote carries, and collect below the cut once
+// the branch has followed.
+func (s *Store) followPublishedReRoot(ctx context.Context, b *storage.HistoryBound, trackingRef string) (refSweepOutcome, error) {
 	if err := s.SyncFetch(ctx, b.Remote, false); err != nil {
 		return refSweepOutcome{}, fmt.Errorf("fetch to learn whether %s carries the re-root: %w", trackingRef, err)
 	}
@@ -260,6 +280,9 @@ func historyBoundReport(b storage.HistoryBound) string {
 	}
 	if b.Lease != "" {
 		parts = append(parts, "lease "+string(b.Lease))
+	}
+	if g := b.RemoteGC; g.Outcome != "" {
+		parts = append(parts, fmt.Sprintf("remote GC %s: %d table files (%s) -> %d (%s), %d other branches dropped", g.Outcome, g.FilesBefore, humanBytes(g.BytesBefore), g.FilesAfter, humanBytes(g.BytesAfter), g.DroppedBranches))
 	}
 	if b.Collected {
 		parts = append(parts, fmt.Sprintf("store %s -> %s", humanBytes(b.BytesBefore), humanBytes(b.BytesAfter)))
