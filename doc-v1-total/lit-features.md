@@ -6,7 +6,7 @@ The second departure from Jira is the intended operator. lit assumes most comman
 
 ## Tickets
 
-The unit of work is the issue: a title, a description, an optional reusable working prompt for the agent that picks it up, a type (task, feature, bug, chore, or epic), a two-level priority (normal or urgent), a topic that groups related work and is baked into the issue's ID, free-form labels, an assignee, and comments. Issue IDs are human-readable — a project prefix, the topic, and a short unique suffix — so a ticket reference reads like `myapp-auth-k4f2` rather than a bare number.
+The unit of work is the issue: a title, a description, an optional reusable working prompt for the agent that picks it up, an optional plan of how the work will be done — each edit a new version, against which a reviewer records a pass or fail verdict citing laws — a type (task, feature, bug, chore, or epic), a two-level priority (normal or urgent), a topic that groups related work and is baked into the issue's ID, free-form labels, an assignee, and comments. Issue IDs are human-readable — a project prefix, the topic, and a short unique suffix — so a ticket reference reads like `myapp-auth-k4f2` rather than a bare number.
 
 An epic is not a separate concept with its own rules; it is simply an issue of type epic that contains children. Its open, in-progress, or closed state is never set by anyone — it is computed from its children (an epic with no children counts as open), so an epic closes itself when its last child closes and can never disagree with the work underneath it. Progress counts roll up the same way.
 
@@ -66,7 +66,7 @@ Workflow files match on any combination of labels, lifecycle states (entering or
 
 ## Getting data in and out
 
-The entire backlog exports as a single self-describing JSON document — every ticket, relation, comment, label, and history event — and that one format is the interchange for everything: scripted export, timestamped backups, and full restore. For bulk authoring, lit imports a JSON tree of tickets (with parents and dependencies wired up by symbolic references, so a whole epic can be drafted in one file) and a YAML form that can both create and update tickets in bulk. Nothing is locked in: the export is complete enough to rebuild the tracker from scratch.
+The entire backlog exports as a single self-describing JSON document — every ticket, relation, comment, label, history event, purge record, and plan review — and that one format is the interchange for everything: scripted export, timestamped backups, and full restore. For bulk authoring, lit imports a JSON tree of tickets (with parents and dependencies wired up by symbolic references, so a whole epic can be drafted in one file) and a YAML form that can both create and update tickets in bulk. Nothing is locked in: the export is complete enough to rebuild the tracker from scratch.
 
 ## Safety and recovery
 

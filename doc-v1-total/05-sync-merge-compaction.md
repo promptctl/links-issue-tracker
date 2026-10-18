@@ -119,10 +119,10 @@ With approval:
 
 The replay never issues UPDATEs. `diffExports` (`internal/store/export_delta.go`) compares two whole exports table by table:
 
-- Per table, rows are indexed by key — issues by `id`; relations by `(src_id, dst_id, type)`; comments by `id`; labels by `(issue_id, name)`; events by `id`; purge records by `(issue_id, issue_created_at)`. A live row absent from the wanted set (or whose persisted projection differs, by `reflect.DeepEqual`) is queued for removal; a wanted row absent from live (or differing) is queued for addition. A changed row therefore appears in both lists — delete then re-insert; there is no UPDATE. Input slices are walked in order, so identical inputs produce an identical statement sequence.
+- Per table, rows are indexed by key — issues by `id`; relations by `(src_id, dst_id, type)`; comments by `id`; labels by `(issue_id, name)`; events by `id`; purge records by `(issue_id, issue_created_at)`; plan reviews by `id`. A live row absent from the wanted set (or whose persisted projection differs, by `reflect.DeepEqual`) is queued for removal; a wanted row absent from live (or differing) is queued for addition. A changed row therefore appears in both lists — delete then re-insert; there is no UPDATE. Input slices are walked in order, so identical inputs produce an identical statement sequence.
 - Issues are compared through `issueRowValues` (row fields only) rather than the whole hydrated struct, because the hydrated view carries labels and (for containers) child-derived lifecycle — comparing those would make every label edit and child status change look like an issue-row change. Other tables compare the whole row; an event's `Changes` are part of its value.
-- **Cascade rule**: the issues diff is computed first; each child table's "live" input is filtered to the post-cascade survivors (a relation cascades away if *either* endpoint is removed; comments/labels/events by their issue). This mirrors the schema fact that every child table is `ON DELETE CASCADE` from issues (and `issue_event_changes` from `issue_events`). Purge records reference no issue row and are diffed unfiltered.
-- Application order: issues, relations, comments, labels, events, purges; per table, all removals before all additions. Deletion row counts are ignored.
+- **Cascade rule**: the issues diff is computed first; each child table's "live" input is filtered to the post-cascade survivors (a relation cascades away if *either* endpoint is removed; comments/labels/events/plan reviews by their issue). This mirrors the schema fact that every child table is `ON DELETE CASCADE` from issues (and `issue_event_changes` from `issue_events`). Purge records reference no issue row and are diffed unfiltered.
+- Application order: issues, relations, comments, labels, events, purges, plan reviews; per table, all removals before all additions. Deletion row counts are ignored.
 
 ## Merge rules (`internal/merge`)
 
@@ -158,6 +158,7 @@ Merged-export assembly: issues sorted by ID; `Version` = `model.ExportVersion`, 
 |---|---|---|---|
 | relations | two-way union by `(src, dst, type)` | remote's metadata wins an identical key | dropped unless **both** endpoints admit the row's side |
 | comments | two-way union by ID | remote wins | issue must admit the row's side |
+| plan reviews | two-way union by ID | remote wins | issue must admit the row's side |
 | events | two-way union by ID | remote wins | issue must admit the row's side |
 | labels | **three-way** by `(issue_id, name)` | remote's metadata wins ties | issue must admit the row's side |
 
@@ -174,7 +175,7 @@ The one primitive is `twoTier`: if exactly one side moved a field off the base, 
 | Field | Tier-2 policy |
 |---|---|
 | issue_type, topic, lane, rank | symmetric workspace tiebreak |
-| title, description, prompt | **prose pending** — never auto-picked |
+| title, description, prompt, plan | **prose pending** — never auto-picked |
 | priority | numerically higher wins (urgent beats normal) |
 | labels | per-name membership (presence-or; single-side removal sticks) |
 | id | always ours; never merged |
@@ -194,7 +195,7 @@ The merged row is built by copying ours — except when the resolved type equals
 
 **Close payload atomicity** (`resolveClosePayload`): resolution and redirect target travel as one atom — the winner's own payload is taken whole; one side's resolution is never mixed with the other side's target. Branch order: equal payloads → either; empty resolution loses to a real one; differing resolutions → tiebreak on the resolution, winner's whole payload; same resolution with one empty target → the real target; same resolution, two real targets → tiebreak on the target selects the whole payload.
 
-**Prose**: there is **no text-diff machinery** — no hunks, no conflict markers, no similarity heuristics. A prose conflict is whole-field: the pending entry carries the three complete strings (base/ours/theirs) for one of `title`, `description`, or `agent_prompt`; if both sides moved to the *same* text there is no conflict. The provisional merged value is ours. The resolution is one complete replacement string per pending field, addressed by its fingerprint alone: 12 lowercase hex chars (the first 6 bytes) of SHA-256 over issue id + field + base + ours + theirs joined by NULs. `MatchProseResolutions` rejects the whole set — returning the zero export and no texts — if any fingerprint names no live pending field, two resolutions name the same field, the number of resolved fields differs from the number of pending fields (so two pending fields that truncate to one fingerprint also reject), or the merge holds an id collision. On success it returns the provisional export unchanged beside the texts, keyed by issue id and then field.
+**Prose**: there is **no text-diff machinery** — no hunks, no conflict markers, no similarity heuristics. A prose conflict is whole-field: the pending entry carries the three complete strings (base/ours/theirs) for one of `title`, `description`, `agent_prompt`, or `plan`; if both sides moved to the *same* text there is no conflict. The provisional merged value is ours. The resolution is one complete replacement string per pending field, addressed by its fingerprint alone: 12 lowercase hex chars (the first 6 bytes) of SHA-256 over issue id + field + base + ours + theirs joined by NULs. `MatchProseResolutions` rejects the whole set — returning the zero export and no texts — if any fingerprint names no live pending field, two resolutions name the same field, the number of resolved fields differs from the number of pending fields (so two pending fields that truncate to one fingerprint also reject), or the merge holds an id collision. On success it returns the provisional export unchanged beside the texts, keyed by issue id and then field.
 
 ## Compaction (Dolt GC)
 
@@ -241,7 +242,7 @@ Every store open runs `migrate` (`internal/store/migration_runner.go`): a snapsh
 
 **The transient schema lift** (`liftWorkingSetToRegistry`): loops goose `UpByOne` to the registry max, commits nothing, takes no checkpoint and no snapshot; a nil-result/nil-error iteration fails loud rather than spinning. Its only caller is the reconcile, on a throwaway scratch branch — this is what heals schema skew between diverged sides.
 
-### The migration registry (v1–v9)
+### The migration registry (v1–v11)
 
 Every statement in every file is wrapped in goose `StatementBegin`/`StatementEnd` pairs; up sections carry **no** idempotency guards (bare `CREATE TABLE` / `ADD COLUMN`); only the baseline's down section uses `IF EXISTS`. Each migration ships a down section with a documented loss contract.
 
@@ -274,6 +275,8 @@ Plus eight indexes: `issues(status,priority,updated_at)`, `issues(item_rank(191)
 **v9 `00009_purges.sql`** — creates `purges(issue_id VARCHAR(191) NOT NULL, issue_created_at VARCHAR(64) NOT NULL, purged_at VARCHAR(64) NOT NULL, purged_by TEXT NOT NULL, PRIMARY KEY (issue_id, issue_created_at))`, one row per purged issue, with **no foreign key**: the issue it names no longer exists. No backfill. Down drops the table; loss contract: the purged issues stay gone, but a store stepped back below v9 no longer knows which ids were purged, so a sync with a store that still holds one can bring it back and minting can hand a purged id out again; the records are recoverable only from a pre-downgrade dbsnapshot. No test exercises the migration's Up or Down by itself; the table's behavior is pinned by `TestRestoreNeverUnpurges` (`internal/store/purge_test.go`) and `TestDeterministicMapCleanAhead` (`internal/store/shapemap_test.go`).
 
 **v10 `00010_history_can_be_re_rooted.sql`** — Up deletes the `meta` row `producer_binary_version` (every lit that wrote it supports v9 and no later version); Down is `SELECT 1;` and restores nothing. A store at this version can be re-rooted by the history bound. A binary whose schema support stops below 10 refuses to write to a remote whose head records 10 (`guardCommitSchemaAhead`), so it cannot push over, force-push, combine with or take a side against a re-rooted remote.
+
+**v11 `00011_plans_and_plan_reviews.sql`** — `issues.work_plan text NOT NULL DEFAULT ''`, the issue's `plan` (the empty text is a ticket with no plan; the column is not named `plan` because PLAN is reserved in the SQL dialect); and `plan_reviews(id VARCHAR(191) NOT NULL, issue_id VARCHAR(191) NOT NULL, plan_digest VARCHAR(64) NOT NULL, verdict VARCHAR(16) NOT NULL, laws TEXT NOT NULL, created_at VARCHAR(64) NOT NULL, created_by TEXT NOT NULL, PRIMARY KEY (id))`, one row per law review of a plan, with index `idx_plan_reviews_issue_created (issue_id, created_at)`, FK `plan_reviews_issue` → `issues(id)` `ON DELETE CASCADE`, and check `plan_reviews_verdict_check` (`verdict IN ('pass','fail')`). `plan_digest` is the hex SHA-256 of the judged plan text; `laws` the cited tokens, sorted and comma-joined. No backfill. Down drops `plan_reviews`, then the column; loss contract: every plan and every plan review is dropped, so a store stepped back below v11 holds no record that a ticket was planned or that a plan passed review; they are recoverable only from a pre-downgrade dbsnapshot. No test exercises the migration's Up or Down by itself; the table's behavior is pinned by the conformance case `a_plan_review_judges_one_version` (`internal/storage/conformance/conformance.go`), which the Dolt engine runs.
 
 **Registry invariants, test-enforced**: baseline bytes frozen by SHA-256 pin; every v2+ migration content-pinned by SHA-256 and filename (`detectVersionReuse` classifies content-changed / renamed / unpinned / deleted, with content-change taking priority over rename); every migration must have a non-empty, non-comment down section (comment-aware parser with 15 pinned accept/reject shapes); filename version parsing is exact (`<digits>_<name>.sql` with a version of at least 1, rejecting signs, whitespace, leading-junk — 13 pinned cases); the registry rule over file names (`.sql` only, every one versioned, no version twice, at least one, ascending) is pinned by a 7-row table over `ParseRegistry`, and the source directory and the embed are pinned to parse to the same registry.
 

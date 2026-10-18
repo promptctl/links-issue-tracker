@@ -306,6 +306,7 @@ There is **no `--skip-empty`** flag anywhere; "nothing to commit" is absorbed by
 - `"add comment"` (`store.go`)
 - `"delete comment"` (`store.go`)
 - `"purge issue"` (`purge.go`)
+- `"add plan review"` (`plan_review.go`)
 
 Each is used verbatim as the Dolt commit message (`commit_lock.go`) and inside tx error text (`commit_lock.go`).
 
@@ -395,7 +396,7 @@ Test evidence:
 4. `canonicalizeLabels(in.Labels)` (`store.go`; `internal/store/labels.go`) — error propagated.
 5. `issueid.NormalizeTopicForCreate(in.Topic)` (`store.go`) — error propagated. Missing topic yields an error containing `"topic is required"` (`store_test.go`).
 6. `createdBy := "links"` — a hardcoded literal used as the event actor, the label creator, and the parent-edge creator (`store.go`).
-7. Builds `model.Issue` with **`strings.TrimSpace` applied to** Title, Description, Prompt, Lane, Assignee; `Priority`, `IssueType`, `Topic`, `Labels` copied; `CreatedAt = UpdatedAt = now` (`store.go`).
+7. Builds `model.Issue` with **`strings.TrimSpace` applied to** Title, Description, Prompt, Plan, Lane, Assignee; `Priority`, `IssueType`, `Topic`, `Labels` copied; `CreatedAt = UpdatedAt = now` (`store.go`).
 8. `model.HydrateRow(issue, model.StatusView{Value: model.StateOpen}, nil)` — new issues start `open` (`store.go`). An invalid issue type is rejected here or downstream (`store_test.go`).
 9. `parentID := strings.TrimSpace(in.ParentID)` (`store.go`).
 10. `storage.RejectLeafWithoutParent(issueType, parentID)` (`internal/storage/containment.go`) → `model.ValidationError` for a leaf with no parent (`store.go`).
@@ -409,10 +410,10 @@ Inside `withMutation(ctx, "create issue"...)` (`store.go`):
 6. The INSERT (`store.go`), verbatim:
 ```sql
 INSERT INTO issues(
-    id, title, description, agent_prompt, status, priority, issue_type, topic, assignee, item_rank, lane, created_at, updated_at, closed_at, archived_at, deleted_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+    id, title, description, agent_prompt, work_plan, status, priority, issue_type, topic, assignee, item_rank, lane, follows_up, created_at, updated_at, closed_at, archived_at, deleted_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
 ```
-   Bound values in order: `issue.ID`, `issue.Title`, `issue.Description`, `nullableString(issue.Prompt)`, `statusForStorage(issue)`, `issue.Priority`, `issue.IssueType`, `issue.Topic`, `issue.AssigneeValue()`, `issue.Rank`, `issue.Lane`, `issue.CreatedAt.Format(time.RFC3339Nano)`, `issue.UpdatedAt.Format(time.RFC3339Nano)`, `archivedCol`, `deletedCol`. `closed_at` is a literal `NULL`. Columns `resolution` and `redirect_target` are **not** in the insert list (left to their defaults). Failure → `fmt.Errorf("insert issue: %w", err)` (`store.go`).
+   Bound values in order: `issue.ID`, `issue.Title`, `issue.Description`, `nullableString(issue.Prompt)`, `issue.Plan`, `statusForStorage(issue)`, `issue.Priority`, `issue.IssueType`, `issue.Topic`, `issue.AssigneeValue()`, `issue.Rank`, `issue.Lane`, `nullableString(issue.FollowsUp)`, `issue.CreatedAt.Format(time.RFC3339Nano)`, `issue.UpdatedAt.Format(time.RFC3339Nano)`, `archivedCol`, `deletedCol`. `closed_at` is a literal `NULL`. Columns `resolution` and `redirect_target` are **not** in the insert list (left to their defaults). Failure → `fmt.Errorf("insert issue: %w", err)` (`store.go`).
 7. If `parentID != ""`: builds `model.Relation{SrcID: issue.ID, DstID: parentID, Type: model.RelParentChild, CreatedAt: issue.CreatedAt, CreatedBy: "links"}` and routes it through `insertRelationTx` (`store.go`; `internal/store/relations.go`).
 8. `s.replaceLabelsTx(ctx, tx, issue.ID, issue.Labels, createdBy)` (`store.go`; `internal/store/labels.go`).
 9. Event: `createChanges := []model.FieldChange{}`; for **non-container** types appends `{Field:"status", From:"", To:"open"}`; containers get none (`store.go`). Then `s.recordEvent(ctx, tx, issue.ID, "created", "issue created", "links", createChanges)` (`store.go`) — action `"created"`, reason `"issue created"`, actor `"links"`.
@@ -428,6 +429,7 @@ Defaults, restated as a table for every column the create path touches:
 | `title` | trimmed input, required non-empty |
 | `description` | trimmed input |
 | `agent_prompt` | trimmed prompt, `""` stored as SQL NULL |
+| `work_plan` | trimmed plan, `""` stored as `""` |
 | `status` | `"open"` for leaves; SQL NULL for containers (`store_test.go`) |
 | `priority` | `in.Priority` as given (no default beyond the Go zero value) |
 | `issue_type` | `in.IssueType`, `""` → `task` |
@@ -454,11 +456,11 @@ The **zero value** of `storage.RankPlacement` behaves as bottom/append: consecut
 
 #### 5.1 The issue projection
 
-`issueColumns` (`store.go`), the single ordered projection, 18 columns:
+`issueColumns` (`store.go`), the single ordered projection, 20 columns:
 ```
-id, title, description, agent_prompt, status, priority,
+id, title, description, agent_prompt, work_plan, status, priority,
 issue_type, topic, assignee, item_rank, lane, created_at,
-updated_at, closed_at, resolution, redirect_target, archived_at, deleted_at
+updated_at, closed_at, resolution, redirect_target, follows_up, archived_at, deleted_at
 ```
 `issueProjection(alias)` (`store.go`) joins them with `", "`, prefixing `alias+"."` when alias is non-empty. Derived once: `issueColumnsBare = issueProjection("")` and `issueColumnsQualified = issueProjection("i")` (`store.go`).
 
@@ -468,9 +470,9 @@ updated_at, closed_at, resolution, redirect_target, archived_at, deleted_at
 
 `issueRow struct { Issue partialIssue; Status model.StatusView }` (`store.go`).
 
-`partialIssue` (`store.go`): `ID, Title, Description, Prompt string; Priority model.Priority; IssueType model.IssueType; Topic, Assignee, Rank, Lane string; Labels []string; CreatedAt, UpdatedAt time.Time; Retention model.Retention`.
+`partialIssue` (`store.go`): `ID, Title, Description, Prompt, Plan string; Priority model.Priority; IssueType model.IssueType; Topic, Assignee, Rank, Lane string; Labels []string; CreatedAt, UpdatedAt time.Time; Retention model.Retention`.
 
-`scanIssue(row)` (`store.go`) scans the 18 columns positionally in `issueColumns` order, with `prompt`, `status`, `closedAt`, `resolution`, `redirectTarget`, `archivedAt`, `deletedAt` as `sql.NullString`; sets `issue.Prompt = prompt.String` (NULL → `""`); delegates to `parsedIssueRow`.
+`scanIssue(row)` (`store.go`) scans the 20 columns positionally in `issueColumns` order, `work_plan` straight into `issue.Plan`, with `prompt`, `status`, `closedAt`, `resolution`, `redirectTarget`, `followsUp`, `archivedAt`, `deletedAt` as `sql.NullString`; sets `issue.Prompt = prompt.String` and `issue.FollowsUp = followsUp.String` (NULL → `""`); delegates to `parsedIssueRow`.
 
 `scanIssueWithParent(row)` (`store.go`) — identical but with a leading `parentID string` column.
 
@@ -535,14 +537,15 @@ Errors: `"batch load issues: %w"`, `"scan batch-loaded issue: %w"`, `"iterate ba
 2. `listRelations(ctx, id)` (`store.go`).
 3. `listComments(ctx, id)` (`store.go`).
 4. `ListEvents(ctx, id)` (`store.go`).
-5. `collectRelatedIssueIDs(id, relations)` (`store.go`; defined `store.go`) — distinct counterparties of both `SrcID` and `DstID`, excluding `""` and the focal id, in first-seen order.
-6. If `issue.RedirectTargetValue()` is non-nil and not already in the list, it is appended (`store.go`).
-7. `getIssuesByIDs(ctx, relatedIDs)` — one batch hydrate — then `loadRankAncestry(ctx, s.db)`, the tree order the relation groups sort in (`store.go`).
-8. `bucketRelations(id, relations, relatedByID, ancestry)` → `structural` with `Parent`, `Children`, `BlockedBy`, `Blocks` (`store.go`; `internal/store/relations.go`).
-9. If `structural.Parent != nil`: `ListIssues(ctx, ListIssuesFilter{ParentIDs: [structural.Parent.ID], IncludeArchived: true, IncludeDeleted: true})` — the parent's children in every retention state, rank order then id — then `siblingsOf(id, parentChildren)`; otherwise `siblings := []model.Issue{}` (`store.go`).
-10. `redirectTarget` is set only if the target id is present in `relatedByID`; a vanished target hydrates as absent (`store.go`).
-11. `related := relatedFrom(id, relations, relatedByID, ancestry)` (`store.go`).
-12. Assembles `model.IssueDetail{Issue, Relations, Comments, Events, Children, Siblings, BlockedBy, Blocks, Parent, Related, RedirectTarget}` (`store.go`).
+5. `queryPlanReviews(ctx, s.db, "WHERE issue_id = ?", id)` — the issue's plan reviews, oldest first (`internal/store/plan_review.go`).
+6. `collectRelatedIssueIDs(id, relations)` (`store.go`; defined `store.go`) — distinct counterparties of both `SrcID` and `DstID`, excluding `""` and the focal id, in first-seen order.
+7. If `issue.RedirectTargetValue()` is non-nil and not already in the list, it is appended (`store.go`).
+8. `getIssuesByIDs(ctx, relatedIDs)` — one batch hydrate — then `loadRankAncestry(ctx, s.db)`, the tree order the relation groups sort in (`store.go`).
+9. `bucketRelations(id, relations, relatedByID, ancestry)` → `structural` with `Parent`, `Children`, `BlockedBy`, `Blocks` (`store.go`; `internal/store/relations.go`).
+10. If `structural.Parent != nil`: `ListIssues(ctx, ListIssuesFilter{ParentIDs: [structural.Parent.ID], IncludeArchived: true, IncludeDeleted: true})` — the parent's children in every retention state, rank order then id — then `siblingsOf(id, parentChildren)`; otherwise `siblings := []model.Issue{}` (`store.go`).
+11. `redirectTarget` is set only if the target id is present in `relatedByID`; a vanished target hydrates as absent (`store.go`).
+12. `related := relatedFrom(id, relations, relatedByID, ancestry)` (`store.go`).
+13. Assembles `model.IssueDetail{Issue, Relations, Comments, Events, PlanReviews, Children, Siblings, BlockedBy, Blocks, Parent, Related, RedirectTarget}` (`store.go`).
 
 Evidence: `BlockedBy`, `Blocks`, `Children`, `Related` all come back in rank order (`store_test.go`); relation counterparties are fully hydrated including container progress and label slices (`store_test.go`); siblings are the parent's other children in rank order excluding self, and empty for parentless issues and only children (`store_test.go`); the redirect target is exposed via `detail.RedirectTarget` with **no** `related-to` edge written (`store_test.go`).
 
@@ -774,13 +777,14 @@ Evidence: a hard-deleted endpoint makes both `AddRelation` and `SetParent` fail 
 - `Title != nil` → `strings.TrimSpace(*in.Title)`; empty result → `model.ValidationError{Message: "title cannot be empty"}` (`store.go`);
 - `Description != nil` → trimmed (`store.go`);
 - `Prompt != nil` → trimmed (`store.go`);
+- `Plan != nil` → trimmed (`internal/storage/fields.go`);
 - `IssueType != nil` → if `issue.IssueType.IsContainer() != in.IssueType.IsContainer()` → `model.ValidationError{Message: fmt.Sprintf("cannot change issue_type between container (%v) and leaf types: lifecycle capability would change", model.ContainerTypes())}` (`store.go`);
 - `Priority != nil` → assigned as-is (`store.go`);
 - `Assignee != nil` → trimmed (`store.go`);
 - `Lane != nil` → trimmed (`store.go`);
 - `Labels != nil` → `canonicalizeLabels(*in.Labels)`, error propagated (`store.go`).
 
-Change rows, emitted only for fields that actually moved, in this order (`store.go`): `title`, `description`, `issue_type` (string cast), `priority` (`strconv.Itoa(int(...))` — the numeric wire encoding, not the display name), `assignee` (compared via `AssigneeValue()`), `lane`, `labels` (compared as `strings.Join(labels, ",")` on both sides).
+Change rows, emitted only for fields that actually moved, in this order (`store.go`; `storage.ApplyIssueFields`, `internal/storage/fields.go`): `title`, `description`, `prompt`, `plan`, `issue_type` (string cast), `priority` (`strconv.Itoa(int(...))` — the numeric wire encoding, not the display name), `assignee` (compared via `AssigneeValue()`), `lane`, `labels` (compared as `strings.Join(labels, ",")` on both sides).
 
 Return: `fieldWrite{issue, replaceLabels: in.Labels != nil, actor, reason: in.Reason, changes}` (`store.go`).
 
@@ -789,10 +793,10 @@ Return: `fieldWrite{issue, replaceLabels: in.Labels != nil, actor, reason: in.Re
 2. The UPDATE (`store.go`):
 ```sql
 UPDATE issues SET
-    title = ?, description = ?, agent_prompt = ?, priority = ?, issue_type = ?, assignee = ?, lane = ?, updated_at = ?
+    title = ?, description = ?, agent_prompt = ?, work_plan = ?, priority = ?, issue_type = ?, assignee = ?, lane = ?, updated_at = ?
     WHERE id = ?
 ```
-bound `issue.Title, issue.Description, nullableString(issue.Prompt), issue.Priority, issue.IssueType, issue.AssigneeValue(), issue.Lane, issue.UpdatedAt.Format(time.RFC3339Nano), issue.ID`. Failure → `fmt.Errorf("update issue: %w", err)`. It is **unguarded** (no CAS) but touches no lifecycle column — `status`, `closed_at`, `resolution`, `redirect_target`, `archived_at`, `deleted_at` are all absent from the SET list (`store.go`).
+bound `issue.Title, issue.Description, nullableString(issue.Prompt), issue.Plan, issue.Priority, issue.IssueType, issue.AssigneeValue(), issue.Lane, issue.UpdatedAt.Format(time.RFC3339Nano), issue.ID`. Failure → `fmt.Errorf("update issue: %w", err)`. It is **unguarded** (no CAS) but touches no lifecycle column — `status`, `closed_at`, `resolution`, `redirect_target`, `archived_at`, `deleted_at` are all absent from the SET list (`store.go`).
 3. `if w.replaceLabels` → `s.replaceLabelsTx(ctx, tx, issue.ID, issue.Labels, w.actor)` (`store.go`).
 4. `if len(w.changes) > 0` → `insertEventTx(ctx, tx, event)` (`store.go`). A field-only update writes an event with a **NULL** `action` column (see §7).
 
@@ -880,8 +884,8 @@ with `created_at` as RFC3339Nano; failure → `fmt.Errorf("insert comment: %w", 
 One `withMutation(ctx, "purge issue", ...)` — one transaction, one Dolt commit (`purge.go`). Inside it, in order:
 1. `SELECT id, created_at FROM issues WHERE id = ?` with `in.IssueID` bound verbatim (no trim). `sql.ErrNoRows` → `storage.NotFoundError{Entity: "issue", ID: in.IssueID}`; other → `fmt.Errorf("read issue %s: %w", in.IssueID, err)`. `created_at` is parsed through `scanTime` into the issue's birth instant; a parse error is returned as is.
 2. `detachedChildrenTx(ctx, tx, id)` (`purge.go`, §8a.4) — one `storage.DetachedChild{ID, Type, ParentsLeft}` per child with a `parent-child` edge onto the issue, whatever the child's retention — then `storage.RejectPurgeOfOccupiedContainer(id, children)` (`internal/storage/containment.go`): a child that is not a container and keeps no other parent edge would be left outside any epic, and any such child → `model.ValidationError` "cannot purge <id>: it would leave <ids> outside any epic; move them with lit parent set --child <id> --parent <epic-id>, or purge them first", where `<ids>` is the stranded children's ids sorted and joined with `", "`. A child epic, or a leaf that keeps another parent edge, does not refuse the purge; the child epic is left with no parent edge (top-level).
-3. One SELECT of four subqueries — `(SELECT COUNT(*) FROM comments WHERE issue_id = ?)`, `(SELECT COUNT(*) FROM labels WHERE issue_id = ?)`, `(SELECT COUNT(*) FROM relations WHERE src_id = ? OR dst_id = ?)`, `(SELECT COUNT(*) FROM issue_events WHERE issue_id = ?)` — scanned into `result.Comments`, `Labels`, `Relations`, `Events`; error → `fmt.Errorf("count rows of issue %s: %w", id, err)`.
-4. `deleteIssueTx(ctx, tx, id)` (`row_deletes.go`), count discarded. `ON DELETE CASCADE` removes the comments, labels, relations, `issue_events`, and `issue_event_changes` rows; no statement names them.
+3. One SELECT of five subqueries — `(SELECT COUNT(*) FROM comments WHERE issue_id = ?)`, `(SELECT COUNT(*) FROM labels WHERE issue_id = ?)`, `(SELECT COUNT(*) FROM relations WHERE src_id = ? OR dst_id = ?)`, `(SELECT COUNT(*) FROM issue_events WHERE issue_id = ?)`, `(SELECT COUNT(*) FROM plan_reviews WHERE issue_id = ?)` — scanned into `result.Comments`, `Labels`, `Relations`, `Events`, `PlanReviews`; error → `fmt.Errorf("count rows of issue %s: %w", id, err)`.
+4. `deleteIssueTx(ctx, tx, id)` (`row_deletes.go`), count discarded. `ON DELETE CASCADE` removes the comments, labels, relations, `issue_events`, `issue_event_changes`, and `plan_reviews` rows; no statement names them.
 5. `result.Purge = model.Purge{IssueID: id, IssueCreatedAt: born, PurgedAt: s.clock.Now(), PurgedBy: in.Actor}` — the birth read in step 1, the actor verbatim, no `unknown` default — written by `insertPurgeTx`.
 
 Any error returns a zero `storage.PurgeResult`. No `issue_events` row is recorded for the purge, and no other issue's row is written.
@@ -998,7 +1002,7 @@ There are exactly four producers of DDL that reaches a live workspace:
 | Producer | File | Cited at |
 |---|---|---|
 | goose baseline migration (v1) | `internal/store/migrations/00001_baseline.sql` | `internal/store/migrations/00001_baseline.sql` |
-| goose numbered migrations v2–v10 | `00002_add_lane.sql`, `00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00005_add_event_attribution.sql`, `00006_add_follows_up.sql`, `00007_every_ticket_inside_a_container.sql`, `00008_blocked_by_edge.sql`, `00009_purges.sql`, `00010_history_can_be_re_rooted.sql` | `internal/store/migrations/00002_add_lane.sql`, `00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00005_add_event_attribution.sql`, `00006_add_follows_up.sql`, `00007_every_ticket_inside_a_container.sql`, `00008_blocked_by_edge.sql`, `00009_purges.sql`, `00010_history_can_be_re_rooted.sql` |
+| goose numbered migrations v2–v11 | `00002_add_lane.sql`, `00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00005_add_event_attribution.sql`, `00006_add_follows_up.sql`, `00007_every_ticket_inside_a_container.sql`, `00008_blocked_by_edge.sql`, `00009_purges.sql`, `00010_history_can_be_re_rooted.sql`, `00011_plans_and_plan_reviews.sql` | `internal/store/migrations/00002_add_lane.sql`, `00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00005_add_event_attribution.sql`, `00006_add_follows_up.sql`, `00007_every_ticket_inside_a_container.sql`, `00008_blocked_by_edge.sql`, `00009_purges.sql`, `00010_history_can_be_re_rooted.sql`, `00011_plans_and_plan_reviews.sql` |
 | pre-goose reconcile (`reconcileToBaseline`) | `internal/store/schema_reconcile.go` | `internal/store/schema_reconcile.go` |
 | quarantine bootstrap (`ensureQuarantineTable`) | `internal/store/migration_runner.go` | `internal/store/migration_runner.go` |
 
@@ -1015,11 +1019,11 @@ Registry constants:
 - Baseline version is `1` (`internal/store/migrations/bounds.go`).
 - HEAD version is derived at runtime as the max numeric filename prefix in the
   embedded registry (`internal/store/migrations/bounds.go`); with the
-  nine files present, HEAD = 9.
+  eleven files present, HEAD = 11.
 
 ---
 
-## 2. THE CONVERGED SCHEMA (v1 + v2..v9), table by table
+## 2. THE CONVERGED SCHEMA (v1 + v2..v11), table by table
 
 The authoritative post-migration shape is the byte-compared golden file
 `internal/store/schema_snapshot.sql`, which is the verbatim
@@ -1064,6 +1068,7 @@ CREATE TABLE `issues` (
   `resolution` varchar(32),
   `redirect_target` varchar(191),
   `follows_up` varchar(191),
+  `work_plan` text NOT NULL DEFAULT '',
   PRIMARY KEY (`id`),
   KEY `idx_issues_rank` (`item_rank`(191)),
   KEY `idx_issues_status_priority` (`status`,`priority`,`updated_at`),
@@ -1098,6 +1103,7 @@ Column-by-column provenance and declared form:
 | `resolution` | `VARCHAR(32)` | NULL | none | `00003_add_resolution.sql` |
 | `redirect_target` | `VARCHAR(191)` | NULL | none | `00004_add_redirect_target.sql` |
 | `follows_up` | `VARCHAR(191)` | NULL | none | `00006_add_follows_up.sql` |
+| `work_plan` | `text` | NOT NULL | `''` | `00011_plans_and_plan_reviews.sql` |
 
 - PRIMARY KEY: `(id)` — declared inline as `PRIMARY KEY` on the column (`00001_baseline.sql`).
 - No UNIQUE constraints.
@@ -1341,6 +1347,31 @@ CREATE TABLE `purges` (
 - PRIMARY KEY `(issue_id, issue_created_at)`; no indexes, no CHECKs, and **no foreign key** on either key column: the issue a row names has been deleted (`00009_purges.sql`).
 - One row per purged issue, named by its id and its `created_at`. The only INSERT is `insertPurgeTx` — `INSERT INTO purges(issue_id, issue_created_at, purged_at, purged_by) VALUES (?, ?, ?, ?)`, `issue_created_at` from `model.Purge.Key` (UTC RFC3339Nano) and `purged_at` formatted RFC3339Nano — reached from `Purge`, a restore, and the replay's delta (`internal/store/purge.go`). The only single-row DELETE is `deletePurgeTx`, reached only from the replay's delta (`internal/store/row_deletes.go`); `writeWholeExportTx` clears the table wholesale before re-inserting the export's union (`internal/store/import_export.go`).
 - Read by `listPurges` (`SELECT issue_id, issue_created_at, purged_at, purged_by FROM purges`, both timestamps through `scanTime`, ordered by `model.UnionPurges`), from `Export` and `cutByHeldPurges` (`internal/store/purge.go`), and by the id-mint existence probe (`internal/store/issue_ids.go`).
+
+### 2.12 `plan_reviews`
+
+```sql
+CREATE TABLE `plan_reviews` (
+  `id` varchar(191) NOT NULL,
+  `issue_id` varchar(191) NOT NULL,
+  `plan_digest` varchar(64) NOT NULL,
+  `verdict` varchar(16) NOT NULL,
+  `laws` text NOT NULL,
+  `created_at` varchar(64) NOT NULL,
+  `created_by` text NOT NULL,
+  PRIMARY KEY (`id`),
+  KEY `idx_plan_reviews_issue_created` (`issue_id`,`created_at`),
+  CONSTRAINT `plan_reviews_issue` FOREIGN KEY (`issue_id`) REFERENCES `issues` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `plan_reviews_verdict_check` CHECK ((`verdict` IN ('pass', 'fail')))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
+```
+
+`internal/store/schema_snapshot.sql`. Source: `00011_plans_and_plan_reviews.sql` (v11), which also adds `issues.work_plan`.
+
+- PRIMARY KEY `(id)`; index `idx_plan_reviews_issue_created (issue_id, created_at)`; FK `plan_reviews_issue` → `issues(id)` `ON DELETE CASCADE`, so a purge's issue delete takes the issue's reviews; CHECK `plan_reviews_verdict_check` admits `pass` and `fail`.
+- One row per law review of a ticket's plan. `plan_digest` is the hex SHA-256 of the plan text judged; `laws` is the cited tokens joined by `","` (`joinLaws`), the empty text for none, split back by `splitLaws`, which drops empty tokens (`internal/store/plan_review.go`).
+- The only INSERT is `insertPlanReviewTx` — `INSERT INTO plan_reviews(id, issue_id, plan_digest, verdict, laws, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)`, `created_at` formatted RFC3339Nano, error `insert plan review <id>: …` — reached from `AddPlanReview` and the replay's delta. The only single-row DELETE is `deletePlanReviewTx` (`DELETE FROM plan_reviews WHERE id = ?`, through `execDelete`), reached only from the replay's delta (`internal/store/plan_review.go`). `writeWholeExportTx` does not name the table; clearing `issues` cascades into it.
+- Read by `queryPlanReviews(ctx, q, where, args...)`: `SELECT id, issue_id, plan_digest, verdict, laws, created_at, created_by FROM plan_reviews <where> ORDER BY created_at ASC, id ASC`, `created_at` through `scanTime`, query error wrapped `list plan reviews: …`; from `Export` (no `where`) and `GetIssueDetail` (`WHERE issue_id = ?`) (`internal/store/plan_review.go`).
 
 ---
 
@@ -1828,6 +1859,7 @@ goose_db_version` and commits. `assertReachedBaseline` asserts
 - v5 Down: `ALTER TABLE issue_events DROP COLUMN stream_id` then `DROP COLUMN workspace_id` (`00005_add_event_attribution.sql`).
 - v9 Down: `DROP TABLE purges` (`00009_purges.sql`); the LOSS CONTRACT comment: purged issues stay gone, but the store no longer knows which ids were purged, so a sync can bring one back and minting can reissue one.
 - v10 Down: `SELECT 1;` (`00010_history_can_be_re_rooted.sql`); the LOSS CONTRACT comment: the `producer_binary_version` row the Up deleted is not restored.
+- v11 Down: `DROP TABLE plan_reviews` then `ALTER TABLE issues DROP COLUMN work_plan` (`00011_plans_and_plan_reviews.sql`); the LOSS CONTRACT comment: every plan and every plan review is dropped, so a store stepped back below this version holds no record that a ticket was planned or that a plan passed review; operators who need them must restore from a pre-downgrade dbsnapshot.
 - v1 Down: `DROP TABLE IF EXISTS` for `issue_event_changes`, `issue_events`, `labels`, `comments`, `relations`, `issues`, `meta` — in that FK-safe order (`00001_baseline.sql`).
 
 v4 Up also performs data mutations that change `relations` content: a backfill
@@ -1907,7 +1939,7 @@ Cell Go types as produced by `dumpTable`: driver `[]byte` is normalized to `stri
 
 `TargetKey string` — the string `"<collection>.<field>"` (shapemap.go).
 
-`collection string` (shapemap.go) with exactly seven constants:
+`collection string` (shapemap.go) with exactly eight constants:
 
 | Constant | Literal | line |
 |---|---|---|
@@ -1918,6 +1950,7 @@ Cell Go types as produced by `dumpTable`: driver `[]byte` is normalized to `stri
 | `collEvents` | `"events"` | 174 |
 | `collEventChanges` | `"event_changes"` | 175 |
 | `collPurges` | `"purges"` | shapemap.go |
+| `collPlanReviews` | `"plan_reviews"` | shapemap.go |
 
 `targetField` (unexported) — shapemap.go:
 - `coll collection`, `field string`, `canonical Transform`, `admits map[Transform]bool`, `optional bool`
@@ -1932,7 +1965,7 @@ Built once at package init by `buildTargetRegistry()` into `var targetRegistry m
 
 Helper `add(c, canonical, opt, fields...)` sets `admits = {canonical: true}` only (shapemap.go). Helper `addMulti(c, canonical, extra, opt, field)` sets `admits = {canonical} ∪ extra` (shapemap.go).
 
-Complete registry (49 entries; the `add(...)` variadic lines register several fields each):
+Complete registry (57 entries; the `add(...)` variadic lines register several fields each):
 
 | TargetKey | collection | field | canonical | admits | optional |
 |---|---|---|---|---|---|
@@ -1942,6 +1975,7 @@ Complete registry (49 entries; the `add(...)` variadic lines register several fi
 | `issues.priority` | issues | priority | identity | {identity} | required |
 | `issues.issue_type` | issues | issue_type | identity | {identity} | required |
 | `issues.prompt` | issues | prompt | identity | {identity} | optional |
+| `issues.plan` | issues | plan | identity | {identity} | optional |
 | `issues.assignee` | issues | assignee | identity | {identity} | optional |
 | `issues.topic` | issues | topic | identity | {identity} | optional |
 | `issues.rank` | issues | rank | identity | {identity} | optional |
@@ -1985,9 +2019,16 @@ Complete registry (49 entries; the `add(...)` variadic lines register several fi
 | `purges.purged_by` | purges | purged_by | identity | {identity} | required |
 | `purges.issue_created_at` | purges | issue_created_at | timestamp | {timestamp} | required |
 | `purges.purged_at` | purges | purged_at | timestamp | {timestamp} | required |
+| `plan_reviews.id` | plan_reviews | id | identity | {identity} | required |
+| `plan_reviews.issue_id` | plan_reviews | issue_id | identity | {identity} | required |
+| `plan_reviews.plan_digest` | plan_reviews | plan_digest | identity | {identity} | required |
+| `plan_reviews.verdict` | plan_reviews | verdict | identity | {identity} | required |
+| `plan_reviews.laws` | plan_reviews | laws | identity | {identity} | required |
+| `plan_reviews.created_by` | plan_reviews | created_by | identity | {identity} | required |
+| `plan_reviews.created_at` | plan_reviews | created_at | timestamp | {timestamp} | required |
 
 
-`knownCollections map[collection]bool` is derived from `targetRegistry` values' `coll` (shapemap.go), i.e. exactly the seven collections above.
+`knownCollections map[collection]bool` is derived from `targetRegistry` values' `coll` (shapemap.go), i.e. exactly the eight collections above.
 
 Per-collection required-field sets (what `emitterProblems` enforces at shapemap.go):
 - issues: id, title, description, priority, issue_type, created_at, updated_at, closed_at, status
@@ -1997,6 +2038,7 @@ Per-collection required-field sets (what `emitterProblems` enforces at shapemap.
 - events: id, issue_id, reason, actor, created_at
 - event_changes: event_id, field
 - purges: issue_id, purged_by, issue_created_at, purged_at
+- plan_reviews: id, issue_id, plan_digest, verdict, laws, created_by, created_at
 
 ### 3. The KNOWN shapes registry (shapemap_known.go)
 
@@ -2027,6 +2069,7 @@ Table `"issues"` (shapemap_known.go):
 | `deleted_at` | `issues.deleted_at` | 178 | |
 | `item_rank` | `issues.rank` | 179 | `// v1 name` |
 | `lane` | `issues.lane` | 180 | |
+| `work_plan` | `issues.plan` | shapemap_known.go | |
 
 Table `"relations"`: `src_id`→`relations.src_id`, `dst_id`→`relations.dst_id`, `type`→`relations.type`, `created_at`→`relations.created_at`, `created_by`→`relations.created_by`.
 
@@ -2051,6 +2094,8 @@ Table `"issue_events"`:
 Table `"issue_event_changes"`: `event_id`→`event_changes.event_id`, `field`→`event_changes.field`, `from_value`→`event_changes.from`, `to_value`→`event_changes.to`.
 
 Table `"purges"`: `issue_id`→`purges.issue_id`, `issue_created_at`→`purges.issue_created_at`, `purged_at`→`purges.purged_at`, `purged_by`→`purges.purged_by` (shapemap_known.go).
+
+Table `"plan_reviews"`: `id`→`plan_reviews.id`, `issue_id`→`plan_reviews.issue_id`, `plan_digest`→`plan_reviews.plan_digest`, `verdict`→`plan_reviews.verdict`, `laws`→`plan_reviews.laws`, `created_at`→`plan_reviews.created_at`, `created_by`→`plan_reviews.created_by` (shapemap_known.go).
 
 `issue_history` is deliberately absent from this map (shapemap_known.go); it is handled by `issueHistoryFanOut`.
 
@@ -2252,9 +2297,10 @@ shapemap.go. Starts from:
 ```go
 model.Export{Version: model.ExportVersion, WorkspaceID: workspaceID,
   Issues: []model.Issue{}, Relations: []model.Relation{}, Comments: []model.Comment{},
-  Labels: []model.Label{}, Events: []model.IssueEvent{}, Purges: []model.Purge{}}
+  Labels: []model.Label{}, Events: []model.IssueEvent{}, Purges: []model.Purge{},
+  PlanReviews: []model.PlanReview{}}
 ```
-(shapemap.go) — `Version` is `model.ExportVersion` (4); all slices non-nil.
+(shapemap.go) — `Version` is `model.ExportVersion` (5); all slices non-nil.
 
 - **Issues** (596-602): `buildIssue(rec)` per record; error propagated as `model.Export{}, err`.
 - **Relations** (603-611): `model.Relation{SrcID: cellString(rec["src_id"]), DstID: cellString(rec["dst_id"]), Type: model.RelationTypeFromStored(cellString(rec["type"])), CreatedAt: cellTime(rec["created_at"]), CreatedBy: cellString(rec["created_by"])}` — the `type` value is read through `RelationTypeFromStored` (a pre-v8 `blocks` becomes `blocked-by`) and otherwise not validated.
@@ -2267,9 +2313,10 @@ model.Export{Version: model.ExportVersion, WorkspaceID: workspaceID,
   ```
   (shapemap.go). Otherwise appends `model.FieldChange{Field: cellString(rec["field"]), From: cellString(rec["from"]), To: cellString(rec["to"])}` to that event's `Changes` (shapemap.go). Note NULL `from`/`to` become `""` here even though the transform preserved NULL.
 - **Purges** (shapemap.go): `model.Purge{IssueID: cellString(rec["issue_id"]), IssueCreatedAt: cellTime(rec["issue_created_at"]), PurgedAt: cellTime(rec["purged_at"]), PurgedBy: cellString(rec["purged_by"])}` per record, appended in record order. Pinned by `TestDeterministicMapCleanAhead` (`shapemap_test.go`): a purge record survives dump → map → apply → rebuilt store, with no count-conservation finding.
+- **Plan reviews** (shapemap.go): `model.PlanReview{ID: cellString(rec["id"]), IssueID: cellString(rec["issue_id"]), PlanDigest: model.PlanDigest(cellString(rec["plan_digest"])), Verdict: model.PlanVerdict(cellString(rec["verdict"])), Laws: splitLaws(cellString(rec["laws"])), CreatedAt: cellTime(rec["created_at"]), CreatedBy: cellString(rec["created_by"])}` per record, appended in record order; the verdict is raw-converted, not re-parsed.
 
 `buildIssue(rec)` — shapemap.go:
-- `model.Issue{ID: cellString(rec["id"]), Title, Description, Prompt: cellString(rec["prompt"]), Priority: model.Priority(cellInt(rec["priority"])), IssueType: model.IssueType(cellString(rec["issue_type"])), Topic, Assignee, Rank: cellString(rec["rank"]), CreatedAt: cellTime(rec["created_at"]), UpdatedAt: cellTime(rec["updated_at"])}` (shapemap.go). **`rec["lane"]` is never read**, despite `issues.lane` being a registered target and `lane` being in `knownSourceColumns`.
+- `model.Issue{ID: cellString(rec["id"]), Title, Description, Prompt: cellString(rec["prompt"]), Plan: cellString(rec["plan"]), Lane: cellString(rec["lane"]), Priority: model.Priority(cellInt(rec["priority"])), IssueType: model.IssueType(cellString(rec["issue_type"])), Topic, Assignee, Rank: cellString(rec["rank"]), FollowsUp: cellString(rec["follows_up"]), CreatedAt: cellTime(rec["created_at"]), UpdatedAt: cellTime(rec["updated_at"])}` (shapemap.go).
 - `issue.SetRetention(model.RetentionFromTimestamps(cellTimePtr(rec["archived_at"]), cellTimePtr(rec["deleted_at"])))` (shapemap.go).
 - `view := model.StatusView{}`; only if `!issue.IssueType.IsContainer()` (shapemap.go) is it populated:
   - `view.Value = model.DefaultOpen(cellString(rec["status"]))`
@@ -2456,7 +2503,7 @@ Note `aheadColumnMapping()` uses `identity` on `issue_events.action/reason/actor
 - `TestClassifyDropDistinguishesProvenance`: `classifyDrop("goose_db_version","version_id")` → `DropIntended` with a non-empty reason; `classifyDrop("issues","a_column_no_migration_ever_made")` → `DropUnexplained`.
 - `TestParseDroppedColumnsReadsMigrationHistory`: from `"ALTER TABLE issues DROP COLUMN legacy_field;\nALTER TABLE \`relations\` DROP COLUMN IF EXISTS \`old_col\`;\nALTER TABLE issues DROP COLUMN a, DROP COLUMN b;"` the results must include `{issues,legacy_field}`, `{relations,old_col}`, `{issues,a}`, `{issues,b}`.
 - `TestGooseUpSectionExcludesDownDrops`: an Up-`ADD`/Down-`DROP` migration yields zero refs; an Up-`DROP legacy`/Down-`ADD` migration yields exactly `[{issues, legacy}]`.
-- `TestDeterministicMapCleanAhead`: a real v1 workspace (epic + child task + solo task, one comment, one label, one `Start` transition) is dumped with `DumpRaw`, mapped, validated, applied, and `ReplaceFromExport`ed into a fresh store; `Doctor` must report `IntegrityCheck == "ok"` with zero errors (`mustClean`, 289-294), every original issue id must survive, and the epic's status must round-trip as `""` (NULL), i.e. `epic.StatusValue() == ""`.
+- `TestDeterministicMapCleanAhead`: a real v1 workspace (epic + child task + solo task, one comment, one label, one `Start` transition) is dumped with `DumpRaw`, mapped, validated, applied, and `ReplaceFromExport`ed into a fresh store; `Doctor` must report `IntegrityCheck == "ok"` with zero errors (`mustClean`, 289-294), every original issue id must survive, and the epic's status must round-trip as `""` (NULL), i.e. `epic.StatusValue() == ""`. The solo task carries lane `solo`, plan `"solo plan"`, and one `fail` review of plan version 1 citing `one-source-of-truth`; after map+apply and again after the rebuild, the solo issue keeps its lane and plan, and the export holds exactly that review, which `Judges("solo plan")`.
 - `TestDeterministicMapPreGoose`: a hand-built pre-goose dump — `issues` with `prompt` (not `agent_prompt`), no `topic`/`item_rank`/`lane`/`resolution`/`redirect_target`/`archived_at`/`deleted_at`; `labels` with column `label`; `issue_events` with `assignee` (not `actor`); statuses `"todo"`/`"done"`; no `goose_db_version` table — is accepted by `DeterministicMap`, validates, and applies to: 2 issues; exactly 1 event with exactly 1 nested change; `export.Events[0].Actor == "claude"` (proving `issue_events.assignee → events.actor`). After `ReplaceFromExport`: Doctor-clean; `i1.Prompt == "the historical prompt"`; `i1.StatusValue() == "open"` (from `"todo"`); `i1.Topic == "misc"` (defaulted by the write path, not by the mapper); `i2.StatusValue() == "closed"` (from `"done"`).
 - `TestApplyTransformPreservesNull`: `applyTransform(tf, nil)` returns `(nil, nil)` for `identity`, `legacy_status_value`, and `timestamp`; `applyTransform(TransformLegacyStatus, "todo")` returns `"open"`.
 - `TestApplyRejectsCorruptTimestamp`: an `issues` row with `created_at = "not-a-timestamp"` makes `Apply` fail with an error containing all of `issues`, `created_at`, and `not-a-timestamp`.
@@ -2511,7 +2558,6 @@ Panics in `shapemap_known.go`:
 
 ### 11. Behavioral edges observable in the code
 
-- `issues.lane` is a registered target and `lane` is in `knownSourceColumns["issues"]` (shapemap_known.go, shapemap.go), but `buildIssue` never reads `rec["lane"]` (shapemap.go): the value satisfies totality and is then discarded at assembly.
 - `event_changes.from`/`.to` are `optional` targets (shapemap.go), so an `event_changes` emitter may omit them; `cellString(nil)` then yields `""` in the `model.FieldChange` (shapemap.go).
 - `emits` returns `true` for a `nil` `When` (shapemap.go), and `Validate` never requires `When` to be non-nil; only `MarshalJSON` rejects it (shapemap_json.go).
 - `Constant` is accepted by `Validate` on any field whose `canonical` is `identity` (shapemap.go) — including optional ones — but `MarshalJSON`/decode restrict the value to `string`.
@@ -3127,7 +3173,7 @@ Slice: `internal/store/import_export.go`, `import_bulk.go`, `import_tree.go`, `e
 
 `func (s *Store) Export(ctx context.Context) (model.Export, error)` — `internal/store/import_export.go`.
 
-It performs six reads and assembles one value (`import_export.go`):
+It performs seven reads and assembles one value (`import_export.go`):
 
 1. `s.ListIssues(ctx, storage.ListIssuesFilter{Limit: 0, IncludeArchived: true, IncludeDeleted: true})` (`import_export.go`). Limit 0 disables the cap (`capLimit` returns the slice unchanged when `limit <= 0`, `internal/store/store.go`). `IncludeArchived`/`IncludeDeleted` true means neither `i.archived_at IS NULL` nor `i.deleted_at IS NULL` is added to the WHERE clause (`store.go`), so **archived and soft-deleted issues are exported**. No other filter is set, so the SQL has no WHERE clause at all. Ordering: the SQL carries no ORDER BY; `ListIssues` sorts the hydrated issues with `slices.SortStableFunc` and the comparator `storage.IssueOrdering(filter.SortBy, ancestry)` returns, which with no `SortBy` specs compares the `rank` key and then the id (`store.go`; `internal/storage/ordering.go`), so **issues are ordered by rank ascending, ties broken by id ascending**.
 2. `s.listAllRelations(ctx)` (`import_export.go`) — `SELECT src_id, dst_id, type, created_at, created_by FROM relations ORDER BY created_at ASC` (`store.go`). Ordered by created_at ascending only (no tiebreak).
@@ -3135,6 +3181,7 @@ It performs six reads and assembles one value (`import_export.go`):
 4. `s.listAllLabels(ctx)` (`import_export.go`) — `SELECT issue_id, label, created_at, created_by FROM labels ORDER BY issue_id ASC, label ASC` (`store.go`).
 5. `s.ListAllEvents(ctx)` (`import_export.go`) — `queryEvents(ctx, "")`, i.e. `SELECT e.id, e.issue_id, e.action, e.reason, e.actor, e.created_at, e.stream_id, e.workspace_id, c.field, c.from_value, c.to_value FROM issue_events e LEFT JOIN issue_event_changes c ON c.event_id = e.id ORDER BY e.id ASC, c.field ASC` (`store.go`). The per-change rows are collapsed back into `IssueEvent.Changes`, so **an event's changes are ordered by field name ascending**; the collapsed events are then sorted by `storage.EventOrdering` — the `created_at` instant, then id (`internal/storage/ordering.go`).
 6. `listPurges(ctx, s.db)` (`import_export.go`) — `SELECT issue_id, issue_created_at, purged_at, purged_by FROM purges`, both timestamps parsed through `scanTime`, returned through `model.UnionPurges`, so **purge records are ordered by issue id, then birth ascending**; the result is never nil (`internal/store/purge.go`).
+7. `queryPlanReviews(ctx, s.db, "")` (`import_export.go`) — `SELECT id, issue_id, plan_digest, verdict, laws, created_at, created_by FROM plan_reviews ORDER BY created_at ASC, id ASC`, `created_at` through `scanTime`, `laws` through `splitLaws`; the result is never nil (`internal/store/plan_review.go`).
 
 Any read error is returned with a zero `model.Export{}` (`import_export.go`).
 
@@ -3146,10 +3193,11 @@ model.Export{
     WorkspaceID: s.workspaceID,
     ExportedAt:  s.clock.Now(),
     Issues:      issues, Relations: rels, Comments: comments, Labels: labels, Events: events, Purges: purges,
+    PlanReviews: planReviews,
 }
 ```
 
-`Version` is `model.ExportVersion` (4). `ExportedAt` is wall-clock UTC at export time.
+`Version` is `model.ExportVersion` (5). `ExportedAt` is wall-clock UTC at export time.
 
 Export does **not** re-check hydration; the comment at `import_export.go` states `hydrateIssues` guarantees every issue is hydrated, and `Issue.MarshalJSON` is the boundary that rejects partial values.
 
@@ -3168,10 +3216,11 @@ type Export struct {
 	Labels      []Label      `json:"labels"`
 	Events      []IssueEvent `json:"events"`
 	Purges      []Purge      `json:"purges"`
+	PlanReviews []PlanReview `json:"plan_reviews"`
 }
 ```
 
-No `omitempty` anywhere on the envelope — all nine keys are always emitted, in this order. Slices from `Store.Export` are never nil (each list helper initializes `out := []model.X{}`, e.g. `store.go`, `1885`, `1908`; `hydrateIssues` returns `[]model.Issue{}` for zero rows, `store.go`), so empty tables serialize as `[]`, not `null`.
+No `omitempty` anywhere on the envelope — all ten keys are always emitted, in this order. Slices from `Store.Export` are never nil (each list helper initializes `out := []model.X{}`, e.g. `store.go`, `1885`, `1908`; `hydrateIssues` returns `[]model.Issue{}` for zero rows, `store.go`), so empty tables serialize as `[]`, not `null`.
 
 ### 1.3 The serialized issue object
 
@@ -3183,6 +3232,7 @@ type issueJSON struct {
 	Title       string                `json:"title"`
 	Description string                `json:"description"`
 	Prompt      string                `json:"prompt,omitempty"`
+	Plan        string                `json:"plan,omitempty"`
 	Status      *State                `json:"status,omitempty"`
 	Priority    Priority              `json:"priority"`
 	IssueType   IssueType             `json:"issue_type"`
@@ -3191,6 +3241,7 @@ type issueJSON struct {
 	Rank        string                `json:"rank"`
 	Lane        string                `json:"lane"`
 	Labels      []string              `json:"labels"`
+	FollowsUp   string                `json:"follows_up,omitempty"`
 	CreatedAt   time.Time             `json:"created_at"`
 	UpdatedAt   time.Time             `json:"updated_at"`
 	ClosedAt    *time.Time            `json:"closed_at,omitempty"`
@@ -3262,7 +3313,7 @@ Minimal epic (no status axis, Live, no prompt/assignee):
 }
 ```
 
-### 1.4 The other four record shapes
+### 1.4 The other six record shapes
 
 `model.Relation` (`model.go`) — no omitempty on any field:
 
@@ -3320,9 +3371,17 @@ Changes     []FieldChange `json:"changes"`
 }
 ```
 
+`model.Purge` (`purge.go`) — no omitempty: `{"issue_id":..,"issue_created_at":..,"purged_at":..,"purged_by":..}`.
+
+`model.PlanReview` (`plan_review.go`) — no omitempty; `plan_digest` is the hex SHA-256 of the judged plan text, `laws` the cited tokens sorted, each once:
+
+```json
+{"id":"rvw-…","issue_id":"links-a-1","plan_digest":"<64 hex chars>","verdict":"fail","laws":["one-source-of-truth"],"created_at":"2026-08-27T10:00:00Z","created_by":"grace"}
+```
+
 ### 1.5 Export decode (`Export.UnmarshalJSON`) — v1 compatibility
 
-`model.go`. Decodes into a private `rawExport` that additionally accepts `"history"` (`model.go`), then copies version/workspace_id/exported_at/issues/relations/comments/labels/events across (`model.go`).
+`model.go`. Decodes into a private `rawExport` that additionally accepts `"history"` (`model.go`), then copies version/workspace_id/exported_at/issues/relations/comments/labels/events/purges/plan_reviews across (`model.go`).
 
 If `raw.Version < 2 && len(raw.History) > 0` (`model.go`), every `v1ExportHistory` row (`model.go`: `issue_id`, `action`, `from_status`, `to_status`, `reason`, `created_by`, `created_at`) is converted into an `IssueEvent` (`model.go`) with:
 - `ID` = `v1EventID(...)` = `"evt-v1-" + hex(sha256(issueID|action|fromStatus|toStatus|createdBy|createdAt.RFC3339Nano)[:8])` — 16 hex chars after the prefix (`model.go`).
@@ -3388,17 +3447,18 @@ type tableDelta[K comparable, R any] struct {
 
 ```go
 type exportDelta struct {
-	issues    tableDelta[string, model.Issue]
-	relations tableDelta[relationKey, model.Relation]
-	comments  tableDelta[string, model.Comment]
-	labels    tableDelta[labelKey, model.Label]
-	events    tableDelta[string, model.IssueEvent]
-	purges    tableDelta[model.PurgeKey, model.Purge]
+	issues      tableDelta[string, model.Issue]
+	relations   tableDelta[relationKey, model.Relation]
+	comments    tableDelta[string, model.Comment]
+	labels      tableDelta[labelKey, model.Label]
+	events      tableDelta[string, model.IssueEvent]
+	purges      tableDelta[model.PurgeKey, model.Purge]
+	planReviews tableDelta[string, model.PlanReview]
 }
 ```
-`export_delta.go`; `empty()` at `export_delta.go` is true only when all six table deltas are empty. These are unexported Go values — **the delta is never serialized to disk or JSON anywhere**.
+`export_delta.go`; `empty()` at `export_delta.go` is true only when all seven table deltas are empty. These are unexported Go values — **the delta is never serialized to disk or JSON anywhere**.
 
-Key types (`internal/store/row_deletes.go`): `relationKey{srcID, dstID string; kind model.RelationType}` (`row_deletes.go`) = the relations PRIMARY KEY; `labelKey{issueID, name string}` (`row_deletes.go`) = labels PRIMARY KEY; `model.PurgeKey{IssueID, IssueCreatedAt string}` (`internal/model/purge.go`) = purges PRIMARY KEY, the birth spelled in UTC RFC3339Nano by `model.Purge.Key`. Comments, issues and events key on their `string` id; purge records key on `model.Purge.Key` (`export_delta.go`).
+Key types (`internal/store/row_deletes.go`): `relationKey{srcID, dstID string; kind model.RelationType}` (`row_deletes.go`) = the relations PRIMARY KEY; `labelKey{issueID, name string}` (`row_deletes.go`) = labels PRIMARY KEY; `model.PurgeKey{IssueID, IssueCreatedAt string}` (`internal/model/purge.go`) = purges PRIMARY KEY, the birth spelled in UTC RFC3339Nano by `model.Purge.Key`. Comments, issues, events and plan reviews key on their `string` id; purge records key on `model.Purge.Key` (`export_delta.go`).
 
 ### 2.3 Add / modify / delete representation
 
@@ -3422,7 +3482,7 @@ So: **delete** = key in `remove` only; **add** = row in `add` only; **modify** =
 
 Comparison is `reflect.DeepEqual` over a `persisted(row)` projection:
 - issues → `issueRowValues(i)` (`export_delta.go`), the normalized `[]any` row tuple, *not* the model value.
-- relations, comments, labels, events, purges → `wholeRow` (identity) (`export_delta.go`, used).
+- relations, comments, labels, events, purges, plan reviews → `wholeRow` (identity) (`export_delta.go`, used).
 
 Determinism: iteration is over the input slices, not maps (`export_delta.go`), so identical inputs produce an identical statement sequence.
 
@@ -3435,6 +3495,7 @@ Each child table's `live` side is then `prev`'s rows **filtered to survivors** (
 - comments: `survivors[c.IssueID]` (`export_delta.go`).
 - labels: `survivors[l.IssueID]` (`export_delta.go`).
 - events: `survivors[e.IssueID]` (`export_delta.go`).
+- plan reviews: `survivors[r.IssueID]` (`export_delta.go`).
 
 Purge records are diffed against `prev.Purges` **unfiltered**: they reference no issue row, so nothing cascades into them (`export_delta.go`).
 
@@ -3442,7 +3503,7 @@ Nested `issue_event_changes` get no layer: an event whose `Changes` differ is a 
 
 ### 2.5 Application order and SQL
 
-`applyExportDelta(ctx, tx, delta)` (`export_delta.go`) runs six table deltas in this fixed order — **issues, relations, comments, labels, events, purges** — and within each table **all removes before all adds** (`applyTableDelta`, `export_delta.go`). The removal row count is discarded (`export_delta.go`).
+`applyExportDelta(ctx, tx, delta)` (`export_delta.go`) runs seven table deltas in this fixed order — **issues, relations, comments, labels, events, purges, plan reviews** — and within each table **all removes before all adds** (`applyTableDelta`, `export_delta.go`). The removal row count is discarded (`export_delta.go`).
 
 Statements bound per table:
 
@@ -3454,8 +3515,9 @@ Statements bound per table:
 | labels | `DELETE FROM labels WHERE issue_id = ? AND label = ?` (`row_deletes.go`) | `INSERT INTO labels(issue_id, label, created_at, created_by) VALUES (?, ?, ?, ?)` (`import_export.go`) |
 | events | `DELETE FROM issue_events WHERE id = ?` (`row_deletes.go`) | `INSERT INTO issue_events(...)` + N `INSERT INTO issue_event_changes(...)` (`import_export.go`) |
 | purges | `DELETE FROM purges WHERE issue_id = ? AND issue_created_at = ?` (`row_deletes.go`) | `INSERT INTO purges(issue_id, issue_created_at, purged_at, purged_by) VALUES (?, ?, ?, ?)` (`insertPurgeTx`, `purge.go`) |
+| plan_reviews | `DELETE FROM plan_reviews WHERE id = ?` (`deletePlanReviewTx`, `plan_review.go`) | `INSERT INTO plan_reviews(id, issue_id, plan_digest, verdict, laws, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)` (`insertPlanReviewTx`, `plan_review.go`) |
 
-Delete error text: `execDelete` wraps as `"delete %s: %w"` and `"delete %s: rows affected: %w"` with subjects `"issue <id>"`, `"relation <src>-><dst> (<type>)"`, `"comment <id>"`, `"label <issue>:<name>"`, `"issue event <id>"`, `"purge record <issue-id>@<created_at>"` (`row_deletes.go`).
+Delete error text: `execDelete` wraps as `"delete %s: %w"` and `"delete %s: rows affected: %w"` with subjects `"issue <id>"`, `"relation <src>-><dst> (<type>)"`, `"comment <id>"`, `"label <issue>:<name>"`, `"issue event <id>"`, `"purge record <issue-id>@<created_at>"` (`row_deletes.go`), `"plan review <id>"` (`plan_review.go`).
 
 ### 2.6 Where a delta is committed
 
@@ -3523,7 +3585,7 @@ A restore lands every ticket inside an epic: `storage.HomeStranded` (`01-data-mo
 
 A restore lands every rank key held by one issue: `separateRankCollisions` gives the issues of the cut export that share a key new keys, in listed order, after the homing (`04-store-operations.md`). Pinned by `TestRestoreSeparatesASharedRankKey` (`internal/store/rank_collisions_test.go`).
 
-Deletion order is literally `labels, comments, relations, issues, purges`. `issue_events` and `issue_event_changes` are deliberately **not** named — they cascade from `issues` (`import_export.go`). Error text: `"clear labels: …"`, `"clear comments: …"`, etc.
+Deletion order is literally `labels, comments, relations, issues, purges`. `issue_events` and `issue_event_changes` are deliberately **not** named — they cascade from `issues` (`import_export.go`) — and neither is `plan_reviews`, which cascades from `issues` the same way (`00011_plans_and_plan_reviews.sql`). Error text: `"clear labels: …"`, `"clear comments: …"`, etc.
 
 Because `prev` is the empty export, every row in the input is an add and nothing is a remove.
 
@@ -3534,8 +3596,8 @@ The input is a `model.Export` value. On the CLI path it arrives from `syncfile.R
 Field-by-field parsing/normalization happens in `issueRowValues` (`import_export.go`), the tuple bound to `insertIssueStmt`:
 
 ```sql
-INSERT INTO issues(id, title, description, agent_prompt, status, priority, issue_type, topic, assignee, item_rank, lane, created_at, updated_at, closed_at, resolution, redirect_target, archived_at, deleted_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(NULLIF(?, ''), 'misc'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO issues(id, title, description, agent_prompt, work_plan, status, priority, issue_type, topic, assignee, item_rank, lane, follows_up, created_at, updated_at, closed_at, resolution, redirect_target, archived_at, deleted_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, COALESCE(NULLIF(?, ''), 'misc'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ```
 (`import_export.go`.)
 
@@ -3547,6 +3609,7 @@ Value-by-value (`import_export.go`):
 | `title` | `issue.Title` | verbatim |
 | `description` | `issue.Description` | verbatim |
 | `agent_prompt` | `nullableString(issue.Prompt)` | `""` → SQL NULL (`store.go`) |
+| `work_plan` | `issue.Plan` | verbatim; `""` stays `""` |
 | `status` | `statusForStorage(issue)` | leaf → `sql.NullString{string(status.Value), Valid:true}`; container (no Status capability) → **NULL** (`store.go`) |
 | `priority` | `model.CanonicalPriority(int(issue.Priority))` | any int ≠ 1 coerces to 0; 1 stays 1 (`priority.go`). **Never rejects** — legacy out-of-range priorities are coerced so the CHECK constraint cannot fail a restore (`import_export.go`) |
 | `issue_type` | `issue.IssueType` | verbatim, no parse gate on this path |
@@ -3554,6 +3617,7 @@ Value-by-value (`import_export.go`):
 | `assignee` | `issue.AssigneeValue()` | |
 | `item_rank` | `issue.Rank` | verbatim |
 | `lane` | `issue.Lane` | verbatim |
+| `follows_up` | `nullableString(issue.FollowsUp)` | `""` → SQL NULL (`store.go`) |
 | `created_at` | `issue.CreatedAt.Format(time.RFC3339Nano)` | |
 | `updated_at` | `issue.UpdatedAt.Format(time.RFC3339Nano)` | |
 | `closed_at` | RFC3339Nano of `issue.ClosedAtValue()`, else nil | (`import_export.go`) |
@@ -3573,6 +3637,8 @@ Events (`insertEventTx`, `import_export.go`):
 - `stream_id` = `nullableString(event.Attribution.Stream())`, `workspace_id` = `nullableString(event.Attribution.Workspace())` — **attribution is replayed verbatim from the dump; the restoring checkout never substitutes its own** (`import_export.go`). No re-validation of the pair here: `Attribution.UnmarshalJSON` already collapsed half pairs.
 - error `"insert issue event %s: %w"`.
 - Then, per `event.Changes` entry, a blank trimmed field name fails `"issue event %s: field name cannot be empty"`; otherwise one `INSERT INTO issue_event_changes(event_id, field, from_value, to_value)`, with `from`/`to` through `nullableString` (`""` → NULL); error `"insert issue event change %s.%s: %w"` (event id, field).
+
+Plan reviews (`insertPlanReviewTx`, `plan_review.go`): `id, issue_id, plan_digest, verdict` verbatim, `laws` joined by `","` (`joinLaws`), `created_at` RFC3339Nano, `created_by` verbatim; error `"insert plan review %s: %w"`.
 
 ### 3.4 ID remapping / conflict policy
 
@@ -3628,6 +3694,7 @@ LocalID     string   `json:"local_id"`
 Title       string   `json:"title"`
 Description string   `json:"description,omitempty"`
 Prompt      string   `json:"prompt,omitempty"`
+Plan        string   `json:"plan,omitempty"`
 IssueType   string   `json:"type"`
 Topic       string   `json:"topic"`
 Priority    int      `json:"priority"`
@@ -3652,7 +3719,7 @@ Hand-writable example (pinned verbatim by `import_tree_test.go`):
 ]
 ```
 
-Defaults for absent fields: every field is a non-pointer, so an absent key is the Go zero value. `priority` absent → `0` → `PriorityNormal` (and `ParsePriority(0)` succeeds). `description`/`prompt`/`assignee`/`parent` absent → `""`. `labels`/`blocked_by` absent → nil slice. **`title`, `type`, `topic` and `local_id` have no defaults** — absent `local_id`/`title`/`type`/`topic` are rejected by validation.
+Defaults for absent fields: every field is a non-pointer, so an absent key is the Go zero value. `priority` absent → `0` → `PriorityNormal` (and `ParsePriority(0)` succeeds). `description`/`prompt`/`plan`/`assignee`/`parent` absent → `""`. `labels`/`blocked_by` absent → nil slice. **`title`, `type`, `topic` and `local_id` have no defaults** — absent `local_id`/`title`/`type`/`topic` are rejected by validation.
 
 ### 4.2 "Tree" = local_id graph over parent + blocked_by
 
@@ -3661,7 +3728,7 @@ Defaults for absent fields: every field is a non-pointer, so an absent key is th
 1. `storage.ParseImportTreeFile(specs)` (`internal/storage/import_validate.go`, shared with the memory engine) — full pre-flight, no store writes; returns each spec parsed, as a `storage.FileCreate`, in the topological write order (§4.4). The engine parses nothing itself.
 2. Create loop in topo order (`import_tree.go`):
    - the parent is `idMap[create.Parent]` — resolved **only** from this batch's map, so an external/real parent id resolves to `""` (see §4.5).
-   - `s.CreateIssue(ctx, create.Input(parentID, prefix))`: the `CreateIssueInput{Title, Description, Prompt, IssueType, Topic, Priority, Assignee, Labels}` the gate parsed, with `ParentID` and `Prefix` filled in. **`Lane` is never set** on this path (contrast bulk). `Placement` is left at its zero value = `RankBottom` (`internal/storage/issues.go`), so creates append in file order.
+   - `s.CreateIssue(ctx, create.Input(parentID, prefix))`: the `CreateIssueInput{Title, Description, Prompt, Plan, IssueType, Topic, Priority, Assignee, Labels}` the gate parsed, with `ParentID` and `Prefix` filled in. **`Lane` is never set** on this path (contrast bulk). `Placement` is left at its zero value = `RankBottom` (`internal/storage/issues.go`), so creates append in file order.
    - On error: `leaked := s.rollbackCreatedIssues(ctx, createdIDs)` then `"import: create %q: %w (rollback leaked %d: %s)"` with the leaked ids comma-joined.
    - `idMap[create.LocalID] = issue.ID`; append to `createdIDs`.
 3. Second pass over the creates **in write order** wiring `blocked_by` (`import_tree.go`): for each dep, `AddRelation(storage.AddRelationInput{SrcID: createdIDs[i], DstID: idMap[dep], Type: model.RelBlockedBy, CreatedBy: "links"})` — **src is the dependent, dst is the dependency**. On error: rollback, then `"import: blocked_by %q -> %q: %w (rollback leaked %d: %s)"`.
@@ -3736,6 +3803,7 @@ ID          string    `yaml:"id,omitempty"`
 Title       *string   `yaml:"title,omitempty"`
 Description *string   `yaml:"description,omitempty"`
 Prompt      *string   `yaml:"prompt,omitempty"`
+Plan        *string   `yaml:"plan,omitempty"`
 IssueType   *string   `yaml:"type,omitempty"`
 Topic       *string   `yaml:"topic,omitempty"`
 Priority    *int      `yaml:"priority,omitempty"`
@@ -3801,7 +3869,7 @@ Update-document checks (`parseBulkUpdateDoc`, `import_validate.go`, which return
 | `storage.bulkUpdatePatch(spec).IsEmpty()` | `bulk: doc %d (id %q) has no fields to update` |
 | id already seen | `bulk: duplicate id %q` (`import_validate.go`) |
 
-The patch is empty iff none of `Title, Description, Prompt, IssueType, Priority, Assignee, Labels, Lane` is set (`UpdateIssueInput.IsEmpty`, `internal/storage/fields.go`). **`Reason` alone does not count** — hence "id set and reason set with no other field set" is rejected.
+The patch is empty iff none of `Title, Description, Prompt, Plan, IssueType, Priority, Assignee, Labels, Lane` is set (`UpdateIssueInput.IsEmpty`, `internal/storage/fields.go`). **`Reason` alone does not count** — hence "id set and reason set with no other field set" is rejected.
 
 Create-document checks (`parseBulkCreateDoc`, `import_validate.go`, which returns the parsed create), in order:
 
@@ -3831,14 +3899,14 @@ Note the create branch does **not** require `LocalID` (unlike ImportTree), and d
 
 1. `s.getIssuesByIDs(ctx, storage.BulkParentRefs(specs))` reads the parents the file names (error → `bulk: read parents: %w`), and `parentTypes` maps each found id to its type; `file, err := storage.ParseBulkFile(specs, parentTypes)` — whole file validated before anything is written, and returned parsed: `file.Creates` in the topological write order (§4.4), `file.Updates` in file order; a cycle reads `bulk: cycle detected involving "x"` (`internal/storage/import_validate.go`). The engine parses nothing itself.
 2. `createdIDs` (ordered, parallel to `file.Creates`), `localRealID` map (`import_bulk.go`).
-3. Create loop over `file.Creates` (`import_bulk.go`): `CreateIssue(ctx, create.Input(resolveBulkRef(create.Parent, localRealID), prefix))`. The gate built that input: `Title` and `Topic` trimmed, `Description`/`Prompt`/`Assignee`/`Lane`/`Labels` the document's value or the zero value, `IssueType` and `Priority` parsed (priority `model.PriorityNormal` when unset), `Placement` left at its zero value `RankBottom` so file order is preserved, matching ImportTree. Failure → rollback then `"bulk: create doc %d: %w (rollback leaked %d: %s)"`.
+3. Create loop over `file.Creates` (`import_bulk.go`): `CreateIssue(ctx, create.Input(resolveBulkRef(create.Parent, localRealID), prefix))`. The gate built that input: `Title` and `Topic` trimmed, `Description`/`Prompt`/`Plan`/`Assignee`/`Lane`/`Labels` the document's value or the zero value, `IssueType` and `Priority` parsed (priority `model.PriorityNormal` when unset), `Placement` left at its zero value `RankBottom` so file order is preserved, matching ImportTree. Failure → rollback then `"bulk: create doc %d: %w (rollback leaked %d: %s)"`.
    - Append `createdIDs`. If `create.LocalID != ""` → `localRealID[LocalID] = issue.ID`; `result.Created` gets `storage.NewIDMapping(create.LocalID, issue.ID)`, **self-keyed when there is no local id** (`import_bulk.go`).
 4. Second pass over `file.Creates` in **write order** (`import_bulk.go`): for each `dep`, `AddRelation({SrcID: createdIDs[i], DstID: resolveBulkRef(dep, localRealID), Type: model.RelBlockedBy, CreatedBy: "links"})`. Failure → rollback then `"bulk: blocked_by doc %d -> %q: %w (rollback leaked %d: %s)"`.
 5. **Updates last**, over `file.Updates` (`import_bulk.go`): `s.Apply(ctx, update.ID, storage.Change{Actor: actor, Fields: update.Patch})`. Failure → rollback then `"bulk: update %q: %w (rollback leaked %d: %s)"`. On success append `issue.ID` to `result.Updated`. A failing create or edge therefore leaves no update applied.
 
 `resolveBulkRef(ref, localRealID)` (`import_bulk.go`): a map hit returns the real id; **a miss returns `ref` unchanged**, to be validated downstream by `CreateIssue`/`AddRelation` as a real pre-existing issue id.
 
-`storage.bulkUpdatePatch(doc)` (`internal/storage/fields.go`), run by the gate, builds the `storage.UpdateIssueInput` with `Reason: strings.TrimSpace(doc.Reason)`, each row of `issueFields` setting its own pointer: `Title`, `Description`, `Prompt`, `Assignee`, `Lane`, `Labels` pass through as the document's pointers, and `IssueType` and `Priority` go through `ParseIssueType`/`ParsePriority` with errors `"has invalid %s %#v: %w"`. **`Topic` is never carried** — it is unrepresentable in `UpdateIssueInput` (`internal/storage/issues.go`).
+`storage.bulkUpdatePatch(doc)` (`internal/storage/fields.go`), run by the gate, builds the `storage.UpdateIssueInput` with `Reason: strings.TrimSpace(doc.Reason)`, each row of `issueFields` setting its own pointer: `Title`, `Description`, `Prompt`, `Plan`, `Assignee`, `Lane`, `Labels` pass through as the document's pointers, and `IssueType` and `Priority` go through `ParseIssueType`/`ParsePriority` with errors `"has invalid %s %#v: %w"`. **`Topic` is never carried** — it is unrepresentable in `UpdateIssueInput` (`internal/storage/issues.go`).
 
 ### 5.4 Differences from the non-bulk (tree) path
 
@@ -3906,7 +3974,7 @@ updated %d issues\n         (len(result.Updated))
 
 | constant / literal | value | site |
 |---|---|---|
-| export `Version` | `2` | `import_export.go` |
+| export `Version` | `model.ExportVersion` = `5` | `import_export.go`, `internal/model/model.go` |
 | restore Dolt commit message | `"replace from export"` | `import_export.go` |
 | `FixIntegrity` Dolt commit message | `"fix integrity"` | `import_export.go` |
 | Doctor healthy `IntegrityCheck` | `"ok"` | `import_export.go` |
@@ -3974,8 +4042,8 @@ All paths are relative to `/Users/bmf/code/links-issue-tracker`. Every claim car
 There is no separate boolean/status field; `Reconciled()` is derived: `return len(r.Findings) == 0` (`internal/store/verify.go`).
 
 `conservationCollections` is the fixed report order (`internal/store/verify.go`):
-`collIssues, collRelations, collComments, collLabels, collEvents, collEventChanges, collPurges`.
-The underlying collection literals (`internal/store/shapemap.go`): `collIssues = "issues"`, `collRelations = "relations"`, `collComments = "comments"`, `collLabels = "labels"`, `collEvents = "events"`, `collEventChanges = "event_changes"`, `collPurges = "purges"`.
+`collIssues, collRelations, collComments, collLabels, collEvents, collEventChanges, collPurges, collPlanReviews`.
+The underlying collection literals (`internal/store/shapemap.go`): `collIssues = "issues"`, `collRelations = "relations"`, `collComments = "comments"`, `collLabels = "labels"`, `collEvents = "events"`, `collEventChanges = "event_changes"`, `collPurges = "purges"`, `collPlanReviews = "plan_reviews"`.
 
 ### 1.2 Report rendering — `VerifyReport.String()` (`verify.go`)
 
@@ -4038,7 +4106,7 @@ Expected counts are computed from the **raw dump** row counts, never re-derived 
 - For each dumped table, for each emitter of that table's mapping (`verify.go`):
   - If `em.When` type-asserts to `Always` → `expected[em.Collection] += len(table.Rows)` (`verify.go`).
   - Otherwise (any conditional `When`) → `exact[em.Collection] = false`, permanently excluding that collection from the count law (`verify.go`).
-- Actual counts read from `model.Export` (`verify.go`): `collIssues = len(export.Issues)`, `collRelations = len(export.Relations)`, `collComments = len(export.Comments)`, `collLabels = len(export.Labels)`, `collEvents = len(export.Events)`, `collEventChanges =` sum of `len(ev.Changes)` over `export.Events`, `collPurges = len(export.Purges)` (`verify.go`).
+- Actual counts read from `model.Export` (`verify.go`): `collIssues = len(export.Issues)`, `collRelations = len(export.Relations)`, `collComments = len(export.Comments)`, `collLabels = len(export.Labels)`, `collEvents = len(export.Events)`, `collEventChanges =` sum of `len(ev.Changes)` over `export.Events`, `collPurges = len(export.Purges)`, `collPlanReviews = len(export.PlanReviews)` (`verify.go`).
 - Iteration for reporting is over `conservationCollections` (fixed order), skipping any collection with `exact[coll] == false` (`verify.go`).
 - Failure condition: `expected[coll] != actual[coll]` (`verify.go`). A collection with no emitter at all has `expected = 0`, so a non-empty rebuild of an unmapped collection also fires.
 - Message (`verify.go`): `collection %q: source dump carries %d row(s) mapped here, rebuild has %d` — collection name quoted via `%q`, then expected, then actual.
@@ -4243,7 +4311,7 @@ The dump is **read-only** on the database — the only SQL issued is the three S
 - `labelKey{issueID string; name string}` — the labels PK `(issue_id, label)` (`row_deletes.go`).
 - Purges key on `model.PurgeKey{IssueID, IssueCreatedAt string}` (`internal/model/purge.go`) — the purges PK `(issue_id, issue_created_at)`, the birth spelled in UTC RFC3339Nano as the row stores it.
 
-### 4.2 The six deletes — all HARD deletes, all single-row by full primary key
+### 4.2 The seven deletes — all HARD deletes, all single-row by full primary key
 
 | Function | Exact SQL | Subject string in errors | Site |
 |---|---|---|---|
@@ -4253,13 +4321,14 @@ The dump is **read-only** on the database — the only SQL issued is the three S
 | `deleteLabelTx(ctx, tx, key)` | `DELETE FROM labels WHERE issue_id = ? AND label = ?` | `fmt.Sprintf("label %s:%s", key.issueID, key.name)` | `row_deletes.go` |
 | `deleteEventTx(ctx, tx, id)` | `DELETE FROM issue_events WHERE id = ?` | `fmt.Sprintf("issue event %s", id)` | `row_deletes.go` |
 | `deletePurgeTx(ctx, tx, key)` | `DELETE FROM purges WHERE issue_id = ? AND issue_created_at = ?` | `fmt.Sprintf("purge record %s@%s", key.IssueID, key.IssueCreatedAt)` | `row_deletes.go` |
+| `deletePlanReviewTx(ctx, tx, id)` | `DELETE FROM plan_reviews WHERE id = ?` | `fmt.Sprintf("plan review %s", id)` | `plan_review.go` |
 
 Bind order for relations is `key.srcID, key.dstID, string(key.kind)` (`row_deletes.go`); for labels `key.issueID, key.name` (`row_deletes.go`); for purges `key.IssueID, key.IssueCreatedAt` (`row_deletes.go`).
 
 ### 4.3 Tombstone vs hard delete
 
-- These are **hard** row removals. The soft-delete path is separate: ordinary issue deletion is a `DeletedAt` stamp; `Purge` is the one command that hard-deletes an issue row, through `deleteIssueTx` (`internal/store/purge.go`). `deleteEventTx` and `deletePurgeTx` have only the reconcile delta as caller, deliberately: an event leaves only with its issue's row, via the cascade, and no command un-purges, so a purge record leaves only when a replay's next export does not hold it (`row_deletes.go`).
-- Cascade is owned by the schema, not by this code: deleting an issue takes its relations, comments, labels, events and event changes via `ON DELETE CASCADE` (`row_deletes.go`); deleting an event takes its `issue_event_changes` rows (`row_deletes.go`). No cascading DELETE statements are issued here.
+- These are **hard** row removals. The soft-delete path is separate: ordinary issue deletion is a `DeletedAt` stamp; `Purge` is the one command that hard-deletes an issue row, through `deleteIssueTx` (`internal/store/purge.go`). `deleteEventTx` and `deletePurgeTx` have only the reconcile delta as caller, deliberately: an event leaves only with its issue's row, via the cascade, and no command un-purges, so a purge record leaves only when a replay's next export does not hold it (`row_deletes.go`). `deletePlanReviewTx` likewise has only the reconcile delta as caller (`export_delta.go`); no command removes a review.
+- Cascade is owned by the schema, not by this code: deleting an issue takes its relations, comments, labels, events, event changes and plan reviews via `ON DELETE CASCADE` (`row_deletes.go`; `00011_plans_and_plan_reviews.sql`); deleting an event takes its `issue_event_changes` rows (`row_deletes.go`). No cascading DELETE statements are issued here.
 
 ### 4.4 Rows-affected contract and error text (`execDelete`, `row_deletes.go`)
 
@@ -4274,11 +4343,11 @@ Bind order for relations is `key.srcID, key.dstID, string(key.kind)` (`row_delet
 - `RemoveRelation` — endpoints canonicalized first via `relType.CanonicalEndpoints`; `affected == 0` → `storage.NotFoundError{Entity: "relation", ID: fmt.Sprintf("src=%s dst=%s type=%s", srcID, dstID, relType)}` (`internal/store/relations.go`).
 - `DeleteComment` — calls `deleteCommentTx` and **discards** the count (`internal/store/store.go`).
 - `Purge` — calls `deleteIssueTx` after proving the row exists in the same transaction, and **discards** the count (`internal/store/purge.go`).
-- The reconcile replay's delta — `applyExportDelta` runs the six tables in this exact order, deleting before inserting within each table: **issues, relations, comments, labels, events, purges** (`internal/store/export_delta.go`). Issues go first so child rows inserted afterwards have their foreign key satisfied (`export_delta.go`). `applyTableDelta` explicitly ignores the affected count (`export_delta.go`).
+- The reconcile replay's delta — `applyExportDelta` runs the seven tables in this exact order, deleting before inserting within each table: **issues, relations, comments, labels, events, purges, plan reviews** (`internal/store/export_delta.go`). Issues go first so child rows inserted afterwards have their foreign key satisfied (`export_delta.go`). `applyTableDelta` explicitly ignores the affected count (`export_delta.go`).
 
 ### 4.6 Deletes deliberately NOT routed here
 
-Set-matching deletes are separate statements on purpose (`row_deletes.go`): `setSingleValuedEdgeTx` (relations.go), `ClearParent` (relations.go), `replaceLabelsTx` (labels.go), and the self-edge sweep in import_export.go. Also outside: `writeWholeExportTx`'s wholesale clear, which issues `DELETE FROM` for `labels, comments, relations, issues, purges` in that order and deliberately does not name `issue_events`/`issue_event_changes` because they cascade from issues (`internal/store/import_export.go`), and `FixIntegrity`'s repairs (`import_export.go`).
+Set-matching deletes are separate statements on purpose (`row_deletes.go`): `setSingleValuedEdgeTx` (relations.go), `ClearParent` (relations.go), `replaceLabelsTx` (labels.go), and the self-edge sweep in import_export.go. Also outside: `writeWholeExportTx`'s wholesale clear, which issues `DELETE FROM` for `labels, comments, relations, issues, purges` in that order and deliberately does not name `issue_events`/`issue_event_changes` because they cascade from issues (`internal/store/import_export.go`) — nor `plan_reviews`, which cascades the same way — and `FixIntegrity`'s repairs (`import_export.go`).
 
 ---
 

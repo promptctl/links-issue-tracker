@@ -752,7 +752,7 @@ Detection-only: `TestSyncReconcileDetectsUnrelatedHistories` (`sync_unrelated_te
 ### 7.1 Delta types
 
 `tableDelta[K comparable, R any]{remove []K; add []R}` (`export_delta.go`); `empty()` at `export_delta.go`.
-`exportDelta{issues, relations, comments, labels, events, purges}` (`export_delta.go`), ordered so issues precede everything referencing them. `exportDelta.empty()` at `export_delta.go`.
+`exportDelta{issues, relations, comments, labels, events, purges, planReviews}` (`export_delta.go`), ordered so issues precede everything referencing them. `exportDelta.empty()` at `export_delta.go`.
 
 ### 7.2 `diffTable` — the per-table comparison rule
 
@@ -766,7 +766,7 @@ Determinism: the input slices are walked, not the maps, so identical inputs prod
 
 ### 7.3 Projections
 
-- `wholeRow[R](row R) any { return row }` (`export_delta.go`) — used for relations, comments, labels, events, and purges. An event's `Changes` are part of its value, so an event whose changes differ is a changed row (`export_delta.go`).
+- `wholeRow[R](row R) any { return row }` (`export_delta.go`) — used for relations, comments, labels, events, purges, and plan reviews. An event's `Changes` are part of its value, so an event whose changes differ is a changed row (`export_delta.go`).
 - `issues` uses `issueRowValues(i)` because `model.Issue` is a hydrated view that also carries labels from another table and, for a container, a lifecycle derived from its children; comparing those made every label edit and every child status change look like an issue-row change (`export_delta.go`).
 
 ### 7.4 Keys
@@ -777,6 +777,7 @@ Determinism: the input slices are walked, not the maps, so identical inputs prod
 - labels: `labelKey{issueID, name}` (`export_delta.go`)
 - events: `e.ID` (`export_delta.go`)
 - purges: `model.Purge.Key` = `model.PurgeKey{IssueID, IssueCreatedAt}`, the birth spelled in UTC RFC3339Nano (`export_delta.go`, `internal/model/purge.go`)
+- plan reviews: `r.ID` (`export_delta.go`)
 Primary-key types live in `/Users/bmf/code/links-issue-tracker/internal/store/row_deletes.go`, except `model.PurgeKey` in `internal/model/purge.go` (`export_delta.go`).
 
 ### 7.5 Cascade rule
@@ -789,12 +790,13 @@ Primary-key types live in `/Users/bmf/code/links-issue-tracker/internal/store/ro
    - comments: `survivors[c.IssueID]` (`export_delta.go`)
    - labels: `survivors[l.IssueID]` (`export_delta.go`)
    - events: `survivors[e.IssueID]` (`export_delta.go`)
+   - plan reviews: `survivors[r.IssueID]` (`export_delta.go`)
 The schema fact this rests on: every child table is `ON DELETE CASCADE` from issues (and `issue_event_changes` from `issue_events`) (`export_delta.go`).
 4. Purge records reference no issue row, so nothing cascades into them: `diffTable(prev.Purges, next.Purges, …)` runs unfiltered (`export_delta.go`).
 
 ### 7.6 Application order
 
-`applyExportDelta(ctx, tx, delta)` (`export_delta.go`) applies, in this exact order: issues, relations, comments, labels, events, purges (`export_delta.go`), each via `applyTableDelta` (`export_delta.go`) which performs **all removals before all additions** for that table (`export_delta.go`). Row counts from deletions are deliberately ignored (`export_delta.go`).
+`applyExportDelta(ctx, tx, delta)` (`export_delta.go`) applies, in this exact order: issues, relations, comments, labels, events, purges, plan reviews (`export_delta.go`), each via `applyTableDelta` (`export_delta.go`) which performs **all removals before all additions** for that table (`export_delta.go`). Row counts from deletions are deliberately ignored (`export_delta.go`).
 
 ---
 
@@ -1114,7 +1116,7 @@ merge.go: `MergeResult struct{ export model.Export; Pending []ProsePending; Coll
 
 collision.go: `Collision{IssueID string; Ours model.Issue; Theirs model.Issue}` with JSON tags `issue_id/ours/theirs`; `SameEntity{base *model.Issue; ours, theirs model.Issue; oursWS, theirsWS string}` — every field unexported, so outside the package `Classify` is the only way to obtain one; `Classify(base *model.Issue, ours, theirs model.Issue, oursWS, theirsWS string) (SameEntity, *Collision)`; `ancestorOf(base *model.Issue, ours model.Issue) *model.Issue`; `SortCollisions(collisions []Collision) []Collision`.
 
-resolve.go: `ProseField string` with `ProseTitle="title"`, `ProseDescription="description"`, `ProsePrompt="agent_prompt"`; `ProsePending{IssueID,Field,Base,Ours,Theirs}` with JSON tags `issue_id/field/base/ours/theirs`; `IssueResolution{merged model.Issue; Pending []ProsePending}` with `Settled() (model.Issue, bool)` and `Provisional() model.Issue`; `ResolveIssue(in SameEntity) IssueResolution`; `resolver` struct; `twoTier[T comparable]`; `(*resolver).prose`; `(*resolver).resolveStatus`; `(*resolver).tiebreak`; `typedTiebreak[T ~string]`; `resolveClosePayload`; `closePayload`; `closePayloadOf`; `(*resolver).derivedFlagTime`; `higher[T cmp.Ordered]`; `stateRank`; `stateFromRank`; `boolBase`; `mergeLabelNames`; `presentOr`; `nameSet`; `unionNameSet`; `latest`; `earliestTime`; `cloneTimePtr`.
+resolve.go: `ProseField string` with `ProseTitle="title"`, `ProseDescription="description"`, `ProsePrompt="agent_prompt"`, `ProsePlan="plan"`; `ProsePending{IssueID,Field,Base,Ours,Theirs}` with JSON tags `issue_id/field/base/ours/theirs`; `IssueResolution{merged model.Issue; Pending []ProsePending}` with `Settled() (model.Issue, bool)` and `Provisional() model.Issue`; `ResolveIssue(in SameEntity) IssueResolution`; `resolver` struct; `twoTier[T comparable]`; `(*resolver).prose`; `(*resolver).resolveStatus`; `(*resolver).tiebreak`; `typedTiebreak[T ~string]`; `resolveClosePayload`; `closePayload`; `closePayloadOf`; `(*resolver).derivedFlagTime`; `higher[T cmp.Ordered]`; `stateRank`; `stateFromRank`; `boolBase`; `mergeLabelNames`; `presentOr`; `nameSet`; `unionNameSet`; `latest`; `earliestTime`; `cloneTimePtr`.
 
 resolve_prose.go: `type Fingerprint string`; `fingerprintBytes = 6`; `(ProsePending) Fingerprint() Fingerprint`; `ParseFingerprint(text string) (Fingerprint, bool)`; `ProseResolution{Fingerprint, Text}` — **no JSON tags**; `proseKey{IssueID, Field}`; `type ProseTexts map[ProseField]string`; `MatchProseResolutions(result MergeResult, resolutions []ProseResolution) (model.Export, map[string]ProseTexts, bool)`; `SortPending`.
 
@@ -1161,7 +1163,7 @@ Collision tests (`collision_test.go`), fixture `plantCollision` = a shared `epic
 
 `issueChanged = !issueEqual` (merge.go). `issueEqual`: both nil → true; exactly one nil → false; else `reflect.DeepEqual` of the two `issueProjection`s (merge.go).
 
-`issueProjection` (merge.go), built by `issueProjectionFrom` (merge.go), captures: `ID`, `Title`, `Description`, `Prompt`, `Priority`, `IssueType`, `Topic`, `Assignee` (via `issue.AssigneeValue()`), `Rank`, `Lane`, `Labels` (copied via `append([]string{}, issue.Labels...)`, normalizing `nil` and `[]string{}` to the same value), `CreatedAt`, `UpdatedAt`, `Retention` (via `issue.Retention()`), `Capabilities` (via `issue.Capabilities()`).
+`issueProjection` (merge.go), built by `issueProjectionFrom` (merge.go), captures: `ID`, `Title`, `Description`, `Prompt`, `Plan`, `Priority`, `IssueType`, `Topic`, `Assignee` (via `issue.AssigneeValue()`), `Rank`, `Lane`, `Labels` (copied via `append([]string{}, issue.Labels...)`, normalizing `nil` and `[]string{}` to the same value), `FollowsUp`, `CreatedAt`, `UpdatedAt`, `Retention` (via `issue.Retention()`), `Capabilities` (via `issue.Capabilities()`).
 
 `Capabilities` carries the whole leaf lifecycle payload — status value, `closed_at`, `resolution`, `redirect_target` (`model.StatusView`, `/Users/bmf/code/links-issue-tracker/internal/model/capabilities.go`) — so a change to any of those four registers as "this side moved" (merge.go). `issue.Capabilities()` returns the empty `Capabilities{}` for containers (`/Users/bmf/code/links-issue-tracker/internal/model/model.go`); for an unhydrated leaf it **panics** through `mustLifecycle` (`model.go`), so `ThreeWay` panics on an unhydrated leaf issue.
 
@@ -1175,10 +1177,11 @@ Tests: `merge_test.go` (nil vs empty `Labels` compare equal, so JSON round-trip 
 - `WorkspaceID = local.WorkspaceID` — remote's is discarded (merge.go).
 - `ExportedAt = local.ExportedAt` — remote's is discarded (merge.go).
 - `Relations = mergeRelations(scope, local.Relations, remote.Relations)` — **base not passed** (merge.go).
-- `Comments = mergeComments(scope, local.Comments, remote.Comments)` — base not passed (merge.go).
+- `Comments = mergeRecords(scope, local.Comments, remote.Comments, <id, issue id of a comment>)` — base not passed (merge.go).
 - `Labels = mergeLabels(scope, base.Labels, local.Labels, remote.Labels)` — the only three-way side-table (merge.go).
 - `Events = mergeEvents(scope, local.Events, remote.Events)` — base not passed (merge.go).
 - `Purges = purges` — the union computed in step 0 of §11.2, sorted by issue id, then birth (merge.go).
+- `PlanReviews = mergeRecords(scope, local.PlanReviews, remote.PlanReviews, <id, issue id of a review>)` — base not passed (merge.go). Test `plan_test.go`: reviews held by base and both sides, plus one only local and one only remote, merge to all three ids once each, sorted by id.
 
 `Settled()` returns `(export, len(Pending)==0 && len(Collisions)==0)` (merge.go); `Provisional()` returns `(export, len(Collisions)==0)` (merge.go). Both return the export value alongside `ok`, including when `ok` is false. The export field is unexported, so those two methods are the only access. Tests `resolve_test.go` (pending prose → `Settled()` `ok=false`; a clean merge → `ok=true`) and `collision_test.go` (a collision → `Settled()` and `Provisional()` both `ok=false`).
 
@@ -1226,6 +1229,7 @@ With `hasBase == false`, both sides count as changed, so **every field goes stra
 | `Title` | `base.Title` | prose → `ProsePending{Field:"title"}`, returns `ours` provisionally | |
 | `Description` | `base.Description` | prose → `ProsePending{Field:"description"}` | |
 | `Prompt` | `base.Prompt` | prose → `ProsePending{Field:"agent_prompt"}` | |
+| `Plan` | `base.Plan` | prose → `ProsePending{Field:"plan"}`; pinned by `plan_test.go` (two sides rewriting one plan hold one pending entry carrying base, ours and theirs) | |
 | `Priority` | `base.Priority` | `higher` — numerically greater wins; `PriorityUrgent=1` beats `PriorityNormal=0` (`/Users/bmf/code/links-issue-tracker/internal/model/priority.go`) | |
 | `Topic` | `base.Topic` | symmetric workspace tiebreak | |
 | `Lane` | `base.Lane` | symmetric workspace tiebreak | |
@@ -1329,7 +1333,7 @@ Plus `resolve_test.go`: both archive (t2 vs t1) off a live base → `Archived{At
 
 Every rejection returns the **zero** `model.Export{}` and nil texts paired with `false` (resolve_prose.go).
 
-**`SortPending`** (resolve_prose.go): copies the slice and sorts by `IssueID`, then `Field` (raw string, so `"agent_prompt" < "description" < "title"`). Does not mutate the input. Not called anywhere inside the package.
+**`SortPending`** (resolve_prose.go): copies the slice and sorts by `IssueID`, then `Field` (raw string, so `"agent_prompt" < "description" < "plan" < "title"`). Does not mutate the input. Not called anywhere inside the package.
 
 Prose tests (`resolve_prose_test.go`), fixture `prosePendingFixture` = one issue `i1` with concurrent title *and* description rewrites → exactly 2 pending; `fingerprintOf` returns a pending field's live fingerprint:
 - — exact bijection with live fingerprints returns `{title: merged-title, description: merged-desc}` for `i1` alone, and the export's title is the provisional one.
@@ -1373,17 +1377,17 @@ Base: `/Users/bmf/code/links-issue-tracker/internal/store/migrations/`.
 
 ### 12.1 Registry-wide conventions
 
-**Directive syntax.** All ten `.sql` files are goose migrations delimited by SQL line comments:
-- `-- +goose Up` begins the up section (`00001_baseline.sql`, `00002_add_lane.sql`, `00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00005_add_event_attribution.sql`, `00006_add_follows_up.sql`, `00007_every_ticket_inside_a_container.sql`, `00008_blocked_by_edge.sql`, `00009_purges.sql`, `00010_history_can_be_re_rooted.sql`).
-- `-- +goose Down` begins the down section (`00001_baseline.sql`, `00002_add_lane.sql`, `00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00005_add_event_attribution.sql`, `00006_add_follows_up.sql`, `00007_every_ticket_inside_a_container.sql`, `00008_blocked_by_edge.sql`, `00009_purges.sql`, `00010_history_can_be_re_rooted.sql`).
-- `-- +goose StatementBegin` / `-- +goose StatementEnd` wrap each individual statement (e.g. `00001_baseline.sql`, `00005_add_event_attribution.sql`). **Every executable statement in every file, in both sections, is inside exactly one such pair** — there are no bare statements (`00001_baseline.sql`, `00002_add_lane.sql`, `00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00005_add_event_attribution.sql`, `00006_add_follows_up.sql`, `00007_every_ticket_inside_a_container.sql`, `00008_blocked_by_edge.sql`, `00009_purges.sql`, `00010_history_can_be_re_rooted.sql`).
+**Directive syntax.** All eleven `.sql` files are goose migrations delimited by SQL line comments:
+- `-- +goose Up` begins the up section (`00001_baseline.sql`, `00002_add_lane.sql`, `00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00005_add_event_attribution.sql`, `00006_add_follows_up.sql`, `00007_every_ticket_inside_a_container.sql`, `00008_blocked_by_edge.sql`, `00009_purges.sql`, `00010_history_can_be_re_rooted.sql`, `00011_plans_and_plan_reviews.sql`).
+- `-- +goose Down` begins the down section (`00001_baseline.sql`, `00002_add_lane.sql`, `00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00005_add_event_attribution.sql`, `00006_add_follows_up.sql`, `00007_every_ticket_inside_a_container.sql`, `00008_blocked_by_edge.sql`, `00009_purges.sql`, `00010_history_can_be_re_rooted.sql`, `00011_plans_and_plan_reviews.sql`).
+- `-- +goose StatementBegin` / `-- +goose StatementEnd` wrap each individual statement (e.g. `00001_baseline.sql`, `00005_add_event_attribution.sql`). **Every executable statement in every file, in both sections, is inside exactly one such pair** — there are no bare statements (`00001_baseline.sql`, `00002_add_lane.sql`, `00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00005_add_event_attribution.sql`, `00006_add_follows_up.sql`, `00007_every_ticket_inside_a_container.sql`, `00008_blocked_by_edge.sql`, `00009_purges.sql`, `00010_history_can_be_re_rooted.sql`, `00011_plans_and_plan_reviews.sql`).
 
-**Naming/numbering.** `<NNNNN>_<name>.sql`, 5-digit zero-padded, `00001_baseline.sql` … `00010_history_can_be_re_rooted.sql`; the accept-shape is enforced by `bounds.go`. `embed.go` states subsequent migrations append with strictly ascending versions and that only SQL migrations are wired — the embed (`//go:embed *.sql`) and `ParseRegistry` (`bounds.go`) both read only `*.sql` entries.
+**Naming/numbering.** `<NNNNN>_<name>.sql`, 5-digit zero-padded, `00001_baseline.sql` … `00011_plans_and_plan_reviews.sql`; the accept-shape is enforced by `bounds.go`. `embed.go` states subsequent migrations append with strictly ascending versions and that only SQL migrations are wired — the embed (`//go:embed *.sql`) and `ParseRegistry` (`bounds.go`) both read only `*.sql` entries.
 
 **Idempotency, per statement.**
-- **Up sections: no DDL is guarded.** Every `CREATE TABLE` is bare, no `IF NOT EXISTS` (`00001_baseline.sql`, `00009_purges.sql`), and so is the one `CREATE TEMPORARY TABLE` (`00006_add_follows_up.sql`). Every `CREATE INDEX` is bare (`00001_baseline.sql`). Every `ALTER TABLE ... ADD COLUMN` is bare (`00002_add_lane.sql`, `00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00005_add_event_attribution.sql`, `00006_add_follows_up.sql`). Every `ADD CONSTRAINT` is bare (`00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00008_blocked_by_edge.sql`). Two migrations guard data instead: `00006_add_follows_up.sql` moves no child onto an edge it already holds, and `00007_every_ticket_inside_a_container.sql` mints the unfiled epic only when no row holds its id and writes no edge a child already holds.
+- **Up sections: no DDL is guarded.** Every `CREATE TABLE` is bare, no `IF NOT EXISTS` (`00001_baseline.sql`, `00009_purges.sql`, `00011_plans_and_plan_reviews.sql`), and so is the one `CREATE TEMPORARY TABLE` (`00006_add_follows_up.sql`). Every `CREATE INDEX` is bare (`00001_baseline.sql`). Every `ALTER TABLE ... ADD COLUMN` is bare (`00002_add_lane.sql`, `00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00005_add_event_attribution.sql`, `00006_add_follows_up.sql`, `00011_plans_and_plan_reviews.sql`). Every `ADD CONSTRAINT` is bare (`00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00008_blocked_by_edge.sql`). Two migrations guard data instead: `00006_add_follows_up.sql` moves no child onto an edge it already holds, and `00007_every_ticket_inside_a_container.sql` mints the unfiled epic only when no row holds its id and writes no edge a child already holds.
 - **`00001_baseline.sql` down section: every statement uses `IF EXISTS`** — all seven `DROP TABLE IF EXISTS` (`00001_baseline.sql`).
-- **Down sections of 00002–00010: no `IF EXISTS` on any statement** (`00002_add_lane.sql`; `00003_add_resolution.sql`; `00004_add_redirect_target.sql`; `00005_add_event_attribution.sql`; `00006_add_follows_up.sql`; `00007_every_ticket_inside_a_container.sql`; `00008_blocked_by_edge.sql`; `00009_purges.sql`; `00010_history_can_be_re_rooted.sql`).
+- **Down sections of 00002–00011: no `IF EXISTS` on any statement** (`00002_add_lane.sql`; `00003_add_resolution.sql`; `00004_add_redirect_target.sql`; `00005_add_event_attribution.sql`; `00006_add_follows_up.sql`; `00007_every_ticket_inside_a_container.sql`; `00008_blocked_by_edge.sql`; `00009_purges.sql`; `00010_history_can_be_re_rooted.sql`; `00011_plans_and_plan_reviews.sql`).
 - The one insert-conflict tolerance in the registry is `INSERT IGNORE INTO relations(...)` in the 00004 down section (`00004_add_redirect_target.sql`).
 
 ### 12.2 `00001_baseline.sql`
@@ -1589,6 +1593,14 @@ sha256 `1203641ecfc7404f23b8153497df136bd3f23d90194e92ff91b959c2aa168fec`.
 
 **Down** — `SELECT 1;`. LOSS CONTRACT: the row is not restored; no lit since v0.18.0 writes or reads it, and the version it named is not recoverable from the store.
 
+### 12.6f `00011_plans_and_plan_reviews.sql`
+
+sha256 `285fb3de85af1b19f541b4093af21a6c7c924b838cebeae09c8bc034b49e528e`.
+
+**Up** — two statements, both bare: `ALTER TABLE issues ADD COLUMN work_plan text NOT NULL DEFAULT '';` and `CREATE TABLE plan_reviews (id VARCHAR(191) NOT NULL, issue_id VARCHAR(191) NOT NULL, plan_digest VARCHAR(64) NOT NULL, verdict VARCHAR(16) NOT NULL, laws TEXT NOT NULL, created_at VARCHAR(64) NOT NULL, created_by TEXT NOT NULL, PRIMARY KEY (id), KEY idx_plan_reviews_issue_created (issue_id, created_at), CONSTRAINT plan_reviews_issue FOREIGN KEY (issue_id) REFERENCES issues (id) ON DELETE CASCADE, CONSTRAINT plan_reviews_verdict_check CHECK (verdict IN ('pass','fail')));`. No backfill. The comments state that `work_plan` is the ticket's plan — how its work will be done, written before the work starts so a reviewer can judge it against the laws — that the empty text is a ticket with no plan, that each edit is recorded in the history like any field's and those recorded texts are the plan's versions, and that the column is not named `plan` because PLAN is a reserved word in the SQL dialect; and that `plan_reviews` holds one row per law review of a ticket's plan, `plan_digest` the hex SHA-256 of the plan text the review judged — naming the text rather than its version number because the numbers follow the history's order and a sync that merges in an older edit renumbers the versions after it — `laws` the cited law tokens sorted and joined by commas (a token holds no comma), a review never edited, and cascading away with its issue on a purge.
+
+**Down** — `DROP TABLE plan_reviews;` then `ALTER TABLE issues DROP COLUMN work_plan;` (no `IF EXISTS`). LOSS CONTRACT: this Down drops every plan and every plan review; a store stepped back below this version holds no record that a ticket was planned or that a plan passed review; operators who need them must restore from a pre-downgrade dbsnapshot.
+
 ### 12.7 `embed.go`
 
 Package `migrations` (`embed.go`), imports `"embed"`. Embed directive `//go:embed *.sql` on `var FS embed.FS`. The glob is `*.sql` only — non-`.sql` files in the directory are not embedded. `FS` is the only exported symbol in the file, described as "the embedded goose migration registry… the one source the runner reads from; nothing applies schema outside this set". The package doc records that only SQL migrations are wired and that adding a Go migration would require registering it with goose and widening the embed pattern.
@@ -1611,7 +1623,7 @@ The doc justifies the exactness against `fmt.Sscanf("%d")`, which would accept l
 
 `Embedded() (Registry, error)` (`bounds.go`): `FS.ReadDir(".")` (error wrapped `"read migration registry: %w"`), then `ParseRegistry` over the entry names. The store's registry readers (`registryColumnAddsThroughVersion`, `scanMigrationDrops`) and `tools/schema-release-check` read the embedded registry through it.
 
-`MaxVersion() (int64, error)` (`bounds.go`): `Embedded()`, then `Registry.MaxVersion()`. With the current registry: **10**.
+`MaxVersion() (int64, error)` (`bounds.go`): `Embedded()`, then `Registry.MaxVersion()`. With the current registry: **11**.
 
 `BaselineFileName() (string, error)` (`bounds.go`): `Embedded()`; returns the first migration whose version equals `Baseline` — currently `00001_baseline.sql`. Not found → `"no baseline migration (v%d) found in registry"`.
 
@@ -1661,7 +1673,7 @@ Each runs as a subtest; mismatch is `t.Errorf("hasDownSection() = %v, want %v\nb
 
 Types: `pinnedMigration{file, sha256 string}`; `migrationFile{version int64; name, sha256 string}`; `reuseKind int` with, in iota order, `kindContentChanged`=0 (a pinned version's bytes no longer match its pin), `kindRenamed`=1 (content matches, filename changed), `kindUnpinned`=2 (an on-disk non-baseline version has no pin), `kindDeleted`=3 (a pinned version is gone from disk); `reuseFinding{kind; version int64; pinned pinnedMigration; onDisk migrationFile}`.
 
-The literal pins, `pinnedVersionContent` — all nine verified against the on-disk sha256s:
+The literal pins, `pinnedVersionContent` — all ten verified against the on-disk sha256s:
 ```go
 2: {file: "00002_add_lane.sql",              sha256: "9126cd9e9c3a01137898fb9023c50b3f8741950f1e5d943dad521852939a4b75"},
 3: {file: "00003_add_resolution.sql",        sha256: "47b50dea1a1e2b7e31ba6b0fa95f5f77c6411b81ee525b04e1ff5e5fdb469563"},
@@ -1672,6 +1684,7 @@ The literal pins, `pinnedVersionContent` — all nine verified against the on-di
 8: {file: "00008_blocked_by_edge.sql", sha256: "2ab61664b7a73c4e36dc0a11d37e2f5b86b261a97aebf67ffa364ae9596e9deb"},
 9: {file: "00009_purges.sql", sha256: "f3af8e534e5b7fd3d09b310574f4b8925ca281bb942e040c83d25ebd64fdf852"},
 10: {file: "00010_history_can_be_re_rooted.sql", sha256: "1203641ecfc7404f23b8153497df136bd3f23d90194e92ff91b959c2aa168fec"},
+11: {file: "00011_plans_and_plan_reviews.sql", sha256: "285fb3de85af1b19f541b4093af21a6c7c924b838cebeae09c8bc034b49e528e"},
 ```
 Version 1 is deliberately absent — `baseline_frozen_test.go` is its content enforcer.
 
@@ -1737,7 +1750,7 @@ ok-mismatch → `t.Errorf("ParseVersion(%q) ok = %v, want %v")` then `continue`;
 | invariant | enforcer | literals |
 |---|---|---|
 | `00001_baseline.sql` bytes never change | `TestBaselineFileIsFrozen` (`baseline_frozen_test.go`) | sha256 `e86c1aa3…d1fbb` |
-| v2+ bytes never change; filename never changes; never deleted; always pinned | `TestReleasedMigrationsAreContentPinned` (`version_reuse_test.go`) via `detectVersionReuse` | eight pins at `version_reuse_test.go` |
+| v2+ bytes never change; filename never changes; never deleted; always pinned | `TestReleasedMigrationsAreContentPinned` (`version_reuse_test.go`) via `detectVersionReuse` | ten pins at `version_reuse_test.go` |
 | every `.sql` has a non-empty non-comment Down section | `TestEveryMigrationHasDownSection` (`down_section_test.go`) | none pinned; registry must be non-empty |
 | filename → version parse shape | `TestParseVersionShape` (`bounds_test.go`) over `ParseVersion` (`bounds.go`) | 13-row table |
 | registry rule over file names: `.sql` only, every one versioned at least 1, no version twice, at least one, ascending | `TestParseRegistryShape` (`bounds_test.go`) over `ParseRegistry` (`bounds.go`) | 7-row table |
