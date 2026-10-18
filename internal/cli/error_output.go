@@ -81,7 +81,7 @@ func commandErrorReason(err error) commandReason {
 	if errors.As(err, &notFound) {
 		return reasonEntityNotFound
 	}
-	var versionNotFound VersionNotFoundError
+	var versionNotFound storage.VersionNotFoundError
 	if errors.As(err, &versionNotFound) {
 		return reasonVersionNotFound
 	}

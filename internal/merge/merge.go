@@ -175,10 +175,11 @@ func ThreeWay(base model.Export, local model.Export, remote model.Export) MergeR
 		ExportedAt:  local.ExportedAt,
 		Issues:      mergedIssues,
 		Relations:   mergeRelations(scope, local.Relations, remote.Relations),
-		Comments:    mergeComments(scope, local.Comments, remote.Comments),
+		Comments:    mergeRecords(scope, local.Comments, remote.Comments, func(c model.Comment) (string, string) { return c.ID, c.IssueID }),
 		Labels:      mergeLabels(scope, base.Labels, local.Labels, remote.Labels),
 		Events:      mergeEvents(scope, local.Events, remote.Events),
 		Purges:      purges,
+		PlanReviews: mergeRecords(scope, local.PlanReviews, remote.PlanReviews, func(r model.PlanReview) (string, string) { return r.ID, r.IssueID }),
 	}
 	return MergeResult{export: merged, Pending: pending, Collisions: SortCollisions(collisions)}
 }
@@ -233,6 +234,7 @@ type issueProjection struct {
 	Title       string
 	Description string
 	Prompt      string
+	Plan        string
 	Priority    model.Priority
 	IssueType   model.IssueType
 	Topic       string
@@ -262,6 +264,7 @@ func issueProjectionFrom(issue model.Issue) issueProjection {
 		Title:        issue.Title,
 		Description:  issue.Description,
 		Prompt:       issue.Prompt,
+		Plan:         issue.Plan,
 		Priority:     issue.Priority,
 		IssueType:    issue.IssueType,
 		Topic:        issue.Topic,
@@ -383,21 +386,30 @@ func maxString(items []string) string {
 	return out
 }
 
-func mergeComments(scope issueScope, locals, remotes []model.Comment) []model.Comment {
-	merged := map[string]model.Comment{}
+// mergeRecords unions an append-only table — rows that are written once
+// under their own id and never edited, comments and plan reviews — keeping
+// every row of an issue the merge kept, once, by id. keys reads a row's id and
+// the issue it belongs to. [LAW:one-type-per-behavior]
+func mergeRecords[R any](scope issueScope, locals, remotes []R, keys func(R) (id, issueID string)) []R {
+	merged := map[string]R{}
 	for _, sided := range bothSidesOf(locals, remotes) {
-		for _, comment := range sided.rows {
-			if !scope.admits(comment.IssueID, sided.from) {
+		for _, row := range sided.rows {
+			id, issueID := keys(row)
+			if !scope.admits(issueID, sided.from) {
 				continue
 			}
-			merged[comment.ID] = comment
+			merged[id] = row
 		}
 	}
-	out := make([]model.Comment, 0, len(merged))
-	for _, comment := range merged {
-		out = append(out, comment)
+	ids := make([]string, 0, len(merged))
+	for id := range merged {
+		ids = append(ids, id)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	sort.Strings(ids)
+	out := make([]R, len(ids))
+	for i, id := range ids {
+		out[i] = merged[id]
+	}
 	return out
 }
 

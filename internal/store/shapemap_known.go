@@ -212,6 +212,7 @@ var knownSourceColumns = map[string]map[string]TargetKey{
 		"deleted_at":      "issues.deleted_at",
 		"item_rank":       "issues.rank", // v1 name
 		"lane":            "issues.lane",
+		"plan":            "issues.plan",
 	},
 	"relations": {
 		"src_id":     "relations.src_id",
@@ -255,6 +256,15 @@ var knownSourceColumns = map[string]map[string]TargetKey{
 		"issue_created_at": "purges.issue_created_at",
 		"purged_at":        "purges.purged_at",
 		"purged_by":        "purges.purged_by",
+	},
+	"plan_reviews": {
+		"id":          "plan_reviews.id",
+		"issue_id":    "plan_reviews.issue_id",
+		"plan_digest": "plan_reviews.plan_digest",
+		"verdict":     "plan_reviews.verdict",
+		"laws":        "plan_reviews.laws",
+		"created_at":  "plan_reviews.created_at",
+		"created_by":  "plan_reviews.created_by",
 	},
 }
 

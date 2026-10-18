@@ -44,6 +44,7 @@ type CreateIssueInput struct {
 	Title       string
 	Description string
 	Prompt      string
+	Plan        string
 	// IssueType is already-parsed vocabulary, never a raw flag string — trust
 	// boundaries route through model.ParseIssueType before constructing the
 	// input. The zero value means "unspecified" and defaults to task, mirroring
@@ -82,6 +83,7 @@ type UpdateIssueInput struct {
 	Title       *string
 	Description *string
 	Prompt      *string
+	Plan        *string
 	IssueType   *model.IssueType
 	Priority    *model.Priority
 	Assignee    *string
@@ -133,11 +135,12 @@ type PurgeInput struct {
 // PurgeResult is the record a purge left and how many of the issue's rows went
 // with it, so the caller can say what was removed without a read beforehand.
 type PurgeResult struct {
-	Purge     model.Purge
-	Comments  int
-	Labels    int
-	Relations int
-	Events    int
+	Purge       model.Purge
+	Comments    int
+	PlanReviews int
+	Labels      int
+	Relations   int
+	Events      int
 }
 
 func (c Change) IsEmpty() bool {

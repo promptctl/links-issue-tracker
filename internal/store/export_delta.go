@@ -100,7 +100,7 @@ func diffTable[K comparable, R any](live, wanted []R, key func(R) K, persisted f
 }
 
 // wholeRow is the projection for the tables whose model type IS their row —
-// relations, comments, labels, and events all carry exactly their persisted
+// relations, comments, labels, events, and plan reviews all carry exactly their persisted
 // columns (an event's Changes included, since those are its child rows). Only
 // issues needs a narrower projection, because only model.Issue is a hydrated
 // view carrying fields no issues column holds.
@@ -109,18 +109,19 @@ func wholeRow[R any](row R) any { return row }
 // exportDelta is the whole transition, one tableDelta per table, in the order
 // the foreign keys demand: issues exist before anything references them.
 type exportDelta struct {
-	issues    tableDelta[string, model.Issue]
-	relations tableDelta[relationKey, model.Relation]
-	comments  tableDelta[string, model.Comment]
-	labels    tableDelta[labelKey, model.Label]
-	events    tableDelta[string, model.IssueEvent]
-	purges    tableDelta[model.PurgeKey, model.Purge]
+	issues      tableDelta[string, model.Issue]
+	relations   tableDelta[relationKey, model.Relation]
+	comments    tableDelta[string, model.Comment]
+	labels      tableDelta[labelKey, model.Label]
+	events      tableDelta[string, model.IssueEvent]
+	purges      tableDelta[model.PurgeKey, model.Purge]
+	planReviews tableDelta[string, model.PlanReview]
 }
 
 // empty reports whether the two exports hold the same rows, so a caller can tell
 // a genuinely no-op step from one that merely looks small.
 func (d exportDelta) empty() bool {
-	return d.issues.empty() && d.relations.empty() && d.comments.empty() && d.labels.empty() && d.events.empty() && d.purges.empty()
+	return d.issues.empty() && d.relations.empty() && d.comments.empty() && d.labels.empty() && d.events.empty() && d.purges.empty() && d.planReviews.empty()
 }
 
 // diffExports derives the row work that turns live tables holding prev into
@@ -171,6 +172,10 @@ func diffExports(prev, next model.Export) exportDelta {
 		// Purge records reference no issue row — the issue they name is gone —
 		// so nothing cascades into them and they diff against prev unfiltered.
 		purges: diffTable(prev.Purges, next.Purges, model.Purge.Key, wholeRow),
+		planReviews: diffTable(
+			filterRows(prev.PlanReviews, func(r model.PlanReview) bool { return survivors[r.IssueID] }),
+			next.PlanReviews,
+			func(r model.PlanReview) string { return r.ID }, wholeRow),
 	}
 }
 
@@ -234,7 +239,10 @@ func applyExportDelta(ctx context.Context, tx *sql.Tx, delta exportDelta) error 
 	if err := applyTableDelta(ctx, tx, delta.events, deleteEventTx, insertEventTx); err != nil {
 		return err
 	}
-	return applyTableDelta(ctx, tx, delta.purges, deletePurgeTx, insertPurgeTx)
+	if err := applyTableDelta(ctx, tx, delta.purges, deletePurgeTx, insertPurgeTx); err != nil {
+		return err
+	}
+	return applyTableDelta(ctx, tx, delta.planReviews, deletePlanReviewTx, insertPlanReviewTx)
 }
 
 // applyTableDelta is the one body every table's change runs through; the table's

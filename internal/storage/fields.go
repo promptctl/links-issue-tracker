@@ -169,6 +169,10 @@ func bulkUpdatePatch(doc BulkIssueSpec) (UpdateIssueInput, error) {
 	return patch, nil
 }
 
+// planFieldName is the plan's name in history's vocabulary, which a review
+// resolves its version against.
+const planFieldName = "plan"
+
 // issueFields is the editable set, in the order history reports a change to
 // them — fixed, so two reads of one mutation describe it identically.
 var issueFields = []issueField{
@@ -193,6 +197,11 @@ var issueFields = []issueField{
 		bulkAsStated(func(doc BulkIssueSpec) *string { return doc.Prompt }),
 		func(issue *model.Issue, v string) error { issue.Prompt = strings.TrimSpace(v); return nil },
 		func(issue model.Issue) string { return issue.Prompt }),
+	patchField(planFieldName, LongText,
+		func(in *UpdateIssueInput) **string { return &in.Plan },
+		bulkAsStated(func(doc BulkIssueSpec) *string { return doc.Plan }),
+		func(issue *model.Issue, v string) error { issue.Plan = strings.TrimSpace(v); return nil },
+		func(issue model.Issue) string { return issue.Plan }),
 	patchField("issue_type", ShortText,
 		func(in *UpdateIssueInput) **model.IssueType { return &in.IssueType },
 		bulkParsed("type", func(doc BulkIssueSpec) *string { return doc.IssueType }, model.ParseIssueType),
@@ -305,6 +314,8 @@ func ApplyProseFields(provisional model.Issue, texts merge.ProseTexts) (model.Is
 			in.Description = &text
 		case merge.ProsePrompt:
 			in.Prompt = &text
+		case merge.ProsePlan:
+			in.Plan = &text
 		default:
 			return model.Issue{}, nil, fmt.Errorf("issue %s: no editable field for merged prose field %q", provisional.ID, field)
 		}

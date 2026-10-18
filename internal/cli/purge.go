@@ -40,8 +40,8 @@ func purgeLeaf() appLeaf {
 		// The statusline file holds titles, and a ticket is often purged for
 		// what its text says.
 		ap.Statusline.Record(statusline.Invalidated{ID: result.Purge.IssueID})
-		_, err = fmt.Fprintf(stdout, "purged %s (comments=%d labels=%d edges=%d events=%d)\n",
-			result.Purge.IssueID, result.Comments, result.Labels, result.Relations, result.Events)
+		_, err = fmt.Fprintf(stdout, "purged %s (comments=%d labels=%d edges=%d events=%d plan_reviews=%d)\n",
+			result.Purge.IssueID, result.Comments, result.Labels, result.Relations, result.Events, result.PlanReviews)
 		return err
 	}}
 }

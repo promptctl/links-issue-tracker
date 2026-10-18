@@ -22,6 +22,7 @@ type BulkIssueSpec struct {
 	Title       *string   `yaml:"title,omitempty"`
 	Description *string   `yaml:"description,omitempty"`
 	Prompt      *string   `yaml:"prompt,omitempty"`
+	Plan        *string   `yaml:"plan,omitempty"`
 	IssueType   *string   `yaml:"type,omitempty"`
 	Topic       *string   `yaml:"topic,omitempty"`
 	Priority    *int      `yaml:"priority,omitempty"`
@@ -113,6 +114,7 @@ type ImportTreeSpec struct {
 	Title       string   `json:"title"`
 	Description string   `json:"description,omitempty"`
 	Prompt      string   `json:"prompt,omitempty"`
+	Plan        string   `json:"plan,omitempty"`
 	IssueType   string   `json:"type"`
 	Topic       string   `json:"topic"`
 	Priority    int      `json:"priority"`

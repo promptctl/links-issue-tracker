@@ -46,8 +46,9 @@ func (e *Engine) Export(ctx context.Context) (model.Export, error) {
 		// the ordering rule single-copy — an export whose events differed from
 		// a listing's would be a divergence inside one engine, before the
 		// oracle ever compared two. [LAW:single-enforcer]
-		Events: e.allEvents(),
-		Purges: e.purgeList(),
+		Events:      e.allEvents(),
+		Purges:      e.purgeList(),
+		PlanReviews: slices.Clone(e.planReviews),
 	}, nil
 }
 

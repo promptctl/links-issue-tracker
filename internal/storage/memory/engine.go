@@ -74,6 +74,10 @@ type Engine struct {
 	// be deriving the same fact twice.
 	labels map[string][]model.Label
 
+	// planReviews are the law reviews of every issue's plan, in the order they
+	// were recorded.
+	planReviews []model.PlanReview
+
 	// purges are the records of the tickets this engine has purged. A purged
 	// ticket holds no row anywhere above, and its id is never minted again.
 	purges []model.Purge
@@ -91,6 +95,7 @@ type record struct {
 	title       string
 	description string
 	prompt      string
+	plan        string
 	issueType   model.IssueType
 	topic       string
 	assignee    string
@@ -211,6 +216,7 @@ func (e *Engine) hydrate(rec *record, pos map[string]int) (model.Issue, error) {
 		Title:       rec.title,
 		Description: rec.description,
 		Prompt:      rec.prompt,
+		Plan:        rec.plan,
 		Priority:    rec.priority,
 		IssueType:   rec.issueType,
 		Topic:       rec.topic,

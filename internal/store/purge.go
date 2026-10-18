@@ -44,12 +44,14 @@ func (s *Store) Purge(ctx context.Context, in storage.PurgeInput) (storage.Purge
 			(SELECT COUNT(*) FROM comments WHERE issue_id = ?),
 			(SELECT COUNT(*) FROM labels WHERE issue_id = ?),
 			(SELECT COUNT(*) FROM relations WHERE src_id = ? OR dst_id = ?),
-			(SELECT COUNT(*) FROM issue_events WHERE issue_id = ?)`,
-			id, id, id, id, id).Scan(&result.Comments, &result.Labels, &result.Relations, &result.Events); err != nil {
+			(SELECT COUNT(*) FROM issue_events WHERE issue_id = ?),
+			(SELECT COUNT(*) FROM plan_reviews WHERE issue_id = ?)`,
+			id, id, id, id, id, id).Scan(&result.Comments, &result.Labels, &result.Relations, &result.Events, &result.PlanReviews); err != nil {
 			return fmt.Errorf("count rows of issue %s: %w", id, err)
 		}
 		// [LAW:single-enforcer] one issues DELETE, shared with the replay's
-		// delta; ON DELETE CASCADE takes the comments, labels, history and edges.
+		// delta; ON DELETE CASCADE takes the comments, labels, history, plan
+		// reviews and edges.
 		if _, err := deleteIssueTx(ctx, tx, id); err != nil {
 			return err
 		}

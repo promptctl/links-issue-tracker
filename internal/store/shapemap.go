@@ -174,6 +174,7 @@ const (
 	collEvents       collection = "events"
 	collEventChanges collection = "event_changes"
 	collPurges       collection = "purges"
+	collPlanReviews  collection = "plan_reviews"
 )
 
 type targetField struct {
@@ -240,7 +241,7 @@ func buildTargetRegistry() map[TargetKey]targetField {
 		}
 	}
 	add(collIssues, TransformIdentity, required, "id", "title", "description", "priority", "issue_type")
-	add(collIssues, TransformIdentity, optional, "prompt", "assignee", "topic", "rank", "lane", "resolution", "redirect_target", "follows_up")
+	add(collIssues, TransformIdentity, optional, "prompt", "plan", "assignee", "topic", "rank", "lane", "resolution", "redirect_target", "follows_up")
 	add(collIssues, TransformTimestamp, required, "created_at", "updated_at", "closed_at")
 	add(collIssues, TransformTimestamp, optional, "archived_at", "deleted_at")
 	add(collIssues, TransformLegacyStatus, required, "status")
@@ -264,6 +265,8 @@ func buildTargetRegistry() map[TargetKey]targetField {
 	addMulti(collEventChanges, TransformIdentity, []Transform{TransformLegacyStatus}, optional, "to")
 	add(collPurges, TransformIdentity, required, "issue_id", "purged_by")
 	add(collPurges, TransformTimestamp, required, "issue_created_at", "purged_at")
+	add(collPlanReviews, TransformIdentity, required, "id", "issue_id", "plan_digest", "verdict", "laws", "created_by")
+	add(collPlanReviews, TransformTimestamp, required, "created_at")
 	return reg
 }
 
@@ -597,6 +600,7 @@ func assembleExport(workspaceID string, records map[collection][]map[string]any)
 		Labels:      []model.Label{},
 		Events:      []model.IssueEvent{},
 		Purges:      []model.Purge{},
+		PlanReviews: []model.PlanReview{},
 	}
 	for _, rec := range records[collIssues] {
 		issue, err := buildIssue(rec)
@@ -674,6 +678,17 @@ func assembleExport(workspaceID string, records map[collection][]map[string]any)
 			PurgedBy:       cellString(rec["purged_by"]),
 		})
 	}
+	for _, rec := range records[collPlanReviews] {
+		export.PlanReviews = append(export.PlanReviews, model.PlanReview{
+			ID:         cellString(rec["id"]),
+			IssueID:    cellString(rec["issue_id"]),
+			PlanDigest: model.PlanDigest(cellString(rec["plan_digest"])),
+			Verdict:    model.PlanVerdict(cellString(rec["verdict"])),
+			Laws:       splitLaws(cellString(rec["laws"])),
+			CreatedAt:  cellTime(rec["created_at"]),
+			CreatedBy:  cellString(rec["created_by"]),
+		})
+	}
 	return export, nil
 }
 
@@ -689,6 +704,8 @@ func buildIssue(rec map[string]any) (model.Issue, error) {
 		Title:       cellString(rec["title"]),
 		Description: cellString(rec["description"]),
 		Prompt:      cellString(rec["prompt"]),
+		Plan:        cellString(rec["plan"]),
+		Lane:        cellString(rec["lane"]),
 		// Raw conversions on the restore boundary, conserving values the DB
 		// CHECK constraints already vouch for — the salvage-path convention.
 		Priority:  model.Priority(cellInt(rec["priority"])),
