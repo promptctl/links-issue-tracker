@@ -1836,10 +1836,11 @@ func authorizePhase(ctx context.Context, _ io.Writer, _ *app.App, _ string, prio
 }
 
 // authorizeDone is the plan gate: a ticket is finished only on a current plan
-// that storage.PlanApproval approves. A done the state machine refuses — on an
-// epic, whose state is its children's, or on frozen work — is answered by that
-// refusal, asked of Issue.Apply first, the rule Apply runs again. On success
-// it owes the approval it rested on; a refusal records which gap stopped it.
+// that storage.PlanApproval approves. A done the lifecycle refuses — on an
+// epic, whose state is its children's, or on frozen work — gets that refusal:
+// the hook asks Issue.Apply, the rule the store's Apply runs, before it reads
+// the plan. On success it owes the approval it rested on; a refusal records
+// which gap stopped it.
 // [LAW:single-enforcer] [LAW:nothing-unseen]
 func authorizeDone(ctx context.Context, _ io.Writer, ap *app.App, issueID string, prior ticketState, action model.Action) (afterApply, error) {
 	done, ok := action.(model.Done)
