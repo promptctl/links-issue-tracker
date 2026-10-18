@@ -876,10 +876,11 @@ lines|table") is built from the same map (`cli.go`, `output.go`).
 5. `\ndescription:\n<text>\n` when non-empty (`output.go`).
 6. `\nprompt:\n<text>\n` when non-empty (`output.go`).
 7. The plan section (`printCurrentPlan`, `output.go`), printed only when the
-   plan is non-empty: `\nplan (<label>):\n<plan>\n`, where `<label>` is
+   plan is non-empty: `\nplan (<label>, digest <digest>):\n<plan>\n`, where
+   `<digest>` is `model.DigestPlan(plan)` — the 64 hex digits `lit verdict
+   --plan` names the text by (§2.30) — and `<label>` is
    `planVersionLabel(storage.TextVersions(issue, events, storage.PlanField()),
-   model.DigestPlan(plan))` — `v<n>`, the number `lit history` shows the current
-   text under. Then the reviews of that text: the entries of
+   <digest>)` — `v<n>`, the number `lit history` shows the current text under. Then the reviews of that text: the entries of
    `detail.PlanReviews` whose `Judges(plan)` holds, in their order. None →
    `reviews of plan <label>: none — lit verdict records one\n`; otherwise
    `reviews of plan <label>:\n` then per review
@@ -2163,7 +2164,11 @@ Description: `helptext/purge.txt`.
    and archived children counted; a child epic, or a leaf with another parent,
    does not count) → `model.ValidationError` from
    `storage.RejectPurgeOfOccupiedContainer` → exit 3, reason `validation_refused`.
-4. Prints `"purged %s (comments=%d labels=%d edges=%d events=%d plan_reviews=%d)\n"` with the
+4. Event counts: `telemetry.Record(ctx, nil, result.EventRecord())`
+   (`PurgeResult.EventRecord`, `internal/storage/issues.go`) — `purge.comments`
+   (`Comments`), `purge.plan_reviews` (`PlanReviews`), `purge.labels` (`Labels`),
+   `purge.edges` (`Relations`), `purge.events` (`Events`); no facts.
+5. Prints `"purged %s (comments=%d labels=%d edges=%d events=%d plan_reviews=%d)\n"` with the
    purged id and `PurgeResult`'s `Comments`, `Labels`, `Relations`, `Events`, `PlanReviews`.
    The title is not printed.
 
@@ -2174,46 +2179,55 @@ a successful run (§1.4).
 `purgeUnconfirmedError{Message}` (`purge.go`) → exit 3 (`exit.go`), reason
 `purge_unconfirmed` (`error_output.go`).
 
-### 2.30 `lit verdict <id> <pass|fail> --version <n> [--law <token>]...`
+### 2.30 `lit verdict <id> <pass|fail> --plan <digest> [--law <token>]...`
 
 Registry row: `verdict` — "Record a law review of one version of an issue's
 plan: pass or fail, citing laws", group `operations`,
 `Run: r.appCmd(app.AccessWrite, verdictLeaf)` (`register.go`).
 
 `verdictLeaf` (`verdict.go`):
-- Flags: `--version` (int, `0`, "The plan version the review judged, as `lit
-  show` and `lit history` number it (required)"); `--law` (string array, no
+- Flags: `--plan` (string, `""`, "The digest of the plan text the review
+  judged, as `lit show` prints it beside the plan's version (required)"); `--law` (string array, no
   default, never comma-split, "A law the verdict cites, by its token
   (one-source-of-truth); repeat for each law; a fail cites at least one"); `--by`
   (`registerActor`, `cli.go`), resolved through `resolveIdentity` into the
   reviewer.
 - `positionals: 2`, usage
-  `"usage: lit verdict <id> <pass|fail> --version <n> [--law <token>]..."`.
-  Fewer than two positionals, or `--version` below 1 (absent included) →
+  `"usage: lit verdict <id> <pass|fail> --plan <digest> [--law <token>]..."`.
+  Fewer than two positionals, or `--plan` empty (absent included) →
   `UsageError` with that line → exit 2; a surplus positional →
   `refuseSurplusPositionals` `UsageError` → exit 2.
 
 **Sequence** (`verdict.go`):
-1. `model.ParsePlanVerdict(positional[1])` — anything but `pass`/`fail` after a
-   trim → `model.ValidationError` `verdict must be pass or fail, got "<raw>"` →
-   exit 3.
-2. Each `--law` in order through `model.ParseLaw` — the first token outside
-   `^[a-z][a-z0-9]*(-[a-z0-9]+)*$` after a trim → `model.ValidationError`
-   `a law is its token, lower-case words joined by hyphens (one-source-of-truth), got "<raw>"`
-   → exit 3; so `--law a,b` is refused, not split. No `--law` → an empty list.
-3. `ap.Store.AddPlanReview(ctx, storage.AddPlanReviewInput{IssueID: positional[0], Version, Verdict, Laws, CreatedBy: resolveActor()})`
-   (`internal/storage/plan_review.go`): a missing issue → `storage.NotFoundError`
-   → exit 4; a version the plan's history does not hold →
-   `storage.VersionNotFoundError` (`<id> has no plan@<n>: its record holds <N
-   version(s)> of plan, numbered from 1; …`) → exit 4, reason
-   `version_not_found`; a `fail` citing no law → `model.ValidationError`
-   `a failing verdict cites at least one law the plan breaks` → exit 3. The
-   stored laws are sorted and deduplicated; a blank reviewer is stored as
-   `unknown`; the id is `rvw-<uuid>`.
-4. Event facts: `verdict.value` (the verdict), `verdict.plan_version` (the
-   `--version` given), `verdict.laws` (the count of stored laws).
-5. Prints `"%s %s: %s on plan v%d — laws: %s\n"` — issue id, review id,
-   verdict, the `--version` given, and `joinLaws(review.Laws)`.
+1. `ap.Store.AddPlanReview(ctx, storage.AddPlanReviewInput{IssueID: positional[0], Plan: <--plan>, Verdict: positional[1], Laws: <each --law>, CreatedBy: resolveActor()})`
+   — every value the raw string given; the command parses none of them.
+   A missing issue → `storage.NotFoundError` → exit 4. The engine then calls
+   `storage.PlanReviewOf` (`internal/storage/plan_review.go`), which returns
+   the first refusal in this order:
+   1. `model.ParsePlanVerdict(Verdict)` — anything but `pass`/`fail` after a
+      trim → `model.ValidationError` `verdict must be pass or fail, got "<raw>"`
+      → exit 3.
+   2. Each law in order through `model.ParseLaw` — the first token outside
+      `^[a-z][a-z0-9]*(-[a-z0-9]+)*$` after a trim → `model.ValidationError`
+      `a law is its token, lower-case words joined by hyphens (one-source-of-truth), got "<raw>"`
+      → exit 3; so `--law a,b` is refused, not split. No `--law` → an empty
+      list. The laws are then sorted and deduplicated (`model.CanonicalLaws`).
+   3. A `fail` citing no law → `model.ValidationError`
+      `a failing verdict cites at least one law the plan breaks` → exit 3.
+   4. `model.ParsePlanDigest(Plan)` (`internal/model/plan_review.go`) — the
+      trimmed text outside `^[0-9a-f]{64}$` → `model.ValidationError`
+      ``a plan is named by its digest, the 64 hex digits `lit show` prints beside its version, got "<raw>"``
+      → exit 3.
+   5. A digest equal to `model.DigestPlan` of none of
+      `storage.TextVersions(issue, events, storage.PlanField())` →
+      `storage.VersionNotFoundError{Field: "plan", Ref: <digest>, Held: <count>}`
+      (`<id> has no plan@<digest>: its record holds <N version(s)> of plan,
+      numbered from 1; …`) → exit 4, reason `version_not_found`.
+   A blank reviewer is stored as `unknown`; the id is `rvw-<uuid>`.
+2. Event facts: `verdict.value` (the verdict), `verdict.plan_digest` (the
+   review's `PlanDigest`), `verdict.laws` (the count of stored laws).
+3. Prints `"%s %s: %s on plan %s — laws: %s\n"` — issue id, review id,
+   verdict, the review's `PlanDigest`, and `joinLaws(review.Laws)`.
 
 `joinLaws(laws []model.Law) string` (`output.go`): the tokens joined by `", "`,
 or `-` (`emptyDash`) when there are none. It is also how `lit show`'s plan

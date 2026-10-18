@@ -77,7 +77,7 @@ the code it arrives on:
 | `workspace_schema_ahead` | 3 | The schema of the workspace, or of the sync remote, is newer than this `lit` supports |
 | `migration_quarantined` | 3 | A migration this workspace has pending failed and is quarantined, on the run that failed and every one after; the message names both ways to recover |
 | `entity_not_found` | 4 | The named issue or resource does not exist |
-| `version_not_found` | 4 | `lit history --version` or `lit verdict --version` named a version past the ones the issue's history records |
+| `version_not_found` | 4 | `lit history --version` named a version past the ones the issue's history records, or `lit verdict --plan` a digest of no plan text it records |
 | `merge_conflict` | 5 | A sync merge conflict |
 | `sync_divergence` | 5 | Local and remote diverged in a way the message tells you how to resolve |
 | `owner_approval_required` | 5 | `lit sync reconcile take` would discard one side's issues and needs the owner's approval |
@@ -432,9 +432,9 @@ lit show <id>
 
 Full detail for one issue: description, status, the phase of an `in_progress`
 issue, labels, and comments, each comment in the lines it was written in. A planned
-issue prints its plan under its version number, `plan (v2):`, followed by the
-reviews of that version (`lit verdict`); reviews of other versions are not
-listed there. The change trail is `lit history <id>`, whose entries
+issue prints its plan under its version number and digest,
+`plan (v2, digest <64 hex digits>):`, followed by the reviews of that version
+(`lit verdict`); reviews of other versions are not listed there. The change trail is `lit history <id>`, whose entries
 include the actor and a human-readable timestamp in the user's current timezone.
 A change to a long text field (`description`, `prompt`, `plan`) shows in the trail as a
 step between numbered versions, `description: v1 → v2`, without the text;
@@ -543,17 +543,18 @@ comment's own ID (shown in `lit show`), not the issue ID.
 ### `lit verdict`
 
 ```text
-lit verdict <id> <pass|fail> --version <n> [--law <token>]...
+lit verdict <id> <pass|fail> --plan <digest> [--law <token>]...
 ```
 
 Records a law review of one version of the issue's plan: the verdict, the laws it
-cites, and the reviewer, who is the acting identity (see Identity). `--version` names
-the version the review judged, by the number `lit show` and `lit history` give it,
-so a plan revised while the review ran is not passed on the strength of the text
-before it. `--law` names a law by its token, lower-case words joined by hyphens
+cites, and the reviewer, who is the acting identity (see Identity). `--plan` names
+the text the review judged by the digest `lit show` prints beside it. A digest
+names the same text on every store and after any sync, where a version number can
+shift, and a plan revised while the review ran is not passed on the strength of
+the text before it. `--law` names a law by its token, lower-case words joined by hyphens
 (`one-source-of-truth`); repeat it for each law. A `fail` cites at least one law.
 A review is never edited: a reviewer who changes their mind records another. A
-version past the ones the history records exits 4 with `version_not_found`.
+digest of no text the plan's history records exits 4 with `version_not_found`.
 
 ### `lit label add` / `lit label rm`
 

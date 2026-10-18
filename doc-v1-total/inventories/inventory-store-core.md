@@ -537,7 +537,7 @@ Errors: `"batch load issues: %w"`, `"scan batch-loaded issue: %w"`, `"iterate ba
 2. `listRelations(ctx, id)` (`store.go`).
 3. `listComments(ctx, id)` (`store.go`).
 4. `ListEvents(ctx, id)` (`store.go`).
-5. `queryPlanReviews(ctx, s.db, "WHERE issue_id = ?", id)` — the issue's plan reviews, oldest first (`internal/store/plan_review.go`).
+5. `queryPlanReviews(ctx, s.db, "WHERE issue_id = ?", id)` — the issue's plan reviews, oldest first by the parsed `created_at` instant, then id (`storage.PlanReviewOrdering`, applied in Go) (`internal/store/plan_review.go`).
 6. `collectRelatedIssueIDs(id, relations)` (`store.go`; defined `store.go`) — distinct counterparties of both `SrcID` and `DstID`, excluding `""` and the focal id, in first-seen order.
 7. If `issue.RedirectTargetValue()` is non-nil and not already in the list, it is appended (`store.go`).
 8. `getIssuesByIDs(ctx, relatedIDs)` — one batch hydrate — then `loadRankAncestry(ctx, s.db)`, the tree order the relation groups sort in (`store.go`).
@@ -1371,7 +1371,7 @@ CREATE TABLE `plan_reviews` (
 - PRIMARY KEY `(id)`; index `idx_plan_reviews_issue_created (issue_id, created_at)`; FK `plan_reviews_issue` → `issues(id)` `ON DELETE CASCADE`, so a purge's issue delete takes the issue's reviews; CHECK `plan_reviews_verdict_check` admits `pass` and `fail`.
 - One row per law review of a ticket's plan. `plan_digest` is the hex SHA-256 of the plan text judged; `laws` is the cited tokens joined by `","` (`joinLaws`), the empty text for none, split back by `splitLaws`, which drops empty tokens (`internal/store/plan_review.go`).
 - The only INSERT is `insertPlanReviewTx` — `INSERT INTO plan_reviews(id, issue_id, plan_digest, verdict, laws, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)`, `created_at` formatted RFC3339Nano, error `insert plan review <id>: …` — reached from `AddPlanReview` and the replay's delta. The only single-row DELETE is `deletePlanReviewTx` (`DELETE FROM plan_reviews WHERE id = ?`, through `execDelete`), reached only from the replay's delta (`internal/store/plan_review.go`). `writeWholeExportTx` does not name the table; clearing `issues` cascades into it.
-- Read by `queryPlanReviews(ctx, q, where, args...)`: `SELECT id, issue_id, plan_digest, verdict, laws, created_at, created_by FROM plan_reviews <where> ORDER BY created_at ASC, id ASC`, `created_at` through `scanTime`, query error wrapped `list plan reviews: …`; from `Export` (no `where`) and `GetIssueDetail` (`WHERE issue_id = ?`) (`internal/store/plan_review.go`).
+- Read by `queryPlanReviews(ctx, q, where, args...)`: `SELECT id, issue_id, plan_digest, verdict, laws, created_at, created_by FROM plan_reviews <where>`, unordered in SQL — the rows are sorted in Go by `storage.PlanReviewOrdering`, the `created_at` instant (parsed through `scanTime`) then id, because the varchar `created_at` sorts by its spelling; query error wrapped `list plan reviews: …`; from `Export` (no `where`) and `GetIssueDetail` (`WHERE issue_id = ?`) (`internal/store/plan_review.go`).
 
 ---
 
@@ -3181,7 +3181,7 @@ It performs seven reads and assembles one value (`import_export.go`):
 4. `s.listAllLabels(ctx)` (`import_export.go`) — `SELECT issue_id, label, created_at, created_by FROM labels ORDER BY issue_id ASC, label ASC` (`store.go`).
 5. `s.ListAllEvents(ctx)` (`import_export.go`) — `queryEvents(ctx, "")`, i.e. `SELECT e.id, e.issue_id, e.action, e.reason, e.actor, e.created_at, e.stream_id, e.workspace_id, c.field, c.from_value, c.to_value FROM issue_events e LEFT JOIN issue_event_changes c ON c.event_id = e.id ORDER BY e.id ASC, c.field ASC` (`store.go`). The per-change rows are collapsed back into `IssueEvent.Changes`, so **an event's changes are ordered by field name ascending**; the collapsed events are then sorted by `storage.EventOrdering` — the `created_at` instant, then id (`internal/storage/ordering.go`).
 6. `listPurges(ctx, s.db)` (`import_export.go`) — `SELECT issue_id, issue_created_at, purged_at, purged_by FROM purges`, both timestamps parsed through `scanTime`, returned through `model.UnionPurges`, so **purge records are ordered by issue id, then birth ascending**; the result is never nil (`internal/store/purge.go`).
-7. `queryPlanReviews(ctx, s.db, "")` (`import_export.go`) — `SELECT id, issue_id, plan_digest, verdict, laws, created_at, created_by FROM plan_reviews ORDER BY created_at ASC, id ASC`, `created_at` through `scanTime`, `laws` through `splitLaws`; the result is never nil (`internal/store/plan_review.go`).
+7. `queryPlanReviews(ctx, s.db, "")` (`import_export.go`) — `SELECT id, issue_id, plan_digest, verdict, laws, created_at, created_by FROM plan_reviews`, `created_at` through `scanTime`, `laws` through `splitLaws`, then sorted by `storage.PlanReviewOrdering` — the `created_at` instant, then id (`internal/storage/ordering.go`); the result is never nil (`internal/store/plan_review.go`).
 
 Any read error is returned with a zero `model.Export{}` (`import_export.go`).
 

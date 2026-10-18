@@ -251,8 +251,20 @@ A recorded verdict sets these keys; a refused one has none of them.
 | Key | Meaning |
 | --- | --- |
 | `verdict.value` | `pass` or `fail`. |
-| `verdict.plan_version` | The plan version the review judged, the one `--version` names. |
+| `verdict.plan_digest` | The digest of the plan text the review judged, the one `--plan` names. |
 | `verdict.laws` | How many laws the verdict cites, each counted once. |
+
+## What `lit purge` records
+
+A purge counts, under `counts`, the rows that went with the issue.
+
+| Key | Meaning |
+| --- | --- |
+| `purge.comments` | Comments removed. |
+| `purge.plan_reviews` | Plan reviews removed. |
+| `purge.labels` | Labels removed. |
+| `purge.edges` | Edges to or from the issue removed. |
+| `purge.events` | History events removed. |
 
 ## What a long-text field records
 

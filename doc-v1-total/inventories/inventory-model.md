@@ -782,6 +782,11 @@ the Go field name when the tag name is empty. Pinned by
 - `PlanDigest` — `plan_review.go`: `string`, the hex SHA-256 of one plan text.
 - `DigestPlan(text string) PlanDigest` — `plan_review.go`: `sha256.Sum256` of the
   text's bytes, hex-encoded — the one way a plan text becomes its digest.
+- `ParsePlanDigest(raw string) (PlanDigest, error)` — `plan_review.go`: trims
+  `raw` and admits it only when it matches `digestShape`, `^[0-9a-f]{64}$` (the
+  lower-case hex `DigestPlan` spells, all 64 digits); anything else is
+  ``ValidationError{"a plan is named by its digest, the 64 hex digits `lit show` prints beside its version, got %q"}``
+  with the untrimmed `raw`.
 - `PlanVerdict` — `plan_review.go`: `string`; constants `PlanPass = "pass"`,
   `PlanFail = "fail"`.
 - `ParsePlanVerdict(raw string) (PlanVerdict, error)` — `plan_review.go`: trims

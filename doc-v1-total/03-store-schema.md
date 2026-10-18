@@ -135,7 +135,7 @@ All issue reads share one 20-column projection (`issueColumns`, `store.go`) and 
 
 - `GetIssue`: single-row lookup; missing → `storage.NotFoundError`.
 - `getIssuesByIDs`: one `IN` query; missing ids are silently absent from the map.
-- `GetIssueDetail` (`store.go`): the issue + its relations (all incident, ordered by `created_at`), comments, events, plan reviews (`queryPlanReviews`, ordered by `created_at` then `id`, `plan_review.go`), then one batch hydrate of every relation counterparty plus the redirect target; buckets into Parent/Children/BlockedBy/Blocks; siblings = the parent's other children in rank order (empty for parentless issues); `Related` carries only manual `related-to` edges; the redirect target hydrates independently of the graph and is absent if the target row vanished.
+- `GetIssueDetail` (`store.go`): the issue + its relations (all incident, ordered by `created_at`), comments, events, plan reviews (`queryPlanReviews`, `plan_review.go`, sorted in Go by `storage.PlanReviewOrdering` — the `created_at` instant, then `id`; the SQL has no ORDER BY, `created_at` being a varchar), then one batch hydrate of every relation counterparty plus the redirect target; buckets into Parent/Children/BlockedBy/Blocks; siblings = the parent's other children in rank order (empty for parentless issues); `Related` carries only manual `related-to` edges; the redirect target hydrates independently of the graph and is absent if the target row vanished.
 - `ListTopics`: distinct non-empty topics of non-deleted issues, ascending.
 - `ListIssueIdentities`: `SELECT id, topic FROM issues ORDER BY id ASC` — every row, retention ignored, nothing hydrated, so it answers where a parent loop stops `ListIssues`.
 

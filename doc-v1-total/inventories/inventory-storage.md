@@ -100,24 +100,28 @@ Records law reviews of a ticket's plan. A review is never edited or removed thro
 
 **`AddPlanReview(ctx, in AddPlanReviewInput) (model.PlanReview, error)`** — `internal/storage/plan_review.go`
 - Records a review of one version of an issue's plan, decided by `PlanReviewOf`, and returns it as stored.
-- Both engines: read the issue (missing → `NotFoundError{Entity: "issue"}`) and its events, call `PlanReviewOf`, then stamp `ID = "rvw-" + uuid.NewString()` and `CreatedAt` = the engine clock's now (`internal/storage/memory/plan_review.go`; `internal/store/plan_review.go`). The memory engine appends to `planReviews` under its mutex; the Dolt engine inserts one `plan_reviews` row through `insertPlanReviewTx` inside one `add plan review` mutation.
+- Both engines: read the issue (missing → `NotFoundError{Entity: "issue"}`) and its events, call `PlanReviewOf`, then stamp `ID = "rvw-" + uuid.NewString()` and `CreatedAt` = the engine clock's now (`internal/storage/memory/plan_review.go`; `internal/store/plan_review.go`). The memory engine appends to `planReviews` under its mutex and returns a copy whose `Laws` slice is its own (`clonePlanReviews`); the Dolt engine reads the issue and events outside the mutation, then inserts one `plan_reviews` row through `insertPlanReviewTx` inside one `add plan review` mutation.
 
 **`AddPlanReviewInput`** — `internal/storage/plan_review.go`
 
 | Field | Type | Semantics |
 |---|---|---|
 | `IssueID` | `string` | |
-| `Version` | `int` | the plan version the review judged, numbered as `lit history` numbers it; named by the reviewer rather than taken to be the current one, so a plan revised while the review ran is not passed on the strength of the text before it |
-| `Verdict` | `model.PlanVerdict` | |
-| `Laws` | `[]model.Law` | |
+| `Plan` | `string` | the digest of the plan text the review judged, as `lit show` prints it; names the text rather than its version number, because a sync that merges in an older edit renumbers the versions; named by the reviewer rather than taken to be the current text, so a plan revised while the review ran is not passed on the strength of the text before it |
+| `Verdict` | `string` | as given; parsed by `PlanReviewOf` |
+| `Laws` | `[]string` | as given, one token each; parsed by `PlanReviewOf` |
 | `CreatedBy` | `string` | |
 
 **`PlanReviewOf(issue model.Issue, events []model.IssueEvent, in AddPlanReviewInput) (model.PlanReview, error)`** — `internal/storage/plan_review.go`
 - Pure: the same request yields the same review on every engine; the engine adds its own id and time.
-- `versions := TextVersions(issue, events, PlanField())`; `in.Version < 1 || in.Version > len(versions)` → `VersionNotFoundError{IssueID: issue.ID, Field: "plan", Number: in.Version, Held: len(versions)}`.
-- `laws := model.CanonicalLaws(in.Laws)`; `in.Verdict == model.PlanFail && len(laws) == 0` → `model.ValidationError{Message: "a failing verdict cites at least one law the plan breaks"}`.
+- Parses, returning the first error, in this order:
+  1. `verdict := model.ParsePlanVerdict(in.Verdict)` (error returned as is).
+  2. Each `in.Laws[i]` through `model.ParseLaw` (the first error returned as is); `laws := model.CanonicalLaws(cited)`.
+  3. `verdict == model.PlanFail && len(laws) == 0` → `model.ValidationError{Message: "a failing verdict cites at least one law the plan breaks"}`.
+  4. `digest := model.ParsePlanDigest(in.Plan)` (error returned as is).
+  5. `versions := TextVersions(issue, events, PlanField())`; no `text` in `versions` with `model.DigestPlan(text) == digest` → `VersionNotFoundError{IssueID: issue.ID, Field: "plan", Ref: string(digest), Held: len(versions)}`.
 - Reviewer: `strings.TrimSpace(in.CreatedBy)`, `""` → `"unknown"`.
-- Returns `model.PlanReview{IssueID: issue.ID, PlanDigest: model.DigestPlan(versions[in.Version-1]), Verdict: in.Verdict, Laws: laws, CreatedBy: reviewer}`. `Verdict` is taken as given; its spelling is checked at the CLI by `model.ParsePlanVerdict`.
+- Returns `model.PlanReview{IssueID: issue.ID, PlanDigest: digest, Verdict: verdict, Laws: laws, CreatedBy: reviewer}`.
 
 **`PlanField() LongTextField`** — `internal/storage/plan_review.go`: the `plan` row of the editable-field table (`LongTextFields()`); panics `editable-field table has no long text row "plan"` if the static table lacks it.
 
@@ -126,9 +130,9 @@ Records law reviews of a ticket's plan. A review is never edited or removed thro
 - A field never changed has one version, its current text (none when that is empty).
 - The numbers follow the record's order, so a sync that merges in an edit older than ones already held renumbers the texts after it; a `model.PlanReview` therefore names its text by digest.
 
-**`VersionNotFoundError{IssueID, Field string; Number, Held int}`** — `internal/storage/plan_review.go`
-- A reference to a version of a long text field past the versions the issue's record holds.
-- `Error()` renders ``fmt.Sprintf("%s has no %s@%d: its record holds %s of %s, numbered from 1; `lit show %s --field %s` prints the current text", e.IssueID, e.Field, e.Number, DescribeVersions(e.Held), e.Field, e.IssueID, e.Field)``.
+**`VersionNotFoundError{IssueID, Field, Ref string; Held int}`** — `internal/storage/plan_review.go`
+- A reference to a version of a long text field the issue's record does not hold: a number past its versions (`lit history --version <field>@<n>`, `printFieldVersion` in `internal/cli/output.go`, `Ref` = `strconv.Itoa(n)`), or a digest of no text it holds (`PlanReviewOf`, `Ref` = the digest). `Ref` is the reference as written after the field's `@`.
+- `Error()` renders ``fmt.Sprintf("%s has no %s@%s: its record holds %s of %s, numbered from 1; `lit show %s --field %s` prints the current text", e.IssueID, e.Field, e.Ref, DescribeVersions(e.Held), e.Field, e.IssueID, e.Field)``.
 - Distinct from `NotFoundError`, whose remediation sends the caller to check the issue id: here the id resolved.
 
 **`DescribeVersions(count int) string`** — `internal/storage/plan_review.go`: `"1 version"` when `count == 1`, else `fmt.Sprintf("%d versions", count)`.
@@ -263,7 +267,7 @@ Interface-wide failure contract: **compensated, not transactional**. A batch tha
 - `Error()` renders `fmt.Sprintf("%s engine does not offer the %s capability", e.Engine, e.Capability)` (`internal/storage/capabilities.go`).
 - `Capability` is the capability's name as `Capability.Name()` reports it; `Engine` names the concrete engine asked (`internal/storage/capabilities.go`).
 
-**`VersionNotFoundError{IssueID, Field string; Number, Held int}`** — `internal/storage/plan_review.go`: see §1.5a.
+**`VersionNotFoundError{IssueID, Field, Ref string; Held int}`** — `internal/storage/plan_review.go`: see §1.5a.
 
 Other error surfaces in the contract package: `ParseSortSpecs` returns `ValidationError` for an unrecognized direction (`internal/storage/sort.go`); `ParseBulkSpecs` returns `fmt.Errorf("bulk: parse spec: %w", err)` (`internal/storage/bulk.go` → `internal/storage/specs.go`); `ParseImportTreeSpecs` returns `fmt.Errorf("import: parse spec: %w", err)` (`internal/storage/specs.go`) and `errors.New("import: unexpected trailing data after spec array")` (`internal/storage/specs.go`).
 
@@ -325,6 +329,7 @@ The field-axis patch. Only columns the field axis owns are representable, so a s
 #### `PurgeInput` / `PurgeResult` (`internal/storage/issues.go`)
 - `PurgeInput{IssueID string; Actor string}` — the issue to purge and who is purging it.
 - `PurgeResult{Purge model.Purge; Comments, PlanReviews, Labels, Relations, Events int}` — the record the purge left and how many of the issue's comments, plan reviews, labels, relations, and events went with it, so a caller can report what was removed without reading first.
+- `(PurgeResult).EventRecord() map[string]int` — the purge as event counts: `purge.comments` = `Comments`, `purge.plan_reviews` = `PlanReviews`, `purge.labels` = `Labels`, `purge.edges` = `Relations`, `purge.events` = `Events`; `lit purge` records it through `telemetry.Record` (`internal/cli/purge.go`).
 
 #### `SortSpec` (`internal/storage/issues.go`)
 - `Field string`, `Desc bool`.
@@ -631,7 +636,7 @@ These types live in the contract, not in an engine, because a capability interfa
 | `order` | `[]string` | **THE** total rank order, top first. `Issue.Rank` is rendered from a position in this slice at read time and stored nowhere, so a rank that contradicts the order is unrepresentable — which is why nothing here needs the inversion repair Dolt offers |
 | `relations` | `[]model.Relation` | Edge table, insertion order (oldest-first by construction) |
 | `comments` | `[]model.Comment` | Comment table, insertion order |
-| `planReviews` | `[]model.PlanReview` | The law reviews of every issue's plan, in recording order |
+| `planReviews` | `[]model.PlanReview` | The law reviews of every issue's plan, in recording order; a read orders them by `storage.PlanReviewOrdering` |
 | `events` | `map[string][]model.IssueEvent` | History, keyed by issue; each issue's run in insertion order, so one issue's history costs that issue's events rather than a scan of the store's |
 | `labels` | `map[string][]model.Label` | Keyed by issue, kept **sorted by name** because the sorted set is what every label read returns |
 | `purges` | `[]model.Purge` | The records of the tickets this engine has purged; a purged ticket holds no row anywhere above, and its id is never minted again |
@@ -717,7 +722,7 @@ Order of checks is stated as contract: the parent must be resolved before the co
 - `Relations` — `incidentRelations(id)`, insertion order
 - `Comments` — `commentsFor(id)`, insertion order
 - `Events` — `eventsFor(id)`, sorted (created_at, id)
-- `PlanReviews` — `planReviewsFor(id)`, the issue's reviews in recording order (`internal/storage/memory/plan_review.go`)
+- `PlanReviews` — `planReviewsFor(id)`, the issue's reviews through `clonePlanReviews`: each a copy with its own `Laws` slice, sorted by `storage.PlanReviewOrdering` (`created_at` instant, then id) (`internal/storage/memory/plan_review.go`)
 - `Children`, `BlockedBy`, `Blocks`, `Parent` — from `bucketRelations`
 - `Siblings` — the parent's other children (same rank-ordered child set, minus self); an only child yields the empty group
 - `Related` — `relatedIssues`
@@ -1068,8 +1073,8 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 
 - Locks, then builds issues via `listIssues(ListIssuesFilter{IncludeArchived: true, IncludeDeleted: true})` — **the WHOLE store**, out-of-flow work included, because an export honoring the listing default would silently drop exactly the rows a diff exists to notice.
 - Labels: flattened from the `labels` map, then sorted by `(IssueID, Name)` via `cmpThen`.
-- Returns `model.Export{Version: model.ExportVersion (5), WorkspaceID: e.workspaceID, ExportedAt: e.now(), Issues, Relations: slices.Clone(e.relations), Comments: slices.Clone(e.comments), Labels, Events: e.allEvents(), Purges: e.purgeList(), PlanReviews: slices.Clone(e.planReviews)}`.
-- `Relations`, `Comments` and `PlanReviews` come back in **write order** (cloned, unsorted); `Issues` in rank order; `Labels` in `(issue, name)` order; `Events` in `(created_at, id)` order; `Purges` in issue-id, then birth order (`purgeList` returns `model.UnionPurges(e.purges)`, `internal/storage/memory/purge.go`).
+- Returns `model.Export{Version: model.ExportVersion (5), WorkspaceID: e.workspaceID, ExportedAt: e.now(), Issues, Relations: slices.Clone(e.relations), Comments: slices.Clone(e.comments), Labels, Events: e.allEvents(), Purges: e.purgeList(), PlanReviews: clonePlanReviews(e.planReviews)}`.
+- `Relations` and `Comments` come back in **write order** (cloned, unsorted); `PlanReviews` copied with their `Laws` slices and sorted by `storage.PlanReviewOrdering` (`created_at` instant, then id); `Issues` in rank order; `Labels` in `(issue, name)` order; `Events` in `(created_at, id)` order; `Purges` in issue-id, then birth order (`purgeList` returns `model.UnionPurges(e.purges)`, `internal/storage/memory/purge.go`).
 - Every collection comes back in a total order so two stores holding the same facts serialize to the same bytes rather than to the same multiset.
 
 ### 2.14a `Purge` (`internal/storage/memory/purge.go`)
@@ -1379,7 +1384,7 @@ Stated in `internal/storage/memory/doc.go`:
 
 **`a_purge_removes_the_issue_and_everything_it_owns`** (`internal/storage/conformance/purge.go`)
 - With the clock pinned, `Purge` returns the record `{IssueID, IssueCreatedAt: the issue's CreatedAt, PurgedAt: the pinned instant, PurgedBy: the input actor}`.
-- The purged issue and one other issue each carry a plan and one `pass` review of plan version 1.
+- The purged issue and one other issue each carry a plan and one `pass` review naming that plan's digest.
 - The counts are exactly the purged issue's comments (1), labels (1), relations at either end (3: its parent edge, the blocked-by edge it holds, the blocked-by edge onto it — a related-to edge between two other issues is not counted), events (its whole history, non-empty), and plan reviews (1).
 - `GetIssue(purged)` → `NotFoundError{Entity: "issue"}`.
 - The export holds no issue, relation, comment, label, event, or plan review of the purged id, and exactly one purge record, equal to the returned one.
@@ -1407,13 +1412,14 @@ Stated in `internal/storage/memory/doc.go`:
 
 **`a_plan_review_judges_one_version`**
 - An issue is created with plan `"add a retry"`, then patched to `"remove the retry"`, so its plan has two versions.
-- `AddPlanReview{Version: 1, Verdict: PlanFail, Laws: ["one-source-of-truth", "carrying-cost", "one-source-of-truth"], CreatedBy: " grace "}` returns a review with the issue's id, a non-empty `ID`, `PlanDigest == model.DigestPlan("add a retry")`, `Verdict` `fail`, `CreatedBy` `"grace"`, and `Laws` `["carrying-cost", "one-source-of-truth"]` — sorted, each once.
-- A `fail` citing no law is a `model.ValidationError` (`assertRefused`).
-- `Version: 3` → `storage.VersionNotFoundError` with `Field` `"plan"`, `Number` 3, `Held` 2.
+- With the clock pinned to `laterInstant`, `AddPlanReview{Plan: DigestPlan("add a retry"), Verdict: "fail", Laws: ["one-source-of-truth", "carrying-cost", "one-source-of-truth"], CreatedBy: " grace "}` returns a review with the issue's id, a non-empty `ID`, `PlanDigest == model.DigestPlan("add a retry")`, `Verdict` `fail`, `CreatedBy` `"grace"`, and `Laws` `["carrying-cost", "one-source-of-truth"]` — sorted, each once.
+- Each of these is refused (`assertRefused`): verdict `"maybe"`; a `fail` with law `"a,b"`; a `fail` citing no law; `Plan: "v2"`.
+- The digest of a text the plan never held → `storage.VersionNotFoundError` with `Field` `"plan"`, `Ref` that digest, `Held` 2.
 - `AddPlanReview` on a missing issue → `NotFoundError{Entity: "issue"}`.
-- `AddPlanReview{Version: 2, Verdict: PlanPass}` judges `"remove the retry"` and cites no law.
-- `GetIssueDetail.PlanReviews` holds the fail then the pass. Of them, `Judges(current plan)` selects only the pass while the plan is `"remove the retry"`; none after the plan is revised to a third text; only the fail after the plan returns to `"add a retry"`.
-- `Export.PlanReviews` holds both, the fail first.
+- With the clock pinned to `earlierInstant`, `AddPlanReview{Plan: " " + DigestPlan("remove the retry") + " ", Verdict: "pass"}` judges `"remove the retry"` and cites no law.
+- Writing through the returned fail's `Laws` does not change the stored review's laws.
+- `GetIssueDetail.PlanReviews` holds the pass then the fail — oldest first by instant, though the fail was recorded first and the earlier instant's RFC3339Nano spelling sorts after the later one's. Of them, `Judges(current plan)` selects only the pass while the plan is `"remove the retry"`; none after the plan is revised to a third text; only the fail after the plan returns to `"add a retry"`.
+- `Export.PlanReviews` holds both, the pass first.
 
 **`labels_roundtrip`**
 - `AddLabel` returns the resulting set.

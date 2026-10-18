@@ -14,7 +14,7 @@ Day-to-day reads and writes are only half of what the store does; the other half
 | 4 | labels | `SELECT ... FROM labels` | `issue_id ASC, label ASC` |
 | 5 | events | `issue_events LEFT JOIN issue_event_changes` | events by `(created_at, id)`, each event's changes by `field ASC` (`store.go`) |
 | 6 | purges | `SELECT issue_id, issue_created_at, purged_at, purged_by FROM purges` (`listPurges`, `purge.go`) | none in SQL; `model.UnionPurges` orders by issue id, then `issue_created_at` |
-| 7 | plan reviews | `SELECT id, issue_id, plan_digest, verdict, laws, created_at, created_by FROM plan_reviews` (`queryPlanReviews`, `plan_review.go`) | `created_at ASC, id ASC` |
+| 7 | plan reviews | `SELECT id, issue_id, plan_digest, verdict, laws, created_at, created_by FROM plan_reviews` (`queryPlanReviews`, `plan_review.go`) | none in SQL; sorted in Go by `storage.PlanReviewOrdering` — the parsed `created_at` instant, then `id` (`internal/storage/ordering.go`) |
 
 The envelope carries `version: 5` (`model.ExportVersion`), `workspace_id`, `exported_at` (wall-clock UTC at export time), and the seven arrays. No key has `omitempty`; every list helper initializes a non-nil slice, so empty tables serialize as `[]`, never `null` (`import_export.go`; `store.go`). The per-record wire shapes (issue, relation, comment, label, event, attribution, purge record, plan review) and the decode fallbacks (v1 `history`, the pre-v3 `blocks` relation type) are specified in `01-data-model.md`; two facts worth restating from the export side: a label's JSON key is `name` while its DB column is `label`, and an unattributed event omits its `attribution` key entirely.
 
