@@ -2,6 +2,7 @@ package storage
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
@@ -121,5 +122,68 @@ func TestImportGateJudgesTheFilesReferences(t *testing.T) {
 				t.Errorf("gate error =\n  %s\nwant\n  %s", err, c.want)
 			}
 		})
+	}
+}
+
+// One bad value is refused in one wording whichever document states it: a
+// tree spec, a bulk create, or a bulk update names the document, then the key
+// and the value, then what is allowed. Each refusal is a validation error, so
+// it exits as the file being wrong.
+func TestABadValueIsRefusedAlikeInEveryDocumentShape(t *testing.T) {
+	str := func(s string) *string { return &s }
+	num := func(n int) *int { return &n }
+	const badType = `has invalid type "ghost": issue type must be task, feature, bug, chore, or epic`
+	tree := ImportTreeSpec{LocalID: "e", Title: "t", IssueType: "epic", Topic: "core"}
+	create := BulkIssueSpec{Title: str("t"), IssueType: str("epic"), Topic: str("core")}
+	for _, c := range []struct {
+		name string
+		gate func() error
+		want string
+	}{
+		{"tree spec type", func() error {
+			spec := tree
+			spec.IssueType = "ghost"
+			_, err := ParseImportTreeFile([]ImportTreeSpec{spec})
+			return err
+		}, `import: spec "e": ` + badType},
+		{"bulk create type", func() error {
+			doc := create
+			doc.IssueType = str("ghost")
+			_, err := ParseBulkFile([]BulkIssueSpec{doc}, nil)
+			return err
+		}, `bulk: doc 0: ` + badType},
+		{"bulk update type", func() error {
+			_, err := ParseBulkFile([]BulkIssueSpec{{ID: "lit-x-1", IssueType: str("ghost")}}, nil)
+			return err
+		}, `bulk: doc 0 (id "lit-x-1"): ` + badType},
+		{"tree spec priority", func() error {
+			spec := tree
+			spec.Priority = 9
+			_, err := ParseImportTreeFile([]ImportTreeSpec{spec})
+			return err
+		}, `import: spec "e": has invalid priority 9: priority must be `},
+		{"bulk create priority", func() error {
+			doc := create
+			doc.Priority = num(9)
+			_, err := ParseBulkFile([]BulkIssueSpec{doc}, nil)
+			return err
+		}, `bulk: doc 0: has invalid priority 9: priority must be `},
+		{"bulk update priority", func() error {
+			_, err := ParseBulkFile([]BulkIssueSpec{{ID: "lit-x-1", Priority: num(9)}}, nil)
+			return err
+		}, `bulk: doc 0 (id "lit-x-1"): has invalid priority 9: priority must be `},
+	} {
+		err := c.gate()
+		if err == nil {
+			t.Errorf("%s: the gate admitted a bad value", c.name)
+			continue
+		}
+		if !strings.HasPrefix(err.Error(), c.want) {
+			t.Errorf("%s: refusal = %q, want it to start %q", c.name, err, c.want)
+		}
+		var validation model.ValidationError
+		if !errors.As(err, &validation) {
+			t.Errorf("%s: refusal %q is not a model.ValidationError", c.name, err)
+		}
 	}
 }

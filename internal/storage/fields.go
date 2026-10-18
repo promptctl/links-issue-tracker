@@ -121,8 +121,7 @@ func bulkAsStated[T any](stated func(BulkIssueSpec) *T) func(BulkIssueSpec) (*T,
 
 // bulkParsed is the bulk side of a field whose document key carries raw
 // input: a stated value goes through the field's one parse gate, and an
-// unstated one stays unstated. A refusal names the document key and the value
-// it held, so the author can find the line to fix.
+// unstated one stays unstated.
 func bulkParsed[R, T any](key string, stated func(BulkIssueSpec) *R, parse func(R) (T, error)) func(BulkIssueSpec) (*T, error) {
 	return func(doc BulkIssueSpec) (*T, error) {
 		raw := stated(doc)
@@ -131,10 +130,18 @@ func bulkParsed[R, T any](key string, stated func(BulkIssueSpec) *R, parse func(
 		}
 		value, err := parse(*raw)
 		if err != nil {
-			return nil, fmt.Errorf("has invalid %s %#v: %w", key, *raw, err)
+			return nil, invalidValue(key, *raw, err)
 		}
 		return &value, nil
 	}
+}
+
+// invalidValue is the one refusal of a document value its parse refused,
+// whichever document shape states it. It names the document key and the value
+// it held, so the author can find the line to fix, and wraps the parse's own
+// refusal, which names what is allowed. [LAW:one-source-of-truth]
+func invalidValue(key string, raw any, err error) error {
+	return fmt.Errorf("has invalid %s %#v: %w", key, raw, err)
 }
 
 // IsEmpty reports whether the patch states no editable field. Reason is not a

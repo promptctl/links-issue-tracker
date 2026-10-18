@@ -2790,21 +2790,23 @@ func anImportFileThatBreaksARuleIsRefusedWhole(t *testing.T, ctx context.Context
 // before that write are rolled back, but an update cannot be. Written last, an
 // update document ahead of the refused create in the file never lands.
 func aBulkFileRefusedAtAWriteAppliesNoUpdate(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	existing := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "existing", Topic: "core", IssueType: model.TypeEpic})
 	title, topic, epicType, taskType, renamed := "imported", "core", "epic", "task", "renamed"
-	rename := storage.BulkIssueSpec{ID: existing.ID, Title: &renamed}
 	for _, file := range []struct {
 		what  string
-		specs []storage.BulkIssueSpec
+		after []storage.BulkIssueSpec // the documents after the update
 	}{
-		{"an update, then an epic blocked by an issue that does not exist", []storage.BulkIssueSpec{rename,
+		{"an update, then an epic blocked by an issue that does not exist", []storage.BulkIssueSpec{
 			{LocalID: "e", Title: &title, Topic: &topic, IssueType: &epicType, BlockedBy: []string{"no-such-issue"}}}},
-		{"an update, then an epic, then a task under a parent that does not exist", []storage.BulkIssueSpec{rename,
+		{"an update, then an epic, then a task under a parent that does not exist", []storage.BulkIssueSpec{
 			{LocalID: "e", Title: &title, Topic: &topic, IssueType: &epicType},
 			{Title: &title, Topic: &topic, IssueType: &taskType, Parent: "no-such-issue"}}},
 	} {
+		// Each file updates an issue of its own, so one file's update landing
+		// fails only that file's case.
+		existing := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "existing", Topic: "core", IssueType: model.TypeEpic})
+		specs := append([]storage.BulkIssueSpec{{ID: existing.ID, Title: &renamed}}, file.after...)
 		before := mustList(t, ctx, st, storage.ListIssuesFilter{})
-		if _, err := st.BulkApply(ctx, prefix, "ada", file.specs); err == nil {
+		if _, err := st.BulkApply(ctx, prefix, "ada", specs); err == nil {
 			t.Fatalf("BulkApply(%s) succeeded; want the write naming a missing issue refused", file.what)
 		}
 		if after := mustList(t, ctx, st, storage.ListIssuesFilter{}); len(after) != len(before) {

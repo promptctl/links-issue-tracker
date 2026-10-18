@@ -993,8 +993,7 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 - Missing/blank `Title` → `"bulk: doc %d missing title"`.
 - `Topic == nil` → `"bulk: doc %d missing topic"`; otherwise parsed by `issueid.NormalizeTopicForCreate`, the parser `CreateIssue` runs; its refusal → `fmt.Errorf("bulk: doc %d: %w", i, err)`.
 - Missing `IssueType` → `"bulk: doc %d missing type"`.
-- Unparseable type → `"bulk: doc %d has invalid type %q"`.
-- Unparseable priority (when set) → `"bulk: doc %d has invalid priority %d"`.
+- Unparseable type → `fmt.Errorf("bulk: doc %d: %w", i, invalidValue("type", *spec.IssueType, err))`, so it reads `bulk: doc 0: has invalid type "ghost": issue type must be …`; unparseable priority (when set) → the same around `invalidValue("priority", *spec.Priority, err)`. `invalidValue` (`internal/storage/fields.go`) is the `has invalid %s %#v: %w` an update document's refusal also wraps.
 - `Reason != ""` on a create → `"bulk: doc %d sets reason without id (reason only applies to updates)"`.
 - The create it returns: Title and Topic `strings.TrimSpace`'d; Description/Prompt/Assignee/Lane/Labels from `valueOr(ptr, zero)`; Priority `model.PriorityNormal` when the doc sets none. **`Placement` is left at its zero value**, so a batch keeps its file order in the ranked order, whichever authored format the file is.
 
@@ -1011,7 +1010,7 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 - Empty → `"import: no issues in input"`.
 - Blank `LocalID` → `"import: spec %d missing local_id"`; untrimmed → `"import: spec %d local_id %q has surrounding whitespace"`.
 - Blank `Title` → `"import: spec %q missing title"`; `issueid.NormalizeTopicForCreate(Topic)` or `model.CanonicalizeLabels(Labels)` refuses → `"import: spec %q: %w"`, the parsers `CreateIssue` runs.
-- Invalid type → `"import: spec %q has invalid type %q"`; invalid priority → `"import: spec %q has invalid priority %d"`.
+- Invalid type or priority → `"import: spec %q: %w"` around `invalidValue("type", …)` / `invalidValue("priority", …)`.
 - Duplicate `LocalID` → `"import: duplicate local_id %q"`.
 - Second loop: `Parent` untrimmed → error; **`Parent` must name a spec in the file** → `"import: spec %q references missing parent %q"`; a `Parent` whose spec is not a container → `"import: spec %q: %w"` around `storage.RejectParentThatIsNotAContainer`; a non-container spec with no `Parent` → `"import: spec %q: %w"` around `storage.RejectLeafWithoutParent`.
 - Each `BlockedBy` entry: untrimmed → error; self-reference → `"import: spec %q cannot depend on itself"`; **must name a spec in the file** → `"import: spec %q references missing blocked_by %q"`.

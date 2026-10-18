@@ -264,11 +264,11 @@ func parseImportTreeSpecs(specs []ImportTreeSpec) (map[int]FileCreate, error) {
 		// the type. [LAW:parse-dont-validate]
 		issueType, err := model.ParseIssueType(spec.IssueType)
 		if err != nil {
-			return nil, model.ValidationError{Message: fmt.Sprintf("import: spec %q has invalid type %q", spec.LocalID, spec.IssueType)}
+			return nil, fmt.Errorf("import: spec %q: %w", spec.LocalID, invalidValue("type", spec.IssueType, err))
 		}
 		priority, err := model.ParsePriority(spec.Priority)
 		if err != nil {
-			return nil, model.ValidationError{Message: fmt.Sprintf("import: spec %q has invalid priority %d", spec.LocalID, spec.Priority)}
+			return nil, fmt.Errorf("import: spec %q: %w", spec.LocalID, invalidValue("priority", spec.Priority, err))
 		}
 		if _, dup := types[spec.LocalID]; dup {
 			return nil, model.ValidationError{Message: fmt.Sprintf("import: duplicate local_id %q", spec.LocalID)}
@@ -425,12 +425,12 @@ func parseBulkCreateDoc(i int, spec BulkIssueSpec) (FileCreate, error) {
 	}
 	issueType, err := model.ParseIssueType(*spec.IssueType)
 	if err != nil {
-		return FileCreate{}, model.ValidationError{Message: fmt.Sprintf("bulk: doc %d has invalid type %q", i, *spec.IssueType)}
+		return FileCreate{}, fmt.Errorf("bulk: doc %d: %w", i, invalidValue("type", *spec.IssueType, err))
 	}
 	priority := model.PriorityNormal
 	if spec.Priority != nil {
 		if priority, err = model.ParsePriority(*spec.Priority); err != nil {
-			return FileCreate{}, model.ValidationError{Message: fmt.Sprintf("bulk: doc %d has invalid priority %d", i, *spec.Priority)}
+			return FileCreate{}, fmt.Errorf("bulk: doc %d: %w", i, invalidValue("priority", *spec.Priority, err))
 		}
 	}
 	if spec.Reason != "" {
