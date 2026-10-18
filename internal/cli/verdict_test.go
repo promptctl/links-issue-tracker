@@ -104,7 +104,7 @@ func TestVerdictRefusesWhatIsNotAReview(t *testing.T) {
 		{[]string{"fail", "--plan", digest, "--law", "One Source"}, `a law is its token, lower-case words joined by hyphens (one-source-of-truth), got "One Source"`},
 		{[]string{"fail", "--plan", digest, "--law", "a,b"}, `got "a,b"`},
 		{[]string{"pass", "--plan", "1"}, `a plan is named by its digest, the 64 hex digits ` + "`lit show`" + ` prints beside its version, got "1"`},
-		{[]string{"pass", "--plan", string(model.DigestPlan("Another plan"))}, id + " has no plan@" + string(model.DigestPlan("Another plan")) + ": its record holds 1 version of plan"},
+		{[]string{"pass", "--plan", string(model.DigestPlan("Another plan"))}, id + " has no plan text with digest " + string(model.DigestPlan("Another plan")) + "; `lit show " + id + "` prints the current plan beside its digest"},
 	} {
 		args := append([]string{"verdict", id}, refusal.args...)
 		out, err := runCLIInDirAllowError(t, dir, args...)

@@ -2400,9 +2400,9 @@ func aPlanReviewJudgesOneVersion(t *testing.T, ctx context.Context, st storage.S
 	}
 	unheld := model.DigestPlan("a text the plan never held")
 	_, err = review(storage.AddPlanReviewInput{Plan: string(unheld), Verdict: "pass", CreatedBy: "grace"})
-	var missing storage.VersionNotFoundError
-	if !errors.As(err, &missing) || missing.Field != "plan" || missing.Ref != string(unheld) || missing.Held != 2 {
-		t.Errorf("AddPlanReview(unheld digest) error = %v, want VersionNotFoundError naming that digest, of 2 versions", err)
+	var missing storage.PlanDigestNotFoundError
+	if !errors.As(err, &missing) || missing.IssueID != issue.ID || missing.Digest != unheld {
+		t.Errorf("AddPlanReview(unheld digest) error = %v, want PlanDigestNotFoundError naming that digest", err)
 	}
 	_, err = st.AddPlanReview(ctx, storage.AddPlanReviewInput{IssueID: "no-such-issue", Plan: first, Verdict: "pass"})
 	assertNotFound(t, err, "issue", "AddPlanReview on a missing issue")

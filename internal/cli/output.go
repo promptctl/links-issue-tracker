@@ -551,7 +551,7 @@ func parseVersionRef(raw string) (versionRef, error) {
 func printFieldVersion(w io.Writer, detail model.IssueDetail, ref versionRef) error {
 	texts := storage.TextVersions(detail.Issue, detail.Events, ref.field)
 	if ref.number > len(texts) {
-		return storage.VersionNotFoundError{IssueID: detail.Issue.ID, Field: ref.field.Name, Ref: strconv.Itoa(ref.number), Held: len(texts)}
+		return storage.VersionNotFoundError{IssueID: detail.Issue.ID, Field: ref.field.Name, Number: ref.number, Held: len(texts)}
 	}
 	_, err := fmt.Fprintln(w, texts[ref.number-1])
 	return err

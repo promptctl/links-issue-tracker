@@ -37,7 +37,7 @@ type AddPlanReviewInput struct {
 // PlanReviewOf decides the review a request records against issue, whose
 // history is events: the verdict, the laws in their canonical order and the
 // digest each parsed, the reviewer. A digest of no text the history holds is
-// VersionNotFoundError, and a fail that cites no law is refused — a failing
+// PlanDigestNotFoundError, and a fail that cites no law is refused — a failing
 // law review names the law the plan breaks. Pure, so every engine records the
 // same review for the same request and stamps it with its own id and time.
 // [LAW:single-enforcer] [LAW:effects-at-boundaries] [LAW:parse-dont-validate]
@@ -63,7 +63,7 @@ func PlanReviewOf(issue model.Issue, events []model.IssueEvent, in AddPlanReview
 	field := PlanField()
 	versions := TextVersions(issue, events, field)
 	if !slices.ContainsFunc(versions, func(text string) bool { return model.DigestPlan(text) == digest }) {
-		return model.PlanReview{}, VersionNotFoundError{IssueID: issue.ID, Field: field.Name, Ref: string(digest), Held: len(versions)}
+		return model.PlanReview{}, PlanDigestNotFoundError{IssueID: issue.ID, Digest: digest}
 	}
 	reviewer := strings.TrimSpace(in.CreatedBy)
 	if reviewer == "" {
@@ -119,22 +119,34 @@ func TextVersions(issue model.Issue, events []model.IssueEvent, field LongTextFi
 	return texts
 }
 
-// VersionNotFoundError is a reference to a version of a long text field the
-// issue's record does not hold: a number past its versions, or a digest of no
-// text it holds. Ref is the reference as written after the field's @. It is
-// not NotFoundError: that one's remediation sends the caller to check the
-// issue id, and here the id resolved — what is missing is the version, and the message says how many
+// VersionNotFoundError is a reference to a version of a long text field past
+// the versions an issue's record holds. It is not NotFoundError: that one's
+// remediation sends the caller to check the issue id, and here the id
+// resolved — what is missing is the version, and the message says how many
 // there are and where the current text is. [LAW:one-type-per-behavior]
 type VersionNotFoundError struct {
 	IssueID string
 	Field   string
-	Ref     string
+	Number  int
 	Held    int
 }
 
 func (e VersionNotFoundError) Error() string {
-	return fmt.Sprintf("%s has no %s@%s: its record holds %s of %s, numbered from 1; `lit show %s --field %s` prints the current text",
-		e.IssueID, e.Field, e.Ref, DescribeVersions(e.Held), e.Field, e.IssueID, e.Field)
+	return fmt.Sprintf("%s has no %s@%d: its record holds %s of %s, numbered from 1; `lit show %s --field %s` prints the current text",
+		e.IssueID, e.Field, e.Number, DescribeVersions(e.Held), e.Field, e.IssueID, e.Field)
+}
+
+// PlanDigestNotFoundError is a review naming a plan text by a digest no text
+// the issue's plan history holds. It misses the way VersionNotFoundError
+// does, and the message differs: a digest names no number, and the current
+// plan's digest is in lit show, not in lit show --field.
+type PlanDigestNotFoundError struct {
+	IssueID string
+	Digest  model.PlanDigest
+}
+
+func (e PlanDigestNotFoundError) Error() string {
+	return fmt.Sprintf("%s has no plan text with digest %s; `lit show %s` prints the current plan beside its digest", e.IssueID, e.Digest, e.IssueID)
 }
 
 // DescribeVersions is how a count of versions reads: "1 version", "3 versions".

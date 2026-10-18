@@ -119,7 +119,7 @@ Records law reviews of a ticket's plan. A review is never edited or removed thro
   2. Each `in.Laws[i]` through `model.ParseLaw` (the first error returned as is); `laws := model.CanonicalLaws(cited)`.
   3. `verdict == model.PlanFail && len(laws) == 0` → `model.ValidationError{Message: "a failing verdict cites at least one law the plan breaks"}`.
   4. `digest := model.ParsePlanDigest(in.Plan)` (error returned as is).
-  5. `versions := TextVersions(issue, events, PlanField())`; no `text` in `versions` with `model.DigestPlan(text) == digest` → `VersionNotFoundError{IssueID: issue.ID, Field: "plan", Ref: string(digest), Held: len(versions)}`.
+  5. `versions := TextVersions(issue, events, PlanField())`; no `text` in `versions` with `model.DigestPlan(text) == digest` → `PlanDigestNotFoundError{IssueID: issue.ID, Digest: digest}`.
 - Reviewer: `strings.TrimSpace(in.CreatedBy)`, `""` → `"unknown"`.
 - Returns `model.PlanReview{IssueID: issue.ID, PlanDigest: digest, Verdict: verdict, Laws: laws, CreatedBy: reviewer}`.
 
@@ -130,9 +130,14 @@ Records law reviews of a ticket's plan. A review is never edited or removed thro
 - A field never changed has one version, its current text (none when that is empty).
 - The numbers follow the record's order, so a sync that merges in an edit older than ones already held renumbers the texts after it; a `model.PlanReview` therefore names its text by digest.
 
-**`VersionNotFoundError{IssueID, Field, Ref string; Held int}`** — `internal/storage/plan_review.go`
-- A reference to a version of a long text field the issue's record does not hold: a number past its versions (`lit history --version <field>@<n>`, `printFieldVersion` in `internal/cli/output.go`, `Ref` = `strconv.Itoa(n)`), or a digest of no text it holds (`PlanReviewOf`, `Ref` = the digest). `Ref` is the reference as written after the field's `@`.
-- `Error()` renders ``fmt.Sprintf("%s has no %s@%s: its record holds %s of %s, numbered from 1; `lit show %s --field %s` prints the current text", e.IssueID, e.Field, e.Ref, DescribeVersions(e.Held), e.Field, e.IssueID, e.Field)``.
+**`VersionNotFoundError{IssueID, Field string; Number, Held int}`** — `internal/storage/plan_review.go`
+- A reference to version `Number` of a long text field past the `Held` versions the issue's record holds (`lit history --version <field>@<n>`, `printFieldVersion` in `internal/cli/output.go`).
+- `Error()` renders ``fmt.Sprintf("%s has no %s@%d: its record holds %s of %s, numbered from 1; `lit show %s --field %s` prints the current text", e.IssueID, e.Field, e.Number, DescribeVersions(e.Held), e.Field, e.IssueID, e.Field)``.
+
+**`PlanDigestNotFoundError{IssueID string; Digest model.PlanDigest}`** — `internal/storage/plan_review.go`
+- A plan review naming a digest no text of the issue's plan history holds (`PlanReviewOf`).
+- `Error()` renders ``fmt.Sprintf("%s has no plan text with digest %s; `lit show %s` prints the current plan beside its digest", e.IssueID, e.Digest, e.IssueID)``.
+- The CLI maps it the way it maps `VersionNotFoundError`: exit 4 (`exit.go`), reason `version_not_found` (`error_output.go`).
 - Distinct from `NotFoundError`, whose remediation sends the caller to check the issue id: here the id resolved.
 
 **`DescribeVersions(count int) string`** — `internal/storage/plan_review.go`: `"1 version"` when `count == 1`, else `fmt.Sprintf("%d versions", count)`.
@@ -267,7 +272,7 @@ Interface-wide failure contract: **compensated, not transactional**. A batch tha
 - `Error()` renders `fmt.Sprintf("%s engine does not offer the %s capability", e.Engine, e.Capability)` (`internal/storage/capabilities.go`).
 - `Capability` is the capability's name as `Capability.Name()` reports it; `Engine` names the concrete engine asked (`internal/storage/capabilities.go`).
 
-**`VersionNotFoundError{IssueID, Field, Ref string; Held int}`** — `internal/storage/plan_review.go`: see §1.5a.
+**`VersionNotFoundError{IssueID, Field string; Number, Held int}`** — `internal/storage/plan_review.go`: see §1.5a.
 
 Other error surfaces in the contract package: `ParseSortSpecs` returns `ValidationError` for an unrecognized direction (`internal/storage/sort.go`); `ParseBulkSpecs` returns `fmt.Errorf("bulk: parse spec: %w", err)` (`internal/storage/bulk.go` → `internal/storage/specs.go`); `ParseImportTreeSpecs` returns `fmt.Errorf("import: parse spec: %w", err)` (`internal/storage/specs.go`) and `errors.New("import: unexpected trailing data after spec array")` (`internal/storage/specs.go`).
 
@@ -1414,7 +1419,7 @@ Stated in `internal/storage/memory/doc.go`:
 - An issue is created with plan `"add a retry"`, then patched to `"remove the retry"`, so its plan has two versions.
 - With the clock pinned to `laterInstant`, `AddPlanReview{Plan: DigestPlan("add a retry"), Verdict: "fail", Laws: ["one-source-of-truth", "carrying-cost", "one-source-of-truth"], CreatedBy: " grace "}` returns a review with the issue's id, a non-empty `ID`, `PlanDigest == model.DigestPlan("add a retry")`, `Verdict` `fail`, `CreatedBy` `"grace"`, and `Laws` `["carrying-cost", "one-source-of-truth"]` — sorted, each once.
 - Each of these is refused (`assertRefused`): verdict `"maybe"`; a `fail` with law `"a,b"`; a `fail` citing no law; `Plan: "v2"`.
-- The digest of a text the plan never held → `storage.VersionNotFoundError` with `Field` `"plan"`, `Ref` that digest, `Held` 2.
+- The digest of a text the plan never held → `storage.PlanDigestNotFoundError` with the issue's id and that digest.
 - `AddPlanReview` on a missing issue → `NotFoundError{Entity: "issue"}`.
 - With the clock pinned to `earlierInstant`, `AddPlanReview{Plan: " " + DigestPlan("remove the retry") + " ", Verdict: "pass"}` judges `"remove the retry"` and cites no law.
 - Writing through the returned fail's `Laws` does not change the stored review's laws.

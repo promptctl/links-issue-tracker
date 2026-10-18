@@ -47,6 +47,10 @@ func ExitCode(err error) int {
 	if errors.As(err, &versionNotFound) {
 		return ExitNotFound
 	}
+	var planDigestNotFound storage.PlanDigestNotFoundError
+	if errors.As(err, &planDigestNotFound) {
+		return ExitNotFound
+	}
 	var mergeConflict MergeConflictError
 	if errors.As(err, &mergeConflict) {
 		return ExitConflict

@@ -2220,9 +2220,9 @@ plan: pass or fail, citing laws", group `operations`,
       → exit 3.
    5. A digest equal to `model.DigestPlan` of none of
       `storage.TextVersions(issue, events, storage.PlanField())` →
-      `storage.VersionNotFoundError{Field: "plan", Ref: <digest>, Held: <count>}`
-      (`<id> has no plan@<digest>: its record holds <N version(s)> of plan,
-      numbered from 1; …`) → exit 4, reason `version_not_found`.
+      `storage.PlanDigestNotFoundError{IssueID, Digest}`
+      (`<id> has no plan text with digest <digest>; …`) → exit 4, reason
+      `version_not_found`.
    A blank reviewer is stored as `unknown`; the id is `rvw-<uuid>`.
 2. Event facts: `verdict.value` (the verdict), `verdict.plan_digest` (the
    review's `PlanDigest`), `verdict.laws` (the count of stored laws).
