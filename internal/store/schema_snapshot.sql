@@ -68,6 +68,7 @@ CREATE TABLE `issues` (
   `resolution` varchar(32),
   `redirect_target` varchar(191),
   `follows_up` varchar(191),
+  `work_plan` text NOT NULL DEFAULT '',
   PRIMARY KEY (`id`),
   KEY `idx_issues_rank` (`item_rank`(191)),
   KEY `idx_issues_status_priority` (`status`,`priority`,`updated_at`),
@@ -101,6 +102,20 @@ CREATE TABLE `migration_quarantine` (
   `error_text` text NOT NULL,
   `created_at` varchar(64) NOT NULL,
   PRIMARY KEY (`version`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
+
+CREATE TABLE `plan_reviews` (
+  `id` varchar(191) NOT NULL,
+  `issue_id` varchar(191) NOT NULL,
+  `plan_digest` varchar(64) NOT NULL,
+  `verdict` varchar(16) NOT NULL,
+  `laws` text NOT NULL,
+  `created_at` varchar(64) NOT NULL,
+  `created_by` text NOT NULL,
+  PRIMARY KEY (`id`),
+  KEY `idx_plan_reviews_issue_created` (`issue_id`,`created_at`),
+  CONSTRAINT `plan_reviews_issue` FOREIGN KEY (`issue_id`) REFERENCES `issues` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `plan_reviews_verdict_check` CHECK ((`verdict` IN ('pass', 'fail')))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
 
 CREATE TABLE `purges` (

@@ -140,7 +140,7 @@ func matchesSearch(issue model.Issue, term string) bool {
 	if needle == "" {
 		return true
 	}
-	for _, haystack := range []string{issue.Title, issue.Description, issue.Prompt, issue.Topic} {
+	for _, haystack := range []string{issue.Title, issue.Description, issue.Prompt, issue.Plan, issue.Topic} {
 		if strings.Contains(strings.ToLower(haystack), needle) {
 			return true
 		}

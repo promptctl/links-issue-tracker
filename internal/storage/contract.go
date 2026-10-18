@@ -285,6 +285,7 @@ type Store interface {
 	IssueReader
 	IssueWriter
 	CommentStore
+	PlanReviewStore
 	LabelStore
 	RelationStore
 	Ranker

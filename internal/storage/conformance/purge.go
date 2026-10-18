@@ -18,12 +18,12 @@ import (
 // left of the purged issue is its purge record and nothing else.
 func aPurgeRemovesTheIssueAndEverythingItOwns(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	doomed := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "doomed", Topic: "core", ParentID: epic.ID, Labels: []string{"leak"}})
+	doomed := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "doomed", Topic: "core", ParentID: epic.ID, Labels: []string{"leak"}, Plan: "a doomed plan"})
 	// The blocked-by neighbors live in another epic: between two leaves of one
 	// epic, rank orders the work and the edge is refused.
 	neighbors := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "neighbors", Topic: "core", IssueType: model.TypeEpic})
 	blocker := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "blocker", Topic: "core", ParentID: neighbors.ID})
-	waiter := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "waiter", Topic: "core", ParentID: neighbors.ID})
+	waiter := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "waiter", Topic: "core", ParentID: neighbors.ID, Plan: "a waiting plan"})
 	followUp := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "follow-up", Topic: "core", ParentID: epic.ID, FollowsUp: doomed.ID})
 	duplicate := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "duplicate", Topic: "core", ParentID: epic.ID})
 
@@ -32,6 +32,11 @@ func aPurgeRemovesTheIssueAndEverythingItOwns(t *testing.T, ctx context.Context,
 	}
 	if _, _, err := st.AddComment(ctx, storage.AddCommentInput{IssueID: waiter.ID, Body: "mentions " + doomed.ID, CreatedBy: "ada"}); err != nil {
 		t.Fatalf("AddComment error = %v", err)
+	}
+	for _, planned := range []model.Issue{doomed, waiter} {
+		if _, err := st.AddPlanReview(ctx, storage.AddPlanReviewInput{IssueID: planned.ID, Plan: string(model.DigestPlan(planned.Plan)), Verdict: "pass", CreatedBy: "grace"}); err != nil {
+			t.Fatalf("AddPlanReview(%s) error = %v", planned.ID, err)
+		}
 	}
 	for _, edge := range []storage.AddRelationInput{
 		{SrcID: doomed.ID, DstID: blocker.ID, Type: model.RelBlockedBy, CreatedBy: "ada"},
@@ -64,9 +69,9 @@ func aPurgeRemovesTheIssueAndEverythingItOwns(t *testing.T, ctx context.Context,
 	// Three edges touch the doomed issue: its parent edge, the blocker it
 	// waits on, and the waiter that waits on it. The related-to edge between
 	// two other issues is not its to take.
-	counts := [4]int{result.Comments, result.Labels, result.Relations, result.Events}
-	if wantCounts := [4]int{1, 1, 3, len(history)}; counts != wantCounts {
-		t.Errorf("purge counts (comments, labels, relations, events) = %v, want %v", counts, wantCounts)
+	counts := [5]int{result.Comments, result.Labels, result.Relations, result.Events, result.PlanReviews}
+	if wantCounts := [5]int{1, 1, 3, len(history), 1}; counts != wantCounts {
+		t.Errorf("purge counts (comments, labels, relations, events, plan reviews) = %v, want %v", counts, wantCounts)
 	}
 	if len(history) == 0 {
 		t.Fatal("the doomed issue recorded no history, so the events count above asserts nothing")
@@ -205,6 +210,11 @@ func assertNoRowOf(t *testing.T, export model.Export, id string) {
 			t.Errorf("export still holds event %s of %s", ev.ID, id)
 		}
 	}
+	for _, review := range export.PlanReviews {
+		if review.IssueID == id {
+			t.Errorf("export still holds plan review %s of %s", review.ID, id)
+		}
+	}
 }
 
 // assertSameRows compares the rows two exports hold for the issues both name,
@@ -214,10 +224,11 @@ func assertNoRowOf(t *testing.T, export model.Export, id string) {
 func assertSameRows(t *testing.T, want, got model.Export) {
 	t.Helper()
 	if len(want.Issues) != len(got.Issues) || len(want.Relations) != len(got.Relations) ||
-		len(want.Comments) != len(got.Comments) || len(want.Labels) != len(got.Labels) || len(want.Events) != len(got.Events) {
-		t.Errorf("row counts (issues, relations, comments, labels, events) = (%d, %d, %d, %d, %d), want (%d, %d, %d, %d, %d)",
-			len(got.Issues), len(got.Relations), len(got.Comments), len(got.Labels), len(got.Events),
-			len(want.Issues), len(want.Relations), len(want.Comments), len(want.Labels), len(want.Events))
+		len(want.Comments) != len(got.Comments) || len(want.Labels) != len(got.Labels) || len(want.Events) != len(got.Events) ||
+		len(want.PlanReviews) != len(got.PlanReviews) {
+		t.Errorf("row counts (issues, relations, comments, labels, events, plan reviews) = (%d, %d, %d, %d, %d, %d), want (%d, %d, %d, %d, %d, %d)",
+			len(got.Issues), len(got.Relations), len(got.Comments), len(got.Labels), len(got.Events), len(got.PlanReviews),
+			len(want.Issues), len(want.Relations), len(want.Comments), len(want.Labels), len(want.Events), len(want.PlanReviews))
 	}
 	gotByID := map[string]model.Issue{}
 	for _, issue := range got.Issues {

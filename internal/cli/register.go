@@ -724,6 +724,8 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 			Run: r.transitionCmd(restoreSpec)},
 		{Name: "purge", Summary: "Permanently remove an issue and everything it owns", GroupID: "retention",
 			Run: r.appCmd(app.AccessWrite, purgeLeaf)},
+		{Name: "verdict", Summary: "Record a law review of one version of an issue's plan: pass or fail, citing laws", GroupID: "operations",
+			Run: r.appCmd(app.AccessWrite, verdictLeaf)},
 		{Name: "comment", Summary: "Add issue comments", GroupID: "operations",
 			Run: r.familyCmd(commentFamily), Subcommands: commentFamily.subcommandSpecs()},
 		{Name: "label", Summary: "Manage labels", GroupID: "operations",

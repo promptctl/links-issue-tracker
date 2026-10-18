@@ -515,6 +515,7 @@ input surfaces) (`label.go`). Otherwise returns the normalized form.
 | `Title` | string | `title` | |
 | `Description` | string | `description` | |
 | `Prompt` | string | `prompt,omitempty` | |
+| `Plan` | string | `plan,omitempty` | how the work will be done, written before it starts so a reviewer can judge it against the laws; every edit is a new version in the history, and a `PlanReview` names the version it judged |
 | `Priority` | `Priority` | `priority` | |
 | `IssueType` | `IssueType` | `issue_type` | |
 | `Topic` | string | `topic` | |
@@ -524,6 +525,7 @@ input surfaces) (`label.go`). Otherwise returns the normalized form.
 | `Labels` | `[]string` | `labels` | |
 | `CreatedAt` | `time.Time` | `created_at` | |
 | `UpdatedAt` | `time.Time` | `updated_at` | |
+| `FollowsUp` | string | `follows_up,omitempty` | |
 | `retention` | `lifecycle.Retention` | unexported | sealed retention axis; wire/storage keep the legacy `archived_at`/`deleted_at` pair |
 | `lifecycle` | `lifecycle.Lifecycle` | unexported | |
 | `pendingHydration` | bool | unexported | |
@@ -660,9 +662,10 @@ establish.
 
 ### JSON encoding
 Wire struct `issueJSON` — `model.go`. Keys in declaration order:
-`id`, `title`, `description`, `prompt` (omitempty), `status` (`*State`,
-omitempty), `priority`, `issue_type`, `topic`, `assignee` (omitempty), `rank`,
-`lane`, `labels`, `created_at`, `updated_at`, `closed_at` (omitempty),
+`id`, `title`, `description`, `prompt` (omitempty), `plan` (omitempty),
+`status` (`*State`, omitempty), `priority`, `issue_type`, `topic`, `assignee`
+(omitempty), `rank`, `lane`, `labels`, `follows_up` (omitempty), `created_at`,
+`updated_at`, `closed_at` (omitempty),
 `resolution` (omitempty), `redirect_target` (omitempty), `archived_at`
 (omitempty), `deleted_at` (omitempty). Notably: no `progress` key (pinned by
 `TestIssueJSONOmitsProgress`, `model_test.go`).
@@ -720,12 +723,17 @@ the Go field name when the tag name is empty. Pinned by
   (`blocks`), `Parent *Issue` (`parent,omitempty`), `RedirectTarget *Issue`
   (`redirect_target,omitempty` — hydrated from the issue's own redirect target,
   never from the relations graph; `Related` carries only manual peer links,
-  `model.go`), `Events` (`events`).
+  `model.go`), `FollowsUp *Issue` (`follows_up,omitempty`), `FollowUps`
+  (`follow_ups`), `Events` (`events`), `PlanReviews []PlanReview`
+  (`plan_reviews` — every law review recorded against any version of the
+  issue's plan, oldest first).
 - `Export` — `model.go`: `Version int` (`version`), `WorkspaceID`
   (`workspace_id`), `ExportedAt` (`exported_at`), `Issues`, `Relations`,
-  `Comments`, `Labels`, `Events`, `Purges []Purge` (`purges`).
-  `ExportVersion = 4` — `model.go`: the version every store writes; version 4
-  is the first to carry purge records.
+  `Comments`, `Labels`, `Events`, `Purges []Purge` (`purges`),
+  `PlanReviews []PlanReview` (`plan_reviews`).
+  `ExportVersion = 5` — `model.go`: the version every store writes; version 5
+  is the first to carry plan reviews, version 4 the first to carry purge
+  records.
 - `Purge` — `purge.go`: `IssueID` (`issue_id`), `IssueCreatedAt time.Time`
   (`issue_created_at`), `PurgedAt time.Time` (`purged_at`), `PurgedBy`
   (`purged_by`). The record of a permanently removed issue: the ticket, named
@@ -754,12 +762,46 @@ the Go field name when the tag name is empty. Pinned by
   with `Purges = purges` and with every row of a purged issue filtered out. An
   issue of the export is purged when some record with its id `Names` it; an
   issue under a purged id with a different `CreatedAt` is kept. Filtered:
-  issues by `ID`, relations whose `SrcID` or `DstID` is purged, comments, labels
-  and events by `IssueID`. Filtering is over clones (`keepRows`), so the receiver's
+  issues by `ID`, relations whose `SrcID` or `DstID` is purged, comments, labels,
+  events and plan reviews by `IssueID`. Filtering is over clones (`keepRows`), so the receiver's
   slices are untouched and a nil collection stays nil. Rows of other issues are
   kept unchanged, including a `FollowsUp`, redirect target, or text naming a
   purged id. Pinned by `TestApplyPurgesDropsEveryRowOfAPurgedIssueAndNothingElse`
   and `TestApplyPurgesLeavesAnotherTicketUnderAPurgedID` (`purge_test.go`).
+- `PlanReview` — `plan_review.go`: `ID` (`id`), `IssueID` (`issue_id`),
+  `PlanDigest PlanDigest` (`plan_digest`), `Verdict PlanVerdict` (`verdict`),
+  `Laws []Law` (`laws` — the cited laws in canonical order: sorted, each once;
+  a fail cites at least one), `CreatedAt time.Time` (`created_at`), `CreatedBy`
+  (`created_by`). One law review of a ticket's plan: a reviewer's verdict on one
+  version of the plan's text. The version is named by the digest of the text it
+  judged, not by the number `lit history` shows it under, because a sync that
+  merges in an older edit renumbers the versions after it; the digest names the
+  same text on every store.
+- `(PlanReview).Judges(plan string) bool` — `plan_review.go`:
+  `r.PlanDigest == DigestPlan(plan)`.
+- `PlanDigest` — `plan_review.go`: `string`, the hex SHA-256 of one plan text.
+- `DigestPlan(text string) PlanDigest` — `plan_review.go`: `sha256.Sum256` of the
+  text's bytes, hex-encoded — the one way a plan text becomes its digest.
+- `ParsePlanDigest(raw string) (PlanDigest, error)` — `plan_review.go`: trims
+  `raw` and admits it only when it matches `digestShape`, `^[0-9a-f]{64}$` (the
+  lower-case hex `DigestPlan` spells, all 64 digits); anything else is
+  ``ValidationError{"a plan is named by its digest, the 64 hex digits `lit show` prints beside its version, got %q"}``
+  with the untrimmed `raw`.
+- `PlanVerdict` — `plan_review.go`: `string`; constants `PlanPass = "pass"`,
+  `PlanFail = "fail"`.
+- `ParsePlanVerdict(raw string) (PlanVerdict, error)` — `plan_review.go`: trims
+  `raw`; `pass` or `fail` is returned, anything else is
+  `ValidationError{"verdict must be pass or fail, got %q"}` with the untrimmed
+  `raw`.
+- `Law` — `plan_review.go`: `string`, one law's token. lit holds no list of laws,
+  so a token is checked for its shape, not looked up.
+- `ParseLaw(raw string) (Law, error)` — `plan_review.go`: trims `raw` and admits
+  it only when it matches `lawShape`, `^[a-z][a-z0-9]*(-[a-z0-9]+)*$`
+  (lower-case words joined by hyphens, so no comma); anything else is
+  `ValidationError{"a law is its token, lower-case words joined by hyphens (one-source-of-truth), got %q"}`
+  with the untrimmed `raw`.
+- `CanonicalLaws(laws []Law) []Law` — `plan_review.go`: a copy, `slices.Sort`ed
+  then `slices.Compact`ed — sorted, each once; the input is untouched.
 
 ## 2.9 `Attribution` — `model.go`
 
@@ -802,8 +844,9 @@ may be carried, because the database syncs to shared remotes
   `FieldChange{Field: "status", From: h.FromStatus, To: h.ToStatus}`
   (`model.go`). v2+ exports ignore any `history` array. If `raw.Version < 3`,
   every relation's `Type` is read through `RelationTypeFromStored`, so a
-  `blocks` edge decodes as `blocked-by` (`model.go`). `purges` is read at every
-  version; a pre-v4 file has none (`model.go`). The decoded value's
+  `blocks` edge decodes as `blocked-by` (`model.go`). `purges` and `plan_reviews` are
+  read at every version; a pre-v4 file has no purges and a pre-v5 file no plan
+  reviews (`model.go`). The decoded value's
   `Version` is `ExportVersion` whatever version was read, since it is now in
   the current format (`model.go`). Pinned by
   `TestExportDecodeRenamesLegacyBlocksEdges`, `relation_type_test.go`.

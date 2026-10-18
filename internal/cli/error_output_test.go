@@ -91,7 +91,8 @@ func TestCommandErrorReason(t *testing.T) {
 		},
 		{"unknown command", UnknownCommandError{Command: "wat"}, "unknown_command"},
 		{"not found", storage.NotFoundError{Entity: "issue", ID: "lit-abc"}, "entity_not_found"},
-		{"version not found", VersionNotFoundError{IssueID: "lit-abc", Field: "description", Number: 4, Held: 3}, "version_not_found"},
+		{"version not found", storage.VersionNotFoundError{IssueID: "lit-abc", Field: "description", Number: 4, Held: 3}, "version_not_found"},
+		{"plan digest not found", storage.PlanDigestNotFoundError{IssueID: "lit-abc", Digest: model.DigestPlan("x")}, "version_not_found"},
 		// A retired flag fails the same way on every run, so neither retired
 		// flag may fall to the default retry advice.
 		{"unsupported output flag", unsupportedOutputFlagError(), "unsupported_flag"},

@@ -106,3 +106,10 @@ func IssueOrdering(specs []SortSpec, ancestry RankAncestry) (func(a, b model.Iss
 func EventOrdering(a, b model.IssueEvent) int {
 	return cmp.Or(a.CreatedAt.Compare(b.CreatedAt), strings.Compare(a.ID, b.ID))
 }
+
+// PlanReviewOrdering is the order [IssueReader.GetIssueDetail] and an export
+// carry plan reviews in: EventOrdering's rule, for the same reason — oldest
+// first by the instant, ties by id.
+func PlanReviewOrdering(a, b model.PlanReview) int {
+	return cmp.Or(a.CreatedAt.Compare(b.CreatedAt), strings.Compare(a.ID, b.ID))
+}

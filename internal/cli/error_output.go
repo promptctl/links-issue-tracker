@@ -81,8 +81,12 @@ func commandErrorReason(err error) commandReason {
 	if errors.As(err, &notFound) {
 		return reasonEntityNotFound
 	}
-	var versionNotFound VersionNotFoundError
+	var versionNotFound storage.VersionNotFoundError
 	if errors.As(err, &versionNotFound) {
+		return reasonVersionNotFound
+	}
+	var planDigestNotFound storage.PlanDigestNotFoundError
+	if errors.As(err, &planDigestNotFound) {
 		return reasonVersionNotFound
 	}
 	var mergeConflict MergeConflictError

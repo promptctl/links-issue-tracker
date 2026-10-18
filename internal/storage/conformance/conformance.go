@@ -201,6 +201,7 @@ var cases = []engineCase{
 	{"a_purge_of_a_missing_issue_is_not_found", aPurgeOfAMissingIssueIsNotFound},
 	{"a_purged_id_is_never_minted_again", aPurgedIDIsNeverMintedAgain},
 	{"comments_roundtrip", commentsRoundtrip},
+	{"a_plan_review_judges_one_version", aPlanReviewJudgesOneVersion},
 	{"labels_roundtrip", labelsRoundtrip},
 	{"relations_roundtrip", relationsRoundtrip},
 	{"relations_batch_buckets_edges", relationsBatchBucketsEdges},
@@ -230,6 +231,7 @@ func createReadRoundtrip(t *testing.T, ctx context.Context, st storage.Store, cl
 		Title:       "  Renderer cleanup  ",
 		Description: "  drop the legacy pass  ",
 		Prompt:      "  do the thing  ",
+		Plan:        "  cut the pass, delete its flag  ",
 		IssueType:   model.TypeBug,
 		Topic:       "renderer",
 		Priority:    model.PriorityUrgent,
@@ -250,6 +252,9 @@ func createReadRoundtrip(t *testing.T, ctx context.Context, st storage.Store, cl
 	if created.Prompt != "do the thing" {
 		t.Errorf("Prompt = %q, want trimmed", created.Prompt)
 	}
+	if created.Plan != "cut the pass, delete its flag" {
+		t.Errorf("Plan = %q, want trimmed", created.Plan)
+	}
 
 	read, err := st.GetIssue(ctx, created.ID)
 	if err != nil {
@@ -265,6 +270,7 @@ func createReadRoundtrip(t *testing.T, ctx context.Context, st storage.Store, cl
 		{"Title", read.Title, created.Title},
 		{"Description", read.Description, created.Description},
 		{"Prompt", read.Prompt, created.Prompt},
+		{"Plan", read.Plan, created.Plan},
 		{"Topic", read.Topic, created.Topic},
 		{"Assignee", read.Assignee, created.Assignee},
 		{"Lane", read.Lane, created.Lane},
@@ -731,7 +737,7 @@ func everyEditableFieldRecordsHistory(t *testing.T, ctx context.Context, st stor
 	newType := model.TypeBug
 	priority := model.PriorityUrgent
 	labels := []string{"beta"}
-	title, description, prompt, assignee, lane := "retitled", "described", "render at 1024x768", "ada", "left"
+	title, description, prompt, plan, assignee, lane := "retitled", "described", "render at 1024x768", "drop the cache", "ada", "left"
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
 
 	// One patch per field, each moving exactly that field, so a recorded row
@@ -744,6 +750,7 @@ func everyEditableFieldRecordsHistory(t *testing.T, ctx context.Context, st stor
 		{"title", storage.UpdateIssueInput{Title: &title}, "retitled"},
 		{"description", storage.UpdateIssueInput{Description: &description}, "described"},
 		{"prompt", storage.UpdateIssueInput{Prompt: &prompt}, "render at 1024x768"},
+		{"plan", storage.UpdateIssueInput{Plan: &plan}, "drop the cache"},
 		{"issue_type", storage.UpdateIssueInput{IssueType: &newType}, "bug"},
 		{"priority", storage.UpdateIssueInput{Priority: &priority}, "1"},
 		{"assignee", storage.UpdateIssueInput{Assignee: &assignee}, "ada"},
@@ -2338,6 +2345,119 @@ func commentsRoundtrip(t *testing.T, ctx context.Context, st storage.Store, clk 
 
 	_, _, err = st.AddComment(ctx, storage.AddCommentInput{IssueID: "no-such-issue", Body: "x", CreatedBy: "ada"})
 	assertNotFound(t, err, "issue", "AddComment on a missing issue")
+}
+
+// aPlanReviewJudgesOneVersion holds a review to the text it judged. A review
+// names a plan text by its digest: a revised plan is a different text with no
+// review of its own, and a plan returned to a reviewed text is that text
+// again. Both engines decide the review through storage.PlanReviewOf, so the
+// refusals are held here once for both.
+func aPlanReviewJudgesOneVersion(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "planned", Topic: "core", ParentID: epic.ID, Plan: "add a retry"})
+	revise := func(plan string) {
+		t.Helper()
+		if _, err := st.Apply(ctx, issue.ID, storage.Change{Actor: "ada", Fields: storage.UpdateIssueInput{Plan: &plan}}); err != nil {
+			t.Fatalf("Apply plan %q error = %v", plan, err)
+		}
+	}
+	review := func(in storage.AddPlanReviewInput) (model.PlanReview, error) {
+		t.Helper()
+		in.IssueID = issue.ID
+		return st.AddPlanReview(ctx, in)
+	}
+	first, second := string(model.DigestPlan("add a retry")), string(model.DigestPlan("remove the retry"))
+	revise("remove the retry")
+
+	// The fail is stamped after the pass recorded below it, as a review
+	// merged in from another store can be, and at the pair of instants whose
+	// spellings sort the other way: the reviews come back oldest first by
+	// the instant, not in the order recorded nor by the stamp's text.
+	clk.Pin(laterInstant)
+	failed, err := review(storage.AddPlanReviewInput{Plan: first, Verdict: "fail", Laws: []string{"one-source-of-truth", "carrying-cost", "one-source-of-truth"}, CreatedBy: " grace "})
+	if err != nil {
+		t.Fatalf("AddPlanReview(v1 fail) error = %v", err)
+	}
+	if failed.IssueID != issue.ID || failed.PlanDigest != model.DigestPlan("add a retry") || failed.Verdict != model.PlanFail || failed.CreatedBy != "grace" || failed.ID == "" {
+		t.Errorf("AddPlanReview(v1 fail) = %+v, want grace's fail of the text v1 holds", failed)
+	}
+	if want := []model.Law{"carrying-cost", "one-source-of-truth"}; !slices.Equal(failed.Laws, want) {
+		t.Errorf("review laws = %v, want %v: sorted, each once", failed.Laws, want)
+	}
+
+	// What is not a review is refused before anything is recorded: a verdict
+	// other than pass or fail, a law not spelled as a token, a fail citing no
+	// law, a digest not spelled as one. A digest of a text the history does
+	// not hold is not a version; a missing issue is not found.
+	for _, refused := range []storage.AddPlanReviewInput{
+		{Plan: second, Verdict: "maybe"},
+		{Plan: second, Verdict: "fail", Laws: []string{"a,b"}},
+		{Plan: second, Verdict: "fail"},
+		{Plan: "v2", Verdict: "pass"},
+	} {
+		_, err = review(refused)
+		assertRefused(t, err, fmt.Sprintf("AddPlanReview(%+v)", refused))
+	}
+	unheld := model.DigestPlan("a text the plan never held")
+	_, err = review(storage.AddPlanReviewInput{Plan: string(unheld), Verdict: "pass", CreatedBy: "grace"})
+	var missing storage.PlanDigestNotFoundError
+	if !errors.As(err, &missing) || missing.IssueID != issue.ID || missing.Digest != unheld {
+		t.Errorf("AddPlanReview(unheld digest) error = %v, want PlanDigestNotFoundError naming that digest", err)
+	}
+	_, err = st.AddPlanReview(ctx, storage.AddPlanReviewInput{IssueID: "no-such-issue", Plan: first, Verdict: "pass"})
+	assertNotFound(t, err, "issue", "AddPlanReview on a missing issue")
+
+	clk.Pin(earlierInstant)
+	passed, err := review(storage.AddPlanReviewInput{Plan: " " + second + " ", Verdict: "pass", CreatedBy: "grace"})
+	if err != nil {
+		t.Fatalf("AddPlanReview(v2 pass) error = %v", err)
+	}
+	if passed.PlanDigest != model.DigestPlan("remove the retry") || len(passed.Laws) != 0 {
+		t.Errorf("AddPlanReview(v2 pass) = %+v, want a pass of the text v2 holds, citing nothing", passed)
+	}
+	// The returned review is the caller's to keep: writing through it does
+	// not reach the stored one.
+	failed.Laws[0] = "rewritten"
+
+	judging := func(plan string) []string {
+		t.Helper()
+		detail, err := st.GetIssueDetail(ctx, issue.ID)
+		if err != nil {
+			t.Fatalf("GetIssueDetail error = %v", err)
+		}
+		if detail.Issue.Plan != plan {
+			t.Fatalf("detail plan = %q, want %q", detail.Issue.Plan, plan)
+		}
+		if len(detail.PlanReviews) != 2 || detail.PlanReviews[0].ID != passed.ID || detail.PlanReviews[1].ID != failed.ID {
+			t.Fatalf("detail plan reviews = %+v, want the pass then the fail, oldest first", detail.PlanReviews)
+		}
+		if want := []model.Law{"carrying-cost", "one-source-of-truth"}; !slices.Equal(detail.PlanReviews[1].Laws, want) {
+			t.Fatalf("stored fail's laws = %v, want %v: unchanged by a write through the review AddPlanReview returned", detail.PlanReviews[1].Laws, want)
+		}
+		var ids []string
+		for _, r := range detail.PlanReviews {
+			if r.Judges(detail.Issue.Plan) {
+				ids = append(ids, r.ID)
+			}
+		}
+		return ids
+	}
+	if got := judging("remove the retry"); !slices.Equal(got, []string{passed.ID}) {
+		t.Errorf("reviews of the current plan = %v, want only the pass of v2", got)
+	}
+	revise("remove the retry and its flag")
+	if got := judging("remove the retry and its flag"); len(got) != 0 {
+		t.Errorf("reviews of a revised plan = %v, want none: a verdict on one text says nothing about another", got)
+	}
+	revise("add a retry")
+	if got := judging("add a retry"); !slices.Equal(got, []string{failed.ID}) {
+		t.Errorf("reviews of a plan returned to v1's text = %v, want the fail of v1", got)
+	}
+
+	export := mustExport(t, ctx, st)
+	if len(export.PlanReviews) != 2 || export.PlanReviews[0].ID != passed.ID || export.PlanReviews[1].ID != failed.ID {
+		t.Errorf("export plan reviews = %+v, want both, oldest first", export.PlanReviews)
+	}
 }
 
 func labelsRoundtrip(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {

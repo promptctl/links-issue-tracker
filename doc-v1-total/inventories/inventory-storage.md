@@ -22,7 +22,7 @@ Path prefix for all citations: `/Users/bmf/code/links-issue-tracker/`
 
 ### 1.2 `Store` — the composed contract
 
-`Store` = `IssueReader` + `IssueWriter` + `CommentStore` + `LabelStore` + `RelationStore` + `Ranker` + `BulkWriter` + `Exporter` + `Attributor` + `Close() error` (`internal/storage/contract.go`).
+`Store` = `IssueReader` + `IssueWriter` + `CommentStore` + `PlanReviewStore` + `LabelStore` + `RelationStore` + `Ranker` + `BulkWriter` + `Exporter` + `Attributor` + `ChangeObserver` + `Close() error` (`internal/storage/contract.go`; `PlanReviewStore` is declared in `internal/storage/plan_review.go`).
 
 - `Close() error` is in the contract so a caller can release an engine's resources without knowing what they are; for Dolt this includes the workspace lock, and discarding the error strands it (`internal/storage/contract.go`).
 - Deliberately absent from `Store` (they are capabilities): sync, schema migration, checkpoints, repair, raw test access — named as `Syncer`, `Reconciler`, `Checkpointer`, `Repairer`, `SchemaMigrator`, `Importer`, `RawExecutor` (`internal/storage/contract.go`).
@@ -75,7 +75,7 @@ General contract: every method is a pure read from the caller's view; two identi
 - `Applied` carries the issue as the change left it and the `claims.Handover` the change recorded, nil for every change but a start taking a ticket somebody had already taken (`internal/storage/issues.go`).
 
 **`Purge(ctx, in PurgeInput) (PurgeResult, error)`** — `internal/storage/contract.go`
-- Permanently removes an issue — its row, comments, labels, history, and every edge to or from it — in one write, leaving a `model.Purge` record that names the ticket by its id and `created_at` and holds nothing of its content (`internal/storage/contract.go`; `internal/model/purge.go`).
+- Permanently removes an issue — its row, comments, plan reviews, labels, history, and every edge to or from it — in one write, leaving a `model.Purge` record that names the ticket by its id and `created_at` and holds nothing of its content (`internal/storage/contract.go`; `internal/model/purge.go`).
 - `Delete` is the reversible removal; `Purge` cannot be undone (`internal/storage/contract.go`).
 - Other issues are not edited: a mention of the id in their text, `follows_up`, or redirect target stays (`internal/storage/contract.go`).
 - The id is never minted again, and every merge drops it from both sides (`model.Export.ApplyPurges`) (`internal/storage/contract.go`).
@@ -91,6 +91,56 @@ General contract: every method is a pure read from the caller's view; two identi
 
 **`DeleteComment(ctx, commentID string) (model.Comment, error)`** — `internal/storage/contract.go`
 - Removes one comment and returns what was removed, so the deletion is reportable without a prior read (`internal/storage/contract.go`).
+
+---
+
+### 1.5a `PlanReviewStore` (`internal/storage/plan_review.go`)
+
+Records law reviews of a ticket's plan. A review is never edited or removed through the contract: a reviewer who changes their mind records another (`internal/storage/plan_review.go`). A purge of the issue removes its reviews (§1.4).
+
+**`AddPlanReview(ctx, in AddPlanReviewInput) (model.PlanReview, error)`** — `internal/storage/plan_review.go`
+- Records a review of one version of an issue's plan, decided by `PlanReviewOf`, and returns it as stored.
+- Both engines: read the issue (missing → `NotFoundError{Entity: "issue"}`) and its events, call `PlanReviewOf`, then stamp `ID = "rvw-" + uuid.NewString()` and `CreatedAt` = the engine clock's now (`internal/storage/memory/plan_review.go`; `internal/store/plan_review.go`). The memory engine appends to `planReviews` under its mutex and returns a copy whose `Laws` slice is its own (`clonePlanReviews`); the Dolt engine reads the issue and events outside the mutation, then inserts one `plan_reviews` row through `insertPlanReviewTx` inside one `add plan review` mutation.
+
+**`AddPlanReviewInput`** — `internal/storage/plan_review.go`
+
+| Field | Type | Semantics |
+|---|---|---|
+| `IssueID` | `string` | |
+| `Plan` | `string` | the digest of the plan text the review judged, as `lit show` prints it; names the text rather than its version number, because a sync that merges in an older edit renumbers the versions; named by the reviewer rather than taken to be the current text, so a plan revised while the review ran is not passed on the strength of the text before it |
+| `Verdict` | `string` | as given; parsed by `PlanReviewOf` |
+| `Laws` | `[]string` | as given, one token each; parsed by `PlanReviewOf` |
+| `CreatedBy` | `string` | |
+
+**`PlanReviewOf(issue model.Issue, events []model.IssueEvent, in AddPlanReviewInput) (model.PlanReview, error)`** — `internal/storage/plan_review.go`
+- Pure: the same request yields the same review on every engine; the engine adds its own id and time.
+- Parses, returning the first error, in this order:
+  1. `verdict := model.ParsePlanVerdict(in.Verdict)` (error returned as is).
+  2. Each `in.Laws[i]` through `model.ParseLaw` (the first error returned as is); `laws := model.CanonicalLaws(cited)`.
+  3. `verdict == model.PlanFail && len(laws) == 0` → `model.ValidationError{Message: "a failing verdict cites at least one law the plan breaks"}`.
+  4. `digest := model.ParsePlanDigest(in.Plan)` (error returned as is).
+  5. `versions := TextVersions(issue, events, PlanField())`; no `text` in `versions` with `model.DigestPlan(text) == digest` → `PlanDigestNotFoundError{IssueID: issue.ID, Digest: digest}`.
+- Reviewer: `strings.TrimSpace(in.CreatedBy)`, `""` → `"unknown"`.
+- Returns `model.PlanReview{IssueID: issue.ID, PlanDigest: digest, Verdict: verdict, Laws: laws, CreatedBy: reviewer}`.
+
+**`PlanField() LongTextField`** — `internal/storage/plan_review.go`: the `plan` row of the editable-field table (`LongTextFields()`); panics `editable-field table has no long text row "plan"` if the static table lacks it.
+
+**`TextVersions(issue model.Issue, events []model.IssueEvent, field LongTextField) []string`** — `internal/storage/plan_review.go`
+- Every text the long text field is recorded holding, each once, numbered from 1 in the order the record first shows it: for each event in the given order, for each change to `field.Name`, its `From` then its `To`; then `field.Current(issue)`. The empty text is no version, and a text already listed is not listed again.
+- A field never changed has one version, its current text (none when that is empty).
+- The numbers follow the record's order, so a sync that merges in an edit older than ones already held renumbers the texts after it; a `model.PlanReview` therefore names its text by digest.
+
+**`VersionNotFoundError{IssueID, Field string; Number, Held int}`** — `internal/storage/plan_review.go`
+- A reference to version `Number` of a long text field past the `Held` versions the issue's record holds (`lit history --version <field>@<n>`, `printFieldVersion` in `internal/cli/output.go`).
+- `Error()` renders ``fmt.Sprintf("%s has no %s@%d: its record holds %s of %s, numbered from 1; `lit show %s --field %s` prints the current text", e.IssueID, e.Field, e.Number, DescribeVersions(e.Held), e.Field, e.IssueID, e.Field)``.
+
+**`PlanDigestNotFoundError{IssueID string; Digest model.PlanDigest}`** — `internal/storage/plan_review.go`
+- A plan review naming a digest no text of the issue's plan history holds (`PlanReviewOf`).
+- `Error()` renders ``fmt.Sprintf("%s has no plan text with digest %s; `lit show %s` prints the current plan beside its digest", e.IssueID, e.Digest, e.IssueID)``.
+- The CLI maps it the way it maps `VersionNotFoundError`: exit 4 (`exit.go`), reason `version_not_found` (`error_output.go`).
+- Distinct from `NotFoundError`, whose remediation sends the caller to check the issue id: here the id resolved.
+
+**`DescribeVersions(count int) string`** — `internal/storage/plan_review.go`: `"1 version"` when `count == 1`, else `fmt.Sprintf("%d versions", count)`.
 
 ---
 
@@ -222,6 +272,8 @@ Interface-wide failure contract: **compensated, not transactional**. A batch tha
 - `Error()` renders `fmt.Sprintf("%s engine does not offer the %s capability", e.Engine, e.Capability)` (`internal/storage/capabilities.go`).
 - `Capability` is the capability's name as `Capability.Name()` reports it; `Engine` names the concrete engine asked (`internal/storage/capabilities.go`).
 
+**`VersionNotFoundError{IssueID, Field string; Number, Held int}`** — `internal/storage/plan_review.go`: see §1.5a.
+
 Other error surfaces in the contract package: `ParseSortSpecs` returns `ValidationError` for an unrecognized direction (`internal/storage/sort.go`); `ParseBulkSpecs` returns `fmt.Errorf("bulk: parse spec: %w", err)` (`internal/storage/bulk.go` → `internal/storage/specs.go`); `ParseImportTreeSpecs` returns `fmt.Errorf("import: parse spec: %w", err)` (`internal/storage/specs.go`) and `errors.New("import: unexpected trailing data after spec array")` (`internal/storage/specs.go`).
 
 ---
@@ -240,6 +292,7 @@ Other error surfaces in the contract package: `ParseSortSpecs` returns `Validati
 | `Title` | `string` | `internal/storage/issues.go` |
 | `Description` | `string` | `internal/storage/issues.go` |
 | `Prompt` | `string` | `internal/storage/issues.go` |
+| `Plan` | `string` | `internal/storage/issues.go` |
 | `IssueType` | `model.IssueType` | Already-parsed vocabulary, never a raw flag string; trust boundaries route through `model.ParseIssueType`. Zero value means "unspecified" and defaults to task (`internal/storage/issues.go`) |
 | `Topic` | `string` | `internal/storage/issues.go` |
 | `ParentID` | `string` | The epic the issue lives inside; required for every type but a container, and must name a container (`internal/storage/containment.go`) — `internal/storage/issues.go` |
@@ -258,6 +311,7 @@ The field-axis patch. Only columns the field axis owns are representable, so a s
 | `Title` | `*string` | nil = leave unchanged (`internal/storage/issues.go`) |
 | `Description` | `*string` | `internal/storage/issues.go` |
 | `Prompt` | `*string` | `internal/storage/issues.go` |
+| `Plan` | `*string` | `internal/storage/issues.go` |
 | `IssueType` | `*model.IssueType` | `internal/storage/issues.go` |
 | `Priority` | `*model.Priority` | `internal/storage/issues.go` |
 | `Assignee` | `*string` | `internal/storage/issues.go` |
@@ -279,7 +333,8 @@ The field-axis patch. Only columns the field axis owns are representable, so a s
 
 #### `PurgeInput` / `PurgeResult` (`internal/storage/issues.go`)
 - `PurgeInput{IssueID string; Actor string}` — the issue to purge and who is purging it.
-- `PurgeResult{Purge model.Purge; Comments, Labels, Relations, Events int}` — the record the purge left and how many of the issue's comments, labels, relations, and events went with it, so a caller can report what was removed without reading first.
+- `PurgeResult{Purge model.Purge; Comments, PlanReviews, Labels, Relations, Events int}` — the record the purge left and how many of the issue's comments, plan reviews, labels, relations, and events went with it, so a caller can report what was removed without reading first.
+- `(PurgeResult).EventRecord() map[string]int` — the purge as event counts: `purge.comments` = `Comments`, `purge.plan_reviews` = `PlanReviews`, `purge.labels` = `Labels`, `purge.edges` = `Relations`, `purge.events` = `Events`; `lit purge` records it through `telemetry.Record` (`internal/cli/purge.go`).
 
 #### `SortSpec` (`internal/storage/issues.go`)
 - `Field string`, `Desc bool`.
@@ -347,6 +402,7 @@ Rule for the whole struct: **every slice is an OR within itself and an AND again
 | `Title` | `*string` | `title,omitempty` |
 | `Description` | `*string` | `description,omitempty` |
 | `Prompt` | `*string` | `prompt,omitempty` |
+| `Plan` | `*string` | `plan,omitempty` |
 | `IssueType` | `*string` | `type,omitempty` |
 | `Topic` | `*string` | `topic,omitempty` |
 | `Priority` | `*int` | `priority,omitempty` |
@@ -362,7 +418,7 @@ Rule for the whole struct: **every slice is an OR within itself and an AND again
 - `Updated []string` — real IDs of every updated issue, in the order applied (`internal/storage/bulk.go`).
 
 #### `ImportTreeSpec` (`internal/storage/bulk.go`)
-JSON tags: `local_id`, `title`, `description,omitempty`, `prompt,omitempty`, `type`, `topic`, `priority`, `assignee,omitempty`, `labels,omitempty`, `parent,omitempty`, `blocked_by,omitempty`. `LocalID` is opaque — used inside the spec to wire `Parent` and `BlockedBy`, replaced with the generated lit issue ID at import time (`internal/storage/bulk.go`).
+JSON tags: `local_id`, `title`, `description,omitempty`, `prompt,omitempty`, `plan,omitempty`, `type`, `topic`, `priority`, `assignee,omitempty`, `labels,omitempty`, `parent,omitempty`, `blocked_by,omitempty`. `LocalID` is opaque — used inside the spec to wire `Parent` and `BlockedBy`, replaced with the generated lit issue ID at import time (`internal/storage/bulk.go`).
 
 #### `ImportTreeResult` (`internal/storage/bulk.go`)
 - `IDMap map[string]string` (json `id_map`) — local-ID → real-issue-ID mapping.
@@ -585,11 +641,12 @@ These types live in the contract, not in an engine, because a capability interfa
 | `order` | `[]string` | **THE** total rank order, top first. `Issue.Rank` is rendered from a position in this slice at read time and stored nowhere, so a rank that contradicts the order is unrepresentable — which is why nothing here needs the inversion repair Dolt offers |
 | `relations` | `[]model.Relation` | Edge table, insertion order (oldest-first by construction) |
 | `comments` | `[]model.Comment` | Comment table, insertion order |
+| `planReviews` | `[]model.PlanReview` | The law reviews of every issue's plan, in recording order; a read orders them by `storage.PlanReviewOrdering` |
 | `events` | `map[string][]model.IssueEvent` | History, keyed by issue; each issue's run in insertion order, so one issue's history costs that issue's events rather than a scan of the store's |
 | `labels` | `map[string][]model.Label` | Keyed by issue, kept **sorted by name** because the sorted set is what every label read returns |
 | `purges` | `[]model.Purge` | The records of the tickets this engine has purged; a purged ticket holds no row anywhere above, and its id is never minted again |
 
-**`record`** (`internal/storage/memory/engine.go`): `id`, `title`, `description`, `prompt`, `issueType model.IssueType`, `topic`, `assignee`, `lane`, `priority model.Priority`, `createdAt`, `updatedAt time.Time`, `status model.StatusView`, `retention model.Retention`.
+**`record`** (`internal/storage/memory/engine.go`): `id`, `title`, `description`, `prompt`, `plan`, `issueType model.IssueType`, `topic`, `assignee`, `lane`, `priority model.Priority`, `createdAt`, `updatedAt time.Time`, `status model.StatusView`, `retention model.Retention`.
 - **Rank is deliberately absent** from `record`; position lives in `Engine.order`, and a rank string beside it would be a second representation of one fact (`internal/storage/memory/engine.go`).
 - `status` is the leaf status view; a container's state derives from its children, so its view stays zero and hydration never reads it — the same place Dolt writes a NULL status column (`internal/storage/memory/engine.go`).
 
@@ -642,7 +699,7 @@ Order of checks is stated as contract: the parent must be resolved before the co
 5. `parentID = strings.TrimSpace(in.ParentID)`; `storage.RejectLeafWithoutParent(issueType, parentID)` → `ValidationError` for a leaf with none; if non-empty, `mustRecord(parentID)` → `NotFoundError` on miss, then `storage.RejectParentThatIsNotAContainer(parentID, parent.issueType)` → `ValidationError` for a parent that is not an epic.
 6. `issueid.NormalizeConfiguredPrefix(in.Prefix)`; error → `fmt.Errorf("normalize issue prefix: %w", err)`.
 7. `now := e.now()`; `mintID(...)`.
-8. Builds the record with all string fields `strings.TrimSpace`'d (description, prompt, assignee, lane), `status: model.StatusView{Value: model.StateOpen}`, `retention: model.Live{}`.
+8. Builds the record with all string fields `strings.TrimSpace`'d (description, prompt, plan, assignee, lane), `status: model.StatusView{Value: model.StateOpen}`, `retention: model.Live{}`.
 9. `e.place(id, e.filingFrame(parentID), in.Placement)` — error propagates; then `e.issues[id] = rec`; `e.setLabels(id, labels, now, createdBy)`.
 10. If `parentID != ""`, appends `model.Relation{SrcID: id, DstID: parentID, Type: model.RelParentChild, CreatedAt: now, CreatedBy: createdBy}`.
 11. Records one `created` event, `reason: "issue created"`, `actor: createdBy`. Changes: a leaf records one `FieldChange{Field:"status", From:"", To:"open"}`; **a container records none**.
@@ -670,6 +727,7 @@ Order of checks is stated as contract: the parent must be resolved before the co
 - `Relations` — `incidentRelations(id)`, insertion order
 - `Comments` — `commentsFor(id)`, insertion order
 - `Events` — `eventsFor(id)`, sorted (created_at, id)
+- `PlanReviews` — `planReviewsFor(id)`, the issue's reviews through `clonePlanReviews`: each a copy with its own `Laws` slice, sorted by `storage.PlanReviewOrdering` (`created_at` instant, then id) (`internal/storage/memory/plan_review.go`)
 - `Children`, `BlockedBy`, `Blocks`, `Parent` — from `bucketRelations`
 - `Siblings` — the parent's other children (same rank-ordered child set, minus self); an only child yields the empty group
 - `Related` — `relatedIssues`
@@ -726,7 +784,7 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 
 **`TrimmedNonEmpty`** (`internal/storage/selects.go`) — drops the blanks a caller may have assembled a criteria slice from, so a filter of nothing but whitespace constrains nothing rather than selecting nothing.
 
-**`matchesSearch`** (`internal/storage/selects.go`) — lowercases and trims the term; an empty needle matches everything; case-insensitive substring across exactly four fields: `Title`, `Description`, `Prompt`, `Topic`.
+**`matchesSearch`** (`internal/storage/selects.go`) — lowercases and trims the term; an empty needle matches everything; case-insensitive substring across exactly five fields: `Title`, `Description`, `Prompt`, `Plan`, `Topic`.
 
 **`capLimit`** (`internal/storage/memory/list.go`) — `limit <= 0` or `len <= limit` → unchanged; else `issues[:limit]`. **A limit of zero is the absence of a limit, not a limit of zero**; truncation, never sampling.
 
@@ -774,7 +832,7 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 
 **`planFields`** (`internal/storage/memory/apply.go`) — a pure function of (baseline, patch, actor, now); no clock beyond the stamp handed in, no store, no writes. It applies the patch through `storage.ApplyIssueFields` (`internal/storage/fields.go`), which carries the per-field rules below.
 - `Title` set → `strings.TrimSpace`; if the result is empty → `model.ValidationError{Message: "title cannot be empty"}`.
-- `Description`, `Prompt`, `Assignee`, `Lane` set → `strings.TrimSpace`.
+- `Description`, `Prompt`, `Plan`, `Assignee`, `Lane` set → `strings.TrimSpace`.
 - `IssueType` set → **refused if it would cross the container/leaf line**: `model.ValidationError{Message: fmt.Sprintf("cannot change issue_type between container (%v) and leaf types: lifecycle capability would change", model.ContainerTypes())}`.
 - `Priority` set → assigned as-is.
 - `Labels` set → `model.CanonicalizeLabels(*in.Labels)`.
@@ -782,18 +840,18 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 - If `storage.ApplyIssueFields(baseline, in)` returns no change rows → returns the patch with **no event and no `UpdatedAt` bump**.
 - Otherwise sets `patch.issue.UpdatedAt = now` and emits one event with `reason: in.Reason`, `actor`, and the changes. **The field-change event has an empty `action` string**.
 
-**`storage.ApplyIssueFields`** (`internal/storage/fields.go`) — one row per field that actually moved, in the fixed order of `issueFields`: `title`, `description`, `prompt`, `issue_type`, `priority`, `assignee`, `lane`, `labels`.
+**`storage.ApplyIssueFields`** (`internal/storage/fields.go`) — one row per field that actually moved, in the fixed order of `issueFields`: `title`, `description`, `prompt`, `plan`, `issue_type`, `priority`, `assignee`, `lane`, `labels`. `description`, `prompt` and `plan` are the rows declaring `LongText`; the rest declare `ShortText` (`internal/storage/fields.go`).
 - `priority` is recorded as `strconv.Itoa(int(...))` — the numeric wire encoding, not the display name.
 - `labels` is recorded as `strings.Join(labels, ",")`.
 - `topic` is not a field of `UpdateIssueInput`, so no patch writes or records it.
 
-**`storage.ApplyProseFields(provisional, texts merge.ProseTexts)`** (`internal/storage/fields.go`) — states each merged text on an `UpdateIssueInput` (`ProseTitle` → `Title`, `ProseDescription` → `Description`, `ProsePrompt` → `Prompt`) and returns `ApplyIssueFields(provisional, in)`, so `agent_prompt` is recorded as `prompt`. Any other field → error `issue <id>: no editable field for merged prose field "<field>"`.
+**`storage.ApplyProseFields(provisional, texts merge.ProseTexts)`** (`internal/storage/fields.go`) — states each merged text on an `UpdateIssueInput` (`ProseTitle` → `Title`, `ProseDescription` → `Description`, `ProsePrompt` → `Prompt`, `ProsePlan` → `Plan`) and returns `ApplyIssueFields(provisional, in)`, so `agent_prompt` is recorded as `prompt`. Any other field → error `issue <id>: no editable field for merged prose field "<field>"`.
 
 **`statusChanges`** (`internal/storage/memory/apply.go`) — rows, in order, for: `status` (when `StatusValue()` moved), `closed_at` (RFC3339Nano, `""` when absent), `resolution` (`""` when absent), `redirect_target` (`""` when absent), `assignee`.
 
 **`retentionChanges`** (`internal/storage/memory/apply.go`) — projects both retentions through `model.RetentionTimestamps` and emits `archived_at` and/or `deleted_at` rows (RFC3339Nano) for whichever moved — the same encoding an export carries.
 
-**`writeIssue`** (`internal/storage/memory/apply.go`) — the one place a mutation becomes stored state; copies `title`, `description`, `prompt`, `issueType`, `priority`, `assignee`, `lane`, `updatedAt`, `retention`, `status = statusViewOf(issue)`. **`topic`, `id`, and `createdAt` are never written here** — topic is immutable through `Apply`.
+**`writeIssue`** (`internal/storage/memory/apply.go`) — the one place a mutation becomes stored state; copies `title`, `description`, `prompt`, `plan`, `issueType`, `priority`, `assignee`, `lane`, `updatedAt`, `retention`, `status = statusViewOf(issue)`. **`topic`, `id`, and `createdAt` are never written here** — topic is immutable through `Apply`.
 
 **`writeLabels`** (`internal/storage/memory/apply.go`) — replaces the label set when and only when `patch.statesLabels`.
 
@@ -972,7 +1030,7 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 
 **`storage.bulkUpdatePatch(doc)`** (`internal/storage/fields.go`)
 - Builds `UpdateIssueInput` with `Reason: strings.TrimSpace(doc.Reason)`, then lets each row of `issueFields` set its own pointer from the document.
-- `Title`, `Description`, `Prompt`, `Assignee`, `Lane`, `Labels` pass through as the document's pointers; trimming is the field's write in `ApplyIssueFields`.
+- `Title`, `Description`, `Prompt`, `Plan`, `Assignee`, `Lane`, `Labels` pass through as the document's pointers; trimming is the field's write in `ApplyIssueFields`.
 - `IssueType` and `Priority` are parsed by `model.ParseIssueType` / `model.ParsePriority`; a parse error → `fmt.Errorf("has invalid %s %#v: %w", key, raw, err)` with `key` `type` / `priority`.
 - The engine applies `storage.Change{Actor: actor, Fields: patch}` — **an update document never carries an Action**.
 
@@ -1004,7 +1062,7 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 - `len(BlockedBy) > 0` → `"... sets blocked_by; wire dependencies with \`lit dep add\` instead"`.
 - `Title` set and trims to `""` → `"bulk: doc %d (id %q) sets an empty title"`.
 - A `bulkUpdatePatch` error → `fmt.Errorf("bulk: doc %d (id %q): %w", i, spec.ID, err)`, so an invalid type reads `bulk: doc 0 (id "x"): has invalid type "ghost": issue type must be …`.
-- `bulkUpdatePatch(spec).IsEmpty()` → `"bulk: doc %d (id %q) has no fields to update"`. Updatable fields are exactly the rows of `issueFields`: `Title`, `Description`, `Prompt`, `IssueType`, `Priority`, `Assignee`, `Labels`, `Lane`.
+- `bulkUpdatePatch(spec).IsEmpty()` → `"bulk: doc %d (id %q) has no fields to update"`. Updatable fields are exactly the rows of `issueFields`: `Title`, `Description`, `Prompt`, `Plan`, `IssueType`, `Priority`, `Assignee`, `Labels`, `Lane`.
 
 **`storage.parseImportTreeSpecs`** (`internal/storage/import_validate.go`) — returns each spec parsed, its type and priority the ones the create writes
 - Empty → `"import: no issues in input"`.
@@ -1020,8 +1078,8 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 
 - Locks, then builds issues via `listIssues(ListIssuesFilter{IncludeArchived: true, IncludeDeleted: true})` — **the WHOLE store**, out-of-flow work included, because an export honoring the listing default would silently drop exactly the rows a diff exists to notice.
 - Labels: flattened from the `labels` map, then sorted by `(IssueID, Name)` via `cmpThen`.
-- Returns `model.Export{Version: model.ExportVersion (4), WorkspaceID: e.workspaceID, ExportedAt: e.now(), Issues, Relations: slices.Clone(e.relations), Comments: slices.Clone(e.comments), Labels, Events: e.allEvents(), Purges: e.purgeList()}`.
-- `Relations` and `Comments` come back in **write order** (cloned, unsorted); `Issues` in rank order; `Labels` in `(issue, name)` order; `Events` in `(created_at, id)` order; `Purges` in issue-id, then birth order (`purgeList` returns `model.UnionPurges(e.purges)`, `internal/storage/memory/purge.go`).
+- Returns `model.Export{Version: model.ExportVersion (5), WorkspaceID: e.workspaceID, ExportedAt: e.now(), Issues, Relations: slices.Clone(e.relations), Comments: slices.Clone(e.comments), Labels, Events: e.allEvents(), Purges: e.purgeList(), PlanReviews: clonePlanReviews(e.planReviews)}`.
+- `Relations` and `Comments` come back in **write order** (cloned, unsorted); `PlanReviews` copied with their `Laws` slices and sorted by `storage.PlanReviewOrdering` (`created_at` instant, then id); `Issues` in rank order; `Labels` in `(issue, name)` order; `Events` in `(created_at, id)` order; `Purges` in issue-id, then birth order (`purgeList` returns `model.UnionPurges(e.purges)`, `internal/storage/memory/purge.go`).
 - Every collection comes back in a total order so two stores holding the same facts serialize to the same bytes rather than to the same multiset.
 
 ### 2.14a `Purge` (`internal/storage/memory/purge.go`)
@@ -1029,8 +1087,8 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 - Locks `e.mu` for the whole operation, so no reader sees the issue half gone.
 - Not a key of `e.issues` → `storage.NotFoundError{Entity: "issue", ID: id}`.
 - `storage.RejectPurgeOfOccupiedContainer(id, e.detachedChildren(id))` — `detachedChildren` returns one `storage.DetachedChild` per `RelParentChild` relation whose `DstID` is the issue, whatever the child's retention, with the child's type and `parentsLeftWithout(child, id)` — its count of other `RelParentChild` relations (`internal/storage/memory/edges.go`), the same count `RemoveRelation`'s detach check reads.
-- Removes, counting each: comments with `IssueID == id` (`removeWhere`, which returns the slice and the number dropped); the issue's events (counted by the length of its run); relations with `SrcID == id` or `DstID == id` (`dropRelations`, which counts through `removeWhere`); the issue's label set (counted by its length); its entry in `e.order` (`detach`); its `e.issues` record.
-- Builds `model.Purge{IssueID: id, IssueCreatedAt: <the record's createdAt>, PurgedAt: e.clock.Now(), PurgedBy: in.Actor}` before removing the `e.issues` record, appends it to `e.purges`, and returns it in `storage.PurgeResult` with the four counts.
+- Removes, counting each: comments with `IssueID == id` (`removeWhere`, which returns the slice and the number dropped); plan reviews with `IssueID == id` (`removeWhere`); the issue's events (counted by the length of its run); relations with `SrcID == id` or `DstID == id` (`dropRelations`, which counts through `removeWhere`); the issue's label set (counted by its length); its entry in `e.order` (`detach`); its `e.issues` record.
+- Builds `model.Purge{IssueID: id, IssueCreatedAt: <the record's createdAt>, PurgedAt: e.clock.Now(), PurgedBy: in.Actor}` before removing the `e.issues` record, appends it to `e.purges`, and returns it in `storage.PurgeResult` with the five counts.
 
 ### 2.15 Capabilities offered by the memory engine
 
@@ -1058,15 +1116,15 @@ Stated in `internal/storage/memory/doc.go`:
 - Rule for what may be asserted: only what a caller can observe through the contract; no case may reach past the interface into engine internals (`internal/storage/conformance/conformance.go`).
 - Dolt's behavior is the tiebreak where a behavior was ambiguous; where the second engine answered better, it was moved to match rather than the contract moved to meet it (`internal/storage/conformance/conformance.go`).
 
-### 3.2 The 67 registered cases (`internal/storage/conformance/conformance.go`)
+### 3.2 The 72 registered cases (`internal/storage/conformance/conformance.go`)
 
-`create_read_roundtrip`, `create_defaults`, `create_requires_title`, `create_normalizes_topic`, `create_under_missing_parent_is_not_found`, `get_missing_issue_is_not_found`, `apply_field_patch`, `an_assignee_no_filter_can_select_is_refused`, `apply_status_transition`, `apply_missing_issue_is_not_found`, `apply_to_container_is_refused`, `apply_to_frozen_names_the_thaw`, `container_state_follows_live_children`, `history_records_mutations`, `a_phase_move_records_its_event`, `every_editable_field_records_history`, `a_new_checkout_taking_a_ticket_records`, `one_issues_history_matches_the_whole_log`, `list_defaults_to_rank_order`, `list_filters_select`, `list_by_parent`, `list_hides_archived_and_deleted`, `list_sorts_and_limits`, `list_breaks_sort_ties_by_id`, `list_orders_by_each_value_key`, `list_sorts_status_by_derived_state`, `stamps_come_from_the_clock_the_engine_was_given`, `list_orders_timestamps_by_instant_not_spelling`, `events_are_totally_ordered`, `rank_intents_reorder`, `rank_intents_resolve_across_frames`, `rank_to_edge_stays_inside_its_frame`, `rank_to_edge_ignores_a_deleted_frame_mate`, `create_at_top_files_inside_its_frame`, `create_at_top_of_an_empty_frame_takes_a_distinct_key`, `placing_at_a_frame_edge_keeps_the_key_beside_its_frame`, `a_relative_move_keeps_every_rank_distinct`, `rank_set_imposes_order`, `rank_set_stays_inside_its_frame`, `rank_set_over_a_whole_frame_permutes_its_keys`, `rank_verbs_refuse_a_deleted_issue`, `a_container_lists_before_everything_inside_it`, `close_redirects_to_a_canonical`, `follow_ups_link_both_ways`, `a_purge_removes_the_issue_and_everything_it_owns`, `a_purge_refuses_a_container_that_holds_tickets`, `a_purge_of_a_missing_issue_is_not_found`, `a_purged_id_is_never_minted_again`, `comments_roundtrip`, `labels_roundtrip`, `relations_roundtrip`, `relations_batch_buckets_edges`, `parent_wiring`, `every_ticket_lives_inside_a_container`, `an_import_file_that_breaks_a_rule_is_refused_whole`, `the_hierarchy_stays_a_tree`, `blocks_never_runs_along_the_hierarchy`, `blocks_never_orders_two_leaves_of_one_epic`, `topics_derive_from_issues`, `issue_identities_cover_every_row`, `export_carries_whole_store`, `bulk_apply_creates_and_updates`, `bulk_apply_compensates_a_failed_batch`, `import_tree_maps_local_ids`, `attribution_stamps_events`, `observers_hear_every_change`, `local_issue_count_tracks_creates`.
+`create_read_roundtrip`, `create_defaults`, `create_requires_title`, `create_normalizes_topic`, `create_under_missing_parent_is_not_found`, `get_missing_issue_is_not_found`, `apply_field_patch`, `an_assignee_no_filter_can_select_is_refused`, `apply_status_transition`, `apply_missing_issue_is_not_found`, `apply_to_container_is_refused`, `apply_to_frozen_names_the_thaw`, `container_state_follows_live_children`, `history_records_mutations`, `a_phase_move_records_its_event`, `every_editable_field_records_history`, `a_new_checkout_taking_a_ticket_records`, `a_reported_handover_is_the_one_recorded`, `one_issues_history_matches_the_whole_log`, `list_defaults_to_rank_order`, `list_filters_select`, `list_by_parent`, `list_hides_archived_and_deleted`, `list_sorts_and_limits`, `list_breaks_sort_ties_by_id`, `list_orders_by_each_value_key`, `list_sorts_status_by_derived_state`, `stamps_come_from_the_clock_the_engine_was_given`, `list_orders_timestamps_by_instant_not_spelling`, `events_are_totally_ordered`, `rank_intents_reorder`, `rank_intents_resolve_across_frames`, `rank_to_edge_stays_inside_its_frame`, `rank_to_edge_ignores_a_deleted_frame_mate`, `create_at_top_files_inside_its_frame`, `create_at_top_of_an_empty_frame_takes_a_distinct_key`, `placing_at_a_frame_edge_keeps_the_key_beside_its_frame`, `a_relative_move_keeps_every_rank_distinct`, `rank_set_imposes_order`, `rank_set_stays_inside_its_frame`, `rank_set_over_a_whole_frame_permutes_its_keys`, `rank_verbs_refuse_a_deleted_issue`, `a_container_lists_before_everything_inside_it`, `close_redirects_to_a_canonical`, `follow_ups_link_both_ways`, `a_purge_removes_the_issue_and_everything_it_owns`, `a_purge_refuses_a_container_that_holds_tickets`, `a_purge_of_a_missing_issue_is_not_found`, `a_purged_id_is_never_minted_again`, `comments_roundtrip`, `a_plan_review_judges_one_version`, `labels_roundtrip`, `relations_roundtrip`, `relations_batch_buckets_edges`, `rank_inversions_read_tree_order`, `interleaved_epics_hold_no_rank_inversion`, `parent_wiring`, `every_ticket_lives_inside_a_container`, `an_import_file_that_breaks_a_rule_is_refused_whole`, `a_bulk_file_refused_at_a_write_applies_no_update`, `the_hierarchy_stays_a_tree`, `blocks_never_runs_along_the_hierarchy`, `blocks_never_orders_two_leaves_of_one_epic`, `topics_derive_from_issues`, `issue_identities_cover_every_row`, `export_carries_whole_store`, `bulk_apply_creates_and_updates`, `bulk_apply_compensates_a_failed_batch`, `import_tree_maps_local_ids`, `attribution_stamps_events`, `observers_hear_every_change`, `local_issue_count_tracks_creates`.
 
 ### 3.3 Every enforced invariant, by case
 
 **`create_read_roundtrip`**
-- Surrounding whitespace is stripped on the way in for `Title`, `Description`, `Prompt`.
-- A `GetIssue` read returns the *same* record, field for field: `ID`, `Title`, `Description`, `Prompt`, `Topic`, `Assignee`, `Lane`, `IssueType`, `State()`.
+- Surrounding whitespace is stripped on the way in for `Title`, `Description`, `Prompt`, `Plan`.
+- A `GetIssue` read returns the *same* record, field for field: `ID`, `Title`, `Description`, `Prompt`, `Plan`, `Topic`, `Assignee`, `Lane`, `IssueType`, `State()`.
 - A create with `IssueType: model.TypeBug` reads back `bug`, and `State()` is `open`.
 - `Priority` survives as `PriorityUrgent`.
 - `Labels: []string{"perf"}` reads back as `["perf"]`.
@@ -1139,9 +1197,9 @@ Stated in `internal/storage/memory/doc.go`:
 - After `Reopen`, `SetPhase{PhaseImpl}` is a `model.ValidationError`; after a later `Start`, the phase is `plan`.
 
 **`every_editable_field_records_history`**
-- For each of eight fields, a fresh `TypeTask` child of one epic is created and given a one-field `UpdateIssueInput` patch (`Actor: "ada"`); each `Apply` succeeds.
+- For each of nine fields, a fresh `TypeTask` child of one epic is created and given a one-field `UpdateIssueInput` patch (`Actor: "ada"`); each `Apply` succeeds.
 - After each patch, the change rows across all of that issue's `ListEvents` include a `FieldChange` whose `Field` is the patched field name.
-- That row's `To` is the expected value: `title` → `"retitled"`, `description` → `"described"`, `prompt` → `"render at 1024x768"`, `issue_type` (`model.TypeBug`) → `"bug"`, `priority` (`model.PriorityUrgent`) → `"1"`, `assignee` → `"ada"`, `lane` → `"left"`, `labels` (`["beta"]`) → `"beta"`.
+- That row's `To` is the expected value: `title` → `"retitled"`, `description` → `"described"`, `prompt` → `"render at 1024x768"`, `plan` → `"drop the cache"`, `issue_type` (`model.TypeBug`) → `"bug"`, `priority` (`model.PriorityUrgent`) → `"1"`, `assignee` → `"ada"`, `lane` → `"left"`, `labels` (`["beta"]`) → `"beta"`.
 
 **`a_new_checkout_taking_a_ticket_records`**
 - An epic and a child; `AttributeTo("checkout-a")`, then `Start{Assignee: "ada"}` (`Actor: "ada"`) on the child. A second identical `Start` from the same checkout leaves the `ListAllEvents` count unchanged.
@@ -1331,9 +1389,10 @@ Stated in `internal/storage/memory/doc.go`:
 
 **`a_purge_removes_the_issue_and_everything_it_owns`** (`internal/storage/conformance/purge.go`)
 - With the clock pinned, `Purge` returns the record `{IssueID, IssueCreatedAt: the issue's CreatedAt, PurgedAt: the pinned instant, PurgedBy: the input actor}`.
-- The counts are exactly the purged issue's comments (1), labels (1), relations at either end (3: its parent edge, the blocked-by edge it holds, the blocked-by edge onto it — a related-to edge between two other issues is not counted), and events (its whole history, non-empty).
+- The purged issue and one other issue each carry a plan and one `pass` review naming that plan's digest.
+- The counts are exactly the purged issue's comments (1), labels (1), relations at either end (3: its parent edge, the blocked-by edge it holds, the blocked-by edge onto it — a related-to edge between two other issues is not counted), events (its whole history, non-empty), and plan reviews (1).
 - `GetIssue(purged)` → `NotFoundError{Entity: "issue"}`.
-- The export holds no issue, relation, comment, label, or event of the purged id, and exactly one purge record, equal to the returned one.
+- The export holds no issue, relation, comment, label, event, or plan review of the purged id, and exactly one purge record, equal to the returned one.
 - Every other issue's title, description, `follows_up`, and redirect target, and every other comment's body, are unchanged — a follow-up keeps `FollowsUp` naming the purged id and a duplicate keeps its redirect target naming it.
 
 **`a_purge_refuses_a_container_that_holds_tickets`** (`internal/storage/conformance/purge.go`)
@@ -1355,6 +1414,17 @@ Stated in `internal/storage/memory/doc.go`:
 - After delete, `GetIssueDetail.Comments` is empty.
 - `DeleteComment("no-such-comment")` → `NotFoundError{Entity: "comment"}`.
 - `AddComment` on a missing issue → `NotFoundError{Entity: "issue"}`.
+
+**`a_plan_review_judges_one_version`**
+- An issue is created with plan `"add a retry"`, then patched to `"remove the retry"`, so its plan has two versions.
+- With the clock pinned to `laterInstant`, `AddPlanReview{Plan: DigestPlan("add a retry"), Verdict: "fail", Laws: ["one-source-of-truth", "carrying-cost", "one-source-of-truth"], CreatedBy: " grace "}` returns a review with the issue's id, a non-empty `ID`, `PlanDigest == model.DigestPlan("add a retry")`, `Verdict` `fail`, `CreatedBy` `"grace"`, and `Laws` `["carrying-cost", "one-source-of-truth"]` — sorted, each once.
+- Each of these is refused (`assertRefused`): verdict `"maybe"`; a `fail` with law `"a,b"`; a `fail` citing no law; `Plan: "v2"`.
+- The digest of a text the plan never held → `storage.PlanDigestNotFoundError` with the issue's id and that digest.
+- `AddPlanReview` on a missing issue → `NotFoundError{Entity: "issue"}`.
+- With the clock pinned to `earlierInstant`, `AddPlanReview{Plan: " " + DigestPlan("remove the retry") + " ", Verdict: "pass"}` judges `"remove the retry"` and cites no law.
+- Writing through the returned fail's `Laws` does not change the stored review's laws.
+- `GetIssueDetail.PlanReviews` holds the pass then the fail — oldest first by instant, though the fail was recorded first and the earlier instant's RFC3339Nano spelling sorts after the later one's. Of them, `Judges(current plan)` selects only the pass while the plan is `"remove the retry"`; none after the plan is revised to a third text; only the fail after the plan returns to `"add a retry"`.
+- `Export.PlanReviews` holds both, the pass first.
 
 **`labels_roundtrip`**
 - `AddLabel` returns the resulting set.

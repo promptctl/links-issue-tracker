@@ -301,11 +301,16 @@ func rankPlacement(top bool) storage.RankPlacement {
 	return unflagged
 }
 
+// planUsage is the one help line for --plan, on every command that writes a
+// plan.
+const planUsage = "How the work will be done, for a law review before it starts: the mechanism it touches, what it adds there, what it removes. Each edit is a new version; `lit verdict` records a review of one"
+
 func newLeaf() appLeaf {
 	fs := newCobraFlagSet("new")
 	title := fs.String("title", "", "Issue title")
 	description := registerLongText(fs, "description", "Issue description")
 	prompt := registerLongText(fs, "prompt", "Reusable agent prompt for the work this issue captures")
+	plan := registerLongText(fs, "plan", planUsage)
 	issueType := fs.String("type", string(model.TypeTask), "Issue type: "+issueTypeChoices())
 	topic := fs.String("topic", "", "Required immutable issue topic slug (1-2 words; stable area of focus; e.g., 'refactor' or 'field-history')")
 	parentID := fs.String("parent", "", "Epic the ticket lives inside — required for every type but epic, which may be top-level or inside another epic; child IDs become parentID.<hash>")
@@ -328,7 +333,7 @@ func newLeaf() appLeaf {
 			return err
 		}
 		issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
-			Title: *title, Description: description.value(), Prompt: prompt.value(), IssueType: issueTypeValue, Topic: *topic, ParentID: *parentID, Priority: priorityValue, Assignee: strings.TrimSpace(*assignee), Labels: splitCSV(*labels), Lane: *lane,
+			Title: *title, Description: description.value(), Prompt: prompt.value(), Plan: plan.value(), IssueType: issueTypeValue, Topic: *topic, ParentID: *parentID, Priority: priorityValue, Assignee: strings.TrimSpace(*assignee), Labels: splitCSV(*labels), Lane: *lane,
 			Placement: rankPlacement(*top),
 			Prefix:    prefix.Value(),
 		})
@@ -1307,6 +1312,7 @@ func updateLeaf() appLeaf {
 	title := fs.String("title", "", "Issue title")
 	description := registerLongText(fs, "description", "Issue description")
 	prompt := registerLongText(fs, "prompt", "Reusable agent prompt for the work this issue captures")
+	plan := registerLongText(fs, "plan", planUsage)
 	issueType := fs.String("type", "", "Issue type: "+issueTypeChoices())
 	priority := fs.String("priority", model.PriorityNormal.String(), "Priority: "+priorityChoices()) // [LAW:one-source-of-truth] default derives from model constant; matches runNew/runFollowup
 	assignee := fs.String("assignee", "", "Assignee")
@@ -1318,10 +1324,10 @@ func updateLeaf() appLeaf {
 	fs.String("status", "", "(removed) change status with the transition verbs: lit start|done|close|open")
 	reason := fs.String("reason", "", "Reason recorded on the field-change event")
 	resolveActor := registerActor(fs)
-	// update takes eleven value flags, past the point where the derived fallback
+	// update takes twelve value flags, past the point where the derived fallback
 	// stops naming them and points at --help. Its own sentence names them all, so
 	// it supplies it rather than taking the fallback. [LAW:one-source-of-truth]
-	usage := "usage: lit update <id> [--title <text>] [--description <text> | --description-file <path|->] [--prompt <text> | --prompt-file <path|->] [--type <task|feature|bug|chore|epic>] [--priority <" + priorityChoices() + ">] [--assignee <user>] [--labels <csv>] [--lane <key>] [--reason <text>]"
+	usage := "usage: lit update <id> [--title <text>] [--description <text> | --description-file <path|->] [--prompt <text> | --prompt-file <path|->] [--plan <text> | --plan-file <path|->] [--type <task|feature|bug|chore|epic>] [--priority <" + priorityChoices() + ">] [--assignee <user>] [--labels <csv>] [--lane <key>] [--reason <text>]"
 	return appLeaf{fs: fs, positionals: 1, usage: usage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		if len(positional) != 1 {
 			return UsageError{Message: usage}
@@ -1357,6 +1363,7 @@ func updateLeaf() appLeaf {
 		}
 		in.Fields.Description = description.text
 		in.Fields.Prompt = prompt.text
+		in.Fields.Plan = plan.text
 		if visited["type"] {
 			value, err := model.ParseIssueType(*issueType)
 			if err != nil {

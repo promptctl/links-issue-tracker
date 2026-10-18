@@ -294,6 +294,7 @@ func (e *Engine) writeIssue(rec *record, issue model.Issue) {
 	rec.title = issue.Title
 	rec.description = issue.Description
 	rec.prompt = issue.Prompt
+	rec.plan = issue.Plan
 	rec.issueType = issue.IssueType
 	rec.priority = issue.Priority
 	rec.assignee = issue.Assignee

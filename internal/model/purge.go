@@ -120,6 +120,7 @@ func (e Export) ApplyPurges(purges []Purge) Export {
 	out.Comments = keepRows(e.Comments, func(c Comment) bool { return kept(c.IssueID) })
 	out.Labels = keepRows(e.Labels, func(l Label) bool { return kept(l.IssueID) })
 	out.Events = keepRows(e.Events, func(ev IssueEvent) bool { return kept(ev.IssueID) })
+	out.PlanReviews = keepRows(e.PlanReviews, func(r PlanReview) bool { return kept(r.IssueID) })
 	return out
 }
 

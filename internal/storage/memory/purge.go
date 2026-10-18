@@ -9,7 +9,7 @@ import (
 )
 
 // Purge removes the issue from every structure that holds it — the record, its
-// place in the rank order, its comments, labels, history, and every edge with
+// place in the rank order, its comments, plan reviews, labels, history, and every edge with
 // it at either end — and keeps the purge record, under the one hold, so no
 // reader sees the issue half gone.
 func (e *Engine) Purge(ctx context.Context, in storage.PurgeInput) (storage.PurgeResult, error) {
@@ -25,6 +25,7 @@ func (e *Engine) Purge(ctx context.Context, in storage.PurgeInput) (storage.Purg
 	}
 	var result storage.PurgeResult
 	e.comments, result.Comments = removeWhere(e.comments, func(c model.Comment) bool { return c.IssueID == id })
+	e.planReviews, result.PlanReviews = removeWhere(e.planReviews, func(r model.PlanReview) bool { return r.IssueID == id })
 	result.Relations = e.dropRelations(func(r model.Relation) bool { return r.SrcID == id || r.DstID == id })
 	result.Events = len(e.events[id])
 	delete(e.events, id)

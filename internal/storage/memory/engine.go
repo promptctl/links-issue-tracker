@@ -74,6 +74,10 @@ type Engine struct {
 	// be deriving the same fact twice.
 	labels map[string][]model.Label
 
+	// planReviews are the law reviews of every issue's plan, in the order they
+	// were recorded; a read orders them by storage.PlanReviewOrdering.
+	planReviews []model.PlanReview
+
 	// purges are the records of the tickets this engine has purged. A purged
 	// ticket holds no row anywhere above, and its id is never minted again.
 	purges []model.Purge
@@ -91,6 +95,7 @@ type record struct {
 	title       string
 	description string
 	prompt      string
+	plan        string
 	issueType   model.IssueType
 	topic       string
 	assignee    string
@@ -211,6 +216,7 @@ func (e *Engine) hydrate(rec *record, pos map[string]int) (model.Issue, error) {
 		Title:       rec.title,
 		Description: rec.description,
 		Prompt:      rec.prompt,
+		Plan:        rec.plan,
 		Priority:    rec.priority,
 		IssueType:   rec.issueType,
 		Topic:       rec.topic,
@@ -347,9 +353,10 @@ func (e *Engine) recordEvents(issueID string, specs []eventSpec, now time.Time) 
 // The copy goes one level deeper than the slice, and that depth is the whole
 // point: model.IssueEvent carries its field changes in a slice, so handing
 // back the stored value would hand back a window into this engine's history
-// that a caller could write through. Every other model value crossing this
-// boundary is composed fresh or is a plain value; this is the one that would
-// have aliased. [LAW:no-shared-mutable-globals]
+// that a caller could write through. A plan review's laws are the other
+// stored slice, and clonePlanReviews copies them the same way; every other
+// model value crossing this boundary is composed fresh or is a plain value.
+// [LAW:no-shared-mutable-globals]
 func cloneEvents(events []model.IssueEvent) []model.IssueEvent {
 	out := make([]model.IssueEvent, 0, len(events))
 	for _, event := range events {

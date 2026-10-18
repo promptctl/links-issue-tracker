@@ -244,10 +244,33 @@ set and carries its refusal instead.
 | `phase.to` | The phase the command moved it to, the one `--to` names. |
 | `phase.changed` | `false` when the issue was already in that phase, so nothing was recorded; `true` otherwise. |
 
+## What `lit verdict` records
+
+A recorded verdict sets these keys; a refused one has none of them.
+
+| Key | Meaning |
+| --- | --- |
+| `verdict.value` | `pass` or `fail`. |
+| `verdict.plan_digest` | The digest of the plan text the review judged, the one `--plan` names. |
+| `verdict.laws` | How many laws the verdict cites, each counted once. |
+
+## What `lit purge` records
+
+A purge counts, under `counts`, the rows that went with the issue.
+
+| Key | Meaning |
+| --- | --- |
+| `purge.comments` | Comments removed. |
+| `purge.plan_reviews` | Plan reviews removed. |
+| `purge.labels` | Labels removed. |
+| `purge.edges` | Edges to or from the issue removed. |
+| `purge.events` | History events removed. |
+
 ## What a long-text field records
 
 `lit new`, `lit followup` and `lit update` record where their `--description` and
-`--prompt` came from, and `lit comment add` records its `--body` the same way.
+`--prompt` came from, `lit new` and `lit update` their `--plan` after those, and
+`lit comment add` records its `--body` the same way.
 Fields are read in that order, and a refusal stops the reading. A field given both
 ways, or one of two fields naming stdin, is refused before its key is set. A path
 that cannot be read, or a file or stdin whose text is blank, is refused with its

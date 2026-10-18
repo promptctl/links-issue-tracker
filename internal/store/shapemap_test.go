@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -303,7 +304,7 @@ func TestDeterministicMapCleanAhead(t *testing.T) {
 	const ws = "test-workspace-id"
 
 	wantIDs := map[string]bool{}
-	var purgedID string
+	var purgedID, soloID, reviewID string
 	withStore(t, ctx, src, func(st *Store) {
 		epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "Epic", IssueType: "epic", Topic: "recovery", Prefix: "links"})
 		if err != nil {
@@ -313,10 +314,16 @@ func TestDeterministicMapCleanAhead(t *testing.T) {
 		if err != nil {
 			t.Fatalf("create child: %v", err)
 		}
-		solo, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "Solo task", IssueType: "task", Topic: "recovery", Prefix: "links", ParentID: epic.ID, Lane: "solo"})
+		solo, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "Solo task", IssueType: "task", Topic: "recovery", Prefix: "links", ParentID: epic.ID, Lane: "solo", Plan: "solo plan"})
 		if err != nil {
 			t.Fatalf("create solo: %v", err)
 		}
+		soloID = solo.ID
+		review, err := st.AddPlanReview(ctx, storage.AddPlanReviewInput{IssueID: solo.ID, Plan: string(model.DigestPlan("solo plan")), Verdict: "fail", Laws: []string{"one-source-of-truth"}, CreatedBy: "claude"})
+		if err != nil {
+			t.Fatalf("add plan review: %v", err)
+		}
+		reviewID = review.ID
 		if _, _, err := st.AddComment(ctx, storage.AddCommentInput{IssueID: child.ID, Body: "a note", CreatedBy: "claude"}); err != nil {
 			t.Fatalf("add comment: %v", err)
 		}
@@ -376,6 +383,20 @@ func TestDeterministicMapCleanAhead(t *testing.T) {
 	if findings := countFindings(dump, mapping, export); len(findings) != 0 {
 		t.Fatalf("count conservation findings = %+v, want none", findings)
 	}
+	// The authored text of a ticket and the reviews of its plan cross the
+	// lifeboat with it: a salvage that dropped them would lose work nobody can
+	// derive again.
+	assertSoloSurvives := func(where string, issues []model.Issue, reviews []model.PlanReview) {
+		t.Helper()
+		at := slices.IndexFunc(issues, func(issue model.Issue) bool { return issue.ID == soloID })
+		if at < 0 || issues[at].Lane != "solo" || issues[at].Plan != "solo plan" {
+			t.Fatalf("%s: solo issue = %+v, want lane solo and its plan", where, issues)
+		}
+		if len(reviews) != 1 || reviews[0].ID != reviewID || reviews[0].Verdict != model.PlanFail || !slices.Equal(reviews[0].Laws, []model.Law{"one-source-of-truth"}) || !reviews[0].Judges("solo plan") {
+			t.Fatalf("%s: plan reviews = %+v, want the fail of solo's plan", where, reviews)
+		}
+	}
+	assertSoloSurvives("map+apply", export.Issues, export.PlanReviews)
 
 	dst := filepath.Join(t.TempDir(), "dst")
 	withStore(t, ctx, dst, func(st *Store) {
@@ -403,6 +424,7 @@ func TestDeterministicMapCleanAhead(t *testing.T) {
 		if len(rebuilt.Purges) != 1 || rebuilt.Purges[0].IssueID != purgedID {
 			t.Fatalf("rebuilt purges = %+v, want the record of %s", rebuilt.Purges, purgedID)
 		}
+		assertSoloSurvives("rebuilt", rebuilt.Issues, rebuilt.PlanReviews)
 	})
 }
 

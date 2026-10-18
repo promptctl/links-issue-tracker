@@ -39,7 +39,7 @@ data — described as assets, not as documentation of behavior).
 | 1 | `ExitGeneric` (`exit.go`) | default; also `BulkFailureError` (`exit.go`), `store.ErrTransientGCContention` (`exit.go`) |
 | 2 | `ExitUsage` (`exit.go`) | `UsageError` (`exit.go`) |
 | 3 | `ExitValidation` (`exit.go`) | `templateShapeError` (`exit.go`), `UnknownCommandError` (`exit.go`), `RetiredCommandError` (`exit.go`), any `model.Refusal` — `model.ValidationError`, `model.FrozenIssueError`, and the upgrade/downgrade target refusals (`exit.go`), any `model.StateRequestError` — `model.ContainerActionError`, `lifecycle.RetentionError` — when not `Satisfied()` (`exit.go`), `UnsupportedError` (`exit.go`), `takeoverUnconfirmedError` (`exit.go`), `purgeUnconfirmedError` (`exit.go`), `OutsideWorkspaceError` (`exit.go`), `store.ErrWorkspaceNotInitialized` (`exit.go`), any `model.SchemaAhead` — `*store.UnsupportedSchemaVersionError`, `*store.DowngradeSpanUnsupportedError`, `*store.RemoteSchemaAheadError`, which a remote-schema-ahead `SyncFailureError` unwraps to (`exit.go`), `*store.QuarantineBlockError` (`exit.go`), `workspace.ErrIssuePrefixRefused` (`exit.go`) |
-| 4 | `ExitNotFound` (`exit.go`) | `storage.NotFoundError` (`exit.go`), `VersionNotFoundError` (`exit.go`) |
+| 4 | `ExitNotFound` (`exit.go`) | `storage.NotFoundError` (`exit.go`), `storage.VersionNotFoundError` (`exit.go`) |
 | 5 | `ExitConflict` (`exit.go`) | `MergeConflictError` (`exit.go`), `SyncFailureError` except one that unwraps to a `model.SchemaAhead` (`exit.go`), `ownerApprovalRefusalError` (`exit.go`) |
 | 6 | `ExitNoWork` (`exit.go`) | `Exhausted` (`exit.go`), `NoWork` (`exit.go`), any `model.StateRequestError` when `Satisfied()` (`exit.go`) |
 | 7 | `ExitCorruption` (`exit.go`) | `CorruptionError` (`exit.go`) |

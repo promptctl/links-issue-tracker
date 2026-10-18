@@ -209,6 +209,9 @@ func printIssueDetail(w io.Writer, detail model.IssueDetail) error {
 			return err
 		}
 	}
+	if err := printCurrentPlan(w, detail); err != nil {
+		return err
+	}
 	if err := printIssueGroup(w, "children", detail.Children); err != nil {
 		return err
 	}
@@ -268,7 +271,7 @@ func printIssueDetail(w io.Writer, detail model.IssueDetail) error {
 // issueFieldNames is the single definition of which field names `lit show
 // --field` accepts and how each renders. It overlaps the --columns vocabulary
 // (columns.go) without matching it: it also exposes the multi-line fields
-// (description, prompt) the field-limited view exists to serve, which a
+// (description, prompt, plan) the field-limited view exists to serve, which a
 // single-line table row cannot carry, and it does not name the relationship
 // columns, which are not the issue's own fields. That the two vocabularies
 // differ is why `--columns` must name the ones it rejects — `status` and
@@ -279,6 +282,7 @@ var issueFieldNames = map[string]func(model.IssueDetail) string{
 	"title":       func(d model.IssueDetail) string { return d.Issue.Title },
 	"description": func(d model.IssueDetail) string { return d.Issue.Description },
 	"prompt":      func(d model.IssueDetail) string { return d.Issue.Prompt },
+	"plan":        func(d model.IssueDetail) string { return d.Issue.Plan },
 	"type":        func(d model.IssueDetail) string { return string(d.Issue.IssueType) },
 	"topic":       func(d model.IssueDetail) string { return d.Issue.Topic },
 	"priority":    func(d model.IssueDetail) string { return d.Issue.Priority.String() },
@@ -348,20 +352,30 @@ func printIssueFields(w io.Writer, detail model.IssueDetail, fields []string) er
 	return nil
 }
 
-// printHistoryEvents renders the field-level transition trail: one
+// printHistoryTrail renders the transition trail: one
 // "- [actor @ time] action reason" line per event, followed by that event's
-// indented change lines. A short field's change reads "field: from → to"; a
-// long text field's reads "field: vN → vM", the numbers its entry in versions
-// gives each text, so the trail says that the text moved without reprinting
-// every text it ever held. This is the single definition of how the transition
-// trail is formatted; the dedicated `lit history` command (printIssueHistory)
-// is its only caller. [LAW:one-source-of-truth] one renderer, so the trail
-// can never render two ways; [LAW:decomposition] carved at the event/detail
-// joint, ready for any future surface that needs the same trail.
+// indented change lines, with each plan review's line placed among the events
+// at the time it was recorded. A short field's change reads "field: from →
+// to"; a long text field's reads "field: vN → vM", the numbers its entry in
+// versions gives each text, so the trail says that the text moved without
+// reprinting every text it ever held. A review names the plan version it
+// judged by the same numbers, and never prints the plan's text. This is the
+// single definition of how the transition trail is formatted; the dedicated
+// `lit history` command (printIssueHistory) is its only caller.
+// [LAW:one-source-of-truth] one renderer, so the trail can never render two
+// ways; [LAW:decomposition] carved at the event/detail joint, ready for any
+// future surface that needs the same trail.
 //
 // Every value on a row goes through singleLine, so each event is one row and
 // each change one row beneath it, whatever text the event carries.
-func printHistoryEvents(w io.Writer, events []model.IssueEvent, versions map[string][]string) error {
+func printHistoryTrail(w io.Writer, events []model.IssueEvent, reviews []model.PlanReview, versions map[string][]string) error {
+	// One timed row per event and per review, sorted stably by time: on a tie
+	// the event, written first, stays first.
+	type row struct {
+		at   time.Time
+		text string
+	}
+	rows := make([]row, 0, len(events)+len(reviews))
 	for _, event := range events {
 		// Plain field updates carry no Action; "update" is their display label.
 		// [LAW:dataflow-not-control-flow] absence of intent is data, not a mode.
@@ -369,17 +383,25 @@ func printHistoryEvents(w io.Writer, events []model.IssueEvent, versions map[str
 		if action == "" {
 			action = "update"
 		}
-		if _, err := fmt.Fprintf(w, "- [%s @ %s] %s %s\n", singleLine(event.Actor), formatHistoryTimestamp(event.CreatedAt), singleLine(action), singleLine(event.Reason)); err != nil {
-			return err
-		}
+		text := fmt.Sprintf("- [%s @ %s] %s %s\n", singleLine(event.Actor), formatHistoryTimestamp(event.CreatedAt), singleLine(action), singleLine(event.Reason))
 		for _, change := range event.Changes {
 			from, to := emptyDash(change.From), emptyDash(change.To)
 			if texts, long := versions[change.Field]; long {
 				from, to = versionLabel(texts, change.From), versionLabel(texts, change.To)
 			}
-			if _, err := fmt.Fprintf(w, "    %s: %s → %s\n", singleLine(change.Field), singleLine(from), singleLine(to)); err != nil {
-				return err
-			}
+			text += fmt.Sprintf("    %s: %s → %s\n", singleLine(change.Field), singleLine(from), singleLine(to))
+		}
+		rows = append(rows, row{at: event.CreatedAt, text: text})
+	}
+	plans := versions[storage.PlanField().Name]
+	for _, review := range reviews {
+		rows = append(rows, row{at: review.CreatedAt, text: fmt.Sprintf("- [%s @ %s] verdict %s on plan %s — laws: %s\n",
+			singleLine(review.CreatedBy), formatHistoryTimestamp(review.CreatedAt), review.Verdict, planVersionLabel(plans, review.PlanDigest), joinLaws(review.Laws))})
+	}
+	slices.SortStableFunc(rows, func(a, b row) int { return a.at.Compare(b.at) })
+	for _, row := range rows {
+		if _, err := io.WriteString(w, row.text); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -414,14 +436,14 @@ func printIssueHistory(w io.Writer, detail model.IssueDetail) error {
 	versions := map[string][]string{}
 	var superseded []string
 	for _, field := range storage.LongTextFields() {
-		texts := textVersions(detail, field)
+		texts := storage.TextVersions(detail.Issue, detail.Events, field)
 		versions[field.Name] = texts
 		current := field.Current(detail.Issue)
 		if slices.ContainsFunc(texts, func(text string) bool { return text != current }) {
-			superseded = append(superseded, fmt.Sprintf("    %s: %s — lit history %s --version %s@<n> prints one\n", field.Name, describeVersions(len(texts)), id, field.Name))
+			superseded = append(superseded, fmt.Sprintf("    %s: %s — lit history %s --version %s@<n> prints one\n", field.Name, storage.DescribeVersions(len(texts)), id, field.Name))
 		}
 	}
-	if err := printHistoryEvents(w, detail.Events, versions); err != nil {
+	if err := printHistoryTrail(w, detail.Events, detail.PlanReviews, versions); err != nil {
 		return err
 	}
 	if len(superseded) == 0 {
@@ -431,33 +453,60 @@ func printIssueHistory(w io.Writer, detail model.IssueDetail) error {
 	return err
 }
 
-// textVersions is every text a long text field is recorded holding, each
-// once, numbered from 1 in the order its record first shows it: the texts
-// the trail's changes move between, then the current text if the trail never
-// reaches it. Each text has one number, so two edits made at once on two
-// machines and merged by sync both step from the number of the text they
-// started from, and a change back to an earlier text returns to its number.
-// The numbers follow the record's order, so a sync that merges in an edit
-// older than ones already here renumbers the texts after it. The empty text is no version; the trail shows it as -, as it
-// shows an empty short field. A field never changed has one version, its
-// current text.
-func textVersions(detail model.IssueDetail, field storage.LongTextField) []string {
-	var texts []string
-	record := func(text string) {
-		if text != "" && !slices.Contains(texts, text) {
-			texts = append(texts, text)
+// printCurrentPlan prints the plan as it stands, under the version number lit
+// history shows it by and the digest lit verdict names it by, and the reviews
+// of that version — the verdicts that
+// speak to the plan a reader is looking at. Reviews of other versions say
+// nothing about this one, and live in lit history. No plan prints nothing.
+func printCurrentPlan(w io.Writer, detail model.IssueDetail) error {
+	plan := detail.Issue.Plan
+	if plan == "" {
+		return nil
+	}
+	digest := model.DigestPlan(plan)
+	label := planVersionLabel(storage.TextVersions(detail.Issue, detail.Events, storage.PlanField()), digest)
+	if _, err := fmt.Fprintf(w, "\nplan (%s, digest %s):\n%s\n", label, digest, plan); err != nil {
+		return err
+	}
+	var current []model.PlanReview
+	for _, review := range detail.PlanReviews {
+		if review.Judges(plan) {
+			current = append(current, review)
 		}
 	}
-	for _, event := range detail.Events {
-		for _, change := range event.Changes {
-			if change.Field == field.Name {
-				record(change.From)
-				record(change.To)
-			}
+	if len(current) == 0 {
+		_, err := fmt.Fprintf(w, "reviews of plan %s: none — lit verdict records one\n", label)
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "reviews of plan %s:\n", label); err != nil {
+		return err
+	}
+	for _, review := range current {
+		if _, err := fmt.Fprintf(w, "- %s [%s @ %s] laws: %s\n", review.Verdict, singleLine(review.CreatedBy), formatHistoryTimestamp(review.CreatedAt), joinLaws(review.Laws)); err != nil {
+			return err
 		}
 	}
-	record(field.Current(detail.Issue))
-	return texts
+	return nil
+}
+
+// planVersionLabel is how a plan version reads wherever a review names it: v
+// and the number texts, the plan's versions, gives the text whose digest it
+// is.
+func planVersionLabel(texts []string, digest model.PlanDigest) string {
+	at := slices.IndexFunc(texts, func(text string) bool { return model.DigestPlan(text) == digest })
+	if at < 0 {
+		return "of a text its history does not hold (" + string(digest) + ")"
+	}
+	return "v" + strconv.Itoa(at+1)
+}
+
+// joinLaws is how a review's cited laws read: comma-separated, or - for none.
+func joinLaws(laws []model.Law) string {
+	tokens := make([]string, len(laws))
+	for i, law := range laws {
+		tokens[i] = string(law)
+	}
+	return emptyDash(strings.Join(tokens, ", "))
 }
 
 // versionLabel is how the trail shows one text of a long text field: v and
@@ -467,13 +516,6 @@ func versionLabel(texts []string, text string) string {
 		return "-"
 	}
 	return "v" + strconv.Itoa(slices.Index(texts, text)+1)
-}
-
-func describeVersions(count int) string {
-	if count == 1 {
-		return "1 version"
-	}
-	return fmt.Sprintf("%d versions", count)
 }
 
 // versionRef names one recorded text of a long text field, written
@@ -507,29 +549,12 @@ func parseVersionRef(raw string) (versionRef, error) {
 // bare, so it round-trips into `lit update --description` the way
 // `lit show --field` output does.
 func printFieldVersion(w io.Writer, detail model.IssueDetail, ref versionRef) error {
-	texts := textVersions(detail, ref.field)
+	texts := storage.TextVersions(detail.Issue, detail.Events, ref.field)
 	if ref.number > len(texts) {
-		return VersionNotFoundError{IssueID: detail.Issue.ID, Field: ref.field.Name, Number: ref.number, Held: len(texts)}
+		return storage.VersionNotFoundError{IssueID: detail.Issue.ID, Field: ref.field.Name, Number: ref.number, Held: len(texts)}
 	}
 	_, err := fmt.Fprintln(w, texts[ref.number-1])
 	return err
-}
-
-// VersionNotFoundError is a --version reference past the versions an issue's
-// record holds. It is not storage.NotFoundError: that one's remediation sends
-// the caller to check the issue id, and here the id resolved — what is missing
-// is the version, and the message says how many there are and where the
-// current text is. [LAW:one-type-per-behavior]
-type VersionNotFoundError struct {
-	IssueID string
-	Field   string
-	Number  int
-	Held    int
-}
-
-func (e VersionNotFoundError) Error() string {
-	return fmt.Sprintf("%s has no %s@%d: its record holds %s of %s, numbered from 1; `lit show %s --field %s` prints the current text",
-		e.IssueID, e.Field, e.Number, describeVersions(e.Held), e.Field, e.IssueID, e.Field)
 }
 
 // optionalGroup adapts a single optional issue — a redirect target, a parent —

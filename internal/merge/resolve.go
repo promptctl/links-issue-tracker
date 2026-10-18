@@ -18,6 +18,7 @@ const (
 	ProseTitle       ProseField = "title"
 	ProseDescription ProseField = "description"
 	ProsePrompt      ProseField = "agent_prompt"
+	ProsePlan        ProseField = "plan"
 )
 
 // ProsePending is one free-text field that diverged on both sides and was held
@@ -107,6 +108,7 @@ func ResolveIssue(in SameEntity) IssueResolution {
 	merged.Title = r.prose(ProseTitle, r.base.Title, ours.Title, theirs.Title)
 	merged.Description = r.prose(ProseDescription, r.base.Description, ours.Description, theirs.Description)
 	merged.Prompt = r.prose(ProsePrompt, r.base.Prompt, ours.Prompt, theirs.Prompt)
+	merged.Plan = r.prose(ProsePlan, r.base.Plan, ours.Plan, theirs.Plan)
 	merged.Priority = twoTier(r.hasBase, r.base.Priority, ours.Priority, theirs.Priority, higher)
 	merged.Topic = twoTier(r.hasBase, r.base.Topic, ours.Topic, theirs.Topic, r.tiebreak)
 	merged.Lane = twoTier(r.hasBase, r.base.Lane, ours.Lane, theirs.Lane, r.tiebreak)

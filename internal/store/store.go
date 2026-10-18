@@ -585,6 +585,7 @@ func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (m
 		Title:       strings.TrimSpace(in.Title),
 		Description: strings.TrimSpace(in.Description),
 		Prompt:      strings.TrimSpace(in.Prompt),
+		Plan:        strings.TrimSpace(in.Plan),
 		Priority:    in.Priority,
 		IssueType:   issueType,
 		Topic:       topic,
@@ -642,9 +643,9 @@ func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (m
 		}
 		archivedCol, deletedCol := retentionColumns(issue)
 		if _, err := tx.ExecContext(ctx, `INSERT INTO issues(
-			id, title, description, agent_prompt, status, priority, issue_type, topic, assignee, item_rank, lane, follows_up, created_at, updated_at, closed_at, archived_at, deleted_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
-			issue.ID, issue.Title, issue.Description, nullableString(issue.Prompt), statusForStorage(issue), issue.Priority, issue.IssueType, issue.Topic,
+			id, title, description, agent_prompt, work_plan, status, priority, issue_type, topic, assignee, item_rank, lane, follows_up, created_at, updated_at, closed_at, archived_at, deleted_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+			issue.ID, issue.Title, issue.Description, nullableString(issue.Prompt), issue.Plan, statusForStorage(issue), issue.Priority, issue.IssueType, issue.Topic,
 			issue.AssigneeValue(), issue.Rank, issue.Lane, nullableString(issue.FollowsUp), issue.CreatedAt.Format(time.RFC3339Nano), issue.UpdatedAt.Format(time.RFC3339Nano), archivedCol, deletedCol); err != nil {
 			return fmt.Errorf("insert issue: %w", err)
 		}
@@ -810,14 +811,14 @@ func (s *Store) ListIssues(ctx context.Context, filter storage.ListIssuesFilter)
 		return nil, err
 	}
 	for _, term := range storage.TrimmedNonEmpty(filter.SearchTerms) {
-		// Four disjuncts, fixed by the four columns a search term reads, and
-		// they stay four however many terms the caller supplies — an extra term
+		// Five disjuncts, fixed by the five columns a search term reads, and
+		// they stay five however many terms the caller supplies — an extra term
 		// is an extra AND'd clause, never a longer OR. The planner's quadratic
 		// range merge needs a disjunct set that GROWS with caller input, which
 		// is the property this shape lacks; see idBatchSize.
-		where = append(where, "(LOWER(i.title) LIKE ? OR LOWER(i.description) LIKE ? OR LOWER(COALESCE(i.agent_prompt, '')) LIKE ? OR LOWER(i.topic) LIKE ?)")
+		where = append(where, "(LOWER(i.title) LIKE ? OR LOWER(i.description) LIKE ? OR LOWER(COALESCE(i.agent_prompt, '')) LIKE ? OR LOWER(i.work_plan) LIKE ? OR LOWER(i.topic) LIKE ?)")
 		like := "%" + strings.ToLower(term) + "%"
-		args = append(args, like, like, like, like)
+		args = append(args, like, like, like, like, like)
 	}
 	// One query when nothing narrows by id, one per batch when something does,
 	// and NO query at all when the id filters narrowed to the empty set — which
@@ -1096,6 +1097,10 @@ func (s *Store) GetIssueDetail(ctx context.Context, id string) (model.IssueDetai
 	if err != nil {
 		return model.IssueDetail{}, err
 	}
+	planReviews, err := queryPlanReviews(ctx, s.db, "WHERE issue_id = ?", id)
+	if err != nil {
+		return model.IssueDetail{}, err
+	}
 
 	// [LAW:single-enforcer] Hydrate every related issue in one query
 	// rather than running N+1 GetIssue calls. The map lets the relation
@@ -1178,6 +1183,7 @@ func (s *Store) GetIssueDetail(ctx context.Context, id string) (model.IssueDetai
 		Relations:      relations,
 		Comments:       comments,
 		Events:         events,
+		PlanReviews:    planReviews,
 		Children:       structural.Children,
 		Siblings:       siblings,
 		BlockedBy:      structural.BlockedBy,
@@ -1341,8 +1347,8 @@ func (s *Store) applyFieldsTx(ctx context.Context, tx *sql.Tx, w fieldWrite) err
 	// not in planFieldUpdate — so the plan stays a pure function of its inputs.
 	issue, event := s.stampEdit(w.issue, w.reason, w.actor, w.changes)
 	if _, err := tx.ExecContext(ctx, `UPDATE issues SET
-		title = ?, description = ?, agent_prompt = ?, priority = ?, issue_type = ?, assignee = ?, lane = ?, updated_at = ?
-		WHERE id = ?`, issue.Title, issue.Description, nullableString(issue.Prompt), issue.Priority, issue.IssueType, issue.AssigneeValue(), issue.Lane, issue.UpdatedAt.Format(time.RFC3339Nano), issue.ID); err != nil {
+		title = ?, description = ?, agent_prompt = ?, work_plan = ?, priority = ?, issue_type = ?, assignee = ?, lane = ?, updated_at = ?
+		WHERE id = ?`, issue.Title, issue.Description, nullableString(issue.Prompt), issue.Plan, issue.Priority, issue.IssueType, issue.AssigneeValue(), issue.Lane, issue.UpdatedAt.Format(time.RFC3339Nano), issue.ID); err != nil {
 		return fmt.Errorf("update issue: %w", err)
 	}
 	if w.replaceLabels {
@@ -2425,6 +2431,7 @@ type partialIssue struct {
 	Title       string
 	Description string
 	Prompt      string
+	Plan        string
 	Priority    model.Priority
 	IssueType   model.IssueType
 	Topic       string
@@ -2479,7 +2486,7 @@ func nextRankForPlacement(ctx context.Context, tx *sql.Tx, p storage.RankPlaceme
 // site through the derived projections, leaving only the two adjacent scanners
 // to move with it. [LAW:one-source-of-truth] [FRAMING:representation]
 var issueColumns = []string{
-	"id", "title", "description", "agent_prompt", "status", "priority",
+	"id", "title", "description", "agent_prompt", "work_plan", "status", "priority",
 	"issue_type", "topic", "assignee", "item_rank", "lane", "created_at",
 	"updated_at", "closed_at", "resolution", "redirect_target", "follows_up", "archived_at", "deleted_at",
 }
@@ -2516,7 +2523,7 @@ func scanIssue(row issueScanner) (issueRow, error) {
 	var assignee string
 	var createdAt, updatedAt string
 	var closedAt, resolution, redirectTarget, followsUp, archivedAt, deletedAt sql.NullString
-	if err := row.Scan(&issue.ID, &issue.Title, &issue.Description, &prompt, &status, &issue.Priority, &issue.IssueType, &issue.Topic, &assignee, &issue.Rank, &issue.Lane, &createdAt, &updatedAt, &closedAt, &resolution, &redirectTarget, &followsUp, &archivedAt, &deletedAt); err != nil {
+	if err := row.Scan(&issue.ID, &issue.Title, &issue.Description, &prompt, &issue.Plan, &status, &issue.Priority, &issue.IssueType, &issue.Topic, &assignee, &issue.Rank, &issue.Lane, &createdAt, &updatedAt, &closedAt, &resolution, &redirectTarget, &followsUp, &archivedAt, &deletedAt); err != nil {
 		return issueRow{}, err
 	}
 	issue.Prompt = prompt.String
@@ -2532,7 +2539,7 @@ func scanIssueWithParent(row issueScanner) (string, issueRow, error) {
 	var assignee string
 	var createdAt, updatedAt string
 	var closedAt, resolution, redirectTarget, followsUp, archivedAt, deletedAt sql.NullString
-	if err := row.Scan(&parentID, &issue.ID, &issue.Title, &issue.Description, &prompt, &status, &issue.Priority, &issue.IssueType, &issue.Topic, &assignee, &issue.Rank, &issue.Lane, &createdAt, &updatedAt, &closedAt, &resolution, &redirectTarget, &followsUp, &archivedAt, &deletedAt); err != nil {
+	if err := row.Scan(&parentID, &issue.ID, &issue.Title, &issue.Description, &prompt, &issue.Plan, &status, &issue.Priority, &issue.IssueType, &issue.Topic, &assignee, &issue.Rank, &issue.Lane, &createdAt, &updatedAt, &closedAt, &resolution, &redirectTarget, &followsUp, &archivedAt, &deletedAt); err != nil {
 		return "", issueRow{}, err
 	}
 	issue.Prompt = prompt.String
@@ -2663,6 +2670,7 @@ func (s *Store) hydrateIssues(ctx context.Context, rows []issueRow) ([]model.Iss
 			Title:       row.Issue.Title,
 			Description: row.Issue.Description,
 			Prompt:      row.Issue.Prompt,
+			Plan:        row.Issue.Plan,
 			Priority:    row.Issue.Priority,
 			IssueType:   row.Issue.IssueType,
 			Topic:       row.Issue.Topic,

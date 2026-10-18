@@ -176,7 +176,7 @@ Constants (`exit.go`):
 
 `ExitCode(err)` dispatches by `errors.As`, in this order (`exit.go`):
 1. `storage.NotFoundError` → 4 (`exit.go`)
-2. `VersionNotFoundError` → 4 (`exit.go`)
+2. `storage.VersionNotFoundError` → 4 (`exit.go`)
 3. `MergeConflictError` → 5 (`exit.go`)
 4. `model.SchemaAhead` (`*store.UnsupportedSchemaVersionError`, `*store.DowngradeSpanUnsupportedError`, `*store.RemoteSchemaAheadError`, which a remote-schema-ahead `SyncFailureError` unwraps to) → 3 (`exit.go`)
 5. `SyncFailureError` → 5 (`exit.go`)
@@ -224,7 +224,7 @@ rules in `internal/model/validation.go`.
 checks run in this order and the first match wins, so an error that wraps
 several of these types gets the reason of the earliest one:
 1. `storage.NotFoundError` → `entity_not_found`
-2. `VersionNotFoundError` → `version_not_found`
+2. `storage.VersionNotFoundError` → `version_not_found`
 3. `MergeConflictError` → `merge_conflict`
 4. `model.SchemaAhead` (`*store.UnsupportedSchemaVersionError`, `*store.DowngradeSpanUnsupportedError`, `*store.RemoteSchemaAheadError`, which a remote-schema-ahead `SyncFailureError` unwraps to) → `workspace_schema_ahead`
 5. `SyncFailureError` → `sync_divergence`
@@ -268,7 +268,7 @@ empty string means no `remediation:` line is printed:
 - `usage_error`: "Run the command with `--help` and retry with valid arguments."
 - `unsupported_flag`: "Do not retry unchanged — this flag is refused on every run. Drop it and use what the message above names instead."
 - `entity_not_found`: "Verify the target ID exists with `lit ls` or `lit show <id>`."
-- `version_not_found`: "" (empty — the `VersionNotFoundError` message names how many versions there are and where the current text is)
+- `version_not_found`: "" (empty — the `storage.VersionNotFoundError` message names how many versions there are and where the current text is)
 - `merge_conflict`: "Sync and retry after resolving conflicts."
 - `sync_divergence`: "" (empty — the `SyncFailureError` message carries the steps)
 - `remote_unreachable`: "The remote host was unreachable over the network; credentials are not the problem, and lit already retried with backoff. Check connectivity to the remote host (for SSH remotes: `ssh -o BatchMode=yes git@<host>`), then retry once the network path is restored."
@@ -338,7 +338,7 @@ and transitions via the table below.
 `transitionBreadcrumbTopics` (`cli.go`): `start` → `"work"`,
 `done` → `"done"`, `close` → `"done"`. Absent for `open`, `archive`,
 `unarchive`, `delete`, `restore` → no breadcrumb (`cli.go`). `purge` emits no
-breadcrumb (`purge.go`).
+breadcrumb (`purge.go`), and neither does `verdict` (`verdict.go`).
 
 ### 1.13 Sync-staleness banners
 
@@ -370,7 +370,7 @@ Occasion builders (`workflow_events.go`):
   `in_progress`; **panics** on a non-retention action with no entry.
 
 Retention actions (archive/unarchive/delete/restore) fire no event:
-`transitionOccasion` returns `fires = false` for them (`workflow_events.go`). `purge` fires none either (`purge.go`).
+`transitionOccasion` returns `fires = false` for them (`workflow_events.go`). `purge` fires none either (`purge.go`), nor does `verdict` (`verdict.go`).
 
 ### 1.15 Prefix / ID resolution
 
@@ -612,8 +612,10 @@ else ready.
 | `--title` | string | `""` | Issue title. Help: "Issue title" |
 | `--description` | string | `""` | "Issue description" |
 | `--prompt` | string | `""` | "Reusable agent prompt for the work this issue captures" |
+| `--plan` | string | `""` | `planUsage` (`cli.go`): "How the work will be done, for a law review before it starts: the mechanism it touches, what it adds there, what it removes. Each edit is a new version; `lit verdict` records a review of one" |
 | `--description-file` | string | `""` | "Read --description from this file, or from stdin when it is -" (`registerLongText`, `longtext.go`) |
 | `--prompt-file` | string | `""` | "Read --prompt from this file, or from stdin when it is -" |
+| `--plan-file` | string | `""` | "Read --plan from this file, or from stdin when it is -" |
 | `--type` | string | `task` | "Issue type: task\|feature\|bug\|chore\|epic" |
 | `--topic` | string | `""` | "Required immutable issue topic slug (1-2 words; stable area of focus; e.g., 'refactor' or 'field-history')" |
 | `--parent` | string | `""` | "Epic the ticket lives inside — required for every type but epic, which may be top-level or inside another epic; child IDs become parentID.\<hash>" |
@@ -840,10 +842,11 @@ lines|table") is built from the same map (`cli.go`, `output.go`).
 
 **`--field` mode** (`printIssueFields`, `output.go`):
 - Accepted field names and their renderings (`issueFieldNames`, `output.go`):
-  `id`, `title`, `description`, `prompt`, `type`, `topic`,
-  `priority` (`Priority.String()`), `status` (`i.State()`),
-  `assignee` (raw, may be empty), `labels` (comma-joined, no spaces),
-  `rank`, `lane`, `created_at` (RFC3339), `updated_at` (RFC3339).
+  `id`, `title`, `description`, `prompt`, `plan`, `type`, `topic`,
+  `priority` (`Priority.String()`), `status` (`i.State()`), `phase`
+  (`detailPhase`), `assignee` (raw, may be empty), `labels` (comma-joined, no
+  spaces), `rank`, `lane`, `follows_up`, `created_at` (RFC3339), `updated_at`
+  (RFC3339).
 - Names are lowercased and trimmed (`output.go`).
 - Unknown name →
   `UsageError{"unknown --field \"<x>\"; valid fields: <sorted list>"}` → exit 2,
@@ -872,7 +875,19 @@ lines|table") is built from the same map (`cli.go`, `output.go`).
    (`output.go`, `optionalGroup` at `output.go`).
 5. `\ndescription:\n<text>\n` when non-empty (`output.go`).
 6. `\nprompt:\n<text>\n` when non-empty (`output.go`).
-7. Group blocks, each rendered as `\n<label>:\n` followed by
+7. The plan section (`printCurrentPlan`, `output.go`), printed only when the
+   plan is non-empty: `\nplan (<label>, digest <digest>):\n<plan>\n`, where
+   `<digest>` is `model.DigestPlan(plan)` — the 64 hex digits `lit verdict
+   --plan` names the text by (§2.30) — and `<label>` is
+   `planVersionLabel(storage.TextVersions(issue, events, storage.PlanField()),
+   <digest>)` — `v<n>`, the number `lit history` shows the current text under. Then the reviews of that text: the entries of
+   `detail.PlanReviews` whose `Judges(plan)` holds, in their order. None →
+   `reviews of plan <label>: none — lit verdict records one\n`; otherwise
+   `reviews of plan <label>:\n` then per review
+   `- <verdict> [<reviewer> @ <Jan 2, 2006 3:04 PM MST, local>] laws: <laws>\n`,
+   the reviewer through `singleLine`, `<laws>` from `joinLaws` (§2.30). Reviews
+   of other plan texts are not printed here.
+8. Group blocks, each rendered as `\n<label>:\n` followed by
    `- <id> [<standing>] <title>` lines and omitted entirely when empty
    (`printIssueGroup`, `output.go`), in this order:
    `children` (`output.go`), `blocked_by` (`output.go`),
@@ -885,10 +900,10 @@ lines|table") is built from the same map (`cli.go`, `output.go`).
    `[closed:duplicate]`, `[closed:superseded]`, `[closed:obsolete]`,
    `[closed:wontfix]` — with a bare `[closed]` for a close that recorded none.
    There is deliberately **no** `siblings` group here (`output.go`).
-8. `\ncomments:` then `- <id> [<createdBy>] <body>` with each line of the body
+9. `\ncomments:` then `- <id> [<createdBy>] <body>` with each line of the body
    after its first indented two spaces (`hangLines`, `output.go`).
-9. **No** history block — history lives behind `lit history` (`output.go`).
-10. Then `writeEpicContext` appends the epic plan block (§2.5). The block is
+10. **No** history block — history lives behind `lit history` (`output.go`).
+11. Then `writeEpicContext` appends the epic plan block (§2.5). The block is
     **resolved before step 1 writes anything** (`cli.go`), so the body and
     the block are all-or-nothing: a failure to build the block exits nonzero with
     neither printed, rather than after a partial body. The staleness banner and any
@@ -974,7 +989,7 @@ Cross-epic dependencies:
 - `--version`, when given, is parsed before the store is read
   (`parseVersionRef`, `output.go`): the field must be one of
   `storage.LongTextFields()` — the editable fields whose row in the field
-  table declares `LongText`, today `description` and `prompt` (`fields.go`) —
+  table declares `LongText`, today `description`, `prompt` and `plan` (`fields.go`) —
   and the number an integer ≥ 1 in plain decimal digits (no sign, no leading
   zero); anything else is a `UsageError` → exit 2,
   whatever the id names.
@@ -986,24 +1001,35 @@ Cross-epic dependencies:
 
 history:
 ```
-  then `printHistoryEvents` (`output.go`): per event
+  then `printHistoryTrail` (`output.go`): per event
   `- [<actor> @ <Jan 2, 2006 3:04 PM MST, local>] <action> <reason>` with newlines
   in the reason escaped to `\n`; an event with no `Action` displays the literal
   `update` (`output.go`). Then per change,
   `    <field>: <from or -> → <to or ->` (`output.go`) — except a change to a
   long text field, which prints each side as `v<n>`, its version number, or
   `-` when empty, and no text (`versionLabel`, `output.go`).
+- Each entry of `detail.PlanReviews` is one more row of the same trail,
+  `- [<reviewer> @ <Jan 2, 2006 3:04 PM MST, local>] verdict <pass|fail> on plan <label> — laws: <laws>`,
+  the reviewer through `singleLine`, `<laws>` from `joinLaws` (§2.30), and
+  `<label>` from `planVersionLabel(versions["plan"], review.PlanDigest)`
+  (`output.go`): `v` and the 1-based index of the first plan version whose
+  `model.DigestPlan` equals the digest, or, when none does,
+  `of a text its history does not hold (<digest>)`. No plan text is printed.
+  Event rows and review rows are stable-sorted together by their `CreatedAt`
+  (`slices.SortStableFunc`, `time.Time.Compare`), events first in the input, so
+  on an equal instant an event precedes a review (`printHistoryTrail`,
+  `output.go`).
 - Then, when any long text field holds a version other than its current
   text, a blank line, `versions:`, and per such field in table order
   `    <field>: <N> versions — lit history <id> --version <field>@<n> prints one`
   (`1 version` when N is 1) (`output.go`).
 - An empty event slice prints just the header (`output.go`).
 - With `--version <field>@<n>`: prints version n's text bare, newline-terminated
-  (`printFieldVersion`, `output.go`). The versions are `textVersions`
-  (`output.go`): each distinct non-empty text the field's changes move
+  (`printFieldVersion`, `output.go`). The versions are `storage.TextVersions`
+  (`internal/storage/plan_review.go`): each distinct non-empty text the field's changes move
   between — `from`, then `to`, in event order — then the issue's current text
   if not already among them, so a field never changed holds one version. n
-  past them is `VersionNotFoundError` → exit 4, reason `version_not_found`,
+  past them is `storage.VersionNotFoundError` → exit 4, reason `version_not_found`,
   message
   `<id> has no <field>@<n>: its record holds <N> versions of <field>, numbered from 1; `lit show <id> --field <field>` prints the current text`.
 
@@ -1011,14 +1037,15 @@ history:
 
 - Registration `register.go`, `app.AccessWrite`. Handler `updateLeaf`
   (`cli.go`).
-- Flags (`cli.go`): `--title`, `--description`, `--prompt`, `--description-file`,
-  `--prompt-file`, `--type` (default `""`), `--priority` (int, default 0), `--assignee`, `--labels`,
+- Flags (`cli.go`): `--title`, `--description`, `--prompt`, `--plan` (help
+  `planUsage`, as on `lit new`), `--description-file`, `--prompt-file`,
+  `--plan-file`, `--type` (default `""`), `--priority` (int, default 0), `--assignee`, `--labels`,
   `--lane`, `--status` (registered only to intercept it; help text
   "(removed) change status with the transition verbs: lit start|done|close|open"),
   `--reason` ("Reason recorded on the field-change event"), and `--by`.
 - Refusals:
   - `len(positional) != 1` → `UsageError` with the usage line
-    `"usage: lit update <id> [--title <text>] [--description <text> | --description-file <path|->] [--prompt <text> | --prompt-file <path|->] [--type <task|feature|bug|chore|epic>] [--priority <normal|urgent>] [--assignee <user>] [--labels <csv>] [--lane <key>] [--reason <text>]"`
+    `"usage: lit update <id> [--title <text>] [--description <text> | --description-file <path|->] [--prompt <text> | --prompt-file <path|->] [--plan <text> | --plan-file <path|->] [--type <task|feature|bug|chore|epic>] [--priority <normal|urgent>] [--assignee <user>] [--labels <csv>] [--lane <key>] [--reason <text>]"`
     (`cli.go`).
   - `--status` present (detected via `fs.Visit`) → `UsageError{statusViaVerbsGuidance}`
     → exit 2. Verbatim text: "lit update no longer changes status — the transition
@@ -1032,8 +1059,8 @@ history:
     `cli.go`).
 - **Only visited flags are applied.** Each visited flag sets a pointer on
   `storage.UpdateIssueInput` (`cli.go`):
-  - `--title` / `--description` / `--prompt` set the raw value (no trimming at
-    the CLI) (`cli.go`); `--description-file` / `--prompt-file` set the file's or
+  - `--title` / `--description` / `--prompt` / `--plan` set the raw value (no trimming at
+    the CLI) (`cli.go`); `--description-file` / `--prompt-file` / `--plan-file` set the file's or
     stdin's raw bytes the same way, refusing blank text (`longtext.go`).
   - `--type` parses via `model.ParseIssueType` → `model.ValidationError` on a bad
     value (`cli.go`).
@@ -1676,7 +1703,8 @@ usage string as a `UsageError` → exit 2 (`resolve`, `register.go`).
   `"only one field can read stdin, and <flags> each name it; give the others a path"`. A failed
   stdin read is a plain error → exit 1. The event records `text_source.body` as `absent`,
   `inline`, `file` or `stdin`.
-  `lit new`, `lit followup` and `lit update` resolve `--description`/`--prompt` the same way.
+  `lit new`, `lit followup` and `lit update` resolve `--description`/`--prompt` the same way,
+  and `lit new` and `lit update` `--plan` too (event fact `text_source.plan`).
 - Store refusal: a blank body (after trim) →
   `model.ValidationError{Message: "comment body is required"}` → exit 3
   (`internal/store/store.go`). A missing issue → exit 4
@@ -2136,8 +2164,12 @@ Description: `helptext/purge.txt`.
    and archived children counted; a child epic, or a leaf with another parent,
    does not count) → `model.ValidationError` from
    `storage.RejectPurgeOfOccupiedContainer` → exit 3, reason `validation_refused`.
-4. Prints `"purged %s (comments=%d labels=%d edges=%d events=%d)\n"` with the
-   purged id and `PurgeResult`'s `Comments`, `Labels`, `Relations`, `Events`.
+4. Event counts: `telemetry.Record(ctx, nil, result.EventRecord())`
+   (`PurgeResult.EventRecord`, `internal/storage/issues.go`) — `purge.comments`
+   (`Comments`), `purge.plan_reviews` (`PlanReviews`), `purge.labels` (`Labels`),
+   `purge.edges` (`Relations`), `purge.events` (`Events`); no facts.
+5. Prints `"purged %s (comments=%d labels=%d edges=%d events=%d plan_reviews=%d)\n"` with the
+   purged id and `PurgeResult`'s `Comments`, `Labels`, `Relations`, `Events`, `PlanReviews`.
    The title is not printed.
 
 No workflow occasion is dispatched and no breadcrumb is emitted. As a write
@@ -2146,6 +2178,64 @@ a successful run (§1.4).
 
 `purgeUnconfirmedError{Message}` (`purge.go`) → exit 3 (`exit.go`), reason
 `purge_unconfirmed` (`error_output.go`).
+
+### 2.30 `lit verdict <id> <pass|fail> --plan <digest> [--law <token>]...`
+
+Registry row: `verdict` — "Record a law review of one version of an issue's
+plan: pass or fail, citing laws", group `operations`,
+`Run: r.appCmd(app.AccessWrite, verdictLeaf)` (`register.go`).
+
+`verdictLeaf` (`verdict.go`):
+- Flags: `--plan` (string, `""`, "The digest of the plan text the review
+  judged, as `lit show` prints it beside the plan's version (required)"); `--law` (string array, no
+  default, never comma-split, "A law the verdict cites, by its token
+  (one-source-of-truth); repeat for each law; a fail cites at least one"); `--by`
+  (`registerActor`, `cli.go`), resolved through `resolveIdentity` into the
+  reviewer.
+- `positionals: 2`, usage
+  `"usage: lit verdict <id> <pass|fail> --plan <digest> [--law <token>]..."`.
+  Fewer than two positionals, or `--plan` empty (absent included) →
+  `UsageError` with that line → exit 2; a surplus positional →
+  `refuseSurplusPositionals` `UsageError` → exit 2.
+
+**Sequence** (`verdict.go`):
+1. `ap.Store.AddPlanReview(ctx, storage.AddPlanReviewInput{IssueID: positional[0], Plan: <--plan>, Verdict: positional[1], Laws: <each --law>, CreatedBy: resolveActor()})`
+   — every value the raw string given; the command parses none of them.
+   A missing issue → `storage.NotFoundError` → exit 4. The engine then calls
+   `storage.PlanReviewOf` (`internal/storage/plan_review.go`), which returns
+   the first refusal in this order:
+   1. `model.ParsePlanVerdict(Verdict)` — anything but `pass`/`fail` after a
+      trim → `model.ValidationError` `verdict must be pass or fail, got "<raw>"`
+      → exit 3.
+   2. Each law in order through `model.ParseLaw` — the first token outside
+      `^[a-z][a-z0-9]*(-[a-z0-9]+)*$` after a trim → `model.ValidationError`
+      `a law is its token, lower-case words joined by hyphens (one-source-of-truth), got "<raw>"`
+      → exit 3; so `--law a,b` is refused, not split. No `--law` → an empty
+      list. The laws are then sorted and deduplicated (`model.CanonicalLaws`).
+   3. A `fail` citing no law → `model.ValidationError`
+      `a failing verdict cites at least one law the plan breaks` → exit 3.
+   4. `model.ParsePlanDigest(Plan)` (`internal/model/plan_review.go`) — the
+      trimmed text outside `^[0-9a-f]{64}$` → `model.ValidationError`
+      ``a plan is named by its digest, the 64 hex digits `lit show` prints beside its version, got "<raw>"``
+      → exit 3.
+   5. A digest equal to `model.DigestPlan` of none of
+      `storage.TextVersions(issue, events, storage.PlanField())` →
+      `storage.PlanDigestNotFoundError{IssueID, Digest}`
+      (`<id> has no plan text with digest <digest>; …`) → exit 4, reason
+      `version_not_found`.
+   A blank reviewer is stored as `unknown`; the id is `rvw-<uuid>`.
+2. Event facts: `verdict.value` (the verdict), `verdict.plan_digest` (the
+   review's `PlanDigest`), `verdict.laws` (the count of stored laws).
+3. Prints `"%s %s: %s on plan %s — laws: %s\n"` — issue id, review id,
+   verdict, the review's `PlanDigest`, and `joinLaws(review.Laws)`.
+
+`joinLaws(laws []model.Law) string` (`output.go`): the tokens joined by `", "`,
+or `-` (`emptyDash`) when there are none. It is also how `lit show`'s plan
+section (§2.4) and `lit history`'s review rows (§2.6) print laws.
+
+No workflow occasion is dispatched and no breadcrumb is emitted. As a write
+command, the mutation sync-staleness warning and post-command auto-sync follow
+a successful run (§1.4). A refused verdict records nothing (`verdict_test.go`).
 
 ---
 

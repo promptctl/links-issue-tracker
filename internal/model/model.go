@@ -80,13 +80,17 @@ var (
 // capability data carries the behavior distinction without splitting shared
 // issue behavior across duplicate types.
 type Issue struct {
-	ID          string    `json:"id"`
-	Title       string    `json:"title"`
-	Description string    `json:"description"`
-	Prompt      string    `json:"prompt,omitempty"`
-	Priority    Priority  `json:"priority"`
-	IssueType   IssueType `json:"issue_type"`
-	Topic       string    `json:"topic"`
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	Prompt      string `json:"prompt,omitempty"`
+	// Plan is how the work will be done, written before it starts so a
+	// reviewer can judge it against the laws. Every edit is a new version in
+	// the history; a PlanReview names the version it judged.
+	Plan      string    `json:"plan,omitempty"`
+	Priority  Priority  `json:"priority"`
+	IssueType IssueType `json:"issue_type"`
+	Topic     string    `json:"topic"`
 	// Assignee is the issue's owner — orthogonal to the status state machine and
 	// preserved across every transition. [LAW:one-source-of-truth] One home for
 	// ownership; the lifecycle leaf carries no assignee.
@@ -590,6 +594,7 @@ type issueJSON struct {
 	Title       string                `json:"title"`
 	Description string                `json:"description"`
 	Prompt      string                `json:"prompt,omitempty"`
+	Plan        string                `json:"plan,omitempty"`
 	Status      *State                `json:"status,omitempty"`
 	Priority    Priority              `json:"priority"`
 	IssueType   IssueType             `json:"issue_type"`
@@ -666,6 +671,7 @@ func (i Issue) MarshalJSON() ([]byte, error) {
 		Title:          i.Title,
 		Description:    i.Description,
 		Prompt:         i.Prompt,
+		Plan:           i.Plan,
 		Status:         statusValue,
 		Priority:       i.Priority,
 		IssueType:      i.IssueType,
@@ -695,6 +701,7 @@ func (i *Issue) UnmarshalJSON(data []byte) error {
 		Title:       payload.Title,
 		Description: payload.Description,
 		Prompt:      payload.Prompt,
+		Plan:        payload.Plan,
 		Priority:    payload.Priority,
 		IssueType:   payload.IssueType,
 		Topic:       payload.Topic,
@@ -920,13 +927,17 @@ type IssueDetail struct {
 	FollowsUp *Issue       `json:"follows_up,omitempty"`
 	FollowUps []Issue      `json:"follow_ups"`
 	Events    []IssueEvent `json:"events"`
+	// PlanReviews is every law review recorded against any version of the
+	// issue's plan, oldest first.
+	PlanReviews []PlanReview `json:"plan_reviews"`
 }
 
-// ExportVersion is the export format every store writes. Version 4 carries
-// the purge records; an export from an earlier version has none. Version 3
+// ExportVersion is the export format every store writes. Version 5 carries
+// the plan reviews; an export from an earlier version has none. Version 4
+// carries the purge records; an export from an earlier version has none. Version 3
 // spells the blocked-by edge "blocked-by"; versions 1 and 2 spelled it
 // "blocks", and UnmarshalJSON reads them through RelationTypeFromStored.
-const ExportVersion = 4
+const ExportVersion = 5
 
 type Export struct {
 	Version     int          `json:"version"`
@@ -938,6 +949,7 @@ type Export struct {
 	Labels      []Label      `json:"labels"`
 	Events      []IssueEvent `json:"events"`
 	Purges      []Purge      `json:"purges"`
+	PlanReviews []PlanReview `json:"plan_reviews"`
 }
 
 // v1ExportHistory is the legacy history row produced by Version 1 exports.
@@ -963,7 +975,7 @@ func v1EventID(issueID, action, fromStatus, toStatus, createdBy string, createdA
 }
 
 // UnmarshalJSON handles v1 (history array), v2 (events array, blocked-by edges
-// spelled "blocks"), v3, and v4 (purge records) export formats so old sync files and backup
+// spelled "blocks"), v3, v4 (purge records), and v5 (plan reviews) export formats so old sync files and backup
 // restores remain readable after each format change. The decoded value is in
 // the current format whatever version it was read from, so it carries
 // ExportVersion: the version read is consumed here, by the dispatch.
@@ -980,6 +992,7 @@ func (e *Export) UnmarshalJSON(data []byte) error {
 		Labels      []Label           `json:"labels"`
 		Events      []IssueEvent      `json:"events"`
 		Purges      []Purge           `json:"purges"`
+		PlanReviews []PlanReview      `json:"plan_reviews"`
 		History     []v1ExportHistory `json:"history"`
 	}
 	var raw rawExport
@@ -996,6 +1009,7 @@ func (e *Export) UnmarshalJSON(data []byte) error {
 		Labels:      raw.Labels,
 		Events:      raw.Events,
 		Purges:      raw.Purges,
+		PlanReviews: raw.PlanReviews,
 	}
 	if raw.Version < 3 {
 		for i := range e.Relations {

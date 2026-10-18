@@ -21,7 +21,8 @@ func TestExitCodeMappings(t *testing.T) {
 	}{
 		{name: "nil", err: nil, want: ExitOK},
 		{name: "not found", err: storage.NotFoundError{Entity: "issue", ID: "lit-1"}, want: ExitNotFound},
-		{name: "version not found", err: VersionNotFoundError{IssueID: "lit-1", Field: "description", Number: 4, Held: 3}, want: ExitNotFound},
+		{name: "version not found", err: storage.VersionNotFoundError{IssueID: "lit-1", Field: "description", Number: 4, Held: 3}, want: ExitNotFound},
+		{name: "plan digest not found", err: storage.PlanDigestNotFoundError{IssueID: "lit-1", Digest: model.DigestPlan("x")}, want: ExitNotFound},
 		{name: "merge conflict typed", err: MergeConflictError{Message: "sync conflict"}, want: ExitConflict},
 		{name: "corruption typed", err: CorruptionError{Message: "integrity_check failed"}, want: ExitCorruption},
 		{name: "usage message", err: UsageError{Message: "usage: lit foo"}, want: ExitUsage},

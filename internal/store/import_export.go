@@ -37,10 +37,14 @@ func (s *Store) Export(ctx context.Context) (model.Export, error) {
 	if err != nil {
 		return model.Export{}, err
 	}
+	planReviews, err := queryPlanReviews(ctx, s.db, "")
+	if err != nil {
+		return model.Export{}, err
+	}
 	// hydrateIssues guarantees every Issue it returns is fully hydrated
 	// (post-condition in store.go), so Export does not re-check. Issue.MarshalJSON
 	// remains the boundary that rejects partial values from any other source.
-	return model.Export{Version: model.ExportVersion, WorkspaceID: s.workspaceID, ExportedAt: s.clock.Now(), Issues: issues, Relations: rels, Comments: comments, Labels: labels, Events: events, Purges: purges}, nil
+	return model.Export{Version: model.ExportVersion, WorkspaceID: s.workspaceID, ExportedAt: s.clock.Now(), Issues: issues, Relations: rels, Comments: comments, Labels: labels, Events: events, Purges: purges, PlanReviews: planReviews}, nil
 }
 
 func (s *Store) Doctor(ctx context.Context) (storage.HealthReport, error) {
@@ -376,8 +380,8 @@ func writeWholeExportTx(ctx context.Context, tx *sql.Tx, export model.Export) er
 // It is NOT the only INSERT into issues: CreateIssue (store.go) writes a
 // creation-time row with a narrower column list of its own. A schema change
 // that adds a column has to be carried to both.
-const insertIssueStmt = `INSERT INTO issues(id, title, description, agent_prompt, status, priority, issue_type, topic, assignee, item_rank, lane, follows_up, created_at, updated_at, closed_at, resolution, redirect_target, archived_at, deleted_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(NULLIF(?, ''), 'misc'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+const insertIssueStmt = `INSERT INTO issues(id, title, description, agent_prompt, work_plan, status, priority, issue_type, topic, assignee, item_rank, lane, follows_up, created_at, updated_at, closed_at, resolution, redirect_target, archived_at, deleted_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, COALESCE(NULLIF(?, ''), 'misc'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 // issueRowValues is the issues row an export issue becomes: every persisted
 // column, in insertIssueStmt's order, with the three normalizations the storage
@@ -421,7 +425,7 @@ func issueRowValues(issue model.Issue) []any {
 	priority := model.CanonicalPriority(int(issue.Priority))
 	archivedCol, deletedCol := retentionColumns(issue)
 	return []any{
-		issue.ID, issue.Title, issue.Description, nullableString(issue.Prompt), status, priority,
+		issue.ID, issue.Title, issue.Description, nullableString(issue.Prompt), issue.Plan, status, priority,
 		issue.IssueType, issueid.NormalizeSlug(issue.Topic), issue.AssigneeValue(), issue.Rank, issue.Lane, nullableString(issue.FollowsUp),
 		issue.CreatedAt.Format(time.RFC3339Nano), issue.UpdatedAt.Format(time.RFC3339Nano), closedAt,
 		nullableResolution(issue.ResolutionValue()), nullableStringPtr(issue.RedirectTargetValue()),
