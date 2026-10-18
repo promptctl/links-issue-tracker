@@ -644,11 +644,13 @@ func TestRunUpgradeOnAnOpenableWorkspacePastRunningSupportNamesNoDowngrade(t *te
 		"upgrade.running_schema_min": float64(current.Schema.Min),
 		"upgrade.running_schema_max": float64(current.Schema.Max),
 		// The reader's open built nothing and found nothing to migrate.
-		"bootstrap":                      "none",
-		"migration.snapshot":             "",
-		"migration.snapshot_prune_error": nil,
-		"migration.schema_ahead":         float64(ahead),
-		"migration.min_writer_schema":    float64(0),
+		"bootstrap":                         "none",
+		"migration.snapshot":                "",
+		"migration.snapshot_prune_error":    nil,
+		"migration.schema_ahead":            float64(ahead),
+		"migration.min_writer_schema":       float64(0),
+		"migration.min_writer_schema_error": nil,
+		"migration.read_only":               false,
 	}
 	if !reflect.DeepEqual(facts, want) {
 		t.Errorf("facts = %v; want %v", facts, want)

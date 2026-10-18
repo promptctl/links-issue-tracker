@@ -83,7 +83,7 @@ func TestWriteOpenRefusesAWorkspaceWhoseWriteRulesItPredates(t *testing.T) {
 		}
 	}()
 	assertIssuesQueryable(t, ctx, reader)
-	want := storage.SchemaAhead{WorkspaceSchema: ahead, MinWriterSchema: ahead}
+	want := storage.SchemaAhead{WorkspaceSchema: ahead, MinWriterSchema: ahead, ReadOnly: true}
 	if got := reader.Migrated().SchemaAhead; got != want {
 		t.Errorf("read open reported %+v, want %+v", got, want)
 	}
@@ -123,20 +123,87 @@ func TestWriteOpenWritesAWorkspaceAheadWhoseWriteRulesItKeeps(t *testing.T) {
 	}
 }
 
-// TestOpenRefusesAMinWriterSchemaThatIsNotAVersion pins that a declaration
-// lit cannot parse stops both opens, rather than reading as no declaration.
-func TestOpenRefusesAMinWriterSchemaThatIsNotAVersion(t *testing.T) {
+// TestAMinWriterSchemaThatIsNotAVersionRefusesWritesOnly pins that a
+// declaration lit cannot parse leaves the minimum unknown: the write open
+// refuses with the reason named, never reading it as no declaration, and the
+// read open still serves the workspace, since reading obeys no write rule.
+func TestAMinWriterSchemaThatIsNotAVersionRefusesWritesOnly(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
-	stampWriteRuleChangeAhead(t, ctx, doltRoot, "v12")
+	ahead := stampWriteRuleChangeAhead(t, ctx, doltRoot, "v12")
 
 	want := `meta min_writer_schema = "v12" is not a schema version`
-	if _, err := Open(ctx, doltRoot, "test-workspace-id"); err == nil || !strings.Contains(err.Error(), want) {
-		t.Errorf("Open() error = %v, want one containing %q", err, want)
+	_, err := Open(ctx, doltRoot, "test-workspace-id")
+	var unsupported *UnsupportedSchemaVersionError
+	if !errors.As(err, &unsupported) || unsupported.WorkspaceVersion != ahead || unsupported.MinWriterSchemaErr == nil {
+		t.Fatalf("Open() error = %v (%T); want *UnsupportedSchemaVersionError at v%d with the parse error", err, err, ahead)
 	}
-	if _, err := OpenForRead(ctx, doltRoot, "test-workspace-id"); err == nil || !strings.Contains(err.Error(), want) {
-		t.Errorf("OpenForRead() error = %v, want one containing %q", err, want)
+	if !strings.Contains(err.Error(), "its minimum writer schema cannot be read ("+want) {
+		t.Errorf("refusal message lacks the parse error %q:\n%s", want, err)
+	}
+
+	reader, err := OpenForRead(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("OpenForRead() error = %v; a lit that cannot read the minimum still reads", err)
+	}
+	defer func() {
+		if err := reader.Close(); err != nil {
+			t.Errorf("Close() error = %v", err)
+		}
+	}()
+	assertIssuesQueryable(t, ctx, reader)
+	got := reader.Migrated().SchemaAhead
+	if got.WorkspaceSchema != ahead || !got.ReadOnly || got.MinWriterSchemaErr == nil || !strings.Contains(got.MinWriterSchemaErr.Error(), want) {
+		t.Errorf("read open reported %+v, want v%d read-only with the parse error", got, ahead)
+	}
+}
+
+// TestSyncOpenMeetsTheWriteFloor pins that the sync engine, which writes,
+// refuses a workspace whose write rules this binary predates as the migrating
+// open does, and opens one ahead whose write rules it keeps, reporting the
+// newer schema it served.
+func TestSyncOpenMeetsTheWriteFloor(t *testing.T) {
+	t.Parallel()
+	registryMax, err := migrations.MaxVersion()
+	if err != nil {
+		t.Fatalf("migrations.MaxVersion() error = %v", err)
+	}
+	for name, tc := range map[string]struct {
+		declared string
+		refused  bool
+	}{
+		"a write rule it predates": {fmt.Sprint(registryMax + 1), true},
+		"one it keeps":             {fmt.Sprint(registryMax), false},
+		"one it cannot read":       {"v12", true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			doltRoot := filepath.Join(t.TempDir(), "dolt")
+			ahead := stampWriteRuleChangeAhead(t, ctx, doltRoot, tc.declared)
+
+			st, err := OpenSync(ctx, doltRoot, "test-workspace-id")
+			var unsupported *UnsupportedSchemaVersionError
+			if refused := errors.As(err, &unsupported); refused != tc.refused {
+				t.Fatalf("OpenSync() error = %v (%T); want refused %v", err, err, tc.refused)
+			}
+			if tc.refused {
+				if unsupported.WorkspaceVersion != ahead {
+					t.Errorf("refusal = %+v, want workspace v%d", unsupported, ahead)
+				}
+				return
+			}
+			defer func() {
+				if err := st.Close(); err != nil {
+					t.Errorf("Close() error = %v", err)
+				}
+			}()
+			want := storage.SchemaAhead{WorkspaceSchema: ahead, MinWriterSchema: registryMax}
+			if got := st.Migrated().SchemaAhead; got != want {
+				t.Errorf("sync open reported %+v, want %+v", got, want)
+			}
+		})
 	}
 }
 

@@ -145,6 +145,10 @@ type UnsupportedSchemaVersionError struct {
 	// workspace but not write to it: a migration this binary lacks changed a
 	// write rule.
 	MinWriterSchema int64
+	// MinWriterSchemaErr is why the workspace's minimum writer schema is not a
+	// schema version. The minimum is then unknown, so this binary reads the
+	// workspace but does not write to it.
+	MinWriterSchemaErr error
 	// SnapshotName is the newest migration-recovery snapshot holding a
 	// workspace this binary writes (searchRollbackSnapshot), when one exists.
 	// Populating it offers the user a lossy rollback path; emptying it means no
@@ -176,6 +180,10 @@ func (e *UnsupportedSchemaVersionError) Error() string {
 		fmt.Fprintf(&b, "; schema version %d changed a write rule this binary predates, so it reads this workspace but does not write to it",
 			e.MinWriterSchema)
 	}
+	if e.MinWriterSchemaErr != nil {
+		fmt.Fprintf(&b, "; its minimum writer schema cannot be read (%v), so this binary reads this workspace but does not write to it",
+			e.MinWriterSchemaErr)
+	}
 	b.WriteString(")")
 	// The workspace is ahead of this binary, so the lossless fix is a NEWER
 	// binary, never a schema reverse. The remedy names the schema version that
@@ -195,7 +203,7 @@ func (e *UnsupportedSchemaVersionError) Error() string {
 			"\n\nif you are stuck and need to roll back this workspace to match this binary:\n  lit snapshots restore %s\n\nthis is a LOSSY recovery — any data written under the newer binary will be discarded.",
 			e.SnapshotName)
 	case e.SnapshotLookupErr == nil:
-		fmt.Fprintf(&b, "\n\nno migration snapshot holds this workspace's data at schema version %d or below; lossy rollback is not possible from this workspace.", e.MaxSupported)
+		b.WriteString("\n\nno migration snapshot holds this workspace's data in a shape this binary writes; lossy rollback is not possible from this workspace.")
 	}
 	if e.SnapshotLookupErr != nil {
 		fmt.Fprintf(&b, "\n\nsome snapshots could not be read while looking for one to roll this workspace back to: %v", e.SnapshotLookupErr)
@@ -208,11 +216,12 @@ func (e *UnsupportedSchemaVersionError) Error() string {
 // many it read.
 func (e *UnsupportedSchemaVersionError) EventRecord() (map[string]any, map[string]int) {
 	return map[string]any{
-			"schema_ahead.workspace_schema":      e.WorkspaceVersion,
-			"schema_ahead.running_schema_max":    e.MaxSupported,
-			"schema_ahead.min_writer_schema":     e.MinWriterSchema,
-			"schema_ahead.rollback_snapshot":     e.SnapshotName,
-			"schema_ahead.rollback_lookup_error": telemetry.ErrorText(e.SnapshotLookupErr),
+			"schema_ahead.workspace_schema":        e.WorkspaceVersion,
+			"schema_ahead.running_schema_max":      e.MaxSupported,
+			"schema_ahead.min_writer_schema":       e.MinWriterSchema,
+			"schema_ahead.min_writer_schema_error": telemetry.ErrorText(e.MinWriterSchemaErr),
+			"schema_ahead.rollback_snapshot":       e.SnapshotName,
+			"schema_ahead.rollback_lookup_error":   telemetry.ErrorText(e.SnapshotLookupErr),
 		}, map[string]int{
 			"schema_ahead.snapshots_examined":   e.SnapshotsExamined,
 			"schema_ahead.snapshots_unreadable": e.SnapshotsUnreadable,
@@ -423,25 +432,9 @@ func (a migrationAssessment) String() string {
 // has none yet and phaseAdopt's pre-goose shape is verified by
 // verifyIssuesReconcilable/reconcileToBaseline instead.
 func (s *Store) assessMigration(ctx context.Context) (migrationAssessment, error) {
-	state, err := s.classifyMigrationState(ctx)
+	state, op, err := s.assessOperability(ctx)
 	if err != nil {
 		return migrationAssessment{}, err
-	}
-	// [LAW:types-are-the-program] A goose log recording a version above this
-	// binary's registry is not a recovery event. goose tolerates unknown-ahead
-	// rows as "nothing to apply", so an ahead log is advisory noise the binary
-	// operates alongside. What decides operability is read from the live
-	// schema and the store (operability) — then either proceed (the ahead log
-	// is honest; leave it) or refuse with the reason named. There is no
-	// bookkeeping mutation: trimming the log would destroy true "these
-	// migrations ran" information and leave the live schema ahead of a reset
-	// log, the landmine a later registry catch-up detonates.
-	op, err := s.operability(ctx, state.appliedVersion, state.support.Max)
-	if err != nil {
-		return migrationAssessment{}, err
-	}
-	if !op.readable() {
-		return migrationAssessment{}, s.schemaAheadRefusal(ctx, op)
 	}
 	if op.ahead() || state.phase != phaseManaged {
 		return migrationAssessment{state: state, op: op}, nil
@@ -474,11 +467,8 @@ func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard) (operabi
 	if err != nil {
 		return operability{}, err
 	}
-	// The write open is the one place a write rule's floor is enforced: a read
-	// open serves the same workspace, since reading obeys no write rule.
-	// [LAW:single-enforcer]
-	if !assessment.op.writable() {
-		return operability{}, s.schemaAheadRefusal(ctx, assessment.op)
+	if err := s.refuseUnwritable(ctx, assessment.op); err != nil {
+		return operability{}, err
 	}
 	return assessment.op, s.applyMigration(ctx, guard, assessment)
 }

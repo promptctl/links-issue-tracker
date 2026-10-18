@@ -285,19 +285,25 @@ type Migrated struct {
 }
 
 // SchemaAhead is a workspace schema newer than the binary that served it: the
-// workspace's schema version, and the oldest a lit must support to write the
-// workspace, 0 when no migration set one. The zero value is a workspace that
-// was not ahead.
+// workspace's schema version; the oldest a lit must support to write the
+// workspace, 0 when no migration set one; why that minimum could not be read
+// as a schema version, if it could not; and whether the binary served it for
+// reading only, since it may not write to it. The zero value is a workspace
+// that was not ahead.
 type SchemaAhead struct {
-	WorkspaceSchema int64
-	MinWriterSchema int64
+	WorkspaceSchema    int64
+	MinWriterSchema    int64
+	MinWriterSchemaErr error
+	ReadOnly           bool
 }
 
-// EventRecord is the schema as event facts, both 0 when it was not ahead.
+// EventRecord is the schema as event facts, all zero when it was not ahead.
 func (a SchemaAhead) EventRecord() map[string]any {
 	return map[string]any{
-		"migration.schema_ahead":      a.WorkspaceSchema,
-		"migration.min_writer_schema": a.MinWriterSchema,
+		"migration.schema_ahead":            a.WorkspaceSchema,
+		"migration.min_writer_schema":       a.MinWriterSchema,
+		"migration.min_writer_schema_error": telemetry.ErrorText(a.MinWriterSchemaErr),
+		"migration.read_only":               a.ReadOnly,
 	}
 }
 

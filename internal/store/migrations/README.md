@@ -80,8 +80,10 @@ DELETE FROM meta WHERE meta_key = 'min_writer_schema';
 -- +goose StatementEnd
 ```
 
-Only a lit that reads the row is held to it. Every release through v0.20.1
-(schema 9) predates it and writes regardless.
+Only a lit that reads the row is held to it. A lit built before the row
+existed writes regardless, whatever its registry: every release through
+v0.20.1 (schema 9), and builds of the schema 10 and 11 registries made before
+it.
 
 ## Released migrations are content-frozen
 

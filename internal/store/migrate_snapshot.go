@@ -185,7 +185,7 @@ type rollbackSearch struct {
 
 // searchRollbackSnapshot finds the newest migration snapshot holding a
 // workspace a lit whose registry tops out at maxSupported writes
-// (snapshotOperable). A snapshot that cannot be read is passed over and counted,
+// (snapshotWritable). A snapshot that cannot be read is passed over and counted,
 // and why is kept: whether it was a closer rollback than the one offered is
 // unknown. [LAW:no-silent-failure] A canceled ctx ends the search; it is not a
 // fact about the snapshot being read.
@@ -204,7 +204,7 @@ func (s *Store) searchRollbackSnapshot(ctx context.Context, maxSupported int64) 
 		if !IsMigrationSnapshotName(snap.Name) {
 			continue
 		}
-		operable, err := snapshotOperable(ctx, snap.Path, s.workspaceID, maxSupported)
+		writable, err := snapshotWritable(ctx, snap.Path, s.workspaceID, maxSupported)
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			errs = append(errs, fmt.Errorf("stopped looking for a rollback snapshot: %w", ctxErr))
 			break
@@ -215,7 +215,7 @@ func (s *Store) searchRollbackSnapshot(ctx context.Context, maxSupported int64) 
 			errs = append(errs, fmt.Errorf("read the schema snapshot %s holds: %w", snap.Name, err))
 			continue
 		}
-		if operable {
+		if writable {
 			search.snapshot = snap.Name
 			break
 		}
@@ -224,7 +224,7 @@ func (s *Store) searchRollbackSnapshot(ctx context.Context, maxSupported int64) 
 	return search
 }
 
-// snapshotOperable reports whether a lit whose registry tops out at
+// snapshotWritable reports whether a lit whose registry tops out at
 // maxSupported writes the workspace a snapshot holds, by the rule its write
 // open applies (operability). The empty workspace the fresh-open snapshot
 // captured holds no data, so it is never a rollback.
@@ -234,7 +234,7 @@ func (s *Store) searchRollbackSnapshot(ctx context.Context, maxSupported int64) 
 // the snapshot is restored; the data the snapshot holds is unchanged. A clone
 // would avoid that rewrite at the price of a full copy on a filesystem with no
 // copy-on-write, and of a store-sized tree stranded by a hard exit.
-func snapshotOperable(ctx context.Context, snapshotPath, workspaceID string, maxSupported int64) (_ bool, err error) {
+func snapshotWritable(ctx context.Context, snapshotPath, workspaceID string, maxSupported int64) (_ bool, err error) {
 	snap, err := openStoreConnection(ctx, snapshotPath, workspaceID, engineRead)
 	if err != nil {
 		return false, err

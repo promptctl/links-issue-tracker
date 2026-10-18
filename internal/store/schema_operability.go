@@ -33,6 +33,11 @@ type operability struct {
 	// migration set it. It is read only from a schema ahead of the lit with its
 	// baseline intact: below that, no migration the lit lacks could have set it.
 	minWriterSchema int64
+	// minWriterSchemaErr is why the row is not a schema version. The minimum
+	// is then unknown, so the lit may not write; reading obeys no write rule,
+	// so it may still read, and `lit upgrade` can still read the workspace's
+	// schema version to fetch a lit that writes it.
+	minWriterSchemaErr error
 }
 
 func (o operability) ahead() bool { return o.workspaceSchema > o.maxSupported }
@@ -40,7 +45,7 @@ func (o operability) ahead() bool { return o.workspaceSchema > o.maxSupported }
 func (o operability) readable() bool { return len(o.missingBaseline) == 0 }
 
 func (o operability) writable() bool {
-	return o.readable() && o.minWriterSchema <= o.maxSupported
+	return o.readable() && o.minWriterSchemaErr == nil && o.minWriterSchema <= o.maxSupported
 }
 
 // schemaAhead is the newer schema an open served, as the open reports it; the
@@ -49,13 +54,18 @@ func (o operability) schemaAhead() storage.SchemaAhead {
 	if !o.ahead() {
 		return storage.SchemaAhead{}
 	}
-	return storage.SchemaAhead{WorkspaceSchema: o.workspaceSchema, MinWriterSchema: o.minWriterSchema}
+	return storage.SchemaAhead{
+		WorkspaceSchema:    o.workspaceSchema,
+		MinWriterSchema:    o.minWriterSchema,
+		MinWriterSchemaErr: o.minWriterSchemaErr,
+		ReadOnly:           !o.writable(),
+	}
 }
 
 // operability reads what decides whether a lit whose registry tops out at
 // maxSupported may read and write this workspace, now at workspaceSchema.
 // [LAW:single-enforcer] the open's refusal and the rollback search
-// (snapshotOperable) both decide by this one rule, so the refusal never offers
+// (snapshotWritable) both decide by this one rule, so the refusal never offers
 // a snapshot it would refuse to write once restored.
 func (s *Store) operability(ctx context.Context, workspaceSchema, maxSupported int64) (operability, error) {
 	op := operability{workspaceSchema: workspaceSchema, maxSupported: maxSupported}
@@ -70,27 +80,66 @@ func (s *Store) operability(ctx context.Context, workspaceSchema, maxSupported i
 	if !op.readable() {
 		return op, nil
 	}
-	op.minWriterSchema, err = s.minWriterSchema(ctx)
+	op.minWriterSchema, op.minWriterSchemaErr, err = s.minWriterSchema(ctx)
 	return op, err
 }
 
-// minWriterSchema parses meta.min_writer_schema. [LAW:parse-dont-validate] a
-// row that is not a schema version fails here, loudly, rather than reading as
+// minWriterSchema parses meta.min_writer_schema: the version it declares, 0
+// when no migration set the row; malformed, why the row is not a schema
+// version; and err, why the row could not be read. [LAW:parse-dont-validate]
+// a malformed row is kept as the reason the minimum is unknown, never read as
 // no declaration.
-func (s *Store) minWriterSchema(ctx context.Context) (int64, error) {
+func (s *Store) minWriterSchema(ctx context.Context) (version int64, malformed, err error) {
 	var raw string
-	err := s.db.QueryRowContext(ctx, `SELECT meta_value FROM meta WHERE meta_key = ?`, minWriterSchemaKey).Scan(&raw)
+	err = s.db.QueryRowContext(ctx, `SELECT meta_value FROM meta WHERE meta_key = ?`, minWriterSchemaKey).Scan(&raw)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		return 0, nil
+		return 0, nil, nil
 	case err != nil:
-		return 0, fmt.Errorf("read meta %s: %w", minWriterSchemaKey, err)
+		return 0, nil, fmt.Errorf("read meta %s: %w", minWriterSchemaKey, err)
 	}
-	version, err := strconv.ParseInt(raw, 10, 64)
+	version, err = strconv.ParseInt(raw, 10, 64)
 	if err != nil {
-		return 0, fmt.Errorf("meta %s = %q is not a schema version: %w", minWriterSchemaKey, raw, err)
+		return 0, fmt.Errorf("meta %s = %q is not a schema version: %w", minWriterSchemaKey, raw, err), nil
 	}
-	return version, nil
+	return version, nil, nil
+}
+
+// assessOperability classifies the workspace and reads what this binary may do
+// with it, refusing one it may not read.
+//
+// [LAW:types-are-the-program] A goose log recording a version above this
+// binary's registry is not a recovery event. goose tolerates unknown-ahead
+// rows as "nothing to apply", so an ahead log is advisory noise the binary
+// operates alongside. What decides operability is read from the live schema
+// and the store (operability) — then either proceed (the ahead log is honest;
+// leave it) or refuse with the reason named. There is no bookkeeping mutation:
+// trimming the log would destroy true "these migrations ran" information and
+// leave the live schema ahead of a reset log, the landmine a later registry
+// catch-up detonates.
+func (s *Store) assessOperability(ctx context.Context) (migrationState, operability, error) {
+	state, err := s.classifyMigrationState(ctx)
+	if err != nil {
+		return migrationState{}, operability{}, err
+	}
+	op, err := s.operability(ctx, state.appliedVersion, state.support.Max)
+	if err != nil {
+		return migrationState{}, operability{}, err
+	}
+	if !op.readable() {
+		return migrationState{}, operability{}, s.schemaAheadRefusal(ctx, op)
+	}
+	return state, op, nil
+}
+
+// refuseUnwritable is the floor a write rule sets, applied by every open whose
+// engine writes: the migrating open and the sync open. A read open serves the
+// same workspace, since reading obeys no write rule. [LAW:single-enforcer]
+func (s *Store) refuseUnwritable(ctx context.Context, op operability) error {
+	if op.writable() {
+		return nil
+	}
+	return s.schemaAheadRefusal(ctx, op)
 }
 
 // schemaAheadRefusal is the refusal of a workspace ahead of this binary that op
@@ -103,6 +152,7 @@ func (s *Store) schemaAheadRefusal(ctx context.Context, op operability) *Unsuppo
 		MaxSupported:        op.maxSupported,
 		MissingBaseline:     op.missingBaseline,
 		MinWriterSchema:     op.minWriterSchema,
+		MinWriterSchemaErr:  op.minWriterSchemaErr,
 		SnapshotName:        search.snapshot,
 		SnapshotLookupErr:   search.err,
 		SnapshotsExamined:   search.examined,

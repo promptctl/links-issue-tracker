@@ -68,7 +68,16 @@ func OpenSync(ctx context.Context, doltRootDir string, workspaceID string) (_ *S
 		return nil, err
 	}
 	s.releaseWorkspaceLock = release
-	s.migrated = storage.Migrated{Bootstrap: bootstrap}
+	// The sync engine writes — merges, replays, resolutions, compactions — so
+	// it meets the floor a write rule sets, as the migrating open does. It
+	// applies no migration: a workspace behind this binary is the migrating
+	// open's to bring forward. [LAW:single-enforcer] both write opens apply
+	// the one floor, refuseUnwritable.
+	_, op, err := s.assessOperability(ctx)
+	if err == nil {
+		err = s.refuseUnwritable(ctx, op)
+	}
+	s.migrated = storage.Migrated{Bootstrap: bootstrap, SchemaAhead: op.schemaAhead()}
 	// Same per-open branch normalization Store.Open runs: the bootstrap only
 	// normalizes at creation, so a pre-made database (an adopt's clone) gets
 	// renamed to master here on the mirror's own engine. The decision is a
@@ -81,7 +90,10 @@ func OpenSync(ctx context.Context, doltRootDir string, workspaceID string) (_ *S
 	// [LAW:single-enforcer] The rename itself still runs only inside
 	// ensureMasterDefaultBranch under the commit lock, which re-derives the
 	// decision — the pre-check is an optimization, never the enforcer.
-	renameSource, err := masterRenameSource(ctx, s.db)
+	var renameSource string
+	if err == nil {
+		renameSource, err = masterRenameSource(ctx, s.db)
+	}
 	if err == nil && renameSource != "" {
 		err = s.withCommitLock(ctx, func(ctx context.Context) error {
 			return ensureMasterDefaultBranch(ctx, s.db)

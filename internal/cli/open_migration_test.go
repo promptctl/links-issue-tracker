@@ -215,20 +215,32 @@ func TestAWorkspaceWhoseWriteRulesThisLitPredatesServesReadsOnly(t *testing.T) {
 		t.Fatalf("lit new wrote to a workspace whose write rules it predates\noutput:\n%s", out)
 	}
 	ev := lastEvent(t)
-	if ev.Reason != "workspace_schema_ahead" || ev.ExitCode != ExitCode(err) {
-		t.Errorf("lit new ended %q exit %d, want workspace_schema_ahead exit %d", ev.Reason, ev.ExitCode, ExitCode(err))
+	if ev.Reason != "workspace_schema_ahead" || ev.ExitCode != ExitValidation || ExitCode(err) != ExitValidation {
+		t.Errorf("lit new ended %q, event exit %d, process exit %d; want workspace_schema_ahead exit %d", ev.Reason, ev.ExitCode, ExitCode(err), ExitValidation)
 	}
-	if got := ev.Facts["schema_ahead.min_writer_schema"]; got != float64(ahead) {
-		t.Errorf("schema_ahead.min_writer_schema = %#v, want %d", got, ahead)
+	for key, want := range map[string]any{
+		"schema_ahead.workspace_schema":        float64(ahead),
+		"schema_ahead.running_schema_max":      float64(current.Schema.Max),
+		"schema_ahead.min_writer_schema":       float64(ahead),
+		"schema_ahead.min_writer_schema_error": nil,
+	} {
+		if got, ok := ev.Facts[key]; !ok || got != want {
+			t.Errorf("lit new %s = %#v (present %v), want %#v", key, got, ok, want)
+		}
 	}
 
 	if out, err := runCLIInDirAllowError(t, repo, "ls"); err != nil {
 		t.Fatalf("lit ls error = %v, want the read served\noutput:\n%s", err, out)
 	}
 	ev = lastEvent(t)
-	for key, want := range map[string]any{"migration.schema_ahead": float64(ahead), "migration.min_writer_schema": float64(ahead)} {
-		if got := ev.Facts[key]; got != want {
-			t.Errorf("lit ls %s = %#v, want %v", key, got, want)
+	for key, want := range map[string]any{
+		"migration.schema_ahead":            float64(ahead),
+		"migration.min_writer_schema":       float64(ahead),
+		"migration.min_writer_schema_error": nil,
+		"migration.read_only":               true,
+	} {
+		if got, ok := ev.Facts[key]; !ok || got != want {
+			t.Errorf("lit ls %s = %#v (present %v), want %#v", key, got, ok, want)
 		}
 	}
 }
