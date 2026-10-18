@@ -1,0 +1,84 @@
+package cli
+
+import (
+	"testing"
+)
+
+// newForkedBelowTheCut is the shared pair after alpha wrote past the head
+// bravo adopted, cut its history at its own head — a commit bravo never saw,
+// so bravo cannot follow — force-pushed it, and pushed an edit to the
+// ticket's description on top. bravo has edited the ticket's title without
+// pushing. adopted is the head bravo adopted: the remote head it last knew.
+func newForkedBelowTheCut(t *testing.T) (r reRootedCheckouts, adopted string) {
+	t.Helper()
+	r, base := newSharedCheckouts(t)
+	adopted, _ = syncHeadAndBranch(t, r.bravo)
+	runCLIInDir(t, r.bravo, "update", r.ticket, "--title", "bravo-title")
+	for _, title := range []string{"past-1", "past-2"} {
+		runCLIInDir(t, r.alpha, "new", "--title", title, "--topic", "demo", "--type", "task", "--parent", r.epic)
+	}
+	runCLIInDir(t, r.alpha, "sync", "push")
+	r.cut, _ = syncHeadAndBranch(t, r.alpha)
+	r.root = reRootAlphaAndForcePush(t, r, r.cut)
+	runCLIInDir(t, r.alpha, "update", r.ticket, "--description", "alpha-description")
+	runCLIInDir(t, r.alpha, "sync", "push")
+	finishSharedCheckouts(t, r, base)
+	return r, adopted
+}
+
+// TestEverySettlingEntryPointMergesAForkBelowTheCut drives each entry point
+// that settles a divergence in bravo against the remote alpha re-rooted
+// above every commit bravo holds. The fetch records the fork point before it
+// moves the tracking ref, the reconcile merges against it, bravo holds both
+// edits with nothing reporting unrelated histories, and the events name the
+// fork point and the base.
+func TestEverySettlingEntryPointMergesAForkBelowTheCut(t *testing.T) {
+	for _, entry := range []struct {
+		name string
+		// fetch and settle are the commands whose events carry the fork
+		// point's record and the reconcile's base: one command for an entry
+		// point that does both.
+		fetch, settle []string
+	}{
+		{name: "pull", settle: []string{"sync", "pull"}},
+		{name: "receive", settle: []string{"sync", backgroundReceiveSubcommand, "--parent-pid", "0"}},
+		{name: "reconcile", fetch: []string{"sync", "fetch"}, settle: []string{"sync", "reconcile"}},
+	} {
+		t.Run(entry.name, func(t *testing.T) {
+			r, adopted := newForkedBelowTheCut(t)
+			if entry.fetch != nil {
+				runCLIInDir(t, r.bravo, entry.fetch...)
+				assertForkPointRecorded(t, adopted)
+			}
+			runCLIInDir(t, r.bravo, entry.settle...)
+			if entry.fetch == nil {
+				assertForkPointRecorded(t, adopted)
+			}
+			ev := lastEvent(t)
+			bases, _ := ev.Facts["reconcile.bases"].([]any)
+			if len(bases) != 1 {
+				t.Fatalf("event %q reconcile.bases = %v; want the one reconcile's base", ev.Event, ev.Facts["reconcile.bases"])
+			}
+			base, _ := bases[0].(map[string]any)
+			if base["reconcile.base"] != "fork_point" || base["reconcile.base_commit"] != adopted || base["reconcile.fork_point"] != adopted {
+				t.Fatalf("event %q base = %v; want fork_point at the adopted head %s", ev.Event, base, adopted)
+			}
+			r.assertFollowedCleanly(t, nil, true)
+		})
+	}
+}
+
+// assertForkPointRecorded checks the last command's event recorded the fork
+// point at the head bravo adopted, before its fetch moved the tracking ref.
+func assertForkPointRecorded(t *testing.T, adopted string) {
+	t.Helper()
+	ev := lastEvent(t)
+	records, _ := ev.Facts["fork_point.records"].([]any)
+	if len(records) == 0 {
+		t.Fatalf("event %q fork_point.records = %v; want the fetch's record", ev.Event, ev.Facts["fork_point.records"])
+	}
+	record, _ := records[0].(map[string]any)
+	if record["fork_point.outcome"] != "recorded" || record["fork_point.head"] != adopted || record["fork_point.branch"] != "master" {
+		t.Fatalf("event %q fork point record = %v; want recorded at the adopted head %s", ev.Event, record, adopted)
+	}
+}

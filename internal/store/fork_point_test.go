@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -90,6 +91,7 @@ func TestAForkBelowTheCutMergesAgainstItsForkPoint(t *testing.T) {
 
 	delta := openSyncOrFatal(t, ctx, f.delta)
 	defer func() { _ = delta.Close() }()
+	unpushed := commitsBetween(t, ctx, delta, f.adopted, headCommit(t, ctx, delta))
 	pulled, err := delta.SyncPull(ctx, "origin", "master")
 	if err != nil {
 		t.Fatalf("SyncPull(delta) error = %v", err)
@@ -107,6 +109,11 @@ func TestAForkBelowTheCutMergesAgainstItsForkPoint(t *testing.T) {
 	f.assertForkPointBase(t, delta)
 	f.assertMerged(t, ctx, delta)
 	assertLinearSpineToRemoteHead(t, ctx, delta, f.remoteHead)
+	// The replay lands delta's own commits since the fork point and the marker,
+	// and nothing of the history below the fork point.
+	if replayed := commitsBetween(t, ctx, delta, f.remoteHead, headCommit(t, ctx, delta)); replayed != unpushed+1 {
+		t.Fatalf("the merge put %d commits on the remote head; want %d: delta's %d since the fork point and the marker", replayed, unpushed+1, unpushed)
+	}
 	if _, err := delta.SyncPush(ctx, "origin", "master", false, false); err != nil {
 		t.Fatalf("delta's push after the merge error = %v", err)
 	}
@@ -216,6 +223,56 @@ func TestARemoteThatDropsTheForkPointsTicketsStaysUnrelated(t *testing.T) {
 	}
 }
 
+// TestTheReceiveLandsTheClonesForkPoint drives the automatic receive's shape:
+// a clone of delta fetches the re-rooted remote, recording the fork point on
+// the clone, and the landing carries it to delta ahead of the tracking ref, so
+// delta's own settle and reconcile merge against it.
+func TestTheReceiveLandsTheClonesForkPoint(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := newForkBelowTheCut(t, ctx)
+
+	clone := filepath.Join(t.TempDir(), "clone", "dolt")
+	if err := dbsnapshot.CloneTree(ctx, f.delta, clone); err != nil {
+		t.Fatalf("CloneTree(delta) error = %v", err)
+	}
+	fetcher := openSyncOrFatal(t, ctx, clone)
+	if err := fetcher.SyncFetch(ctx, "origin", false); err != nil {
+		t.Fatalf("SyncFetch(clone) error = %v", err)
+	}
+	if err := fetcher.Close(); err != nil {
+		t.Fatalf("Close(clone) error = %v", err)
+	}
+	for _, want := range []FetchedHeadRecord{FetchedHeadMoved, FetchedHeadUnchanged} {
+		landed, err := LandFetchedHead(ctx, f.delta, clone, "origin", "master")
+		if err != nil {
+			t.Fatalf("LandFetchedHead() error = %v", err)
+		}
+		if landed.Record != want || landed.ForkPoint != want {
+			t.Fatalf("LandFetchedHead() landed the ref %s and the fork point %s; want both %s", landed.Record, landed.ForkPoint, want)
+		}
+	}
+
+	delta := openSyncOrFatal(t, ctx, f.delta)
+	defer func() { _ = delta.Close() }()
+	received, err := delta.SyncSettleReceived(ctx, "origin", "master")
+	if err != nil {
+		t.Fatalf("SyncSettleReceived(delta) error = %v", err)
+	}
+	if received.State != storage.SyncReceiveDiverged {
+		t.Fatalf("settle = %q, want %q", received.State, storage.SyncReceiveDiverged)
+	}
+	reconciled, err := delta.SyncReconcile(ctx, "origin", "master")
+	if err != nil {
+		t.Fatalf("SyncReconcile(delta) error = %v", err)
+	}
+	if reconciled.State != storage.SyncReconcileLinearized || reconciled.BaseCommit != f.adopted {
+		t.Fatalf("reconcile = %q against %q, want %q against the fork point %s", reconciled.State, reconciled.BaseCommit, storage.SyncReconcileLinearized, f.adopted)
+	}
+	f.assertForkPointBase(t, delta)
+	f.assertMerged(t, ctx, delta)
+}
+
 // createAndPush files a ticket under epic at root and pushes it, returning
 // its id.
 func createAndPush(t *testing.T, ctx context.Context, root, epic, title string) string {
@@ -239,6 +296,16 @@ func createAndPush(t *testing.T, ctx context.Context, root, epic, title string) 
 		t.Fatalf("Close(%s sync) error = %v", root, err)
 	}
 	return issue.ID
+}
+
+// commitsBetween counts the commits head reaches that base does not.
+func commitsBetween(t *testing.T, ctx context.Context, st *Store, base, head string) int {
+	t.Helper()
+	var n int
+	if err := st.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM dolt_log(?, ?)`, head, "^"+base).Scan(&n); err != nil {
+		t.Fatalf("count commits from %s to %s: %v", base, head, err)
+	}
+	return n
 }
 
 // headAt is the head commit of the store at root.
