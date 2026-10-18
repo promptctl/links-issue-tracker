@@ -9,15 +9,16 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
-// BulkApply creates or updates every issue named by specs: a document
-// without an ID creates (in dependency order, same as ImportTree); a
-// document with an ID applies its set fields to that existing issue. On any
+// BulkApply creates or updates every issue named by specs: it creates the
+// file's new issues in the order storage.ParseBulkFile hands back, wires
+// their blocked_by edges, then applies each update document's patch. On any
 // failure mid-batch, BulkApply best-effort rolls back issues it created in
 // this call (never issues it updated — an update has no "prior create" to
-// unwind). Run `lit doctor` after a failed batch to detect orphans left if
+// unwind); updates come last, so a failing create or edge leaves no update
+// applied. Run `lit doctor` after a failed batch to detect orphans left if
 // rollback itself failed. [LAW:single-enforcer] one boundary owns ID
-// resolution and create/update dispatch; the order it writes in is the one
-// storage.BulkWriteOrder hands back once it has judged the file.
+// resolution; what it writes is the file storage.ParseBulkFile parsed once
+// it judged it.
 func (s *Store) BulkApply(ctx context.Context, prefix, actor string, specs []storage.BulkIssueSpec) (storage.BulkApplyResult, error) {
 	parents, err := s.getIssuesByIDs(ctx, storage.BulkParentRefs(specs))
 	if err != nil {
@@ -27,86 +28,41 @@ func (s *Store) BulkApply(ctx context.Context, prefix, actor string, specs []sto
 	for id, parent := range parents {
 		parentTypes[id] = parent.IssueType
 	}
-	order, err := storage.BulkWriteOrder(specs, parentTypes)
+	file, err := storage.ParseBulkFile(specs, parentTypes)
 	if err != nil {
 		return storage.BulkApplyResult{}, err
 	}
 
 	result := storage.BulkApplyResult{}
-	createdRealID := make([]string, len(specs))
-	createdIDs := make([]string, 0, len(specs))
-	localRealID := make(map[string]string, len(specs))
-
-	for _, idx := range order {
-		spec := specs[idx]
-		if spec.ID != "" {
-			fields, err := storage.BulkUpdatePatch(spec)
-			if err != nil {
-				return storage.BulkApplyResult{}, err
-			}
-			applied, err := s.Apply(ctx, spec.ID, storage.Change{Actor: actor, Fields: fields})
-			if err != nil {
-				leaked := s.rollbackCreatedIssues(ctx, createdIDs)
-				return storage.BulkApplyResult{}, fmt.Errorf("bulk: update %q: %w (rollback leaked %d: %s)", spec.ID, err, len(leaked), strings.Join(leaked, ","))
-			}
-			result.Updated = append(result.Updated, applied.Issue.ID)
-			continue
-		}
-		// validateBulkSpecs already required Title/Topic/IssueType present and
-		// IssueType/Priority valid before the first create; parsing again here
-		// is the same single gate producing the typed value.
-		issueType, err := model.ParseIssueType(*spec.IssueType)
-		if err != nil {
-			return storage.BulkApplyResult{}, fmt.Errorf("bulk: doc %d: %w", idx, err)
-		}
-		priority := model.PriorityNormal
-		if spec.Priority != nil {
-			priority, err = model.ParsePriority(*spec.Priority)
-			if err != nil {
-				return storage.BulkApplyResult{}, fmt.Errorf("bulk: doc %d: %w", idx, err)
-			}
-		}
-		issue, err := s.CreateIssue(ctx, storage.CreateIssueInput{
-			Title:       strings.TrimSpace(*spec.Title),
-			Description: derefOr(spec.Description, ""),
-			Prompt:      derefOr(spec.Prompt, ""),
-			IssueType:   issueType,
-			Topic:       strings.TrimSpace(*spec.Topic),
-			ParentID:    resolveBulkRef(spec.Parent, localRealID),
-			Priority:    priority,
-			Assignee:    derefOr(spec.Assignee, ""),
-			Lane:        derefOr(spec.Lane, ""),
-			Labels:      derefOr(spec.Labels, nil),
-			// Placement is left at its zero value (RankBottom), matching
-			// ImportTree — both are `lit import --path <file>`, so a create
-			// lands the same place in the ranked order regardless of which
-			// format the file is, and a batch keeps its file order with no
-			// flag to remember. [LAW:one-source-of-truth]
-			Prefix: prefix,
-		})
+	createdIDs := make([]string, 0, len(file.Creates))
+	localRealID := make(map[string]string, len(file.Creates))
+	for _, create := range file.Creates {
+		issue, err := s.CreateIssue(ctx, create.Input(resolveBulkRef(create.Parent, localRealID), prefix))
 		if err != nil {
 			leaked := s.rollbackCreatedIssues(ctx, createdIDs)
-			return storage.BulkApplyResult{}, fmt.Errorf("bulk: create doc %d: %w (rollback leaked %d: %s)", idx, err, len(leaked), strings.Join(leaked, ","))
+			return storage.BulkApplyResult{}, fmt.Errorf("bulk: create doc %d: %w (rollback leaked %d: %s)", create.Index, err, len(leaked), strings.Join(leaked, ","))
 		}
-		createdRealID[idx] = issue.ID
 		createdIDs = append(createdIDs, issue.ID)
-		if spec.LocalID != "" {
-			localRealID[spec.LocalID] = issue.ID
+		if create.LocalID != "" {
+			localRealID[create.LocalID] = issue.ID
 		}
-		result.Created = append(result.Created, storage.NewIDMapping(spec.LocalID, issue.ID))
+		result.Created = append(result.Created, storage.NewIDMapping(create.LocalID, issue.ID))
 	}
-	for i, spec := range specs {
-		if spec.ID != "" {
-			continue
-		}
-		for _, dep := range spec.BlockedBy {
-			srcID := createdRealID[i]
-			dstID := resolveBulkRef(dep, localRealID)
-			if _, err := s.AddRelation(ctx, storage.AddRelationInput{SrcID: srcID, DstID: dstID, Type: model.RelBlockedBy, CreatedBy: "links"}); err != nil {
+	for i, create := range file.Creates {
+		for _, dep := range create.BlockedBy {
+			if _, err := s.AddRelation(ctx, storage.AddRelationInput{SrcID: createdIDs[i], DstID: resolveBulkRef(dep, localRealID), Type: model.RelBlockedBy, CreatedBy: "links"}); err != nil {
 				leaked := s.rollbackCreatedIssues(ctx, createdIDs)
-				return storage.BulkApplyResult{}, fmt.Errorf("bulk: blocked_by doc %d -> %q: %w (rollback leaked %d: %s)", i, dep, err, len(leaked), strings.Join(leaked, ","))
+				return storage.BulkApplyResult{}, fmt.Errorf("bulk: blocked_by doc %d -> %q: %w (rollback leaked %d: %s)", create.Index, dep, err, len(leaked), strings.Join(leaked, ","))
 			}
 		}
+	}
+	for _, update := range file.Updates {
+		applied, err := s.Apply(ctx, update.ID, storage.Change{Actor: actor, Fields: update.Patch})
+		if err != nil {
+			leaked := s.rollbackCreatedIssues(ctx, createdIDs)
+			return storage.BulkApplyResult{}, fmt.Errorf("bulk: update %q: %w (rollback leaked %d: %s)", update.ID, err, len(leaked), strings.Join(leaked, ","))
+		}
+		result.Updated = append(result.Updated, applied.Issue.ID)
 	}
 	return result, nil
 }
@@ -122,11 +78,4 @@ func resolveBulkRef(ref string, localRealID map[string]string) string {
 		return real
 	}
 	return ref
-}
-
-func derefOr[T any](p *T, fallback T) T {
-	if p == nil {
-		return fallback
-	}
-	return *p
 }

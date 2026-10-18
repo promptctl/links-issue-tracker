@@ -345,7 +345,7 @@ func TestBulkApplyRollsBackCreatesOnLaterFailure(t *testing.T) {
 	topic := "bulk"
 	badTitle := "b"
 	// doc b's parent matches no local_id in the batch and no real issue, so
-	// it passes validateBulkSpecs (which cannot check external existence)
+	// it passes parseBulkSpecs (which cannot check external existence)
 	// and fails inside CreateIssue — after doc a has already been created.
 	specs := []storage.BulkIssueSpec{
 		{LocalID: "a", Title: &title, IssueType: &issueType, Topic: &topic, Parent: epic.ID},

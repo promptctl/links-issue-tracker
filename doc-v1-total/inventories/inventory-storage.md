@@ -944,18 +944,16 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 ### 2.13 Bulk / import (`internal/storage/memory/bulk.go`)
 
 **`BulkApply(ctx, prefix, actor, specs)`**
-1. `parentTypes` maps each id among `storage.BulkParentRefs(specs)` that names an issue in `e.issues` to its type; `order, err := storage.BulkWriteOrder(specs, parentTypes)` (`internal/storage/import_validate.go`, shared with the Dolt engine) — the entire file is gated before any document is applied, and the gate returns the order the documents are written in. Its error is returned as is.
-2. Walks documents in topological order:
-   - `spec.ID != ""` (update): `storage.BulkUpdatePatch(spec)` then `e.apply(spec.ID, storage.Change{Actor: actor, Fields: fields})`. On apply failure → `e.compensate(batch, fmt.Errorf("bulk: update %q: %w", spec.ID, err))`. Appends `issue.ID` to `result.Updated`.
-   - Otherwise (create): `bulkCreateInput(spec, prefix, batch)` then `e.createIssue(in)`. On failure → `e.compensate(batch, fmt.Errorf("bulk: create doc %d: %w", index, err))`. Records into the batch, and into `result.Created` under `spec.LocalID` if set, else under the new real id.
-   - Note: `storage.BulkUpdatePatch` and `bulkCreateInput` errors are returned **without** compensation.
-3. **Second pass, in original spec order (not topological)**: wires every `BlockedBy` edge as `blocked-by` with `src = the document's own issue`, `dst = batch.resolve(dep)`. On failure → `e.compensate(batch, fmt.Errorf("bulk: blocked_by doc %d -> %q: %w", index, dep, err))`.
+1. `parentTypes` maps each id among `storage.BulkParentRefs(specs)` that names an issue in `e.issues` to its type; `file, err := storage.ParseBulkFile(specs, parentTypes)` (`internal/storage/import_validate.go`, shared with the Dolt engine) — the entire file is gated before any document is applied, and the gate returns it parsed: `file.Creates` in write order, `file.Updates` in file order. Its error is returned as is. The engine parses nothing itself.
+2. Per create in `file.Creates`: `e.createIssue(create.Input(batch.resolve(create.Parent), prefix))`. On failure → `e.compensate(batch, fmt.Errorf("bulk: create doc %d: %w", create.Index, err))`. Records into the batch, and into `result.Created` under `create.LocalID` if set, else under the new real id.
+3. **Second pass, over `file.Creates` in write order**: wires every `BlockedBy` edge as `blocked-by` with `src = the document's own issue`, `dst = batch.resolve(dep)`. On failure → `e.compensate(batch, fmt.Errorf("bulk: blocked_by doc %d -> %q: %w", create.Index, dep, err))`.
+4. **Updates last**, per `file.Updates` in file order: `e.apply(update.ID, storage.Change{Actor: actor, Fields: update.Patch})`. On failure → `e.compensate(batch, fmt.Errorf("bulk: update %q: %w", update.ID, err))`. Appends `issue.ID` to `result.Updated`. A failing create or edge therefore leaves no update applied.
 
 **`ImportTree(ctx, prefix, specs)`**
-1. `order, err := storage.ImportTreeWriteOrder(specs)` (`internal/storage/import_validate.go`, shared with the Dolt engine); its error is returned as is.
-2. Per spec in topological order: re-parses `IssueType` and `Priority` (errors → `fmt.Errorf("import: spec %q: %w", spec.LocalID, err)`, **without** compensation), then `createIssue` with `ParentID: batch.resolveLocal(spec.Parent)` and `Prefix: prefix`. Create failure → `e.compensate(batch, fmt.Errorf("import: create %q: %w", spec.LocalID, err))`.
+1. `creates, err := storage.ParseImportTreeFile(specs)` (`internal/storage/import_validate.go`, shared with the Dolt engine) — the parsed creates in write order; its error is returned as is.
+2. Per create: `createIssue(create.Input(batch.resolveLocal(create.Parent), prefix))`. Create failure → `e.compensate(batch, fmt.Errorf("import: create %q: %w", create.LocalID, err))`.
    - Note: `Lane` and `Placement` are not carried from `ImportTreeSpec` (it has no such fields).
-3. Second pass in spec order wires `BlockedBy`.
+3. Second pass over the creates in write order wires `BlockedBy`.
 4. Returns `ImportTreeResult{IDMap: batch.idMap()}` — the `byLocalID` map.
 
 **`wireDependency(dependent, dependency)`** — `addRelation` with `Type: model.RelBlockedBy`, `CreatedBy: createdBy` (`"links"`).
@@ -970,53 +968,49 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 - `resolve(ref)` — returns the local mapping if present, otherwise **passes the reference through unchanged**; a reference matching nothing local is a real, pre-existing id, and the write that receives it decides whether it is real.
 - `resolveLocal(ref)` — plain map lookup; an unresolved reference yields `""`, which the create path reads as "no parent". Validation, not this lookup, is what makes it total.
 
-**`bulkCreateInput`**
-- `model.ParseIssueType(*spec.IssueType)` → error wrapped `fmt.Errorf("bulk: %w", err)`.
-- Priority defaults to `model.PriorityNormal` when the doc sets none; else `model.ParsePriority(*spec.Priority)`.
-- Title and Topic are `strings.TrimSpace`'d; Description/Prompt/Assignee/Lane/Labels come from `valueOr(ptr, zero)`.
-- **`Placement` is left at its zero value**, so a batch keeps its file order in the ranked order, whichever authored format the file is.
+**`storage.FileCreate`** (`internal/storage/bulk.go`) — one parsed create document: `Index` (its file position), `LocalID`, `Parent` and `BlockedBy` (unresolved references), and the create it writes. `Input(parentID, prefix)` returns that `CreateIssueInput` with the resolved parent and the prefix filled in.
 
-**`storage.BulkUpdatePatch(doc)`** (`internal/storage/fields.go`, shared with the Dolt engine)
+**`storage.bulkUpdatePatch(doc)`** (`internal/storage/fields.go`)
 - Builds `UpdateIssueInput` with `Reason: strings.TrimSpace(doc.Reason)`, then lets each row of `issueFields` set its own pointer from the document.
 - `Title`, `Description`, `Prompt`, `Assignee`, `Lane`, `Labels` pass through as the document's pointers; trimming is the field's write in `ApplyIssueFields`.
-- `IssueType` and `Priority` are parsed by `model.ParseIssueType` / `model.ParsePriority`; parse errors → `fmt.Errorf("bulk: update %q: %w", doc.ID, err)`.
+- `IssueType` and `Priority` are parsed by `model.ParseIssueType` / `model.ParsePriority`; a parse error → `fmt.Errorf("has invalid %s %#v: %w", key, raw, err)` with `key` `type` / `priority`.
 - The engine applies `storage.Change{Actor: actor, Fields: patch}` — **an update document never carries an Action**.
 
-**`storage.BulkWriteOrder(specs, existingParentTypes)`** / **`storage.ImportTreeWriteOrder(specs)`** (`internal/storage/import_validate.go`) — run `validateBulkSpecs` / `validateImportTreeSpecs`, then `storage.writeOrder(format, specs, refsOf)` (`internal/storage/import_validate.go`) with `format` `"bulk"` / `"import"` and each spec's references as `Parent` followed by `BlockedBy`. Every refusal either returns is a `model.ValidationError`; the `%w` rows below wrap the containment helpers' own `ValidationError`.
+**`storage.ParseBulkFile(specs, existingParentTypes)`** / **`storage.ParseImportTreeFile(specs)`** (`internal/storage/import_validate.go`) — run `parseBulkSpecs` / `parseImportTreeSpecs`, then `storage.writeOrder(format, specs, refsOf)` (`internal/storage/import_validate.go`) with `format` `"bulk"` / `"import"` and each spec's references as `Parent` followed by `BlockedBy`. Every refusal either returns is a `model.ValidationError`; the `%w` rows below wrap the containment helpers' own `ValidationError`.
 
 `storage.writeOrder(format, specs, refsOf)` (`internal/storage/import_validate.go`) — DFS topological sort over intra-file references only. States `unvisited`/`visiting`/`done`; re-entering `visiting` → `model.ValidationError{Message: fmt.Sprintf("%s: cycle detected involving %q", format, localIDs[i])}`. A reference matching no local_id is not an edge.
 
-**`storage.validateBulkSpecs`** (`internal/storage/import_validate.go`)
+**`storage.parseBulkSpecs`** (`internal/storage/import_validate.go`)
 - Empty input → `"bulk: no issues in input"`.
 - Per doc: `id`, `local_id`, `parent` must have no surrounding whitespace → `"bulk: doc %d %s %q has surrounding whitespace"`.
 - Each `blocked_by` entry: no surrounding whitespace; and if `LocalID != "" && dep == spec.LocalID` → `"bulk: doc %d (local_id %q) cannot depend on itself"`.
 - `Labels` set → parsed by `model.CanonicalizeLabels`, the parser either write runs; its refusal → `fmt.Errorf("bulk: doc %d: %w", i, err)`.
-- `ID != ""` → `validateBulkUpdateDoc`; duplicate `ID` → `"bulk: duplicate id %q"`.
-- Else → `validateBulkCreateDoc`, whose parsed type is kept; duplicate non-empty `LocalID` → `"bulk: duplicate local_id %q"`.
+- `ID != ""` → `parseBulkUpdateDoc`; duplicate `ID` → `"bulk: duplicate id %q"`.
+- Else → `parseBulkCreateDoc`, whose parsed create is kept; duplicate non-empty `LocalID` → `"bulk: duplicate local_id %q"`.
 - Second pass over the create documents: a non-container type with `Parent == ""` → `fmt.Errorf("bulk: doc %d: %w", i, storage.RejectLeafWithoutParent(...))`; a `Parent` naming a create document in the file whose type is not a container → `fmt.Errorf("bulk: doc %d: %w", i, storage.RejectParentThatIsNotAContainer(...))`; a `Parent` matching no `local_id` is left to `createIssue`.
 
-**`validateBulkCreateDoc`** (`internal/storage/import_validate.go`)
+**`parseBulkCreateDoc`** (`internal/storage/import_validate.go`)
 - Missing/blank `Title` → `"bulk: doc %d missing title"`.
 - `Topic == nil` → `"bulk: doc %d missing topic"`; otherwise parsed by `issueid.NormalizeTopicForCreate`, the parser `CreateIssue` runs; its refusal → `fmt.Errorf("bulk: doc %d: %w", i, err)`.
 - Missing `IssueType` → `"bulk: doc %d missing type"`.
-- Unparseable type → `"bulk: doc %d has invalid type %q"`.
-- Unparseable priority (when set) → `"bulk: doc %d has invalid priority %d"`.
+- Unparseable type → `fmt.Errorf("bulk: doc %d: %w", i, invalidValue("type", *spec.IssueType, err))`, so it reads `bulk: doc 0: has invalid type "ghost": issue type must be …`; unparseable priority (when set) → the same around `invalidValue("priority", *spec.Priority, err)`. `invalidValue` (`internal/storage/fields.go`) is the `has invalid %s %#v: %w` an update document's refusal also wraps.
 - `Reason != ""` on a create → `"bulk: doc %d sets reason without id (reason only applies to updates)"`.
+- The create it returns: Title and Topic `strings.TrimSpace`'d; Description/Prompt/Assignee/Lane/Labels from `valueOr(ptr, zero)`; Priority `model.PriorityNormal` when the doc sets none. **`Placement` is left at its zero value**, so a batch keeps its file order in the ranked order, whichever authored format the file is.
 
-**`validateBulkUpdateDoc`** — refuses the fields an update document has no business setting; each is somebody else's verb:
+**`parseBulkUpdateDoc`** — refuses the fields an update document has no business setting, each somebody else's verb, and otherwise returns the update's patch:
 - `LocalID != ""` → `"bulk: doc %d (id %q) sets local_id; local_id only applies to new tickets"`.
 - `Topic != nil` → `"... sets topic; topic is immutable and update cannot change it"`.
 - `Parent != ""` → `"... sets parent; reparent with \`lit parent set\` instead"`.
 - `len(BlockedBy) > 0` → `"... sets blocked_by; wire dependencies with \`lit dep add\` instead"`.
 - `Title` set and trims to `""` → `"bulk: doc %d (id %q) sets an empty title"`.
-- Invalid type / priority → `"... has invalid type %q"` / `"... has invalid priority %d"`.
-- `storage.BulkUpdatePatch(spec).IsEmpty()` → `"bulk: doc %d (id %q) has no fields to update"`; a `BulkUpdatePatch` error is returned as is. Updatable fields are exactly the rows of `issueFields`: `Title`, `Description`, `Prompt`, `IssueType`, `Priority`, `Assignee`, `Labels`, `Lane`.
+- A `bulkUpdatePatch` error → `fmt.Errorf("bulk: doc %d (id %q): %w", i, spec.ID, err)`, so an invalid type reads `bulk: doc 0 (id "x"): has invalid type "ghost": issue type must be …`.
+- `bulkUpdatePatch(spec).IsEmpty()` → `"bulk: doc %d (id %q) has no fields to update"`. Updatable fields are exactly the rows of `issueFields`: `Title`, `Description`, `Prompt`, `IssueType`, `Priority`, `Assignee`, `Labels`, `Lane`.
 
-**`storage.validateImportTreeSpecs`** (`internal/storage/import_validate.go`)
+**`storage.parseImportTreeSpecs`** (`internal/storage/import_validate.go`) — returns each spec parsed, its type and priority the ones the create writes
 - Empty → `"import: no issues in input"`.
 - Blank `LocalID` → `"import: spec %d missing local_id"`; untrimmed → `"import: spec %d local_id %q has surrounding whitespace"`.
 - Blank `Title` → `"import: spec %q missing title"`; `issueid.NormalizeTopicForCreate(Topic)` or `model.CanonicalizeLabels(Labels)` refuses → `"import: spec %q: %w"`, the parsers `CreateIssue` runs.
-- Invalid type → `"import: spec %q has invalid type %q"`; invalid priority → `"import: spec %q has invalid priority %d"`.
+- Invalid type or priority → `"import: spec %q: %w"` around `invalidValue("type", …)` / `invalidValue("priority", …)`.
 - Duplicate `LocalID` → `"import: duplicate local_id %q"`.
 - Second loop: `Parent` untrimmed → error; **`Parent` must name a spec in the file** → `"import: spec %q references missing parent %q"`; a `Parent` whose spec is not a container → `"import: spec %q: %w"` around `storage.RejectParentThatIsNotAContainer`; a non-container spec with no `Parent` → `"import: spec %q: %w"` around `storage.RejectLeafWithoutParent`.
 - Each `BlockedBy` entry: untrimmed → error; self-reference → `"import: spec %q cannot depend on itself"`; **must name a spec in the file** → `"import: spec %q references missing blocked_by %q"`.

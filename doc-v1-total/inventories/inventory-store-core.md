@@ -3658,20 +3658,18 @@ Defaults for absent fields: every field is a non-pointer, so an absent key is th
 
 `ImportTree(ctx, prefix, specs)` (`import_tree.go`):
 
-1. `storage.ImportTreeWriteOrder(specs)` (`internal/storage/import_validate.go`, shared with the memory engine) — full pre-flight, no store writes; returns the topological write order (§4.4) as indices.
+1. `storage.ParseImportTreeFile(specs)` (`internal/storage/import_validate.go`, shared with the memory engine) — full pre-flight, no store writes; returns each spec parsed, as a `storage.FileCreate`, in the topological write order (§4.4). The engine parses nothing itself.
 2. Create loop in topo order (`import_tree.go`):
-   - `parentID = idMap[spec.Parent]` when `spec.Parent != ""` — resolved **only** from this batch's map, so an external/real parent id resolves to `""` (see §4.5).
-   - `model.ParseIssueType(spec.IssueType)` — error `"import: spec %q: %w"` (local id).
-   - `model.ParsePriority(spec.Priority)` — error `"import: spec %q: %w"`.
-   - `s.CreateIssue(ctx, storage.CreateIssueInput{Title, Description, Prompt, IssueType, Topic, Priority, Assignee, Labels, ParentID, Prefix})`. **`Lane` is never set** on this path (contrast bulk). `Placement` is left at its zero value = `RankBottom` (`internal/storage/issues.go`), so creates append in file order.
+   - the parent is `idMap[create.Parent]` — resolved **only** from this batch's map, so an external/real parent id resolves to `""` (see §4.5).
+   - `s.CreateIssue(ctx, create.Input(parentID, prefix))`: the `CreateIssueInput{Title, Description, Prompt, IssueType, Topic, Priority, Assignee, Labels}` the gate parsed, with `ParentID` and `Prefix` filled in. **`Lane` is never set** on this path (contrast bulk). `Placement` is left at its zero value = `RankBottom` (`internal/storage/issues.go`), so creates append in file order.
    - On error: `leaked := s.rollbackCreatedIssues(ctx, createdIDs)` then `"import: create %q: %w (rollback leaked %d: %s)"` with the leaked ids comma-joined.
-   - `idMap[spec.LocalID] = issue.ID`; append to `createdIDs`.
-3. Second pass over `specs` **in file order** (not topo order) wiring `blocked_by` (`import_tree.go`): for each dep, `AddRelation(storage.AddRelationInput{SrcID: idMap[spec.LocalID], DstID: idMap[dep], Type: model.RelBlockedBy, CreatedBy: "links"})` — **src is the dependent, dst is the dependency**. On error: rollback, then `"import: blocked_by %q -> %q: %w (rollback leaked %d: %s)"`.
+   - `idMap[create.LocalID] = issue.ID`; append to `createdIDs`.
+3. Second pass over the creates **in write order** wiring `blocked_by` (`import_tree.go`): for each dep, `AddRelation(storage.AddRelationInput{SrcID: createdIDs[i], DstID: idMap[dep], Type: model.RelBlockedBy, CreatedBy: "links"})` — **src is the dependent, dst is the dependency**. On error: rollback, then `"import: blocked_by %q -> %q: %w (rollback leaked %d: %s)"`.
 4. Returns `storage.ImportTreeResult{IDMap: idMap}` (`import_tree.go`), whose field tag is `json:"id_map"` (`storage/bulk.go`).
 
 ### 4.3 Validation and every rejection text
 
-`storage.validateImportTreeSpecs` (`internal/storage/import_validate.go`), run by `storage.ImportTreeWriteOrder`. Every error in both tables is a `model.ValidationError`, so `lit import` exits 3 with the `validation_refused` remediation. First pass, per spec index `i`:
+`storage.parseImportTreeSpecs` (`internal/storage/import_validate.go`), run by `storage.ParseImportTreeFile`. Every error in both tables is a `model.ValidationError`, so `lit import` exits 3 with the `validation_refused` remediation. First pass, per spec index `i`:
 
 | condition | error |
 |---|---|
@@ -3681,8 +3679,8 @@ Defaults for absent fields: every field is a non-pointer, so an absent key is th
 | `strings.TrimSpace(Title) == ""` | `import: spec %q missing title` (local id) |
 | `issueid.NormalizeTopicForCreate(Topic)` fails | `import: spec %q: %w` (local id) |
 | `model.CanonicalizeLabels(Labels)` fails | `import: spec %q: %w` (local id) |
-| `ParseIssueType` fails | `import: spec %q has invalid type %q` |
-| `ParsePriority` fails | `import: spec %q has invalid priority %d` |
+| `ParseIssueType` fails | `import: spec %q: %w` around `invalidValue` (`has invalid %s %#v: %w`) |
+| `ParsePriority` fails | `import: spec %q: %w` around `invalidValue` |
 | local_id already seen | `import: duplicate local_id %q` |
 
 Second pass, over all specs (`import_validate.go`) — i.e. **forward references are legal**, because references are checked against the complete `types` map (local_id → parsed `model.IssueType`) built in the first pass:
@@ -3701,7 +3699,7 @@ Consequence: on the tree path **every parent/blocked_by reference must be intern
 
 ### 4.4 Topological order and cycles
 
-`storage.ImportTreeWriteOrder` calls `storage.writeOrder(format, specs, refsOf)` (`internal/storage/import_validate.go`) with `format` `"import"` and each spec's references as `Parent` followed by `BlockedBy`; `storage.BulkWriteOrder` calls it the same way with `"bulk"`:
+`storage.ParseImportTreeFile` calls `storage.writeOrder(format, specs, refsOf)` (`internal/storage/import_validate.go`) with `format` `"import"` and each spec's references as `Parent` followed by `BlockedBy`; `storage.ParseBulkFile` calls it the same way with `"bulk"`:
 - builds `indexByLocal`, **skipping entries whose local id is `""`** — an empty local id is never a referable name.
 - three-state DFS with constants `unvisited`, `visiting`, `done` (`iota`).
 - `visit(i)`: `done` → return; `visiting` → `model.ValidationError{Message: fmt.Sprintf("%s: cycle detected involving %q", format, localIDs[i])}`; otherwise mark visiting, recurse into each reference present in the map (the parent first, then each `blocked_by` entry), mark done, append `i` to `order`.
@@ -3751,7 +3749,7 @@ Reason      string    `yaml:"reason,omitempty"`
 
 Pointer fields carry the patch distinction: nil = "leave unchanged / unspecified", set = "write this value" (`bulk.go`).
 
-`ParseBulkSpecs` (`internal/storage/specs.go`): `yaml.NewDecoder` with `dec.KnownFields(true)` — unknown keys are an error. It loops `dec.Decode(&spec)` until `io.EOF`, appending each document; any other error → `"bulk: parse spec: %w"` around a `ValidationError` carrying the decoder's message, so it exits 3 with the `validation_refused` remediation. **A file with zero documents parses to a nil slice**, which `storage.BulkWriteOrder` then rejects.
+`ParseBulkSpecs` (`internal/storage/specs.go`): `yaml.NewDecoder` with `dec.KnownFields(true)` — unknown keys are an error. It loops `dec.Decode(&spec)` until `io.EOF`, appending each document; any other error → `"bulk: parse spec: %w"` around a `ValidationError` carrying the decoder's message, so it exits 3 with the `validation_refused` remediation. **A file with zero documents parses to a nil slice**, which `storage.ParseBulkFile` then rejects.
 
 Example (from `cli.go`):
 
@@ -3775,7 +3773,7 @@ labels: [reviewed]
 
 `ID` present → **update patch** of an existing issue. `ID` absent → **create**, behaving like the tree flat form.
 
-The full accept/reject enumeration is enforced by `storage.validateBulkSpecs` (`internal/storage/import_validate.go`, shared with the memory engine), run by `storage.BulkWriteOrder`. Every refusal is a `model.ValidationError`.
+The full accept/reject enumeration is enforced by `storage.parseBulkSpecs` (`internal/storage/import_validate.go`, shared with the memory engine), run by `storage.ParseBulkFile`, which returns the file parsed. Every refusal is a `model.ValidationError`.
 
 Per-document checks that run for **both** shapes (`import_validate.go`):
 
@@ -3789,7 +3787,7 @@ Per-document checks that run for **both** shapes (`import_validate.go`):
 | `LocalID != "" && dep == LocalID` | `bulk: doc %d (local_id %q) cannot depend on itself` |
 | `Labels` set and `model.CanonicalizeLabels` fails | `bulk: doc %d: %w` |
 
-Update-document checks (`validateBulkUpdateDoc`, `import_validate.go`), in order:
+Update-document checks (`parseBulkUpdateDoc`, `import_validate.go`, which returns the update's patch), in order:
 
 | condition | error |
 |---|---|
@@ -3798,15 +3796,14 @@ Update-document checks (`validateBulkUpdateDoc`, `import_validate.go`), in order
 | `Parent != ""` | ``bulk: doc %d (id %q) sets parent; reparent with `lit parent set` instead`` |
 | `len(BlockedBy) > 0` | ``bulk: doc %d (id %q) sets blocked_by; wire dependencies with `lit dep add` instead`` |
 | `Title` set and trims to `""` | `bulk: doc %d (id %q) sets an empty title` |
-| `IssueType` set and unparseable | `bulk: doc %d (id %q) has invalid type %q` |
-| `Priority` set and unparseable | `bulk: doc %d (id %q) has invalid priority %d` |
-| `storage.BulkUpdatePatch(spec)` fails | its error, as is |
-| `storage.BulkUpdatePatch(spec).IsEmpty()` | `bulk: doc %d (id %q) has no fields to update` |
+| `IssueType` set and unparseable | `bulk: doc %d (id %q): has invalid type "<value>": issue type must be …` |
+| `Priority` set and unparseable | `bulk: doc %d (id %q): has invalid priority <value>: priority must be …` |
+| `storage.bulkUpdatePatch(spec).IsEmpty()` | `bulk: doc %d (id %q) has no fields to update` |
 | id already seen | `bulk: duplicate id %q` (`import_validate.go`) |
 
 The patch is empty iff none of `Title, Description, Prompt, IssueType, Priority, Assignee, Labels, Lane` is set (`UpdateIssueInput.IsEmpty`, `internal/storage/fields.go`). **`Reason` alone does not count** — hence "id set and reason set with no other field set" is rejected.
 
-Create-document checks (`validateBulkCreateDoc`, `import_validate.go`, which returns the parsed `model.IssueType`), in order:
+Create-document checks (`parseBulkCreateDoc`, `import_validate.go`, which returns the parsed create), in order:
 
 | condition | error |
 |---|---|
@@ -3814,8 +3811,8 @@ Create-document checks (`validateBulkCreateDoc`, `import_validate.go`, which ret
 | `Topic == nil` | `bulk: doc %d missing topic` |
 | `issueid.NormalizeTopicForCreate(*Topic)` fails | `bulk: doc %d: %w` |
 | `IssueType == nil` | `bulk: doc %d missing type` |
-| `ParseIssueType` fails | `bulk: doc %d has invalid type %q` |
-| `Priority` set and `ParsePriority` fails | `bulk: doc %d has invalid priority %d` |
+| `ParseIssueType` fails | `bulk: doc %d: %w` around `invalidValue` (`has invalid %s %#v: %w`) |
+| `Priority` set and `ParsePriority` fails | `bulk: doc %d: %w` around `invalidValue` |
 | `Reason != ""` | `bulk: doc %d sets reason without id (reason only applies to updates)` |
 | local_id already seen (non-empty) | `bulk: duplicate local_id %q` (`import_validate.go`) |
 
@@ -3832,19 +3829,16 @@ Note the create branch does **not** require `LocalID` (unlike ImportTree), and d
 
 `BulkApply(ctx, prefix, actor string, specs)` (`import_bulk.go`):
 
-1. `s.getIssuesByIDs(ctx, storage.BulkParentRefs(specs))` reads the parents the file names (error → `bulk: read parents: %w`), and `parentTypes` maps each found id to its type; `order, err := storage.BulkWriteOrder(specs, parentTypes)` — whole file validated before anything is written, and the topological write order returned (§4.4); a cycle reads `bulk: cycle detected involving "x"` (`internal/storage/import_validate.go`).
-2. `result := storage.BulkApplyResult{Created: map[string]string{}}`; `createdRealID` (index-parallel), `createdIDs` (ordered), `localRealID` map (`import_bulk.go`).
-3. Loop in topo order (`import_bulk.go`):
-   - **Update branch** (`spec.ID != ""`): `storage.BulkUpdatePatch(spec)` then `s.Apply(ctx, spec.ID, storage.Change{Actor: actor, Fields: fields})`. A `BulkUpdatePatch` error is returned **without** a rollback (`import_bulk.go`). `Apply` error → rollback then `"bulk: update %q: %w (rollback leaked %d: %s)"`. On success append `issue.ID` to `result.Updated`.
-   - **Create branch**: re-parse type (`"bulk: doc %d: %w"`, no rollback, `import_bulk.go`); priority defaults to `model.PriorityNormal` and is re-parsed only if set (`"bulk: doc %d: %w"`, no rollback); then `CreateIssue` with `Title: TrimSpace(*spec.Title)`, `Description: derefOr(spec.Description, "")`, `Prompt: derefOr(spec.Prompt, "")`, `IssueType`, `Topic: TrimSpace(*spec.Topic)`, `ParentID: resolveBulkRef(spec.Parent, localRealID)`, `Priority`, `Assignee: derefOr(spec.Assignee, "")`, `Lane: derefOr(spec.Lane, "")`, `Labels: derefOr(spec.Labels, nil)`, `Prefix: prefix` (`import_bulk.go`). `Placement` deliberately left at its zero value `RankBottom` so file order is preserved, matching ImportTree (`import_bulk.go`). Failure → rollback then `"bulk: create doc %d: %w (rollback leaked %d: %s)"`.
-   - Record `createdRealID[idx]`, append `createdIDs`. If `spec.LocalID != ""` → `localRealID[LocalID] = issue.ID` and `result.Created[LocalID] = issue.ID`; **else `result.Created[issue.ID] = issue.ID`** (self-keyed) (`import_bulk.go`).
-4. Second pass over `specs` in **file order**, skipping update docs (`import_bulk.go`): for each `dep`, `AddRelation({SrcID: createdRealID[i], DstID: resolveBulkRef(dep, localRealID), Type: model.RelBlockedBy, CreatedBy: "links"})`. Failure → rollback then `"bulk: blocked_by doc %d -> %q: %w (rollback leaked %d: %s)"`.
-
-`derefOr[T](p *T, fallback T) T` (`import_bulk.go`) is the nil-to-default helper.
+1. `s.getIssuesByIDs(ctx, storage.BulkParentRefs(specs))` reads the parents the file names (error → `bulk: read parents: %w`), and `parentTypes` maps each found id to its type; `file, err := storage.ParseBulkFile(specs, parentTypes)` — whole file validated before anything is written, and returned parsed: `file.Creates` in the topological write order (§4.4), `file.Updates` in file order; a cycle reads `bulk: cycle detected involving "x"` (`internal/storage/import_validate.go`). The engine parses nothing itself.
+2. `createdIDs` (ordered, parallel to `file.Creates`), `localRealID` map (`import_bulk.go`).
+3. Create loop over `file.Creates` (`import_bulk.go`): `CreateIssue(ctx, create.Input(resolveBulkRef(create.Parent, localRealID), prefix))`. The gate built that input: `Title` and `Topic` trimmed, `Description`/`Prompt`/`Assignee`/`Lane`/`Labels` the document's value or the zero value, `IssueType` and `Priority` parsed (priority `model.PriorityNormal` when unset), `Placement` left at its zero value `RankBottom` so file order is preserved, matching ImportTree. Failure → rollback then `"bulk: create doc %d: %w (rollback leaked %d: %s)"`.
+   - Append `createdIDs`. If `create.LocalID != ""` → `localRealID[LocalID] = issue.ID`; `result.Created` gets `storage.NewIDMapping(create.LocalID, issue.ID)`, **self-keyed when there is no local id** (`import_bulk.go`).
+4. Second pass over `file.Creates` in **write order** (`import_bulk.go`): for each `dep`, `AddRelation({SrcID: createdIDs[i], DstID: resolveBulkRef(dep, localRealID), Type: model.RelBlockedBy, CreatedBy: "links"})`. Failure → rollback then `"bulk: blocked_by doc %d -> %q: %w (rollback leaked %d: %s)"`.
+5. **Updates last**, over `file.Updates` (`import_bulk.go`): `s.Apply(ctx, update.ID, storage.Change{Actor: actor, Fields: update.Patch})`. Failure → rollback then `"bulk: update %q: %w (rollback leaked %d: %s)"`. On success append `issue.ID` to `result.Updated`. A failing create or edge therefore leaves no update applied.
 
 `resolveBulkRef(ref, localRealID)` (`import_bulk.go`): a map hit returns the real id; **a miss returns `ref` unchanged**, to be validated downstream by `CreateIssue`/`AddRelation` as a real pre-existing issue id.
 
-`storage.BulkUpdatePatch(doc)` (`internal/storage/fields.go`, shared with the memory engine) builds the `storage.UpdateIssueInput` with `Reason: strings.TrimSpace(doc.Reason)`, each row of `issueFields` setting its own pointer: `Title`, `Description`, `Prompt`, `Assignee`, `Lane`, `Labels` pass through as the document's pointers, and `IssueType` and `Priority` go through `ParseIssueType`/`ParsePriority` again with errors `"bulk: update %q: %w"`. **`Topic` is never carried** — it is unrepresentable in `UpdateIssueInput` (`internal/storage/issues.go`).
+`storage.bulkUpdatePatch(doc)` (`internal/storage/fields.go`), run by the gate, builds the `storage.UpdateIssueInput` with `Reason: strings.TrimSpace(doc.Reason)`, each row of `issueFields` setting its own pointer: `Title`, `Description`, `Prompt`, `Assignee`, `Lane`, `Labels` pass through as the document's pointers, and `IssueType` and `Priority` go through `ParseIssueType`/`ParsePriority` with errors `"has invalid %s %#v: %w"`. **`Topic` is never carried** — it is unrepresentable in `UpdateIssueInput` (`internal/storage/issues.go`).
 
 ### 5.4 Differences from the non-bulk (tree) path
 
@@ -3938,11 +3932,11 @@ updated %d issues\n         (len(result.Updated))
 
 `import_export.go`: `verify constraints: %w`, `count foreign key issues: %w`, `count invalid related rows: %w`, `count orphan event rows: %w`, `rank ancestry: %w`, `rank checks: %w`, `parent cycle check: %w`, `constraint violations: %d`, `foreign key violations: %d`, `invalid related-to ordering rows: %d`, `orphan issue event rows: %d`, `rank inversions: %d (dependencies ranked below dependents)`, `interleaved: %s — work in each waits on work in another, so no rank order lists every dependency among them first; 'lit doctor --fix=rank' does not reorder them for those edges`, `blocked-by dependency cycle: %s (no rank order exists; remove one edge with 'lit dep rm' to break it)`, `repair orphan events: %w`, `repair self related rows: %w`, `repair related ordering: %w`, `clear %s: %w`, `restore issue %s: %w`, `restore comment %s: %w`, `restore label %s:%s: %w`, `insert issue event %s: %w`, `issue event %s: field name cannot be empty`, `insert issue event change %s.%s: %w`.
 
-`import_validate.go` (tree gate): `import: no issues in input`, `import: spec %d missing local_id`, `import: spec %d local_id %q has surrounding whitespace`, `import: spec %q missing title`, `import: spec %q has invalid type %q`, `import: spec %q has invalid priority %d`, `import: duplicate local_id %q`, `import: spec %q parent %q has surrounding whitespace`, `import: spec %q references missing parent %q`, `import: spec %q blocked_by entry %q has surrounding whitespace`, `import: spec %q references missing blocked_by %q`, `import: spec %q cannot depend on itself`, `import: spec %q: %w`, and from `writeOrder` `%s: cycle detected involving %q` (`import` or `bulk`).
+`import_validate.go` (tree gate): `import: no issues in input`, `import: spec %d missing local_id`, `import: spec %d local_id %q has surrounding whitespace`, `import: spec %q missing title`, `import: duplicate local_id %q`, `import: spec %q parent %q has surrounding whitespace`, `import: spec %q references missing parent %q`, `import: spec %q blocked_by entry %q has surrounding whitespace`, `import: spec %q references missing blocked_by %q`, `import: spec %q cannot depend on itself`, `import: spec %q: %w`, and from `writeOrder` `%s: cycle detected involving %q` (`import` or `bulk`).
 
-`import_tree.go`: `import: spec %q: %w`, `import: create %q: %w (rollback leaked %d: %s)`, `import: blocked_by %q -> %q: %w (rollback leaked %d: %s)`.
+`import_tree.go`: `import: create %q: %w (rollback leaked %d: %s)`, `import: blocked_by %q -> %q: %w (rollback leaked %d: %s)`.
 
-`import_bulk.go`: `bulk: no issues in input`, `bulk: doc %d id %q has surrounding whitespace`, `bulk: doc %d local_id %q has surrounding whitespace`, `bulk: doc %d parent %q has surrounding whitespace`, `bulk: doc %d blocked_by entry %q has surrounding whitespace`, `bulk: doc %d (local_id %q) cannot depend on itself`, `bulk: duplicate id %q`, `bulk: duplicate local_id %q`, `bulk: doc %d missing title`, `bulk: doc %d missing topic`, `bulk: doc %d missing type`, `bulk: doc %d has invalid type %q`, `bulk: doc %d has invalid priority %d`, `bulk: doc %d sets reason without id (reason only applies to updates)`, `bulk: doc %d (id %q) sets local_id; local_id only applies to new tickets`, `bulk: doc %d (id %q) sets topic; topic is immutable and update cannot change it`, ``bulk: doc %d (id %q) sets parent; reparent with `lit parent set` instead``, ``bulk: doc %d (id %q) sets blocked_by; wire dependencies with `lit dep add` instead``, `bulk: doc %d (id %q) has invalid type %q`, `bulk: doc %d (id %q) has invalid priority %d`, `bulk: doc %d (id %q) sets an empty title`, `bulk: doc %d (id %q) has no fields to update`, `bulk: %w`, `bulk: doc %d: %w`, `bulk: update %q: %w`, `bulk: update %q: %w (rollback leaked %d: %s)`, `bulk: create doc %d: %w (rollback leaked %d: %s)`, `bulk: blocked_by doc %d -> %q: %w (rollback leaked %d: %s)`.
+`import_bulk.go`: `bulk: no issues in input`, `bulk: doc %d id %q has surrounding whitespace`, `bulk: doc %d local_id %q has surrounding whitespace`, `bulk: doc %d parent %q has surrounding whitespace`, `bulk: doc %d blocked_by entry %q has surrounding whitespace`, `bulk: doc %d (local_id %q) cannot depend on itself`, `bulk: duplicate id %q`, `bulk: duplicate local_id %q`, `bulk: doc %d missing title`, `bulk: doc %d missing topic`, `bulk: doc %d missing type`, `bulk: doc %d sets reason without id (reason only applies to updates)`, `bulk: doc %d (id %q) sets local_id; local_id only applies to new tickets`, `bulk: doc %d (id %q) sets topic; topic is immutable and update cannot change it`, ``bulk: doc %d (id %q) sets parent; reparent with `lit parent set` instead``, ``bulk: doc %d (id %q) sets blocked_by; wire dependencies with `lit dep add` instead``, `bulk: doc %d (id %q): %w`, `bulk: doc %d (id %q) sets an empty title`, `bulk: doc %d (id %q) has no fields to update`, `bulk: doc %d: %w`, `bulk: update %q: %w (rollback leaked %d: %s)`, `bulk: create doc %d: %w (rollback leaked %d: %s)`, `bulk: blocked_by doc %d -> %q: %w (rollback leaked %d: %s)`; and from `invalidValue` (`internal/storage/fields.go`) `has invalid %s %#v: %w`.
 
 Parsers (`internal/storage/specs.go`): `bulk: parse spec: %w`, `import: parse spec: %w`, `import: unexpected trailing data after spec array`.
 
