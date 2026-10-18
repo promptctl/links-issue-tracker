@@ -793,8 +793,9 @@ func mirrorOnce(ctx, completionCtx context.Context, session syncSession, ws work
 	}
 	// The head the push reports is the clone's HEAD — the push is
 	// HEAD:<branch> and the clone is frozen, so nothing moved it but a follow
-	// of a re-rooted remote, which followedReRoot reports. The live store
-	// learns it through RecordPushedHead, or by receiving a re-rooted push.
+	// of a re-root, a peer's or the one the clone's history bound published,
+	// which followedReRoot reports. The live store learns it through
+	// RecordPushedHead, or by receiving a re-rooted push.
 	return pushedHead{remote: outcome.remote, branch: outcome.branch, head: outcome.head, proven: outcome.proven, followedReRoot: len(session.syncer.FollowedReRoots()) > 0}, nil
 }
 

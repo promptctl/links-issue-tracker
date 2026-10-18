@@ -16,8 +16,8 @@ import (
 )
 
 // historyBound is the bound on the sync branch's reachable history, as a
-// commit count: a push that leaves the remote head at height reRootAt or
-// above re-roots it, keeping the keep commits of the head's first-parent line.
+// commit count: a push that leaves the remote head at height ReRootAt or
+// above re-roots it, keeping the Keep commits of the head's first-parent line.
 // It is a count, not an age, because the store grows linearly with its
 // commits while the rate of commits swings month to month (the decision on
 // links-storage-3k6u). Keep is below ReRootAt, so a re-root always drops
