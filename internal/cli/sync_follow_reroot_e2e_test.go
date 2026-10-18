@@ -253,3 +253,28 @@ func TestSyncFetchWithNoKnownSyncBranchFetchesAndFollowsNothing(t *testing.T) {
 		t.Fatalf("reroot.follows = %v; want an empty list", lastEvent(t).Facts["reroot.follows"])
 	}
 }
+
+// TestSyncPushPutsTheHistoryBoundOnItsEvent pushes from alpha under the
+// default bound. The push's event carries the one bound it kept: the remote
+// head it left and that head's height, short of the height that re-roots,
+// with nothing published.
+func TestSyncPushPutsTheHistoryBoundOnItsEvent(t *testing.T) {
+	r, _ := newSharedCheckouts(t)
+	runCLIInDir(t, r.alpha, "new", "--title", "pushed", "--topic", "demo", "--type", "task", "--parent", r.epic)
+	isolateEvents(t)
+	runCLIInDir(t, r.alpha, "sync", "push")
+	head, _ := syncHeadAndBranch(t, r.alpha)
+	ev := readEvents(t)[0]
+	records, _ := ev.Facts["history_bound.records"].([]any)
+	if len(records) != 1 {
+		t.Fatalf("event %q history_bound.records = %v; want the push's one bound", ev.Event, ev.Facts["history_bound.records"])
+	}
+	record, _ := records[0].(map[string]any)
+	height, _ := record["history_bound.height"].(float64)
+	if record["history_bound.head"] != head || height < 2 || record["history_bound.fired"] != false || record["history_bound.reroot_at"] != float64(2000) || record["history_bound.keep"] != float64(1000) {
+		t.Fatalf("event %q bound = %v; want alpha's head %s at its height, short of 2000, keeping 1000", ev.Event, record, head)
+	}
+	if record["history_bound.lease"] != "" || record["history_bound.collected"] != false || record["history_bound.error"] != nil || record["reroot.head"] != "" {
+		t.Fatalf("event %q bound = %v; want nothing published, collected or failed", ev.Event, record)
+	}
+}

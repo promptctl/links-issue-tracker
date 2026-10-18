@@ -1,0 +1,408 @@
+package store
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
+	"github.com/dolthub/dolt/go/libraries/doltcore/ref"
+	"github.com/dolthub/dolt/go/store/hash"
+
+	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
+)
+
+// historyCanBeReRootedVersion is the schema version that marks a store's
+// history as one a push can re-root: 00010_history_can_be_re_rooted.sql.
+const historyCanBeReRootedVersion = 10
+
+// compactPush files a ticket under epic at root and pushes it the way `lit
+// sync push` and the pre-push hook do, under bound, returning what the push
+// did to keep it.
+func compactPush(t *testing.T, ctx context.Context, root, epic, title string, bound historyBound) storage.HistoryBound {
+	t.Helper()
+	st, err := Open(ctx, root, "ws")
+	if err != nil {
+		t.Fatalf("Open(%s) error = %v", root, err)
+	}
+	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "topic", IssueType: "task", ParentID: epic}); err != nil {
+		t.Fatalf("CreateIssue(%s) error = %v", title, err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close(%s) error = %v", root, err)
+	}
+	sync := openSyncOrFatal(t, ctx, root)
+	defer func() { _ = sync.Close() }()
+	sync.bound = bound
+	if _, err := sync.SyncCompactAndPush(ctx, "origin", "master", false, false); err != nil {
+		t.Fatalf("SyncCompactAndPush(%s) error = %v", title, err)
+	}
+	bounds := sync.HistoryBounds()
+	if len(bounds) != 1 {
+		t.Fatalf("HistoryBounds() after one push = %+v, want one", bounds)
+	}
+	return bounds[0]
+}
+
+// heightOf is the height of rev in the store at root, as dolt_log reports it.
+func heightOf(t *testing.T, ctx context.Context, st *Store, rev string) uint64 {
+	t.Helper()
+	var height uint64
+	if err := st.db.QueryRowContext(ctx, `SELECT commit_order FROM dolt_log(?) LIMIT 1`, rev).Scan(&height); err != nil {
+		t.Fatalf("read the height of %s: %v", rev, err)
+	}
+	return height
+}
+
+// branchesUnder is every branch of st whose name begins with prefix.
+func branchesUnder(t *testing.T, ctx context.Context, st *Store, prefix string) map[string]string {
+	t.Helper()
+	heads, err := refHeadsUnder(ctx, st.db, `SELECT name, hash FROM dolt_branches`, prefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return heads
+}
+
+// TestAPushPastTheBoundReRootsWithNoCommandRun drives ordinary writes, each
+// pushed the way the pre-push hook pushes, past a small bound. The push that
+// reaches it re-roots the remote and this checkout to the kept window, drops
+// the refs that pinned the old history, and the store shrinks; the backlog is
+// unchanged, the remote then refuses every lit whose schema support stops
+// below the version that marks re-rootable history, and the next write pushes
+// as an ordinary fast-forward.
+func TestAPushPastTheBoundReRootsWithNoCommandRun(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	remoteURL := "file://" + filepath.Join(t.TempDir(), "remote")
+	alpha := migratedDoltDir(t)
+	epic := seedReconcileRemote(t, ctx, alpha, remoteURL)
+
+	st := openSyncOrFatal(t, ctx, alpha)
+	seeded := heightOf(t, ctx, st, "HEAD")
+	checkpoints := len(branchesUnder(t, ctx, st, migrationCheckpointPrefix+"-"))
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if checkpoints == 0 {
+		t.Fatalf("the migrated store holds no %s checkpoint, so the test cannot show the bound dropping one", migrationCheckpointPrefix)
+	}
+	bound := historyBound{reRootAt: seeded + 2, keep: 3}
+
+	under := compactPush(t, ctx, alpha, epic, "under", bound)
+	if under.Fired() || under.Height != seeded+1 || under.Err != nil || under.ReRooted.Head != "" || under.Lease != "" || under.Collected {
+		t.Fatalf("a push under the bound = %+v; want height %d, not fired, nothing published", under, seeded+1)
+	}
+	// A fetch records the fork point every checkout that syncs holds, here on
+	// the head the push under the bound left.
+	st = openSyncOrFatal(t, ctx, alpha)
+	if err := st.SyncFetch(ctx, "origin", false); err != nil {
+		t.Fatal(err)
+	}
+	if forkPoint := branchesUnder(t, ctx, st, forkPointPrefix)["origin/master"]; forkPoint != under.Head {
+		t.Fatalf("the fork point is %q; want it on the head %s the push under the bound left", forkPoint, under.Head)
+	}
+	// A re-root scratch a killed bound left behind, pinning the old history:
+	// the next bound to fire deletes it with its own.
+	if err := execProcedureDiscard(ctx, st.db, "DOLT_BRANCH", reRootScratchPrefix+"killed", under.Head); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	before := exportOf(t, ctx, alpha)
+
+	fired := compactPush(t, ctx, alpha, epic, "past", bound)
+	if fired.Err != nil {
+		t.Fatalf("the push past the bound stopped: %v", fired.Err)
+	}
+	if !fired.Fired() || fired.Height != bound.reRootAt || fired.Lease != storage.LeaseHeld || !fired.Collected {
+		t.Fatalf("the push past the bound = %+v; want fired at height %d, lease held, store collected", fired, bound.reRootAt)
+	}
+	if fired.ReRooted.Kept() != int(bound.keep) || fired.ReRooted.Dropped != int(fired.Height-bound.keep) {
+		t.Fatalf("the re-root kept %d and dropped %d commits; want %d kept and %d dropped", fired.ReRooted.Kept(), fired.ReRooted.Dropped, bound.keep, fired.Height-bound.keep)
+	}
+	if fired.BytesAfter >= fired.BytesBefore {
+		t.Fatalf("the store went from %d to %d bytes across the GC; want it smaller", fired.BytesBefore, fired.BytesAfter)
+	}
+
+	st = openSyncOrFatal(t, ctx, alpha)
+	defer func() { _ = st.Close() }()
+	head := headCommit(t, ctx, st)
+	if forkPoints := branchesUnder(t, ctx, st, forkPointPrefix); forkPoints["origin/master"] != head {
+		t.Fatalf("fork points = %v; want origin/master's on the re-rooted head %s", forkPoints, head)
+	}
+	// The old history is gone from the store, not merely unlisted: neither the
+	// head the push replaced nor the one the old fork point named resolves.
+	for _, old := range []string{fired.Head, under.Head} {
+		var n int
+		if err := st.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM dolt_log(?)`, old).Scan(&n); err == nil {
+			t.Fatalf("the old head %s still resolves, with %d commits below it; want it collected", old, n)
+		}
+	}
+	if err := st.SyncFetch(ctx, "origin", false); err != nil {
+		t.Fatal(err)
+	}
+	if head != fired.ReRooted.Head || heightOf(t, ctx, st, "HEAD") != bound.keep {
+		t.Fatalf("alpha's head is %s at height %d; want the published head %s at the kept height %d", head, heightOf(t, ctx, st, "HEAD"), fired.ReRooted.Head, bound.keep)
+	}
+	if remote, err := commitHashOfRef(ctx, st.db, "remotes/origin/master"); err != nil || remote != head {
+		t.Fatalf("the remote's head is %s (%v); want alpha's re-rooted head %s", remote, err, head)
+	}
+	for _, prefix := range []string{migrationCheckpointPrefix + "-", migrationDriftRepairCheckpointPrefix + "-", reconcileScratchPrefix, reRootScratchPrefix} {
+		if left := branchesUnder(t, ctx, st, prefix); len(left) != 0 {
+			t.Fatalf("branches under %q still pin the old history: %v", prefix, left)
+		}
+	}
+	schema, err := st.schemaVersionAtCommit(ctx, head)
+	if err != nil || schema < historyCanBeReRootedVersion {
+		t.Fatalf("the re-rooted remote head records schema %d (%v); want at least %d, so every lit that cannot follow a re-root refuses to write to it", schema, err, historyCanBeReRootedVersion)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := exportOf(t, ctx, alpha); !backlogGrewBy(before, got, "past") {
+		t.Fatalf("the backlog after the re-root holds %d issues; want the %d before it and the ticket the push carried", len(got.Issues), len(before.Issues))
+	}
+
+	after := compactPush(t, ctx, alpha, epic, "after", bound)
+	if after.Fired() || after.Height != bound.keep+1 || after.Err != nil {
+		t.Fatalf("the push after the re-root = %+v; want an ordinary push at height %d", after, bound.keep+1)
+	}
+
+	event := fired.EventValue()
+	want := map[string]any{
+		"history_bound.height":    fired.Height,
+		"history_bound.fired":     true,
+		"history_bound.keep":      bound.keep,
+		"history_bound.lease":     string(storage.LeaseHeld),
+		"history_bound.collected": true,
+		"reroot.cut":              fired.ReRooted.Cut,
+		"reroot.kept":             int(bound.keep),
+		"reroot.dropped":          fired.ReRooted.Dropped,
+	}
+	for key, value := range want {
+		if event[key] != value {
+			t.Fatalf("event %s = %v, want %v (event %v)", key, event[key], value, event)
+		}
+	}
+	if event["history_bound.bytes_before"] != fired.BytesBefore || event["history_bound.bytes_after"] != fired.BytesAfter {
+		t.Fatalf("event bytes = %v -> %v, want %d -> %d", event["history_bound.bytes_before"], event["history_bound.bytes_after"], fired.BytesBefore, fired.BytesAfter)
+	}
+}
+
+// backlogGrewBy reports whether after holds every issue of before, with the
+// same title, and one more titled title.
+func backlogGrewBy(before, after model.Export, title string) bool {
+	titles := map[string]string{}
+	for _, issue := range after.Issues {
+		titles[issue.ID] = issue.Title
+	}
+	for _, issue := range before.Issues {
+		if titles[issue.ID] != issue.Title {
+			return false
+		}
+		delete(titles, issue.ID)
+	}
+	for _, added := range titles {
+		if len(titles) != 1 || added != title {
+			return false
+		}
+	}
+	return len(titles) == 1
+}
+
+// boundAt fires the bound on alpha at head, keeping keep commits, as a push
+// that left the remote at head and reached the bound would.
+func boundAt(t *testing.T, ctx context.Context, alpha, head string, keep uint64) storage.HistoryBound {
+	t.Helper()
+	st := openSyncOrFatal(t, ctx, alpha)
+	defer func() { _ = st.Close() }()
+	b := storage.HistoryBound{Remote: "origin", Branch: "master", Head: head, Keep: keep}
+	_, b.Err = st.publishBound(ctx, &b)
+	return b
+}
+
+// TestAStaleLeaseLeavesTheBranchOnItsHistory has a peer push an ordinary
+// commit after alpha's push landed and before alpha's re-root reached the
+// remote. The lease is stale, the remote keeps the peer's push, and alpha's
+// branch, checkpoints and history stay exactly as they were.
+func TestAStaleLeaseLeavesTheBranchOnItsHistory(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	remoteURL := "file://" + filepath.Join(t.TempDir(), "remote")
+	alpha, bravo := migratedDoltDir(t), migratedDoltDir(t)
+	epic := seedReconcileRemote(t, ctx, alpha, remoteURL)
+	createAndPush(t, ctx, alpha, epic, "a1")
+	adoptRemote(t, ctx, bravo, remoteURL)
+	createAndPush(t, ctx, bravo, epic, "b1")
+	bravoHead := headAt(t, ctx, bravo)
+	alphaHead := headAt(t, ctx, alpha)
+	st := openSyncOrFatal(t, ctx, alpha)
+	checkpoints := branchesUnder(t, ctx, st, migrationCheckpointPrefix+"-")
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	b := boundAt(t, ctx, alpha, alphaHead, 3)
+	if b.Err != nil || b.Lease != storage.LeaseStale || b.Collected || b.ReRooted.Head == "" {
+		t.Fatalf("the bound over a remote a peer moved = %+v; want a published re-root refused as stale and nothing collected", b)
+	}
+	st = openSyncOrFatal(t, ctx, alpha)
+	defer func() { _ = st.Close() }()
+	if head := headCommit(t, ctx, st); head != alphaHead {
+		t.Fatalf("alpha's head moved to %s; want it left at %s", head, alphaHead)
+	}
+	if remote, err := commitHashOfRef(ctx, st.db, "remotes/origin/master"); err != nil || remote != bravoHead {
+		t.Fatalf("the remote's head is %s (%v); want bravo's push %s", remote, err, bravoHead)
+	}
+	if left := branchesUnder(t, ctx, st, migrationCheckpointPrefix+"-"); len(left) != len(checkpoints) {
+		t.Fatalf("checkpoints = %v; want them all kept, %v", left, checkpoints)
+	}
+	if left := branchesUnder(t, ctx, st, reRootScratchPrefix); len(left) != 0 {
+		t.Fatalf("the re-root's scratch branch was left behind: %v", left)
+	}
+	if followed := st.FollowedReRoots(); len(followed) != 0 {
+		t.Fatalf("alpha followed %+v; want nothing to follow", followed)
+	}
+}
+
+// TestAStaleLeaseOverTheLandedReRootStillFollowsIt is the transport retry the
+// lease's verdict cannot see past: alpha's re-root landed, bravo followed it
+// and pushed on top, and then alpha's push of the same re-root comes back
+// stale. The fetch shows the remote carries the re-root, so alpha follows it,
+// collects, and is left behind bravo's push rather than on the old history.
+func TestAStaleLeaseOverTheLandedReRootStillFollowsIt(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	remoteURL := "file://" + filepath.Join(t.TempDir(), "remote")
+	alpha, bravo := migratedDoltDir(t), migratedDoltDir(t)
+	epic := seedReconcileRemote(t, ctx, alpha, remoteURL)
+	createAndPush(t, ctx, alpha, epic, "a1")
+
+	// The attempt that landed: alpha's re-root on the remote, alpha not yet
+	// following it.
+	st := openSyncOrFatal(t, ctx, alpha)
+	seen, err := commitHashOfRef(ctx, st.db, "remotes/origin/master")
+	if err != nil {
+		t.Fatal(err)
+	}
+	landed, err := st.reRootScratch(ctx, "master", seen, 3)
+	if err != nil {
+		t.Fatalf("reRootScratch error = %v", err)
+	}
+	if lease, err := st.publishReRoot(ctx, "origin", "master", seen); err != nil || lease != storage.LeaseHeld {
+		t.Fatalf("the landed attempt = %q, %v; want held", lease, err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	adoptRemote(t, ctx, bravo, remoteURL)
+	createAndPush(t, ctx, bravo, epic, "b1")
+
+	b := boundAt(t, ctx, alpha, seen, 3)
+	if b.Lease != storage.LeaseStale {
+		t.Fatalf("the retried push = %+v; want its lease stale over bravo's push", b)
+	}
+	if b.Err != nil || !b.Collected {
+		t.Fatalf("the bound after a stale lease over its own landed re-root = %+v; want alpha to follow and collect", b)
+	}
+	st = openSyncOrFatal(t, ctx, alpha)
+	defer func() { _ = st.Close() }()
+	var root string
+	if err := st.db.QueryRowContext(ctx, `SELECT commit_hash FROM dolt_log() ORDER BY commit_order LIMIT 1`).Scan(&root); err != nil {
+		t.Fatal(err)
+	}
+	if root != landed.Root {
+		t.Fatalf("alpha's history is rooted at %s; want the landed re-root's root %s", root, landed.Root)
+	}
+	fresh, err := st.SyncFreshness(ctx, "origin", "master")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh.State() != storage.SyncBehind {
+		t.Fatalf("alpha against the remote = %q; want behind bravo's push", fresh.State())
+	}
+}
+
+// TestAHeldLeaseTheBranchCannotFollowIsTheBoundsError publishes a re-root
+// that lands, over a local branch the follow cannot recognize: past the
+// pushed head, alpha holds a second commit that rebuilds to the re-root's
+// root, so no one cut is evidenced. The remote carries the re-root and the
+// branch stays on the old history, unrelated to it, and the bound says so
+// rather than ending as though nothing were wrong.
+func TestAHeldLeaseTheBranchCannotFollowIsTheBoundsError(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	remoteURL := "file://" + filepath.Join(t.TempDir(), "remote")
+	alpha := migratedDoltDir(t)
+	epic := seedReconcileRemote(t, ctx, alpha, remoteURL)
+	createAndPush(t, ctx, alpha, epic, "a1")
+	head := headAt(t, ctx, alpha)
+	const keep = 3
+	withChunkStore(t, alpha, func(ddb *doltdb.DoltDB) {
+		branch := ref.NewBranchRef("master")
+		headCommit := readCommit(t, ctx, ddb, hash.Parse(head))
+		cut, err := firstParentAncestor(ctx, ddb, headCommit, keep-1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		value, meta, err := commitContent(ctx, readCommit(t, ctx, ddb, cut))
+		if err != nil {
+			t.Fatal(err)
+		}
+		twin, err := ddb.CommitDanglingWithParentCommits(ctx, value, []*doltdb.Commit{headCommit}, meta)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := ddb.SetHeadToCommit(ctx, branch, twin); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	b := boundAt(t, ctx, alpha, head, keep)
+	if b.Lease != storage.LeaseHeld || b.Collected {
+		t.Fatalf("the bound = %+v; want its re-root to land and nothing collected", b)
+	}
+	if b.Err == nil || !strings.Contains(b.Err.Error(), "carries a re-root the branch did not follow") {
+		t.Fatalf("the bound's error = %v; want the branch left unrelated to the remote reported", b.Err)
+	}
+	st := openSyncOrFatal(t, ctx, alpha)
+	defer func() { _ = st.Close() }()
+	if remote, err := commitHashOfRef(ctx, st.db, "remotes/origin/master"); err != nil || remote != b.ReRooted.Head {
+		t.Fatalf("the remote's head is %s (%v); want the re-root %s", remote, err, b.ReRooted.Head)
+	}
+}
+
+// TestAReRootPushWithNoVerdictLeavesNoScratch has the bound's lease push
+// fail before it reaches the remote: the remote's path is a file, not a
+// store. The push reaches no verdict, and the scratch the re-root was written
+// on is gone anyway, so nothing keeps the history below the cut reachable.
+func TestAReRootPushWithNoVerdictLeavesNoScratch(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	remotePath := filepath.Join(t.TempDir(), "remote")
+	alpha := migratedDoltDir(t)
+	epic := seedReconcileRemote(t, ctx, alpha, "file://"+remotePath)
+	createAndPush(t, ctx, alpha, epic, "a1")
+	head := headAt(t, ctx, alpha)
+	if err := os.Rename(remotePath, remotePath+".gone"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(remotePath, []byte("not a store"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	b := boundAt(t, ctx, alpha, head, 3)
+	if b.Err == nil || b.Lease != "" || b.ReRooted.Head == "" {
+		t.Fatalf("the bound over a remote that is a file = %+v; want a re-root written, no verdict and an error", b)
+	}
+	st := openSyncOrFatal(t, ctx, alpha)
+	defer func() { _ = st.Close() }()
+	if left := branchesUnder(t, ctx, st, reRootScratchPrefix); len(left) != 0 {
+		t.Fatalf("the re-root's scratch branch was left behind: %v", left)
+	}
+}

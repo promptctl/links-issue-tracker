@@ -60,6 +60,9 @@ const (
 	SyncEntryPush SyncEntry = "push"
 	// SyncEntryFetch is `lit sync fetch`.
 	SyncEntryFetch SyncEntry = "fetch"
+	// SyncEntryBound is a push past the history bound, following the re-root
+	// it published (HistoryBound).
+	SyncEntryBound SyncEntry = "bound"
 )
 
 // FollowedReRoot is a re-root a store applied to its own branch to follow a

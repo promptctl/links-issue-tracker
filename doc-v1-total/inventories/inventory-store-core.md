@@ -998,7 +998,7 @@ There are exactly four producers of DDL that reaches a live workspace:
 | Producer | File | Cited at |
 |---|---|---|
 | goose baseline migration (v1) | `internal/store/migrations/00001_baseline.sql` | `internal/store/migrations/00001_baseline.sql` |
-| goose numbered migrations v2–v9 | `00002_add_lane.sql`, `00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00005_add_event_attribution.sql`, `00006_add_follows_up.sql`, `00007_every_ticket_inside_a_container.sql`, `00008_blocked_by_edge.sql`, `00009_purges.sql` | `internal/store/migrations/00002_add_lane.sql`, `00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00005_add_event_attribution.sql`, `00006_add_follows_up.sql`, `00007_every_ticket_inside_a_container.sql`, `00008_blocked_by_edge.sql`, `00009_purges.sql` |
+| goose numbered migrations v2–v10 | `00002_add_lane.sql`, `00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00005_add_event_attribution.sql`, `00006_add_follows_up.sql`, `00007_every_ticket_inside_a_container.sql`, `00008_blocked_by_edge.sql`, `00009_purges.sql`, `00010_history_can_be_re_rooted.sql` | `internal/store/migrations/00002_add_lane.sql`, `00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00005_add_event_attribution.sql`, `00006_add_follows_up.sql`, `00007_every_ticket_inside_a_container.sql`, `00008_blocked_by_edge.sql`, `00009_purges.sql`, `00010_history_can_be_re_rooted.sql` |
 | pre-goose reconcile (`reconcileToBaseline`) | `internal/store/schema_reconcile.go` | `internal/store/schema_reconcile.go` |
 | quarantine bootstrap (`ensureQuarantineTable`) | `internal/store/migration_runner.go` | `internal/store/migration_runner.go` |
 
@@ -1827,6 +1827,7 @@ goose_db_version` and commits. `assertReachedBaseline` asserts
 - v4 Down: `INSERT IGNORE INTO relations(src_id, dst_id, type, created_at, created_by)` re-materializing one `related-to` edge per non-NULL `redirect_target` with `LEAST/GREATEST` ordering, `created_at = COALESCE(closed_at, updated_at)`, `created_by = 'unknown'` (`00004_add_redirect_target.sql`); then `DROP CONSTRAINT issues_redirect_target_check` and `DROP COLUMN redirect_target`.
 - v5 Down: `ALTER TABLE issue_events DROP COLUMN stream_id` then `DROP COLUMN workspace_id` (`00005_add_event_attribution.sql`).
 - v9 Down: `DROP TABLE purges` (`00009_purges.sql`); the LOSS CONTRACT comment: purged issues stay gone, but the store no longer knows which ids were purged, so a sync can bring one back and minting can reissue one.
+- v10 Down: `SELECT 1;` (`00010_history_can_be_re_rooted.sql`); the LOSS CONTRACT comment: the `producer_binary_version` row the Up deleted is not restored.
 - v1 Down: `DROP TABLE IF EXISTS` for `issue_event_changes`, `issue_events`, `labels`, `comments`, `relations`, `issues`, `meta` — in that FK-safe order (`00001_baseline.sql`).
 
 v4 Up also performs data mutations that change `relations` content: a backfill

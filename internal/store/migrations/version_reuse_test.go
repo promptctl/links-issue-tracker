@@ -31,14 +31,15 @@ type pinnedMigration struct {
 // [LAW:one-source-of-truth] adding a migration adds exactly one line here, in the
 // same PR that adds the file; the pin and the file land together or the guard fails.
 var pinnedVersionContent = map[int64]pinnedMigration{
-	2: {file: "00002_add_lane.sql", sha256: "9126cd9e9c3a01137898fb9023c50b3f8741950f1e5d943dad521852939a4b75"},
-	3: {file: "00003_add_resolution.sql", sha256: "47b50dea1a1e2b7e31ba6b0fa95f5f77c6411b81ee525b04e1ff5e5fdb469563"},
-	4: {file: "00004_add_redirect_target.sql", sha256: "e171b9a18f13d67967e6c235499fc35254125ac23b36f9a687eddc7c411b590d"},
-	5: {file: "00005_add_event_attribution.sql", sha256: "ed625b2817365ed357ad477cd0691994a93a65a7ab1005d1b05456c39d159a70"},
-	6: {file: "00006_add_follows_up.sql", sha256: "f01b4b1ef42071526c8c97bc0acf4bfa4451e0b95981576e63d8170080441b45"},
-	7: {file: "00007_every_ticket_inside_a_container.sql", sha256: "2eb2ae5ab7a43df7116e4dd9137901d8272f03f89a7569bb67b7437182101458"},
-	8: {file: "00008_blocked_by_edge.sql", sha256: "2ab61664b7a73c4e36dc0a11d37e2f5b86b261a97aebf67ffa364ae9596e9deb"},
-	9: {file: "00009_purges.sql", sha256: "f3af8e534e5b7fd3d09b310574f4b8925ca281bb942e040c83d25ebd64fdf852"},
+	2:  {file: "00002_add_lane.sql", sha256: "9126cd9e9c3a01137898fb9023c50b3f8741950f1e5d943dad521852939a4b75"},
+	3:  {file: "00003_add_resolution.sql", sha256: "47b50dea1a1e2b7e31ba6b0fa95f5f77c6411b81ee525b04e1ff5e5fdb469563"},
+	4:  {file: "00004_add_redirect_target.sql", sha256: "e171b9a18f13d67967e6c235499fc35254125ac23b36f9a687eddc7c411b590d"},
+	5:  {file: "00005_add_event_attribution.sql", sha256: "ed625b2817365ed357ad477cd0691994a93a65a7ab1005d1b05456c39d159a70"},
+	6:  {file: "00006_add_follows_up.sql", sha256: "f01b4b1ef42071526c8c97bc0acf4bfa4451e0b95981576e63d8170080441b45"},
+	7:  {file: "00007_every_ticket_inside_a_container.sql", sha256: "2eb2ae5ab7a43df7116e4dd9137901d8272f03f89a7569bb67b7437182101458"},
+	8:  {file: "00008_blocked_by_edge.sql", sha256: "2ab61664b7a73c4e36dc0a11d37e2f5b86b261a97aebf67ffa364ae9596e9deb"},
+	9:  {file: "00009_purges.sql", sha256: "f3af8e534e5b7fd3d09b310574f4b8925ca281bb942e040c83d25ebd64fdf852"},
+	10: {file: "00010_history_can_be_re_rooted.sql", sha256: "1203641ecfc7404f23b8153497df136bd3f23d90194e92ff91b959c2aa168fec"},
 }
 
 // migrationFile is one on-disk, non-baseline registry entry reduced to the identity

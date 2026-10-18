@@ -66,7 +66,13 @@ func (s *Store) followRemoteReRoot(ctx context.Context, remote, branch string, e
 	if !unrelated {
 		return false, nil
 	}
-	reRooted, moved, err := s.followWithEngineClosed(ctx, local, ref.NewRemoteRef(trimmedRemote, trimmedBranch))
+	var reRooted storage.ReRooted
+	var moved bool
+	err = s.withEngineClosed(ctx, func(holdCtx context.Context, ddb *doltdb.DoltDB) error {
+		var err error
+		reRooted, moved, err = followReRoot(holdCtx, ddb, ref.NewBranchRef(local), ref.NewRemoteRef(trimmedRemote, trimmedBranch))
+		return err
+	})
 	// A branch that moved stands even when something after the move failed,
 	// as ReRoot's own result does, so the follow is recorded either way.
 	// [LAW:no-silent-failure]
@@ -113,19 +119,17 @@ func (s *Store) unrelatedToRemote(ctx context.Context, remote, branch string) (l
 	return local, !shared, nil
 }
 
-// followWithEngineClosed closes this store's engine, follows under
-// holdForRefWrite — LOCK, then the commit lock — and reopens the engine
-// whatever happened, so the store is usable again on every return.
-func (s *Store) followWithEngineClosed(ctx context.Context, local string, tracking ref.DoltRef) (followed storage.ReRooted, moved bool, err error) {
+// withEngineClosed closes this store's engine, runs write under
+// holdForRefWrite — LOCK, then the commit lock — within ReRootHoldBudget, and
+// reopens the engine whatever happened, so the store is usable again on every
+// return. A follow and the bound's re-root both rewrite history this way.
+// [LAW:single-enforcer]
+func (s *Store) withEngineClosed(ctx context.Context, write func(holdCtx context.Context, ddb *doltdb.DoltDB) error) error {
 	if err := s.closeEngine(); err != nil {
-		return storage.ReRooted{}, false, errors.Join(fmt.Errorf("close the engine: %w", err), s.reopenEngine(ctx))
+		return errors.Join(fmt.Errorf("close the engine: %w", err), s.reopenEngine(ctx))
 	}
-	holdErr := holdForRefWrite(ctx, s.doltRootDir, ReRootHoldBudget, func(holdCtx context.Context, ddb *doltdb.DoltDB) error {
-		var err error
-		followed, moved, err = followReRoot(holdCtx, ddb, ref.NewBranchRef(local), tracking)
-		return err
-	})
-	return followed, moved, errors.Join(holdErr, s.reopenEngine(ctx))
+	holdErr := holdForRefWrite(ctx, s.doltRootDir, ReRootHoldBudget, write)
+	return errors.Join(holdErr, s.reopenEngine(ctx))
 }
 
 // reopenEngine opens the engine closeEngine closed, under the store's own

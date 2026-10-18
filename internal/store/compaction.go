@@ -196,6 +196,19 @@ func measureFootprint(doltRootDir string) (storeFootprint, error) {
 	return footprint, nil
 }
 
+// storeBytes is the size on disk of everything the store at doltRootDir keeps
+// its chunks in: the journal, both generations and the manifests. Unlike
+// measureFootprint it walks the whole chunk store, so it is read around a
+// pass that can shrink the store, never as a cheap probe. A walk that fails
+// reads zero rather than the part it summed.
+func storeBytes(doltRootDir string) (int64, error) {
+	total, err := dirSize(nomsDir(doltRootDir))
+	if err != nil {
+		return 0, fmt.Errorf("measure the store's size on disk: %w", err)
+	}
+	return total, nil
+}
+
 // measureFootprint measures the store this handle is open on.
 func (s *Store) measureFootprint() (storeFootprint, error) {
 	return measureFootprint(s.doltRootDir)

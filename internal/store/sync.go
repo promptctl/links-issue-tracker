@@ -838,6 +838,16 @@ func (s *Store) SyncCompactAndPush(ctx context.Context, remote string, branch st
 	// compacting: the store was compacted moments ago.
 	result, err, followErr := s.retryPushAfterFollow(ctx, remote, branch, setUpstream, force, result, err)
 	err = joinFollowFailure(err, followErr)
+	// The bound keeps the history the push just published, so it runs once
+	// the push has landed and only then. Its outcome is carried with the
+	// other maintenance and never fails the push that landed before it, and
+	// its GC's sweep joins this push's.
+	var bound string
+	if err == nil {
+		kept, boundSweep := s.boundHistory(ctx, strings.TrimSpace(remote), strings.TrimSpace(branch))
+		bound = historyBoundReport(kept)
+		sweep = sweep.plus(boundSweep)
+	}
 	// DOLT_GC above compacts `noms`; the prune collects the other half of the
 	// store's local footprint, the abandoned git remote mirrors. All three jobs
 	// report whether or not the push landed. A pass that ran is reported even
@@ -869,6 +879,7 @@ func (s *Store) SyncCompactAndPush(ctx context.Context, remote string, branch st
 	maintenance := joinMaintenance(
 		compactionReport(attempt, depthErr),
 		sweep.Report(),
+		bound,
 		s.pruneRemoteCache(ctx).Report(),
 	)
 	if err != nil {

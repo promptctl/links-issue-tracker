@@ -470,7 +470,12 @@ func (s *Store) replayUnderGuard(ctx context.Context, remote, branch, remoteHead
 	if err := s.guardCommitSchemaAhead(ctx, remote, branch, remoteHead); err != nil {
 		return err
 	}
-	s.sweepStaleReconcileScratch(ctx)
+	// A leftover scratch branch is inert to a reconcile — never the data
+	// branch, never pushed — so a sweep that fails is reported and the
+	// reconcile goes on. [LAW:no-silent-failure]
+	if err := s.deleteBranchesUnder(ctx, reconcileScratchPrefix+"-"); err != nil {
+		fmt.Fprintf(os.Stderr, "lit: reconcile could not sweep stale scratch branches: %v\n", err)
+	}
 	scratchBranch := newReconcileScratch()
 	guard := newSnapshotGuard(s.doltRootDir, formatReconcileSnapshotLabel(time.Now()))
 	return retryTransientGCContention(ctx, func(ctx context.Context) error {
@@ -1093,37 +1098,38 @@ func (s *Store) cleanupReconcileScratch(ctx context.Context, dataBranch string, 
 	return nil
 }
 
-// sweepStaleReconcileScratch deletes scratch branches abandoned by a previously
-// killed reconcile. The commit lock guarantees no other reconcile is live, so
-// every branch under the scratch prefix is an orphan — deleting them keeps the
-// unique-per-run names from accumulating. Best-effort: a sweep failure is surfaced
-// but never fails the reconcile, since a leftover scratch branch is inert (never
-// the data branch, never pushed). [LAW:no-silent-failure]
-func (s *Store) sweepStaleReconcileScratch(ctx context.Context) {
-	rows, err := s.db.QueryContext(ctx, `SELECT name FROM dolt_branches WHERE name LIKE ?`, reconcileScratchPrefix+"-%")
+// deleteBranchesUnder deletes every branch whose name begins with prefix: the
+// scratch branches a reconcile or a history bound writes and a killed run
+// abandons. The caller holds the commit lock, so no run that owns one is
+// live and every such branch is an orphan. Every branch it lists is tried,
+// and every failure is returned, joined: what one costs is the caller's to
+// judge, since a reconcile can run beside a leftover branch and the history
+// bound cannot collect under one.
+func (s *Store) deleteBranchesUnder(ctx context.Context, prefix string) error {
+	rows, err := s.db.QueryContext(ctx, `SELECT name FROM dolt_branches WHERE name LIKE ?`, prefix+"%")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "lit: reconcile could not list stale scratch branches: %v\n", err)
-		return
+		return fmt.Errorf("list the branches under %q: %w", prefix, err)
 	}
 	var names []string
 	for rows.Next() {
 		var name string
-		if scanErr := rows.Scan(&name); scanErr != nil {
-			fmt.Fprintf(os.Stderr, "lit: reconcile could not scan stale scratch branch: %v\n", scanErr)
+		if err := rows.Scan(&name); err != nil {
 			rows.Close()
-			return
+			return fmt.Errorf("scan a branch under %q: %w", prefix, err)
 		}
 		names = append(names, name)
 	}
-	if iterErr := rows.Err(); iterErr != nil {
-		fmt.Fprintf(os.Stderr, "lit: reconcile could not iterate stale scratch branches: %v\n", iterErr)
+	var errs []error
+	if err := rows.Err(); err != nil {
+		errs = append(errs, fmt.Errorf("iterate the branches under %q: %w", prefix, err))
 	}
 	rows.Close()
 	for _, name := range names {
-		if delErr := execProcedureDiscard(ctx, s.db, "DOLT_BRANCH", "-D", name); delErr != nil {
-			fmt.Fprintf(os.Stderr, "lit: reconcile could not delete stale scratch branch %q: %v\n", name, delErr)
+		if err := execProcedureDiscard(ctx, s.db, "DOLT_BRANCH", "-D", name); err != nil {
+			errs = append(errs, fmt.Errorf("delete branch %q: %w", name, err))
 		}
 	}
+	return errors.Join(errs...)
 }
 
 // resetAndLift hard-resets the (scratch) branch to a commit and then lifts the

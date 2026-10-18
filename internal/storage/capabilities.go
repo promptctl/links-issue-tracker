@@ -130,6 +130,13 @@ type Syncer interface {
 	// nothing and returns none.
 	FollowedReRoots() []FollowedReRoot
 
+	// HistoryBounds is what every compacting push since the engine opened did
+	// to keep the sync branch's history under its bound, oldest first: the
+	// remote head's height every time, and the re-root it published once that
+	// height reached the bound. An engine whose history has no bound to keep
+	// returns none.
+	HistoryBounds() []HistoryBound
+
 	// ForkPointRecords is what every fetch the engine ran since it opened did
 	// to each fork point before it moved the tracking ref, oldest first. A
 	// fork point is the remote head this checkout last knew while the two
