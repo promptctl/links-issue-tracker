@@ -188,7 +188,8 @@ func syncFetchLeaf() syncLeaf {
 	verbose := fs.Bool("verbose", false, "Include detailed remote output")
 	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, scope syncScope, positional []string) error {
 		ws, session := scope.ws, scope.session
-		if _, err := syncDoltRemotesFromGit(ctx, session, ws); err != nil {
+		syncState, err := syncDoltRemotesFromGit(ctx, session, ws)
+		if err != nil {
 			// A could-not-attempt failure (git-remote reconciliation itself failed,
 			// before any fetch was even tried) is still a decision this command
 			// reached — trace it, matching the coverage recordMirrorTraceError/
@@ -198,7 +199,7 @@ func syncFetchLeaf() syncLeaf {
 			return err
 		}
 		remoteName := strings.TrimSpace(*remote)
-		err := fetchAndFollow(ctx, session, ws, remoteName, *prune)
+		err = fetchAndFollow(ctx, session, ws, syncState.gitRemotes, remoteName, *prune)
 		recordSyncCommandTrace(ws, "lit sync fetch", "fetched", err, map[string]string{"remote": remoteName})
 		if err != nil {
 			return err
@@ -213,20 +214,28 @@ func syncFetchLeaf() syncLeaf {
 }
 
 // fetchAndFollow is `lit sync fetch`'s work, traced by its caller as one
-// decision: fetch remote, then follow a re-root the fetch brought on the sync
-// branch, so no read after it reports that re-root as a divergence.
-func fetchAndFollow(ctx context.Context, session syncSession, ws workspace.Info, remote string, prune bool) error {
+// decision: fetch remote, then follow a re-root on the remote and branch the
+// freshness reads report on (freshnessSyncTarget), so none of them reports
+// that re-root as a divergence. The follow is for those reads alone, so it
+// targets what they read whichever remote was fetched, and contacts no
+// network: a workspace with no sync remote, or none whose default branch is
+// known here, has no freshness a re-root could misreport, and follows
+// nothing.
+func fetchAndFollow(ctx context.Context, session syncSession, ws workspace.Info, gitRemotes []workspace.GitRemote, remote string, prune bool) error {
 	if err := session.syncer.SyncFetch(ctx, remote, prune); err != nil {
 		return err
 	}
 	if err := markFetchSuccess(ws); err != nil {
 		fmt.Fprintf(os.Stderr, "lit: fetch-success marker not written: %v\n", err)
 	}
-	branch, err := resolveSyncBranch(ctx, ws, remote)
+	syncRemote, branch, err := freshnessSyncTarget(ctx, ws, gitRemotes)
+	if notKnown := (syncBranchNotKnownError{}); errors.As(err, &notKnown) || (err == nil && syncRemote == "") {
+		return nil
+	}
 	if err != nil {
 		return err
 	}
-	return session.syncer.SyncFollowReRoot(ctx, remote, branch, storage.SyncEntryFetch)
+	return session.syncer.SyncFollowReRoot(ctx, syncRemote, branch, storage.SyncEntryFetch)
 }
 
 func syncPullLeaf() syncLeaf {

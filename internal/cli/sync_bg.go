@@ -680,7 +680,9 @@ func mirrorCycle(ctx context.Context, log io.Writer, ws workspace.Info, stopAnsw
 // on the live store exactly as the automatic receive does it
 // (performSyncReceive), and the settle follows the re-root the clone followed.
 // What it established is surfaced through the receive's one contract, and a
-// receive that failed is recorded there and returned, for the mirror's log.
+// receive that failed — to open, or in the landing, the remotes or the settle
+// (outcome.receiveErr, already traced by performSyncReceive) — is returned,
+// for the mirror's log.
 func receivePushedReRoot(ctx context.Context, ws workspace.Info, clone liveClone, landed pushedHead) error {
 	target := syncTarget{remote: landed.remote, branch: landed.branch, skip: syncTargetReady}
 	outcome, closeLive, err := performSyncReceive(ctx, ws, clone, receiveFetch{target: target})
@@ -696,7 +698,7 @@ func receivePushedReRoot(ctx context.Context, ws workspace.Info, clone liveClone
 		fmt.Fprintf(os.Stderr, "lit: on-change mirror: receive trace not recorded: %v\n", outcome.traceErr)
 	}
 	surfaceReceiveOutcome(ctx, ws, outcome, time.Now())
-	return nil
+	return outcome.receiveErr
 }
 
 // holdBudgetCutExplanation is the one wording of "the holder cut itself

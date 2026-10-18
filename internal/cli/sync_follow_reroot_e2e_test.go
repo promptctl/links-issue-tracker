@@ -189,3 +189,45 @@ func TestEverySyncEntryPointFollowsAReRootedRemote(t *testing.T) {
 		}
 	})
 }
+
+// `lit sync fetch` follows only for the freshness reads, which never ask the
+// network for the sync branch. With no default branch known on this machine
+// and none the remote can name, the fetch lands, reports fetched, and follows
+// nothing, as no read has a freshness to misreport.
+func TestSyncFetchWithNoKnownSyncBranchFetchesAndFollowsNothing(t *testing.T) {
+	t.Setenv(DisableAutoSyncEnvVar, "1")
+	maskGlobalConfig(t)
+	base := t.TempDir()
+	runGit(t, base, "init", "--bare", "remote.git")
+	remote := filepath.Join(base, "remote.git")
+	runGit(t, base, "clone", remote, "alpha")
+	alpha := filepath.Join(base, "alpha")
+	runGit(t, alpha, "config", "user.email", "a@a.co")
+	runGit(t, alpha, "config", "user.name", "alpha")
+	if err := os.WriteFile(filepath.Join(alpha, "readme.md"), []byte("hi\n"), 0o644); err != nil {
+		t.Fatalf("write readme error = %v", err)
+	}
+	runGit(t, alpha, "add", "-A")
+	runGit(t, alpha, "commit", "-m", "seed")
+	runGit(t, alpha, "push", "origin", "HEAD")
+	runCLIInDir(t, alpha, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, alpha, "sync", "push", "--set-upstream")
+
+	runGit(t, remote, "symbolic-ref", "HEAD", "refs/heads/no-such-branch")
+	runGit(t, alpha, "remote", "set-head", "origin", "-d")
+	ws, err := workspace.Resolve(alpha)
+	if err != nil {
+		t.Fatalf("resolve alpha: %v", err)
+	}
+	if err := os.Remove(advertisedSyncBranchPath(ws, "origin")); err != nil && !os.IsNotExist(err) {
+		t.Fatalf("remove the sync branch record: %v", err)
+	}
+
+	isolateEvents(t)
+	if out := runCLIInDir(t, alpha, "sync", "fetch"); strings.TrimSpace(out) != "fetched" {
+		t.Fatalf("lit sync fetch printed %q, want fetched", out)
+	}
+	if follows, ok := lastEvent(t).Facts["reroot.follows"].([]any); !ok || len(follows) != 0 {
+		t.Fatalf("reroot.follows = %v; want an empty list", lastEvent(t).Facts["reroot.follows"])
+	}
+}
