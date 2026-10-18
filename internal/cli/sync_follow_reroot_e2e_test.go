@@ -274,7 +274,10 @@ func TestSyncPushPutsTheHistoryBoundOnItsEvent(t *testing.T) {
 	if record["history_bound.head"] != head || height < 2 || record["history_bound.fired"] != false || record["history_bound.reroot_at"] != float64(2000) || record["history_bound.keep"] != float64(1000) {
 		t.Fatalf("event %q bound = %v; want alpha's head %s at its height, short of 2000, keeping 1000", ev.Event, record, head)
 	}
-	if record["history_bound.lease"] != "" || record["history_bound.collected"] != false || record["history_bound.error"] != nil || record["reroot.head"] != "" {
-		t.Fatalf("event %q bound = %v; want nothing published, collected or failed", ev.Event, record)
+	if record["history_bound.lease"] != "" || record["history_bound.error"] != nil || record["reroot.head"] != "" {
+		t.Fatalf("event %q bound = %v; want nothing published or failed", ev.Event, record)
+	}
+	if follows, ok := ev.Facts["reroot.follows"].([]any); !ok || len(follows) != 0 {
+		t.Fatalf("event %q reroot.follows = %v; want an empty list: nothing followed, so nothing collected", ev.Event, ev.Facts["reroot.follows"])
 	}
 }

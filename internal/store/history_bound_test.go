@@ -92,7 +92,7 @@ func TestAPushPastTheBoundReRootsWithNoCommandRun(t *testing.T) {
 	bound := historyBound{reRootAt: seeded + 2, keep: 3}
 
 	under := compactPush(t, ctx, alpha, epic, "under", bound)
-	if under.Fired() || under.Height != seeded+1 || under.Err != nil || under.ReRooted.Head != "" || under.Lease != "" || under.Collected {
+	if under.Fired() || under.Height != seeded+1 || under.Err != nil || under.ReRooted.Head != "" || under.Lease != "" || under.Collection.Ran {
 		t.Fatalf("a push under the bound = %+v; want height %d, not fired, nothing published", under, seeded+1)
 	}
 	// A fetch records the fork point every checkout that syncs holds, here on
@@ -118,14 +118,14 @@ func TestAPushPastTheBoundReRootsWithNoCommandRun(t *testing.T) {
 	if fired.Err != nil {
 		t.Fatalf("the push past the bound stopped: %v", fired.Err)
 	}
-	if !fired.Fired() || fired.Height != bound.reRootAt || fired.Lease != storage.LeaseHeld || !fired.Collected {
+	if !fired.Fired() || fired.Height != bound.reRootAt || fired.Lease != storage.LeaseHeld || !fired.Collection.Ran {
 		t.Fatalf("the push past the bound = %+v; want fired at height %d, lease held, store collected", fired, bound.reRootAt)
 	}
 	if fired.ReRooted.Kept() != int(bound.keep) || fired.ReRooted.Dropped != int(fired.Height-bound.keep) {
 		t.Fatalf("the re-root kept %d and dropped %d commits; want %d kept and %d dropped", fired.ReRooted.Kept(), fired.ReRooted.Dropped, bound.keep, fired.Height-bound.keep)
 	}
-	if fired.BytesAfter >= fired.BytesBefore {
-		t.Fatalf("the store went from %d to %d bytes across the GC; want it smaller", fired.BytesBefore, fired.BytesAfter)
+	if c := fired.Collection; c.BytesAfter >= c.BytesBefore {
+		t.Fatalf("the store went from %d to %d bytes across the GC; want it smaller", c.BytesBefore, c.BytesAfter)
 	}
 
 	st = openSyncOrFatal(t, ctx, alpha)
@@ -174,22 +174,18 @@ func TestAPushPastTheBoundReRootsWithNoCommandRun(t *testing.T) {
 
 	event := fired.EventValue()
 	want := map[string]any{
-		"history_bound.height":    fired.Height,
-		"history_bound.fired":     true,
-		"history_bound.keep":      bound.keep,
-		"history_bound.lease":     string(storage.LeaseHeld),
-		"history_bound.collected": true,
-		"reroot.cut":              fired.ReRooted.Cut,
-		"reroot.kept":             int(bound.keep),
-		"reroot.dropped":          fired.ReRooted.Dropped,
+		"history_bound.height": fired.Height,
+		"history_bound.fired":  true,
+		"history_bound.keep":   bound.keep,
+		"history_bound.lease":  string(storage.LeaseHeld),
+		"reroot.cut":           fired.ReRooted.Cut,
+		"reroot.kept":          int(bound.keep),
+		"reroot.dropped":       fired.ReRooted.Dropped,
 	}
 	for key, value := range want {
 		if event[key] != value {
 			t.Fatalf("event %s = %v, want %v (event %v)", key, event[key], value, event)
 		}
-	}
-	if event["history_bound.bytes_before"] != fired.BytesBefore || event["history_bound.bytes_after"] != fired.BytesAfter {
-		t.Fatalf("event bytes = %v -> %v, want %d -> %d", event["history_bound.bytes_before"], event["history_bound.bytes_after"], fired.BytesBefore, fired.BytesAfter)
 	}
 }
 
@@ -221,7 +217,7 @@ func boundAt(t *testing.T, ctx context.Context, alpha, head string, keep uint64)
 	st := openSyncOrFatal(t, ctx, alpha)
 	defer func() { _ = st.Close() }()
 	b := storage.HistoryBound{Remote: "origin", Branch: "master", Head: head, Keep: keep}
-	_, b.Err = st.publishBound(ctx, &b)
+	b.Err = st.publishBound(ctx, &b)
 	return b
 }
 
@@ -247,7 +243,7 @@ func TestAStaleLeaseLeavesTheBranchOnItsHistory(t *testing.T) {
 	}
 
 	b := boundAt(t, ctx, alpha, alphaHead, 3)
-	if b.Err != nil || b.Lease != storage.LeaseStale || b.Collected || b.ReRooted.Head == "" {
+	if b.Err != nil || b.Lease != storage.LeaseStale || b.Collection.Ran || b.ReRooted.Head == "" {
 		t.Fatalf("the bound over a remote a peer moved = %+v; want a published re-root refused as stale and nothing collected", b)
 	}
 	st = openSyncOrFatal(t, ctx, alpha)
@@ -306,7 +302,7 @@ func TestAStaleLeaseOverTheLandedReRootStillFollowsIt(t *testing.T) {
 	if b.Lease != storage.LeaseStale {
 		t.Fatalf("the retried push = %+v; want its lease stale over bravo's push", b)
 	}
-	if b.Err != nil || !b.Collected {
+	if b.Err != nil || !b.Collection.Ran {
 		t.Fatalf("the bound after a stale lease over its own landed re-root = %+v; want alpha to follow and collect", b)
 	}
 	st = openSyncOrFatal(t, ctx, alpha)
@@ -363,7 +359,7 @@ func TestAHeldLeaseTheBranchCannotFollowIsTheBoundsError(t *testing.T) {
 	})
 
 	b := boundAt(t, ctx, alpha, head, keep)
-	if b.Lease != storage.LeaseHeld || b.Collected {
+	if b.Lease != storage.LeaseHeld || b.Collection.Ran {
 		t.Fatalf("the bound = %+v; want its re-root to land and nothing collected", b)
 	}
 	if b.Err == nil || !strings.Contains(b.Err.Error(), "carries a re-root the branch did not follow") {

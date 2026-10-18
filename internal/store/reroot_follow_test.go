@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -166,6 +168,122 @@ func TestSyncPullFollowsAReRootedRemote(t *testing.T) {
 	}
 }
 
+// TestAFollowCollectsTheHistoryBelowTheCut has bravo follow alpha's re-root
+// through `lit sync pull`, holding every kind of local ref that names a commit
+// below the cut: its migration checkpoints, the fork point its adopt recorded,
+// and a re-root scratch a killed bound left. The follow drops them and runs
+// the full GC, so neither bravo's old head nor the cut resolves in its store
+// any more, the store shrank, and the follow's event carries both sizes.
+func TestAFollowCollectsTheHistoryBelowTheCut(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	r := newReRootedRemote(t, ctx, true)
+
+	bravo := openSyncOrFatal(t, ctx, r.bravo)
+	defer func() { _ = bravo.Close() }()
+	oldHead := headCommit(t, ctx, bravo)
+	if err := execProcedureDiscard(ctx, bravo.db, "DOLT_BRANCH", reRootScratchPrefix+"killed", r.cut); err != nil {
+		t.Fatal(err)
+	}
+	pins := []string{migrationCheckpointPrefix + "-", migrationDriftRepairCheckpointPrefix + "-", reconcileScratchPrefix, reRootScratchPrefix}
+	if len(branchesUnder(t, ctx, bravo, migrationCheckpointPrefix+"-")) == 0 {
+		t.Fatalf("bravo holds no %s checkpoint, so the test cannot show the follow dropping one", migrationCheckpointPrefix)
+	}
+
+	if _, err := bravo.SyncPull(ctx, "origin", "master"); err != nil {
+		t.Fatalf("SyncPull(bravo) error = %v", err)
+	}
+	r.assertFollowed(t, bravo, storage.SyncEntryPull)
+	r.assertMerged(t, ctx, bravo)
+	for _, old := range []string{oldHead, r.cut} {
+		var n int
+		if err := bravo.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM dolt_log(?)`, old).Scan(&n); err == nil {
+			t.Fatalf("%s still resolves in bravo's store, with %d commits below it; want it collected", old, n)
+		}
+	}
+	for _, prefix := range pins {
+		if left := branchesUnder(t, ctx, bravo, prefix); len(left) != 0 {
+			t.Fatalf("branches under %q still pin the history below the cut: %v", prefix, left)
+		}
+	}
+	if forkPoint, remote := branchesUnder(t, ctx, bravo, forkPointPrefix)["origin/master"], r.alphaReRoot.Head; forkPoint != remote {
+		t.Fatalf("bravo's fork point is %q; want it moved onto the remote's re-rooted head %s", forkPoint, remote)
+	}
+
+	c := bravo.FollowedReRoots()[0].Collection
+	if !c.Ran || c.BytesAfter >= c.BytesBefore {
+		t.Fatalf("the follow's collection = %+v; want the GC run and the store smaller after it", c)
+	}
+	event := bravo.FollowedReRoots()[0].EventValue()
+	if event["collection.ran"] != true || event["collection.bytes_before"] != c.BytesBefore || event["collection.bytes_after"] != c.BytesAfter {
+		t.Fatalf("the follow's event = %v; want collection.ran true and %d -> %d bytes", event, c.BytesBefore, c.BytesAfter)
+	}
+}
+
+// TestAFollowCarriesAFailedCollection has bravo's collection fail after its
+// fetch followed alpha's re-root: a directory under the chunk store that the
+// size reading cannot walk. The collection is maintenance, so the follow
+// still succeeds, the GC still runs, and the failure rides the follow's record
+// and its event's collection.error instead of failing the fetch. The fetch is
+// the entry point because it settles nothing: a pull's reconcile snapshots the
+// whole store, which the same directory would fail first.
+func TestAFollowCarriesAFailedCollection(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	r := newReRootedRemote(t, ctx, true)
+	unreadable := filepath.Join(nomsDir(r.bravo), "unreadable")
+	if err := os.Mkdir(unreadable, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(unreadable, 0o755) })
+
+	bravo := openSyncOrFatal(t, ctx, r.bravo)
+	defer func() { _ = bravo.Close() }()
+	if err := bravo.SyncFetch(ctx, "origin", false); err != nil {
+		t.Fatalf("SyncFetch(bravo) error = %v", err)
+	}
+	if err := bravo.SyncFollowReRoot(ctx, "origin", "master", storage.SyncEntryFetch); err != nil {
+		t.Fatalf("SyncFollowReRoot(bravo) error = %v; want the follow to stand whatever its collection did", err)
+	}
+	r.assertFollowed(t, bravo, storage.SyncEntryFetch)
+
+	c := bravo.FollowedReRoots()[0].Collection
+	if !c.Ran || c.Err == nil || !strings.Contains(c.Err.Error(), "measure the store's size on disk") {
+		t.Fatalf("the follow's collection = %+v; want the GC run and the failed size reading carried", c)
+	}
+	if got, ok := bravo.FollowedReRoots()[0].EventValue()["collection.error"].(*string); !ok || got == nil || *got != c.Err.Error() {
+		t.Fatalf("the follow's event collection.error = %v; want %q", got, c.Err.Error())
+	}
+}
+
+// TestACollectionIsReportedWhole puts every fact of a collection on its event
+// and in its maintenance line, and a collection that did nothing says nothing.
+func TestACollectionIsReportedWhole(t *testing.T) {
+	t.Parallel()
+	c := storage.Collection{Ran: true, BytesBefore: 3 << 20, BytesAfter: 1 << 20, Sweep: "remote-cache ref sweep: 2 orphaned refs", Err: errors.New("prune pre-migrate checkpoints: refused")}
+	want := map[string]any{
+		"collection.ran":          true,
+		"collection.bytes_before": int64(3 << 20),
+		"collection.bytes_after":  int64(1 << 20),
+		"collection.sweep":        "remote-cache ref sweep: 2 orphaned refs",
+	}
+	got := c.EventRecord()
+	errText, ok := got["collection.error"].(*string)
+	if !ok || errText == nil || *errText != "prune pre-migrate checkpoints: refused" {
+		t.Fatalf("EventRecord() collection.error = %v, want the collection's error text", got["collection.error"])
+	}
+	delete(got, "collection.error")
+	if !maps.Equal(got, want) {
+		t.Fatalf("EventRecord() = %v, want %v", got, want)
+	}
+	if got, want := collectionReport(c), "store 3.0 MiB -> 1.0 MiB; remote-cache ref sweep: 2 orphaned refs; history below the cut not collected: prune pre-migrate checkpoints: refused"; got != want {
+		t.Fatalf("collectionReport() = %q, want %q", got, want)
+	}
+	if got := collectionReport(storage.Collection{}); got != "" {
+		t.Fatalf("collectionReport(zero) = %q, want nothing said", got)
+	}
+}
+
 // TestSyncReceiveFollowsAReRootedRemote drives the receive: it follows the
 // re-root and reports the concurrent edits as an ordinary divergence, which
 // the reconcile the receive hands it to merges.
@@ -216,6 +334,27 @@ func TestSyncReconcileFollowsAReRootedRemote(t *testing.T) {
 	}
 	r.assertFollowed(t, bravo, storage.SyncEntryReconcile)
 	r.assertMerged(t, ctx, bravo)
+}
+
+// TestACompactingPushReportsItsFollowsCollection has `lit sync push` refused
+// over alpha's re-root: bravo follows, collects below the cut and pushes
+// again, and the push's maintenance account carries that collection.
+func TestACompactingPushReportsItsFollowsCollection(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	r := newReRootedRemote(t, ctx, false)
+	bravo := openSyncOrFatal(t, ctx, r.bravo)
+	defer func() { _ = bravo.Close() }()
+
+	pushed, err := bravo.SyncCompactAndPush(ctx, "origin", "master", false, false)
+	if err != nil {
+		t.Fatalf("SyncCompactAndPush(bravo) error = %v", err)
+	}
+	r.assertFollowed(t, bravo, storage.SyncEntryPush)
+	c := bravo.FollowedReRoots()[0].Collection
+	if want := fmt.Sprintf("store %s -> %s", humanBytes(c.BytesBefore), humanBytes(c.BytesAfter)); !c.Ran || !strings.Contains(pushed.Maintenance, want) {
+		t.Fatalf("the push's maintenance = %q; want the follow's collection %+v reported as %q", pushed.Maintenance, c, want)
+	}
 }
 
 // TestSyncPushFollowsAReRootedRemote drives a push the re-rooted remote

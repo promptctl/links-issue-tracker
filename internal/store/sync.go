@@ -717,7 +717,7 @@ func (s *Store) chooseCompactionDepth() (GCMode, error) {
 // after a mutation, and reclaiming local disk is not worth that on every change.
 func (s *Store) SyncPush(ctx context.Context, remote string, branch string, setUpstream bool, force bool) (storage.SyncPushResult, error) {
 	result, pushErr := s.pushMutation(ctx, remote, branch, setUpstream, force)
-	result, pushErr, followErr := s.retryPushAfterFollow(ctx, remote, branch, setUpstream, force, result, pushErr)
+	result, pushErr, _, followErr := s.retryPushAfterFollow(ctx, remote, branch, setUpstream, force, result, pushErr)
 	if err := joinFollowFailure(pushErr, followErr); err != nil {
 		return storage.SyncPushResult{}, err
 	}
@@ -783,28 +783,30 @@ func (s *Store) pushMutation(ctx context.Context, remote string, branch string, 
 // result. Otherwise the refusal stands, returned as pushErr with the fetch
 // already run, so a caller judging it reads the remote as it stands now.
 // followErr is a fetch or follow that failed, beside the refusal it could not
-// explain, for the caller to word. Every other outcome — a push that landed,
+// explain, for the caller to word; followed is the follow's record, zero when
+// the branch did not move, for the caller's maintenance account. Every other
+// outcome — a push that landed,
 // or one that failed without a refusal (an unreachable remote, a commit lock
 // not acquired, a compaction that failed first) — passes through untouched
 // with nothing fetched.
 //
 // A push with no branch names no tracking ref, so its refusal stands with
 // nothing fetched: there is no history on the other side to follow.
-func (s *Store) retryPushAfterFollow(ctx context.Context, remote, branch string, setUpstream, force bool, pushed storage.SyncPushResult, pushErr error) (result storage.SyncPushResult, _ error, followErr error) {
+func (s *Store) retryPushAfterFollow(ctx context.Context, remote, branch string, setUpstream, force bool, pushed storage.SyncPushResult, pushErr error) (result storage.SyncPushResult, _ error, followed storage.FollowedReRoot, followErr error) {
 	trimmedBranch := strings.TrimSpace(branch)
 	var refusal pushRefusedError
 	if !errors.As(pushErr, &refusal) || trimmedBranch == "" {
-		return pushed, pushErr, nil
+		return pushed, pushErr, storage.FollowedReRoot{}, nil
 	}
 	if err := s.SyncFetch(ctx, remote, false); err != nil {
-		return storage.SyncPushResult{}, pushErr, err
+		return storage.SyncPushResult{}, pushErr, storage.FollowedReRoot{}, err
 	}
 	followed, err := s.followRemoteReRoot(ctx, remote, trimmedBranch, storage.SyncEntryPush)
-	if err != nil || !followed {
-		return storage.SyncPushResult{}, pushErr, err
+	if err != nil || followed.Head == "" {
+		return storage.SyncPushResult{}, pushErr, followed, err
 	}
 	result, pushErr = s.pushMutation(ctx, remote, trimmedBranch, setUpstream, force)
-	return result, pushErr, nil
+	return result, pushErr, followed, nil
 }
 
 // SyncCompactAndPush compacts then pushes under one commit-lock acquisition, so
@@ -835,18 +837,16 @@ func (s *Store) SyncCompactAndPush(ctx context.Context, remote string, branch st
 		return pushErr
 	})
 	// A push refused over a re-root it follows runs again without
-	// compacting: the store was compacted moments ago.
-	result, err, followErr := s.retryPushAfterFollow(ctx, remote, branch, setUpstream, force, result, err)
+	// compacting: the follow collected the store below the cut, and that
+	// collection joins the maintenance account.
+	result, err, followed, followErr := s.retryPushAfterFollow(ctx, remote, branch, setUpstream, force, result, err)
 	err = joinFollowFailure(err, followErr)
 	// The bound keeps the history the push just published, so it runs once
 	// the push has landed and only then. Its outcome is carried with the
-	// other maintenance and never fails the push that landed before it, and
-	// its GC's sweep joins this push's.
+	// other maintenance and never fails the push that landed before it.
 	var bound string
 	if err == nil {
-		kept, boundSweep := s.boundHistory(ctx, strings.TrimSpace(remote), strings.TrimSpace(branch))
-		bound = historyBoundReport(kept)
-		sweep = sweep.plus(boundSweep)
+		bound = historyBoundReport(s.boundHistory(ctx, strings.TrimSpace(remote), strings.TrimSpace(branch)))
 	}
 	// DOLT_GC above compacts `noms`; the prune collects the other half of the
 	// store's local footprint, the abandoned git remote mirrors. All three jobs
@@ -879,6 +879,7 @@ func (s *Store) SyncCompactAndPush(ctx context.Context, remote string, branch st
 	maintenance := joinMaintenance(
 		compactionReport(attempt, depthErr),
 		sweep.Report(),
+		collectionReport(followed.Collection),
 		bound,
 		s.pruneRemoteCache(ctx).Report(),
 	)
@@ -982,7 +983,7 @@ func (s *Store) SyncPushFromClone(ctx context.Context, remote string, branch str
 		return storage.SyncPushResult{}, err
 	}
 	result, pushErr := s.pushMutation(ctx, trimmedRemote, trimmedBranch, setUpstream, force)
-	result, pushErr, followErr := s.retryPushAfterFollow(ctx, trimmedRemote, trimmedBranch, setUpstream, force, result, pushErr)
+	result, pushErr, _, followErr := s.retryPushAfterFollow(ctx, trimmedRemote, trimmedBranch, setUpstream, force, result, pushErr)
 	if pushErr == nil {
 		return result, nil
 	}

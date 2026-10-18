@@ -138,7 +138,7 @@ func TestAPushPastTheBoundCollectsTheRemote(t *testing.T) {
 	_, grown := dataTree(t, gitDir)
 
 	fired := compactPush(t, ctx, alpha, epic, "past", bound)
-	if fired.Err != nil || fired.Lease != storage.LeaseHeld || !fired.Collected {
+	if fired.Err != nil || fired.Lease != storage.LeaseHeld || !fired.Collection.Ran {
 		t.Fatalf("the push past the bound = %+v; want its re-root held and the checkout collected", fired)
 	}
 	gc := fired.RemoteGC
@@ -159,8 +159,8 @@ func TestAPushPastTheBoundCollectsTheRemote(t *testing.T) {
 		t.Fatalf("the push after the GC = %+v; want an ordinary push", afterPush)
 	}
 	_, pushed := dataTree(t, gitDir)
-	if onePush := pushed - bytes; bytes > fired.BytesAfter+onePush {
-		t.Fatalf("the remote holds %d bytes after its GC; want no more than the collected store's %d plus one push's %d", bytes, fired.BytesAfter, onePush)
+	if onePush := pushed - bytes; bytes > fired.Collection.BytesAfter+onePush {
+		t.Fatalf("the remote holds %d bytes after its GC; want no more than the collected store's %d plus one push's %d", bytes, fired.Collection.BytesAfter, onePush)
 	}
 
 	if _, other := remoteBranches(t, ctx, alpha); other != "" {
