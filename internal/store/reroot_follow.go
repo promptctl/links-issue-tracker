@@ -143,13 +143,16 @@ func (s *Store) unrelatedToRemote(ctx context.Context, remote, branch string) (l
 // holdForRefWrite — LOCK, then the commit lock — within ReRootHoldBudget, and
 // reopens the engine whatever happened, so the store is usable again on every
 // return. A follow and the bound's re-root both rewrite history this way.
-// [LAW:single-enforcer]
+// [LAW:single-enforcer] The reopen restores the store rather than doing the
+// caller's work, so a deadline that cut the work does not cut it; the
+// engine open's own wait on Dolt's LOCK bounds it.
 func (s *Store) withEngineClosed(ctx context.Context, write func(holdCtx context.Context, ddb *doltdb.DoltDB) error) error {
+	reopenCtx := context.WithoutCancel(ctx)
 	if err := s.closeEngine(); err != nil {
-		return errors.Join(fmt.Errorf("close the engine: %w", err), s.reopenEngine(ctx))
+		return errors.Join(fmt.Errorf("close the engine: %w", err), s.reopenEngine(reopenCtx))
 	}
 	holdErr := holdForRefWrite(ctx, s.doltRootDir, ReRootHoldBudget, write)
-	return errors.Join(holdErr, s.reopenEngine(ctx))
+	return errors.Join(holdErr, s.reopenEngine(reopenCtx))
 }
 
 // reopenEngine opens the engine closeEngine closed, under the store's own

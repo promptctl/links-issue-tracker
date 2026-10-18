@@ -500,9 +500,13 @@ type syncPushStep func(ctx context.Context, remote, branch string, setUpstream, 
 // is reroot.elapsed_ms, and the follow's full GC, measured at 2.0s on an APFS
 // clone of this repository's 437 MB store. The remote GC's upload has not
 // been measured against a hosted remote; history_bound.elapsed_ms on the
-// push's event is the figure to re-measure from. A cut bound fails nothing: the push landed, and the next
-// push past the bound runs it again. A function because the push deadline it
-// derives from is the store's variable. [LAW:one-source-of-truth]
+// push's event is the figure to re-measure from. A cut bound fails nothing:
+// the push landed. A cut before the re-root reaches the remote leaves the
+// next push past the bound to run it again; a cut after it leaves the
+// remote's history below the cut to the next re-root's GC, which collects it
+// with its own, since the remote's GC replaces nothing once a push lands on
+// top of the re-root. A function because the push deadline it derives from
+// is the store's variable. [LAW:one-source-of-truth]
 func historyBoundDeadline() time.Duration { return 3 * store.MirrorPushDeadline }
 
 // syncPushTraceMetadata is everything the durable record says about one push
@@ -630,11 +634,13 @@ func performSyncPush(ctx, completionCtx context.Context, session syncSession, ws
 	// A push that landed on its own moved the remote to its own write, and the
 	// next receive would fetch to learn nothing unless the push records that.
 	// Proving it costs one ls-remote. A failed or superseded push proves
-	// nothing, and the trace says which way the proof went. [LAW:nothing-unseen]
+	// nothing, nor does one whose bound left no head the remote carries for
+	// the branch: the remote may advertise a re-root the store's branch never
+	// followed. The trace says which way the proof went. [LAW:nothing-unseen]
 	// The proof runs under its own deadline off the completion lifetime: the
 	// push has done its work, so the push's deadline is not the proof's.
 	var proven remoteAdvertisement
-	if pushErr == nil && result.Superseded == "" {
+	if pushErr == nil && result.Superseded == "" && result.Head != "" {
 		proofCtx, cancelProof := context.WithTimeout(completionCtx, pushProofDeadline)
 		var unproven string
 		proven, unproven = provePushedAdvertisement(proofCtx, session.syncer, ws, remoteName, target.gitRemotes)

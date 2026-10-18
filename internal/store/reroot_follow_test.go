@@ -654,3 +654,24 @@ func TestFollowRefusesToRunUnderTheCommitLock(t *testing.T) {
 		t.Fatalf("follow under the commit lock error = %v, want the lock-order refusal", err)
 	}
 }
+
+// TestAHoldCutByItsDeadlineLeavesTheStoreUsable ends the hold's lifetime
+// while the engine is closed, as a bound's deadline can mid-re-root: the
+// engine reopens anyway, so the session's next query answers.
+func TestAHoldCutByItsDeadlineLeavesTheStoreUsable(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openSyncOrFatal(t, ctx, migratedDoltDir(t))
+	defer func() { _ = st.Close() }()
+	holdCtx, cut := context.WithCancel(ctx)
+	err := st.withEngineClosed(holdCtx, func(holdCtx context.Context, _ *doltdb.DoltDB) error {
+		cut()
+		return holdCtx.Err()
+	})
+	if !errors.Is(err, context.Canceled) || strings.Contains(err.Error(), "reopen the engine") {
+		t.Fatalf("withEngineClosed under a cut lifetime = %v; want the cut alone, the engine reopened", err)
+	}
+	if _, err := activeBranch(ctx, st.db); err != nil {
+		t.Fatalf("the store after a cut hold: %v; want it answering", err)
+	}
+}

@@ -29,10 +29,10 @@ type HistoryBound struct {
 	// RemoteGC is the remote's GC that follows the force push, whatever the
 	// lease said: the remote's root decides whether it replaces anything.
 	RemoteGC RemoteGC
-	// Collection is what this checkout reclaimed once its branch followed the
-	// re-root the remote carries: the Collection of the bound's own follow,
-	// zero when the branch did not follow.
-	Collection Collection
+	// Follow is the bound's own follow of the re-root the remote carries: the
+	// head this checkout's branch moved onto and what it reclaimed below the
+	// cut, zero when the branch did not move.
+	Follow FollowedReRoot
 	// Elapsed is the bound's work end to end, from reading the head's height
 	// to the follow's collection.
 	Elapsed time.Duration
@@ -45,6 +45,24 @@ type HistoryBound struct {
 // re-roots.
 func (b HistoryBound) Fired() bool {
 	return b.Height >= b.ReRootAt
+}
+
+// RemoteHead is the head the remote carries for this checkout's branch once
+// the bound is done, given the head the push before it landed: that head
+// while the bound wrote no re-root over it, the re-root the branch followed
+// once it moved, and none when the bound wrote a re-root the branch did not
+// follow, since the remote may carry it in place of the pushed head.
+// [FRAMING:representation] a head the remote may no longer carry is a map
+// of a territory that moved.
+func (b HistoryBound) RemoteHead(pushed string) string {
+	switch {
+	case b.Follow.Head != "":
+		return b.Follow.Head
+	case b.ReRooted.Head == "":
+		return pushed
+	default:
+		return ""
+	}
 }
 
 // EventValue is the bound as one value of the event's history_bound.records
