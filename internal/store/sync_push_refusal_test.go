@@ -45,7 +45,7 @@ func TestOnlyARefusedPushIsFollowedAndRetried(t *testing.T) {
 	lockTimeout := errors.New("acquire commit lock: timed out")
 	for _, pushErr := range []error{nil, lockTimeout, classifyPushFailure(live, "origin", RemoteUnreachableError{Attempts: 3, Symptom: "connection refused", Cause: cause})} {
 		pushed := storage.SyncPushResult{Head: "h"}
-		result, gotErr, followErr := (&Store{}).retryPushAfterFollow(live, "origin", "master", false, false, pushed, pushErr)
+		result, gotErr, _, followErr := (&Store{}).retryPushAfterFollow(live, "origin", "master", false, false, pushed, pushErr)
 		if result != pushed || gotErr != pushErr || followErr != nil {
 			t.Fatalf("retryPushAfterFollow(%v) = %+v, %v, %v; want the push's own outcome untouched", pushErr, result, gotErr, followErr)
 		}

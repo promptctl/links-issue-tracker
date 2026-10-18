@@ -40,9 +40,11 @@ import (
 // A branch that followed is across the cut, so the store then reclaims what
 // is below it (collectBelowTheCut): whichever checkout follows, the history
 // the re-root dropped leaves its store too, and not only the store of the
-// checkout whose push re-rooted it. The follow and its collection are
-// recorded under entry, for FollowedReRoots, and returned; the record is zero
-// when the branch did not move.
+// checkout whose push re-rooted it. The collection is maintenance: its
+// failure is carried on the record and never fails the sync that followed,
+// as a push's other maintenance never fails the push. The follow and its
+// collection are recorded under entry, for FollowedReRoots, and returned; the
+// record is zero when the branch did not move.
 //
 // Every public sync entry point that reads the tracking ref runs it first, so
 // none of them meets a re-root it could follow as a divergence; the private
@@ -88,11 +90,7 @@ func (s *Store) followRemoteReRoot(ctx context.Context, remote, branch string, e
 	// a follow that finished is across the cut and collects below it.
 	// [LAW:no-silent-failure]
 	if err == nil {
-		var collectErr error
-		followed.Collection, collectErr = s.collectBelowTheCut(ctx, trimmedRemote)
-		if collectErr != nil {
-			err = fmt.Errorf("collect below the cut: %w", collectErr)
-		}
+		followed.Collection = s.collectBelowTheCut(ctx, trimmedRemote)
 	}
 	s.followed = append(s.followed, followed)
 	return followed, wrapFollowErr(trimmedRemote, trimmedBranch, err)

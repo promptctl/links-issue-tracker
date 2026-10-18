@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
@@ -229,8 +228,8 @@ func (s *Store) publishReRoot(ctx context.Context, remote, branch, head string) 
 // The store is measured around the pass, outside the lock, as SyncCompact
 // measures it: the two readings are an account of what happened and never an
 // input to it, so a reading that fails joins the collection's error and stops
-// nothing.
-func (s *Store) collectBelowTheCut(ctx context.Context, remote string) (storage.Collection, error) {
+// nothing. The collection's error is its own (storage.Collection.Err).
+func (s *Store) collectBelowTheCut(ctx context.Context, remote string) storage.Collection {
 	var c storage.Collection
 	var beforeErr, afterErr error
 	c.BytesBefore, beforeErr = storeBytes(s.doltRootDir)
@@ -258,7 +257,25 @@ func (s *Store) collectBelowTheCut(ctx context.Context, remote string) (storage.
 	})
 	c.BytesAfter, afterErr = storeBytes(s.doltRootDir)
 	c.Sweep = sweep.Report()
-	return c, errors.Join(err, beforeErr, afterErr)
+	c.Err = errors.Join(err, beforeErr, afterErr)
+	return c
+}
+
+// collectionReport is a collection in the maintenance vocabulary: the store's
+// size across the GC when it ran, the GC's sweep line, and where the pass
+// stopped. A collection that did nothing and failed nothing says nothing.
+func collectionReport(c storage.Collection) string {
+	var parts []string
+	if c.Ran {
+		parts = append(parts, fmt.Sprintf("store %s -> %s", humanBytes(c.BytesBefore), humanBytes(c.BytesAfter)))
+	}
+	if c.Sweep != "" {
+		parts = append(parts, c.Sweep)
+	}
+	if c.Err != nil {
+		parts = append(parts, fmt.Sprintf("history below the cut not collected: %v", c.Err))
+	}
+	return joinMaintenance(parts...)
 }
 
 // HistoryBounds is every bound boundHistory kept on this store since it
@@ -285,14 +302,9 @@ func historyBoundReport(b storage.HistoryBound) string {
 	if g := b.RemoteGC; g.Outcome != "" {
 		parts = append(parts, fmt.Sprintf("remote GC %s: %s of table files, %s collected, %d other branches dropped", g.Outcome, humanBytes(g.BytesBefore), humanBytes(g.CollectedBytes), len(g.DroppedBranches)))
 	}
-	if c := b.Collection; c.Ran {
-		parts = append(parts, fmt.Sprintf("store %s -> %s", humanBytes(c.BytesBefore), humanBytes(c.BytesAfter)))
-	}
-	if b.Collection.Sweep != "" {
-		parts = append(parts, b.Collection.Sweep)
-	}
+	parts = append(parts, collectionReport(b.Collection))
 	if b.Err != nil {
 		parts = append(parts, fmt.Sprintf("history bound not kept: %v", b.Err))
 	}
-	return strings.Join(parts, "; ")
+	return joinMaintenance(parts...)
 }
