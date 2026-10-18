@@ -44,7 +44,7 @@ type ReconcileBase struct {
 
 // Found is the base commit and whether there is one.
 func (b ReconcileBase) Found() (commit string, ok bool) {
-	return b.Commit, b.Source != ReconcileBaseNone
+	return b.Commit, b.Source == ReconcileBaseMergeBase || b.Source == ReconcileBaseForkPoint
 }
 
 // EventValue is the base as one value of the event's reconcile.bases list.

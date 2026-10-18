@@ -365,8 +365,8 @@ func (s *Store) captureReconcilePlan(ctx context.Context, remote, branch string)
 
 // reconcileBase is the base of a divergence: the heads' merge base when they
 // share history, and otherwise what the fork point offers (forkPointBase).
-func (s *Store) reconcileBase(ctx context.Context, remote, branch, localHead, remoteHead, trackingRef string) (storage.ReconcileBase, error) {
-	merged, err := mergeBase(ctx, s.db, localHead, trackingRef)
+func (s *Store) reconcileBase(ctx context.Context, remote, branch, localHead, remoteHead string) (storage.ReconcileBase, error) {
+	merged, err := mergeBase(ctx, s.db, localHead, remoteHead)
 	if err != nil {
 		return storage.ReconcileBase{}, err
 	}

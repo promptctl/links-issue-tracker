@@ -174,21 +174,27 @@ func (s *Store) SyncRemoveRemote(ctx context.Context, name string) error {
 		return err
 	}
 	return s.runSyncMutation(ctx, func(ctx context.Context) error {
-		_, err := callIntProcedure(ctx, s.db, "DOLT_REMOTE", "remove", trimmedName)
+		// The remote's tracking refs go with it, so its fork points go too.
+		// They go first: a retried attempt reruns the whole body, and
+		// deleting fork points repeats safely where a second remove fails.
+		dropped, err := s.dropForkPoints(ctx, trimmedName, nil)
+		s.forkPoints = append(s.forkPoints, dropped...)
 		if err != nil {
+			return err
+		}
+		if _, err := callIntProcedure(ctx, s.db, "DOLT_REMOTE", "remove", trimmedName); err != nil {
 			return fmt.Errorf("remove dolt remote %q: %w", trimmedName, err)
 		}
-		// The remote's tracking refs went with it, so its fork points go too.
-		dropped, err := s.dropOrphanForkPoints(ctx, trimmedName)
-		s.forkPoints = append(s.forkPoints, dropped...)
-		return err
+		return nil
 	})
 }
 
 // SyncSetRemoteURL re-points a remote in one mutation. Dolt has no set-url, so
 // it is a remove and an add; the fork points stay, because the name still
 // names the remote they record, and the next fetch brings its tracking refs
-// back (dropOrphanForkPoints runs only after that fetch).
+// back (dropOrphanForkPoints runs only after that fetch). The remove runs only
+// while the remote is there, so an attempt retried after its remove landed
+// goes on to the add.
 func (s *Store) SyncSetRemoteURL(ctx context.Context, name string, url string) error {
 	trimmedName, err := requireSyncArg("remote name", name)
 	if err != nil {
@@ -199,8 +205,14 @@ func (s *Store) SyncSetRemoteURL(ctx context.Context, name string, url string) e
 		return err
 	}
 	return s.runSyncMutation(ctx, func(ctx context.Context) error {
-		if _, err := callIntProcedure(ctx, s.db, "DOLT_REMOTE", "remove", trimmedName); err != nil {
-			return fmt.Errorf("re-point dolt remote %q: remove: %w", trimmedName, err)
+		var present int
+		if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM dolt_remotes WHERE name = ?`, trimmedName).Scan(&present); err != nil {
+			return fmt.Errorf("re-point dolt remote %q: read it: %w", trimmedName, err)
+		}
+		if present > 0 {
+			if _, err := callIntProcedure(ctx, s.db, "DOLT_REMOTE", "remove", trimmedName); err != nil {
+				return fmt.Errorf("re-point dolt remote %q: remove: %w", trimmedName, err)
+			}
 		}
 		if _, err := callIntProcedure(ctx, s.db, "DOLT_REMOTE", "add", trimmedName, trimmedURL); err != nil {
 			return fmt.Errorf("re-point dolt remote %q: add %s: %w", trimmedName, trimmedURL, err)
@@ -974,7 +986,10 @@ func (s *Store) SyncPushFromClone(ctx context.Context, remote string, branch str
 		if freshErr != nil {
 			return fmt.Errorf("%w (and whether a concurrent push superseded it could not be checked: %w)", pushErr, freshErr)
 		}
-		if !fresh.Synced || fresh.Ahead > 0 {
+		// The remote carries this store's HEAD exactly when the branch is up to
+		// date or behind; a fork-point divergence with nothing to replay is
+		// neither.
+		if state := fresh.State(); state != storage.SyncUpToDate && state != storage.SyncBehind {
 			return pushErr
 		}
 		head, headErr := s.headCommitWithinLock(ctx)
@@ -1075,7 +1090,7 @@ func (s *Store) SyncFreshness(ctx context.Context, remote string, branch string)
 	if err != nil {
 		return storage.SyncFreshness{}, err
 	}
-	freshness.Base, err = s.reconcileBase(ctx, trimmedRemote, trimmedBranch, localHead, remoteHead, trackingRef)
+	freshness.Base, err = s.reconcileBase(ctx, trimmedRemote, trimmedBranch, localHead, remoteHead)
 	if err != nil {
 		return storage.SyncFreshness{}, err
 	}

@@ -91,21 +91,28 @@ func (s *Store) recordForkPoint(ctx context.Context, local, forkPoint, head stri
 }
 
 // dropOrphanForkPoints deletes every fork point of remote whose tracking ref
-// is gone — pruned by a fetch, or removed with the remote — so no fork point
-// keeps its commit's chunks through GC once nothing can read it. A fork point
-// lives exactly as long as its tracking ref. [LAW:one-source-of-truth]
+// a fetch pruned, so no fork point keeps its commit's chunks through GC once
+// nothing can read it. A fork point lives exactly as long as its tracking ref.
+// [LAW:one-source-of-truth]
 func (s *Store) dropOrphanForkPoints(ctx context.Context, remote string) ([]storage.ForkPointRecord, error) {
 	tracked, err := refHeadsUnder(ctx, s.db, `SELECT name, hash FROM dolt_remote_branches`, "remotes/"+remote+"/")
 	if err != nil {
 		return nil, err
 	}
+	return s.dropForkPoints(ctx, remote, tracked)
+}
+
+// dropForkPoints deletes every fork point of remote but those of the branches
+// in keep. Each deletion stands once made, so a retried run deletes only what
+// is left.
+func (s *Store) dropForkPoints(ctx context.Context, remote string, keep map[string]string) ([]storage.ForkPointRecord, error) {
 	recorded, err := refHeadsUnder(ctx, s.db, `SELECT name, hash FROM dolt_branches`, forkPointBranch(remote, ""))
 	if err != nil {
 		return nil, err
 	}
 	var dropped []storage.ForkPointRecord
 	for _, branch := range slices.Sorted(maps.Keys(recorded)) {
-		if _, ok := tracked[branch]; ok {
+		if _, ok := keep[branch]; ok {
 			continue
 		}
 		if err := execProcedureDiscard(ctx, s.db, "DOLT_BRANCH", "-D", forkPointBranch(remote, branch)); err != nil {
@@ -228,8 +235,11 @@ func countUnaccounted(base, remote map[string]model.Issue, baseEvents, remoteEve
 			tickets++
 		}
 	}
+	// An event whose ticket the base does not hold records no edit the merge
+	// could revert: the merge carries events with their ticket.
 	for id, ticketID := range baseEvents {
-		if _, held := remoteEvents[id]; !held && !purged(base[ticketID]) {
+		ticket, onBase := base[ticketID]
+		if _, held := remoteEvents[id]; !held && onBase && !purged(ticket) {
 			events++
 		}
 	}

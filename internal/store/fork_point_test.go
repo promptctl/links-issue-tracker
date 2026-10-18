@@ -7,8 +7,10 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -474,6 +476,64 @@ func TestARemotesNewURLKeepsItsForkPoint(t *testing.T) {
 	}
 	f.assertForkPointBase(t, delta)
 	f.assertMerged(t, ctx, delta)
+}
+
+// TestASetRemoteURLRetriedAfterItsRemoveLandsTheAdd puts the store where an
+// attempt whose remove landed and whose add failed leaves it, with no remote,
+// and runs the re-point again, as the mutation's retry does.
+func TestASetRemoteURLRetriedAfterItsRemoveLandsTheAdd(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	remoteURL := "file://" + filepath.Join(t.TempDir(), "remote")
+	alpha := migratedDoltDir(t)
+	seedReconcileRemote(t, ctx, alpha, remoteURL)
+	st := openSyncOrFatal(t, ctx, alpha)
+	defer func() { _ = st.Close() }()
+	if err := execProcedureDiscard(ctx, st.db, "DOLT_REMOTE", "remove", "origin"); err != nil {
+		t.Fatalf("remove the remote: %v", err)
+	}
+	moved := "file://" + filepath.Join(t.TempDir(), "moved")
+	if err := st.SyncSetRemoteURL(ctx, "origin", moved); err != nil {
+		t.Fatalf("SyncSetRemoteURL() error = %v", err)
+	}
+	remotes, err := st.SyncListRemotes(ctx)
+	if err != nil {
+		t.Fatalf("SyncListRemotes() error = %v", err)
+	}
+	if len(remotes) != 1 || remotes[0].Name != "origin" || remotes[0].URL != moved {
+		t.Fatalf("remotes = %+v, want origin at %s", remotes, moved)
+	}
+}
+
+// TestAQuietForksRefusedPushIsNotSuperseded pushes from a checkout with
+// nothing past its fork point. The remote does not carry its head, so the
+// refusal is the error, even though there is nothing for it to replay.
+func TestAQuietForksRefusedPushIsNotSuperseded(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := newForkBelowTheCutAfter(t, ctx, func(forkBelowTheCut) {})
+	delta := openSyncOrFatal(t, ctx, f.delta)
+	defer func() { _ = delta.Close() }()
+	if err := delta.SyncFetch(ctx, "origin", false); err != nil {
+		t.Fatalf("SyncFetch(delta) error = %v", err)
+	}
+	pushed, err := delta.SyncPushFromClone(ctx, "origin", "master", false, false)
+	if err == nil {
+		t.Fatalf("SyncPushFromClone() = %+v, nil; want the refusal, since the remote does not carry delta's head", pushed)
+	}
+}
+
+// TestAnEventOfNoBaseTicketIsNotCounted counts over rows already read: an
+// event at the base whose ticket the base does not hold records no edit a
+// merge against the base could revert, so the remote need not hold it.
+func TestAnEventOfNoBaseTicketIsNotCounted(t *testing.T) {
+	ticket := model.Issue{ID: "t", CreatedAt: time.Unix(1, 0)}
+	base := map[string]model.Issue{"t": ticket}
+	baseEvents := map[string]string{"e-t": "t", "e-orphan": "gone"}
+	tickets, events := countUnaccounted(base, base, baseEvents, map[string]string{}, nil)
+	if tickets != 0 || events != 1 {
+		t.Fatalf("countUnaccounted() = %d tickets, %d events; want 0 and 1: the ticket's event alone", tickets, events)
+	}
 }
 
 // TestTheReceiveLandsTheClonesForkPoint drives the automatic receive's shape:
