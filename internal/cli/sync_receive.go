@@ -590,6 +590,7 @@ func performSyncReceive(ctx context.Context, ws workspace.Info, clone liveClone,
 		"ahead":       strconv.FormatInt(result.Ahead, 10),
 		"behind":      strconv.FormatInt(result.Behind, 10),
 		"landed":      landed.Record.String(),
+		"fork_point":  landed.ForkPoint.String(),
 		"land_held":   landed.Held.Round(time.Millisecond).String(),
 	}
 	traceStatus := "ok"

@@ -174,9 +174,48 @@ func (s *Store) SyncRemoveRemote(ctx context.Context, name string) error {
 		return err
 	}
 	return s.runSyncMutation(ctx, func(ctx context.Context) error {
-		_, err := callIntProcedure(ctx, s.db, "DOLT_REMOTE", "remove", trimmedName)
+		// The remote's tracking refs go with it, so its fork points go too.
+		// They go first: a retried attempt reruns the whole body, and
+		// deleting fork points repeats safely where a second remove fails.
+		dropped, err := s.dropForkPoints(ctx, trimmedName, nil)
+		s.forkPoints = append(s.forkPoints, dropped...)
 		if err != nil {
+			return err
+		}
+		if _, err := callIntProcedure(ctx, s.db, "DOLT_REMOTE", "remove", trimmedName); err != nil {
 			return fmt.Errorf("remove dolt remote %q: %w", trimmedName, err)
+		}
+		return nil
+	})
+}
+
+// SyncSetRemoteURL re-points a remote in one mutation. Dolt has no set-url, so
+// it is a remove and an add; the fork points stay, because the name still
+// names the remote they record, and the next fetch brings its tracking refs
+// back (dropOrphanForkPoints runs only after that fetch). The remove runs only
+// while the remote is there, so an attempt retried after its remove landed
+// goes on to the add.
+func (s *Store) SyncSetRemoteURL(ctx context.Context, name string, url string) error {
+	trimmedName, err := requireSyncArg("remote name", name)
+	if err != nil {
+		return err
+	}
+	trimmedURL, err := requireSyncArg("remote url", url)
+	if err != nil {
+		return err
+	}
+	return s.runSyncMutation(ctx, func(ctx context.Context) error {
+		var present int
+		if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM dolt_remotes WHERE name = ?`, trimmedName).Scan(&present); err != nil {
+			return fmt.Errorf("re-point dolt remote %q: read it: %w", trimmedName, err)
+		}
+		if present > 0 {
+			if _, err := callIntProcedure(ctx, s.db, "DOLT_REMOTE", "remove", trimmedName); err != nil {
+				return fmt.Errorf("re-point dolt remote %q: remove: %w", trimmedName, err)
+			}
+		}
+		if _, err := callIntProcedure(ctx, s.db, "DOLT_REMOTE", "add", trimmedName, trimmedURL); err != nil {
+			return fmt.Errorf("re-point dolt remote %q: add %s: %w", trimmedName, trimmedURL, err)
 		}
 		return nil
 	})
@@ -192,17 +231,28 @@ func (s *Store) SyncFetch(ctx context.Context, remote string, prune bool) error 
 		args = append([]string{"--prune"}, args...)
 	}
 	return s.runSyncMutation(ctx, func(ctx context.Context) error {
+		// The fork points are recorded in the same mutation as the fetch and
+		// ahead of it, because the fetch moves every tracking ref of the remote
+		// however the remote's history moved (recordForkPoints). Every attempt
+		// records, so a retried attempt reports what it found as well.
+		forkPoints, err := s.recordForkPoints(ctx, trimmedRemote)
+		s.forkPoints = append(s.forkPoints, forkPoints...)
+		if err != nil {
+			return err
+		}
 		// [LAW:single-enforcer] Remote transport retry wraps the one network-touching
 		// call, inside the mutation's own GC-contention retry: the two loops recover
 		// unrelated failures under separate budgets (see remote_io.go).
-		err := runRemoteIO(ctx, func(ctx context.Context) error {
+		err = runRemoteIO(ctx, func(ctx context.Context) error {
 			_, err := callIntProcedure(ctx, s.db, "DOLT_FETCH", args...)
 			return err
 		})
 		if err != nil {
 			return fmt.Errorf("fetch remote %q: %w", trimmedRemote, err)
 		}
-		return nil
+		dropped, err := s.dropOrphanForkPoints(ctx, trimmedRemote)
+		s.forkPoints = append(s.forkPoints, dropped...)
+		return err
 	})
 }
 
@@ -936,7 +986,10 @@ func (s *Store) SyncPushFromClone(ctx context.Context, remote string, branch str
 		if freshErr != nil {
 			return fmt.Errorf("%w (and whether a concurrent push superseded it could not be checked: %w)", pushErr, freshErr)
 		}
-		if !fresh.Synced || fresh.Ahead > 0 {
+		// The remote carries this store's HEAD exactly when the branch is up to
+		// date or behind; a fork-point divergence with nothing to replay is
+		// neither.
+		if state := fresh.State(); state != storage.SyncUpToDate && state != storage.SyncBehind {
 			return pushErr
 		}
 		head, headErr := s.headCommitWithinLock(ctx)
@@ -1029,24 +1082,50 @@ func (s *Store) SyncFreshness(ctx context.Context, remote string, branch string)
 		return storage.SyncFreshness{}, fmt.Errorf("read active branch: %w", err)
 	}
 
-	ahead, aheadOldest, err := s.commitRangeStats(ctx, trackingRef, localBranch)
+	localHead, err := readDoltHead(ctx, s.db)
+	if err != nil {
+		return storage.SyncFreshness{}, err
+	}
+	remoteHead, err := commitHashOfRef(ctx, s.db, trackingRef)
+	if err != nil {
+		return storage.SyncFreshness{}, err
+	}
+	freshness.Base, err = s.reconcileBase(ctx, trimmedRemote, trimmedBranch, localHead, remoteHead)
+	if err != nil {
+		return storage.SyncFreshness{}, err
+	}
+	// Ahead is the folded chain the reconcile would replay, so it is spelled
+	// with the same exclusions: the remote head and, when there is one, the
+	// base. [LAW:one-source-of-truth]
+	aheadExcludes := []string{trackingRef}
+	if baseCommit, found := freshness.Base.Found(); found {
+		aheadExcludes = append(aheadExcludes, baseCommit)
+	}
+	ahead, aheadOldest, err := s.commitRangeStats(ctx, localBranch, aheadExcludes...)
 	if err != nil {
 		return storage.SyncFreshness{}, fmt.Errorf("summarize commits ahead of %q: %w", trackingRef, err)
 	}
-	behind, behindOldest, err := s.commitRangeStats(ctx, localBranch, trackingRef)
+	behind, behindOldest, err := s.commitRangeStats(ctx, trackingRef, localBranch)
 	if err != nil {
 		return storage.SyncFreshness{}, fmt.Errorf("summarize commits behind %q: %w", trackingRef, err)
 	}
 	freshness.Ahead = ahead
 	freshness.Behind = behind
 	// OldestDivergedUnix dates a DIVERGENCE, so it is populated only when the
-	// branch is actually diverged — commits on BOTH sides. An ahead-only or
-	// behind-only branch is not diverged, so it stays 0 rather than carrying a
-	// timestamp its state contradicts (the field name would otherwise lie on the
-	// wire). When diverged, the two ranges partition the post-merge-base commits,
-	// so the earlier of their oldest commits dates the fork. [LAW:types-are-the-program]
-	// the field is populated iff the state it names holds.
-	if ahead > 0 && behind > 0 {
+	// branch is actually diverged. An ahead-only or behind-only branch is not
+	// diverged, so it stays 0 rather than carrying a timestamp its state
+	// contradicts (the field name would otherwise lie on the wire). When
+	// diverged, the earlier of the two ranges' oldest commits dates the fork.
+	// [LAW:types-are-the-program] the field is populated iff the state it
+	// names holds.
+	//
+	// Under a fork-point base, Behind is the remote's whole re-rooted history,
+	// since the local branch holds none of its hashes. For a fork below the
+	// cut that is exactly the commits past the base. For a fork above it,
+	// which reaches this base only when the follow refused, it also counts the
+	// re-root's copies of the commits between the cut and the base: a copy has
+	// its own hash, and nothing locally held tells it from a new commit.
+	if freshness.State() == storage.SyncDiverged {
 		freshness.OldestDivergedUnix = earlierValidUnix(aheadOldest, behindOldest)
 	}
 	return freshness, nil
@@ -1083,9 +1162,9 @@ func earlierValidUnix(a, b sql.NullInt64) int64 {
 	}
 }
 
-// commitRangeStats summarizes the commits reachable from `to` but not from
-// `from` — the dolt_log two-dot range `from..to`: how many there are, and the
-// Unix time of the OLDEST one (NULL/invalid when the range is empty).
+// commitRangeStats summarizes the commits reachable from head but from none of
+// excluded — foldedChainQuery's spelling: how many there are, and the Unix
+// time of the OLDEST one (NULL/invalid when the range is empty).
 // [LAW:single-enforcer] Ahead and behind are the same query in opposite
 // directions, so they share one path, and the oldest-commit date rides along
 // rather than costing a second query. UNIX_TIMESTAMP(MIN(date)) yields a numeric
@@ -1093,15 +1172,13 @@ func earlierValidUnix(a, b sql.NullInt64) int64 {
 // the driver renders that scalar as a fractional decimal STRING (the `date` column
 // is Datetime3, millisecond precision), which is why it is scanned as a NullString
 // and parsed to whole seconds by parseUnixSeconds rather than into a NullInt64
-// directly. The range is a bound parameter, not interpolated, so ref names cannot
-// inject SQL.
-func (s *Store) commitRangeStats(ctx context.Context, from string, to string) (int64, sql.NullInt64, error) {
+// directly. The revisions are bound parameters, not interpolated, so ref names
+// cannot inject SQL.
+func (s *Store) commitRangeStats(ctx context.Context, head string, excluded ...string) (int64, sql.NullInt64, error) {
 	var count int64
 	var oldestRaw sql.NullString
-	rangeExpr := fmt.Sprintf("%s..%s", from, to)
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*), UNIX_TIMESTAMP(MIN(date)) FROM dolt_log(?)`, rangeExpr,
-	).Scan(&count, &oldestRaw); err != nil {
+	query, args := foldedChainQuery("COUNT(*), UNIX_TIMESTAMP(MIN(date))", head, excluded...)
+	if err := s.db.QueryRowContext(ctx, query, args...).Scan(&count, &oldestRaw); err != nil {
 		return 0, sql.NullInt64{}, err
 	}
 	oldest, err := parseUnixSeconds(oldestRaw)

@@ -73,22 +73,25 @@ func openSyncSessionAt(ctx context.Context, databasePath, workspaceID string) (s
 		return syncSession{}, nil, errors.Join(err, st.Close())
 	}
 	return syncSession{engine: st, syncer: syncer}, func() error {
-		reportFollowedReRoots(ctx, syncer.FollowedReRoots())
+		reportEventValues(ctx, "reroot.follows", syncer.FollowedReRoots())
+		reportEventValues(ctx, "fork_point.records", syncer.ForkPointRecords())
+		reportEventValues(ctx, "reconcile.bases", syncer.ReconcileBases())
 		return st.Close()
 	}, nil
 }
 
-// reportFollowedReRoots appends each re-root a sync session's engine applied
-// to follow its remote to the command's reroot.follows list, which a session
-// that followed nothing leaves empty but present. Every sync session closes
-// through openSyncSessionAt, so no entry point has to remember to.
+// reportEventValues appends one value per item to the command's list fact
+// key: what a sync session's engine did, each item once, in the order it
+// happened. A session that did none of it leaves the list empty but present,
+// so "none happened" reads apart from "nothing looked". Every sync session
+// closes through openSyncSessionAt, so no entry point has to remember to.
 // [LAW:nothing-unseen] [LAW:single-enforcer]
-func reportFollowedReRoots(ctx context.Context, followed []storage.FollowedReRoot) {
-	values := make([]any, len(followed))
-	for i, f := range followed {
-		values[i] = f.EventValue()
+func reportEventValues[T interface{ EventValue() map[string]any }](ctx context.Context, key string, items []T) {
+	values := make([]any, len(items))
+	for i, item := range items {
+		values[i] = item.EventValue()
 	}
-	telemetry.Append(ctx, "reroot.follows", values...)
+	telemetry.Append(ctx, key, values...)
 }
 
 // syncScope is what a sync leaf's work runs against: the workspace plus the
@@ -980,10 +983,7 @@ func syncDoltRemotesFromGit(ctx context.Context, session syncSession, ws workspa
 			continue
 		}
 		if strings.TrimSpace(currentURL) != desiredURL {
-			if err := session.syncer.SyncRemoveRemote(ctx, remote.Name); err != nil {
-				return remoteSyncState{}, err
-			}
-			if err := session.syncer.SyncAddRemote(ctx, remote.Name, desiredURL); err != nil {
+			if err := session.syncer.SyncSetRemoteURL(ctx, remote.Name, desiredURL); err != nil {
 				return remoteSyncState{}, err
 			}
 		}

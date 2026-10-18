@@ -34,8 +34,9 @@ Constants at `/Users/bmf/code/links-issue-tracker/internal/store/sync.go`:
 
 - `SyncListRemotes` (`sync.go`): `SELECT name, url FROM dolt_remotes ORDER BY name`. Returns `[]storage.SyncRemote` (never nil — initialized to `[]` at `sync.go`). Errors: `"list dolt remotes: %w"`, `"scan dolt remote: %w"`, `"iterate dolt remotes: %w"`.
 - `SyncAddRemote(ctx, name, url)` (`sync.go`): trims/requires both args via `requireSyncArg` (`sync.go`), then under `runSyncMutation` calls `CALL DOLT_REMOTE(?, ?, ?)` with `"add", name, url` (`sync.go`). Error: `"add dolt remote %q: %w"`.
-- `SyncRemoveRemote(ctx, name)` (`sync.go`): `CALL DOLT_REMOTE(?, ?)` with `"remove", name` (`sync.go`). Error `"remove dolt remote %q: %w"`.
-- `SyncFetch(ctx, remote, prune)` (`sync.go`): args are `[remote]`, and when `prune` is true `"--prune"` is **prepended** (`sync.go`), then `CALL DOLT_FETCH(...)`. Error `"fetch remote %q: %w"`.
+- `SyncRemoveRemote(ctx, name)` (`sync.go`): `dropForkPoints(name, nil)` (§1.6d), its records appended to the store's `forkPoints`, then `CALL DOLT_REMOTE(?, ?)` with `"remove", name` (`sync.go`) — the remove last, since a retried attempt reruns the body and only the deletions repeat safely. Error `"remove dolt remote %q: %w"`.
+- `SyncSetRemoteURL(ctx, name, url)` (`sync.go`): both args via `requireSyncArg`, then in one `runSyncMutation` `CALL DOLT_REMOTE` with `"remove", name` when `dolt_remotes` holds the name — so an attempt retried after its remove landed goes on — and with `"add", name, url` (Dolt has no set-url). Errors add `"re-point dolt remote %q: read it: %w"`. The fork points stay; the next fetch brings the tracking refs back before `dropOrphanForkPoints` runs. Errors `"re-point dolt remote %q: remove: %w"`, `"re-point dolt remote %q: add %s: %w"`. The CLI's git-remote sync calls it for a remote whose URL changed (`internal/cli/sync.go`).
+- `SyncFetch(ctx, remote, prune)` (`sync.go`): args are `[remote]`, and when `prune` is true `"--prune"` is **prepended** (`sync.go`). Inside one `runSyncMutation`, each attempt runs `recordForkPoints` (§1.6d) and appends its records to the store's `forkPoints`, then `CALL DOLT_FETCH(...)` under `runRemoteIO`, then `dropOrphanForkPoints` (§1.6d), its records appended likewise. Error `"fetch remote %q: %w"`.
 - Test: `TestSyncRemoteLifecycle` (`sync_test.go`), `TestSyncRemoteValidation` (`sync_test.go`).
 
 `requireSyncArg(field, value)` (`sync.go`) trims whitespace and errors `"%s is required"` when the trimmed value is empty.
@@ -58,10 +59,13 @@ Tests: `TestGitBackedRemoteURL` (`sync_test.go`), `TestGitBackedRemoteURLIsIdemp
 2. Tracking ref string is `fmt.Sprintf("remotes/%s/%s", remote, branch)` (`sync.go`).
 3. Existence probe: `SELECT COUNT(*) FROM dolt_remote_branches WHERE name = ?` (`sync.go`). Count 0 → return with `Synced=false`, `Ahead=0`, `Behind=0`, `OldestDivergedUnix=0` — the never-synced state; the range queries are **not** run (`sync.go`).
 4. `Synced = true`; read `SELECT ACTIVE_BRANCH()` (`sync.go`).
-5. `ahead = commitRangeStats(trackingRef, localBranch)`; `behind = commitRangeStats(localBranch, trackingRef)` (`sync.go`). Errors wrapped `"summarize commits ahead of %q: %w"` / `"summarize commits behind %q: %w"`.
-6. `OldestDivergedUnix` is populated **only** when `ahead > 0 && behind > 0`, as `earlierValidUnix(aheadOldest, behindOldest)` (`sync.go`). Ahead-only or behind-only leaves it 0.
+5. `readDoltHead` → local head, `commitHashOfRef(trackingRef)` → remote head; `Base = reconcileBase(remote, branch, localHead, remoteHead)` (§1.6d).
+6. `ahead = commitRangeStats(localBranch, trackingRef[, Base.Commit])` — the base excluded when `Base.Found()`, so ahead is the folded chain the reconcile replays; `behind = commitRangeStats(trackingRef, localBranch)` (`sync.go`). Errors wrapped `"summarize commits ahead of %q: %w"` / `"summarize commits behind %q: %w"`.
+7. `OldestDivergedUnix` is populated **only** when `State()` is `diverged`, as `earlierValidUnix(aheadOldest, behindOldest)` (`sync.go`). Ahead-only or behind-only leaves it 0.
 
-`commitRangeStats(from, to)` (`sync.go`) runs `SELECT COUNT(*), UNIX_TIMESTAMP(MIN(date)) FROM dolt_log(?)` with the bound range expression `"<from>..<to>"` (`sync.go`). The timestamp is scanned as `sql.NullString` because the driver renders `UNIX_TIMESTAMP` of a Datetime3 column as a fractional decimal string (`sync.go`), then parsed by `parseUnixSeconds`.
+`State()` (`internal/storage/sync.go`) is `behind` for `ahead == 0` only when `Base.Source` is not `fork_point`: heads that share no commit cannot fast-forward, so a fork-point base with nothing to replay is `diverged`. `Base` is not serialized.
+
+`commitRangeStats(head, excluded...)` (`sync.go`) runs `SELECT COUNT(*), UNIX_TIMESTAMP(MIN(date)) FROM dolt_log(?, ^?...)` — `foldedChainQuery`'s spelling, every revision bound (`sync.go`). The timestamp is scanned as `sql.NullString` because the driver renders `UNIX_TIMESTAMP` of a Datetime3 column as a fractional decimal string (`sync.go`), then parsed by `parseUnixSeconds`.
 
 `parseUnixSeconds(raw sql.NullString) (sql.NullInt64, error)` (`sync.go`): invalid/blank → `{}, nil`; `strconv.ParseFloat` failure → error (wrapped by caller as `"parse oldest commit time %q: %w"`, `sync.go`); otherwise `int64(secs)` — sub-second truncated. Test `TestParseUnixSeconds` (`sync_helpers_test.go`).
 
@@ -79,7 +83,7 @@ Constants at `storage/sync.go`. Test `TestSyncFreshnessStateClassification` (`sy
 ### 1.6 `SyncReceive` — fetch + fast-forward only
 
 `SyncReceive(ctx, remote, branch)` at `sync.go`. Both args required (`requireSyncArg`). Then, as separate holds:
-1. `SyncFetch(remote, prune=false)` — `CALL DOLT_FETCH(?)` under `runRemoteIO` inside its own `runSyncMutation` (`sync.go`). Error `"fetch remote %q: %w"`.
+1. `SyncFetch(remote, prune=false)` — `recordForkPoints`, then `CALL DOLT_FETCH(?)` under `runRemoteIO`, inside its own `runSyncMutation` (`sync.go`). Error `"fetch remote %q: %w"`.
 2. `SyncSettleReceived(remote, branch)`: `followRemoteReRoot(..., SyncEntryReceive)` (§1.6c), then `settleReceived`, which runs `settleReceivedWithinLock` inside `runSyncMutation` (commit lock + GC retry; it joins a commit lock the caller already holds). `settleReceivedWithinLock` (`sync.go`) is one `SyncFreshness` read; `Ahead`, `Behind`, `OldestDivergedUnix` are copied onto the result (`sync.go`).
 3. Switch on `fresh.State()` (`sync.go`):
    - `SyncBehind` → `execProcedureDiscard(DOLT_MERGE, "--ff-only", "remotes/<remote>/<branch>")`; error `"fast-forward to %q: %w"`; state `SyncReceiveFastForwarded`.
@@ -92,9 +96,9 @@ Fast-forward is the only local-data-touching outcome. State constants and their 
 
 ### 1.6a `LandFetchedHead` — a clone's fetch carried to the live store
 
-`LandFetchedHead(ctx, doltRootDir, cloneRootDir, remote, branch) (LandedFetch, error)` at `fetched_head.go`; no network, no SQL engine. `LandedFetch` carries `Record` (`FetchedHeadRecord`: `moved` / `unchanged` / `absent`) and `Held`, the landing's work under the hold. Opens the clone's chunk store (`openCloneChunkStore`: journal on, singleton cache off, no lock wait; error `"open the clone's chunk store at %s: %w"`) and reads its `refs/remotes/<remote>/<branch>` (`resolveTrackingHead`); absent → `FetchedHeadAbsent` with nothing written. Before any hold, `planRemoteCacheLanding` lists `<db>/links/.dolt/git-remote-cache` of both stores: a cache key the live store lacks is planned as a whole-directory move; a key both hold is planned as a forced copy of every clone `refs/dolt/last-known/<remote>/` ref of the fetched remote the live mirror lacks or holds at a different object (two `listMirrorRefs` per key); instance refs and other remotes' last-known refs are never copied; a key whose last-known refs all match is skipped. Then, under the workspace shared lock, `requireInitializedWorkspace` and `requireNoPendingAdopt`, runs inside `holdForRefWrite` (`pushed_head.go`; the hold `RecordPushedHead` also takes: chunk-store open with LOCK waited out for `coResidentHolderWait`, then a budget — here `ReceiveDeadline`, for `RecordPushedHead` `MirrorHoldBudget` — then the commit lock; a cut wraps `ErrHoldCut`):
-1. `PullChunks` from the clone into the live store for the fetched head, temp files under `<db>/links/.dolt/temptf` (error `"copy the fetched chunks of %s into the live store: %w"`).
-2. `landTrackingRef`: the fetched head must read as a non-ghost commit; the ref already naming it → `FetchedHeadUnchanged`; otherwise `SetHead` → `FetchedHeadMoved`, whatever the two heads' relation.
+`LandFetchedHead(ctx, doltRootDir, cloneRootDir, remote, branch) (LandedFetch, error)` at `fetched_head.go`; no network, no SQL engine. `LandedFetch` carries `Record` (`FetchedHeadRecord`: `moved` / `unchanged` / `absent`), `ForkPoint` (the same record for the fork point; `absent` when the clone holds none) and `Held`, the landing's work under the hold. Opens the clone's chunk store (`openCloneChunkStore`: journal on, singleton cache off, no lock wait; error `"open the clone's chunk store at %s: %w"`) and reads its `refs/remotes/<remote>/<branch>` (`resolveRefHead`); absent → `FetchedHeadAbsent` for both with nothing written. Then reads the clone's `refs/heads/lit-fork-point/<remote>/<branch>` (`resolveRefHead`; error `"read the clone's %s: %w"`). Before any hold, `planRemoteCacheLanding` lists `<db>/links/.dolt/git-remote-cache` of both stores: a cache key the live store lacks is planned as a whole-directory move; a key both hold is planned as a forced copy of every clone `refs/dolt/last-known/<remote>/` ref of the fetched remote the live mirror lacks or holds at a different object (two `listMirrorRefs` per key); instance refs and other remotes' last-known refs are never copied; a key whose last-known refs all match is skipped. Then, under the workspace shared lock, `requireInitializedWorkspace` and `requireNoPendingAdopt`, runs inside `holdForRefWrite` (`pushed_head.go`; the hold `RecordPushedHead` also takes: chunk-store open with LOCK waited out for `coResidentHolderWait`, then a budget — here `ReceiveDeadline`, for `RecordPushedHead` `MirrorHoldBudget` — then the commit lock; a cut wraps `ErrHoldCut`):
+1. `PullChunks` from the clone into the live store for the fetched head and the clone's fork point, temp files under `<db>/links/.dolt/temptf` (error `"copy the fetched chunks of %v into the live store: %w"`).
+2. `landRef` for the fork point, when the clone holds one, then for the tracking ref: the head must read as a non-ghost commit; the ref already naming it → `FetchedHeadUnchanged`; otherwise a branch ref moves with its working set (`NewBranchAtCommit`) and any other ref by `SetHead` → `FetchedHeadMoved`, whatever the two heads' relation.
 3. The cache plan's `apply`: `os.Rename` for each move; one `git --git-dir <live repo.git> fetch --no-tags --quiet <clone repo.git> +<ref>:<ref>…` (forced) for each copy. A planning or apply failure is returned after the hold as `ErrRemoteCacheNotLanded` wrapping it, with the result.
 
 ### 1.6b `ReRoot` — the sync branch's history cut at a commit
@@ -116,6 +120,24 @@ A move that landed and a failure after it (the branch's read-back or a hold's re
 4. A follow is appended to the store's `followed` list as `storage.FollowedReRoot{Entry, ReRooted}`; `FollowedReRoots()` returns a copy, oldest first. `FollowedReRoot.EventValue()` is one map: `ReRooted.EventRecord()`'s facts and counts under their own keys, plus `reroot.follow` = the entry.
 
 Callers, each before the commit-locked step that reads the result: `SyncSettleReceived` (entry `receive`), `SyncPull` (`pull`, after its fetch), `followThenReconcile` behind `SyncReconcile`, `SyncReconcileResolved` and `SyncReconcileCombine` (`reconcile`), `SyncResolveUnrelated` after its side check (`reconcile`), `retryPushAfterFollow` (`push`), and `lit sync fetch` through `SyncFollowReRoot` (`fetch`). Entry values (`internal/storage/reroot.go`): `pull`, `receive`, `reconcile`, `push`, `fetch`. Tests: `reroot_follow_test.go`.
+
+### 1.6d Fork points — the base of a divergence whose heads share no history
+
+`forkPointBranch(remote, branch)` = `"lit-fork-point/" + remote + "/" + branch` (`fork_point.go`): the branch holding the fork point of `remotes/<remote>/<branch>`.
+
+`recordForkPoints(ctx, remote) ([]storage.ForkPointRecord, error)` (`fork_point.go`), run by `SyncFetch` before `DOLT_FETCH`:
+1. `activeBranch`; the tracking refs under `remotes/<remote>/` (`refHeadsUnder` over `SELECT name, hash FROM dolt_remote_branches`); the recorded fork points under `lit-fork-point/<remote>/` (`refHeadsUnder` over `SELECT name, hash FROM dolt_branches`). `refHeadsUnder` compares the prefix in Go, not with `LIKE`.
+2. For each tracking ref, in branch order: the fork point already naming its head → `unchanged`. Otherwise `recordForkPoint`: `mergeBase(active, head)` sharing a commit → `CALL DOLT_BRANCH('-f', <fork point>, head)` → `recorded` (error `"record fork point %s at %s: %w"`); no shared commit → `kept` when a fork point is recorded, `none` when none ever was, nothing written. A failure returns the records written before it with the error.
+
+`dropOrphanForkPoints(ctx, remote)` (`fork_point.go`), run after `DOLT_FETCH`: `dropForkPoints` keeping the branches with a tracking ref under `remotes/<remote>/`. `dropForkPoints(ctx, remote, keep)`: every fork point under `lit-fork-point/<remote>/` whose branch is not in `keep` → `CALL DOLT_BRANCH('-D', <fork point>)` → a `dropped` record carrying the head it held (error `"drop fork point %s: %w"`).
+
+`forkPointBase(ctx, remote, branch, localHead, remoteHead) (storage.ReconcileBase, error)` (`fork_point.go`), called by `reconcileBase` when the heads share no commit:
+1. No recorded fork point for the branch → `{Source: none}`.
+2. `mergeBase(localHead, forkPoint)` sharing no commit → `{Source: none, ForkPoint}`.
+3. `unaccountedRows(base, localHead, remoteHead)`: `issuesAtCommit` and `eventTicketsAtCommit` (`SELECT id, issue_id FROM issue_events AS OF`, `sync_unrelated.go`) at the base and at the remote head, `purgesAtCommit` at all three; `countUnaccounted` counts each base ticket the remote holds no row for with the same id and `created_at`, and each base event of a base ticket whose id the remote lacks, leaving out those whose ticket a purge record names (`Purge.Names`); an event whose ticket the base does not hold is not counted. Errors `"read the fork point's tickets: %w"`, `"read the remote's tickets: %w"`, `"read the fork point's ticket events: %w"`, `"read the remote's ticket events: %w"`, `"read the purge records at %s: %w"`. Either count nonzero → `{Source: none, ForkPoint, UnaccountedTickets, UnaccountedEvents}`.
+4. Otherwise `{Source: fork_point, Commit: base, ForkPoint}`.
+
+`ForkPointRecords()` and `ReconcileBases()` return copies of the store's `forkPoints` and `reconcileBases`, oldest first. Vocabulary (`internal/storage/fork_point.go`): `ForkPointRecord{Remote, Branch, Head string; Outcome ForkPointOutcome}` (`recorded`, `unchanged`, `kept`, `none`, `dropped`), `EventValue()` keys `fork_point.remote`, `fork_point.branch`, `fork_point.head`, `fork_point.outcome`; `ReconcileBase{Source ReconcileBaseSource; Commit, ForkPoint string; UnaccountedTickets, UnaccountedEvents int}` (`merge_base`, `fork_point`, `none`), `Found() (commit, ok)` (`ok` for `merge_base` and `fork_point` only, so a zero value has none), `EventValue()` keys `reconcile.base`, `reconcile.base_commit`, `reconcile.fork_point`, `reconcile.unaccounted_tickets`, `reconcile.unaccounted_events`. Tests: `fork_point_test.go`.
 
 ### 1.7 `SyncPull` — receive, then reconcile only on divergence
 
@@ -165,7 +187,7 @@ After all attempts, whether or not they failed, and **outside** the commit lock 
 5. `CALL DOLT_PUSH(...)` scanned into `(result.Status int64, message sql.NullString)` (`sync.go`). The error goes through `classifyPushFailure`: a `RemoteUnreachableError`, or any error once `ctx` has ended, is wrapped `"push remote %q: %w"`; any other is the remote's refusal, `pushRefusedError{remote, cause}`, with the same text.
 6. `result.Message = nullStringValue(message)` — NULL→`""`, otherwise trimmed; `result.Head = head` (`sync.go`).
 
-`SyncPushFromClone(ctx, remote, branch, setUpstream, force)` (`sync.go`) — requires both remote and branch (`requireSyncArg`), then `pushMutation` and `retryPushAfterFollow` on its outcome; a push that lands (first or after following) returns its result. A failure that is not a `pushRefusedError` fetched nothing and is returned as it failed. A refusal that stands has already had its fetch; a failed fetch or follow returns the push error joined as `"%w (and whether a concurrent push superseded it could not be checked — %w)"`. Otherwise, inside one `runSyncMutation`, `SyncFreshness(remote, branch)`; a failed read returns the push error joined as `"%w (and whether a concurrent push superseded it could not be checked: %w)"`. `!fresh.Synced || fresh.Ahead > 0` returns the push error unchanged. Otherwise the result is `SyncPushResult{Head: <HEAD>, Superseded: <push error text>}` and no error. Test: `TestSyncPushFromCloneReportsARaceItLostAsSuperseded` (`sync_push_from_clone_test.go`).
+`SyncPushFromClone(ctx, remote, branch, setUpstream, force)` (`sync.go`) — requires both remote and branch (`requireSyncArg`), then `pushMutation` and `retryPushAfterFollow` on its outcome; a push that lands (first or after following) returns its result. A failure that is not a `pushRefusedError` fetched nothing and is returned as it failed. A refusal that stands has already had its fetch; a failed fetch or follow returns the push error joined as `"%w (and whether a concurrent push superseded it could not be checked — %w)"`. Otherwise, inside one `runSyncMutation`, `SyncFreshness(remote, branch)`; a failed read returns the push error joined as `"%w (and whether a concurrent push superseded it could not be checked: %w)"`. A state other than `up_to_date` or `behind` — the remote does not carry HEAD — returns the push error unchanged. Otherwise the result is `SyncPushResult{Head: <HEAD>, Superseded: <push error text>}` and no error. Test: `TestSyncPushFromCloneReportsARaceItLostAsSuperseded` (`sync_push_from_clone_test.go`).
 
 Tests: `TestSyncPushDelivers` (`sync_test.go`), `TestSyncCompactAndPushDelivers` (`sync_test.go`), `TestSyncCompactAndPushDeepensOnAFragmentedOldGeneration` (`sync_test.go`).
 
@@ -432,7 +454,7 @@ Each runs through `followThenReconcile` (`sync_reconcile.go`): `followRemoteReRo
 
 ### 5.7 `reconcilePlan` and its capture
 
-`reconcilePlan{diverged bool; ahead, behind int64; dataBranch, localHead, remoteHead string; base mergeBaseResult}` (`sync_reconcile.go`).
+`reconcilePlan{diverged bool; ahead, behind int64; dataBranch, localHead, remoteHead string; base storage.ReconcileBase}` (`sync_reconcile.go`).
 
 `captureReconcilePlan(ctx, remote, branch)` (`sync_reconcile.go`), run under the already-held commit lock:
 1. `SyncFreshness` → `ahead`, `behind`.
@@ -441,7 +463,7 @@ Each runs through `followThenReconcile` (`sync_reconcile.go`): `followRemoteReRo
 4. `activeBranch(ctx, s.db)` → `dataBranch` (`SELECT active_branch()`, `sync_reconcile.go`).
 5. `readDoltHead(ctx, s.db)` → `localHead`; error `"read local head: %w"`.
 6. `commitHashOfRef(ctx, s.db, trackingRef)` → `remoteHead` (`SELECT commit_hash FROM dolt_log(?) LIMIT 1`, `sync_reconcile.go`; error `"read head of %q: %w"`).
-7. `mergeBase(ctx, s.db, localHead, trackingRef)` → `base`.
+7. `base = fresh.Base`, appended to the store's `reconcileBases`. `reconcileBase(ctx, remote, branch, localHead, remoteHead)`, which freshness ran: `mergeBase(localHead, remoteHead)` sharing a commit → `{Source: merge_base, Commit}`; otherwise `forkPointBase` (§1.6d).
 
 ### 5.8 Merge-base and the unrelated-history discriminator
 
@@ -465,7 +487,7 @@ Each runs through `followThenReconcile` (`sync_reconcile.go`): `followRemoteReRo
 2. Whole body inside `s.withCommitLock` (`sync_reconcile.go`).
 3. `captureReconcilePlan`. Copy `Ahead`/`Behind` onto the result.
 4. `!plan.diverged` → `result.State = SyncReconcileNotDiverged`, return (`sync_reconcile.go`).
-5. `baseCommit, shared := plan.base.shared()`; set `result.LocalHead`, `result.RemoteHead`, `result.BaseCommit` (`sync_reconcile.go`).
+5. `baseCommit, shared := plan.base.Found()`; set `result.LocalHead`, `result.RemoteHead`, `result.BaseCommit` (`sync_reconcile.go`).
 6. **If `!shared` (unrelated histories)** (`sync_reconcile.go`):
    a. `s.unrelatedInventory(localHead, remoteHead)` — pure `AS OF` reads under the lock; assigned to `result.Unrelated`.
    b. `unrelated == detectOnly` → `result.State = SyncReconcileUnrelated`, **return before** the schema guard, the scratch sweep, the snapshot, and every reset. Both stores untouched (`sync_reconcile.go`).
@@ -512,33 +534,33 @@ Only ever run on a scratch branch.
 
 ### 5.13 `mergeAndReplay` — the shared merge/settle/replay tail
 
-`mergeAndReplay(ctx, result, settle, guard, dataBranch, scratch, localHead, remoteHead, base, message, settledState)` (`sync_reconcile.go`):
+`mergeAndReplay(ctx, result, settle, guard, dataBranch, scratch, localHead, remoteHead, remoteSide, base, message, settledState)` (`sync_reconcile.go`):
 1. `ours = exportAtCommit(scratch.read, localHead)`.
 2. `theirs = exportAtCommit(scratch.read, remoteHead)`.
 3. `merged = merge.ThreeWay(base, ours, theirs)`.
 4. `export, pending = settle(merged)`.
 5. **`len(pending) > 0`** → `result.State = SyncReconcileProsePending`, `result.Pending = pending`, **return with nothing committed**. The data branch is still at `localHead` (`sync_reconcile.go`).
-6. `chain = readFoldedChain(ctx, s.db, remoteHead, localHead)`.
+6. `chain = readFoldedChain(ctx, s.db, localHead, remoteSide...)`.
 7. `stepper = foldStepper{store, readBranch: scratch.read, chain, base, theirs}`.
 8. `landing = commitReplayAndAdvance(guard, dataBranch, scratch, remoteHead, message, export, stepper)`.
 9. `result.State = settledState`; `result.Pending = nil`; `result.Replayed = landing.replayed`; `result.Landing = landing.landing`.
 
-`reconcileFromAnchors` (`sync_reconcile.go`) = `runOnReconcileScratch` + `base := exportAtCommit(scratch.read, baseCommit)` + `mergeAndReplay(..., base, reconcileCommitMessage, SyncReconcileLinearized)`.
+`reconcileFromAnchors` (`sync_reconcile.go`) = `runOnReconcileScratch` + `base := exportAtCommit(scratch.read, baseCommit)` + `mergeAndReplay(..., []string{remoteHead, baseCommit}, base, reconcileCommitMessage, SyncReconcileLinearized)`.
 
-`combineFromAnchors` (`sync_reconcile.go`) = `runOnReconcileScratch` + `mergeAndReplay(..., model.Export{}, combineCommitMessage, SyncReconcileCombined)` — the **empty export is the base**, which `merge.ThreeWay` reads as "both sides changed every field from empty", i.e. a two-way union (`sync_reconcile.go`).
+`combineFromAnchors` (`sync_reconcile.go`) = `runOnReconcileScratch` + `mergeAndReplay(..., []string{remoteHead}, model.Export{}, combineCommitMessage, SyncReconcileCombined)` — the **empty export is the base**, which `merge.ThreeWay` reads as "both sides changed every field from empty", i.e. a two-way union (`sync_reconcile.go`).
 
 ### 5.14 Folded-chain provenance
 
 `foldedCommit{hash, message, author string; date time.Time}` (`sync_reconcile.go`).
 
-`foldedChainRange(remoteHead, localHead)` = `remoteHead + ".." + localHead` (`sync_reconcile.go`). One spelling: on unrelated histories it is the entire local chain; on a shared base it is exactly the ahead commits.
+`foldedChainQuery(columns, head, remoteSide...)` (`sync_reconcile.go`) is `SELECT <columns> FROM dolt_log(?, …)` with `head` and `"^"+c` for each `c` of `remoteSide` bound: the commits `head` reaches that no `remoteSide` commit reaches. One spelling: on unrelated histories (`remoteSide` = the remote head) it is the entire local chain; on a shared base it is exactly the ahead commits; on a fork-point base it is the local commits since the base.
 
-`readFoldedChain(ctx, db, remoteHead, localHead)` (`sync_reconcile.go`):
-1. `SELECT commit_hash, committer, email, date, message FROM dolt_log(?)` with the bound range.
+`readFoldedChain(ctx, db, localHead, remoteSide...)` (`sync_reconcile.go`):
+1. `foldedChainQuery("commit_hash, committer, email, date, message", localHead, remoteSide...)`.
 2. `author = fmt.Sprintf("%s <%s>", committer, email)` (`sync_reconcile.go`).
 3. **Abort condition**: if the chain is non-empty and `chain[0].hash != localHead` → error `"folded chain starts at %q, want local head %q"` (`sync_reconcile.go`).
 4. Reverse in place (dolt_log is newest-first; replay order is oldest-first) (`sync_reconcile.go`).
-Errors: `"read folded chain %s..%s: %w"`, `"scan folded chain commit: %w"`, `"iterate folded chain: %w"`.
+Errors: `"read folded chain of %s excluding %v: %w"`, `"scan folded chain commit: %w"`, `"iterate folded chain: %w"`.
 
 `replayStep{export model.Export; stamp commitStamp}` (`sync_reconcile.go`). Two authorities are explicitly separated (`sync_reconcile.go`): the Go-side diff decides which **rows** to write; **Dolt** decides whether a commit exists (empty diff → no commit).
 
@@ -568,7 +590,7 @@ Errors: `"read folded chain %s..%s: %w"`, `"scan folded chain commit: %w"`, `"it
 6. Loop `i = 0 .. stepper.len()-1`: `step = stepper.step(ctx, i)`; `writer.land(step.export, step.stamp)`, its landing discarded; landing error wrapped `"replay folded commit %q: %w"` naming the step's message (`sync_reconcile.go`). One step is read and landed before the next is read — bounded memory.
 7. `landing = writer.land(ctx, export, commitStamp{Message: message, AllowEmpty: true})` — the marker commit is **unconditional** (`sync_reconcile.go`).
 8. `replayedCommit = readDoltHead(ctx, s.db)`; error `"read replayed commit: %w"`.
-9. `landed = countCommitsInRange(ctx, s.db, liftedBase, replayedCommit)`; `replayed = landed - 1` (subtracting the marker) (`sync_reconcile.go`). `countCommitsInRange` (`sync_reconcile.go`) = `SELECT COUNT(*) FROM dolt_log(?)` over `foldedChainRange(exclusiveBase, head)`; error `"count replayed commits %s..%s: %w"`.
+9. `landed = countCommitsInRange(ctx, s.db, liftedBase, replayedCommit)`; `replayed = landed - 1` (subtracting the marker) (`sync_reconcile.go`). `countCommitsInRange` (`sync_reconcile.go`) = `foldedChainQuery("COUNT(*)", head, exclusiveBase)`; error `"count replayed commits %s..%s: %w"`.
 10. **Snapshot-first**: `guard.ensure(ctx)`; failure → `"snapshot before reconcile: %w"`, aborting **before** the data branch moves (`sync_reconcile.go`).
 11. `CALL DOLT_CHECKOUT(dataBranch)`; error `"return to data branch %q: %w"`.
 12. `CALL DOLT_RESET('--hard', replayedCommit)` — **the single atomic advance of the data branch**; error `"advance %q to replayed commit: %w"` (`sync_reconcile.go`).
@@ -648,7 +670,7 @@ Test `TestSyncResolveUnrelatedOwnerApprovalBindsForkAndSide` (`sync_unrelated_te
 5. `captureReconcilePlan`; copy `Ahead`/`Behind`.
 6. `!plan.diverged` → `SyncReconcileNotDiverged`, return (`sync_unrelated_take.go`).
 7. Set `result.LocalHead`, `result.RemoteHead`.
-8. **If the divergence HAS a base** → refuse: `"sync reconcile take applies only to unrelated histories, but %s/%s shares history with the local backlog; run \`lit sync reconcile\` to field-merge it"` (`sync_unrelated_take.go`). Test `TestSyncResolveUnrelatedRefusesSharedHistory` (`sync_unrelated_test.go`).
+8. **If the divergence HAS a base** → refuse: `"sync reconcile take applies only to unrelated histories, but the local backlog has a base to merge %s/%s against (%s); run \`lit sync reconcile\` to field-merge it"`; the parenthesis names where the base came from (`merge_base` or `fork_point`) (`sync_unrelated_take.go`). Test `TestSyncResolveUnrelatedRefusesSharedHistory` (`sync_unrelated_test.go`).
 9. `unrelatedInventory(localHead, remoteHead)` → `result.Unrelated` (read **before** the approval check so the refusal can name what would be destroyed).
 10. `expected := takeApprovalToken(plan.localHead, plan.remoteHead, choice)`; if `ownerApproval != expected` → return `OwnerApprovalRequiredError{..., Stale: ownerApproval != ""}` with **nothing mutated** (`sync_unrelated_take.go`).
 11. `s.applyUnrelatedTake(...)`.
@@ -683,7 +705,7 @@ Tests `TestSyncResolveUnrelatedTakeRemoteCarriesTheLocalPurge`, `TestSyncResolve
 `takeLocalOntoRemoteHead(ctx, result, guard, dataBranch, scratch, localHead, remoteHead)` (`sync_unrelated_take.go`), inside `runOnReconcileScratch`:
 1. `local = exportAtCommit(scratch.read, localHead)`.
 2. `theirs = exportAtCommit(scratch.read, remoteHead)`.
-3. `chain = readFoldedChain(remoteHead, localHead)`.
+3. `chain = readFoldedChain(localHead, remoteHead)`.
 4. `stepper = foldStepper{base: model.Export{}, theirs: theirs...}` — the **same no-base union projection combine uses**, so mid-chain history stays a whole backlog (`sync_unrelated_take.go`).
 5. `commitReplayAndAdvance(guard, dataBranch, scratch, remoteHead, takeLocalCommitMessage, terminal, stepper)` with `terminal = local.ApplyPurges(model.UnionPurges(local.Purges, theirs.Purges))` — the terminal export is **local's content, not the union**, cut by both sides' purge records and carrying them, so the marker commit holds the remote's records and no row they name, and its diff is the discard of the remote-only issues (`sync_unrelated_take.go`).
 6. `result.State = SyncReconcileTookLocal`; `result.Replayed = landing.replayed`; `result.Landing = landing.landing`.

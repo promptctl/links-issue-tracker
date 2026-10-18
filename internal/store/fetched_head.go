@@ -19,18 +19,20 @@ import (
 	"github.com/dolthub/dolt/go/store/types"
 )
 
-// FetchedHeadRecord is what LandFetchedHead did to the live store's tracking
-// ref. [LAW:types-are-the-program] all three are successes, and a caller
-// tracing the receive must tell them apart.
+// FetchedHeadRecord is what LandFetchedHead did to one of the live store's
+// refs: the tracking ref, or its fork point. [LAW:types-are-the-program] all
+// three are successes, and a caller tracing the receive must tell them apart.
 type FetchedHeadRecord int
 
 const (
-	// FetchedHeadMoved: the ref now names the head the clone fetched.
+	// FetchedHeadMoved: the ref now names the clone's head for it.
 	FetchedHeadMoved FetchedHeadRecord = iota + 1
-	// FetchedHeadUnchanged: the ref already named the fetched head.
+	// FetchedHeadUnchanged: the ref already named the clone's head for it.
 	FetchedHeadUnchanged
-	// FetchedHeadAbsent: the clone's fetch found no such branch on the remote,
-	// so there was nothing to land and the live ref was not touched.
+	// FetchedHeadAbsent: the clone held no such ref — for the tracking ref,
+	// its fetch found no such branch on the remote; for the fork point, it
+	// recorded none — so there was nothing to land and the live ref was not
+	// touched.
 	FetchedHeadAbsent
 )
 
@@ -53,26 +55,32 @@ func (r FetchedHeadRecord) String() string {
 var ErrRemoteCacheNotLanded = errors.New("the fetched git objects did not reach the live store's mirror of the remote, so its next network operation downloads them again")
 
 // LandedFetch is what LandFetchedHead established: what it did to the tracking
-// ref, and how long the live store was held for the copy.
+// ref and to its fork point, and how long the live store was held for the copy.
 type LandedFetch struct {
 	Record FetchedHeadRecord
+	// ForkPoint is what the landing did to the tracking ref's fork point:
+	// absent when the clone recorded none.
+	ForkPoint FetchedHeadRecord
 	// Held is the landing's work under the hold, from the open's success to
 	// the end of the git copy; zero when nothing was landed.
 	Held time.Duration
 }
 
 // LandFetchedHead carries a fetch that ran on a clone back to the live store
-// at doltRootDir: every chunk the clone's `remotes/<remote>/<branch>` reaches
-// is copied into the live store, the live ref is set to the same commit, and
-// the git objects the fetch brought into the clone's mirror of the remote are
-// copied into the live store's mirror. It contacts no network and opens no SQL
+// at doltRootDir: every chunk the clone's `remotes/<remote>/<branch>` and its
+// fork point reach is copied into the live store, the live fork point and then
+// the live ref are set to the same commits, and the git objects the fetch
+// brought into the clone's mirror of the remote are copied into the live
+// store's mirror. It contacts no network and opens no SQL
 // engine; the copies are local.
 //
 // Why it exists: the automatic receive fetches from a clone, so the live store
-// is held for this copy rather than for the network round trip. Dolt's own fetch writes the chunks, the ref and the
-// mirror's objects into the store it runs on; this is those three writes moved
-// to the store that owns them. [LAW:one-source-of-truth] the tracking ref
-// stays the one source of "where the remote is".
+// is held for this copy rather than for the network round trip. A fetch on a
+// store writes the fork point (recordForkPoints), then the chunks, the ref and
+// the mirror's objects; this is those writes moved to the store that owns
+// them, in the same order, so the fork point never trails the ref it guards.
+// [LAW:one-source-of-truth] the tracking ref stays the one source of "where
+// the remote is".
 //
 // The ref is set to what the fetch found whenever it differs, forwards,
 // backwards, or onto an unrelated history, because that is what a fetch does:
@@ -122,12 +130,21 @@ func LandFetchedHead(ctx context.Context, doltRootDir, cloneRootDir, remote, bra
 		return LandedFetch{}, err
 	}
 	defer func() { err = errors.Join(err, clone.Close()) }()
-	fetched, found, err := resolveTrackingHead(ctx, clone, trackingRef)
+	fetched, found, err := resolveRefHead(ctx, clone, trackingRef)
 	if err != nil {
 		return LandedFetch{}, fmt.Errorf("read the clone's %s: %w", trackingRef.String(), err)
 	}
 	if !found {
-		return LandedFetch{Record: FetchedHeadAbsent}, nil
+		return LandedFetch{Record: FetchedHeadAbsent, ForkPoint: FetchedHeadAbsent}, nil
+	}
+	forkPointRef := ref.NewBranchRef(forkPointBranch(trimmedRemote, trimmedBranch))
+	forkPoint, forkPointFound, err := resolveRefHead(ctx, clone, forkPointRef)
+	if err != nil {
+		return LandedFetch{}, fmt.Errorf("read the clone's %s: %w", forkPointRef.String(), err)
+	}
+	heads := []hash.Hash{fetched}
+	if forkPointFound {
+		heads = append(heads, forkPoint)
 	}
 	// Which mirror refs to copy is decided before the hold: the listing is two
 	// git subprocesses per mirror. The plan names only the fetched remote's
@@ -149,11 +166,18 @@ func LandFetchedHead(ctx context.Context, doltRootDir, cloneRootDir, remote, bra
 		if err := os.MkdirAll(tempDir, 0o755); err != nil {
 			return fmt.Errorf("create temp table file dir: %w", err)
 		}
-		if err := ddb.PullChunks(holdCtx, tempDir, clone, []hash.Hash{fetched}, nil, nil); err != nil {
-			return fmt.Errorf("copy the fetched chunks of %s into the live store: %w", fetched, err)
+		if err := ddb.PullChunks(holdCtx, tempDir, clone, heads, nil, nil); err != nil {
+			return fmt.Errorf("copy the fetched chunks of %v into the live store: %w", heads, err)
 		}
 		var landErr error
-		landed.Record, landErr = landTrackingRef(holdCtx, ddb, trackingRef, fetched)
+		landed.ForkPoint = FetchedHeadAbsent
+		if forkPointFound {
+			landed.ForkPoint, landErr = landRef(holdCtx, ddb, forkPointRef, forkPoint)
+			if landErr != nil {
+				return landErr
+			}
+		}
+		landed.Record, landErr = landRef(holdCtx, ddb, trackingRef, fetched)
 		if landErr != nil {
 			return landErr
 		}
@@ -169,35 +193,44 @@ func LandFetchedHead(ctx context.Context, doltRootDir, cloneRootDir, remote, bra
 	return landed, nil
 }
 
-// landTrackingRef sets ref to fetched unless it already names it — a fetch's
-// own semantics, whatever the relation between the two (LandFetchedHead says
-// why). It reads fetched as a commit first, so a copy that did not land it is
-// refused rather than pointed at.
-func landTrackingRef(ctx context.Context, ddb *doltdb.DoltDB, trackingRef ref.DoltRef, fetched hash.Hash) (FetchedHeadRecord, error) {
-	if _, err := readFullCommit(ctx, ddb, fetched); err != nil {
+// landRef sets r to fetched unless it already names it — a fetch's own
+// semantics, whatever the relation between the two (LandFetchedHead says why).
+// It reads fetched as a commit first, so a copy that did not land it is
+// refused rather than pointed at. A branch moves with its working set, as
+// DOLT_BRANCH -f moves the fork point a fetch on the store records; any other
+// ref is its head alone.
+func landRef(ctx context.Context, ddb *doltdb.DoltDB, r ref.DoltRef, fetched hash.Hash) (FetchedHeadRecord, error) {
+	commit, err := readFullCommit(ctx, ddb, fetched)
+	if err != nil {
 		return 0, fmt.Errorf("land fetched head %s: the copied chunks do not hold it as a commit: %w", fetched, err)
 	}
-	current, found, err := resolveTrackingHead(ctx, ddb, trackingRef)
+	current, found, err := resolveRefHead(ctx, ddb, r)
 	if err != nil {
-		return 0, fmt.Errorf("land fetched head %s: read %s: %w", fetched, trackingRef.String(), err)
+		return 0, fmt.Errorf("land fetched head %s: read %s: %w", fetched, r.String(), err)
 	}
 	if found && current == fetched {
 		return FetchedHeadUnchanged, nil
 	}
-	if err := ddb.SetHead(ctx, trackingRef, fetched); err != nil {
-		return 0, fmt.Errorf("land fetched head %s on %s: %w", fetched, trackingRef.String(), err)
+	if r.GetType() == ref.BranchRefType {
+		err = ddb.NewBranchAtCommit(ctx, r, commit, nil)
+	} else {
+		err = ddb.SetHead(ctx, r, fetched)
+	}
+	if err != nil {
+		return 0, fmt.Errorf("land fetched head %s on %s: %w", fetched, r.String(), err)
 	}
 	return FetchedHeadMoved, nil
 }
 
-// resolveTrackingHead reads the commit a tracking ref names. An absent ref is
-// a real answer — the remote has no such branch — not an error.
-func resolveTrackingHead(ctx context.Context, ddb *doltdb.DoltDB, trackingRef ref.DoltRef) (hash.Hash, bool, error) {
-	has, err := ddb.HasRef(ctx, trackingRef)
+// resolveRefHead reads the commit a ref names. An absent ref is a real answer
+// — the remote has no such branch, the clone recorded no fork point — not an
+// error.
+func resolveRefHead(ctx context.Context, ddb *doltdb.DoltDB, r ref.DoltRef) (hash.Hash, bool, error) {
+	has, err := ddb.HasRef(ctx, r)
 	if err != nil || !has {
 		return hash.Hash{}, false, err
 	}
-	commit, err := ddb.ResolveCommitRef(ctx, trackingRef)
+	commit, err := ddb.ResolveCommitRef(ctx, r)
 	if err != nil {
 		return hash.Hash{}, false, err
 	}

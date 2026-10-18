@@ -56,6 +56,9 @@ import (
 type Syncer interface {
 	SyncAddRemote(ctx context.Context, name string, url string) error
 	SyncRemoveRemote(ctx context.Context, name string) error
+	// SyncSetRemoteURL points the remote name at url. The remote stays the
+	// same remote: unlike a removal, it keeps its fork points.
+	SyncSetRemoteURL(ctx context.Context, name string, url string) error
 	SyncListRemotes(ctx context.Context) ([]SyncRemote, error)
 
 	// SyncStatus reports the local side only — build, position, pending
@@ -126,6 +129,17 @@ type Syncer interface {
 	// unrelated histories. An engine whose history is never re-rooted follows
 	// nothing and returns none.
 	FollowedReRoots() []FollowedReRoot
+
+	// ForkPointRecords is what every fetch the engine ran since it opened did
+	// to each fork point before it moved the tracking ref, oldest first. A
+	// fork point is the remote head this checkout last knew while the two
+	// still shared history: the base a reconcile merges against once the
+	// remote re-roots above every commit this checkout holds.
+	ForkPointRecords() []ForkPointRecord
+
+	// ReconcileBases is the base every reconcile since the engine opened
+	// decided on, and where it came from, oldest first.
+	ReconcileBases() []ReconcileBase
 
 	// GetSyncState and RecordSyncState carry the staleness marker across
 	// commands: what the store's content was at the last sync, so a later

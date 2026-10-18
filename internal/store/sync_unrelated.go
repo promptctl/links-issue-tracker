@@ -122,6 +122,21 @@ func issuesAtCommit(ctx context.Context, db *sql.DB, commitHash string) (map[str
 	return issues, err
 }
 
+// eventTicketsAtCommit reads the ticket events present at a commit: each
+// event's id, mapped to the id of the ticket it records.
+func eventTicketsAtCommit(ctx context.Context, db *sql.DB, commitHash string) (map[string]string, error) {
+	events := map[string]string{}
+	err := queryAsOf(ctx, db, commitHash, `SELECT id, issue_id FROM issue_events AS OF '%s'`, func(rows *sql.Rows) error {
+		var id, ticketID string
+		if err := rows.Scan(&id, &ticketID); err != nil {
+			return err
+		}
+		events[id] = ticketID
+		return nil
+	})
+	return events, err
+}
+
 // purgesAtCommit reads the purge records present at a commit.
 func purgesAtCommit(ctx context.Context, db *sql.DB, commitHash string) ([]model.Purge, error) {
 	var out []model.Purge

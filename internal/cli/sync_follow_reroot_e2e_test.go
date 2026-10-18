@@ -17,13 +17,30 @@ import (
 // edited its description and pushed before the re-root.
 type reRootedCheckouts struct {
 	alpha, bravo string
-	ticket       string
+	epic, ticket string
 	cut          string
 	root         string
 	sink         string
 }
 
 func newReRootedCheckouts(t *testing.T, concurrent bool) reRootedCheckouts {
+	t.Helper()
+	r, base := newSharedCheckouts(t)
+	r.cut, _ = syncHeadAndBranch(t, r.bravo)
+	runCLIInDir(t, r.bravo, "update", r.ticket, "--title", "bravo-title")
+	if concurrent {
+		runCLIInDir(t, r.alpha, "update", r.ticket, "--description", "alpha-description")
+		runCLIInDir(t, r.alpha, "sync", "push")
+	}
+	r.root = reRootAlphaAndForcePush(t, r, r.cut)
+	finishSharedCheckouts(t, r, base)
+	return r
+}
+
+// newSharedCheckouts is the start every re-rooted pair shares: alpha seeded
+// an epic holding the ticket and a filler over one git remote and pushed it,
+// and bravo adopted it. It returns the directory both live under.
+func newSharedCheckouts(t *testing.T) (reRootedCheckouts, string) {
 	t.Helper()
 	t.Setenv(DisableAutoSyncEnvVar, "1")
 	maskGlobalConfig(t)
@@ -42,41 +59,46 @@ func newReRootedCheckouts(t *testing.T, concurrent bool) reRootedCheckouts {
 	runGit(t, r.alpha, "commit", "-m", "seed")
 	runGit(t, r.alpha, "push", "origin", "HEAD")
 	runCLIInDir(t, r.alpha, "init", "--skip-hooks", "--skip-agents")
-	epicID := newEpicInDir(t, r.alpha, "shared-epic")
-	r.ticket = extractTicketID(t, runCLIInDir(t, r.alpha, "new", "--title", "shared-ticket", "--topic", "demo", "--type", "task", "--parent", epicID))
-	runCLIInDir(t, r.alpha, "new", "--title", "filler", "--topic", "demo", "--type", "task", "--parent", epicID)
+	r.epic = newEpicInDir(t, r.alpha, "shared-epic")
+	r.ticket = extractTicketID(t, runCLIInDir(t, r.alpha, "new", "--title", "shared-ticket", "--topic", "demo", "--type", "task", "--parent", r.epic))
+	runCLIInDir(t, r.alpha, "new", "--title", "filler", "--topic", "demo", "--type", "task", "--parent", r.epic)
 	runCLIInDir(t, r.alpha, "sync", "push", "--set-upstream")
 
 	runGit(t, base, "clone", remote, "bravo")
 	runGit(t, r.bravo, "config", "user.email", "b@b.co")
 	runGit(t, r.bravo, "config", "user.name", "bravo")
 	runCLIInDir(t, r.bravo, "init", "--skip-hooks", "--skip-agents")
-	r.cut, _ = syncHeadAndBranch(t, r.bravo)
-	runCLIInDir(t, r.bravo, "update", r.ticket, "--title", "bravo-title")
-	if concurrent {
-		runCLIInDir(t, r.alpha, "update", r.ticket, "--description", "alpha-description")
-		runCLIInDir(t, r.alpha, "sync", "push")
-	}
+	return r, base
+}
 
+// reRootAlphaAndForcePush cuts alpha's history at cut, force-pushes it, and
+// returns the re-root's parentless root.
+func reRootAlphaAndForcePush(t *testing.T, r reRootedCheckouts, cut string) string {
+	t.Helper()
 	alphaWS, err := workspace.Resolve(r.alpha)
 	if err != nil {
 		t.Fatalf("resolve alpha: %v", err)
 	}
 	_, branch := syncHeadAndBranch(t, r.alpha)
-	reRooted, err := store.ReRoot(context.Background(), alphaWS.DatabasePath, branch, r.cut)
+	reRooted, err := store.ReRoot(context.Background(), alphaWS.DatabasePath, branch, cut)
 	if err != nil {
 		t.Fatalf("ReRoot(alpha) error = %v", err)
 	}
-	r.root = reRooted.Root
 	runCLIInDir(t, r.alpha, "sync", "push", "--force")
+	return reRooted.Root
+}
 
+// finishSharedCheckouts sends each checkout's owner notifications to its own
+// sink, turns the automatic sync back on, and isolates the events the test
+// reads.
+func finishSharedCheckouts(t *testing.T, r reRootedCheckouts, base string) {
+	t.Helper()
 	writeOwnerNotifyProjectConfig(t, r.bravo, r.sink)
 	// alpha gets the same config so its own commands spawn no background
 	// receive; its notifications go elsewhere.
 	writeOwnerNotifyProjectConfig(t, r.alpha, filepath.Join(base, "alpha-notifications"))
 	t.Setenv(DisableAutoSyncEnvVar, "0")
 	isolateEvents(t)
-	return r
 }
 
 // syncHeadAndBranch reads the workspace's head commit and active branch.

@@ -318,7 +318,7 @@ func TestTakeFollowsAReRootedRemoteBeforeItCanDiscardASide(t *testing.T) {
 	}
 	_, err := bravo.SyncResolveUnrelated(ctx, "origin", "master", storage.TakeRemote, "")
 	var approval OwnerApprovalRequiredError
-	if err == nil || errors.As(err, &approval) || !strings.Contains(err.Error(), "shares history") {
+	if err == nil || errors.As(err, &approval) || !strings.Contains(err.Error(), "has a base to merge") {
 		t.Fatalf("take over a re-rooted remote error = %v, want the shared-history refusal", err)
 	}
 	r.assertFollowed(t, bravo, storage.SyncEntryReconcile)
@@ -456,7 +456,9 @@ func TestSyncDoesNotFollowARemoteRootMatchedByMetadataAlone(t *testing.T) {
 // TestSyncDoesNotFollowWhenTwoLocalCommitsRebuildToTheRoot gives bravo a
 // second commit carrying the cut's tables and metadata over different
 // parents. Both rebuild to the remote's root, and each would re-root bravo
-// differently, so no one cut is evidenced and nothing is followed.
+// differently, so no one cut is evidenced and nothing is followed. The
+// reconcile then merges against bravo's fork point, as it does for any
+// checkout that cannot follow.
 func TestSyncDoesNotFollowWhenTwoLocalCommitsRebuildToTheRoot(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -489,8 +491,11 @@ func TestSyncDoesNotFollowWhenTwoLocalCommitsRebuildToTheRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncReconcile error = %v", err)
 	}
-	if reconciled.State != storage.SyncReconcileUnrelated || len(st.FollowedReRoots()) != 0 {
-		t.Fatalf("reconcile = %q with follows %+v; want unrelated histories and no follow", reconciled.State, st.FollowedReRoots())
+	if len(st.FollowedReRoots()) != 0 {
+		t.Fatalf("follows = %+v; want none, since no one cut is evidenced", st.FollowedReRoots())
+	}
+	if bases := st.ReconcileBases(); reconciled.State != storage.SyncReconcileLinearized || len(bases) != 1 || bases[0].Source != storage.ReconcileBaseForkPoint {
+		t.Fatalf("reconcile = %q against %+v; want a merge against the fork point", reconciled.State, bases)
 	}
 }
 

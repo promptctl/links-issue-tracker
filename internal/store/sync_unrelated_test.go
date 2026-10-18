@@ -587,8 +587,8 @@ func TestSyncResolveUnrelatedRefusesSharedHistory(t *testing.T) {
 	if err == nil {
 		t.Fatalf("SyncResolveUnrelated on a shared-history divergence returned nil, want a refusal")
 	}
-	if !strings.Contains(err.Error(), "shares history") {
-		t.Fatalf("refusal error = %q, want it to name the shared history", err.Error())
+	if !strings.Contains(err.Error(), "has a base to merge") {
+		t.Fatalf("refusal error = %q, want it to name the base it would merge against", err.Error())
 	}
 	var approval OwnerApprovalRequiredError
 	if errors.As(err, &approval) {

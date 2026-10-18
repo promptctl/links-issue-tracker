@@ -435,6 +435,7 @@ They live beside the specs rather than in an engine because the schema is the co
 #### `Syncer` (`internal/storage/capabilities.go`)
 - `SyncAddRemote(ctx, name, url string) error`
 - `SyncRemoveRemote(ctx, name string) error`
+- `SyncSetRemoteURL(ctx, name, url string) error` — re-points the remote; unlike a removal, it keeps the remote's fork points.
 - `SyncListRemotes(ctx) ([]SyncRemote, error)`
 - `SyncStatus(ctx) (SyncStatusReport, error)` — local side only: build, position, pending changes, peers; **contacts no network**
 - `SyncFreshness(ctx, remote, branch string) (SyncFreshness, error)` — local branch position against a peer as of the last fetch or push; reads local refs, never contacts the network, which is what lets a read-only command call it
@@ -450,6 +451,8 @@ They live beside the specs rather than in an engine because the schema is the co
 - `SyncCompactAndPush(ctx, remote, branch string, setUpstream, force bool) (SyncPushResult, error)`
 - `SyncFollowReRoot(ctx, remote, branch string, entry SyncEntry) error` — brings the local branch into the remote's history when another checkout re-rooted it, reading the tracking ref as the last fetch left it; no network. Every sync verb that settles or pushes follows on its own; this is for a caller that fetched and settles nothing.
 - `FollowedReRoots() []FollowedReRoot` — every re-root the engine applied to its own branch since it opened, to follow a re-rooted remote; an engine whose history is never re-rooted returns none.
+- `ForkPointRecords() []ForkPointRecord` — what every fetch the engine ran since it opened did to each fork point before it moved the tracking ref, oldest first.
+- `ReconcileBases() []ReconcileBase` — the base every reconcile since the engine opened decided on, and where it came from, oldest first.
 - `GetSyncState(ctx) (SyncState, error)` / `RecordSyncState(ctx, state SyncState) error` — carry the staleness marker across commands
 - Compaction sits inside `Syncer` because `SyncCompactAndPush` compacts and pushes under a single commit-lock acquisition — one atomic operation not assemblable from `SyncCompact` + `SyncPush` (`internal/storage/capabilities.go`).
 - Nothing in `Syncer` resolves a divergence — that is `Reconciler` (`internal/storage/capabilities.go`).
@@ -526,6 +529,9 @@ These types live in the contract, not in an engine, because a capability interfa
   - **`ReRooted`** — what a re-root did to a branch: `Cut`, `Root` (the parentless commit carrying the cut's root value and metadata), `Head`, `Rewritten map[string]string` (every kept commit, old hash to new), `Dropped int` (the cut's ancestors), `Elapsed time.Duration`. `Kept()` is `len(Rewritten)`. `EventRecord()` gives facts `reroot.cut`, `reroot.root`, `reroot.head`, `reroot.elapsed_ms` and counts `reroot.kept`, `reroot.dropped`.
   - **`SyncEntry`** string: `pull`, `receive` (the automatic receive, or the on-change mirror's receive of what it pushed), `reconcile`, `push` (a refused `lit sync push` or mirror push), `fetch`.
   - **`FollowedReRoot{Entry SyncEntry; ReRooted}`** — a re-root a store applied to follow a re-rooted remote; `EventValue()` is one value of the event's `reroot.follows` list: the re-root's facts and counts under their own keys, plus `reroot.follow` = the entry.
+- Fork-point vocabulary (`internal/storage/fork_point.go`):
+  - **`ForkPointRecord{Remote, Branch, Head string; Outcome ForkPointOutcome}`** — one tracking ref a fetch was about to move and what it did to that ref's fork point first: `recorded`, `unchanged`, `kept` (the local branch shares no history with `Head`) or `none` (nor was a fork point ever recorded); or a fork point deleted with its tracking ref, `dropped`. `EventValue()` is one value of the event's `fork_point.records` list.
+  - **`ReconcileBase{Source ReconcileBaseSource; Commit, ForkPoint string; UnaccountedTickets, UnaccountedEvents int}`** — a reconcile's base and its source: `merge_base`, `fork_point`, or `none`. `ForkPoint` is the fork point read when the heads share no history; `UnaccountedTickets` counts the base tickets the remote head holds neither a row nor a purge record for, and `UnaccountedEvents` the base ticket events it lacks whose ticket no purge record names. `Found()` is the commit and whether there is one. `EventValue()` is one value of the event's `reconcile.bases` list.
 
 ---
 
