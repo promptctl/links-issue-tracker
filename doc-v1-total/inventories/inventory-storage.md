@@ -435,6 +435,7 @@ They live beside the specs rather than in an engine because the schema is the co
 #### `Syncer` (`internal/storage/capabilities.go`)
 - `SyncAddRemote(ctx, name, url string) error`
 - `SyncRemoveRemote(ctx, name string) error`
+- `SyncSetRemoteURL(ctx, name, url string) error` — re-points the remote; unlike a removal, it keeps the remote's fork points.
 - `SyncListRemotes(ctx) ([]SyncRemote, error)`
 - `SyncStatus(ctx) (SyncStatusReport, error)` — local side only: build, position, pending changes, peers; **contacts no network**
 - `SyncFreshness(ctx, remote, branch string) (SyncFreshness, error)` — local branch position against a peer as of the last fetch or push; reads local refs, never contacts the network, which is what lets a read-only command call it
