@@ -648,7 +648,7 @@ Test `TestSyncResolveUnrelatedOwnerApprovalBindsForkAndSide` (`sync_unrelated_te
 5. `captureReconcilePlan`; copy `Ahead`/`Behind`.
 6. `!plan.diverged` → `SyncReconcileNotDiverged`, return (`sync_unrelated_take.go`).
 7. Set `result.LocalHead`, `result.RemoteHead`.
-8. **If the divergence HAS a base** → refuse: `"sync reconcile take applies only to unrelated histories, but %s/%s shares history with the local backlog; run \`lit sync reconcile\` to field-merge it"` (`sync_unrelated_take.go`). Test `TestSyncResolveUnrelatedRefusesSharedHistory` (`sync_unrelated_test.go`).
+8. **If the divergence HAS a base** → refuse: `"sync reconcile take applies only to unrelated histories, but the local backlog has a base to merge %s/%s against (%s); run \`lit sync reconcile\` to field-merge it"`; the parenthesis names where the base came from (`merge_base` or `fork_point`) (`sync_unrelated_take.go`). Test `TestSyncResolveUnrelatedRefusesSharedHistory` (`sync_unrelated_test.go`).
 9. `unrelatedInventory(localHead, remoteHead)` → `result.Unrelated` (read **before** the approval check so the refusal can name what would be destroyed).
 10. `expected := takeApprovalToken(plan.localHead, plan.remoteHead, choice)`; if `ownerApproval != expected` → return `OwnerApprovalRequiredError{..., Stale: ownerApproval != ""}` with **nothing mutated** (`sync_unrelated_take.go`).
 11. `s.applyUnrelatedTake(...)`.

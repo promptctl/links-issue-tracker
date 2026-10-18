@@ -322,7 +322,7 @@ type reconcilePlan struct {
 	dataBranch string
 	localHead  string
 	remoteHead string
-	base       mergeBaseResult
+	base       storage.ReconcileBase
 }
 
 // captureReconcilePlan reads the reconcile decision state under the already-held
@@ -358,11 +358,25 @@ func (s *Store) captureReconcilePlan(ctx context.Context, remote, branch string)
 	if err != nil {
 		return reconcilePlan{}, err
 	}
-	plan.base, err = mergeBase(ctx, s.db, plan.localHead, trackingRef)
+	plan.base, err = s.reconcileBase(ctx, remote, branch, plan.localHead, plan.remoteHead, trackingRef)
 	if err != nil {
 		return reconcilePlan{}, err
 	}
+	s.reconcileBases = append(s.reconcileBases, plan.base)
 	return plan, nil
+}
+
+// reconcileBase is the base of a divergence: the heads' merge base when they
+// share history, and otherwise what the fork point offers (forkPointBase).
+func (s *Store) reconcileBase(ctx context.Context, remote, branch, localHead, remoteHead, trackingRef string) (storage.ReconcileBase, error) {
+	merged, err := mergeBase(ctx, s.db, localHead, trackingRef)
+	if err != nil {
+		return storage.ReconcileBase{}, err
+	}
+	if commit, shared := merged.shared(); shared {
+		return storage.ReconcileBase{Source: storage.ReconcileBaseMergeBase, Commit: commit}, nil
+	}
+	return s.forkPointBase(ctx, remote, branch, localHead, remoteHead)
 }
 
 // followThenReconcile is the public reconcile verbs' path: follow a re-root
@@ -398,7 +412,7 @@ func (s *Store) reconcile(ctx context.Context, remote string, branch string, set
 			result.State = storage.SyncReconcileNotDiverged
 			return nil
 		}
-		baseCommit, shared := plan.base.shared()
+		baseCommit, shared := plan.base.Found()
 		result.LocalHead, result.RemoteHead, result.BaseCommit = plan.localHead, plan.remoteHead, baseCommit
 
 		if !shared {
@@ -485,7 +499,7 @@ func (s *Store) reconcileFromAnchors(ctx context.Context, result *storage.SyncRe
 		if err != nil {
 			return err
 		}
-		return s.mergeAndReplay(ctx, result, settle, guard, dataBranch, scratch, localHead, remoteHead, base, reconcileCommitMessage, storage.SyncReconcileLinearized)
+		return s.mergeAndReplay(ctx, result, settle, guard, dataBranch, scratch, localHead, remoteHead, []string{remoteHead, baseCommit}, base, reconcileCommitMessage, storage.SyncReconcileLinearized)
 	})
 }
 
@@ -499,7 +513,7 @@ func (s *Store) combineFromAnchors(ctx context.Context, result *storage.SyncReco
 	return s.runOnReconcileScratch(ctx, dataBranch, scratch, localHead, func() error {
 		// [LAW:types-are-the-program] no merge-base is the empty export, which merge.ThreeWay
 		// reads as "both sides changed every field from empty" — exactly the two-way union.
-		return s.mergeAndReplay(ctx, result, settle, guard, dataBranch, scratch, localHead, remoteHead, model.Export{}, combineCommitMessage, storage.SyncReconcileCombined)
+		return s.mergeAndReplay(ctx, result, settle, guard, dataBranch, scratch, localHead, remoteHead, []string{remoteHead}, model.Export{}, combineCommitMessage, storage.SyncReconcileCombined)
 	})
 }
 
@@ -516,25 +530,32 @@ type foldedCommit struct {
 	date    time.Time
 }
 
-// foldedChainRange spells the folded side of a divergence as a dolt_log
-// revision range: every commit reachable from localHead that the remote spine
-// lacks. One spelling serves both divergence shapes — on unrelated histories
-// it is the entire local chain; on a shared base it is exactly the ahead
-// commits — so no caller re-derives "the folded side" from a base commit.
-// [LAW:one-source-of-truth]
-func foldedChainRange(remoteHead, localHead string) string {
-	return remoteHead + ".." + localHead
+// foldedChainQuery spells, as a dolt_log query and its bound arguments, the
+// commits reachable from head that no commit of remoteSide reaches. For a
+// divergence remoteSide is what the remote is known to hold: its head, and
+// the base. One spelling serves every divergence shape: on a shared base the
+// base is an ancestor of the remote head and adds nothing, so it is exactly
+// the ahead commits; under a fork-point base the remote head reaches none of
+// local's history and the base cuts the chain at the fork; on unrelated
+// histories, with no base, it is the entire local chain. So no caller
+// re-derives "the folded side" from the divergence's shape.
+// [LAW:one-source-of-truth] [LAW:dataflow-not-control-flow]
+func foldedChainQuery(columns, head string, remoteSide ...string) (string, []any) {
+	args := []any{head}
+	for _, commit := range remoteSide {
+		args = append(args, "^"+commit)
+	}
+	return fmt.Sprintf(`SELECT %s FROM dolt_log(%s)`, columns, strings.TrimSuffix(strings.Repeat("?, ", len(args)), ", ")), args
 }
 
 // readFoldedChain lists the folded side's commits oldest-first — replay order —
-// with the message, author, and timestamp each replayed commit preserves. The
-// range is bound, not interpolated.
-func readFoldedChain(ctx context.Context, db *sql.DB, remoteHead, localHead string) ([]foldedCommit, error) {
-	rows, err := db.QueryContext(ctx,
-		`SELECT commit_hash, committer, email, date, message FROM dolt_log(?)`,
-		foldedChainRange(remoteHead, localHead))
+// with the message, author, and timestamp each replayed commit preserves.
+// remoteSide is foldedChainQuery's. The revisions are bound, not interpolated.
+func readFoldedChain(ctx context.Context, db *sql.DB, localHead string, remoteSide ...string) ([]foldedCommit, error) {
+	query, args := foldedChainQuery("commit_hash, committer, email, date, message", localHead, remoteSide...)
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("read folded chain %s..%s: %w", remoteHead, localHead, err)
+		return nil, fmt.Errorf("read folded chain of %s excluding %v: %w", localHead, remoteSide, err)
 	}
 	defer rows.Close()
 	var chain []foldedCommit
@@ -766,16 +787,17 @@ func holdForCollisions(result *storage.SyncReconcileResult, collisions []merge.C
 
 // mergeAndReplay is the merge-settle-replay tail shared by the shared-history three-way and
 // the no-base combine: on the scratch branch it reads ours@localHead and theirs@remoteHead,
-// merges them against base (a real merge-base export, or the empty export for a combine),
+// merges them against base (a real base's export, or the empty export for a combine),
 // and either refuses an id that names two tickets, holds the prose divergence for the
-// agent, or replays the folded chain forward onto remoteHead — each folded commit under
-// its own provenance, settled by the marker
-// commit carrying message — landing settledState. The caller has already read base (or left
-// it empty), so the ONLY difference between the two producers is that value and the two
-// labels — the safety-critical replay is written once.
-// [LAW:single-enforcer] [LAW:dataflow-not-control-flow] base/message/state are values, not
-// a branch duplicated through the replay.
-func (s *Store) mergeAndReplay(ctx context.Context, result *storage.SyncReconcileResult, settle settleFn, guard *snapshotGuard, dataBranch string, scratch reconcileScratch, localHead, remoteHead string, base model.Export, message string, settledState storage.SyncReconcileState) error {
+// agent, or replays the folded chain — the local commits no commit of remoteSide reaches
+// (foldedChainQuery) — forward onto remoteHead, each folded commit under its own
+// provenance, settled by the marker commit carrying message — landing settledState. The
+// caller has already read base (or left it empty), so the ONLY difference between the two
+// producers is that value, remoteSide and the two labels — the safety-critical replay is
+// written once.
+// [LAW:single-enforcer] [LAW:dataflow-not-control-flow] base/remoteSide/message/state are
+// values, not a branch duplicated through the replay.
+func (s *Store) mergeAndReplay(ctx context.Context, result *storage.SyncReconcileResult, settle settleFn, guard *snapshotGuard, dataBranch string, scratch reconcileScratch, localHead, remoteHead string, remoteSide []string, base model.Export, message string, settledState storage.SyncReconcileState) error {
 	ours, err := s.exportAtCommit(ctx, scratch.read, localHead)
 	if err != nil {
 		return err
@@ -822,7 +844,7 @@ func (s *Store) mergeAndReplay(ctx context.Context, result *storage.SyncReconcil
 		return nil
 	}
 
-	chain, err := readFoldedChain(ctx, s.db, remoteHead, localHead)
+	chain, err := readFoldedChain(ctx, s.db, localHead, remoteSide...)
 	if err != nil {
 		return err
 	}
@@ -1027,11 +1049,12 @@ type replayLanding struct {
 
 // countCommitsInRange counts the commits reachable from head but not from
 // exclusiveBase — the spine segment a replay built, marker included. It reuses
-// the folded-chain range spelling, so "the segment between two anchors" has one
+// the folded-chain spelling, so "the segment between two anchors" has one
 // definition. [LAW:one-source-of-truth]
 func countCommitsInRange(ctx context.Context, db *sql.DB, exclusiveBase, head string) (int, error) {
 	var count int
-	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM dolt_log(?)`, foldedChainRange(exclusiveBase, head)).Scan(&count); err != nil {
+	query, args := foldedChainQuery("COUNT(*)", head, exclusiveBase)
+	if err := db.QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
 		return 0, fmt.Errorf("count replayed commits %s..%s: %w", exclusiveBase, head, err)
 	}
 	return count, nil

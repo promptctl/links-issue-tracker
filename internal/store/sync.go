@@ -192,10 +192,19 @@ func (s *Store) SyncFetch(ctx context.Context, remote string, prune bool) error 
 		args = append([]string{"--prune"}, args...)
 	}
 	return s.runSyncMutation(ctx, func(ctx context.Context) error {
+		// The fork points are recorded in the same mutation as the fetch and
+		// ahead of it, because the fetch moves every tracking ref of the remote
+		// however the remote's history moved (recordForkPoints). Every attempt
+		// records, so a retried attempt reports what it found as well.
+		forkPoints, err := s.recordForkPoints(ctx, trimmedRemote)
+		s.forkPoints = append(s.forkPoints, forkPoints...)
+		if err != nil {
+			return err
+		}
 		// [LAW:single-enforcer] Remote transport retry wraps the one network-touching
 		// call, inside the mutation's own GC-contention retry: the two loops recover
 		// unrelated failures under separate budgets (see remote_io.go).
-		err := runRemoteIO(ctx, func(ctx context.Context) error {
+		err = runRemoteIO(ctx, func(ctx context.Context) error {
 			_, err := callIntProcedure(ctx, s.db, "DOLT_FETCH", args...)
 			return err
 		})

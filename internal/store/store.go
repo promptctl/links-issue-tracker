@@ -57,6 +57,12 @@ type Store struct {
 	// followed is every re-root followRemoteReRoot applied since the store
 	// opened; FollowedReRoots is its one reader.
 	followed []storage.FollowedReRoot
+	// forkPoints is what every fetch since the store opened did to each fork
+	// point (recordForkPoints); ForkPointRecords is its one reader.
+	forkPoints []storage.ForkPointRecord
+	// reconcileBases is the base every reconcile plan since the store opened
+	// decided on (captureReconcilePlan); ReconcileBases is its one reader.
+	reconcileBases []storage.ReconcileBase
 
 	// clock is where this store learns the instant it stamps a write with. It
 	// is a construction-time dependency rather than a read from inside the

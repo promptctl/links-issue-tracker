@@ -127,6 +127,17 @@ type Syncer interface {
 	// nothing and returns none.
 	FollowedReRoots() []FollowedReRoot
 
+	// ForkPointRecords is what every fetch the engine ran since it opened did
+	// to each fork point before it moved the tracking ref, oldest first. A
+	// fork point is the remote head this checkout last knew while the two
+	// still shared history: the base a reconcile merges against once the
+	// remote re-roots above every commit this checkout holds.
+	ForkPointRecords() []ForkPointRecord
+
+	// ReconcileBases is the base every reconcile since the engine opened
+	// decided on, and where it came from, oldest first.
+	ReconcileBases() []ReconcileBase
+
 	// GetSyncState and RecordSyncState carry the staleness marker across
 	// commands: what the store's content was at the last sync, so a later
 	// command can tell whether anything has happened since.

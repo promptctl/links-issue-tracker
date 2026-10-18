@@ -133,13 +133,13 @@ func (s *Store) SyncResolveUnrelated(ctx context.Context, remote string, branch 
 			result.State = storage.SyncReconcileNotDiverged
 			return nil
 		}
-		_, shared := plan.base.shared()
+		_, shared := plan.base.Found()
 		result.LocalHead, result.RemoteHead = plan.localHead, plan.remoteHead
 		if shared {
 			// A divergence WITH a base is mergeable; taking one side wholesale here would
 			// silently drop the other side's non-conflicting work that the field-aware
 			// reconcile would have kept. Refuse and route to the merge. [LAW:no-silent-failure]
-			return fmt.Errorf("sync reconcile take applies only to unrelated histories, but %s/%s shares history with the local backlog; run `lit sync reconcile` to field-merge it", trimmedRemote, trimmedBranch)
+			return fmt.Errorf("sync reconcile take applies only to unrelated histories, but the local backlog has a base to merge %s/%s against (%s); run `lit sync reconcile` to field-merge it", trimmedRemote, trimmedBranch, plan.base.Source)
 		}
 
 		// Read the both-sides inventory off the two anchors while under the lock — pure
@@ -328,7 +328,7 @@ func (s *Store) takeLocalOntoRemoteHead(ctx context.Context, result *storage.Syn
 		if err != nil {
 			return err
 		}
-		chain, err := readFoldedChain(ctx, s.db, remoteHead, localHead)
+		chain, err := readFoldedChain(ctx, s.db, localHead, remoteHead)
 		if err != nil {
 			return err
 		}
