@@ -115,11 +115,11 @@ A move that landed and a failure after it (the branch's read-back or a hold's re
 
 `followRemoteReRoot(ctx, remote, branch, entry storage.SyncEntry) (followed bool, err error)` at `reroot_follow.go`; no network. Exported for the CLI as `SyncFollowReRoot` (returns only the error). Both args required (`requireSyncArg`). A held commit lock (`commitLockHeldSince`) is refused before anything is read: `"follow a re-root of %s/%s: the commit lock is held (since %s), and the follow takes Dolt's LOCK, which is taken before the commit lock or not at all"`.
 1. `unrelatedToRemote` (in the engine): `trackingRefExists(remotes/<remote>/<branch>)` (the `dolt_remote_branches` count `SyncFreshness` also uses; absent → nothing to follow), `activeBranch`, then `mergeBase(active, trackingRef)`. A shared base, or no tracking ref, returns `false, nil` with nothing else run.
-2. `followWithEngineClosed`: `closeEngine`, then `holdForRefWrite(doltRootDir, ReRootHoldBudget, …)` (LOCK, then the commit lock), then `reopenEngine` (`openEngine` under the store's own access; a failure leaves the closed engine in place and a no-op holder release) whatever happened. Close, hold and reopen errors are joined and wrapped `"follow a re-root of %s/%s: %w"`.
+2. `withEngineClosed` (also the bound's re-root, §1.8a): `closeEngine`, then `holdForRefWrite(doltRootDir, ReRootHoldBudget, …)` (LOCK, then the commit lock), then `reopenEngine` (`openEngine` under the store's own access; a failure leaves the closed engine in place and a no-op holder release) whatever happened. Close, hold and reopen errors are joined and wrapped `"follow a re-root of %s/%s: %w"`.
 3. Inside the hold, `followReRoot` → `recognizeReRootCut`: resolve the branch and the tracking ref; read the tracking ref's whole history (`readHistory`); it must have exactly one parentless commit, the remote root. Read the local history; every local commit whose `CommitMeta` equals the root's is rebuilt parentless with `commitRoot` and kept when the rebuild's hash equals the root's. Exactly one kept commit is the cut; zero or several → not followed. Then `reRootBranch` at the cut; `ErrSideLineAcrossCut` → not followed, any other error returned.
 4. A follow is appended to the store's `followed` list as `storage.FollowedReRoot{Entry, ReRooted}`; `FollowedReRoots()` returns a copy, oldest first. `FollowedReRoot.EventValue()` is one map: `ReRooted.EventRecord()`'s facts and counts under their own keys, plus `reroot.follow` = the entry.
 
-Callers, each before the commit-locked step that reads the result: `SyncSettleReceived` (entry `receive`), `SyncPull` (`pull`, after its fetch), `followThenReconcile` behind `SyncReconcile`, `SyncReconcileResolved` and `SyncReconcileCombine` (`reconcile`), `SyncResolveUnrelated` after its side check (`reconcile`), `retryPushAfterFollow` (`push`), and `lit sync fetch` through `SyncFollowReRoot` (`fetch`). Entry values (`internal/storage/reroot.go`): `pull`, `receive`, `reconcile`, `push`, `fetch`. Tests: `reroot_follow_test.go`.
+Callers, each before the commit-locked step that reads the result: `SyncSettleReceived` (entry `receive`), `SyncPull` (`pull`, after its fetch), `followThenReconcile` behind `SyncReconcile`, `SyncReconcileResolved` and `SyncReconcileCombine` (`reconcile`), `SyncResolveUnrelated` after its side check (`reconcile`), `retryPushAfterFollow` (`push`), `publishBound` after its fetch (`bound`, §1.8a), and `lit sync fetch` through `SyncFollowReRoot` (`fetch`). Entry values (`internal/storage/reroot.go`): `pull`, `receive`, `reconcile`, `push`, `fetch`, `bound`. Tests: `reroot_follow_test.go`.
 
 ### 1.6d Fork points — the base of a divergence whose heads share no history
 
@@ -176,8 +176,9 @@ Tests: `TestSyncPullStateTransitions` (`sync_reconcile_schema_skew_test.go`), `T
 2. `attempt, swept, compactErr = s.compactWithinLock(ctx, depth)`; `sweep = sweep.plus(swept)` (`sync.go`).
 3. `s.pushWithinLock(...)` (`sync.go`).
 The attempt's outcome goes through `retryPushAfterFollow`, so a refusal over a re-root it follows pushes again without compacting, and any other failure stands with nothing fetched; the outcome is `joinFollowFailure(err, followErr)`.
+Only when that outcome is a landed push, `boundHistory(ctx, remote, branch)` (§1.8a, both args trimmed) runs and `bound = historyBoundReport(...)` of its result.
 After all attempts, whether or not they failed, and **outside** the commit lock (`sync.go`):
-`maintenance := joinMaintenance(compactionReport(attempt, depthErr), sweep.Report(), s.pruneRemoteCache(ctx).Report())`. A failure returns `annotateWithMaintenance(err, maintenance)`; otherwise `result.Maintenance = maintenance`. Neither a sweep nor a prune failure fails the push (`sync.go`).
+`maintenance := joinMaintenance(compactionReport(attempt, depthErr), sweep.Report(), bound, s.pruneRemoteCache(ctx).Report())`. A failure returns `annotateWithMaintenance(err, maintenance)`; otherwise `result.Maintenance = maintenance`. Neither a sweep, a bound nor a prune failure fails the push (`sync.go`).
 
 `pushWithinLock` (`sync.go`):
 1. `requireSyncArg("remote", remote)`; branch is only `strings.TrimSpace`d and **may be empty** (`sync.go`).
@@ -190,6 +191,17 @@ After all attempts, whether or not they failed, and **outside** the commit lock 
 `SyncPushFromClone(ctx, remote, branch, setUpstream, force)` (`sync.go`) — requires both remote and branch (`requireSyncArg`), then `pushMutation` and `retryPushAfterFollow` on its outcome; a push that lands (first or after following) returns its result. A failure that is not a `pushRefusedError` fetched nothing and is returned as it failed. A refusal that stands has already had its fetch; a failed fetch or follow returns the push error joined as `"%w (and whether a concurrent push superseded it could not be checked — %w)"`. Otherwise, inside one `runSyncMutation`, `SyncFreshness(remote, branch)`; a failed read returns the push error joined as `"%w (and whether a concurrent push superseded it could not be checked: %w)"`. A state other than `up_to_date` or `behind` — the remote does not carry HEAD — returns the push error unchanged. Otherwise the result is `SyncPushResult{Head: <HEAD>, Superseded: <push error text>}` and no error. Test: `TestSyncPushFromCloneReportsARaceItLostAsSuperseded` (`sync_push_from_clone_test.go`).
 
 Tests: `TestSyncPushDelivers` (`sync_test.go`), `TestSyncCompactAndPushDelivers` (`sync_test.go`), `TestSyncCompactAndPushDeepensOnAFragmentedOldGeneration` (`sync_test.go`).
+
+### 1.8a `boundHistory` — a push past the history bound re-roots history
+
+`boundHistory(ctx, remote, branch) storage.HistoryBound` (`history_bound.go`). The bound is the store's `bound historyBound{reRootAt, keep uint64}`, set to `defaultHistoryBound` = `{reRootAt: 2000, keep: 1000}` at open (`openStoreConnection`). The result starts as `HistoryBound{Remote, Branch, ReRootAt, Keep}`; `keepHistoryBound` fills it in step by step and its error becomes `Err`. Every result, whatever its error, is appended to the store's `bounds`; `HistoryBounds()` returns a copy, oldest first.
+1. `requireSyncArg("branch", branch)`. Then `SELECT commit_hash, commit_order FROM dolt_log(?) LIMIT 1` on `remotes/<remote>/<branch>` into `Head` and `Height` (`commit_order` is the commit's height); a failure is `"read the height of %s: %w"`. `Fired()` is `Height >= ReRootAt`; below it nothing else runs.
+2. `publishBound`. `reRootScratch(branch, Head, Keep)` under `withEngineClosed`: read `Head` (`readFullCommit`), take the commit `Keep-1` first parents below it (`firstParentAncestor`; a line that ends first is `"the first-parent line below %s ends after %d commits, short of the %d the bound keeps"`), point the branch `lit-reroot/<branch>` (`reRootScratchPrefix`) at `Head` (`SetHeadToCommit`), and `reRootBranch` it at that commit (§1.6b), timing `Elapsed`. A re-root that fails is `"re-root %s at %s: %w"`, joined with the scratch branch's deletion. The result is `ReRooted`.
+3. `publishReRoot(remote, branch, Head)`, one `runSyncMutation`: `pushLeasedWithinLock(remote, "lit-reroot/<branch>", branch, Head)`; once it returns a verdict, `DOLT_BRANCH -D` the scratch. The verdict is `Lease`.
+4. `SyncFetch(remote, false)` (`"fetch to learn whether %s carries the re-root: %w"`), then `followRemoteReRoot(remote, branch, SyncEntryBound)` (§1.6c), whatever `Lease` says. A branch that did not follow ends the bound with no error.
+5. `collectBelowTheCut`: `BytesBefore = storeBytes(doltRootDir)` (the size of every file under the chunk store, `"measure the store's size on disk: %w"`); then one `runSyncMutation`: `recordForkPoints(remote)` (§1.6d; its records join the store's fork point records), `PruneCheckpoints(prefix, 0)` for `pre-migrate` and `pre-drift-repair`, `sweepStaleReconcileScratch`, `compactWithinLock(GCFull)` with `Collected = attempt.Ran`; then `BytesAfter = storeBytes(...)`.
+
+`historyBoundReport` joins with `"; "`: `"history bound: the remote head reached height %d (bound %d)"` when fired, `"re-rooted at %s, keeping %d commits and dropping %d"` when `ReRooted.Head` is set, `"lease "` + the outcome when pushed, `"store %s -> %s"` (`humanBytes`) when collected, `"history bound not kept: %v"` on `Err`; under the bound with no error it is empty. Tests: `TestAPushPastTheBoundReRootsWithNoCommandRun`, `TestAStaleLeaseLeavesTheBranchOnItsHistory`, `TestAStaleLeaseOverTheLandedReRootStillFollowsIt` (`history_bound_test.go`).
 
 ### 1.9 `SyncStatus`
 
@@ -1346,17 +1358,17 @@ Base: `/Users/bmf/code/links-issue-tracker/internal/store/migrations/`.
 
 ### 12.1 Registry-wide conventions
 
-**Directive syntax.** All nine `.sql` files are goose migrations delimited by SQL line comments:
-- `-- +goose Up` begins the up section (`00001_baseline.sql`, `00002_add_lane.sql`, `00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00005_add_event_attribution.sql`, `00006_add_follows_up.sql`, `00007_every_ticket_inside_a_container.sql`, `00008_blocked_by_edge.sql`, `00009_purges.sql`).
-- `-- +goose Down` begins the down section (`00001_baseline.sql`, `00002_add_lane.sql`, `00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00005_add_event_attribution.sql`, `00006_add_follows_up.sql`, `00007_every_ticket_inside_a_container.sql`, `00008_blocked_by_edge.sql`, `00009_purges.sql`).
-- `-- +goose StatementBegin` / `-- +goose StatementEnd` wrap each individual statement (e.g. `00001_baseline.sql`, `00005_add_event_attribution.sql`). **Every executable statement in every file, in both sections, is inside exactly one such pair** — there are no bare statements (`00001_baseline.sql`, `00002_add_lane.sql`, `00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00005_add_event_attribution.sql`, `00006_add_follows_up.sql`, `00007_every_ticket_inside_a_container.sql`, `00008_blocked_by_edge.sql`, `00009_purges.sql`).
+**Directive syntax.** All ten `.sql` files are goose migrations delimited by SQL line comments:
+- `-- +goose Up` begins the up section (`00001_baseline.sql`, `00002_add_lane.sql`, `00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00005_add_event_attribution.sql`, `00006_add_follows_up.sql`, `00007_every_ticket_inside_a_container.sql`, `00008_blocked_by_edge.sql`, `00009_purges.sql`, `00010_history_can_be_re_rooted.sql`).
+- `-- +goose Down` begins the down section (`00001_baseline.sql`, `00002_add_lane.sql`, `00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00005_add_event_attribution.sql`, `00006_add_follows_up.sql`, `00007_every_ticket_inside_a_container.sql`, `00008_blocked_by_edge.sql`, `00009_purges.sql`, `00010_history_can_be_re_rooted.sql`).
+- `-- +goose StatementBegin` / `-- +goose StatementEnd` wrap each individual statement (e.g. `00001_baseline.sql`, `00005_add_event_attribution.sql`). **Every executable statement in every file, in both sections, is inside exactly one such pair** — there are no bare statements (`00001_baseline.sql`, `00002_add_lane.sql`, `00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00005_add_event_attribution.sql`, `00006_add_follows_up.sql`, `00007_every_ticket_inside_a_container.sql`, `00008_blocked_by_edge.sql`, `00009_purges.sql`, `00010_history_can_be_re_rooted.sql`).
 
-**Naming/numbering.** `<NNNNN>_<name>.sql`, 5-digit zero-padded, `00001_baseline.sql` … `00009_purges.sql`; the accept-shape is enforced by `bounds.go`. `embed.go` states subsequent migrations append with strictly ascending versions and that only SQL migrations are wired — the embed (`//go:embed *.sql`) and `ParseRegistry` (`bounds.go`) both read only `*.sql` entries.
+**Naming/numbering.** `<NNNNN>_<name>.sql`, 5-digit zero-padded, `00001_baseline.sql` … `00010_history_can_be_re_rooted.sql`; the accept-shape is enforced by `bounds.go`. `embed.go` states subsequent migrations append with strictly ascending versions and that only SQL migrations are wired — the embed (`//go:embed *.sql`) and `ParseRegistry` (`bounds.go`) both read only `*.sql` entries.
 
 **Idempotency, per statement.**
 - **Up sections: no DDL is guarded.** Every `CREATE TABLE` is bare, no `IF NOT EXISTS` (`00001_baseline.sql`, `00009_purges.sql`), and so is the one `CREATE TEMPORARY TABLE` (`00006_add_follows_up.sql`). Every `CREATE INDEX` is bare (`00001_baseline.sql`). Every `ALTER TABLE ... ADD COLUMN` is bare (`00002_add_lane.sql`, `00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00005_add_event_attribution.sql`, `00006_add_follows_up.sql`). Every `ADD CONSTRAINT` is bare (`00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00008_blocked_by_edge.sql`). Two migrations guard data instead: `00006_add_follows_up.sql` moves no child onto an edge it already holds, and `00007_every_ticket_inside_a_container.sql` mints the unfiled epic only when no row holds its id and writes no edge a child already holds.
 - **`00001_baseline.sql` down section: every statement uses `IF EXISTS`** — all seven `DROP TABLE IF EXISTS` (`00001_baseline.sql`).
-- **Down sections of 00002–00009: no `IF EXISTS` on any statement** (`00002_add_lane.sql`; `00003_add_resolution.sql`; `00004_add_redirect_target.sql`; `00005_add_event_attribution.sql`; `00006_add_follows_up.sql`; `00007_every_ticket_inside_a_container.sql`; `00008_blocked_by_edge.sql`; `00009_purges.sql`).
+- **Down sections of 00002–00010: no `IF EXISTS` on any statement** (`00002_add_lane.sql`; `00003_add_resolution.sql`; `00004_add_redirect_target.sql`; `00005_add_event_attribution.sql`; `00006_add_follows_up.sql`; `00007_every_ticket_inside_a_container.sql`; `00008_blocked_by_edge.sql`; `00009_purges.sql`; `00010_history_can_be_re_rooted.sql`).
 - The one insert-conflict tolerance in the registry is `INSERT IGNORE INTO relations(...)` in the 00004 down section (`00004_add_redirect_target.sql`).
 
 ### 12.2 `00001_baseline.sql`
@@ -1554,6 +1566,14 @@ sha256 `f3af8e534e5b7fd3d09b310574f4b8925ca281bb942e040c83d25ebd64fdf852`.
 
 **Down** — `DROP TABLE purges;` (no `IF EXISTS`). LOSS CONTRACT: the purged issues stay gone (their rows were deleted by the purge, not by this migration), but a store stepped back below this version no longer knows which ids were purged, so a sync with a store that still holds one of them can bring it back, and minting can hand a purged id out again; operators who need the records must restore from a pre-downgrade dbsnapshot.
 
+### 12.6e `00010_history_can_be_re_rooted.sql`
+
+sha256 `1203641ecfc7404f23b8153497df136bd3f23d90194e92ff91b959c2aa168fec`.
+
+**Up** — one statement, `DELETE FROM meta WHERE meta_key = 'producer_binary_version';`. The comment states that it is the first version past v9, the newest any lit that wrote `meta.producer_binary_version` supports, so the `lit upgrade --to <row>` that lit v0.1.0.1 through v0.14.0.1 print from that row would name a lit that refuses the workspace too; and that a store at this version or above can be re-rooted by a push past the history bound (§1.8a) and that every lit supporting it follows a re-rooted remote at every sync entry point, while a lit whose support stops below it meets a re-rooted remote as unrelated histories and refuses to write to a remote whose head records a version above its own (`guardCommitSchemaAhead`), so once the shared remote carries this version no such lit can push over a re-root, force-push it, combine with it or take a side against it.
+
+**Down** — `SELECT 1;`. LOSS CONTRACT: the row is not restored; no lit since v0.18.0 writes or reads it, and the version it named is not recoverable from the store.
+
 ### 12.7 `embed.go`
 
 Package `migrations` (`embed.go`), imports `"embed"`. Embed directive `//go:embed *.sql` on `var FS embed.FS`. The glob is `*.sql` only — non-`.sql` files in the directory are not embedded. `FS` is the only exported symbol in the file, described as "the embedded goose migration registry… the one source the runner reads from; nothing applies schema outside this set". The package doc records that only SQL migrations are wired and that adding a Go migration would require registering it with goose and widening the embed pattern.
@@ -1576,7 +1596,7 @@ The doc justifies the exactness against `fmt.Sscanf("%d")`, which would accept l
 
 `Embedded() (Registry, error)` (`bounds.go`): `FS.ReadDir(".")` (error wrapped `"read migration registry: %w"`), then `ParseRegistry` over the entry names. The store's registry readers (`registryColumnAddsThroughVersion`, `scanMigrationDrops`) and `tools/schema-release-check` read the embedded registry through it.
 
-`MaxVersion() (int64, error)` (`bounds.go`): `Embedded()`, then `Registry.MaxVersion()`. With the current registry: **9**.
+`MaxVersion() (int64, error)` (`bounds.go`): `Embedded()`, then `Registry.MaxVersion()`. With the current registry: **10**.
 
 `BaselineFileName() (string, error)` (`bounds.go`): `Embedded()`; returns the first migration whose version equals `Baseline` — currently `00001_baseline.sql`. Not found → `"no baseline migration (v%d) found in registry"`.
 
@@ -1626,7 +1646,7 @@ Each runs as a subtest; mismatch is `t.Errorf("hasDownSection() = %v, want %v\nb
 
 Types: `pinnedMigration{file, sha256 string}`; `migrationFile{version int64; name, sha256 string}`; `reuseKind int` with, in iota order, `kindContentChanged`=0 (a pinned version's bytes no longer match its pin), `kindRenamed`=1 (content matches, filename changed), `kindUnpinned`=2 (an on-disk non-baseline version has no pin), `kindDeleted`=3 (a pinned version is gone from disk); `reuseFinding{kind; version int64; pinned pinnedMigration; onDisk migrationFile}`.
 
-The literal pins, `pinnedVersionContent` — all eight verified against the on-disk sha256s:
+The literal pins, `pinnedVersionContent` — all nine verified against the on-disk sha256s:
 ```go
 2: {file: "00002_add_lane.sql",              sha256: "9126cd9e9c3a01137898fb9023c50b3f8741950f1e5d943dad521852939a4b75"},
 3: {file: "00003_add_resolution.sql",        sha256: "47b50dea1a1e2b7e31ba6b0fa95f5f77c6411b81ee525b04e1ff5e5fdb469563"},
@@ -1636,6 +1656,7 @@ The literal pins, `pinnedVersionContent` — all eight verified against the on-d
 7: {file: "00007_every_ticket_inside_a_container.sql", sha256: "2eb2ae5ab7a43df7116e4dd9137901d8272f03f89a7569bb67b7437182101458"},
 8: {file: "00008_blocked_by_edge.sql", sha256: "2ab61664b7a73c4e36dc0a11d37e2f5b86b261a97aebf67ffa364ae9596e9deb"},
 9: {file: "00009_purges.sql", sha256: "f3af8e534e5b7fd3d09b310574f4b8925ca281bb942e040c83d25ebd64fdf852"},
+10: {file: "00010_history_can_be_re_rooted.sql", sha256: "1203641ecfc7404f23b8153497df136bd3f23d90194e92ff91b959c2aa168fec"},
 ```
 Version 1 is deliberately absent — `baseline_frozen_test.go` is its content enforcer.
 

@@ -63,6 +63,11 @@ type Store struct {
 	// reconcileBases is the base every reconcile plan since the store opened
 	// decided on (captureReconcilePlan); ReconcileBases is its one reader.
 	reconcileBases []storage.ReconcileBase
+	// bound is the sync branch's history bound, which a compacting push
+	// keeps (boundHistory), and bounds is what each such push since the
+	// store opened did to keep it; HistoryBounds is its one reader.
+	bound  historyBound
+	bounds []storage.HistoryBound
 
 	// clock is where this store learns the instant it stamps a write with. It
 	// is a construction-time dependency rather than a read from inside the
@@ -435,6 +440,7 @@ func openStoreConnection(ctx context.Context, doltRootDir string, workspaceID st
 		access:              access,
 		releaseEngineRecord: releaseEngineRecord,
 		clock:               storage.SystemClock,
+		bound:               defaultHistoryBound,
 		// Both facts about the commit lock, drawn side by side from the one
 		// root, so neither is ever recovered by inverting the other.
 		// [LAW:one-source-of-truth]
