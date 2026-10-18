@@ -264,7 +264,7 @@ func (s *Store) landProse(export model.Export, texts map[string]merge.ProseTexts
 // on the caller's own engine after its command engine closed — never a background
 // worker.
 func (s *Store) SyncReconcile(ctx context.Context, remote string, branch string) (storage.SyncReconcileResult, error) {
-	return s.reconcile(ctx, remote, branch, autonomousSettle, detectOnly)
+	return s.followThenReconcile(ctx, remote, branch, autonomousSettle, detectOnly)
 }
 
 // SyncReconcileResolved is the agent-resolved finalize of a prose-pending
@@ -287,7 +287,7 @@ func (s *Store) SyncReconcileResolved(ctx context.Context, remote string, branch
 	// base branch handles it) OR an unrelated combine (the !shared branch, with the agent's
 	// prose landed). Reusing the same command means renderProsePendingGuidance's printed
 	// resolve line is correct for both surfaces. [LAW:single-enforcer] one finalize path.
-	return s.reconcile(ctx, remote, branch, s.resolvedSettle(resolutions, actor), unionCombine)
+	return s.followThenReconcile(ctx, remote, branch, s.resolvedSettle(resolutions, actor), unionCombine)
 }
 
 // SyncReconcileCombine resolves an unrelated-history divergence by COMBINING both sides:
@@ -304,7 +304,7 @@ func (s *Store) SyncReconcileResolved(ctx context.Context, remote string, branch
 // through that base like an ordinary reconcile — combine is non-destructive, so it need not
 // refuse shared history the way the wholesale takes do.
 func (s *Store) SyncReconcileCombine(ctx context.Context, remote string, branch string) (storage.SyncReconcileResult, error) {
-	return s.reconcile(ctx, remote, branch, autonomousSettle, unionCombine)
+	return s.followThenReconcile(ctx, remote, branch, autonomousSettle, unionCombine)
 }
 
 // reconcilePlan is everything a reconcile decides from, captured ONCE under the
@@ -363,6 +363,18 @@ func (s *Store) captureReconcilePlan(ctx context.Context, remote, branch string)
 		return reconcilePlan{}, err
 	}
 	return plan, nil
+}
+
+// followThenReconcile is the public reconcile verbs' path: follow a re-root
+// the tracking ref reveals (followRemoteReRoot), then reconcile, so a re-root
+// this branch can follow never reaches the reconcile as unrelated histories.
+// SyncPull calls reconcile directly, inside the commit lock it took after
+// following.
+func (s *Store) followThenReconcile(ctx context.Context, remote string, branch string, settle settleFn, unrelated unrelatedHandling) (storage.SyncReconcileResult, error) {
+	if _, err := s.followRemoteReRoot(ctx, remote, branch, storage.SyncEntryReconcile); err != nil {
+		return storage.SyncReconcileResult{}, err
+	}
+	return s.reconcile(ctx, remote, branch, settle, unrelated)
 }
 
 func (s *Store) reconcile(ctx context.Context, remote string, branch string, settle settleFn, unrelated unrelatedHandling) (storage.SyncReconcileResult, error) {

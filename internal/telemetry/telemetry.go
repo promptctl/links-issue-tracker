@@ -233,6 +233,19 @@ func Count(ctx context.Context, key string, n int) {
 	r.ev.Counts[key] = n
 }
 
+// Append adds values to the list fact key, after every value an earlier
+// Append gave it, for a fact that can occur more than once in one invocation.
+// An Append of no values still records the empty list, so "none occurred"
+// reads as [] and not as an absent key, which says nothing was looked at.
+// [LAW:nothing-unseen]
+func Append(ctx context.Context, key string, values ...any) {
+	r := from(ctx)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	list, _ := r.ev.Facts[key].([]any)
+	r.ev.Facts[key] = append(append([]any{}, list...), values...)
+}
+
 // Record records facts and counts a value declared about itself, such as a
 // result's EventRecord, as if each were Set or Counted.
 func Record(ctx context.Context, facts map[string]any, counts map[string]int) {

@@ -71,14 +71,37 @@ func knownSyncBranch(ctx context.Context, ws workspace.Info, remote string) (str
 	if branch != "" {
 		return branch, nil
 	}
-	notKnown := fmt.Errorf(
-		"default branch of remote %q is not known on this machine: git names none in refs/remotes/%s/HEAD and no sync here has learned it from the remote; the next sync that reaches the remote learns it",
-		remote, remote,
-	)
+	notKnown := syncBranchNotKnownError{remote: remote}
 	if readErr != nil && !errors.Is(readErr, fs.ErrNotExist) {
 		return "", fmt.Errorf("%w; the record of what the remote last said is unreadable: %w", notKnown, readErr)
 	}
 	return "", notKnown
+}
+
+// syncBranchNotKnownError is knownSyncBranch finding nothing on this machine
+// that names the remote's default branch. No freshness read can report on the
+// remote then, which is what a caller acting only for those reads keys on.
+type syncBranchNotKnownError struct{ remote string }
+
+func (e syncBranchNotKnownError) Error() string {
+	return fmt.Sprintf(
+		"default branch of remote %q is not known on this machine: git names none in refs/remotes/%s/HEAD and no sync here has learned it from the remote; the next sync that reaches the remote learns it",
+		e.remote, e.remote,
+	)
+}
+
+// freshnessSyncTarget is the remote and branch the freshness reads report on
+// — doctor and every read command's banner — resolved as `lit sync` resolves
+// its remote, and with no network: the branch is knownSyncBranch's. An empty
+// remote is a workspace with no sync remote. [LAW:one-source-of-truth] the one
+// reading of what freshness is about.
+func freshnessSyncTarget(ctx context.Context, ws workspace.Info, gitRemotes []workspace.GitRemote) (remote string, branch string, err error) {
+	remote, err = resolveSyncRemote("", workspace.UpstreamRemote(ctx, ws.RootDir), gitRemotes)
+	if err != nil || remote == "" {
+		return remote, "", err
+	}
+	branch, err = knownSyncBranch(ctx, ws, remote)
+	return remote, branch, err
 }
 
 // advertisedSyncBranchPath is where resolveSyncBranch records the branch a

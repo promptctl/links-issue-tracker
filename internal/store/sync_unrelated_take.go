@@ -92,7 +92,10 @@ func (e OwnerApprovalRequiredError) Error() string {
 // ownerApproval is the owner-confirmation step: the take runs only when it matches
 // this exact fork+side's takeApprovalToken. Anything else — absent, stale, or issued
 // for the other side — returns OwnerApprovalRequiredError carrying the current token
-// and inventory, with nothing mutated. The check runs under the same commit lock as
+// and inventory, with nothing taken. Approval or not, a re-root this branch can follow
+// is followed first, as every sync verb follows one unasked: it discards no row of
+// either side, and it is not an unrelated history, so the take that meets it finds
+// shared history and refuses. The check runs under the same commit lock as
 // the mutation, so there is no gap between the state the owner approved and the state
 // destroyed. [LAW:no-ambient-temporal-coupling]
 // [LAW:single-enforcer] the gate lives on the destructive operation itself, not on
@@ -110,6 +113,11 @@ func (s *Store) SyncResolveUnrelated(ctx context.Context, remote string, branch 
 		// [LAW:no-silent-failure] an unknown side must never reach the dispatch and
 		// silently do nothing; reject it at the boundary with the legal values.
 		return storage.SyncReconcileResult{}, fmt.Errorf("resolve unrelated histories: unknown side %q (want %q or %q)", choice, storage.TakeLocal, storage.TakeRemote)
+	}
+	// A re-root this branch can follow is not an unrelated history, so it is
+	// followed before the take can discard either side of it.
+	if _, err := s.followRemoteReRoot(ctx, trimmedRemote, trimmedBranch, storage.SyncEntryReconcile); err != nil {
+		return storage.SyncReconcileResult{}, err
 	}
 
 	var result storage.SyncReconcileResult

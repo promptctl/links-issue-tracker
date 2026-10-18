@@ -155,6 +155,15 @@ var doltWorkspaceMachinery = map[string][]string{
 		"ReceiveDeadline", "ReadReceivedRefs", "WriteReceivedRefs", "ReceivedRefsPath",
 		"LandFetchedHead", "LandedFetch", "ErrRemoteCacheNotLanded",
 	},
+	// Bounding Dolt history: ReRoot cuts the sync branch at a commit by
+	// writing through the chunk store with no engine, so there is no handle to
+	// ask through the contract. The CLI's one caller is the follow's end-to-end
+	// test, which re-roots one checkout and force-pushes it to stand in for
+	// the push path's own trigger (links-storage-3k6u.ge9), which runs inside
+	// the store. Dolt history machinery, deleted at S4 with the rest.
+	"history bound": {
+		"ReRoot",
+	},
 	// Typed failures the CLI matches to choose an exit code and a message.
 	// [LAW:parse-dont-validate] — matched as types, never by message text.
 	//

@@ -448,6 +448,8 @@ They live beside the specs rather than in an engine because the schema is the co
 - `SyncCompact(ctx, mode GCMode) (CompactionOutcome, error)` — reclaims local storage at the requested depth with no remote involved
 - `CompactIfDue(ctx) (CompactionOutcome, error)` — compacts only when the engine's own accounting says a pass is owed; the engine owns that judgment because what makes a pass due is a fact about how it stores data
 - `SyncCompactAndPush(ctx, remote, branch string, setUpstream, force bool) (SyncPushResult, error)`
+- `SyncFollowReRoot(ctx, remote, branch string, entry SyncEntry) error` — brings the local branch into the remote's history when another checkout re-rooted it, reading the tracking ref as the last fetch left it; no network. Every sync verb that settles or pushes follows on its own; this is for a caller that fetched and settles nothing.
+- `FollowedReRoots() []FollowedReRoot` — every re-root the engine applied to its own branch since it opened, to follow a re-rooted remote; an engine whose history is never re-rooted returns none.
 - `GetSyncState(ctx) (SyncState, error)` / `RecordSyncState(ctx, state SyncState) error` — carry the staleness marker across commands
 - Compaction sits inside `Syncer` because `SyncCompactAndPush` compacts and pushes under a single commit-lock acquisition — one atomic operation not assemblable from `SyncCompact` + `SyncPush` (`internal/storage/capabilities.go`).
 - Nothing in `Syncer` resolves a divergence — that is `Reconciler` (`internal/storage/capabilities.go`).
@@ -519,6 +521,11 @@ These types live in the contract, not in an engine, because a capability interfa
 - **`UnrelatedInventory`** (`internal/storage/sync.go`) — `OnlyLocal`, `OnlyRemote`, `OnBoth`, `Purged []string` (json `only_local,omitempty`, `only_remote,omitempty`, `on_both,omitempty`, `purged,omitempty`). `Purged` is the ids a purge record on either side names, which every resolution drops; the other three partition the rest. The four slices are sorted and mutually disjoint by construction; every id present on either side lands in exactly one (`internal/storage/sync.go`).
 - **`UnrelatedResolution`** string (`internal/storage/sync.go`): `TakeLocal = "local"` (keeps local backlog, discards remote-only issues), `TakeRemote = "remote"` (keeps remote backlog, discards local-only issues).
   - `Valid()` returns true only for those two; the door guard every `Reconciler` runs before touching the store (`internal/storage/sync.go`).
+
+- Re-root vocabulary (`internal/storage/reroot.go`):
+  - **`ReRooted`** — what a re-root did to a branch: `Cut`, `Root` (the parentless commit carrying the cut's root value and metadata), `Head`, `Rewritten map[string]string` (every kept commit, old hash to new), `Dropped int` (the cut's ancestors), `Elapsed time.Duration`. `Kept()` is `len(Rewritten)`. `EventRecord()` gives facts `reroot.cut`, `reroot.root`, `reroot.head`, `reroot.elapsed_ms` and counts `reroot.kept`, `reroot.dropped`.
+  - **`SyncEntry`** string: `pull`, `receive` (the automatic receive, or the on-change mirror's receive of what it pushed), `reconcile`, `push` (a refused `lit sync push` or mirror push), `fetch`.
+  - **`FollowedReRoot{Entry SyncEntry; ReRooted}`** — a re-root a store applied to follow a re-rooted remote; `EventValue()` is one value of the event's `reroot.follows` list: the re-root's facts and counts under their own keys, plus `reroot.follow` = the entry.
 
 ---
 

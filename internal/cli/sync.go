@@ -14,6 +14,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/precedence"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -71,7 +72,23 @@ func openSyncSessionAt(ctx context.Context, databasePath, workspaceID string) (s
 		// [LAW:no-silent-failure]
 		return syncSession{}, nil, errors.Join(err, st.Close())
 	}
-	return syncSession{engine: st, syncer: syncer}, st.Close, nil
+	return syncSession{engine: st, syncer: syncer}, func() error {
+		reportFollowedReRoots(ctx, syncer.FollowedReRoots())
+		return st.Close()
+	}, nil
+}
+
+// reportFollowedReRoots appends each re-root a sync session's engine applied
+// to follow its remote to the command's reroot.follows list, which a session
+// that followed nothing leaves empty but present. Every sync session closes
+// through openSyncSessionAt, so no entry point has to remember to.
+// [LAW:nothing-unseen] [LAW:single-enforcer]
+func reportFollowedReRoots(ctx context.Context, followed []storage.FollowedReRoot) {
+	values := make([]any, len(followed))
+	for i, f := range followed {
+		values[i] = f.EventValue()
+	}
+	telemetry.Append(ctx, "reroot.follows", values...)
 }
 
 // syncScope is what a sync leaf's work runs against: the workspace plus the
@@ -171,7 +188,8 @@ func syncFetchLeaf() syncLeaf {
 	verbose := fs.Bool("verbose", false, "Include detailed remote output")
 	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, scope syncScope, positional []string) error {
 		ws, session := scope.ws, scope.session
-		if _, err := syncDoltRemotesFromGit(ctx, session, ws); err != nil {
+		syncState, err := syncDoltRemotesFromGit(ctx, session, ws)
+		if err != nil {
 			// A could-not-attempt failure (git-remote reconciliation itself failed,
 			// before any fetch was even tried) is still a decision this command
 			// reached — trace it, matching the coverage recordMirrorTraceError/
@@ -181,21 +199,43 @@ func syncFetchLeaf() syncLeaf {
 			return err
 		}
 		remoteName := strings.TrimSpace(*remote)
-		fetchErr := session.syncer.SyncFetch(ctx, remoteName, *prune)
-		recordSyncCommandTrace(ws, "lit sync fetch", "fetched", fetchErr, map[string]string{"remote": remoteName})
-		if fetchErr != nil {
-			return fetchErr
-		}
-		if err := markFetchSuccess(ws); err != nil {
-			fmt.Fprintf(os.Stderr, "lit: fetch-success marker not written: %v\n", err)
+		err = fetchAndFollow(ctx, session, ws, syncState.gitRemotes, remoteName, *prune)
+		recordSyncCommandTrace(ws, "lit sync fetch", "fetched", err, map[string]string{"remote": remoteName})
+		if err != nil {
+			return err
 		}
 		if !*verbose {
 			_, err := fmt.Fprintln(stdout, "fetched")
 			return err
 		}
-		_, err := fmt.Fprintf(stdout, "fetched %s\n", remoteName)
+		_, err = fmt.Fprintf(stdout, "fetched %s\n", remoteName)
 		return err
 	}}
+}
+
+// fetchAndFollow is `lit sync fetch`'s work, traced by its caller as one
+// decision: fetch remote, then follow a re-root on the remote and branch the
+// freshness reads report on (freshnessSyncTarget), so none of them reports
+// that re-root as a divergence. The follow is for those reads alone, so it
+// targets what they read whichever remote was fetched, and contacts no
+// network: a workspace with no sync remote, or none whose default branch is
+// known here, has no freshness a re-root could misreport, and follows
+// nothing.
+func fetchAndFollow(ctx context.Context, session syncSession, ws workspace.Info, gitRemotes []workspace.GitRemote, remote string, prune bool) error {
+	if err := session.syncer.SyncFetch(ctx, remote, prune); err != nil {
+		return err
+	}
+	if err := markFetchSuccess(ws); err != nil {
+		fmt.Fprintf(os.Stderr, "lit: fetch-success marker not written: %v\n", err)
+	}
+	syncRemote, branch, err := freshnessSyncTarget(ctx, ws, gitRemotes)
+	if notKnown := (syncBranchNotKnownError{}); errors.As(err, &notKnown) || (err == nil && syncRemote == "") {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return session.syncer.SyncFollowReRoot(ctx, syncRemote, branch, storage.SyncEntryFetch)
 }
 
 func syncPullLeaf() syncLeaf {

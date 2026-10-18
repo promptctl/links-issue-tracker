@@ -14,6 +14,8 @@ import (
 	"github.com/dolthub/dolt/go/libraries/doltcore/ref"
 	"github.com/dolthub/dolt/go/store/datas"
 	"github.com/dolthub/dolt/go/store/hash"
+
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // ReRootHoldBudget bounds a re-root's work under the live store's hold. The
@@ -44,43 +46,6 @@ var ErrReRootLandedThenFailed = errors.New("the branch moved to its rewritten he
 // branch listing.
 var reRootRef = ref.NewInternalRef("reroot")
 
-// ReRooted is what ReRoot did to the branch.
-type ReRooted struct {
-	// Cut is the commit the history was cut at.
-	Cut string
-	// Root is the parentless commit carrying Cut's root value and metadata.
-	Root string
-	// Head is the branch's head after the re-root.
-	Head string
-	// Rewritten maps every commit the branch keeps — Cut and each commit
-	// after it — from its hash before the re-root to its hash after.
-	Rewritten map[string]string
-	// Dropped counts the commits the branch reached before the re-root and
-	// reaches no longer: the ancestors of Cut.
-	Dropped int
-	// Elapsed is the re-root's work inside the hold, from the commit lock's
-	// acquisition to the branch move.
-	Elapsed time.Duration
-}
-
-// Kept counts the commits the branch keeps.
-func (r ReRooted) Kept() int {
-	return len(r.Rewritten)
-}
-
-// EventRecord is the re-root as event facts and counts.
-func (r ReRooted) EventRecord() (map[string]any, map[string]int) {
-	return map[string]any{
-			"reroot.cut":        r.Cut,
-			"reroot.root":       r.Root,
-			"reroot.head":       r.Head,
-			"reroot.elapsed_ms": r.Elapsed.Milliseconds(),
-		}, map[string]int{
-			"reroot.kept":    r.Kept(),
-			"reroot.dropped": r.Dropped,
-		}
-}
-
 // ReRoot bounds branch's history at cut, on the store at doltRootDir. It
 // writes a parentless commit carrying cut's root value and commit metadata,
 // then rewrites every commit after cut, oldest first, onto the rewritten
@@ -107,18 +72,18 @@ func (r ReRooted) EventRecord() (map[string]any, map[string]int) {
 // It contacts no network and opens no SQL engine; the hold is
 // holdForRefWrite's, under ReRootHoldBudget. Deciding when to re-root, and
 // where, is the caller's.
-func ReRoot(ctx context.Context, doltRootDir, branch, cut string) (ReRooted, error) {
+func ReRoot(ctx context.Context, doltRootDir, branch, cut string) (storage.ReRooted, error) {
 	root, err := validateDoltRootDir(doltRootDir)
 	if err != nil {
-		return ReRooted{}, err
+		return storage.ReRooted{}, err
 	}
 	trimmedBranch, err := requireSyncArg("branch", branch)
 	if err != nil {
-		return ReRooted{}, err
+		return storage.ReRooted{}, err
 	}
 	trimmedCut := strings.TrimSpace(cut)
 	if !isDoltCommitHash(trimmedCut) {
-		return ReRooted{}, fmt.Errorf("re-root %s: %q is not a Dolt commit hash", trimmedBranch, cut)
+		return storage.ReRooted{}, fmt.Errorf("re-root %s: %q is not a Dolt commit hash", trimmedBranch, cut)
 	}
 	reRooted, err := reRootUnderHold(ctx, root, trimmedBranch, trimmedCut)
 	return settleReRoot(reRooted, err, trimmedBranch, trimmedCut)
@@ -127,10 +92,10 @@ func ReRoot(ctx context.Context, doltRootDir, branch, cut string) (ReRooted, err
 // reRootUnderHold is ReRoot's work under the live store's holds, both
 // released before it returns. Its result's Head is set exactly when the
 // branch moved, whatever the error.
-func reRootUnderHold(ctx context.Context, root, branch, cut string) (reRooted ReRooted, err error) {
+func reRootUnderHold(ctx context.Context, root, branch, cut string) (reRooted storage.ReRooted, err error) {
 	release, err := acquireLiveStoreHold(ctx, root)
 	if err != nil {
-		return ReRooted{}, err
+		return storage.ReRooted{}, err
 	}
 	defer func() { err = errors.Join(err, release()) }()
 	err = holdForRefWrite(ctx, root, ReRootHoldBudget, func(holdCtx context.Context, ddb *doltdb.DoltDB) error {
@@ -149,7 +114,7 @@ func reRootUnderHold(ctx context.Context, root, branch, cut string) (reRooted Re
 // ErrReceivedRefsNotRecorded does for its own landed write. Anything else is
 // not known to have moved, and its result carries only the time it held, as
 // LandFetchedHead's carries Held. [LAW:no-silent-failure]
-func settleReRoot(r ReRooted, err error, branch, cut string) (ReRooted, error) {
+func settleReRoot(r storage.ReRooted, err error, branch, cut string) (storage.ReRooted, error) {
 	switch {
 	case err == nil:
 		return r, nil
@@ -170,34 +135,34 @@ type historyCommit struct {
 
 // reRootBranch is ReRoot's work inside the hold: read the history, plan the
 // rewrite, write it, move the branch.
-func reRootBranch(ctx context.Context, ddb *doltdb.DoltDB, branch ref.DoltRef, cut hash.Hash) (ReRooted, error) {
+func reRootBranch(ctx context.Context, ddb *doltdb.DoltDB, branch ref.DoltRef, cut hash.Hash) (storage.ReRooted, error) {
 	headCommit, err := ddb.ResolveCommitRef(ctx, branch)
 	if err != nil {
-		return ReRooted{}, fmt.Errorf("resolve the branch head: %w", err)
+		return storage.ReRooted{}, fmt.Errorf("resolve the branch head: %w", err)
 	}
 	head, err := headCommit.HashOf()
 	if err != nil {
-		return ReRooted{}, err
+		return storage.ReRooted{}, err
 	}
 	// Everything at or below the cut, then everything the head reaches above
 	// it: the walk from the head stops wherever it meets the first set.
 	below, err := readHistory(ctx, ddb, cut, nil)
 	if err != nil {
-		return ReRooted{}, err
+		return storage.ReRooted{}, err
 	}
 	above, err := readHistory(ctx, ddb, head, below)
 	if err != nil {
-		return ReRooted{}, err
+		return storage.ReRooted{}, err
 	}
 	steps, err := planReRoot(above, head, cut)
 	if err != nil {
-		return ReRooted{}, err
+		return storage.ReRooted{}, err
 	}
 
 	rewritten := map[hash.Hash]*doltdb.Commit{}
 	rewritten[cut], err = commitRoot(ctx, ddb, below[cut].commit)
 	if err != nil {
-		return ReRooted{}, err
+		return storage.ReRooted{}, err
 	}
 	for _, step := range steps {
 		parents := make([]*doltdb.Commit, len(step.parents))
@@ -206,16 +171,16 @@ func reRootBranch(ctx context.Context, ddb *doltdb.DoltDB, branch ref.DoltRef, c
 		}
 		rewritten[step.commit.addr], err = recommit(ctx, ddb, step.commit.commit, parents)
 		if err != nil {
-			return ReRooted{}, err
+			return storage.ReRooted{}, err
 		}
 	}
 	// The result is read before the move, so nothing can fail after the
 	// branch has moved but the hold's release.
-	result := ReRooted{Cut: cut.String(), Rewritten: make(map[string]string, len(rewritten)), Dropped: len(below) - 1}
+	result := storage.ReRooted{Cut: cut.String(), Rewritten: make(map[string]string, len(rewritten)), Dropped: len(below) - 1}
 	for old, nc := range rewritten {
 		addr, err := nc.HashOf()
 		if err != nil {
-			return ReRooted{}, err
+			return storage.ReRooted{}, err
 		}
 		result.Rewritten[old.String()] = addr.String()
 	}
@@ -232,16 +197,16 @@ func reRootBranch(ctx context.Context, ddb *doltdb.DoltDB, branch ref.DoltRef, c
 // does not say the branch stayed: the branch says. On the rewritten head, the
 // result stands beside the error; anywhere else, or unreadable, it does not.
 // The read runs past the hold's budget, since a cut is one way to get here.
-func whereTheMoveLeft(ctx context.Context, ddb *doltdb.DoltDB, branch ref.DoltRef, result ReRooted, moveErr error) (ReRooted, error) {
+func whereTheMoveLeft(ctx context.Context, ddb *doltdb.DoltDB, branch ref.DoltRef, result storage.ReRooted, moveErr error) (storage.ReRooted, error) {
 	err := fmt.Errorf("move the branch to the rewritten head %s: %w", result.Head, moveErr)
 	at, readErr := ddb.ResolveCommitRef(context.WithoutCancel(ctx), branch)
 	if readErr != nil {
-		return ReRooted{}, errors.Join(err, fmt.Errorf("read where the branch is: %w", readErr))
+		return storage.ReRooted{}, errors.Join(err, fmt.Errorf("read where the branch is: %w", readErr))
 	}
 	if addr, _ := at.HashOf(); addr.String() == result.Head {
 		return result, err
 	}
-	return ReRooted{}, err
+	return storage.ReRooted{}, err
 }
 
 // rewriteStep is one commit after the cut and the parents it keeps, by their

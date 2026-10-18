@@ -78,9 +78,9 @@ Constants at `storage/sync.go`. Test `TestSyncFreshnessStateClassification` (`sy
 
 ### 1.6 `SyncReceive` — fetch + fast-forward only
 
-`SyncReceive(ctx, remote, branch)` at `sync.go`. Runs inside `runSyncMutation` (commit lock + GC retry):
-1. `CALL DOLT_FETCH(?)` with the remote (`sync.go`). Error `"fetch remote %q: %w"`.
-2. `settleReceivedWithinLock` (`sync.go`), which `SyncSettleReceived` also runs alone inside its own `runSyncMutation`, with no fetch: one `SyncFreshness` read (`sync.go`). `Ahead`, `Behind`, `OldestDivergedUnix` are copied onto the result (`sync.go`).
+`SyncReceive(ctx, remote, branch)` at `sync.go`. Both args required (`requireSyncArg`). Then, as separate holds:
+1. `SyncFetch(remote, prune=false)` — `CALL DOLT_FETCH(?)` under `runRemoteIO` inside its own `runSyncMutation` (`sync.go`). Error `"fetch remote %q: %w"`.
+2. `SyncSettleReceived(remote, branch)`: `followRemoteReRoot(..., SyncEntryReceive)` (§1.6c), then `settleReceived`, which runs `settleReceivedWithinLock` inside `runSyncMutation` (commit lock + GC retry; it joins a commit lock the caller already holds). `settleReceivedWithinLock` (`sync.go`) is one `SyncFreshness` read; `Ahead`, `Behind`, `OldestDivergedUnix` are copied onto the result (`sync.go`).
 3. Switch on `fresh.State()` (`sync.go`):
    - `SyncBehind` → `execProcedureDiscard(DOLT_MERGE, "--ff-only", "remotes/<remote>/<branch>")`; error `"fast-forward to %q: %w"`; state `SyncReceiveFastForwarded`.
    - `SyncDiverged` → state `SyncReceiveDiverged`, **no merge performed**.
@@ -99,7 +99,7 @@ Fast-forward is the only local-data-touching outcome. State constants and their 
 
 ### 1.6b `ReRoot` — the sync branch's history cut at a commit
 
-`ReRoot(ctx, doltRootDir, branch, cut) (ReRooted, error)` at `reroot.go`; no network, no SQL engine. `ReRooted` carries `Cut`, `Root` (the parentless commit carrying the cut's root value and metadata), `Head` (the branch's head after the move), `Rewritten` (every kept commit, old hash to new), `Dropped` (the cut's ancestors) and `Elapsed`; `Kept()` is `len(Rewritten)`, and `EventRecord()` gives facts `reroot.cut`, `reroot.root`, `reroot.head`, `reroot.elapsed_ms` and counts `reroot.kept`, `reroot.dropped`. A cut that is not a Dolt commit hash is refused before any hold. Under `acquireLiveStoreHold` (workspace shared lock, `requireInitializedWorkspace`, `requireNoPendingAdopt`), runs inside `holdForRefWrite` under `ReRootHoldBudget` (15s):
+`ReRoot(ctx, doltRootDir, branch, cut) (storage.ReRooted, error)` at `reroot.go`; no network, no SQL engine. `storage.ReRooted` (`internal/storage/reroot.go`) carries `Cut`, `Root` (the parentless commit carrying the cut's root value and metadata), `Head` (the branch's head after the move), `Rewritten` (every kept commit, old hash to new), `Dropped` (the cut's ancestors) and `Elapsed`; `Kept()` is `len(Rewritten)`, and `EventRecord()` gives facts `reroot.cut`, `reroot.root`, `reroot.head`, `reroot.elapsed_ms` and counts `reroot.kept`, `reroot.dropped`. A cut that is not a Dolt commit hash is refused before any hold. Under `acquireLiveStoreHold` (workspace shared lock, `requireInitializedWorkspace`, `requireNoPendingAdopt`), runs inside `holdForRefWrite` under `ReRootHoldBudget` (15s):
 1. Reads every commit at or below the cut, then every commit the head reaches above it, through `readFullCommit` (a ghost commit is refused).
 2. `planReRoot` orders the commits above the cut by height and keeps, for each, the parents that are the cut or above it. A cut the head does not reach is refused (`"the cut is not an ancestor of the branch head %s"`); a commit left with no kept parent is refused as `ErrSideLineAcrossCut`. Nothing is written before the plan stands.
 3. `commitRoot` commits the cut's root value and metadata to `refs/internal/reroot` (a leftover of that ref is deleted first) and deletes the ref; each planned commit is recommitted, oldest first, onto its kept parents' rewrites with its own root value and metadata (`CommitDanglingWithParentCommits`).
@@ -107,18 +107,28 @@ Fast-forward is the only local-data-touching outcome. State constants and their 
 
 A move that landed and a failure after it (the branch's read-back or a hold's release) returns the result with an error wrapping `ErrReRootLandedThenFailed`; any other failure returns only `Elapsed`. A cut at the budget wraps `ErrHoldCut`.
 
+### 1.6c `followRemoteReRoot` — the local branch follows a remote another checkout re-rooted
+
+`followRemoteReRoot(ctx, remote, branch, entry storage.SyncEntry) (followed bool, err error)` at `reroot_follow.go`; no network. Exported for the CLI as `SyncFollowReRoot` (returns only the error). Both args required (`requireSyncArg`). A held commit lock (`commitLockHeldSince`) is refused before anything is read: `"follow a re-root of %s/%s: the commit lock is held (since %s), and the follow takes Dolt's LOCK, which is taken before the commit lock or not at all"`.
+1. `unrelatedToRemote` (in the engine): `trackingRefExists(remotes/<remote>/<branch>)` (the `dolt_remote_branches` count `SyncFreshness` also uses; absent → nothing to follow), `activeBranch`, then `mergeBase(active, trackingRef)`. A shared base, or no tracking ref, returns `false, nil` with nothing else run.
+2. `followWithEngineClosed`: `closeEngine`, then `holdForRefWrite(doltRootDir, ReRootHoldBudget, …)` (LOCK, then the commit lock), then `reopenEngine` (`openEngine` under the store's own access; a failure leaves the closed engine in place and a no-op holder release) whatever happened. Close, hold and reopen errors are joined and wrapped `"follow a re-root of %s/%s: %w"`.
+3. Inside the hold, `followReRoot` → `recognizeReRootCut`: resolve the branch and the tracking ref; read the tracking ref's whole history (`readHistory`); it must have exactly one parentless commit, the remote root. Read the local history; every local commit whose `CommitMeta` equals the root's is rebuilt parentless with `commitRoot` and kept when the rebuild's hash equals the root's. Exactly one kept commit is the cut; zero or several → not followed. Then `reRootBranch` at the cut; `ErrSideLineAcrossCut` → not followed, any other error returned.
+4. A follow is appended to the store's `followed` list as `storage.FollowedReRoot{Entry, ReRooted}`; `FollowedReRoots()` returns a copy, oldest first. `FollowedReRoot.EventValue()` is one map: `ReRooted.EventRecord()`'s facts and counts under their own keys, plus `reroot.follow` = the entry.
+
+Callers, each before the commit-locked step that reads the result: `SyncSettleReceived` (entry `receive`), `SyncPull` (`pull`, after its fetch), `followThenReconcile` behind `SyncReconcile`, `SyncReconcileResolved` and `SyncReconcileCombine` (`reconcile`), `SyncResolveUnrelated` after its side check (`reconcile`), `retryPushAfterFollow` (`push`), and `lit sync fetch` through `SyncFollowReRoot` (`fetch`). Entry values (`internal/storage/reroot.go`): `pull`, `receive`, `reconcile`, `push`, `fetch`. Tests: `reroot_follow_test.go`.
+
 ### 1.7 `SyncPull` — receive, then reconcile only on divergence
 
-`SyncPull(ctx, remote, branch) (storage.SyncPullResult, error)` at `sync.go`. The whole converge runs under **one** `s.withCommitLock` (`sync.go`); nested acquisitions short-circuit because `acquireCommitLock` is context-reentrant (`commit_lock.go`).
+`SyncPull(ctx, remote, branch) (storage.SyncPullResult, error)` at `sync.go`. Both args required (`requireSyncArg`). `SyncFetch(remote, false)` and then `followRemoteReRoot(..., SyncEntryPull)` (§1.6c) run first, each under its own hold. The converge after them runs under **one** `s.withCommitLock` (`sync.go`); nested acquisitions short-circuit because `acquireCommitLock` is context-reentrant (`commit_lock.go`).
 
-Sequence (`sync.go`):
-1. `s.SyncReceive`. Copy `Ahead`, `Behind`, `OldestDivergedUnix`.
+Converge sequence (`sync.go`):
+1. `s.settleReceived` (§1.6 steps 2–3, without the follow). Copy `Ahead`, `Behind`, `OldestDivergedUnix`.
 2. Map receive state → pull state:
    - `SyncReceiveUpToDate` → `SyncPullUpToDate`
    - `SyncReceiveFastForwarded` → `SyncPullFastForwarded`
    - `SyncReceiveAhead` → `SyncPullAhead`
    - `SyncReceiveNeverSynced` → `SyncPullNeverSynced`
-   - `SyncReceiveDiverged` → run `s.SyncReconcile(ctx, remote, branch)`, copy its `Ahead`, `Behind` and `Landing`, and map its state:
+   - `SyncReceiveDiverged` → run `s.reconcile(ctx, remote, branch, autonomousSettle, detectOnly)` (the core behind `SyncReconcile`, without its follow), copy its `Ahead`, `Behind` and `Landing`, and map its state:
      - `SyncReconcileLinearized` → `SyncPullLinearized`, then **re-read** `SyncFreshness` and overwrite `Ahead`, `Behind`, `OldestDivergedUnix` from it (`sync.go`).
      - `SyncReconcileProsePending` → `SyncPullProsePending`, `result.Pending = rec.Pending` (`sync.go`).
      - `SyncReconcileUnrelated` → `SyncPullUnrelated`, `result.Unrelated = rec.Unrelated`; the receive's ahead/behind and fork timestamp ride along unchanged (`sync.go`).
@@ -135,13 +145,16 @@ Tests: `TestSyncPullStateTransitions` (`sync_reconcile_schema_skew_test.go`), `T
 
 ### 1.8 `SyncPush` and `SyncCompactAndPush`
 
-`SyncPush(ctx, remote, branch, setUpstream, force)` (`sync.go`) — runs `pushWithinLock` inside `runSyncMutation`. **No compaction.** Rationale in the source: `DOLT_GC` transitions the embedded store read-only mid-run (`sync.go`).
+`SyncPush(ctx, remote, branch, setUpstream, force)` (`sync.go`) — `pushMutation` (`pushWithinLock` inside `runSyncMutation`), then `retryPushAfterFollow` on its outcome. **No compaction.** Rationale in the source: `DOLT_GC` transitions the embedded store read-only mid-run (`sync.go`). The outcome is `joinFollowFailure(pushErr, followErr)`: a fetch or follow failure is joined as `"%w (and whether the remote re-rooted its history could not be checked: %w)"`.
 
-`SyncCompactAndPush(...)` (`sync.go`) — inside one `runSyncMutation`:
+`retryPushAfterFollow(ctx, remote, branch, setUpstream, force, pushed, pushErr)` (`sync.go`) takes the outcome of a push its caller ran. Only a `pushRefusedError` acts; a push that landed, and every failure that is not a refusal (an unreachable remote, a commit lock not acquired, a failed compaction), passes through with nothing fetched. A refusal with a non-empty branch runs `SyncFetch(remote, false)` and `followRemoteReRoot(..., SyncEntryPush)` (§1.6c), each under its own hold; when the follow moved the branch, `pushMutation` runs once more (no compaction) and its outcome is the result. Otherwise the first refusal stands. A refusal with an empty branch stands with nothing fetched. A failed fetch or follow is returned raw, beside the refusal, for the caller to word.
+
+`SyncCompactAndPush(...)` (`sync.go`) — the first attempt is one `runSyncMutation`:
 1. `depth, depthErr = s.chooseCompactionDepth()` measured **inside** the lock (`sync.go`).
 2. `attempt, swept, compactErr = s.compactWithinLock(ctx, depth)`; `sweep = sweep.plus(swept)` (`sync.go`).
 3. `s.pushWithinLock(...)` (`sync.go`).
-After the envelope, whether or not it failed, and **outside** the commit lock (`sync.go`):
+The attempt's outcome goes through `retryPushAfterFollow`, so a refusal over a re-root it follows pushes again without compacting, and any other failure stands with nothing fetched; the outcome is `joinFollowFailure(err, followErr)`.
+After all attempts, whether or not they failed, and **outside** the commit lock (`sync.go`):
 `maintenance := joinMaintenance(compactionReport(attempt, depthErr), sweep.Report(), s.pruneRemoteCache(ctx).Report())`. A failure returns `annotateWithMaintenance(err, maintenance)`; otherwise `result.Maintenance = maintenance`. Neither a sweep nor a prune failure fails the push (`sync.go`).
 
 `pushWithinLock` (`sync.go`):
@@ -149,10 +162,10 @@ After the envelope, whether or not it failed, and **outside** the commit lock (`
 2. If branch is non-empty, `s.guardRemoteSchemaAhead(ctx, remote, branch)` runs first (`sync.go`). An empty branch skips the guard entirely.
 3. Args built in order: `"--set-upstream"` if `setUpstream`, `"--force"` if `force`, then the remote, then `fmt.Sprintf("HEAD:%s", branch)` if branch non-empty (`sync.go`).
 4. `head` = `headCommitWithinLock` (`SELECT commit_hash FROM dolt_log() LIMIT 1`, trimmed; error `"read head commit: %w"`), read before the push so a failed read fails an attempt that has sent nothing (`sync.go`).
-5. `CALL DOLT_PUSH(...)` scanned into `(result.Status int64, message sql.NullString)` (`sync.go`). Error `"push remote %q: %w"`.
+5. `CALL DOLT_PUSH(...)` scanned into `(result.Status int64, message sql.NullString)` (`sync.go`). The error goes through `classifyPushFailure`: a `RemoteUnreachableError`, or any error once `ctx` has ended, is wrapped `"push remote %q: %w"`; any other is the remote's refusal, `pushRefusedError{remote, cause}`, with the same text.
 6. `result.Message = nullStringValue(message)` — NULL→`""`, otherwise trimmed; `result.Head = head` (`sync.go`).
 
-`SyncPushFromClone(ctx, remote, branch, setUpstream, force)` (`sync.go`) — requires both remote and branch (`requireSyncArg`), then inside one `runSyncMutation`: `pushWithinLock`; on success returns its result. On a push error it runs `DOLT_FETCH <remote>` under `runRemoteIO` and `SyncFreshness(remote, branch)`; a failed fetch or freshness read returns the push error with the failed check joined (`"%w (and whether a concurrent push superseded it could not be checked …)"`). `!fresh.Synced || fresh.Ahead > 0` returns the push error unchanged. Otherwise the result is `SyncPushResult{Head: <HEAD>, Superseded: <push error text>}` and no error. Test: `TestSyncPushFromCloneReportsARaceItLostAsSuperseded` (`sync_push_from_clone_test.go`).
+`SyncPushFromClone(ctx, remote, branch, setUpstream, force)` (`sync.go`) — requires both remote and branch (`requireSyncArg`), then `pushMutation` and `retryPushAfterFollow` on its outcome; a push that lands (first or after following) returns its result. A failure that is not a `pushRefusedError` fetched nothing and is returned as it failed. A refusal that stands has already had its fetch; a failed fetch or follow returns the push error joined as `"%w (and whether a concurrent push superseded it could not be checked — %w)"`. Otherwise, inside one `runSyncMutation`, `SyncFreshness(remote, branch)`; a failed read returns the push error joined as `"%w (and whether a concurrent push superseded it could not be checked: %w)"`. `!fresh.Synced || fresh.Ahead > 0` returns the push error unchanged. Otherwise the result is `SyncPushResult{Head: <HEAD>, Superseded: <push error text>}` and no error. Test: `TestSyncPushFromCloneReportsARaceItLostAsSuperseded` (`sync_push_from_clone_test.go`).
 
 Tests: `TestSyncPushDelivers` (`sync_test.go`), `TestSyncCompactAndPushDelivers` (`sync_test.go`), `TestSyncCompactAndPushDeepensOnAFragmentedOldGeneration` (`sync_test.go`).
 
@@ -412,6 +425,7 @@ Fields (`sync_schema_guard.go`): `Remote`, `Branch`, `RemoteVersion int64`, `Bin
 
 ### 5.6 Public reconcile entry points
 
+Each runs through `followThenReconcile` (`sync_reconcile.go`): `followRemoteReRoot(..., SyncEntryReconcile)` (§1.6c), then `reconcile`.
 - `SyncReconcile(ctx, remote, branch)` (`sync_reconcile.go`) = `reconcile(..., autonomousSettle, detectOnly)`.
 - `SyncReconcileResolved(ctx, remote, branch, resolutions, actor)` (`sync_reconcile.go`) = `reconcile(..., s.resolvedSettle(resolutions, actor), unionCombine)` — one finalize path serving both shared-history three-way and unrelated combine (`sync_reconcile.go`).
 - `SyncReconcileCombine(ctx, remote, branch)` (`sync_reconcile.go`) = `reconcile(..., autonomousSettle, unionCombine)`. On a divergence **with** a common base it merges through that base like an ordinary reconcile (`sync_reconcile.go`).
@@ -629,14 +643,15 @@ Test `TestSyncResolveUnrelatedOwnerApprovalBindsForkAndSide` (`sync_unrelated_te
 `SyncResolveUnrelated(ctx, remote, branch, choice storage.UnrelatedResolution, ownerApproval string)` (`sync_unrelated_take.go`):
 1. `requireSyncArg` on remote and branch.
 2. `!choice.Valid()` → `"resolve unrelated histories: unknown side %q (want %q or %q)"` naming `storage.TakeLocal`/`storage.TakeRemote` (`sync_unrelated_take.go`). `UnrelatedResolution` values: `TakeLocal = "local"`, `TakeRemote = "remote"` (`/Users/bmf/code/links-issue-tracker/internal/storage/sync.go`); `Valid()` at `storage/sync.go`. Test `TestUnrelatedResolutionValid` (`sync_unrelated_test.go`).
-3. Everything below inside `s.withCommitLock` (`sync_unrelated_take.go`).
-4. `captureReconcilePlan`; copy `Ahead`/`Behind`.
-5. `!plan.diverged` → `SyncReconcileNotDiverged`, return (`sync_unrelated_take.go`).
-6. Set `result.LocalHead`, `result.RemoteHead`.
-7. **If the divergence HAS a base** → refuse: `"sync reconcile take applies only to unrelated histories, but %s/%s shares history with the local backlog; run \`lit sync reconcile\` to field-merge it"` (`sync_unrelated_take.go`). Test `TestSyncResolveUnrelatedRefusesSharedHistory` (`sync_unrelated_test.go`).
-8. `unrelatedInventory(localHead, remoteHead)` → `result.Unrelated` (read **before** the approval check so the refusal can name what would be destroyed).
-9. `expected := takeApprovalToken(plan.localHead, plan.remoteHead, choice)`; if `ownerApproval != expected` → return `OwnerApprovalRequiredError{..., Stale: ownerApproval != ""}` with **nothing mutated** (`sync_unrelated_take.go`).
-10. `s.applyUnrelatedTake(...)`.
+3. `followRemoteReRoot(..., SyncEntryReconcile)` (§1.6c), so a re-root this branch can follow reaches step 8 as shared history.
+4. Everything below inside `s.withCommitLock` (`sync_unrelated_take.go`).
+5. `captureReconcilePlan`; copy `Ahead`/`Behind`.
+6. `!plan.diverged` → `SyncReconcileNotDiverged`, return (`sync_unrelated_take.go`).
+7. Set `result.LocalHead`, `result.RemoteHead`.
+8. **If the divergence HAS a base** → refuse: `"sync reconcile take applies only to unrelated histories, but %s/%s shares history with the local backlog; run \`lit sync reconcile\` to field-merge it"` (`sync_unrelated_take.go`). Test `TestSyncResolveUnrelatedRefusesSharedHistory` (`sync_unrelated_test.go`).
+9. `unrelatedInventory(localHead, remoteHead)` → `result.Unrelated` (read **before** the approval check so the refusal can name what would be destroyed).
+10. `expected := takeApprovalToken(plan.localHead, plan.remoteHead, choice)`; if `ownerApproval != expected` → return `OwnerApprovalRequiredError{..., Stale: ownerApproval != ""}` with **nothing mutated** (`sync_unrelated_take.go`).
+11. `s.applyUnrelatedTake(...)`.
 
 ### 6.4 `applyUnrelatedTake` dispatch
 

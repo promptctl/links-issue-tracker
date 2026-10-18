@@ -80,7 +80,7 @@ func receiveNow(t *testing.T, dir string) {
 	if err != nil {
 		t.Fatalf("resolve workspace %s: %v", dir, err)
 	}
-	receiveOnce(context.Background(), ws)
+	receiveOnce(underInvocation(context.Background()), ws)
 }
 
 // TestTheReceiveBlockWaitsForTheNextCommandUntilAReceiveSettles pins the

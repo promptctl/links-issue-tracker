@@ -54,6 +54,10 @@ type Store struct {
 	// [LAW:dataflow-not-control-flow]
 	releaseEngineRecord func() error
 
+	// followed is every re-root followRemoteReRoot applied since the store
+	// opened; FollowedReRoots is its one reader.
+	followed []storage.FollowedReRoot
+
 	// clock is where this store learns the instant it stamps a write with. It
 	// is a construction-time dependency rather than a read from inside the
 	// write path, so a caller that needs two rows whose timestamps no real
@@ -414,19 +418,9 @@ func (s *Store) Close() error {
 // nothing would send an operator after the wrong pid. The one branch is the
 // open contract's own discriminator. [LAW:dataflow-not-control-flow]
 func openStoreConnection(ctx context.Context, doltRootDir string, workspaceID string, access engineAccess) (*Store, error) {
-	db, err := openDoltPool(doltRootDir, workspaceID, doltDatabaseName, access)
+	db, releaseEngineRecord, err := openEngine(ctx, doltRootDir, workspaceID, access)
 	if err != nil {
 		return nil, err
-	}
-	if err := awaitEngineOpen(ctx, doltRootDir, db.PingContext); err != nil {
-		return nil, errors.Join(err, db.Close())
-	}
-	releaseEngineRecord := func() error { return nil }
-	if access == engineWrite {
-		// The engine took LOCK through Dolt's own loader, so the record is
-		// published here rather than by acquireStoreLock, and the release it
-		// wraps is a no-op: the hold itself ends when the engine closes.
-		releaseEngineRecord = recordLockHolder(workspaceStorageDir(doltRootDir), DoltJournalLockPath(doltRootDir), func() error { return nil })
 	}
 	return &Store{
 		db:                  db,
@@ -442,6 +436,27 @@ func openStoreConnection(ctx context.Context, doltRootDir string, workspaceID st
 		commitLockStorageDir: workspaceStorageDir(doltRootDir),
 		telemetryDir:         filepath.Join(filepath.Clean(doltRootDir), "telemetry"),
 	}, nil
+}
+
+// openEngine opens the engine openStoreConnection describes, pinged so it is
+// open rather than lazy, and returns it with the release of its LOCK holder
+// record: a no-op for a read engine, which records nothing.
+func openEngine(ctx context.Context, doltRootDir string, workspaceID string, access engineAccess) (*sql.DB, func() error, error) {
+	db, err := openDoltPool(doltRootDir, workspaceID, doltDatabaseName, access)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := awaitEngineOpen(ctx, doltRootDir, db.PingContext); err != nil {
+		return nil, nil, errors.Join(err, db.Close())
+	}
+	releaseEngineRecord := func() error { return nil }
+	if access == engineWrite {
+		// The engine took LOCK through Dolt's own loader, so the record is
+		// published here rather than by acquireStoreLock, and the release it
+		// wraps is a no-op: the hold itself ends when the engine closes.
+		releaseEngineRecord = recordLockHolder(workspaceStorageDir(doltRootDir), DoltJournalLockPath(doltRootDir), func() error { return nil })
+	}
+	return db, releaseEngineRecord, nil
 }
 
 // reconnect swaps s.db for a fresh connection with the Store's own open
