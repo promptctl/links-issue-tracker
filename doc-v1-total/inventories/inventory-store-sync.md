@@ -34,8 +34,8 @@ Constants at `/Users/bmf/code/links-issue-tracker/internal/store/sync.go`:
 
 - `SyncListRemotes` (`sync.go`): `SELECT name, url FROM dolt_remotes ORDER BY name`. Returns `[]storage.SyncRemote` (never nil — initialized to `[]` at `sync.go`). Errors: `"list dolt remotes: %w"`, `"scan dolt remote: %w"`, `"iterate dolt remotes: %w"`.
 - `SyncAddRemote(ctx, name, url)` (`sync.go`): trims/requires both args via `requireSyncArg` (`sync.go`), then under `runSyncMutation` calls `CALL DOLT_REMOTE(?, ?, ?)` with `"add", name, url` (`sync.go`). Error: `"add dolt remote %q: %w"`.
-- `SyncRemoveRemote(ctx, name)` (`sync.go`): `CALL DOLT_REMOTE(?, ?)` with `"remove", name` (`sync.go`). Error `"remove dolt remote %q: %w"`.
-- `SyncFetch(ctx, remote, prune)` (`sync.go`): args are `[remote]`, and when `prune` is true `"--prune"` is **prepended** (`sync.go`). Inside one `runSyncMutation`, each attempt runs `recordForkPoints` (§1.6d) and appends its records to the store's `forkPoints`, then `CALL DOLT_FETCH(...)` under `runRemoteIO`. Error `"fetch remote %q: %w"`.
+- `SyncRemoveRemote(ctx, name)` (`sync.go`): `CALL DOLT_REMOTE(?, ?)` with `"remove", name` (`sync.go`), then `dropOrphanForkPoints` (§1.6d), its records appended to the store's `forkPoints`. Error `"remove dolt remote %q: %w"`.
+- `SyncFetch(ctx, remote, prune)` (`sync.go`): args are `[remote]`, and when `prune` is true `"--prune"` is **prepended** (`sync.go`). Inside one `runSyncMutation`, each attempt runs `recordForkPoints` (§1.6d) and appends its records to the store's `forkPoints`, then `CALL DOLT_FETCH(...)` under `runRemoteIO`, then `dropOrphanForkPoints` (§1.6d), its records appended likewise. Error `"fetch remote %q: %w"`.
 - Test: `TestSyncRemoteLifecycle` (`sync_test.go`), `TestSyncRemoteValidation` (`sync_test.go`).
 
 `requireSyncArg(field, value)` (`sync.go`) trims whitespace and errors `"%s is required"` when the trimmed value is empty.
@@ -58,10 +58,13 @@ Tests: `TestGitBackedRemoteURL` (`sync_test.go`), `TestGitBackedRemoteURLIsIdemp
 2. Tracking ref string is `fmt.Sprintf("remotes/%s/%s", remote, branch)` (`sync.go`).
 3. Existence probe: `SELECT COUNT(*) FROM dolt_remote_branches WHERE name = ?` (`sync.go`). Count 0 → return with `Synced=false`, `Ahead=0`, `Behind=0`, `OldestDivergedUnix=0` — the never-synced state; the range queries are **not** run (`sync.go`).
 4. `Synced = true`; read `SELECT ACTIVE_BRANCH()` (`sync.go`).
-5. `ahead = commitRangeStats(trackingRef, localBranch)`; `behind = commitRangeStats(localBranch, trackingRef)` (`sync.go`). Errors wrapped `"summarize commits ahead of %q: %w"` / `"summarize commits behind %q: %w"`.
-6. `OldestDivergedUnix` is populated **only** when `ahead > 0 && behind > 0`, as `earlierValidUnix(aheadOldest, behindOldest)` (`sync.go`). Ahead-only or behind-only leaves it 0.
+5. `readDoltHead` → local head, `commitHashOfRef(trackingRef)` → remote head; `Base = reconcileBase(remote, branch, localHead, remoteHead, trackingRef)` (§1.6d).
+6. `ahead = commitRangeStats(localBranch, trackingRef[, Base.Commit])` — the base excluded when `Base.Found()`, so ahead is the folded chain the reconcile replays; `behind = commitRangeStats(trackingRef, localBranch)` (`sync.go`). Errors wrapped `"summarize commits ahead of %q: %w"` / `"summarize commits behind %q: %w"`.
+7. `OldestDivergedUnix` is populated **only** when `State()` is `diverged`, as `earlierValidUnix(aheadOldest, behindOldest)` (`sync.go`). Ahead-only or behind-only leaves it 0.
 
-`commitRangeStats(from, to)` (`sync.go`) runs `SELECT COUNT(*), UNIX_TIMESTAMP(MIN(date)) FROM dolt_log(?)` with the bound range expression `"<from>..<to>"` (`sync.go`). The timestamp is scanned as `sql.NullString` because the driver renders `UNIX_TIMESTAMP` of a Datetime3 column as a fractional decimal string (`sync.go`), then parsed by `parseUnixSeconds`.
+`State()` (`internal/storage/sync.go`) is `behind` for `ahead == 0` only when `Base.Source` is not `fork_point`: heads that share no commit cannot fast-forward, so a fork-point base with nothing to replay is `diverged`. `Base` is not serialized.
+
+`commitRangeStats(head, excluded...)` (`sync.go`) runs `SELECT COUNT(*), UNIX_TIMESTAMP(MIN(date)) FROM dolt_log(?, ^?...)` — `foldedChainQuery`'s spelling, every revision bound (`sync.go`). The timestamp is scanned as `sql.NullString` because the driver renders `UNIX_TIMESTAMP` of a Datetime3 column as a fractional decimal string (`sync.go`), then parsed by `parseUnixSeconds`.
 
 `parseUnixSeconds(raw sql.NullString) (sql.NullInt64, error)` (`sync.go`): invalid/blank → `{}, nil`; `strconv.ParseFloat` failure → error (wrapped by caller as `"parse oldest commit time %q: %w"`, `sync.go`); otherwise `int64(secs)` — sub-second truncated. Test `TestParseUnixSeconds` (`sync_helpers_test.go`).
 
@@ -123,15 +126,17 @@ Callers, each before the commit-locked step that reads the result: `SyncSettleRe
 
 `recordForkPoints(ctx, remote) ([]storage.ForkPointRecord, error)` (`fork_point.go`), run by `SyncFetch` before `DOLT_FETCH`:
 1. `activeBranch`; the tracking refs under `remotes/<remote>/` (`refHeadsUnder` over `SELECT name, hash FROM dolt_remote_branches`); the recorded fork points under `lit-fork-point/<remote>/` (`refHeadsUnder` over `SELECT name, hash FROM dolt_branches`). `refHeadsUnder` compares the prefix in Go, not with `LIKE`.
-2. For each tracking ref, in branch order: the fork point already naming its head → `unchanged`. Otherwise `recordForkPoint`: `mergeBase(active, head)` sharing a commit → `CALL DOLT_BRANCH('-f', <fork point>, head)` → `recorded` (error `"record fork point %s at %s: %w"`); no shared commit → `kept`, nothing written.
+2. For each tracking ref, in branch order: the fork point already naming its head → `unchanged`. Otherwise `recordForkPoint`: `mergeBase(active, head)` sharing a commit → `CALL DOLT_BRANCH('-f', <fork point>, head)` → `recorded` (error `"record fork point %s at %s: %w"`); no shared commit → `kept` when a fork point is recorded, `none` when none ever was, nothing written. A failure returns the records written before it with the error.
+
+`dropOrphanForkPoints(ctx, remote)` (`fork_point.go`), run after `DOLT_FETCH` and after `DOLT_REMOTE remove`: every fork point under `lit-fork-point/<remote>/` with no tracking ref under `remotes/<remote>/` → `CALL DOLT_BRANCH('-D', <fork point>)` → a `dropped` record carrying the head it held (error `"drop fork point %s: %w"`).
 
 `forkPointBase(ctx, remote, branch, localHead, remoteHead) (storage.ReconcileBase, error)` (`fork_point.go`), called by `reconcileBase` when the heads share no commit:
 1. No recorded fork point for the branch → `{Source: none}`.
 2. `mergeBase(localHead, forkPoint)` sharing no commit → `{Source: none, ForkPoint}`.
-3. `unaccountedTickets(base, localHead, remoteHead)`: `issuesAtCommit` at the base and at the remote head, `purgesAtCommit` at all three; `countUnaccounted` counts each base ticket the remote holds no row for with the same id and `created_at` and no purge record names (`Purge.Names`). Errors `"read the fork point's tickets: %w"`, `"read the remote's tickets: %w"`, `"read the purge records at %s: %w"`. A nonzero count → `{Source: none, ForkPoint, UnaccountedTickets}`.
+3. `unaccountedRows(base, localHead, remoteHead)`: `issuesAtCommit` and `eventTicketsAtCommit` (`SELECT id, issue_id FROM issue_events AS OF`, `sync_unrelated.go`) at the base and at the remote head, `purgesAtCommit` at all three; `countUnaccounted` counts each base ticket the remote holds no row for with the same id and `created_at`, and each base event whose id the remote lacks, leaving out those whose ticket a purge record names (`Purge.Names`). Errors `"read the fork point's tickets: %w"`, `"read the remote's tickets: %w"`, `"read the fork point's ticket events: %w"`, `"read the remote's ticket events: %w"`, `"read the purge records at %s: %w"`. Either count nonzero → `{Source: none, ForkPoint, UnaccountedTickets, UnaccountedEvents}`.
 4. Otherwise `{Source: fork_point, Commit: base, ForkPoint}`.
 
-`ForkPointRecords()` and `ReconcileBases()` return copies of the store's `forkPoints` and `reconcileBases`, oldest first. Vocabulary (`internal/storage/fork_point.go`): `ForkPointRecord{Remote, Branch, Head string; Outcome ForkPointOutcome}` (`recorded`, `unchanged`, `kept`), `EventValue()` keys `fork_point.remote`, `fork_point.branch`, `fork_point.head`, `fork_point.outcome`; `ReconcileBase{Source ReconcileBaseSource; Commit, ForkPoint string; UnaccountedTickets int}` (`merge_base`, `fork_point`, `none`), `Found() (commit, ok)` (`ok` unless `none`), `EventValue()` keys `reconcile.base`, `reconcile.base_commit`, `reconcile.fork_point`, `reconcile.unaccounted_tickets`. Tests: `fork_point_test.go`.
+`ForkPointRecords()` and `ReconcileBases()` return copies of the store's `forkPoints` and `reconcileBases`, oldest first. Vocabulary (`internal/storage/fork_point.go`): `ForkPointRecord{Remote, Branch, Head string; Outcome ForkPointOutcome}` (`recorded`, `unchanged`, `kept`, `none`, `dropped`), `EventValue()` keys `fork_point.remote`, `fork_point.branch`, `fork_point.head`, `fork_point.outcome`; `ReconcileBase{Source ReconcileBaseSource; Commit, ForkPoint string; UnaccountedTickets, UnaccountedEvents int}` (`merge_base`, `fork_point`, `none`), `Found() (commit, ok)` (`ok` unless `none`), `EventValue()` keys `reconcile.base`, `reconcile.base_commit`, `reconcile.fork_point`, `reconcile.unaccounted_tickets`, `reconcile.unaccounted_events`. Tests: `fork_point_test.go`.
 
 ### 1.7 `SyncPull` — receive, then reconcile only on divergence
 
@@ -457,7 +462,7 @@ Each runs through `followThenReconcile` (`sync_reconcile.go`): `followRemoteReRo
 4. `activeBranch(ctx, s.db)` → `dataBranch` (`SELECT active_branch()`, `sync_reconcile.go`).
 5. `readDoltHead(ctx, s.db)` → `localHead`; error `"read local head: %w"`.
 6. `commitHashOfRef(ctx, s.db, trackingRef)` → `remoteHead` (`SELECT commit_hash FROM dolt_log(?) LIMIT 1`, `sync_reconcile.go`; error `"read head of %q: %w"`).
-7. `reconcileBase(ctx, remote, branch, localHead, remoteHead, trackingRef)` → `base`, appended to the store's `reconcileBases`: `mergeBase(localHead, trackingRef)` sharing a commit → `{Source: merge_base, Commit}`; otherwise `forkPointBase` (§1.6d).
+7. `base = fresh.Base`, appended to the store's `reconcileBases`. `reconcileBase(ctx, remote, branch, localHead, remoteHead, trackingRef)`, which freshness ran: `mergeBase(localHead, trackingRef)` sharing a commit → `{Source: merge_base, Commit}`; otherwise `forkPointBase` (§1.6d).
 
 ### 5.8 Merge-base and the unrelated-history discriminator
 
