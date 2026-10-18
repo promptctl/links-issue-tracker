@@ -643,7 +643,7 @@ func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (m
 		}
 		archivedCol, deletedCol := retentionColumns(issue)
 		if _, err := tx.ExecContext(ctx, `INSERT INTO issues(
-			id, title, description, agent_prompt, plan, status, priority, issue_type, topic, assignee, item_rank, lane, follows_up, created_at, updated_at, closed_at, archived_at, deleted_at
+			id, title, description, agent_prompt, work_plan, status, priority, issue_type, topic, assignee, item_rank, lane, follows_up, created_at, updated_at, closed_at, archived_at, deleted_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
 			issue.ID, issue.Title, issue.Description, nullableString(issue.Prompt), issue.Plan, statusForStorage(issue), issue.Priority, issue.IssueType, issue.Topic,
 			issue.AssigneeValue(), issue.Rank, issue.Lane, nullableString(issue.FollowsUp), issue.CreatedAt.Format(time.RFC3339Nano), issue.UpdatedAt.Format(time.RFC3339Nano), archivedCol, deletedCol); err != nil {
@@ -816,7 +816,7 @@ func (s *Store) ListIssues(ctx context.Context, filter storage.ListIssuesFilter)
 		// is an extra AND'd clause, never a longer OR. The planner's quadratic
 		// range merge needs a disjunct set that GROWS with caller input, which
 		// is the property this shape lacks; see idBatchSize.
-		where = append(where, "(LOWER(i.title) LIKE ? OR LOWER(i.description) LIKE ? OR LOWER(COALESCE(i.agent_prompt, '')) LIKE ? OR LOWER(i.plan) LIKE ? OR LOWER(i.topic) LIKE ?)")
+		where = append(where, "(LOWER(i.title) LIKE ? OR LOWER(i.description) LIKE ? OR LOWER(COALESCE(i.agent_prompt, '')) LIKE ? OR LOWER(i.work_plan) LIKE ? OR LOWER(i.topic) LIKE ?)")
 		like := "%" + strings.ToLower(term) + "%"
 		args = append(args, like, like, like, like, like)
 	}
@@ -1347,7 +1347,7 @@ func (s *Store) applyFieldsTx(ctx context.Context, tx *sql.Tx, w fieldWrite) err
 	// not in planFieldUpdate — so the plan stays a pure function of its inputs.
 	issue, event := s.stampEdit(w.issue, w.reason, w.actor, w.changes)
 	if _, err := tx.ExecContext(ctx, `UPDATE issues SET
-		title = ?, description = ?, agent_prompt = ?, plan = ?, priority = ?, issue_type = ?, assignee = ?, lane = ?, updated_at = ?
+		title = ?, description = ?, agent_prompt = ?, work_plan = ?, priority = ?, issue_type = ?, assignee = ?, lane = ?, updated_at = ?
 		WHERE id = ?`, issue.Title, issue.Description, nullableString(issue.Prompt), issue.Plan, issue.Priority, issue.IssueType, issue.AssigneeValue(), issue.Lane, issue.UpdatedAt.Format(time.RFC3339Nano), issue.ID); err != nil {
 		return fmt.Errorf("update issue: %w", err)
 	}
@@ -2486,7 +2486,7 @@ func nextRankForPlacement(ctx context.Context, tx *sql.Tx, p storage.RankPlaceme
 // site through the derived projections, leaving only the two adjacent scanners
 // to move with it. [LAW:one-source-of-truth] [FRAMING:representation]
 var issueColumns = []string{
-	"id", "title", "description", "agent_prompt", "plan", "status", "priority",
+	"id", "title", "description", "agent_prompt", "work_plan", "status", "priority",
 	"issue_type", "topic", "assignee", "item_rank", "lane", "created_at",
 	"updated_at", "closed_at", "resolution", "redirect_target", "follows_up", "archived_at", "deleted_at",
 }

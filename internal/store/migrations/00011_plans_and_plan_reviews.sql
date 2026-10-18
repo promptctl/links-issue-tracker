@@ -1,10 +1,11 @@
 -- +goose Up
--- plan is how a ticket's work will be done, written before the work starts so
--- a reviewer can judge it against the laws. The empty text is a ticket with no
--- plan. Each edit is recorded in the history like any field's, and those
--- recorded texts are the plan's versions.
+-- work_plan is the ticket's plan: how its work will be done, written before
+-- the work starts so a reviewer can judge it against the laws. The empty text
+-- is a ticket with no plan. Each edit is recorded in the history like any
+-- field's, and those recorded texts are the plan's versions. The column is not
+-- named plan because PLAN is a reserved word in the SQL dialect.
 -- +goose StatementBegin
-ALTER TABLE issues ADD COLUMN plan text NOT NULL DEFAULT '';
+ALTER TABLE issues ADD COLUMN work_plan text NOT NULL DEFAULT '';
 -- +goose StatementEnd
 
 -- One row per law review of a ticket's plan: the verdict, the laws it cites,
@@ -39,5 +40,5 @@ CREATE TABLE plan_reviews (
 DROP TABLE plan_reviews;
 -- +goose StatementEnd
 -- +goose StatementBegin
-ALTER TABLE issues DROP COLUMN plan;
+ALTER TABLE issues DROP COLUMN work_plan;
 -- +goose StatementEnd

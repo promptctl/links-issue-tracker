@@ -380,7 +380,7 @@ func writeWholeExportTx(ctx context.Context, tx *sql.Tx, export model.Export) er
 // It is NOT the only INSERT into issues: CreateIssue (store.go) writes a
 // creation-time row with a narrower column list of its own. A schema change
 // that adds a column has to be carried to both.
-const insertIssueStmt = `INSERT INTO issues(id, title, description, agent_prompt, plan, status, priority, issue_type, topic, assignee, item_rank, lane, follows_up, created_at, updated_at, closed_at, resolution, redirect_target, archived_at, deleted_at)
+const insertIssueStmt = `INSERT INTO issues(id, title, description, agent_prompt, work_plan, status, priority, issue_type, topic, assignee, item_rank, lane, follows_up, created_at, updated_at, closed_at, resolution, redirect_target, archived_at, deleted_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, COALESCE(NULLIF(?, ''), 'misc'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 // issueRowValues is the issues row an export issue becomes: every persisted
