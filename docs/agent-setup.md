@@ -94,7 +94,9 @@ Claude Code plugin declared at this repo's own root
 the team-wide `.claude/settings.json` wiring are in the main README's
 [Claude Code plugin section](https://github.com/promptctl/links-issue-tracker#claude-code-plugin)
 — that's the canonical copy; install the plugin once and `/next` (namespaced
-`/lit:next`) is available in every session.
+`/lit:next`) is available in every session. The same plugin ships
+`/lit:review-plan <id>`, which has a separate Claude session law-review a ticket's
+plan and record the verdict with `lit verdict`.
 
 ## 5. The core work loop
 
