@@ -394,6 +394,54 @@ func TestRemovingARemoteDropsItsForkPoints(t *testing.T) {
 	}
 }
 
+// TestAPrunedTrackingRefTakesItsForkPointWithIt deletes a branch on the
+// remote after delta recorded its fork point: the pruning fetch drops the
+// tracking ref, and the fork point goes with it.
+func TestAPrunedTrackingRefTakesItsForkPointWithIt(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	remoteURL := "file://" + filepath.Join(t.TempDir(), "remote")
+	alpha := migratedDoltDir(t)
+	seedReconcileRemote(t, ctx, alpha, remoteURL)
+	pusher := openSyncOrFatal(t, ctx, alpha)
+	defer func() { _ = pusher.Close() }()
+	if err := execProcedureDiscard(ctx, pusher.db, "DOLT_BRANCH", "feature"); err != nil {
+		t.Fatalf("create the feature branch: %v", err)
+	}
+	if err := execProcedureDiscard(ctx, pusher.db, "DOLT_PUSH", "origin", "feature"); err != nil {
+		t.Fatalf("push the feature branch: %v", err)
+	}
+	delta := migratedDoltDir(t)
+	adoptRemote(t, ctx, delta, remoteURL)
+	st := openSyncOrFatal(t, ctx, delta)
+	defer func() { _ = st.Close() }()
+	if err := st.SyncFetch(ctx, "origin", false); err != nil {
+		t.Fatalf("SyncFetch(delta) error = %v", err)
+	}
+	feature, err := commitHashOfRef(ctx, st.db, "remotes/origin/feature")
+	if err != nil {
+		t.Fatalf("read the feature tracking ref: %v", err)
+	}
+	if err := execProcedureDiscard(ctx, pusher.db, "DOLT_PUSH", "origin", ":feature"); err != nil {
+		t.Fatalf("delete the remote's feature branch: %v", err)
+	}
+	if err := st.SyncFetch(ctx, "origin", true); err != nil {
+		t.Fatalf("SyncFetch(delta, prune) error = %v", err)
+	}
+	records := st.ForkPointRecords()
+	want := storage.ForkPointRecord{Remote: "origin", Branch: "feature", Head: feature, Outcome: storage.ForkPointDropped}
+	if len(records) == 0 || records[len(records)-1] != want {
+		t.Fatalf("ForkPointRecords() = %+v, want the pruning fetch to end with %+v", records, want)
+	}
+	left, err := refHeadsUnder(ctx, st.db, `SELECT name, hash FROM dolt_branches`, forkPointBranch("origin", ""))
+	if err != nil {
+		t.Fatalf("list fork points: %v", err)
+	}
+	if _, ok := left["feature"]; ok || len(left) != 1 {
+		t.Fatalf("fork points after the prune = %v, want master's alone", left)
+	}
+}
+
 // TestTheReceiveLandsTheClonesForkPoint drives the automatic receive's shape:
 // a clone of delta fetches the re-rooted remote, recording the fork point on
 // the clone, and the landing carries it to delta ahead of the tracking ref, so
