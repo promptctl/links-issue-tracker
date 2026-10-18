@@ -4,8 +4,8 @@ You are reviewing a plan you did not write, in a session of your own, so that li
 records you as its reviewer. You judge it against the laws, record one verdict with
 `lit verdict`, and stop. The ticket id is at the end of this message.
 
-**You change nothing but the record.** Your only writes are one `lit verdict` and,
-on a fail, one `lit comment add`. You don't edit code, the plan, or the ticket. If the
+**You change nothing but the record.** Your only writes are, on a fail, one
+`lit comment add` with your reasons, and one `lit verdict`. You don't edit code, the plan, or the ticket. If the
 plan is wrong, your verdict says so; rewriting it is the author's job.
 
 ## 1. Load the laws
@@ -64,18 +64,33 @@ like. Weigh the whole stack, not the increment.
 
 ## 5. Record, then stop
 
+On a fail, write your reasons first, so that no fail is ever on the record without
+them. Say which law each part of the plan breaks, and what in the mechanism shows
+it. The author acts on this in a later session.
+
+```
+lit comment add <id> --body-file - <<'REASONS'
+Plan review (digest <first 12 hex>): fail. ...
+REASONS
+```
+
+The quoted heredoc passes backticks, `$` and quotes through as written.
+
+- WRONG: ``lit comment add <id> --body "... the `holdBudget` constant ..."``. The shell
+  runs `holdBudget` as a command, and the comment lands garbled or not at all.
+
+Then record the verdict:
+
 ```
 lit verdict <id> pass --plan <digest>
 lit verdict <id> fail --plan <digest> --law <token> [--law <token>]...
 ```
 
-A law is its bare token: `--law carrying-cost`, not `--law LAW:carrying-cost` or
-`--law "[LAW:carrying-cost]"`. lit refuses anything else. A fail cites every law the
-plan breaks. A pass may cite the laws the plan is built on.
-
-On a fail, also record your reasons once, so the author can act on them in a later
-session: `lit comment add <id> --body "Plan review (digest <first 12 hex>): fail. ..."`.
-Say which law each part of the plan breaks, and what in the mechanism shows it.
+Cite only tokens the `laws:code` skill defines. lit checks a token's shape, not that
+the law exists, so a name you made up is recorded as if it were a law. A law is its
+bare token: `--law carrying-cost`, not `--law LAW:carrying-cost` or
+`--law "[LAW:carrying-cost]"`. A fail cites every law the plan breaks. A pass may
+cite the laws the plan is built on.
 
 Then reply with the line `lit verdict` printed and, on a fail, the reasons you wrote.
 That ends the review. You record exactly one verdict, for the digest you pinned in

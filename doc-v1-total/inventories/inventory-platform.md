@@ -1262,8 +1262,10 @@ name `lit`, description
 version `0.9.0`, and no hooks. The skill `next` has description "Pull the next ticket"
 (`claude-plugin/skills/next/SKILL.md`). The skill `review-plan` has description "Have a separate
 Claude session law-review a ticket's plan and record the verdict in lit. ..."; it starts a
-reviewer as a headless `claude -p` session fed `reviewer.md` and the ticket id, allowed only
-read tools, `lit verdict` and `lit comment add`
+reviewer as a headless `claude -p` session fed `reviewer.md` and the ticket id, run in the
+background with the tools Read, Grep, Glob, Skill and Bash in `dontAsk` permission mode,
+pre-approving the read tools, `lit show`, `lit ls`, `lit history`, `lit verdict`,
+`lit comment add`, `git log` and `git show` on top of the user's own settings
 (`claude-plugin/skills/review-plan/SKILL.md`).
 
 There are no commands, agents, hooks, or MCP servers in the shipped plugin.
