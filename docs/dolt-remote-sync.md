@@ -231,7 +231,7 @@ commit's diff is the owner-approved discard of the remote-only issues). The
 reconcile is transparent for everything the rules can settle.
 
 The one class the rules cannot settle is a concurrent **free-text rewrite** —
-title, description, or agent prompt changed to different text on both sides. Those
+title, description, agent prompt, or plan changed to different text on both sides. Those
 are the only fields a reader can genuinely *merge* (preserving both intents)
 rather than pick, so the reconcile commits nothing, leaves the local branch
 untouched (still diverged, still usable on local truth), and holds the conflict as

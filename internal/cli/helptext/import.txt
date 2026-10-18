@@ -33,7 +33,7 @@ JSON tree spec (creates only)
     ]
 
   Keys: local_id, title, type, topic, priority, description, prompt,
-  assignee, labels, parent, blocked_by. Anything after the closing
+  plan, assignee, labels, parent, blocked_by. Anything after the closing
   bracket is an error.
 
   local_id is required on every record: it is how parent and blocked_by
@@ -78,7 +78,7 @@ YAML bulk file (creates and updates)
   create: there is no prior value for it to annotate.
 
   An update document must set at least one of title, description, prompt,
-  type, priority, assignee, labels, lane. A document carrying only id, or
+  plan, type, priority, assignee, labels, lane. A document carrying only id, or
   only id and reason, has nothing to apply and is rejected; reason is
   free text recorded on the change event, not itself a change. --by
   names the actor those change events record; only a YAML file with an

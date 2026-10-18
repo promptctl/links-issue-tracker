@@ -355,15 +355,16 @@ func printIssueFields(w io.Writer, detail model.IssueDetail, fields []string) er
 // printHistoryTrail renders the transition trail: one
 // "- [actor @ time] action reason" line per event, followed by that event's
 // indented change lines, with each plan review's line placed among the events
-// at the time it was recorded. A short field's change reads "field: from → to"; a
-// long text field's reads "field: vN → vM", the numbers its entry in versions
-// gives each text, so the trail says that the text moved without reprinting
-// every text it ever held. This is the single definition of how the transition
-// trail is formatted; the dedicated `lit history` command (printIssueHistory)
-// is its only caller. A review names the plan version it judged by the number
-// versions gives it, and never prints the plan's text. [LAW:one-source-of-truth] one renderer, so the trail
-// can never render two ways; [LAW:decomposition] carved at the event/detail
-// joint, ready for any future surface that needs the same trail.
+// at the time it was recorded. A short field's change reads "field: from →
+// to"; a long text field's reads "field: vN → vM", the numbers its entry in
+// versions gives each text, so the trail says that the text moved without
+// reprinting every text it ever held. A review names the plan version it
+// judged by the same numbers, and never prints the plan's text. This is the
+// single definition of how the transition trail is formatted; the dedicated
+// `lit history` command (printIssueHistory) is its only caller.
+// [LAW:one-source-of-truth] one renderer, so the trail can never render two
+// ways; [LAW:decomposition] carved at the event/detail joint, ready for any
+// future surface that needs the same trail.
 //
 // Every value on a row goes through singleLine, so each event is one row and
 // each change one row beneath it, whatever text the event carries.

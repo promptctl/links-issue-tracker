@@ -142,7 +142,7 @@ func TestDescriptionAndPromptTakeAFileOrStdin(t *testing.T) {
 	}
 
 	created := extractTicketID(t, runCLIInDir(t, dir, "new", "--title", "Long", "--topic", "demo", "--parent", epic, "--description-file", description, "--prompt-file", prompt))
-	if got, want := sourceFacts(t), map[string]any{"text_source.description": "file", "text_source.prompt": "file"}; !reflect.DeepEqual(got, want) {
+	if got, want := sourceFacts(t), map[string]any{"text_source.description": "file", "text_source.prompt": "file", "text_source.plan": "absent"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("new event facts = %v, want %v", got, want)
 	}
 	if got := field(created, "description"); got != shellHostileText+" (description)" {
@@ -163,7 +163,7 @@ func TestDescriptionAndPromptTakeAFileOrStdin(t *testing.T) {
 
 	withStdin(t, "revised prompt")
 	runCLIInDir(t, dir, "update", created, "--prompt-file", "-")
-	if got, want := sourceFacts(t), map[string]any{"text_source.description": "absent", "text_source.prompt": "stdin"}; !reflect.DeepEqual(got, want) {
+	if got, want := sourceFacts(t), map[string]any{"text_source.description": "absent", "text_source.prompt": "stdin", "text_source.plan": "absent"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("update event facts = %v, want %v", got, want)
 	}
 	if got := field(created, "prompt"); got != "revised prompt" {
@@ -206,7 +206,7 @@ func TestLongTextRefusesBlankTextAndASecondStdinReader(t *testing.T) {
 		{"blank file", "", []string{"--description-file", blank}, "--description-file " + blank + " supplied no text",
 			map[string]any{"text_source.description": "file"}},
 		{"blank stdin", "\n", []string{"--prompt-file", "-"}, "--prompt-file - supplied no text",
-			map[string]any{"text_source.description": "absent", "text_source.prompt": "stdin"}},
+			map[string]any{"text_source.description": "absent", "text_source.prompt": "stdin", "text_source.plan": "absent"}},
 		{"unreadable path", "", []string{"--prompt-file", filepath.Join(t.TempDir(), "missing.md")}, "read --prompt-file: open ",
 			map[string]any{"text_source.description": "absent", "text_source.prompt": "file"}},
 		{"two stdin readers", "one text", []string{"--description-file", "-", "--prompt-file", "-"}, "only one field can read stdin, and --description-file and --prompt-file each name it; give the others a path",

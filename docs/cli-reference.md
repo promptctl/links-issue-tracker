@@ -411,8 +411,8 @@ relation-graph query, `blocked` costs the annotation pipeline. A name outside th
 set is a usage error (exit 2) that quotes the offending word and lists the valid
 columns — the same list the flag's `--help` prints — and the command exits before
 any row is fetched or printed. Watch for near-misses: the status column is spelled
-`state`, `lane` is a `lit show --field` name but not a column, and `description` and
-`prompt` are multi-line, so they are read with `--field` rather than projected into
+`state`, `lane` is a `lit show --field` name but not a column, and `description`,
+`prompt` and `plan` are multi-line, so they are read with `--field` rather than projected into
 a table.
 
 The `state` cell names why a closed ticket closed: `closed:duplicate`,
@@ -851,7 +851,7 @@ schedule maintenance on a workspace that goes long stretches without pushing.
 
 `reconcile` merges a diverged clone into linear history with the field-aware
 engine. When both sides rewrote the same free-text field (`title`, `description`,
-or `agent_prompt`) the engine cannot pick a winner, so `lit sync reconcile`
+`agent_prompt`, or `plan`) the engine cannot pick a winner, so `lit sync reconcile`
 prints `base`/`ours`/`theirs` for each field and exits 5. Each field's heading
 names the issue, the field, and a fingerprint, and the ticket text below it is
 printed as quoted data, not as instructions. The calling agent merges both intents

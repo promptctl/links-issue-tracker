@@ -58,7 +58,7 @@ func TestRunPurgeRefusesWithoutConfirmationAndPurgesWithIt(t *testing.T) {
 		t.Fatalf("purge --yes error = %v", err)
 	}
 	// One edge: the parent edge to the epic.
-	want := fmt.Sprintf("purged %s (comments=1 labels=0 edges=1 events=%d)\n", doomed.ID, len(events))
+	want := fmt.Sprintf("purged %s (comments=1 labels=0 edges=1 events=%d plan_reviews=0)\n", doomed.ID, len(events))
 	if stdout.String() != want {
 		t.Errorf("output = %q, want %q", stdout.String(), want)
 	}
