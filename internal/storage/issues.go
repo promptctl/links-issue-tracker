@@ -143,6 +143,18 @@ type PurgeResult struct {
 	Events      int
 }
 
+// EventRecord is the purge as event counts: how many of each kind of row went
+// with the issue.
+func (r PurgeResult) EventRecord() map[string]int {
+	return map[string]int{
+		"purge.comments":     r.Comments,
+		"purge.plan_reviews": r.PlanReviews,
+		"purge.labels":       r.Labels,
+		"purge.edges":        r.Relations,
+		"purge.events":       r.Events,
+	}
+}
+
 func (c Change) IsEmpty() bool {
 	return c.Action == nil && c.Fields.IsEmpty()
 }

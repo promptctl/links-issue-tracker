@@ -8,6 +8,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/statusline"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 )
 
 // purgeLeaf is `lit purge <id>`: the one command that removes a ticket for
@@ -40,6 +41,7 @@ func purgeLeaf() appLeaf {
 		// The statusline file holds titles, and a ticket is often purged for
 		// what its text says.
 		ap.Statusline.Record(statusline.Invalidated{ID: result.Purge.IssueID})
+		telemetry.Record(ctx, nil, result.EventRecord())
 		_, err = fmt.Fprintf(stdout, "purged %s (comments=%d labels=%d edges=%d events=%d plan_reviews=%d)\n",
 			result.Purge.IssueID, result.Comments, result.Labels, result.Relations, result.Events, result.PlanReviews)
 		return err

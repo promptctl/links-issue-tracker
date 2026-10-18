@@ -319,7 +319,7 @@ func TestDeterministicMapCleanAhead(t *testing.T) {
 			t.Fatalf("create solo: %v", err)
 		}
 		soloID = solo.ID
-		review, err := st.AddPlanReview(ctx, storage.AddPlanReviewInput{IssueID: solo.ID, Version: 1, Verdict: model.PlanFail, Laws: []model.Law{"one-source-of-truth"}, CreatedBy: "claude"})
+		review, err := st.AddPlanReview(ctx, storage.AddPlanReviewInput{IssueID: solo.ID, Plan: string(model.DigestPlan("solo plan")), Verdict: "fail", Laws: []string{"one-source-of-truth"}, CreatedBy: "claude"})
 		if err != nil {
 			t.Fatalf("add plan review: %v", err)
 		}

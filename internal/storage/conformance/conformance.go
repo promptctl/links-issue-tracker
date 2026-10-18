@@ -2348,8 +2348,7 @@ func commentsRoundtrip(t *testing.T, ctx context.Context, st storage.Store, clk 
 }
 
 // aPlanReviewJudgesOneVersion holds a review to the text it judged. A review
-// names a plan version by the number lit history shows it under, and records
-// the text that number named: a revised plan is a different text with no
+// names a plan text by its digest: a revised plan is a different text with no
 // review of its own, and a plan returned to a reviewed text is that text
 // again. Both engines decide the review through storage.PlanReviewOf, so the
 // refusals are held here once for both.
@@ -2367,38 +2366,58 @@ func aPlanReviewJudgesOneVersion(t *testing.T, ctx context.Context, st storage.S
 		in.IssueID = issue.ID
 		return st.AddPlanReview(ctx, in)
 	}
+	first, second := string(model.DigestPlan("add a retry")), string(model.DigestPlan("remove the retry"))
 	revise("remove the retry")
 
-	failed, err := review(storage.AddPlanReviewInput{Version: 1, Verdict: model.PlanFail, Laws: []model.Law{"one-source-of-truth", "carrying-cost", "one-source-of-truth"}, CreatedBy: " grace "})
+	// The fail is stamped after the pass recorded below it, as a review
+	// merged in from another store can be, and at the pair of instants whose
+	// spellings sort the other way: the reviews come back oldest first by
+	// the instant, not in the order recorded nor by the stamp's text.
+	clk.Pin(laterInstant)
+	failed, err := review(storage.AddPlanReviewInput{Plan: first, Verdict: "fail", Laws: []string{"one-source-of-truth", "carrying-cost", "one-source-of-truth"}, CreatedBy: " grace "})
 	if err != nil {
 		t.Fatalf("AddPlanReview(v1 fail) error = %v", err)
 	}
 	if failed.IssueID != issue.ID || failed.PlanDigest != model.DigestPlan("add a retry") || failed.Verdict != model.PlanFail || failed.CreatedBy != "grace" || failed.ID == "" {
-		t.Errorf("AddPlanReview(v1 fail) = %+v, want grace's fail of the text v1 named", failed)
+		t.Errorf("AddPlanReview(v1 fail) = %+v, want grace's fail of the text v1 holds", failed)
 	}
 	if want := []model.Law{"carrying-cost", "one-source-of-truth"}; !slices.Equal(failed.Laws, want) {
 		t.Errorf("review laws = %v, want %v: sorted, each once", failed.Laws, want)
 	}
 
-	// A fail names the law the plan breaks; a version past the recorded ones
-	// is not a version; a missing issue is not found.
-	_, err = review(storage.AddPlanReviewInput{Version: 2, Verdict: model.PlanFail, CreatedBy: "grace"})
-	assertRefused(t, err, "AddPlanReview(fail citing no law)")
-	_, err = review(storage.AddPlanReviewInput{Version: 3, Verdict: model.PlanPass, CreatedBy: "grace"})
-	var missing storage.VersionNotFoundError
-	if !errors.As(err, &missing) || missing.Field != "plan" || missing.Number != 3 || missing.Held != 2 {
-		t.Errorf("AddPlanReview(v3) error = %v, want VersionNotFoundError naming plan@3 of 2 versions", err)
+	// What is not a review is refused before anything is recorded: a verdict
+	// other than pass or fail, a law not spelled as a token, a fail citing no
+	// law, a digest not spelled as one. A digest of a text the history does
+	// not hold is not a version; a missing issue is not found.
+	for _, refused := range []storage.AddPlanReviewInput{
+		{Plan: second, Verdict: "maybe"},
+		{Plan: second, Verdict: "fail", Laws: []string{"a,b"}},
+		{Plan: second, Verdict: "fail"},
+		{Plan: "v2", Verdict: "pass"},
+	} {
+		_, err = review(refused)
+		assertRefused(t, err, fmt.Sprintf("AddPlanReview(%+v)", refused))
 	}
-	_, err = st.AddPlanReview(ctx, storage.AddPlanReviewInput{IssueID: "no-such-issue", Version: 1, Verdict: model.PlanPass})
+	unheld := model.DigestPlan("a text the plan never held")
+	_, err = review(storage.AddPlanReviewInput{Plan: string(unheld), Verdict: "pass", CreatedBy: "grace"})
+	var missing storage.VersionNotFoundError
+	if !errors.As(err, &missing) || missing.Field != "plan" || missing.Ref != string(unheld) || missing.Held != 2 {
+		t.Errorf("AddPlanReview(unheld digest) error = %v, want VersionNotFoundError naming that digest, of 2 versions", err)
+	}
+	_, err = st.AddPlanReview(ctx, storage.AddPlanReviewInput{IssueID: "no-such-issue", Plan: first, Verdict: "pass"})
 	assertNotFound(t, err, "issue", "AddPlanReview on a missing issue")
 
-	passed, err := review(storage.AddPlanReviewInput{Version: 2, Verdict: model.PlanPass, CreatedBy: "grace"})
+	clk.Pin(earlierInstant)
+	passed, err := review(storage.AddPlanReviewInput{Plan: " " + second + " ", Verdict: "pass", CreatedBy: "grace"})
 	if err != nil {
 		t.Fatalf("AddPlanReview(v2 pass) error = %v", err)
 	}
 	if passed.PlanDigest != model.DigestPlan("remove the retry") || len(passed.Laws) != 0 {
-		t.Errorf("AddPlanReview(v2 pass) = %+v, want a pass of the text v2 named, citing nothing", passed)
+		t.Errorf("AddPlanReview(v2 pass) = %+v, want a pass of the text v2 holds, citing nothing", passed)
 	}
+	// The returned review is the caller's to keep: writing through it does
+	// not reach the stored one.
+	failed.Laws[0] = "rewritten"
 
 	judging := func(plan string) []string {
 		t.Helper()
@@ -2409,8 +2428,11 @@ func aPlanReviewJudgesOneVersion(t *testing.T, ctx context.Context, st storage.S
 		if detail.Issue.Plan != plan {
 			t.Fatalf("detail plan = %q, want %q", detail.Issue.Plan, plan)
 		}
-		if len(detail.PlanReviews) != 2 || detail.PlanReviews[0].ID != failed.ID || detail.PlanReviews[1].ID != passed.ID {
-			t.Fatalf("detail plan reviews = %+v, want the fail then the pass", detail.PlanReviews)
+		if len(detail.PlanReviews) != 2 || detail.PlanReviews[0].ID != passed.ID || detail.PlanReviews[1].ID != failed.ID {
+			t.Fatalf("detail plan reviews = %+v, want the pass then the fail, oldest first", detail.PlanReviews)
+		}
+		if want := []model.Law{"carrying-cost", "one-source-of-truth"}; !slices.Equal(detail.PlanReviews[1].Laws, want) {
+			t.Fatalf("stored fail's laws = %v, want %v: unchanged by a write through the review AddPlanReview returned", detail.PlanReviews[1].Laws, want)
 		}
 		var ids []string
 		for _, r := range detail.PlanReviews {
@@ -2433,7 +2455,7 @@ func aPlanReviewJudgesOneVersion(t *testing.T, ctx context.Context, st storage.S
 	}
 
 	export := mustExport(t, ctx, st)
-	if len(export.PlanReviews) != 2 || export.PlanReviews[0].ID != failed.ID || export.PlanReviews[1].ID != passed.ID {
+	if len(export.PlanReviews) != 2 || export.PlanReviews[0].ID != passed.ID || export.PlanReviews[1].ID != failed.ID {
 		t.Errorf("export plan reviews = %+v, want both, oldest first", export.PlanReviews)
 	}
 }

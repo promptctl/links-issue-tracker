@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"slices"
 
 	"github.com/google/uuid"
 
@@ -26,15 +27,21 @@ func (e *Engine) AddPlanReview(ctx context.Context, in storage.AddPlanReviewInpu
 	review.ID = "rvw-" + uuid.NewString()
 	review.CreatedAt = e.clock.Now()
 	e.planReviews = append(e.planReviews, review)
-	return review, nil
+	return clonePlanReviews([]model.PlanReview{review})[0], nil
 }
 
 func (e *Engine) planReviewsFor(issueID string) []model.PlanReview {
-	out := []model.PlanReview{}
-	for _, review := range e.planReviews {
-		if review.IssueID == issueID {
-			out = append(out, review)
-		}
+	return clonePlanReviews(slices.DeleteFunc(slices.Clone(e.planReviews), func(review model.PlanReview) bool { return review.IssueID != issueID }))
+}
+
+// clonePlanReviews copies plan reviews for a caller to keep, laws and all, in
+// storage.PlanReviewOrdering.
+func clonePlanReviews(reviews []model.PlanReview) []model.PlanReview {
+	out := make([]model.PlanReview, len(reviews))
+	for i, review := range reviews {
+		review.Laws = slices.Clone(review.Laws)
+		out[i] = review
 	}
+	slices.SortFunc(out, storage.PlanReviewOrdering)
 	return out
 }

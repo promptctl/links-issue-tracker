@@ -17,36 +17,53 @@ type PlanReviewStore interface {
 	AddPlanReview(ctx context.Context, in AddPlanReviewInput) (model.PlanReview, error)
 }
 
-// AddPlanReviewInput is a reviewer's verdict on the plan version they read.
+// AddPlanReviewInput is a reviewer's verdict on the plan text they read, as
+// they gave it; PlanReviewOf parses it.
 type AddPlanReviewInput struct {
 	IssueID string
-	// Version is the plan version the review judged, numbered as lit history
-	// numbers it. It is named by the reviewer rather than taken to be the
-	// current one, so a plan revised while the review ran is not passed on
-	// the strength of the text before it.
-	Version   int
-	Verdict   model.PlanVerdict
-	Laws      []model.Law
+	// Plan is the digest of the text the review judged, as `lit show` prints
+	// it. It names the text rather than its version number because a sync
+	// that merges in an older edit renumbers the versions, and a number read
+	// before that merge would name a text the reviewer never read. It is
+	// named by the reviewer rather than taken to be the current text, so a
+	// plan revised while the review ran is not passed on the strength of the
+	// text before it.
+	Plan      string
+	Verdict   string
+	Laws      []string
 	CreatedBy string
 }
 
 // PlanReviewOf decides the review a request records against issue, whose
-// history is events: the version it names resolved to the text it held and
-// that text's digest, the laws in their canonical order, the reviewer. A
-// version the history does not hold is VersionNotFoundError, and a fail that
-// cites no law is refused — a failing law review names the law the plan
-// breaks. Pure, so every engine records the same review for the same request
-// and stamps it with its own id and time.
-// [LAW:single-enforcer] [LAW:effects-at-boundaries]
+// history is events: the verdict, the laws in their canonical order and the
+// digest each parsed, the reviewer. A digest of no text the history holds is
+// VersionNotFoundError, and a fail that cites no law is refused — a failing
+// law review names the law the plan breaks. Pure, so every engine records the
+// same review for the same request and stamps it with its own id and time.
+// [LAW:single-enforcer] [LAW:effects-at-boundaries] [LAW:parse-dont-validate]
 func PlanReviewOf(issue model.Issue, events []model.IssueEvent, in AddPlanReviewInput) (model.PlanReview, error) {
+	verdict, err := model.ParsePlanVerdict(in.Verdict)
+	if err != nil {
+		return model.PlanReview{}, err
+	}
+	cited := make([]model.Law, len(in.Laws))
+	for i, raw := range in.Laws {
+		if cited[i], err = model.ParseLaw(raw); err != nil {
+			return model.PlanReview{}, err
+		}
+	}
+	laws := model.CanonicalLaws(cited)
+	if verdict == model.PlanFail && len(laws) == 0 {
+		return model.PlanReview{}, model.ValidationError{Message: "a failing verdict cites at least one law the plan breaks"}
+	}
+	digest, err := model.ParsePlanDigest(in.Plan)
+	if err != nil {
+		return model.PlanReview{}, err
+	}
 	field := PlanField()
 	versions := TextVersions(issue, events, field)
-	if in.Version < 1 || in.Version > len(versions) {
-		return model.PlanReview{}, VersionNotFoundError{IssueID: issue.ID, Field: field.Name, Number: in.Version, Held: len(versions)}
-	}
-	laws := model.CanonicalLaws(in.Laws)
-	if in.Verdict == model.PlanFail && len(laws) == 0 {
-		return model.PlanReview{}, model.ValidationError{Message: "a failing verdict cites at least one law the plan breaks"}
+	if !slices.ContainsFunc(versions, func(text string) bool { return model.DigestPlan(text) == digest }) {
+		return model.PlanReview{}, VersionNotFoundError{IssueID: issue.ID, Field: field.Name, Ref: string(digest), Held: len(versions)}
 	}
 	reviewer := strings.TrimSpace(in.CreatedBy)
 	if reviewer == "" {
@@ -54,8 +71,8 @@ func PlanReviewOf(issue model.Issue, events []model.IssueEvent, in AddPlanReview
 	}
 	return model.PlanReview{
 		IssueID:    issue.ID,
-		PlanDigest: model.DigestPlan(versions[in.Version-1]),
-		Verdict:    in.Verdict,
+		PlanDigest: digest,
+		Verdict:    verdict,
 		Laws:       laws,
 		CreatedBy:  reviewer,
 	}, nil
@@ -102,21 +119,22 @@ func TextVersions(issue model.Issue, events []model.IssueEvent, field LongTextFi
 	return texts
 }
 
-// VersionNotFoundError is a reference to a version of a long text field past
-// the versions an issue's record holds. It is not NotFoundError: that one's
-// remediation sends the caller to check the issue id, and here the id
-// resolved — what is missing is the version, and the message says how many
+// VersionNotFoundError is a reference to a version of a long text field the
+// issue's record does not hold: a number past its versions, or a digest of no
+// text it holds. Ref is the reference as written after the field's @. It is
+// not NotFoundError: that one's remediation sends the caller to check the
+// issue id, and here the id resolved — what is missing is the version, and the message says how many
 // there are and where the current text is. [LAW:one-type-per-behavior]
 type VersionNotFoundError struct {
 	IssueID string
 	Field   string
-	Number  int
+	Ref     string
 	Held    int
 }
 
 func (e VersionNotFoundError) Error() string {
-	return fmt.Sprintf("%s has no %s@%d: its record holds %s of %s, numbered from 1; `lit show %s --field %s` prints the current text",
-		e.IssueID, e.Field, e.Number, DescribeVersions(e.Held), e.Field, e.IssueID, e.Field)
+	return fmt.Sprintf("%s has no %s@%s: its record holds %s of %s, numbered from 1; `lit show %s --field %s` prints the current text",
+		e.IssueID, e.Field, e.Ref, DescribeVersions(e.Held), e.Field, e.IssueID, e.Field)
 }
 
 // DescribeVersions is how a count of versions reads: "1 version", "3 versions".

@@ -48,7 +48,7 @@ func (e *Engine) Export(ctx context.Context) (model.Export, error) {
 		// oracle ever compared two. [LAW:single-enforcer]
 		Events:      e.allEvents(),
 		Purges:      e.purgeList(),
-		PlanReviews: slices.Clone(e.planReviews),
+		PlanReviews: clonePlanReviews(e.planReviews),
 	}, nil
 }
 

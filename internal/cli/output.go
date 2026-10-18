@@ -454,7 +454,8 @@ func printIssueHistory(w io.Writer, detail model.IssueDetail) error {
 }
 
 // printCurrentPlan prints the plan as it stands, under the version number lit
-// history shows it by, and the reviews of that version — the verdicts that
+// history shows it by and the digest lit verdict names it by, and the reviews
+// of that version — the verdicts that
 // speak to the plan a reader is looking at. Reviews of other versions say
 // nothing about this one, and live in lit history. No plan prints nothing.
 func printCurrentPlan(w io.Writer, detail model.IssueDetail) error {
@@ -462,8 +463,9 @@ func printCurrentPlan(w io.Writer, detail model.IssueDetail) error {
 	if plan == "" {
 		return nil
 	}
-	label := planVersionLabel(storage.TextVersions(detail.Issue, detail.Events, storage.PlanField()), model.DigestPlan(plan))
-	if _, err := fmt.Fprintf(w, "\nplan (%s):\n%s\n", label, plan); err != nil {
+	digest := model.DigestPlan(plan)
+	label := planVersionLabel(storage.TextVersions(detail.Issue, detail.Events, storage.PlanField()), digest)
+	if _, err := fmt.Fprintf(w, "\nplan (%s, digest %s):\n%s\n", label, digest, plan); err != nil {
 		return err
 	}
 	var current []model.PlanReview
@@ -549,7 +551,7 @@ func parseVersionRef(raw string) (versionRef, error) {
 func printFieldVersion(w io.Writer, detail model.IssueDetail, ref versionRef) error {
 	texts := storage.TextVersions(detail.Issue, detail.Events, ref.field)
 	if ref.number > len(texts) {
-		return storage.VersionNotFoundError{IssueID: detail.Issue.ID, Field: ref.field.Name, Number: ref.number, Held: len(texts)}
+		return storage.VersionNotFoundError{IssueID: detail.Issue.ID, Field: ref.field.Name, Ref: strconv.Itoa(ref.number), Held: len(texts)}
 	}
 	_, err := fmt.Fprintln(w, texts[ref.number-1])
 	return err

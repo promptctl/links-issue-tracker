@@ -33,9 +33,9 @@ func aPurgeRemovesTheIssueAndEverythingItOwns(t *testing.T, ctx context.Context,
 	if _, _, err := st.AddComment(ctx, storage.AddCommentInput{IssueID: waiter.ID, Body: "mentions " + doomed.ID, CreatedBy: "ada"}); err != nil {
 		t.Fatalf("AddComment error = %v", err)
 	}
-	for _, id := range []string{doomed.ID, waiter.ID} {
-		if _, err := st.AddPlanReview(ctx, storage.AddPlanReviewInput{IssueID: id, Version: 1, Verdict: model.PlanPass, CreatedBy: "grace"}); err != nil {
-			t.Fatalf("AddPlanReview(%s) error = %v", id, err)
+	for _, planned := range []model.Issue{doomed, waiter} {
+		if _, err := st.AddPlanReview(ctx, storage.AddPlanReviewInput{IssueID: planned.ID, Plan: string(model.DigestPlan(planned.Plan)), Verdict: "pass", CreatedBy: "grace"}); err != nil {
+			t.Fatalf("AddPlanReview(%s) error = %v", planned.ID, err)
 		}
 	}
 	for _, edge := range []storage.AddRelationInput{

@@ -5,11 +5,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 )
 
 // TestRunPurgeRefusesWithoutConfirmationAndPurgesWithIt pins the command's
@@ -17,7 +19,7 @@ import (
 // the refusal is purge_unconfirmed, so an agent is told the purge is the
 // user's call. With --yes the ticket is gone, and the report names the id and
 // the counts but never the title — a ticket is often purged because of what it
-// says.
+// says — and the invocation's event counts each kind of row removed.
 func TestRunPurgeRefusesWithoutConfirmationAndPurgesWithIt(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
@@ -54,8 +56,19 @@ func TestRunPurgeRefusesWithoutConfirmationAndPurgesWithIt(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := runLeaf(purgeLeaf(), ctx, &stdout, ap, []string{doomed.ID, "--yes"}); err != nil {
+	invocation := telemetry.Begin(telemetry.Event{})
+	purge := purgeLeaf()
+	invoked := telemetry.With(ctx, invocation)
+	positional, err := parseLeaf(invoked, purge, []string{doomed.ID, "--yes"}, &stdout)
+	if err != nil {
+		t.Fatalf("parse purge --yes error = %v", err)
+	}
+	if err := purge.work(invoked, &stdout, ap, positional); err != nil {
 		t.Fatalf("purge --yes error = %v", err)
+	}
+	counts := invocation.Finish(telemetry.End{}).Counts
+	if want := map[string]int{"purge.comments": 1, "purge.plan_reviews": 0, "purge.labels": 0, "purge.edges": 1, "purge.events": len(events)}; !maps.Equal(counts, want) {
+		t.Errorf("purge event counts = %v, want %v", counts, want)
 	}
 	// One edge: the parent edge to the epic.
 	want := fmt.Sprintf("purged %s (comments=1 labels=0 edges=1 events=%d plan_reviews=0)\n", doomed.ID, len(events))

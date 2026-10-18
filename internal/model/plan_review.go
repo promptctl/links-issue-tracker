@@ -50,6 +50,18 @@ func DigestPlan(text string) PlanDigest {
 	return PlanDigest(hex.EncodeToString(sum[:]))
 }
 
+var digestShape = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// ParsePlanDigest is the gate a plan digest passes through on its way in from
+// a reviewer: the hex SHA-256 DigestPlan spells, lower-case, all 64 digits.
+func ParsePlanDigest(raw string) (PlanDigest, error) {
+	digest := strings.TrimSpace(raw)
+	if !digestShape.MatchString(digest) {
+		return "", ValidationError{Message: fmt.Sprintf("a plan is named by its digest, the 64 hex digits `lit show` prints beside its version, got %q", raw)}
+	}
+	return PlanDigest(digest), nil
+}
+
 // PlanVerdict is a law review's outcome.
 type PlanVerdict string
 

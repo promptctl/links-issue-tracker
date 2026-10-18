@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -28,6 +29,8 @@ func (s *Store) AddPlanReview(ctx context.Context, in storage.AddPlanReviewInput
 	if err != nil {
 		return model.PlanReview{}, err
 	}
+	// Read outside the mutation: the review depends only on the history
+	// holding the named text, and a history only gains texts.
 	review.ID = "rvw-" + uuid.NewString()
 	review.CreatedAt = s.clock.Now()
 	if err := s.withMutation(ctx, "add plan review", func(ctx context.Context, tx *sql.Tx) error {
@@ -52,10 +55,11 @@ func deletePlanReviewTx(ctx context.Context, tx *sql.Tx, id string) (int64, erro
 	return execDelete(ctx, tx, `DELETE FROM plan_reviews WHERE id = ?`, fmt.Sprintf("plan review %s", id), id)
 }
 
-// queryPlanReviews reads the plan reviews where selects, oldest first, the
-// order a detail and an export carry them in.
+// queryPlanReviews reads the plan reviews where selects, in
+// storage.PlanReviewOrdering. The order is taken in Go, not in SQL: created_at
+// is a varchar, and ORDER BY on it sorts a stamp by its spelling.
 func queryPlanReviews(ctx context.Context, q rowQueryer, where string, args ...any) ([]model.PlanReview, error) {
-	rows, err := q.QueryContext(ctx, `SELECT id, issue_id, plan_digest, verdict, laws, created_at, created_by FROM plan_reviews `+where+` ORDER BY created_at ASC, id ASC`, args...)
+	rows, err := q.QueryContext(ctx, `SELECT id, issue_id, plan_digest, verdict, laws, created_at, created_by FROM plan_reviews `+where, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list plan reviews: %w", err)
 	}
@@ -75,7 +79,11 @@ func queryPlanReviews(ctx context.Context, q rowQueryer, where string, args ...a
 		}
 		out = append(out, review)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	slices.SortFunc(out, storage.PlanReviewOrdering)
+	return out, nil
 }
 
 // joinLaws and splitLaws are the laws column's encoding: the tokens joined by

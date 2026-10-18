@@ -177,7 +177,7 @@ func ThreeWay(base model.Export, local model.Export, remote model.Export) MergeR
 		Relations:   mergeRelations(scope, local.Relations, remote.Relations),
 		Comments:    mergeRecords(scope, local.Comments, remote.Comments, func(c model.Comment) (string, string) { return c.ID, c.IssueID }),
 		Labels:      mergeLabels(scope, base.Labels, local.Labels, remote.Labels),
-		Events:      mergeEvents(scope, local.Events, remote.Events),
+		Events:      mergeRecords(scope, local.Events, remote.Events, func(e model.IssueEvent) (string, string) { return e.ID, e.IssueID }),
 		Purges:      purges,
 		PlanReviews: mergeRecords(scope, local.PlanReviews, remote.PlanReviews, func(r model.PlanReview) (string, string) { return r.ID, r.IssueID }),
 	}
@@ -387,7 +387,7 @@ func maxString(items []string) string {
 }
 
 // mergeRecords unions an append-only table — rows that are written once
-// under their own id and never edited, comments and plan reviews — keeping
+// under their own id and never edited, comments, events and plan reviews — keeping
 // every row of an issue the merge kept, once, by id. keys reads a row's id and
 // the issue it belongs to. [LAW:one-type-per-behavior]
 func mergeRecords[R any](scope issueScope, locals, remotes []R, keys func(R) (id, issueID string)) []R {
@@ -481,23 +481,5 @@ func mergeLabels(scope issueScope, base, locals, remotes []model.Label) []model.
 		}
 		return out[i].Name < out[j].Name
 	})
-	return out
-}
-
-func mergeEvents(scope issueScope, locals, remotes []model.IssueEvent) []model.IssueEvent {
-	merged := map[string]model.IssueEvent{}
-	for _, sided := range bothSidesOf(locals, remotes) {
-		for _, event := range sided.rows {
-			if !scope.admits(event.IssueID, sided.from) {
-				continue
-			}
-			merged[event.ID] = event
-		}
-	}
-	out := make([]model.IssueEvent, 0, len(merged))
-	for _, event := range merged {
-		out = append(out, event)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
 }
