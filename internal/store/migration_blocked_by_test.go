@@ -11,8 +11,8 @@ import (
 // relations CHECK carries an engine-generated name, as a pre-goose store's
 // does: every pre-v8
 // 'blocks' row becomes 'blocked-by' with its src and dst untouched, so the
-// ticket that waited still waits — read back through the store, the waiter
-// lists its blocker under BlockedBy. The other relation types pass through, the
+// ticket that waited still waits — read back through the store at the latest
+// schema, the waiter lists its blocker under BlockedBy. The other relation types pass through, the
 // sealed set refuses the old spelling afterwards, and down restores 'blocks'
 // row for row.
 func TestMigrationRenamesBlocksEdgesKeepingTheirMeaning(t *testing.T) {
@@ -52,6 +52,11 @@ func TestMigrationRenamesBlocksEdgesKeepingTheirMeaning(t *testing.T) {
 	wantUp := []string{"e-blocker e-peer related-to", "e-waiter e-blocker blocked-by"}
 	if got := relationRows(t, ctx, f); !slices.Equal(got, wantUp) {
 		t.Fatalf("relations after v8 = %v, want %v", got, wantUp)
+	}
+	// The store reads through the latest schema's columns, so the read-back
+	// runs on a store migrated the rest of the way.
+	if _, err := provider.Up(ctx); err != nil {
+		t.Fatalf("Up error = %v", err)
 	}
 	detail, err := f.st.GetIssueDetail(ctx, "e-waiter")
 	if err != nil {
