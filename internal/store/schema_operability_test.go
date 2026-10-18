@@ -65,7 +65,7 @@ func TestWriteOpenRefusesAWorkspaceWhoseWriteRulesItPredates(t *testing.T) {
 		t.Errorf("refusal = %+v, want workspace v%d, max v%d, min writer v%d, no missing baseline", unsupported, ahead, registryMax, ahead)
 	}
 	for _, want := range []string{
-		fmt.Sprintf("schema version %d changed a write rule this binary predates", ahead),
+		fmt.Sprintf("schema version %d changed a write rule this binary predates, so it reads this workspace but does not write to it or sync it", ahead),
 		fmt.Sprintf("install a lit that supports schema version %d:\n  lit upgrade", ahead),
 	} {
 		if !strings.Contains(err.Error(), want) {

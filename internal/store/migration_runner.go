@@ -177,11 +177,11 @@ func (e *UnsupportedSchemaVersionError) Error() string {
 			strings.Join(e.MissingBaseline, ", "))
 	}
 	if e.MinWriterSchema > e.MaxSupported {
-		fmt.Fprintf(&b, "; schema version %d changed a write rule this binary predates, so it reads this workspace but does not write to it",
+		fmt.Fprintf(&b, "; schema version %d changed a write rule this binary predates, so it reads this workspace but does not write to it or sync it",
 			e.MinWriterSchema)
 	}
 	if e.MinWriterSchemaErr != nil {
-		fmt.Fprintf(&b, "; its minimum writer schema cannot be read (%v), so this binary reads this workspace but does not write to it",
+		fmt.Fprintf(&b, "; its minimum writer schema cannot be read (%v), so this binary reads this workspace but does not write to it or sync it",
 			e.MinWriterSchemaErr)
 	}
 	b.WriteString(")")

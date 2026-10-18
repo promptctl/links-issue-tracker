@@ -1033,8 +1033,8 @@ Tests: `TestPreGooseAdoptionStampsWithoutRerunningBaseline` (`migration_runner_t
 `UnsupportedSchemaVersionError{WorkspaceVersion, MaxSupported int64; MissingBaseline []string; MinWriterSchema int64; MinWriterSchemaErr error; SnapshotName string; SnapshotLookupErr error; SnapshotsExamined, SnapshotsUnreadable int}` (`migration_runner.go`). `Error()` (`migration_runner.go`) composes:
 1. `"please upgrade lit (your workspace is at schema version %d; this binary supports up to %d"`.
 2. If `len(MissingBaseline) > 0`: `"; the live schema is also missing baseline shape: %s"` (comma-joined).
-3. If `MinWriterSchema > MaxSupported`: `"; schema version %d changed a write rule this binary predates, so it reads this workspace but does not write to it"` (`MinWriterSchema`).
-4. If `MinWriterSchemaErr != nil`: `"; its minimum writer schema cannot be read (%v), so this binary reads this workspace but does not write to it"`.
+3. If `MinWriterSchema > MaxSupported`: `"; schema version %d changed a write rule this binary predates, so it reads this workspace but does not write to it or sync it"` (`MinWriterSchema`).
+4. If `MinWriterSchemaErr != nil`: `"; its minimum writer schema cannot be read (%v), so this binary reads this workspace but does not write to it or sync it"`.
 5. `")"`.
 6. Always: `"\n\nto operate this workspace, install a lit that supports schema version %d:\n  lit upgrade\n\n(this is the supported path — `lit upgrade` runs even from this too-old binary, installs the latest release, and refuses a release that cannot operate this workspace.)"` (`WorkspaceVersion`).
 7. If `SnapshotName != ""` → `"\n\nif you are stuck and need to roll back this workspace to match this binary:\n  lit snapshots restore %s\n\nthis is a LOSSY recovery — any data written under the newer binary will be discarded."`; else if `SnapshotLookupErr == nil` → `"\n\nno migration snapshot holds this workspace's data in a shape this binary writes; lossy rollback is not possible from this workspace."`.
