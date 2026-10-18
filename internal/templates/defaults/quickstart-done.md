@@ -1,6 +1,6 @@
 Finishing work (lit)
 
-Mark a ticket done when all work is completed: `lit done <issue-id>` closes the ticket (success path) and prints follow-up guidance for capturing what the next agent needs.
+Mark a ticket done when all work is completed: `lit done <issue-id>` closes the ticket (success path) and prints follow-up guidance for capturing what the next agent needs. It refuses a ticket whose current plan has not passed a law review by someone other than the plan's author, and says what is missing.
 Close a ticket without marking done: `lit close <issue-id> --resolution <duplicate|superseded|obsolete|wontfix>` (resolution is REQUIRED — it records why the work was not finished; from any non-closed state). duplicate/superseded redirect to a canonical ticket; obsolete = the need is gone; wontfix = a standing decision not to do it. Reopening clears the resolution. Filter closed work by it: `lit ls --query "resolution:wontfix"`.
 Create a follow-up ticket: `lit followup --on <closed-id> --title "..."` — it lands beside the closed ticket, in the same epic. A follow-up of a top-level epic has no epic to land in, so file it as an epic (`--type epic`) or in the epic it belongs to (`--parent <epic-id>`); either way it keeps its link to the ticket it follows up.
 

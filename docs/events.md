@@ -255,6 +255,19 @@ set and carries its refusal instead.
 | `phase.to` | The phase the command moved it to, the one `--to` names. |
 | `phase.changed` | `false` when the issue was already in that phase, so nothing was recorded; `true` otherwise. |
 
+## What `lit done` records
+
+A done reads the ticket's plan and its reviews before it writes. A refusal
+because the current plan has not passed carries `done.plan_gap`; a done that
+lands carries the other two keys. A done the lifecycle refuses, such as one on
+an epic, carries none of them.
+
+| Key | Meaning |
+| --- | --- |
+| `done.plan_gap` | What kept the plan from approval: `no_plan`, `unreviewed` (no review of the current text), `failed` (a fail stands on it), or `author_only` (only its author passed it). |
+| `done.plan_digest` | The digest of the current plan text the ticket was finished on. |
+| `done.plan_review` | The id of the passing review the approval rested on, the most recent standing pass by someone other than the plan's author. |
+
 ## What `lit verdict` records
 
 A recorded verdict sets these keys; a refused one has none of them.

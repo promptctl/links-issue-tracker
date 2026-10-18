@@ -314,6 +314,7 @@ func TestNextUnderAFilterNamesTheTicketItHidFromTheHeldEpic(t *testing.T) {
 	// Finishing the first ticket leaves the epic's lane held by this checkout
 	// with the second ready in it.
 	runCLIInDir(t, repo, "start", first)
+	approvePlanInDir(t, repo, first)
 	runCLIInDir(t, repo, "done", first)
 
 	_, err := runCLIInDirAllowError(t, repo, "next", "--type", "bug")

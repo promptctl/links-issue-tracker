@@ -41,6 +41,8 @@ func TestCloseRendersLiveAdjacency(t *testing.T) {
 	if _, err := ap.Store.AddRelation(ctx, storage.AddRelationInput{SrcID: dependent, DstID: focal, Type: "blocked-by", CreatedBy: "test"}); err != nil {
 		t.Fatalf("AddRelation(blocks) error = %v", err)
 	}
+	approvePlan(t, ctx, ap, closedSibling)
+	approvePlan(t, ctx, ap, focal)
 	// Close the sibling that must not appear as live adjacency.
 	var sink bytes.Buffer
 	if err := runTransition(ctx, &sink, ap, []string{closedSibling}, doneSpec); err != nil {
@@ -105,6 +107,7 @@ func TestCloseAdjacencyOnlyOnFinish(t *testing.T) {
 	_ = seedTaskUnder(t, ctx, ap, "Open sibling", parent)
 
 	// Drive focal to closed, then reopen it; only the reopen output is inspected.
+	approvePlan(t, ctx, ap, focal)
 	var sink bytes.Buffer
 	if err := runTransition(ctx, &sink, ap, []string{focal}, doneSpec); err != nil {
 		t.Fatalf("runTransition(done focal) error = %v", err)

@@ -37,6 +37,8 @@ func TestRunTransitionDoneClosesAndPrintsPostGuidance(t *testing.T) {
 		t.Fatalf("StartIssue() error = %v", err)
 	}
 
+	approvePlan(t, ctx, ap, issue.ID)
+
 	// `lit done` is single-phase: one invocation closes the ticket and prints
 	// the post-close capture-deposit guidance. There is no preview/apply token.
 	var stdout bytes.Buffer
@@ -90,6 +92,7 @@ func TestRunTransitionTargetStateMatrix(t *testing.T) {
 				if err != nil {
 					t.Fatalf("CreateIssue() error = %v", err)
 				}
+				approvePlan(t, ctx, ap, issue.ID)
 				// Drive the issue to the from-state. The claim is always held by
 				// `owner` so the start diagonal (start on an in_progress issue by
 				// the same owner) is a pure no-op rather than a claim transfer.
@@ -606,6 +609,7 @@ func TestRunTransitionActorFromSessionEnv(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
+	approvePlan(t, ctx, ap, issue.ID)
 	driveTransition(t, ctx, ap, issue.ID, startSpec)
 	driveTransition(t, ctx, ap, issue.ID, doneSpec)
 	if got, want := lastEventActorForAction(t, ap, ctx, issue.ID, "start"), "claude_sess-actor"; got != want {
