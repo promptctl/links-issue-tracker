@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -164,19 +165,26 @@ func humanBytes(n int64) string {
 	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
 }
 
-// remoteCacheBase is where dbfactory keeps this store's mirrors.
+// gitCacheRoot is the directory dbfactory roots this store's git caches at:
+// its GitCacheRootParam, under which it keeps each mirror in
+// remoteCacheBase.
 //
 // The path segments are not guesswork, and each has exactly one owner. Dolt's
 // sqle provider roots a git cache at the *database's* own directory
 // (`dbLocations[db].Abs(".")`), which the embedded connector lays down as
-// `<doltRootDir>/<database>` — so the middle segment is doltDatabaseName, never
+// `<doltRootDir>/<database>` — so the last segment is doltDatabaseName, never
 // the workspace id, which names a different thing and only coincides with the
 // database name in a repository called "links".
 // [LAW:one-source-of-truth] every segment comes from the constant that defines
 // it: the root from the Store, the database name from doltDatabaseName, and
 // `.dolt` from dbfactory rather than a second literal here.
+func (s *Store) gitCacheRoot() string {
+	return filepath.Join(s.doltRootDir, doltDatabaseName)
+}
+
+// remoteCacheBase is where dbfactory keeps this store's mirrors.
 func (s *Store) remoteCacheBase() string {
-	return filepath.Join(s.doltRootDir, doltDatabaseName, dbfactory.DoltDir, remoteCacheDirName)
+	return filepath.Join(s.gitCacheRoot(), dbfactory.DoltDir, remoteCacheDirName)
 }
 
 // listRemoteCacheKeys returns the cache keys present under base. A base that
@@ -242,11 +250,9 @@ func (s *Store) remoteMirrorKeys(ctx context.Context) (map[string]string, error)
 		if err := rows.Scan(&name, &remoteURL, &rawParams); err != nil {
 			return nil, fmt.Errorf("scan dolt remote: %w", err)
 		}
-		var params map[string]interface{}
-		if rawParams.Valid {
-			if err := json.Unmarshal([]byte(rawParams.String), &params); err != nil {
-				return nil, fmt.Errorf("decode params of remote %q: %w", name, err)
-			}
+		params, err := decodeRemoteParams(name, rawParams)
+		if err != nil {
+			return nil, err
 		}
 		key, gitBacked, err := dbfactory.GitRemoteCacheKey(remoteURL, params)
 		if err != nil {
@@ -260,6 +266,22 @@ func (s *Store) remoteMirrorKeys(ctx context.Context) (map[string]string, error)
 		return nil, fmt.Errorf("iterate dolt remotes: %w", err)
 	}
 	return keys, nil
+}
+
+// decodeRemoteParams is the params column dolt_remotes holds for the remote
+// name, as the map Dolt opens the remote with. A remote with none has an
+// empty map: the column is SQL NULL, or JSON null where Dolt rendered a nil
+// map (dtables remotes_table.go), which decoding sets the map to.
+func decodeRemoteParams(name string, raw sql.NullString) (map[string]interface{}, error) {
+	var decoded map[string]interface{}
+	if raw.Valid {
+		if err := json.Unmarshal([]byte(raw.String), &decoded); err != nil {
+			return nil, fmt.Errorf("decode params of remote %q: %w", name, err)
+		}
+	}
+	params := map[string]interface{}{}
+	maps.Copy(params, decoded)
+	return params, nil
 }
 
 // readAbandonedMirrors reads the configured remotes' keys and the directories

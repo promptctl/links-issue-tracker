@@ -5248,15 +5248,19 @@ Constant: `remoteCacheDirName = "git-remote-cache"` (`remotecache.go`).
 
 Base path (`remotecache.go`):
 ```go
+func (s *Store) gitCacheRoot() string {
+    return filepath.Join(s.doltRootDir, doltDatabaseName)
+}
+
 func (s *Store) remoteCacheBase() string {
-    return filepath.Join(s.doltRootDir, doltDatabaseName, dbfactory.DoltDir, remoteCacheDirName)
+    return filepath.Join(s.gitCacheRoot(), dbfactory.DoltDir, remoteCacheDirName)
 }
 ```
-The middle segment is `doltDatabaseName`, **not** the workspace id (`remotecache.go`).
+`gitCacheRoot()` is the `GitCacheRootParam` Dolt's SQL provider opens a git remote with; its last segment is `doltDatabaseName`, **not** the workspace id (`remotecache.go`).
 
 #### 7.2 Key derivation
 
-lit does not derive a key itself. `(*Store).remoteMirrorKeys(ctx)` (`remotecache.go`) runs `SELECT name, url, params FROM dolt_remotes` and maps each git-backed remote's **name** → `dbfactory.GitRemoteCacheKey(url, params)`, Dolt's own derivation of the directory name (fork patch 8, `FORKS.md`), so the remote's `--ref`, which is part of the hash, is honored. A `NULL` params column is no params; otherwise it is JSON-decoded. A remote whose URL does not resolve to the git factory has no entry. Errors wrap as `list dolt remotes: %w`, `scan dolt remote: %w`, `decode params of remote %q: %w`, `derive cache key of remote %q (%s): %w`, `iterate dolt remotes: %w`.
+lit does not derive a key itself. `(*Store).remoteMirrorKeys(ctx)` (`remotecache.go`) runs `SELECT name, url, params FROM dolt_remotes` and maps each git-backed remote's **name** → `dbfactory.GitRemoteCacheKey(url, params)`, Dolt's own derivation of the directory name (fork patch 8, `FORKS.md`), so the remote's `--ref`, which is part of the hash, is honored. `decodeRemoteParams(name, raw)` reads the params column: `NULL`, and JSON `null` (Dolt's rendering of a remote with no params), are an empty map; otherwise it is JSON-decoded into a fresh map. A remote whose URL does not resolve to the git factory has no entry. Errors wrap as `list dolt remotes: %w`, `scan dolt remote: %w`, `decode params of remote %q: %w`, `derive cache key of remote %q (%s): %w`, `iterate dolt remotes: %w`.
 
 `isRemoteCacheKey(name)` (`remotecache.go`): length must equal `sha256.Size*2` = **64**, the name must equal its own lower-casing, and it must hex-decode. Anything else was not written by dbfactory and is never deleted.
 

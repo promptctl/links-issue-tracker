@@ -15,7 +15,7 @@ one below carries the condition that would let it be deleted.
 
 | Module in `go.mod` | Upstream | What `lit` builds | Branch | Current pin |
 | --- | --- | --- | --- | --- |
-| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20261018035346-ddfdcc7080ee` |
+| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20261018081222-82e90e61eede` |
 | `github.com/dolthub/go-mysql-server` | [dolthub/go-mysql-server](https://github.com/dolthub/go-mysql-server) | [promptctl/go-mysql-server](https://github.com/promptctl/go-mysql-server) | `lit` | `v0.20.1-0.20260821032251-ab5cb9ec3b69` |
 | `github.com/dolthub/driver` | [dolthub/driver](https://github.com/dolthub/driver) | [`internal/vendor/dolthub-driver`](internal/vendor/dolthub-driver) | — | `v0.2.1-0.20260314000741-0fe74e7ee31a` |
 
@@ -316,6 +316,33 @@ own message.
 line moves past that change. Dropping it without that turns every leased
 push in `internal/store` into an error, and a bare `--force` in its place
 would overwrite a peer's push.
+
+#### Patch 10 — re-check against a new GC generation, and replace a store's table files under one
+
+`go/store/nbs/store.go`, plus `go/store/nbs/gc_generation_test.go` (a new
+file, not upstream's).
+
+A writer adding table files reads its view of the store's GC generation, and
+retried a manifest whose generation had changed against that same view, so it
+found the same mismatch every time: a writer whose view predated another
+process collecting the store spun until its context ended, and without a
+deadline never returned. It now rebases onto the manifest before the retry,
+whose ref check then runs against the files the store holds, so a chunk
+referencing one the new generation dropped fails with
+`ErrTableFileNotFound`. `nbs.ReplaceStoreTableFiles` points a store's manifest
+at exactly the given table files, keeping its root and starting a new GC
+generation, in one manifest write; a refusal while the manifest has moved past
+the view is `ErrConcurrentManifestWriteDuringOverwrite`.
+`internal/store/remote_gc.go` uses it to run a git remote's GC after a
+re-root (`links-storage-3k6u`): the remote never collects itself, and a force
+push only adds table files.
+
+**Retire it when** upstream rebases on a GC-generation mismatch and offers a
+way to replace a remote's table set under a new generation, and the `require`
+line moves past that change. Dropping it without that leaves the shared
+remote holding every write ever pushed, and the bare
+`OverwriteStoreManifest` in its place keeps the generation, so a writer
+holding the old one could reference a chunk the replacement dropped.
 
 ### promptctl/go-mysql-server
 

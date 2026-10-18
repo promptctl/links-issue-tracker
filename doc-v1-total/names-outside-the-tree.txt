@@ -28,6 +28,7 @@ doltdb.ErrNoCommonAncestor  Dolt, libraries/doltcore/doltdb
 corruptIndexRecovery  Dolt fork, store/nbs/journal_writer.go
 CollectDBs            Dolt fork, cmd/dolt/commands/engine
 cli.CliErr            Dolt's cmd/dolt/cli package, which lit imports as doltcli
+env.Remote.GetRemoteDB  Dolt, libraries/doltcore/env/remotes.go; openRemoteDB opens a remote as it does
 InitStatusVariables   go-mysql-server fork, sql/variables/status_variables.go
 emitUsageEvent        upstream dolthub/driver; the vendored copy deletes it (internal/vendor/dolthub-driver/README.lit-patch.md)
 NumericComponent      github.com/pressly/goose/v3, migration.go; parses a migration file name's version

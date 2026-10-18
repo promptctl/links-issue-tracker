@@ -2,12 +2,16 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/dolthub/dolt/go/libraries/doltcore/dbfactory"
 
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
@@ -612,5 +616,28 @@ func TestSyncRemoteMirrorHoldsItsOwnPushNotAPeersLaterOne(t *testing.T) {
 	}
 	if holds("mixed", doltRoot, []string{ownHead, peerHead}) {
 		t.Fatal("one held commit answered for a list with an unheld one in it")
+	}
+}
+
+// TestDecodeRemoteParamsGivesAMapToOpenWith decodes each params column
+// dolt_remotes can hold. A remote with none - SQL NULL, or JSON null where
+// Dolt rendered a nil map - has an empty map the open can add the git
+// remote's name to, and one with params has them.
+func TestDecodeRemoteParamsGivesAMapToOpenWith(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		raw  sql.NullString
+		want map[string]interface{}
+	}{
+		{raw: sql.NullString{}, want: map[string]interface{}{}},
+		{raw: sql.NullString{String: "null", Valid: true}, want: map[string]interface{}{}},
+		{raw: sql.NullString{String: "{}", Valid: true}, want: map[string]interface{}{}},
+		{raw: sql.NullString{String: `{"k":"v"}`, Valid: true}, want: map[string]interface{}{"k": "v"}},
+	} {
+		params, err := decodeRemoteParams("origin", tc.raw)
+		if err != nil || !maps.Equal(params, tc.want) {
+			t.Fatalf("decodeRemoteParams(%+v) = %v, %v; want %v", tc.raw, params, err, tc.want)
+		}
+		params[dbfactory.GitRemoteNameParam] = "origin"
 	}
 }

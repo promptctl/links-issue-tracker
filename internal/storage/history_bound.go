@@ -25,6 +25,9 @@ type HistoryBound struct {
 	// Lease is what the force push of ReRooted found at the remote branch:
 	// empty when nothing was pushed.
 	Lease LeaseOutcome
+	// RemoteGC is the remote's GC that follows the force push, whatever the
+	// lease said: the remote's root decides whether it replaces anything.
+	RemoteGC RemoteGC
 	// Collected is set once the full GC ran, which it does only after this
 	// checkout's branch followed the re-root onto the remote's history; the
 	// two byte counts are the store's size on disk around it.
@@ -42,8 +45,9 @@ func (b HistoryBound) Fired() bool {
 }
 
 // EventValue is the bound as one value of the event's history_bound.records
-// list: its own facts under history_bound.*, and the re-root it published
-// under the reroot.* keys every re-root's facts use.
+// list: its own facts under history_bound.*, the re-root it published under
+// the reroot.* keys every re-root's facts use, and the remote's GC under
+// remote_gc.*.
 func (b HistoryBound) EventValue() map[string]any {
 	value := map[string]any{
 		"history_bound.remote":       b.Remote,
@@ -61,6 +65,7 @@ func (b HistoryBound) EventValue() map[string]any {
 	}
 	facts, counts := b.ReRooted.EventRecord()
 	maps.Copy(value, facts)
+	maps.Copy(value, b.RemoteGC.EventRecord())
 	for key, n := range counts {
 		value[key] = n
 	}

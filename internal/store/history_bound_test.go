@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -77,7 +76,7 @@ func branchesUnder(t *testing.T, ctx context.Context, st *Store, prefix string) 
 func TestAPushPastTheBoundReRootsWithNoCommandRun(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	remoteURL := "file://" + filepath.Join(t.TempDir(), "remote")
+	remoteURL, _ := gitRemote(t)
 	alpha := migratedDoltDir(t)
 	epic := seedReconcileRemote(t, ctx, alpha, remoteURL)
 
@@ -233,7 +232,7 @@ func boundAt(t *testing.T, ctx context.Context, alpha, head string, keep uint64)
 func TestAStaleLeaseLeavesTheBranchOnItsHistory(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	remoteURL := "file://" + filepath.Join(t.TempDir(), "remote")
+	remoteURL, _ := gitRemote(t)
 	alpha, bravo := migratedDoltDir(t), migratedDoltDir(t)
 	epic := seedReconcileRemote(t, ctx, alpha, remoteURL)
 	createAndPush(t, ctx, alpha, epic, "a1")
@@ -278,7 +277,7 @@ func TestAStaleLeaseLeavesTheBranchOnItsHistory(t *testing.T) {
 func TestAStaleLeaseOverTheLandedReRootStillFollowsIt(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	remoteURL := "file://" + filepath.Join(t.TempDir(), "remote")
+	remoteURL, _ := gitRemote(t)
 	alpha, bravo := migratedDoltDir(t), migratedDoltDir(t)
 	epic := seedReconcileRemote(t, ctx, alpha, remoteURL)
 	createAndPush(t, ctx, alpha, epic, "a1")
@@ -337,7 +336,7 @@ func TestAStaleLeaseOverTheLandedReRootStillFollowsIt(t *testing.T) {
 func TestAHeldLeaseTheBranchCannotFollowIsTheBoundsError(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	remoteURL := "file://" + filepath.Join(t.TempDir(), "remote")
+	remoteURL, _ := gitRemote(t)
 	alpha := migratedDoltDir(t)
 	epic := seedReconcileRemote(t, ctx, alpha, remoteURL)
 	createAndPush(t, ctx, alpha, epic, "a1")
@@ -378,15 +377,15 @@ func TestAHeldLeaseTheBranchCannotFollowIsTheBoundsError(t *testing.T) {
 }
 
 // TestAReRootPushWithNoVerdictLeavesNoScratch has the bound's lease push
-// fail before it reaches the remote: the remote's path is a file, not a
-// store. The push reaches no verdict, and the scratch the re-root was written
+// fail before it reaches the remote: the remote's path is a file, not a git
+// repository. The push reaches no verdict, and the scratch the re-root was written
 // on is gone anyway, so nothing keeps the history below the cut reachable.
 func TestAReRootPushWithNoVerdictLeavesNoScratch(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	remotePath := filepath.Join(t.TempDir(), "remote")
+	remoteURL, remotePath := gitRemote(t)
 	alpha := migratedDoltDir(t)
-	epic := seedReconcileRemote(t, ctx, alpha, "file://"+remotePath)
+	epic := seedReconcileRemote(t, ctx, alpha, remoteURL)
 	createAndPush(t, ctx, alpha, epic, "a1")
 	head := headAt(t, ctx, alpha)
 	if err := os.Rename(remotePath, remotePath+".gone"); err != nil {
