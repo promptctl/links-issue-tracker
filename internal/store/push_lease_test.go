@@ -1,0 +1,116 @@
+package store
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
+
+	"github.com/promptctl/links-issue-tracker/internal/storage"
+)
+
+// TestLeasedPushLandsOnlyOverTheHeadItNames drives two checkouts sharing one
+// remote. bravo pushes after alpha last read the remote; alpha then rewrites
+// its own history and pushes it under a lease. Naming the head alpha last saw
+// is refused and bravo's push stays; naming the remote's actual head lands a
+// non-fast-forward rewrite; and the same push again, as a transport retry
+// would send it, still lands.
+func TestLeasedPushLandsOnlyOverTheHeadItNames(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	remoteURL := "file://" + filepath.Join(t.TempDir(), "remote")
+	alpha, bravo := migratedDoltDir(t), migratedDoltDir(t)
+	epic := seedReconcileRemote(t, ctx, alpha, remoteURL)
+	createAndPush(t, ctx, alpha, epic, "a1")
+	createAndPush(t, ctx, alpha, epic, "a2")
+	seen := headAt(t, ctx, alpha)
+	adoptRemote(t, ctx, bravo, remoteURL)
+	createAndPush(t, ctx, bravo, epic, "b1")
+	bravoHead := headAt(t, ctx, bravo)
+
+	// alpha's rewrite: its history re-rooted below its head, so the head it
+	// pushes descends from neither the head it saw nor bravo's.
+	var cut string
+	withChunkStore(t, alpha, func(ddb *doltdb.DoltDB) {
+		cut = firstParentBelowHead(t, ctx, ddb, 1).String()
+	})
+	rewritten, err := ReRoot(ctx, alpha, "master", cut)
+	if err != nil {
+		t.Fatalf("ReRoot(alpha) error = %v", err)
+	}
+
+	st := openSyncOrFatal(t, ctx, alpha)
+	defer func() { _ = st.Close() }()
+	push := func(expected string) storage.LeasedPush {
+		t.Helper()
+		var pushed storage.LeasedPush
+		err := st.runSyncMutation(ctx, func(ctx context.Context) error {
+			var err error
+			pushed, err = st.pushLeasedWithinLock(ctx, "origin", "master", "master", expected)
+			return err
+		})
+		if err != nil {
+			t.Fatalf("leased push expecting %s error = %v", expected, err)
+		}
+		return pushed
+	}
+	remoteHead := func() string {
+		t.Helper()
+		if err := st.SyncFetch(ctx, "origin", false); err != nil {
+			t.Fatalf("SyncFetch(alpha) error = %v", err)
+		}
+		head, err := commitHashOfRef(ctx, st.db, "remotes/origin/master")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return head
+	}
+
+	stale := push(seen)
+	want := storage.LeasedPush{Remote: "origin", Branch: "master", Expected: seen, Pushed: rewritten.Head, Outcome: storage.LeaseStale}
+	if stale != want {
+		t.Fatalf("lease on the head alpha last saw = %+v, want %+v", stale, want)
+	}
+	if got := remoteHead(); got != bravoHead {
+		t.Fatalf("after a stale lease the remote is at %s, want bravo's push %s", got, bravoHead)
+	}
+
+	held := push(bravoHead)
+	want = storage.LeasedPush{Remote: "origin", Branch: "master", Expected: bravoHead, Pushed: rewritten.Head, Outcome: storage.LeaseHeld}
+	if held != want {
+		t.Fatalf("lease on the remote's head = %+v, want %+v", held, want)
+	}
+	if got := remoteHead(); got != rewritten.Head {
+		t.Fatalf("after a held lease the remote is at %s, want alpha's rewritten head %s", got, rewritten.Head)
+	}
+
+	if again := push(bravoHead); again.Outcome != storage.LeaseHeld {
+		t.Fatalf("the same leased push again = %+v, want it held over its own landed head", again)
+	}
+
+	// A remote that cannot be reached gives no verdict on the lease, so it
+	// is an error and never a stale outcome. A file remote is created
+	// wherever it can be, so this one's directory becomes a regular file.
+	gone := filepath.Join(t.TempDir(), "remote")
+	if err := st.SyncAddRemote(ctx, "gone", "file://"+gone); err != nil {
+		t.Fatalf("SyncAddRemote(gone) error = %v", err)
+	}
+	if err := os.RemoveAll(gone); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(gone, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err = st.runSyncMutation(ctx, func(ctx context.Context) error {
+		unreached, err := st.pushLeasedWithinLock(ctx, "gone", "master", "master", bravoHead)
+		if err == nil {
+			t.Errorf("leased push to an unreachable remote = %+v, want an error", unreached)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}

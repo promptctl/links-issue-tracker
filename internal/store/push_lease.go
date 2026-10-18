@@ -1,0 +1,68 @@
+package store
+
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	"github.com/dolthub/dolt/go/store/datas"
+
+	"github.com/promptctl/links-issue-tracker/internal/storage"
+)
+
+// pushLeasedWithinLock pushes the local branch source to remote's branch,
+// landing only while that branch still names expected, and otherwise leaving
+// it where it is: DOLT_PUSH --force-with-lease. A stale lease is an outcome,
+// not an error — it is the one answer a lease exists to give — so the error
+// is reserved for a push that reached no verdict. The caller holds the commit
+// lock (via runSyncMutation), as it does for pushWithinLock.
+//
+// A transport retry cannot misreport a landed push as stale: a remote branch
+// already at the pushed commit satisfies the lease (Patch 9 in FORKS.md).
+func (s *Store) pushLeasedWithinLock(ctx context.Context, remote, source, branch, expected string) (storage.LeasedPush, error) {
+	trimmedRemote, err := requireSyncArg("remote", remote)
+	if err != nil {
+		return storage.LeasedPush{}, err
+	}
+	trimmedSource, err := requireSyncArg("source", source)
+	if err != nil {
+		return storage.LeasedPush{}, err
+	}
+	trimmedBranch, err := requireSyncArg("branch", branch)
+	if err != nil {
+		return storage.LeasedPush{}, err
+	}
+	trimmedExpected := strings.TrimSpace(expected)
+	if !isDoltCommitHash(trimmedExpected) {
+		return storage.LeasedPush{}, fmt.Errorf("leased push to %s/%s: %q is not a Dolt commit hash", trimmedRemote, trimmedBranch, expected)
+	}
+	// [LAW:single-enforcer] the same schema-ahead refusal every push runs.
+	if err := s.guardRemoteSchemaAhead(ctx, trimmedRemote, trimmedBranch); err != nil {
+		return storage.LeasedPush{}, err
+	}
+	pushed, err := commitHashOfRef(ctx, s.db, trimmedSource)
+	if err != nil {
+		return storage.LeasedPush{}, err
+	}
+	result := storage.LeasedPush{Remote: trimmedRemote, Branch: trimmedBranch, Expected: trimmedExpected, Pushed: pushed}
+	args := []string{"--force-with-lease=" + trimmedBranch + ":" + trimmedExpected, trimmedRemote, trimmedSource + ":" + trimmedBranch}
+	query := buildProcedureCall("DOLT_PUSH", len(args))
+	pushErr := runRemoteIO(ctx, func(ctx context.Context) error {
+		var status int64
+		var message *string
+		return s.db.QueryRowContext(ctx, query, stringArgsToAny(args)...).Scan(&status, &message)
+	})
+	// [LAW:parse-dont-validate] the stale verdict is classified once, here,
+	// and travels on as the outcome. The SQL boundary renders DOLT_PUSH's
+	// error as text (MySQL error 1105), so it is recognized by the text of
+	// Dolt's own sentinel, which DOLT_PUSH carries for a stale target.
+	switch {
+	case pushErr != nil && strings.Contains(pushErr.Error(), datas.ErrStaleInfo.Error()):
+		result.Outcome = storage.LeaseStale
+	case pushErr != nil:
+		return storage.LeasedPush{}, classifyPushFailure(ctx, trimmedRemote, pushErr)
+	default:
+		result.Outcome = storage.LeaseHeld
+	}
+	return result, nil
+}
