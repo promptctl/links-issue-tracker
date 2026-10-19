@@ -44,10 +44,11 @@
     },
   },
   helpers: {
-    // A schema_version this definition was not written for may mean any
-    // field: the cell says so (⚠) rather than guess. The version is the one
-    // internal/statusline.SchemaVersion writes, and a test holds them equal.
-    schema: '{{ if ne (toString .schema_version) "1" }}{{ fail (printf "lit statusline.json is schema_version %v; this plugin reads 1 — %s" .schema_version (ternary "update this plugin: cc-candybar plugin install promptctl/links-issue-tracker" "update lit" (gt (int .schema_version) 1))) }}{{ end }}',
+    // lit keeps schema_version 1 and only adds fields (docs/statusline.md), so
+    // a file of any other version is not one lit wrote: the cell says so (⚠)
+    // rather than guess. The version is the one internal/statusline.SchemaVersion
+    // writes, and a test holds them equal.
+    schema: '{{ if ne (toString .schema_version) "1" }}{{ fail (printf "lit statusline.json is schema_version %v; this plugin reads 1 — the only version lit writes — the next lit next here replaces the file" .schema_version) }}{{ end }}',
     title: '{{ if gt (int .width) 0 }} {{ abbrev (int .width) .title }}{{ end }}',
   },
   actions: {

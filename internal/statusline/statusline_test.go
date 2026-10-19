@@ -220,6 +220,94 @@ func TestFileEncodesTheDocumentedShape(t *testing.T) {
 	}
 }
 
+// lit only ever adds fields to the file, so a plugin written for any lit reads
+// a file from any other. This list is every field lit has written at
+// schema_version 1, and it only grows: a field is never edited or removed
+// here, and a field lit starts writing joins it, so the promise holds for that
+// field too. It is not the set every version-1 file carries: a lit older than
+// a field never wrote it.
+// [LAW:one-source-of-truth] exception: the contract is a second copy of the
+// shape on purpose, so a rename the shape test would absorb still fails here.
+var schemaV1Fields = []string{
+	"schema_version",
+	"working_on",
+	"working_on.ticket",
+	"working_on.ticket.id",
+	"working_on.ticket.title",
+	"working_on.rollup_progress",
+	"working_on.rollup_progress.rollup_completed_count",
+	"working_on.rollup_progress.rollup_total_count",
+	"working_on.phase",
+	"working_on.recorded_at",
+	"next",
+	"next.ticket",
+	"next.ticket.id",
+	"next.ticket.title",
+	"next.recorded_at",
+}
+
+// Each write leaves a different slot null, and one writes a zero count, since a
+// key dropped only while its value is null or zero would turn "recorded as
+// nothing" into "not recorded".
+func TestEveryVersion1FieldIsStillWritten(t *testing.T) {
+	contract := map[string]bool{}
+	for _, field := range schemaV1Fields {
+		contract[field] = true
+	}
+	for _, facts := range [][]Fact{
+		{Started{alpha, progress}, PhaseRead{alpha.ID, "impl"}, Picked{&bravo}},
+		{Started{alpha, progress}, Picked{nil}},
+		{Picked{&bravo}},
+		{Started{bravo, bravoLane}},
+	} {
+		loc := testLocation(t)
+		write(t, loc, facts...)
+		raw, err := os.ReadFile(loc.File)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var doc map[string]any
+		if err := json.Unmarshal(raw, &doc); err != nil {
+			t.Fatal(err)
+		}
+		// objects maps each object the file holds to its keys; "" is the root.
+		// values holds every field written, so a parent that stopped being an
+		// object is told apart from one that is null.
+		objects := map[string]map[string]any{}
+		values := map[string]any{}
+		var walk func(path string, obj map[string]any)
+		walk = func(path string, obj map[string]any) {
+			objects[path] = obj
+			for k, v := range obj {
+				field := strings.TrimPrefix(path+"."+k, ".")
+				values[field] = v
+				if !contract[field] {
+					t.Errorf("%s is written but not in schemaV1Fields; a field lit writes joins that list, so it is never removed either\n%s", field, raw)
+				}
+				if child, ok := v.(map[string]any); ok {
+					walk(field, child)
+				}
+			}
+		}
+		walk("", doc)
+		for _, field := range schemaV1Fields {
+			parent, key := "", field
+			if i := strings.LastIndex(field, "."); i >= 0 {
+				parent, key = field[:i], field[i+1:]
+			}
+			if v, written := values[parent]; parent != "" && (!written || v == nil) {
+				continue // a null or absent parent holds nothing; an absent one fails as its own field
+			}
+			if _, ok := objects[parent][key]; !ok {
+				t.Errorf("%s is missing from the file; lit never removes or renames a field of schema_version 1 (docs/statusline.md, schema_version)\n%s", field, raw)
+			}
+		}
+		if v := doc["schema_version"]; v != float64(1) {
+			t.Errorf("schema_version = %v, want 1: it never changes", v)
+		}
+	}
+}
+
 func TestACommandWithNoFactsWritesNothing(t *testing.T) {
 	loc := testLocation(t)
 	out, err := Write(loc, nil, at)

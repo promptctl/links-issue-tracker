@@ -71,7 +71,7 @@ lifecycle change clears it, as described under
 
 | Field | Type | Meaning |
 |---|---|---|
-| `schema_version` | integer | The version of the file's shape. Currently `1`. |
+| `schema_version` | integer | The version of the file's shape: `1`, which never changes (see [`schema_version`](#schema_version)). |
 | `working_on` | object or `null` | The ticket this checkout is working on. `null` when nothing is recorded. |
 | `working_on.ticket.id` | string | The ticket's id. |
 | `working_on.ticket.title` | string | The ticket's title. |
@@ -179,11 +179,12 @@ matters to you.
 
 ## `schema_version`
 
-`schema_version` changes when a field is removed or a field's meaning changes. It
-does not change when a field is added. A script should check that
-`schema_version` is the version it was written for and ignore fields it does not
-know. A field added later can be missing even at the same `schema_version`,
-because an older lit that rewrites the file drops the fields it does not know.
+`schema_version` is `1` and stays `1`. lit never renames or removes a field and
+never changes what a field means; a new meaning is a new field. So a script
+written against any lit reads the file any other lit writes: it ignores fields it
+does not know, and treats a field it knows but cannot find as not recorded. A
+field added later can still be missing: a lit older than the field never writes
+it, and one that rewrites a newer lit's file drops it.
 
 When lit finds a file it cannot parse, or one with a different
 `schema_version`, it replaces the whole file with what the current command
@@ -215,8 +216,8 @@ library lists three segments:
 
 Place one from cc-candybar's edit mode. Each segment hides while there is
 nothing to show, and shows a warning naming the version when the file's
-`schema_version` is not the one the plugin reads, and says which of lit and
-the plugin to update.
+`schema_version` is not `1`. lit writes no other, and the next `lit next` in
+that checkout replaces the file.
 
 ## A minimal statusline
 
