@@ -478,9 +478,24 @@ reason: "  padded reason  "
 func TestRunImportYAMLRankTopOrdersTheBacklogInOneCall(t *testing.T) {
 	isolateEvents(t)
 	dir := newInitTestRepo(t)
+	// One import seeds the ten epics: a `lit new` per epic would cost this
+	// serial test ten invocations for no behavior it pins.
+	var seed strings.Builder
+	for i := range 10 {
+		fmt.Fprintf(&seed, "---\nlocal_id: e%d\ntitle: epic %d\ntype: epic\ntopic: demo\n", i, i)
+	}
+	seeded := runCLIInDir(t, dir, "import", "--path", writeImportFile(t, "seed.yaml", seed.String()))
 	epics := make([]string, 10)
 	for i := range epics {
-		epics[i] = newEpicInDir(t, dir, fmt.Sprintf("epic %d", i))
+		prefix := fmt.Sprintf("e%d -> ", i)
+		for _, line := range strings.Split(seeded, "\n") {
+			if rest, ok := strings.CutPrefix(strings.TrimSpace(line), prefix); ok {
+				epics[i] = rest
+			}
+		}
+		if epics[i] == "" {
+			t.Fatalf("seed import did not report e%d:\n%s", i, seeded)
+		}
 	}
 	var file strings.Builder
 	var want []string
