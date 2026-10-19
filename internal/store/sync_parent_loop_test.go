@@ -12,10 +12,11 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
-// loopedSyncPair seeds a remote holding a seed epic and a two-epic tree E > F,
-// adopts it on a second clone, and returns both roots, the seed epic's id and
-// the tree. A clone that then stores a loop over E and F holds what an older
-// lit, or a hand edit, could write.
+// loopedSyncPair seeds a remote holding a seed epic and two top-level epics E
+// and F, adopts it on a second clone, and returns both roots, the seed epic's
+// id and the two epics. A clone that then stores a loop over E and F holds what
+// an older lit, or a hand edit, could write; neither edge of that loop is in
+// the shared history, so a cut the lift makes is the only one any landing sees.
 func loopedSyncPair(t *testing.T, ctx context.Context) (rootA, rootB, seedID string, tree []model.Issue) {
 	t.Helper()
 	rootA = migratedDoltDir(t)
@@ -26,7 +27,9 @@ func loopedSyncPair(t *testing.T, ctx context.Context) (rootA, rootB, seedID str
 	if err != nil {
 		t.Fatalf("Open(A): %v", err)
 	}
-	tree = parentChain(t, ctx, st, "E", "F")
+	for _, title := range []string{"E", "F"} {
+		tree = append(tree, parentChain(t, ctx, st, title)[0])
+	}
 	if err := st.Close(); err != nil {
 		t.Fatalf("Close(A): %v", err)
 	}
@@ -35,8 +38,8 @@ func loopedSyncPair(t *testing.T, ctx context.Context) (rootA, rootB, seedID str
 	return rootA, rootB, seedID, tree
 }
 
-// plantLoop stores E under F beside F under E, past the write boundary that
-// refuses it, and commits it, so the loop is in the clone's history.
+// plantLoop stores E under F and F under E, past the write boundary that
+// refuses the second, and commits them, so the loop is in the clone's history.
 func plantLoop(t *testing.T, ctx context.Context, root string, tree []model.Issue) {
 	t.Helper()
 	st, err := Open(ctx, root, "ws")
@@ -44,6 +47,7 @@ func plantLoop(t *testing.T, ctx context.Context, root string, tree []model.Issu
 		t.Fatalf("Open(plant): %v", err)
 	}
 	seedParentEdge(t, ctx, st, tree[0].ID, tree[1].ID)
+	seedParentEdge(t, ctx, st, tree[1].ID, tree[0].ID)
 	if _, err := st.db.ExecContext(ctx, `CALL DOLT_COMMIT('-Am', 'plant a parent loop')`); err != nil {
 		t.Fatalf("commit the planted loop: %v", err)
 	}
