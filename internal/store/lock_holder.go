@@ -165,8 +165,9 @@ func privateNameFor(recordPath string) string {
 }
 
 // lockHolderRecord is what one holder says about itself. It is descriptive
-// only: nothing in this package branches on a record's contents, so a record
-// that is somehow wrong degrades a diagnostic message and can do nothing else.
+// only: no lock decision reads a record's contents (a publisher reading back
+// its own decides only whether that record goes out), so a record that is
+// somehow wrong degrades a diagnostic message and can do nothing else.
 type lockHolderRecord struct {
 	PID     int       `json:"pid"`
 	Command string    `json:"command"`
