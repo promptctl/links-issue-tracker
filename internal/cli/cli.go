@@ -1604,7 +1604,11 @@ func printRankSet(stdout io.Writer, result storage.RankSetResult) error {
 	// verb anchors at the top of the representatives' own frame, so an
 	// unqualified "at top" reads as the head of the backlog when the set was
 	// three children leading one epic. [LAW:no-silent-failure]
-	_, err := fmt.Fprintf(stdout, "ranked %d issues at the top of %s in order: %s\n", len(ranked), frameLabel(result.Frame), strings.Join(ranked, ", "))
+	noun := "issues"
+	if len(ranked) == 1 {
+		noun = "issue"
+	}
+	_, err := fmt.Fprintf(stdout, "ranked %d %s at the top of %s in order: %s\n", len(ranked), noun, frameLabel(result.Frame), strings.Join(ranked, ", "))
 	return err
 }
 

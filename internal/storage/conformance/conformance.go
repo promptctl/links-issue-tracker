@@ -2946,13 +2946,14 @@ func anImportFileThatBreaksARuleIsRefusedWhole(t *testing.T, ctx context.Context
 }
 
 // aBulkFileRefusedAtAWriteAppliesNoUpdate pins the order a bulk file is
-// written in: its creates and their edges first, its updates last. A file the
-// gate admits can still be refused at a write the gate could not judge — a
-// parent or blocked_by naming a real id that names no issue — and the creates
-// before that write are rolled back, but an update cannot be. Written last, an
-// update document ahead of the refused create in the file never lands.
+// written in: its creates and their edges first, then its ordering, its
+// updates last. A file the gate admits can still be refused at a write the
+// gate could not judge — a parent or blocked_by naming a real id that names
+// no issue, or an ordering RankSet refuses — and the creates before that
+// write are rolled back, but an update cannot be. Written last, an update
+// document ahead of the refused write in the file never lands.
 func aBulkFileRefusedAtAWriteAppliesNoUpdate(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	title, topic, epicType, taskType, renamed := "imported", "core", "epic", "task", "renamed"
+	title, topic, epicType, taskType, renamed, top := "imported", "core", "epic", "task", "renamed", "top"
 	for _, file := range []struct {
 		what  string
 		after []storage.BulkIssueSpec // the documents after the update
@@ -2962,6 +2963,9 @@ func aBulkFileRefusedAtAWriteAppliesNoUpdate(t *testing.T, ctx context.Context, 
 		{"an update, then an epic, then a task under a parent that does not exist", []storage.BulkIssueSpec{
 			{LocalID: "e", Title: &title, Topic: &topic, IssueType: &epicType},
 			{Title: &title, Topic: &topic, IssueType: &taskType, Parent: "no-such-issue"}}},
+		{"an update, then an epic and its own task, both rank: top", []storage.BulkIssueSpec{
+			{LocalID: "e", Title: &title, Topic: &topic, IssueType: &epicType, Rank: &top},
+			{Title: &title, Topic: &topic, IssueType: &taskType, Parent: "e", Rank: &top}}},
 	} {
 		// Each file updates an issue of its own, so one file's update landing
 		// fails only that file's case.
@@ -2969,13 +2973,13 @@ func aBulkFileRefusedAtAWriteAppliesNoUpdate(t *testing.T, ctx context.Context, 
 		specs := append([]storage.BulkIssueSpec{{ID: existing.ID, Title: &renamed}}, file.after...)
 		before := mustList(t, ctx, st, storage.ListIssuesFilter{})
 		if _, err := st.BulkApply(ctx, prefix, "ada", specs); err == nil {
-			t.Fatalf("BulkApply(%s) succeeded; want the write naming a missing issue refused", file.what)
+			t.Fatalf("BulkApply(%s) succeeded; want the write it cannot make refused", file.what)
 		}
 		if after := mustList(t, ctx, st, storage.ListIssuesFilter{}); len(after) != len(before) {
 			t.Errorf("BulkApply(%s): live issues = %d, want %d: the creates before the refused write are rolled back", file.what, len(after), len(before))
 		}
 		if got := mustGet(t, ctx, st, existing.ID); got.Title != "existing" {
-			t.Errorf("BulkApply(%s): existing title = %q, want %q: an update is written after every create and edge", file.what, got.Title, "existing")
+			t.Errorf("BulkApply(%s): existing title = %q, want %q: an update is written after every create, edge, and ordering", file.what, got.Title, "existing")
 		}
 	}
 }

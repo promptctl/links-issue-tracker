@@ -98,14 +98,18 @@ type FileRef struct {
 }
 
 // RankedIDs is the file's ordering as the issue ids an engine hands its
-// RankSet, given the id the write minted for each create document by its
-// position. It is empty for a file that states no rank.
-func (f BulkFile) RankedIDs(createdID func(index int) string) []string {
+// RankSet, given created: the id the write minted for each of f.Creates, in
+// that order. It is empty for a file that states no rank.
+func (f BulkFile) RankedIDs(created []string) []string {
+	byIndex := make(map[int]string, len(f.Creates))
+	for pos, create := range f.Creates {
+		byIndex[create.Index] = created[pos]
+	}
 	ids := make([]string, len(f.Ranked))
 	for i, ref := range f.Ranked {
 		ids[i] = ref.id
 		if ref.id == "" {
-			ids[i] = createdID(ref.index)
+			ids[i] = byIndex[ref.index]
 		}
 	}
 	return ids

@@ -388,13 +388,18 @@ func parseBulkSpecs(specs []BulkIssueSpec) (map[int]FileCreate, []BulkUpdate, []
 			// The document states a field exactly when the patch it becomes
 			// does, so the question is asked of that patch; a document that
 			// only ranks its issue is in the ordering and writes no field
-			// change. [LAW:one-source-of-truth]
-			if patch.IsEmpty() && !ranks {
-				return nil, nil, nil, model.ValidationError{Message: fmt.Sprintf("bulk: doc %d (id %q) has no fields to update and no rank", i, spec.ID)}
+			// change, so it has no change event for a reason to annotate.
+			// [LAW:one-source-of-truth] [LAW:no-silent-failure]
+			if patch.IsEmpty() {
+				if !ranks {
+					return nil, nil, nil, model.ValidationError{Message: fmt.Sprintf("bulk: doc %d (id %q) has no fields to update and no rank", i, spec.ID)}
+				}
+				if patch.Reason != "" {
+					return nil, nil, nil, model.ValidationError{Message: fmt.Sprintf("bulk: doc %d (id %q) sets reason but changes no field; reason annotates a field change, and rank writes none", i, spec.ID)}
+				}
+				continue
 			}
-			if !patch.IsEmpty() {
-				updates = append(updates, BulkUpdate{ID: spec.ID, Patch: patch})
-			}
+			updates = append(updates, BulkUpdate{ID: spec.ID, Patch: patch})
 			continue
 		}
 

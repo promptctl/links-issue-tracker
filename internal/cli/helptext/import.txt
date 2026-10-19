@@ -97,12 +97,14 @@ YAML bulk file (creates and updates)
   in file order: the first leads, the next ranks directly below it, and
   so on, exactly as lit rank set <ids in file order> would, and one such
   document alone is lit rank <id> --top. top is the only value. The order
-  is written after every create and update, in one step, so it lands
-  whole or not at all, and a file whose order has already landed changes
-  no rank when it is imported again. An issue ordered against issues
-  outside its epic is ordered by its epic instead, as lit rank set orders
-  it, so a file that ranks two issues of one epic together with an issue
-  outside that epic is refused.
+  is written after every create and before any update, in one step, so it
+  lands whole or not at all, a refused order applies no update, and a
+  file whose order has already landed changes no rank when it is imported
+  again. An issue ordered against issues outside its epic is ordered by
+  its epic instead, as lit rank set orders it, so a file that ranks two
+  issues of one epic together with an issue outside that epic is refused.
+  A document that only ranks writes no field change, so it takes no
+  reason.
 
 Values both formats enforce
 

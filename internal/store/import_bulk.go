@@ -11,13 +11,13 @@ import (
 
 // BulkApply creates or updates every issue named by specs: it creates the
 // file's new issues in the order storage.ParseBulkFile hands back, wires
-// their blocked_by edges, then applies each update document's patch. On any
-// failure mid-batch, BulkApply best-effort rolls back issues it created in
-// this call (never issues it updated — an update has no "prior create" to
-// unwind); updates come after creates and edges, so a failing create or edge
-// leaves no update applied, and the file's ordering comes last, as one
-// RankSet, so it is applied whole or not at all. Run `lit doctor` after a failed batch to detect orphans left if
-// rollback itself failed. [LAW:single-enforcer] one boundary owns ID
+// their blocked_by edges, writes the file's ordering as one RankSet, then
+// applies each update document's patch. On any failure mid-batch, BulkApply
+// best-effort rolls back issues it created in this call (never issues it
+// updated — an update has no "prior create" to unwind); updates come last, so
+// a failing create, edge, or ordering leaves no update applied. Run
+// `lit doctor` after a failed batch to detect orphans left if rollback
+// itself failed. [LAW:single-enforcer] one boundary owns ID
 // resolution; what it writes is the file storage.ParseBulkFile parsed once
 // it judged it.
 func (s *Store) BulkApply(ctx context.Context, prefix, actor string, specs []storage.BulkIssueSpec) (storage.BulkApplyResult, error) {
@@ -36,7 +36,6 @@ func (s *Store) BulkApply(ctx context.Context, prefix, actor string, specs []sto
 
 	result := storage.BulkApplyResult{}
 	createdIDs := make([]string, 0, len(file.Creates))
-	createdByIndex := make(map[int]string, len(file.Creates))
 	localRealID := make(map[string]string, len(file.Creates))
 	for _, create := range file.Creates {
 		issue, err := s.CreateIssue(ctx, create.Input(resolveBulkRef(create.Parent, localRealID), prefix, actor))
@@ -45,7 +44,6 @@ func (s *Store) BulkApply(ctx context.Context, prefix, actor string, specs []sto
 			return storage.BulkApplyResult{}, fmt.Errorf("bulk: create doc %d: %w (rollback leaked %d: %s)", create.Index, err, len(leaked), strings.Join(leaked, ","))
 		}
 		createdIDs = append(createdIDs, issue.ID)
-		createdByIndex[create.Index] = issue.ID
 		if create.LocalID != "" {
 			localRealID[create.LocalID] = issue.ID
 		}
@@ -59,6 +57,12 @@ func (s *Store) BulkApply(ctx context.Context, prefix, actor string, specs []sto
 			}
 		}
 	}
+	if ranked := file.RankedIDs(createdIDs); len(ranked) > 0 {
+		if result.Ranked, err = s.RankSet(ctx, ranked); err != nil {
+			leaked := s.rollbackCreatedIssues(ctx, actor, createdIDs)
+			return storage.BulkApplyResult{}, fmt.Errorf("bulk: rank: %w (rollback leaked %d: %s)", err, len(leaked), strings.Join(leaked, ","))
+		}
+	}
 	for _, update := range file.Updates {
 		applied, err := s.Apply(ctx, update.ID, storage.Change{Actor: actor, Fields: update.Patch})
 		if err != nil {
@@ -66,12 +70,6 @@ func (s *Store) BulkApply(ctx context.Context, prefix, actor string, specs []sto
 			return storage.BulkApplyResult{}, fmt.Errorf("bulk: update %q: %w (rollback leaked %d: %s)", update.ID, err, len(leaked), strings.Join(leaked, ","))
 		}
 		result.Updated = append(result.Updated, applied.Issue.ID)
-	}
-	if ranked := file.RankedIDs(func(index int) string { return createdByIndex[index] }); len(ranked) > 0 {
-		if result.Ranked, err = s.RankSet(ctx, ranked); err != nil {
-			leaked := s.rollbackCreatedIssues(ctx, actor, createdIDs)
-			return storage.BulkApplyResult{}, fmt.Errorf("bulk: rank: %w (rollback leaked %d: %s)", err, len(leaked), strings.Join(leaked, ","))
-		}
 	}
 	return result, nil
 }

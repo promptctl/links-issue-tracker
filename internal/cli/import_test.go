@@ -494,12 +494,7 @@ func TestRunImportYAMLRankTopOrdersTheBacklogInOneCall(t *testing.T) {
 	if line := "ranked 10 issues at the top of the backlog in order: " + strings.Join(want, ", "); !strings.Contains(out, line) {
 		t.Errorf("import output lacks %q:\n%s", line, out)
 	}
-	facts := writtenFacts(t, lastEvent(t))
-	for fact, value := range map[string]string{"import.created": "0", "import.updated": "0", "import.ranked": "10"} {
-		if got := fmt.Sprint(facts[fact]); got != value {
-			t.Errorf("event fact %s = %v, want %s", fact, got, value)
-		}
-	}
+	assertFacts(t, map[string]string{"import.created": "0", "import.updated": "0", "import.ranked": "10"})
 
 	// Childless epics are no one's work, so lit backlog leaves them out; lit
 	// ls lists every issue in the same rank order.
@@ -511,5 +506,37 @@ func TestRunImportYAMLRankTopOrdersTheBacklogInOneCall(t *testing.T) {
 			t.Fatalf("lit ls does not list %v in file order (%s at %d, after %d):\n%s", want, id, next, at, listing)
 		}
 		at = next
+	}
+}
+
+// The invocation's event counts what each import format wrote — a YAML file
+// that creates, updates and ranks one issue each, and a JSON tree that creates
+// two — and a file whose order names one issue reports it in the singular.
+func TestRunImportEventCountsWhatTheFileWrote(t *testing.T) {
+	isolateEvents(t)
+	dir := newInitTestRepo(t)
+	epic := newEpicInDir(t, dir, "home")
+	yaml := writeImportFile(t, "mixed.yaml", fmt.Sprintf("title: fresh\ntype: task\ntopic: demo\nparent: %s\nrank: top\n---\nid: %s\ntitle: home, renamed\n", epic, epic))
+	out := runCLIInDir(t, dir, "import", "--path", yaml)
+	if line := "ranked 1 issue at the top of " + epic + " in order: "; !strings.Contains(out, line) {
+		t.Errorf("import output lacks %q:\n%s", line, out)
+	}
+	assertFacts(t, map[string]string{"import.created": "1", "import.updated": "1", "import.ranked": "1"})
+
+	tree := writeImportFile(t, "tree.json", `[
+		{"local_id":"e1","title":"Epic","type":"epic","topic":"demo","priority":0},
+		{"local_id":"t1","title":"Child","type":"task","topic":"demo","priority":0,"parent":"e1"}
+	]`)
+	runCLIInDir(t, dir, "import", "--path", tree)
+	assertFacts(t, map[string]string{"import.created": "2"})
+}
+
+func assertFacts(t *testing.T, want map[string]string) {
+	t.Helper()
+	facts := writtenFacts(t, lastEvent(t))
+	for fact, value := range want {
+		if got := fmt.Sprint(facts[fact]); got != value {
+			t.Errorf("event fact %s = %v, want %s", fact, got, value)
+		}
 	}
 }
