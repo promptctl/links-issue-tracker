@@ -927,13 +927,18 @@ there (`tar -xzf` or `unzip -q`), appends its `bin/` to `$GITHUB_PATH`, then run
   `mingw-w64-ucrt-x86_64-gcc` and `mingw-w64-ucrt-x86_64-icu` for cgo) → install-dolt →
   install-claude → `go build ./cmd/lit` →
   `go test -short -timeout 30m ./cmd/... ./internal/...`, both with `CGO_ENABLED: '1'`.
-- Job `report`, `needs: [full-suite, windows]`,
-  `if: ${{ always() && (needs.full-suite.result != 'success' || needs.windows.result != 'success') && github.ref == 'refs/heads/master' }}`
+- Job `report`, `needs: full-suite`,
+  `if: ${{ always() && needs.full-suite.result != 'success' && github.ref == 'refs/heads/master' }}`
   (a job timeout is reported as cancelled, so the condition reads the result, not
   `failure()`; a run on any other ref files nothing),
   `permissions: contents: write`, `timeout-minutes: 15`. Steps: checkout
   (`persist-credentials: false`) → `./.github/actions/report-to-lit` with label
-  `nightly-failure` and title `Nightly test lanes are failing` (§11.8).
+  `nightly-failure` and title `Nightly full test lane is failing` (§11.8).
+- Job `report-windows`, `needs: windows`,
+  `if: ${{ always() && needs.windows.result != 'success' && github.ref == 'refs/heads/master' }}`,
+  otherwise shaped as `report`, with label `nightly-windows-failure` and title
+  `Nightly Windows test lane is failing`. A label per lane keeps one lane's open
+  ticket from absorbing the other lane's red runs as `Red again` comments.
 
 ### 11.4 `.github/workflows/license-graph-audit.yml` — "License graph audit"
 

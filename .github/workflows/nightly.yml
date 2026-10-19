@@ -120,15 +120,17 @@ jobs:
           CGO_ENABLED: '1'
         run: go test -short -timeout 30m ./cmd/... ./internal/...
 
-  # Its own job, so the suites never run holding the write token the report
-  # needs. One report for both lanes: one alarm ticket collects them, and two
-  # reports in one run would race each other's push to the store. `result != 'success'` covers failure, cancellation, and the
+  # Each lane reports in its own job, so no suite runs holding the write token
+  # a report needs. Each lane has its own alarm label too: one lane's open
+  # ticket must not absorb the other lane's red runs as "Red again" comments,
+  # or a Linux regression would hide behind a Windows red that is already
+  # known. `result != 'success'` covers failure, cancellation, and the
   # job-level timeout, which GitHub reports as cancelled. [LAW:no-silent-failure]
   # Only master's runs report: the backlog is master's, and a run dispatched
   # on a branch is red in front of the session that dispatched it.
   report:
-    needs: [full-suite, windows]
-    if: ${{ always() && (needs.full-suite.result != 'success' || needs.windows.result != 'success') && github.ref == 'refs/heads/master' }}
+    needs: full-suite
+    if: ${{ always() && needs.full-suite.result != 'success' && github.ref == 'refs/heads/master' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -140,7 +142,26 @@ jobs:
       - uses: ./.github/actions/report-to-lit
         with:
           label: nightly-failure
-          title: Nightly test lanes are failing
+          title: Nightly full test lane is failing
           token: ${{ github.token }}
           body: |
-            A step in a nightly job failed, or the job was cancelled (a job that hits its 60-minute timeout also reports cancelled); the run log names which job, which step and why. `full-suite` runs everything the PR gate's `-short` skips, plus the law-token upstream check; `windows` runs the shipped packages' tests on Windows, the one place a Windows-only regression shows. Triage it, do not mute it.
+            A step in the nightly full-suite job failed, or the job was cancelled (a job that hits its 60-minute timeout also reports cancelled); the run log names which step and why. This lane runs everything the PR gate's `-short` skips, plus the law-token upstream check: triage it, do not mute it.
+
+  report-windows:
+    needs: windows
+    if: ${{ always() && needs.windows.result != 'success' && github.ref == 'refs/heads/master' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/report-to-lit
+        with:
+          label: nightly-windows-failure
+          title: Nightly Windows test lane is failing
+          token: ${{ github.token }}
+          body: |
+            A step in the nightly windows job failed, or the job was cancelled (a job that hits its 60-minute timeout also reports cancelled); the run log names which step and why. This lane is the only place lit's tests run on Windows, a release target, so a failure here is a Windows-only regression no other lane can show: triage it, do not mute it.
