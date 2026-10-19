@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# start-reviewer <ticket-id> - run from the ticket's repository.
+#
+# Starts the plan reviewer as its own interactive Claude Code session in a
+# detached tmux session, types its instruction into the input, waits for the
+# reviewer's turn to end, prints its reply and the verdict lit recorded for it,
+# and closes the session. Needs tmux, claude and jq. Exit 0: a verdict is recorded. Exit 1: it is not.
+#
+# Never Claude Code's print mode (-p): the owner banned it. Anything that asks Claude Code
+# something types into an interactive session's input, as a person would.
+set -euo pipefail
+
+[[ $# -eq 1 ]] || { echo "usage: start-reviewer <ticket-id>" >&2; exit 2; }
+ID=$1
+SKILL_DIR=$(cd "$(dirname "$0")" && pwd -P)
+REPO=$(pwd -P)
+CLAUDE=$(command -v claude)
+
+# lit names a Claude session's actor after CLAUDE_CODE_SESSION_ID, so choosing
+# the reviewer's session id here is what lets this script find its verdict.
+SESSION_ID=$(uuidgen | tr '[:upper:]' '[:lower:]')
+ACTOR=claude_$SESSION_ID
+TMUX_SESSION=lit-review-${SESSION_ID:0:8}
+WORK=$(mktemp -d)
+STOPPED=$WORK/stopped
+
+alive() { tmux has-session -t "=$TMUX_SESSION" 2>/dev/null; }
+cleanup() {
+  if alive; then tmux kill-session -t "=$TMUX_SESSION"; fi
+  rm -rf "$WORK"
+}
+trap cleanup EXIT
+
+screen() { tmux capture-pane -p -J -S - -t "=$TMUX_SESSION:"; }
+fail() { echo "start-reviewer: $1; the reviewer's screen:" >&2; screen >&2; exit 1; }
+
+# The Stop hook is the reviewer's own signal that its turn has ended; its
+# input carries the reply, as last_assistant_message.
+printf '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"cat > %s"}]}]}}\n' \
+  "$STOPPED" >"$WORK/settings.json"
+
+# The reviewer is restricted the same way whatever it is asked: no Edit or
+# Write tool, and dontAsk refuses every command not pre-approved here or in the
+# user's own settings, which stay loaded because they enable the laws plugin.
+env_args=(-e "PATH=$PATH")
+[[ -n ${CLAUDE_CONFIG_DIR:-} ]] && env_args+=(-e "CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR")
+tmux new-session -d -s "$TMUX_SESSION" -c "$REPO" -x 200 -y 50 "${env_args[@]}" -- \
+  "$CLAUDE" --session-id "$SESSION_ID" \
+  --settings "$WORK/settings.json" \
+  --add-dir "$SKILL_DIR" \
+  --tools Read Grep Glob Skill Bash \
+  --permission-mode dontAsk \
+  --allowedTools Read Grep Glob Skill \
+  "Bash(lit show:*)" "Bash(lit ls:*)" "Bash(lit history:*)" \
+  "Bash(lit verdict:*)" "Bash(lit comment add:*)" \
+  "Bash(git log:*)" "Bash(git show:*)"
+echo "start-reviewer: reviewer $ACTOR in tmux session $TMUX_SESSION" >&2
+
+# Wait for the state each step needs, never for a guessed delay.
+until_screen() { # <pattern> <seconds> <what failed>
+  local deadline=$((SECONDS + $2))
+  while ! screen | grep -qF -- "$1"; do
+    alive || { echo "start-reviewer: claude exited: $3" >&2; exit 1; }
+    ((SECONDS < deadline)) || fail "$3"
+    sleep 1
+  done
+}
+
+# The footer naming the permission mode is drawn only on the main screen, not
+# behind a startup dialog, and it shows dontAsk took effect.
+until_screen "don't ask on" 90 "claude's input was not ready in dontAsk mode within 90s"
+LINE="Read $SKILL_DIR/reviewer.md and follow it. Ticket: $ID"
+tmux send-keys -t "=$TMUX_SESSION:" -l "$LINE"
+until_screen "Ticket: $ID" 30 "the instruction did not appear in claude's input"
+# Only a turn that ends after this Enter is the review.
+rm -f "$STOPPED"
+tmux send-keys -t "=$TMUX_SESSION:" Enter
+
+deadline=$((SECONDS + 45 * 60))
+until [[ -e $STOPPED ]]; do
+  alive || { echo "start-reviewer: claude exited before its turn ended" >&2; exit 1; }
+  ((SECONDS < deadline)) || fail "the review did not end within 45 minutes"
+  sleep 5
+done
+
+jq -r .last_assistant_message "$STOPPED"
+echo "--- lit show $ID, lines by the reviewer $ACTOR:"
+shown=$(lit show "$ID")
+grep -F "[$ACTOR" <<<"$shown" || { echo "(none: no verdict was recorded)"; exit 1; }
