@@ -10,7 +10,7 @@
 // Each case is a checkout as some lit leaves it. statusline.Write records the
 // case's facts in the checkout's file, as every lit command does, and
 // `cc-candybar plugin install` installs the definition this repository ships
-// at .cc-candybar/plugins/lit/, as a user installs it. Each render runs under a
+// at .cc-candybar/plugins/lit/, from this checkout's working tree. Each render runs under a
 // HOME and XDG dirs of its own, so nothing else on the machine reaches the bar.
 //
 // Every case prints one line on stdout, whatever its verdict, and the run ends

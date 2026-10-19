@@ -8,7 +8,7 @@ import (
 )
 
 // Every variable that selects a lit code path on one machine and not another
-// is removed, the config, state and data homes are the run's own, and everything
+// is removed, the config and state homes are the run's own, and everything
 // else — PATH, the cgo library paths — survives untouched.
 func TestHermeticEnvStripsExactlyWhatMovesLit(t *testing.T) {
 	in := []string{

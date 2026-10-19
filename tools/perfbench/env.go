@@ -30,7 +30,7 @@ import "strings"
 // Pure — a function of the environment it is handed — so what it strips is
 // testable without a process. [LAW:effects-at-boundaries]
 func hermeticEnv(environ []string, configHome, stateHome string) []string {
-	out := make([]string, 0, len(environ)+3)
+	out := make([]string, 0, len(environ)+2)
 	for _, kv := range environ {
 		key, _, _ := strings.Cut(kv, "=")
 		if key == "XDG_CONFIG_HOME" || key == "XDG_STATE_HOME" || key == "CLAUDE_CODE_SESSION_ID" || strings.HasPrefix(key, "LIT_") {

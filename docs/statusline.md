@@ -213,8 +213,8 @@ library lists three segments:
 
 Place one from cc-candybar's edit mode. Each segment hides while there is
 nothing to show, and shows a warning naming the version when the file's
-`schema_version` is not the one the plugin reads: update whichever of lit
-and the plugin is older.
+`schema_version` is not the one the plugin reads, and says which of lit and
+the plugin to update.
 
 ## A minimal statusline
 
