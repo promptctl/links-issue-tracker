@@ -268,7 +268,7 @@ A could-not-attempt error is traced as `lit sync push`/`error` and returned (`sy
    - Push error nil, `result.Superseded` empty and `result.AfterPush` empty ⇒ `provePushedAdvertisement(proofCtx, session.syncer, ws, remote, target.gitRemotes)` (`sync_receive_ask.go`) under `pushProofDeadline` (10s) off `completionCtx`: the receive's remote (`resolveSyncRemote("", UpstreamRemote, gitRemotes)`) must be the pushed remote, else unproven `pushed remote %q is not the remote the automatic receive asks (%q)`; then `advertise` (the same `RemoteDoltRefs` round trip `askRemote` makes) and `syncer.SyncRemoteMirrorHolds(ctx, remote, advertisement.commits())`, not held ⇒ unproven `the store's git mirror does not hold every commit the remote advertises`, any error ⇒ unproven with the error's text. Metadata key `advertisement` = `proven` or `unproven: <reason>`; the advertisement travels on the outcome as `proven` (zero when unproven). `lit sync push` then calls `recordPushedAdvertisement` (`store.WriteReceivedRefs`; stderr `lit: received-refs marker not written: <err>`; the zero advertisement writes nothing).
 5. Metadata via `syncPushTraceMetadata` (`sync.go`): `{remote, sync_branch}` plus `message` (trimmed `result.Message`), `maintenance` (trimmed `result.Maintenance`), `head` (trimmed `result.Head`), `superseded` (trimmed `result.Superseded`), `after_push` (trimmed `result.AfterPush`), `error` (pushErr) when non-empty.
 6. Automation trace (only when `LNKS_AUTOMATION_TRIGGER` is set) with command `formatCommand(["sync","push","--remote",r("--set-upstream")("--force")])`, side effect `"mirror Dolt data to the configured git remote"`, status `ok|error`, reason `"managed automation requested sync push"` or the push error (`sync.go`).
-7. Durable sync trace, unconditional: decision `pushed` or `error`, reason empty or the push error (`sync.go`).
+7. Durable sync trace, unconditional: decision and reason from `classifyPushOutcome(outcome, nil)` (§3.8), the ones the push-outcome marker records (`sync.go`).
 
 Push outcome (`syncPushOutcome`, `sync.go`): `{skip, remote, branch, message, maintenance, head, proven, traceErr, pushErr}` — `skip` is the `syncTargetSkip` from `resolveSyncTarget`; `message` is the engine's verbatim push output.
 
@@ -505,17 +505,17 @@ Flag parse output is `io.Discard` (`sync_bg.go`).
 
 ### 3.8 Push-outcome marker (`sync_push_outcome.go`)
 
-- Decisions: `pushed`, `error`, `canceled`, `workspace_busy` (`sync_push_outcome.go`), plus the skip reasons `no_sync_remote` / `remote_empty` carried through from `syncPushOutcome.skip`.
+- Decisions: `pushed`, `error`, `canceled`, `workspace_busy`, `diverged` (`sync_push_outcome.go`), plus the skip reasons `no_sync_remote` / `remote_empty` carried through from `syncPushOutcome.skip`.
 - Record JSON: `{decision, reason?, remote?, branch?, observed_by?}` (`sync_push_outcome.go`); marker `<StorageDir>/push-outcome.last` (`sync_push_outcome.go`); mtime = attempt completion time.
 - `failed()` is `Decision == "error"` only (`sync_push_outcome.go`).
 - `pushOutcomeOf(outcome, err, observedBy)` — `sync_push_outcome.go`: stamps `observed_by` on the record `classifyPushOutcome` derives, in order:
   1. `context.Canceled` in `err` or `outcome.pushErr` → `canceled` with the first non-nil error's text, plus remote/branch.
   2. `store.ErrWorkspaceBusy` in `err` → `workspace_busy` with err text (no remote/branch).
   3. any other `err` → `error` with err text.
-  4. `outcome.pushErr != nil` → `error` with its text plus remote/branch.
+  4. `outcome.pushErr != nil` → `pushFailureDecision(outcome.pushErr)` (`diverged` when it holds `storage.ErrPushDiverged`, otherwise `error`) with its text plus remote/branch.
   5. `outcome.skip != syncTargetReady` → decision = `string(outcome.skip)`, remote only.
   6. default → `pushed` with remote/branch.
-- `completePushAttempt` — `sync_push_outcome.go`: derives the record, writes it, and feeds `observePushOutcomeForOwner`.
+- `completePushAttempt` — `sync_push_outcome.go`: derives the record, appends it to the event's `push.outcomes` list as `{push.decision, push.reason, push.remote, push.branch}`, writes it, and feeds `observePushOutcomeForOwner`.
 - `recordPushOutcome` — `sync_push_outcome.go`: atomic temp-and-rename write of the JSON plus a newline; failure → stderr `lit: push-outcome marker not written: <err>`, never returned.
 - `lastPushOutcome` — `sync_push_outcome.go`: missing marker → `ok=false` silently; other stat/read failure → stderr `lit: push-outcome marker unreadable: <err>`; bad JSON → stderr `lit: push-outcome marker corrupt: <err>`; returns record + age from mtime.
 

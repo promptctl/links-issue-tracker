@@ -116,7 +116,8 @@ func TestAPushRecordsTheAdvertisementItLeft(t *testing.T) {
 		if err != nil {
 			t.Fatalf("open consumer sync session: %v", err)
 		}
-		outcome, err := performSyncPush(context.Background(), context.Background(), session, resolved, "", false, false, pushStep(tc.superseded))
+		ctx := underInvocation(context.Background())
+		outcome, err := performSyncPush(ctx, ctx, session, resolved, "", false, false, pushStep(tc.superseded))
 		if closeErr := closeStore(); closeErr != nil {
 			t.Fatalf("close consumer sync session: %v", closeErr)
 		}

@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -206,6 +207,21 @@ func TestObservePushOutcomeForOwner(t *testing.T) {
 	observePushOutcomeForOwner(ctx, ws, cancelled)
 	if payload, _ := os.ReadFile(sink); strings.Count(string(payload), "push_failed") != 1 {
 		t.Fatalf("a cancelled push notified the owner: %q", payload)
+	}
+
+	// A push refused over a peer's commits neither notifies nor ends a live
+	// episode: the channel is not broken, and it has not been shown healthy.
+	observePushOutcomeForOwner(ctx, ws, failed)
+	diverged := pushOutcomeOf(syncPushOutcome{remote: "origin", branch: "master", pushErr: fmt.Errorf("%w: rejected", storage.ErrPushDiverged)}, nil, "")
+	if diverged.Decision != pushDecisionDiverged || diverged.failed() {
+		t.Fatalf("pushOutcomeOf(diverged) = %+v, want the non-failed diverged decision", diverged)
+	}
+	observePushOutcomeForOwner(ctx, ws, diverged)
+	if payload, _ := os.ReadFile(sink); strings.Count(string(payload), "push_failed") != 2 {
+		t.Fatalf("want the second failure's one notification and none for the diverged push: %q", payload)
+	}
+	if _, err := os.Stat(ownerNotifyMarkerPath(ws, ownerNotifyPushFailed)); err != nil {
+		t.Fatalf("a diverged push ended the live failure episode: %v", err)
 	}
 }
 

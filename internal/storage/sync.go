@@ -1,10 +1,19 @@
 package storage
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/promptctl/links-issue-tracker/internal/merge"
 )
+
+// ErrPushDiverged marks a refused push whose branch and remote each hold
+// commits the other lacks. No plain push lands over that, whatever else the
+// remote said: a peer pushed first, and this checkout has to merge the
+// remote's commits (the background receive, or `lit sync pull`) before its
+// next push can land. Every push method of Syncer returns an unforced push's
+// refusal that stands in that state wrapped in it.
+var ErrPushDiverged = errors.New("the remote and this checkout each hold commits the other lacks; the remote's must be merged before a push can land")
 
 // This file is the vocabulary the sync and reconcile capabilities speak. It
 // lives beside the contract rather than inside an engine because a capability

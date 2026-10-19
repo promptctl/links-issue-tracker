@@ -161,7 +161,7 @@ Timing constants (`sync_bg.go`): the parent's post-spawn tail is 45s (the compac
 
 ### Push-outcome marker
 
-Every push attempt — explicit or mirrored — completes through `completePushAttempt`, which derives a record `{decision, reason?, remote?, branch?}` and atomically writes `<StorageDir>/push-outcome.last` (`sync_push_outcome.go`). Decisions: `pushed`, `error`, `canceled` (context canceled), `workspace_busy`, or a skip reason (`no_sync_remote`/`remote_empty`). Only `error` counts as failed. The record also feeds owner notification (below). Marker read/write failures are stderr-only, never returned.
+Every push attempt — explicit or mirrored — completes through `completePushAttempt`, which derives a record `{decision, reason?, remote?, branch?}` and atomically writes `<StorageDir>/push-outcome.last` (`sync_push_outcome.go`). Decisions: `pushed`, `error`, `canceled` (context canceled), `workspace_busy`, `diverged` (refused while the branch and the remote each hold commits the other lacks), or a skip reason (`no_sync_remote`/`remote_empty`). Only `error` counts as failed. The record also feeds owner notification (below), the push's durable sync trace (the same decision), and the event's `push.outcomes` list. Marker read/write failures are stderr-only, never returned.
 
 ### Staleness banners
 

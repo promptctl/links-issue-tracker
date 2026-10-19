@@ -793,7 +793,10 @@ func (s *Store) pushMutation(ctx context.Context, remote string, branch string, 
 // branch, the refusal was the re-root's and the follow removed it, so the
 // push runs once more, as a plain push, and that push's outcome is the
 // result. Otherwise the refusal stands, returned as pushErr with the fetch
-// already run, so a caller judging it reads the remote as it stands now.
+// already run, so a caller judging it reads the remote as it stands now. A
+// refusal that stands, the first push's or the retry's, comes back judged by
+// judgeStandingRefusal: every push step's refusal passes through here, so one
+// judgment covers them all. [LAW:single-enforcer]
 // followErr is a fetch or follow that failed, beside the refusal it could not
 // explain, for the caller to word; followed is the follow's record, zero when
 // the branch did not move, for the caller's maintenance account. Every other
@@ -814,11 +817,45 @@ func (s *Store) retryPushAfterFollow(ctx context.Context, remote, branch string,
 		return storage.SyncPushResult{}, pushErr, storage.FollowedReRoot{}, err
 	}
 	followed, err := s.followRemoteReRoot(ctx, remote, trimmedBranch, storage.SyncEntryPush)
-	if err != nil || followed.Head == "" {
+	if err != nil {
 		return storage.SyncPushResult{}, pushErr, followed, err
 	}
-	result, pushErr = s.pushMutation(ctx, remote, trimmedBranch, setUpstream, force)
-	return result, pushErr, followed, nil
+	if followed.Head != "" {
+		result, pushErr = s.pushMutation(ctx, remote, trimmedBranch, setUpstream, force)
+		if !errors.As(pushErr, &refusal) {
+			return result, pushErr, followed, nil
+		}
+		// The retry was refused over a remote that moved after the first
+		// fetch, so its judgment reads the remote as it stands now too.
+		if err := s.SyncFetch(ctx, remote, false); err != nil {
+			return storage.SyncPushResult{}, unjudgedRefusal(pushErr, err), followed, nil
+		}
+	}
+	return storage.SyncPushResult{}, s.judgeStandingRefusal(ctx, remote, trimmedBranch, force, pushErr), followed, nil
+}
+
+// judgeStandingRefusal is a refusal that stands, after its fetch, wrapped in
+// storage.ErrPushDiverged when the branch and the remote each hold commits
+// the other lacks. A forced push is never refused over divergence, which it
+// overwrites, so its refusal is returned as it came.
+func (s *Store) judgeStandingRefusal(ctx context.Context, remote, branch string, force bool, refusal error) error {
+	if force {
+		return refusal
+	}
+	fresh, err := s.SyncFreshness(ctx, remote, branch)
+	if err != nil {
+		return unjudgedRefusal(refusal, err)
+	}
+	if fresh.State() == storage.SyncDiverged {
+		return fmt.Errorf("%w: %w", storage.ErrPushDiverged, refusal)
+	}
+	return refusal
+}
+
+// unjudgedRefusal is a refusal whose divergence could not be read, still a
+// pushRefusedError for every caller that judges it further.
+func unjudgedRefusal(refusal, readErr error) error {
+	return fmt.Errorf("%w (and whether the branch diverged from the remote could not be read: %w)", refusal, readErr)
 }
 
 // SyncCompactAndPush compacts then pushes under one commit-lock acquisition, so

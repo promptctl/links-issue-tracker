@@ -9,7 +9,9 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/version"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
@@ -39,14 +41,19 @@ func firstError(errs ...error) error {
 // reconcile or import — this repo's own prescribed serialized workflow) are
 // endings of THIS attempt, not evidence the push channel is degraded, and
 // recording them as "error" pages the owner and banners every later command
-// over a healthy workspace whose next attempt pushes fine. The class is
-// decided once here, from the error values, for both consumers.
+// over a healthy workspace whose next attempt pushes fine. "diverged" is the
+// same kind of ending: the remote refused the push because a peer pushed
+// first (storage.ErrPushDiverged), and the receive's merge is what lets the
+// next push land. A receive that cannot merge surfaces its own sync-failure
+// class to the owner. The class is decided once here, from the error values,
+// for every consumer: the marker, the owner page and the sync trace.
 // [LAW:parse-dont-validate]
 const (
 	pushDecisionPushed        = "pushed"
 	pushDecisionError         = "error"
 	pushDecisionCanceled      = "canceled"
 	pushDecisionWorkspaceBusy = "workspace_busy"
+	pushDecisionDiverged      = "diverged"
 )
 
 // pushOutcomeRecord is how the last completed push attempt ended — the cheap,
@@ -72,8 +79,9 @@ type pushOutcomeRecord struct {
 
 // failed reports whether the record describes a push attempt that did not
 // land — the one condition the staleness banner warns on. Skip decisions
-// (no remote, empty remote), a deliberate cancellation, and a legitimately
-// busy workspace are healthy or self-resolving states, not failures, and an
+// (no remote, empty remote), a deliberate cancellation, a legitimately busy
+// workspace and a push refused over a peer's commits awaiting the receive's
+// merge are healthy or self-resolving states, not failures, and an
 // unknown decision written by a newer binary is deliberately not treated as
 // one.
 func (r pushOutcomeRecord) failed() bool {
@@ -121,7 +129,7 @@ func classifyPushOutcome(outcome syncPushOutcome, err error) pushOutcomeRecord {
 		return pushOutcomeRecord{Decision: pushDecisionError, Reason: err.Error()}
 	case outcome.pushErr != nil:
 		return pushOutcomeRecord{
-			Decision: pushDecisionError,
+			Decision: pushFailureDecision(outcome.pushErr),
 			Reason:   outcome.pushErr.Error(),
 			Remote:   outcome.remote,
 			Branch:   outcome.branch,
@@ -137,6 +145,16 @@ func classifyPushOutcome(outcome syncPushOutcome, err error) pushOutcomeRecord {
 	}
 }
 
+// pushFailureDecision is the decision a push that ran and did not land ended
+// in: diverged when the remote refused it over a peer's commits, error for
+// every other failure.
+func pushFailureDecision(pushErr error) string {
+	if errors.Is(pushErr, storage.ErrPushDiverged) {
+		return pushDecisionDiverged
+	}
+	return pushDecisionError
+}
+
 // completePushAttempt is the one completion seam for how a push attempt ended
 // — the attempt that ran (performSyncPush's deferred call, any outcome) and
 // the attempt that could not start (a mirror dying before its engine opened, a
@@ -144,11 +162,24 @@ func classifyPushOutcome(outcome syncPushOutcome, err error) pushOutcomeRecord {
 // push-outcome marker and the owner's out-of-band channel are always fed the
 // same record and can never disagree about the same attempt.
 // [LAW:single-enforcer] Callers construct nothing themselves: the record is
-// derived once, from the same two values, for every producer.
+// derived once, from the same two values, for every producer. The record also
+// lands on the invocation's event, one value per attempt on push.outcomes.
+// [LAW:nothing-unseen]
 func completePushAttempt(ctx context.Context, ws workspace.Info, outcome syncPushOutcome, attemptErr error) {
 	rec := pushOutcomeOf(outcome, attemptErr, runningBinaryVersion())
+	telemetry.Append(ctx, "push.outcomes", rec.eventValue())
 	recordPushOutcome(ws, rec)
 	observePushOutcomeForOwner(ctx, ws, rec)
+}
+
+// eventValue is the record as one value of the event's push.outcomes list.
+func (r pushOutcomeRecord) eventValue() map[string]any {
+	return map[string]any{
+		"push.decision": r.Decision,
+		"push.reason":   r.Reason,
+		"push.remote":   r.Remote,
+		"push.branch":   r.Branch,
+	}
 }
 
 // recordPushOutcome writes the marker atomically (writeMarkerAtomic: an explicit
