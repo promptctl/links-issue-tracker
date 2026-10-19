@@ -442,11 +442,11 @@ func TestARemoteHoldingATagKeepsEveryBranch(t *testing.T) {
 	}
 }
 
-// TestARemoteOpensForEachGCItRuns opens a file:// remote's database for the
-// GC twice in one process, as a checkout following two re-roots does. Each
-// open is the caller's own handle: closing the first leaves nothing the second
-// is handed.
-func TestARemoteOpensForEachGCItRuns(t *testing.T) {
+// TestEachOpenOfARemoteIsItsCallersOwn opens a remote's database twice in one
+// process through openRemoteDB, the open every remote GC runs, as a checkout
+// following two re-roots does. Each open is the caller's own handle: closing
+// the first leaves nothing the second is handed.
+func TestEachOpenOfARemoteIsItsCallersOwn(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()

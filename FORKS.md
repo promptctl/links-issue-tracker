@@ -15,7 +15,7 @@ one below carries the condition that would let it be deleted.
 
 | Module in `go.mod` | Upstream | What `lit` builds | Branch | Current pin |
 | --- | --- | --- | --- | --- |
-| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20261019140221-16ea880f8fde` |
+| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20261019145047-52672bfb864e` |
 | `github.com/dolthub/go-mysql-server` | [dolthub/go-mysql-server](https://github.com/dolthub/go-mysql-server) | [promptctl/go-mysql-server](https://github.com/promptctl/go-mysql-server) | `lit` | `v0.20.1-0.20260821032251-ab5cb9ec3b69` |
 | `github.com/dolthub/driver` | [dolthub/driver](https://github.com/dolthub/driver) | [`internal/vendor/dolthub-driver`](internal/vendor/dolthub-driver) | — | `v0.2.1-0.20260314000741-0fe74e7ee31a` |
 
@@ -357,9 +357,14 @@ nothing under that remote's directory could be removed: 79 `internal/store`
 tests still held a remote's files when their TempDir was removed
 (`links-windows-qr8l.7na`). The provider now caches every remote it hands
 out, opened past the singleton map, so its `Close` releases them all and the
-git-only branch is gone. `DOLT_CLONE`'s source is opened the same way and
-closed when the clone returns, as patch 7 closes fetch's and pull's — for a
-git-backed source that also retires the blobstore's UUID refs.
+git-only branch is gone. `DOLT_CLONE`'s source is opened and closed as
+patch 7's fetch and pull open and close theirs: through
+`GetRemoteDBWithoutCaching`, past the singleton map and with remotestorage's
+chunk cache off, and closed by `dprocedures.CloseRemoteDB` when the clone
+returns, which logs a failed close instead of failing a clone that has
+landed. For a git-backed source the close also retires the blobstore's UUID
+refs. The clone also returns the error from writing its branch config, which
+upstream overwrote with `registerNewDatabase`'s.
 `internal/store/remote_handles_test.go` fails without the patch.
 
 **Retire it when** upstream closes the remote a push or a clone opens without

@@ -1,6 +1,8 @@
 package store
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
@@ -17,10 +19,15 @@ func openFiles(t *testing.T) []string {
 	}
 	paths := make([]string, 0, len(entries))
 	for _, e := range entries {
-		// An fd closed between ReadDir and Readlink (the ReadDir's own among
-		// them) is no longer open, so it has no path to report.
-		if p, err := os.Readlink(filepath.Join(fdDir, e.Name())); err == nil {
+		p, err := os.Readlink(filepath.Join(fdDir, e.Name()))
+		switch {
+		case err == nil:
 			paths = append(paths, p)
+		case errors.Is(err, fs.ErrNotExist):
+			// An fd closed between ReadDir and Readlink (the ReadDir's own
+			// among them) is no longer open, so it has no path to report.
+		default:
+			t.Fatalf("read %s: %v", e.Name(), err)
 		}
 	}
 	return paths
