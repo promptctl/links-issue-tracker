@@ -85,13 +85,6 @@ jobs:
       run:
         shell: msys2 {0}
     steps:
-      # The release builds from an LF tree, so these tests read the bytes that
-      # ship. The runner's git defaults to core.autocrlf=true, which would
-      # rewrite every text file to CRLF and fail tests on bytes no user gets.
-      - name: Check out with LF line endings
-        shell: bash
-        run: git config --global core.autocrlf false
-
       - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v5

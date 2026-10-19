@@ -349,6 +349,10 @@ func TestRecordPushedHeadNeverMovesTheTrackingRefBackwards(t *testing.T) {
 // ErrHoldCut — the discriminator the mirror's trail reads. The budget is
 // shrunk to nothing so the hold is cut the instant it starts; the lock waits
 // before it are not under the budget, so the open itself still succeeds.
+// Zero, not a nanosecond: a zero budget cancels the hold's context before the
+// commit lock is tried, and a done context is refused on every platform; a
+// positive one arms a timer the write can outrun where the clock is coarse
+// (Windows).
 func TestRecordPushedHeadCutsAtTheHoldBudget(t *testing.T) {
 	// serial: no t.Parallel — MirrorHoldBudget is a package variable.
 	ctx := context.Background()
@@ -365,7 +369,7 @@ func TestRecordPushedHeadCutsAtTheHoldBudget(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 	previous := MirrorHoldBudget
-	MirrorHoldBudget = time.Nanosecond
+	MirrorHoldBudget = 0
 	t.Cleanup(func() { MirrorHoldBudget = previous })
 	_, err = RecordPushedHead(ctx, doltRoot, "origin", "master", head, nil)
 	if !errors.Is(err, ErrHoldCut) {
