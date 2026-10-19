@@ -15,6 +15,8 @@ import (
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 	"github.com/dolthub/dolt/go/libraries/doltcore/ref"
 	"github.com/dolthub/dolt/go/libraries/utils/filesys"
+	"github.com/dolthub/dolt/go/store/chunks"
+	"github.com/dolthub/dolt/go/store/datas"
 	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/types"
 
@@ -84,10 +86,9 @@ func driveTheBound(t *testing.T, rounds int) {
 	store.DefaultHistoryBound.ReRootAt = checkpointReRootAt
 	store.DefaultHistoryBound.Keep = checkpointKeep
 	remote := filepath.Join(base, "remote.git")
-	remoteBefore := remoteDataBytes(t, remote)
-
 	alpha := newBoundCheckout(t, "alpha", r.alpha, filepath.Join(base, "alpha-notifications"))
 	bravo := newBoundCheckout(t, "bravo", r.bravo, r.sink)
+	historyBefore := historyBytes(t, remote, alpha, bravo, "before the first re-root")
 	// The seeded history is above the bound, so the first push re-roots, and
 	// every checkpointPeriod-th push after it.
 	pushes := 0
@@ -140,12 +141,8 @@ func driveTheBound(t *testing.T, rounds int) {
 		side.assertUnderTheBound(t)
 		side.assertNothingEscalated(t)
 	}
-	if after := remoteDataBytes(t, remote); after > remoteBefore {
-		t.Fatalf("the remote's refs/dolt/data tree is %d bytes after %d rounds and %d before the first re-root; want no more", after, rounds, remoteBefore)
-	}
-	alphaHead, _ := syncHeadAndBranch(t, r.alpha)
-	if bravoHead, _ := syncHeadAndBranch(t, r.bravo); alphaHead != bravoHead {
-		t.Fatalf("after both received, alpha is at %s and bravo at %s", alphaHead, bravoHead)
+	if after := historyBytes(t, remote, alpha, bravo, fmt.Sprintf("after %d rounds", rounds)); after.history() > historyBefore.history() {
+		t.Fatalf("the remote holds %s; %s: want no more history than before", after, historyBefore)
 	}
 
 	// A checkout that adopts the remote now adopts the re-rooted history.
@@ -249,7 +246,94 @@ func (c *boundCheckout) assertNothingEscalated(t *testing.T) {
 // longest line from it down to a root, itself counted, found by walking
 // parent links in the checkout's chunk store. The bound reads the height from
 // dolt_log's commit_order; this reads it a second way.
-func (c *boundCheckout) walkedHeight(t *testing.T) uint64 {
+func (c *boundCheckout) walkedHeight(t *testing.T) (height uint64) {
+	t.Helper()
+	c.atSyncHead(t, func(ctx context.Context, ddb *doltdb.DoltDB, head *doltdb.Commit) {
+		addr, err := head.HashOf()
+		if err != nil {
+			t.Fatal(err)
+		}
+		heights := map[hash.Hash]uint64{}
+		var heightOf func(addr hash.Hash) uint64
+		heightOf = func(addr hash.Hash) uint64 {
+			if h, ok := heights[addr]; ok {
+				return h
+			}
+			optional, err := ddb.ReadCommit(ctx, addr)
+			if err != nil {
+				t.Fatalf("read commit %s in %s: %v", addr, c.name, err)
+			}
+			commit, ok := optional.ToCommit()
+			if !ok {
+				t.Fatalf("%s holds commit %s only as a ghost", c.name, addr)
+			}
+			parents, err := commit.ParentHashes(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var below uint64
+			for _, parent := range parents {
+				below = max(below, heightOf(parent))
+			}
+			heights[addr] = below + 1
+			return below + 1
+		}
+		height = heightOf(addr)
+	})
+	return height
+}
+
+// stateBytes is the table-file bytes of c's current state alone: the tables
+// its sync branch head holds, without the commits that lead to them, pulled
+// into a scratch store with no chunk journal the way the remote's GC builds
+// the files it collects (store.buildCollectedSet). So it counts in the unit
+// remoteDataBytes reads.
+func (c *boundCheckout) stateBytes(t *testing.T) (size int64) {
+	t.Helper()
+	c.atSyncHead(t, func(ctx context.Context, ddb *doltdb.DoltDB, head *doltdb.Commit) {
+		tables, err := head.GetRootValue(ctx)
+		if err != nil {
+			t.Fatalf("read %s's tables: %v", c.name, err)
+		}
+		addr, err := tables.HashOf()
+		if err != nil {
+			t.Fatal(err)
+		}
+		scratch := t.TempDir()
+		nomsDir, tempDir := filepath.Join(scratch, "noms"), filepath.Join(scratch, "tmp")
+		for _, dir := range []string{nomsDir, tempDir} {
+			if err := os.Mkdir(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		state, err := doltdb.LoadDoltDBWithParams(ctx, types.Format_Default, "file://"+filepath.ToSlash(nomsDir), filesys.LocalFS, map[string]any{dbfactory.DisableSingletonCacheParam: struct{}{}})
+		if err != nil {
+			t.Fatalf("open a scratch store for %s's state: %v", c.name, err)
+		}
+		defer func() {
+			if err := state.Close(); err != nil {
+				t.Fatalf("close the scratch store for %s's state: %v", c.name, err)
+			}
+		}()
+		if err := state.PullChunks(ctx, tempDir, ddb, []hash.Hash{addr}, nil, nil); err != nil {
+			t.Fatalf("copy %s's tables into a scratch store: %v", c.name, err)
+		}
+		files, ok := datas.ChunkStoreFromDatabase(doltdb.ExposeDatabaseFromDoltDB(state)).(chunks.TableFileStore)
+		if !ok {
+			t.Fatalf("the scratch store for %s's state lists no table files", c.name)
+		}
+		bytes, err := files.Size(ctx)
+		if err != nil {
+			t.Fatalf("size the scratch store for %s's state: %v", c.name, err)
+		}
+		size = int64(bytes)
+	})
+	return size
+}
+
+// atSyncHead runs read over c's chunk store, opened outside lit, at c's sync
+// branch head.
+func (c *boundCheckout) atSyncHead(t *testing.T, read func(ctx context.Context, ddb *doltdb.DoltDB, head *doltdb.Commit)) {
 	t.Helper()
 	ctx := context.Background()
 	nomsDir := filepath.Join(c.ws.DoltRepoPath, dbfactory.DoltDataDir)
@@ -267,36 +351,35 @@ func (c *boundCheckout) walkedHeight(t *testing.T) uint64 {
 	if err != nil {
 		t.Fatalf("resolve %s's branch %s: %v", c.name, c.branch, err)
 	}
-	addr, err := head.HashOf()
-	if err != nil {
-		t.Fatal(err)
+	read(ctx, ddb, head)
+}
+
+// remoteBytes is the remote's refs/dolt/data tree at one moment, split into
+// the current state it holds and the history it holds beyond that state.
+// Every write adds rows to the issue event log, so the state grows with the
+// writes; the history is what the bound keeps from growing with them.
+type remoteBytes struct {
+	when          string
+	remote, state int64
+}
+
+func (b remoteBytes) history() int64 { return b.remote - b.state }
+
+func (b remoteBytes) String() string {
+	return fmt.Sprintf("%d bytes of history %s (%d in its tree, %d of current state)", b.history(), b.when, b.remote, b.state)
+}
+
+// historyBytes measures the remote's tree against the state alpha holds once
+// alpha and bravo share a head. bravo adopted the remote at the start and
+// pushed the head it holds at the end, so the head they share is the
+// remote's.
+func historyBytes(t *testing.T, remote string, alpha, bravo *boundCheckout, when string) remoteBytes {
+	t.Helper()
+	alphaHead, _ := syncHeadAndBranch(t, alpha.dir)
+	if bravoHead, _ := syncHeadAndBranch(t, bravo.dir); alphaHead != bravoHead {
+		t.Fatalf("%s, alpha is at %s and bravo at %s", when, alphaHead, bravoHead)
 	}
-	heights := map[hash.Hash]uint64{}
-	var heightOf func(addr hash.Hash) uint64
-	heightOf = func(addr hash.Hash) uint64 {
-		if h, ok := heights[addr]; ok {
-			return h
-		}
-		optional, err := ddb.ReadCommit(ctx, addr)
-		if err != nil {
-			t.Fatalf("read commit %s in %s: %v", addr, c.name, err)
-		}
-		commit, ok := optional.ToCommit()
-		if !ok {
-			t.Fatalf("%s holds commit %s only as a ghost", c.name, addr)
-		}
-		parents, err := commit.ParentHashes(ctx)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var below uint64
-		for _, parent := range parents {
-			below = max(below, heightOf(parent))
-		}
-		heights[addr] = below + 1
-		return below + 1
-	}
-	return heightOf(addr)
+	return remoteBytes{when: when, remote: remoteDataBytes(t, remote), state: alpha.stateBytes(t)}
 }
 
 // remoteDataBytes is the bytes of the table files in the tree the remote's
