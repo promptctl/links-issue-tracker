@@ -123,7 +123,6 @@ none), and `reach` is what this checkout can do about it:
 
 | `reach` | Meaning |
 | --- | --- |
-| `takeable` | This checkout can start it. |
 | `held_fresh` | Another checkout holds its lane right now. |
 | `held_by_itself` | Not held elsewhere, but held by something about the ticket itself, such as a reserved label or a missing field. |
 | `not_ready` | Not held elsewhere, but blocked by further open tickets and nothing about itself. |

@@ -426,7 +426,7 @@ func TestRouteNextDescendsAnEpicBlockerToItsWorkableChild(t *testing.T) {
 			// The epic is read through the work under it: its one ticket is held
 			// elsewhere, so it is held, not outside the view — the epic's own
 			// row is never gathered, and reading that would repeat the bug.
-			if kind := exhausted.Blocked[0].Kind; kind != reachHeldFresh {
+			if kind := readingOf(t, exhausted.Blocked[0]).Kind; kind != reachHeldFresh {
 				t.Fatalf("blocker %s classified as %v, want reachHeldFresh (%s is held by another checkout)", epicA.ID, kind, a1.ID)
 			}
 

@@ -7,17 +7,22 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 )
 
-// reachKindNames is how the invocation event spells each reachKind. Indexed by
-// the kind, like reachNotes, and held total by TestEveryReachKindHasAnEventName.
-var reachKindNames = [reachKindCount]string{
-	reachTakeable:        "takeable",
+// reachKindNames is how the invocation event spells each reachKind a walk can
+// report. Indexed by the kind and bounded by reachTakeable, like reachNotes, and
+// held total by TestEveryReachKindHasAnEventName.
+var reachKindNames = [reachTakeable]string{
 	reachHeldFresh:       "held_fresh",
 	reachHeldByItself:    "held_by_itself",
 	reachNotReady:        "not_ready",
 	reachAwaitingOutside: "awaiting_outside",
-	reachOutOfView:       "out_of_view",
-	reachOffFocusPath:    "off_focus_path",
 }
+
+// The event's reach for the entries of the two lists that are not kinds, as
+// outOfViewNote and offFocusPathNote are their words.
+const (
+	outOfViewReach    = "out_of_view"
+	offFocusPathReach = "off_focus_path"
+)
 
 // reachFact is one row a walk went past, as the event records it: the id the
 // diagnostic named, the gathered ticket its kind was read from (the id itself,
@@ -45,6 +50,16 @@ func reachFacts(rows []rowReach) []reachFact {
 	return facts
 }
 
+// offPathFacts records the rows a focus label withheld. Each is its own
+// gathered ticket.
+func offPathFacts(ids []string) []reachFact {
+	facts := make([]reachFact, len(ids))
+	for i, id := range ids {
+		facts[i] = reachFact{ID: id, Ticket: id, Reach: offFocusPathReach}
+	}
+	return facts
+}
+
 // blockerFact is one blocker as the event records it: the row it is, and
 // whether a ticket filed here could free it.
 type blockerFact struct {
@@ -52,10 +67,16 @@ type blockerFact struct {
 	Clearable bool `json:"clearable"`
 }
 
+// blockerFacts records every blocker in walk order. One out of view has no
+// ticket, since the run could see none.
 func blockerFacts(blockers []blockerReach) []blockerFact {
 	facts := make([]blockerFact, len(blockers))
-	for i, fact := range reachFacts(reachesOf(blockers)) {
-		facts[i] = blockerFact{reachFact: fact, Clearable: blockers[i].Clearable}
+	for i, blocker := range blockers {
+		fact := reachFact{ID: blocker.ID, Reach: outOfViewReach}
+		if blocker.Best != nil {
+			fact = reachFact{ID: blocker.ID, Ticket: blocker.Best.Row.ID, Reach: reachKindNames[blocker.Best.Kind]}
+		}
+		facts[i] = blockerFact{reachFact: fact, Clearable: blocker.Clearable}
 	}
 	return facts
 }
@@ -78,7 +99,7 @@ type nextDecision struct {
 	DependencyPath []string
 	Exhaustion     Exhausted
 	HiddenByFilter *string
-	Unreachable    []rowReach
+	NoWork         NoWork
 }
 
 func decideNextEvent(outcome NextOutcome) nextDecision {
@@ -112,7 +133,7 @@ func decideNextEvent(outcome NextOutcome) nextDecision {
 	case Narrowed:
 		return nextDecision{Outcome: "narrowed", HiddenByFilter: picked(o.Hidden.ID)}
 	case NoWork:
-		return nextDecision{Outcome: "no_work", Unreachable: o.Unreachable}
+		return nextDecision{Outcome: "no_work", NoWork: o}
 	}
 	panic(fmt.Sprintf("decideNextEvent: unhandled NextOutcome %T", outcome))
 }
@@ -136,9 +157,9 @@ func recordNextEvent(ctx context.Context, outcome NextOutcome, gathered int) {
 	telemetry.Set(ctx, "next.exhausted_progress", progressFact(decision.Exhaustion.Progress))
 	telemetry.Set(ctx, "next.blocked", blockerFacts(decision.Exhaustion.Blocked))
 	telemetry.Set(ctx, "next.held", reachFacts(decision.Exhaustion.Held))
-	telemetry.Set(ctx, "next.off_path", reachFacts(decision.Exhaustion.OffPath))
+	telemetry.Set(ctx, "next.off_path", offPathFacts(decision.Exhaustion.OffPath))
 	telemetry.Set(ctx, "next.hidden_by_filter", decision.HiddenByFilter)
-	telemetry.Set(ctx, "next.unreachable", reachFacts(decision.Unreachable))
+	telemetry.Set(ctx, "next.unreachable", append(reachFacts(decision.NoWork.Unreachable), offPathFacts(decision.NoWork.OffPath)...))
 	telemetry.Set(ctx, "next.stay_offered", len(decision.Exhaustion.stay()) > 0)
 	telemetry.Count(ctx, "next.rows_gathered", gathered)
 }

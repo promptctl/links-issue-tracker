@@ -509,7 +509,7 @@ func TestRouteNextExhaustionNamesReadyRowsTheFocusWithheld(t *testing.T) {
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want Exhausted — the focus path holds nothing ready", outcome, outcome)
 	}
-	if len(exhausted.OffPath) != 1 || exhausted.OffPath[0].ID != offPath.ID {
+	if len(exhausted.OffPath) != 1 || exhausted.OffPath[0] != offPath.ID {
 		t.Fatalf("exhausted.OffPath = %+v, want exactly [%s] — %s is epic A's own, walked by steps 1-2b", exhausted.OffPath, offPath.ID, a2.ID)
 	}
 	msg := exhausted.Error()
@@ -848,7 +848,7 @@ func TestRouteNextStillReportsAnExhaustedScopeUnderAFilter(t *testing.T) {
 	if served.Row.ID != b1.ID {
 		t.Fatalf("served = %q, want %q", served.Row.ID, b1.ID)
 	}
-	if len(served.Exhaustion.Blocked) != 1 || served.Exhaustion.Blocked[0].ID != dep.ID || served.Exhaustion.Blocked[0].Kind != reachHeldFresh {
+	if len(served.Exhaustion.Blocked) != 1 || served.Exhaustion.Blocked[0].ID != dep.ID || readingOf(t, served.Exhaustion.Blocked[0]).Kind != reachHeldFresh {
 		t.Fatalf("blocked = %#v, want %q held fresh", served.Exhaustion.Blocked, dep.ID)
 	}
 }
@@ -936,7 +936,7 @@ func TestRouteNextExhaustionUnderAFilterNamesOnlyWithheldRowsItSelects(t *testin
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want Exhausted — the focus path holds nothing ready", outcome, outcome)
 	}
-	if len(exhausted.OffPath) != 1 || exhausted.OffPath[0].ID != offBug.ID {
+	if len(exhausted.OffPath) != 1 || exhausted.OffPath[0] != offBug.ID {
 		t.Fatalf("exhausted.OffPath = %+v, want exactly [%s] — the task off the path is not what this run asked for", exhausted.OffPath, offBug.ID)
 	}
 }
@@ -1075,8 +1075,8 @@ func TestRouteNextRoutesAroundOnPathDependencyHeldFresh(t *testing.T) {
 			continue
 		}
 		named = true
-		if blocked.Kind != reachHeldFresh {
-			t.Fatalf("blocked dependency %q classified %v, want reachHeldFresh — another checkout holds its lane fresh", dep.ID, blocked.Kind)
+		if readingOf(t, blocked).Kind != reachHeldFresh {
+			t.Fatalf("blocked dependency %q classified %v, want reachHeldFresh — another checkout holds its lane fresh", dep.ID, readingOf(t, blocked).Kind)
 		}
 	}
 	if !named {
@@ -1130,7 +1130,7 @@ func TestExhaustionPlacesAHiddenLaneMateWhicheverChainReachesItFirst(t *testing.
 	if !ok {
 		t.Fatal("routeNext did not answer Exhausted — every row in view waits on other work")
 	}
-	if len(exhausted.Blocked) != 1 || exhausted.Blocked[0].ID != outside.ID || exhausted.Blocked[0].Kind != reachNotReady {
+	if len(exhausted.Blocked) != 1 || exhausted.Blocked[0].ID != outside.ID || readingOf(t, exhausted.Blocked[0]).Kind != reachNotReady {
 		t.Fatalf("exhausted.Blocked = %+v, want only %s, not ready — %s sits in our lane l", exhausted.Blocked, outside.ID, hidden.ID)
 	}
 	if msg := exhausted.Error(); strings.Contains(msg, "to stay, file") {
@@ -1176,7 +1176,7 @@ func TestExhaustionReportsAnEpicBlockerByItsTicketHeldByItself(t *testing.T) {
 			if !ok {
 				t.Fatal("routeNext did not answer Exhausted — nothing on the path is takeable")
 			}
-			if got := exhausted.Blocked[0]; got.ID != epicE.ID || got.Row.ID != held.ID || got.Kind != reachHeldByItself {
+			if got := readingOf(t, exhausted.Blocked[0]); got.ID != epicE.ID || got.Row.ID != held.ID || got.Kind != reachHeldByItself {
 				t.Fatalf("exhausted.Blocked[0] = {%s via %s, %v}, want {%s via %s, held by itself}", got.ID, got.Row.ID, got.Kind, epicE.ID, held.ID)
 			}
 			if msg := exhausted.Error(); strings.Contains(msg, "to stay") {
@@ -1191,6 +1191,60 @@ func TestExhaustionReportsAnEpicBlockerByItsTicketHeldByItself(t *testing.T) {
 // row's own, so it is inside the scope and never a blocker to clear from
 // outside. Collected, it would draw a route to stay that files a ticket in our
 // epic and asks for a blocked-by edge lit refuses between two of its tickets.
+// Blockers are named in the order the walk reached them, which is the rank of
+// the rows they gate, whether or not the run could see them. Here the
+// higher-ranked row waits on a blocker out of view and the lower-ranked one on
+// a blocker another checkout holds: both are clearable, and the route to stay
+// offers the out-of-view one first. Gathering the out-of-view blocker last
+// would push it past the cap on a busy scope, out of the agent's sight.
+func TestExhaustionNamesBlockersInWalkOrderWhetherOrNotInView(t *testing.T) {
+	h := newReadyTestHarness(t)
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
+	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
+	a3 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.3", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a3"})
+	epicX := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic X", Topic: "next", IssueType: "epic", Priority: 1})
+	gone := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Out of view", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicX.ID, Lane: "gone"})
+	theirs := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Theirs", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicX.ID, Lane: "theirs"})
+
+	// The out-of-view blocker gates whichever of ours the queue ranks first.
+	rows, _, _ := h.gather()
+	first, second := a2, a3
+	if slices.IndexFunc(rows, func(r annotation.AnnotatedIssue) bool { return r.ID == a3.ID }) < slices.IndexFunc(rows, func(r annotation.AnnotatedIssue) bool { return r.ID == a2.ID }) {
+		first, second = a3, a2
+	}
+	h.addDependency(first.ID, gone.ID)
+	h.addDependency(second.ID, theirs.ID)
+
+	rows, details, epics := h.gather()
+	standings := claims.Standings{
+		laneOf(t, details, rowByID(t, rows, a2.ID)):     heldBy(selfAttribution),
+		laneOf(t, details, rowByID(t, rows, a3.ID)):     heldBy(selfAttribution),
+		laneOf(t, details, rowByID(t, rows, theirs.ID)): heldBy(otherAttribution),
+	}
+	var inView []annotation.AnnotatedIssue
+	for _, row := range rows {
+		if row.ID != gone.ID {
+			inView = append(inView, row)
+		}
+	}
+
+	outcome := routeNext(inView, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, storage.IssueCriteria{})
+	exhausted, ok := outcome.(Exhausted)
+	if !ok {
+		t.Fatalf("routeNext = %#v (%T), want Exhausted — one blocker is out of view and the other is held elsewhere", outcome, outcome)
+	}
+	var named []string
+	for _, blocked := range exhausted.Blocked {
+		named = append(named, blocked.ID)
+	}
+	if want := []string{gone.ID, theirs.ID}; !slices.Equal(named, want) {
+		t.Fatalf("exhausted.Blocked = %v, want %v — the walk reached %s first, through %s", named, want, gone.ID, first.ID)
+	}
+	if want := fmt.Sprintf("`lit dep add %s --blocked-by <new>` or `lit dep add %s --blocked-by <new>`", gone.ID, theirs.ID); !strings.Contains(exhausted.Error(), want) {
+		t.Fatalf("exhausted.Error() = %q, want the route to stay to offer %q", exhausted.Error(), want)
+	}
+}
+
 func TestExhaustionNeverNamesAnEarlierLaneMateOutOfViewAsABlocker(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
@@ -1267,8 +1321,8 @@ func TestExhaustionNamesABlockerOutsideThisViewAsSuch(t *testing.T) {
 			continue
 		}
 		named = true
-		if blocked.Kind != reachOutOfView {
-			t.Fatalf("blocked dependency %q classified %v, want reachOutOfView — it is absent from the gathered rows", dep.ID, blocked.Kind)
+		if blocked.Best != nil {
+			t.Fatalf("blocked dependency %q read through %q as %v, want it out of view — it is absent from the gathered rows", dep.ID, blocked.Best.Row.ID, blocked.Best.Kind)
 		}
 	}
 	if !named {
@@ -1324,8 +1378,8 @@ func TestExhaustionNamesEachLinkOfAStuckChainByItsOwnReach(t *testing.T) {
 			continue
 		}
 		named = true
-		if blocked.Kind != reachNotReady {
-			t.Fatalf("blocked dependency %q classified %v, want reachNotReady — nobody holds its lane; it is blocked by %q", dep.ID, blocked.Kind, deeper.ID)
+		if readingOf(t, blocked).Kind != reachNotReady {
+			t.Fatalf("blocked dependency %q classified %v, want reachNotReady — nobody holds its lane; it is blocked by %q", dep.ID, readingOf(t, blocked).Kind, deeper.ID)
 		}
 	}
 	if !named {
@@ -1505,7 +1559,7 @@ func TestExhaustionNeverOffersToClearABlockerAwaitingAnOutsideEvent(t *testing.T
 				t.Fatalf("routeNext = %#v (%T), want Exhausted — epic A's one open row waits on %q", outcome, outcome, upstream.ID)
 			}
 			idx := slices.IndexFunc(exhausted.Blocked, func(r blockerReach) bool { return r.ID == upstream.ID })
-			if idx < 0 || exhausted.Blocked[idx].Kind != reachAwaitingOutside {
+			if idx < 0 || readingOf(t, exhausted.Blocked[idx]).Kind != reachAwaitingOutside {
 				t.Fatalf("exhausted.Blocked = %v, want %q classified reachAwaitingOutside", exhausted.Blocked, upstream.ID)
 			}
 			msg := exhausted.Error()
@@ -1971,62 +2025,40 @@ func TestRouteNextRoutesAroundAFreshPublicHold(t *testing.T) {
 // reachNotes is indexed by the kind, so no diagnostic can drop a kind's ids the
 // way a list of pairs could — but Go fills an unlisted index with "", and the
 // renderer would then print those ids under an empty parenthetical. The array
-// makes the failure loud; only this makes it impossible.
-//
-// Words and speakability are asserted as one biconditional because the two ways
-// they can disagree are both defects and only one of them is obvious. A
-// speakable kind with no words renders ids under an empty parenthetical. Words
-// for a kind the walk cannot stamp are a promise about a different walk:
-// exhaustedNotes carrying reachOffFocusPath would tell a reader that an epic's
-// own gating blocker wants `lit next --all`, when steps 1-3 never scope and so
-// never need it.
-//
-// The union is asserted separately: a sixth kind cannot enter the enum until
-// some walk claims it.
+// makes the failure loud; only this makes it impossible. The other direction —
+// words for a kind no walk reports — is the compiler's: reachNotes has no slot
+// for reachTakeable, and what each walk reports beyond reachOf's answers is a
+// list of its own outcome, not a kind.
 func TestEveryReachKindHasWordsInBothDiagnostics(t *testing.T) {
 	t.Parallel()
-	// reachOf's switch is total over its kinds. The exhaustion walk reaches
-	// laneOurs rows and, via gatingDependencies, deps the gather never
-	// returned — but never a takeable one: step 2b serves the first takeable
-	// dependency over the same scope before exhaustion is reached.
-	//
-	// The pool walk stamps no takeable row either: NoWork is answered only with
-	// no lane held, so nothing there is laneOurs and the pick has already
-	// declined every takeable row, leaving routeAround as the only verdict
-	// passedOver sees; and it asks reachOf about gathered rows only. So
-	// reachOutOfView is unreachable there, and words for it would describe an
-	// answer that walk can never give.
-	exhaustedSpeaks := []reachKind{reachHeldFresh, reachHeldByItself, reachNotReady, reachAwaitingOutside, reachOutOfView}
-	poolSpeaks := []reachKind{reachHeldFresh, reachHeldByItself, reachNotReady, reachAwaitingOutside, reachOffFocusPath}
-
-	// reachTakeable is the one kind routing acts on instead of reporting: steps
-	// 1b and 2b serve it. It means something without a walk that says it.
-	spoken := map[reachKind]bool{reachTakeable: true}
-	for _, diagnostic := range []struct {
-		name   string
-		notes  reachNotes
-		speaks []reachKind
-	}{
-		{"exhausted", exhaustedNotes, exhaustedSpeaks},
-		{"pool", poolNotes, poolSpeaks},
-	} {
-		speakable := map[reachKind]bool{}
-		for _, kind := range diagnostic.speaks {
-			speakable[kind] = true
-			spoken[kind] = true
-		}
-		for kind := reachKind(0); kind < reachKindCount; kind++ {
-			if speakable[kind] != (diagnostic.notes[kind] != "") {
-				t.Errorf("%s notes: reachKind %d is speakable=%v but its words are %q — a speakable kind with no words renders its ids under an empty parenthetical, and words for an unspeakable kind describe an answer this walk can never give",
-					diagnostic.name, kind, speakable[kind], diagnostic.notes[kind])
+	for name, notes := range map[string]reachNotes{"exhausted": exhaustedNotes, "pool": poolNotes} {
+		for kind, words := range notes {
+			if words == "" {
+				t.Errorf("%s notes: reachKind %d has no words — its ids would render under an empty parenthetical", name, kind)
 			}
 		}
 	}
-	for kind := reachKind(0); kind < reachKindCount; kind++ {
-		if !spoken[kind] {
-			t.Errorf("reachKind %d is stamped by no diagnostic — a new kind needs a walk that says it before it can mean anything", kind)
-		}
+}
+
+// A focus label can withhold every row the pool would have walked. The pool is
+// then empty, but the backlog is not, and the bare "no ready work" would say it
+// is: the message names the withheld rows as off the path.
+func TestNoWorkWithEveryRowOffThePathIsNotAnEmptyBacklog(t *testing.T) {
+	t.Parallel()
+	msg := NoWork{OffPath: []string{"test-off"}}.Error()
+	if !strings.HasPrefix(msg, "no ready work on the focus path — ") || !strings.Contains(msg, "test-off ("+offFocusPathNote+")") {
+		t.Fatalf("NoWork.Error() = %q, want the focus-path lead naming test-off as off the focus path", msg)
 	}
+}
+
+// readingOf is the reading of a blocker the test expects in view, failing the
+// test when the run could not read it.
+func readingOf(t *testing.T, blocker blockerReach) rowReach {
+	t.Helper()
+	if blocker.Best == nil {
+		t.Fatalf("blocker %q is out of view, want it read through work in view", blocker.ID)
+	}
+	return *blocker.Best
 }
 
 // "No ready work" alone would answer two opposite questions in identical
@@ -2184,7 +2216,7 @@ func TestStayRouteNamesABoundedPrefixAndCountsTheRest(t *testing.T) {
 	over := 3
 	blocked := make([]blockerReach, maxNamedPerKind+over)
 	for i := range blocked {
-		blocked[i] = blockerReach{rowReach: rowReach{ID: fmt.Sprintf("dep-%03d", i), Kind: reachHeldFresh}, Clearable: true}
+		blocked[i] = blockerReach{depReach: depReach{ID: fmt.Sprintf("dep-%03d", i)}, Clearable: true}
 	}
 	route := strings.Join(Exhausted{Epics: []string{"test-epic"}, Blocked: blocked}.stay(), "")
 	if want := fmt.Sprintf("`lit dep add dep-%03d --blocked-by <new>` and %d more", maxNamedPerKind-1, over); !strings.HasSuffix(route, want) {

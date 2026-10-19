@@ -422,7 +422,7 @@ func TestNextRefusesToSubstituteOffPathWorkForAStuckFocusPath(t *testing.T) {
 }
 
 // The focus-scoped lead may say rows sit off the path. It may not say they are
-// startable: withheldByScope stamps reachOffFocusPath on every excluded row
+// startable: withheldByScope names every excluded row
 // without consulting capacityFor, because the kind records which question the
 // run asked rather than a verdict about the row. A lead promising startable
 // work off the path is therefore an assertion nothing checked.
@@ -488,7 +488,7 @@ func TestFocusPathDeadEndDoesNotClaimOffPathWorkIsStartable(t *testing.T) {
 	if strings.Contains(lead, "off that path") || strings.Contains(lead, "off the focus path") {
 		t.Fatalf("NoWork.Error() lead = %q describes every row it introduces as off the focus path, but %s and %s are on it", lead, goal.ID, gate.ID)
 	}
-	for _, note := range []string{poolNotes[reachNotReady], poolNotes[reachOffFocusPath]} {
+	for _, note := range []string{poolNotes[reachNotReady], offFocusPathNote} {
 		if !strings.Contains(got, note) {
 			t.Fatalf("NoWork.Error() = %q lists two populations but is missing the words one of them owns: %q", got, note)
 		}
