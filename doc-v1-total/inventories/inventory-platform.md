@@ -882,7 +882,7 @@ Justfile or any workflow in `.github/workflows/`.
 .
 - Six jobs, all in parallel:
   1. **`build-and-test`**: checkout@v4 → setup-go@v5 (`go-version-file: go.mod`) →
-     `./.github/actions/install-claude` (§11.9) →
+     `./.github/actions/install-claude` (§11.8) →
      `go build ./cmd/lit` → `go test -short -json ./... | go run ./tools/testbudget` →
      `go -C internal/vendor/dolthub-driver test -short -json ./... | go run ./tools/testbudget`
      (the vendored driver is its own module, so `./...` never reaches it), both under
@@ -931,7 +931,7 @@ Justfile or any workflow in `.github/workflows/`.
   `failure()`; a run on any other ref files nothing),
   `permissions: contents: write`, `timeout-minutes: 15`. Steps: checkout
   (`persist-credentials: false`) → `./.github/actions/report-to-lit` with label
-  `nightly-failure` and title `Nightly full test lane is failing` (§11.7).
+  `nightly-failure` and title `Nightly full test lane is failing` (§11.6).
 - Job `report-windows`, `needs: windows`,
   `if: ${{ always() && needs.windows.result != 'success' && github.ref == 'refs/heads/master' }}`,
   otherwise shaped as `report`, with label `nightly-windows-failure` and title
@@ -951,25 +951,7 @@ Justfile or any workflow in `.github/workflows/`.
   failing with `::error::the license graph audit modified go.mod/go.sum — withGoSumPreserved is not holding.`
 .
 
-### 11.4 `.github/workflows/code-review.yml` — "AI Code Review"
-
-- Header states the file is **generated** by `agent-code-review-setup/install.sh` and is
-  reconverged (overwriting local edits) on every installer run
-  (`.github/workflows/code-review.yml`).
-- Trigger: `pull_request` with types `[opened, synchronize, reopened, ready_for_review]`
- — deliberately `pull_request`, not `pull_request_target`.
-- `permissions: contents: read, issues: write, pull-requests: write`.
-- Concurrency `code-review-${{ github.event.pull_request.number }}`, `cancel-in-progress: true`
-.
-- Job `review` ("Review") on `ubuntu-latest`, `timeout-minutes: 30`.
-- Steps: `actions/checkout` pinned to SHA `d23441a48e516b6c34aea4fa41551a30e30af803` (v6),
-  checking out `github.event.pull_request.head.sha` with `persist-credentials: false`
-; then `promptctl/copirate-code-review-agent@v1` (moving `v1` tag by design,
-) with inputs `CLAUDE_CODE_OAUTH_TOKEN`, `DEEPSEEK_API_KEY`, and
-  `DEPENDENCY_DIFF: "true"`. The comment records that both credentials must exist in
-  both the Actions and the Dependabot secret stores.
-
-### 11.5 `.github/workflows/release-smoke.yml` — "Release smoke"
+### 11.4 `.github/workflows/release-smoke.yml` — "Release smoke"
 
 - Trigger: `pull_request` targeting `master` only (`.github/workflows/release-smoke.yml`).
 - `permissions: contents: read, packages: read`. Concurrency
@@ -1000,7 +982,7 @@ Justfile or any workflow in `.github/workflows/`.
       shows `INTERP`, fail if `readelf -d` shows `NEEDED`, then run `./<bin> version` on the
       glibc runner and `docker run --rm … alpine:3.20 lit version` on musl.
 
-### 11.6 `.github/workflows/release-validate.yml` — "Release validate"
+### 11.5 `.github/workflows/release-validate.yml` — "Release validate"
 
 - Triggers: `push` to `master` and `workflow_dispatch: {}` — never on `pull_request`
   (`.github/workflows/release-validate.yml`).
@@ -1104,7 +1086,7 @@ setup-go@v5 (`cache: true`) → `go mod download` → `go run ./tools/licenses -
   failing `gh release create` prints a recovery instruction naming
   `gh release delete $TAG --repo … --cleanup-tag --yes`.
 
-### 11.7 `.github/actions/report-to-lit/action.yml`
+### 11.6 `.github/actions/report-to-lit/action.yml`
 
 Composite action (`.github/actions/report-to-lit/action.yml`). Inputs, all required:
 `label`, `title`, `body`, `token`.
@@ -1126,7 +1108,7 @@ Composite action (`.github/actions/report-to-lit/action.yml`). Inputs, all requi
     and runs `lit sync pull` before the next push. The third push's exit status is
     the step's.
 
-### 11.8 `.github/workflows/release-watchdog.yml` — "Release watchdog"
+### 11.7 `.github/workflows/release-watchdog.yml` — "Release watchdog"
 
 - Triggers: `schedule: cron '23 * * * *'` and `workflow_dispatch`.
 - `permissions: contents: read`. Concurrency group `release-watchdog`,
@@ -1142,11 +1124,11 @@ Composite action (`.github/actions/report-to-lit/action.yml`). Inputs, all requi
 - Job `report`, `needs: watchdog`,
   `if: ${{ always() && needs.watchdog.result != 'success' && github.ref == 'refs/heads/master' }}`,
   `permissions: contents: write`, `timeout-minutes: 15`. Steps: checkout
-  (`persist-credentials: false`) → `./.github/actions/report-to-lit` (§11.7) with label
+  (`persist-credentials: false`) → `./.github/actions/report-to-lit` (§11.6) with label
   `release-stuck`, title `A promoted release is stuck: no tag published`, and a body
   naming the recovery `gh workflow run release-validate.yml --ref master`.
 
-### 11.9 `.github/actions/install-claude/action.yml`
+### 11.8 `.github/actions/install-claude/action.yml`
 
 Composite action; installs the pinned Claude Code CLI used as a **test-only** oracle
 for `claude plugin validate --json` (`.github/actions/install-claude/action.yml`):
