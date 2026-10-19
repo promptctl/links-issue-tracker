@@ -77,8 +77,8 @@ type CreateIssueInput struct {
 	Prefix string
 	// Actor is who files the issue: the created event's actor, and the author
 	// of the parent edge and labels the create wires. It is the author of a
-	// plan given at creation, so the plan gate can tell that author's own pass
-	// from a reviewer's.
+	// plan given at creation, so storage.PlanApproval can tell that author's own
+	// pass from a reviewer's.
 	Actor string
 }
 

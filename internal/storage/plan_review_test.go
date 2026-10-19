@@ -1,7 +1,6 @@
 package storage_test
 
 import (
-	"errors"
 	"reflect"
 	"testing"
 
@@ -87,24 +86,23 @@ func TestPlanApprovalNamesWhatTheCurrentPlanLacks(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			issue := model.Issue{ID: "lit-1", Plan: tc.plan}
-			got, err := storage.PlanApproval(issue, tc.events, tc.reviews)
+			got := storage.PlanApproval(issue, tc.events, tc.reviews)
 			if tc.gap == nil {
-				if err != nil || got.ID != tc.approved {
-					t.Fatalf("PlanApproval = %s, %v; want approved on %s", got.ID, err, tc.approved)
+				if approval, ok := got.(storage.PlanApproved); !ok || approval.Review.ID != tc.approved {
+					t.Fatalf("PlanApproval = %#v; want approved on %s", got, tc.approved)
 				}
 				return
 			}
-			var unapproved storage.PlanUnapprovedError
-			if !errors.As(err, &unapproved) || unapproved.IssueID != "lit-1" || !reflect.DeepEqual(unapproved.Gap, tc.gap) {
-				t.Fatalf("PlanApproval = %s, %#v; want PlanUnapprovedError with gap %#v", got.ID, err, tc.gap)
+			if !reflect.DeepEqual(got, tc.gap) {
+				t.Fatalf("PlanApproval = %#v; want gap %#v", got, tc.gap)
 			}
 		})
 	}
 }
 
-// The refusal says what is missing, in the words lit show uses for the plan's
+// A gap says what is missing, in the words lit show uses for the plan's
 // version and digest, and a fail names who gave it and the laws it cites.
-func TestPlanUnapprovedErrorSaysWhatIsMissing(t *testing.T) {
+func TestPlanGapSaysWhatIsMissing(t *testing.T) {
 	version := storage.PlanVersion{Number: 2, Digest: model.DigestPlan("plan")}
 	fail := model.PlanReview{CreatedBy: "ada", Verdict: model.PlanFail, Laws: []model.Law{"carrying-cost", "single-enforcer"}}
 	for _, tc := range []struct {
@@ -113,19 +111,18 @@ func TestPlanUnapprovedErrorSaysWhatIsMissing(t *testing.T) {
 		want string
 	}{
 		{storage.PlanMissing{}, "no_plan",
-			"lit-1 has no plan; a ticket is finished once a reviewer other than its plan's author has passed the current plan"},
+			"lit-1 has no plan"},
 		{storage.PlanUnreviewed{Plan: version}, "unreviewed",
 			"lit-1's current plan (v2, digest " + string(version.Digest) + ") has no review"},
 		{storage.PlanUnreviewed{Plan: version, EarlierReviewed: true}, "unreviewed",
 			"lit-1's current plan (v2, digest " + string(version.Digest) + ") has no review; the reviews on record judged an earlier text"},
 		{storage.PlanFailed{Plan: version, Fails: []model.PlanReview{fail}}, "failed",
-			"lit-1's current plan (v2, digest " + string(version.Digest) + ") failed its law review: ada failed it citing carrying-cost, single-enforcer; a fail stands until its reviewer passes the same text, so revise the plan and have the new text reviewed"},
+			"lit-1's current plan (v2, digest " + string(version.Digest) + ") failed its law review: ada failed it citing carrying-cost, single-enforcer"},
 		{storage.PlanSelfReviewed{Plan: version, Author: "author"}, "author_only",
-			"lit-1's current plan (v2, digest " + string(version.Digest) + ") has passed only its author's own review (author); it needs a pass from a reviewer other than its author"},
+			"lit-1's current plan (v2, digest " + string(version.Digest) + ") has passed only its author's own review (author)"},
 	} {
-		err := storage.PlanUnapprovedError{IssueID: "lit-1", Gap: tc.gap}
-		if err.Error() != tc.want || tc.gap.Kind() != tc.kind {
-			t.Errorf("%T: Error() = %q, Kind() = %q\nwant %q, %q", tc.gap, err.Error(), tc.gap.Kind(), tc.want, tc.kind)
+		if got := tc.gap.Describe("lit-1"); got != tc.want || tc.gap.Kind() != tc.kind {
+			t.Errorf("%T: Describe() = %q, Kind() = %q\nwant %q, %q", tc.gap, got, tc.gap.Kind(), tc.want, tc.kind)
 		}
 	}
 }

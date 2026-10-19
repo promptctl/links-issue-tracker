@@ -89,11 +89,12 @@ var transitionEvents = map[model.ActionName]workflows.Event{
 }
 
 // ticketState is where a ticket stands at one moment: its row, which carries
-// its status, and the phase its history puts it in — empty when it has none,
-// which is every ticket not in progress.
+// its status, the history read beside it, and the phase that history puts it
+// in — empty when it has none, which is every ticket not in progress.
 type ticketState struct {
-	issue model.Issue
-	phase model.Phase
+	issue  model.Issue
+	events []model.IssueEvent
+	phase  model.Phase
 }
 
 // states is every state the ticket is in, outermost first: its status, then

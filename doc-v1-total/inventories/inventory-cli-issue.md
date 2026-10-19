@@ -189,19 +189,18 @@ Constants (`exit.go`):
 12. `model.Refusal` (every `model.ValidationError`, `model.FrozenIssueError`, and the upgrade/downgrade target refusals) → 3 (`exit.go`)
 13. `model.StateRequestError` (`model.ContainerActionError`, `lifecycle.RetentionError`, `storage.RelationExistsError`) → 6 when `Satisfied()`, else 3 (`exit.go`)
 14. `UnsupportedError` → 3 (`exit.go`)
-15. `storage.PlanUnapprovedError` → 3 (`exit.go`)
-16. `takeoverUnconfirmedError` → 3 (`exit.go`)
-17. `purgeUnconfirmedError` → 3 (`exit.go`)
-18. `Exhausted` → 6 (`exit.go`)
-19. `Narrowed` → 6 (`exit.go`)
-20. `NoWork` → 6 (`exit.go`)
-21. `OutsideWorkspaceError` → 3 (`exit.go`)
-22. `errors.Is(err, store.ErrWorkspaceNotInitialized)` → 3 (`exit.go`)
-23. `*store.QuarantineBlockError` → 3 (`exit.go`)
-24. `errors.Is(err, workspace.ErrIssuePrefixRefused)` → 3 (`exit.go`)
-25. `BulkFailureError` → 1 (`exit.go`)
-26. `errors.Is(err, store.ErrTransientGCContention)` → 1 (`exit.go`)
-27. anything else → 1 (`exit.go`)
+15. `takeoverUnconfirmedError` → 3 (`exit.go`)
+16. `purgeUnconfirmedError` → 3 (`exit.go`)
+17. `Exhausted` → 6 (`exit.go`)
+18. `Narrowed` → 6 (`exit.go`)
+19. `NoWork` → 6 (`exit.go`)
+20. `OutsideWorkspaceError` → 3 (`exit.go`)
+21. `errors.Is(err, store.ErrWorkspaceNotInitialized)` → 3 (`exit.go`)
+22. `*store.QuarantineBlockError` → 3 (`exit.go`)
+23. `errors.Is(err, workspace.ErrIssuePrefixRefused)` → 3 (`exit.go`)
+24. `BulkFailureError` → 1 (`exit.go`)
+25. `errors.Is(err, store.ErrTransientGCContention)` → 1 (`exit.go`)
+26. anything else → 1 (`exit.go`)
 
 Error types defined in `cli.go`: `MergeConflictError` (`cli.go`),
 `CorruptionError` (`cli.go`), `UsageError` (`cli.go`),
@@ -247,21 +246,20 @@ several of these types gets the reason of the earliest one:
 17. `NoWork` → `no_ready_work`
 18. `UnsupportedError` → `unsupported_flag`
 19. `takeoverUnconfirmedError` → `takeover_unconfirmed`
-20. `storage.PlanUnapprovedError` → `plan_not_approved`
-21. `purgeUnconfirmedError` → `purge_unconfirmed`
-22. `OutsideWorkspaceError` → `outside_git_workspace`
-23. `errors.Is(err, store.ErrWorkspaceNotInitialized)` → `workspace_not_initialized`
-24. `*store.QuarantineBlockError` → `migration_quarantined`
-25. `workspace.StoredPrefixError` → `stored_prefix_refused`
-26. `errors.Is(err, workspace.ErrIssuePrefixRefused)` → `validation_refused`
-    (`StoredPrefixError` unwraps to this sentinel; step 25 catches it first)
-27. `BulkFailureError` → `bulk_partial_failure`
-28. `store.WorkspaceWriteBlockedError` → `workspace_write_blocked` (it unwraps
+20. `purgeUnconfirmedError` → `purge_unconfirmed`
+21. `OutsideWorkspaceError` → `outside_git_workspace`
+22. `errors.Is(err, store.ErrWorkspaceNotInitialized)` → `workspace_not_initialized`
+23. `*store.QuarantineBlockError` → `migration_quarantined`
+24. `workspace.StoredPrefixError` → `stored_prefix_refused`
+25. `errors.Is(err, workspace.ErrIssuePrefixRefused)` → `validation_refused`
+    (`StoredPrefixError` unwraps to this sentinel; step 24 catches it first)
+26. `BulkFailureError` → `bulk_partial_failure`
+27. `store.WorkspaceWriteBlockedError` → `workspace_write_blocked` (it unwraps
     to `store.ErrTransientGCContention`; this step catches it first)
-29. `errors.Is(err, store.ErrWorkspaceBusy)` or
+28. `errors.Is(err, store.ErrWorkspaceBusy)` or
     `errors.Is(err, workspace.ErrConfigBusy)` → `workspace_busy`
-30. `errors.Is(err, store.ErrTransientGCContention)` → `transient_gc_contention`
-31. anything else → `command_failed`
+29. `errors.Is(err, store.ErrTransientGCContention)` → `transient_gc_contention`
+30. anything else → `command_failed`
 
 `commandErrorRemediation(reason)` (`error_output.go`), verbatim strings. An
 empty string means no `remediation:` line is printed:
@@ -287,7 +285,6 @@ empty string means no `remediation:` line is printed:
 - `no_ready_work`: "Do not retry unchanged — routing is deterministic and repeats this answer until something in the backlog moves. That is the backlog's state, not a fault. If `--type`, `--labels`, `--assignee`, or `--status` narrowed this run, drop the filter and ask again. If a `focus` label narrowed it, `lit next --all` routes over the whole queue for one run and `lit label rm <id> focus` lifts the scope. Otherwise `lit backlog --all` shows the whole queue and who holds what, and `lit new` adds work if it is genuinely empty."
 - `state_already_holds`: "No action is needed — the command asked for a state the workspace is already in. Do not retry: running it again cannot change the answer, and `lit doctor` has nothing to diagnose because nothing is broken."
 - `takeover_unconfirmed`: "Rerun with `--take` to take the lane over, or run `lit next` for work nobody else holds. \<agent-instructions>Taking over a lane another checkout holds right now overrides that checkout's work: pass `--take` only when the user directs the takeover.\</agent-instructions>"
-- `plan_not_approved`: "Write the plan with `lit update <id> --plan-file <path>`, or revise it after a fail; have a reviewer other than its author pass the current text with `/lit:review-plan <id>`; then run `lit done <id>` again. \<agent-instructions>Do not record a verdict on a plan you wrote: lit records the session that runs `lit verdict` as the reviewer, so your pass counts as the author's own and approves nothing.\</agent-instructions>"
 - `purge_unconfirmed`: "Rerun with `--yes` to purge it, or run `lit delete <id>` to remove it reversibly. \<agent-instructions>A purge cannot be undone and reaches every store lit syncs with: pass `--yes` only when the user directs the purge.\</agent-instructions>"
 - `outside_git_workspace`: "Run the command inside a git repository/worktree with links initialized."
 - `workspace_not_initialized`: "Do not retry unchanged — this repository has no lit workspace, and retrying this command cannot create one. Run `lit init` here to create it, or change to a directory that already has one."
@@ -1233,28 +1230,26 @@ positional is required; otherwise `errors.New("usage: lit <name> <id> [--reason 
   `applyStatusAction` is total over the leaf states
   (`internal/model/lifecycle/status_states.go`). A same-state transition is a no-op that records nothing
   (`status_states.go`, `internal/store/store.go`).
-- **`done` is gated on the plan.** `doneSpec.authorize` → `authorizeDone`
-  (`cli.go`) asks `Issue.Apply` first, so an epic or a frozen issue gets the
-  lifecycle's own refusal; then it reads `GetIssueDetail` and refuses through
-  `storage.PlanApproval(issue, events, reviews)` (`internal/storage/plan_review.go`)
-  unless the current plan has passed. Each reviewer's latest verdict on the
-  current text stands; none may be a fail, and one pass must be by someone
-  other than the text's author, who is the actor of the latest event that wrote
-  the plan to that text, else the actor of the `created` event. The refusal is
-  `storage.PlanUnapprovedError`, exit 3, reason `plan_not_approved`, whose
-  `Gap` is one of `PlanMissing` ("<id> has no plan; a ticket is finished once a
-  reviewer other than its plan's author has passed the current plan"),
-  `PlanUnreviewed` ("<id>'s current plan (v<n>, digest <d>) has no review",
-  plus "; the reviews on record judged an earlier text" when there are any),
-  `PlanFailed` ("… failed its law review: <reviewer> failed it citing <laws>; …
-  a fail stands until its reviewer passes the same text, so revise the plan and
-  have the new text reviewed") or `PlanSelfReviewed` ("… has passed only its
-  author's own review (<author>); it needs a pass from a reviewer other than its
-  author"). The refused command's event carries `done.plan_gate` (the gap's
-  `Kind()`: `no_plan`, `unreviewed`, `failed`, `author_only`); a done that lands
-  carries `done.plan_gate` `approved`, `done.plan_digest` and `done.plan_review`.
-  A done whose `Issue.Apply` leaves the status unchanged (the ticket is already
-  closed) reads no plan and carries `done.plan_gate` `already_closed`.
+- **`done` finishes wherever the plan stands.** `doneSpec.authorize` →
+  `authorizeDone` (`cli.go`) gates nothing: an epic or a frozen issue gets the
+  lifecycle's refusal from `Store.Apply`. Before the write it takes the events
+  `transitionLeaf` read with the issue, reads the plan reviews, and takes `storage.PlanApproval(issue, events, reviews)`
+  (`internal/storage/plan_review.go`), a sealed `PlanStanding`. The plan is
+  `PlanApproved` when each reviewer's latest verdict on the current text leaves
+  no fail standing and one pass is by someone other than the text's author, who
+  is the actor of the latest event that wrote the plan to that text, else the
+  actor of the `created` event. Otherwise it is a `PlanGap`: `PlanMissing`
+  ("<id> has no plan"), `PlanUnreviewed` ("<id>'s current plan (v<n>, digest
+  <d>) has no review", plus "; the reviews on record judged an earlier text"
+  when there are any), `PlanFailed` ("… failed its law review: <reviewer>
+  failed it citing <laws>") or `PlanSelfReviewed` ("… has passed only its
+  author's own review (<author>)"). The ticket is finished either way; a gap
+  prints `warning: finished without an approved plan: ` and its `Describe`
+  before the summary. The event carries `done.plan_standing` (the standing's
+  `Kind()`: `approved`, `no_plan`, `unreviewed`, `failed`, `author_only`), and
+  an approval adds `done.plan_digest` and `done.plan_review`. A done whose
+  write leaves the status unchanged (the ticket is already closed) prints no
+  warning and carries `done.plan_standing` `already_closed`.
 
 ### 2.11 `lit start` takeover gate
 

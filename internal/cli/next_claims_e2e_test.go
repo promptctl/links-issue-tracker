@@ -50,7 +50,6 @@ func TestNextRoutesEachCheckoutToItsOwnClaimedWork(t *testing.T) {
 	// ready (the lane gate no longer holds it behind a finished sibling) and
 	// the lane stays Held — A.2 itself is still open — attributed to alpha.
 	runCLIInDir(t, alpha, "start", a1)
-	approvePlanInDir(t, alpha, a1)
 	runCLIInDir(t, alpha, "done", a1)
 	runCLIInDir(t, alpha, "sync", "push", "--set-upstream")
 
