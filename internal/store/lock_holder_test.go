@@ -828,15 +828,15 @@ func TestARecordThatWillNotRetireIsReportedAndTheReleaseStillLands(t *testing.T)
 func TestHoldingARetiredRecordFailsRatherThanPublishingAnImpostor(t *testing.T) {
 	t.Parallel()
 	private := filepath.Join(t.TempDir(), lockHolderPrivatePrefix+"gone")
-	written, err := writeNewRecord(private, []byte(`{"pid":1}`))
-	if err != nil {
+	payload := []byte(`{"pid":1}`)
+	if err := writeNewRecord(private, payload); err != nil {
 		t.Fatalf("writeNewRecord: %v", err)
 	}
 	if err := os.Remove(private); err != nil {
 		t.Fatalf("retire the written record: %v", err)
 	}
 
-	release, err := holdWrittenRecord(private, written)
+	release, err := holdWrittenRecord(private, payload)
 	if err == nil {
 		_ = release()
 		t.Fatal("holdWrittenRecord() on a record retired before its hold returned no error")

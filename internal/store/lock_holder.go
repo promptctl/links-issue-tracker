@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -255,11 +256,10 @@ func publishLockHolder(storageDir, lockPath string) (func() error, error) {
 // complete and held.
 func mintHeldRecord(dir string, payload []byte) (func() error, error) {
 	privatePath, recordPath := lockHolderRecordNames(dir)
-	written, err := writeNewRecord(privatePath, payload)
-	if err != nil {
+	if err := writeNewRecord(privatePath, payload); err != nil {
 		return nil, err
 	}
-	release, err := holdWrittenRecord(privatePath, written)
+	release, err := holdWrittenRecord(privatePath, payload)
 	if err != nil {
 		return nil, errors.Join(err, retireRecord(privatePath))
 	}
@@ -285,45 +285,45 @@ func mintHeldRecord(dir string, payload []byte) (func() error, error) {
 }
 
 // writeNewRecord creates the record under its private name and writes the
-// payload through the creating handle, returning the identity of the file it
-// wrote. O_EXCL so a name already on disk is refused here rather than adopted
-// as this holder's record. lockHolderProcessNonce keeps any name from being
-// drawn twice; this is what makes a breach of that loud.
+// payload through the creating handle. O_EXCL so a name already on disk is
+// refused here rather than adopted as this holder's record.
+// lockHolderProcessNonce keeps any name from being drawn twice; this is what
+// makes a breach of that loud.
 // [LAW:no-silent-failure]
-func writeNewRecord(privatePath string, payload []byte) (os.FileInfo, error) {
+func writeNewRecord(privatePath string, payload []byte) error {
 	file, err := os.OpenFile(privatePath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
-		return nil, fmt.Errorf("create holder record: %w", err)
+		return fmt.Errorf("create holder record: %w", err)
 	}
 	_, writeErr := file.Write(payload)
-	written, statErr := file.Stat()
-	if err := errors.Join(writeErr, statErr, file.Close()); err != nil {
-		return nil, errors.Join(fmt.Errorf("write holder record: %w", err), retireRecord(privatePath))
+	if err := errors.Join(writeErr, file.Close()); err != nil {
+		return errors.Join(fmt.Errorf("write holder record: %w", err), retireRecord(privatePath))
 	}
-	return written, nil
+	return nil
 }
 
 // holdWrittenRecord takes the shared hold on the record writeNewRecord wrote,
-// and refuses a hold on any other file. filelock opens with O_CREATE, so a
-// record removed from under its name before the hold lands would be
-// recreated empty and held — a file carrying no holder that the link would
-// then publish as this one, unnamed for the life of its lock. Comparing the
-// held name's identity against the file written is what catches it.
+// and refuses a hold on a file that does not say what was written. filelock
+// opens with O_CREATE, so a record removed from under its name before the hold
+// lands would be recreated empty and held — a file naming nobody that the link
+// would then publish as this holder, unnamed for the life of its lock. Reading
+// the held name back is what catches it: a shared hold permits reads on every
+// platform, and the contents, not the inode, are what a reader is told.
 // [LAW:no-silent-failure]
 //
 // One attempt is the whole budget: no reader will ever open this name, so
 // the hold is uncontended by construction and contention here would mean
 // the invariant is broken, not that waiting would help.
-func holdWrittenRecord(privatePath string, written os.FileInfo) (func() error, error) {
+func holdWrittenRecord(privatePath string, payload []byte) (func() error, error) {
 	release, acquired, err := filelock.Acquire(context.Background(), privatePath, false, 1, 0)
 	if err != nil || !acquired {
 		return nil, fmt.Errorf("hold holder record (acquired=%v): %w", acquired, err)
 	}
-	held, err := os.Stat(privatePath)
+	held, err := os.ReadFile(privatePath)
 	if err != nil {
-		return nil, errors.Join(fmt.Errorf("identify held holder record: %w", err), release())
+		return nil, errors.Join(fmt.Errorf("read back held holder record: %w", err), release())
 	}
-	if !os.SameFile(written, held) {
+	if !bytes.Equal(held, payload) {
 		return nil, errors.Join(fmt.Errorf("hold holder record: %s is no longer the record this process wrote", filepath.Base(privatePath)), release())
 	}
 	return release, nil
