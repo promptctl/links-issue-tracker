@@ -218,7 +218,8 @@ type PlanGap interface {
 	Describe(issueID string) string
 }
 
-// PlanApproved is a current plan whose latest review passed it. Review is the pass the approval rests on.
+// PlanApproved is a current plan whose latest review passed it. Review is the
+// pass the approval rests on.
 type PlanApproved struct {
 	Review model.PlanReview
 }
