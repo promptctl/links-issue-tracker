@@ -1186,11 +1186,6 @@ func TestExhaustionReportsAnEpicBlockerByItsTicketHeldByItself(t *testing.T) {
 	}
 }
 
-// A row of ours waiting behind an earlier ticket of its own lane waits on our
-// own work, even when a filter keeps that ticket out of view: its lane is the
-// row's own, so it is inside the scope and never a blocker to clear from
-// outside. Collected, it would draw a route to stay that files a ticket in our
-// epic and asks for a blocked-by edge lit refuses between two of its tickets.
 // Blockers are named in the order the walk reached them, which is the rank of
 // the rows they gate, whether or not the run could see them. Here the
 // higher-ranked row waits on a blocker out of view and the lower-ranked one on
@@ -1245,6 +1240,11 @@ func TestExhaustionNamesBlockersInWalkOrderWhetherOrNotInView(t *testing.T) {
 	}
 }
 
+// A row of ours waiting behind an earlier ticket of its own lane waits on our
+// own work, even when a filter keeps that ticket out of view: its lane is the
+// row's own, so it is inside the scope and never a blocker to clear from
+// outside. Collected, it would draw a route to stay that files a ticket in our
+// epic and asks for a blocked-by edge lit refuses between two of its tickets.
 func TestExhaustionNeverNamesAnEarlierLaneMateOutOfViewAsABlocker(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
@@ -2055,10 +2055,11 @@ func TestNoWorkWithEveryRowOffThePathIsNotAnEmptyBacklog(t *testing.T) {
 // test when the run could not read it.
 func readingOf(t *testing.T, blocker blockerReach) rowReach {
 	t.Helper()
-	if blocker.Best == nil {
+	row, ok := blocker.read()
+	if !ok {
 		t.Fatalf("blocker %q is out of view, want it read through work in view", blocker.ID)
 	}
-	return *blocker.Best
+	return row
 }
 
 // "No ready work" alone would answer two opposite questions in identical
@@ -2120,6 +2121,30 @@ func TestNoWorkNamesEachRowThePoolWalkWentPast(t *testing.T) {
 	}
 }
 
+// poolNotes has words for every kind, which holds only because the pool walk
+// can report every kind: a kind it could not reach would leave a note nothing
+// renders. Held fresh and not ready are reached above, and awaiting outside by
+// TestNextLeavesTheRowsItWentPastOnTheEvent; this reaches the fourth, a row
+// held by a label on itself.
+func TestNoWorkReportsARowHeldByItself(t *testing.T) {
+	h := newReadyTestHarness(t)
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "next", IssueType: "epic", Priority: 1})
+	held := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Needs design", Topic: "next", IssueType: "task", Priority: 0, ParentID: epic.ID, Lane: "held", Labels: []string{NeedsDesignLabel}})
+
+	rows, details, epics := h.gather()
+	outcome := routeNext(rows, details, epics, claims.Standings{}, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, storage.IssueCriteria{})
+	noWork, ok := outcome.(NoWork)
+	if !ok {
+		t.Fatalf("routeNext = %#v (%T), want NoWork — the one row is held by a label on itself", outcome, outcome)
+	}
+	if len(noWork.Unreachable) != 1 || noWork.Unreachable[0].ID != held.ID || noWork.Unreachable[0].Kind != reachHeldByItself {
+		t.Fatalf("NoWork.Unreachable = %+v, want exactly %s, held by itself", noWork.Unreachable, held.ID)
+	}
+	if want := held.ID + " (" + poolNotes[reachHeldByItself] + ")"; !strings.Contains(noWork.Error(), want) {
+		t.Fatalf("NoWork.Error() = %q, want %q", noWork.Error(), want)
+	}
+}
+
 // The other half of the same type: an empty backlog. The clause is driven
 // entirely by the rows the walk went past, so no rows means no clause — pinned
 // byte-for-byte, because "no ready work" is still the whole truth when there is
@@ -2156,7 +2181,7 @@ func TestReachClauseNamesABoundedPrefixAndCountsTheRest(t *testing.T) {
 	rowsOfKind := func(kind reachKind, prefix string, n int) []rowReach {
 		rows := make([]rowReach, 0, n)
 		for i := range n {
-			rows = append(rows, rowReach{ID: fmt.Sprintf("%s-%03d", prefix, i), Kind: kind})
+			rows = append(rows, rowReach{ID: fmt.Sprintf("%s-%03d", prefix, i), reading: reading{Kind: kind}})
 		}
 		return rows
 	}

@@ -788,7 +788,7 @@ func TestRenderNextOutcomeTerminalOutcomesKeepTheirType(t *testing.T) {
 			// it never examined.
 			name: "no work withheld by focus scope",
 			outcome: NoWork{
-				Unreachable: []rowReach{{ID: "links-gate-onpath", Kind: reachNotReady}},
+				Unreachable: []rowReach{{ID: "links-gate-onpath", reading: reading{Kind: reachNotReady}}},
 				OffPath:     []string{"links-other-offpath"},
 			},
 			wantReason: "no_ready_work",

@@ -260,13 +260,19 @@ const (
 	reachTakeable
 )
 
+// reading is what one gathered row says to this checkout: the row, and what
+// this checkout may do about it.
+type reading struct {
+	Row  annotation.AnnotatedIssue
+	Kind reachKind
+}
+
 // rowReach is a row a walk went past, carrying what this checkout may do about
 // it. Row is the gathered row Kind was read from: the row itself, or for a
 // dependency, the ticket that would clear it.
 type rowReach struct {
-	ID   string
-	Row  annotation.AnnotatedIssue
-	Kind reachKind
+	ID string
+	reading
 }
 
 // name is how a diagnostic names the entry. A dependency read through a ticket
@@ -653,7 +659,7 @@ func withheldByScope(rows []annotation.AnnotatedIssue) []string {
 func passedOver(rows []annotation.AnnotatedIssue, reachFor func(annotation.AnnotatedIssue) reachKind) []rowReach {
 	passed := make([]rowReach, 0, len(rows))
 	for _, row := range rows {
-		passed = append(passed, rowReach{ID: row.ID, Row: row, Kind: reachFor(row)})
+		passed = append(passed, rowReach{ID: row.ID, reading: reading{Row: row, Kind: reachFor(row)}})
 	}
 	return passed
 }
@@ -677,8 +683,11 @@ type gatedDep struct {
 }
 
 // depReach is a dependency as the work toward it reads. Best is the work this
-// checkout can do the most about, with that kind, under the dependency's own id.
-// It is nil when none of that work is among the gathered rows, which puts the
+// checkout can do the most about, with that kind. It carries no id: the
+// dependency's is ID alone, so the entry a diagnostic names and the edge the
+// route to stay offers cannot be two different ids. [LAW:one-source-of-truth]
+//
+// Best is nil when none of that work is among the gathered rows, which puts the
 // dependency outside this view: this run knows nothing about it — an epic with
 // no open ticket under it, say. Leaf-only membership narrows the gather; the
 // dependency annotation is read from the store and does not, and no filter
@@ -687,7 +696,16 @@ type gatedDep struct {
 // rather than a kind of one. [LAW:types-are-the-program]
 type depReach struct {
 	ID   string
-	Best *rowReach
+	Best *reading
+}
+
+// read is the dependency as the row a diagnostic names it by, and false when
+// the run could see none of the work toward it.
+func (d depReach) read() (rowReach, bool) {
+	if d.Best == nil {
+		return rowReach{}, false
+	}
+	return rowReach{ID: d.ID, reading: *d.Best}, true
 }
 
 // heldByThemselves collects, in rank order, the rows in scope that routing
@@ -703,7 +721,7 @@ func heldByThemselves(rows []annotation.AnnotatedIssue, inScope func(annotation.
 	for _, row := range rows {
 		kind := reachFor(row)
 		if inScope(row) && (kind == reachHeldByItself || kind == reachAwaitingOutside) && ClassifyReadiness(row.Annotations).HeldByItself() {
-			held = append(held, rowReach{ID: row.ID, Row: row, Kind: kind})
+			held = append(held, rowReach{ID: row.ID, reading: reading{Row: row, Kind: kind}})
 		}
 	}
 	return held
@@ -755,11 +773,12 @@ func blockersOf(deps []gatedDep, workToward map[string][]annotation.AnnotatedIss
 // in walk order.
 func readingsOf(blockers []blockerReach) (inView []rowReach, outOfView []string) {
 	for _, blocker := range blockers {
-		if blocker.Best == nil {
+		row, ok := blocker.read()
+		if !ok {
 			outOfView = append(outOfView, blocker.ID)
 			continue
 		}
-		inView = append(inView, *blocker.Best)
+		inView = append(inView, row)
 	}
 	return inView, outOfView
 }
@@ -877,7 +896,7 @@ func gatingDependencies(rows []annotation.AnnotatedIssue, laneOf func(annotation
 				dep := gatedDep{depReach: depReach{ID: id}, Gates: gated.ID, Via: at.via}
 				for _, work := range workToward[id] {
 					if kind := reachFor(work); dep.Best == nil || kind > dep.Best.Kind {
-						dep.Best = &rowReach{ID: id, Row: work, Kind: kind}
+						dep.Best = &reading{Row: work, Kind: kind}
 					}
 				}
 				lane, isPlaced := placed[id]
@@ -1047,7 +1066,8 @@ func (o Exhausted) scope() string {
 // every kind a walk can report and none for a row routing would have served
 // instead: words for that are an out-of-range index, which does not compile. No
 // reported list holds a takeable row, and one that did would not pass quietly:
-// the event's name lookup (reachKindNames) panics on it. Go does not
+// describeReach's grouping and the event's name lookup (reachKindNames) are
+// bounded the same way and panic on it. Go does not
 // require an indexed array literal to fill every slot, so
 // TestEveryReachKindHasWordsInBothDiagnostics holds the other direction.
 // [LAW:types-are-the-program] [LAW:no-silent-failure]
@@ -1112,14 +1132,18 @@ func nameCapped(items []string, sep string) string {
 // describeReach renders a clause for each kind that has rows, most this
 // checkout can do first — one ordering for both diagnostics rather than a
 // per-caller one that could disagree. [LAW:one-source-of-truth]
+//
+// The rows are grouped into an array bounded like notes, so a takeable row
+// panics here, at the render, rather than being grouped under a kind no clause
+// is written for and dropped from the message. [LAW:no-silent-failure]
 func describeReach(rows []rowReach, lead string, notes reachNotes) string {
-	byKind := map[reachKind][]string{}
+	var byKind [reachTakeable][]string
 	for _, row := range rows {
 		byKind[row.Kind] = append(byKind[row.Kind], row.name())
 	}
 	parts := make([]string, 0, len(notes))
 	for kind := len(notes) - 1; kind >= 0; kind-- {
-		parts = append(parts, clause(lead, byKind[reachKind(kind)], notes[kind]))
+		parts = append(parts, clause(lead, byKind[kind], notes[kind]))
 	}
 	return joinClauses(parts...)
 }

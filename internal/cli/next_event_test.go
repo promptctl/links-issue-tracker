@@ -66,7 +66,7 @@ func rowFor(id string) annotation.AnnotatedIssue {
 
 // readThrough is a dependency the run read through the gathered ticket under it.
 func readThrough(id, ticket string, kind reachKind) depReach {
-	return depReach{ID: id, Best: &rowReach{ID: id, Row: rowFor(ticket), Kind: kind}}
+	return depReach{ID: id, Best: &reading{Row: rowFor(ticket), Kind: kind}}
 }
 
 // An exhausted scope's event says how far the scope had come, names every
@@ -90,7 +90,7 @@ func TestNextRecordsWhatAnExhaustedScopeNamed(t *testing.T) {
 					{depReach: readThrough("test-dep", "test-dep-leaf", reachHeldFresh), Clearable: true},
 					{depReach: readThrough("test-ext", "test-ext", reachAwaitingOutside)},
 				},
-				Held: []rowReach{{ID: "test-held", Row: rowFor("test-held"), Kind: reachNotReady}},
+				Held: []rowReach{{ID: "test-held", reading: reading{Row: rowFor("test-held"), Kind: reachNotReady}}},
 			},
 			gathered: 5,
 			want: `{
@@ -201,22 +201,23 @@ func TestNextRecordsWhatAnExhaustedScopeNamed(t *testing.T) {
 }
 
 // An empty pool under a focus label records every row it named: the ones the
-// walk went past with their reach, then the ones the focus withheld as off the
-// focus path.
+// walk went past with their reach under next.unreachable, and the ones the
+// focus withheld under next.off_path, the key an exhausted scope's withheld
+// rows land on too.
 func TestNextRecordsWhatAFocusedEmptyPoolNamed(t *testing.T) {
 	recorder := telemetry.Begin(telemetry.Event{})
 	outcome := NoWork{
-		Unreachable: []rowReach{{ID: "test-gate", Row: rowFor("test-gate"), Kind: reachNotReady}},
+		Unreachable: []rowReach{{ID: "test-gate", reading: reading{Row: rowFor("test-gate"), Kind: reachNotReady}}},
 		OffPath:     []string{"test-off"},
 	}
 	recordNextEvent(telemetry.With(context.Background(), recorder), outcome, 2)
-	want := decodeJSON(t, `{"unreachable": [
-		{"id": "test-gate", "ticket": "test-gate", "reach": "not_ready"},
-		{"id": "test-off", "ticket": "test-off", "reach": "off_focus_path"}
-	]}`)["unreachable"]
+	want := decodeJSON(t, `{
+		"unreachable": [{"id": "test-gate", "ticket": "test-gate", "reach": "not_ready"}],
+		"off_path": [{"id": "test-off", "ticket": "test-off", "reach": "off_focus_path"}]
+	}`)
 	facts := writtenFacts(t, recorder.Finish(telemetry.End{}))
-	if facts["next.outcome"] != "no_work" || !reflect.DeepEqual(facts["next.unreachable"], want) {
-		t.Errorf("next.outcome, next.unreachable = %v, %v; want no_work, %v", facts["next.outcome"], facts["next.unreachable"], want)
+	if facts["next.outcome"] != "no_work" || !reflect.DeepEqual(facts["next.unreachable"], want["unreachable"]) || !reflect.DeepEqual(facts["next.off_path"], want["off_path"]) {
+		t.Errorf("next.outcome, next.unreachable, next.off_path = %v, %v, %v; want no_work, %v, %v", facts["next.outcome"], facts["next.unreachable"], facts["next.off_path"], want["unreachable"], want["off_path"])
 	}
 }
 

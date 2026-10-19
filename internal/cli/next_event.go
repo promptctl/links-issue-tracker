@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 )
@@ -42,10 +43,16 @@ type progressFact struct {
 	Total int `json:"total"`
 }
 
+// fact is the row as the event records it — the one mapping every list of rows
+// goes through. [LAW:one-source-of-truth]
+func (r rowReach) fact() reachFact {
+	return reachFact{ID: r.ID, Ticket: r.Row.ID, Reach: reachKindNames[r.Kind]}
+}
+
 func reachFacts(rows []rowReach) []reachFact {
 	facts := make([]reachFact, len(rows))
 	for i, row := range rows {
-		facts[i] = reachFact{ID: row.ID, Ticket: row.Row.ID, Reach: reachKindNames[row.Kind]}
+		facts[i] = row.fact()
 	}
 	return facts
 }
@@ -73,8 +80,8 @@ func blockerFacts(blockers []blockerReach) []blockerFact {
 	facts := make([]blockerFact, len(blockers))
 	for i, blocker := range blockers {
 		fact := reachFact{ID: blocker.ID, Reach: outOfViewReach}
-		if blocker.Best != nil {
-			fact = reachFact{ID: blocker.ID, Ticket: blocker.Best.Row.ID, Reach: reachKindNames[blocker.Best.Kind]}
+		if row, ok := blocker.read(); ok {
+			fact = row.fact()
 		}
 		facts[i] = blockerFact{reachFact: fact, Clearable: blocker.Clearable}
 	}
@@ -157,9 +164,11 @@ func recordNextEvent(ctx context.Context, outcome NextOutcome, gathered int) {
 	telemetry.Set(ctx, "next.exhausted_progress", progressFact(decision.Exhaustion.Progress))
 	telemetry.Set(ctx, "next.blocked", blockerFacts(decision.Exhaustion.Blocked))
 	telemetry.Set(ctx, "next.held", reachFacts(decision.Exhaustion.Held))
-	telemetry.Set(ctx, "next.off_path", offPathFacts(decision.Exhaustion.OffPath))
+	// One outcome at most carries rows the focus withheld, and they are the same
+	// fact on either, so they land on one key. [LAW:one-source-of-truth]
+	telemetry.Set(ctx, "next.off_path", offPathFacts(slices.Concat(decision.Exhaustion.OffPath, decision.NoWork.OffPath)))
 	telemetry.Set(ctx, "next.hidden_by_filter", decision.HiddenByFilter)
-	telemetry.Set(ctx, "next.unreachable", append(reachFacts(decision.NoWork.Unreachable), offPathFacts(decision.NoWork.OffPath)...))
+	telemetry.Set(ctx, "next.unreachable", reachFacts(decision.NoWork.Unreachable))
 	telemetry.Set(ctx, "next.stay_offered", len(decision.Exhaustion.stay()) > 0)
 	telemetry.Count(ctx, "next.rows_gathered", gathered)
 }
