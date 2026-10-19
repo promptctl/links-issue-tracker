@@ -1278,7 +1278,7 @@ version `0.10.0`, and no hooks. The skill `next` has description "Pull the next 
 Claude session law-review a ticket's plan and record the verdict in lit. ..."; its script
 `start-reviewer`, run in the background, starts a reviewer as an interactive Claude Code session
 in a detached tmux session, types `reviewer.md`'s path and the ticket id into its input, and
-waits for its turn to end; the reviewer has the tools Read, Grep, Glob, Skill and Bash in `dontAsk` permission mode,
+waits until it sits idle at its prompt; the reviewer has the tools Read, Grep, Glob, Skill and Bash in `dontAsk` permission mode,
 pre-approving the read tools, `lit show`, `lit ls`, `lit history`, `lit verdict`,
 `lit comment add`, `git log` and `git show` on top of the user's own settings
 (`claude-plugin/skills/review-plan/SKILL.md`).

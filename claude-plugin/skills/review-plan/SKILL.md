@@ -23,9 +23,10 @@ foreground command's timeout, and you are told when it exits.
 ```
 
 It starts the reviewer as an interactive Claude Code session in a detached tmux
-session, types `reviewer.md`'s path and the ticket id into its input, waits for
-the reviewer's turn to end, prints its reply, and closes the session. It needs
-`tmux`, `claude` and `jq` on your PATH.
+session, types `reviewer.md`'s path and the ticket id into its input, waits until
+the reviewer sits idle at its prompt, prints its reply, and closes the session.
+The reviewer runs in your environment, less your own session's variables. It
+needs `bash`, `tmux`, `claude`, `jq`, `uuidgen` and `lit` on your PATH.
 
 lit records whoever runs `lit verdict`, and it identifies a Claude session by
 `CLAUDE_CODE_SESSION_ID`. The reviewer is a new session with its own id, so lit
@@ -43,6 +44,8 @@ session's input, as a person would.
 - WRONG: judging the plan yourself, or handing `reviewer.md` to a subagent through
   the Agent tool. A subagent inherits your `CLAUDE_CODE_SESSION_ID`, so lit records
   its verdict as yours, and the plan's author has reviewed their own plan.
+- WRONG: running `start-reviewer` in the foreground. The tool's timeout kills it
+  partway through, it closes the reviewer's session, and nothing is recorded.
 - WRONG: print mode, in any form, to save the tmux session. It is banned.
 - RIGHT: `start-reviewer` in the background, and nothing else records the verdict.
 
@@ -50,8 +53,9 @@ session's input, as a person would.
 
 The background command's output is the reviewer's reply, then the lines
 `lit show` holds by the reviewer: its verdict and, on a fail, its reasons
-comment. Relay the reply. If it exits 1 with no verdict, relay what the
-reviewer said instead; the plan stays unreviewed, and it is not yours to judge.
+comment. Relay the reply. It exits 0 only when the reviewer recorded a verdict on
+the current plan. On any other exit, relay what it printed instead; the plan stays
+unreviewed, and it is not yours to judge.
 
 A fail sends the plan back to its author. A revised plan is a new text with a new
 digest, and the verdict on the old text says nothing about it, so run the review

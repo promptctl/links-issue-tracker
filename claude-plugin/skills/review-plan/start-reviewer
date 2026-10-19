@@ -2,15 +2,19 @@
 # start-reviewer <ticket-id> - run from the ticket's repository.
 #
 # Starts the plan reviewer as its own interactive Claude Code session in a
-# detached tmux session, types its instruction into the input, waits for the
-# reviewer's turn to end, prints its reply and the verdict lit recorded for it,
-# and closes the session. Needs tmux, claude and jq. Exit 0: a verdict is recorded. Exit 1: it is not.
+# detached tmux session, types its instruction into the input, waits until the
+# reviewer sits idle at its prompt, prints its last reply and the lines lit show
+# holds by it, and closes the session. Exit 0: the reviewer recorded a verdict
+# on the current plan. Exit 1: it did not. Exit 2: it could not be started.
 #
 # Never Claude Code's print mode (-p): the owner banned it. Anything that asks Claude Code
 # something types into an interactive session's input, as a person would.
 set -euo pipefail
 
 [[ $# -eq 1 ]] || { echo "usage: start-reviewer <ticket-id>" >&2; exit 2; }
+for tool in tmux claude jq uuidgen lit; do
+  command -v "$tool" >/dev/null || { echo "start-reviewer: $tool is not on PATH" >&2; exit 2; }
+done
 ID=$1
 SKILL_DIR=$(cd "$(dirname "$0")" && pwd -P)
 REPO=$(pwd -P)
@@ -22,7 +26,8 @@ SESSION_ID=$(uuidgen | tr '[:upper:]' '[:lower:]')
 ACTOR=claude_$SESSION_ID
 TMUX_SESSION=lit-review-${SESSION_ID:0:8}
 WORK=$(mktemp -d)
-STOPPED=$WORK/stopped
+LAST_REPLY=$WORK/reply
+IDLE=$WORK/idle
 
 alive() { tmux has-session -t "=$TMUX_SESSION" 2>/dev/null; }
 cleanup() {
@@ -33,18 +38,39 @@ trap cleanup EXIT
 
 screen() { tmux capture-pane -p -J -S - -t "=$TMUX_SESSION:"; }
 fail() { echo "start-reviewer: $1; the reviewer's screen:" >&2; screen >&2; exit 1; }
+quote() { printf "'%s'" "${1//\'/\'\\\'\'}"; } # sh single-quoting, for any path
 
-# The Stop hook is the reviewer's own signal that its turn has ended; its
-# input carries the reply, as last_assistant_message.
-printf '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"cat > %s"}]}]}}\n' \
-  "$STOPPED" >"$WORK/settings.json"
+# Stop fires each time the reviewer's turn tries to end and carries its reply as
+# last_assistant_message. Another Stop hook may block it and the turn goes on,
+# so each one replaces the last, whole, by rename. The turn has ended only once
+# the session sits waiting for input: Claude Code's idle_prompt notification,
+# sent after 60s of that.
+jq -n --arg stop "cat >$(quote "$LAST_REPLY.part") && mv $(quote "$LAST_REPLY.part") $(quote "$LAST_REPLY")" \
+  --arg idle "touch $(quote "$IDLE")" \
+  '{hooks: {Stop: [{hooks: [{type: "command", command: $stop}]}],
+            Notification: [{matcher: "idle_prompt", hooks: [{type: "command", command: $idle}]}]}}' \
+  >"$WORK/settings.json"
+
+# The reviewer runs in the caller's environment, not the tmux server's, which
+# predates the caller or was started by it, less the variables that make a
+# process part of the author's Claude Code session, and the terminal's, which
+# its pane sets.
+for name in $(compgen -e); do
+  case $name in
+    TERM | TMUX | TMUX_PANE | CLAUDECODE | CLAUDE_PID | CLAUDE_EFFORT | CLAUDE_CODE_ENTRYPOINT | \
+      CLAUDE_CODE_EXECPATH | CLAUDE_CODE_CHILD_SESSION | CLAUDE_CODE_SESSION_* | \
+      CLAUDE_CODE_MESSAGING_* | CLAUDE_CODE_BRIDGE_*) ;;
+    *) printf '%s=%s\0' "$name" "${!name}" ;;
+  esac
+done >"$WORK/env"
 
 # The reviewer is restricted the same way whatever it is asked: no Edit or
 # Write tool, and dontAsk refuses every command not pre-approved here or in the
 # user's own settings, which stay loaded because they enable the laws plugin.
-env_args=(-e "PATH=$PATH")
-[[ -n ${CLAUDE_CONFIG_DIR:-} ]] && env_args+=(-e "CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR")
-tmux new-session -d -s "$TMUX_SESSION" -c "$REPO" -x 200 -y 50 "${env_args[@]}" -- \
+# shellcheck disable=SC2016 # the pane's bash expands the -c script
+tmux new-session -d -s "$TMUX_SESSION" -c "$REPO" -x 200 -y 50 -- \
+  "$BASH" -c 'kv=(); while IFS= read -r -d "" v; do kv+=("$v"); done <"$1"; shift
+    exec env -i TERM="$TERM" "${kv[@]}" "$@"' start-reviewer "$WORK/env" \
   "$CLAUDE" --session-id "$SESSION_ID" \
   --settings "$WORK/settings.json" \
   --add-dir "$SKILL_DIR" \
@@ -73,17 +99,21 @@ LINE="Read $SKILL_DIR/reviewer.md and follow it. Ticket: $ID"
 tmux send-keys -t "=$TMUX_SESSION:" -l "$LINE"
 until_screen "Ticket: $ID" 30 "the instruction did not appear in claude's input"
 # Only a turn that ends after this Enter is the review.
-rm -f "$STOPPED"
+rm -f "$LAST_REPLY" "$IDLE"
 tmux send-keys -t "=$TMUX_SESSION:" Enter
 
 deadline=$((SECONDS + 45 * 60))
-until [[ -e $STOPPED ]]; do
+until [[ -e $IDLE ]]; do
   alive || { echo "start-reviewer: claude exited before its turn ended" >&2; exit 1; }
   ((SECONDS < deadline)) || fail "the review did not end within 45 minutes"
   sleep 5
 done
+[[ -e $LAST_REPLY ]] || fail "the reviewer went idle with no turn ended"
 
-jq -r .last_assistant_message "$STOPPED"
-echo "--- lit show $ID, lines by the reviewer $ACTOR:"
+jq -r .last_assistant_message "$LAST_REPLY"
+echo "--- lit show $ID, the lines by the reviewer $ACTOR:"
 shown=$(lit show "$ID")
-grep -F "[$ACTOR" <<<"$shown" || { echo "(none: no verdict was recorded)"; exit 1; }
+# lit show starts each row at column 0 and indents a comment's later lines, so
+# a row by the reviewer prints with its whole body.
+awk -v actor="[$ACTOR" '/^[^ ]/ { mine = index($0, actor) > 0 } mine' <<<"$shown"
+grep -qE "^- (pass|fail) \[$ACTOR @" <<<"$shown" || { echo "(no verdict on the current plan was recorded)"; exit 1; }
