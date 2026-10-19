@@ -1236,12 +1236,12 @@ positional is required; otherwise `errors.New("usage: lit <name> <id> [--reason 
   lifecycle's refusal from `Store.Apply`. Before the write it takes the events
   `transitionLeaf` read with the issue, reads the plan reviews, and takes `storage.PlanApproval(issue, events, reviews)`
   (`internal/storage/plan_review.go`), a sealed `PlanStanding`. The plan is
-  `PlanApproved` when a review of the current text passed it and none failed
-  it; who recorded a verdict decides nothing. Otherwise it is a `PlanGap`: `PlanMissing`
+  `PlanApproved` when the latest review of the current text passed it; who
+  recorded a verdict decides nothing. Otherwise it is a `PlanGap`: `PlanMissing`
   ("<id> has no plan"), `PlanUnreviewed` ("<id>'s current plan (v<n>, digest
   <d>) has no review", plus "; the reviews on record judged an earlier text"
-  when there are any) or `PlanFailed` ("… failed its law review: <reviewer>
-  failed it citing <laws>"). The ticket is finished either way; a gap
+  when there are any) or `PlanFailed`, the latest review failed it ("… failed
+  its law review: <reviewer> failed it citing <laws>"). The ticket is finished either way; a gap
   prints `warning: finished without an approved plan: ` and its `Describe`
   before the summary. The event carries `done.plan_standing` (the standing's
   `Kind()`: `approved`, `no_plan`, `unreviewed`, `failed`), and

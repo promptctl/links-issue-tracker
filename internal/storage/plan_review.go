@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 )
@@ -163,11 +162,11 @@ func DescribeVersions(count int) string {
 // returns PlanApproved with the passing review the approval rests on, or the
 // PlanGap naming what is missing.
 //
-// The plan is approved when a review of the current text passed it and none
-// failed it, so a fail stands until the text is revised. Who recorded a
-// verdict decides nothing: lit cannot tell one reviewer from another, since a
-// subagent records under its parent's session and --by takes any name. Pure,
-// so every engine decides the same.
+// The latest review of the current text decides: a pass approves the plan, a
+// fail stands against it, and a reviewer who changes their mind records
+// another. Who recorded a verdict decides nothing: lit cannot tell one reviewer
+// from another, since a subagent records under its parent's session and --by
+// takes any name. Pure, so every engine decides the same.
 // [LAW:single-enforcer] [LAW:effects-at-boundaries] [LAW:parse-dont-validate]
 func PlanApproval(issue model.Issue, events []model.IssueEvent, reviews []model.PlanReview) PlanStanding {
 	field := PlanField()
@@ -179,18 +178,14 @@ func PlanApproval(issue model.Issue, events []model.IssueEvent, reviews []model.
 		Number: slices.Index(TextVersions(issue, events, field), plan) + 1,
 		Digest: model.DigestPlan(plan),
 	}
-	// Newest first, so the pass an approval rests on is the latest.
-	var judged []model.PlanReview
 	for _, review := range slices.Backward(reviews) {
-		if review.Judges(plan) {
-			judged = append(judged, review)
+		if !review.Judges(plan) {
+			continue
 		}
-	}
-	if fails := slices.DeleteFunc(slices.Clone(judged), func(review model.PlanReview) bool { return review.Verdict != model.PlanFail }); len(fails) > 0 {
-		return PlanFailed{Plan: version, Fails: fails}
-	}
-	if len(judged) > 0 {
-		return PlanApproved{Review: judged[0]}
+		if review.Verdict == model.PlanFail {
+			return PlanFailed{Plan: version, Fail: review}
+		}
+		return PlanApproved{Review: review}
 	}
 	return PlanUnreviewed{Plan: version, EarlierReviewed: len(reviews) > 0}
 }
@@ -223,7 +218,7 @@ type PlanGap interface {
 	Describe(issueID string) string
 }
 
-// PlanApproved is a current plan a review has passed and none has failed. Review is the pass the approval rests on.
+// PlanApproved is a current plan whose latest review passed it. Review is the pass the approval rests on.
 type PlanApproved struct {
 	Review model.PlanReview
 }
@@ -238,10 +233,10 @@ type PlanUnreviewed struct {
 	EarlierReviewed bool
 }
 
-// PlanFailed is a current plan reviews have failed, newest first.
+// PlanFailed is a current plan whose latest review, Fail, failed it.
 type PlanFailed struct {
-	Plan  PlanVersion
-	Fails []model.PlanReview
+	Plan PlanVersion
+	Fail model.PlanReview
 }
 
 func (PlanApproved) Kind() string   { return "approved" }
@@ -267,9 +262,5 @@ func (g PlanUnreviewed) Describe(issueID string) string {
 }
 
 func (g PlanFailed) Describe(issueID string) string {
-	fails := make([]string, len(g.Fails))
-	for i, review := range g.Fails {
-		fails[i] = fmt.Sprintf("%s failed it citing %s", review.CreatedBy, model.JoinLaws(review.Laws))
-	}
-	return fmt.Sprintf("%s's current plan (%s) failed its law review: %s", issueID, g.Plan, strings.Join(fails, "; "))
+	return fmt.Sprintf("%s's current plan (%s) failed its law review: %s failed it citing %s", issueID, g.Plan, g.Fail.CreatedBy, model.JoinLaws(g.Fail.Laws))
 }

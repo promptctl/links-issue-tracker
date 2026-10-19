@@ -8,8 +8,8 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
-// A ticket's current plan is approved when a review of that text passed it and
-// none failed it, whoever recorded either.
+// The latest review of a ticket's current plan decides whether it is approved,
+// whoever recorded it.
 func TestPlanApprovalNamesWhatTheCurrentPlanLacks(t *testing.T) {
 	const first, second = "Add a retry around the push", "Drop the retry; the lease already bounds it"
 	created := model.IssueEvent{Action: model.ActionCreated, Actor: "creator"}
@@ -51,14 +51,14 @@ func TestPlanApprovalNamesWhatTheCurrentPlanLacks(t *testing.T) {
 			reviews:  []model.PlanReview{review("r1", "creator", first, model.PlanPass)},
 			approved: "r1"},
 		{name: "a fail, then a pass of the same text", plan: first, events: authored,
-			reviews: []model.PlanReview{review("r1", "ada", first, model.PlanFail, "carrying-cost"), review("r2", "ada", first, model.PlanPass)},
-			gap:     storage.PlanFailed{Plan: v1, Fails: []model.PlanReview{review("r1", "ada", first, model.PlanFail, "carrying-cost")}}},
+			reviews:  []model.PlanReview{review("r1", "ada", first, model.PlanFail, "carrying-cost"), review("r2", "ada", first, model.PlanPass)},
+			approved: "r2"},
 		{name: "a pass, then a fail of the same text", plan: first, events: authored,
-			reviews: []model.PlanReview{review("r1", "ada", first, model.PlanPass), review("r2", "ada", first, model.PlanFail, "single-enforcer")},
-			gap:     storage.PlanFailed{Plan: v1, Fails: []model.PlanReview{review("r2", "ada", first, model.PlanFail, "single-enforcer")}}},
-		{name: "fails, newest first", plan: first, events: authored,
-			reviews: []model.PlanReview{review("r1", "ada", first, model.PlanFail, "carrying-cost"), review("r2", "grace", first, model.PlanFail, "single-enforcer")},
-			gap:     storage.PlanFailed{Plan: v1, Fails: []model.PlanReview{review("r2", "grace", first, model.PlanFail, "single-enforcer"), review("r1", "ada", first, model.PlanFail, "carrying-cost")}}},
+			reviews: []model.PlanReview{review("r1", "ada", first, model.PlanPass), review("r2", "grace", first, model.PlanFail, "single-enforcer")},
+			gap:     storage.PlanFailed{Plan: v1, Fail: review("r2", "grace", first, model.PlanFail, "single-enforcer")}},
+		{name: "a fail of the current text after a pass of an earlier one", plan: second, events: revised,
+			reviews: []model.PlanReview{review("r1", "ada", first, model.PlanPass), review("r2", "ada", second, model.PlanFail, "carrying-cost"), review("r3", "grace", first, model.PlanPass)},
+			gap:     storage.PlanFailed{Plan: v2, Fail: review("r2", "ada", second, model.PlanFail, "carrying-cost")}},
 		{name: "a fail of an earlier text", plan: second, events: revised,
 			reviews:  []model.PlanReview{review("r1", "ada", first, model.PlanFail, "carrying-cost"), review("r2", "ada", second, model.PlanPass)},
 			approved: "r2"},
@@ -104,7 +104,7 @@ func TestPlanGapSaysWhatIsMissing(t *testing.T) {
 			"lit-1's current plan (v2, digest " + string(version.Digest) + ") has no review"},
 		{storage.PlanUnreviewed{Plan: version, EarlierReviewed: true}, "unreviewed",
 			"lit-1's current plan (v2, digest " + string(version.Digest) + ") has no review; the reviews on record judged an earlier text"},
-		{storage.PlanFailed{Plan: version, Fails: []model.PlanReview{fail}}, "failed",
+		{storage.PlanFailed{Plan: version, Fail: fail}, "failed",
 			"lit-1's current plan (v2, digest " + string(version.Digest) + ") failed its law review: ada failed it citing carrying-cost, single-enforcer"},
 	} {
 		if got := tc.gap.Describe("lit-1"); got != tc.want || tc.gap.Kind() != tc.kind {

@@ -273,9 +273,9 @@ none of them.
 
 | Key | Meaning |
 | --- | --- |
-| `done.plan_standing` | `approved`; `already_closed` (the ticket was already closed, so the done finished nothing); or what kept the plan from approval, which the done also prints as a warning: `no_plan`, `unreviewed` (no review of the current text), or `failed` (a review failed it). |
+| `done.plan_standing` | `approved`; `already_closed` (the ticket was already closed, so the done finished nothing); or what kept the plan from approval, which the done also prints as a warning: `no_plan`, `unreviewed` (no review of the current text), or `failed` (the latest review of the current text failed it). |
 | `done.plan_digest` | The digest of the current plan text the ticket was finished on. |
-| `done.plan_review` | The id of the passing review the approval rested on, the most recent pass of the current text. |
+| `done.plan_review` | The id of the passing review the approval rested on, the latest review of the current text. |
 
 ## What `lit verdict` records
 

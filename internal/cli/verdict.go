@@ -14,8 +14,7 @@ import (
 // a law review of one text of a ticket's plan, named by the digest `lit show`
 // prints beside it, recorded by the reviewer. storage.PlanReviewOf parses
 // what the reviewer gave. The reviewer resolves through the same identity rule
-// as every actor, so lit records who gave the verdict rather than taking
-// anyone's word for it. [LAW:single-enforcer]
+// as every actor. [LAW:single-enforcer]
 func verdictLeaf() appLeaf {
 	fs := newCobraFlagSet("verdict")
 	plan := fs.String("plan", "", "The digest of the plan text the review judged, as `lit show` prints it beside the plan's version (required)")

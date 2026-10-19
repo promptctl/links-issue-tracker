@@ -6,7 +6,7 @@ You are reviewing a plan you did not write. You judge it against the laws, recor
 
 ## 1. Load the laws
 
-Invoke the `laws:code` skill. Its tokens (`carrying-cost`, `single-enforcer`, ...) are what a verdict cites. If the skill isn't available, stop here and reply `no review: the laws:code skill is not available`, without recording anything. A verdict judged against laws you never read is worse than none.
+Invoke the `laws:code` skill; if your harness has no skills, read its text, `plugins/laws/skills/code/SKILL.md` in github.com/promptctl/laws. Its tokens (`carrying-cost`, `single-enforcer`, ...) are what a verdict cites. If you can't load the laws, stop here and reply `no review: the laws are not available`, without recording anything. A verdict judged against laws you never read is worse than none.
 
 ## 2. Read the plan, and pin what you read
 
@@ -54,6 +54,6 @@ lit verdict <id> fail --plan <digest> --law <token> [--law <token>]...
 
 Cite only tokens the `laws:code` skill defines. `lit verdict` checks a token's shape, not that the law exists, so a name you made up is recorded as if it were a law. A law is its bare token: `--law carrying-cost`, not `--law LAW:carrying-cost` or `--law "[LAW:carrying-cost]"`. A fail cites every law the plan breaks. A pass may cite the laws the plan is built on.
 
-Your verdict binds to the digest you pinned, not to the ticket. A fail stands until the author revises the plan; the revised text has a new digest and needs a review of its own.
+Your verdict binds to the digest you pinned, not to the ticket. It stands until a later review of the same text replaces it. A revised plan has a new digest and needs a review of its own.
 
 Then reply with the line `lit verdict` printed and, on a fail, the reasons you wrote. That ends the review. You record exactly one verdict, for the digest you pinned in step 2. You do not edit anything; you only record.
