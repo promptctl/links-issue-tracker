@@ -1837,15 +1837,15 @@ func authorizePhase(ctx context.Context, _ io.Writer, _ *app.App, _ string, prio
 	}, nil
 }
 
-// authorizeDone is the plan gate: a ticket is finished only on a current plan
-// that storage.PlanApproval approves. A done the lifecycle refuses — on an
-// epic, whose state is its children's, or on frozen work — gets that refusal:
-// the hook asks Issue.Apply, the rule the store's Apply runs, before it reads
-// the plan. A done on a ticket already closed finishes nothing — the engines
-// record no write for it — so it has no finish to authorize, as the engines
-// check nothing for a write they will not make. done.plan_gate on the event
-// says which way the gate went; an approval adds the plan and the review it
-// rested on.
+// authorizeDone reads where the ticket's plan stands in its law review, the
+// rule storage.PlanApproval holds, and finishes the ticket whatever it finds:
+// review shapes the work, it never keeps a ticket open. A plan short of
+// approval prints a warning naming what is missing. A done the lifecycle
+// refuses — on an epic, whose state is its children's, or on frozen work —
+// gets that refusal: the hook asks Issue.Apply, the rule the store's Apply
+// runs, before it reads the plan. A done on a ticket already closed finishes
+// nothing, so it reads no plan. done.plan_standing on the event says where the
+// plan stood; an approval adds the plan and the review it rested on.
 // [LAW:single-enforcer] [LAW:nothing-unseen]
 func authorizeDone(ctx context.Context, _ io.Writer, ap *app.App, issueID string, prior ticketState, action model.Action) (afterApply, error) {
 	done, ok := action.(model.Done)
@@ -1858,7 +1858,7 @@ func authorizeDone(ctx context.Context, _ io.Writer, ap *app.App, issueID string
 	}
 	if finished.StatusValue() == prior.issue.StatusValue() {
 		return func(ticketState, *claims.Handover) (string, statusline.Facts) {
-			telemetry.Set(ctx, "done.plan_gate", "already_closed")
+			telemetry.Set(ctx, "done.plan_standing", "already_closed")
 			return "", nil
 		}, nil
 	}
@@ -1870,19 +1870,19 @@ func authorizeDone(ctx context.Context, _ io.Writer, ap *app.App, issueID string
 	if err != nil {
 		return nil, err
 	}
-	approval, err := storage.PlanApproval(prior.issue, events, reviews)
-	var unapproved storage.PlanUnapprovedError
-	if errors.As(err, &unapproved) {
-		telemetry.Set(ctx, "done.plan_gate", unapproved.Gap.Kind())
-	}
-	if err != nil {
-		return nil, err
-	}
+	standing := storage.PlanApproval(prior.issue, events, reviews)
 	return func(ticketState, *claims.Handover) (string, statusline.Facts) {
-		telemetry.Set(ctx, "done.plan_gate", "approved")
-		telemetry.Set(ctx, "done.plan_digest", string(approval.PlanDigest))
-		telemetry.Set(ctx, "done.plan_review", approval.ID)
-		return "", nil
+		telemetry.Set(ctx, "done.plan_standing", standing.Kind())
+		switch standing := standing.(type) {
+		case storage.PlanApproved:
+			telemetry.Set(ctx, "done.plan_digest", string(standing.Review.PlanDigest))
+			telemetry.Set(ctx, "done.plan_review", standing.Review.ID)
+			return "", nil
+		case storage.PlanGap:
+			return "warning: finished without an approved plan: " + standing.Describe(issueID) + "\n", nil
+		}
+		// Unreachable: PlanStanding is sealed to PlanApproved and the gaps.
+		panic(fmt.Sprintf("done: unhandled plan standing %T", standing))
 	}, nil
 }
 

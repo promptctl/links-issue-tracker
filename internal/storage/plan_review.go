@@ -160,8 +160,8 @@ func DescribeVersions(count int) string {
 
 // PlanApproval decides whether issue's current plan has passed its law review,
 // given its history events and every review of its plan, oldest first. It
-// returns the passing review the approval rests on, or PlanUnapprovedError
-// naming what is missing. A ticket is finished only on an approved plan.
+// returns PlanApproved with the passing review the approval rests on, or the
+// PlanGap naming what is missing.
 //
 // Each reviewer's latest verdict on the current text stands. The plan is
 // approved when no standing verdict is a fail and at least one standing pass
@@ -169,13 +169,13 @@ func DescribeVersions(count int) string {
 // who gave it passes the same text, or the text changes: /lit:review-plan
 // starts a reviewer with a new identity on every run, so running an unchanged
 // plan past fresh reviewers until one passes it leaves the first fail
-// standing. Pure, so the gate decides the same on every engine.
+// standing. Pure, so every engine decides the same.
 // [LAW:single-enforcer] [LAW:effects-at-boundaries] [LAW:parse-dont-validate]
-func PlanApproval(issue model.Issue, events []model.IssueEvent, reviews []model.PlanReview) (model.PlanReview, error) {
+func PlanApproval(issue model.Issue, events []model.IssueEvent, reviews []model.PlanReview) PlanStanding {
 	field := PlanField()
 	plan := field.Current(issue)
 	if plan == "" {
-		return model.PlanReview{}, PlanUnapprovedError{IssueID: issue.ID, Gap: PlanMissing{}}
+		return PlanMissing{}
 	}
 	version := PlanVersion{
 		Number: slices.Index(TextVersions(issue, events, field), plan) + 1,
@@ -192,16 +192,16 @@ func PlanApproval(issue model.Issue, events []model.IssueEvent, reviews []model.
 	}
 	fails := slices.DeleteFunc(slices.Clone(standing), func(review model.PlanReview) bool { return review.Verdict != model.PlanFail })
 	if len(fails) > 0 {
-		return model.PlanReview{}, PlanUnapprovedError{IssueID: issue.ID, Gap: PlanFailed{Plan: version, Fails: fails}}
+		return PlanFailed{Plan: version, Fails: fails}
 	}
 	at := slices.IndexFunc(standing, func(review model.PlanReview) bool { return review.CreatedBy != author })
 	if at >= 0 {
-		return standing[at], nil
+		return PlanApproved{Review: standing[at]}
 	}
 	if len(standing) > 0 {
-		return model.PlanReview{}, PlanUnapprovedError{IssueID: issue.ID, Gap: PlanSelfReviewed{Plan: version, Author: author}}
+		return PlanSelfReviewed{Plan: version, Author: author}
 	}
-	return model.PlanReview{}, PlanUnapprovedError{IssueID: issue.ID, Gap: PlanUnreviewed{Plan: version, EarlierReviewed: len(reviews) > 0}}
+	return PlanUnreviewed{Plan: version, EarlierReviewed: len(reviews) > 0}
 }
 
 // planAuthor is who wrote the plan text plan: the actor of the latest event
@@ -229,23 +229,27 @@ func (v PlanVersion) String() string {
 	return fmt.Sprintf("v%d, digest %s", v.Number, v.Digest)
 }
 
-// PlanUnapprovedError is `lit done` refused because the ticket's current plan
-// has not passed its law review. Gap says what is missing.
-type PlanUnapprovedError struct {
-	IssueID string
-	Gap     PlanGap
-}
-
-func (e PlanUnapprovedError) Error() string {
-	return e.Gap.describe(e.IssueID)
-}
-
-// PlanGap is what keeps a plan from approval. The variants are sealed, and
-// only those with a plan carry its version. [LAW:types-are-the-program]
-type PlanGap interface {
-	// Kind is the gap's token on the refused command's event.
+// PlanStanding is where a ticket's current plan stands in its law review:
+// PlanApproved, or a PlanGap saying what keeps it from approval. The variants
+// are sealed, and only those with a plan carry its version.
+// [LAW:types-are-the-program]
+type PlanStanding interface {
+	// Kind is the standing's token on the command's event.
 	Kind() string
-	describe(issueID string) string
+	planStanding()
+}
+
+// PlanGap is a standing short of approval.
+type PlanGap interface {
+	PlanStanding
+	// Describe says what is missing, naming the ticket.
+	Describe(issueID string) string
+}
+
+// PlanApproved is a current plan a reviewer other than its author has passed,
+// with no standing fail. Review is the pass the approval rests on.
+type PlanApproved struct {
+	Review model.PlanReview
 }
 
 // PlanMissing is a ticket with no plan.
@@ -271,16 +275,23 @@ type PlanSelfReviewed struct {
 	Author string
 }
 
+func (PlanApproved) Kind() string     { return "approved" }
 func (PlanMissing) Kind() string      { return "no_plan" }
 func (PlanUnreviewed) Kind() string   { return "unreviewed" }
 func (PlanFailed) Kind() string       { return "failed" }
 func (PlanSelfReviewed) Kind() string { return "author_only" }
 
-func (PlanMissing) describe(issueID string) string {
-	return fmt.Sprintf("%s has no plan; a ticket is finished once a reviewer other than its plan's author has passed the current plan", issueID)
+func (PlanApproved) planStanding()     {}
+func (PlanMissing) planStanding()      {}
+func (PlanUnreviewed) planStanding()   {}
+func (PlanFailed) planStanding()       {}
+func (PlanSelfReviewed) planStanding() {}
+
+func (PlanMissing) Describe(issueID string) string {
+	return fmt.Sprintf("%s has no plan", issueID)
 }
 
-func (g PlanUnreviewed) describe(issueID string) string {
+func (g PlanUnreviewed) Describe(issueID string) string {
 	earlier := ""
 	if g.EarlierReviewed {
 		earlier = "; the reviews on record judged an earlier text"
@@ -288,14 +299,14 @@ func (g PlanUnreviewed) describe(issueID string) string {
 	return fmt.Sprintf("%s's current plan (%s) has no review%s", issueID, g.Plan, earlier)
 }
 
-func (g PlanFailed) describe(issueID string) string {
+func (g PlanFailed) Describe(issueID string) string {
 	fails := make([]string, len(g.Fails))
 	for i, review := range g.Fails {
 		fails[i] = fmt.Sprintf("%s failed it citing %s", review.CreatedBy, model.JoinLaws(review.Laws))
 	}
-	return fmt.Sprintf("%s's current plan (%s) failed its law review: %s; a fail stands until its reviewer passes the same text, so revise the plan and have the new text reviewed", issueID, g.Plan, strings.Join(fails, "; "))
+	return fmt.Sprintf("%s's current plan (%s) failed its law review: %s", issueID, g.Plan, strings.Join(fails, "; "))
 }
 
-func (g PlanSelfReviewed) describe(issueID string) string {
-	return fmt.Sprintf("%s's current plan (%s) has passed only its author's own review (%s); it needs a pass from a reviewer other than its author", issueID, g.Plan, g.Author)
+func (g PlanSelfReviewed) Describe(issueID string) string {
+	return fmt.Sprintf("%s's current plan (%s) has passed only its author's own review (%s)", issueID, g.Plan, g.Author)
 }

@@ -34,7 +34,6 @@ var reasonCodes = map[commandReason]int{
 	"no_ready_work":             6,
 	"outside_git_workspace":     3,
 	"owner_approval_required":   5,
-	"plan_not_approved":         3,
 	"purge_unconfirmed":         3,
 	"remote_unreachable":        1,
 	"retired_command":           3,
@@ -126,8 +125,6 @@ func TestCommandErrorReason(t *testing.T) {
 		{"takeover declined", takeoverUnconfirmedError{Message: "takeover declined"}, "takeover_unconfirmed"},
 		{"takeover declined wrapped", fmt.Errorf("start: %w", takeoverUnconfirmedError{Message: "takeover declined"}), "takeover_unconfirmed"},
 		// The done plan gate, and one wrapped.
-		{"plan not approved", storage.PlanUnapprovedError{IssueID: "lit-1", Gap: storage.PlanMissing{}}, "plan_not_approved"},
-		{"plan not approved wrapped", fmt.Errorf("done: %w", storage.PlanUnapprovedError{IssueID: "lit-1", Gap: storage.PlanSelfReviewed{Author: "ada"}}), "plan_not_approved"},
 		// Both purge-gate arms.
 		{"purge without --yes", purgeUnconfirmedError{Message: "purging links-x cannot be undone; pass --yes to confirm it"}, "purge_unconfirmed"},
 		{"purge declined", purgeUnconfirmedError{Message: "purge declined"}, "purge_unconfirmed"},

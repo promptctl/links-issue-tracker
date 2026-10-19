@@ -130,12 +130,6 @@ func ExitCode(err error) int {
 	if errors.As(err, &unsupported) {
 		return ExitValidation
 	}
-	// A plan not yet approved refuses `lit done` deterministically for the
-	// ticket as it stands, which is what ExitValidation means.
-	var planUnapproved storage.PlanUnapprovedError
-	if errors.As(err, &planUnapproved) {
-		return ExitValidation
-	}
 	// An unconfirmed takeover is the claim gate refusing, deterministically for
 	// the command as issued, which is what ExitValidation means.
 	var takeover takeoverUnconfirmedError
