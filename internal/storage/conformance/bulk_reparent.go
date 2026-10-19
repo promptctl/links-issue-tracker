@@ -129,18 +129,26 @@ func aBulkFileIsJudgedOnTheHierarchyItEndsWith(t *testing.T, ctx context.Context
 // aBulkFileClearsAParentWithAnEmptyOne: `parent: ""` is `lit parent clear`,
 // with its rule — a nested epic is lifted to the top level, a leaf is refused,
 // since a leaf lives inside an epic — and a file clearing a leaf beside an
-// epic it could lift lifts neither.
+// epic it could lift lifts neither. The rule needs only the leaf's stored
+// type, so the refusal comes before any write: a create beside it leaves no
+// tombstone.
 func aBulkFileClearsAParentWithAnEmptyOne(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	outer := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "outer", Topic: "core", IssueType: model.TypeEpic})
 	nested := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "nested", Topic: "core", IssueType: model.TypeEpic, ParentID: outer.ID})
 	leaf := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "leaf", Topic: "core", ParentID: outer.ID})
 	topLevel := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "top level", Topic: "core", IssueType: model.TypeEpic})
 
+	before := mustList(t, ctx, st, storage.ListIssuesFilter{IncludeDeleted: true})
+	title, topic, epicType := "fresh", "core", "epic"
 	if _, err := st.BulkApply(ctx, prefix, "ada", []storage.BulkIssueSpec{
+		{Title: &title, Topic: &topic, IssueType: &epicType},
 		{ID: nested.ID, Parent: ptr("")},
 		{ID: leaf.ID, Parent: ptr("")},
 	}); err == nil {
 		t.Fatal("BulkApply clearing a leaf's parent succeeded; want it refused")
+	}
+	if after := mustList(t, ctx, st, storage.ListIssuesFilter{IncludeDeleted: true}); len(after) != len(before) {
+		t.Errorf("issues, deleted included, = %d after the refusal, want %d: clearing a leaf is refused before any write", len(after), len(before))
 	}
 	assertStrings(t, "nested's parents after a refused file", parentsOf(t, ctx, st, nested.ID), []string{outer.ID})
 
@@ -190,7 +198,7 @@ func aBulkFileRefusedAtItsOrderingNamesTheReparentsItKept(t *testing.T, ctx cont
 	top := "top"
 	// Two leaves of one epic ranked together with an issue outside it is an
 	// order the store refuses.
-	_, err := st.BulkApply(ctx, prefix, "ada", []storage.BulkIssueSpec{
+	result, err := st.BulkApply(ctx, prefix, "ada", []storage.BulkIssueSpec{
 		{ID: mover.ID, Parent: ptr(to.ID), Rank: &top},
 		{ID: stayer.ID, Rank: &top},
 		{ID: from.ID, Rank: &top},
@@ -200,6 +208,42 @@ func aBulkFileRefusedAtItsOrderingNamesTheReparentsItKept(t *testing.T, ctx cont
 		t.Fatalf("BulkApply error = %v, want it to name what it kept: %q", err, want)
 	}
 	assertStrings(t, "the kept reparent", parentsOf(t, ctx, st, mover.ID), []string{to.ID})
+	assertStrings(t, "the refusal's result, reparented", result.Reparented, []string{mover.ID})
+}
+
+// aBulkFileJudgesItsBlockedByOnTheHierarchyItEndsWith: a create's blocked_by
+// naming an issue the same file reparents is judged where the file puts that
+// issue, not where it stood. Moved out of the create's epic, the edge is
+// legal and lands; moved into it, the two are leaves of one epic, which the
+// gate refuses before any write. [LAW:no-ambient-temporal-coupling]
+func aBulkFileJudgesItsBlockedByOnTheHierarchyItEndsWith(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	e := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "e", Topic: "core", IssueType: model.TypeEpic})
+	f := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "f", Topic: "core", IssueType: model.TypeEpic})
+	x := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "x", Topic: "core", ParentID: e.ID})
+	title, topic, taskType := "t", "core", "task"
+	create := func(parent string) storage.BulkIssueSpec {
+		return storage.BulkIssueSpec{LocalID: "t", Title: &title, Topic: &topic, IssueType: &taskType, Parent: ptr(parent), BlockedBy: []string{x.ID}}
+	}
+
+	result, err := st.BulkApply(ctx, prefix, "ada", []storage.BulkIssueSpec{create(e.ID), {ID: x.ID, Parent: ptr(f.ID)}})
+	if err != nil {
+		t.Fatalf("moving x out of t's epic: BulkApply error = %v", err)
+	}
+	assertStrings(t, "x's parents", parentsOf(t, ctx, st, x.ID), []string{f.ID})
+	tID := mustCreatedID(t, result.Created, "t")
+	rels, err := st.ListRelationsForIssue(ctx, tID, model.RelBlockedBy)
+	if err != nil || len(rels) != 1 || rels[0].DstID != x.ID {
+		t.Fatalf("t's blocked_by = %v (error %v), want one edge to %s", rels, err, x.ID)
+	}
+
+	before := mustList(t, ctx, st, storage.ListIssuesFilter{IncludeDeleted: true})
+	if _, err := st.BulkApply(ctx, prefix, "ada", []storage.BulkIssueSpec{create(e.ID), {ID: x.ID, Parent: ptr(e.ID)}}); err == nil || !strings.Contains(err.Error(), storage.SameEpicBlocksRejectionMessage) {
+		t.Fatalf("moving x into t's epic: BulkApply error = %v, want the same-epic refusal", err)
+	}
+	if after := mustList(t, ctx, st, storage.ListIssuesFilter{IncludeDeleted: true}); len(after) != len(before) {
+		t.Errorf("issues, deleted included, = %d after the refusal, want %d: the file states both places, so it is refused before any write", len(after), len(before))
+	}
+	assertStrings(t, "x's parents after the refusal", parentsOf(t, ctx, st, x.ID), []string{f.ID})
 }
 
 // parentsOf lists the parents childID holds, by the edges it is the child of.

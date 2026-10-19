@@ -2266,15 +2266,17 @@ func runImportBulk(ctx context.Context, stdout io.Writer, ap *app.App, data []by
 	if err != nil {
 		return err
 	}
+	// A refused file still returns what it left written, so the event counts
+	// that whether the file landed or not. [LAW:nothing-unseen]
 	result, err := ap.Store.BulkApply(ctx, prefix.Value(), actor, specs)
-	if err != nil {
-		return err
-	}
 	telemetry.Set(ctx, "import.created", len(result.Created))
 	telemetry.Set(ctx, "import.updated", len(result.Updated))
 	telemetry.Set(ctx, "import.reparented", len(result.Reparented))
 	telemetry.Set(ctx, "import.parent_held", len(result.ParentHeld))
 	telemetry.Set(ctx, "import.ranked", len(result.Ranked.Resolutions))
+	if err != nil {
+		return err
+	}
 	if _, err := fmt.Fprintf(stdout, "created %d issues\n", len(result.Created)); err != nil {
 		return err
 	}

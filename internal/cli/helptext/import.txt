@@ -15,12 +15,13 @@ one of those is checked as the file is written: an id, parent or
 blocked_by naming no existing issue, a parent that is not an epic, a
 blocked_by naming an epic the new issue sits under or another non-epic
 issue directly under its epic, a reparent that would close a parent
-cycle through issues already stored, a parent cleared on an issue that
-is not an epic, or an update that changes type to or from epic. A YAML
-file is written in this order: creates, then blocked_by, then
-reparents, then the order rank: top states, then updates. A file that
-breaks one of these rules therefore fails partway through. See Results
-for what rollback covers.
+cycle through issues already stored, or an update that changes type to
+or from epic. Clearing the parent of an issue that is not an epic is
+refused before anything is written. A YAML file is written in this
+order: creates, then reparents, then blocked_by, then the order rank:
+top states, then updates, so a blocked_by is judged on the hierarchy
+the file ends with. A file that breaks one of these rules therefore
+fails partway through. See Results for what rollback covers.
 
 JSON tree spec (creates only)
 
@@ -166,7 +167,8 @@ Results
   on a best-effort basis by deleting them; reparents and updates already
   applied, and the order a YAML file wrote, are not rolled back, since
   there is no prior state to restore, and an error at the order or at an
-  update names what stays written. If the error
+  update names what stays written, as does a failure after the
+  reparents. If the error
   reports that rollback leaked IDs, run lit doctor.
 
   A full-database export is a different shape than either format above;

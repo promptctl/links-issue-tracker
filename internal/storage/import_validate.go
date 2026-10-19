@@ -74,6 +74,17 @@ func ParseBulkFile(specs []BulkIssueSpec, existingTypes map[string]model.IssueTy
 	if err != nil {
 		return BulkFile{}, err
 	}
+	// A clear's one rule needs only the stored type, which the gate holds,
+	// so a clear the write would refuse is refused before any write. An
+	// update cannot carry the issue across the container line, so the
+	// stored type is the one the write judges. [LAW:single-enforcer]
+	for _, r := range file.Reparents {
+		if storedType, stored := existingTypes[r.ID]; stored && r.Parent == "" {
+			if err := RejectDetachingALeaf(r.ID, storedType, 0); err != nil {
+				return BulkFile{}, fmt.Errorf("bulk: parent of %q -> %q: %w", r.ID, r.Parent, err)
+			}
+		}
+	}
 	file.Creates = inWriteOrder(order, creates)
 	return file, nil
 }
@@ -130,12 +141,12 @@ func (d fileDocument) ref() string {
 
 // fileReferences is the graph a file draws among its own documents, indexed
 // by document position, since a bulk create need not carry a local_id. A
-// parent resolves as the engines resolve it: a local_id in the file first,
-// then an update document's id. A reference matching neither is not an edge:
-// it names a real issue, and the write that receives it judges it. A parent
-// named that way is still kept, because two documents under one existing epic
-// are leaves of one epic before either is written. A blocked_by resolves by
-// local_id alone, since an update document states none.
+// parent or blocked_by resolves as the engines resolve it: a local_id in the
+// file first, then an update document's id, so a create blocked by an issue
+// the file reparents is judged where the file puts it. A reference matching
+// neither is not an edge: it names a real issue, and the write that receives
+// it judges it. A parent named that way is still kept, because two documents
+// under one existing epic are leaves of one epic before either is written.
 type fileReferences struct {
 	docs           []fileDocument
 	parent         map[int]int    // document -> its parent, for a parent in the file
@@ -167,7 +178,11 @@ func resolveFileReferences[S any](specs []S, documentOf func(int, S) fileDocumen
 			refs.existingParent[i] = doc.parent
 		}
 		for _, dep := range doc.blockedBy {
-			if j, inFile := indexByLocal[dep]; inFile {
+			j, inFile := indexByLocal[dep]
+			if !inFile {
+				j, inFile = indexByID[dep]
+			}
+			if inFile {
 				refs.blockedBy[i] = append(refs.blockedBy[i], j)
 			}
 		}
@@ -257,7 +272,7 @@ func rejectBlocksWithinFileEpics(format string, refs fileReferences, existingTyp
 	for i, deps := range refs.blockedBy {
 		for _, j := range deps {
 			if err := RejectBlocksWithinEpic(tree, node(i), node(j)); err != nil {
-				return fmt.Errorf("%s: %s blocked_by %q: %w", format, refs.docs[i].name, refs.docs[j].localID, err)
+				return fmt.Errorf("%s: %s blocked_by %q: %w", format, refs.docs[i].name, refs.docs[j].ref(), err)
 			}
 		}
 	}

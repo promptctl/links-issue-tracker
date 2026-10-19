@@ -70,13 +70,15 @@ func NewIDMapping(localID, realID string) IDMapping {
 	return IDMapping{Ref: localID, ID: realID}
 }
 
-// BulkApplyResult reports what a successful BulkApply did. Created lists
+// BulkApplyResult reports what a BulkApply left written. Created lists
 // every created issue in the order it was created; Reparented lists the issues
 // whose parent the file changed, and ParentHeld those whose parent already
 // was what the file states, each in file order; Updated lists the real IDs of
 // every updated issue, in the order they were applied; Ranked is the RankSet
 // the file's `rank: top` documents made, with no resolutions when the file
-// states no rank.
+// states no rank. A refused BulkApply returns its AfterRollback beside the
+// error, so the caller reads one account of the batch whether it landed or
+// not. [LAW:nothing-unseen]
 type BulkApplyResult struct {
 	Created    []IDMapping
 	Reparented []string
@@ -85,24 +87,36 @@ type BulkApplyResult struct {
 	Ranked     RankSetResult
 }
 
-// Kept is the account a batch that fails at an update owes its caller: what
-// stays written once its creates are rolled back — the reparents, the updates
-// applied before the failure, and the order the file's `rank: top` documents
-// wrote, among the issues that outlive the rollback. Zero of any is said, not
-// omitted.
-// [LAW:no-silent-failure]
-func (r BulkApplyResult) Kept() string {
+// AfterRollback is what stays written once a refused batch's creates are
+// rolled back: the reparents, the updates applied before the refusal, and the
+// order the file's `rank: top` documents wrote, among the issues that outlive
+// the rollback. It creates nothing; any create the rollback leaked is named by
+// the refusal's error.
+func (r BulkApplyResult) AfterRollback() BulkApplyResult {
 	created := make(map[string]struct{}, len(r.Created))
 	for _, m := range r.Created {
 		created[m.ID] = struct{}{}
 	}
-	ranked := make([]string, 0, len(r.Ranked.Resolutions))
+	kept := r
+	kept.Created = nil
+	kept.Ranked.Resolutions = nil
 	for _, res := range r.Ranked.Resolutions {
 		if _, rolledBack := created[res.RankedID]; !rolledBack {
-			ranked = append(ranked, res.RankedID)
+			kept.Ranked.Resolutions = append(kept.Ranked.Resolutions, res)
 		}
 	}
-	return fmt.Sprintf("kept %d reparents [%s], %d updates [%s] and the order of %d issues [%s]", len(r.Reparented), strings.Join(r.Reparented, ","), len(r.Updated), strings.Join(r.Updated, ","), len(ranked), strings.Join(ranked, ","))
+	return kept
+}
+
+// Kept is AfterRollback in words, the account a refused batch's error owes its
+// caller. Zero of any is said, not omitted. [LAW:no-silent-failure]
+func (r BulkApplyResult) Kept() string {
+	kept := r.AfterRollback()
+	ranked := make([]string, len(kept.Ranked.Resolutions))
+	for i, res := range kept.Ranked.Resolutions {
+		ranked[i] = res.RankedID
+	}
+	return fmt.Sprintf("kept %d reparents [%s], %d updates [%s] and the order of %d issues [%s]", len(kept.Reparented), strings.Join(kept.Reparented, ","), len(kept.Updated), strings.Join(kept.Updated, ","), len(ranked), strings.Join(ranked, ","))
 }
 
 // BulkFile is a bulk file the gate admitted, parsed: the issues it creates,
@@ -120,7 +134,9 @@ func (r BulkApplyResult) Kept() string {
 // Reparents are the update documents that state a parent, in document order.
 // An engine writes them as one step, whole or not at all, through the relation
 // write `lit parent set` and `lit parent clear` use, so a reparent obeys the
-// one hierarchy rule. [LAW:single-enforcer]
+// one hierarchy rule. [LAW:single-enforcer] It writes them after the creates,
+// which a reparent may name as its parent, and before the creates' blocked_by
+// edges, so each edge is judged on the hierarchy the file ends with.
 type BulkFile struct {
 	Creates   []FileCreate
 	Reparents []FileReparent

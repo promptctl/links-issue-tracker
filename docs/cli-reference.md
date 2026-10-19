@@ -746,8 +746,9 @@ two-parent finding is repaired. Naming the parent that is already the child's
 only parent exits 6 with `state_already_holds`, and so does clearing an epic that
 has no parent.
 
-`parent set` and `parent clear` are the only commands that write the parent-child
-edge. `parent set` prints it as `lit dep ls` does: `<child> child of <parent>`.
+`parent set`, `parent clear`, and a `lit import` update document that states
+`parent` are the only commands that change an existing ticket's parent. `parent
+set` prints the edge as `lit dep ls` does: `<child> child of <parent>`.
 
 ### `lit children`
 

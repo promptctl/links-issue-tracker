@@ -424,9 +424,9 @@ func (e *Engine) SetParent(ctx context.Context, in storage.SetParentInput) (mode
 // ClearParent detaches a child from its parent. Only a container can be
 // detached: a leaf lives inside an epic (storage.RejectDetachingALeaf), so
 // the one thing this verb does is lift a nested epic to the top level.
-// Clearing a child that has no parent is an absence report, not a silent
-// success: the caller asked to remove an edge, and reporting removal of one
-// that was never there would be an answer-shaped void. [LAW:no-silent-failure]
+// Clearing a child that has no parent is the state asked for, answered with
+// storage.RelationAbsentError, which is satisfied rather than a removal it
+// did not make. [LAW:no-silent-failure]
 func (e *Engine) ClearParent(ctx context.Context, childID string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()

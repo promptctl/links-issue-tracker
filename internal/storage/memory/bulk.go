@@ -16,12 +16,14 @@ import (
 // Failure is compensated, not transactional, and the contract is about what
 // the caller is told: a batch that fails partway undoes the issues it created
 // and names every one it could not undo, so a partial application is always
-// reported rather than inferred. The update documents' reparents are written
-// after the creates as one step, the file's ordering after them as one
-// RankSet, and updates are applied last, so a failing create, edge, reparent,
-// or ordering leaves none applied, but a failing update does not revert the
-// ones before it, which is why the error text is the caller's only
-// complete account of what happened. [LAW:no-silent-failure]
+// reported rather than inferred, and it returns what stays written beside the
+// error. The update documents' reparents are written after the creates as one
+// step and before the creates' blocked_by edges, so each edge is judged on the
+// hierarchy the file ends with; the file's ordering follows as one RankSet,
+// and updates are applied last, so a failing create, reparent, edge, or
+// ordering leaves none applied, but a failing update does not revert the ones
+// before it, which is why the error text is the caller's only complete account
+// of what happened. [LAW:no-silent-failure]
 func (e *Engine) BulkApply(ctx context.Context, prefix, actor string, specs []storage.BulkIssueSpec) (storage.BulkApplyResult, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -38,33 +40,37 @@ func (e *Engine) BulkApply(ctx context.Context, prefix, actor string, specs []st
 	}
 
 	batch := newBatch(len(specs))
+	result := storage.BulkApplyResult{}
+	refuse := func(err error) (storage.BulkApplyResult, error) {
+		return result.AfterRollback(), e.compensate(batch, actor, fmt.Errorf("%w; %s", err, result.Kept()))
+	}
 	for _, create := range file.Creates {
 		issue, err := e.createIssue(create.Input(batch.resolve(create.Parent), prefix, actor))
 		if err != nil {
-			return storage.BulkApplyResult{}, e.compensate(batch, actor, fmt.Errorf("bulk: create doc %d: %w", create.Index, err))
+			return refuse(fmt.Errorf("bulk: create doc %d: %w", create.Index, err))
 		}
 		batch.created(create.Index, create.LocalID, issue.ID)
+	}
+	result.Created = batch.createdMappings()
+	if result.Reparented, result.ParentHeld, err = e.reparent(file, batch.resolve, actor); err != nil {
+		return refuse(err)
 	}
 	for _, create := range file.Creates {
 		for _, dep := range create.BlockedBy {
 			if err := e.wireDependency(batch.realID(create.Index), batch.resolve(dep), actor); err != nil {
-				return storage.BulkApplyResult{}, e.compensate(batch, actor, fmt.Errorf("bulk: blocked_by doc %d -> %q: %w", create.Index, dep, err))
+				return refuse(fmt.Errorf("bulk: blocked_by doc %d -> %q: %w", create.Index, dep, err))
 			}
 		}
 	}
-	result := storage.BulkApplyResult{Created: batch.createdMappings()}
-	if result.Reparented, result.ParentHeld, err = e.reparent(file, batch.resolve, actor); err != nil {
-		return storage.BulkApplyResult{}, e.compensate(batch, actor, err)
-	}
 	if ranked := file.RankedIDs(batch.createdIDs); len(ranked) > 0 {
 		if result.Ranked, err = e.rankSet(ranked); err != nil {
-			return storage.BulkApplyResult{}, e.compensate(batch, actor, fmt.Errorf("bulk: rank: %w; %s", err, result.Kept()))
+			return refuse(fmt.Errorf("bulk: rank: %w", err))
 		}
 	}
 	for _, update := range file.Updates {
 		applied, err := e.apply(update.ID, storage.Change{Actor: actor, Fields: update.Patch})
 		if err != nil {
-			return storage.BulkApplyResult{}, e.compensate(batch, actor, fmt.Errorf("bulk: update %q: %w; %s", update.ID, err, result.Kept()))
+			return refuse(fmt.Errorf("bulk: update %q: %w", update.ID, err))
 		}
 		result.Updated = append(result.Updated, applied.Issue.ID)
 	}

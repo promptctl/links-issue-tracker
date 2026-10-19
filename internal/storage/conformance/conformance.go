@@ -229,6 +229,7 @@ var cases = []engineCase{
 	{"a_bulk_file_clears_a_parent_with_an_empty_one", aBulkFileClearsAParentWithAnEmptyOne},
 	{"a_bulk_file_ranks_issues_in_the_frame_it_moves_them_to", aBulkFileRanksIssuesInTheFrameItMovesThemTo},
 	{"a_bulk_file_refused_at_its_ordering_names_the_reparents_it_kept", aBulkFileRefusedAtItsOrderingNamesTheReparentsItKept},
+	{"a_bulk_file_judges_its_blocked_by_on_the_hierarchy_it_ends_with", aBulkFileJudgesItsBlockedByOnTheHierarchyItEndsWith},
 	{"import_tree_maps_local_ids", importTreeMapsLocalIDs},
 	{"attribution_stamps_events", attributionStampsEvents},
 	{"observers_hear_every_change", observersHearEveryChange},
