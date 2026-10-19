@@ -15,9 +15,19 @@ import (
 // pushing. adopted is the head bravo adopted: the remote head it last knew.
 func newForkedBelowTheCut(t *testing.T) (r reRootedCheckouts, adopted string) {
 	t.Helper()
+	return newForkedBelowTheCutAfter(t, func(r reRootedCheckouts) {
+		runCLIInDir(t, r.bravo, "update", r.ticket, "--title", "bravo-title")
+	})
+}
+
+// newForkedBelowTheCutAfter is newForkedBelowTheCut with bravoWrites in place
+// of bravo's title edit: what bravo does between adopting the remote and
+// alpha's re-root.
+func newForkedBelowTheCutAfter(t *testing.T, bravoWrites func(reRootedCheckouts)) (r reRootedCheckouts, adopted string) {
+	t.Helper()
 	r, base := newSharedCheckouts(t)
 	adopted, _ = syncHeadAndBranch(t, r.bravo)
-	runCLIInDir(t, r.bravo, "update", r.ticket, "--title", "bravo-title")
+	bravoWrites(r)
 	for _, title := range []string{"past-1", "past-2"} {
 		runCLIInDir(t, r.alpha, "new", "--title", title, "--topic", "demo", "--type", "task", "--parent", r.epic)
 	}
@@ -112,5 +122,32 @@ func assertForkPointRecorded(t *testing.T, adopted string) {
 	record, _ := records[0].(map[string]any)
 	if record["fork_point.outcome"] != "recorded" || record["fork_point.head"] != adopted || record["fork_point.branch"] != "master" {
 		t.Fatalf("event %q fork point record = %v; want recorded at the adopted head %s", ev.Event, record, adopted)
+	}
+}
+
+// TestAQuietForkReceivesOntoTheRemoteHead is bravo with nothing of its own
+// past the head it adopted, receiving the history alpha re-rooted above it.
+// The receive lands bravo on alpha's head, reconciles nothing, and its event
+// says it landed across the fork point.
+func TestAQuietForkReceivesOntoTheRemoteHead(t *testing.T) {
+	r, _ := newForkedBelowTheCutAfter(t, func(reRootedCheckouts) {})
+	runCLIInDir(t, r.bravo, "sync", backgroundReceiveSubcommand, "--parent-pid", "0")
+	ev := lastEvent(t)
+	outcomes, _ := ev.Facts["receive.outcomes"].([]any)
+	if len(outcomes) != 1 {
+		t.Fatalf("event %q receive.outcomes = %v; want the one receive's outcome", ev.Event, ev.Facts["receive.outcomes"])
+	}
+	if outcome, _ := outcomes[0].(map[string]any); outcome["receive.decision"] != "fast_forwarded" || outcome["receive.base"] != "fork_point" {
+		t.Fatalf("receive outcome = %v; want fast_forwarded across the fork_point base", outcome)
+	}
+	if bases, _ := ev.Facts["reconcile.bases"].([]any); len(bases) != 0 {
+		t.Fatalf("reconcile.bases = %v; want none: bravo has nothing to replay", bases)
+	}
+	alphaHead, _ := syncHeadAndBranch(t, r.alpha)
+	if bravoHead, _ := syncHeadAndBranch(t, r.bravo); bravoHead != alphaHead {
+		t.Fatalf("bravo's head after the receive = %s, want alpha's %s", bravoHead, alphaHead)
+	}
+	if show := runCLIInDir(t, r.bravo, "show", r.ticket); !strings.Contains(show, "alpha-description") {
+		t.Fatalf("bravo's ticket after the receive:\n%s\nwant alpha's description", show)
 	}
 }

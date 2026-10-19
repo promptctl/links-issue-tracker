@@ -14,6 +14,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/merge"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -598,6 +599,8 @@ func performSyncReceive(ctx context.Context, ws workspace.Info, clone liveClone,
 		"state":       string(result.State),
 		"ahead":       strconv.FormatInt(result.Ahead, 10),
 		"behind":      strconv.FormatInt(result.Behind, 10),
+		"base":        string(result.Base),
+		"stranded":    strconv.Itoa(result.StrandedTables),
 		"landed":      landed.Record.String(),
 		"fork_point":  landed.ForkPoint.String(),
 		"land_held":   landed.Held.Round(time.Millisecond).String(),
@@ -611,6 +614,15 @@ func performSyncReceive(ctx context.Context, ws workspace.Info, clone liveClone,
 		traceMetadata["error"] = receiveErr.Error()
 		receiveDecision = "error"
 	}
+	// The settle's decision lands on the invocation's event too, one value per
+	// receive, read off the trace's own fields. [LAW:nothing-unseen]
+	telemetry.Append(ctx, "receive.outcomes", map[string]any{
+		"receive.decision":        receiveDecision,
+		"receive.ahead":           result.Ahead,
+		"receive.behind":          result.Behind,
+		"receive.base":            traceMetadata["base"],
+		"receive.stranded_tables": result.StrandedTables,
+	})
 	traceRecordErr := recordReceiveTrace(ws, receiveDecision, traceStatus, traceReason, traceMetadata)
 	outcome = syncReceiveOutcome{
 		remote:             remoteName,

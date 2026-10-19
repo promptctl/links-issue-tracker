@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -298,9 +299,9 @@ func TestARemoteMissingAnEditAtTheForkPointStaysUnrelated(t *testing.T) {
 }
 
 // TestAQuietForkBelowTheCutLandsOnTheRemoteHead is a checkout with nothing
-// of its own past its fork point. It is not behind, because no fast-forward
-// joins histories that share no commit; it is a divergence with nothing to
-// replay, and the reconcile lands the remote head and its marker.
+// of its own past its fork point receiving a re-root it cannot follow. The
+// remote holds every row it holds, so it is behind, and the receive lands it
+// on the remote head itself: no reconcile, and no commit of its own on top.
 func TestAQuietForkBelowTheCutLandsOnTheRemoteHead(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -315,18 +316,21 @@ func TestAQuietForkBelowTheCutLandsOnTheRemoteHead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncFreshness(delta) error = %v", err)
 	}
-	if fresh.Ahead != 0 || fresh.Behind == 0 || fresh.State() != storage.SyncDiverged || fresh.OldestDivergedUnix == 0 {
-		t.Fatalf("freshness = ahead %d, behind %d, %q, oldest diverged %d; want ahead 0, behind > 0, %q, dated", fresh.Ahead, fresh.Behind, fresh.State(), fresh.OldestDivergedUnix, storage.SyncDiverged)
+	if fresh.Ahead != 0 || fresh.Behind == 0 || fresh.State() != storage.SyncBehind || fresh.Base.Source != storage.ReconcileBaseForkPoint || fresh.OldestDivergedUnix != 0 {
+		t.Fatalf("freshness = ahead %d, behind %d, %q, base %q, oldest diverged %d; want ahead 0, behind > 0, %q, base %q, undated", fresh.Ahead, fresh.Behind, fresh.State(), fresh.Base.Source, fresh.OldestDivergedUnix, storage.SyncBehind, storage.ReconcileBaseForkPoint)
 	}
-	pulled, err := delta.SyncPull(ctx, "origin", "master")
+	received, err := delta.SyncReceive(ctx, "origin", "master")
 	if err != nil {
-		t.Fatalf("SyncPull(delta) error = %v", err)
+		t.Fatalf("SyncReceive(delta) error = %v", err)
 	}
-	if pulled.State != storage.SyncPullLinearized {
-		t.Fatalf("pull state = %q, want %q", pulled.State, storage.SyncPullLinearized)
+	if received.State != storage.SyncReceiveFastForwarded || received.Base != storage.ReconcileBaseForkPoint {
+		t.Fatalf("receive = %q across base %q, want %q across %q", received.State, received.Base, storage.SyncReceiveFastForwarded, storage.ReconcileBaseForkPoint)
 	}
-	if landed := commitsBetween(t, ctx, delta, f.remoteHead, headCommit(t, ctx, delta)); landed != 1 {
-		t.Fatalf("the reconcile put %d commits on the remote head, want its marker alone", landed)
+	if head := headCommit(t, ctx, delta); head != f.remoteHead {
+		t.Fatalf("delta's head after the receive = %s, want the remote head %s", head, f.remoteHead)
+	}
+	if bases, followed := delta.ReconcileBases(), delta.FollowedReRoots(); len(bases) != 0 || len(followed) != 0 {
+		t.Fatalf("ReconcileBases() = %+v, FollowedReRoots() = %+v; want neither: delta holds no copy of the cut and nothing to replay", bases, followed)
 	}
 	if issue := getIssueOrFatal(t, ctx, delta, f.ticket); issue.Description != alphaPastCutDescribed {
 		t.Fatalf("ticket description = %q, want the remote's %q", issue.Description, alphaPastCutDescribed)
@@ -507,7 +511,8 @@ func TestASetRemoteURLRetriedAfterItsRemoveLandsTheAdd(t *testing.T) {
 
 // TestAQuietForksRefusedPushIsNotSuperseded pushes from a checkout with
 // nothing past its fork point. The remote does not carry its head, so the
-// refusal is the error, even though there is nothing for it to replay.
+// refusal is the error, even though there is nothing for it to replay, and it
+// is the divergence a receive heals, not a failure.
 func TestAQuietForksRefusedPushIsNotSuperseded(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -518,8 +523,76 @@ func TestAQuietForksRefusedPushIsNotSuperseded(t *testing.T) {
 		t.Fatalf("SyncFetch(delta) error = %v", err)
 	}
 	pushed, err := delta.SyncPushFromClone(ctx, "origin", "master", false, false)
-	if err == nil {
-		t.Fatalf("SyncPushFromClone() = %+v, nil; want the refusal, since the remote does not carry delta's head", pushed)
+	if !errors.Is(err, storage.ErrPushDiverged) {
+		t.Fatalf("SyncPushFromClone() = %+v, %v; want the refusal as %v, since the remote does not carry delta's head", pushed, err, storage.ErrPushDiverged)
+	}
+}
+
+// strandWrite edits the ticket's title on root with DOLT_COMMIT failing, so
+// the write stays staged in the working set with no commit over it.
+func strandWrite(t *testing.T, ctx context.Context, root, ticket string) {
+	t.Helper()
+	st := openSyncOrFatal(t, ctx, root)
+	st.commitWorkingSetHookForTest = func() error { return errors.New("injected: DOLT_COMMIT failed") }
+	if _, err := st.Apply(ctx, ticket, storage.Change{Fields: storage.UpdateIssueInput{Title: strptr(strandedTitle)}}); err == nil {
+		t.Fatalf("Apply() with DOLT_COMMIT failing returned nil; want the failure")
+	}
+	st.commitWorkingSetHookForTest = nil
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close(stranded write) error = %v", err)
+	}
+}
+
+const strandedTitle = "stranded-title"
+
+// TestAStrandedWriteSurvivesAReceive leaves a write staged by a failed commit
+// on a checkout whose remote moved, along shared history and below a cut. The
+// receive versions the write before it decides, so it reads a divergence, not
+// a landing that would discard the write, and the pull merges the write with
+// the remote's edit.
+func TestAStrandedWriteSurvivesAReceive(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		// setup returns the checkout holding the stranded write, the ticket,
+		// and the description the remote gave it.
+		setup func(t *testing.T, ctx context.Context) (root, ticket, remoteDescription string)
+	}{
+		{"shared base", func(t *testing.T, ctx context.Context) (string, string, string) {
+			alpha, beta := migratedDoltDir(t), migratedDoltDir(t)
+			remoteURL := "file://" + filepath.Join(t.TempDir(), "remote")
+			ticket := createAndPush(t, ctx, alpha, seedReconcileRemote(t, ctx, alpha, remoteURL), "x")
+			adoptRemote(t, ctx, beta, remoteURL)
+			updateAndPush(t, ctx, alpha, ticket, storage.UpdateIssueInput{Description: strptr("alpha-description")})
+			strandWrite(t, ctx, beta, ticket)
+			return beta, ticket, "alpha-description"
+		}},
+		{"fork-point base", func(t *testing.T, ctx context.Context) (string, string, string) {
+			f := newForkBelowTheCutAfter(t, ctx, func(f forkBelowTheCut) { strandWrite(t, ctx, f.delta, f.ticket) })
+			return f.delta, f.ticket, alphaPastCutDescribed
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			root, ticket, remoteDescription := tc.setup(t, ctx)
+			st := openSyncOrFatal(t, ctx, root)
+			defer func() { _ = st.Close() }()
+			received, err := st.SyncReceive(ctx, "origin", "master")
+			if err != nil {
+				t.Fatalf("SyncReceive() error = %v", err)
+			}
+			if received.State != storage.SyncReceiveDiverged || received.StrandedTables == 0 {
+				t.Fatalf("receive = %q with %d stranded table(s); want %q over the versioned write", received.State, received.StrandedTables, storage.SyncReceiveDiverged)
+			}
+			if _, err := st.SyncPull(ctx, "origin", "master"); err != nil {
+				t.Fatalf("SyncPull() error = %v", err)
+			}
+			if issue := getIssueOrFatal(t, ctx, st, ticket); issue.Title != strandedTitle || issue.Description != remoteDescription {
+				t.Fatalf("ticket title, description = %q, %q; want the stranded %q and the remote's %q", issue.Title, issue.Description, strandedTitle, remoteDescription)
+			}
+			assertWorkingSetClean(t, ctx, st)
+		})
 	}
 }
 

@@ -540,6 +540,10 @@ func (s *Store) settleReceived(ctx context.Context, remote, branch string) (stor
 	return result, nil
 }
 
+// strandedWritesCommitMessage is the message of the commit a settle lands
+// over writes a failed DOLT_COMMIT left in the working set.
+const strandedWritesCommitMessage = "commit writes a failed commit left staged"
+
 // settleReceivedWithinLock is the half of a receive that follows the fetch:
 // the post-fetch freshness selects the outcome, and the one state that touches
 // local data (behind) fast-forwards. SyncReceive and SyncSettleReceived both
@@ -547,17 +551,31 @@ func (s *Store) settleReceived(ctx context.Context, remote, branch string) (stor
 // settle identically. [LAW:single-enforcer] The caller holds the commit lock.
 func (s *Store) settleReceivedWithinLock(ctx context.Context, remote, branch string) (storage.SyncReceiveResult, error) {
 	var result storage.SyncReceiveResult
+	// Freshness counts commits, and landing on the remote head discards the
+	// working set, so writes a failed DOLT_COMMIT left staged are versioned
+	// first, as the next mutation would version them. Then the freshness that
+	// licenses the landing counts every local write. [LAW:no-silent-failure]
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM dolt_status`).Scan(&result.StrandedTables); err != nil {
+		return result, fmt.Errorf("read the working set: %w", err)
+	}
+	if err := s.commitWorkingSetOnce(ctx, commitStamp{Message: strandedWritesCommitMessage}); err != nil {
+		return result, err
+	}
 	fresh, err := s.SyncFreshness(ctx, remote, branch)
 	if err != nil {
 		return result, err
 	}
 	result.Ahead, result.Behind = fresh.Ahead, fresh.Behind
 	result.OldestDivergedUnix = fresh.OldestDivergedUnix
+	result.Base = fresh.Base.Source
 	switch fresh.State() {
 	case storage.SyncBehind:
-		trackingRef := fmt.Sprintf("remotes/%s/%s", remote, branch)
-		if err := execProcedureDiscard(ctx, s.db, "DOLT_MERGE", "--ff-only", trackingRef); err != nil {
-			return result, fmt.Errorf("fast-forward to %q: %w", trackingRef, err)
+		// A reset, not a --ff-only merge, because behind includes a fork-point
+		// base whose heads share no commit; along shared history it is the
+		// fast-forward. The freshness that chose behind was read under this
+		// commit lock, so no local commit is past the remote.
+		if err := resetHardToRef(ctx, s.db, fmt.Sprintf("remotes/%s/%s", remote, branch)); err != nil {
+			return result, err
 		}
 		result.State = storage.SyncReceiveFastForwarded
 	case storage.SyncDiverged:
@@ -846,7 +864,7 @@ func (s *Store) judgeStandingRefusal(ctx context.Context, remote, branch string,
 	if err != nil {
 		return unjudgedRefusal(refusal, err)
 	}
-	if fresh.State() == storage.SyncDiverged {
+	if fresh.CommitsDiverged() {
 		return fmt.Errorf("%w: %w", storage.ErrPushDiverged, refusal)
 	}
 	return refusal
@@ -1041,10 +1059,7 @@ func (s *Store) SyncPushFromClone(ctx context.Context, remote string, branch str
 		if freshErr != nil {
 			return fmt.Errorf("%w (and whether a concurrent push superseded it could not be checked: %w)", pushErr, freshErr)
 		}
-		// The remote carries this store's HEAD exactly when the branch is up to
-		// date or behind; a fork-point divergence with nothing to replay is
-		// neither.
-		if state := fresh.State(); state != storage.SyncUpToDate && state != storage.SyncBehind {
+		if !fresh.RemoteCarriesHead() {
 			return pushErr
 		}
 		head, headErr := s.headCommitWithinLock(ctx)
