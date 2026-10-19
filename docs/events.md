@@ -86,7 +86,7 @@ lines here for reading:
 | `sink_rotation` | What happened to the file's size cap before this line was appended: `none`, `rotated` (this is the first line of a new file), or `failed` (the file keeps growing past its cap). |
 | `sink_rotation_error` | Present only when `sink_rotation` is `failed`: why. |
 | `counts` | The command's counts. A count of zero is written as `0`, so "ran and found none" is distinguishable from a command that does not count that thing. |
-| `facts` | What the command decided, under keys prefixed with the command's name, with `statusline.` for what it wrote to the statusline file, with `workflows.` for the workflow occasion it fired, or with `schema_ahead.` for a refusal because the workspace's schema is ahead of this lit. |
+| `facts` | What the command decided, under keys prefixed with the command's name, with `statusline.` for what it wrote to the statusline file, with `workflows.` for the workflow occasion it fired, with `config.` for its config check, or with `schema_ahead.` for a refusal because the workspace's schema is ahead of this lit. |
 
 A command that records no counts or facts writes `{}` for each.
 
@@ -182,6 +182,19 @@ instead.
 | `counts.stores.schema_ahead` | The stores at a schema newer than this lit. |
 | `counts.stores.read_only` | Those of them this lit reads but does not write. |
 | `counts.stores.snapshot_prune_failures` | The stores whose open migrated them and then could not remove older migration snapshots. Each gets a `~ <storage dir>: warning: old migration snapshots were not removed:` line after the table. |
+
+## What checking the config records
+
+A command that runs in a workspace checks the global and project
+`config.toml` for keys that are not lit settings, once, before it runs. Such
+a key has no effect: a misspelling, a setting lit no longer has, or one a
+newer lit added. The command runs all the same, and prints a `warning:` line
+on stderr for each key, naming the key and the file that sets it.
+
+| Key | Meaning |
+| --- | --- |
+| `config.unknown_keys` | Each key that is not a setting, as `{"key": …, "file": …}`, in layer order (global, then project) and alphabetically within a file; `[]` when there are none. Keys are lowercased. `null` when the check could not run. |
+| `config.unknown_keys_error` | Why a config file could not be read to check its keys, or `null`. The command prints `warning: config keys were not checked:` with the reason. |
 
 ## What a schema-ahead refusal records
 
