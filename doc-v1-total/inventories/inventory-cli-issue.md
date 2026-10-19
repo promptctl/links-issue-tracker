@@ -1250,9 +1250,11 @@ positional is required; otherwise `errors.New("usage: lit <name> <id> [--reason 
   a fail stands until its reviewer passes the same text, so revise the plan and
   have the new text reviewed") or `PlanSelfReviewed` ("… has passed only its
   author's own review (<author>); it needs a pass from a reviewer other than its
-  author"). The refused command's event carries `done.plan_gap` (the gap's
+  author"). The refused command's event carries `done.plan_gate` (the gap's
   `Kind()`: `no_plan`, `unreviewed`, `failed`, `author_only`); a done that lands
-  carries `done.plan_digest` and `done.plan_review`.
+  carries `done.plan_gate` `approved`, `done.plan_digest` and `done.plan_review`.
+  A done whose `Issue.Apply` leaves the status unchanged (the ticket is already
+  closed) reads no plan and carries `done.plan_gate` `already_closed`.
 
 ### 2.11 `lit start` takeover gate
 
@@ -1967,13 +1969,13 @@ outside a git repository (`register.go`; asserted in `retired_command_test.go`).
   (`cli.go`).
 - **Format is selected by the file extension** (lowercased) (`cli.go`):
   - `.yaml` / `.yml` → `runImportBulk`
-  - anything else → `runImportTreeJSON`, but first: if `--by` was set →
-    `UsageError{"usage: --by only applies to a YAML bulk-update file (--path *.yaml|*.yml); JSON tree-spec import always attributes creates to \"links\""}`
-    → exit 2 (`cli.go`).
+  - anything else → `runImportTreeJSON` (`cli.go`).
+- Both paths pass the resolved actor (session, else `--by`); it authors every
+  create and every update the file holds (`cli.go`).
 
 **JSON tree path** (`runImportTreeJSON`, `cli.go`):
 - `storage.ParseImportTreeSpecs(data)` then
-  `Store.ImportTree(ctx, prefix, specs)`.
+  `Store.ImportTree(ctx, prefix, actor, specs)`.
 - Documented spec shape (`cli.go`): an array of records each with
   `local_id`, optional `parent` (a local_id), optional `blocked_by` (array of
   local_ids), `title`, `type`, `topic`, `priority`.
@@ -1984,9 +1986,6 @@ outside a git repository (`register.go`; asserted in `retired_command_test.go`).
 
 **YAML bulk path** (`runImportBulk`, `cli.go`):
 - `storage.ParseBulkSpecs(data)`.
-- If `--by` was set but no document has an `id` (i.e. no update documents) →
-  `UsageError{"usage: --by only applies when the file has at least one update document (a document with \`id\` set); this file has none"}`
-  → exit 2 (`cli.go`, `bulkSpecsHaveUpdate` at `cli.go`).
 - Calls `Store.BulkApply(ctx, prefix, actor, specs)`.
 - Documented YAML shape (`cli.go`): one document per issue separated by
   `---`; optional `local_id` for intra-file references; `id` present means

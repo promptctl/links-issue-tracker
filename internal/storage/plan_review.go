@@ -15,6 +15,10 @@ type PlanReviewStore interface {
 	// AddPlanReview records a review of one version of an issue's plan,
 	// decided by PlanReviewOf, and returns it as stored.
 	AddPlanReview(ctx context.Context, in AddPlanReviewInput) (model.PlanReview, error)
+	// ListPlanReviews is every review of the issue's plan, in
+	// PlanReviewOrdering: what PlanApproval decides on, without the rest of
+	// the issue's detail.
+	ListPlanReviews(ctx context.Context, issueID string) ([]model.PlanReview, error)
 }
 
 // AddPlanReviewInput is a reviewer's verdict on the plan text they read, as

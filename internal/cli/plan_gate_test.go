@@ -72,8 +72,8 @@ func TestDoneFinishesOnlyAPassedCurrentPlan(t *testing.T) {
 		if ExitCode(err) != ExitValidation || commandErrorReason(err) != reasonPlanNotApproved || !strings.Contains(err.Error(), message) {
 			t.Fatalf("lit done = exit %d, reason %s, %q; want exit %d, reason %s, naming %q", ExitCode(err), commandErrorReason(err), err, ExitValidation, reasonPlanNotApproved, message)
 		}
-		if got := writtenFacts(t, lastEvent(t))["done.plan_gap"]; got != gap {
-			t.Fatalf("refused lit done event done.plan_gap = %v, want %s", got, gap)
+		if got := writtenFacts(t, lastEvent(t))["done.plan_gate"]; got != gap {
+			t.Fatalf("refused lit done event done.plan_gate = %v, want %s", got, gap)
 		}
 	}
 
@@ -91,8 +91,8 @@ func TestDoneFinishesOnlyAPassedCurrentPlan(t *testing.T) {
 	verdict := strings.Fields(runCLIInDir(t, dir, "verdict", id, "pass", "--plan", revisedDigest, "--by", "ada"))
 	runCLIInDir(t, dir, "done", id)
 	facts := writtenFacts(t, lastEvent(t))
-	if review := strings.TrimSuffix(verdict[1], ":"); facts["done.plan_digest"] != revisedDigest || facts["done.plan_review"] != review {
-		t.Errorf("lit done event facts = %v, want done.plan_digest %s and done.plan_review %s", facts, revisedDigest, review)
+	if review := strings.TrimSuffix(verdict[1], ":"); facts["done.plan_gate"] != "approved" || facts["done.plan_digest"] != revisedDigest || facts["done.plan_review"] != review {
+		t.Errorf("lit done event facts = %v, want done.plan_gate approved, done.plan_digest %s and done.plan_review %s", facts, revisedDigest, review)
 	}
 	if status := strings.TrimSpace(runCLIInDir(t, dir, "show", id, "--field", "status")); status != "closed" {
 		t.Errorf("after an approved lit done, status = %q, want closed", status)
@@ -111,5 +111,17 @@ func TestDoneRefusesAPlanItsFilerPassed(t *testing.T) {
 	_, err := runCLIInDirAllowError(t, dir, "done", id)
 	if want := "has passed only its author's own review (filer)"; err == nil || commandErrorReason(err) != reasonPlanNotApproved || !strings.Contains(err.Error(), want) {
 		t.Fatalf("lit done on a plan only its filer passed = %v, want reason %s naming %q", err, reasonPlanNotApproved, want)
+	}
+}
+
+// A done on a ticket already closed finishes nothing, so the gate asks it for
+// no plan, and its event says the gate found the ticket closed.
+func TestDoneOnAClosedTicketAsksForNoPlan(t *testing.T) {
+	isolateEvents(t)
+	dir, id, _ := statuslineCheckout(t)
+	runCLIInDir(t, dir, "close", id, "--resolution", "wontfix")
+	runCLIInDir(t, dir, "done", id)
+	if got := writtenFacts(t, lastEvent(t))["done.plan_gate"]; got != "already_closed" {
+		t.Fatalf("lit done on a closed ticket: done.plan_gate = %v, want already_closed", got)
 	}
 }

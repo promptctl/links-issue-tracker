@@ -30,6 +30,14 @@ func (e *Engine) AddPlanReview(ctx context.Context, in storage.AddPlanReviewInpu
 	return clonePlanReviews([]model.PlanReview{review})[0], nil
 }
 
+// ListPlanReviews is every review of issueID's plan, in the order they were
+// recorded.
+func (e *Engine) ListPlanReviews(ctx context.Context, issueID string) ([]model.PlanReview, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.planReviewsFor(issueID), nil
+}
+
 func (e *Engine) planReviewsFor(issueID string) []model.PlanReview {
 	return clonePlanReviews(slices.DeleteFunc(slices.Clone(e.planReviews), func(review model.PlanReview) bool { return review.IssueID != issueID }))
 }

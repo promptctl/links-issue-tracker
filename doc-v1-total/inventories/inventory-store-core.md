@@ -395,7 +395,7 @@ Test evidence:
 3. `now := time.Now().UTC()` (`store.go`).
 4. `canonicalizeLabels(in.Labels)` (`store.go`; `internal/store/labels.go`) — error propagated.
 5. `issueid.NormalizeTopicForCreate(in.Topic)` (`store.go`) — error propagated. Missing topic yields an error containing `"topic is required"` (`store_test.go`).
-6. `createdBy := "links"` — a hardcoded literal used as the event actor, the label creator, and the parent-edge creator (`store.go`).
+6. `createdBy := storage.Actor(in.Actor)` — the event actor, the label creator, the parent-edge creator, and the id hash's creator (`store.go`).
 7. Builds `model.Issue` with **`strings.TrimSpace` applied to** Title, Description, Prompt, Plan, Lane, Assignee; `Priority`, `IssueType`, `Topic`, `Labels` copied; `CreatedAt = UpdatedAt = now` (`store.go`).
 8. `model.HydrateRow(issue, model.StatusView{Value: model.StateOpen}, nil)` — new issues start `open` (`store.go`). An invalid issue type is rejected here or downstream (`store_test.go`).
 9. `parentID := strings.TrimSpace(in.ParentID)` (`store.go`).
@@ -414,7 +414,7 @@ INSERT INTO issues(
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
 ```
    Bound values in order: `issue.ID`, `issue.Title`, `issue.Description`, `nullableString(issue.Prompt)`, `issue.Plan`, `statusForStorage(issue)`, `issue.Priority`, `issue.IssueType`, `issue.Topic`, `issue.AssigneeValue()`, `issue.Rank`, `issue.Lane`, `nullableString(issue.FollowsUp)`, `issue.CreatedAt.Format(time.RFC3339Nano)`, `issue.UpdatedAt.Format(time.RFC3339Nano)`, `archivedCol`, `deletedCol`. `closed_at` is a literal `NULL`. Columns `resolution` and `redirect_target` are **not** in the insert list (left to their defaults). Failure → `fmt.Errorf("insert issue: %w", err)` (`store.go`).
-7. If `parentID != ""`: builds `model.Relation{SrcID: issue.ID, DstID: parentID, Type: model.RelParentChild, CreatedAt: issue.CreatedAt, CreatedBy: "links"}` and routes it through `insertRelationTx` (`store.go`; `internal/store/relations.go`).
+7. If `parentID != ""`: builds `model.Relation{SrcID: issue.ID, DstID: parentID, Type: model.RelParentChild, CreatedAt: issue.CreatedAt, CreatedBy: createdBy}` and routes it through `insertRelationTx` (`store.go`; `internal/store/relations.go`).
 8. `s.replaceLabelsTx(ctx, tx, issue.ID, issue.Labels, createdBy)` (`store.go`; `internal/store/labels.go`).
 9. Event: `createChanges := []model.FieldChange{}`; for **non-container** types appends `{Field:"status", From:"", To:"open"}`; containers get none (`store.go`). Then `s.recordEvent(ctx, tx, issue.ID, "created", "issue created", "links", createChanges)` (`store.go`) — action `"created"`, reason `"issue created"`, actor `"links"`.
 10. `smoothRanksIfNeededTx(ctx, tx, issue.Rank)` (`store.go`; `internal/store/ranking.go`).
@@ -835,8 +835,8 @@ Which mutations emit which event:
 
 | Mutation | action column | reason | actor | change rows |
 |---|---|---|---|---|
-| `CreateIssue` leaf | `"created"` | `"issue created"` | `"links"` | one `status ""→"open"` |
-| `CreateIssue` container | `"created"` | `"issue created"` | `"links"` | none |
+| `CreateIssue` leaf | `"created"` | `"issue created"` | `in.Actor` (else `"unknown"`) | one `status ""→"open"` |
+| `CreateIssue` container | `"created"` | `"issue created"` | `in.Actor` (else `"unknown"`) | none |
 | status transition | `string(action.Name())` | `strings.TrimSpace(c.Reason)` | normalized actor (`"unknown"` if blank) | status / closed_at / resolution / redirect_target / assignee, only where moved |
 | retention transition | `string(action.Name())` | same | same | archived_at / deleted_at, only where moved |
 | field update | SQL **NULL** (empty action) | `in.Reason` | same | one per moved field |
@@ -3724,15 +3724,15 @@ Defaults for absent fields: every field is a non-pointer, so an absent key is th
 
 ### 4.2 "Tree" = local_id graph over parent + blocked_by
 
-`ImportTree(ctx, prefix, specs)` (`import_tree.go`):
+`ImportTree(ctx, prefix, actor, specs)` (`import_tree.go`):
 
 1. `storage.ParseImportTreeFile(specs)` (`internal/storage/import_validate.go`, shared with the memory engine) — full pre-flight, no store writes; returns each spec parsed, as a `storage.FileCreate`, in the topological write order (§4.4). The engine parses nothing itself.
 2. Create loop in topo order (`import_tree.go`):
    - the parent is `idMap[create.Parent]` — resolved **only** from this batch's map, so an external/real parent id resolves to `""` (see §4.5).
-   - `s.CreateIssue(ctx, create.Input(parentID, prefix))`: the `CreateIssueInput{Title, Description, Prompt, Plan, IssueType, Topic, Priority, Assignee, Labels}` the gate parsed, with `ParentID` and `Prefix` filled in. **`Lane` is never set** on this path (contrast bulk). `Placement` is left at its zero value = `RankBottom` (`internal/storage/issues.go`), so creates append in file order.
-   - On error: `leaked := s.rollbackCreatedIssues(ctx, createdIDs)` then `"import: create %q: %w (rollback leaked %d: %s)"` with the leaked ids comma-joined.
+   - `s.CreateIssue(ctx, create.Input(parentID, prefix, actor))`: the `CreateIssueInput{Title, Description, Prompt, Plan, IssueType, Topic, Priority, Assignee, Labels}` the gate parsed, with `ParentID`, `Prefix` and `Actor` filled in. **`Lane` is never set** on this path (contrast bulk). `Placement` is left at its zero value = `RankBottom` (`internal/storage/issues.go`), so creates append in file order.
+   - On error: `leaked := s.rollbackCreatedIssues(ctx, actor, createdIDs)` then `"import: create %q: %w (rollback leaked %d: %s)"` with the leaked ids comma-joined.
    - `idMap[create.LocalID] = issue.ID`; append to `createdIDs`.
-3. Second pass over the creates **in write order** wiring `blocked_by` (`import_tree.go`): for each dep, `AddRelation(storage.AddRelationInput{SrcID: createdIDs[i], DstID: idMap[dep], Type: model.RelBlockedBy, CreatedBy: "links"})` — **src is the dependent, dst is the dependency**. On error: rollback, then `"import: blocked_by %q -> %q: %w (rollback leaked %d: %s)"`.
+3. Second pass over the creates **in write order** wiring `blocked_by` (`import_tree.go`): for each dep, `AddRelation(storage.AddRelationInput{SrcID: createdIDs[i], DstID: idMap[dep], Type: model.RelBlockedBy, CreatedBy: actor})` — **src is the dependent, dst is the dependency**. On error: rollback, then `"import: blocked_by %q -> %q: %w (rollback leaked %d: %s)"`.
 4. Returns `storage.ImportTreeResult{IDMap: idMap}` (`import_tree.go`), whose field tag is `json:"id_map"` (`storage/bulk.go`).
 
 ### 4.3 Validation and every rejection text
@@ -3786,7 +3786,7 @@ Atomicity: best-effort only. Doc comment `import_tree.go` states partial state m
 
 `lit import --path <file>` (`internal/cli/cli.go`). `importUsage = "usage: lit import --path <tree-spec.json | bulk-file.yaml> (run `lit import --help` for both formats)"` (`cli.go`) — raised for an empty `--path` or any positional argument. The file is read with `os.ReadFile`, error `"read import spec: %w"`. Dispatch is on `strings.ToLower(filepath.Ext(path))`: `.yaml`/`.yml` → bulk; **anything else** (including `.json` and no extension) → tree JSON (`cli.go`).
 
-On the JSON branch, a set `--by` flag is an error: `"usage: --by only applies to a YAML bulk-update file (--path *.yaml|*.yml); JSON tree-spec import always attributes creates to \"links\""` (`cli.go`).
+Both branches pass the resolved actor (session, else `--by`) to the store (`cli.go`).
 
 Output (`runImportTreeJSON`, `cli.go`): `"imported %d issues\n"` with `len(result.IDMap)`, then one line per map entry `"  %s -> %s\n"` — **iterated over a Go map, so the mapping lines are in nondeterministic order**.
 
@@ -3902,7 +3902,7 @@ Note the create branch does **not** require `LocalID` (unlike ImportTree), and d
 2. `createdIDs` (ordered, parallel to `file.Creates`), `localRealID` map (`import_bulk.go`).
 3. Create loop over `file.Creates` (`import_bulk.go`): `CreateIssue(ctx, create.Input(resolveBulkRef(create.Parent, localRealID), prefix))`. The gate built that input: `Title` and `Topic` trimmed, `Description`/`Prompt`/`Plan`/`Assignee`/`Lane`/`Labels` the document's value or the zero value, `IssueType` and `Priority` parsed (priority `model.PriorityNormal` when unset), `Placement` left at its zero value `RankBottom` so file order is preserved, matching ImportTree. Failure → rollback then `"bulk: create doc %d: %w (rollback leaked %d: %s)"`.
    - Append `createdIDs`. If `create.LocalID != ""` → `localRealID[LocalID] = issue.ID`; `result.Created` gets `storage.NewIDMapping(create.LocalID, issue.ID)`, **self-keyed when there is no local id** (`import_bulk.go`).
-4. Second pass over `file.Creates` in **write order** (`import_bulk.go`): for each `dep`, `AddRelation({SrcID: createdIDs[i], DstID: resolveBulkRef(dep, localRealID), Type: model.RelBlockedBy, CreatedBy: "links"})`. Failure → rollback then `"bulk: blocked_by doc %d -> %q: %w (rollback leaked %d: %s)"`.
+4. Second pass over `file.Creates` in **write order** (`import_bulk.go`): for each `dep`, `AddRelation({SrcID: createdIDs[i], DstID: resolveBulkRef(dep, localRealID), Type: model.RelBlockedBy, CreatedBy: actor})`. Failure → rollback then `"bulk: blocked_by doc %d -> %q: %w (rollback leaked %d: %s)"`.
 5. **Updates last**, over `file.Updates` (`import_bulk.go`): `s.Apply(ctx, update.ID, storage.Change{Actor: actor, Fields: update.Patch})`. Failure → rollback then `"bulk: update %q: %w (rollback leaked %d: %s)"`. On success append `issue.ID` to `result.Updated`. A failing create or edge therefore leaves no update applied.
 
 `resolveBulkRef(ref, localRealID)` (`import_bulk.go`): a map hit returns the real id; **a miss returns `ref` unchanged**, to be validated downstream by `CreateIssue`/`AddRelation` as a real pre-existing issue id.
@@ -3934,7 +3934,7 @@ Note the create branch does **not** require `LocalID` (unlike ImportTree), and d
 
 ### 5.6 CLI surface for bulk
 
-`runImportBulk` (`cli.go`): parse; if `--by` was set but no document has an `id` → `UsageError{Message: "usage: --by only applies when the file has at least one update document (a document with `id` set); this file has none"}` (`cli.go`), determined by `bulkSpecsHaveUpdate` (`cli.go`). Then `ap.Store.BulkApply(ctx, ap.Workspace.IssuePrefix.Value(), actor, specs)`.
+`runImportBulk` (`cli.go`): parse, then `ap.Store.BulkApply(ctx, ap.Workspace.IssuePrefix.Value(), actor, specs)`.
 
 Output, in order (`cli.go`):
 ```

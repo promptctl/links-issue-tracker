@@ -1843,30 +1843,45 @@ func authorizePhase(ctx context.Context, _ io.Writer, _ *app.App, _ string, prio
 // that storage.PlanApproval approves. A done the lifecycle refuses — on an
 // epic, whose state is its children's, or on frozen work — gets that refusal:
 // the hook asks Issue.Apply, the rule the store's Apply runs, before it reads
-// the plan. On success it owes the approval it rested on; a refusal records
-// which gap stopped it.
+// the plan. A done on a ticket already closed finishes nothing — the engines
+// record no write for it — so it has no finish to authorize, as the engines
+// check nothing for a write they will not make. done.plan_gate on the event
+// says which way the gate went; an approval adds the plan and the review it
+// rested on.
 // [LAW:single-enforcer] [LAW:nothing-unseen]
 func authorizeDone(ctx context.Context, _ io.Writer, ap *app.App, issueID string, prior ticketState, action model.Action) (afterApply, error) {
 	done, ok := action.(model.Done)
 	if !ok {
 		return nil, fmt.Errorf("done: authorize hook received a %T action", action)
 	}
-	if _, err := prior.issue.Apply(done); err != nil {
-		return nil, err
-	}
-	detail, err := ap.Store.GetIssueDetail(ctx, issueID)
+	finished, err := prior.issue.Apply(done)
 	if err != nil {
 		return nil, err
 	}
-	approval, err := storage.PlanApproval(detail.Issue, detail.Events, detail.PlanReviews)
+	if finished.StatusValue() == prior.issue.StatusValue() {
+		return func(ticketState, *claims.Handover) (string, statusline.Facts) {
+			telemetry.Set(ctx, "done.plan_gate", "already_closed")
+			return "", nil
+		}, nil
+	}
+	events, err := ap.Store.ListEvents(ctx, issueID)
+	if err != nil {
+		return nil, err
+	}
+	reviews, err := ap.Store.ListPlanReviews(ctx, issueID)
+	if err != nil {
+		return nil, err
+	}
+	approval, err := storage.PlanApproval(prior.issue, events, reviews)
 	var unapproved storage.PlanUnapprovedError
 	if errors.As(err, &unapproved) {
-		telemetry.Set(ctx, "done.plan_gap", unapproved.Gap.Kind())
+		telemetry.Set(ctx, "done.plan_gate", unapproved.Gap.Kind())
 	}
 	if err != nil {
 		return nil, err
 	}
 	return func(ticketState, *claims.Handover) (string, statusline.Facts) {
+		telemetry.Set(ctx, "done.plan_gate", "approved")
 		telemetry.Set(ctx, "done.plan_digest", string(approval.PlanDigest))
 		telemetry.Set(ctx, "done.plan_review", approval.ID)
 		return "", nil

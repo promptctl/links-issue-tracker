@@ -1098,7 +1098,7 @@ func (s *Store) GetIssueDetail(ctx context.Context, id string) (model.IssueDetai
 	if err != nil {
 		return model.IssueDetail{}, err
 	}
-	planReviews, err := queryPlanReviews(ctx, s.db, "WHERE issue_id = ?", id)
+	planReviews, err := s.ListPlanReviews(ctx, id)
 	if err != nil {
 		return model.IssueDetail{}, err
 	}

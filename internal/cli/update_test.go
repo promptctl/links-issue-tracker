@@ -92,7 +92,11 @@ func TestRunTransitionTargetStateMatrix(t *testing.T) {
 				if err != nil {
 					t.Fatalf("CreateIssue() error = %v", err)
 				}
-				approvePlan(t, ctx, ap, issue.ID)
+				// A done that closes the ticket needs an approved plan; the
+				// diagonal done finishes nothing and runs with none.
+				if verb.spec.name == doneSpec.name && from != verb.target {
+					approvePlan(t, ctx, ap, issue.ID)
+				}
 				// Drive the issue to the from-state. The claim is always held by
 				// `owner` so the start diagonal (start on an in_progress issue by
 				// the same owner) is a pure no-op rather than a claim transfer.

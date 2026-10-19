@@ -2464,6 +2464,13 @@ func aPlanReviewJudgesOneVersion(t *testing.T, ctx context.Context, st storage.S
 		if len(detail.PlanReviews) != 2 || detail.PlanReviews[0].ID != passed.ID || detail.PlanReviews[1].ID != failed.ID {
 			t.Fatalf("detail plan reviews = %+v, want the pass then the fail, oldest first", detail.PlanReviews)
 		}
+		listed, err := st.ListPlanReviews(ctx, issue.ID)
+		if err != nil {
+			t.Fatalf("ListPlanReviews error = %v", err)
+		}
+		if len(listed) != 2 || listed[0].ID != passed.ID || listed[1].ID != failed.ID {
+			t.Fatalf("ListPlanReviews = %+v, want the pass then the fail, oldest first", listed)
+		}
 		if want := []model.Law{"carrying-cost", "one-source-of-truth"}; !slices.Equal(detail.PlanReviews[1].Laws, want) {
 			t.Fatalf("stored fail's laws = %v, want %v: unchanged by a write through the review AddPlanReview returned", detail.PlanReviews[1].Laws, want)
 		}

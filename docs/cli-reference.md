@@ -99,7 +99,8 @@ closed itself when its last child did and there is no transition left to make.
 Commands that record an actor resolve it from the `CLAUDE_CODE_SESSION_ID` environment
 variable (producing an identity like `claude_<session-id>`). The `--by` flag is the
 *fallback* for when that variable is unset — when both are present, the environment
-wins. It is one name for one person: the actor every mutating command records, the
+wins. It is one name for one person: the actor every mutating command records (a
+create's included, so it is the author of a plan given at filing), the
 assignee `lit start` writes, and the reader `lit next` tells whether a ticket in flight
 is theirs, so an operator with no session runs `lit start <id> --by bob` and
 `lit next --by bob` and is the same person to both. `lit start --assignee` is refused
@@ -678,7 +679,7 @@ Status lifecycle (Agent Operations):
 | Command | Transition | Flags | Notes |
 |---------|-----------|-------|-------|
 | `lit start` | any state → `in_progress` | `[--take]` | Claims the issue and assigns it to you; from `closed` it is a reopen-and-claim. `--take` confirms taking over a lane another checkout holds fresh, and is how a caller with no terminal to prompt does it. |
-| `lit done` | any non-closed → `closed` | | Success path; prints post-close capture guidance. Transitions are target-state: the verb names the destination, whatever the current status. Refused with `plan_not_approved` unless the ticket's current plan has passed: each reviewer's latest verdict on that text stands, none may be a fail, and one pass must be by someone other than the text's author (whoever last wrote the plan to it, or the ticket's creator for a plan given at creation). A fail stands until the reviewer who gave it passes the same text, or the plan is revised. An epic is answered by its children, as before. |
+| `lit done` | any non-closed → `closed` | | Success path; prints post-close capture guidance. Transitions are target-state: the verb names the destination, whatever the current status. Refused with `plan_not_approved` unless the ticket's current plan has passed: each reviewer's latest verdict on that text stands, none may be a fail, and one pass must be by someone other than the text's author (whoever last wrote the plan to it, or the ticket's creator for a plan given at creation). A fail stands until the reviewer who gave it passes the same text, or the plan is revised. A done on a ticket already closed finishes nothing and asks for no plan. An epic is answered by its children. |
 | `lit close` | any non-closed → `closed` | `--resolution <duplicate\|superseded\|obsolete\|wontfix> [--of <canonical-id>]` | Closing without finishing; `--of` names the canonical ticket for the redirecting resolutions (required for those, unrepresentable otherwise). |
 | `lit open` | any non-open → `open` | | Returns the issue to the backlog; ownership (assignee) is untouched — only `start` rewrites it. |
 | `lit phase` | `in_progress` → `in_progress`, phase → the `--to` phase | `--to <plan\|impl\|review\|merge>` | Records where the work stands; the status does not change. Any phase may follow any other, so `review` back to `impl` after review findings is one move. A move to the phase the issue is already in records nothing. Prints `phase: impl → review`, or `phase: review (unchanged)`, before the issue's summary. Refused for an issue that is not `in_progress` and for an epic. |
