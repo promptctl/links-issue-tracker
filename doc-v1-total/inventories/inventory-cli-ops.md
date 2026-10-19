@@ -929,7 +929,7 @@ Family usage `usage: lit hooks install` (`hooks.go`); the only row is `install` 
 ## 12. `lit quickstart`
 
 Handler `quickstartLeaf` — `cli.go`.
-Usage string, derived from the topic table: `usage: lit quickstart [work|new|update|done|doctor] [--refresh] [--eject[=LIST]] [--force]` (`quickstart_topics.go`, tokens from `quickstart_topics.go`).
+Usage string, derived from the topic table: `usage: lit quickstart [work|new|update|done|doctor|review] [--refresh] [--eject[=LIST]] [--force]` (`quickstart_topics.go`, tokens from `quickstart_topics.go`).
 
 | Flag | Default | Effect | Line |
 |---|---|---|---|
@@ -944,7 +944,7 @@ Usage string, derived from the topic table: `usage: lit quickstart [work|new|upd
 - `--refresh` together with `--eject` → `usage: --refresh and --eject are mutually exclusive` (`cli.go`).
 - `--force` without `--eject` → `usage: --force is only valid with --eject` (`cli.go`).
 - Exactly one positional (a topic) with `--refresh` or `--eject` → `quickstartUsage` followed by `a topic renders on its own`; when `--eject` was given it also names `, and --eject takes its value as --eject=LIST` (`cli.go`). `--force` alone never reaches this branch: the `--force` without `--eject` check above returns first.
-- An unknown topic → `usage: unknown quickstart topic "<t>" (must be one of: work, new, update, done, doctor)` (`cli.go`).
+- An unknown topic → `usage: unknown quickstart topic "<t>" (must be one of: work, new, update, done, doctor, review)` (`cli.go`).
 
 ### 12.2 Modes
 
@@ -1045,8 +1045,8 @@ Markers (`agents_internal.go`): current `<!-- BEGIN LIT INTEGRATION -->` / `<!--
 ## 16. `internal/templates` — the embed mechanism and asset list
 
 - `//go:embed defaults/*` into `defaultsFS embed.FS` (`templates.go`).
-- Canonical names (`templates.go`): `agents-section.md`, `pre-push-hook.sh`, `quickstart.md`, `quickstart-work.md`, `quickstart-new.md`, `quickstart-update.md`, `quickstart-done.md`, `quickstart-doctor.md`. `Names()` returns this list in that order (`templates.go`).
-- Short aliases (`templates.go`): `quickstart`, `quickstart-work`, `quickstart-new`, `quickstart-update`, `quickstart-done`, `quickstart-doctor`, `agents`, `hook`. `sortedAliasNames()` sorts them for error messages (`templates.go`).
+- Canonical names (`templates.go`): `agents-section.md`, `pre-push-hook.sh`, `quickstart.md`, `quickstart-work.md`, `quickstart-new.md`, `quickstart-update.md`, `quickstart-done.md`, `quickstart-doctor.md`, `quickstart-review.md`. `Names()` returns this list in that order (`templates.go`).
+- Short aliases (`templates.go`): `quickstart`, `quickstart-work`, `quickstart-new`, `quickstart-update`, `quickstart-done`, `quickstart-doctor`, `quickstart-review`, `agents`, `hook`. `sortedAliasNames()` sorts them for error messages (`templates.go`).
 - Resolution precedence (`Load`/`LoadWithSource`, `templates.go`): **project** `<workspaceRoot>/.lit/templates/<name>` (`templates.go`) > **global** `<config.ConfigDir()>/templates/<name>` (`templates.go`) > **embedded**. A layer contributes nothing when its file is absent or empty; a read error at a layer is wrapped `load project template <path>: %w` / `load global template <path>: %w`. Sources are `project` / `global` / `embedded` (`templates.go`). All three empty → `load template <name>: no non-empty source`.
 - `EmbeddedDefault(name)` reads `defaults/<name>` raw (`templates.go`).
 - `ActiveOverride(root, name)` returns the highest-priority EXISTING override (project then global) with its content, or an absent path when neither exists; non-not-exist errors propagate (`templates.go`).
@@ -1057,14 +1057,15 @@ Markers (`agents_internal.go`): current `<!-- BEGIN LIT INTEGRATION -->` / `<!--
 |---|---|---|---|
 | `agents-section.md` | `ensureLinksAgentFiles` (from `lit init`, `lit quickstart --refresh`) | the managed region of `<root>/AGENTS.md` and `<root>/CLAUDE.md` | 10 lines wrapped in `<!-- BEGIN/END LIT INTEGRATION -->`; a heading, a paragraph telling the agent to run `lit quickstart` first, and a paragraph naming the command that records each phase move (`lit phase <id> --to impl`, `--to review`, `--to merge`, `lit done <id>`) |
 | `pre-push-hook.sh` | `installHooks` (from `lit init`, `lit hooks install`, `lit quickstart --refresh`) | the managed region of `<git-common-dir>/hooks/pre-push` | 25-line bash fragment wrapped in `# --- BEGIN/END LIT INTEGRATION ---`; `set -u`, takes `$1` as the remote name (default `origin`), mktemps a trace-ref file, runs `lit sync push --remote "$remote"` with `LNKS_AUTOMATION_TRIGGER=git-pre-push`, `LNKS_AUTOMATION_REASON="git push triggered the managed pre-push sync"`, and `LNKS_AUTOMATION_TRACE_REF_FILE`; on failure prints a `[links] warning:` line to stderr carrying the trace path (or `unavailable`) inside an `<agent-instructions>` element; has a no-mktemp fallback branch; always `exit 0` so a sync failure never blocks the git push |
-| `quickstart.md` | `lit quickstart` (bare), bare `lit`, `lit quickstart --refresh` (rendered, never written to the repo) | stdout | 18-line router: an `<agent-instructions>` framing note, a paragraph on ticket provenance, a bulleted list of the five topic subcommands, and a "Fastpath" of `lit next` / `lit start <id>` / `lit workflows` |
+| `quickstart.md` | `lit quickstart` (bare), bare `lit`, `lit quickstart --refresh` (rendered, never written to the repo) | stdout | 19-line router: an `<agent-instructions>` framing note, a paragraph on ticket provenance, a bulleted list of the six topic subcommands, and a "Fastpath" of `lit next` / `lit start <id>` / `lit workflows` |
 | `quickstart-work.md` | `lit quickstart work` | stdout | 15 lines on finding/starting work: `lit ls --limit --search`, `lit next`, `lit backlog`, `lit show`, claims-first selection, `lit start` and `--take`, and recording each phase move with `lit phase <id> --to <phase>` and `lit done <id>` |
 | `quickstart-new.md` | `lit quickstart new` | stdout | 15 lines on `lit new` flags (`--title/--topic/--type/--parent/--top`), `<agent-instructions>` notes on `--description`, `--topic`, and default bottom-of-frame ranking; `lit followup`; `lit import --path` for batches |
 | `quickstart-update.md` | `lit quickstart update` | stdout | 14 lines: `lit update`, `lit import`, `lit rank`, `lit label add/rm` (`needs-design`, `external`, `focus`), `lit parent set`, `lit dep add` (`--blocked-by`, `--related-to`), `lit comment add` |
 | `quickstart-done.md` | `lit quickstart done` | stdout | 9 lines: `lit done`, `lit close --resolution <duplicate\|superseded\|obsolete\|wontfix>`, `lit followup`, `lit workflows edit done`, and a commit reminder |
 | `quickstart-doctor.md` | `lit quickstart doctor` | stdout | 5 lines: `lit doctor [--fix]` plus an `<agent-instructions>` note to self-resolve first |
+| `quickstart-review.md` | `lit quickstart review` | stdout | the reviewer brief: load the `laws:code` skill, pin the plan's digest from `lit show`, find the whole mechanism and its history, judge the stack rather than the increment, record one `lit verdict` (and on a fail one `lit comment add`) |
 
-All eight are also the payload of `lit quickstart --eject`, written to `<config.ConfigDir()>/templates/<name>` at mode `0o644` (`quickstart_eject.go`).
+All nine are also the payload of `lit quickstart --eject`, written to `<config.ConfigDir()>/templates/<name>` at mode `0o644` (`quickstart_eject.go`).
 
 ---
 

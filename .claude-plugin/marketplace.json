@@ -9,7 +9,7 @@
     {
       "name": "lit",
       "source": "./claude-plugin",
-      "description": "The /next and /review-plan skills for repos tracked with lit"
+      "description": "The /next skill for repos tracked with lit"
     }
   ]
 }

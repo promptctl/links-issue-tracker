@@ -22,6 +22,7 @@ var quickstartTopics = []struct {
 	{"update", templates.QuickstartUpdateTemplateName},
 	{"done", templates.QuickstartDoneTemplateName},
 	{"doctor", templates.QuickstartDoctorTemplateName},
+	{"review", templates.QuickstartReviewTemplateName},
 }
 
 func quickstartTopicTemplate(token string) (string, bool) {

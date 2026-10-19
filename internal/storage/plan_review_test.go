@@ -8,10 +8,8 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
-// A ticket's current plan is approved when each reviewer's latest verdict on
-// that text leaves no fail standing and at least one standing pass is by
-// someone other than the text's author: the actor of the latest event that
-// wrote the plan to it, or the issue's creator for a plan given at creation.
+// A ticket's current plan is approved when a review of that text passed it and
+// none failed it, whoever recorded either.
 func TestPlanApprovalNamesWhatTheCurrentPlanLacks(t *testing.T) {
 	const first, second = "Add a retry around the push", "Drop the retry; the lease already bounds it"
 	created := model.IssueEvent{Action: model.ActionCreated, Actor: "creator"}
@@ -26,7 +24,6 @@ func TestPlanApprovalNamesWhatTheCurrentPlanLacks(t *testing.T) {
 	authored := []model.IssueEvent{created, wrote("author", "", first)}
 	revised := []model.IssueEvent{created, wrote("author", "", first), wrote("author", first, second)}
 	reverted := []model.IssueEvent{created, wrote("author", "", first), wrote("author", first, second), wrote("author", second, first)}
-	revertedByReviewer := []model.IssueEvent{created, wrote("author", "", first), wrote("author", first, second), wrote("ada", second, first)}
 	// Two stores edited the plan at once and the merge kept the earlier edit:
 	// the later event wrote a text that is not the current one.
 	mergedConcurrent := []model.IssueEvent{created, wrote("author", "", first), wrote("ada", "", second)}
@@ -44,28 +41,22 @@ func TestPlanApprovalNamesWhatTheCurrentPlanLacks(t *testing.T) {
 		{name: "only an earlier text reviewed", plan: second, events: revised,
 			reviews: []model.PlanReview{review("r1", "ada", first, model.PlanPass)},
 			gap:     storage.PlanUnreviewed{Plan: v2, EarlierReviewed: true}},
-		{name: "a pass by someone else", plan: first, events: authored,
+		{name: "a pass", plan: first, events: authored,
 			reviews:  []model.PlanReview{review("r1", "ada", first, model.PlanPass)},
 			approved: "r1"},
-		{name: "only the author's own pass", plan: first, events: authored,
-			reviews: []model.PlanReview{review("r1", "author", first, model.PlanPass)},
-			gap:     storage.PlanSelfReviewed{Plan: v1, Author: "author"}},
-		{name: "a plan given at creation, passed by its creator", plan: first, events: []model.IssueEvent{created},
-			reviews: []model.PlanReview{review("r1", "creator", first, model.PlanPass)},
-			gap:     storage.PlanSelfReviewed{Plan: v1, Author: "creator"}},
-		{name: "a plan given at creation, passed by someone else", plan: first, events: []model.IssueEvent{created},
-			reviews:  []model.PlanReview{review("r1", "ada", first, model.PlanPass)},
+		{name: "a pass recorded by the plan's author", plan: first, events: authored,
+			reviews:  []model.PlanReview{review("r1", "author", first, model.PlanPass)},
 			approved: "r1"},
-		{name: "a fail, then a fresh reviewer's pass of the same text", plan: first, events: authored,
-			reviews: []model.PlanReview{review("r1", "ada", first, model.PlanFail, "carrying-cost"), review("r2", "grace", first, model.PlanPass)},
+		{name: "a plan given at creation, passed", plan: first, events: []model.IssueEvent{created},
+			reviews:  []model.PlanReview{review("r1", "creator", first, model.PlanPass)},
+			approved: "r1"},
+		{name: "a fail, then a pass of the same text", plan: first, events: authored,
+			reviews: []model.PlanReview{review("r1", "ada", first, model.PlanFail, "carrying-cost"), review("r2", "ada", first, model.PlanPass)},
 			gap:     storage.PlanFailed{Plan: v1, Fails: []model.PlanReview{review("r1", "ada", first, model.PlanFail, "carrying-cost")}}},
-		{name: "a reviewer reversing their own fail", plan: first, events: authored,
-			reviews:  []model.PlanReview{review("r1", "ada", first, model.PlanFail, "carrying-cost"), review("r2", "ada", first, model.PlanPass)},
-			approved: "r2"},
-		{name: "a reviewer reversing their own pass", plan: first, events: authored,
+		{name: "a pass, then a fail of the same text", plan: first, events: authored,
 			reviews: []model.PlanReview{review("r1", "ada", first, model.PlanPass), review("r2", "ada", first, model.PlanFail, "single-enforcer")},
 			gap:     storage.PlanFailed{Plan: v1, Fails: []model.PlanReview{review("r2", "ada", first, model.PlanFail, "single-enforcer")}}},
-		{name: "standing fails, newest first", plan: first, events: authored,
+		{name: "fails, newest first", plan: first, events: authored,
 			reviews: []model.PlanReview{review("r1", "ada", first, model.PlanFail, "carrying-cost"), review("r2", "grace", first, model.PlanFail, "single-enforcer")},
 			gap:     storage.PlanFailed{Plan: v1, Fails: []model.PlanReview{review("r2", "grace", first, model.PlanFail, "single-enforcer"), review("r1", "ada", first, model.PlanFail, "carrying-cost")}}},
 		{name: "a fail of an earlier text", plan: second, events: revised,
@@ -74,9 +65,6 @@ func TestPlanApprovalNamesWhatTheCurrentPlanLacks(t *testing.T) {
 		{name: "a plan returned to a text that passed", plan: first, events: reverted,
 			reviews:  []model.PlanReview{review("r1", "ada", first, model.PlanPass)},
 			approved: "r1"},
-		{name: "a plan returned to a passed text by its reviewer", plan: first, events: revertedByReviewer,
-			reviews: []model.PlanReview{review("r1", "ada", first, model.PlanPass)},
-			gap:     storage.PlanSelfReviewed{Plan: v1, Author: "ada"}},
 		{name: "concurrent edits merged to the earlier text", plan: first, events: mergedConcurrent,
 			reviews:  []model.PlanReview{review("r1", "ada", first, model.PlanPass)},
 			approved: "r1"},
@@ -118,8 +106,6 @@ func TestPlanGapSaysWhatIsMissing(t *testing.T) {
 			"lit-1's current plan (v2, digest " + string(version.Digest) + ") has no review; the reviews on record judged an earlier text"},
 		{storage.PlanFailed{Plan: version, Fails: []model.PlanReview{fail}}, "failed",
 			"lit-1's current plan (v2, digest " + string(version.Digest) + ") failed its law review: ada failed it citing carrying-cost, single-enforcer"},
-		{storage.PlanSelfReviewed{Plan: version, Author: "author"}, "author_only",
-			"lit-1's current plan (v2, digest " + string(version.Digest) + ") has passed only its author's own review (author)"},
 	} {
 		if got := tc.gap.Describe("lit-1"); got != tc.want || tc.gap.Kind() != tc.kind {
 			t.Errorf("%T: Describe() = %q, Kind() = %q\nwant %q, %q", tc.gap, got, tc.gap.Kind(), tc.want, tc.kind)

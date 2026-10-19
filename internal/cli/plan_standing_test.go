@@ -31,43 +31,29 @@ func TestDoneFinishesWhereverThePlanStands(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		standing string
-		filing   []string                             // extra `lit new` flags
 		review   func(t *testing.T, id string) string // returns the approving review's id
 		warns    string                               // what the warning names; empty for none
 	}{
-		{"no_plan", "no_plan", nil, func(*testing.T, string) string { return "" }, " has no plan"},
-		{"unreviewed", "unreviewed", nil, func(t *testing.T, id string) string {
+		{"no_plan", "no_plan", func(*testing.T, string) string { return "" }, " has no plan"},
+		{"unreviewed", "unreviewed", func(t *testing.T, id string) string {
 			update(t, id)
 			return ""
 		}, "'s current plan (v1, digest " + digest + ") has no review"},
-		{"author_only", "author_only", nil, func(t *testing.T, id string) string {
-			update(t, id)
-			verdict(t, id, "author", "pass")
-			return ""
-		}, "has passed only its author's own review (author)"},
-		// A plan given at filing is its filer's, so the filer's own pass is
-		// only the author's.
-		{"filer_only", "author_only", []string{"--plan", plan}, func(t *testing.T, id string) string {
-			verdict(t, id, "filer", "pass")
-			return ""
-		}, "has passed only its author's own review (filer)"},
-		{"failed", "failed", nil, func(t *testing.T, id string) string {
+		{"failed", "failed", func(t *testing.T, id string) string {
 			update(t, id)
 			verdict(t, id, "ada", "fail", "--law", "carrying-cost")
 			return ""
 		}, "ada failed it citing carrying-cost"},
-		// The author's own pass is the newest, so the approval rests on the
-		// one before it.
-		{"approved", "approved", nil, func(t *testing.T, id string) string {
+		// Who recorded a pass decides nothing, so the approval rests on the
+		// newest pass, the plan's author's own.
+		{"approved", "approved", func(t *testing.T, id string) string {
 			update(t, id)
-			approval := verdict(t, id, "ada", "pass")
-			verdict(t, id, "author", "pass")
-			return approval
+			verdict(t, id, "ada", "pass")
+			return verdict(t, id, "author", "pass")
 		}, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			filing := append([]string{"new", "--title", "Plan " + tc.name, "--topic", "demo", "--parent", epic, "--by", "filer"}, tc.filing...)
-			id := extractTicketID(t, runCLIInDir(t, dir, filing...))
+			id := extractTicketID(t, runCLIInDir(t, dir, "new", "--title", "Plan "+tc.name, "--topic", "demo", "--parent", epic, "--by", "filer"))
 			runCLIInDir(t, dir, "start", id, "--by", "agent")
 			approval := tc.review(t, id)
 

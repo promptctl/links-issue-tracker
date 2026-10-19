@@ -11,6 +11,7 @@ Run any of the subcommands below for task-specific guidance; they're cheap to ca
 - `lit quickstart update` — use when changing existing tickets: rerank, block, parent, dependencies, comments.
 - `lit quickstart done` — use when finishing, closing, or following up on work.
 - `lit quickstart doctor` — use when lit errors or data looks wrong.
+- `lit quickstart review` — use when law-reviewing a ticket's plan you did not write.
 
 Fastpath:
 `lit next` — pick the top workable ticket

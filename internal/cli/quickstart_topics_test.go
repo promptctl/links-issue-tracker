@@ -64,6 +64,7 @@ func TestQuickstartTopicPrintsTaskGuidance(t *testing.T) {
 		"update": "lit rank",
 		"done":   "lit done",
 		"doctor": "lit doctor",
+		"review": "lit verdict",
 	}
 	for topic, want := range wantByTopic {
 		output, err := runLit(t, "quickstart", topic)
@@ -86,7 +87,7 @@ func TestQuickstartUnknownTopicErrors(t *testing.T) {
 	if err == nil {
 		t.Fatal("Run(quickstart bogus) expected error, got nil")
 	}
-	if !strings.Contains(err.Error(), "work, new, update, done, doctor") {
+	if !strings.Contains(err.Error(), "work, new, update, done, doctor, review") {
 		t.Fatalf("unknown-topic error should list valid topics, got %q", err.Error())
 	}
 }
