@@ -1231,9 +1231,9 @@ positional is required; otherwise `errors.New("usage: lit <name> <id> [--reason 
   (`internal/model/lifecycle/status_states.go`). A same-state transition is a no-op that records nothing
   (`status_states.go`, `internal/store/store.go`).
 - **`done` finishes wherever the plan stands.** `doneSpec.authorize` →
-  `authorizeDone` (`cli.go`) asks `Issue.Apply` first, so an epic or a frozen
-  issue gets the lifecycle's own refusal; then it reads the issue's events and
-  plan reviews and takes `storage.PlanApproval(issue, events, reviews)`
+  `authorizeDone` (`cli.go`) gates nothing: an epic or a frozen issue gets the
+  lifecycle's refusal from `Store.Apply`. Before the write it takes the events
+  `transitionLeaf` read with the issue, reads the plan reviews, and takes `storage.PlanApproval(issue, events, reviews)`
   (`internal/storage/plan_review.go`), a sealed `PlanStanding`. The plan is
   `PlanApproved` when each reviewer's latest verdict on the current text leaves
   no fail standing and one pass is by someone other than the text's author, who
@@ -1248,8 +1248,8 @@ positional is required; otherwise `errors.New("usage: lit <name> <id> [--reason 
   before the summary. The event carries `done.plan_standing` (the standing's
   `Kind()`: `approved`, `no_plan`, `unreviewed`, `failed`, `author_only`), and
   an approval adds `done.plan_digest` and `done.plan_review`. A done whose
-  `Issue.Apply` leaves the status unchanged (the ticket is already closed)
-  reads no plan and carries `done.plan_standing` `already_closed`.
+  write leaves the status unchanged (the ticket is already closed) prints no
+  warning and carries `done.plan_standing` `already_closed`.
 
 ### 2.11 `lit start` takeover gate
 

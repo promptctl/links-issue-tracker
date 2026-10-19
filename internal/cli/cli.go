@@ -1839,50 +1839,43 @@ func authorizePhase(ctx context.Context, _ io.Writer, _ *app.App, _ string, prio
 
 // authorizeDone reads where the ticket's plan stands in its law review, the
 // rule storage.PlanApproval holds, and finishes the ticket whatever it finds:
-// review shapes the work, it never keeps a ticket open. A plan short of
-// approval prints a warning naming what is missing. A done the lifecycle
-// refuses — on an epic, whose state is its children's, or on frozen work —
-// gets that refusal: the hook asks Issue.Apply, the rule the store's Apply
-// runs, before it reads the plan. A done on a ticket already closed finishes
-// nothing, so it reads no plan. done.plan_standing on the event says where the
-// plan stood; an approval adds the plan and the review it rested on.
+// review shapes the work, it never keeps a ticket open. It gates nothing — the
+// lifecycle refusals, on an epic or on frozen work, are the store's Apply's
+// alone. A plan short of approval prints a warning naming what is missing.
+// done.plan_standing on the event says where the plan stood, and an approval
+// adds the plan and the review it rested on; a done that found the ticket
+// already closed finished nothing, so its event says that instead.
 // [LAW:single-enforcer] [LAW:nothing-unseen]
-func authorizeDone(ctx context.Context, _ io.Writer, ap *app.App, issueID string, prior ticketState, action model.Action) (afterApply, error) {
-	done, ok := action.(model.Done)
-	if !ok {
-		return nil, fmt.Errorf("done: authorize hook received a %T action", action)
-	}
-	finished, err := prior.issue.Apply(done)
-	if err != nil {
-		return nil, err
-	}
-	if finished.StatusValue() == prior.issue.StatusValue() {
-		return func(ticketState, *claims.Handover) (string, statusline.Facts) {
-			telemetry.Set(ctx, "done.plan_standing", "already_closed")
-			return "", nil
-		}, nil
-	}
-	events, err := ap.Store.ListEvents(ctx, issueID)
-	if err != nil {
-		return nil, err
-	}
+func authorizeDone(ctx context.Context, _ io.Writer, ap *app.App, issueID string, prior ticketState, _ model.Action) (afterApply, error) {
 	reviews, err := ap.Store.ListPlanReviews(ctx, issueID)
 	if err != nil {
 		return nil, err
 	}
-	standing := storage.PlanApproval(prior.issue, events, reviews)
-	return func(ticketState, *claims.Handover) (string, statusline.Facts) {
-		telemetry.Set(ctx, "done.plan_standing", standing.Kind())
-		switch standing := standing.(type) {
-		case storage.PlanApproved:
+	// Resolved before the write, so a standing this switch does not know fails
+	// the command with the ticket untouched. [LAW:no-silent-failure]
+	standing := storage.PlanApproval(prior.issue, prior.events, reviews)
+	// What the done owes once it lands, by standing: the facts it records and
+	// the warning it prints.
+	record, warning := func() {}, ""
+	switch standing := standing.(type) {
+	case storage.PlanApproved:
+		record = func() {
 			telemetry.Set(ctx, "done.plan_digest", string(standing.Review.PlanDigest))
 			telemetry.Set(ctx, "done.plan_review", standing.Review.ID)
-			return "", nil
-		case storage.PlanGap:
-			return "warning: finished without an approved plan: " + standing.Describe(issueID) + "\n", nil
 		}
-		// Unreachable: PlanStanding is sealed to PlanApproved and the gaps.
-		panic(fmt.Sprintf("done: unhandled plan standing %T", standing))
+	case storage.PlanGap:
+		warning = "warning: finished without an approved plan: " + standing.Describe(issueID) + "\n"
+	default:
+		return nil, fmt.Errorf("done: unhandled plan standing %T", standing)
+	}
+	return func(written ticketState, _ *claims.Handover) (string, statusline.Facts) {
+		if written.issue.StatusValue() == prior.issue.StatusValue() {
+			telemetry.Set(ctx, "done.plan_standing", "already_closed")
+			return "", nil
+		}
+		telemetry.Set(ctx, "done.plan_standing", standing.Kind())
+		record()
+		return warning, nil
 	}, nil
 }
 
@@ -1955,7 +1948,7 @@ func readTicketState(ctx context.Context, st storage.Store, issue model.Issue) (
 // phase events put it in, empty when it is not in progress.
 func ticketStateOf(issue model.Issue, events []model.IssueEvent) ticketState {
 	phase, _ := model.PhaseOf(issue, events)
-	return ticketState{issue: issue, phase: phase}
+	return ticketState{issue: issue, events: events, phase: phase}
 }
 
 func transitionLeaf(spec transitionSpec) appLeaf {

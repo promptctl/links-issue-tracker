@@ -124,7 +124,6 @@ func TestCommandErrorReason(t *testing.T) {
 		{"takeover without --take", takeoverUnconfirmedError{Message: "claimed here: … — this lane is claimed and active; pass --take to confirm the takeover"}, "takeover_unconfirmed"},
 		{"takeover declined", takeoverUnconfirmedError{Message: "takeover declined"}, "takeover_unconfirmed"},
 		{"takeover declined wrapped", fmt.Errorf("start: %w", takeoverUnconfirmedError{Message: "takeover declined"}), "takeover_unconfirmed"},
-		// The done plan gate, and one wrapped.
 		// Both purge-gate arms.
 		{"purge without --yes", purgeUnconfirmedError{Message: "purging links-x cannot be undone; pass --yes to confirm it"}, "purge_unconfirmed"},
 		{"purge declined", purgeUnconfirmedError{Message: "purge declined"}, "purge_unconfirmed"},
