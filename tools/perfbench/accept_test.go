@@ -25,7 +25,7 @@ func TestLitCarriesOutThePlan(t *testing.T) {
 		t.Run(sz.name, func(t *testing.T) {
 			state := t.TempDir()
 			adoptEnv(t, hermeticEnv(os.Environ(), filepath.Join(state, "config"),
-				filepath.Join(state, "state"), filepath.Join(state, "data")))
+				filepath.Join(state, "state")))
 			bin := litBinary{path: "lit"}
 			store, err := generate(bin, t.TempDir(), sz, os.Environ(), inProcess(t, bin))
 			if err != nil {

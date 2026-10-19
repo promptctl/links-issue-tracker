@@ -2,11 +2,9 @@
 // without running lit. lit writes `.lit/statusline.json` at the root of every
 // checkout it runs in — each worktree its own — saying what that checkout is
 // working on and what `lit next` last picked; the file's shape is lit's
-// docs/statusline.md. Every lit that writes the file installs this definition
-// beside it, as $XDG_DATA_HOME/cc-candybar/plugins/lit/plugin.json5, so the
-// reader on disk is the one the writer shipped with. Its folder, `lit`, is its
-// name: placed as `plugins.lit.ticket`, `plugins.lit.phase` and
-// `plugins.lit.next`.
+// docs/statusline.md. `cc-candybar plugin install promptctl/links-issue-tracker`
+// installs it. Its folder, `lit`, is its name: placed as `plugins.lit.ticket`,
+// `plugins.lit.phase` and `plugins.lit.next`.
 {
   data: { checkout: ".lit/statusline.json" },
   segments: {
@@ -49,7 +47,7 @@
     // A schema_version this definition was not written for may mean any
     // field: the cell says so (⚠) rather than guess. The version is the one
     // internal/statusline.SchemaVersion writes, and a test holds them equal.
-    schema: '{{ if ne (toString .schema_version) "1" }}{{ fail (printf "lit statusline.json is schema_version %v; this plugin reads 1 — run lit next in this checkout to reinstall the plugin" .schema_version) }}{{ end }}',
+    schema: '{{ if ne (toString .schema_version) "1" }}{{ fail (printf "lit statusline.json is schema_version %v; this plugin reads 1 — update it: cc-candybar plugin install promptctl/links-issue-tracker" .schema_version) }}{{ end }}',
     title: '{{ if gt (int .width) 0 }} {{ abbrev (int .width) .title }}{{ end }}',
   },
   actions: {

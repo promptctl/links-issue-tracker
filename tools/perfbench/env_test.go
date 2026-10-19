@@ -20,11 +20,10 @@ func TestHermeticEnvStripsExactlyWhatMovesLit(t *testing.T) {
 		"CLAUDE_CODE_SESSION_ID=abc",
 		"XDG_CONFIG_HOME=/home/dev/.config",
 		"XDG_STATE_HOME=/home/dev/.local/state",
-		"XDG_DATA_HOME=/home/dev/.local/share",
 		"LITERAL_NOT_LIT=keep", // LIT_ is a prefix with an underscore, not "LIT"
 	}
-	got := hermeticEnv(in, "/work/config-home", "/work/state-home", "/work/data-home")
-	for _, want := range []string{"HOME=/home/dev", "PATH=/usr/bin", "DYLD_LIBRARY_PATH=/opt/icu/lib", "LITERAL_NOT_LIT=keep", "XDG_CONFIG_HOME=/work/config-home", "XDG_STATE_HOME=/work/state-home", "XDG_DATA_HOME=/work/data-home"} {
+	got := hermeticEnv(in, "/work/config-home", "/work/state-home")
+	for _, want := range []string{"HOME=/home/dev", "PATH=/usr/bin", "DYLD_LIBRARY_PATH=/opt/icu/lib", "LITERAL_NOT_LIT=keep", "XDG_CONFIG_HOME=/work/config-home", "XDG_STATE_HOME=/work/state-home"} {
 		if !contains(got, want) {
 			t.Errorf("hermeticEnv dropped %q:\n%v", want, got)
 		}
@@ -35,7 +34,7 @@ func TestHermeticEnvStripsExactlyWhatMovesLit(t *testing.T) {
 			t.Errorf("hermeticEnv kept %q, which selects a lit code path per machine", kv)
 		}
 	}
-	for _, key := range []string{"XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_DATA_HOME"} {
+	for _, key := range []string{"XDG_CONFIG_HOME", "XDG_STATE_HOME"} {
 		if n := count(got, key); n != 1 {
 			t.Errorf("%s appears %d times, want exactly once: with two, which one lit reads is exec's business, not this tool's", key, n)
 		}

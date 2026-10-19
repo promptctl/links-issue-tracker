@@ -467,18 +467,3 @@ func TestLoadInvalidTOMLReturnsError(t *testing.T) {
 		t.Fatal("Load(pathspec.PathSpec{}) expected error for invalid TOML")
 	}
 }
-
-// The data home is XDG_DATA_HOME when it is set and ~/.local/share otherwise,
-// the base cc-candybar reads installed plugins from.
-func TestDataHomeFollowsXDGDataHome(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_DATA_HOME", "")
-	if got, err := DataHome(); err != nil || got != filepath.Join(home, ".local", "share") {
-		t.Fatalf("DataHome with XDG_DATA_HOME unset = %q, %v; want %s", got, err, filepath.Join(home, ".local", "share"))
-	}
-	t.Setenv("XDG_DATA_HOME", "/xdg/data")
-	if got, err := DataHome(); err != nil || got != "/xdg/data" {
-		t.Fatalf("DataHome = %q, %v; want /xdg/data", got, err)
-	}
-}

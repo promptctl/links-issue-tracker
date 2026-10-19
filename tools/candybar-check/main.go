@@ -9,9 +9,9 @@
 //
 // Each case is a checkout as some lit leaves it. statusline.Write records the
 // case's facts in the checkout's file, as every lit command does, and
-// statusline.InstallPlugin installs the definition this binary embeds where
-// cc-candybar finds it. Each render runs under a HOME and XDG dirs of its own,
-// so nothing else on the machine reaches the bar.
+// `cc-candybar plugin install` installs the definition this repository ships
+// at .cc-candybar/plugins/lit/, as a user installs it. Each render runs under a
+// HOME and XDG dirs of its own, so nothing else on the machine reaches the bar.
 //
 // Every case prints one line on stdout, whatever its verdict, and the run ends
 // with a summary:
@@ -162,13 +162,19 @@ func run(stdout, stderr io.Writer) int {
 		return 1
 	}
 	defer os.RemoveAll(dir)
+	top, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		fmt.Fprintf(stderr, "error: candybar-check: find the repository to install the plugin from: %v\n", err)
+		return 1
+	}
+	repo := strings.TrimSpace(string(top))
 	candybar, err := install(dir, stderr)
 	if err != nil {
 		fmt.Fprintf(stderr, "error: candybar-check: install cc-candybar %s: %v\n", candybarVersion, err)
 		return 1
 	}
 	return check(stdout, stderr, cases, func(c renderCase) ([]string, error) {
-		return render(candybar, filepath.Join(dir, c.name), c)
+		return render(candybar, repo, filepath.Join(dir, c.name), c)
 	})
 }
 
@@ -210,18 +216,24 @@ func install(dir string, stderr io.Writer) (string, error) {
 	return filepath.Join(dir, "node_modules", ".bin", "cc-candybar"), nil
 }
 
-// render lays out one case under root, with the plugin installed, and returns
-// the cells `cc-candybar check --render` draws for it.
-func render(candybar, root string, c renderCase) ([]string, error) {
+// render lays out one case under root, with the plugin installed from repo,
+// and returns the cells `cc-candybar check --render` draws for it.
+func render(candybar, repo, root string, c renderCase) ([]string, error) {
 	home := filepath.Join(root, "home")
 	data := filepath.Join(root, "data")
 	checkout := filepath.Join(root, "checkout")
 	config := filepath.Join(root, "config.json5")
-	if _, err := statusline.InstallPlugin(statusline.PluginPath(data)); err != nil {
-		return nil, err
-	}
 	if err := os.MkdirAll(home, 0o755); err != nil {
 		return nil, err
+	}
+	// PATH finds node, which cc-candybar's command runs under; nothing else
+	// of this process's environment reaches the install or the render.
+	env := []string{"PATH=" + os.Getenv("PATH"),
+		"HOME=" + home, "XDG_DATA_HOME=" + data, "XDG_CONFIG_HOME=" + filepath.Join(home, ".config")}
+	plugin := exec.Command(candybar, "plugin", "install", repo)
+	plugin.Env = env
+	if out, err := plugin.CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("cc-candybar plugin install: %v: %s", err, out)
 	}
 	if out, err := exec.Command("git", "init", "-q", checkout).CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("git init: %v: %s", err, out)
@@ -235,10 +247,7 @@ func render(candybar, root string, c renderCase) ([]string, error) {
 	var stdout, stderr strings.Builder
 	cmd := exec.Command(candybar, "check", "--render", config)
 	cmd.Dir = checkout
-	// PATH finds node, which cc-candybar's command runs under; nothing else
-	// of this process's environment reaches the render.
-	cmd.Env = []string{"PATH=" + os.Getenv("PATH"),
-		"HOME=" + home, "XDG_DATA_HOME=" + data, "XDG_CONFIG_HOME=" + filepath.Join(home, ".config")}
+	cmd.Env = env
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
 		return nil, fmt.Errorf("cc-candybar check --render: %v\n%s", err, stderr.String())
