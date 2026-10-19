@@ -90,7 +90,7 @@ Both hooks are per-`Store` instance state, not package globals (`store.go`).
 
 #### 1.5 `newEngineOpenBackOff`
 
-`store.go`. `newHoldWait(workspaceStorageDir(doltRootDir), DoltJournalLockPath(doltRootDir), coResidentHolderWaitNow, time.Now)` per connector: `holdWait` (`lock_holder.go`) polls every `storeLockPollInterval` = 100ms and returns `backoff.Stop` once no holder-record name it has not seen before has appeared under the lock's holder directory for the wait; `Reset` starts the clock and takes the first reading. Only attached for `engineWrite` (`store.go`).
+`store.go`. `newHoldWait(workspaceStorageDir(doltRootDir), DoltJournalLockPath(doltRootDir), coResidentHolderWaitNow, time.Now)` per connector: `holdWait` (`lock_holder.go`) polls every `storeLockPollInterval` = 100ms and returns `backoff.Stop` once no holder-record name it has not seen before has appeared under the lock's holder directory for the wait; `Reset` starts the clock and takes the first reading. Each `NextBackOff` (called only after a refused attempt) also prints `lit: still waiting for <lock> after <d>; <holder account>` to `lockWaitNoticeWriter` (stderr) once `lockWaitNoticeGrace` = 2s has passed since `Reset`, then every `lockWaitNoticeInterval` = 30s (`lock_holder.go`). Only attached for `engineWrite` (`store.go`).
 
 #### 1.6 `wrapEngineOpenContention`
 
@@ -213,7 +213,7 @@ The two pools run strictly sequentially — the explicit close of the first is t
 
 `store.go`, through `openEngine(ctx, doltRootDir, workspaceID, access) (*sql.DB, func() error, error)`, which `reopenEngine` also uses after a re-root follow closed the engine (`reroot_follow.go`):
 - `openDoltPool(doltRootDir, workspaceID, doltDatabaseName, access)` (`store.go`);
-- `awaitEngineOpen(ctx, doltRootDir, db.PingContext)` for both access values; on failure returns `errors.Join(err, db.Close())` (`store.go`); a write engine then publishes its LOCK holder record via `recordLockHolder` with a no-op release, returned as the holder release (`store.go`);
+- `wrapEngineOpenContention(db.PingContext(ctx), doltRootDir)` for both access values; on failure returns `errors.Join(err, db.Close())` (`store.go`); a write engine then publishes its LOCK holder record via `recordLockHolder` with a no-op release, returned as the holder release (`store.go`);
 - builds the `Store` with the field assignments listed in §1.3 (`store.go`). `doltRootDir` is stored **unmodified**; only `commitLockPath` and `telemetryDir` clean it.
 
 A read engine's ping falls back to Dolt's read-only mode past a held journal lock rather than waiting; the fallback being permanent costs a reader nothing because a read open never applies DDL (`store.go`).
@@ -237,7 +237,7 @@ A read engine's ping falls back to Dolt's read-only mode past a held journal loc
 1. `openDoltPool(s.doltRootDir, s.workspaceID, doltDatabaseName, s.access)`; failure → `fmt.Errorf("reopen dolt: %w", err)` (`store.go`).
 2. `prev := s.db; s.db = next` (`store.go`) — swap **before** closing.
 3. `prev.Close()`; a `context.Canceled` is tolerated, anything else → `fmt.Errorf("close prior dolt connection after reconnect: %w", err)` (`store.go`).
-4. `awaitEngineOpen(ctx, s.doltRootDir, next.PingContext)`; failure → `fmt.Errorf("reopen dolt: %w", err)` (`store.go`).
+4. `wrapEngineOpenContention(next.PingContext(ctx), s.doltRootDir)`; failure → `fmt.Errorf("reopen dolt: %w", err)` (`store.go`).
 
 Doc: must be called under the commit lock; it is the one site where the journal lock is taken while the commit lock is held, bounded by `coResidentHolderWait` (2.3s) against the commit-lock waiter budget of `coResidentHolderWait` + `rotationReserve()` (`store.go`). `reconnect` is the `connectionRotator` passed to every call of the transient-GC retry (`commit_lock.go`).
 
