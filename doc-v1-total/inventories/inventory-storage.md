@@ -120,7 +120,7 @@ Records law reviews of a ticket's plan. A review is never edited or removed thro
   3. `verdict == model.PlanFail && len(laws) == 0` → `model.ValidationError{Message: "a failing verdict cites at least one law the plan breaks"}`.
   4. `digest := model.ParsePlanDigest(in.Plan)` (error returned as is).
   5. `versions := TextVersions(issue, events, PlanField())`; no `text` in `versions` with `model.DigestPlan(text) == digest` → `PlanDigestNotFoundError{IssueID: issue.ID, Digest: digest}`.
-- Reviewer: `strings.TrimSpace(in.CreatedBy)`, `""` → `"unknown"`.
+- Reviewer: `Actor(in.CreatedBy)` (trimmed, `""` → `"unknown"`).
 - Returns `model.PlanReview{IssueID: issue.ID, PlanDigest: digest, Verdict: verdict, Laws: laws, CreatedBy: reviewer}`.
 
 **`PlanField() LongTextField`** — `internal/storage/plan_review.go`: the `plan` row of the editable-field table (`LongTextFields()`); panics `editable-field table has no long text row "plan"` if the static table lacks it.
@@ -800,7 +800,7 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 **`apply(id, c)`** (`internal/storage/memory/apply.go`)
 1. `mustRecord(id)` → `NotFoundError` on miss.
 2. Hydrates `current`.
-3. `actor = strings.TrimSpace(c.Actor)`; empty → `"unknown"`.
+3. `actor = storage.Actor(c.Actor)` (trimmed; empty → `"unknown"`).
 4. `now := e.now()`.
 5. `planLifecycle(current, actor, strings.TrimSpace(c.Reason), c.Action, now)` → `(afterAction, actionEvents, handover, err)`.
 6. `planFields(afterAction, c.Fields, actor, now)` — **the field write baselines on the POST-action issue**, so a start's new assignee is what the patch diffs against rather than producing a second assignee change row.

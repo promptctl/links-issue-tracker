@@ -660,7 +660,7 @@ The `c.field ASC` sort is deliberate so two reads of an unchanged event compare 
 
 `store.go`, the single execution path for issue-record changes:
 1. `current, err := s.GetIssue(ctx, id)` — a not-found id fails here (`store.go`).
-2. `actor := strings.TrimSpace(c.Actor)`; if empty → `"unknown"` (`store.go`).
+2. `actor := storage.Actor(c.Actor)` — trimmed; empty → `"unknown"` (`store.go`).
 3. `baseline := current` (`store.go`).
 4. If `c.Action != nil`: `lw, err = s.planLifecycleAction(ctx, current, actor, strings.TrimSpace(c.Reason), c.Action)`; on error, returns immediately with **no** writes; then `baseline = lw.postIssue()` so a following field write diffs against the post-action issue, and `handover = lw.handover()` (`store.go`).
 5. `hasFields := !c.Fields.IsEmpty()`; if true, `fw, err = planFieldUpdate(baseline, c.Fields, actor)` — a validation error returns before any write (`store.go`).
@@ -810,12 +810,12 @@ Evidence: a field plan taken against a stale snapshot lands its title change whi
 
 Constructed event (`store.go`):
 - `ID = "evt-" + uuid.NewString()`;
-- `Action`, `Reason`, `Actor` each `strings.TrimSpace`d;
+- `Action`, `Reason` each `strings.TrimSpace`d; `Actor = storage.Actor(actor)`;
 - `CreatedAt = time.Now().UTC()`;
 - `Attribution = s.attribution` — read off the store, never passed in;
 - `Changes = changes`.
 
-Then: `if event.Actor == "" { event.Actor = "unknown" }` (`store.go`). In `insertEventTx`, `actionArg` is `nil` when the action is empty, otherwise the string (`import_export.go`).
+`storage.Actor` trims the actor and spells an empty one `"unknown"` (`store.go`). In `insertEventTx`, `actionArg` is `nil` when the action is empty, otherwise the string (`import_export.go`).
 
 The event insert (`import_export.go`):
 ```sql
@@ -855,7 +855,7 @@ Evidence: a create/close/reopen/archive sequence yields exactly 4 events with ac
 `store.go`:
 1. `s.GetIssue(ctx, in.IssueID)` — validates existence and doubles as the returned issue, avoiding a second read (`store.go`, doc).
 2. `body := strings.TrimSpace(in.Body)`; empty → `model.ValidationError{Message: "comment body is required"}` (`store.go`).
-3. `now := time.Now().UTC()`; `comment := model.Comment{ID: "cmt-" + uuid.NewString(), IssueID: in.IssueID, Body: body, CreatedAt: now, CreatedBy: strings.TrimSpace(in.CreatedBy)}`; blank `CreatedBy` → `"unknown"` (`store.go`).
+3. `now := time.Now().UTC()`; `comment := model.Comment{ID: "cmt-" + uuid.NewString(), IssueID: in.IssueID, Body: body, CreatedAt: now, CreatedBy: storage.Actor(in.CreatedBy)}` — blank → `"unknown"` (`store.go`).
 4. `withMutation(ctx, "add comment", ...)` runs:
 ```sql
 INSERT INTO comments(id, issue_id, body, created_at, created_by) VALUES (?, ?, ?, ?, ?)
@@ -2648,7 +2648,7 @@ There is no ID parser or validator in this slice: lookups bind the id verbatim (
 `Store.AddLabel(ctx, storage.AddLabelInput{IssueID, Name, CreatedBy})` — `internal/store/labels.go`:
 1. `s.GetIssue(ctx, in.IssueID)`; error returned as-is (a missing issue yields `storage.NotFoundError` from GetIssue).
 2. `normalizeLabel(in.Name)`; error returned.
-3. `createdBy := strings.TrimSpace(in.CreatedBy)`; empty → `"unknown"`.
+3. `createdBy := storage.Actor(in.CreatedBy)` — trimmed; empty → `"unknown"`.
 4. Inside `s.withMutation(ctx, "add label", ...)`:
    ```sql
    INSERT INTO labels(issue_id, label, created_at, created_by)
@@ -2674,7 +2674,7 @@ Error-vs-not-found distinction: `execDelete` wraps a delete failure as `fmt.Erro
 
 `replaceLabelsTx` — `internal/store/labels.go`:
 - `DELETE FROM labels WHERE issue_id = ?` — clears the whole set; error → `fmt.Errorf("clear labels: %w", err)`.
-- `author := strings.TrimSpace(createdBy)`; empty → `"unknown"`.
+- `author := storage.Actor(createdBy)` — trimmed; empty → `"unknown"`.
 - One `timestamp := time.Now().UTC().Format(time.RFC3339Nano)` shared by every inserted row.
 - Per label: `INSERT INTO labels(issue_id, label, created_at, created_by) VALUES (?, ?, ?, ?)`; error → `fmt.Errorf("insert label %q: %w", label, err)`.
 - Consequence: replacing a set rewrites `created_at`/`created_by` for labels that survive the replace.
@@ -2739,7 +2739,7 @@ Bucketing convention, `bucketRelations(focalID, relations, issuesByID, ancestry)
 `Store.AddRelation(ctx, storage.AddRelationInput{SrcID, DstID, Type, CreatedBy})` — `internal/store/relations.go`:
 1. Pre-tx: `in.Type == model.RelRelatedTo && in.SrcID == in.DstID` → `model.ValidationError{Message: "related-to cannot target itself"}`. Note this self-check is only for related-to at this point.
 2. `srcID, dstID := in.Type.CanonicalEndpoints(in.SrcID, in.DstID)` — related-to endpoints get sorted.
-3. `now := time.Now().UTC()`; the returned `model.Relation` is built with the canonical endpoints, the type, `now`, and `strings.TrimSpace(in.CreatedBy)`; empty createdBy → `"unknown"`.
+3. `now := time.Now().UTC()`; the returned `model.Relation` is built with the canonical endpoints, the type, `now`, and `storage.Actor(in.CreatedBy)` (empty → `"unknown"`).
 4. Inside `s.withMutation(ctx, "add relation", ...)`:
    - `requireIssueExistsTx(ctx, tx, in.SrcID)` then `issueTypeTx(ctx, tx, in.DstID)` — note these use the **input** ids, not the canonicalized ones. `requireIssueExistsTx` runs `SELECT 1 FROM issues WHERE id = ?` and maps `sql.ErrNoRows` to `storage.NotFoundError{Entity: "issue", ID: issueID}`, other errors to `fmt.Errorf("check issue exists: %w", err)` — `internal/store/store.go`. It deliberately does not filter on `deleted_at`, so archived/soft-deleted rows count as existing (`internal/store/store.go` comment).
    - `issueTypeTx` (`relations.go`) is the dst's existence proof and its type in one read (`SELECT issue_type FROM issues WHERE id = ?`, `ErrNoRows` → `storage.NotFoundError{Entity: "issue"}`, other errors → `fmt.Errorf("read issue type: %w", err)`); then `rejectHeldRelationTx` (see Duplicate handling below); then `storage.RejectNonContainerParentEdge(rel.Type, rel.DstID, dstType)` (`internal/storage/containment.go`, shared with the memory engine): for `parent-child` only, `storage.RejectParentThatIsNotAContainer` → `model.ValidationError` for a parent that is not an epic; other types pass.
