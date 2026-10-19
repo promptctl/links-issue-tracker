@@ -4,42 +4,34 @@
 // working on and what `lit next` last picked; the file's shape is lit's
 // docs/statusline.md. `cc-candybar plugin install promptctl/links-issue-tracker`
 // installs it. Its folder, `lit`, is its name: placed as `plugins.lit.ticket`,
-// `plugins.lit.phase` and `plugins.lit.next`.
+// ONE segment whose parts — the lane's progress, the phase, the next pick, the
+// description — are each a setting of the placement (🔧 in edit mode), never
+// segments of their own.
 {
   data: { checkout: ".lit/statusline.json" },
   segments: {
     ticket: {
       group: "activity",
-      description: "The lit ticket this checkout is working on, and how many of its lane's tickets are done; click the id to copy it.",
+      description: "The lit ticket this checkout is working on: its id (click to copy), its lane's N/M done, its phase and what lit next last picked, each a setting; ▸ drops its description.",
       // No file yet reads as no fields, and `with` skips an empty document:
-      // the cell hides until lit records something.
-      when: '{{ with .plugins.lit.data }}{{ template "plugins.lit.schema" . }}{{ if .working_on }}true{{ else }}false{{ end }}{{ else }}false{{ end }}',
-      // rollup_progress is null in a file lit 0.19 to 0.21 wrote when the
-      // command that recorded working_on did not count the lane, and missing
-      // in one an older lit wrote; the cell then shows no count.
-      template: '{{ with .plugins.lit.data.working_on }}🎫 {{ action "plugins.lit.copyWorking" .ticket.id }}{{ template "plugins.lit.title" (dict "title" .ticket.title "width" $.settings.title) }}{{ if hasKey . "rollup_progress" }}{{ with .rollup_progress }} {{ .rollup_completed_count }}/{{ .rollup_total_count }}{{ end }}{{ end }}{{ end }}',
-      settings: {
-        title: { label: "title chars", domain: { min: 0, max: 80, step: 10 }, default: 0 },
+      // the cell hides until lit records something. With nothing being
+      // worked, the cell shows only when the next pick is on and recorded.
+      when: '{{ with .plugins.lit.data }}{{ template "plugins.lit.schema" . }}{{ if .working_on }}true{{ else if and $.settings.next .next }}true{{ else }}false{{ end }}{{ else }}false{{ end }}',
+      template: '{{ with .plugins.lit.data }}{{ with .working_on }}🎫 {{ action "plugins.lit.copyWorking" .ticket.id }}{{ template "plugins.lit.title" (dict "title" .ticket.title "width" $.settings.title) }}{{ if $.settings.progress }}{{ template "plugins.lit.progress" . }}{{ end }}{{ if $.settings.phase }}{{ template "plugins.lit.phase" . }}{{ end }}{{ end }}{{ if $.settings.next }}{{ template "plugins.lit.next" (dict "file" . "width" $.settings.title) }}{{ end }}{{ template "plugins.lit.detail" (dict "file" . "open" $.plugins.lit.ticket.detail "chars" $.settings.description) }}{{ end }}',
+      // Whether this session has dropped the description under the cell: what
+      // ▸/▾ cycles, read back here. A session fact, never the file's. The key
+      // is written bare on both sides; cc-candybar keeps it under
+      // `plugins.lit.`, so it can meet no other config's.
+      vars: {
+        detail: { kind: "state", key: "detail", default: "closed" },
       },
-    },
-    phase: {
-      group: "activity",
-      description: "Where the work on the lit ticket this checkout is working on stands: plan, impl, review or merge.",
-      // phase is null when the command that recorded working_on read none,
-      // and missing when an older lit wrote the file: the cell then hides.
-      when: '{{ with .plugins.lit.data }}{{ template "plugins.lit.schema" . }}{{ with .working_on }}{{ if hasKey . "phase" }}{{ if .phase }}true{{ else }}false{{ end }}{{ else }}false{{ end }}{{ else }}false{{ end }}{{ else }}false{{ end }}',
-      template: 'phase {{ .plugins.lit.data.working_on.phase }}',
-    },
-    next: {
-      group: "activity",
-      description: "The ticket lit next last picked for this checkout, unless it is the one being worked; click the id to copy it.",
-      // `next` is null until a plain `lit next` runs here, and still names
-      // the ticket after `lit start` takes it: shown only when it says
-      // something `ticket` does not.
-      when: '{{ with .plugins.lit.data }}{{ template "plugins.lit.schema" . }}{{ if not .next }}false{{ else if not .next.ticket }}true{{ else if .working_on }}{{ ne .next.ticket.id .working_on.ticket.id }}{{ else }}true{{ end }}{{ else }}false{{ end }}',
-      template: 'next {{ with .plugins.lit.data.next.ticket }}{{ action "plugins.lit.copyNext" .id }}{{ template "plugins.lit.title" (dict "title" .title "width" $.settings.title) }}{{ else }}nothing ready{{ end }}',
       settings: {
         title: { label: "title chars", domain: { min: 0, max: 80, step: 10 }, default: 0 },
+        progress: { label: "lane progress", domain: "bool", default: true },
+        phase: { label: "phase", domain: "bool", default: true },
+        next: { label: "next pick", domain: "bool", default: true },
+        // 0 hides the ▸ and its row, as title chars 0 hides the title.
+        description: { label: "description chars", domain: { min: 0, max: 600, step: 40 }, default: 240 },
       },
     },
   },
@@ -50,9 +42,26 @@
     // writes, and a test holds them equal.
     schema: '{{ if ne (toString .schema_version) "1" }}{{ fail (printf "lit statusline.json is schema_version %v; this plugin reads 1 — the only version lit writes — the next lit next here replaces the file" .schema_version) }}{{ end }}',
     title: '{{ if gt (int .width) 0 }} {{ abbrev (int .width) .title }}{{ end }}',
+    // Dot is working_on. rollup_progress is null in a file lit 0.19 to 0.21
+    // wrote when the command that recorded working_on did not count the lane,
+    // and missing in one an older lit wrote; the part then shows nothing.
+    // Phase likewise.
+    progress: '{{ if hasKey . "rollup_progress" }}{{ with .rollup_progress }} {{ .rollup_completed_count }}/{{ .rollup_total_count }}{{ end }}{{ end }}',
+    phase: '{{ if hasKey . "phase" }}{{ with .phase }} · {{ . }}{{ end }}{{ end }}',
+    // Dot is { file, width }. `next` is null until a plain `lit next` runs
+    // here, and still names the ticket after `lit start` takes it: shown only
+    // when it says something the worked ticket does not.
+    next: '{{ if not .file.next }}{{ else if not .file.next.ticket }}{{ if .file.working_on }} · {{ end }}next: nothing ready{{ else if not .file.working_on }}next {{ template "plugins.lit.nextRef" (dict "ticket" .file.next.ticket "width" .width) }}{{ else if ne .file.next.ticket.id .file.working_on.ticket.id }} · next {{ template "plugins.lit.nextRef" (dict "ticket" .file.next.ticket "width" .width) }}{{ end }}',
+    nextRef: '{{ action "plugins.lit.copyNext" .ticket.id }}{{ template "plugins.lit.title" (dict "title" .ticket.title "width" .width) }}',
+    // Dot is { file, open, chars }. The description rides the file (a lit
+    // older than it writes no key): ▸ shows while there is one and the
+    // placement's `description chars` is above 0, and open, the description
+    // is a row of its own under the cell, on one line, cut to that many.
+    detail: '{{ if gt (int .chars) 0 }}{{ if .file.working_on }}{{ if hasKey .file.working_on.ticket "description" }}{{ if .file.working_on.ticket.description }} {{ action "plugins.lit.more" "▸" "▾" }}{{ if eq .open "open" }}\n{{ abbrev (int .chars) (replace "\\n" " " .file.working_on.ticket.description) }}{{ end }}{{ end }}{{ end }}{{ end }}{{ end }}',
   },
   actions: {
     copyWorking: { copy: "{{ .plugins.lit.data.working_on.ticket.id }}" },
     copyNext: { copy: "{{ .plugins.lit.data.next.ticket.id }}" },
+    more: { set: "detail", cycle: ["closed", "open"] },
   },
 }
