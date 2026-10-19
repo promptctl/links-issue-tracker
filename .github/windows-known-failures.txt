@@ -48,8 +48,6 @@ links-windows-qr8l.7na internal/store TestASetRemoteURLRetriedAfterItsRemoveLand
 links-windows-qr8l.7na internal/store TestAdoptRemoteByCloneBootstrapsAndReAdopts
 links-windows-qr8l.7na internal/store TestAdoptRemoteByCloneHealsAbandonedAdoptResidue
 links-windows-qr8l.7na internal/store TestDoltTransferKeepsStdoutClean
-links-windows-qr8l.7na internal/store TestDowngradeHappyPathSteppedAndCommitted
-links-windows-qr8l.7na internal/store TestFreshOpenAppliesRegistryToHead
 links-windows-qr8l.7na internal/store TestGuardRemoteSchemaAheadDetects
 links-windows-qr8l.7na internal/store TestGuardRemoteSchemaNotAheadAtOrBelowMax
 links-windows-qr8l.7na internal/store TestLandFetchedHeadCarriesAClonesFetchToTheLiveStore
