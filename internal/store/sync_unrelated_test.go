@@ -993,8 +993,10 @@ func TestSyncReconcileCombineRecoversFromTransientFailureMidReplay(t *testing.T)
 		name   string
 		failAt int
 	}{
-		{name: "at the lift commit", failAt: 1},
-		{name: "inside a provenance step", failAt: 2},
+		// The first commit is the plan's versioning of the working set
+		// (freshnessOverEveryWrite), before the replay begins.
+		{name: "at the lift commit", failAt: 2},
+		{name: "inside a provenance step", failAt: 3},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
