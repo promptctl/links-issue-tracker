@@ -125,7 +125,9 @@ jobs:
       # go test's -skip is not scoped to a package, so a package with listed
       # tests gets its own invocation and a same-named test elsewhere still
       # runs. Every invocation runs even after one fails, so one red package
-      # cannot hide another. [LAW:no-silent-failure]
+      # cannot hide another. [LAW:no-silent-failure] A line naming a test or a
+      # package that does not exist fails the step, so the list cannot outlive
+      # the code it describes and the notice counts tests that exist.
       - name: Test (-short)
         env:
           CGO_ENABLED: '1'
@@ -146,15 +148,27 @@ jobs:
           done < "$known"
           status=0
           rest=()
+          declare -A seen=()
           for pkg in $pkgs; do
             rel=${pkg#"$module"/}
+            seen[$rel]=1
             if [[ -v untested[$rel] ]]; then
               continue
             elif [[ -v skip[$rel] ]]; then
-              go test -short -skip "^(${skip[$rel]})\$" "./$rel" || status=1
+              re="^(${skip[$rel]})\$"
+              found=$(go test -list "$re" "./$rel") || { status=1; continue; }
+              missing=$(comm -23 <(tr '|' '\n' <<<"${skip[$rel]}" | sort) <(awk '/^Test/' <<<"$found" | sort))
+              if [[ -n $missing ]]; then
+                echo "::error file=$known::$rel has no test named" $missing "- delete its line" >&2
+                status=1
+              fi
+              go test -short -skip "$re" "./$rel" || status=1
             else
               rest+=("./$rel")
             fi
+          done
+          for listed in "${!skip[@]}" "${!untested[@]}"; do
+            [[ -v seen[$listed] ]] || { echo "::error file=$known::no package $listed under ./cmd/... ./internal/... - delete its lines" >&2; status=1; }
           done
           go test -short "${rest[@]}" || status=1
           echo "::notice file=$known,title=Known Windows failures::skipped $skipped tests in ${#skip[@]} packages; did not compile or run ${!untested[*]}"

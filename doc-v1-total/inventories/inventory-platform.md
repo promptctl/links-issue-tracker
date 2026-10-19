@@ -930,10 +930,13 @@ there (`tar -xzf` or `unzip -q`), appends its `bin/` to `$GITHUB_PATH`, then run
   Test (-short), both with `CGO_ENABLED: '1'`: reads `.github/windows-known-failures.txt`
   (`<ticket> <package> <test-or-*>` per line, `#` comments and blank lines ignored, a third
   field that is neither `*` nor `Test…` is an `::error::` and exit 1), runs
+  `go test -list '^(<listed tests>)$' ./<pkg>` and then
   `go test -short -skip '^(<listed tests>)$' ./<pkg>` once per package with listed tests,
   does not run a `*` package, runs `go test -short` once over every other package of
-  `./cmd/... ./internal/...`, posts a `::notice` counting the skipped tests and naming the
-  packages not run, and exits 1 if any invocation failed → Test vendored driver (-short)
+  `./cmd/... ./internal/...`, emits an `::error::` for each listed test `-list` does not
+  find and each listed package `go list` does not find, posts a `::notice` counting the
+  skipped tests and naming the packages not run, and exits 1 if any invocation or check
+  failed → Test vendored driver (-short)
   (`if: ${{ !cancelled() }}`, `go -C internal/vendor/dolthub-driver test -short ./...`).
 - Job `report`, `needs: full-suite`,
   `if: ${{ always() && needs.full-suite.result != 'success' && github.ref == 'refs/heads/master' }}`
