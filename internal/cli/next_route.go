@@ -1041,11 +1041,13 @@ func (o Exhausted) scope() string {
 //
 // An array indexed by the kind, not a list of pairs: a pair list can omit a
 // kind and silently drop its ids from the message, which is the class of defect
-// this whole type exists to end. The array cannot drop them — a kind with no
-// words still renders its ids, under an empty parenthetical, which is loud
-// rather than silent. Its length is reachTakeable, so it has a slot for every
-// kind a walk can report and none for a row routing would have served instead:
-// words for that are an out-of-range index, which does not compile. Go does not
+// this whole type exists to end. The array cannot drop them — a reported kind
+// with no words still renders its ids, under an empty parenthetical, which is
+// loud rather than silent. Its length is reachTakeable, so it has a slot for
+// every kind a walk can report and none for a row routing would have served
+// instead: words for that are an out-of-range index, which does not compile. No
+// reported list holds a takeable row, and one that did would not pass quietly:
+// the event's name lookup (reachKindNames) panics on it. Go does not
 // require an indexed array literal to fill every slot, so
 // TestEveryReachKindHasWordsInBothDiagnostics holds the other direction.
 // [LAW:types-are-the-program] [LAW:no-silent-failure]
