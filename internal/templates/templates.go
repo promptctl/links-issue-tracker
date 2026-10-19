@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
+	"path"
 	"sort"
 	"strings"
 
@@ -130,7 +130,7 @@ func LoadWithSource(name string, workspaceRoot string) (string, Source, error) {
 
 // EmbeddedDefault returns the raw bytes of the embedded default for name.
 func EmbeddedDefault(name string) ([]byte, error) {
-	return defaultsFS.ReadFile(filepath.Join("defaults", name))
+	return defaultsFS.ReadFile(path.Join("defaults", name))
 }
 
 // GlobalPath returns the override path in the user's global config directory for name.
