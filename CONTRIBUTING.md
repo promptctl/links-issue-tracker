@@ -86,7 +86,11 @@ real work brushes go test's 10-minute per-package default — runs everything,
 and a scheduled job
 ([`.github/workflows/nightly.yml`](.github/workflows/nightly.yml)) runs it
 nightly, filing an urgent `nightly-failure` lit ticket when it breaks so the skipped tests
-stay covered rather than quietly rotting. A test belongs behind
+stay covered rather than quietly rotting. The same workflow runs the `-short` suite
+on Windows, the one place a Windows-only regression shows (the PR gate is
+Linux-only), skipping the known failures in
+[`.github/windows-known-failures.txt`](.github/windows-known-failures.txt), and files `nightly-windows-failure` when that lane breaks.
+The fix for a listed failure deletes its line. A test belongs behind
 `testing.Short()` only when its cost is the scale it generates, not the
 behavior it pins — never move a test there to make a slow test disappear.
 
