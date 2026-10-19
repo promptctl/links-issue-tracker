@@ -62,8 +62,12 @@ const detailOpen = `{
   segments: { 'plugins.lit.ticket': { vars: { detail: { kind: 'state', key: 'plugins.lit.detail', default: 'open' } } } },
 }` + "\n"
 
-// descriptionOff is layout with the placement's description chars at 0.
-const descriptionOff = `{ root: { h: [{ seg: 'plugins.lit.ticket', settings: { description: 0 } }] } }` + "\n"
+// descriptionOff is detailOpen with the placement's description chars at 0:
+// the description dropped, and the part turned off.
+const descriptionOff = `{
+  root: { h: [{ seg: 'plugins.lit.ticket', settings: { description: 0 } }] },
+  segments: { 'plugins.lit.ticket': { vars: { detail: { kind: 'state', key: 'plugins.lit.detail', default: 'open' } } } },
+}` + "\n"
 
 var recordedAt = time.Date(2026, 10, 16, 0, 0, 0, 0, time.UTC)
 
