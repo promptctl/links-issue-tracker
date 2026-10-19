@@ -141,6 +141,13 @@ storage dir, and two banners read it:
   is always momentarily ahead at its own end, because its mirror pushes only
   after the process exits.)
 
+A push the remote refuses because another checkout pushed first is not a
+failure. When this checkout and the remote each hold commits the other lacks,
+the attempt records `diverged`: no FAILING banner, no `push_failed`
+notification. The automatic receive merges the remote's commits, and the next
+push lands them. `lit sync push` still exits with the refusal, so whoever ran
+it sees it.
+
 `lit doctor` additionally names the durable evidence when the last attempt
 failed: the failure reason and the mirror worker's log
 (`<storage-dir>/mirror.log`, with its last-write age). An unknown cadence
