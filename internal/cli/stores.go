@@ -145,10 +145,11 @@ func rollupLocation(ctx context.Context, loc workspace.Location) (row projectRol
 	// DO cross the boundary; the required_fields policy is repo config, not a
 	// store fact, and a Location carries no repo root. See gatherCrossProjectRollup's callers
 	// (`lit stores --counts`) and its [LAW:one-source-of-truth].
-	// The focus scope is dropped deliberately. These are whole-project counts,
-	// and a project that happens to carry a focus label would otherwise report
-	// "ready" totals that silently meant "ready on that project's focus path" —
-	// the same number, a different fact. [LAW:no-silent-failure]
+	// classifyWorkable applies no focus scope, and these counts must not get
+	// one. They are whole-project counts, and a project that happens to carry a
+	// focus label would otherwise report "ready" totals that silently meant
+	// "ready on that project's focus path" — the same number, a different fact.
+	// [LAW:no-silent-failure]
 	gathered, err := classifyWorkable(ctx, st, nil)
 	if err != nil {
 		row.Err = err

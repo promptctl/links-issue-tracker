@@ -86,5 +86,5 @@ func (g workableGather) keepRows(criteria storage.IssueCriteria) workableGather 
 	}
 	// epics is kept whole: routing asks which kept rows sit under an epic the
 	// gather never returns as a row.
-	return workableGather{annotatedRows: annotatedRows{rows: rows, details: details, epics: g.epics, scope: g.scope}, facts: g.facts}
+	return workableGather{annotatedRows: annotatedRows{rows: rows, details: details, epics: g.epics}, facts: g.facts}
 }

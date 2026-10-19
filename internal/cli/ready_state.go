@@ -775,25 +775,44 @@ func relationsByID(ctx context.Context, fetch relationsFetch, cache map[string]s
 	return out, nil
 }
 
-// newFocusPathAnnotator returns an annotator that emits a FocusPath annotation
-// for any issue on a focused goal's derived prerequisite path; the message is
-// the goal's ID. FocusPath is the fact focusScope.holds reads to decide which
-// rows a VIEW answers over, and it stays deliberately invisible to
-// ClassifyReadiness: scoping a view and gating readiness are different
-// memberships, so a blocked path item is still listed and still blocked.
-// [LAW:dataflow-not-control-flow] Pure map lookup for every issue; absence
-// yields nil, not a skipped operation.
-func newFocusPathAnnotator(pathGoals map[string]string) annotation.Annotator {
-	return func(_ context.Context, issue model.Issue) ([]annotation.Annotation, error) {
-		goalID, ok := pathGoals[issue.ID]
-		if !ok {
-			return nil, nil
-		}
-		return []annotation.Annotation{{
-			Kind:    annotation.FocusPath,
-			Message: goalID,
-		}}, nil
+// focusedQueue is the workable queue as the focused views receive it: the rows
+// with the focus walk's FocusPath facts stamped on, and the scope that walk
+// derived. Only `lit next` and `lit backlog` are handed one, so a surface that
+// answers no focus question — the rollup, the epic plan — holds no scope it
+// could misread as "unfocused". [LAW:types-are-the-program]
+type focusedQueue struct {
+	workableGather
+	scope focusScope
+}
+
+// focusQueue runs the focus walk over the full dependency DAG (unfiltered by the
+// CLI narrowing) and stamps a FocusPath annotation, carrying its goal's id, on
+// every queue row on a focused goal's path. The focus fact lives on the one goal
+// ticket and chain membership is derived on every gather, never stored, so it
+// cannot drift. [LAW:one-source-of-truth]
+//
+// FocusPath is the fact focusScope.holds reads to decide which rows a VIEW
+// answers over, and it stays invisible to ClassifyReadiness: scoping a view and
+// gating readiness are different memberships, so a blocked path item is still
+// listed and still blocked. The stamp goes after every readiness annotation, so
+// a row's annotations read in the order they always have.
+//
+// The walk is seeded with the relations the readiness pass already loaded —
+// every workable leaf and every epic above one — so it fetches only what lies
+// beyond them; a seeded hit is byte-identical to a refetch.
+// [LAW:dataflow-not-control-flow] An unfocused workspace yields an empty path
+// through the same code, and every row passes the same lookup.
+func focusQueue(ctx context.Context, src focusGraphSource, queue workableGather) (focusedQueue, error) {
+	pathGoals, err := fetchFocusPathGoals(ctx, src, queue.details, queue.epics)
+	if err != nil {
+		return focusedQueue{}, err
 	}
+	for i, row := range queue.rows {
+		if goalID, ok := pathGoals[row.ID]; ok {
+			queue.rows[i].Annotations = append(row.Annotations, annotation.Annotation{Kind: annotation.FocusPath, Message: goalID})
+		}
+	}
+	return focusedQueue{workableGather: queue, scope: focusScopeOf(pathGoals)}, nil
 }
 
 // focusScope is the row set a focused view answers over: the prerequisite

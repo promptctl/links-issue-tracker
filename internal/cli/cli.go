@@ -936,26 +936,28 @@ func (f workableFilter) criteria() (storage.IssueCriteria, error) {
 // The filter is parsed before a single row is read, so a label the vocabulary
 // cannot express fails here rather than after the queue is materialized.
 // [LAW:parse-dont-validate]
-func gatherWorkableAnnotated(ctx context.Context, ap *app.App, rf workableFilter) (workableGather, error) {
+func gatherWorkableAnnotated(ctx context.Context, ap *app.App, rf workableFilter) (focusedQueue, error) {
 	criteria, err := rf.criteria()
 	if err != nil {
-		return workableGather{}, err
+		return focusedQueue{}, err
 	}
 	queue, err := gatherWorkableQueue(ctx, ap)
 	if err != nil {
-		return workableGather{}, err
+		return focusedQueue{}, err
 	}
-	return queue.keepRows(criteria), nil
+	// The scope is the walk's, not the kept rows': a filter that drops every
+	// path row leaves the focus on (see focusScope).
+	return focusedQueue{workableGather: queue.keepRows(criteria), scope: queue.scope}, nil
 }
 
 // gatherWorkableQueue is the workable pipeline with nothing narrowed: the whole
 // queue, for a caller that applies the filter itself. `lit next` is the one —
 // its filter decides which rows it may serve, not which rows its walks may read,
 // so it needs the rows a filter would drop (see routeNext).
-func gatherWorkableQueue(ctx context.Context, ap *app.App) (workableGather, error) {
+func gatherWorkableQueue(ctx context.Context, ap *app.App) (focusedQueue, error) {
 	requiredFields, err := readyRequiredFields(ap)
 	if err != nil {
-		return workableGather{}, err
+		return focusedQueue{}, err
 	}
 	// [LAW:locality-or-seam] The pipeline's real inputs are a store surface and
 	// the ready required-fields policy; the *app.App only supplied those two.
@@ -963,7 +965,14 @@ func gatherWorkableQueue(ctx context.Context, ap *app.App) (workableGather, erro
 	// lets the cross-project rollup run the SAME pipeline over a read-only
 	// foreign store — which has no repo root and so no per-repo config — by
 	// passing the policy as a value. [LAW:single-enforcer]
-	return classifyWorkable(ctx, ap.Store, requiredFields)
+	queue, err := classifyWorkable(ctx, ap.Store, requiredFields)
+	if err != nil {
+		return focusedQueue{}, err
+	}
+	// The focus walk runs here and nowhere below: `lit next` and `lit backlog`
+	// are the views that answer over a focus scope, and the rollup that shares
+	// classifyWorkable reports whole-project counts. [LAW:decomposition]
+	return focusQueue(ctx, ap.Store, queue)
 }
 
 // readyRequiredFields reads this repo's ready required-fields policy. Every
@@ -1044,8 +1053,8 @@ func classifyWorkable(ctx context.Context, st storage.Store, requiredFields []st
 		return workableGather{}, err
 	}
 	// The listing's rank order, then one stable sort by priority, are the whole
-	// ordering story. Focus is a scope, returned alongside the rows for the views
-	// to answer over, so ordering has one authority. [LAW:one-source-of-truth]
+	// ordering story. Focus is a scope the views apply afterwards (focusQueue),
+	// never an ordering, so ordering has one authority. [LAW:one-source-of-truth]
 	sortByPriority(queue.rows)
 	enrichWithParentEpic(queue.rows, queue.details)
 	// Derived over the queue, so the facts are true of the queue whatever the
@@ -1066,16 +1075,21 @@ func classifyWorkable(ctx context.Context, st storage.Store, requiredFields []st
 // WHAT the registry says about them; cutting here lets a caller with an already
 // resolved set — an epic's children — skip the workable list query entirely.
 //
-// The focus scope comes back beside the rows because the focus walk runs HERE,
-// and the scope is read from that walk's own output rather than from the rows it
-// annotated — see focusScope, whose goals a row-derived scope would lose exactly
-// when every path row was narrowed away. [LAW:one-source-of-truth]
+// The focus path is not among these facts. It scopes a view rather than gating
+// a pull (annotation.RoleNone), so it is stamped where the views that read it
+// are fed (focusQueue), and a surface that reads only readiness — the epic plan,
+// `lit ls --columns blocked`, the cross-project rollup — never pays for the
+// focus walk. [LAW:decomposition]
 //
 // The epics above the issues come back too: the blocker annotator already
 // loaded them to pass an epic's blockers down, and routing climbs the same
 // chain to find the work under an epic that blocks. One load, so "which epics
 // is this issue under" has one answer on both sides.
-func annotateIssues(ctx context.Context, st storage.Store, requiredFields []string, issues []model.Issue) (annotatedRows, error) {
+//
+// seeds donate relations the caller already holds — the epic plan has its epic
+// — so the ancestry climb reuses them rather than fetching them again. The
+// subjects themselves are always read fresh, below.
+func annotateIssues(ctx context.Context, st storage.Store, requiredFields []string, issues []model.Issue, seeds ...map[string]storage.IssueRelations) (annotatedRows, error) {
 	fieldAnnotator, err := newFieldAnnotator(requiredFields)
 	if err != nil {
 		return annotatedRows{}, err
@@ -1100,20 +1114,10 @@ func annotateIssues(ctx context.Context, st storage.Store, requiredFields []stri
 	// The lane gate and the blocker annotator read the ancestor epics' FULL
 	// relations (unfiltered by the CLI assignee/type/label narrowing), so an
 	// earlier sibling or an epic's blocker hidden by those filters still gates.
-	memo, loaded := memoizeRelations(st.GetRelationsByIDs, details)
+	// details goes in last so the fresh read of a subject wins over any seeded
+	// copy of it.
+	memo, _ := memoizeRelations(st.GetRelationsByIDs, slices.Concat(seeds, []map[string]storage.IssueRelations{details})...)
 	held, err := fetchHeldAncestry(ctx, memo, details)
-	if err != nil {
-		return annotatedRows{}, err
-	}
-	// The focus path is derived from the full dependency DAG (unfiltered by the
-	// CLI narrowing) on every gather — the focus fact lives on the one goal
-	// ticket; chain membership is never stored, so it cannot drift.
-	// [LAW:one-source-of-truth]
-	//
-	// The walk reuses the relations loaded for the subjects, their ancestor epics
-	// and the blockers' wait walks rather than re-querying them; a seeded hit is
-	// byte-identical to a refetch.
-	focusPaths, err := fetchFocusPathGoals(ctx, st, loaded)
 	if err != nil {
 		return annotatedRows{}, err
 	}
@@ -1130,12 +1134,11 @@ func annotateIssues(ctx context.Context, st storage.Store, requiredFields []stri
 		newSiblingGateAnnotator(details, pendingSiblingsByEpic(held.ancestry.relations)),
 		newOrphanedAnnotator(orphanedThreshold),
 		newBlockingLabelAnnotator(),
-		newFocusPathAnnotator(focusPaths),
 	)
 	if err != nil {
 		return annotatedRows{}, err
 	}
-	return annotatedRows{rows: annotated, details: details, epics: held.ancestry.relations, scope: focusScopeOf(focusPaths)}, nil
+	return annotatedRows{rows: annotated, details: details, epics: held.ancestry.relations}, nil
 }
 
 // annotatedRows is one annotateIssues pass. Named rather than positional
@@ -1148,7 +1151,6 @@ type annotatedRows struct {
 	// epics is the relations of every epic above a row, keyed by epic id — the
 	// chain epicsAbove climbs.
 	epics map[string]storage.IssueRelations
-	scope focusScope
 }
 
 // runOrphaned lists in_progress issues whose last update is older than
