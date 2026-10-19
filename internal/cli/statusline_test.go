@@ -36,7 +36,7 @@ func TestNextOutcomesBecomeStatuslineFacts(t *testing.T) {
 	row := annotation.AnnotatedIssue{Issue: inFlight}
 	resumed := ResumedOwnWork{Row: row}
 	ticket := statusline.Ticket{ID: "t-1", Title: "One"}
-	counted := statusline.RollupCounted{ID: "t-1", Progress: statusline.RollupProgress{CompletedCount: 1, TotalCount: 3}}
+	started := statusline.NewStarted(ticket, statusline.RollupProgress{CompletedCount: 1, TotalCount: 3})
 	phased := statusline.PhaseRead{ID: "t-1", Phase: "review"}
 	cases := []struct {
 		name    string
@@ -46,8 +46,8 @@ func TestNextOutcomesBecomeStatuslineFacts(t *testing.T) {
 	}{
 		{"a fresh pick", ServedFromNewLane{Row: row}, true, statusline.Facts{statusline.Picked{Ticket: &ticket}}},
 		{"a narrowed fresh pick", ServedFromNewLane{Row: row}, false, nil},
-		{"own work handed back", resumed, true, statusline.Facts{statusline.Started{Ticket: ticket}, counted, phased, statusline.Picked{Ticket: &ticket}}},
-		{"own work handed back to a narrowed question", resumed, false, statusline.Facts{statusline.Started{Ticket: ticket}, counted, phased}},
+		{"own work handed back", resumed, true, statusline.Facts{started, phased, statusline.Picked{Ticket: &ticket}}},
+		{"own work handed back to a narrowed question", resumed, false, statusline.Facts{started, phased}},
 		{"nothing to pick", NoWork{}, true, statusline.Facts{statusline.Picked{}}},
 		{"a scope with nothing left", Exhausted{}, true, statusline.Facts{statusline.Picked{}}},
 		{"nothing to pick for a narrowed question", NoWork{}, false, nil},

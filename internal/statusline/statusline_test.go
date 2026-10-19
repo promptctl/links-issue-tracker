@@ -17,6 +17,7 @@ var (
 	alphaRenamed = Ticket{ID: "t-alpha", Title: "Alpha, renamed"}
 	at           = time.Date(2026, 10, 15, 9, 30, 0, 0, time.UTC)
 	progress     = RollupProgress{CompletedCount: 1, TotalCount: 4}
+	bravoLane    = RollupProgress{CompletedCount: 0, TotalCount: 2}
 	review       = "review"
 )
 
@@ -51,12 +52,11 @@ func write(t *testing.T, loc Location, facts ...Fact) Outcome {
 // Each write folds its facts into what earlier writes left, so the file
 // carries every slot's latest record whichever command recorded it.
 func TestWritesFoldFactsIntoTheFile(t *testing.T) {
-	working := func(ticket Ticket) *WorkingOn { return &WorkingOn{Ticket: ticket, RecordedAt: at} }
-	counted := func(ticket Ticket) *WorkingOn {
-		return &WorkingOn{Ticket: ticket, RollupProgress: &progress, RecordedAt: at}
+	working := func(ticket Ticket, lane RollupProgress) *WorkingOn {
+		return &WorkingOn{Ticket: ticket, RollupProgress: lane, RecordedAt: at}
 	}
-	inPhase := func(ticket Ticket, phase string) *WorkingOn {
-		return &WorkingOn{Ticket: ticket, Phase: &phase, RecordedAt: at}
+	inPhase := func(ticket Ticket, lane RollupProgress, phase string) *WorkingOn {
+		return &WorkingOn{Ticket: ticket, RollupProgress: lane, Phase: &phase, RecordedAt: at}
 	}
 	next := func(ticket *Ticket) *Next { return &Next{Ticket: ticket, RecordedAt: at} }
 	cases := []struct {
@@ -65,14 +65,14 @@ func TestWritesFoldFactsIntoTheFile(t *testing.T) {
 		want   File
 	}{
 		{
-			name:   "a start records what the checkout is working on",
-			writes: [][]Fact{{Started{alpha}}},
-			want:   File{SchemaVersion: SchemaVersion, WorkingOn: working(alpha)},
+			name:   "a start records what the checkout is working on and its lane's count",
+			writes: [][]Fact{{Started{alpha, progress}}},
+			want:   File{SchemaVersion: SchemaVersion, WorkingOn: working(alpha, progress)},
 		},
 		{
 			name:   "a later write keeps the slots it says nothing about",
-			writes: [][]Fact{{Started{alpha}}, {Picked{&bravo}}},
-			want:   File{SchemaVersion: SchemaVersion, WorkingOn: working(alpha), Next: next(&bravo)},
+			writes: [][]Fact{{Started{alpha, progress}}, {Picked{&bravo}}},
+			want:   File{SchemaVersion: SchemaVersion, WorkingOn: working(alpha, progress), Next: next(&bravo)},
 		},
 		{
 			name:   "a pick of nothing is recorded, not left blank",
@@ -81,33 +81,33 @@ func TestWritesFoldFactsIntoTheFile(t *testing.T) {
 		},
 		{
 			name:   "a second start replaces the first",
-			writes: [][]Fact{{Started{alpha}}, {Started{bravo}}},
-			want:   File{SchemaVersion: SchemaVersion, WorkingOn: working(bravo)},
+			writes: [][]Fact{{Started{alpha, progress}}, {Started{bravo, bravoLane}}},
+			want:   File{SchemaVersion: SchemaVersion, WorkingOn: working(bravo, bravoLane)},
 		},
 		{
 			name:   "invalidating a ticket clears every slot naming it",
-			writes: [][]Fact{{Started{alpha}, Picked{&alpha}}, {Invalidated{alpha.ID}}},
+			writes: [][]Fact{{Started{alpha, progress}, Picked{&alpha}}, {Invalidated{alpha.ID}}},
 			want:   File{SchemaVersion: SchemaVersion},
 		},
 		{
 			name:   "invalidating another ticket clears nothing",
-			writes: [][]Fact{{Started{alpha}, Picked{&bravo}}, {Invalidated{"t-other"}}},
-			want:   File{SchemaVersion: SchemaVersion, WorkingOn: working(alpha), Next: next(&bravo)},
+			writes: [][]Fact{{Started{alpha, progress}, Picked{&bravo}}, {Invalidated{"t-other"}}},
+			want:   File{SchemaVersion: SchemaVersion, WorkingOn: working(alpha, progress), Next: next(&bravo)},
 		},
 		{
 			name:   "invalidating the pick leaves the work in flight",
-			writes: [][]Fact{{Started{alpha}, Picked{&bravo}}, {Invalidated{bravo.ID}}},
-			want:   File{SchemaVersion: SchemaVersion, WorkingOn: working(alpha)},
+			writes: [][]Fact{{Started{alpha, progress}, Picked{&bravo}}, {Invalidated{bravo.ID}}},
+			want:   File{SchemaVersion: SchemaVersion, WorkingOn: working(alpha, progress)},
 		},
 		{
 			name:   "a retitle renames every slot naming the ticket",
-			writes: [][]Fact{{Started{alpha}, Picked{&alpha}}, {Retitled{alphaRenamed}}},
-			want:   File{SchemaVersion: SchemaVersion, WorkingOn: working(alphaRenamed), Next: next(&alphaRenamed)},
+			writes: [][]Fact{{Started{alpha, progress}, Picked{&alpha}}, {Retitled{alphaRenamed}}},
+			want:   File{SchemaVersion: SchemaVersion, WorkingOn: working(alphaRenamed, progress), Next: next(&alphaRenamed)},
 		},
 		{
 			name:   "retitling another ticket renames nothing",
-			writes: [][]Fact{{Started{alpha}, Picked{&bravo}}, {Retitled{Ticket{ID: "t-other", Title: "Other"}}}},
-			want:   File{SchemaVersion: SchemaVersion, WorkingOn: working(alpha), Next: next(&bravo)},
+			writes: [][]Fact{{Started{alpha, progress}, Picked{&bravo}}, {Retitled{Ticket{ID: "t-other", Title: "Other"}}}},
+			want:   File{SchemaVersion: SchemaVersion, WorkingOn: working(alpha, progress), Next: next(&bravo)},
 		},
 		{
 			name:   "retitling leaves a recorded pick of nothing alone",
@@ -115,39 +115,29 @@ func TestWritesFoldFactsIntoTheFile(t *testing.T) {
 			want:   File{SchemaVersion: SchemaVersion, Next: next(nil)},
 		},
 		{
-			name:   "a rollup count shows on the work it names",
-			writes: [][]Fact{{Started{alpha}, RollupCounted{alpha.ID, progress}}},
-			want:   File{SchemaVersion: SchemaVersion, WorkingOn: counted(alpha)},
-		},
-		{
-			name:   "a rollup count for another ticket shows nowhere",
-			writes: [][]Fact{{Started{alpha}, Picked{&bravo}, RollupCounted{bravo.ID, progress}}},
-			want:   File{SchemaVersion: SchemaVersion, WorkingOn: working(alpha), Next: next(&bravo)},
-		},
-		{
 			name:   "a retitle keeps the rollup count",
-			writes: [][]Fact{{Started{alpha}, RollupCounted{alpha.ID, progress}}, {Retitled{alphaRenamed}}},
-			want:   File{SchemaVersion: SchemaVersion, WorkingOn: counted(alphaRenamed)},
+			writes: [][]Fact{{Started{alpha, progress}}, {Retitled{alphaRenamed}}},
+			want:   File{SchemaVersion: SchemaVersion, WorkingOn: working(alphaRenamed, progress)},
 		},
 		{
-			name:   "a new start drops the last ticket's rollup count",
-			writes: [][]Fact{{Started{alpha}, RollupCounted{alpha.ID, progress}}, {Started{bravo}}},
-			want:   File{SchemaVersion: SchemaVersion, WorkingOn: working(bravo)},
+			name:   "a new start shows its own lane's rollup count",
+			writes: [][]Fact{{Started{alpha, progress}}, {Started{bravo, bravoLane}}},
+			want:   File{SchemaVersion: SchemaVersion, WorkingOn: working(bravo, bravoLane)},
 		},
 		{
 			name:   "a phase shows on the work it names",
-			writes: [][]Fact{{Started{alpha}, PhaseRead{alpha.ID, "plan"}}},
-			want:   File{SchemaVersion: SchemaVersion, WorkingOn: inPhase(alpha, "plan")},
+			writes: [][]Fact{{Started{alpha, progress}, PhaseRead{alpha.ID, "plan"}}},
+			want:   File{SchemaVersion: SchemaVersion, WorkingOn: inPhase(alpha, progress, "plan")},
 		},
 		{
 			name:   "a later phase replaces the one recorded",
-			writes: [][]Fact{{Started{alpha}, PhaseRead{alpha.ID, "plan"}}, {PhaseRead{alpha.ID, "impl"}}},
-			want:   File{SchemaVersion: SchemaVersion, WorkingOn: inPhase(alpha, "impl")},
+			writes: [][]Fact{{Started{alpha, progress}, PhaseRead{alpha.ID, "plan"}}, {PhaseRead{alpha.ID, "impl"}}},
+			want:   File{SchemaVersion: SchemaVersion, WorkingOn: inPhase(alpha, progress, "impl")},
 		},
 		{
 			name:   "a phase for another ticket shows nowhere",
-			writes: [][]Fact{{Started{alpha}, Picked{&bravo}, PhaseRead{bravo.ID, "impl"}}},
-			want:   File{SchemaVersion: SchemaVersion, WorkingOn: working(alpha), Next: next(&bravo)},
+			writes: [][]Fact{{Started{alpha, progress}, Picked{&bravo}, PhaseRead{bravo.ID, "impl"}}},
+			want:   File{SchemaVersion: SchemaVersion, WorkingOn: working(alpha, progress), Next: next(&bravo)},
 		},
 		{
 			name:   "a phase with no work recorded shows nowhere",
@@ -156,23 +146,23 @@ func TestWritesFoldFactsIntoTheFile(t *testing.T) {
 		},
 		{
 			name:   "a retitle keeps the phase",
-			writes: [][]Fact{{Started{alpha}, PhaseRead{alpha.ID, "review"}}, {Retitled{alphaRenamed}}},
-			want:   File{SchemaVersion: SchemaVersion, WorkingOn: inPhase(alphaRenamed, "review")},
+			writes: [][]Fact{{Started{alpha, progress}, PhaseRead{alpha.ID, "review"}}, {Retitled{alphaRenamed}}},
+			want:   File{SchemaVersion: SchemaVersion, WorkingOn: inPhase(alphaRenamed, progress, "review")},
 		},
 		{
 			name:   "a new start drops the last ticket's phase",
-			writes: [][]Fact{{Started{alpha}, PhaseRead{alpha.ID, "review"}}, {Started{bravo}}},
-			want:   File{SchemaVersion: SchemaVersion, WorkingOn: working(bravo)},
+			writes: [][]Fact{{Started{alpha, progress}, PhaseRead{alpha.ID, "review"}}, {Started{bravo, bravoLane}}},
+			want:   File{SchemaVersion: SchemaVersion, WorkingOn: working(bravo, bravoLane)},
 		},
 		{
 			name:   "invalidating the work clears its phase with it",
-			writes: [][]Fact{{Started{alpha}, PhaseRead{alpha.ID, "merge"}}, {Invalidated{alpha.ID}}},
+			writes: [][]Fact{{Started{alpha, progress}, PhaseRead{alpha.ID, "merge"}}, {Invalidated{alpha.ID}}},
 			want:   File{SchemaVersion: SchemaVersion},
 		},
 		{
 			name:   "facts apply in the order the command learned them",
-			writes: [][]Fact{{Started{alpha}, Invalidated{alpha.ID}, Started{bravo}}},
-			want:   File{SchemaVersion: SchemaVersion, WorkingOn: working(bravo)},
+			writes: [][]Fact{{Started{alpha, progress}, Invalidated{alpha.ID}, Started{bravo, bravoLane}}},
+			want:   File{SchemaVersion: SchemaVersion, WorkingOn: working(bravo, bravoLane)},
 		},
 	}
 	for _, tc := range cases {
@@ -191,7 +181,7 @@ func TestWritesFoldFactsIntoTheFile(t *testing.T) {
 // A retitle changes what a record shows, not when the checkout made it.
 func TestARetitleKeepsWhenTheRecordWasMade(t *testing.T) {
 	loc := testLocation(t)
-	write(t, loc, Started{alpha}, Picked{&alpha})
+	write(t, loc, Started{alpha, progress}, Picked{&alpha})
 	if _, err := Write(loc, Facts{Retitled{alphaRenamed}}, at.Add(time.Hour)); err != nil {
 		t.Fatalf("Write(retitle) error = %v", err)
 	}
@@ -206,7 +196,7 @@ func TestARetitleKeepsWhenTheRecordWasMade(t *testing.T) {
 // own types.
 func TestFileEncodesTheDocumentedShape(t *testing.T) {
 	loc := testLocation(t)
-	write(t, loc, Started{alpha}, RollupCounted{alpha.ID, progress}, PhaseRead{alpha.ID, "impl"}, Picked{nil})
+	write(t, loc, Started{alpha, progress}, PhaseRead{alpha.ID, "impl"}, Picked{nil})
 	raw, err := os.ReadFile(loc.File)
 	if err != nil {
 		t.Fatal(err)
@@ -247,7 +237,7 @@ func TestACommandWithNoFactsWritesNothing(t *testing.T) {
 // other, and never twice.
 func TestTheCreatingWriteAddsTheExcludeEntryOnce(t *testing.T) {
 	loc := testLocation(t)
-	first := write(t, loc, Started{alpha})
+	first := write(t, loc, Started{alpha, progress})
 	if !first.Created || !first.ExcludeAdded || first.Bytes == 0 {
 		t.Fatalf("first write = %+v; want Created, ExcludeAdded and a byte count", first)
 	}
@@ -269,7 +259,7 @@ func TestTheCreatingWriteAddsTheExcludeEntryOnce(t *testing.T) {
 		if err := os.Remove(loc.File); err != nil {
 			t.Fatal(err)
 		}
-		recreated := write(t, loc, Started{alpha})
+		recreated := write(t, loc, Started{alpha, progress})
 		if !recreated.Created || recreated.ExcludeAdded != wantAdded {
 			t.Fatalf("write after the file was removed = %+v; want Created, ExcludeAdded=%v", recreated, wantAdded)
 		}
@@ -293,7 +283,7 @@ func TestTheExcludeEntryIsAppendedOnItsOwnLine(t *testing.T) {
 	if err := os.WriteFile(loc.Exclude, []byte("# local\n*.swp"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	write(t, loc, Started{alpha})
+	write(t, loc, Started{alpha, progress})
 	raw, err := os.ReadFile(loc.Exclude)
 	if err != nil {
 		t.Fatal(err)
@@ -312,16 +302,16 @@ func TestAWriteNamesTheSlotsItChanged(t *testing.T) {
 		facts []Fact
 		want  []string
 	}{
-		{[]Fact{Started{alpha}}, []string{"working_on"}},
+		{[]Fact{Started{alpha, progress}}, []string{"working_on"}},
 		{[]Fact{Picked{&bravo}}, []string{"next"}},
-		{[]Fact{Started{alpha}}, []string{"working_on"}},
+		{[]Fact{Started{alpha, progress}}, []string{"working_on"}},
 		{[]Fact{Retitled{Ticket{ID: "t-other", Title: "Other"}}}, []string{}},
 		{[]Fact{Invalidated{"t-other"}}, []string{}},
 		{[]Fact{Retitled{alphaRenamed}}, []string{"working_on"}},
 		{[]Fact{Invalidated{bravo.ID}}, []string{"next"}},
-		{[]Fact{Started{bravo}, Picked{&alpha}}, []string{"working_on", "next"}},
-		{[]Fact{RollupCounted{bravo.ID, progress}}, []string{"working_on"}},
-		{[]Fact{RollupCounted{bravo.ID, progress}}, []string{}},
+		{[]Fact{Started{bravo, bravoLane}, Picked{&alpha}}, []string{"working_on", "next"}},
+		{[]Fact{PhaseRead{bravo.ID, "impl"}}, []string{"working_on"}},
+		{[]Fact{PhaseRead{bravo.ID, "impl"}}, []string{}},
 		{[]Fact{Replaced{}}, []string{"working_on", "next"}},
 		{[]Fact{Replaced{}}, []string{}},
 	} {
@@ -335,8 +325,8 @@ func TestAWriteNamesTheSlotsItChanged(t *testing.T) {
 	}
 }
 
-// Each write reports the rollup progress the working_on it wrote shows, whichever
-// command counted it, and nothing when that record shows none or is null.
+// Each write reports the rollup progress the working_on it wrote shows, and
+// nothing when that record is null.
 func TestAWriteReportsTheRollupProgressItsWorkingOnShows(t *testing.T) {
 	loc := testLocation(t)
 	for _, step := range []struct {
@@ -344,8 +334,7 @@ func TestAWriteReportsTheRollupProgressItsWorkingOnShows(t *testing.T) {
 		want  *RollupProgress
 	}{
 		{[]Fact{Picked{&bravo}}, nil},
-		{[]Fact{Started{alpha}}, nil},
-		{[]Fact{RollupCounted{alpha.ID, progress}}, &progress},
+		{[]Fact{Started{alpha, progress}}, &progress},
 		{[]Fact{Retitled{alphaRenamed}}, &progress},
 		{[]Fact{Invalidated{alpha.ID}}, nil},
 	} {
@@ -360,7 +349,7 @@ func TestAWriteReportsTheRollupProgressItsWorkingOnShows(t *testing.T) {
 // missing field: missing is what an older lit's file says.
 func TestAnUnreadPhaseEncodesAsNull(t *testing.T) {
 	loc := testLocation(t)
-	write(t, loc, Started{alpha})
+	write(t, loc, Started{alpha, progress})
 	raw, err := os.ReadFile(loc.File)
 	if err != nil {
 		t.Fatal(err)
@@ -385,7 +374,7 @@ func TestAWriteReportsThePhaseItsWorkingOnShows(t *testing.T) {
 		want  *string
 	}{
 		{[]Fact{Picked{&bravo}}, nil},
-		{[]Fact{Started{alpha}}, nil},
+		{[]Fact{Started{alpha, progress}}, nil},
 		{[]Fact{PhaseRead{alpha.ID, review}}, &review},
 		{[]Fact{Retitled{alphaRenamed}}, &review},
 		{[]Fact{Invalidated{alpha.ID}}, nil},
@@ -412,7 +401,7 @@ func TestAFailedWriteReportsWhatItHadDone(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
-	out, err := Write(loc, Facts{Started{alpha}}, at)
+	out, err := Write(loc, Facts{Started{alpha, progress}}, at)
 	if err == nil {
 		t.Fatal("Write into a read-only directory succeeded; want an error")
 	}
@@ -443,7 +432,7 @@ func TestAFailedRewriteOfAnUnreadableFileIsNotReplaced(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
-	out, err := Write(loc, Facts{Started{alpha}}, at)
+	out, err := Write(loc, Facts{Started{alpha, progress}}, at)
 	if err == nil {
 		t.Fatal("Write into a read-only directory succeeded; want an error")
 	}
@@ -485,11 +474,45 @@ func TestAnUnreadableFileIsReplacedAndReported(t *testing.T) {
 	}
 }
 
+// A working_on an older lit wrote with no count is the one record dropped: the
+// file's next is still read and kept, and the write says what it dropped.
+func TestAnUncountedWorkingOnIsDroppedAndNextKept(t *testing.T) {
+	const next = `"next": {"ticket": {"id": "t-next", "title": "Next"}, "recorded_at": "2026-10-15T09:30:00Z"}`
+	for name, workingOn := range map[string]string{
+		// lit 0.19 to 0.21 wrote null for a lane the recording command did not
+		// count, and a lit before them wrote no key.
+		"a null rollup_progress": `{"ticket": {"id": "t-old", "title": "Old"}, "rollup_progress": null, "phase": null, "recorded_at": "2026-10-15T09:30:00Z"}`,
+		"no rollup_progress":     `{"ticket": {"id": "t-old", "title": "Old"}, "phase": null, "recorded_at": "2026-10-15T09:30:00Z"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			loc := testLocation(t)
+			if err := os.MkdirAll(filepath.Dir(loc.File), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			content := `{"schema_version": 1, "working_on": ` + workingOn + `, ` + next + `}`
+			if err := os.WriteFile(loc.File, []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			out := write(t, loc, Retitled{Ticket{ID: "t-other", Title: "Other"}})
+			if out.Replaced == nil || !strings.Contains(out.Replaced.Error(), "working_on has no rollup_progress") {
+				t.Fatalf("write over %s: Replaced = %v; want the dropped working_on named", name, out.Replaced)
+			}
+			if want := []string{"working_on"}; !reflect.DeepEqual(out.Changed, want) {
+				t.Fatalf("write over %s changed %q, want %q", name, out.Changed, want)
+			}
+			want := File{SchemaVersion: SchemaVersion, Next: &Next{Ticket: &Ticket{ID: "t-next", Title: "Next"}, RecordedAt: time.Date(2026, 10, 15, 9, 30, 0, 0, time.UTC)}}
+			if got := readFile(t, loc); !reflect.DeepEqual(got, want) {
+				t.Fatalf("file = %+v\nwant %+v", got, want)
+			}
+		})
+	}
+}
+
 // A write leaves the file and nothing else in its directory: the temporary
 // sibling it renames into place is gone.
 func TestAWriteLeavesNoTemporaryFile(t *testing.T) {
 	loc := testLocation(t)
-	write(t, loc, Started{alpha})
+	write(t, loc, Started{alpha, progress})
 	write(t, loc, Picked{&bravo})
 	entries, err := os.ReadDir(filepath.Dir(loc.File))
 	if err != nil {

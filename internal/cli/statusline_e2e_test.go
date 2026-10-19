@@ -308,8 +308,8 @@ func TestTheStatuslineRollupProgressMatchesTheClaimLine(t *testing.T) {
 	matches := func(after string, want statusline.RollupProgress) {
 		t.Helper()
 		got := readStatusline(t, dir)
-		if got.WorkingOn == nil || got.WorkingOn.RollupProgress == nil {
-			t.Fatalf("after %s: working_on = %+v; want a rollup progress", after, got.WorkingOn)
+		if got.WorkingOn == nil {
+			t.Fatalf("after %s: working_on is null; want the ticket started", after)
 		}
 		backlog := runCLIInDir(t, dir, "backlog")
 		line := claimCount.FindAllStringSubmatch(backlog, -1)
@@ -317,8 +317,8 @@ func TestTheStatuslineRollupProgressMatchesTheClaimLine(t *testing.T) {
 			t.Fatalf("after %s: lit backlog printed %d claim lines with a count; want 1:\n%s", after, len(line), backlog)
 		}
 		printed := statusline.RollupProgress{CompletedCount: mustAtoi(t, line[0][1]), TotalCount: mustAtoi(t, line[0][2])}
-		if *got.WorkingOn.RollupProgress != printed || printed != want {
-			t.Fatalf("after %s: file rollup_progress = %+v, claim line %+v; want both %+v", after, *got.WorkingOn.RollupProgress, printed, want)
+		if got.WorkingOn.RollupProgress != printed || printed != want {
+			t.Fatalf("after %s: file rollup_progress = %+v, claim line %+v; want both %+v", after, got.WorkingOn.RollupProgress, printed, want)
 		}
 	}
 
@@ -435,7 +435,7 @@ func TestAFailedStatuslineWriteIsRecordedOnTheEvent(t *testing.T) {
 	rec := telemetry.Begin(telemetry.Event{Event: "lit start"})
 	ctx := telemetry.With(context.Background(), rec)
 	ws := workspace.Info{RootDir: root, Location: workspace.Location{GitCommonDir: filepath.Join(root, "git")}}
-	recordStatusline(ctx, ws, statusline.Facts{statusline.Started{Ticket: statusline.Ticket{ID: "t-1", Title: "One"}}})
+	recordStatusline(ctx, ws, statusline.Facts{statusline.NewStarted(statusline.Ticket{ID: "t-1", Title: "One"}, statusline.RollupProgress{CompletedCount: 0, TotalCount: 1})})
 	ev := rec.Finish(telemetry.End{At: time.Now(), Outcome: telemetry.OutcomeOK})
 	facts := writtenFacts(t, ev)
 	if text, ok := facts["statusline.error"].(string); !ok || !strings.Contains(text, "statusline") {

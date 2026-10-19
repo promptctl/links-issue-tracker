@@ -60,8 +60,8 @@ type File struct {
 type WorkingOn struct {
 	Ticket Ticket `json:"ticket"`
 	// RollupProgress is the progress of the ticket's lane, counted by the
-	// command that made the record; nil when that command counted none.
-	RollupProgress *RollupProgress `json:"rollup_progress"`
+	// command that started the record.
+	RollupProgress RollupProgress `json:"rollup_progress"`
 	// Phase is where the ticket's work stands — plan, impl, review or merge —
 	// as the ticket's history put it when a command last read it; nil when
 	// the command that made the record read none.
@@ -94,8 +94,20 @@ type Fact interface {
 	apply(f File, at time.Time) File
 }
 
-// Started says this checkout is working on Ticket.
-type Started struct{ Ticket Ticket }
+// Started says this checkout is working on a ticket, whose lane stands at a
+// progress. A start carries its lane's count because the record it makes shows
+// one, and its fields are set only by NewStarted, so outside this package no
+// start can name its ticket without its count. [LAW:types-are-the-program]
+type Started struct {
+	ticket   Ticket
+	progress RollupProgress
+}
+
+// NewStarted says this checkout is working on ticket, whose lane stands at
+// progress.
+func NewStarted(ticket Ticket, progress RollupProgress) Started {
+	return Started{ticket: ticket, progress: progress}
+}
 
 // Picked says a plain `lit next` picked Ticket, or found nothing when Ticket is
 // nil.
@@ -104,13 +116,6 @@ type Picked struct{ Ticket *Ticket }
 // Retitled says Ticket's title is now Ticket.Title, so any record naming it
 // shows that title from here on; when the record was made does not change.
 type Retitled struct{ Ticket Ticket }
-
-// RollupCounted says the lane ticket ID is in stands at Progress, so the
-// record of working on ID shows that progress.
-type RollupCounted struct {
-	ID       string
-	Progress RollupProgress
-}
 
 // PhaseRead says ticket ID's history puts it in Phase, so the record of
 // working on ID shows that phase.
@@ -129,7 +134,7 @@ type Invalidated struct{ ID string }
 type Replaced struct{}
 
 func (s Started) apply(f File, at time.Time) File {
-	f.WorkingOn = &WorkingOn{Ticket: s.Ticket, RecordedAt: at}
+	f.WorkingOn = &WorkingOn{Ticket: s.ticket, RollupProgress: s.progress, RecordedAt: at}
 	return f
 }
 
@@ -150,15 +155,6 @@ func (r Retitled) apply(f File, _ time.Time) File {
 		next, ticket := *f.Next, r.Ticket
 		next.Ticket = &ticket
 		f.Next = &next
-	}
-	return f
-}
-
-func (c RollupCounted) apply(f File, _ time.Time) File {
-	if f.WorkingOn != nil && f.WorkingOn.Ticket.ID == c.ID {
-		working, progress := *f.WorkingOn, c.Progress
-		working.RollupProgress = &progress
-		f.WorkingOn = &working
 	}
 	return f
 }
@@ -229,8 +225,7 @@ type Outcome struct {
 	// Bytes is the size of the file written; zero when nothing was written.
 	Bytes int
 	// RollupProgress is the rollup progress the written file's working_on
-	// shows; nil when nothing was written, or the file shows no working_on or
-	// no count for it.
+	// shows; nil when nothing was written, or the file shows no working_on.
 	RollupProgress *RollupProgress
 	// Phase is the phase the written file's working_on shows; nil when
 	// nothing was written, or the file shows no working_on or no phase for it.
@@ -239,9 +234,10 @@ type Outcome struct {
 	Created bool
 	// ExcludeAdded is true when this write added the exclude entry.
 	ExcludeAdded bool
-	// Replaced is why the file already on disk could not be read as this
-	// schema and was rewritten from these facts alone; nil when it was read,
-	// when there was none, or when the rewrite failed.
+	// Replaced is why a record of the file already on disk could not be read
+	// as this schema, so what it held is rewritten from these facts alone: the
+	// whole file, or the one record parse dropped. Nil when it was read, when
+	// there was none, or when the rewrite failed.
 	Replaced error
 }
 
@@ -265,9 +261,9 @@ func Write(loc Location, facts Facts, now time.Time) (Outcome, error) {
 		return out, nil
 	}
 	prior := File{SchemaVersion: SchemaVersion}
-	// before is what the slots held on disk; nil when the file could not be
-	// read, so no slot of it is known.
-	before := &prior
+	// unread names the slots whose record on disk this lit could not read, so
+	// no record of them is known to compare against.
+	var unread []string
 	var replaced error
 	raw, err := os.ReadFile(loc.File)
 	switch {
@@ -276,11 +272,13 @@ func Write(loc Location, facts Facts, now time.Time) (Outcome, error) {
 	case err != nil:
 		return out, fmt.Errorf("read statusline file: %w", err)
 	default:
-		parsed, parseErr := parse(raw)
-		if parseErr != nil {
-			replaced = fmt.Errorf("%s: %w", loc.File, parseErr)
-			before = nil
-		} else {
+		parsed, dropped, parseErr := parse(raw)
+		switch {
+		case parseErr != nil:
+			replaced, unread = fmt.Errorf("%s: %w", loc.File, parseErr), slots
+		case dropped != nil:
+			prior, replaced, unread = parsed, fmt.Errorf("%s: %w", loc.File, dropped), []string{"working_on"}
+		default:
 			prior = parsed
 		}
 	}
@@ -300,40 +298,68 @@ func Write(loc Location, facts Facts, now time.Time) (Outcome, error) {
 		return out, fmt.Errorf("write statusline file: %w", err)
 	}
 	out.Replaced = replaced
-	out.Changed = changedSlots(before, written)
+	out.Changed = changedSlots(prior, unread, written)
 	out.Bytes = len(payload)
 	if written.WorkingOn != nil {
-		out.RollupProgress = written.WorkingOn.RollupProgress
+		progress := written.WorkingOn.RollupProgress
+		out.RollupProgress = &progress
 		out.Phase = written.WorkingOn.Phase
 	}
 	return out, nil
 }
 
+// slots is every slot of the file.
+var slots = []string{"working_on", "next"}
+
 // changedSlots names the slots whose records differ between before and after,
-// recorded_at included. A file that could not be read (before is nil) has no
-// record to match, so every slot is changed: all it shows came from this write.
-func changedSlots(before *File, after File) []string {
+// recorded_at included. A slot whose record could not be read (unread) has none
+// to match, so it is changed: all it shows came from this write.
+func changedSlots(before File, unread []string, after File) []string {
 	changed := []string{}
-	if before == nil || !reflect.DeepEqual(before.WorkingOn, after.WorkingOn) {
+	if slices.Contains(unread, "working_on") || !reflect.DeepEqual(before.WorkingOn, after.WorkingOn) {
 		changed = append(changed, "working_on")
 	}
-	if before == nil || !reflect.DeepEqual(before.Next, after.Next) {
+	if slices.Contains(unread, "next") || !reflect.DeepEqual(before.Next, after.Next) {
 		changed = append(changed, "next")
 	}
 	return changed
 }
 
-// parse reads a file this lit wrote. A file of another schema version is not
-// one it can merge into: it is replaced, like a damaged one.
-func parse(raw []byte) (File, error) {
-	var f File
-	if err := json.Unmarshal(raw, &f); err != nil {
-		return File{}, err
+// parse reads a file this lit wrote. A file it cannot decode, or of another
+// schema version, is not one it can merge into: err says why, and the file is
+// replaced whole. A working_on with no rollup_progress — lit 0.19 to 0.21 wrote
+// null when the command that made the record counted no lane, and an older lit
+// no key at all — is a record this lit cannot carry, since a record of working
+// on a ticket shows its lane's count: the file is read without it, and dropped
+// says why. [LAW:types-are-the-program]
+func parse(raw []byte) (f File, dropped error, err error) {
+	// The outer working_on, and its rollup_progress, are shallower than the ones
+	// File and WorkingOn declare, so they are the ones decoded: one decode reads
+	// the file and whether its record was counted.
+	var wire struct {
+		File
+		WorkingOn *struct {
+			WorkingOn
+			RollupProgress *RollupProgress `json:"rollup_progress"`
+		} `json:"working_on"`
 	}
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		return File{}, nil, err
+	}
+	f = wire.File
 	if f.SchemaVersion != SchemaVersion {
-		return File{}, fmt.Errorf("schema_version %d, this lit writes %d", f.SchemaVersion, SchemaVersion)
+		return File{}, nil, fmt.Errorf("schema_version %d, this lit writes %d", f.SchemaVersion, SchemaVersion)
 	}
-	return f, nil
+	switch on := wire.WorkingOn; {
+	case on == nil:
+	case on.RollupProgress == nil:
+		dropped = errors.New("working_on has no rollup_progress, as an older lit wrote it; that record was dropped")
+	default:
+		working := on.WorkingOn
+		working.RollupProgress = *on.RollupProgress
+		f.WorkingOn = &working
+	}
+	return f, dropped, nil
 }
 
 // ensureExcluded appends the exclude entry unless a line already holds it, and

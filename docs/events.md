@@ -144,12 +144,12 @@ not work on this checkout's tickets, such as `lit sync push`, `lit init` or
 
 | Key | Meaning |
 | --- | --- |
-| `statusline.changed` | The file's slots whose records this write changed: `working_on`, `next`, both, or `[]`. A slot re-recorded with the ticket it already held is listed, since its `recorded_at` moved; a slot the command's facts did not reach is not. When the file was replaced, both are listed. |
-| `statusline.rollup_progress` | The rollup progress the file's `working_on` shows after this write, as `{"rollup_completed_count": N, "rollup_total_count": M}`, whichever command counted it; `null` when nothing was written or `working_on` is `null` or carries no count. |
+| `statusline.changed` | The file's slots whose records this write changed: `working_on`, `next`, both, or `[]`. A slot re-recorded with the ticket it already held is listed, since its `recorded_at` moved; a slot the command's facts did not reach is not. When the file was replaced, both are listed; when its `working_on` record was dropped, `working_on` is, and `next` as the write changed it. |
+| `statusline.rollup_progress` | The rollup progress the file's `working_on` shows after this write, as `{"rollup_completed_count": N, "rollup_total_count": M}`; `null` when nothing was written or `working_on` is `null`. |
 | `statusline.phase` | The phase the file's `working_on` shows after this write, such as `"impl"`, whichever command read it; `null` when nothing was written or `working_on` is `null` or carries no phase. |
 | `statusline.created` | Whether the file did not exist before this write. |
 | `statusline.exclude_added` | Whether this write added the file's entry to the repository's `info/exclude`. Only a write that creates the file adds it, and only when the entry is missing. |
-| `statusline.replaced` | Why the file already on disk could not be read and was rewritten from this command's facts alone, or `null`. |
+| `statusline.replaced` | Why the file already on disk, or its `working_on` record, could not be read and was rewritten from this command's facts alone, or `null`. |
 | `statusline.error` | Why the write failed, or `null`. The command's own result is unchanged; the other keys say what the write had done before it failed. |
 | `counts.statusline.bytes` | The size of the file written; `0` when nothing was written. |
 

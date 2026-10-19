@@ -26,7 +26,7 @@ func recordStatusline(ctx context.Context, ws workspace.Info, facts statusline.F
 		return
 	}
 	if out.Replaced != nil {
-		fmt.Fprintf(os.Stderr, "warning: statusline file was unreadable and has been rewritten: %v\n", out.Replaced)
+		fmt.Fprintf(os.Stderr, "warning: statusline file held what this lit cannot read, rewritten: %v\n", out.Replaced)
 	}
 }
 
@@ -57,7 +57,7 @@ func nextStatuslineFacts(outcome NextOutcome, plain bool, evidence claims.Eviden
 	switch o := outcome.(type) {
 	case ResumedOwnWork:
 		picked = statuslineTicketRef(o.Row.Issue)
-		facts.Record(statusline.Started{Ticket: *picked}, rollupCounted(evidence, o.Row.Issue), phaseRead(ticketStateOf(o.Row.Issue, evidence.IssueEvents(o.Row.Issue.ID))))
+		facts.Record(started(evidence, o.Row.Issue), phaseRead(ticketStateOf(o.Row.Issue, evidence.IssueEvents(o.Row.Issue.ID))))
 	case ServedFromClaim:
 		picked = statuslineTicketRef(o.Row.Issue)
 	case ServedFromEpicLane:
@@ -85,13 +85,14 @@ func statuslineTicketRef(issue model.Issue) *statusline.Ticket {
 	return &ticket
 }
 
-// rollupCounted is the progress of the lane the worked-on ticket is in, as the
-// statusline file records it. It is the count the claim line renders, read
-// from the same evidence, so the file and lit backlog agree when the file is
-// written; docs/statusline.md says when it goes stale. [LAW:one-source-of-truth]
-func rollupCounted(evidence claims.Evidence, worked model.Issue) statusline.RollupCounted {
+// started is this checkout working on worked, with the progress of the lane it
+// is in as the statusline file records it. The progress is the count the claim
+// line renders, read from the same evidence, so the file and lit backlog agree
+// when the file is written; docs/statusline.md says when it goes stale.
+// [LAW:one-source-of-truth]
+func started(evidence claims.Evidence, worked model.Issue) statusline.Started {
 	progress := evidence.LaneProgressWith(worked)
-	return statusline.RollupCounted{ID: worked.ID, Progress: statusline.RollupProgress{CompletedCount: progress.Done, TotalCount: progress.Total}}
+	return statusline.NewStarted(app.StatuslineTicket(worked), statusline.RollupProgress{CompletedCount: progress.Done, TotalCount: progress.Total})
 }
 
 // phaseRead is the phase the worked-on ticket's history puts it in, as the
