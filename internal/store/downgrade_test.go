@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/pressly/goose/v3"
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
-	"github.com/promptctl/links-issue-tracker/internal/doltcli"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
 	"github.com/promptctl/links-issue-tracker/internal/version"
@@ -258,7 +258,7 @@ func TestDowngradeRollbackOnFailure(t *testing.T) {
 //
 // It reverses the registry's top two migrations with their real Down
 // sections — a span this binary covers — and asserts (a) the recorded version
-// walks down to target, and (b) the dolt log carries one commit per reversed
+// walks down to target, and (b) the commit log carries one commit per reversed
 // file, named by the registry's own file names.
 func TestDowngradeHappyPathSteppedAndCommitted(t *testing.T) {
 	t.Parallel()
@@ -293,10 +293,10 @@ func TestDowngradeHappyPathSteppedAndCommitted(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dbsnapshot.DirFor(doltRoot), done.Snapshot)); err != nil {
 		t.Fatalf("reported snapshot %q: %v", done.Snapshot, err)
 	}
-	log, err := doltcli.Run(ctx, filepath.Join(doltRoot, "links"), "log", "--oneline")
-	if err != nil {
-		t.Fatalf("dolt log = %v", err)
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close() = %v", err)
 	}
+	log := observedCommitMessages(t, ctx, doltRoot, "test-workspace-id")
 	registry, err := migrations.Embedded()
 	if err != nil {
 		t.Fatal(err)
@@ -308,8 +308,8 @@ func TestDowngradeHappyPathSteppedAndCommitted(t *testing.T) {
 		}
 		reverted++
 		want := fmt.Sprintf("downgrade: revert v%d %s", m.Version, m.Name)
-		if !strings.Contains(log, want) {
-			t.Fatalf("dolt log missing per-step commit %q:\n%s", want, log)
+		if !slices.ContainsFunc(log, func(m string) bool { return strings.Contains(m, want) }) {
+			t.Fatalf("commit log missing per-step commit %q:\n%s", want, strings.Join(log, "\n"))
 		}
 	}
 	if reverted != 2 {

@@ -365,6 +365,12 @@ func issueIDFromLitNew(t *testing.T, out, title string) string {
 func runLit(t *testing.T, dir, self string, extraEnv map[string]string, args ...string) (string, error) {
 	t.Helper()
 	joinDetachedWorkers(t, dir)
+	return execLit(dir, self, extraEnv, args...)
+}
+
+// execLit is runLit without the worker join, for a caller that registered the
+// join for dir once and then runs lit there many times.
+func execLit(dir, self string, extraEnv map[string]string, args ...string) (string, error) {
 	cmd := exec.Command(self, args...)
 	cmd.Dir = dir
 	cmd.Env = litEnv(extraEnv)

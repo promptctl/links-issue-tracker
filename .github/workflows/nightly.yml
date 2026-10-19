@@ -42,8 +42,6 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - uses: ./.github/actions/install-dolt
-
       - uses: ./.github/actions/install-claude
 
       - name: Build
@@ -101,8 +99,6 @@ jobs:
           install: >-
             mingw-w64-ucrt-x86_64-gcc
             mingw-w64-ucrt-x86_64-icu
-
-      - uses: ./.github/actions/install-dolt
 
       - uses: ./.github/actions/install-claude
 

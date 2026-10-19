@@ -3,11 +3,6 @@
 `links` sync is Dolt-native and uses Dolt git-remote support directly.
 Git remotes are the canonical remote configuration.
 
-## Version requirement
-
-- Required Dolt version: `>= 1.81.10`
-- Enforced at app startup through `internal/doltcli.RequireMinimumVersion`.
-
 ## Local data location
 
 The Links Dolt database is shared across all worktrees in the same clone:

@@ -10,8 +10,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/promptctl/links-issue-tracker/internal/testoracle"
 )
 
 // TestBurstOfMutationsNeverHitsEngineReadOnlyCollision is the acceptance pin:
@@ -19,9 +17,8 @@ import (
 // burst of several mutating lit commands run back-to-back must never surface
 // Dolt's raw "database is read only" (or the online-GC reconnect variant)
 // error, and every command must exit 0. It is also the acceptance pin for the
-// burst tail: every commit — including the final mutation's — reaches the
-// remote with NO explicit sweep push, proved by the independent oracle poll
-// at the end.
+// burst tail: every mutation — including the final one — reaches the remote
+// with NO explicit sweep push, proved by polling a remoteObserver at the end.
 //
 // The race this reproduces: each mutating command's on-change mirror is a
 // detached subprocess that keeps running (spawning its own read-write
@@ -48,7 +45,6 @@ func TestBurstOfMutationsNeverHitsEngineReadOnlyCollision(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
-	testoracle.Path(t, "dolt")
 	t.Parallel()
 	self, err := os.Executable()
 	if err != nil {
@@ -92,21 +88,17 @@ func TestBurstOfMutationsNeverHitsEngineReadOnlyCollision(t *testing.T) {
 		t.Fatalf("lit init: %v\noutput:\n%s", err, out)
 	}
 	// The epic the burst files into is part of the bootstrap, made with
-	// auto-sync off and carried by the manual push, so the burst's commits are
-	// exactly the ones the oracle counts past the baseline.
+	// auto-sync off and carried by the manual push, so the burst's tickets are
+	// exactly the ones the oracle counts.
 	epic := newEpicViaLit(t, root, self, isolatedEnv(xdgConfigHome, "1"), "burst-epic")
 	if out, err := runLit(t, root, self, isolatedEnv(xdgConfigHome, "1"),
 		"sync", "push", "--set-upstream"); err != nil {
 		t.Fatalf("bootstrap lit sync push: %v\noutput:\n%s", err, out)
 	}
 
-	// Independent oracle, same technique as
-	// TestEagerPushOnDefaultCadenceReachesRemoteWithoutExplicitPush: a plain
-	// `dolt clone` of the bare remote, touched by nothing else in this test.
-	ref := "remotes/origin/" + branch
-	oracleDir := filepath.Join(base, "oracle-clone")
-	runDolt(t, base, "clone", "file://"+remoteGit, oracleDir)
-	baseline := doltRefCommitCount(t, oracleDir, ref)
+	// The oracle is the same remoteObserver
+	// TestEagerPushOnDefaultCadenceReachesRemoteWithoutExplicitPush reads.
+	observer := newRemoteObserver(t, base, remoteGit, self, xdgConfigHome)
 
 	// No config.toml: this run exercises the shipped default (on-change), the
 	// same way a fresh agent workspace does — and, unlike the bootstrap calls
@@ -138,7 +130,7 @@ func TestBurstOfMutationsNeverHitsEngineReadOnlyCollision(t *testing.T) {
 	// mirror-pending marker), not a time window, so the poll may bet on it.
 	//
 	// The poll proves delivery only; TempDir safety against a mirror that
-	// outlives the satisfied commit count (a post-release re-check cycle) is
+	// outlives the satisfied ticket count (a post-release re-check cycle) is
 	// owned by the worker join runLit registers (joinDetachedWorkers).
 	//
 	// Budget: delivery of the tail can legitimately chain up to three full
@@ -151,13 +143,12 @@ func TestBurstOfMutationsNeverHitsEngineReadOnlyCollision(t *testing.T) {
 	const settlePollInterval = 300 * time.Millisecond
 	deadline := time.Now().Add(settleTimeout)
 	for {
-		if _, err := tryDolt(oracleDir, "fetch", "origin"); err == nil {
-			if doltRefCommitCount(t, oracleDir, ref) >= baseline+burstSize {
-				return
-			}
+		arrived, err := observer.count(epic, "burst-issue")
+		if err == nil && arrived == burstSize {
+			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("burst's %d commits never all reached the remote within %s of the last lit new returning\n%s", burstSize, settleTimeout, dumpMirrorLog(filepath.Join(root, ".git", "links")))
+			t.Fatalf("burst's %d tickets never all reached the remote within %s of the last lit new returning (last observation: %d arrived, error %v)\n%s", burstSize, settleTimeout, arrived, err, dumpMirrorLog(filepath.Join(root, ".git", "links")))
 		}
 		time.Sleep(settlePollInterval)
 	}

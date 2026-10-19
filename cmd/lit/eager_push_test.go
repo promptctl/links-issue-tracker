@@ -3,16 +3,13 @@
 package main
 
 import (
-	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/promptctl/links-issue-tracker/internal/testoracle"
 )
 
 // TestEagerPushOnDefaultCadenceReachesRemoteWithoutExplicitPush is the
@@ -23,20 +20,18 @@ import (
 // `[sync] cadence`, by proving the contract (does the remote observe the
 // change) rather than the mechanism.
 //
-// The oracle is an independent `dolt clone` of the bare git remote, fetched
-// and inspected directly — not lit's own "sync: N local change(s) not
+// The oracle is a remoteObserver: a second clone of the bare remote with its
+// own lit workspace, touched by nothing else in this test, which pulls and
+// lists what reached the remote — not lit's own "sync: N local change(s) not
 // pushed" banner. That banner reads freshness through the same tracking-ref
 // bookkeeping a known pre-existing quirk leaves briefly wrong immediately after
 // a workspace's very first `--set-upstream` push (the ahead-count can read
 // stale for a beat even once the data has genuinely landed), so it is not a
-// reliable ground truth for "did the bytes actually reach the remote". The
-// dolt CLI is already this project's sanctioned test oracle (see
-// .github/workflows/ci.yml, which installs it for exactly this reason) and
-// never shares lit's embedded engine or its path cache, so counting commits
-// on `remotes/origin/<branch>` in a freshly fetched, never-otherwise-touched
-// clone is independent ground truth. [LAW:behavior-not-structure]
+// reliable ground truth for "did the data actually reach the remote". The
+// observer reads the ticket itself on another machine's workspace, which is
+// what a teammate sees. [LAW:behavior-not-structure]
 //
-// It polls that independent oracle with a bounded timeout instead of a fixed
+// It polls the observer with a bounded timeout instead of a fixed
 // sleep, since the mirror is a detached background process with no other
 // completion signal available to a caller. [LAW:no-ambient-temporal-coupling]
 // If eager push never fired, this single local mutation reaches the remote by
@@ -46,7 +41,6 @@ func TestEagerPushOnDefaultCadenceReachesRemoteWithoutExplicitPush(t *testing.T)
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
-	testoracle.Path(t, "dolt")
 	t.Parallel()
 	self, err := os.Executable()
 	if err != nil {
@@ -108,18 +102,7 @@ func TestEagerPushOnDefaultCadenceReachesRemoteWithoutExplicitPush(t *testing.T)
 		t.Fatalf("bootstrap lit sync push: %v\noutput:\n%s", err, out)
 	}
 
-	// Independent oracle: a plain `dolt clone` of the bare remote, touched by
-	// nothing else in this test. Its baseline commit count is read once, before
-	// the mutation, so the poll below detects "at least one new commit landed"
-	// rather than depending on an exact expected count. Both the baseline and
-	// every poll read the same explicit `remotes/origin/<branch>` ref — never
-	// the ambiguous "current checkout" — so the comparison cannot be skewed by
-	// dolt's or the bare repo's own notion of a "default" branch disagreeing
-	// with the branch this test actually pushed.
-	ref := "remotes/origin/" + branch
-	oracleDir := filepath.Join(base, "oracle-clone")
-	runDolt(t, base, "clone", "file://"+remoteGit, oracleDir)
-	baseline := doltRefCommitCount(t, oracleDir, ref)
+	observer := newRemoteObserver(t, base, remoteGit, self, xdgConfigHome)
 
 	// No config.toml exists anywhere under xdgConfigHome: this run exercises
 	// config.Load's shipped default, not an explicit on-change opt-in.
@@ -131,21 +114,15 @@ func TestEagerPushOnDefaultCadenceReachesRemoteWithoutExplicitPush(t *testing.T)
 	const pollTimeout = 15 * time.Second
 	const pollInterval = 300 * time.Millisecond
 	deadline := time.Now().Add(pollTimeout)
+	var arrived int
+	var lastErr error
 	for time.Now().Before(deadline) {
-		// Tolerant of a transient fetch error (e.g. hitting the remote mid-push
-		// from the background mirror): treat it as "not yet" and retry within the
-		// poll window rather than failing the test on a one-off race unrelated to
-		// the thing under test. [LAW:no-silent-failure] exception: the fetch
-		// output is discarded here only because a genuine, persistent failure
-		// still surfaces — as a poll-timeout failure below, not silently.
-		if _, err := tryDolt(oracleDir, "fetch", "origin"); err == nil {
-			if count := doltRefCommitCount(t, oracleDir, ref); count > baseline {
-				return
-			}
+		if arrived, lastErr = observer.count(epic, "eager-push"); lastErr == nil && arrived == 1 {
+			return
 		}
 		time.Sleep(pollInterval)
 	}
-	t.Fatalf("mutation never reached the remote without an explicit push, %s after lit new returned (default cadence should be on-change)", pollTimeout)
+	t.Fatalf("mutation never reached the remote without an explicit push, %s after lit new returned (default cadence should be on-change); last observation: %d arrived, error %v", pollTimeout, arrived, lastErr)
 }
 
 // isolatedEnv builds the child-env overrides for a test whose claim is about
@@ -176,43 +153,43 @@ func gitCurrentBranch(t *testing.T, dir string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// runDolt runs a dolt CLI subcommand to completion, failing the test on a
-// non-zero exit. dolt is this project's sanctioned test oracle (installed by
-// .github/workflows/ci.yml for that purpose), independent of lit's own
-// embedded engine and its path cache. Use tryDolt instead where a transient
-// failure (e.g. polling a remote mid-push) must not fail the test outright.
-func runDolt(t *testing.T, dir string, args ...string) string {
-	t.Helper()
-	out, err := tryDolt(dir, args...)
-	if err != nil {
-		t.Fatalf("dolt %s: %v\noutput:\n%s", strings.Join(args, " "), err, out)
-	}
-	return out
+// remoteObserver reads what a bare git remote holds through a second clone
+// with its own lit workspace. Nothing else in a test touches the clone and it
+// never syncs on its own, so data reaches it only through the remote.
+type remoteObserver struct {
+	dir, self string
+	env       map[string]string
 }
 
-// tryDolt runs a dolt CLI subcommand and returns its combined output and any
-// error, without failing the test — the non-fatal counterpart to runDolt.
-func tryDolt(dir string, args ...string) (string, error) {
-	cmd := exec.Command("dolt", args...)
-	cmd.Dir = dir
-	var out bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &out
-	err := cmd.Run()
-	return out.String(), err
+func newRemoteObserver(t *testing.T, base, remoteGit, self, xdgConfigHome string) remoteObserver {
+	t.Helper()
+	dir := filepath.Join(base, "observer")
+	runGit(t, base, "clone", remoteGit, dir)
+	o := remoteObserver{dir: dir, self: self, env: isolatedEnv(xdgConfigHome, "1")}
+	// runLit registers the clone's one worker join; count's polls run without
+	// queuing another per call.
+	if out, err := runLit(t, dir, self, o.env, "init", "--skip-hooks", "--skip-agents"); err != nil {
+		t.Fatalf("observer lit init: %v\noutput:\n%s", err, out)
+	}
+	return o
 }
 
-// doltRefCommitCount counts commits reachable from ref inside the dolt
-// database at dir, via a plain SQL count — ground truth independent of lit's
-// own freshness/ahead-count bookkeeping.
-func doltRefCommitCount(t *testing.T, dir, ref string) int {
-	t.Helper()
-	query := "select count(*) as n from dolt_log(" + strconv.Quote(ref) + ")"
-	out := runDolt(t, dir, "sql", "-q", query, "-r", "csv")
-	lines := strings.Split(strings.TrimSpace(out), "\n")
-	last := strings.TrimSpace(lines[len(lines)-1])
-	count, err := strconv.Atoi(last)
-	if err != nil {
-		t.Fatalf("parse dolt_log count from %q: %v", out, err)
+// count pulls the remote and counts the tickets under parent titled title. A
+// pull or list that fails returns its error, which a poll reads as "not yet"
+// and reports if the deadline passes.
+func (o remoteObserver) count(parent, title string) (int, error) {
+	if out, err := execLit(o.dir, o.self, o.env, "sync", "pull"); err != nil {
+		return 0, fmt.Errorf("observer lit sync pull: %w\n%s", err, out)
 	}
-	return count
+	out, err := execLit(o.dir, o.self, o.env, "ls", "--parent", parent, "--columns", "title")
+	if err != nil {
+		return 0, fmt.Errorf("observer lit ls: %w\n%s", err, out)
+	}
+	n := 0
+	for _, line := range strings.Split(out, "\n") {
+		if line == title {
+			n++
+		}
+	}
+	return n, nil
 }

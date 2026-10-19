@@ -157,12 +157,10 @@ func (s *Store) withEngineClosed(ctx context.Context, write func(holdCtx context
 
 // reopenEngine opens the engine closeEngine closed, under the store's own
 // open contract. A failure leaves the closed engine in place, so every query
-// after it fails loudly, and a holder record that is no longer held is not
-// retired twice.
+// after it fails loudly.
 func (s *Store) reopenEngine(ctx context.Context) error {
 	db, releaseEngineRecord, err := openEngine(ctx, s.doltRootDir, s.workspaceID, s.access)
 	if err != nil {
-		s.releaseEngineRecord = func() error { return nil }
 		return fmt.Errorf("reopen the engine: %w", err)
 	}
 	s.db, s.releaseEngineRecord = db, releaseEngineRecord

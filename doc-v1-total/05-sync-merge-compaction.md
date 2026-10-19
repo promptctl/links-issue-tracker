@@ -321,11 +321,9 @@ Snapshots are full directory copies of the database dir, used as the coarse reco
 
 ## Support packages
 
-Four small packages sit beside the sync machinery.
+Three small packages sit beside the sync machinery.
 
 **`internal/syncfile`** — JSON export files on disk. `WriteAtomic` marshals a `model.Export` as two-space-indented JSON with a trailing newline, replaces the target with it through `atomicfile.WriteFile` (mode `0o600`, durable), returning the lowercase-hex SHA-256 of the payload bytes (`internal/syncfile/syncfile.go`). `Read` parses a file back into an export (inheriting the v1→v2 history conversion in `Export.UnmarshalJSON`) and returns the same hash; `HashFile` hashes a file's bytes and returns `""` with no error for a missing file (`syncfile.go`). Because the hash covers the serialized bytes, any formatting change alters it.
-
-**`internal/doltcli`** — shell-out wrapper for an external `dolt` binary, distinct from the embedded engine. `MinSupportedVersion` is `1.81.10` (`internal/doltcli/doltcli.go`). `ParseVersion` extracts the first `\d+\.\d+\.\d+` from its input; `RequireMinimumVersion` runs `dolt version` in a directory and refuses with `"dolt %s+ is required, found %s"` when the installed version is older. `Run` executes arbitrary `dolt <args>` with combined output; failures carry the trimmed output in the error (`doltcli.go`).
 
 **`internal/engine`** — the one seam mapping an open mode to a store constructor; the only package above `internal/store` that names the Dolt engine's construction surface (`internal/engine/engine.go`). Three modes: `read-write` → `store.Open` (bootstraps an absent database, exclusive workspace lock), `read-only` → `store.OpenForRead` (requires an initialized database, shared lock), `sync` → `store.OpenSync` (handle held across network operations). An unknown mode — including the zero value — fails with `"invalid storage engine mode %q"` rather than defaulting to write access, and the return is the `storage.Store` interface with the concrete type erased (`engine.go`).
 

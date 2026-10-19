@@ -36,8 +36,6 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - uses: ./.github/actions/install-dolt
-
       - uses: ./.github/actions/install-claude
 
       - name: Build
@@ -93,8 +91,6 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-
-      - uses: ./.github/actions/install-dolt
 
       - uses: ./.github/actions/install-claude
 
