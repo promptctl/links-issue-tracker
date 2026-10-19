@@ -386,7 +386,10 @@ func (e *Engine) ancestorChain(id string) ([]string, error) {
 			return chain, nil
 		}
 		if _, looped := seen[parent]; looped {
-			return nil, fmt.Errorf("ancestor chain of %s: parent cycle at %s", id, parent)
+			// The chain from parent up to the last hop is the loop, each the
+			// child of the next. [LAW:single-enforcer] one refusal type names a
+			// loop to the CLI, whichever read met it.
+			return nil, fmt.Errorf("ancestor chain of %s: %w", id, storage.ParentCycleError{Cycle: chain[slices.Index(chain, parent):]})
 		}
 		seen[parent] = struct{}{}
 		chain = append(chain, parent)

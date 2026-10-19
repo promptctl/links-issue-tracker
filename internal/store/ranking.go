@@ -790,7 +790,10 @@ func ancestorChain(ctx context.Context, q rowQueryer, id string) ([]string, erro
 			return nil, fmt.Errorf("ancestor chain of %s: %w", id, err)
 		}
 		if _, ok := seen[parent]; ok {
-			return nil, fmt.Errorf("ancestor chain of %s: parent cycle at %s", id, parent)
+			// The chain from parent up to the last hop is the loop, each the
+			// child of the next. [LAW:single-enforcer] one refusal type names a
+			// loop to the CLI, whichever read met it.
+			return nil, fmt.Errorf("ancestor chain of %s: %w", id, storage.ParentCycleError{Cycle: chain[slices.Index(chain, parent):]})
 		}
 		seen[parent] = struct{}{}
 		chain = append(chain, parent)

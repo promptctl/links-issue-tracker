@@ -12,9 +12,10 @@ import (
 // edges, and an epic's state is derived from its children's. A parent cycle has
 // no root, so no epic in it has a state to derive. The write boundary refuses
 // the edge that would close a loop (rejectParentCycle), a write that lands an
-// export whole cuts every loop the export holds (BreakParentCycles), and a loop
-// stored before either rule existed is refused by every read that would derive
-// from it (ParentCycleError) and named by Doctor. [LAW:single-enforcer]
+// export whole cuts every loop the export holds (BreakParentCycles), a sync's
+// lift of a historical commit cuts every loop that commit holds (Unloop), and a
+// loop stored before these rules existed is refused by every read that would
+// derive from it (ParentCycleError) and named by Doctor. [LAW:single-enforcer]
 
 // ParentCycleRepair is the repair every report of a stored parent loop names.
 // A loop is usually leaves, and a leaf cannot be detached, so the first way is
@@ -34,7 +35,7 @@ type ParentCycleError struct {
 }
 
 func (e ParentCycleError) Error() string {
-	return fmt.Sprintf("parent cycle: %s (a hierarchy has no root once it loops, so no epic in it has a state to derive — %s, then retry)", strings.Join(e.Cycle, " -> "), ParentCycleRepair)
+	return fmt.Sprintf("parent cycle: %s (a hierarchy has no root once it loops, so no epic in it has a state to derive — %s)", strings.Join(e.Cycle, " -> "), ParentCycleRepair)
 }
 
 // ParentCycle returns the members of one loop in the hierarchy, in walk order,
@@ -106,12 +107,34 @@ type Unlooped struct {
 	Cycle   []string `json:"cycle"`
 }
 
-// BreakParentCycles returns export with every parent loop cut, and names each
-// edge it cut, in the order it cut them. In each loop the edge that goes is the
-// one held by the member with the greatest id, onto the next member of the
-// loop: a choice every clone computes identically from the same data, so two
-// clones landing one backlog cut the same edge. Each pass cuts one edge, so it
-// ends. An export with no loop comes back unchanged with nothing named.
+// Unloop names the parent edges that cut every loop in the parent graph
+// parentOf maps out, in the order it cuts them. In each loop the edge that goes
+// is the one held by the member with the greatest id, onto the next member of
+// the loop: a choice every clone computes identically from the same data, so
+// two clones landing one backlog, or one clone reading the same commit twice,
+// cut the same edge. Each pass cuts one edge, so it ends. A forest names
+// nothing. parentOf is left as it was.
+//
+// [LAW:one-source-of-truth] The landing (BreakParentCycles) and the store's
+// lift of a historical commit cut by this one rule.
+func Unloop(parentOf map[string][]string) []Unlooped {
+	remaining := make(map[string][]string, len(parentOf))
+	for child, parents := range parentOf {
+		remaining[child] = slices.Clone(parents)
+	}
+	var unlooped []Unlooped
+	for cycle := ParentCycle(remaining); len(cycle) > 0; cycle = ParentCycle(remaining) {
+		at := slices.Index(cycle, slices.Max(cycle))
+		cut := Unlooped{IssueID: cycle[at], Parent: cycle[(at+1)%len(cycle)], Cycle: cycle}
+		remaining[cut.IssueID] = slices.DeleteFunc(remaining[cut.IssueID], func(parent string) bool { return parent == cut.Parent })
+		unlooped = append(unlooped, cut)
+	}
+	return unlooped
+}
+
+// BreakParentCycles returns export with every parent loop cut by Unloop's rule,
+// and names each edge it cut, in the order it cut them. An export with no loop
+// comes back unchanged with nothing named.
 //
 // It is pure. [LAW:effects-at-boundaries]
 func BreakParentCycles(export model.Export) (model.Export, []Unlooped) {
@@ -121,13 +144,7 @@ func BreakParentCycles(export model.Export) (model.Export, []Unlooped) {
 			parentOf[relation.SrcID] = append(parentOf[relation.SrcID], relation.DstID)
 		}
 	}
-	var unlooped []Unlooped
-	for cycle := ParentCycle(parentOf); len(cycle) > 0; cycle = ParentCycle(parentOf) {
-		at := slices.Index(cycle, slices.Max(cycle))
-		cut := Unlooped{IssueID: cycle[at], Parent: cycle[(at+1)%len(cycle)], Cycle: cycle}
-		parentOf[cut.IssueID] = slices.DeleteFunc(parentOf[cut.IssueID], func(parent string) bool { return parent == cut.Parent })
-		unlooped = append(unlooped, cut)
-	}
+	unlooped := Unloop(parentOf)
 	if len(unlooped) == 0 {
 		return export, nil
 	}

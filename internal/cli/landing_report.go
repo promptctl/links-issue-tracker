@@ -25,9 +25,10 @@ func writeLanding(w io.Writer, backlog string, landing storage.Landing) error {
 
 // writeUnlooped reports the parent edges a landing cut because each closed a
 // loop: a header with the count, then one line per cut naming the loop it
-// broke. The landing chose which edge goes, so each line names the reparent
-// that puts the child back where it belongs. Ids may have arrived from a
-// remote, so each is quoted like every remote-authored id.
+// broke. The landing chose which edge goes, and the parent it took is the one
+// place the child cannot go back to without closing the loop again, so the
+// header names the reparent and leaves the epic to the operator. Ids may have
+// arrived from a remote, so each is quoted like every remote-authored id.
 func writeUnlooped(w io.Writer, backlog string, unlooped []storage.Unlooped) error {
 	if len(unlooped) == 0 {
 		return nil
