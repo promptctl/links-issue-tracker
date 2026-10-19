@@ -576,6 +576,7 @@ func (r *commandRegistrar) wsCmdPipeline(dispatch func(args []string) (wsLeaf, w
 		if err != nil {
 			return err
 		}
+		reportUnknownConfigKeys(r.ctx, ws.RootDir)
 		return l.work(r.ctx, r.stdout, ws, positional)
 	}
 }

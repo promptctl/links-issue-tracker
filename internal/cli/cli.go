@@ -178,6 +178,7 @@ func runWithApp(ctx context.Context, stdout io.Writer, accessMode app.AccessMode
 	// is closed, and the close happens in the inner function below (including on
 	// panic, as a deferred close) so it always precedes the automatic sync below.
 	ws := ap.Workspace
+	reportUnknownConfigKeys(ctx, ws.RootDir)
 	runErr := func() error {
 		defer ap.Close()
 		reportOpenMigration(ctx, storage.OpenMigration(ap.Store))

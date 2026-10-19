@@ -1,9 +1,12 @@
 package config
 
 import (
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -300,6 +303,116 @@ soil_mode = true
 	}
 	if !cfg.Quickstart.SoilMode {
 		t.Fatal("expected soil_mode=true from the file that also carries retired sections")
+	}
+}
+
+// The settings table is exactly the keys Load decodes into Config, plus
+// claims.freshness_window, which parseFreshnessWindow reads instead of the
+// struct tag. A key missing from the table would be reported as unknown while
+// Load reads it; a key the table holds that Config does not decode would be
+// accepted and change nothing.
+func TestSettingsAreTheKeysLoadReads(t *testing.T) {
+	want := []string{"claims.freshness_window"}
+	config := reflect.TypeOf(Config{})
+	for i := range config.NumField() {
+		section := config.Field(i)
+		for j := range section.Type.NumField() {
+			tag := section.Type.Field(j).Tag.Get("mapstructure")
+			if tag != "-" {
+				want = append(want, section.Tag.Get("mapstructure")+"."+tag)
+			}
+		}
+	}
+	got := slices.Collect(maps.Keys(settings))
+	slices.Sort(got)
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Fatalf("settings keys = %v, want the keys Load reads: %v", got, want)
+	}
+}
+
+// UnknownKeys names every key a layer sets that is no setting, with the file
+// that sets it, and passes over every key that is one, including the
+// top-level required_fields spelling.
+func TestUnknownKeysNamesEachKeyAndItsFile(t *testing.T) {
+	globalRoot := t.TempDir()
+	globalDir := filepath.Join(globalRoot, "links-issue-tracker")
+	if err := os.MkdirAll(globalDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	globalFile := filepath.Join(globalDir, "config.toml")
+	globalContent := `
+required_fields = ["title"]
+
+[snapshot]
+retention_budgt = 2
+retention_budget = 3
+
+[init]
+install_hooks = false
+`
+	if err := os.WriteFile(globalFile, []byte(globalContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", globalRoot)
+
+	workspaceRoot := t.TempDir()
+	projectDir := filepath.Join(workspaceRoot, ".lit")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	projectFile := filepath.Join(projectDir, "config.toml")
+	projectContent := `
+[sync]
+cadence = "on-push"
+future_setting = 1
+
+[claims]
+freshness_window = "2h"
+`
+	if err := os.WriteFile(projectFile, []byte(projectContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := UnknownKeys(pathspec.New(workspaceRoot))
+	if err != nil {
+		t.Fatalf("UnknownKeys error = %v", err)
+	}
+	want := []UnknownKey{
+		{Key: "init.install_hooks", File: globalFile},
+		{Key: "snapshot.retention_budgt", File: globalFile},
+		{Key: "sync.future_setting", File: projectFile},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("UnknownKeys = %#v, want %#v", got, want)
+	}
+}
+
+// With no config file in either layer there is nothing unknown, and the list
+// is empty rather than nil, so "checked and found none" encodes as [].
+func TestUnknownKeysIsEmptyWithNoConfigFiles(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	got, err := UnknownKeys(pathspec.New(t.TempDir()))
+	if err != nil || got == nil || len(got) != 0 {
+		t.Fatalf("UnknownKeys = %#v, %v; want an empty, non-nil list", got, err)
+	}
+}
+
+// A layer that does not parse cannot be checked, and the error names it.
+func TestUnknownKeysReportsAnUnparseableLayer(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	workspaceRoot := t.TempDir()
+	projectFile := filepath.Join(workspaceRoot, ".lit", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(projectFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(projectFile, []byte("[sync\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := UnknownKeys(pathspec.New(workspaceRoot)); err == nil || !strings.Contains(err.Error(), projectFile) {
+		t.Fatalf("UnknownKeys error = %v, want one naming %s", err, projectFile)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -125,10 +126,10 @@ const (
 // syncCadences is the closed set of legal cadence values in documentation
 // order. [LAW:one-source-of-truth] valid() and syncCadenceValues() both derive
 // from this one list, so validation and the error message cannot drift from
-// each other. The shipped default (Load's `v.SetDefault` call) is a separate,
-// independently chosen literal — deliberately not "whichever value is first in
-// this list" — so reordering this list alone never changes which cadence a
-// workspace with no config file falls into.
+// each other. The shipped default (sync.cadence in the settings table) is a
+// separate, independently chosen literal — deliberately not "whichever value is
+// first in this list" — so reordering this list alone never changes which
+// cadence a workspace with no config file falls into.
 var syncCadences = []SyncCadence{SyncCadenceOnPush, SyncCadenceOnChange}
 
 func (c SyncCadence) valid() bool {
@@ -183,6 +184,64 @@ func StateDir() (string, error) {
 	return filepath.Join(home, ".local", "state", appDirName), nil
 }
 
+// settings is every key a config layer can set, with the value it takes when
+// no layer sets it. [LAW:one-source-of-truth] Load's defaults and the keys
+// UnknownKeys accepts are both this table, and TestSettingsAreTheKeysLoadReads
+// holds it to the keys Load decodes, so a key cannot be read without a default
+// or accepted without being read.
+var settings = map[string]any{
+	"ready.required_fields":     []string{},
+	"quickstart.soil_mode":      false,
+	"snapshot.retention_budget": 5,
+	"sync.cadence":              string(SyncCadenceOnChange),
+	"sync.receive":              true,
+	"sync.owner_notify_cmd":     "",
+	"claims.freshness_window":   "6h",
+}
+
+// legacyRequiredFieldsKey is the top-level spelling of ready.required_fields.
+// It has no default of its own: each layer's value is appended to that layer's
+// ready.required_fields list by mergeConfigFile.
+const legacyRequiredFieldsKey = "required_fields"
+
+// isSetting reports whether a key a config layer sets is one Load reads.
+func isSetting(key string) bool {
+	_, ok := settings[key]
+	return ok || key == legacyRequiredFieldsKey
+}
+
+// UnknownKey is a key a config file sets that is no setting of lit's, so
+// setting it changes nothing: a misspelling, a removed setting, or one a newer
+// lit added.
+type UnknownKey struct {
+	Key  string `json:"key"`
+	File string `json:"file"`
+}
+
+// UnknownKeys lists the keys each config layer sets that are no setting, in
+// precedence order and alphabetically within a file. Load does not refuse
+// them: the project layer is committed and read by clones on older lits, so
+// refusing a key a newer lit added would break every command on those clones.
+// Keys are as viper reads them, lowercased, which is also how Load matches
+// them to settings.
+func UnknownKeys(workspaceRoot pathspec.PathSpec) ([]UnknownKey, error) {
+	unknown := []UnknownKey{}
+	for _, layer := range configLayers(workspaceRoot) {
+		file, err := readLayer(layer)
+		if err != nil {
+			return nil, err
+		}
+		keys := file.AllKeys()
+		slices.Sort(keys)
+		for _, key := range keys {
+			if !isSetting(key) {
+				unknown = append(unknown, UnknownKey{Key: key, File: layer.String()})
+			}
+		}
+	}
+	return unknown, nil
+}
+
 // layers is the config precedence chain: merged in slice order, so later
 // layers override earlier ones. [LAW:one-source-of-truth] This ordering is
 // the only encoding of global-vs-project precedence.
@@ -213,14 +272,9 @@ func (l layers) merge(v *viper.Viper) ([]string, error) {
 // A missing file is not an error; defaults are returned.
 func Load(workspaceRoot pathspec.PathSpec) (Config, error) {
 	v := viper.New()
-
-	v.SetDefault("ready.required_fields", []string{})
-	v.SetDefault("quickstart.soil_mode", false)
-	v.SetDefault("snapshot.retention_budget", 5)
-	v.SetDefault("sync.cadence", string(SyncCadenceOnChange))
-	v.SetDefault("sync.receive", true)
-	v.SetDefault("sync.owner_notify_cmd", "")
-	v.SetDefault("claims.freshness_window", "6h")
+	for key, value := range settings {
+		v.SetDefault(key, value)
+	}
 
 	required, err := configLayers(workspaceRoot).merge(v)
 	if err != nil {
@@ -273,23 +327,33 @@ func projectConfigPath(workspaceRoot pathspec.PathSpec) pathspec.PathSpec {
 }
 
 func mergeConfigFile(v *viper.Viper, path pathspec.PathSpec) ([]string, error) {
-	// An absent layer contributes nothing — genuine optionality the type declares.
-	if path.IsEmpty() {
-		return nil, nil
-	}
-	fileConfig := viper.New()
-	fileConfig.SetConfigFile(path.String())
-	if err := fileConfig.ReadInConfig(); err != nil {
-		var notFound viper.ConfigFileNotFoundError
-		if errors.As(err, &notFound) || os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("parse config %s: %w", path, err)
+	fileConfig, err := readLayer(path)
+	if err != nil {
+		return nil, err
 	}
 	if err := v.MergeConfigMap(fileConfig.AllSettings()); err != nil {
 		return nil, fmt.Errorf("merge config %s: %w", path, err)
 	}
 	required := fileConfig.GetStringSlice("ready.required_fields")
-	required = append(required, fileConfig.GetStringSlice("required_fields")...)
+	required = append(required, fileConfig.GetStringSlice(legacyRequiredFieldsKey)...)
 	return required, nil
+}
+
+// readLayer parses one config layer. A layer with no path, or no file at its
+// path, reads as a file that sets nothing, so its callers have no absent case
+// of their own. [LAW:dataflow-not-control-flow]
+func readLayer(path pathspec.PathSpec) (*viper.Viper, error) {
+	if path.IsEmpty() {
+		return viper.New(), nil
+	}
+	file := viper.New()
+	file.SetConfigFile(path.String())
+	if err := file.ReadInConfig(); err != nil {
+		var notFound viper.ConfigFileNotFoundError
+		if errors.As(err, &notFound) || os.IsNotExist(err) {
+			return viper.New(), nil
+		}
+		return nil, fmt.Errorf("parse config %s: %w", path, err)
+	}
+	return file, nil
 }
