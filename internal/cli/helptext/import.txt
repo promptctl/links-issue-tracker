@@ -163,12 +163,11 @@ Results
   already had the parent stated; and, when the file ranks, the order
   written, as lit rank set reports it.
 
-  On any failure, issues created earlier in the same run are rolled back
-  on a best-effort basis by deleting them; reparents and updates already
-  applied, and the order a YAML file wrote, are not rolled back, since
-  there is no prior state to restore, and an error at the order or at an
-  update names what stays written, as does a failure after the
-  reparents. If the error
+  On any failure, a YAML file's reparents are undone, putting each moved
+  issue back under the parents it had, and issues created earlier in the
+  same run are rolled back on a best-effort basis by deleting them.
+  Updates already applied, and the order a YAML file wrote, are not
+  rolled back, and the error names what stays written. If the error
   reports that rollback leaked IDs, run lit doctor.
 
   A full-database export is a different shape than either format above;

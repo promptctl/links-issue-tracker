@@ -19,9 +19,10 @@ import (
 // each update document's patch. Reparents come before the edges so each edge
 // is judged on the hierarchy the file ends with, and before the ordering
 // because `rank: top` stacks an issue in the frame its parent makes. On any
-// failure mid-batch, BulkApply best-effort rolls back issues it created in
-// this call (never issues it updated — an update has no "prior create" to
-// unwind) and returns what stays written beside the error; updates come last,
+// failure mid-batch, BulkApply puts back the parents its reparents replaced,
+// best-effort rolls back issues it created in this call (never issues it
+// updated — an update has no "prior create" to unwind) and returns what stays
+// written beside the error; updates come last,
 // so a failing create, reparent, edge, or ordering leaves no update applied.
 // Run `lit doctor` after a failed batch to detect orphans left if rollback
 // itself failed. [LAW:single-enforcer] one boundary owns ID
@@ -43,7 +44,17 @@ func (s *Store) BulkApply(ctx context.Context, prefix, actor string, specs []sto
 
 	result := storage.BulkApplyResult{}
 	createdIDs := make([]string, 0, len(file.Creates))
+	var reparents storage.ReparentStep
 	refuse := func(err error) (storage.BulkApplyResult, error) {
+		if len(reparents.Moved) > 0 {
+			if undoErr := s.withMutation(ctx, "bulk reparent undo", func(ctx context.Context, tx *sql.Tx) error {
+				return reparents.Undo(parentWriterTx{ctx: ctx, tx: tx, actor: actor, now: s.clock.Now()})
+			}); undoErr != nil {
+				err = fmt.Errorf("%w; %w", err, undoErr)
+			} else {
+				result.Reparented = nil
+			}
+		}
 		leaked := s.rollbackCreatedIssues(ctx, actor, createdIDs)
 		return result.AfterRollback(), fmt.Errorf("%w; %s (rollback leaked %d: %s)", err, result.Kept(), len(leaked), strings.Join(leaked, ","))
 	}
@@ -63,11 +74,13 @@ func (s *Store) BulkApply(ctx context.Context, prefix, actor string, specs []sto
 		resolve := func(ref string) string { return resolveBulkRef(ref, localRealID) }
 		if err := s.withMutation(ctx, "bulk reparent", func(ctx context.Context, tx *sql.Tx) error {
 			var err error
-			result.Reparented, result.ParentHeld, err = file.WriteReparents(resolve, parentWriterTx{ctx: ctx, tx: tx, actor: actor, now: s.clock.Now()})
+			reparents, err = file.WriteReparents(resolve, parentWriterTx{ctx: ctx, tx: tx, actor: actor, now: s.clock.Now()})
 			return err
 		}); err != nil {
+			reparents = storage.ReparentStep{}
 			return refuse(err)
 		}
+		result.Reparented, result.ParentHeld = reparents.Moved, reparents.Held
 	}
 	for i, create := range file.Creates {
 		for _, dep := range create.BlockedBy {
@@ -126,6 +139,41 @@ func (w parentWriterTx) Detach(childID string) error {
 
 func (w parentWriterTx) Attach(childID, parentID string) error {
 	return addRelationTx(w.ctx, w.tx, w.edge(childID, parentID))
+}
+
+func (w parentWriterTx) Parents(childID string) ([]model.Relation, error) {
+	rows, err := w.tx.QueryContext(w.ctx, `SELECT src_id, dst_id, type, created_at, created_by FROM relations WHERE src_id = ? AND type = 'parent-child'`, childID)
+	if err != nil {
+		return nil, fmt.Errorf("list parent relations: %w", err)
+	}
+	defer rows.Close()
+	var edges []model.Relation
+	for rows.Next() {
+		var rel model.Relation
+		var createdAt string
+		if err := rows.Scan(&rel.SrcID, &rel.DstID, &rel.Type, &createdAt, &rel.CreatedBy); err != nil {
+			return nil, err
+		}
+		if rel.CreatedAt, err = scanTime(createdAt); err != nil {
+			return nil, err
+		}
+		edges = append(edges, rel)
+	}
+	return edges, rows.Err()
+}
+
+// Restore writes edges back raw, as import restore does: they are the rows
+// Parents read, so no rule judges them again. [LAW:one-source-of-truth]
+func (w parentWriterTx) Restore(childID string, edges []model.Relation) error {
+	if _, err := detachParentsTx(w.ctx, w.tx, childID); err != nil {
+		return err
+	}
+	for _, rel := range edges {
+		if err := insertRelationTx(w.ctx, w.tx, rel); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // resolveBulkRef resolves a parent/blocked_by reference against this batch's

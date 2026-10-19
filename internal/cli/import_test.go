@@ -559,22 +559,20 @@ func TestRunImportEventCountsWhatTheFileWrote(t *testing.T) {
 	assertFacts(t, map[string]string{"import.created": "1", "import.updated": "1", "import.ranked": "1", "import.reparented": "1", "import.parent_held": "1"})
 }
 
-// A file refused after its reparents landed keeps them, and the invocation's
-// event counts them: the hierarchy changed though the import failed.
+// A file refused at an update keeps the updates applied before it, and the
+// invocation's event counts them, and counts no reparent: the refusal put the
+// moved issue back.
 func TestRunImportEventCountsWhatARefusedFileKept(t *testing.T) {
 	isolateEvents(t)
 	dir := newInitTestRepo(t)
 	from := newEpicInDir(t, dir, "from")
 	to := newEpicInDir(t, dir, "to")
 	mover := extractTicketID(t, runCLIInDir(t, dir, "new", "--type", "task", "--title", "mover", "--topic", "demo", "--parent", from))
-	stayer := extractTicketID(t, runCLIInDir(t, dir, "new", "--type", "task", "--title", "stayer", "--topic", "demo", "--parent", to))
-	// Two leaves of one epic ranked with an issue outside it is an order the
-	// store refuses, after the reparent is written.
-	yaml := writeImportFile(t, "refused.yaml", fmt.Sprintf("id: %s\nparent: %s\nrank: top\n---\nid: %s\nrank: top\n---\nid: %s\nrank: top\n", mover, to, stayer, from))
+	yaml := writeImportFile(t, "refused.yaml", fmt.Sprintf("id: %s\nparent: %s\ntitle: renamed\n---\nid: missing-1\ntitle: ghost\n", mover, to))
 	if out, err := runCLIInDirAllowError(t, dir, "import", "--path", yaml); err == nil {
-		t.Fatalf("import succeeded; want the order refused:\n%s", out)
+		t.Fatalf("import succeeded; want the missing update refused:\n%s", out)
 	}
-	assertFacts(t, map[string]string{"import.created": "0", "import.updated": "0", "import.ranked": "0", "import.reparented": "1", "import.parent_held": "0"})
+	assertFacts(t, map[string]string{"import.created": "0", "import.updated": "1", "import.ranked": "0", "import.reparented": "0", "import.parent_held": "0"})
 }
 
 func assertFacts(t *testing.T, want map[string]string) {

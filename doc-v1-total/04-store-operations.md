@@ -104,7 +104,7 @@ Execution (`import_bulk.go`): the shared gate, `storage.ParseBulkFile`, returns 
 
 Differences from tree import, condensed: JSON array vs multi-document YAML; create-only vs create+update; `local_id` required vs optional; internal-only references vs pass-through externals; `lane` unsettable vs settable; `reason` absent vs update-only; actor always `links` vs `--by` on updates; result `id_map` vs `{created map, updated list}`.
 
-**There is no batching**: every document is its own `withMutation` transaction and its own Dolt commit; no store-layer progress reporting exists — the CLI prints only after the whole call returns (`import_bulk.go`; `cli.go`). Partial failure is not transactional: rollback soft-deletes only this call's creates, never updates that already landed, which stay applied (`import_bulk.go`).
+**There is no batching**: every document is its own `withMutation` transaction and its own Dolt commit; no store-layer progress reporting exists — the CLI prints only after the whole call returns (`import_bulk.go`; `cli.go`). Partial failure is not transactional: rollback puts back the parents the update documents' reparents replaced, then soft-deletes this call's creates; updates that already landed stay applied (`import_bulk.go`).
 
 CLI: `--by` with a file containing no update document is a usage error. Output: `created %d issues` + per-entry `ref -> real` lines, then `updated %d issues` + ids in apply order; when an update states a parent, `reparented %d issues` and `%d issues already had the parent the file states`, each + ids.
 

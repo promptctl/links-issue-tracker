@@ -17,8 +17,8 @@ import (
 // the caller is told: a batch that fails partway undoes the issues it created
 // and names every one it could not undo, so a partial application is always
 // reported rather than inferred, and it returns what stays written beside the
-// error. The update documents' reparents are written after the creates as one
-// step and before the creates' blocked_by edges, so each edge is judged on the
+// error, having put back the parents its reparents replaced. The update
+// documents' reparents are written after the creates as one step and before the creates' blocked_by edges, so each edge is judged on the
 // hierarchy the file ends with; the file's ordering follows as one RankSet,
 // and updates are applied last, so a failing create, reparent, edge, or
 // ordering leaves none applied, but a failing update does not revert the ones
@@ -41,7 +41,13 @@ func (e *Engine) BulkApply(ctx context.Context, prefix, actor string, specs []st
 
 	batch := newBatch(len(specs))
 	result := storage.BulkApplyResult{}
+	var reparents storage.ReparentStep
 	refuse := func(err error) (storage.BulkApplyResult, error) {
+		if undoErr := reparents.Undo(parentWriter{e: e, actor: actor}); undoErr != nil {
+			err = fmt.Errorf("%w; %w", err, undoErr)
+		} else {
+			result.Reparented = nil
+		}
 		return result.AfterRollback(), e.compensate(batch, actor, fmt.Errorf("%w; %s", err, result.Kept()))
 	}
 	for _, create := range file.Creates {
@@ -52,9 +58,10 @@ func (e *Engine) BulkApply(ctx context.Context, prefix, actor string, specs []st
 		batch.created(create.Index, create.LocalID, issue.ID)
 	}
 	result.Created = batch.createdMappings()
-	if result.Reparented, result.ParentHeld, err = e.reparent(file, batch.resolve, actor); err != nil {
+	if reparents, err = e.reparent(file, batch.resolve, actor); err != nil {
 		return refuse(err)
 	}
+	result.Reparented, result.ParentHeld = reparents.Moved, reparents.Held
 	for _, create := range file.Creates {
 		for _, dep := range create.BlockedBy {
 			if err := e.wireDependency(batch.realID(create.Index), batch.resolve(dep), actor); err != nil {
@@ -110,12 +117,13 @@ func (e *Engine) ImportTree(ctx context.Context, prefix, actor string, specs []s
 // reparent writes a file's reparents whole or not at all: a refusal restores
 // the relations as they were before the first, since a relation write changes
 // nothing else in this engine.
-func (e *Engine) reparent(file storage.BulkFile, resolve func(string) string, actor string) (moved, held []string, err error) {
+func (e *Engine) reparent(file storage.BulkFile, resolve func(string) string, actor string) (storage.ReparentStep, error) {
 	before := slices.Clone(e.relations)
-	if moved, held, err = file.WriteReparents(resolve, parentWriter{e: e, actor: actor}); err != nil {
+	step, err := file.WriteReparents(resolve, parentWriter{e: e, actor: actor})
+	if err != nil {
 		e.relations = before
 	}
-	return moved, held, err
+	return step, err
 }
 
 // parentWriter is a bulk file's hierarchy write: the writes `lit parent set`
@@ -134,6 +142,22 @@ func (w parentWriter) Clear(childID string) error { return w.e.clearParent(child
 
 func (w parentWriter) Detach(childID string) error {
 	w.e.detachParents(childID)
+	return nil
+}
+
+func (w parentWriter) Parents(childID string) ([]model.Relation, error) {
+	var edges []model.Relation
+	for _, rel := range w.e.relations {
+		if rel.SrcID == childID && rel.Type == model.RelParentChild {
+			edges = append(edges, rel)
+		}
+	}
+	return edges, nil
+}
+
+func (w parentWriter) Restore(childID string, edges []model.Relation) error {
+	w.e.detachParents(childID)
+	w.e.relations = append(w.e.relations, edges...)
 	return nil
 }
 

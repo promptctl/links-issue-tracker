@@ -187,28 +187,44 @@ func aBulkFileRanksIssuesInTheFrameItMovesThemTo(t *testing.T, ctx context.Conte
 	assertIssueIDs(t, "the new epic's children", mustChildren(t, ctx, st, created), []string{second.ID, first.ID})
 }
 
-// aBulkFileRefusedAtItsOrderingNamesTheReparentsItKept: reparents are written
-// before the ordering, and an order the store refuses cannot take them back,
-// so the refusal names them. [LAW:no-silent-failure]
-func aBulkFileRefusedAtItsOrderingNamesTheReparentsItKept(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+// aBulkFileRefusedAfterItsReparentsPutsBackTheParents: reparents are written
+// before the file's edges, ordering and updates, so a refusal at any of those
+// puts every moved issue back under the parents it had — whether the file
+// moved it under an existing epic or under one it creates, which the refusal
+// deletes — and the result reports no reparent kept. [LAW:no-silent-failure]
+func aBulkFileRefusedAfterItsReparentsPutsBackTheParents(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	from := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "from", Topic: "core", IssueType: model.TypeEpic})
 	to := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "to", Topic: "core", IssueType: model.TypeEpic})
 	mover := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "mover", Topic: "core", ParentID: from.ID})
 	stayer := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "stayer", Topic: "core", ParentID: to.ID})
+	nested := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "nested", Topic: "core", IssueType: model.TypeEpic, ParentID: from.ID})
 	top := "top"
 	// Two leaves of one epic ranked together with an issue outside it is an
 	// order the store refuses.
 	result, err := st.BulkApply(ctx, prefix, "ada", []storage.BulkIssueSpec{
 		{ID: mover.ID, Parent: ptr(to.ID), Rank: &top},
+		{ID: nested.ID, Parent: ptr("")},
 		{ID: stayer.ID, Rank: &top},
 		{ID: from.ID, Rank: &top},
 	})
-	want := fmt.Sprintf("kept 1 reparents [%s]", mover.ID)
-	if err == nil || !strings.Contains(err.Error(), want) {
-		t.Fatalf("BulkApply error = %v, want it to name what it kept: %q", err, want)
+	if err == nil || !strings.Contains(err.Error(), "kept 0 reparents") {
+		t.Fatalf("BulkApply error = %v, want the order refused with no reparent kept", err)
 	}
-	assertStrings(t, "the kept reparent", parentsOf(t, ctx, st, mover.ID), []string{to.ID})
-	assertStrings(t, "the refusal's result, reparented", result.Reparented, []string{mover.ID})
+	assertStrings(t, "the mover's parents", parentsOf(t, ctx, st, mover.ID), []string{from.ID})
+	assertStrings(t, "the cleared epic's parents", parentsOf(t, ctx, st, nested.ID), []string{from.ID})
+	assertStrings(t, "the refusal's result, reparented", result.Reparented, nil)
+
+	title, topic, epicType, ghost := "new home", "core", "epic", "renamed"
+	if _, err := st.BulkApply(ctx, prefix, "ada", []storage.BulkIssueSpec{
+		{LocalID: "new", Title: &title, Topic: &topic, IssueType: &epicType},
+		{ID: mover.ID, Parent: ptr("new")},
+		{ID: nested.ID, Parent: ptr("new")},
+		{ID: "missing-1", Title: &ghost},
+	}); err == nil {
+		t.Fatal("BulkApply updating a missing issue succeeded; want it refused")
+	}
+	assertStrings(t, "the mover's parents after its new epic was rolled back", parentsOf(t, ctx, st, mover.ID), []string{from.ID})
+	assertStrings(t, "the nested epic's parents after its new epic was rolled back", parentsOf(t, ctx, st, nested.ID), []string{from.ID})
 }
 
 // aBulkFileJudgesItsBlockedByOnTheHierarchyItEndsWith: a create's blocked_by
