@@ -787,13 +787,13 @@ func TestRenderNextOutcomeTerminalOutcomesKeepTheirType(t *testing.T) {
 			// an on-path row step 4 walked and rejected, and an off-path row
 			// it never examined.
 			name: "no work withheld by focus scope",
-			outcome: NoWork{Unreachable: []rowReach{
-				{ID: "links-gate-onpath", Kind: reachNotReady},
-				{ID: "links-other-offpath", Kind: reachOffFocusPath},
-			}},
+			outcome: NoWork{
+				Unreachable: []rowReach{{ID: "links-gate-onpath", reading: reading{Kind: reachNotReady}}},
+				OffPath:     []string{"links-other-offpath"},
+			},
 			wantReason: "no_ready_work",
 			wantAct:    "lit next --all",
-			// withheldByScope stamps the off-path row without ever running
+			// withheldByScope names the off-path row without ever running
 			// capacityFor on it, so the remediation holds no reading of its
 			// capacity and may pass no verdict on it — in any wording, which
 			// is why the pin is the bare word and not one sentence's phrasing.

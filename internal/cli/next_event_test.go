@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -13,20 +14,25 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 )
 
-// Every reach kind has its own name on the event; a kind left unnamed would
-// record a blocker with no reach at all.
+// Every reach the event records has its own name: each kind, and the two lists
+// that are not kinds. A kind left unnamed would record a blocker with no reach
+// at all, and a shared name would record two answers as one.
 func TestEveryReachKindHasAnEventName(t *testing.T) {
-	seen := map[string]reachKind{}
-	for kind := reachKind(0); kind < reachKindCount; kind++ {
-		name := reachKindNames[kind]
-		if name == "" {
-			t.Errorf("reach kind %d has no event name", kind)
+	seen := map[string]string{}
+	name := func(what, reach string) {
+		if reach == "" {
+			t.Errorf("%s has no event name", what)
 		}
-		if other, dup := seen[name]; dup {
-			t.Errorf("reach kinds %d and %d share the event name %q", other, kind, name)
+		if other, dup := seen[reach]; dup {
+			t.Errorf("%s and %s share the event name %q", other, what, reach)
 		}
-		seen[name] = kind
+		seen[reach] = what
 	}
+	for kind, reach := range reachKindNames {
+		name(fmt.Sprintf("reach kind %d", kind), reach)
+	}
+	name("an out-of-view blocker", outOfViewReach)
+	name("an off-path row", offFocusPathReach)
 }
 
 // writtenFacts is the event's facts as the events file holds them.
@@ -58,6 +64,11 @@ func rowFor(id string) annotation.AnnotatedIssue {
 	return annotation.AnnotatedIssue{Issue: model.Issue{ID: id}}
 }
 
+// readThrough is a dependency the run read through the gathered ticket under it.
+func readThrough(id, ticket string, kind reachKind) depReach {
+	return depReach{ID: id, Best: &reading{Row: rowFor(ticket), Kind: kind}}
+}
+
 // An exhausted scope's event says how far the scope had come, names every
 // blocker and held row with what this checkout may do about each, whether a
 // ticket filed here could free each blocker, and whether the route that stays
@@ -76,10 +87,10 @@ func TestNextRecordsWhatAnExhaustedScopeNamed(t *testing.T) {
 				Epics:    []string{"test-epic"},
 				Progress: claims.Progress{Done: 3, Total: 5},
 				Blocked: []blockerReach{
-					{rowReach: rowReach{ID: "test-dep", Row: rowFor("test-dep-leaf"), Kind: reachHeldFresh}, Clearable: true},
-					{rowReach: rowReach{ID: "test-ext", Row: rowFor("test-ext"), Kind: reachAwaitingOutside}},
+					{depReach: readThrough("test-dep", "test-dep-leaf", reachHeldFresh), Clearable: true},
+					{depReach: readThrough("test-ext", "test-ext", reachAwaitingOutside)},
 				},
-				Held: []rowReach{{ID: "test-held", Row: rowFor("test-held"), Kind: reachNotReady}},
+				Held: []rowReach{{ID: "test-held", reading: reading{Row: rowFor("test-held"), Kind: reachNotReady}}},
 			},
 			gathered: 5,
 			want: `{
@@ -100,11 +111,42 @@ func TestNextRecordsWhatAnExhaustedScopeNamed(t *testing.T) {
 			}`,
 		},
 		{
+			name: "a blocker out of view keeps its place in walk order, and a withheld row is off the focus path",
+			outcome: Exhausted{
+				Epics:    []string{"test-epic"},
+				Progress: claims.Progress{Done: 1, Total: 4},
+				Blocked: []blockerReach{
+					{depReach: readThrough("test-dep", "test-dep", reachNotReady)},
+					{depReach: depReach{ID: "test-gone"}, Clearable: true},
+					{depReach: readThrough("test-held", "test-held.1", reachHeldFresh), Clearable: true},
+				},
+				OffPath: []string{"test-off"},
+			},
+			gathered: 4,
+			want: `{
+				"next.outcome": "exhausted",
+				"next.picked": null,
+				"next.dependency_path": [],
+				"next.exhausted_epics": ["test-epic"],
+				"next.exhausted_progress": {"done": 1, "total": 4},
+				"next.blocked": [
+					{"id": "test-dep", "ticket": "test-dep", "reach": "not_ready", "clearable": false},
+					{"id": "test-gone", "ticket": "", "reach": "out_of_view", "clearable": true},
+					{"id": "test-held", "ticket": "test-held.1", "reach": "held_fresh", "clearable": true}
+				],
+				"next.held": [],
+				"next.off_path": [{"id": "test-off", "ticket": "test-off", "reach": "off_focus_path"}],
+				"next.hidden_by_filter": null,
+				"next.unreachable": [],
+				"next.stay_offered": true
+			}`,
+		},
+		{
 			name: "a blocker awaiting an outside event offers no stay",
 			outcome: Exhausted{
 				Epics:    []string{"test-epic"},
 				Progress: claims.Progress{Done: 0, Total: 2},
-				Blocked:  []blockerReach{{rowReach: rowReach{ID: "test-ext", Row: rowFor("test-ext"), Kind: reachAwaitingOutside}}},
+				Blocked:  []blockerReach{{depReach: readThrough("test-ext", "test-ext", reachAwaitingOutside)}},
 			},
 			gathered: 2,
 			want: `{
@@ -126,7 +168,7 @@ func TestNextRecordsWhatAnExhaustedScopeNamed(t *testing.T) {
 			outcome: ServedPastExhaustion{Row: rowFor("test-bug"), Exhaustion: Exhausted{
 				Epics:    []string{"test-epic"},
 				Progress: claims.Progress{Done: 8, Total: 9},
-				Blocked:  []blockerReach{{rowReach: rowReach{ID: "test-dep", Row: rowFor("test-dep"), Kind: reachHeldFresh}, Clearable: true}},
+				Blocked:  []blockerReach{{depReach: readThrough("test-dep", "test-dep", reachHeldFresh), Clearable: true}},
 			}},
 			gathered: 3,
 			want: `{
@@ -155,6 +197,27 @@ func TestNextRecordsWhatAnExhaustedScopeNamed(t *testing.T) {
 				t.Errorf("counts[next.rows_gathered] = %d, %v; want %d", n, ok, tc.gathered)
 			}
 		})
+	}
+}
+
+// An empty pool under a focus label records every row it named: the ones the
+// walk went past with their reach under next.unreachable, and the ones the
+// focus withheld under next.off_path, the key an exhausted scope's withheld
+// rows land on too.
+func TestNextRecordsWhatAFocusedEmptyPoolNamed(t *testing.T) {
+	recorder := telemetry.Begin(telemetry.Event{})
+	outcome := NoWork{
+		Unreachable: []rowReach{{ID: "test-gate", reading: reading{Row: rowFor("test-gate"), Kind: reachNotReady}}},
+		OffPath:     []string{"test-off"},
+	}
+	recordNextEvent(telemetry.With(context.Background(), recorder), outcome, 2)
+	want := decodeJSON(t, `{
+		"unreachable": [{"id": "test-gate", "ticket": "test-gate", "reach": "not_ready"}],
+		"off_path": [{"id": "test-off", "ticket": "test-off", "reach": "off_focus_path"}]
+	}`)
+	facts := writtenFacts(t, recorder.Finish(telemetry.End{}))
+	if facts["next.outcome"] != "no_work" || !reflect.DeepEqual(facts["next.unreachable"], want["unreachable"]) || !reflect.DeepEqual(facts["next.off_path"], want["off_path"]) {
+		t.Errorf("next.outcome, next.unreachable, next.off_path = %v, %v, %v; want no_work, %v, %v", facts["next.outcome"], facts["next.unreachable"], facts["next.off_path"], want["unreachable"], want["off_path"])
 	}
 }
 

@@ -179,13 +179,14 @@ type ServedPastNarrowing struct {
 // lane of the same epic — and the global pool having nothing ready outside it
 // either, or routing would have answered ServedPastExhaustion. Loud and
 // diagnostic. Blocked names the open dependencies from outside the scope gating
-// that work, if any. Held names the scope's own open rows held by a reason about
-// the row itself — a reserved label, a missing field — which no other work
-// finishing will clear; a scope with neither is waiting only on work already in
-// progress. OffPath names the rows outside the scope
-// that a focus label kept out of the pool, so "nothing ready outside it" is
-// never claimed of rows the pool was not asked about; with no focus active it
-// is empty, and on ServedPastExhaustion, whose pool did offer a row.
+// that work, if any, in the order the walk reached them. Held names the scope's
+// own open rows held by a reason about the row itself — a reserved label, a
+// missing field — which no other work finishing will clear; a scope with
+// neither is waiting only on work already in progress. OffPath names the rows
+// outside the scope that a focus label kept out of the pool, so "nothing ready
+// outside it" is never claimed of rows the pool was not asked about; with no
+// focus active it is empty, and on ServedPastExhaustion, whose pool did offer a
+// row.
 //
 // Progress is how far the stopped scope has come, counted over every lane of
 // it, closed tickets included: "blocked" and "eight-ninths done and blocked"
@@ -208,7 +209,7 @@ type Exhausted struct {
 	Progress  claims.Progress
 	Blocked   []blockerReach
 	Held      []rowReach
-	OffPath   []rowReach
+	OffPath   []string
 	Narrowing *Narrowed
 }
 
@@ -225,55 +226,53 @@ type Exhausted struct {
 // about a different set of rows, is two clocks.
 // [LAW:types-are-the-program] [LAW:one-type-per-behavior] [LAW:no-silent-failure]
 //
-// Every kind but reachOffFocusPath is declared from most to least this
+// The kinds are exactly reachOf's answers, declared from least to most this
 // checkout can do, which is what lets a dependency with several tickets under
-// it report the best of them (gatingDependencies).
+// it report the best of them (gatingDependencies). What a diagnostic reports
+// that is not an answer about a gathered row — a dependency with no work in
+// view, a row the focus scope withheld — is its own list on the outcome, never
+// a kind, so no table of words can carry a slot for it that its walk cannot
+// fill.
 type reachKind int
 
 const (
-	reachTakeable reachKind = iota
-	// reachHeldFresh: another checkout holds its lane right now.
-	reachHeldFresh
+	// reachAwaitingOutside: gathered and not held elsewhere, and held by the
+	// external label — it waits on an event outside this repository, so no
+	// ticket filed here can clear it. Below reachNotReady because nothing here
+	// moves it.
+	reachAwaitingOutside reachKind = iota
+	// reachNotReady: gathered and not held elsewhere, but not startable —
+	// blocked by further open tickets and by nothing about itself.
+	reachNotReady
 	// reachHeldByItself: gathered and not held elsewhere, but not startable
 	// for a reason about the row itself — a reserved label, a missing field —
 	// which someone here can settle, whatever else it also waits on. Above
 	// reachNotReady because nothing but that settles it, and a ticket that
 	// waits only on others is cleared by work already named.
 	reachHeldByItself
-	// reachNotReady: gathered and not held elsewhere, but not startable —
-	// blocked by further open tickets and by nothing about itself.
-	reachNotReady
-	// reachAwaitingOutside: gathered and not held elsewhere, and held by the
-	// external label — it waits on an event outside this repository, so no
-	// ticket filed here can clear it. Below reachNotReady because nothing here
-	// moves it, above reachOutOfView because this run can see it.
-	reachAwaitingOutside
-	// reachOutOfView: nothing that would clear it is among the gathered rows,
-	// so this run knows nothing about it — an epic with no open ticket under
-	// it, say. Leaf-only membership narrows the gather; the dependency
-	// annotation is read from the store and does not, and no filter narrows
-	// what routing reads (routeNext). Only the exhaustion walk can reach it — that
-	// one reads dependency ids off annotations, while the pool walk classifies
-	// rows it is already holding.
-	reachOutOfView
-	// reachOffFocusPath: gathered and possibly startable, but outside the focus
-	// scope this run answered over, so the pool walk never offered it. Not a
-	// verdict about the row — a statement about the question that was asked —
-	// which is why it is classified where the scope is applied (routeNext step
-	// 4) rather than inside reachOf, whose other caller walks an unscoped set.
-	reachOffFocusPath
-	// reachKindCount bounds reachNotes and is never a classification.
-	reachKindCount
+	// reachHeldFresh: another checkout holds its lane right now.
+	reachHeldFresh
+	// reachTakeable: this checkout may start it. Declared last because it is
+	// also the length of every table that words a kind (reachNotes, the event's
+	// names): routing serves a takeable row instead of reporting it, so a word
+	// for one is an index past the table's end, which does not compile.
+	// [LAW:types-are-the-program]
+	reachTakeable
 )
 
-// rowReach is a row a walk went past, carrying what this checkout may do about
-// it. Row is the gathered row Kind was read from, for every kind but
-// reachOutOfView: the row itself, or for a dependency, the ticket that would
-// clear it.
-type rowReach struct {
-	ID   string
+// reading is what one gathered row says to this checkout: the row, and what
+// this checkout may do about it.
+type reading struct {
 	Row  annotation.AnnotatedIssue
 	Kind reachKind
+}
+
+// rowReach is a row a walk went past, carrying what this checkout may do about
+// it. Row is the gathered row Kind was read from: the row itself, or for a
+// dependency, the ticket that would clear it.
+type rowReach struct {
+	ID string
+	reading
 }
 
 // name is how a diagnostic names the entry. A dependency read through a ticket
@@ -319,9 +318,10 @@ func reachOf(row annotation.AnnotatedIssue, standing claims.Standing, self model
 }
 
 // NoWork is the global pool handing back nothing. Unreachable is every row that
-// walk went past, each carrying why — empty exactly when the gather itself came
-// back empty, which is the genuinely empty backlog. An error on the same terms
-// as Exhausted.
+// walk went past, each carrying why, and OffPath every row the focus scope kept
+// out of the pool, which the walk never asked about — both empty exactly when
+// the gather itself came back empty, which is the genuinely empty backlog. An
+// error on the same terms as Exhausted.
 //
 // "No ready work" is an answer-shaped void the moment it carries nothing: one
 // sentence for "the backlog is empty" and for "the backlog is full of work you
@@ -332,7 +332,10 @@ func reachOf(row annotation.AnnotatedIssue, standing claims.Standing, self model
 // what lets the message name which emptiness this is, instead of the
 // remediation listing all three and hoping. [LAW:parse-dont-validate]
 // [LAW:types-are-the-program]
-type NoWork struct{ Unreachable []rowReach }
+type NoWork struct {
+	Unreachable []rowReach
+	OffPath     []string
+}
 
 func (ServedFromClaim) isNextOutcome()      {}
 func (ResumedOwnWork) isNextOutcome()       {}
@@ -627,18 +630,18 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 	if hidden, ok := fromPool(anyRow); ok {
 		return Narrowed{Hidden: hidden}
 	}
-	return NoWork{Unreachable: append(passedOver(selectedOf(pool), reachFor), withheldByScope(selectedOf(offPath))...)}
+	return NoWork{Unreachable: passedOver(selectedOf(pool), reachFor), OffPath: withheldByScope(selectedOf(offPath))}
 }
 
-// withheldByScope classifies the rows the focus scope kept out of the pool. They
-// are the one group whose kind is decided by the question rather than by the
-// row, which is why they are stamped here — at the only place that applied the
-// scope — instead of inside reachOf, whose other caller walks an unscoped set
-// and would never have a scope to consult. [LAW:single-enforcer]
-func withheldByScope(rows []annotation.AnnotatedIssue) []rowReach {
-	withheld := make([]rowReach, 0, len(rows))
-	for _, row := range rows {
-		withheld = append(withheld, rowReach{ID: row.ID, Row: row, Kind: reachOffFocusPath})
+// withheldByScope names the rows the focus scope kept out of the pool. What
+// sets them apart is the question rather than the row — the walk never asked
+// capacityFor about them — so they travel as ids on a list of their own
+// rather than as a kind reachOf could be asked for, and no diagnostic can word
+// them as a verdict about the row. [LAW:types-are-the-program]
+func withheldByScope(rows []annotation.AnnotatedIssue) []string {
+	withheld := make([]string, len(rows))
+	for i, row := range rows {
+		withheld[i] = row.ID
 	}
 	return withheld
 }
@@ -650,16 +653,13 @@ func withheldByScope(rows []annotation.AnnotatedIssue) []rowReach {
 // asking the data a second question.
 //
 // The pool is every gathered row only when no focus scope narrowed it. Under a
-// scope the walk never sees the off-path rows at all: withheldByScope stamps
-// those, and the call site appends the two lists, so it is NoWork.Unreachable —
-// not this function — that accounts for every gathered row. Saying "all the
-// rows" here would hand the next reader the conclusion that the off-path rows
-// are already covered, and the separate function that exists to cover them
-// would read as redundant. [LAW:one-source-of-truth]
+// scope the walk never sees the off-path rows at all: withheldByScope names
+// those, on NoWork.OffPath, so it is the two lists together — not this
+// function — that account for every gathered row. [LAW:one-source-of-truth]
 func passedOver(rows []annotation.AnnotatedIssue, reachFor func(annotation.AnnotatedIssue) reachKind) []rowReach {
 	passed := make([]rowReach, 0, len(rows))
 	for _, row := range rows {
-		passed = append(passed, rowReach{ID: row.ID, Row: row, Kind: reachFor(row)})
+		passed = append(passed, rowReach{ID: row.ID, reading: reading{Row: row, Kind: reachFor(row)}})
 	}
 	return passed
 }
@@ -672,14 +672,40 @@ func passedOver(rows []annotation.AnnotatedIssue, reachFor func(annotation.Annot
 // over, and dropping Via would leave it claiming an edge `lit show` cannot find.
 //
 // It is a field of this walk's element rather than of rowReach because rowReach
-// serves two other walks — withheldByScope and passedOver — for which a gated id
-// is meaningless and would always be empty. A field that only one producer ever
-// fills is a bag of optionals in miniature, and every later reader would have to
-// learn which walks populate it. [LAW:types-are-the-program]
+// serves two other walks — passedOver and heldByThemselves — for which a gated
+// id is meaningless and would always be empty. A field that only one producer
+// ever fills is a bag of optionals in miniature, and every later reader would
+// have to learn which walks populate it. [LAW:types-are-the-program]
 type gatedDep struct {
-	rowReach
+	depReach
 	Gates string
 	Via   []hop
+}
+
+// depReach is a dependency as the work toward it reads. Best is the work this
+// checkout can do the most about, with that kind. It carries no id: the
+// dependency's is ID alone, so the entry a diagnostic names and the edge the
+// route to stay offers cannot be two different ids. [LAW:one-source-of-truth]
+//
+// Best is nil when none of that work is among the gathered rows, which puts the
+// dependency outside this view: this run knows nothing about it — an epic with
+// no open ticket under it, say. Leaf-only membership narrows the gather; the
+// dependency annotation is read from the store and does not, and no filter
+// narrows what routing reads (routeNext). That is a fact about what the run
+// could see, not an answer reachOf gives, so it is the absence of a reading
+// rather than a kind of one. [LAW:types-are-the-program]
+type depReach struct {
+	ID   string
+	Best *reading
+}
+
+// read is the dependency as the row a diagnostic names it by, and false when
+// the run could see none of the work toward it.
+func (d depReach) read() (rowReach, bool) {
+	if d.Best == nil {
+		return rowReach{}, false
+	}
+	return rowReach{ID: d.ID, reading: *d.Best}, true
 }
 
 // heldByThemselves collects, in rank order, the rows in scope that routing
@@ -695,7 +721,7 @@ func heldByThemselves(rows []annotation.AnnotatedIssue, inScope func(annotation.
 	for _, row := range rows {
 		kind := reachFor(row)
 		if inScope(row) && (kind == reachHeldByItself || kind == reachAwaitingOutside) && ClassifyReadiness(row.Annotations).HeldByItself() {
-			held = append(held, rowReach{ID: row.ID, Row: row, Kind: kind})
+			held = append(held, rowReach{ID: row.ID, reading: reading{Row: row, Kind: kind}})
 		}
 	}
 	return held
@@ -704,18 +730,18 @@ func heldByThemselves(rows []annotation.AnnotatedIssue, inScope func(annotation.
 // blockerReach is a dependency gating the scope, as Exhausted reports it: what
 // this checkout may do about it, and whether a ticket filed here could free it
 // — what the route to stay offers to clear. The second is a fact about the
-// blocker alone, so it sits beside the kind on the entry, where no other list's
-// row could claim it and no id could carry it that Blocked does not.
+// blocker alone, so it sits beside the reading on the entry, where no other
+// list's row could claim it and no id could carry it that Blocked does not.
 // [LAW:types-are-the-program]
 type blockerReach struct {
-	rowReach
+	depReach
 	Clearable bool
 }
 
-// blockersOf reports the dependencies one walk found for Exhausted. It drops
-// the gated id — that diagnostic reports WHICH dependencies gate the epic, not
-// which row each one gates — and reads off the work toward each whether a
-// ticket filed here could free it.
+// blockersOf reports the dependencies one walk found for Exhausted, in the
+// order the walk reached them. It drops the gated id — that diagnostic reports
+// WHICH dependencies gate the epic, not which row each one gates — and reads
+// off the work toward each whether a ticket filed here could free it.
 //
 // A dependency closes only when all of that work does — a leaf when it does,
 // an epic when every ticket under it does — so one ticket of it awaiting an
@@ -729,7 +755,7 @@ type blockerReach struct {
 // while the external label holds work in every state. Read off all the work,
 // not the kind: the kind is the best of that work, and a held kind outranks
 // not-ready, so it keeps no trace of what the rest waits on. With no work in
-// view a dependency is reachOutOfView, and nothing seen holds it.
+// view nothing seen holds a dependency, so an out-of-view one is clearable.
 func blockersOf(deps []gatedDep, workToward map[string][]annotation.AnnotatedIssue) []blockerReach {
 	blockers := make([]blockerReach, len(deps))
 	for i, dep := range deps {
@@ -737,19 +763,24 @@ func blockersOf(deps []gatedDep, workToward map[string][]annotation.AnnotatedIss
 			readiness := ClassifyReadiness(work.Annotations)
 			return readiness.AwaitsOutside() || work.State() == model.StateOpen && len(readiness.Prerequisites()) > 0
 		})
-		blockers[i] = blockerReach{rowReach: dep.rowReach, Clearable: !waitsElsewhere}
+		blockers[i] = blockerReach{depReach: dep.depReach, Clearable: !waitsElsewhere}
 	}
 	return blockers
 }
 
-// reachesOf is the blockers as the rows they are, for what reads every reported
-// row alike.
-func reachesOf(blockers []blockerReach) []rowReach {
-	rows := make([]rowReach, len(blockers))
-	for i, blocker := range blockers {
-		rows[i] = blocker.rowReach
+// readingsOf splits the blockers by whether the run could read them: the ones
+// with work in view as the rows they are, and the ids of the ones without, each
+// in walk order.
+func readingsOf(blockers []blockerReach) (inView []rowReach, outOfView []string) {
+	for _, blocker := range blockers {
+		row, ok := blocker.read()
+		if !ok {
+			outOfView = append(outOfView, blocker.ID)
+			continue
+		}
+		inView = append(inView, row)
 	}
-	return rows
+	return inView, outOfView
 }
 
 // workTowardEach indexes the gathered rows, in rank order, by every dependency
@@ -783,7 +814,7 @@ func workTowardEach(rows []annotation.AnnotatedIssue, details, epics map[string]
 // an epic never has: it takes the best kind among that work, carried by the
 // first row in rank order to reach it, so an epic whose one ticket another
 // checkout holds reads as held, not as outside the view. With no work in view
-// it is reachOutOfView, which every row's kind outranks.
+// it has no reading at all (gatedDep.Best).
 //
 // That work is on the path too, so its own prerequisites are walked the same
 // way: a blocker that cannot be started is cleared by whatever clears its own
@@ -853,17 +884,6 @@ func gatingDependencies(rows []annotation.AnnotatedIssue, laneOf func(annotation
 					continue
 				}
 				seen[id] = true
-				dep := rowReach{ID: id, Kind: reachOutOfView}
-				for _, work := range workToward[id] {
-					if kind := reachFor(work); kind < dep.Kind {
-						dep.Row, dep.Kind = work, kind
-					}
-				}
-				lane, isPlaced := placed[id]
-				inside := isPlaced && inScope(lane) || dep.Kind != reachOutOfView && inScope(laneOf(dep.Row))
-				if inside {
-					continue
-				}
 				// gated is the in-scope row the chain started from — the fact
 				// step 1b needs.
 				// `seen` keeps the FIRST row to reach a dependency, so when one
@@ -873,7 +893,18 @@ func gatingDependencies(rows []annotation.AnnotatedIssue, laneOf func(annotation
 				// is the highest-ranked thing it unblocks. Naming every gated row
 				// would put an unbounded list in a one-line announcement.
 				// [LAW:polishing-by-subtraction]
-				deps = append(deps, gatedDep{rowReach: dep, Gates: gated.ID, Via: at.via})
+				dep := gatedDep{depReach: depReach{ID: id}, Gates: gated.ID, Via: at.via}
+				for _, work := range workToward[id] {
+					if kind := reachFor(work); dep.Best == nil || kind > dep.Best.Kind {
+						dep.Best = &reading{Row: work, Kind: kind}
+					}
+				}
+				lane, isPlaced := placed[id]
+				inside := isPlaced && inScope(lane) || dep.Best != nil && inScope(laneOf(dep.Best.Row))
+				if inside {
+					continue
+				}
+				deps = append(deps, dep)
 				for _, work := range workToward[id] {
 					chain = append(chain, onPath{row: work, via: append(slices.Clone(at.via), hop{Prerequisite: id, Through: work.ID})})
 				}
@@ -906,9 +937,6 @@ func gatingDependencies(rows []annotation.AnnotatedIssue, laneOf func(annotation
 // by construction.
 func onPathDependency(deps []gatedDep, serves func(annotation.AnnotatedIssue) bool, reachFor func(annotation.AnnotatedIssue) reachKind, workToward map[string][]annotation.AnnotatedIssue, laneOf func(annotation.AnnotatedIssue) model.LaneID) (ServedFromDependency, bool) {
 	for _, dep := range deps {
-		if dep.Kind != reachTakeable {
-			continue
-		}
 		for _, work := range workToward[dep.ID] {
 			if serves(work) && reachFor(work) == reachTakeable {
 				return ServedFromDependency{Row: work, Lane: laneOf(work), Gates: dep.Gates, Via: dep.Via, Blocker: dep.ID}, true
@@ -933,18 +961,20 @@ func (o Exhausted) Error() string {
 }
 
 // why is what both exhaustion outcomes say first: which scope stopped, how far
-// it had come, and what stops it — the dependencies from outside it, then its
-// own rows held by themselves. With neither, nothing stops the scope, and it
-// says what the scope's progress shows instead.
+// it had come, and what stops it — the dependencies from outside it, in view
+// and then out of it, then its own rows held by themselves. With none of them,
+// nothing stops the scope, and it says what the scope's progress shows instead.
 func (o Exhausted) why() string {
-	stops := slices.DeleteFunc([]string{
-		describeReach(reachesOf(o.Blocked), "blocked by ", exhaustedNotes),
+	inView, outOfView := readingsOf(o.Blocked)
+	stops := joinClauses(
+		describeReach(inView, "blocked by ", exhaustedNotes),
+		clause("blocked by ", outOfView, outOfViewNote),
 		describeReach(o.Held, "held here: ", exhaustedNotes),
-	}, func(clause string) bool { return clause == "" })
-	if len(stops) == 0 {
-		stops = []string{unstopped(o.Progress)}
+	)
+	if stops == "" {
+		stops = unstopped(o.Progress)
 	}
-	return fmt.Sprintf("no ready work in %s (%s) — %s", o.scope(), formatProgress(o.Progress), strings.Join(stops, "; "))
+	return fmt.Sprintf("no ready work in %s (%s) — %s", o.scope(), formatProgress(o.Progress), stops)
 }
 
 // unstopped is what a scope nothing stops has left: nothing at all, once no
@@ -970,7 +1000,7 @@ func (o Exhausted) outside() string {
 	if len(o.OffPath) == 0 {
 		return "`lit next` has nothing ready outside it either"
 	}
-	return "nothing on the focus path outside it is ready either: " + describeReach(o.OffPath, "", poolNotes)
+	return "nothing on the focus path outside it is ready either: " + clause("", o.OffPath, offFocusPathNote)
 }
 
 // stay is the route that keeps the checkout in its scope, as a list of at most
@@ -1030,27 +1060,25 @@ func (o Exhausted) scope() string {
 //
 // An array indexed by the kind, not a list of pairs: a pair list can omit a
 // kind and silently drop its ids from the message, which is the class of defect
-// this whole type exists to end. The array cannot drop them — a kind with no
-// words still renders its ids, under an empty parenthetical, which is loud
-// rather than silent. It is not total on its own, since Go does not require an
-// indexed array literal to fill every slot, so
-// TestEveryReachKindHasWordsInBothDiagnostics closes that gap — in both
-// directions, because a slot a diagnostic can never reach is its own defect:
-// worded text for an impossible kind reads as a capability the walk does not
-// have. [LAW:types-are-the-program] [LAW:no-silent-failure]
-type reachNotes [reachKindCount]string
+// this whole type exists to end. The array cannot drop them — a reported kind
+// with no words still renders its ids, under an empty parenthetical, which is
+// loud rather than silent. Its length is reachTakeable, so it has a slot for
+// every kind a walk can report and none for a row routing would have served
+// instead: words for that are an out-of-range index, which does not compile. No
+// reported list holds a takeable row, and one that did would not pass quietly:
+// describeReach's grouping and the event's name lookup (reachKindNames) are
+// bounded the same way and panic on it. Go does not
+// require an indexed array literal to fill every slot, so
+// TestEveryReachKindHasWordsInBothDiagnostics holds the other direction.
+// [LAW:types-are-the-program] [LAW:no-silent-failure]
+type reachNotes [reachTakeable]string
 
 // The wording each diagnostic carries, named so the totality test can reach
-// them and so neither is rebuilt on every render. Each walk words exactly the
-// kinds it can stamp, and the two sets differ at both ends.
+// them and so neither is rebuilt on every render. Both walks report every kind
+// a reachNotes has a slot for.
 //
-// reachOffFocusPath is the pool walk's alone, stamped by withheldByScope —
-// Exhausted.OffPath reports it too, in the pool's words, because those are
-// rows the pool withheld. reachOutOfView is the exhaustion walk's alone:
-// passedOver classifies gathered rows only, where gatingDependencies reaches
-// deps the gather never returned.
-// reachTakeable is neither's. NoWork is answered only to a checkout holding no
-// lane, so no pool row is laneOurs and capacityFor cannot answer resumeWork,
+// Neither reports reachTakeable. NoWork is answered only to a checkout holding
+// no lane, so no pool row is laneOurs and capacityFor cannot answer resumeWork,
 // while the pick just declined every serveWork over that same set — leaving
 // routeAround as the only verdict passedOver can see. And exhaustion reports
 // the very walk step 2b just declined, so it never holds a takeable one.
@@ -1060,15 +1088,22 @@ var (
 		reachHeldByItself:    "on your path but held by something about the ticket itself — `lit show` it names what",
 		reachNotReady:        "on your path but not startable right now — `lit show` it",
 		reachAwaitingOutside: "on your path but waiting on an event outside this repository — `lit show` it names the event",
-		reachOutOfView:       "on your path but outside this view — `lit show` it",
 	}
 	poolNotes = reachNotes{
 		reachHeldFresh:       "in progress or claimed in a lane another checkout holds right now",
 		reachHeldByItself:    "held by something about the ticket itself — `lit show` it names what",
 		reachNotReady:        "not startable right now — `lit show` it names what blocks it",
 		reachAwaitingOutside: "waiting on an event outside this repository — `lit show` it names the event",
-		reachOffFocusPath:    "off the focus path this run answered over — `lit next --all` to route over the whole queue",
 	}
+)
+
+// The words for the two lists only one outcome carries each, which are not
+// kinds: a dependency with no work in view is Exhausted's alone, and a row the
+// focus withheld is said of OffPath on both Exhausted and NoWork, in the pool's
+// words, because those are rows the pool withheld.
+const (
+	outOfViewNote    = "on your path but outside this view — `lit show` it"
+	offFocusPathNote = "off the focus path this run answered over — `lit next --all` to route over the whole queue"
 )
 
 // maxNamedPerKind caps how many ids one clause names outright. NoWork's rows
@@ -1094,26 +1129,39 @@ func nameCapped(items []string, sep string) string {
 	return fmt.Sprintf("%s and %d more", strings.Join(items[:maxNamedPerKind], sep), len(items)-maxNamedPerKind)
 }
 
-// describeReach renders "<lead><ids> (<note>)" for each kind that has rows,
-// joined by "; ", in reachKind's own declaration order — one ordering for both
-// diagnostics rather than a per-caller one that could disagree. The cap lives
-// here for the same reason the ordering does: both diagnostics render through
-// this one function, so neither can grow a second answer to how long a clause
-// may get. [LAW:one-source-of-truth] [LAW:single-enforcer]
+// describeReach renders a clause for each kind that has rows, most this
+// checkout can do first — one ordering for both diagnostics rather than a
+// per-caller one that could disagree. [LAW:one-source-of-truth]
+//
+// The rows are grouped into an array bounded like notes, so a takeable row
+// panics here, at the render, rather than being grouped under a kind no clause
+// is written for and dropped from the message. [LAW:no-silent-failure]
 func describeReach(rows []rowReach, lead string, notes reachNotes) string {
-	byKind := map[reachKind][]string{}
+	var byKind [reachTakeable][]string
 	for _, row := range rows {
 		byKind[row.Kind] = append(byKind[row.Kind], row.name())
 	}
-	var parts []string
-	for kind, note := range notes {
-		ids := byKind[reachKind(kind)]
-		if len(ids) == 0 {
-			continue
-		}
-		parts = append(parts, fmt.Sprintf("%s%s (%s)", lead, nameCapped(ids, ", "), note))
+	parts := make([]string, 0, len(notes))
+	for kind := len(notes) - 1; kind >= 0; kind-- {
+		parts = append(parts, clause(lead, byKind[kind], notes[kind]))
 	}
-	return strings.Join(parts, "; ")
+	return joinClauses(parts...)
+}
+
+// clause renders "<lead><ids> (<note>)", and nothing when there are no ids.
+// Every list a diagnostic names is rendered through it, so the cap lives here:
+// no clause can grow a second answer to how long it may get.
+// [LAW:single-enforcer]
+func clause(lead string, ids []string, note string) string {
+	if len(ids) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%s%s (%s)", lead, nameCapped(ids, ", "), note)
+}
+
+// joinClauses joins the clauses that say something with "; ".
+func joinClauses(clauses ...string) string {
+	return strings.Join(slices.DeleteFunc(clauses, func(c string) bool { return c == "" }), "; ")
 }
 
 // Error names which emptiness this is.
@@ -1124,31 +1172,20 @@ func describeReach(rows []rowReach, lead string, notes reachNotes) string {
 // clause leads by refuting the empty reading outright, since that reading tells
 // an agent asking, after a crash, what it was already on that its work is gone.
 func (o NoWork) Error() string {
-	if len(o.Unreachable) == 0 {
+	rows := joinClauses(describeReach(o.Unreachable, "", poolNotes), clause("", o.OffPath, offFocusPathNote))
+	if rows == "" {
 		return "no ready work"
 	}
 	// A third emptiness, and it needs its own lead: with rows withheld by the
 	// focus scope, "nothing in it is startable here" is false — those rows were
 	// never asked. The lead claims neither startability nor location, because
-	// Unreachable mixes two populations here: on-path rows step 4 walked and
+	// the message names two populations here: on-path rows step 4 walked and
 	// rejected, and off-path rows it never examined. A header asserting either
 	// fact over the whole list is false for one of them — and the on-path half
-	// is the news the agent has to act on. Only poolNotes can tell them apart,
-	// and it already does, per row.
-	if o.withheld() {
-		return fmt.Sprintf("no ready work on the focus path — the backlog is not empty, and each row below says why this run did not serve it: %s", describeReach(o.Unreachable, "", poolNotes))
+	// is the news the agent has to act on. Each clause's own note tells them
+	// apart.
+	if len(o.OffPath) > 0 {
+		return fmt.Sprintf("no ready work on the focus path — the backlog is not empty, and each row below says why this run did not serve it: %s", rows)
 	}
-	return fmt.Sprintf("no ready work — the backlog is not empty, but nothing in it is startable here: %s", describeReach(o.Unreachable, "", poolNotes))
-}
-
-// withheld reports whether the focus scope kept any row out of the pool this
-// walk went through. Read off the rows the outcome already carries, so the
-// sentence and the clauses beneath it cannot disagree. [LAW:one-source-of-truth]
-func (o NoWork) withheld() bool {
-	for _, row := range o.Unreachable {
-		if row.Kind == reachOffFocusPath {
-			return true
-		}
-	}
-	return false
+	return fmt.Sprintf("no ready work — the backlog is not empty, but nothing in it is startable here: %s", rows)
 }

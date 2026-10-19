@@ -362,7 +362,7 @@ func commandErrorRemediation(reason commandReason) string {
 		// [LAW:no-silent-failure]
 		//
 		// The lead obeys that rule too, which is why it claims determinism and
-		// not startability: withheldByScope stamps every scope-excluded row
+		// not startability: withheldByScope names every scope-excluded row
 		// off-path without ever running capacityFor on it, so "nothing here is
 		// startable" is a verdict this line has no reading to support — and
 		// NoWork.Error() already declines to make it. [LAW:one-source-of-truth]
