@@ -342,7 +342,10 @@ func TestRemoteCacheLandingCopiesTheFetchedRemotesLastKnownRefs(t *testing.T) {
 	liveRepo := filepath.Join(liveBase, key, "repo.git")
 	cloneRepo := filepath.Join(cloneBase, key, "repo.git")
 	for _, dir := range []string{liveRepo, cloneRepo, filepath.Join(cloneBase, onlyCloneKey, "repo.git")} {
-		if out, err := exec.Command("git", "init", "--bare", "--quiet", dir).CombinedOutput(); err != nil {
+		if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if out, err := mirrorGit(context.Background(), dir, "init", "--bare", "--quiet").CombinedOutput(); err != nil {
 			t.Fatalf("git init %s: %v\n%s", dir, err, out)
 		}
 	}
@@ -354,7 +357,9 @@ func TestRemoteCacheLandingCopiesTheFetchedRemotesLastKnownRefs(t *testing.T) {
 	commitOn(liveRepo, lastKnown, "where live last saw the remote")
 	cloneLastKnown := commitOn(cloneRepo, lastKnown, "where the clone's fetch saw it")
 	liveUnchanged := commitOn(liveRepo, unchanged, "both hold this")
-	git(cloneRepo, "fetch", "--quiet", liveRepo, unchanged+":"+unchanged)
+	if out, err := mirrorFetch(context.Background(), cloneRepo, liveRepo, unchanged+":"+unchanged).CombinedOutput(); err != nil {
+		t.Fatalf("fetch %s from the live mirror: %v\n%s", unchanged, err, out)
+	}
 	addedOID := commitOn(cloneRepo, added, "what the clone fetched")
 	commitOn(cloneRepo, unfetched, "the value the clone copied from live")
 	livePushed := commitOn(liveRepo, unfetched, "where a live push left upstream since")

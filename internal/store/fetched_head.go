@@ -365,11 +365,7 @@ func (p remoteCacheLanding) apply(ctx context.Context) error {
 		}
 	}
 	for _, c := range p.copies {
-		// git drops -c settings from the upload-pack it starts on a local
-		// repository, so the clone's mirror is read with long paths only
-		// when upload-pack is told itself.
-		args := append([]string{"fetch", "--no-tags", "--quiet", "--upload-pack", "git -c " + gitLongPaths + " upload-pack", c.cloneRepo}, c.refspecs...)
-		if out, err := mirrorGit(ctx, c.liveRepo, args...).CombinedOutput(); err != nil {
+		if out, err := mirrorFetch(ctx, c.liveRepo, c.cloneRepo, c.refspecs...).CombinedOutput(); err != nil {
 			errs = append(errs, fmt.Errorf("copy %d ref(s) of the clone's mirror %s into the live store: %w: %s", len(c.refspecs), filepath.Base(filepath.Dir(c.liveRepo)), err, strings.TrimSpace(string(out))))
 		}
 	}
