@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
@@ -69,9 +70,9 @@ func TestPushOutcomeOf(t *testing.T) {
 			name: "push refused over a peer's commits records diverged, not error",
 			outcome: syncPushOutcome{
 				remote: "origin", branch: "master",
-				pushErr: fmt.Errorf("%w: push remote \"origin\": rejected", store.ErrPushDiverged),
+				pushErr: fmt.Errorf("%w: push remote \"origin\": rejected", storage.ErrPushDiverged),
 			},
-			want: pushOutcomeRecord{Decision: pushDecisionDiverged, Reason: store.ErrPushDiverged.Error() + ": push remote \"origin\": rejected", Remote: "origin", Branch: "master"},
+			want: pushOutcomeRecord{Decision: pushDecisionDiverged, Reason: storage.ErrPushDiverged.Error() + ": push remote \"origin\": rejected", Remote: "origin", Branch: "master"},
 		},
 		{
 			name: "workspace legitimately busy records its own decision, not error",

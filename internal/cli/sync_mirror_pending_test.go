@@ -279,7 +279,7 @@ func TestCompleteMirrorWithoutAttempt(t *testing.T) {
 	}
 
 	cause := errors.New("spawning command (pid 4242) still running after 30s")
-	if err := completeMirrorWithoutAttempt(context.Background(), ws, cause, func() {}); err != nil {
+	if err := completeMirrorWithoutAttempt(underInvocation(context.Background()), ws, cause, func() {}); err != nil {
 		t.Fatalf("completeMirrorWithoutAttempt must be best-effort nil, got %v", err)
 	}
 
@@ -314,7 +314,7 @@ func TestCompleteMirrorWithoutAttemptCancelledSkipsOwner(t *testing.T) {
 	enableOwnerNotify(t, ws, `printf sent >> `+sink)
 
 	cause := fmt.Errorf("open sync store: %w", context.Canceled)
-	if err := completeMirrorWithoutAttempt(context.Background(), ws, cause, func() {}); err != nil {
+	if err := completeMirrorWithoutAttempt(underInvocation(context.Background()), ws, cause, func() {}); err != nil {
 		t.Fatalf("completeMirrorWithoutAttempt must be best-effort nil, got %v", err)
 	}
 	rec, _, ok := lastPushOutcome(ws, time.Now())
@@ -340,7 +340,7 @@ func TestCompleteMirrorWithoutAttemptBusySkipsOwner(t *testing.T) {
 	}
 
 	cause := fmt.Errorf("open sync store: %w", store.ErrWorkspaceBusy)
-	if err := completeMirrorWithoutAttempt(context.Background(), ws, cause, func() {}); err != nil {
+	if err := completeMirrorWithoutAttempt(underInvocation(context.Background()), ws, cause, func() {}); err != nil {
 		t.Fatalf("completeMirrorWithoutAttempt must be best-effort nil, got %v", err)
 	}
 	rec, _, ok := lastPushOutcome(ws, time.Now())
@@ -378,7 +378,7 @@ func TestCompleteMirrorWithoutAttemptStopsAnsweringFirst(t *testing.T) {
 		_ = f.Close()
 	}
 	cause := errors.New("spawning command (pid 4242) still running after 30s")
-	if err := completeMirrorWithoutAttempt(context.Background(), ws, cause, stopAnswering); err != nil {
+	if err := completeMirrorWithoutAttempt(underInvocation(context.Background()), ws, cause, stopAnswering); err != nil {
 		t.Fatalf("completeMirrorWithoutAttempt must be best-effort nil, got %v", err)
 	}
 	payload, err := os.ReadFile(sink)

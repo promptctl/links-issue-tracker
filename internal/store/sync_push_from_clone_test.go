@@ -64,7 +64,7 @@ func TestSyncPushFromCloneReportsARaceItLostAsSuperseded(t *testing.T) {
 // lose when both write: a clone is taken at c1, the live store commits c2
 // and pushes it, and the clone commits c3. The remote refuses the clone's
 // push, and the clone and the remote each hold a commit the other lacks, so
-// every push step reports the refusal as ErrPushDiverged. A store only ahead
+// every push step reports the refusal as storage.ErrPushDiverged. A store only ahead
 // of a remote that refuses it is refused plainly: nothing a merge can fix
 // stands in its way.
 func TestAPushRefusedOverAPeersCommitsIsDiverged(t *testing.T) {
@@ -93,8 +93,8 @@ func TestAPushRefusedOverAPeersCommitsIsDiverged(t *testing.T) {
 		"SyncPush":           clone.SyncPush,
 	}
 	for name, push := range steps {
-		if _, err := push(ctx, "origin", "master", false, false); !errors.Is(err, ErrPushDiverged) {
-			t.Fatalf("%s() over the peer's c2 error = %v; want ErrPushDiverged", name, err)
+		if _, err := push(ctx, "origin", "master", false, false); !errors.Is(err, storage.ErrPushDiverged) {
+			t.Fatalf("%s() over the peer's c2 error = %v; want storage.ErrPushDiverged", name, err)
 		}
 	}
 
@@ -107,7 +107,16 @@ func TestAPushRefusedOverAPeersCommitsIsDiverged(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("make the remote read-only: %v", err)
 	}
-	t.Cleanup(func() { _ = filepath.WalkDir(remoteDir, func(path string, _ fs.DirEntry, _ error) error { return os.Chmod(path, 0o755) }) })
+	t.Cleanup(func() {
+		if err := filepath.WalkDir(remoteDir, func(path string, _ fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			return os.Chmod(path, 0o755)
+		}); err != nil {
+			t.Errorf("restore the remote's permissions: %v", err)
+		}
+	})
 	if err := os.Chmod(remoteDir, 0o555); err != nil {
 		t.Fatalf("make the remote read-only: %v", err)
 	}
@@ -117,8 +126,8 @@ func TestAPushRefusedOverAPeersCommitsIsDiverged(t *testing.T) {
 	}
 	defer live.Close()
 	_, err = live.SyncPush(ctx, "origin", "master", false, false)
-	if err == nil || errors.Is(err, ErrPushDiverged) {
-		t.Fatalf("SyncPush() of c4, only ahead of a read-only remote, error = %v; want a refusal that is not ErrPushDiverged", err)
+	if err == nil || errors.Is(err, storage.ErrPushDiverged) {
+		t.Fatalf("SyncPush() of c4, only ahead of a read-only remote, error = %v; want a refusal that is not storage.ErrPushDiverged", err)
 	}
 }
 

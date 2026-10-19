@@ -212,7 +212,7 @@ func TestObservePushOutcomeForOwner(t *testing.T) {
 	// A push refused over a peer's commits neither notifies nor ends a live
 	// episode: the channel is not broken, and it has not been shown healthy.
 	observePushOutcomeForOwner(ctx, ws, failed)
-	diverged := pushOutcomeOf(syncPushOutcome{remote: "origin", branch: "master", pushErr: fmt.Errorf("%w: rejected", store.ErrPushDiverged)}, nil, "")
+	diverged := pushOutcomeOf(syncPushOutcome{remote: "origin", branch: "master", pushErr: fmt.Errorf("%w: rejected", storage.ErrPushDiverged)}, nil, "")
 	if diverged.Decision != pushDecisionDiverged || diverged.failed() {
 		t.Fatalf("pushOutcomeOf(diverged) = %+v, want the non-failed diverged decision", diverged)
 	}

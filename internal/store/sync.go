@@ -763,13 +763,6 @@ func (e pushRefusedError) Error() string {
 
 func (e pushRefusedError) Unwrap() error { return e.cause }
 
-// ErrPushDiverged marks a refused push whose branch and remote each hold
-// commits the other lacks. No plain push lands over that, whatever else the
-// remote said: a peer pushed first, and this checkout has to merge the
-// remote's commits (the background receive, or `lit sync pull`) before its
-// next push can land.
-var ErrPushDiverged = errors.New("the remote and this checkout each hold commits the other lacks; the remote's must be merged before a push can land")
-
 // classifyPushFailure is DOLT_PUSH's error as pushRefusedError when the remote
 // refused it, and otherwise the same failure wrapped as it always is.
 func classifyPushFailure(ctx context.Context, remote string, pushErr error) error {
@@ -802,7 +795,7 @@ func (s *Store) pushMutation(ctx context.Context, remote string, branch string, 
 // result. Otherwise the refusal stands, returned as pushErr with the fetch
 // already run, so a caller judging it reads the remote as it stands now. A
 // refusal that stands with the branch diverged from the remote comes back
-// wrapped in ErrPushDiverged: every push step's refusal passes through here,
+// wrapped in storage.ErrPushDiverged: every push step's refusal passes through here,
 // so one judgment covers them all. [LAW:single-enforcer]
 // followErr is a fetch or follow that failed, beside the refusal it could not
 // explain, for the caller to word; followed is the follow's record, zero when
@@ -833,7 +826,7 @@ func (s *Store) retryPushAfterFollow(ctx context.Context, remote, branch string,
 			return storage.SyncPushResult{}, pushErr, followed, fmt.Errorf("read whether the branch diverged from the remote: %w", err)
 		}
 		if fresh.State() == storage.SyncDiverged {
-			pushErr = fmt.Errorf("%w: %w", ErrPushDiverged, pushErr)
+			pushErr = fmt.Errorf("%w: %w", storage.ErrPushDiverged, pushErr)
 		}
 		return storage.SyncPushResult{}, pushErr, followed, nil
 	}

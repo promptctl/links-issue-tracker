@@ -512,7 +512,7 @@ Flag parse output is `io.Discard` (`sync_bg.go`).
   1. `context.Canceled` in `err` or `outcome.pushErr` → `canceled` with the first non-nil error's text, plus remote/branch.
   2. `store.ErrWorkspaceBusy` in `err` → `workspace_busy` with err text (no remote/branch).
   3. any other `err` → `error` with err text.
-  4. `store.ErrPushDiverged` in `outcome.pushErr` → `diverged` with its text plus remote/branch.
+  4. `storage.ErrPushDiverged` in `outcome.pushErr` → `diverged` with its text plus remote/branch.
   5. `outcome.pushErr != nil` → `error` with its text plus remote/branch.
   6. `outcome.skip != syncTargetReady` → decision = `string(outcome.skip)`, remote only.
   7. default → `pushed` with remote/branch.

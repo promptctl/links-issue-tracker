@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/version"
@@ -42,7 +43,7 @@ func firstError(errs ...error) error {
 // recording them as "error" pages the owner and banners every later command
 // over a healthy workspace whose next attempt pushes fine. "diverged" is the
 // same kind of ending: the remote refused the push because a peer pushed
-// first (store.ErrPushDiverged), and the receive's merge is what lets the
+// first (storage.ErrPushDiverged), and the receive's merge is what lets the
 // next push land. A receive that cannot merge surfaces its own sync-failure
 // class to the owner. The class is decided once here, from the error values,
 // for every consumer: the marker, the owner page and the sync trace.
@@ -126,7 +127,7 @@ func classifyPushOutcome(outcome syncPushOutcome, err error) pushOutcomeRecord {
 		return pushOutcomeRecord{Decision: pushDecisionWorkspaceBusy, Reason: err.Error()}
 	case err != nil:
 		return pushOutcomeRecord{Decision: pushDecisionError, Reason: err.Error()}
-	case errors.Is(outcome.pushErr, store.ErrPushDiverged):
+	case errors.Is(outcome.pushErr, storage.ErrPushDiverged):
 		return pushOutcomeRecord{
 			Decision: pushDecisionDiverged,
 			Reason:   outcome.pushErr.Error(),
