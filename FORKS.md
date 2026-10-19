@@ -15,7 +15,7 @@ one below carries the condition that would let it be deleted.
 
 | Module in `go.mod` | Upstream | What `lit` builds | Branch | Current pin |
 | --- | --- | --- | --- | --- |
-| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20261019145047-52672bfb864e` |
+| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20261019182839-d1c522accf0f` |
 | `github.com/dolthub/go-mysql-server` | [dolthub/go-mysql-server](https://github.com/dolthub/go-mysql-server) | [promptctl/go-mysql-server](https://github.com/promptctl/go-mysql-server) | `lit` | `v0.20.1-0.20260821032251-ab5cb9ec3b69` |
 | `github.com/dolthub/driver` | [dolthub/driver](https://github.com/dolthub/driver) | [`internal/vendor/dolthub-driver`](internal/vendor/dolthub-driver) | — | `v0.2.1-0.20260314000741-0fe74e7ee31a` |
 
@@ -371,6 +371,30 @@ upstream overwrote with `registerNewDatabase`'s.
 routing it through the singleton map, and the `require` line moves past that
 change. Dropping it without that brings back every pushed or cloned remote
 held open for the life of the process.
+
+#### Patch 12 — run git with long paths on, and read a rooted path as local on Windows
+
+`go/store/blobstore/internal/git/runner.go`,
+`go/libraries/doltcore/dbfactory/git_remote.go`,
+`go/libraries/doltcore/env/git_remote_url.go`.
+
+Git for Windows refuses a path past MAX_PATH (260 characters) unless
+`core.longpaths` is set, and it is off by default. A ref under a git remote
+cache sits about 175 characters below the database directory, so pushing from
+a database a few directories deep failed with `Filename too long` and git exit
+128 (`links-windows-qr8l.8m6`). Both git command builders, the blobstore's
+`git.Runner` and dbfactory's `gitCmd`, pass `-c core.longpaths=true` on every
+call, as `lit`'s own `mirrorGit` does. `NormalizeGitRemoteUrl` read
+`/srv/git/repo.git` as a schemeless host on Windows, where `filepath.IsAbs` is
+false for a path with no volume, and returned `git+https:///srv/git/repo.git`;
+a path that starts with a separator is now local and gains the current drive.
+`TestGitBackedRemoteURL` and the git-backed remote tests in `internal/store`
+fail on the nightly `windows` lane without the patch.
+
+**Retire it when** upstream sets `core.longpaths` on the git it runs and reads a
+rooted path as local, and the `require` line moves past that change. Dropping
+it without that brings back every git-backed push failing on Windows from a
+database a few directories deep.
 
 ### promptctl/go-mysql-server
 

@@ -39,6 +39,28 @@ import (
 // directory that holds `.dolt`.
 const remoteCacheDirName = "git-remote-cache"
 
+// mirrorGit builds "git <args...>" against the mirror at gitDir. It is the one
+// way lit runs git on a mirror. [LAW:single-enforcer] core.longpaths lets git for
+// Windows open paths past MAX_PATH (260 characters): a mirror ref sits about 175
+// characters below the database directory, so a database a few directories deep
+// passes it, and other platforms ignore the key. Dolt's own git commands on a
+// mirror pass it too (Patch 12 in FORKS.md). git hands -c settings on to the
+// processes it spawns on this side, but not to the upload-pack it starts in a
+// local repository, so a fetch from another mirror goes through mirrorFetch.
+func mirrorGit(ctx context.Context, gitDir string, args ...string) *exec.Cmd {
+	return exec.CommandContext(ctx, "git", append([]string{"-c", gitLongPaths, "--git-dir", gitDir}, args...)...)
+}
+
+// mirrorFetch builds a fetch of refspecs into the mirror at gitDir from the
+// mirror at source. It names an upload-pack that sets core.longpaths itself,
+// because git starts a local source's upload-pack without mirrorGit's -c.
+func mirrorFetch(ctx context.Context, gitDir, source string, refspecs ...string) *exec.Cmd {
+	return mirrorGit(ctx, gitDir, append([]string{"fetch", "--no-tags", "--quiet", "--upload-pack", "git -c " + gitLongPaths + " upload-pack", source}, refspecs...)...)
+}
+
+// gitLongPaths is the setting mirrorGit passes to git.
+const gitLongPaths = "core.longpaths=true"
+
 // isRemoteCacheKey reports whether a directory name is one of dbfactory's cache
 // keys — a lowercase hex sha256 and nothing else. Anything else under the cache
 // base was not put there by dbfactory, so this prune does not own it and must
@@ -489,7 +511,7 @@ func (s *Store) SyncRemoteMirrorHolds(ctx context.Context, remote string, commit
 // "<oid> <type> <size>" or "<input> missing", so absence is an answer and only
 // git failing to run is an error.
 func gitDirHoldsCommits(ctx context.Context, gitDir string, commits []string) (bool, error) {
-	cmd := exec.CommandContext(ctx, "git", "--git-dir", gitDir, "cat-file", "--batch-check")
+	cmd := mirrorGit(ctx, gitDir, "cat-file", "--batch-check")
 	cmd.Stdin = strings.NewReader(strings.Join(commits, "\n") + "\n")
 	out, err := cmd.Output()
 	if err != nil {
