@@ -414,14 +414,15 @@ Rule for the whole struct: **every slice is an OR within itself and an AND again
 | `Reason` | `string` | `reason,omitempty`; applies only to updates — there is no prior state to annotate a create against (`internal/storage/bulk.go`) |
 
 #### `BulkApplyResult` (`internal/storage/bulk.go`)
-- `Created map[string]string` — maps each create document's own reference (its `LocalID` if set, otherwise its new real ID) to the real ID it was created under, so every create is nameable even when the file gave no `LocalID` (`internal/storage/bulk.go`).
+- `Created []IDMapping` — each create document's own reference (its `LocalID` if set, otherwise its new real ID) paired with the real ID it was created under, in creation order, so every create is nameable even when the file gave no `LocalID` (`internal/storage/bulk.go`).
 - `Updated []string` — real IDs of every updated issue, in the order applied (`internal/storage/bulk.go`).
+- `Ranked RankSetResult` — the `RankSet` the file's `rank: top` documents made, in file order; no resolutions when the file states no rank (`internal/storage/bulk.go`).
 
 #### `ImportTreeSpec` (`internal/storage/bulk.go`)
 JSON tags: `local_id`, `title`, `description,omitempty`, `prompt,omitempty`, `plan,omitempty`, `type`, `topic`, `priority`, `assignee,omitempty`, `labels,omitempty`, `parent,omitempty`, `blocked_by,omitempty`. `LocalID` is opaque — used inside the spec to wire `Parent` and `BlockedBy`, replaced with the generated lit issue ID at import time (`internal/storage/bulk.go`).
 
 #### `ImportTreeResult` (`internal/storage/bulk.go`)
-- `IDMap map[string]string` (json `id_map`) — local-ID → real-issue-ID mapping.
+- `Created []IDMapping` — each record's `LocalID` paired with the real issue ID it was created under, in creation order.
 
 ---
 
@@ -974,7 +975,7 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 **`RankToTop` / `RankToBottom`** — `rankToEdge(issueID, storage.RankTop|RankBottom)` (`internal/storage/memory/rank.go`): `mustRankable` (a missing id is `NotFoundError`; a deleted one → `model.ValidationError` with message `"cannot rank deleted issue %s; restore it first"`), then `orderEdgeFor(placement)`. The ends are the issue's own frame's: the result carries `Frame: e.frameOf(issueID)`, and an issue with no frame-mates returns with `Moved` false. An issue already past the edge among its frame-mates returns with `Moved` false; otherwise it is `detach`ed and inserted at `edge.positionIn` of its frame-mates' positions.
 
 **`RankSet(ids)`**
-- `storage.ValidateRankSetIDs(ids)` (`internal/storage/rank.go`, shared with the Dolt store), each refusal a `model.ValidationError`: `len(ids) < 2` → `"rank set: need at least 2 IDs to establish order"`; empty id → `"rank set: empty ID in input"`; duplicate id → `"rank set: duplicate ID %q in input"`.
+- `storage.ValidateRankSetIDs(ids)` (`internal/storage/rank.go`, shared with the Dolt store), each refusal a `model.ValidationError`: `len(ids) == 0` → `"rank set: need at least 1 ID to establish order"`; empty id → `"rank set: empty ID in input"`; duplicate id → `"rank set: duplicate ID %q in input"`.
 - `mustRankable` per id, unwrapped.
 - Builds an ancestor chain per id (missing id → `NotFoundError` from `ancestorChain`).
 - `storage.FrameRepresentatives(chains)`; error wrapped as `fmt.Errorf("rank set: %w", err)`.
@@ -1061,7 +1062,7 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 - `len(BlockedBy) > 0` → `"... sets blocked_by; wire dependencies with \`lit dep add\` instead"`.
 - `Title` set and trims to `""` → `"bulk: doc %d (id %q) sets an empty title"`.
 - A `bulkUpdatePatch` error → `fmt.Errorf("bulk: doc %d (id %q): %w", i, spec.ID, err)`, so an invalid type reads `bulk: doc 0 (id "x"): has invalid type "ghost": issue type must be …`.
-- `bulkUpdatePatch(spec).IsEmpty()` → `"bulk: doc %d (id %q) has no fields to update"`. Updatable fields are exactly the rows of `issueFields`: `Title`, `Description`, `Prompt`, `Plan`, `IssueType`, `Priority`, `Assignee`, `Labels`, `Lane`.
+- `bulkUpdatePatch(spec).IsEmpty()` and no `rank` → `"bulk: doc %d (id %q) has no fields to update and no rank"`; a document stating only `rank: top` joins the file's ordering and writes no `BulkUpdate`. A `rank` other than `top` → `"bulk: doc %d: rank %q is not a placement; …"`. Updatable fields are exactly the rows of `issueFields`: `Title`, `Description`, `Prompt`, `Plan`, `IssueType`, `Priority`, `Assignee`, `Labels`, `Lane`.
 
 **`storage.parseImportTreeSpecs`** (`internal/storage/import_validate.go`) — returns each spec parsed, its type and priority the ones the create writes
 - Empty → `"import: no issues in input"`.

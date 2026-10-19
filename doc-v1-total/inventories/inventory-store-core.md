@@ -2992,7 +2992,7 @@ Frame behavior pinned by tests — `internal/store/ranking_frame_test.go`:
 - `RankAbove(child, own epic)` and `RankBelow(epic, own child)` both refuse with `storage.FrameContainmentError{ContainerID: epic, ContainedID: child}`.
 
 **RankSet(ids)** — `internal/store/ranking.go`:
-- Validation `storage.ValidateRankSetIDs` — `internal/storage/rank.go`, shared with the memory engine: each refusal is a `model.ValidationError`: fewer than 2 ids → `"rank set: need at least 2 IDs to establish order"`; an empty-string id → `"rank set: empty ID in input"`; a repeated id → `"rank set: duplicate ID %q in input"`.
+- Validation `storage.ValidateRankSetIDs` — `internal/storage/rank.go`, shared with the memory engine: each refusal is a `model.ValidationError`: no ids → `"rank set: need at least 1 ID to establish order"`; an empty-string id → `"rank set: empty ID in input"`; a repeated id → `"rank set: duplicate ID %q in input"`.
 - `resolveRankSet` — `internal/store/ranking.go`: per id, `GetIssue` then `ancestorChain`; `storage.FrameRepresentatives` errors are wrapped `fmt.Errorf("rank set: %w", err)`; `storage.RankSetResolutions(ids, reps)` (`internal/storage/rank.go`, shared with the memory engine) pairs each id with its representative, and two named ids collapsing to the same representative → `model.ValidationError`
   `fmt.Sprintf("rank set: %s and %s both resolve to %s — their relative order is internal to %s and cannot be set against outside issues; run rank set among siblings instead", prior, id, reps[i], reps[i])`.
   Returns `[]storage.RankSetResolution{{NamedID, RankedID}}` parallel to the input order.
@@ -3868,7 +3868,8 @@ Update-document checks (`parseBulkUpdateDoc`, `import_validate.go`, which return
 | `Title` set and trims to `""` | `bulk: doc %d (id %q) sets an empty title` |
 | `IssueType` set and unparseable | `bulk: doc %d (id %q): has invalid type "<value>": issue type must be …` |
 | `Priority` set and unparseable | `bulk: doc %d (id %q): has invalid priority <value>: priority must be …` |
-| `storage.bulkUpdatePatch(spec).IsEmpty()` | `bulk: doc %d (id %q) has no fields to update` |
+| `storage.bulkUpdatePatch(spec).IsEmpty()` and no `rank` | `bulk: doc %d (id %q) has no fields to update and no rank` |
+| `rank` set to anything but `top` | `bulk: doc %d: rank %q is not a placement; the one placement is top, …` |
 | id already seen | `bulk: duplicate id %q` (`import_validate.go`) |
 
 The patch is empty iff none of `Title, Description, Prompt, Plan, IssueType, Priority, Assignee, Labels, Lane` is set (`UpdateIssueInput.IsEmpty`, `internal/storage/fields.go`). **`Reason` alone does not count** — hence "id set and reason set with no other field set" is rejected.
@@ -3923,11 +3924,12 @@ Note the create branch does **not** require `LocalID` (unlike ImportTree), and d
 | priority default | `0` (the int zero value, parsed strictly) | `PriorityNormal` when the pointer is nil; parsed only when set |
 | topic | required, parsed by the validator with `CreateIssue`'s `issueid.NormalizeTopicForCreate` | required (`missing topic`) and parsed the same way on create; forbidden on update |
 | actor | always `"links"` (CLI rejects `--by`) | `--by` actor threaded into update Changes only |
-| result | `ImportTreeResult{IDMap}` | `BulkApplyResult{Created map, Updated []string}` |
+| ordering | none | every `rank: top` document, in file order, written as one `RankSet` after every create and update |
+| result | `ImportTreeResult{Created []IDMapping}` | `BulkApplyResult{Created []IDMapping, Updated []string, Ranked RankSetResult}` |
 
 ### 5.5 Batching, progress, partial failure
 
-**There is no batching.** Every document is applied through the ordinary per-issue `CreateIssue`/`Apply`/`AddRelation` calls one at a time (`import_bulk.go`) — each of which is its own `withMutation` transaction and its own Dolt commit. There are no literal batch-size constants anywhere in these files, and `BulkApply`/`ImportTree` open no transaction of their own.
+**There is no batching.** Every document is applied through the ordinary per-issue `CreateIssue`/`Apply`/`AddRelation` calls one at a time (`import_bulk.go`) — each of which is its own `withMutation` transaction and its own Dolt commit. The one exception is a YAML file's ordering: its `rank: top` documents are written last, together, by one `RankSet` call. There are no literal batch-size constants anywhere in these files, and `BulkApply`/`ImportTree` open no transaction of their own.
 
 **No progress reporting** exists at the store layer; the CLI prints only after the whole call returns (`cli.go`).
 
