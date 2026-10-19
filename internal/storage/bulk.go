@@ -79,12 +79,19 @@ type BulkApplyResult struct {
 
 // Kept is the account a batch that fails at an update owes its caller: what
 // stays written once its creates are rolled back — the updates applied before
-// the failure and the order the file's `rank: top` documents wrote. Zero of
-// either is said, not omitted. [LAW:no-silent-failure]
+// the failure and the order the file's `rank: top` documents wrote, among the
+// issues that outlive the rollback. Zero of either is said, not omitted.
+// [LAW:no-silent-failure]
 func (r BulkApplyResult) Kept() string {
-	ranked := make([]string, len(r.Ranked.Resolutions))
-	for i, res := range r.Ranked.Resolutions {
-		ranked[i] = res.RankedID
+	created := make(map[string]struct{}, len(r.Created))
+	for _, m := range r.Created {
+		created[m.ID] = struct{}{}
+	}
+	ranked := make([]string, 0, len(r.Ranked.Resolutions))
+	for _, res := range r.Ranked.Resolutions {
+		if _, rolledBack := created[res.RankedID]; !rolledBack {
+			ranked = append(ranked, res.RankedID)
+		}
 	}
 	return fmt.Sprintf("kept %d updates [%s] and the order of %d issues [%s]", len(r.Updated), strings.Join(r.Updated, ","), len(ranked), strings.Join(ranked, ","))
 }

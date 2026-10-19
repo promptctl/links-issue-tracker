@@ -3645,13 +3645,15 @@ func bulkApplyCompensatesFailure(t *testing.T, ctx context.Context, st storage.S
 // aBulkFileFailingAtAnUpdateNamesWhatItKept: an update is written after the
 // file's ordering, and neither an applied update nor an order can be rolled
 // back, so a batch refused at an update says what stays written — and what it
-// says is what the store holds. [LAW:no-silent-failure]
+// says is what the store holds: a created issue the file ranked is rolled
+// back, so it is no part of the order kept. [LAW:no-silent-failure]
 func aBulkFileFailingAtAnUpdateNamesWhatItKept(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	a := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "a", Topic: "core", IssueType: model.TypeEpic})
 	b := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "b", Topic: "core", IssueType: model.TypeEpic})
 	c := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "c", Topic: "core", IssueType: model.TypeEpic})
-	top, renamed := "top", "renamed"
+	top, renamed, title, topic, epicType := "top", "renamed", "created", "core", "epic"
 	_, err := st.BulkApply(ctx, prefix, "ada", []storage.BulkIssueSpec{
+		{Title: &title, Topic: &topic, IssueType: &epicType, Rank: &top},
 		{ID: b.ID, Rank: &top},
 		{ID: a.ID, Rank: &top},
 		{ID: c.ID, Title: &renamed},

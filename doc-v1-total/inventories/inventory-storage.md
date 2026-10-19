@@ -417,7 +417,7 @@ Rule for the whole struct: **every slice is an OR within itself and an AND again
 - `Created []IDMapping` — each create document's own reference (its `LocalID` if set, otherwise its new real ID) paired with the real ID it was created under, in creation order, so every create is nameable even when the file gave no `LocalID` (`internal/storage/bulk.go`).
 - `Updated []string` — real IDs of every updated issue, in the order applied (`internal/storage/bulk.go`).
 - `Ranked RankSetResult` — the `RankSet` the file's `rank: top` documents made, in file order; no resolutions when the file states no rank (`internal/storage/bulk.go`).
-- `Kept() string` — what a batch refused at an update leaves written: `"kept %d updates [%s] and the order of %d issues [%s]"` over `Updated` and the `RankedID`s of `Ranked`, comma-joined, zero counts included; both engines put it in the update-failure error (`internal/storage/bulk.go`).
+- `Kept() string` — what a batch refused at an update leaves written: `"kept %d updates [%s] and the order of %d issues [%s]"` over `Updated` and the `RankedID`s of `Ranked` that are not among `Created` (the rollback deletes those), comma-joined, zero counts included; both engines put it in the update-failure error (`internal/storage/bulk.go`).
 
 #### `ImportTreeSpec` (`internal/storage/bulk.go`)
 JSON tags: `local_id`, `title`, `description,omitempty`, `prompt,omitempty`, `plan,omitempty`, `type`, `topic`, `priority`, `assignee,omitempty`, `labels,omitempty`, `parent,omitempty`, `blocked_by,omitempty`. `LocalID` is opaque — used inside the spec to wire `Parent` and `BlockedBy`, replaced with the generated lit issue ID at import time (`internal/storage/bulk.go`).
