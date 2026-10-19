@@ -176,7 +176,7 @@ func maybeNotifyOwner(ctx context.Context, ws workspace.Info, ev ownerNotifyEven
 		})
 		return
 	}
-	if err := writeMarkerAtomic(ws, markerPath, []byte(ev.fingerprint()+"\n")); err != nil {
+	if err := writeMarkerAtomic(markerPath, []byte(ev.fingerprint()+"\n")); err != nil {
 		fmt.Fprintf(os.Stderr, "lit: owner-notify marker not written: %v\n", err)
 	}
 	recordSyncTraceLogged(ws, syncTraceRecord{

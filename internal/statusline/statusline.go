@@ -5,9 +5,10 @@
 // The file costs lit nothing, and that is a property of this package's shape.
 // A command records facts it already holds while doing its own work; this
 // package folds them into the file after the command has closed its store.
-// It takes plain paths and values and imports only the standard library —
-// .golangci.yml holds it to that — so a write cannot reach the store, the
-// workspace lock, or anything else that waits on another process.
+// It takes plain paths and values and imports only the standard library and
+// atomicfile, which imports only the standard library too — .golangci.yml
+// holds both to that — so a write cannot reach the store, the workspace lock,
+// or anything else that waits on another process.
 // [LAW:effects-at-boundaries]
 package statusline
 
@@ -22,6 +23,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/promptctl/links-issue-tracker/internal/atomicfile"
 )
 
 // SchemaVersion is the version of the file's shape. It changes when a field is
@@ -362,34 +365,13 @@ func ensureExcluded(path string) (bool, error) {
 	return true, nil
 }
 
-// replaceFile writes payload to a temporary sibling and renames it over path,
-// creating path's directory if it is missing. There is no fsync: each file it
-// writes is rewritten by the next command that writes it, so a crash that
-// loses the newest version costs nothing a sync would be worth. Its errors name
-// the step that failed; the caller says which file it was writing.
+// replaceFile atomically replaces path with payload, creating path's
+// directory if it is missing. Replaceable: each file it writes is rewritten by
+// the next command that writes it. Its errors name the step that failed; the
+// caller says which file it was writing.
 func replaceFile(path string, payload []byte) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create directory: %w", err)
 	}
-	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".*")
-	if err != nil {
-		return fmt.Errorf("create temp file: %w", err)
-	}
-	_, writeErr := tmp.Write(payload)
-	err = errors.Join(writeErr, tmp.Close(), os.Chmod(tmp.Name(), 0o644))
-	if err == nil {
-		err = os.Rename(tmp.Name(), path)
-	}
-	if err != nil {
-		return errors.Join(err, removeIfPresent(tmp.Name()))
-	}
-	return nil
-}
-
-func removeIfPresent(path string) error {
-	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return err
-	}
-	return nil
+	return atomicfile.WriteFile(path, payload, 0o644, atomicfile.Replaceable)
 }

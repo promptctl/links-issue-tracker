@@ -371,7 +371,7 @@ func surfaceReceiveOutcome(ctx context.Context, ws workspace.Info, outcome syncR
 		// The worker's own log keeps every block it reached; the pending file
 		// is the copy a command prints.
 		fmt.Fprintln(os.Stderr, block)
-		if err := writeMarkerAtomic(ws, receiveBlockPendingPath(ws), []byte(block+"\n")); err != nil {
+		if err := writeMarkerAtomic(receiveBlockPendingPath(ws), []byte(block+"\n")); err != nil {
 			fmt.Fprintf(os.Stderr, "lit: sync-failure block not left for the next command: %v\n", err)
 		}
 		if ev, evOK := ownerNotifyEventForFailure(failure); evOK {

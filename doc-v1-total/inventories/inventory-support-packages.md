@@ -1,18 +1,43 @@
-# Behavioral Inventory — support packages: syncfile, doltcli, engine, backup
+# Behavioral Inventory — support packages: atomicfile, syncfile, doltcli, engine, backup
 
 Written directly from source by the coordinating session (not a subagent) after the
 store-sync inventory was found not to cover these four packages. Method identical to
 the other inventories: Go source only, no docs read, every claim cited.
 
-## `internal/syncfile` (`syncfile.go`, 77 lines)
+## `internal/atomicfile` (`atomicfile.go`, 124 lines)
+
+Atomic file replacement; imports only the standard library (`.golangci.yml`,
+`atomicfile-stdlib-only`), so `internal/statusline` may import it.
+
+- `Replace(name, perm, durability, write)` (`atomicfile.go`): `os.CreateTemp` in
+  `filepath.Dir(name)` with pattern `filepath.Base(name) + ".tmp-*"` (it extends
+  the target's name and never ends in the target's extension); runs `write` on the temp
+  file; `Chmod(perm)` on the handle (the mode is exact, whatever the umask); for
+  `Durable`, `Sync()`; `Close()`; `os.Rename` over `name`; for `Durable`, a
+  best-effort fsync of the directory whose error is deliberately ignored (Windows
+  cannot fsync a directory handle). The directory is not created. On any failure
+  the temp file is removed and a removal error is joined into the returned error;
+  `write`'s own error is returned wrapped but not reworded, and the package's own steps are named:
+  `create temp file: %w`, `chmod: %w`, `fsync: %w`, `close: %w`, `rename: %w`.
+- `WriteFile(name, data, perm, durability)` (`atomicfile.go`): `Replace` with a
+  `write` that writes `data`.
+- `Durability` (`atomicfile.go`): `Replaceable` (no fsync) or `Durable`; any other
+  value, the zero value included, panics before the temp file is created.
+- Callers and their `(perm, durability)`: statusline files `(0o644, Replaceable)`;
+  workspace `config.json` `(0o644, Durable)`; the installed binary
+  `(0o755, Durable)`; the cli's storage-dir markers `(0o600, Replaceable)`;
+  `syncfile.WriteAtomic` `(0o600, Durable)`; `received-refs.last`
+  `(0o600, Replaceable)`; the adopt-pending marker `(0o600, Durable)`.
+
+## `internal/syncfile` (`syncfile.go`, 67 lines)
 
 JSON export files on disk, with content hashing.
 
 - `WriteAtomic(path, export)` (`syncfile.go`): marshals a `model.Export` with
   `json.MarshalIndent(export, "", "  ")` plus a trailing newline (`syncfile.go`);
-  creates the parent directory `0o755`; writes to a temp file named `.links-sync-*.json`
-  in the destination directory; renames over `path` (atomic on the same filesystem);
-  the temp file is removed on any failure path via deferred `os.Remove`. Returns the
+  creates the parent directory `0o755`; replaces `path` through
+  `atomicfile.WriteFile` with mode `0o600`, durably; a failure is
+  `write sync file: %w`. Returns the
   lowercase hex SHA-256 of the exact payload bytes (`syncfile.go`).
 - `Read(path)` (`syncfile.go`): reads the file, unmarshals into `model.Export`
   (inheriting the v1→v2 history conversion in `Export.UnmarshalJSON`), returns the

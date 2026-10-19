@@ -121,13 +121,19 @@ func TestHTTPInstallerAtomicReplacesBinary(t *testing.T) {
 		t.Errorf("contents after install: got %q want NEW-BINARY", got)
 	}
 
-	// No leftover .tmp files in the target directory.
+	assertOnlyTheBinary(t, dir)
+}
+
+// assertOnlyTheBinary fails if dir holds anything besides the installed
+// binary: a temp file an install left behind, whatever its name.
+func assertOnlyTheBinary(t *testing.T, dir string) {
+	t.Helper()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), ".lit-install-") {
+		if e.Name() != "lit" {
 			t.Errorf("orphan temp file left behind: %s", e.Name())
 		}
 	}
@@ -161,13 +167,7 @@ func TestHTTPInstallerSHA256MismatchRefuses(t *testing.T) {
 	if string(got) != "OLD" {
 		t.Errorf("target should be unchanged on checksum failure, got %q", got)
 	}
-	// No leftover temp.
-	entries, _ := os.ReadDir(dir)
-	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), ".lit-install-") {
-			t.Errorf("orphan temp file left behind: %s", e.Name())
-		}
-	}
+	assertOnlyTheBinary(t, dir)
 }
 
 func TestHTTPInstallerRejectsUnsafeArchiveEntry(t *testing.T) {

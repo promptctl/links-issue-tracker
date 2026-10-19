@@ -3416,7 +3416,7 @@ Three write surfaces consume `Store.Export`:
 
 **(c) Sync file / last-sync base** — `internal/syncfile/syncfile.go`. `WriteAtomic(path, export)`:
 - `marshalExport` = `json.MarshalIndent(export, "", "  ")` **plus a trailing `'\n'`** (`syncfile.go`).
-- `os.MkdirAll(dir, 0o755)`, `os.CreateTemp(dir, ".links-sync-*.json")`, write, close, `os.Rename` onto the clean path (`syncfile.go`); the temp file is removed on any failure path via `defer`.
+- `os.MkdirAll(dir, 0o755)`, then `atomicfile.WriteFile(cleanPath, payload, 0o600, atomicfile.Durable)`; a failure is `write sync file: %w` (`syncfile.go`).
 - returns `hashPayload(payload)` — the content hash of the bytes written.
 - The sync base lives at `filepath.Join(ap.Workspace.StorageDir, "last-sync-base.json")` (`internal/cli/backup.go`).
 
@@ -4469,7 +4469,7 @@ Any **pre-existing** database directory at the target (an empty bootstrap store,
 |---|---|---|
 | Marker filename | `const adoptPendingMarkerName = ".links-adopt-pending"` | `adopt.go` |
 | Marker path | `func AdoptPendingMarkerPath(databasePath string) string { return filepath.Join(filepath.Clean(databasePath), adoptPendingMarkerName) }` — **inside** the dolt root, sibling of the `links` database dir (not at the dirname position the locks use) | `adopt.go`, rationale `adopt.go` |
-| Marker temp-file pattern | `os.CreateTemp(cleanRoot, adoptPendingMarkerName+".tmp-*")` → `.links-adopt-pending.tmp-*` | `adopt.go` |
+| Marker write | `atomicfile.WriteFile(AdoptPendingMarkerPath(cleanRoot), payload, 0o600, atomicfile.Durable)`; temp file `.links-adopt-pending.tmp-*` | `adopt.go` |
 | Database dir | `dbDir := filepath.Join(cleanRoot, doltDatabaseName)` → `<root>/links` | `adopt.go` |
 | Displacement dir | `displaced := fmt.Sprintf("%s.adopt-displaced-%d", cleanRoot, time.Now().UTC().UnixNano())` — a **sibling of the dolt root** (prefix is `cleanRoot`, not `dbDir`) | `adopt.go` |
 | Singleton cache keys | `filepath.ToSlash(filepath.Join(dbDir, ".dolt", "noms"))` and `filepath.ToSlash(filepath.Join(dbDir, ".dolt", "stats", ".dolt", "noms"))` | `adopt.go` |
@@ -4491,12 +4491,7 @@ Sentinel: `var errAdoptPending = errors.New("adopt pending")` — unexported, wr
 
 Exact ordered steps:
 1. `json.Marshal(adoptPendingMarker{...})`; on error → `"encode adopt-pending marker: %w"` (`adopt.go`).
-2. `os.CreateTemp(cleanRoot, ".links-adopt-pending.tmp-*")`; on error → `"write adopt-pending marker: %w"` (`adopt.go`).
-3. `f.Write(payload)`; on error → `errors.Join(fmt.Errorf("write adopt-pending marker: %w", err), f.Close(), os.Remove(f.Name()))` (`adopt.go`).
-4. `f.Sync()`; on error → `errors.Join(fmt.Errorf("sync adopt-pending marker: %w", err), f.Close(), os.Remove(f.Name()))` (`adopt.go`).
-5. `f.Close()`; on error → `errors.Join(fmt.Errorf("close adopt-pending marker: %w", err), os.Remove(f.Name()))` (`adopt.go`).
-6. `os.Rename(f.Name(), AdoptPendingMarkerPath(cleanRoot))`; on error → `errors.Join(fmt.Errorf("install adopt-pending marker: %w", err), os.Remove(f.Name()))` (`adopt.go`).
-7. Best-effort directory fsync: `os.Open(cleanRoot)` then `_ = dir.Sync(); _ = dir.Close()` — **errors deliberately ignored**, with the stated reason that Windows cannot fsync a directory handle and there is no recovery action (`adopt.go`).
+2. `atomicfile.WriteFile(AdoptPendingMarkerPath(cleanRoot), payload, 0o600, atomicfile.Durable)`: write, fsync, close and rename, then a best-effort directory fsync whose error is deliberately ignored (Windows cannot fsync a directory handle); any failure removes the temp file. On error → `"write adopt-pending marker: %w"` (`adopt.go`, `internal/atomicfile`).
 
 ### 1.5 `clearAdoptPendingMarker(cleanRoot string) error` — `adopt.go`
 

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/promptctl/links-issue-tracker/internal/atomicfile"
 	"github.com/promptctl/links-issue-tracker/internal/issueid"
 )
 
@@ -739,31 +740,12 @@ func writeConfig(path string, cfg Config) (Config, error) {
 		return Config{}, fmt.Errorf("marshal workspace config: %w", err)
 	}
 	payload = append(payload, '\n')
-	// [LAW:single-enforcer] Same-directory temp-file + rename is the atomic-write
-	// boundary every config writer flows through, so a crash between truncate
-	// and write cannot leave config.json empty or partially written.
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".config.json.*")
-	if err != nil {
-		return Config{}, fmt.Errorf("create workspace config temp: %w", err)
-	}
-	tmpPath := tmp.Name()
-	if _, err := tmp.Write(payload); err != nil {
-		_ = tmp.Close()
-		_ = os.Remove(tmpPath)
-		return Config{}, fmt.Errorf("write workspace config temp: %w", err)
-	}
-	if err := tmp.Chmod(0o644); err != nil {
-		_ = tmp.Close()
-		_ = os.Remove(tmpPath)
-		return Config{}, fmt.Errorf("chmod workspace config temp: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmpPath)
-		return Config{}, fmt.Errorf("close workspace config temp: %w", err)
-	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		_ = os.Remove(tmpPath)
-		return Config{}, fmt.Errorf("rename workspace config: %w", err)
+	// [LAW:single-enforcer] Every config writer flows through here, and the
+	// atomic replace means a crash cannot leave config.json empty or partially
+	// written. Durable: it holds the workspace's identity, which nothing
+	// recomputes.
+	if err := atomicfile.WriteFile(path, payload, 0o644, atomicfile.Durable); err != nil {
+		return Config{}, fmt.Errorf("write workspace config: %w", err)
 	}
 	return cfg, nil
 }

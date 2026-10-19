@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/promptctl/links-issue-tracker/internal/atomicfile"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
@@ -21,21 +22,10 @@ func WriteAtomic(path string, export model.Export) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(cleanPath), 0o755); err != nil {
 		return "", fmt.Errorf("create sync dir: %w", err)
 	}
-	tempFile, err := os.CreateTemp(filepath.Dir(cleanPath), ".links-sync-*.json")
-	if err != nil {
-		return "", fmt.Errorf("create temp sync file: %w", err)
-	}
-	tempPath := tempFile.Name()
-	defer os.Remove(tempPath)
-	if _, err := tempFile.Write(payload); err != nil {
-		_ = tempFile.Close()
-		return "", fmt.Errorf("write temp sync file: %w", err)
-	}
-	if err := tempFile.Close(); err != nil {
-		return "", fmt.Errorf("close temp sync file: %w", err)
-	}
-	if err := os.Rename(tempPath, cleanPath); err != nil {
-		return "", fmt.Errorf("rename sync file: %w", err)
+	// Durable: a backup or a sync base is the copy kept for when the store is
+	// lost, so nothing could recompute it.
+	if err := atomicfile.WriteFile(cleanPath, payload, 0o600, atomicfile.Durable); err != nil {
+		return "", fmt.Errorf("write sync file: %w", err)
 	}
 	return hashPayload(payload), nil
 }

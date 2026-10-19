@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/promptctl/links-issue-tracker/internal/atomicfile"
 )
 
 // The received-refs record is the last advertisement of the sync remote this
@@ -44,26 +46,16 @@ func ReadReceivedRefs(databasePath string) ([]byte, error) {
 	return payload, err
 }
 
-// WriteReceivedRefs replaces the record atomically (write beside it, rename
-// over it), so a reader never sees a torn record and a crash leaves either the
-// old record or the new one.
+// WriteReceivedRefs replaces the record atomically, so a reader never sees a
+// torn record. Replaceable: a record a crash cut short no longer matches any
+// advertisement, which only costs the fetch it would have saved.
 func WriteReceivedRefs(databasePath string, payload []byte) error {
 	target := ReceivedRefsPath(databasePath)
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return fmt.Errorf("ensure storage dir for received-refs record: %w", err)
 	}
-	f, err := os.CreateTemp(filepath.Dir(target), receivedRefsMarkerName+".tmp-*")
-	if err != nil {
+	if err := atomicfile.WriteFile(target, payload, 0o600, atomicfile.Replaceable); err != nil {
 		return fmt.Errorf("write received-refs record: %w", err)
-	}
-	if _, err := f.Write(payload); err != nil {
-		return errors.Join(fmt.Errorf("write received-refs record: %w", err), f.Close(), os.Remove(f.Name()))
-	}
-	if err := f.Close(); err != nil {
-		return errors.Join(fmt.Errorf("close received-refs record: %w", err), os.Remove(f.Name()))
-	}
-	if err := os.Rename(f.Name(), target); err != nil {
-		return errors.Join(fmt.Errorf("install received-refs record: %w", err), os.Remove(f.Name()))
 	}
 	return nil
 }

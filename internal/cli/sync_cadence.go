@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
+	"github.com/promptctl/links-issue-tracker/internal/atomicfile"
 	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/pathspec"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
@@ -245,35 +246,18 @@ func markRunAttempt(ws workspace.Info, markerPath string) error {
 	return nil
 }
 
-// writeMarkerAtomic writes a storage-dir marker via temp-file-and-rename: two
-// lit processes (a foreground command and a detached mirror) can complete
+// writeMarkerAtomic atomically replaces a storage-dir marker: two lit
+// processes (a foreground command and a detached mirror) can complete
 // near-simultaneously, and a reader must see one whole payload or the other,
 // never a torn write. [LAW:no-ambient-temporal-coupling]
-// [LAW:one-type-per-behavior] the one atomic-marker primitive for the cli's
-// storage-dir markers; the push-outcome and owner-notify markers are instances
-// distinguished only by path and payload. The store's adopt-pending marker
-// (store.writeAdoptPendingMarker) is the same temp-and-rename shape plus the
-// fsync its crash-survival contract needs — it cannot share this function
-// without an import cycle (store cannot import cli), so the two are kept
-// deliberately congruent rather than unified.
-func writeMarkerAtomic(ws workspace.Info, markerPath string, payload []byte) error {
-	if err := os.MkdirAll(ws.StorageDir, 0o755); err != nil {
+// [LAW:one-type-per-behavior] the one marker write for the cli's storage-dir
+// markers; they are instances distinguished only by path and payload.
+// Replaceable: each marker is rewritten by the next command that writes it.
+func writeMarkerAtomic(markerPath string, payload []byte) error {
+	if err := os.MkdirAll(filepath.Dir(markerPath), 0o755); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(ws.StorageDir, filepath.Base(markerPath)+"-*")
-	if err != nil {
-		return err
-	}
-	if _, err := tmp.Write(payload); err != nil {
-		_ = tmp.Close()
-		_ = os.Remove(tmp.Name())
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmp.Name())
-		return err
-	}
-	return os.Rename(tmp.Name(), markerPath)
+	return atomicfile.WriteFile(markerPath, payload, 0o600, atomicfile.Replaceable)
 }
 
 // receiveMarkerPath is the single debounce marker for automatic receive: its

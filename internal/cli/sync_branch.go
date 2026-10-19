@@ -53,7 +53,7 @@ func resolveSyncBranch(ctx context.Context, ws workspace.Info, remote string) (s
 	}
 	// The branch is resolved whether or not the record lands; a lost record only
 	// costs read commands their sync banner until the next sync verb writes it.
-	if err := writeMarkerAtomic(ws, advertisedSyncBranchPath(ws, remote), []byte(branch+"\n")); err != nil {
+	if err := writeMarkerAtomic(advertisedSyncBranchPath(ws, remote), []byte(branch+"\n")); err != nil {
 		fmt.Fprintf(os.Stderr, "lit: sync branch record not written: %v\n", err)
 	}
 	return branch, nil
