@@ -14,7 +14,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/statusline"
 )
 
-// testdata/render.txt is what cc-candybar 1.130.5 printed for a checkout
+// testdata/render.txt is what cc-candybar 1.135.0 printed for a checkout
 // working on t-1 with no phase, whose last lit next found nothing: a solid
 // arrow after the menu, then a thin one between two cells of one colour.
 func TestCellsReadsTheBarCandybarPrints(t *testing.T) {
@@ -120,18 +120,18 @@ func TestCheckFailsTheRunOnAnyCaseThatDoesNotRender(t *testing.T) {
 		return nil, errors.New("plugin did not load")
 	}
 	var stdout strings.Builder
-	if code := check(&stdout, io.Discard, cases, render); code != 1 {
+	if code := check(&stdout, io.Discard, "/repo", cases, render); code != 1 {
 		t.Errorf("exit %d, want 1", code)
 	}
 	want := `candybar-check: case=renders verdict=ok cells=["phase plan"]
 candybar-check: case=other-cells verdict=mismatch cells=[]
 candybar-check: case=no-render verdict=error cells=[]
-candybar-check: cc-candybar=` + candybarVersion + ` cases=3 failed=2
+candybar-check: cc-candybar=` + candybarVersion + ` plugin=/repo cases=3 failed=2
 `
 	if stdout.String() != want {
 		t.Errorf("stdout:\n%s\nwant:\n%s", stdout.String(), want)
 	}
-	if code := check(io.Discard, io.Discard, cases[:1], render); code != 0 {
+	if code := check(io.Discard, io.Discard, "/repo", cases[:1], render); code != 0 {
 		t.Errorf("every case rendered: exit %d, want 0", code)
 	}
 }

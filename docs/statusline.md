@@ -194,7 +194,7 @@ it does.
 
 lit ships a [cc-candybar](https://github.com/promptctl/cc-candybar) plugin
 that reads this file, at `.cc-candybar/plugins/lit/plugin.json5` in this
-repository. cc-candybar installs it:
+repository. cc-candybar 1.135.0 or later installs it:
 
 ```sh
 cc-candybar plugin install promptctl/links-issue-tracker
@@ -213,7 +213,8 @@ library lists three segments:
 
 Place one from cc-candybar's edit mode. Each segment hides while there is
 nothing to show, and shows a warning naming the version when the file's
-`schema_version` is not the one the plugin reads.
+`schema_version` is not the one the plugin reads: update whichever of lit
+and the plugin is older.
 
 ## A minimal statusline
 

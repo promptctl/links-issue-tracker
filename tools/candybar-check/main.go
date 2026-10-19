@@ -17,10 +17,15 @@
 // with a summary:
 //
 //	candybar-check: case=phase verdict=ok cells=["phase review"]
-//	candybar-check: cc-candybar=1.135.0 cases=6 failed=0
+//	candybar-check: cc-candybar=1.135.0 plugin=/path/to/links cases=6 failed=0
+//
+// plugin= is the repository the plugin was installed from: the checkout the
+// tool runs in.
 //
 // Exit codes: 0, every case rendered the cells it expects; 1, a case did not,
-// or cc-candybar could not be installed.
+// or the run could not start: no repository to install the plugin from, or
+// cc-candybar could not be installed. A run that could not start prints no
+// summary.
 package main
 
 import (
@@ -173,14 +178,14 @@ func run(stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "error: candybar-check: install cc-candybar %s: %v\n", candybarVersion, err)
 		return 1
 	}
-	return check(stdout, stderr, cases, func(c renderCase) ([]string, error) {
+	return check(stdout, stderr, repo, cases, func(c renderCase) ([]string, error) {
 		return render(candybar, repo, filepath.Join(dir, c.name), c)
 	})
 }
 
-// check renders every case, prints each one's verdict and then the summary,
-// and returns the exit code: 1 when any case did not render its cells.
-func check(stdout, stderr io.Writer, cases []renderCase, render func(renderCase) ([]string, error)) int {
+// check renders every case, prints each one's verdict and then the summary
+// naming the repository the plugin came from, and returns the exit code: 1 when any case did not render its cells.
+func check(stdout, stderr io.Writer, plugin string, cases []renderCase, render func(renderCase) ([]string, error)) int {
 	failed := 0
 	for _, c := range cases {
 		got, err := render(c)
@@ -198,7 +203,7 @@ func check(stdout, stderr io.Writer, cases []renderCase, render func(renderCase)
 		}
 		fmt.Fprintf(stdout, "candybar-check: case=%s verdict=%s cells=%q\n", c.name, verdict, got)
 	}
-	fmt.Fprintf(stdout, "candybar-check: cc-candybar=%s cases=%d failed=%d\n", candybarVersion, len(cases), failed)
+	fmt.Fprintf(stdout, "candybar-check: cc-candybar=%s plugin=%s cases=%d failed=%d\n", candybarVersion, plugin, len(cases), failed)
 	if failed > 0 {
 		return 1
 	}
