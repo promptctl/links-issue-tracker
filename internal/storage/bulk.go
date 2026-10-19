@@ -1,5 +1,10 @@
 package storage
 
+import (
+	"fmt"
+	"strings"
+)
+
 // BulkIssueSpec is a single YAML document in a bulk-input file. ID is the
 // selector: present, it names an existing issue and the document is an
 // update patch of only the fields it sets (the same fields UpdateIssueInput
@@ -70,6 +75,18 @@ type BulkApplyResult struct {
 	Created []IDMapping
 	Updated []string
 	Ranked  RankSetResult
+}
+
+// Kept is the account a batch that fails at an update owes its caller: what
+// stays written once its creates are rolled back — the updates applied before
+// the failure and the order the file's `rank: top` documents wrote. Zero of
+// either is said, not omitted. [LAW:no-silent-failure]
+func (r BulkApplyResult) Kept() string {
+	ranked := make([]string, len(r.Ranked.Resolutions))
+	for i, res := range r.Ranked.Resolutions {
+		ranked[i] = res.RankedID
+	}
+	return fmt.Sprintf("kept %d updates [%s] and the order of %d issues [%s]", len(r.Updated), strings.Join(r.Updated, ","), len(ranked), strings.Join(ranked, ","))
 }
 
 // BulkFile is a bulk file the gate admitted, parsed: the issues it creates,

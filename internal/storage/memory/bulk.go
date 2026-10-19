@@ -59,7 +59,7 @@ func (e *Engine) BulkApply(ctx context.Context, prefix, actor string, specs []st
 	for _, update := range file.Updates {
 		applied, err := e.apply(update.ID, storage.Change{Actor: actor, Fields: update.Patch})
 		if err != nil {
-			return storage.BulkApplyResult{}, e.compensate(batch, actor, fmt.Errorf("bulk: update %q: %w", update.ID, err))
+			return storage.BulkApplyResult{}, e.compensate(batch, actor, fmt.Errorf("bulk: update %q: %w; %s", update.ID, err, result.Kept()))
 		}
 		result.Updated = append(result.Updated, applied.Issue.ID)
 	}

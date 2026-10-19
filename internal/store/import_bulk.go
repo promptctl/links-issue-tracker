@@ -67,7 +67,7 @@ func (s *Store) BulkApply(ctx context.Context, prefix, actor string, specs []sto
 		applied, err := s.Apply(ctx, update.ID, storage.Change{Actor: actor, Fields: update.Patch})
 		if err != nil {
 			leaked := s.rollbackCreatedIssues(ctx, actor, createdIDs)
-			return storage.BulkApplyResult{}, fmt.Errorf("bulk: update %q: %w (rollback leaked %d: %s)", update.ID, err, len(leaked), strings.Join(leaked, ","))
+			return storage.BulkApplyResult{}, fmt.Errorf("bulk: update %q: %w; %s (rollback leaked %d: %s)", update.ID, err, result.Kept(), len(leaked), strings.Join(leaked, ","))
 		}
 		result.Updated = append(result.Updated, applied.Issue.ID)
 	}

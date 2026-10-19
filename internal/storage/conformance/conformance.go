@@ -221,6 +221,7 @@ var cases = []engineCase{
 	{"bulk_file_orders_its_rank_top_documents", bulkFileOrdersItsRankTopDocuments},
 	{"bulk_file_ranks_a_create_at_the_top_of_its_epic", bulkFileRanksACreateAtTheTopOfItsEpic},
 	{"bulk_apply_compensates_a_failed_batch", bulkApplyCompensatesFailure},
+	{"a_bulk_file_failing_at_an_update_names_what_it_kept", aBulkFileFailingAtAnUpdateNamesWhatItKept},
 	{"import_tree_maps_local_ids", importTreeMapsLocalIDs},
 	{"attribution_stamps_events", attributionStampsEvents},
 	{"observers_hear_every_change", observersHearEveryChange},
@@ -3639,6 +3640,32 @@ func bulkApplyCompensatesFailure(t *testing.T, ctx context.Context, st storage.S
 		t.Fatal("BulkApply with an unresolvable parent succeeded; want an error")
 	}
 	assertIssueIDs(t, "issues after a compensated batch", mustList(t, ctx, st, storage.ListIssuesFilter{}), nil)
+}
+
+// aBulkFileFailingAtAnUpdateNamesWhatItKept: an update is written after the
+// file's ordering, and neither an applied update nor an order can be rolled
+// back, so a batch refused at an update says what stays written — and what it
+// says is what the store holds. [LAW:no-silent-failure]
+func aBulkFileFailingAtAnUpdateNamesWhatItKept(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	a := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "a", Topic: "core", IssueType: model.TypeEpic})
+	b := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "b", Topic: "core", IssueType: model.TypeEpic})
+	c := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "c", Topic: "core", IssueType: model.TypeEpic})
+	top, renamed := "top", "renamed"
+	_, err := st.BulkApply(ctx, prefix, "ada", []storage.BulkIssueSpec{
+		{ID: b.ID, Rank: &top},
+		{ID: a.ID, Rank: &top},
+		{ID: c.ID, Title: &renamed},
+		// An id the gate cannot judge: it names no issue, so its write fails.
+		{ID: "no-such-issue", Title: &renamed},
+	})
+	want := fmt.Sprintf("kept 1 updates [%s] and the order of 2 issues [%s,%s]", c.ID, b.ID, a.ID)
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("BulkApply error = %v, want it to name what it kept: %q", err, want)
+	}
+	assertOrder(t, ctx, st, "the order the failed batch kept", b.ID, a.ID, c.ID)
+	if got := mustGet(t, ctx, st, c.ID); got.Title != renamed {
+		t.Errorf("the update the failed batch kept: title = %q, want %q", got.Title, renamed)
+	}
 }
 
 func importTreeMapsLocalIDs(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
