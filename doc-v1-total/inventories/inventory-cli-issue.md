@@ -1458,9 +1458,9 @@ Lane for the claim line is `model.LaneOf(entry.Issue, details[entry.ID].Parent)`
 | `ServedFromDependency` | `Row`, `Lane model.LaneID`, `Gates string` | step 1b's or 2b's on-path dependency; `Gates` is the id of the blocked row it unblocks, so the pick explains itself (`next_route.go`) |
 | `ServedPastExhaustion` | `Row`, `Lane model.LaneID`, `Exhaustion Exhausted` | the checkout's own epic(s) have open work, none of it reachable, and the global pool has a ready ticket outside them — step 3 (`next_route.go`) |
 | `ServedPastNarrowing` | `Row`, `Lane model.LaneID`, `Narrowing Narrowed` | steps 1–2b serve nothing the filter selects, the same steps over the whole queue would serve `Narrowing.Hidden`, and the global pool has a ready ticket the filter selects — step 3 (`next_route.go`) |
-| `Exhausted` | `Epics []string`, `Blocked []rowReach`, `Held []rowReach`, `OffPath []rowReach`, `Narrowing *Narrowed` | the same, with nothing the filter selects ready in the global pool either — step 3; `Narrowing` is the pool's pick over the whole queue, if any, and `OffPath`, set only when there is none, is the rows outside the scope a focus label withheld from the pool (`next_route.go`) |
+| `Exhausted` | `Epics []string`, `Progress claims.Progress`, `Blocked []blockerReach`, `Held []rowReach`, `OffPath []string`, `Narrowing *Narrowed` | the same, with nothing the filter selects ready in the global pool either — step 3; `Narrowing` is the pool's pick over the whole queue, if any, and `OffPath`, set only when there is none, is the rows outside the scope a focus label withheld from the pool (`next_route.go`) |
 | `Narrowed` | `Hidden annotation.AnnotatedIssue` | no step serves a row the filter selects, and the same steps over the whole queue serve `Hidden` — step 3, with nothing the filter selects ready in the global pool either, or step 4 (`next_route.go`) |
-| `NoWork` | `Unreachable []rowReach` | the global pool produced nothing — step 4 (`next_route.go`) |
+| `NoWork` | `Unreachable []rowReach`, `OffPath []string` | the global pool produced nothing — step 4; `OffPath` is the rows a focus label kept out of the pool (`next_route.go`) |
 
 `Exhausted`, `Narrowed` and `NoWork` implement `error` and travel outward as themselves
 rather than being rendered into a generic error (`next_route.go`,
@@ -1519,7 +1519,7 @@ serves nothing, over every row; both dependency walks read every row either way:
      `reachFor` reads `reachTakeable` (`next_route.go`), drawn from
      `gatingDependencies`, which collects the distinct open dependency IDs of
      the in-scope **open** rows in rank order, each as a `depReach` whose
-     `Best` is the `rowReach` of the highest `reachFor` among `workToward[id]`,
+     `Best` is the `reading` of the highest `reachFor` among `workToward[id]`,
      carried by the first row in rank order with it, or nil when that is empty
      (`next_route.go`) →
      **`ServedFromDependency{Row: work, Lane: laneOf(work), Gates: dep.Gates, Via: dep.Via, Blocker: dep.ID}`** (`next_route.go`), the `Gates` being the blocked row the dependency gates and `work` the first row of `workToward[dep.ID]` the run may serve that `reachFor` reads `reachTakeable` — the dependency itself or, for an epic, a ticket under it.
