@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"strings"
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/claims"
@@ -74,6 +75,22 @@ type CreateIssueInput struct {
 	// Prefix is the workspace's cosmetic ID prefix (e.g., "links" → "links-foo-abc1").
 	// Sourced from workspace config at the call site. Not persisted as derived state.
 	Prefix string
+	// Actor is who files the issue: the created event's actor, and the author
+	// of the parent edge and labels the create wires. It is the author of a
+	// plan given at creation, so the plan gate can tell that author's own pass
+	// from a reviewer's.
+	Actor string
+}
+
+// Actor is who a write records as its author: the name the caller gave,
+// trimmed, or "unknown" when it gave none. A write attributed to nobody is a
+// real state — an engine cannot invent who did something — and this is the
+// one spelling of it. [LAW:one-source-of-truth]
+func Actor(name string) string {
+	if actor := strings.TrimSpace(name); actor != "" {
+		return actor
+	}
+	return "unknown"
 }
 
 // UpdateIssueInput is the field-axis patch of a Change: only columns the field

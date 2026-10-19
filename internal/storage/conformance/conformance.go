@@ -223,6 +223,39 @@ var cases = []engineCase{
 	{"attribution_stamps_events", attributionStampsEvents},
 	{"observers_hear_every_change", observersHearEveryChange},
 	{"local_issue_count_tracks_creates", localIssueCountTracksCreates},
+	{"a_create_is_written_by_its_actor", aCreateIsWrittenByItsActor},
+}
+
+// Every row a create writes — its created event, its parent edge, its labels —
+// names the create's actor, trimmed, and "unknown" when the caller named none.
+func aCreateIsWrittenByItsActor(t *testing.T, ctx context.Context, st storage.Store, _ *clock) {
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+	for _, tc := range []struct{ actor, want string }{{" ada ", "ada"}, {"", "unknown"}} {
+		issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "filed", Topic: "core", ParentID: epic.ID, Labels: []string{"perf"}, Actor: tc.actor})
+		export, err := st.Export(ctx)
+		if err != nil {
+			t.Fatalf("Export() error = %v", err)
+		}
+		var authors []string
+		for _, event := range export.Events {
+			if event.IssueID == issue.ID && event.Action == model.ActionCreated {
+				authors = append(authors, "event "+event.Actor)
+			}
+		}
+		for _, rel := range export.Relations {
+			if rel.SrcID == issue.ID && rel.Type == model.RelParentChild {
+				authors = append(authors, "parent "+rel.CreatedBy)
+			}
+		}
+		for _, label := range export.Labels {
+			if label.IssueID == issue.ID {
+				authors = append(authors, "label "+label.CreatedBy)
+			}
+		}
+		if want := []string{"event " + tc.want, "parent " + tc.want, "label " + tc.want}; !slices.Equal(authors, want) {
+			t.Errorf("create with actor %q wrote rows by %q, want %q", tc.actor, authors, want)
+		}
+	}
 }
 
 func createReadRoundtrip(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
@@ -2431,6 +2464,13 @@ func aPlanReviewJudgesOneVersion(t *testing.T, ctx context.Context, st storage.S
 		if len(detail.PlanReviews) != 2 || detail.PlanReviews[0].ID != passed.ID || detail.PlanReviews[1].ID != failed.ID {
 			t.Fatalf("detail plan reviews = %+v, want the pass then the fail, oldest first", detail.PlanReviews)
 		}
+		listed, err := st.ListPlanReviews(ctx, issue.ID)
+		if err != nil {
+			t.Fatalf("ListPlanReviews error = %v", err)
+		}
+		if len(listed) != 2 || listed[0].ID != passed.ID || listed[1].ID != failed.ID {
+			t.Fatalf("ListPlanReviews = %+v, want the pass then the fail, oldest first", listed)
+		}
 		if want := []model.Law{"carrying-cost", "one-source-of-truth"}; !slices.Equal(detail.PlanReviews[1].Laws, want) {
 			t.Fatalf("stored fail's laws = %v, want %v: unchanged by a write through the review AddPlanReview returned", detail.PlanReviews[1].Laws, want)
 		}
@@ -2809,7 +2849,7 @@ func anImportFileThatBreaksARuleIsRefusedWhole(t *testing.T, ctx context.Context
 	commaAssignee := "Doe, J"
 	lands := storage.ImportTreeSpec{LocalID: "e", Title: "lands", IssueType: "epic", Topic: "core"}
 	tree := func(specs ...storage.ImportTreeSpec) func() error {
-		return func() error { _, err := st.ImportTree(ctx, prefix, specs); return err }
+		return func() error { _, err := st.ImportTree(ctx, prefix, "", specs); return err }
 	}
 	bulk := func(specs ...storage.BulkIssueSpec) func() error {
 		return func() error { _, err := st.BulkApply(ctx, prefix, "ada", specs); return err }
@@ -2996,14 +3036,14 @@ func everyTicketLivesInsideAContainer(t *testing.T, ctx context.Context, st stor
 		do   func() error
 	}{
 		{"ImportTree(a loose leaf after an epic)", func() error {
-			_, err := st.ImportTree(ctx, prefix, []storage.ImportTreeSpec{
+			_, err := st.ImportTree(ctx, prefix, "", []storage.ImportTreeSpec{
 				{LocalID: "e", Title: "imported epic", IssueType: "epic", Topic: "core"},
 				{LocalID: "l", Title: "loose leaf", IssueType: "task", Topic: "core"},
 			})
 			return err
 		}},
 		{"ImportTree(a leaf under a leaf)", func() error {
-			_, err := st.ImportTree(ctx, prefix, []storage.ImportTreeSpec{
+			_, err := st.ImportTree(ctx, prefix, "", []storage.ImportTreeSpec{
 				{LocalID: "e", Title: "imported epic", IssueType: "epic", Topic: "core"},
 				{LocalID: "l", Title: "imported leaf", IssueType: "task", Topic: "core", Parent: "e"},
 				{LocalID: "u", Title: "under a leaf", IssueType: "bug", Topic: "core", Parent: "l"},
@@ -3184,7 +3224,7 @@ func blocksNeverRunsAlongTheHierarchy(t *testing.T, ctx context.Context, st stor
 		}
 	}
 
-	_, err := st.ImportTree(ctx, prefix, []storage.ImportTreeSpec{
+	_, err := st.ImportTree(ctx, prefix, "", []storage.ImportTreeSpec{
 		{LocalID: "e", Title: "imported epic", IssueType: "epic", Topic: "core"},
 		{LocalID: "s", Title: "imported sub-epic", IssueType: "epic", Topic: "core", Parent: "e"},
 		{LocalID: "l", Title: "imported leaf", IssueType: "task", Topic: "core", Parent: "s", BlockedBy: []string{"e"}},
@@ -3228,7 +3268,7 @@ func blocksNeverOrdersTwoLeavesOfOneEpic(t *testing.T, ctx context.Context, st s
 		t.Errorf("blocked-by edges at %s after the refusal = %+v, want none", second.ID, edges)
 	}
 
-	_, err = st.ImportTree(ctx, prefix, []storage.ImportTreeSpec{
+	_, err = st.ImportTree(ctx, prefix, "", []storage.ImportTreeSpec{
 		{LocalID: "e", Title: "imported epic", IssueType: "epic", Topic: "core"},
 		{LocalID: "a", Title: "imported first", IssueType: "task", Topic: "core", Parent: "e"},
 		{LocalID: "b", Title: "imported second", IssueType: "task", Topic: "core", Parent: "e", BlockedBy: []string{"a"}},
@@ -3525,7 +3565,7 @@ func importTreeMapsLocalIDs(t *testing.T, ctx context.Context, st storage.Store,
 	// below fails for an engine that reports file order instead of creation
 	// order. other is a sub-epic: between two leaves of one epic a blocked_by
 	// is refused, since rank orders them.
-	result, err := st.ImportTree(ctx, prefix, []storage.ImportTreeSpec{
+	result, err := st.ImportTree(ctx, prefix, "", []storage.ImportTreeSpec{
 		{LocalID: "other", Title: "other", IssueType: "epic", Topic: "core", Parent: "root", BlockedBy: []string{"leaf"}},
 		{LocalID: "leaf", Title: "leaf", IssueType: "task", Topic: "core", Parent: "root"},
 		{LocalID: "root", Title: "root", IssueType: "epic", Topic: "core"},

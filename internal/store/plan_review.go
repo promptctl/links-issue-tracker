@@ -41,6 +41,12 @@ func (s *Store) AddPlanReview(ctx context.Context, in storage.AddPlanReviewInput
 	return review, nil
 }
 
+// ListPlanReviews is every review of issueID's plan, in
+// storage.PlanReviewOrdering.
+func (s *Store) ListPlanReviews(ctx context.Context, issueID string) ([]model.PlanReview, error) {
+	return queryPlanReviews(ctx, s.db, "WHERE issue_id = ?", issueID)
+}
+
 // insertPlanReviewTx is the one INSERT into plan_reviews, shared by a new
 // review and a restore or replay. [LAW:single-enforcer]
 func insertPlanReviewTx(ctx context.Context, tx *sql.Tx, review model.PlanReview) error {

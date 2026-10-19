@@ -95,14 +95,16 @@ type FileCreate struct {
 	issue     CreateIssueInput
 }
 
-// Input is the create this document writes, given the two facts only the
-// write knows: the real id its parent reference resolved to, and the prefix of
-// the workspace it lands in. Taking them as arguments is what keeps a write
-// from landing with its parent unresolved. [LAW:types-are-the-program]
-func (c FileCreate) Input(parentID, prefix string) CreateIssueInput {
+// Input is the create this document writes, given the three facts only the
+// write knows: the real id its parent reference resolved to, the prefix of the
+// workspace it lands in, and who is importing it. Taking them as arguments is
+// what keeps a write from landing with its parent unresolved or its author
+// unnamed. [LAW:types-are-the-program]
+func (c FileCreate) Input(parentID, prefix, actor string) CreateIssueInput {
 	in := c.issue
 	in.ParentID = parentID
 	in.Prefix = prefix
+	in.Actor = actor
 	return in
 }
 

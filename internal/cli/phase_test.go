@@ -56,6 +56,7 @@ func TestPhaseMovesFireStateBoundWorkflows(t *testing.T) {
 	for id, activation := range bound {
 		writeCLIWorkflow(t, dir, id+".md", "---\n"+activation+"\n---\nFIRED "+id+" on <id>")
 	}
+	approvePlanInDir(t, dir, first)
 
 	for _, step := range []struct {
 		args    []string

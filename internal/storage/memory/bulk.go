@@ -36,16 +36,16 @@ func (e *Engine) BulkApply(ctx context.Context, prefix, actor string, specs []st
 
 	batch := newBatch(len(specs))
 	for _, create := range file.Creates {
-		issue, err := e.createIssue(create.Input(batch.resolve(create.Parent), prefix))
+		issue, err := e.createIssue(create.Input(batch.resolve(create.Parent), prefix, actor))
 		if err != nil {
-			return storage.BulkApplyResult{}, e.compensate(batch, fmt.Errorf("bulk: create doc %d: %w", create.Index, err))
+			return storage.BulkApplyResult{}, e.compensate(batch, actor, fmt.Errorf("bulk: create doc %d: %w", create.Index, err))
 		}
 		batch.created(create.Index, create.LocalID, issue.ID)
 	}
 	for _, create := range file.Creates {
 		for _, dep := range create.BlockedBy {
-			if err := e.wireDependency(batch.realID(create.Index), batch.resolve(dep)); err != nil {
-				return storage.BulkApplyResult{}, e.compensate(batch, fmt.Errorf("bulk: blocked_by doc %d -> %q: %w", create.Index, dep, err))
+			if err := e.wireDependency(batch.realID(create.Index), batch.resolve(dep), actor); err != nil {
+				return storage.BulkApplyResult{}, e.compensate(batch, actor, fmt.Errorf("bulk: blocked_by doc %d -> %q: %w", create.Index, dep, err))
 			}
 		}
 	}
@@ -53,7 +53,7 @@ func (e *Engine) BulkApply(ctx context.Context, prefix, actor string, specs []st
 	for _, update := range file.Updates {
 		applied, err := e.apply(update.ID, storage.Change{Actor: actor, Fields: update.Patch})
 		if err != nil {
-			return storage.BulkApplyResult{}, e.compensate(batch, fmt.Errorf("bulk: update %q: %w", update.ID, err))
+			return storage.BulkApplyResult{}, e.compensate(batch, actor, fmt.Errorf("bulk: update %q: %w", update.ID, err))
 		}
 		result.Updated = append(result.Updated, applied.Issue.ID)
 	}
@@ -63,7 +63,7 @@ func (e *Engine) BulkApply(ctx context.Context, prefix, actor string, specs []st
 // ImportTree creates a whole issue tree, returning the local-ID → real-ID
 // mapping the caller needs to talk about what it just made. It compensates on
 // failure exactly as BulkApply does, for the same reason.
-func (e *Engine) ImportTree(ctx context.Context, prefix string, specs []storage.ImportTreeSpec) (storage.ImportTreeResult, error) {
+func (e *Engine) ImportTree(ctx context.Context, prefix, actor string, specs []storage.ImportTreeSpec) (storage.ImportTreeResult, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -74,25 +74,25 @@ func (e *Engine) ImportTree(ctx context.Context, prefix string, specs []storage.
 
 	batch := newBatch(len(specs))
 	for _, create := range creates {
-		issue, err := e.createIssue(create.Input(batch.resolveLocal(create.Parent), prefix))
+		issue, err := e.createIssue(create.Input(batch.resolveLocal(create.Parent), prefix, actor))
 		if err != nil {
-			return storage.ImportTreeResult{}, e.compensate(batch, fmt.Errorf("import: create %q: %w", create.LocalID, err))
+			return storage.ImportTreeResult{}, e.compensate(batch, actor, fmt.Errorf("import: create %q: %w", create.LocalID, err))
 		}
 		batch.created(create.Index, create.LocalID, issue.ID)
 	}
 	for _, create := range creates {
 		for _, dep := range create.BlockedBy {
-			if err := e.wireDependency(batch.realID(create.Index), batch.resolveLocal(dep)); err != nil {
-				return storage.ImportTreeResult{}, e.compensate(batch, fmt.Errorf("import: blocked_by %q -> %q: %w", create.LocalID, dep, err))
+			if err := e.wireDependency(batch.realID(create.Index), batch.resolveLocal(dep), actor); err != nil {
+				return storage.ImportTreeResult{}, e.compensate(batch, actor, fmt.Errorf("import: blocked_by %q -> %q: %w", create.LocalID, dep, err))
 			}
 		}
 	}
 	return storage.ImportTreeResult{Created: batch.createdMappings()}, nil
 }
 
-func (e *Engine) wireDependency(dependent, dependency string) error {
+func (e *Engine) wireDependency(dependent, dependency, actor string) error {
 	_, err := e.addRelation(storage.AddRelationInput{
-		SrcID: dependent, DstID: dependency, Type: model.RelBlockedBy, CreatedBy: createdBy,
+		SrcID: dependent, DstID: dependency, Type: model.RelBlockedBy, CreatedBy: actor,
 	})
 	return err
 }
@@ -100,10 +100,10 @@ func (e *Engine) wireDependency(dependent, dependency string) error {
 // compensate undoes the issues this batch created and folds what it could not
 // undo into the error the caller sees. The original failure travels unchanged;
 // the rollback only adds an account of what is left behind. [LAW:no-silent-failure]
-func (e *Engine) compensate(batch *batchIDs, cause error) error {
+func (e *Engine) compensate(batch *batchIDs, actor string, cause error) error {
 	leaked := []string{}
 	for _, id := range batch.createdIDs {
-		if _, err := e.apply(id, storage.Change{Action: model.Delete{}, Actor: createdBy, Reason: "import rollback"}); err != nil {
+		if _, err := e.apply(id, storage.Change{Action: model.Delete{}, Actor: actor, Reason: "import rollback"}); err != nil {
 			leaked = append(leaked, id)
 		}
 	}

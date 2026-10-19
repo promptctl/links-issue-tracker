@@ -124,6 +124,7 @@ func TestStatuslineFileFollowsEachCheckoutsOwnWork(t *testing.T) {
 		t.Fatalf("worktree file = %+v; want a recorded pick and nothing in flight", got)
 	}
 
+	approvePlanInDir(t, main, first)
 	runCLIInDir(t, main, "done", first)
 	if got := readStatusline(t, main); got.WorkingOn != nil || got.Next != nil {
 		t.Fatalf("after done: file = %+v; want both records of %s cleared", got, first)
@@ -206,6 +207,11 @@ func TestEachStatuslineWriteRecordsItsFactsOnTheEvent(t *testing.T) {
 		{[]string{"start", first, "--by", "agent"}, `["working_on"]`, `{"rollup_completed_count": 0, "rollup_total_count": 2}`, `"plan"`, false, false, false},
 		{[]string{"update", first, "--title", "First, renamed"}, `["working_on", "next"]`, `{"rollup_completed_count": 0, "rollup_total_count": 2}`, `"plan"`, false, false, false},
 		{[]string{"phase", first, "--to", "impl"}, `["working_on"]`, `{"rollup_completed_count": 0, "rollup_total_count": 2}`, `"impl"`, false, false, false},
+	} {
+		check(s)
+	}
+	approvePlanInDir(t, dir, first)
+	for _, s := range []step{
 		{[]string{"done", first}, `["working_on", "next"]`, `null`, `null`, false, false, false},
 		{[]string{"start", second, "--by", "agent"}, `["working_on"]`, `{"rollup_completed_count": 1, "rollup_total_count": 2}`, `"plan"`, false, false, false},
 		{[]string{"purge", second, "--yes"}, `["working_on"]`, `null`, `null`, false, false, false},
@@ -331,6 +337,7 @@ func TestTheStatuslineRollupProgressMatchesTheClaimLine(t *testing.T) {
 	runCLIInDir(t, dir, "start", first, "--by", "agent")
 	matches("starting the first ticket", statusline.RollupProgress{CompletedCount: 0, TotalCount: 2})
 	runCLIInDir(t, dir, "start", second, "--by", "agent")
+	approvePlanInDir(t, dir, second)
 	runCLIInDir(t, dir, "done", second)
 	runCLIInDir(t, dir, "next")
 	matches("lit next handing the first ticket back", statusline.RollupProgress{CompletedCount: 1, TotalCount: 2})
@@ -365,6 +372,7 @@ func TestTheStatuslinePhaseMatchesTheTicketsPhase(t *testing.T) {
 	matches("starting the second ticket", second, "plan")
 	runCLIInDir(t, dir, "phase", first, "--to", "review")
 	matches("moving the first ticket, which the file does not name", second, "plan")
+	approvePlanInDir(t, dir, second)
 	runCLIInDir(t, dir, "done", second)
 	runCLIInDir(t, dir, "next")
 	matches("lit next handing the first ticket back", first, "review")
@@ -590,10 +598,10 @@ func TestDocumentedStatuslineRendersTheFileWithNoLitProcess(t *testing.T) {
 		{"no file yet", func() {}, ""},
 		{"after start", func() { runCLIInDir(t, dir, "start", first, "--by", "agent") }, "working: " + first + " First (0/2 done) [plan]\n"},
 		{"after a phase move", func() { runCLIInDir(t, dir, "phase", first, "--to", "impl") }, "working: " + first + " First (0/2 done) [impl]\n"},
-		{"after done", func() { runCLIInDir(t, dir, "done", first) }, ""},
+		{"after done", func() { approvePlanInDir(t, dir, first); runCLIInDir(t, dir, "done", first) }, ""},
 		{"after next", func() { runCLIInDir(t, dir, "next") }, "next: " + second + "\n"},
 		{"after start of the pick", func() { runCLIInDir(t, dir, "start", second, "--by", "agent") }, "working: " + second + " Second (1/2 done) [plan]  |  next: " + second + "\n"},
-		{"after done of the pick", func() { runCLIInDir(t, dir, "done", second) }, ""},
+		{"after done of the pick", func() { approvePlanInDir(t, dir, second); runCLIInDir(t, dir, "done", second) }, ""},
 		{"after next on an empty backlog", func() { runCLIInDirAllowError(t, dir, "next") }, "next: nothing ready\n"},
 		{"a record with no rollup progress or phase, as an older lit writes", func() {
 			if err := os.WriteFile(file, []byte(`{"schema_version": 1, "working_on": {"ticket": {"id": "x-1", "title": "X"}, "recorded_at": "2026-10-15T09:30:00Z"}, "next": null}`), 0o644); err != nil {

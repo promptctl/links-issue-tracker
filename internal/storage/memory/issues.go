@@ -79,7 +79,8 @@ func (e *Engine) createIssue(in storage.CreateIssueInput) (model.Issue, error) {
 		return model.Issue{}, fmt.Errorf("normalize issue prefix: %w", err)
 	}
 	now := e.clock.Now()
-	id, err := e.mintID(prefix, topic, title, strings.TrimSpace(in.Description), now, parentID)
+	actor := storage.Actor(in.Actor)
+	id, err := e.mintID(prefix, topic, title, strings.TrimSpace(in.Description), actor, now, parentID)
 	if err != nil {
 		return model.Issue{}, err
 	}
@@ -111,10 +112,10 @@ func (e *Engine) createIssue(in storage.CreateIssueInput) (model.Issue, error) {
 		return model.Issue{}, err
 	}
 	e.issues[id] = rec
-	e.setLabels(id, labels, now, createdBy)
+	e.setLabels(id, labels, now, actor)
 	if parentID != "" {
 		e.relations = append(e.relations, model.Relation{
-			SrcID: id, DstID: parentID, Type: model.RelParentChild, CreatedAt: now, CreatedBy: createdBy,
+			SrcID: id, DstID: parentID, Type: model.RelParentChild, CreatedAt: now, CreatedBy: actor,
 		})
 	}
 	// The create event records the initial status as one field-change row. A
@@ -128,7 +129,7 @@ func (e *Engine) createIssue(in storage.CreateIssueInput) (model.Issue, error) {
 	if rec.followsUp != "" {
 		changes = append(changes, model.FieldChange{Field: "follows_up", From: "", To: rec.followsUp})
 	}
-	e.recordEvent(id, eventSpec{action: "created", reason: "issue created", actor: createdBy, changes: changes}, now)
+	e.recordEvent(id, eventSpec{action: model.ActionCreated, reason: "issue created", actor: actor, changes: changes}, now)
 
 	return e.hydrate(rec, e.positions())
 }
@@ -211,12 +212,12 @@ func (e *Engine) slotInsideContainer(f storage.Frame) (int, error) {
 // the minting rule itself is one function in issueid, reached the same way
 // from both, so this engine and the Dolt store cannot drift apart on what an
 // id is. [LAW:one-type-per-behavior]
-func (e *Engine) mintID(prefix, topic, title, description string, createdAt time.Time, parentID string) (string, error) {
+func (e *Engine) mintID(prefix, topic, title, description, creator string, createdAt time.Time, parentID string) (string, error) {
 	content := issueid.Content{
 		Topic:       topic,
 		Title:       title,
 		Description: description,
-		Creator:     createdBy,
+		Creator:     creator,
 		CreatedAt:   createdAt,
 	}
 	namespace, population := e.idSpace(prefix, topic, parentID)

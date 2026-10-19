@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
@@ -19,10 +18,7 @@ func (s *Store) AddLabel(ctx context.Context, in storage.AddLabelInput) ([]strin
 	if err != nil {
 		return nil, err
 	}
-	createdBy := strings.TrimSpace(in.CreatedBy)
-	if createdBy == "" {
-		createdBy = "unknown"
-	}
+	createdBy := storage.Actor(in.CreatedBy)
 	if err := s.withMutation(ctx, "add label", func(ctx context.Context, tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `INSERT INTO labels(issue_id, label, created_at, created_by)
 			VALUES (?, ?, ?, ?)
@@ -95,10 +91,7 @@ func (s *Store) replaceLabelsTx(ctx context.Context, tx *sql.Tx, issueID string,
 	if _, err := tx.ExecContext(ctx, `DELETE FROM labels WHERE issue_id = ?`, issueID); err != nil {
 		return fmt.Errorf("clear labels: %w", err)
 	}
-	author := strings.TrimSpace(createdBy)
-	if author == "" {
-		author = "unknown"
-	}
+	author := storage.Actor(createdBy)
 	timestamp := s.clock.Now().Format(time.RFC3339Nano)
 	for _, label := range labels {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO labels(issue_id, label, created_at, created_by) VALUES (?, ?, ?, ?)`, issueID, label, timestamp, author); err != nil {

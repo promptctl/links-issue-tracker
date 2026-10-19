@@ -500,13 +500,9 @@ func planVersionLabel(texts []string, digest model.PlanDigest) string {
 	return "v" + strconv.Itoa(at+1)
 }
 
-// joinLaws is how a review's cited laws read: comma-separated, or - for none.
+// joinLaws is how a review's cited laws read: model.JoinLaws, or - for none.
 func joinLaws(laws []model.Law) string {
-	tokens := make([]string, len(laws))
-	for i, law := range laws {
-		tokens[i] = string(law)
-	}
-	return emptyDash(strings.Join(tokens, ", "))
+	return emptyDash(model.JoinLaws(laws))
 }
 
 // versionLabel is how the trail shows one text of a long text field: v and

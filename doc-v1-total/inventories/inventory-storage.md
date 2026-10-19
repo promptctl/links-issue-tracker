@@ -120,7 +120,7 @@ Records law reviews of a ticket's plan. A review is never edited or removed thro
   3. `verdict == model.PlanFail && len(laws) == 0` → `model.ValidationError{Message: "a failing verdict cites at least one law the plan breaks"}`.
   4. `digest := model.ParsePlanDigest(in.Plan)` (error returned as is).
   5. `versions := TextVersions(issue, events, PlanField())`; no `text` in `versions` with `model.DigestPlan(text) == digest` → `PlanDigestNotFoundError{IssueID: issue.ID, Digest: digest}`.
-- Reviewer: `strings.TrimSpace(in.CreatedBy)`, `""` → `"unknown"`.
+- Reviewer: `Actor(in.CreatedBy)` (trimmed, `""` → `"unknown"`).
 - Returns `model.PlanReview{IssueID: issue.ID, PlanDigest: digest, Verdict: verdict, Laws: laws, CreatedBy: reviewer}`.
 
 **`PlanField() LongTextField`** — `internal/storage/plan_review.go`: the `plan` row of the editable-field table (`LongTextFields()`); panics `editable-field table has no long text row "plan"` if the static table lacks it.
@@ -650,7 +650,7 @@ These types live in the contract, not in an engine, because a capability interfa
 - **Rank is deliberately absent** from `record`; position lives in `Engine.order`, and a rank string beside it would be a second representation of one fact (`internal/storage/memory/engine.go`).
 - `status` is the leaf status view; a container's state derives from its children, so its view stays zero and hydration never reads it — the same place Dolt writes a NULL status column (`internal/storage/memory/engine.go`).
 
-**`const createdBy = "links"`** (`internal/storage/memory/engine.go`) — the author every structural row the engine writes on a caller's behalf carries: the parent edge and initial labels a create wires, and the create event itself. It matches Dolt's spelling because it lands in exported history a user reads (`internal/storage/memory/engine.go`).
+**`storage.Actor(name)`** (`internal/storage/issues.go`) — the author a write records: `name` trimmed, else `"unknown"`. A create's actor is `storage.Actor(in.Actor)`, carried by its parent edge, initial labels, created event and id hash (`internal/storage/memory/issues.go`).
 
 **Export version** — the engine writes `model.ExportVersion` (`internal/model/model.go`), the constant the Dolt engine writes too, so two identical stores carry one version number (`internal/storage/memory/export.go`).
 
@@ -700,9 +700,9 @@ Order of checks is stated as contract: the parent must be resolved before the co
 6. `issueid.NormalizeConfiguredPrefix(in.Prefix)`; error → `fmt.Errorf("normalize issue prefix: %w", err)`.
 7. `now := e.now()`; `mintID(...)`.
 8. Builds the record with all string fields `strings.TrimSpace`'d (description, prompt, plan, assignee, lane), `status: model.StatusView{Value: model.StateOpen}`, `retention: model.Live{}`.
-9. `e.place(id, e.filingFrame(parentID), in.Placement)` — error propagates; then `e.issues[id] = rec`; `e.setLabels(id, labels, now, createdBy)`.
-10. If `parentID != ""`, appends `model.Relation{SrcID: id, DstID: parentID, Type: model.RelParentChild, CreatedAt: now, CreatedBy: createdBy}`.
-11. Records one `created` event, `reason: "issue created"`, `actor: createdBy`. Changes: a leaf records one `FieldChange{Field:"status", From:"", To:"open"}`; **a container records none**.
+9. `e.place(id, e.filingFrame(parentID), in.Placement)` — error propagates; then `e.issues[id] = rec`; `e.setLabels(id, labels, now, actor)`.
+10. If `parentID != ""`, appends `model.Relation{SrcID: id, DstID: parentID, Type: model.RelParentChild, CreatedAt: now, CreatedBy: actor}`.
+11. Records one `created` event, `reason: "issue created"`, `actor: actor`. Changes: a leaf records one `FieldChange{Field:"status", From:"", To:"open"}`; **a container records none**.
 12. Returns `e.hydrate(rec, e.positions())`.
 
 **`place(id, f, placement)`** (`internal/storage/memory/issues.go`) — `RankTop` takes the first slot among the frame `f`'s members; `RankBottom` (the zero value) appends to the whole order; any other value → `fmt.Errorf("unknown rank placement: %d", p)` from `orderEdgeFor`. A population with no members takes neither end: `place` takes the slot from `e.slotInsideContainer(f)`, propagates its error, and otherwise inserts there, so the first member of a frame lands immediately after the issue that frames it — `slices.Index(e.order, string(f))` plus one. `storage.TopLevel` names no such issue and gives slot `0`; a frame absent from the order is refused with `fmt.Errorf("frame %s holds no position in the order; an issue cannot be filed inside one that is not there", f)`.
@@ -800,7 +800,7 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 **`apply(id, c)`** (`internal/storage/memory/apply.go`)
 1. `mustRecord(id)` → `NotFoundError` on miss.
 2. Hydrates `current`.
-3. `actor = strings.TrimSpace(c.Actor)`; empty → `"unknown"`.
+3. `actor = storage.Actor(c.Actor)` (trimmed; empty → `"unknown"`).
 4. `now := e.now()`.
 5. `planLifecycle(current, actor, strings.TrimSpace(c.Reason), c.Action, now)` → `(afterAction, actionEvents, handover, err)`.
 6. `planFields(afterAction, c.Fields, actor, now)` — **the field write baselines on the POST-action issue**, so a start's new assignee is what the patch diffs against rather than producing a second assignee change row.
@@ -866,7 +866,7 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 **`AddComment`**
 - `getIssue(in.IssueID)` first → missing issue is `NotFoundError`.
 - `body = strings.TrimSpace(in.Body)`; empty → `model.ValidationError{Message: "comment body is required"}`.
-- Comment: `ID: "cmt-" + uuid.NewString()`, `IssueID`, trimmed `Body`, `CreatedAt: e.now()`, `CreatedBy: authorOr(in.CreatedBy)`.
+- Comment: `ID: "cmt-" + uuid.NewString()`, `IssueID`, trimmed `Body`, `CreatedAt: e.now()`, `CreatedBy: storage.Actor(in.CreatedBy)`.
 - Appends and returns `(comment, issue, nil)` — the issue read is the caller's answer too, since a comment never changes the issue row.
 - **`AddComment` records no history event.**
 
@@ -882,7 +882,7 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 **`AddLabel`**
 - `mustRecord(in.IssueID)` → `NotFoundError`.
 - `model.NormalizeLabel(in.Name)` → error propagates.
-- If the name is not already present, appends a `model.Label{IssueID, Name, CreatedAt: e.now(), CreatedBy: authorOr(in.CreatedBy)}` and re-sorts by name.
+- If the name is not already present, appends a `model.Label{IssueID, Name, CreatedAt: e.now(), CreatedBy: storage.Actor(in.CreatedBy)}` and re-sorts by name.
 - **Adding the same label twice is not an error**: the caller asked for the label to be there, and it is; the row keeps the authorship the first add gave it.
 - Returns the whole resulting set.
 
@@ -898,11 +898,10 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 
 **`ListLabels`** — returns `labelNames(issueID)` **without** a `mustRecord` check, so an unknown issue id returns an empty slice and no error.
 
-**`setLabels`** — the one label write, shared by create and replace; builds fresh rows with one author (`authorOr(createdBy)`) and one timestamp.
+**`setLabels`** — the one label write, shared by create and replace; builds fresh rows with one author (`storage.Actor(createdBy)`) and one timestamp.
 
 **`canonicalLabels`** — normalizes each name via `model.NormalizeLabel` (error propagates), collapses duplicates, then `slices.Sort`. It is a parser: nothing downstream re-normalizes.
 
-**`authorOr(createdBy)`** — trimmed non-empty value, else `"unknown"`.
 
 ### 2.11 Relations (`internal/storage/memory/edges.go`)
 
@@ -912,7 +911,7 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 3. `mustRecord(srcID)` then `mustRecord(dstID)` → `NotFoundError`.
 4. If `relationHeld(srcID, dstID, in.Type)` — the edges the write would replace (every edge of the type from src for a single-valued type, the identical edge otherwise) are exactly this one → `storage.RelationExistsError{SrcID, DstID, Type}` naming the canonical endpoints.
 5. `storage.RejectNonContainerParentEdge(in.Type, dstID, dst.issueType)`, then `rejectCycle`: for `RelBlockedBy`, `storage.RejectBlocksWithinEpic(e.epicTree(), srcID, dstID)` then `rejectBlocksCycle(srcID, dstID)`; for `RelParentChild`, `rejectParentCycle(srcID, dstID)`.
-6. Builds `model.Relation{SrcID, DstID, Type, CreatedAt: e.now(), CreatedBy: authorOr(in.CreatedBy)}`.
+6. Builds `model.Relation{SrcID, DstID, Type, CreatedAt: e.now(), CreatedBy: storage.Actor(in.CreatedBy)}`.
 7. If `in.Type.SingleValuedFromSrc()`, drops every existing edge with the same `SrcID` and `Type` — cardinality is read off the type, not off which method the caller reached for.
 8. Appends and returns.
 
@@ -1003,21 +1002,21 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 
 **`BulkApply(ctx, prefix, actor, specs)`**
 1. `parentTypes` maps each id among `storage.BulkParentRefs(specs)` that names an issue in `e.issues` to its type; `file, err := storage.ParseBulkFile(specs, parentTypes)` (`internal/storage/import_validate.go`, shared with the Dolt engine) — the entire file is gated before any document is applied, and the gate returns it parsed: `file.Creates` in write order, `file.Updates` in file order. Its error is returned as is. The engine parses nothing itself.
-2. Per create in `file.Creates`: `e.createIssue(create.Input(batch.resolve(create.Parent), prefix))`. On failure → `e.compensate(batch, fmt.Errorf("bulk: create doc %d: %w", create.Index, err))`. Records into the batch, and into `result.Created` under `create.LocalID` if set, else under the new real id.
-3. **Second pass, over `file.Creates` in write order**: wires every `BlockedBy` edge as `blocked-by` with `src = the document's own issue`, `dst = batch.resolve(dep)`. On failure → `e.compensate(batch, fmt.Errorf("bulk: blocked_by doc %d -> %q: %w", create.Index, dep, err))`.
-4. **Updates last**, per `file.Updates` in file order: `e.apply(update.ID, storage.Change{Actor: actor, Fields: update.Patch})`. On failure → `e.compensate(batch, fmt.Errorf("bulk: update %q: %w", update.ID, err))`. Appends `issue.ID` to `result.Updated`. A failing create or edge therefore leaves no update applied.
+2. Per create in `file.Creates`: `e.createIssue(create.Input(batch.resolve(create.Parent), prefix, actor))`. On failure → `e.compensate(batch, actor, fmt.Errorf("bulk: create doc %d: %w", create.Index, err))`. Records into the batch, and into `result.Created` under `create.LocalID` if set, else under the new real id.
+3. **Second pass, over `file.Creates` in write order**: wires every `BlockedBy` edge as `blocked-by` with `src = the document's own issue`, `dst = batch.resolve(dep)`. On failure → `e.compensate(batch, actor, fmt.Errorf("bulk: blocked_by doc %d -> %q: %w", create.Index, dep, err))`.
+4. **Updates last**, per `file.Updates` in file order: `e.apply(update.ID, storage.Change{Actor: actor, Fields: update.Patch})`. On failure → `e.compensate(batch, actor, fmt.Errorf("bulk: update %q: %w", update.ID, err))`. Appends `issue.ID` to `result.Updated`. A failing create or edge therefore leaves no update applied.
 
-**`ImportTree(ctx, prefix, specs)`**
+**`ImportTree(ctx, prefix, actor, specs)`**
 1. `creates, err := storage.ParseImportTreeFile(specs)` (`internal/storage/import_validate.go`, shared with the Dolt engine) — the parsed creates in write order; its error is returned as is.
-2. Per create: `createIssue(create.Input(batch.resolveLocal(create.Parent), prefix))`. Create failure → `e.compensate(batch, fmt.Errorf("import: create %q: %w", create.LocalID, err))`.
+2. Per create: `createIssue(create.Input(batch.resolveLocal(create.Parent), prefix, actor))`. Create failure → `e.compensate(batch, actor, fmt.Errorf("import: create %q: %w", create.LocalID, err))`.
    - Note: `Lane` and `Placement` are not carried from `ImportTreeSpec` (it has no such fields).
 3. Second pass over the creates in write order wires `BlockedBy`.
 4. Returns `ImportTreeResult{IDMap: batch.idMap()}` — the `byLocalID` map.
 
-**`wireDependency(dependent, dependency)`** — `addRelation` with `Type: model.RelBlockedBy`, `CreatedBy: createdBy` (`"links"`).
+**`wireDependency(dependent, dependency, actor)`** — `addRelation` with `Type: model.RelBlockedBy`, `CreatedBy: actor`.
 
 **`compensate(batch, cause)`**
-- For each created id, applies `storage.Change{Action: model.Delete{}, Actor: createdBy, Reason: "import rollback"}`; ids whose delete failed are collected as "leaked".
+- For each created id, applies `storage.Change{Action: model.Delete{}, Actor: actor, Reason: "import rollback"}`; ids whose delete failed are collected as "leaked".
 - Returns `fmt.Errorf("%w (rollback leaked %d: %s)", cause, len(leaked), strings.Join(leaked, ","))` — the original failure travels unchanged; the rollback only adds an account of what is left behind.
 - **Compensation is a soft delete, not a removal**: the issues remain in the store with `Deleted` retention (hence invisible to a default listing and to `ListTopics`, but counted by `LocalIssueCount`).
 - **Updates already applied are not reverted.**
@@ -1026,7 +1025,7 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 - `resolve(ref)` — returns the local mapping if present, otherwise **passes the reference through unchanged**; a reference matching nothing local is a real, pre-existing id, and the write that receives it decides whether it is real.
 - `resolveLocal(ref)` — plain map lookup; an unresolved reference yields `""`, which the create path reads as "no parent". Validation, not this lookup, is what makes it total.
 
-**`storage.FileCreate`** (`internal/storage/bulk.go`) — one parsed create document: `Index` (its file position), `LocalID`, `Parent` and `BlockedBy` (unresolved references), and the create it writes. `Input(parentID, prefix)` returns that `CreateIssueInput` with the resolved parent and the prefix filled in.
+**`storage.FileCreate`** (`internal/storage/bulk.go`) — one parsed create document: `Index` (its file position), `LocalID`, `Parent` and `BlockedBy` (unresolved references), and the create it writes. `Input(parentID, prefix, actor)` returns that `CreateIssueInput` with the resolved parent, the prefix and the actor filled in.
 
 **`storage.bulkUpdatePatch(doc)`** (`internal/storage/fields.go`)
 - Builds `UpdateIssueInput` with `Reason: strings.TrimSpace(doc.Reason)`, then lets each row of `issueFields` set its own pointer from the document.

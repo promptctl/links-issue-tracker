@@ -114,12 +114,6 @@ type record struct {
 	retention model.Retention
 }
 
-// createdBy is the author every structural row this engine writes on a
-// caller's behalf carries: the parent edge and initial labels a create wires,
-// and the create event itself. It matches the Dolt engine's spelling because
-// it lands in exported history a user reads.
-const createdBy = "links"
-
 // New mints an empty engine whose work is attributed under workspaceID.
 //
 // The workspace id is required rather than defaulted: attribution is a
@@ -323,10 +317,7 @@ type eventSpec struct {
 // write path and not an obligation on every call site that could be forgotten
 // at one of them. [LAW:single-enforcer]
 func (e *Engine) recordEvent(issueID string, spec eventSpec, now time.Time) {
-	actor := strings.TrimSpace(spec.actor)
-	if actor == "" {
-		actor = "unknown"
-	}
+	actor := storage.Actor(spec.actor)
 	e.events[issueID] = append(e.events[issueID], model.IssueEvent{
 		ID:          "evt-" + uuid.NewString(),
 		IssueID:     issueID,

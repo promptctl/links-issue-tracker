@@ -581,7 +581,7 @@ func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (m
 	if err != nil {
 		return model.Issue{}, err
 	}
-	createdBy := "links"
+	createdBy := storage.Actor(in.Actor)
 	issue := model.Issue{
 		Title:       strings.TrimSpace(in.Title),
 		Description: strings.TrimSpace(in.Description),
@@ -687,7 +687,7 @@ func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (m
 		if issue.FollowsUp != "" {
 			createChanges = append(createChanges, model.FieldChange{Field: "follows_up", From: "", To: issue.FollowsUp})
 		}
-		if err := s.recordEvent(ctx, tx, issue.ID, "created", "issue created", createdBy, createChanges); err != nil {
+		if err := s.recordEvent(ctx, tx, issue.ID, model.ActionCreated, "issue created", createdBy, createChanges); err != nil {
 			return err
 		}
 		return smoothRanksIfNeededTx(ctx, tx, issue.Rank)
@@ -1098,7 +1098,7 @@ func (s *Store) GetIssueDetail(ctx context.Context, id string) (model.IssueDetai
 	if err != nil {
 		return model.IssueDetail{}, err
 	}
-	planReviews, err := queryPlanReviews(ctx, s.db, "WHERE issue_id = ?", id)
+	planReviews, err := s.ListPlanReviews(ctx, id)
 	if err != nil {
 		return model.IssueDetail{}, err
 	}
@@ -1389,10 +1389,7 @@ func (s *Store) Apply(ctx context.Context, id string, c storage.Change) (storage
 	// status-moved-but-fields-unwritten row — the torn state is unrepresentable.
 	// [LAW:one-source-of-truth] One change has one author: the actor is
 	// normalized once here and recorded on every event the change produces.
-	actor := strings.TrimSpace(c.Actor)
-	if actor == "" {
-		actor = "unknown"
-	}
+	actor := storage.Actor(c.Actor)
 	baseline := current
 	var lw lifecycleWrite
 	var handover *claims.Handover
@@ -1461,10 +1458,7 @@ func (s *Store) AddComment(ctx context.Context, in storage.AddCommentInput) (mod
 		return model.Comment{}, model.Issue{}, model.ValidationError{Message: "comment body is required"}
 	}
 	now := s.clock.Now()
-	comment := model.Comment{ID: "cmt-" + uuid.NewString(), IssueID: in.IssueID, Body: body, CreatedAt: now, CreatedBy: strings.TrimSpace(in.CreatedBy)}
-	if comment.CreatedBy == "" {
-		comment.CreatedBy = "unknown"
-	}
+	comment := model.Comment{ID: "cmt-" + uuid.NewString(), IssueID: in.IssueID, Body: body, CreatedAt: now, CreatedBy: storage.Actor(in.CreatedBy)}
 	if err := s.withMutation(ctx, "add comment", func(ctx context.Context, tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO comments(id, issue_id, body, created_at, created_by) VALUES (?, ?, ?, ?, ?)`, comment.ID, comment.IssueID, comment.Body, comment.CreatedAt.Format(time.RFC3339Nano), comment.CreatedBy); err != nil {
 			return fmt.Errorf("insert comment: %w", err)
@@ -2199,7 +2193,7 @@ func (s *Store) newEvent(issueID, action, reason, actor string, changes []model.
 		IssueID:   issueID,
 		Action:    strings.TrimSpace(action),
 		Reason:    strings.TrimSpace(reason),
-		Actor:     strings.TrimSpace(actor),
+		Actor:     storage.Actor(actor),
 		CreatedAt: s.clock.Now(),
 		// The stamp is read off the store rather than passed in, so it is the
 		// same for every event this command writes and cannot be forgotten at a
@@ -2207,9 +2201,6 @@ func (s *Store) newEvent(issueID, action, reason, actor string, changes []model.
 		// opened for reading and a store from before the feature agree.
 		Attribution: s.attribution,
 		Changes:     changes,
-	}
-	if event.Actor == "" {
-		event.Actor = "unknown"
 	}
 	return event
 }

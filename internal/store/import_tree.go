@@ -23,7 +23,7 @@ import (
 // [LAW:single-enforcer] Atomic tree import is the one shared boundary that
 // owns ID resolution; what it creates, and in what order, is the file
 // storage.ParseImportTreeFile parsed once it judged it.
-func (s *Store) ImportTree(ctx context.Context, prefix string, specs []storage.ImportTreeSpec) (storage.ImportTreeResult, error) {
+func (s *Store) ImportTree(ctx context.Context, prefix, actor string, specs []storage.ImportTreeSpec) (storage.ImportTreeResult, error) {
 	creates, err := storage.ParseImportTreeFile(specs)
 	if err != nil {
 		return storage.ImportTreeResult{}, err
@@ -33,9 +33,9 @@ func (s *Store) ImportTree(ctx context.Context, prefix string, specs []storage.I
 	createdIDs := make([]string, 0, len(creates))
 
 	for _, create := range creates {
-		issue, err := s.CreateIssue(ctx, create.Input(idMap[create.Parent], prefix))
+		issue, err := s.CreateIssue(ctx, create.Input(idMap[create.Parent], prefix, actor))
 		if err != nil {
-			leaked := s.rollbackCreatedIssues(ctx, createdIDs)
+			leaked := s.rollbackCreatedIssues(ctx, actor, createdIDs)
 			return storage.ImportTreeResult{}, fmt.Errorf("import: create %q: %w (rollback leaked %d: %s)", create.LocalID, err, len(leaked), strings.Join(leaked, ","))
 		}
 		idMap[create.LocalID] = issue.ID
@@ -44,8 +44,8 @@ func (s *Store) ImportTree(ctx context.Context, prefix string, specs []storage.I
 	}
 	for i, create := range creates {
 		for _, dep := range create.BlockedBy {
-			if _, err := s.AddRelation(ctx, storage.AddRelationInput{SrcID: createdIDs[i], DstID: idMap[dep], Type: model.RelBlockedBy, CreatedBy: "links"}); err != nil {
-				leaked := s.rollbackCreatedIssues(ctx, createdIDs)
+			if _, err := s.AddRelation(ctx, storage.AddRelationInput{SrcID: createdIDs[i], DstID: idMap[dep], Type: model.RelBlockedBy, CreatedBy: actor}); err != nil {
+				leaked := s.rollbackCreatedIssues(ctx, actor, createdIDs)
 				return storage.ImportTreeResult{}, fmt.Errorf("import: blocked_by %q -> %q: %w (rollback leaked %d: %s)", create.LocalID, dep, err, len(leaked), strings.Join(leaked, ","))
 			}
 		}
@@ -59,10 +59,10 @@ func (s *Store) ImportTree(ctx context.Context, prefix string, specs []storage.I
 // original error unchanged. Shared by ImportTree and BulkApply — both create
 // issues in a loop and must unwind the same way on a later failure.
 // [LAW:one-source-of-truth]
-func (s *Store) rollbackCreatedIssues(ctx context.Context, createdIDs []string) []string {
+func (s *Store) rollbackCreatedIssues(ctx context.Context, actor string, createdIDs []string) []string {
 	leaked := []string{}
 	for _, realID := range createdIDs {
-		if _, err := s.Apply(ctx, realID, storage.Change{Action: model.Delete{}, Actor: "links", Reason: "import rollback"}); err != nil {
+		if _, err := s.Apply(ctx, realID, storage.Change{Action: model.Delete{}, Actor: actor, Reason: "import rollback"}); err != nil {
 			leaked = append(leaked, realID)
 		}
 	}

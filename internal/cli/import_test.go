@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -349,40 +350,6 @@ func TestRunImportRequiresPath(t *testing.T) {
 	}
 }
 
-// --by has no consumer on the JSON tree-spec dispatch branch (it always
-// attributes creates to "links"); a set-but-unused --by there must be
-// rejected, not silently discarded.
-func TestRunImportRejectsByFlagOnJSONPath(t *testing.T) {
-	ctx := context.Background()
-	ap := newTestCLIApp(t)
-	path := writeImportFile(t, "tree.json", `[{"local_id":"e1","title":"Epic","type":"epic","topic":"import","priority":0}]`)
-	var stdout bytes.Buffer
-	err := runImportTree(ctx, &stdout, ap, []string{"--path", path, "--by", "alice"})
-	if err == nil {
-		t.Fatal("runImportTree(json --by) error = nil, want usage error")
-	}
-	if ExitCode(err) != ExitUsage {
-		t.Fatalf("runImportTree(json --by) exit code = %d, want %d", ExitCode(err), ExitUsage)
-	}
-}
-
-// --by is likewise unused when a YAML file contains only creates (a create
-// has no actor field to carry it) — the same rejection the JSON path gets,
-// for the same reason, on the format that does support --by in general.
-func TestRunImportRejectsByFlagOnCreateOnlyYAML(t *testing.T) {
-	ctx := context.Background()
-	ap := newTestCLIApp(t)
-	path := writeImportFile(t, "create-only.yaml", "title: Fresh\ntype: task\ntopic: import\n")
-	var stdout bytes.Buffer
-	err := runImportTree(ctx, &stdout, ap, []string{"--path", path, "--by", "alice"})
-	if err == nil {
-		t.Fatal("runImportTree(create-only yaml --by) error = nil, want usage error")
-	}
-	if ExitCode(err) != ExitUsage {
-		t.Fatalf("runImportTree(create-only yaml --by) exit code = %d, want %d", ExitCode(err), ExitUsage)
-	}
-}
-
 // A YAML file with at least one update document does consume --by — it
 // attributes that document's field-change event, same as `lit update --by`.
 func TestRunImportYAMLUpdateHonorsByFlag(t *testing.T) {
@@ -414,6 +381,56 @@ func TestRunImportYAMLUpdateHonorsByFlag(t *testing.T) {
 	if !found {
 		t.Fatalf("no event attributed to --by actor \"alice\": %#v", detail.Events)
 	}
+}
+
+// Both import formats name the importer as the author of every ticket they
+// create: the created event records --by, as lit new's does, so a plan
+// imported with a ticket has the importer as its author.
+func TestRunImportAttributesCreatesToBy(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	for _, tc := range []struct {
+		file string
+		body func(epic string) string
+	}{
+		{"tree.json", func(string) string {
+			return `[{"local_id":"e1","title":"Imported epic","type":"epic","topic":"import","priority":0},{"local_id":"t1","parent":"e1","title":"Imported","type":"task","topic":"import","priority":0}]`
+		}},
+		{"create.yaml", func(epic string) string { return "title: Imported\ntype: task\ntopic: import\nparent: " + epic + "\n" }},
+	} {
+		t.Run(tc.file, func(t *testing.T) {
+			ctx := context.Background()
+			ap := newTestCLIApp(t)
+			path := writeImportFile(t, tc.file, tc.body(seedEpicRaw(t, ctx, ap, "Import", "import")))
+			var stdout bytes.Buffer
+			if err := runImportTree(ctx, &stdout, ap, []string{"--path", path, "--by", "alice"}); err != nil {
+				t.Fatalf("runImportTree(%s --by alice) error = %v", tc.file, err)
+			}
+			for _, id := range importedIDs(t, stdout.String()) {
+				events, err := ap.Store.ListEvents(ctx, id)
+				if err != nil {
+					t.Fatalf("ListEvents(%s) error = %v", id, err)
+				}
+				if events[0].Action != model.ActionCreated || events[0].Actor != "alice" {
+					t.Errorf("%s's first event = %s by %q, want %s by alice", id, events[0].Action, events[0].Actor, model.ActionCreated)
+				}
+			}
+		})
+	}
+}
+
+// importedIDs is the real id of every ticket an import's output maps.
+func importedIDs(t *testing.T, output string) []string {
+	t.Helper()
+	var ids []string
+	for _, line := range strings.Split(output, "\n") {
+		if _, id, ok := strings.Cut(line, " -> "); ok {
+			ids = append(ids, strings.TrimSpace(id))
+		}
+	}
+	if len(ids) == 0 {
+		t.Fatalf("no created mapping in import output %q", output)
+	}
+	return ids
 }
 
 func TestRunImportYAMLUpdateTrimsReason(t *testing.T) {

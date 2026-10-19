@@ -900,6 +900,11 @@ type IssueEvent struct {
 	Changes     []FieldChange `json:"changes"`
 }
 
+// ActionCreated is the Action of the event an issue's creation records, whose
+// actor is the issue's creator. Both engines record it under this name.
+// [LAW:one-source-of-truth]
+const ActionCreated = "created"
+
 type IssueDetail struct {
 	Issue     Issue      `json:"issue"`
 	Relations []Relation `json:"relations"`

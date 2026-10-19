@@ -106,3 +106,13 @@ func CanonicalLaws(laws []Law) []Law {
 	slices.Sort(out)
 	return slices.Compact(out)
 }
+
+// JoinLaws is how a set of laws reads in a sentence: their tokens,
+// comma-separated.
+func JoinLaws(laws []Law) string {
+	tokens := make([]string, len(laws))
+	for i, law := range laws {
+		tokens[i] = string(law)
+	}
+	return strings.Join(tokens, ", ")
+}

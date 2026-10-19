@@ -8,7 +8,6 @@
 # why it is outside the tree. See CONTRIBUTING.md, "Documented names".
 
 # Standard library.
-os.LookupEnv          os package; the environment-variable survey names what it searched for
 json.Encoder          encoding/json; writeJSON builds one with json.NewEncoder
 LimitedReader         io.LimitedReader, unwrapped by *os.File.ReadFrom
 os.File.ReadFrom      os package

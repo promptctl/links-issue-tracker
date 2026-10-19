@@ -319,6 +319,7 @@ func newLeaf() appLeaf {
 	labels := fs.String("labels", "", "Comma-separated labels")
 	lane := fs.String("lane", "", "Lane key partitioning an epic's children into parallel rank-ordered sub-sequences; shared lane serializes, distinct lane parallelizes")
 	top := fs.Bool("top", false, "Promote the new issue to the top of its frame (the default appends it to the bottom)")
+	resolveActor := registerActor(fs)
 	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		issueTypeValue, err := model.ParseIssueType(*issueType)
 		if err != nil {
@@ -336,6 +337,7 @@ func newLeaf() appLeaf {
 			Title: *title, Description: description.value(), Prompt: prompt.value(), Plan: plan.value(), IssueType: issueTypeValue, Topic: *topic, ParentID: *parentID, Priority: priorityValue, Assignee: strings.TrimSpace(*assignee), Labels: splitCSV(*labels), Lane: *lane,
 			Placement: rankPlacement(*top),
 			Prefix:    prefix.Value(),
+			Actor:     resolveActor(),
 		})
 		if err != nil {
 			return err
@@ -380,11 +382,12 @@ func followupLeaf() appLeaf {
 	assignee := fs.String("assignee", "", "Assignee")
 	labels := fs.String("labels", "", "Comma-separated labels")
 	top := fs.Bool("top", false, "Promote the follow-up to the top of its frame (the default appends it to the bottom)")
+	resolveActor := registerActor(fs)
 	// One sentence for both of followup's usage failures — a missing --on/--title,
 	// and a value typed where no positional is taken. It is declared outside the
 	// work because the seam's arity check runs first and cannot reach a sentence
 	// written inside it. [LAW:one-source-of-truth]
-	usage := "usage: lit followup --on <id> --title <text> [--description <text> | --description-file <path|->] [--prompt <text> | --prompt-file <path|->] [--topic <slug>] [--type <task|feature|bug|chore|epic>] [--parent <epic-id>] [--priority <" + priorityChoices() + ">] [--assignee <user>] [--labels <csv>] [--top]"
+	usage := "usage: lit followup --on <id> --title <text> [--description <text> | --description-file <path|->] [--prompt <text> | --prompt-file <path|->] [--topic <slug>] [--type <task|feature|bug|chore|epic>] [--parent <epic-id>] [--priority <" + priorityChoices() + ">] [--assignee <user>] [--labels <csv>] [--top] [--by <name>]"
 	return appLeaf{fs: fs, positionals: 0, usage: usage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 		onID := strings.TrimSpace(*on)
 		titleValue := strings.TrimSpace(*title)
@@ -439,6 +442,7 @@ func followupLeaf() appLeaf {
 			Labels:      splitCSV(*labels),
 			Placement:   rankPlacement(*top),
 			Prefix:      prefix.Value(),
+			Actor:       resolveActor(),
 		})
 		if err != nil {
 			return err
@@ -1766,7 +1770,13 @@ var (
 			}
 		},
 	}
-	doneSpec  = transitionSpec{name: "done", registerFlags: fixedAction(model.Done{}), authorize: noAuthorize}
+	doneSpec = transitionSpec{
+		name:          "done",
+		registerFlags: fixedAction(model.Done{}),
+		authorize: func(*cobraFlagSet) func(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, prior ticketState, action model.Action) (afterApply, error) {
+			return authorizeDone
+		},
+	}
 	closeSpec = transitionSpec{
 		name:     "close",
 		synopsis: " --resolution <duplicate|superseded|obsolete|wontfix> [--of <canonical-id>]",
@@ -1826,6 +1836,55 @@ func authorizePhase(ctx context.Context, _ io.Writer, _ *app.App, _ string, prio
 		telemetry.Set(ctx, "phase.to", string(move.To))
 		telemetry.Set(ctx, "phase.changed", move.Changed())
 		return phaseNotice(move), nil
+	}, nil
+}
+
+// authorizeDone is the plan gate: a ticket is finished only on a current plan
+// that storage.PlanApproval approves. A done the lifecycle refuses — on an
+// epic, whose state is its children's, or on frozen work — gets that refusal:
+// the hook asks Issue.Apply, the rule the store's Apply runs, before it reads
+// the plan. A done on a ticket already closed finishes nothing — the engines
+// record no write for it — so it has no finish to authorize, as the engines
+// check nothing for a write they will not make. done.plan_gate on the event
+// says which way the gate went; an approval adds the plan and the review it
+// rested on.
+// [LAW:single-enforcer] [LAW:nothing-unseen]
+func authorizeDone(ctx context.Context, _ io.Writer, ap *app.App, issueID string, prior ticketState, action model.Action) (afterApply, error) {
+	done, ok := action.(model.Done)
+	if !ok {
+		return nil, fmt.Errorf("done: authorize hook received a %T action", action)
+	}
+	finished, err := prior.issue.Apply(done)
+	if err != nil {
+		return nil, err
+	}
+	if finished.StatusValue() == prior.issue.StatusValue() {
+		return func(ticketState, *claims.Handover) (string, statusline.Facts) {
+			telemetry.Set(ctx, "done.plan_gate", "already_closed")
+			return "", nil
+		}, nil
+	}
+	events, err := ap.Store.ListEvents(ctx, issueID)
+	if err != nil {
+		return nil, err
+	}
+	reviews, err := ap.Store.ListPlanReviews(ctx, issueID)
+	if err != nil {
+		return nil, err
+	}
+	approval, err := storage.PlanApproval(prior.issue, events, reviews)
+	var unapproved storage.PlanUnapprovedError
+	if errors.As(err, &unapproved) {
+		telemetry.Set(ctx, "done.plan_gate", unapproved.Gap.Kind())
+	}
+	if err != nil {
+		return nil, err
+	}
+	return func(ticketState, *claims.Handover) (string, statusline.Facts) {
+		telemetry.Set(ctx, "done.plan_gate", "approved")
+		telemetry.Set(ctx, "done.plan_digest", string(approval.PlanDigest))
+		telemetry.Set(ctx, "done.plan_review", approval.ID)
+		return "", nil
 	}, nil
 }
 
@@ -2118,17 +2177,9 @@ func importTreeLeaf() appLeaf {
 		}
 		switch strings.ToLower(filepath.Ext(*path)) {
 		case ".yaml", ".yml":
-			return runImportBulk(ctx, stdout, ap, data, resolveActor(), fs.Changed("by"))
+			return runImportBulk(ctx, stdout, ap, data, resolveActor())
 		default:
-			// --by only has a consumer on the YAML update path (it attributes each
-			// update's field-change event); the JSON tree spec always attributes
-			// creates to "links". Rejecting a set-but-unused --by here, rather than
-			// silently discarding it, keeps a JSON import with --by an error, not a
-			// quiet no-op. [LAW:no-silent-failure]
-			if fs.Changed("by") {
-				return UsageError{Message: "usage: --by only applies to a YAML bulk-update file (--path *.yaml|*.yml); JSON tree-spec import always attributes creates to \"links\""}
-			}
-			return runImportTreeJSON(ctx, stdout, ap, data)
+			return runImportTreeJSON(ctx, stdout, ap, data, resolveActor())
 		}
 	}}
 }
@@ -2148,7 +2199,7 @@ func importTreeLeaf() appLeaf {
 //	  {"local_id": "task-1", "parent": "epic-x", "title": "Design", "type": "task", "topic": "exporter", "priority": 0},
 //	  {"local_id": "task-2", "parent": "epic-x", "blocked_by": ["task-1"], "title": "Build", "type": "task", "topic": "exporter", "priority": 0}
 //	]
-func runImportTreeJSON(ctx context.Context, stdout io.Writer, ap *app.App, data []byte) error {
+func runImportTreeJSON(ctx context.Context, stdout io.Writer, ap *app.App, data []byte, actor string) error {
 	specs, err := storage.ParseImportTreeSpecs(data)
 	if err != nil {
 		return err
@@ -2157,7 +2208,7 @@ func runImportTreeJSON(ctx context.Context, stdout io.Writer, ap *app.App, data 
 	if err != nil {
 		return err
 	}
-	result, err := ap.Store.ImportTree(ctx, prefix.Value(), specs)
+	result, err := ap.Store.ImportTree(ctx, prefix.Value(), actor, specs)
 	if err != nil {
 		return err
 	}
@@ -2191,19 +2242,10 @@ func runImportTreeJSON(ctx context.Context, stdout io.Writer, ap *app.App, data 
 //	id: existing-issue-7     # present => update that issue instead of creating
 //	title: Renamed
 //	labels: [reviewed]
-func runImportBulk(ctx context.Context, stdout io.Writer, ap *app.App, data []byte, actor string, byChanged bool) error {
+func runImportBulk(ctx context.Context, stdout io.Writer, ap *app.App, data []byte, actor string) error {
 	specs, err := storage.ParseBulkSpecs(data)
 	if err != nil {
 		return err
-	}
-	// actor only has a consumer on an update document (it attributes that
-	// document's field-change event; a create has no actor field to carry
-	// it). A file with no update documents at all never reads actor, so a
-	// set-but-unused --by is rejected here rather than silently discarded —
-	// the same treatment the JSON dispatch branch gives --by on a format
-	// that never consumes it. [LAW:no-silent-failure]
-	if byChanged && !bulkSpecsHaveUpdate(specs) {
-		return UsageError{Message: "usage: --by only applies when the file has at least one update document (a document with `id` set); this file has none"}
 	}
 	prefix, err := ap.Workspace.IssuePrefix.Mintable()
 	if err != nil {
@@ -2230,17 +2272,6 @@ func runImportBulk(ctx context.Context, stdout io.Writer, ap *app.App, data []by
 		}
 	}
 	return nil
-}
-
-// bulkSpecsHaveUpdate reports whether any document in specs selects an
-// existing issue (id set) rather than creating one.
-func bulkSpecsHaveUpdate(specs []storage.BulkIssueSpec) bool {
-	for _, spec := range specs {
-		if spec.ID != "" {
-			return true
-		}
-	}
-	return false
 }
 
 func workspaceLeaf() wsLeaf {
