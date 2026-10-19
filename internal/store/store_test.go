@@ -2985,20 +2985,12 @@ func TestRankSetRejectsDuplicates(t *testing.T) {
 	}
 }
 
-func TestRankSetRejectsTooFewIDs(t *testing.T) {
+func TestRankSetRejectsNoIDs(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
-	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "rank", IssueType: "epic", Priority: 1})
-	if err != nil {
-		t.Fatalf("CreateIssue(epic) error = %v", err)
-	}
-	a, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "A", Topic: "rank", IssueType: "task", Priority: 0, Placement: storage.RankBottom, ParentID: epic.ID})
-	if err != nil {
-		t.Fatalf("CreateIssue(A) error = %v", err)
-	}
-	if _, err := st.RankSet(ctx, []string{a.ID}); err == nil || !strings.Contains(err.Error(), "at least 2") {
-		t.Fatalf("RankSet(single id) error = %v, want too-few error", err)
+	if _, err := st.RankSet(ctx, nil); err == nil || !strings.Contains(err.Error(), "at least 1") {
+		t.Fatalf("RankSet(no ids) error = %v, want too-few error", err)
 	}
 }
 

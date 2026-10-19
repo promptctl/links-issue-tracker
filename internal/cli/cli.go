@@ -1577,26 +1577,39 @@ func rankSetLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		ranked := make([]string, len(result.Resolutions))
-		for i, r := range result.Resolutions {
-			ranked[i] = r.RankedID
-		}
-		for _, r := range result.Resolutions {
-			if r.RankedID != r.NamedID {
-				if _, err := fmt.Fprintf(stdout, "%s is inside %s; ranked the epic %s instead, leaving its internal order unchanged\n", r.NamedID, r.RankedID, r.RankedID); err != nil {
-					return err
-				}
-			}
-		}
-		// Name the frame the stack landed in, for the reason the edge verbs do: this
-		// verb anchors at the top of the representatives' own frame, so an
-		// unqualified "at top" reads as the head of the backlog when the set was
-		// three children leading one epic. [LAW:no-silent-failure]
-		if _, err := fmt.Fprintf(stdout, "ranked %d issues at the top of %s in order: %s\n", len(ranked), frameLabel(result.Frame), strings.Join(ranked, ", ")); err != nil {
+		if err := printRankSet(stdout, result); err != nil {
 			return err
 		}
 		return emitBreadcrumb(stdout, "update")
 	}}
+}
+
+// printRankSet reports an order a RankSet wrote: each name that resolved to
+// its epic, then the order itself. `lit rank set` and a bulk file's
+// `rank: top` documents write the same RankSet, so they report it in the same
+// words. [LAW:one-source-of-truth]
+func printRankSet(stdout io.Writer, result storage.RankSetResult) error {
+	ranked := make([]string, len(result.Resolutions))
+	for i, r := range result.Resolutions {
+		ranked[i] = r.RankedID
+	}
+	for _, r := range result.Resolutions {
+		if r.RankedID != r.NamedID {
+			if _, err := fmt.Fprintf(stdout, "%s is inside %s; ranked the epic %s instead, leaving its internal order unchanged\n", r.NamedID, r.RankedID, r.RankedID); err != nil {
+				return err
+			}
+		}
+	}
+	// Name the frame the stack landed in, for the reason the edge verbs do: this
+	// verb anchors at the top of the representatives' own frame, so an
+	// unqualified "at top" reads as the head of the backlog when the set was
+	// three children leading one epic. [LAW:no-silent-failure]
+	noun := "issues"
+	if len(ranked) == 1 {
+		noun = "issue"
+	}
+	_, err := fmt.Fprintf(stdout, "ranked %d %s at the top of %s in order: %s\n", len(ranked), noun, frameLabel(result.Frame), strings.Join(ranked, ", "))
+	return err
 }
 
 // filterWorkableIssues keeps the leaves that are still work anyone might do.
@@ -2203,6 +2216,7 @@ func runImportTreeJSON(ctx context.Context, stdout io.Writer, ap *app.App, data 
 	if err != nil {
 		return err
 	}
+	telemetry.Set(ctx, "import.created", len(result.Created))
 	if _, err := fmt.Fprintf(stdout, "imported %d issues\n", len(result.Created)); err != nil {
 		return err
 	}
@@ -2233,6 +2247,7 @@ func runImportTreeJSON(ctx context.Context, stdout io.Writer, ap *app.App, data 
 //	id: existing-issue-7     # present => update that issue instead of creating
 //	title: Renamed
 //	labels: [reviewed]
+//	rank: top                # optional; the file's rank: top documents are stacked, in file order, at the top of their frame
 func runImportBulk(ctx context.Context, stdout io.Writer, ap *app.App, data []byte, actor string) error {
 	specs, err := storage.ParseBulkSpecs(data)
 	if err != nil {
@@ -2246,6 +2261,9 @@ func runImportBulk(ctx context.Context, stdout io.Writer, ap *app.App, data []by
 	if err != nil {
 		return err
 	}
+	telemetry.Set(ctx, "import.created", len(result.Created))
+	telemetry.Set(ctx, "import.updated", len(result.Updated))
+	telemetry.Set(ctx, "import.ranked", len(result.Ranked.Resolutions))
 	if _, err := fmt.Fprintf(stdout, "created %d issues\n", len(result.Created)); err != nil {
 		return err
 	}
@@ -2262,7 +2280,11 @@ func runImportBulk(ctx context.Context, stdout io.Writer, ap *app.App, data []by
 			return err
 		}
 	}
-	return nil
+	// A file that states no rank wrote no order, so there is none to report.
+	if len(result.Ranked.Resolutions) == 0 {
+		return nil
+	}
+	return printRankSet(stdout, result.Ranked)
 }
 
 func workspaceLeaf() wsLeaf {

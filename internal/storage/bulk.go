@@ -1,5 +1,10 @@
 package storage
 
+import (
+	"fmt"
+	"strings"
+)
+
 // BulkIssueSpec is a single YAML document in a bulk-input file. ID is the
 // selector: present, it names an existing issue and the document is an
 // update patch of only the fields it sets (the same fields UpdateIssueInput
@@ -31,6 +36,9 @@ type BulkIssueSpec struct {
 	Lane        *string   `yaml:"lane,omitempty"`
 	Parent      string    `yaml:"parent,omitempty"`
 	BlockedBy   []string  `yaml:"blocked_by,omitempty"`
+	// Rank places the document's issue in the file's ordering. Its one
+	// value is "top"; the gate refuses any other.
+	Rank *string `yaml:"rank,omitempty"`
 	// Reason is optional free text recorded on an update's field-change
 	// event; it does not apply to a create (there is no prior state to
 	// annotate a change against).
@@ -60,10 +68,32 @@ func NewIDMapping(localID, realID string) IDMapping {
 
 // BulkApplyResult reports what a successful BulkApply did. Created lists
 // every created issue in the order it was created; Updated lists the real IDs
-// of every updated issue, in the order they were applied.
+// of every updated issue, in the order they were applied; Ranked is the
+// RankSet the file's `rank: top` documents made, with no resolutions when
+// the file states no rank.
 type BulkApplyResult struct {
 	Created []IDMapping
 	Updated []string
+	Ranked  RankSetResult
+}
+
+// Kept is the account a batch that fails at an update owes its caller: what
+// stays written once its creates are rolled back — the updates applied before
+// the failure and the order the file's `rank: top` documents wrote, among the
+// issues that outlive the rollback. Zero of either is said, not omitted.
+// [LAW:no-silent-failure]
+func (r BulkApplyResult) Kept() string {
+	created := make(map[string]struct{}, len(r.Created))
+	for _, m := range r.Created {
+		created[m.ID] = struct{}{}
+	}
+	ranked := make([]string, 0, len(r.Ranked.Resolutions))
+	for _, res := range r.Ranked.Resolutions {
+		if _, rolledBack := created[res.RankedID]; !rolledBack {
+			ranked = append(ranked, res.RankedID)
+		}
+	}
+	return fmt.Sprintf("kept %d updates [%s] and the order of %d issues [%s]", len(r.Updated), strings.Join(r.Updated, ","), len(ranked), strings.Join(ranked, ","))
 }
 
 // BulkFile is a bulk file the gate admitted, parsed: the issues it creates,
@@ -71,9 +101,42 @@ type BulkApplyResult struct {
 // An engine writes exactly this, so a document means the same write whichever
 // engine opens the file, and no engine parses a document itself.
 // [LAW:parse-dont-validate] [LAW:one-source-of-truth]
+//
+// Ranked is the file's ordering: every document that states `rank: top`, in
+// document order. An engine hands it to its RankSet whole, so a file orders
+// issues exactly as `lit rank set` does — one transaction, keys permuted and
+// none minted, and an order that has already landed writes nothing.
+// [LAW:single-enforcer]
 type BulkFile struct {
 	Creates []FileCreate
 	Updates []BulkUpdate
+	Ranked  []FileRef
+}
+
+// FileRef names a document's issue before the file is written: an update
+// document's id, or a create document's position in the file, whose id only
+// the write mints.
+type FileRef struct {
+	id    string
+	index int
+}
+
+// RankedIDs is the file's ordering as the issue ids an engine hands its
+// RankSet, given created: the id the write minted for each of f.Creates, in
+// that order. It is empty for a file that states no rank.
+func (f BulkFile) RankedIDs(created []string) []string {
+	byIndex := make(map[int]string, len(f.Creates))
+	for pos, create := range f.Creates {
+		byIndex[create.Index] = created[pos]
+	}
+	ids := make([]string, len(f.Ranked))
+	for i, ref := range f.Ranked {
+		ids[i] = ref.id
+		if ref.id == "" {
+			ids[i] = byIndex[ref.index]
+		}
+	}
+	return ids
 }
 
 // BulkUpdate is one update document, parsed: the issue it names and the patch

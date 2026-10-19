@@ -167,6 +167,8 @@ func TestFrameRepresentatives(t *testing.T) {
 		wantErr   bool
 	}{
 		{name: "all top-level", chains: [][]string{{"x"}, {"y"}, {"z"}}, want: []string{"x", "y", "z"}, wantFrame: TopLevel},
+		{name: "a lone top-level issue", chains: [][]string{{"x"}}, want: []string{"x"}, wantFrame: TopLevel},
+		{name: "a lone child is its own representative in its epic", chains: [][]string{{"g", "s", "e"}}, want: []string{"g"}, wantFrame: "s"},
 		{name: "siblings same epic", chains: [][]string{{"c1", "e"}, {"c2", "e"}, {"c3", "e"}}, want: []string{"c1", "c2", "c3"}, wantFrame: "e"},
 		{name: "children plus outsider resolve to roots", chains: [][]string{{"c1", "e"}, {"x"}, {"c2", "e"}}, want: []string{"e", "x", "e"}, wantFrame: TopLevel},
 		{name: "children of two epics under shared parent with outsider", chains: [][]string{{"c1", "e1", "p"}, {"c2", "e2", "p"}, {"x"}}, want: []string{"p", "p", "x"}, wantFrame: TopLevel},

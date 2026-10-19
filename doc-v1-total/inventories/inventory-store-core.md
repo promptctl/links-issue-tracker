@@ -2992,7 +2992,7 @@ Frame behavior pinned by tests — `internal/store/ranking_frame_test.go`:
 - `RankAbove(child, own epic)` and `RankBelow(epic, own child)` both refuse with `storage.FrameContainmentError{ContainerID: epic, ContainedID: child}`.
 
 **RankSet(ids)** — `internal/store/ranking.go`:
-- Validation `storage.ValidateRankSetIDs` — `internal/storage/rank.go`, shared with the memory engine: each refusal is a `model.ValidationError`: fewer than 2 ids → `"rank set: need at least 2 IDs to establish order"`; an empty-string id → `"rank set: empty ID in input"`; a repeated id → `"rank set: duplicate ID %q in input"`.
+- Validation `storage.ValidateRankSetIDs` — `internal/storage/rank.go`, shared with the memory engine: each refusal is a `model.ValidationError`: no ids → `"rank set: need at least 1 ID to establish order"`; an empty-string id → `"rank set: empty ID in input"`; a repeated id → `"rank set: duplicate ID %q in input"`.
 - `resolveRankSet` — `internal/store/ranking.go`: per id, `GetIssue` then `ancestorChain`; `storage.FrameRepresentatives` errors are wrapped `fmt.Errorf("rank set: %w", err)`; `storage.RankSetResolutions(ids, reps)` (`internal/storage/rank.go`, shared with the memory engine) pairs each id with its representative, and two named ids collapsing to the same representative → `model.ValidationError`
   `fmt.Sprintf("rank set: %s and %s both resolve to %s — their relative order is internal to %s and cannot be set against outside issues; run rank set among siblings instead", prior, id, reps[i], reps[i])`.
   Returns `[]storage.RankSetResolution{{NamedID, RankedID}}` parallel to the input order.
@@ -3007,7 +3007,7 @@ Frame behavior pinned by tests — `internal/store/ranking_frame_test.go`:
 - Atomic: all assignments in one mutation.
 - On error the zero `RankSetResult` is returned (`mutationValue`), so no resolutions come back with a failed write.
 
-Tests: absolute top ordering — `internal/store/store_test.go`; duplicates rejected with an error containing `"duplicate"` —; single id rejected with `"at least 2"` —; mixed-frame resolves child→epic with children unmoved — `internal/store/ranking_frame_test.go`; two epics' children resolve to their epics —; same-epic siblings resolve to themselves and only they move —; duplicate representatives rejected with `"both resolve to"` and **no** rank changed —; naming an epic with its own child rejected with `"inside"` in both orders —.
+Tests: absolute top ordering — `internal/store/store_test.go`; duplicates rejected with an error containing `"duplicate"` —; no ids rejected with `"at least 1"` —; mixed-frame resolves child→epic with children unmoved — `internal/store/ranking_frame_test.go`; two epics' children resolve to their epics —; same-epic siblings resolve to themselves and only they move —; duplicate representatives rejected with `"both resolve to"` and **no** rank changed —; naming an epic with its own child rejected with `"inside"` in both orders —.
 
 ### 5.7 Smoothing (rebalancing)
 
@@ -3868,7 +3868,9 @@ Update-document checks (`parseBulkUpdateDoc`, `import_validate.go`, which return
 | `Title` set and trims to `""` | `bulk: doc %d (id %q) sets an empty title` |
 | `IssueType` set and unparseable | `bulk: doc %d (id %q): has invalid type "<value>": issue type must be …` |
 | `Priority` set and unparseable | `bulk: doc %d (id %q): has invalid priority <value>: priority must be …` |
-| `storage.bulkUpdatePatch(spec).IsEmpty()` | `bulk: doc %d (id %q) has no fields to update` |
+| `storage.bulkUpdatePatch(spec).IsEmpty()` and no `rank` | `bulk: doc %d (id %q) has no fields to update and no rank` |
+| the patch is empty, `rank: top` is set, and `reason` trims to non-empty | `bulk: doc %d (id %q) sets reason but changes no field; reason annotates a field change, and rank writes none` |
+| `rank` set to anything but `top` | `bulk: doc %d: rank %q is not a placement; the one placement is top, …` |
 | id already seen | `bulk: duplicate id %q` (`import_validate.go`) |
 
 The patch is empty iff none of `Title, Description, Prompt, Plan, IssueType, Priority, Assignee, Labels, Lane` is set (`UpdateIssueInput.IsEmpty`, `internal/storage/fields.go`). **`Reason` alone does not count** — hence "id set and reason set with no other field set" is rejected.
@@ -3904,7 +3906,8 @@ Note the create branch does **not** require `LocalID` (unlike ImportTree), and d
 3. Create loop over `file.Creates` (`import_bulk.go`): `CreateIssue(ctx, create.Input(resolveBulkRef(create.Parent, localRealID), prefix))`. The gate built that input: `Title` and `Topic` trimmed, `Description`/`Prompt`/`Plan`/`Assignee`/`Lane`/`Labels` the document's value or the zero value, `IssueType` and `Priority` parsed (priority `model.PriorityNormal` when unset), `Placement` left at its zero value `RankBottom` so file order is preserved, matching ImportTree. Failure → rollback then `"bulk: create doc %d: %w (rollback leaked %d: %s)"`.
    - Append `createdIDs`. If `create.LocalID != ""` → `localRealID[LocalID] = issue.ID`; `result.Created` gets `storage.NewIDMapping(create.LocalID, issue.ID)`, **self-keyed when there is no local id** (`import_bulk.go`).
 4. Second pass over `file.Creates` in **write order** (`import_bulk.go`): for each `dep`, `AddRelation({SrcID: createdIDs[i], DstID: resolveBulkRef(dep, localRealID), Type: model.RelBlockedBy, CreatedBy: actor})`. Failure → rollback then `"bulk: blocked_by doc %d -> %q: %w (rollback leaked %d: %s)"`.
-5. **Updates last**, over `file.Updates` (`import_bulk.go`): `s.Apply(ctx, update.ID, storage.Change{Actor: actor, Fields: update.Patch})`. Failure → rollback then `"bulk: update %q: %w (rollback leaked %d: %s)"`. On success append `issue.ID` to `result.Updated`. A failing create or edge therefore leaves no update applied.
+5. **The ordering**, when `file.RankedIDs(createdIDs)` is non-empty (`import_bulk.go`): one `s.RankSet(ctx, ranked)` into `result.Ranked`. Failure → rollback then `"bulk: rank: %w (rollback leaked %d: %s)"`.
+6. **Updates last**, over `file.Updates` (`import_bulk.go`): `s.Apply(ctx, update.ID, storage.Change{Actor: actor, Fields: update.Patch})`. Failure → rollback then `"bulk: update %q: %w; %s (rollback leaked %d: %s)"`, the `%s` being `result.Kept()` (`internal/storage/bulk.go`): the updates applied so far and the order written. On success append `issue.ID` to `result.Updated`. A failing create, edge, or ordering therefore leaves no update applied.
 
 `resolveBulkRef(ref, localRealID)` (`import_bulk.go`): a map hit returns the real id; **a miss returns `ref` unchanged**, to be validated downstream by `CreateIssue`/`AddRelation` as a real pre-existing issue id.
 
@@ -3923,11 +3926,12 @@ Note the create branch does **not** require `LocalID` (unlike ImportTree), and d
 | priority default | `0` (the int zero value, parsed strictly) | `PriorityNormal` when the pointer is nil; parsed only when set |
 | topic | required, parsed by the validator with `CreateIssue`'s `issueid.NormalizeTopicForCreate` | required (`missing topic`) and parsed the same way on create; forbidden on update |
 | actor | always `"links"` (CLI rejects `--by`) | `--by` actor threaded into update Changes only |
-| result | `ImportTreeResult{IDMap}` | `BulkApplyResult{Created map, Updated []string}` |
+| ordering | none | every `rank: top` document, in file order, written as one `RankSet` after every create and update |
+| result | `ImportTreeResult{Created []IDMapping}` | `BulkApplyResult{Created []IDMapping, Updated []string, Ranked RankSetResult}` |
 
 ### 5.5 Batching, progress, partial failure
 
-**There is no batching.** Every document is applied through the ordinary per-issue `CreateIssue`/`Apply`/`AddRelation` calls one at a time (`import_bulk.go`) — each of which is its own `withMutation` transaction and its own Dolt commit. There are no literal batch-size constants anywhere in these files, and `BulkApply`/`ImportTree` open no transaction of their own.
+**There is no batching.** Every document is applied through the ordinary per-issue `CreateIssue`/`Apply`/`AddRelation` calls one at a time (`import_bulk.go`) — each of which is its own `withMutation` transaction and its own Dolt commit. The one exception is a YAML file's ordering: its `rank: top` documents are written together, after the creates and edges and before any update, by one `RankSet` call. There are no literal batch-size constants anywhere in these files, and `BulkApply`/`ImportTree` open no transaction of their own.
 
 **No progress reporting** exists at the store layer; the CLI prints only after the whole call returns (`cli.go`).
 
@@ -4006,7 +4010,7 @@ updated %d issues\n         (len(result.Updated))
 
 `import_tree.go`: `import: create %q: %w (rollback leaked %d: %s)`, `import: blocked_by %q -> %q: %w (rollback leaked %d: %s)`.
 
-`import_bulk.go`: `bulk: no issues in input`, `bulk: doc %d id %q has surrounding whitespace`, `bulk: doc %d local_id %q has surrounding whitespace`, `bulk: doc %d parent %q has surrounding whitespace`, `bulk: doc %d blocked_by entry %q has surrounding whitespace`, `bulk: doc %d (local_id %q) cannot depend on itself`, `bulk: duplicate id %q`, `bulk: duplicate local_id %q`, `bulk: doc %d missing title`, `bulk: doc %d missing topic`, `bulk: doc %d missing type`, `bulk: doc %d sets reason without id (reason only applies to updates)`, `bulk: doc %d (id %q) sets local_id; local_id only applies to new tickets`, `bulk: doc %d (id %q) sets topic; topic is immutable and update cannot change it`, ``bulk: doc %d (id %q) sets parent; reparent with `lit parent set` instead``, ``bulk: doc %d (id %q) sets blocked_by; wire dependencies with `lit dep add` instead``, `bulk: doc %d (id %q): %w`, `bulk: doc %d (id %q) sets an empty title`, `bulk: doc %d (id %q) has no fields to update`, `bulk: doc %d: %w`, `bulk: update %q: %w (rollback leaked %d: %s)`, `bulk: create doc %d: %w (rollback leaked %d: %s)`, `bulk: blocked_by doc %d -> %q: %w (rollback leaked %d: %s)`; and from `invalidValue` (`internal/storage/fields.go`) `has invalid %s %#v: %w`.
+`import_bulk.go`: `bulk: no issues in input`, `bulk: doc %d id %q has surrounding whitespace`, `bulk: doc %d local_id %q has surrounding whitespace`, `bulk: doc %d parent %q has surrounding whitespace`, `bulk: doc %d blocked_by entry %q has surrounding whitespace`, `bulk: doc %d (local_id %q) cannot depend on itself`, `bulk: duplicate id %q`, `bulk: duplicate local_id %q`, `bulk: doc %d missing title`, `bulk: doc %d missing topic`, `bulk: doc %d missing type`, `bulk: doc %d sets reason without id (reason only applies to updates)`, `bulk: doc %d (id %q) sets local_id; local_id only applies to new tickets`, `bulk: doc %d (id %q) sets topic; topic is immutable and update cannot change it`, ``bulk: doc %d (id %q) sets parent; reparent with `lit parent set` instead``, ``bulk: doc %d (id %q) sets blocked_by; wire dependencies with `lit dep add` instead``, `bulk: doc %d (id %q): %w`, `bulk: doc %d (id %q) sets an empty title`, `bulk: doc %d (id %q) has no fields to update and no rank`, `bulk: doc %d (id %q) sets reason but changes no field; reason annotates a field change, and rank writes none`, `bulk: doc %d: %w` (among them `rank %q is not a placement; …`), `bulk: rank: %w (rollback leaked %d: %s)`, `bulk: update %q: %w; %s (rollback leaked %d: %s)`, `bulk: create doc %d: %w (rollback leaked %d: %s)`, `bulk: blocked_by doc %d -> %q: %w (rollback leaked %d: %s)`; and from `invalidValue` (`internal/storage/fields.go`) `has invalid %s %#v: %w`.
 
 Parsers (`internal/storage/specs.go`): `bulk: parse spec: %w`, `import: parse spec: %w`, `import: unexpected trailing data after spec array`.
 

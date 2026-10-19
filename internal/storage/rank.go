@@ -33,13 +33,15 @@ func (FrameContainmentError) RefusesCommand() {}
 var _ model.Refusal = FrameContainmentError{}
 
 // ValidateRankSetIDs refuses a rank set whose arguments cannot name an order:
-// fewer than two ids, an empty id, or one id named twice. The refusals are
-// about the call's own arguments, so they carry the "rank set: " prefix.
+// no ids, an empty id, or one id named twice. One id is an order — that issue
+// first in its frame — which is what a bulk file with one `rank: top`
+// document asks for. The refusals are about the call's own arguments, so they
+// carry the "rank set: " prefix.
 // [LAW:one-source-of-truth] Both engines run this one check, so they cannot
 // word or classify these refusals differently.
 func ValidateRankSetIDs(ids []string) error {
-	if len(ids) < 2 {
-		return model.ValidationError{Message: "rank set: need at least 2 IDs to establish order"}
+	if len(ids) == 0 {
+		return model.ValidationError{Message: "rank set: need at least 1 ID to establish order"}
 	}
 	seen := make(map[string]struct{}, len(ids))
 	for _, id := range ids {
@@ -283,9 +285,12 @@ func FrameRepresentatives(chains [][]string) ([]string, Frame, error) {
 		}
 	}
 	// Common ancestors form a shared suffix of every chain, so the first
-	// element of chains[0] present in all others is the lowest common ancestor.
+	// proper ancestor of chains[0] present in all others is the lowest common
+	// ancestor. The issue itself is never it: in two or more chains that
+	// would be the containment refused above, and a lone chain's frame is its
+	// issue's parent.
 	lcaID := ""
-	for _, id := range chains[0] {
+	for _, id := range chains[0][1:] {
 		inAll := true
 		for _, m := range memberships[1:] {
 			if _, ok := m[id]; !ok {

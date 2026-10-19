@@ -218,7 +218,10 @@ var cases = []engineCase{
 	{"issue_identities_cover_every_row", issueIdentitiesCoverEveryRow},
 	{"export_carries_whole_store", exportCarriesWholeStore},
 	{"bulk_apply_creates_and_updates", bulkApplyCreatesAndUpdates},
+	{"bulk_file_orders_its_rank_top_documents", bulkFileOrdersItsRankTopDocuments},
+	{"bulk_file_ranks_a_create_at_the_top_of_its_epic", bulkFileRanksACreateAtTheTopOfItsEpic},
 	{"bulk_apply_compensates_a_failed_batch", bulkApplyCompensatesFailure},
+	{"a_bulk_file_failing_at_an_update_names_what_it_kept", aBulkFileFailingAtAnUpdateNamesWhatItKept},
 	{"import_tree_maps_local_ids", importTreeMapsLocalIDs},
 	{"attribution_stamps_events", attributionStampsEvents},
 	{"observers_hear_every_change", observersHearEveryChange},
@@ -2944,13 +2947,14 @@ func anImportFileThatBreaksARuleIsRefusedWhole(t *testing.T, ctx context.Context
 }
 
 // aBulkFileRefusedAtAWriteAppliesNoUpdate pins the order a bulk file is
-// written in: its creates and their edges first, its updates last. A file the
-// gate admits can still be refused at a write the gate could not judge — a
-// parent or blocked_by naming a real id that names no issue — and the creates
-// before that write are rolled back, but an update cannot be. Written last, an
-// update document ahead of the refused create in the file never lands.
+// written in: its creates and their edges first, then its ordering, its
+// updates last. A file the gate admits can still be refused at a write the
+// gate could not judge — a parent or blocked_by naming a real id that names
+// no issue, or an ordering RankSet refuses — and the creates before that
+// write are rolled back, but an update cannot be. Written last, an update
+// document ahead of the refused write in the file never lands.
 func aBulkFileRefusedAtAWriteAppliesNoUpdate(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	title, topic, epicType, taskType, renamed := "imported", "core", "epic", "task", "renamed"
+	title, topic, epicType, taskType, renamed, top := "imported", "core", "epic", "task", "renamed", "top"
 	for _, file := range []struct {
 		what  string
 		after []storage.BulkIssueSpec // the documents after the update
@@ -2960,6 +2964,9 @@ func aBulkFileRefusedAtAWriteAppliesNoUpdate(t *testing.T, ctx context.Context, 
 		{"an update, then an epic, then a task under a parent that does not exist", []storage.BulkIssueSpec{
 			{LocalID: "e", Title: &title, Topic: &topic, IssueType: &epicType},
 			{Title: &title, Topic: &topic, IssueType: &taskType, Parent: "no-such-issue"}}},
+		{"an update, then an epic and its own task, both rank: top", []storage.BulkIssueSpec{
+			{LocalID: "e", Title: &title, Topic: &topic, IssueType: &epicType, Rank: &top},
+			{Title: &title, Topic: &topic, IssueType: &taskType, Parent: "e", Rank: &top}}},
 	} {
 		// Each file updates an issue of its own, so one file's update landing
 		// fails only that file's case.
@@ -2967,13 +2974,13 @@ func aBulkFileRefusedAtAWriteAppliesNoUpdate(t *testing.T, ctx context.Context, 
 		specs := append([]storage.BulkIssueSpec{{ID: existing.ID, Title: &renamed}}, file.after...)
 		before := mustList(t, ctx, st, storage.ListIssuesFilter{})
 		if _, err := st.BulkApply(ctx, prefix, "ada", specs); err == nil {
-			t.Fatalf("BulkApply(%s) succeeded; want the write naming a missing issue refused", file.what)
+			t.Fatalf("BulkApply(%s) succeeded; want the write it cannot make refused", file.what)
 		}
 		if after := mustList(t, ctx, st, storage.ListIssuesFilter{}); len(after) != len(before) {
 			t.Errorf("BulkApply(%s): live issues = %d, want %d: the creates before the refused write are rolled back", file.what, len(after), len(before))
 		}
 		if got := mustGet(t, ctx, st, existing.ID); got.Title != "existing" {
-			t.Errorf("BulkApply(%s): existing title = %q, want %q: an update is written after every create and edge", file.what, got.Title, "existing")
+			t.Errorf("BulkApply(%s): existing title = %q, want %q: an update is written after every create, edge, and ordering", file.what, got.Title, "existing")
 		}
 	}
 }
@@ -3532,6 +3539,82 @@ func bulkApplyCreatesAndUpdates(t *testing.T, ctx context.Context, st storage.St
 	}
 }
 
+// bulkFileOrdersItsRankTopDocuments is the contract behind reordering a
+// backlog with one `lit import`: the documents stating `rank: top` lead their
+// frame in file order, every issue the file does not name keeps its place
+// below them, and importing the file again once its order has landed writes
+// nothing — no key and no updated_at changes, though the clock has moved.
+func bulkFileOrdersItsRankTopDocuments(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	start := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	clk.Pin(start)
+	// The top level holds only epics, so they are the frame a top-level order
+	// is read in. Two of the twelve go unnamed and must follow the ten.
+	epics := make([]model.Issue, 12)
+	for i := range epics {
+		epics[i] = mustCreate(t, ctx, st, storage.CreateIssueInput{Title: fmt.Sprintf("epic %d", i), Topic: "core", IssueType: model.TypeEpic})
+	}
+	top := "top"
+	var specs []storage.BulkIssueSpec
+	var want []string
+	for _, n := range []int{7, 2, 9, 0, 5, 3, 8, 1, 6, 4} {
+		specs = append(specs, storage.BulkIssueSpec{ID: epics[n].ID, Rank: &top})
+		want = append(want, epics[n].ID)
+	}
+	want = append(want, epics[10].ID, epics[11].ID)
+
+	clk.Pin(start.Add(time.Hour))
+	result, err := st.BulkApply(ctx, prefix, "ada", specs)
+	if err != nil {
+		t.Fatalf("BulkApply error = %v", err)
+	}
+	assertOrder(t, ctx, st, "after one import of the ordering", want...)
+	if len(result.Updated) != 0 {
+		t.Errorf("BulkApply Updated = %v, want none: the documents state only rank", result.Updated)
+	}
+	if got := len(result.Ranked.Resolutions); got != 10 {
+		t.Errorf("BulkApply ranked %d issues, want 10", got)
+	}
+	landed := mustList(t, ctx, st, storage.ListIssuesFilter{})
+
+	clk.Pin(start.Add(2 * time.Hour))
+	if _, err := st.BulkApply(ctx, prefix, "ada", specs); err != nil {
+		t.Fatalf("BulkApply again error = %v", err)
+	}
+	again := mustList(t, ctx, st, storage.ListIssuesFilter{})
+	assertIssueIDs(t, "after importing the same ordering again", again, want)
+	for i, issue := range again {
+		if issue.Rank != landed[i].Rank || !issue.UpdatedAt.Equal(landed[i].UpdatedAt) {
+			t.Errorf("importing a landed ordering again rewrote %s: rank %q -> %q, updated_at %v -> %v", issue.ID, landed[i].Rank, issue.Rank, landed[i].UpdatedAt, issue.UpdatedAt)
+		}
+	}
+}
+
+// bulkFileRanksACreateAtTheTopOfItsEpic: a create document's `rank: top` is
+// the same ordering an update's is, so a new child stated with it leads its
+// epic's children — and a file whose ordering is one document is that issue
+// sent to the top of its frame.
+func bulkFileRanksACreateAtTheTopOfItsEpic(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+	first := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "first", Topic: "core", ParentID: epic.ID})
+	second := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "second", Topic: "core", ParentID: epic.ID})
+	title, topic, task, top := "new", "core", "task", "top"
+	result, err := st.BulkApply(ctx, prefix, "ada", []storage.BulkIssueSpec{
+		{Title: &title, Topic: &topic, IssueType: &task, Parent: epic.ID, Rank: &top},
+	})
+	if err != nil {
+		t.Fatalf("BulkApply error = %v", err)
+	}
+	if len(result.Created) != 1 {
+		t.Fatalf("BulkApply Created = %+v, want one", result.Created)
+	}
+	created := result.Created[0].ID
+	if result.Ranked.Frame != storage.Frame(epic.ID) {
+		t.Errorf("the ordering landed in frame %q, want the epic %s", result.Ranked.Frame, epic.ID)
+	}
+	frame := map[string]struct{}{created: {}, first.ID: {}, second.ID: {}}
+	assertIssueIDs(t, "the epic's children", childrenOf(mustList(t, ctx, st, storage.ListIssuesFilter{}), frame), []string{created, first.ID, second.ID})
+}
+
 // bulkApplyCompensatesFailure pins what a batch owes when it fails partway.
 // The contract trades atomicity for an account: the issues the batch created
 // are undone, and what could not be undone is named in the error. A batch that
@@ -3557,6 +3640,34 @@ func bulkApplyCompensatesFailure(t *testing.T, ctx context.Context, st storage.S
 		t.Fatal("BulkApply with an unresolvable parent succeeded; want an error")
 	}
 	assertIssueIDs(t, "issues after a compensated batch", mustList(t, ctx, st, storage.ListIssuesFilter{}), nil)
+}
+
+// aBulkFileFailingAtAnUpdateNamesWhatItKept: an update is written after the
+// file's ordering, and neither an applied update nor an order can be rolled
+// back, so a batch refused at an update says what stays written — and what it
+// says is what the store holds: a created issue the file ranked is rolled
+// back, so it is no part of the order kept. [LAW:no-silent-failure]
+func aBulkFileFailingAtAnUpdateNamesWhatItKept(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	a := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "a", Topic: "core", IssueType: model.TypeEpic})
+	b := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "b", Topic: "core", IssueType: model.TypeEpic})
+	c := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "c", Topic: "core", IssueType: model.TypeEpic})
+	top, renamed, title, topic, epicType := "top", "renamed", "created", "core", "epic"
+	_, err := st.BulkApply(ctx, prefix, "ada", []storage.BulkIssueSpec{
+		{Title: &title, Topic: &topic, IssueType: &epicType, Rank: &top},
+		{ID: b.ID, Rank: &top},
+		{ID: a.ID, Rank: &top},
+		{ID: c.ID, Title: &renamed},
+		// An id the gate cannot judge: it names no issue, so its write fails.
+		{ID: "no-such-issue", Title: &renamed},
+	})
+	want := fmt.Sprintf("kept 1 updates [%s] and the order of 2 issues [%s,%s]", c.ID, b.ID, a.ID)
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("BulkApply error = %v, want it to name what it kept: %q", err, want)
+	}
+	assertOrder(t, ctx, st, "the order the failed batch kept", b.ID, a.ID, c.ID)
+	if got := mustGet(t, ctx, st, c.ID); got.Title != renamed {
+		t.Errorf("the update the failed batch kept: title = %q, want %q", got.Title, renamed)
+	}
 }
 
 func importTreeMapsLocalIDs(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {

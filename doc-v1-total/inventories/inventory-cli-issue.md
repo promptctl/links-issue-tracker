@@ -1115,11 +1115,12 @@ history:
   (`cli.go`).
 - Calls `Store.RankSet(ctx, positional)` — atomic; stacks the named issues at the
   top in the given order (`cli.go`, doc at `cli.go`).
-- Output: for each resolution where `RankedID != NamedID`,
-  `"<NamedID> is inside <RankedID>; ranked the epic <RankedID> instead, leaving its internal order unchanged\n"`
-  (`cli.go`); then
-  `"ranked %d issues at top in order: <comma-joined RankedIDs>\n"`
-  (`cli.go`); then the `update` breadcrumb (`cli.go`).
+- Output, by `printRankSet` (`cli.go`, shared with `lit import`'s YAML
+  bulk path): for each resolution where `RankedID != NamedID`,
+  `"<NamedID> is inside <RankedID>; ranked the epic <RankedID> instead, leaving its internal order unchanged\n"`;
+  then `"ranked %d %s at the top of %s in order: <comma-joined RankedIDs>\n"`,
+  the noun `issue` for one id and `issues` otherwise, the frame by
+  `frameLabel`; then the `update` breadcrumb (`cli.go`).
 
 ### 2.10 Transition commands — `start`, `done`, `close`, `open`, `archive`, `unarchive`, `delete`, `restore`
 
