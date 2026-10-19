@@ -478,11 +478,12 @@ func resetHardToRef(ctx context.Context, db *sql.DB, ref string) error {
 }
 
 // SyncReceive fetches the remote and, only when the local branch is strictly
-// behind, fast-forwards it to the remote head. It is purely lossless: it never
-// creates a merge commit, never merges a divergence, and never leaves a dirty
-// or conflicted working set — a fast-forward only moves a branch pointer that
-// has no local commits to lose. [LAW:effects-at-boundaries] The one state that
-// touches local data (behind → fast-forward) is the only safe automatic one;
+// behind, lands it on the remote head. It is purely lossless: it never creates
+// a merge commit, never merges a divergence, and never leaves a dirty or
+// conflicted working set — the freshness that licenses the landing counts
+// every local write, stranded ones included (freshnessOverEveryWrite), so the
+// landing discards none. [LAW:effects-at-boundaries] The one state that moves
+// the branch (behind → land on the remote head) is the only safe automatic one;
 // every other state is observed and reported for the caller, with the diverged
 // case explicitly deferred to the foreground agent-present reconcile rather than
 // silently dropped. [LAW:dataflow-not-control-flow] The post-fetch freshness is
@@ -507,7 +508,7 @@ func (s *Store) SyncReceive(ctx context.Context, remote string, branch string) (
 
 // SyncSettleReceived is SyncReceive without the fetch: it reads the tracking
 // ref as it already stands — a fetch landed on this store from a clone
-// (LandFetchedHead) — and fast-forwards when the local branch is strictly
+// (LandFetchedHead) — and lands on it when the local branch is strictly
 // behind it, first following a re-root the tracking ref reveals
 // (followRemoteReRoot). It contacts no network.
 func (s *Store) SyncSettleReceived(ctx context.Context, remote string, branch string) (storage.SyncReceiveResult, error) {
@@ -540,28 +541,40 @@ func (s *Store) settleReceived(ctx context.Context, remote, branch string) (stor
 	return result, nil
 }
 
-// strandedWritesCommitMessage is the message of the commit a settle lands
-// over writes a failed DOLT_COMMIT left in the working set.
+// strandedWritesCommitMessage is the message of the commit a sync lands over
+// writes a failed DOLT_COMMIT left in the working set.
 const strandedWritesCommitMessage = "commit writes a failed commit left staged"
 
-// settleReceivedWithinLock is the half of a receive that follows the fetch:
-// the post-fetch freshness selects the outcome, and the one state that touches
-// local data (behind) fast-forwards. SyncReceive and SyncSettleReceived both
-// run it, so a receive whose fetch ran here and one whose fetch ran on a clone
-// settle identically. [LAW:single-enforcer] The caller holds the commit lock.
-func (s *Store) settleReceivedWithinLock(ctx context.Context, remote, branch string) (storage.SyncReceiveResult, error) {
-	var result storage.SyncReceiveResult
-	// Freshness counts commits, and landing on the remote head discards the
-	// working set, so writes a failed DOLT_COMMIT left staged are versioned
-	// first, as the next mutation would version them. Then the freshness that
-	// licenses the landing counts every local write. [LAW:no-silent-failure]
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM dolt_status`).Scan(&result.StrandedTables); err != nil {
-		return result, fmt.Errorf("read the working set: %w", err)
+// freshnessOverEveryWrite is the freshness that decides whether the branch
+// moves. Freshness counts commits, and landing on the remote head or on a
+// reconcile's replay resets the working set, so writes a failed DOLT_COMMIT
+// left staged are versioned first, as the next mutation would version them.
+// Then the freshness counts every local write: a stranded write is a local
+// commit, and the branch is diverged, not behind. [LAW:single-enforcer] The
+// settle and the reconcile plan both read it. [LAW:no-silent-failure]
+func (s *Store) freshnessOverEveryWrite(ctx context.Context, remote, branch string) (storage.SyncFreshness, error) {
+	var tables int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT table_name) FROM dolt_status`).Scan(&tables); err != nil {
+		return storage.SyncFreshness{}, fmt.Errorf("read the working set: %w", err)
 	}
 	if err := s.commitWorkingSetOnce(ctx, commitStamp{Message: strandedWritesCommitMessage}); err != nil {
-		return result, err
+		return storage.SyncFreshness{}, err
 	}
-	fresh, err := s.SyncFreshness(ctx, remote, branch)
+	if tables > 0 {
+		s.strandedWritesCommits = append(s.strandedWritesCommits, storage.StrandedWritesCommit{Tables: tables})
+	}
+	return s.SyncFreshness(ctx, remote, branch)
+}
+
+// settleReceivedWithinLock is the half of a receive that follows the fetch:
+// the post-fetch freshness selects the outcome, and the one state that moves
+// the branch (behind) lands on the remote head. SyncReceive and
+// SyncSettleReceived both run it, so a receive whose fetch ran here and one
+// whose fetch ran on a clone settle identically. [LAW:single-enforcer] The
+// caller holds the commit lock.
+func (s *Store) settleReceivedWithinLock(ctx context.Context, remote, branch string) (storage.SyncReceiveResult, error) {
+	var result storage.SyncReceiveResult
+	fresh, err := s.freshnessOverEveryWrite(ctx, remote, branch)
 	if err != nil {
 		return result, err
 	}

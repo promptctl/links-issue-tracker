@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -532,9 +533,15 @@ func TestAQuietForksRefusedPushIsNotSuperseded(t *testing.T) {
 // the write stays staged in the working set with no commit over it.
 func strandWrite(t *testing.T, ctx context.Context, root, ticket string) {
 	t.Helper()
+	strandTitle(t, ctx, root, ticket, strandedTitle)
+}
+
+// strandTitle is strandWrite with the title to strand.
+func strandTitle(t *testing.T, ctx context.Context, root, ticket, title string) {
+	t.Helper()
 	st := openSyncOrFatal(t, ctx, root)
 	st.commitWorkingSetHookForTest = func() error { return errors.New("injected: DOLT_COMMIT failed") }
-	if _, err := st.Apply(ctx, ticket, storage.Change{Fields: storage.UpdateIssueInput{Title: strptr(strandedTitle)}}); err == nil {
+	if _, err := st.Apply(ctx, ticket, storage.Change{Fields: storage.UpdateIssueInput{Title: strptr(title)}}); err == nil {
 		t.Fatalf("Apply() with DOLT_COMMIT failing returned nil; want the failure")
 	}
 	st.commitWorkingSetHookForTest = nil
@@ -582,9 +589,10 @@ func TestAStrandedWriteSurvivesAReceive(t *testing.T) {
 			if err != nil {
 				t.Fatalf("SyncReceive() error = %v", err)
 			}
-			if received.State != storage.SyncReceiveDiverged || received.StrandedTables == 0 {
-				t.Fatalf("receive = %q with %d stranded table(s); want %q over the versioned write", received.State, received.StrandedTables, storage.SyncReceiveDiverged)
+			if received.State != storage.SyncReceiveDiverged {
+				t.Fatalf("receive = %q; want %q over the versioned write", received.State, storage.SyncReceiveDiverged)
 			}
+			assertStrandedWritesVersioned(t, ctx, st)
 			if _, err := st.SyncPull(ctx, "origin", "master"); err != nil {
 				t.Fatalf("SyncPull() error = %v", err)
 			}
@@ -593,6 +601,68 @@ func TestAStrandedWriteSurvivesAReceive(t *testing.T) {
 			}
 			assertWorkingSetClean(t, ctx, st)
 		})
+	}
+}
+
+// TestAStrandedWriteSurvivesAReconcile leaves a write staged by a failed
+// commit on a checkout that diverged from its remote, and reconciles without
+// a receive first. The reconcile plan versions the write before it reads the
+// divergence, so the replay carries it rather than the landing discarding it.
+func TestAStrandedWriteSurvivesAReconcile(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	alpha, beta := migratedDoltDir(t), migratedDoltDir(t)
+	remoteURL := "file://" + filepath.Join(t.TempDir(), "remote")
+	ticket := createAndPush(t, ctx, alpha, seedReconcileRemote(t, ctx, alpha, remoteURL), "x")
+	adoptRemote(t, ctx, beta, remoteURL)
+	updateAndPush(t, ctx, alpha, ticket, storage.UpdateIssueInput{Description: strptr("alpha-description")})
+	updateLocal(t, ctx, beta, ticket, storage.UpdateIssueInput{Assignee: strptr("beta-assignee")})
+	// One stranded write staged and a second unstaged over it, so each table
+	// they touch holds a change on both sides of the index.
+	strandTitle(t, ctx, beta, ticket, "staged-title")
+	stageWorkingSet(t, ctx, beta)
+	strandWrite(t, ctx, beta, ticket)
+	st := openSyncOrFatal(t, ctx, beta)
+	defer func() { _ = st.Close() }()
+	if err := st.SyncFetch(ctx, "origin", false); err != nil {
+		t.Fatalf("SyncFetch() error = %v", err)
+	}
+	if _, err := st.SyncReconcile(ctx, "origin", "master"); err != nil {
+		t.Fatalf("SyncReconcile() error = %v", err)
+	}
+	if issue := getIssueOrFatal(t, ctx, st, ticket); issue.Title != strandedTitle || issue.Description != "alpha-description" || issue.Assignee != "beta-assignee" {
+		t.Fatalf("ticket title, description, assignee = %q, %q, %q; want the stranded %q, alpha's description and beta's assignee", issue.Title, issue.Description, issue.Assignee, strandedTitle)
+	}
+	assertStrandedWritesVersioned(t, ctx, st)
+	assertWorkingSetClean(t, ctx, st)
+}
+
+// stageWorkingSet stages every change in root's working set.
+func stageWorkingSet(t *testing.T, ctx context.Context, root string) {
+	t.Helper()
+	st := openSyncOrFatal(t, ctx, root)
+	if err := execProcedureDiscard(ctx, st.db, "DOLT_ADD", "-A"); err != nil {
+		t.Fatalf("DOLT_ADD -A: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close(staged) error = %v", err)
+	}
+}
+
+// assertStrandedWritesVersioned asserts the store landed exactly one commit
+// over stranded writes, counting the tables that commit's own diff touched.
+func assertStrandedWritesVersioned(t *testing.T, ctx context.Context, st *Store) {
+	t.Helper()
+	var tables int
+	if err := st.db.QueryRowContext(ctx,
+		`SELECT COUNT(DISTINCT table_name) FROM dolt_diff WHERE commit_hash = (SELECT commit_hash FROM dolt_log WHERE message = ? LIMIT 1)`,
+		strandedWritesCommitMessage,
+	).Scan(&tables); err != nil {
+		t.Fatalf("count the stranded commit's tables: %v", err)
+	}
+	want := []storage.StrandedWritesCommit{{Tables: tables}}
+	if got := st.StrandedWritesCommits(); tables == 0 || !reflect.DeepEqual(got, want) {
+		t.Fatalf("StrandedWritesCommits() = %+v; want %+v, the tables the stranded commit's diff touched", got, want)
 	}
 }
 

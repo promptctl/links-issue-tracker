@@ -333,7 +333,7 @@ type reconcilePlan struct {
 // divergence rather than each re-deriving it. [LAW:single-enforcer]
 func (s *Store) captureReconcilePlan(ctx context.Context, remote, branch string) (reconcilePlan, error) {
 	var plan reconcilePlan
-	fresh, err := s.SyncFreshness(ctx, remote, branch)
+	fresh, err := s.freshnessOverEveryWrite(ctx, remote, branch)
 	if err != nil {
 		return reconcilePlan{}, err
 	}

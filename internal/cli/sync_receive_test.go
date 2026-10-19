@@ -11,8 +11,27 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
+
+// A receive whose target is skipped settles nothing, and its event says so
+// with an empty receive.outcomes rather than no key at all.
+func TestASkippedReceiveRecordsNoOutcomes(t *testing.T) {
+	recorder := telemetry.Begin(telemetry.Event{})
+	ctx := telemetry.With(context.Background(), recorder)
+	outcome, closeLive, err := performSyncReceive(ctx, workspace.Info{}, liveClone{}, receiveFetch{target: syncTarget{skip: syncTargetNoRemote}})
+	if err != nil || outcome.skip != syncTargetNoRemote {
+		t.Fatalf("performSyncReceive() = %+v, %v; want the skip", outcome, err)
+	}
+	if err := closeLive(); err != nil {
+		t.Fatal(err)
+	}
+	facts := writtenFacts(t, recorder.Finish(invocationEnd(time.Now(), nil, nil)))
+	if outcomes, present := facts["receive.outcomes"].([]any); !present || len(outcomes) != 0 {
+		t.Fatalf("receive.outcomes = %#v; want an empty list", facts["receive.outcomes"])
+	}
+}
 
 // TestAutomaticReceiveFastForwardsEstablishedClone is the end-to-end proof of the
 // feature: an established clone that adopted the remote on init, then has another

@@ -137,8 +137,12 @@ func TestAQuietForkReceivesOntoTheRemoteHead(t *testing.T) {
 	if len(outcomes) != 1 {
 		t.Fatalf("event %q receive.outcomes = %v; want the one receive's outcome", ev.Event, ev.Facts["receive.outcomes"])
 	}
-	if outcome, _ := outcomes[0].(map[string]any); outcome["receive.decision"] != "fast_forwarded" || outcome["receive.base"] != "fork_point" {
-		t.Fatalf("receive outcome = %v; want fast_forwarded across the fork_point base", outcome)
+	if outcome, _ := outcomes[0].(map[string]any); outcome["receive.decision"] != "fast_forwarded" || outcome["receive.base"] != "fork_point" ||
+		outcome["receive.ahead"] != float64(0) || !(outcome["receive.behind"].(float64) > 0) {
+		t.Fatalf("receive outcome = %v; want fast_forwarded across the fork_point base, nothing ahead and alpha's history behind", outcome)
+	}
+	if stranded, present := ev.Facts["stranded_writes.commits"].([]any); !present || len(stranded) != 0 {
+		t.Fatalf("stranded_writes.commits = %#v; want an empty list: bravo stranded no write", ev.Facts["stranded_writes.commits"])
 	}
 	if bases, _ := ev.Facts["reconcile.bases"].([]any); len(bases) != 0 {
 		t.Fatalf("reconcile.bases = %v; want none: bravo has nothing to replay", bases)

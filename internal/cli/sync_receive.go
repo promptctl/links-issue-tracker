@@ -564,6 +564,10 @@ type reconcileOutcome struct {
 // otherwise; it is the caller's to run once it has recorded the outcome.
 func performSyncReceive(ctx context.Context, ws workspace.Info, clone liveClone, fetch receiveFetch) (outcome syncReceiveOutcome, closeLive func() error, err error) {
 	closeLive = func() error { return nil }
+	// A receive that skips its target or cannot open the store settles
+	// nothing, and its receive.outcomes reads [] rather than absent.
+	// [LAW:nothing-unseen]
+	telemetry.Append(ctx, "receive.outcomes")
 	target := fetch.target
 	if target.skip != syncTargetReady {
 		return syncReceiveOutcome{skip: target.skip, remote: target.remote}, closeLive, nil
@@ -600,7 +604,6 @@ func performSyncReceive(ctx context.Context, ws workspace.Info, clone liveClone,
 		"ahead":       strconv.FormatInt(result.Ahead, 10),
 		"behind":      strconv.FormatInt(result.Behind, 10),
 		"base":        string(result.Base),
-		"stranded":    strconv.Itoa(result.StrandedTables),
 		"landed":      landed.Record.String(),
 		"fork_point":  landed.ForkPoint.String(),
 		"land_held":   landed.Held.Round(time.Millisecond).String(),
@@ -617,11 +620,10 @@ func performSyncReceive(ctx context.Context, ws workspace.Info, clone liveClone,
 	// The settle's decision lands on the invocation's event too, one value per
 	// receive, read off the trace's own fields. [LAW:nothing-unseen]
 	telemetry.Append(ctx, "receive.outcomes", map[string]any{
-		"receive.decision":        receiveDecision,
-		"receive.ahead":           result.Ahead,
-		"receive.behind":          result.Behind,
-		"receive.base":            traceMetadata["base"],
-		"receive.stranded_tables": result.StrandedTables,
+		"receive.decision": receiveDecision,
+		"receive.ahead":    result.Ahead,
+		"receive.behind":   result.Behind,
+		"receive.base":     traceMetadata["base"],
 	})
 	traceRecordErr := recordReceiveTrace(ws, receiveDecision, traceStatus, traceReason, traceMetadata)
 	outcome = syncReceiveOutcome{
@@ -763,7 +765,7 @@ func reconcileReasonForState(state storage.SyncReconcileState) string {
 func receiveReasonForState(state storage.SyncReceiveState) string {
 	switch state {
 	case storage.SyncReceiveFastForwarded:
-		return "automatic receive fast-forwarded the local store to the remote head"
+		return "automatic receive landed the local store on the remote head"
 	case storage.SyncReceiveUpToDate:
 		return "automatic receive found the local store already up to date with the remote"
 	case storage.SyncReceiveAhead:

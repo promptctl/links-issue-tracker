@@ -159,7 +159,7 @@ const (
 	// SyncReceiveUpToDate: local already at the remote head; fetch found nothing.
 	SyncReceiveUpToDate SyncReceiveState = "up_to_date"
 	// SyncReceiveFastForwarded: local was strictly behind and landed on the
-	// remote head with no merge commit — the only state that mutates local data.
+	// remote head with no merge commit — the only state that moves the branch.
 	SyncReceiveFastForwarded SyncReceiveState = "fast_forwarded"
 	// SyncReceiveAhead: local has unpushed commits and the remote has nothing
 	// new; there is nothing to receive (the push side delivers local commits).
@@ -179,16 +179,27 @@ const (
 // so the inline reconcile that follows a SyncReceiveDiverged can date the fork
 // it is about to heal without a second freshness read. Zero unless diverged.
 // Base is the freshness's base, so a landing across a fork point reads apart
-// from a fast-forward along shared history. StrandedTables counts the tables
-// whose writes a failed commit left staged and the settle versioned before it
-// read the freshness.
+// from a fast-forward along shared history.
 type SyncReceiveResult struct {
 	State              SyncReceiveState
 	Ahead              int64
 	Behind             int64
 	OldestDivergedUnix int64
 	Base               ReconcileBaseSource
-	StrandedTables     int
+}
+
+// StrandedWritesCommit is one commit a sync landed over writes a failed
+// DOLT_COMMIT left in the working set, before it read the freshness that
+// decides whether the branch moves. Tables counts the tables those writes
+// touched.
+type StrandedWritesCommit struct {
+	Tables int
+}
+
+// EventValue is the commit as one value of the event's stranded_writes.commits
+// list.
+func (c StrandedWritesCommit) EventValue() map[string]any {
+	return map[string]any{"stranded_writes.tables": c.Tables}
 }
 
 // SyncPullState classifies what a single `lit sync pull` did, derived from the
