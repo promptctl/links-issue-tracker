@@ -15,7 +15,6 @@ os.File.ReadFrom      os package
 QueryRow              database/sql
 
 # Third-party modules this repository imports but does not carry.
-fd.Close              github.com/promptctl/primitives/filelock
 joinWithClose         github.com/promptctl/primitives/filelock
 errWouldBlock         github.com/promptctl/primitives/filelock
 TryLock               github.com/promptctl/primitives/filelock

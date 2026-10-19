@@ -15,7 +15,7 @@ one below carries the condition that would let it be deleted.
 
 | Module in `go.mod` | Upstream | What `lit` builds | Branch | Current pin |
 | --- | --- | --- | --- | --- |
-| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20261018081222-82e90e61eede` |
+| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20261019140221-16ea880f8fde` |
 | `github.com/dolthub/go-mysql-server` | [dolthub/go-mysql-server](https://github.com/dolthub/go-mysql-server) | [promptctl/go-mysql-server](https://github.com/promptctl/go-mysql-server) | `lit` | `v0.20.1-0.20260821032251-ab5cb9ec3b69` |
 | `github.com/dolthub/driver` | [dolthub/driver](https://github.com/dolthub/driver) | [`internal/vendor/dolthub-driver`](internal/vendor/dolthub-driver) | — | `v0.2.1-0.20260314000741-0fe74e7ee31a` |
 
@@ -343,6 +343,29 @@ line moves past that change. Dropping it without that leaves the shared
 remote holding every write ever pushed, and the bare
 `OverwriteStoreManifest` in its place keeps the generation, so a writer
 holding the old one could reference a chunk the replacement dropped.
+
+#### Patch 11 — the engine owns every remote a push opens, and a clone closes its source
+
+`go/libraries/doltcore/sqle/database_provider.go`.
+
+`DOLT_PUSH` asks the provider for a cached remote. The provider cached only
+`git+` remotes, in its own map, closed with the engine; every other remote
+was opened through dbfactory's process-wide singleton map, which only
+`CloseAllLocalDatabases` closes and `lit` never calls. A `file://` remote's
+table files therefore stayed open until the process exited, and on Windows
+nothing under that remote's directory could be removed: 79 `internal/store`
+tests still held a remote's files when their TempDir was removed
+(`links-windows-qr8l.7na`). The provider now caches every remote it hands
+out, opened past the singleton map, so its `Close` releases them all and the
+git-only branch is gone. `DOLT_CLONE`'s source is opened the same way and
+closed when the clone returns, as patch 7 closes fetch's and pull's — for a
+git-backed source that also retires the blobstore's UUID refs.
+`internal/store/remote_handles_test.go` fails without the patch.
+
+**Retire it when** upstream closes the remote a push or a clone opens without
+routing it through the singleton map, and the `require` line moves past that
+change. Dropping it without that brings back every pushed or cloned remote
+held open for the life of the process.
 
 ### promptctl/go-mysql-server
 
