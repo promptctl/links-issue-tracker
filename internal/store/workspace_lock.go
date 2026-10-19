@@ -375,8 +375,8 @@ var errLockHeld = errors.New("lock held")
 // contention carries the same errors.Is discriminator.
 //
 // It is also the one boundary where a lock says who holds it. Both halves of
-// that live here rather than at each wrapper: while the wait runs,
-// announceLockWait reports it instead of leaving the caller to guess whether
+// that live here rather than at each wrapper: while the wait runs, the wait
+// policy (holdWait) reports it instead of leaving the caller to guess whether
 // lit is wedged or merely slow; when the wait elapses, the holder account
 // rides the sentinel out to every wrapper's message for free. A ctx that ends
 // while the lock is still held cuts the wait with the ctx's own error, which
@@ -394,11 +394,6 @@ func acquireStoreLock(ctx context.Context, storageDir, lockPath string, exclusiv
 // chose, so no assertion about the wait depends on how fast the machine runs.
 // [LAW:effects-at-boundaries]
 func acquireStoreLockOn(ctx context.Context, now func() time.Time, storageDir, lockPath string, exclusive bool, wait time.Duration) (func() error, error) {
-	// Deferred, not called after the acquire: the reporter is a goroutine
-	// whose only other exit is ctx.Done(), and callers pass
-	// context.Background(), so a panic in the acquire would strand it waking
-	// to do filesystem I/O for the life of the process.
-	defer announceLockWait(ctx, storageDir, lockPath)()
 	var release func() error
 	// sawHeld stays set once any try found the lock held: a ctx that ends
 	// mid-wait surfaces as a bare ctx error — from the retry loop between

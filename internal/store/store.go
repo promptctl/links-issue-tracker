@@ -463,7 +463,7 @@ func openEngine(ctx context.Context, doltRootDir string, workspaceID string, acc
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := awaitEngineOpen(ctx, doltRootDir, db.PingContext); err != nil {
+	if err := wrapEngineOpenContention(db.PingContext(ctx), doltRootDir); err != nil {
 		return nil, nil, errors.Join(err, db.Close())
 	}
 	releaseEngineRecord := func() error { return nil }
@@ -527,7 +527,7 @@ func (s *Store) reconnect(ctx context.Context) error {
 	if err := prev.Close(); err != nil && !errors.Is(err, context.Canceled) {
 		return fmt.Errorf("close prior dolt connection after reconnect: %w", err)
 	}
-	if err := awaitEngineOpen(ctx, s.doltRootDir, next.PingContext); err != nil {
+	if err := wrapEngineOpenContention(next.PingContext(ctx), s.doltRootDir); err != nil {
 		return fmt.Errorf("reopen dolt: %w", err)
 	}
 	return nil
@@ -3335,18 +3335,6 @@ func wrapEngineOpenContention(err error, doltRootDir string) error {
 			describeLockHolders(workspaceStorageDir(doltRootDir), DoltJournalLockPath(doltRootDir)), ErrWorkspaceBusy, err)
 	}
 	return err
-}
-
-// awaitEngineOpen runs the step that makes an engine open surface — the ping
-// that opens a pooled connector, or a chunk-store load — while reporting the
-// wait the way every store lock reports its own (announceLockWait), and
-// stamps a contention outcome with the holder's name. The retry itself is
-// the caller's, driven by newEngineOpenBackOff; this is the one seam every
-// engine open of Dolt's LOCK crosses, so the notice and the name cannot be
-// forgotten at one of them. [LAW:single-enforcer]
-func awaitEngineOpen(ctx context.Context, doltRootDir string, open func(context.Context) error) error {
-	defer announceLockWait(ctx, workspaceStorageDir(doltRootDir), DoltJournalLockPath(doltRootDir))()
-	return wrapEngineOpenContention(open(ctx), doltRootDir)
 }
 
 // newEngineOpenBackOff builds the per-connector retry policy for write-capable

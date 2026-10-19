@@ -19,9 +19,9 @@ import (
 	"github.com/promptctl/primitives/filelock"
 )
 
-// syncWriter collects notice output written from announceLockWait's reporter
-// goroutine while the test reads it, so the race detector sees the guard the
-// two sides actually share.
+// syncWriter collects notice output written by every goroutine contending in
+// a test — each wait prints from its own — so the race detector sees the
+// guard the writers actually share.
 type syncWriter struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
@@ -116,8 +116,14 @@ func TestContentionErrorNamesTheLiveHolder(t *testing.T) {
 // a wedged lock indistinguishable from slow work, so a wait that outlasts the
 // grace reports itself, names its holder, and KEEPS reporting — one line that
 // scrolled away fifteen minutes ago is the same silence.
+//
+// The contender's clock steps one second per poll, so the schedule is read
+// off the instants the wait is handed rather than off how fast the machine
+// runs. The holder stands still, so the wait refuses at 10s; the notice is
+// due at the 3s grace and then every 2s interval, which is 3s, 5s, 7s and 9s,
+// with the next one (11s) past the refusal.
 func TestWaitAnnouncesItselfRepeatedly(t *testing.T) {
-	notices := captureLockNotices(t, 10*time.Millisecond, 10*time.Millisecond)
+	notices := captureLockNotices(t, 3*time.Second, 2*time.Second)
 	ctx := context.Background()
 	lockPath := filepath.Join(t.TempDir(), "test.lock")
 
@@ -131,16 +137,22 @@ func TestWaitAnnouncesItselfRepeatedly(t *testing.T) {
 		}
 	}()
 
-	// A budget long enough to outlast several notice intervals; the wait ends
-	// by exhausting it, so the reporter is stopped by the acquisition
-	// finishing rather than by the test.
-	if _, err := acquireStoreLock(ctx, storageDirOf(lockPath), lockPath, true, 300*time.Millisecond); !errors.Is(err, ErrWorkspaceBusy) {
-		t.Fatalf("contended acquireStoreLock() error = %v, want ErrWorkspaceBusy", err)
+	clock := newStepClock(t, time.Second, noTick)
+	if _, err := acquireStoreLockOn(ctx, clock.now, storageDirOf(lockPath), lockPath, true, 10*time.Second); !errors.Is(err, ErrWorkspaceBusy) {
+		t.Fatalf("contended acquireStoreLockOn() error = %v, want ErrWorkspaceBusy", err)
 	}
 
 	printed := notices.String()
-	if got := strings.Count(printed, "still waiting for "+lockPath); got < 2 {
-		t.Errorf("notices repeated %d time(s), want at least 2:\n%s", got, printed)
+	var after []string
+	for _, line := range strings.Split(strings.TrimSuffix(printed, "\n"), "\n") {
+		waited, _, found := strings.Cut(strings.TrimPrefix(line, "lit: still waiting for "+lockPath+" after "), ";")
+		if !found {
+			t.Fatalf("notice %q is not a wait notice for %s", line, lockPath)
+		}
+		after = append(after, waited)
+	}
+	if want := []string{"3s", "5s", "7s", "9s"}; !slices.Equal(after, want) {
+		t.Errorf("notices reported waits of %v, want %v:\n%s", after, want, printed)
 	}
 	if !strings.Contains(printed, "pid "+strconv.Itoa(os.Getpid())) {
 		t.Errorf("notices do not name the holder:\n%s", printed)
@@ -148,25 +160,17 @@ func TestWaitAnnouncesItselfRepeatedly(t *testing.T) {
 }
 
 // TestPromptAcquisitionAnnouncesNothing pins the notice's other edge: an
-// acquisition that does not wait must print nothing at all. A channel that
-// narrates every uncontended lock trains its reader to ignore it, which costs
-// exactly the signal the notice exists to carry.
+// acquisition that is never refused prints nothing at all, however long it
+// took. A channel that narrates every uncontended lock trains its reader to
+// ignore it, which costs exactly the signal the notice exists to carry — and
+// for Dolt's LOCK, whose foreign holders leave no record, the narration names
+// "a process that left no record", a holder that does not exist.
 //
-// [LAW:no-ambient-temporal-coupling] The grace is an hour, where the tests
-// that assert a wait DOES report shrink it to milliseconds, and the asymmetry
-// is the point. The reporter fires on wall-clock elapsed, so a grace set near
-// an uncontended acquisition's own duration hands the verdict to the
-// scheduler: this test's premise is that the acquisition never waits, and a
-// 10ms grace would make ordinary delay -- a parallel package, a loaded
-// runner -- into a printed line and a red test. An hour is a grace an
-// uncontended acquisition cannot reach on any machine, so the only thing that
-// can print here is the defect being pinned.
-//
-// The reporter's stop is a contract of announceLockWait rather than of
-// acquisition, and TestStoppedNoticeReporterStaysStopped pins it directly and
-// without a race.
+// The grace and interval are zero, so a notice is due the instant the wait
+// starts: the only thing standing between this acquisition and a printed line
+// is that nothing refused it. No clock decides the verdict.
 func TestPromptAcquisitionAnnouncesNothing(t *testing.T) {
-	notices := captureLockNotices(t, time.Hour, time.Hour)
+	notices := captureLockNotices(t, 0, 0)
 	lockPath := filepath.Join(t.TempDir(), "test.lock")
 
 	release, err := acquireStoreLock(context.Background(), storageDirOf(lockPath), lockPath, true, 0)
@@ -178,44 +182,6 @@ func TestPromptAcquisitionAnnouncesNothing(t *testing.T) {
 	}
 	if printed := notices.String(); printed != "" {
 		t.Errorf("uncontended acquisition printed:\n%s", printed)
-	}
-}
-
-// TestStoppedNoticeReporterStaysStopped pins announceLockWait's stop contract:
-// once stop returns, the reporter has returned too and writes nothing further.
-// A reporter outliving its acquisition narrates a wait that is already over --
-// a notice describing a lock nobody is waiting on, which is worse than silence
-// because it is false, and false in the direction that makes an operator go
-// looking for a holder that has already left.
-//
-// [LAW:no-ambient-temporal-coupling] The verdict is "no growth after stop",
-// never "nothing printed", so no clock decides it. Load changes how many lines
-// land BEFORE the stop, which this test does not measure, and it gives a
-// leaked reporter MORE room to betray itself afterwards rather than less --
-// the two ways the machine can be slow both push toward the honest answer.
-func TestStoppedNoticeReporterStaysStopped(t *testing.T) {
-	notices := captureLockNotices(t, 0, time.Millisecond)
-	lockPath := filepath.Join(t.TempDir(), "test.lock")
-
-	stop := announceLockWait(context.Background(), storageDirOf(lockPath), lockPath)
-
-	// A reporter that never started would satisfy "stopped" vacuously, so the
-	// test earns its assertion by waiting for real output first.
-	deadline := time.Now().Add(10 * time.Second)
-	for notices.String() == "" {
-		if time.Now().After(deadline) {
-			stop()
-			t.Fatalf("reporter printed nothing within 10s; the stop contract cannot be pinned against a reporter that never ran")
-		}
-		time.Sleep(time.Millisecond)
-	}
-	stop()
-
-	settled := notices.String()
-	// Many intervals: a reporter still alive prints repeatedly in this window.
-	time.Sleep(50 * time.Millisecond)
-	if grown := notices.String(); grown != settled {
-		t.Errorf("reporter wrote after stop returned:\n%s", strings.TrimPrefix(grown, settled))
 	}
 }
 
@@ -1213,11 +1179,11 @@ func TestWriteEngineRecordsItselfAsTheJournalHolder(t *testing.T) {
 
 // TestASweepDoesNotRestartTheWait pins that only an arrival is progress. A
 // holder dies mid-wait without retiring its record; the contender's own
-// notice tick sweeps the record, and that departure must not restart the
+// notice sweeps the record, and that departure must not restart the
 // clock — a contender whose wait is prolonged by its own housekeeping fails
 // later than the contract says, and by an amount nobody can predict.
 func TestASweepDoesNotRestartTheWait(t *testing.T) {
-	captureLockNotices(t, 10*time.Millisecond, 10*time.Millisecond)
+	captureLockNotices(t, 0, 0)
 	ctx := context.Background()
 	lockPath := filepath.Join(t.TempDir(), "test.lock")
 	const wait = 300 * time.Millisecond
@@ -1232,8 +1198,7 @@ func TestASweepDoesNotRestartTheWait(t *testing.T) {
 		}
 	}()
 	// A second holder's record, live for as long as the test holds its
-	// flock, so the contender's first reading of who is there includes it
-	// whenever the notice reporter runs.
+	// flock, so the contender's first reading of who is there includes it.
 	dying := filepath.Join(lockHolderDir(storageDirOf(lockPath), lockPath), lockHolderRecordPrefix+"99999-1")
 	if err := os.WriteFile(dying, []byte(`{"pid":99999,"command":"lit dying","since":"2026-01-01T00:00:00Z"}`), 0o600); err != nil {
 		t.Fatalf("plant record: %v", err)
@@ -1243,22 +1208,19 @@ func TestASweepDoesNotRestartTheWait(t *testing.T) {
 		t.Fatalf("hold the planted record: acquired=%v err=%v", alive, err)
 	}
 
-	// At the first poll the holder dies without retiring its record, and the
-	// poll waits for the reporter's next tick to sweep it, so the sweep lands
-	// mid-wait however slowly the machine runs.
+	// At the first poll the holder dies without retiring its record, and that
+	// poll's notice (due at every poll here) sweeps it; by the second poll the
+	// record must be gone, so the sweep is proven to land mid-wait rather than
+	// in the refusal's own holder account at the end.
 	clock := newStepClock(t, storeLockPollInterval, func(read int) {
-		if read != 1 {
-			return
-		}
-		if err := dies(); err != nil {
-			t.Fatalf("release the planted record: %v", err)
-		}
-		for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(5 * time.Millisecond) {
-			if _, statErr := os.Stat(dying); errors.Is(statErr, os.ErrNotExist) {
-				return
+		switch read {
+		case 1:
+			if err := dies(); err != nil {
+				t.Fatalf("release the planted record: %v", err)
 			}
-			if time.Now().After(deadline) {
-				t.Fatalf("the dead holder's record was not swept during the wait; the test did not exercise a sweep")
+		case 2:
+			if _, statErr := os.Stat(dying); !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("the dead holder's record was not swept during the wait (stat: %v); the test did not exercise a sweep", statErr)
 			}
 		}
 	})

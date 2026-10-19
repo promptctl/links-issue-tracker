@@ -549,12 +549,25 @@ func renderHolderCommand(command string) string {
 // [LAW:no-ambient-temporal-coupling] No timestamp inside a record is
 // trusted; the signal is the existence of a name, which only an acquisition
 // creates.
+//
+// The policy also gives the wait notice. NextBackOff runs only after an
+// attempt was refused because something holds the lock, so "a contender is
+// waiting" is a fact this policy knows rather than infers, and the notice
+// cannot narrate an acquisition that was merely slow — an engine open
+// recovering its journal, a holder record written on a loaded disk — as a
+// wait on a holder that does not exist. [LAW:one-source-of-truth]
 type holdWait struct {
-	dir   string
-	wait  func() time.Duration
-	now   func() time.Time
-	known map[string]struct{}
-	since time.Time
+	storageDir string
+	lockPath   string
+	dir        string
+	wait       func() time.Duration
+	now        func() time.Time
+	known      map[string]struct{}
+	// started is when this wait began; since is when its holders last
+	// changed, the stand-still clock the wait is judged on.
+	started   time.Time
+	since     time.Time
+	noticeDue time.Time
 }
 
 // newHoldWait builds the policy for one lock. wait is read at each poll, not
@@ -566,24 +579,31 @@ type holdWait struct {
 // by the instants it is handed rather than by how fast a loaded machine runs.
 // [LAW:effects-at-boundaries]
 func newHoldWait(storageDir, lockPath string, wait func() time.Duration, now func() time.Time) *holdWait {
-	return &holdWait{dir: lockHolderDir(storageDir, lockPath), wait: wait, now: now}
+	return &holdWait{storageDir: storageDir, lockPath: lockPath, dir: lockHolderDir(storageDir, lockPath), wait: wait, now: now}
 }
 
 // Reset starts the clock and takes the first reading of who is there.
 func (w *holdWait) Reset() {
-	w.known, w.since = map[string]struct{}{}, w.now()
+	w.started = w.now()
+	w.known, w.since, w.noticeDue = map[string]struct{}{}, w.started, w.started.Add(lockWaitNoticeGrace)
 	w.arrivals()
 }
 
 // NextBackOff is called after each failed attempt: it restarts the clock when
-// a holder has arrived since the last reading, and stops the retry when the
-// holders in front have stood for the whole wait.
-// One reading of the clock serves the whole decision, so the arrival and the
-// elapsed figure are measured at the same instant.
+// a holder has arrived since the last reading, reports the wait once it has
+// outlasted the notice grace and every notice interval after, and stops the
+// retry when the holders in front have stood for the whole wait.
+// One reading of the clock serves the whole decision, so the arrival, the
+// notice and the elapsed figure are measured at the same instant.
 func (w *holdWait) NextBackOff() time.Duration {
 	now := w.now()
 	if w.arrivals() {
 		w.since = now
+	}
+	if !now.Before(w.noticeDue) {
+		fmt.Fprintf(lockWaitNoticeWriter, "lit: still waiting for %s after %s; %s\n",
+			w.lockPath, now.Sub(w.started).Round(time.Second), describeLockHolders(w.storageDir, w.lockPath))
+		w.noticeDue = now.Add(lockWaitNoticeInterval)
 	}
 	if now.Sub(w.since) >= w.wait() {
 		return backoff.Stop
@@ -675,39 +695,3 @@ var (
 	// is also where every other operator notice in this package goes.
 	lockWaitNoticeWriter io.Writer = os.Stderr
 )
-
-// announceLockWait reports, for as long as it runs, that an acquisition is
-// still waiting and who it is waiting on. The returned stop ends the reporting
-// and does not return until the reporter has, so nothing prints about a wait
-// that is already over.
-//
-// [LAW:no-ambient-temporal-coupling] The schedule is this function's own,
-// owned and named; no correctness rests on it. The notice is an account of a
-// wait, so its timing is the fact it reports, and a missed tick costs a line
-// of output and nothing else.
-func announceLockWait(ctx context.Context, storageDir, lockPath string) func() {
-	stopped := make(chan struct{})
-	reported := make(chan struct{})
-	go func() {
-		defer close(reported)
-		started := time.Now()
-		timer := time.NewTimer(lockWaitNoticeGrace)
-		defer timer.Stop()
-		for {
-			select {
-			case <-stopped:
-				return
-			case <-ctx.Done():
-				return
-			case <-timer.C:
-			}
-			fmt.Fprintf(lockWaitNoticeWriter, "lit: still waiting for %s after %s; %s\n",
-				lockPath, time.Since(started).Round(time.Second), describeLockHolders(storageDir, lockPath))
-			timer.Reset(lockWaitNoticeInterval)
-		}
-	}()
-	return func() {
-		close(stopped)
-		<-reported
-	}
-}
