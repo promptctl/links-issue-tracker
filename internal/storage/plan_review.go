@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 )
@@ -163,13 +162,11 @@ func DescribeVersions(count int) string {
 // returns PlanApproved with the passing review the approval rests on, or the
 // PlanGap naming what is missing.
 //
-// Each reviewer's latest verdict on the current text stands. The plan is
-// approved when no standing verdict is a fail and at least one standing pass
-// is by someone other than the text's author. A fail holds until the reviewer
-// who gave it passes the same text, or the text changes: /lit:review-plan
-// starts a reviewer with a new identity on every run, so running an unchanged
-// plan past fresh reviewers until one passes it leaves the first fail
-// standing. Pure, so every engine decides the same.
+// The latest review of the current text decides: a pass approves the plan, a
+// fail stands against it, and a reviewer who changes their mind records
+// another. Who recorded a verdict decides nothing: lit cannot tell one reviewer
+// from another, since a subagent records under its parent's session and --by
+// takes any name. Pure, so every engine decides the same.
 // [LAW:single-enforcer] [LAW:effects-at-boundaries] [LAW:parse-dont-validate]
 func PlanApproval(issue model.Issue, events []model.IssueEvent, reviews []model.PlanReview) PlanStanding {
 	field := PlanField()
@@ -181,41 +178,16 @@ func PlanApproval(issue model.Issue, events []model.IssueEvent, reviews []model.
 		Number: slices.Index(TextVersions(issue, events, field), plan) + 1,
 		Digest: model.DigestPlan(plan),
 	}
-	author := planAuthor(events, field, plan)
-	// Newest first, so the first review seen from each reviewer is the
-	// verdict of theirs that stands.
-	var standing []model.PlanReview
 	for _, review := range slices.Backward(reviews) {
-		if review.Judges(plan) && !slices.ContainsFunc(standing, func(seen model.PlanReview) bool { return seen.CreatedBy == review.CreatedBy }) {
-			standing = append(standing, review)
+		if !review.Judges(plan) {
+			continue
 		}
-	}
-	fails := slices.DeleteFunc(slices.Clone(standing), func(review model.PlanReview) bool { return review.Verdict != model.PlanFail })
-	if len(fails) > 0 {
-		return PlanFailed{Plan: version, Fails: fails}
-	}
-	at := slices.IndexFunc(standing, func(review model.PlanReview) bool { return review.CreatedBy != author })
-	if at >= 0 {
-		return PlanApproved{Review: standing[at]}
-	}
-	if len(standing) > 0 {
-		return PlanSelfReviewed{Plan: version, Author: author}
+		if review.Verdict == model.PlanFail {
+			return PlanFailed{Plan: version, Fail: review}
+		}
+		return PlanApproved{Review: review}
 	}
 	return PlanUnreviewed{Plan: version, EarlierReviewed: len(reviews) > 0}
-}
-
-// planAuthor is who wrote the plan text plan: the actor of the latest event
-// that changed the plan to it, else the issue's creator, since a plan given at
-// creation is recorded by no change.
-func planAuthor(events []model.IssueEvent, field LongTextField, plan string) string {
-	author := ""
-	for _, event := range events {
-		wrote := slices.ContainsFunc(event.Changes, func(change model.FieldChange) bool { return change.Field == field.Name && change.To == plan })
-		if wrote || event.Action == model.ActionCreated {
-			author = event.Actor
-		}
-	}
-	return author
 }
 
 // PlanVersion is one text of a plan as `lit show` names it: its number in the
@@ -246,8 +218,8 @@ type PlanGap interface {
 	Describe(issueID string) string
 }
 
-// PlanApproved is a current plan a reviewer other than its author has passed,
-// with no standing fail. Review is the pass the approval rests on.
+// PlanApproved is a current plan whose latest review passed it. Review is the
+// pass the approval rests on.
 type PlanApproved struct {
 	Review model.PlanReview
 }
@@ -262,30 +234,21 @@ type PlanUnreviewed struct {
 	EarlierReviewed bool
 }
 
-// PlanFailed is a current plan with standing fails, newest first.
+// PlanFailed is a current plan whose latest review, Fail, failed it.
 type PlanFailed struct {
-	Plan  PlanVersion
-	Fails []model.PlanReview
+	Plan PlanVersion
+	Fail model.PlanReview
 }
 
-// PlanSelfReviewed is a current plan whose only standing verdicts are its
-// author's own passes.
-type PlanSelfReviewed struct {
-	Plan   PlanVersion
-	Author string
-}
+func (PlanApproved) Kind() string   { return "approved" }
+func (PlanMissing) Kind() string    { return "no_plan" }
+func (PlanUnreviewed) Kind() string { return "unreviewed" }
+func (PlanFailed) Kind() string     { return "failed" }
 
-func (PlanApproved) Kind() string     { return "approved" }
-func (PlanMissing) Kind() string      { return "no_plan" }
-func (PlanUnreviewed) Kind() string   { return "unreviewed" }
-func (PlanFailed) Kind() string       { return "failed" }
-func (PlanSelfReviewed) Kind() string { return "author_only" }
-
-func (PlanApproved) planStanding()     {}
-func (PlanMissing) planStanding()      {}
-func (PlanUnreviewed) planStanding()   {}
-func (PlanFailed) planStanding()       {}
-func (PlanSelfReviewed) planStanding() {}
+func (PlanApproved) planStanding()   {}
+func (PlanMissing) planStanding()    {}
+func (PlanUnreviewed) planStanding() {}
+func (PlanFailed) planStanding()     {}
 
 func (PlanMissing) Describe(issueID string) string {
 	return fmt.Sprintf("%s has no plan", issueID)
@@ -300,13 +263,5 @@ func (g PlanUnreviewed) Describe(issueID string) string {
 }
 
 func (g PlanFailed) Describe(issueID string) string {
-	fails := make([]string, len(g.Fails))
-	for i, review := range g.Fails {
-		fails[i] = fmt.Sprintf("%s failed it citing %s", review.CreatedBy, model.JoinLaws(review.Laws))
-	}
-	return fmt.Sprintf("%s's current plan (%s) failed its law review: %s", issueID, g.Plan, strings.Join(fails, "; "))
-}
-
-func (g PlanSelfReviewed) Describe(issueID string) string {
-	return fmt.Sprintf("%s's current plan (%s) has passed only its author's own review (%s)", issueID, g.Plan, g.Author)
+	return fmt.Sprintf("%s's current plan (%s) failed its law review: %s failed it citing %s", issueID, g.Plan, g.Fail.CreatedBy, model.JoinLaws(g.Fail.Laws))
 }

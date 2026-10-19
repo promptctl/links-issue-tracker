@@ -271,11 +271,11 @@ One row: `install`. Prints `installed <hookPath>` whether or not anything change
 
 ## `lit quickstart`
 
-`lit quickstart [work|new|update|done|doctor] [--refresh] [--eject[=LIST]] [--force]` (`quickstart_topics.go`). Validation (all exit 2): at most one positional; `--refresh` and `--eject` are mutually exclusive; `--force` only with `--eject`; a topic takes no flags; unknown topics are rejected naming the five valid ones (`cli.go`).
+`lit quickstart [work|new|update|done|doctor|review] [--refresh] [--eject[=LIST]] [--force]` (`quickstart_topics.go`). Validation (all exit 2): at most one positional; `--refresh` and `--eject` are mutually exclusive; `--force` only with `--eject`; a topic takes no flags; unknown topics are rejected naming the six valid ones (`cli.go`).
 
 - **Topic mode** renders the topic's template (project > global > embedded), trimmed; topic output never carries the soil section (`quickstart_refresh.go`).
 - **Bare / `--refresh`** renders `quickstart.md`, appending a "soil" section when config `quickstart.soil_mode = true` (default false). `--refresh` additionally runs the same writers `init` uses — hooks and agent files — plus an **inspection-only** pass over the quickstart templates: per template, `absent` (no override), `unchanged` (override identical to embedded), or `skipped`/`customized` (override drifted; left untouched — refresh never overwrites overrides). The human summary groups items into `Refreshed:` / `Skipped:` / `Up to date:`, or `nothing to refresh` (`quickstart_refresh.go`).
-- **`--eject`** copies embedded defaults to the global override path `<config-dir>/templates/<name>`. Selection: bare `--eject` = all eight; otherwise comma-separated short aliases (`agents, hook, quickstart, quickstart-done, quickstart-doctor, quickstart-new, quickstart-update, quickstart-work`), unknown aliases erroring with the list. All targets are planned first; any existing file aborts the entire write phase (nothing written) unless `--force` overwrites everything. Report lines: `exists` / `skipped` / `ejected`; conflicts end in `MergeConflictError`, exit 5 (`quickstart_eject.go`).
+- **`--eject`** copies embedded defaults to the global override path `<config-dir>/templates/<name>`. Selection: bare `--eject` = all nine; otherwise comma-separated short aliases (`agents, hook, quickstart, quickstart-done, quickstart-doctor, quickstart-new, quickstart-review, quickstart-update, quickstart-work`), unknown aliases erroring with the list. All targets are planned first; any existing file aborts the entire write phase (nothing written) unless `--force` overwrites everything. Report lines: `exists` / `skipped` / `ejected`; conflicts end in `MergeConflictError`, exit 5 (`quickstart_eject.go`).
 
 Commands emit **breadcrumbs** — `deeper guidance: lit quickstart <topic>` as a trailing output line; an unknown breadcrumb token panics (`quickstart_topics.go`).
 
@@ -297,18 +297,19 @@ A separate, rarer line carries build drift onto the ordinary read commands. `bui
 
 Template resolution (`internal/templates/templates.go`): **project** `<root>/.lit/templates/<name>` > **global** `<config-dir>/templates/<name>` > **embedded**; a layer with an absent or empty file contributes nothing; all-empty is an error.
 
-The eight embedded assets (all also ejectable):
+The nine embedded assets (all also ejectable):
 
 | Asset | Written by | Destination | Role |
 |---|---|---|---|
 | `agents-section.md` | `ensureLinksAgentFiles` | managed region of `AGENTS.md`/`CLAUDE.md` | 10 lines telling the agent to run `lit quickstart` first and naming the command that records each phase move |
 | `pre-push-hook.sh` | `installHooks` | managed region of the git `pre-push` hook | runs `lit sync push --remote <r>` with `LNKS_AUTOMATION_TRIGGER=git-pre-push` and a trace-ref file; on failure prints an `<agent-instructions>` warning with the trace path; always exits 0 so a sync failure never blocks the git push |
-| `quickstart.md` | bare `lit` / `lit quickstart` | stdout | 18-line router over the five topics plus a fastpath (`lit next` / `lit start` / `lit workflows`) |
+| `quickstart.md` | bare `lit` / `lit quickstart` | stdout | 19-line router over the six topics plus a fastpath (`lit next` / `lit start` / `lit workflows`) |
 | `quickstart-work.md` | `lit quickstart work` | stdout | finding/starting work: `ls`, `next`, `backlog`, `show`, claims-first selection, `start --take`, recording each phase move |
 | `quickstart-new.md` | `lit quickstart new` | stdout | `lit new` flags, description/topic notes, `import --path` |
 | `quickstart-update.md` | `lit quickstart update` | stdout | `update`, `import`, `rank`, `label add/rm`, `parent set`, `dep add`, `comment add` |
 | `quickstart-done.md` | `lit quickstart done` | stdout | `done`, `close --resolution …`, `followup`, `workflows edit done`, commit reminder |
 | `quickstart-doctor.md` | `lit quickstart doctor` | stdout | `doctor [--fix]` plus a self-resolve-first note |
+| `quickstart-review.md` | `lit quickstart review` | stdout | the brief for a reviewer law-reviewing a plan it did not write: load the laws, pin the plan's digest, judge the whole mechanism, record one `lit verdict` |
 
 ## Consolidated refusal table (operations scope)
 

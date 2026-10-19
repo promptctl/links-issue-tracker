@@ -88,9 +88,7 @@ This repo is also a [Claude Code plugin marketplace](https://code.claude.com/doc
 ```
 
 That gets you the `lit` plugin: the `/lit:next` skill (pick up and start the
-next ticket) and the `/lit:review-plan` skill (a separate Claude session
-law-reviews a ticket's plan and records the verdict). `/lit:review-plan` also
-needs `bash`, `tmux`, `jq`, `uuidgen` and the `claude` CLI on `PATH`, and the
+next ticket). A plan reviewer, which follows `lit quickstart review`, needs the
 `laws` plugin
 (`/plugin marketplace add promptctl/laws`, then `/plugin install laws@promptctl`).
 For a team, wire `lit` into every clone instead of asking everyone to install

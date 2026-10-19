@@ -1236,18 +1236,15 @@ positional is required; otherwise `errors.New("usage: lit <name> <id> [--reason 
   lifecycle's refusal from `Store.Apply`. Before the write it takes the events
   `transitionLeaf` read with the issue, reads the plan reviews, and takes `storage.PlanApproval(issue, events, reviews)`
   (`internal/storage/plan_review.go`), a sealed `PlanStanding`. The plan is
-  `PlanApproved` when each reviewer's latest verdict on the current text leaves
-  no fail standing and one pass is by someone other than the text's author, who
-  is the actor of the latest event that wrote the plan to that text, else the
-  actor of the `created` event. Otherwise it is a `PlanGap`: `PlanMissing`
+  `PlanApproved` when the latest review of the current text passed it; who
+  recorded a verdict decides nothing. Otherwise it is a `PlanGap`: `PlanMissing`
   ("<id> has no plan"), `PlanUnreviewed` ("<id>'s current plan (v<n>, digest
   <d>) has no review", plus "; the reviews on record judged an earlier text"
-  when there are any), `PlanFailed` ("… failed its law review: <reviewer>
-  failed it citing <laws>") or `PlanSelfReviewed` ("… has passed only its
-  author's own review (<author>)"). The ticket is finished either way; a gap
+  when there are any) or `PlanFailed`, the latest review failed it ("… failed
+  its law review: <reviewer> failed it citing <laws>"). The ticket is finished either way; a gap
   prints `warning: finished without an approved plan: ` and its `Describe`
   before the summary. The event carries `done.plan_standing` (the standing's
-  `Kind()`: `approved`, `no_plan`, `unreviewed`, `failed`, `author_only`), and
+  `Kind()`: `approved`, `no_plan`, `unreviewed`, `failed`), and
   an approval adds `done.plan_digest` and `done.plan_review`. A done whose
   write leaves the status unchanged (the ticket is already closed) prints no
   warning and carries `done.plan_standing` `already_closed`.

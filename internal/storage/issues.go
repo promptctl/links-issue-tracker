@@ -76,9 +76,7 @@ type CreateIssueInput struct {
 	// Sourced from workspace config at the call site. Not persisted as derived state.
 	Prefix string
 	// Actor is who files the issue: the created event's actor, and the author
-	// of the parent edge and labels the create wires. It is the author of a
-	// plan given at creation, so storage.PlanApproval can tell that author's own
-	// pass from a reviewer's.
+	// of the parent edge and labels the create wires.
 	Actor string
 }
 
