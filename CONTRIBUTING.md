@@ -21,12 +21,6 @@ You need:
 - **A git repository** — `lit` stores its data inside one.
 - **The Go toolchain.** The required version is the `go` directive in
   [`go.mod`](go.mod); a recent Go will auto-download a matching toolchain.
-- **The `dolt` CLI** — *only for running the test suite*. `lit` itself compiles
-  the Dolt storage engine in and does **not** need the CLI at runtime; some
-  tests use `dolt` as an oracle. Install it from
-  [dolthub/dolt](https://github.com/dolthub/dolt) (CI pins the exact version it
-  installs in
-  [`.github/actions/install-dolt/action.yml`](.github/actions/install-dolt/action.yml)).
 - **The `claude` CLI** — *optional, for running the test suite.* A test runs
   the plugin and marketplace manifests through `claude plugin validate
   --strict` and skips when `claude` is not on PATH (in CI it fails instead);
@@ -59,7 +53,7 @@ just setup       # one-time per machine: native deps + persist cgo paths (macOS)
 pre-commit install  # one-time per clone: install the commit hooks (see below)
 just build       # build the lit binary
 just test-short  # the inner loop: full suite minus the generated-scale tests
-just test        # run the full suite (needs the dolt CLI; see above) — args pass through
+just test        # run the full suite — args pass through
 just lint        # golangci-lint against .golangci.yml
 just install     # build from source and install onto your PATH
 ```
@@ -70,7 +64,7 @@ after `just setup`, or run via `just`):
 ```sh
 go build ./cmd/lit    # build the lit binary
 ./scripts/install.sh  # build and install onto your PATH (wires cgo paths itself)
-go test -short ./...          # the inner loop (needs the dolt CLI; see above)
+go test -short ./...          # the inner loop
 go test -timeout 30m ./...    # the full suite, generated-scale tests included
 golangci-lint run     # lint against .golangci.yml before opening a PR
 go mod tidy           # CI fails if go.mod/go.sum aren't tidy — run and commit any diff

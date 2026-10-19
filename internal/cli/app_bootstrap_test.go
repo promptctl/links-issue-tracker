@@ -5,13 +5,12 @@ import (
 	"context"
 	"errors"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
-	"github.com/promptctl/links-issue-tracker/internal/doltcli"
 	"github.com/promptctl/links-issue-tracker/internal/engine"
+	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -27,11 +26,7 @@ func TestReadCommandDoesNotCreateStartupCommit(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chdir(prevWD) })
 
-	repoPath := filepath.Join(ws.DatabasePath, "links")
-	beforeLog, err := doltcli.Run(context.Background(), repoPath, "log", "--oneline")
-	if err != nil {
-		t.Fatalf("dolt log before ls error = %v", err)
-	}
+	before := doltHead(t, ws)
 
 	var stdout bytes.Buffer
 	if err := Run(context.Background(), &stdout, &stdout, []string{"ls"}); err != nil {
@@ -44,13 +39,20 @@ func TestReadCommandDoesNotCreateStartupCommit(t *testing.T) {
 		t.Fatalf("ls on an empty workspace = %q, want no rows", got)
 	}
 
-	afterLog, err := doltcli.Run(context.Background(), repoPath, "log", "--oneline")
+	if after := doltHead(t, ws); after != before {
+		t.Fatalf("ls moved HEAD from %s to %s: it created a commit", before, after)
+	}
+}
+
+// doltHead is the HEAD commit of ws's database, read in process below the
+// migration gate.
+func doltHead(t *testing.T, ws workspace.Info) string {
+	t.Helper()
+	dump, err := store.DumpRaw(context.Background(), ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
-		t.Fatalf("dolt log after ls error = %v", err)
+		t.Fatalf("read HEAD of %s: %v", ws.DatabasePath, err)
 	}
-	if countNonEmptyLines(afterLog) != countNonEmptyLines(beforeLog) {
-		t.Fatalf("ls created extra commit:\nbefore:\n%s\nafter:\n%s", beforeLog, afterLog)
-	}
+	return dump.DoltHead
 }
 
 func initBootstrapTestRepo(t *testing.T) (string, workspace.Info) {
@@ -171,14 +173,4 @@ func TestCommandFamilyResolve(t *testing.T) {
 			}
 		})
 	}
-}
-
-func countNonEmptyLines(input string) int {
-	count := 0
-	for _, line := range strings.Split(strings.TrimSpace(input), "\n") {
-		if strings.TrimSpace(line) != "" {
-			count++
-		}
-	}
-	return count
 }

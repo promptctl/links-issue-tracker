@@ -1,4 +1,4 @@
-# Behavioral Inventory — support packages: atomicfile, syncfile, doltcli, engine, backup
+# Behavioral Inventory — support packages: atomicfile, syncfile, engine, backup
 
 Written directly from source by the coordinating session (not a subagent) after the
 store-sync inventory was found not to cover these four packages. Method identical to
@@ -46,28 +46,6 @@ JSON export files on disk, with content hashing.
   returns `("", nil)` — absence is not an error.
 - Hash format everywhere: lowercase hex SHA-256 of the serialized bytes, so any
   whitespace or key-order change alters the hash.
-
-## `internal/doltcli` (`doltcli.go`, 99 lines)
-
-Shell-out wrapper for an external `dolt` binary (as opposed to the embedded engine).
-
-- `MinSupportedVersion = "1.81.10"` (`doltcli.go`).
-- `Version{Major, Minor, Patch}` with `String()` → `"%d.%d.%d"` and lexicographic
-  `LessThan` (`doltcli.go`).
-- `ParseVersion` (`doltcli.go`): extracts the first `\d+\.\d+\.\d+` match from
-  the (trimmed) input via regexp; no match → `"parse dolt version from %q"`.
-- `InstalledVersion(ctx, cwd)` (`doltcli.go`): runs `dolt version` in `cwd`,
-  parses the output.
-- `RequireMinimumVersion(ctx, cwd, minRequired)` (`doltcli.go`): parses the
-  floor, reads the installed version, and refuses with
-  `"dolt %s+ is required, found %s"` when installed < floor. Returns the installed
-  version on success.
-- `Run(ctx, cwd, args...)` (`doltcli.go`): refuses empty args
-  (`"dolt args are required"`); otherwise executes `dolt <args...>` in `cwd`.
-- `runCommand` (`doltcli.go`): `exec.CommandContext`, `CombinedOutput`; on
-  failure the error is `"dolt <args joined by space>: <trimmed combined output>"`,
-  falling back to the exec error's text when output is empty; on success returns
-  trimmed combined output.
 
 ## `internal/engine` (`engine.go`, 89 lines)
 

@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/promptctl/links-issue-tracker/internal/doltcli"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/storage/storagetest"
@@ -1794,11 +1793,7 @@ func TestOpenDoesNotCreateStartupCommitWhenSchemaIsCurrent(t *testing.T) {
 		t.Fatalf("Close() initial error = %v", err)
 	}
 
-	repoPath := filepath.Join(doltRoot, "links")
-	beforeLog, err := doltcli.Run(ctx, repoPath, "log", "--oneline")
-	if err != nil {
-		t.Fatalf("dolt log before reopen error = %v", err)
-	}
+	before := observedHead(t, ctx, doltRoot, "test-workspace-id")
 
 	st, err = Open(ctx, doltRoot, "test-workspace-id")
 	if err != nil {
@@ -1808,13 +1803,8 @@ func TestOpenDoesNotCreateStartupCommitWhenSchemaIsCurrent(t *testing.T) {
 		t.Fatalf("Close() reopen error = %v", err)
 	}
 
-	afterLog, err := doltcli.Run(ctx, repoPath, "log", "--oneline")
-	if err != nil {
-		t.Fatalf("dolt log after reopen error = %v", err)
-	}
-
-	if countNonEmptyLines(afterLog) != countNonEmptyLines(beforeLog) {
-		t.Fatalf("startup reopen created extra commit:\nbefore:\n%s\nafter:\n%s", beforeLog, afterLog)
+	if after := observedHead(t, ctx, doltRoot, "test-workspace-id"); after != before {
+		t.Fatalf("startup reopen moved HEAD from %s to %s: it created a commit", before, after)
 	}
 }
 
@@ -1865,11 +1855,7 @@ func TestOpenForReadDoesNotCreateStartupCommitWhenSchemaIsCurrent(t *testing.T) 
 		t.Fatalf("Close() initial error = %v", err)
 	}
 
-	repoPath := filepath.Join(doltRoot, "links")
-	beforeLog, err := doltcli.Run(ctx, repoPath, "log", "--oneline")
-	if err != nil {
-		t.Fatalf("dolt log before read-open error = %v", err)
-	}
+	before := observedHead(t, ctx, doltRoot, "test-workspace-id")
 
 	readStore, err := OpenForRead(ctx, doltRoot, "test-workspace-id")
 	if err != nil {
@@ -1882,13 +1868,8 @@ func TestOpenForReadDoesNotCreateStartupCommitWhenSchemaIsCurrent(t *testing.T) 
 		t.Fatalf("Close() read error = %v", err)
 	}
 
-	afterLog, err := doltcli.Run(ctx, repoPath, "log", "--oneline")
-	if err != nil {
-		t.Fatalf("dolt log after read-open error = %v", err)
-	}
-
-	if countNonEmptyLines(afterLog) != countNonEmptyLines(beforeLog) {
-		t.Fatalf("read-open created extra commit:\nbefore:\n%s\nafter:\n%s", beforeLog, afterLog)
+	if after := observedHead(t, ctx, doltRoot, "test-workspace-id"); after != before {
+		t.Fatalf("read-open moved HEAD from %s to %s: it created a commit", before, after)
 	}
 }
 
@@ -2182,10 +2163,7 @@ func TestMigrationIsIdempotentOnSecondOpen(t *testing.T) {
 	if err := first.Close(); err != nil {
 		t.Fatalf("Close(first) error = %v", err)
 	}
-	commitsBefore, err := doltcli.Run(ctx, filepath.Join(doltRoot, "links"), "log", "--oneline")
-	if err != nil {
-		t.Fatalf("dolt log before reopen error = %v", err)
-	}
+	before := observedHead(t, ctx, doltRoot, "test-workspace-id")
 	second, err := Open(ctx, doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(second) error = %v", err)
@@ -2193,12 +2171,8 @@ func TestMigrationIsIdempotentOnSecondOpen(t *testing.T) {
 	if err := second.Close(); err != nil {
 		t.Fatalf("Close(second) error = %v", err)
 	}
-	commitsAfter, err := doltcli.Run(ctx, filepath.Join(doltRoot, "links"), "log", "--oneline")
-	if err != nil {
-		t.Fatalf("dolt log after reopen error = %v", err)
-	}
-	if countNonEmptyLines(commitsAfter) != countNonEmptyLines(commitsBefore) {
-		t.Fatalf("migration produced extra commit on second Open():\nbefore:\n%s\nafter:\n%s", commitsBefore, commitsAfter)
+	if after := observedHead(t, ctx, doltRoot, "test-workspace-id"); after != before {
+		t.Fatalf("second Open() moved HEAD from %s to %s: migration produced a commit", before, after)
 	}
 }
 
@@ -3063,16 +3037,6 @@ func TestRemovePerChildBlockAfterRankReorder(t *testing.T) {
 	if err := st.RemoveRelation(ctx, epicB.ID, epicA.ID, "blocked-by"); err != nil {
 		t.Fatalf("RemoveRelation(epic-level block) error = %v", err)
 	}
-}
-
-func countNonEmptyLines(input string) int {
-	count := 0
-	for _, line := range strings.Split(strings.TrimSpace(input), "\n") {
-		if strings.TrimSpace(line) != "" {
-			count++
-		}
-	}
-	return count
 }
 
 // GetIssueDetail.Siblings is the parent's other children in rank order, never

@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
-	"github.com/promptctl/links-issue-tracker/internal/doltcli"
 	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
 )
 
@@ -49,12 +49,9 @@ func TestFreshOpenAppliesRegistryToHead(t *testing.T) {
 		t.Fatalf("recorded version = %d, want %d", appliedVersion, headVersion(t))
 	}
 
-	log, err := doltcli.Run(ctx, filepath.Join(doltRoot, "links"), "log", "--oneline")
-	if err != nil {
-		t.Fatalf("dolt log error = %v", err)
-	}
-	if !strings.Contains(log, "migrate: v1 00001_baseline.sql") {
-		t.Fatalf("dolt log missing per-migration commit message:\n%s", log)
+	log := commitMessages(t, ctx, st.db)
+	if !slices.ContainsFunc(log, func(m string) bool { return strings.Contains(m, "migrate: v1 00001_baseline.sql") }) {
+		t.Fatalf("commit log missing per-migration commit message:\n%s", strings.Join(log, "\n"))
 	}
 }
 

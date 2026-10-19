@@ -36,8 +36,7 @@ small, predictable CLI.
 
 > `lit` ships **prebuilt, self-contained binaries** — no Go toolchain and no
 > system ICU/zstd needed to run them. The `dolt` CLI isn't required either; the
-> Dolt storage engine is compiled in. (It's only a test oracle when developing
-> `lit` itself.)
+> Dolt storage engine is compiled in.
 
 ### Install
 

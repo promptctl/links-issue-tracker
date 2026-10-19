@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/promptctl/links-issue-tracker/internal/doltcli"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -28,11 +27,7 @@ func TestOpenSyncDoesNotCreateStartupCommitWhenSchemaIsCurrent(t *testing.T) {
 		t.Fatalf("Close() initial error = %v", err)
 	}
 
-	repoPath := filepath.Join(doltRoot, "links")
-	beforeLog, err := doltcli.Run(ctx, repoPath, "log", "--oneline")
-	if err != nil {
-		t.Fatalf("dolt log before sync open error = %v", err)
-	}
+	before := observedHead(t, ctx, doltRoot, "test-workspace-id")
 
 	syncStore, err := OpenSync(ctx, doltRoot, "test-workspace-id")
 	if err != nil {
@@ -42,13 +37,8 @@ func TestOpenSyncDoesNotCreateStartupCommitWhenSchemaIsCurrent(t *testing.T) {
 		t.Fatalf("Close() sync error = %v", err)
 	}
 
-	afterLog, err := doltcli.Run(ctx, repoPath, "log", "--oneline")
-	if err != nil {
-		t.Fatalf("dolt log after sync open error = %v", err)
-	}
-
-	if countNonEmptyLines(afterLog) != countNonEmptyLines(beforeLog) {
-		t.Fatalf("OpenSync() created extra commit:\nbefore:\n%s\nafter:\n%s", beforeLog, afterLog)
+	if after := observedHead(t, ctx, doltRoot, "test-workspace-id"); after != before {
+		t.Fatalf("OpenSync() moved HEAD from %s to %s: it created a commit", before, after)
 	}
 }
 
@@ -65,21 +55,11 @@ func TestOpenSyncCreatesDatabaseWhenMissing(t *testing.T) {
 		t.Fatalf("Close() sync error = %v", err)
 	}
 
-	repoPath := filepath.Join(doltRoot, "links")
-	status, err := doltcli.Run(ctx, repoPath, "status")
-	if err != nil {
-		t.Fatalf("dolt status after sync open error = %v", err)
-	}
-	if !strings.Contains(status, "On branch master") {
-		t.Fatalf("unexpected dolt status output after sync open: %q", status)
+	if branch := observedBranch(t, ctx, doltRoot, "test-workspace-id"); branch != "master" {
+		t.Fatalf("database OpenSync created is on branch %q, want master", branch)
 	}
 }
 
-// premadeMainBranchDB builds the pre-made-database shape an adopt's clone
-// arrives in: a real database at the root, created outside lit's bootstrap,
-// still on Dolt's own default branch rather than master. Returns the dolt
-// root and the database's repo path, having asserted the branch is not yet
-// master — the precondition both normalization tests depend on.
 // seedSyncEpic opens the store at doltRoot, creates one top-level epic, and closes
 // it again, returning the epic's id: every leaf a test then commits lives
 // inside it. The create is one commit of its own, landed before the test's
@@ -100,7 +80,12 @@ func seedSyncEpic(t *testing.T, ctx context.Context, doltRoot, workspace string)
 	return epic.ID
 }
 
-func premadeMainBranchDB(t *testing.T, ctx context.Context) (doltRoot, repoPath string) {
+// premadeMainBranchDB builds the pre-made-database shape an adopt's clone
+// arrives in: a real database at the root, created outside lit's bootstrap,
+// still on Dolt's own default branch rather than master. Returns the dolt
+// root, having asserted the branch is not yet master — the precondition both
+// normalization tests depend on.
+func premadeMainBranchDB(t *testing.T, ctx context.Context) (doltRoot string) {
 	t.Helper()
 	doltRoot = filepath.Join(t.TempDir(), "dolt")
 	if err := os.MkdirAll(doltRoot, 0o755); err != nil {
@@ -116,15 +101,10 @@ func premadeMainBranchDB(t *testing.T, ctx context.Context) (doltRoot, repoPath 
 	if err := bootstrap.Close(); err != nil && !errors.Is(err, context.Canceled) {
 		t.Fatalf("bootstrap close error = %v", err)
 	}
-	repoPath = filepath.Join(doltRoot, "links")
-	statusBefore, err := doltcli.Run(ctx, repoPath, "status")
-	if err != nil {
-		t.Fatalf("dolt status on pre-made database error = %v", err)
+	if branch := observedBranch(t, ctx, doltRoot, "test-workspace-id"); branch == "master" {
+		t.Fatal("pre-made database is already on master")
 	}
-	if strings.Contains(statusBefore, "On branch master") {
-		t.Fatalf("pre-made database is already on master: %q", statusBefore)
-	}
-	return doltRoot, repoPath
+	return doltRoot
 }
 
 // TestOpenSyncNormalizesPreMadeMainBranchToMaster proves the mirror-side
@@ -135,7 +115,7 @@ func premadeMainBranchDB(t *testing.T, ctx context.Context) (doltRoot, repoPath 
 func TestOpenSyncNormalizesPreMadeMainBranchToMaster(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot, repoPath := premadeMainBranchDB(t, ctx)
+	doltRoot := premadeMainBranchDB(t, ctx)
 
 	sync, err := OpenSync(ctx, doltRoot, "test-workspace-id")
 	if err != nil {
@@ -144,12 +124,8 @@ func TestOpenSyncNormalizesPreMadeMainBranchToMaster(t *testing.T) {
 	if err := sync.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
-	statusAfter, err := doltcli.Run(ctx, repoPath, "status")
-	if err != nil {
-		t.Fatalf("dolt status after OpenSync error = %v", err)
-	}
-	if !strings.Contains(statusAfter, "On branch master") {
-		t.Fatalf("unexpected dolt status after OpenSync: %q", statusAfter)
+	if branch := observedBranch(t, ctx, doltRoot, "test-workspace-id"); branch != "master" {
+		t.Fatalf("after OpenSync the database is on branch %q, want master", branch)
 	}
 }
 
@@ -196,7 +172,7 @@ func TestOpenSyncOnNormalizedStoreIgnoresHeldCommitLock(t *testing.T) {
 func TestBranchNormalizationDefersToFirstWriteOpen(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot, repoPath := premadeMainBranchDB(t, ctx)
+	doltRoot := premadeMainBranchDB(t, ctx)
 
 	// EnsureDatabase over a pre-existing database is a no-op — branch
 	// normalization is owned by write opens, so a pre-made main-branch store
@@ -204,12 +180,8 @@ func TestBranchNormalizationDefersToFirstWriteOpen(t *testing.T) {
 	if _, err := EnsureDatabase(ctx, doltRoot, "test-workspace-id"); err != nil {
 		t.Fatalf("EnsureDatabase() error = %v", err)
 	}
-	statusEnsured, err := doltcli.Run(ctx, repoPath, "status")
-	if err != nil {
-		t.Fatalf("dolt status after EnsureDatabase error = %v", err)
-	}
-	if strings.Contains(statusEnsured, "On branch master") {
-		t.Fatalf("EnsureDatabase should leave a pre-existing database untouched, got: %q", statusEnsured)
+	if branch := observedBranch(t, ctx, doltRoot, "test-workspace-id"); branch == "master" {
+		t.Fatal("EnsureDatabase should leave a pre-existing database untouched, but it is on master")
 	}
 
 	// ...and the contract — on master before any write use — holds at the
@@ -221,12 +193,8 @@ func TestBranchNormalizationDefersToFirstWriteOpen(t *testing.T) {
 	if err := st.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
-	statusAfter, err := doltcli.Run(ctx, repoPath, "status")
-	if err != nil {
-		t.Fatalf("dolt status after write open error = %v", err)
-	}
-	if !strings.Contains(statusAfter, "On branch master") {
-		t.Fatalf("unexpected dolt status after write open: %q", statusAfter)
+	if branch := observedBranch(t, ctx, doltRoot, "test-workspace-id"); branch != "master" {
+		t.Fatalf("after the first write open the database is on branch %q, want master", branch)
 	}
 }
 

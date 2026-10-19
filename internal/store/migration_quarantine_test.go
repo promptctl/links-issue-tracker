@@ -2,14 +2,15 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/pressly/goose/v3"
-	"github.com/promptctl/links-issue-tracker/internal/doltcli"
 )
 
 // TestQuarantineTableCreatedByFreshOpen pins that a fresh-workspace Open
@@ -348,13 +349,12 @@ func TestMigrationFailureCheckpointPath(t *testing.T) {
 
 	// The checkpoint branch created during the failed Open must still exist:
 	// PruneCheckpoints only fires on a successful migration pass, which the
-	// failure aborted. Verified via raw dolt — a lit Open is (correctly) blocked.
-	branches, err := doltcli.Run(ctx, filepath.Join(doltRoot, "links"), "branch")
-	if err != nil {
-		t.Fatalf("dolt branch error = %v", err)
-	}
-	if !strings.Contains(branches, cpErr.Checkpoint.Name) {
-		t.Errorf("checkpoint branch %q not found in dolt branches:\n%s", cpErr.Checkpoint.Name, branches)
+	// failure aborted. Read below the migration gate — a lit Open is (correctly)
+	// blocked.
+	var branches []string
+	observeDolt(t, ctx, doltRoot, "test-workspace-id", func(db *sql.DB) { branches = branchNames(t, ctx, db) })
+	if !slices.Contains(branches, cpErr.Checkpoint.Name) {
+		t.Errorf("checkpoint branch %q not found in branches %q", cpErr.Checkpoint.Name, branches)
 	}
 }
 

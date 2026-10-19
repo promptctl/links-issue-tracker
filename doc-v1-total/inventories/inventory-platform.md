@@ -247,7 +247,7 @@ Complete grep of `os.Getenv` / `os.LookupEnv` / `os.Environ` across non-vendored
 
 | Variable | Where | Effect |
 |---|---|---|
-| `GITHUB_ACTIONS` | `tools/testbudget/main.go`, `internal/testoracle/testoracle.go` | When `== "true"`, budget-violation lines are prefixed `::error::` so they become GHA annotations (`tools/testbudget/main.go`), and a test whose oracle CLI (`dolt`, `claude`) is not on PATH fails instead of skipping (`internal/testoracle/testoracle.go`). |
+| `GITHUB_ACTIONS` | `tools/testbudget/main.go`, `internal/testoracle/testoracle.go` | When `== "true"`, budget-violation lines are prefixed `::error::` so they become GHA annotations (`tools/testbudget/main.go`), and a test whose oracle CLI (`claude`) is not on PATH fails instead of skipping (`internal/testoracle/testoracle.go`). |
 | `LIT_LICENSE_GRAPH_AUDIT` | `tools/licenses/graph_test.go` (via `graphAuditEnv`) | Empty ⇒ the whole-graph acceptance test is skipped; the license-graph-audit workflow sets it to `"1"` (`.github/workflows/license-graph-audit.yml`). |
 | `LIT_TEST_REEXEC` | `cmd/lit/main_signal_test.go` | `=1` makes the test binary run the real `main()` instead of the test suite. |
 | `USER`, `HOME` | `internal/workspace/stream_test.go` | Used only as negative-evidence material asserting stream tokens contain no username/home material. |
@@ -882,13 +882,12 @@ Justfile or any workflow in `.github/workflows/`.
 .
 - Six jobs, all in parallel:
   1. **`build-and-test`**: checkout@v4 → setup-go@v5 (`go-version-file: go.mod`) →
-     `./.github/actions/install-dolt` → `./.github/actions/install-claude` (§11.10) →
+     `./.github/actions/install-claude` (§11.9) →
      `go build ./cmd/lit` → `go test -short -json ./... | go run ./tools/testbudget` →
      `go -C internal/vendor/dolthub-driver test -short -json ./... | go run ./tools/testbudget`
      (the vendored driver is its own module, so `./...` never reaches it), both under
      `shell: bash` (pipefail is load-bearing). No `-timeout` override by policy.
-  2. **`race`**: checkout@v4 → setup-go@v5 → `./.github/actions/install-dolt` →
-     `./.github/actions/install-claude` → `go test -short -race -timeout 30m ./cmd/... ./internal/...` —
+  2. **`race`**: checkout@v4 → setup-go@v5 → `./.github/actions/install-claude` → `go test -short -race -timeout 30m ./cmd/... ./internal/...` —
      scope excludes `tools/` deliberately; no testbudget pipe. The `-timeout 30m`
      is sized above internal/cli's testbudget ceiling as the detector inflates
      it, so slowness fails build-and-test's budget check, not this lane's timeout.
@@ -901,31 +900,20 @@ Justfile or any workflow in `.github/workflows/`.
   6. **`candybar`**: checkout@v4 → setup-go@v5 → setup-node@v4 (`node-version: '22'`) →
      `go run ./tools/candybar-check`.
 
-### 11.2 `.github/actions/install-dolt/action.yml`
-
-Composite action; installs the pinned Dolt CLI used as a **test-only** oracle
-(`.github/actions/install-dolt/action.yml`): with `DOLT_VERSION: v1.81.10`, picks the
-asset from `$RUNNER_OS` — `dolt-linux-amd64.tar.gz` on Linux, `dolt-windows-amd64.zip`
-on Windows, and `::error::install-dolt has no Dolt asset for runner OS` with exit 1
-on any other — downloads it from the Dolt release into `$RUNNER_TEMP` (`curl -fsSL --retry 3
---retry-all-errors`), unpacks it
-there (`tar -xzf` or `unzip -q`), appends its `bin/` to `$GITHUB_PATH`, then runs
-`dolt version` from that directory.
-
-### 11.3 `.github/workflows/nightly.yml` — "Nightly full suite"
+### 11.2 `.github/workflows/nightly.yml` — "Nightly full suite"
 
 - Triggers: `schedule: cron '17 9 * * *'` and `workflow_dispatch`
   (`.github/workflows/nightly.yml`).
 - `permissions: contents: read`. Concurrency group
   `nightly-full-suite`, `cancel-in-progress: false`.
 - Job `full-suite`, `ubuntu-latest`, `timeout-minutes: 60`.
-  Steps: checkout → setup-go → install-dolt → install-claude → `go build ./cmd/lit` →
+  Steps: checkout → setup-go → install-claude → `go build ./cmd/lit` →
   `go test -timeout 30m ./...` (no `-short`, so `testing.Short()` is false) →
   `go run ./tools/lawtokens-sync -check` (`if: ${{ !cancelled() }}`).
 - Job `windows`, `windows-latest`, `timeout-minutes: 60`, default shell `msys2 {0}`.
   Steps: checkout → setup-go → `msys2/setup-msys2@v2` (`msystem: UCRT64`, `path-type:
   inherit`, installing `mingw-w64-ucrt-x86_64-gcc` and `mingw-w64-ucrt-x86_64-icu` for cgo)
-  → install-dolt → install-claude → `go build ./cmd/lit` →
+  → install-claude → `go build ./cmd/lit` →
   Test (-short), both with `CGO_ENABLED: '1'`: reads `.github/windows-known-failures.txt`
   (`<ticket> <package> <test-or-*>` per line, `#` comments and blank lines ignored, a third
   field that is neither `*` nor `Test…` is an `::error::` and exit 1), runs
@@ -943,14 +931,14 @@ there (`tar -xzf` or `unzip -q`), appends its `bin/` to `$GITHUB_PATH`, then run
   `failure()`; a run on any other ref files nothing),
   `permissions: contents: write`, `timeout-minutes: 15`. Steps: checkout
   (`persist-credentials: false`) → `./.github/actions/report-to-lit` with label
-  `nightly-failure` and title `Nightly full test lane is failing` (§11.8).
+  `nightly-failure` and title `Nightly full test lane is failing` (§11.7).
 - Job `report-windows`, `needs: windows`,
   `if: ${{ always() && needs.windows.result != 'success' && github.ref == 'refs/heads/master' }}`,
   otherwise shaped as `report`, with label `nightly-windows-failure` and title
   `Nightly Windows test lane is failing`. A label per lane keeps one lane's open
   ticket from absorbing the other lane's red runs as `Red again` comments.
 
-### 11.4 `.github/workflows/license-graph-audit.yml` — "License graph audit"
+### 11.3 `.github/workflows/license-graph-audit.yml` — "License graph audit"
 
 - Triggers: `schedule: cron "0 9 * * 1"` (Mondays 09:00 UTC) and `workflow_dispatch`
   (`.github/workflows/license-graph-audit.yml`). `permissions: contents: read`.
@@ -963,7 +951,7 @@ there (`tar -xzf` or `unzip -q`), appends its `bin/` to `$GITHUB_PATH`, then run
   failing with `::error::the license graph audit modified go.mod/go.sum — withGoSumPreserved is not holding.`
 .
 
-### 11.5 `.github/workflows/code-review.yml` — "AI Code Review"
+### 11.4 `.github/workflows/code-review.yml` — "AI Code Review"
 
 - Header states the file is **generated** by `agent-code-review-setup/install.sh` and is
   reconverged (overwriting local edits) on every installer run
@@ -981,7 +969,7 @@ there (`tar -xzf` or `unzip -q`), appends its `bin/` to `$GITHUB_PATH`, then run
   `DEPENDENCY_DIFF: "true"`. The comment records that both credentials must exist in
   both the Actions and the Dependabot secret stores.
 
-### 11.6 `.github/workflows/release-smoke.yml` — "Release smoke"
+### 11.5 `.github/workflows/release-smoke.yml` — "Release smoke"
 
 - Trigger: `pull_request` targeting `master` only (`.github/workflows/release-smoke.yml`).
 - `permissions: contents: read, packages: read`. Concurrency
@@ -1012,7 +1000,7 @@ there (`tar -xzf` or `unzip -q`), appends its `bin/` to `$GITHUB_PATH`, then run
       shows `INTERP`, fail if `readelf -d` shows `NEEDED`, then run `./<bin> version` on the
       glibc runner and `docker run --rm … alpine:3.20 lit version` on musl.
 
-### 11.7 `.github/workflows/release-validate.yml` — "Release validate"
+### 11.6 `.github/workflows/release-validate.yml` — "Release validate"
 
 - Triggers: `push` to `master` and `workflow_dispatch: {}` — never on `pull_request`
   (`.github/workflows/release-validate.yml`).
@@ -1116,7 +1104,7 @@ setup-go@v5 (`cache: true`) → `go mod download` → `go run ./tools/licenses -
   failing `gh release create` prints a recovery instruction naming
   `gh release delete $TAG --repo … --cleanup-tag --yes`.
 
-### 11.8 `.github/actions/report-to-lit/action.yml`
+### 11.7 `.github/actions/report-to-lit/action.yml`
 
 Composite action (`.github/actions/report-to-lit/action.yml`). Inputs, all required:
 `label`, `title`, `body`, `token`.
@@ -1138,7 +1126,7 @@ Composite action (`.github/actions/report-to-lit/action.yml`). Inputs, all requi
     and runs `lit sync pull` before the next push. The third push's exit status is
     the step's.
 
-### 11.9 `.github/workflows/release-watchdog.yml` — "Release watchdog"
+### 11.8 `.github/workflows/release-watchdog.yml` — "Release watchdog"
 
 - Triggers: `schedule: cron '23 * * * *'` and `workflow_dispatch`.
 - `permissions: contents: read`. Concurrency group `release-watchdog`,
@@ -1154,18 +1142,18 @@ Composite action (`.github/actions/report-to-lit/action.yml`). Inputs, all requi
 - Job `report`, `needs: watchdog`,
   `if: ${{ always() && needs.watchdog.result != 'success' && github.ref == 'refs/heads/master' }}`,
   `permissions: contents: write`, `timeout-minutes: 15`. Steps: checkout
-  (`persist-credentials: false`) → `./.github/actions/report-to-lit` (§11.8) with label
+  (`persist-credentials: false`) → `./.github/actions/report-to-lit` (§11.7) with label
   `release-stuck`, title `A promoted release is stuck: no tag published`, and a body
   naming the recovery `gh workflow run release-validate.yml --ref master`.
 
-### 11.10 `.github/actions/install-claude/action.yml`
+### 11.9 `.github/actions/install-claude/action.yml`
 
 Composite action; installs the pinned Claude Code CLI used as a **test-only** oracle
 for `claude plugin validate --strict` (`.github/actions/install-claude/action.yml`):
 setup-node@v4 (`node-version: '22'`, the package's `engines` floor) →
 `npm install -g @anthropic-ai/claude-code@2.1.292` → appends `DISABLE_AUTOUPDATER=1`
 to `$GITHUB_ENV` → `claude --version`. Used by every job that runs `go test`
-(ci.yml `build-and-test` and `race`, nightly.yml `full-suite` and `windows`), as install-dolt is.
+(ci.yml `build-and-test` and `race`, nightly.yml `full-suite` and `windows`).
 
 ---
 
