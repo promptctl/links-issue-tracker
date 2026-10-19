@@ -47,8 +47,11 @@ const remoteCacheDirName = "git-remote-cache"
 // platforms ignore the key. Dolt's own git commands on a mirror pass it too
 // (Patch 12 in FORKS.md).
 func mirrorGit(ctx context.Context, gitDir string, args ...string) *exec.Cmd {
-	return exec.CommandContext(ctx, "git", append([]string{"-c", "core.longpaths=true", "--git-dir", gitDir}, args...)...)
+	return exec.CommandContext(ctx, "git", append([]string{"-c", gitLongPaths, "--git-dir", gitDir}, args...)...)
 }
+
+// gitLongPaths is the setting mirrorGit passes to git.
+const gitLongPaths = "core.longpaths=true"
 
 // isRemoteCacheKey reports whether a directory name is one of dbfactory's cache
 // keys — a lowercase hex sha256 and nothing else. Anything else under the cache

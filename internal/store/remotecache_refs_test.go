@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -97,7 +96,7 @@ func soleMirrorGitDir(t *testing.T, s *Store) string {
 // mirrorRefValues lists every ref in a mirror as "<name> <object>", sorted.
 func mirrorRefValues(t *testing.T, gitDir string) []string {
 	t.Helper()
-	out, err := exec.Command("git", "--git-dir", gitDir, "for-each-ref", "--format=%(refname) %(objectname)").Output()
+	out, err := mirrorGit(context.Background(), gitDir, "for-each-ref", "--format=%(refname) %(objectname)").Output()
 	if err != nil {
 		t.Fatalf("for-each-ref in %s: %v", gitDir, err)
 	}
@@ -111,7 +110,7 @@ func mirrorRefValues(t *testing.T, gitDir string) []string {
 
 func gitRevParse(t *testing.T, gitDir, rev string) string {
 	t.Helper()
-	out, err := exec.Command("git", "--git-dir", gitDir, "rev-parse", rev).Output()
+	out, err := mirrorGit(context.Background(), gitDir, "rev-parse", rev).Output()
 	if err != nil {
 		t.Fatalf("rev-parse %s in %s: %v", rev, gitDir, err)
 	}
@@ -155,7 +154,7 @@ func pushedMirror(t *testing.T) (doltRoot, remote, mirror string) {
 // trimmed output.
 func gitAt(t *testing.T, gitDir string, env []string, stdin string, args ...string) string {
 	t.Helper()
-	cmd := exec.Command("git", append([]string{"--git-dir", gitDir}, args...)...)
+	cmd := mirrorGit(context.Background(), gitDir, args...)
 	cmd.Env = append(append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t"), env...)
 	cmd.Stdin = strings.NewReader(stdin)
 	out, err := cmd.CombinedOutput()
@@ -228,7 +227,7 @@ func TestSweepCollectsOrphanedInstanceRefsAndKeepsTheNewestTrackingRefAsLastKnow
 	if got := mirrorRefValues(t, mirror); strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("mirror refs after sweep =\n  %s\nwant\n  %s", strings.Join(got, "\n  "), strings.Join(want, "\n  "))
 	}
-	if err := exec.Command("git", "--git-dir", mirror, "cat-file", "-e", oldBlob).Run(); err == nil {
+	if err := mirrorGit(context.Background(), mirror, "cat-file", "-e", oldBlob).Run(); err == nil {
 		t.Fatalf("the snapshot only orphans reached (%s) is still in the mirror", oldBlob)
 	}
 }
