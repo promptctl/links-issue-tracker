@@ -70,9 +70,9 @@ func relationOf(standing claims.Standing, self model.Attribution) laneRelation {
 // the transfer notice when Apply reports the claim changed hands and the lane's
 // standing names the predecessor as its holder, the empty string otherwise;
 // and, for the statusline file, the start with its lane's count for its rollup
-// progress, and the phase the start left the ticket in. A handover from anyone the lane does
-// not name — nobody holds it, or somebody else does — goes unannounced, and the
-// gate is the one read that knows the lane's standing. The count is that same
+// progress, and the phase the start left the ticket in. A handover from anyone
+// the lane does not name — nobody holds it, or somebody else does — goes
+// unannounced, and the gate is the one read that knows the lane's standing. The count is that same
 // evidence with the written ticket in place of the one read, so it costs no
 // second gather, and a start that reopens a closed ticket counts it as no
 // longer done.

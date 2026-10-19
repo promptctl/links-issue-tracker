@@ -14,7 +14,7 @@
       // No file yet reads as no fields, and `with` skips an empty document:
       // the cell hides until lit records something.
       when: '{{ with .plugins.lit.data }}{{ template "plugins.lit.schema" . }}{{ if .working_on }}true{{ else }}false{{ end }}{{ else }}false{{ end }}',
-      // rollup_progress is null in a file lit 0.19 or 0.20 wrote when the
+      // rollup_progress is null in a file lit 0.19 to 0.21 wrote when the
       // command that recorded working_on did not count the lane, and missing
       // in one an older lit wrote; the cell then shows no count.
       template: '{{ with .plugins.lit.data.working_on }}🎫 {{ action "plugins.lit.copyWorking" .ticket.id }}{{ template "plugins.lit.title" (dict "title" .ticket.title "width" $.settings.title) }}{{ if hasKey . "rollup_progress" }}{{ with .rollup_progress }} {{ .rollup_completed_count }}/{{ .rollup_total_count }}{{ end }}{{ end }}{{ end }}',

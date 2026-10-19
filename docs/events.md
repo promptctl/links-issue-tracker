@@ -144,7 +144,7 @@ not work on this checkout's tickets, such as `lit sync push`, `lit init` or
 
 | Key | Meaning |
 | --- | --- |
-| `statusline.changed` | The file's slots whose records this write changed: `working_on`, `next`, both, or `[]`. A slot re-recorded with the ticket it already held is listed, since its `recorded_at` moved; a slot the command's facts did not reach is not. When the file was replaced, both are listed; when only its `working_on` record was dropped, `working_on` is. |
+| `statusline.changed` | The file's slots whose records this write changed: `working_on`, `next`, both, or `[]`. A slot re-recorded with the ticket it already held is listed, since its `recorded_at` moved; a slot the command's facts did not reach is not. When the file was replaced, both are listed; when its `working_on` record was dropped, `working_on` is, and `next` as the write changed it. |
 | `statusline.rollup_progress` | The rollup progress the file's `working_on` shows after this write, as `{"rollup_completed_count": N, "rollup_total_count": M}`; `null` when nothing was written or `working_on` is `null`. |
 | `statusline.phase` | The phase the file's `working_on` shows after this write, such as `"impl"`, whichever command read it; `null` when nothing was written or `working_on` is `null` or carries no phase. |
 | `statusline.created` | Whether the file did not exist before this write. |

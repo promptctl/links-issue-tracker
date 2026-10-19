@@ -10,9 +10,9 @@ import (
 
 // Every change leaves the file showing the ticket's current title. A start
 // says no more than that, since `lit start` records it with its lane's count;
-// a phase move puts it in the phase the move names, every
-// other transition invalidates what the file says about it, and a change of
-// fields alone does none of these.
+// a phase move puts it in the phase the move names, every other transition
+// invalidates what the file says about it, and a change of fields alone does
+// none of these.
 func TestChangesBecomeStatuslineFacts(t *testing.T) {
 	issue := model.Issue{ID: "t-1", Title: "One"}
 	ticket := statusline.Ticket{ID: "t-1", Title: "One"}
