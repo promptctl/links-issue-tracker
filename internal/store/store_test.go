@@ -1786,11 +1786,6 @@ func TestIssueStatusClaimAndDoneAreDeterministic(t *testing.T) {
 //
 // Not parallel: it swaps the package's notice writer.
 func TestCloseTwiceRetiresTheHolderRecordOnce(t *testing.T) {
-	var notices strings.Builder
-	restore := lockWaitNoticeWriter
-	lockWaitNoticeWriter = &notices
-	t.Cleanup(func() { lockWaitNoticeWriter = restore })
-
 	st, err := Open(context.Background(), filepath.Join(t.TempDir(), "dolt"), "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
@@ -1798,11 +1793,17 @@ func TestCloseTwiceRetiresTheHolderRecordOnce(t *testing.T) {
 	if err := st.Close(); err != nil {
 		t.Fatalf("first Close() error = %v", err)
 	}
+	// Only the second Close is listened to: what Open and the first Close say
+	// is not this contract.
+	var notices strings.Builder
+	restore := lockWaitNoticeWriter
+	lockWaitNoticeWriter = &notices
+	t.Cleanup(func() { lockWaitNoticeWriter = restore })
 	if err := st.Close(); err != nil {
 		t.Fatalf("second Close() error = %v", err)
 	}
 	if notices.Len() != 0 {
-		t.Fatalf("Close twice wrote notices:\n%s", notices.String())
+		t.Fatalf("second Close() wrote notices:\n%s", notices.String())
 	}
 }
 
