@@ -47,11 +47,9 @@ func TestMain(m *testing.M) {
 	// Every lit this suite runs appends its invocation event under
 	// XDG_STATE_HOME, and the child processes inherit this environment: point
 	// it at a directory the suite owns, never the developer's own events file.
-	homes := []string{isolateXDGHome("XDG_STATE_HOME", "lit-cmd-state-")}
+	stateHome := isolateXDGHome("XDG_STATE_HOME", "lit-cmd-state-")
 	code := m.Run()
-	for _, dir := range homes {
-		_ = os.RemoveAll(dir)
-	}
+	_ = os.RemoveAll(stateHome)
 	os.Exit(code)
 }
 

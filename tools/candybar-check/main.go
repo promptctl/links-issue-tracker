@@ -167,7 +167,10 @@ func run(stdout, stderr io.Writer) int {
 		return 1
 	}
 	defer os.RemoveAll(dir)
-	top, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
+	// git's own stderr says why there is no repository.
+	toplevel := exec.Command("git", "rev-parse", "--show-toplevel")
+	toplevel.Stderr = stderr
+	top, err := toplevel.Output()
 	if err != nil {
 		fmt.Fprintf(stderr, "error: candybar-check: find the repository to install the plugin from: %v\n", err)
 		return 1
@@ -184,7 +187,8 @@ func run(stdout, stderr io.Writer) int {
 }
 
 // check renders every case, prints each one's verdict and then the summary
-// naming the repository the plugin came from, and returns the exit code: 1 when any case did not render its cells.
+// naming the repository the plugin came from, and returns the exit code: 1
+// when any case did not render its cells.
 func check(stdout, stderr io.Writer, plugin string, cases []renderCase, render func(renderCase) ([]string, error)) int {
 	failed := 0
 	for _, c := range cases {
