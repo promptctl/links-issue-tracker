@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -366,8 +365,8 @@ func (p remoteCacheLanding) apply(ctx context.Context) error {
 		}
 	}
 	for _, c := range p.copies {
-		args := append([]string{"--git-dir", c.liveRepo, "fetch", "--no-tags", "--quiet", c.cloneRepo}, c.refspecs...)
-		if out, err := exec.CommandContext(ctx, "git", args...).CombinedOutput(); err != nil {
+		args := append([]string{"fetch", "--no-tags", "--quiet", c.cloneRepo}, c.refspecs...)
+		if out, err := mirrorGit(ctx, c.liveRepo, args...).CombinedOutput(); err != nil {
 			errs = append(errs, fmt.Errorf("copy %d ref(s) of the clone's mirror %s into the live store: %w: %s", len(c.refspecs), filepath.Base(filepath.Dir(c.liveRepo)), err, strings.TrimSpace(string(out))))
 		}
 	}
@@ -384,7 +383,7 @@ type mirrorRef struct {
 // first. It is the one reading of a mirror's refs: the landing and the sweep
 // both read through it. [LAW:one-source-of-truth]
 func listMirrorRefs(ctx context.Context, gitDir string) ([]mirrorRef, error) {
-	out, err := exec.CommandContext(ctx, "git", "--git-dir", gitDir, "for-each-ref",
+	out, err := mirrorGit(ctx, gitDir, "for-each-ref",
 		"--sort=-committerdate", "--format=%(refname) %(objectname)", "refs/dolt/").Output()
 	if err != nil {
 		return nil, fmt.Errorf("list the refs of mirror %s: %w", gitDir, err)

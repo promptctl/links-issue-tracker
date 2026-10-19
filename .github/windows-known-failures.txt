@@ -7,36 +7,6 @@
 # <ticket> <package> <top-level test, or * for a package whose tests do not
 # compile on Windows>
 
-
-
-links-windows-qr8l.8m6 internal/store TestAHeldLeaseTheBranchCannotFollowIsTheBoundsError
-links-windows-qr8l.8m6 internal/store TestAPeerWriteAfterTheGCReadTheRemoteKeepsEveryBranch
-links-windows-qr8l.8m6 internal/store TestAPeerWriteAfterTheRootWriteKeepsTheTableSet
-links-windows-qr8l.8m6 internal/store TestAPushPastTheBoundCollectsTheRemote
-links-windows-qr8l.8m6 internal/store TestAPushPastTheBoundReRootsWithNoCommandRun
-links-windows-qr8l.8m6 internal/store TestAPushThatReadTheRemoteBeforeItsGCLandsAfterIt
-links-windows-qr8l.8m6 internal/store TestAReRootPushWithNoVerdictLeavesNoScratch
-links-windows-qr8l.8m6 internal/store TestARemoteAPeerWroteToAfterTheReRootKeepsItsTableFiles
-links-windows-qr8l.8m6 internal/store TestARemoteHoldingATagKeepsEveryBranch
-links-windows-qr8l.8m6 internal/store TestAStaleLeaseLeavesTheBranchOnItsHistory
-links-windows-qr8l.8m6 internal/store TestAStaleLeaseOverTheLandedReRootStillFollowsIt
-links-windows-qr8l.8m6 internal/store TestBackgroundReceiveLandsTheClonesLastKnownRef
-links-windows-qr8l.8m6 internal/store TestGitBackedRemoteURL
-links-windows-qr8l.8m6 internal/store TestPruneRemoteCacheCollectsAbandonedMirrors
-links-windows-qr8l.8m6 internal/store TestPruneRemoteCacheCollectsBesideANeverOpenedRemote
-links-windows-qr8l.8m6 internal/store TestPruneRemoteCacheIsNotBlockedByOneStuckMirror
-links-windows-qr8l.8m6 internal/store TestPruneRemoteCacheKeepsTheLiveMirror
-links-windows-qr8l.8m6 internal/store TestPruneRemoteCacheKeepsTheMirrorOfAFailedFirstPush
-links-windows-qr8l.8m6 internal/store TestPruneRemoteCacheKeepsTheMirrorOfARemoteWithItsOwnRef
-links-windows-qr8l.8m6 internal/store TestReadAbandonedMirrorsFollowsTheRemotesNotASnapshot
-links-windows-qr8l.8m6 internal/store TestRemoteCacheLandingCopiesTheFetchedRemotesLastKnownRefs
-links-windows-qr8l.8m6 internal/store TestRemoteOperationsLeaveTheMirrorHoldingOnlyItsLastKnownRef
-links-windows-qr8l.8m6 internal/store TestSweepCollectsOrphanedInstanceRefsAndKeepsTheNewestTrackingRefAsLastKnown
-links-windows-qr8l.8m6 internal/store TestSyncCompactAndPushPrunesWhenThePushFails
-links-windows-qr8l.8m6 internal/store TestSyncCompactAndPushReportsTheSweep
-links-windows-qr8l.8m6 internal/store TestSyncCompactSweepsAndReportsItInDetail
-links-windows-qr8l.8m6 internal/store TestSyncRemoteMirrorHoldsItsOwnPushNotAPeersLaterOne
-
 links-windows-qr8l.mq4 internal/workspace TestDamagedTokenErrorNamesItsRemedy
 links-windows-qr8l.mq4 internal/workspace TestGitOutputCancellationKillsSubprocess
 links-windows-qr8l.mq4 internal/workspace TestResolveRefusesEveryNameItCannotDeriveAPrefixFrom

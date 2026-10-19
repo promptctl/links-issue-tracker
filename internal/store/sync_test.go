@@ -1262,6 +1262,13 @@ func TestSyncResetToRemoteHeadRequiresRemoteAndBranch(t *testing.T) {
 
 func TestGitBackedRemoteURL(t *testing.T) {
 	t.Parallel()
+	// A path rooted at a separator is local: on POSIX it is absolute, and on
+	// Windows it names a directory on the current drive, so it gains that drive.
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rooted := "git+file://" + filepath.ToSlash(filepath.VolumeName(wd))
 	cases := []struct {
 		name string
 		in   string
@@ -1274,8 +1281,8 @@ func TestGitBackedRemoteURL(t *testing.T) {
 		{"scp-like without .git", "git@github.com:org/repo", "git+ssh://git@github.com/./org/repo"},
 		{"ssh url with .git", "ssh://git@github.com/org/repo.git", "git+ssh://git@github.com/org/repo.git"},
 		{"file url", "file:///srv/git/repo.git", "git+file:///srv/git/repo.git"},
-		{"local absolute path with .git", "/srv/git/repo.git", "git+file:///srv/git/repo.git"},
-		{"local absolute path without .git", "/srv/git/repo", "git+file:///srv/git/repo"},
+		{"local absolute path with .git", "/srv/git/repo.git", rooted + "/srv/git/repo.git"},
+		{"local absolute path without .git", "/srv/git/repo", rooted + "/srv/git/repo"},
 		{"schemeless host without .git", "github.com/org/repo", "git+https://github.com/org/repo"},
 		{"already git+ prefixed", "git+https://github.com/org/repo", "git+https://github.com/org/repo"},
 		{"empty", "   ", ""},

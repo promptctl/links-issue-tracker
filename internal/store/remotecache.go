@@ -39,6 +39,17 @@ import (
 // directory that holds `.dolt`.
 const remoteCacheDirName = "git-remote-cache"
 
+// mirrorGit builds "git <args...>" against the mirror at gitDir. It is the one
+// way lit runs git on a mirror. [LAW:single-enforcer] core.longpaths lets git for
+// Windows open paths past MAX_PATH (260 characters): a mirror ref sits about 175
+// characters below the database directory, so a database a few directories deep
+// passes it. git hands the setting on to the git processes it spawns, and other
+// platforms ignore the key. Dolt's own git commands on a mirror pass it too
+// (Patch 12 in FORKS.md).
+func mirrorGit(ctx context.Context, gitDir string, args ...string) *exec.Cmd {
+	return exec.CommandContext(ctx, "git", append([]string{"-c", "core.longpaths=true", "--git-dir", gitDir}, args...)...)
+}
+
 // isRemoteCacheKey reports whether a directory name is one of dbfactory's cache
 // keys — a lowercase hex sha256 and nothing else. Anything else under the cache
 // base was not put there by dbfactory, so this prune does not own it and must
@@ -489,7 +500,7 @@ func (s *Store) SyncRemoteMirrorHolds(ctx context.Context, remote string, commit
 // "<oid> <type> <size>" or "<input> missing", so absence is an answer and only
 // git failing to run is an error.
 func gitDirHoldsCommits(ctx context.Context, gitDir string, commits []string) (bool, error) {
-	cmd := exec.CommandContext(ctx, "git", "--git-dir", gitDir, "cat-file", "--batch-check")
+	cmd := mirrorGit(ctx, gitDir, "cat-file", "--batch-check")
 	cmd.Stdin = strings.NewReader(strings.Join(commits, "\n") + "\n")
 	out, err := cmd.Output()
 	if err != nil {
