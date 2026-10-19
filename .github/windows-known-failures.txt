@@ -149,6 +149,8 @@ links-windows-qr8l.mq4 internal/workspace TestResolveRefusesEveryNameItCannotDer
 links-windows-qr8l.mq4 internal/workspace TestWorktreePathWhoseTailLooksLikeAnAttributeStaysLive
 
 links-windows-qr8l.btw cmd/lit *
+links-windows-qr8l.btw internal/atomicfile TestAFailedWriteLeavesTheTargetAndNoTempFile
+links-windows-qr8l.btw internal/atomicfile TestWriteFileReplacesAnExistingFileAndItsMode
 links-windows-qr8l.btw internal/backup TestCreateListLatestAndPrune
 links-windows-qr8l.btw internal/cli *
 links-windows-qr8l.btw internal/dbsnapshot TestCollectOrphanedResidue_ErrorNamesThePath
