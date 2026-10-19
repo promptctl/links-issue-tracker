@@ -696,3 +696,28 @@ func TestClearParentReportsAnUnknownIssueAsMissing(t *testing.T) {
 		t.Errorf("ClearParent(parentless issue) error = %v, want a missing \"parent relation\"", err)
 	}
 }
+
+// Hydration descends only into epics, so a stored loop that runs through a
+// leaf reads; the rank verbs walk up the parent chain, and that walk is what
+// meets it. It refuses with the same typed refusal every read gives a loop, so
+// the CLI names the loop and its repair whichever read found it.
+func TestARankRefusesAStoredLoopThroughALeafByName(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	st := openIssueStore(t, ctx)
+	epic := parentChain(t, ctx, st, "E")[0]
+	leaf, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "T", Topic: "hier", IssueType: "task", ParentID: epic.ID, Placement: storage.RankBottom})
+	if err != nil {
+		t.Fatalf("CreateIssue(T) error = %v", err)
+	}
+	seedParentEdge(t, ctx, st, epic.ID, leaf.ID)
+
+	_, err = st.RankAbove(ctx, leaf.ID, epic.ID)
+	var refusal storage.ParentCycleError
+	if !errors.As(err, &refusal) {
+		t.Fatalf("RankAbove(%s, %s) over a loop error = %v, want a ParentCycleError", leaf.ID, epic.ID, err)
+	}
+	if want := []string{leaf.ID, epic.ID}; !slices.Equal(refusal.Cycle, want) {
+		t.Errorf("ParentCycleError.Cycle = %v, want %v: walked up from the leaf, each the child of the next", refusal.Cycle, want)
+	}
+}
