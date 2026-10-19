@@ -1341,7 +1341,7 @@ line for `done` and `close`, each group omitted when empty:
 ### 2.13 `lit backlog` — Full workable backlog
 
 - Registration `register.go`, `app.AccessRead`, handler
-  `workableLeafFn(backlogView)`. Summary: "List the full workable backlog in
+  `workableLeafFn(backlogView)`. Summary: "List the workable backlog in
   priority/rank order (blocked items inline)".
 - `backlogView` preset (`workable.go`):
   `hasLimit: true`, `hasColumns: true`, order = `orderCanonical` (no-op,
@@ -1355,11 +1355,12 @@ line for `done` and `close`, each group omitted when empty:
 | `--type` | string array | `nil` | Type set, comma-separated and/or repeated, via `parseIssueTypeSet` as on `lit ls` |
 | `--status` | string | `""` | "Filter by status: open\|in_progress" |
 | `--labels` | string array | `nil` | Label set (ALL must match), comma-separated and/or repeated, via `parseLabelSet` as on `lit ls` |
+| `--all` | bool | `false` | "Ignore the focus scope and list the whole queue" |
 | `--limit` | int | `0` | "Limit results" — applied **after** ordering; read by `query.ParseLimit`, so a negative value → `parse --limit: %w` → exit 3 (`workable.go`) |
 | `--columns` | string | `""` | "Comma-separated output columns" |
 
 - Refusal: any positional argument → `UsageError{view.usage()}` (`workable.go`).
-  `usage()` builds `"usage: lit backlog [--type ...] [--status ...] [--labels ...] [--assignee <user>] [--limit N] [--columns ...]"`
+  `usage()` builds `"usage: lit backlog [--type ...] [--status ...] [--labels ...] [--assignee <user>] [--all] [--limit N] [--columns ...]"`
   (`workable.go`).
 - `--status closed` (or any unparseable state) →
   `model.ValidationError{"invalid --status \"<x>\" (valid: open, in_progress)"}` → exit 3
@@ -1369,28 +1370,60 @@ line for `done` and `close`, each group omitted when empty:
   (`workableFilterFlags.parse`, `workable.go`; `cli.go`).
 - Prints the sync-staleness warning first (`workable.go`).
 - Runs the shared workable pipeline (§1.18) via `gatherWorkableAnnotated`
-  (`workable.go`), then `gatherClaimContext` (`workable.go`).
+  (`workable.go`). The focus scope then partitions the rows,
+  `scopeFor(all).partition(rows)` (`ready_state.go`): `--all` resolves to the
+  zero `focusScope`, which holds every row, and the excluded rows are only
+  counted. Order, keep and `--limit` run on the in-scope rows, in that order.
+  Then `gatherClaimContext` (`workable.go`).
 - Dispatches `EventShowBacklog` after rendering (`workable.go`).
 
 **Output** (`printBacklogOutput`, `backlog.go`):
 1. The `backlogPreamble` verbatim (`backlog.go`):
 ```
-This is the full backlog in priority/rank order — every workable item, blocked or not.
+This is the backlog in priority/rank order.
 Items at the top are ranked higher than items below them. Blocked items stay where they were ranked
 so you can see WHY the queue is shaped this way, not just what is ready next.
-Read every row: each carries its parent epic, dependencies, blocking reasons, and what closing it would unblock.
+Read every row: each carries its dependencies, blocking reasons, and what closing it would unblock.
 That context is the ordering rationale — the dependency graph IS the priority story.
+An epic line and a claim line describe a whole run of rows and are printed once, on the row that
+opens the run, so a row without one continues the run above it. 'blocked: earlier sibling X' names
+the one ticket directly ahead of it in its lane, not every ticket ahead of it — and X is the true
+prerequisite even when a filter or --limit keeps X's own row out of this list.
 Rows claimed by another checkout show who holds them and how fresh, but claim visibility here is
 just that — visibility; only 'lit next' routes by claim, serving this checkout's own lanes first.
 Use 'lit next' to pick the top workable item to start.
 ```
-2. A rule of 80 `─` characters, then a blank line (`backlog.go`).
-3. If empty: the literal `(backlog empty)` and nothing else (`backlog.go`).
-4. Otherwise, per row: `"%2d. %s"` — a right-aligned 1-based index, then the
+2. The focus notice, one line, printed on every run (`focusNotice.line`,
+   `backlog.go`): a scope clause followed by a trim clause. The scope clause is
+   one of:
+   - unfocused, nothing trimmed: `Nothing is hidden: every workable item is listed.`
+   - unfocused, `--limit` trimmed rows: `Every workable item is in scope.`
+   - focused, `--all` given: `Focus is on %s; this run bypassed it and lists the whole queue.`
+   - focused: `Focused on %s — listing only its unfinished prerequisite path, in rank order; %d workable row(s) off that path are not shown (%s for the whole queue).`
+
+   The first `%s` is the focus goals' ids joined by `", "`
+   (`focusScope.describe`, `ready_state.go`), `%d` is the count of rows the
+   partition excluded, and the last `%s` is ``"`lit backlog --all`"``. The trim
+   clause is empty when `--limit` cut nothing, else a space and then
+   `--limit trimmed this run: %d more workable row(s) are not shown.`, where
+   `%d` is the rows `--limit` cut after keep (`trimClause`, `backlog.go`).
+3. A rule of 80 `─` characters, then a blank line (`backlog.go`).
+4. If no row survived: one line from `focusNotice.emptyLine` (`backlog.go`) —
+   `(nothing workable on the focus path — %d row(s) off it, %s to see them)`,
+   with the excluded count and ``"`lit backlog --all`"``, when the scope is
+   active, `--all` was not given and the partition excluded at least one row;
+   else `(backlog empty)`. The output does not stop there: step 7 still runs.
+5. Otherwise, per row: `"%2d. %s"` — a right-aligned 1-based index, then the
    resolved columns joined by two spaces (`backlog.go`).
-5. Then the indented context block (`printBacklogContext`, `backlog.go`), in
-   this order, each omitted when empty:
-   - `    epic: <epicID>  <epicTitle>` (`output.go`)
+6. Then the indented context block (`printBacklogContext`, `backlog.go`), in
+   this order, each omitted when empty. The epic line and the claim line are
+   stated once per run of rows (`backlogRun.advance`, `openingRun`,
+   `backlog.go`): a row prints each only when its subject differs from the
+   row above's — its epic id for the epic line, its lane for the claim line —
+   and the first row is compared against an empty run, so leading rows with no
+   epic print no epic line.
+   - `    epic: <epicID>  <epicTitle>` (`output.go`), or `    epic: none` for a
+     row with no epic opening a run (`backlogEpicLine`, `backlog.go`)
    - `    blocked: <reasons joined by "; ">` — only non-dependency blockers,
      rendered as `missing <field>` for `MissingField`, `needs-design` for
      `NeedsDesign`, `external` for `External`, and `earlier sibling <id> still
@@ -1401,15 +1434,18 @@ Use 'lit next' to pick the top workable item to start.
      rows (`backlog.go`, `inProgressSuffix` at `ready_state.go`);
      the `(ORPHANED)` suffix is withdrawn when somebody holds the row's lane
      (`backlog.go`), since the claim line beneath names them
-   - `    <claim line>` when the row's lane is Held (`backlog.go`)
+   - `    <claim line>` when the row's lane is Held, or `    unclaimed` when it
+     is not and the row above's lane is (`claimStatement`, `backlog.go`)
    - `    unblocks: <ids of rows that depend on this one>` — derived from the
      classified open-dependency facts of the whole workable queue, before any
      narrowing, so the line survives a filter or a limit that cuts the
      dependent row (`backlog.go`, `deriveQueueFacts` at
      `queue_facts.go`, read back through `queueFacts.Unblocks` at
      `queue_facts.go`)
-6. Finally, if any row carries a `RankInversion` annotation:
-   `"\nWarning: %d rank inversion(s) — dependencies ranked below their dependents. Run `lit doctor --fix` to repair. <agent-instructions>This command is idempotent and safe to run without confirmation.</agent-instructions>\n"`
+7. Finally, when the whole workable queue holds at least one rank inversion —
+   counted by `queueFacts.RankInversions` (`queue_facts.go`) before any
+   narrowing, so a scope, filter or `--limit` does not lower it:
+   ``"\nWarning: %d rank inversion(s) — dependencies ranked below their dependents. Run `lit doctor --fix` to repair. <agent-instructions>This command is idempotent and safe to run without confirmation.</agent-instructions>\n"``
    (`printRankInversions`, `ready_state.go`).
 
 Lane for the claim line is `model.LaneOf(entry.Issue, details[entry.ID].Parent)`
