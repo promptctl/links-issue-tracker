@@ -52,6 +52,8 @@ links-windows-qr8l.btw internal/dbsnapshot TestPlainFileCopy_PreservesPerms
 links-windows-qr8l.btw internal/statusline TestAFailedRewriteOfAnUnreadableFileIsNotReplaced
 links-windows-qr8l.btw internal/statusline TestAFailedWriteReportsWhatItHadDone
 links-windows-qr8l.btw internal/storage/memory TestConformance
+links-windows-qr8l.btw internal/store TestAFollowCarriesAFailedCollection
+links-windows-qr8l.btw internal/store TestASetRemoteURLRetriedAfterItsRemoveLandsTheAdd
 links-windows-qr8l.btw internal/store TestAdoptRemoteByCloneFailedCloneLeavesNoResidue
 links-windows-qr8l.btw internal/store TestCollectAbandonedMirrorKeepsCollectingPastAStuckFile
 links-windows-qr8l.btw internal/store TestCollectAbandonedMirrorReportsAFailureNamingTheKey
