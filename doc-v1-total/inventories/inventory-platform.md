@@ -923,10 +923,9 @@ there (`tar -xzf` or `unzip -q`), appends its `bin/` to `$GITHUB_PATH`, then run
   `go test -timeout 30m ./...` (no `-short`, so `testing.Short()` is false) →
   `go run ./tools/lawtokens-sync -check` (`if: ${{ !cancelled() }}`).
 - Job `windows`, `windows-latest`, `timeout-minutes: 60`, default shell `msys2 {0}`.
-  Steps: checkout → setup-go →
-  `msys2/setup-msys2@v2` (`msystem: UCRT64`, `path-type: inherit`, installing
-  `mingw-w64-ucrt-x86_64-gcc` and `mingw-w64-ucrt-x86_64-icu` for cgo) → install-dolt →
-  install-claude → `go build ./cmd/lit` →
+  Steps: checkout → setup-go → `msys2/setup-msys2@v2` (`msystem: UCRT64`, `path-type:
+  inherit`, installing `mingw-w64-ucrt-x86_64-gcc` and `mingw-w64-ucrt-x86_64-icu` for cgo)
+  → install-dolt → install-claude → `go build ./cmd/lit` →
   Test (-short), both with `CGO_ENABLED: '1'`: reads `.github/windows-known-failures.txt`
   (`<ticket> <package> <test-or-*>` per line, `#` comments and blank lines ignored, a third
   field that is neither `*` nor `Test…` is an `::error::` and exit 1), runs

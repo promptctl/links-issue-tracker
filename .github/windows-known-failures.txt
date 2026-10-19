@@ -164,7 +164,6 @@ links-windows-qr8l.btw internal/store TestCollectAbandonedMirrorReportsAFailureN
 links-windows-qr8l.btw internal/store TestDowngradePruneFailureReportsTheCommittedReverse
 links-windows-qr8l.btw internal/store TestDowngradeSnapshotFailureReportsTheVersionItRead
 links-windows-qr8l.btw internal/store TestMigratingOpenReportsAFailedSnapshotPrune
-links-windows-qr8l.btw internal/store TestRecordPushedHeadCutsAtTheHoldBudget
 links-windows-qr8l.btw internal/store TestRefusalReportsUnreadableSnapshots
 links-windows-qr8l.btw internal/store TestRequireInitializedWorkspaceSeparatesGenuineStatFaults
 links-windows-qr8l.btw internal/testoracle TestPathOutcomes
