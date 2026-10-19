@@ -5,6 +5,28 @@ All notable changes to `links-issue-tracker` (the `lit` CLI) are documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.21.0] - 2026-10-19
+
+### Added
+
+- Tickets carry a plan. `lit new --plan`, `lit update --plan` or `--plan-file`, and the `plan` key in bulk YAML and tree import set it. Each edit is a version, and `lit history <id> --version plan@<n>` prints one. `lit show` prints the plan with its version and SHA-256 digest, followed by the reviews of that text. (links-plan-review-o3mh.1cl)
+- `lit verdict <id> <pass|fail> --plan <digest> --law <token>...` records a law review of the plan text the digest names, signed by the acting identity. A fail cites at least one law. A digest that names no recorded text exits 4 with `version_not_found`. Export format 5 carries the reviews, and a merge unions them. (links-plan-review-o3mh.1cl)
+- `/lit:review-plan <id>` starts a separate headless Claude session with no edit or write tools. That session law-reviews the ticket's plan, writes its reasons on a fail, and records the verdict. The Claude Code plugin is at 0.9.0. (links-plan-review-o3mh.dmf)
+- A compacting push bounds the sync branch's history with no command run. Once the remote head is 2,000 commits deep, the push re-roots the branch on its latest 1,000 commits. It force-pushes under a lease on the head it read, shrinks the shared remote to the window, and collects the local store. The on-change mirror's pushes run the same bound. Each push records `history_bound` on its event. (links-storage-3k6u.s5b, links-storage-3k6u.fbx, links-storage-3k6u.ge9, links-storage-3k6u.0fo, links-storage-3k6u.sm9)
+- Every sync entry point follows a remote that another checkout re-rooted. The branch is rewritten onto the remote's own hashes, the history below the cut is collected, and the sync continues as a fast-forward or a merge. A checkout whose unpushed work forks below the cut merges against its recorded fork point. Events record `reroot.follows`, `fork_point.records` and `reconcile.bases`. (links-storage-3k6u.krb, links-storage-3k6u.1q7, links-storage-3k6u.lxi)
+- A migration can set the store's minimum writer schema. A lit older than that schema reads the store but refuses to write to it or sync it, exiting 3 with `workspace_schema_ahead` and naming the schema version to install a lit for. `lit stores --counts` reports `schema_ahead` and `read_only`. (links-store-integrity-e59t.dkx)
+
+### Changed
+
+- `lit done` finishes a ticket only when its current plan has a passing law review from someone other than the plan's author and no fail stands against that text. Otherwise it exits 3 with `plan_not_approved` and names what is missing. A create records who filed it, from the session or `--by`, and import accepts `--by` on a file of creates. (links-plan-review-o3mh.4mo)
+- The store schema is 11. Lit v0.20.1 and earlier exit 3 with `workspace_schema_ahead` when pushing to or reconciling with a remote this release has migrated. (links-storage-3k6u.ge9, links-plan-review-o3mh.1cl)
+- A bulk file is written as creates, then edges, then updates, so a create or edge refused at its write leaves no update applied. Tree specs, bulk creates and bulk updates refuse a bad type or priority with one message, naming the document, key, value and allowed values. (links-bulk-edit-h2rg.83f)
+- The cc-candybar statusline plugin ships at `.cc-candybar/plugins/lit/`, and cc-candybar 1.135.0 or later installs it. lit does not install it. The schema warning names which of lit and the plugin to update. (links-statusline-e9pl.jw1)
+
+### Fixed
+
+- Every file lit replaces in place goes through one atomic write: the installed binary, workspace config, backups, the sync base, statusline files and markers. The file's mode is exact under any umask, and a failed write removes its temp file. A temp file is never listed as a backup snapshot. (links-unfiled-fc79.x7zm)
+
 ## [0.20.1] - 2026-10-17
 
 ### Changed
