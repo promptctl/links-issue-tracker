@@ -56,11 +56,13 @@ func TestDoneFinishesWhereverThePlanStands(t *testing.T) {
 			verdict(t, id, "ada", "fail", "--law", "carrying-cost")
 			return ""
 		}, "ada failed it citing carrying-cost"},
-		// The author passes first, so the approval rests on the second pass.
+		// The author's own pass is the newest, so the approval rests on the
+		// one before it.
 		{"approved", "approved", nil, func(t *testing.T, id string) string {
 			update(t, id)
+			approval := verdict(t, id, "ada", "pass")
 			verdict(t, id, "author", "pass")
-			return verdict(t, id, "ada", "pass")
+			return approval
 		}, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
