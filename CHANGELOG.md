@@ -5,6 +5,17 @@ All notable changes to `links-issue-tracker` (the `lit` CLI) are documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.21.1] - 2026-10-19
+
+### Changed
+
+- `.lit/statusline.json` stays at `schema_version` 1. lit only adds fields to it, and never renames or removes a field or changes what one means, so a plugin or script written for any lit reads the file any other lit writes. The cc-candybar plugin warns on any other version and says the next `lit next` replaces the file. (links-statusline-e9pl.7a2)
+- A checkout whose cc-candybar plugin lit 0.19 or 0.20 installed takes the plugin lit ships with `cc-candybar plugin install promptctl/links-issue-tracker`, run once; re-running it updates the plugin. (links-statusline-e9pl.jw1)
+
+### Fixed
+
+- Every command that records `working_on` in `.lit/statusline.json` writes its `rollup_progress`, and a start names the lane's count. A file whose `working_on` has no `rollup_progress` has that record dropped with a warning on stderr, and its `next` kept. (links-statusline-e9pl.xav)
+
 ## [0.21.0] - 2026-10-19
 
 ### Added
