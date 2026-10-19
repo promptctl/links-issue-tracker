@@ -223,13 +223,16 @@ type UnknownKey struct {
 // them: the project layer is committed and read by clones on older lits, so
 // refusing a key a newer lit added would break every command on those clones.
 // Keys are as viper reads them, lowercased, which is also how Load matches
-// them to settings.
+// them to settings. Each layer is its own file, so a layer that does not parse
+// adds its error and hides nothing another layer sets.
 func UnknownKeys(workspaceRoot pathspec.PathSpec) ([]UnknownKey, error) {
 	unknown := []UnknownKey{}
+	var errs []error
 	for _, layer := range configLayers(workspaceRoot) {
 		file, err := readLayer(layer)
 		if err != nil {
-			return nil, err
+			errs = append(errs, err)
+			continue
 		}
 		keys := file.AllKeys()
 		slices.Sort(keys)
@@ -239,7 +242,7 @@ func UnknownKeys(workspaceRoot pathspec.PathSpec) ([]UnknownKey, error) {
 			}
 		}
 	}
-	return unknown, nil
+	return unknown, errors.Join(errs...)
 }
 
 // layers is the config precedence chain: merged in slice order, so later

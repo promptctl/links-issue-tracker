@@ -399,9 +399,18 @@ func TestUnknownKeysIsEmptyWithNoConfigFiles(t *testing.T) {
 	}
 }
 
-// A layer that does not parse cannot be checked, and the error names it.
+// A layer that does not parse cannot be checked, and the error names it; the
+// other layer is still checked.
 func TestUnknownKeysReportsAnUnparseableLayer(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	globalRoot := t.TempDir()
+	globalFile := filepath.Join(globalRoot, "links-issue-tracker", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(globalFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(globalFile, []byte("[init]\ninstall_hooks = false\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", globalRoot)
 	workspaceRoot := t.TempDir()
 	projectFile := filepath.Join(workspaceRoot, ".lit", "config.toml")
 	if err := os.MkdirAll(filepath.Dir(projectFile), 0o755); err != nil {
@@ -411,8 +420,12 @@ func TestUnknownKeysReportsAnUnparseableLayer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := UnknownKeys(pathspec.New(workspaceRoot)); err == nil || !strings.Contains(err.Error(), projectFile) {
+	got, err := UnknownKeys(pathspec.New(workspaceRoot))
+	if err == nil || !strings.Contains(err.Error(), projectFile) {
 		t.Fatalf("UnknownKeys error = %v, want one naming %s", err, projectFile)
+	}
+	if want := []UnknownKey{{Key: "init.install_hooks", File: globalFile}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("UnknownKeys = %#v, want the global layer's key %#v", got, want)
 	}
 }
 

@@ -114,7 +114,7 @@ func newRootCommand(ctx context.Context, stdout io.Writer, stderr io.Writer) *co
 			}
 			// [LAW:one-source-of-truth] Default command reuses renderQuickstartGuidance
 			// so the output is always identical to `lit quickstart`.
-			ws, wsErr := resolveWorkspaceFromWD(workspace.PrefixRequest{})
+			ws, wsErr := resolveWorkspaceFromWD(cmd.Context(), workspace.PrefixRequest{})
 			// [LAW:dataflow-not-control-flow] Only the "outside git repo" case routes to help;
 			// other failures (getcwd, template load) surface so they remain diagnosable.
 			var outside OutsideWorkspaceError
@@ -154,31 +154,26 @@ func newRootCommand(ctx context.Context, stdout io.Writer, stderr io.Writer) *co
 }
 
 func runWithApp(ctx context.Context, stdout io.Writer, accessMode app.AccessMode, run func(context.Context, *app.App) error) error {
-	cwd, err := os.Getwd()
+	ws, err := resolveWorkspaceFromWD(ctx, workspace.PrefixRequest{})
 	if err != nil {
-		return fmt.Errorf("get cwd: %w", err)
+		return err
 	}
 	// [LAW:single-enforcer] Cobra command registration owns app access selection so startup mode is declared once per entrypoint.
-	ap, err := app.Open(ctx, cwd, accessMode)
+	ap, err := app.Open(ctx, ws, accessMode)
 	if err != nil {
-		if errors.Is(err, workspace.ErrNotGitRepo) {
-			return OutsideWorkspaceError{Message: "links requires running inside a git repository/worktree"}
-		}
 		// The open boundary stamps holder contention so Run's trace can tell a
 		// starved OPEN from a handler-traced mid-command contention, filed under
-		// the workspace app.Open resolved. A failure to resolve has no workspace
-		// to file under, so it passes through unstamped.
+		// the workspace it opened in. Open's other failures are not a store
+		// acquisition, so they pass through unstamped.
 		var storeErr app.StoreOpenError
 		if errors.As(err, &storeErr) {
 			return markEngineOpenContention(err, storeErr.Workspace)
 		}
 		return err
 	}
-	// Capture the workspace before running: auto-sync needs it after the engine
-	// is closed, and the close happens in the inner function below (including on
-	// panic, as a deferred close) so it always precedes the automatic sync below.
-	ws := ap.Workspace
-	reportUnknownConfigKeys(ctx, ws.RootDir)
+	// The engine closes in the inner function below (including on panic, as a
+	// deferred close), so the close always precedes the automatic sync below,
+	// which needs only the workspace.
 	runErr := func() error {
 		defer ap.Close()
 		reportOpenMigration(ctx, storage.OpenMigration(ap.Store))
@@ -216,9 +211,10 @@ func runWithApp(ctx context.Context, stdout io.Writer, accessMode app.AccessMode
 // resolveWorkspaceFromWD acquires the workspace for the process's working
 // directory, carrying whatever issue prefix the caller's flags asked for — the
 // zero request for every command but `lit init --prefix`.
-// [LAW:single-enforcer] one translation of ErrNotGitRepo into the typed CLI
-// error, for every acquisition.
-func resolveWorkspaceFromWD(requested workspace.PrefixRequest) (workspace.Info, error) {
+// [LAW:single-enforcer] Every command acquires its workspace here, so this is
+// the one translation of ErrNotGitRepo into the typed CLI error and the one
+// place the workspace's config keys are checked.
+func resolveWorkspaceFromWD(ctx context.Context, requested workspace.PrefixRequest) (workspace.Info, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return workspace.Info{}, fmt.Errorf("get cwd: %w", err)
@@ -231,6 +227,7 @@ func resolveWorkspaceFromWD(requested workspace.PrefixRequest) (workspace.Info, 
 		}
 		return workspace.Info{}, err
 	}
+	reportUnknownConfigKeys(ctx, ws.RootDir)
 	return ws, nil
 }
 

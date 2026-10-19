@@ -36,7 +36,7 @@ func TestOpenModeContract(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := gitRepo(t)
-			ap, err := Open(context.Background(), repo, tc.mode)
+			ap, err := Open(context.Background(), resolvedWorkspace(t, repo), tc.mode)
 			if tc.wantErr != "" {
 				if err == nil {
 					ap.Close()
@@ -61,14 +61,14 @@ func TestOpenModeContract(t *testing.T) {
 // bootstrapped — the two modes describe one store, not two.
 func TestOpenReadAfterWrite(t *testing.T) {
 	repo := gitRepo(t)
-	writer, err := Open(context.Background(), repo, AccessWrite)
+	writer, err := Open(context.Background(), resolvedWorkspace(t, repo), AccessWrite)
 	if err != nil {
 		t.Fatalf("Open(write) error = %v", err)
 	}
 	if err := writer.Close(); err != nil {
 		t.Fatalf("Close(write) error = %v", err)
 	}
-	reader, err := Open(context.Background(), repo, AccessRead)
+	reader, err := Open(context.Background(), resolvedWorkspace(t, repo), AccessRead)
 	if err != nil {
 		t.Fatalf("Open(read) after write error = %v", err)
 	}
@@ -83,7 +83,7 @@ func TestOpenReadAfterWrite(t *testing.T) {
 func TestOpenRejectsUnknownMode(t *testing.T) {
 	repo := gitRepo(t)
 	for _, mode := range []AccessMode{"", "admin"} {
-		ap, err := Open(context.Background(), repo, mode)
+		ap, err := Open(context.Background(), resolvedWorkspace(t, repo), mode)
 		if err == nil {
 			ap.Close()
 			t.Fatalf("Open(%q) succeeded, want invalid-mode error", mode)
@@ -107,7 +107,7 @@ func gitRepoWithWorktree(t *testing.T) (string, string) {
 		t.Fatalf("git commit: %v\n%s", err, out)
 	}
 	// Bootstraps the database, which the read mode below requires to exist.
-	ap, err := Open(context.Background(), repo, AccessWrite)
+	ap, err := Open(context.Background(), resolvedWorkspace(t, repo), AccessWrite)
 	if err != nil {
 		t.Fatalf("Open(AccessWrite) error = %v", err)
 	}
@@ -126,7 +126,7 @@ func gitRepoWithWorktree(t *testing.T) (string, string) {
 
 func openStream(t *testing.T, dir string, mode AccessMode) workspace.StreamID {
 	t.Helper()
-	ap, err := Open(context.Background(), dir, mode)
+	ap, err := Open(context.Background(), resolvedWorkspace(t, dir), mode)
 	if err != nil {
 		t.Fatalf("Open(%v) error = %v", mode, err)
 	}
@@ -210,7 +210,7 @@ func TestFailedIdentityResolutionReleasesTheStore(t *testing.T) {
 		t.Fatalf("WriteFile error = %v", err)
 	}
 
-	ap, err := Open(context.Background(), repo, AccessWrite)
+	ap, err := Open(context.Background(), resolvedWorkspace(t, repo), AccessWrite)
 	if err == nil {
 		ap.Close()
 		t.Fatal("Open must fail when the checkout's identity is damaged")
@@ -227,4 +227,14 @@ func TestFailedIdentityResolutionReleasesTheStore(t *testing.T) {
 	if got := openStream(t, repo, AccessWrite); !got.Present() {
 		t.Fatal("a repaired checkout must open and mint a fresh identity")
 	}
+}
+
+// resolvedWorkspace is the workspace a command run in dir acquires.
+func resolvedWorkspace(t *testing.T, dir string) workspace.Info {
+	t.Helper()
+	ws, err := workspace.Resolve(dir)
+	if err != nil {
+		t.Fatalf("workspace.Resolve(%s) error = %v", dir, err)
+	}
+	return ws
 }

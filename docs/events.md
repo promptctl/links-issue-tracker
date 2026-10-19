@@ -186,15 +186,15 @@ instead.
 ## What checking the config records
 
 A command that runs in a workspace checks the global and project
-`config.toml` for keys that are not lit settings, once, before it runs. Such
-a key has no effect: a misspelling, a setting lit no longer has, or one a
-newer lit added. The command runs all the same, and prints a `warning:` line
+`config.toml` for keys that this version of lit does not read, once, before
+it runs. Such a key has no effect: a misspelling, a setting lit no longer
+has, or one a newer lit added. The command runs all the same, and prints a `warning:` line
 on stderr for each key, naming the key and the file that sets it.
 
 | Key | Meaning |
 | --- | --- |
-| `config.unknown_keys` | Each key that is not a setting, as `{"key": …, "file": …}`, in layer order (global, then project) and alphabetically within a file; `[]` when there are none. Keys are lowercased. `null` when the check could not run. |
-| `config.unknown_keys_error` | Why a config file could not be read to check its keys, or `null`. The command prints `warning: config keys were not checked:` with the reason. |
+| `config.unknown_keys` | Each key that is not a setting, as `{"key": …, "file": …}`, in layer order (global, then project) and alphabetically within a file; `[]` when there are none. Keys are lowercased. A file that could not be read adds none. |
+| `config.unknown_keys_error` | Why a config file's keys could not be checked, one reason for each file that does not parse, or `null`. The command prints `warning: config keys were not checked:` with the reason. |
 
 ## What a schema-ahead refusal records
 

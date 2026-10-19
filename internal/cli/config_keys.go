@@ -16,9 +16,10 @@ import (
 // writes a warning for each to stderr. The command runs either way, because a
 // key that changes nothing is a reason to look, not to stop.
 //
-// It runs where a command acquires its workspace, once per invocation, not
-// inside config.Load, which one command can call several times and which
-// commands that read no setting never call. [LAW:single-enforcer]
+// It runs in resolveWorkspaceFromWD, where every command acquires its
+// workspace once, not inside config.Load, which one command can call several
+// times and which commands that read no setting never call.
+// [LAW:single-enforcer]
 func reportUnknownConfigKeys(ctx context.Context, workspaceRoot string) {
 	unknown, err := config.UnknownKeys(pathspec.New(workspaceRoot))
 	telemetry.Set(ctx, "config.unknown_keys", unknown)
@@ -27,14 +28,16 @@ func reportUnknownConfigKeys(ctx context.Context, workspaceRoot string) {
 }
 
 // unknownConfigKeyWarnings is the line each unknown key adds to the command's
-// output, or the one line saying the keys could not be checked.
+// output, after the line saying which layers' keys could not be checked. The
+// message is true whether the key is a misspelling, a removed setting, or one a
+// newer lit reads.
 func unknownConfigKeyWarnings(unknown []config.UnknownKey, err error) string {
 	var b strings.Builder
 	if err != nil {
 		fmt.Fprintf(&b, "warning: config keys were not checked: %v\n", err)
 	}
 	for _, key := range unknown {
-		fmt.Fprintf(&b, "warning: %s sets %q, which is not a lit setting, so it has no effect\n", key.File, key.Key)
+		fmt.Fprintf(&b, "warning: %s sets %q, which this version of lit does not read, so it has no effect\n", key.File, key.Key)
 	}
 	return b.String()
 }

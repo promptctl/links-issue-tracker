@@ -9,9 +9,9 @@ import (
 )
 
 // A key a config layer sets that is no setting is named, with its file, once
-// per command on stderr and once on the command's event, by app-mode and
-// workspace-mode commands alike, even though both commands here read the
-// config more than once. The command still runs.
+// per command on stderr and once on the command's event, by bare lit and by
+// app-mode and workspace-mode commands alike, even though the commands here
+// read the config more than once. The command still runs.
 func TestUnknownConfigKeysWarnOncePerCommand(t *testing.T) {
 	isolateEvents(t)
 	repo := newInitTestRepo(t)
@@ -19,24 +19,25 @@ func TestUnknownConfigKeysWarnOncePerCommand(t *testing.T) {
 		"[init]\ninstall_hooks = false\n",
 		"[snapshot]\nretention_budgt = 2\n")
 	wantLines := []string{
-		"warning: " + globalFile + ` sets "init.install_hooks", which is not a lit setting, so it has no effect`,
-		"warning: " + projectFile + ` sets "snapshot.retention_budgt", which is not a lit setting, so it has no effect`,
+		"warning: " + globalFile + ` sets "init.install_hooks", which this version of lit does not read, so it has no effect`,
+		"warning: " + projectFile + ` sets "snapshot.retention_budgt", which this version of lit does not read, so it has no effect`,
 	}
 	wantFact := []any{
 		map[string]any{"key": "init.install_hooks", "file": globalFile},
 		map[string]any{"key": "snapshot.retention_budgt", "file": projectFile},
 	}
 
-	for _, command := range []string{"backlog", "quickstart"} {
+	for _, args := range [][]string{{}, {"backlog"}, {"quickstart"}} {
+		command := strings.Join(append([]string{"lit"}, args...), " ")
 		t.Run(command, func(t *testing.T) {
 			var out string
 			var err error
-			stderr := captureStderr(t, func() { out, err = runCLIInDirAllowError(t, repo, command) })
+			stderr := captureStderr(t, func() { out, err = runCLIInDirAllowError(t, repo, args...) })
 			if err != nil {
-				t.Fatalf("lit %s error = %v, want it to run\noutput:\n%s", command, err, out)
+				t.Fatalf("%s error = %v, want it to run\noutput:\n%s", command, err, out)
 			}
 			if strings.Contains(out, "warning:") {
-				t.Errorf("lit %s stdout carries a warning:\n%s", command, out)
+				t.Errorf("%s stdout carries a warning:\n%s", command, out)
 			}
 			if got := warningLines(stderr); !reflect.DeepEqual(got, wantLines) {
 				t.Errorf("stderr warnings = %q, want %q", got, wantLines)
@@ -65,6 +66,30 @@ func TestKnownConfigKeysWarnNothing(t *testing.T) {
 	}
 	if got, present := lastEvent(t).Facts["config.unknown_keys"]; !present || !reflect.DeepEqual(got, []any{}) {
 		t.Errorf("config.unknown_keys = %#v (present %v), want []", got, present)
+	}
+}
+
+// A layer that does not parse is named in a warning and on the event, and
+// the keys of the layer that does parse are still reported.
+func TestUnparseableConfigLayerWarnsAndHidesNoOtherKey(t *testing.T) {
+	isolateEvents(t)
+	repo := newInitTestRepo(t)
+	globalFile, projectFile := writeConfigLayers(t, repo, "[init]\ninstall_hooks = false\n", "[sync\n")
+
+	stderr := captureStderr(t, func() { _, _ = runCLIInDirAllowError(t, repo, "backlog") })
+	got := warningLines(stderr)
+	if len(got) != 2 ||
+		!strings.HasPrefix(got[0], "warning: config keys were not checked: parse config "+projectFile+":") ||
+		got[1] != "warning: "+globalFile+` sets "init.install_hooks", which this version of lit does not read, so it has no effect` {
+		t.Errorf("stderr warnings = %q, want the project file's parse failure, then the global file's unknown key", got)
+	}
+	ev := lastEvent(t)
+	wantFact := []any{map[string]any{"key": "init.install_hooks", "file": globalFile}}
+	if got := ev.Facts["config.unknown_keys"]; !reflect.DeepEqual(got, wantFact) {
+		t.Errorf("config.unknown_keys = %#v, want %#v", got, wantFact)
+	}
+	if got, _ := ev.Facts["config.unknown_keys_error"].(string); !strings.Contains(got, projectFile) {
+		t.Errorf("config.unknown_keys_error = %#v, want the parse failure naming %s", ev.Facts["config.unknown_keys_error"], projectFile)
 	}
 }
 

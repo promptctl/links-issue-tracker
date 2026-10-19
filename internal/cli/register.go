@@ -572,11 +572,10 @@ func (r *commandRegistrar) wsCmdPipeline(dispatch func(args []string) (wsLeaf, w
 		if err != nil {
 			return err
 		}
-		ws, err := acquire()
+		ws, err := acquire(r.ctx)
 		if err != nil {
 			return err
 		}
-		reportUnknownConfigKeys(r.ctx, ws.RootDir)
 		return l.work(r.ctx, r.stdout, ws, positional)
 	}
 }
@@ -588,12 +587,12 @@ func (r *commandRegistrar) wsCmdPipeline(dispatch func(args []string) (wsLeaf, w
 // leaf's flags are parsed. [LAW:dataflow-not-control-flow] the pipeline always
 // acquires; only the value it acquires with varies, so the ordering this
 // pipeline owns stays one ordering rather than forking for one command.
-type wsAcquire = func() (workspace.Info, error)
+type wsAcquire = func(ctx context.Context) (workspace.Info, error)
 
 // acquireFromWD is what every command but `lit init` acquires with: the
 // workspace for the working directory, with no prefix of its own to offer.
-func acquireFromWD() (workspace.Info, error) {
-	return resolveWorkspaceFromWD(workspace.PrefixRequest{})
+func acquireFromWD(ctx context.Context) (workspace.Info, error) {
+	return resolveWorkspaceFromWD(ctx, workspace.PrefixRequest{})
 }
 
 // withWDAcquire lifts a dispatch that only chooses a leaf into the pipeline's
