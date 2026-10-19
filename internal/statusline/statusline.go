@@ -27,8 +27,9 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/atomicfile"
 )
 
-// SchemaVersion is the version of the file's shape. It changes when a field is
-// removed or its meaning changes, never when one is added.
+// SchemaVersion is the version of the file's shape, and it stays 1: lit only
+// ever adds fields, never renaming, removing, or changing the meaning of one,
+// so every plugin reads every lit's file (docs/statusline.md, schema_version).
 const SchemaVersion = 1
 
 // relPath is where the file sits under a checkout's root.

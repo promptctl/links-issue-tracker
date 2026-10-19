@@ -220,6 +220,61 @@ func TestFileEncodesTheDocumentedShape(t *testing.T) {
 	}
 }
 
+// lit only ever adds fields to the file, so a plugin written for any lit reads
+// a file from any other. This list is the version-1 contract, frozen: it is
+// never edited, and a field added later joins the shape above, not this.
+// [LAW:one-source-of-truth] exception: the contract is a second copy of the
+// shape on purpose, so a rename the shape test would absorb still fails here.
+var schemaV1Fields = []string{
+	"schema_version",
+	"working_on",
+	"working_on.ticket",
+	"working_on.ticket.id",
+	"working_on.ticket.title",
+	"working_on.rollup_progress",
+	"working_on.rollup_progress.rollup_completed_count",
+	"working_on.rollup_progress.rollup_total_count",
+	"working_on.phase",
+	"working_on.recorded_at",
+	"next",
+	"next.ticket",
+	"next.ticket.id",
+	"next.ticket.title",
+	"next.recorded_at",
+}
+
+func TestEveryVersion1FieldIsStillWritten(t *testing.T) {
+	loc := testLocation(t)
+	write(t, loc, Started{alpha, progress}, PhaseRead{alpha.ID, "impl"}, Picked{&bravo})
+	raw, err := os.ReadFile(loc.File)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	written := map[string]bool{}
+	var walk func(prefix string, obj map[string]any)
+	walk = func(prefix string, obj map[string]any) {
+		for k, v := range obj {
+			written[prefix+k] = true
+			if child, ok := v.(map[string]any); ok {
+				walk(prefix+k+".", child)
+			}
+		}
+	}
+	walk("", doc)
+	for _, field := range schemaV1Fields {
+		if !written[field] {
+			t.Errorf("%s is missing from the file; lit never removes or renames a field of schema_version 1 (docs/statusline.md, schema_version)\n%s", field, raw)
+		}
+	}
+	if v := doc["schema_version"]; v != float64(1) {
+		t.Errorf("schema_version = %v, want 1: it never changes", v)
+	}
+}
+
 func TestACommandWithNoFactsWritesNothing(t *testing.T) {
 	loc := testLocation(t)
 	out, err := Write(loc, nil, at)

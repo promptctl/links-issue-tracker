@@ -179,11 +179,12 @@ matters to you.
 
 ## `schema_version`
 
-`schema_version` changes when a field is removed or a field's meaning changes. It
-does not change when a field is added. A script should check that
-`schema_version` is the version it was written for and ignore fields it does not
-know. A field added later can be missing even at the same `schema_version`,
-because an older lit that rewrites the file drops the fields it does not know.
+`schema_version` is `1` and stays `1`. lit never renames or removes a field and
+never changes what a field means; a new meaning is a new field. So a script
+written against any lit reads the file any other lit writes: it ignores fields it
+does not know, and treats a field it knows but cannot find as not recorded. A
+field added later can be missing from a file a newer lit wrote, because an older
+lit that rewrites the file drops the fields it does not know.
 
 When lit finds a file it cannot parse, or one with a different
 `schema_version`, it replaces the whole file with what the current command
