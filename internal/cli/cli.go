@@ -1820,7 +1820,8 @@ var (
 // the phase rule — and owes the move it made: the line saying where the
 // ticket's phase now stands, and on the command's event the phase left, the
 // phase entered, and whether anything changed. The statusline file hears of
-// the move from the store's change observer, as it hears of every change. A
+// the move from the store's change observer, as it hears of every change but a
+// start. A
 // refused move fails Apply, so its event carries the refusal instead. The
 // phase left is the one transitionLeaf read before Apply on the same write
 // Store the move is planned on, whose engine holds Dolt's LOCK for the whole

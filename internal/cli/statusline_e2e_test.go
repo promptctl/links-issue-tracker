@@ -435,7 +435,7 @@ func TestAFailedStatuslineWriteIsRecordedOnTheEvent(t *testing.T) {
 	rec := telemetry.Begin(telemetry.Event{Event: "lit start"})
 	ctx := telemetry.With(context.Background(), rec)
 	ws := workspace.Info{RootDir: root, Location: workspace.Location{GitCommonDir: filepath.Join(root, "git")}}
-	recordStatusline(ctx, ws, statusline.Facts{statusline.Started{Ticket: statusline.Ticket{ID: "t-1", Title: "One"}, Progress: statusline.RollupProgress{CompletedCount: 0, TotalCount: 1}}})
+	recordStatusline(ctx, ws, statusline.Facts{statusline.NewStarted(statusline.Ticket{ID: "t-1", Title: "One"}, statusline.RollupProgress{CompletedCount: 0, TotalCount: 1})})
 	ev := rec.Finish(telemetry.End{At: time.Now(), Outcome: telemetry.OutcomeOK})
 	facts := writtenFacts(t, ev)
 	if text, ok := facts["statusline.error"].(string); !ok || !strings.Contains(text, "statusline") {

@@ -448,10 +448,6 @@ func TestAnUnreadableFileIsReplacedAndReported(t *testing.T) {
 		"not JSON":         "{working_on",
 		"another schema":   `{"schema_version": 2, "working_on": {"ticket": {"id": "t-old", "title": "Old"}}}`,
 		"no schema at all": `{"working_on": {"ticket": {"id": "t-old", "title": "Old"}}}`,
-		// lit 0.19 and 0.20 wrote null for a lane the recording command did
-		// not count, and a lit before them wrote no key.
-		"a null rollup_progress": `{"schema_version": 1, "working_on": {"ticket": {"id": "t-old", "title": "Old"}, "rollup_progress": null, "phase": null, "recorded_at": "2026-10-15T09:30:00Z"}, "next": null}`,
-		"no rollup_progress":     `{"schema_version": 1, "working_on": {"ticket": {"id": "t-old", "title": "Old"}, "phase": null, "recorded_at": "2026-10-15T09:30:00Z"}, "next": null}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			loc := testLocation(t)
@@ -471,6 +467,40 @@ func TestAnUnreadableFileIsReplacedAndReported(t *testing.T) {
 				t.Fatalf("write over %s changed %q, want %q", name, out.Changed, want)
 			}
 			want := File{SchemaVersion: SchemaVersion, Next: &Next{Ticket: &bravo, RecordedAt: at}}
+			if got := readFile(t, loc); !reflect.DeepEqual(got, want) {
+				t.Fatalf("file = %+v\nwant %+v", got, want)
+			}
+		})
+	}
+}
+
+// A working_on an older lit wrote with no count is the one record dropped: the
+// file's next is still read and kept, and the write says what it dropped.
+func TestAnUncountedWorkingOnIsDroppedAndNextKept(t *testing.T) {
+	const next = `"next": {"ticket": {"id": "t-next", "title": "Next"}, "recorded_at": "2026-10-15T09:30:00Z"}`
+	for name, workingOn := range map[string]string{
+		// lit 0.19 to 0.21 wrote null for a lane the recording command did not
+		// count, and a lit before them wrote no key.
+		"a null rollup_progress": `{"ticket": {"id": "t-old", "title": "Old"}, "rollup_progress": null, "phase": null, "recorded_at": "2026-10-15T09:30:00Z"}`,
+		"no rollup_progress":     `{"ticket": {"id": "t-old", "title": "Old"}, "phase": null, "recorded_at": "2026-10-15T09:30:00Z"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			loc := testLocation(t)
+			if err := os.MkdirAll(filepath.Dir(loc.File), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			content := `{"schema_version": 1, "working_on": ` + workingOn + `, ` + next + `}`
+			if err := os.WriteFile(loc.File, []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			out := write(t, loc, Retitled{Ticket{ID: "t-other", Title: "Other"}})
+			if out.Replaced == nil || !strings.Contains(out.Replaced.Error(), "working_on has no rollup_progress") {
+				t.Fatalf("write over %s: Replaced = %v; want the dropped working_on named", name, out.Replaced)
+			}
+			if want := []string{"working_on"}; !reflect.DeepEqual(out.Changed, want) {
+				t.Fatalf("write over %s changed %q, want %q", name, out.Changed, want)
+			}
+			want := File{SchemaVersion: SchemaVersion, Next: &Next{Ticket: &Ticket{ID: "t-next", Title: "Next"}, RecordedAt: time.Date(2026, 10, 15, 9, 30, 0, 0, time.UTC)}}
 			if got := readFile(t, loc); !reflect.DeepEqual(got, want) {
 				t.Fatalf("file = %+v\nwant %+v", got, want)
 			}

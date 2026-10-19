@@ -26,7 +26,7 @@ func recordStatusline(ctx context.Context, ws workspace.Info, facts statusline.F
 		return
 	}
 	if out.Replaced != nil {
-		fmt.Fprintf(os.Stderr, "warning: statusline file was unreadable and has been rewritten: %v\n", out.Replaced)
+		fmt.Fprintf(os.Stderr, "warning: statusline file held what this lit cannot read, rewritten: %v\n", out.Replaced)
 	}
 }
 
@@ -92,7 +92,7 @@ func statuslineTicketRef(issue model.Issue) *statusline.Ticket {
 // [LAW:one-source-of-truth]
 func started(evidence claims.Evidence, worked model.Issue) statusline.Started {
 	progress := evidence.LaneProgressWith(worked)
-	return statusline.Started{Ticket: app.StatuslineTicket(worked), Progress: statusline.RollupProgress{CompletedCount: progress.Done, TotalCount: progress.Total}}
+	return statusline.NewStarted(app.StatuslineTicket(worked), statusline.RollupProgress{CompletedCount: progress.Done, TotalCount: progress.Total})
 }
 
 // phaseRead is the phase the worked-on ticket's history puts it in, as the

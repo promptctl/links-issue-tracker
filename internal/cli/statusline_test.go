@@ -36,7 +36,7 @@ func TestNextOutcomesBecomeStatuslineFacts(t *testing.T) {
 	row := annotation.AnnotatedIssue{Issue: inFlight}
 	resumed := ResumedOwnWork{Row: row}
 	ticket := statusline.Ticket{ID: "t-1", Title: "One"}
-	started := statusline.Started{Ticket: ticket, Progress: statusline.RollupProgress{CompletedCount: 1, TotalCount: 3}}
+	started := statusline.NewStarted(ticket, statusline.RollupProgress{CompletedCount: 1, TotalCount: 3})
 	phased := statusline.PhaseRead{ID: "t-1", Phase: "review"}
 	cases := []struct {
 		name    string

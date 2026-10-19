@@ -72,7 +72,7 @@ var (
 var cases = []renderCase{
 	{
 		name: "phase",
-		write: litWrites(statusline.Started{Ticket: one, Progress: lane},
+		write: litWrites(statusline.NewStarted(one, lane),
 			statusline.PhaseRead{ID: one.ID, Phase: "review"}, statusline.Picked{Ticket: &two}),
 		cells: []string{
 			"🎫 [t-1](cc-candybar://dispatch/e=copy%2Ft-1) 1/4",
@@ -84,19 +84,19 @@ var cases = []renderCase{
 		// No phase read: it is null. next names the ticket being worked, so it
 		// says nothing ticket does not, and hides.
 		name:  "null-phase",
-		write: litWrites(statusline.Started{Ticket: one, Progress: lane}, statusline.Picked{Ticket: &one}),
+		write: litWrites(statusline.NewStarted(one, lane), statusline.Picked{Ticket: &one}),
 		cells: []string{"🎫 [t-1](cc-candybar://dispatch/e=copy%2Ft-1) 1/4"},
 	},
 	{
 		name:  "no-phase-key",
-		write: olderLitWrites(withoutKey("phase"), statusline.Started{Ticket: one, Progress: lane}),
+		write: olderLitWrites(withoutKey("phase"), statusline.NewStarted(one, lane)),
 		cells: []string{"🎫 [t-1](cc-candybar://dispatch/e=copy%2Ft-1) 1/4"},
 	},
 	{
-		// lit 0.19 and 0.20 wrote null for a lane the recording command did
+		// lit 0.19 to 0.21 wrote null for a lane the recording command did
 		// not count.
 		name:  "null-rollup",
-		write: olderLitWrites(nullKey("rollup_progress"), statusline.Started{Ticket: one, Progress: lane}),
+		write: olderLitWrites(nullKey("rollup_progress"), statusline.NewStarted(one, lane)),
 		cells: []string{"🎫 [t-1](cc-candybar://dispatch/e=copy%2Ft-1)"},
 	},
 	{
@@ -106,7 +106,7 @@ var cases = []renderCase{
 	},
 	{
 		name:  "nothing-ready",
-		write: litWrites(statusline.Started{Ticket: one, Progress: lane}, statusline.Picked{Ticket: nil}),
+		write: litWrites(statusline.NewStarted(one, lane), statusline.Picked{Ticket: nil}),
 		cells: []string{"🎫 [t-1](cc-candybar://dispatch/e=copy%2Ft-1) 1/4", "next nothing ready"},
 	},
 	{

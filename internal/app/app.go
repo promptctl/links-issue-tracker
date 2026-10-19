@@ -129,8 +129,9 @@ func (e StoreOpenError) Unwrap() error { return e.Err }
 // differ. [LAW:single-enforcer]
 //
 // New also has the store tell Statusline of every change it applies, so the
-// statusline file hears of each change whichever command made it, a lone
-// update or one document of an import. [LAW:single-enforcer]
+// statusline file hears what each change says whichever command made it, a
+// lone update or one document of an import; changeStatuslineFacts says why a
+// start says nothing here. [LAW:single-enforcer]
 func New(ws workspace.Info, st storage.Store, stream workspace.StreamID) *App {
 	st.AttributeTo(stream.Value())
 	a := &App{Workspace: ws, Store: st, Stream: stream}
