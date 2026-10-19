@@ -5,6 +5,23 @@ All notable changes to `links-issue-tracker` (the `lit` CLI) are documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.23.0] - 2026-10-19
+
+### Added
+
+- `lit quickstart review` prints the brief a plan reviewer follows: load the laws, pin the plan's digest from `lit show`, judge the whole mechanism the plan touches, and record one `lit verdict`. The plan-phase workflow tells the author to give a reviewer with a fresh context the instruction "Law-review the plan of <id>: run `lit quickstart review` and follow it." (links-plan-review-o3mh.bjm)
+- A YAML bulk file orders issues in one `lit import`: each document that states `rank: top` joins the file's ordering, applied as one `lit rank set` in file order. (links-bulk-edit-h2rg.1)
+
+### Changed
+
+- The latest review of a plan's current text decides its standing, whoever recorded it. `done.plan_standing` is `approved`, `no_plan`, `unreviewed` or `failed`. (links-plan-review-o3mh.bjm)
+- The lit Claude Code plugin ships the `/next` skill alone and sets no version, so installed users follow its commits. (links-plan-review-o3mh.bjm, links-templates-3cna)
+
+### Fixed
+
+- A push the remote refuses because a peer pushed first is recorded as `diverged` and pages nobody; the next push lands it. (links-storage-3k6u.1pv)
+- A closed store holds none of its file:// remote's files, so Windows can remove the remote's directory. (links-windows-qr8l.7na)
+
 ## [0.22.1] - 2026-10-19
 
 ### Fixed
