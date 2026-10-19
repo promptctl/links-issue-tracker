@@ -117,17 +117,23 @@ func TestContentionErrorNamesTheLiveHolder(t *testing.T) {
 // grace reports itself, names its holder, and KEEPS reporting — one line that
 // scrolled away fifteen minutes ago is the same silence.
 //
+// The figure each notice reports is the whole wait, not the stand-still
+// clock that arrivals restart: a contender behind a queue of short holders
+// that said "after 2s" thirty seconds in would hide exactly the wait the
+// notice exists to show.
+//
 // The contender's clock steps one second per poll, so the schedule is read
 // off the instants the wait is handed rather than off how fast the machine
-// runs. The holder stands still, so the wait refuses at 10s; the notice is
-// due at the 3s grace and then every 2s interval, which is 3s, 5s, 7s and 9s,
-// with the next one (11s) past the refusal.
+// runs. Shared holders hand the lock along at the first three polls, so the
+// last arrives at 3s and the 10s wait refuses at 13s; the notice is due at
+// the 3s grace and then every 2s interval through the refusal, which is 3s,
+// 5s, 7s, 9s, 11s and 13s.
 func TestWaitAnnouncesItselfRepeatedly(t *testing.T) {
 	notices := captureLockNotices(t, 3*time.Second, 2*time.Second)
 	ctx := context.Background()
 	lockPath := filepath.Join(t.TempDir(), "test.lock")
 
-	holder, err := acquireStoreLock(ctx, storageDirOf(lockPath), lockPath, true, 0)
+	holder, err := acquireStoreLock(ctx, storageDirOf(lockPath), lockPath, false, 0)
 	if err != nil {
 		t.Fatalf("holder acquireStoreLock() error = %v", err)
 	}
@@ -137,7 +143,20 @@ func TestWaitAnnouncesItselfRepeatedly(t *testing.T) {
 		}
 	}()
 
-	clock := newStepClock(t, time.Second, noTick)
+	clock := newStepClock(t, time.Second, func(read int) {
+		if read == 0 || read > 3 {
+			return
+		}
+		next, err := acquireStoreLock(ctx, storageDirOf(lockPath), lockPath, false, 0)
+		if err != nil {
+			t.Fatalf("holder %d: %v", read+1, err)
+		}
+		previous := holder
+		holder = next
+		if err := previous(); err != nil {
+			t.Fatalf("release holder %d: %v", read, err)
+		}
+	})
 	if _, err := acquireStoreLockOn(ctx, clock.now, storageDirOf(lockPath), lockPath, true, 10*time.Second); !errors.Is(err, ErrWorkspaceBusy) {
 		t.Fatalf("contended acquireStoreLockOn() error = %v, want ErrWorkspaceBusy", err)
 	}
@@ -151,7 +170,7 @@ func TestWaitAnnouncesItselfRepeatedly(t *testing.T) {
 		}
 		after = append(after, waited)
 	}
-	if want := []string{"3s", "5s", "7s", "9s"}; !slices.Equal(after, want) {
+	if want := []string{"3s", "5s", "7s", "9s", "11s", "13s"}; !slices.Equal(after, want) {
 		t.Errorf("notices reported waits of %v, want %v:\n%s", after, want, printed)
 	}
 	if !strings.Contains(printed, "pid "+strconv.Itoa(os.Getpid())) {
