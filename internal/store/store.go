@@ -63,6 +63,9 @@ type Store struct {
 	// reconcileBases is the base every reconcile plan since the store opened
 	// decided on (captureReconcilePlan); ReconcileBases is its one reader.
 	reconcileBases []storage.ReconcileBase
+	// strandedWritesCommits is every commit freshnessOverEveryWrite landed
+	// since the store opened; StrandedWritesCommits is its one reader.
+	strandedWritesCommits []storage.StrandedWritesCommit
 	// bound is the sync branch's history bound, which every push that lands
 	// keeps (boundHistory), and bounds is what each such push since the
 	// store opened did to keep it; HistoryBounds is its one reader.

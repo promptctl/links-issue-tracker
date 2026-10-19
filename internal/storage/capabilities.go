@@ -159,6 +159,10 @@ type Syncer interface {
 	// decided on, and where it came from, oldest first.
 	ReconcileBases() []ReconcileBase
 
+	// StrandedWritesCommits is every commit the engine landed since it opened
+	// over writes a failed commit left in the working set, oldest first.
+	StrandedWritesCommits() []StrandedWritesCommit
+
 	// GetSyncState and RecordSyncState carry the staleness marker across
 	// commands: what the store's content was at the last sync, so a later
 	// command can tell whether anything has happened since.

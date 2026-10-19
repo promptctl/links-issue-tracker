@@ -121,14 +121,33 @@ func (f SyncFreshness) State() SyncFreshnessState {
 		return SyncUpToDate
 	case f.Behind == 0:
 		return SyncAhead
-	case f.Ahead == 0 && f.Base.Source != ReconcileBaseForkPoint:
-		// Behind is what a fast-forward settles. Heads that share no commit
-		// cannot fast-forward, so a fork-point base with nothing to replay is
-		// still a divergence for the reconcile to land.
+	case f.Ahead == 0:
+		// Behind is local holding nothing the remote lacks, whatever the base:
+		// under a fork-point base the remote already holds every ticket and
+		// event at the base, so a branch with nothing past it lands on the
+		// remote head, as one sharing history does.
 		return SyncBehind
 	default:
 		return SyncDiverged
 	}
+}
+
+// RemoteCarriesHead and CommitsDiverged answer State's question about commits
+// rather than rows. Along shared history the two agree. Under a fork-point base
+// with nothing past it they part: the remote holds the local head's rows, so
+// State is behind, but not its commit, so each side holds a commit the other
+// lacks.
+//
+// RemoteCarriesHead reports whether the remote head is the local head or a
+// descendant of it.
+func (f SyncFreshness) RemoteCarriesHead() bool {
+	return f.Synced && f.Ahead == 0 && f.Base.Source == ReconcileBaseMergeBase
+}
+
+// CommitsDiverged reports whether the remote and the local branch each hold a
+// commit the other lacks, so a push cannot land until the remote's is received.
+func (f SyncFreshness) CommitsDiverged() bool {
+	return f.Behind > 0 && !f.RemoteCarriesHead()
 }
 
 // SyncReceiveState classifies what a single background receive did, derived
@@ -139,8 +158,8 @@ type SyncReceiveState string
 const (
 	// SyncReceiveUpToDate: local already at the remote head; fetch found nothing.
 	SyncReceiveUpToDate SyncReceiveState = "up_to_date"
-	// SyncReceiveFastForwarded: local was strictly behind and advanced to the
-	// remote head with no merge commit — the only state that mutates local data.
+	// SyncReceiveFastForwarded: local was strictly behind and landed on the
+	// remote head with no merge commit — the only state that moves the branch.
 	SyncReceiveFastForwarded SyncReceiveState = "fast_forwarded"
 	// SyncReceiveAhead: local has unpushed commits and the remote has nothing
 	// new; there is nothing to receive (the push side delivers local commits).
@@ -159,11 +178,28 @@ const (
 // was decided from, plus — when diverged — the Unix time the divergence began,
 // so the inline reconcile that follows a SyncReceiveDiverged can date the fork
 // it is about to heal without a second freshness read. Zero unless diverged.
+// Base is the freshness's base, so a landing across a fork point reads apart
+// from a fast-forward along shared history.
 type SyncReceiveResult struct {
 	State              SyncReceiveState
 	Ahead              int64
 	Behind             int64
 	OldestDivergedUnix int64
+	Base               ReconcileBaseSource
+}
+
+// StrandedWritesCommit is one commit a sync landed over writes a failed
+// DOLT_COMMIT left in the working set, before it read the freshness that
+// decides whether the branch moves. Tables counts the tables those writes
+// touched.
+type StrandedWritesCommit struct {
+	Tables int
+}
+
+// EventValue is the commit as one value of the event's stranded_writes.commits
+// list.
+func (c StrandedWritesCommit) EventValue() map[string]any {
+	return map[string]any{"stranded_writes.tables": c.Tables}
 }
 
 // SyncPullState classifies what a single `lit sync pull` did, derived from the

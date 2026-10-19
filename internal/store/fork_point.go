@@ -257,3 +257,9 @@ func (s *Store) ForkPointRecords() []storage.ForkPointRecord {
 func (s *Store) ReconcileBases() []storage.ReconcileBase {
 	return slices.Clone(s.reconcileBases)
 }
+
+// StrandedWritesCommits is every commit freshnessOverEveryWrite landed since
+// the store opened, oldest first.
+func (s *Store) StrandedWritesCommits() []storage.StrandedWritesCommit {
+	return slices.Clone(s.strandedWritesCommits)
+}
