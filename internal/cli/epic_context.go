@@ -161,9 +161,10 @@ func classifyChildStatus(child model.Issue, readiness IssueReadiness) childStatu
 // value exactly as classifyWorkable takes it, so the annotation that a required
 // field is missing reaches this slice too.
 //
-// Each child is annotated once and its relations fetched once; both feed its
-// status classification and the cross-epic edge collection, so there is one
-// resolved source per child rather than a separate fetch per concern.
+// Each child is annotated once and its relations fetched once, and the epic's
+// relations are fetched once; they feed the status classification and the
+// cross-epic edge collection, so there is one resolved source per issue rather
+// than a separate fetch per concern.
 func buildEpicContext(ctx context.Context, st storage.Store, requiredFields []string, epicID, focusedChildID string) (EpicContext, error) {
 	epicRels, err := st.GetRelationsByIDs(ctx, []string{epicID})
 	if err != nil {
@@ -184,10 +185,12 @@ func buildEpicContext(ctx context.Context, st storage.Store, requiredFields []st
 	// come back in the epic-rank order epic.Children arrived in, and the batch
 	// fetch inside makes the loop below pure map lookups rather than a fetch per
 	// child. [LAW:dataflow-not-control-flow]
-	// The focus scope is dropped rather than applied: the epic plan is the epic's
-	// own child list, and narrowing it to the focus path would print a partial
-	// plan that still reads as the whole one. [LAW:no-silent-failure]
-	annotated, err := annotateIssues(ctx, st, requiredFields, epic.Children)
+	// The epic's relations go in as a seed: the readiness pass climbs from each
+	// child to the epics above it, and the first of those is the epic just read.
+	// The plan is never narrowed to a focus path — it is the epic's own child
+	// list, and a partial plan would still read as the whole one — so it asks
+	// for no focus walk at all.
+	annotated, err := annotateIssues(ctx, st, requiredFields, epic.Children, epicRels)
 	if err != nil {
 		return EpicContext{}, err
 	}

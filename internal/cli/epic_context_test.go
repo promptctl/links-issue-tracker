@@ -655,3 +655,25 @@ func TestRenderEpicContextNamesTheCloseReason(t *testing.T) {
 		}
 	}
 }
+
+// The epic plan reads the epic's relations once. The readiness pass climbs from
+// every child to the epics above it, and the first of those is the epic the
+// plan has just read, so the climb is handed that read rather than repeating
+// it.
+func TestBuildEpicContextFetchesTheEpicOnce(t *testing.T) {
+	f := newEpicFixture(t, "Fetch epic", "the epic is read once")
+	first := f.addChild("First one")
+	f.addChild("Second one")
+
+	counting := &countingGraphSource{Store: f.ap.Store}
+	ec, err := buildEpicContext(f.ctx, counting, nil, f.epicID, first)
+	if err != nil {
+		t.Fatalf("buildEpicContext error = %v", err)
+	}
+	if len(ec.Children) != 2 {
+		t.Fatalf("plan has %d children, want 2", len(ec.Children))
+	}
+	if reads := counting.fetchCounts()[f.epicID]; reads != 1 {
+		t.Fatalf("epic %s fetched %d times in %v; want exactly once", f.epicID, reads, counting.fetched)
+	}
+}
