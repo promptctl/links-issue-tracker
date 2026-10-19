@@ -903,9 +903,12 @@ Justfile or any workflow in `.github/workflows/`.
 ### 11.2 `.github/actions/install-dolt/action.yml`
 
 Composite action; installs the pinned Dolt CLI used as a **test-only** oracle
-(`.github/actions/install-dolt/action.yml`): downloads
-`https://github.com/dolthub/dolt/releases/download/v1.81.10/install.sh`, runs it with `sudo bash`,
-then `dolt version`.
+(`.github/actions/install-dolt/action.yml`): with `DOLT_VERSION: v1.81.10`, picks the
+asset from `$RUNNER_OS` — `dolt-linux-amd64.tar.gz` on Linux, `dolt-windows-amd64.zip`
+on Windows, and `::error::install-dolt has no Dolt asset for runner OS` with exit 1
+on any other — downloads it from the Dolt release into `$RUNNER_TEMP`, unpacks it
+there (`tar -xzf` or `unzip -q`), appends its `bin/` to `$GITHUB_PATH`, then runs
+`dolt version` from that directory.
 
 ### 11.3 `.github/workflows/nightly.yml` — "Nightly full suite"
 
@@ -917,13 +920,20 @@ then `dolt version`.
   Steps: checkout → setup-go → install-dolt → install-claude → `go build ./cmd/lit` →
   `go test -timeout 30m ./...` (no `-short`, so `testing.Short()` is false) →
   `go run ./tools/lawtokens-sync -check` (`if: ${{ !cancelled() }}`).
-- Job `report`, `needs: full-suite`,
-  `if: ${{ always() && needs.full-suite.result != 'success' && github.ref == 'refs/heads/master' }}`
+- Job `windows`, `windows-latest`, `timeout-minutes: 60`, default shell `msys2 {0}`.
+  Steps: `git config --global core.autocrlf false` (under `shell: bash`, before checkout,
+  so the tree is the LF bytes the release builds from) → checkout → setup-go →
+  `msys2/setup-msys2@v2` (`msystem: UCRT64`, `path-type: inherit`, installing
+  `mingw-w64-ucrt-x86_64-gcc` and `mingw-w64-ucrt-x86_64-icu` for cgo) → install-dolt →
+  install-claude → `go build ./cmd/lit` →
+  `go test -short -timeout 30m ./cmd/... ./internal/...`, both with `CGO_ENABLED: '1'`.
+- Job `report`, `needs: [full-suite, windows]`,
+  `if: ${{ always() && (needs.full-suite.result != 'success' || needs.windows.result != 'success') && github.ref == 'refs/heads/master' }}`
   (a job timeout is reported as cancelled, so the condition reads the result, not
   `failure()`; a run on any other ref files nothing),
   `permissions: contents: write`, `timeout-minutes: 15`. Steps: checkout
   (`persist-credentials: false`) → `./.github/actions/report-to-lit` with label
-  `nightly-failure` and title `Nightly full test lane is failing` (§11.8).
+  `nightly-failure` and title `Nightly test lanes are failing` (§11.8).
 
 ### 11.4 `.github/workflows/license-graph-audit.yml` — "License graph audit"
 
@@ -1140,7 +1150,7 @@ for `claude plugin validate --strict` (`.github/actions/install-claude/action.ym
 setup-node@v4 (`node-version: '22'`, the package's `engines` floor) →
 `npm install -g @anthropic-ai/claude-code@2.1.292` → appends `DISABLE_AUTOUPDATER=1`
 to `$GITHUB_ENV` → `claude --version`. Used by every job that runs `go test`
-(ci.yml `build-and-test` and `race`, nightly.yml `full-suite`), as install-dolt is.
+(ci.yml `build-and-test` and `race`, nightly.yml `full-suite` and `windows`), as install-dolt is.
 
 ---
 
