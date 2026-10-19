@@ -857,9 +857,10 @@ Justfile or any workflow in `.github/workflows/`.
   `github.com/promptctl/links-issue-tracker/internal/model/lifecycle` with the message
   "lifecycle internals are owned by internal/model; use model hydration and capability APIs"
   (`.golangci.yml`).
-- `.gitattributes`: `*.sql text eol=lf` — forces LF normalization so byte-comparison gates
-  (a sha256-pinned baseline migration and a schema-snapshot drift canary) cannot be tripped by
-  CRLF (`.gitattributes`).
+- `.gitattributes`: `* text=auto eol=lf` — every text file checks out with LF on every
+  platform, whatever `core.autocrlf` says, so byte-comparison gates (a sha256-pinned baseline
+  migration and a schema-snapshot drift canary) cannot be tripped by CRLF; binary files are
+  left alone (`.gitattributes`).
 - `.github/dependabot.yml`: `gomod` ecosystem at `/`, `weekly` schedule, with a `go-safe` group
   covering `minor` and `patch` update types; majors match no group and arrive as individual PRs
   (`.github/dependabot.yml`).
@@ -922,8 +923,7 @@ there (`tar -xzf` or `unzip -q`), appends its `bin/` to `$GITHUB_PATH`, then run
   `go test -timeout 30m ./...` (no `-short`, so `testing.Short()` is false) →
   `go run ./tools/lawtokens-sync -check` (`if: ${{ !cancelled() }}`).
 - Job `windows`, `windows-latest`, `timeout-minutes: 60`, default shell `msys2 {0}`.
-  Steps: `git config --global core.autocrlf false` (under `shell: bash`, before checkout,
-  so the tree is the LF bytes the release builds from) → checkout → setup-go →
+  Steps: checkout → setup-go →
   `msys2/setup-msys2@v2` (`msystem: UCRT64`, `path-type: inherit`, installing
   `mingw-w64-ucrt-x86_64-gcc` and `mingw-w64-ucrt-x86_64-icu` for cgo) → install-dolt →
   install-claude → `go build ./cmd/lit` →
