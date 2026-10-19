@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -90,6 +91,38 @@ func TestOpenConnectorDoesNotRetryWhenDisabled(t *testing.T) {
 	_, err = c.Connect(context.Background())
 	require.Error(t, err)
 	require.True(t, errors.Is(err, nbs.ErrDatabaseLocked))
+	require.Equal(t, int32(1), atomic.LoadInt32(&calls))
+}
+
+// TestOpenConnectorRetriesOnlyLockContention pins Patch 7: with a BackOff
+// that would retry, an open failing for any reason but a held lock is tried
+// once and its error returned. Upstream also retried os.ErrDeadlineExceeded,
+// which is the error a refresh would bring back, so it is the one used here.
+func TestOpenConnectorRetriesOnlyLockContention(t *testing.T) {
+	dir := t.TempDir()
+
+	var calls int32
+	prev := openSqlEngineForConnector
+	t.Cleanup(func() { openSqlEngineForConnector = prev })
+	openSqlEngineForConnector = func(ctx context.Context, cfg config.ReadWriteConfig, fs filesys.Filesys, dir, version string, seCfg *engine.SqlEngineConfig) (*engine.SqlEngine, error) {
+		atomic.AddInt32(&calls, 1)
+		return nil, fmt.Errorf("read manifest: %w", os.ErrDeadlineExceeded)
+	}
+
+	prevNewCtx := newLocalContextForConnector
+	t.Cleanup(func() { newLocalContextForConnector = prevNewCtx })
+	newLocalContextForConnector = func(se *engine.SqlEngine, ctx context.Context) (*gms.Context, error) {
+		return &gms.Context{}, nil
+	}
+
+	dsn := fmt.Sprintf("file://%s?commitname=Test&commitemail=test@example.com", dir)
+	cfg, err := ParseDSN(dsn)
+	require.NoError(t, err)
+	cfg.BackOff = backoff.WithMaxRetries(backoff.NewConstantBackOff(0), 10)
+	c, err := NewConnector(cfg)
+	require.NoError(t, err)
+	_, err = c.Connect(context.Background())
+	require.ErrorIs(t, err, os.ErrDeadlineExceeded)
 	require.Equal(t, int32(1), atomic.LoadInt32(&calls))
 }
 

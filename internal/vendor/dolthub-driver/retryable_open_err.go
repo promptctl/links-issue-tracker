@@ -16,22 +16,17 @@ package embedded
 
 import (
 	"errors"
-	"os"
 
 	"github.com/dolthub/dolt/go/store/nbs"
 )
 
+// isRetryableOpenErr reports whether an open failed because another process
+// holds the database's exclusive lock — the one failure a retry can outwait.
+//
+// [LAW:one-source-of-truth] Modified by lit (README.lit-patch.md, Patch 7):
+// lock contention is the only retry signal. The BackOff an embedder supplies
+// is consulted only after a retryable failure, so it may treat every call as
+// "a contender is waiting"; any other error is permanent and surfaces at once.
 func isRetryableOpenErr(err error) bool {
-	if err == nil {
-		return false
-	}
-	// The intended primary retry signal for embedded usage: DB couldn't acquire its exclusive lock.
-	if errors.Is(err, nbs.ErrDatabaseLocked) {
-		return true
-	}
-	// Some filesystem / lower-level paths can surface timeouts as os.ErrDeadlineExceeded.
-	if errors.Is(err, os.ErrDeadlineExceeded) {
-		return true
-	}
-	return false
+	return errors.Is(err, nbs.ErrDatabaseLocked)
 }

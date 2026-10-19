@@ -10,7 +10,7 @@ instead of on a remote host, so the patch travels with the PR that needed it.
 
 ## Why this exists
 
-This copy carries **six** independent patches. When refreshing (below), all
+This copy carries **seven** independent patches. When refreshing (below), all
 must be re-applied.
 
 ### Patch 1 — telemetry removal (`connector.go`, `driver.go`)
@@ -179,6 +179,19 @@ the next statement then commits. The engine open still runs
 on the `Connect` context, so a cancelled caller can still abandon an open in
 progress.
 
+### Patch 7 — retry only lock contention (`retryable_open_err.go`)
+
+Upstream's `isRetryableOpenErr` retried an engine open on
+`nbs.ErrDatabaseLocked` and also on `os.ErrDeadlineExceeded`. Dolt reports a
+held `LOCK` only as `nbs.ErrDatabaseLocked` (`newJournalManifest` maps
+`filelock.ErrTimeout` to it), so the second case retried an error that has no
+holder behind it. lit's BackOff is `holdWait`, which judges a wait by holder
+arrivals and prints the operator's "still waiting for ... held by ..." notice
+on the strength of being called, so a non-contention retry would narrate a
+wait on a holder that does not exist. The patch makes lock contention the only
+retry signal; every other open error is permanent and surfaces on the first
+attempt.
+
 ## Refreshing this copy
 
 When bumping the `dolthub/driver` version pinned in the top-level `go.mod`:
@@ -188,7 +201,7 @@ When bumping the `dolthub/driver` version pinned in the top-level `go.mod`:
    `replace` directive temporarily removed).
 2. Diff `$(go env GOMODCACHE)/github.com/dolthub/driver@<version>` against
    this directory to see what upstream changed.
-3. Re-apply **all six** patches against the new version, copying the rest
+3. Re-apply **all seven** patches against the new version, copying the rest
    of upstream's changes through untouched:
    - Patch 1: delete `emitUsageEvent` and its supporting machinery in
      `connector.go`, and the `go emitUsageEvent(...)` call in `driver.go`.
@@ -233,6 +246,9 @@ When bumping the `dolthub/driver` version pinned in the top-level `go.mod`:
      `Error 1105: context canceled` if the session holds the Connect context)
      and `internal/cli` `TestMirrorPushHoldsNothingOnTheLiveStore` (the run
      is unbounded if a statement ignores its own deadline).
+   - Patch 7: reduce `isRetryableOpenErr` in `retryable_open_err.go` to
+     `errors.Is(err, nbs.ErrDatabaseLocked)`. Confirm with
+     `openconnector_retry_test.go`'s `TestOpenConnectorRetriesOnlyLockContention`.
 4. Update the `replace` directive's version comment in the top-level
    `go.mod` to match.
 
