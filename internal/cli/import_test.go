@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -467,5 +468,48 @@ reason: "  padded reason  "
 	}
 	if !found {
 		t.Fatalf("no event recorded the trimmed reason: %#v", detail.Events)
+	}
+}
+
+// One `lit import` reorders a backlog: ten epics a file names with
+// `rank: top` are listed in file order, the import reports the order
+// it wrote, and the invocation's event counts what the file created, updated
+// and ranked.
+func TestRunImportYAMLRankTopOrdersTheBacklogInOneCall(t *testing.T) {
+	isolateEvents(t)
+	dir := newInitTestRepo(t)
+	epics := make([]string, 10)
+	for i := range epics {
+		epics[i] = newEpicInDir(t, dir, fmt.Sprintf("epic %d", i))
+	}
+	var file strings.Builder
+	var want []string
+	for _, n := range []int{4, 9, 0, 6, 2, 8, 1, 7, 3, 5} {
+		fmt.Fprintf(&file, "---\nid: %s\nrank: top\n", epics[n])
+		want = append(want, epics[n])
+	}
+	path := writeImportFile(t, "order.yaml", file.String())
+
+	out := runCLIInDir(t, dir, "import", "--path", path)
+	if line := "ranked 10 issues at the top of the backlog in order: " + strings.Join(want, ", "); !strings.Contains(out, line) {
+		t.Errorf("import output lacks %q:\n%s", line, out)
+	}
+	facts := writtenFacts(t, lastEvent(t))
+	for fact, value := range map[string]string{"import.created": "0", "import.updated": "0", "import.ranked": "10"} {
+		if got := fmt.Sprint(facts[fact]); got != value {
+			t.Errorf("event fact %s = %v, want %s", fact, got, value)
+		}
+	}
+
+	// Childless epics are no one's work, so lit backlog leaves them out; lit
+	// ls lists every issue in the same rank order.
+	listing := runCLIInDir(t, dir, "ls")
+	at := -1
+	for _, id := range want {
+		next := strings.Index(listing, id)
+		if next <= at {
+			t.Fatalf("lit ls does not list %v in file order (%s at %d, after %d):\n%s", want, id, next, at, listing)
+		}
+		at = next
 	}
 }

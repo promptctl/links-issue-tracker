@@ -18,7 +18,8 @@ import (
 // reported rather than inferred. Updates are applied last, so a failing create
 // or edge leaves none applied, but a failing update does not revert the ones
 // before it, which is why the error text is the caller's only complete account
-// of what happened. [LAW:no-silent-failure]
+// of what happened. [LAW:no-silent-failure] The file's ordering is written
+// last, as one RankSet, so it is applied whole or not at all.
 func (e *Engine) BulkApply(ctx context.Context, prefix, actor string, specs []storage.BulkIssueSpec) (storage.BulkApplyResult, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -56,6 +57,11 @@ func (e *Engine) BulkApply(ctx context.Context, prefix, actor string, specs []st
 			return storage.BulkApplyResult{}, e.compensate(batch, actor, fmt.Errorf("bulk: update %q: %w", update.ID, err))
 		}
 		result.Updated = append(result.Updated, applied.Issue.ID)
+	}
+	if ranked := file.RankedIDs(batch.realID); len(ranked) > 0 {
+		if result.Ranked, err = e.rankSet(ranked); err != nil {
+			return storage.BulkApplyResult{}, e.compensate(batch, actor, fmt.Errorf("bulk: rank: %w", err))
+		}
 	}
 	return result, nil
 }

@@ -2,6 +2,7 @@ package storage
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -185,5 +186,52 @@ func TestABadValueIsRefusedAlikeInEveryDocumentShape(t *testing.T) {
 		if !errors.As(err, &validation) {
 			t.Errorf("%s: refusal %q is not a model.ValidationError", c.name, err)
 		}
+	}
+}
+
+// A bulk file's ordering is every document stating `rank: top`, creates and
+// updates alike, in the order the file lists them — not the write order its
+// references force on the creates. An update document may state rank alone,
+// and then writes no field change; one stating neither a field nor rank, or a
+// rank other than top, is refused.
+func TestABulkFileOrderingIsItsRankTopDocumentsInFileOrder(t *testing.T) {
+	str := func(s string) *string { return &s }
+	top := str("top")
+	file, err := ParseBulkFile([]BulkIssueSpec{
+		{LocalID: "leaf", Title: str("leaf"), IssueType: str("task"), Topic: str("core"), Parent: "root", Rank: top},
+		{ID: "lit-a-1", Rank: top},
+		{ID: "lit-b-2", Title: str("retitled"), Rank: top},
+		{LocalID: "root", Title: str("root"), IssueType: str("epic"), Topic: str("core"), Rank: top},
+		{ID: "lit-c-3", Title: str("unranked")},
+	}, nil)
+	if err != nil {
+		t.Fatalf("ParseBulkFile error = %v", err)
+	}
+	created := func(index int) string { return "created-" + string(rune('0'+index)) }
+	if got, want := file.RankedIDs(created), []string{"created-0", "lit-a-1", "lit-b-2", "created-3"}; !slices.Equal(got, want) {
+		t.Errorf("RankedIDs = %v, want %v", got, want)
+	}
+	var updated []string
+	for _, u := range file.Updates {
+		updated = append(updated, u.ID)
+	}
+	if want := []string{"lit-b-2", "lit-c-3"}; !slices.Equal(updated, want) {
+		t.Errorf("updates = %v, want %v: a document stating only rank writes no field change", updated, want)
+	}
+
+	for _, refused := range []struct {
+		name string
+		doc  BulkIssueSpec
+		want string
+	}{
+		{"a rank other than top", BulkIssueSpec{ID: "lit-a-1", Rank: str("bottom")}, `bulk: doc 0: rank "bottom" is not a placement; the one placement is top`},
+		{"an update stating neither a field nor rank", BulkIssueSpec{ID: "lit-a-1"}, `bulk: doc 0 (id "lit-a-1") has no fields to update and no rank`},
+	} {
+		if _, err := ParseBulkFile([]BulkIssueSpec{refused.doc}, nil); err == nil || !strings.HasPrefix(err.Error(), refused.want) {
+			t.Errorf("%s: err = %v, want it to start %q", refused.name, err, refused.want)
+		}
+	}
+	if file, err := ParseBulkFile([]BulkIssueSpec{{ID: "lit-a-1", Title: str("t")}}, nil); err != nil || len(file.RankedIDs(created)) != 0 {
+		t.Errorf("a file stating no rank: ordering %v, err %v; want an empty ordering", file.RankedIDs(created), err)
 	}
 }

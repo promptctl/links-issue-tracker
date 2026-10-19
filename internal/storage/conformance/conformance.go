@@ -218,6 +218,8 @@ var cases = []engineCase{
 	{"issue_identities_cover_every_row", issueIdentitiesCoverEveryRow},
 	{"export_carries_whole_store", exportCarriesWholeStore},
 	{"bulk_apply_creates_and_updates", bulkApplyCreatesAndUpdates},
+	{"bulk_file_orders_its_rank_top_documents", bulkFileOrdersItsRankTopDocuments},
+	{"bulk_file_ranks_a_create_at_the_top_of_its_epic", bulkFileRanksACreateAtTheTopOfItsEpic},
 	{"bulk_apply_compensates_a_failed_batch", bulkApplyCompensatesFailure},
 	{"import_tree_maps_local_ids", importTreeMapsLocalIDs},
 	{"attribution_stamps_events", attributionStampsEvents},
@@ -3530,6 +3532,82 @@ func bulkApplyCreatesAndUpdates(t *testing.T, ctx context.Context, st storage.St
 	if read.Title != newTitle {
 		t.Errorf("Title = %q, want %q", read.Title, newTitle)
 	}
+}
+
+// bulkFileOrdersItsRankTopDocuments is the contract behind reordering a
+// backlog with one `lit import`: the documents stating `rank: top` lead their
+// frame in file order, every issue the file does not name keeps its place
+// below them, and importing the file again once its order has landed writes
+// nothing — no key and no updated_at changes, though the clock has moved.
+func bulkFileOrdersItsRankTopDocuments(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	start := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	clk.Pin(start)
+	// The top level holds only epics, so they are the frame a top-level order
+	// is read in. Two of the twelve go unnamed and must follow the ten.
+	epics := make([]model.Issue, 12)
+	for i := range epics {
+		epics[i] = mustCreate(t, ctx, st, storage.CreateIssueInput{Title: fmt.Sprintf("epic %d", i), Topic: "core", IssueType: model.TypeEpic})
+	}
+	top := "top"
+	var specs []storage.BulkIssueSpec
+	var want []string
+	for _, n := range []int{7, 2, 9, 0, 5, 3, 8, 1, 6, 4} {
+		specs = append(specs, storage.BulkIssueSpec{ID: epics[n].ID, Rank: &top})
+		want = append(want, epics[n].ID)
+	}
+	want = append(want, epics[10].ID, epics[11].ID)
+
+	clk.Pin(start.Add(time.Hour))
+	result, err := st.BulkApply(ctx, prefix, "ada", specs)
+	if err != nil {
+		t.Fatalf("BulkApply error = %v", err)
+	}
+	assertOrder(t, ctx, st, "after one import of the ordering", want...)
+	if len(result.Updated) != 0 {
+		t.Errorf("BulkApply Updated = %v, want none: the documents state only rank", result.Updated)
+	}
+	if got := len(result.Ranked.Resolutions); got != 10 {
+		t.Errorf("BulkApply ranked %d issues, want 10", got)
+	}
+	landed := mustList(t, ctx, st, storage.ListIssuesFilter{})
+
+	clk.Pin(start.Add(2 * time.Hour))
+	if _, err := st.BulkApply(ctx, prefix, "ada", specs); err != nil {
+		t.Fatalf("BulkApply again error = %v", err)
+	}
+	again := mustList(t, ctx, st, storage.ListIssuesFilter{})
+	assertIssueIDs(t, "after importing the same ordering again", again, want)
+	for i, issue := range again {
+		if issue.Rank != landed[i].Rank || !issue.UpdatedAt.Equal(landed[i].UpdatedAt) {
+			t.Errorf("importing a landed ordering again rewrote %s: rank %q -> %q, updated_at %v -> %v", issue.ID, landed[i].Rank, issue.Rank, landed[i].UpdatedAt, issue.UpdatedAt)
+		}
+	}
+}
+
+// bulkFileRanksACreateAtTheTopOfItsEpic: a create document's `rank: top` is
+// the same ordering an update's is, so a new child stated with it leads its
+// epic's children — and a file whose ordering is one document is that issue
+// sent to the top of its frame.
+func bulkFileRanksACreateAtTheTopOfItsEpic(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+	first := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "first", Topic: "core", ParentID: epic.ID})
+	second := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "second", Topic: "core", ParentID: epic.ID})
+	title, topic, task, top := "new", "core", "task", "top"
+	result, err := st.BulkApply(ctx, prefix, "ada", []storage.BulkIssueSpec{
+		{Title: &title, Topic: &topic, IssueType: &task, Parent: epic.ID, Rank: &top},
+	})
+	if err != nil {
+		t.Fatalf("BulkApply error = %v", err)
+	}
+	if len(result.Created) != 1 {
+		t.Fatalf("BulkApply Created = %+v, want one", result.Created)
+	}
+	created := result.Created[0].ID
+	if result.Ranked.Frame != storage.Frame(epic.ID) {
+		t.Errorf("the ordering landed in frame %q, want the epic %s", result.Ranked.Frame, epic.ID)
+	}
+	frame := map[string]struct{}{created: {}, first.ID: {}, second.ID: {}}
+	assertIssueIDs(t, "the epic's children", childrenOf(mustList(t, ctx, st, storage.ListIssuesFilter{}), frame), []string{created, first.ID, second.ID})
 }
 
 // bulkApplyCompensatesFailure pins what a batch owes when it fails partway.

@@ -64,6 +64,9 @@ YAML bulk file (creates and updates)
     title: Build it, renamed
     labels: [reviewed]
     reason: retitled after review
+    ---
+    id: lit-exporter-9kd1
+    rank: top
 
   id decides what a document does, and nothing else does. Absent, the
   document creates. Present, it updates exactly that issue; an id
@@ -78,8 +81,8 @@ YAML bulk file (creates and updates)
   create: there is no prior value for it to annotate.
 
   An update document must set at least one of title, description, prompt,
-  plan, type, priority, assignee, labels, lane. A document carrying only id, or
-  only id and reason, has nothing to apply and is rejected; reason is
+  plan, type, priority, assignee, labels, lane, rank. A document carrying only
+  id, or only id and reason, has nothing to apply and is rejected; reason is
   free text recorded on the change event, not itself a change. --by
   names the actor those change events record; only a YAML file with an
   update document takes it, and any other import given --by is refused.
@@ -88,6 +91,18 @@ YAML bulk file (creates and updates)
   to something else: topic (immutable — no command changes it after
   create), local_id (create-only), parent (reparent with lit parent set),
   blocked_by (wire dependencies with lit dep add).
+
+  rank: top, on a create or an update document, orders the file's issues.
+  Every document that says it is stacked at the top of its issue's frame
+  in file order: the first leads, the next ranks directly below it, and
+  so on, exactly as lit rank set <ids in file order> would, and one such
+  document alone is lit rank <id> --top. top is the only value. The order
+  is written after every create and update, in one step, so it lands
+  whole or not at all, and a file whose order has already landed changes
+  no rank when it is imported again. An issue ordered against issues
+  outside its epic is ordered by its epic instead, as lit rank set orders
+  it, so a file that ranks two issues of one epic together with an issue
+  outside that epic is refused.
 
 Values both formats enforce
 
@@ -122,7 +137,8 @@ Results
   Created issues land at the bottom of the ranked order. Output is the
   number created and one "name -> real id" line each, where the name is
   the local_id (or the new real ID when the document gave none), followed
-  for a YAML file by the number updated and their IDs.
+  for a YAML file by the number updated and their IDs, and, when the file
+  ranks, the order written, as lit rank set reports it.
 
   On any failure, issues created earlier in the same run are rolled back
   on a best-effort basis by deleting them; updates already applied are

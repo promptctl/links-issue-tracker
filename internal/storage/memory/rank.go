@@ -262,7 +262,12 @@ func (e *Engine) frameOf(id string) storage.Frame {
 func (e *Engine) RankSet(ctx context.Context, ids []string) (storage.RankSetResult, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	return e.rankSet(ids)
+}
 
+// rankSet is RankSet under a lock its caller holds: the verb itself, and a
+// bulk file's ordering, which BulkApply writes inside its own hold.
+func (e *Engine) rankSet(ids []string) (storage.RankSetResult, error) {
 	if err := storage.ValidateRankSetIDs(ids); err != nil {
 		return storage.RankSetResult{}, err
 	}
