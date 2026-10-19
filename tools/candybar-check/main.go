@@ -17,7 +17,7 @@
 // with a summary:
 //
 //	candybar-check: case=phase verdict=ok cells=["phase review"]
-//	candybar-check: cc-candybar=1.130.5 cases=6 failed=0
+//	candybar-check: cc-candybar=1.135.0 cases=6 failed=0
 //
 // Exit codes: 0, every case rendered the cells it expects; 1, a case did not,
 // or cc-candybar could not be installed.
@@ -42,7 +42,7 @@ import (
 // candybarVersion is the cc-candybar every case renders on. Moving it is
 // checking the plugin against another release: the cells it expects may move
 // with it.
-const candybarVersion = "1.130.5"
+const candybarVersion = "1.135.0"
 
 // layout makes lit's three segments the bar's whole tree, in the order cells
 // are expected. A tree at root replaces cc-candybar's own rows, so the bar

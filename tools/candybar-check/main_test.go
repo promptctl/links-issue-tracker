@@ -126,7 +126,7 @@ func TestCheckFailsTheRunOnAnyCaseThatDoesNotRender(t *testing.T) {
 	want := `candybar-check: case=renders verdict=ok cells=["phase plan"]
 candybar-check: case=other-cells verdict=mismatch cells=[]
 candybar-check: case=no-render verdict=error cells=[]
-candybar-check: cc-candybar=1.130.5 cases=3 failed=2
+candybar-check: cc-candybar=` + candybarVersion + ` cases=3 failed=2
 `
 	if stdout.String() != want {
 		t.Errorf("stdout:\n%s\nwant:\n%s", stdout.String(), want)
