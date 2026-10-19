@@ -44,7 +44,7 @@ func initLeaf() (wsLeaf, wsAcquire) {
 	// `lit prefix set` uses, so `--prefix ""` is refused here instead of being
 	// demoted to "no flag" and then failing further in with a message telling
 	// them to pass the flag they just passed. [LAW:no-silent-failure]
-	acquire := func() (workspace.Info, error) {
+	acquire := func(ctx context.Context) (workspace.Info, error) {
 		// Arity is settled before anything is created -- upstream, in
 		// parseLeaf, which every leaf's pipeline runs before it acquires.
 		// The ordering matters more here than anywhere: acquiring resolves the
@@ -59,13 +59,13 @@ func initLeaf() (wsLeaf, wsAcquire) {
 		// one every leaf gets. The usage sentence it prints is `initUsage`, set
 		// on the leaf below. [LAW:single-enforcer]
 		if !fs.Changed("prefix") {
-			return resolveWorkspaceFromWD(workspace.PrefixRequest{})
+			return resolveWorkspaceFromWD(ctx, workspace.PrefixRequest{})
 		}
 		requested, err := workspace.RequestPrefix(*prefix)
 		if err != nil {
 			return workspace.Info{}, model.ValidationError{Message: fmt.Sprintf("invalid --prefix %q: %v", *prefix, err)}
 		}
-		return resolveWorkspaceFromWD(requested)
+		return resolveWorkspaceFromWD(ctx, requested)
 	}
 
 	return wsLeaf{fs: fs, usage: initUsage, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {

@@ -76,7 +76,7 @@ Format is whatever viper infers from the extension; the default filename is TOML
 
 ### Key schema
 
-Defaults set in `Load` (`config.go`):
+The `settings` table, which supplies `Load`'s defaults (`config.go`):
 
 | Key | Type | Default | Validation |
 |---|---|---|---|
@@ -88,7 +88,7 @@ Defaults set in `Load` (`config.go`):
 | `sync.owner_notify_cmd` | string | `""` | empty = no owner-notification channel |
 | `claims.freshness_window` | duration string | `"6h"` | read as a string and parsed by `time.ParseDuration`; a bare number or non-positive duration fails `Load` (`config.go`) |
 
-A key the table does not list is ignored: `Load` decodes with viper's `Unmarshal`, which drops keys `Config` does not declare without an error (`config.go`).
+A key the table does not list, other than the legacy top-level `required_fields`, has no effect, and `Load` does not refuse it: the project layer is committed and read by clones on older lits. `UnknownKeys` lists each such key, lowercased as viper reads it, with the file that sets it, in layer order and alphabetically within a file; a layer that does not parse contributes its error and no keys, and the other layer is still listed (`config.go`). Every command acquires its workspace through `resolveWorkspaceFromWD` (`cli.go`), which calls it once, before the command's work, and prints `warning: config keys were not checked: <err>` on stderr when a layer does not parse, then `warning: <file> sets "<key>", which this version of lit does not read, so it has no effect` for each key; the command runs either way, and its event records `config.unknown_keys` and `config.unknown_keys_error` (`internal/cli/config_keys.go`). `TestSettingsAreTheKeysLoadReads` holds the table to the keys `Config` decodes plus `claims.freshness_window` (`config_test.go`).
 
 Cadence semantics (`config.go`): `on-push` mirrors only when the managed pre-push git hook runs; `on-change` (default) mirrors after every mutating command. `shouldSyncAfterMutation` is true only for write access + `on-change` (`sync_cadence.go`). `maybeAutoSyncAfterCommand` returns immediately under `LIT_DISABLE_AUTO_SYNC`; on an unreadable config it prints `lit: automatic sync skipped, config unreadable: %v` and returns; otherwise it prints any pending receive block, runs mirror coverage per cadence, schedules the receive worker per `sync.receive`, and runs inline compaction for write commands (`sync_cadence.go`). Timing constants: receive debounce 5 minutes, remote-absent recheck 10 seconds (`sync_cadence.go`).
 

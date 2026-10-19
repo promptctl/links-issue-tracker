@@ -66,22 +66,18 @@ var accessContracts = map[AccessMode]accessContract{
 	AccessWrite: {mode: engine.ReadWrite, resolveStream: workspace.EnsureStream},
 }
 
-// Open is the single app construction path, parameterized by mode.
-// [LAW:single-enforcer] Workspace resolution, store opening, and identity
+// Open is the single app construction path for a resolved workspace,
+// parameterized by mode. [LAW:single-enforcer] Store opening and identity
 // resolution happen here only; there is no second factory to drift from this
 // one, and the mode is validated exactly once — the lookup below is both the
 // validity check and the dispatch, so no second switch can classify an unknown
 // mode differently.
-func Open(ctx context.Context, cwd string, mode AccessMode) (*App, error) {
+func Open(ctx context.Context, ws workspace.Info, mode AccessMode) (*App, error) {
 	contract, known := accessContracts[mode]
 	if !known {
 		// [LAW:no-silent-failure] An unknown mode (including the zero value)
 		// fails closed instead of being granted write access by a default arm.
 		return nil, fmt.Errorf("invalid access mode %q", string(mode))
-	}
-	ws, err := workspace.Resolve(cwd)
-	if err != nil {
-		return nil, err
 	}
 	st, err := engine.Open(ctx, contract.mode, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {

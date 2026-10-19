@@ -41,8 +41,10 @@ func TestMain(m *testing.M) {
 		panic("set " + DisableAutoSyncEnvVar + ": " + err.Error())
 	}
 	stateHome := isolateXDGHome("XDG_STATE_HOME", "lit-cli-state-")
+	configHome := isolateXDGHome("XDG_CONFIG_HOME", "lit-cli-config-")
 	code := m.Run()
 	_ = os.RemoveAll(stateHome)
+	_ = os.RemoveAll(configHome)
 	os.Exit(code)
 }
 
@@ -50,7 +52,8 @@ func TestMain(m *testing.M) {
 // for the rest of the process, and the detached workers a test spawns inherit
 // it. Every Run appends its invocation event under XDG_STATE_HOME: what a test
 // run writes belongs in a directory the suite owns, never in the developer's
-// own events file.
+// own events file. Every workspace command reads the global config layer under
+// XDG_CONFIG_HOME, so the developer's own settings stay out of the suite too.
 func isolateXDGHome(key, prefix string) string {
 	dir, err := os.MkdirTemp("", prefix)
 	if err != nil {
