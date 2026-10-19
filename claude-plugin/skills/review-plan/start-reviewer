@@ -5,7 +5,7 @@
 # detached tmux session, types its instruction into the input, waits until the
 # reviewer sits idle at its prompt, prints its last reply and the lines lit show
 # holds by it, and closes the session. Exit 0: the reviewer recorded a verdict
-# on the current plan. Exit 1: it did not. Exit 2: it could not be started.
+# on the current plan. Exit 1: it did not. Exit 2: it never got its instruction.
 #
 # Never Claude Code's print mode (-p): the owner banned it. Anything that asks Claude Code
 # something types into an interactive session's input, as a person would.
@@ -37,7 +37,11 @@ cleanup() {
 trap cleanup EXIT
 
 screen() { tmux capture-pane -p -J -S - -t "=$TMUX_SESSION:"; }
-fail() { echo "start-reviewer: $1; the reviewer's screen:" >&2; screen >&2; exit 1; }
+fail() { # <exit code> <what failed>
+  echo "start-reviewer: $2; the reviewer's screen:" >&2
+  screen >&2
+  exit "$1"
+}
 quote() { printf "'%s'" "${1//\'/\'\\\'\'}"; } # sh single-quoting, for any path
 
 # Stop fires each time the reviewer's turn tries to end and carries its reply as
@@ -82,12 +86,14 @@ tmux new-session -d -s "$TMUX_SESSION" -c "$REPO" -x 200 -y 50 -- \
   "Bash(git log:*)" "Bash(git show:*)"
 echo "start-reviewer: reviewer $ACTOR in tmux session $TMUX_SESSION" >&2
 
-# Wait for the state each step needs, never for a guessed delay.
+# Wait for the state each step needs, never for a guessed delay. It is only
+# waited on before Enter, so its failures are a reviewer that never started.
 until_screen() { # <pattern> <seconds> <what failed>
-  local deadline=$((SECONDS + $2))
-  while ! screen | grep -qF -- "$1"; do
-    alive || { echo "start-reviewer: claude exited: $3" >&2; exit 1; }
-    ((SECONDS < deadline)) || fail "$3"
+  local deadline=$((SECONDS + $2)) shown
+  while :; do
+    shown=$(screen) || { echo "start-reviewer: claude exited: $3" >&2; exit 2; }
+    grep -qF -- "$1" <<<"$shown" && return
+    ((SECONDS < deadline)) || fail 2 "$3"
     sleep 1
   done
 }
@@ -105,10 +111,10 @@ tmux send-keys -t "=$TMUX_SESSION:" Enter
 deadline=$((SECONDS + 45 * 60))
 until [[ -e $IDLE ]]; do
   alive || { echo "start-reviewer: claude exited before its turn ended" >&2; exit 1; }
-  ((SECONDS < deadline)) || fail "the review did not end within 45 minutes"
+  ((SECONDS < deadline)) || fail 1 "the review did not end within 45 minutes"
   sleep 5
 done
-[[ -e $LAST_REPLY ]] || fail "the reviewer went idle with no turn ended"
+[[ -e $LAST_REPLY ]] || fail 1 "the reviewer went idle with no turn ended"
 
 jq -r .last_assistant_message "$LAST_REPLY"
 echo "--- lit show $ID, the lines by the reviewer $ACTOR:"

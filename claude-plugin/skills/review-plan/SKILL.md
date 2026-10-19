@@ -54,7 +54,8 @@ session's input, as a person would.
 The background command's output is the reviewer's reply, then the lines
 `lit show` holds by the reviewer: its verdict and, on a fail, its reasons
 comment. Relay the reply. It exits 0 only when the reviewer recorded a verdict on
-the current plan. On any other exit, relay what it printed instead; the plan stays
+the current plan; exit 2 means the reviewer never got its instruction. On any
+exit but 0, relay what it printed instead; the plan stays
 unreviewed, and it is not yours to judge.
 
 A fail sends the plan back to its author. A revised plan is a new text with a new
