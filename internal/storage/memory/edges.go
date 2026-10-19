@@ -36,7 +36,7 @@ func (e *Engine) AddComment(ctx context.Context, in storage.AddCommentInput) (mo
 		IssueID:   in.IssueID,
 		Body:      body,
 		CreatedAt: e.clock.Now(),
-		CreatedBy: authorOr(in.CreatedBy),
+		CreatedBy: storage.Actor(in.CreatedBy),
 	}
 	e.comments = append(e.comments, comment)
 	return comment, issue, nil
@@ -90,7 +90,7 @@ func (e *Engine) AddLabel(ctx context.Context, in storage.AddLabelInput) ([]stri
 	}
 	rows := e.labels[in.IssueID]
 	if !slices.ContainsFunc(rows, func(l model.Label) bool { return l.Name == name }) {
-		rows = append(rows, model.Label{IssueID: in.IssueID, Name: name, CreatedAt: e.clock.Now(), CreatedBy: authorOr(in.CreatedBy)})
+		rows = append(rows, model.Label{IssueID: in.IssueID, Name: name, CreatedAt: e.clock.Now(), CreatedBy: storage.Actor(in.CreatedBy)})
 		slices.SortFunc(rows, func(a, b model.Label) int { return strings.Compare(a.Name, b.Name) })
 		e.labels[in.IssueID] = rows
 	}
@@ -147,7 +147,7 @@ func (e *Engine) ListLabels(ctx context.Context, issueID string) ([]string, erro
 // the one label write, shared by the create path and the replace path, so the
 // stored rows can only ever be the canonical form. [LAW:single-enforcer]
 func (e *Engine) setLabels(issueID string, names []string, now time.Time, createdBy string) {
-	author := authorOr(createdBy)
+	author := storage.Actor(createdBy)
 	rows := make([]model.Label, 0, len(names))
 	for _, name := range names {
 		rows = append(rows, model.Label{IssueID: issueID, Name: name, CreatedAt: now, CreatedBy: author})
@@ -195,7 +195,7 @@ func (e *Engine) addRelation(in storage.AddRelationInput) (model.Relation, error
 	if err := e.rejectCycle(in.Type, srcID, dstID); err != nil {
 		return model.Relation{}, err
 	}
-	rel := model.Relation{SrcID: srcID, DstID: dstID, Type: in.Type, CreatedAt: e.clock.Now(), CreatedBy: authorOr(in.CreatedBy)}
+	rel := model.Relation{SrcID: srcID, DstID: dstID, Type: in.Type, CreatedAt: e.clock.Now(), CreatedBy: storage.Actor(in.CreatedBy)}
 	// A single-valued type's src holds at most one such edge, so writing one
 	// replaces any it already had. The cardinality is read off the type, not
 	// off which method the caller reached for. [LAW:dataflow-not-control-flow]
@@ -602,15 +602,4 @@ func (e *Engine) relatedIssues(focalID string, relations []model.Relation, pos m
 	}
 	ancestry.Sort(out)
 	return out, nil
-}
-
-// authorOr names the writer of a row, falling back to the unknown author when
-// the caller named none. Attribution of a row to nobody is a real state — an
-// engine cannot invent who did something — and it is spelled once here so
-// every row spells it the same way. [LAW:one-source-of-truth]
-func authorOr(createdBy string) string {
-	if author := strings.TrimSpace(createdBy); author != "" {
-		return author
-	}
-	return "unknown"
 }

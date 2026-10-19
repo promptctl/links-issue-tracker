@@ -228,7 +228,7 @@ type BulkWriter interface {
 
 	// ImportTree creates a whole issue tree, returning the local-ID → real-ID
 	// mapping the caller needs to talk about what it just made.
-	ImportTree(ctx context.Context, prefix string, specs []ImportTreeSpec) (ImportTreeResult, error)
+	ImportTree(ctx context.Context, prefix, actor string, specs []ImportTreeSpec) (ImportTreeResult, error)
 }
 
 // Exporter serializes the store's entire contents as one value.

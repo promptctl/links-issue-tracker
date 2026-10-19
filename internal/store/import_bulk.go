@@ -37,9 +37,9 @@ func (s *Store) BulkApply(ctx context.Context, prefix, actor string, specs []sto
 	createdIDs := make([]string, 0, len(file.Creates))
 	localRealID := make(map[string]string, len(file.Creates))
 	for _, create := range file.Creates {
-		issue, err := s.CreateIssue(ctx, create.Input(resolveBulkRef(create.Parent, localRealID), prefix))
+		issue, err := s.CreateIssue(ctx, create.Input(resolveBulkRef(create.Parent, localRealID), prefix, actor))
 		if err != nil {
-			leaked := s.rollbackCreatedIssues(ctx, createdIDs)
+			leaked := s.rollbackCreatedIssues(ctx, actor, createdIDs)
 			return storage.BulkApplyResult{}, fmt.Errorf("bulk: create doc %d: %w (rollback leaked %d: %s)", create.Index, err, len(leaked), strings.Join(leaked, ","))
 		}
 		createdIDs = append(createdIDs, issue.ID)
@@ -50,8 +50,8 @@ func (s *Store) BulkApply(ctx context.Context, prefix, actor string, specs []sto
 	}
 	for i, create := range file.Creates {
 		for _, dep := range create.BlockedBy {
-			if _, err := s.AddRelation(ctx, storage.AddRelationInput{SrcID: createdIDs[i], DstID: resolveBulkRef(dep, localRealID), Type: model.RelBlockedBy, CreatedBy: "links"}); err != nil {
-				leaked := s.rollbackCreatedIssues(ctx, createdIDs)
+			if _, err := s.AddRelation(ctx, storage.AddRelationInput{SrcID: createdIDs[i], DstID: resolveBulkRef(dep, localRealID), Type: model.RelBlockedBy, CreatedBy: actor}); err != nil {
+				leaked := s.rollbackCreatedIssues(ctx, actor, createdIDs)
 				return storage.BulkApplyResult{}, fmt.Errorf("bulk: blocked_by doc %d -> %q: %w (rollback leaked %d: %s)", create.Index, dep, err, len(leaked), strings.Join(leaked, ","))
 			}
 		}
@@ -59,7 +59,7 @@ func (s *Store) BulkApply(ctx context.Context, prefix, actor string, specs []sto
 	for _, update := range file.Updates {
 		applied, err := s.Apply(ctx, update.ID, storage.Change{Actor: actor, Fields: update.Patch})
 		if err != nil {
-			leaked := s.rollbackCreatedIssues(ctx, createdIDs)
+			leaked := s.rollbackCreatedIssues(ctx, actor, createdIDs)
 			return storage.BulkApplyResult{}, fmt.Errorf("bulk: update %q: %w (rollback leaked %d: %s)", update.ID, err, len(leaked), strings.Join(leaked, ","))
 		}
 		result.Updated = append(result.Updated, applied.Issue.ID)

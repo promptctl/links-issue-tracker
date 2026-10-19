@@ -98,3 +98,18 @@ func TestDoneFinishesOnlyAPassedCurrentPlan(t *testing.T) {
 		t.Errorf("after an approved lit done, status = %q, want closed", status)
 	}
 }
+
+// A plan given when the ticket is filed is its filer's: lit new records who
+// ran it, so the filer passing their own plan approves nothing.
+func TestDoneRefusesAPlanItsFilerPassed(t *testing.T) {
+	isolateEvents(t)
+	dir, _, _ := statuslineCheckout(t)
+	epic := newEpicInDir(t, dir, "planned epic")
+	id := extractTicketID(t, runCLIInDir(t, dir, "new", "--title", "Planned at filing", "--topic", "demo", "--parent", epic, "--plan", gatePlan, "--by", "filer"))
+	runCLIInDir(t, dir, "start", id, "--by", "filer")
+	runCLIInDir(t, dir, "verdict", id, "pass", "--plan", string(model.DigestPlan(gatePlan)), "--by", "filer")
+	_, err := runCLIInDirAllowError(t, dir, "done", id)
+	if want := "has passed only its author's own review (filer)"; err == nil || commandErrorReason(err) != reasonPlanNotApproved || !strings.Contains(err.Error(), want) {
+		t.Fatalf("lit done on a plan only its filer passed = %v, want reason %s naming %q", err, reasonPlanNotApproved, want)
+	}
+}

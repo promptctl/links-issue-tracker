@@ -65,10 +65,7 @@ func PlanReviewOf(issue model.Issue, events []model.IssueEvent, in AddPlanReview
 	if !slices.ContainsFunc(versions, func(text string) bool { return model.DigestPlan(text) == digest }) {
 		return model.PlanReview{}, PlanDigestNotFoundError{IssueID: issue.ID, Digest: digest}
 	}
-	reviewer := strings.TrimSpace(in.CreatedBy)
-	if reviewer == "" {
-		reviewer = "unknown"
-	}
+	reviewer := Actor(in.CreatedBy)
 	return model.PlanReview{
 		IssueID:    issue.ID,
 		PlanDigest: digest,
