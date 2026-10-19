@@ -138,6 +138,7 @@ func driveTheBound(t *testing.T, rounds int) {
 		if show := runCLIInDir(t, side.dir, "show", r.ticket); !strings.Contains(show, "alpha-description") || !strings.Contains(show, "bravo-title") {
 			t.Fatalf("%s's ticket after the concurrent edit:\n%s\nwant alpha's description and bravo's title", side.name, show)
 		}
+		side.assertAtTheRemote(t)
 		side.assertUnderTheBound(t)
 		side.assertNothingEscalated(t)
 	}
@@ -283,13 +284,9 @@ func (c *boundCheckout) walkedHeight(t *testing.T) (height uint64) {
 	return height
 }
 
-// remoteStateBytes is the table-file bytes of the remote's current state
-// alone, read through c once c's fetch finds its sync branch head is the
-// remote's: the tables that head holds, without the commits that lead to
-// them, pulled into a scratch store with no chunk journal the way the
-// remote's GC builds the files it collects (store.buildCollectedSet). So it
-// counts in the unit remoteDataBytes reads.
-func (c *boundCheckout) remoteStateBytes(t *testing.T) (size int64) {
+// assertAtTheRemote checks c's sync branch head is the remote's, as c's
+// fetch finds it.
+func (c *boundCheckout) assertAtTheRemote(t *testing.T) {
 	t.Helper()
 	runCLIInDir(t, c.dir, "sync", "fetch")
 	c.atSyncHead(t, func(ctx context.Context, ddb *doltdb.DoltDB, head *doltdb.Commit) {
@@ -302,8 +299,20 @@ func (c *boundCheckout) remoteStateBytes(t *testing.T) (size int64) {
 			t.Fatal(err)
 		}
 		if theirs, err := remoteHead.HashOf(); err != nil || ours != theirs {
-			t.Fatalf("%s is at %s and the remote at %s (err=%v); want the remote's state", c.name, ours, theirs, err)
+			t.Fatalf("%s is at %s and the remote at %s (err=%v); want the remote's head", c.name, ours, theirs, err)
 		}
+	})
+}
+
+// remoteStateBytes is the table-file bytes of the remote's current state
+// alone, read through c once c is at the remote's head: the tables that head
+// holds, without the commits that lead to them, pulled into a scratch store
+// with no chunk journal the way the remote's GC builds the files it collects
+// (store.buildCollectedSet). So it counts in the unit remoteDataBytes reads.
+func (c *boundCheckout) remoteStateBytes(t *testing.T) (size int64) {
+	t.Helper()
+	c.assertAtTheRemote(t)
+	c.atSyncHead(t, func(ctx context.Context, ddb *doltdb.DoltDB, head *doltdb.Commit) {
 		tables, err := head.GetRootValue(ctx)
 		if err != nil {
 			t.Fatalf("read %s's tables: %v", c.name, err)
