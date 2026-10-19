@@ -2,7 +2,7 @@
 
 You are reviewing a plan you did not write, in a session of your own, so that lit
 records you as its reviewer. You judge it against the laws, record one verdict with
-`lit verdict`, and stop. The ticket id is at the end of this message.
+`lit verdict`, and stop. The ticket id is in the message that sent you here.
 
 **You change nothing but the record.** Your only writes are, on a fail, one
 `lit comment add` with your reasons, and one `lit verdict`. You don't edit code, the plan, or the ticket. If the
