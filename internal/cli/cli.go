@@ -1846,7 +1846,7 @@ func authorizePhase(ctx context.Context, _ io.Writer, _ *app.App, _ string, prio
 // adds the plan and the review it rested on; a done that found the ticket
 // already closed finished nothing, so its event says that instead.
 // [LAW:single-enforcer] [LAW:nothing-unseen]
-func authorizeDone(ctx context.Context, _ io.Writer, ap *app.App, issueID string, prior ticketState, _ model.Action) (afterApply, error) {
+func authorizeDone(ctx context.Context, _ io.Writer, ap *app.App, issueID string, prior ticketState, action model.Action) (afterApply, error) {
 	reviews, err := ap.Store.ListPlanReviews(ctx, issueID)
 	if err != nil {
 		return nil, err
