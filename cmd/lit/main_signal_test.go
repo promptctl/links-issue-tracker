@@ -45,15 +45,11 @@ func TestMain(m *testing.M) {
 		os.Exit(0)
 	}
 	// Every lit this suite runs appends its invocation event under
-	// XDG_STATE_HOME and installs lit's cc-candybar plugin under XDG_DATA_HOME
-	// when it writes the statusline file, and the child processes inherit this
-	// environment: point both at directories the suite owns, never the
-	// developer's own events file or installed plugin.
-	homes := []string{isolateXDGHome("XDG_STATE_HOME", "lit-cmd-state-"), isolateXDGHome("XDG_DATA_HOME", "lit-cmd-data-")}
+	// XDG_STATE_HOME, and the child processes inherit this environment: point
+	// it at a directory the suite owns, never the developer's own events file.
+	stateHome := isolateXDGHome("XDG_STATE_HOME", "lit-cmd-state-")
 	code := m.Run()
-	for _, dir := range homes {
-		_ = os.RemoveAll(dir)
-	}
+	_ = os.RemoveAll(stateHome)
 	os.Exit(code)
 }
 

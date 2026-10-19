@@ -192,9 +192,16 @@ it does.
 
 ## Showing it in cc-candybar
 
-lit carries a [cc-candybar](https://github.com/promptctl/cc-candybar) plugin
-that reads this file, and installs it the first time a command writes the file.
-After that, cc-candybar's add-segment library lists three segments:
+lit ships a [cc-candybar](https://github.com/promptctl/cc-candybar) plugin
+that reads this file, at `.cc-candybar/plugins/lit/plugin.json5` in this
+repository. cc-candybar 1.135.0 or later installs it:
+
+```sh
+cc-candybar plugin install promptctl/links-issue-tracker
+```
+
+Re-running it updates the plugin. After that, cc-candybar's add-segment
+library lists three segments:
 
 - `plugins.lit.ticket` shows the ticket being worked on, followed by the lane's
   `rollup_completed_count/rollup_total_count` when the file records them.
@@ -204,20 +211,10 @@ After that, cc-candybar's add-segment library lists three segments:
   from the one being worked on, and `nothing ready` when that `lit next` found
   nothing.
 
-Place one from cc-candybar's edit mode. No cc-candybar config edit is needed to
-install the plugin. Each segment hides while there is nothing to show, and shows
-a warning naming the version when the file's `schema_version` is not the one
-the plugin reads.
-
-The plugin is installed at `$XDG_DATA_HOME/cc-candybar/plugins/lit/plugin.json5`,
-which is `~/.local/share/cc-candybar/plugins/lit/plugin.json5` when
-`XDG_DATA_HOME` is unset. A write that finds the definition this lit carries
-already there leaves it alone. Otherwise, after a removal or an upgrade, it
-writes the definition again. With several lit versions on one machine, the
-plugin is the one carried by whichever lit wrote a file most recently. If lit
-cannot install the plugin, it prints
-`warning: cc-candybar plugin not installed:` on stderr and still writes the
-file.
+Place one from cc-candybar's edit mode. Each segment hides while there is
+nothing to show, and shows a warning naming the version when the file's
+`schema_version` is not the one the plugin reads, and says which of lit and
+the plugin to update.
 
 ## A minimal statusline
 

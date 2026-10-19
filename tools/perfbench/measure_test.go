@@ -145,7 +145,7 @@ func TestRunProbeRunsLitUnderTheStoresEnvironment(t *testing.T) {
 		t.Fatal(err)
 	}
 	configHome := filepath.Join(dir, "config-home")
-	store := generatedStore{size: size{name: "fake", rows: 7}, root: dir, env: hermeticEnv(os.Environ(), configHome, filepath.Join(dir, "state-home"), filepath.Join(dir, "data-home"))}
+	store := generatedStore{size: size{name: "fake", rows: 7}, root: dir, env: hermeticEnv(os.Environ(), configHome, filepath.Join(dir, "state-home"))}
 	if _, err := runProbe(litBinary{path: path}, store, probe{name: "ls", args: []string{"ls"}, okCodes: exits(0)}, devNull(t)); err != nil {
 		t.Fatalf("runProbe error = %v", err)
 	}
