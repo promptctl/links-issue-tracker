@@ -40,11 +40,23 @@ linters:
         # so it takes plain paths and values and imports only the standard
         # library. An allow-list rather than a deny-list of internal/store,
         # internal/storage and the lock code: a new package that opens the store
-        # is refused too, without anyone remembering to list it.
+        # is refused too, without anyone remembering to list it. atomicfile is
+        # the one internal package admitted, and only because its own rule
+        # below holds it to the standard library too.
         statusline-stdlib-only:
           list-mode: strict
           files:
             - "**/internal/statusline/**"
+          allow:
+            - $gostd
+            - github.com/promptctl/links-issue-tracker/internal/atomicfile$
+        # [LAW:one-way-deps] every package that replaces a file atomically
+        # shares this one writer, the stdlib-only statusline writer included,
+        # so it sits below all of them and imports only the standard library.
+        atomicfile-stdlib-only:
+          list-mode: strict
+          files:
+            - "**/internal/atomicfile/**"
           allow:
             - $gostd
         # [LAW:one-way-deps] any package may add a fact to the invocation's
