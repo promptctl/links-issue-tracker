@@ -50,7 +50,7 @@ lit tracks tickets, not GitHub PRs, so no lit command will surface one.  Two che
 gh pr list --head "$(git branch --show-current)" --state open --limit 1000
 ```
 
-A PR here is your ticket.  Skip the selection steps and take it through this repo's review process to a clean, merged close-out — the process the repo's own instructions define, in its CLAUDE.md or contributing docs.  Then pick up the working steps under "Working the ticket".
+A PR here is your ticket.  Skip the selection steps and take it to a clean, merged close-out through the review process your instructions define — and where none defines one, by working its review threads by hand.  Then pick up the working steps under "Working the ticket".
 
 **Your PRs elsewhere.**
 
@@ -66,7 +66,7 @@ For each PR the query returned, take the ticket id from its branch name and chec
 
 A branch whose name carries no ticket id at all — someone's typo fix, a hand-cut experiment — is not lit-tracked work, so there is no lane to look up and nothing here for you to adopt.  Leave it where it is.
 
-Every lane nobody holds is yours to wrap up — an expired claim is no claim, so a lane whose holder went quiet six hours ago prints no claim line and is one of these — and wrapping up means the same thing it meant above: check that branch out, treat its ticket as the one you now hold, take it through this repo's review process to a clean, merged close-out, then the working steps under "Working the ticket".  Work them one at a time, and do not pull new work until the last one is closed out.
+Every lane nobody holds is yours to wrap up — an expired claim is no claim, so a lane whose holder went quiet six hours ago prints no claim line and is one of these — and wrapping up means the same thing it meant above: check that branch out, treat its ticket as the one you now hold, close its PR out as above, then the working steps under "Working the ticket".  Work them one at a time, and do not pull new work until the last one is closed out.
 
 **If nothing is in flight,** proceed to "Pull new work" below.  Open PRs stay relevant after that — an older one may touch the files your new ticket touches — which is why the overlap check is a step in "Working the ticket".
 
