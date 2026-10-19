@@ -1149,7 +1149,7 @@ Composite action (`.github/actions/report-to-lit/action.yml`). Inputs, all requi
 ### 11.9 `.github/actions/install-claude/action.yml`
 
 Composite action; installs the pinned Claude Code CLI used as a **test-only** oracle
-for `claude plugin validate --strict` (`.github/actions/install-claude/action.yml`):
+for `claude plugin validate --json` (`.github/actions/install-claude/action.yml`):
 setup-node@v4 (`node-version: '22'`, the package's `engines` floor) →
 `npm install -g @anthropic-ai/claude-code@2.1.292` → appends `DISABLE_AUTOUPDATER=1`
 to `$GITHUB_ENV` → `claude --version`. Used by every job that runs `go test`
