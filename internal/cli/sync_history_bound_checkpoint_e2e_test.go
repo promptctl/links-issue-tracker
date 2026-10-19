@@ -88,7 +88,7 @@ func driveTheBound(t *testing.T, rounds int) {
 	remote := filepath.Join(base, "remote.git")
 	alpha := newBoundCheckout(t, "alpha", r.alpha, filepath.Join(base, "alpha-notifications"))
 	bravo := newBoundCheckout(t, "bravo", r.bravo, r.sink)
-	historyBefore := historyBytes(t, remote, alpha, bravo, "before the first re-root")
+	historyBefore := historyBytes(t, remote, alpha, "before the first re-root")
 	// The seeded history is above the bound, so the first push re-roots, and
 	// every checkpointPeriod-th push after it.
 	pushes := 0
@@ -141,7 +141,7 @@ func driveTheBound(t *testing.T, rounds int) {
 		side.assertUnderTheBound(t)
 		side.assertNothingEscalated(t)
 	}
-	if after := historyBytes(t, remote, alpha, bravo, fmt.Sprintf("after %d rounds", rounds)); after.history() > historyBefore.history() {
+	if after := historyBytes(t, remote, alpha, fmt.Sprintf("after %d rounds", rounds)); after.history() > historyBefore.history() {
 		t.Fatalf("the remote holds %s; %s: want no more history than before", after, historyBefore)
 	}
 
@@ -283,14 +283,27 @@ func (c *boundCheckout) walkedHeight(t *testing.T) (height uint64) {
 	return height
 }
 
-// stateBytes is the table-file bytes of c's current state alone: the tables
-// its sync branch head holds, without the commits that lead to them, pulled
-// into a scratch store with no chunk journal the way the remote's GC builds
-// the files it collects (store.buildCollectedSet). So it counts in the unit
-// remoteDataBytes reads.
-func (c *boundCheckout) stateBytes(t *testing.T) (size int64) {
+// remoteStateBytes is the table-file bytes of the remote's current state
+// alone, read through c once c's fetch finds its sync branch head is the
+// remote's: the tables that head holds, without the commits that lead to
+// them, pulled into a scratch store with no chunk journal the way the
+// remote's GC builds the files it collects (store.buildCollectedSet). So it
+// counts in the unit remoteDataBytes reads.
+func (c *boundCheckout) remoteStateBytes(t *testing.T) (size int64) {
 	t.Helper()
+	runCLIInDir(t, c.dir, "sync", "fetch")
 	c.atSyncHead(t, func(ctx context.Context, ddb *doltdb.DoltDB, head *doltdb.Commit) {
+		remoteHead, err := ddb.ResolveCommitRef(ctx, ref.NewRemoteRef("origin", c.branch))
+		if err != nil {
+			t.Fatalf("resolve the remote's %s in %s: %v", c.branch, c.name, err)
+		}
+		ours, err := head.HashOf()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if theirs, err := remoteHead.HashOf(); err != nil || ours != theirs {
+			t.Fatalf("%s is at %s and the remote at %s (err=%v); want the remote's state", c.name, ours, theirs, err)
+		}
 		tables, err := head.GetRootValue(ctx)
 		if err != nil {
 			t.Fatalf("read %s's tables: %v", c.name, err)
@@ -369,17 +382,11 @@ func (b remoteBytes) String() string {
 	return fmt.Sprintf("%d bytes of history %s (%d in its tree, %d of current state)", b.history(), b.when, b.remote, b.state)
 }
 
-// historyBytes measures the remote's tree against the state alpha holds once
-// alpha and bravo share a head. bravo adopted the remote at the start and
-// pushed the head it holds at the end, so the head they share is the
-// remote's.
-func historyBytes(t *testing.T, remote string, alpha, bravo *boundCheckout, when string) remoteBytes {
+// historyBytes measures the remote's tree against its current state, read
+// through c.
+func historyBytes(t *testing.T, remote string, c *boundCheckout, when string) remoteBytes {
 	t.Helper()
-	alphaHead, _ := syncHeadAndBranch(t, alpha.dir)
-	if bravoHead, _ := syncHeadAndBranch(t, bravo.dir); alphaHead != bravoHead {
-		t.Fatalf("%s, alpha is at %s and bravo at %s", when, alphaHead, bravoHead)
-	}
-	return remoteBytes{when: when, remote: remoteDataBytes(t, remote), state: alpha.stateBytes(t)}
+	return remoteBytes{when: when, remote: remoteDataBytes(t, remote), state: c.remoteStateBytes(t)}
 }
 
 // remoteDataBytes is the bytes of the table files in the tree the remote's
