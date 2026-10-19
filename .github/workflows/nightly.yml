@@ -3,7 +3,8 @@
 # This workflow is the other half of that bargain: everything the gate skips
 # runs here, on a schedule, in full. Without `-short`, `testing.Short()` is
 # false by construction, so the scale lane cannot skip — the gate being open
-# here is guaranteed by Go, not by convention.
+# here is guaranteed by Go, not by convention. The Windows lane runs here too,
+# for the platform the Linux-only gate cannot execute.
 #
 # A nightly job whose failures nobody sees is deletion with extra steps, so a
 # red run files (or extends) an urgent lit bug labeled `nightly-failure`
@@ -64,14 +65,70 @@ jobs:
         if: ${{ !cancelled() }}
         run: go run ./tools/lawtokens-sync -check
 
-  # Its own job, so the suite never runs holding the write token the report
-  # needs. `result != 'success'` covers failure, cancellation, and the
+  # Windows is a release target, and this is the one lane that executes it.
+  # The store's filesystem primitives - lock share modes, renaming over an open
+  # handle, hard links, unlinking while open - behave differently there, and no
+  # Linux run can show it. It runs nightly, not in ci.yml: the PR gate stays
+  # Linux-only and fast, and a Windows-only regression turns this lane red the
+  # night after it merges.
+  #
+  # Scope is the shipped binary and its libraries, the race lane's boundary in
+  # ci.yml, with -short for the same reason: the scale tests add volume, not
+  # platform coverage.
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      # The release builds from an LF tree, so these tests read the bytes that
+      # ship. The runner's git defaults to core.autocrlf=true, which would
+      # rewrite every text file to CRLF and fail tests on bytes no user gets.
+      - name: Check out with LF line endings
+        shell: bash
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # cgo needs a C/C++ toolchain and ICU (go-icu-regex). MSYS2's UCRT64
+      # environment provides both; path-type inherit keeps setup-go's Go on
+      # PATH, and ICU's DLLs sit on that PATH when the test binaries load.
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          path-type: inherit
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-icu
+
+      - uses: ./.github/actions/install-dolt
+
+      - uses: ./.github/actions/install-claude
+
+      - name: Build
+        env:
+          CGO_ENABLED: '1'
+        run: go build ./cmd/lit
+
+      - name: Test (-short)
+        env:
+          CGO_ENABLED: '1'
+        run: go test -short -timeout 30m ./cmd/... ./internal/...
+
+  # Its own job, so the suites never run holding the write token the report
+  # needs. One report for both lanes: one alarm ticket collects them, and two
+  # reports in one run would race each other's push to the store. `result != 'success'` covers failure, cancellation, and the
   # job-level timeout, which GitHub reports as cancelled. [LAW:no-silent-failure]
   # Only master's runs report: the backlog is master's, and a run dispatched
   # on a branch is red in front of the session that dispatched it.
   report:
-    needs: full-suite
-    if: ${{ always() && needs.full-suite.result != 'success' && github.ref == 'refs/heads/master' }}
+    needs: [full-suite, windows]
+    if: ${{ always() && (needs.full-suite.result != 'success' || needs.windows.result != 'success') && github.ref == 'refs/heads/master' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -83,7 +140,7 @@ jobs:
       - uses: ./.github/actions/report-to-lit
         with:
           label: nightly-failure
-          title: Nightly full test lane is failing
+          title: Nightly test lanes are failing
           token: ${{ github.token }}
           body: |
-            A step in the nightly full-suite job failed, or the job was cancelled (a job that hits its 60-minute timeout also reports cancelled); the run log names which step and why. This lane runs everything the PR gate's `-short` skips, plus the law-token upstream check: triage it, do not mute it.
+            A step in a nightly job failed, or the job was cancelled (a job that hits its 60-minute timeout also reports cancelled); the run log names which job, which step and why. `full-suite` runs everything the PR gate's `-short` skips, plus the law-token upstream check; `windows` runs the shipped packages' tests on Windows, the one place a Windows-only regression shows. Triage it, do not mute it.

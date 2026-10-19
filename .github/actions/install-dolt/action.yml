@@ -2,17 +2,34 @@
 # installed before `go test` in every workflow that runs tests. (Dolt is a
 # test-only oracle; it is NOT a runtime dependency of the shipped binary.)
 # [LAW:one-source-of-truth] This action is the one home of the pinned Dolt
-# version — CI and the nightly full lane both install through it, so the pin
-# cannot drift between lanes.
+# version — CI, the nightly full lane and the nightly Windows lane all install
+# through it, so the pin cannot drift between lanes.
 name: Install Dolt
 description: Install the pinned dolt CLI the test suite uses as an oracle.
 runs:
   using: composite
   steps:
+    # One path on every runner: fetch the release archive, unpack it, put its
+    # bin/ on PATH. The runner OS picks only the asset and its unpacker, the
+    # two things Dolt publishes differently per platform.
+    # [LAW:dataflow-not-control-flow]
     - name: Install Dolt
       shell: bash
+      env:
+        DOLT_VERSION: v1.81.10
       run: |
         set -euo pipefail
-        curl -L https://github.com/dolthub/dolt/releases/download/v1.81.10/install.sh -o install-dolt.sh
-        sudo bash install-dolt.sh
-        dolt version
+        case "$RUNNER_OS" in
+          Linux)   platform=linux-amd64;   archive=tar.gz ;;
+          Windows) platform=windows-amd64; archive=zip ;;
+          *) echo "::error::install-dolt has no Dolt asset for runner OS $RUNNER_OS" >&2; exit 1 ;;
+        esac
+        asset="dolt-$platform.$archive"
+        curl -fsSL "https://github.com/dolthub/dolt/releases/download/$DOLT_VERSION/$asset" -o "$RUNNER_TEMP/$asset"
+        case "$archive" in
+          tar.gz) tar -xzf "$RUNNER_TEMP/$asset" -C "$RUNNER_TEMP" ;;
+          zip)    unzip -q "$RUNNER_TEMP/$asset" -d "$RUNNER_TEMP" ;;
+        esac
+        bin="$RUNNER_TEMP/dolt-$platform/bin"
+        echo "$bin" >> "$GITHUB_PATH"
+        "$bin/dolt" version
