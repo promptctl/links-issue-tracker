@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -497,7 +498,9 @@ func (s *Store) replayUnderGuard(ctx context.Context, remote, branch, remoteHead
 // same result.
 func (s *Store) reconcileFromAnchors(ctx context.Context, result *storage.SyncReconcileResult, settle settleFn, guard *snapshotGuard, dataBranch string, scratch reconcileScratch, localHead, remoteHead, baseCommit string) error {
 	return s.runOnReconcileScratch(ctx, dataBranch, scratch, localHead, func() error {
-		base, err := s.exportAtCommit(ctx, scratch.read, baseCommit)
+		// A loop the base held is history: the replay reports the cuts made to
+		// the two heads, whose content is what lands.
+		base, _, err := s.exportAtCommit(ctx, scratch.read, baseCommit)
 		if err != nil {
 			return err
 		}
@@ -656,7 +659,9 @@ func (e foldCollisionError) Error() string {
 // on every iteration; only the commit differs.
 func (f foldStepper) step(ctx context.Context, i int) (replayStep, error) {
 	c := f.chain[i]
-	at, err := f.store.exportAtCommit(ctx, f.readBranch, c.hash)
+	// A loop a folded commit held is history the head has moved past or still
+	// holds; the head's cut is the one reported.
+	at, _, err := f.store.exportAtCommit(ctx, f.readBranch, c.hash)
 	if err != nil {
 		return replayStep{}, err
 	}
@@ -800,11 +805,12 @@ func holdForCollisions(result *storage.SyncReconcileResult, collisions []merge.C
 // [LAW:single-enforcer] [LAW:dataflow-not-control-flow] base/remoteSide/message/state are
 // values, not a branch duplicated through the replay.
 func (s *Store) mergeAndReplay(ctx context.Context, result *storage.SyncReconcileResult, settle settleFn, guard *snapshotGuard, dataBranch string, scratch reconcileScratch, localHead, remoteHead string, remoteSide []string, base model.Export, message string, settledState storage.SyncReconcileState) error {
-	ours, err := s.exportAtCommit(ctx, scratch.read, localHead)
+	ours, oursCut, err := s.exportAtCommit(ctx, scratch.read, localHead)
 	if err != nil {
 		return err
 	}
-	theirs, err := s.exportAtCommit(ctx, scratch.read, remoteHead)
+	// The spine's lift of the same commit cuts and reports what this read cut.
+	theirs, _, err := s.exportAtCommit(ctx, scratch.read, remoteHead)
 	if err != nil {
 		return err
 	}
@@ -851,7 +857,7 @@ func (s *Store) mergeAndReplay(ctx context.Context, result *storage.SyncReconcil
 		return err
 	}
 	stepper := foldStepper{store: s, readBranch: scratch.read, chain: chain, base: base, theirs: theirs}
-	landing, err := s.commitReplayAndAdvance(ctx, guard, dataBranch, scratch, remoteHead, message, settled.export, stepper)
+	landing, err := s.commitReplayAndAdvance(ctx, guard, dataBranch, scratch, remoteHead, message, settled.export, stepper, oursCut)
 	var foldCollision foldCollisionError
 	if errors.As(err, &foldCollision) {
 		holdForCollisions(result, foldCollision.collisions)
@@ -933,6 +939,10 @@ func (s *Store) runOnReconcileScratch(ctx context.Context, dataBranch string, sc
 // the agent's prose resolutions). The steps before it carry the folded side's
 // provenance; the marker carries the reconcile's.
 //
+// localCut is the parent edges the lift of the local head cut, when the local
+// head's content is what the replay settles on; the remote head's lift happens
+// here, on the spine, and the landing reports both.
+//
 // The lift is required when remoteHead is older-schema: the replay writes this
 // binary's columns, which the remote commit's table may not yet have; lifting first
 // (reusing the migration chain) lands the schema DDL with the first landing commit,
@@ -940,17 +950,19 @@ func (s *Store) runOnReconcileScratch(ctx context.Context, dataBranch string, sc
 // intermediate because it is untouched until the single atomic reset.
 // [LAW:no-ambient-temporal-coupling] no observer sees a half-built state; it lives
 // only on the scratch branch.
-func (s *Store) commitReplayAndAdvance(ctx context.Context, guard *snapshotGuard, dataBranch string, scratch reconcileScratch, remoteHead, message string, export model.Export, stepper foldStepper) (replayLanding, error) {
+func (s *Store) commitReplayAndAdvance(ctx context.Context, guard *snapshotGuard, dataBranch string, scratch reconcileScratch, remoteHead, message string, export model.Export, stepper foldStepper, localCut []storage.Unlooped) (replayLanding, error) {
 	if err := execProcedureDiscard(ctx, s.db, "DOLT_CHECKOUT", scratch.spine); err != nil {
 		return replayLanding{}, fmt.Errorf("switch to reconcile spine branch %q: %w", scratch.spine, err)
 	}
-	if err := s.resetAndLift(ctx, remoteHead); err != nil {
+	remoteCut, err := s.resetAndLift(ctx, remoteHead)
+	if err != nil {
 		return replayLanding{}, fmt.Errorf("adopt remote head %q on scratch: %w", remoteHead, err)
 	}
-	// The lift's own changes (schema DDL, migration bookkeeping) land as the
-	// machinery's own named commit — or no commit at all on a current-schema
-	// head — so the first provenance step's diff is purely its folded commit's
-	// change, never schema work that was not its own. Committed via the
+	// The lift's own changes (schema DDL, migration bookkeeping, the cut of a
+	// parent loop the remote head held) land as the machinery's own named
+	// commit — or no commit at all on a current-schema, loop-free head — so the
+	// first provenance step's diff is purely its folded commit's change, never
+	// lift work that was not its own. Committed via the
 	// single-attempt commitWorkingSetOnce for the same reason every commit
 	// below goes through replayDeltaOnScratch: a self-rotating retry would
 	// resume on the data branch (see replayDeltaOnScratch).
@@ -988,6 +1000,11 @@ func (s *Store) commitReplayAndAdvance(ctx context.Context, guard *snapshotGuard
 	if err != nil {
 		return replayLanding{}, err
 	}
+	// A loop either head held was cut by its lift before any landing saw it, so
+	// the settling landing's own cuts are only the loops the merge closed; the
+	// heads' cuts join them, so the report names every edge this sync took
+	// away. [LAW:nothing-unseen]
+	landing.Unlooped = unionUnlooped(localCut, remoteCut, landing.Unlooped)
 	replayedCommit, err := readDoltHead(ctx, s.db)
 	if err != nil {
 		return replayLanding{}, fmt.Errorf("read replayed commit: %w", err)
@@ -1040,6 +1057,23 @@ func (s *Store) commitReplayAndAdvance(ctx context.Context, guard *snapshotGuard
 		fmt.Fprintf(os.Stderr, "lit: reconcile could not prune old recovery snapshots (replay already committed): %v\n", err)
 	}
 	return replayLanding{replayed: replayed, landing: landing}, nil
+}
+
+// unionUnlooped joins the cuts of several lifts and landings, each edge named
+// once, at its first sighting: both heads of a sync hold a loop they inherited
+// from their base, and their lifts cut it identically.
+func unionUnlooped(sets ...[]storage.Unlooped) []storage.Unlooped {
+	var out []storage.Unlooped
+	for _, set := range sets {
+		for _, cut := range set {
+			if !slices.ContainsFunc(out, func(seen storage.Unlooped) bool {
+				return seen.IssueID == cut.IssueID && seen.Parent == cut.Parent
+			}) {
+				out = append(out, cut)
+			}
+		}
+	}
+	return out
 }
 
 // replayLanding is what a replay landed: how many of the folded side's commits
@@ -1145,9 +1179,15 @@ func (s *Store) deleteBranchesUnder(ctx context.Context, prefix string) error {
 // at an older schema version"; resetAndLift is what makes that state legal to
 // read and write instead of a raw backend error. [LAW:one-source-of-truth] the
 // lift reuses the migration chain, not a second schema-adaptation path.
-func (s *Store) resetAndLift(ctx context.Context, commit string) error {
+//
+// The lift also cuts every parent loop the commit holds, and names each cut
+// (cutParentLoops): a commit an older lit or a hand edit wrote can hold one,
+// and every read of a commit hydrates, which a loop refuses — so without the
+// cut, one looped commit anywhere in the history a sync reads would refuse that
+// sync on every attempt, and a repair at the head could not reach it.
+func (s *Store) resetAndLift(ctx context.Context, commit string) ([]storage.Unlooped, error) {
 	if _, err := callIntProcedure(ctx, s.db, "DOLT_RESET", "--hard", commit); err != nil {
-		return fmt.Errorf("reset scratch to %q: %w", commit, err)
+		return nil, fmt.Errorf("reset scratch to %q: %w", commit, err)
 	}
 	// A hard reset keeps untracked tables, and an earlier lift on this branch
 	// leaves the tables its migrations created untracked in the working set
@@ -1156,17 +1196,41 @@ func (s *Store) resetAndLift(ctx context.Context, commit string) error {
 	// against a table the previous lift left behind, or reads its rows as if
 	// they belonged to this commit.
 	if err := execProcedureDiscard(ctx, s.db, "DOLT_CLEAN"); err != nil {
-		return fmt.Errorf("clean scratch at %q: %w", commit, err)
+		return nil, fmt.Errorf("clean scratch at %q: %w", commit, err)
 	}
 	if err := s.liftWorkingSetToRegistry(ctx); err != nil {
-		return fmt.Errorf("lift %q to current schema: %w", commit, err)
+		return nil, fmt.Errorf("lift %q to current schema: %w", commit, err)
 	}
-	return nil
+	unlooped, err := cutParentLoops(ctx, s.db)
+	if err != nil {
+		return nil, fmt.Errorf("cut parent loops at %q: %w", commit, err)
+	}
+	return unlooped, nil
+}
+
+// cutParentLoops deletes from the working set the parent edges storage.Unloop
+// names for the hierarchy stored there, and returns them. It reads the edges
+// straight from the relations table, the one read a loop does not refuse.
+// [LAW:one-source-of-truth] the restore's landing and this cut choose an edge
+// by one rule, so a loop is cut the same way whichever of them meets it.
+func cutParentLoops(ctx context.Context, db *sql.DB) ([]storage.Unlooped, error) {
+	parentOf, err := loadParentEdges(ctx, db)
+	if err != nil {
+		return nil, err
+	}
+	unlooped := storage.Unloop(parentOf)
+	for _, cut := range unlooped {
+		if _, err := db.ExecContext(ctx, `DELETE FROM relations WHERE src_id = ? AND dst_id = ? AND type = 'parent-child'`, cut.IssueID, cut.Parent); err != nil {
+			return nil, fmt.Errorf("cut parent edge %s -> %s: %w", cut.IssueID, cut.Parent, err)
+		}
+	}
+	return unlooped, nil
 }
 
 // exportAtCommit switches to the reconcile's READ branch, resets it to a
-// commit, lifts it to the current schema, and exports it. Reading at a revision
-// this way reuses the one canonical export path. [LAW:single-enforcer]
+// commit, lifts it to the current schema, and exports it, with the parent edges
+// the lift cut. Reading at a revision this way reuses the one canonical export
+// path. [LAW:single-enforcer]
 //
 // Taking the branch as a parameter and switching to it here — rather than
 // inheriting whatever branch the session happens to be on — is what makes the
@@ -1175,14 +1239,19 @@ func (s *Store) resetAndLift(ctx context.Context, commit string) error {
 // never on the spine the replay is accumulating.
 // [LAW:no-ambient-temporal-coupling] the branch a reset lands on is an argument,
 // not a consequence of call order.
-func (s *Store) exportAtCommit(ctx context.Context, readBranch, commit string) (model.Export, error) {
+func (s *Store) exportAtCommit(ctx context.Context, readBranch, commit string) (model.Export, []storage.Unlooped, error) {
 	if err := execProcedureDiscard(ctx, s.db, "DOLT_CHECKOUT", readBranch); err != nil {
-		return model.Export{}, fmt.Errorf("switch to reconcile read branch %q: %w", readBranch, err)
+		return model.Export{}, nil, fmt.Errorf("switch to reconcile read branch %q: %w", readBranch, err)
 	}
-	if err := s.resetAndLift(ctx, commit); err != nil {
-		return model.Export{}, fmt.Errorf("read export at %q: %w", commit, err)
+	unlooped, err := s.resetAndLift(ctx, commit)
+	if err != nil {
+		return model.Export{}, nil, fmt.Errorf("read export at %q: %w", commit, err)
 	}
-	return s.Export(ctx)
+	export, err := s.Export(ctx)
+	if err != nil {
+		return model.Export{}, nil, err
+	}
+	return export, unlooped, nil
 }
 
 // activeBranch reads the session's current branch — the live data branch the

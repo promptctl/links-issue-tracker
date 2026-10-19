@@ -92,6 +92,10 @@ func ExitCode(err error) int {
 	if errors.As(err, &corruption) {
 		return ExitCorruption
 	}
+	var parentCycle storage.ParentCycleError
+	if errors.As(err, &parentCycle) {
+		return ExitCorruption
+	}
 	var usage UsageError
 	if errors.As(err, &usage) {
 		return ExitUsage

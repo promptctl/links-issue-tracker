@@ -506,11 +506,11 @@ func rejectBlocksCycle(ctx context.Context, tx *sql.Tx, dependent, dependency st
 // A hierarchy is a tree: every issue reaches a root by walking up, and that walk
 // is what container state derivation, the ancestor walk gating a leaf on its
 // container's blocked-by edges, and rank's top-level-ancestor resolution are all
-// built on. A cycle has no root, so those walks do not return a wrong answer —
-// they do not terminate, and hydrating any issue in the loop overflows the
-// stack. That is incoherent state rather than an unusual hierarchy, so the edge
-// that would create it is refused here instead of guarded against by every
-// consumer that walks up. [LAW:types-are-the-program]
+// built on. A cycle has no root, so those walks have no answer to return, and
+// a read that reaches one refuses it (storage.ParentCycleError). That is
+// incoherent state rather than an unusual hierarchy, so the edge that would
+// create it is refused here instead of guarded against by every consumer that
+// walks up. [LAW:types-are-the-program]
 //
 // The edge runs child -> parent, so the loop closes exactly when parent is
 // already at or below child: walking up from parent reaches child. Reading the
@@ -555,81 +555,8 @@ func rejectParentCycle(ctx context.Context, tx *sql.Tx, childID, parentID string
 	// second issue under the first. [LAW:no-silent-failure]
 	// [LAW:one-source-of-truth] The same detector Doctor reports with, asked
 	// about the subgraph this edge would attach to rather than the workspace.
-	if cycle := parentCycle(above); len(cycle) > 0 {
-		return fmt.Errorf("parent-child: cannot make %s a child of %s — the hierarchy above %s already holds a cycle (%s); %s, then retry", childID, parentID, parentID, strings.Join(cycle, " -> "), parentCycleRepair)
-	}
-	return nil
-}
-
-// parentCycleRepair is the repair every report of a stored parent loop names.
-// A loop is usually leaves, and a leaf cannot be detached, so the first way is
-// the reparent: it replaces every parent the member holds, and it climbs only
-// above the epic it names, so that epic must sit outside the loop. The second
-// way is for a member that is an epic belonging at the top level.
-// [LAW:one-source-of-truth] Doctor and the write boundary name one repair.
-const parentCycleRepair = "break it with 'lit parent set --child <one member> --parent <an epic outside the loop>', which replaces every parent that member holds, or with 'lit parent clear <member>' for a member that is an epic belonging at the top level"
-
-// parentCycle returns the members of one loop in the hierarchy, in walk order,
-// or nothing when the parent graph is a forest.
-//
-// The write boundary refuses the edge that would close a loop, so a workspace
-// written under that rule cannot grow one — but data written before it, or
-// restored from an export, still can, and every walk up the parent chain
-// hangs on it. Doctor is where that pre-existing state is named, the same
-// division the blocks cycle already uses: refuse at the boundary, report what
-// the boundary was not there to refuse. [LAW:single-enforcer]
-//
-// A child can hold more than one parent edge in restored data, so the walk is a
-// depth-first search rather than a single chain, and it carries its path so the
-// loop can be named by its members rather than merely detected. A node still on
-// the current path is the loop; a node already settled reaches a root, and its
-// ancestry is never walked twice, which keeps the whole scan linear in edges.
-func parentCycle(parentOf map[string][]string) []string {
-	const (
-		unvisited = iota
-		onPath
-		settled
-	)
-	state := make(map[string]int, len(parentOf))
-	starts := make([]string, 0, len(parentOf))
-	for child := range parentOf {
-		starts = append(starts, child)
-	}
-	// The map's iteration order is random; a cycle report that names the same
-	// members in a different order on every run is a fact nobody can act on.
-	slices.Sort(starts)
-	for _, start := range starts {
-		if state[start] != unvisited {
-			continue
-		}
-		// path is the chain of nodes currently being descended; taken[i] counts
-		// how many of path[i]'s parents have been followed already.
-		path := []string{start}
-		taken := []int{0}
-		state[start] = onPath
-		for len(path) > 0 {
-			at := len(path) - 1
-			parents := parentOf[path[at]]
-			if taken[at] >= len(parents) {
-				state[path[at]] = settled
-				path, taken = path[:at], taken[:at]
-				continue
-			}
-			parent := parents[taken[at]]
-			taken[at]++
-			switch state[parent] {
-			case onPath:
-				for i, id := range path {
-					if id == parent {
-						return append([]string{}, path[i:]...)
-					}
-				}
-			case unvisited:
-				state[parent] = onPath
-				path = append(path, parent)
-				taken = append(taken, 0)
-			}
-		}
+	if cycle := storage.ParentCycle(above); len(cycle) > 0 {
+		return fmt.Errorf("parent-child: cannot make %s a child of %s — the hierarchy above %s already holds a cycle (%s); %s, then retry", childID, parentID, parentID, strings.Join(cycle, " -> "), storage.ParentCycleRepair)
 	}
 	return nil
 }
@@ -641,7 +568,7 @@ func parentCycle(parentOf map[string][]string) []string {
 // lifecycleChildrenByEpicIDs, for one, keeps a dead container's membership and
 // so traverses edges whose parent is archived or deleted — and a detector
 // scoped to any single consumer's subset reports a clean hierarchy while some
-// other walk still runs forever. Reading every stored edge makes this a
+// other walk still meets a loop. Reading every stored edge makes this a
 // superset of all of them, which is the only version that cannot drift as
 // consumers change. [LAW:one-source-of-truth]
 //
@@ -816,9 +743,9 @@ func (s *Store) SetParent(ctx context.Context, in storage.SetParentInput) (model
 // It hydrates nothing before the DELETE. That is what makes it usable on the
 // one workspace that needs it most: a hierarchy holding a loop, which `lit
 // doctor` names and tells the operator to break here. Hydrating the child
-// first — GetIssue climbs the parent chain — would overflow the stack on
-// exactly that state, so the repair would crash on the fault it is the repair
-// for. The child's type is read as a column on the tx, which also proves it
+// first — GetIssue derives an epic's state from its children — would refuse
+// exactly that state (storage.ParentCycleError), so the repair would fail on
+// the fault it is the repair for. The child's type is read as a column on the tx, which also proves it
 // exists, because the two absences are different diagnoses: "no such issue"
 // and "that issue has no parent" send the operator to different places, and
 // collapsing them into the DELETE's rows-affected would report a typo'd id as

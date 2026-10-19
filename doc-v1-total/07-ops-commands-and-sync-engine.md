@@ -219,7 +219,7 @@ Checks, printed to stdout in order (`doctor.go`):
 6. One sync-freshness line — a distinct message per state: no remote, unresolved (with detail), never synced, up to date, ahead (with `[ahead=n behind=0]`), behind, diverged (with both counts); an unhandled state is an error, exit 1. Freshness resolution never errors — every failure becomes an "unresolved" report with a reason (`doctor.go`).
 7. Only when the last push attempt failed: `sync: last push attempt FAILED <age> ago: <reason>[ — mirror log: <path> (last written <age> ago)]`.
 
-Exit: any integrity errors → `CorruptionError`, exit 7, which wins over both exits below; a stored prefix the rules refuse → `StoredPrefixError`, reason `stored_prefix_refused`, exit 3, after everything above is printed and after any divergence owner notification; a persistent divergence (≥24h or >10 commits) → `SyncFailureError` class `diverged_unresolved`, exit 5, with owner notification; otherwise 0 (`doctor.go`).
+Exit: any integrity errors → `CorruptionError` (the errors joined by `; `), exit 7, which wins over both exits below; when the report names a parent loop the error carries `storage.ParentCycleError` as its cause, so its reason is `parent_cycle` rather than `corruption_detected` (`error_output.go`); a stored prefix the rules refuse → `StoredPrefixError`, reason `stored_prefix_refused`, exit 3, after everything above is printed and after any divergence owner notification; a persistent divergence (≥24h or >10 commits) → `SyncFailureError` class `diverged_unresolved`, exit 5, with owner notification; otherwise 0 (`doctor.go`).
 
 ## `lit upgrade` and `lit downgrade`
 
@@ -326,7 +326,8 @@ The nine embedded assets (all also ejectable):
 | Unrelated histories | `sync pull`, reconcile rows | `SyncFailureError` | 5 |
 | `take` without owner approval | `sync reconcile take` | refusal block | 5 |
 | Persistent divergence | `doctor` | `SyncFailureError` | 5 |
-| Store corruption | `doctor` | `CorruptionError` | 7 |
+| Store corruption | `doctor` | `CorruptionError` (reason `parent_cycle` when the report names a parent loop) | 7 |
+| Parent loop | `ls` and any read that hydrates the loop's epics; a rank verb whose walk up the parent chain meets a loop | `storage.ParentCycleError`, reason `parent_cycle` | 7 |
 | Unsynced local changes | `backup restore` without `--force` | `MergeConflictError` | 5 |
 | `--latest` + `--path` | `backup restore` | `UsageError` | 2 |
 | Existing override without `--force` | `quickstart --eject` | `MergeConflictError`, nothing written | 5 |

@@ -337,11 +337,11 @@ func TestHomeStrandedSendsAnEpicWithNoEpicAboveToTheTopLevel(t *testing.T) {
 	assertContained(t, out)
 }
 
-// Route 1 of the ticket: the merge breaks a parent cycle by deleting one edge,
-// and the child it cuts loose is left with no parent. Every parent is an epic,
-// so every member of a cycle is one, and the one cut loose stands at the top
-// level, where an epic may: nothing is stranded and nothing moves.
-func TestAMergeThatBreaksAParentCycleStrandsNothing(t *testing.T) {
+// Route 1 of the ticket: two sides merge into a parent cycle, the landing cuts
+// one edge, and the child it cuts loose is left with no parent. Every parent
+// is an epic, so every member of a cycle is one, and the one cut loose stands
+// at the top level, where an epic may: nothing is stranded and nothing moves.
+func TestALandingThatCutsAMergedParentCycleStrandsNothing(t *testing.T) {
 	base := model.Export{Issues: []model.Issue{epic("acme-core-x0a"), epic("acme-core-y0a")}}
 	local, remote := base, base
 	local.Relations = []model.Relation{under("acme-core-x0a", "acme-core-y0a")}
@@ -350,10 +350,11 @@ func TestAMergeThatBreaksAParentCycleStrandsNothing(t *testing.T) {
 	if !ok {
 		t.Fatalf("merge did not settle")
 	}
-	if len(parents(merged)) != 1 {
-		t.Fatalf("merged parent edges = %v, want the cycle broken to one edge", parents(merged))
+	unlooped, _ := storage.BreakParentCycles(merged)
+	if len(parents(unlooped)) != 1 {
+		t.Fatalf("landed parent edges = %v, want the cycle cut to one edge", parents(unlooped))
 	}
-	out, rehomed := storage.HomeStranded(merged)
+	out, rehomed := storage.HomeStranded(unlooped)
 	if len(rehomed) != 0 {
 		t.Errorf("rehomed = %+v, want nothing: the epic cut loose may stand at the top level", rehomed)
 	}

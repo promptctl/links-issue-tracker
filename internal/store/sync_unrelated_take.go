@@ -269,17 +269,20 @@ func (s *Store) takeRemoteHead(ctx context.Context, result *storage.SyncReconcil
 // restore.
 func (s *Store) takeRemoteCarryingPurges(ctx context.Context, result *storage.SyncReconcileResult, guard *snapshotGuard, dataBranch string, scratch reconcileScratch, localHead, remoteHead string) error {
 	return s.runOnReconcileScratch(ctx, dataBranch, scratch, localHead, func() error {
-		local, err := s.exportAtCommit(ctx, scratch.read, localHead)
+		// Only local's purge records land, so a loop its hierarchy held is not
+		// part of what lands; the remote head's cut is reported by the spine's
+		// lift.
+		local, _, err := s.exportAtCommit(ctx, scratch.read, localHead)
 		if err != nil {
 			return err
 		}
-		theirs, err := s.exportAtCommit(ctx, scratch.read, remoteHead)
+		theirs, _, err := s.exportAtCommit(ctx, scratch.read, remoteHead)
 		if err != nil {
 			return err
 		}
 		terminal := theirs.ApplyPurges(model.UnionPurges(theirs.Purges, local.Purges))
 		stepper := foldStepper{store: s, readBranch: scratch.read, base: model.Export{}, theirs: theirs}
-		landing, err := s.commitReplayAndAdvance(ctx, guard, dataBranch, scratch, remoteHead, takeRemotePurgesCommitMessage, terminal, stepper)
+		landing, err := s.commitReplayAndAdvance(ctx, guard, dataBranch, scratch, remoteHead, takeRemotePurgesCommitMessage, terminal, stepper, nil)
 		if err != nil {
 			return err
 		}
@@ -320,11 +323,12 @@ func (s *Store) purgesMissingAt(ctx context.Context, commit string) ([]model.Pur
 // lifecycle, shared with the field-aware path.
 func (s *Store) takeLocalOntoRemoteHead(ctx context.Context, result *storage.SyncReconcileResult, guard *snapshotGuard, dataBranch string, scratch reconcileScratch, localHead, remoteHead string) error {
 	return s.runOnReconcileScratch(ctx, dataBranch, scratch, localHead, func() error {
-		local, err := s.exportAtCommit(ctx, scratch.read, localHead)
+		local, localCut, err := s.exportAtCommit(ctx, scratch.read, localHead)
 		if err != nil {
 			return err
 		}
-		theirs, err := s.exportAtCommit(ctx, scratch.read, remoteHead)
+		// The spine's lift of the same commit cuts and reports what this read cut.
+		theirs, _, err := s.exportAtCommit(ctx, scratch.read, remoteHead)
 		if err != nil {
 			return err
 		}
@@ -339,7 +343,7 @@ func (s *Store) takeLocalOntoRemoteHead(ctx context.Context, result *storage.Syn
 		// [LAW:dataflow-not-control-flow]
 		stepper := foldStepper{store: s, readBranch: scratch.read, chain: chain, base: model.Export{}, theirs: theirs}
 		terminal := local.ApplyPurges(model.UnionPurges(local.Purges, theirs.Purges))
-		landing, err := s.commitReplayAndAdvance(ctx, guard, dataBranch, scratch, remoteHead, takeLocalCommitMessage, terminal, stepper)
+		landing, err := s.commitReplayAndAdvance(ctx, guard, dataBranch, scratch, remoteHead, takeLocalCommitMessage, terminal, stepper, localCut)
 		if err != nil {
 			return err
 		}

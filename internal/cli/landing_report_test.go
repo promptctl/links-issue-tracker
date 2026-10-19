@@ -47,7 +47,7 @@ func TestWriteRehomedNamesEachMoveAndIsSilentWithoutOne(t *testing.T) {
 
 	metadata := map[string]string{}
 	landingMetadata(metadata, storage.Landing{})
-	for _, key := range []string{"rehomed", "rekeyed"} {
+	for _, key := range []string{"unlooped", "rehomed", "rekeyed"} {
 		if metadata[key] != "0" {
 			t.Errorf("metadata %s = %q, want %q: zero changes is recorded, not omitted", key, metadata[key], "0")
 		}

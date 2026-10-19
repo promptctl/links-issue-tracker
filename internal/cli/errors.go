@@ -21,11 +21,17 @@ func (e MergeConflictError) Error() string {
 	return e.Message
 }
 
+// CorruptionError is a store that failed an integrity check. Cause is the
+// typed fault behind the failure when the check named one, so the reason and
+// remediation follow the fault rather than the check that found it.
 type CorruptionError struct {
 	Message string
+	Cause   error
 }
 
 func (e CorruptionError) Error() string { return e.Message }
+
+func (e CorruptionError) Unwrap() error { return e.Cause }
 
 // UsageError signals wrong CLI usage (bad argument count, unrecognised flag).
 // [LAW:types-are-the-program] The type carries the ExitUsage classification so sinks dispatch on type.

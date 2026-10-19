@@ -182,6 +182,7 @@ Constants (`internal/cli/exit.go`):
 - `templateShapeError` ⇒ 3
 - `ownerApprovalRefusalError` ⇒ 5
 - `CorruptionError` ⇒ 7
+- `storage.ParentCycleError` ⇒ 7
 - `UsageError` ⇒ 2
 - `UnknownCommandError` ⇒ 3
 - `RetiredCommandError` ⇒ 3

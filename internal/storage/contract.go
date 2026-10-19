@@ -51,7 +51,7 @@ type IssueReader interface {
 	// id was minted from, for a caller that asks what the ids in a store carry
 	// (the prefix census). Nothing is hydrated, so it never walks the
 	// hierarchy, and it answers in a store whose parent links loop, where
-	// ListIssues does not return; `lit doctor` reads it before it has any other
+	// ListIssues refuses (ParentCycleError); `lit doctor` reads it before it has any other
 	// way to know the hierarchy is sound.
 	ListIssueIdentities(ctx context.Context) ([]IssueIdentity, error)
 

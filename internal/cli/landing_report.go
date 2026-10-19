@@ -14,10 +14,34 @@ import (
 // write. It prints nothing when nothing changed, so an ordinary sync or restore
 // gains no line; the trace carries the counts either way (landingMetadata).
 func writeLanding(w io.Writer, backlog string, landing storage.Landing) error {
+	if err := writeUnlooped(w, backlog, landing.Unlooped); err != nil {
+		return err
+	}
 	if err := writeRehomed(w, backlog, landing.Rehomed); err != nil {
 		return err
 	}
 	return writeRekeyed(w, backlog, landing.Rekeyed)
+}
+
+// writeUnlooped reports the parent edges a landing cut because each closed a
+// loop: a header with the count, then one line per cut naming the loop it
+// broke. The landing chose which edge goes, and the parent it took is the one
+// place the child cannot go back to without closing the loop again, so the
+// header names the reparent and leaves the epic to the operator. Ids may have
+// arrived from a remote, so each is quoted like every remote-authored id.
+func writeUnlooped(w io.Writer, backlog string, unlooped []storage.Unlooped) error {
+	if len(unlooped) == 0 {
+		return nil
+	}
+	if _, err := fmt.Fprintf(w, "cut %d parent edge(s) %s held in a loop, which has no root; `lit parent set --child <id> --parent <epic-id>` moves a child where it belongs:\n", len(unlooped), backlog); err != nil {
+		return err
+	}
+	for _, cut := range describeCuts(unlooped, func(id string) string { return quoteRemote(id).inline() }) {
+		if _, err := fmt.Fprintf(w, "  %s\n", cut); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // writeRehomed reports the tickets a landing found outside an epic and moved
@@ -57,6 +81,8 @@ func writeRekeyed(w io.Writer, backlog string, rekeyed []storage.Rekeyed) error 
 // unrecorded write read differently.
 func landingMetadata(metadata map[string]string, landing storage.Landing) {
 	identity := func(id string) string { return id }
+	metadata["unlooped"] = strconv.Itoa(len(landing.Unlooped))
+	metadata["unlooped_cuts"] = strings.Join(describeCuts(landing.Unlooped, identity), ", ")
 	metadata["rehomed"] = strconv.Itoa(len(landing.Rehomed))
 	metadata["rehomed_moves"] = strings.Join(describeMoves(landing.Rehomed, identity), ", ")
 	metadata["rekeyed"] = strconv.Itoa(len(landing.Rekeyed))
@@ -94,4 +120,18 @@ func describeMoves(rehomed []storage.Rehomed, render func(string) string) []stri
 		moves = append(moves, render(r.IssueID)+" into "+render(r.Epic))
 	}
 	return moves
+}
+
+// describeCuts renders each cut as "<child> no longer under <parent> (loop
+// <a> -> <b>)".
+func describeCuts(unlooped []storage.Unlooped, render func(string) string) []string {
+	cuts := make([]string, len(unlooped))
+	for i, cut := range unlooped {
+		loop := make([]string, len(cut.Cycle))
+		for j, id := range cut.Cycle {
+			loop[j] = render(id)
+		}
+		cuts[i] = fmt.Sprintf("%s no longer under %s (loop %s)", render(cut.IssueID), render(cut.Parent), strings.Join(loop, " -> "))
+	}
+	return cuts
 }

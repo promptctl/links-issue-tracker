@@ -549,31 +549,34 @@ Each runs through `followThenReconcile` (`sync_reconcile.go`): `followRemoteReRo
 
 ### 5.12 Reading exports at fixed anchors
 
-`resetAndLift(ctx, commit)` (`sync_reconcile.go`):
+`resetAndLift(ctx, commit) ([]storage.Unlooped, error)` (`sync_reconcile.go`):
 1. `CALL DOLT_RESET('--hard', commit)`; error `"reset scratch to %q: %w"`.
 2. `CALL DOLT_CLEAN()` (`execProcedureDiscard`, `sync.go`); error `"clean scratch at %q: %w"`. A hard reset keeps untracked tables, and an earlier lift on the branch leaves the tables its migrations created untracked (the lift commits nothing); the clean drops them so the working set is exactly the commit's (`sync_reconcile.go`).
 3. `s.liftWorkingSetToRegistry(ctx)`; error `"lift %q to current schema: %w"`.
+4. `cutParentLoops(ctx, s.db)`; error `"cut parent loops at %q: %w"`. Returns its cuts.
 Only ever run on a scratch branch.
 
-`exportAtCommit(ctx, readBranch, commit)` (`sync_reconcile.go`):
+`cutParentLoops(ctx, db) ([]storage.Unlooped, error)` (`sync_reconcile.go`): `loadParentEdges` (every stored `parent-child` edge, no hydration), then `storage.Unloop` on it (`01-data-model.md`), then for each cut `DELETE FROM relations WHERE src_id = ? AND dst_id = ? AND type = 'parent-child'` in the working set (error `"cut parent edge %s -> %s: %w"`). A commit an older lit or a hand edit wrote can hold a loop, and every read of a commit hydrates, which refuses a loop (`storage.ParentCycleError`); the cut is what lets a sync read such a commit. Tests `TestSyncReconcileCutsALoopTheRemoteHeadHolds`, `TestSyncReconcileCutsALoopTheLocalHeadHolds`, `TestSyncReconcileReplaysALoopAnUnpushedCommitHeldAfterItsRepair` (`sync_parent_loop_test.go`).
+
+`exportAtCommit(ctx, readBranch, commit) (model.Export, []storage.Unlooped, error)` (`sync_reconcile.go`):
 1. `CALL DOLT_CHECKOUT(readBranch)` — the branch is an **argument**, never inherited from session state; error `"switch to reconcile read branch %q: %w"`.
 2. `resetAndLift(commit)`; error `"read export at %q: %w"`.
-3. `s.Export(ctx)`.
+3. `s.Export(ctx)`, returned with the lift's cuts.
 
 ### 5.13 `mergeAndReplay` — the shared merge/settle/replay tail
 
 `mergeAndReplay(ctx, result, settle, guard, dataBranch, scratch, localHead, remoteHead, remoteSide, base, message, settledState)` (`sync_reconcile.go`):
-1. `ours = exportAtCommit(scratch.read, localHead)`.
-2. `theirs = exportAtCommit(scratch.read, remoteHead)`.
+1. `ours, oursCut = exportAtCommit(scratch.read, localHead)`.
+2. `theirs = exportAtCommit(scratch.read, remoteHead)`; its cuts are discarded, because the spine's lift of the same commit makes and reports them.
 3. `merged = merge.ThreeWay(base, ours, theirs)`.
 4. `export, pending = settle(merged)`.
 5. **`len(pending) > 0`** → `result.State = SyncReconcileProsePending`, `result.Pending = pending`, **return with nothing committed**. The data branch is still at `localHead` (`sync_reconcile.go`).
 6. `chain = readFoldedChain(ctx, s.db, localHead, remoteSide...)`.
 7. `stepper = foldStepper{store, readBranch: scratch.read, chain, base, theirs}`.
-8. `landing = commitReplayAndAdvance(guard, dataBranch, scratch, remoteHead, message, export, stepper)`.
+8. `landing = commitReplayAndAdvance(guard, dataBranch, scratch, remoteHead, message, export, stepper, oursCut)`.
 9. `result.State = settledState`; `result.Pending = nil`; `result.Replayed = landing.replayed`; `result.Landing = landing.landing`.
 
-`reconcileFromAnchors` (`sync_reconcile.go`) = `runOnReconcileScratch` + `base := exportAtCommit(scratch.read, baseCommit)` + `mergeAndReplay(..., []string{remoteHead, baseCommit}, base, reconcileCommitMessage, SyncReconcileLinearized)`.
+`reconcileFromAnchors` (`sync_reconcile.go`) = `runOnReconcileScratch` + `base := exportAtCommit(scratch.read, baseCommit)` (its cuts discarded: what lands is read from the two heads) + `mergeAndReplay(..., []string{remoteHead, baseCommit}, base, reconcileCommitMessage, SyncReconcileLinearized)`.
 
 `combineFromAnchors` (`sync_reconcile.go`) = `runOnReconcileScratch` + `mergeAndReplay(..., []string{remoteHead}, model.Export{}, combineCommitMessage, SyncReconcileCombined)` — the **empty export is the base**, which `merge.ThreeWay` reads as "both sides changed every field from empty", i.e. a two-way union (`sync_reconcile.go`).
 
@@ -594,7 +597,7 @@ Errors: `"read folded chain of %s excluding %v: %w"`, `"scan folded chain commit
 
 `foldStepper{store, readBranch, chain, base, theirs}` (`sync_reconcile.go`):
 - `len()` = `len(chain)` (`sync_reconcile.go`).
-- `step(ctx, i)` (`sync_reconcile.go`): `at := exportAtCommit(readBranch, chain[i].hash)`; returns `replayStep{export: merge.ThreeWay(base, at, theirs).Provisional(), stamp: commitStamp{Message: c.message, Date: c.date, Author: c.author}}`. Every step reads its own commit including the newest — no special case for the last (`sync_reconcile.go`).
+- `step(ctx, i)` (`sync_reconcile.go`): `at := exportAtCommit(readBranch, chain[i].hash)`, its cuts discarded; returns `replayStep{export: merge.ThreeWay(base, at, theirs).Provisional(), stamp: commitStamp{Message: c.message, Date: c.date, Author: c.author}}`. Every step reads its own commit including the newest — no special case for the last (`sync_reconcile.go`).
 
 ### 5.15 The spine writer
 
@@ -602,21 +605,21 @@ Errors: `"read folded chain of %s excluding %v: %w"`, `"scan folded chain commit
 
 `newSpineWriter(ctx, branch)` (`sync_reconcile.go`): `CALL DOLT_CHECKOUT(branch)` (error `"switch to reconcile spine branch %q: %w"`), then `s.Export(ctx)` to seed `landed` from a real read (error `"read reconcile spine base state: %w"`).
 
-`land(ctx, next, stamp) (storage.Landing, error)` (`sync_reconcile.go`): unconditional `CALL DOLT_CHECKOUT(w.branch)` first, then `landed, landing, err := landExport(next)` (`rank_collisions.go`: `storage.HomeStranded`, then `separateRankCollisions`; `01-data-model.md`, `04-store-operations.md`), a separation error returned as is, then `replayDeltaOnScratch(diffExports(w.landed, landed), stamp)`; `w.landed = landed` **only on success**, and `landing` is returned. Every sync write lands here, so no landing commits a ticket outside an epic or a rank key two issues hold. Test evidence: `TestSyncReconcileHomesAChildOfAnEpicPurgedOnTheOtherSide` (`rehome_test.go`); `TestSyncReconcileSeparatesTheKeyTwoReplicasMintedAlike` (`rank_collisions_test.go`).
+`land(ctx, next, stamp) (storage.Landing, error)` (`sync_reconcile.go`): unconditional `CALL DOLT_CHECKOUT(w.branch)` first, then `landed, landing, err := landExport(next)` (`rank_collisions.go`: `storage.BreakParentCycles`, then `storage.HomeStranded`, then `separateRankCollisions`; `01-data-model.md`, `04-store-operations.md`), a separation error returned as is, then `replayDeltaOnScratch(diffExports(w.landed, landed), stamp)`; `w.landed = landed` **only on success**, and `landing` is returned. Every sync write lands here, so no landing commits a parent loop, a ticket outside an epic or a rank key two issues hold. Test evidence: `TestALandingThatCutsAMergedParentCycleStrandsNothing` (`internal/storage/rehome_test.go`); `TestSyncReconcileHomesAChildOfAnEpicPurgedOnTheOtherSide` (`rehome_test.go`); `TestSyncReconcileSeparatesTheKeyTwoReplicasMintedAlike` (`rank_collisions_test.go`).
 
 `replayDeltaOnScratch(ctx, delta, stamp)` (`sync_reconcile.go`): inside `withCommitLock` (re-entrant): `BeginTx` → `defer tx.Rollback()` → `applyExportDelta(ctx, tx, delta)` → `tx.Commit()` → `commitWorkingSetOnce(ctx, stamp)`. **A single attempt, deliberately without the self-rotating transient retry** — a rotation would open a fresh connection on the DEFAULT branch and resume committing onto the data branch (`sync_reconcile.go`). A transient failure bubbles to `replayUnderGuard`'s outer retry, whose next attempt re-creates both scratch branches as its first op and rebuilds the whole spine from the fixed anchors. Errors: `"begin %s tx: %w"`, `"commit %s tx: %w"`. Test evidence: `TestSyncReconcileCombineRecoversFromTransientFailureMidReplay` (`sync_unrelated_test.go`).
 
 ### 5.16 `commitReplayAndAdvance` — the safe replay, step by step
 
-`commitReplayAndAdvance(ctx, guard, dataBranch, scratch, remoteHead, message, export, stepper) (replayLanding, error)` (`sync_reconcile.go`), where `replayLanding{replayed int; landing storage.Landing}`:
+`commitReplayAndAdvance(ctx, guard, dataBranch, scratch, remoteHead, message, export, stepper, localCut) (replayLanding, error)` (`sync_reconcile.go`), where `replayLanding{replayed int; landing storage.Landing}`:
 
 1. `CALL DOLT_CHECKOUT(scratch.spine)`; error `"switch to reconcile spine branch %q: %w"`.
-2. `s.resetAndLift(ctx, remoteHead)`; error `"adopt remote head %q on scratch: %w"`. This is the spine's **one and only** reset.
-3. `s.commitWorkingSetOnce(ctx, commitStamp{Message: reconcileLiftCommitMessage})` — the schema-lift DDL and bookkeeping land as their own named commit, or **no commit at all** on a current-schema head (empty diff). Error `"commit schema lift of %q: %w"` (`sync_reconcile.go`).
+2. `remoteCut = s.resetAndLift(ctx, remoteHead)`; error `"adopt remote head %q on scratch: %w"`. This is the spine's **one and only** reset.
+3. `s.commitWorkingSetOnce(ctx, commitStamp{Message: reconcileLiftCommitMessage})` — the schema-lift DDL, bookkeeping and parent-loop cut land as their own named commit, or **no commit at all** on a current-schema, loop-free head (empty diff). Error `"commit schema lift of %q: %w"` (`sync_reconcile.go`).
 4. `liftedBase = readDoltHead(ctx, s.db)`; error `"read lifted base: %w"`.
 5. `writer = newSpineWriter(ctx, scratch.spine)` — constructed **after** the lift commit.
 6. Loop `i = 0 .. stepper.len()-1`: `step = stepper.step(ctx, i)`; `writer.land(step.export, step.stamp)`, its landing discarded; landing error wrapped `"replay folded commit %q: %w"` naming the step's message (`sync_reconcile.go`). One step is read and landed before the next is read — bounded memory.
-7. `landing = writer.land(ctx, export, commitStamp{Message: message, AllowEmpty: true})` — the marker commit is **unconditional** (`sync_reconcile.go`).
+7. `landing = writer.land(ctx, export, commitStamp{Message: message, AllowEmpty: true})` — the marker commit is **unconditional** (`sync_reconcile.go`). Then `landing.Unlooped = unionUnlooped(localCut, remoteCut, landing.Unlooped)`: each edge once, at its first sighting, compared by `IssueID` and `Parent`.
 8. `replayedCommit = readDoltHead(ctx, s.db)`; error `"read replayed commit: %w"`.
 9. `landed = countCommitsInRange(ctx, s.db, liftedBase, replayedCommit)`; `replayed = landed - 1` (subtracting the marker) (`sync_reconcile.go`). `countCommitsInRange` (`sync_reconcile.go`) = `foldedChainQuery("COUNT(*)", head, exclusiveBase)`; error `"count replayed commits %s..%s: %w"`.
 10. **Snapshot-first**: `guard.ensure(ctx)`; failure → `"snapshot before reconcile: %w"`, aborting **before** the data branch moves (`sync_reconcile.go`).
@@ -644,7 +647,7 @@ States and their string values (`storage/sync.go`):
 
 `CarriedPurges` counts the local purge records a take-remote carried onto the remote head; nonzero means local is ahead of the remote by the commit carrying them, which the next push delivers; zero for every other outcome (`storage/sync.go`).
 
-`Landing` names each ticket the settling landing moved into an epic and the epic it now lives in (`storage.HomeStranded`), and each ticket it gave a new rank key, with the key it held and the key it holds now (`separateRankCollisions`); both empty when the backlog kept both rules and for every non-mutating outcome (`storage/sync.go`). `mergeAndReplay`, take-remote with carried purges and take-local set it from the landing.
+`Landing` names each parent edge the sync cut because it closed a loop, with the loop — cut by the lift of the local head (when its content lands), by the lift of the remote head, or by the settling landing (`storage.BreakParentCycles`) — each ticket it moved into an epic and the epic it now lives in (`storage.HomeStranded`), and each ticket it gave a new rank key, with the key it held and the key it holds now (`separateRankCollisions`); all empty when the backlog kept every rule and for every non-mutating outcome (`storage/sync.go`, `storage/landing.go`). `mergeAndReplay`, take-remote with carried purges and take-local set it from the landing.
 
 Tests: `TestSyncReconcileLinearizesDivergenceAndFastForwardPushes` (`sync_reconcile_test.go`), `TestSyncReconcileHoldsProseDivergenceForAgent` (`sync_reconcile_test.go`), `TestSyncReconcileResolvedFinalizesWithAgentText` (`sync_reconcile_test.go`), `TestSyncReconcileHealsSchemaSkew` (`sync_reconcile_schema_skew_test.go`), `TestSyncReconcileCombineIsBoundedOnALargeFoldedChain` (`sync_reconcile_scale_test.go`), `TestSyncReconcileCombinePreservesFoldedProvenance` (`sync_unrelated_test.go`).
 
@@ -720,9 +723,9 @@ Test `TestSyncResolveUnrelatedOwnerApprovalBindsForkAndSide` (`sync_unrelated_te
 Idempotent under retry (cached snapshot, fixed ref). The session's working set is left at the adopted head's own schema; the next `Open` lifts it. Tests `TestSyncResolveUnrelatedTakeRemote` (`sync_unrelated_test.go`), `TestSyncResolveUnrelatedTakeRemoteAdoptsAPrePurgeRemote` "nothing to carry" (`sync_unrelated_purge_test.go`).
 
 `takeRemoteCarryingPurges(ctx, result, guard, dataBranch, scratch, localHead, remoteHead)` (`sync_unrelated_take.go`), inside `runOnReconcileScratch`:
-1. `local = exportAtCommit(scratch.read, localHead)`; `theirs = exportAtCommit(scratch.read, remoteHead)` (each lifted to the current schema).
+1. `local = exportAtCommit(scratch.read, localHead)`; `theirs = exportAtCommit(scratch.read, remoteHead)` (each lifted to the current schema; both reads' cuts discarded, since only local's purge records land).
 2. `terminal = theirs.ApplyPurges(model.UnionPurges(theirs.Purges, local.Purges))`.
-3. `commitReplayAndAdvance(ctx, guard, dataBranch, scratch, remoteHead, takeRemotePurgesCommitMessage, terminal, foldStepper{store: s, readBranch: scratch.read, base: model.Export{}, theirs: theirs})` — an empty chain, so the spine is the lift commit (none on a current-schema head) and the marker.
+3. `commitReplayAndAdvance(ctx, guard, dataBranch, scratch, remoteHead, takeRemotePurgesCommitMessage, terminal, foldStepper{store: s, readBranch: scratch.read, base: model.Export{}, theirs: theirs}, nil)` — an empty chain, so the spine is the lift commit (none on a current-schema head) and the marker.
 4. `result.State = SyncReconcileTookRemote`; `result.Landing = landing.landing`.
 Tests `TestSyncResolveUnrelatedTakeRemoteCarriesTheLocalPurge`, `TestSyncResolveUnrelatedTakeRemoteAdoptsAPrePurgeRemote` "a purge to carry" (`sync_unrelated_purge_test.go`).
 
@@ -731,11 +734,11 @@ Tests `TestSyncResolveUnrelatedTakeRemoteCarriesTheLocalPurge`, `TestSyncResolve
 ### 6.6 `takeLocalOntoRemoteHead`
 
 `takeLocalOntoRemoteHead(ctx, result, guard, dataBranch, scratch, localHead, remoteHead)` (`sync_unrelated_take.go`), inside `runOnReconcileScratch`:
-1. `local = exportAtCommit(scratch.read, localHead)`.
-2. `theirs = exportAtCommit(scratch.read, remoteHead)`.
+1. `local, localCut = exportAtCommit(scratch.read, localHead)`.
+2. `theirs = exportAtCommit(scratch.read, remoteHead)`, its cuts discarded.
 3. `chain = readFoldedChain(localHead, remoteHead)`.
 4. `stepper = foldStepper{base: model.Export{}, theirs: theirs...}` — the **same no-base union projection combine uses**, so mid-chain history stays a whole backlog (`sync_unrelated_take.go`).
-5. `commitReplayAndAdvance(guard, dataBranch, scratch, remoteHead, takeLocalCommitMessage, terminal, stepper)` with `terminal = local.ApplyPurges(model.UnionPurges(local.Purges, theirs.Purges))` — the terminal export is **local's content, not the union**, cut by both sides' purge records and carrying them, so the marker commit holds the remote's records and no row they name, and its diff is the discard of the remote-only issues (`sync_unrelated_take.go`).
+5. `commitReplayAndAdvance(guard, dataBranch, scratch, remoteHead, takeLocalCommitMessage, terminal, stepper, localCut)` with `terminal = local.ApplyPurges(model.UnionPurges(local.Purges, theirs.Purges))` — the terminal export is **local's content, not the union**, cut by both sides' purge records and carrying them, so the marker commit holds the remote's records and no row they name, and its diff is the discard of the remote-only issues (`sync_unrelated_take.go`).
 6. `result.State = SyncReconcileTookLocal`; `result.Replayed = landing.replayed`; `result.Landing = landing.landing`.
 
 Tests: `TestSyncResolveUnrelatedTakeLocal` (`sync_unrelated_test.go`), `TestSyncResolveUnrelatedTakeLocalPreservesFoldedProvenance` (`sync_unrelated_test.go`), `TestSyncResolveUnrelatedTakeLocalKeepsTheRemotesPurge` (`sync_unrelated_purge_test.go`).
@@ -1115,7 +1118,7 @@ Files: `/Users/bmf/code/links-issue-tracker/internal/merge/merge.go`, `collision
 
 ### 11.1 Signatures
 
-merge.go: `MergeResult struct{ export model.Export; Pending []ProsePending; Collisions []Collision }` (merge.go; `Collision` is declared at collision.go); `(MergeResult) Settled() (model.Export, bool)`, ok only when `Pending` and `Collisions` are both empty (merge.go); `(MergeResult) Provisional() (model.Export, bool)`, ok only when `Collisions` is empty (merge.go); `side uint8`; `issueScope map[string]side` with `admits`; `sidedRows[T any]`; `bothSidesOf[T any]`; `ThreeWay(base model.Export, local model.Export, remote model.Export) MergeResult` (merge.go); `mapIssues`; `optionalIssuePtr`; `unionIssueIDs`; `issueChanged`; `issueEqual`; `issueProjection` struct; `issueProjectionFrom`; `mergeRelations`; `enforceSingleParent`; `breakParentCycles`; `maxString`; `mergeRecords`; `mergeLabels`.
+merge.go: `MergeResult struct{ export model.Export; Pending []ProsePending; Collisions []Collision }` (merge.go; `Collision` is declared at collision.go); `(MergeResult) Settled() (model.Export, bool)`, ok only when `Pending` and `Collisions` are both empty (merge.go); `(MergeResult) Provisional() (model.Export, bool)`, ok only when `Collisions` is empty (merge.go); `side uint8`; `issueScope map[string]side` with `admits`; `sidedRows[T any]`; `bothSidesOf[T any]`; `ThreeWay(base model.Export, local model.Export, remote model.Export) MergeResult` (merge.go); `mapIssues`; `optionalIssuePtr`; `unionIssueIDs`; `issueChanged`; `issueEqual`; `issueProjection` struct; `issueProjectionFrom`; `mergeRelations`; `enforceSingleParent`; `mergeRecords`; `mergeLabels`.
 
 collision.go: `Collision{IssueID string; Ours model.Issue; Theirs model.Issue}` with JSON tags `issue_id/ours/theirs`; `SameEntity{base *model.Issue; ours, theirs model.Issue; oursWS, theirsWS string}` — every field unexported, so outside the package `Classify` is the only way to obtain one; `Classify(base *model.Issue, ours, theirs model.Issue, oursWS, theirsWS string) (SameEntity, *Collision)`; `ancestorOf(base *model.Issue, ours model.Issue) *model.Issue`; `SortCollisions(collisions []Collision) []Collision`.
 
@@ -1192,9 +1195,9 @@ Tests: `merge_test.go` (nil vs empty `Labels` compare equal, so JSON round-trip 
 
 **Relations** (`mergeRelations`, merge.go): key is the triple `{Src, Dst, Type}` (merge.go). Iterates `bothSidesOf(locals, remotes)` — locals first, then remotes (merge.go) — writing into `merged[key]`, so on an identical key the **remote row wins** its `CreatedAt`/`CreatedBy` (merge.go). Referential filter: a row is dropped unless `scope` admits **both** `SrcID` and `DstID` from the side the row was read from (merge.go), so a relation touching a collided id survives only from the local side. Then `enforceSingleParent` (merge.go), then sort by `SrcID`, `DstID`, `Type` (merge.go). `Type` values: `"blocked-by"`, `"parent-child"`, `"related-to"` (`/Users/bmf/code/links-issue-tracker/internal/model/relation_type.go`). `blocked-by` and `related-to` are purely additive — test `resolve_test.go` asserts a local `blocked-by` edge and a remote `related-to` edge both survive (2 relations).
 
-**Single parent** (`enforceSingleParent`, merge.go): non-`parent-child` relations pass straight through (merge.go). Parent-child edges are keyed by `SrcID` (the child); the child keeps exactly one edge — the one with the **lexicographically greatest `DstID`** (`!seen || relation.DstID > existing.DstID`) (merge.go). Order-independent. Then `breakParentCycles(parentOf)` (merge.go) and the survivors are appended (merge.go); the caller sorts. Test `resolve_test.go`.
+**Single parent** (`enforceSingleParent`, merge.go): non-`parent-child` relations pass straight through (merge.go). Parent-child edges are keyed by `SrcID` (the child); the child keeps exactly one edge — the one with the **lexicographically greatest `DstID`** (`!seen || relation.DstID > existing.DstID`) (merge.go). Order-independent. The survivors are appended (merge.go); the caller sorts. Test `resolve_test.go`.
 
-**Cycle breaking** (`breakParentCycles`, merge.go): walks parent edges from each unsettled key (merge.go); a walk stops at a node with no parent edge or already `settled` (merge.go). On revisiting a node already on the current path at index `idx`, it **deletes the map entry keyed by `maxString(path[idx:])`** — the lexicographically greatest child id inside the loop — and stops (merge.go). The victim child becomes a root; nothing is reparented. Every node on the path is then marked `settled` (merge.go). `maxString` panics on an empty slice (merge.go) but is only ever called with the non-empty `path[idx:]`. Tests: `merge_test.go` (tail-entered cycle `a→b→c→b` → `c`'s edge deleted, `a→b`/`b→c` untouched); `merge_test.go` (clean 3-cycle `a→b→c→a` → exactly one edge removed, victim `c`); `resolve_test.go` (end-to-end: local `a→b`, remote `b→a` → exactly one parent edge).
+**Parent loops**: the merge applies no acyclicity rule. Two sides that each moved a different ticket under the other (local `a→b`, remote `b→a`) are two children each keeping its one edge, so the merged export holds both — a loop. The landing every merged export goes through cuts it (`storage.BreakParentCycles`, called first by `landExport`; see `land` above). A loop already stored in a commit the sync reads is cut earlier, by that commit's lift (`cutParentLoops`, 5.12). Test: `TestALoopTwoClonesMergeIntoIsCutOnLanding` (`internal/storage/parent_cycle_test.go`: `ThreeWay(...).Provisional()` holds both edges; `BreakParentCycles` keeps `a→b` and returns `Unlooped{IssueID: "b", Parent: "a", Cycle: [a b]}`).
 
 **Comments, events and plan reviews** (`mergeRecords[R]`, merge.go): one generic two-way union over `bothSidesOf(locals, remotes)` for the append-only tables, keyed by the row's own id (`Comment.ID`, `IssueEvent.ID`, `PlanReview.ID`), so when both sides carry one id the **remote row wins** (merge.go); a row is dropped unless `scope` admits its `IssueID` from the side it was read from (merge.go); sorted by id (merge.go). Tests `resolve_test.go`, `plan_test.go`.
 
@@ -1349,7 +1352,7 @@ Prose tests (`resolve_prose_test.go`), fixture `prosePendingFixture` = one issue
 
 The package declares **no** error type, no sentinel `var Err...`, and **no function returns `error`**. Every failure is a `bool` second return: `MergeResult.Settled` (merge.go), `MergeResult.Provisional` (merge.go), `IssueResolution.Settled` (resolve.go), `ParseFingerprint` (resolve_prose.go), `MatchProseResolutions` (resolve_prose.go).
 
-The only explicit abort is `panic(err)` when `model.HydrateStatus` returns an error inside `resolveStatus` (resolve.go). Implicit panics reachable from this package: `maxString` on an empty slice (merge.go, only called at merge.go with the non-empty `path[idx:]`); `issueProjectionFrom → issue.Capabilities() → mustLifecycle` on an unhydrated non-container (`/Users/bmf/code/links-issue-tracker/internal/model/model.go`), reached from `issueChanged` for every id (merge.go); `model.RetentionTimestamps` on an illegal retention variant (`/Users/bmf/code/links-issue-tracker/internal/model/lifecycle/retention.go`), called at resolve.go; `merged.SetRetention(...)` on an illegal retention variant (`model.go`), called at resolve.go. `ResolveIssue` dereferences no caller-supplied pointer that can be nil: `ours` and `theirs` are addresses of `SameEntity` fields, and `base` is dereferenced only when `hasBase` (resolve.go).
+The only explicit abort is `panic(err)` when `model.HydrateStatus` returns an error inside `resolveStatus` (resolve.go). Implicit panics reachable from this package: `issueProjectionFrom → issue.Capabilities() → mustLifecycle` on an unhydrated non-container (`/Users/bmf/code/links-issue-tracker/internal/model/model.go`), reached from `issueChanged` for every id (merge.go); `model.RetentionTimestamps` on an illegal retention variant (`/Users/bmf/code/links-issue-tracker/internal/model/lifecycle/retention.go`), called at resolve.go; `merged.SetRetention(...)` on an illegal retention variant (`model.go`), called at resolve.go. `ResolveIssue` dereferences no caller-supplied pointer that can be nil: `ours` and `theirs` are addresses of `SameEntity` fields, and `base` is dereferenced only when `hasBase` (resolve.go).
 
 ### 11.9 Ordering and determinism
 
@@ -1357,8 +1360,8 @@ The only explicit abort is `panic(err)` when `model.HydrateStatus` returns an er
 - Merged issues sorted by `ID` (merge.go); collisions by `IssueID` (merge.go, collision.go); relations by `(SrcID, DstID, Type)` (merge.go); comments by `ID` (merge.go); events by `ID` (merge.go); label table by `(IssueID, Name)` (merge.go); label names on a row ascending (resolve.go); `SortPending` by `(IssueID, Field)` (resolve_prose.go).
 - Every Tier-2 policy is symmetric in its two inputs — `higher` (resolve.go), `presentOr` (resolve.go), workspace `tiebreak` (resolve.go), `resolveClosePayload` (resolve.go, verified in both orders at resolve_test.go) — so both machines compute the same winner without a clock and without knowing which side is "ours".
 - Causality comes from the merge-base, not timestamps: `UpdatedAt` is never consulted to pick a field winner and is itself an output (resolve.go). `CreatedAt` is consulted only by `Classify` and `ancestorOf`, to decide whether two rows are one ticket and whether the base row is its ancestor (collision.go); the merged `CreatedAt` is an output (resolve.go). The merge-base rule is stated at resolve.go.
-- The single-parent winner (`max DstID`, merge.go) and the cycle victim (`max child id in the loop`, merge.go) are order-independent functions of the data.
-- Non-deterministic residue: map-iteration order feeds `enforceSingleParent` (merge.go) and `breakParentCycles`' start-node choice (merge.go); both are followed by an order-independent selection rule and a final sort.
+- The single-parent winner (`max DstID`, merge.go) is an order-independent function of the data.
+- Non-deterministic residue: map-iteration order feeds `enforceSingleParent` (merge.go); it is followed by an order-independent selection rule and a final sort.
 
 ### 11.10 Additional test-pinned merge behaviors
 
@@ -1370,7 +1373,7 @@ The only explicit abort is `panic(err)` when `model.HydrateStatus` returns an er
 - `resolve_test.go` — Tier-2 prose is limited to the field that actually diverged: title and prompt identical, description divergent → exactly one pending carrying all three description versions.
 - `resolve_test.go` — local removed the whole row, remote edited it → the remote edit survives (`Title == "edited"`).
 - `resolve_test.go` — a base-only id absent on both sides → zero issues; no zero-value row is appended.
-- Fixtures/clocks: `issueWithStatus` (merge_test.go), `jsonRoundTripIssue` (merge_test.go), `provisional` (merge_test.go), `leaf` (resolve_test.go), `open` (resolve_test.go), `same` (resolve_test.go; routes a fixture through `Classify` and fails the test if it is a collision), `closedLeaf` (resolve_test.go), `issueClosedWith` (merge_test.go), `parentEdges` (merge_test.go), `hasParentCycle` (merge_test.go), `plantCollision` (collision_test.go); `t0 = 2026-01-01`, `t1 = 2026-02-01`, `t2 = 2026-03-01` UTC (resolve_test.go).
+- Fixtures/clocks: `issueWithStatus` (merge_test.go), `jsonRoundTripIssue` (merge_test.go), `provisional` (merge_test.go), `leaf` (resolve_test.go), `open` (resolve_test.go), `same` (resolve_test.go; routes a fixture through `Classify` and fails the test if it is a collision), `closedLeaf` (resolve_test.go), `issueClosedWith` (merge_test.go), `plantCollision` (collision_test.go); `t0 = 2026-01-01`, `t1 = 2026-02-01`, `t2 = 2026-03-01` UTC (resolve_test.go).
 
 ## PART 12 — The migration registry (`internal/store/migrations/`)
 

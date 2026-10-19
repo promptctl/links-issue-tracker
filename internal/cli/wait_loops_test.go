@@ -91,8 +91,9 @@ func TestDoctorNamesEveryLinkBetweenAPair(t *testing.T) {
 	}
 }
 
-// A hierarchy that loops has no walk over it that returns, so doctor reports
-// the wait-loop check as not run instead of overflowing the stack on it.
+// A hierarchy that loops has no walk over it with an answer, so doctor reports
+// the wait-loop check as not run, and its exit names the loop's own repair
+// rather than --fix integrity, which does not touch a loop.
 func TestDoctorWaitLoopsUncheckedOnAStoredParentCycle(t *testing.T) {
 	h := newReadyTestHarness(t)
 	top := h.createIssue(storage.CreateIssueInput{Title: "E", Topic: "loop", IssueType: "epic"})
@@ -112,6 +113,12 @@ func TestDoctorWaitLoopsUncheckedOnAStoredParentCycle(t *testing.T) {
 	err = runDoctor(h.ctx, &buf, h.ap, nil)
 	if !errors.As(err, new(CorruptionError)) {
 		t.Fatalf("runDoctor() error = %v, want the parent cycle's CorruptionError", err)
+	}
+	if got := commandErrorReason(err); got != reasonParentCycle {
+		t.Errorf("reason = %q, want %q", got, reasonParentCycle)
+	}
+	if remediation := commandErrorRemediation(reasonParentCycle); strings.Contains(remediation, "--fix") {
+		t.Errorf("remediation %q points at a --fix; a loop is broken with the repair the message names", remediation)
 	}
 	if !strings.Contains(buf.String(), " wait_loops=unchecked\n") {
 		t.Fatalf("doctor should report wait_loops=unchecked on a parent cycle; got:\n%s", buf.String())

@@ -1174,6 +1174,7 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/inventories/inventory-store-sync.md", Text: "DELETE FROM meta WHERE meta_key = 'producer_binary_version';", Src: "internal/store/migrations/00010_history_can_be_re_rooted.sql"},
 	{Doc: "doc-v1-total/inventories/inventory-store-sync.md", Text: "DELETE FROM meta WHERE meta_key = 'schema_version'", Src: "DELETE FROM meta WHERE meta_key = 'schema_version'"},
 	{Doc: "doc-v1-total/inventories/inventory-store-sync.md", Text: "DELETE FROM relations", Src: "DELETE FROM relations WHERE src_id = ? AND type = ?"},
+	{Doc: "doc-v1-total/inventories/inventory-store-sync.md", Text: "DELETE FROM relations WHERE src_id = ? AND dst_id = ? AND type = 'parent-child'", Src: "DELETE FROM relations WHERE src_id = ? AND dst_id = ? AND type = 'parent-child'"},
 	{Doc: "doc-v1-total/inventories/inventory-store-sync.md", Text: "DELETE r FROM relations r", Src: "internal/store/migrations/00004_add_redirect_target.sql"},
 	{Doc: "doc-v1-total/inventories/inventory-store-sync.md", Text: "DROP TABLE IF EXISTS", Src: "DROP TABLE IF EXISTS issue_history"},
 	{Doc: "doc-v1-total/inventories/inventory-store-sync.md", Text: "DROP TABLE migration_quarantine", Src: "DROP TABLE migration_quarantine"},

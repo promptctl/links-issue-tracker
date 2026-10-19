@@ -86,6 +86,7 @@ the code it arrives on:
 | `scope_narrowed` | 6 | `lit next`'s filter left out the ticket it would otherwise hand you, and nothing it selects is ready; the message names the ticket |
 | `state_already_holds` | 6 | The state the command asked for already holds |
 | `corruption_detected` | 7 | The store failed an integrity check |
+| `parent_cycle` | 7 | The store's hierarchy holds a loop, so no epic in it has a state to read; the message names the loop and the `lit parent set` that breaks it |
 
 Code 6 is not a failure: the command ran correctly and changed nothing. It exists so a
 caller looping `lit next` can tell "stop, there is nothing for you" from "lit is broken"

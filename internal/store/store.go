@@ -2641,6 +2641,39 @@ func statusForStorage(issue model.Issue) sql.NullString {
 }
 
 func (s *Store) hydrateIssues(ctx context.Context, rows []issueRow) ([]model.Issue, error) {
+	return s.hydrateBelow(ctx, rows, make([]*descent, len(rows)))
+}
+
+// descent is the chain of containers a hydration descended through to reach a
+// row, nearest first; a row the caller asked for has none. It is a list that
+// shares its tail, so extending it for a child costs one node.
+type descent struct {
+	id string
+	up *descent
+}
+
+// loopTo returns the chain from its nearest container up to id, or nothing
+// when id is not on it. A child already on its own chain is a parent cycle:
+// the chain from its parent up to it is the loop, each the child of the next,
+// and the child of the first.
+func (d *descent) loopTo(id string) []string {
+	var loop []string
+	for at := d; at != nil; at = at.up {
+		loop = append(loop, at.id)
+		if at.id == id {
+			return loop
+		}
+	}
+	return nil
+}
+
+// hydrateBelow hydrates rows, each reached through the containers in its
+// chain. A container's state is derived from its children's, so a container
+// that is its own descendant has none to derive; the descent refuses it there,
+// naming the loop, rather than descending into it again. The chain is what
+// bounds the descent: no row is hydrated below itself.
+// [LAW:no-silent-failure]
+func (s *Store) hydrateBelow(ctx context.Context, rows []issueRow, chains []*descent) ([]model.Issue, error) {
 	if len(rows) == 0 {
 		return []model.Issue{}, nil
 	}
@@ -2653,12 +2686,14 @@ func (s *Store) hydrateIssues(ctx context.Context, rows []issueRow) ([]model.Iss
 		return nil, err
 	}
 	epicIDs := make([]string, 0, len(rows))
-	for _, row := range rows {
+	below := make(map[string]*descent, len(rows))
+	for i, row := range rows {
 		if row.Issue.IssueType.IsContainer() {
 			epicIDs = append(epicIDs, row.Issue.ID)
+			below[row.Issue.ID] = &descent{id: row.Issue.ID, up: chains[i]}
 		}
 	}
-	childrenByEpicID, err := s.lifecycleChildrenByEpicIDs(ctx, epicIDs)
+	childrenByEpicID, err := s.lifecycleChildrenByEpicIDs(ctx, epicIDs, below)
 	if err != nil {
 		return nil, err
 	}
@@ -2703,7 +2738,10 @@ func (s *Store) hydrateIssues(ctx context.Context, rows []issueRow) ([]model.Iss
 	return hydrated, nil
 }
 
-func (s *Store) lifecycleChildrenByEpicIDs(ctx context.Context, epicIDs []string) (map[string][]model.Issue, error) {
+// lifecycleChildrenByEpicIDs hydrates the children of each epic in epicIDs,
+// grouped by epic. below holds each epic's chain, the epic itself nearest, and
+// every child is hydrated under its epic's.
+func (s *Store) lifecycleChildrenByEpicIDs(ctx context.Context, epicIDs []string, below map[string]*descent) (map[string][]model.Issue, error) {
 	out := make(map[string][]model.Issue, len(epicIDs))
 
 	// [LAW:dataflow-not-control-flow] Hydrate every epic's children in a single
@@ -2735,7 +2773,14 @@ func (s *Store) lifecycleChildrenByEpicIDs(ctx context.Context, epicIDs []string
 		childRows = append(childRows, batchRows...)
 		parentIDs = append(parentIDs, batchParents...)
 	}
-	hydrated, err := s.hydrateIssues(ctx, childRows)
+	chains := make([]*descent, len(childRows))
+	for i, child := range childRows {
+		chains[i] = below[parentIDs[i]]
+		if loop := chains[i].loopTo(child.Issue.ID); len(loop) > 0 {
+			return nil, storage.ParentCycleError{Cycle: loop}
+		}
+	}
+	hydrated, err := s.hydrateBelow(ctx, childRows, chains)
 	if err != nil {
 		return nil, err
 	}
