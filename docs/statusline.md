@@ -75,7 +75,7 @@ lifecycle change clears it, as described under
 | `working_on` | object or `null` | The ticket this checkout is working on. `null` when nothing is recorded. |
 | `working_on.ticket.id` | string | The ticket's id. |
 | `working_on.ticket.title` | string | The ticket's title. |
-| `working_on.rollup_progress` | object or `null` | The progress of the ticket's lane. `null` when the command that recorded `working_on` did not count the lane. A lit older than this field writes no `rollup_progress` key at all. |
+| `working_on.rollup_progress` | object | The progress of the ticket's lane, counted when `working_on` is recorded. lit 0.19 and 0.20 write `null` when the command that recorded `working_on` did not count the lane, and a lit older than 0.19 writes no `rollup_progress` key at all. |
 | `working_on.rollup_progress.rollup_completed_count` | integer | How many of the lane's tickets are closed: the `N` of the `N/M done` on that lane's claim line in `lit backlog`. Archived and deleted tickets are not counted. |
 | `working_on.rollup_progress.rollup_total_count` | integer | How many tickets the lane holds, not counting archived or deleted ones: the `M` of that `N/M done`. |
 | `working_on.phase` | string or `null` | Where the work on the ticket stands: `plan`, `impl`, `review` or `merge`, as `lit show` prints it on the ticket's `phase:` line. `null` when the command that recorded `working_on` did not read the phase. A lit older than this field writes no `phase` key at all. |
@@ -97,9 +97,9 @@ seconds.
 
 **`working_on`** is set by:
 
-- `lit start <id>`, which records the ticket it started and its
-  `rollup_progress` once the start has landed. Starting a closed ticket takes
-  it out of `rollup_completed_count`.
+- `lit start <id>`, which records the ticket it started with its
+  `rollup_progress`, counted once the start has landed. Starting a closed
+  ticket takes it out of `rollup_completed_count`.
 - `lit next`, when it hands back a ticket that is already in progress in a lane
   this checkout holds. This happens with or without filter flags, and it also
   counts `rollup_progress` again, reads `phase` again and updates
@@ -185,8 +185,8 @@ does not change when a field is added. A script should check that
 know. A field added later can be missing even at the same `schema_version`,
 because an older lit that rewrites the file drops the fields it does not know.
 
-When lit finds a file it cannot parse, or one with a different `schema_version`,
-it replaces the whole file with what the current command recorded. It prints
+When lit finds a file it cannot parse, one with a different `schema_version`,
+or one whose `working_on` has no `rollup_progress`, it replaces the whole file with what the current command recorded. It prints
 `warning: statusline file was unreadable and has been rewritten:` on stderr when
 it does.
 

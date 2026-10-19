@@ -30,7 +30,6 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -73,7 +72,7 @@ var (
 var cases = []renderCase{
 	{
 		name: "phase",
-		write: litWrites(statusline.Started{Ticket: one}, statusline.RollupCounted{ID: one.ID, Progress: lane},
+		write: litWrites(statusline.Started{Ticket: one, Progress: lane},
 			statusline.PhaseRead{ID: one.ID, Phase: "review"}, statusline.Picked{Ticket: &two}),
 		cells: []string{
 			"🎫 [t-1](cc-candybar://dispatch/e=copy%2Ft-1) 1/4",
@@ -82,16 +81,23 @@ var cases = []renderCase{
 		},
 	},
 	{
-		// No phase read and no lane counted: both are null. next names the
-		// ticket being worked, so it says nothing ticket does not, and hides.
+		// No phase read: it is null. next names the ticket being worked, so it
+		// says nothing ticket does not, and hides.
 		name:  "null-phase",
-		write: litWrites(statusline.Started{Ticket: one}, statusline.Picked{Ticket: &one}),
-		cells: []string{"🎫 [t-1](cc-candybar://dispatch/e=copy%2Ft-1)"},
+		write: litWrites(statusline.Started{Ticket: one, Progress: lane}, statusline.Picked{Ticket: &one}),
+		cells: []string{"🎫 [t-1](cc-candybar://dispatch/e=copy%2Ft-1) 1/4"},
 	},
 	{
 		name:  "no-phase-key",
-		write: olderLitWrites(statusline.Started{Ticket: one}, statusline.RollupCounted{ID: one.ID, Progress: lane}),
+		write: olderLitWrites(withoutKey("phase"), statusline.Started{Ticket: one, Progress: lane}),
 		cells: []string{"🎫 [t-1](cc-candybar://dispatch/e=copy%2Ft-1) 1/4"},
+	},
+	{
+		// lit 0.19 and 0.20 wrote null for a lane the recording command did
+		// not count.
+		name:  "null-rollup",
+		write: olderLitWrites(nullKey("rollup_progress"), statusline.Started{Ticket: one, Progress: lane}),
+		cells: []string{"🎫 [t-1](cc-candybar://dispatch/e=copy%2Ft-1)"},
 	},
 	{
 		name:  "no-working-on",
@@ -100,8 +106,8 @@ var cases = []renderCase{
 	},
 	{
 		name:  "nothing-ready",
-		write: litWrites(statusline.Started{Ticket: one}, statusline.Picked{Ticket: nil}),
-		cells: []string{"🎫 [t-1](cc-candybar://dispatch/e=copy%2Ft-1)", "next nothing ready"},
+		write: litWrites(statusline.Started{Ticket: one, Progress: lane}, statusline.Picked{Ticket: nil}),
+		cells: []string{"🎫 [t-1](cc-candybar://dispatch/e=copy%2Ft-1) 1/4", "next nothing ready"},
 	},
 	{
 		name:  "no-file",
@@ -118,9 +124,9 @@ func litWrites(facts ...statusline.Fact) func(statusline.Location) error {
 	}
 }
 
-// olderLitWrites leaves the file a lit from before phases writes after
-// recording facts: its working_on has no phase key at all.
-func olderLitWrites(facts ...statusline.Fact) func(statusline.Location) error {
+// olderLitWrites leaves the file an older lit writes after recording facts:
+// the file this lit writes, with older applied to its working_on.
+func olderLitWrites(older func(workingOn map[string]json.RawMessage) error, facts ...statusline.Fact) func(statusline.Location) error {
 	return func(loc statusline.Location) error {
 		if err := litWrites(facts...)(loc); err != nil {
 			return err
@@ -129,8 +135,9 @@ func olderLitWrites(facts ...statusline.Fact) func(statusline.Location) error {
 		if err != nil {
 			return err
 		}
-		// Raw messages keep every key this lit writes but the one dropped, so
-		// the file tracks statusline.File without restating its shape.
+		// Raw messages keep every key this lit writes but the one older
+		// changes, so the file tracks statusline.File without restating its
+		// shape.
 		var file, workingOn map[string]json.RawMessage
 		if err := json.Unmarshal(raw, &file); err != nil {
 			return err
@@ -138,10 +145,9 @@ func olderLitWrites(facts ...statusline.Fact) func(statusline.Location) error {
 		if err := json.Unmarshal(file["working_on"], &workingOn); err != nil {
 			return err
 		}
-		if _, ok := workingOn["phase"]; !ok {
-			return errors.New("the facts recorded no working_on with a phase key to drop")
+		if err := older(workingOn); err != nil {
+			return err
 		}
-		delete(workingOn, "phase")
 		if file["working_on"], err = json.Marshal(workingOn); err != nil {
 			return err
 		}
@@ -150,6 +156,28 @@ func olderLitWrites(facts ...statusline.Fact) func(statusline.Location) error {
 			return err
 		}
 		return os.WriteFile(loc.File, older, 0o644)
+	}
+}
+
+// withoutKey is a working_on from a lit before key: it has no such key at all.
+func withoutKey(key string) func(map[string]json.RawMessage) error {
+	return func(workingOn map[string]json.RawMessage) error {
+		if _, ok := workingOn[key]; !ok {
+			return fmt.Errorf("the facts recorded no working_on with a %s key to drop", key)
+		}
+		delete(workingOn, key)
+		return nil
+	}
+}
+
+// nullKey is a working_on from a lit that wrote key as null.
+func nullKey(key string) func(map[string]json.RawMessage) error {
+	return func(workingOn map[string]json.RawMessage) error {
+		if _, ok := workingOn[key]; !ok {
+			return fmt.Errorf("the facts recorded no working_on with a %s key to null", key)
+		}
+		workingOn[key] = json.RawMessage("null")
+		return nil
 	}
 }
 

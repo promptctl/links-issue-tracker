@@ -60,8 +60,8 @@ type File struct {
 type WorkingOn struct {
 	Ticket Ticket `json:"ticket"`
 	// RollupProgress is the progress of the ticket's lane, counted by the
-	// command that made the record; nil when that command counted none.
-	RollupProgress *RollupProgress `json:"rollup_progress"`
+	// command that started the record.
+	RollupProgress RollupProgress `json:"rollup_progress"`
 	// Phase is where the ticket's work stands — plan, impl, review or merge —
 	// as the ticket's history put it when a command last read it; nil when
 	// the command that made the record read none.
@@ -94,8 +94,14 @@ type Fact interface {
 	apply(f File, at time.Time) File
 }
 
-// Started says this checkout is working on Ticket.
-type Started struct{ Ticket Ticket }
+// Started says this checkout is working on Ticket, whose lane stands at
+// Progress. A start carries its lane's count because the record it makes
+// shows one: no command can say what it is working on without counting it.
+// [LAW:types-are-the-program]
+type Started struct {
+	Ticket   Ticket
+	Progress RollupProgress
+}
 
 // Picked says a plain `lit next` picked Ticket, or found nothing when Ticket is
 // nil.
@@ -104,13 +110,6 @@ type Picked struct{ Ticket *Ticket }
 // Retitled says Ticket's title is now Ticket.Title, so any record naming it
 // shows that title from here on; when the record was made does not change.
 type Retitled struct{ Ticket Ticket }
-
-// RollupCounted says the lane ticket ID is in stands at Progress, so the
-// record of working on ID shows that progress.
-type RollupCounted struct {
-	ID       string
-	Progress RollupProgress
-}
 
 // PhaseRead says ticket ID's history puts it in Phase, so the record of
 // working on ID shows that phase.
@@ -129,7 +128,7 @@ type Invalidated struct{ ID string }
 type Replaced struct{}
 
 func (s Started) apply(f File, at time.Time) File {
-	f.WorkingOn = &WorkingOn{Ticket: s.Ticket, RecordedAt: at}
+	f.WorkingOn = &WorkingOn{Ticket: s.Ticket, RollupProgress: s.Progress, RecordedAt: at}
 	return f
 }
 
@@ -150,15 +149,6 @@ func (r Retitled) apply(f File, _ time.Time) File {
 		next, ticket := *f.Next, r.Ticket
 		next.Ticket = &ticket
 		f.Next = &next
-	}
-	return f
-}
-
-func (c RollupCounted) apply(f File, _ time.Time) File {
-	if f.WorkingOn != nil && f.WorkingOn.Ticket.ID == c.ID {
-		working, progress := *f.WorkingOn, c.Progress
-		working.RollupProgress = &progress
-		f.WorkingOn = &working
 	}
 	return f
 }
@@ -229,8 +219,7 @@ type Outcome struct {
 	// Bytes is the size of the file written; zero when nothing was written.
 	Bytes int
 	// RollupProgress is the rollup progress the written file's working_on
-	// shows; nil when nothing was written, or the file shows no working_on or
-	// no count for it.
+	// shows; nil when nothing was written, or the file shows no working_on.
 	RollupProgress *RollupProgress
 	// Phase is the phase the written file's working_on shows; nil when
 	// nothing was written, or the file shows no working_on or no phase for it.
@@ -303,7 +292,8 @@ func Write(loc Location, facts Facts, now time.Time) (Outcome, error) {
 	out.Changed = changedSlots(before, written)
 	out.Bytes = len(payload)
 	if written.WorkingOn != nil {
-		out.RollupProgress = written.WorkingOn.RollupProgress
+		progress := written.WorkingOn.RollupProgress
+		out.RollupProgress = &progress
 		out.Phase = written.WorkingOn.Phase
 	}
 	return out, nil
@@ -324,7 +314,10 @@ func changedSlots(before *File, after File) []string {
 }
 
 // parse reads a file this lit wrote. A file of another schema version is not
-// one it can merge into: it is replaced, like a damaged one.
+// one it can merge into: it is replaced, like a damaged one. So is a working_on
+// with no rollup_progress, which lit 0.19 and 0.20 wrote as null when the
+// command that made the record counted no lane: decoded into File, it would
+// read as a lane of no tickets.
 func parse(raw []byte) (File, error) {
 	var f File
 	if err := json.Unmarshal(raw, &f); err != nil {
@@ -332,6 +325,17 @@ func parse(raw []byte) (File, error) {
 	}
 	if f.SchemaVersion != SchemaVersion {
 		return File{}, fmt.Errorf("schema_version %d, this lit writes %d", f.SchemaVersion, SchemaVersion)
+	}
+	var counted struct {
+		WorkingOn *struct {
+			RollupProgress *RollupProgress `json:"rollup_progress"`
+		} `json:"working_on"`
+	}
+	if err := json.Unmarshal(raw, &counted); err != nil {
+		return File{}, err
+	}
+	if counted.WorkingOn != nil && counted.WorkingOn.RollupProgress == nil {
+		return File{}, errors.New("working_on has no rollup_progress")
 	}
 	return f, nil
 }

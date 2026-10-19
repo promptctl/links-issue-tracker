@@ -146,10 +146,12 @@ func StatuslineTicket(issue model.Issue) statusline.Ticket {
 }
 
 // changeStatuslineFacts is what a change tells the statusline file. Every
-// change leaves the ticket with the title it now has. A start is this checkout
-// taking the ticket on; a phase move keeps the ticket in progress, in the phase
-// it names; every other transition moves the ticket out of what the file can
-// say about it; a change of fields alone moves it nowhere.
+// change leaves the ticket with the title it now has. A phase move keeps the
+// ticket in progress, in the phase it names; every other transition but a
+// start moves the ticket out of what the file can say about it; a change of
+// fields alone moves it nowhere. A start is this checkout taking the ticket on,
+// and `lit start` records it with its lane's count, which only the claim
+// evidence it gathered holds; a change knows its own ticket and no lane.
 func changeStatuslineFacts(action model.Action, issue model.Issue) statusline.Facts {
 	ticket := StatuslineTicket(issue)
 	facts := statusline.Facts{statusline.Retitled{Ticket: ticket}}
@@ -158,7 +160,7 @@ func changeStatuslineFacts(action model.Action, issue model.Issue) statusline.Fa
 	case model.SetPhase:
 		facts.Record(statusline.PhaseRead{ID: issue.ID, Phase: string(action.Phase)})
 	case model.Start:
-		facts.Record(statusline.Started{Ticket: ticket})
+		// Recorded by authorizeStart's afterApply, with the lane's count.
 	default:
 		facts.Record(statusline.Invalidated{ID: issue.ID})
 	}

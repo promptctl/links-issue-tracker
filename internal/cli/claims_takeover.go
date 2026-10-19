@@ -69,8 +69,8 @@ func relationOf(standing claims.Standing, self model.Attribution) laneRelation {
 // Its result is what the start owes after Apply (transitionSpec.authorize):
 // the transfer notice when Apply reports the claim changed hands and the lane's
 // standing names the predecessor as its holder, the empty string otherwise;
-// and, for the statusline file, the lane's count for its rollup progress and
-// the phase the start left the ticket in. A handover from anyone the lane does
+// and, for the statusline file, the start with its lane's count for its rollup
+// progress, and the phase the start left the ticket in. A handover from anyone the lane does
 // not name — nobody holds it, or somebody else does — goes unannounced, and the
 // gate is the one read that knows the lane's standing. The count is that same
 // evidence with the written ticket in place of the one read, so it costs no
@@ -113,7 +113,7 @@ func authorizeStart(ctx context.Context, stdout io.Writer, ap *app.App, issueID 
 		notice := transferNotice(standing, handover)
 		telemetry.Set(ctx, "start.handover", handover != nil)
 		telemetry.Set(ctx, "start.transfer_announced", notice != "")
-		return notice, statusline.Facts{rollupCounted(cc.evidence, written.issue), phaseRead(written)}
+		return notice, statusline.Facts{started(cc.evidence, written.issue), phaseRead(written)}
 	}, nil
 }
 
