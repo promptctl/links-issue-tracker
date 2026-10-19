@@ -114,15 +114,15 @@ func TestEagerPushOnDefaultCadenceReachesRemoteWithoutExplicitPush(t *testing.T)
 	const pollTimeout = 15 * time.Second
 	const pollInterval = 300 * time.Millisecond
 	deadline := time.Now().Add(pollTimeout)
+	var arrived int
 	var lastErr error
 	for time.Now().Before(deadline) {
-		var arrived int
 		if arrived, lastErr = observer.count(epic, "eager-push"); lastErr == nil && arrived == 1 {
 			return
 		}
 		time.Sleep(pollInterval)
 	}
-	t.Fatalf("mutation never reached the remote without an explicit push, %s after lit new returned (default cadence should be on-change); last observation error: %v", pollTimeout, lastErr)
+	t.Fatalf("mutation never reached the remote without an explicit push, %s after lit new returned (default cadence should be on-change); last observation: %d arrived, error %v", pollTimeout, arrived, lastErr)
 }
 
 // isolatedEnv builds the child-env overrides for a test whose claim is about
@@ -157,7 +157,6 @@ func gitCurrentBranch(t *testing.T, dir string) string {
 // with its own lit workspace. Nothing else in a test touches the clone and it
 // never syncs on its own, so data reaches it only through the remote.
 type remoteObserver struct {
-	t         *testing.T
 	dir, self string
 	env       map[string]string
 }
@@ -166,7 +165,9 @@ func newRemoteObserver(t *testing.T, base, remoteGit, self, xdgConfigHome string
 	t.Helper()
 	dir := filepath.Join(base, "observer")
 	runGit(t, base, "clone", remoteGit, dir)
-	o := remoteObserver{t: t, dir: dir, self: self, env: isolatedEnv(xdgConfigHome, "1")}
+	o := remoteObserver{dir: dir, self: self, env: isolatedEnv(xdgConfigHome, "1")}
+	// runLit registers the clone's one worker join; count's polls run without
+	// queuing another per call.
 	if out, err := runLit(t, dir, self, o.env, "init", "--skip-hooks", "--skip-agents"); err != nil {
 		t.Fatalf("observer lit init: %v\noutput:\n%s", err, out)
 	}
@@ -177,17 +178,16 @@ func newRemoteObserver(t *testing.T, base, remoteGit, self, xdgConfigHome string
 // pull or list that fails returns its error, which a poll reads as "not yet"
 // and reports if the deadline passes.
 func (o remoteObserver) count(parent, title string) (int, error) {
-	o.t.Helper()
-	if out, err := runLit(o.t, o.dir, o.self, o.env, "sync", "pull"); err != nil {
+	if out, err := execLit(o.dir, o.self, o.env, "sync", "pull"); err != nil {
 		return 0, fmt.Errorf("observer lit sync pull: %w\n%s", err, out)
 	}
-	out, err := runLit(o.t, o.dir, o.self, o.env, "ls", "--parent", parent)
+	out, err := execLit(o.dir, o.self, o.env, "ls", "--parent", parent, "--columns", "title")
 	if err != nil {
 		return 0, fmt.Errorf("observer lit ls: %w\n%s", err, out)
 	}
 	n := 0
 	for _, line := range strings.Split(out, "\n") {
-		if strings.HasSuffix(line, "| "+title) {
+		if line == title {
 			n++
 		}
 	}

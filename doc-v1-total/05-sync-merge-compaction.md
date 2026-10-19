@@ -321,7 +321,7 @@ Snapshots are full directory copies of the database dir, used as the coarse reco
 
 ## Support packages
 
-Four small packages sit beside the sync machinery.
+Three small packages sit beside the sync machinery.
 
 **`internal/syncfile`** — JSON export files on disk. `WriteAtomic` marshals a `model.Export` as two-space-indented JSON with a trailing newline, replaces the target with it through `atomicfile.WriteFile` (mode `0o600`, durable), returning the lowercase-hex SHA-256 of the payload bytes (`internal/syncfile/syncfile.go`). `Read` parses a file back into an export (inheriting the v1→v2 history conversion in `Export.UnmarshalJSON`) and returns the same hash; `HashFile` hashes a file's bytes and returns `""` with no error for a missing file (`syncfile.go`). Because the hash covers the serialized bytes, any formatting change alters it.
 

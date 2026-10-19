@@ -49,7 +49,10 @@ func TestFreshOpenAppliesRegistryToHead(t *testing.T) {
 		t.Fatalf("recorded version = %d, want %d", appliedVersion, headVersion(t))
 	}
 
-	log := commitMessages(t, ctx, st.db)
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	log := observedCommitMessages(t, ctx, doltRoot, "test-workspace-id")
 	if !slices.ContainsFunc(log, func(m string) bool { return strings.Contains(m, "migrate: v1 00001_baseline.sql") }) {
 		t.Fatalf("commit log missing per-migration commit message:\n%s", strings.Join(log, "\n"))
 	}

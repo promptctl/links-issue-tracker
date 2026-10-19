@@ -51,10 +51,15 @@ func observedBranch(t *testing.T, ctx context.Context, doltRoot, workspaceID str
 	return branch
 }
 
-// commitMessages is every commit message on db's current branch, newest first.
-func commitMessages(t *testing.T, ctx context.Context, db *sql.DB) []string {
+// observedCommitMessages is every commit message on the branch the closed store
+// at doltRoot has checked out, newest first.
+func observedCommitMessages(t *testing.T, ctx context.Context, doltRoot, workspaceID string) []string {
 	t.Helper()
-	return queryStrings(t, ctx, db, `SELECT message FROM dolt_log()`)
+	var messages []string
+	observeDolt(t, ctx, doltRoot, workspaceID, func(db *sql.DB) {
+		messages = queryStrings(t, ctx, db, `SELECT message FROM dolt_log()`)
+	})
+	return messages
 }
 
 // branchNames is every branch in db.

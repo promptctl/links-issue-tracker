@@ -293,7 +293,10 @@ func TestDowngradeHappyPathSteppedAndCommitted(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dbsnapshot.DirFor(doltRoot), done.Snapshot)); err != nil {
 		t.Fatalf("reported snapshot %q: %v", done.Snapshot, err)
 	}
-	log := commitMessages(t, ctx, st.db)
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close() = %v", err)
+	}
+	log := observedCommitMessages(t, ctx, doltRoot, "test-workspace-id")
 	registry, err := migrations.Embedded()
 	if err != nil {
 		t.Fatal(err)

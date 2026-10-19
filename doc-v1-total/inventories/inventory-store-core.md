@@ -159,7 +159,7 @@ Behavioral evidence:
 - A second concurrent `Open` on the same root blocks while the first store is live and then succeeds after the first `Close` (`engine_serialization_test.go`); it must still be blocked after a 300 ms window (`engine_serialization_test.go`) and must complete within 5 s of the release (`engine_serialization_test.go`).
 - `OpenSync` waits on a live foreground `Open` the same way (`engine_serialization_test.go`).
 - Re-`Open` on a current schema adds **no** Dolt commit (`store_test.go`, HEAD read in process before and after).
-- Migration is idempotent across opens, measured on the commit log (`store_test.go`).
+- Migration is idempotent across opens: a second `Open` leaves HEAD where the first put it (`store_test.go`, HEAD read in process).
 - `Open` preserves an existing `meta.schema_version` value (`store_test.go`).
 - After a SIGKILL delivered inside `commitWorkingSetOnce`, a fresh-process `Open` on the same path succeeds, the commit lock is free, and the killed mutation's staged write is visible (`process_kill_test.go`).
 - After a SIGKILL inside a goose migration step, `Open` still completes and the schema is usable (`process_kill_test.go`).
