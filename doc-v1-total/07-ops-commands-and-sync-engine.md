@@ -327,7 +327,7 @@ The nine embedded assets (all also ejectable):
 | `take` without owner approval | `sync reconcile take` | refusal block | 5 |
 | Persistent divergence | `doctor` | `SyncFailureError` | 5 |
 | Store corruption | `doctor` | `CorruptionError` (reason `parent_cycle` when the report names a parent loop) | 7 |
-| Parent loop of epics | `ls` and any read that hydrates the loop's epics | `storage.ParentCycleError`, reason `parent_cycle` | 7 |
+| Parent loop | `ls` and any read that hydrates the loop's epics; a rank verb whose walk up the parent chain meets a loop | `storage.ParentCycleError`, reason `parent_cycle` | 7 |
 | Unsynced local changes | `backup restore` without `--force` | `MergeConflictError` | 5 |
 | `--latest` + `--path` | `backup restore` | `UsageError` | 2 |
 | Existing override without `--force` | `quickstart --eject` | `MergeConflictError`, nothing written | 5 |

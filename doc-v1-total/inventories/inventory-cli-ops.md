@@ -1086,7 +1086,7 @@ All nine are also the payload of `lit quickstart --eject`, written to `<config.C
 | Take without owner approval | `sync reconcile take` | `ownerApprovalRefusalError` block, exit 5 | `sync_reconcile_cmd.go` |
 | Persistent divergence (≥24h or >10 commits) | `doctor` | `SyncFailureError`, exit 5 | `doctor.go` |
 | Store corruption | `doctor` | `CorruptionError`, exit 7 (reason `parent_cycle` when the report names a parent loop) | `doctor.go`, `error_output.go` |
-| Parent loop of epics | `ls` and any read that hydrates the loop's epics | `storage.ParentCycleError`, exit 7, reason `parent_cycle` | `exit.go`, `error_output.go` |
+| Parent loop | `ls` and any read that hydrates the loop's epics; a rank verb whose walk up the parent chain meets a loop | `storage.ParentCycleError`, exit 7, reason `parent_cycle` | `exit.go`, `error_output.go` |
 | Unsynced local changes | `backup restore` without `--force` | `MergeConflictError`, exit 5 | `backup.go` |
 | `--latest` + `--path` together | `backup restore` | `UsageError`, exit 2 | `backup.go` |
 | Existing global override without `--force` | `quickstart --eject` | `MergeConflictError`, exit 5, nothing written | `quickstart_eject.go` |

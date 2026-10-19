@@ -205,7 +205,7 @@ Ranks are base-62 strings (`0-9A-Za-z`, ASCII order = rank order) compared bytew
 
 ### Frames
 
-Rank comparisons are **frame-local**: an issue is only comparable to siblings under the same container or fellow top-level items (`ranking.go`). Cross-frame rank verbs resolve both ids through their ancestor chains (walking non-deleted parents; a revisit errors "parent cycle at <id>") to representatives one level below the lowest common ancestor — so ranking a child of epic A against a standalone issue actually moves **epic A**. Ranking an issue against its own container (either direction) is refused ("…rank it against a sibling instead"). `resolveRankPair` returns which id actually moves (`RankMove{MovedID, AnchorID}`); this is why `lit rank` can move a different issue than the one named.
+Rank comparisons are **frame-local**: an issue is only comparable to siblings under the same container or fellow top-level items (`ranking.go`). Cross-frame rank verbs resolve both ids through their ancestor chains (walking non-deleted parents; a revisit is refused with `storage.ParentCycleError` naming the loop) to representatives one level below the lowest common ancestor — so ranking a child of epic A against a standalone issue actually moves **epic A**. Ranking an issue against its own container (either direction) is refused ("…rank it against a sibling instead"). `resolveRankPair` returns which id actually moves (`RankMove{MovedID, AnchorID}`); this is why `lit rank` can move a different issue than the one named.
 
 ### The five verbs
 
