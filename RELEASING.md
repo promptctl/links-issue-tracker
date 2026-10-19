@@ -29,6 +29,20 @@ feature or any presumed-breaking change, **patch** = a pure bugfix.
 `scripts/next-version.sh <minor|patch>` computes the next tag under this policy
 (`v0.1.0` → `v0.2.0` or `v0.1.1`).
 
+## The Claude Code plugin has no version
+
+Neither `claude-plugin/.claude-plugin/plugin.json` nor the plugin's entry in
+`.claude-plugin/marketplace.json` sets `version`. Claude Code then versions the
+plugin by commit SHA, so a user who has installed it gets every merged change at
+their next plugin update. A change to the plugin needs no bump, and a lit
+release does not touch it.
+
+Do not add `version` to either file. Claude Code reads a set `version` before
+the commit SHA and skips the update while that string is unchanged, so a pinned
+version keeps every installed user on old files until someone remembers to
+change it
+([how Claude Code computes the version](https://code.claude.com/docs/en/plugins/loading#how-claude-code-computes-the-version)).
+
 ## Cutting a release
 
 A release is cut entirely by CI when a release PR merges to `master`. Releases

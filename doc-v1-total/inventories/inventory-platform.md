@@ -1262,8 +1262,7 @@ bundled SDK omits it (`build/zig-macos-stubs/tzfile.h`).
 
 A marketplace named `lit`, description
 "Plugin marketplace for lit, the agent-native issue tracker that lives in your git repo.", owner `lit`,
-listing one plugin: `lit`, source `./claude-plugin`, description "The /next and /review-plan skills for repos tracked with lit",
-version `0.10.0` (`.claude-plugin/marketplace.json`).
+listing one plugin: `lit`, source `./claude-plugin`, description "The /next and /review-plan skills for repos tracked with lit" (`.claude-plugin/marketplace.json`).
 
 ### 14.2 `claude-plugin/.claude-plugin/plugin.json`
 
@@ -1273,7 +1272,7 @@ with its reviewer brief `claude-plugin/skills/review-plan/reviewer.md` and its s
 `claude-plugin/skills/review-plan/start-reviewer`. The manifest declares
 name `lit`, description
 "The /next and /review-plan skills for repos tracked with lit, the agent-native issue tracker.",
-version `0.10.0`, and no hooks. The skill `next` has description "Pull the next ticket"
+no version, and no hooks. The skill `next` has description "Pull the next ticket"
 (`claude-plugin/skills/next/SKILL.md`). The skill `review-plan` has description "Have a separate
 Claude session law-review a ticket's plan and record the verdict in lit. ..."; its script
 `start-reviewer`, run in the background, starts a reviewer as an interactive Claude Code session
