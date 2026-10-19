@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/dbfactory"
+	"github.com/promptctl/links-issue-tracker/internal/atomicfile"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -50,16 +51,14 @@ type adoptPendingMarker struct {
 var errAdoptPending = errors.New("adopt pending")
 
 // writeAdoptPendingMarker durably records "a destructive adopt is in flight"
-// and must complete BEFORE the first destructive act. It writes via
-// temp-file-then-rename — the same shape as internal/cli's writeMarkerAtomic
-// (which internal/store cannot import without a cycle) — plus the fsync that
-// marker doesn't need and this one does: this marker's whole job is surviving
-// a crash, and a marker sitting in the page cache when the power goes
-// protects nothing. The rename makes a torn marker unrepresentable: the
-// marker path either holds the whole payload or nothing, and a failure
-// partway leaves only an inert temp file, never a stray marker condemning a
-// workspace nothing destructive ever touched. If the truth-teller cannot be
-// made durable, the destructive window must not open. [LAW:no-silent-failure]
+// and must complete BEFORE the first destructive act. Durable, which the cli's
+// storage-dir markers are not: this marker's whole job is surviving a crash,
+// and a marker sitting in the page cache when the power goes protects
+// nothing. The atomic replace makes a torn marker unrepresentable: the marker
+// path either holds the whole payload or nothing, and a failure partway leaves
+// no stray marker condemning a workspace nothing destructive ever touched. If
+// the truth-teller cannot be made durable, the destructive window must not
+// open. [LAW:no-silent-failure]
 func writeAdoptPendingMarker(cleanRoot, remote, branch string, now time.Time) error {
 	payload, err := json.Marshal(adoptPendingMarker{
 		StartedAt: now.UTC().Format(time.RFC3339),
@@ -69,31 +68,8 @@ func writeAdoptPendingMarker(cleanRoot, remote, branch string, now time.Time) er
 	if err != nil {
 		return fmt.Errorf("encode adopt-pending marker: %w", err)
 	}
-	f, err := os.CreateTemp(cleanRoot, adoptPendingMarkerName+".tmp-*")
-	if err != nil {
+	if err := atomicfile.WriteFile(AdoptPendingMarkerPath(cleanRoot), payload, 0o600, atomicfile.Durable); err != nil {
 		return fmt.Errorf("write adopt-pending marker: %w", err)
-	}
-	if _, err := f.Write(payload); err != nil {
-		return errors.Join(fmt.Errorf("write adopt-pending marker: %w", err), f.Close(), os.Remove(f.Name()))
-	}
-	if err := f.Sync(); err != nil {
-		return errors.Join(fmt.Errorf("sync adopt-pending marker: %w", err), f.Close(), os.Remove(f.Name()))
-	}
-	if err := f.Close(); err != nil {
-		return errors.Join(fmt.Errorf("close adopt-pending marker: %w", err), os.Remove(f.Name()))
-	}
-	if err := os.Rename(f.Name(), AdoptPendingMarkerPath(cleanRoot)); err != nil {
-		return errors.Join(fmt.Errorf("install adopt-pending marker: %w", err), os.Remove(f.Name()))
-	}
-	// [LAW:no-silent-failure] exception: the directory fsync that would make
-	// the renamed dirent itself crash-durable is not supported on every
-	// platform (Windows cannot fsync a directory handle), and there is no
-	// recovery action when it fails — the file's own fsync above is the
-	// load-bearing one, so a dirent-durability miss only narrows back to the
-	// pre-marker crash window rather than corrupting anything.
-	if dir, dirErr := os.Open(cleanRoot); dirErr == nil {
-		_ = dir.Sync()
-		_ = dir.Close()
 	}
 	return nil
 }

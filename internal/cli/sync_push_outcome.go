@@ -162,7 +162,7 @@ func recordPushOutcome(ws workspace.Info, rec pushOutcomeRecord) {
 		if err != nil {
 			return err
 		}
-		return writeMarkerAtomic(ws, pushOutcomeMarkerPath(ws), append(payload, '\n'))
+		return writeMarkerAtomic(pushOutcomeMarkerPath(ws), append(payload, '\n'))
 	}()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "lit: push-outcome marker not written: %v\n", err)

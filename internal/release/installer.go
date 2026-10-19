@@ -12,10 +12,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/promptctl/links-issue-tracker/internal/atomicfile"
 )
 
 // Installer downloads, verifies, and atomically installs the binary the Target
@@ -52,11 +52,9 @@ type HTTPInstaller struct {
 }
 
 // Install fetches target.Artifact.URL, verifies it against target.Artifact.SHA256,
-// extracts BinaryName from the archive into a sibling temp file on the same
-// filesystem as targetPath, and atomically renames it into place.
+// and atomically replaces targetPath with the archive's BinaryName.
 //
-// On any failure before the rename, targetPath is unchanged and the temp file
-// is removed.
+// On any failure, targetPath is unchanged and no temp file is left behind.
 func (i *HTTPInstaller) Install(ctx context.Context, target *Target, targetPath string) error {
 	if target == nil {
 		return errors.New("release: nil target")
@@ -76,45 +74,20 @@ func (i *HTTPInstaller) Install(ctx context.Context, target *Target, targetPath 
 		client = &http.Client{Timeout: defaultInstallerTimeout}
 	}
 
-	// [LAW:dataflow-not-control-flow] Create the temp file BEFORE downloading
-	// so a non-writable install dir (e.g. /usr/local/bin without sudo) fails
-	// fast and doesn't burn bandwidth fetching an archive we couldn't have
-	// installed anyway. Temp file lives on the same filesystem as targetPath
-	// so the eventual os.Rename is genuinely atomic.
-	targetDir := filepath.Dir(targetPath)
-	tmp, err := os.CreateTemp(targetDir, ".lit-install-*.tmp")
-	if err != nil {
-		return fmt.Errorf("release: create temp file in %s: %w", targetDir, err)
-	}
-	tmpPath := tmp.Name()
-	committed := false
-	defer func() {
-		if !committed {
-			_ = os.Remove(tmpPath)
+	// The download runs inside the replace, after its temp file exists, so a
+	// non-writable install dir (e.g. /usr/local/bin without sudo) fails fast
+	// and doesn't burn bandwidth fetching an archive we couldn't have installed
+	// anyway. Durable: a binary cut short by a crash is a lit that cannot run.
+	err = atomicfile.Replace(targetPath, 0o755, atomicfile.Durable, func(w io.Writer) error {
+		archive, err := downloadAndVerify(ctx, client, target.Artifact)
+		if err != nil {
+			return err
 		}
-	}()
-
-	archive, err := downloadAndVerify(ctx, client, target.Artifact)
+		return extractBinary(format, archive, w)
+	})
 	if err != nil {
-		_ = tmp.Close()
-		return err
+		return fmt.Errorf("release: install %s: %w", targetPath, err)
 	}
-
-	if err := extractBinary(format, archive, tmp); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Chmod(0o755); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("release: chmod temp binary: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("release: close temp binary: %w", err)
-	}
-	if err := os.Rename(tmpPath, targetPath); err != nil {
-		return fmt.Errorf("release: atomic rename into %s: %w", targetPath, err)
-	}
-	committed = true
 	return nil
 }
 
