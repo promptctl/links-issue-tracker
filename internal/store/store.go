@@ -2193,7 +2193,7 @@ func (s *Store) newEvent(issueID, action, reason, actor string, changes []model.
 		IssueID:   issueID,
 		Action:    strings.TrimSpace(action),
 		Reason:    strings.TrimSpace(reason),
-		Actor:     strings.TrimSpace(actor),
+		Actor:     storage.Actor(actor),
 		CreatedAt: s.clock.Now(),
 		// The stamp is read off the store rather than passed in, so it is the
 		// same for every event this command writes and cannot be forgotten at a
@@ -2201,9 +2201,6 @@ func (s *Store) newEvent(issueID, action, reason, actor string, changes []model.
 		// opened for reading and a store from before the feature agree.
 		Attribution: s.attribution,
 		Changes:     changes,
-	}
-	if event.Actor == "" {
-		event.Actor = "unknown"
 	}
 	return event
 }
