@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -10,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -164,8 +166,9 @@ func privateNameFor(recordPath string) string {
 }
 
 // lockHolderRecord is what one holder says about itself. It is descriptive
-// only: nothing in this package branches on a record's contents, so a record
-// that is somehow wrong degrades a diagnostic message and can do nothing else.
+// only: no lock decision reads a record's contents (a publisher reading back
+// its own decides only whether that record goes out), so a record that is
+// somehow wrong degrades a diagnostic message and can do nothing else.
 type lockHolderRecord struct {
 	PID     int       `json:"pid"`
 	Command string    `json:"command"`
@@ -243,33 +246,25 @@ func publishLockHolder(storageDir, lockPath string) (func() error, error) {
 }
 
 // mintHeldRecord runs the four steps that make a holder record: create it,
-// take the shared hold that makes it live, fill it in, and only then give it
-// the name a reader sweeps. The order is the point — under that name the record
+// fill it in, take the shared hold that makes it live — refusing it if the held
+// file no longer says what was filled in — and only then give it the name a
+// reader sweeps. The order is the point — under that name the record
 // is complete and held from the instant it exists, so no reader ever meets a
 // half-made one.
+//
+// Filled before held, because the hold forbids the fill: filelock's Windows
+// LockFileEx covers the whole file, and a shared byte-range lock denies WRITE
+// to every handle, the locker's own included. Filling first exposes nothing —
+// no reader ever opens a private name — so the swept name still arrives
+// complete and held.
 func mintHeldRecord(dir string, payload []byte) (func() error, error) {
 	privatePath, recordPath := lockHolderRecordNames(dir)
-	// O_EXCL so a name already on disk is refused here rather than adopted as
-	// this holder's record. lockHolderProcessNonce keeps any name from being
-	// drawn twice; this is what makes a breach of that loud.
-	// [LAW:no-silent-failure]
-	created, err := os.OpenFile(privatePath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err := writeNewRecord(privatePath, payload); err != nil {
+		return nil, err
+	}
+	release, err := holdWrittenRecord(privatePath, payload)
 	if err != nil {
-		return nil, fmt.Errorf("create holder record: %w", err)
-	}
-	if err := created.Close(); err != nil {
-		return nil, errors.Join(fmt.Errorf("create holder record: %w", err), retireRecord(privatePath))
-	}
-	// One attempt is the whole budget: no reader will ever open this name, so
-	// the hold is uncontended by construction and contention here would mean
-	// the invariant is broken, not that waiting would help.
-	// [LAW:no-silent-failure]
-	release, acquired, err := filelock.Acquire(context.Background(), privatePath, false, 1, 0)
-	if err != nil || !acquired {
-		return nil, errors.Join(fmt.Errorf("hold holder record (acquired=%v): %w", acquired, err), retireRecord(privatePath))
-	}
-	if err := fillHeldRecord(privatePath, payload); err != nil {
-		return nil, errors.Join(err, release(), retireRecord(privatePath))
+		return nil, err
 	}
 	// A hold rides the inode, not the name, so the record a reader now finds
 	// under recordPath is the one this call is already holding — and this is
@@ -292,22 +287,50 @@ func mintHeldRecord(dir string, payload []byte) (func() error, error) {
 	}, nil
 }
 
-// fillHeldRecord writes the payload into a record the caller already holds. It
-// opens WITHOUT O_CREATE so that a mint something outside this package has
-// removed fails here, loudly, instead of being recreated as a second file —
-// one carrying this holder's identity while nothing holds it, which would go
-// on to be renamed into place and read as a live holder that is not there.
+// writeNewRecord creates the record under its private name and writes the
+// payload through the creating handle. O_EXCL so a name already on disk is
+// refused here rather than adopted as this holder's record.
+// lockHolderProcessNonce keeps any name from being drawn twice; this is what
+// makes a breach of that loud.
 // [LAW:no-silent-failure]
-func fillHeldRecord(recordPath string, payload []byte) error {
-	file, err := os.OpenFile(recordPath, os.O_WRONLY, 0o600)
+func writeNewRecord(privatePath string, payload []byte) error {
+	file, err := os.OpenFile(privatePath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
-		return fmt.Errorf("open holder record to fill in: %w", err)
+		return fmt.Errorf("create holder record: %w", err)
 	}
 	_, writeErr := file.Write(payload)
 	if err := errors.Join(writeErr, file.Close()); err != nil {
-		return fmt.Errorf("write holder record: %w", err)
+		return errors.Join(fmt.Errorf("write holder record: %w", err), retireRecord(privatePath))
 	}
 	return nil
+}
+
+// holdWrittenRecord takes the shared hold on the record writeNewRecord wrote,
+// and refuses a hold on a file that does not say what was written, retiring
+// whatever file the refused hold leaves under the private name. filelock
+// opens with O_CREATE, so a record removed from under its name before the hold
+// lands would be recreated empty and held — a file naming nobody that the link
+// would then publish as this holder, unnamed for the life of its lock. Reading
+// the held name back is what catches it: a shared hold permits reads on every
+// platform, and the contents, not the inode, are what a reader is told.
+// [LAW:no-silent-failure]
+//
+// One attempt is the whole budget: no reader will ever open this name, so
+// the hold is uncontended by construction and contention here would mean
+// the invariant is broken, not that waiting would help.
+func holdWrittenRecord(privatePath string, payload []byte) (func() error, error) {
+	release, acquired, err := filelock.Acquire(context.Background(), privatePath, false, 1, 0)
+	if err != nil || !acquired {
+		return nil, errors.Join(fmt.Errorf("hold holder record (acquired=%v): %w", acquired, err), retireRecord(privatePath))
+	}
+	held, err := os.ReadFile(privatePath)
+	if err != nil {
+		return nil, errors.Join(fmt.Errorf("read back held holder record: %w", err), release(), retireRecord(privatePath))
+	}
+	if !bytes.Equal(held, payload) {
+		return nil, errors.Join(fmt.Errorf("hold holder record: %s is no longer the record this process wrote", filepath.Base(privatePath)), release(), retireRecord(privatePath))
+	}
+	return release, nil
 }
 
 // retireRecord ensures a record file is gone. Already-gone is the goal
@@ -591,20 +614,40 @@ func (w *holdWait) arrivals() bool {
 // has no holders.
 // [LAW:one-source-of-truth] The one listing the account, the sweep and the
 // wait all read.
-func holderRecordNames(dir string) ([]string, error) {
-	entries, err := os.ReadDir(dir)
+//
+// The kind is checked before the read because a directory read cannot be
+// trusted with it: on Windows it reads a regular file as an empty directory
+// (os/dir_windows.go takes the ERROR_FILE_NOT_FOUND its listing call returns
+// on a file handle for "no more entries"), so a file squatting on the holder
+// dir would read as no holders rather than as the unreadable records it is.
+// One handle answers both, so the kind checked is the kind listed.
+func holderRecordNames(dir string) (names []string, err error) {
+	listing, err := os.Open(dir)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	var names []string
+	defer func() { err = errors.Join(err, listing.Close()) }()
+	info, err := listing.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("%s is not a directory", dir)
+	}
+	entries, err := listing.ReadDir(-1)
+	if err != nil {
+		return nil, err
+	}
 	for _, entry := range entries {
 		if strings.HasPrefix(entry.Name(), lockHolderRecordPrefix) {
 			names = append(names, entry.Name())
 		}
 	}
+	// Sorted, as os.ReadDir sorts: the account renders holders in this order.
+	slices.Sort(names)
 	return names, nil
 }
 

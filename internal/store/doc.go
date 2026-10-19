@@ -142,8 +142,8 @@
 // under the storage dir and never beside the lock, because one lock
 // (Dolt's journal LOCK) lives in a directory lit does not own, and lit's
 // records do not go there. They are descriptive only: the kernel remains
-// the sole authority on whether a lock is held, and no code branches on a
-// record's contents, so a wrong record can cost a diagnostic and nothing
+// the sole authority on whether a lock is held, and no lock decision reads
+// a record's contents, so a wrong record can cost a diagnostic and nothing
 // else. No wait edge exists here at all: a reader's liveness probe passes
 // maxAttempts 1, and a publisher holds only a private name no reader can
 // reach, so neither ever waits on a record's flock. See lock_holder.go.
