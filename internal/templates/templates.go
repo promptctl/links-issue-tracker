@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
+	"path"
 	"sort"
 	"strings"
 
@@ -130,7 +130,7 @@ func LoadWithSource(name string, workspaceRoot string) (string, Source, error) {
 
 // EmbeddedDefault returns the raw bytes of the embedded default for name.
 func EmbeddedDefault(name string) ([]byte, error) {
-	return defaultsFS.ReadFile(filepath.Join("defaults", name))
+	return defaultsFS.ReadFile(path.Join("defaults", name))
 }
 
 // GlobalPath returns the override path in the user's global config directory for name.
@@ -151,7 +151,7 @@ func ProjectPath(workspaceRoot string, name string) pathspec.PathSpec {
 // [LAW:one-source-of-truth] This helper resolves only the project/global override
 // layers; callers that need to know which override layer was selected can infer it
 // from the returned path.
-func ActiveOverride(workspaceRoot string, name string) (path pathspec.PathSpec, content []byte, err error) {
+func ActiveOverride(workspaceRoot string, name string) (override pathspec.PathSpec, content []byte, err error) {
 	// [LAW:dataflow-not-control-flow] Inspect both layers in fixed order; presence/absence is data, not branching.
 	candidatePaths := []pathspec.PathSpec{
 		projectTemplatePath(workspaceRoot, name),
@@ -173,11 +173,11 @@ func ActiveOverride(workspaceRoot string, name string) (path pathspec.PathSpec, 
 	return pathspec.PathSpec{}, nil, nil
 }
 
-func readOptionalFile(path pathspec.PathSpec) (string, error) {
-	if path.IsEmpty() {
+func readOptionalFile(p pathspec.PathSpec) (string, error) {
+	if p.IsEmpty() {
 		return "", nil
 	}
-	content, err := os.ReadFile(path.String())
+	content, err := os.ReadFile(p.String())
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return "", nil

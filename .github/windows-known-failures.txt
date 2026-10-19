@@ -7,12 +7,6 @@
 # <ticket> <package> <top-level test, or * for a package whose tests do not
 # compile on Windows>
 
-links-windows-qr8l.4yu internal/templates TestLoadAbsentWorkspaceRootFallsThrough
-links-windows-qr8l.4yu internal/templates TestLoadGlobalOverrideWins
-links-windows-qr8l.4yu internal/templates TestLoadProjectOverrideWins
-links-windows-qr8l.4yu internal/templates TestLoadReturnsEmbeddedDefaultWhenNoOverride
-links-windows-qr8l.4yu internal/templates TestLoadWithSourceReportsLayer
-
 links-windows-qr8l.e0r internal/store TestARecordThatWillNotRetireIsReportedAndTheReleaseStillLands
 links-windows-qr8l.e0r internal/store TestAReusedPidPublishesPastItsPredecessorsNames
 links-windows-qr8l.e0r internal/store TestASweepThatFailsIsReportedAndTheLockStillGranted
