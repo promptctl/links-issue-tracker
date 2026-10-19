@@ -20,16 +20,14 @@ runs:
       run: |
         set -euo pipefail
         case "$RUNNER_OS" in
-          Linux)   platform=linux-amd64;   archive=tar.gz ;;
-          Windows) platform=windows-amd64; archive=zip ;;
+          Linux)   platform=linux-amd64;   asset=dolt-linux-amd64.tar.gz; unpack=(tar -xzf "$RUNNER_TEMP/$asset" -C "$RUNNER_TEMP") ;;
+          Windows) platform=windows-amd64; asset=dolt-windows-amd64.zip;  unpack=(unzip -q "$RUNNER_TEMP/$asset" -d "$RUNNER_TEMP") ;;
           *) echo "::error::install-dolt has no Dolt asset for runner OS $RUNNER_OS" >&2; exit 1 ;;
         esac
-        asset="dolt-$platform.$archive"
-        curl -fsSL "https://github.com/dolthub/dolt/releases/download/$DOLT_VERSION/$asset" -o "$RUNNER_TEMP/$asset"
-        case "$archive" in
-          tar.gz) tar -xzf "$RUNNER_TEMP/$asset" -C "$RUNNER_TEMP" ;;
-          zip)    unzip -q "$RUNNER_TEMP/$asset" -d "$RUNNER_TEMP" ;;
-        esac
+        # A nightly red files an urgent ticket, so a transient release-CDN
+        # error is retried rather than reported; a missing asset still fails.
+        curl -fsSL --retry 3 --retry-all-errors "https://github.com/dolthub/dolt/releases/download/$DOLT_VERSION/$asset" -o "$RUNNER_TEMP/$asset"
+        "${unpack[@]}"
         bin="$RUNNER_TEMP/dolt-$platform/bin"
         echo "$bin" >> "$GITHUB_PATH"
         "$bin/dolt" version

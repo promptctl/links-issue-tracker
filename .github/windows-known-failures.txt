@@ -1,0 +1,120 @@
+# Tests known to fail on Windows. Each line names the child of epic
+# links-windows-qr8l that owns the failure. nightly.yml's `windows` job skips
+# exactly these, so a Windows-only failure in any other test turns the lane
+# red. The ticket that fixes a failure deletes its lines, and the epic is done
+# when no lines remain.
+#
+# <ticket> <package> <top-level test, or * for a package whose tests do not
+# compile on Windows>
+
+links-windows-qr8l.4yu internal/templates TestLoadAbsentWorkspaceRootFallsThrough
+links-windows-qr8l.4yu internal/templates TestLoadGlobalOverrideWins
+links-windows-qr8l.4yu internal/templates TestLoadProjectOverrideWins
+links-windows-qr8l.4yu internal/templates TestLoadReturnsEmbeddedDefaultWhenNoOverride
+links-windows-qr8l.4yu internal/templates TestLoadWithSourceReportsLayer
+
+links-windows-qr8l.e0r internal/store TestARecordThatWillNotRetireIsReportedAndTheReleaseStillLands
+links-windows-qr8l.e0r internal/store TestAReusedPidPublishesPastItsPredecessorsNames
+links-windows-qr8l.e0r internal/store TestASweepThatFailsIsReportedAndTheLockStillGranted
+links-windows-qr8l.e0r internal/store TestBeaconContentionNamesTheSquatter
+links-windows-qr8l.e0r internal/store TestCommitContentionNamesTheHolder
+links-windows-qr8l.e0r internal/store TestContentionAccountReachesTheWrappers
+links-windows-qr8l.e0r internal/store TestContentionErrorNamesTheLiveHolder
+links-windows-qr8l.e0r internal/store TestEveryAcquisitionRetiresTheRecordsOfDepartedHolders
+links-windows-qr8l.e0r internal/store TestLockRecordsStayOutOfDoltsTree
+links-windows-qr8l.e0r internal/store TestPromptAcquisitionAnnouncesNothing
+links-windows-qr8l.e0r internal/store TestPublishSurvivesASweepRacingIt
+links-windows-qr8l.e0r internal/store TestReleaseRetiresTheHolderRecord
+links-windows-qr8l.e0r internal/store TestSharedHoldersAreAllNamed
+links-windows-qr8l.e0r internal/store TestUnnamedHolderDoesNotGuessPastAFailedRead
+links-windows-qr8l.e0r internal/store TestUnreadableHolderDirIsReportedNotSwallowed
+links-windows-qr8l.e0r internal/store TestWaitAnnouncesItselfRepeatedly
+links-windows-qr8l.e0r internal/store TestWaitOutlastsHoldersThatKeepChanging
+links-windows-qr8l.e0r internal/store TestWriteEngineRecordsItselfAsTheJournalHolder
+
+links-windows-qr8l.7na internal/store TestAdoptRemoteByCloneBootstrapsAndReAdopts
+links-windows-qr8l.7na internal/store TestAdoptRemoteByCloneHealsAbandonedAdoptResidue
+links-windows-qr8l.7na internal/store TestDoltTransferKeepsStdoutClean
+links-windows-qr8l.7na internal/store TestDowngradeHappyPathSteppedAndCommitted
+links-windows-qr8l.7na internal/store TestFreshOpenAppliesRegistryToHead
+links-windows-qr8l.7na internal/store TestGuardRemoteSchemaAheadDetects
+links-windows-qr8l.7na internal/store TestGuardRemoteSchemaNotAheadAtOrBelowMax
+links-windows-qr8l.7na internal/store TestLandFetchedHeadCarriesAClonesFetchToTheLiveStore
+links-windows-qr8l.7na internal/store TestLandFetchedHeadLeavesTheLiveStoreAloneForAnAbsentBranch
+links-windows-qr8l.7na internal/store TestLandFetchedHeadRecordsWhatTheFetchSaw
+links-windows-qr8l.7na internal/store TestMigrationSuccessPruneSurvivesCallerCancel
+links-windows-qr8l.7na internal/store TestRecordPushedHeadCutInTheCommitLockWaitNamesTheHolder
+links-windows-qr8l.7na internal/store TestRecordPushedHeadMovesTheTrackingRefWithoutTheNetwork
+links-windows-qr8l.7na internal/store TestRecordPushedHeadNeverMovesTheTrackingRefBackwards
+links-windows-qr8l.7na internal/store TestRemoteHeadSchemaReadsVersion
+links-windows-qr8l.7na internal/store TestSyncCompactAndPushDeepensOnAFragmentedOldGeneration
+links-windows-qr8l.7na internal/store TestSyncCompactAndPushDelivers
+links-windows-qr8l.7na internal/store TestSyncFreshnessTracksAheadBehindAgainstRemote
+links-windows-qr8l.7na internal/store TestSyncPullHealsSchemaSkewDivergence
+links-windows-qr8l.7na internal/store TestSyncPullStateTransitions
+links-windows-qr8l.7na internal/store TestSyncPullSurfacesIDCollision
+links-windows-qr8l.7na internal/store TestSyncPushDelivers
+links-windows-qr8l.7na internal/store TestSyncPushFromCloneReportsARaceItLostAsSuperseded
+links-windows-qr8l.7na internal/store TestSyncPushRefusesWhenRemoteSchemaAhead
+links-windows-qr8l.7na internal/store TestSyncReceiveFastForwardsWhenBehindAndDefersDivergence
+links-windows-qr8l.7na internal/store TestSyncReconcileCombineHoldsAndFinalizesProse
+links-windows-qr8l.7na internal/store TestSyncReconcileCombinePreservesFoldedProvenance
+links-windows-qr8l.7na internal/store TestSyncReconcileCombineRecoversFromTransientFailureMidReplay
+links-windows-qr8l.7na internal/store TestSyncReconcileCombineRefusesIDCollision
+links-windows-qr8l.7na internal/store TestSyncReconcileCombineUnionsBothSides
+links-windows-qr8l.7na internal/store TestSyncReconcileDetectsUnrelatedHistories
+links-windows-qr8l.7na internal/store TestSyncReconcileHealsSchemaSkew
+links-windows-qr8l.7na internal/store TestSyncReconcileHoldsProseDivergenceForAgent
+links-windows-qr8l.7na internal/store TestSyncReconcileHomesAChildOfAnEpicPurgedOnTheOtherSide
+links-windows-qr8l.7na internal/store TestSyncReconcileLinearizesDivergenceAndFastForwardPushes
+links-windows-qr8l.7na internal/store TestSyncReconcileRefusesIDCollisionAndCommitsNothing
+links-windows-qr8l.7na internal/store TestSyncReconcileRefusesIDCollisionFoundInFoldedCommit
+links-windows-qr8l.7na internal/store TestSyncReconcileRefusesWhenRemoteSchemaAhead
+links-windows-qr8l.7na internal/store TestSyncReconcileResolvedFinalizesWithAgentText
+links-windows-qr8l.7na internal/store TestSyncReconcileResolvedRecordsNothingForTheProvisionalText
+links-windows-qr8l.7na internal/store TestSyncReconcileResolvedRecordsTheMergedText
+links-windows-qr8l.7na internal/store TestSyncReconcileResolvedRejectsStaleResolutions
+links-windows-qr8l.7na internal/store TestSyncReconcileSeparatesTheKeyTwoReplicasMintedAlike
+links-windows-qr8l.7na internal/store TestSyncReconcileUnrelatedInventoryPartitionsAllThreeSides
+links-windows-qr8l.7na internal/store TestSyncResetToRemoteHeadAdoptsUnrelatedHistory
+links-windows-qr8l.7na internal/store TestSyncResolveUnrelatedOwnerApprovalBindsForkAndSide
+links-windows-qr8l.7na internal/store TestSyncResolveUnrelatedRefusesSharedHistory
+links-windows-qr8l.7na internal/store TestSyncResolveUnrelatedTakeLocal
+links-windows-qr8l.7na internal/store TestSyncResolveUnrelatedTakeLocalKeepsTheRemotesPurge
+links-windows-qr8l.7na internal/store TestSyncResolveUnrelatedTakeLocalPreservesFoldedProvenance
+links-windows-qr8l.7na internal/store TestSyncResolveUnrelatedTakeLocalRefusesSchemaAheadRemote
+links-windows-qr8l.7na internal/store TestSyncResolveUnrelatedTakeRemote
+links-windows-qr8l.7na internal/store TestSyncResolveUnrelatedTakeRemoteAdoptsAPrePurgeRemote
+links-windows-qr8l.7na internal/store TestSyncResolveUnrelatedTakeRemoteCarriesTheLocalPurge
+links-windows-qr8l.7na internal/store TestTwoDisconnectedStoresMintDistinctChildIDs
+links-windows-qr8l.7na internal/store TestWriteOpenNamesTheJournalHolder
+
+links-windows-qr8l.8m6 internal/store TestGitBackedRemoteURL
+links-windows-qr8l.8m6 internal/store TestPruneRemoteCacheCollectsAbandonedMirrors
+links-windows-qr8l.8m6 internal/store TestPruneRemoteCacheIsNotBlockedByOneStuckMirror
+links-windows-qr8l.8m6 internal/store TestPruneRemoteCacheKeepsTheLiveMirror
+links-windows-qr8l.8m6 internal/store TestSyncRemoteMirrorHoldsItsOwnPushNotAPeersLaterOne
+
+links-windows-qr8l.mq4 internal/workspace TestDamagedTokenErrorNamesItsRemedy
+links-windows-qr8l.mq4 internal/workspace TestGitOutputCancellationKillsSubprocess
+links-windows-qr8l.mq4 internal/workspace TestResolveRefusesEveryNameItCannotDeriveAPrefixFrom
+links-windows-qr8l.mq4 internal/workspace TestWorktreePathWhoseTailLooksLikeAnAttributeStaysLive
+
+links-windows-qr8l.btw cmd/lit *
+links-windows-qr8l.btw internal/backup TestCreateListLatestAndPrune
+links-windows-qr8l.btw internal/cli *
+links-windows-qr8l.btw internal/config TestDataHomeFollowsXDGDataHome
+links-windows-qr8l.btw internal/dbsnapshot TestCollectOrphanedResidue_ErrorNamesThePath
+links-windows-qr8l.btw internal/dbsnapshot TestPlainFileCopy_PreservesPerms
+links-windows-qr8l.btw internal/statusline TestAFailedRewriteOfAnUnreadableFileIsNotReplaced
+links-windows-qr8l.btw internal/statusline TestAFailedWriteReportsWhatItHadDone
+links-windows-qr8l.btw internal/statusline TestInstallPluginReportsAFailedWrite
+links-windows-qr8l.btw internal/storage/memory TestConformance
+links-windows-qr8l.btw internal/store TestAdoptRemoteByCloneFailedCloneLeavesNoResidue
+links-windows-qr8l.btw internal/store TestCollectAbandonedMirrorReportsAFailureNamingTheKey
+links-windows-qr8l.btw internal/store TestDowngradePruneFailureReportsTheCommittedReverse
+links-windows-qr8l.btw internal/store TestDowngradeSnapshotFailureReportsTheVersionItRead
+links-windows-qr8l.btw internal/store TestMigratingOpenReportsAFailedSnapshotPrune
+links-windows-qr8l.btw internal/store TestRefusalReportsUnreadableSnapshots
+links-windows-qr8l.btw internal/store TestRequireInitializedWorkspaceSeparatesGenuineStatFaults
+links-windows-qr8l.btw internal/testoracle TestPathOutcomes

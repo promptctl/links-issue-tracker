@@ -7,8 +7,9 @@
 # for the platform the Linux-only gate cannot execute.
 #
 # A nightly job whose failures nobody sees is deletion with extra steps, so a
-# red run files (or extends) an urgent lit bug labeled `nightly-failure`
-# through .github/actions/report-to-lit. [LAW:no-silent-failure]
+# red lane files (or extends) an urgent lit bug under its own label,
+# `nightly-failure` or `nightly-windows-failure`, through
+# .github/actions/report-to-lit. [LAW:no-silent-failure]
 name: Nightly full suite
 
 on:
@@ -20,8 +21,8 @@ permissions:
   contents: read
 
 # A dispatched run overlapping the scheduled one must queue, not race: two
-# concurrent failing runs would each see no open nightly-failure ticket and
-# file a duplicate. Never cancel-in-progress — a cancelled full lane is a
+# concurrent failing runs would each see no open ticket under a lane's label
+# and file a duplicate. Never cancel-in-progress — a cancelled full lane is a
 # skipped full lane.
 concurrency:
   group: nightly-full-suite
@@ -73,8 +74,10 @@ jobs:
   # night after it merges.
   #
   # Scope is the shipped binary and its libraries, the race lane's boundary in
-  # ci.yml, with -short for the same reason: the scale tests add volume, not
-  # platform coverage.
+  # ci.yml, plus the vendored driver module they build with, and -short for
+  # the same reason: the scale tests add volume, not platform coverage. No -timeout:
+  # go test's 10m default sits far above the slowest package here
+  # (internal/store, 120s on run 39207582813), so it fires only on a hang.
   windows:
     runs-on: windows-latest
     timeout-minutes: 60
@@ -115,10 +118,57 @@ jobs:
           CGO_ENABLED: '1'
         run: go build ./cmd/lit
 
+      # Every test runs except the known failures in
+      # .github/windows-known-failures.txt, each owned by a child of epic
+      # links-windows-qr8l, so the lane is green and a red run is a new
+      # Windows failure, not one already filed. [LAW:one-source-of-truth]
+      # go test's -skip is not scoped to a package, so a package with listed
+      # tests gets its own invocation and a same-named test elsewhere still
+      # runs. Every invocation runs even after one fails, so one red package
+      # cannot hide another. [LAW:no-silent-failure]
       - name: Test (-short)
         env:
           CGO_ENABLED: '1'
-        run: go test -short -timeout 30m ./cmd/... ./internal/...
+        run: |
+          set -euo pipefail
+          known=.github/windows-known-failures.txt
+          module=$(go list -m)
+          pkgs=$(go list ./cmd/... ./internal/...)
+          declare -A skip=() untested=()
+          skipped=0
+          while read -r ticket pkg test; do
+            case "$ticket" in ''|'#'*) continue ;; esac
+            case "$test" in
+              '*')    untested[$pkg]=$ticket ;;
+              Test*)  skip[$pkg]+="${skip[$pkg]:+|}$test"; skipped=$((skipped + 1)) ;;
+              *) echo "::error file=$known::'$ticket $pkg $test' names no test: the third field is a top-level test or *" >&2; exit 1 ;;
+            esac
+          done < "$known"
+          status=0
+          rest=()
+          for pkg in $pkgs; do
+            rel=${pkg#"$module"/}
+            if [[ -v untested[$rel] ]]; then
+              continue
+            elif [[ -v skip[$rel] ]]; then
+              go test -short -skip "^(${skip[$rel]})\$" "./$rel" || status=1
+            else
+              rest+=("./$rel")
+            fi
+          done
+          go test -short "${rest[@]}" || status=1
+          echo "::notice file=$known,title=Known Windows failures::skipped $skipped tests in ${#skip[@]} packages; did not compile or run ${!untested[*]}"
+          exit "$status"
+
+      # internal/vendor/dolthub-driver is its own Go module, so ./internal/...
+      # never reaches it; ci.yml tests it in a step of its own for the same
+      # reason. It carries lit's patches to the driver, and its DSN and
+      # directory handling has Windows-specific cases.
+      - name: Test vendored driver (-short)
+        if: ${{ !cancelled() }}
+        env:
+          CGO_ENABLED: '1'
+        run: go -C internal/vendor/dolthub-driver test -short ./...
 
   # Each lane reports in its own job, so no suite runs holding the write token
   # a report needs. Each lane has its own alarm label too: one lane's open

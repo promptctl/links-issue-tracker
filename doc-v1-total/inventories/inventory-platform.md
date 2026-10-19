@@ -906,7 +906,8 @@ Composite action; installs the pinned Dolt CLI used as a **test-only** oracle
 (`.github/actions/install-dolt/action.yml`): with `DOLT_VERSION: v1.81.10`, picks the
 asset from `$RUNNER_OS` — `dolt-linux-amd64.tar.gz` on Linux, `dolt-windows-amd64.zip`
 on Windows, and `::error::install-dolt has no Dolt asset for runner OS` with exit 1
-on any other — downloads it from the Dolt release into `$RUNNER_TEMP`, unpacks it
+on any other — downloads it from the Dolt release into `$RUNNER_TEMP` (`curl -fsSL --retry 3
+--retry-all-errors`), unpacks it
 there (`tar -xzf` or `unzip -q`), appends its `bin/` to `$GITHUB_PATH`, then runs
 `dolt version` from that directory.
 
@@ -926,7 +927,14 @@ there (`tar -xzf` or `unzip -q`), appends its `bin/` to `$GITHUB_PATH`, then run
   `msys2/setup-msys2@v2` (`msystem: UCRT64`, `path-type: inherit`, installing
   `mingw-w64-ucrt-x86_64-gcc` and `mingw-w64-ucrt-x86_64-icu` for cgo) → install-dolt →
   install-claude → `go build ./cmd/lit` →
-  `go test -short -timeout 30m ./cmd/... ./internal/...`, both with `CGO_ENABLED: '1'`.
+  Test (-short), both with `CGO_ENABLED: '1'`: reads `.github/windows-known-failures.txt`
+  (`<ticket> <package> <test-or-*>` per line, `#` comments and blank lines ignored, a third
+  field that is neither `*` nor `Test…` is an `::error::` and exit 1), runs
+  `go test -short -skip '^(<listed tests>)$' ./<pkg>` once per package with listed tests,
+  does not run a `*` package, runs `go test -short` once over every other package of
+  `./cmd/... ./internal/...`, posts a `::notice` counting the skipped tests and naming the
+  packages not run, and exits 1 if any invocation failed → Test vendored driver (-short)
+  (`if: ${{ !cancelled() }}`, `go -C internal/vendor/dolthub-driver test -short ./...`).
 - Job `report`, `needs: full-suite`,
   `if: ${{ always() && needs.full-suite.result != 'success' && github.ref == 'refs/heads/master' }}`
   (a job timeout is reported as cancelled, so the condition reads the result, not
