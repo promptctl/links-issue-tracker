@@ -90,7 +90,7 @@ Both hooks are per-`Store` instance state, not package globals (`store.go`).
 
 #### 1.5 `newEngineOpenBackOff`
 
-`store.go`. `newHoldWait(workspaceStorageDir(doltRootDir), DoltJournalLockPath(doltRootDir), coResidentHolderWaitNow, time.Now)` per connector: `holdWait` (`lock_holder.go`) polls every `storeLockPollInterval` = 100ms and returns `backoff.Stop` once no holder-record name it has not seen before has appeared under the lock's holder directory for the wait; `Reset` starts the clock and takes the first reading. Each `NextBackOff` (called only after a refused attempt) also prints `lit: still waiting for <lock> after <d>; <holder account>` to `lockWaitNoticeWriter` (stderr) once `lockWaitNoticeGrace` = 2s has passed since `Reset`, then every `lockWaitNoticeInterval` = 30s (`lock_holder.go`). Only attached for `engineWrite` (`store.go`).
+`store.go`. `newHoldWait(workspaceStorageDir(doltRootDir), DoltJournalLockPath(doltRootDir), coResidentHolderWaitNow, time.Now)` per connector: `holdWait` (`lock_holder.go`) polls every `storeLockPollInterval` = 100ms and returns `backoff.Stop` once no holder-record name it has not seen before has appeared under the lock's holder directory for the wait; `Reset` starts the clock and takes the first reading. Each `NextBackOff` (called only after a refused attempt) that does not return `backoff.Stop` also prints `lit: still waiting for <lock> after <d>; <holder account>` to `lockWaitNoticeWriter` (stderr) once `lockWaitNoticeGrace` = 2s has passed since `Reset`, then every `lockWaitNoticeInterval` = 30s (`lock_holder.go`). Only attached for `engineWrite` (`store.go`).
 
 #### 1.6 `wrapEngineOpenContention`
 
@@ -5477,7 +5477,7 @@ Tests: `parse_dsn_test.go` basics param names are case-insensitive requires comm
 - If `BackOff == nil`, one call to `open(ctx)` (`connector.go`).
 - Else `BackOff.Reset()`, wrap with `backoff.WithContext(bo, ctx)`, and `backoff.Retry`: a retryable error is returned for retry, anything else is wrapped `backoff.Permanent` (`connector.go`). On failure the **last underlying error** is returned in preference to backoff's own (`connector.go`).
 
-`isRetryableOpenErr(err)` (`retryable_open_err.go`) — exactly two shapes: `errors.Is(err, nbs.ErrDatabaseLocked)` (`retryable_open_err.go`) and `errors.Is(err, os.ErrDeadlineExceeded)` (`retryable_open_err.go`). Everything else is permanent.
+`isRetryableOpenErr(err)` (`retryable_open_err.go`) — exactly one shape: `errors.Is(err, nbs.ErrDatabaseLocked)` (`retryable_open_err.go`). Everything else is permanent.
 
 `openSqlEngine` (`driver.go`):
 - Builds a **carrier** `env.DoltEnv{Version: version, DBLoadParams: maps.Clone(seCfg.DBLoadParams)}` when params exist (`driver.go`), because `NewSqlEngine`'s own threading of `DBLoadParams` happens after `MultiEnvForDirectory` has already loaded the databases — too late for params that shape the storage open itself (`driver.go`).

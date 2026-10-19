@@ -126,8 +126,9 @@ func TestContentionErrorNamesTheLiveHolder(t *testing.T) {
 // off the instants the wait is handed rather than off how fast the machine
 // runs. Shared holders hand the lock along at the first three polls, so the
 // last arrives at 3s and the 10s wait refuses at 13s; the notice is due at
-// the 3s grace and then every 2s interval through the refusal, which is 3s,
-// 5s, 7s, 9s, 11s and 13s.
+// the 3s grace and then every 2s interval, which is 3s, 5s, 7s, 9s and 11s.
+// The 13s poll is due a notice too and prints none: it is the refusal, and a
+// wait that has given up is not still waiting.
 func TestWaitAnnouncesItselfRepeatedly(t *testing.T) {
 	notices := captureLockNotices(t, 3*time.Second, 2*time.Second)
 	ctx := context.Background()
@@ -164,13 +165,14 @@ func TestWaitAnnouncesItselfRepeatedly(t *testing.T) {
 	printed := notices.String()
 	var after []string
 	for _, line := range strings.Split(strings.TrimSuffix(printed, "\n"), "\n") {
-		waited, _, found := strings.Cut(strings.TrimPrefix(line, "lit: still waiting for "+lockPath+" after "), ";")
-		if !found {
+		rest, isNotice := strings.CutPrefix(line, "lit: still waiting for "+lockPath+" after ")
+		waited, _, hasAccount := strings.Cut(rest, "; ")
+		if !isNotice || !hasAccount {
 			t.Fatalf("notice %q is not a wait notice for %s", line, lockPath)
 		}
 		after = append(after, waited)
 	}
-	if want := []string{"3s", "5s", "7s", "9s", "11s", "13s"}; !slices.Equal(after, want) {
+	if want := []string{"3s", "5s", "7s", "9s", "11s"}; !slices.Equal(after, want) {
 		t.Errorf("notices reported waits of %v, want %v:\n%s", after, want, printed)
 	}
 	if !strings.Contains(printed, "pid "+strconv.Itoa(os.Getpid())) {
@@ -449,10 +451,12 @@ func TestHolderRecordSurvivesConcurrentAcquisitions(t *testing.T) {
 // rename keeps every sweepable name a finished record and every in-flight name
 // out of the sweep's sight.
 //
-// The sweepers are exactly what announceLockWait runs on a contended lock, one
-// per waiting contender, so this is the production pairing rather than a
-// contrived one — and one sweeper is not the pairing, because the failure this
-// pins needs a second one to recreate what the first retired.
+// The sweepers are what every contender on a held lock runs — its wait notice
+// and its refusal each render the holder account, which sweeps — one per
+// waiting contender, so this is the production pairing rather than a
+// contrived one, run back to back where production sweeps once a notice
+// interval. One sweeper is not the pairing, because the failure this pins
+// needs a second one to recreate what the first retired.
 //
 // The assertion is the whole contract, not the absence of any one failure. A
 // sweep can cost a holder its name several ways — an empty record parsing as

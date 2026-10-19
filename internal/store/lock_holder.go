@@ -559,7 +559,6 @@ func renderHolderCommand(command string) string {
 type holdWait struct {
 	storageDir string
 	lockPath   string
-	dir        string
 	wait       func() time.Duration
 	now        func() time.Time
 	known      map[string]struct{}
@@ -579,7 +578,7 @@ type holdWait struct {
 // by the instants it is handed rather than by how fast a loaded machine runs.
 // [LAW:effects-at-boundaries]
 func newHoldWait(storageDir, lockPath string, wait func() time.Duration, now func() time.Time) *holdWait {
-	return &holdWait{storageDir: storageDir, lockPath: lockPath, dir: lockHolderDir(storageDir, lockPath), wait: wait, now: now}
+	return &holdWait{storageDir: storageDir, lockPath: lockPath, wait: wait, now: now}
 }
 
 // Reset starts the clock and takes the first reading of who is there.
@@ -590,9 +589,11 @@ func (w *holdWait) Reset() {
 }
 
 // NextBackOff is called after each failed attempt: it restarts the clock when
-// a holder has arrived since the last reading, reports the wait once it has
-// outlasted the notice grace and every notice interval after, and stops the
-// retry when the holders in front have stood for the whole wait.
+// a holder has arrived since the last reading, stops the retry when the
+// holders in front have stood for the whole wait, and otherwise reports the
+// wait once it has outlasted the notice grace and every notice interval after.
+// A wait that stops is over, so it says nothing here: the refusal that
+// follows names the holders, and "still waiting" beside it would be false.
 // One reading of the clock serves the whole decision, so the arrival, the
 // notice and the elapsed figure are measured at the same instant.
 func (w *holdWait) NextBackOff() time.Duration {
@@ -600,13 +601,13 @@ func (w *holdWait) NextBackOff() time.Duration {
 	if w.arrivals() {
 		w.since = now
 	}
+	if now.Sub(w.since) >= w.wait() {
+		return backoff.Stop
+	}
 	if !now.Before(w.noticeDue) {
 		fmt.Fprintf(lockWaitNoticeWriter, "lit: still waiting for %s after %s; %s\n",
 			w.lockPath, now.Sub(w.started).Round(time.Second), describeLockHolders(w.storageDir, w.lockPath))
 		w.noticeDue = now.Add(lockWaitNoticeInterval)
-	}
-	if now.Sub(w.since) >= w.wait() {
-		return backoff.Stop
 	}
 	return storeLockPollInterval
 }
@@ -618,7 +619,7 @@ func (w *holdWait) arrivals() bool {
 	// An unreadable directory reads as no names here; the failure surfaces
 	// where the account is rendered (readLockHolders), which every exhausted
 	// wait reaches.
-	names, _ := holderRecordNames(w.dir)
+	names, _ := holderRecordNames(lockHolderDir(w.storageDir, w.lockPath))
 	for _, name := range names {
 		if _, seen := w.known[name]; !seen {
 			w.known[name] = struct{}{}
