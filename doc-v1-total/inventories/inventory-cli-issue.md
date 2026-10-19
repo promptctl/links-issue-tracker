@@ -541,8 +541,19 @@ not `closed` (`cli.go`). Epics are therefore never workable rows.
    the label `needs-design` and `External` for any carrying `external`, each
    with the label as its message; one table, `blockingLabels`, pairs label and
    kind (`ready_state.go`).
-6. `newFocusPathAnnotator(focusPaths)` — emits `FocusPath{Message: goalID}` for
-   issues on a focused goal's prerequisite closure (`ready_state.go`).
+
+`annotateIssues` takes optional relation seeds that prime the memo
+`fetchHeldAncestry` reads through, with `details` copied in last; `buildEpicContext`
+passes the epic's relations (`cli.go`, `epic_context.go`).
+
+**Focus stamp** (`focusQueue`, `ready_state.go`): run by `gatherWorkableQueue`
+on the output of `classifyWorkable`, and by nothing else — not `annotateIssues`,
+the epic plan, `lit ls --columns blocked`, or the `lit stores --counts` rollup
+(`cli.go`). It appends `FocusPath{Message: goalID}`, after every readiness
+annotation, to each row on a focused goal's prerequisite closure, and returns
+`focusedQueue{workableGather, scope}` with `scope = focusScopeOf(path)`.
+`gatherWorkableAnnotated` narrows the rows with `keepRows` and carries the scope
+through unchanged (`cli.go`).
 
 **Focus path derivation** (`fetchFocusPathGoals`, `ready_state.go`):
 goals are issues with `Statuses=[open,in_progress]` and label `focus`
@@ -551,7 +562,7 @@ prerequisite DAG, one `fetchWaitLinks` expansion per level. The
 `path` map doubles as the visited set, so shared prerequisites attribute to the
 first goal reached and cycles terminate. Relations are memoized through
 `memoizeRelations` over `relationsByID`, primed with the
-seeds; `annotateIssues` passes the memo it built for `fetchHeldAncestry`.
+seeds; `focusQueue` passes the queue's `details` and `epics`.
 
 **Wait links** (`fetchWaitLinks`, `ready_state.go`): for each frontier
 issue, in frontier order, a `waitLink{waiter, prereq, holds, kind}` for
@@ -930,8 +941,8 @@ lines|table") is built from the same map (`cli.go`, `output.go`).
 - `GetRelationsByIDs([epicID])`; a missing epic → `storage.NotFoundError`
   (`epic_context.go`).
 - The children run through `annotateIssues` (`cli.go`) — the same annotator set
-  the workable pipeline uses — which batches their relations; a child listed but
-  absent → `storage.NotFoundError`.
+  the workable pipeline uses — seeded with the epic's relations, which batches
+  their relations; a child listed but absent → `storage.NotFoundError`.
 - Per child, `classifyChildStatus(child, ClassifyReadiness(row.Annotations))`:
   any child that is frozen or not `open` renders the word `issueStanding`
   composes, bracketed — archived/deleted → `[archived]` / `[deleted]`;
