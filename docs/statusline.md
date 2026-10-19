@@ -183,8 +183,8 @@ matters to you.
 never changes what a field means; a new meaning is a new field. So a script
 written against any lit reads the file any other lit writes: it ignores fields it
 does not know, and treats a field it knows but cannot find as not recorded. A
-field added later can be missing from a file a newer lit wrote, because an older
-lit that rewrites the file drops the fields it does not know.
+field added later can still be missing: a lit older than the field never writes
+it, and one that rewrites a newer lit's file drops it.
 
 When lit finds a file it cannot parse, or one with a different
 `schema_version`, it replaces the whole file with what the current command
