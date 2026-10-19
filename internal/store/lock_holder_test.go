@@ -824,7 +824,8 @@ func TestARecordThatWillNotRetireIsReportedAndTheReleaseStillLands(t *testing.T)
 // before its hold landed must not be held and published anyway: filelock
 // recreates the name empty, and that file would go out as this holder's
 // record while naming nobody — costing the account a holder that is very much
-// alive, silently.
+// alive, silently. Nor may the refused file outlive the refusal: nothing
+// sweeps a private name, so whatever the hold leaves there is never collected.
 func TestHoldingARetiredRecordFailsRatherThanPublishingAnImpostor(t *testing.T) {
 	t.Parallel()
 	private := filepath.Join(t.TempDir(), lockHolderPrivatePrefix+"gone")
@@ -843,6 +844,9 @@ func TestHoldingARetiredRecordFailsRatherThanPublishingAnImpostor(t *testing.T) 
 	}
 	if !strings.Contains(err.Error(), "no longer the record this process wrote") {
 		t.Errorf("holdWrittenRecord() error = %v, want it to name the swapped record", err)
+	}
+	if _, err := os.Stat(private); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("holdWrittenRecord() left the refused file under its private name: stat err = %v, want not-exist", err)
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -245,8 +246,9 @@ func publishLockHolder(storageDir, lockPath string) (func() error, error) {
 }
 
 // mintHeldRecord runs the four steps that make a holder record: create it,
-// fill it in, take the shared hold that makes it live, and only then give it
-// the name a reader sweeps. The order is the point — under that name the record
+// fill it in, take the shared hold that makes it live — refusing it if the held
+// file no longer says what was filled in — and only then give it the name a
+// reader sweeps. The order is the point — under that name the record
 // is complete and held from the instant it exists, so no reader ever meets a
 // half-made one.
 //
@@ -262,7 +264,7 @@ func mintHeldRecord(dir string, payload []byte) (func() error, error) {
 	}
 	release, err := holdWrittenRecord(privatePath, payload)
 	if err != nil {
-		return nil, errors.Join(err, retireRecord(privatePath))
+		return nil, err
 	}
 	// A hold rides the inode, not the name, so the record a reader now finds
 	// under recordPath is the one this call is already holding — and this is
@@ -304,7 +306,8 @@ func writeNewRecord(privatePath string, payload []byte) error {
 }
 
 // holdWrittenRecord takes the shared hold on the record writeNewRecord wrote,
-// and refuses a hold on a file that does not say what was written. filelock
+// and refuses a hold on a file that does not say what was written, retiring
+// whatever file the refused hold leaves under the private name. filelock
 // opens with O_CREATE, so a record removed from under its name before the hold
 // lands would be recreated empty and held — a file naming nobody that the link
 // would then publish as this holder, unnamed for the life of its lock. Reading
@@ -318,14 +321,14 @@ func writeNewRecord(privatePath string, payload []byte) error {
 func holdWrittenRecord(privatePath string, payload []byte) (func() error, error) {
 	release, acquired, err := filelock.Acquire(context.Background(), privatePath, false, 1, 0)
 	if err != nil || !acquired {
-		return nil, fmt.Errorf("hold holder record (acquired=%v): %w", acquired, err)
+		return nil, errors.Join(fmt.Errorf("hold holder record (acquired=%v): %w", acquired, err), retireRecord(privatePath))
 	}
 	held, err := os.ReadFile(privatePath)
 	if err != nil {
-		return nil, errors.Join(fmt.Errorf("read back held holder record: %w", err), release())
+		return nil, errors.Join(fmt.Errorf("read back held holder record: %w", err), release(), retireRecord(privatePath))
 	}
 	if !bytes.Equal(held, payload) {
-		return nil, errors.Join(fmt.Errorf("hold holder record: %s is no longer the record this process wrote", filepath.Base(privatePath)), release())
+		return nil, errors.Join(fmt.Errorf("hold holder record: %s is no longer the record this process wrote", filepath.Base(privatePath)), release(), retireRecord(privatePath))
 	}
 	return release, nil
 }
@@ -612,32 +615,39 @@ func (w *holdWait) arrivals() bool {
 // [LAW:one-source-of-truth] The one listing the account, the sweep and the
 // wait all read.
 //
-// The kind is checked before the read because os.ReadDir cannot be trusted
-// with it: on Windows it reads a regular file as an empty directory
+// The kind is checked before the read because a directory read cannot be
+// trusted with it: on Windows it reads a regular file as an empty directory
 // (os/dir_windows.go takes the ERROR_FILE_NOT_FOUND its listing call returns
 // on a file handle for "no more entries"), so a file squatting on the holder
 // dir would read as no holders rather than as the unreadable records it is.
-func holderRecordNames(dir string) ([]string, error) {
-	info, err := os.Stat(dir)
+// One handle answers both, so the kind checked is the kind listed.
+func holderRecordNames(dir string) (names []string, err error) {
+	listing, err := os.Open(dir)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	if !info.IsDir() {
-		return nil, fmt.Errorf("%s is not a directory", dir)
-	}
-	entries, err := os.ReadDir(dir)
+	defer func() { err = errors.Join(err, listing.Close()) }()
+	info, err := listing.Stat()
 	if err != nil {
 		return nil, err
 	}
-	var names []string
+	if !info.IsDir() {
+		return nil, fmt.Errorf("%s is not a directory", dir)
+	}
+	entries, err := listing.ReadDir(-1)
+	if err != nil {
+		return nil, err
+	}
 	for _, entry := range entries {
 		if strings.HasPrefix(entry.Name(), lockHolderRecordPrefix) {
 			names = append(names, entry.Name())
 		}
 	}
+	// Sorted, as os.ReadDir sorts: the account renders holders in this order.
+	slices.Sort(names)
 	return names, nil
 }
 
