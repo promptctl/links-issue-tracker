@@ -22,9 +22,10 @@ You need:
 - **The Go toolchain.** The required version is the `go` directive in
   [`go.mod`](go.mod); a recent Go will auto-download a matching toolchain.
 - **The `claude` CLI** — *optional, for running the test suite.* A test runs
-  the plugin and marketplace manifests through `claude plugin validate
-  --strict` and skips when `claude` is not on PATH (in CI it fails instead);
-  CI installs the version pinned in
+  the plugin and marketplace manifests through `claude plugin validate`,
+  failing on any finding but the warning that the plugin sets no version
+  ([RELEASING.md](RELEASING.md)), and skips when `claude` is not on PATH (in
+  CI it fails instead); CI installs the version pinned in
   [`.github/actions/install-claude/action.yml`](.github/actions/install-claude/action.yml).
 - **`jq`** — *only for running the test suite.* A test runs the example
   statusline in [docs/statusline.md](docs/statusline.md), which is a `jq`

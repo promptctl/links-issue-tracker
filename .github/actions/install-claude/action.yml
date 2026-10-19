@@ -1,4 +1,4 @@
-# The test suite shells out to `claude plugin validate --strict` as the oracle
+# The test suite shells out to `claude plugin validate --json` as the oracle
 # for the plugin and marketplace manifests, so the `claude` CLI must be on PATH
 # before `go test` in every workflow that runs tests — there a missing oracle
 # fails its test instead of skipping it (internal/testoracle). (It is a

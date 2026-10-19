@@ -15,9 +15,8 @@ import (
 
 type marketplaceManifest struct {
 	Plugins []struct {
-		Name    string `json:"name"`
-		Source  string `json:"source"`
-		Version string `json:"version"`
+		Name   string `json:"name"`
+		Source string `json:"source"`
 	} `json:"plugins"`
 }
 
@@ -38,51 +37,6 @@ func TestClaudeMarketplaceListsPlugin(t *testing.T) {
 	}
 	if marketplace.Plugins[0].Name != "lit" || marketplace.Plugins[0].Source != "./claude-plugin" {
 		t.Fatalf("unexpected marketplace plugin entry: %#v", marketplace.Plugins[0])
-	}
-}
-
-// TestClaudeMarketplaceVersionMatchesPlugin pins one released version across the
-// two manifests that publish it. Claude Code reads the marketplace listing and
-// the plugin's own manifest independently, so neither is derived from the other
-// and a bump that lands in only one ships a listing misreporting the version the
-// plugin declares — silently, since nothing else in the install path compares
-// them. An absent version on either side is the same defect as a mismatched one:
-// two empty strings agree while guarding nothing. [LAW:one-source-of-truth]
-func TestClaudeMarketplaceVersionMatchesPlugin(t *testing.T) {
-	t.Parallel()
-	root := mustRepoRoot(t)
-
-	marketplacePath := filepath.Join(root, ".claude-plugin", "marketplace.json")
-	marketplaceBytes, err := os.ReadFile(marketplacePath)
-	if err != nil {
-		t.Fatalf("ReadFile(marketplace.json) error = %v", err)
-	}
-	var marketplace marketplaceManifest
-	if err := json.Unmarshal(marketplaceBytes, &marketplace); err != nil {
-		t.Fatalf("marketplace json parse error = %v", err)
-	}
-	if len(marketplace.Plugins) == 0 {
-		t.Fatalf("marketplace plugins missing: %#v", marketplace)
-	}
-
-	pluginPath := filepath.Join(root, "claude-plugin", ".claude-plugin", "plugin.json")
-	pluginBytes, err := os.ReadFile(pluginPath)
-	if err != nil {
-		t.Fatalf("ReadFile(plugin.json) error = %v", err)
-	}
-	var plugin struct {
-		Version string `json:"version"`
-	}
-	if err := json.Unmarshal(pluginBytes, &plugin); err != nil {
-		t.Fatalf("plugin json parse error = %v", err)
-	}
-
-	marketplaceVersion := marketplace.Plugins[0].Version
-	if marketplaceVersion == "" || plugin.Version == "" {
-		t.Fatalf("plugin version absent: %s declares %q, %s declares %q", marketplacePath, marketplaceVersion, pluginPath, plugin.Version)
-	}
-	if marketplaceVersion != plugin.Version {
-		t.Fatalf("plugin version disagrees: %s declares %q, %s declares %q", marketplacePath, marketplaceVersion, pluginPath, plugin.Version)
 	}
 }
 
@@ -127,25 +81,77 @@ func TestClaudePluginShipsNextSkill(t *testing.T) {
 	}
 }
 
+// validationReport is the part of `claude plugin validate --json`'s report this
+// test judges. Manifest.Type is checked against the target, so a report whose
+// shape moved decodes to a mismatch rather than to empty, passing finding
+// lists. Contents stays raw: the plugin's manifests are all it validates today,
+// and a report that starts listing contents must fail here until those
+// findings are judged too, not decode as an empty, passing list.
+type validationReport struct {
+	Success  bool `json:"success"`
+	Manifest struct {
+		Type     string              `json:"type"`
+		Errors   []validationFinding `json:"errors"`
+		Warnings []validationFinding `json:"warnings"`
+	} `json:"manifest"`
+	Contents []json.RawMessage `json:"contents"`
+}
+
+type validationFinding struct {
+	Path    string `json:"path"`
+	Message string `json:"message"`
+}
+
+// versionlessMessage is the validator's warning for a manifest that sets no
+// version, the one warning the plugin is meant to draw.
+const versionlessMessage = `No version specified. Consider adding a version following semver (e.g., "1.0.0")`
+
 // TestClaudePluginManifestsPassOfficialValidation runs the marketplace and
-// plugin manifests through the real `claude plugin validate --strict`, the
-// one checker that knows the manifest schema Claude Code actually loads —
-// hand-modeling that schema in Go would drift the moment the CLI adds or
-// retires a field. [LAW:verifiable-goals] testoracle.Path skips it where the
-// CLI isn't installed and fails it in CI, which installs the pinned CLI
+// plugin manifests through the real `claude plugin validate`, the one checker
+// that knows the manifest schema Claude Code actually loads — hand-modeling
+// that schema in Go would drift the moment the CLI adds or retires a field.
+// [LAW:verifiable-goals] testoracle.Path skips it where the CLI isn't installed
+// and fails it in CI, which installs the pinned CLI
 // (`.github/actions/install-claude`).
+//
+// It holds the manifests to strict validation, every warning a failure, but for
+// one: the warning that the plugin sets no version. The plugin carries none on
+// purpose, so that Claude Code versions it by commit and every merged change
+// reaches installed users (RELEASING.md); --strict cannot be told that, so the
+// report is read as JSON and that one warning, named by its exact path and
+// message, is the only finding allowed. [LAW:one-source-of-truth]
 func TestClaudePluginManifestsPassOfficialValidation(t *testing.T) {
 	t.Parallel()
 	claudeBin := testoracle.Path(t, "claude")
 	root := mustRepoRoot(t)
 
-	for _, target := range []string{".", "claude-plugin"} {
-		t.Run(target, func(t *testing.T) {
-			cmd := exec.Command(claudeBin, "plugin", "validate", target, "--strict")
+	for _, tc := range []struct {
+		target, manifestType string
+		versionless          validationFinding
+	}{
+		{".", "marketplace", validationFinding{"plugins[0] plugin.json → version", versionlessMessage}},
+		{"claude-plugin", "plugin", validationFinding{"version", versionlessMessage}},
+	} {
+		t.Run(tc.target, func(t *testing.T) {
+			cmd := exec.Command(claudeBin, "plugin", "validate", tc.target, "--json")
 			cmd.Dir = root
-			out, err := cmd.CombinedOutput()
+			var stderr strings.Builder
+			cmd.Stderr = &stderr
+			out, err := cmd.Output()
 			if err != nil {
-				t.Fatalf("claude plugin validate %s --strict failed: %v\n%s", target, err, out)
+				t.Fatalf("claude plugin validate %s --json failed: %v\nstdout:\n%s\nstderr:\n%s", tc.target, err, out, stderr.String())
+			}
+			var report validationReport
+			if err := json.Unmarshal(out, &report); err != nil {
+				t.Fatalf("claude plugin validate %s --json: report parse error = %v\n%s", tc.target, err, out)
+			}
+			if !report.Success || report.Manifest.Type != tc.manifestType || len(report.Manifest.Errors) != 0 || len(report.Contents) != 0 {
+				t.Fatalf("claude plugin validate %s: want success on a %s manifest with no errors or contents findings\n%s", tc.target, tc.manifestType, out)
+			}
+			for _, w := range report.Manifest.Warnings {
+				if w != tc.versionless {
+					t.Errorf("claude plugin validate %s warns at %q: %s", tc.target, w.Path, w.Message)
+				}
 			}
 		})
 	}
