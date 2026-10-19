@@ -512,10 +512,9 @@ Flag parse output is `io.Discard` (`sync_bg.go`).
   1. `context.Canceled` in `err` or `outcome.pushErr` → `canceled` with the first non-nil error's text, plus remote/branch.
   2. `store.ErrWorkspaceBusy` in `err` → `workspace_busy` with err text (no remote/branch).
   3. any other `err` → `error` with err text.
-  4. `storage.ErrPushDiverged` in `outcome.pushErr` → `diverged` with its text plus remote/branch.
-  5. `outcome.pushErr != nil` → `error` with its text plus remote/branch.
-  6. `outcome.skip != syncTargetReady` → decision = `string(outcome.skip)`, remote only.
-  7. default → `pushed` with remote/branch.
+  4. `outcome.pushErr != nil` → `pushFailureDecision(outcome.pushErr)` (`diverged` when it holds `storage.ErrPushDiverged`, otherwise `error`) with its text plus remote/branch.
+  5. `outcome.skip != syncTargetReady` → decision = `string(outcome.skip)`, remote only.
+  6. default → `pushed` with remote/branch.
 - `completePushAttempt` — `sync_push_outcome.go`: derives the record, appends it to the event's `push.outcomes` list as `{push.decision, push.reason, push.remote, push.branch}`, writes it, and feeds `observePushOutcomeForOwner`.
 - `recordPushOutcome` — `sync_push_outcome.go`: atomic temp-and-rename write of the JSON plus a newline; failure → stderr `lit: push-outcome marker not written: <err>`, never returned.
 - `lastPushOutcome` — `sync_push_outcome.go`: missing marker → `ok=false` silently; other stat/read failure → stderr `lit: push-outcome marker unreadable: <err>`; bad JSON → stderr `lit: push-outcome marker corrupt: <err>`; returns record + age from mtime.
