@@ -5,6 +5,22 @@ All notable changes to `links-issue-tracker` (the `lit` CLI) are documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.22.0] - 2026-10-19
+
+### Added
+
+- The cc-candybar plugin is one segment, `plugins.lit.ticket`. Its parts are settings of that segment: title length, lane progress, phase, next pick and description length. ▸ shows the ticket's description under the bar for the session, and ▾ folds it. The statusline file carries `working_on.ticket.description` and `next.ticket.description`. The plugin needs cc-candybar 1.136.0. (links-unfiled-fc79.xw1d)
+
+### Changed
+
+- Building and testing lit from source needs no `dolt` CLI. (links-unfiled-fc79.rm9w)
+
+### Fixed
+
+- `lit init`, `lit quickstart` and the pre-push hook install find their embedded templates on Windows. (links-windows-qr8l.4yu)
+- Every command names each config key it does not read on stderr, as `warning: <file> sets "<key>", which this version of lit does not read, so it has no effect`, and records it on its event as `config.unknown_keys`. The command still runs. (links-unfiled-fc79.v72b)
+- Closing a store a second time does nothing. The lock-holder record is retired once. (links-unfiled-fc79.rm9w)
+
 ## [0.21.1] - 2026-10-19
 
 ### Changed
