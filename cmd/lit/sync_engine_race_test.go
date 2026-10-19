@@ -17,9 +17,8 @@ import (
 // burst of several mutating lit commands run back-to-back must never surface
 // Dolt's raw "database is read only" (or the online-GC reconnect variant)
 // error, and every command must exit 0. It is also the acceptance pin for the
-// burst tail: every commit — including the final mutation's — reaches the
-// remote with NO explicit sweep push, proved by the independent oracle poll
-// at the end.
+// burst tail: every mutation — including the final one — reaches the remote
+// with NO explicit sweep push, proved by polling a remoteObserver at the end.
 //
 // The race this reproduces: each mutating command's on-change mirror is a
 // detached subprocess that keeps running (spawning its own read-write
@@ -97,7 +96,7 @@ func TestBurstOfMutationsNeverHitsEngineReadOnlyCollision(t *testing.T) {
 		t.Fatalf("bootstrap lit sync push: %v\noutput:\n%s", err, out)
 	}
 
-	// Independent oracle, the same remoteObserver
+	// The oracle is the same remoteObserver
 	// TestEagerPushOnDefaultCadenceReachesRemoteWithoutExplicitPush reads.
 	observer := newRemoteObserver(t, base, remoteGit, self, xdgConfigHome)
 

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/pressly/goose/v3"
@@ -263,7 +264,14 @@ func TestDowngradeRollbackOnFailure(t *testing.T) {
 func TestDowngradeHappyPathSteppedAndCommitted(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, doltRoot := openWorkspaceForDowngrade(t)
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	st, err := Open(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	// Once only: a second Close releases a file lock through a closed fd.
+	closeStore := sync.OnceValue(st.Close)
+	t.Cleanup(func() { _ = closeStore() })
 
 	registryMax, err := migrations.MaxVersion()
 	if err != nil {
@@ -293,7 +301,7 @@ func TestDowngradeHappyPathSteppedAndCommitted(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dbsnapshot.DirFor(doltRoot), done.Snapshot)); err != nil {
 		t.Fatalf("reported snapshot %q: %v", done.Snapshot, err)
 	}
-	if err := st.Close(); err != nil {
+	if err := closeStore(); err != nil {
 		t.Fatalf("Close() = %v", err)
 	}
 	log := observedCommitMessages(t, ctx, doltRoot, "test-workspace-id")

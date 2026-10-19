@@ -31,7 +31,7 @@ import (
 // observer reads the ticket itself on another machine's workspace, which is
 // what a teammate sees. [LAW:behavior-not-structure]
 //
-// It polls that independent oracle with a bounded timeout instead of a fixed
+// It polls the observer with a bounded timeout instead of a fixed
 // sleep, since the mirror is a detached background process with no other
 // completion signal available to a caller. [LAW:no-ambient-temporal-coupling]
 // If eager push never fired, this single local mutation reaches the remote by
