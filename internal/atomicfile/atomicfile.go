@@ -15,20 +15,20 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 // Durability says whether a replacement must survive a crash of the machine,
 // not only of the process. A rename is atomic against other processes either
 // way; without an fsync, a power loss can still leave the new name pointing at
-// contents that never reached the disk.
+// contents that never reached the disk. The zero Durability is neither, so one
+// nobody set panics instead of quietly skipping the fsync.
 type Durability int
 
 const (
 	// Replaceable is for a file the next writer rewrites anyway, or one whose
 	// loss only costs recomputing it: a crash that loses the newest version
 	// costs nothing an fsync would be worth.
-	Replaceable Durability = iota
+	Replaceable Durability = iota + 1
 	// Durable is for a file nothing recomputes: its contents are fsynced
 	// before the rename, so a crash leaves the old file or the whole new one,
 	// and its directory is fsynced after, where the platform can, so the
@@ -47,33 +47,36 @@ func WriteFile(name string, data []byte, perm fs.FileMode, durability Durability
 // Replace writes name's new contents through write into a temporary sibling,
 // sets its mode to perm, and renames it over name. name's directory must
 // exist. On any failure name is untouched and the temporary file is removed;
-// an error from write is returned as write gave it, and Replace's own steps
-// are named in theirs.
+// an error from write comes back wrapped but not reworded, so errors.Is and
+// errors.As still reach it, and Replace's own steps are named in theirs.
 //
 // The temporary file is created before write runs, so a directory that cannot
 // be written fails before write does any work (a download, say).
 func Replace(name string, perm fs.FileMode, durability Durability, write func(io.Writer) error) error {
+	syncFile, syncParent := durability.syncs()
 	dir := filepath.Dir(name)
-	// A hidden sibling: on the target's filesystem, so the rename is atomic,
-	// and out of a plain listing, so a reader that lists the directory (backup
-	// listing keeps *.json) does not mistake an in-flight write for a file.
-	tmp, err := os.CreateTemp(dir, "."+strings.TrimPrefix(filepath.Base(name), ".")+".tmp-*")
+	// name.tmp-<random>: a sibling, on the target's filesystem, so the rename
+	// is atomic. It extends the target's name, so a pattern that covers name*
+	// covers an in-flight write too (the statusline's git exclude), and it
+	// never ends in the target's extension, so a reader that picks files by
+	// extension (backup listing keeps *.json) passes it over.
+	tmp, err := os.CreateTemp(dir, filepath.Base(name)+".tmp-*")
 	if err != nil {
 		return fmt.Errorf("create temp file: %w", err)
 	}
-	if err := fill(tmp, perm, durability, write); err != nil {
+	if err := fill(tmp, perm, syncFile, write); err != nil {
 		return errors.Join(err, os.Remove(tmp.Name()))
 	}
 	if err := os.Rename(tmp.Name(), name); err != nil {
 		return errors.Join(fmt.Errorf("rename: %w", err), os.Remove(tmp.Name()))
 	}
-	durability.syncDir(dir)
+	syncParent(dir)
 	return nil
 }
 
 // fill writes the temporary file to its final contents and mode and closes
 // it, on every path.
-func fill(tmp *os.File, perm fs.FileMode, durability Durability, write func(io.Writer) error) error {
+func fill(tmp *os.File, perm fs.FileMode, syncFile func(*os.File) error, write func(io.Writer) error) error {
 	if err := write(tmp); err != nil {
 		return errors.Join(err, tmp.Close())
 	}
@@ -81,7 +84,7 @@ func fill(tmp *os.File, perm fs.FileMode, durability Durability, write func(io.W
 	if err := tmp.Chmod(perm); err != nil {
 		return errors.Join(fmt.Errorf("chmod: %w", err), tmp.Close())
 	}
-	if err := durability.syncFile(tmp); err != nil {
+	if err := syncFile(tmp); err != nil {
 		return errors.Join(fmt.Errorf("fsync: %w", err), tmp.Close())
 	}
 	if err := tmp.Close(); err != nil {
@@ -90,34 +93,32 @@ func fill(tmp *os.File, perm fs.FileMode, durability Durability, write func(io.W
 	return nil
 }
 
+// syncs returns the fsync steps a write at d runs on the file and then on its
+// directory.
 // [LAW:dataflow-not-control-flow] The one branch in a write is the domain's
-// own enum, read in these two methods; Replace runs the same steps for both.
-func (d Durability) syncFile(f *os.File) error {
+// own enum, read here once, before anything touches the disk, so an illegal
+// Durability leaves nothing behind; Replace runs the same steps for both.
+func (d Durability) syncs() (file func(*os.File) error, dir func(string)) {
 	switch d {
 	case Replaceable:
-		return nil
+		return func(*os.File) error { return nil }, func(string) {}
 	case Durable:
-		return f.Sync()
+		return (*os.File).Sync, syncDir
 	}
 	panic(fmt.Sprintf("atomicfile: illegal Durability %d", d))
 }
 
-func (d Durability) syncDir(dir string) {
-	switch d {
-	case Replaceable:
-		return
-	case Durable:
-		// [LAW:no-silent-failure] exception: the directory fsync that makes
-		// the renamed entry itself crash-durable is not supported on every
-		// platform (Windows cannot fsync a directory handle), and there is no
-		// recovery action when it fails. The file's own fsync, which fails
-		// loudly, is the load-bearing one: with the contents on disk, a miss
-		// here can only roll a crash back to the old file, never tear the new.
-		if f, err := os.Open(dir); err == nil {
-			_ = f.Sync()
-			_ = f.Close()
-		}
-		return
+// syncDir fsyncs dir, where the platform can, so the rename into it survives a
+// crash too.
+func syncDir(dir string) {
+	// [LAW:no-silent-failure] exception: the directory fsync that makes the
+	// renamed entry itself crash-durable is not supported on every platform
+	// (Windows cannot fsync a directory handle), and there is no recovery
+	// action when it fails. The file's own fsync, which fails loudly, is the
+	// load-bearing one: with the contents on disk, a miss here can only roll a
+	// crash back to the old file, never tear the new.
+	if f, err := os.Open(dir); err == nil {
+		_ = f.Sync()
+		_ = f.Close()
 	}
-	panic(fmt.Sprintf("atomicfile: illegal Durability %d", d))
 }

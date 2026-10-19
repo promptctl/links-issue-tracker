@@ -54,8 +54,8 @@ func TestAFailedWriteLeavesTheTargetAndNoTempFile(t *testing.T) {
 		}
 		return refused
 	})
-	if !errors.Is(err, refused) {
-		t.Fatalf("Replace() = %v, want the write's own error", err)
+	if !errors.Is(err, refused) || err.Error() != refused.Error() {
+		t.Fatalf("Replace() = %v, want the write's own error, not reworded", err)
 	}
 	assertFile(t, name, "old binary", 0o755)
 	assertOnlyEntry(t, dir, "lit")
@@ -91,18 +91,26 @@ func TestAMissingDirectoryIsAnErrorAndCreatesNothing(t *testing.T) {
 	}
 }
 
-// A reader that picks a directory's files by extension — backup listing
-// keeps *.json — must not see a write that is still in flight.
-func TestAnInFlightWriteIsNotListedAsTheTargetsKind(t *testing.T) {
+// A write still in flight is covered by a pattern for the target's name — the
+// statusline's git exclude is /.lit/statusline.json* — and not by one for the
+// target's extension — backup listing keeps *.json.
+func TestAnInFlightWriteMatchesTheTargetsNameButNotItsExtension(t *testing.T) {
 	dir := t.TempDir()
-	name := filepath.Join(dir, "20261019-000000.000000000.json")
+	name := filepath.Join(dir, "statusline.json")
 	err := Replace(name, 0o644, Replaceable, func(w io.Writer) error {
-		listed, err := filepath.Glob(filepath.Join(dir, "*.json"))
+		byName, err := filepath.Glob(name + "*")
 		if err != nil {
 			return err
 		}
-		if len(listed) != 0 {
-			t.Errorf("*.json lists %v while the write is in flight, want nothing", listed)
+		if len(byName) != 1 {
+			t.Errorf("statusline.json* lists %v while the write is in flight, want the temp file alone", byName)
+		}
+		byExtension, err := filepath.Glob(filepath.Join(dir, "*.json"))
+		if err != nil {
+			return err
+		}
+		if len(byExtension) != 0 {
+			t.Errorf("*.json lists %v while the write is in flight, want nothing", byExtension)
 		}
 		_, err = w.Write([]byte("{}"))
 		return err
@@ -112,13 +120,27 @@ func TestAnInFlightWriteIsNotListedAsTheTargetsKind(t *testing.T) {
 	}
 }
 
-func TestAnIllegalDurabilityPanics(t *testing.T) {
-	defer func() {
-		if recover() == nil {
-			t.Fatal("WriteFile with an illegal Durability returned; want a panic")
+// The zero Durability is illegal too, so one nobody set cannot pass for
+// Replaceable; and the panic comes before anything is written.
+func TestAnIllegalDurabilityPanicsAndLeavesNothing(t *testing.T) {
+	for _, durability := range []Durability{0, 7} {
+		dir := t.TempDir()
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Fatalf("WriteFile with Durability %d returned; want a panic", durability)
+				}
+			}()
+			_ = WriteFile(filepath.Join(dir, "x"), nil, 0o644, durability)
+		}()
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
 		}
-	}()
-	_ = WriteFile(filepath.Join(t.TempDir(), "x"), nil, 0o644, Durability(7))
+		if len(entries) != 0 {
+			t.Fatalf("Durability %d left %v behind, want nothing", durability, entries)
+		}
+	}
 }
 
 func assertFile(t *testing.T, name, contents string, perm fs.FileMode) {
