@@ -649,7 +649,7 @@ The block has no trailing newline after `</agent-instructions>` (`sync_failure.g
 
 - `shouldRunNow(markerPath, now, interval)` (`sync_cadence.go`): a missing or unstattable marker means "allow".
 - `markRunAttempt` (`sync_cadence.go`): `MkdirAll(StorageDir, 0o755)` then `os.WriteFile(marker, nil, 0o644)`; errors wrapped `ensure storage dir for debounce marker` / `write debounce marker <base>`.
-- `writeMarkerAtomic` (`sync_cadence.go`): `MkdirAll`, `CreateTemp(StorageDir, base+"-*")`, write, close, rename. Used by the push-outcome and owner-notify markers.
+- `writeMarkerAtomic(markerPath, payload)` (`sync_cadence.go`): `MkdirAll` of the marker's directory, then `atomicfile.WriteFile(markerPath, payload, 0o600, atomicfile.Replaceable)`. Used by the push-outcome, owner-notify, receive-block and advertised-sync-branch markers.
 - Marker inventory under `<StorageDir>`: `receive.last`, `received-refs.last` (`store/received_refs.go`; forgotten by `store.LockWorkspaceExclusive`), `remote-absent.last`, `compact.last`, `fetch-success.last`, `mirror-pending`, `push-outcome.last`, `owner-notify.<kind>.last`, `mirror.log`, `snapshots/`, `traces/{sync,automation,…}/`, `last-sync-base.json`.
 
 ### 3.16 Acceptance evidence in `cmd/lit`

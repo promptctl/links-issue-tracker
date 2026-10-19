@@ -326,8 +326,8 @@ Defaults are set in `Load` (`internal/config/config.go`).
   `Version = 1` (`internal/workspace/workspace.go`).
 - `ReadConfig` fails with `read workspace config: %w`, `parse workspace config: %w`, or
   `workspace config missing workspace_id` (`internal/workspace/workspace.go`).
-- Writes are atomic: temp file `.config.json.*` in the same directory, chmod 0644, close,
-  rename (`internal/workspace/workspace.go`).
+- Writes go through `atomicfile.WriteFile(path, payload, 0o644, atomicfile.Durable)`;
+  a failure is `write workspace config: %w` (`internal/workspace/workspace.go`).
 - `UpdateConfig(path, mutate)` is the single read-modify-write boundary
   (`internal/workspace/workspace.go`).
 - Issue-prefix resolution (`internal/workspace/workspace.go`, which takes the config
@@ -597,11 +597,11 @@ manifests (`internal/release/manifest.go`). `Signature` is reserved and unverifi
   1. `archiveFormatForURL(url)`: `.tar.gz` ⇒ tar/gzip + binary name `lit`; `.zip` ⇒ zip +
      `lit.exe`; anything else ⇒
      `release: unsupported archive extension in %q (want .tar.gz or .zip)`.
-  2. Create the temp file `.lit-install-*.tmp` **in the target directory first**, before
-     downloading, so an unwritable install dir fails fast.
-  3. `downloadAndVerify`.
-  4. `extractBinary` into the temp file, `Chmod(0o755)`, `Close`, `os.Rename` into place
-. Any failure before the rename removes the temp file.
+  2. `atomicfile.Replace(targetPath, 0o755, atomicfile.Durable, ...)`, whose temp file
+     exists **before** the download, so an unwritable install dir fails fast.
+  3. Inside it, `downloadAndVerify`, then `extractBinary` into the temp file.
+  4. Any failure is `release: install <targetPath>: %w`, leaves the target unchanged,
+     and removes the temp file.
 - `downloadAndVerify`: GET with ctx; non-200 ⇒
   `release: fetch %s: HTTP %d: %s` (256-byte snippet); the expected SHA256 is hex-decoded
   **before** the download and must be exactly 32 bytes, else

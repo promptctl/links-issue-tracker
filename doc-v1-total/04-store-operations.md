@@ -22,7 +22,7 @@ Three surfaces write the export to disk or stdout:
 
 - **`lit export`** — the JSON object to stdout with two-space indent and one trailing newline; export is JSON-only, with no text representation (`internal/cli/cli.go`).
 - **Backup snapshots** (`internal/backup/backup.go`) — directory `<StorageDir>/backups` (mode `0o755`), filename `20060102-150405.000000000.json` (UTC), written via `syncfile.WriteAtomic`. `List` reads the directory (no manifest/index file exists), skipping non-`.json` entries; a missing directory lists as empty without error. `Prune(dir, keep)` errors on `keep <= 0`; `lit backup create` defaults `--keep` to 20 and the restore path hardcodes a prune to 20 (`internal/cli/backup.go`). `lit backup create` prints `<name> <path>`; `lit backup list` prints `<name> <size> <path>`.
-- **Sync base** (`internal/syncfile/syncfile.go`) — `<StorageDir>/last-sync-base.json`, written atomically: `json.MarshalIndent` two-space **plus a trailing newline**, temp file `.links-sync-*.json` in the same directory, then `os.Rename`; the temp file is removed on any failure. `WriteAtomic` returns the content hash of the bytes written (`syncfile.go`).
+- **Sync base** (`internal/syncfile/syncfile.go`) — `<StorageDir>/last-sync-base.json`, written atomically: `json.MarshalIndent` two-space **plus a trailing newline**, replaced through `atomicfile.WriteFile` with mode `0o600`, durably (`internal/atomicfile`). `WriteAtomic` returns the content hash of the bytes written (`syncfile.go`).
 
 ## The export delta
 
@@ -151,7 +151,7 @@ Consumers (`migration_runner.go`): the startup migration path checkpoints as `pr
 
 `AdoptRemoteByClone` bootstraps the local store by **cloning the remote Dolt database wholesale** into the dolt root — not a fetch, and not an in-place adoption (`adopt.go`). Any pre-existing database directory (an empty bootstrap store, or an interrupted adopt's residue) is **set aside by rename, never deleted**, to a sibling `<root>.adopt-displaced-<UnixNano>` directory (`adopt.go`).
 
-The crash-safety mechanism is the **adopt-pending marker**, `.links-adopt-pending`, written *inside* the dolt root before the first destructive act (`adopt.go`). Its JSON payload (`started_at`, `remote`, `branch`) is informational; **presence alone condemns** — garbage content still refuses (`adopt.go`). It is written atomically (temp file → write → fsync → close → rename, with a best-effort directory fsync whose error is deliberately ignored for Windows) (`adopt.go`).
+The crash-safety mechanism is the **adopt-pending marker**, `.links-adopt-pending`, written *inside* the dolt root before the first destructive act (`adopt.go`). Its JSON payload (`started_at`, `remote`, `branch`) is informational; **presence alone condemns** — garbage content still refuses (`adopt.go`). It is written through `atomicfile.WriteFile` with mode `0o600`, durably: the file is fsynced before the rename, with a best-effort directory fsync whose error is deliberately ignored for Windows (`adopt.go`, `internal/atomicfile`).
 
 While the marker exists, every normal open path refuses — `Open`, `OpenForRead`, `EnsureDatabase`, `OpenSync`, `DumpRaw` — with a message explaining the interrupted adopt and directing to re-run `lit init` (or delete the root to abandon) (`adopt.go`; enforcement sites `store.go`; `sync.go`; `rawdump.go`). The check runs **after** the workspace lock is taken: a live adopt holds the exclusive lock, so marker-with-acquirable-lock always means a *dead* adopt (`store.go`).
 
