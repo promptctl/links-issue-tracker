@@ -562,7 +562,8 @@ prerequisite DAG, one `fetchWaitLinks` expansion per level. The
 `path` map doubles as the visited set, so shared prerequisites attribute to the
 first goal reached and cycles terminate. Relations are memoized through
 `memoizeRelations` over `relationsByID`, primed with the
-seeds; `focusQueue` passes the queue's `details` and `epics`.
+seeds; `focusQueue` passes the queue's `loaded` — every relation the memo
+`annotateIssues` built for `fetchHeldAncestry` read.
 
 **Wait links** (`fetchWaitLinks`, `ready_state.go`): for each frontier
 issue, in frontier order, a `waitLink{waiter, prereq, holds, kind}` for

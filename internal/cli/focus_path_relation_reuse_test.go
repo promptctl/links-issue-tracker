@@ -5,27 +5,22 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
-// countingGraphSource wraps a focusGraphSource and records every subject id
-// handed to GetRelationsByIDs across a whole walk (with multiplicity). It lets a
-// test assert the focus-path walk's query behavior without inspecting code
-// shape: which subjects reach the store, and how often. ListIssues passes
-// straight through — only relation loads are the contract under test.
+// countingGraphSource wraps a store and records every subject id handed to
+// GetRelationsByIDs (with multiplicity). It lets a test assert a read path's
+// query behavior without inspecting code shape: which subjects reach the store,
+// and how often. Every other method passes straight through — only relation
+// loads are the contract under test.
 type countingGraphSource struct {
-	inner   focusGraphSource
+	storage.Store
 	fetched []string
-}
-
-func (c *countingGraphSource) ListIssues(ctx context.Context, filter storage.ListIssuesFilter) ([]model.Issue, error) {
-	return c.inner.ListIssues(ctx, filter)
 }
 
 func (c *countingGraphSource) GetRelationsByIDs(ctx context.Context, ids []string) (map[string]storage.IssueRelations, error) {
 	c.fetched = append(c.fetched, ids...)
-	return c.inner.GetRelationsByIDs(ctx, ids)
+	return c.Store.GetRelationsByIDs(ctx, ids)
 }
 
 func (c *countingGraphSource) fetchCounts() map[string]int {
@@ -67,7 +62,7 @@ func TestFocusPathWalkReusesFetchedRelations(t *testing.T) {
 
 	// Unseeded walk: the canonical result, and proof the memo fetches each
 	// recurring subject at most once within one walk.
-	bare := &countingGraphSource{inner: h.ap.Store}
+	bare := &countingGraphSource{Store: h.ap.Store}
 	wantPath, err := fetchFocusPathGoals(h.ctx, bare)
 	if err != nil {
 		t.Fatalf("fetchFocusPathGoals(unseeded) error = %v", err)
@@ -85,7 +80,7 @@ func TestFocusPathWalkReusesFetchedRelations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetRelationsByIDs(seed) error = %v", err)
 	}
-	seeded := &countingGraphSource{inner: h.ap.Store}
+	seeded := &countingGraphSource{Store: h.ap.Store}
 	gotPath, err := fetchFocusPathGoals(h.ctx, seeded, seed)
 	if err != nil {
 		t.Fatalf("fetchFocusPathGoals(seeded) error = %v", err)
@@ -104,5 +99,46 @@ func TestFocusPathWalkReusesFetchedRelations(t *testing.T) {
 	// path map.
 	if !reflect.DeepEqual(wantPath, gotPath) {
 		t.Fatalf("seeded path = %v, unseeded path = %v; the seed must not change the result", gotPath, wantPath)
+	}
+}
+
+// One gather of the workable queue loads each subject's relations at most once,
+// across the readiness pass and the focus walk together. The blocker here is an
+// epic with no children: it is neither a workable row nor an epic above one, so
+// only the readiness pass's wait walk loads it — and the focus walk, which
+// reaches it through the focused epic's dependency, must reuse that load.
+func TestWorkableQueueLoadsEachSubjectOnce(t *testing.T) {
+	h := newReadyTestHarness(t)
+	goal := h.createIssue(storage.CreateIssueInput{Prefix: "test",
+		Title: "Focused epic", Topic: "goal", IssueType: "epic",
+	})
+	h.createIssue(storage.CreateIssueInput{Prefix: "test",
+		Title: "Step", Topic: "goal", IssueType: "task", ParentID: goal.ID,
+	})
+	gate := h.createIssue(storage.CreateIssueInput{Prefix: "test",
+		Title: "Empty gate", Topic: "gate", IssueType: "epic",
+	})
+	h.addDependency(goal.ID, gate.ID)
+	h.setLabels(goal.ID, FocusLabel)
+
+	// The gate must be on the walk, or the test exercises nothing.
+	path, err := fetchFocusPathGoals(h.ctx, h.ap.Store)
+	if err != nil {
+		t.Fatalf("fetchFocusPathGoals error = %v", err)
+	}
+	if path[gate.ID] != goal.ID {
+		t.Fatalf("focus path = %v; the walk must reach gate %s from goal %s", path, gate.ID, goal.ID)
+	}
+
+	counting := &countingGraphSource{Store: h.ap.Store}
+	ap := *h.ap
+	ap.Store = counting
+	if _, err := gatherWorkableQueue(h.ctx, &ap); err != nil {
+		t.Fatalf("gatherWorkableQueue error = %v", err)
+	}
+	for id, n := range counting.fetchCounts() {
+		if n > 1 {
+			t.Fatalf("subject %s loaded %d times in one gather (%v); the focus walk must reuse the readiness pass's loads", id, n, counting.fetched)
+		}
 	}
 }

@@ -924,10 +924,11 @@ func (f workableFilter) criteria() (storage.IssueCriteria, error) {
 // to the bottom) is applied by the caller, not here, so consumers that want the
 // unmodified ranking (`lit backlog`) see it as ordered.
 //
-// The focus scope comes back BESIDE the rows rather than pre-applied to them,
-// because the two views narrow by it at different points: `lit backlog` scopes
-// the rows it prints, while `lit next` scopes only its global pool and leaves
-// this checkout's own claimed lanes reachable regardless (see routeNext).
+// The focus scope (stamped by focusQueue) comes back BESIDE the rows rather
+// than pre-applied to them, because the two views narrow by it at different
+// points: `lit backlog` scopes the rows it prints, while `lit next` scopes only
+// its global pool and leaves this checkout's own claimed lanes reachable
+// regardless (see routeNext).
 //
 // [LAW:single-enforcer] `lit next` and `lit backlog` both
 // read from this single pipeline so their "what is workable, in what
@@ -1022,11 +1023,12 @@ func noReadyPolicy() ([]string, error) { return nil, nil }
 // [LAW:one-source-of-truth] `lit next`/`backlog` and the cross-project
 // rollup share this one definition of "what is workable, annotated how".
 //
-// The focus scope is returned, never applied here: the rollup counts a whole
-// project's ready/in-flight/blocked rows, and narrowing those to one project's
-// focus path would leave the counts reading as project totals while meaning
-// something else — a query silently swapped for a similar-looking one with
-// different semantics. [LAW:no-silent-failure]
+// No focus walk runs here; focusQueue stamps the focus path on top for the two
+// views that answer over it. The rollup counts a whole project's
+// ready/in-flight/blocked rows, and narrowing those to one project's focus path
+// would leave the counts reading as project totals while meaning something
+// else — a query silently swapped for a similar-looking one with different
+// semantics. [LAW:no-silent-failure]
 func classifyWorkable(ctx context.Context, st storage.Store, requiredFields []string) (workableGather, error) {
 	// The query asks for the workable population and nothing a caller wants
 	// narrowed. A narrowed query is upstream of everything: it would put the
@@ -1116,7 +1118,7 @@ func annotateIssues(ctx context.Context, st storage.Store, requiredFields []stri
 	// earlier sibling or an epic's blocker hidden by those filters still gates.
 	// details goes in last so the fresh read of a subject wins over any seeded
 	// copy of it.
-	memo, _ := memoizeRelations(st.GetRelationsByIDs, slices.Concat(seeds, []map[string]storage.IssueRelations{details})...)
+	memo, loaded := memoizeRelations(st.GetRelationsByIDs, slices.Concat(seeds, []map[string]storage.IssueRelations{details})...)
 	held, err := fetchHeldAncestry(ctx, memo, details)
 	if err != nil {
 		return annotatedRows{}, err
@@ -1138,7 +1140,7 @@ func annotateIssues(ctx context.Context, st storage.Store, requiredFields []stri
 	if err != nil {
 		return annotatedRows{}, err
 	}
-	return annotatedRows{rows: annotated, details: details, epics: held.ancestry.relations}, nil
+	return annotatedRows{rows: annotated, details: details, epics: held.ancestry.relations, loaded: loaded}, nil
 }
 
 // annotatedRows is one annotateIssues pass. Named rather than positional
@@ -1151,6 +1153,10 @@ type annotatedRows struct {
 	// epics is the relations of every epic above a row, keyed by epic id — the
 	// chain epicsAbove climbs.
 	epics map[string]storage.IssueRelations
+	// loaded is every relation the pass read — the subjects, the epics above
+	// them, and the blockers' wait walks — the seed a later walk over the same
+	// graph reuses rather than re-reading.
+	loaded map[string]storage.IssueRelations
 }
 
 // runOrphaned lists in_progress issues whose last update is older than

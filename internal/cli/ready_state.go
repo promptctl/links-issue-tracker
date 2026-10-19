@@ -797,13 +797,15 @@ type focusedQueue struct {
 // listed and still blocked. The stamp goes after every readiness annotation, so
 // a row's annotations read in the order they always have.
 //
-// The walk is seeded with the relations the readiness pass already loaded —
-// every workable leaf and every epic above one — so it fetches only what lies
-// beyond them; a seeded hit is byte-identical to a refetch.
+// The walk is seeded with every relation the readiness pass already loaded —
+// the workable leaves, the epics above them, and the blockers' wait walks — so
+// it fetches only what lies beyond them; a seeded hit is byte-identical to a
+// refetch. The queue must not have been narrowed (keepRows releases the
+// loads), which gatherWorkableQueue guarantees by stamping before any filter.
 // [LAW:dataflow-not-control-flow] An unfocused workspace yields an empty path
 // through the same code, and every row passes the same lookup.
 func focusQueue(ctx context.Context, src focusGraphSource, queue workableGather) (focusedQueue, error) {
-	pathGoals, err := fetchFocusPathGoals(ctx, src, queue.details, queue.epics)
+	pathGoals, err := fetchFocusPathGoals(ctx, src, queue.loaded)
 	if err != nil {
 		return focusedQueue{}, err
 	}

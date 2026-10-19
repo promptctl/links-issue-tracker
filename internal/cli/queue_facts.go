@@ -55,8 +55,7 @@ func deriveQueueFacts(queue []annotation.AnnotatedIssue) queueFacts {
 }
 
 // workableGather is one run of the workable pipeline: the rows the caller asked
-// for, the relations behind exactly those rows, the whole-queue facts, and the
-// focus scope for a view to narrow by.
+// for, the relations behind exactly those rows, and the whole-queue facts.
 //
 // [LAW:types-are-the-program] the rows and the queue facts have different types
 // and cannot be crossed at a call site. As two []annotation.AnnotatedIssue

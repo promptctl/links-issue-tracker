@@ -656,19 +656,6 @@ func TestRenderEpicContextNamesTheCloseReason(t *testing.T) {
 	}
 }
 
-// relationCountingStore records every subject id handed to GetRelationsByIDs,
-// with multiplicity, so a test can assert which subjects a read path loads and
-// how often. Every other method passes straight through to the wrapped store.
-type relationCountingStore struct {
-	storage.Store
-	fetched []string
-}
-
-func (s *relationCountingStore) GetRelationsByIDs(ctx context.Context, ids []string) (map[string]storage.IssueRelations, error) {
-	s.fetched = append(s.fetched, ids...)
-	return s.Store.GetRelationsByIDs(ctx, ids)
-}
-
 // The epic plan reads the epic's relations once. The readiness pass climbs from
 // every child to the epics above it, and the first of those is the epic the
 // plan has just read, so the climb is handed that read rather than repeating
@@ -678,7 +665,7 @@ func TestBuildEpicContextFetchesTheEpicOnce(t *testing.T) {
 	first := f.addChild("First one")
 	f.addChild("Second one")
 
-	counting := &relationCountingStore{Store: f.ap.Store}
+	counting := &countingGraphSource{Store: f.ap.Store}
 	ec, err := buildEpicContext(f.ctx, counting, nil, f.epicID, first)
 	if err != nil {
 		t.Fatalf("buildEpicContext error = %v", err)
@@ -686,13 +673,7 @@ func TestBuildEpicContextFetchesTheEpicOnce(t *testing.T) {
 	if len(ec.Children) != 2 {
 		t.Fatalf("plan has %d children, want 2", len(ec.Children))
 	}
-	reads := 0
-	for _, id := range counting.fetched {
-		if id == f.epicID {
-			reads++
-		}
-	}
-	if reads != 1 {
+	if reads := counting.fetchCounts()[f.epicID]; reads != 1 {
 		t.Fatalf("epic %s fetched %d times in %v; want exactly once", f.epicID, reads, counting.fetched)
 	}
 }
