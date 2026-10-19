@@ -51,6 +51,7 @@ const (
 	reasonNoReadyWork             commandReason = "no_ready_work"
 	reasonOutsideGitWorkspace     commandReason = "outside_git_workspace"
 	reasonOwnerApprovalRequired   commandReason = "owner_approval_required"
+	reasonParentCycle             commandReason = "parent_cycle"
 	reasonPurgeUnconfirmed        commandReason = "purge_unconfirmed"
 	reasonRemoteUnreachable       commandReason = "remote_unreachable"
 	reasonRetiredCommand          commandReason = "retired_command"
@@ -116,6 +117,14 @@ func commandErrorReason(err error) commandReason {
 	var ownerApproval ownerApprovalRefusalError
 	if errors.As(err, &ownerApproval) {
 		return reasonOwnerApprovalRequired
+	}
+	// A hierarchy that loops is corruption with one known repair, which `lit
+	// doctor --fix integrity` is not, so it precedes the corruption arm: a
+	// doctor report that found the loop carries it as its cause.
+	// [LAW:one-type-per-behavior]
+	var parentCycle storage.ParentCycleError
+	if errors.As(err, &parentCycle) {
+		return reasonParentCycle
 	}
 	var corruption CorruptionError
 	if errors.As(err, &corruption) {
@@ -332,6 +341,10 @@ func commandErrorRemediation(reason commandReason) string {
 	case reasonOwnerApprovalRequired:
 		// Same shape: the refusal block IS the remediation. [LAW:one-source-of-truth]
 		return ""
+	case reasonParentCycle:
+		// The message names the loop and the repair; this line says only that
+		// nothing else will clear it. [LAW:one-source-of-truth]
+		return "Do not retry unchanged: the loop stays until one of its parent edges is replaced. Break it the way the message above names, then rerun the command."
 	case reasonCorruptionDetected:
 		return "Run `lit doctor --fix integrity` and retry. " + agentInstructionsOpen + "This command is idempotent and safe to run without confirmation." + agentInstructionsClose
 	case reasonTransientGcContention:

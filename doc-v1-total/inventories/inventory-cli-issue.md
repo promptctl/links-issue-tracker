@@ -183,32 +183,35 @@ Constants (`exit.go`):
 6. `templateShapeError` → 3 (`exit.go`)
 7. `ownerApprovalRefusalError` → 5 (`exit.go`)
 8. `CorruptionError` → 7 (`exit.go`)
-9. `UsageError` → 2 (`exit.go`)
-10. `UnknownCommandError` → 3 (`exit.go`)
-11. `RetiredCommandError` → 3 (`exit.go`)
-12. `model.Refusal` (every `model.ValidationError`, `model.FrozenIssueError`, and the upgrade/downgrade target refusals) → 3 (`exit.go`)
-13. `model.StateRequestError` (`model.ContainerActionError`, `lifecycle.RetentionError`, `storage.RelationExistsError`) → 6 when `Satisfied()`, else 3 (`exit.go`)
-14. `UnsupportedError` → 3 (`exit.go`)
-15. `takeoverUnconfirmedError` → 3 (`exit.go`)
-16. `purgeUnconfirmedError` → 3 (`exit.go`)
-17. `Exhausted` → 6 (`exit.go`)
-18. `Narrowed` → 6 (`exit.go`)
-19. `NoWork` → 6 (`exit.go`)
-20. `OutsideWorkspaceError` → 3 (`exit.go`)
-21. `errors.Is(err, store.ErrWorkspaceNotInitialized)` → 3 (`exit.go`)
-22. `*store.QuarantineBlockError` → 3 (`exit.go`)
-23. `errors.Is(err, workspace.ErrIssuePrefixRefused)` → 3 (`exit.go`)
-24. `BulkFailureError` → 1 (`exit.go`)
-25. `errors.Is(err, store.ErrTransientGCContention)` → 1 (`exit.go`)
-26. anything else → 1 (`exit.go`)
+9. `storage.ParentCycleError` → 7 (`exit.go`)
+10. `UsageError` → 2 (`exit.go`)
+11. `UnknownCommandError` → 3 (`exit.go`)
+12. `RetiredCommandError` → 3 (`exit.go`)
+13. `model.Refusal` (every `model.ValidationError`, `model.FrozenIssueError`, and the upgrade/downgrade target refusals) → 3 (`exit.go`)
+14. `model.StateRequestError` (`model.ContainerActionError`, `lifecycle.RetentionError`, `storage.RelationExistsError`) → 6 when `Satisfied()`, else 3 (`exit.go`)
+15. `UnsupportedError` → 3 (`exit.go`)
+16. `takeoverUnconfirmedError` → 3 (`exit.go`)
+17. `purgeUnconfirmedError` → 3 (`exit.go`)
+18. `Exhausted` → 6 (`exit.go`)
+19. `Narrowed` → 6 (`exit.go`)
+20. `NoWork` → 6 (`exit.go`)
+21. `OutsideWorkspaceError` → 3 (`exit.go`)
+22. `errors.Is(err, store.ErrWorkspaceNotInitialized)` → 3 (`exit.go`)
+23. `*store.QuarantineBlockError` → 3 (`exit.go`)
+24. `errors.Is(err, workspace.ErrIssuePrefixRefused)` → 3 (`exit.go`)
+25. `BulkFailureError` → 1 (`exit.go`)
+26. `errors.Is(err, store.ErrTransientGCContention)` → 1 (`exit.go`)
+27. anything else → 1 (`exit.go`)
 
-Error types defined in `cli.go`: `MergeConflictError` (`cli.go`),
-`CorruptionError` (`cli.go`), `UsageError` (`cli.go`),
-`UnknownCommandError` — message `unknown command "<x>"` (`cli.go`),
+Error types defined in `errors.go`: `MergeConflictError`,
+`CorruptionError{Message string; Cause error}` — `Error()` is `Message`,
+`Unwrap()` is `Cause`, the typed fault behind the failure when the check named
+one (`doctor.go` sets a `storage.ParentCycleError`), `UsageError`,
+`UnknownCommandError` — message `unknown command "<x>"`,
 `UnsupportedError` with a single `Message`
-field (`errors.go`), `RetiredCommandError` — message
-`the "<cmd>" command has been retired; <replacement>` (`cli.go`),
-`OutsideWorkspaceError` (`cli.go`). `BulkFailureError` in
+field, `RetiredCommandError` — message
+`the "<cmd>" command has been retired; <replacement>`,
+`OutsideWorkspaceError`. `BulkFailureError` in
 `bulk.go`. Value refusals use `model.ValidationError`, defined beside the
 rules in `internal/model/validation.go`.
 
@@ -230,36 +233,37 @@ several of these types gets the reason of the earliest one:
 5. `SyncFailureError` → `sync_divergence`
 6. `store.RemoteUnreachableError` → `remote_unreachable`
 7. `ownerApprovalRefusalError` → `owner_approval_required`
-8. `CorruptionError` → `corruption_detected`
-9. `UnknownCommandError` → `unknown_command`
-10. `RetiredCommandError` → `retired_command`
-11. `UsageError` → `usage_error`
-12. any error implementing `model.Refusal` → `validation_refused`
-13. `templateShapeError` → `template_shape_refused`
-14. `model.StateRequestError` → `state_already_holds` when its `Satisfied()`
+8. `storage.ParentCycleError` → `parent_cycle` (also reached through a `CorruptionError` whose `Cause` is one)
+9. `CorruptionError` → `corruption_detected`
+10. `UnknownCommandError` → `unknown_command`
+11. `RetiredCommandError` → `retired_command`
+12. `UsageError` → `usage_error`
+13. any error implementing `model.Refusal` → `validation_refused`
+14. `templateShapeError` → `template_shape_refused`
+15. `model.StateRequestError` → `state_already_holds` when its `Satisfied()`
     is true (for `ContainerActionError`: the epic has at least one child, its
     derived state already equals the requested one, and no child remains
     unfinished; for `RetentionError`: the `Retain` cell says so), otherwise
     `validation_refused`
-15. `Exhausted` → `scope_exhausted`
-16. `Narrowed` → `scope_narrowed`
-17. `NoWork` → `no_ready_work`
-18. `UnsupportedError` → `unsupported_flag`
-19. `takeoverUnconfirmedError` → `takeover_unconfirmed`
-20. `purgeUnconfirmedError` → `purge_unconfirmed`
-21. `OutsideWorkspaceError` → `outside_git_workspace`
-22. `errors.Is(err, store.ErrWorkspaceNotInitialized)` → `workspace_not_initialized`
-23. `*store.QuarantineBlockError` → `migration_quarantined`
-24. `workspace.StoredPrefixError` → `stored_prefix_refused`
-25. `errors.Is(err, workspace.ErrIssuePrefixRefused)` → `validation_refused`
-    (`StoredPrefixError` unwraps to this sentinel; step 24 catches it first)
-26. `BulkFailureError` → `bulk_partial_failure`
-27. `store.WorkspaceWriteBlockedError` → `workspace_write_blocked` (it unwraps
+16. `Exhausted` → `scope_exhausted`
+17. `Narrowed` → `scope_narrowed`
+18. `NoWork` → `no_ready_work`
+19. `UnsupportedError` → `unsupported_flag`
+20. `takeoverUnconfirmedError` → `takeover_unconfirmed`
+21. `purgeUnconfirmedError` → `purge_unconfirmed`
+22. `OutsideWorkspaceError` → `outside_git_workspace`
+23. `errors.Is(err, store.ErrWorkspaceNotInitialized)` → `workspace_not_initialized`
+24. `*store.QuarantineBlockError` → `migration_quarantined`
+25. `workspace.StoredPrefixError` → `stored_prefix_refused`
+26. `errors.Is(err, workspace.ErrIssuePrefixRefused)` → `validation_refused`
+    (`StoredPrefixError` unwraps to this sentinel; step 25 catches it first)
+27. `BulkFailureError` → `bulk_partial_failure`
+28. `store.WorkspaceWriteBlockedError` → `workspace_write_blocked` (it unwraps
     to `store.ErrTransientGCContention`; this step catches it first)
-28. `errors.Is(err, store.ErrWorkspaceBusy)` or
+29. `errors.Is(err, store.ErrWorkspaceBusy)` or
     `errors.Is(err, workspace.ErrConfigBusy)` → `workspace_busy`
-29. `errors.Is(err, store.ErrTransientGCContention)` → `transient_gc_contention`
-30. anything else → `command_failed`
+30. `errors.Is(err, store.ErrTransientGCContention)` → `transient_gc_contention`
+31. anything else → `command_failed`
 
 `commandErrorRemediation(reason)` (`error_output.go`), verbatim strings. An
 empty string means no `remediation:` line is printed:
@@ -277,6 +281,7 @@ empty string means no `remediation:` line is printed:
 - `validation_refused`: "Do not retry unchanged — this refusal is deterministic and will repeat until the command or the data changes. The error message above states the rule it enforces; adjust the command to satisfy it."
 - `workspace_busy`: "" (empty — each wrapping message carries its own retry guidance)
 - `owner_approval_required`: "" (empty — the refusal message carries the steps)
+- `parent_cycle`: "Do not retry unchanged: the loop stays until one of its parent edges is replaced. Break it the way the message above names, then rerun the command."
 - `corruption_detected`: "Run `lit doctor --fix integrity` and retry. \<agent-instructions>This command is idempotent and safe to run without confirmation.\</agent-instructions>"
 - `transient_gc_contention`: "Retry once. If the error persists, run `lit doctor --fix`. \<agent-instructions>This command is idempotent and safe to run without confirmation.\</agent-instructions>"
 - `workspace_write_blocked`: "Wait a moment and retry — a normal command releases the store in well under a second. If it persists, a lit process is stuck: find it with `ps aux | grep '[l]it'` and terminate it, then retry; if none is running the hold is stale, so run `lit doctor --fix`. \<agent-instructions>This is a mechanical, self-diagnosable state — the steps above resolve it without needing the user's input.\</agent-instructions>"

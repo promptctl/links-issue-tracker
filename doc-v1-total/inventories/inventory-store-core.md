@@ -488,10 +488,10 @@ updated_at, closed_at, resolution, redirect_target, follows_up, archived_at, del
 
 #### 5.3 `hydrateIssues(ctx, rows []issueRow) ([]model.Issue, error)`
 
-`store.go`. Query count is **fixed per recursion level**, not per epic:
+`store.go`. `hydrateIssues` is `hydrateBelow(ctx, rows, make([]*descent, len(rows)))`: the rows the caller asked for carry no descent chain. `descent{id string; up *descent}` is the chain of containers a hydration came down through to reach a row, nearest first, sharing its tail. `hydrateBelow(ctx, rows, chains)` — query count is **fixed per recursion level**, not per epic:
 1. Empty input → `([]model.Issue{}, nil)` with no query (`store.go`).
 2. One `loadLabelsByIssueIDs` query for all ids (`store.go`).
-3. Collects container ids; one `lifecycleChildrenByEpicIDs` query for all of them (`store.go`).
+3. Collects container ids, and for each container a chain `below[id] = &descent{id: id, up: chains[i]}`; one `lifecycleChildrenByEpicIDs(ctx, epicIDs, below)` call for all of them (`store.go`).
 4. Per row, builds a `model.Issue` copying every `partialIssue` field, `SetRetention(row.Issue.Retention)`, `Labels` defaulted to `[]string{}` when the map has no entry, and calls `model.HydrateRow(base, row.Status, childrenByEpicID[id])` (`store.go`).
 5. Post-condition: `!issue.IsHydrated()` → `fmt.Errorf("hydrateIssues: produced unhydrated issue %s", issue.ID)` (`store.go`).
 
@@ -501,7 +501,7 @@ SELECT issue_id, label FROM labels WHERE issue_id IN (?, ?, ...) ORDER BY label 
 ```
 failure → `fmt.Errorf("load labels by issue ids: %w", err)`.
 
-`lifecycleChildrenByEpicIDs(ctx, epicIDs)` (`store.go`) — empty input returns an empty map without querying; otherwise one query:
+`lifecycleChildrenByEpicIDs(ctx, epicIDs, below)` (`store.go`) — empty input returns an empty map without querying; otherwise one query per id batch (`idBatches`):
 ```sql
 SELECT r.dst_id, <issueColumnsQualified>
 FROM relations r
@@ -511,7 +511,7 @@ WHERE r.dst_id IN (?, ...) AND r.type = 'parent-child'
     AND (p.archived_at IS NOT NULL OR p.deleted_at IS NOT NULL OR (i.archived_at IS NULL AND i.deleted_at IS NULL))
 ORDER BY r.dst_id ASC, i.item_rank ASC
 ```
-failure → `fmt.Errorf("load lifecycle children: %w", err)`. Visibility truth table (`store.go`): parent live + child live → include; parent live + child dead → exclude; parent dead (archived or deleted) + child either → include. Rows are scanned with `scanIssueWithParent`, hydrated in **one** recursive `hydrateIssues` call, and re-bucketed by the parallel `parentIDs` slice (`store.go`).
+failure → `fmt.Errorf("load lifecycle children: %w", err)`. Visibility truth table (`store.go`): parent live + child live → include; parent live + child dead → exclude; parent dead (archived or deleted) + child either → include. Rows are scanned with `scanIssueWithParent`. Each child row's chain is its epic's, `below[parentIDs[i]]`; `chain.loopTo(child.ID)` walks that chain from the epic upward and, when it reaches the child's own id, returns the ids walked — the epic first, the child last, each the child of the next and the last the child of the first — and the call returns `storage.ParentCycleError{Cycle: loop}` before any child is hydrated. Otherwise the rows are hydrated in **one** recursive `hydrateBelow(ctx, childRows, chains)` call and re-bucketed by the parallel `parentIDs` slice (`store.go`). Only containers enter a chain, so the refusal is met by a loop of epics. Tests: `TestAReadRefusesAStoredLoopOfEpicsByName` (`ListIssues` and `GetIssue` over a two-epic loop return `ParentCycleError` naming exactly those two; `hierarchy_cycle_test.go`), `TestListRefusesAStoredLoopByName` (`lit ls`: exit 7, reason `parent_cycle`; `internal/cli/parent_cycle_test.go`).
 
 Evidence: listing query count for 1 epic equals that for 5 epics, measured by a counting `driver.Conn` that forces every query through `Prepare` (`lifecycle_hydration_query_count_test.go`, wrapper). An active epic's `Progress()` excludes archived children (`Total == 0`); the same epic once archived includes them (`Total == 1, Open == 1`) (`store_test.go`).
 
@@ -606,7 +606,7 @@ failure → `fmt.Errorf("list topics: %w", err)`. Returns `[]string{}` (never ni
 ```sql
 SELECT id, topic FROM issues ORDER BY id ASC
 ```
-failure → `fmt.Errorf("list issue identities: %w", err)`. Returns `[]storage.IssueIdentity{}` (never nil) plus `rows.Err()`. No hydration, so it never reaches `lifecycleChildrenByEpicIDs`, whose walk does not return on a parent loop.
+failure → `fmt.Errorf("list issue identities: %w", err)`. Returns `[]storage.IssueIdentity{}` (never nil) plus `rows.Err()`. No hydration, so it never reaches `lifecycleChildrenByEpicIDs`, which refuses a parent loop of epics with `storage.ParentCycleError`.
 
 #### 5.9 Relation, comment, and label reads
 
@@ -3122,7 +3122,7 @@ Pure and DB-free, in `internal/store/rank_repair.go`; `FixRankInversions` suppli
 
 `separateRankCollisions(export) (model.Export, []storage.Rekeyed, error)` — `internal/store/rank_collisions.go`: pure. Takes `placedIssues(export)`; with no `rankCollisions`, returns `export` unchanged and nil. Otherwise sorts them by rank then id and calls `rankRewrites(anchorRun(placed))` with that order as the target, so `anchorRun`'s longest strictly ascending run stays — one holder of each shared key among it — and every other issue is spaced into the gaps it leaves; an error → `fmt.Errorf("separate shared rank keys (%s): %w", describeRankCollisions(collisions), err)`. Returns a copy of the export with each mover's new rank, and one `storage.Rekeyed{IssueID, From, Rank}` per mover, in listed order. Every listing keeps its order; a key with no room beside it, or a malformed one, is a mover rather than a refusal; two clones landing the same export write the same keys. Test-pinned in `internal/store/rank_collisions_test.go`: a generated-export property test (no placed key shared afterwards, listed order kept, empty ranks and deleted issues untouched, exactly the changed keys named with the key each held, no change without a shared key, and — where every key is well formed and no two differ only by trailing zeros — one holder of each shared key keeping it and nobody else moving), and `TestSeparateRankCollisionsLandsAKeyWithNoRoomBesideIt`.
 
-`landExport(export) (model.Export, storage.Landing, error)` — `internal/store/rank_collisions.go`: `storage.HomeStranded(export)`, then `separateRankCollisions` on its result (an error returned as is), returning `storage.Landing{Rehomed, Rekeyed}`. Called by `ReplaceFromExport` and `spineWriter.land`, never by `rebuildFromExport`.
+`landExport(export) (model.Export, storage.Landing, error)` — `internal/store/rank_collisions.go`: `storage.BreakParentCycles(export)`, then `storage.HomeStranded` on its result, then `separateRankCollisions` on that (an error returned as is), returning `storage.Landing{Unlooped, Rehomed, Rekeyed}`. Called by `ReplaceFromExport` and `spineWriter.land`, never by `rebuildFromExport`.
 
 `Store.DependencyOrder(ctx) (storage.DependencyOrder, error)` — `internal/store/ranking.go`: `liveIssueIDs(ctx)`, `loadRankAncestry(ctx, s.db)` and `loadBlocksEdges(ctx, s.db)`, each error wrapped `"dependency order: %w"`; returns `storage.NewDependencyOrder(ancestry, liveEdges(edges, liveIDs))`, the reading Doctor builds from the same three loads. The queue's annotation reads it once per gather.
 
@@ -3583,6 +3583,8 @@ return applyExportDelta(ctx, tx, diffExports(model.Export{}, export))
 
 A restore never un-purges: the store's own purge records are read before the clear, unioned with the export's, and the export is cut by the union (`ApplyPurges`), so a backup taken before a purge lands without the purged issue and every record survives the rewrite (`import_export.go`). Pinned by `TestRestoreNeverUnpurges` (`internal/store/purge_test.go`).
 
+A restore lands a hierarchy with no parent loop: `storage.BreakParentCycles` (`01-data-model.md`) cuts one edge of each loop the cut export holds, the edge held by the member with the greatest id. Pinned by `TestRestoreCutsALoopTheExportHolds` (`internal/store/hierarchy_cycle_test.go`): an export with a two-epic loop lands, `Landing.Unlooped` names the greater id's edge onto the lesser, and `ListIssues` reads after.
+
 A restore lands every ticket inside an epic: `storage.HomeStranded` (`01-data-model.md`) moves each ticket the cut export holds outside one — a backup from before migration v7 holds top-level leaves, and one taken before a purge can hold a child of the purged epic, whose edge the cut removed. Pinned by `TestRestoreHomesWhatTheBackupLeavesOutsideAnEpic` (`internal/store/rehome_test.go`).
 
 A restore lands every rank key held by one issue: `separateRankCollisions` gives the issues of the cut export that share a key new keys, in listed order, after the homing (`04-store-operations.md`). Pinned by `TestRestoreSeparatesASharedRankKey` (`internal/store/rank_collisions_test.go`).
@@ -3648,7 +3650,7 @@ Plan reviews (`insertPlanReviewTx`, `plan_review.go`): `id, issue_id, plan_diges
 
 ### 3.5 The surrounding CLI restore flow
 
-`restoreFromExportPath` (`internal/cli/backup.go`), in order: acquire `storage.Sync.Of(ap.Store)` and `storage.Import.Of(ap.Store)` capabilities up front; `syncfile.Read(restorePath)`; `ap.Store.Export(ctx)` for the local state; `syncer.GetSyncState`; if a sync state exists and `--force` was not passed, hash `last-sync-base.json` and compare against `hashExport(localExport)` — mismatch → `MergeConflictError{Message: "restore conflict: local workspace has unsynced changes since last sync base"}` (`backup.go`); `backup.Create` a pre-restore snapshot; `backup.Prune(dir, 20)`; `landing := importer.ReplaceFromExport`; re-`Export` and `syncfile.WriteAtomic(syncBasePath(ap), restoredExport)`; `syncfile.HashFile(restorePath)`; `syncer.RecordSyncState({Path, ContentHash})`; return `landing`. `restoreFromExportPath` wraps that sequence (`restoreFromExport`) and, on the way out whatever the outcome, records one sync trace record: `recordSyncCommandTrace(ws, "lit backup restore", "restored", err, metadata)` with metadata `path`, `rehomed`, `rehomed_moves`, `rekeyed`, `rekeyed_moves` (`landingMetadata`, `internal/cli/landing_report.go`). The leaf prints `restored <path>`, then `writeLanding(stdout, "the backup", landing)`.
+`restoreFromExportPath` (`internal/cli/backup.go`), in order: acquire `storage.Sync.Of(ap.Store)` and `storage.Import.Of(ap.Store)` capabilities up front; `syncfile.Read(restorePath)`; `ap.Store.Export(ctx)` for the local state; `syncer.GetSyncState`; if a sync state exists and `--force` was not passed, hash `last-sync-base.json` and compare against `hashExport(localExport)` — mismatch → `MergeConflictError{Message: "restore conflict: local workspace has unsynced changes since last sync base"}` (`backup.go`); `backup.Create` a pre-restore snapshot; `backup.Prune(dir, 20)`; `landing := importer.ReplaceFromExport`; re-`Export` and `syncfile.WriteAtomic(syncBasePath(ap), restoredExport)`; `syncfile.HashFile(restorePath)`; `syncer.RecordSyncState({Path, ContentHash})`; return `landing`. `restoreFromExportPath` wraps that sequence (`restoreFromExport`) and, on the way out whatever the outcome, records one sync trace record: `recordSyncCommandTrace(ws, "lit backup restore", "restored", err, metadata)` with metadata `path`, `unlooped`, `unlooped_cuts`, `rehomed`, `rehomed_moves`, `rekeyed`, `rekeyed_moves` (`landingMetadata`, `internal/cli/landing_report.go`). The leaf prints `restored <path>`, then `writeLanding(stdout, "the backup", landing)`.
 
 `hashExport` uses `json.MarshalIndent(export, "", "  ")` (`backup.go`) — note: **no trailing newline**, unlike `syncfile.marshalExport`.
 
@@ -3666,6 +3668,7 @@ Usage strings: `restoreUsage = "usage: lit backup restore (--latest | --path <ex
 - `SELECT COUNT(*) FROM relations WHERE type='related-to' AND src_id >= dst_id` → `InvalidRelatedRows`; wrap `"count invalid related rows: %w"`; warning `"invalid related-to ordering rows: %d"`.
 - `SELECT COUNT(*) FROM issue_events e LEFT JOIN issues i ON i.id = e.issue_id WHERE i.id IS NULL` → `OrphanHistoryRows`; wrap `"count orphan event rows: %w"`; warning `"orphan issue event rows: %d"`.
 - `containmentFindings(ctx, s.db)` (`import_export.go`), error wrap `"containment check: %w"`: one query lists every non-epic with no parent-child edge and every parent-child edge onto a non-epic; warning `"tickets outside an epic: %s (every ticket except an epic lives inside one; move each into the epic it belongs to with 'lit parent set --child <id> --parent <epic-id>')"` naming each as `id (type)`, and warning `"tickets under a parent that is not an epic: %s (only an epic contains tickets; …)"` naming each as `id under parent (parent type)`. Column reads, so it runs before the parent-cycle check.
+- Parent-cycle check, before every hydrating read: `loadParentEdges(ctx, s.db)` (every stored `parent-child` edge whose two issues exist, child → parents; error wrap `"parent cycle check: %w"`), then `storage.ParentCycle`. A loop → `ParentCycle = cycle`, `Unchecked = [CheckRankInversions, CheckDuplicateRanks, CheckDependencyCycle]`, error line `storage.ParentCycleError{Cycle: cycle}.Error()` (`parent cycle: <a -> b> (a hierarchy has no root once it loops, so no epic in it has a state to derive — <ParentCycleRepair>, then retry)`), and `Doctor` returns there. Pinned by `TestDoctorNamesAStoredParentCycle` (`hierarchy_cycle_test.go`).
 - `loadRankAncestry(ctx, s.db)`, error wrap `"rank ancestry: %w"`; each `ancestry.Conflicts()` entry appends its `Finding()` as an error line, and the checks below still run.
 - `s.liveIssueIDs(ctx)`, `loadRankOrder(ctx, s.db)` and `loadBlocksEdges(ctx, s.db)`, loaded once for the three rank checks; each error wraps `"rank checks: %w"`. `live := liveEdges(edges, liveIDs)`.
 - `dependencies := storage.NewDependencyOrder(ancestry, live)`; `RankInversions = len(invertedEdges(order, dependencies, live))`; warning `"rank inversions: %d (dependencies ranked below dependents)"`.

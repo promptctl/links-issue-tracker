@@ -311,13 +311,15 @@ func mergeRelations(scope issueScope, locals, remotes []model.Relation) []model.
 	return out
 }
 
-// enforceSingleParent collapses concurrent parent-child edges so the graph stays
-// a valid forest: each child keeps exactly one parent and no parent chain loops.
-// blocks / related-to are additive and pass through; only parent-child is
-// single-valued (a child's parent relation is stored src=child, dst=parent, one
-// per child). [LAW:decomposition] This is the "choose-only, no semantic winner"
-// branch of the merge cut: two parents cannot be combined, so a deterministic,
-// symmetric tiebreak keeps the DAG invariant without inventing a clock.
+// enforceSingleParent collapses concurrent parent-child edges so each child
+// keeps exactly one parent. blocks / related-to are additive and pass through;
+// only parent-child is single-valued (a child's parent relation is stored
+// src=child, dst=parent, one per child). [LAW:decomposition] This is the
+// "choose-only, no semantic winner" branch of the merge cut: two parents cannot
+// be combined, so a deterministic, symmetric tiebreak picks one without
+// inventing a clock. Two sides that each moved a different ticket under the
+// other can still union into a loop; the landing every merged export goes
+// through cuts it and says so (storage.BreakParentCycles). [LAW:single-enforcer]
 func enforceSingleParent(relations []model.Relation) []model.Relation {
 	parentOf := map[string]model.Relation{}
 	out := make([]model.Relation, 0, len(relations))
@@ -331,57 +333,8 @@ func enforceSingleParent(relations []model.Relation) []model.Relation {
 			parentOf[relation.SrcID] = relation
 		}
 	}
-	breakParentCycles(parentOf)
 	for _, relation := range parentOf {
 		out = append(out, relation)
-	}
-	return out
-}
-
-// breakParentCycles deletes one edge from every parent cycle so the union never
-// commits a cycle (the store has no acyclicity guard, so a cycle here would be
-// silent corruption — [LAW:no-silent-failure]). With single-parent already
-// enforced the parent map is functional, so each cycle is a simple loop; the
-// victim is the lexicographically greatest child id in the loop — a choice both
-// machines compute identically from the same data.
-func breakParentCycles(parentOf map[string]model.Relation) {
-	// [LAW:no-defensive-null-guards] A node's on-path fact and its position in the
-	// walk are one value: presence in onPath means it is on the current path, and
-	// the stored int is where. So a cycle's position cannot be "absent" for a node
-	// known to be on the path — the -1 not-found sentinel is unrepresentable here,
-	// not merely unreached. settled spans walks; onPath is scoped to one walk.
-	settled := map[string]bool{}
-	for start := range parentOf {
-		if settled[start] {
-			continue
-		}
-		onPath := map[string]int{}
-		var path []string
-		node := start
-		for {
-			if _, ok := parentOf[node]; !ok || settled[node] {
-				break
-			}
-			if idx, looping := onPath[node]; looping {
-				delete(parentOf, maxString(path[idx:]))
-				break
-			}
-			onPath[node] = len(path)
-			path = append(path, node)
-			node = parentOf[node].DstID
-		}
-		for _, n := range path {
-			settled[n] = true
-		}
-	}
-}
-
-func maxString(items []string) string {
-	out := items[0]
-	for _, item := range items[1:] {
-		if item > out {
-			out = item
-		}
 	}
 	return out
 }

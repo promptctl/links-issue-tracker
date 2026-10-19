@@ -149,9 +149,9 @@ func TestSetParentRefusesACycleThroughANonEpicParent(t *testing.T) {
 }
 
 // The write boundary cannot refuse a cycle that was already stored — data
-// written before the rule, or restored from an export, can still hold one, and
-// every walk up the parent chain runs forever on it. Doctor is where that state
-// is named, so the operator learns it from a report rather than from a crash.
+// written before the rule can still hold one, and every read that derives an
+// epic's state refuses it. Doctor is where that state is named, so the operator
+// learns it from a report that still runs.
 func TestDoctorNamesAStoredParentCycle(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
@@ -246,7 +246,7 @@ func TestParentCycleFindsOnlyTheLoop(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := parentCycle(tc.parentOf)
+			got := storage.ParentCycle(tc.parentOf)
 			if len(got) != len(tc.want) {
 				t.Fatalf("parentCycle() = %v, want %v", got, tc.want)
 			}
@@ -298,9 +298,9 @@ func seedParentEdge(t *testing.T, ctx context.Context, st *Store, childID, paren
 // the workspace unreadable, which is the condition this whole rule exists to
 // prevent.
 //
-// The anti-vacuity precondition is the hydration check below: on this
-// workspace a ClearParent that begins with GetIssue recurses until the stack
-// overflows rather than returning any error at all.
+// The anti-vacuity precondition is the doctor check below: on this workspace a
+// ClearParent that began with GetIssue would be refused by the read it
+// started with (storage.ParentCycleError) rather than breaking the loop.
 func TestClearParentBreaksAStoredCycleWithoutHydrating(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
@@ -482,8 +482,8 @@ func TestTheCycleRuleSeesAnEdgeThroughADeletedIssue(t *testing.T) {
 
 // VerifyCandidate's health gate exists for untrusted data, and a parent cycle is
 // exactly the untrusted shape that stops the gates below it: they all read
-// through Export, which hydrates. Without the early return, this overflows the
-// stack instead of reporting.
+// through Export, which hydrates and so refuses the loop. Without the early
+// return, the gate fails with that refusal instead of reporting the finding.
 func TestVerifyCandidateReportsAParentCycleRatherThanHanging(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
@@ -502,6 +502,74 @@ func TestVerifyCandidateReportsAParentCycleRatherThanHanging(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("VerifyCandidate().Findings = %+v, want a health finding naming the parent cycle", report.Findings)
+	}
+}
+
+// A read that derives an epic's state from its children cannot derive one for
+// an epic that is its own descendant. Over a stored loop of epics it refuses,
+// naming the loop and the repair, instead of descending into the loop until
+// the context runs out — the deadline here is what turns that hang into a
+// failure of this test rather than of the suite.
+func TestAReadRefusesAStoredLoopOfEpicsByName(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	st := openIssueStore(t, ctx)
+	chain := parentChain(t, ctx, st, "E", "F")
+	// The tree reads before the loop closes, so a refusal below is the loop's.
+	if _, err := st.ListIssues(ctx, storage.ListIssuesFilter{}); err != nil {
+		t.Fatalf("ListIssues() on a tree error = %v", err)
+	}
+	seedParentEdge(t, ctx, st, chain[0].ID, chain[1].ID)
+
+	_, err := st.ListIssues(ctx, storage.ListIssuesFilter{})
+	var refusal storage.ParentCycleError
+	if !errors.As(err, &refusal) {
+		t.Fatalf("ListIssues() over a loop error = %v, want a ParentCycleError", err)
+	}
+	if !slices.Contains(refusal.Cycle, chain[0].ID) || !slices.Contains(refusal.Cycle, chain[1].ID) || len(refusal.Cycle) != 2 {
+		t.Errorf("ParentCycleError.Cycle = %v, want exactly %s and %s", refusal.Cycle, chain[0].ID, chain[1].ID)
+	}
+	if !strings.Contains(err.Error(), "lit parent set --child") {
+		t.Errorf("refusal %q names no repair; want 'lit parent set --child'", err)
+	}
+	// One issue's read meets the same loop.
+	if _, err := st.GetIssue(ctx, chain[1].ID); !errors.As(err, &refusal) {
+		t.Errorf("GetIssue(%s) over a loop error = %v, want a ParentCycleError", chain[1].ID, err)
+	}
+}
+
+// A restore lands an export as the store's rules stand now, and a loop-free
+// hierarchy is one of them: an export holding a loop of epics lands with one
+// edge of the loop cut, the landing names the cut, and the store reads after.
+// Which edge goes is worked by hand from the rule — the member with the
+// greater id loses its edge onto the other.
+func TestRestoreCutsALoopTheExportHolds(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	st := openIssueStore(t, ctx)
+	chain := parentChain(t, ctx, st, "E", "F")
+	export, err := st.Export(ctx)
+	if err != nil {
+		t.Fatalf("Export() error = %v", err)
+	}
+	export.Relations = append(export.Relations, model.Relation{SrcID: chain[0].ID, DstID: chain[1].ID, Type: model.RelParentChild, CreatedAt: time.Now().UTC(), CreatedBy: "import"})
+	lo, hi := min(chain[0].ID, chain[1].ID), max(chain[0].ID, chain[1].ID)
+
+	landing, err := st.ReplaceFromExport(ctx, export)
+	if err != nil {
+		t.Fatalf("ReplaceFromExport() of an export holding a loop error = %v, want it landed", err)
+	}
+	want := []storage.Unlooped{{IssueID: hi, Parent: lo, Cycle: []string{lo, hi}}}
+	if !slices.EqualFunc(landing.Unlooped, want, func(a, b storage.Unlooped) bool {
+		return a.IssueID == b.IssueID && a.Parent == b.Parent && slices.Equal(a.Cycle, b.Cycle)
+	}) {
+		t.Errorf("Landing.Unlooped = %+v, want %+v", landing.Unlooped, want)
+	}
+	if got := parentOf(t, ctx, st, chain); got[hi] != "" || got[lo] != hi {
+		t.Errorf("parents after restore = %v, want %s under %s and %s at the top level", got, lo, hi, hi)
+	}
+	if _, err := st.ListIssues(ctx, storage.ListIssuesFilter{}); err != nil {
+		t.Errorf("ListIssues() after the restore error = %v, want the store readable", err)
 	}
 }
 

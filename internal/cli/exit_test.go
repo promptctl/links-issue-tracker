@@ -25,6 +25,7 @@ func TestExitCodeMappings(t *testing.T) {
 		{name: "plan digest not found", err: storage.PlanDigestNotFoundError{IssueID: "lit-1", Digest: model.DigestPlan("x")}, want: ExitNotFound},
 		{name: "merge conflict typed", err: MergeConflictError{Message: "sync conflict"}, want: ExitConflict},
 		{name: "corruption typed", err: CorruptionError{Message: "integrity_check failed"}, want: ExitCorruption},
+		{name: "parent cycle", err: storage.ParentCycleError{Cycle: []string{"a", "b"}}, want: ExitCorruption},
 		{name: "usage message", err: UsageError{Message: "usage: lit foo"}, want: ExitUsage},
 		{name: "validation required", err: model.ValidationError{Message: "--title is required"}, want: ExitValidation},
 		{name: "validation unknown command", err: UnknownCommandError{Command: "abc"}, want: ExitValidation},

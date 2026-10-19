@@ -258,11 +258,11 @@ func allDoctorFixNames() []string {
 // doctorFix repairs one class of fault.
 //
 // climbsHierarchy marks a repair whose work begins with the live-issue
-// classification, which is a walk up the parent chain — and that walk does not
-// return when the hierarchy holds a loop. Carrying it as data on the repair,
-// rather than as a branch where the repairs are dispatched, is what keeps the
-// skip honest: a repair that cannot crash is not withheld, and a new repair
-// declares its own reach instead of some caller guessing at it.
+// classification, a hydrating read — and a hydrating read refuses a hierarchy
+// that holds a loop (storage.ParentCycleError). Carrying it as data on the
+// repair, rather than as a branch where the repairs are dispatched, is what
+// keeps the skip honest: a repair that can run is not withheld, and a new
+// repair declares its own reach instead of some caller guessing at it.
 // [LAW:types-are-the-program] [LAW:dataflow-not-control-flow]
 type doctorFix struct {
 	// name is filled in from the map key at parse time, so the two cannot drift.
@@ -389,14 +389,14 @@ func printDoctorReport(ctx context.Context, stdout io.Writer, ap *app.App, repor
 // run, and reports the state left behind.
 //
 // The order is the whole point. A repair that climbs the hierarchy starts from
-// the live-issue classification, and that walk does not return when the
-// hierarchy holds a loop — so repairing first would make `lit doctor --fix`
-// overflow the stack before it could name the loop, and the operator whose
-// habit is `--fix` would get no diagnosis at all. Diagnosis has to survive the
-// state it diagnoses. Store.Doctor answers the same ordering question one level
-// down, for the same reason.
+// the live-issue classification, and that read refuses a hierarchy holding a
+// loop — so repairing first would make `lit doctor --fix` fail on the repair
+// before it could report anything else, and the operator whose habit is
+// `--fix` would get no report at all. Diagnosis has to survive the state it
+// diagnoses. Store.Doctor answers the same ordering question one level down,
+// for the same reason.
 //
-// A loop withholds only the repairs that would crash on it. Repairs that never
+// A loop withholds only the repairs that would fail on it. Repairs that never
 // read the hierarchy still run, because refusing them would strand faults the
 // operator can fix in a workspace they cannot yet climb.
 // A repair that fails stops the repairs after it, never the report: the state
@@ -423,7 +423,7 @@ func diagnoseThenRepair(ctx context.Context, progress io.Writer, repairer storag
 			// [LAW:no-silent-failure] The skip is stated. A run that printed only
 			// the cycle would read as though these repairs had run and found
 			// nothing.
-			fmt.Fprintf(progress, "doctor: skipping --fix %s because the hierarchy holds a cycle (%s); those repairs walk up the parent chain and that walk does not return on a loop — break it first, then re-run\n", strings.Join(withheld, ","), strings.Join(report.ParentCycle, " -> "))
+			fmt.Fprintf(progress, "doctor: skipping --fix %s because the hierarchy holds a cycle (%s); those repairs start from a read of the hierarchy, which refuses a loop — break it first, then re-run\n", strings.Join(withheld, ","), strings.Join(report.ParentCycle, " -> "))
 		}
 		fixes = runnable
 	}
@@ -508,7 +508,7 @@ func doctorLeaf() appLeaf {
 		}
 		// [LAW:single-enforcer] Corruption classification is output-format agnostic and always enforced here.
 		if len(report.Errors) > 0 {
-			return CorruptionError{Message: strings.Join(report.Errors, "; ")}
+			return CorruptionError{Message: strings.Join(report.Errors, "; "), Cause: parentCycleCause(report)}
 		}
 		// A divergence that has festered past the persistence threshold surfaces the
 		// sync-failure contract on stderr and exits nonzero — the stdout freshness line
@@ -533,4 +533,14 @@ func doctorLeaf() appLeaf {
 		}
 		return exitErr
 	}}
+}
+
+// parentCycleCause is the typed fault a report that found a parent loop
+// carries, or nothing. The loop's repair is not --fix integrity, so the
+// report's exit names the loop's own.
+func parentCycleCause(report storage.HealthReport) error {
+	if len(report.ParentCycle) == 0 {
+		return nil
+	}
+	return storage.ParentCycleError{Cycle: report.ParentCycle}
 }

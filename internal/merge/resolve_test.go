@@ -659,36 +659,6 @@ func TestThreeWayUnionsConcurrentComments(t *testing.T) {
 	}
 }
 
-func TestThreeWayBreaksConcurrentParentCycle(t *testing.T) {
-	// ours makes a the child of b; theirs makes b the child of a. Each is a valid
-	// single-parent edge alone, but the union is a cycle the store cannot reject.
-	issues := []model.Issue{open(t, "a"), open(t, "b")}
-	base := model.Export{WorkspaceID: "wsA", Issues: issues}
-	local := model.Export{
-		WorkspaceID: "wsA",
-		Issues:      issues,
-		Relations:   []model.Relation{{SrcID: "a", DstID: "b", Type: model.RelParentChild, CreatedAt: t1}},
-	}
-	remote := model.Export{
-		WorkspaceID: "wsB",
-		Issues:      issues,
-		Relations:   []model.Relation{{SrcID: "b", DstID: "a", Type: model.RelParentChild, CreatedAt: t2}},
-	}
-	got := ThreeWay(base, local, remote)
-	parentOf := map[string]string{}
-	for _, relation := range provisional(t, got).Relations {
-		if relation.Type == model.RelParentChild {
-			parentOf[relation.SrcID] = relation.DstID
-		}
-	}
-	if len(parentOf) != 1 {
-		t.Fatalf("parent edges = %#v, want exactly one (cycle broken)", parentOf)
-	}
-	if parentOf["a"] == "b" && parentOf["b"] == "a" {
-		t.Fatalf("both edges survived; the merged graph is a cycle: %#v", parentOf)
-	}
-}
-
 func TestThreeWayKeepsSingleParentOnConcurrentReparent(t *testing.T) {
 	issues := []model.Issue{open(t, "c1"), open(t, "p1"), open(t, "p2")}
 	base := model.Export{WorkspaceID: "wsA", Issues: issues}

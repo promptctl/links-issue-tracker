@@ -131,7 +131,7 @@ Default placement is bottom (the `RankPlacement` zero value): rank = `After(max 
 
 ## Reads
 
-All issue reads share one 20-column projection (`issueColumns`, `store.go`) and one hydration path. `hydrateIssues` uses a **fixed query count per recursion level**, not per issue: one labels query for all ids, one children query for all container ids (`store.go`). The children query's visibility rule, encoded in `scanLifecycleChildRows`'s WHERE clause: a live parent sees only live children; an archived/deleted parent sees all its children — so an active epic's progress excludes archived children, but the same epic once archived counts them (`store.go`).
+All issue reads share one 20-column projection (`issueColumns`, `store.go`) and one hydration path. `hydrateIssues` uses a **fixed query count per recursion level**, not per issue: one labels query for all ids, one children query for all container ids (`store.go`). The descent carries the chain of epics it came down through; a child already on its epic's chain is a parent loop, and the read returns `storage.ParentCycleError` naming the loop instead of descending into it (`store.go`). The children query's visibility rule, encoded in `scanLifecycleChildRows`'s WHERE clause: a live parent sees only live children; an archived/deleted parent sees all its children — so an active epic's progress excludes archived children, but the same epic once archived counts them (`store.go`).
 
 - `GetIssue`: single-row lookup; missing → `storage.NotFoundError`.
 - `getIssuesByIDs`: one `IN` query; missing ids are silently absent from the map.

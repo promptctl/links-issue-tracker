@@ -54,22 +54,25 @@ func describeRankCollisions(collisions []rankCollision) string {
 }
 
 // landExport brings an export that lands whole — a restore, every sync landing
-// — under the two rules a single write is refused for breaking, and says what it
-// changed: every ticket lives inside an epic (storage.HomeStranded), and every
-// rank key orders one issue (separateRankCollisions). Homing runs first because
-// it can mint the unfiled epic, and the epic's key must be one the separation
-// sees.
+// — under the three rules a single write is refused for breaking, and says what
+// it changed: the hierarchy holds no loop (storage.BreakParentCycles), every
+// ticket lives inside an epic (storage.HomeStranded), and every rank key orders
+// one issue (separateRankCollisions). Cutting runs first because a leaf whose
+// loop edge it cuts can be left with no epic, which homing then gives it;
+// homing runs before the separation because it can mint the unfiled epic, and
+// the epic's key must be one the separation sees.
 //
 // [LAW:single-enforcer] Every write that lands an export whole goes through
 // here; the recovery rebuild alone does not, because it must reproduce its
 // source.
 func landExport(export model.Export) (model.Export, storage.Landing, error) {
-	contained, rehomed := storage.HomeStranded(export)
+	unlooped, cut := storage.BreakParentCycles(export)
+	contained, rehomed := storage.HomeStranded(unlooped)
 	separated, rekeyed, err := separateRankCollisions(contained)
 	if err != nil {
 		return model.Export{}, storage.Landing{}, err
 	}
-	return separated, storage.Landing{Rehomed: rehomed, Rekeyed: rekeyed}, nil
+	return separated, storage.Landing{Unlooped: cut, Rehomed: rehomed, Rekeyed: rekeyed}, nil
 }
 
 // placedIssues returns the ranked issues of export that a rank verb places

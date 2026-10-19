@@ -34,6 +34,7 @@ var reasonCodes = map[commandReason]int{
 	"no_ready_work":             6,
 	"outside_git_workspace":     3,
 	"owner_approval_required":   5,
+	"parent_cycle":              7,
 	"purge_unconfirmed":         3,
 	"remote_unreachable":        1,
 	"retired_command":           3,
@@ -204,6 +205,8 @@ func TestCommandErrorReason(t *testing.T) {
 		// A genuine fault reaching the same surface keeps its own reason: the
 		// arms above dispatch on their concrete types, so they shadow nothing.
 		{"genuine fault still classifies", CorruptionError{Message: "integrity_check failed"}, "corruption_detected"},
+		{"a read refuses a parent loop", storage.ParentCycleError{Cycle: []string{"lit-a", "lit-b"}}, "parent_cycle"},
+		{"doctor's corruption caused by a parent loop", CorruptionError{Message: "parent cycle: lit-a -> lit-b", Cause: storage.ParentCycleError{Cycle: []string{"lit-a", "lit-b"}}}, "parent_cycle"},
 		// A container action carries its own split: the request the children
 		// already satisfy needs nothing done, while the one they do not is a
 		// deterministic refusal joining the existing validation reason. Both
