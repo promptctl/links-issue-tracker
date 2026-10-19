@@ -819,20 +819,30 @@ func TestARecordThatWillNotRetireIsReportedAndTheReleaseStillLands(t *testing.T)
 	}
 }
 
-// TestFillingARetiredRecordFailsRatherThanRecreatingIt pins the O_CREATE-less
-// open. A record retired in the instant before its hold landed must not be
-// written back into existence: the file would carry this holder's identity
-// with nothing holding it, and the next reader would find it ownerless and
-// retire it — costing the account a holder that is very much alive, silently.
-func TestFillingARetiredRecordFailsRatherThanRecreatingIt(t *testing.T) {
+// TestHoldingARetiredRecordFailsRatherThanPublishingAnImpostor pins the
+// identity check on the hold. A record removed from under its private name
+// before its hold landed must not be held and published anyway: filelock
+// recreates the name empty, and that file would go out as this holder's
+// record while naming nobody — costing the account a holder that is very much
+// alive, silently.
+func TestHoldingARetiredRecordFailsRatherThanPublishingAnImpostor(t *testing.T) {
 	t.Parallel()
-	retired := filepath.Join(t.TempDir(), lockHolderRecordPrefix+"gone")
-
-	if err := fillHeldRecord(retired, []byte(`{"pid":1}`)); err == nil {
-		t.Fatal("fillHeldRecord() on a retired record returned no error")
+	private := filepath.Join(t.TempDir(), lockHolderPrivatePrefix+"gone")
+	written, err := writeNewRecord(private, []byte(`{"pid":1}`))
+	if err != nil {
+		t.Fatalf("writeNewRecord: %v", err)
 	}
-	if _, err := os.Stat(retired); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("fillHeldRecord() recreated the retired record: stat err = %v, want not-exist", err)
+	if err := os.Remove(private); err != nil {
+		t.Fatalf("retire the written record: %v", err)
+	}
+
+	release, err := holdWrittenRecord(private, written)
+	if err == nil {
+		_ = release()
+		t.Fatal("holdWrittenRecord() on a record retired before its hold returned no error")
+	}
+	if !strings.Contains(err.Error(), "no longer the record this process wrote") {
+		t.Errorf("holdWrittenRecord() error = %v, want it to name the swapped record", err)
 	}
 }
 

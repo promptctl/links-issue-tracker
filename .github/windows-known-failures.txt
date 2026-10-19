@@ -7,24 +7,6 @@
 # <ticket> <package> <top-level test, or * for a package whose tests do not
 # compile on Windows>
 
-links-windows-qr8l.e0r internal/store TestARecordThatWillNotRetireIsReportedAndTheReleaseStillLands
-links-windows-qr8l.e0r internal/store TestAReusedPidPublishesPastItsPredecessorsNames
-links-windows-qr8l.e0r internal/store TestASweepThatFailsIsReportedAndTheLockStillGranted
-links-windows-qr8l.e0r internal/store TestBeaconContentionNamesTheSquatter
-links-windows-qr8l.e0r internal/store TestCommitContentionNamesTheHolder
-links-windows-qr8l.e0r internal/store TestContentionAccountReachesTheWrappers
-links-windows-qr8l.e0r internal/store TestContentionErrorNamesTheLiveHolder
-links-windows-qr8l.e0r internal/store TestEveryAcquisitionRetiresTheRecordsOfDepartedHolders
-links-windows-qr8l.e0r internal/store TestLockRecordsStayOutOfDoltsTree
-links-windows-qr8l.e0r internal/store TestPromptAcquisitionAnnouncesNothing
-links-windows-qr8l.e0r internal/store TestPublishSurvivesASweepRacingIt
-links-windows-qr8l.e0r internal/store TestReleaseRetiresTheHolderRecord
-links-windows-qr8l.e0r internal/store TestSharedHoldersAreAllNamed
-links-windows-qr8l.e0r internal/store TestUnnamedHolderDoesNotGuessPastAFailedRead
-links-windows-qr8l.e0r internal/store TestUnreadableHolderDirIsReportedNotSwallowed
-links-windows-qr8l.e0r internal/store TestWaitAnnouncesItselfRepeatedly
-links-windows-qr8l.e0r internal/store TestWaitOutlastsHoldersThatKeepChanging
-links-windows-qr8l.e0r internal/store TestWriteEngineRecordsItselfAsTheJournalHolder
 
 links-windows-qr8l.7na internal/store TestACompactingPushReportsItsFollowsCollection
 links-windows-qr8l.7na internal/store TestAFollowCarriesAFailedCollection
