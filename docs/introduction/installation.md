@@ -6,8 +6,8 @@ on a supported platform, installing `lit` is "download a binary and run it."
 Building from source is the fallback for platforms without a prebuilt archive,
 or for developing `lit` itself.
 
-The `dolt` CLI is **not** required to run `lit` — the Dolt storage engine is
-compiled into the binary. It's only used as a test oracle when developing `lit`.
+The `dolt` CLI is **not** required to run, build, or test `lit` — the Dolt
+storage engine is compiled into the binary.
 
 ## Requirements
 

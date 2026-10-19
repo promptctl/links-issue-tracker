@@ -1780,6 +1780,32 @@ func TestIssueStatusClaimAndDoneAreDeterministic(t *testing.T) {
 	}
 }
 
+// TestCloseTwiceRetiresTheHolderRecordOnce pins that a second Close of a write
+// store is a no-op: it returns nil and says nothing, rather than releasing the
+// holder record's file lock again through the fd the first Close closed.
+//
+// Not parallel: it swaps the package's notice writer.
+func TestCloseTwiceRetiresTheHolderRecordOnce(t *testing.T) {
+	var notices strings.Builder
+	restore := lockWaitNoticeWriter
+	lockWaitNoticeWriter = &notices
+	t.Cleanup(func() { lockWaitNoticeWriter = restore })
+
+	st, err := Open(context.Background(), filepath.Join(t.TempDir(), "dolt"), "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("first Close() error = %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("second Close() error = %v", err)
+	}
+	if notices.Len() != 0 {
+		t.Fatalf("Close twice wrote notices:\n%s", notices.String())
+	}
+}
+
 func TestOpenDoesNotCreateStartupCommitWhenSchemaIsCurrent(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

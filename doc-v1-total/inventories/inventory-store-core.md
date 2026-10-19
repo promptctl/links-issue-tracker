@@ -161,6 +161,7 @@ Behavioral evidence:
 - Re-`Open` on a current schema adds **no** Dolt commit (`store_test.go`, HEAD read in process before and after).
 - Migration is idempotent across opens: a second `Open` leaves HEAD where the first put it (`store_test.go`, HEAD read in process).
 - `Open` preserves an existing `meta.schema_version` value (`store_test.go`).
+- A second `Close` of a write store returns nil and writes no notice: the holder record is retired once (`store_test.go`).
 - After a SIGKILL delivered inside `commitWorkingSetOnce`, a fresh-process `Open` on the same path succeeds, the commit lock is free, and the killed mutation's staged write is visible (`process_kill_test.go`).
 - After a SIGKILL inside a goose migration step, `Open` still completes and the schema is usable (`process_kill_test.go`).
 - Opening a read-only (frozen) directory fails and mutates nothing (`fixture_residue_test.go`).

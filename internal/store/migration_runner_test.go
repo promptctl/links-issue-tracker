@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
@@ -40,9 +39,7 @@ func TestFreshOpenAppliesRegistryToHead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
-	// Once only: a second Close releases a file lock through a closed fd.
-	closeStore := sync.OnceValue(st.Close)
-	t.Cleanup(func() { _ = closeStore() })
+	defer st.Close()
 
 	appliedVersion, err := st.recordedMigrationVersion(ctx)
 	if err != nil {
@@ -52,7 +49,7 @@ func TestFreshOpenAppliesRegistryToHead(t *testing.T) {
 		t.Fatalf("recorded version = %d, want %d", appliedVersion, headVersion(t))
 	}
 
-	if err := closeStore(); err != nil {
+	if err := st.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
 	log := observedCommitMessages(t, ctx, doltRoot, "test-workspace-id")

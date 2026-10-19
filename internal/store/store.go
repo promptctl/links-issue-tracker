@@ -379,9 +379,13 @@ func (s *Store) ExecRawForTest(ctx context.Context, query string, args ...any) e
 // so it can never hide the record release's own failure.
 // [LAW:single-enforcer] one close contract for every path that ends an
 // engine: Close, and the open paths that fail after the engine came up.
-// [LAW:no-silent-failure]
+// [LAW:no-silent-failure] The holder record is retired once: a second close
+// (a deferred Close after an explicit one, a Close after a failed reopen) would
+// release its file lock through the fd the first release closed.
 func (s *Store) closeEngine() error {
-	err := s.releaseEngineRecord()
+	release := s.releaseEngineRecord
+	s.releaseEngineRecord = func() error { return nil }
+	err := release()
 	closeErr := s.db.Close()
 	if errors.Is(closeErr, context.Canceled) {
 		closeErr = nil
