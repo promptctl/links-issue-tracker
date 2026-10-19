@@ -143,11 +143,11 @@ func New(ws workspace.Info, st storage.Store, stream workspace.StreamID) *App {
 
 // StatuslineTicket is issue as the statusline file shows it.
 func StatuslineTicket(issue model.Issue) statusline.Ticket {
-	return statusline.Ticket{ID: issue.ID, Title: issue.Title}
+	return statusline.Ticket{ID: issue.ID, Title: issue.Title, Description: issue.Description}
 }
 
 // changeStatuslineFacts is what a change tells the statusline file. Every
-// change leaves the ticket with the title it now has. A phase move keeps the
+// change leaves the ticket with the title and description it now has. A phase move keeps the
 // ticket in progress, in the phase it names; every other transition but a
 // start moves the ticket out of what the file can say about it; a change of
 // fields alone moves it nowhere. A start is this checkout taking the ticket on,

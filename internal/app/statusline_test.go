@@ -14,8 +14,8 @@ import (
 // invalidates what the file says about it, and a change of fields alone does
 // none of these.
 func TestChangesBecomeStatuslineFacts(t *testing.T) {
-	issue := model.Issue{ID: "t-1", Title: "One"}
-	ticket := statusline.Ticket{ID: "t-1", Title: "One"}
+	issue := model.Issue{ID: "t-1", Title: "One", Description: "The first."}
+	ticket := statusline.Ticket{ID: "t-1", Title: "One", Description: "The first."}
 	retitled := statusline.Retitled{Ticket: ticket}
 	if got, want := changeStatuslineFacts(nil, issue), (statusline.Facts{retitled}); !reflect.DeepEqual(got, want) {
 		t.Fatalf("fields alone = %#v, want %#v", got, want)

@@ -11,7 +11,7 @@ import (
 )
 
 var (
-	alpha = Ticket{ID: "t-alpha", Title: "Alpha"}
+	alpha = Ticket{ID: "t-alpha", Title: "Alpha", Description: "What alpha is."}
 	bravo = Ticket{ID: "t-bravo", Title: "Bravo"}
 	// alphaRenamed is alpha after a retitle.
 	alphaRenamed = Ticket{ID: "t-alpha", Title: "Alpha, renamed"}
@@ -208,7 +208,7 @@ func TestFileEncodesTheDocumentedShape(t *testing.T) {
 	want := map[string]any{
 		"schema_version": float64(1),
 		"working_on": map[string]any{
-			"ticket":          map[string]any{"id": "t-alpha", "title": "Alpha"},
+			"ticket":          map[string]any{"id": "t-alpha", "title": "Alpha", "description": "What alpha is."},
 			"rollup_progress": map[string]any{"rollup_completed_count": float64(1), "rollup_total_count": float64(4)},
 			"phase":           "impl",
 			"recorded_at":     "2026-10-15T09:30:00Z",
@@ -234,6 +234,7 @@ var schemaV1Fields = []string{
 	"working_on.ticket",
 	"working_on.ticket.id",
 	"working_on.ticket.title",
+	"working_on.ticket.description",
 	"working_on.rollup_progress",
 	"working_on.rollup_progress.rollup_completed_count",
 	"working_on.rollup_progress.rollup_total_count",
@@ -243,6 +244,7 @@ var schemaV1Fields = []string{
 	"next.ticket",
 	"next.ticket.id",
 	"next.ticket.title",
+	"next.ticket.description",
 	"next.recorded_at",
 }
 

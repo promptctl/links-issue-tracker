@@ -41,10 +41,13 @@ const relPath = ".lit/statusline.json"
 // would otherwise show in a git status that runs mid-write.
 const excludeEntry = "/" + relPath + "*"
 
-// Ticket is a ticket as the statusline shows it.
+// Ticket is a ticket as the statusline shows it. Description is the ticket's
+// whole description, so a statusline can show what the work IS without
+// running lit; empty when the ticket has none.
 type Ticket struct {
-	ID    string `json:"id"`
-	Title string `json:"title"`
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
 }
 
 // File is the statusline file's whole content. A nil slot is one this checkout
@@ -114,8 +117,9 @@ func NewStarted(ticket Ticket, progress RollupProgress) Started {
 // nil.
 type Picked struct{ Ticket *Ticket }
 
-// Retitled says Ticket's title is now Ticket.Title, so any record naming it
-// shows that title from here on; when the record was made does not change.
+// Retitled says Ticket's title and description are now Ticket's, so any
+// record naming it shows them from here on; when the record was made does not
+// change.
 type Retitled struct{ Ticket Ticket }
 
 // PhaseRead says ticket ID's history puts it in Phase, so the record of

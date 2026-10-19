@@ -43,7 +43,8 @@ where one of four tickets was already closed:
   "working_on": {
     "ticket": {
       "id": "links-auth-k2p",
-      "title": "Refresh tokens survive a clock skew"
+      "title": "Refresh tokens survive a clock skew",
+      "description": "A refresh issued within 30 s of expiry is refused as expired when the client's clock runs ahead."
     },
     "rollup_progress": {
       "rollup_completed_count": 1,
@@ -55,7 +56,8 @@ where one of four tickets was already closed:
   "next": {
     "ticket": {
       "id": "links-auth-k2p",
-      "title": "Refresh tokens survive a clock skew"
+      "title": "Refresh tokens survive a clock skew",
+      "description": "A refresh issued within 30 s of expiry is refused as expired when the client's clock runs ahead."
     },
     "recorded_at": "2026-10-15T13:59:25.579056Z"
   }
@@ -75,13 +77,14 @@ lifecycle change clears it, as described under
 | `working_on` | object or `null` | The ticket this checkout is working on. `null` when nothing is recorded. |
 | `working_on.ticket.id` | string | The ticket's id. |
 | `working_on.ticket.title` | string | The ticket's title. |
+| `working_on.ticket.description` | string | The ticket's whole description; `""` when it has none. A lit older than this field writes no `description` key at all. |
 | `working_on.rollup_progress` | object | The progress of the ticket's lane, counted when `working_on` is recorded. lit 0.19 to 0.21 write `null` when the command that recorded `working_on` did not count the lane, and a lit older than 0.19 writes no `rollup_progress` key at all. |
 | `working_on.rollup_progress.rollup_completed_count` | integer | How many of the lane's tickets are closed: the `N` of the `N/M done` on that lane's claim line in `lit backlog`. Archived and deleted tickets are not counted. |
 | `working_on.rollup_progress.rollup_total_count` | integer | How many tickets the lane holds, not counting archived or deleted ones: the `M` of that `N/M done`. |
 | `working_on.phase` | string or `null` | Where the work on the ticket stands: `plan`, `impl`, `review` or `merge`, as `lit show` prints it on the ticket's `phase:` line. `null` when the command that recorded `working_on` did not read the phase. A lit older than this field writes no `phase` key at all. |
 | `working_on.recorded_at` | string | When lit recorded this ticket as worked on. |
 | `next` | object or `null` | The last plain `lit next` answer. `null` when no answer is recorded. |
-| `next.ticket` | object or `null` | The ticket that `lit next` picked, with `id` and `title` as above. `null` means `lit next` ran and found nothing to pick. |
+| `next.ticket` | object or `null` | The ticket that `lit next` picked, with `id`, `title` and `description` as above. `null` means `lit next` ran and found nothing to pick. |
 | `next.recorded_at` | string | When that `lit next` ran. |
 
 Timestamps are RFC 3339 in UTC, as in the example, and may carry fractional
@@ -129,9 +132,10 @@ plain. A filtered `lit next`, or one with `--all`, answers a different question
 and leaves `next` alone. A focus scope configured for the repository does not
 count as a filter.
 
-**Titles.** After any command in this checkout changes a ticket's title, such as
-`lit update --title` or a `lit import` document that sets `title`, every value
-naming that ticket shows the new title. Its `recorded_at` does not change.
+**Titles and descriptions.** After any command in this checkout changes a
+ticket's title or description, such as `lit update --title` or a `lit import`
+document that sets `description`, every value naming that ticket shows the new
+text. Its `recorded_at` does not change.
 
 **Clearing.** A value becomes `null` when this checkout moves the ticket it names
 through any lifecycle change other than a start: `lit done`, `lit close`,
@@ -197,27 +201,37 @@ when it does either.
 
 lit ships a [cc-candybar](https://github.com/promptctl/cc-candybar) plugin
 that reads this file, at `.cc-candybar/plugins/lit/plugin.json5` in this
-repository. cc-candybar 1.135.0 or later installs it:
+repository. cc-candybar 1.136.0 or later installs it:
 
 ```sh
 cc-candybar plugin install promptctl/links-issue-tracker
 ```
 
 Re-running it updates the plugin. After that, cc-candybar's add-segment
-library lists three segments:
+library lists one segment, `plugins.lit.ticket`, which shows in one cell:
 
-- `plugins.lit.ticket` shows the ticket being worked on, followed by the lane's
-  `rollup_completed_count/rollup_total_count` when the file records them.
-- `plugins.lit.phase` shows `phase` and the phase of the ticket being worked
-  on, such as `phase review`, when the file records one.
-- `plugins.lit.next` shows the ticket `lit next` last picked when it differs
-  from the one being worked on, and `nothing ready` when that `lit next` found
-  nothing.
+- `🎫` and the id of the ticket being worked on, which copies the id when
+  clicked, then its title when the placement's `title chars` setting is above
+  0;
+- the lane's `rollup_completed_count/rollup_total_count` when the file
+  records them (the `lane progress` setting);
+- `· ` and the `phase` when the file records one (the `phase` setting);
+- `· next ` and the ticket `lit next` last picked when it differs from the one
+  being worked, or `· next: nothing ready` when that `lit next` found nothing
+  (the `next pick` setting; with nothing being worked, this part alone shows,
+  without the `· `);
+- `▸` when the ticket has a description and the `description chars` setting
+  is above 0: clicking it drops the description, on one line cut to that many
+  characters, as a row under the bar for this session, and `▾` folds it again.
 
-Place one from cc-candybar's edit mode. Each segment hides while there is
-nothing to show, and shows a warning naming the version when the file's
-`schema_version` is not `1`. lit writes no other, and the next `lit next` in
-that checkout replaces the file.
+Each part is a setting of the placement, on by default: open edit mode from
+cc-candybar's menu (`📐 layout › ✎ arrange`) and click the placement's `🔧`
+to turn one off or set a width. Place the segment from edit mode's add-segment
+library. The cell hides while there is nothing to show, and shows a warning
+naming the version when the file's `schema_version` is not `1`. lit writes no
+other, and the next `lit next` in that checkout replaces the file. The plugin
+needs cc-candybar 1.136.0 or later, which admits the session-state variable the
+`▸` cycles; an older cc-candybar refuses the whole definition.
 
 ## A minimal statusline
 

@@ -14,9 +14,9 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/statusline"
 )
 
-// testdata/render.txt is what cc-candybar 1.135.0 printed for a checkout
+// testdata/render.txt is what cc-candybar 1.136.0 printed for a checkout
 // working on t-1 with no phase, whose last lit next found nothing: a solid
-// arrow after the menu, then a thin one between two cells of one colour.
+// arrow after the menu, then lit's one cell.
 func TestCellsReadsTheBarCandybarPrints(t *testing.T) {
 	printed, err := os.ReadFile(filepath.Join("testdata", "render.txt"))
 	if err != nil {
@@ -26,9 +26,30 @@ func TestCellsReadsTheBarCandybarPrints(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cells: %v", err)
 	}
-	want := []string{"🎫 [t-1](cc-candybar://dispatch/e=copy%2Ft-1)", "next nothing ready"}
-	if !slices.Equal(got, want) {
-		t.Fatalf("cells = %q, want %q", got, want)
+	want := []string{"🎫 [t-1](cc-candybar://dispatch/e=copy%2Ft-1) · next: nothing ready"}
+	if !slices.Equal(got.cells, want) || len(got.rows) != 0 {
+		t.Fatalf("cells = %q rows = %q, want %q and no rows", got.cells, got.rows, want)
+	}
+}
+
+// A line after the bar is a row a segment dropped under it, read as cells
+// like the bar; a bar line and a row read apart.
+func TestCellsReadsTheRowsUnderTheBar(t *testing.T) {
+	const (
+		ok   = "✓ /c.json5: config OK\n"
+		menu = "\ue0b0 \x1b]8;;m\x1b\\🍫\x1b]8;;\x1b\\ \ue0b0"
+		bar  = menu + " 🎫 one \ue0b0\n"
+		row  = "\ue0b0 What one is. \ue0b0\n"
+	)
+	got, err := cells(ok + bar + row)
+	if err != nil {
+		t.Fatalf("cells: %v", err)
+	}
+	if !slices.Equal(got.cells, []string{"🎫 one"}) || !slices.EqualFunc(got.rows, [][]string{{"What one is."}}, slices.Equal[[]string]) {
+		t.Fatalf("cells = %q rows = %q", got.cells, got.rows)
+	}
+	if got, err := cells(ok + bar + "What one is.\n"); err == nil {
+		t.Errorf("a row not between arrows: cells = %q rows = %q, want an error", got.cells, got.rows)
 	}
 }
 
@@ -41,20 +62,19 @@ func TestCellsRefusesAPrintItCannotRead(t *testing.T) {
 		menu = "\ue0b0 \x1b]8;;m\x1b\\🍫\x1b]8;;\x1b\\ \ue0b0"
 		bar  = menu + " phase plan \ue0b0\n"
 	)
-	if got, err := cells(ok + bar); err != nil || !slices.Equal(got, []string{"phase plan"}) {
-		t.Fatalf("the readable print: cells = %q, %v; want [\"phase plan\"]", got, err)
+	if got, err := cells(ok + bar); err != nil || !slices.Equal(got.cells, []string{"phase plan"}) {
+		t.Fatalf("the readable print: cells = %q, %v; want [\"phase plan\"]", got.cells, err)
 	}
 	for name, printed := range map[string]string{
 		"nothing printed":             "",
 		"no config OK line":           "✓ /c.json5: config failed\n" + bar,
-		"two bar lines":               ok + bar + bar,
 		"no menu cell":                ok + "\ue0b0 phase plan \ue0b0 next nothing ready \ue0b0\n",
 		"text before the first arrow": ok + "x" + menu + " phase plan \ue0b0\n",
 		"no closing arrow":            ok + menu + " phase plan\n",
 		"unread escape":               ok + menu + " \x1b[2Kphase plan \ue0b0\n",
 	} {
 		if got, err := cells(printed); err == nil {
-			t.Errorf("%s: cells = %q, want an error", name, got)
+			t.Errorf("%s: cells = %q, want an error", name, got.cells)
 		}
 	}
 }
@@ -91,16 +111,16 @@ func TestOlderLitWritesWorkingOnWithoutAPhaseKey(t *testing.T) {
 }
 
 // A segment whose template renders only spaces is drawn as a blank cell
-// between two arrows, as cc-candybar 1.130.5 draws it; it reads as a cell, so
-// a case expecting the segment hidden fails.
+// between two arrows, as cc-candybar draws it; it reads as a cell, so a case
+// expecting the segment hidden fails.
 func TestCellsKeepsABlankCell(t *testing.T) {
 	printed := "✓ /c.json5: config OK\n\ue0b0 \x1b]8;;m\x1b\\🍫\x1b]8;;\x1b\\ \ue0b0   \ue0b0 next nothing ready \ue0b0\n"
 	got, err := cells(printed)
 	if err != nil {
 		t.Fatalf("cells: %v", err)
 	}
-	if want := []string{"", "next nothing ready"}; !slices.Equal(got, want) {
-		t.Fatalf("cells = %q, want %q", got, want)
+	if want := []string{"", "next nothing ready"}; !slices.Equal(got.cells, want) {
+		t.Fatalf("cells = %q, want %q", got.cells, want)
 	}
 }
 
@@ -110,23 +130,29 @@ func TestCheckFailsTheRunOnAnyCaseThatDoesNotRender(t *testing.T) {
 	cases := []renderCase{
 		{name: "renders", cells: []string{"phase plan"}},
 		{name: "other-cells", cells: []string{"phase plan"}},
+		{name: "other-rows", cells: []string{"phase plan"}, rows: [][]string{{"a row"}}},
 		{name: "no-render", cells: []string{}},
 	}
-	rendered := map[string][]string{"renders": {"phase plan"}, "other-cells": {}}
-	render := func(c renderCase) ([]string, error) {
-		if got, ok := rendered[c.name]; ok {
+	drawn := map[string]rendered{
+		"renders":     {cells: []string{"phase plan"}, rows: [][]string{}},
+		"other-cells": {cells: []string{}, rows: [][]string{}},
+		"other-rows":  {cells: []string{"phase plan"}, rows: [][]string{}},
+	}
+	render := func(c renderCase) (rendered, error) {
+		if got, ok := drawn[c.name]; ok {
 			return got, nil
 		}
-		return nil, errors.New("plugin did not load")
+		return rendered{}, errors.New("plugin did not load")
 	}
 	var stdout strings.Builder
 	if code := check(&stdout, io.Discard, "/repo", cases, render); code != 1 {
 		t.Errorf("exit %d, want 1", code)
 	}
-	want := `candybar-check: case=renders verdict=ok cells=["phase plan"]
-candybar-check: case=other-cells verdict=mismatch cells=[]
-candybar-check: case=no-render verdict=error cells=[]
-candybar-check: cc-candybar=` + candybarVersion + ` plugin=/repo cases=3 failed=2
+	want := `candybar-check: case=renders verdict=ok cells=["phase plan"] rows=[]
+candybar-check: case=other-cells verdict=mismatch cells=[] rows=[]
+candybar-check: case=other-rows verdict=mismatch cells=["phase plan"] rows=[]
+candybar-check: case=no-render verdict=error cells=[] rows=[]
+candybar-check: cc-candybar=` + candybarVersion + ` plugin=/repo cases=4 failed=3
 `
 	if stdout.String() != want {
 		t.Errorf("stdout:\n%s\nwant:\n%s", stdout.String(), want)
