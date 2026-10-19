@@ -268,7 +268,9 @@ func storeBytesOf(ctx context.Context, cs chunks.TableFileStore) (int64, error) 
 // for a push (env.Remote.GetRemoteDB, dolt libraries/doltcore/env/remotes.go):
 // the URL and params dolt_remotes holds, the remote's name as the git
 // remote's, and the git cache rooted where the provider roots it, so the open
-// reads through the mirror every push and fetch keeps.
+// reads through the mirror every push and fetch keeps. Like the provider, it
+// opens past dolt's in-process singleton cache: the caller owns the handle and
+// closes it, so no cached entry is left serving a closed store.
 func (s *Store) openRemoteDB(ctx context.Context, remote string) (*doltdb.DoltDB, error) {
 	var remoteURL string
 	var rawParams sql.NullString
@@ -281,6 +283,7 @@ func (s *Store) openRemoteDB(ctx context.Context, remote string) (*doltdb.DoltDB
 	}
 	params[dbfactory.GitRemoteNameParam] = remote
 	params[dbfactory.GitCacheRootParam] = s.gitCacheRoot()
+	params[dbfactory.DisableSingletonCacheParam] = struct{}{}
 	remoteDB, err := doltdb.LoadDoltDBWithParams(ctx, types.Format_Default, remoteURL, filesys.LocalFS, params)
 	if err != nil {
 		return nil, fmt.Errorf("open remote %q (%s): %w", remote, remoteURL, err)

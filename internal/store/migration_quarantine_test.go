@@ -602,10 +602,13 @@ func TestMigrationSuccessPruneSurvivesCallerCancel(t *testing.T) {
 	}
 	t.Cleanup(func() { migrationUpByOneForTest = nil })
 
-	_, openErr := Open(ctx, doltRoot, "test-workspace-id")
+	st, err := Open(ctx, doltRoot, "test-workspace-id")
 	migrationUpByOneForTest = nil
-	if openErr != nil && strings.Contains(openErr.Error(), "prune migration checkpoints") {
-		t.Fatalf("Open() error = %v; the success-path prune stopped on the caller's cancellation", openErr)
+	if err != nil {
+		t.Fatalf("Open() error = %v; the migrated workspace was reported as a failed open", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
 	}
 }
 

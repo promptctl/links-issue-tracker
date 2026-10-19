@@ -441,3 +441,32 @@ func TestARemoteHoldingATagKeepsEveryBranch(t *testing.T) {
 		t.Fatalf("the remote's branch other is at %q; want it kept at %s", other, otherHead)
 	}
 }
+
+// TestEachOpenOfARemoteIsItsCallersOwn opens a remote's database twice in one
+// process through openRemoteDB, the open every remote GC runs, as a checkout
+// following two re-roots does. Each open is the caller's own handle: closing
+// the first leaves nothing the second is handed.
+func TestEachOpenOfARemoteIsItsCallersOwn(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	base := t.TempDir()
+	root := filepath.Join(base, "producer")
+	seedReconcileRemote(t, ctx, root, "file://"+filepath.Join(base, "remote"))
+	st, err := Open(ctx, root, "ws")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = st.Close() }()
+	for _, which := range []string{"first", "second"} {
+		remoteDB, err := st.openRemoteDB(ctx, "origin")
+		if err != nil {
+			t.Fatalf("openRemoteDB(%s): %v", which, err)
+		}
+		if _, err := remoteDB.GetBranches(ctx); err != nil {
+			t.Fatalf("read the remote's branches (%s open): %v", which, err)
+		}
+		if err := remoteDB.Close(); err != nil {
+			t.Fatalf("close the remote (%s open): %v", which, err)
+		}
+	}
+}
