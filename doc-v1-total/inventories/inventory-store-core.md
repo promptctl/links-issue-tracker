@@ -3007,7 +3007,7 @@ Frame behavior pinned by tests — `internal/store/ranking_frame_test.go`:
 - Atomic: all assignments in one mutation.
 - On error the zero `RankSetResult` is returned (`mutationValue`), so no resolutions come back with a failed write.
 
-Tests: absolute top ordering — `internal/store/store_test.go`; duplicates rejected with an error containing `"duplicate"` —; single id rejected with `"at least 2"` —; mixed-frame resolves child→epic with children unmoved — `internal/store/ranking_frame_test.go`; two epics' children resolve to their epics —; same-epic siblings resolve to themselves and only they move —; duplicate representatives rejected with `"both resolve to"` and **no** rank changed —; naming an epic with its own child rejected with `"inside"` in both orders —.
+Tests: absolute top ordering — `internal/store/store_test.go`; duplicates rejected with an error containing `"duplicate"` —; no ids rejected with `"at least 1"` —; mixed-frame resolves child→epic with children unmoved — `internal/store/ranking_frame_test.go`; two epics' children resolve to their epics —; same-epic siblings resolve to themselves and only they move —; duplicate representatives rejected with `"both resolve to"` and **no** rank changed —; naming an epic with its own child rejected with `"inside"` in both orders —.
 
 ### 5.7 Smoothing (rebalancing)
 
