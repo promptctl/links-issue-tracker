@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"errors"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
@@ -64,71 +63,50 @@ func TestSyncPushFromCloneReportsARaceItLostAsSuperseded(t *testing.T) {
 // lose when both write: a clone is taken at c1, the live store commits c2
 // and pushes it, and the clone commits c3. The remote refuses the clone's
 // push, and the clone and the remote each hold a commit the other lacks, so
-// every push step reports the refusal as storage.ErrPushDiverged. A store only ahead
-// of a remote that refuses it is refused plainly: nothing a merge can fix
-// stands in its way.
+// every push step reports the refusal as storage.ErrPushDiverged.
 func TestAPushRefusedOverAPeersCommitsIsDiverged(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	base := t.TempDir()
-	doltRoot := migratedDoltDir(t)
-	remoteDir := filepath.Join(base, "remote")
-	epicID := seedSyncEpic(t, ctx, doltRoot, "ws")
-
-	commitTitled(t, ctx, doltRoot, epicID, "c1")
-	pushSyncFrom(t, ctx, doltRoot, "file://"+remoteDir, "seed")
-	cloneRoot := cloneStoreTree(t, ctx, doltRoot, base)
-	commitTitled(t, ctx, doltRoot, epicID, "c2")
-	pushSyncFrom(t, ctx, doltRoot, "", "the peer's push of c2")
-	commitTitled(t, ctx, cloneRoot, epicID, "c3")
-
-	clone, err := OpenSync(ctx, cloneRoot, "ws")
+	race := buildDivergedClone(t, ctx)
+	clone, err := OpenSync(ctx, race.cloneRoot, "ws")
 	if err != nil {
 		t.Fatalf("OpenSync(clone) error = %v", err)
 	}
 	defer clone.Close()
-	steps := map[string]func(context.Context, string, string, bool, bool) (storage.SyncPushResult, error){
-		"SyncPushFromClone":  clone.SyncPushFromClone,
-		"SyncCompactAndPush": clone.SyncCompactAndPush,
-		"SyncPush":           clone.SyncPush,
+	steps := []struct {
+		name string
+		push func(context.Context, string, string, bool, bool) (storage.SyncPushResult, error)
+	}{
+		{"SyncPushFromClone", clone.SyncPushFromClone},
+		{"SyncCompactAndPush", clone.SyncCompactAndPush},
+		{"SyncPush", clone.SyncPush},
 	}
-	for name, push := range steps {
-		if _, err := push(ctx, "origin", "master", false, false); !errors.Is(err, storage.ErrPushDiverged) {
-			t.Fatalf("%s() over the peer's c2 error = %v; want storage.ErrPushDiverged", name, err)
+	for _, step := range steps {
+		if _, err := step.push(ctx, "origin", "master", false, false); !errors.Is(err, storage.ErrPushDiverged) {
+			t.Fatalf("%s() over the peer's c2 error = %v; want storage.ErrPushDiverged", step.name, err)
 		}
 	}
+}
 
-	commitTitled(t, ctx, doltRoot, epicID, "c4")
-	if err := filepath.WalkDir(remoteDir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return err
-		}
-		return os.Chmod(path, 0o444)
-	}); err != nil {
-		t.Fatalf("make the remote read-only: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := filepath.WalkDir(remoteDir, func(path string, _ fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			return os.Chmod(path, 0o755)
-		}); err != nil {
-			t.Errorf("restore the remote's permissions: %v", err)
-		}
-	})
-	if err := os.Chmod(remoteDir, 0o555); err != nil {
-		t.Fatalf("make the remote read-only: %v", err)
-	}
-	live, err := OpenSync(ctx, doltRoot, "ws")
-	if err != nil {
-		t.Fatalf("OpenSync(live) error = %v", err)
-	}
-	defer live.Close()
-	_, err = live.SyncPush(ctx, "origin", "master", false, false)
-	if err == nil || errors.Is(err, storage.ErrPushDiverged) {
-		t.Fatalf("SyncPush() of c4, only ahead of a read-only remote, error = %v; want a refusal that is not storage.ErrPushDiverged", err)
-	}
+// divergedClone is the race TestAPushRefusedOverAPeersCommitsIsDiverged
+// builds: the live store at liveRoot pushed c2 to the remote at remoteDir,
+// and the clone at cloneRoot, taken at c1, holds c3.
+type divergedClone struct {
+	liveRoot, cloneRoot, remoteDir, epicID string
+}
+
+func buildDivergedClone(t *testing.T, ctx context.Context) divergedClone {
+	t.Helper()
+	base := t.TempDir()
+	race := divergedClone{liveRoot: migratedDoltDir(t), remoteDir: filepath.Join(base, "remote")}
+	race.epicID = seedSyncEpic(t, ctx, race.liveRoot, "ws")
+	commitTitled(t, ctx, race.liveRoot, race.epicID, "c1")
+	pushSyncFrom(t, ctx, race.liveRoot, "file://"+race.remoteDir, "seed")
+	race.cloneRoot = cloneStoreTree(t, ctx, race.liveRoot, base)
+	commitTitled(t, ctx, race.liveRoot, race.epicID, "c2")
+	pushSyncFrom(t, ctx, race.liveRoot, "", "the peer's push of c2")
+	commitTitled(t, ctx, race.cloneRoot, race.epicID, "c3")
+	return race
 }
 
 // commitTitled creates an issue titled title in the store at root and

@@ -127,16 +127,9 @@ func classifyPushOutcome(outcome syncPushOutcome, err error) pushOutcomeRecord {
 		return pushOutcomeRecord{Decision: pushDecisionWorkspaceBusy, Reason: err.Error()}
 	case err != nil:
 		return pushOutcomeRecord{Decision: pushDecisionError, Reason: err.Error()}
-	case errors.Is(outcome.pushErr, storage.ErrPushDiverged):
-		return pushOutcomeRecord{
-			Decision: pushDecisionDiverged,
-			Reason:   outcome.pushErr.Error(),
-			Remote:   outcome.remote,
-			Branch:   outcome.branch,
-		}
 	case outcome.pushErr != nil:
 		return pushOutcomeRecord{
-			Decision: pushDecisionError,
+			Decision: pushFailureDecision(outcome.pushErr),
 			Reason:   outcome.pushErr.Error(),
 			Remote:   outcome.remote,
 			Branch:   outcome.branch,
@@ -150,6 +143,16 @@ func classifyPushOutcome(outcome syncPushOutcome, err error) pushOutcomeRecord {
 			Branch:   outcome.branch,
 		}
 	}
+}
+
+// pushFailureDecision is the decision a push that ran and did not land ended
+// in: diverged when the remote refused it over a peer's commits, error for
+// every other failure.
+func pushFailureDecision(pushErr error) string {
+	if errors.Is(pushErr, storage.ErrPushDiverged) {
+		return pushDecisionDiverged
+	}
+	return pushDecisionError
 }
 
 // completePushAttempt is the one completion seam for how a push attempt ended
