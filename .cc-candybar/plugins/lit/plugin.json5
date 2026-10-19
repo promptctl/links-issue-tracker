@@ -48,7 +48,7 @@
     // a file of any other version is not one lit wrote: the cell says so (⚠)
     // rather than guess. The version is the one internal/statusline.SchemaVersion
     // writes, and a test holds them equal.
-    schema: '{{ if ne (toString .schema_version) "1" }}{{ fail (printf "lit statusline.json is schema_version %v; this plugin reads 1 and lit writes no other" .schema_version) }}{{ end }}',
+    schema: '{{ if ne (toString .schema_version) "1" }}{{ fail (printf "lit statusline.json is schema_version %v; this plugin reads 1 — the only version lit writes — the next lit next here replaces the file" .schema_version) }}{{ end }}',
     title: '{{ if gt (int .width) 0 }} {{ abbrev (int .width) .title }}{{ end }}',
   },
   actions: {

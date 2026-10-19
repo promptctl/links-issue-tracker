@@ -246,8 +246,9 @@ var schemaV1Fields = []string{
 	"next.recorded_at",
 }
 
-// Each write leaves a different slot null, since a key dropped only while its
-// value is null would turn "recorded as nothing" into "not recorded".
+// Each write leaves a different slot null, and one writes a zero count, since a
+// key dropped only while its value is null or zero would turn "recorded as
+// nothing" into "not recorded".
 func TestEveryVersion1FieldIsStillWritten(t *testing.T) {
 	contract := map[string]bool{}
 	for _, field := range schemaV1Fields {
@@ -257,7 +258,7 @@ func TestEveryVersion1FieldIsStillWritten(t *testing.T) {
 		{Started{alpha, progress}, PhaseRead{alpha.ID, "impl"}, Picked{&bravo}},
 		{Started{alpha, progress}, Picked{nil}},
 		{Picked{&bravo}},
-		{Started{alpha, progress}},
+		{Started{bravo, bravoLane}},
 	} {
 		loc := testLocation(t)
 		write(t, loc, facts...)
@@ -270,12 +271,16 @@ func TestEveryVersion1FieldIsStillWritten(t *testing.T) {
 			t.Fatal(err)
 		}
 		// objects maps each object the file holds to its keys; "" is the root.
+		// values holds every field written, so a parent that stopped being an
+		// object is told apart from one that is null.
 		objects := map[string]map[string]any{}
+		values := map[string]any{}
 		var walk func(path string, obj map[string]any)
 		walk = func(path string, obj map[string]any) {
 			objects[path] = obj
 			for k, v := range obj {
 				field := strings.TrimPrefix(path+"."+k, ".")
+				values[field] = v
 				if !contract[field] {
 					t.Errorf("%s is written but not in schemaV1Fields; a field lit writes joins that list, so it is never removed either\n%s", field, raw)
 				}
@@ -290,10 +295,11 @@ func TestEveryVersion1FieldIsStillWritten(t *testing.T) {
 			if i := strings.LastIndex(field, "."); i >= 0 {
 				parent, key = field[:i], field[i+1:]
 			}
-			if obj, ok := objects[parent]; ok {
-				if _, ok := obj[key]; !ok {
-					t.Errorf("%s is missing from the file; lit never removes or renames a field of schema_version 1 (docs/statusline.md, schema_version)\n%s", field, raw)
-				}
+			if v, written := values[parent]; parent != "" && (!written || v == nil) {
+				continue // a null or absent parent holds nothing; an absent one fails as its own field
+			}
+			if _, ok := objects[parent][key]; !ok {
+				t.Errorf("%s is missing from the file; lit never removes or renames a field of schema_version 1 (docs/statusline.md, schema_version)\n%s", field, raw)
 			}
 		}
 		if v := doc["schema_version"]; v != float64(1) {

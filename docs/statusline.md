@@ -71,7 +71,7 @@ lifecycle change clears it, as described under
 
 | Field | Type | Meaning |
 |---|---|---|
-| `schema_version` | integer | The version of the file's shape. Currently `1`. |
+| `schema_version` | integer | The version of the file's shape: `1`, which never changes (see [`schema_version`](#schema_version)). |
 | `working_on` | object or `null` | The ticket this checkout is working on. `null` when nothing is recorded. |
 | `working_on.ticket.id` | string | The ticket's id. |
 | `working_on.ticket.title` | string | The ticket's title. |
@@ -216,8 +216,8 @@ library lists three segments:
 
 Place one from cc-candybar's edit mode. Each segment hides while there is
 nothing to show, and shows a warning naming the version when the file's
-`schema_version` is not the one the plugin reads, and says which of lit and
-the plugin to update.
+`schema_version` is not `1`. lit writes no other, and the next `lit next` in
+that checkout replaces the file.
 
 ## A minimal statusline
 
