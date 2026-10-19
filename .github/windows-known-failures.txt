@@ -151,12 +151,10 @@ links-windows-qr8l.mq4 internal/workspace TestWorktreePathWhoseTailLooksLikeAnAt
 links-windows-qr8l.btw cmd/lit *
 links-windows-qr8l.btw internal/backup TestCreateListLatestAndPrune
 links-windows-qr8l.btw internal/cli *
-links-windows-qr8l.btw internal/config TestDataHomeFollowsXDGDataHome
 links-windows-qr8l.btw internal/dbsnapshot TestCollectOrphanedResidue_ErrorNamesThePath
 links-windows-qr8l.btw internal/dbsnapshot TestPlainFileCopy_PreservesPerms
 links-windows-qr8l.btw internal/statusline TestAFailedRewriteOfAnUnreadableFileIsNotReplaced
 links-windows-qr8l.btw internal/statusline TestAFailedWriteReportsWhatItHadDone
-links-windows-qr8l.btw internal/statusline TestInstallPluginReportsAFailedWrite
 links-windows-qr8l.btw internal/storage/memory TestConformance
 links-windows-qr8l.btw internal/store TestAdoptRemoteByCloneFailedCloneLeavesNoResidue
 links-windows-qr8l.btw internal/store TestCollectAbandonedMirrorKeepsCollectingPastAStuckFile
