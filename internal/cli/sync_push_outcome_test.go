@@ -66,6 +66,14 @@ func TestPushOutcomeOf(t *testing.T) {
 			want: pushOutcomeRecord{Decision: pushDecisionCanceled, Reason: "push: context canceled", Remote: "origin", Branch: "master"},
 		},
 		{
+			name: "push refused over a peer's commits records diverged, not error",
+			outcome: syncPushOutcome{
+				remote: "origin", branch: "master",
+				pushErr: fmt.Errorf("%w: push remote \"origin\": rejected", store.ErrPushDiverged),
+			},
+			want: pushOutcomeRecord{Decision: pushDecisionDiverged, Reason: store.ErrPushDiverged.Error() + ": push remote \"origin\": rejected", Remote: "origin", Branch: "master"},
+		},
+		{
 			name: "workspace legitimately busy records its own decision, not error",
 			err:  fmt.Errorf("open sync store: %w", store.ErrWorkspaceBusy),
 			want: pushOutcomeRecord{Decision: pushDecisionWorkspaceBusy, Reason: "open sync store: workspace busy"},

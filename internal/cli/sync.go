@@ -687,22 +687,10 @@ func performSyncPush(ctx, completionCtx context.Context, session syncSession, ws
 	// a trigger actually did request the push) — reusing it here would print
 	// that false claim on every interactive `lit sync push` a human runs
 	// directly. [LAW:no-silent-failure] a trace record that misattributes its
-	// own cause is a lie the next reader has no way to catch.
-	syncPushDecision := pushDecisionPushed
-	durableReason := ""
-	if pushErr != nil {
-		syncPushDecision = pushDecisionError
-		durableReason = pushErr.Error()
-	}
-	recordSyncTraceLogged(ws, syncTraceRecord{
-		Command:   formatCommand(syncCommandArgs),
-		Decision:  syncPushDecision,
-		Status:    traceStatus,
-		Reason:    durableReason,
-		BuildNote: resolveBuildStatusNote(time.Now()),
-		Metadata:  traceMetadata,
-	})
-	return syncPushOutcome{
+	// own cause is a lie the next reader has no way to catch. Its decision is
+	// classifyPushOutcome's, the one the push-outcome marker records, so the
+	// two never spell one attempt two ways. [LAW:one-source-of-truth]
+	outcome = syncPushOutcome{
 		remote:      remoteName,
 		branch:      syncBranch,
 		message:     result.Message,
@@ -712,7 +700,17 @@ func performSyncPush(ctx, completionCtx context.Context, session syncSession, ws
 		proven:      proven,
 		traceErr:    traceRecordErr,
 		pushErr:     pushErr,
-	}, nil
+	}
+	decided := classifyPushOutcome(outcome, nil)
+	recordSyncTraceLogged(ws, syncTraceRecord{
+		Command:   formatCommand(syncCommandArgs),
+		Decision:  decided.Decision,
+		Status:    traceStatus,
+		Reason:    decided.Reason,
+		BuildNote: resolveBuildStatusNote(time.Now()),
+		Metadata:  traceMetadata,
+	})
+	return outcome, nil
 }
 
 // advertisementProofTrace is how a push's trace reads the proof: proven, or
