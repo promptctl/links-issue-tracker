@@ -5,6 +5,14 @@ All notable changes to `links-issue-tracker` (the `lit` CLI) are documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.22.1] - 2026-10-19
+
+### Fixed
+
+- `lit done` finishes a ticket wherever its plan stands. A plan that has not passed a law review by someone other than its author prints a warning saying what it lacks, and the ticket closes. The done event records `done.plan_standing`. (links-plan-review-o3mh.avl)
+- `/lit:review-plan` runs its reviewer as an interactive Claude Code session in a detached tmux session, started by the skill's `start-reviewer` script. (links-unfiled-fc79.r427)
+- A lock wait is announced only after an attempt to take the lock was refused. (links-locking-ocqx)
+
 ## [0.22.0] - 2026-10-19
 
 ### Added
