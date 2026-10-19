@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
@@ -15,22 +16,23 @@ import (
 // Failure is compensated, not transactional, and the contract is about what
 // the caller is told: a batch that fails partway undoes the issues it created
 // and names every one it could not undo, so a partial application is always
-// reported rather than inferred. The file's ordering is written after the
-// creates as one RankSet, and updates are applied last, so a failing create,
-// edge, or ordering leaves none applied, but a failing update does not revert
-// the ones before it, which is why the error text is the caller's only
+// reported rather than inferred. The update documents' reparents are written
+// after the creates as one step, the file's ordering after them as one
+// RankSet, and updates are applied last, so a failing create, edge, reparent,
+// or ordering leaves none applied, but a failing update does not revert the
+// ones before it, which is why the error text is the caller's only
 // complete account of what happened. [LAW:no-silent-failure]
 func (e *Engine) BulkApply(ctx context.Context, prefix, actor string, specs []storage.BulkIssueSpec) (storage.BulkApplyResult, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	parentTypes := map[string]model.IssueType{}
-	for _, id := range storage.BulkParentRefs(specs) {
-		if parent, ok := e.issues[id]; ok {
-			parentTypes[id] = parent.issueType
+	existingTypes := map[string]model.IssueType{}
+	for _, id := range storage.BulkExistingRefs(specs) {
+		if issue, ok := e.issues[id]; ok {
+			existingTypes[id] = issue.issueType
 		}
 	}
-	file, err := storage.ParseBulkFile(specs, parentTypes)
+	file, err := storage.ParseBulkFile(specs, existingTypes)
 	if err != nil {
 		return storage.BulkApplyResult{}, err
 	}
@@ -51,9 +53,12 @@ func (e *Engine) BulkApply(ctx context.Context, prefix, actor string, specs []st
 		}
 	}
 	result := storage.BulkApplyResult{Created: batch.createdMappings()}
+	if result.Reparented, result.ParentHeld, err = e.reparent(file, batch.resolve, actor); err != nil {
+		return storage.BulkApplyResult{}, e.compensate(batch, actor, err)
+	}
 	if ranked := file.RankedIDs(batch.createdIDs); len(ranked) > 0 {
 		if result.Ranked, err = e.rankSet(ranked); err != nil {
-			return storage.BulkApplyResult{}, e.compensate(batch, actor, fmt.Errorf("bulk: rank: %w", err))
+			return storage.BulkApplyResult{}, e.compensate(batch, actor, fmt.Errorf("bulk: rank: %w; %s", err, result.Kept()))
 		}
 	}
 	for _, update := range file.Updates {
@@ -94,6 +99,41 @@ func (e *Engine) ImportTree(ctx context.Context, prefix, actor string, specs []s
 		}
 	}
 	return storage.ImportTreeResult{Created: batch.createdMappings()}, nil
+}
+
+// reparent writes a file's reparents whole or not at all: a refusal restores
+// the relations as they were before the first, since a relation write changes
+// nothing else in this engine.
+func (e *Engine) reparent(file storage.BulkFile, resolve func(string) string, actor string) (moved, held []string, err error) {
+	before := slices.Clone(e.relations)
+	if moved, held, err = file.WriteReparents(resolve, parentWriter{e: e, actor: actor}); err != nil {
+		e.relations = before
+	}
+	return moved, held, err
+}
+
+// parentWriter is a bulk file's hierarchy write: the writes `lit parent set`
+// and `lit parent clear` make, so a bulk reparent obeys the one hierarchy
+// rule. [LAW:single-enforcer]
+type parentWriter struct {
+	e     *Engine
+	actor string
+}
+
+func (w parentWriter) Holds(childID, parentID string) (bool, error) {
+	return w.e.relationHeld(childID, parentID, model.RelParentChild), nil
+}
+
+func (w parentWriter) Clear(childID string) error { return w.e.clearParent(childID) }
+
+func (w parentWriter) Detach(childID string) error {
+	w.e.detachParents(childID)
+	return nil
+}
+
+func (w parentWriter) Attach(childID, parentID string) error {
+	_, err := w.e.addRelation(storage.AddRelationInput{SrcID: childID, DstID: parentID, Type: model.RelParentChild, CreatedBy: w.actor})
+	return err
 }
 
 func (e *Engine) wireDependency(dependent, dependency, actor string) error {

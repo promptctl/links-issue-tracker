@@ -524,26 +524,39 @@ func TestRunImportYAMLRankTopOrdersTheBacklogInOneCall(t *testing.T) {
 	}
 }
 
-// The invocation's event counts what each import format wrote — a YAML file
-// that creates, updates and ranks one issue each, and a JSON tree that creates
-// two — and a file whose order names one issue reports it in the singular.
+// The invocation's event counts what each import format wrote — a JSON tree
+// that creates two, then a YAML file that creates, updates and ranks one issue
+// each, moves one under another epic and restates the parent another already
+// has — and a file whose order names one issue reports it in the singular.
 func TestRunImportEventCountsWhatTheFileWrote(t *testing.T) {
 	isolateEvents(t)
 	dir := newInitTestRepo(t)
 	epic := newEpicInDir(t, dir, "home")
-	yaml := writeImportFile(t, "mixed.yaml", fmt.Sprintf("title: fresh\ntype: task\ntopic: demo\nparent: %s\nrank: top\n---\nid: %s\ntitle: home, renamed\n", epic, epic))
-	out := runCLIInDir(t, dir, "import", "--path", yaml)
-	if line := "ranked 1 issue at the top of " + epic + " in order: "; !strings.Contains(out, line) {
-		t.Errorf("import output lacks %q:\n%s", line, out)
-	}
-	assertFacts(t, map[string]string{"import.created": "1", "import.updated": "1", "import.ranked": "1"})
-
 	tree := writeImportFile(t, "tree.json", `[
 		{"local_id":"e1","title":"Epic","type":"epic","topic":"demo","priority":0},
 		{"local_id":"t1","title":"Child","type":"task","topic":"demo","priority":0,"parent":"e1"}
 	]`)
-	runCLIInDir(t, dir, "import", "--path", tree)
+	created := runCLIInDir(t, dir, "import", "--path", tree)
 	assertFacts(t, map[string]string{"import.created": "2"})
+	var child string
+	for _, line := range strings.Split(created, "\n") {
+		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "t1 -> "); ok {
+			child = rest
+		}
+	}
+	if child == "" {
+		t.Fatalf("tree import did not report t1:\n%s", created)
+	}
+
+	yaml := writeImportFile(t, "mixed.yaml", fmt.Sprintf("title: fresh\ntype: task\ntopic: demo\nparent: %s\nrank: top\n---\nid: %s\ntitle: home, renamed\nparent: \"\"\n---\nid: %s\nparent: %s\n", epic, epic, child, epic))
+	out := runCLIInDir(t, dir, "import", "--path", yaml)
+	if line := "ranked 1 issue at the top of " + epic + " in order: "; !strings.Contains(out, line) {
+		t.Errorf("import output lacks %q:\n%s", line, out)
+	}
+	if lines := fmt.Sprintf("reparented 1 issues\n  %s\n1 issues already had the parent the file states\n  %s\n", child, epic); !strings.Contains(out, lines) {
+		t.Errorf("import output lacks %q:\n%s", lines, out)
+	}
+	assertFacts(t, map[string]string{"import.created": "1", "import.updated": "1", "import.ranked": "1", "import.reparented": "1", "import.parent_held": "1"})
 }
 
 func assertFacts(t *testing.T, want map[string]string) {

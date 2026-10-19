@@ -20,9 +20,9 @@ import (
 // RejectParentThatIsNotAContainer), and no blocked_by orders work inside one
 // of its epics (RejectBlocksWithinEpic), including an existing epic two of its
 // documents name as their parent. That one rule reads the type of each
-// existing parent, which the engine reads and hands in; every other rule
-// about a parent or blocked_by named by a real id is judged by the write that
-// reads it. Both engines write the parsed file these gates hand back, so a
+// existing issue the file places, which the engine reads and hands in; every
+// other rule about a parent or blocked_by named by a real id is judged by the
+// write that reads it. Both engines write the parsed file these gates hand back, so a
 // file is accepted or refused, and written, the same way whichever engine
 // opens it, and no engine can write a file the gate has not judged.
 // [LAW:single-enforcer] [LAW:one-source-of-truth] [LAW:parse-dont-validate]
@@ -49,22 +49,33 @@ func ParseImportTreeFile(specs []ImportTreeSpec) ([]FileCreate, error) {
 }
 
 // ParseBulkFile gates a bulk file and returns it parsed.
-// existingParentTypes holds the type of each existing issue among
-// BulkParentRefs(specs); an id naming no issue is absent.
-func ParseBulkFile(specs []BulkIssueSpec, existingParentTypes map[string]model.IssueType) (BulkFile, error) {
-	creates, updates, ranked, err := parseBulkSpecs(specs)
+// existingTypes holds the type of each existing issue among
+// BulkExistingRefs(specs); an id naming no issue is absent.
+//
+// An update document is a document of the graph, named by its id, as a create
+// is by its local_id: a create may sit under it and its own parent is an edge,
+// so the graph the gate judges is the hierarchy the file writes, and a parent
+// cycle the file states is refused here whatever kinds of document close it.
+// Its type is the one it is stored with, which is the type the reparent write
+// judges it by. [LAW:one-source-of-truth]
+func ParseBulkFile(specs []BulkIssueSpec, existingTypes map[string]model.IssueType) (BulkFile, error) {
+	file, creates, err := parseBulkSpecs(specs)
 	if err != nil {
 		return BulkFile{}, err
 	}
-	// An update document is in no create's map entry, so its type reads as
-	// empty: it names no parent, and nothing reads it.
 	order, err := judgeReferences("bulk", resolveFileReferences(specs, func(i int, spec BulkIssueSpec) fileDocument {
-		return fileDocument{name: fmt.Sprintf("doc %d", i), localID: spec.LocalID, issueType: creates[i].issue.IssueType, parent: spec.Parent, blockedBy: spec.BlockedBy}
-	}), existingParentTypes)
+		doc := fileDocument{name: fmt.Sprintf("doc %d", i), localID: spec.LocalID, issueType: creates[i].issue.IssueType, parent: valueOr(spec.Parent, ""), blockedBy: spec.BlockedBy}
+		if spec.ID != "" {
+			doc.name = fmt.Sprintf("doc %d (id %q)", i, spec.ID)
+			doc.id, doc.issueType = spec.ID, existingTypes[spec.ID]
+		}
+		return doc
+	}), existingTypes)
 	if err != nil {
 		return BulkFile{}, err
 	}
-	return BulkFile{Creates: inWriteOrder(order, creates), Updates: updates, Ranked: ranked}, nil
+	file.Creates = inWriteOrder(order, creates)
+	return file, nil
 }
 
 // inWriteOrder lists a file's creates, keyed by document position, in the
@@ -80,35 +91,51 @@ func inWriteOrder(order []int, creates map[int]FileCreate) []FileCreate {
 	return ordered
 }
 
-// BulkParentRefs lists every parent a bulk file names, by local_id or by real
-// id: the ids whose types an engine reads for ParseBulkFile. A local_id among
-// them names no existing issue, or is resolved to its document first.
-func BulkParentRefs(specs []BulkIssueSpec) []string {
+// BulkExistingRefs lists the ids whose types an engine reads for
+// ParseBulkFile: every parent a bulk file names, by local_id or by real id,
+// and the id of every update document that states a parent, which the file
+// places. A local_id among them names no existing issue, or is resolved to its
+// document first.
+func BulkExistingRefs(specs []BulkIssueSpec) []string {
 	refs := make([]string, 0, len(specs))
 	for _, spec := range specs {
-		if spec.Parent != "" {
-			refs = append(refs, spec.Parent)
+		if spec.Parent != nil && *spec.Parent != "" {
+			refs = append(refs, *spec.Parent)
+		}
+		if spec.Parent != nil && spec.ID != "" {
+			refs = append(refs, spec.ID)
 		}
 	}
 	return refs
 }
 
-// fileDocument is what the reference rules read from one document: its
+// fileDocument is what the reference rules read from one document: the names
+// a reference can call it by (a create's local_id, an update's id), its
 // references, its type, and the name a refusal calls it by, in its format's
-// own words. An update document's type is empty: it names no parent, so the
-// file places it under no epic and nothing reads its type.
+// own words.
 type fileDocument struct {
-	name, localID, parent string
-	issueType             model.IssueType
-	blockedBy             []string
+	name, localID, id, parent string
+	issueType                 model.IssueType
+	blockedBy                 []string
+}
+
+// ref is the name a refusal quotes the document by: the one references in
+// the file call it by.
+func (d fileDocument) ref() string {
+	if d.localID != "" {
+		return d.localID
+	}
+	return d.id
 }
 
 // fileReferences is the graph a file draws among its own documents, indexed
 // by document position, since a bulk create need not carry a local_id. A
-// reference matching no local_id in the file is not an edge: it names a real
-// issue, and the write that receives it judges it. A parent named that way is
-// still kept, because two documents under one existing epic are leaves of one
-// epic before either is written.
+// parent resolves as the engines resolve it: a local_id in the file first,
+// then an update document's id. A reference matching neither is not an edge:
+// it names a real issue, and the write that receives it judges it. A parent
+// named that way is still kept, because two documents under one existing epic
+// are leaves of one epic before either is written. A blocked_by resolves by
+// local_id alone, since an update document states none.
 type fileReferences struct {
 	docs           []fileDocument
 	parent         map[int]int    // document -> its parent, for a parent in the file
@@ -119,14 +146,22 @@ type fileReferences struct {
 func resolveFileReferences[S any](specs []S, documentOf func(int, S) fileDocument) fileReferences {
 	refs := fileReferences{docs: make([]fileDocument, len(specs)), parent: make(map[int]int, len(specs)), existingParent: make(map[int]string), blockedBy: make([][]int, len(specs))}
 	indexByLocal := make(map[string]int, len(specs))
+	indexByID := make(map[string]int)
 	for i, spec := range specs {
 		refs.docs[i] = documentOf(i, spec)
 		if localID := refs.docs[i].localID; localID != "" {
 			indexByLocal[localID] = i
 		}
+		if id := refs.docs[i].id; id != "" {
+			indexByID[id] = i
+		}
 	}
 	for i, doc := range refs.docs {
-		if j, inFile := indexByLocal[doc.parent]; inFile {
+		j, inFile := indexByLocal[doc.parent]
+		if !inFile {
+			j, inFile = indexByID[doc.parent]
+		}
+		if inFile {
 			refs.parent[i] = j
 		} else if doc.parent != "" {
 			refs.existingParent[i] = doc.parent
@@ -145,8 +180,8 @@ func resolveFileReferences[S any](specs []S, documentOf func(int, S) fileDocumen
 // in. The hierarchy rule is judged first: an epic blocked by something under
 // it is also a cycle in write order, and the rule's own refusal is the one
 // that names the fix.
-func judgeReferences(format string, refs fileReferences, existingParentTypes map[string]model.IssueType) ([]int, error) {
-	if err := rejectBlocksWithinFileEpics(format, refs, existingParentTypes); err != nil {
+func judgeReferences(format string, refs fileReferences, existingTypes map[string]model.IssueType) ([]int, error) {
+	if err := rejectBlocksWithinFileEpics(format, refs, existingTypes); err != nil {
 		return nil, err
 	}
 	return writeOrder(format, refs)
@@ -170,7 +205,7 @@ func writeOrder(format string, refs fileReferences) ([]int, error) {
 		case done:
 			return nil
 		case visiting:
-			return model.ValidationError{Message: fmt.Sprintf("%s: cycle detected involving %q", format, refs.docs[i].localID)}
+			return model.ValidationError{Message: fmt.Sprintf("%s: cycle detected involving %q", format, refs.docs[i].ref())}
 		}
 		state[i] = visiting
 		if p, inFile := refs.parent[i]; inFile {
@@ -200,19 +235,22 @@ func writeOrder(format string, refs fileReferences) ([]int, error) {
 // so a document blocked by an epic it sits under in the file, an epic blocked
 // by a document under it, or a leaf blocked by another leaf of its epic is
 // refused before the first create rather than at its edge, after the last.
-// Every parent in the file is an epic by now — the validators refused any
-// other — so every parent edge is one the rule climbs. An existing parent is
-// placed only if it is an epic, as the engines' own trees place it, and keyed
-// apart from the documents, whatever its id spells. An edge whose judgment
-// needs a real id's own place is the write's to judge. [LAW:single-enforcer]
-func rejectBlocksWithinFileEpics(format string, refs fileReferences, existingParentTypes map[string]model.IssueType) error {
+// A parent is placed only if it is an epic, as the engines' own trees place
+// it: a create the file names as a parent is one by now — the validators
+// refused any other — and an update document or an existing parent is one by
+// the type it is stored with. An existing parent is keyed apart from the
+// documents, whatever its id spells. An edge whose judgment needs a real id's
+// own place is the write's to judge. [LAW:single-enforcer]
+func rejectBlocksWithinFileEpics(format string, refs fileReferences, existingTypes map[string]model.IssueType) error {
 	node := strconv.Itoa
 	tree := make(EpicTree, len(refs.parent)+len(refs.existingParent))
 	for i, p := range refs.parent {
-		tree.Place(node(i), refs.docs[i].issueType, node(p))
+		if refs.docs[p].issueType.IsContainer() {
+			tree.Place(node(i), refs.docs[i].issueType, node(p))
+		}
 	}
 	for i, id := range refs.existingParent {
-		if existingParentTypes[id].IsContainer() {
+		if existingTypes[id].IsContainer() {
 			tree.Place(node(i), refs.docs[i].issueType, "existing "+id)
 		}
 	}
@@ -323,113 +361,114 @@ func parseImportTreeSpecs(specs []ImportTreeSpec) (map[int]FileCreate, error) {
 // parseBulkSpecs judges a bulk file by every rule but those over the
 // graph its references draw, which judgeReferences makes:
 // every document is a create or an update by whether it names an id, and each
-// shape admits exactly the fields its verb owns. A create document's parent
-// may be a local_id in the file or a real id; only the first can be judged
-// here. It returns each create parsed, by position, each update parsed, in
-// file order, and the file's ordering: every document stating `rank: top`, in
-// file order.
-func parseBulkSpecs(specs []BulkIssueSpec) (map[int]FileCreate, []BulkUpdate, []FileRef, error) {
+// shape admits exactly the fields its verb owns. A document's parent may be a
+// local_id in the file or a real id; only the first can be judged here. It
+// returns each create parsed, by position, and the rest of the file parsed in
+// file order: each update document's parent and patch, and the file's
+// ordering, every document stating `rank: top`.
+func parseBulkSpecs(specs []BulkIssueSpec) (BulkFile, map[int]FileCreate, error) {
 	if len(specs) == 0 {
-		return nil, nil, nil, model.ValidationError{Message: "bulk: no issues in input"}
+		return BulkFile{}, nil, model.ValidationError{Message: "bulk: no issues in input"}
 	}
 	seenID := make(map[string]struct{}, len(specs))
 	localTypes := make(map[string]model.IssueType, len(specs))
 	creates := make(map[int]FileCreate, len(specs))
-	var updates []BulkUpdate
-	var ranked []FileRef
+	var file BulkFile
 	for i, spec := range specs {
 		if spec.ID != strings.TrimSpace(spec.ID) {
-			return nil, nil, nil, model.ValidationError{Message: fmt.Sprintf("bulk: doc %d id %q has surrounding whitespace", i, spec.ID)}
+			return BulkFile{}, nil, model.ValidationError{Message: fmt.Sprintf("bulk: doc %d id %q has surrounding whitespace", i, spec.ID)}
 		}
 		if spec.LocalID != strings.TrimSpace(spec.LocalID) {
-			return nil, nil, nil, model.ValidationError{Message: fmt.Sprintf("bulk: doc %d local_id %q has surrounding whitespace", i, spec.LocalID)}
+			return BulkFile{}, nil, model.ValidationError{Message: fmt.Sprintf("bulk: doc %d local_id %q has surrounding whitespace", i, spec.LocalID)}
 		}
-		if spec.Parent != strings.TrimSpace(spec.Parent) {
-			return nil, nil, nil, model.ValidationError{Message: fmt.Sprintf("bulk: doc %d parent %q has surrounding whitespace", i, spec.Parent)}
+		if parent := valueOr(spec.Parent, ""); parent != strings.TrimSpace(parent) {
+			return BulkFile{}, nil, model.ValidationError{Message: fmt.Sprintf("bulk: doc %d parent %q has surrounding whitespace", i, parent)}
 		}
 		for _, dep := range spec.BlockedBy {
 			if dep != strings.TrimSpace(dep) {
-				return nil, nil, nil, model.ValidationError{Message: fmt.Sprintf("bulk: doc %d blocked_by entry %q has surrounding whitespace", i, dep)}
+				return BulkFile{}, nil, model.ValidationError{Message: fmt.Sprintf("bulk: doc %d blocked_by entry %q has surrounding whitespace", i, dep)}
 			}
 			if spec.LocalID != "" && dep == spec.LocalID {
-				return nil, nil, nil, model.ValidationError{Message: fmt.Sprintf("bulk: doc %d (local_id %q) cannot depend on itself", i, spec.LocalID)}
+				return BulkFile{}, nil, model.ValidationError{Message: fmt.Sprintf("bulk: doc %d (local_id %q) cannot depend on itself", i, spec.LocalID)}
 			}
 		}
 		// A create and an update both write labels and the assignee, by the
 		// one parser either write runs. [LAW:single-enforcer]
 		if spec.Labels != nil {
 			if _, err := model.CanonicalizeLabels(*spec.Labels); err != nil {
-				return nil, nil, nil, fmt.Errorf("bulk: doc %d: %w", i, err)
+				return BulkFile{}, nil, fmt.Errorf("bulk: doc %d: %w", i, err)
 			}
 		}
 		if spec.Assignee != nil {
 			if _, err := model.NormalizeAssignee(*spec.Assignee); err != nil {
-				return nil, nil, nil, fmt.Errorf("bulk: doc %d: %w", i, err)
+				return BulkFile{}, nil, fmt.Errorf("bulk: doc %d: %w", i, err)
 			}
 		}
 
 		ranks, err := parseBulkRank(spec.Rank)
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("bulk: doc %d: %w", i, err)
+			return BulkFile{}, nil, fmt.Errorf("bulk: doc %d: %w", i, err)
 		}
 		if ranks {
-			ranked = append(ranked, FileRef{id: spec.ID, index: i})
+			file.Ranked = append(file.Ranked, FileRef{id: spec.ID, index: i})
 		}
 
 		if spec.ID != "" {
 			patch, err := parseBulkUpdateDoc(i, spec)
 			if err != nil {
-				return nil, nil, nil, err
+				return BulkFile{}, nil, err
 			}
 			if _, dup := seenID[spec.ID]; dup {
-				return nil, nil, nil, model.ValidationError{Message: fmt.Sprintf("bulk: duplicate id %q", spec.ID)}
+				return BulkFile{}, nil, model.ValidationError{Message: fmt.Sprintf("bulk: duplicate id %q", spec.ID)}
 			}
 			seenID[spec.ID] = struct{}{}
+			if spec.Parent != nil {
+				file.Reparents = append(file.Reparents, FileReparent{ID: spec.ID, Parent: *spec.Parent})
+			}
 			// The document states a field exactly when the patch it becomes
 			// does, so the question is asked of that patch; a document that
-			// only ranks its issue is in the ordering and writes no field
-			// change, so it has no change event for a reason to annotate.
+			// only reparents or ranks its issue writes no field change, so it
+			// has no change event for a reason to annotate.
 			// [LAW:one-source-of-truth] [LAW:no-silent-failure]
 			if patch.IsEmpty() {
-				if !ranks {
-					return nil, nil, nil, model.ValidationError{Message: fmt.Sprintf("bulk: doc %d (id %q) has no fields to update and no rank", i, spec.ID)}
+				if !ranks && spec.Parent == nil {
+					return BulkFile{}, nil, model.ValidationError{Message: fmt.Sprintf("bulk: doc %d (id %q) has no fields to update, no parent and no rank", i, spec.ID)}
 				}
 				if patch.Reason != "" {
-					return nil, nil, nil, model.ValidationError{Message: fmt.Sprintf("bulk: doc %d (id %q) sets reason but changes no field; reason annotates a field change, and rank writes none", i, spec.ID)}
+					return BulkFile{}, nil, model.ValidationError{Message: fmt.Sprintf("bulk: doc %d (id %q) sets reason but changes no field; reason annotates a field change, and parent and rank write none", i, spec.ID)}
 				}
 				continue
 			}
-			updates = append(updates, BulkUpdate{ID: spec.ID, Patch: patch})
+			file.Updates = append(file.Updates, BulkUpdate{ID: spec.ID, Patch: patch})
 			continue
 		}
 
 		create, err := parseBulkCreateDoc(i, spec)
 		if err != nil {
-			return nil, nil, nil, err
+			return BulkFile{}, nil, err
 		}
 		creates[i] = create
 		if spec.LocalID != "" {
 			if _, dup := localTypes[spec.LocalID]; dup {
-				return nil, nil, nil, model.ValidationError{Message: fmt.Sprintf("bulk: duplicate local_id %q", spec.LocalID)}
+				return BulkFile{}, nil, model.ValidationError{Message: fmt.Sprintf("bulk: duplicate local_id %q", spec.LocalID)}
 			}
 			localTypes[spec.LocalID] = create.issue.IssueType
 		}
 	}
 	for i, spec := range specs {
-		create, isCreate := creates[i]
-		if !isCreate {
-			continue
+		parent := valueOr(spec.Parent, "")
+		if create, isCreate := creates[i]; isCreate {
+			if err := RejectLeafWithoutParent(create.issue.IssueType, parent); err != nil {
+				return BulkFile{}, nil, fmt.Errorf("bulk: doc %d: %w", i, err)
+			}
 		}
-		if err := RejectLeafWithoutParent(create.issue.IssueType, spec.Parent); err != nil {
-			return nil, nil, nil, fmt.Errorf("bulk: doc %d: %w", i, err)
-		}
-		if parentType, inFile := localTypes[spec.Parent]; inFile {
-			if err := RejectParentThatIsNotAContainer(spec.Parent, parentType); err != nil {
-				return nil, nil, nil, fmt.Errorf("bulk: doc %d: %w", i, err)
+		if parentType, inFile := localTypes[parent]; inFile {
+			if err := RejectParentThatIsNotAContainer(parent, parentType); err != nil {
+				return BulkFile{}, nil, fmt.Errorf("bulk: doc %d: %w", i, err)
 			}
 		}
 	}
-	return creates, updates, ranked, nil
+	return file, creates, nil
 }
 
 // parseBulkCreateDoc admits a create document and returns the create it
@@ -464,7 +503,7 @@ func parseBulkCreateDoc(i int, spec BulkIssueSpec) (FileCreate, error) {
 	if err := rejectRepeatedBlockedBy(spec.BlockedBy); err != nil {
 		return FileCreate{}, fmt.Errorf("bulk: doc %d: %w", i, err)
 	}
-	return FileCreate{Index: i, LocalID: spec.LocalID, Parent: spec.Parent, BlockedBy: spec.BlockedBy, issue: CreateIssueInput{
+	return FileCreate{Index: i, LocalID: spec.LocalID, Parent: valueOr(spec.Parent, ""), BlockedBy: spec.BlockedBy, issue: CreateIssueInput{
 		Title:       strings.TrimSpace(*spec.Title),
 		Description: valueOr(spec.Description, ""),
 		Prompt:      valueOr(spec.Prompt, ""),
@@ -517,9 +556,9 @@ func parseBulkRank(rank *string) (bool, error) {
 
 // parseBulkUpdateDoc refuses the fields an update document has no business
 // setting, and otherwise returns the patch it applies, which is empty for a
-// document that only ranks its issue. Each refused field is somebody else's
-// verb — topic is immutable, reparenting and dependency wiring are their own
-// commands — so a document that states one is asking for something this path
+// document that only reparents or ranks its issue. Each refused field is
+// somebody else's verb — topic is immutable, dependency wiring is its own
+// command — so a document that states one is asking for something this path
 // would silently not do.
 func parseBulkUpdateDoc(i int, spec BulkIssueSpec) (UpdateIssueInput, error) {
 	if spec.LocalID != "" {
@@ -527,9 +566,6 @@ func parseBulkUpdateDoc(i int, spec BulkIssueSpec) (UpdateIssueInput, error) {
 	}
 	if spec.Topic != nil {
 		return UpdateIssueInput{}, model.ValidationError{Message: fmt.Sprintf("bulk: doc %d (id %q) sets topic; topic is immutable and update cannot change it", i, spec.ID)}
-	}
-	if spec.Parent != "" {
-		return UpdateIssueInput{}, model.ValidationError{Message: fmt.Sprintf("bulk: doc %d (id %q) sets parent; reparent with `lit parent set` instead", i, spec.ID)}
 	}
 	if len(spec.BlockedBy) > 0 {
 		return UpdateIssueInput{}, model.ValidationError{Message: fmt.Sprintf("bulk: doc %d (id %q) sets blocked_by; wire dependencies with `lit dep add` instead", i, spec.ID)}

@@ -955,7 +955,7 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 
 **`ClearParent`**
 - `mustRecord(childID)` → `NotFoundError`.
-- Drops every `RelParentChild` edge with `SrcID == childID`; **removed == 0** → `storage.NotFoundError{Entity: "parent relation", ID: childID}`.
+- `clearParent`: `mustRecord(childID)`, `storage.RejectDetachingALeaf`, then `detachParents` drops every `RelParentChild` edge with `SrcID == childID`; **removed == 0** → `storage.RelationAbsentError{SrcID: childID, Type: model.RelParentChild}` (`Satisfied()` true).
 
 **`incidentRelations`** — every edge touching the id in either direction, in write order.
 
@@ -1012,11 +1012,12 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 ### 2.13 Bulk / import (`internal/storage/memory/bulk.go`)
 
 **`BulkApply(ctx, prefix, actor, specs)`**
-1. `parentTypes` maps each id among `storage.BulkParentRefs(specs)` that names an issue in `e.issues` to its type; `file, err := storage.ParseBulkFile(specs, parentTypes)` (`internal/storage/import_validate.go`, shared with the Dolt engine) — the entire file is gated before any document is applied, and the gate returns it parsed: `file.Creates` in write order, `file.Updates` in file order. Its error is returned as is. The engine parses nothing itself.
+1. `existingTypes` maps each id among `storage.BulkExistingRefs(specs)` that names an issue in `e.issues` to its type; `file, err := storage.ParseBulkFile(specs, existingTypes)` (`internal/storage/import_validate.go`, shared with the Dolt engine) — the entire file is gated before any document is applied, and the gate returns it parsed: `file.Creates` in write order, `file.Reparents` and `file.Updates` in file order. Its error is returned as is. The engine parses nothing itself.
 2. Per create in `file.Creates`: `e.createIssue(create.Input(batch.resolve(create.Parent), prefix, actor))`. On failure → `e.compensate(batch, actor, fmt.Errorf("bulk: create doc %d: %w", create.Index, err))`. Records into the batch, and into `result.Created` under `create.LocalID` if set, else under the new real id.
 3. **Second pass, over `file.Creates` in write order**: wires every `BlockedBy` edge as `blocked-by` with `src = the document's own issue`, `dst = batch.resolve(dep)`. On failure → `e.compensate(batch, actor, fmt.Errorf("bulk: blocked_by doc %d -> %q: %w", create.Index, dep, err))`.
-4. **The ordering**, when `file.RankedIDs(batch.createdIDs)` is non-empty: one `e.rankSet(ranked)` — `RankSet` under the lock `BulkApply` already holds — into `result.Ranked`. On failure → `e.compensate(batch, actor, fmt.Errorf("bulk: rank: %w", err))`.
-5. **Updates last**, per `file.Updates` in file order: `e.apply(update.ID, storage.Change{Actor: actor, Fields: update.Patch})`. On failure → `e.compensate(batch, actor, fmt.Errorf("bulk: update %q: %w; %s", update.ID, err, result.Kept()))`. Appends `issue.ID` to `result.Updated`. A failing create, edge, or ordering therefore leaves no update applied.
+4. **The reparents**, `e.reparent(file, batch.resolve, actor)` into `result.Reparented` and `result.ParentHeld`: it copies `e.relations`, runs `file.WriteReparents(resolve, parentWriter{e, actor})` (`internal/storage/bulk.go`), and restores the copy on any error. `WriteReparents` asks `Holds` (`relationHeld`) of every reparent naming a parent, then runs `Clear` (`clearParent`) for each `parent: ""` — `storage.RelationAbsentError` marks it held — and `Detach` (`detachParents`) for each move not held, then `Attach` (`addRelation`, `RelParentChild`) for each move not held; an error → `"bulk: parent of %q -> %q: %w"`. On failure → `e.compensate(batch, actor, err)`.
+5. **The ordering**, when `file.RankedIDs(batch.createdIDs)` is non-empty: one `e.rankSet(ranked)` — `RankSet` under the lock `BulkApply` already holds — into `result.Ranked`. On failure → `e.compensate(batch, actor, fmt.Errorf("bulk: rank: %w; %s", err, result.Kept()))`.
+6. **Updates last**, per `file.Updates` in file order: `e.apply(update.ID, storage.Change{Actor: actor, Fields: update.Patch})`. On failure → `e.compensate(batch, actor, fmt.Errorf("bulk: update %q: %w; %s", update.ID, err, result.Kept()))`. Appends `issue.ID` to `result.Updated`. A failing create, edge, reparent, or ordering therefore leaves no update applied.
 
 **`ImportTree(ctx, prefix, actor, specs)`**
 1. `creates, err := storage.ParseImportTreeFile(specs)` (`internal/storage/import_validate.go`, shared with the Dolt engine) — the parsed creates in write order; its error is returned as is.
@@ -1045,7 +1046,7 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 - `IssueType` and `Priority` are parsed by `model.ParseIssueType` / `model.ParsePriority`; a parse error → `fmt.Errorf("has invalid %s %#v: %w", key, raw, err)` with `key` `type` / `priority`.
 - The engine applies `storage.Change{Actor: actor, Fields: patch}` — **an update document never carries an Action**.
 
-**`storage.ParseBulkFile(specs, existingParentTypes)`** / **`storage.ParseImportTreeFile(specs)`** (`internal/storage/import_validate.go`) — run `parseBulkSpecs` / `parseImportTreeSpecs`, then `storage.writeOrder(format, specs, refsOf)` (`internal/storage/import_validate.go`) with `format` `"bulk"` / `"import"` and each spec's references as `Parent` followed by `BlockedBy`. Every refusal either returns is a `model.ValidationError`; the `%w` rows below wrap the containment helpers' own `ValidationError`.
+**`storage.ParseBulkFile(specs, existingTypes)`** / **`storage.ParseImportTreeFile(specs)`** (`internal/storage/import_validate.go`) — run `parseBulkSpecs` / `parseImportTreeSpecs`, then `storage.writeOrder(format, specs, refsOf)` (`internal/storage/import_validate.go`) with `format` `"bulk"` / `"import"` and each spec's references as `Parent` followed by `BlockedBy`. Every refusal either returns is a `model.ValidationError`; the `%w` rows below wrap the containment helpers' own `ValidationError`.
 
 `storage.writeOrder(format, specs, refsOf)` (`internal/storage/import_validate.go`) — DFS topological sort over intra-file references only. States `unvisited`/`visiting`/`done`; re-entering `visiting` → `model.ValidationError{Message: fmt.Sprintf("%s: cycle detected involving %q", format, localIDs[i])}`. A reference matching no local_id is not an edge.
 
@@ -1069,11 +1070,10 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 **`parseBulkUpdateDoc`** — refuses the fields an update document has no business setting, each somebody else's verb, and otherwise returns the update's patch:
 - `LocalID != ""` → `"bulk: doc %d (id %q) sets local_id; local_id only applies to new tickets"`.
 - `Topic != nil` → `"... sets topic; topic is immutable and update cannot change it"`.
-- `Parent != ""` → `"... sets parent; reparent with \`lit parent set\` instead"`.
 - `len(BlockedBy) > 0` → `"... sets blocked_by; wire dependencies with \`lit dep add\` instead"`.
 - `Title` set and trims to `""` → `"bulk: doc %d (id %q) sets an empty title"`.
 - A `bulkUpdatePatch` error → `fmt.Errorf("bulk: doc %d (id %q): %w", i, spec.ID, err)`, so an invalid type reads `bulk: doc 0 (id "x"): has invalid type "ghost": issue type must be …`.
-- `bulkUpdatePatch(spec).IsEmpty()` and no `rank` → `"bulk: doc %d (id %q) has no fields to update and no rank"`; a document stating only `rank: top` joins the file's ordering and writes no `BulkUpdate`, and one that also states a `reason` → `"bulk: doc %d (id %q) sets reason but changes no field; reason annotates a field change, and rank writes none"`. A `rank` other than `top` → `"bulk: doc %d: rank %q is not a placement; …"`. Updatable fields are exactly the rows of `issueFields`: `Title`, `Description`, `Prompt`, `Plan`, `IssueType`, `Priority`, `Assignee`, `Labels`, `Lane`.
+- A stated `Parent` (non-nil) becomes a `storage.FileReparent{ID, Parent}` in `file.Reparents`; `""` clears. `bulkUpdatePatch(spec).IsEmpty()` with no `parent` and no `rank` → `"bulk: doc %d (id %q) has no fields to update, no parent and no rank"`; a document stating only `parent` and/or `rank: top` writes no `BulkUpdate`, and one that also states a `reason` → `"bulk: doc %d (id %q) sets reason but changes no field; reason annotates a field change, and parent and rank write none"`. A `rank` other than `top` → `"bulk: doc %d: rank %q is not a placement; …"`. Updatable fields are exactly the rows of `issueFields`: `Title`, `Description`, `Prompt`, `Plan`, `IssueType`, `Priority`, `Assignee`, `Labels`, `Lane`.
 
 **`storage.parseImportTreeSpecs`** (`internal/storage/import_validate.go`) — returns each spec parsed, its type and priority the ones the create writes
 - Empty → `"import: no issues in input"`.
@@ -1476,7 +1476,7 @@ Stated in `internal/storage/memory/doc.go`:
 - `SetParent` wires a child under an epic; `mustChildren` (a `ListIssues` with `ParentIDs: [parent]`, `IncludeArchived` and `IncludeDeleted`) shows it.
 - **Reparenting replaces rather than adds**: after a second `SetParent`, the old epic has no children and the new one has the child.
 - `ClearParent` detaches; the parent then has no children.
-- `ClearParent` on a parentless child → `NotFoundError{Entity: "parent relation"}`.
+- `ClearParent` on a parentless child → `storage.RelationAbsentError{SrcID: child, Type: RelParentChild}`.
 - `SetParent` to itself is an error.
 - `SetParent` under a missing parent → `NotFoundError{Entity: "issue"}`.
 
@@ -1493,7 +1493,7 @@ Stated in `internal/storage/memory/doc.go`:
 - `ClearParent(leaf)` and `RemoveRelation(leaf, epic, RelParentChild)` each return a `model.ValidationError` whose message contains `"lit parent set"`.
 - After those refusals, the epic's children are still exactly leaf, nested.
 - `RemoveRelation(nested, epic, RelParentChild)` succeeds, and the epic's children become exactly leaf.
-- `ClearParent(nested)` then returns `NotFoundError{Entity: "parent relation"}`.
+- `ClearParent(nested)` then returns `storage.RelationAbsentError`.
 - `RemoveRelation(leaf, nested, RelParentChild)` returns `NotFoundError{Entity: "relation"}`.
 
 **`an_import_file_that_breaks_a_rule_is_refused_whole`**
@@ -1577,7 +1577,7 @@ Stated in `internal/storage/memory/doc.go`:
 - `assertPrecedes` pins a relative position without pinning the whole listing.
 - `assertStrings` compares by content and order joined with `"|"`; **a nil result and an empty one compare equal on purpose** — an engine spelling "nothing here" as nil rather than a zero-length slice has not behaved differently.
 - `assertNotFound` requires `errors.As` to a `storage.NotFoundError` **and** an exact `Entity` match — callers dispatch on the type, and the entity tells a user WHICH thing was missing when an operation touches several.
-- Entity strings the suite pins: `"issue"`, `"comment"`, `"label"`, `"relation"`, `"parent relation"`.
+- Entity strings the suite pins: `"issue"`, `"comment"`, `"label"`, `"relation"`.
 - Every helper fails the test rather than returning an error, so a case body reads as the behavioral statement it is.
 
 ### 3.5 What the conformance suite does NOT require

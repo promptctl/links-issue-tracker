@@ -431,8 +431,15 @@ func (e *Engine) ClearParent(ctx context.Context, childID string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	// The record is read for its type alone, so this answers on a hierarchy
-	// holding a loop. Every parent edge goes, so none is left.
+	return e.clearParent(childID)
+}
+
+// clearParent is `lit parent clear`: it refuses a leaf and removes every
+// parent edge of childID, answering a child with no parent with
+// storage.RelationAbsentError — the Dolt engine's clearParentTx, rendered over
+// this engine's slices. The record is read for its type alone, so this
+// answers on a hierarchy holding a loop. [LAW:one-source-of-truth]
+func (e *Engine) clearParent(childID string) error {
 	child, err := e.mustRecord(childID)
 	if err != nil {
 		return err
@@ -440,13 +447,19 @@ func (e *Engine) ClearParent(ctx context.Context, childID string) error {
 	if err := storage.RejectDetachingALeaf(childID, child.issueType, 0); err != nil {
 		return err
 	}
-	removed := e.dropRelations(func(rel model.Relation) bool {
-		return rel.SrcID == childID && rel.Type == model.RelParentChild
-	})
-	if removed == 0 {
-		return storage.NotFoundError{Entity: "parent relation", ID: childID}
+	if e.detachParents(childID) == 0 {
+		return storage.RelationAbsentError{SrcID: childID, Type: model.RelParentChild}
 	}
 	return nil
+}
+
+// detachParents removes every parent edge of childID, judging nothing: the
+// raw half of a clear, and a bulk reparent's detach before the attach that
+// judges the child's new place.
+func (e *Engine) detachParents(childID string) int {
+	return e.dropRelations(func(rel model.Relation) bool {
+		return rel.SrcID == childID && rel.Type == model.RelParentChild
+	})
 }
 
 // DependencyOrder reads the blocked-by edges between live issues in tree order:

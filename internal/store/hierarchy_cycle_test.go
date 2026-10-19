@@ -681,19 +681,17 @@ func TestClearParentReportsAnUnknownIssueAsMissing(t *testing.T) {
 	}
 
 	// Anti-vacuity: an issue that exists and simply has no parent — an epic,
-	// the one shape that can be parentless — still reports the edge as the
-	// missing thing, so the case above is not passing because every absence is
-	// called an issue.
+	// the one shape that can be parentless — answers that its parent is
+	// already absent, so the case above is not passing because every absence
+	// is called an issue.
 	solo, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Solo", Topic: "hier", IssueType: "epic", Placement: storage.RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue error = %v", err)
 	}
 	err = st.ClearParent(ctx, solo.ID)
-	if err == nil {
-		t.Fatal("ClearParent on a parentless issue succeeded, want an absence report")
-	}
-	if !errors.As(err, &notFound) || notFound.Entity != "parent relation" {
-		t.Errorf("ClearParent(parentless issue) error = %v, want a missing \"parent relation\"", err)
+	var absent storage.RelationAbsentError
+	if !errors.As(err, &absent) {
+		t.Errorf("ClearParent(parentless issue) error = %v, want storage.RelationAbsentError", err)
 	}
 }
 

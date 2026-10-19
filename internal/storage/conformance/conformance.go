@@ -222,6 +222,13 @@ var cases = []engineCase{
 	{"bulk_file_ranks_a_create_at_the_top_of_its_epic", bulkFileRanksACreateAtTheTopOfItsEpic},
 	{"bulk_apply_compensates_a_failed_batch", bulkApplyCompensatesFailure},
 	{"a_bulk_file_failing_at_an_update_names_what_it_kept", aBulkFileFailingAtAnUpdateNamesWhatItKept},
+	{"a_bulk_file_reparents_its_update_documents", aBulkFileReparentsItsUpdateDocuments},
+	{"a_bulk_file_stating_a_parent_cycle_writes_nothing", aBulkFileStatingAParentCycleWritesNothing},
+	{"a_refused_reparent_applies_no_document", aRefusedReparentAppliesNoDocument},
+	{"a_bulk_file_is_judged_on_the_hierarchy_it_ends_with", aBulkFileIsJudgedOnTheHierarchyItEndsWith},
+	{"a_bulk_file_clears_a_parent_with_an_empty_one", aBulkFileClearsAParentWithAnEmptyOne},
+	{"a_bulk_file_ranks_issues_in_the_frame_it_moves_them_to", aBulkFileRanksIssuesInTheFrameItMovesThemTo},
+	{"a_bulk_file_refused_at_its_ordering_names_the_reparents_it_kept", aBulkFileRefusedAtItsOrderingNamesTheReparentsItKept},
 	{"import_tree_maps_local_ids", importTreeMapsLocalIDs},
 	{"attribution_stamps_events", attributionStampsEvents},
 	{"observers_hear_every_change", observersHearEveryChange},
@@ -2828,9 +2835,9 @@ func parentWiring(t *testing.T, ctx context.Context, st storage.Store, clk *cloc
 	}
 	assertIssueIDs(t, "children after clearing", mustChildren(t, ctx, st, other.ID), nil)
 
-	// Clearing a parent that is not there removed no edge, and says so.
+	// Clearing a parent that is not there is the state asked for, and says so.
 	err := st.ClearParent(ctx, child.ID)
-	assertNotFound(t, err, "parent relation", "ClearParent of a parentless child")
+	assertParentAbsent(t, err, child.ID, "ClearParent of a parentless child")
 
 	if _, err := st.SetParent(ctx, storage.SetParentInput{ChildID: child.ID, ParentID: child.ID}); err == nil {
 		t.Error("SetParent to itself succeeded; want an error")
@@ -2924,14 +2931,14 @@ func anImportFileThatBreaksARuleIsRefusedWhole(t *testing.T, ctx context.Context
 		{"BulkApply(a blocked_by naming one existing issue twice)", bulk(
 			storage.BulkIssueSpec{Title: &title, Topic: &topic, IssueType: &epicType, BlockedBy: []string{existing.ID, existing.ID}})},
 		{"BulkApply(a task with no local_id blocked by the epic it sits under)", bulk(epic("e", ""),
-			storage.BulkIssueSpec{Title: &title, Topic: &topic, IssueType: &taskType, Parent: "e", BlockedBy: []string{"e"}})},
+			storage.BulkIssueSpec{Title: &title, Topic: &topic, IssueType: &taskType, Parent: ptr("e"), BlockedBy: []string{"e"}})},
 		{"BulkApply(a task blocked by a task beside it under one epic)", bulk(epic("e", ""),
-			storage.BulkIssueSpec{LocalID: "a", Title: &title, Topic: &topic, IssueType: &taskType, Parent: "e"},
-			storage.BulkIssueSpec{Title: &title, Topic: &topic, IssueType: &taskType, Parent: "e", BlockedBy: []string{"a"}})},
+			storage.BulkIssueSpec{LocalID: "a", Title: &title, Topic: &topic, IssueType: &taskType, Parent: ptr("e")},
+			storage.BulkIssueSpec{Title: &title, Topic: &topic, IssueType: &taskType, Parent: ptr("e"), BlockedBy: []string{"a"}})},
 		{"BulkApply(an update, then a task blocked by a task beside it under an existing epic)", bulk(
 			storage.BulkIssueSpec{ID: existing.ID, Title: &renamed},
-			storage.BulkIssueSpec{LocalID: "a", Title: &title, Topic: &topic, IssueType: &taskType, Parent: existing.ID},
-			storage.BulkIssueSpec{Title: &title, Topic: &topic, IssueType: &taskType, Parent: existing.ID, BlockedBy: []string{"a"}})},
+			storage.BulkIssueSpec{LocalID: "a", Title: &title, Topic: &topic, IssueType: &taskType, Parent: ptr(existing.ID)},
+			storage.BulkIssueSpec{Title: &title, Topic: &topic, IssueType: &taskType, Parent: ptr(existing.ID), BlockedBy: []string{"a"}})},
 	} {
 		assertRefused(t, imp.do(), imp.what)
 	}
@@ -2963,10 +2970,10 @@ func aBulkFileRefusedAtAWriteAppliesNoUpdate(t *testing.T, ctx context.Context, 
 			{LocalID: "e", Title: &title, Topic: &topic, IssueType: &epicType, BlockedBy: []string{"no-such-issue"}}}},
 		{"an update, then an epic, then a task under a parent that does not exist", []storage.BulkIssueSpec{
 			{LocalID: "e", Title: &title, Topic: &topic, IssueType: &epicType},
-			{Title: &title, Topic: &topic, IssueType: &taskType, Parent: "no-such-issue"}}},
+			{Title: &title, Topic: &topic, IssueType: &taskType, Parent: ptr("no-such-issue")}}},
 		{"an update, then an epic and its own task, both rank: top", []storage.BulkIssueSpec{
 			{LocalID: "e", Title: &title, Topic: &topic, IssueType: &epicType, Rank: &top},
-			{Title: &title, Topic: &topic, IssueType: &taskType, Parent: "e", Rank: &top}}},
+			{Title: &title, Topic: &topic, IssueType: &taskType, Parent: ptr("e"), Rank: &top}}},
 	} {
 		// Each file updates an issue of its own, so one file's update landing
 		// fails only that file's case.
@@ -3067,8 +3074,8 @@ func everyTicketLivesInsideAContainer(t *testing.T, ctx context.Context, st stor
 		{"BulkApply(a leaf under a leaf in the file)", func() error {
 			_, err := st.BulkApply(ctx, prefix, "ada", []storage.BulkIssueSpec{
 				{LocalID: "e", Title: &epicTitle, Topic: &topic, IssueType: &epicType},
-				{LocalID: "l", Title: &leafTitle, Topic: &topic, IssueType: &leafType, Parent: "e"},
-				{Title: &underTitle, Topic: &topic, IssueType: &bugType, Parent: "l"},
+				{LocalID: "l", Title: &leafTitle, Topic: &topic, IssueType: &leafType, Parent: ptr("e")},
+				{Title: &underTitle, Topic: &topic, IssueType: &bugType, Parent: ptr("l")},
 			})
 			return err
 		}},
@@ -3109,7 +3116,7 @@ func everyTicketLivesInsideAContainer(t *testing.T, ctx context.Context, st stor
 		t.Fatalf("RemoveRelation(nested epic's parent edge) error = %v; an epic may be top-level", err)
 	}
 	assertIssueIDs(t, "children of the epic after lifting the nested epic", mustChildren(t, ctx, st, epic.ID), []string{leaf.ID})
-	assertNotFound(t, st.ClearParent(ctx, nested.ID), "parent relation", "ClearParent of the lifted epic")
+	assertParentAbsent(t, st.ClearParent(ctx, nested.ID), nested.ID, "ClearParent of the lifted epic")
 
 	// A missing edge is still reported as missing before the rule is judged,
 	// so a typo names the edge rather than the leaf.
@@ -3240,7 +3247,7 @@ func blocksNeverRunsAlongTheHierarchy(t *testing.T, ctx context.Context, st stor
 
 	title, topic, issueType := "bulk leaf", "core", "task"
 	_, err = st.BulkApply(ctx, prefix, "ada", []storage.BulkIssueSpec{
-		{Title: &title, Topic: &topic, IssueType: &issueType, Parent: mid.ID, BlockedBy: []string{root.ID}},
+		{Title: &title, Topic: &topic, IssueType: &issueType, Parent: ptr(mid.ID), BlockedBy: []string{root.ID}},
 	})
 	assertHierarchyBlocksRefused(t, err, "BulkApply(a leaf depending on its grandparent epic)")
 }
@@ -3285,12 +3292,12 @@ func blocksNeverOrdersTwoLeavesOfOneEpic(t *testing.T, ctx context.Context, st s
 	title, topic, epicType, taskType := "bulk", "core", "epic", "task"
 	_, err = st.BulkApply(ctx, prefix, "ada", []storage.BulkIssueSpec{
 		{LocalID: "e", Title: &title, Topic: &topic, IssueType: &epicType},
-		{LocalID: "a", Title: &title, Topic: &topic, IssueType: &taskType, Parent: "e"},
-		{Title: &title, Topic: &topic, IssueType: &taskType, Parent: "e", BlockedBy: []string{"a"}},
+		{LocalID: "a", Title: &title, Topic: &topic, IssueType: &taskType, Parent: ptr("e")},
+		{Title: &title, Topic: &topic, IssueType: &taskType, Parent: ptr("e"), BlockedBy: []string{"a"}},
 	})
 	assertHierarchyBlocksRefused(t, err, "BulkApply(a leaf blocked by the leaf beside it, epic in the file)")
 	_, err = st.BulkApply(ctx, prefix, "ada", []storage.BulkIssueSpec{
-		{Title: &title, Topic: &topic, IssueType: &taskType, Parent: epic.ID, BlockedBy: []string{first.ID}},
+		{Title: &title, Topic: &topic, IssueType: &taskType, Parent: ptr(epic.ID), BlockedBy: []string{first.ID}},
 	})
 	assertHierarchyBlocksRefused(t, err, "BulkApply(a leaf blocked by an existing leaf beside it)")
 
@@ -3499,7 +3506,7 @@ func bulkApplyCreatesAndUpdates(t *testing.T, ctx context.Context, st storage.St
 	// reorder to referent-first, so the asserted sequence below fails for an
 	// engine that reports file order — not just one that reports map order.
 	result, err := st.BulkApply(ctx, prefix, "ada", []storage.BulkIssueSpec{
-		{LocalID: "leaf", Title: &childTitle, Topic: &topic, IssueType: &issueType, Parent: "root"},
+		{LocalID: "leaf", Title: &childTitle, Topic: &topic, IssueType: &issueType, Parent: ptr("root")},
 		{LocalID: "root", Title: &title, Topic: &topic, IssueType: &epicType},
 	})
 	if err != nil {
@@ -3599,7 +3606,7 @@ func bulkFileRanksACreateAtTheTopOfItsEpic(t *testing.T, ctx context.Context, st
 	second := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "second", Topic: "core", ParentID: epic.ID})
 	title, topic, task, top := "new", "core", "task", "top"
 	result, err := st.BulkApply(ctx, prefix, "ada", []storage.BulkIssueSpec{
-		{Title: &title, Topic: &topic, IssueType: &task, Parent: epic.ID, Rank: &top},
+		{Title: &title, Topic: &topic, IssueType: &task, Parent: ptr(epic.ID), Rank: &top},
 	})
 	if err != nil {
 		t.Fatalf("BulkApply error = %v", err)
@@ -3630,11 +3637,11 @@ func bulkApplyCompensatesFailure(t *testing.T, ctx context.Context, st storage.S
 
 	_, err := st.BulkApply(ctx, prefix, "ada", []storage.BulkIssueSpec{
 		{LocalID: "home", Title: &home, Topic: &topic, IssueType: &epicType},
-		{LocalID: "first", Title: &kept, Topic: &topic, IssueType: &issueType, Parent: "home"},
+		{LocalID: "first", Title: &kept, Topic: &topic, IssueType: &issueType, Parent: ptr("home")},
 		// A parent that is neither a name in this batch nor a real id passes
 		// the file's own validation and fails at the write — which is exactly
 		// the mid-batch failure the compensation exists for.
-		{LocalID: "second", Title: &orphan, Topic: &topic, IssueType: &issueType, Parent: "no-such-issue"},
+		{LocalID: "second", Title: &orphan, Topic: &topic, IssueType: &issueType, Parent: ptr("no-such-issue")},
 	})
 	if err == nil {
 		t.Fatal("BulkApply with an unresolvable parent succeeded; want an error")
@@ -3660,7 +3667,7 @@ func aBulkFileFailingAtAnUpdateNamesWhatItKept(t *testing.T, ctx context.Context
 		// An id the gate cannot judge: it names no issue, so its write fails.
 		{ID: "no-such-issue", Title: &renamed},
 	})
-	want := fmt.Sprintf("kept 1 updates [%s] and the order of 2 issues [%s,%s]", c.ID, b.ID, a.ID)
+	want := fmt.Sprintf("kept 0 reparents [], 1 updates [%s] and the order of 2 issues [%s,%s]", c.ID, b.ID, a.ID)
 	if err == nil || !strings.Contains(err.Error(), want) {
 		t.Fatalf("BulkApply error = %v, want it to name what it kept: %q", err, want)
 	}
@@ -3998,3 +4005,16 @@ func assertNotFound(t *testing.T, err error, entity, what string) {
 		t.Errorf("%s reported entity %q, want %q", what, notFound.Entity, entity)
 	}
 }
+
+// assertParentAbsent pins the satisfied answer to clearing a parent that is
+// not there: the child it names and the relation type, not a refusal.
+func assertParentAbsent(t *testing.T, err error, childID, what string) {
+	t.Helper()
+	want := storage.RelationAbsentError{SrcID: childID, Type: model.RelParentChild}
+	var absent storage.RelationAbsentError
+	if !errors.As(err, &absent) || absent != want {
+		t.Fatalf("%s error = %v, want %#v", what, err, want)
+	}
+}
+
+func ptr[T any](v T) *T { return &v }

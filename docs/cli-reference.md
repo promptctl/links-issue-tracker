@@ -743,7 +743,8 @@ above it, lifting it to the top level; on a task, feature, bug or chore it refus
 ticket instead, since detaching one would leave it outside every epic. `set` replaces
 whatever parent the child holds in one act, which is also how `lit doctor`'s
 two-parent finding is repaired. Naming the parent that is already the child's
-only parent exits 6 with `state_already_holds`.
+only parent exits 6 with `state_already_holds`, and so does clearing an epic that
+has no parent.
 
 `parent set` and `parent clear` are the only commands that write the parent-child
 edge. `parent set` prints it as `lit dep ls` does: `<child> child of <parent>`.

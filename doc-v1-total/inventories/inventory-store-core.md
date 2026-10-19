@@ -2804,7 +2804,7 @@ Tests: `TestAddRelationRejectsBlocksCycle` (A→B then B→A rejected) — `inte
   ```
   (type literal inlined, not a placeholder) —. Error → `fmt.Errorf("delete parent relation: %w", err)`.
 - `res.RowsAffected()` error → `fmt.Errorf("rows affected: %w", err)`.
-- `affected == 0` → `storage.NotFoundError{Entity: "parent relation", ID: childID}`.
+- `affected == 0` → `storage.RelationAbsentError{SrcID: childID, Type: model.RelParentChild}` (`Satisfied()` true). The body is `clearParentTx` — the type read, `storage.RejectDetachingALeaf`, then `detachParentsTx`, the DELETE and its rows-affected — which the bulk reparent step runs too.
 - `TestClearParentSurfacesGenuineRowsAffectedError` proves a failing `RowsAffected()` is not masked as NotFound and wraps the cause — `internal/store/relations_rows_affected_test.go`.
 
 ### 4.8 SetParent
@@ -3866,13 +3866,12 @@ Update-document checks (`parseBulkUpdateDoc`, `import_validate.go`, which return
 |---|---|
 | `LocalID != ""` | `bulk: doc %d (id %q) sets local_id; local_id only applies to new tickets` |
 | `Topic != nil` | `bulk: doc %d (id %q) sets topic; topic is immutable and update cannot change it` |
-| `Parent != ""` | ``bulk: doc %d (id %q) sets parent; reparent with `lit parent set` instead`` |
 | `len(BlockedBy) > 0` | ``bulk: doc %d (id %q) sets blocked_by; wire dependencies with `lit dep add` instead`` |
 | `Title` set and trims to `""` | `bulk: doc %d (id %q) sets an empty title` |
 | `IssueType` set and unparseable | `bulk: doc %d (id %q): has invalid type "<value>": issue type must be …` |
 | `Priority` set and unparseable | `bulk: doc %d (id %q): has invalid priority <value>: priority must be …` |
-| `storage.bulkUpdatePatch(spec).IsEmpty()` and no `rank` | `bulk: doc %d (id %q) has no fields to update and no rank` |
-| the patch is empty, `rank: top` is set, and `reason` trims to non-empty | `bulk: doc %d (id %q) sets reason but changes no field; reason annotates a field change, and rank writes none` |
+| `storage.bulkUpdatePatch(spec).IsEmpty()`, no `parent` and no `rank` | `bulk: doc %d (id %q) has no fields to update, no parent and no rank` |
+| the patch is empty, `parent` or `rank: top` is set, and `reason` trims to non-empty | `bulk: doc %d (id %q) sets reason but changes no field; reason annotates a field change, and parent and rank write none` |
 | `rank` set to anything but `top` | `bulk: doc %d: rank %q is not a placement; the one placement is top, …` |
 | id already seen | `bulk: duplicate id %q` (`import_validate.go`) |
 
@@ -3904,13 +3903,14 @@ Note the create branch does **not** require `LocalID` (unlike ImportTree), and d
 
 `BulkApply(ctx, prefix, actor string, specs)` (`import_bulk.go`):
 
-1. `s.getIssuesByIDs(ctx, storage.BulkParentRefs(specs))` reads the parents the file names (error → `bulk: read parents: %w`), and `parentTypes` maps each found id to its type; `file, err := storage.ParseBulkFile(specs, parentTypes)` — whole file validated before anything is written, and returned parsed: `file.Creates` in the topological write order (§4.4), `file.Updates` in file order; a cycle reads `bulk: cycle detected involving "x"` (`internal/storage/import_validate.go`). The engine parses nothing itself.
+1. `s.getIssuesByIDs(ctx, storage.BulkExistingRefs(specs))` reads every parent the file names and every update document that states a parent (error → `bulk: read the issues the file places: %w`), and `existingTypes` maps each found id to its type; `file, err := storage.ParseBulkFile(specs, existingTypes)` — whole file validated before anything is written, and returned parsed: `file.Creates` in the topological write order (§4.4), `file.Reparents` and `file.Updates` in file order. An update document is a node of the gate's reference graph, named by its id, so a parent cycle the file states through update documents is refused here; a cycle reads `bulk: cycle detected involving "x"`, `x` the document's local_id or id (`internal/storage/import_validate.go`). The engine parses nothing itself.
 2. `createdIDs` (ordered, parallel to `file.Creates`), `localRealID` map (`import_bulk.go`).
 3. Create loop over `file.Creates` (`import_bulk.go`): `CreateIssue(ctx, create.Input(resolveBulkRef(create.Parent, localRealID), prefix))`. The gate built that input: `Title` and `Topic` trimmed, `Description`/`Prompt`/`Plan`/`Assignee`/`Lane`/`Labels` the document's value or the zero value, `IssueType` and `Priority` parsed (priority `model.PriorityNormal` when unset), `Placement` left at its zero value `RankBottom` so file order is preserved, matching ImportTree. Failure → rollback then `"bulk: create doc %d: %w (rollback leaked %d: %s)"`.
    - Append `createdIDs`. If `create.LocalID != ""` → `localRealID[LocalID] = issue.ID`; `result.Created` gets `storage.NewIDMapping(create.LocalID, issue.ID)`, **self-keyed when there is no local id** (`import_bulk.go`).
 4. Second pass over `file.Creates` in **write order** (`import_bulk.go`): for each `dep`, `AddRelation({SrcID: createdIDs[i], DstID: resolveBulkRef(dep, localRealID), Type: model.RelBlockedBy, CreatedBy: actor})`. Failure → rollback then `"bulk: blocked_by doc %d -> %q: %w (rollback leaked %d: %s)"`.
-5. **The ordering**, when `file.RankedIDs(createdIDs)` is non-empty (`import_bulk.go`): one `s.RankSet(ctx, ranked)` into `result.Ranked`. Failure → rollback then `"bulk: rank: %w (rollback leaked %d: %s)"`.
-6. **Updates last**, over `file.Updates` (`import_bulk.go`): `s.Apply(ctx, update.ID, storage.Change{Actor: actor, Fields: update.Patch})`. Failure → rollback then `"bulk: update %q: %w; %s (rollback leaked %d: %s)"`, the `%s` being `result.Kept()` (`internal/storage/bulk.go`): the updates applied so far and the order written. On success append `issue.ID` to `result.Updated`. A failing create, edge, or ordering therefore leaves no update applied.
+5. **The reparents**, when `file.Reparents` is non-empty (`import_bulk.go`): one `s.withMutation(ctx, "bulk reparent", …)` running `file.WriteReparents(resolve, parentWriterTx{…})` (`internal/storage/bulk.go`) into `result.Reparented` and `result.ParentHeld`. `WriteReparents` asks `Holds` (`rejectHeldRelationTx`) of every reparent naming a parent, then runs `Clear` (`clearParentTx`) for each `parent: ""` — `storage.RelationAbsentError` marks it held — and `Detach` (`detachParentsTx`) for each move not held, then `Attach` (`addRelationTx`, `RelParentChild`) for each move not held, so every hierarchy in between is part of the final one; an error → `"bulk: parent of %q -> %q: %w"`. Failure → rollback then `"%w (rollback leaked %d: %s)"`.
+6. **The ordering**, when `file.RankedIDs(createdIDs)` is non-empty (`import_bulk.go`): one `s.RankSet(ctx, ranked)` into `result.Ranked`. Failure → rollback then `"bulk: rank: %w; %s (rollback leaked %d: %s)"`, the `%s` being `result.Kept()`.
+7. **Updates last**, over `file.Updates` (`import_bulk.go`): `s.Apply(ctx, update.ID, storage.Change{Actor: actor, Fields: update.Patch})`. Failure → rollback then `"bulk: update %q: %w; %s (rollback leaked %d: %s)"`, the `%s` being `result.Kept()` (`internal/storage/bulk.go`): the reparents, the updates applied so far, and the order written. On success append `issue.ID` to `result.Updated`. A failing create, edge, reparent, or ordering therefore leaves no update applied.
 
 `resolveBulkRef(ref, localRealID)` (`import_bulk.go`): a map hit returns the real id; **a miss returns `ref` unchanged**, to be validated downstream by `CreateIssue`/`AddRelation` as a real pre-existing issue id.
 
@@ -3964,7 +3964,6 @@ updated %d issues\n         (len(result.Updated))
 - `TestBulkApplyRejectsUnknownID`: `id: "ghost-1"` → error contains `"not found"` (raised by `Apply`, not by validation).
 - `TestBulkApplyRejectsUpdateWithNoFields`: error contains `"no fields to update"`.
 - `TestBulkApplyRejectsUpdateWithTopic`: error contains `"immutable"`.
-- `TestBulkApplyRejectsUpdateWithParentOrDependsOn`: error contains `"lit parent set"`.
 - `TestBulkApplyRejectsInvalidTypeOrPriorityOnUpdate`: `type:"ghost"` → contains `"invalid type"`; `priority: 7` → contains `"invalid priority"`.
 - `TestBulkApplyRejectsMissingCreateFields`: title only → contains `"missing topic"`.
 - `TestBulkApplyRejectsDuplicateID`: contains `"duplicate id"`.
@@ -4013,7 +4012,7 @@ updated %d issues\n         (len(result.Updated))
 
 `import_tree.go`: `import: create %q: %w (rollback leaked %d: %s)`, `import: blocked_by %q -> %q: %w (rollback leaked %d: %s)`.
 
-`import_bulk.go`: `bulk: no issues in input`, `bulk: doc %d id %q has surrounding whitespace`, `bulk: doc %d local_id %q has surrounding whitespace`, `bulk: doc %d parent %q has surrounding whitespace`, `bulk: doc %d blocked_by entry %q has surrounding whitespace`, `bulk: doc %d (local_id %q) cannot depend on itself`, `bulk: duplicate id %q`, `bulk: duplicate local_id %q`, `bulk: doc %d missing title`, `bulk: doc %d missing topic`, `bulk: doc %d missing type`, `bulk: doc %d sets reason without id (reason only applies to updates)`, `bulk: doc %d (id %q) sets local_id; local_id only applies to new tickets`, `bulk: doc %d (id %q) sets topic; topic is immutable and update cannot change it`, ``bulk: doc %d (id %q) sets parent; reparent with `lit parent set` instead``, ``bulk: doc %d (id %q) sets blocked_by; wire dependencies with `lit dep add` instead``, `bulk: doc %d (id %q): %w`, `bulk: doc %d (id %q) sets an empty title`, `bulk: doc %d (id %q) has no fields to update and no rank`, `bulk: doc %d (id %q) sets reason but changes no field; reason annotates a field change, and rank writes none`, `bulk: doc %d: %w` (among them `rank %q is not a placement; …`), `bulk: rank: %w (rollback leaked %d: %s)`, `bulk: update %q: %w; %s (rollback leaked %d: %s)`, `bulk: create doc %d: %w (rollback leaked %d: %s)`, `bulk: blocked_by doc %d -> %q: %w (rollback leaked %d: %s)`; and from `invalidValue` (`internal/storage/fields.go`) `has invalid %s %#v: %w`.
+`import_bulk.go`: `bulk: no issues in input`, `bulk: doc %d id %q has surrounding whitespace`, `bulk: doc %d local_id %q has surrounding whitespace`, `bulk: doc %d parent %q has surrounding whitespace`, `bulk: doc %d blocked_by entry %q has surrounding whitespace`, `bulk: doc %d (local_id %q) cannot depend on itself`, `bulk: duplicate id %q`, `bulk: duplicate local_id %q`, `bulk: doc %d missing title`, `bulk: doc %d missing topic`, `bulk: doc %d missing type`, `bulk: doc %d sets reason without id (reason only applies to updates)`, `bulk: doc %d (id %q) sets local_id; local_id only applies to new tickets`, `bulk: doc %d (id %q) sets topic; topic is immutable and update cannot change it`, ``bulk: doc %d (id %q) sets blocked_by; wire dependencies with `lit dep add` instead``, `bulk: doc %d (id %q): %w`, `bulk: doc %d (id %q) sets an empty title`, `bulk: doc %d (id %q) has no fields to update, no parent and no rank`, `bulk: doc %d (id %q) sets reason but changes no field; reason annotates a field change, and parent and rank write none`, `bulk: doc %d: %w` (among them `rank %q is not a placement; …`), `bulk: rank: %w; %s (rollback leaked %d: %s)`, `bulk: parent of %q -> %q: %w`, `bulk: update %q: %w; %s (rollback leaked %d: %s)`, `bulk: create doc %d: %w (rollback leaked %d: %s)`, `bulk: blocked_by doc %d -> %q: %w (rollback leaked %d: %s)`; and from `invalidValue` (`internal/storage/fields.go`) `has invalid %s %#v: %w`.
 
 Parsers (`internal/storage/specs.go`): `bulk: parse spec: %w`, `import: parse spec: %w`, `import: unexpected trailing data after spec array`.
 
