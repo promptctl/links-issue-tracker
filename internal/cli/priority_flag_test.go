@@ -154,7 +154,7 @@ func TestPriorityFlagRefusesOutOfDomainValuesWithoutAdvisingRetry(t *testing.T) 
 				t.Fatalf("runNew(--priority %q) exit code = %d, want %d (a domain refusal, not a generic failure)", raw, code, ExitValidation)
 			}
 			reason := commandErrorReason(err)
-			if reason != "validation_refused" {
+			if reason != reasonValidationRefused {
 				t.Fatalf("runNew(--priority %q) reason = %q, want validation_refused", raw, reason)
 			}
 			if rem := commandErrorRemediation(reason); strings.Contains(rem, "Retry the command") {

@@ -51,19 +51,21 @@ func beginInvocation(now time.Time) *telemetry.Recorder {
 }
 
 // invocationEnd is how an invocation ended: Run's returned error, or the
-// panic it died of. The exit code and reason are the ones WriteCommandError
-// prints for the same error, read from the same two functions.
+// panic it died of. A failed command's exit code and reason are the ones
+// WriteCommandError prints for the same error, read off one classification.
 // [LAW:one-source-of-truth]
 func invocationEnd(at time.Time, err error, panicked any) telemetry.End {
-	end := telemetry.End{At: at, Outcome: telemetry.OutcomeOK, ExitCode: ExitCode(err)}
+	end := telemetry.End{At: at, Outcome: telemetry.OutcomeOK, ExitCode: ExitOK}
 	switch {
 	case panicked != nil:
 		end.Outcome = telemetry.OutcomePanic
 		end.ExitCode = goPanicExitCode
 		end.Error = fmt.Sprint(panicked)
 	case err != nil:
+		reason := commandErrorReason(err)
 		end.Outcome = telemetry.OutcomeError
-		end.Reason = string(commandErrorReason(err))
+		end.ExitCode = reason.exit
+		end.Reason = reason.String()
 		end.Error = err.Error()
 		end.Facts, end.Counts = errorRecord(err)
 	}

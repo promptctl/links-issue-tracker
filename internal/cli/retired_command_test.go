@@ -39,7 +39,7 @@ func TestRetiredCommandsPointToReplacements(t *testing.T) {
 		if got := ExitCode(err); got != ExitValidation {
 			t.Errorf("lit %s exit code = %d, want %d", name, got, ExitValidation)
 		}
-		if got := commandErrorReason(err); got != "retired_command" {
+		if got := commandErrorReason(err); got != reasonRetiredCommand {
 			t.Errorf("lit %s reason = %q, want retired_command", name, got)
 		}
 		// The message already names the replacements, so there is no second
@@ -84,7 +84,7 @@ func TestFoldedCommandsPointToTheirFlags(t *testing.T) {
 		if got := ExitCode(err); got != ExitValidation {
 			t.Errorf("lit %s exit code = %d, want %d", tc.name, got, ExitValidation)
 		}
-		if got := commandErrorReason(err); got != "retired_command" {
+		if got := commandErrorReason(err); got != reasonRetiredCommand {
 			t.Errorf("lit %s reason = %q, want retired_command", tc.name, got)
 		}
 	}

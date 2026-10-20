@@ -776,7 +776,7 @@ comment) (closing `---`) (body placeholder). Pinned
 Two-stage enforcement (`internal/cli/workflows_edit.go`):
 
 1. `refuseExistingFile` stats the path; if it exists, returns `MergeConflictError` (**exit 5**,
-   `internal/cli/exit.go`) with message
+   `internal/cli/error_output.go`) with message
    `cannot scaffold "<subject>": <path> already exists (edit it directly, or run 'lit workflows' to
    see what's already loaded there)` (`internal/cli/workflows_edit.go`). A stat error other
    than not-exist is returned as `stat %s: %w` (`internal/cli/workflows_edit.go`).

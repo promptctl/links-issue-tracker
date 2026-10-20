@@ -174,34 +174,17 @@ Constants (`exit.go`):
 | `ExitNoWork` | 6 |
 | `ExitCorruption` | 7 |
 
-`ExitCode(err)` dispatches by `errors.As`, in this order (`exit.go`):
-1. `storage.NotFoundError` → 4 (`exit.go`)
-2. `storage.VersionNotFoundError` and `storage.PlanDigestNotFoundError` → 4 (`exit.go`)
-3. `MergeConflictError` → 5 (`exit.go`)
-4. `model.SchemaAhead` (`*store.UnsupportedSchemaVersionError`, `*store.DowngradeSpanUnsupportedError`, `*store.RemoteSchemaAheadError`, which a remote-schema-ahead `SyncFailureError` unwraps to) → 3 (`exit.go`)
-5. `SyncFailureError` → 5 (`exit.go`)
-6. `templateShapeError` → 3 (`exit.go`)
-7. `ownerApprovalRefusalError` → 5 (`exit.go`)
-8. `CorruptionError` → 7 (`exit.go`)
-9. `storage.ParentCycleError` → 7 (`exit.go`)
-10. `UsageError` → 2 (`exit.go`)
-11. `UnknownCommandError` → 3 (`exit.go`)
-12. `RetiredCommandError` → 3 (`exit.go`)
-13. `model.Refusal` (every `model.ValidationError`, `model.FrozenIssueError`, and the upgrade/downgrade target refusals) → 3 (`exit.go`)
-14. `model.StateRequestError` (`model.ContainerActionError`, `lifecycle.RetentionError`, `storage.RelationExistsError`) → 6 when `Satisfied()`, else 3 (`exit.go`)
-15. `UnsupportedError` → 3 (`exit.go`)
-16. `takeoverUnconfirmedError` → 3 (`exit.go`)
-17. `purgeUnconfirmedError` → 3 (`exit.go`)
-18. `Exhausted` → 6 (`exit.go`)
-19. `Narrowed` → 6 (`exit.go`)
-20. `NoWork` → 6 (`exit.go`)
-21. `OutsideWorkspaceError` → 3 (`exit.go`)
-22. `errors.Is(err, store.ErrWorkspaceNotInitialized)` → 3 (`exit.go`)
-23. `*store.QuarantineBlockError` → 3 (`exit.go`)
-24. `errors.Is(err, workspace.ErrIssuePrefixRefused)` → 3 (`exit.go`)
-25. `BulkFailureError` → 1 (`exit.go`)
-26. `errors.Is(err, store.ErrTransientGCContention)` → 1 (`exit.go`)
-27. anything else → 1 (`exit.go`)
+`ExitCode(err)` is `ExitOK` for a nil error and otherwise the code carried by
+the reason `commandErrorReason(err)` returns (`exit.go`), so an error's code is
+decided by the classification order in §1.9. Each `commandReason` is declared
+with its code (`error_output.go`):
+- 1: `bulk_partial_failure`, `command_failed`, `remote_unreachable`, `transient_gc_contention`, `workspace_busy`, `workspace_write_blocked`
+- 2: `usage_error`
+- 3: `migration_quarantined`, `outside_git_workspace`, `purge_unconfirmed`, `retired_command`, `stored_prefix_refused`, `takeover_unconfirmed`, `template_shape_refused`, `unknown_command`, `unsupported_flag`, `validation_refused`, `workspace_not_initialized`, `workspace_schema_ahead`
+- 4: `entity_not_found`, `version_not_found`
+- 5: `merge_conflict`, `owner_approval_required`, `sync_divergence`
+- 6: `no_ready_work`, `scope_exhausted`, `scope_narrowed`, `state_already_holds`
+- 7: `corruption_detected`, `parent_cycle`
 
 Error types defined in `errors.go`: `MergeConflictError`,
 `CorruptionError{Message string; Cause error}` — `Error()` is `Message`,
@@ -1670,7 +1653,7 @@ joined by `" — "`.
 `<rows>` is `describeReach(Unreachable, "", poolNotes)` followed by
 `"<OffPath> (<offFocusPathNote>)"` when `OffPath` is non-empty, joined by `"; "`.
 
-Both map to `ExitNoWork` = **6** (`exit.go`), with reasons
+Both map to `ExitNoWork` = **6** (`error_output.go`), with reasons
 `scope_exhausted` and `no_ready_work` respectively (`error_output.go`).
 
 **Rendering** — `renderNextOutcome(w, outcome, details, cc)` (`next.go`):
@@ -1954,7 +1937,7 @@ before any id is acted on.
 - Each success writes `"<id> ok\n"` to stdout (`bulk.go`).
 - Each failure is collected; **failures never reach stdout** (`bulk.go`).
 - If any failed, returns `BulkFailureError{Failures}` → exit 1
-  (`bulk.go`, `exit.go`), whose message is
+  (`bulk.go`, `error_output.go`), whose message is
   `"bulk operation: <n> item(s) failed: <id>: <err>; <id>: <err>"`
   (`bulk.go`), printed by `WriteCommandError` to stderr with the
   `bulk_partial_failure` remediation (§1.9).
@@ -2260,7 +2243,7 @@ No workflow occasion is dispatched and no breadcrumb is emitted. As a write
 command, the mutation sync-staleness warning and post-command auto-sync follow
 a successful run (§1.4).
 
-`purgeUnconfirmedError{Message}` (`purge.go`) → exit 3 (`exit.go`), reason
+`purgeUnconfirmedError{Message}` (`purge.go`) → exit 3 (`error_output.go`), reason
 `purge_unconfirmed` (`error_output.go`).
 
 ### 2.30 `lit verdict <id> <pass|fail> --plan <digest> [--law <token>]...`

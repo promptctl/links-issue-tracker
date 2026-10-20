@@ -143,7 +143,7 @@ func TestParseFlagSetClassifiesFlagErrors(t *testing.T) {
 			if got := ExitCode(err); got != tc.want {
 				t.Errorf("parseFlagSet(%q) = %T %q, exit %d; want exit %d", tc.arg, err, err, got, tc.want)
 			}
-			if reason := commandErrorReason(err); reason == "command_failed" {
+			if reason := commandErrorReason(err); reason == reasonCommandFailed {
 				t.Errorf("parseFlagSet(%q) error %q classified as command_failed", tc.arg, err)
 			}
 		})

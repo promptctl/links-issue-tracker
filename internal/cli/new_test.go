@@ -236,7 +236,7 @@ func TestRunNewLeafWithoutParentIsRefused(t *testing.T) {
 	if code := ExitCode(err); code != ExitValidation {
 		t.Fatalf("runNew(no --parent) exit code = %d, want %d (error: %v)", code, ExitValidation, err)
 	}
-	if reason := commandErrorReason(err); reason != "validation_refused" {
+	if reason := commandErrorReason(err); reason != reasonValidationRefused {
 		t.Fatalf("runNew(no --parent) reason = %q, want validation_refused (error: %v)", reason, err)
 	}
 	want := "cannot create a task outside an epic: every ticket except an epic lives inside one, so give it the epic it belongs to as its parent, or make it an epic"

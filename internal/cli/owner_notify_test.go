@@ -277,7 +277,7 @@ func TestOwnerApprovalRefusalBlock(t *testing.T) {
 	if code := ExitCode(refusal); code != ExitConflict {
 		t.Fatalf("refusal exit code = %d, want %d (ExitConflict)", code, ExitConflict)
 	}
-	if reason := commandErrorReason(refusal); reason != "owner_approval_required" {
+	if reason := commandErrorReason(refusal); reason != reasonOwnerApprovalRequired {
 		t.Fatalf("refusal reason = %q, want owner_approval_required", reason)
 	}
 	if remediation := commandErrorRemediation(commandErrorReason(refusal)); remediation != "" {

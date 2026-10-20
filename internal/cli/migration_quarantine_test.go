@@ -53,7 +53,7 @@ func TestAQuarantinedMigrationRefusesAtExit3WithItsOwnReason(t *testing.T) {
 			t.Fatalf("Run(%v) error = %v (%T), want the quarantine of v%d", args, err, err, latest)
 		}
 		ev := lastEvent(t)
-		if ev.ExitCode != ExitValidation || ev.Reason != string(reasonMigrationQuarantined) {
+		if ev.ExitCode != ExitValidation || ev.Reason != reasonMigrationQuarantined.String() {
 			t.Errorf("Run(%v) event = exit %d reason %q, want exit %d reason %q", args, ev.ExitCode, ev.Reason, ExitValidation, reasonMigrationQuarantined)
 		}
 	}

@@ -246,7 +246,7 @@ func TestAStoredIllegalPrefixRefusesMintingAndNamesTheRepair(t *testing.T) {
 	// Its own reason, not the family's: the two command-fixable prefix refusals
 	// are cleared by adjusting the command, and this one is not, so it cannot
 	// inherit a remediation that says so.
-	if got := commandErrorReason(err); got != "stored_prefix_refused" {
+	if got := commandErrorReason(err); got != reasonStoredPrefixRefused {
 		t.Fatalf("reason = %q, want stored_prefix_refused", got)
 	}
 
@@ -278,7 +278,7 @@ func TestPrefixSetRepairsAStoredIllegalPrefix(t *testing.T) {
 	}
 
 	out, err := runLit("doctor")
-	if got := commandErrorReason(err); got != "stored_prefix_refused" {
+	if got := commandErrorReason(err); got != reasonStoredPrefixRefused {
 		t.Fatalf("doctor reason = %q (err %v), want stored_prefix_refused — a workspace that cannot mint is not healthy", got, err)
 	}
 	for _, want := range []string{
@@ -344,7 +344,7 @@ func TestPrefixSetRepairsAStoredIllegalPrefixBeforeTheStoreExists(t *testing.T) 
 	}
 	rewriteStoredPrefix(t, info.ConfigPath, "ab")
 
-	if err := runInit(t); commandErrorReason(err) != "stored_prefix_refused" {
+	if err := runInit(t); commandErrorReason(err) != reasonStoredPrefixRefused {
 		t.Fatalf("Run(init) reason = %q (err %v), want stored_prefix_refused", commandErrorReason(err), err)
 	}
 	out, err := runLit("prefix", "set", "myrepo")

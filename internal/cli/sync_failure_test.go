@@ -198,10 +198,10 @@ func TestSyncFailureErrorExitAndRemediation(t *testing.T) {
 	if err.Error() != err.Failure.blockString() {
 		t.Fatal("SyncFailureError.Error() is not the contract block verbatim")
 	}
-	if reason := commandErrorReason(err); reason != "sync_divergence" {
+	if reason := commandErrorReason(err); reason != reasonSyncDivergence {
 		t.Fatalf("reason = %q, want sync_divergence", reason)
 	}
-	if rem := commandErrorRemediation("sync_divergence"); rem != "" {
+	if rem := commandErrorRemediation(reasonSyncDivergence); rem != "" {
 		t.Fatalf("sync_divergence remediation = %q, want empty (block is the remediation)", rem)
 	}
 }

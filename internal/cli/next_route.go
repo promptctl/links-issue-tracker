@@ -218,8 +218,8 @@ type ServedPastNarrowing struct {
 // It is also an error, for the same reason HelpRequestedError is: it is an
 // answer, not a failure, and the error channel is the only channel runNext has
 // for an answer that hands back no row. Being the error itself — rather than
-// being rendered into a separate error type — is what keeps the reason and exit
-// sinks reading the routing verdict rather than a copy of it that could drift
+// being rendered into a separate error type — is what keeps the error
+// classifier reading the routing verdict rather than a copy of it that could drift
 // from these fields. [LAW:one-source-of-truth]
 type Exhausted struct {
 	Epics     []string

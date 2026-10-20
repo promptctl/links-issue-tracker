@@ -157,7 +157,7 @@ to `/Users/bmf/code/links-issue-tracker`.
   (`internal/app/app.go`).
 - `(*App).Close()` = `Store.Close()` (`internal/app/app.go`).
 
-### 2.7 Exit codes (`internal/cli/exit.go`)
+### 2.7 Exit codes (`internal/cli/exit.go`, `internal/cli/error_output.go`)
 
 Constants (`internal/cli/exit.go`):
 
@@ -172,30 +172,10 @@ Constants (`internal/cli/exit.go`):
 | `ExitNoWork` | 6 |
 | `ExitCorruption` | 7 |
 
-`ExitCode(err)` dispatches by `errors.As` in this order
-(`internal/cli/exit.go`):
-
-- `storage.NotFoundError` ⇒ 4
-- `storage.VersionNotFoundError` ⇒ 4
-- `MergeConflictError` ⇒ 5
-- `SyncFailureError` ⇒ 5
-- `templateShapeError` ⇒ 3
-- `ownerApprovalRefusalError` ⇒ 5
-- `CorruptionError` ⇒ 7
-- `storage.ParentCycleError` ⇒ 7
-- `UsageError` ⇒ 2
-- `UnknownCommandError` ⇒ 3
-- `RetiredCommandError` ⇒ 3
-- `model.ValidationError` ⇒ 3
-- `model.StateRequestError` (`model.ContainerActionError`, `lifecycle.RetentionError`, `storage.RelationExistsError`) ⇒ 6 when `Satisfied()`, else 3
-- `UnsupportedError` ⇒ 3
-- `Exhausted` ⇒ 6
-- `NoWork` ⇒ 6
-- `OutsideWorkspaceError` ⇒ 3
-- `store.ErrWorkspaceNotInitialized` ⇒ 3
-- `BulkFailureError` ⇒ 1
-- `store.ErrTransientGCContention` ⇒ 1
-- anything else ⇒ 1
+`ExitCode(err)` is `ExitOK` for a nil error and otherwise the code carried by
+the reason `commandErrorReason(err)` returns (`internal/cli/exit.go`); each
+reason is declared with its code (`internal/cli/error_output.go`). The
+reason-to-code list is in inventory-cli-issue.md §1.8.
 
 ### 2.8 Error rendering (`internal/cli/error_output.go`)
 

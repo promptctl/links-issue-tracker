@@ -764,19 +764,19 @@ func TestRenderNextOutcomeTerminalOutcomesKeepTheirType(t *testing.T) {
 		{
 			name:       "exhausted",
 			outcome:    Exhausted{Epics: []string{"links-epic-abcd"}},
-			wantReason: "scope_exhausted",
+			wantReason: reasonScopeExhausted,
 			wantAct:    "finish or hand off what you already hold",
 		},
 		{
 			name:       "narrowed",
 			outcome:    Narrowed{Hidden: annotation.AnnotatedIssue{Issue: model.Issue{ID: "links-hidden-abcd"}}},
-			wantReason: "scope_narrowed",
+			wantReason: reasonScopeNarrowed,
 			wantAct:    "without the filter",
 		},
 		{
 			name:       "no work",
 			outcome:    NoWork{},
-			wantReason: "no_ready_work",
+			wantReason: reasonNoReadyWork,
 			wantAct:    "lit new",
 		},
 		{
@@ -791,7 +791,7 @@ func TestRenderNextOutcomeTerminalOutcomesKeepTheirType(t *testing.T) {
 				Unreachable: []rowReach{{ID: "links-gate-onpath", reading: reading{Kind: reachNotReady}}},
 				OffPath:     []string{"links-other-offpath"},
 			},
-			wantReason: "no_ready_work",
+			wantReason: reasonNoReadyWork,
 			wantAct:    "lit next --all",
 			// withheldByScope names the off-path row without ever running
 			// capacityFor on it, so the remediation holds no reading of its

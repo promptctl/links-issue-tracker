@@ -133,8 +133,8 @@ func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[string]stor
 		announce = o.Narrowing.Error() + "\nor take the top ready ticket the filter selects, outside the work you hold: " + o.advice() + "\n"
 	// The three terminal outcomes travel outward AS THEMSELVES. Rendering them
 	// into an untyped error here would discard the very discriminator routing
-	// has just established, so both sinks — ExitCode and commandErrorReason —
-	// would fall through to "command_failed", whose remediation tells the agent
+	// has just established, so the classifier, commandErrorReason, would fall
+	// through to "command_failed", whose remediation tells the agent
 	// to retry a deterministic answer and then run `lit doctor` on a healthy
 	// workspace. [LAW:types-are-the-program] classification is carried by the
 	// type, never re-derived from the message.
