@@ -508,7 +508,7 @@ Flag parse output is `io.Discard` (`sync_bg.go`).
 - Decisions: `pushed`, `error`, `canceled`, `workspace_busy`, `diverged` (`sync_push_outcome.go`), plus the skip reasons `no_sync_remote` / `remote_empty` carried through from `syncPushOutcome.skip`.
 - Record JSON: `{decision, reason?, remote?, branch?, observed_by?, receive_merges}` (`sync_push_outcome.go`); marker `<StorageDir>/push-outcome.last` (`sync_push_outcome.go`); mtime = attempt completion time.
 - `failed()` is `Decision == "error"` only (`sync_push_outcome.go`).
-- `pushOutcomeOf(outcome, err, observedBy)` — `sync_push_outcome.go`: stamps `observed_by` and `receive_merges` (`outcome.receiveMerges`, which `performSyncPush` reads through `receiveMergesHere`, `sync_cadence.go`) on the record `classifyPushOutcome` derives, in order:
+- `pushOutcomeOf(outcome, err, observedBy)` — `sync_push_outcome.go`: stamps `observed_by` and `receive_merges` (`outcome.receiveMerges`, which `performSyncPush` reads through `receiveMergesIn`, `sync_cadence.go`, from the one `config.Load` it runs after the push; a load error reads false, with stderr `lit: no automatic receive known to run here, config unreadable: <err>`) on the record `classifyPushOutcome` derives, in order:
   1. `context.Canceled` in `err` or `outcome.pushErr` → `canceled` with the first non-nil error's text, plus remote/branch.
   2. `store.ErrWorkspaceBusy` in `err` or `outcome.pushErr` → `workspace_busy` with the first non-nil error's text, plus remote/branch.
   3. any other `err` → `error` with err text.

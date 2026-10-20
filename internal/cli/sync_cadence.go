@@ -158,13 +158,12 @@ func automaticReceiveScheduled(cfg config.Config) bool {
 	return !autoSyncDisabled() && cfg.Sync.Receive
 }
 
-// receiveMergesHere is automaticReceiveScheduled read from this checkout's
-// config. An unreadable config schedules no receive (syncOnPolicy), so it
-// reads false, and says why on stderr. [LAW:no-silent-failure]
-func receiveMergesHere(ws workspace.Info) bool {
-	cfg, err := config.Load(pathspec.New(ws.RootDir))
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "lit: no automatic receive known to run here, config unreadable: %v\n", err)
+// receiveMergesIn is automaticReceiveScheduled over a config load's result.
+// An unreadable config schedules no receive (syncOnPolicy), so it reads
+// false, and says why on stderr. [LAW:no-silent-failure]
+func receiveMergesIn(cfg config.Config, loadErr error) bool {
+	if loadErr != nil {
+		fmt.Fprintf(os.Stderr, "lit: no automatic receive known to run here, config unreadable: %v\n", loadErr)
 		return false
 	}
 	return automaticReceiveScheduled(cfg)
