@@ -42,11 +42,13 @@ linters:
         # internal/storage and the lock code: a new package that opens the store
         # is refused too, without anyone remembering to list it. atomicfile is
         # the one internal package admitted, and only because its own rule
-        # below holds it to the standard library too.
+        # below holds it to the standard library too. The rule is about what
+        # the writer runs, so a test of it is not held to it.
         statusline-stdlib-only:
           list-mode: strict
           files:
             - "**/internal/statusline/**"
+            - "!$test"
           allow:
             - $gostd
             - github.com/promptctl/links-issue-tracker/internal/atomicfile$
@@ -57,6 +59,7 @@ linters:
           list-mode: strict
           files:
             - "**/internal/atomicfile/**"
+            - "!$test"
           allow:
             - $gostd
         # [LAW:one-way-deps] any package may add a fact to the invocation's

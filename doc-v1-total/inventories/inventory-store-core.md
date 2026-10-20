@@ -4631,7 +4631,7 @@ Documented: lit's own opens bypass the cache (`DisableSingletonCache: true`, `st
 
 ---
 
-## 2. CANDIDATE (`internal/store/candidate.go`, `candidate_test.go`, `candidate_posix_test.go`)
+## 2. CANDIDATE (`internal/store/candidate.go`, `candidate_test.go`)
 
 ### 2.1 What a candidate IS
 
@@ -4718,18 +4718,15 @@ Fixture `preGooseDump()` (`candidate_test.go`): `WorkspaceID: "legacy-ws"`, **no
 
 `TestRebuildCandidateAttemptsAreIsolated` (`candidate_test.go`): two candidates from one dump under one parent; `first.Discard()` twice must both return nil (idempotence); `second.store.Export(ctx)` still yields 2 issues.
 
-### 2.9 POSIX-specific behavior (`candidate_posix_test.go`)
+### 2.9 Removal retry under a refused write (`candidate_test.go`)
 
-Build tag: `//go:build !windows` (`candidate_posix_test.go`).
-
-`TestDiscardRetriesDirectoryRemoval` (`candidate_posix_test.go`):
-- Skips when `os.Geteuid() == 0` with reason `"removal-permission injection has no effect as root"` — root bypasses the permission check so the injection cannot fail there.
-- Injection mechanism is **POSIX directory-write-bit semantics**: `os.Chmod(parent, 0o555)` makes the parent unwritable, and removing an entry requires write permission on its parent. This is permission semantics, not atomicity or rename semantics — no rename or fsync behavior is exercised in this file.
+`TestDiscardRetriesDirectoryRemoval` (`candidate_test.go`):
+- Injection is `fsperm.Deny(t, parent, fsperm.Write)`: the parent refuses changes to its entries, and removing an entry requires write permission on its parent. `fsperm` skips the test where the fault does not take (root, and Windows, which does not enforce a directory's mode for its entries). No rename or fsync behavior is exercised.
 - Under the unwritable parent, the first `cand.Discard()` **must error**.
-- After `os.Chmod(parent, 0o755)`, the second `cand.Discard()` must return nil.
+- After `restore()` puts the parent's mode back, the second `cand.Discard()` must return nil.
 - `dirEntryCount(t, parent)` must then be **0**.
 - Rationale pinned: "A single shared release flag would have nulled everything on the first attempt and the retry would no-op, stranding the directory".
-- Both chmods are also registered via `t.Cleanup` so an early `Fatalf` cannot strand an unwritable parent.
+- `fsperm` also restores the mode at test end, so an early `Fatalf` cannot strand an unwritable parent.
 
 ---
 

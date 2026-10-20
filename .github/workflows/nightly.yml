@@ -116,7 +116,9 @@ jobs:
       # runs. Every invocation runs even after one fails, so one red package
       # cannot hide another. [LAW:no-silent-failure] A line naming a test or a
       # package that does not exist fails the step, so the list cannot outlive
-      # the code it describes and the notice counts tests that exist.
+      # the code it describes and the notice counts tests that exist. -v puts
+      # each test's verdict in the log: a test whose fault this platform does
+      # not enforce skips itself saying why, and only -v shows that it did.
       - name: Test (-short)
         env:
           CGO_ENABLED: '1'
@@ -151,7 +153,7 @@ jobs:
                 echo "::error file=$known::$rel has no test named" $missing "- delete its line" >&2
                 status=1
               fi
-              go test -short -timeout 30m -skip "$re" "./$rel" || status=1
+              go test -v -short -timeout 30m -skip "$re" "./$rel" || status=1
             else
               rest+=("./$rel")
             fi
@@ -159,7 +161,7 @@ jobs:
           for listed in "${!skip[@]}" "${!untested[@]}"; do
             [[ -v seen[$listed] ]] || { echo "::error file=$known::no package $listed under ./cmd/... ./internal/... - delete its lines" >&2; status=1; }
           done
-          go test -short -timeout 30m "${rest[@]}" || status=1
+          go test -v -short -timeout 30m "${rest[@]}" || status=1
           echo "::notice file=$known,title=Known Windows failures::skipped $skipped tests in ${#skip[@]} packages; did not compile or run ${!untested[*]}"
           exit "$status"
 
