@@ -66,7 +66,7 @@ func (s *Store) pushLeasedWithinLock(ctx context.Context, remote, source, branch
 	case pushErr != nil && strings.Contains(pushErr.Error(), datas.ErrStaleInfo.Error()):
 		result.Outcome = storage.LeaseStale
 	case pushErr != nil:
-		return storage.LeasedPush{}, classifyPushFailure(ctx, trimmedRemote, pushErr)
+		return storage.LeasedPush{}, classifyPushFailure(trimmedRemote, pushErr)
 	default:
 		result.Outcome = storage.LeaseHeld
 	}
