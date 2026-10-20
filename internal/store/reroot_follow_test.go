@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
+	"github.com/dolthub/dolt/go/libraries/doltcore/env/actions"
 	"github.com/dolthub/dolt/go/libraries/doltcore/ref"
 	"github.com/dolthub/dolt/go/store/datas"
 	"github.com/dolthub/dolt/go/store/hash"
@@ -398,8 +399,8 @@ func TestSyncPushFollowsAReRootedRemote(t *testing.T) {
 		if err == nil {
 			t.Fatalf("SyncPush(bravo) landed over alpha's concurrent edit")
 		}
-		if strings.Contains(err.Error(), noCommonAncestorMsg) {
-			t.Fatalf("the push was refused for histories with no common ancestor after following: %v", err)
+		if !errors.Is(err, actions.ErrCantFF) {
+			t.Fatalf("the push was not refused as non-fast-forward after following: %v", err)
 		}
 		r.assertFollowed(t, bravo, storage.SyncEntryPush)
 		pulled, err := bravo.SyncPull(ctx, remoteName(t, "origin"), "master")

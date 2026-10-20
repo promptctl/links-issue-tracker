@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
+
 	"github.com/promptctl/links-issue-tracker/internal/merge"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
@@ -709,5 +711,29 @@ func TestReconcileScratchCleanupSurvivesCallerCancel(t *testing.T) {
 	assertScratchBranchCleanedUp(t, bg, st)
 	if branch, err := activeBranch(bg, st.db); err != nil || branch != dataBranch {
 		t.Fatalf("active branch = %q (%v); want the data branch %q", branch, err, dataBranch)
+	}
+}
+
+// mergeBase reads unrelated histories off doltdb.ErrNoCommonAncestor alone, so
+// any other failure of DOLT_MERGE_BASE is an error and never "unrelated": a
+// ref that does not exist must not let two refs pass as sharing no history.
+func TestAMergeBaseThatFailsIsAnErrorNotUnrelated(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openSyncOrFatal(t, ctx, migratedDoltDir(t))
+	defer func() { _ = st.Close() }()
+	same, err := mergeBase(ctx, st.db, "master", "master")
+	if err != nil {
+		t.Fatalf("mergeBase(master, master) error = %v", err)
+	}
+	if _, ok := same.shared(); !ok {
+		t.Fatalf("mergeBase(master, master) = %+v, want a shared commit", same)
+	}
+	missing, err := mergeBase(ctx, st.db, "master", "no-such-ref")
+	if err == nil {
+		t.Fatalf("mergeBase(master, no-such-ref) = %+v, want an error", missing)
+	}
+	if errors.Is(err, doltdb.ErrNoCommonAncestor) {
+		t.Fatalf("mergeBase(master, no-such-ref) error = %v, which reads as unrelated histories", err)
 	}
 }

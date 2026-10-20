@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -55,11 +56,10 @@ func (s *Store) pushLeasedWithinLock(ctx context.Context, remote storage.RemoteN
 		return s.db.QueryRowContext(ctx, query, stringArgsToAny(args)...).Scan(&status, &message)
 	})
 	// [LAW:parse-dont-validate] the stale verdict is classified once, here,
-	// and travels on as the outcome. The SQL boundary renders DOLT_PUSH's
-	// error as text (MySQL error 1105), so it is recognized by the text of
-	// Dolt's own sentinel, which DOLT_PUSH carries for a stale target.
+	// and travels on as the outcome. DOLT_PUSH wraps datas.ErrStaleInfo for a
+	// stale target, and the driver's error unwraps to it.
 	switch {
-	case pushErr != nil && strings.Contains(pushErr.Error(), datas.ErrStaleInfo.Error()):
+	case errors.Is(pushErr, datas.ErrStaleInfo):
 		return storage.LeaseStale, nil
 	case pushErr != nil:
 		return storage.LeaseUnsettled, classifyPushFailure(remote, pushErr)

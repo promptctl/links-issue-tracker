@@ -195,7 +195,7 @@ After all attempts, whether or not they failed, and **outside** the commit lock 
 2. `s.guardRemoteSchemaAhead(ctx, remote, branch)` runs first (`sync.go`).
 3. Args built in order: `"--set-upstream"` if `setUpstream`, `"--force"` if `force`, then the remote, then `fmt.Sprintf("HEAD:%s", branch)` (`sync.go`).
 4. `head` = `headCommitWithinLock` (`SELECT commit_hash FROM dolt_log() LIMIT 1`, trimmed; error `"read head commit: %w"`), read before the push so a failed read fails an attempt that has sent nothing (`sync.go`).
-5. `CALL DOLT_PUSH(...)` scanned into `(result.Status int64, message sql.NullString)` (`sync.go`). The error goes through `classifyPushFailure`: a `RemoteUnreachableError` is wrapped `"push remote %q: %w"` by its type; otherwise an error whose text carries one of `pushRefusalTexts` — the hint of `env.ErrFailedToPush` (a target rejected non-fast-forward; its opening line is git's own, which a git remote's rejected write carries too) or `doltdb.ErrNoCommonAncestor` — is the remote's refusal, `pushRefusedError{remote, cause}`; any other (one that never opened, a write the remote's storage failed, an ended context) is wrapped `"push remote %q: %w"`, with the same text. Both refusals come from the fast-forward check a forced push skips. Tests: `TestOnlyARefusedPushIsFollowedAndRetried` (`sync_push_refusal_test.go`), over the texts DOLT_PUSH returned for each; `TestPushRefusalTextsAreDoltsOwn`, the rejection hint against Dolt's `ErrFailedToPush`.
+5. `CALL DOLT_PUSH(...)` scanned into `(result.Status int64, message sql.NullString)` (`sync.go`). The error goes through `classifyPushFailure`: a `RemoteUnreachableError` is wrapped `"push remote %q: %w"` by its type; otherwise an error that wraps one of `pushRefusals` — `doltdb.ErrIsAhead`, `actions.ErrCantFF`, `datas.ErrMergeNeeded` (the target rejections Dolt reports as non-fast-forward) or `doltdb.ErrNoCommonAncestor` — is the remote's refusal, `pushRefusedError{remote, cause}`; any other (a stale lease, one that never opened, a write the remote's storage failed, an ended context) is wrapped `"push remote %q: %w"`, with the same text. Every refusal comes from the fast-forward check a forced push skips. Test: `TestOnlyARefusedPushIsFollowedAndRetried` (`sync_push_refusal_test.go`).
 6. `result.Message = nullStringValue(message)` — NULL→`""`, otherwise trimmed; `result.Head = head` (`sync.go`).
 
 `SyncPushFromClone(ctx, remote, branch, setUpstream, force)` (`sync.go`) — requires both remote and branch (`requireSyncArg`), then `pushMutation` and `retryPushAfterFollow` on its outcome, then `recordFollowOnClone(followed, followErr)`: a follow that moved with no error moves the fork points under one `runSyncMutation` (`moveForkPointsAcrossTheCut`), its error the record's `Collection.Err`, and collects nothing, then the follow is recorded (`TestSyncPushFromCloneFollowsAReRootedRemote`, `reroot_follow_test.go`); a push that lands (first or after following) returns its result. A failure that is not a `pushRefusedError` fetched nothing and is returned as it failed. A refusal that stands has already had its fetch; a failed fetch or follow returns the push error joined as `"%w (and whether a concurrent push superseded it could not be checked — %v)"`. Otherwise, inside one `runSyncMutation`, `SyncFreshness(remote, branch)`; a failed read returns the push error joined as `"%w (and whether a concurrent push superseded it could not be checked: %v)"`. A state other than `up_to_date` or `behind` — the remote does not carry HEAD — returns the push error as `retryPushAfterFollow` returned it (wrapped in `storage.ErrPushDiverged` when diverged). Otherwise the result is `SyncPushResult{Head: <HEAD>, Superseded: <push error text>}` and no error. Test: `TestSyncPushFromCloneReportsARaceItLostAsSuperseded` (`sync_push_from_clone_test.go`).
@@ -505,16 +505,11 @@ Each runs through `followThenReconcile` (`sync_reconcile.go`): `followRemoteReRo
 
 `mergeBaseResult{commit string; hasBase bool}` (`sync_reconcile.go`); `shared() (commit, ok)` (`sync_reconcile.go`).
 
-`noCommonAncestorMsg = "no common ancestor"` (`sync_reconcile.go`) — the message `doltdb.ErrNoCommonAncestor` surfaces through the engine as a generic Error 1105.
-
-`isNoCommonAncestor(err)` (`sync_reconcile.go`): true when `errors.Is(err, sql.ErrNoRows)` **or** `strings.Contains(err.Error(), "no common ancestor")`. Deliberately **not** matched on code 1105 (MySQL's catch-all `ER_UNKNOWN_ERROR`, which would over-match).
-
 `mergeBase(ctx, db, ref1, ref2)` (`sync_reconcile.go`):
-1. `SELECT DOLT_MERGE_BASE(?, ?)` scanned as `sql.NullString`.
-2. `isNoCommonAncestor(err)` → `(mergeBaseResult{}, nil)` — i.e. `hasBase=false`.
-3. any other error → `"merge-base of %q and %q: %w"`.
-4. Valid, non-blank scalar → `{commit: trimmed, hasBase: true}`.
-5. NULL or blank scalar → `hasBase=false` (belt-and-suspenders across backend versions, `sync_reconcile.go`).
+1. `SELECT DOLT_MERGE_BASE(?, ?)` scanned as `string`.
+2. `errors.Is(err, doltdb.ErrNoCommonAncestor)` → `(mergeBaseResult{}, nil)` — i.e. `hasBase=false`. The driver's `*MySQLError` unwraps to the engine's error, so the sentinel is reached by type.
+3. any other error, a NULL scalar included → `"merge-base of %q and %q: %w"`.
+4. otherwise → `{commit: base, hasBase: true}`.
 
 ### 5.9 The reconcile algorithm (`reconcile`)
 

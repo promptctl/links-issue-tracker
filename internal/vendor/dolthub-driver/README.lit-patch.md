@@ -94,8 +94,11 @@ modules lit already owns, on both ends.
 
 `mysql_error.go` defines this driver's own `MySQLError` — a server error code
 and a message, the two fields the MySQL protocol's ERR packet gives a client a
-reason to branch on, and exactly the two our producer sets and our consumer
-reads. It was written from the protocol and from those call sites, **not** from
+reason to branch on — and keeps the engine error it was translated from,
+which `Unwrap` returns. The engine runs in-process, so that error still
+carries Dolt's sentinels, and lit decides Dolt's verdicts (a stale lease, a
+refused push, unrelated histories) with `errors.Is` on it, never on the
+message (`links-storage-3k6u.cr2`). It was written from the protocol and from those call sites, **not** from
 go-sql-driver's source, per `design-docs/clean-room-reimplementation.md`: this
 epic's default is rewrite, and a shape partly dictated by a wire protocol is
 still not ours to copy out of an MPL-2.0 file. It carries no SQL state, because

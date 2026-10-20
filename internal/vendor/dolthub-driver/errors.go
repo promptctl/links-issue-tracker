@@ -20,7 +20,8 @@ import (
 
 // translateError converts a go-mysql-server error into this driver's
 // *MySQLError. This improves compatibility with clients that program against
-// embedded and sql-server Dolt.
+// embedded and sql-server Dolt. The *MySQLError wraps err, so the engine's own
+// error chain stays reachable through errors.Is and errors.As.
 //
 // [LAW:one-source-of-truth] Modified by lit: this copy does not construct
 // github.com/go-sql-driver/mysql's MySQLError, because that would make an
@@ -35,5 +36,6 @@ func translateError(err error) error {
 	return &MySQLError{
 		Number:  uint16(vitessErr.Num),
 		Message: vitessErr.Message,
+		cause:   err,
 	}
 }

@@ -15,7 +15,7 @@ one below carries the condition that would let it be deleted.
 
 | Module in `go.mod` | Upstream | What `lit` builds | Branch | Current pin |
 | --- | --- | --- | --- | --- |
-| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20261020194339-6839d5fdc5e8` |
+| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20261020200859-593561a4c1e4` |
 | `github.com/dolthub/go-mysql-server` | [dolthub/go-mysql-server](https://github.com/dolthub/go-mysql-server) | [promptctl/go-mysql-server](https://github.com/promptctl/go-mysql-server) | `lit` | `v0.20.1-0.20260821032251-ab5cb9ec3b69` |
 | `github.com/dolthub/driver` | [dolthub/driver](https://github.com/dolthub/driver) | [`internal/vendor/dolthub-driver`](internal/vendor/dolthub-driver) | — | `v0.2.1-0.20260314000741-0fe74e7ee31a` |
 
@@ -307,9 +307,8 @@ Publishing a re-rooted history (`links-storage-3k6u`) has to refuse instead.
 root update, on every retry, and refuses with `datas.ErrStaleInfo` unless it
 is `<commit>` or already the pushed commit — the second so that a push
 retried after its first attempt landed does not report its own write as
-stale. The SQL boundary renders the error as text, so
-`internal/store/push_lease.go` recognizes a stale lease by the sentinel's
-own message.
+stale. Patch 14 carries that error through `DOLT_PUSH` to the driver, so
+`internal/store/push_lease.go` recognizes a stale lease by `errors.Is`.
 
 **Retire it when** upstream ships a conditional push (git's
 `--force-with-lease` or an equivalent compare-and-swap) and the `require`
@@ -451,6 +450,31 @@ without the patch; the second fails on the nightly `windows` lane.
 platform and reports the cancel to its caller, and the `require` line moves
 past that change. Dropping it without that brings back a cancelled push or
 fetch whose transport outlives `lit`.
+
+#### Patch 14 — a push rejection keeps its cause through `DOLT_PUSH`
+
+`go/libraries/doltcore/env/actions/remotes.go`,
+`go/libraries/doltcore/sqle/dprocedures/dolt_push.go`.
+
+`lit` decides three push verdicts off Dolt's own errors: a stale lease
+(`datas.ErrStaleInfo`), a non-fast-forward rejection (`doltdb.ErrIsAhead`,
+`actions.ErrCantFF`, `datas.ErrMergeNeeded`) and a remote with no common
+ancestor (`doltdb.ErrNoCommonAncestor`). Dolt rebuilt each of them as text
+before `DOLT_PUSH` returned, so `lit` could only match messages
+(`links-storage-3k6u.cr2`). `DoPush` wraps every rejected target's error, not
+only a stale one, onto the `ErrFailedToPush` it returns; `PushToRemoteBranch`
+wraps an unknown push error's cause with `%w`; and `DOLT_PUSH` wraps the error
+it prefixes with the push's report. Every message reads as before, except a
+non-fast-forward rejection, which appends its cause as a stale one already
+did. `TestAStaleLeaseLeavesTheBranchOnItsHistory`,
+`TestSyncPushFollowsAReRootedRemote` and
+`TestAQuietForksRefusedPushIsNotSuperseded` in `internal/store` fail without
+the patch.
+
+**Retire it when** upstream's `DOLT_PUSH` returns its rejections with their
+causes wrapped, and the `require` line moves past that change. Dropping it
+without that turns every refused push into a plain failure that is never
+followed, and every stale lease into an unsettled one.
 
 ### promptctl/go-mysql-server
 
