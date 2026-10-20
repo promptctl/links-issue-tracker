@@ -6,6 +6,7 @@ import (
 	"maps"
 	"slices"
 
+	"github.com/promptctl/links-issue-tracker/internal/historywindow"
 	"github.com/promptctl/links-issue-tracker/internal/merge"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
@@ -130,7 +131,7 @@ type Syncer interface {
 	// nothing and returns none.
 	FollowedReRoots() []FollowedReRoot
 
-	// SyncKeepHistoryBound keeps the sync branch's history under its bound
+	// SyncKeepHistoryBound keeps the sync branch's history inside window
 	// once pushed has landed on remote's branch, whichever push landed it,
 	// and returns pushed with AfterPush set once it wrote a re-root and the
 	// bound's account joined to its Maintenance.
@@ -139,7 +140,7 @@ type Syncer interface {
 	// the remote's GC, and follows the re-root. The push landed whatever the
 	// bound did, so the bound fails nothing: where it stopped is on its
 	// record (HistoryBounds) and in the account.
-	SyncKeepHistoryBound(ctx context.Context, remote, branch string, pushed SyncPushResult) SyncPushResult
+	SyncKeepHistoryBound(ctx context.Context, remote, branch string, window historywindow.Window, pushed SyncPushResult) SyncPushResult
 
 	// HistoryBounds is what every SyncKeepHistoryBound since the engine
 	// opened did, oldest first: the remote head's height every time, and the

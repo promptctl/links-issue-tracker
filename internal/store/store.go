@@ -66,10 +66,9 @@ type Store struct {
 	// strandedWritesCommits is every commit freshnessOverEveryWrite landed
 	// since the store opened; StrandedWritesCommits is its one reader.
 	strandedWritesCommits []storage.StrandedWritesCommit
-	// bound is the sync branch's history bound, which every push that lands
-	// keeps (boundHistory), and bounds is what each such push since the
-	// store opened did to keep it; HistoryBounds is its one reader.
-	bound  historyBound
+	// bounds is what each push since the store opened did to keep the sync
+	// branch's history inside its window (boundHistory); HistoryBounds is
+	// its one reader.
 	bounds []storage.HistoryBound
 
 	// clock is where this store learns the instant it stamps a write with. It
@@ -448,7 +447,6 @@ func openStoreConnection(ctx context.Context, doltRootDir string, workspaceID st
 		access:              access,
 		releaseEngineRecord: releaseEngineRecord,
 		clock:               storage.SystemClock,
-		bound:               DefaultHistoryBound,
 		// Both facts about the commit lock, drawn side by side from the one
 		// root, so neither is ever recovered by inverting the other.
 		// [LAW:one-source-of-truth]

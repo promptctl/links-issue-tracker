@@ -159,13 +159,10 @@ var doltWorkspaceMachinery = map[string][]string{
 	// writing through the chunk store with no engine, so there is no handle to
 	// ask through the contract. The CLI's one caller is the follow's end-to-end
 	// test, which re-roots one checkout and force-pushes it to stand in for
-	// the push path's own trigger (SyncKeepHistoryBound). DefaultHistoryBound
-	// is the bound every store opens with, read at open, before any handle
-	// exists to ask; the mirror's end-to-end test shrinks it so a few writes
-	// reach it, as the mirror tests shrink MirrorPushDeadline. Dolt history
+	// the push path's own trigger (SyncKeepHistoryBound). Dolt history
 	// machinery, deleted at S4 with the rest.
 	"history bound": {
-		"ReRoot", "DefaultHistoryBound",
+		"ReRoot",
 	},
 	// Typed failures the CLI matches to choose an exit code and a message.
 	// [LAW:parse-dont-validate] — matched as types, never by message text.

@@ -280,4 +280,7 @@ func TestSyncPushPutsTheHistoryBoundOnItsEvent(t *testing.T) {
 	if follows, ok := ev.Facts["reroot.follows"].([]any); !ok || len(follows) != 0 {
 		t.Fatalf("event %q reroot.follows = %v; want an empty list: nothing followed, so nothing collected", ev.Event, ev.Facts["reroot.follows"])
 	}
+	if windowErr, ok := ev.Facts["history_bound.window_error"]; !ok || windowErr != nil {
+		t.Fatalf("event %q history_bound.window_error = %v (present %t); want null: the window was read", ev.Event, windowErr, ok)
+	}
 }

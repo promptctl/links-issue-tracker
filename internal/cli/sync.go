@@ -10,7 +10,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/engine"
+	"github.com/promptctl/links-issue-tracker/internal/pathspec"
 	"github.com/promptctl/links-issue-tracker/internal/precedence"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
@@ -511,6 +513,26 @@ type syncPushOutcome struct {
 // compaction branch and never compacts a push it skips.
 type syncPushStep func(ctx context.Context, remote, branch string, setUpstream, force bool) (storage.SyncPushResult, error)
 
+// keepHistoryBound keeps the history bound of a push that landed, inside the
+// window the workspace's config names. The bound fails nothing, so a config
+// Load refuses fails only the bound: the push stays landed, its maintenance
+// line says the bound was not kept and why, and the event's
+// history_bound.window_error carries the refusal, null when the window was
+// read. [LAW:no-silent-failure]
+func keepHistoryBound(ctx context.Context, session syncSession, ws workspace.Info, remote, branch string, pushed storage.SyncPushResult) storage.SyncPushResult {
+	cfg, err := config.Load(pathspec.New(ws.RootDir))
+	telemetry.Set(ctx, "history_bound.window_error", telemetry.ErrorText(err))
+	if err != nil {
+		notKept := "history bound not kept: " + err.Error()
+		if pushed.Maintenance != "" {
+			notKept = pushed.Maintenance + "; " + notKept
+		}
+		pushed.Maintenance = notKept
+		return pushed
+	}
+	return session.syncer.SyncKeepHistoryBound(ctx, remote, branch, cfg.Sync.HistoryWindow, pushed)
+}
+
 // historyBoundDeadline is the deadline a landed push's history bound runs
 // under. The bound crosses the network three times — the re-root's lease
 // push, the remote's GC, the fetch that learns what the remote carries — and
@@ -650,7 +672,7 @@ func performSyncPush(ctx, completionCtx context.Context, session syncSession, ws
 	// is spent, and the bound's network legs need their own.
 	if pushErr == nil {
 		boundCtx, cancelBound := context.WithTimeout(completionCtx, historyBoundDeadline())
-		result = session.syncer.SyncKeepHistoryBound(boundCtx, remoteName, syncBranch, result)
+		result = keepHistoryBound(boundCtx, session, ws, remoteName, syncBranch, result)
 		cancelBound()
 	}
 	traceMetadata := syncPushTraceMetadata(remoteName, syncBranch, result, pushErr)

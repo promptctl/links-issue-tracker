@@ -291,6 +291,8 @@ Defaults are set in `Load` (`internal/config/config.go`).
 | `sync.cadence` | string enum | `"on-change"` | `internal/config/config.go`; legal values `on-push`, `on-change`; invalid ⇒ `config: sync.cadence must be one of on-push, on-change, got %q` |
 | `sync.receive` | bool | `true` | `internal/config/config.go` |
 | `sync.owner_notify_cmd` | string | `""` | `internal/config/config.go`; empty means no owner-notification channel |
+| `sync.history_bound.re_root_at` | int64 | `int64(2000)` | `internal/config/config.go`; read by `parseHistoryWindow` with `v.Get`, not struct-tag decoding; anything but a non-negative `int64` fails with `config: %s must be a whole number of commits, got %#v (%T)` |
+| `sync.history_bound.keep` | int64 | `int64(1000)` | `internal/config/config.go`; read as `.re_root_at` is; the pair becomes `Sync.HistoryWindow` (`historywindow.Window`, `mapstructure:"-"`) through `historywindow.New`, failing `config: sync.history_bound: a history window keeps at least one commit and fewer than it re-roots at; re_root_at %d, keep %d is not one` unless `1 <= keep < re_root_at` |
 | `claims.freshness_window` | duration string | `"6h"` | `internal/config/config.go`; read as a **string** (`v.GetString`) and parsed by `time.ParseDuration` |
 
 - `claims.freshness_window` is explicitly excluded from struct-tag decoding (`mapstructure:"-"`,

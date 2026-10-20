@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/viper"
 
+	"github.com/promptctl/links-issue-tracker/internal/historywindow"
 	"github.com/promptctl/links-issue-tracker/internal/pathspec"
 )
 
@@ -81,6 +82,33 @@ func parseFreshnessWindow(raw string) (time.Duration, error) {
 	return window, nil
 }
 
+// parseHistoryWindow is sync.history_bound as the window it names, refused
+// when either count is not a whole number of commits or the pair keeps none
+// or drops none. A TOML integer, and the default, are int64; anything else is
+// a value the user did not mean as a count. [LAW:parse-dont-validate]
+func parseHistoryWindow(v *viper.Viper) (historywindow.Window, error) {
+	count := func(key string) (uint64, error) {
+		n, ok := v.Get(key).(int64)
+		if !ok || n < 0 {
+			return 0, fmt.Errorf("config: %s must be a whole number of commits, got %#v (%T)", key, v.Get(key), v.Get(key))
+		}
+		return uint64(n), nil
+	}
+	reRootAt, err := count("sync.history_bound.re_root_at")
+	if err != nil {
+		return historywindow.Window{}, err
+	}
+	keep, err := count("sync.history_bound.keep")
+	if err != nil {
+		return historywindow.Window{}, err
+	}
+	window, err := historywindow.New(reRootAt, keep)
+	if err != nil {
+		return historywindow.Window{}, fmt.Errorf("config: sync.history_bound: %w", err)
+	}
+	return window, nil
+}
+
 type SyncConfig struct {
 	Cadence SyncCadence `mapstructure:"cadence"`
 	// Receive enables the background receive worker that fast-forwards the local
@@ -99,6 +127,15 @@ type SyncConfig struct {
 	// where is the command's business, never lit's.
 	// [LAW:no-mode-explosion]
 	OwnerNotifyCmd string `mapstructure:"owner_notify_cmd"`
+	// HistoryWindow is sync.history_bound: the window the sync branch's
+	// history is kept inside. A push that leaves the remote head at height
+	// re_root_at or above re-roots it, keeping keep commits. It is what sets a
+	// store's size, since the store grows with every commit it keeps. The
+	// defaults hold this repository's store between 35.8 MB and 64.7 MB,
+	// measured on a copy of it (links-storage-3k6u.8ka). Filled by
+	// parseHistoryWindow rather than by struct-tag decoding, whose weak decode
+	// would take re_root_at = -1 as a height no push ever reaches.
+	HistoryWindow historywindow.Window `mapstructure:"-"`
 }
 
 // SyncCadence selects when lit mirrors its Dolt store to the configured git
@@ -190,13 +227,15 @@ func StateDir() (string, error) {
 // holds it to the keys Load decodes, so a key cannot be read without a default
 // or accepted without being read.
 var settings = map[string]any{
-	"ready.required_fields":     []string{},
-	"quickstart.soil_mode":      false,
-	"snapshot.retention_budget": 5,
-	"sync.cadence":              string(SyncCadenceOnChange),
-	"sync.receive":              true,
-	"sync.owner_notify_cmd":     "",
-	"claims.freshness_window":   "6h",
+	"ready.required_fields":         []string{},
+	"quickstart.soil_mode":          false,
+	"snapshot.retention_budget":     5,
+	"sync.cadence":                  string(SyncCadenceOnChange),
+	"sync.receive":                  true,
+	"sync.owner_notify_cmd":         "",
+	"sync.history_bound.re_root_at": int64(2000),
+	"sync.history_bound.keep":       int64(1000),
+	"claims.freshness_window":       "6h",
 }
 
 // legacyRequiredFieldsKey is the top-level spelling of ready.required_fields.
@@ -316,6 +355,14 @@ func Load(workspaceRoot pathspec.PathSpec) (Config, error) {
 		return Config{}, err
 	}
 	cfg.Claims.FreshnessWindow = window
+	// [LAW:single-enforcer] sync.history_bound becomes a historywindow.Window
+	// once, here, so the push path is handed a window that keeps and drops and
+	// never re-checks it.
+	historyWindow, err := parseHistoryWindow(v)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.Sync.HistoryWindow = historyWindow
 	return cfg, nil
 }
 
