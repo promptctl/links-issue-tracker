@@ -51,7 +51,7 @@ func TestAPushRefusedOverAPeersPushNotifiesOnlyWhenNothingMergesIt(t *testing.T)
 				}
 				ev := lastEvent(t)
 				assertPushDecision(t, ev, receive.decision)
-				if merges := ev.Facts["push.outcomes"].([]any)[0].(map[string]any)["push.receive_merges"]; merges != receive.on {
+				if merges := ev.Occurrences["push.outcomes"][0].(map[string]any)["push.receive_merges"]; merges != receive.on {
 					t.Fatalf("bravo's push.receive_merges = %v; want %t", merges, receive.on)
 				}
 				ws, err := workspace.Resolve(r.bravo)
