@@ -61,14 +61,25 @@ type ServedFromEpicLane struct {
 // the row's state. A ready ticket reads as a fresh start whatever its lane's
 // history: a lane whose claim expired is unclaimed, and nothing about the
 // expired claim is printed (links-claims-y6yz).
+type ServedFromNewLane struct{ poolPick }
+
+// poolPick is a row the global pool served, with the lane starting it would
+// claim and the focus scope the pool answered over. The scope is the one
+// routeNext partitioned the pool by, carried out of the walk rather than
+// re-derived by the renderer, so the pick says which question produced it: the
+// focus path, or — the zero scope — the whole queue. Only the outcomes the pool
+// builds embed it, so a pick from steps 1-2b, which no scope narrowed, has no
+// field through which it could claim one. [LAW:types-are-the-program]
+// [LAW:one-source-of-truth]
 //
 // Lane is the LaneID and not its String(): the rendering belongs to whoever
 // knows the reader, and stringifying here would throw away the discriminator
 // the renderer needs to tell a lane worth naming from one that would only
 // repeat the ticket. [LAW:types-are-the-program]
-type ServedFromNewLane struct {
-	Row  annotation.AnnotatedIssue
-	Lane model.LaneID
+type poolPick struct {
+	Row   annotation.AnnotatedIssue
+	Lane  model.LaneID
+	Scope focusScope
 }
 
 // ServedFromDependency is routing step 1b or 2b: a ready ticket OUTSIDE our
@@ -145,8 +156,7 @@ func (h hop) name() string { return workName(h.Prerequisite, h.Through) }
 // reason the scope stopped.
 // [LAW:types-are-the-program] [LAW:no-silent-failure]
 type ServedPastExhaustion struct {
-	Row        annotation.AnnotatedIssue
-	Lane       model.LaneID
+	poolPick
 	Exhaustion Exhausted
 }
 
@@ -169,8 +179,7 @@ type Narrowed struct{ Hidden annotation.AnnotatedIssue }
 // rather than a flag, so the one sentence that names the hidden ticket is
 // written once, on Narrowed.
 type ServedPastNarrowing struct {
-	Row       annotation.AnnotatedIssue
-	Lane      model.LaneID
+	poolPick
 	Narrowing Narrowed
 }
 
@@ -515,10 +524,12 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 	// the focus-scoped one — see the step 4 comment below — and, as at every
 	// step, serves admits what may be served from it: the filter for the run's
 	// answer, every row for the answer the filter would otherwise have got.
+	// The pick carries that scope out, so what the run says it answered over is
+	// the scope it did answer over.
 	pool, offPath := scope.partition(rows)
-	fromPool := func(serves func(annotation.AnnotatedIssue) bool) (annotation.AnnotatedIssue, bool) {
+	fromPool := func(serves func(annotation.AnnotatedIssue) bool) (poolPick, bool) {
 		row, _, ok := pickFrom(pool, serves, func(model.LaneID) bool { return true }, serveWork)
-		return row, ok
+		return poolPick{Row: row, Lane: laneOf(row), Scope: scope}, ok
 	}
 	// The diagnostics name only rows the filter selects: what they report is
 	// why this run's question got no row.
@@ -583,8 +594,8 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 		// rows it selects.
 		if _, hidden, ok := ownSteps(anyRow); ok {
 			narrowing := Narrowed{Hidden: hidden}
-			if row, ok := fromPool(selected); ok {
-				return ServedPastNarrowing{Row: row, Lane: laneOf(row), Narrowing: narrowing}
+			if pick, ok := fromPool(selected); ok {
+				return ServedPastNarrowing{poolPick: pick, Narrowing: narrowing}
 			}
 			return narrowing
 		}
@@ -595,14 +606,14 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 			Blocked:  blockersOf(gating, workToward),
 			Held:     heldByThemselves(rows, ours, reachFor),
 		}
-		if row, ok := fromPool(selected); ok {
-			return ServedPastExhaustion{Row: row, Lane: laneOf(row), Exhaustion: exhausted}
+		if pick, ok := fromPool(selected); ok {
+			return ServedPastExhaustion{poolPick: pick, Exhaustion: exhausted}
 		}
 		// Nothing outside our scope is ready that the filter selects. Over the
 		// whole queue the pool may still serve a row, and then the filter is why
 		// nothing outside is on offer: "nothing ready outside it" would be false.
 		if hidden, ok := fromPool(anyRow); ok {
-			exhausted.Narrowing = &Narrowed{Hidden: hidden}
+			exhausted.Narrowing = &Narrowed{Hidden: hidden.Row}
 			return exhausted
 		}
 		// The pool offered nothing, so what the focus kept from it is the rest
@@ -624,11 +635,11 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 	//
 	// "No ready work" is asked of the queue, as exhaustion is: when only the
 	// filter emptied the pool, the answer is the ticket it hid.
-	if row, ok := fromPool(selected); ok {
-		return ServedFromNewLane{Row: row, Lane: laneOf(row)}
+	if pick, ok := fromPool(selected); ok {
+		return ServedFromNewLane{pick}
 	}
 	if hidden, ok := fromPool(anyRow); ok {
-		return Narrowed{Hidden: hidden}
+		return Narrowed{Hidden: hidden.Row}
 	}
 	return NoWork{Unreachable: passedOver(selectedOf(pool), reachFor), OffPath: withheldByScope(selectedOf(offPath))}
 }
@@ -1103,8 +1114,12 @@ var (
 // words, because those are rows the pool withheld.
 const (
 	outOfViewNote    = "on your path but outside this view — `lit show` it"
-	offFocusPathNote = "off the focus path this run answered over — `lit next --all` to route over the whole queue"
+	offFocusPathNote = "off the focus path this run answered over — " + focusEscape
 )
+
+// focusEscape is the way out of the focus scope for one run, said the same
+// wherever `lit next` names that scope. [LAW:one-source-of-truth]
+const focusEscape = "`lit next --all` to route over the whole queue"
 
 // maxNamedPerKind caps how many ids one clause names outright. NoWork's rows
 // are every row the pool walk went past — the whole filtered backlog, not the
