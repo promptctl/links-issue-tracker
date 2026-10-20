@@ -50,6 +50,7 @@ lines here for reading:
   "facts": {
     "next.outcome": "served_from_new_lane",
     "next.picked": "app-auth-082.oa5",
+    "next.picked_focus_goals": [],
     "next.dependency_path": [],
     "next.exhausted_epics": [],
     "next.exhausted_progress": {"done": 0, "total": 0},
@@ -100,6 +101,7 @@ filter, writes `"outcome": "error"` and none of these keys.
 | --- | --- |
 | `next.outcome` | How the pick was reached: `served_from_claim`, `resumed_own_work`, `served_from_epic_lane`, `served_from_new_lane`, `served_from_dependency`, `served_past_exhaustion`, `served_past_narrowing`, `exhausted`, `narrowed`, or `no_work`. |
 | `next.picked` | The ticket id it printed, or `null` when it picked nothing. |
+| `next.picked_focus_goals` | The focus goals whose prerequisite path the pool was narrowed to, when the global pool served the pick. Empty for a pick over the whole queue, for a pick from your own lanes or epic, and when it picked nothing. |
 | `next.dependency_path` | For `served_from_dependency`, how the pick clears the way: the ticket of yours it unblocks, each prerequisite between — an epic followed by the ticket under it the walk went through — then the dependency the pick is work toward, which is the pick itself or the epic it sits under. Empty for every other outcome. |
 | `next.exhausted_epics` | The epics whose open work it found unreachable. |
 | `next.exhausted_progress` | How far the stopped scope had come, counted over every lane of it: `done` is how many of its tickets are closed and `total` is how many there are, archived and deleted tickets left out. Both are `0` when no scope stopped. |
@@ -107,6 +109,7 @@ filter, writes `"outcome": "error"` and none of these keys.
 | `next.held` | Tickets in those epics held by something about the ticket itself, such as a reserved label. |
 | `next.off_path` | Tickets a focus label kept out of the pick. |
 | `next.hidden_by_filter` | The ticket the `--type`, `--status`, `--labels` or `--assignee` filter left out when that is why the run served past its epic or served nothing: the one `lit next` without the filter would hand you. Always set for `served_past_narrowing` and `narrowed`, set for `exhausted` when the filter hid every ready ticket outside the epic, and `null` otherwise. |
+| `next.hidden_focus_goals` | The focus goals whose prerequisite path the pool was narrowed to, when the global pool offered the ticket in `next.hidden_by_filter`. Empty when that ticket came from your own lanes or epic, for a pool over the whole queue, and when no filter hid one. |
 | `next.unreachable` | When it found nothing at all, every ticket it went past. |
 | `next.stay_offered` | Whether its output offered filing a ticket to unblock the epic instead of moving on. |
 | `counts.next.rows_gathered` | How many tickets it chose among: the workable tickets its filter selects. |

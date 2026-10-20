@@ -285,7 +285,12 @@ one of epic E". A pick that continues an epic you already hold a lane in closes 
 qualifier saying so, and a pick that gates one of your blocked tickets closes
 on a qualifier naming the ticket it unblocks. The same line from the global
 pool carries neither, unless the pool was reached past an exhausted epic or past
-the ticket a filter hid, when the lines above it say so.
+the ticket a filter hid, when the lines above it say so. Under a `focus` label, a
+pick from the global pool closes on a qualifier naming the focus goals and
+`lit next --all`, because the label narrowed the pool it was picked from; picks
+from your own lanes and epic never carry it. The same qualifier follows the
+pool's ticket a filter hid: the filter emptied a pool the label had already
+narrowed.
 
 Work already in flight in one of your own lanes reports the state it is in rather
 than a command to run. When the ticket carries an assignee that is not the

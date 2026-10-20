@@ -100,13 +100,20 @@ func blockerFacts(blockers []blockerReach) []blockerFact {
 // HiddenByFilter is the ticket the run's filter left out when that is why the
 // run served past its scope or served nothing — the one routing over the whole
 // queue would have handed over.
+//
+// PickedFocusGoals is the focus goals whose prerequisite path the pool was
+// narrowed to when the pool served the pick: empty for a pick over the whole
+// queue, and for a pick from steps 1-2b, which no scope narrows.
+// HiddenFocusGoals is the same fact about HiddenByFilter.
 type nextDecision struct {
-	Outcome        string
-	Picked         *string
-	DependencyPath []string
-	Exhaustion     Exhausted
-	HiddenByFilter *string
-	NoWork         NoWork
+	Outcome          string
+	Picked           *string
+	PickedFocusGoals []string
+	DependencyPath   []string
+	Exhaustion       Exhausted
+	HiddenByFilter   *string
+	HiddenFocusGoals []string
+	NoWork           NoWork
 }
 
 func decideNextEvent(outcome NextOutcome) nextDecision {
@@ -119,7 +126,7 @@ func decideNextEvent(outcome NextOutcome) nextDecision {
 	case ServedFromEpicLane:
 		return nextDecision{Outcome: "served_from_epic_lane", Picked: picked(o.Row.ID)}
 	case ServedFromNewLane:
-		return nextDecision{Outcome: "served_from_new_lane", Picked: picked(o.Row.ID)}
+		return nextDecision{Outcome: "served_from_new_lane", Picked: picked(o.Row.ID), PickedFocusGoals: o.Scope.goals}
 	case ServedFromDependency:
 		path := []string{o.Gates}
 		for _, h := range o.Via {
@@ -128,17 +135,18 @@ func decideNextEvent(outcome NextOutcome) nextDecision {
 		path = append(path, o.Blocker)
 		return nextDecision{Outcome: "served_from_dependency", Picked: picked(o.Row.ID), DependencyPath: path}
 	case ServedPastExhaustion:
-		return nextDecision{Outcome: "served_past_exhaustion", Picked: picked(o.Row.ID), Exhaustion: o.Exhaustion}
+		return nextDecision{Outcome: "served_past_exhaustion", Picked: picked(o.Row.ID), PickedFocusGoals: o.Scope.goals, Exhaustion: o.Exhaustion}
 	case ServedPastNarrowing:
-		return nextDecision{Outcome: "served_past_narrowing", Picked: picked(o.Row.ID), HiddenByFilter: picked(o.Narrowing.Hidden.ID)}
+		return nextDecision{Outcome: "served_past_narrowing", Picked: picked(o.Row.ID), PickedFocusGoals: o.Scope.goals, HiddenByFilter: picked(o.Narrowing.Hidden.ID), HiddenFocusGoals: o.Narrowing.Scope.goals}
 	case Exhausted:
 		decision := nextDecision{Outcome: "exhausted", Exhaustion: o}
 		if o.Narrowing != nil {
 			decision.HiddenByFilter = picked(o.Narrowing.Hidden.ID)
+			decision.HiddenFocusGoals = o.Narrowing.Scope.goals
 		}
 		return decision
 	case Narrowed:
-		return nextDecision{Outcome: "narrowed", HiddenByFilter: picked(o.Hidden.ID)}
+		return nextDecision{Outcome: "narrowed", HiddenByFilter: picked(o.Hidden.ID), HiddenFocusGoals: o.Scope.goals}
 	case NoWork:
 		return nextDecision{Outcome: "no_work", NoWork: o}
 	}
@@ -146,8 +154,10 @@ func decideNextEvent(outcome NextOutcome) nextDecision {
 }
 
 // recordNextEvent puts what routeNext decided on the invocation's event: the
-// outcome, the ticket it picked and the chain a dependency pick was reached
-// through, how far a stopped scope had come, the ticket a filter hid, every
+// outcome, the ticket it picked and the focus goals that narrowed the pool it
+// was picked from, the chain a dependency pick was reached
+// through, how far a stopped scope had come, the ticket a filter hid and the
+// focus goals it was drawn under, every
 // row its diagnostics named with what this checkout may do about each and, for
 // a blocker, whether a ticket filed here could free it, whether it offered the
 // route that stays in the scope, and how many rows it chose among — the ones
@@ -159,6 +169,7 @@ func recordNextEvent(ctx context.Context, outcome NextOutcome, gathered int) {
 	decision := decideNextEvent(outcome)
 	telemetry.Set(ctx, "next.outcome", decision.Outcome)
 	telemetry.Set(ctx, "next.picked", decision.Picked)
+	telemetry.Set(ctx, "next.picked_focus_goals", append([]string{}, decision.PickedFocusGoals...))
 	telemetry.Set(ctx, "next.dependency_path", append([]string{}, decision.DependencyPath...))
 	telemetry.Set(ctx, "next.exhausted_epics", append([]string{}, decision.Exhaustion.Epics...))
 	telemetry.Set(ctx, "next.exhausted_progress", progressFact(decision.Exhaustion.Progress))
@@ -168,6 +179,7 @@ func recordNextEvent(ctx context.Context, outcome NextOutcome, gathered int) {
 	// fact on either, so they land on one key. [LAW:one-source-of-truth]
 	telemetry.Set(ctx, "next.off_path", offPathFacts(slices.Concat(decision.Exhaustion.OffPath, decision.NoWork.OffPath)))
 	telemetry.Set(ctx, "next.hidden_by_filter", decision.HiddenByFilter)
+	telemetry.Set(ctx, "next.hidden_focus_goals", append([]string{}, decision.HiddenFocusGoals...))
 	telemetry.Set(ctx, "next.unreachable", reachFacts(decision.NoWork.Unreachable))
 	telemetry.Set(ctx, "next.stay_offered", len(decision.Exhaustion.stay()) > 0)
 	telemetry.Count(ctx, "next.rows_gathered", gathered)

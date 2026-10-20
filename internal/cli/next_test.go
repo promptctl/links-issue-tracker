@@ -97,10 +97,10 @@ func TestServedRowIsTotalOverTheSealedSum(t *testing.T) {
 		{"the claimed lane", ServedFromClaim{Row: row}, true},
 		{"own work resumed", ResumedOwnWork{Row: row}, true},
 		{"the epic's next lane", ServedFromEpicLane{Row: row}, true},
-		{"the global pool", ServedFromNewLane{Row: row}, true},
+		{"the global pool", ServedFromNewLane{poolPick{Row: row}}, true},
 		{"the on-path dependency", ServedFromDependency{Row: row, Gates: "test-gated-1", Blocker: row.ID}, true},
-		{"past an exhausted scope", ServedPastExhaustion{Row: row, Exhaustion: Exhausted{Epics: []string{"test-epic-1"}}}, true},
-		{"past a scope the filter narrowed", ServedPastNarrowing{Row: row, Narrowing: Narrowed{Hidden: annotation.AnnotatedIssue{Issue: model.Issue{ID: "test-hidden-1"}}}}, true},
+		{"past an exhausted scope", ServedPastExhaustion{poolPick: poolPick{Row: row}, Exhaustion: Exhausted{Epics: []string{"test-epic-1"}}}, true},
+		{"past a scope the filter narrowed", ServedPastNarrowing{poolPick: poolPick{Row: row}, Narrowing: Narrowed{Hidden: annotation.AnnotatedIssue{Issue: model.Issue{ID: "test-hidden-1"}}}}, true},
 		{"exhausted carries none", Exhausted{}, false},
 		// Hidden is the ticket the filter kept from being served, so it must
 		// not read as the row this outcome hands over.
@@ -1027,7 +1027,7 @@ func TestRenderNextOutcomeSpeaksOnlyInTheConditional(t *testing.T) {
 			inFlight.ID + " is already in progress in a lane you hold — continue where you left off"},
 		{"the epic's next lane names what a start would lock", ServedFromEpicLane{Row: freshRow, Lane: freshLane},
 			"run `lit start " + fresh.ID + "` to claim lane a1 of epic " + epicA.ID + " (a second lane of an epic you already hold a lane in)"},
-		{"abandoned work says it is in flight and unheld before the same claim advice", ServedFromNewLane{Row: inFlightRow, Lane: inFlightLane},
+		{"abandoned work says it is in flight and unheld before the same claim advice", ServedFromNewLane{poolPick{Row: inFlightRow, Lane: inFlightLane}},
 			inFlight.ID + " is in progress and nobody holds it — run `lit start " + inFlight.ID + "` to claim lane a2 of epic " + epicA.ID},
 		// Step 2 serves abandoned in-flight rows too, so the epic's next lane
 		// can carry one: the one place the state-dependent sentence and the
@@ -1141,7 +1141,7 @@ func TestDependencyPickIsDistinguishableFromThePool(t *testing.T) {
 		}
 		return buf.String()
 	}
-	pool := render(ServedFromNewLane{Row: row, Lane: lane})
+	pool := render(ServedFromNewLane{poolPick{Row: row, Lane: lane}})
 	dep := render(ServedFromDependency{Row: row, Lane: lane, Gates: blocked.ID, Blocker: row.ID})
 
 	if pool == dep {

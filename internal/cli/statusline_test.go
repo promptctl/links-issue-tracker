@@ -44,8 +44,8 @@ func TestNextOutcomesBecomeStatuslineFacts(t *testing.T) {
 		plain   bool
 		want    statusline.Facts
 	}{
-		{"a fresh pick", ServedFromNewLane{Row: row}, true, statusline.Facts{statusline.Picked{Ticket: &ticket}}},
-		{"a narrowed fresh pick", ServedFromNewLane{Row: row}, false, nil},
+		{"a fresh pick", ServedFromNewLane{poolPick{Row: row}}, true, statusline.Facts{statusline.Picked{Ticket: &ticket}}},
+		{"a narrowed fresh pick", ServedFromNewLane{poolPick{Row: row}}, false, nil},
 		{"own work handed back", resumed, true, statusline.Facts{started, phased, statusline.Picked{Ticket: &ticket}}},
 		{"own work handed back to a narrowed question", resumed, false, statusline.Facts{started, phased}},
 		{"nothing to pick", NoWork{}, true, statusline.Facts{statusline.Picked{}}},

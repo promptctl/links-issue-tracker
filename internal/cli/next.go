@@ -111,11 +111,11 @@ func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[string]stor
 		announce = startAdvice(o.Row, o.Lane) + " (a second lane of an epic you already hold a lane in)\n"
 	case ServedFromNewLane:
 		row = o.Row
-		announce = startAdvice(o.Row, o.Lane) + "\n"
-	// Steps 1b and 2b say what they are for. This is the one pick whose reason
-	// the row cannot show on its own: a global-pool pick is self-explanatory
-	// from the row, and step 2's shared epic is visible in the id, but "this
-	// unblocks work on your path" is a fact about the WALK.
+		announce = o.advice() + "\n"
+	// Steps 1b and 2b say what they are for: "this unblocks work on your path"
+	// is a fact about the WALK the row cannot show on its own, whereas step 2's
+	// shared epic is visible in the id. A pool pick's one such fact, the focus
+	// scope that narrowed it, is said by its advice.
 	case ServedFromDependency:
 		row = o.Row
 		announce = startAdvice(o.Row, o.Lane) + dependencyReason(o) + "\n"
@@ -123,14 +123,14 @@ func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[string]stor
 	// none is taken: the row is the last route, printed like any pick.
 	case ServedPastExhaustion:
 		row = o.Row
-		routes := append(o.Exhaustion.stay(), "move on to the top ready ticket outside it: "+startAdvice(o.Row, o.Lane))
+		routes := append(o.Exhaustion.stay(), "move on to the top ready ticket outside it: "+o.advice())
 		announce = o.Exhaustion.why() + "\n" + strings.Join(routes, "\nor ") + "\n"
 	// The hidden ticket's route comes first, as the stay route does above: it
 	// is the answer the unfiltered question gets, and the row is the one this
 	// question gets.
 	case ServedPastNarrowing:
 		row = o.Row
-		announce = o.Narrowing.Error() + "\nor take the top ready ticket the filter selects, outside the work you hold: " + startAdvice(o.Row, o.Lane) + "\n"
+		announce = o.Narrowing.Error() + "\nor take the top ready ticket the filter selects, outside the work you hold: " + o.advice() + "\n"
 	// The three terminal outcomes travel outward AS THEMSELVES. Rendering them
 	// into an untyped error here would discard the very discriminator routing
 	// has just established, so both sinks — ExitCode and commandErrorReason —
@@ -260,4 +260,27 @@ func startAdvice(row annotation.AnnotatedIssue, lane model.LaneID) string {
 		return fmt.Sprintf("%s is in progress and nobody holds it — %s", row.ID, advice)
 	}
 	return advice
+}
+
+// advice is a pool pick's startAdvice with the question that produced it: a
+// focus label narrows the pool to its goals' prerequisite path, so a ticket
+// ranked above the pick but off that path was never asked about, and a pick
+// that said nothing would read as a ranking bug to anyone checking it against
+// `lit backlog --all`. The whole queue is the zero scope and says nothing,
+// because a pick over the whole queue is the backlog's top, as it reads.
+// [LAW:dataflow-not-control-flow] every pool pick renders through here; the
+// scope's value decides the clause.
+func (p poolPick) advice() string {
+	return startAdvice(p.Row, p.Lane) + p.Scope.pickClause()
+}
+
+// pickClause is how a row the pool offered names the focus scope it was drawn
+// under, in the words offFocusPathNote uses for the same scope, and the empty
+// string for the whole queue. "The focus path" is one path however many goals
+// carry the label.
+func (s focusScope) pickClause() string {
+	if !s.active() {
+		return ""
+	}
+	return fmt.Sprintf(" (focused on %s: picked from the focus path alone — `lit next --all` to route over the whole queue)", s.describe())
 }
