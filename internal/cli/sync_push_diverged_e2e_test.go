@@ -36,9 +36,14 @@ func TestAPushRefusedOverAPeersPushNotifiesOnlyWhenNothingMergesIt(t *testing.T)
 			// liveStoreSteps is the mirror's live-store step: a refused push
 			// landed nothing, so the live store waits for the next receive.
 			liveStoreSteps []string
+			// reason and failureClass are how the step's event ends: `lit sync
+			// push` on the push_diverged sync-failure block, with or without a
+			// receive, since its caller asked for the push to land now.
+			reason       string
+			failureClass any
 		}{
 			{name: "on-change mirror", args: []string{"sync", backgroundMirrorSubcommand, "--parent-pid", "0"}, liveStoreSteps: []string{"wait"}},
-			{name: "lit sync push", args: []string{"sync", "push"}, fails: true},
+			{name: "lit sync push", args: []string{"sync", "push"}, fails: true, reason: "sync_divergence", failureClass: "push_diverged"},
 		} {
 			t.Run(receive.name+"/"+step.name, func(t *testing.T) {
 				r, base := newSharedCheckouts(t)
@@ -55,6 +60,9 @@ func TestAPushRefusedOverAPeersPushNotifiesOnlyWhenNothingMergesIt(t *testing.T)
 				}
 				ev := lastEvent(t)
 				assertPushDecision(t, ev, receive.decision)
+				if ev.Reason != step.reason || ev.Facts["sync.failure_class"] != step.failureClass {
+					t.Fatalf("bravo's %s event ended reason=%q sync.failure_class=%v; want %q %v", step.name, ev.Reason, ev.Facts["sync.failure_class"], step.reason, step.failureClass)
+				}
 				if step.liveStoreSteps != nil {
 					assertLiveStoreSteps(t, ev, step.liveStoreSteps...)
 				}

@@ -256,9 +256,6 @@ func (e SyncFailureError) Error() string {
 	return e.Failure.blockString()
 }
 
-// Unwrap is the store refusal the block renders, when there is one, so a
-// remote-schema-ahead block exits and is advised as the schema-ahead refusal it
-// is, not as a divergence. The other classes wrap no typed refusal.
 // EventRecord is the block's class, so the failed command's event says which
 // sync failure it was, not only the sync_divergence reason every class shares.
 func (e SyncFailureError) EventRecord() (map[string]any, map[string]int) {
@@ -267,6 +264,10 @@ func (e SyncFailureError) EventRecord() (map[string]any, map[string]int) {
 
 var _ model.RecordedError = SyncFailureError{}
 
+// Unwrap is the remote-schema-ahead refusal the block renders, so that block
+// exits and is advised as the schema-ahead refusal it is, not as a divergence.
+// Every other class exits as the block itself: a push_diverged block renders
+// its refusal as the Cause line and does not unwrap to it.
 func (e SyncFailureError) Unwrap() error {
 	if e.Failure.RemoteAhead == nil {
 		return nil
@@ -499,9 +500,10 @@ func (f SyncFailure) escalationLine() string {
 			"ESCALATION — BLOCKED: no settle has succeeded on this checkout since a receive first stopped after its fetch at %s (%s), and the latest receive stopped at %s; this checkout is not receiving the shared backlog. Run the resolution above, and surface it to the user as blocking if it fails.",
 			f.UnsettledSince.UTC().Format(time.RFC3339), f.agePhrase(), f.StoppedAt.describe())
 	case syncFailurePushDiverged:
-		// The push path reads no divergence age or span, so the line is fixed:
-		// a peer pushing first is ordinary, and the pull is what clears it.
-		return "ESCALATION — routine: a peer pushing first is ordinary between checkouts that share a remote. Run the steps above; if the pull reports a conflict, resolve it as its block says, and if the push is refused again after the pull, surface it to the user as blocking."
+		// The push path reads no divergence age or span, so the line is fixed.
+		// It names what clears the refusal and when it stops being the agent's
+		// to clear; it never calls it routine, which the directive above denies.
+		return "ESCALATION — resolve now: the pull above merges the peer's commits, and the push after it lands them. If the pull reports a conflict, resolve it as its block says; if the push is refused again after the pull, surface it to the user as blocking."
 	case syncFailureProseHeld, syncFailureDivergedUnresolved:
 		span := f.Ahead + f.Behind
 		if f.persistent() {
