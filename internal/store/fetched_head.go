@@ -197,7 +197,7 @@ func LandFetchedHead(ctx context.Context, doltRootDir, cloneRootDir string, remo
 			return fmt.Errorf("copy the fetched chunks of %v into the live store: %w", heads, err)
 		}
 		var landErr error
-		landed.ForkPoints, landErr = recordLiveForkPoint(holdCtx, ddb, root, ownerOf(remote), trimmedBranch)
+		landed.ForkPoints, landErr = recordLiveForkPoint(holdCtx, ddb, root, ownerOf(remote), trackingRef)
 		if landErr != nil {
 			return landErr
 		}
@@ -259,11 +259,12 @@ func landRef(ctx context.Context, ddb *doltdb.DoltDB, r ref.DoltRef, fetched has
 
 // recordLiveForkPoint is recordForkPoints for the one tracking ref a landing
 // moves, on the store at root held with no SQL engine: the fork point of
-// remotes/<owner>/<branch> is recorded against the head that ref names now,
-// before the landing moves it. A store that holds no such ref has nothing to
-// move off, and so no record.
-func recordLiveForkPoint(ctx context.Context, ddb *doltdb.DoltDB, root string, owner refOwner, branch string) ([]storage.ForkPointRecord, error) {
-	head, found, err := resolveRefHead(ctx, ddb, ref.NewRemoteRef(owner.String(), branch))
+// trackingRef, which owner owns, is recorded against the head that ref names
+// now, before the landing moves it. A store that holds no such ref has
+// nothing to move off, and so no record. [LAW:one-source-of-truth] the ref is
+// the one the landing moves, never rebuilt here.
+func recordLiveForkPoint(ctx context.Context, ddb *doltdb.DoltDB, root string, owner refOwner, trackingRef ref.RemoteRef) ([]storage.ForkPointRecord, error) {
+	head, found, err := resolveRefHead(ctx, ddb, trackingRef)
 	if err != nil || !found {
 		return nil, err
 	}
@@ -279,7 +280,7 @@ func recordLiveForkPoint(ctx context.Context, ddb *doltdb.DoltDB, root string, o
 	if err != nil {
 		return nil, err
 	}
-	record, err := recordForkPoint(ctx, chunkForkPoints{ddb: ddb, local: localHead}, owner, branch, head.String(), recorded)
+	record, err := recordForkPoint(ctx, chunkForkPoints{ddb: ddb, local: localHead}, owner, trackingRef.GetBranch(), head.String(), recorded)
 	if err != nil {
 		return nil, err
 	}

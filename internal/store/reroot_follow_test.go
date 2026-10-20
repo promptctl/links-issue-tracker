@@ -195,12 +195,7 @@ func TestAFollowCollectsTheHistoryBelowTheCut(t *testing.T) {
 	}
 	r.assertFollowed(t, bravo, storage.SyncEntryPull)
 	r.assertMerged(t, ctx, bravo)
-	for _, old := range []string{oldHead, r.cut} {
-		var n int
-		if err := bravo.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM dolt_log(?)`, old).Scan(&n); err == nil {
-			t.Fatalf("%s still resolves in bravo's store, with %d commits below it; want it collected", old, n)
-		}
-	}
+	assertCollected(t, ctx, bravo, oldHead, r.cut)
 	for _, prefix := range pins {
 		if left := branchesUnder(t, ctx, bravo, prefix); len(left) != 0 {
 			t.Fatalf("branches under %q still pin the history below the cut: %v", prefix, left)

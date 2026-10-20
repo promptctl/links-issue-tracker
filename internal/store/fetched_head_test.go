@@ -578,10 +578,7 @@ func TestLandFetchedHeadKeepsAFollowTheLiveStoreRanDuringTheClonesFetch(t *testi
 	if forkPoint := branchesUnder(t, ctx, bravo, forkPointPrefix)["origin/master"]; forkPoint != r.alphaReRoot.Head {
 		t.Fatalf("bravo's fork point after the landing is %s; want the re-rooted head %s the follow recorded", forkPoint, r.alphaReRoot.Head)
 	}
-	var n int
-	if err := bravo.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM dolt_log(?)`, cloneForkPoint).Scan(&n); err == nil {
-		t.Fatalf("the clone's pre-cut fork point %s resolves in bravo's store with %d commits below it; want it left collected", cloneForkPoint, n)
-	}
+	assertCollected(t, ctx, bravo, cloneForkPoint)
 }
 
 // TestRemoteCacheLandingCopiesTheFetchedRemotesLastKnownRefs drives the git
