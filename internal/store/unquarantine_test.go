@@ -131,3 +131,25 @@ func TestUnquarantineEnsuresTheQuarantineTableBeforeReadingIt(t *testing.T) {
 		t.Fatalf("Unquarantine() error = %v (%T); want NoQuarantineError", err, err)
 	}
 }
+
+// A quarantine row above every migration this binary has blocks no open of an
+// up-to-date workspace, so it is not the quarantine Unquarantine clears.
+func TestUnquarantineLeavesARowThatBlocksNothing(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	withStore(t, ctx, doltRoot, func(st *Store) {
+		if err := st.recordQuarantine(ctx, &QuarantineBlockError{Version: headVersion(t) + 1, Name: "newer.sql", ErrorText: "simulated failure"}); err != nil {
+			t.Fatalf("recordQuarantine error = %v", err)
+		}
+		if err := st.commitWorkingSet(ctx, "quarantine for test"); err != nil {
+			t.Fatalf("commitWorkingSet error = %v", err)
+		}
+	})
+
+	_, err := Unquarantine(ctx, doltRoot, "test-workspace-id")
+	var none NoQuarantineError
+	if !errors.As(err, &none) {
+		t.Fatalf("Unquarantine() error = %v (%T); want NoQuarantineError", err, err)
+	}
+}
