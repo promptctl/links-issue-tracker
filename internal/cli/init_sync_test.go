@@ -58,6 +58,11 @@ func TestWriteInitSyncLine(t *testing.T) {
 			want:    "",
 		},
 		{
+			name:    "remote refused is silent",
+			outcome: initSyncOutcome{State: initSyncRemoteRefused, Remote: "my.fork"},
+			want:    "",
+		},
+		{
 			name:    "remote empty is silent",
 			outcome: initSyncOutcome{State: initSyncRemoteEmpty, Remote: "origin"},
 			want:    "",
@@ -220,11 +225,14 @@ func TestInitBesideARemoteDoltCannotHold(t *testing.T) {
 	fresh, freshWS := consumerOf("bravo")
 	progress := captureProgress(t)
 	runCLIInDir(t, fresh, "init", "--skip-hooks", "--skip-agents")
-	if !strings.Contains(progress.String(), "no eligible git remote; starting with an empty backlog") {
+	if !strings.Contains(progress.String(), "the git remote's name is one Dolt cannot hold, so lit cannot sync with it until it is renamed (git remote rename); starting with an empty backlog") {
 		t.Fatalf("init beside my.fork with no lit data: progress missing the fresh start:\n%s", progress.String())
 	}
 	if _, err := os.Stat(freshWS.DatabasePath); err != nil {
 		t.Fatalf("init beside my.fork with no lit data created no store: %v", err)
+	}
+	if records := readSyncTraceRecords(t, freshWS); len(records) == 0 || records[0].Decision != string(initSyncRemoteRefused) || records[0].Metadata["remote"] != "my.fork" {
+		t.Fatalf("init trace records = %+v, want the first to decide remote_refused for my.fork", records)
 	}
 
 	runCLIInDir(t, producer, "init", "--skip-hooks", "--skip-agents")

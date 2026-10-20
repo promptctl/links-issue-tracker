@@ -187,7 +187,17 @@ func syncRemoteLsLeaf() syncLeaf {
 			len(syncState.plan.remove),
 			len(syncState.plan.refused),
 		)
-		return err
+		if err != nil {
+			return err
+		}
+		// A refused remote is named, since nothing syncs with it until it is
+		// renamed. [LAW:no-silent-failure]
+		for _, name := range syncState.plan.refused {
+			if _, err := fmt.Fprintf(stdout, "refused %s: Dolt cannot hold this name; rename it (git remote rename) to sync with it\n", name); err != nil {
+				return err
+			}
+		}
+		return nil
 	}}
 }
 

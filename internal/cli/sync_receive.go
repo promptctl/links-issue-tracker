@@ -270,6 +270,13 @@ func receiveOnce(ctx context.Context, ws workspace.Info) {
 	defer cancel()
 
 	observed, askErr := askRemote(timeoutCtx, ws, gitRemotes)
+	// A remote lit cannot sync with is an answer, not a failure to tell: the
+	// clone's own sync would refuse it the same way, so the receive ends here,
+	// before the lock and the clone. [LAW:no-silent-failure]
+	if refused := (storage.RefusedRemoteNameError{}); errors.As(askErr, &refused) {
+		recordReceiveError(ws, askErr)
+		return
+	}
 	if askErr != nil {
 		// "Could not tell" is not "nothing changed": say so, then fetch.
 		// [LAW:no-silent-failure]

@@ -121,7 +121,7 @@ Any positional argument → `UsageError{initUsage}`, exit 2 (`init.go`), where `
 
 ### 1.3 Adopt decision machine (`internal/cli/init_sync.go`)
 
-Outcome states (`init_sync.go`): `has_local_tickets`, `not_configured`, `remote_empty`, `no_remote_data`, `adopted`, `failed`.
+Outcome states (`init_sync.go`): `has_local_tickets`, `not_configured`, `remote_refused`, `remote_empty`, `no_remote_data`, `adopted`, `failed`.
 Outcome struct fields JSON-tagged `state`, `remote`, `branch`, `error` (`init_sync.go`).
 
 - Timeout: `adoptRemoteTimeout = 120 * time.Second` (`init_sync.go`), a `var` so tests can shorten it.
@@ -130,7 +130,7 @@ Outcome struct fields JSON-tagged `state`, `remote`, `branch`, `error` (`init_sy
   1. `store.PendingAdopt(ws.DatabasePath)` read; if residue exists, every *benign* terminal below is converted into `initSyncFailed` carrying the residue error (`init_sync.go`).
   2. `store.LocalHasTickets`; its `storage.Migrated` goes to `reportOpenMigration` whatever the result; error → `failed`; `true` → `has_local_tickets` (`init_sync.go`).
   3. `workspace.GitRemotes` error → `failed` (`init_sync.go`).
-  4. `resolveSyncRemote("", workspace.UpstreamRemote(...), gitRemotes)`: a `storage.RefusedRemoteNameError` (the chosen remote's name is one Dolt cannot hold) asks `workspace.RemoteHasDoltData` of that name: error → `failed`; `true` → `failed` with `"remote %q carries lit ticket data (refs/dolt/*), which lit cannot adopt: <refusal>"`; `false` → `not_configured` carrying the name as `Remote`. Any other error → `failed`; empty → `not_configured` (`init_sync.go`).
+  4. `resolveSyncRemote("", workspace.UpstreamRemote(...), gitRemotes)`: a `storage.RefusedRemoteNameError` (the chosen remote's name is one Dolt cannot hold) asks `workspace.RemoteHasDoltData` of that name: error → `failed`; `true` → `failed` with `"remote %q carries lit ticket data (refs/dolt/*), which lit cannot adopt: <refusal>"`; `false` → `remote_refused` carrying the name as `Remote`. Any other error → `failed`; empty → `not_configured` (`init_sync.go`).
   5. `workspace.RemoteHasRefs` error → `failed`; false → `remote_empty` (`init_sync.go`).
   6. `resolveSyncBranch` error → `failed` (`init_sync.go`).
   7. `workspace.RemoteHasDoltData` (checks `refs/dolt/*`) error → `failed`; false → `no_remote_data` (`init_sync.go`).
@@ -139,6 +139,7 @@ Outcome struct fields JSON-tagged `state`, `remote`, `branch`, `error` (`init_sy
 - Benign terminals also emit one progress line plus the build note (`init_sync.go`), text from `remoteSituationLine` (`init_sync.go`):
   - `has_local_tickets` → "local store already holds tickets; leaving it untouched (ongoing sync handles updates)"
   - `not_configured` → "no eligible git remote; starting with an empty backlog"
+  - `remote_refused` → "the git remote's name is one Dolt cannot hold, so lit cannot sync with it until it is renamed (git remote rename); starting with an empty backlog"
   - `remote_empty` → "remote has no refs yet (brand-new repo); starting with an empty backlog"
   - `no_remote_data` → "remote has git refs but no lit data; starting with an empty backlog"
   - `failed` → "" (deliberately silent; the command error is the sole channel).
@@ -195,7 +196,7 @@ Output, one line:
 
 Family usage `usage: lit sync remote ls` (`sync.go`); only row is `ls` (`sync.go`).
 `syncRemoteLsLeaf` — `sync.go`. No flags. Output:
-`git=<n> dolt=<n> added=<n> updated=<n> removed=<n> refused=<n>` (`sync.go`).
+`git=<n> dolt=<n> added=<n> updated=<n> removed=<n> refused=<n>`, then one line per refused name, sorted: `refused <name>: Dolt cannot hold this name; rename it (git remote rename) to sync with it` (`sync.go`).
 The counts are the sets of `planRemoteSync` (`sync.go`), the one plan `syncDoltRemotesFromGit` executes: sorted lists comparing git remotes (translated via `store.GitBackedRemoteURL`) to Dolt remotes, with a git remote `storage.ParseRemoteName` refuses listed as refused and never added. Reading the plan sets the event fact `remotes.refused`.
 
 ### 2.4 `lit sync fetch`
@@ -473,7 +474,7 @@ Flag parse output is `io.Discard` (`sync_bg.go`).
 `receiveOnce` — `sync_receive.go`:
 1. `workspace.GitRemotes` error → `recordReceiveError("check git remotes: %w")`; no remotes → silent return (`sync_receive.go`).
 2. One 15s timeout ctx spans the question and the fetch (`sync_receive.go`).
-3. `askRemote` (`sync_receive_ask.go`): `resolveSyncRemote("", UpstreamRemote, gitRemotes)`; `""` ⇒ the zero advertisement, which `nothingToReceive` ends silently; else `workspace.RemoteDoltRefs` — error ⇒ `list refs/dolt/* on remote %q: %w`, traced with decision `remote_check_failed` / status `error` / metadata `{error}`, and the receive continues to step 4; success ⇒ `remoteAdvertisement{remote, url, refs}`.
+3. `askRemote` (`sync_receive_ask.go`): `resolveSyncRemote("", UpstreamRemote, gitRemotes)`; a `storage.RefusedRemoteNameError` ⇒ `recordReceiveError(<refusal>)` and return, before the lock and the clone; `""` ⇒ the zero advertisement, which `nothingToReceive` ends silently; else `workspace.RemoteDoltRefs` — error ⇒ `list refs/dolt/* on remote %q: %w`, traced with decision `remote_check_failed` / status `error` / metadata `{error}`, and the receive continues to step 4; success ⇒ `remoteAdvertisement{remote, url, refs}`.
    - `unmoved(recorded)` (`sync_receive_ask.go`): the advertisement's record (`<remote> <url>\n<refs>\n`; nil for the zero value) is non-nil and byte-equal to `<StorageDir>/received-refs.last` (`readReceivedRefs` over `store.ReadReceivedRefs`: missing ⇒ nil silently; other read error ⇒ stderr `lit: received-refs marker unreadable: <err>` and nil) ⇒ `confirmRemoteUnmoved`: `markFetchSuccess` (stderr on failure) and a trace with decision `remote_unmoved` / status `ok` / reason `automatic receive found the remote unmoved since the last receive; nothing fetched` / metadata `{remote}`; return with no store opened.
    - `nothingToReceive()` (`sync_receive_ask.go`): an answered question with no remote picked or an empty listing ends the receive silently, before any clone.
 4. `store.TryAcquireReceiveLock` (`.links-sync-receive.lock`, one non-blocking attempt): an error → `recordReceiveError("take the receive lock: %w")`; not acquired (another receive is running) → silent return (`sync_receive.go`). A release failure → stderr `lit: automatic receive lock not released: <err>`.

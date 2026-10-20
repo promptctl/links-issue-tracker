@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
 // TestAGitRemoteDoltCannotHoldIsRefusedAndStopsNoOtherSync gives a checkout
@@ -28,7 +30,7 @@ func TestAGitRemoteDoltCannotHoldIsRefusedAndStopsNoOtherSync(t *testing.T) {
 	if refused := lastEvent(t).Facts["remotes.refused"]; !reflect.DeepEqual(refused, []any{"a/b"}) {
 		t.Fatalf("remotes.refused = %#v, want [a/b]", refused)
 	}
-	if out := runCLIInDir(t, dir, "sync", "remote", "ls"); strings.TrimSpace(out) != "git=2 dolt=1 added=0 updated=0 removed=0 refused=1" {
+	if out := runCLIInDir(t, dir, "sync", "remote", "ls"); strings.TrimSpace(out) != "git=2 dolt=1 added=0 updated=0 removed=0 refused=1\nrefused a/b: Dolt cannot hold this name; rename it (git remote rename) to sync with it" {
 		t.Fatalf("`lit sync remote ls` = %q, want a/b refused and a mirrored", out)
 	}
 
@@ -46,6 +48,19 @@ func TestAGitRemoteDoltCannotHoldIsRefusedAndStopsNoOtherSync(t *testing.T) {
 	}
 	if out := runCLIInDir(t, dir, "sync", "fetch", "--remote", "a", "--verbose"); strings.TrimSpace(out) != "fetched a" {
 		t.Fatalf("`lit sync fetch --remote a` tracking a/b = %q, want %q", out, "fetched a")
+	}
+
+	// The automatic receive ends on the refusal before it clones the store,
+	// with the one trace that names it.
+	ws, err := workspace.Resolve(dir)
+	if err != nil {
+		t.Fatalf("workspace.Resolve() error = %v", err)
+	}
+	before := len(readSyncTraceRecords(t, ws))
+	receiveNow(t, dir)
+	records := readSyncTraceRecords(t, ws)[before:]
+	if len(records) != 1 || records[0].Decision != "error" || !strings.Contains(records[0].Reason, `remote "a/b" has "/" in its name`) {
+		t.Fatalf("receive tracking a/b traced %+v; want one error naming the refusal", records)
 	}
 }
 

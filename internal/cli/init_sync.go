@@ -35,6 +35,9 @@ const (
 	initSyncHasLocalTickets initSyncState = "has_local_tickets"
 	// initSyncNotConfigured: no eligible git remote to adopt from.
 	initSyncNotConfigured initSyncState = "not_configured"
+	// initSyncRemoteRefused: the chosen git remote's name is one Dolt cannot
+	// hold, and the remote carries no lit data.
+	initSyncRemoteRefused initSyncState = "remote_refused"
 	// initSyncRemoteEmpty: the remote advertises no refs yet (brand-new repo).
 	initSyncRemoteEmpty initSyncState = "remote_empty"
 	// initSyncNoRemoteData: the remote has git refs but no lit data on the branch.
@@ -217,8 +220,8 @@ func planRemoteAdopt(ctx context.Context, ws workspace.Info) (*adoptClonePlan, i
 		return nil, initSyncOutcome{State: initSyncFailed, Error: err.Error()}
 	}
 	remote, ok, err := resolveSyncRemote("", workspace.UpstreamRemote(ctx, ws.RootDir), gitRemotes)
-	// A remote Dolt cannot hold is no eligible remote, so init starts fresh,
-	// unless it carries lit data: a fresh store would fork from that backlog,
+	// A remote Dolt cannot hold has nothing init can adopt, so init starts
+	// fresh, unless it carries lit data: a fresh store would fork from that backlog,
 	// which only the remote renamed can adopt. [LAW:no-silent-failure]
 	if refused := (storage.RefusedRemoteNameError{}); errors.As(err, &refused) {
 		hasData, dataErr := workspace.RemoteHasDoltData(ctx, ws.RootDir, refused.Name)
@@ -228,7 +231,7 @@ func planRemoteAdopt(ctx context.Context, ws workspace.Info) (*adoptClonePlan, i
 		if hasData {
 			return nil, initSyncOutcome{State: initSyncFailed, Remote: refused.Name, Error: fmt.Sprintf("remote %q carries lit ticket data (refs/dolt/*), which lit cannot adopt: %v", refused.Name, err)}
 		}
-		return freshOutcome(initSyncOutcome{State: initSyncNotConfigured, Remote: refused.Name})
+		return freshOutcome(initSyncOutcome{State: initSyncRemoteRefused, Remote: refused.Name})
 	}
 	if err != nil {
 		return nil, initSyncOutcome{State: initSyncFailed, Error: err.Error()}
@@ -288,6 +291,8 @@ func remoteSituationLine(state initSyncState) string {
 		return "local store already holds tickets; leaving it untouched (ongoing sync handles updates)"
 	case initSyncNotConfigured:
 		return "no eligible git remote; starting with an empty backlog"
+	case initSyncRemoteRefused:
+		return "the git remote's name is one Dolt cannot hold, so lit cannot sync with it until it is renamed (git remote rename); starting with an empty backlog"
 	case initSyncRemoteEmpty:
 		return "remote has no refs yet (brand-new repo); starting with an empty backlog"
 	case initSyncNoRemoteData:
