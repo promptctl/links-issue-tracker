@@ -104,8 +104,10 @@ func (ev ownerNotifyEvent) fingerprint() string {
 // ownerNotifyEventForFailure maps a surfaced sync failure to its owner
 // notification: the divergence classes and an unsettled receive notify, and a
 // remote-schema-ahead block, a version condition only an upgrade clears, is
-// ok=false. [LAW:dataflow-not-control-flow] every surface calls this
-// unconditionally; the class value decides.
+// ok=false. So is a diverged push's block: its push attempt's record already
+// decides whether the owner hears of it (completePushAttempt).
+// [LAW:dataflow-not-control-flow] every surface calls this unconditionally;
+// the class value decides.
 func ownerNotifyEventForFailure(failure SyncFailure) (ownerNotifyEvent, bool) {
 	switch failure.Class {
 	case syncFailureProseHeld, syncFailureDivergedUnresolved, syncFailureUnrelatedHistories, syncFailureIDCollision:

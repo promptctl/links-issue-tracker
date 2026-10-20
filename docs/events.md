@@ -251,6 +251,16 @@ Every key is present exactly when the command ended in that refusal.
 | `schema_ahead.remote_schema` | The schema version of the remote branch's head. |
 | `schema_ahead.running_schema_max` | The highest schema version this lit supports. |
 
+## What a sync-failure block records
+
+A command that ends on a sync-failure block — reason `sync_divergence`, or
+`workspace_schema_ahead` for a remote whose schema is ahead — records which
+block it was, since every divergence class shares one reason.
+
+| Key | Meaning |
+| --- | --- |
+| `sync.failure_class` | The block's class: `prose_held`, `diverged_unresolved`, `remote_schema_ahead`, `unrelated_histories`, `id_collision`, `receive_unsettled`, or `push_diverged` (`lit sync push` refused because a peer pushed first). |
+
 ## What `lit init` records
 
 Init sets its key once the workspace has a database, so an init that stops

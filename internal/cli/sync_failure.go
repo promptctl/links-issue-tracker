@@ -67,6 +67,11 @@ const (
 	// fetches into the live store, settles through the same settle, and returns
 	// the error to its caller.
 	syncFailureReceiveUnsettled syncFailureClass = "receive_unsettled"
+	// syncFailurePushDiverged: `lit sync push` was refused because a peer
+	// pushed first — the remote and this checkout each hold commits the other
+	// lacks (storage.ErrPushDiverged). A retry is refused the same way until the
+	// peer's commits are merged here. Remedy: a foreground pull, then the push.
+	syncFailurePushDiverged syncFailureClass = "push_diverged"
 )
 
 // persistentDivergenceAge and persistentDivergenceCommits are the thresholds past
@@ -174,6 +179,42 @@ func remoteSchemaAheadFailure(err error) (SyncFailure, bool) {
 	}, true
 }
 
+// pushDivergedFailure builds the sync-failure contract for a push the remote
+// refused over a peer's commits, or ok=false when err is not one. The remote
+// and branch come off the store's refusal; the refusal is the block's cause,
+// since its text is the remote's.
+func pushDivergedFailure(err error) (SyncFailure, bool) {
+	var diverged storage.PushDivergedError
+	if !errors.As(err, &diverged) {
+		return SyncFailure{}, false
+	}
+	return SyncFailure{
+		Class:     syncFailurePushDiverged,
+		Remote:    diverged.Remote.String(),
+		Branch:    diverged.Branch,
+		Cause:     err,
+		BuildNote: resolveBuildStatusNote(time.Now()),
+	}, true
+}
+
+// remedyStep is one command of a sync-failure remedy and what it does.
+type remedyStep struct {
+	command, gloss string
+}
+
+// line is the step as the block's HOW TO RESOLVE renders it.
+func (r remedyStep) line() string {
+	return fmt.Sprintf("%-26s# %s", r.command, r.gloss)
+}
+
+// pushDivergedRemedy is how a push refused over a peer's commits clears, in
+// order. [LAW:one-source-of-truth] the block's steps and the mirror's one-line
+// push-outcome reason (pushFailureDecision) both render from it.
+var pushDivergedRemedy = []remedyStep{
+	{"lit sync pull", "merges the peer's commits in the foreground and reports what it settled"},
+	{"lit sync push", "lands the merged history on the remote"},
+}
+
 // asSyncFailure converts a store *RemoteSchemaAheadError into the returnable
 // sync-failure contract (so the command prints the block, and exits as the
 // schema-ahead refusal it unwraps to), or returns err unchanged. The explicit sync commands route their store error
@@ -181,6 +222,9 @@ func remoteSchemaAheadFailure(err error) (SyncFailure, bool) {
 // contract. [LAW:single-enforcer]
 func asSyncFailure(err error) error {
 	if failure, ok := remoteSchemaAheadFailure(err); ok {
+		return SyncFailureError{Failure: failure}
+	}
+	if failure, ok := pushDivergedFailure(err); ok {
 		return SyncFailureError{Failure: failure}
 	}
 	return err
@@ -215,6 +259,14 @@ func (e SyncFailureError) Error() string {
 // Unwrap is the store refusal the block renders, when there is one, so a
 // remote-schema-ahead block exits and is advised as the schema-ahead refusal it
 // is, not as a divergence. The other classes wrap no typed refusal.
+// EventRecord is the block's class, so the failed command's event says which
+// sync failure it was, not only the sync_divergence reason every class shares.
+func (e SyncFailureError) EventRecord() (map[string]any, map[string]int) {
+	return map[string]any{"sync.failure_class": string(e.Failure.Class)}, nil
+}
+
+var _ model.RecordedError = SyncFailureError{}
+
 func (e SyncFailureError) Unwrap() error {
 	if e.Failure.RemoteAhead == nil {
 		return nil
@@ -293,6 +345,8 @@ func (f SyncFailure) headline() string {
 		return "lit sync cannot write to the remote's backlog until this lit is upgraded, and needs you."
 	case syncFailureReceiveUnsettled:
 		return "lit's automatic receive fetched the remote but could not bring it into this checkout, and needs you."
+	case syncFailurePushDiverged:
+		return "lit sync push was refused because a peer pushed first, and needs you to merge the peer's commits."
 	default:
 		return fmt.Sprintf("lit sync hit an unrecognized sync-failure class %q — this is a bug; please report it.", f.Class)
 	}
@@ -335,6 +389,10 @@ func (f SyncFailure) whatLine() string {
 		return fmt.Sprintf(
 			"the automatic receive fetched %s and then stopped at %s. A receive first stopped after its fetch at %s, and no settle has succeeded on this checkout since then, so it is still on the history it last settled to and is not receiving the shared backlog. The cause from the latest stop is below.",
 			ref, f.StoppedAt.describe(), f.UnsettledSince.UTC().Format(time.RFC3339))
+	case syncFailurePushDiverged:
+		return fmt.Sprintf(
+			"%s holds commits a peer pushed that this checkout lacks, and this checkout holds commits %s lacks, so the remote refused the push and nothing was written to it. A retry is refused the same way until the peer's commits are merged here.",
+			ref, ref)
 	default:
 		// A class this renderer does not know must not render as a bland,
 		// authoritative-looking line. Name it as a bug the way the pull payload
@@ -401,6 +459,12 @@ func (f SyncFailure) resolutionSteps() []string {
 		return []string{
 			"lit sync pull             # fetches and settles in the foreground and reports the error it stops on",
 		}
+	case syncFailurePushDiverged:
+		steps := make([]string, 0, len(pushDivergedRemedy))
+		for _, step := range pushDivergedRemedy {
+			steps = append(steps, step.line())
+		}
+		return steps
 	default:
 		return []string{"lit doctor                # unrecognized sync-failure class; report this"}
 	}
@@ -434,6 +498,10 @@ func (f SyncFailure) escalationLine() string {
 		return fmt.Sprintf(
 			"ESCALATION — BLOCKED: no settle has succeeded on this checkout since a receive first stopped after its fetch at %s (%s), and the latest receive stopped at %s; this checkout is not receiving the shared backlog. Run the resolution above, and surface it to the user as blocking if it fails.",
 			f.UnsettledSince.UTC().Format(time.RFC3339), f.agePhrase(), f.StoppedAt.describe())
+	case syncFailurePushDiverged:
+		// The push path reads no divergence age or span, so the line is fixed:
+		// a peer pushing first is ordinary, and the pull is what clears it.
+		return "ESCALATION — routine: a peer pushing first is ordinary between checkouts that share a remote. Run the steps above; if the pull reports a conflict, resolve it as its block says, and if the push is refused again after the pull, surface it to the user as blocking."
 	case syncFailureProseHeld, syncFailureDivergedUnresolved:
 		span := f.Ahead + f.Behind
 		if f.persistent() {

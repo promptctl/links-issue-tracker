@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/storage"
@@ -171,7 +172,11 @@ func pushFailureDecision(pushErr error, receiveMerges bool) (decision, reason st
 	if receiveMerges {
 		return pushDecisionDiverged, pushErr.Error()
 	}
-	return pushDecisionError, pushErr.Error() + "; no automatic receive runs here to merge the peer's commits: run 'lit sync pull', then 'lit sync push'"
+	commands := make([]string, 0, len(pushDivergedRemedy))
+	for _, step := range pushDivergedRemedy {
+		commands = append(commands, "'"+step.command+"'")
+	}
+	return pushDecisionError, pushErr.Error() + "; no automatic receive runs here to merge the peer's commits: run " + strings.Join(commands, ", then ")
 }
 
 // completePushAttempt is the one completion seam for how a push attempt ended

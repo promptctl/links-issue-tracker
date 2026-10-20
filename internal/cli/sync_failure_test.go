@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"bytes"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -372,5 +374,45 @@ func TestDoctorDivergenceExit(t *testing.T) {
 	}
 	if err := doctorDivergenceExit(behindOnly); err != nil {
 		t.Fatalf("non-diverged state wrongly exited nonzero: %v", err)
+	}
+}
+
+// A push the remote refused over a peer's commits reaches the agent as the
+// sync-failure block: exit 5 as sync_divergence, the remote and branch the
+// store judged, the pull that merges the peer's commits before the push, and
+// the remote's text fenced as the cause. Never the default's "Retry the
+// command", which repeats the refusal.
+func TestADivergedPushIsTheSyncFailureBlock(t *testing.T) {
+	t.Parallel()
+	refusal := storage.PushDivergedError{
+		Remote:  remoteName(t, "origin"),
+		Branch:  "master",
+		Refusal: errors.New(`push remote "origin": ! [rejected] HEAD -> master (non-fast-forward)`),
+	}
+	var stderr bytes.Buffer
+	if code := WriteCommandError(&stderr, asSyncFailure(fmt.Errorf("sync push: %w", refusal))); code != ExitConflict {
+		t.Fatalf("exit code = %d, want %d", code, ExitConflict)
+	}
+	out := stderr.String()
+	if !strings.HasPrefix(out, "error (code=5, reason=sync_divergence): ") {
+		t.Fatalf("header is not the sync_divergence conflict:\n%s", out)
+	}
+	pull := strings.Index(out, "lit sync pull             #")
+	push := strings.Index(out, "lit sync push             #")
+	if pull < 0 || push < pull {
+		t.Fatalf("resolution must run `lit sync pull`, then `lit sync push`:\n%s", out)
+	}
+	for _, want := range []string{"origin/master holds commits a peer pushed", storage.ErrPushDiverged.Error(), "non-fast-forward"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("block missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "Retry the command") || strings.Contains(out, "lit doctor") {
+		t.Fatalf("a diverged push must not carry the generic retry advice:\n%s", out)
+	}
+
+	other := errors.New(`push remote "origin": permission denied`)
+	if got := asSyncFailure(other); got != other {
+		t.Fatalf("a push refused for another reason converted to %v", got)
 	}
 }
