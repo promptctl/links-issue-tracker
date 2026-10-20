@@ -16,12 +16,37 @@ import (
 // on a case-insensitive filesystem rather than the same case run twice.
 func repoNamed(t *testing.T, name string) string {
 	t.Helper()
-	repo := filepath.Join(t.TempDir(), name)
-	if err := os.MkdirAll(repo, 0o755); err != nil {
-		t.Fatalf("MkdirAll(%q) error = %v", repo, err)
-	}
+	repo := dirNamedExactly(t, t.TempDir(), name)
 	run(t, repo, "git", "init")
 	return repo
+}
+
+// dirNamedExactly creates parent/name and returns its path, or skips the test
+// when the filesystem cannot hold a directory spelled exactly name. Windows
+// refuses a newline in a filename and strips trailing dots from a path
+// component, so "wt\nprunable" cannot be created there and "..." resolves to
+// parent itself. A test about such a name guards a state that cannot exist on
+// that filesystem. Whether the name was held is read back from parent's
+// listing, not assumed from the platform.
+func dirNamedExactly(t *testing.T, parent, name string) string {
+	t.Helper()
+	dir := filepath.Join(parent, name)
+	mkdirErr := os.Mkdir(dir, 0o755)
+	entries, err := os.ReadDir(parent)
+	if err != nil {
+		t.Fatalf("ReadDir(%q) error = %v", parent, err)
+	}
+	for _, entry := range entries {
+		if entry.Name() != name {
+			continue
+		}
+		if mkdirErr != nil {
+			t.Fatalf("Mkdir(%q) error = %v", dir, mkdirErr)
+		}
+		return dir
+	}
+	t.Skipf("this filesystem holds no directory named %q (mkdir: %v)", name, mkdirErr)
+	return ""
 }
 
 // namesThatDeriveNothing is the two ways a repository name can fail to produce

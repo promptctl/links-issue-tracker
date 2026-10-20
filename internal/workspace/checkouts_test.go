@@ -328,7 +328,7 @@ func TestBareRepositoryContributesNoCheckout(t *testing.T) {
 // purpose; nobody has to do this deliberately for it to be wrong.
 func TestWorktreePathWhoseTailLooksLikeAnAttributeStaysLive(t *testing.T) {
 	primary := litRepoWithCommit(t)
-	awkward := filepath.Join(t.TempDir(), "wt\nprunable")
+	awkward := dirNamedExactly(t, t.TempDir(), "wt\nprunable")
 	// The branch is named explicitly because `git worktree add` would otherwise
 	// derive one from the basename, and a newline is legal in a path but not in
 	// a ref. That asymmetry is the whole reason this path shape is reachable
