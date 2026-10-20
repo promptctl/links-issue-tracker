@@ -144,7 +144,13 @@ var doltWorkspaceMachinery = map[string][]string{
 	// with no engine, so there is no handle to ask through the contract.
 	// LandedFetch is its answer, which the receive's trace carries, and
 	// ErrRemoteCacheNotLanded the one failure the receive tells apart — the
-	// fetch landed and only the git mirror's copy did not.
+	// fetch landed and only the git mirror's copy did not. FetchedHeadRecord
+	// is what the landing did to the tracking ref, which the receive's record
+	// of the remote's advertisement waits on (a superseded landing landed
+	// nothing), and the tests name its values. ReadTakenClone and TakenClone
+	// are the take's half of the landing: the clone's tracking refs read as
+	// taken, by the same engine-less chunk-store open, before a session moves
+	// them.
 	//
 	// ReadReceivedRefs and WriteReceivedRefs (at ReceivedRefsPath, which the
 	// SIGTERM wedge test removes so its receive fetches) are the receive's record of what
@@ -169,6 +175,8 @@ var doltWorkspaceMachinery = map[string][]string{
 		"RecordPushedHead", "PushedHeadRecord", "ErrHoldCut", "ErrReceivedRefsNotRecorded",
 		"ReceiveDeadline", "ReadReceivedRefs", "WriteReceivedRefs", "ReceivedRefsPath",
 		"LandFetchedHead", "LandedFetch", "ErrRemoteCacheNotLanded", "LandingTempDir",
+		"FetchedHeadRecord", "FetchedHeadMoved", "FetchedHeadUnchanged", "FetchedHeadSuperseded",
+		"ReadTakenClone", "TakenClone",
 		"ReadUnsettledFirst", "WriteUnsettledFirst", "UnsettledFirstPath",
 		"ReadUnsettledLast", "WriteUnsettledLast",
 		"ReadSettledLast", "SettledLastPath",
