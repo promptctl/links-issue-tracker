@@ -53,7 +53,7 @@ to `/Users/bmf/code/links-issue-tracker`.
 
 - Caught signal set: `syscall.SIGINT`, `syscall.SIGTERM` (`internal/interrupt/interrupt.go`).
   SIGKILL is deliberately absent (`internal/interrupt/interrupt.go`).
-- `DefaultGrace = 5 * time.Second` (`internal/interrupt/interrupt.go`).
+- `DefaultGrace = gitcmd.CancelBound + time.Second`, 7s (`internal/interrupt/interrupt.go`).
 - `Guard` allocates a 1-buffered signal channel, calls `signal.Notify`, derives a cancellable
   context, and spawns `watch` with the escalation closure `os.Exit(exitCode(sig))`
   (`internal/interrupt/interrupt.go`).

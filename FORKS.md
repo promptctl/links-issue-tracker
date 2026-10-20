@@ -15,7 +15,7 @@ one below carries the condition that would let it be deleted.
 
 | Module in `go.mod` | Upstream | What `lit` builds | Branch | Current pin |
 | --- | --- | --- | --- | --- |
-| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20261020190615-35f0914b06fc` |
+| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20261020194339-6839d5fdc5e8` |
 | `github.com/dolthub/go-mysql-server` | [dolthub/go-mysql-server](https://github.com/dolthub/go-mysql-server) | [promptctl/go-mysql-server](https://github.com/promptctl/go-mysql-server) | `lit` | `v0.20.1-0.20260821032251-ab5cb9ec3b69` |
 | `github.com/dolthub/driver` | [dolthub/driver](https://github.com/dolthub/driver) | [`internal/vendor/dolthub-driver`](internal/vendor/dolthub-driver) | — | `v0.2.1-0.20260314000741-0fe74e7ee31a` |
 
@@ -434,9 +434,12 @@ keeping git in its caller's process group so a `/dev/tty` prompt still
 prompts; on Windows git starts suspended in a Job Object, which a cancel
 terminates. `gitcmd` owns git's output pipes and bounds them by the context:
 unbounded while it lives, at most 1s once it is done. A run the context ended
-returns a `*gitcmd.Cancelled` and hands it to the observer on its context,
-which is how `lit`'s event records a cancel inside `CALL DOLT_FETCH` or
-`DOLT_PUSH`, whose errors reach `lit` only as text. The `GitBlobstore`
+(killed, cut, or a git that exited non-zero once the context was done, as
+one Ctrl-C reached before the kill does) returns a `*gitcmd.Cancelled` and
+hands it to the observer on its context, which is how `lit`'s event records
+a cancel inside `CALL DOLT_FETCH` or `DOLT_PUSH`, whose errors reach `lit`
+only as text. The observer has it within `gitcmd.CancelBound` of git's exit,
+and `lit`'s interrupt grace is derived from that bound. The `GitBlobstore`
 constructors take the opener's context, and `Close` runs its git on it
 without its cancellation, so a gc its deadline kills reaches that observer.
 `gitcmd` also passes `core.longpaths=true` to every git, which Patch 12 used

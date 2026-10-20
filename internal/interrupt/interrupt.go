@@ -24,16 +24,22 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/dolthub/dolt/go/libraries/utils/gitcmd"
 )
 
 // DefaultGrace bounds how long the clean cancellation path may run before the
-// process is hard-exited. It is chosen shorter than the receive worker's own
-// fetch budget (so a SIGTERM ends that worker faster than merely letting its
-// timeout lapse) and shorter than a typical supervisor's SIGKILL deadline (Docker's 10s,
-// Kubernetes' 30s), so lit exits on its own terms before it is force-killed. On
-// the common path — work that honors ctx — the process exits in milliseconds and
-// this bound is never reached.
-const DefaultGrace = 5 * time.Second
+// process is hard-exited. It gives a cancelled git gitcmd.CancelBound to end
+// and reach the invocation's event, and a second for the command to unwind
+// and write it, so a hard exit never records a cancel still settling as none.
+// It is shorter than the receive worker's own fetch budget (so a SIGTERM ends
+// that worker faster than merely letting its timeout lapse) and, with the
+// hard-exit hooks' budget, shorter than a typical supervisor's SIGKILL
+// deadline (Docker's 10s, Kubernetes' 30s), so lit exits on its own terms
+// before it is force-killed. On the common path — work that honors ctx — the
+// process exits in milliseconds and this bound is never reached.
+// [LAW:no-ambient-temporal-coupling]
+const DefaultGrace = gitcmd.CancelBound + time.Second
 
 // interruptSignals is the graceful-shutdown signal set: an interactive Ctrl-C
 // (SIGINT) and a supervisor's terminate (SIGTERM). Both mean "stop now, cleanly

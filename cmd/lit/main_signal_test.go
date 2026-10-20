@@ -449,9 +449,9 @@ func TestSIGTERMDuringWedgedGitSubprocessExitsCleanly(t *testing.T) {
 		t.Fatalf("receive worker %d ended before the git wedge could be signalled:\n%s", pid, receiveLog(t, ws))
 	}
 
-	// Deliberately UNDER interrupt.DefaultGrace (5s): a clean ctx-cancel exit is
+	// Deliberately UNDER interrupt.DefaultGrace: a clean ctx-cancel exit is
 	// milliseconds, while git ignoring the cancel only ends at the grace-timer
-	// hard-exit at ~5s, which also skips the end line. A deadline below grace
+	// hard-exit, which also skips the end line. A deadline below grace
 	// fails that path on both counts.
 	sigtermReceiveWorker(t, ws, pid, 4*time.Second)
 

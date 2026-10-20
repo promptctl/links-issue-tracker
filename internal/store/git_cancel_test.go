@@ -35,15 +35,26 @@ func TestCancelledDoltTransferEndsItsTransport(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = ln.Close() })
-			accepted := make(chan net.Conn, 4)
+			// The accept loop owns every connection it takes, and closes them
+			// once the listener closes; the test reads the first.
+			accepted := make(chan net.Conn, 1)
 			go func() {
+				var conns []net.Conn
+				defer func() {
+					for _, conn := range conns {
+						_ = conn.Close()
+					}
+				}()
 				for {
 					conn, err := ln.Accept()
 					if err != nil {
 						return
 					}
-					t.Cleanup(func() { _ = conn.Close() })
-					accepted <- conn
+					conns = append(conns, conn)
+					select {
+					case accepted <- conn:
+					default:
+					}
 				}
 			}()
 
