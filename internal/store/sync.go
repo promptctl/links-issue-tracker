@@ -773,10 +773,14 @@ func (s *Store) SyncPush(ctx context.Context, remote string, branch string, setU
 
 // joinFollowFailure is a failed push as its caller reports it: the push's
 // error, with the fetch or follow that could not explain a refusal joined, or
-// nil when the push landed.
+// nil when the push landed. The join carries that check's text and not its
+// error: the push's failure is what a caller classifies, and a check that
+// met a busy store or a cancellation after the remote refused does not make
+// the refusal busy or canceled. Every check this package runs after a
+// refusal joins its failure the same way.
 func joinFollowFailure(pushErr, followErr error) error {
 	if followErr != nil {
-		return fmt.Errorf("%w (and whether the remote re-rooted its history could not be checked: %w)", pushErr, followErr)
+		return fmt.Errorf("%w (and whether the remote re-rooted its history could not be checked: %v)", pushErr, followErr)
 	}
 	return pushErr
 }
@@ -887,7 +891,7 @@ func (s *Store) judgeStandingRefusal(ctx context.Context, remote, branch string,
 // unjudgedRefusal is a refusal whose divergence could not be read, still a
 // pushRefusedError for every caller that judges it further.
 func unjudgedRefusal(refusal, readErr error) error {
-	return fmt.Errorf("%w (and whether the branch diverged from the remote could not be read: %w)", refusal, readErr)
+	return fmt.Errorf("%w (and whether the branch diverged from the remote could not be read: %v)", refusal, readErr)
 }
 
 // SyncCompactAndPush compacts then pushes under one commit-lock acquisition, so
@@ -1074,19 +1078,19 @@ func (s *Store) SyncPushFromClone(ctx context.Context, remote string, branch str
 		return storage.SyncPushResult{}, pushErr
 	}
 	if followErr != nil {
-		return storage.SyncPushResult{}, fmt.Errorf("%w (and whether a concurrent push superseded it could not be checked — %w)", pushErr, followErr)
+		return storage.SyncPushResult{}, fmt.Errorf("%w (and whether a concurrent push superseded it could not be checked — %v)", pushErr, followErr)
 	}
 	err = s.runSyncMutation(ctx, func(ctx context.Context) error {
 		fresh, freshErr := s.SyncFreshness(ctx, trimmedRemote, trimmedBranch)
 		if freshErr != nil {
-			return fmt.Errorf("%w (and whether a concurrent push superseded it could not be checked: %w)", pushErr, freshErr)
+			return fmt.Errorf("%w (and whether a concurrent push superseded it could not be checked: %v)", pushErr, freshErr)
 		}
 		if !fresh.RemoteCarriesHead() {
 			return pushErr
 		}
 		head, headErr := s.headCommitWithinLock(ctx)
 		if headErr != nil {
-			return fmt.Errorf("%w (superseded by a concurrent push, but the head could not be read: %w)", pushErr, headErr)
+			return fmt.Errorf("%w (superseded by a concurrent push, but the head could not be read: %v)", pushErr, headErr)
 		}
 		result = storage.SyncPushResult{Head: head, Superseded: pushErr.Error()}
 		return nil
