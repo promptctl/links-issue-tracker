@@ -43,9 +43,7 @@ func writeOwnerNotifyProjectConfig(t *testing.T, repo, sink string) {
 }
 
 // writeOwnerNotifyConfig writes the repo's project config: on-push cadence,
-// the receive on or off, and the file-appending owner hook. The hook runs in
-// sh, which reads a backslash as an escape, so the sink is spelled with
-// forward slashes, a path sh resolves on Windows too.
+// the receive on or off, and the file-appending owner hook.
 func writeOwnerNotifyConfig(t *testing.T, repo, sink string, receive bool) {
 	t.Helper()
 	litDir := filepath.Join(repo, ".lit")
@@ -53,7 +51,7 @@ func writeOwnerNotifyConfig(t *testing.T, repo, sink string, receive bool) {
 		t.Fatalf("mkdir %s: %v", litDir, err)
 	}
 	payload := fmt.Sprintf("[sync]\ncadence = 'on-push'\nreceive = %t\n", receive) +
-		"owner_notify_cmd = 'printf \"%s %s/%s\\n\" \"$LIT_NOTIFY_KIND\" \"$LIT_NOTIFY_REMOTE\" \"$LIT_NOTIFY_BRANCH\" >> \"" + filepath.ToSlash(sink) + "\"'\n"
+		"owner_notify_cmd = 'printf \"%s %s/%s\\n\" \"$LIT_NOTIFY_KIND\" \"$LIT_NOTIFY_REMOTE\" \"$LIT_NOTIFY_BRANCH\" >> " + shPath(sink) + "'\n"
 	if err := os.WriteFile(filepath.Join(litDir, "config.toml"), []byte(payload), 0o644); err != nil {
 		t.Fatalf("write project config: %v", err)
 	}

@@ -7,5 +7,33 @@
 # <ticket> <package> <top-level test, or * for a package whose tests do not
 # compile on Windows>
 
-links-windows-qr8l.9j5 internal/store TestAdoptRemoteByCloneFailedCloneLeavesNoResidue
 links-windows-qr8l.fkh internal/backup TestCreateListLatestAndPrune
+links-windows-qr8l.bc1 internal/cli TestAMirrorWhoseLiveStoreReceiveFailsSaysWhere
+links-windows-qr8l.bc1 internal/cli TestAPushRecordsTheAdvertisementItLeft
+links-windows-qr8l.bc1 internal/cli TestAPushRefusedOverAPeersPushNotifiesOnlyWhenNothingMergesIt
+links-windows-qr8l.bc1 internal/cli TestAQuietForkReceivesOntoTheRemoteHead
+links-windows-qr8l.bc1 internal/cli TestAReceiveThatFetchedAndKeepsStoppingReachesTheFailureSurface
+links-windows-qr8l.bc1 internal/cli TestAReceiveWhoseOpenFailsHasNothingToClose
+links-windows-qr8l.bc1 internal/cli TestAnAutomaticReceivePrunesABranchTheRemoteDeleted
+links-windows-qr8l.bc1 internal/cli TestAutomaticReceiveAsksBeforeFetching
+links-windows-qr8l.bc1 internal/cli TestAutomaticReceiveFastForwardsEstablishedClone
+links-windows-qr8l.bc1 internal/cli TestAutomaticReconcileLinearizesDivergedClone
+links-windows-qr8l.nca internal/cli TestClaimMirrorPendingClockStepIrrelevant
+links-windows-qr8l.nca internal/cli TestClearMirrorPendingIdempotent
+links-windows-qr8l.nca internal/cli TestCompleteMirrorWithoutAttempt
+links-windows-qr8l.nca internal/cli TestCompleteMirrorWithoutAttemptBusySkipsOwner
+links-windows-qr8l.bc1 internal/cli TestEverySettlingEntryPointMergesAForkBelowTheCut
+links-windows-qr8l.bc1 internal/cli TestEverySyncEntryPointFollowsAReRootedRemote
+links-windows-qr8l.9j5 internal/cli TestInitHardStopsWhenRemoteHasDataButAdoptCannotComplete
+links-windows-qr8l.bc1 internal/cli TestInlineReconcileSurfacesContractOnProseHeld
+links-windows-qr8l.nca internal/cli TestMirrorOwedIgnoresLiveness
+links-windows-qr8l.bc1 internal/cli TestReadCommandsStaySilentOnAFreshOrReleasedBuild
+links-windows-qr8l.nca internal/cli TestRecheckMirrorPending
+links-windows-qr8l.bc1 internal/cli TestReconcileTakeAndCombineLeaveDurableTracesInteractively
+links-windows-qr8l.nca internal/cli TestRunBackgroundMirrorTeardownReleasesClaim
+links-windows-qr8l.bc1 internal/cli TestSyncFetchSelectsTheSyncRemoteAndFailsOnAnUnreadableBranchRecord
+links-windows-qr8l.bc1 internal/cli TestSyncReconcileNamesContestedLaneAfterPartitionedDoubleStart
+links-windows-qr8l.bc1 internal/cli TestTheMirrorAloneKeepsTheHistoryBound
+links-windows-qr8l.bc1 internal/cli TestTheMirrorsReceiveStartsNoRun
+links-windows-qr8l.bc1 internal/cli TestTwoCheckoutsSyncAcrossTheHistoryBound
+links-windows-qr8l.9j5 internal/store TestAdoptRemoteByCloneFailedCloneLeavesNoResidue

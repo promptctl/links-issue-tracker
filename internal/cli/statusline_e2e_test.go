@@ -524,7 +524,9 @@ func TestDocumentedStatuslineRendersTheFileWithNoLitProcess(t *testing.T) {
 			t.Fatalf("the documented statusline ran lit (%v)", err)
 		}
 		t.Logf("rendered %q in %v", stdout.String(), time.Since(start))
-		return stdout.String()
+		// A native Windows jq ends its lines in CRLF; the line is what is
+		// documented, not its ending.
+		return strings.ReplaceAll(stdout.String(), "\r\n", "\n")
 	}
 
 	if _, err := os.Stat(file); !errors.Is(err, fs.ErrNotExist) {

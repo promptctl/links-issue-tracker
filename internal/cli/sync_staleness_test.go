@@ -186,18 +186,13 @@ func TestMarkFetchSuccessAndLastFetchSuccessAge(t *testing.T) {
 // TestLastFetchSuccessAgeSurfacesNonNotExistStatErrorsToStderr pins the
 // distinction lastFetchSuccessAge draws between "marker does not exist" (a
 // real, silent domain state) and any other stat error (a real operational
-// failure, surfaced to stderr). Pointing StorageDir's marker path through a
-// PARENT that is a regular file, not a directory, makes os.Stat return
-// ENOTDIR — a genuine, portable, deterministic non-IsNotExist error on any
-// OS/user, unlike a permission-denied fixture, which real CI often ignores
-// when run as root.
+// failure, surfaced to stderr). A NUL byte in StorageDir makes os.Stat refuse
+// the marker path as an invalid argument: a non-IsNotExist error on every
+// platform and for every user, root included, which a permission fixture is
+// not. A regular file where a directory belongs is not either: Windows
+// reports that path not found.
 func TestLastFetchSuccessAgeSurfacesNonNotExistStatErrorsToStderr(t *testing.T) {
-	tmp := t.TempDir()
-	notADir := filepath.Join(tmp, "not-a-directory")
-	if err := os.WriteFile(notADir, []byte("x"), 0o644); err != nil {
-		t.Fatalf("write file error = %v", err)
-	}
-	ws := workspace.Info{Location: workspace.Location{StorageDir: notADir}}
+	ws := workspace.Info{Location: workspace.Location{StorageDir: filepath.Join(t.TempDir(), "storage\x00")}}
 
 	stderr := captureStderr(t, func() {
 		if _, ok := lastFetchSuccessAge(ws, remoteName(t, "origin"), time.Now()); ok {

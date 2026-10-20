@@ -22,6 +22,13 @@ func notifyTestWorkspace(t *testing.T) workspace.Info {
 	return workspace.Info{RootDir: root, Location: workspace.LocationFromStorageDir(filepath.Join(root, ".lit"))}
 }
 
+// shPath spells path for a hook's sh command line: quoted, and with forward
+// slashes, since sh reads a backslash as an escape and resolves D:/... on
+// Windows as it does D:\....
+func shPath(path string) string {
+	return `"` + filepath.ToSlash(path) + `"`
+}
+
 // enableOwnerNotify opts one test back into the owner channel: the package
 // TestMain disables all auto-sync side effects (which the hook is one of), and
 // the global-config layer is pointed at an empty temp file so the developer's
@@ -113,7 +120,7 @@ func TestOwnerNotifyEventFingerprint(t *testing.T) {
 func TestMaybeNotifyOwnerRunsHookOncePerEpisode(t *testing.T) {
 	ws := notifyTestWorkspace(t)
 	sink := filepath.Join(t.TempDir(), "notifications")
-	enableOwnerNotify(t, ws, `printf "%s %s/%s\n" "$LIT_NOTIFY_KIND" "$LIT_NOTIFY_REMOTE" "$LIT_NOTIFY_BRANCH" >> `+sink)
+	enableOwnerNotify(t, ws, `printf "%s %s/%s\n" "$LIT_NOTIFY_KIND" "$LIT_NOTIFY_REMOTE" "$LIT_NOTIFY_BRANCH" >> `+shPath(sink))
 
 	ev := ownerNotifyEvent{Kind: ownerNotifyPushFailed, Summary: "push failing", Remote: "origin", Branch: "master"}
 	maybeNotifyOwner(context.Background(), ws, ev)
@@ -153,7 +160,7 @@ func TestMaybeNotifyOwnerFailedHookRetries(t *testing.T) {
 	}
 
 	// The channel repaired: the very next detection sends.
-	enableOwnerNotify(t, ws, `printf sent >> `+sink)
+	enableOwnerNotify(t, ws, `printf sent >> `+shPath(sink))
 	maybeNotifyOwner(context.Background(), ws, ev)
 	if _, err := os.Stat(sink); err != nil {
 		t.Fatalf("the detection after a failed hook did not retry: %v", err)
@@ -166,7 +173,7 @@ func TestMaybeNotifyOwnerFailedHookRetries(t *testing.T) {
 func TestMaybeNotifyOwnerHonorsAutoSyncKillSwitch(t *testing.T) {
 	ws := notifyTestWorkspace(t)
 	sink := filepath.Join(t.TempDir(), "notifications")
-	enableOwnerNotify(t, ws, `printf sent >> `+sink)
+	enableOwnerNotify(t, ws, `printf sent >> `+shPath(sink))
 	t.Setenv(DisableAutoSyncEnvVar, "1")
 
 	maybeNotifyOwner(context.Background(), ws, ownerNotifyEvent{Kind: ownerNotifyPushFailed, Summary: "s", Remote: "o", Branch: "m"})
@@ -184,7 +191,7 @@ func TestMaybeNotifyOwnerHonorsAutoSyncKillSwitch(t *testing.T) {
 func TestObservePushOutcomeForOwner(t *testing.T) {
 	ws := notifyTestWorkspace(t)
 	sink := filepath.Join(t.TempDir(), "notifications")
-	enableOwnerNotify(t, ws, `printf "%s\n" "$LIT_NOTIFY_KIND" >> `+sink)
+	enableOwnerNotify(t, ws, `printf "%s\n" "$LIT_NOTIFY_KIND" >> `+shPath(sink))
 	ctx := context.Background()
 
 	failed := pushOutcomeRecord{Decision: pushDecisionError, Reason: "remote unreachable", Remote: "origin", Branch: "master"}
