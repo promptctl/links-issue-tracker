@@ -60,6 +60,9 @@ type Store struct {
 	// forkPoints is what every fetch since the store opened did to each fork
 	// point (recordForkPoints); ForkPointRecords is its one reader.
 	forkPoints []storage.ForkPointRecord
+	// removals is every SyncRemoveRemote attempt since the store opened;
+	// RemoteRemovals is its one reader.
+	removals []storage.RemoteRemovalRecord
 	// reconcileBases is the base every reconcile plan since the store opened
 	// decided on (captureReconcilePlan); ReconcileBases is its one reader.
 	reconcileBases []storage.ReconcileBase

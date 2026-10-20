@@ -85,7 +85,7 @@ func syncReconcileShowLeaf() syncLeaf {
 		}
 		result, err := reconciler.SyncReconcile(ctx, remote, branch)
 		if err != nil {
-			recordSyncCommandTrace(ws, reconcileShowCommand, "error", err, map[string]string{"remote": remote, "sync_branch": branch})
+			recordSyncCommandTrace(ws, reconcileShowCommand, "error", err, map[string]string{"remote": remote.String(), "sync_branch": branch})
 			return asSyncFailure(err)
 		}
 		return reportReconcileResult(ctx, stdout, ws, session, reconcileShowCommand, remote, branch, result, false)
@@ -133,7 +133,7 @@ func syncReconcileResolveLeaf() syncLeaf {
 		}
 		result, err := reconciler.SyncReconcileResolved(ctx, remote, branch, resolutions, resolveActor())
 		if err != nil {
-			recordSyncCommandTrace(ws, proseResolveCommand, "error", err, map[string]string{"remote": remote, "sync_branch": branch})
+			recordSyncCommandTrace(ws, proseResolveCommand, "error", err, map[string]string{"remote": remote.String(), "sync_branch": branch})
 			return asSyncFailure(err)
 		}
 		return reportReconcileResult(ctx, stdout, ws, session, proseResolveCommand, remote, branch, result, true)
@@ -216,18 +216,18 @@ func syncReconcileTakeLeaf() syncLeaf {
 					Status:    "ok",
 					Reason:    approval.Error(),
 					BuildNote: resolveBuildStatusNote(time.Now()),
-					Metadata:  map[string]string{"remote": remote, "sync_branch": branch},
+					Metadata:  map[string]string{"remote": remote.String(), "sync_branch": branch},
 				})
 				if ev, ok := ownerNotifyEventForFailure(SyncFailure{
 					Class:  syncFailureUnrelatedHistories,
-					Remote: remote,
+					Remote: remote.String(),
 					Branch: branch,
 				}); ok {
 					maybeNotifyOwner(ctx, ws, ev)
 				}
-				return ownerApprovalRefusalError{Approval: approval, Remote: remote, Branch: branch}
+				return ownerApprovalRefusalError{Approval: approval, Remote: remote.String(), Branch: branch}
 			}
-			recordSyncCommandTrace(ws, command, "error", err, map[string]string{"remote": remote, "sync_branch": branch})
+			recordSyncCommandTrace(ws, command, "error", err, map[string]string{"remote": remote.String(), "sync_branch": branch})
 			return asSyncFailure(err)
 		}
 		return reportTakeOutcome(stdout, ws, command, remote, branch, result)
@@ -259,7 +259,7 @@ func syncReconcileCombineLeaf() syncLeaf {
 		}
 		result, err := reconciler.SyncReconcileCombine(ctx, remote, branch)
 		if err != nil {
-			recordSyncCommandTrace(ws, reconcileCombineCommand, "error", err, map[string]string{"remote": remote, "sync_branch": branch})
+			recordSyncCommandTrace(ws, reconcileCombineCommand, "error", err, map[string]string{"remote": remote.String(), "sync_branch": branch})
 			return asSyncFailure(err)
 		}
 		return reportReconcileResult(ctx, stdout, ws, session, reconcileCombineCommand, remote, branch, result, false)
@@ -330,11 +330,11 @@ func reconcileCommandReasonForState(state storage.SyncReconcileState) string {
 // It records the durable, unconditional trace for the take decision before
 // rendering — the one point every take outcome (success or bug) passes through.
 // [LAW:single-enforcer]
-func reportTakeOutcome(stdout io.Writer, ws workspace.Info, command string, remote, branch string, result storage.SyncReconcileResult) error {
+func reportTakeOutcome(stdout io.Writer, ws workspace.Info, command string, remote storage.RemoteName, branch string, result storage.SyncReconcileResult) error {
 	// "replayed" makes the provenance-replay count part of the durable trace,
 	// not just the stdout line; zero is honest data for outcomes that fold
 	// nothing. [LAW:dataflow-not-control-flow] recorded unconditionally.
-	metadata := map[string]string{"remote": remote, "sync_branch": branch, "replayed": strconv.Itoa(result.Replayed),
+	metadata := map[string]string{"remote": remote.String(), "sync_branch": branch, "replayed": strconv.Itoa(result.Replayed),
 		"carried_purges": strconv.Itoa(result.CarriedPurges), "purged": strconv.Itoa(len(purgedIDs(result.Unrelated)))}
 	landingMetadata(metadata, result.Landing)
 	decision := string(result.State)
@@ -357,7 +357,7 @@ func reportTakeOutcome(stdout io.Writer, ws workspace.Info, command string, remo
 		BuildNote: resolveBuildStatusNote(time.Now()),
 		Metadata:  metadata,
 	})
-	ref := remote + "/" + branch
+	ref := remote.String() + "/" + branch
 	switch result.State {
 	case storage.SyncReconcileTookRemote:
 		endDivergenceEpisode(ws)
@@ -439,10 +439,10 @@ func purgedIDs(inv *storage.UnrelatedInventory) []string {
 // passes through — and it feeds the owner channel the same way every surface does:
 // a held state notifies out-of-band, a converged one ends the divergence episode.
 // [LAW:single-enforcer]
-func reportReconcileResult(ctx context.Context, stdout io.Writer, ws workspace.Info, session syncSession, command string, remote, branch string, result storage.SyncReconcileResult, resolved bool) error {
+func reportReconcileResult(ctx context.Context, stdout io.Writer, ws workspace.Info, session syncSession, command string, remote storage.RemoteName, branch string, result storage.SyncReconcileResult, resolved bool) error {
 	// "replayed" mirrors reportTakeOutcome: the provenance-replay count is part
 	// of the durable trace for every outcome, zero included.
-	metadata := map[string]string{"remote": remote, "sync_branch": branch, "replayed": strconv.Itoa(result.Replayed)}
+	metadata := map[string]string{"remote": remote.String(), "sync_branch": branch, "replayed": strconv.Itoa(result.Replayed)}
 	landingMetadata(metadata, result.Landing)
 	metadata["prose_recorded"] = strconv.Itoa(result.ProseRecorded)
 	switch result.State {
@@ -456,7 +456,7 @@ func reportReconcileResult(ctx context.Context, stdout io.Writer, ws workspace.I
 		metadata["collisions"] = strconv.Itoa(len(result.Collisions))
 		failure := SyncFailureError{Failure: SyncFailure{
 			Class:      syncFailureIDCollision,
-			Remote:     remote,
+			Remote:     remote.String(),
 			Branch:     branch,
 			Ahead:      result.Ahead,
 			Behind:     result.Behind,
@@ -475,7 +475,7 @@ func reportReconcileResult(ctx context.Context, stdout io.Writer, ws workspace.I
 		// which the unrelated escalation does not use (its severity is fixed, not aged).
 		failure := SyncFailureError{Failure: SyncFailure{
 			Class:     syncFailureUnrelatedHistories,
-			Remote:    remote,
+			Remote:    remote.String(),
 			Branch:    branch,
 			Ahead:     result.Ahead,
 			Behind:    result.Behind,
@@ -513,7 +513,7 @@ func reportReconcileResult(ctx context.Context, stdout io.Writer, ws workspace.I
 		// against the automatic receive's earlier detection when there was one.
 		if ev, ok := ownerNotifyEventForFailure(SyncFailure{
 			Class:  syncFailureProseHeld,
-			Remote: remote,
+			Remote: remote.String(),
 			Branch: branch,
 			Fields: result.Pending,
 		}); ok {
@@ -553,7 +553,7 @@ func reportReconcileResult(ctx context.Context, stdout io.Writer, ws workspace.I
 				"  kept remote-only: %s\n"+
 				"  field-merged on both: %s\n"+
 				"  dropped, purged on a side: %s\n",
-			remote+"/"+branch,
+			remote.String()+"/"+branch,
 			describeReplayed(result.Replayed),
 			describeIDSet(inv.OnlyLocal),
 			describeIDSet(inv.OnlyRemote),
@@ -613,16 +613,16 @@ func recordReconcileDecisionTrace(ws workspace.Info, command string, state stora
 // a prior fetch. ok=false means there is nothing to reconcile against (no remote
 // or an empty remote). [LAW:single-enforcer] It resolves the target through the
 // shared prologue push/pull/receive use, so the four never disagree.
-func freshReconcileTarget(ctx context.Context, session syncSession, ws workspace.Info) (remote string, branch string, ok bool, err error) {
+func freshReconcileTarget(ctx context.Context, session syncSession, ws workspace.Info) (remote storage.RemoteName, branch string, ok bool, err error) {
 	target, err := resolveSyncTarget(ctx, session, ws, "")
 	if err != nil {
-		return "", "", false, err
+		return storage.RemoteName{}, "", false, err
 	}
 	if target.skip != syncTargetReady {
-		return "", "", false, nil
+		return storage.RemoteName{}, "", false, nil
 	}
 	if err := session.syncer.SyncFetch(ctx, target.remote, false); err != nil {
-		return "", "", false, fmt.Errorf("fetch %q before reconcile: %w", target.remote, err)
+		return storage.RemoteName{}, "", false, fmt.Errorf("fetch %q before reconcile: %w", target.remote, err)
 	}
 	if err := markFetchSuccess(ws); err != nil {
 		fmt.Fprintf(os.Stderr, "lit: fetch-success marker not written: %v\n", err)

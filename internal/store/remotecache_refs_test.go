@@ -46,16 +46,16 @@ func TestRemoteOperationsLeaveTheMirrorHoldingOnlyItsLastKnownRef(t *testing.T) 
 		run  func(*Store) error
 	}{
 		{"push", func(s *Store) error {
-			if err := s.SyncAddRemote(ctx, "origin", GitBackedRemoteURL(remote)); err != nil {
+			if err := s.SyncAddRemote(ctx, remoteName(t, "origin"), GitBackedRemoteURL(remote)); err != nil {
 				return err
 			}
-			_, err := s.SyncCompactAndPush(ctx, "origin", "master", true, false)
+			_, err := s.SyncCompactAndPush(ctx, remoteName(t, "origin"), "master", true, false)
 			return err
 		}},
-		{"fetch", func(s *Store) error { return s.SyncFetch(ctx, "origin", false) }},
-		{"pull", func(s *Store) error { _, err := s.SyncPull(ctx, "origin", "master"); return err }},
-		{"receive", func(s *Store) error { _, err := s.SyncReceive(ctx, "origin", "master"); return err }},
-		{"fetch again", func(s *Store) error { return s.SyncFetch(ctx, "origin", false) }},
+		{"fetch", func(s *Store) error { return s.SyncFetch(ctx, remoteName(t, "origin"), false) }},
+		{"pull", func(s *Store) error { _, err := s.SyncPull(ctx, remoteName(t, "origin"), "master"); return err }},
+		{"receive", func(s *Store) error { _, err := s.SyncReceive(ctx, remoteName(t, "origin"), "master"); return err }},
+		{"fetch again", func(s *Store) error { return s.SyncFetch(ctx, remoteName(t, "origin"), false) }},
 	}
 	var mirror string
 	for _, op := range operations {
@@ -137,10 +137,10 @@ func pushedMirror(t *testing.T) (doltRoot, remote, mirror string) {
 	if err != nil {
 		t.Fatalf("OpenSync() error = %v", err)
 	}
-	if err := session.SyncAddRemote(ctx, "origin", GitBackedRemoteURL(remote)); err != nil {
+	if err := session.SyncAddRemote(ctx, remoteName(t, "origin"), GitBackedRemoteURL(remote)); err != nil {
 		t.Fatalf("SyncAddRemote() error = %v", err)
 	}
-	if _, err := session.SyncCompactAndPush(ctx, "origin", "master", true, false); err != nil {
+	if _, err := session.SyncCompactAndPush(ctx, remoteName(t, "origin"), "master", true, false); err != nil {
 		t.Fatalf("SyncCompactAndPush() error = %v", err)
 	}
 	mirror = soleMirrorGitDir(t, session)
@@ -278,7 +278,7 @@ func TestSyncCompactAndPushReportsTheSweep(t *testing.T) {
 		t.Fatalf("OpenSync() error = %v", err)
 	}
 	commitPayload(t, ctx, session, "c2")
-	result, err := session.SyncCompactAndPush(ctx, "origin", "master", false, false)
+	result, err := session.SyncCompactAndPush(ctx, remoteName(t, "origin"), "master", false, false)
 	if closeErr := session.Close(); closeErr != nil {
 		t.Fatalf("Close() error = %v", closeErr)
 	}
@@ -359,7 +359,7 @@ func TestBackgroundReceiveLandsTheClonesLastKnownRef(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenSync(peer) error = %v", err)
 	}
-	_, pushErr := peerSync.SyncPush(ctx, "origin", "master", false, false)
+	_, pushErr := peerSync.SyncPush(ctx, remoteName(t, "origin"), "master", false, false)
 	if err := peerSync.Close(); err != nil {
 		t.Fatalf("Close(peer sync) error = %v", err)
 	}
@@ -373,14 +373,14 @@ func TestBackgroundReceiveLandsTheClonesLastKnownRef(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenSync(clone) error = %v", err)
 	}
-	fetchErr := cloneSync.SyncFetch(ctx, "origin", false)
+	fetchErr := cloneSync.SyncFetch(ctx, remoteName(t, "origin"), false)
 	if err := cloneSync.Close(); err != nil {
 		t.Fatalf("Close(clone) error = %v", err)
 	}
 	if fetchErr != nil {
 		t.Fatalf("SyncFetch(clone) error = %v", fetchErr)
 	}
-	if _, err := LandFetchedHead(ctx, live, clone, "origin", "master"); err != nil {
+	if _, err := LandFetchedHead(ctx, live, clone, remoteName(t, "origin"), "master"); err != nil {
 		t.Fatalf("LandFetchedHead() error = %v", err)
 	}
 

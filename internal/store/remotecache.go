@@ -477,7 +477,7 @@ func removeTreeCounting(path string) (freed int64, removed bool, err error) {
 // that will not parse, or a git that fails to answer is the error.
 // [LAW:no-silent-failure] [LAW:one-source-of-truth] the path comes from
 // remoteMirrorKeys, the key Dolt itself writes the mirror at.
-func (s *Store) SyncRemoteMirrorHolds(ctx context.Context, remote string, commits []string) (bool, error) {
+func (s *Store) SyncRemoteMirrorHolds(ctx context.Context, remote storage.RemoteName, commits []string) (bool, error) {
 	if len(commits) == 0 {
 		return false, nil
 	}
@@ -485,7 +485,7 @@ func (s *Store) SyncRemoteMirrorHolds(ctx context.Context, remote string, commit
 	if err != nil {
 		return false, err
 	}
-	index := slices.IndexFunc(remotes, func(r storage.SyncRemote) bool { return r.Name == remote })
+	index := slices.IndexFunc(remotes, func(r storage.SyncRemote) bool { return r.Name == remote.String() })
 	if index < 0 {
 		return false, fmt.Errorf("remote %q is not configured on this store", remote)
 	}
@@ -493,7 +493,7 @@ func (s *Store) SyncRemoteMirrorHolds(ctx context.Context, remote string, commit
 	if err != nil {
 		return false, err
 	}
-	key, gitBacked := keys[remote]
+	key, gitBacked := keys[remote.String()]
 	if !gitBacked {
 		return false, nil
 	}

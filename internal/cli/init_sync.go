@@ -2,10 +2,12 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
@@ -33,6 +35,9 @@ const (
 	initSyncHasLocalTickets initSyncState = "has_local_tickets"
 	// initSyncNotConfigured: no eligible git remote to adopt from.
 	initSyncNotConfigured initSyncState = "not_configured"
+	// initSyncRemoteRefused: the chosen git remote's name is one Dolt cannot
+	// hold, and the remote carries no lit data.
+	initSyncRemoteRefused initSyncState = "remote_refused"
 	// initSyncRemoteEmpty: the remote advertises no refs yet (brand-new repo).
 	initSyncRemoteEmpty initSyncState = "remote_empty"
 	// initSyncNoRemoteData: the remote has git refs but no lit data on the branch.
@@ -144,7 +149,7 @@ func adoptRemoteTicketsBlocking(ctx context.Context, ws workspace.Info) initSync
 		// push from the empty store. [LAW:no-silent-failure]
 		return initSyncOutcome{
 			State:  initSyncFailed,
-			Remote: plan.remote,
+			Remote: plan.remote.String(),
 			Branch: plan.branch,
 			Error: fmt.Sprintf(
 				"remote %q carries lit ticket data (refs/dolt/*) but adopting it did not complete, so the local store "+
@@ -155,14 +160,14 @@ func adoptRemoteTicketsBlocking(ctx context.Context, ws workspace.Info) initSync
 			),
 		}
 	}
-	return initSyncOutcome{State: initSyncAdopted, Remote: plan.remote, Branch: plan.branch}
+	return initSyncOutcome{State: initSyncAdopted, Remote: plan.remote.String(), Branch: plan.branch}
 }
 
 // adoptClonePlan carries the resolved inputs the clone-based adopt needs. It is
 // produced only when the remote genuinely carries lit data and the local store
 // is empty — i.e. only when an adopt should actually happen.
 type adoptClonePlan struct {
-	remote string
+	remote storage.RemoteName
 	branch string
 	url    string
 }
@@ -214,25 +219,38 @@ func planRemoteAdopt(ctx context.Context, ws workspace.Info) (*adoptClonePlan, i
 	if err != nil {
 		return nil, initSyncOutcome{State: initSyncFailed, Error: err.Error()}
 	}
-	remote, err := resolveSyncRemote("", workspace.UpstreamRemote(ctx, ws.RootDir), gitRemotes)
+	remote, ok, err := resolveSyncRemote("", workspace.UpstreamRemote(ctx, ws.RootDir), gitRemotes)
+	// A remote Dolt cannot hold has nothing init can adopt, so init starts
+	// fresh, unless it carries lit data: a fresh store would fork from that backlog,
+	// which only the remote renamed can adopt. [LAW:no-silent-failure]
+	if refused := (storage.RefusedRemoteNameError{}); errors.As(err, &refused) {
+		hasData, dataErr := workspace.RemoteHasDoltData(ctx, ws.RootDir, refused.Name)
+		if dataErr != nil {
+			return nil, initSyncOutcome{State: initSyncFailed, Remote: refused.Name, Error: dataErr.Error()}
+		}
+		if hasData {
+			return nil, initSyncOutcome{State: initSyncFailed, Remote: refused.Name, Error: fmt.Sprintf("remote %q carries lit ticket data (refs/dolt/*), which lit cannot adopt: %v", refused.Name, err)}
+		}
+		return freshOutcome(initSyncOutcome{State: initSyncRemoteRefused, Remote: refused.Name})
+	}
 	if err != nil {
 		return nil, initSyncOutcome{State: initSyncFailed, Error: err.Error()}
 	}
-	if remote == "" {
+	if !ok {
 		return freshOutcome(initSyncOutcome{State: initSyncNotConfigured})
 	}
 	// [LAW:single-enforcer] First-push detection is centralized so init, pull,
 	// and push share one definition of "remote is empty".
-	hasRefs, refsErr := workspace.RemoteHasRefs(ctx, ws.RootDir, remote)
+	hasRefs, refsErr := workspace.RemoteHasRefs(ctx, ws.RootDir, remote.String())
 	if refsErr != nil {
-		return nil, initSyncOutcome{State: initSyncFailed, Remote: remote, Error: refsErr.Error()}
+		return nil, initSyncOutcome{State: initSyncFailed, Remote: remote.String(), Error: refsErr.Error()}
 	}
 	if !hasRefs {
-		return freshOutcome(initSyncOutcome{State: initSyncRemoteEmpty, Remote: remote})
+		return freshOutcome(initSyncOutcome{State: initSyncRemoteEmpty, Remote: remote.String()})
 	}
 	branch, err := resolveSyncBranch(ctx, ws, remote)
 	if err != nil {
-		return nil, initSyncOutcome{State: initSyncFailed, Remote: remote, Error: err.Error()}
+		return nil, initSyncOutcome{State: initSyncFailed, Remote: remote.String(), Error: err.Error()}
 	}
 	// The refs/dolt/* namespace is the authoritative "remote carries lit data"
 	// signal; RemoteHasRefs (any git ref) cannot tell a code-only repo from one
@@ -240,18 +258,18 @@ func planRemoteAdopt(ctx context.Context, ws workspace.Info) (*adoptClonePlan, i
 	// empty result, reported silently; a remote that DOES carry data is adopted
 	// by clone. hasData==true always leads to a clone, never to a silent empty
 	// store. [LAW:no-silent-failure] [LAW:types-are-the-program]
-	hasData, dataErr := workspace.RemoteHasDoltData(ctx, ws.RootDir, remote)
+	hasData, dataErr := workspace.RemoteHasDoltData(ctx, ws.RootDir, remote.String())
 	if dataErr != nil {
-		return nil, initSyncOutcome{State: initSyncFailed, Remote: remote, Branch: branch, Error: dataErr.Error()}
+		return nil, initSyncOutcome{State: initSyncFailed, Remote: remote.String(), Branch: branch, Error: dataErr.Error()}
 	}
 	if !hasData {
-		return freshOutcome(initSyncOutcome{State: initSyncNoRemoteData, Remote: remote, Branch: branch})
+		return freshOutcome(initSyncOutcome{State: initSyncNoRemoteData, Remote: remote.String(), Branch: branch})
 	}
-	url := gitBackedURLForRemote(gitRemotes, remote)
+	url := gitBackedURLForRemote(gitRemotes, remote.String())
 	if url == "" {
 		return nil, initSyncOutcome{
 			State:  initSyncFailed,
-			Remote: remote,
+			Remote: remote.String(),
 			Branch: branch,
 			Error:  fmt.Sprintf("remote %q carries lit data but its git URL could not be resolved for clone", remote),
 		}
@@ -273,6 +291,8 @@ func remoteSituationLine(state initSyncState) string {
 		return "local store already holds tickets; leaving it untouched (ongoing sync handles updates)"
 	case initSyncNotConfigured:
 		return "no eligible git remote; starting with an empty backlog"
+	case initSyncRemoteRefused:
+		return "the git remote's name is one Dolt cannot hold, so lit cannot sync with it until it is renamed (git remote rename); starting with an empty backlog"
 	case initSyncRemoteEmpty:
 		return "remote has no refs yet (brand-new repo); starting with an empty backlog"
 	case initSyncNoRemoteData:

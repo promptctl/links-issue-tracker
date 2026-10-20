@@ -67,7 +67,7 @@ func newForkBelowTheCutAfter(t *testing.T, ctx context.Context, deltaWrites func
 		t.Fatalf("ReRoot(alpha) error = %v", err)
 	}
 	sync := openSyncOrFatal(t, ctx, f.alpha)
-	if _, err := sync.SyncPush(ctx, "origin", "master", false, true); err != nil {
+	if _, err := sync.SyncPush(ctx, remoteName(t, "origin"), "master", false, true); err != nil {
 		t.Fatalf("force push of alpha's re-rooted history error = %v", err)
 	}
 	if err := sync.Close(); err != nil {
@@ -109,7 +109,7 @@ func TestAForkBelowTheCutMergesAgainstItsForkPoint(t *testing.T) {
 	delta := openSyncOrFatal(t, ctx, f.delta)
 	defer func() { _ = delta.Close() }()
 	unpushed := commitsBetween(t, ctx, delta, f.adopted, headCommit(t, ctx, delta))
-	pulled, err := delta.SyncPull(ctx, "origin", "master")
+	pulled, err := delta.SyncPull(ctx, remoteName(t, "origin"), "master")
 	if err != nil {
 		t.Fatalf("SyncPull(delta) error = %v", err)
 	}
@@ -131,13 +131,13 @@ func TestAForkBelowTheCutMergesAgainstItsForkPoint(t *testing.T) {
 	if replayed := commitsBetween(t, ctx, delta, f.remoteHead, headCommit(t, ctx, delta)); replayed != unpushed+1 {
 		t.Fatalf("the merge put %d commits on the remote head; want %d: delta's %d since the fork point and the marker", replayed, unpushed+1, unpushed)
 	}
-	if _, err := delta.SyncPush(ctx, "origin", "master", false, false); err != nil {
+	if _, err := delta.SyncPush(ctx, remoteName(t, "origin"), "master", false, false); err != nil {
 		t.Fatalf("delta's push after the merge error = %v", err)
 	}
 
 	alpha := openSyncOrFatal(t, ctx, f.alpha)
 	defer func() { _ = alpha.Close() }()
-	back, err := alpha.SyncPull(ctx, "origin", "master")
+	back, err := alpha.SyncPull(ctx, remoteName(t, "origin"), "master")
 	if err != nil {
 		t.Fatalf("SyncPull(alpha) error = %v", err)
 	}
@@ -160,7 +160,7 @@ func TestAForkPointOutlivesTheFetchThatJumpedPastIt(t *testing.T) {
 	f := newForkBelowTheCut(t, ctx)
 
 	crashed := openSyncOrFatal(t, ctx, f.delta)
-	if err := crashed.SyncFetch(ctx, "origin", false); err != nil {
+	if err := crashed.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
 		t.Fatalf("SyncFetch(delta) error = %v", err)
 	}
 	if err := crashed.Close(); err != nil {
@@ -171,14 +171,14 @@ func TestAForkPointOutlivesTheFetchThatJumpedPastIt(t *testing.T) {
 	defer func() { _ = delta.Close() }()
 	// Ahead is delta's one edit since the fork point, not the history below it
 	// that the remote's cut dropped.
-	fresh, err := delta.SyncFreshness(ctx, "origin", "master")
+	fresh, err := delta.SyncFreshness(ctx, remoteName(t, "origin"), "master")
 	if err != nil {
 		t.Fatalf("SyncFreshness(delta) error = %v", err)
 	}
 	if fresh.Ahead != 1 || fresh.State() != storage.SyncDiverged || fresh.Base.Source != storage.ReconcileBaseForkPoint {
 		t.Fatalf("freshness = ahead %d, %q, base %q; want ahead 1, %q, base %q", fresh.Ahead, fresh.State(), fresh.Base.Source, storage.SyncDiverged, storage.ReconcileBaseForkPoint)
 	}
-	pulled, err := delta.SyncPull(ctx, "origin", "master")
+	pulled, err := delta.SyncPull(ctx, remoteName(t, "origin"), "master")
 	if err != nil {
 		t.Fatalf("SyncPull(delta) error = %v", err)
 	}
@@ -221,10 +221,10 @@ func TestARemoteThatDropsTheForkPointsTicketsStaysUnrelated(t *testing.T) {
 		t.Fatalf("Close(other) error = %v", err)
 	}
 	sync := openSyncOrFatal(t, ctx, other)
-	if err := sync.SyncAddRemote(ctx, "origin", remoteURL); err != nil {
+	if err := sync.SyncAddRemote(ctx, remoteName(t, "origin"), remoteURL); err != nil {
 		t.Fatalf("SyncAddRemote(other) error = %v", err)
 	}
-	if _, err := sync.SyncPush(ctx, "origin", "master", true, true); err != nil {
+	if _, err := sync.SyncPush(ctx, remoteName(t, "origin"), "master", true, true); err != nil {
 		t.Fatalf("force push of the other history error = %v", err)
 	}
 	if err := sync.Close(); err != nil {
@@ -233,7 +233,7 @@ func TestARemoteThatDropsTheForkPointsTicketsStaysUnrelated(t *testing.T) {
 
 	d := openSyncOrFatal(t, ctx, delta)
 	defer func() { _ = d.Close() }()
-	pulled, err := d.SyncPull(ctx, "origin", "master")
+	pulled, err := d.SyncPull(ctx, remoteName(t, "origin"), "master")
 	if err != nil {
 		t.Fatalf("SyncPull(delta) error = %v", err)
 	}
@@ -274,7 +274,7 @@ func TestARemoteMissingAnEditAtTheForkPointStaysUnrelated(t *testing.T) {
 		t.Fatalf("ReRoot(alpha) error = %v", err)
 	}
 	sync := openSyncOrFatal(t, ctx, alpha)
-	if _, err := sync.SyncPush(ctx, "origin", "master", false, true); err != nil {
+	if _, err := sync.SyncPush(ctx, remoteName(t, "origin"), "master", false, true); err != nil {
 		t.Fatalf("force push of alpha's re-rooted history error = %v", err)
 	}
 	if err := sync.Close(); err != nil {
@@ -283,7 +283,7 @@ func TestARemoteMissingAnEditAtTheForkPointStaysUnrelated(t *testing.T) {
 
 	d := openSyncOrFatal(t, ctx, delta)
 	defer func() { _ = d.Close() }()
-	pulled, err := d.SyncPull(ctx, "origin", "master")
+	pulled, err := d.SyncPull(ctx, remoteName(t, "origin"), "master")
 	if err != nil {
 		t.Fatalf("SyncPull(delta) error = %v", err)
 	}
@@ -310,17 +310,17 @@ func TestAQuietForkBelowTheCutLandsOnTheRemoteHead(t *testing.T) {
 
 	delta := openSyncOrFatal(t, ctx, f.delta)
 	defer func() { _ = delta.Close() }()
-	if err := delta.SyncFetch(ctx, "origin", false); err != nil {
+	if err := delta.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
 		t.Fatalf("SyncFetch(delta) error = %v", err)
 	}
-	fresh, err := delta.SyncFreshness(ctx, "origin", "master")
+	fresh, err := delta.SyncFreshness(ctx, remoteName(t, "origin"), "master")
 	if err != nil {
 		t.Fatalf("SyncFreshness(delta) error = %v", err)
 	}
 	if fresh.Ahead != 0 || fresh.Behind == 0 || fresh.State() != storage.SyncBehind || fresh.Base.Source != storage.ReconcileBaseForkPoint || fresh.OldestDivergedUnix != 0 {
 		t.Fatalf("freshness = ahead %d, behind %d, %q, base %q, oldest diverged %d; want ahead 0, behind > 0, %q, base %q, undated", fresh.Ahead, fresh.Behind, fresh.State(), fresh.Base.Source, fresh.OldestDivergedUnix, storage.SyncBehind, storage.ReconcileBaseForkPoint)
 	}
-	received, err := delta.SyncReceive(ctx, "origin", "master")
+	received, err := delta.SyncReceive(ctx, remoteName(t, "origin"), "master")
 	if err != nil {
 		t.Fatalf("SyncReceive(delta) error = %v", err)
 	}
@@ -349,11 +349,11 @@ func TestAForkPointIsNoneWhenNothingWasShared(t *testing.T) {
 	seedReconcileRemote(t, ctx, migratedDoltDir(t), remoteURL)
 	other := openSyncOrFatal(t, ctx, unrelatedDoltDir(t))
 	defer func() { _ = other.Close() }()
-	if err := other.SyncAddRemote(ctx, "origin", remoteURL); err != nil {
+	if err := other.SyncAddRemote(ctx, remoteName(t, "origin"), remoteURL); err != nil {
 		t.Fatalf("SyncAddRemote(other) error = %v", err)
 	}
 	for range 2 {
-		if err := other.SyncFetch(ctx, "origin", false); err != nil {
+		if err := other.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
 			t.Fatalf("SyncFetch(other) error = %v", err)
 		}
 	}
@@ -381,7 +381,7 @@ func TestRemovingARemoteDropsItsForkPoints(t *testing.T) {
 
 	st := openSyncOrFatal(t, ctx, delta)
 	defer func() { _ = st.Close() }()
-	if err := st.SyncFetch(ctx, "origin", false); err != nil {
+	if err := st.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
 		t.Fatalf("SyncFetch(delta) error = %v", err)
 	}
 	if err := st.SyncRemoveRemote(ctx, "origin"); err != nil {
@@ -424,7 +424,7 @@ func TestAPrunedTrackingRefTakesItsForkPointWithIt(t *testing.T) {
 	adoptRemote(t, ctx, delta, remoteURL)
 	st := openSyncOrFatal(t, ctx, delta)
 	defer func() { _ = st.Close() }()
-	if err := st.SyncFetch(ctx, "origin", false); err != nil {
+	if err := st.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
 		t.Fatalf("SyncFetch(delta) error = %v", err)
 	}
 	feature, err := commitHashOfRef(ctx, st.db, "remotes/origin/feature")
@@ -434,7 +434,7 @@ func TestAPrunedTrackingRefTakesItsForkPointWithIt(t *testing.T) {
 	if err := execProcedureDiscard(ctx, pusher.db, "DOLT_PUSH", "origin", ":feature"); err != nil {
 		t.Fatalf("delete the remote's feature branch: %v", err)
 	}
-	if err := st.SyncFetch(ctx, "origin", true); err != nil {
+	if err := st.SyncFetch(ctx, remoteName(t, "origin"), true); err != nil {
 		t.Fatalf("SyncFetch(delta, prune) error = %v", err)
 	}
 	records := st.ForkPointRecords()
@@ -442,7 +442,7 @@ func TestAPrunedTrackingRefTakesItsForkPointWithIt(t *testing.T) {
 	if len(records) == 0 || records[len(records)-1] != want {
 		t.Fatalf("ForkPointRecords() = %+v, want the pruning fetch to end with %+v", records, want)
 	}
-	left, err := refHeadsUnder(ctx, st.db, `SELECT name, hash FROM dolt_branches`, forkPointBranch("origin", ""))
+	left, err := refHeadsUnder(ctx, st.db, `SELECT name, hash FROM dolt_branches`, forkPointBranch(ownerOf(remoteName(t, "origin")), ""))
 	if err != nil {
 		t.Fatalf("list fork points: %v", err)
 	}
@@ -466,13 +466,13 @@ func TestARemotesNewURLKeepsItsForkPoint(t *testing.T) {
 
 	delta := openSyncOrFatal(t, ctx, f.delta)
 	defer func() { _ = delta.Close() }()
-	if err := delta.SyncFetch(ctx, "origin", false); err != nil {
+	if err := delta.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
 		t.Fatalf("SyncFetch(delta) error = %v", err)
 	}
-	if err := delta.SyncSetRemoteURL(ctx, "origin", "file://"+link); err != nil {
+	if err := delta.SyncSetRemoteURL(ctx, remoteName(t, "origin"), "file://"+link); err != nil {
 		t.Fatalf("SyncSetRemoteURL(delta) error = %v", err)
 	}
-	pulled, err := delta.SyncPull(ctx, "origin", "master")
+	pulled, err := delta.SyncPull(ctx, remoteName(t, "origin"), "master")
 	if err != nil {
 		t.Fatalf("SyncPull(delta) error = %v", err)
 	}
@@ -498,7 +498,7 @@ func TestASetRemoteURLRetriedAfterItsRemoveLandsTheAdd(t *testing.T) {
 		t.Fatalf("remove the remote: %v", err)
 	}
 	moved := "file://" + filepath.Join(t.TempDir(), "moved")
-	if err := st.SyncSetRemoteURL(ctx, "origin", moved); err != nil {
+	if err := st.SyncSetRemoteURL(ctx, remoteName(t, "origin"), moved); err != nil {
 		t.Fatalf("SyncSetRemoteURL() error = %v", err)
 	}
 	remotes, err := st.SyncListRemotes(ctx)
@@ -520,10 +520,10 @@ func TestAQuietForksRefusedPushIsNotSuperseded(t *testing.T) {
 	f := newForkBelowTheCutAfter(t, ctx, func(forkBelowTheCut) {})
 	delta := openSyncOrFatal(t, ctx, f.delta)
 	defer func() { _ = delta.Close() }()
-	if err := delta.SyncFetch(ctx, "origin", false); err != nil {
+	if err := delta.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
 		t.Fatalf("SyncFetch(delta) error = %v", err)
 	}
-	pushed, err := delta.SyncPushFromClone(ctx, "origin", "master", false, false)
+	pushed, err := delta.SyncPushFromClone(ctx, remoteName(t, "origin"), "master", false, false)
 	if !errors.Is(err, storage.ErrPushDiverged) {
 		t.Fatalf("SyncPushFromClone() = %+v, %v; want the refusal as %v, since the remote does not carry delta's head", pushed, err, storage.ErrPushDiverged)
 	}
@@ -585,7 +585,7 @@ func TestAStrandedWriteSurvivesAReceive(t *testing.T) {
 			root, ticket, remoteDescription := tc.setup(t, ctx)
 			st := openSyncOrFatal(t, ctx, root)
 			defer func() { _ = st.Close() }()
-			received, err := st.SyncReceive(ctx, "origin", "master")
+			received, err := st.SyncReceive(ctx, remoteName(t, "origin"), "master")
 			if err != nil {
 				t.Fatalf("SyncReceive() error = %v", err)
 			}
@@ -593,7 +593,7 @@ func TestAStrandedWriteSurvivesAReceive(t *testing.T) {
 				t.Fatalf("receive = %q; want %q over the versioned write", received.State, storage.SyncReceiveDiverged)
 			}
 			assertStrandedWritesVersioned(t, ctx, st)
-			if _, err := st.SyncPull(ctx, "origin", "master"); err != nil {
+			if _, err := st.SyncPull(ctx, remoteName(t, "origin"), "master"); err != nil {
 				t.Fatalf("SyncPull() error = %v", err)
 			}
 			if issue := getIssueOrFatal(t, ctx, st, ticket); issue.Title != strandedTitle || issue.Description != remoteDescription {
@@ -624,10 +624,10 @@ func TestAStrandedWriteSurvivesAReconcile(t *testing.T) {
 	strandWrite(t, ctx, beta, ticket)
 	st := openSyncOrFatal(t, ctx, beta)
 	defer func() { _ = st.Close() }()
-	if err := st.SyncFetch(ctx, "origin", false); err != nil {
+	if err := st.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
 		t.Fatalf("SyncFetch() error = %v", err)
 	}
-	if _, err := st.SyncReconcile(ctx, "origin", "master"); err != nil {
+	if _, err := st.SyncReconcile(ctx, remoteName(t, "origin"), "master"); err != nil {
 		t.Fatalf("SyncReconcile() error = %v", err)
 	}
 	if issue := getIssueOrFatal(t, ctx, st, ticket); issue.Title != strandedTitle || issue.Description != "alpha-description" || issue.Assignee != "beta-assignee" {
@@ -693,14 +693,14 @@ func TestTheReceiveLandsTheClonesForkPoint(t *testing.T) {
 		t.Fatalf("CloneTree(delta) error = %v", err)
 	}
 	fetcher := openSyncOrFatal(t, ctx, clone)
-	if err := fetcher.SyncFetch(ctx, "origin", false); err != nil {
+	if err := fetcher.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
 		t.Fatalf("SyncFetch(clone) error = %v", err)
 	}
 	if err := fetcher.Close(); err != nil {
 		t.Fatalf("Close(clone) error = %v", err)
 	}
 	for _, want := range []FetchedHeadRecord{FetchedHeadMoved, FetchedHeadUnchanged} {
-		landed, err := LandFetchedHead(ctx, f.delta, clone, "origin", "master")
+		landed, err := LandFetchedHead(ctx, f.delta, clone, remoteName(t, "origin"), "master")
 		if err != nil {
 			t.Fatalf("LandFetchedHead() error = %v", err)
 		}
@@ -711,14 +711,14 @@ func TestTheReceiveLandsTheClonesForkPoint(t *testing.T) {
 
 	delta := openSyncOrFatal(t, ctx, f.delta)
 	defer func() { _ = delta.Close() }()
-	received, err := delta.SyncSettleReceived(ctx, "origin", "master")
+	received, err := delta.SyncSettleReceived(ctx, remoteName(t, "origin"), "master")
 	if err != nil {
 		t.Fatalf("SyncSettleReceived(delta) error = %v", err)
 	}
 	if received.State != storage.SyncReceiveDiverged {
 		t.Fatalf("settle = %q, want %q", received.State, storage.SyncReceiveDiverged)
 	}
-	reconciled, err := delta.SyncReconcile(ctx, "origin", "master")
+	reconciled, err := delta.SyncReconcile(ctx, remoteName(t, "origin"), "master")
 	if err != nil {
 		t.Fatalf("SyncReconcile(delta) error = %v", err)
 	}
@@ -745,7 +745,7 @@ func createAndPush(t *testing.T, ctx context.Context, root, epic, title string) 
 		t.Fatalf("Close(%s) error = %v", root, err)
 	}
 	sync := openSyncOrFatal(t, ctx, root)
-	if _, err := sync.SyncPush(ctx, "origin", "master", false, false); err != nil {
+	if _, err := sync.SyncPush(ctx, remoteName(t, "origin"), "master", false, false); err != nil {
 		t.Fatalf("SyncPush(%s) error = %v", title, err)
 	}
 	if err := sync.Close(); err != nil {

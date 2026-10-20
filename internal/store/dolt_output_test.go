@@ -81,7 +81,7 @@ func TestDoltTransferKeepsStdoutClean(t *testing.T) {
 
 	// DOLT_CLONE — the confirmed heavy emitter (init adopt bootstraps by clone).
 	cloneOut := captureStdout(t, func() error {
-		return AdoptRemoteByClone(ctx, consumer, "ws", "origin", remoteURL, "master")
+		return AdoptRemoteByClone(ctx, consumer, "ws", remoteName(t, "origin"), remoteURL, "master")
 	})
 	if len(cloneOut) != 0 {
 		t.Fatalf("adopt-by-clone wrote %d bytes to stdout, want 0: %q", len(cloneOut), cloneOut)
@@ -94,7 +94,7 @@ func TestDoltTransferKeepsStdoutClean(t *testing.T) {
 	sync := openSyncOrFatal(t, ctx, consumer)
 	defer sync.Close()
 	fetchOut := captureStdout(t, func() error {
-		return sync.SyncFetch(ctx, "origin", false)
+		return sync.SyncFetch(ctx, remoteName(t, "origin"), false)
 	})
 	if len(fetchOut) != 0 {
 		t.Fatalf("sync fetch wrote %d bytes to stdout, want 0: %q", len(fetchOut), fetchOut)
@@ -120,7 +120,7 @@ func seedSecondChange(t *testing.T, ctx context.Context, root, remoteURL string)
 		t.Fatalf("Close(second change): %v", err)
 	}
 	sync := openSyncOrFatal(t, ctx, root)
-	if _, err := sync.SyncPush(ctx, "origin", "master", true, false); err != nil {
+	if _, err := sync.SyncPush(ctx, remoteName(t, "origin"), "master", true, false); err != nil {
 		t.Fatalf("SyncPush(second): %v", err)
 	}
 	if err := sync.Close(); err != nil {

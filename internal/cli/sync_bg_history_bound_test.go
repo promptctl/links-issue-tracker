@@ -152,7 +152,7 @@ func dirBytes(t *testing.T, root string) int64 {
 // push does; one the remote may carry the re-root in place of waits.
 func TestTheLiveStoreLearnsWhereTheCycleLeftTheRemote(t *testing.T) {
 	landed := func(reRoot storage.ReRootPublication, followed bool) pushedHead {
-		return pushedHead{remote: "origin", branch: "master", head: "abc", reRoot: reRoot, followedReRoot: followed}
+		return pushedHead{remote: remoteName(t, "origin"), branch: "master", head: "abc", reRoot: reRoot, followedReRoot: followed}
 	}
 	for _, tc := range []struct {
 		name   string

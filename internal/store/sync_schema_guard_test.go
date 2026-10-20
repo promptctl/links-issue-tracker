@@ -50,10 +50,10 @@ func seedFutureSchemaRemote(t *testing.T, ctx context.Context, root, remoteURL s
 	}
 
 	sync := openSyncOrFatal(t, ctx, root)
-	if err := sync.SyncAddRemote(ctx, "origin", remoteURL); err != nil {
+	if err := sync.SyncAddRemote(ctx, remoteName(t, "origin"), remoteURL); err != nil {
 		t.Fatalf("SyncAddRemote(seed): %v", err)
 	}
-	if _, err := sync.SyncPush(ctx, "origin", "master", true, false); err != nil {
+	if _, err := sync.SyncPush(ctx, remoteName(t, "origin"), "master", true, false); err != nil {
 		t.Fatalf("SyncPush(seed): %v", err)
 	}
 	if err := sync.Close(); err != nil {
@@ -78,10 +78,10 @@ func TestRemoteHeadSchemaReadsVersion(t *testing.T) {
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	defer syncB.Close()
-	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
 		t.Fatalf("SyncFetch: %v", err)
 	}
-	head, synced, err := syncB.trackingHeadHash(ctx, "origin", "master")
+	head, synced, err := syncB.trackingHeadHash(ctx, remoteName(t, "origin"), "master")
 	if err != nil || !synced {
 		t.Fatalf("trackingHeadHash: synced=%v err=%v", synced, err)
 	}
@@ -110,10 +110,10 @@ func TestGuardRemoteSchemaAheadDetects(t *testing.T) {
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	defer syncB.Close()
-	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
 		t.Fatalf("SyncFetch: %v", err)
 	}
-	err := syncB.guardRemoteSchemaAhead(ctx, "origin", "master")
+	err := syncB.guardRemoteSchemaAhead(ctx, remoteName(t, "origin"), "master")
 	var ahead *RemoteSchemaAheadError
 	if !errors.As(err, &ahead) {
 		t.Fatalf("guardRemoteSchemaAhead = %v, want *RemoteSchemaAheadError", err)
@@ -140,15 +140,15 @@ func TestGuardRemoteSchemaNotAheadAtOrBelowMax(t *testing.T) {
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	defer syncB.Close()
-	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
 		t.Fatalf("SyncFetch: %v", err)
 	}
-	if err := syncB.guardRemoteSchemaAhead(ctx, "origin", "master"); err != nil {
+	if err := syncB.guardRemoteSchemaAhead(ctx, remoteName(t, "origin"), "master"); err != nil {
 		t.Fatalf("guard at-or-below max = %v, want nil", err)
 	}
 	// A branch the remote has never seen has no tracking ref, so the guard cannot
 	// and must not block it.
-	if err := syncB.guardRemoteSchemaAhead(ctx, "origin", "no-such-branch"); err != nil {
+	if err := syncB.guardRemoteSchemaAhead(ctx, remoteName(t, "origin"), "no-such-branch"); err != nil {
 		t.Fatalf("guard never-synced branch = %v, want nil", err)
 	}
 }
@@ -172,10 +172,10 @@ func TestSyncPushRefusesWhenRemoteSchemaAhead(t *testing.T) {
 	updateLocal(t, ctx, rootB, id, storage.UpdateIssueInput{Lane: strptr("from-b")})
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
-	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
 		t.Fatalf("SyncFetch: %v", err)
 	}
-	_, err := syncB.SyncPush(ctx, "origin", "master", false, false)
+	_, err := syncB.SyncPush(ctx, remoteName(t, "origin"), "master", false, false)
 	var ahead *RemoteSchemaAheadError
 	if !errors.As(err, &ahead) {
 		t.Fatalf("SyncPush onto ahead remote = %v, want *RemoteSchemaAheadError", err)
@@ -227,10 +227,10 @@ func TestSyncReconcileRefusesWhenRemoteSchemaAhead(t *testing.T) {
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	defer syncB.Close()
-	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
-	fresh, err := syncB.SyncFreshness(ctx, "origin", "master")
+	fresh, err := syncB.SyncFreshness(ctx, remoteName(t, "origin"), "master")
 	if err != nil {
 		t.Fatalf("SyncFreshness: %v", err)
 	}
@@ -239,7 +239,7 @@ func TestSyncReconcileRefusesWhenRemoteSchemaAhead(t *testing.T) {
 	}
 	localHeadBefore := headCommit(t, ctx, syncB)
 
-	res, err := syncB.SyncReconcile(ctx, "origin", "master")
+	res, err := syncB.SyncReconcile(ctx, remoteName(t, "origin"), "master")
 	var ahead *RemoteSchemaAheadError
 	if !errors.As(err, &ahead) {
 		t.Fatalf("SyncReconcile onto ahead remote = %v (state %q), want *RemoteSchemaAheadError", err, res.State)
@@ -279,7 +279,7 @@ func advanceRemoteToFutureSchema(t *testing.T, ctx context.Context, root, id str
 		t.Fatalf("Close(advance): %v", err)
 	}
 	sync := openSyncOrFatal(t, ctx, root)
-	if _, err := sync.SyncPush(ctx, "origin", "master", false, false); err != nil {
+	if _, err := sync.SyncPush(ctx, remoteName(t, "origin"), "master", false, false); err != nil {
 		t.Fatalf("SyncPush(advance): %v", err)
 	}
 	if err := sync.Close(); err != nil {

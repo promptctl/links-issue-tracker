@@ -166,10 +166,10 @@ func TestSyncReconcileHomesAChildOfAnEpicPurgedOnTheOtherSide(t *testing.T) {
 	}
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
-	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
-	res, err := syncB.SyncReconcile(ctx, "origin", "master")
+	res, err := syncB.SyncReconcile(ctx, remoteName(t, "origin"), "master")
 	if err != nil {
 		t.Fatalf("SyncReconcile(B): %v", err)
 	}
@@ -180,7 +180,7 @@ func TestSyncReconcileHomesAChildOfAnEpicPurgedOnTheOtherSide(t *testing.T) {
 		t.Errorf("Rehomed = %+v, want %+v", res.Rehomed, want)
 	}
 	assertHomedUnder(t, ctx, syncB, child.ID, testUnfiled)
-	if _, err := syncB.SyncPush(ctx, "origin", "master", false, false); err != nil {
+	if _, err := syncB.SyncPush(ctx, remoteName(t, "origin"), "master", false, false); err != nil {
 		t.Fatalf("SyncPush(B): %v", err)
 	}
 	if err := syncB.Close(); err != nil {
@@ -189,7 +189,7 @@ func TestSyncReconcileHomesAChildOfAnEpicPurgedOnTheOtherSide(t *testing.T) {
 
 	syncA := openSyncOrFatal(t, ctx, rootA)
 	defer func() { _ = syncA.Close() }()
-	if _, err := syncA.SyncReceive(ctx, "origin", "master"); err != nil {
+	if _, err := syncA.SyncReceive(ctx, remoteName(t, "origin"), "master"); err != nil {
 		t.Fatalf("SyncReceive(A): %v", err)
 	}
 	assertHomedUnder(t, ctx, syncA, child.ID, testUnfiled)
@@ -270,7 +270,7 @@ func createEpicAndPush(t *testing.T, ctx context.Context, root, title string) {
 	}
 	sync := openSyncOrFatal(t, ctx, root)
 	defer func() { _ = sync.Close() }()
-	if _, err := sync.SyncPush(ctx, "origin", "master", false, false); err != nil {
+	if _, err := sync.SyncPush(ctx, remoteName(t, "origin"), "master", false, false); err != nil {
 		t.Fatalf("SyncPush(%s): %v", title, err)
 	}
 }

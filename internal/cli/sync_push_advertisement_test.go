@@ -77,10 +77,10 @@ func TestAPushRecordsTheAdvertisementItLeft(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read consumer git remotes: %v", err)
 	}
-	proven, unproven := provePushedAdvertisement(context.Background(), session.syncer, resolved, "origin", gitRemotes)
+	proven, unproven := provePushedAdvertisement(context.Background(), session.syncer, resolved, remoteName(t, "origin"), gitRemotes)
 	// A push to a remote the receive never asks proves nothing either: its
 	// record would replace one the receive can match with one it cannot.
-	_, otherRemote := provePushedAdvertisement(context.Background(), session.syncer, resolved, "backup", gitRemotes)
+	_, otherRemote := provePushedAdvertisement(context.Background(), session.syncer, resolved, remoteName(t, "backup"), gitRemotes)
 	if closeErr := closeStore(); closeErr != nil {
 		t.Fatalf("close consumer sync session: %v", closeErr)
 	}
@@ -105,7 +105,7 @@ func TestAPushRecordsTheAdvertisementItLeft(t *testing.T) {
 	// head now (it just fetched), so a landed push step proves and a
 	// superseded one, identical in every other respect, must not.
 	pushStep := func(superseded error) syncPushStep {
-		return func(context.Context, string, string, bool, bool) (storage.SyncPushResult, error) {
+		return func(context.Context, storage.RemoteName, string, bool, bool) (storage.SyncPushResult, error) {
 			return storage.SyncPushResult{Head: "unused", Superseded: superseded}, nil
 		}
 	}

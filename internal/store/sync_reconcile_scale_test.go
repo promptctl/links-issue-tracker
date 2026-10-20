@@ -116,16 +116,16 @@ func TestSyncReconcileCombineIsBoundedOnALargeFoldedChain(t *testing.T) {
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	defer syncB.Close()
-	if err := syncB.SyncAddRemote(ctx, "origin", remoteURL); err != nil {
+	if err := syncB.SyncAddRemote(ctx, remoteName(t, "origin"), remoteURL); err != nil {
 		t.Fatalf("SyncAddRemote(B): %v", err)
 	}
-	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
 
 	peak := watchPeakHeap(t)
 	start := time.Now()
-	res, err := syncB.SyncReconcileCombine(ctx, "origin", "master")
+	res, err := syncB.SyncReconcileCombine(ctx, remoteName(t, "origin"), "master")
 	elapsed := time.Since(start)
 	peakHeap := peak.stop()
 	if err != nil {
@@ -165,7 +165,7 @@ func TestSyncReconcileCombineIsBoundedOnALargeFoldedChain(t *testing.T) {
 
 	// The whole point of replaying onto the remote head is that the result is a
 	// descendant the remote takes without a merge.
-	if _, err := syncB.SyncPush(ctx, "origin", "master", false, false); err != nil {
+	if _, err := syncB.SyncPush(ctx, remoteName(t, "origin"), "master", false, false); err != nil {
 		t.Fatalf("fast-forward SyncPush(B) after combine: %v", err)
 	}
 }
@@ -250,10 +250,10 @@ func seedUnrelatedBacklogPair(t *testing.T, ctx context.Context, rootA, rootB, r
 		t.Fatalf("Close(A): %v", err)
 	}
 	syncA := openSyncOrFatal(t, ctx, rootA)
-	if err := syncA.SyncAddRemote(ctx, "origin", remoteURL); err != nil {
+	if err := syncA.SyncAddRemote(ctx, remoteName(t, "origin"), remoteURL); err != nil {
 		t.Fatalf("SyncAddRemote(A): %v", err)
 	}
-	if _, err := syncA.SyncPush(ctx, "origin", "master", true, false); err != nil {
+	if _, err := syncA.SyncPush(ctx, remoteName(t, "origin"), "master", true, false); err != nil {
 		t.Fatalf("SyncPush(A): %v", err)
 	}
 	if err := syncA.Close(); err != nil {

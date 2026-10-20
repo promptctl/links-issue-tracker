@@ -101,7 +101,7 @@ func remoteBranches(t *testing.T, ctx context.Context, alpha string) (master, ot
 	t.Helper()
 	st := openSyncOrFatal(t, ctx, alpha)
 	defer func() { _ = st.Close() }()
-	if err := st.SyncFetch(ctx, "origin", true); err != nil {
+	if err := st.SyncFetch(ctx, remoteName(t, "origin"), true); err != nil {
 		t.Fatal(err)
 	}
 	master, err := commitHashOfRef(ctx, st.db, "remotes/origin/master")
@@ -204,7 +204,7 @@ func landReRootWithoutGC(t *testing.T, ctx context.Context, alpha string, keep u
 	if err != nil {
 		t.Fatalf("reRootScratch error = %v", err)
 	}
-	if lease, err := st.publishReRoot(ctx, "origin", "master", seen); err != nil || lease != storage.LeaseHeld {
+	if lease, err := st.publishReRoot(ctx, remoteName(t, "origin"), "master", seen); err != nil || lease != storage.LeaseHeld {
 		t.Fatalf("publishReRoot = %q, %v; want held", lease, err)
 	}
 	return landed
@@ -231,7 +231,7 @@ func TestARemoteAPeerWroteToAfterTheReRootKeepsItsTableFiles(t *testing.T) {
 	files, bytes := dataTree(t, gitDir)
 
 	st := openSyncOrFatal(t, ctx, alpha)
-	gc, err := st.collectRemote(ctx, "origin", "master", landed.Head)
+	gc, err := st.collectRemote(ctx, remoteName(t, "origin"), "master", landed.Head)
 	if closeErr := st.Close(); err == nil {
 		err = closeErr
 	}
@@ -264,7 +264,7 @@ func TestAPeerWriteAfterTheGCReadTheRemoteKeepsEveryBranch(t *testing.T) {
 	landed := landReRootWithoutGC(t, ctx, alpha, 3)
 
 	st := openSyncOrFatal(t, ctx, alpha)
-	view, err := st.openRemoteDB(ctx, "origin")
+	view, err := st.openRemoteDB(ctx, remoteName(t, "origin"))
 	if closeErr := st.Close(); err == nil {
 		err = closeErr
 	}
@@ -312,7 +312,7 @@ func TestAPushThatReadTheRemoteBeforeItsGCLandsAfterIt(t *testing.T) {
 	}
 	bravoHead := hash.Parse(headAt(t, ctx, bravo))
 	st = openSyncOrFatal(t, ctx, bravo)
-	view, err := st.openRemoteDB(ctx, "origin")
+	view, err := st.openRemoteDB(ctx, remoteName(t, "origin"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -325,7 +325,7 @@ func TestAPushThatReadTheRemoteBeforeItsGCLandsAfterIt(t *testing.T) {
 	}
 
 	st = openSyncOrFatal(t, ctx, alpha)
-	gc, err := st.collectRemote(ctx, "origin", "master", landed.Head)
+	gc, err := st.collectRemote(ctx, remoteName(t, "origin"), "master", landed.Head)
 	if closeErr := st.Close(); err == nil {
 		err = closeErr
 	}
@@ -374,7 +374,7 @@ func TestAPeerWriteAfterTheRootWriteKeepsTheTableSet(t *testing.T) {
 
 	st := openSyncOrFatal(t, ctx, alpha)
 	defer func() { _ = st.Close() }()
-	remoteDB, err := st.openRemoteDB(ctx, "origin")
+	remoteDB, err := st.openRemoteDB(ctx, remoteName(t, "origin"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -430,7 +430,7 @@ func TestARemoteHoldingATagKeepsEveryBranch(t *testing.T) {
 	landed := landReRootWithoutGC(t, ctx, alpha, 3)
 
 	st := openSyncOrFatal(t, ctx, alpha)
-	gc, err := st.collectRemote(ctx, "origin", "master", landed.Head)
+	gc, err := st.collectRemote(ctx, remoteName(t, "origin"), "master", landed.Head)
 	if closeErr := st.Close(); closeErr != nil {
 		t.Fatal(closeErr)
 	}
@@ -458,7 +458,7 @@ func TestEachOpenOfARemoteIsItsCallersOwn(t *testing.T) {
 	}
 	defer func() { _ = st.Close() }()
 	for _, which := range []string{"first", "second"} {
-		remoteDB, err := st.openRemoteDB(ctx, "origin")
+		remoteDB, err := st.openRemoteDB(ctx, remoteName(t, "origin"))
 		if err != nil {
 			t.Fatalf("openRemoteDB(%s): %v", which, err)
 		}

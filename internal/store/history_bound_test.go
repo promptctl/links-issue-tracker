@@ -48,11 +48,11 @@ func compactPush(t *testing.T, ctx context.Context, root, epic, title string, bo
 	}
 	sync := openSyncOrFatal(t, ctx, root)
 	defer func() { _ = sync.Close() }()
-	pushed, err := sync.SyncCompactAndPush(ctx, "origin", "master", false, false)
+	pushed, err := sync.SyncCompactAndPush(ctx, remoteName(t, "origin"), "master", false, false)
 	if err != nil {
 		t.Fatalf("SyncCompactAndPush(%s) error = %v", title, err)
 	}
-	kept := sync.SyncKeepHistoryBound(ctx, "origin", "master", bound, pushed)
+	kept := sync.SyncKeepHistoryBound(ctx, remoteName(t, "origin"), "master", bound, pushed)
 	bounds := sync.HistoryBounds()
 	if len(bounds) != 1 {
 		t.Fatalf("HistoryBounds() after one push = %+v, want one", bounds)
@@ -122,7 +122,7 @@ func TestAPushPastTheBoundReRootsWithNoCommandRun(t *testing.T) {
 	// A fetch records the fork point every checkout that syncs holds, here on
 	// the head the push under the bound left.
 	st = openSyncOrFatal(t, ctx, alpha)
-	if err := st.SyncFetch(ctx, "origin", false); err != nil {
+	if err := st.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
 		t.Fatal(err)
 	}
 	if forkPoint := branchesUnder(t, ctx, st, forkPointPrefix)["origin/master"]; forkPoint != under.Head {
@@ -166,7 +166,7 @@ func TestAPushPastTheBoundReRootsWithNoCommandRun(t *testing.T) {
 			t.Fatalf("the old head %s still resolves, with %d commits below it; want it collected", old, n)
 		}
 	}
-	if err := st.SyncFetch(ctx, "origin", false); err != nil {
+	if err := st.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
 		t.Fatal(err)
 	}
 	if head != fired.ReRooted.Head || heightOf(t, ctx, st, "HEAD") != bound.Keep() {
@@ -245,7 +245,7 @@ func boundAt(t *testing.T, ctx context.Context, alpha, head string, keep uint64)
 	st := openSyncOrFatal(t, ctx, alpha)
 	defer func() { _ = st.Close() }()
 	b := storage.HistoryBound{Remote: "origin", Branch: "master", Head: head, Window: windowOf(t, keep+1, keep)}
-	b.Err = st.publishBound(ctx, &b)
+	b.Err = st.publishBound(ctx, remoteName(t, "origin"), &b)
 	return b
 }
 
@@ -323,7 +323,7 @@ func TestAStaleLeaseOverTheLandedReRootStillFollowsIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reRootScratch error = %v", err)
 	}
-	if lease, err := st.publishReRoot(ctx, "origin", "master", seen); err != nil || lease != storage.LeaseHeld {
+	if lease, err := st.publishReRoot(ctx, remoteName(t, "origin"), "master", seen); err != nil || lease != storage.LeaseHeld {
 		t.Fatalf("the landed attempt = %q, %v; want held", lease, err)
 	}
 	if err := st.Close(); err != nil {
@@ -348,7 +348,7 @@ func TestAStaleLeaseOverTheLandedReRootStillFollowsIt(t *testing.T) {
 	if root != landed.Root {
 		t.Fatalf("alpha's history is rooted at %s; want the landed re-root's root %s", root, landed.Root)
 	}
-	fresh, err := st.SyncFreshness(ctx, "origin", "master")
+	fresh, err := st.SyncFreshness(ctx, remoteName(t, "origin"), "master")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -473,7 +473,7 @@ func TestAReRootRefusedBeforeTheRemoteIsNotPushed(t *testing.T) {
 		t.Fatal(err)
 	}
 	pusher := openSyncOrFatal(t, ctx, bravo)
-	if _, err := pusher.SyncPush(ctx, "origin", "master", false, false); err != nil {
+	if _, err := pusher.SyncPush(ctx, remoteName(t, "origin"), "master", false, false); err != nil {
 		t.Fatalf("SyncPush(bravo) error = %v", err)
 	}
 	if err := pusher.Close(); err != nil {
@@ -484,10 +484,10 @@ func TestAReRootRefusedBeforeTheRemoteIsNotPushed(t *testing.T) {
 	// alpha reads the remote's head through a second name for it, so the
 	// head is in alpha's store while remotes/origin/master still lags.
 	st := openSyncOrFatal(t, ctx, alpha)
-	if err := st.SyncAddRemote(ctx, "mirror", remoteURL); err != nil {
+	if err := st.SyncAddRemote(ctx, remoteName(t, "mirror"), remoteURL); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.SyncFetch(ctx, "mirror", false); err != nil {
+	if err := st.SyncFetch(ctx, remoteName(t, "mirror"), false); err != nil {
 		t.Fatal(err)
 	}
 	lagging, err := commitHashOfRef(ctx, st.db, "remotes/origin/master")

@@ -204,7 +204,7 @@ func markerModTime(t *testing.T, markerPath string) time.Time {
 // is a receive outcome the inline path can produce; the assertion is what is
 // on disk afterwards. [LAW:behavior-not-structure]
 func TestRecordReceivedWritesOnlyWhatASettledReceiveLearned(t *testing.T) {
-	observed := remoteAdvertisement{remote: "origin", url: "git@example.invalid:o/r.git", refs: "abc\trefs/dolt/data"}
+	observed := remoteAdvertisement{remote: remoteName(t, "origin"), url: "git@example.invalid:o/r.git", refs: "abc\trefs/dolt/data"}
 	converged := &reconcileOutcome{state: storage.SyncReconcileLinearized}
 	unconverged := &reconcileOutcome{state: storage.SyncReconcileProsePending}
 	failed := &reconcileOutcome{err: errors.New("reconcile backend unavailable")}
@@ -267,12 +267,26 @@ func TestNothingToReceiveIsOnlyAnEmptyAnswer(t *testing.T) {
 		want bool
 	}{
 		{"no remote picked", remoteAdvertisement{}, true},
-		{"remote with no lit data", remoteAdvertisement{remote: "origin", url: "u", refs: ""}, true},
-		{"remote with lit data", remoteAdvertisement{remote: "origin", url: "u", refs: "abc\trefs/dolt/data"}, false},
+		{"remote with no lit data", remoteAdvertisement{remote: remoteName(t, "origin"), url: "u", refs: ""}, true},
+		{"remote with lit data", remoteAdvertisement{remote: remoteName(t, "origin"), url: "u", refs: "abc\trefs/dolt/data"}, false},
 	}
 	for _, c := range cases {
 		if got := c.ad.nothingToReceive(); got != c.want {
 			t.Errorf("%s: nothingToReceive() = %t, want %t", c.name, got, c.want)
 		}
+	}
+}
+
+// TestAPushToARemoteTheReceiveDoesNotAskIsUnproven: a push names origin in a
+// checkout of two remotes and no upstream, where the automatic receive asks
+// none, so the push proves no advertisement and says the receive asks none.
+func TestAPushToARemoteTheReceiveDoesNotAskIsUnproven(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-q")
+	gitRemotes := []workspace.GitRemote{{Name: "origin", URL: "https://example.com/a.git"}, {Name: "fork", URL: "https://example.com/b.git"}}
+	proven, unproven := provePushedAdvertisement(t.Context(), nil, workspace.Info{RootDir: dir}, remoteName(t, "origin"), gitRemotes)
+	if proven != (remoteAdvertisement{}) || unproven != "the automatic receive asks no remote" {
+		t.Fatalf("provePushedAdvertisement() = %+v, %q; want nothing proven because the receive asks no remote", proven, unproven)
 	}
 }

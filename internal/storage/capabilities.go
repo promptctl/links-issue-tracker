@@ -56,11 +56,15 @@ import (
 // two apart is what lets an engine whose arrivals cannot conflict offer this
 // and stop.
 type Syncer interface {
-	SyncAddRemote(ctx context.Context, name string, url string) error
+	SyncAddRemote(ctx context.Context, name RemoteName, url string) error
+	// SyncRemoveRemote takes any name the engine holds, as SyncListRemotes
+	// lists it, not only a RemoteName: an older lit wrote names a RemoteName
+	// refuses, and removing them is how the reconcile clears them. A name the
+	// engine no longer holds is already removed.
 	SyncRemoveRemote(ctx context.Context, name string) error
 	// SyncSetRemoteURL points the remote name at url. The remote stays the
 	// same remote: unlike a removal, it keeps its fork points.
-	SyncSetRemoteURL(ctx context.Context, name string, url string) error
+	SyncSetRemoteURL(ctx context.Context, name RemoteName, url string) error
 	SyncListRemotes(ctx context.Context) ([]SyncRemote, error)
 
 	// SyncStatus reports the local side only — build, position, pending
@@ -70,9 +74,9 @@ type Syncer interface {
 	// SyncFreshness reports the local branch's position against a peer as of
 	// the last fetch or push. It reads local refs; it never contacts the
 	// network, which is what lets a read-only command call it.
-	SyncFreshness(ctx context.Context, remote string, branch string) (SyncFreshness, error)
+	SyncFreshness(ctx context.Context, remote RemoteName, branch string) (SyncFreshness, error)
 
-	SyncFetch(ctx context.Context, remote string, prune bool) error
+	SyncFetch(ctx context.Context, remote RemoteName, prune bool) error
 
 	// SyncPushFromClone is the push of a store that is a frozen clone of a
 	// live one — the on-change mirror's push. Nothing serializes it against
@@ -81,7 +85,7 @@ type Syncer interface {
 	// store's HEAD (a concurrent push from the live store landed a descendant
 	// of it), the result is Superseded rather than an error, because the goal
 	// state holds. A rejection the re-check does not explain is the error.
-	SyncPushFromClone(ctx context.Context, remote string, branch string, setUpstream bool, force bool) (SyncPushResult, error)
+	SyncPushFromClone(ctx context.Context, remote RemoteName, branch string, setUpstream bool, force bool) (SyncPushResult, error)
 
 	// SyncRemoteMirrorHolds reports whether this store's local mirror of the
 	// remote's data holds every one of commits — git commit ids as the remote
@@ -90,18 +94,18 @@ type Syncer interface {
 	// store wrote or had already read, so an advertised commit the mirror holds
 	// is this store's own push and not a peer's later one: that is what lets
 	// the push record what it left the remote advertising without a fetch.
-	SyncRemoteMirrorHolds(ctx context.Context, remote string, commits []string) (bool, error)
-	SyncPull(ctx context.Context, remote string, branch string) (SyncPullResult, error)
+	SyncRemoteMirrorHolds(ctx context.Context, remote RemoteName, commits []string) (bool, error)
+	SyncPull(ctx context.Context, remote RemoteName, branch string) (SyncPullResult, error)
 
 	// SyncReceive fetches and fast-forwards when — and only when — local is
 	// strictly behind. It never merges: a divergence it meets is reported for
 	// the foreground reconcile, never healed here. [LAW:no-silent-failure]
-	SyncReceive(ctx context.Context, remote string, branch string) (SyncReceiveResult, error)
+	SyncReceive(ctx context.Context, remote RemoteName, branch string) (SyncReceiveResult, error)
 
 	// SyncSettleReceived is SyncReceive's second half alone: it reads the
 	// tracking ref as it stands — a fetch that ran on a clone and was landed
 	// here — and fast-forwards on the same terms. It contacts no network.
-	SyncSettleReceived(ctx context.Context, remote string, branch string) (SyncReceiveResult, error)
+	SyncSettleReceived(ctx context.Context, remote RemoteName, branch string) (SyncReceiveResult, error)
 
 	// SyncCompact reclaims local storage at the requested depth, with no
 	// remote involved — the entrypoint a workspace that never pushes needs.
@@ -114,7 +118,7 @@ type Syncer interface {
 	// exactly what this contract exists to keep it from needing.
 	// [LAW:decomposition]
 	CompactIfDue(ctx context.Context) (CompactionOutcome, error)
-	SyncCompactAndPush(ctx context.Context, remote string, branch string, setUpstream bool, force bool) (SyncPushResult, error)
+	SyncCompactAndPush(ctx context.Context, remote RemoteName, branch string, setUpstream bool, force bool) (SyncPushResult, error)
 
 	// SyncFollowReRoot brings the local branch into the remote's history when
 	// another checkout re-rooted it, reading the tracking ref as the last fetch
@@ -122,7 +126,7 @@ type Syncer interface {
 	// follows on its own; this is for a caller that fetched and settles
 	// nothing, so the freshness a later read reports never shows a re-root it
 	// could follow as a divergence. entry names that caller.
-	SyncFollowReRoot(ctx context.Context, remote string, branch string, entry SyncEntry) error
+	SyncFollowReRoot(ctx context.Context, remote RemoteName, branch string, entry SyncEntry) error
 
 	// FollowedReRoots is every re-root the engine applied to its own branch,
 	// since it opened, to follow a remote another checkout re-rooted: the sync
@@ -140,7 +144,7 @@ type Syncer interface {
 	// the remote's GC, and follows the re-root. The push landed whatever the
 	// bound did, so the bound fails nothing: where it stopped is on its
 	// record (HistoryBounds) and in the account.
-	SyncKeepHistoryBound(ctx context.Context, remote, branch string, window historywindow.Window, pushed SyncPushResult) SyncPushResult
+	SyncKeepHistoryBound(ctx context.Context, remote RemoteName, branch string, window historywindow.Window, pushed SyncPushResult) SyncPushResult
 
 	// HistoryBounds is what every SyncKeepHistoryBound since the engine
 	// opened did, oldest first: the remote head's height every time, and the
@@ -155,6 +159,10 @@ type Syncer interface {
 	// still shared history: the base a reconcile merges against once the
 	// remote re-roots above every commit this checkout holds.
 	ForkPointRecords() []ForkPointRecord
+
+	// RemoteRemovals is every SyncRemoveRemote attempt since the engine
+	// opened, oldest first.
+	RemoteRemovals() []RemoteRemovalRecord
 
 	// ReconcileBases is the base every reconcile since the engine opened
 	// decided on, and where it came from, oldest first.
@@ -183,24 +191,24 @@ type Reconciler interface {
 	// SyncReconcile merges a divergence field-aware and replays it into linear
 	// history, or — when a free-text field moved on both sides — holds the
 	// conflict and commits nothing.
-	SyncReconcile(ctx context.Context, remote string, branch string) (SyncReconcileResult, error)
+	SyncReconcile(ctx context.Context, remote RemoteName, branch string) (SyncReconcileResult, error)
 
 	// SyncReconcileCombine settles an unrelated-history divergence by union,
 	// keeping every issue from both sides.
-	SyncReconcileCombine(ctx context.Context, remote string, branch string) (SyncReconcileResult, error)
+	SyncReconcileCombine(ctx context.Context, remote RemoteName, branch string) (SyncReconcileResult, error)
 
 	// SyncReconcileResolved finishes a reconcile that was held for prose,
 	// landing the text a judge merged as actor's edit, recorded in history.
-	SyncReconcileResolved(ctx context.Context, remote string, branch string, resolutions []merge.ProseResolution, actor string) (SyncReconcileResult, error)
+	SyncReconcileResolved(ctx context.Context, remote RemoteName, branch string, resolutions []merge.ProseResolution, actor string) (SyncReconcileResult, error)
 
 	// SyncResolveUnrelated settles an unrelated-history divergence by taking
 	// one side wholesale. It destroys the other side's unique issues, which is
 	// why it takes an owner approval bound to this exact fork rather than a
 	// bare confirmation flag.
-	SyncResolveUnrelated(ctx context.Context, remote string, branch string, choice UnrelatedResolution, ownerApproval string) (SyncReconcileResult, error)
+	SyncResolveUnrelated(ctx context.Context, remote RemoteName, branch string, choice UnrelatedResolution, ownerApproval string) (SyncReconcileResult, error)
 
 	// SyncResetToRemoteHead abandons local history for the peer's.
-	SyncResetToRemoteHead(ctx context.Context, remote string, branch string) error
+	SyncResetToRemoteHead(ctx context.Context, remote RemoteName, branch string) error
 }
 
 // Checkpointer names revert points and returns the store to them.

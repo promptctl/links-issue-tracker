@@ -58,6 +58,11 @@ func TestWriteInitSyncLine(t *testing.T) {
 			want:    "",
 		},
 		{
+			name:    "remote refused is silent",
+			outcome: initSyncOutcome{State: initSyncRemoteRefused, Remote: "my.fork"},
+			want:    "",
+		},
+		{
 			name:    "remote empty is silent",
 			outcome: initSyncOutcome{State: initSyncRemoteEmpty, Remote: "origin"},
 			want:    "",
@@ -183,6 +188,63 @@ func TestInitAdoptsExistingRemoteBacklog(t *testing.T) {
 	}
 	if !strings.Contains(progress.String(), "lit: sync pull: pulling lit data from origin/master") {
 		t.Fatalf("sync pull progress missing the transfer announcement:\n%s", progress.String())
+	}
+}
+
+// TestInitBesideARemoteDoltCannotHold: a checkout whose one git remote,
+// my.fork, has a name Dolt refuses starts with a fresh store when the remote
+// carries no lit data, and creates none when it does, since that backlog is
+// adoptable only once the remote is renamed.
+func TestInitBesideARemoteDoltCannotHold(t *testing.T) {
+	base := t.TempDir()
+	runGit(t, base, "init", "--bare", "remote.git")
+	remote := filepath.Join(base, "remote.git")
+	producer := filepath.Join(base, "alpha")
+	runGit(t, base, "clone", remote, "alpha")
+	runGit(t, producer, "config", "user.email", "a@a.co")
+	runGit(t, producer, "config", "user.name", "alpha")
+	if err := os.WriteFile(filepath.Join(producer, "readme.md"), []byte("hi\n"), 0o644); err != nil {
+		t.Fatalf("write readme error = %v", err)
+	}
+	runGit(t, producer, "add", "-A")
+	runGit(t, producer, "commit", "-m", "seed")
+	runGit(t, producer, "push", "origin", "HEAD")
+
+	consumerOf := func(name string) (string, workspace.Info) {
+		t.Helper()
+		dir := filepath.Join(base, name)
+		runGit(t, base, "clone", remote, name)
+		runGit(t, dir, "remote", "rename", "origin", "my.fork")
+		ws, err := workspace.Resolve(dir)
+		if err != nil {
+			t.Fatalf("workspace.Resolve(%s) error = %v", name, err)
+		}
+		return dir, ws
+	}
+
+	fresh, freshWS := consumerOf("bravo")
+	progress := captureProgress(t)
+	runCLIInDir(t, fresh, "init", "--skip-hooks", "--skip-agents")
+	if !strings.Contains(progress.String(), "the git remote's name is one Dolt cannot hold, so lit cannot sync with it until it is renamed (git remote rename); starting with an empty backlog") {
+		t.Fatalf("init beside my.fork with no lit data: progress missing the fresh start:\n%s", progress.String())
+	}
+	if _, err := os.Stat(freshWS.DatabasePath); err != nil {
+		t.Fatalf("init beside my.fork with no lit data created no store: %v", err)
+	}
+	if records := readSyncTraceRecords(t, freshWS); len(records) == 0 || records[0].Decision != string(initSyncRemoteRefused) || records[0].Metadata["remote"] != "my.fork" {
+		t.Fatalf("init trace records = %+v, want the first to decide remote_refused for my.fork", records)
+	}
+
+	runCLIInDir(t, producer, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, producer, "new", "--title", "remote-epic", "--topic", "demo", "--type", "epic")
+	runCLIInDir(t, producer, "sync", "push", "--set-upstream")
+	held, heldWS := consumerOf("charlie")
+	out, err := runCLIInDirAllowError(t, held, "init", "--skip-hooks", "--skip-agents")
+	if err == nil || !strings.Contains(err.Error(), `remote "my.fork" carries lit ticket data (refs/dolt/*), which lit cannot adopt: remote "my.fork" has "." in its name`) {
+		t.Fatalf("init beside my.fork carrying lit data = %q, %v; want the refusal naming the data and the name", out, err)
+	}
+	if _, statErr := os.Stat(heldWS.DatabasePath); !os.IsNotExist(statErr) {
+		t.Fatalf("DatabasePath stat = %v, want no store beside a backlog lit cannot adopt", statErr)
 	}
 }
 

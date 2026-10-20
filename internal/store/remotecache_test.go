@@ -64,10 +64,10 @@ func TestRemoteCacheKeyMatchesDoltLayout(t *testing.T) {
 	if !strings.HasPrefix(gitBacked, "git+") {
 		t.Fatalf("GitBackedRemoteURL(%q) = %q, want a git+ transport URL", remote, gitBacked)
 	}
-	if err := sync.SyncAddRemote(ctx, "origin", gitBacked); err != nil {
+	if err := sync.SyncAddRemote(ctx, remoteName(t, "origin"), gitBacked); err != nil {
 		t.Fatalf("SyncAddRemote() error = %v", err)
 	}
-	if _, err := sync.SyncCompactAndPush(ctx, "origin", "master", true, false); err != nil {
+	if _, err := sync.SyncCompactAndPush(ctx, remoteName(t, "origin"), "master", true, false); err != nil {
 		t.Fatalf("SyncCompactAndPush() error = %v", err)
 	}
 
@@ -116,11 +116,11 @@ func TestPruneRemoteCacheKeepsTheLiveMirror(t *testing.T) {
 		t.Fatalf("OpenSync() error = %v", err)
 	}
 	defer sync.Close()
-	if err := sync.SyncAddRemote(ctx, "origin", GitBackedRemoteURL(remote)); err != nil {
+	if err := sync.SyncAddRemote(ctx, remoteName(t, "origin"), GitBackedRemoteURL(remote)); err != nil {
 		t.Fatalf("SyncAddRemote() error = %v", err)
 	}
 
-	result, err := sync.SyncCompactAndPush(ctx, "origin", "master", true, false)
+	result, err := sync.SyncCompactAndPush(ctx, remoteName(t, "origin"), "master", true, false)
 	if err != nil {
 		t.Fatalf("SyncCompactAndPush() error = %v", err)
 	}
@@ -163,10 +163,10 @@ func TestPruneRemoteCacheCollectsAbandonedMirrors(t *testing.T) {
 		t.Fatalf("OpenSync() error = %v", err)
 	}
 	defer sync.Close()
-	if err := sync.SyncAddRemote(ctx, "origin", GitBackedRemoteURL(remote)); err != nil {
+	if err := sync.SyncAddRemote(ctx, remoteName(t, "origin"), GitBackedRemoteURL(remote)); err != nil {
 		t.Fatalf("SyncAddRemote() error = %v", err)
 	}
-	if _, err := sync.SyncCompactAndPush(ctx, "origin", "master", true, false); err != nil {
+	if _, err := sync.SyncCompactAndPush(ctx, remoteName(t, "origin"), "master", true, false); err != nil {
 		t.Fatalf("SyncCompactAndPush() error = %v", err)
 	}
 
@@ -237,10 +237,10 @@ func TestPruneRemoteCacheIsNotBlockedByOneStuckMirror(t *testing.T) {
 		t.Fatalf("OpenSync() error = %v", err)
 	}
 	defer sync.Close()
-	if err := sync.SyncAddRemote(ctx, "origin", GitBackedRemoteURL(remote)); err != nil {
+	if err := sync.SyncAddRemote(ctx, remoteName(t, "origin"), GitBackedRemoteURL(remote)); err != nil {
 		t.Fatalf("SyncAddRemote() error = %v", err)
 	}
-	if _, err := sync.SyncCompactAndPush(ctx, "origin", "master", true, false); err != nil {
+	if _, err := sync.SyncCompactAndPush(ctx, remoteName(t, "origin"), "master", true, false); err != nil {
 		t.Fatalf("SyncCompactAndPush() error = %v", err)
 	}
 
@@ -337,10 +337,10 @@ func pushedSyncStore(t *testing.T, ctx context.Context) *Store {
 		t.Fatalf("OpenSync() error = %v", err)
 	}
 	t.Cleanup(func() { _ = sync.Close() })
-	if err := sync.SyncAddRemote(ctx, "origin", GitBackedRemoteURL(remote)); err != nil {
+	if err := sync.SyncAddRemote(ctx, remoteName(t, "origin"), GitBackedRemoteURL(remote)); err != nil {
 		t.Fatalf("SyncAddRemote() error = %v", err)
 	}
-	if _, err := sync.SyncCompactAndPush(ctx, "origin", "master", true, false); err != nil {
+	if _, err := sync.SyncCompactAndPush(ctx, remoteName(t, "origin"), "master", true, false); err != nil {
 		t.Fatalf("SyncCompactAndPush() error = %v", err)
 	}
 	return sync
@@ -394,7 +394,7 @@ func TestPruneRemoteCacheCollectsBesideANeverOpenedRemote(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	sync := pushedSyncStore(t, ctx)
-	if err := sync.SyncAddRemote(ctx, "backup", GitBackedRemoteURL(seedBareGitRemote(t, t.TempDir()))); err != nil {
+	if err := sync.SyncAddRemote(ctx, remoteName(t, "backup"), GitBackedRemoteURL(seedBareGitRemote(t, t.TempDir()))); err != nil {
 		t.Fatalf("SyncAddRemote(backup) error = %v", err)
 	}
 	orphan := strings.Repeat("ab", 32)
@@ -424,7 +424,7 @@ func TestPruneRemoteCacheKeepsTheMirrorOfAFailedFirstPush(t *testing.T) {
 	sync := pushedSyncStore(t, ctx)
 	empty := t.TempDir()
 	gitInDir(t, empty, "init", "--bare", "remote.git")
-	if err := sync.SyncAddRemote(ctx, "backup", GitBackedRemoteURL(filepath.Join(empty, "remote.git"))); err != nil {
+	if err := sync.SyncAddRemote(ctx, remoteName(t, "backup"), GitBackedRemoteURL(filepath.Join(empty, "remote.git"))); err != nil {
 		t.Fatalf("SyncAddRemote(backup) error = %v", err)
 	}
 	base := sync.remoteCacheBase()
@@ -432,7 +432,7 @@ func TestPruneRemoteCacheKeepsTheMirrorOfAFailedFirstPush(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listRemoteCacheKeys() error = %v", err)
 	}
-	if _, err := sync.SyncCompactAndPush(ctx, "backup", "master", false, false); err == nil {
+	if _, err := sync.SyncCompactAndPush(ctx, remoteName(t, "backup"), "master", false, false); err == nil {
 		t.Fatal("SyncCompactAndPush(backup) to a remote with no branches succeeded, want the failed first push")
 	}
 	after, err := listRemoteCacheKeys(base)
@@ -465,7 +465,7 @@ func TestPruneRemoteCacheKeepsTheMirrorOfARemoteWithItsOwnRef(t *testing.T) {
 	if _, err := sync.db.ExecContext(ctx, "CALL DOLT_REMOTE('add', '--ref', 'refs/dolt/other', 'backup', ?)", backupURL); err != nil {
 		t.Fatalf("DOLT_REMOTE add --ref error = %v", err)
 	}
-	if _, err := sync.SyncCompactAndPush(ctx, "backup", "master", false, false); err != nil {
+	if _, err := sync.SyncCompactAndPush(ctx, remoteName(t, "backup"), "master", false, false); err != nil {
 		t.Fatalf("SyncCompactAndPush(backup) error = %v", err)
 	}
 	base := sync.remoteCacheBase()
@@ -494,13 +494,13 @@ func TestSyncCompactAndPushPrunesWhenThePushFails(t *testing.T) {
 	sync := pushedSyncStore(t, ctx)
 	empty := t.TempDir()
 	gitInDir(t, empty, "init", "--bare", "remote.git")
-	if err := sync.SyncAddRemote(ctx, "backup", GitBackedRemoteURL(filepath.Join(empty, "remote.git"))); err != nil {
+	if err := sync.SyncAddRemote(ctx, remoteName(t, "backup"), GitBackedRemoteURL(filepath.Join(empty, "remote.git"))); err != nil {
 		t.Fatalf("SyncAddRemote(backup) error = %v", err)
 	}
 	orphan := strings.Repeat("ab", 32)
 	plantOrphanMirror(t, sync.remoteCacheBase(), orphan)
 
-	_, err := sync.SyncCompactAndPush(ctx, "backup", "master", false, false)
+	_, err := sync.SyncCompactAndPush(ctx, remoteName(t, "backup"), "master", false, false)
 	if err == nil {
 		t.Fatal("SyncCompactAndPush(backup) to a remote with no branches succeeded, want a failed push")
 	}
@@ -551,7 +551,7 @@ func TestSyncRemoteMirrorHoldsItsOwnPushNotAPeersLaterOne(t *testing.T) {
 			t.Fatalf("%s: OpenSync() error = %v", label, err)
 		}
 		defer st.Close()
-		held, err := st.SyncRemoteMirrorHolds(ctx, "origin", commits)
+		held, err := st.SyncRemoteMirrorHolds(ctx, remoteName(t, "origin"), commits)
 		if err != nil {
 			t.Fatalf("%s: SyncRemoteMirrorHolds() error = %v", label, err)
 		}
@@ -563,19 +563,19 @@ func TestSyncRemoteMirrorHoldsItsOwnPushNotAPeersLaterOne(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenSync() error = %v", err)
 	}
-	if err := st.SyncAddRemote(ctx, "origin", GitBackedRemoteURL(remote)); err != nil {
+	if err := st.SyncAddRemote(ctx, remoteName(t, "origin"), GitBackedRemoteURL(remote)); err != nil {
 		t.Fatalf("SyncAddRemote() error = %v", err)
 	}
-	if held, err := st.SyncRemoteMirrorHolds(ctx, "origin", []string{strings.Repeat("a", 40)}); err != nil || held {
+	if held, err := st.SyncRemoteMirrorHolds(ctx, remoteName(t, "origin"), []string{strings.Repeat("a", 40)}); err != nil || held {
 		t.Fatalf("before any push: SyncRemoteMirrorHolds() = %t, %v; want false with no mirror on disk", held, err)
 	}
-	if _, err := st.SyncCompactAndPush(ctx, "origin", "master", true, false); err != nil {
+	if _, err := st.SyncCompactAndPush(ctx, remoteName(t, "origin"), "master", true, false); err != nil {
 		t.Fatalf("SyncCompactAndPush() error = %v", err)
 	}
-	if _, err := st.SyncRemoteMirrorHolds(ctx, "upstream", []string{remoteHead()}); err == nil {
+	if _, err := st.SyncRemoteMirrorHolds(ctx, remoteName(t, "upstream"), []string{remoteHead()}); err == nil {
 		t.Fatal("SyncRemoteMirrorHolds() answered for a remote this store does not have")
 	}
-	if held, err := st.SyncRemoteMirrorHolds(ctx, "origin", nil); err != nil || held {
+	if held, err := st.SyncRemoteMirrorHolds(ctx, remoteName(t, "origin"), nil); err != nil || held {
 		t.Fatalf("no commits: SyncRemoteMirrorHolds() = %t, %v; want false, nothing proven", held, err)
 	}
 	if err := st.Close(); err != nil {
@@ -598,7 +598,7 @@ func TestSyncRemoteMirrorHoldsItsOwnPushNotAPeersLaterOne(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenSync(peer) error = %v", err)
 	}
-	if _, err := peer.SyncPush(ctx, "origin", "master", false, false); err != nil {
+	if _, err := peer.SyncPush(ctx, remoteName(t, "origin"), "master", false, false); err != nil {
 		t.Fatalf("SyncPush(peer) error = %v", err)
 	}
 	if err := peer.Close(); err != nil {

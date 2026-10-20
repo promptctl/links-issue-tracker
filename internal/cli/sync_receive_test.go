@@ -129,7 +129,7 @@ func TestTheReceiveBlockWaitsForTheNextCommandUntilAReceiveSettles(t *testing.T)
 	now := time.Now()
 
 	unconverged := syncReceiveOutcome{
-		remote: "origin", branch: "master", ahead: 1, behind: 1,
+		remote: remoteName(t, "origin"), branch: "master", ahead: 1, behind: 1,
 		reconcile: &reconcileOutcome{err: errors.New("reconcile backend unavailable")},
 	}
 	surfaceReceiveOutcome(context.Background(), ws, unconverged, now)
@@ -141,7 +141,7 @@ func TestTheReceiveBlockWaitsForTheNextCommandUntilAReceiveSettles(t *testing.T)
 		t.Fatalf("pending block does not carry the receive's failure:\n%s", block)
 	}
 
-	surfaceReceiveOutcome(context.Background(), ws, syncReceiveOutcome{remote: "origin", branch: "master"}, now)
+	surfaceReceiveOutcome(context.Background(), ws, syncReceiveOutcome{remote: remoteName(t, "origin"), branch: "master"}, now)
 	if _, err := os.Stat(receiveBlockPendingPath(ws)); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("a receive that settled cleanly left the earlier block pending (stat err = %v)", err)
 	}

@@ -333,7 +333,7 @@ func TestSyncReconcileSeparatesTheKeyTwoReplicasMintedAlike(t *testing.T) {
 	}
 	placeAboveSecond(rootA, third)
 	sync := openSyncOrFatal(t, ctx, rootA)
-	if _, err := sync.SyncPush(ctx, "origin", "master", false, false); err != nil {
+	if _, err := sync.SyncPush(ctx, remoteName(t, "origin"), "master", false, false); err != nil {
 		t.Fatalf("SyncPush(A): %v", err)
 	}
 	if err := sync.Close(); err != nil {
@@ -342,10 +342,10 @@ func TestSyncReconcileSeparatesTheKeyTwoReplicasMintedAlike(t *testing.T) {
 	placeAboveSecond(rootB, fourth)
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
-	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
-	res, err := syncB.SyncReconcile(ctx, "origin", "master")
+	res, err := syncB.SyncReconcile(ctx, remoteName(t, "origin"), "master")
 	if err != nil {
 		t.Fatalf("SyncReconcile(B): %v", err)
 	}
@@ -362,7 +362,7 @@ func TestSyncReconcileSeparatesTheKeyTwoReplicasMintedAlike(t *testing.T) {
 		t.Errorf("B lists %v, want %v", got, wantOrder)
 	}
 	assertNoDuplicateRanks(t, ctx, syncB)
-	if _, err := syncB.SyncPush(ctx, "origin", "master", false, false); err != nil {
+	if _, err := syncB.SyncPush(ctx, remoteName(t, "origin"), "master", false, false); err != nil {
 		t.Fatalf("SyncPush(B): %v", err)
 	}
 	if err := syncB.Close(); err != nil {
@@ -371,7 +371,7 @@ func TestSyncReconcileSeparatesTheKeyTwoReplicasMintedAlike(t *testing.T) {
 
 	syncA := openSyncOrFatal(t, ctx, rootA)
 	defer func() { _ = syncA.Close() }()
-	if _, err := syncA.SyncReceive(ctx, "origin", "master"); err != nil {
+	if _, err := syncA.SyncReceive(ctx, remoteName(t, "origin"), "master"); err != nil {
 		t.Fatalf("SyncReceive(A): %v", err)
 	}
 	if got := listedIDs(t, ctx, syncA); !slices.Equal(got, wantOrder) {

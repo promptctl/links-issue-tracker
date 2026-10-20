@@ -98,7 +98,7 @@ func retagIssueLocally(t *testing.T, ctx context.Context, root, workspace, oldID
 func pushRootOrFatal(t *testing.T, ctx context.Context, root string) {
 	t.Helper()
 	sync := openSyncOrFatal(t, ctx, root)
-	if _, err := sync.SyncPush(ctx, "origin", "master", false, false); err != nil {
+	if _, err := sync.SyncPush(ctx, remoteName(t, "origin"), "master", false, false); err != nil {
 		t.Fatalf("SyncPush(%s): %v", root, err)
 	}
 	if err := sync.Close(); err != nil {
@@ -141,12 +141,12 @@ func TestSyncReconcileRefusesIDCollisionAndCommitsNothing(t *testing.T) {
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	defer syncB.Close()
-	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
 	headBefore := headCommit(t, ctx, syncB)
 
-	res, err := syncB.SyncReconcile(ctx, "origin", "master")
+	res, err := syncB.SyncReconcile(ctx, remoteName(t, "origin"), "master")
 	if err != nil {
 		t.Fatalf("SyncReconcile(B): %v", err)
 	}
@@ -219,10 +219,10 @@ func TestTwoDisconnectedStoresMintDistinctChildIDs(t *testing.T) {
 	// machines filing different work under one epic is ordinary, not a conflict.
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	defer syncB.Close()
-	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
-	res, err := syncB.SyncReconcile(ctx, "origin", "master")
+	res, err := syncB.SyncReconcile(ctx, remoteName(t, "origin"), "master")
 	if err != nil {
 		t.Fatalf("SyncReconcile(B): %v", err)
 	}
@@ -263,7 +263,7 @@ func TestSyncPullSurfacesIDCollision(t *testing.T) {
 	defer syncB.Close()
 	headBefore := headCommit(t, ctx, syncB)
 
-	res, err := syncB.SyncPull(ctx, "origin", "master")
+	res, err := syncB.SyncPull(ctx, remoteName(t, "origin"), "master")
 	if err != nil {
 		t.Fatalf("SyncPull(B) returned an error instead of a collision state: %v", err)
 	}
@@ -311,10 +311,10 @@ func seedUnrelatedCollision(t *testing.T, ctx context.Context, rootA, rootB, rem
 		t.Fatalf("Close(A): %v", err)
 	}
 	syncA := openSyncOrFatal(t, ctx, rootA)
-	if err := syncA.SyncAddRemote(ctx, "origin", remoteURL); err != nil {
+	if err := syncA.SyncAddRemote(ctx, remoteName(t, "origin"), remoteURL); err != nil {
 		t.Fatalf("SyncAddRemote(A): %v", err)
 	}
-	if _, err := syncA.SyncPush(ctx, "origin", "master", true, false); err != nil {
+	if _, err := syncA.SyncPush(ctx, remoteName(t, "origin"), "master", true, false); err != nil {
 		t.Fatalf("SyncPush(A): %v", err)
 	}
 	if err := syncA.Close(); err != nil {
@@ -341,7 +341,7 @@ func seedUnrelatedCollision(t *testing.T, ctx context.Context, rootA, rootB, rem
 		t.Fatalf("Close(B): %v", err)
 	}
 	syncBSetup := openSyncOrFatal(t, ctx, rootB)
-	if err := syncBSetup.SyncAddRemote(ctx, "origin", remoteURL); err != nil {
+	if err := syncBSetup.SyncAddRemote(ctx, remoteName(t, "origin"), remoteURL); err != nil {
 		t.Fatalf("SyncAddRemote(B): %v", err)
 	}
 	if err := syncBSetup.Close(); err != nil {
@@ -368,12 +368,12 @@ func TestSyncReconcileCombineRefusesIDCollision(t *testing.T) {
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	defer syncB.Close()
-	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
 	headBefore := headCommit(t, ctx, syncB)
 
-	res, err := syncB.SyncReconcileCombine(ctx, "origin", "master")
+	res, err := syncB.SyncReconcileCombine(ctx, remoteName(t, "origin"), "master")
 	if err != nil {
 		t.Fatalf("SyncReconcileCombine(B): %v", err)
 	}
@@ -461,7 +461,7 @@ func TestSyncReconcileRefusesIDCollisionFoundInFoldedCommit(t *testing.T) {
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	defer syncB.Close()
-	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
 	// The premise of the FOLD half, asserted rather than assumed: the id is gone
@@ -471,7 +471,7 @@ func TestSyncReconcileRefusesIDCollisionFoundInFoldedCommit(t *testing.T) {
 	}
 	headBefore := headCommit(t, ctx, syncB)
 
-	res, err := syncB.SyncReconcile(ctx, "origin", "master")
+	res, err := syncB.SyncReconcile(ctx, remoteName(t, "origin"), "master")
 	if err != nil {
 		t.Fatalf("SyncReconcile(B) returned an error instead of a collision state: %v", err)
 	}

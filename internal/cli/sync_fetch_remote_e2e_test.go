@@ -43,7 +43,7 @@ func TestSyncFetchSelectsTheSyncRemoteAndFailsOnAnUnreadableBranchRecord(t *test
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}
 	runGit(t, dir, "remote", "set-head", "gh", "--delete")
-	record := advertisedSyncBranchPath(ws, "gh")
+	record := advertisedSyncBranchPath(ws, remoteName(t, "gh"))
 	if err := os.RemoveAll(record); err != nil {
 		t.Fatalf("remove sync branch record: %v", err)
 	}

@@ -533,7 +533,7 @@ func (c mirrorClone) remove(log io.Writer) {
 // The zero value means no push landed this cycle, so there is nothing to
 // record. [LAW:types-are-the-program]
 type pushedHead struct {
-	remote string
+	remote storage.RemoteName
 	branch string
 	head   string
 	// proven is what the push proved it left the remote advertising, recorded

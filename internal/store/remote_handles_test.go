@@ -27,7 +27,7 @@ func TestPushAndCloneLeaveNothingOfTheirRemoteOpen(t *testing.T) {
 	seedReconcileRemote(t, ctx, filepath.Join(base, "producer"), remoteURL)
 	assertNoOpenFileUnder(t, "after the push's store closed", remoteDir)
 
-	if err := AdoptRemoteByClone(ctx, filepath.Join(base, "consumer"), "ws", "origin", remoteURL, "master"); err != nil {
+	if err := AdoptRemoteByClone(ctx, filepath.Join(base, "consumer"), "ws", remoteName(t, "origin"), remoteURL, "master"); err != nil {
 		t.Fatalf("AdoptRemoteByClone: %v", err)
 	}
 	assertNoOpenFileUnder(t, "after the clone returned", base)

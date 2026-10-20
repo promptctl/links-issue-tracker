@@ -43,7 +43,7 @@ func TestRecordPushedHeadMovesTheTrackingRefWithoutTheNetwork(t *testing.T) {
 	}
 	freshness := func(label string, st *Store) storage.SyncFreshness {
 		t.Helper()
-		got, err := st.SyncFreshness(ctx, "origin", "master")
+		got, err := st.SyncFreshness(ctx, remoteName(t, "origin"), "master")
 		if err != nil {
 			t.Fatalf("%s: SyncFreshness() error = %v", label, err)
 		}
@@ -55,10 +55,10 @@ func TestRecordPushedHeadMovesTheTrackingRefWithoutTheNetwork(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenSync() error = %v", err)
 	}
-	if err := live.SyncAddRemote(ctx, "origin", remoteURL); err != nil {
+	if err := live.SyncAddRemote(ctx, remoteName(t, "origin"), remoteURL); err != nil {
 		t.Fatalf("SyncAddRemote() error = %v", err)
 	}
-	if _, err := live.SyncPush(ctx, "origin", "master", true, false); err != nil {
+	if _, err := live.SyncPush(ctx, remoteName(t, "origin"), "master", true, false); err != nil {
 		t.Fatalf("seed push error = %v", err)
 	}
 	if err := live.Close(); err != nil {
@@ -81,7 +81,7 @@ func TestRecordPushedHeadMovesTheTrackingRefWithoutTheNetwork(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenSync(clone) error = %v", err)
 	}
-	if _, err := clone.SyncPush(ctx, "origin", "master", false, false); err != nil {
+	if _, err := clone.SyncPush(ctx, remoteName(t, "origin"), "master", false, false); err != nil {
 		t.Fatalf("SyncPush(clone) error = %v", err)
 	}
 	if got := freshness("clone after push", clone); got.State() != storage.SyncUpToDate {
@@ -112,7 +112,7 @@ func TestRecordPushedHeadMovesTheTrackingRefWithoutTheNetwork(t *testing.T) {
 	// The mirror's situation: no engine of its own on the live store. The
 	// received-refs record the push proved rides along and lands with the ref.
 	proven := []byte("origin " + remoteURL + "\nproven-head\trefs/dolt/data\n")
-	record, err := RecordPushedHead(ctx, doltRoot, "origin", "master", pushedHead, proven)
+	record, err := RecordPushedHead(ctx, doltRoot, remoteName(t, "origin"), "master", pushedHead, proven)
 	if err != nil {
 		t.Fatalf("RecordPushedHead() error = %v", err)
 	}
@@ -172,12 +172,12 @@ func TestRecordPushedHeadRefusesAHeadTheStoreDoesNotHold(t *testing.T) {
 		t.Fatalf("WriteReceivedRefs() error = %v", err)
 	}
 	proven := []byte("proven\n")
-	if _, err := RecordPushedHead(ctx, doltRoot, "origin", "master", "not-a-hash", proven); err == nil {
+	if _, err := RecordPushedHead(ctx, doltRoot, remoteName(t, "origin"), "master", "not-a-hash", proven); err == nil {
 		t.Fatal("RecordPushedHead accepted a value that is not a Dolt commit hash")
 	}
 	// Well-formed, absent: 32 chars of the Dolt hash alphabet naming nothing.
 	absent := "00000000000000000000000000000000"
-	if _, err := RecordPushedHead(ctx, doltRoot, "origin", "master", absent, proven); err == nil {
+	if _, err := RecordPushedHead(ctx, doltRoot, remoteName(t, "origin"), "master", absent, proven); err == nil {
 		t.Fatal("RecordPushedHead set a tracking ref to a commit the store does not hold")
 	}
 	if got, err := ReadReceivedRefs(doltRoot); err != nil || string(got) != string(standing) {
@@ -209,7 +209,7 @@ func TestRecordPushedHeadWaitsOutALiveWriteEngine(t *testing.T) {
 		_ = st.Close()
 		close(closed)
 	}()
-	if _, err := RecordPushedHead(ctx, doltRoot, "origin", "master", head, nil); err != nil {
+	if _, err := RecordPushedHead(ctx, doltRoot, remoteName(t, "origin"), "master", head, nil); err != nil {
 		t.Fatalf("RecordPushedHead() against a write engine that closes mid-wait error = %v", err)
 	}
 	select {
@@ -261,11 +261,11 @@ func TestRecordPushedHeadNeverMovesTheTrackingRefBackwards(t *testing.T) {
 			t.Fatalf("%s: OpenSync() error = %v", label, err)
 		}
 		if setUpstream {
-			if err := live.SyncAddRemote(ctx, "origin", remoteURL); err != nil {
+			if err := live.SyncAddRemote(ctx, remoteName(t, "origin"), remoteURL); err != nil {
 				t.Fatalf("%s: SyncAddRemote() error = %v", label, err)
 			}
 		}
-		if _, err := live.SyncPush(ctx, "origin", "master", setUpstream, false); err != nil {
+		if _, err := live.SyncPush(ctx, remoteName(t, "origin"), "master", setUpstream, false); err != nil {
 			t.Fatalf("%s: SyncPush() error = %v", label, err)
 		}
 		if err := live.Close(); err != nil {
@@ -303,7 +303,7 @@ func TestRecordPushedHeadNeverMovesTheTrackingRefBackwards(t *testing.T) {
 	if err := WriteReceivedRefs(doltRoot, newer); err != nil {
 		t.Fatalf("WriteReceivedRefs() error = %v", err)
 	}
-	record, err := RecordPushedHead(ctx, doltRoot, "origin", "master", c2, []byte("late-c2\n"))
+	record, err := RecordPushedHead(ctx, doltRoot, remoteName(t, "origin"), "master", c2, []byte("late-c2\n"))
 	if err != nil {
 		t.Fatalf("RecordPushedHead(c2) error = %v", err)
 	}
@@ -319,7 +319,7 @@ func TestRecordPushedHeadNeverMovesTheTrackingRefBackwards(t *testing.T) {
 	// And for exactly where the ref is: nothing to do to the ref, still not an
 	// error, and the ref ends at the pushed head, so the proof is recorded.
 	atC3 := []byte("at-c3\n")
-	record, err = RecordPushedHead(ctx, doltRoot, "origin", "master", c3, atC3)
+	record, err = RecordPushedHead(ctx, doltRoot, remoteName(t, "origin"), "master", c3, atC3)
 	if err != nil {
 		t.Fatalf("RecordPushedHead(c3) error = %v", err)
 	}
@@ -331,7 +331,7 @@ func TestRecordPushedHeadNeverMovesTheTrackingRefBackwards(t *testing.T) {
 	}
 	// The forward move still works from this state: a later head moves it.
 	c4 := commit("c4")
-	record, err = RecordPushedHead(ctx, doltRoot, "origin", "master", c4, nil)
+	record, err = RecordPushedHead(ctx, doltRoot, remoteName(t, "origin"), "master", c4, nil)
 	if err != nil {
 		t.Fatalf("RecordPushedHead(c4) error = %v", err)
 	}
@@ -371,7 +371,7 @@ func TestRecordPushedHeadCutsAtTheHoldBudget(t *testing.T) {
 	previous := MirrorHoldBudget
 	MirrorHoldBudget = 0
 	t.Cleanup(func() { MirrorHoldBudget = previous })
-	_, err = RecordPushedHead(ctx, doltRoot, "origin", "master", head, nil)
+	_, err = RecordPushedHead(ctx, doltRoot, remoteName(t, "origin"), "master", head, nil)
 	if !errors.Is(err, ErrHoldCut) {
 		t.Fatalf("RecordPushedHead() under a zero hold budget error = %v, want ErrHoldCut", err)
 	}
@@ -409,7 +409,7 @@ func TestRecordPushedHeadCutInTheCommitLockWaitNamesTheHolder(t *testing.T) {
 	previous := MirrorHoldBudget
 	MirrorHoldBudget = 300 * time.Millisecond
 	t.Cleanup(func() { MirrorHoldBudget = previous })
-	_, err = RecordPushedHead(ctx, doltRoot, "origin", "master", head, nil)
+	_, err = RecordPushedHead(ctx, doltRoot, remoteName(t, "origin"), "master", head, nil)
 	if !errors.Is(err, ErrHoldCut) {
 		t.Fatalf("RecordPushedHead() against a held commit lock error = %v, want ErrHoldCut", err)
 	}

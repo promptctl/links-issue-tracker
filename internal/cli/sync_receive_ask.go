@@ -52,7 +52,7 @@ import (
 // fetched without getting to ask leaves the record it found standing.
 // [LAW:types-are-the-program]
 type remoteAdvertisement struct {
-	remote string
+	remote storage.RemoteName
 	url    string
 	refs   string
 }
@@ -62,7 +62,7 @@ type remoteAdvertisement struct {
 // refs/dolt/*. Neither case ever writes a received-refs record, so without
 // this the receive would clone the whole store every interval only to skip.
 func (a remoteAdvertisement) nothingToReceive() bool {
-	return a.remote == "" || strings.TrimSpace(a.refs) == ""
+	return a.remote == (storage.RemoteName{}) || strings.TrimSpace(a.refs) == ""
 }
 
 // record is the marker payload for this advertisement; nil for the zero value.
@@ -70,7 +70,7 @@ func (a remoteAdvertisement) record() []byte {
 	if a == (remoteAdvertisement{}) {
 		return nil
 	}
-	return []byte(a.remote + " " + a.url + "\n" + a.refs + "\n")
+	return []byte(a.remote.String() + " " + a.url + "\n" + a.refs + "\n")
 }
 
 // unmoved reports whether this advertisement is byte-for-byte what the last
@@ -103,11 +103,11 @@ func readReceivedRefs(ws workspace.Info) []byte {
 // [LAW:one-source-of-truth] resolveSyncRemote is the one selection rule, so
 // the remote asked here is the remote the fetch would have used.
 func askRemote(ctx context.Context, ws workspace.Info, gitRemotes []workspace.GitRemote) (remoteAdvertisement, error) {
-	remoteName, err := resolveSyncRemote("", workspace.UpstreamRemote(ctx, ws.RootDir), gitRemotes)
+	remoteName, ok, err := resolveSyncRemote("", workspace.UpstreamRemote(ctx, ws.RootDir), gitRemotes)
 	if err != nil {
 		return remoteAdvertisement{}, err
 	}
-	if remoteName == "" {
+	if !ok {
 		return remoteAdvertisement{}, nil
 	}
 	return advertise(ctx, ws, remoteName, gitRemotes)
@@ -117,14 +117,14 @@ func askRemote(ctx context.Context, ws workspace.Info, gitRemotes []workspace.Gi
 // comes from `git ls-remote`, the URL from the git config it was read from.
 // [LAW:one-source-of-truth] the receive's question and the push's proof both
 // build their advertisement here, so the two can only ever agree byte for byte.
-func advertise(ctx context.Context, ws workspace.Info, remoteName string, gitRemotes []workspace.GitRemote) (remoteAdvertisement, error) {
-	refs, err := workspace.RemoteDoltRefs(ctx, ws.RootDir, remoteName)
+func advertise(ctx context.Context, ws workspace.Info, remoteName storage.RemoteName, gitRemotes []workspace.GitRemote) (remoteAdvertisement, error) {
+	refs, err := workspace.RemoteDoltRefs(ctx, ws.RootDir, remoteName.String())
 	if err != nil {
 		return remoteAdvertisement{}, fmt.Errorf("list refs/dolt/* on remote %q: %w", remoteName, err)
 	}
 	return remoteAdvertisement{
 		remote: remoteName,
-		url:    mapGitRemotesByName(gitRemotes)[remoteName],
+		url:    mapGitRemotesByName(gitRemotes)[remoteName.String()],
 		refs:   refs,
 	}, nil
 }
@@ -171,10 +171,13 @@ const pushProofDeadline = 10 * time.Second
 // [LAW:one-source-of-truth] resolveSyncRemote picks that remote, as it does
 // for the receive. [LAW:parse-dont-validate] the non-zero advertisement is the
 // proof; nothing downstream re-asks.
-func provePushedAdvertisement(ctx context.Context, syncer storage.Syncer, ws workspace.Info, remoteName string, gitRemotes []workspace.GitRemote) (proven remoteAdvertisement, unproven string) {
-	receiveRemote, err := resolveSyncRemote("", workspace.UpstreamRemote(ctx, ws.RootDir), gitRemotes)
+func provePushedAdvertisement(ctx context.Context, syncer storage.Syncer, ws workspace.Info, remoteName storage.RemoteName, gitRemotes []workspace.GitRemote) (proven remoteAdvertisement, unproven string) {
+	receiveRemote, ok, err := resolveSyncRemote("", workspace.UpstreamRemote(ctx, ws.RootDir), gitRemotes)
 	if err != nil {
 		return remoteAdvertisement{}, "resolve the remote the automatic receive asks: " + err.Error()
+	}
+	if !ok {
+		return remoteAdvertisement{}, "the automatic receive asks no remote"
 	}
 	if receiveRemote != remoteName {
 		return remoteAdvertisement{}, fmt.Sprintf("pushed remote %q is not the remote the automatic receive asks (%q)", remoteName, receiveRemote)
@@ -247,7 +250,7 @@ func confirmRemoteUnmoved(ws workspace.Info, observed remoteAdvertisement) {
 	}
 	if err := recordReceiveTrace(ws, receiveDecisionRemoteUnmoved, "ok",
 		"automatic receive found the remote unmoved since the last receive; nothing fetched",
-		map[string]string{"remote": observed.remote}); err != nil {
+		map[string]string{"remote": observed.remote.String()}); err != nil {
 		fmt.Fprintf(os.Stderr, "lit: automatic receive trace not recorded: %v\n", err)
 	}
 }

@@ -495,24 +495,24 @@ They live beside the specs rather than in an engine because the schema is the co
 - `Offered(engine Store) []Capability` returns the capabilities the engine implements, **in `Capabilities()` order** (`internal/storage/capabilities.go`).
 
 #### `Syncer` (`internal/storage/capabilities.go`)
-- `SyncAddRemote(ctx, name, url string) error`
-- `SyncRemoveRemote(ctx, name string) error`
-- `SyncSetRemoteURL(ctx, name, url string) error` — re-points the remote; unlike a removal, it keeps the remote's fork points.
+- `SyncAddRemote(ctx, name RemoteName, url string) error`
+- `SyncRemoveRemote(ctx, name string) error` — takes any name the engine holds, as `SyncListRemotes` lists it, not only a `RemoteName`: an older lit wrote names a `RemoteName` refuses, and removing them is how the reconcile clears them. A name the engine no longer holds is already removed.
+- `SyncSetRemoteURL(ctx, name RemoteName, url string) error` — re-points the remote; unlike a removal, it keeps the remote's fork points.
 - `SyncListRemotes(ctx) ([]SyncRemote, error)`
 - `SyncStatus(ctx) (SyncStatusReport, error)` — local side only: build, position, pending changes, peers; **contacts no network**
-- `SyncFreshness(ctx, remote, branch string) (SyncFreshness, error)` — local branch position against a peer as of the last fetch or push; reads local refs, never contacts the network, which is what lets a read-only command call it
-- `SyncFetch(ctx, remote string, prune bool) error`
-- `SyncPushFromClone(ctx, remote, branch string, setUpstream, force bool) (SyncPushResult, error)` — the push of a store that is a frozen clone of a live one (the on-change mirror's push): a push the remote rejects is re-checked, and a remote already carrying the store's HEAD yields a `Superseded` result rather than an error.
-- `SyncRemoteMirrorHolds(ctx, remote string, commits []string) (bool, error)`: whether this store's local mirror of the remote's data holds every one of the given git commit ids; no network. After a push from this store that landed without being superseded, a held advertised commit is this store's own push, never a peer's later one.
-- `SyncPull(ctx, remote, branch string) (SyncPullResult, error)`
-- `SyncReceive(ctx, remote, branch string) (SyncReceiveResult, error)` — fetches and fast-forwards when and only when local is strictly behind; never merges; a divergence it meets is reported, never healed here
-- `SyncSettleReceived(ctx, remote, branch string) (SyncReceiveResult, error)` — `SyncReceive`'s second half alone: reads the tracking ref as it stands (a fetch that ran on a clone and was landed here) and fast-forwards on the same terms; no network
+- `SyncFreshness(ctx, remote RemoteName, branch string) (SyncFreshness, error)` — local branch position against a peer as of the last fetch or push; reads local refs, never contacts the network, which is what lets a read-only command call it
+- `SyncFetch(ctx, remote RemoteName, prune bool) error`
+- `SyncPushFromClone(ctx, remote RemoteName, branch string, setUpstream, force bool) (SyncPushResult, error)` — the push of a store that is a frozen clone of a live one (the on-change mirror's push): a push the remote rejects is re-checked, and a remote already carrying the store's HEAD yields a `Superseded` result rather than an error.
+- `SyncRemoteMirrorHolds(ctx, remote RemoteName, commits []string) (bool, error)`: whether this store's local mirror of the remote's data holds every one of the given git commit ids; no network. After a push from this store that landed without being superseded, a held advertised commit is this store's own push, never a peer's later one.
+- `SyncPull(ctx, remote RemoteName, branch string) (SyncPullResult, error)`
+- `SyncReceive(ctx, remote RemoteName, branch string) (SyncReceiveResult, error)` — fetches and fast-forwards when and only when local is strictly behind; never merges; a divergence it meets is reported, never healed here
+- `SyncSettleReceived(ctx, remote RemoteName, branch string) (SyncReceiveResult, error)` — `SyncReceive`'s second half alone: reads the tracking ref as it stands (a fetch that ran on a clone and was landed here) and fast-forwards on the same terms; no network
 - `SyncCompact(ctx, mode GCMode) (CompactionOutcome, error)` — reclaims local storage at the requested depth with no remote involved
 - `CompactIfDue(ctx) (CompactionOutcome, error)` — compacts only when the engine's own accounting says a pass is owed; the engine owns that judgment because what makes a pass due is a fact about how it stores data
-- `SyncCompactAndPush(ctx, remote, branch string, setUpstream, force bool) (SyncPushResult, error)`
-- `SyncFollowReRoot(ctx, remote, branch string, entry SyncEntry) error` — brings the local branch into the remote's history when another checkout re-rooted it, reading the tracking ref as the last fetch left it; no network. Every sync verb that settles or pushes follows on its own; this is for a caller that fetched and settles nothing.
+- `SyncCompactAndPush(ctx, remote RemoteName, branch string, setUpstream, force bool) (SyncPushResult, error)`
+- `SyncFollowReRoot(ctx, remote RemoteName, branch string, entry SyncEntry) error` — brings the local branch into the remote's history when another checkout re-rooted it, reading the tracking ref as the last fetch left it; no network. Every sync verb that settles or pushes follows on its own; this is for a caller that fetched and settles nothing.
 - `FollowedReRoots() []FollowedReRoot` — every re-root the engine applied to its own branch since it opened, to follow a re-rooted remote; an engine whose history is never re-rooted returns none.
-- `SyncKeepHistoryBound(ctx, remote, branch string, pushed SyncPushResult) SyncPushResult` — keeps the sync branch's history under its bound once `pushed` landed, whichever push landed it, and returns `pushed` with the bound it kept as `Bound` and the bound's account joined to its `Maintenance`; fails nothing
+- `SyncKeepHistoryBound(ctx, remote RemoteName, branch string, pushed SyncPushResult) SyncPushResult` — keeps the sync branch's history under its bound once `pushed` landed, whichever push landed it, and returns `pushed` with the bound it kept as `Bound` and the bound's account joined to its `Maintenance`; fails nothing
 - `HistoryBounds() []HistoryBound` — what every `SyncKeepHistoryBound` since the engine opened did to keep the sync branch's history under its bound, oldest first; an engine whose history has no bound to keep returns none.
 - `ForkPointRecords() []ForkPointRecord` — what the engine did to each fork point since it opened, oldest first: every fetch before it moved the tracking ref, every collection below a cut, and every removal of a remote.
 - `ReconcileBases() []ReconcileBase` — the base every reconcile since the engine opened decided on, and where it came from, oldest first.
@@ -521,11 +521,11 @@ They live beside the specs rather than in an engine because the schema is the co
 - Nothing in `Syncer` resolves a divergence — that is `Reconciler` (`internal/storage/capabilities.go`).
 
 #### `Reconciler` (`internal/storage/capabilities.go`)
-- `SyncReconcile(ctx, remote, branch string) (SyncReconcileResult, error)` — merges a divergence field-aware and replays it into linear history, or — when a free-text field moved on both sides — holds the conflict and commits nothing
-- `SyncReconcileCombine(ctx, remote, branch string) (SyncReconcileResult, error)` — settles an unrelated-history divergence by union, keeping every issue from both sides
-- `SyncReconcileResolved(ctx, remote, branch string, resolutions []merge.ProseResolution, actor string) (SyncReconcileResult, error)` — finishes a reconcile held for prose
-- `SyncResolveUnrelated(ctx, remote, branch string, choice UnrelatedResolution, ownerApproval string) (SyncReconcileResult, error)` — settles by taking one side wholesale; destroys the other side's unique issues, which is why it takes an owner approval bound to this exact fork rather than a bare confirmation flag
-- `SyncResetToRemoteHead(ctx, remote, branch string) error` — abandons local history for the peer's
+- `SyncReconcile(ctx, remote RemoteName, branch string) (SyncReconcileResult, error)` — merges a divergence field-aware and replays it into linear history, or — when a free-text field moved on both sides — holds the conflict and commits nothing
+- `SyncReconcileCombine(ctx, remote RemoteName, branch string) (SyncReconcileResult, error)` — settles an unrelated-history divergence by union, keeping every issue from both sides
+- `SyncReconcileResolved(ctx, remote RemoteName, branch string, resolutions []merge.ProseResolution, actor string) (SyncReconcileResult, error)` — finishes a reconcile held for prose
+- `SyncResolveUnrelated(ctx, remote RemoteName, branch string, choice UnrelatedResolution, ownerApproval string) (SyncReconcileResult, error)` — settles by taking one side wholesale; destroys the other side's unique issues, which is why it takes an owner approval bound to this exact fork rather than a bare confirmation flag
+- `SyncResetToRemoteHead(ctx, remote RemoteName, branch string) error` — abandons local history for the peer's
 
 #### `Checkpointer` (`internal/storage/capabilities.go`)
 - `CreateCheckpoint(ctx, prefix string) (Checkpoint, error)`
@@ -609,6 +609,7 @@ These types live in the contract, not in an engine, because a capability interfa
   - **`RemoteGCOutcome`** string: `moved` (the remote's sync branch was not at the re-rooted head, or a write landed before the GC's root write: nothing the remote names changed, every branch stays), `dropped` (the remote's root names the sync branch alone and its table set stays whole: a write landed before the GC replaced it, or the replacement failed), `replaced` (the remote's root names the sync branch alone and its manifest names exactly the collected table files, under a new GC generation).
 - Fork-point vocabulary (`internal/storage/fork_point.go`):
   - **`ForkPointRecord{Remote, Branch, Head string; Outcome ForkPointOutcome}`** — one tracking ref a fetch was about to move and what it did to that ref's fork point first: `recorded`, `unchanged`, `kept` (the local branch shares no history with `Head`) or `none` (nor was a fork point ever recorded); or a fork point deleted with its tracking ref, `dropped`. `EventValue()` is one value of the event's `fork_point.records` list.
+  - **`RemoteRemovalRecord{Remote, Owner string; Held, OwnerHeld bool; TrackingRefsDropped int}`** — one `SyncRemoveRemote` attempt: whether the engine held the name, whether it holds another remote named the owner (so none of the owner's refs went), and how many of the owner's tracking refs it deleted. `EventValue()` is one value of the event's `remote.removals` list (`remote_removal.remote`, `.owner`, `.held`, `.owner_held`, `.tracking_refs_dropped`).
   - **`ReconcileBase{Source ReconcileBaseSource; Commit, ForkPoint string; UnaccountedTickets, UnaccountedEvents int}`** — a reconcile's base and its source: `merge_base`, `fork_point`, or `none`. `ForkPoint` is the fork point read when the heads share no history; `UnaccountedTickets` counts the base tickets the remote head holds neither a row nor a purge record for, and `UnaccountedEvents` the base ticket events it lacks whose ticket no purge record names. `Found()` is the commit and whether there is one. `EventValue()` is one value of the event's `reconcile.bases` list.
 
 ---

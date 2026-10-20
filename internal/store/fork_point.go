@@ -25,10 +25,45 @@ import (
 // and the fork point is the history they last shared (forkPointBase).
 const forkPointPrefix = "lit-fork-point/"
 
+// refOwner is the remote a ref under remotes/<owner>/ or
+// lit-fork-point/<owner>/ belongs to: the path's first segment, which is how
+// Dolt reads a tracking ref's remote (ref.RemoteRef, and DOLT_REMOTE remove
+// and DOLT_BRANCH -D -r with it). It holds no "/", so every such ref has
+// exactly one owner. A remote lit syncs with is its own owner; a name Dolt
+// holds with a "/" in it, which DOLT_CLONE --remote once wrote, is owned by
+// its first segment. [LAW:types-are-the-program] [LAW:one-source-of-truth]
+type refOwner struct {
+	name string
+}
+
+func (o refOwner) String() string {
+	return o.name
+}
+
+// ownerOf is a parsed remote's owner: the remote itself, since its name
+// holds no "/".
+func ownerOf(remote storage.RemoteName) refOwner {
+	return refOwner{name: remote.String()}
+}
+
+// ownerOfHeld is the owner of the refs a remote Dolt holds writes, whatever
+// its name: its first segment. For a name such as /x that segment is empty,
+// and Dolt reads no remote off such refs, so that owner owns none.
+func ownerOfHeld(name string) refOwner {
+	first, _, _ := strings.Cut(name, "/")
+	return refOwner{name: first}
+}
+
 // forkPointBranch is the branch holding the fork point of
-// remotes/<remote>/<branch>.
-func forkPointBranch(remote, branch string) string {
-	return forkPointPrefix + remote + "/" + branch
+// remotes/<owner>/<branch>.
+func forkPointBranch(owner refOwner, branch string) string {
+	return forkPointPrefix + owner.String() + "/" + branch
+}
+
+// trackingRefPrefix is the prefix of every tracking ref owner has,
+// remotes/<owner>/, as dolt_remote_branches names them.
+func trackingRefPrefix(owner refOwner) string {
+	return "remotes/" + owner.String() + "/"
 }
 
 // recordForkPoints runs before a fetch moves remotes/<remote>/*: each
@@ -39,12 +74,12 @@ func forkPointBranch(remote, branch string) string {
 // second fetch nor a crash before the reconcile can replace the head the
 // reconcile needs. [LAW:no-ambient-temporal-coupling] the record is written
 // before the move, never reconstructed after it.
-func (s *Store) recordForkPoints(ctx context.Context, remote string) ([]storage.ForkPointRecord, error) {
+func (s *Store) recordForkPoints(ctx context.Context, remote refOwner) ([]storage.ForkPointRecord, error) {
 	local, err := activeBranch(ctx, s.db)
 	if err != nil {
 		return nil, err
 	}
-	trackingPrefix := "remotes/" + remote + "/"
+	trackingPrefix := trackingRefPrefix(remote)
 	tracked, err := refHeadsUnder(ctx, s.db, `SELECT name, hash FROM dolt_remote_branches`, trackingPrefix)
 	if err != nil {
 		return nil, err
@@ -58,7 +93,7 @@ func (s *Store) recordForkPoints(ctx context.Context, remote string) ([]storage.
 	records := make([]storage.ForkPointRecord, 0, len(tracked))
 	for _, branch := range slices.Sorted(maps.Keys(tracked)) {
 		head := tracked[branch]
-		record := storage.ForkPointRecord{Remote: remote, Branch: branch, Head: head, Outcome: storage.ForkPointUnchanged}
+		record := storage.ForkPointRecord{Remote: remote.String(), Branch: branch, Head: head, Outcome: storage.ForkPointUnchanged}
 		if held, ok := recorded[branch]; held != head {
 			record.Outcome, err = s.recordForkPoint(ctx, local, forkPointBranch(remote, branch), head, ok)
 			if err != nil {
@@ -94,8 +129,8 @@ func (s *Store) recordForkPoint(ctx context.Context, local, forkPoint, head stri
 // a fetch pruned, so no fork point keeps its commit's chunks through GC once
 // nothing can read it. A fork point lives exactly as long as its tracking ref.
 // [LAW:one-source-of-truth]
-func (s *Store) dropOrphanForkPoints(ctx context.Context, remote string) ([]storage.ForkPointRecord, error) {
-	tracked, err := refHeadsUnder(ctx, s.db, `SELECT name, hash FROM dolt_remote_branches`, "remotes/"+remote+"/")
+func (s *Store) dropOrphanForkPoints(ctx context.Context, remote refOwner) ([]storage.ForkPointRecord, error) {
+	tracked, err := refHeadsUnder(ctx, s.db, `SELECT name, hash FROM dolt_remote_branches`, trackingRefPrefix(remote))
 	if err != nil {
 		return nil, err
 	}
@@ -105,7 +140,7 @@ func (s *Store) dropOrphanForkPoints(ctx context.Context, remote string) ([]stor
 // dropForkPoints deletes every fork point of remote but those of the branches
 // in keep. Each deletion stands once made, so a retried run deletes only what
 // is left.
-func (s *Store) dropForkPoints(ctx context.Context, remote string, keep map[string]string) ([]storage.ForkPointRecord, error) {
+func (s *Store) dropForkPoints(ctx context.Context, remote refOwner, keep map[string]string) ([]storage.ForkPointRecord, error) {
 	recorded, err := refHeadsUnder(ctx, s.db, `SELECT name, hash FROM dolt_branches`, forkPointBranch(remote, ""))
 	if err != nil {
 		return nil, err
@@ -118,7 +153,26 @@ func (s *Store) dropForkPoints(ctx context.Context, remote string, keep map[stri
 		if err := execProcedureDiscard(ctx, s.db, "DOLT_BRANCH", "-D", forkPointBranch(remote, branch)); err != nil {
 			return dropped, fmt.Errorf("drop fork point %s: %w", forkPointBranch(remote, branch), err)
 		}
-		dropped = append(dropped, storage.ForkPointRecord{Remote: remote, Branch: branch, Head: recorded[branch], Outcome: storage.ForkPointDropped})
+		dropped = append(dropped, storage.ForkPointRecord{Remote: remote.String(), Branch: branch, Head: recorded[branch], Outcome: storage.ForkPointDropped})
+	}
+	return dropped, nil
+}
+
+// dropTrackingRefs deletes every tracking ref owner has and returns how many
+// it deleted, a failure included. Each deletion stands once made, so a
+// retried run deletes only what is left.
+func (s *Store) dropTrackingRefs(ctx context.Context, owner refOwner) (int, error) {
+	tracked, err := refHeadsUnder(ctx, s.db, `SELECT name, hash FROM dolt_remote_branches`, trackingRefPrefix(owner))
+	if err != nil {
+		return 0, err
+	}
+	dropped := 0
+	for _, branch := range slices.Sorted(maps.Keys(tracked)) {
+		path := owner.String() + "/" + branch
+		if err := execProcedureDiscard(ctx, s.db, "DOLT_BRANCH", "-D", "-r", path); err != nil {
+			return dropped, fmt.Errorf("drop tracking ref remotes/%s: %w", path, err)
+		}
+		dropped++
 	}
 	return dropped, nil
 }
@@ -163,7 +217,7 @@ func refHeadsUnder(ctx context.Context, db *sql.DB, query, prefix string) (map[s
 // checkout's tickets or edits fails, and stays the unrelated-histories
 // divergence it is today. [LAW:parse-dont-validate] the result's Source is the
 // evidence, and a refusal says why in its counts.
-func (s *Store) forkPointBase(ctx context.Context, remote, branch, localHead, remoteHead string) (storage.ReconcileBase, error) {
+func (s *Store) forkPointBase(ctx context.Context, remote refOwner, branch, localHead, remoteHead string) (storage.ReconcileBase, error) {
 	unrelated := storage.ReconcileBase{Source: storage.ReconcileBaseNone}
 	recorded, err := refHeadsUnder(ctx, s.db, `SELECT name, hash FROM dolt_branches`, forkPointBranch(remote, ""))
 	if err != nil {

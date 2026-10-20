@@ -33,7 +33,7 @@ func TestPushOutcomeOf(t *testing.T) {
 		{
 			name: "push that ran and failed records error with the resolved ref",
 			outcome: syncPushOutcome{
-				remote: "origin", branch: "master",
+				remote: remoteName(t, "origin"), branch: "master",
 				pushErr: errors.New("connection refused"),
 			},
 			want: pushOutcomeRecord{Decision: pushDecisionError, Reason: "connection refused", Remote: "origin", Branch: "master"},
@@ -45,12 +45,12 @@ func TestPushOutcomeOf(t *testing.T) {
 		},
 		{
 			name:    "empty-remote skip records its own decision, not a failure",
-			outcome: syncPushOutcome{skip: syncTargetRemoteEmpty, remote: "origin"},
+			outcome: syncPushOutcome{skip: syncTargetRemoteEmpty, remote: remoteName(t, "origin")},
 			want:    pushOutcomeRecord{Decision: "remote_empty", Remote: "origin"},
 		},
 		{
 			name:    "landed push records pushed",
-			outcome: syncPushOutcome{remote: "origin", branch: "master"},
+			outcome: syncPushOutcome{remote: remoteName(t, "origin"), branch: "master"},
 			want:    pushOutcomeRecord{Decision: pushDecisionPushed, Remote: "origin", Branch: "master"},
 		},
 		{
@@ -61,20 +61,20 @@ func TestPushOutcomeOf(t *testing.T) {
 		{
 			name: "cancellation mid-push records canceled with the resolved ref",
 			outcome: syncPushOutcome{
-				remote: "origin", branch: "master",
+				remote: remoteName(t, "origin"), branch: "master",
 				pushErr: fmt.Errorf("push: %w", context.Canceled),
 			},
 			want: pushOutcomeRecord{Decision: pushDecisionCanceled, Reason: "push: context canceled", Remote: "origin", Branch: "master"},
 		},
 		{
 			name:    "landed push records whether a receive merges here",
-			outcome: syncPushOutcome{remote: "origin", branch: "master", receiveMerges: true},
+			outcome: syncPushOutcome{remote: remoteName(t, "origin"), branch: "master", receiveMerges: true},
 			want:    pushOutcomeRecord{Decision: pushDecisionPushed, Remote: "origin", Branch: "master", ReceiveMerges: true},
 		},
 		{
 			name: "push refused over a peer's commits a receive merges records diverged, not error",
 			outcome: syncPushOutcome{
-				remote: "origin", branch: "master", receiveMerges: true,
+				remote: remoteName(t, "origin"), branch: "master", receiveMerges: true,
 				pushErr: fmt.Errorf("%w: push remote \"origin\": rejected", storage.ErrPushDiverged),
 			},
 			want: pushOutcomeRecord{Decision: pushDecisionDiverged, Reason: storage.ErrPushDiverged.Error() + ": push remote \"origin\": rejected", Remote: "origin", Branch: "master", ReceiveMerges: true},
@@ -82,7 +82,7 @@ func TestPushOutcomeOf(t *testing.T) {
 		{
 			name: "push refused over a peer's commits nothing merges records error naming the merge",
 			outcome: syncPushOutcome{
-				remote: "origin", branch: "master",
+				remote: remoteName(t, "origin"), branch: "master",
 				pushErr: fmt.Errorf("%w: push remote \"origin\": rejected", storage.ErrPushDiverged),
 			},
 			want: pushOutcomeRecord{Decision: pushDecisionError, Reason: storage.ErrPushDiverged.Error() + ": push remote \"origin\": rejected; no automatic receive runs here to merge the peer's commits: run 'lit sync pull', then 'lit sync push'", Remote: "origin", Branch: "master"},
@@ -90,7 +90,7 @@ func TestPushOutcomeOf(t *testing.T) {
 		{
 			name: "push that failed otherwise records error whether or not a receive merges",
 			outcome: syncPushOutcome{
-				remote: "origin", branch: "master", receiveMerges: true,
+				remote: remoteName(t, "origin"), branch: "master", receiveMerges: true,
 				pushErr: errors.New("connection refused"),
 			},
 			want: pushOutcomeRecord{Decision: pushDecisionError, Reason: "connection refused", Remote: "origin", Branch: "master", ReceiveMerges: true},
@@ -105,7 +105,7 @@ func TestPushOutcomeOf(t *testing.T) {
 			// lock held: that busy is the push's own and comes back on pushErr.
 			name: "workspace busy mid-push records busy with the resolved ref, not error",
 			outcome: syncPushOutcome{
-				remote: "origin", branch: "master",
+				remote: remoteName(t, "origin"), branch: "master",
 				pushErr: fmt.Errorf("acquire the commit lock: %w", store.ErrWorkspaceBusy),
 			},
 			want: pushOutcomeRecord{Decision: pushDecisionWorkspaceBusy, Reason: "acquire the commit lock: workspace busy", Remote: "origin", Branch: "master"},
@@ -116,7 +116,7 @@ func TestPushOutcomeOf(t *testing.T) {
 			// (joinFollowFailure), so the record says error and the banner warns.
 			name: "push refused with a busy follow-up check records error, not busy",
 			outcome: syncPushOutcome{
-				remote: "origin", branch: "master",
+				remote: remoteName(t, "origin"), branch: "master",
 				pushErr: fmt.Errorf("push remote \"origin\": rejected (and whether the remote re-rooted its history could not be checked: %v)", store.ErrWorkspaceBusy),
 			},
 			want: pushOutcomeRecord{Decision: pushDecisionError, Reason: "push remote \"origin\": rejected (and whether the remote re-rooted its history could not be checked: workspace busy)", Remote: "origin", Branch: "master"},
@@ -428,7 +428,7 @@ func TestRecordedPushFailureIsNotALatch(t *testing.T) {
 	t.Parallel()
 	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}}
 	recordPushOutcome(ws, pushOutcomeOf(syncPushOutcome{
-		remote: "origin", branch: "master",
+		remote: remoteName(t, "origin"), branch: "master",
 		pushErr: errors.New("remote origin/master is at schema version 5 but this binary supports only up to 4"),
 	}, nil, "0.7.0"))
 
@@ -439,7 +439,7 @@ func TestRecordedPushFailureIsNotALatch(t *testing.T) {
 
 	// The condition clears and the next attempt lands.
 	recordPushOutcome(ws, pushOutcomeOf(syncPushOutcome{
-		remote: "origin", branch: "master", skip: syncTargetReady,
+		remote: remoteName(t, "origin"), branch: "master", skip: syncTargetReady,
 	}, nil, "0.9.0"))
 
 	rec, age, known = lastPushOutcome(ws, time.Now())

@@ -264,7 +264,7 @@ func (s *Store) landProse(export model.Export, texts map[string]merge.ProseTexts
 // CONSTRAINT (embedded Dolt one-RW-engine-per-path): this runs INLINE/foreground
 // on the caller's own engine after its command engine closed — never a background
 // worker.
-func (s *Store) SyncReconcile(ctx context.Context, remote string, branch string) (storage.SyncReconcileResult, error) {
+func (s *Store) SyncReconcile(ctx context.Context, remote storage.RemoteName, branch string) (storage.SyncReconcileResult, error) {
 	return s.followThenReconcile(ctx, remote, branch, autonomousSettle, detectOnly)
 }
 
@@ -282,7 +282,7 @@ func (s *Store) SyncReconcile(ctx context.Context, remote string, branch string)
 // It shares SyncReconcile's safe-replay verbatim: the replayed spine is built on a
 // unique scratch branch and the data branch advances with one atomic reset, so an
 // interrupted finalize can never orphan the clone's local work.
-func (s *Store) SyncReconcileResolved(ctx context.Context, remote string, branch string, resolutions []merge.ProseResolution, actor string) (storage.SyncReconcileResult, error) {
+func (s *Store) SyncReconcileResolved(ctx context.Context, remote storage.RemoteName, branch string, resolutions []merge.ProseResolution, actor string) (storage.SyncReconcileResult, error) {
 	// unionCombine: `lit sync reconcile resolve` is the ONE finalize command, so it must
 	// finalize whichever divergence the refs describe — a shared-history three-way (the
 	// base branch handles it) OR an unrelated combine (the !shared branch, with the agent's
@@ -304,7 +304,7 @@ func (s *Store) SyncReconcileResolved(ctx context.Context, remote string, branch
 // that degrades the merge to a two-way union. On a divergence WITH a common base it merges
 // through that base like an ordinary reconcile — combine is non-destructive, so it need not
 // refuse shared history the way the wholesale takes do.
-func (s *Store) SyncReconcileCombine(ctx context.Context, remote string, branch string) (storage.SyncReconcileResult, error) {
+func (s *Store) SyncReconcileCombine(ctx context.Context, remote storage.RemoteName, branch string) (storage.SyncReconcileResult, error) {
 	return s.followThenReconcile(ctx, remote, branch, autonomousSettle, unionCombine)
 }
 
@@ -334,7 +334,7 @@ type reconcilePlan struct {
 // descend from (reconcileBase). It is the single reader of this state,
 // so the three-way reconcile and the take-one resolver share one definition of the
 // divergence rather than each re-deriving it. [LAW:single-enforcer]
-func (s *Store) captureReconcilePlan(ctx context.Context, remote, branch string) (reconcilePlan, error) {
+func (s *Store) captureReconcilePlan(ctx context.Context, remote storage.RemoteName, branch string) (reconcilePlan, error) {
 	var plan reconcilePlan
 	fresh, err := s.freshnessOverEveryWrite(ctx, remote, branch)
 	if err != nil {
@@ -368,7 +368,7 @@ func (s *Store) captureReconcilePlan(ctx context.Context, remote, branch string)
 
 // reconcileBase is the base of a divergence: the heads' merge base when they
 // share history, and otherwise what the fork point offers (forkPointBase).
-func (s *Store) reconcileBase(ctx context.Context, remote, branch, localHead, remoteHead string) (storage.ReconcileBase, error) {
+func (s *Store) reconcileBase(ctx context.Context, remote storage.RemoteName, branch, localHead, remoteHead string) (storage.ReconcileBase, error) {
 	merged, err := mergeBase(ctx, s.db, localHead, remoteHead)
 	if err != nil {
 		return storage.ReconcileBase{}, err
@@ -376,7 +376,7 @@ func (s *Store) reconcileBase(ctx context.Context, remote, branch, localHead, re
 	if commit, shared := merged.shared(); shared {
 		return storage.ReconcileBase{Source: storage.ReconcileBaseMergeBase, Commit: commit}, nil
 	}
-	return s.forkPointBase(ctx, remote, branch, localHead, remoteHead)
+	return s.forkPointBase(ctx, ownerOf(remote), branch, localHead, remoteHead)
 }
 
 // followThenReconcile is the public reconcile verbs' path: follow a re-root
@@ -384,18 +384,14 @@ func (s *Store) reconcileBase(ctx context.Context, remote, branch, localHead, re
 // this branch can follow never reaches the reconcile as unrelated histories.
 // SyncPull calls reconcile directly, inside the commit lock it took after
 // following.
-func (s *Store) followThenReconcile(ctx context.Context, remote string, branch string, settle settleFn, unrelated unrelatedHandling) (storage.SyncReconcileResult, error) {
+func (s *Store) followThenReconcile(ctx context.Context, remote storage.RemoteName, branch string, settle settleFn, unrelated unrelatedHandling) (storage.SyncReconcileResult, error) {
 	if _, err := s.followRemoteReRoot(ctx, remote, branch, storage.SyncEntryReconcile); err != nil {
 		return storage.SyncReconcileResult{}, err
 	}
 	return s.reconcile(ctx, remote, branch, settle, unrelated)
 }
 
-func (s *Store) reconcile(ctx context.Context, remote string, branch string, settle settleFn, unrelated unrelatedHandling) (storage.SyncReconcileResult, error) {
-	trimmedRemote, err := requireSyncArg("remote", remote)
-	if err != nil {
-		return storage.SyncReconcileResult{}, err
-	}
+func (s *Store) reconcile(ctx context.Context, remote storage.RemoteName, branch string, settle settleFn, unrelated unrelatedHandling) (storage.SyncReconcileResult, error) {
 	trimmedBranch, err := requireSyncArg("branch", branch)
 	if err != nil {
 		return storage.SyncReconcileResult{}, err
@@ -403,7 +399,7 @@ func (s *Store) reconcile(ctx context.Context, remote string, branch string, set
 
 	var result storage.SyncReconcileResult
 	err = s.withCommitLock(ctx, func(ctx context.Context) error {
-		plan, err := s.captureReconcilePlan(ctx, trimmedRemote, trimmedBranch)
+		plan, err := s.captureReconcilePlan(ctx, remote, trimmedBranch)
 		if err != nil {
 			return err
 		}
@@ -444,12 +440,12 @@ func (s *Store) reconcile(ctx context.Context, remote string, branch string, set
 			// two-way union; combineFromAnchors is the only difference from the shared path.
 			// [LAW:dataflow-not-control-flow] the handling value selects the export producer,
 			// not a duplicated engine.
-			return s.replayUnderGuard(ctx, trimmedRemote, trimmedBranch, plan.remoteHead, func(ctx context.Context, guard *snapshotGuard, scratch reconcileScratch) error {
+			return s.replayUnderGuard(ctx, remote, trimmedBranch, plan.remoteHead, func(ctx context.Context, guard *snapshotGuard, scratch reconcileScratch) error {
 				return s.combineFromAnchors(ctx, &result, settle, guard, plan.dataBranch, scratch, plan.localHead, plan.remoteHead)
 			})
 		}
 
-		return s.replayUnderGuard(ctx, trimmedRemote, trimmedBranch, plan.remoteHead, func(ctx context.Context, guard *snapshotGuard, scratch reconcileScratch) error {
+		return s.replayUnderGuard(ctx, remote, trimmedBranch, plan.remoteHead, func(ctx context.Context, guard *snapshotGuard, scratch reconcileScratch) error {
 			return s.reconcileFromAnchors(ctx, &result, settle, guard, plan.dataBranch, scratch, plan.localHead, plan.remoteHead, baseCommit)
 		})
 	})
@@ -469,7 +465,7 @@ func (s *Store) reconcile(ctx context.Context, remote string, branch string, set
 // [LAW:single-enforcer] the mutation envelope is written once; the body is the only variable.
 // [LAW:no-ambient-temporal-coupling] the schema-ahead read reuses the captured remoteHead, so
 // no concurrent fetch can shift the decision between guard and replay.
-func (s *Store) replayUnderGuard(ctx context.Context, remote, branch, remoteHead string, body func(ctx context.Context, guard *snapshotGuard, scratchBranch reconcileScratch) error) error {
+func (s *Store) replayUnderGuard(ctx context.Context, remote storage.RemoteName, branch string, remoteHead string, body func(ctx context.Context, guard *snapshotGuard, scratchBranch reconcileScratch) error) error {
 	if err := s.guardCommitSchemaAhead(ctx, remote, branch, remoteHead); err != nil {
 		return err
 	}

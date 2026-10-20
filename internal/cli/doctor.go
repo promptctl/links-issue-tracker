@@ -146,11 +146,11 @@ func resolveDoctorSyncFreshness(ctx context.Context, ws workspace.Info, st stora
 	// branch is knownSyncBranch's, not resolveSyncBranch's, because this report
 	// is read by doctor and by every read command's banner, and neither waits
 	// on the network.
-	remoteName, branch, err := freshnessSyncTarget(ctx, ws, gitRemotes)
+	remoteName, branch, ok, err := freshnessSyncTarget(ctx, ws, gitRemotes)
 	if err != nil {
 		return doctorSyncReport{Kind: doctorSyncUnresolved, Detail: err.Error()}
 	}
-	if remoteName == "" {
+	if !ok {
 		return doctorSyncReport{Kind: doctorSyncNoRemote}
 	}
 	freshness, err := syncer.SyncFreshness(ctx, remoteName, branch)

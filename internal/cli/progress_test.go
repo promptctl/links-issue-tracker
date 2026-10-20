@@ -40,6 +40,7 @@ func TestRemoteSituationLine(t *testing.T) {
 	}{
 		{state: initSyncHasLocalTickets},
 		{state: initSyncNotConfigured},
+		{state: initSyncRemoteRefused},
 		{state: initSyncRemoteEmpty},
 		{state: initSyncNoRemoteData},
 		{state: initSyncAdopted, wantEmpty: true},

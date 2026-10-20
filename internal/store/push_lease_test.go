@@ -52,7 +52,7 @@ func TestLeasedPushLandsOnlyOverTheHeadItNames(t *testing.T) {
 		var pushed storage.LeaseOutcome
 		err := st.runSyncMutation(ctx, func(ctx context.Context) error {
 			var err error
-			pushed, err = st.pushLeasedWithinLock(ctx, "origin", "master", "master", expected)
+			pushed, err = st.pushLeasedWithinLock(ctx, remoteName(t, "origin"), "master", "master", expected)
 			return err
 		})
 		if err != nil {
@@ -62,7 +62,7 @@ func TestLeasedPushLandsOnlyOverTheHeadItNames(t *testing.T) {
 	}
 	remoteHead := func() string {
 		t.Helper()
-		if err := st.SyncFetch(ctx, "origin", false); err != nil {
+		if err := st.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
 			t.Fatalf("SyncFetch(alpha) error = %v", err)
 		}
 		head, err := commitHashOfRef(ctx, st.db, "remotes/origin/master")
@@ -95,7 +95,7 @@ func TestLeasedPushLandsOnlyOverTheHeadItNames(t *testing.T) {
 	// not the transport giving out. A file remote is created wherever it can
 	// be, so this one's directory becomes a regular file.
 	gone := filepath.Join(t.TempDir(), "remote")
-	if err := st.SyncAddRemote(ctx, "gone", "file://"+gone); err != nil {
+	if err := st.SyncAddRemote(ctx, remoteName(t, "gone"), "file://"+gone); err != nil {
 		t.Fatalf("SyncAddRemote(gone) error = %v", err)
 	}
 	if err := os.RemoveAll(gone); err != nil {
@@ -105,7 +105,7 @@ func TestLeasedPushLandsOnlyOverTheHeadItNames(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = st.runSyncMutation(ctx, func(ctx context.Context) error {
-		unreached, err := st.pushLeasedWithinLock(ctx, "gone", "master", "master", bravoHead)
+		unreached, err := st.pushLeasedWithinLock(ctx, remoteName(t, "gone"), "master", "master", bravoHead)
 		if err == nil || errors.As(err, new(pushRefusedError)) || errors.As(err, new(RemoteUnreachableError)) || !strings.Contains(err.Error(), actions.ErrFailedToGetRemoteDb.Error()) {
 			t.Errorf("leased push to a remote that cannot be opened = %q, %v; want Dolt's %q, neither a refusal nor unreachable", unreached, err, actions.ErrFailedToGetRemoteDb)
 		}
@@ -147,7 +147,7 @@ func TestLeasedPushRefusesToReplaceASchemaAheadHead(t *testing.T) {
 		t.Fatal(err)
 	}
 	pusher := openSyncOrFatal(t, ctx, bravo)
-	if _, err := pusher.SyncPush(ctx, "origin", "master", false, false); err != nil {
+	if _, err := pusher.SyncPush(ctx, remoteName(t, "origin"), "master", false, false); err != nil {
 		t.Fatalf("SyncPush(bravo) error = %v", err)
 	}
 	if err := pusher.Close(); err != nil {
@@ -159,20 +159,20 @@ func TestLeasedPushRefusesToReplaceASchemaAheadHead(t *testing.T) {
 	// head is in alpha's store while remotes/origin/master still lags.
 	st := openSyncOrFatal(t, ctx, alpha)
 	defer func() { _ = st.Close() }()
-	if err := st.SyncAddRemote(ctx, "mirror", remoteURL); err != nil {
+	if err := st.SyncAddRemote(ctx, remoteName(t, "mirror"), remoteURL); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.SyncFetch(ctx, "mirror", false); err != nil {
+	if err := st.SyncFetch(ctx, remoteName(t, "mirror"), false); err != nil {
 		t.Fatal(err)
 	}
 	err = st.runSyncMutation(ctx, func(ctx context.Context) error {
-		_, err := st.pushLeasedWithinLock(ctx, "origin", "master", "master", ahead)
+		_, err := st.pushLeasedWithinLock(ctx, remoteName(t, "origin"), "master", "master", ahead)
 		return err
 	})
 	if !errors.As(err, new(*RemoteSchemaAheadError)) {
 		t.Fatalf("leased push over a schema-ahead head = %v, want *RemoteSchemaAheadError", err)
 	}
-	if err := st.SyncFetch(ctx, "origin", false); err != nil {
+	if err := st.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := commitHashOfRef(ctx, st.db, "remotes/origin/master"); err != nil || got != ahead {

@@ -2,14 +2,17 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/merge"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -51,7 +54,7 @@ func TestPrintSyncPullOutcomeNeverSyncedDirectsUpstreamSetup(t *testing.T) {
 	// A branch the remote has never seen is the typed never_synced state, not a
 	// parsed backend error string — the printer directs the caller to set the
 	// upstream with a deterministic command derived from the resolved remote.
-	outcome := syncPullOutcome{remote: "origin", branch: "feature/local-only", state: storage.SyncPullNeverSynced}
+	outcome := syncPullOutcome{remote: remoteName(t, "origin"), branch: "feature/local-only", state: storage.SyncPullNeverSynced}
 	var out bytes.Buffer
 	if err := printSyncPullOutcome(&out, outcome, true); err != nil {
 		t.Fatalf("printSyncPullOutcome() error = %v", err)
@@ -76,7 +79,7 @@ func TestPrintSyncPullOutcomeNeverSyncedDirectsUpstreamSetup(t *testing.T) {
 func TestSyncFailureFromPullHoldsProseConflict(t *testing.T) {
 	t.Parallel()
 	now := time.Unix(1_700_000_000, 0)
-	failure, held := syncFailureFromPull("origin", "master", storage.SyncPullResult{
+	failure, held := syncFailureFromPull(remoteName(t, "origin"), "master", storage.SyncPullResult{
 		State:              storage.SyncPullProsePending,
 		Ahead:              2,
 		Behind:             3,
@@ -104,7 +107,7 @@ func TestSyncFailureFromPullHoldsProseConflict(t *testing.T) {
 		storage.SyncPullUpToDate, storage.SyncPullFastForwarded, storage.SyncPullLinearized,
 		storage.SyncPullAhead, storage.SyncPullNeverSynced,
 	} {
-		if _, held := syncFailureFromPull("origin", "master", storage.SyncPullResult{State: state}, now); held {
+		if _, held := syncFailureFromPull(remoteName(t, "origin"), "master", storage.SyncPullResult{State: state}, now); held {
 			t.Fatalf("state %q wrongly classified as a held conflict", state)
 		}
 	}
@@ -112,7 +115,7 @@ func TestSyncFailureFromPullHoldsProseConflict(t *testing.T) {
 
 func TestPrintSyncPullOutcomeNeverSyncedWithoutVerboseOmitsRemoteDetails(t *testing.T) {
 	t.Parallel()
-	outcome := syncPullOutcome{remote: "origin", branch: "feature/local-only", state: storage.SyncPullNeverSynced}
+	outcome := syncPullOutcome{remote: remoteName(t, "origin"), branch: "feature/local-only", state: storage.SyncPullNeverSynced}
 	var out bytes.Buffer
 	if err := printSyncPullOutcome(&out, outcome, false); err != nil {
 		t.Fatalf("printSyncPullOutcome() error = %v", err)
@@ -131,7 +134,7 @@ func TestPrintSyncPullOutcomeVerboseOKShowsState(t *testing.T) {
 	for _, state := range []storage.SyncPullState{
 		storage.SyncPullUpToDate, storage.SyncPullFastForwarded, storage.SyncPullLinearized, storage.SyncPullAhead,
 	} {
-		outcome := syncPullOutcome{remote: "origin", branch: "master", state: state}
+		outcome := syncPullOutcome{remote: remoteName(t, "origin"), branch: "master", state: state}
 		var out bytes.Buffer
 		if err := printSyncPullOutcome(&out, outcome, true); err != nil {
 			t.Fatalf("printSyncPullOutcome(%q) error = %v", state, err)
@@ -148,7 +151,7 @@ func TestPrintSyncPullOutcomeVerboseOKShowsState(t *testing.T) {
 
 func TestPrintSyncPullOutcomeUnknownStateAlwaysSurfaces(t *testing.T) {
 	t.Parallel()
-	outcome := syncPullOutcome{remote: "origin", branch: "master", state: storage.SyncPullState("weird_new_state")}
+	outcome := syncPullOutcome{remote: remoteName(t, "origin"), branch: "master", state: storage.SyncPullState("weird_new_state")}
 	// Must surface even in non-verbose mode — a bug must never hide behind "pulled".
 	var out bytes.Buffer
 	if err := printSyncPullOutcome(&out, outcome, false); err != nil {
@@ -170,7 +173,7 @@ func TestPrintSyncPullOutcomeUnknownStateAlwaysSurfaces(t *testing.T) {
 // must surface loudly.
 func TestPrintSyncPullOutcomeSurfacesUnknownStateAsBug(t *testing.T) {
 	t.Parallel()
-	outcome := syncPullOutcome{remote: "origin", branch: "master", state: storage.SyncPullState("prose_pending")}
+	outcome := syncPullOutcome{remote: remoteName(t, "origin"), branch: "master", state: storage.SyncPullState("prose_pending")}
 	var out bytes.Buffer
 	if err := printSyncPullOutcome(&out, outcome, false); err != nil {
 		t.Fatalf("printSyncPullOutcome() error = %v", err)
@@ -230,7 +233,7 @@ func TestPrintSyncPushOutcomeNoRemoteSkippedVerboseText(t *testing.T) {
 
 func TestPrintSyncPushOutcomeRemoteEmptyAlwaysEmitsFirstPushMessage(t *testing.T) {
 	t.Parallel()
-	outcome := syncPushOutcome{skip: syncTargetRemoteEmpty, remote: "origin"}
+	outcome := syncPushOutcome{skip: syncTargetRemoteEmpty, remote: remoteName(t, "origin")}
 	var out bytes.Buffer
 	if err := printSyncPushOutcome(&out, outcome, false); err != nil {
 		t.Fatalf("printSyncPushOutcome() error = %v", err)
@@ -249,7 +252,7 @@ func TestPrintSyncPushOutcomeRemoteEmptyAlwaysEmitsFirstPushMessage(t *testing.T
 
 func TestPrintSyncPullOutcomeRemoteEmptyAlwaysEmitsFirstPushMessage(t *testing.T) {
 	t.Parallel()
-	outcome := syncPullOutcome{skip: syncTargetRemoteEmpty, remote: "origin"}
+	outcome := syncPullOutcome{skip: syncTargetRemoteEmpty, remote: remoteName(t, "origin")}
 	var out bytes.Buffer
 	if err := printSyncPullOutcome(&out, outcome, false); err != nil {
 		t.Fatalf("printSyncPullOutcome() error = %v", err)
@@ -265,7 +268,7 @@ func TestPrintSyncPullOutcomeRemoteEmptyAlwaysEmitsFirstPushMessage(t *testing.T
 
 func TestPrintSyncPullOutcomeDefaultSuccessTextHidesRemoteDetails(t *testing.T) {
 	t.Parallel()
-	outcome := syncPullOutcome{remote: "origin", branch: "master", state: storage.SyncPullFastForwarded}
+	outcome := syncPullOutcome{remote: remoteName(t, "origin"), branch: "master", state: storage.SyncPullFastForwarded}
 	var out bytes.Buffer
 	if err := printSyncPullOutcome(&out, outcome, false); err != nil {
 		t.Fatalf("printSyncPullOutcome() error = %v", err)
@@ -277,7 +280,7 @@ func TestPrintSyncPullOutcomeDefaultSuccessTextHidesRemoteDetails(t *testing.T) 
 
 func TestPrintSyncPushOutcomeDefaultSuccessTextHidesRemoteDetails(t *testing.T) {
 	t.Parallel()
-	outcome := syncPushOutcome{remote: "origin", branch: "master", message: "Pushing to origin"}
+	outcome := syncPushOutcome{remote: remoteName(t, "origin"), branch: "master", message: "Pushing to origin"}
 	var out bytes.Buffer
 	if err := printSyncPushOutcome(&out, outcome, false); err != nil {
 		t.Fatalf("printSyncPushOutcome() error = %v", err)
@@ -287,44 +290,71 @@ func TestPrintSyncPushOutcomeDefaultSuccessTextHidesRemoteDetails(t *testing.T) 
 	}
 }
 
-func TestBuildRemoteSyncChanges(t *testing.T) {
+func TestPlanRemoteSync(t *testing.T) {
 	t.Parallel()
 	gitRemotes := []workspace.GitRemote{
 		{Name: "origin", URL: "https://example.com/new-origin.git"},
 		{Name: "upstream", URL: "https://example.com/upstream.git"},
+		{Name: "a/b", URL: "https://example.com/a-b.git"},
+		{Name: "old.fork", URL: "https://example.com/old-fork.git"},
 	}
 	doltRemotes := []storage.SyncRemote{
 		{Name: "origin", URL: "https://example.com/old-origin.git"},
 		{Name: "fork", URL: "https://example.com/fork.git"},
 	}
 
-	got := buildRemoteSyncChanges(gitRemotes, doltRemotes)
-	want := remoteSyncChanges{
-		Added:   []string{"upstream"},
-		Updated: []string{"origin"},
-		Removed: []string{"fork"},
+	got := planRemoteSync(gitRemotes, doltRemotes)
+	want := remoteSyncPlan{
+		add:     []plannedRemote{{name: remoteName(t, "upstream"), url: "git+https://example.com/upstream.git"}},
+		update:  []plannedRemote{{name: remoteName(t, "origin"), url: "git+https://example.com/new-origin.git"}},
+		remove:  []string{"fork"},
+		refused: []string{"a/b", "old.fork"},
 	}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("buildRemoteSyncChanges() = %#v, want %#v", got, want)
+		t.Fatalf("planRemoteSync() = %#v, want %#v", got, want)
+	}
+}
+
+// A chosen remote Dolt cannot hold is refused however it was chosen, never
+// passed over for another remote.
+func TestResolveSyncRemoteRefusesARemoteDoltCannotHold(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name                string
+		requested, upstream string
+		remotes             []string
+	}{
+		{name: "requested", requested: "a/b", upstream: "origin", remotes: []string{"origin", "a/b"}},
+		{name: "upstream", upstream: "a/b", remotes: []string{"origin", "a/b"}},
+		{name: "single", remotes: []string{"a/b"}},
+	} {
+		remotes := make([]workspace.GitRemote, 0, len(tc.remotes))
+		for _, name := range tc.remotes {
+			remotes = append(remotes, workspace.GitRemote{Name: name})
+		}
+		got, ok, err := resolveSyncRemote(tc.requested, tc.upstream, remotes)
+		if err == nil || !strings.Contains(err.Error(), `remote "a/b" has "/" in its name`) {
+			t.Errorf("%s: resolveSyncRemote() = %q, %t, %v; want the refusal naming a/b", tc.name, got, ok, err)
+		}
 	}
 }
 
 func TestResolveSyncRemoteUsesRequestedRemoteFirst(t *testing.T) {
 	t.Parallel()
 	remotes := []workspace.GitRemote{{Name: "origin"}, {Name: "upstream"}}
-	got, err := resolveSyncRemote("origin", "upstream", remotes)
+	got, ok, err := resolveSyncRemote("origin", "upstream", remotes)
 	if err != nil {
 		t.Fatalf("resolveSyncRemote() error = %v", err)
 	}
-	if got != "origin" {
-		t.Fatalf("resolveSyncRemote() = %q, want origin", got)
+	if !ok || got != remoteName(t, "origin") {
+		t.Fatalf("resolveSyncRemote() = %q, %t, want origin", got, ok)
 	}
 }
 
 func TestResolveSyncRemoteErrorsWhenRequestedRemoteIsUnknown(t *testing.T) {
 	t.Parallel()
 	remotes := []workspace.GitRemote{{Name: "origin"}, {Name: "upstream"}}
-	_, err := resolveSyncRemote("fork", "upstream", remotes)
+	_, _, err := resolveSyncRemote("fork", "upstream", remotes)
 	if err == nil {
 		t.Fatal("resolveSyncRemote() error = nil, want error for unknown requested remote")
 	}
@@ -333,47 +363,47 @@ func TestResolveSyncRemoteErrorsWhenRequestedRemoteIsUnknown(t *testing.T) {
 func TestResolveSyncRemoteUsesUpstreamRemoteWhenPresent(t *testing.T) {
 	t.Parallel()
 	remotes := []workspace.GitRemote{{Name: "origin"}, {Name: "upstream"}}
-	got, err := resolveSyncRemote("", "upstream", remotes)
+	got, ok, err := resolveSyncRemote("", "upstream", remotes)
 	if err != nil {
 		t.Fatalf("resolveSyncRemote() error = %v", err)
 	}
-	if got != "upstream" {
-		t.Fatalf("resolveSyncRemote() = %q, want upstream", got)
+	if !ok || got != remoteName(t, "upstream") {
+		t.Fatalf("resolveSyncRemote() = %q, %t, want upstream", got, ok)
 	}
 }
 
 func TestResolveSyncRemoteUsesSingleRemoteFallback(t *testing.T) {
 	t.Parallel()
 	remotes := []workspace.GitRemote{{Name: "origin"}}
-	got, err := resolveSyncRemote("", "", remotes)
+	got, ok, err := resolveSyncRemote("", "", remotes)
 	if err != nil {
 		t.Fatalf("resolveSyncRemote() error = %v", err)
 	}
-	if got != "origin" {
-		t.Fatalf("resolveSyncRemote() = %q, want origin", got)
+	if !ok || got != remoteName(t, "origin") {
+		t.Fatalf("resolveSyncRemote() = %q, %t, want origin", got, ok)
 	}
 }
 
 func TestResolveSyncRemoteIgnoresUnknownUpstreamRemote(t *testing.T) {
 	t.Parallel()
 	remotes := []workspace.GitRemote{{Name: "origin"}, {Name: "upstream"}}
-	got, err := resolveSyncRemote("", "missing", remotes)
+	got, ok, err := resolveSyncRemote("", "missing", remotes)
 	if err != nil {
 		t.Fatalf("resolveSyncRemote() error = %v", err)
 	}
-	if got != "" {
-		t.Fatalf("resolveSyncRemote() = %q, want empty", got)
+	if ok {
+		t.Fatalf("resolveSyncRemote() = %q, want none", got)
 	}
 }
 
 func TestResolveSyncRemoteReturnsEmptyWhenNoEligibleRemote(t *testing.T) {
 	t.Parallel()
-	got, err := resolveSyncRemote("", "", nil)
+	got, ok, err := resolveSyncRemote("", "", nil)
 	if err != nil {
 		t.Fatalf("resolveSyncRemote() error = %v", err)
 	}
-	if got != "" {
-		t.Fatalf("resolveSyncRemote() = %q, want empty", got)
+	if ok {
+		t.Fatalf("resolveSyncRemote() = %q, want none", got)
 	}
 }
 
@@ -403,7 +433,7 @@ func TestPrintSyncPushOutcomeSurfacesMaintenanceInBothModes(t *testing.T) {
 		{verbose: true, wantPush: "Everything up-to-date."},
 	} {
 		outcome := syncPushOutcome{
-			remote:      "origin",
+			remote:      remoteName(t, "origin"),
 			branch:      "master",
 			message:     "Everything up-to-date.",
 			maintenance: failure,
@@ -430,7 +460,7 @@ func TestPrintSyncPushOutcomeSurfacesMaintenanceInBothModes(t *testing.T) {
 func TestPrintSyncPushOutcomeAddsNoLineWhenMaintenanceIsEmpty(t *testing.T) {
 	t.Parallel()
 	outcome := syncPushOutcome{
-		remote:  "origin",
+		remote:  remoteName(t, "origin"),
 		branch:  "master",
 		message: "Everything up-to-date.",
 	}
@@ -451,7 +481,7 @@ func TestSyncPushTraceMetadataCarriesTheMaintenanceReport(t *testing.T) {
 	t.Parallel()
 	const failure = "remote-cache prune: removed 1 abandoned mirror (2.0 KiB), then failed: remove abandoned mirror ab12: permission denied"
 
-	metadata := syncPushTraceMetadata("origin", "master", storage.SyncPushResult{
+	metadata := syncPushTraceMetadata(remoteName(t, "origin"), "master", storage.SyncPushResult{
 		Message:     "Everything up-to-date.",
 		Maintenance: failure,
 	}, nil)
@@ -475,18 +505,70 @@ func TestSyncPushTraceMetadataCarriesTheMaintenanceReport(t *testing.T) {
 // records for the key finds it exactly when there was something to report.
 func TestSyncPushTraceMetadataOmitsWhatDidNotHappen(t *testing.T) {
 	t.Parallel()
-	metadata := syncPushTraceMetadata("origin", "master", storage.SyncPushResult{
+	metadata := syncPushTraceMetadata(remoteName(t, "origin"), "master", storage.SyncPushResult{
 		Message: "Everything up-to-date.",
 	}, nil)
 	if _, present := metadata["maintenance"]; present {
 		t.Fatalf("metadata = %v, want no maintenance key when the prune found nothing", metadata)
 	}
 
-	failed := syncPushTraceMetadata("origin", "master", storage.SyncPushResult{}, errors.New("push rejected"))
+	failed := syncPushTraceMetadata(remoteName(t, "origin"), "master", storage.SyncPushResult{}, errors.New("push rejected"))
 	if failed["error"] != "push rejected" {
 		t.Fatalf("metadata[error] = %q, want the push failure recorded", failed["error"])
 	}
 	if _, present := failed["message"]; present {
 		t.Fatalf("metadata = %v, want no message key when the engine said nothing", failed)
+	}
+}
+
+// recordingSyncer is a Syncer whose remote list is held in memory and whose
+// remote verbs record the order they ran in. Any other method panics, so a
+// reconcile that reaches past the remotes fails the test.
+type recordingSyncer struct {
+	storage.Syncer
+	remotes []storage.SyncRemote
+	calls   []string
+}
+
+func (r *recordingSyncer) SyncListRemotes(context.Context) ([]storage.SyncRemote, error) {
+	return slices.Clone(r.remotes), nil
+}
+
+func (r *recordingSyncer) SyncAddRemote(_ context.Context, name storage.RemoteName, url string) error {
+	r.calls = append(r.calls, "add "+name.String())
+	r.remotes = append(r.remotes, storage.SyncRemote{Name: name.String(), URL: url})
+	return nil
+}
+
+func (r *recordingSyncer) SyncSetRemoteURL(_ context.Context, name storage.RemoteName, url string) error {
+	r.calls = append(r.calls, "update "+name.String())
+	return nil
+}
+
+func (r *recordingSyncer) SyncRemoveRemote(_ context.Context, name string) error {
+	r.calls = append(r.calls, "remove "+name)
+	r.remotes = slices.DeleteFunc(r.remotes, func(remote storage.SyncRemote) bool { return remote.Name == name })
+	return nil
+}
+
+// TestTheReconcileRemovesBeforeItAdds: git renamed team/origin, a name an
+// older lit cloned under, to team. The reconcile removes team/origin before it
+// adds team, so the removal finds no team and takes team/origin's refs with it.
+func TestTheReconcileRemovesBeforeItAdds(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-q")
+	runGit(t, dir, "remote", "add", "team", "https://example.com/team.git")
+	runGit(t, dir, "remote", "add", "fork", "https://example.com/fork-new.git")
+	syncer := &recordingSyncer{remotes: []storage.SyncRemote{
+		{Name: "team/origin", URL: "git+https://example.com/team.git"},
+		{Name: "fork", URL: "git+https://example.com/fork-old.git"},
+	}}
+	ctx := telemetry.With(context.Background(), telemetry.Begin(telemetry.Event{}))
+	if _, err := syncDoltRemotesFromGit(ctx, syncSession{syncer: syncer}, workspace.Info{RootDir: dir}); err != nil {
+		t.Fatalf("syncDoltRemotesFromGit() error = %v", err)
+	}
+	if want := []string{"remove team/origin", "update fork", "add team"}; !slices.Equal(syncer.calls, want) {
+		t.Fatalf("reconcile ran %v, want %v", syncer.calls, want)
 	}
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/dolthub/dolt/go/libraries/utils/filesys"
 	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/types"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // FetchedHeadRecord is what LandFetchedHead did to one of the live store's
@@ -103,7 +104,7 @@ type LandedFetch struct {
 // The mirror's objects land last: a failure there is returned wrapping
 // ErrRemoteCacheNotLanded with the result, because the chunks and ref it
 // follows are already written and stand.
-func LandFetchedHead(ctx context.Context, doltRootDir, cloneRootDir, remote, branch string) (landed LandedFetch, err error) {
+func LandFetchedHead(ctx context.Context, doltRootDir, cloneRootDir string, remote storage.RemoteName, branch string) (landed LandedFetch, err error) {
 	root, err := validateDoltRootDir(doltRootDir)
 	if err != nil {
 		return LandedFetch{}, err
@@ -112,15 +113,11 @@ func LandFetchedHead(ctx context.Context, doltRootDir, cloneRootDir, remote, bra
 	if err != nil {
 		return LandedFetch{}, err
 	}
-	trimmedRemote, err := requireSyncArg("remote", remote)
-	if err != nil {
-		return LandedFetch{}, err
-	}
 	trimmedBranch, err := requireSyncArg("branch", branch)
 	if err != nil {
 		return LandedFetch{}, err
 	}
-	trackingRef := ref.NewRemoteRef(trimmedRemote, trimmedBranch)
+	trackingRef := ref.NewRemoteRef(remote.String(), trimmedBranch)
 
 	// The clone is this caller's alone — nothing else opens it — so it is read
 	// before the live store is held, and stays open for the copy.
@@ -136,7 +133,7 @@ func LandFetchedHead(ctx context.Context, doltRootDir, cloneRootDir, remote, bra
 	if !found {
 		return LandedFetch{Record: FetchedHeadAbsent, ForkPoint: FetchedHeadAbsent}, nil
 	}
-	forkPointRef := ref.NewBranchRef(forkPointBranch(trimmedRemote, trimmedBranch))
+	forkPointRef := ref.NewBranchRef(forkPointBranch(ownerOf(remote), trimmedBranch))
 	forkPoint, forkPointFound, err := resolveRefHead(ctx, clone, forkPointRef)
 	if err != nil {
 		return LandedFetch{}, fmt.Errorf("read the clone's %s: %w", forkPointRef.String(), err)
@@ -151,7 +148,7 @@ func LandFetchedHead(ctx context.Context, doltRootDir, cloneRootDir, remote, bra
 	// instance republished on close, and the plan going stale there costs
 	// nothing: the copy sets the ref to the clone's value, the same
 	// last-writer-wins rule every close follows.
-	cachePlan, cacheErr := planRemoteCacheLanding(ctx, remoteCacheBaseAt(root), remoteCacheBaseAt(cloneRoot), trimmedRemote)
+	cachePlan, cacheErr := planRemoteCacheLanding(ctx, remoteCacheBaseAt(root), remoteCacheBaseAt(cloneRoot), remote)
 
 	releaseWorkspace, err := acquireLiveStoreHold(ctx, root)
 	if err != nil {
@@ -306,8 +303,8 @@ type mirrorCopy struct {
 // tell which of two states is later, since the blobstore severs its history
 // chain periodically. A ref both hold at the same value costs nothing under
 // the hold. A mirror that cannot be listed is reported and skipped.
-func planRemoteCacheLanding(ctx context.Context, liveBase, cloneBase, remote string) (remoteCacheLanding, error) {
-	fetched := lastKnownRefNamespace + remote + "/"
+func planRemoteCacheLanding(ctx context.Context, liveBase string, cloneBase string, remote storage.RemoteName) (remoteCacheLanding, error) {
+	fetched := lastKnownRefNamespace + remote.String() + "/"
 	keys, err := listRemoteCacheKeys(cloneBase)
 	if err != nil {
 		return remoteCacheLanding{}, err

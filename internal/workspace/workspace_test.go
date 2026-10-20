@@ -571,15 +571,28 @@ func TestRemoteHasDoltDataTrueWhenDoltRefPresent(t *testing.T) {
 	}
 }
 
-func TestUpstreamRemoteFromRef(t *testing.T) {
-	if got := upstreamRemoteFromRef("origin/master"); got != "origin" {
-		t.Fatalf("upstreamRemoteFromRef() = %q, want origin", got)
+// TestUpstreamRemoteIsTheWholeName: a branch tracking remote team/fork's
+// master tracks team/fork, not team.
+func TestUpstreamRemoteIsTheWholeName(t *testing.T) {
+	base := t.TempDir()
+	repo, remote := filepath.Join(base, "repo"), filepath.Join(base, "remote.git")
+	run(t, base, "git", "init", "--bare", remote)
+	run(t, base, "git", "init", repo)
+	run(t, repo, "git", "checkout", "-b", "master")
+	run(t, repo, "git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "init")
+	run(t, repo, "git", "remote", "add", "origin", remote)
+	run(t, repo, "git", "remote", "add", "team/fork", remote)
+	ctx := context.Background()
+	if got := UpstreamRemote(ctx, repo); got != "" {
+		t.Fatalf("UpstreamRemote() with no upstream = %q, want empty", got)
 	}
-	if got := upstreamRemoteFromRef("upstream/master"); got != "upstream" {
-		t.Fatalf("upstreamRemoteFromRef() = %q, want upstream", got)
+	run(t, repo, "git", "push", "--set-upstream", "team/fork", "master")
+	if got := UpstreamRemote(ctx, repo); got != "team/fork" {
+		t.Fatalf("UpstreamRemote() tracking team/fork/master = %q, want team/fork", got)
 	}
-	if got := upstreamRemoteFromRef("master"); got != "" {
-		t.Fatalf("upstreamRemoteFromRef() = %q, want empty", got)
+	run(t, repo, "git", "checkout", "--detach")
+	if got := UpstreamRemote(ctx, repo); got != "" {
+		t.Fatalf("UpstreamRemote() on a detached HEAD = %q, want empty", got)
 	}
 }
 

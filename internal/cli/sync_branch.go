@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/precedence"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -35,12 +36,11 @@ func localSyncBranch(ctx context.Context, rootDir string, remote string) string 
 // records the answer for knownSyncBranch.
 // [LAW:single-enforcer] Sync branch selection is centralized so pull/push/hooks
 // consume one canonical branch decision.
-func resolveSyncBranch(ctx context.Context, ws workspace.Info, remote string) (string, error) {
-	remote = strings.TrimSpace(remote)
-	if branch := localSyncBranch(ctx, ws.RootDir, remote); branch != "" {
+func resolveSyncBranch(ctx context.Context, ws workspace.Info, remote storage.RemoteName) (string, error) {
+	if branch := localSyncBranch(ctx, ws.RootDir, remote.String()); branch != "" {
 		return branch, nil
 	}
-	branch, err := workspace.AdvertisedRemoteHead(ctx, ws.RootDir, remote)
+	branch, err := workspace.AdvertisedRemoteHead(ctx, ws.RootDir, remote.String())
 	if err != nil {
 		return "", fmt.Errorf("resolve sync branch for remote %q: %w", remote, err)
 	}
@@ -64,10 +64,9 @@ func resolveSyncBranch(ctx context.Context, ws workspace.Info, remote string) (s
 // sync verb on this machine. An unknown branch is an error, never a guess; an
 // unreadable record is that error's cause, and matters only when nothing
 // ahead of the record answered.
-func knownSyncBranch(ctx context.Context, ws workspace.Info, remote string) (string, error) {
-	remote = strings.TrimSpace(remote)
+func knownSyncBranch(ctx context.Context, ws workspace.Info, remote storage.RemoteName) (string, error) {
 	recorded, readErr := os.ReadFile(advertisedSyncBranchPath(ws, remote))
-	branch := precedence.First(localSyncBranch(ctx, ws.RootDir, remote), strings.TrimSpace(string(recorded)))
+	branch := precedence.First(localSyncBranch(ctx, ws.RootDir, remote.String()), strings.TrimSpace(string(recorded)))
 	if branch != "" {
 		return branch, nil
 	}
@@ -84,7 +83,7 @@ func knownSyncBranch(ctx context.Context, ws workspace.Info, remote string) (str
 // syncBranchNotKnownError is knownSyncBranch finding nothing on this machine
 // that names the remote's default branch. No freshness read can report on the
 // remote then, which is what a caller acting only for those reads keys on.
-type syncBranchNotKnownError struct{ remote string }
+type syncBranchNotKnownError struct{ remote storage.RemoteName }
 
 func (e syncBranchNotKnownError) Error() string {
 	return fmt.Sprintf(
@@ -95,21 +94,23 @@ func (e syncBranchNotKnownError) Error() string {
 
 // freshnessSyncTarget is the remote and branch the freshness reads report on
 // — doctor and every read command's banner — resolved as `lit sync` resolves
-// its remote, and with no network: the branch is knownSyncBranch's. An empty
-// remote is a workspace with no sync remote. [LAW:one-source-of-truth] the one
+// its remote, and with no network: the branch is knownSyncBranch's. ok false
+// is a workspace with no sync remote. [LAW:one-source-of-truth] the one
 // reading of what freshness is about.
-func freshnessSyncTarget(ctx context.Context, ws workspace.Info, gitRemotes []workspace.GitRemote) (remote string, branch string, err error) {
-	remote, err = resolveSyncRemote("", workspace.UpstreamRemote(ctx, ws.RootDir), gitRemotes)
-	if err != nil || remote == "" {
-		return remote, "", err
+func freshnessSyncTarget(ctx context.Context, ws workspace.Info, gitRemotes []workspace.GitRemote) (remote storage.RemoteName, branch string, ok bool, err error) {
+	remote, ok, err = resolveSyncRemote("", workspace.UpstreamRemote(ctx, ws.RootDir), gitRemotes)
+	if err != nil || !ok {
+		return remote, "", ok, err
 	}
 	branch, err = knownSyncBranch(ctx, ws, remote)
-	return remote, branch, err
+	return remote, branch, true, err
 }
 
 // advertisedSyncBranchPath is where resolveSyncBranch records the branch a
-// remote advertised, one file per remote. The name is path-escaped because a
-// git remote name may contain '/'.
-func advertisedSyncBranchPath(ws workspace.Info, remote string) string {
-	return filepath.Join(ws.StorageDir, "sync-branch."+url.PathEscape(remote))
+// remote advertised, one file per remote: a RemoteName holds no "/", so the
+// record is a file directly in StorageDir. The name is still path-escaped
+// because a RemoteName admits characters the escape rewrites (";" among
+// them), and every earlier lit wrote the record under the escaped name.
+func advertisedSyncBranchPath(ws workspace.Info, remote storage.RemoteName) string {
+	return filepath.Join(ws.StorageDir, "sync-branch."+url.PathEscape(remote.String()))
 }
