@@ -714,9 +714,9 @@ func TestAnEventOfNoBaseTicketIsNotCounted(t *testing.T) {
 // receive's shape: a clone of delta fetches the re-rooted remote, and the
 // landing records delta's fork point on delta ahead of the tracking ref, by
 // the fetch's rule. The first landing records it at the head delta adopted,
-// which delta's branch shares history with; the second finds the tracking ref on the re-rooted history, which
-// delta's branch shares nothing with, and keeps it. Delta's own settle and
-// reconcile then merge against it.
+// which delta's branch shares history with; the second finds the tracking
+// ref on the re-rooted history, which delta's branch shares nothing with,
+// and keeps it. Delta's own settle and reconcile then merge against it.
 func TestTheReceiveRecordsTheForkPointOnTheLiveStore(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

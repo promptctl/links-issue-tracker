@@ -265,8 +265,11 @@ func landRef(ctx context.Context, ddb *doltdb.DoltDB, r ref.DoltRef, fetched has
 // the one the landing moves, never rebuilt here.
 func recordLiveForkPoint(ctx context.Context, ddb *doltdb.DoltDB, root string, owner refOwner, trackingRef ref.RemoteRef) ([]storage.ForkPointRecord, error) {
 	head, found, err := resolveRefHead(ctx, ddb, trackingRef)
-	if err != nil || !found {
-		return nil, err
+	if err != nil {
+		return nil, fmt.Errorf("read the live %s: %w", trackingRef.String(), err)
+	}
+	if !found {
+		return nil, nil
 	}
 	local, err := localBranchAt(root)
 	if err != nil {
