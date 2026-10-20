@@ -6,8 +6,9 @@
 // bypasses them, and Windows enforces only part of them (a file's read-only
 // bit, and a directory's against its own removal). So each fault is measured
 // once it is set, and a test runs where it holds and is skipped, saying why,
-// where it does not — never run against a fault that silently did nothing. Windows keeps a single read-only bit where
-// POSIX keeps nine, so a mode a test asserts is the one the platform stores.
+// where it does not — never run against a fault that silently did nothing.
+// Windows keeps a single read-only bit where POSIX keeps nine, so a mode a
+// test asserts is the one the platform stores.
 // [LAW:single-enforcer] This is the one place a test learns either.
 package fsperm
 
@@ -19,53 +20,81 @@ import (
 	"testing"
 )
 
-// DenyWrite takes write permission off dir, so nothing can be created in it,
-// renamed into or out of it, or removed from it, and restores dir's mode when
+// An Op is an operation on a directory that Deny makes it refuse.
+type Op int
+
+const (
+	// Write changes the directory's entries: creating one, renaming one into
+	// or out of it, or removing one from it.
+	Write Op = iota
+	// Removal removes the directory with what it holds.
+	Removal
+	// Read lists the directory's entries.
+	Read
+)
+
+func (op Op) String() string {
+	return [...]string{Write: "a new entry", Removal: "its removal", Read: "a listing"}[op]
+}
+
+// Deny takes permission off dir so it refuses op, and restores dir's mode when
 // the test ends. restore puts the mode back sooner, for a test that goes on to
 // show what happens once the fault is gone; calling it twice is harmless.
-func DenyWrite(t testing.TB, dir string) (restore func()) {
+// [LAW:one-type-per-behavior] Every fault is a mode change on dir; the caller
+// names the operation its code under test meets, because that operation is
+// what the platforms enforce apart and so what the measurement attempts.
+func Deny(t testing.TB, dir string, op Op) (restore func()) {
 	t.Helper()
-	restore = set(t, dir, 0o555)
-	probe, err := os.CreateTemp(dir, "fsperm-probe-*")
+	restore, err := op.inject(t, dir)
 	if err == nil {
-		name := probe.Name()
-		closeErr := probe.Close()
-		if err := errors.Join(closeErr, os.Remove(name)); err != nil {
-			t.Fatalf("remove the write probe %s: %v", name, err)
-		}
 		restore()
-		t.Skipf("%s took a new file with its write permission off: this process bypasses directory permissions (root does, and Windows does not enforce them), so the fault cannot be injected", dir)
+		t.Skipf("%s did not refuse %s with its permission off: this process bypasses directory permissions (root does, and Windows enforces a directory's read-only mode only against its removal), so the fault cannot be injected", dir, op)
 	}
 	if !errors.Is(err, fs.ErrPermission) {
-		t.Fatalf("probe %s for the write fault: %v; want a permission error", dir, err)
+		t.Fatalf("probe %s for refusing %s: %v; want a permission error", dir, op, err)
 	}
 	return restore
 }
 
-// DenyRemoval takes write permission off dir so it cannot be removed with
-// what it holds, and restores dir's mode when the test ends, as DenyWrite does.
-// It is a fault apart from DenyWrite because the platforms keep it apart:
-// Windows lets a new file into a directory marked read-only, but will not
-// remove the directory. It is measured on a twin directory holding one file,
-// since removing dir itself would take its contents.
-func DenyRemoval(t testing.TB, dir string) (restore func()) {
+// inject sets op's mode on dir and attempts op where the attempt cannot harm
+// dir, returning what it met.
+func (op Op) inject(t testing.TB, dir string) (restore func(), attempt error) {
 	t.Helper()
-	twin := filepath.Join(t.TempDir(), "fsperm-removal-probe")
-	if err := os.Mkdir(twin, 0o755); err != nil {
-		t.Fatal(err)
+	switch op {
+	case Write:
+		restore = set(t, dir, 0o555)
+		probe, err := os.CreateTemp(dir, "fsperm-probe-*")
+		if err == nil {
+			name := probe.Name()
+			if err := errors.Join(probe.Close(), os.Remove(name)); err != nil {
+				t.Fatalf("remove the write probe %s: %v", name, err)
+			}
+		}
+		return restore, err
+	case Removal:
+		// On POSIX a directory's own mode guards only its entries; an empty
+		// one is removed on its parent's permission.
+		if entries, err := os.ReadDir(dir); err != nil || len(entries) == 0 {
+			t.Fatalf("%s must hold an entry to refuse its removal on every platform: entries %v, %v", dir, entries, err)
+		}
+		// Removing dir itself would take its contents, so the attempt is on
+		// a twin holding one file.
+		twin := filepath.Join(t.TempDir(), "fsperm-removal-probe")
+		if err := os.Mkdir(twin, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(twin, "entry"), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		set(t, twin, 0o555)
+		return set(t, dir, 0o555), os.RemoveAll(twin)
+	case Read:
+		restore = set(t, dir, 0o000)
+		_, err := os.ReadDir(dir)
+		return restore, err
 	}
-	if err := os.WriteFile(filepath.Join(twin, "entry"), nil, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	set(t, twin, 0o555)
-	removeErr := os.RemoveAll(twin)
-	if removeErr == nil {
-		t.Skipf("a directory with its write permission off was removed with what it held: this process bypasses directory permissions (root does), so %s cannot be made unremovable", dir)
-	}
-	if !errors.Is(removeErr, fs.ErrPermission) {
-		t.Fatalf("probe the removal fault: %v; want a permission error", removeErr)
-	}
-	return set(t, dir, 0o555)
+	t.Fatalf("fsperm has no fault for %d", int(op))
+	return nil, nil
 }
 
 // RequireReadOnly skips the test unless file, whose write permission the

@@ -53,7 +53,7 @@ func TestAPushTheRemotesStorageFailsIsNotARefusal(t *testing.T) {
 // ends: nothing can be created in root, and no file in the tree written.
 func makeTreeReadOnly(t *testing.T, root string) {
 	t.Helper()
-	fsperm.DenyWrite(t, root)
+	fsperm.Deny(t, root, fsperm.Write)
 	if err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err

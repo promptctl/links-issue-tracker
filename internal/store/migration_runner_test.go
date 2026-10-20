@@ -502,7 +502,7 @@ func TestRefusalReportsUnreadableSnapshots(t *testing.T) {
 	if err := os.MkdirAll(snapshotsDir, 0o755); err != nil {
 		t.Fatalf("create snapshots dir: %v", err)
 	}
-	fsperm.DenyRead(t, snapshotsDir)
+	fsperm.Deny(t, snapshotsDir, fsperm.Read)
 
 	_, err := Open(ctx, doltRoot, "test-workspace-id")
 	var refusal *UnsupportedSchemaVersionError

@@ -160,7 +160,7 @@ func workspaceWhosePruneWillFail(t *testing.T) (repo string, ws workspace.Info, 
 			t.Fatalf("plant snapshot file: %v", err)
 		}
 	}
-	fsperm.DenyWrite(t, stuck)
+	fsperm.Deny(t, stuck, fsperm.Removal)
 	return repo, ws, stuck
 }
 

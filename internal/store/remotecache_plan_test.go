@@ -90,7 +90,7 @@ func TestCollectAbandonedMirrorReportsAFailureNamingTheKey(t *testing.T) {
 	}
 	// Unlinking the key directory needs write on its parent, so a read-only base
 	// fails the removal while leaving the walk that measures it working.
-	fsperm.DenyWrite(t, base)
+	fsperm.Deny(t, base, fsperm.Write)
 
 	_, collected, err := collectAbandonedMirror(base, orphanKey)
 	if err == nil {
@@ -211,7 +211,7 @@ func TestCollectAbandonedMirrorKeepsCollectingPastAStuckFile(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(stuck, "pack"), make([]byte, 1024), 0o644); err != nil {
 		t.Fatalf("plant stuck payload: %v", err)
 	}
-	fsperm.DenyWrite(t, stuck)
+	fsperm.Deny(t, stuck, fsperm.Write)
 
 	reclaimed, collected, err := collectAbandonedMirror(base, orphanKey)
 	if err == nil || collected {

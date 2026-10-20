@@ -2,15 +2,18 @@ package fsperm
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 )
 
 func TestDenyWriteRefusesANewEntryUntilRestored(t *testing.T) {
 	dir := t.TempDir()
-	restore := DenyWrite(t, dir)
+	restore := Deny(t, dir, Write)
 	name := filepath.Join(dir, "entry")
 	if err := os.WriteFile(name, nil, 0o644); !errors.Is(err, fs.ErrPermission) {
 		t.Fatalf("write into a denied directory = %v; want a permission error", err)
@@ -27,7 +30,7 @@ func TestDenyReadRefusesAListingUntilRestored(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "entry"), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	restore := DenyRead(t, dir)
+	restore := Deny(t, dir, Read)
 	if _, err := os.ReadDir(dir); !errors.Is(err, fs.ErrPermission) {
 		t.Fatalf("list a denied directory = %v; want a permission error", err)
 	}
@@ -40,7 +43,7 @@ func TestDenyRemovalKeepsTheDirectoryUntilRestored(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dir, "sub"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	restore := DenyRemoval(t, dir)
+	restore := Deny(t, dir, Removal)
 	if err := os.RemoveAll(dir); !errors.Is(err, fs.ErrPermission) {
 		t.Fatalf("remove a denied directory = %v; want a permission error", err)
 	}
@@ -51,6 +54,36 @@ func TestDenyRemovalKeepsTheDirectoryUntilRestored(t *testing.T) {
 	if err := os.RemoveAll(dir); err != nil {
 		t.Fatalf("remove once restored = %v; want it gone", err)
 	}
+}
+
+// On POSIX an empty directory is removed on its parent's permission, whatever
+// its own mode, so its removal cannot be refused on every platform.
+func TestDenyRemovalFailsOnAnEmptyDirectory(t *testing.T) {
+	dir := t.TempDir()
+	rec := &fatalRecorder{TB: t}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		Deny(rec, dir, Removal)
+	}()
+	<-done
+	if !strings.Contains(rec.fatal, "must hold an entry") {
+		t.Fatalf("Deny(empty dir, Removal) fatal = %q; want it refused for holding nothing", rec.fatal)
+	}
+}
+
+// fatalRecorder records a Fatalf and ends the goroutine that called it, as
+// testing.T does, without failing the test it wraps.
+type fatalRecorder struct {
+	testing.TB
+	fatal string
+}
+
+func (r *fatalRecorder) Helper() {}
+
+func (r *fatalRecorder) Fatalf(format string, args ...any) {
+	r.fatal = fmt.Sprintf(format, args...)
+	runtime.Goexit()
 }
 
 func TestRequireReadOnlyRunsWhereAReadOnlyFileRefusesAWrite(t *testing.T) {

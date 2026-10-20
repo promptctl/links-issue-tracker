@@ -486,7 +486,7 @@ func TestAFailedWriteReportsWhatItHadDone(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	fsperm.DenyWrite(t, dir)
+	fsperm.Deny(t, dir, fsperm.Write)
 	out, err := Write(loc, Facts{Started{alpha, progress}}, at)
 	if err == nil {
 		t.Fatal("Write into a read-only directory succeeded; want an error")
@@ -511,7 +511,7 @@ func TestAFailedRewriteOfAnUnreadableFileIsNotReplaced(t *testing.T) {
 	if err := os.WriteFile(loc.File, []byte("{working_on"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	fsperm.DenyWrite(t, dir)
+	fsperm.Deny(t, dir, fsperm.Write)
 	out, err := Write(loc, Facts{Started{alpha, progress}}, at)
 	if err == nil {
 		t.Fatal("Write into a read-only directory succeeded; want an error")

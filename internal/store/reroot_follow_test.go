@@ -232,7 +232,7 @@ func TestAFollowCarriesAFailedCollection(t *testing.T) {
 	if err := os.Mkdir(unreadable, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	fsperm.DenyRead(t, unreadable)
+	fsperm.Deny(t, unreadable, fsperm.Read)
 
 	bravo := openSyncOrFatal(t, ctx, r.bravo)
 	defer func() { _ = bravo.Close() }()

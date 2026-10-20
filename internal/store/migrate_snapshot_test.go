@@ -282,7 +282,7 @@ func TestMigratingOpenReportsAFailedSnapshotPrune(t *testing.T) {
 			stuck = path
 		}
 	}
-	fsperm.DenyWrite(t, stuck)
+	fsperm.Deny(t, stuck, fsperm.Removal)
 	withGooseHistoryDropped(t, ctx, doltRoot)
 
 	st, err := Open(ctx, doltRoot, "test-workspace-id")

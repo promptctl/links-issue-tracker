@@ -422,7 +422,7 @@ func TestAFailedStatuslineWriteIsRecordedOnTheEvent(t *testing.T) {
 	if err := os.MkdirAll(litDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	fsperm.DenyWrite(t, litDir)
+	fsperm.Deny(t, litDir, fsperm.Write)
 	rec := telemetry.Begin(telemetry.Event{Event: "lit start"})
 	ctx := telemetry.With(context.Background(), rec)
 	ws := workspace.Info{RootDir: root, Location: workspace.Location{GitCommonDir: filepath.Join(root, "git")}}

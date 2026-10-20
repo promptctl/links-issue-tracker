@@ -188,7 +188,7 @@ func TestDiscardRetriesDirectoryRemoval(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = cand.Discard() })
 
-	restore := fsperm.DenyWrite(t, parent)
+	restore := fsperm.Deny(t, parent, fsperm.Write)
 
 	if err := cand.Discard(); err == nil {
 		t.Fatal("Discard succeeded despite an unwritable parent; expected a removal error")

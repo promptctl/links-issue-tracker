@@ -387,7 +387,7 @@ func TestDowngradeSnapshotFailureReportsTheVersionItRead(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir snapshots: %v", err)
 	}
-	fsperm.DenyWrite(t, dir)
+	fsperm.Deny(t, dir, fsperm.Write)
 
 	done, err := st.Downgrade(ctx, registryMax-1)
 	if err == nil {
@@ -427,7 +427,7 @@ func TestDowngradePruneFailureReportsTheCommittedReverse(t *testing.T) {
 			stuck = path
 		}
 	}
-	fsperm.DenyWrite(t, stuck)
+	fsperm.Deny(t, stuck, fsperm.Removal)
 
 	done, err := st.Downgrade(ctx, registryMax-1)
 	if err != nil {
