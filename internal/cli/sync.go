@@ -78,6 +78,7 @@ func openSyncSessionAt(ctx context.Context, databasePath, workspaceID string) (s
 	return syncSession{engine: st, syncer: syncer}, func() error {
 		reportEventValues(ctx, "reroot.follows", syncer.FollowedReRoots())
 		reportEventValues(ctx, "fork_point.records", syncer.ForkPointRecords())
+		reportEventValues(ctx, "remote.removals", syncer.RemoteRemovals())
 		reportEventValues(ctx, "reconcile.bases", syncer.ReconcileBases())
 		reportEventValues(ctx, "stranded_writes.commits", syncer.StrandedWritesCommits())
 		reportEventValues(ctx, "history_bound.records", syncer.HistoryBounds())
@@ -240,9 +241,9 @@ func syncFetchLeaf() syncLeaf {
 // freshness reads report on (freshnessSyncTarget), so none of them reports
 // that re-root as a divergence. The follow is for those reads alone, so it
 // targets what they read whichever remote was fetched, and contacts no
-// network: a workspace with no sync remote, or none whose default branch is
-// known here, has no freshness a re-root could misreport, and follows
-// nothing.
+// network: a workspace with no sync remote, one Dolt cannot hold, or none
+// whose default branch is known here, has no freshness a re-root could
+// misreport, and follows nothing.
 func fetchAndFollow(ctx context.Context, session syncSession, ws workspace.Info, gitRemotes []workspace.GitRemote, remote storage.RemoteName, prune bool) error {
 	if err := session.syncer.SyncFetch(ctx, remote, prune); err != nil {
 		return err
@@ -251,9 +252,11 @@ func fetchAndFollow(ctx context.Context, session syncSession, ws workspace.Info,
 		fmt.Fprintf(os.Stderr, "lit: fetch-success marker not written: %v\n", err)
 	}
 	syncRemote, branch, ok, err := freshnessSyncTarget(ctx, ws, gitRemotes)
-	// Only a branch nothing here names skips the follow; a record that would
-	// name it but cannot be read is not that error, and fails the fetch.
-	if notKnown := (syncBranchNotKnownError{}); errors.As(err, &notKnown) || (err == nil && !ok) {
+	// Only a branch nothing here names, or a remote lit cannot sync with,
+	// skips the follow; a record that would name the branch but cannot be
+	// read is not that error, and fails the fetch.
+	notKnown, refused := syncBranchNotKnownError{}, storage.RefusedRemoteNameError{}
+	if errors.As(err, &notKnown) || errors.As(err, &refused) || (err == nil && !ok) {
 		return nil
 	}
 	if err != nil {

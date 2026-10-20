@@ -160,20 +160,23 @@ func (s *Store) dropForkPoints(ctx context.Context, remote refOwner, keep map[st
 	return dropped, nil
 }
 
-// dropTrackingRefs deletes every tracking ref owner has. Each deletion
-// stands once made, so a retried run deletes only what is left.
-func (s *Store) dropTrackingRefs(ctx context.Context, owner refOwner) error {
+// dropTrackingRefs deletes every tracking ref owner has and returns how many
+// it deleted, a failure included. Each deletion stands once made, so a
+// retried run deletes only what is left.
+func (s *Store) dropTrackingRefs(ctx context.Context, owner refOwner) (int, error) {
 	tracked, err := refHeadsUnder(ctx, s.db, `SELECT name, hash FROM dolt_remote_branches`, trackingRefPrefix(owner))
 	if err != nil {
-		return err
+		return 0, err
 	}
+	dropped := 0
 	for _, branch := range slices.Sorted(maps.Keys(tracked)) {
 		path := owner.String() + "/" + branch
 		if err := execProcedureDiscard(ctx, s.db, "DOLT_BRANCH", "-D", "-r", path); err != nil {
-			return fmt.Errorf("drop tracking ref remotes/%s: %w", path, err)
+			return dropped, fmt.Errorf("drop tracking ref remotes/%s: %w", path, err)
 		}
+		dropped++
 	}
-	return nil
+	return dropped, nil
 }
 
 // refHeadsUnder runs query, which selects (name, hash) rows, and maps every

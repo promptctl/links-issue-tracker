@@ -496,7 +496,7 @@ They live beside the specs rather than in an engine because the schema is the co
 
 #### `Syncer` (`internal/storage/capabilities.go`)
 - `SyncAddRemote(ctx, name RemoteName, url string) error`
-- `SyncRemoveRemote(ctx, name string) error` — takes any name the engine holds, as `SyncListRemotes` lists it, not only a `RemoteName`: an older lit wrote names a `RemoteName` refuses, and removing them is how the reconcile clears them.
+- `SyncRemoveRemote(ctx, name string) error` — takes any name the engine holds, as `SyncListRemotes` lists it, not only a `RemoteName`: an older lit wrote names a `RemoteName` refuses, and removing them is how the reconcile clears them. A name the engine no longer holds is already removed.
 - `SyncSetRemoteURL(ctx, name RemoteName, url string) error` — re-points the remote; unlike a removal, it keeps the remote's fork points.
 - `SyncListRemotes(ctx) ([]SyncRemote, error)`
 - `SyncStatus(ctx) (SyncStatusReport, error)` — local side only: build, position, pending changes, peers; **contacts no network**
@@ -609,6 +609,7 @@ These types live in the contract, not in an engine, because a capability interfa
   - **`RemoteGCOutcome`** string: `moved` (the remote's sync branch was not at the re-rooted head, or a write landed before the GC's root write: nothing the remote names changed, every branch stays), `dropped` (the remote's root names the sync branch alone and its table set stays whole: a write landed before the GC replaced it, or the replacement failed), `replaced` (the remote's root names the sync branch alone and its manifest names exactly the collected table files, under a new GC generation).
 - Fork-point vocabulary (`internal/storage/fork_point.go`):
   - **`ForkPointRecord{Remote, Branch, Head string; Outcome ForkPointOutcome}`** — one tracking ref a fetch was about to move and what it did to that ref's fork point first: `recorded`, `unchanged`, `kept` (the local branch shares no history with `Head`) or `none` (nor was a fork point ever recorded); or a fork point deleted with its tracking ref, `dropped`. `EventValue()` is one value of the event's `fork_point.records` list.
+  - **`RemoteRemovalRecord{Remote, Owner string; Held, OwnerHeld bool; TrackingRefsDropped int}`** — one `SyncRemoveRemote` attempt: whether the engine held the name, whether it holds another remote named the owner (so none of the owner's refs went), and how many of the owner's tracking refs it deleted. `EventValue()` is one value of the event's `remote.removals` list (`remote_removal.remote`, `.owner`, `.held`, `.owner_held`, `.tracking_refs_dropped`).
   - **`ReconcileBase{Source ReconcileBaseSource; Commit, ForkPoint string; UnaccountedTickets, UnaccountedEvents int}`** — a reconcile's base and its source: `merge_base`, `fork_point`, or `none`. `ForkPoint` is the fork point read when the heads share no history; `UnaccountedTickets` counts the base tickets the remote head holds neither a row nor a purge record for, and `UnaccountedEvents` the base ticket events it lacks whose ticket no purge record names. `Found()` is the commit and whether there is one. `EventValue()` is one value of the event's `reconcile.bases` list.
 
 ---

@@ -12,31 +12,16 @@ import (
 // syncing with remote a a second git remote, a/b, whose name Dolt refuses. The
 // reconcile mirrors a and refuses a/b, so syncing with a goes on; the event
 // and the reports name the refusal, and naming a/b as the sync target fails
-// with the reason.
+// with the reason. A branch tracking a/b syncs with a/b, so its sync is
+// refused rather than taken to a, and a fetch naming a still lands.
 func TestAGitRemoteDoltCannotHoldIsRefusedAndStopsNoOtherSync(t *testing.T) {
 	isolateEvents(t)
-	base := t.TempDir()
-	runGit(t, base, "init", "--bare", "remote.git")
-	dir := filepath.Join(base, "solo")
-	runGit(t, base, "clone", filepath.Join(base, "remote.git"), "solo")
-	runGit(t, dir, "config", "user.email", "solo@example.com")
-	runGit(t, dir, "config", "user.name", "solo")
-	if err := os.WriteFile(filepath.Join(dir, "readme.md"), []byte("hi\n"), 0o644); err != nil {
-		t.Fatalf("write readme error = %v", err)
-	}
-	runGit(t, dir, "add", "-A")
-	runGit(t, dir, "commit", "-m", "seed")
-	runGit(t, dir, "push", "origin", "HEAD")
-	runGit(t, dir, "remote", "rename", "origin", "a")
-
-	t.Setenv(DisableAutoSyncEnvVar, "1")
-	runCLIInDir(t, dir, "init", "--skip-hooks", "--skip-agents")
-	runCLIInDir(t, dir, "sync", "push", "--set-upstream")
+	dir, remoteURL := soloCheckoutSyncingWithA(t)
 	if refused := lastEvent(t).Facts["remotes.refused"]; !reflect.DeepEqual(refused, []any{}) {
 		t.Fatalf("remotes.refused with a alone = %#v, want []", refused)
 	}
 
-	runGit(t, dir, "remote", "add", "a/b", filepath.Join(base, "remote.git"))
+	runGit(t, dir, "remote", "add", "a/b", remoteURL)
 	if out := runCLIInDir(t, dir, "sync", "fetch", "--verbose"); strings.TrimSpace(out) != "fetched a" {
 		t.Fatalf("`lit sync fetch --verbose` beside a/b = %q, want %q", out, "fetched a")
 	}
@@ -54,4 +39,63 @@ func TestAGitRemoteDoltCannotHoldIsRefusedAndStopsNoOtherSync(t *testing.T) {
 	if !strings.Contains(err.Error(), `remote "a/b" has "/" in its name`) {
 		t.Fatalf("`lit sync fetch --remote a/b` error = %v, want the refusal naming a/b", err)
 	}
+
+	runGit(t, dir, "push", "--set-upstream", "a/b", "HEAD")
+	if out, err := runCLIInDirAllowError(t, dir, "sync", "fetch", "--verbose"); err == nil || !strings.Contains(err.Error(), `remote "a/b" has "/" in its name`) {
+		t.Fatalf("`lit sync fetch` tracking a/b = %q, %v; want the refusal naming a/b", out, err)
+	}
+	if out := runCLIInDir(t, dir, "sync", "fetch", "--remote", "a", "--verbose"); strings.TrimSpace(out) != "fetched a" {
+		t.Fatalf("`lit sync fetch --remote a` tracking a/b = %q, want %q", out, "fetched a")
+	}
+}
+
+// TestRemovingAGitRemoteRecordsItsRemoval: a remote git no longer names
+// leaves Dolt at the next sync, and that sync's event records the removal
+// and the tracking refs that went with it.
+func TestRemovingAGitRemoteRecordsItsRemoval(t *testing.T) {
+	isolateEvents(t)
+	dir, remoteURL := soloCheckoutSyncingWithA(t)
+	runGit(t, dir, "remote", "add", "c", remoteURL)
+	runCLIInDir(t, dir, "sync", "fetch", "--remote", "c")
+	if removals, ok := lastEvent(t).Occurrences["remote.removals"]; !ok || len(removals) != 0 {
+		t.Fatalf("remote.removals with nothing to remove = %#v, want []", removals)
+	}
+
+	runGit(t, dir, "remote", "remove", "c")
+	runCLIInDir(t, dir, "sync", "fetch")
+	want := []any{map[string]any{
+		"remote_removal.remote":                "c",
+		"remote_removal.owner":                 "c",
+		"remote_removal.held":                  true,
+		"remote_removal.owner_held":            false,
+		"remote_removal.tracking_refs_dropped": float64(1),
+	}}
+	if removals := lastEvent(t).Occurrences["remote.removals"]; !reflect.DeepEqual(removals, want) {
+		t.Fatalf("remote.removals = %#v, want %#v", removals, want)
+	}
+}
+
+// soloCheckoutSyncingWithA is a lit checkout whose one git remote, a, holds
+// its pushed store, and the URL of a's repository.
+func soloCheckoutSyncingWithA(t *testing.T) (dir, remoteURL string) {
+	t.Helper()
+	base := t.TempDir()
+	remoteURL = filepath.Join(base, "remote.git")
+	runGit(t, base, "init", "--bare", "remote.git")
+	dir = filepath.Join(base, "solo")
+	runGit(t, base, "clone", remoteURL, "solo")
+	runGit(t, dir, "config", "user.email", "solo@example.com")
+	runGit(t, dir, "config", "user.name", "solo")
+	if err := os.WriteFile(filepath.Join(dir, "readme.md"), []byte("hi\n"), 0o644); err != nil {
+		t.Fatalf("write readme error = %v", err)
+	}
+	runGit(t, dir, "add", "-A")
+	runGit(t, dir, "commit", "-m", "seed")
+	runGit(t, dir, "push", "origin", "HEAD")
+	runGit(t, dir, "remote", "rename", "origin", "a")
+
+	t.Setenv(DisableAutoSyncEnvVar, "1")
+	runCLIInDir(t, dir, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, dir, "sync", "push", "--set-upstream")
+	return dir, remoteURL
 }

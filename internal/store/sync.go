@@ -182,13 +182,16 @@ func (s *Store) SyncAddRemote(ctx context.Context, name storage.RemoteName, url 
 // SyncRemoveRemote removes any remote Dolt holds, a name the parse refuses
 // included: DOLT_CLONE --remote once wrote such names unchecked, and the
 // reconcile must be able to remove them. The refs the removed name's fetches
-// wrote belong to its owner (refOwner), so they go with it only when that
-// owner names no other remote Dolt holds: for origin, origin's refs; for
-// team/origin alone, team's; for a/b beside a, none, as they are a's
+// wrote belong to its owner (refOwner), so they go with it only when Dolt
+// holds no other remote named that owner: for origin, origin's refs; for
+// team/origin, team's, which are every team/* name's, and the reconcile
+// removes each of those too; for a/b beside a, none, as they are a's
 // branches b/*, kept until a's next pruning fetch like any of a's stale
-// branches. The drops go first and the remove last: a retried attempt reruns
-// the whole body, and dropping refs repeats safely where a second remove
-// fails. [LAW:no-ambient-temporal-coupling]
+// branches. The drops go first and the remove last, and the remove runs only
+// while Dolt holds the name, so an attempt retried after its remove landed,
+// or a second reconcile planned before it, finds the removal done.
+// [LAW:no-ambient-temporal-coupling] Every attempt is recorded
+// (RemoteRemovals).
 func (s *Store) SyncRemoveRemote(ctx context.Context, name string) error {
 	trimmedName, err := requireSyncArg("remote", name)
 	if err != nil {
@@ -199,25 +202,55 @@ func (s *Store) SyncRemoveRemote(ctx context.Context, name string) error {
 		return err
 	}
 	return s.runSyncMutation(ctx, func(ctx context.Context) error {
-		var ownerHeld int
-		if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM dolt_remotes WHERE name = ? AND name <> ?`, owner.String(), trimmedName).Scan(&ownerHeld); err != nil {
-			return fmt.Errorf("remove dolt remote %q: read whether %q remains: %w", trimmedName, owner, err)
-		}
-		if ownerHeld == 0 {
-			dropped, err := s.dropForkPoints(ctx, owner, nil)
-			s.forkPoints = append(s.forkPoints, dropped...)
-			if err != nil {
-				return err
-			}
-			if err := s.dropTrackingRefs(ctx, owner); err != nil {
-				return err
-			}
-		}
-		if _, err := callIntProcedure(ctx, s.db, "DOLT_REMOTE", "remove", trimmedName); err != nil {
-			return fmt.Errorf("remove dolt remote %q: %w", trimmedName, err)
-		}
-		return nil
+		record := storage.RemoteRemovalRecord{Remote: trimmedName, Owner: owner.String()}
+		err := s.removeRemote(ctx, owner, &record)
+		s.removals = append(s.removals, record)
+		return err
 	})
+}
+
+func (s *Store) removeRemote(ctx context.Context, owner refOwner, record *storage.RemoteRemovalRecord) error {
+	var err error
+	if record.Held, err = s.holdsRemote(ctx, record.Remote); err != nil {
+		return fmt.Errorf("remove dolt remote %q: %w", record.Remote, err)
+	}
+	if owner.String() != record.Remote {
+		if record.OwnerHeld, err = s.holdsRemote(ctx, owner.String()); err != nil {
+			return fmt.Errorf("remove dolt remote %q: %w", record.Remote, err)
+		}
+	}
+	if !record.OwnerHeld {
+		dropped, err := s.dropForkPoints(ctx, owner, nil)
+		s.forkPoints = append(s.forkPoints, dropped...)
+		if err != nil {
+			return err
+		}
+		record.TrackingRefsDropped, err = s.dropTrackingRefs(ctx, owner)
+		if err != nil {
+			return err
+		}
+	}
+	if record.Held {
+		if _, err := callIntProcedure(ctx, s.db, "DOLT_REMOTE", "remove", record.Remote); err != nil {
+			return fmt.Errorf("remove dolt remote %q: %w", record.Remote, err)
+		}
+	}
+	return nil
+}
+
+// holdsRemote reads whether Dolt holds a remote named name.
+func (s *Store) holdsRemote(ctx context.Context, name string) (bool, error) {
+	var held int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM dolt_remotes WHERE name = ?`, name).Scan(&held); err != nil {
+		return false, fmt.Errorf("read whether dolt holds remote %q: %w", name, err)
+	}
+	return held > 0, nil
+}
+
+// RemoteRemovals is every SyncRemoveRemote attempt since the store opened,
+// oldest first.
+func (s *Store) RemoteRemovals() []storage.RemoteRemovalRecord {
+	return slices.Clone(s.removals)
 }
 
 // SyncSetRemoteURL re-points a remote in one mutation. Dolt has no set-url, so
@@ -232,11 +265,11 @@ func (s *Store) SyncSetRemoteURL(ctx context.Context, name storage.RemoteName, u
 		return err
 	}
 	return s.runSyncMutation(ctx, func(ctx context.Context) error {
-		var present int
-		if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM dolt_remotes WHERE name = ?`, name.String()).Scan(&present); err != nil {
-			return fmt.Errorf("re-point dolt remote %q: read it: %w", name, err)
+		present, err := s.holdsRemote(ctx, name.String())
+		if err != nil {
+			return fmt.Errorf("re-point dolt remote %q: %w", name, err)
 		}
-		if present > 0 {
+		if present {
 			if _, err := callIntProcedure(ctx, s.db, "DOLT_REMOTE", "remove", name.String()); err != nil {
 				return fmt.Errorf("re-point dolt remote %q: remove: %w", name, err)
 			}

@@ -15,9 +15,10 @@ import (
 const InvalidRemoteNameCharacters = " \t\n\r./\\!@#$%^&*(){}[],.<>'\"?=+|"
 
 // RemoteName is the name of a remote lit syncs with. Only ParseRemoteName
-// builds one, and every Syncer method that syncs with a remote takes one, so
-// a name is parsed where it enters and is never checked again.
-// [LAW:parse-dont-validate]
+// builds one that names a remote, and every Syncer method that syncs with a
+// remote takes one, so a name is parsed where it enters and is never checked
+// again. The zero value names none: it is what a caller holds before a
+// remote is selected, never a remote to sync with. [LAW:parse-dont-validate]
 type RemoteName struct {
 	name string
 }
@@ -34,7 +35,17 @@ func ParseRemoteName(raw string) (RemoteName, error) {
 		return RemoteName{}, errors.New("remote is required")
 	}
 	if at := strings.IndexAny(name, InvalidRemoteNameCharacters); at >= 0 {
-		return RemoteName{}, fmt.Errorf("remote %q has %q in its name, which Dolt does not allow in a remote's name; rename it (git remote rename) to sync with it", name, name[at:at+1])
+		return RemoteName{}, RefusedRemoteNameError{Name: name, Character: name[at : at+1]}
 	}
 	return RemoteName{name: name}, nil
+}
+
+// RefusedRemoteNameError is ParseRemoteName's refusal of a name Dolt cannot
+// hold: lit neither adds such a remote to Dolt nor syncs with it.
+type RefusedRemoteNameError struct {
+	Name, Character string
+}
+
+func (e RefusedRemoteNameError) Error() string {
+	return fmt.Sprintf("remote %q has %q in its name, which Dolt does not allow in a remote's name; rename it (git remote rename) to sync with it", e.Name, e.Character)
 }

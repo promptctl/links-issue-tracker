@@ -223,9 +223,12 @@ type GitRemote struct {
 	URL  string `json:"url"`
 }
 
+// UpstreamRemote is the name of the remote the current branch tracks, whole
+// as git records it ("." for a local branch, "" for none or a detached HEAD).
+// It is never cut from the upstream ref: in a/b/main the remote is a/b.
 func UpstreamRemote(ctx context.Context, cwd string) string {
-	upstreamRef, _ := gitOutput(ctx, cwd, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")
-	return upstreamRemoteFromRef(upstreamRef)
+	remote, _ := gitOutput(ctx, cwd, "for-each-ref", "--format=%(if)%(HEAD)%(then)%(upstream:remotename)%(end)", "refs/heads/")
+	return strings.TrimSpace(remote)
 }
 
 func RemoteHasRefs(ctx context.Context, cwd string, remote string) (bool, error) {
@@ -557,15 +560,6 @@ func defaultRemoteBranchFromLSRemote(output string) string {
 		return strings.TrimSpace(branch)
 	}
 	return ""
-}
-
-func upstreamRemoteFromRef(ref string) string {
-	trimmed := strings.TrimSpace(ref)
-	parts := strings.SplitN(trimmed, "/", 2)
-	if len(parts) != 2 {
-		return ""
-	}
-	return strings.TrimSpace(parts[0])
 }
 
 func GitRemotes(ctx context.Context, cwd string) ([]GitRemote, error) {

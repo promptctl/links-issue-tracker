@@ -59,7 +59,8 @@ type Syncer interface {
 	SyncAddRemote(ctx context.Context, name RemoteName, url string) error
 	// SyncRemoveRemote takes any name the engine holds, as SyncListRemotes
 	// lists it, not only a RemoteName: an older lit wrote names a RemoteName
-	// refuses, and removing them is how the reconcile clears them.
+	// refuses, and removing them is how the reconcile clears them. A name the
+	// engine no longer holds is already removed.
 	SyncRemoveRemote(ctx context.Context, name string) error
 	// SyncSetRemoteURL points the remote name at url. The remote stays the
 	// same remote: unlike a removal, it keeps its fork points.
@@ -158,6 +159,10 @@ type Syncer interface {
 	// still shared history: the base a reconcile merges against once the
 	// remote re-roots above every commit this checkout holds.
 	ForkPointRecords() []ForkPointRecord
+
+	// RemoteRemovals is every SyncRemoveRemote attempt since the engine
+	// opened, oldest first.
+	RemoteRemovals() []RemoteRemovalRecord
 
 	// ReconcileBases is the base every reconcile since the engine opened
 	// decided on, and where it came from, oldest first.

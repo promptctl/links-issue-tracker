@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -30,6 +31,10 @@ func TestParseRemoteName(t *testing.T) {
 		}
 		if err == nil || !strings.Contains(err.Error(), tc.refusal) {
 			t.Errorf("ParseRemoteName(%q) error = %v, want one containing %q", tc.raw, err, tc.refusal)
+		}
+		// Only a name Dolt cannot hold is a refusal; an empty one names no remote.
+		if refused := (RefusedRemoteNameError{}); errors.As(err, &refused) != (strings.TrimSpace(tc.raw) != "") {
+			t.Errorf("ParseRemoteName(%q) error = %#v; want a RefusedRemoteNameError exactly when the name is not empty", tc.raw, err)
 		}
 	}
 }

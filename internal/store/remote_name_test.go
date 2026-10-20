@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	doltenv "github.com/dolthub/dolt/go/libraries/doltcore/env"
+	"github.com/dolthub/dolt/go/libraries/doltcore/ref"
 
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
@@ -28,6 +29,25 @@ func TestRemoteNameCharactersAreDolts(t *testing.T) {
 	t.Parallel()
 	if storage.InvalidRemoteNameCharacters != doltenv.InvalidRemoteNameCharacters {
 		t.Fatalf("storage.InvalidRemoteNameCharacters = %q, want Dolt's %q", storage.InvalidRemoteNameCharacters, doltenv.InvalidRemoteNameCharacters)
+	}
+}
+
+// TestRefOwnerIsDoltsRemote: the owner lit reads off a held name is the
+// remote Dolt reads off the tracking refs that name's fetches write.
+func TestRefOwnerIsDoltsRemote(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"origin", "a/b", "team/origin", "a/b/c", "a//b"} {
+		owner, err := ownerOfHeld(name)
+		if err != nil {
+			t.Fatalf("ownerOfHeld(%q): %v", name, err)
+		}
+		tracking, err := ref.NewRemoteRefFromPathStr("remotes/" + name + "/master")
+		if err != nil {
+			t.Fatalf("Dolt's parse of %s's tracking ref: %v", name, err)
+		}
+		if remote := tracking.(ref.RemoteRef).GetRemote(); owner.String() != remote {
+			t.Errorf("ownerOfHeld(%q) = %q, want Dolt's remote %q", name, owner, remote)
+		}
 	}
 }
 
@@ -94,8 +114,13 @@ func TestRemovingARemoteTakesOnlyItsOwnRefs(t *testing.T) {
 	fetchedRemote(t, ctx, st, "a", url)
 	cHeads := fetchedRemote(t, ctx, st, "c", url)
 
+	aHeads := headsUnder(t, ctx, st, `dolt_remote_branches`, "remotes/a/")
 	if err := st.SyncRemoveRemote(ctx, "a"); err != nil {
 		t.Fatalf("SyncRemoveRemote(a): %v", err)
+	}
+	want := []storage.RemoteRemovalRecord{{Remote: "a", Owner: "a", Held: true, TrackingRefsDropped: len(aHeads)}}
+	if removals := st.RemoteRemovals(); !slices.Equal(removals, want) {
+		t.Errorf("RemoteRemovals() = %+v, want %+v", removals, want)
 	}
 	if left := headsUnder(t, ctx, st, `dolt_remote_branches`, "remotes/a/"); len(left) != 0 {
 		t.Errorf("tracking refs under remotes/a/ = %v, want none", left)
@@ -169,6 +194,18 @@ func TestRemovingACloneHeldSlashNamedRemoteTakesItsRefs(t *testing.T) {
 	if records := st.ForkPointRecords(); !slices.Equal(records, want) {
 		t.Errorf("ForkPointRecords() = %+v, want %+v", records, want)
 	}
+	// A second reconcile planned before the first removal landed finds it
+	// done, and removes nothing more.
+	if err := st.SyncRemoveRemote(ctx, "team/origin"); err != nil {
+		t.Fatalf("SyncRemoveRemote(team/origin) again: %v", err)
+	}
+	wantRemovals := []storage.RemoteRemovalRecord{
+		{Remote: "team/origin", Owner: "team", Held: true, TrackingRefsDropped: len(heads)},
+		{Remote: "team/origin", Owner: "team"},
+	}
+	if removals := st.RemoteRemovals(); !slices.Equal(removals, wantRemovals) {
+		t.Errorf("RemoteRemovals() = %+v, want %+v", removals, wantRemovals)
+	}
 
 	if err := st.SyncAddRemote(ctx, remoteName(t, "team"), url); err != nil {
 		t.Fatalf("SyncAddRemote(team): %v", err)
@@ -197,6 +234,10 @@ func TestRemovingACloneHeldSlashNamedRemoteLeavesItsOwnersRefs(t *testing.T) {
 
 	if err := st.SyncRemoveRemote(ctx, "a/b"); err != nil {
 		t.Fatalf("SyncRemoveRemote(a/b): %v", err)
+	}
+	want := []storage.RemoteRemovalRecord{{Remote: "a/b", Owner: "a", Held: true, OwnerHeld: true}}
+	if removals := st.RemoteRemovals(); !slices.Equal(removals, want) {
+		t.Errorf("RemoteRemovals() = %+v, want %+v", removals, want)
 	}
 	if tracked := headsUnder(t, ctx, st, `dolt_remote_branches`, "remotes/a/"); !maps.Equal(tracked, aHeads) {
 		t.Errorf("tracking refs under remotes/a/ after removing a/b = %v, want a's %v", tracked, aHeads)
