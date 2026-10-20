@@ -155,11 +155,23 @@ var doltWorkspaceMachinery = map[string][]string{
 	// no handle to ask through the contract, and the record is addressed by
 	// path beside the locks, whose exclusive hold forgets it. Receive
 	// machinery, deleted at S4 with the rest. [LAW:one-way-deps]
+	//
+	// ReadUnsettledFirst and WriteUnsettledFirst (at UnsettledFirstPath),
+	// ReadUnsettledLast and WriteUnsettledLast, and ReadSettledLast (at
+	// SettledLastPath, which only the settle writes), are the automatic
+	// receive's run of post-fetch stops. The tests reach LandingTempDir to
+	// stop a landing from a real cause. A stop at opening the
+	// live store counts toward that run, and it has no engine to ask, so the
+	// records are addressed by path beside ReceivedRefsPath. The tests reach
+	// the two paths to plant a record or to make one unwritable.
 	"mirror clone and push": {
 		"MirrorHoldBudget", "MirrorPushDeadline", "MirrorPushCancelLagObserved",
 		"RecordPushedHead", "PushedHeadRecord", "ErrHoldCut", "ErrReceivedRefsNotRecorded",
 		"ReceiveDeadline", "ReadReceivedRefs", "WriteReceivedRefs", "ReceivedRefsPath",
-		"LandFetchedHead", "LandedFetch", "ErrRemoteCacheNotLanded",
+		"LandFetchedHead", "LandedFetch", "ErrRemoteCacheNotLanded", "LandingTempDir",
+		"ReadUnsettledFirst", "WriteUnsettledFirst", "UnsettledFirstPath",
+		"ReadUnsettledLast", "WriteUnsettledLast",
+		"ReadSettledLast", "SettledLastPath",
 	},
 	// Bounding Dolt history: ReRoot cuts the sync branch at a commit by
 	// writing through the chunk store with no engine, so there is no handle to

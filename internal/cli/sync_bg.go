@@ -724,18 +724,16 @@ func mirrorCycle(ctx context.Context, log io.Writer, ws workspace.Info, stopAnsw
 // following a re-root of the remote: the clone's fetch is landed and settled
 // on the live store exactly as the automatic receive does it
 // (performSyncReceive), and the settle follows the re-root the clone followed.
-// What it established is surfaced through the receive's one contract, and a
-// receive that failed — to open, or in the landing, the remotes or the settle
-// (outcome.receiveErr, already traced by performSyncReceive) — is returned,
-// for the mirror's log.
+// What it established is surfaced through the receive's one contract, and
+// where it stopped — the landing, the open, the remotes, the settle or the
+// reconcile (outcome.err, already traced by performSyncReceive) — is returned,
+// for the mirror's log. It does not hold the receive lock, so it reads the run
+// of post-fetch stops and leaves writing it to the automatic receive, which
+// fetches past the head this push moved and counts its own stop
+// (leaveUnsettledRun).
 func receivePushedReRoot(ctx context.Context, ws workspace.Info, clone liveClone, landed pushedHead) error {
 	target := syncTarget{remote: landed.remote, branch: landed.branch, skip: syncTargetReady}
-	outcome, closeLive, err := performSyncReceive(ctx, ws, clone, receiveFetch{target: target})
-	if err != nil {
-		err = fmt.Errorf("receive the re-rooted push on the live store: %w", err)
-		recordReceiveError(ws, err)
-		return err
-	}
+	outcome, closeLive := performSyncReceive(ctx, ws, clone, receiveFetch{target: target}, leaveUnsettledRun(ws.DatabasePath))
 	if err := closeLive(); err != nil {
 		fmt.Fprintf(os.Stderr, "lit: on-change mirror: live store not closed cleanly after receiving its re-rooted push: %v\n", err)
 	}
@@ -743,7 +741,10 @@ func receivePushedReRoot(ctx context.Context, ws workspace.Info, clone liveClone
 		fmt.Fprintf(os.Stderr, "lit: on-change mirror: receive trace not recorded: %v\n", outcome.traceErr)
 	}
 	surfaceReceiveOutcome(ctx, ws, outcome, time.Now())
-	return outcome.receiveErr
+	if outcome.err != nil {
+		return fmt.Errorf("receive the re-rooted push on the live store: stopped at %s: %w", outcome.stopped, outcome.err)
+	}
+	return nil
 }
 
 // holdBudgetCutExplanation is the one wording of "the holder cut itself

@@ -240,13 +240,14 @@ func TestSyncReceiveOutcomeSettledCleanly(t *testing.T) {
 	}{
 		{"fast-forwarded", syncReceiveOutcome{}, true},
 		{"skipped no remote", syncReceiveOutcome{skip: syncTargetNoRemote}, false},
-		{"receive failed", syncReceiveOutcome{receiveErr: errors.New("network")}, false},
+		{"fetch failed", syncReceiveOutcome{stopped: receiveStepFetch, err: errors.New("network")}, false},
+		{"settle stopped", syncReceiveOutcome{stopped: receiveStepSettle, err: errors.New("follow")}, false},
 		{"reconcile linearized", syncReceiveOutcome{reconcile: &reconcileOutcome{state: storage.SyncReconcileLinearized}}, true},
 		{"reconcile no longer diverged", syncReceiveOutcome{reconcile: &reconcileOutcome{state: storage.SyncReconcileNotDiverged}}, true},
 		{"reconcile held prose", syncReceiveOutcome{reconcile: &reconcileOutcome{state: storage.SyncReconcileProsePending}}, false},
 		{"reconcile unrelated", syncReceiveOutcome{reconcile: &reconcileOutcome{state: storage.SyncReconcileUnrelated}}, false},
 		{"reconcile refused an id collision", syncReceiveOutcome{reconcile: &reconcileOutcome{state: storage.SyncReconcileIDCollision}}, false},
-		{"reconcile errored", syncReceiveOutcome{reconcile: &reconcileOutcome{state: storage.SyncReconcileLinearized, err: errors.New("gc")}}, false},
+		{"reconcile errored", syncReceiveOutcome{reconcile: &reconcileOutcome{state: storage.SyncReconcileLinearized}, stopped: receiveStepReconcile, err: errors.New("gc")}, false},
 	}
 	for _, tc := range cases {
 		if got := tc.outcome.settledCleanly(); got != tc.want {
@@ -262,8 +263,8 @@ func TestSyncReceiveOutcomeSettledCleanly(t *testing.T) {
 func TestSyncReceiveOutcomeAccess(t *testing.T) {
 	t.Parallel()
 	settled := func(state storage.SyncReceiveState) syncReceiveOutcome { return syncReceiveOutcome{state: state} }
-	reconciled := func(state storage.SyncReconcileState, err error) syncReceiveOutcome {
-		return syncReceiveOutcome{state: storage.SyncReceiveDiverged, reconcile: &reconcileOutcome{state: state, err: err}}
+	reconciled := func(state storage.SyncReconcileState) syncReceiveOutcome {
+		return syncReceiveOutcome{state: storage.SyncReceiveDiverged, reconcile: &reconcileOutcome{state: state}}
 	}
 	cases := []struct {
 		name    string
@@ -275,12 +276,13 @@ func TestSyncReceiveOutcomeAccess(t *testing.T) {
 		{"ahead", settled(storage.SyncReceiveAhead), app.AccessWrite},
 		{"never synced", settled(storage.SyncReceiveNeverSynced), app.AccessRead},
 		{"skipped no remote", syncReceiveOutcome{skip: syncTargetNoRemote, state: storage.SyncReceiveAhead}, app.AccessRead},
-		{"receive failed", syncReceiveOutcome{state: storage.SyncReceiveAhead, receiveErr: errors.New("network")}, app.AccessRead},
-		{"reconcile linearized", reconciled(storage.SyncReconcileLinearized, nil), app.AccessWrite},
-		{"reconcile no longer diverged", reconciled(storage.SyncReconcileNotDiverged, nil), app.AccessRead},
-		{"reconcile held prose", reconciled(storage.SyncReconcileProsePending, nil), app.AccessRead},
-		{"reconcile refused an id collision", reconciled(storage.SyncReconcileIDCollision, nil), app.AccessRead},
-		{"reconcile unrelated", reconciled(storage.SyncReconcileUnrelated, nil), app.AccessRead},
+		{"fetch failed", syncReceiveOutcome{state: storage.SyncReceiveAhead, stopped: receiveStepFetch, err: errors.New("network")}, app.AccessRead},
+		{"settle stopped", syncReceiveOutcome{state: storage.SyncReceiveAhead, stopped: receiveStepSettle, err: errors.New("follow")}, app.AccessRead},
+		{"reconcile linearized", reconciled(storage.SyncReconcileLinearized), app.AccessWrite},
+		{"reconcile no longer diverged", reconciled(storage.SyncReconcileNotDiverged), app.AccessRead},
+		{"reconcile held prose", reconciled(storage.SyncReconcileProsePending), app.AccessRead},
+		{"reconcile refused an id collision", reconciled(storage.SyncReconcileIDCollision), app.AccessRead},
+		{"reconcile unrelated", reconciled(storage.SyncReconcileUnrelated), app.AccessRead},
 	}
 	for _, tc := range cases {
 		if got := tc.outcome.access(); got != tc.want {

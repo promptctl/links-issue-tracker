@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -47,10 +48,11 @@ const (
 )
 
 // ownerNotifyKind is the closed set of owner-relevant degraded states. The
-// divergence kinds ARE the sync-failure divergence classes — one vocabulary, so
-// the trace, the failure block, and the notification can never spell the same
-// condition two ways — plus the push kind, whose detection point (a completed
-// push attempt) has no SyncFailure. [LAW:one-source-of-truth]
+// receive's kinds ARE its sync-failure classes — the divergence classes and the
+// unsettled receive — one vocabulary, so the trace, the failure block, and the
+// notification can never spell the same condition two ways; plus the push
+// kind, whose detection point (a completed push attempt) has no SyncFailure.
+// [LAW:one-source-of-truth]
 type ownerNotifyKind string
 
 const ownerNotifyPushFailed ownerNotifyKind = "push_failed"
@@ -66,12 +68,15 @@ var ownerNotifyDivergenceKinds = []ownerNotifyKind{
 }
 
 // ownerNotifyEvent is one owner-relevant occurrence: what degraded (Kind), the
-// domain sentence describing it (Summary), and which sync target it concerns.
+// domain sentence describing it (Summary), which sync target it concerns, and,
+// for an unsettled receive, when its run of stops began (EpisodeStart, zero for
+// every other kind).
 type ownerNotifyEvent struct {
-	Kind    ownerNotifyKind
-	Summary string
-	Remote  string
-	Branch  string
+	Kind         ownerNotifyKind
+	Summary      string
+	Remote       string
+	Branch       string
+	EpisodeStart time.Time
 }
 
 // fingerprint identifies the episode the marker de-duplicates. For a
@@ -80,18 +85,26 @@ type ownerNotifyEvent struct {
 // failure keys on the kind alone: the same broken channel can fail at
 // different stages (a refs check that resolves no remote, a push the remote
 // refuses), and per-stage target detail would make one outage read as several
-// episodes and ping the owner once per flap.
+// episodes and ping the owner once per flap. An unsettled receive keys on when
+// its run of stops began: the run IS the episode, so a run that a settle ended
+// and a new one started reads as a new fingerprint and pages on its first
+// detection, with no marker to clear on the way. [LAW:one-source-of-truth] the
+// episode is derived from the run's record, never kept beside it.
 func (ev ownerNotifyEvent) fingerprint() string {
-	if ev.Kind == ownerNotifyPushFailed {
+	switch ev.Kind {
+	case ownerNotifyPushFailed:
 		return string(ev.Kind)
+	case ownerNotifyKind(syncFailureReceiveUnsettled):
+		return string(ev.Kind) + " " + strconv.FormatInt(ev.EpisodeStart.Unix(), 10)
+	default:
+		return string(ev.Kind) + " " + ev.Remote + "/" + ev.Branch
 	}
-	return string(ev.Kind) + " " + ev.Remote + "/" + ev.Branch
 }
 
 // ownerNotifyEventForFailure maps a surfaced sync failure to its owner
-// notification, or ok=false for the classes that are not divergences (a
-// remote-schema-ahead block is a version condition, not the ticket's "real
-// divergence" set). [LAW:dataflow-not-control-flow] every surface calls this
+// notification: the divergence classes and an unsettled receive notify, and a
+// remote-schema-ahead block, a version condition only an upgrade clears, is
+// ok=false. [LAW:dataflow-not-control-flow] every surface calls this
 // unconditionally; the class value decides.
 func ownerNotifyEventForFailure(failure SyncFailure) (ownerNotifyEvent, bool) {
 	switch failure.Class {
@@ -101,6 +114,14 @@ func ownerNotifyEventForFailure(failure SyncFailure) (ownerNotifyEvent, bool) {
 			Summary: failure.whatLine(),
 			Remote:  failure.Remote,
 			Branch:  failure.Branch,
+		}, true
+	case syncFailureReceiveUnsettled:
+		return ownerNotifyEvent{
+			Kind:         ownerNotifyKind(failure.Class),
+			Summary:      failure.whatLine(),
+			Remote:       failure.Remote,
+			Branch:       failure.Branch,
+			EpisodeStart: failure.UnsettledSince,
 		}, true
 	default:
 		return ownerNotifyEvent{}, false

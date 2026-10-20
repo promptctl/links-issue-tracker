@@ -69,6 +69,9 @@ type Store struct {
 	// strandedWritesCommits is every commit freshnessOverEveryWrite landed
 	// since the store opened; StrandedWritesCommits is its one reader.
 	strandedWritesCommits []storage.StrandedWritesCommit
+	// settledLastWrites is every settle's write of settled.last since the
+	// store opened (settleReceived); SettledLastWrites is its one reader.
+	settledLastWrites []storage.SettledLastWrite
 	// bounds is what each push since the store opened did to keep the sync
 	// branch's history inside its window (boundHistory); HistoryBounds is
 	// its one reader.

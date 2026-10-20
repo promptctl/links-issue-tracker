@@ -172,6 +172,10 @@ type Syncer interface {
 	// over writes a failed commit left in the working set, oldest first.
 	StrandedWritesCommits() []StrandedWritesCommit
 
+	// SettledLastWrites is every settle's write of its settled.last record
+	// since the engine opened, oldest first.
+	SettledLastWrites() []SettledLastWrite
+
 	// GetSyncState and RecordSyncState carry the staleness marker across
 	// commands: what the store's content was at the last sync, so a later
 	// command can tell whether anything has happened since.
