@@ -1,13 +1,16 @@
 package cli
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -79,6 +82,9 @@ func TestAReceiveThatFetchedAndKeepsStoppingReachesTheFailureSurface(t *testing.
 	if first["receive.stopped"] != "settle" || first["receive.decision"] != "error" || !(first["receive.unsettled_since"].(float64) > 0) {
 		t.Fatalf("first receive outcome = %v; want a settle stop that starts a run", first)
 	}
+	if stops := receiveTraceStops(t, ws); len(stops) != 1 || stops[0] != "settle" {
+		t.Fatalf("receive traces' stopped = %q; want the one receive's settle stop", stops)
+	}
 	if _, err := os.Stat(fetchSuccessMarkerPath(ws)); err != nil {
 		t.Fatalf("a fetch that worked did not move the fetch-success marker: %v", err)
 	}
@@ -145,6 +151,9 @@ func TestAReceiveThatFetchedAndKeepsStoppingReachesTheFailureSurface(t *testing.
 	if third["receive.stopped"] != "" || third["receive.unsettled_since"] != float64(0) || !(third["receive.settled_last"].(float64) > 0) {
 		t.Fatalf("third receive outcome = %v; want a receive that ran to the end, settled, with no run current", third)
 	}
+	if stops := receiveTraceStops(t, ws); len(stops) != 3 || stops[2] != "" {
+		t.Fatalf("receive traces' stopped = %q; want the third receive's empty stop, it ran to the end", stops)
+	}
 	if _, err := os.Stat(receiveBlockPendingPath(ws)); !os.IsNotExist(err) {
 		t.Fatalf("a receive that settled left the receive_unsettled block pending (stat err = %v)", err)
 	}
@@ -174,5 +183,102 @@ func addOwnerNotifyHook(t *testing.T, ws workspace.Info, hook string) {
 	}
 	if err := os.WriteFile(path, []byte(updated), 0o644); err != nil {
 		t.Fatalf("write project config: %v", err)
+	}
+}
+
+// receiveTraceStops is the stopped metadata of every receive trace the
+// workspace recorded, oldest first.
+func receiveTraceStops(t *testing.T, ws workspace.Info) []string {
+	t.Helper()
+	type stop struct {
+		at      time.Time
+		stopped string
+	}
+	var stops []stop
+	for _, record := range readSyncTraces(t, ws) {
+		if record.Command != receiveTraceCommand {
+			continue
+		}
+		at, err := time.Parse(time.RFC3339Nano, record.RecordedAt)
+		if err != nil {
+			t.Fatalf("receive trace %s recorded_at: %v", record.ID, err)
+		}
+		stops = append(stops, stop{at, record.Metadata["stopped"]})
+	}
+	sort.Slice(stops, func(i, j int) bool { return stops[i].at.Before(stops[j].at) })
+	out := make([]string, len(stops))
+	for i, s := range stops {
+		out[i] = s.stopped
+	}
+	return out
+}
+
+// unsettlingCheckout is a checkout pushed to its remote whose settle fails
+// after a fetch that works: the settle's record of itself cannot be written,
+// because its path is a directory. It returns an invocation's context, the
+// workspace, and a receive's fetch into a fresh clone of its live store, ready
+// to land.
+func unsettlingCheckout(t *testing.T) (context.Context, workspace.Info, liveClone, receiveFetch) {
+	t.Helper()
+	base := t.TempDir()
+	runGit(t, base, "init", "--bare", "remote.git")
+	runGit(t, base, "clone", filepath.Join(base, "remote.git"), "alpha")
+	dir := filepath.Join(base, "alpha")
+	runGit(t, dir, "config", "user.email", "a@a.co")
+	runGit(t, dir, "config", "user.name", "alpha")
+	if err := os.WriteFile(filepath.Join(dir, "readme.md"), []byte("hi\n"), 0o644); err != nil {
+		t.Fatalf("write readme error = %v", err)
+	}
+	runGit(t, dir, "add", "-A")
+	runGit(t, dir, "commit", "-m", "seed")
+	runGit(t, dir, "push", "origin", "HEAD")
+	runCLIInDir(t, dir, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, dir, "sync", "push", "--set-upstream")
+	ws, err := workspace.Resolve(dir)
+	if err != nil {
+		t.Fatalf("resolve workspace: %v", err)
+	}
+	if err := os.MkdirAll(store.SettledLastPath(ws.DatabasePath), 0o755); err != nil {
+		t.Fatalf("block the settle's record: %v", err)
+	}
+	ctx := telemetry.With(context.Background(), telemetry.Begin(telemetry.Event{}))
+	clone, err := takeReceiveClone(ctx, ws)
+	if err != nil {
+		t.Fatalf("takeReceiveClone() error = %v", err)
+	}
+	t.Cleanup(func() { removeReceiveClone(clone) })
+	fetch, err := fetchIntoClone(ctx, ws, clone)
+	if err != nil || fetch.fetchErr != nil || fetch.target.skip != syncTargetReady {
+		t.Fatalf("fetchIntoClone() = %+v, %v; want a ready target fetched cleanly", fetch, err)
+	}
+	return ctx, ws, clone, fetch
+}
+
+// TestTheMirrorsReceiveStartsNoRun: the mirror's receive of its re-rooted
+// push does not hold the receive lock, so a post-fetch stop there leaves
+// unsettled.first unwritten, and the next automatic receive counts it.
+func TestTheMirrorsReceiveStartsNoRun(t *testing.T) {
+	ctx, ws, clone, fetch := unsettlingCheckout(t)
+	err := receivePushedReRoot(ctx, ws, clone, pushedHead{remote: fetch.target.remote, branch: fetch.target.branch})
+	if err == nil || !strings.Contains(err.Error(), "settled.last") {
+		t.Fatalf("receivePushedReRoot() error = %v; want the settle's stop", err)
+	}
+	if at, ok, err := store.ReadUnsettledFirst(ws.DatabasePath); ok || err != nil {
+		t.Fatalf("unsettled.first after the mirror's stop = %s ok %v err %v; want no record", at, ok, err)
+	}
+}
+
+// TestAReceiveWhoseOpenFailsHasNothingToClose: a receive that stops at
+// opening the live store holds no store, and the closer it hands back is one
+// its caller can always call.
+func TestAReceiveWhoseOpenFailsHasNothingToClose(t *testing.T) {
+	ctx, ws, clone, fetch := unsettlingCheckout(t)
+	ws.WorkspaceID = "" // the open refuses a store with no workspace identity; the land never reads it
+	outcome, closeLive := performSyncReceive(ctx, ws, clone, fetch, leaveUnsettledRun)
+	if outcome.stopped != receiveStepOpen {
+		t.Fatalf("receive stopped at %q (err %v); want the open", outcome.stopped, outcome.err)
+	}
+	if err := closeLive(); err != nil {
+		t.Fatalf("closeLive() after a failed open = %v; want nothing to close", err)
 	}
 }

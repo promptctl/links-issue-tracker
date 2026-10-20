@@ -116,6 +116,7 @@ func TestTheAutomaticReceiveOwnsTheRun(t *testing.T) {
 		{"a later stop extends the run", t0, time.Time{}, settleStop, t0, t0},
 		{"a run a settle has not ended goes on", t1, t0, settleStop, t1, t1},
 		{"a settle after the run began ends it; the stop starts a new one", t0, t1, settleStop, now, now},
+		{"a settle that finished after this receive read its clock ends the run it starts", time.Time{}, now.Add(time.Second), settleStop, time.Time{}, now},
 		{"a landing stop counts", time.Time{}, t0, syncReceiveOutcome{stopped: receiveStepLand, err: errors.New("land")}, now, now},
 		{"a fetch stop does not count", time.Time{}, time.Time{}, syncReceiveOutcome{stopped: receiveStepFetch, err: errors.New("net")}, time.Time{}, time.Time{}},
 		{"a reconcile stop does not count", time.Time{}, time.Time{}, syncReceiveOutcome{stopped: receiveStepReconcile, err: errors.New("gc")}, time.Time{}, time.Time{}},
