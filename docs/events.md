@@ -89,7 +89,7 @@ lines here for reading:
 | `sink_rotation_error` | Present only when `sink_rotation` is `failed`: why. |
 | `counts` | The command's counts. A count of zero is written as `0`, so "ran and found none" is distinguishable from a command that does not count that thing. |
 | `facts` | What the command decided, under keys prefixed with the command's name, with `statusline.` for what it wrote to the statusline file, with `workflows.` for the workflow occasion it fired, with `config.` for its config check, or with `schema_ahead.` for a refusal because the workspace's schema is ahead of this lit. A sync command that reads its remotes records `remotes.refused`: the git remotes whose names Dolt cannot hold, sorted, `[]` when none. |
-| `occurrences` | What can happen more than once in one invocation, under keys of their own: one entry per occurrence, in the order they happened. A key that was looked at and found nothing is `[]`; an absent key was not looked at. A sync command records `push.outcomes`, `receive.outcomes`, `reroot.follows`, `fork_point.records`, `remote.removals`, `reconcile.bases`, `stranded_writes.commits` and `history_bound.records` here. A key's prefix names the command or part of lit that recorded it, not its map: `history_bound.window_error` is a fact, set once, and `history_bound.records` is an occurrence, one entry per push. |
+| `occurrences` | What can happen more than once in one invocation, under keys of their own: one entry per occurrence, in the order they happened. A key that was looked at and found nothing is `[]`; an absent key was not looked at. A sync command records `push.outcomes`, `receive.outcomes`, `reroot.follows`, `fork_point.records`, `remote.removals`, `reconcile.bases`, `stranded_writes.commits`, `settled_last.writes` and `history_bound.records` here. A key's prefix names the command or part of lit that recorded it, not its map: `history_bound.window_error` is a fact, set once, and `history_bound.records` is an occurrence, one entry per push. |
 
 A command that records no counts, facts or occurrences writes `{}` for each.
 
@@ -390,6 +390,19 @@ the ones it had.
 | `counts.downgrade.reversed` | The down-migrations applied. `0` when none ran; on a reverse that failed part-way, those applied before it stopped. |
 | `downgrade.snapshot_prune_error` | Why older downgrade snapshots could not be removed after the reverse, or `null`. The downgrade prints the failure as a `warning:` line and still installs the `--to` release. |
 | `downgrade.installed_path` | The path the `--to` release was installed to. Absent when nothing was installed. |
+
+## What `lit unquarantine` records
+
+`lit unquarantine` clears the quarantine that every command opening the store
+is refused on. When no quarantine blocks the store, the command exits 6, reason
+`state_already_holds`, and its event carries none of these keys. When the clear's
+commit fails, the command fails and its event still carries them: the clear is in
+force.
+
+| Key | Meaning |
+| --- | --- |
+| `unquarantine.cleared_version` | The version of the migration whose quarantine was cleared. |
+| `unquarantine.next_version` | The version of the migration whose quarantine is still in force, which the next command that opens the store is refused on. Absent when none remains, so the cleared migration runs on the next open. |
 
 ## What `lit doctor` records
 

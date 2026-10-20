@@ -233,7 +233,8 @@ func TestInlineSyncFailureMapping(t *testing.T) {
 	// Hard backend failure -> divergedUnresolved, cause demoted into the block.
 	backend := errors.New(`table "i" does not have column "resolution"`)
 	hard := base
-	hard.reconcile = &reconcileOutcome{err: backend}
+	hard.reconcile = &reconcileOutcome{}
+	hard.stopped, hard.err = receiveStepReconcile, backend
 	failure, ok := hard.inlineSyncFailure(now)
 	if !ok {
 		t.Fatal("hard reconcile error did not produce a sync failure")

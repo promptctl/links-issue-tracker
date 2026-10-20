@@ -50,12 +50,18 @@ func ReadReceivedRefs(databasePath string) ([]byte, error) {
 // torn record. Replaceable: a record a crash cut short no longer matches any
 // advertisement, which only costs the fetch it would have saved.
 func WriteReceivedRefs(databasePath string, payload []byte) error {
-	target := ReceivedRefsPath(databasePath)
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-		return fmt.Errorf("ensure storage dir for received-refs record: %w", err)
+	return writeStorageRecord(ReceivedRefsPath(databasePath), payload)
+}
+
+// writeStorageRecord replaces a record in the storage dir atomically, so a
+// reader never sees a torn one. [LAW:one-source-of-truth] the one writer of
+// every store record beside the Dolt directory.
+func writeStorageRecord(path string, payload []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("ensure storage dir for %s: %w", filepath.Base(path), err)
 	}
-	if err := atomicfile.WriteFile(target, payload, 0o600, atomicfile.Replaceable); err != nil {
-		return fmt.Errorf("write received-refs record: %w", err)
+	if err := atomicfile.WriteFile(path, payload, 0o600, atomicfile.Replaceable); err != nil {
+		return fmt.Errorf("write %s: %w", filepath.Base(path), err)
 	}
 	return nil
 }

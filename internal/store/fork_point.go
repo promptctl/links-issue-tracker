@@ -332,3 +332,9 @@ func (s *Store) ReconcileBases() []storage.ReconcileBase {
 func (s *Store) StrandedWritesCommits() []storage.StrandedWritesCommit {
 	return slices.Clone(s.strandedWritesCommits)
 }
+
+// SettledLastWrites is every settle's write of its settled.last record since
+// the store opened, oldest first.
+func (s *Store) SettledLastWrites() []storage.SettledLastWrite {
+	return slices.Clone(s.settledLastWrites)
+}

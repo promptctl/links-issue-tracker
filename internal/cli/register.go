@@ -767,6 +767,8 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 			Run: r.wsFamilyCmd(lifeboatFamily), Subcommands: lifeboatFamily.subcommandSpecs()},
 		{Name: "downgrade", Summary: "Reverse schema migrations and atomically install a prior lit binary", GroupID: "maintenance",
 			Run: r.appCmd(app.AccessWrite, downgradeLeaf)},
+		{Name: "unquarantine", Summary: "Clear the quarantine a failed migration left, so the next command that opens the store runs it again", GroupID: "maintenance",
+			Run: r.wsCmd(unquarantineLeaf)},
 		{Name: "upgrade", Summary: "Atomically install a newer lit binary to operate a workspace whose schema is ahead of this one", GroupID: "maintenance",
 			Run: r.wsCmd(upgradeLeaf)},
 		{Name: "bulk", Summary: "Bulk issue operations", GroupID: "operations",

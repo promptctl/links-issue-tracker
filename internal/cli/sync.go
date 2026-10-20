@@ -82,6 +82,7 @@ func openSyncSessionAt(ctx context.Context, databasePath, workspaceID string) (s
 		reportEventValues(ctx, "remote.removals", syncer.RemoteRemovals())
 		reportEventValues(ctx, "reconcile.bases", syncer.ReconcileBases())
 		reportEventValues(ctx, "stranded_writes.commits", syncer.StrandedWritesCommits())
+		reportEventValues(ctx, "settled_last.writes", syncer.SettledLastWrites())
 		reportEventValues(ctx, "history_bound.records", syncer.HistoryBounds())
 		return st.Close()
 	}, nil

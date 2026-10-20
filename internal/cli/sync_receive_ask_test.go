@@ -208,7 +208,6 @@ func TestRecordReceivedWritesOnlyWhatASettledReceiveLearned(t *testing.T) {
 	observed := remoteAdvertisement{remote: remoteName(t, "origin"), url: "git@example.invalid:o/r.git", refs: "abc\trefs/dolt/data"}
 	converged := &reconcileOutcome{state: storage.SyncReconcileLinearized}
 	unconverged := &reconcileOutcome{state: storage.SyncReconcileProsePending}
-	failed := &reconcileOutcome{err: errors.New("reconcile backend unavailable")}
 	previous := []byte("origin git@example.invalid:o/r.git\nold\trefs/dolt/data\n")
 
 	cases := []struct {
@@ -222,8 +221,12 @@ func TestRecordReceivedWritesOnlyWhatASettledReceiveLearned(t *testing.T) {
 		{"fast-forwarded, answered", syncReceiveOutcome{skip: syncTargetReady, state: storage.SyncReceiveFastForwarded}, observed, observed.record(), true},
 		{"diverged, reconcile converged", syncReceiveOutcome{skip: syncTargetReady, state: storage.SyncReceiveDiverged, reconcile: converged}, observed, observed.record(), true},
 		{"diverged, reconcile unconverged", syncReceiveOutcome{skip: syncTargetReady, state: storage.SyncReceiveDiverged, reconcile: unconverged}, observed, previous, true},
-		{"diverged, reconcile failed", syncReceiveOutcome{skip: syncTargetReady, state: storage.SyncReceiveDiverged, reconcile: failed}, observed, previous, true},
-		{"fetch failed", syncReceiveOutcome{skip: syncTargetReady, receiveErr: errors.New("remote unreachable")}, observed, previous, false},
+		{"diverged, reconcile failed", syncReceiveOutcome{skip: syncTargetReady, state: storage.SyncReceiveDiverged, reconcile: &reconcileOutcome{}, stopped: receiveStepReconcile, err: errors.New("reconcile backend unavailable")}, observed, previous, true},
+		{"fetch failed", syncReceiveOutcome{skip: syncTargetReady, stopped: receiveStepFetch, err: errors.New("remote unreachable")}, observed, previous, false},
+		{"fetched, landing failed", syncReceiveOutcome{skip: syncTargetReady, stopped: receiveStepLand, err: errors.New("land")}, observed, previous, true},
+		{"fetched, open failed", syncReceiveOutcome{skip: syncTargetReady, stopped: receiveStepOpen, err: errors.New("open")}, observed, previous, true},
+		{"fetched, live remotes failed", syncReceiveOutcome{skip: syncTargetReady, stopped: receiveStepLiveRemotes, err: errors.New("remotes")}, observed, previous, true},
+		{"fetched, settle failed", syncReceiveOutcome{skip: syncTargetReady, stopped: receiveStepSettle, err: errors.New("follow a re-root")}, observed, previous, true},
 		{"target skipped", syncReceiveOutcome{skip: syncTargetNoRemote}, observed, previous, false},
 		{"fetched, question unanswered", syncReceiveOutcome{skip: syncTargetReady, state: storage.SyncReceiveUpToDate}, remoteAdvertisement{}, previous, true},
 	}

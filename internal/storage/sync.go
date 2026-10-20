@@ -202,6 +202,19 @@ func (c StrandedWritesCommit) EventValue() map[string]any {
 	return map[string]any{"stranded_writes.tables": c.Tables}
 }
 
+// SettledLastWrite is one settle's write of its settled.last record: Err is
+// why the record was not written, empty when it was. The settle itself stands
+// either way; the record is this checkout's account of it.
+type SettledLastWrite struct {
+	Err string
+}
+
+// EventValue is the write as one value of the event's settled_last.writes
+// list.
+func (w SettledLastWrite) EventValue() map[string]any {
+	return map[string]any{"settled_last.error": w.Err}
+}
+
 // SyncPullState classifies what a single `lit sync pull` did, derived from the
 // receive (fetch + fast-forward) and, when the branch diverged, the field-aware
 // reconcile. [LAW:one-source-of-truth] one mapping from the underlying

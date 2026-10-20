@@ -185,7 +185,7 @@ func LandFetchedHead(ctx context.Context, doltRootDir, cloneRootDir string, remo
 	err = holdForRefWrite(ctx, root, ReceiveDeadline, func(holdCtx context.Context, ddb *doltdb.DoltDB) error {
 		start := time.Now()
 		defer func() { landed.Held = time.Since(start) }()
-		tempDir := filepath.Join(root, doltDatabaseName, dbfactory.DoltDir, "temptf")
+		tempDir := LandingTempDir(root)
 		if err := os.MkdirAll(tempDir, 0o755); err != nil {
 			return fmt.Errorf("create temp table file dir: %w", err)
 		}
@@ -227,6 +227,12 @@ func LandFetchedHead(ctx context.Context, doltRootDir, cloneRootDir string, remo
 		return landed, fmt.Errorf("%w: %s landed (%s): %w", ErrRemoteCacheNotLanded, trackingRef.String(), landed.Record, cacheErr)
 	}
 	return landed, nil
+}
+
+// LandingTempDir is where LandFetchedHead stages the table files it copies
+// into the live store at doltRootDir.
+func LandingTempDir(doltRootDir string) string {
+	return filepath.Join(doltRootDir, doltDatabaseName, dbfactory.DoltDir, "temptf")
 }
 
 // landRef sets r to fetched unless it already names it — a fetch's own

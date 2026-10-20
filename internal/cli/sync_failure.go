@@ -54,6 +54,19 @@ const (
 	// outside it. Remedy: read both tickets (the block prints them whole so no
 	// work is lost) and re-file one, then surface as blocking.
 	syncFailureIDCollision syncFailureClass = "id_collision"
+	// syncFailureReceiveUnsettled: the automatic receive fetched the remote and
+	// then stopped before it settled — landing the fetch, opening the live store,
+	// reconciling its remotes, or the settle itself (a re-root follow included) —
+	// at least unsettledLastingAfter after a receive first stopped that way, with
+	// another such stop between them and no settle anywhere in between. One
+	// stop is never this class:
+	// the receive's one deadline spans the fetch and the local steps, so a
+	// single cut is as often contention as a fault; a run that outlives two
+	// debounce intervals is retries that did not clear it. The checkout stays
+	// on whatever history it last settled to. Remedy: a foreground pull, which
+	// fetches into the live store, settles through the same settle, and returns
+	// the error to its caller.
+	syncFailureReceiveUnsettled syncFailureClass = "receive_unsettled"
 )
 
 // persistentDivergenceAge and persistentDivergenceCommits are the thresholds past
@@ -121,6 +134,14 @@ type SyncFailure struct {
 	// [LAW:no-silent-failure] [LAW:types-are-the-program] the field present names
 	// the class that produced it.
 	Collisions []merge.Collision
+	// StoppedAt and UnsettledSince are populated only for
+	// syncFailureReceiveUnsettled: the step the receive stopped at, and when
+	// the run of stops began. Age is derived from UnsettledSince at the
+	// surfacing boundary, as a divergence's age is derived from its oldest
+	// divergent commit. [LAW:types-are-the-program] the fields present name the
+	// class that produced them.
+	StoppedAt      receiveStep
+	UnsettledSince time.Time
 	// BuildNote is the dev-vs-release build status line, resolved once at the
 	// boundary that constructs this failure (asSyncFailure, syncFailureFromPull,
 	// doctorSyncReport.divergenceFailure) via resolveBuildStatusNote, never
@@ -210,7 +231,7 @@ func (e SyncFailureError) Unwrap() error {
 func (f SyncFailure) blockString() string {
 	var b strings.Builder
 	b.WriteString(agentInstructionsOpen + "\n")
-	b.WriteString("lit sync could not resolve a backlog divergence automatically and needs you.\n\n")
+	fmt.Fprintf(&b, "%s\n\n", f.headline())
 
 	// (1) Directive — constant, unmissable, class-independent.
 	b.WriteString(syncFailureMustNotIgnore)
@@ -260,6 +281,23 @@ func (f SyncFailure) blockString() string {
 	return b.String()
 }
 
+// headline is the block's opening sentence: what lit could not do, named for
+// the class, so a block that is not about a divergence never opens by claiming
+// one. [LAW:dataflow-not-control-flow] the class selects the line.
+func (f SyncFailure) headline() string {
+	switch f.Class {
+	case syncFailureProseHeld, syncFailureDivergedUnresolved,
+		syncFailureUnrelatedHistories, syncFailureIDCollision:
+		return "lit sync could not resolve a backlog divergence automatically and needs you."
+	case syncFailureRemoteSchemaAhead:
+		return "lit sync cannot write to the remote's backlog until this lit is upgraded, and needs you."
+	case syncFailureReceiveUnsettled:
+		return "lit's automatic receive fetched the remote but could not bring it into this checkout, and needs you."
+	default:
+		return fmt.Sprintf("lit sync hit an unrecognized sync-failure class %q — this is a bug; please report it.", f.Class)
+	}
+}
+
 // whatLine states the failure in domain terms — schema/commit reality, not the
 // raw backend error. [FRAMING:representation] the message is the representation
 // of the failure; a domain sentence is a truer map than a driver string.
@@ -293,6 +331,10 @@ func (f SyncFailure) whatLine() string {
 		return fmt.Sprintf(
 			"%s and this backlog each minted %s for a DIFFERENT ticket — two stores that hold the same children of a parent both number the next one the same, so this is ordinary between syncs, not a race. These are two pieces of work wearing one name, not one ticket that diverged: field-merging them would produce a well-formed ticket nobody filed, with one job's title over another's description and the loser gone. The merge was refused and nothing was committed; both tickets are printed below so neither is lost.",
 			ref, describeCollidedIDs(f.Collisions))
+	case syncFailureReceiveUnsettled:
+		return fmt.Sprintf(
+			"the automatic receive fetched %s and then stopped at %s. A receive first stopped after its fetch at %s, and no settle has succeeded on this checkout since then, so it is still on the history it last settled to and is not receiving the shared backlog. The cause from the latest stop is below.",
+			ref, f.StoppedAt.describe(), f.UnsettledSince.UTC().Format(time.RFC3339))
 	default:
 		// A class this renderer does not know must not render as a bland,
 		// authoritative-looking line. Name it as a bug the way the pull payload
@@ -355,51 +397,56 @@ func (f SyncFailure) resolutionSteps() []string {
 			"lit new ...               # re-file ONE of the two jobs under a fresh id, so neither piece of work is lost",
 			"                          # then surface to the user: retiring the duplicate id is not yet a lit operation",
 		}
+	case syncFailureReceiveUnsettled:
+		return []string{
+			"lit sync pull             # fetches and settles in the foreground and reports the error it stops on",
+		}
 	default:
 		return []string{"lit doctor                # unrecognized sync-failure class; report this"}
 	}
 }
 
-// escalationLine selects the severity sentence from the divergence's values. The
-// operations are identical every call; only the branch taken varies, and it
-// varies on data (persistent), not on the surface that called in.
-// [LAW:dataflow-not-control-flow]
+// escalationLine selects the severity sentence. The classes that never clear
+// by retrying fix their own line; the two divergence classes derive theirs
+// from the divergence's age and span (persistent), the only place a
+// divergence age means anything. [LAW:dataflow-not-control-flow] the class
+// selects the arm, and inside the divergence arm the values select the line.
 func (f SyncFailure) escalationLine() string {
-	// A remote-schema-ahead block is not a divergence that ages toward incident —
-	// it will NOT clear on the next command or with time, only with an upgrade. So
-	// its escalation is fixed by the class, not derived from age/span, which would
-	// otherwise read as "recent, still routine" and invite the very wait-and-retry
-	// the epic kills. The upgrade is gated on the user the way the local
-	// schema-ahead refusal gates it, because the passive surfaces print this
-	// block with no remediation line after it. [LAW:dataflow-not-control-flow]
-	// the class selects the line.
-	if f.Class == syncFailureRemoteSchemaAhead {
+	switch f.Class {
+	case syncFailureRemoteSchemaAhead:
+		// It will NOT clear on the next command or with time, only with an
+		// upgrade; an age-derived "recent, still routine" would invite the very
+		// wait-and-retry the epic kills. The upgrade is gated on the user the
+		// way the local schema-ahead refusal gates it, because the passive
+		// surfaces print this block with no remediation line after it.
 		return "ESCALATION — BLOCKED: this will not clear by waiting or retrying; only a lit whose schema support reaches the remote's can write to it. " + installReplacesLit + ": run the upgrade above only when the user directs it, and until then surface this to the user as blocking."
-	}
-	// Unrelated histories, like a schema-ahead remote, never merge on a retry — there
-	// is no base and never will be one for this pair. So its escalation is fixed by
-	// the class, not derived from age/span, which would otherwise read as "recent,
-	// still routine" and invite the retry that can never work. [LAW:dataflow-not-control-flow]
-	if f.Class == syncFailureUnrelatedHistories {
+	case syncFailureUnrelatedHistories:
+		// There is no base and never will be one for this pair.
 		return "ESCALATION — BLOCKED: unrelated histories never merge automatically and will not clear by retrying. Resolving requires a deliberate choice — take one side's backlog wholesale, or union the two — which lit cannot make for you. Surface it to the user as blocking before continuing ticket work."
-	}
-	// An id collision, like the two above, never resolves by retrying — the two
-	// rows will name two tickets on every future attempt. It is also the class
-	// most likely to be misread as routine, because everything about the backlog
-	// still looks well-formed. [LAW:dataflow-not-control-flow] the class selects
-	// the line.
-	if f.Class == syncFailureIDCollision {
+	case syncFailureIDCollision:
+		// The two rows will name two tickets on every future attempt, and
+		// everything about the backlog still looks well-formed, which makes it
+		// the class most likely to be misread as routine.
 		return "ESCALATION — BLOCKED: two tickets share one id and will collide on every retry. lit cannot resolve this for you: one of the two jobs has to be re-filed under a free id, and that is a decision about which piece of work keeps the name. Surface it to the user as blocking before continuing ticket work."
-	}
-	span := f.Ahead + f.Behind
-	if f.persistent() {
+	case syncFailureReceiveUnsettled:
+		// The class exists only once a third receive has stopped at least two
+		// debounce intervals after the first, so retrying is already what failed.
 		return fmt.Sprintf(
-			"ESCALATION — INCIDENT: this divergence has persisted for %s across %d commit(s) — far past a transient hiccup. Treat the workspace as blocked on it: resolve it now or surface it to the user as blocking. Ticket work continued around it will compound on top of an unresolved divergence.",
+			"ESCALATION — BLOCKED: no settle has succeeded on this checkout since a receive first stopped after its fetch at %s (%s), and the latest receive stopped at %s; this checkout is not receiving the shared backlog. Run the resolution above, and surface it to the user as blocking if it fails.",
+			f.UnsettledSince.UTC().Format(time.RFC3339), f.agePhrase(), f.StoppedAt.describe())
+	case syncFailureProseHeld, syncFailureDivergedUnresolved:
+		span := f.Ahead + f.Behind
+		if f.persistent() {
+			return fmt.Sprintf(
+				"ESCALATION — INCIDENT: this divergence has persisted for %s across %d commit(s) — far past a transient hiccup. Treat the workspace as blocked on it: resolve it now or surface it to the user as blocking. Ticket work continued around it will compound on top of an unresolved divergence.",
+				f.agePhrase(), span)
+		}
+		return fmt.Sprintf(
+			"ESCALATION — recent (%s, %d commit(s)): still within the window where a divergence is routine. Resolve it with the steps above; if it is still here on your next command it is no longer routine — escalate then.",
 			f.agePhrase(), span)
+	default:
+		return fmt.Sprintf("ESCALATION — unrecognized sync-failure class %q; this is a bug, please report it, and surface it to the user as blocking.", f.Class)
 	}
-	return fmt.Sprintf(
-		"ESCALATION — recent (%s, %d commit(s)): still within the window where a divergence is routine. Resolve it with the steps above; if it is still here on your next command it is no longer routine — escalate then.",
-		f.agePhrase(), span)
 }
 
 // agePhrase humanizes the divergence age for the escalation sentence. Zero age
