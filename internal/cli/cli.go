@@ -192,10 +192,11 @@ func runWithApp(ctx context.Context, stdout io.Writer, accessMode app.AccessMode
 	// command remember the call, and one that forgot would miss it. A command
 	// that only mutates hears about failing pushes. [LAW:locality-or-seam]
 	// It runs after the engine close on purpose: it reads only storage-dir
-	// markers, needing no engine, and precedes the auto-sync below so the banner
-	// reports the last COMPLETED attempt rather than racing the one about to spawn.
+	// markers and git's remote config, needing no engine, and precedes the
+	// auto-sync below so the banner reports the last COMPLETED attempt rather
+	// than racing the one about to spawn.
 	if accessMode == app.AccessWrite {
-		printMutationSyncStalenessWarning(stdout, ws, time.Now())
+		printMutationSyncStalenessWarning(ctx, stdout, ws, time.Now())
 	}
 	// [LAW:single-enforcer] One owner consults the auto-sync policy after a
 	// successful command, AND after that command's engine is closed: the on-change

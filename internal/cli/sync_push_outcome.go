@@ -62,7 +62,7 @@ const (
 // pushOutcomeRecord is how the last completed push attempt ended — the cheap,
 // engine-free answer to "are pushes working?" that the sync traces (a
 // one-file-per-decision audit log) are too heavy to give on every command.
-// It plays the role fetch-success.last plays for fetch freshness: the traces
+// It plays the role the fetch-success marker plays for fetch freshness: the traces
 // answer "what happened, in order"; the marker answers "where do things stand
 // now". Remote and Branch are empty when the attempt failed before resolving
 // them. [LAW:types-are-the-program] the banner's predicate is a field read,
