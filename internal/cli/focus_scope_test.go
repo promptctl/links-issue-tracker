@@ -3,7 +3,9 @@ package cli
 import (
 	"bytes"
 	"errors"
+	"reflect"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -52,40 +54,72 @@ func (h readyTestHarness) runNextRowArgs(args ...string) annotation.AnnotatedIss
 // The focus scope is a membership rule, and the way a membership rule fails is
 // by being written to recognize the shape it expects instead of to reject every
 // shape it does not. So the accept/reject set is pinned here as DATA — one row
-// per (scope state, row state) pair — rather than as an assertion derived from
-// the predicate, which would restate the implementation and pass for any
-// implementation, including a wrong one.
+// per (scope state, row state, lane) triple — rather than as an assertion
+// derived from the predicate, which would restate the implementation and pass
+// for any implementation, including a wrong one.
 func TestFocusScopeHoldsExactly(t *testing.T) {
 	onPath := annotation.AnnotatedIssue{Annotations: []annotation.Annotation{{Kind: annotation.FocusPath, Message: "goal-1"}}}
 	offPath := annotation.AnnotatedIssue{Annotations: []annotation.Annotation{{Kind: annotation.OpenDependency, Message: "dep"}}}
 	bare := annotation.AnnotatedIssue{}
 
+	laneIn := func(epic, key string) model.LaneID {
+		parent := model.Issue{ID: epic, IssueType: model.TypeEpic}
+		return model.LaneOf(model.Issue{ID: "any-member", Lane: key}, &parent)
+	}
+	soloLane := func(id string) model.LaneID { return model.LaneOf(model.Issue{ID: id}, nil) }
+
+	focused := focusScope{goals: []string{"goal-1"}}
+	// This checkout holds lane "held" of epic E, and the solo lane S.
+	owned := focused.owning(ownWork{
+		lanes: map[model.LaneID]bool{laneIn("E", "held"): true, soloLane("S"): true},
+		epics: map[string]bool{"E": true},
+	})
+	unrelated := laneIn("F", "x")
+
 	cases := []struct {
 		name  string
 		scope focusScope
 		row   annotation.AnnotatedIssue
+		lane  model.LaneID
 		want  bool
 	}{
 		// The unfocused workspace is the zero state, and its scope is the whole
 		// queue. A scope that held nothing here would empty every view the day
 		// nobody focused anything.
-		{"unfocused holds an annotated row", focusScope{}, onPath, true},
-		{"unfocused holds an off-path row", focusScope{}, offPath, true},
-		{"unfocused holds a bare row", focusScope{}, bare, true},
+		{"unfocused holds an annotated row", focusScope{}, onPath, unrelated, true},
+		{"unfocused holds an off-path row", focusScope{}, offPath, unrelated, true},
+		{"unfocused holds a bare row", focusScope{}, bare, unrelated, true},
 
-		// Focused: membership is the FocusPath annotation and nothing else.
-		{"focused holds the path row", focusScope{goals: []string{"goal-1"}}, onPath, true},
-		{"focused rejects an annotated off-path row", focusScope{goals: []string{"goal-1"}}, offPath, false},
-		{"focused rejects a bare row", focusScope{goals: []string{"goal-1"}}, bare, false},
+		// Focused, owning nothing: membership is the FocusPath annotation and
+		// nothing else.
+		{"focused holds the path row", focused, onPath, unrelated, true},
+		{"focused rejects an annotated off-path row", focused, offPath, unrelated, false},
+		{"focused rejects a bare row", focused, bare, unrelated, false},
+		{"focused rejects a row in a lane only another scope would own", focused, offPath, laneIn("E", "held"), false},
 
 		// Several goals is one scope, not one scope per goal: a row on ANY
 		// goal's path is in. The annotation names the goal that reached it, and
 		// membership must not start depending on WHICH.
-		{"two goals hold a row reached by either", focusScope{goals: []string{"goal-1", "goal-2"}}, onPath, true},
+		{"two goals hold a row reached by either", focusScope{goals: []string{"goal-1", "goal-2"}}, onPath, unrelated, true},
+
+		// Owning this checkout's work: its lanes and every lane of their epics
+		// are in wherever the path runs, and nothing else is added.
+		{"owned holds an off-path row in a held lane", owned, offPath, laneIn("E", "held"), true},
+		{"owned holds a bare row in a held lane", owned, bare, laneIn("E", "held"), true},
+		{"owned holds an off-path row in another lane of a held lane's epic", owned, offPath, laneIn("E", "other"), true},
+		{"owned holds an off-path row in a held solo lane", owned, offPath, soloLane("S"), true},
+		{"owned still holds the path row", owned, onPath, unrelated, true},
+		{"owned rejects an off-path row in another epic", owned, offPath, unrelated, false},
+		// A solo lane has no epic, so holding one must not make every other
+		// solo lane ours through the empty epic id.
+		{"owned rejects an off-path row in a solo lane it does not hold", owned, offPath, soloLane("T"), false},
+
+		// --all is the unfocused scope, owned or not.
+		{"--all holds an off-path row in an unrelated lane", focused.scopeFor(true).owning(owned.own), offPath, unrelated, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := tc.scope.holds(tc.row); got != tc.want {
+			if got := tc.scope.holds(tc.row, tc.lane); got != tc.want {
 				t.Fatalf("holds() = %v, want %v", got, tc.want)
 			}
 		})
@@ -106,7 +140,7 @@ func TestFocusScopePartitionKeepsBothHalvesInOrder(t *testing.T) {
 	}
 	rows := []annotation.AnnotatedIssue{row("a", false), row("b", true), row("c", false), row("d", true)}
 
-	inScope, excluded := focusScope{goals: []string{"g"}}.partition(rows)
+	inScope, excluded := focusScope{goals: []string{"g"}}.partition(rows, soloLaneOfRow)
 	if got := rowIDsJoined(inScope); got != "b,d" {
 		t.Fatalf("in-scope ids = %q, want %q", got, "b,d")
 	}
@@ -116,13 +150,19 @@ func TestFocusScopePartitionKeepsBothHalvesInOrder(t *testing.T) {
 
 	// --all resolves to the unfocused scope, so everything is in and the
 	// excluded half is empty — not "everything is excluded".
-	inScope, excluded = focusScope{goals: []string{"g"}}.scopeFor(true).partition(rows)
+	inScope, excluded = focusScope{goals: []string{"g"}}.scopeFor(true).partition(rows, soloLaneOfRow)
 	if got := rowIDsJoined(inScope); got != "a,b,c,d" {
 		t.Fatalf("--all in-scope ids = %q, want %q", got, "a,b,c,d")
 	}
 	if len(excluded) != 0 {
 		t.Fatalf("--all excluded = %v, want none", rowIDsJoined(excluded))
 	}
+}
+
+// soloLaneOfRow is the lane of a parentless row, for partitions whose scope
+// owns no lane and so never asks which lane a row is in.
+func soloLaneOfRow(row annotation.AnnotatedIssue) model.LaneID {
+	return model.LaneOf(row.Issue, nil)
 }
 
 func rowIDsJoined(rows []annotation.AnnotatedIssue) string {
@@ -539,6 +579,82 @@ func TestFocusScopeNeverHidesThisCheckoutsOwnWork(t *testing.T) {
 	if row := h.runNextRow(); row.ID != mine.ID {
 		t.Fatalf("next = %q, want this checkout's own in-flight row %q — the focus scope must not reach step 1", row.ID, mine.ID)
 	}
+}
+
+// `lit backlog` answers over the scope `lit next` routes by, so the work next
+// hands back is never missing from the list. The case it exists for is an agent
+// back from a crash or a reset, running `lit backlog` to learn what it was
+// doing: its in-flight ticket off the focused path must be on screen, together
+// with the rest of the epic next would keep it in, and named as its own work
+// rather than counted among the rows the focus withheld. Driven through the CLI
+// so the event the run leaves is the one asserted.
+func TestFocusedBacklogListsThisCheckoutsOwnWork(t *testing.T) {
+	isolateEvents(t)
+	repo := newInitTestRepo(t)
+	goalEpic := newEpicInDir(t, repo, "Goal epic")
+	goal := extractTicketID(t, runCLIInDir(t, repo, "new", "--type", "task", "--parent", goalEpic, "--title", "Goal", "--topic", "goal"))
+	ours := newEpicInDir(t, repo, "Our epic")
+	mine := extractTicketID(t, runCLIInDir(t, repo, "new", "--type", "task", "--parent", ours, "--lane", "mine", "--title", "In flight", "--topic", "ours"))
+	sibling := extractTicketID(t, runCLIInDir(t, repo, "new", "--type", "task", "--parent", ours, "--lane", "other", "--title", "Rest of our epic", "--topic", "ours"))
+	elsewhere := newEpicInDir(t, repo, "Elsewhere")
+	unrelated := extractTicketID(t, runCLIInDir(t, repo, "new", "--type", "task", "--parent", elsewhere, "--title", "Not ours", "--topic", "elsewhere"))
+
+	runCLIInDir(t, repo, "start", mine)
+	runCLIInDir(t, repo, "label", "add", goal, FocusLabel)
+
+	text := runCLIInDir(t, repo, "backlog")
+	for _, id := range []string{goal, mine, sibling} {
+		rowPosition(t, text, id)
+	}
+	if strings.Contains(text, unrelated) {
+		t.Fatalf("focused backlog lists %s, which is neither on the path nor this checkout's work:\n%s", unrelated, text)
+	}
+	if want := "Focused on " + goal + " — listing only its unfinished prerequisite path, in rank order; 1 workable row(s) off that path are not shown (`lit backlog --all` for the whole queue)."; !strings.Contains(text, want) {
+		t.Fatalf("focused backlog missing %q — own work counted as withheld?\n%s", want, text)
+	}
+	ownClause := " Listed although off that path, as this checkout's own work (a lane it holds, or that lane's epic): "
+	if !strings.Contains(text, ownClause) {
+		t.Fatalf("focused backlog does not name the own work it listed off the path:\n%s", text)
+	}
+	ev := lastEvent(t)
+	if got, want := ev.Facts["backlog.focus_goals"], []any{goal}; !reflect.DeepEqual(got, want) {
+		t.Errorf("backlog.focus_goals = %#v, want %#v", got, want)
+	}
+	if got, want := ev.Facts["backlog.off_path"], []any{unrelated}; !reflect.DeepEqual(got, want) {
+		t.Errorf("backlog.off_path = %#v, want %#v", got, want)
+	}
+	if got := ev.Facts["backlog.own_off_path"]; !sameIDs(got, mine, sibling) {
+		t.Errorf("backlog.own_off_path = %#v, want exactly %s and %s", got, mine, sibling)
+	}
+
+	// --all lists the whole queue, so nothing is off a path and no fact says
+	// a scope narrowed it.
+	whole := runCLIInDir(t, repo, "backlog", "--all")
+	if strings.Contains(whole, ownClause) {
+		t.Fatalf("`lit backlog --all` names own work off a path it did not apply:\n%s", whole)
+	}
+	ev = lastEvent(t)
+	for _, key := range []string{"backlog.focus_goals", "backlog.off_path", "backlog.own_off_path"} {
+		if got := ev.Facts[key]; !reflect.DeepEqual(got, []any{}) {
+			t.Errorf("--all: %s = %#v, want []", key, got)
+		}
+	}
+}
+
+// sameIDs reports whether a fact holding a list of ids holds exactly want, in
+// any order: the order is the backlog's rank order, which this test does not
+// set.
+func sameIDs(fact any, want ...string) bool {
+	got, ok := fact.([]any)
+	if !ok || len(got) != len(want) {
+		return false
+	}
+	for _, id := range want {
+		if !slices.Contains(got, any(id)) {
+			return false
+		}
+	}
+	return true
 }
 
 // A focus label narrows the pool `lit next` picks from, so a ticket ranked

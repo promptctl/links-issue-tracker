@@ -438,20 +438,43 @@ func capacityFor(row annotation.AnnotatedIssue, standing claims.Standing, self m
 // An unidentified self needs no guard here: relationOf owns what a
 // public-checkout self may match, so ownership and the start gate cannot drift
 // apart on it. [LAW:single-enforcer]
-func ownScope(standings claims.Standings, self model.Attribution) (map[model.LaneID]bool, map[string]bool) {
-	lanes := map[model.LaneID]bool{}
-	epics := map[string]bool{}
+func ownScope(standings claims.Standings, self model.Attribution) ownWork {
+	own := ownWork{lanes: map[model.LaneID]bool{}, epics: map[string]bool{}}
 	for lane, standing := range standings {
 		if relationOf(standing, self) != laneOurs {
 			continue
 		}
-		lanes[lane] = true
+		own.lanes[lane] = true
 		if lane.Epic() != "" {
-			epics[lane.Epic()] = true
+			own.epics[lane.Epic()] = true
 		}
 	}
-	return lanes, epics
+	return own
 }
+
+// ownWork is this checkout's own work: the lanes it holds and the epics those
+// lanes sit in. `lit next` routes over it before anything else, and the focus
+// scope never narrows it away, so both read "ours" from this one value rather
+// than each rebuilding it from the standings. [LAW:one-source-of-truth]
+//
+// The zero value holds nothing, which is the checkout that holds no lane.
+type ownWork struct {
+	lanes map[model.LaneID]bool
+	epics map[string]bool
+}
+
+// holds reports whether this checkout holds the lane itself.
+func (o ownWork) holds(lane model.LaneID) bool { return o.lanes[lane] }
+
+// covers reports whether the lane is this checkout's own work: a lane it holds,
+// or any lane of an epic one of those sits in — the epic-major rule, which
+// keeps `lit next` serving the epic in flight until it has nothing workable.
+func (o ownWork) covers(lane model.LaneID) bool {
+	return o.holds(lane) || lane.Epic() != "" && o.epics[lane.Epic()]
+}
+
+// any reports whether this checkout holds a lane at all.
+func (o ownWork) any() bool { return len(o.lanes) > 0 }
 
 // routeNext applies the claim-aware selection precedence over an already
 // gathered, already ordered workable set. Pure — standings and self are
@@ -484,7 +507,9 @@ func ownScope(standings claims.Standings, self model.Attribution) (map[model.Lan
 // would re-open exactly that hole from the other side: a checkout holding a
 // ticket off the focused path would be told to start something else while its
 // own work sat in flight. Focus decides where a fresh session goes; it does not
-// decide whether your own work is still yours.
+// decide whether your own work is still yours. The scope states that rule
+// itself — it owns this checkout's work (focusScope.owning) — so `lit backlog`,
+// which has no steps to order, lists that work by the same rule.
 //
 // [LAW:dataflow-not-control-flow] Every step walks the same rows in the same
 // rank order and asks capacityFor the same question; a step differs
@@ -534,7 +559,14 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 	// answer, every row for the answer the filter would otherwise have got.
 	// The pick carries that scope out, so what the run says it answered over is
 	// the scope it did answer over.
-	pool, offPath := scope.partition(rows)
+	//
+	// The pool holds this checkout's own work too, since the scope owns it, and
+	// that changes no pick: step 4 is reached directly only when own holds
+	// nothing, and the own branch consults the pool only after steps 1-2b took
+	// every row of ours it could serve.
+	own := ownScope(standings, self)
+	scope = scope.owning(own)
+	pool, offPath := scope.partition(rows, laneOf)
 	fromPool := func(serves func(annotation.AnnotatedIssue) bool) (poolPick, bool) {
 		row, _, ok := pickFrom(pool, serves, func(model.LaneID) bool { return true }, serveWork)
 		return poolPick{Row: row, Lane: laneOf(row), Scope: scope}, ok
@@ -545,20 +577,14 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 		return slices.DeleteFunc(slices.Clone(from), func(row annotation.AnnotatedIssue) bool { return !selected(row) })
 	}
 
-	ownLanes, ownEpics := ownScope(standings, self)
-	mine := func(lane model.LaneID) bool { return ownLanes[lane] }
-	if len(ownLanes) > 0 {
+	if own.any() {
 		workToward := workTowardEach(rows, details, epics)
-		ourEpic := func(lane model.LaneID) bool {
-			return lane.Epic() != "" && ownEpics[lane.Epic()]
-		}
-		ourScope := func(lane model.LaneID) bool { return mine(lane) || ourEpic(lane) }
 		// Both dependency walks read every row and are shared by both runs of
 		// ownSteps; the walk step 2b declines is the walk step 3 reports, so
 		// what exhaustion names is exactly what that step passed over.
 		// [LAW:one-source-of-truth]
-		gatingMine := gatingDependencies(rows, laneOf, mine, reachFor, workToward)
-		gating := gatingDependencies(rows, laneOf, ourScope, reachFor, workToward)
+		gatingMine := gatingDependencies(rows, laneOf, own.holds, reachFor, workToward)
+		gating := gatingDependencies(rows, laneOf, own.covers, reachFor, workToward)
 		// ownSteps is steps 1-2b for a run that may serve only the rows serves
 		// accepts. It runs once with the filter, and — only when that finds
 		// nothing — once over the whole queue, which is how step 3 tells a
@@ -568,7 +594,7 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 		ownSteps := func(serves func(annotation.AnnotatedIssue) bool) (NextOutcome, annotation.AnnotatedIssue, bool) {
 			// Step 1 — our own lanes, startable work and work already underway
 			// alike, whichever the backlog ranks first.
-			if row, how, ok := pickFrom(rows, serves, mine, serveWork, resumeWork); ok {
+			if row, how, ok := pickFrom(rows, serves, own.holds, serveWork, resumeWork); ok {
 				if how == resumeWork {
 					return ResumedOwnWork{Row: row}, row, true
 				}
@@ -581,7 +607,7 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 				return served, served.Row, true
 			}
 			// Step 2 — the rest of our epic, in lanes we do not already hold.
-			if row, _, ok := pickFrom(rows, serves, func(lane model.LaneID) bool { return ourEpic(lane) && !mine(lane) }, serveWork); ok {
+			if row, _, ok := pickFrom(rows, serves, func(lane model.LaneID) bool { return own.covers(lane) && !own.holds(lane) }, serveWork); ok {
 				return ServedFromEpicLane{Row: row, Lane: laneOf(row)}, row, true
 			}
 			// Step 2b — a dependency outside our epic that gates any of it.
@@ -607,12 +633,11 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 			}
 			return narrowing
 		}
-		ours := func(row annotation.AnnotatedIssue) bool { return ourScope(laneOf(row)) }
 		exhausted := Exhausted{
-			Epics:    slices.Sorted(maps.Keys(ownEpics)),
-			Progress: evidence.ScopeProgress(ourScope),
+			Epics:    slices.Sorted(maps.Keys(own.epics)),
+			Progress: evidence.ScopeProgress(own.covers),
 			Blocked:  blockersOf(gating, workToward),
-			Held:     heldByThemselves(rows, ours, reachFor),
+			Held:     heldByThemselves(rows, func(row annotation.AnnotatedIssue) bool { return own.covers(laneOf(row)) }, reachFor),
 		}
 		if pick, ok := fromPool(selected); ok {
 			return ServedPastExhaustion{poolPick: pick, Exhaustion: exhausted}
@@ -625,9 +650,9 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 			return exhausted
 		}
 		// The pool offered nothing, so what the focus kept from it is the rest
-		// of the answer: the withheld rows outside our scope — ours were walked
-		// by steps 1-2b, focus or not.
-		exhausted.OffPath = withheldByScope(slices.DeleteFunc(selectedOf(offPath), ours))
+		// of the answer: the withheld rows. None of them is ours — the scope
+		// owns our work, which steps 1-2b walked, focus or not.
+		exhausted.OffPath = withheldByScope(selectedOf(offPath))
 		return exhausted
 	}
 
@@ -658,11 +683,16 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 // rather than as a kind reachOf could be asked for, and no diagnostic can word
 // them as a verdict about the row. [LAW:types-are-the-program]
 func withheldByScope(rows []annotation.AnnotatedIssue) []string {
-	withheld := make([]string, len(rows))
+	return rowIDs(rows)
+}
+
+// rowIDs names rows by id, in the order given.
+func rowIDs(rows []annotation.AnnotatedIssue) []string {
+	ids := make([]string, len(rows))
 	for i, row := range rows {
-		withheld[i] = row.ID
+		ids[i] = row.ID
 	}
-	return withheld
+	return ids
 }
 
 // passedOver classifies every row in the pool it is handed, in the rank order

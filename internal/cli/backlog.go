@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 )
 
 // backlogPreamble explains what the backlog view is so an agent reading top to
@@ -46,20 +48,42 @@ Use 'lit next' to pick the top workable item to start.`
 // the focus scope AND the --limit trim that runs after it. A notice derived
 // from the scope alone could not see the second, and would print "Nothing is
 // hidden" over a truncated list.
+//
+// It also names the rows the scope listed off the path because they are this
+// checkout's own work. They are on screen, so nothing hides them, but a reader
+// told the view lists "only its unfinished prerequisite path" would otherwise
+// take them for path rows.
 type focusNotice struct {
-	scope   focusScope
-	applied bool // false when --all asked for the whole queue anyway
-	hidden  int  // rows the scope excluded from this view
-	trimmed int  // rows --limit cut AFTER the scope partition
-	escape  string
+	scope      focusScope
+	applied    bool     // false when --all asked for the whole queue anyway
+	offPath    []string // ids the scope excluded from this view
+	ownOffPath []string // ids printed off the path, as this checkout's own work
+	trimmed    int      // rows --limit cut AFTER the scope partition
+	escape     string
 }
 
-// line renders the notice: what the scope did, then what --limit did. Two
-// clauses because they are two narrowings with two escapes, and one number
-// covering both would tell a reader rows are off the focus path when --limit
-// is what removed them. [LAW:one-source-of-truth]
+// line renders the notice: what the scope did, which of the rows it kept are
+// this checkout's own work off the path, then what --limit did. Separate
+// clauses because they are separate causes, and one number covering two would
+// tell a reader rows are off the focus path when --limit is what removed them.
+// [LAW:one-source-of-truth]
 func (n focusNotice) line() string {
-	return n.scopeClause() + n.trimClause()
+	return n.scopeClause() + n.ownClause() + n.trimClause()
+}
+
+// record puts the scope's decision on the command's event, under the names
+// `lit next` gives the same facts: which goals narrowed the view, the rows it
+// withheld, and the rows it listed off the path as this checkout's own work.
+// The goals are empty when nothing narrowed the run — an unfocused workspace,
+// or --all. [LAW:nothing-unseen]
+func (n focusNotice) record(ctx context.Context, view string) {
+	goals := []string{}
+	if n.applied {
+		goals = append(goals, n.scope.goals...)
+	}
+	telemetry.Set(ctx, view+".focus_goals", goals)
+	telemetry.Set(ctx, view+".off_path", append([]string{}, n.offPath...))
+	telemetry.Set(ctx, view+".own_off_path", append([]string{}, n.ownOffPath...))
 }
 
 // scopeClause states what the focus scope did — the unfocused workspace stating
@@ -77,7 +101,18 @@ func (n focusNotice) scopeClause() string {
 	case !n.applied:
 		return fmt.Sprintf("Focus is on %s; this run bypassed it and lists the whole queue.", n.scope.describe())
 	}
-	return fmt.Sprintf("Focused on %s — listing only its unfinished prerequisite path, in rank order; %d workable row(s) off that path are not shown (%s for the whole queue).", n.scope.describe(), n.hidden, n.escape)
+	return fmt.Sprintf("Focused on %s — listing only its unfinished prerequisite path, in rank order; %d workable row(s) off that path are not shown (%s for the whole queue).", n.scope.describe(), len(n.offPath), n.escape)
+}
+
+// ownClause names the listed rows that sit off the focus path because they are
+// this checkout's own work, which the scope never narrows away. It is empty
+// when there are none, which is every unfocused or --all run.
+// [LAW:dataflow-not-control-flow] no own rows render the identity string.
+func (n focusNotice) ownClause() string {
+	if len(n.ownOffPath) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" Listed although off that path, as this checkout's own work (a lane it holds, or that lane's epic): %s.", strings.Join(n.ownOffPath, ", "))
 }
 
 // trimClause names the narrowing the scope cannot see. It is empty when --limit
@@ -95,8 +130,8 @@ func (n focusNotice) trimClause() string {
 // with "(backlog empty)" collapses two facts into one value the reader cannot
 // pull apart again. [LAW:parse-dont-validate]
 func (n focusNotice) emptyLine() string {
-	if n.scope.active() && n.applied && n.hidden > 0 {
-		return fmt.Sprintf("(nothing workable on the focus path — %d row(s) off it, %s to see them)", n.hidden, n.escape)
+	if n.scope.active() && n.applied && len(n.offPath) > 0 {
+		return fmt.Sprintf("(nothing workable on the focus path — %d row(s) off it, %s to see them)", len(n.offPath), n.escape)
 	}
 	return "(backlog empty)"
 }

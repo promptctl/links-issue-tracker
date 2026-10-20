@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 
@@ -175,13 +176,25 @@ func workableLeaf(view workableView) appLeaf {
 		if err != nil {
 			return err
 		}
+		cc, err := gatherClaimContext(ctx, stdout, ap)
+		if err != nil {
+			return err
+		}
 		// The scope narrows MEMBERSHIP and nothing else, which is why it runs before
 		// ordering rather than as one more sort: what is left is then in stored rank
 		// order and the preamble that says so is true again. --all resolves to the
 		// unfocused scope — the same value an unlabeled workspace produces — so one
 		// partition serves every case and nothing downstream learns the flag exists.
 		// [LAW:dataflow-not-control-flow]
-		scoped, excluded := gathered.scope.scopeFor(knobs.all).partition(gathered.rows)
+		//
+		// It owns this checkout's work exactly as `lit next`'s does, so the work
+		// next would hand back is never missing from the list. That is why the
+		// claim context is read before the partition rather than after it.
+		scope := gathered.scope.scopeFor(knobs.all).owning(ownScope(cc.standings, cc.self))
+		laneOf := func(row annotation.AnnotatedIssue) model.LaneID {
+			return model.LaneOf(row.Issue, gathered.details[row.ID].Parent)
+		}
+		scoped, excluded := scope.partition(gathered.rows, laneOf)
 		view.order(scoped, gathered.details, knobs)
 		kept := view.keep(scoped)
 		rows := applyLimit(kept, knobs.limit)
@@ -198,16 +211,14 @@ func workableLeaf(view workableView) appLeaf {
 		// The endpoints say which narrowing is being measured.
 		// [LAW:one-source-of-truth]
 		notice := focusNotice{
-			scope:   gathered.scope,
-			applied: !knobs.all,
-			hidden:  len(excluded),
-			trimmed: len(kept) - len(rows),
-			escape:  "`lit " + view.name + " --all`",
+			scope:      gathered.scope,
+			applied:    !knobs.all,
+			offPath:    withheldByScope(excluded),
+			ownOffPath: rowIDs(slices.DeleteFunc(slices.Clone(rows), scope.onPath)),
+			trimmed:    len(kept) - len(rows),
+			escape:     "`lit " + view.name + " --all`",
 		}
-		cc, err := gatherClaimContext(ctx, stdout, ap)
-		if err != nil {
-			return err
-		}
+		notice.record(ctx, view.name)
 		// Derived unconditionally from the rows and graph data already gathered
 		// above: no extra query, and no branch deciding whether the renderer gets
 		// its data. [LAW:dataflow-not-control-flow]
