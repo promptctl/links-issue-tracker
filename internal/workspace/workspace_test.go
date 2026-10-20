@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -12,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/dolthub/dolt/go/libraries/utils/gitcmd"
 )
 
 func TestResolveCreatesSharedConfigInGitCommonDir(t *testing.T) {
@@ -442,16 +445,15 @@ func TestRemoteHasRefsReturnsErrorForUnknownRemoteName(t *testing.T) {
 }
 
 // TestGitOutputCancellationKillsSubprocess pins gitOutput's load-bearing contract:
-// a cancelled context kills the git subprocess promptly instead of letting a
-// network-wedged call hang. It is the unit-level counterpart to cmd/lit's
-// end-to-end SIGTERM acceptance test — the mechanism (exec.CommandContext) lives
-// here, so it is verified here directly. [LAW:verifiable-goals]
+// a cancelled context ends the git subprocess, and everything it started,
+// promptly instead of letting a network-wedged call hang. It is the unit-level
+// counterpart to cmd/lit's end-to-end SIGTERM acceptance test.
+// [LAW:verifiable-goals]
 //
 // The remote is a black-hole TCP listener: it accepts git's connection and never
-// answers the ref advertisement, so `git ls-remote` blocks in git itself — no
-// transport subprocess, so cancelling the context kills git and unblocks its
-// stdout read at once (an ext-transport hang would leave a grandchild holding the
-// pipe and hide the very behavior under test).
+// answers the ref advertisement. On POSIX the git lit started holds the
+// connection itself; on Windows it is Git for Windows' launcher, and the real
+// git.exe that holds the connection is its child, which only a tree kill ends.
 func TestGitOutputCancellationKillsSubprocess(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
@@ -461,42 +463,56 @@ func TestGitOutputCancellationKillsSubprocess(t *testing.T) {
 		t.Fatalf("listen for black-hole remote: %v", err)
 	}
 	defer ln.Close()
+	accepted := make(chan net.Conn, 1)
 	go func() {
-		for {
-			conn, err := ln.Accept()
-			if err != nil {
-				return // listener closed
-			}
-			// Hold the connection open and never write the git ref advertisement.
-			t.Cleanup(func() { _ = conn.Close() })
+		// Hold the connection open and never write the git ref advertisement.
+		if conn, err := ln.Accept(); err == nil {
+			accepted <- conn
 		}
 	}()
 	url := "git://127.0.0.1:" + strconv.Itoa(ln.Addr().(*net.TCPAddr).Port) + "/wedge.git"
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	done := make(chan error, 1)
 	go func() {
 		_, gitErr := gitOutput(ctx, t.TempDir(), "ls-remote", url)
 		done <- gitErr
 	}()
 
-	// It must actually hang: still running after a settle window. If it returned
-	// already, the wedge never engaged and the cancellation assertion is meaningless.
+	// Cancel once git is connected: the wedge has engaged, and whatever holds
+	// the connection is what the cancel must end.
+	var conn net.Conn
 	select {
+	case conn = <-accepted:
+		defer conn.Close()
 	case err := <-done:
-		t.Fatalf("gitOutput returned before cancellation (%v) — the black-hole remote did not wedge git", err)
-	case <-time.After(1 * time.Second):
+		t.Fatalf("gitOutput returned before connecting (%v) — the black-hole remote did not wedge git", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("git never connected to the black-hole remote")
 	}
 
 	cancel()
 	select {
 	case err := <-done:
-		// A killed subprocess must surface as an error, never a silent empty success.
-		if err == nil {
-			t.Fatalf("gitOutput returned nil error after cancellation; want a non-nil error")
+		// A killed subprocess must surface as the cancel, never a silent empty
+		// success.
+		var cancelled *gitcmd.Cancelled
+		if !errors.As(err, &cancelled) || !errors.Is(err, context.Canceled) {
+			t.Fatalf("gitOutput error = %v, want a *gitcmd.Cancelled naming context.Canceled", err)
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatalf("gitOutput did not return within 3s of cancellation — exec.CommandContext did not kill the wedged git")
+		t.Fatalf("gitOutput did not return within 3s of cancellation — the wedged git outlived it")
+	}
+	// Returning is not enough: on Windows the git that holds the connection
+	// is a child of the git lit started. It must be gone too.
+	// git wrote its request when it connected. A connection still open is a
+	// read that times out; a closed one ends, with EOF or, from a process
+	// Windows terminated, a reset.
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var netErr net.Error
+	if _, err := io.Copy(io.Discard, conn); errors.As(err, &netErr) && netErr.Timeout() {
+		t.Fatalf("the connection is still open 2s after the cancel — a process git started outlived it")
 	}
 }
 

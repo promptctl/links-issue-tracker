@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dolthub/dolt/go/libraries/utils/gitcmd"
 	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
@@ -48,6 +50,32 @@ func beginInvocation(now time.Time) *telemetry.Recorder {
 		Cwd:       cwd,
 		StartedAt: now,
 	})
+}
+
+// invocationContext is the context an invocation's dispatch runs under: its
+// open event, and the observer that puts on that event every git run its
+// context ended. Dolt's git included, whose errors reach lit only as text
+// through the SQL driver, while the context reaches the git Dolt starts.
+// "git.cancels" starts as [] so an invocation that ended no git says so, not
+// nothing. [LAW:nothing-unseen] [LAW:single-enforcer]
+func invocationContext(ctx context.Context, recorder *telemetry.Recorder) context.Context {
+	ctx = telemetry.With(ctx, recorder)
+	telemetry.Append(ctx, "git.cancels")
+	return gitcmd.WithObserver(ctx, func(cancelled *gitcmd.Cancelled) {
+		telemetry.Append(ctx, "git.cancels", gitCancelValue(cancelled))
+	})
+}
+
+// gitCancelValue is one git.cancels occurrence. survivors is null when no
+// count was taken.
+func gitCancelValue(c *gitcmd.Cancelled) map[string]any {
+	return map[string]any{
+		"git.cancel.cause":      telemetry.ErrorText(c.Cause),
+		"git.cancel.processes":  c.Kill.Processes,
+		"git.cancel.survivors":  c.Kill.Survivors,
+		"git.cancel.kill_error": telemetry.ErrorText(c.Kill.Err),
+		"git.cancel.output_cut": c.OutputCut,
+	}
 }
 
 // invocationEnd is how an invocation ended: Run's returned error, or the

@@ -1626,8 +1626,9 @@ Package doc — `interrupt.go`: turns SIGINT/SIGTERM into context
 cancellation AND guarantees process termination even when in-flight work ignores
 cancellation.
 
-- `DefaultGrace = 5 * time.Second` — `interrupt.go`: bounds how long the clean
-  cancellation path may run before hard exit; chosen shorter than the inline
+- `DefaultGrace = gitcmd.CancelBound + time.Second` (7s) — `interrupt.go`: bounds
+  how long the clean cancellation path may run before hard exit; gives a
+  cancelled git `gitcmd.CancelBound` to reach the event; chosen shorter than the inline
   receive's fetch budget and shorter than Docker's 10s / Kubernetes' 30s SIGKILL
   deadlines (`interrupt.go`).
 - `interruptSignals = []os.Signal{syscall.SIGINT, syscall.SIGTERM}` —

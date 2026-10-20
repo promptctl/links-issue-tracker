@@ -15,7 +15,7 @@ one below carries the condition that would let it be deleted.
 
 | Module in `go.mod` | Upstream | What `lit` builds | Branch | Current pin |
 | --- | --- | --- | --- | --- |
-| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20261020015807-0eb248a259c5` |
+| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20261020194339-6839d5fdc5e8` |
 | `github.com/dolthub/go-mysql-server` | [dolthub/go-mysql-server](https://github.com/dolthub/go-mysql-server) | [promptctl/go-mysql-server](https://github.com/promptctl/go-mysql-server) | `lit` | `v0.20.1-0.20260821032251-ab5cb9ec3b69` |
 | `github.com/dolthub/driver` | [dolthub/driver](https://github.com/dolthub/driver) | [`internal/vendor/dolthub-driver`](internal/vendor/dolthub-driver) | — | `v0.2.1-0.20260314000741-0fe74e7ee31a` |
 
@@ -394,29 +394,63 @@ routing it through the singleton map, and the `require` line moves past that
 change. Dropping it without that brings back every pushed or cloned remote
 held open for the life of the process.
 
-#### Patch 12 — run git with long paths on, and read a rooted path as local on Windows
+#### Patch 12 — read a rooted path as local on Windows
 
-`go/store/blobstore/internal/git/runner.go`,
-`go/libraries/doltcore/dbfactory/git_remote.go`,
 `go/libraries/doltcore/env/git_remote_url.go`.
 
 Git for Windows refuses a path past MAX_PATH (260 characters) unless
 `core.longpaths` is set, and it is off by default. A ref under a git remote
 cache sits about 175 characters below the database directory, so pushing from
 a database a few directories deep failed with `Filename too long` and git exit
-128 (`links-windows-qr8l.8m6`). Both git command builders, the blobstore's
-`git.Runner` and dbfactory's `gitCmd`, pass `-c core.longpaths=true` on every
-call, as `lit`'s own `mirrorGit` does. `NormalizeGitRemoteUrl` read
+128 (`links-windows-qr8l.8m6`). Every git the fork starts now runs with
+`core.longpaths` on through `gitcmd` (Patch 13). `NormalizeGitRemoteUrl` read
 `/srv/git/repo.git` as a schemeless host on Windows, where `filepath.IsAbs` is
 false for a path with no volume, and returned `git+https:///srv/git/repo.git`;
 a path that starts with a separator is now local and gains the current drive.
 `TestGitBackedRemoteURL` and the git-backed remote tests in `internal/store`
 fail on the nightly `windows` lane without the patch.
 
-**Retire it when** upstream sets `core.longpaths` on the git it runs and reads a
-rooted path as local, and the `require` line moves past that change. Dropping
-it without that brings back every git-backed push failing on Windows from a
-database a few directories deep.
+**Retire it when** upstream reads a rooted path as local on Windows, and the
+`require` line moves past that change. Dropping it without that brings back
+every git-backed remote named by a rooted path failing on Windows.
+
+#### Patch 13 — a cancelled git ends with everything it started
+
+`go/libraries/utils/proctree/` and `go/libraries/utils/gitcmd/` (added),
+`go/store/blobstore/internal/git/runner.go`,
+`go/store/blobstore/internal/git/impl.go`,
+`go/libraries/doltcore/dbfactory/git_remote.go`,
+`go/store/blobstore/git_blobstore.go`, `go/store/nbs/store.go`, and the
+blobstore and nbs tests that construct a `GitBlobstore`.
+
+os/exec's cancel kills the one process it started. git runs its transport in
+a child (ssh, `git-remote-http`, and on Windows the real `git.exe` behind Git
+for Windows' launcher), which kept running and kept git's output pipes open,
+so `Wait` blocked until it exited: a mirror push cut by its 40s deadline went
+on uploading for over 14 minutes (`links-unfiled-fc79.709k`). `gitcmd` is now
+the one way the fork and `lit` start git. It runs each git as a `proctree`:
+on POSIX a cancel stops the tree from the root down and kills every member,
+keeping git in its caller's process group so a `/dev/tty` prompt still
+prompts; on Windows git starts suspended in a Job Object, which a cancel
+terminates. `gitcmd` owns git's output pipes and bounds them by the context:
+unbounded while it lives, at most 1s once it is done. A run the context ended
+(killed, cut, or a git that exited non-zero once the context was done, as
+one Ctrl-C reached before the kill does) returns a `*gitcmd.Cancelled` and
+hands it to the observer on its context, which is how `lit`'s event records
+a cancel inside `CALL DOLT_FETCH` or `DOLT_PUSH`, whose errors reach `lit`
+only as text. The observer has it within `gitcmd.CancelBound` of git's exit,
+and `lit`'s interrupt grace is derived from that bound. The `GitBlobstore`
+constructors take the opener's context, and `Close` runs its git on it
+without its cancellation, so a gc its deadline kills reaches that observer.
+`gitcmd` also passes `core.longpaths=true` to every git, which Patch 12 used
+to do in each builder. `internal/store/git_cancel_test.go` and
+`internal/workspace`'s `TestGitOutputCancellationKillsSubprocess` fail
+without the patch; the second fails on the nightly `windows` lane.
+
+**Retire it when** upstream ends a cancelled git's whole process tree on every
+platform and reports the cancel to its caller, and the `require` line moves
+past that change. Dropping it without that brings back a cancelled push or
+fetch whose transport outlives `lit`.
 
 ### promptctl/go-mysql-server
 

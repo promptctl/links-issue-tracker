@@ -47,7 +47,7 @@ func Run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string)
 			panic(panicked)
 		}
 	}()
-	return dispatch(telemetry.With(ctx, recorder), stdout, stderr, args)
+	return dispatch(invocationContext(ctx, recorder), stdout, stderr, args)
 }
 
 func dispatch(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string) error {
