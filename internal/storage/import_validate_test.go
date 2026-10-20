@@ -145,6 +145,10 @@ func TestImportGateJudgesTheFilesReferences(t *testing.T) {
 			_, err := ParseBulkFile([]BulkIssueSpec{create("t", "task", "lit-e", "t")}, nil)
 			return err
 		}, `bulk: doc 0 ("t") cannot depend on itself`},
+		{"bulk: an update naming an empty blocker is refused", func() error {
+			_, err := ParseBulkFile([]BulkIssueSpec{{ID: "lit-real-1", BlockedBy: ptr([]string{"lit-real-2", ""})}}, nil)
+			return err
+		}, `bulk: doc 0 blocked_by has an empty entry`},
 		{"bulk: an update stating only blocked_by, naming another issue, is admitted", func() error {
 			_, err := ParseBulkFile([]BulkIssueSpec{{ID: "lit-real-1", BlockedBy: ptr([]string{"lit-real-2"})}}, nil)
 			return err

@@ -236,6 +236,7 @@ var cases = []engineCase{
 	{"a_bulk_file_stating_blocked_by_on_a_missing_issue_is_refused", aBulkFileStatingBlockedByOnAMissingIssueIsRefused},
 	{"a_bulk_file_refused_after_its_edges_puts_back_the_blocked_by", aBulkFileRefusedAfterItsEdgesPutsBackTheBlockedBy},
 	{"a_bulk_file_judges_an_updates_blocked_by_on_the_hierarchy_it_ends_with", aBulkFileJudgesAnUpdatesBlockedByOnTheHierarchyItEndsWith},
+	{"a_bulk_file_refusal_names_the_target_as_the_file_states_it", aBulkFileRefusalNamesTheTargetAsTheFileStatesIt},
 	{"import_tree_maps_local_ids", importTreeMapsLocalIDs},
 	{"attribution_stamps_events", attributionStampsEvents},
 	{"observers_hear_every_change", observersHearEveryChange},

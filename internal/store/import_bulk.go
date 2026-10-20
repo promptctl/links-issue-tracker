@@ -54,7 +54,7 @@ func (s *Store) BulkApply(ctx context.Context, prefix, actor string, specs []sto
 	}
 	localRealID := make(map[string]string, len(file.Creates))
 	for _, create := range file.Creates {
-		issue, err := s.CreateIssue(ctx, create.Input(resolveBulkRef(create.Parent, localRealID), prefix, actor))
+		issue, err := s.CreateIssue(ctx, create.Input(storage.ResolveRef(create.Parent, localRealID), prefix, actor))
 		if err != nil {
 			return refuse(fmt.Errorf("bulk: create doc %d: %w", create.Index, err))
 		}
@@ -64,10 +64,9 @@ func (s *Store) BulkApply(ctx context.Context, prefix, actor string, specs []sto
 		}
 		result.Created = append(result.Created, storage.NewIDMapping(create.LocalID, issue.ID))
 	}
-	resolve := func(ref string) string { return resolveBulkRef(ref, localRealID) }
 	if err := s.withMutation(ctx, "bulk edges", func(ctx context.Context, tx *sql.Tx) error {
 		var err error
-		edges, err = file.WriteEdges(createdIDs, resolve, edgeWriterTx{ctx: ctx, tx: tx, actor: actor, now: s.clock.Now()})
+		edges, err = file.WriteEdges(createdIDs, edgeWriterTx{ctx: ctx, tx: tx, actor: actor, now: s.clock.Now()})
 		return err
 	}); err != nil {
 		edges = storage.EdgeStep{}
@@ -145,17 +144,4 @@ func (w edgeWriterTx) Restore(id string, relType model.RelationType, edges []mod
 		}
 	}
 	return nil
-}
-
-// resolveBulkRef resolves a parent/blocked_by reference against this batch's
-// LocalID -> real-ID map; a reference that matches nothing in the batch
-// passes through unchanged as a real, pre-existing issue ID for CreateIssue
-// or AddRelation to validate. [LAW:dataflow-not-control-flow] one
-// unconditional lookup-with-fallback, not a branch on "is this local or
-// external."
-func resolveBulkRef(ref string, localRealID map[string]string) string {
-	if real, ok := localRealID[ref]; ok {
-		return real
-	}
-	return ref
 }

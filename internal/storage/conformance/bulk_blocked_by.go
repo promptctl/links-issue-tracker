@@ -204,6 +204,30 @@ func aBulkFileRefusedAfterItsEdgesPutsBackTheBlockedBy(t *testing.T, ctx context
 	assertStrings(t, "blocked_by set", result.BlockedBySet, nil)
 }
 
+// aBulkFileRefusalNamesTheTargetAsTheFileStatesIt: an edge the write refuses
+// is named by the reference the file wrote, so an edge onto a create names
+// its local_id, not the id the rollback deletes. Here the gate cannot judge
+// the edge, since the update document states no parent, and the write refuses
+// it: the create and x are leaves of one epic.
+func aBulkFileRefusalNamesTheTargetAsTheFileStatesIt(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+	x := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "x", Topic: "core", ParentID: epic.ID})
+	title := "c"
+
+	result, err := st.BulkApply(ctx, prefix, "ada", []storage.BulkIssueSpec{
+		{LocalID: "c", Title: &title, IssueType: ptr("task"), Topic: ptr("core"), Parent: ptr(epic.ID)},
+		{ID: x.ID, BlockedBy: blockedBy("c")},
+	})
+	want := fmt.Sprintf("bulk: blocked_by of %q -> %q: %s", x.ID, "c", storage.SameEpicBlocksRejectionMessage)
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("BulkApply error = %v, want it to contain %q", err, want)
+	}
+	assertStrings(t, "x's blockers after the refusal", blockersOf(t, ctx, st, x.ID), nil)
+	if len(result.Created) != 0 {
+		t.Errorf("created after the refusal = %v, want the create rolled back", result.Created)
+	}
+}
+
 // aBulkFileJudgesAnUpdatesBlockedByOnTheHierarchyItEndsWith: two leaves of one
 // epic may not block each other, so an update document's blocked_by between
 // them applies when another document moves one of them out, and is refused,

@@ -405,6 +405,9 @@ func parseBulkSpecs(specs []BulkIssueSpec) (BulkFile, map[int]FileCreate, error)
 		// create. [LAW:single-enforcer]
 		blockedBy := valueOr(spec.BlockedBy, nil)
 		for _, dep := range blockedBy {
+			if dep == "" {
+				return BulkFile{}, nil, model.ValidationError{Message: fmt.Sprintf("bulk: doc %d blocked_by has an empty entry", i)}
+			}
 			if dep != strings.TrimSpace(dep) {
 				return BulkFile{}, nil, model.ValidationError{Message: fmt.Sprintf("bulk: doc %d blocked_by entry %q has surrounding whitespace", i, dep)}
 			}

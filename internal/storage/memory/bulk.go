@@ -114,7 +114,7 @@ func (e *Engine) ImportTree(ctx context.Context, prefix, actor string, specs []s
 // changes nothing else in this engine.
 func (e *Engine) writeEdges(file storage.BulkFile, batch *batchIDs, actor string) (storage.EdgeStep, error) {
 	before := slices.Clone(e.relations)
-	step, err := file.WriteEdges(batch.createdIDs, batch.resolve, edgeWriter{e: e, actor: actor})
+	step, err := file.WriteEdges(batch.createdIDs, edgeWriter{e: e, actor: actor})
 	if err != nil {
 		e.relations = before
 	}
@@ -218,17 +218,9 @@ func (b *batchIDs) created(index int, localID, realID string) {
 
 func (b *batchIDs) realID(index int) string { return b.byIndex[index] }
 
-// resolve maps a reference against this batch's names, passing anything it
-// does not recognize through unchanged — a reference that matches nothing
-// local is a real, pre-existing id, and the create or edge write that receives
-// it is what decides whether it is a real one. [LAW:dataflow-not-control-flow]
-// One unconditional lookup-with-fallback, not a branch on "is this local".
-func (b *batchIDs) resolve(ref string) string {
-	if real, ok := b.byLocalID[ref]; ok {
-		return real
-	}
-	return ref
-}
+// resolve maps a reference against this batch's names by the one rule every
+// engine resolves a file's references by. [LAW:one-source-of-truth]
+func (b *batchIDs) resolve(ref string) string { return storage.ResolveRef(ref, b.byLocalID) }
 
 // resolveLocal maps a reference that must be local. A tree import validates
 // every reference against the file before the first create, so an unresolved

@@ -222,13 +222,31 @@ func (r FileRef) String() string {
 
 // EdgeSet states one issue's whole set of outgoing edges of one relation
 // type: a parent is a set of zero or one, a blocked_by list a set of any size.
-// Targets are references, each a local_id in the file or a real id, which only
-// the write can resolve. Doc is the document that states the set.
+// Doc is the document that states the set.
 type EdgeSet struct {
 	Doc     FileRef
 	ID      string
 	Type    model.RelationType
-	Targets []string
+	Targets []EdgeTarget
+}
+
+// EdgeTarget is one target an edge set states: Ref as the file wrote it, a
+// local_id in the file or a real id, and ID, the real id it resolves to. A
+// refusal names the Ref, the one the author can find in the file.
+type EdgeTarget struct {
+	Ref, ID string
+}
+
+// ResolveRef resolves a reference a file states against minted, the ids its
+// creates were minted under by local_id: a reference that matches no create
+// passes through unchanged as a real, pre-existing id, for the write that
+// receives it to judge. [LAW:dataflow-not-control-flow] one lookup with a
+// fallback, not a branch on "is this local".
+func ResolveRef(ref string, minted map[string]string) string {
+	if id, ok := minted[ref]; ok {
+		return id
+	}
+	return ref
 }
 
 // EdgeWriter is the relation write an engine runs a file's edge sets through,
@@ -286,18 +304,14 @@ func (s EdgeStep) Undo(w EdgeWriter) error {
 // [LAW:no-ambient-temporal-coupling] [LAW:single-enforcer]
 //
 // The first refusal ends the step, naming the document it refused.
-func (f BulkFile) WriteEdges(created []string, resolve func(ref string) string, w EdgeWriter) (EdgeStep, error) {
-	refuse := func(set EdgeSet, target string, err error) (EdgeStep, error) {
-		return EdgeStep{}, fmt.Errorf("bulk: %s of %s -> %q: %w", fileKey(set.Type), set.Doc, target, err)
+func (f BulkFile) WriteEdges(created []string, w EdgeWriter) (EdgeStep, error) {
+	refuse := func(set EdgeSet, ref string, err error) (EdgeStep, error) {
+		return EdgeStep{}, fmt.Errorf("bulk: %s of %s -> %q: %w", fileKey(set.Type), set.Doc, ref, err)
 	}
 	var step EdgeStep
 	sets := f.edgeSets(created)
-	adds := make([][]string, len(sets))
+	adds := make([][]EdgeTarget, len(sets))
 	for i, set := range sets {
-		stated := make([]string, len(set.Targets))
-		for j, ref := range set.Targets {
-			stated[j] = resolve(ref)
-		}
 		prior, err := w.Edges(set.ID, set.Type)
 		if err != nil {
 			return EdgeStep{}, fmt.Errorf("bulk: %s of %s: %w", fileKey(set.Type), set.Doc, err)
@@ -306,15 +320,15 @@ func (f BulkFile) WriteEdges(created []string, resolve func(ref string) string, 
 		removed := 0
 		for _, edge := range prior {
 			held[edge.DstID] = true
-			if !slices.Contains(stated, edge.DstID) {
+			if !slices.ContainsFunc(set.Targets, func(t EdgeTarget) bool { return t.ID == edge.DstID }) {
 				if err := w.Remove(edge); err != nil {
 					return refuse(set, edge.DstID, err)
 				}
 				removed++
 			}
 		}
-		for _, target := range stated {
-			if !held[target] {
+		for _, target := range set.Targets {
+			if !held[target.ID] {
 				adds[i] = append(adds[i], target)
 			}
 		}
@@ -328,8 +342,8 @@ func (f BulkFile) WriteEdges(created []string, resolve func(ref string) string, 
 	}
 	for i, set := range sets {
 		for _, target := range adds[i] {
-			if err := w.Add(set.ID, target, set.Type); err != nil {
-				return refuse(set, target, err)
+			if err := w.Add(set.ID, target.ID, set.Type); err != nil {
+				return refuse(set, target.Ref, err)
 			}
 			step.Added++
 		}
@@ -342,21 +356,34 @@ func (f BulkFile) WriteEdges(created []string, resolve func(ref string) string, 
 // parents, then the creates' blocked_by, then the update documents'
 // blocked_by. A create's parent is not among them; the create writes it.
 func (f BulkFile) edgeSets(created []string) []EdgeSet {
+	minted := make(map[string]string, len(f.Creates))
+	for pos, c := range f.Creates {
+		if c.LocalID != "" {
+			minted[c.LocalID] = created[pos]
+		}
+	}
+	targets := func(refs []string) []EdgeTarget {
+		resolved := make([]EdgeTarget, len(refs))
+		for i, ref := range refs {
+			resolved[i] = EdgeTarget{Ref: ref, ID: ResolveRef(ref, minted)}
+		}
+		return resolved
+	}
 	sets := make([]EdgeSet, 0, len(f.Reparents)+len(f.Creates)+len(f.BlockedBy))
 	for _, r := range f.Reparents {
 		set := EdgeSet{Doc: FileRef{id: r.ID}, ID: r.ID, Type: model.RelParentChild}
 		if r.Parent != "" {
-			set.Targets = []string{r.Parent}
+			set.Targets = targets([]string{r.Parent})
 		}
 		sets = append(sets, set)
 	}
 	for pos, c := range f.Creates {
 		if len(c.BlockedBy) > 0 {
-			sets = append(sets, EdgeSet{Doc: FileRef{index: c.Index}, ID: created[pos], Type: model.RelBlockedBy, Targets: c.BlockedBy})
+			sets = append(sets, EdgeSet{Doc: FileRef{index: c.Index}, ID: created[pos], Type: model.RelBlockedBy, Targets: targets(c.BlockedBy)})
 		}
 	}
 	for _, b := range f.BlockedBy {
-		sets = append(sets, EdgeSet{Doc: FileRef{id: b.ID}, ID: b.ID, Type: model.RelBlockedBy, Targets: b.BlockedBy})
+		sets = append(sets, EdgeSet{Doc: FileRef{id: b.ID}, ID: b.ID, Type: model.RelBlockedBy, Targets: targets(b.BlockedBy)})
 	}
 	return sets
 }
