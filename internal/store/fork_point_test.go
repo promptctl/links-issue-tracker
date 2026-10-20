@@ -528,7 +528,9 @@ func TestASetRemoteURLRetriedAfterItsRemoveLandsTheAdd(t *testing.T) {
 	if err := execProcedureDiscard(ctx, st.db, "DOLT_REMOTE", "remove", "origin"); err != nil {
 		t.Fatalf("remove the remote: %v", err)
 	}
-	moved := "file://" + filepath.Join(t.TempDir(), "moved")
+	// Forward slashes, as Dolt lists a file URL back: on Windows a backslashed
+	// path reads back file://D:/... and would not match its own setting.
+	moved := "file://" + filepath.ToSlash(filepath.Join(t.TempDir(), "moved"))
 	if err := st.SyncSetRemoteURL(ctx, remoteName(t, "origin"), moved); err != nil {
 		t.Fatalf("SyncSetRemoteURL() error = %v", err)
 	}

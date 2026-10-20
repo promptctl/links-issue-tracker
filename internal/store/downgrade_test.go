@@ -12,6 +12,7 @@ import (
 
 	"github.com/pressly/goose/v3"
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
+	"github.com/promptctl/links-issue-tracker/internal/fsfault"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
 	"github.com/promptctl/links-issue-tracker/internal/version"
@@ -386,10 +387,7 @@ func TestDowngradeSnapshotFailureReportsTheVersionItRead(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir snapshots: %v", err)
 	}
-	if err := os.Chmod(dir, 0o555); err != nil {
-		t.Fatalf("chmod snapshots: %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	fsfault.DenyWrite(t, dir)
 
 	done, err := st.Downgrade(ctx, registryMax-1)
 	if err == nil {
@@ -405,9 +403,6 @@ func TestDowngradeSnapshotFailureReportsTheVersionItRead(t *testing.T) {
 // error and carries the prune failure on what it reports.
 func TestDowngradePruneFailureReportsTheCommittedReverse(t *testing.T) {
 	t.Parallel()
-	if os.Geteuid() == 0 {
-		t.Skip("removal-permission injection has no effect as root")
-	}
 	ctx := context.Background()
 	st, doltRoot := openWorkspaceForDowngrade(t)
 	registryMax, err := migrations.MaxVersion()
@@ -432,10 +427,7 @@ func TestDowngradePruneFailureReportsTheCommittedReverse(t *testing.T) {
 			stuck = path
 		}
 	}
-	if err := os.Chmod(stuck, 0o555); err != nil {
-		t.Fatalf("chmod stuck snapshot: %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(stuck, 0o755) })
+	fsfault.DenyWrite(t, stuck)
 
 	done, err := st.Downgrade(ctx, registryMax-1)
 	if err != nil {

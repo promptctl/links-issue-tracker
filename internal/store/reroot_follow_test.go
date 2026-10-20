@@ -17,6 +17,7 @@ import (
 	"github.com/dolthub/dolt/go/store/hash"
 
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
+	"github.com/promptctl/links-issue-tracker/internal/fsfault"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -228,10 +229,10 @@ func TestAFollowCarriesAFailedCollection(t *testing.T) {
 	ctx := context.Background()
 	r := newReRootedRemote(t, ctx, true)
 	unreadable := filepath.Join(nomsDir(r.bravo), "unreadable")
-	if err := os.Mkdir(unreadable, 0o000); err != nil {
+	if err := os.Mkdir(unreadable, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.Chmod(unreadable, 0o755) })
+	fsfault.DenyRead(t, unreadable)
 
 	bravo := openSyncOrFatal(t, ctx, r.bravo)
 	defer func() { _ = bravo.Close() }()

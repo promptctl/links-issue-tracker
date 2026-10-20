@@ -143,6 +143,8 @@ func TestAnIllegalDurabilityPanicsAndLeavesNothing(t *testing.T) {
 	}
 }
 
+// assertFile checks name holds contents with the mode perm reads back as on
+// this platform.
 func assertFile(t *testing.T, name, contents string, perm fs.FileMode) {
 	t.Helper()
 	got, err := os.ReadFile(name)
@@ -153,9 +155,29 @@ func assertFile(t *testing.T, name, contents string, perm fs.FileMode) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != perm {
-		t.Fatalf("%s mode = %v, want %v", name, info.Mode().Perm(), perm)
+	if want := modeAsStored(t, perm); info.Mode().Perm() != want {
+		t.Fatalf("%s mode = %v, want %v (%v as this platform stores it)", name, info.Mode().Perm(), want, perm)
 	}
+}
+
+// modeAsStored is the mode a file chmodded to perm reads back with: perm
+// itself on POSIX, and on Windows, which keeps only a read-only bit, 0o666 or
+// 0o444. It chmods a file of its own by name, an instrument apart from the
+// file handle Replace sets the mode through.
+func modeAsStored(t *testing.T, perm fs.FileMode) fs.FileMode {
+	t.Helper()
+	probe := filepath.Join(t.TempDir(), "mode-probe")
+	if err := os.WriteFile(probe, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(probe, perm); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(probe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return info.Mode().Perm()
 }
 
 func assertOnlyEntry(t *testing.T, dir, want string) {

@@ -591,7 +591,16 @@ func TestPlainFileCopy_PreservesPerms(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	src := filepath.Join(root, "a")
-	if err := os.WriteFile(src, []byte("x"), 0o640); err != nil {
+	if err := os.WriteFile(src, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// 0o666 is what a umask of 022 strips to 0o644 when the copy is created,
+	// so only a copy that sets its mode outright reads back as the source's.
+	if err := os.Chmod(src, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	srcInfo, err := os.Stat(src)
+	if err != nil {
 		t.Fatal(err)
 	}
 	dst := filepath.Join(root, "b")
@@ -602,8 +611,8 @@ func TestPlainFileCopy_PreservesPerms(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o640 {
-		t.Fatalf("perm: %v, want 0640", info.Mode().Perm())
+	if info.Mode().Perm() != srcInfo.Mode().Perm() {
+		t.Fatalf("perm: %v, want the source's %v", info.Mode().Perm(), srcInfo.Mode().Perm())
 	}
 }
 

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/promptctl/links-issue-tracker/internal/fsfault"
 )
 
 var (
@@ -479,18 +481,12 @@ func TestAWriteReportsThePhaseItsWorkingOnShows(t *testing.T) {
 // A write that fails after adding the exclude entry says it added it: the
 // entry is in the exclude file whether or not the file itself was written.
 func TestAFailedWriteReportsWhatItHadDone(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("a read-only directory does not stop root from writing")
-	}
 	loc := testLocation(t)
 	dir := filepath.Dir(loc.File)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(dir, 0o555); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	fsfault.DenyWrite(t, dir)
 	out, err := Write(loc, Facts{Started{alpha, progress}}, at)
 	if err == nil {
 		t.Fatal("Write into a read-only directory succeeded; want an error")
@@ -507,9 +503,6 @@ func TestAFailedWriteReportsWhatItHadDone(t *testing.T) {
 // A rewrite of an unreadable file that fails does not say the file was
 // replaced: the damaged file is still on disk.
 func TestAFailedRewriteOfAnUnreadableFileIsNotReplaced(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("a read-only directory does not stop root from writing")
-	}
 	loc := testLocation(t)
 	dir := filepath.Dir(loc.File)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -518,10 +511,7 @@ func TestAFailedRewriteOfAnUnreadableFileIsNotReplaced(t *testing.T) {
 	if err := os.WriteFile(loc.File, []byte("{working_on"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(dir, 0o555); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	fsfault.DenyWrite(t, dir)
 	out, err := Write(loc, Facts{Started{alpha, progress}}, at)
 	if err == nil {
 		t.Fatal("Write into a read-only directory succeeded; want an error")

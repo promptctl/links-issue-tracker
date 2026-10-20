@@ -78,14 +78,14 @@ func TestUninitializedWorkspaceIsOneCondition(t *testing.T) {
 func TestRequireInitializedWorkspaceSeparatesGenuineStatFaults(t *testing.T) {
 	t.Parallel()
 
-	notADir := filepath.Join(t.TempDir(), "regular-file")
-	if err := os.WriteFile(notADir, []byte("not a directory"), 0o600); err != nil {
-		t.Fatalf("seed the non-directory: %v", err)
-	}
+	// A NUL byte is refused as an invalid argument by every platform's stat. A
+	// regular file where a directory belongs is not portable: POSIX reports
+	// ENOTDIR, while Windows reports the path not found, which is ENOENT.
+	invalid := filepath.Join(t.TempDir(), "dolt\x00")
 
-	err := requireInitializedWorkspace(filepath.Join(notADir, "dolt"))
+	err := requireInitializedWorkspace(invalid)
 	if err == nil {
-		t.Fatal("requireInitializedWorkspace() through a non-directory succeeded; want the stat fault surfaced")
+		t.Fatal("requireInitializedWorkspace() of a name stat refuses succeeded; want the stat fault surfaced")
 	}
 	if errors.Is(err, ErrWorkspaceNotInitialized) {
 		t.Fatalf("a non-ENOENT stat fault was reported as an uninitialized workspace: %v", err)

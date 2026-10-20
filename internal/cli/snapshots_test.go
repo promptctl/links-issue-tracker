@@ -13,6 +13,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
 	"github.com/promptctl/links-issue-tracker/internal/engine"
+	"github.com/promptctl/links-issue-tracker/internal/fsfault"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
@@ -658,10 +659,7 @@ func TestSnapshotsNew_RecordSurvivesPruneFailure(t *testing.T) {
 		t.Fatal("no user snapshots on disk after five takes")
 	}
 	oldestPath := filepath.Join(dir, oldest)
-	if err := os.Chmod(oldestPath, 0o000); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(oldestPath, 0o755) })
+	fsfault.DenyRead(t, oldestPath)
 
 	var stdout, stderr bytes.Buffer
 	runErr := Run(context.Background(), &stdout, &stderr, []string{"snapshots", "new"})

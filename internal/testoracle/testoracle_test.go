@@ -3,6 +3,7 @@ package testoracle
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 )
@@ -29,18 +30,23 @@ func (r *verdictRecorder) Skipf(format string, args ...any) {
 // Not parallel: it rewrites PATH and GITHUB_ACTIONS for the process.
 func TestPathOutcomes(t *testing.T) {
 	dir := t.TempDir()
-	present := filepath.Join(dir, "present-oracle")
-	if err := os.WriteFile(present, []byte("#!/bin/sh\n"), 0o755); err != nil {
+	// The .exe is in the name itself, so the same file is an executable on
+	// PATH both where LookPath reads the mode's exec bits and where it reads
+	// PATHEXT; LookPath runs nothing, so what the file holds is beside the point.
+	present := filepath.Join(dir, "present-oracle.exe")
+	if err := os.WriteFile(present, nil, 0o755); err != nil {
 		t.Fatalf("write fake oracle: %v", err)
 	}
 	t.Setenv("PATH", dir)
+	// The lookup error's text is the platform's: Windows names %PATH%.
+	notFound := (&exec.Error{Name: "absent-oracle", Err: exec.ErrNotFound}).Error()
 
 	cases := []struct {
 		name, oracle, githubActions, wantPath, wantVerdict string
 	}{
-		{"present in CI", "present-oracle", "true", present, ""},
-		{"present locally", "present-oracle", "", present, ""},
-		{"missing in CI", "absent-oracle", "true", "", "fail: absent-oracle not on PATH, but CI installs every test oracle (.github/actions/install-absent-oracle): exec: \"absent-oracle\": executable file not found in $PATH"},
+		{"present in CI", "present-oracle.exe", "true", present, ""},
+		{"present locally", "present-oracle.exe", "", present, ""},
+		{"missing in CI", "absent-oracle", "true", "", "fail: absent-oracle not on PATH, but CI installs every test oracle (.github/actions/install-absent-oracle): " + notFound},
 		{"missing locally", "absent-oracle", "", "", "skip: absent-oracle not on PATH; skipping this oracle check"},
 		{"missing, GITHUB_ACTIONS not true", "absent-oracle", "false", "", "skip: absent-oracle not on PATH; skipping this oracle check"},
 	}

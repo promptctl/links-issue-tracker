@@ -11,6 +11,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
 	"github.com/promptctl/links-issue-tracker/internal/engine"
+	"github.com/promptctl/links-issue-tracker/internal/fsfault"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/version"
@@ -23,9 +24,6 @@ import (
 // failure. The command is a read, so this also drives the read open's hand-off
 // to the write open that migrates.
 func TestACommandWhoseMigratingOpenCannotPruneStillRuns(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("removal-permission injection has no effect as root")
-	}
 	isolateEvents(t)
 	repo, _, stuck := workspaceWhosePruneWillFail(t)
 
@@ -49,9 +47,6 @@ func TestACommandWhoseMigratingOpenCannotPruneStillRuns(t *testing.T) {
 // App, so nothing reads the migration's report: the failed prune rides the
 // command's error instead of vanishing, since the next open migrates nothing.
 func TestAnOpenThatFailsAfterMigratingCarriesThePruneFailure(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("removal-permission injection has no effect as root")
-	}
 	isolateEvents(t)
 	repo, ws, _ := workspaceWhosePruneWillFail(t)
 	if err := os.WriteFile(filepath.Join(ws.PrivateGitDir, "lit-stream"), []byte("not a token"), 0o644); err != nil {
@@ -73,9 +68,6 @@ func TestAnOpenThatFailsAfterMigratingCarriesThePruneFailure(t *testing.T) {
 // migrates a store behind this binary: the gate records that open's migration
 // and warns of a failed prune like any other open.
 func TestInitsAdoptGateReportsItsOpensMigration(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("removal-permission injection has no effect as root")
-	}
 	isolateEvents(t)
 	repo, _, stuck := workspaceWhosePruneWillFail(t)
 
@@ -110,9 +102,6 @@ func assertMigrationPruneFailureRecorded(t *testing.T, stuck string) {
 // The rollup opens every store it finds, so its event counts the stores whose
 // open migrated and then could not prune, and its output notes each.
 func TestTheRollupCountsStoresWhoseMigratingOpenCannotPrune(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("removal-permission injection has no effect as root")
-	}
 	isolateEvents(t)
 	repo, ws, _ := workspaceWhosePruneWillFail(t)
 
@@ -171,10 +160,7 @@ func workspaceWhosePruneWillFail(t *testing.T) (repo string, ws workspace.Info, 
 			t.Fatalf("plant snapshot file: %v", err)
 		}
 	}
-	if err := os.Chmod(stuck, 0o555); err != nil {
-		t.Fatalf("chmod stuck snapshot: %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(stuck, 0o755) })
+	fsfault.DenyWrite(t, stuck)
 	return repo, ws, stuck
 }
 

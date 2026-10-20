@@ -73,9 +73,9 @@ jobs:
   #
   # Scope is the shipped binary and its libraries, the race lane's boundary in
   # ci.yml, plus the vendored driver module they build with, and -short for
-  # the same reason: the scale tests add volume, not platform coverage. No -timeout:
-  # go test's 10m default sits far above the slowest package here
-  # (internal/store, 120s on run 39207582813), so it fires only on a hang.
+  # the same reason: the scale tests add volume, not platform coverage.
+  # -timeout 30m, as the full suite has: internal/cli alone runs past go test's
+  # 10-minute per-package default here (run 39496042580).
   windows:
     runs-on: windows-latest
     timeout-minutes: 60
@@ -151,7 +151,7 @@ jobs:
                 echo "::error file=$known::$rel has no test named" $missing "- delete its line" >&2
                 status=1
               fi
-              go test -short -skip "$re" "./$rel" || status=1
+              go test -short -timeout 30m -skip "$re" "./$rel" || status=1
             else
               rest+=("./$rel")
             fi
@@ -159,7 +159,7 @@ jobs:
           for listed in "${!skip[@]}" "${!untested[@]}"; do
             [[ -v seen[$listed] ]] || { echo "::error file=$known::no package $listed under ./cmd/... ./internal/... - delete its lines" >&2; status=1; }
           done
-          go test -short "${rest[@]}" || status=1
+          go test -short -timeout 30m "${rest[@]}" || status=1
           echo "::notice file=$known,title=Known Windows failures::skipped $skipped tests in ${#skip[@]} packages; did not compile or run ${!untested[*]}"
           exit "$status"
 

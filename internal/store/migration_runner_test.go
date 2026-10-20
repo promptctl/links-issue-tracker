@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
+	"github.com/promptctl/links-issue-tracker/internal/fsfault"
 	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
 )
 
@@ -494,14 +495,14 @@ func TestRefusalReportsUnreadableSnapshots(t *testing.T) {
 		mustCommit(t, ctx, st, "test: corrupt baseline shape")
 	})
 	stampGooseVersionAhead(t, ctx, doltRoot)
-	// A file where the snapshots directory belongs makes the listing fail.
+	// An unreadable snapshots directory makes the listing fail. A file where the
+	// directory belongs does not on Windows, whose listing of a regular file
+	// can come back empty and without an error.
 	snapshotsDir := dbsnapshot.DirFor(doltRoot)
-	if err := os.RemoveAll(snapshotsDir); err != nil {
-		t.Fatalf("remove snapshots dir: %v", err)
+	if err := os.MkdirAll(snapshotsDir, 0o755); err != nil {
+		t.Fatalf("create snapshots dir: %v", err)
 	}
-	if err := os.WriteFile(snapshotsDir, nil, 0o644); err != nil {
-		t.Fatalf("write file at snapshots dir: %v", err)
-	}
+	fsfault.DenyRead(t, snapshotsDir)
 
 	_, err := Open(ctx, doltRoot, "test-workspace-id")
 	var refusal *UnsupportedSchemaVersionError

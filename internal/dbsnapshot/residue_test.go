@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/fsfault"
 	"github.com/promptctl/primitives/filelock"
 )
 
@@ -287,9 +288,6 @@ func TestCollectOrphanedResidue_ConvergesOnStampReuse(t *testing.T) {
 // but must not fail the take — the snapshot this call was asked for is still
 // mintable, and failing it would also starve retention at every producer.
 func TestTake_CollectionFailureDoesNotFailTake(t *testing.T) {
-	if os.Getuid() == 0 {
-		t.Skip("root ignores directory write permissions")
-	}
 	t.Parallel()
 	root := t.TempDir()
 	src := filepath.Join(root, "src")
@@ -302,9 +300,7 @@ func TestTake_CollectionFailureDoesNotFailTake(t *testing.T) {
 	snapshotsDir := DirFor(src)
 	tmpPath, _ := fabricateDeadResidue(t, snapshotsDir, "1700000000000000008")
 	nested := filepath.Join(tmpPath, "nested")
-	if err := os.Chmod(nested, 0o555); err != nil {
-		t.Fatal(err)
-	}
+	fsfault.DenyWrite(t, nested)
 	t.Cleanup(func() { restoreCondemnedPerms(t, snapshotsDir) })
 
 	snap, err := Take(context.Background(), src, "")
@@ -439,9 +435,6 @@ func TestTake_HoldsBeaconSharedForConcurrentProducers(t *testing.T) {
 // condemned corpse cannot be removed, the error names it so the operator can
 // reclaim the disk by hand. [LAW:no-silent-failure]
 func TestCollectOrphanedResidue_ErrorNamesThePath(t *testing.T) {
-	if os.Getuid() == 0 {
-		t.Skip("root ignores directory write permissions")
-	}
 	t.Parallel()
 	snapshotsDir := t.TempDir()
 	tmpPath, _ := fabricateDeadResidue(t, snapshotsDir, "1700000000000000005")
@@ -449,9 +442,7 @@ func TestCollectOrphanedResidue_ErrorNamesThePath(t *testing.T) {
 	// Classification renames the residue (to a uniquely-stamped .condemned
 	// name) before deleting, so the undeletable dir lives under a *.condemned
 	// path by the time RemoveAll hits it — located by glob below.
-	if err := os.Chmod(filepath.Join(tmpPath, "nested"), 0o555); err != nil {
-		t.Fatal(err)
-	}
+	fsfault.DenyWrite(t, filepath.Join(tmpPath, "nested"))
 	t.Cleanup(func() { restoreCondemnedPerms(t, snapshotsDir) })
 
 	err := collectOrphanedResidue(snapshotsDir)

@@ -6,3 +6,6 @@
 #
 # <ticket> <package> <top-level test, or * for a package whose tests do not
 # compile on Windows>
+
+links-windows-qr8l.9j5 internal/store TestAdoptRemoteByCloneFailedCloneLeavesNoResidue
+links-windows-qr8l.fkh internal/backup TestCreateListLatestAndPrune

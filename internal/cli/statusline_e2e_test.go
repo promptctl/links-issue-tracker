@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/fsfault"
 	"github.com/promptctl/links-issue-tracker/internal/statusline"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
@@ -416,18 +417,12 @@ func mustAtoi(t *testing.T, s string) int {
 // A statusline write that fails is on the event with its error, beside what
 // the write had done before it failed; the command itself does not fail.
 func TestAFailedStatuslineWriteIsRecordedOnTheEvent(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("a read-only directory does not stop root from writing")
-	}
 	root := t.TempDir()
 	litDir := filepath.Join(root, ".lit")
 	if err := os.MkdirAll(litDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(litDir, 0o555); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(litDir, 0o755) })
+	fsfault.DenyWrite(t, litDir)
 	rec := telemetry.Begin(telemetry.Event{Event: "lit start"})
 	ctx := telemetry.With(context.Background(), rec)
 	ws := workspace.Info{RootDir: root, Location: workspace.Location{GitCommonDir: filepath.Join(root, "git")}}
