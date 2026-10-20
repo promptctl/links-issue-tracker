@@ -956,6 +956,19 @@ shapes; for an unrecognized shape, author a ShapeMapping (typically by feeding t
 to an LLM) and pass it via `--mapping`. Recovery is converge-or-change-nothing: a failed
 attempt leaves the workspace untouched.
 
+### `lit unquarantine`
+
+```text
+lit unquarantine
+```
+
+Clears the quarantine a failed migration left, so the next command that opens the
+store runs that migration again. Run it once the cause of the failure is fixed; it
+keeps every write, where `lit snapshots restore` discards those made since the
+snapshot. It clears exactly the quarantine the refusal named and prints it; when
+another quarantined migration still blocks the store, it names that one instead of
+promising the run. With nothing quarantined it exits 6 (`state_already_holds`).
+
 ---
 
 ## Maintenance

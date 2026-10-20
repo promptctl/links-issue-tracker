@@ -77,7 +77,7 @@ const (
 | `access` | `engineAccess` | `store.go` | reused verbatim by `reconnect` (`store.go`) |
 | `commitLockPath` | `string` | `store.go` = `commitLockPathForDolt(doltRootDir)` | flock path, `filepath.Join(filepath.Dir(filepath.Clean(doltRootDir)), ".links-commit-flock.lock")` (`commit_lock.go`) |
 | `telemetryDir` | `string` | `store.go` = `filepath.Join(filepath.Clean(doltRootDir), "telemetry")` | never read inside `store.go` |
-| `releaseWorkspaceLock` | `func() error` | `store.go` (Open), `store.go` (OpenForRead); cleared to `nil` on failure at `store.go`, and in `Close` at `store.go` | the workspace shared-lock release |
+| `releaseWorkspaceLock` | `func() error` | `store.go` (Open), `store.go` (openInitialized, which OpenForRead, DumpRaw and Unquarantine open through); cleared to `nil` on failure at `store.go`, and in `Close` at `store.go` | the workspace shared-lock release |
 | `attribution` | `model.Attribution` | only by `AttributeTo` (`store.go`) | stamped on every event `newEvent` mints (`store.go`) |
 | `applyPreMutationHookForTest` | `func()` | nil in production; fired at `store.go` | test seam between planning and `withMutation` in `Apply` |
 | `commitWorkingSetHookForTest` | `func() error` | nil in production; fired at `commit_lock.go` | test seam at the top of every `commitWorkingSetOnce` |
@@ -170,15 +170,12 @@ Behavioral evidence:
 
 `store.go`. Steps:
 
-1. `validateOpenArgs` (`store.go`).
-2. `acquireWorkspaceShared` **before** the existence stat (`store.go`), with the same `success`-guarded deferred release (`store.go`).
-3. `requireInitializedWorkspace(doltRootDir)` (`store.go`):
-   - `os.ErrNotExist` → the package sentinel `ErrWorkspaceNotInitialized` (`workspace_initialized.go`), whose text is unchanged: `repository not initialized with lit — run 'lit init' first`;
-   - any other stat error → `stat database dir: %w`.
-4. `requireNoPendingAdopt` (`store.go`).
-5. `openStoreConnection(..., engineRead)` (`store.go`) — pinged eagerly like a write engine.
-6. `s.releaseWorkspaceLock = release` (`store.go`).
-7. `s.assessMigration(ctx)` (`migration_runner.go`) with **no** commit lock: classify, the schema-ahead baseline check, and applied-version content verification, all reads. On error: `s.Close()` (which releases the workspace hold) joined beside it (`store.go`).
+1. `openInitialized(ctx, doltRootDir, workspaceID, engineRead)` (`store.go`), the open `DumpRaw` and `Unquarantine` share:
+   - `validateOpenArgs` (`store.go`);
+   - `acquireLiveStoreHold` (`pushed_head.go`): `acquireWorkspaceShared` **before** the existence stat, then `requireInitializedWorkspace(doltRootDir)` — `os.ErrNotExist` → the package sentinel `ErrWorkspaceNotInitialized` (`workspace_initialized.go`), whose text is unchanged: `repository not initialized with lit — run 'lit init' first`; any other stat error → `stat database dir: %w` — then `requireNoPendingAdopt`; either refusal is joined with the release;
+   - `openStoreConnection(..., access)` (`store.go`) — pinged eagerly like a write engine; its failure is joined with the release;
+   - `s.releaseWorkspaceLock = release` (`store.go`), so `Close` releases the hold.
+2. `s.assessMigration(ctx)` (`migration_runner.go`) with **no** commit lock: classify, the schema-ahead baseline check, and applied-version content verification, all reads. On error: `s.Close()` (which releases the workspace hold) joined beside it (`store.go`).
 8. `assessment.needsWrite()` false (managed, at registry max, no content drift) → return the read store.
 9. Otherwise the read store is closed (`s.Close()`, releasing the workspace hold) and the call returns `Open(ctx, doltRootDir, workspaceID)` — the write open migrates under the commit lock (and normalizes the default branch, as every write open does) and serves the read; its failure is wrapped as `this read open found <assessment> and handed off to the write open to bring it forward: %w` (`store.go`). A read open never applies DDL itself.
 
@@ -4273,13 +4270,13 @@ The dump is a **JSON** document, not SQL and not TSV. The only producer path to 
 
 Signature `DumpRaw(ctx, doltRootDir string, workspaceID string) (RawDump, error)` with a named error return (`rawdump.go`).
 
-1. `validateOpenArgs(doltRootDir, workspaceID)` (`rawdump.go`) — rejects an empty/whitespace root dir with `dolt root dir is required` (`store.go`) and an empty/whitespace workspace id with `workspace id is required` (`store.go`).
-2. `acquireWorkspaceShared(ctx, doltRootDir)` — a **shared** workspace lock, excluding directory rotators such as `lit snapshots restore` (`rawdump.go`). On contention the error text is `a lit operation is rebuilding this workspace's Dolt directory (e.g. snapshots restore, an init backlog adopt, or lifeboat recover); retry after it completes: %w` wrapping `ErrWorkspaceBusy` (`internal/store/workspace_lock.go`).
-3. A deferred release joins any release error into the returned error (`rawdump.go`).
-4. `requireInitializedWorkspace(doltRootDir)` (`rawdump.go`) — the same shared helper `OpenForRead` calls: `os.ErrNotExist` → the package sentinel `ErrWorkspaceNotInitialized` (`workspace_initialized.go`), `repository not initialized with lit — run 'lit init' first`; any other stat error → `stat database dir: %w`.
-5. `requireNoPendingAdopt(doltRootDir)` — run **after** the lock is taken (`rawdump.go`). Its message (`internal/store/adopt.go`): ``%w: a `lit init` backlog adopt was interrupted before completing (%s; marker %s), so the on-disk store is that adopt's leftover partial state, not a usable backlog. Run `lit init` to retry: it sets the leftover aside and re-clones the remote backlog. If the remote no longer carries the backlog, delete %s to abandon the adopt and start fresh``, with the `%s` context either the literal `a backlog adopt` or `the adopt of %s/%s started %s` (`adopt.go`); a marker read failure yields `read adopt-pending marker: %w` (`adopt.go`).
-6. `openStoreConnection(ctx, doltRootDir, workspaceID, engineRead)` — **no `migrate()` call**, which is what lets it read a workspace `store.Open` refuses (`rawdump.go`, doc at `rawdump.go`). `engineRead` is the first `engineAccess` value (`store.go`).
-7. Deferred `s.db.Close()`, whose error is joined into the return unless it is `context.Canceled` (`rawdump.go`).
+1. `openInitialized(ctx, doltRootDir, workspaceID, engineRead)` (`store.go`), the open `OpenForRead` and `Unquarantine` share, in this order:
+2. `validateOpenArgs(doltRootDir, workspaceID)` — rejects an empty/whitespace root dir with `dolt root dir is required` (`store.go`) and an empty/whitespace workspace id with `workspace id is required` (`store.go`).
+3. `acquireWorkspaceShared(ctx, doltRootDir)`, through `acquireLiveStoreHold` (`pushed_head.go`) — a **shared** workspace lock, excluding directory rotators such as `lit snapshots restore`. On contention the error text is `a lit operation is rebuilding this workspace's Dolt directory (e.g. snapshots restore, an init backlog adopt, or lifeboat recover); retry after it completes: %w` wrapping `ErrWorkspaceBusy` (`internal/store/workspace_lock.go`).
+4. `requireInitializedWorkspace(doltRootDir)`: `os.ErrNotExist` → the package sentinel `ErrWorkspaceNotInitialized` (`workspace_initialized.go`), `repository not initialized with lit — run 'lit init' first`; any other stat error → `stat database dir: %w`.
+5. `requireNoPendingAdopt(doltRootDir)` — run **after** the lock is taken; either refusal is joined with the release. Its message (`internal/store/adopt.go`): ``%w: a `lit init` backlog adopt was interrupted before completing (%s; marker %s), so the on-disk store is that adopt's leftover partial state, not a usable backlog. Run `lit init` to retry: it sets the leftover aside and re-clones the remote backlog. If the remote no longer carries the backlog, delete %s to abandon the adopt and start fresh``, with the `%s` context either the literal `a backlog adopt` or `the adopt of %s/%s started %s` (`adopt.go`); a marker read failure yields `read adopt-pending marker: %w` (`adopt.go`).
+6. `openStoreConnection(ctx, doltRootDir, workspaceID, engineRead)` — **no `migrate()` call**, which is what lets it read a workspace `store.Open` refuses (`rawdump.go`, doc at `rawdump.go`). `engineRead` is the first `engineAccess` value (`store.go`). The store then owns the hold.
+7. Deferred `s.Close()` (`rawdump.go`) — the engine closed (its error dropped when it is `context.Canceled`), then the workspace hold released — whose error is joined into the return.
 8. `readDoltHead(ctx, s.db)` — mandatory, not best-effort (`rawdump.go`, rationale `rawdump.go`).
 9. `listTables(ctx, s.db)` (`rawdump.go`).
 10. `dumpTable` per table, in the order `listTables` returned; the first table error aborts the whole dump (`rawdump.go`).
