@@ -897,12 +897,12 @@ Builders (`convergence.go`): `attempt(step, work)` = `failAt(step, atFailpoint(s
 1. `version, name := migrationIdentity(result)`; `migration := &MigrationStepError{Version, Name, Cause}` (`migration_runner.go`).
 2. `atFailpoint(reset, s.ResetToCheckpoint(ctx, checkpoint.Name))`. Failure → `p.failAt(reset, &CheckpointResetFailedError{Checkpoint, Cause: migration, ResetErr})` — `migration_reset` after a goose failure, `commit_migration_reset` after a commit failure (`migration_runner.go`).
 3. `outcome := &CheckpointResetError{Checkpoint, Cause: migration}`. Not `quarantine` → `p.failAt(failed, outcome)`. A failure that earned no quarantine (unknown version, a cancelled caller, GC contention, or a failed step commit) skips quarantine insertion entirely (`migration_runner.go`).
-4. `atFailpoint(stepRecordQuarantine, s.recordQuarantine(ctx, version, name, cause.Error()))`; failure → `outcome.QuarantineErr = err`, `p.failAt(stepRecordQuarantine, outcome)`, `outcome.Quarantine` nil.
-5. `outcome.Quarantine = &QuarantineBlockError{Version, Name, ErrorText: cause.Error()}` — the row is in the working set, committed or not.
-6. `atFailpoint(stepCommitQuarantine, s.commitWorkingSet(ctx, fmt.Sprintf("migrate: quarantine v%d %s", version, name)))`; failure → `outcome.QuarantineErr = fmt.Errorf("commit quarantine v%d: %w", version, err)`, `p.failAt(stepCommitQuarantine, outcome)` (`migration_runner.go`).
+4. `quarantined := migration.quarantine()`, the `&QuarantineBlockError{Version, Name, ErrorText: Cause.Error()}` of the `MigrationStepError`; `atFailpoint(stepRecordQuarantine, s.recordQuarantine(ctx, quarantined))`; failure → `outcome.QuarantineErr = err`, `p.failAt(stepRecordQuarantine, outcome)`, `outcome.Quarantine` nil.
+5. `outcome.Quarantine = quarantined`, the value the row was written from — the row is in the working set, committed or not.
+6. `atFailpoint(stepCommitQuarantine, s.commitWorkingSet(ctx, fmt.Sprintf("migrate: quarantine v%d %s", quarantined.Version, quarantined.Name)))`; failure → `outcome.QuarantineErr = fmt.Errorf("commit quarantine v%d: %w", quarantined.Version, err)`, `p.failAt(stepCommitQuarantine, outcome)` (`migration_runner.go`).
 7. Return `p.failAt(failed, outcome)`.
 
-`recordQuarantine` (`migration_runner.go`): `INSERT INTO migration_quarantine (version, name, error_text, created_at) VALUES (?,?,?,?) ON DUPLICATE KEY UPDATE name = VALUES(name), error_text = VALUES(error_text), created_at = VALUES(created_at)` with `created_at = time.Now().UTC().Format(time.RFC3339Nano)`.
+`recordQuarantine(ctx, q *QuarantineBlockError)` (`migration_runner.go`): `INSERT INTO migration_quarantine (version, name, error_text, created_at) VALUES (?,?,?,?) ON DUPLICATE KEY UPDATE name = VALUES(name), error_text = VALUES(error_text), created_at = VALUES(created_at)` with `created_at = time.Now().UTC().Format(time.RFC3339Nano)`.
 
 `quarantineFastFail(ctx, state)` (`migration_runner.go`): `effectiveApplied = state.appliedVersion`, but for `phaseAdopt` it is overridden to `baselineVersion` so a quarantine row for the baseline cannot block after adoption (`migration_runner.go`).
 
