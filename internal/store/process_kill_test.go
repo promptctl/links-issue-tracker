@@ -5,6 +5,7 @@ package store
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"os/exec"
@@ -142,7 +143,7 @@ func TestHelperKillMidMigrationStep(t *testing.T) {
 	if dir == "" {
 		t.Skip("helper test; runs only via TestMidMigrationStepProcessKillRecovers's re-exec")
 	}
-	migrationUpByOneForTest = func(ctx context.Context, provider *goose.Provider) (*goose.MigrationResult, error) {
+	migrationUpByOneForTest = func(ctx context.Context, _ *sql.DB, provider *goose.Provider) (*goose.MigrationResult, error) {
 		result, err := provider.UpByOne(ctx)
 		if err != nil {
 			return result, err

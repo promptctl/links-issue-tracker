@@ -100,10 +100,10 @@ func readReceivedRefs(ws workspace.Info) []byte {
 // A remote the store-free rule cannot pick (several remotes, no upstream)
 // is the zero advertisement, not an error: it is the syncTargetNoRemote skip
 // the full path already owns, so the caller falls through to it.
-// [LAW:one-source-of-truth] resolveSyncRemote is the one selection rule, so
+// [LAW:one-source-of-truth] workspaceSyncRemote is the one selection rule, so
 // the remote asked here is the remote the fetch would have used.
 func askRemote(ctx context.Context, ws workspace.Info, gitRemotes []workspace.GitRemote) (remoteAdvertisement, error) {
-	remoteName, ok, err := resolveSyncRemote("", workspace.UpstreamRemote(ctx, ws.RootDir), gitRemotes)
+	remoteName, ok, err := workspaceSyncRemote(ctx, ws, "", gitRemotes)
 	if err != nil {
 		return remoteAdvertisement{}, err
 	}
@@ -168,11 +168,11 @@ const pushProofDeadline = 10 * time.Second
 // Only the remote the automatic receive asks is worth proving: the record
 // holds one remote's advertisement, and a push to another remote would
 // replace a record the receive can use with one it never matches.
-// [LAW:one-source-of-truth] resolveSyncRemote picks that remote, as it does
+// [LAW:one-source-of-truth] workspaceSyncRemote picks that remote, as it does
 // for the receive. [LAW:parse-dont-validate] the non-zero advertisement is the
 // proof; nothing downstream re-asks.
 func provePushedAdvertisement(ctx context.Context, syncer storage.Syncer, ws workspace.Info, remoteName storage.RemoteName, gitRemotes []workspace.GitRemote) (proven remoteAdvertisement, unproven string) {
-	receiveRemote, ok, err := resolveSyncRemote("", workspace.UpstreamRemote(ctx, ws.RootDir), gitRemotes)
+	receiveRemote, ok, err := workspaceSyncRemote(ctx, ws, "", gitRemotes)
 	if err != nil {
 		return remoteAdvertisement{}, "resolve the remote the automatic receive asks: " + err.Error()
 	}
@@ -213,8 +213,8 @@ func recordPushedAdvertisement(ws workspace.Info, proven remoteAdvertisement) {
 
 // recordReceived writes what the receive established, and only that. A fetch
 // that returned without error, whatever state it reached, means a fetch
-// succeeded now (fetch-success.last, which the 24-hour staleness banner
-// reads). A receive that settled cleanly — that fetch, and a reconcile that
+// of outcome.remote succeeded now (its fetch-success marker, which the
+// 24-hour staleness banner reads). A receive that settled cleanly — that fetch, and a reconcile that
 // converged if one ran — means the store now holds what the remote advertised
 // before the fetch, so that advertisement becomes the record the next
 // question is measured against; an unconverged divergence leaves the record
@@ -227,7 +227,7 @@ func recordPushedAdvertisement(ws workspace.Info, proven remoteAdvertisement) {
 // decide; the caller runs this after every fetch path.
 func recordReceived(ws workspace.Info, outcome syncReceiveOutcome, observed remoteAdvertisement) {
 	if outcome.fetched() {
-		if err := markFetchSuccess(ws); err != nil {
+		if err := markFetchSuccess(ws, outcome.remote); err != nil {
 			fmt.Fprintf(os.Stderr, "lit: fetch-success marker not written: %v\n", err)
 		}
 	}
@@ -245,7 +245,7 @@ func recordReceived(ws workspace.Info, outcome syncReceiveOutcome, observed remo
 // what it decided — a skipped fetch is a decision, not silence.
 // [LAW:no-silent-failure]
 func confirmRemoteUnmoved(ws workspace.Info, observed remoteAdvertisement) {
-	if err := markFetchSuccess(ws); err != nil {
+	if err := markFetchSuccess(ws, observed.remote); err != nil {
 		fmt.Fprintf(os.Stderr, "lit: fetch-success marker not written: %v\n", err)
 	}
 	if err := recordReceiveTrace(ws, receiveDecisionRemoteUnmoved, "ok",

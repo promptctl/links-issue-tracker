@@ -247,7 +247,7 @@ func TestEveryStalenessSurfaceAgreesAtItsBoundary(t *testing.T) {
 	if len(banner) != 1 {
 		t.Fatalf("buildStalenessLines() = %q, want one line at the threshold", banner)
 	}
-	fetch := fetchStalenessLines("origin/master", unfetchedStalenessThreshold, true)
+	fetch := fetchStalenessLines(&remoteFetch{remote: remoteName(t, "origin"), age: unfetchedStalenessThreshold})
 	if len(fetch) != 1 {
 		t.Fatalf("fetchStalenessLines() = %q, want one line at the threshold", fetch)
 	}

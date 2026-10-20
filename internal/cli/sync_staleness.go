@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -22,39 +21,43 @@ import (
 // for in-progress issue staleness.
 const unfetchedStalenessThreshold = 24 * time.Hour
 
-// fetchSuccessMarkerPath is the single file whose modification time is the
-// last time local knowledge of the remote was actually CONFIRMED current: a
-// fetch against it succeeded, or it advertised the same refs the last
+// fetchSuccessMarkerPath is the file whose modification time is the last
+// time local knowledge of one remote was actually CONFIRMED current: a fetch
+// of that remote succeeded, or it advertised the same refs the last
 // successful receive already brought in (sync_receive_ask.go) — distinct from
 // receiveMarkerPath, which marks an attempt (so its debounce still applies
 // even to a remote that is failing every fetch). A workspace whose fetches
 // keep failing must still read as stale; conflating "attempted" with
-// "succeeded" would hide exactly that. [LAW:one-source-of-truth]
-func fetchSuccessMarkerPath(ws workspace.Info) string {
-	return filepath.Join(ws.StorageDir, "fetch-success.last")
+// "succeeded" would hide exactly that. One file per remote, because a fetch
+// is a fact about the remote it fetched: a fetch of another remote says
+// nothing about the one the banner reports on. [LAW:one-source-of-truth]
+func fetchSuccessMarkerPath(ws workspace.Info, remote storage.RemoteName) string {
+	return perRemotePath(ws, "fetched", remote)
 }
 
-// markFetchSuccess records "local knowledge of the remote is current as of
-// now". Callers are every real DOLT_FETCH call site that returned no error —
-// the explicit `lit sync fetch`/`lit sync pull`, the reconcile command's
+// markFetchSuccess records "local knowledge of remote is current as of now".
+// Callers are every real DOLT_FETCH call site that returned no error — the
+// explicit `lit sync fetch`/`lit sync pull`, the reconcile command's
 // pre-reconcile fetch, the automatic receive — and the automatic receive's
-// unmoved answer, which proves the same thing without the fetch.
-// [LAW:single-enforcer] one marker, every call site writes it the same way.
-func markFetchSuccess(ws workspace.Info) error {
+// unmoved answer, which proves the same thing without the fetch. Each marks
+// the remote it fetched, whichever remote the banner reports on.
+// [LAW:single-enforcer] one marker per remote, every call site writes it the
+// same way. [LAW:dataflow-not-control-flow]
+func markFetchSuccess(ws workspace.Info, remote storage.RemoteName) error {
 	if err := os.MkdirAll(ws.StorageDir, 0o755); err != nil {
 		return fmt.Errorf("ensure storage dir for fetch-success marker: %w", err)
 	}
-	if err := os.WriteFile(fetchSuccessMarkerPath(ws), nil, 0o644); err != nil {
+	if err := os.WriteFile(fetchSuccessMarkerPath(ws, remote), nil, 0o644); err != nil {
 		return fmt.Errorf("write fetch-success marker: %w", err)
 	}
 	return nil
 }
 
-// lastFetchSuccessAge reports how long ago a fetch last succeeded. ok is false
-// when no fetch has ever succeeded on this workspace — mirroring
-// shouldReceiveNow's reading that a missing marker means "never happened",
-// not "infinitely stale": a workspace that simply has not had automatic
-// receive run yet is not flagged before it gets the chance to.
+// lastFetchSuccessAge reports how long ago a fetch of remote last succeeded.
+// ok is false when no fetch of it has ever succeeded on this workspace —
+// mirroring shouldReceiveNow's reading that a missing marker means "never
+// happened", not "infinitely stale": a workspace that simply has not had
+// automatic receive run yet is not flagged before it gets the chance to.
 // [LAW:no-defensive-null-guards] absence is a real, distinct state, not a
 // fabricated worst-case age. A stat error other than "does not exist" —
 // permission denied, a corrupt storage dir — is a real operational failure,
@@ -62,8 +65,8 @@ func markFetchSuccess(ws workspace.Info) error {
 // silently folded into the same ok=false, so a broken storage dir is
 // diagnosable instead of just reading as a quiet workspace.
 // [LAW:no-silent-failure]
-func lastFetchSuccessAge(ws workspace.Info, now time.Time) (age time.Duration, ok bool) {
-	info, err := os.Stat(fetchSuccessMarkerPath(ws))
+func lastFetchSuccessAge(ws workspace.Info, remote storage.RemoteName, now time.Time) (age time.Duration, ok bool) {
+	info, err := os.Stat(fetchSuccessMarkerPath(ws, remote))
 	if err != nil {
 		if !os.IsNotExist(err) {
 			fmt.Fprintf(os.Stderr, "lit: fetch-success marker unreadable: %v\n", err)
@@ -71,6 +74,36 @@ func lastFetchSuccessAge(ws workspace.Info, now time.Time) (age time.Duration, o
 		return 0, false
 	}
 	return now.Sub(info.ModTime()), true
+}
+
+// remoteFetch is the last successful fetch of one remote: which remote, and
+// how long ago.
+type remoteFetch struct {
+	remote storage.RemoteName
+	age    time.Duration
+}
+
+// lastTargetFetch is the last successful fetch of the remote lit syncs with
+// (workspaceSyncRemote), the one both staleness banners warn about. nil when
+// that remote was never fetched here, or when there is no such remote to
+// read: no remote configured, or remotes that cannot be read or resolved. The
+// banner is best-effort, so an unresolved remote prints no fetch line, as it
+// prints no freshness line; `lit doctor` names why.
+// [LAW:types-are-the-program] a known fetch always names its remote.
+func lastTargetFetch(ctx context.Context, ws workspace.Info, now time.Time) *remoteFetch {
+	gitRemotes, err := workspace.GitRemotes(ctx, ws.RootDir)
+	if err != nil {
+		return nil
+	}
+	remote, ok, err := workspaceSyncRemote(ctx, ws, "", gitRemotes)
+	if err != nil || !ok {
+		return nil
+	}
+	age, ok := lastFetchSuccessAge(ws, remote, now)
+	if !ok {
+		return nil
+	}
+	return &remoteFetch{remote: remote, age: age}
 }
 
 // syncStalenessLines renders zero or more prominent warning lines from a sync
@@ -92,45 +125,28 @@ func lastFetchSuccessAge(ws workspace.Info, now time.Time) (age time.Duration, o
 // answers; a NeverSynced workspace is left to the second condition below (a
 // never-fetched-in-threshold remote still warns) rather than a speculative
 // third case.
-func syncStalenessLines(report doctorSyncReport, fetchAge time.Duration, fetchAgeKnown bool) []string {
+func syncStalenessLines(report doctorSyncReport, fetch *remoteFetch) []string {
 	var lines []string
-	ref := ""
-	switch report.Kind {
-	case doctorSyncNoRemote:
-		// Nothing to fetch from, so a stale-fetch warning could never clear.
-		return nil
-	case doctorSyncResolved:
-		f := report.Freshness
-		ref = f.Remote + "/" + f.Branch
-		if f.State() == storage.SyncAhead {
-			lines = append(lines, fmt.Sprintf(
-				"sync: %d local change(s) not pushed to %s, as of last fetch — run 'lit sync push'",
-				f.Ahead, ref,
-			))
-		}
+	if f := report.Freshness; report.Kind == doctorSyncResolved && f.State() == storage.SyncAhead {
+		lines = append(lines, fmt.Sprintf(
+			"sync: %d local change(s) not pushed to %s/%s, as of last fetch — run 'lit sync push'",
+			f.Ahead, f.Remote, f.Branch,
+		))
 	}
-	// The fetch age is a marker stat, not a freshness read, so an unresolved
-	// report still warns about it, without the ref.
-	return append(lines, fetchStalenessLines(ref, fetchAge, fetchAgeKnown)...)
+	// The fetch age is its own read of the sync remote, so an unresolved
+	// report still warns about it.
+	return append(lines, fetchStalenessLines(fetch)...)
 }
 
-// fetchStalenessLines renders the stale-fetch warning. ref names the remote
-// when the caller has resolved one ("origin/main"); an empty ref renders the
-// same warning without it — the store-free mutation-side banner knows the
-// fetch age (a marker stat) but not the remote (an engine read), and the
-// warning must not be withheld for want of a name.
-// [LAW:one-type-per-behavior] one renderer, the ref is data.
-func fetchStalenessLines(ref string, fetchAge time.Duration, fetchAgeKnown bool) []string {
-	if !fetchAgeKnown || fetchAge < unfetchedStalenessThreshold {
+// fetchStalenessLines renders the stale-fetch warning, naming the remote the
+// fetch is of: a fetch is per remote, not per branch. nil is no known fetch.
+func fetchStalenessLines(fetch *remoteFetch) []string {
+	if fetch == nil || fetch.age < unfetchedStalenessThreshold {
 		return nil
 	}
-	from := ""
-	if ref != "" {
-		from = " from " + ref
-	}
 	return []string{fmt.Sprintf(
-		"sync: last successful fetch%s was %s ago (%s) — run 'lit sync fetch'",
-		from, humanizeCoarseDuration(fetchAge), stalenessThresholdClause(unfetchedStalenessThreshold),
+		"sync: last successful fetch from %s was %s ago (%s) — run 'lit sync fetch'",
+		fetch.remote, humanizeCoarseDuration(fetch.age), stalenessThresholdClause(unfetchedStalenessThreshold),
 	)}
 }
 
@@ -194,7 +210,7 @@ func oneLineReason(reason string) string {
 // itself a diagnostic. [LAW:no-silent-failure] [LAW:effects-at-boundaries]
 func printStalenessWarning(ctx context.Context, w io.Writer, ws workspace.Info, st storage.Store, now time.Time) error {
 	report := resolveDoctorSyncFreshness(ctx, ws, st)
-	fetchAge, fetchAgeKnown := lastFetchSuccessAge(ws, now)
+	fetch := lastTargetFetch(ctx, ws, now)
 	// Build drift leads the whole banner. It is the deepest of the three: a
 	// binary that predates master can be the reason the sync lines below read
 	// the way they do, so a reader who takes it in first interprets everything
@@ -206,7 +222,7 @@ func printStalenessWarning(ctx context.Context, w io.Writer, ws workspace.Info, 
 	// effect of.
 	rec, pushAge, pushKnown := lastPushOutcome(ws, now)
 	lines = append(lines, syncPushFailureLines(rec, pushAge, pushKnown, runningBinaryVersion())...)
-	lines = append(lines, syncStalenessLines(report, fetchAge, fetchAgeKnown)...)
+	lines = append(lines, syncStalenessLines(report, fetch)...)
 	for _, line := range lines {
 		if _, err := fmt.Fprintln(w, line); err != nil {
 			return err
@@ -217,8 +233,9 @@ func printStalenessWarning(ctx context.Context, w io.Writer, ws workspace.Info, 
 
 // printMutationSyncStalenessWarning is the staleness banner for mutating
 // commands. It runs at the one dispatch seam every mutating command already
-// flows through, after the command's engine has closed, so it reads only the
-// storage-dir markers (push outcome, fetch success): the store-backed ahead
+// flows through, after the command's engine has closed, so it reads only
+// storage-dir markers (push outcome, the sync remote's fetch success) and
+// git's remote config: the store-backed ahead
 // count is both unavailable there and, per syncPushFailureLines' rationale, the
 // wrong predicate for a mutating session anyway. A session that only chains
 // mutations against a failing remote hears about it on its very next command.
@@ -229,11 +246,10 @@ func printStalenessWarning(ctx context.Context, w io.Writer, ws workspace.Info, 
 // would tell the caller the mutation failed when it succeeded — the exit code
 // stays truthful about the command's own work. [LAW:no-silent-failure] the
 // failure is still loud, on the channel that cannot lie about the mutation.
-func printMutationSyncStalenessWarning(w io.Writer, ws workspace.Info, now time.Time) {
+func printMutationSyncStalenessWarning(ctx context.Context, w io.Writer, ws workspace.Info, now time.Time) {
 	rec, pushAge, pushKnown := lastPushOutcome(ws, now)
-	fetchAge, fetchAgeKnown := lastFetchSuccessAge(ws, now)
 	lines := syncPushFailureLines(rec, pushAge, pushKnown, runningBinaryVersion())
-	lines = append(lines, fetchStalenessLines("", fetchAge, fetchAgeKnown)...)
+	lines = append(lines, fetchStalenessLines(lastTargetFetch(ctx, ws, now))...)
 	for _, line := range lines {
 		if _, err := fmt.Fprintln(w, line); err != nil {
 			fmt.Fprintf(os.Stderr, "lit: staleness banner not written: %v\n", err)
