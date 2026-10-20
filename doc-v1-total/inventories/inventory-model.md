@@ -871,12 +871,17 @@ itself: `store.DowngradeTargetAheadError` and `store.DowngradeBelowBaselineError
 
 `RecordedError` (`validation.go`) is `error` plus `EventRecord() (facts
 map[string]any, counts map[string]int)`: the facts and counts a failed command's
-event carries for that error. The CLI's `errorRecord` (`invocation_event.go`)
-reads the first error in the chain implementing it, and records nothing for an
-error that does not. Implementers: `store.UnsupportedSchemaVersionError`
-(`migration_runner.go`) and `store.RemoteSchemaAheadError`
-(`sync_schema_guard.go`), the `schema_ahead.*` keys, each with a compile-time
-`var _ model.RecordedError` assertion.
+event carries for that error. `ErrorRecord` (`validation.go`) merges the
+record of every error in the tree that implements it, depth-first in the order
+`errors.As` visits them, and keeps the first value of a key two records share;
+a tree with none records nothing. The CLI's invocation event
+(`invocation_event.go`) takes a failed command's facts and counts from it.
+Implementers: `store.SchemaConvergenceError` (`convergence.go`),
+`store.MigrationStepError`, `store.CheckpointResetError`,
+`store.CheckpointResetFailedError`, `store.QuarantineBlockError` and
+`store.UnsupportedSchemaVersionError` (`migration_runner.go`), and
+`store.RemoteSchemaAheadError` (`sync_schema_guard.go`), each with a
+compile-time `var _ model.RecordedError` assertion.
 
 `SchemaAhead` (`validation.go`) is `error` plus a marker method
 `SchemaAheadOfBinary()`: an error raised because the workspace's schema is past
