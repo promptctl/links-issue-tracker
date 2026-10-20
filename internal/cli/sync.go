@@ -500,9 +500,13 @@ type syncPushOutcome struct {
 	afterPush string
 	// proven is the advertisement this push proved it left the remote showing
 	// (provePushedAdvertisement); zero when it proved none.
-	proven   remoteAdvertisement
-	traceErr error
-	pushErr  error // the push failure; the trace is already recorded when set
+	proven remoteAdvertisement
+	// receiveMerges is whether an automatic receive runs on this checkout
+	// (automaticReceiveScheduled) to merge the peer's commits a refused push
+	// was refused over; false when the attempt did not reach the push.
+	receiveMerges bool
+	traceErr      error
+	pushErr       error // the push failure; the trace is already recorded when set
 }
 
 // syncPushStep is the push the orchestrator runs once it has resolved the
@@ -729,15 +733,16 @@ func performSyncPush(ctx, completionCtx context.Context, session syncSession, ws
 	// classifyPushOutcome's, the one the push-outcome marker records, so the
 	// two never spell one attempt two ways. [LAW:one-source-of-truth]
 	outcome = syncPushOutcome{
-		remote:      remoteName,
-		branch:      syncBranch,
-		message:     result.Message,
-		maintenance: result.Maintenance,
-		head:        result.Head,
-		afterPush:   result.AfterPush,
-		proven:      proven,
-		traceErr:    traceRecordErr,
-		pushErr:     pushErr,
+		remote:        remoteName,
+		branch:        syncBranch,
+		message:       result.Message,
+		maintenance:   result.Maintenance,
+		head:          result.Head,
+		afterPush:     result.AfterPush,
+		proven:        proven,
+		receiveMerges: receiveMergesHere(ws),
+		traceErr:      traceRecordErr,
+		pushErr:       pushErr,
 	}
 	decided := classifyPushOutcome(outcome, nil)
 	recordSyncTraceLogged(ws, syncTraceRecord{

@@ -42,11 +42,14 @@ func firstError(errs ...error) error {
 // endings of THIS attempt, not evidence the push channel is degraded, and
 // recording them as "error" pages the owner and banners every later command
 // over a healthy workspace whose next attempt pushes fine. "diverged" is the
-// same kind of ending: the remote refused the push because a peer pushed
-// first (storage.ErrPushDiverged), and the receive's merge is what lets the
-// next push land. A receive that cannot merge surfaces its own sync-failure
-// class to the owner. The class is decided once here, from the error values,
-// for every consumer: the marker, the owner page and the sync trace.
+// same kind of ending when an automatic receive runs here: the remote refused
+// the push because a peer pushed first (storage.ErrPushDiverged), the receive
+// merges the peer's commits and owes the merge a push (mirrorAfterReceive).
+// A receive that cannot merge surfaces its own sync-failure class to the
+// owner. With no automatic receive, nothing merges the refusal, so it is an
+// "error". The class is decided once here, from the error values and
+// receiveMerges, for every consumer: the marker, the owner page and the sync
+// trace.
 // [LAW:parse-dont-validate]
 const (
 	pushDecisionPushed        = "pushed"
@@ -75,13 +78,18 @@ type pushOutcomeRecord struct {
 	// dev build, an unreadable build stamp, or a record written before the field
 	// existed: "no observer to compare", not an error.
 	ObservedBy string `json:"observed_by,omitempty"`
+	// ReceiveMerges is whether an automatic receive runs on this checkout to
+	// merge what a refused push was refused over — what made a refusal
+	// diverged rather than error. False when the attempt never reached the
+	// push.
+	ReceiveMerges bool `json:"receive_merges"`
 }
 
 // failed reports whether the record describes a push attempt that did not
 // land — the one condition the staleness banner warns on. Skip decisions
 // (no remote, empty remote), a deliberate cancellation, a legitimately busy
-// workspace and a push refused over a peer's commits awaiting the receive's
-// merge are healthy or self-resolving states, not failures, and an
+// workspace and a push refused over a peer's commits an automatic receive
+// will merge are healthy or self-resolving states, not failures, and an
 // unknown decision written by a newer binary is deliberately not treated as
 // one.
 func (r pushOutcomeRecord) failed() bool {
@@ -109,6 +117,7 @@ func pushOutcomeOf(outcome syncPushOutcome, err error, observedBy string) pushOu
 	// [LAW:dataflow-not-control-flow] Every outcome is stamped, so an empty
 	// ObservedBy means only "no observer", never "not a failure".
 	rec.ObservedBy = observedBy
+	rec.ReceiveMerges = outcome.receiveMerges
 	return rec
 }
 
@@ -133,9 +142,10 @@ func classifyPushOutcome(outcome syncPushOutcome, err error) pushOutcomeRecord {
 	case err != nil:
 		return pushOutcomeRecord{Decision: pushDecisionError, Reason: err.Error()}
 	case outcome.pushErr != nil:
+		decision, reason := pushFailureDecision(outcome.pushErr, outcome.receiveMerges)
 		return pushOutcomeRecord{
-			Decision: pushFailureDecision(outcome.pushErr),
-			Reason:   outcome.pushErr.Error(),
+			Decision: decision,
+			Reason:   reason,
 			Remote:   outcome.remote,
 			Branch:   outcome.branch,
 		}
@@ -150,14 +160,18 @@ func classifyPushOutcome(outcome syncPushOutcome, err error) pushOutcomeRecord {
 	}
 }
 
-// pushFailureDecision is the decision a push that ran and did not land ended
-// in: diverged when the remote refused it over a peer's commits, error for
-// every other failure.
-func pushFailureDecision(pushErr error) string {
-	if errors.Is(pushErr, storage.ErrPushDiverged) {
-		return pushDecisionDiverged
+// pushFailureDecision is the decision and reason a push that ran and did not
+// land ended in: diverged when the remote refused it over a peer's commits an
+// automatic receive will merge, error for every other failure. A refusal
+// nothing will merge says so, and names the command that merges it.
+func pushFailureDecision(pushErr error, receiveMerges bool) (decision, reason string) {
+	if !errors.Is(pushErr, storage.ErrPushDiverged) {
+		return pushDecisionError, pushErr.Error()
 	}
-	return pushDecisionError
+	if receiveMerges {
+		return pushDecisionDiverged, pushErr.Error()
+	}
+	return pushDecisionError, pushErr.Error() + "; no automatic receive runs here to merge the peer's commits: run `lit sync pull`"
 }
 
 // completePushAttempt is the one completion seam for how a push attempt ended
@@ -184,6 +198,8 @@ func (r pushOutcomeRecord) eventValue() map[string]any {
 		"push.reason":   r.Reason,
 		"push.remote":   r.Remote,
 		"push.branch":   r.Branch,
+		// [LAW:nothing-unseen] which way the receive question went.
+		"push.receive_merges": r.ReceiveMerges,
 	}
 }
 

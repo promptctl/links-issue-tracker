@@ -67,12 +67,33 @@ func TestPushOutcomeOf(t *testing.T) {
 			want: pushOutcomeRecord{Decision: pushDecisionCanceled, Reason: "push: context canceled", Remote: "origin", Branch: "master"},
 		},
 		{
-			name: "push refused over a peer's commits records diverged, not error",
+			name:    "landed push records whether a receive merges here",
+			outcome: syncPushOutcome{remote: "origin", branch: "master", receiveMerges: true},
+			want:    pushOutcomeRecord{Decision: pushDecisionPushed, Remote: "origin", Branch: "master", ReceiveMerges: true},
+		},
+		{
+			name: "push refused over a peer's commits a receive merges records diverged, not error",
+			outcome: syncPushOutcome{
+				remote: "origin", branch: "master", receiveMerges: true,
+				pushErr: fmt.Errorf("%w: push remote \"origin\": rejected", storage.ErrPushDiverged),
+			},
+			want: pushOutcomeRecord{Decision: pushDecisionDiverged, Reason: storage.ErrPushDiverged.Error() + ": push remote \"origin\": rejected", Remote: "origin", Branch: "master", ReceiveMerges: true},
+		},
+		{
+			name: "push refused over a peer's commits nothing merges records error naming the merge",
 			outcome: syncPushOutcome{
 				remote: "origin", branch: "master",
 				pushErr: fmt.Errorf("%w: push remote \"origin\": rejected", storage.ErrPushDiverged),
 			},
-			want: pushOutcomeRecord{Decision: pushDecisionDiverged, Reason: storage.ErrPushDiverged.Error() + ": push remote \"origin\": rejected", Remote: "origin", Branch: "master"},
+			want: pushOutcomeRecord{Decision: pushDecisionError, Reason: storage.ErrPushDiverged.Error() + ": push remote \"origin\": rejected; no automatic receive runs here to merge the peer's commits: run `lit sync pull`", Remote: "origin", Branch: "master"},
+		},
+		{
+			name: "push that failed otherwise records error whether or not a receive merges",
+			outcome: syncPushOutcome{
+				remote: "origin", branch: "master", receiveMerges: true,
+				pushErr: errors.New("connection refused"),
+			},
+			want: pushOutcomeRecord{Decision: pushDecisionError, Reason: "connection refused", Remote: "origin", Branch: "master", ReceiveMerges: true},
 		},
 		{
 			name: "workspace legitimately busy records its own decision, not error",
