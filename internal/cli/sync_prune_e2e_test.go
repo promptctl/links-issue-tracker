@@ -19,7 +19,9 @@ import (
 // ref and its fork point), the peer deletes it on the remote and pushes a
 // ticket, and one automatic receive — no fetch run by hand, no --prune
 // anywhere — leaves the live store without either ref. The receive's trace
-// names what its landing deleted, and its event carries the clone's prune.
+// names what its landing deleted, and its event carries the clone's prune and
+// the landing's own record of the sync branch's fork point, which the second
+// fetch left at the head the live tracking ref still names.
 func TestAnAutomaticReceivePrunesABranchTheRemoteDeleted(t *testing.T) {
 	base := t.TempDir()
 	runGit(t, base, "init", "--bare", "remote.git")
@@ -72,7 +74,18 @@ func TestAnAutomaticReceivePrunesABranchTheRemoteDeleted(t *testing.T) {
 		t.Fatalf("receive trace landed_pruned=%q landed_fork_points_dropped=%q; want feature for both (trace %+v)",
 			landing.Metadata["landed_pruned"], landing.Metadata["landed_fork_points_dropped"], landing)
 	}
+	if landing.Metadata["fork_point"] != string(storage.ForkPointUnchanged) {
+		t.Fatalf("receive trace fork_point=%q; want %q (trace %+v)", landing.Metadata["fork_point"], storage.ForkPointUnchanged, landing)
+	}
 	written := writtenEvent(t, recorder.Finish(invocationEnd(time.Now(), nil, nil)))
+	landedForkPoints := written.Occurrences["receive.landed_fork_points"]
+	if len(landedForkPoints) != 1 {
+		t.Fatalf("receive.landed_fork_points = %#v; want the sync branch's one record", landedForkPoints)
+	}
+	if value, _ := landedForkPoints[0].(map[string]any); value["fork_point.remote"] != "origin" || value["fork_point.branch"] != "master" ||
+		value["fork_point.outcome"] != string(storage.ForkPointUnchanged) || value["fork_point.head"] == "" {
+		t.Fatalf("receive.landed_fork_points[0] = %#v; want origin's master unchanged at its head", landedForkPoints[0])
+	}
 	landedPruned := written.Occurrences["receive.landed_pruned"]
 	if len(landedPruned) != 1 {
 		t.Fatalf("receive.landed_pruned = %#v; want the one ref the landing deleted", landedPruned)

@@ -84,41 +84,79 @@ func (s *Store) recordForkPoints(ctx context.Context, remote refOwner, tracked m
 	if err != nil {
 		return nil, err
 	}
+	view := engineForkPoints{db: s.db, local: local}
 	// The records written before a failure are returned with it: each one
 	// moved a branch that stands. [LAW:nothing-unseen]
 	records := make([]storage.ForkPointRecord, 0, len(tracked))
 	for _, branch := range slices.Sorted(maps.Keys(tracked)) {
-		head := tracked[branch]
-		record := storage.ForkPointRecord{Remote: remote.String(), Branch: branch, Head: head, Outcome: storage.ForkPointUnchanged}
-		if held, ok := recorded[branch]; held != head {
-			record.Outcome, err = s.recordForkPoint(ctx, local, forkPointBranch(remote, branch), head, ok)
-			if err != nil {
-				return records, err
-			}
+		record, err := recordForkPoint(ctx, view, remote, branch, tracked[branch], recorded)
+		if err != nil {
+			return records, err
 		}
 		records = append(records, record)
 	}
 	return records, nil
 }
 
-// recordForkPoint sets the fork point to head when the local branch shares
-// history with head, and otherwise leaves it as it was: kept when one was
-// recorded, none when none ever was.
-func (s *Store) recordForkPoint(ctx context.Context, local, forkPoint, head string, held bool) (storage.ForkPointOutcome, error) {
-	base, err := mergeBase(ctx, s.db, local, head)
+// forkPointStore is what recording a fork point reads and writes: whether the
+// local branch shares history with a head, and the fork point branch itself.
+// A store open on its SQL engine is one (engineForkPoints); a held chunk store
+// with no engine, as the receive's landing has, is the other
+// (chunkForkPoints).
+type forkPointStore interface {
+	sharesHistory(ctx context.Context, head string) (bool, error)
+	setForkPoint(ctx context.Context, name, head string) error
+}
+
+// recordForkPoint is the one rule a fork point follows before its tracking
+// ref moves off head: unchanged when it already names head; set to head when
+// the local branch shares history with head; otherwise left as it was — kept
+// when one was recorded, none when none ever was. recorded is the store's
+// fork points of remote, branch to head. [LAW:single-enforcer] a fetch and a
+// landing record by this one rule, whichever store they hold.
+func recordForkPoint(ctx context.Context, st forkPointStore, remote refOwner, branch, head string, recorded map[string]string) (storage.ForkPointRecord, error) {
+	record := storage.ForkPointRecord{Remote: remote.String(), Branch: branch, Head: head, Outcome: storage.ForkPointUnchanged}
+	held, ok := recorded[branch]
+	if held == head {
+		return record, nil
+	}
+	shared, err := st.sharesHistory(ctx, head)
 	if err != nil {
-		return "", err
+		return storage.ForkPointRecord{}, err
 	}
-	if _, shared := base.shared(); !shared {
-		if held {
-			return storage.ForkPointKept, nil
+	switch {
+	case shared:
+		name := forkPointBranch(remote, branch)
+		if err := st.setForkPoint(ctx, name, head); err != nil {
+			return storage.ForkPointRecord{}, fmt.Errorf("record fork point %s at %s: %w", name, head, err)
 		}
-		return storage.ForkPointNone, nil
+		record.Outcome = storage.ForkPointRecorded
+	case ok:
+		record.Outcome = storage.ForkPointKept
+	default:
+		record.Outcome = storage.ForkPointNone
 	}
-	if err := execProcedureDiscard(ctx, s.db, "DOLT_BRANCH", "-f", forkPoint, head); err != nil {
-		return "", fmt.Errorf("record fork point %s at %s: %w", forkPoint, head, err)
+	return record, nil
+}
+
+// engineForkPoints is a forkPointStore on an open store's SQL engine, whose
+// local branch is local.
+type engineForkPoints struct {
+	db    *sql.DB
+	local string
+}
+
+func (e engineForkPoints) sharesHistory(ctx context.Context, head string) (bool, error) {
+	base, err := mergeBase(ctx, e.db, e.local, head)
+	if err != nil {
+		return false, err
 	}
-	return storage.ForkPointRecorded, nil
+	_, shared := base.shared()
+	return shared, nil
+}
+
+func (e engineForkPoints) setForkPoint(ctx context.Context, name, head string) error {
+	return execProcedureDiscard(ctx, e.db, "DOLT_BRANCH", "-f", name, head)
 }
 
 // trackingRefs is owner's tracking refs, branch to head.

@@ -710,11 +710,14 @@ func TestAnEventOfNoBaseTicketIsNotCounted(t *testing.T) {
 	}
 }
 
-// TestTheReceiveLandsTheClonesForkPoint drives the automatic receive's shape:
-// a clone of delta fetches the re-rooted remote, recording the fork point on
-// the clone, and the landing carries it to delta ahead of the tracking ref, so
-// delta's own settle and reconcile merge against it.
-func TestTheReceiveLandsTheClonesForkPoint(t *testing.T) {
+// TestTheReceiveRecordsTheForkPointOnTheLiveStore drives the automatic
+// receive's shape: a clone of delta fetches the re-rooted remote, and the
+// landing records delta's fork point on delta ahead of the tracking ref, by
+// the fetch's rule. The first landing records it at the head delta adopted,
+// which delta's branch shares history with; the second finds the tracking ref on the re-rooted history, which
+// delta's branch shares nothing with, and keeps it. Delta's own settle and
+// reconcile then merge against it.
+func TestTheReceiveRecordsTheForkPointOnTheLiveStore(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	f := newForkBelowTheCut(t, ctx)
@@ -730,13 +733,19 @@ func TestTheReceiveLandsTheClonesForkPoint(t *testing.T) {
 	if err := fetcher.Close(); err != nil {
 		t.Fatalf("Close(clone) error = %v", err)
 	}
-	for _, want := range []FetchedHeadRecord{FetchedHeadMoved, FetchedHeadUnchanged} {
+	for _, want := range []struct {
+		ref       FetchedHeadRecord
+		forkPoint storage.ForkPointRecord
+	}{
+		{FetchedHeadMoved, storage.ForkPointRecord{Remote: "origin", Branch: "master", Head: f.adopted, Outcome: storage.ForkPointRecorded}},
+		{FetchedHeadUnchanged, storage.ForkPointRecord{Remote: "origin", Branch: "master", Head: f.remoteHead, Outcome: storage.ForkPointKept}},
+	} {
 		landed, err := LandFetchedHead(ctx, f.delta, clone, remoteName(t, "origin"), "master", nil)
 		if err != nil {
 			t.Fatalf("LandFetchedHead() error = %v", err)
 		}
-		if landed.Record != want || landed.ForkPoint != want {
-			t.Fatalf("LandFetchedHead() landed the ref %s and the fork point %s; want both %s", landed.Record, landed.ForkPoint, want)
+		if landed.Record != want.ref || !slices.Equal(landed.ForkPoints, []storage.ForkPointRecord{want.forkPoint}) {
+			t.Fatalf("LandFetchedHead() landed the ref %s and the fork point %+v; want %s and %+v", landed.Record, landed.ForkPoints, want.ref, want.forkPoint)
 		}
 	}
 
