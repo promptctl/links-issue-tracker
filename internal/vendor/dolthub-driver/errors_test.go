@@ -50,8 +50,8 @@ func TestTranslateError(t *testing.T) {
 }
 
 // TestMySQLErrorMessage pins the rendered form, which is the half of the
-// contract translateError's own test does not reach: lit matches on Number, but
-// a human reading a failed query sees only this string.
+// contract translateError's own test does not reach: lit matches on Number and
+// the cause, but a human reading a failed query sees only this string.
 // [LAW:behavior-not-structure] asserts what a caller observes, not how it is built.
 func TestMySQLErrorMessage(t *testing.T) {
 	err := &MySQLError{Number: 1146, Message: "table not found: goose_db_version"}

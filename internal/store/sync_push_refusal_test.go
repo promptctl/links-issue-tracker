@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 	doltenv "github.com/dolthub/dolt/go/libraries/doltcore/env"
@@ -74,5 +75,25 @@ func TestOnlyARefusedPushIsFollowedAndRetried(t *testing.T) {
 		if !reflect.DeepEqual(result, pushed) || gotErr != pushErr || followErr != nil {
 			t.Fatalf("retryPushAfterFollow(%v) = %+v, %v, %v; want the push's own outcome untouched", pushErr, result, gotErr, followErr)
 		}
+	}
+}
+
+// A caller's context that ends while Dolt is running the query reaches lit as
+// context.Canceled through the driver's error, not as a bare Error 1105, so
+// classifyPushOutcome and countsTowardUnsettled read a push or receive torn
+// down mid-call as cancelled, the same as one cancelled before it started.
+// SLEEP holds the engine inside the call when the cancel lands.
+func TestACancelInsideDoltReachesLitAsContextCanceled(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openSyncOrFatal(t, ctx, migratedDoltDir(t))
+	defer func() { _ = st.Close() }()
+	queryCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	time.AfterFunc(200*time.Millisecond, cancel)
+	var slept any
+	err := st.db.QueryRowContext(queryCtx, `SELECT SLEEP(30)`).Scan(&slept)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("query cancelled inside Dolt: error = %v (%T), want context.Canceled in the chain", err, err)
 	}
 }

@@ -27,8 +27,10 @@ import "strconv"
 // reach it through errors.As, never by constructing one themselves.
 type MySQLError struct {
 	// Number is the MySQL server error code, e.g. 1146 for a table that does
-	// not exist. It is the field callers match on: the code is stable across
-	// server versions and locales, while Message is neither.
+	// not exist. A caller matching a protocol error matches on it: the code is
+	// stable across server versions and locales, while Message is neither. A
+	// Dolt verdict arrives under 1105, MySQL's catch-all, so it is matched with
+	// errors.Is on the cause instead.
 	Number uint16
 
 	// Message is the server's description of the failure, already interpolated
