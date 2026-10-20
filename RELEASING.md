@@ -128,7 +128,8 @@ edits a released section; revert that edit.
 
 Two tiers, split by cost so the per-PR loop stays fast:
 
-- **Per PR (fast):** `.github/workflows/release-smoke.yml` builds the
+- **Per PR (fast):** `.github/workflows/release-smoke.yml`, run on every PR as
+  `ci.yml`'s `smoke` job, builds the
   `linux/amd64` target with `goreleaser build --single-target --snapshot --clean`
   inside the release image's `smoke` stage (toolchain + linux/amd64 ICU only,
   layer-cached). It proves the things that break per code change — the code

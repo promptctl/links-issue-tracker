@@ -28,17 +28,15 @@ name: Release smoke
 # release ships (zig cc x86_64-linux-musl, static ICU, -static link) — not a
 # native-glibc stand-in that would hide a broken musl link until release time.
 
+# ci.yml calls this as its `smoke` job on PRs, so it is one of the jobs `gate`
+# needs, and ci.yml's concurrency group cancels it with the rest of a
+# superseded run.
 on:
-  pull_request:
-    branches: [master]
+  workflow_call:
 
 permissions:
   contents: read
   packages: read    # pull the prebuilt release-builder image published from master
-
-concurrency:
-  group: release-smoke-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
   smoke:

@@ -212,7 +212,7 @@ Every compile recipe sources `cgo-env.sh` first (`Justfile`).
 
 ### `ci.yml` — merge gate
 
-Push to `master` and PRs targeting `master`; concurrency-cancelled per ref; `ubuntu-latest` only, no matrix. Six parallel jobs (`.github/workflows/ci.yml`):
+Push to `master` and PRs targeting `master`; concurrency-cancelled per ref; `ubuntu-latest` only, no matrix. Six parallel jobs, then two that run only on PRs (`.github/workflows/ci.yml`). Master's ruleset requires one check, `gate`; CodeQL default setup, configured in repo settings, also runs on PRs and is required by nothing:
 
 1. **build-and-test** — installs Dolt and Claude Code, builds, then runs `go test -short -json ./... | go run ./tools/testbudget` and the same for the vendored driver module (`go -C internal/vendor/dolthub-driver test …`), under `shell: bash` (pipefail load-bearing); no `-timeout` override by policy.
 2. **race** — installs Dolt and Claude Code, then `go test -short -race -timeout 30m ./cmd/... ./internal/...` (tools excluded deliberately; no budget pipe). The timeout is sized above internal/cli's testbudget ceiling as the detector inflates it, so slowness fails build-and-test's budget check, not this lane's timeout.
@@ -220,6 +220,8 @@ Push to `master` and PRs targeting `master`; concurrency-cancelled per ref; `ubu
 4. **lint** — golangci-lint pinned to v2.8.0.
 5. **docs** — `mkdocs build --strict` (mkdocs 1.6.1 / material 9.7.6), so a missing docs page or broken nav link fails the merge gate. (`mkdocs.yml` defines the `links` material-theme site with a seven-entry nav.)
 6. **candybar** — Go plus Node 22 (`actions/setup-node`), then `go run ./tools/candybar-check`, so a lit cc-candybar plugin that does not render each case's cells fails the merge gate.
+7. **smoke** — PRs only; calls `release-smoke.yml` with `packages: read`.
+8. **gate** — PRs only, `if: always()`, needing the other seven. Prints each needed job's result, then fails unless its `needs` names every other job in `ci.yml`, unless every other workflow's triggers are among `schedule`, `workflow_dispatch`, `workflow_call` and a `push` filtered to exactly `branches: [master]`, and unless every needed job's result is `success`.
 
 The composite action `.github/actions/install-claude` installs Node 22 and the pinned Claude Code CLI 2.1.292, with its auto-updater disabled for the rest of the job — the test-only oracle for `claude plugin validate --json`. Every job that runs `go test` (build-and-test, race, nightly `full-suite` and `windows`) runs it, and under `GITHUB_ACTIONS=true` a test whose oracle is missing fails instead of skipping (`internal/testoracle`).
 
@@ -235,7 +237,7 @@ Mondays 09:00 UTC + manual; explicitly not a merge gate. Runs the graph acceptan
 
 ### `release-smoke.yml` — PR-time release rehearsal
 
-PRs targeting `master`. Builds (or pulls from GHCR) the release toolchain image — tagged by the **git tree hash of `build/`**, so the image is rebuilt exactly when `build/` changes — then runs `goreleaser build --single-target --snapshot` inside it with the repo, a read-only `GOMODCACHE`, and a cached `GOCACHE` mounted. Asserts the produced Linux binary is fully static (`readelf`: no `INTERP`, no `NEEDED`) and executes on both glibc (runner) and musl (`alpine:3.20`).
+A reusable workflow (`workflow_call`), run on PRs as `ci.yml`'s `smoke` job. Builds (or pulls from GHCR) the release toolchain image — tagged by the **git tree hash of `build/`**, so the image is rebuilt exactly when `build/` changes — then runs `goreleaser build --single-target --snapshot` inside it with the repo, a read-only `GOMODCACHE`, and a cached `GOCACHE` mounted. Asserts the produced Linux binary is fully static (`readelf`: no `INTERP`, no `NEEDED`) and executes on both glibc (runner) and musl (`alpine:3.20`).
 
 ### `release-validate.yml` — the release pipeline
 
