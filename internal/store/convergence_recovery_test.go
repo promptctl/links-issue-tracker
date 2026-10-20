@@ -217,6 +217,39 @@ func TestAPruneAfterCommittedWorkIsReportedNotFailed(t *testing.T) {
 	}
 }
 
+// A failed drop of the legacy schema_version key leaves no goose state, so a
+// retry adopts the workspace again and drops the key: the step's act, a
+// retry, is what clears it.
+func TestAFailedLegacyKeyDropIsClearedByARetry(t *testing.T) {
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	withStore(t, ctx, doltRoot, func(st *Store) {
+		if err := st.ExecRawForTest(ctx, `INSERT INTO meta (meta_key, meta_value) VALUES ('schema_version', '1')`); err != nil {
+			t.Fatalf("seed legacy key: %v", err)
+		}
+		if err := st.commitWorkingSet(ctx, "seed legacy key"); err != nil {
+			t.Fatalf("commit legacy key: %v", err)
+		}
+	})
+	withGooseHistoryDropped(t, ctx, doltRoot)
+	clear := injectFailpoint(t, errors.New("simulated drop failure"), stepAdoptDropLegacyKey)
+
+	fail := asConvergenceError(t, openErr(t, doltRoot))
+	if fail.Step != stepAdoptDropLegacyKey || fail.Step.Act() != ActClearCause {
+		t.Fatalf("failure = step %s (act %d); want %s, cleared by a retry", fail.Step, fail.Step.Act(), stepAdoptDropLegacyKey)
+	}
+	clear()
+	withStore(t, ctx, doltRoot, func(st *Store) {
+		var keys int
+		if err := st.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM meta WHERE meta_key = 'schema_version'`).Scan(&keys); err != nil {
+			t.Fatalf("count legacy keys: %v", err)
+		}
+		if keys != 0 {
+			t.Errorf("legacy schema_version keys after the retry = %d, want 0", keys)
+		}
+	})
+}
+
 // A failed adoption stamp leaves an empty goose table the next open would
 // misread: the failure calls for the snapshot, and carries it.
 func TestAFailedAdoptionStampCallsForTheSnapshot(t *testing.T) {

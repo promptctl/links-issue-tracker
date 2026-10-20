@@ -35,7 +35,7 @@ type SchemaConvergenceError struct {
 // says what exists.
 func (e *SchemaConvergenceError) Error() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "migrate: step %s failed: %v", e.Step, e.Cause)
+	fmt.Fprintf(&b, "schema convergence step %s failed: %v", e.Step, e.Cause)
 	if e.Snapshot != nil {
 		fmt.Fprintf(&b, "\n\nthis open took recovery snapshot %s before migrating; it holds the workspace as it was then:\n  %s",
 			e.Snapshot.Name, e.Snapshot.Path)
@@ -87,9 +87,9 @@ const (
 	stepReconcile
 	stepVerifyReconciledShape
 	stepReconciledShapeDiffers
+	stepAdoptDropLegacyKey
 	stepAdoptVersionTable
 	stepAdoptStamp
-	stepAdoptDropLegacyKey
 	stepCommitAdoptionStamp
 	stepMigrationProvider
 	stepMigrationCheckpoint
@@ -148,13 +148,13 @@ var convergenceSteps = [convergenceStepCount]struct {
 	stepVerifyReconciledShape: {"verify_reconciled_shape", ActClearCause},
 	// Restoring the snapshot gives back the shape that fails.
 	stepReconciledShapeDiffers: {"reconciled_shape_differs", ActEscalate},
-	stepAdoptVersionTable:      {"adopt_version_table", ActClearCause},
+	// No goose table yet: the next open classifies the workspace as pre-goose
+	// and adopts it again.
+	stepAdoptDropLegacyKey: {"adopt_drop_legacy_key", ActClearCause},
+	stepAdoptVersionTable:  {"adopt_version_table", ActClearCause},
 	// An empty goose table: the next open classifies the workspace as managed
 	// at v0 and applies the baseline on top of the existing tables.
-	stepAdoptStamp: {"adopt_stamp", ActRestoreSnapshot},
-	// The working set is stamped; the next open reads it as managed at the
-	// baseline, and its next commit includes the adoption.
-	stepAdoptDropLegacyKey:  {"adopt_drop_legacy_key", ActClearCause},
+	stepAdoptStamp:          {"adopt_stamp", ActRestoreSnapshot},
 	stepCommitAdoptionStamp: {"commit_adoption_stamp", ActClearCause},
 	stepMigrationProvider:   {"migration_provider", ActClearCause},
 	stepMigrationCheckpoint: {"migration_checkpoint", ActClearCause},
@@ -217,8 +217,10 @@ type failpoint interface {
 func (ConvergenceStep) isFailpoint() {}
 func (pruneStep) isFailpoint()       {}
 
-// failpointForTest, if non-nil, is consulted before each step and prune of the
-// convergence runs: an error it returns fails that step in place of its work.
+// failpointForTest, if non-nil, is consulted before each step that runs as one
+// unit of work, and before each prune: an error it returns fails that step in
+// place of its work. A step decided inside another step's work (a shape
+// refusal, a migration's or a drift repair's own failure) is never consulted.
 var failpointForTest func(at failpoint) error
 
 // atFailpoint runs work, or the failure a test injected at this point.

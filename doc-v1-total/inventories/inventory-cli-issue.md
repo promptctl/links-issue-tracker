@@ -207,11 +207,12 @@ rules in `internal/model/validation.go`.
 - Then, only when non-empty: `remediation: %s\n`.
 
 `commandErrorReason(err)` maps type → reason string (`error_output.go`). Its
-first check is `*store.SchemaConvergenceError`, answered by
-`convergenceReason` from the failed step's act: `ActRestoreSnapshot` →
+first check is a `*store.SchemaConvergenceError` anywhere in the tree, read
+off the failed step's act: `ActRestoreSnapshot` →
 `migration_partially_applied`; `ActEscalate` → `schema_shape_refused`;
-`ActClearCause` → `commandErrorReason` of the error's cause, and
-`migration_failed` when that is `command_failed`. Every other check runs in
+`ActClearCause` → the checks below over the whole error, with
+`migration_failed` in place of `command_failed` when none matches
+(`typedErrorReason(err, unnamed)`). Every other check runs in
 this order and the first match wins, so an error that wraps several of these
 types gets the reason of the earliest one:
 1. `storage.NotFoundError` → `entity_not_found`

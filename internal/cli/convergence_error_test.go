@@ -116,6 +116,28 @@ func TestAConvergenceFailureIsRefinedByItsCause(t *testing.T) {
 	}
 }
 
+// A reason carried outside the convergence failure, as the sync open's
+// contention stamp carries workspace_busy, holds for a step a retry clears,
+// and a step that may have left partial changes still outranks it.
+func TestAReasonOutsideAConvergenceFailureStillHolds(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		step string
+		want string
+	}{
+		{"classify", "workspace_busy"},
+		{"refuse_unwritable", "workspace_busy"},
+		{"migration_reset", "migration_partially_applied"},
+		{"quarantine_table_shape", "schema_shape_refused"},
+	} {
+		fail := &store.SchemaConvergenceError{Step: convergenceStep(t, tc.step), Cause: errors.New("database is locked")}
+		err := fmt.Errorf("another process is holding this workspace's Dolt store open: %w (%w)", store.ErrWorkspaceBusy, fail)
+		if got := commandErrorReason(err); got.String() != tc.want {
+			t.Errorf("step %q under a busy stamp classifies as %q, want %q", tc.step, got, tc.want)
+		}
+	}
+}
+
 // Every reason a convergence failure can reach gives advice that can work:
 // it never names `lit doctor`, which opens the store through the same
 // convergence; never sends the agent hunting for a process to terminate; and

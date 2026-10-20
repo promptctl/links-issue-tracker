@@ -163,7 +163,8 @@ func rollupLocation(ctx context.Context, loc workspace.Location) (row projectRol
 }
 
 // rollupMigrationCounts is how many of the rolled-up stores their open
-// migrated, how many of those could not then roll old migration snapshots off,
+// migrated, how many could not roll old migration snapshots or checkpoints off
+// after the work they trail committed,
 // how many were at a schema newer than this lit, and how many of those this
 // lit may read but not write.
 func rollupMigrationCounts(rows []projectRollup) map[string]int {

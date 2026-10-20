@@ -199,7 +199,7 @@ instead.
 | `counts.stores.migrated` | The stores whose open migrated them. |
 | `counts.stores.schema_ahead` | The stores at a schema newer than this lit. |
 | `counts.stores.read_only` | Those of them this lit reads but does not write. |
-| `counts.stores.prune_failures` | The stores whose open migrated them and then could not remove older migration snapshots or checkpoints. Each gets a `~ <storage dir>: warning: old migration snapshots or checkpoints were not removed:` line after the table. |
+| `counts.stores.prune_failures` | The stores whose open could not remove older migration snapshots or checkpoints after the work they trail committed: a migration or a repair of a recorded migration whose content changed. Each gets a `~ <storage dir>: warning: old migration snapshots or checkpoints were not removed:` line after the table. |
 
 ## What checking the config records
 

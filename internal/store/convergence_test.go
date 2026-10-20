@@ -9,20 +9,30 @@ import (
 )
 
 // injectFailpoint fails each named failpoint with err until the returned
-// clear runs or the test ends. Serial tests only: failpointForTest is
-// package-level.
+// clear runs or the test ends, and fails the test when one of them is never
+// reached, so an injection at a point the convergence does not consult cannot
+// pass as a test of it. Serial tests only: failpointForTest is package-level.
 func injectFailpoint(t *testing.T, err error, at ...failpoint) (clear func()) {
 	t.Helper()
+	reached := map[failpoint]bool{}
 	failpointForTest = func(got failpoint) error {
 		for _, want := range at {
 			if got == want {
+				reached[want] = true
 				return err
 			}
 		}
 		return nil
 	}
 	clear = func() { failpointForTest = nil }
-	t.Cleanup(clear)
+	t.Cleanup(func() {
+		clear()
+		for _, want := range at {
+			if !reached[want] {
+				t.Errorf("failpoint %s was never reached; nothing was injected there", want)
+			}
+		}
+	})
 	return clear
 }
 

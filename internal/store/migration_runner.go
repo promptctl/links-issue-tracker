@@ -490,7 +490,7 @@ func (s *Store) assessContent(ctx context.Context, state migrationState, op oper
 // [LAW:dataflow-not-control-flow] The same assess -> repair -> snapshot ->
 // adopt -> apply sequence runs every Open; variability lives in the phase and
 // the set of pending versions, not in whether stages execute.
-func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard) (operability, error, *SchemaConvergenceError) {
+func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard) (op operability, pruneErr error, fail *SchemaConvergenceError) {
 	state, op, fail := s.checkWritable(ctx)
 	if fail != nil {
 		return operability{}, nil, fail
@@ -499,7 +499,7 @@ func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard) (operabi
 	if fail != nil {
 		return operability{}, nil, fail
 	}
-	pruneErr, fail := s.applyMigration(ctx, guard, assessment)
+	pruneErr, fail = s.applyMigration(ctx, guard, assessment)
 	return op, pruneErr, fail
 }
 
@@ -1346,10 +1346,18 @@ func (s *Store) AppliedSchemaVersion(ctx context.Context) (int64, error) {
 // the legacy meta.schema_version key is deleted so two authorities cannot
 // coexist and drift.
 //
-// Its three steps leave three states: a failed version-table create writes
-// nothing, a failed stamp leaves an empty goose table, and a failed key drop
-// leaves a stamped working set.
+// The key is dropped first, while no goose table exists: a failed drop or a
+// failed version-table create leaves a workspace the next open classifies as
+// pre-goose and adopts again, and only a failed stamp leaves goose state, an
+// empty goose table. Stamping first would leave a failed drop's key in a
+// workspace every later open reads as managed, and no open drops it.
 func (s *Store) adoptPreGooseWorkspace(ctx context.Context, p snapshotted) *SchemaConvergenceError {
+	if fail := p.attempt(stepAdoptDropLegacyKey, func() error {
+		_, err := s.db.ExecContext(ctx, `DELETE FROM meta WHERE meta_key = 'schema_version'`)
+		return err
+	}); fail != nil {
+		return fail
+	}
 	var store database.Store
 	if fail := p.attempt(stepAdoptVersionTable, func() (err error) {
 		store, err = database.NewStore(goose.DialectMySQL, gooseVersionTable)
@@ -1360,14 +1368,8 @@ func (s *Store) adoptPreGooseWorkspace(ctx context.Context, p snapshotted) *Sche
 	}); fail != nil {
 		return fail
 	}
-	if fail := p.attempt(stepAdoptStamp, func() error {
+	return p.attempt(stepAdoptStamp, func() error {
 		return store.Insert(ctx, s.db, database.InsertRequest{Version: baselineVersion})
-	}); fail != nil {
-		return fail
-	}
-	return p.attempt(stepAdoptDropLegacyKey, func() error {
-		_, err := s.db.ExecContext(ctx, `DELETE FROM meta WHERE meta_key = 'schema_version'`)
-		return err
 	})
 }
 

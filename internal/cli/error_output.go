@@ -125,15 +125,32 @@ var (
 // [LAW:types-are-the-program] No message text is inspected; classification is carried by the type.
 func commandErrorReason(err error) commandReason {
 	// A failure of an open's schema convergence: the act that clears it is a
-	// property of the step that failed, read off the step. Placed first
-	// because a step that may have left partial changes outranks whatever its
-	// cause says: a contended reset still leaves a dirty working set, and the
-	// busy and GC-contention arms below would answer "retry" to it.
-	// [LAW:single-enforcer] [LAW:one-type-per-behavior]
+	// property of the step that failed, read off the step. A step that may
+	// have left partial changes, or a shape no open converges, outranks
+	// everything else in the tree: a contended reset still leaves a dirty
+	// working set, and the busy and GC-contention arms below would answer
+	// "retry" to it. A step a retry clears is classified like any other error,
+	// so a wrapper's reason or the cause's own reason still holds, and only an
+	// error no arm names gets migration_failed rather than command_failed,
+	// whose doctor advice cannot help: doctor opens the store through the
+	// same convergence. [LAW:single-enforcer] [LAW:one-type-per-behavior]
+	unnamed := reasonCommandFailed
 	var convergence *store.SchemaConvergenceError
 	if errors.As(err, &convergence) {
-		return convergenceReason(convergence)
+		switch convergence.Step.Act() {
+		case store.ActRestoreSnapshot:
+			return reasonMigrationPartiallyApplied
+		case store.ActEscalate:
+			return reasonSchemaShapeRefused
+		case store.ActClearCause:
+			unnamed = reasonMigrationFailed
+		}
 	}
+	return typedErrorReason(err, unnamed)
+}
+
+// typedErrorReason is the reason err's types name, or unnamed when none does.
+func typedErrorReason(err error, unnamed commandReason) commandReason {
 	var notFound storage.NotFoundError
 	if errors.As(err, &notFound) {
 		return reasonEntityNotFound
@@ -338,26 +355,7 @@ func commandErrorReason(err error) commandReason {
 	if errors.Is(err, store.ErrTransientGCContention) {
 		return reasonTransientGcContention
 	}
-	return reasonCommandFailed
-}
-
-// convergenceReason is the reason a failed convergence step's act calls for.
-// A step whose retry converges is refined by its cause: the cause's own
-// reason (a quarantine in force, a busy or write-blocked store, GC contention,
-// a schema ahead) is the narrower act, and a cause no arm names gets
-// migration_failed, never command_failed, whose doctor advice cannot help:
-// doctor opens the store through the same convergence.
-func convergenceReason(e *store.SchemaConvergenceError) commandReason {
-	switch e.Step.Act() {
-	case store.ActRestoreSnapshot:
-		return reasonMigrationPartiallyApplied
-	case store.ActEscalate:
-		return reasonSchemaShapeRefused
-	}
-	if reason := commandErrorReason(e.Cause); reason != reasonCommandFailed {
-		return reason
-	}
-	return reasonMigrationFailed
+	return unnamed
 }
 
 // installReplacesLit is why installing a lit is the user's call: the
