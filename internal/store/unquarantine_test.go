@@ -42,8 +42,8 @@ func TestUnquarantineClearsTheBlockingQuarantineAndTheNextOpenRunsIt(t *testing.
 	if err != nil {
 		t.Fatalf("Unquarantine() error = %v", err)
 	}
-	if done.Cleared.Version != version || done.Next != nil {
-		t.Fatalf("Unquarantine() = cleared v%d, next %v; want cleared v%d, next nil", done.Cleared.Version, done.Next, version)
+	if done.Cleared.Version != version || done.Cleared.Next != nil {
+		t.Fatalf("Unquarantine() = cleared v%d, next %v; want cleared v%d, next nil", done.Cleared.Version, done.Cleared.Next, version)
 	}
 	// Dolt history names the clear as its own commit, not folded into
 	// whatever commits next.
@@ -83,8 +83,8 @@ func TestUnquarantineNamesTheQuarantineTheNextOpenStillMeets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Unquarantine() error = %v", err)
 	}
-	if done.Cleared.Version != version || done.Next == nil || done.Next.Version != version+1 {
-		t.Fatalf("Unquarantine() = cleared v%d, next %v; want cleared v%d, next v%d", done.Cleared.Version, done.Next, version, version+1)
+	if done.Cleared.Version != version || done.Cleared.Next == nil || done.Cleared.Next.Version != version+1 {
+		t.Fatalf("Unquarantine() = cleared v%d, next %v; want cleared v%d, next v%d", done.Cleared.Version, done.Cleared.Next, version, version+1)
 	}
 	_, openErr := Open(ctx, doltRoot, "test-workspace-id")
 	var blocked *QuarantineBlockError
@@ -169,4 +169,50 @@ func TestUnquarantineLeavesARowThatBlocksNothing(t *testing.T) {
 	if !errors.As(err, &none) {
 		t.Fatalf("Unquarantine() error = %v (%T); want NoQuarantineError", err, err)
 	}
+}
+
+// A clear whose commit fails is still in force: the error names it with the
+// facts a committed clear records, and the next open runs the migration.
+func TestUnquarantineWhoseCommitFailsLeavesTheClearInForce(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	doltRoot, version := quarantinedWorkspace(t, ctx, 1)
+
+	st, err := openInitialized(ctx, doltRoot, "test-workspace-id", engineWrite)
+	if err != nil {
+		t.Fatalf("openInitialized() error = %v", err)
+	}
+	injected := errors.New("injected: DOLT_COMMIT failed")
+	// Fails only the commit that would version the clear: the gate's own
+	// commit, which runs while the row is still there, lands.
+	st.commitWorkingSetHookForTest = func() error {
+		var rows int
+		if err := st.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM migration_quarantine WHERE version = ?`, version).Scan(&rows); err != nil {
+			return err
+		}
+		if rows == 0 {
+			return injected
+		}
+		return nil
+	}
+	_, err = st.unquarantine(ctx)
+	if closeErr := st.Close(); closeErr != nil {
+		t.Fatalf("Close() error = %v", closeErr)
+	}
+	var uncommitted *UnquarantineCommitError
+	if !errors.As(err, &uncommitted) || !errors.Is(err, injected) || uncommitted.Cleared.Version != version {
+		t.Fatalf("unquarantine() error = %v (%T); want UnquarantineCommitError clearing v%d over the injected failure", err, err, version)
+	}
+	if facts, _ := uncommitted.EventRecord(); facts["unquarantine.cleared_version"] != version {
+		t.Errorf("EventRecord() = %v; want unquarantine.cleared_version %d", facts, version)
+	}
+	withStore(t, ctx, doltRoot, func(st *Store) {
+		applied, err := st.recordedMigrationVersion(ctx)
+		if err != nil {
+			t.Fatalf("recordedMigrationVersion() error = %v", err)
+		}
+		if applied != version {
+			t.Errorf("open after the failed commit left the workspace at v%d; want the cleared v%d run", applied, version)
+		}
+	})
 }

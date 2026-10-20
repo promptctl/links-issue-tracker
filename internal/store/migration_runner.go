@@ -198,6 +198,16 @@ type QuarantineBlockError struct {
 	Version   int64
 	Name      string
 	ErrorText string // original failure message recorded at quarantine time
+	// Next is the quarantine the open is refused on once this one is cleared,
+	// nil when none. Clearing a quarantine changes neither the applied version
+	// nor the phase, so it is what the gate refuses on after the clear.
+	Next *QuarantinedMigration
+}
+
+// QuarantinedMigration names a migration whose quarantine is in force.
+type QuarantinedMigration struct {
+	Version int64
+	Name    string
 }
 
 func (e *QuarantineBlockError) Error() string {
@@ -205,8 +215,8 @@ func (e *QuarantineBlockError) Error() string {
 		"migration v%d %q is quarantined after a previous failure:\n  %s\n\n"+
 			"to recover, either:\n"+
 			"  (a) restore from a dbsnapshot: lit snapshots restore <name>\n"+
-			"  (b) clear the quarantine (if transient), so the next open runs v%d again: lit unquarantine",
-		e.Version, e.Name, e.ErrorText, e.Version,
+			"  (b) clear the quarantine (if transient): lit unquarantine",
+		e.Version, e.Name, e.ErrorText,
 	)
 }
 
@@ -1095,22 +1105,37 @@ func (s *Store) quarantineGate(ctx context.Context, state migrationState) *Schem
 	return attempt(stepCheckQuarantine, func() error { return s.checkPendingQuarantine(ctx, effectiveApplied) })
 }
 
-// checkPendingQuarantine returns a QuarantineBlockError if any migration
-// version greater than appliedVersion has a quarantine record.
+// checkPendingQuarantine returns a QuarantineBlockError for the lowest
+// quarantined version above appliedVersion, its Next the one after it, and
+// nil when none is quarantined.
 func (s *Store) checkPendingQuarantine(ctx context.Context, appliedVersion int64) error {
-	var version int64
-	var name, errorText string
-	err := s.db.QueryRowContext(ctx,
-		`SELECT version, name, error_text FROM migration_quarantine WHERE version > ? ORDER BY version LIMIT 1`,
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT version, name, error_text FROM migration_quarantine WHERE version > ? ORDER BY version LIMIT 2`,
 		appliedVersion,
-	).Scan(&version, &name, &errorText)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil
-	}
+	)
 	if err != nil {
 		return fmt.Errorf("check pending quarantine: %w", err)
 	}
-	return &QuarantineBlockError{Version: version, Name: name, ErrorText: errorText}
+	defer rows.Close()
+	var inForce []QuarantineBlockError
+	for rows.Next() {
+		var q QuarantineBlockError
+		if err := rows.Scan(&q.Version, &q.Name, &q.ErrorText); err != nil {
+			return fmt.Errorf("check pending quarantine: %w", err)
+		}
+		inForce = append(inForce, q)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("check pending quarantine: %w", err)
+	}
+	if len(inForce) == 0 {
+		return nil
+	}
+	blocked := inForce[0]
+	if len(inForce) > 1 {
+		blocked.Next = &QuarantinedMigration{Version: inForce[1].Version, Name: inForce[1].Name}
+	}
+	return &blocked
 }
 
 // recordQuarantine upserts the quarantine row for q's migration version.

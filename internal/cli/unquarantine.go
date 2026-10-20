@@ -23,16 +23,7 @@ func unquarantineLeaf() wsLeaf {
 		}
 		facts, counts := done.EventRecord()
 		telemetry.Record(ctx, facts, counts)
-		_, err = fmt.Fprintf(stdout, "cleared the quarantine of migration v%d %q\n%s\n", done.Cleared.Version, done.Cleared.Name, unquarantineNext(done.Next))
+		_, err = fmt.Fprintln(stdout, done)
 		return err
 	}}
-}
-
-// unquarantineNext is what the next open meets: the cleared migration run
-// again, or the quarantine still in force refusing it first.
-func unquarantineNext(next *store.QuarantineBlockError) string {
-	if next == nil {
-		return "the next command that opens the store runs it again"
-	}
-	return fmt.Sprintf("migration v%d %q is still quarantined, so the next command that opens the store refuses on it; `lit unquarantine` clears it", next.Version, next.Name)
 }
