@@ -131,7 +131,7 @@ func TestAPushPastTheBoundCollectsTheRemote(t *testing.T) {
 	if err := st.Close(); err != nil {
 		t.Fatal(err)
 	}
-	bound := historyBound{ReRootAt: seeded + 2, Keep: 3}
+	bound := windowOf(t, seeded+2, 3)
 	if under := compactPush(t, ctx, alpha, epic, "under", bound); under.Fired() || under.RemoteGC.Outcome != "" {
 		t.Fatalf("a push under the bound = %+v; want no remote GC", under)
 	}

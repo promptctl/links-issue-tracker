@@ -20,7 +20,6 @@ import (
 	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/types"
 
-	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -30,9 +29,8 @@ import (
 // other's background receive, until the history has crossed the bound many
 // times over. Then each edits a different field of one ticket before either
 // syncs, and the push that lands first re-roots. Nothing runs but those
-// writes and the two automatic sync paths. They run in-process, so the shrunk
-// bound applies and every step lands before the next: a detached worker would
-// open its store under the default bound.
+// writes and the two automatic sync paths. They run in-process, so every step
+// lands before the next.
 //
 // The 10x case is the 1x case with ten times the rounds and nothing else
 // changed.
@@ -81,10 +79,9 @@ func newBoundCheckout(t *testing.T, name, dir, sink string) *boundCheckout {
 func driveTheBound(t *testing.T, rounds int) {
 	r, base := newSharedCheckouts(t)
 	finishSharedCheckouts(t, r, base)
-	defaultBound := store.DefaultHistoryBound
-	t.Cleanup(func() { store.DefaultHistoryBound = defaultBound })
-	store.DefaultHistoryBound.ReRootAt = checkpointReRootAt
-	store.DefaultHistoryBound.Keep = checkpointKeep
+	for _, repo := range []string{r.alpha, r.bravo} {
+		setHistoryWindow(t, repo, checkpointReRootAt, checkpointKeep)
+	}
 	remote := filepath.Join(base, "remote.git")
 	alpha := newBoundCheckout(t, "alpha", r.alpha, filepath.Join(base, "alpha-notifications"))
 	bravo := newBoundCheckout(t, "bravo", r.bravo, r.sink)

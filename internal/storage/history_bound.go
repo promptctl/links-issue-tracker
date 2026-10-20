@@ -4,6 +4,7 @@ import (
 	"maps"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/historywindow"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 )
 
@@ -17,9 +18,8 @@ type HistoryBound struct {
 	// commits on the longest line from it down to the root, itself counted.
 	Head   string
 	Height uint64
-	// ReRootAt is the height at which a push re-roots, and Keep how many
-	// commits of the head's first-parent line the re-root keeps.
-	ReRootAt, Keep uint64
+	// Window is the bound the push was kept inside.
+	Window historywindow.Window
 	// ReRooted is the re-root published in Head's place: zero until the bound
 	// fires, and zero when the re-root was refused.
 	ReRooted ReRooted
@@ -44,7 +44,7 @@ type HistoryBound struct {
 // Fired is whether the remote head reached the height at which a push
 // re-roots.
 func (b HistoryBound) Fired() bool {
-	return b.Height >= b.ReRootAt
+	return b.Height >= b.Window.ReRootAt()
 }
 
 // EventValue is the bound as one value of the event's history_bound.records
@@ -59,8 +59,8 @@ func (b HistoryBound) EventValue() map[string]any {
 		"history_bound.branch":     b.Branch,
 		"history_bound.head":       b.Head,
 		"history_bound.height":     b.Height,
-		"history_bound.reroot_at":  b.ReRootAt,
-		"history_bound.keep":       b.Keep,
+		"history_bound.reroot_at":  b.Window.ReRootAt(),
+		"history_bound.keep":       b.Window.Keep(),
 		"history_bound.fired":      b.Fired(),
 		"history_bound.lease":      string(b.Lease),
 		"history_bound.elapsed_ms": b.Elapsed.Milliseconds(),

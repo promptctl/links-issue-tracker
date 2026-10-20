@@ -359,6 +359,28 @@ Detection and prevention are both needed, and neither replaces the other:
 prevention does not fix a store that already holds a collided pair, and
 detection does not stop the next one.
 
+## History bound
+
+The sync remote's history does not grow with every write. After each push that
+lands, lit reads how many commits the remote's branch carries; at
+`re_root_at` it re-roots the branch so it keeps only its newest `keep`
+commits, collects the dropped history's storage on the remote, and moves the
+local store onto the re-rooted history. Other clones follow the re-root on
+their next fetch. The window is yours to set:
+
+```toml
+[sync.history_bound]
+re_root_at = 2000  # default
+keep = 1000        # default; at least 1 and fewer than re_root_at
+```
+
+Each checkout that pushes applies its own window to the shared remote, so set
+it in the committed `.lit/config.toml`, where every clone reads the same one.
+A count that is not a whole number, or a window that keeps no commit or keeps
+as many as it re-roots at, is a config error naming `sync.history_bound`.
+Pushes still land, but each says `history bound not kept` with the error, and
+history grows until the config is fixed.
+
 ## Owner notifications
 
 The in-band surfaces above talk to whoever runs the next command — usually an

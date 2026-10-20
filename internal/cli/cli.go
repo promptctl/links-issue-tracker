@@ -996,8 +996,9 @@ func readyRequiredFields(ap *app.App) ([]string, error) {
 //
 // Deferring is not a micro-optimization over one file read. config.Load
 // validates the whole config — snapshot.retention_budget, sync.cadence,
-// claims.freshness_window — and fails on any of them, so reading it eagerly
-// would make `lit ls` fail on config defects in settings it does not render.
+// sync.history_bound, claims.freshness_window — and fails on any of them, so
+// reading it eagerly would make `lit ls` fail on config defects in settings it
+// does not render.
 // That would take out the plain listing exactly when a repo's config is broken,
 // which is when a reader most needs to see their tickets.
 // [LAW:no-silent-failure] the policy still fails loudly, at the one projection

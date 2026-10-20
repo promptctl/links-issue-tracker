@@ -1,7 +1,10 @@
 package cli
 
 import (
+	"errors"
+	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -16,16 +19,14 @@ import (
 // write the mirror pushes sits one commit above the kept window.
 func TestTheMirrorAloneKeepsTheHistoryBound(t *testing.T) {
 	// Auto-sync stays off throughout: a write here spawns no detached mirror,
-	// which would push from another process under the default bound.
+	// which would push from another process, racing the pushes this test
+	// sequences.
 	r, _ := newSharedCheckouts(t)
 	isolateEvents(t)
 	runCLIInDir(t, r.alpha, "sync", "push")
 	seeded := boundRecordOf(t, lastEvent(t).Facts)["history_bound.height"].(float64)
 
-	defaultBound := store.DefaultHistoryBound
-	t.Cleanup(func() { store.DefaultHistoryBound = defaultBound })
-	store.DefaultHistoryBound.ReRootAt = uint64(seeded) + 3
-	store.DefaultHistoryBound.Keep = 2
+	setHistoryWindow(t, r.alpha, uint64(seeded)+3, 2)
 	for _, title := range []string{"one", "two", "three"} {
 		runCLIInDir(t, r.alpha, "new", "--title", title, "--topic", "demo", "--type", "task", "--parent", r.epic)
 	}
@@ -86,10 +87,7 @@ func TestAPushWhoseBoundFiredProvesNothing(t *testing.T) {
 		t.Fatalf("the seeding push's received-refs record = %q (%v); want the advertisement it proved", proved, err)
 	}
 
-	defaultBound := store.DefaultHistoryBound
-	t.Cleanup(func() { store.DefaultHistoryBound = defaultBound })
-	store.DefaultHistoryBound.ReRootAt = uint64(seeded) + 1
-	store.DefaultHistoryBound.Keep = 2
+	setHistoryWindow(t, r.alpha, uint64(seeded)+1, 2)
 	runCLIInDir(t, r.alpha, "new", "--title", "one", "--topic", "demo", "--type", "task", "--parent", r.epic)
 	runCLIInDir(t, r.alpha, "sync", "push")
 	bound := boundRecordOf(t, lastEvent(t).Facts)
@@ -167,5 +165,51 @@ func TestTheLiveStoreLearnsWhereTheCycleLeftTheRemote(t *testing.T) {
 		if got := tc.pushed.liveStoreStep(); got != tc.want {
 			t.Errorf("%s: liveStoreStep() = %d; want %d", tc.name, got, tc.want)
 		}
+	}
+}
+
+// The bound fails nothing, so an illegal sync.history_bound fails only the
+// bound: the push lands, its output says the bound was not kept and why, and
+// the event's history_bound.window_error carries the refusal, with no bound
+// record beside it.
+func TestAnIllegalHistoryWindowFailsTheBoundAndNotThePush(t *testing.T) {
+	r, _ := newSharedCheckouts(t)
+	pushed := extractTicketID(t, runCLIInDir(t, r.alpha, "new", "--title", "pushed", "--topic", "demo", "--type", "task", "--parent", r.epic))
+	setHistoryWindow(t, r.alpha, 5, 5)
+	isolateEvents(t)
+	const refusal = "config: sync.history_bound: a history window keeps at least one commit and fewer than it re-roots at; re_root_at 5, keep 5 is not one"
+	if out := runCLIInDir(t, r.alpha, "sync", "push"); !strings.Contains(out, "history bound not kept: "+refusal) {
+		t.Fatalf("lit sync push under re_root_at 5, keep 5:\n%s\nwant the push landed and the bound not kept, naming the refusal", out)
+	}
+	ev := readEvents(t)[0]
+	if got, _ := ev.Facts["history_bound.window_error"].(string); got != refusal {
+		t.Fatalf("event %q history_bound.window_error = %v; want %q", ev.Event, ev.Facts["history_bound.window_error"], refusal)
+	}
+	if records, ok := ev.Facts["history_bound.records"].([]any); !ok || len(records) != 0 {
+		t.Fatalf("event %q history_bound.records = %v; want an empty list: no bound ran", ev.Event, ev.Facts["history_bound.records"])
+	}
+	runCLIInDir(t, r.bravo, "sync", "pull")
+	runCLIInDir(t, r.bravo, "show", pushed)
+}
+
+// setHistoryWindow sets sync.history_bound in repo's project config,
+// creating the file if no fixture wrote one, so every later push from repo
+// keeps its history inside that window. The table it writes is always the
+// file's last, so a later call replaces it rather than adding a second.
+func setHistoryWindow(t *testing.T, repo string, reRootAt, keep uint64) {
+	t.Helper()
+	const table = "\n[sync.history_bound]\n"
+	path := filepath.Join(repo, ".lit", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
+	}
+	existing, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("read project config %s: %v", path, err)
+	}
+	before, _, _ := strings.Cut(string(existing), table)
+	content := fmt.Sprintf("%s%sre_root_at = %d\nkeep = %d\n", before, table, reRootAt, keep)
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write sync.history_bound to %s: %v", path, err)
 	}
 }

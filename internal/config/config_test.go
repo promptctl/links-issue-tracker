@@ -43,6 +43,56 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Claims.FreshnessWindow != 6*time.Hour {
 		t.Fatalf("expected claims.freshness_window=6h by default, got %s", cfg.Claims.FreshnessWindow)
 	}
+	if cfg.Sync.HistoryWindow.ReRootAt() != 2000 || cfg.Sync.HistoryWindow.Keep() != 1000 {
+		t.Fatalf("expected sync.history_bound re_root_at=2000, keep=1000 by default, got %d, %d", cfg.Sync.HistoryWindow.ReRootAt(), cfg.Sync.HistoryWindow.Keep())
+	}
+}
+
+// Load builds sync.history_bound into the window it names only from two whole,
+// non-negative counts that keep a commit and drop one. A negative count is the
+// case a weak decode would not refuse: it would wrap to a height no push ever
+// reaches, and the bound would silently never fire.
+func TestLoadBuildsTheHistoryWindowOnlyFromWholeCounts(t *testing.T) {
+	for _, tc := range []struct {
+		name, body     string
+		reRootAt, keep uint64
+		refusal        string
+	}{
+		{"a legal pair", "re_root_at = 50\nkeep = 10", 50, 10, ""},
+		{"keep alone", "keep = 10", 2000, 10, ""},
+		{"a negative re_root_at", "re_root_at = -1", 0, 0, "sync.history_bound.re_root_at must be a whole number of commits, got -1 (int64)"},
+		{"a negative keep", "keep = -1", 0, 0, "sync.history_bound.keep must be a whole number of commits, got -1 (int64)"},
+		{"a quoted count", "re_root_at = \"2000\"", 0, 0, "sync.history_bound.re_root_at must be a whole number of commits, got \"2000\" (string)"},
+		{"a whole float", "re_root_at = 2000.0", 0, 0, "sync.history_bound.re_root_at must be a whole number of commits, got 2000 (float64)"},
+		{"a fractional count", "keep = 10.5", 0, 0, "sync.history_bound.keep must be a whole number of commits, got 10.5 (float64)"},
+		{"a window that drops nothing", "re_root_at = 10\nkeep = 10", 0, 0, "config: sync.history_bound: a history window keeps at least one commit and fewer than it re-roots at; re_root_at 10, keep 10 is not one"},
+		{"a window that keeps nothing", "keep = 0", 0, 0, "re_root_at 2000, keep 0 is not one"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			configDir := filepath.Join(dir, "links-issue-tracker")
+			if err := os.MkdirAll(configDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte("[sync.history_bound]\n"+tc.body+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("XDG_CONFIG_HOME", dir)
+			cfg, err := Load(pathspec.PathSpec{})
+			if tc.refusal != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.refusal) {
+					t.Fatalf("Load() error = %v; want a refusal containing %q", err, tc.refusal)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load() error = %v; want re_root_at %d, keep %d", err, tc.reRootAt, tc.keep)
+			}
+			if cfg.Sync.HistoryWindow.ReRootAt() != tc.reRootAt || cfg.Sync.HistoryWindow.Keep() != tc.keep {
+				t.Fatalf("Load() = %s; want re_root_at %d, keep %d", cfg.Sync.HistoryWindow, tc.reRootAt, tc.keep)
+			}
+		})
+	}
 }
 
 // TestLoadRejectsUnusableFreshnessWindow covers both ways the window can arrive
@@ -312,17 +362,22 @@ soil_mode = true
 // Load reads it; a key the table holds that Config does not decode would be
 // accepted and change nothing.
 func TestSettingsAreTheKeysLoadReads(t *testing.T) {
-	want := []string{"claims.freshness_window"}
-	config := reflect.TypeOf(Config{})
-	for i := range config.NumField() {
-		section := config.Field(i)
-		for j := range section.Type.NumField() {
-			tag := section.Type.Field(j).Tag.Get("mapstructure")
-			if tag != "-" {
-				want = append(want, section.Tag.Get("mapstructure")+"."+tag)
+	want := []string{"claims.freshness_window", "sync.history_bound.re_root_at", "sync.history_bound.keep"}
+	var decoded func(prefix string, t reflect.Type)
+	decoded = func(prefix string, t reflect.Type) {
+		for i := range t.NumField() {
+			field := t.Field(i)
+			tag := field.Tag.Get("mapstructure")
+			switch {
+			case tag == "-":
+			case field.Type.Kind() == reflect.Struct:
+				decoded(prefix+tag+".", field.Type)
+			default:
+				want = append(want, prefix+tag)
 			}
 		}
 	}
+	decoded("", reflect.TypeOf(Config{}))
 	got := slices.Collect(maps.Keys(settings))
 	slices.Sort(got)
 	slices.Sort(want)

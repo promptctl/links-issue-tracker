@@ -657,7 +657,7 @@ func TestFollowAndBoundRefuseUnderTheCommitLockOnEveryRun(t *testing.T) {
 	}
 	var bound storage.HistoryBound
 	err = st.withCommitLock(ctx, func(ctx context.Context) error {
-		bound = st.boundHistory(ctx, "origin", "master")
+		bound = st.boundHistory(ctx, "origin", "master", windowOf(t, 2000, 1000))
 		return nil
 	})
 	if err != nil {
