@@ -217,7 +217,7 @@ func TestSyncRemoteLifecycle(t *testing.T) {
 	}
 	defer syncStore.Close()
 
-	if err := syncStore.SyncAddRemote(ctx, "origin", "https://example.com/repo.git"); err != nil {
+	if err := syncStore.SyncAddRemote(ctx, remoteName(t, "origin"), "https://example.com/repo.git"); err != nil {
 		t.Fatalf("SyncAddRemote() error = %v", err)
 	}
 
@@ -262,13 +262,8 @@ func TestSyncRemoteValidation(t *testing.T) {
 		wantErr string
 	}{
 		{
-			name:    "add remote requires name",
-			run:     func() error { return syncStore.SyncAddRemote(ctx, "   ", "https://example.com/repo.git") },
-			wantErr: "remote is required",
-		},
-		{
 			name:    "add remote requires url",
-			run:     func() error { return syncStore.SyncAddRemote(ctx, "origin", "   ") },
+			run:     func() error { return syncStore.SyncAddRemote(ctx, remoteName(t, "origin"), "   ") },
 			wantErr: "remote url is required",
 		},
 		{
@@ -277,30 +272,9 @@ func TestSyncRemoteValidation(t *testing.T) {
 			wantErr: "remote is required",
 		},
 		{
-			name:    "fetch requires remote",
-			run:     func() error { return syncStore.SyncFetch(ctx, "   ", false) },
-			wantErr: "remote is required",
-		},
-		{
-			name: "pull requires remote",
-			run: func() error {
-				_, err := syncStore.SyncPull(ctx, "   ", "master")
-				return err
-			},
-			wantErr: "remote is required",
-		},
-		{
-			name: "push requires remote",
-			run: func() error {
-				_, err := syncStore.SyncPush(ctx, "   ", "master", false, false)
-				return err
-			},
-			wantErr: "remote is required",
-		},
-		{
 			name: "push requires branch",
 			run: func() error {
-				_, err := syncStore.SyncPush(ctx, "origin", "   ", false, false)
+				_, err := syncStore.SyncPush(ctx, remoteName(t, "origin"), "   ", false, false)
 				return err
 			},
 			wantErr: "branch is required",
@@ -308,7 +282,7 @@ func TestSyncRemoteValidation(t *testing.T) {
 		{
 			name: "compacting push requires branch",
 			run: func() error {
-				_, err := syncStore.SyncCompactAndPush(ctx, "origin", "   ", false, false)
+				_, err := syncStore.SyncCompactAndPush(ctx, remoteName(t, "origin"), "   ", false, false)
 				return err
 			},
 			wantErr: "branch is required",
@@ -359,7 +333,7 @@ func TestSyncCompactAndPushRefusesABlankBranchBeforeAnyWork(t *testing.T) {
 	defer func() { _ = st.Close() }()
 	canceled, cancel := context.WithCancel(ctx)
 	cancel()
-	_, err := st.SyncCompactAndPush(canceled, "origin", "   ", false, false)
+	_, err := st.SyncCompactAndPush(canceled, remoteName(t, "origin"), "   ", false, false)
 	if err == nil || err.Error() != "branch is required" {
 		t.Fatalf("SyncCompactAndPush(blank branch) error = %v, want only %q", err, "branch is required")
 	}
@@ -667,7 +641,7 @@ func TestSyncFreshnessStateClassification(t *testing.T) {
 	}
 }
 
-func TestSyncFreshnessRequiresRemoteAndBranch(t *testing.T) {
+func TestSyncFreshnessRequiresBranch(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
@@ -676,10 +650,7 @@ func TestSyncFreshnessRequiresRemoteAndBranch(t *testing.T) {
 		t.Fatalf("Open() error = %v", err)
 	}
 	defer st.Close()
-	if _, err := st.SyncFreshness(ctx, "  ", "master"); err == nil || !strings.Contains(err.Error(), "remote is required") {
-		t.Fatalf("SyncFreshness with blank remote error = %v, want remote required", err)
-	}
-	if _, err := st.SyncFreshness(ctx, "origin", "  "); err == nil || !strings.Contains(err.Error(), "branch is required") {
+	if _, err := st.SyncFreshness(ctx, remoteName(t, "origin"), "  "); err == nil || !strings.Contains(err.Error(), "branch is required") {
 		t.Fatalf("SyncFreshness with blank branch error = %v, want branch required", err)
 	}
 }
@@ -711,7 +682,7 @@ func TestSyncFreshnessTracksAheadBehindAgainstRemote(t *testing.T) {
 
 	assertFreshness := func(label string, sync *Store, wantState storage.SyncFreshnessState, wantAhead, wantBehind int64) {
 		t.Helper()
-		got, err := sync.SyncFreshness(ctx, "origin", "master")
+		got, err := sync.SyncFreshness(ctx, remoteName(t, "origin"), "master")
 		if err != nil {
 			t.Fatalf("%s: SyncFreshness() error = %v", label, err)
 		}
@@ -734,14 +705,14 @@ func TestSyncFreshnessTracksAheadBehindAgainstRemote(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenSync() error = %v", err)
 	}
-	if err := sync.SyncAddRemote(ctx, "origin", remoteURL); err != nil {
+	if err := sync.SyncAddRemote(ctx, remoteName(t, "origin"), remoteURL); err != nil {
 		t.Fatalf("SyncAddRemote() error = %v", err)
 	}
 
 	// Remote configured but never pushed/fetched: tracking ref absent.
 	assertFreshness("never synced", sync, storage.SyncNeverSynced, 0, 0)
 
-	if _, err := sync.SyncPush(ctx, "origin", "master", true, false); err != nil {
+	if _, err := sync.SyncPush(ctx, remoteName(t, "origin"), "master", true, false); err != nil {
 		t.Fatalf("SyncPush(c1) error = %v", err)
 	}
 	var c1Hash string
@@ -763,7 +734,7 @@ func TestSyncFreshnessTracksAheadBehindAgainstRemote(t *testing.T) {
 
 	// Publish c2 so the remote-tracking ref advances to c2, then rewind the
 	// local branch to c1: the tracking ref is now ahead of local → behind by 1.
-	if _, err := sync.SyncPush(ctx, "origin", "master", false, false); err != nil {
+	if _, err := sync.SyncPush(ctx, remoteName(t, "origin"), "master", false, false); err != nil {
 		t.Fatalf("SyncPush(c2) error = %v", err)
 	}
 	assertFreshness("after publishing c2", sync, storage.SyncUpToDate, 0, 0)
@@ -830,15 +801,15 @@ func TestSyncPushDelivers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenSync() error = %v", err)
 	}
-	if err := sync.SyncAddRemote(ctx, "origin", remoteURL); err != nil {
+	if err := sync.SyncAddRemote(ctx, remoteName(t, "origin"), remoteURL); err != nil {
 		t.Fatalf("SyncAddRemote() error = %v", err)
 	}
 
 	// First push seeds the remote and the tracking ref.
-	if _, err := sync.SyncPush(ctx, "origin", "master", true, false); err != nil {
+	if _, err := sync.SyncPush(ctx, remoteName(t, "origin"), "master", true, false); err != nil {
 		t.Fatalf("SyncPush(set-upstream) error = %v", err)
 	}
-	got, err := sync.SyncFreshness(ctx, "origin", "master")
+	got, err := sync.SyncFreshness(ctx, remoteName(t, "origin"), "master")
 	if err != nil {
 		t.Fatalf("SyncFreshness() error = %v", err)
 	}
@@ -860,13 +831,13 @@ func TestSyncPushDelivers(t *testing.T) {
 		t.Fatalf("OpenSync() after c2 error = %v", err)
 	}
 	defer sync2.Close()
-	if freshness, _ := sync2.SyncFreshness(ctx, "origin", "master"); freshness.Ahead != 1 {
+	if freshness, _ := sync2.SyncFreshness(ctx, remoteName(t, "origin"), "master"); freshness.Ahead != 1 {
 		t.Fatalf("before second push: ahead = %d, want 1", freshness.Ahead)
 	}
-	if _, err := sync2.SyncPush(ctx, "origin", "master", false, false); err != nil {
+	if _, err := sync2.SyncPush(ctx, remoteName(t, "origin"), "master", false, false); err != nil {
 		t.Fatalf("SyncPush(c2) error = %v", err)
 	}
-	after, err := sync2.SyncFreshness(ctx, "origin", "master")
+	after, err := sync2.SyncFreshness(ctx, remoteName(t, "origin"), "master")
 	if err != nil {
 		t.Fatalf("SyncFreshness() after c2 push error = %v", err)
 	}
@@ -906,13 +877,13 @@ func TestSyncCompactAndPushDelivers(t *testing.T) {
 		t.Fatalf("OpenSync() error = %v", err)
 	}
 	defer sync.Close()
-	if err := sync.SyncAddRemote(ctx, "origin", remoteURL); err != nil {
+	if err := sync.SyncAddRemote(ctx, remoteName(t, "origin"), remoteURL); err != nil {
 		t.Fatalf("SyncAddRemote() error = %v", err)
 	}
-	if _, err := sync.SyncCompactAndPush(ctx, "origin", "master", true, false); err != nil {
+	if _, err := sync.SyncCompactAndPush(ctx, remoteName(t, "origin"), "master", true, false); err != nil {
 		t.Fatalf("SyncCompactAndPush() error = %v", err)
 	}
-	got, err := sync.SyncFreshness(ctx, "origin", "master")
+	got, err := sync.SyncFreshness(ctx, remoteName(t, "origin"), "master")
 	if err != nil {
 		t.Fatalf("SyncFreshness() error = %v", err)
 	}
@@ -975,11 +946,11 @@ func TestSyncCompactAndPushDeepensOnAFragmentedOldGeneration(t *testing.T) {
 		t.Fatalf("OpenSync() error = %v", err)
 	}
 	defer syncStore.Close()
-	if err := syncStore.SyncAddRemote(ctx, "origin", remoteURL); err != nil {
+	if err := syncStore.SyncAddRemote(ctx, remoteName(t, "origin"), remoteURL); err != nil {
 		t.Fatalf("SyncAddRemote() error = %v", err)
 	}
 
-	result, err := syncStore.SyncCompactAndPush(ctx, "origin", "master", true, false)
+	result, err := syncStore.SyncCompactAndPush(ctx, remoteName(t, "origin"), "master", true, false)
 	if err != nil {
 		t.Fatalf("SyncCompactAndPush() error = %v", err)
 	}
@@ -1037,7 +1008,7 @@ func TestSyncCompactAndPushNamesADeepPassInsideAFailedPush(t *testing.T) {
 	}
 	defer syncStore.Close()
 
-	_, err = syncStore.SyncCompactAndPush(ctx, "no-such-remote", "master", false, false)
+	_, err = syncStore.SyncCompactAndPush(ctx, remoteName(t, "no-such-remote"), "master", false, false)
 	if err == nil {
 		t.Fatal("SyncCompactAndPush() to a remote that does not exist succeeded; this test cannot say anything unless the push fails")
 	}
@@ -1195,10 +1166,10 @@ func TestSyncResetToRemoteHeadAdoptsUnrelatedHistory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenSync(producer) error = %v", err)
 	}
-	if err := producerSync.SyncAddRemote(ctx, "origin", remoteURL); err != nil {
+	if err := producerSync.SyncAddRemote(ctx, remoteName(t, "origin"), remoteURL); err != nil {
 		t.Fatalf("SyncAddRemote(producer) error = %v", err)
 	}
-	if _, err := producerSync.SyncPush(ctx, "origin", "master", true, false); err != nil {
+	if _, err := producerSync.SyncPush(ctx, remoteName(t, "origin"), "master", true, false); err != nil {
 		t.Fatalf("SyncPush(producer) error = %v", err)
 	}
 	if err := producerSync.Close(); err != nil {
@@ -1211,22 +1182,22 @@ func TestSyncResetToRemoteHeadAdoptsUnrelatedHistory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenSync(consumer) error = %v", err)
 	}
-	if err := consumer.SyncAddRemote(ctx, "origin", remoteURL); err != nil {
+	if err := consumer.SyncAddRemote(ctx, remoteName(t, "origin"), remoteURL); err != nil {
 		t.Fatalf("SyncAddRemote(consumer) error = %v", err)
 	}
-	if err := consumer.SyncFetch(ctx, "origin", false); err != nil {
+	if err := consumer.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
 		t.Fatalf("SyncFetch(consumer) error = %v", err)
 	}
 	// The tracking ref exists post-fetch, so the consumer reports Synced — the
 	// signal init uses to decide there is remote data to adopt.
-	freshness, err := consumer.SyncFreshness(ctx, "origin", "master")
+	freshness, err := consumer.SyncFreshness(ctx, remoteName(t, "origin"), "master")
 	if err != nil {
 		t.Fatalf("SyncFreshness(consumer) error = %v", err)
 	}
 	if !freshness.Synced {
 		t.Fatalf("consumer freshness Synced = false, want true (remote carries data): %+v", freshness)
 	}
-	if err := consumer.SyncResetToRemoteHead(ctx, "origin", "master"); err != nil {
+	if err := consumer.SyncResetToRemoteHead(ctx, remoteName(t, "origin"), "master"); err != nil {
 		t.Fatalf("SyncResetToRemoteHead() error = %v", err)
 	}
 	if err := consumer.Close(); err != nil {
@@ -1302,7 +1273,7 @@ func TestLocalIssueCountAcrossLifecycle(t *testing.T) {
 	}
 }
 
-func TestSyncResetToRemoteHeadRequiresRemoteAndBranch(t *testing.T) {
+func TestSyncResetToRemoteHeadRequiresBranch(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
@@ -1311,10 +1282,7 @@ func TestSyncResetToRemoteHeadRequiresRemoteAndBranch(t *testing.T) {
 		t.Fatalf("OpenSync() error = %v", err)
 	}
 	defer st.Close()
-	if err := st.SyncResetToRemoteHead(ctx, "  ", "master"); err == nil || !strings.Contains(err.Error(), "remote is required") {
-		t.Fatalf("blank remote error = %v, want remote required", err)
-	}
-	if err := st.SyncResetToRemoteHead(ctx, "origin", "  "); err == nil || !strings.Contains(err.Error(), "branch is required") {
+	if err := st.SyncResetToRemoteHead(ctx, remoteName(t, "origin"), "  "); err == nil || !strings.Contains(err.Error(), "branch is required") {
 		t.Fatalf("blank branch error = %v, want branch required", err)
 	}
 }
@@ -1402,7 +1370,7 @@ func TestGitBackedRemoteURLRoundTripsThroughDolt(t *testing.T) {
 			defer syncStore.Close()
 
 			desired := GitBackedRemoteURL(raw)
-			if err := syncStore.SyncAddRemote(ctx, "origin", desired); err != nil {
+			if err := syncStore.SyncAddRemote(ctx, remoteName(t, "origin"), desired); err != nil {
 				t.Fatalf("SyncAddRemote(%q) error = %v", desired, err)
 			}
 			remotes, err := syncStore.SyncListRemotes(ctx)
@@ -1468,7 +1436,7 @@ func TestSyncReceiveFastForwardsWhenBehindAndDefersDivergence(t *testing.T) {
 		if err != nil {
 			t.Fatalf("OpenSync(%s) for push error = %v", root, err)
 		}
-		if _, err := st.SyncPush(ctx, "origin", "master", setUpstream, false); err != nil {
+		if _, err := st.SyncPush(ctx, remoteName(t, "origin"), "master", setUpstream, false); err != nil {
 			t.Fatalf("SyncPush(%s) error = %v", root, err)
 		}
 		if err := st.Close(); err != nil {
@@ -1482,7 +1450,7 @@ func TestSyncReceiveFastForwardsWhenBehindAndDefersDivergence(t *testing.T) {
 			t.Fatalf("%s: OpenSync(B) error = %v", label, err)
 		}
 		defer st.Close()
-		res, err := st.SyncReceive(ctx, "origin", "master")
+		res, err := st.SyncReceive(ctx, remoteName(t, "origin"), "master")
 		if err != nil {
 			t.Fatalf("%s: SyncReceive() error = %v", label, err)
 		}
@@ -1498,10 +1466,10 @@ func TestSyncReceiveFastForwardsWhenBehindAndDefersDivergence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenSync(A) error = %v", err)
 	}
-	if err := syncA.SyncAddRemote(ctx, "origin", remoteURL); err != nil {
+	if err := syncA.SyncAddRemote(ctx, remoteName(t, "origin"), remoteURL); err != nil {
 		t.Fatalf("SyncAddRemote(A) error = %v", err)
 	}
-	if _, err := syncA.SyncPush(ctx, "origin", "master", true, false); err != nil {
+	if _, err := syncA.SyncPush(ctx, remoteName(t, "origin"), "master", true, false); err != nil {
 		t.Fatalf("SyncPush(A c1) error = %v", err)
 	}
 	if err := syncA.Close(); err != nil {
@@ -1513,13 +1481,13 @@ func TestSyncReceiveFastForwardsWhenBehindAndDefersDivergence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenSync(B) error = %v", err)
 	}
-	if err := syncB.SyncAddRemote(ctx, "origin", remoteURL); err != nil {
+	if err := syncB.SyncAddRemote(ctx, remoteName(t, "origin"), remoteURL); err != nil {
 		t.Fatalf("SyncAddRemote(B) error = %v", err)
 	}
-	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
 		t.Fatalf("SyncFetch(B) error = %v", err)
 	}
-	if err := syncB.SyncResetToRemoteHead(ctx, "origin", "master"); err != nil {
+	if err := syncB.SyncResetToRemoteHead(ctx, remoteName(t, "origin"), "master"); err != nil {
 		t.Fatalf("SyncResetToRemoteHead(B) error = %v", err)
 	}
 	if err := syncB.Close(); err != nil {

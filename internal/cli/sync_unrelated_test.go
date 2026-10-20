@@ -128,7 +128,7 @@ func TestReportReconcileResultUnrelatedCarriesInventory(t *testing.T) {
 	t.Parallel()
 	var sink strings.Builder
 	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}}
-	err := reportReconcileResult(context.Background(), &sink, ws, syncSession{}, "lit sync reconcile", "origin", "master", storage.SyncReconcileResult{
+	err := reportReconcileResult(context.Background(), &sink, ws, syncSession{}, "lit sync reconcile", remoteName(t, "origin"), "master", storage.SyncReconcileResult{
 		State:  storage.SyncReconcileUnrelated,
 		Ahead:  1,
 		Behind: 1,
@@ -153,7 +153,7 @@ func TestReportReconcileResultUnrelatedCarriesInventory(t *testing.T) {
 func TestSyncFailureFromPullUnrelatedCarriesInventory(t *testing.T) {
 	t.Parallel()
 	inv := &storage.UnrelatedInventory{OnlyLocal: []string{"proj-l"}, OnBoth: []string{"proj-b"}}
-	failure, held := syncFailureFromPull("origin", "master", storage.SyncPullResult{
+	failure, held := syncFailureFromPull(remoteName(t, "origin"), "master", storage.SyncPullResult{
 		State:     storage.SyncPullUnrelated,
 		Unrelated: inv,
 	}, time.Now())
@@ -172,7 +172,7 @@ func TestReportReconcileResultUnrelatedExitsConflict(t *testing.T) {
 	t.Parallel()
 	var sink strings.Builder
 	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}}
-	err := reportReconcileResult(context.Background(), &sink, ws, syncSession{}, "lit sync reconcile", "origin", "master", storage.SyncReconcileResult{
+	err := reportReconcileResult(context.Background(), &sink, ws, syncSession{}, "lit sync reconcile", remoteName(t, "origin"), "master", storage.SyncReconcileResult{
 		State:  storage.SyncReconcileUnrelated,
 		Ahead:  7,
 		Behind: 7,
@@ -209,7 +209,7 @@ func TestReportTakeOutcomeReportsDiscard(t *testing.T) {
 	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}}
 
 	var remote strings.Builder
-	if err := reportTakeOutcome(&remote, ws, "lit sync reconcile take remote", "origin", "master", storage.SyncReconcileResult{
+	if err := reportTakeOutcome(&remote, ws, "lit sync reconcile take remote", remoteName(t, "origin"), "master", storage.SyncReconcileResult{
 		State:     storage.SyncReconcileTookRemote,
 		Unrelated: inv,
 	}); err != nil {
@@ -230,7 +230,7 @@ func TestReportTakeOutcomeReportsDiscard(t *testing.T) {
 	}
 
 	var local strings.Builder
-	if err := reportTakeOutcome(&local, ws, "lit sync reconcile take local", "origin", "master", storage.SyncReconcileResult{
+	if err := reportTakeOutcome(&local, ws, "lit sync reconcile take local", remoteName(t, "origin"), "master", storage.SyncReconcileResult{
 		State:     storage.SyncReconcileTookLocal,
 		Unrelated: inv,
 	}); err != nil {
@@ -251,7 +251,7 @@ func TestReportTakeOutcomeEmptyDiscard(t *testing.T) {
 	t.Parallel()
 	var out strings.Builder
 	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}}
-	if err := reportTakeOutcome(&out, ws, "lit sync reconcile take remote", "origin", "master", storage.SyncReconcileResult{
+	if err := reportTakeOutcome(&out, ws, "lit sync reconcile take remote", remoteName(t, "origin"), "master", storage.SyncReconcileResult{
 		State:     storage.SyncReconcileTookRemote,
 		Unrelated: &storage.UnrelatedInventory{OnlyRemote: []string{"proj-remoteA"}},
 	}); err != nil {
@@ -291,7 +291,7 @@ func TestParseUnrelatedSide(t *testing.T) {
 // `lit sync reconcile`, so the two never disagree on the same divergence.
 func TestSyncFailureFromPullUnrelated(t *testing.T) {
 	t.Parallel()
-	failure, held := syncFailureFromPull("origin", "master", storage.SyncPullResult{
+	failure, held := syncFailureFromPull(remoteName(t, "origin"), "master", storage.SyncPullResult{
 		State:  storage.SyncPullUnrelated,
 		Ahead:  7,
 		Behind: 7,
@@ -316,7 +316,7 @@ func TestReportTakeOutcomeNamesPurgedAndCarried(t *testing.T) {
 	t.Parallel()
 	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}}
 	var out strings.Builder
-	if err := reportTakeOutcome(&out, ws, "lit sync reconcile take remote", "origin", "master", storage.SyncReconcileResult{
+	if err := reportTakeOutcome(&out, ws, "lit sync reconcile take remote", remoteName(t, "origin"), "master", storage.SyncReconcileResult{
 		State:         storage.SyncReconcileTookRemote,
 		Unrelated:     &storage.UnrelatedInventory{OnlyLocal: []string{"proj-localA"}, Purged: []string{"proj-purged"}},
 		CarriedPurges: 2,

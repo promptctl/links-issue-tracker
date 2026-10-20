@@ -241,7 +241,7 @@ func TestSyncFetchWithNoKnownSyncBranchFetchesAndFollowsNothing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve alpha: %v", err)
 	}
-	if err := os.Remove(advertisedSyncBranchPath(ws, "origin")); err != nil && !os.IsNotExist(err) {
+	if err := os.Remove(advertisedSyncBranchPath(ws, remoteName(t, "origin"))); err != nil && !os.IsNotExist(err) {
 		t.Fatalf("remove the sync branch record: %v", err)
 	}
 

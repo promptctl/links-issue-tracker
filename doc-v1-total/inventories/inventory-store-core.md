@@ -4546,25 +4546,25 @@ Ordered:
 
 External caller: `internal/cli/init_sync.go`.
 
-### 1.9 `AdoptRemoteByClone(ctx, doltRootDir, workspaceID, remoteName, remoteURL, branch string) (err error)` — `adopt.go`
+### 1.9 `AdoptRemoteByClone(ctx, doltRootDir, workspaceID string, remote storage.RemoteName, remoteURL, branch string) (err error)` — `adopt.go`
 
 **Full step sequence, in order:**
 
 1. `cleanRoot, err = validateDoltRootDir(doltRootDir)` (`adopt.go`).
 2. `if strings.TrimSpace(workspaceID) == ""` → `errors.New("workspace id is required")` (`adopt.go`).
-3. The remote name is parsed by `storage.ParseRemoteName`, since `DOLT_CLONE --remote` checks no name; a refusal returns `"adopt by clone: %w"` (`adopt.go`). `remoteURL` and `branch` are each `strings.TrimSpace`d (`adopt.go`).
+3. `remoteURL` and `branch` are each `strings.TrimSpace`d (`adopt.go`). The remote is a `storage.RemoteName` because `DOLT_CLONE --remote` checks no name.
 4. If either is empty → `fmt.Errorf("adopt by clone requires a remote url and branch (got url=%q branch=%q)", remoteURL, branch)` (`adopt.go`).
 5. `os.MkdirAll(cleanRoot, 0o755)`; on error → `"create dolt root dir: %w"`. Reason given: the server root must exist before the sibling lock file can be taken and before the clone engine opens (`adopt.go`).
 6. `release, err := LockWorkspaceExclusive(ctx, cleanRoot)` — returns the error unchanged on failure; `defer` joins any release error into the named return `err` (`adopt.go`).
-7. `writeAdoptPendingMarker(cleanRoot, remoteName, branch, time.Now())` — **before the first destructive act**; on error returns immediately, nothing destructive has run (`adopt.go`).
+7. `writeAdoptPendingMarker(cleanRoot, remote.String(), branch, time.Now())` — **before the first destructive act**; on error returns immediately, nothing destructive has run (`adopt.go`).
 8. `dbDir := filepath.Join(cleanRoot, doltDatabaseName)`; `evictSingleton(dbDir)` — eviction precedes the rename so no cached handle serves the displaced or re-cloned store stale (`adopt.go`, rationale).
 9. `displaced := fmt.Sprintf("%s.adopt-displaced-%d", cleanRoot, time.Now().UTC().UnixNano())`; `os.Rename(dbDir, displaced)`. `os.ErrNotExist` = nothing to displace (proceed); any other error → `"set aside database before adopt: %w"`, **aborting with the marker still in place** (`adopt.go`).
-10. `cloneRemoteDatabase(ctx, cleanRoot, workspaceID, remoteName, remoteURL, branch)` (§1.10).
+10. `cloneRemoteDatabase(ctx, cleanRoot, workspaceID, remote, remoteURL, branch)` (§1.10).
 11. **Clone-failure arm** (`adopt.go`): `evictSingleton(dbDir)`; then `os.RemoveAll(dbDir)` **unconditionally** (no stat gate — a transient stat error must not let the removal be skipped while the marker is cleared). Note this arm **deletes** rather than displaces, because the dbDir is this run's own partial clone.
     - `RemoveAll` fails → `errors.Join(cloneErr, fmt.Errorf("clean up partial clone: %w", rmErr))` — marker stays.
     - `clearAdoptPendingMarker` fails → `errors.Join(cloneErr, clearErr)`.
     - else → returns `cloneErr` alone.
-12. **Post-clone validation**: `if !dirExists(dbDir)` → `fmt.Errorf("clone of remote %q produced no %q database", remoteName, doltDatabaseName)`; **the marker is deliberately left in place** (`adopt.go`).
+12. **Post-clone validation**: `if !dirExists(dbDir)` → `fmt.Errorf("clone of remote %q produced no %q database", remote, doltDatabaseName)`; **the marker is deliberately left in place** (`adopt.go`).
 13. `clearAdoptPendingMarker(cleanRoot)` is the last act; on failure returns (`adopt.go`):
 ```
 the backlog cloned completely, but the adopt-completion marker could not be cleared, so the store stays refused until a retry of `lit init` completes (the retry sets this download aside and re-clones; no remote data is at risk): %w
@@ -4581,13 +4581,13 @@ the backlog cloned completely, but the adopt-completion marker could not be clea
 db, err := openDoltPool(serverRoot, workspaceID, "", engineWrite)   // no current database
 ...
 callIntProcedure(ctx, db, "DOLT_CLONE",
-    "--remote", remoteName, "--branch", branch, remoteURL, doltDatabaseName)
+    "--remote", remote.String(), "--branch", branch, remoteURL, doltDatabaseName)
 ```
 i.e. the SQL executed is `CALL DOLT_CLONE(?,?,?,?,?,?)` with args `["--remote", remoteName, "--branch", branch, remoteURL, "links"]` — wait, six placeholders for six args: `--remote`, `<remoteName>`, `--branch`, `<branch>`, `<remoteURL>`, `links` (`adopt.go`; builder at `sync.go`). `defer db.Close()` (`adopt.go`).
 
 Errors:
 - pool open → `"open dolt for clone: %w"` (`adopt.go`).
-- procedure → `fmt.Errorf("clone remote %q (%s) branch %q: %w", remoteName, remoteURL, branch, err)` (`adopt.go`).
+- procedure → `fmt.Errorf("clone remote %q (%s) branch %q: %w", remote, remoteURL, branch, err)` (`adopt.go`).
 
 Documented behavior: the git-backed remote defaults to the `refs/dolt/data` ref — the ref lit's sync push writes — so no explicit ref is passed (`adopt.go`).
 

@@ -36,14 +36,14 @@ func TestSyncReconcileLinearizesDivergenceAndFastForwardPushes(t *testing.T) {
 	updateLocal(t, ctx, rootB, id, storage.UpdateIssueInput{Priority: ptr(model.PriorityUrgent)})
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
-	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
 	// B's folded side is its one "apply update" commit; capture its original
 	// timestamp and author so the replay's provenance claim is checked against
 	// them.
 	originals := originalCommitsByMessage(t, ctx, syncB, "apply update")
-	res, err := syncB.SyncReconcile(ctx, "origin", "master")
+	res, err := syncB.SyncReconcile(ctx, remoteName(t, "origin"), "master")
 	if err != nil {
 		t.Fatalf("SyncReconcile(B): %v", err)
 	}
@@ -82,7 +82,7 @@ func TestSyncReconcileLinearizesDivergenceAndFastForwardPushes(t *testing.T) {
 	// Property: the linearized outcome — the one that DOES mutate the data branch —
 	// leaves a clean working set (no staged/unstaged residue, no held conflicts).
 	assertWorkingSetClean(t, ctx, syncB)
-	fresh, err := syncB.SyncFreshness(ctx, "origin", "master")
+	fresh, err := syncB.SyncFreshness(ctx, remoteName(t, "origin"), "master")
 	if err != nil {
 		t.Fatalf("SyncFreshness(B) after reconcile: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestSyncReconcileLinearizesDivergenceAndFastForwardPushes(t *testing.T) {
 		t.Fatalf("post-reconcile freshness = %q ahead=%d behind=%d, want ahead/2/0 (provenance commit + marker)", fresh.State(), fresh.Ahead, fresh.Behind)
 	}
 
-	if _, err := syncB.SyncPush(ctx, "origin", "master", false, false); err != nil {
+	if _, err := syncB.SyncPush(ctx, remoteName(t, "origin"), "master", false, false); err != nil {
 		t.Fatalf("fast-forward SyncPush(B) after reconcile: %v", err)
 	}
 	if err := syncB.Close(); err != nil {
@@ -99,7 +99,7 @@ func TestSyncReconcileLinearizesDivergenceAndFastForwardPushes(t *testing.T) {
 
 	// A receives the reconciled head by a pure fast-forward and sees both edits.
 	syncA := openSyncOrFatal(t, ctx, rootA)
-	recv, err := syncA.SyncReceive(ctx, "origin", "master")
+	recv, err := syncA.SyncReceive(ctx, remoteName(t, "origin"), "master")
 	if err != nil {
 		t.Fatalf("SyncReceive(A): %v", err)
 	}
@@ -134,14 +134,14 @@ func TestSyncReconcileHoldsProseDivergenceForAgent(t *testing.T) {
 	updateLocal(t, ctx, rootB, id, storage.UpdateIssueInput{Title: strptr("B's rewritten title")})
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
-	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
 	// Capture the local head before reconcile: the prose-pending path reads the
 	// three-way state on a scratch branch and commits nothing, so the data branch
 	// must be byte-for-byte where it started.
 	headBefore := headCommit(t, ctx, syncB)
-	res, err := syncB.SyncReconcile(ctx, "origin", "master")
+	res, err := syncB.SyncReconcile(ctx, remoteName(t, "origin"), "master")
 	if err != nil {
 		t.Fatalf("SyncReconcile(B): %v", err)
 	}
@@ -172,7 +172,7 @@ func TestSyncReconcileHoldsProseDivergenceForAgent(t *testing.T) {
 	if local.Title != "B's rewritten title" {
 		t.Fatalf("local title after prose-pending reconcile = %q, want B's (untouched)", local.Title)
 	}
-	fresh, err := syncB.SyncFreshness(ctx, "origin", "master")
+	fresh, err := syncB.SyncFreshness(ctx, remoteName(t, "origin"), "master")
 	if err != nil {
 		t.Fatalf("SyncFreshness(B): %v", err)
 	}
@@ -204,19 +204,19 @@ func TestSyncReconcileResolvedFinalizesWithAgentText(t *testing.T) {
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	defer func() { _ = syncB.Close() }()
-	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
 	// Read the live conflict to obtain the fingerprint the agent would copy from the
 	// surface, then finalize against it.
-	pendingRes, err := syncB.SyncReconcile(ctx, "origin", "master")
+	pendingRes, err := syncB.SyncReconcile(ctx, remoteName(t, "origin"), "master")
 	if err != nil {
 		t.Fatalf("SyncReconcile(B): %v", err)
 	}
 	if len(pendingRes.Pending) != 1 {
 		t.Fatalf("expected one pending field, got %+v", pendingRes.Pending)
 	}
-	res, err := syncB.SyncReconcileResolved(ctx, "origin", "master", []merge.ProseResolution{
+	res, err := syncB.SyncReconcileResolved(ctx, remoteName(t, "origin"), "master", []merge.ProseResolution{
 		{Fingerprint: pendingRes.Pending[0].Fingerprint(), Text: "both A's and B's intent merged"},
 	}, "judge")
 	if err != nil {
@@ -230,7 +230,7 @@ func TestSyncReconcileResolvedFinalizesWithAgentText(t *testing.T) {
 		t.Fatalf("title after finalize = %q, want the agent's merged text", got.Title)
 	}
 	assertScratchBranchCleanedUp(t, ctx, syncB)
-	fresh, err := syncB.SyncFreshness(ctx, "origin", "master")
+	fresh, err := syncB.SyncFreshness(ctx, remoteName(t, "origin"), "master")
 	if err != nil {
 		t.Fatalf("SyncFreshness(B): %v", err)
 	}
@@ -260,10 +260,10 @@ func TestSyncReconcileResolvedRecordsTheMergedText(t *testing.T) {
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	defer func() { _ = syncB.Close() }()
-	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
-	pendingRes, err := syncB.SyncReconcile(ctx, "origin", "master")
+	pendingRes, err := syncB.SyncReconcile(ctx, remoteName(t, "origin"), "master")
 	if err != nil {
 		t.Fatalf("SyncReconcile(B): %v", err)
 	}
@@ -279,7 +279,7 @@ func TestSyncReconcileResolvedRecordsTheMergedText(t *testing.T) {
 	for _, p := range pendingRes.Pending {
 		resolutions = append(resolutions, merge.ProseResolution{Fingerprint: p.Fingerprint(), Text: merged[p.Field]})
 	}
-	res, err := syncB.SyncReconcileResolved(ctx, "origin", "master", resolutions, "judge")
+	res, err := syncB.SyncReconcileResolved(ctx, remoteName(t, "origin"), "master", resolutions, "judge")
 	if err != nil {
 		t.Fatalf("SyncReconcileResolved(B): %v", err)
 	}
@@ -348,17 +348,17 @@ func TestSyncReconcileResolvedRecordsNothingForTheProvisionalText(t *testing.T) 
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	defer func() { _ = syncB.Close() }()
-	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
-	pendingRes, err := syncB.SyncReconcile(ctx, "origin", "master")
+	pendingRes, err := syncB.SyncReconcile(ctx, remoteName(t, "origin"), "master")
 	if err != nil {
 		t.Fatalf("SyncReconcile(B): %v", err)
 	}
 	if len(pendingRes.Pending) != 1 {
 		t.Fatalf("expected one pending field, got %+v", pendingRes.Pending)
 	}
-	res, err := syncB.SyncReconcileResolved(ctx, "origin", "master", []merge.ProseResolution{
+	res, err := syncB.SyncReconcileResolved(ctx, remoteName(t, "origin"), "master", []merge.ProseResolution{
 		{Fingerprint: pendingRes.Pending[0].Fingerprint(), Text: "B title"},
 	}, "judge")
 	if err != nil {
@@ -402,13 +402,13 @@ func TestSyncReconcileResolvedRejectsStaleResolutions(t *testing.T) {
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	defer func() { _ = syncB.Close() }()
-	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
 	headBefore := headCommit(t, ctx, syncB)
 	// Only the title diverged; a resolution addressed to a description conflict names
 	// no live conflict, so the set is stale.
-	res, err := syncB.SyncReconcileResolved(ctx, "origin", "master", []merge.ProseResolution{
+	res, err := syncB.SyncReconcileResolved(ctx, remoteName(t, "origin"), "master", []merge.ProseResolution{
 		{Fingerprint: merge.ProsePending{IssueID: id, Field: merge.ProseDescription}.Fingerprint(), Text: "wrong field"},
 	}, "judge")
 	if err != nil {
@@ -451,10 +451,10 @@ func seedReconcileRemote(t *testing.T, ctx context.Context, root, remoteURL stri
 		t.Fatalf("Close(seed): %v", err)
 	}
 	sync := openSyncOrFatal(t, ctx, root)
-	if err := sync.SyncAddRemote(ctx, "origin", remoteURL); err != nil {
+	if err := sync.SyncAddRemote(ctx, remoteName(t, "origin"), remoteURL); err != nil {
 		t.Fatalf("SyncAddRemote(seed): %v", err)
 	}
-	if _, err := sync.SyncPush(ctx, "origin", "master", true, false); err != nil {
+	if _, err := sync.SyncPush(ctx, remoteName(t, "origin"), "master", true, false); err != nil {
 		t.Fatalf("SyncPush(seed): %v", err)
 	}
 	if err := sync.Close(); err != nil {
@@ -467,13 +467,13 @@ func seedReconcileRemote(t *testing.T, ctx context.Context, root, remoteURL stri
 func adoptRemote(t *testing.T, ctx context.Context, root, remoteURL string) {
 	t.Helper()
 	sync := openSyncOrFatal(t, ctx, root)
-	if err := sync.SyncAddRemote(ctx, "origin", remoteURL); err != nil {
+	if err := sync.SyncAddRemote(ctx, remoteName(t, "origin"), remoteURL); err != nil {
 		t.Fatalf("SyncAddRemote(adopt): %v", err)
 	}
-	if err := sync.SyncFetch(ctx, "origin", false); err != nil {
+	if err := sync.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
 		t.Fatalf("SyncFetch(adopt): %v", err)
 	}
-	if err := sync.SyncResetToRemoteHead(ctx, "origin", "master"); err != nil {
+	if err := sync.SyncResetToRemoteHead(ctx, remoteName(t, "origin"), "master"); err != nil {
 		t.Fatalf("SyncResetToRemoteHead(adopt): %v", err)
 	}
 	if err := sync.Close(); err != nil {
@@ -501,7 +501,7 @@ func updateAndPush(t *testing.T, ctx context.Context, root, id string, in storag
 	t.Helper()
 	updateLocal(t, ctx, root, id, in)
 	sync := openSyncOrFatal(t, ctx, root)
-	if _, err := sync.SyncPush(ctx, "origin", "master", false, false); err != nil {
+	if _, err := sync.SyncPush(ctx, remoteName(t, "origin"), "master", false, false); err != nil {
 		t.Fatalf("SyncPush(update): %v", err)
 	}
 	if err := sync.Close(); err != nil {

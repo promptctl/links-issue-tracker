@@ -46,11 +46,11 @@ func compactPush(t *testing.T, ctx context.Context, root, epic, title string, bo
 	}
 	sync := openSyncOrFatal(t, ctx, root)
 	defer func() { _ = sync.Close() }()
-	pushed, err := sync.SyncCompactAndPush(ctx, "origin", "master", false, false)
+	pushed, err := sync.SyncCompactAndPush(ctx, remoteName(t, "origin"), "master", false, false)
 	if err != nil {
 		t.Fatalf("SyncCompactAndPush(%s) error = %v", title, err)
 	}
-	kept := sync.SyncKeepHistoryBound(ctx, "origin", "master", bound, pushed)
+	kept := sync.SyncKeepHistoryBound(ctx, remoteName(t, "origin"), "master", bound, pushed)
 	bounds := sync.HistoryBounds()
 	if len(bounds) != 1 {
 		t.Fatalf("HistoryBounds() after one push = %+v, want one", bounds)
@@ -120,7 +120,7 @@ func TestAPushPastTheBoundReRootsWithNoCommandRun(t *testing.T) {
 	// A fetch records the fork point every checkout that syncs holds, here on
 	// the head the push under the bound left.
 	st = openSyncOrFatal(t, ctx, alpha)
-	if err := st.SyncFetch(ctx, "origin", false); err != nil {
+	if err := st.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
 		t.Fatal(err)
 	}
 	if forkPoint := branchesUnder(t, ctx, st, forkPointPrefix)["origin/master"]; forkPoint != under.Head {
@@ -164,7 +164,7 @@ func TestAPushPastTheBoundReRootsWithNoCommandRun(t *testing.T) {
 			t.Fatalf("the old head %s still resolves, with %d commits below it; want it collected", old, n)
 		}
 	}
-	if err := st.SyncFetch(ctx, "origin", false); err != nil {
+	if err := st.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
 		t.Fatal(err)
 	}
 	if head != fired.ReRooted.Head || heightOf(t, ctx, st, "HEAD") != bound.Keep() {
@@ -340,7 +340,7 @@ func TestAStaleLeaseOverTheLandedReRootStillFollowsIt(t *testing.T) {
 	if root != landed.Root {
 		t.Fatalf("alpha's history is rooted at %s; want the landed re-root's root %s", root, landed.Root)
 	}
-	fresh, err := st.SyncFreshness(ctx, "origin", "master")
+	fresh, err := st.SyncFreshness(ctx, remoteName(t, "origin"), "master")
 	if err != nil {
 		t.Fatal(err)
 	}

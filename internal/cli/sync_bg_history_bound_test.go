@@ -147,7 +147,7 @@ func dirBytes(t *testing.T, root string) int64 {
 // TestTheLiveStoreLearnsWhereTheCycleLeftTheRemote walks every combination
 // of a cycle's facts to the step it gives the live store.
 func TestTheLiveStoreLearnsWhereTheCycleLeftTheRemote(t *testing.T) {
-	landed := pushedHead{remote: "origin", branch: "master", head: "abc"}
+	landed := pushedHead{remote: remoteName(t, "origin"), branch: "master", head: "abc"}
 	followed, reRooted, both := landed, landed, landed
 	followed.followedReRoot = true
 	reRooted.reRootedAfter = true

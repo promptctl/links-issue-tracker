@@ -36,10 +36,10 @@ func newLandFixture(t *testing.T) *landFixture {
 	f.seedEpic(f.live)
 	f.commit(f.live, "c1")
 	st := f.openSync(f.live)
-	if err := st.SyncAddRemote(f.ctx, "origin", f.remoteURL); err != nil {
+	if err := st.SyncAddRemote(f.ctx, remoteName(t, "origin"), f.remoteURL); err != nil {
 		t.Fatalf("SyncAddRemote() error = %v", err)
 	}
-	if _, err := st.SyncPush(f.ctx, "origin", "master", true, false); err != nil {
+	if _, err := st.SyncPush(f.ctx, remoteName(t, "origin"), "master", true, false); err != nil {
 		t.Fatalf("seed push error = %v", err)
 	}
 	f.close(st)
@@ -119,7 +119,7 @@ func (f *landFixture) push(root string, force bool) {
 	f.t.Helper()
 	st := f.openSync(root)
 	defer f.close(st)
-	if _, err := st.SyncPush(f.ctx, "origin", "master", false, force); err != nil {
+	if _, err := st.SyncPush(f.ctx, remoteName(f.t, "origin"), "master", false, force); err != nil {
 		f.t.Fatalf("SyncPush(force=%t) error = %v", force, err)
 	}
 }
@@ -130,7 +130,7 @@ func (f *landFixture) fetchedClone() string {
 	clone := f.copyOf(f.live)
 	st := f.openSync(clone)
 	defer f.close(st)
-	if err := st.SyncFetch(f.ctx, "origin", false); err != nil {
+	if err := st.SyncFetch(f.ctx, remoteName(f.t, "origin"), false); err != nil {
 		f.t.Fatalf("SyncFetch(clone) error = %v", err)
 	}
 	return clone
@@ -161,7 +161,7 @@ func TestLandFetchedHeadCarriesAClonesFetchToTheLiveStore(t *testing.T) {
 	f.push(peer, false)
 
 	clone := f.fetchedClone()
-	landed, err := LandFetchedHead(f.ctx, f.live, clone, "origin", "master")
+	landed, err := LandFetchedHead(f.ctx, f.live, clone, remoteName(t, "origin"), "master")
 	if err != nil {
 		t.Fatalf("LandFetchedHead() error = %v", err)
 	}
@@ -180,7 +180,7 @@ func TestLandFetchedHeadCarriesAClonesFetchToTheLiveStore(t *testing.T) {
 
 	st := f.openSync(f.live)
 	defer f.close(st)
-	result, err := st.SyncSettleReceived(f.ctx, "origin", "master")
+	result, err := st.SyncSettleReceived(f.ctx, remoteName(t, "origin"), "master")
 	if err != nil {
 		t.Fatalf("SyncSettleReceived() error = %v", err)
 	}
@@ -209,13 +209,13 @@ func TestLandFetchedHeadRecordsWhatTheFetchSaw(t *testing.T) {
 		t.Helper()
 		st := f.openSync(f.live)
 		defer f.close(st)
-		if err := st.SyncFetch(f.ctx, "origin", false); err != nil {
+		if err := st.SyncFetch(f.ctx, remoteName(f.t, "origin"), false); err != nil {
 			t.Fatalf("SyncFetch(live) error = %v", err)
 		}
 	}
 	land := func(f *landFixture, clone string) LandedFetch {
 		t.Helper()
-		landed, err := LandFetchedHead(f.ctx, f.live, clone, "origin", "master")
+		landed, err := LandFetchedHead(f.ctx, f.live, clone, remoteName(t, "origin"), "master")
 		if err != nil {
 			t.Fatalf("LandFetchedHead() error = %v", err)
 		}
@@ -258,7 +258,7 @@ func TestLandFetchedHeadRecordsWhatTheFetchSaw(t *testing.T) {
 		f.seedEpic(unrelated)
 		unrelatedHead := f.commit(unrelated, "unrelated-ticket")
 		st := f.openSync(unrelated)
-		if err := st.SyncAddRemote(f.ctx, "origin", f.remoteURL); err != nil {
+		if err := st.SyncAddRemote(f.ctx, remoteName(t, "origin"), f.remoteURL); err != nil {
 			t.Fatalf("SyncAddRemote(unrelated) error = %v", err)
 		}
 		f.close(st)
@@ -285,7 +285,7 @@ func TestLandFetchedHeadLeavesTheLiveStoreAloneForAnAbsentBranch(t *testing.T) {
 	f := newLandFixture(t)
 	before := f.trackingRef()
 	clone := f.fetchedClone()
-	landed, err := LandFetchedHead(f.ctx, f.live, clone, "origin", "no-such-branch")
+	landed, err := LandFetchedHead(f.ctx, f.live, clone, remoteName(t, "origin"), "no-such-branch")
 	if err != nil {
 		t.Fatalf("LandFetchedHead() error = %v", err)
 	}

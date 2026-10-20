@@ -208,12 +208,12 @@ func syncFetchLeaf() syncLeaf {
 			return err
 		}
 		// [LAW:one-source-of-truth] the remote every sync verb selects.
-		remoteName, err := resolveSyncRemote(*remote, workspace.UpstreamRemote(ctx, ws.RootDir), syncState.gitRemotes)
+		remoteName, ok, err := resolveSyncRemote(*remote, workspace.UpstreamRemote(ctx, ws.RootDir), syncState.gitRemotes)
 		if err != nil {
 			recordSyncCommandTrace(ws, "lit sync fetch", "error", err, nil)
 			return err
 		}
-		if remoteName == "" {
+		if !ok {
 			// Said in every mode: the staleness banner sends people here, and a
 			// fetch that silently fetched nothing would leave them stale with no
 			// sign why. [LAW:no-silent-failure]
@@ -222,7 +222,7 @@ func syncFetchLeaf() syncLeaf {
 			return err
 		}
 		err = fetchAndFollow(ctx, session, ws, syncState.gitRemotes, remoteName, *prune)
-		recordSyncCommandTrace(ws, "lit sync fetch", "fetched", err, map[string]string{"remote": remoteName})
+		recordSyncCommandTrace(ws, "lit sync fetch", "fetched", err, map[string]string{"remote": remoteName.String()})
 		if err != nil {
 			return err
 		}
@@ -243,17 +243,17 @@ func syncFetchLeaf() syncLeaf {
 // network: a workspace with no sync remote, or none whose default branch is
 // known here, has no freshness a re-root could misreport, and follows
 // nothing.
-func fetchAndFollow(ctx context.Context, session syncSession, ws workspace.Info, gitRemotes []workspace.GitRemote, remote string, prune bool) error {
+func fetchAndFollow(ctx context.Context, session syncSession, ws workspace.Info, gitRemotes []workspace.GitRemote, remote storage.RemoteName, prune bool) error {
 	if err := session.syncer.SyncFetch(ctx, remote, prune); err != nil {
 		return err
 	}
 	if err := markFetchSuccess(ws); err != nil {
 		fmt.Fprintf(os.Stderr, "lit: fetch-success marker not written: %v\n", err)
 	}
-	syncRemote, branch, err := freshnessSyncTarget(ctx, ws, gitRemotes)
+	syncRemote, branch, ok, err := freshnessSyncTarget(ctx, ws, gitRemotes)
 	// Only a branch nothing here names skips the follow; a record that would
 	// name it but cannot be read is not that error, and fails the fetch.
-	if notKnown := (syncBranchNotKnownError{}); errors.As(err, &notKnown) || (err == nil && syncRemote == "") {
+	if notKnown := (syncBranchNotKnownError{}); errors.As(err, &notKnown) || (err == nil && !ok) {
 		return nil
 	}
 	if err != nil {
@@ -288,7 +288,7 @@ func syncPullLeaf() syncLeaf {
 		remoteName, resolvedBranch := target.remote, target.branch
 		progressf("sync pull", "pulling lit data from %s/%s (transfer and apply may take a moment)", remoteName, resolvedBranch)
 		result, err := session.syncer.SyncPull(ctx, remoteName, resolvedBranch)
-		pullTraceMetadata := map[string]string{"remote": remoteName, "sync_branch": resolvedBranch}
+		pullTraceMetadata := map[string]string{"remote": remoteName.String(), "sync_branch": resolvedBranch}
 		if err != nil {
 			recordSyncCommandTrace(ws, "lit sync pull", "error", err, pullTraceMetadata)
 			// An explicit pull is not best-effort: a fetch or reconcile failure is
@@ -341,9 +341,9 @@ func syncPullLeaf() syncLeaf {
 // version vars plus the embedded migration registry), so it is not safe to
 // memoize or assume side-effect-free.
 // [LAW:dataflow-not-control-flow]
-func syncFailureFromPull(remote, branch string, result storage.SyncPullResult, now time.Time) (SyncFailureError, bool) {
+func syncFailureFromPull(remote storage.RemoteName, branch string, result storage.SyncPullResult, now time.Time) (SyncFailureError, bool) {
 	base := SyncFailure{
-		Remote:    remote,
+		Remote:    remote.String(),
 		Branch:    branch,
 		Ahead:     result.Ahead,
 		Behind:    result.Behind,
@@ -489,7 +489,7 @@ type syncPushOutcome struct {
 	// [LAW:types-are-the-program] "skipped" and its reason are one fact; the
 	// skip carries both. [LAW:one-source-of-truth]
 	skip    syncTargetSkip
-	remote  string
+	remote  storage.RemoteName
 	branch  string
 	message string // the engine's verbatim push output; empty on a skip
 	// maintenance is what the engine reclaimed locally while servicing this
@@ -517,7 +517,7 @@ type syncPushOutcome struct {
 // [LAW:dataflow-not-control-flow]
 // The variant is a value the caller supplies, so performSyncPush carries no
 // compaction branch and never compacts a push it skips.
-type syncPushStep func(ctx context.Context, remote, branch string, setUpstream, force bool) (storage.SyncPushResult, error)
+type syncPushStep func(ctx context.Context, remote storage.RemoteName, branch string, setUpstream, force bool) (storage.SyncPushResult, error)
 
 // keepHistoryBound keeps the history bound of a push that landed, inside the
 // window the workspace's config names. The bound fails nothing, so a config
@@ -525,7 +525,7 @@ type syncPushStep func(ctx context.Context, remote, branch string, setUpstream, 
 // line says the bound was not kept and why, and the event's
 // history_bound.window_error carries the refusal, null when the window was
 // read. [LAW:no-silent-failure]
-func keepHistoryBound(ctx context.Context, session syncSession, cfg config.Config, err error, remote, branch string, pushed storage.SyncPushResult) storage.SyncPushResult {
+func keepHistoryBound(ctx context.Context, session syncSession, cfg config.Config, err error, remote storage.RemoteName, branch string, pushed storage.SyncPushResult) storage.SyncPushResult {
 	telemetry.Set(ctx, "history_bound.window_error", telemetry.ErrorText(err))
 	if err != nil {
 		notKept := "history bound not kept: " + err.Error()
@@ -564,9 +564,9 @@ func historyBoundDeadline() time.Duration { return 3 * store.MirrorPushDeadline 
 // only way to ask would be to stand up a workspace, a ref-carrying remote and a
 // live engine session and drive a real push. [LAW:decomposition] a job with no
 // name has no test.
-func syncPushTraceMetadata(remoteName, syncBranch string, result storage.SyncPushResult, pushErr error) map[string]string {
+func syncPushTraceMetadata(remoteName storage.RemoteName, syncBranch string, result storage.SyncPushResult, pushErr error) map[string]string {
 	metadata := map[string]string{
-		"remote":      remoteName,
+		"remote":      remoteName.String(),
 		"sync_branch": syncBranch,
 	}
 	if message := strings.TrimSpace(result.Message); message != "" {
@@ -707,7 +707,7 @@ func performSyncPush(ctx, completionCtx context.Context, session syncSession, ws
 		traceStatus = "error"
 		traceReason = pushErr.Error()
 	}
-	syncCommandArgs := []string{"sync", "push", "--remote", remoteName}
+	syncCommandArgs := []string{"sync", "push", "--remote", remoteName.String()}
 	if setUpstream {
 		syncCommandArgs = append(syncCommandArgs, "--set-upstream")
 	}
@@ -807,14 +807,15 @@ func syncStatusLeaf() syncLeaf {
 }
 
 // resolveSyncRemote picks the remote a sync verb targets: the requested one,
-// else the upstream's, else the only one, else none (""). A chosen remote Dolt
-// cannot hold is refused, never skipped for another, which would sync
-// somewhere unmeant.
-func resolveSyncRemote(requestedRemote string, upstreamRemote string, gitRemotes []workspace.GitRemote) (string, error) {
+// else the upstream's, else the only one, else none (ok false). A chosen
+// remote Dolt cannot hold is refused, never skipped for another, which would
+// sync somewhere unmeant. The remote it returns is parsed, so nothing it
+// reaches checks the name again. [LAW:parse-dont-validate]
+func resolveSyncRemote(requestedRemote string, upstreamRemote string, gitRemotes []workspace.GitRemote) (remote storage.RemoteName, ok bool, err error) {
 	chosen := strings.TrimSpace(requestedRemote)
 	// [LAW:no-silent-failure] Explicit remote that doesn't exist is a configuration error, not a skip condition.
 	if chosen != "" && !syncRemoteExists(chosen, gitRemotes) {
-		return "", fmt.Errorf("requested remote %q not found in configured git remotes", chosen)
+		return storage.RemoteName{}, false, fmt.Errorf("requested remote %q not found in configured git remotes", chosen)
 	}
 	singleRemote := ""
 	if len(gitRemotes) == 1 {
@@ -828,10 +829,13 @@ func resolveSyncRemote(requestedRemote string, upstreamRemote string, gitRemotes
 	// Candidates are trimmed where they are produced, so plain precedence suffices.
 	chosen = precedence.First(chosen, validatedUpstreamRemote, singleRemote)
 	if chosen == "" {
-		return "", nil
+		return storage.RemoteName{}, false, nil
 	}
-	name, err := storage.ParseRemoteName(chosen)
-	return name.String(), err
+	remote, err = storage.ParseRemoteName(chosen)
+	if err != nil {
+		return storage.RemoteName{}, false, err
+	}
+	return remote, true, nil
 }
 
 func syncRemoteExists(name string, gitRemotes []workspace.GitRemote) bool {
@@ -867,7 +871,7 @@ const (
 // discriminator; a caller that forgets to check it holds an empty branch, not
 // a plausible-looking wrong one.
 type syncTarget struct {
-	remote string
+	remote storage.RemoteName
 	branch string
 	skip   syncTargetSkip
 	// gitRemotes is the git remote list the target was resolved from, so a
@@ -878,10 +882,10 @@ type syncTarget struct {
 // traceMetadata renders the resolved remote as trace metadata — nil before one
 // was selected — so traces carry exactly what resolution had established.
 func (t syncTarget) traceMetadata() map[string]string {
-	if t.remote == "" {
+	if t.remote == (storage.RemoteName{}) {
 		return nil
 	}
-	return map[string]string{"remote": t.remote}
+	return map[string]string{"remote": t.remote.String()}
 }
 
 // resolveSyncTarget is the one prologue push, pull, receive, and reconcile all
@@ -903,14 +907,14 @@ func resolveSyncTarget(ctx context.Context, session syncSession, ws workspace.In
 	if err != nil {
 		return syncTarget{}, err
 	}
-	remoteName, err := resolveSyncRemote(requestedRemote, workspace.UpstreamRemote(ctx, ws.RootDir), syncState.gitRemotes)
+	remoteName, ok, err := resolveSyncRemote(requestedRemote, workspace.UpstreamRemote(ctx, ws.RootDir), syncState.gitRemotes)
 	if err != nil {
 		return syncTarget{}, err
 	}
-	if remoteName == "" {
+	if !ok {
 		return syncTarget{skip: syncTargetNoRemote}, nil
 	}
-	hasRefs, refsErr := workspace.RemoteHasRefs(ctx, ws.RootDir, remoteName)
+	hasRefs, refsErr := workspace.RemoteHasRefs(ctx, ws.RootDir, remoteName.String())
 	if refsErr != nil {
 		return syncTarget{remote: remoteName}, fmt.Errorf("check remote refs %q: %w", remoteName, refsErr)
 	}
@@ -936,7 +940,7 @@ type syncPullOutcome struct {
 	// skip is the typed no-op discriminator shared with push: syncTargetReady
 	// means the pull ran and state carries its result.
 	skip   syncTargetSkip
-	remote string
+	remote storage.RemoteName
 	branch string
 	state  storage.SyncPullState
 	// landing is what the pull's reconcile changed on the way in; empty for
@@ -1041,10 +1045,17 @@ func printSyncPushOutcome(w io.Writer, o syncPushOutcome, verbose bool) error {
 // syncDoltRemotesFromGit executes it and the reports count it.
 // [LAW:one-source-of-truth]
 type remoteSyncPlan struct {
-	add     []storage.SyncRemote
-	update  []storage.SyncRemote
+	add     []plannedRemote
+	update  []plannedRemote
 	remove  []string
 	refused []string
+}
+
+// plannedRemote is a git remote the plan adds or re-points: the name as
+// parsed and the URL Dolt is to hold for it.
+type plannedRemote struct {
+	name storage.RemoteName
+	url  string
 }
 
 type remoteSyncState struct {
@@ -1088,12 +1099,12 @@ func syncDoltRemotesFromGit(ctx context.Context, session syncSession, ws workspa
 		}
 	}
 	for _, remote := range state.plan.update {
-		if err := session.syncer.SyncSetRemoteURL(ctx, remote.Name, remote.URL); err != nil {
+		if err := session.syncer.SyncSetRemoteURL(ctx, remote.name, remote.url); err != nil {
 			return remoteSyncState{}, err
 		}
 	}
 	for _, remote := range state.plan.add {
-		if err := session.syncer.SyncAddRemote(ctx, remote.Name, remote.URL); err != nil {
+		if err := session.syncer.SyncAddRemote(ctx, remote.name, remote.url); err != nil {
 			return remoteSyncState{}, err
 		}
 	}
@@ -1107,8 +1118,8 @@ func syncDoltRemotesFromGit(ctx context.Context, session syncSession, ws workspa
 func planRemoteSync(gitRemotes []workspace.GitRemote, doltRemotes []storage.SyncRemote) remoteSyncPlan {
 	doltByName := mapRemotesByName(doltRemotes)
 	plan := remoteSyncPlan{
-		add:     []storage.SyncRemote{},
-		update:  []storage.SyncRemote{},
+		add:     []plannedRemote{},
+		update:  []plannedRemote{},
 		remove:  []string{},
 		refused: []string{},
 	}
@@ -1119,14 +1130,14 @@ func planRemoteSync(gitRemotes []workspace.GitRemote, doltRemotes []storage.Sync
 			plan.refused = append(plan.refused, remote.Name)
 			continue
 		}
-		desired := storage.SyncRemote{Name: name.String(), URL: store.GitBackedRemoteURL(remote.URL)}
-		held[desired.Name] = true
-		currentURL, exists := doltByName[desired.Name]
+		desired := plannedRemote{name: name, url: store.GitBackedRemoteURL(remote.URL)}
+		held[name.String()] = true
+		currentURL, exists := doltByName[name.String()]
 		if !exists {
 			plan.add = append(plan.add, desired)
 			continue
 		}
-		if strings.TrimSpace(currentURL) != desired.URL {
+		if strings.TrimSpace(currentURL) != desired.url {
 			plan.update = append(plan.update, desired)
 		}
 	}
@@ -1135,7 +1146,7 @@ func planRemoteSync(gitRemotes []workspace.GitRemote, doltRemotes []storage.Sync
 			plan.remove = append(plan.remove, name)
 		}
 	}
-	byName := func(a, b storage.SyncRemote) int { return strings.Compare(a.Name, b.Name) }
+	byName := func(a, b plannedRemote) int { return strings.Compare(a.name.String(), b.name.String()) }
 	slices.SortFunc(plan.add, byName)
 	slices.SortFunc(plan.update, byName)
 	sort.Strings(plan.remove)

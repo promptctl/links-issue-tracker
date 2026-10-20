@@ -204,7 +204,7 @@ func markerModTime(t *testing.T, markerPath string) time.Time {
 // is a receive outcome the inline path can produce; the assertion is what is
 // on disk afterwards. [LAW:behavior-not-structure]
 func TestRecordReceivedWritesOnlyWhatASettledReceiveLearned(t *testing.T) {
-	observed := remoteAdvertisement{remote: "origin", url: "git@example.invalid:o/r.git", refs: "abc\trefs/dolt/data"}
+	observed := remoteAdvertisement{remote: remoteName(t, "origin"), url: "git@example.invalid:o/r.git", refs: "abc\trefs/dolt/data"}
 	converged := &reconcileOutcome{state: storage.SyncReconcileLinearized}
 	unconverged := &reconcileOutcome{state: storage.SyncReconcileProsePending}
 	failed := &reconcileOutcome{err: errors.New("reconcile backend unavailable")}
@@ -267,8 +267,8 @@ func TestNothingToReceiveIsOnlyAnEmptyAnswer(t *testing.T) {
 		want bool
 	}{
 		{"no remote picked", remoteAdvertisement{}, true},
-		{"remote with no lit data", remoteAdvertisement{remote: "origin", url: "u", refs: ""}, true},
-		{"remote with lit data", remoteAdvertisement{remote: "origin", url: "u", refs: "abc\trefs/dolt/data"}, false},
+		{"remote with no lit data", remoteAdvertisement{remote: remoteName(t, "origin"), url: "u", refs: ""}, true},
+		{"remote with lit data", remoteAdvertisement{remote: remoteName(t, "origin"), url: "u", refs: "abc\trefs/dolt/data"}, false},
 	}
 	for _, c := range cases {
 		if got := c.ad.nothingToReceive(); got != c.want {

@@ -505,7 +505,7 @@ func (o syncReceiveOutcome) inlineSyncFailure(now time.Time) (SyncFailure, bool)
 		return SyncFailure{}, false
 	}
 	base := SyncFailure{
-		Remote:    o.remote,
+		Remote:    o.remote.String(),
 		Branch:    o.branch,
 		Ahead:     o.ahead,
 		Behind:    o.behind,
@@ -554,7 +554,7 @@ type syncReceiveOutcome struct {
 	// syncTargetReady means the receive ran; a non-empty skip names why it did
 	// not. [LAW:types-are-the-program]
 	skip               syncTargetSkip
-	remote             string
+	remote             storage.RemoteName
 	branch             string
 	state              storage.SyncReceiveState
 	ahead              int64
@@ -627,7 +627,7 @@ func performSyncReceive(ctx context.Context, ws workspace.Info, clone liveClone,
 		result, receiveErr = session.syncer.SyncSettleReceived(ctx, remoteName, syncBranch)
 	}
 	traceMetadata := map[string]string{
-		"remote":      remoteName,
+		"remote":      remoteName.String(),
 		"sync_branch": syncBranch,
 		"state":       string(result.State),
 		"ahead":       strconv.FormatInt(result.Ahead, 10),
@@ -685,7 +685,7 @@ func performSyncReceive(ctx context.Context, ws workspace.Info, clone liveClone,
 // It is a unit of its own so that performInlineReconcile keeps one unbranched
 // path: the capability question is answered here and never re-asked below.
 // [LAW:parse-dont-validate]
-func reconcileOnce(ctx context.Context, session syncSession, remote, branch string) (storage.SyncReconcileResult, error) {
+func reconcileOnce(ctx context.Context, session syncSession, remote storage.RemoteName, branch string) (storage.SyncReconcileResult, error) {
 	reconciler, err := storage.Reconcile.Of(session.engine)
 	if err != nil {
 		return storage.SyncReconcileResult{}, err
@@ -699,13 +699,13 @@ func reconcileOnce(ctx context.Context, session syncSession, remote, branch stri
 // prose-pending for the agent surface, never auto-committed by picking a side.
 // [LAW:single-enforcer] One reconcile entrypoint and one trace writer, whether
 // the receive was inline or foreground.
-func performInlineReconcile(ctx context.Context, session syncSession, ws workspace.Info, remote, branch string) *reconcileOutcome {
+func performInlineReconcile(ctx context.Context, session syncSession, ws workspace.Info, remote storage.RemoteName, branch string) *reconcileOutcome {
 	result, reconcileErr := reconcileOnce(ctx, session, remote, branch)
 	// "replayed" matches the explicit reconcile/take reporters: the durable
 	// trace carries the provenance-replay count for every outcome, zero
 	// included, so the trail can distinguish a granular fold from a no-op.
 	traceMetadata := map[string]string{
-		"remote":      remote,
+		"remote":      remote.String(),
 		"sync_branch": branch,
 		"state":       string(result.State),
 		"replayed":    strconv.Itoa(result.Replayed),

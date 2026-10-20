@@ -55,10 +55,10 @@ const reRootScratchPrefix = "lit-reroot/"
 //
 // The bound is recorded for HistoryBounds whatever happened to it, and its
 // error is its own: the push before it landed. [LAW:nothing-unseen]
-func (s *Store) boundHistory(ctx context.Context, remote, branch string, window historywindow.Window) storage.HistoryBound {
-	b := storage.HistoryBound{Remote: remote, Branch: branch, Window: window}
+func (s *Store) boundHistory(ctx context.Context, remote storage.RemoteName, branch string, window historywindow.Window) storage.HistoryBound {
+	b := storage.HistoryBound{Remote: remote.String(), Branch: branch, Window: window}
 	start := time.Now()
-	b.Err = s.keepHistoryBound(ctx, &b)
+	b.Err = s.keepHistoryBound(ctx, remote, &b)
 	b.Elapsed = time.Since(start)
 	s.bounds = append(s.bounds, b)
 	return b
@@ -67,8 +67,8 @@ func (s *Store) boundHistory(ctx context.Context, remote, branch string, window 
 // SyncKeepHistoryBound runs boundHistory after a push that landed, says so
 // on the push's result once it wrote a re-root (AfterPush), and joins its
 // account to the push's maintenance. See the storage.Syncer contract.
-func (s *Store) SyncKeepHistoryBound(ctx context.Context, remote, branch string, window historywindow.Window, pushed storage.SyncPushResult) storage.SyncPushResult {
-	bound := s.boundHistory(ctx, strings.TrimSpace(remote), strings.TrimSpace(branch), window)
+func (s *Store) SyncKeepHistoryBound(ctx context.Context, remote storage.RemoteName, branch string, window historywindow.Window, pushed storage.SyncPushResult) storage.SyncPushResult {
+	bound := s.boundHistory(ctx, remote, strings.TrimSpace(branch), window)
 	if bound.ReRooted.Head != "" {
 		pushed.AfterPush = fmt.Sprintf("the history bound wrote re-root %s of %s after the push", bound.ReRooted.Head, bound.Head)
 	}
@@ -77,18 +77,14 @@ func (s *Store) SyncKeepHistoryBound(ctx context.Context, remote, branch string,
 }
 
 // keepHistoryBound runs boundHistory's steps, filling in b as each one lands.
-func (s *Store) keepHistoryBound(ctx context.Context, b *storage.HistoryBound) error {
-	remote, err := storage.ParseRemoteName(b.Remote)
-	if err != nil {
-		return err
-	}
+func (s *Store) keepHistoryBound(ctx context.Context, remote storage.RemoteName, b *storage.HistoryBound) error {
 	if _, err := requireSyncArg("branch", b.Branch); err != nil {
 		return err
 	}
 	if err := refuseLOCKUnderCommitLock(ctx); err != nil {
 		return err
 	}
-	trackingRef := fmt.Sprintf("remotes/%s/%s", b.Remote, b.Branch)
+	trackingRef := fmt.Sprintf("remotes/%s/%s", remote, b.Branch)
 	if err := s.db.QueryRowContext(ctx, `SELECT commit_hash, commit_order FROM dolt_log(?) LIMIT 1`, trackingRef).Scan(&b.Head, &b.Height); err != nil {
 		return fmt.Errorf("read the height of %s: %w", trackingRef, err)
 	}
@@ -100,7 +96,7 @@ func (s *Store) keepHistoryBound(ctx context.Context, b *storage.HistoryBound) e
 
 // publishBound is boundHistory's steps once the bound fired at b.Head.
 func (s *Store) publishBound(ctx context.Context, remote storage.RemoteName, b *storage.HistoryBound) error {
-	trackingRef := fmt.Sprintf("remotes/%s/%s", b.Remote, b.Branch)
+	trackingRef := fmt.Sprintf("remotes/%s/%s", remote, b.Branch)
 	var err error
 	b.ReRooted, err = s.reRootScratch(ctx, b.Branch, b.Head, b.Window.Keep())
 	if err == nil {
@@ -137,7 +133,7 @@ func (s *Store) publishBound(ctx context.Context, remote storage.RemoteName, b *
 // and follow whatever re-root the remote carries, collecting below the cut
 // as every follow does.
 func (s *Store) followPublishedReRoot(ctx context.Context, remote storage.RemoteName, b *storage.HistoryBound, trackingRef string) error {
-	if err := s.syncFetch(ctx, remote, false); err != nil {
+	if err := s.SyncFetch(ctx, remote, false); err != nil {
 		return fmt.Errorf("fetch to learn whether %s carries the re-root: %w", trackingRef, err)
 	}
 	followed, err := s.followRemoteReRoot(ctx, remote, b.Branch, storage.SyncEntryBound)

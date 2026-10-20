@@ -15,7 +15,9 @@ import (
 const InvalidRemoteNameCharacters = " \t\n\r./\\!@#$%^&*(){}[],.<>'\"?=+|"
 
 // RemoteName is the name of a remote lit syncs with. Only ParseRemoteName
-// builds one. [LAW:parse-dont-validate]
+// builds one, and every Syncer method that syncs with a remote takes one, so
+// a name is parsed where it enters and is never checked again.
+// [LAW:parse-dont-validate]
 type RemoteName struct {
 	name string
 }

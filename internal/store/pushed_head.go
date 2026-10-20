@@ -118,12 +118,8 @@ var ErrReceivedRefsNotRecorded = errors.New("received-refs record not written, s
 // already past head was carried there by something that recorded a newer
 // advertisement. A nil record leaves the one on disk standing.
 // [LAW:one-source-of-truth]
-func RecordPushedHead(ctx context.Context, doltRootDir string, remote string, branch string, head string, receivedRefs []byte) (record PushedHeadRecord, err error) {
+func RecordPushedHead(ctx context.Context, doltRootDir string, remote storage.RemoteName, branch string, head string, receivedRefs []byte) (record PushedHeadRecord, err error) {
 	root, err := validateDoltRootDir(doltRootDir)
-	if err != nil {
-		return 0, err
-	}
-	trimmedRemote, err := storage.ParseRemoteName(remote)
 	if err != nil {
 		return 0, err
 	}
@@ -140,7 +136,7 @@ func RecordPushedHead(ctx context.Context, doltRootDir string, remote string, br
 		return 0, err
 	}
 	defer func() { err = errors.Join(err, releaseWorkspace()) }()
-	record, atHead, err := settlePushedHead(ctx, root, trimmedRemote.String(), trimmedBranch, trimmedHead)
+	record, atHead, err := settlePushedHead(ctx, root, remote, trimmedBranch, trimmedHead)
 	if err != nil {
 		return 0, err
 	}
@@ -160,9 +156,9 @@ func RecordPushedHead(ctx context.Context, doltRootDir string, remote string, br
 // settlePushedHead is RecordPushedHead's ref write: the one ref comparison and
 // move, run inside holdForRefWrite. atHead reports whether the ref now names
 // head, moved there or already there, as against left on a descendant of it.
-func settlePushedHead(ctx context.Context, root, trimmedRemote, trimmedBranch, trimmedHead string) (record PushedHeadRecord, atHead bool, err error) {
+func settlePushedHead(ctx context.Context, root string, remote storage.RemoteName, trimmedBranch, trimmedHead string) (record PushedHeadRecord, atHead bool, err error) {
 	err = holdForRefWrite(ctx, root, MirrorHoldBudget, func(holdCtx context.Context, ddb *doltdb.DoltDB) error {
-		trackingRef := ref.NewRemoteRef(trimmedRemote, trimmedBranch)
+		trackingRef := ref.NewRemoteRef(remote.String(), trimmedBranch)
 		pushedCommit, err := readFullCommit(holdCtx, ddb, hash.Parse(trimmedHead))
 		if err != nil {
 			return fmt.Errorf("record pushed head %s: this store does not hold it as a commit: %w", trimmedHead, err)
@@ -183,12 +179,12 @@ func settlePushedHead(ctx context.Context, root, trimmedRemote, trimmedBranch, t
 			record, atHead = PushedHeadCarried, false
 			return nil
 		case ffErr != nil:
-			return fmt.Errorf("record pushed head %s on remotes/%s/%s: compare the ref with the pushed head: %w", trimmedHead, trimmedRemote, trimmedBranch, ffErr)
+			return fmt.Errorf("record pushed head %s on remotes/%s/%s: compare the ref with the pushed head: %w", trimmedHead, remote, trimmedBranch, ffErr)
 		case !canMove:
-			return fmt.Errorf("record pushed head %s on remotes/%s/%s: the ref has diverged from the pushed head (the remote was rewritten under the clone); the next fetch settles it", trimmedHead, trimmedRemote, trimmedBranch)
+			return fmt.Errorf("record pushed head %s on remotes/%s/%s: the ref has diverged from the pushed head (the remote was rewritten under the clone); the next fetch settles it", trimmedHead, remote, trimmedBranch)
 		}
 		if setErr := ddb.SetHead(holdCtx, trackingRef, hash.Parse(trimmedHead)); setErr != nil {
-			return fmt.Errorf("record pushed head %s on remotes/%s/%s: %w", trimmedHead, trimmedRemote, trimmedBranch, setErr)
+			return fmt.Errorf("record pushed head %s on remotes/%s/%s: %w", trimmedHead, remote, trimmedBranch, setErr)
 		}
 		record, atHead = PushedHeadMoved, true
 		return nil

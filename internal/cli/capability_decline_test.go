@@ -134,7 +134,7 @@ func TestInlineReconcileSurfacesADeclineInsteadOfSettling(t *testing.T) {
 	t.Parallel()
 	ws := declineWorkspace(t)
 
-	outcome := performInlineReconcile(context.Background(), syncSession{engine: syncOnlyEngine{}}, ws, "origin", "lit-sync")
+	outcome := performInlineReconcile(context.Background(), syncSession{engine: syncOnlyEngine{}}, ws, remoteName(t, "origin"), "lit-sync")
 
 	wantUnsupported(t, outcome.err, "reconcile")
 	for _, settled := range []storage.SyncReconcileState{

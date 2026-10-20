@@ -264,7 +264,7 @@ func (s *Store) landProse(export model.Export, texts map[string]merge.ProseTexts
 // CONSTRAINT (embedded Dolt one-RW-engine-per-path): this runs INLINE/foreground
 // on the caller's own engine after its command engine closed — never a background
 // worker.
-func (s *Store) SyncReconcile(ctx context.Context, remote string, branch string) (storage.SyncReconcileResult, error) {
+func (s *Store) SyncReconcile(ctx context.Context, remote storage.RemoteName, branch string) (storage.SyncReconcileResult, error) {
 	return s.followThenReconcile(ctx, remote, branch, autonomousSettle, detectOnly)
 }
 
@@ -282,7 +282,7 @@ func (s *Store) SyncReconcile(ctx context.Context, remote string, branch string)
 // It shares SyncReconcile's safe-replay verbatim: the replayed spine is built on a
 // unique scratch branch and the data branch advances with one atomic reset, so an
 // interrupted finalize can never orphan the clone's local work.
-func (s *Store) SyncReconcileResolved(ctx context.Context, remote string, branch string, resolutions []merge.ProseResolution, actor string) (storage.SyncReconcileResult, error) {
+func (s *Store) SyncReconcileResolved(ctx context.Context, remote storage.RemoteName, branch string, resolutions []merge.ProseResolution, actor string) (storage.SyncReconcileResult, error) {
 	// unionCombine: `lit sync reconcile resolve` is the ONE finalize command, so it must
 	// finalize whichever divergence the refs describe — a shared-history three-way (the
 	// base branch handles it) OR an unrelated combine (the !shared branch, with the agent's
@@ -304,7 +304,7 @@ func (s *Store) SyncReconcileResolved(ctx context.Context, remote string, branch
 // that degrades the merge to a two-way union. On a divergence WITH a common base it merges
 // through that base like an ordinary reconcile — combine is non-destructive, so it need not
 // refuse shared history the way the wholesale takes do.
-func (s *Store) SyncReconcileCombine(ctx context.Context, remote string, branch string) (storage.SyncReconcileResult, error) {
+func (s *Store) SyncReconcileCombine(ctx context.Context, remote storage.RemoteName, branch string) (storage.SyncReconcileResult, error) {
 	return s.followThenReconcile(ctx, remote, branch, autonomousSettle, unionCombine)
 }
 
@@ -384,15 +384,11 @@ func (s *Store) reconcileBase(ctx context.Context, remote storage.RemoteName, br
 // this branch can follow never reaches the reconcile as unrelated histories.
 // SyncPull calls reconcile directly, inside the commit lock it took after
 // following.
-func (s *Store) followThenReconcile(ctx context.Context, remote string, branch string, settle settleFn, unrelated unrelatedHandling) (storage.SyncReconcileResult, error) {
-	parsed, err := storage.ParseRemoteName(remote)
-	if err != nil {
+func (s *Store) followThenReconcile(ctx context.Context, remote storage.RemoteName, branch string, settle settleFn, unrelated unrelatedHandling) (storage.SyncReconcileResult, error) {
+	if _, err := s.followRemoteReRoot(ctx, remote, branch, storage.SyncEntryReconcile); err != nil {
 		return storage.SyncReconcileResult{}, err
 	}
-	if _, err := s.followRemoteReRoot(ctx, parsed, branch, storage.SyncEntryReconcile); err != nil {
-		return storage.SyncReconcileResult{}, err
-	}
-	return s.reconcile(ctx, parsed, branch, settle, unrelated)
+	return s.reconcile(ctx, remote, branch, settle, unrelated)
 }
 
 func (s *Store) reconcile(ctx context.Context, remote storage.RemoteName, branch string, settle settleFn, unrelated unrelatedHandling) (storage.SyncReconcileResult, error) {

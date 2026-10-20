@@ -59,7 +59,7 @@ func plantLoop(t *testing.T, ctx context.Context, root string, tree []model.Issu
 func push(t *testing.T, ctx context.Context, root string) {
 	t.Helper()
 	sync := openSyncOrFatal(t, ctx, root)
-	if _, err := sync.SyncPush(ctx, "origin", "master", false, false); err != nil {
+	if _, err := sync.SyncPush(ctx, remoteName(t, "origin"), "master", false, false); err != nil {
 		t.Fatalf("SyncPush(%s): %v", root, err)
 	}
 	if err := sync.Close(); err != nil {
@@ -73,10 +73,10 @@ func reconcileB(t *testing.T, ctx context.Context, rootB string) (storage.SyncRe
 	t.Helper()
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	t.Cleanup(func() { _ = syncB.Close() })
-	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
-	res, err := syncB.SyncReconcile(ctx, "origin", "master")
+	res, err := syncB.SyncReconcile(ctx, remoteName(t, "origin"), "master")
 	if err != nil {
 		var refusal storage.ParentCycleError
 		if errors.As(err, &refusal) {

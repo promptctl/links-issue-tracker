@@ -61,7 +61,7 @@ func newReRootedRemote(t *testing.T, ctx context.Context, concurrent bool) reRoo
 		t.Fatalf("Close(alpha) error = %v", err)
 	}
 	sync := openSyncOrFatal(t, ctx, r.alpha)
-	if _, err := sync.SyncPush(ctx, "origin", "master", false, false); err != nil {
+	if _, err := sync.SyncPush(ctx, remoteName(t, "origin"), "master", false, false); err != nil {
 		t.Fatalf("SyncPush(alpha) error = %v", err)
 	}
 	if err := sync.Close(); err != nil {
@@ -85,7 +85,7 @@ func newReRootedRemote(t *testing.T, ctx context.Context, concurrent bool) reRoo
 		t.Fatalf("ReRoot(alpha) error = %v", err)
 	}
 	sync = openSyncOrFatal(t, ctx, r.alpha)
-	if _, err := sync.SyncPush(ctx, "origin", "master", false, true); err != nil {
+	if _, err := sync.SyncPush(ctx, remoteName(t, "origin"), "master", false, true); err != nil {
 		t.Fatalf("force push of alpha's re-rooted history error = %v", err)
 	}
 	if err := sync.Close(); err != nil {
@@ -140,7 +140,7 @@ func TestSyncPullFollowsAReRootedRemote(t *testing.T) {
 
 	bravo := openSyncOrFatal(t, ctx, r.bravo)
 	defer func() { _ = bravo.Close() }()
-	pulled, err := bravo.SyncPull(ctx, "origin", "master")
+	pulled, err := bravo.SyncPull(ctx, remoteName(t, "origin"), "master")
 	if err != nil {
 		t.Fatalf("SyncPull(bravo) error = %v", err)
 	}
@@ -149,13 +149,13 @@ func TestSyncPullFollowsAReRootedRemote(t *testing.T) {
 	}
 	r.assertFollowed(t, bravo, storage.SyncEntryPull)
 	r.assertMerged(t, ctx, bravo)
-	if _, err := bravo.SyncPush(ctx, "origin", "master", false, false); err != nil {
+	if _, err := bravo.SyncPush(ctx, remoteName(t, "origin"), "master", false, false); err != nil {
 		t.Fatalf("bravo's push after the follow error = %v", err)
 	}
 
 	alpha := openSyncOrFatal(t, ctx, r.alpha)
 	defer func() { _ = alpha.Close() }()
-	back, err := alpha.SyncPull(ctx, "origin", "master")
+	back, err := alpha.SyncPull(ctx, remoteName(t, "origin"), "master")
 	if err != nil {
 		t.Fatalf("SyncPull(alpha) error = %v", err)
 	}
@@ -190,7 +190,7 @@ func TestAFollowCollectsTheHistoryBelowTheCut(t *testing.T) {
 		t.Fatalf("bravo holds no %s checkpoint, so the test cannot show the follow dropping one", migrationCheckpointPrefix)
 	}
 
-	if _, err := bravo.SyncPull(ctx, "origin", "master"); err != nil {
+	if _, err := bravo.SyncPull(ctx, remoteName(t, "origin"), "master"); err != nil {
 		t.Fatalf("SyncPull(bravo) error = %v", err)
 	}
 	r.assertFollowed(t, bravo, storage.SyncEntryPull)
@@ -239,10 +239,10 @@ func TestAFollowCarriesAFailedCollection(t *testing.T) {
 
 	bravo := openSyncOrFatal(t, ctx, r.bravo)
 	defer func() { _ = bravo.Close() }()
-	if err := bravo.SyncFetch(ctx, "origin", false); err != nil {
+	if err := bravo.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
 		t.Fatalf("SyncFetch(bravo) error = %v", err)
 	}
-	if err := bravo.SyncFollowReRoot(ctx, "origin", "master", storage.SyncEntryFetch); err != nil {
+	if err := bravo.SyncFollowReRoot(ctx, remoteName(t, "origin"), "master", storage.SyncEntryFetch); err != nil {
 		t.Fatalf("SyncFollowReRoot(bravo) error = %v; want the follow to stand whatever its collection did", err)
 	}
 	r.assertFollowed(t, bravo, storage.SyncEntryFetch)
@@ -294,7 +294,7 @@ func TestSyncReceiveFollowsAReRootedRemote(t *testing.T) {
 
 	bravo := openSyncOrFatal(t, ctx, r.bravo)
 	defer func() { _ = bravo.Close() }()
-	received, err := bravo.SyncReceive(ctx, "origin", "master")
+	received, err := bravo.SyncReceive(ctx, remoteName(t, "origin"), "master")
 	if err != nil {
 		t.Fatalf("SyncReceive(bravo) error = %v", err)
 	}
@@ -302,7 +302,7 @@ func TestSyncReceiveFollowsAReRootedRemote(t *testing.T) {
 		t.Fatalf("receive state = %q, want %q", received.State, storage.SyncReceiveDiverged)
 	}
 	r.assertFollowed(t, bravo, storage.SyncEntryReceive)
-	reconciled, err := bravo.SyncReconcile(ctx, "origin", "master")
+	reconciled, err := bravo.SyncReconcile(ctx, remoteName(t, "origin"), "master")
 	if err != nil {
 		t.Fatalf("SyncReconcile(bravo) error = %v", err)
 	}
@@ -322,10 +322,10 @@ func TestSyncReconcileFollowsAReRootedRemote(t *testing.T) {
 
 	bravo := openSyncOrFatal(t, ctx, r.bravo)
 	defer func() { _ = bravo.Close() }()
-	if err := bravo.SyncFetch(ctx, "origin", false); err != nil {
+	if err := bravo.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
 		t.Fatalf("SyncFetch(bravo) error = %v", err)
 	}
-	reconciled, err := bravo.SyncReconcile(ctx, "origin", "master")
+	reconciled, err := bravo.SyncReconcile(ctx, remoteName(t, "origin"), "master")
 	if err != nil {
 		t.Fatalf("SyncReconcile(bravo) error = %v", err)
 	}
@@ -346,7 +346,7 @@ func TestACompactingPushReportsItsFollowsCollection(t *testing.T) {
 	bravo := openSyncOrFatal(t, ctx, r.bravo)
 	defer func() { _ = bravo.Close() }()
 
-	pushed, err := bravo.SyncCompactAndPush(ctx, "origin", "master", false, false)
+	pushed, err := bravo.SyncCompactAndPush(ctx, remoteName(t, "origin"), "master", false, false)
 	if err != nil {
 		t.Fatalf("SyncCompactAndPush(bravo) error = %v", err)
 	}
@@ -372,7 +372,7 @@ func TestSyncPushFollowsAReRootedRemote(t *testing.T) {
 		r := newReRootedRemote(t, ctx, false)
 		bravo := openSyncOrFatal(t, ctx, r.bravo)
 		defer func() { _ = bravo.Close() }()
-		pushed, err := bravo.SyncPush(ctx, "origin", "master", false, false)
+		pushed, err := bravo.SyncPush(ctx, remoteName(t, "origin"), "master", false, false)
 		if err != nil {
 			t.Fatalf("SyncPush(bravo) error = %v", err)
 		}
@@ -382,7 +382,7 @@ func TestSyncPushFollowsAReRootedRemote(t *testing.T) {
 		}
 		alpha := openSyncOrFatal(t, ctx, r.alpha)
 		defer func() { _ = alpha.Close() }()
-		back, err := alpha.SyncPull(ctx, "origin", "master")
+		back, err := alpha.SyncPull(ctx, remoteName(t, "origin"), "master")
 		if err != nil {
 			t.Fatalf("SyncPull(alpha) error = %v", err)
 		}
@@ -399,7 +399,7 @@ func TestSyncPushFollowsAReRootedRemote(t *testing.T) {
 		r := newReRootedRemote(t, ctx, true)
 		bravo := openSyncOrFatal(t, ctx, r.bravo)
 		defer func() { _ = bravo.Close() }()
-		_, err := bravo.SyncPush(ctx, "origin", "master", false, false)
+		_, err := bravo.SyncPush(ctx, remoteName(t, "origin"), "master", false, false)
 		if err == nil {
 			t.Fatalf("SyncPush(bravo) landed over alpha's concurrent edit")
 		}
@@ -407,7 +407,7 @@ func TestSyncPushFollowsAReRootedRemote(t *testing.T) {
 			t.Fatalf("the push was refused for histories with no common ancestor after following: %v", err)
 		}
 		r.assertFollowed(t, bravo, storage.SyncEntryPush)
-		pulled, err := bravo.SyncPull(ctx, "origin", "master")
+		pulled, err := bravo.SyncPull(ctx, remoteName(t, "origin"), "master")
 		if err != nil {
 			t.Fatalf("SyncPull(bravo) error = %v", err)
 		}
@@ -431,7 +431,7 @@ func TestSyncPushFromCloneFollowsAReRootedRemote(t *testing.T) {
 	r.bravo = clone
 	st := openSyncOrFatal(t, ctx, clone)
 	defer func() { _ = st.Close() }()
-	pushed, err := st.SyncPushFromClone(ctx, "origin", "master", false, false)
+	pushed, err := st.SyncPushFromClone(ctx, remoteName(t, "origin"), "master", false, false)
 	if err != nil {
 		t.Fatalf("SyncPushFromClone error = %v", err)
 	}
@@ -452,10 +452,10 @@ func TestTakeFollowsAReRootedRemoteBeforeItCanDiscardASide(t *testing.T) {
 	r := newReRootedRemote(t, ctx, true)
 	bravo := openSyncOrFatal(t, ctx, r.bravo)
 	defer func() { _ = bravo.Close() }()
-	if err := bravo.SyncFetch(ctx, "origin", false); err != nil {
+	if err := bravo.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
 		t.Fatalf("SyncFetch(bravo) error = %v", err)
 	}
-	_, err := bravo.SyncResolveUnrelated(ctx, "origin", "master", storage.TakeRemote, "")
+	_, err := bravo.SyncResolveUnrelated(ctx, remoteName(t, "origin"), "master", storage.TakeRemote, "")
 	var approval OwnerApprovalRequiredError
 	if err == nil || errors.As(err, &approval) || !strings.Contains(err.Error(), "has a base to merge") {
 		t.Fatalf("take over a re-rooted remote error = %v, want the shared-history refusal", err)
@@ -493,7 +493,7 @@ func TestSyncFollowsARemoteReRootedAboveItsOwnCut(t *testing.T) {
 		t.Fatal(err)
 	}
 	sync := openSyncOrFatal(t, ctx, alpha)
-	if _, err := sync.SyncPush(ctx, "origin", "master", false, false); err != nil {
+	if _, err := sync.SyncPush(ctx, remoteName(t, "origin"), "master", false, false); err != nil {
 		t.Fatalf("SyncPush(alpha) error = %v", err)
 	}
 	if err := sync.Close(); err != nil {
@@ -516,7 +516,7 @@ func TestSyncFollowsARemoteReRootedAboveItsOwnCut(t *testing.T) {
 		t.Fatalf("ReRoot(alpha, high cut) error = %v", err)
 	}
 	sync = openSyncOrFatal(t, ctx, alpha)
-	if _, err := sync.SyncPush(ctx, "origin", "master", false, true); err != nil {
+	if _, err := sync.SyncPush(ctx, remoteName(t, "origin"), "master", false, true); err != nil {
 		t.Fatalf("force push of alpha's re-rooted history error = %v", err)
 	}
 	if err := sync.Close(); err != nil {
@@ -525,7 +525,7 @@ func TestSyncFollowsARemoteReRootedAboveItsOwnCut(t *testing.T) {
 
 	st = openSyncOrFatal(t, ctx, bravo)
 	defer func() { _ = st.Close() }()
-	pulled, err := st.SyncPull(ctx, "origin", "master")
+	pulled, err := st.SyncPull(ctx, remoteName(t, "origin"), "master")
 	if err != nil {
 		t.Fatalf("SyncPull(bravo) error = %v", err)
 	}
@@ -580,10 +580,10 @@ func TestSyncDoesNotFollowARemoteRootMatchedByMetadataAlone(t *testing.T) {
 
 	st := openSyncOrFatal(t, ctx, stranger)
 	defer func() { _ = st.Close() }()
-	if err := st.SyncFetch(ctx, "origin", false); err != nil {
+	if err := st.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
 		t.Fatalf("SyncFetch error = %v", err)
 	}
-	reconciled, err := st.SyncReconcile(ctx, "origin", "master")
+	reconciled, err := st.SyncReconcile(ctx, remoteName(t, "origin"), "master")
 	if err != nil {
 		t.Fatalf("SyncReconcile error = %v", err)
 	}
@@ -623,10 +623,10 @@ func TestSyncDoesNotFollowWhenTwoLocalCommitsRebuildToTheRoot(t *testing.T) {
 
 	st := openSyncOrFatal(t, ctx, r.bravo)
 	defer func() { _ = st.Close() }()
-	if err := st.SyncFetch(ctx, "origin", false); err != nil {
+	if err := st.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
 		t.Fatalf("SyncFetch error = %v", err)
 	}
-	reconciled, err := st.SyncReconcile(ctx, "origin", "master")
+	reconciled, err := st.SyncReconcile(ctx, remoteName(t, "origin"), "master")
 	if err != nil {
 		t.Fatalf("SyncReconcile error = %v", err)
 	}
@@ -657,7 +657,7 @@ func TestFollowAndBoundRefuseUnderTheCommitLockOnEveryRun(t *testing.T) {
 	}
 	var bound storage.HistoryBound
 	err = st.withCommitLock(ctx, func(ctx context.Context) error {
-		bound = st.boundHistory(ctx, "origin", "master", windowOf(t, 2000, 1000))
+		bound = st.boundHistory(ctx, remoteName(t, "origin"), "master", windowOf(t, 2000, 1000))
 		return nil
 	})
 	if err != nil {

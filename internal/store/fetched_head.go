@@ -104,7 +104,7 @@ type LandedFetch struct {
 // The mirror's objects land last: a failure there is returned wrapping
 // ErrRemoteCacheNotLanded with the result, because the chunks and ref it
 // follows are already written and stand.
-func LandFetchedHead(ctx context.Context, doltRootDir, cloneRootDir, remote, branch string) (landed LandedFetch, err error) {
+func LandFetchedHead(ctx context.Context, doltRootDir, cloneRootDir string, remote storage.RemoteName, branch string) (landed LandedFetch, err error) {
 	root, err := validateDoltRootDir(doltRootDir)
 	if err != nil {
 		return LandedFetch{}, err
@@ -113,15 +113,11 @@ func LandFetchedHead(ctx context.Context, doltRootDir, cloneRootDir, remote, bra
 	if err != nil {
 		return LandedFetch{}, err
 	}
-	trimmedRemote, err := storage.ParseRemoteName(remote)
-	if err != nil {
-		return LandedFetch{}, err
-	}
 	trimmedBranch, err := requireSyncArg("branch", branch)
 	if err != nil {
 		return LandedFetch{}, err
 	}
-	trackingRef := ref.NewRemoteRef(trimmedRemote.String(), trimmedBranch)
+	trackingRef := ref.NewRemoteRef(remote.String(), trimmedBranch)
 
 	// The clone is this caller's alone — nothing else opens it — so it is read
 	// before the live store is held, and stays open for the copy.
@@ -137,7 +133,7 @@ func LandFetchedHead(ctx context.Context, doltRootDir, cloneRootDir, remote, bra
 	if !found {
 		return LandedFetch{Record: FetchedHeadAbsent, ForkPoint: FetchedHeadAbsent}, nil
 	}
-	forkPointRef := ref.NewBranchRef(forkPointBranch(ownerOf(trimmedRemote), trimmedBranch))
+	forkPointRef := ref.NewBranchRef(forkPointBranch(ownerOf(remote), trimmedBranch))
 	forkPoint, forkPointFound, err := resolveRefHead(ctx, clone, forkPointRef)
 	if err != nil {
 		return LandedFetch{}, fmt.Errorf("read the clone's %s: %w", forkPointRef.String(), err)
@@ -152,7 +148,7 @@ func LandFetchedHead(ctx context.Context, doltRootDir, cloneRootDir, remote, bra
 	// instance republished on close, and the plan going stale there costs
 	// nothing: the copy sets the ref to the clone's value, the same
 	// last-writer-wins rule every close follows.
-	cachePlan, cacheErr := planRemoteCacheLanding(ctx, remoteCacheBaseAt(root), remoteCacheBaseAt(cloneRoot), trimmedRemote)
+	cachePlan, cacheErr := planRemoteCacheLanding(ctx, remoteCacheBaseAt(root), remoteCacheBaseAt(cloneRoot), remote)
 
 	releaseWorkspace, err := acquireLiveStoreHold(ctx, root)
 	if err != nil {

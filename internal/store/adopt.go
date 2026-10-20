@@ -216,7 +216,7 @@ func LocalHasTickets(ctx context.Context, doltRootDir, workspaceID string) (bool
 // leftover from ever being opened as a store.
 // [LAW:types-are-the-program] "undefined partial state that looks valid" is
 // unrepresentable at this seam.
-func AdoptRemoteByClone(ctx context.Context, doltRootDir, workspaceID, rawRemoteName, remoteURL, branch string) (err error) {
+func AdoptRemoteByClone(ctx context.Context, doltRootDir, workspaceID string, remote storage.RemoteName, remoteURL, branch string) (err error) {
 	cleanRoot, err := validateDoltRootDir(doltRootDir)
 	if err != nil {
 		return err
@@ -224,13 +224,6 @@ func AdoptRemoteByClone(ctx context.Context, doltRootDir, workspaceID, rawRemote
 	if strings.TrimSpace(workspaceID) == "" {
 		return errors.New("workspace id is required")
 	}
-	// [LAW:single-enforcer] DOLT_CLONE --remote checks no name, so the parse
-	// that holds every other remote this store is given holds this one too.
-	remote, err := storage.ParseRemoteName(rawRemoteName)
-	if err != nil {
-		return fmt.Errorf("adopt by clone: %w", err)
-	}
-	remoteName := remote.String()
 	remoteURL = strings.TrimSpace(remoteURL)
 	branch = strings.TrimSpace(branch)
 	if remoteURL == "" || branch == "" {
@@ -261,7 +254,7 @@ func AdoptRemoteByClone(ctx context.Context, doltRootDir, workspaceID, rawRemote
 	// store" instead of inferring validity from directory existence.
 	// [LAW:no-ambient-temporal-coupling] the adopt lifecycle is durable state,
 	// not an inference from the process having exited at the right moment.
-	if err := writeAdoptPendingMarker(cleanRoot, remoteName, branch, time.Now()); err != nil {
+	if err := writeAdoptPendingMarker(cleanRoot, remote.String(), branch, time.Now()); err != nil {
 		return err
 	}
 
@@ -313,7 +306,7 @@ func AdoptRemoteByClone(ctx context.Context, doltRootDir, workspaceID, rawRemote
 		// The clone claimed success but produced no database. The marker stays:
 		// something is off enough that the workspace should remain condemned
 		// until a retry provably completes.
-		return fmt.Errorf("clone of remote %q produced no %q database", remoteName, doltDatabaseName)
+		return fmt.Errorf("clone of remote %q produced no %q database", remote, doltDatabaseName)
 	}
 	// The last act: marker-present means "never fully adopted", so the marker
 	// may only leave after the clone's product is validated above. A clear
@@ -336,7 +329,9 @@ func AdoptRemoteByClone(ctx context.Context, doltRootDir, workspaceID, rawRemote
 // no current database) and clones remoteURL into the canonical database name via
 // DOLT_CLONE, which copies whole archive table files in bulk. The git-backed
 // remote defaults to the refs/dolt/data ref — the same ref lit's sync push
-// writes — so no explicit ref is needed.
+// writes — so no explicit ref is needed. DOLT_CLONE --remote checks no name,
+// unlike DOLT_REMOTE add; remote being a storage.RemoteName is what keeps a
+// name Dolt cannot hold out of the clone. [LAW:parse-dont-validate]
 func cloneRemoteDatabase(ctx context.Context, serverRoot, workspaceID string, remote storage.RemoteName, remoteURL, branch string) error {
 	db, err := openDoltPool(serverRoot, workspaceID, "", engineWrite)
 	if err != nil {

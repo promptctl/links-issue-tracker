@@ -226,7 +226,7 @@ func TestInlineSyncFailureMapping(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
 	base := syncReceiveOutcome{
-		remote: "origin", branch: "master", ahead: 41, behind: 5,
+		remote: remoteName(t, "origin"), branch: "master", ahead: 41, behind: 5,
 		oldestDivergedUnix: now.Add(-5 * 24 * time.Hour).Unix(),
 	}
 

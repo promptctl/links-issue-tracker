@@ -58,7 +58,7 @@ func TestAdoptRemoteByCloneBootstrapsAndReAdopts(t *testing.T) {
 
 	id := seedReconcileRemote(t, ctx, producer, remoteURL)
 
-	if err := AdoptRemoteByClone(ctx, consumer, "ws", "origin", remoteURL, "master"); err != nil {
+	if err := AdoptRemoteByClone(ctx, consumer, "ws", remoteName(t, "origin"), remoteURL, "master"); err != nil {
 		t.Fatalf("AdoptRemoteByClone(first): %v", err)
 	}
 	assertHasIssueAfterAdopt(t, ctx, consumer, id)
@@ -68,7 +68,7 @@ func TestAdoptRemoteByCloneBootstrapsAndReAdopts(t *testing.T) {
 
 	// The consumer store has now been opened (and cached) in this process. A
 	// second adopt must evict that cache so the re-cloned data is read fresh.
-	if err := AdoptRemoteByClone(ctx, consumer, "ws", "origin", remoteURL, "master"); err != nil {
+	if err := AdoptRemoteByClone(ctx, consumer, "ws", remoteName(t, "origin"), remoteURL, "master"); err != nil {
 		t.Fatalf("AdoptRemoteByClone(re-adopt): %v", err)
 	}
 	assertHasIssueAfterAdopt(t, ctx, consumer, id)
@@ -100,7 +100,7 @@ func TestAdoptRemoteByCloneFailedCloneLeavesNoResidue(t *testing.T) {
 	remoteURL := "file://" + filepath.Join(base, "remote")
 	id := seedReconcileRemote(t, ctx, producer, remoteURL)
 
-	if err := AdoptRemoteByClone(ctx, consumer, "ws", "origin", remoteURL, "branch-the-remote-does-not-have"); err == nil {
+	if err := AdoptRemoteByClone(ctx, consumer, "ws", remoteName(t, "origin"), remoteURL, "branch-the-remote-does-not-have"); err == nil {
 		t.Fatal("AdoptRemoteByClone(bad branch) = nil, want error")
 	}
 	if dirExists(filepath.Join(consumer, doltDatabaseName)) {
@@ -111,7 +111,7 @@ func TestAdoptRemoteByCloneFailedCloneLeavesNoResidue(t *testing.T) {
 	}
 
 	// The clean slate is not cosmetic: the retry adopts successfully.
-	if err := AdoptRemoteByClone(ctx, consumer, "ws", "origin", remoteURL, "master"); err != nil {
+	if err := AdoptRemoteByClone(ctx, consumer, "ws", remoteName(t, "origin"), remoteURL, "master"); err != nil {
 		t.Fatalf("AdoptRemoteByClone(retry): %v", err)
 	}
 	if _, statErr := os.Stat(AdoptPendingMarkerPath(consumer)); !os.IsNotExist(statErr) {
@@ -159,7 +159,7 @@ func TestAdoptRemoteByCloneHealsAbandonedAdoptResidue(t *testing.T) {
 		t.Fatal("LocalHasTickets(residue) = true, want false: adopt residue is nothing-to-lose by construction")
 	}
 
-	if err := AdoptRemoteByClone(ctx, consumer, "ws", "origin", remoteURL, "master"); err != nil {
+	if err := AdoptRemoteByClone(ctx, consumer, "ws", remoteName(t, "origin"), remoteURL, "master"); err != nil {
 		t.Fatalf("AdoptRemoteByClone(over residue): %v", err)
 	}
 	if _, statErr := os.Stat(AdoptPendingMarkerPath(consumer)); !os.IsNotExist(statErr) {

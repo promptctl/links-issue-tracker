@@ -42,7 +42,7 @@ func TestSyncPushFromCloneReportsARaceItLostAsSuperseded(t *testing.T) {
 		t.Fatalf("OpenSync(clone) error = %v", err)
 	}
 	defer clone.Close()
-	result, err := clone.SyncPushFromClone(ctx, "origin", "master", false, false)
+	result, err := clone.SyncPushFromClone(ctx, remoteName(t, "origin"), "master", false, false)
 	if err != nil {
 		t.Fatalf("SyncPushFromClone() after the live store outran it error = %v; want superseded, the remote carries c2 inside c3", err)
 	}
@@ -54,7 +54,7 @@ func TestSyncPushFromCloneReportsARaceItLostAsSuperseded(t *testing.T) {
 	}
 	// A plain push from the same clone is the rejection, unexplained: the
 	// clone variant is what adds the judgment, not the push.
-	if _, err := clone.SyncPush(ctx, "origin", "master", false, false); err == nil {
+	if _, err := clone.SyncPush(ctx, remoteName(t, "origin"), "master", false, false); err == nil {
 		t.Fatal("SyncPush() from the outrun clone succeeded; the race this test builds did not happen")
 	}
 }
@@ -75,14 +75,14 @@ func TestAPushRefusedOverAPeersCommitsIsDiverged(t *testing.T) {
 	defer clone.Close()
 	steps := []struct {
 		name string
-		push func(context.Context, string, string, bool, bool) (storage.SyncPushResult, error)
+		push func(context.Context, storage.RemoteName, string, bool, bool) (storage.SyncPushResult, error)
 	}{
 		{"SyncPushFromClone", clone.SyncPushFromClone},
 		{"SyncCompactAndPush", clone.SyncCompactAndPush},
 		{"SyncPush", clone.SyncPush},
 	}
 	for _, step := range steps {
-		if _, err := step.push(ctx, "origin", "master", false, false); !errors.Is(err, storage.ErrPushDiverged) {
+		if _, err := step.push(ctx, remoteName(t, "origin"), "master", false, false); !errors.Is(err, storage.ErrPushDiverged) {
 			t.Fatalf("%s() over the peer's c2 error = %v; want storage.ErrPushDiverged", step.name, err)
 		}
 	}
@@ -139,11 +139,11 @@ func pushSyncFrom(t *testing.T, ctx context.Context, root, addRemote, label stri
 		t.Fatalf("%s: OpenSync() error = %v", label, err)
 	}
 	if addRemote != "" {
-		if err := live.SyncAddRemote(ctx, "origin", addRemote); err != nil {
+		if err := live.SyncAddRemote(ctx, remoteName(t, "origin"), addRemote); err != nil {
 			t.Fatalf("%s: SyncAddRemote() error = %v", label, err)
 		}
 	}
-	result, err := live.SyncPush(ctx, "origin", "master", addRemote != "", false)
+	result, err := live.SyncPush(ctx, remoteName(t, "origin"), "master", addRemote != "", false)
 	if err != nil {
 		t.Fatalf("%s: SyncPush() error = %v", label, err)
 	}

@@ -132,7 +132,7 @@ func TestInlineReceiveSurfacesIDCollision(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
 	outcome := syncReceiveOutcome{
-		remote: "origin", branch: "master", ahead: 2, behind: 3,
+		remote: remoteName(t, "origin"), branch: "master", ahead: 2, behind: 3,
 		oldestDivergedUnix: now.Add(-time.Hour).Unix(),
 		reconcile: &reconcileOutcome{
 			state:      storage.SyncReconcileIDCollision,
@@ -176,7 +176,7 @@ func TestSyncPullSurfacesIDCollisionAsSyncFailure(t *testing.T) {
 		Behind:     3,
 		Collisions: collisionFailure(t).Collisions,
 	}
-	failure, held := syncFailureFromPull("origin", "master", result, time.Now())
+	failure, held := syncFailureFromPull(remoteName(t, "origin"), "master", result, time.Now())
 	if !held {
 		t.Fatal("lit sync pull rendered an id collision as an ordinary outcome")
 	}
@@ -270,7 +270,7 @@ func TestReportReconcileResultCollisionCarriesBothTickets(t *testing.T) {
 	t.Parallel()
 	var sink strings.Builder
 	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}}
-	err := reportReconcileResult(context.Background(), &sink, ws, syncSession{}, "lit sync reconcile", "origin", "master", storage.SyncReconcileResult{
+	err := reportReconcileResult(context.Background(), &sink, ws, syncSession{}, "lit sync reconcile", remoteName(t, "origin"), "master", storage.SyncReconcileResult{
 		State:      storage.SyncReconcileIDCollision,
 		Ahead:      3,
 		Behind:     2,
@@ -310,7 +310,7 @@ func TestReportReconcileResultCollisionExitsConflict(t *testing.T) {
 	t.Parallel()
 	var sink strings.Builder
 	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}}
-	err := reportReconcileResult(context.Background(), &sink, ws, syncSession{}, "lit sync reconcile", "origin", "master", storage.SyncReconcileResult{
+	err := reportReconcileResult(context.Background(), &sink, ws, syncSession{}, "lit sync reconcile", remoteName(t, "origin"), "master", storage.SyncReconcileResult{
 		State:      storage.SyncReconcileIDCollision,
 		Ahead:      3,
 		Behind:     2,

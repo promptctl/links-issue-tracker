@@ -41,7 +41,7 @@ func TestAPushTheRemotesStorageFailsIsNotARefusal(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: OpenSync() error = %v", failed.name, err)
 		}
-		_, err = st.SyncPush(ctx, "origin", "master", false, failed.force)
+		_, err = st.SyncPush(ctx, remoteName(t, "origin"), "master", false, failed.force)
 		if closeErr := st.Close(); closeErr != nil {
 			t.Fatalf("%s: Close() error = %v", failed.name, closeErr)
 		}

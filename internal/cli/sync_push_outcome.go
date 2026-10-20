@@ -129,14 +129,14 @@ func classifyPushOutcome(outcome syncPushOutcome, err error) pushOutcomeRecord {
 		return pushOutcomeRecord{
 			Decision: pushDecisionCanceled,
 			Reason:   firstError(err, outcome.pushErr).Error(),
-			Remote:   outcome.remote,
+			Remote:   outcome.remote.String(),
 			Branch:   outcome.branch,
 		}
 	case errors.Is(err, store.ErrWorkspaceBusy) || errors.Is(outcome.pushErr, store.ErrWorkspaceBusy):
 		return pushOutcomeRecord{
 			Decision: pushDecisionWorkspaceBusy,
 			Reason:   firstError(err, outcome.pushErr).Error(),
-			Remote:   outcome.remote,
+			Remote:   outcome.remote.String(),
 			Branch:   outcome.branch,
 		}
 	case err != nil:
@@ -146,15 +146,15 @@ func classifyPushOutcome(outcome syncPushOutcome, err error) pushOutcomeRecord {
 		return pushOutcomeRecord{
 			Decision: decision,
 			Reason:   reason,
-			Remote:   outcome.remote,
+			Remote:   outcome.remote.String(),
 			Branch:   outcome.branch,
 		}
 	case outcome.skip != syncTargetReady:
-		return pushOutcomeRecord{Decision: string(outcome.skip), Remote: outcome.remote}
+		return pushOutcomeRecord{Decision: string(outcome.skip), Remote: outcome.remote.String()}
 	default:
 		return pushOutcomeRecord{
 			Decision: pushDecisionPushed,
-			Remote:   outcome.remote,
+			Remote:   outcome.remote.String(),
 			Branch:   outcome.branch,
 		}
 	}

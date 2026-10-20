@@ -104,12 +104,8 @@ func wrapFollowErr(remote storage.RemoteName, branch string, err error) error {
 
 // SyncFollowReRoot is followRemoteReRoot for a caller that fetched and
 // settles nothing. See the storage.Syncer contract.
-func (s *Store) SyncFollowReRoot(ctx context.Context, remote, branch string, entry storage.SyncEntry) error {
-	parsed, err := storage.ParseRemoteName(remote)
-	if err != nil {
-		return err
-	}
-	_, err = s.followRemoteReRoot(ctx, parsed, branch, entry)
+func (s *Store) SyncFollowReRoot(ctx context.Context, remote storage.RemoteName, branch string, entry storage.SyncEntry) error {
+	_, err := s.followRemoteReRoot(ctx, remote, branch, entry)
 	return err
 }
 

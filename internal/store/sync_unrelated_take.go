@@ -100,11 +100,7 @@ func (e OwnerApprovalRequiredError) Error() string {
 // destroyed. [LAW:no-ambient-temporal-coupling]
 // [LAW:single-enforcer] the gate lives on the destructive operation itself, not on
 // any of its surfaces.
-func (s *Store) SyncResolveUnrelated(ctx context.Context, remote string, branch string, choice storage.UnrelatedResolution, ownerApproval string) (storage.SyncReconcileResult, error) {
-	trimmedRemote, err := storage.ParseRemoteName(remote)
-	if err != nil {
-		return storage.SyncReconcileResult{}, err
-	}
+func (s *Store) SyncResolveUnrelated(ctx context.Context, remote storage.RemoteName, branch string, choice storage.UnrelatedResolution, ownerApproval string) (storage.SyncReconcileResult, error) {
 	trimmedBranch, err := requireSyncArg("branch", branch)
 	if err != nil {
 		return storage.SyncReconcileResult{}, err
@@ -116,13 +112,13 @@ func (s *Store) SyncResolveUnrelated(ctx context.Context, remote string, branch 
 	}
 	// A re-root this branch can follow is not an unrelated history, so it is
 	// followed before the take can discard either side of it.
-	if _, err := s.followRemoteReRoot(ctx, trimmedRemote, trimmedBranch, storage.SyncEntryReconcile); err != nil {
+	if _, err := s.followRemoteReRoot(ctx, remote, trimmedBranch, storage.SyncEntryReconcile); err != nil {
 		return storage.SyncReconcileResult{}, err
 	}
 
 	var result storage.SyncReconcileResult
 	err = s.withCommitLock(ctx, func(ctx context.Context) error {
-		plan, err := s.captureReconcilePlan(ctx, trimmedRemote, trimmedBranch)
+		plan, err := s.captureReconcilePlan(ctx, remote, trimmedBranch)
 		if err != nil {
 			return err
 		}
@@ -139,7 +135,7 @@ func (s *Store) SyncResolveUnrelated(ctx context.Context, remote string, branch 
 			// A divergence WITH a base is mergeable; taking one side wholesale here would
 			// silently drop the other side's non-conflicting work that the field-aware
 			// reconcile would have kept. Refuse and route to the merge. [LAW:no-silent-failure]
-			return fmt.Errorf("sync reconcile take applies only to unrelated histories, but the local backlog has a base to merge %s/%s against (%s); run `lit sync reconcile` to field-merge it", trimmedRemote, trimmedBranch, plan.base.Source)
+			return fmt.Errorf("sync reconcile take applies only to unrelated histories, but the local backlog has a base to merge %s/%s against (%s); run `lit sync reconcile` to field-merge it", remote, trimmedBranch, plan.base.Source)
 		}
 
 		// Read the both-sides inventory off the two anchors while under the lock — pure
@@ -167,7 +163,7 @@ func (s *Store) SyncResolveUnrelated(ctx context.Context, remote string, branch 
 			}
 		}
 
-		return s.applyUnrelatedTake(ctx, &result, plan, trimmedRemote, trimmedBranch, choice)
+		return s.applyUnrelatedTake(ctx, &result, plan, remote, trimmedBranch, choice)
 	})
 	if err != nil {
 		return storage.SyncReconcileResult{}, err

@@ -111,11 +111,11 @@ func TestSyncReconcileHealsSchemaSkew(t *testing.T) {
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	defer syncB.Close()
-	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
 
-	fresh, err := syncB.SyncFreshness(ctx, "origin", "master")
+	fresh, err := syncB.SyncFreshness(ctx, remoteName(t, "origin"), "master")
 	if err != nil {
 		t.Fatalf("SyncFreshness(B): %v", err)
 	}
@@ -124,7 +124,7 @@ func TestSyncReconcileHealsSchemaSkew(t *testing.T) {
 	}
 
 	// The reconcile heals the divergence with no manual steps.
-	res, err := syncB.SyncReconcile(ctx, "origin", "master")
+	res, err := syncB.SyncReconcile(ctx, remoteName(t, "origin"), "master")
 	if err != nil {
 		t.Fatalf("SyncReconcile across schema skew: %v", err)
 	}
@@ -208,7 +208,7 @@ func TestSyncPullHealsSchemaSkewDivergence(t *testing.T) {
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	defer syncB.Close()
 
-	res, err := syncB.SyncPull(ctx, "origin", "master")
+	res, err := syncB.SyncPull(ctx, remoteName(t, "origin"), "master")
 	if err != nil {
 		// A native DOLT_PULL would fail here with the autocommit error; the
 		// reconcile-backed pull must not.
@@ -261,7 +261,7 @@ func TestSyncPullStateTransitions(t *testing.T) {
 		adoptRemote(t, ctx, rootB, remoteURL) // B == remote head
 		syncB := openSyncOrFatal(t, ctx, rootB)
 		defer syncB.Close()
-		res, err := syncB.SyncPull(ctx, "origin", "master")
+		res, err := syncB.SyncPull(ctx, remoteName(t, "origin"), "master")
 		if err != nil {
 			t.Fatalf("SyncPull: %v", err)
 		}
@@ -281,7 +281,7 @@ func TestSyncPullStateTransitions(t *testing.T) {
 		updateAndPush(t, ctx, rootA, id, storage.UpdateIssueInput{Lane: strptr("ahead")})
 		syncB := openSyncOrFatal(t, ctx, rootB)
 		defer syncB.Close()
-		res, err := syncB.SyncPull(ctx, "origin", "master")
+		res, err := syncB.SyncPull(ctx, remoteName(t, "origin"), "master")
 		if err != nil {
 			t.Fatalf("SyncPull: %v", err)
 		}
@@ -303,7 +303,7 @@ func TestSyncPullStateTransitions(t *testing.T) {
 		updateLocal(t, ctx, rootB, id, storage.UpdateIssueInput{Lane: strptr("local")})
 		syncB := openSyncOrFatal(t, ctx, rootB)
 		defer syncB.Close()
-		res, err := syncB.SyncPull(ctx, "origin", "master")
+		res, err := syncB.SyncPull(ctx, remoteName(t, "origin"), "master")
 		if err != nil {
 			t.Fatalf("SyncPull: %v", err)
 		}
@@ -321,7 +321,7 @@ func TestSyncPullStateTransitions(t *testing.T) {
 		syncB := openSyncOrFatal(t, ctx, rootB)
 		defer syncB.Close()
 		// The remote has refs (master) but never this branch.
-		res, err := syncB.SyncPull(ctx, "origin", "no-such-branch")
+		res, err := syncB.SyncPull(ctx, remoteName(t, "origin"), "no-such-branch")
 		if err != nil {
 			t.Fatalf("SyncPull: %v", err)
 		}
@@ -408,10 +408,10 @@ func seedOldSchemaRemote(t *testing.T, ctx context.Context, root, remoteURL stri
 		t.Fatalf("Close(seed): %v", err)
 	}
 	sync := openSyncOrFatal(t, ctx, root)
-	if err := sync.SyncAddRemote(ctx, "origin", remoteURL); err != nil {
+	if err := sync.SyncAddRemote(ctx, remoteName(t, "origin"), remoteURL); err != nil {
 		t.Fatalf("SyncAddRemote(seed): %v", err)
 	}
-	if _, err := sync.SyncPush(ctx, "origin", "master", true, false); err != nil {
+	if _, err := sync.SyncPush(ctx, remoteName(t, "origin"), "master", true, false); err != nil {
 		t.Fatalf("SyncPush(seed): %v", err)
 	}
 	if err := sync.Close(); err != nil {
@@ -438,7 +438,7 @@ func advanceOldSchemaRemote(t *testing.T, ctx context.Context, root, id string, 
 		t.Fatalf("Close(advance): %v", err)
 	}
 	sync := openSyncOrFatal(t, ctx, root)
-	if _, err := sync.SyncPush(ctx, "origin", "master", false, false); err != nil {
+	if _, err := sync.SyncPush(ctx, remoteName(t, "origin"), "master", false, false); err != nil {
 		t.Fatalf("SyncPush(advance): %v", err)
 	}
 	if err := sync.Close(); err != nil {

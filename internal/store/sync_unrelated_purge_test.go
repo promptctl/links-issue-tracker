@@ -26,11 +26,11 @@ func TestSyncResolveUnrelatedTakeLocalKeepsTheRemotesPurge(t *testing.T) {
 	purgeAndPush(t, ctx, rootA, sharedID)
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
-	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
 	token := ownerApprovedTakeToken(t, ctx, syncB, "origin", "master", storage.TakeLocal)
-	res, err := syncB.SyncResolveUnrelated(ctx, "origin", "master", storage.TakeLocal, token)
+	res, err := syncB.SyncResolveUnrelated(ctx, remoteName(t, "origin"), "master", storage.TakeLocal, token)
 	if err != nil {
 		t.Fatalf("SyncResolveUnrelated(TakeLocal): %v", err)
 	}
@@ -41,7 +41,7 @@ func TestSyncResolveUnrelatedTakeLocalKeepsTheRemotesPurge(t *testing.T) {
 	assertLocalIssueIDs(t, ctx, syncB, []string{localEpicID, localIssueID})
 	assertPurged(t, ctx, syncB, sharedID)
 
-	if _, err := syncB.SyncPush(ctx, "origin", "master", false, false); err != nil {
+	if _, err := syncB.SyncPush(ctx, remoteName(t, "origin"), "master", false, false); err != nil {
 		t.Fatalf("SyncPush(B) after take-local: %v", err)
 	}
 	if err := syncB.Close(); err != nil {
@@ -49,7 +49,7 @@ func TestSyncResolveUnrelatedTakeLocalKeepsTheRemotesPurge(t *testing.T) {
 	}
 	syncA := openSyncOrFatal(t, ctx, rootA)
 	defer func() { _ = syncA.Close() }()
-	if _, err := syncA.SyncReceive(ctx, "origin", "master"); err != nil {
+	if _, err := syncA.SyncReceive(ctx, remoteName(t, "origin"), "master"); err != nil {
 		t.Fatalf("SyncReceive(A): %v", err)
 	}
 	assertLocalIssueIDs(t, ctx, syncA, []string{localEpicID, localIssueID})
@@ -73,11 +73,11 @@ func TestSyncResolveUnrelatedTakeRemoteCarriesTheLocalPurge(t *testing.T) {
 	purgeIssue(t, ctx, rootB, sharedID)
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
-	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
 	token := ownerApprovedTakeToken(t, ctx, syncB, "origin", "master", storage.TakeRemote)
-	res, err := syncB.SyncResolveUnrelated(ctx, "origin", "master", storage.TakeRemote, token)
+	res, err := syncB.SyncResolveUnrelated(ctx, remoteName(t, "origin"), "master", storage.TakeRemote, token)
 	if err != nil {
 		t.Fatalf("SyncResolveUnrelated(TakeRemote): %v", err)
 	}
@@ -89,7 +89,7 @@ func TestSyncResolveUnrelatedTakeRemoteCarriesTheLocalPurge(t *testing.T) {
 	assertLocalIssueIDs(t, ctx, syncB, nil)
 	assertPurged(t, ctx, syncB, sharedID)
 	assertWorkingSetClean(t, ctx, syncB)
-	fresh, err := syncB.SyncFreshness(ctx, "origin", "master")
+	fresh, err := syncB.SyncFreshness(ctx, remoteName(t, "origin"), "master")
 	if err != nil {
 		t.Fatalf("SyncFreshness(B): %v", err)
 	}
@@ -97,7 +97,7 @@ func TestSyncResolveUnrelatedTakeRemoteCarriesTheLocalPurge(t *testing.T) {
 		t.Fatalf("post-take-remote freshness = %q ahead=%d, want ahead by the one commit carrying the purge", fresh.State(), fresh.Ahead)
 	}
 
-	if _, err := syncB.SyncPush(ctx, "origin", "master", false, false); err != nil {
+	if _, err := syncB.SyncPush(ctx, remoteName(t, "origin"), "master", false, false); err != nil {
 		t.Fatalf("SyncPush(B) after take-remote: %v", err)
 	}
 	if err := syncB.Close(); err != nil {
@@ -105,7 +105,7 @@ func TestSyncResolveUnrelatedTakeRemoteCarriesTheLocalPurge(t *testing.T) {
 	}
 	syncA := openSyncOrFatal(t, ctx, rootA)
 	defer func() { _ = syncA.Close() }()
-	if _, err := syncA.SyncReceive(ctx, "origin", "master"); err != nil {
+	if _, err := syncA.SyncReceive(ctx, remoteName(t, "origin"), "master"); err != nil {
 		t.Fatalf("SyncReceive(A): %v", err)
 	}
 	assertLocalIssueIDs(t, ctx, syncA, nil)
@@ -151,7 +151,7 @@ func purgeAndPush(t *testing.T, ctx context.Context, root, id string) {
 	purgeIssue(t, ctx, root, id)
 	sync := openSyncOrFatal(t, ctx, root)
 	defer func() { _ = sync.Close() }()
-	if _, err := sync.SyncPush(ctx, "origin", "master", false, false); err != nil {
+	if _, err := sync.SyncPush(ctx, remoteName(t, "origin"), "master", false, false); err != nil {
 		t.Fatalf("SyncPush(after purge): %v", err)
 	}
 }
@@ -207,11 +207,11 @@ func TestSyncResolveUnrelatedTakeRemoteAdoptsAPrePurgeRemote(t *testing.T) {
 			}
 
 			syncB := openSyncOrFatal(t, ctx, rootB)
-			if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
+			if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
 				t.Fatalf("SyncFetch(B): %v", err)
 			}
 			token := ownerApprovedTakeToken(t, ctx, syncB, "origin", "master", storage.TakeRemote)
-			res, err := syncB.SyncResolveUnrelated(ctx, "origin", "master", storage.TakeRemote, token)
+			res, err := syncB.SyncResolveUnrelated(ctx, remoteName(t, "origin"), "master", storage.TakeRemote, token)
 			if err != nil {
 				t.Fatalf("SyncResolveUnrelated(TakeRemote) onto a pre-purge remote: %v", err)
 			}
@@ -222,7 +222,7 @@ func TestSyncResolveUnrelatedTakeRemoteAdoptsAPrePurgeRemote(t *testing.T) {
 				t.Errorf("CarriedPurges = %d, want %d", res.CarriedPurges, want)
 			}
 			assertScratchBranchCleanedUp(t, ctx, syncB)
-			fresh, err := syncB.SyncFreshness(ctx, "origin", "master")
+			fresh, err := syncB.SyncFreshness(ctx, remoteName(t, "origin"), "master")
 			if err != nil {
 				t.Fatalf("SyncFreshness(B): %v", err)
 			}
@@ -231,7 +231,7 @@ func TestSyncResolveUnrelatedTakeRemoteAdoptsAPrePurgeRemote(t *testing.T) {
 				t.Fatalf("freshness = %q ahead=%d, want %q: the take writes only when it carries a purge", fresh.State(), fresh.Ahead, wantState)
 			}
 			if tc.purge {
-				if _, err := syncB.SyncPush(ctx, "origin", "master", false, false); err != nil {
+				if _, err := syncB.SyncPush(ctx, remoteName(t, "origin"), "master", false, false); err != nil {
 					t.Fatalf("SyncPush(B): %v", err)
 				}
 			}
@@ -268,10 +268,10 @@ func seedPrePurgeRemote(t *testing.T, ctx context.Context, root, remoteURL strin
 	}
 	sync := openSyncOrFatal(t, ctx, root)
 	defer func() { _ = sync.Close() }()
-	if err := sync.SyncAddRemote(ctx, "origin", remoteURL); err != nil {
+	if err := sync.SyncAddRemote(ctx, remoteName(t, "origin"), remoteURL); err != nil {
 		t.Fatalf("SyncAddRemote(seed): %v", err)
 	}
-	if _, err := sync.SyncPush(ctx, "origin", "master", true, false); err != nil {
+	if _, err := sync.SyncPush(ctx, remoteName(t, "origin"), "master", true, false); err != nil {
 		t.Fatalf("SyncPush(seed): %v", err)
 	}
 	return epic.ID
