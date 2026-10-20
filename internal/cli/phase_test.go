@@ -113,11 +113,11 @@ func TestAgentGuidanceNamesEveryPhaseMove(t *testing.T) {
 		}
 		texts[name] = string(raw)
 	}
-	skill, err := os.ReadFile(filepath.Join(mustRepoRoot(t), "claude-plugin", "skills", "next", "SKILL.md"))
+	skill, err := os.ReadFile(filepath.Join(mustRepoRoot(t), filepath.FromSlash(nextSkillPath)))
 	if err != nil {
-		t.Fatalf("ReadFile(SKILL.md) error = %v", err)
+		t.Fatalf("ReadFile(%s) error = %v", nextSkillPath, err)
 	}
-	texts["claude-plugin/skills/next/SKILL.md"] = string(skill)
+	texts[nextSkillPath] = string(skill)
 
 	phases := model.Phases()
 	for name, text := range texts {
