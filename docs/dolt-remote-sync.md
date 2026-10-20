@@ -202,7 +202,15 @@ command. A receive that ends in a divergence it cannot settle leaves its
 sync-failure block for the next command to finish on the checkout, which prints
 it to stderr once, under a line saying how long ago the receive reached it. A
 later receive that settles, or a `lit sync pull` or `lit sync reconcile` that
-converges the divergence, retires a block no command has printed yet.
+converges the divergence, retires a block no command has printed yet. A receive
+that fetched and then could not land the fetch, open the store, or settle onto
+the fetched head records where it stopped; one such stop is left to the next
+receive, since its 15-second limit covers the fetch and the store waits alike.
+When those stops have kept coming for 10 minutes with no settle in between, the
+receive leaves a block saying the checkout is not receiving the shared backlog
+and naming `lit sync pull`, which runs the same steps in the foreground and
+reports the error. A fetch that worked keeps the 24-hour staleness line quiet
+either way.
 Set `LIT_DISABLE_AUTO_SYNC=1` to disable all automatic sync (mirror and receive)
 for a process — useful for CI and sandboxes.
 
@@ -394,7 +402,9 @@ The in-band surfaces above talk to whoever runs the next command — usually an
 agent. The party who can actually *lose work* when sync degrades is the OWNER,
 so lit also carries the event out of the terminal: when it detects a real
 divergence (no common ancestor, a reconcile it could not converge, a held
-prose conflict, an id naming two different tickets) or a push attempt fails,
+prose conflict, an id naming two different tickets), when the automatic receive
+has kept failing to bring fetched history into the checkout for 10 minutes, or
+when a push attempt fails,
 it runs a shell command you configure — e.g. a push to an
 [ntfy](https://ntfy.sh) topic — at detection time:
 
@@ -408,7 +418,7 @@ event's facts in the environment:
 
 | variable             | value                                                            |
 | -------------------- | ---------------------------------------------------------------- |
-| `LIT_NOTIFY_KIND`    | `unrelated_histories`, `prose_held`, `diverged_unresolved`, `id_collision`, or `push_failed` |
+| `LIT_NOTIFY_KIND`    | `unrelated_histories`, `prose_held`, `diverged_unresolved`, `id_collision`, `receive_unsettled`, or `push_failed` |
 | `LIT_NOTIFY_SUMMARY` | the one-sentence domain description of what degraded             |
 | `LIT_NOTIFY_REMOTE`  | the sync remote concerned (may be empty for an unresolved push)  |
 | `LIT_NOTIFY_BRANCH`  | the sync branch concerned                                        |
@@ -417,7 +427,8 @@ event's facts in the environment:
 Notifications are de-duplicated **per episode**: the first detection of a
 condition fires immediately, re-detections of the same ongoing condition are
 suppressed (re-pinging at most daily while it persists), and the episode ends
-when the condition resolves — a landed push, a converged reconcile — so the
+when the condition resolves — a landed push, a converged reconcile, a settle
+after an unsettled run — so the
 *next* occurrence notifies immediately again. A failed hook is loud on stderr,
 recorded in the sync traces, and retried on the next detection. Empty (the
 default) configures no channel and runs nothing; `LIT_DISABLE_AUTO_SYNC=1`
