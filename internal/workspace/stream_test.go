@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -495,7 +496,9 @@ func TestDamagedTokenErrorNamesItsRemedy(t *testing.T) {
 		t.Fatal("a damaged token must fail loudly")
 	}
 	message := err.Error()
-	for _, want := range []string{tokenPath, "delete"} {
+	// The message quotes the path with %q, which doubles each backslash in a
+	// Windows path, so the raw path is not a substring of it there.
+	for _, want := range []string{fmt.Sprintf("%q", tokenPath), "delete"} {
 		if !strings.Contains(message, want) {
 			t.Fatalf("error must tell the operator how to recover; %q missing from: %s", want, message)
 		}

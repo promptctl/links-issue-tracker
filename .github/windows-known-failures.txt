@@ -7,10 +7,7 @@
 # <ticket> <package> <top-level test, or * for a package whose tests do not
 # compile on Windows>
 
-links-windows-qr8l.mq4 internal/workspace TestDamagedTokenErrorNamesItsRemedy
-links-windows-qr8l.mq4 internal/workspace TestGitOutputCancellationKillsSubprocess
-links-windows-qr8l.mq4 internal/workspace TestResolveRefusesEveryNameItCannotDeriveAPrefixFrom
-links-windows-qr8l.mq4 internal/workspace TestWorktreePathWhoseTailLooksLikeAnAttributeStaysLive
+links-unfiled-fc79.709k internal/workspace TestGitOutputCancellationKillsSubprocess
 
 links-windows-qr8l.btw cmd/lit *
 links-windows-qr8l.btw internal/atomicfile TestAFailedWriteLeavesTheTargetAndNoTempFile
