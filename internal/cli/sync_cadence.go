@@ -112,7 +112,7 @@ func syncOnPolicy(ctx context.Context, accessMode app.AccessMode, ws workspace.I
 		return
 	}
 	mirrorOnPolicy(ctx, accessMode, ws, cfg)
-	if automaticReceiveScheduled(cfg) {
+	if cfg.Sync.Receive {
 		scheduleReceive(ctx, ws)
 	}
 }
@@ -148,25 +148,6 @@ func mirrorOnPolicy(ctx context.Context, accessMode app.AccessMode, ws workspace
 // effect reads the switch through here.
 func autoSyncDisabled() bool {
 	return isTruthyEnv(os.Getenv(DisableAutoSyncEnvVar))
-}
-
-// automaticReceiveScheduled reports whether an automatic receive runs on this
-// checkout: the kill switch is off and sync.receive is on. It schedules the
-// receive, and it decides whether a push the remote refused over a peer's
-// commits is merged without the owner. [LAW:one-source-of-truth]
-func automaticReceiveScheduled(cfg config.Config) bool {
-	return !autoSyncDisabled() && cfg.Sync.Receive
-}
-
-// receiveMergesIn is automaticReceiveScheduled over a config load's result.
-// An unreadable config schedules no receive (syncOnPolicy), so it reads
-// false, and says why on stderr. [LAW:no-silent-failure]
-func receiveMergesIn(cfg config.Config, loadErr error) bool {
-	if loadErr != nil {
-		fmt.Fprintf(os.Stderr, "lit: no automatic receive known to run here, config unreadable: %v\n", loadErr)
-		return false
-	}
-	return automaticReceiveScheduled(cfg)
 }
 
 // ensureMirrorCoverage upholds the on-change tail guarantee for the mutation

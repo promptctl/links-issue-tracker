@@ -3,12 +3,15 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
 // TestAReceiveThatMergesARefusedPushPushesTheMerge is links-storage-3k6u.bzg's
@@ -77,6 +80,23 @@ func TestAReceiveThatMergesARefusedPushPushesTheMerge(t *testing.T) {
 	mustLit(bravo, "update", ticket, "--title", "bravo-title")
 	if out, err := runLit(t, bravo, self, quiet, "sync", "push"); err == nil {
 		t.Fatalf("bravo's push over alpha's landed; want the remote to refuse it:\n%s", out)
+	}
+	// The refusal is classified by bravo's config, which runs the receive,
+	// not by the kill switch the push ran under.
+	bravoWS, err := workspace.Resolve(bravo)
+	if err != nil {
+		t.Fatalf("resolve bravo: %v", err)
+	}
+	marker, err := os.ReadFile(filepath.Join(bravoWS.StorageDir, "push-outcome.last"))
+	if err != nil {
+		t.Fatalf("read bravo's push-outcome marker: %v", err)
+	}
+	var refused struct {
+		Decision      string `json:"decision"`
+		ReceiveMerges bool   `json:"receive_merges"`
+	}
+	if err := json.Unmarshal(marker, &refused); err != nil || refused.Decision != "diverged" || !refused.ReceiveMerges {
+		t.Fatalf("bravo's push-outcome marker = %s (err %v); want diverged with receive_merges", marker, err)
 	}
 
 	if out, err := runLit(t, bravo, self, isolatedEnv(xdgConfigHome, "0"), "backlog"); err != nil {

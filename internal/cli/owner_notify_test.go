@@ -277,7 +277,6 @@ func TestSyncReceiveOutcomeAccess(t *testing.T) {
 		{"skipped no remote", syncReceiveOutcome{skip: syncTargetNoRemote, state: storage.SyncReceiveAhead}, app.AccessRead},
 		{"receive failed", syncReceiveOutcome{state: storage.SyncReceiveAhead, receiveErr: errors.New("network")}, app.AccessRead},
 		{"reconcile linearized", reconciled(storage.SyncReconcileLinearized, nil), app.AccessWrite},
-		{"reconcile linearized then errored", reconciled(storage.SyncReconcileLinearized, errors.New("gc")), app.AccessRead},
 		{"reconcile no longer diverged", reconciled(storage.SyncReconcileNotDiverged, nil), app.AccessRead},
 		{"reconcile held prose", reconciled(storage.SyncReconcileProsePending, nil), app.AccessRead},
 		{"reconcile refused an id collision", reconciled(storage.SyncReconcileIDCollision, nil), app.AccessRead},

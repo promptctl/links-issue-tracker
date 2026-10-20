@@ -46,8 +46,8 @@ func firstError(errs ...error) error {
 // the push because a peer pushed first (storage.ErrPushDiverged), the receive
 // merges the peer's commits and owes the merge a push (mirrorAfterReceive).
 // A receive that cannot merge surfaces its own sync-failure class to the
-// owner. With no automatic receive, nothing merges the refusal, so it is an
-// "error". The class is decided once here, from the error values and
+// owner. With no automatic receive in the workspace's config, nothing merges
+// the refusal, so it is an "error". The class is decided once here, from the error values and
 // receiveMerges, for every consumer: the marker, the owner page and the sync
 // trace.
 // [LAW:parse-dont-validate]
@@ -78,8 +78,8 @@ type pushOutcomeRecord struct {
 	// dev build, an unreadable build stamp, or a record written before the field
 	// existed: "no observer to compare", not an error.
 	ObservedBy string `json:"observed_by,omitempty"`
-	// ReceiveMerges is whether an automatic receive runs on this checkout to
-	// merge what a refused push was refused over — what made a refusal
+	// ReceiveMerges is whether the workspace's config runs the automatic
+	// receive that merges what a refused push was refused over — what made a refusal
 	// diverged rather than error. False when the attempt never reached the
 	// push.
 	ReceiveMerges bool `json:"receive_merges"`
@@ -171,7 +171,7 @@ func pushFailureDecision(pushErr error, receiveMerges bool) (decision, reason st
 	if receiveMerges {
 		return pushDecisionDiverged, pushErr.Error()
 	}
-	return pushDecisionError, pushErr.Error() + "; no automatic receive runs here to merge the peer's commits: run 'lit sync pull'"
+	return pushDecisionError, pushErr.Error() + "; no automatic receive runs here to merge the peer's commits: run 'lit sync pull', then 'lit sync push'"
 }
 
 // completePushAttempt is the one completion seam for how a push attempt ended

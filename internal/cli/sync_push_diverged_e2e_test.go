@@ -69,6 +69,12 @@ func TestAPushRefusedOverAPeersPushNotifiesOnlyWhenNothingMergesIt(t *testing.T)
 					if !os.IsNotExist(err) {
 						t.Fatalf("bravo's owner was notified: %q (err=%v)", payload, err)
 					}
+					// The receive merges alpha's commits and says it owes the
+					// merge a push; on-push cadence spawns no mirror here.
+					runCLIInDir(t, r.bravo, "sync", backgroundReceiveSubcommand, "--parent-pid", "0")
+					if owed := lastEvent(t).Facts["receive.push_owed"]; owed != true {
+						t.Fatalf("bravo's receive.push_owed = %v; want true: its merge is not on the remote", owed)
+					}
 					return
 				}
 				if err != nil || strings.Count(string(payload), "push_failed origin/master") != 1 {

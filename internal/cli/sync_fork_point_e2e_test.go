@@ -147,6 +147,9 @@ func TestAQuietForkReceivesOntoTheRemoteHead(t *testing.T) {
 	if bases, present := ev.Occurrences["reconcile.bases"]; !present || len(bases) != 0 {
 		t.Fatalf("reconcile.bases = %v; want none: bravo has nothing to replay", bases)
 	}
+	if owed, present := ev.Facts["receive.push_owed"]; !present || owed != false {
+		t.Fatalf("receive.push_owed = %v (present %t); want false: a fast-forward leaves nothing unpushed", owed, present)
+	}
 	alphaHead, _ := syncHeadAndBranch(t, r.alpha)
 	if bravoHead, _ := syncHeadAndBranch(t, r.bravo); bravoHead != alphaHead {
 		t.Fatalf("bravo's head after the receive = %s, want alpha's %s", bravoHead, alphaHead)

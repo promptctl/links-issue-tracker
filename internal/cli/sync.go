@@ -501,9 +501,9 @@ type syncPushOutcome struct {
 	// proven is the advertisement this push proved it left the remote showing
 	// (provePushedAdvertisement); zero when it proved none.
 	proven remoteAdvertisement
-	// receiveMerges is whether an automatic receive runs on this checkout
-	// (automaticReceiveScheduled) to merge the peer's commits a refused push
-	// was refused over; false when the attempt did not reach the push.
+	// receiveMerges is whether this workspace's config runs the automatic
+	// receive that merges the peer's commits a refused push was refused over;
+	// false when the attempt did not reach the push.
 	receiveMerges bool
 	traceErr      error
 	pushErr       error // the push failure; the trace is already recorded when set
@@ -735,14 +735,18 @@ func performSyncPush(ctx, completionCtx context.Context, session syncSession, ws
 	// classifyPushOutcome's, the one the push-outcome marker records, so the
 	// two never spell one attempt two ways. [LAW:one-source-of-truth]
 	outcome = syncPushOutcome{
-		remote:        remoteName,
-		branch:        syncBranch,
-		message:       result.Message,
-		maintenance:   result.Maintenance,
-		head:          result.Head,
-		afterPush:     result.AfterPush,
-		proven:        proven,
-		receiveMerges: receiveMergesIn(cfg, cfgErr),
+		remote:      remoteName,
+		branch:      syncBranch,
+		message:     result.Message,
+		maintenance: result.Maintenance,
+		head:        result.Head,
+		afterPush:   result.AfterPush,
+		proven:      proven,
+		// The workspace's config, not this process's kill switch: the marker
+		// this classifies is read by every later command, and their receives
+		// are what merge the refusal. An unreadable config schedules no
+		// receive (syncOnPolicy), and every command that reads it says so.
+		receiveMerges: cfgErr == nil && cfg.Sync.Receive,
 		traceErr:      traceRecordErr,
 		pushErr:       pushErr,
 	}
