@@ -281,5 +281,5 @@ func (s focusScope) pickClause() string {
 	if !s.active() {
 		return ""
 	}
-	return fmt.Sprintf(" (focused on %s: picked from its prerequisite path alone — %s)", s.describe(), focusEscape)
+	return fmt.Sprintf(" (focused on %s: picked from its prerequisite path alone — `lit next --all` to route over the whole queue)", s.describe())
 }

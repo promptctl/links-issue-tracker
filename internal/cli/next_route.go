@@ -1114,12 +1114,8 @@ var (
 // words, because those are rows the pool withheld.
 const (
 	outOfViewNote    = "on your path but outside this view — `lit show` it"
-	offFocusPathNote = "off the focus path this run answered over — " + focusEscape
+	offFocusPathNote = "off the focus path this run answered over — `lit next --all` to route over the whole queue"
 )
-
-// focusEscape is the way out of the focus scope for one run, said the same
-// wherever `lit next` names that scope. [LAW:one-source-of-truth]
-const focusEscape = "`lit next --all` to route over the whole queue"
 
 // maxNamedPerKind caps how many ids one clause names outright. NoWork's rows
 // are every row the pool walk went past — the whole filtered backlog, not the

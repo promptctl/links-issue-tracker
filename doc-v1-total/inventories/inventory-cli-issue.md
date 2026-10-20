@@ -1496,10 +1496,10 @@ Lane for the claim line is `model.LaneOf(entry.Issue, details[entry.ID].Parent)`
 | `ServedFromClaim` | `Row` | a ready ticket in a lane this checkout already holds — step 1 (`next_route.go`) |
 | `ResumedOwnWork` | `Row` | a ticket already in flight in a lane this checkout holds, handed back to its holder — also step 1 (`next_route.go`) |
 | `ServedFromEpicLane` | `Row`, `Lane model.LaneID` | a pick from a different lane of the same epic this checkout already holds a lane in — step 2. The epic is `Lane.Epic()`; there is no `Epic` field (`next_route.go`) |
-| `ServedFromNewLane` | `Row`, `Lane model.LaneID` | a ticket in a lane this checkout does **not** hold — produced by step 4 alone (`next_route.go`) |
+| `ServedFromNewLane` | `poolPick` (`Row`, `Lane model.LaneID`, `Scope focusScope`) | a ticket in a lane this checkout does **not** hold — produced by step 4 alone; `Scope` is the scope the pool was partitioned by (`next_route.go`) |
 | `ServedFromDependency` | `Row`, `Lane model.LaneID`, `Gates string` | step 1b's or 2b's on-path dependency; `Gates` is the id of the blocked row it unblocks, so the pick explains itself (`next_route.go`) |
-| `ServedPastExhaustion` | `Row`, `Lane model.LaneID`, `Exhaustion Exhausted` | the checkout's own epic(s) have open work, none of it reachable, and the global pool has a ready ticket outside them — step 3 (`next_route.go`) |
-| `ServedPastNarrowing` | `Row`, `Lane model.LaneID`, `Narrowing Narrowed` | steps 1–2b serve nothing the filter selects, the same steps over the whole queue would serve `Narrowing.Hidden`, and the global pool has a ready ticket the filter selects — step 3 (`next_route.go`) |
+| `ServedPastExhaustion` | `poolPick`, `Exhaustion Exhausted` | the checkout's own epic(s) have open work, none of it reachable, and the global pool has a ready ticket outside them — step 3 (`next_route.go`) |
+| `ServedPastNarrowing` | `poolPick`, `Narrowing Narrowed` | steps 1–2b serve nothing the filter selects, the same steps over the whole queue would serve `Narrowing.Hidden`, and the global pool has a ready ticket the filter selects — step 3 (`next_route.go`) |
 | `Exhausted` | `Epics []string`, `Progress claims.Progress`, `Blocked []blockerReach`, `Held []rowReach`, `OffPath []string`, `Narrowing *Narrowed` | the same, with nothing the filter selects ready in the global pool either — step 3; `Narrowing` is the pool's pick over the whole queue, if any, and `OffPath`, set only when there is none, is the rows outside the scope a focus label withheld from the pool (`next_route.go`) |
 | `Narrowed` | `Hidden annotation.AnnotatedIssue` | no step serves a row the filter selects, and the same steps over the whole queue serve `Hidden` — step 3, with nothing the filter selects ready in the global pool either, or step 4 (`next_route.go`) |
 | `NoWork` | `Unreachable []rowReach`, `OffPath []string` | the global pool produced nothing — step 4; `OffPath` is the rows a focus label kept out of the pool (`next_route.go`) |
@@ -1590,7 +1590,7 @@ Step 4 is reached directly by a checkout holding no lanes:
 4. **The global pool, focus-scoped.** `pool, offPath := scope.partition(rows)`
    (`next_route.go`, `ready_state.go`), then
    `pickFrom(pool, selected, func(model.LaneID) bool { return true }, serveWork)` →
-   **`ServedFromNewLane{Row, Lane: laneOf(row)}`**.
+   **`ServedFromNewLane{poolPick{Row, Lane: laneOf(row), Scope: scope}}`**.
    Else, the same pick over every row → **`Narrowed{Hidden: row}`**.
    Else → **`NoWork{Unreachable: passedOver(<pool rows asked selects>, reachFor), OffPath: withheldByScope(<offPath rows asked selects>)}`**
    (`next_route.go`), where `passedOver` stamps every walked pool row with
@@ -1682,12 +1682,12 @@ Both map to `ExitNoWork` = **6** (`exit.go`), with reasons
   otherwise `"<RowID> is already in progress in a lane you hold — continue where you left off"`.
 - `ServedFromEpicLane` → `startAdvice(o.Row, o.Lane)`
   + `" (a second lane of an epic you already hold a lane in)\n"`.
-- `ServedFromNewLane` → the same `startAdvice(...)` + `"\n"`.
+- `ServedFromNewLane` → `o.advice()` + `"\n"`.
 - `ServedFromDependency` → the same `startAdvice(...)` + `dependencyReason(o)` + `"\n"`:
   `" (gates %s, which is on your path)"` on `Gates` when `Blocker == Row.ID`,
   else `" (it is in epic %s, which gates %s on your path)"` on `Blocker`, `Gates`.
-- `ServedPastExhaustion` → `"<why()>\n"`, then the `stay()` routes followed by `"move on to the top ready ticket outside it: <startAdvice(o.Row, o.Lane)>"`, joined by `"\nor "`, then `"\n"`.
-- `ServedPastNarrowing` → `"<o.Narrowing.Error()>\nor take the top ready ticket the filter selects, outside the work you hold: <startAdvice(o.Row, o.Lane)>\n"`.
+- `ServedPastExhaustion` → `"<why()>\n"`, then the `stay()` routes followed by `"move on to the top ready ticket outside it: <o.advice()>"`, joined by `"\nor "`, then `"\n"`.
+- `ServedPastNarrowing` → `"<o.Narrowing.Error()>\nor take the top ready ticket the filter selects, outside the work you hold: <o.advice()>\n"`.
 - `Exhausted`, `Narrowed`, `NoWork` → returned as themselves; no ticket printed.
 - Any other outcome type → panic.
 
@@ -1699,6 +1699,10 @@ lead clause. `object, named := lane.Describe()`, `object = "it"` when not named:
 The lead clause says only what the standing proves — routing serves an
 in-progress row from a lane this checkout does not hold only when nobody holds
 that lane — and nothing about who left the row or when.
+
+`poolPick.advice()` (`next.go`) is `startAdvice(Row, Lane)` followed by
+`focusScope.pickClause()`: nothing for the whole queue, and under a `focus`
+label ``" (focused on <goals>: picked from its prerequisite path alone — `lit next --all` to route over the whole queue)"``, the goals joined by `", "`.
 
 `LaneID.Describe() (string, bool)` (`model.go`):
 - solo lane → `("", false)`
