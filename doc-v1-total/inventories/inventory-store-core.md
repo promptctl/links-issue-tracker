@@ -4552,8 +4552,8 @@ External caller: `internal/cli/init_sync.go`.
 
 1. `cleanRoot, err = validateDoltRootDir(doltRootDir)` (`adopt.go`).
 2. `if strings.TrimSpace(workspaceID) == ""` → `errors.New("workspace id is required")` (`adopt.go`).
-3. `remoteName`, `remoteURL`, `branch` each `strings.TrimSpace`d (`adopt.go`).
-4. If any of the three is empty → `fmt.Errorf("adopt by clone requires a remote name, url, and branch (got name=%q url=%q branch=%q)", remoteName, remoteURL, branch)` (`adopt.go`).
+3. The remote name is parsed by `storage.ParseRemoteName`, since `DOLT_CLONE --remote` checks no name; a refusal returns `"adopt by clone: %w"` (`adopt.go`). `remoteURL` and `branch` are each `strings.TrimSpace`d (`adopt.go`).
+4. If either is empty → `fmt.Errorf("adopt by clone requires a remote url and branch (got url=%q branch=%q)", remoteURL, branch)` (`adopt.go`).
 5. `os.MkdirAll(cleanRoot, 0o755)`; on error → `"create dolt root dir: %w"`. Reason given: the server root must exist before the sibling lock file can be taken and before the clone engine opens (`adopt.go`).
 6. `release, err := LockWorkspaceExclusive(ctx, cleanRoot)` — returns the error unchanged on failure; `defer` joins any release error into the named return `err` (`adopt.go`).
 7. `writeAdoptPendingMarker(cleanRoot, remoteName, branch, time.Now())` — **before the first destructive act**; on error returns immediately, nothing destructive has run (`adopt.go`).

@@ -239,7 +239,7 @@ func (s *Store) collectBelowTheCut(ctx context.Context, remote storage.RemoteNam
 	c.BytesBefore, beforeErr = storeBytes(s.doltRootDir)
 	var sweep refSweepOutcome
 	err := s.runSyncMutation(ctx, func(ctx context.Context) error {
-		forkPoints, err := s.recordForkPoints(ctx, remote)
+		forkPoints, err := s.recordForkPoints(ctx, ownerOf(remote))
 		s.forkPoints = append(s.forkPoints, forkPoints...)
 		if err != nil {
 			return err

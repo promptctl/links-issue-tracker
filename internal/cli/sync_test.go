@@ -2,14 +2,17 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/merge"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -515,5 +518,57 @@ func TestSyncPushTraceMetadataOmitsWhatDidNotHappen(t *testing.T) {
 	}
 	if _, present := failed["message"]; present {
 		t.Fatalf("metadata = %v, want no message key when the engine said nothing", failed)
+	}
+}
+
+// recordingSyncer is a Syncer whose remote list is held in memory and whose
+// remote verbs record the order they ran in. Any other method panics, so a
+// reconcile that reaches past the remotes fails the test.
+type recordingSyncer struct {
+	storage.Syncer
+	remotes []storage.SyncRemote
+	calls   []string
+}
+
+func (r *recordingSyncer) SyncListRemotes(context.Context) ([]storage.SyncRemote, error) {
+	return slices.Clone(r.remotes), nil
+}
+
+func (r *recordingSyncer) SyncAddRemote(_ context.Context, name, url string) error {
+	r.calls = append(r.calls, "add "+name)
+	r.remotes = append(r.remotes, storage.SyncRemote{Name: name, URL: url})
+	return nil
+}
+
+func (r *recordingSyncer) SyncSetRemoteURL(_ context.Context, name, url string) error {
+	r.calls = append(r.calls, "update "+name)
+	return nil
+}
+
+func (r *recordingSyncer) SyncRemoveRemote(_ context.Context, name string) error {
+	r.calls = append(r.calls, "remove "+name)
+	r.remotes = slices.DeleteFunc(r.remotes, func(remote storage.SyncRemote) bool { return remote.Name == name })
+	return nil
+}
+
+// TestTheReconcileRemovesBeforeItAdds: git renamed team/origin, a name an
+// older lit cloned under, to team. The reconcile removes team/origin before it
+// adds team, so the removal finds no team and takes team/origin's refs with it.
+func TestTheReconcileRemovesBeforeItAdds(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-q")
+	runGit(t, dir, "remote", "add", "team", "https://example.com/team.git")
+	runGit(t, dir, "remote", "add", "fork", "https://example.com/fork-new.git")
+	syncer := &recordingSyncer{remotes: []storage.SyncRemote{
+		{Name: "team/origin", URL: "git+https://example.com/team.git"},
+		{Name: "fork", URL: "git+https://example.com/fork-old.git"},
+	}}
+	ctx := telemetry.With(context.Background(), telemetry.Begin(telemetry.Event{}))
+	if _, err := syncDoltRemotesFromGit(ctx, syncSession{syncer: syncer}, workspace.Info{RootDir: dir}); err != nil {
+		t.Fatalf("syncDoltRemotesFromGit() error = %v", err)
+	}
+	if want := []string{"remove team/origin", "update fork", "add team"}; !slices.Equal(syncer.calls, want) {
+		t.Fatalf("reconcile ran %v, want %v", syncer.calls, want)
 	}
 }

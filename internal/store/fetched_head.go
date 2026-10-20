@@ -137,7 +137,7 @@ func LandFetchedHead(ctx context.Context, doltRootDir, cloneRootDir, remote, bra
 	if !found {
 		return LandedFetch{Record: FetchedHeadAbsent, ForkPoint: FetchedHeadAbsent}, nil
 	}
-	forkPointRef := ref.NewBranchRef(forkPointBranch(trimmedRemote, trimmedBranch))
+	forkPointRef := ref.NewBranchRef(forkPointBranch(ownerOf(trimmedRemote), trimmedBranch))
 	forkPoint, forkPointFound, err := resolveRefHead(ctx, clone, forkPointRef)
 	if err != nil {
 		return LandedFetch{}, fmt.Errorf("read the clone's %s: %w", forkPointRef.String(), err)

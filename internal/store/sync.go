@@ -182,21 +182,41 @@ func (s *Store) SyncAddRemote(ctx context.Context, name string, url string) erro
 	})
 }
 
+// SyncRemoveRemote removes any remote Dolt holds, a name the parse refuses
+// included: DOLT_CLONE --remote once wrote such names unchecked, and the
+// reconcile must be able to remove them. The refs the removed name's fetches
+// wrote belong to its owner (refOwner), so they go with it only when that
+// owner names no other remote Dolt holds: for origin, origin's refs; for
+// team/origin alone, team's; for a/b beside a, none, as they are a's
+// branches b/*, kept until a's next pruning fetch like any of a's stale
+// branches. The drops go first and the remove last: a retried attempt reruns
+// the whole body, and dropping refs repeats safely where a second remove
+// fails. [LAW:no-ambient-temporal-coupling]
 func (s *Store) SyncRemoveRemote(ctx context.Context, name string) error {
-	trimmedName, err := storage.ParseRemoteName(name)
+	trimmedName, err := requireSyncArg("remote", name)
+	if err != nil {
+		return err
+	}
+	owner, err := ownerOfHeld(trimmedName)
 	if err != nil {
 		return err
 	}
 	return s.runSyncMutation(ctx, func(ctx context.Context) error {
-		// The remote's tracking refs go with it, so its fork points go too.
-		// They go first: a retried attempt reruns the whole body, and
-		// deleting fork points repeats safely where a second remove fails.
-		dropped, err := s.dropForkPoints(ctx, trimmedName, nil)
-		s.forkPoints = append(s.forkPoints, dropped...)
-		if err != nil {
-			return err
+		var ownerHeld int
+		if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM dolt_remotes WHERE name = ? AND name <> ?`, owner.String(), trimmedName).Scan(&ownerHeld); err != nil {
+			return fmt.Errorf("remove dolt remote %q: read whether %q remains: %w", trimmedName, owner, err)
 		}
-		if _, err := callIntProcedure(ctx, s.db, "DOLT_REMOTE", "remove", trimmedName.String()); err != nil {
+		if ownerHeld == 0 {
+			dropped, err := s.dropForkPoints(ctx, owner, nil)
+			s.forkPoints = append(s.forkPoints, dropped...)
+			if err != nil {
+				return err
+			}
+			if err := s.dropTrackingRefs(ctx, owner); err != nil {
+				return err
+			}
+		}
+		if _, err := callIntProcedure(ctx, s.db, "DOLT_REMOTE", "remove", trimmedName); err != nil {
 			return fmt.Errorf("remove dolt remote %q: %w", trimmedName, err)
 		}
 		return nil
@@ -249,7 +269,7 @@ func (s *Store) SyncFetch(ctx context.Context, remote string, prune bool) error 
 		// ahead of it, because the fetch moves every tracking ref of the remote
 		// however the remote's history moved (recordForkPoints). Every attempt
 		// records, so a retried attempt reports what it found as well.
-		forkPoints, err := s.recordForkPoints(ctx, trimmedRemote)
+		forkPoints, err := s.recordForkPoints(ctx, ownerOf(trimmedRemote))
 		s.forkPoints = append(s.forkPoints, forkPoints...)
 		if err != nil {
 			return err
@@ -264,7 +284,7 @@ func (s *Store) SyncFetch(ctx context.Context, remote string, prune bool) error 
 		if err != nil {
 			return fmt.Errorf("fetch remote %q: %w", trimmedRemote, err)
 		}
-		dropped, err := s.dropOrphanForkPoints(ctx, trimmedRemote)
+		dropped, err := s.dropOrphanForkPoints(ctx, ownerOf(trimmedRemote))
 		s.forkPoints = append(s.forkPoints, dropped...)
 		return err
 	})

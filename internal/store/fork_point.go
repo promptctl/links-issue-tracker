@@ -25,16 +25,47 @@ import (
 // and the fork point is the history they last shared (forkPointBase).
 const forkPointPrefix = "lit-fork-point/"
 
-// forkPointBranch is the branch holding the fork point of
-// remotes/<remote>/<branch>.
-func forkPointBranch(remote storage.RemoteName, branch string) string {
-	return forkPointPrefix + remote.String() + "/" + branch
+// refOwner is the remote a ref under remotes/<owner>/ or
+// lit-fork-point/<owner>/ belongs to: the path's first segment, which is how
+// Dolt reads a tracking ref's remote (ref.RemoteRef, and DOLT_REMOTE remove
+// and DOLT_BRANCH -D -r with it). It holds no "/", so every such ref has
+// exactly one owner. A remote lit syncs with is its own owner; a name Dolt
+// holds with a "/" in it, which DOLT_CLONE --remote once wrote, is owned by
+// its first segment. [LAW:types-are-the-program] [LAW:one-source-of-truth]
+type refOwner struct {
+	name string
 }
 
-// trackingRefPrefix is the prefix of every tracking ref Dolt keeps for
-// remote, remotes/<remote>/, as dolt_remote_branches names them.
-func trackingRefPrefix(remote storage.RemoteName) string {
-	return "remotes/" + remote.String() + "/"
+func (o refOwner) String() string {
+	return o.name
+}
+
+// ownerOf is a parsed remote's owner: the remote itself, since its name
+// holds no "/".
+func ownerOf(remote storage.RemoteName) refOwner {
+	return refOwner{name: remote.String()}
+}
+
+// ownerOfHeld is the owner of the refs a remote Dolt holds writes, whatever
+// its name: its first segment.
+func ownerOfHeld(name string) (refOwner, error) {
+	first, _, _ := strings.Cut(name, "/")
+	if first == "" {
+		return refOwner{}, fmt.Errorf("remote %q names no owner for its refs: its first segment is empty", name)
+	}
+	return refOwner{name: first}, nil
+}
+
+// forkPointBranch is the branch holding the fork point of
+// remotes/<owner>/<branch>.
+func forkPointBranch(owner refOwner, branch string) string {
+	return forkPointPrefix + owner.String() + "/" + branch
+}
+
+// trackingRefPrefix is the prefix of every tracking ref owner has,
+// remotes/<owner>/, as dolt_remote_branches names them.
+func trackingRefPrefix(owner refOwner) string {
+	return "remotes/" + owner.String() + "/"
 }
 
 // recordForkPoints runs before a fetch moves remotes/<remote>/*: each
@@ -45,7 +76,7 @@ func trackingRefPrefix(remote storage.RemoteName) string {
 // second fetch nor a crash before the reconcile can replace the head the
 // reconcile needs. [LAW:no-ambient-temporal-coupling] the record is written
 // before the move, never reconstructed after it.
-func (s *Store) recordForkPoints(ctx context.Context, remote storage.RemoteName) ([]storage.ForkPointRecord, error) {
+func (s *Store) recordForkPoints(ctx context.Context, remote refOwner) ([]storage.ForkPointRecord, error) {
 	local, err := activeBranch(ctx, s.db)
 	if err != nil {
 		return nil, err
@@ -100,7 +131,7 @@ func (s *Store) recordForkPoint(ctx context.Context, local, forkPoint, head stri
 // a fetch pruned, so no fork point keeps its commit's chunks through GC once
 // nothing can read it. A fork point lives exactly as long as its tracking ref.
 // [LAW:one-source-of-truth]
-func (s *Store) dropOrphanForkPoints(ctx context.Context, remote storage.RemoteName) ([]storage.ForkPointRecord, error) {
+func (s *Store) dropOrphanForkPoints(ctx context.Context, remote refOwner) ([]storage.ForkPointRecord, error) {
 	tracked, err := refHeadsUnder(ctx, s.db, `SELECT name, hash FROM dolt_remote_branches`, trackingRefPrefix(remote))
 	if err != nil {
 		return nil, err
@@ -111,7 +142,7 @@ func (s *Store) dropOrphanForkPoints(ctx context.Context, remote storage.RemoteN
 // dropForkPoints deletes every fork point of remote but those of the branches
 // in keep. Each deletion stands once made, so a retried run deletes only what
 // is left.
-func (s *Store) dropForkPoints(ctx context.Context, remote storage.RemoteName, keep map[string]string) ([]storage.ForkPointRecord, error) {
+func (s *Store) dropForkPoints(ctx context.Context, remote refOwner, keep map[string]string) ([]storage.ForkPointRecord, error) {
 	recorded, err := refHeadsUnder(ctx, s.db, `SELECT name, hash FROM dolt_branches`, forkPointBranch(remote, ""))
 	if err != nil {
 		return nil, err
@@ -127,6 +158,22 @@ func (s *Store) dropForkPoints(ctx context.Context, remote storage.RemoteName, k
 		dropped = append(dropped, storage.ForkPointRecord{Remote: remote.String(), Branch: branch, Head: recorded[branch], Outcome: storage.ForkPointDropped})
 	}
 	return dropped, nil
+}
+
+// dropTrackingRefs deletes every tracking ref owner has. Each deletion
+// stands once made, so a retried run deletes only what is left.
+func (s *Store) dropTrackingRefs(ctx context.Context, owner refOwner) error {
+	tracked, err := refHeadsUnder(ctx, s.db, `SELECT name, hash FROM dolt_remote_branches`, trackingRefPrefix(owner))
+	if err != nil {
+		return err
+	}
+	for _, branch := range slices.Sorted(maps.Keys(tracked)) {
+		path := owner.String() + "/" + branch
+		if err := execProcedureDiscard(ctx, s.db, "DOLT_BRANCH", "-D", "-r", path); err != nil {
+			return fmt.Errorf("drop tracking ref remotes/%s: %w", path, err)
+		}
+	}
+	return nil
 }
 
 // refHeadsUnder runs query, which selects (name, hash) rows, and maps every
@@ -169,7 +216,7 @@ func refHeadsUnder(ctx context.Context, db *sql.DB, query, prefix string) (map[s
 // checkout's tickets or edits fails, and stays the unrelated-histories
 // divergence it is today. [LAW:parse-dont-validate] the result's Source is the
 // evidence, and a refusal says why in its counts.
-func (s *Store) forkPointBase(ctx context.Context, remote storage.RemoteName, branch, localHead, remoteHead string) (storage.ReconcileBase, error) {
+func (s *Store) forkPointBase(ctx context.Context, remote refOwner, branch, localHead, remoteHead string) (storage.ReconcileBase, error) {
 	unrelated := storage.ReconcileBase{Source: storage.ReconcileBaseNone}
 	recorded, err := refHeadsUnder(ctx, s.db, `SELECT name, hash FROM dolt_branches`, forkPointBranch(remote, ""))
 	if err != nil {

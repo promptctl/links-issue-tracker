@@ -1035,8 +1035,9 @@ func printSyncPushOutcome(w io.Writer, o syncPushOutcome, verbose bool) error {
 
 // remoteSyncPlan is the one decision of how Dolt's remotes follow git's:
 // every git remote Dolt can hold is added or re-pointed, every Dolt remote git
-// does not name that way is removed, and a git remote Dolt cannot hold is
-// refused, never added, so one such name stops no sync with the others.
+// does not name that way is removed (one an older lit cloned under a name the
+// parse refuses included), and a git remote Dolt cannot hold is refused,
+// never added, so one such name stops no sync with the others.
 // syncDoltRemotesFromGit executes it and the reports count it.
 // [LAW:one-source-of-truth]
 type remoteSyncPlan struct {
@@ -1075,8 +1076,14 @@ func syncDoltRemotesFromGit(ctx context.Context, session syncSession, ws workspa
 	if err != nil {
 		return remoteSyncState{}, err
 	}
-	for _, remote := range state.plan.add {
-		if err := session.syncer.SyncAddRemote(ctx, remote.Name, remote.URL); err != nil {
+	// Removals run first. A removal takes its refs with it only while their
+	// owner names no other Dolt remote (store.SyncRemoveRemote), so a remote
+	// this pass adds must not exist yet when the removal asks: git renaming
+	// team/origin to team must leave team none of team/origin's refs. A pass
+	// that fails partway leaves the rest to the next reconcile, which plans
+	// again from what Dolt then holds. [LAW:no-ambient-temporal-coupling]
+	for _, name := range state.plan.remove {
+		if err := session.syncer.SyncRemoveRemote(ctx, name); err != nil {
 			return remoteSyncState{}, err
 		}
 	}
@@ -1085,8 +1092,8 @@ func syncDoltRemotesFromGit(ctx context.Context, session syncSession, ws workspa
 			return remoteSyncState{}, err
 		}
 	}
-	for _, name := range state.plan.remove {
-		if err := session.syncer.SyncRemoveRemote(ctx, name); err != nil {
+	for _, remote := range state.plan.add {
+		if err := session.syncer.SyncAddRemote(ctx, remote.Name, remote.URL); err != nil {
 			return remoteSyncState{}, err
 		}
 	}

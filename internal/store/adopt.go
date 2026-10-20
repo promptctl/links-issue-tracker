@@ -216,7 +216,7 @@ func LocalHasTickets(ctx context.Context, doltRootDir, workspaceID string) (bool
 // leftover from ever being opened as a store.
 // [LAW:types-are-the-program] "undefined partial state that looks valid" is
 // unrepresentable at this seam.
-func AdoptRemoteByClone(ctx context.Context, doltRootDir, workspaceID, remoteName, remoteURL, branch string) (err error) {
+func AdoptRemoteByClone(ctx context.Context, doltRootDir, workspaceID, rawRemoteName, remoteURL, branch string) (err error) {
 	cleanRoot, err := validateDoltRootDir(doltRootDir)
 	if err != nil {
 		return err
@@ -224,11 +224,17 @@ func AdoptRemoteByClone(ctx context.Context, doltRootDir, workspaceID, remoteNam
 	if strings.TrimSpace(workspaceID) == "" {
 		return errors.New("workspace id is required")
 	}
-	remoteName = strings.TrimSpace(remoteName)
+	// [LAW:single-enforcer] DOLT_CLONE --remote checks no name, so the parse
+	// that holds every other remote this store is given holds this one too.
+	remote, err := storage.ParseRemoteName(rawRemoteName)
+	if err != nil {
+		return fmt.Errorf("adopt by clone: %w", err)
+	}
+	remoteName := remote.String()
 	remoteURL = strings.TrimSpace(remoteURL)
 	branch = strings.TrimSpace(branch)
-	if remoteName == "" || remoteURL == "" || branch == "" {
-		return fmt.Errorf("adopt by clone requires a remote name, url, and branch (got name=%q url=%q branch=%q)", remoteName, remoteURL, branch)
+	if remoteURL == "" || branch == "" {
+		return fmt.Errorf("adopt by clone requires a remote url and branch (got url=%q branch=%q)", remoteURL, branch)
 	}
 
 	// The server root must exist before the workspace lock (whose file is a
@@ -279,7 +285,7 @@ func AdoptRemoteByClone(ctx context.Context, doltRootDir, workspaceID, remoteNam
 		return fmt.Errorf("set aside database before adopt: %w", err)
 	}
 
-	if cloneErr := cloneRemoteDatabase(ctx, cleanRoot, workspaceID, remoteName, remoteURL, branch); cloneErr != nil {
+	if cloneErr := cloneRemoteDatabase(ctx, cleanRoot, workspaceID, remote, remoteURL, branch); cloneErr != nil {
 		// dolt's own procedure cleans its clone target on most failures, but
 		// that is a fork-internal courtesy; lit owns its postcondition here: a
 		// RETURNED failure leaves no partial database and no marker, so the
@@ -331,15 +337,15 @@ func AdoptRemoteByClone(ctx context.Context, doltRootDir, workspaceID, remoteNam
 // DOLT_CLONE, which copies whole archive table files in bulk. The git-backed
 // remote defaults to the refs/dolt/data ref — the same ref lit's sync push
 // writes — so no explicit ref is needed.
-func cloneRemoteDatabase(ctx context.Context, serverRoot, workspaceID, remoteName, remoteURL, branch string) error {
+func cloneRemoteDatabase(ctx context.Context, serverRoot, workspaceID string, remote storage.RemoteName, remoteURL, branch string) error {
 	db, err := openDoltPool(serverRoot, workspaceID, "", engineWrite)
 	if err != nil {
 		return fmt.Errorf("open dolt for clone: %w", err)
 	}
 	defer db.Close()
 	if _, err := callIntProcedure(ctx, db, "DOLT_CLONE",
-		"--remote", remoteName, "--branch", branch, remoteURL, doltDatabaseName); err != nil {
-		return fmt.Errorf("clone remote %q (%s) branch %q: %w", remoteName, remoteURL, branch, err)
+		"--remote", remote.String(), "--branch", branch, remoteURL, doltDatabaseName); err != nil {
+		return fmt.Errorf("clone remote %q (%s) branch %q: %w", remote, remoteURL, branch, err)
 	}
 	return nil
 }

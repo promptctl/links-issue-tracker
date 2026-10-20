@@ -3,7 +3,9 @@ package store
 import (
 	"context"
 	"maps"
+	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -30,9 +32,9 @@ func TestRemoteNameCharactersAreDolts(t *testing.T) {
 	}
 }
 
-// TestParseRemoteNameAdmitsWhatDoltHolds: Dolt adds every name the parse
-// admits and refuses every name it refuses, so the parse is Dolt's own rule,
-// said where lit names the remote.
+// TestParseRemoteNameAdmitsWhatDoltHolds: DOLT_REMOTE add takes every name
+// the parse admits and refuses every name it refuses. DOLT_CLONE --remote
+// checks no name, which is why AdoptRemoteByClone parses too.
 func TestParseRemoteNameAdmitsWhatDoltHolds(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -48,8 +50,9 @@ func TestParseRemoteNameAdmitsWhatDoltHolds(t *testing.T) {
 	}
 }
 
-// TestTheStoreRefusesARemoteDoltCannotHold: every verb that names a remote
-// refuses a/b with the parse's reason, never Dolt's bare "remote name invalid".
+// TestTheStoreRefusesARemoteDoltCannotHold: every verb that hands a remote's
+// name to Dolt refuses a/b with the parse's reason, the clone that DOLT_CLONE
+// would take unchecked included.
 func TestTheStoreRefusesARemoteDoltCannotHold(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -57,10 +60,10 @@ func TestTheStoreRefusesARemoteDoltCannotHold(t *testing.T) {
 	defer func() { _ = st.Close() }()
 	url := "file://" + filepath.Join(t.TempDir(), "remote")
 	for verb, err := range map[string]error{
-		"SyncAddRemote":    st.SyncAddRemote(ctx, "a/b", url),
-		"SyncFetch":        st.SyncFetch(ctx, "a/b", false),
-		"SyncSetRemoteURL": st.SyncSetRemoteURL(ctx, "a/b", url),
-		"SyncRemoveRemote": st.SyncRemoveRemote(ctx, "a/b"),
+		"SyncAddRemote":      st.SyncAddRemote(ctx, "a/b", url),
+		"SyncFetch":          st.SyncFetch(ctx, "a/b", false),
+		"SyncSetRemoteURL":   st.SyncSetRemoteURL(ctx, "a/b", url),
+		"AdoptRemoteByClone": AdoptRemoteByClone(ctx, filepath.Join(t.TempDir(), "dolt"), "ws", "a/b", url, "master"),
 	} {
 		if err == nil || !strings.Contains(err.Error(), `remote "a/b" has "/" in its name`) {
 			t.Errorf("%s(a/b) error = %v, want the refusal naming a/b", verb, err)
@@ -128,4 +131,117 @@ func TestRemovingARemoteTakesOnlyItsOwnRefs(t *testing.T) {
 	if forkPoints := headsUnder(t, ctx, st, `dolt_branches`, forkPointPrefix+"c/"); !maps.Equal(forkPoints, cHeads) {
 		t.Errorf("c's fork points = %v, want %v", forkPoints, cHeads)
 	}
+}
+
+// cloneHeldRemote is a checkout an older lit adopted by clone from url under
+// the git remote name, which DOLT_CLONE --remote took unchecked, with the
+// fork point of each tracking ref the clone wrote at its head. It returns the
+// store and those heads, keyed by tracking-ref path under remotes/.
+func cloneHeldRemote(t *testing.T, ctx context.Context, name, url string) (*Store, map[string]string) {
+	t.Helper()
+	root := filepath.Join(t.TempDir(), "dolt")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("create the clone's root: %v", err)
+	}
+	db, err := openDoltPool(root, "ws", "", engineWrite)
+	if err != nil {
+		t.Fatalf("open dolt for the clone: %v", err)
+	}
+	if _, err := callIntProcedure(ctx, db, "DOLT_CLONE", "--remote", name, "--branch", "master", url, doltDatabaseName); err != nil {
+		t.Fatalf("clone %s under remote %q: %v", url, name, err)
+	}
+	// Closed as cloneRemoteDatabase closes it: the embedded engine's close
+	// reports the canceled context of the clone it served.
+	_ = db.Close()
+	st := openSyncOrFatal(t, ctx, root)
+	t.Cleanup(func() { _ = st.Close() })
+	heads := headsUnder(t, ctx, st, `dolt_remote_branches`, "remotes/")
+	if len(heads) == 0 {
+		t.Fatalf("the clone under %q wrote no tracking ref", name)
+	}
+	for path, head := range heads {
+		if err := execProcedureDiscard(ctx, st.db, "DOLT_BRANCH", "-f", forkPointPrefix+path, head); err != nil {
+			t.Fatalf("record the fork point of %s: %v", path, err)
+		}
+	}
+	return st, heads
+}
+
+// TestRemovingACloneHeldSlashNamedRemoteTakesItsRefs: a checkout an older lit
+// adopted from team/origin holds that name. Its refs sit under team, and no
+// remote named team remains, so every ref under remotes/team/ and
+// lit-fork-point/team/ goes with it. A remote team added after, as git renaming
+// team/origin to team asks, holds exactly its own server's branches.
+func TestRemovingACloneHeldSlashNamedRemoteTakesItsRefs(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	url := seededRemoteURL(t, ctx)
+	st, heads := cloneHeldRemote(t, ctx, "team/origin", url)
+
+	if err := st.SyncRemoveRemote(ctx, "team/origin"); err != nil {
+		t.Fatalf("SyncRemoveRemote(team/origin): %v", err)
+	}
+	if left := headsUnder(t, ctx, st, `dolt_remote_branches`, "remotes/team/"); len(left) != 0 {
+		t.Errorf("tracking refs under remotes/team/ = %v, want none", left)
+	}
+	if left := headsUnder(t, ctx, st, `dolt_branches`, forkPointPrefix+"team/"); len(left) != 0 {
+		t.Errorf("fork points under lit-fork-point/team/ = %v, want none", left)
+	}
+	want := []storage.ForkPointRecord{{Remote: "team", Branch: "origin/master", Head: heads["team/origin/master"], Outcome: storage.ForkPointDropped}}
+	if records := st.ForkPointRecords(); !slices.Equal(records, want) {
+		t.Errorf("ForkPointRecords() = %+v, want %+v", records, want)
+	}
+
+	if err := st.SyncAddRemote(ctx, "team", url); err != nil {
+		t.Fatalf("SyncAddRemote(team): %v", err)
+	}
+	if err := st.SyncFetch(ctx, "team", false); err != nil {
+		t.Fatalf("SyncFetch(team): %v", err)
+	}
+	if tracked := headsUnder(t, ctx, st, `dolt_remote_branches`, "remotes/team/"); len(tracked) != 1 || tracked["master"] != heads["team/origin/master"] {
+		t.Errorf("tracking refs under remotes/team/ after team's fetch = %v, want only master at %s", tracked, heads["team/origin/master"])
+	}
+}
+
+// TestRemovingACloneHeldSlashNamedRemoteLeavesItsOwnersRefs: a/b's refs are
+// a's refs for branches b/*, so removing a clone-held a/b beside a drops none
+// of them, and a's pruning fetch then leaves exactly a's own branches and
+// their fork points.
+func TestRemovingACloneHeldSlashNamedRemoteLeavesItsOwnersRefs(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	url := seededRemoteURL(t, ctx)
+	st, _ := cloneHeldRemote(t, ctx, "a/b", url)
+	aHeads := fetchedRemote(t, ctx, st, "a", url)
+	if _, ok := aHeads["b/master"]; !ok {
+		t.Fatalf("a's tracking refs = %v, want a/b's b/master among them, as Dolt reads it", aHeads)
+	}
+
+	if err := st.SyncRemoveRemote(ctx, "a/b"); err != nil {
+		t.Fatalf("SyncRemoveRemote(a/b): %v", err)
+	}
+	if tracked := headsUnder(t, ctx, st, `dolt_remote_branches`, "remotes/a/"); !maps.Equal(tracked, aHeads) {
+		t.Errorf("tracking refs under remotes/a/ after removing a/b = %v, want a's %v", tracked, aHeads)
+	}
+	if forkPoints := headsUnder(t, ctx, st, `dolt_branches`, forkPointPrefix+"a/"); !maps.Equal(forkPoints, aHeads) {
+		t.Errorf("fork points under lit-fork-point/a/ after removing a/b = %v, want a's %v", forkPoints, aHeads)
+	}
+
+	if err := st.SyncFetch(ctx, "a", true); err != nil {
+		t.Fatalf("SyncFetch(a, prune): %v", err)
+	}
+	own := map[string]string{"master": aHeads["master"]}
+	if tracked := headsUnder(t, ctx, st, `dolt_remote_branches`, "remotes/a/"); !maps.Equal(tracked, own) {
+		t.Errorf("tracking refs under remotes/a/ after the prune = %v, want a's own %v", tracked, own)
+	}
+	if forkPoints := headsUnder(t, ctx, st, `dolt_branches`, forkPointPrefix+"a/"); !maps.Equal(forkPoints, own) {
+		t.Errorf("fork points under lit-fork-point/a/ after the prune = %v, want a's own %v", forkPoints, own)
+	}
+}
+
+func seededRemoteURL(t *testing.T, ctx context.Context) string {
+	t.Helper()
+	url := "file://" + filepath.Join(t.TempDir(), "remote")
+	seedReconcileRemote(t, ctx, migratedDoltDir(t), url)
+	return url
 }

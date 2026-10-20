@@ -376,7 +376,7 @@ func (s *Store) reconcileBase(ctx context.Context, remote storage.RemoteName, br
 	if commit, shared := merged.shared(); shared {
 		return storage.ReconcileBase{Source: storage.ReconcileBaseMergeBase, Commit: commit}, nil
 	}
-	return s.forkPointBase(ctx, remote, branch, localHead, remoteHead)
+	return s.forkPointBase(ctx, ownerOf(remote), branch, localHead, remoteHead)
 }
 
 // followThenReconcile is the public reconcile verbs' path: follow a re-root
