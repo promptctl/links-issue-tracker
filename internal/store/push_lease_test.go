@@ -45,9 +45,9 @@ func TestLeasedPushLandsOnlyOverTheHeadItNames(t *testing.T) {
 
 	st := openSyncOrFatal(t, ctx, alpha)
 	defer func() { _ = st.Close() }()
-	push := func(expected string) storage.LeasedPush {
+	push := func(expected string) leasedPush {
 		t.Helper()
-		var pushed storage.LeasedPush
+		var pushed leasedPush
 		err := st.runSyncMutation(ctx, func(ctx context.Context) error {
 			var err error
 			pushed, err = st.pushLeasedWithinLock(ctx, "origin", "master", "master", expected)
@@ -71,7 +71,7 @@ func TestLeasedPushLandsOnlyOverTheHeadItNames(t *testing.T) {
 	}
 
 	stale := push(seen)
-	want := storage.LeasedPush{Remote: "origin", Branch: "master", Expected: seen, Pushed: rewritten.Head, Outcome: storage.LeaseStale}
+	want := leasedPush{Remote: "origin", Branch: "master", Expected: seen, Pushed: rewritten.Head, Outcome: storage.LeaseStale}
 	if stale != want {
 		t.Fatalf("lease on the head alpha last saw = %+v, want %+v", stale, want)
 	}
@@ -80,7 +80,7 @@ func TestLeasedPushLandsOnlyOverTheHeadItNames(t *testing.T) {
 	}
 
 	held := push(bravoHead)
-	want = storage.LeasedPush{Remote: "origin", Branch: "master", Expected: bravoHead, Pushed: rewritten.Head, Outcome: storage.LeaseHeld}
+	want = leasedPush{Remote: "origin", Branch: "master", Expected: bravoHead, Pushed: rewritten.Head, Outcome: storage.LeaseHeld}
 	if held != want {
 		t.Fatalf("lease on the remote's head = %+v, want %+v", held, want)
 	}

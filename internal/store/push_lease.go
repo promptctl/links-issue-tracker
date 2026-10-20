@@ -10,6 +10,20 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
+// leasedPush is one push that updated a remote branch only while that branch
+// still named the commit the pusher expected: git's --force-with-lease. It is
+// how a rewritten history is published without overwriting a push that landed
+// after the pusher last read the remote. Its Outcome is what the contract
+// carries (storage.HistoryBound.Lease); the rest is this engine's.
+type leasedPush struct {
+	Remote, Branch string
+	// Expected is the remote branch's head the lease named.
+	Expected string
+	// Pushed is the commit the push sent.
+	Pushed  string
+	Outcome storage.LeaseOutcome
+}
+
 // pushLeasedWithinLock pushes the local branch source to remote's branch,
 // landing only while that branch still names expected, and otherwise leaving
 // it where it is: DOLT_PUSH --force-with-lease. A stale lease is an outcome,
@@ -22,35 +36,35 @@ import (
 // (Patch 9 in FORKS.md). The verdict is the last attempt's, so a peer that
 // built on a landed attempt before the retry reached the remote makes it
 // stale (see storage.LeaseStale).
-func (s *Store) pushLeasedWithinLock(ctx context.Context, remote, source, branch, expected string) (storage.LeasedPush, error) {
+func (s *Store) pushLeasedWithinLock(ctx context.Context, remote, source, branch, expected string) (leasedPush, error) {
 	trimmedRemote, err := requireSyncArg("remote", remote)
 	if err != nil {
-		return storage.LeasedPush{}, err
+		return leasedPush{}, err
 	}
 	trimmedSource, err := requireSyncArg("source", source)
 	if err != nil {
-		return storage.LeasedPush{}, err
+		return leasedPush{}, err
 	}
 	trimmedBranch, err := requireSyncArg("branch", branch)
 	if err != nil {
-		return storage.LeasedPush{}, err
+		return leasedPush{}, err
 	}
 	trimmedExpected := strings.TrimSpace(expected)
 	if !isDoltCommitHash(trimmedExpected) {
-		return storage.LeasedPush{}, fmt.Errorf("leased push to %s/%s: %q is not a Dolt commit hash", trimmedRemote, trimmedBranch, expected)
+		return leasedPush{}, fmt.Errorf("leased push to %s/%s: %q is not a Dolt commit hash", trimmedRemote, trimmedBranch, expected)
 	}
 	// [LAW:single-enforcer] the same schema-ahead refusal every push runs,
 	// on the one commit a held lease can replace: expected. The tracking ref
 	// may lag it, and a lease over a schema-ahead head would regress the
 	// shared remote to this binary's schema.
 	if err := s.guardCommitSchemaAhead(ctx, trimmedRemote, trimmedBranch, trimmedExpected); err != nil {
-		return storage.LeasedPush{}, err
+		return leasedPush{}, err
 	}
 	pushed, err := commitHashOfRef(ctx, s.db, trimmedSource)
 	if err != nil {
-		return storage.LeasedPush{}, err
+		return leasedPush{}, err
 	}
-	result := storage.LeasedPush{Remote: trimmedRemote, Branch: trimmedBranch, Expected: trimmedExpected, Pushed: pushed}
+	result := leasedPush{Remote: trimmedRemote, Branch: trimmedBranch, Expected: trimmedExpected, Pushed: pushed}
 	args := []string{"--force-with-lease=" + trimmedBranch + ":" + trimmedExpected, trimmedRemote, trimmedSource + ":" + trimmedBranch}
 	query := buildProcedureCall("DOLT_PUSH", len(args))
 	pushErr := runRemoteIO(ctx, func(ctx context.Context) error {
@@ -66,7 +80,7 @@ func (s *Store) pushLeasedWithinLock(ctx context.Context, remote, source, branch
 	case pushErr != nil && strings.Contains(pushErr.Error(), datas.ErrStaleInfo.Error()):
 		result.Outcome = storage.LeaseStale
 	case pushErr != nil:
-		return storage.LeasedPush{}, classifyPushFailure(ctx, trimmedRemote, pushErr)
+		return leasedPush{}, classifyPushFailure(ctx, trimmedRemote, pushErr)
 	default:
 		result.Outcome = storage.LeaseHeld
 	}
