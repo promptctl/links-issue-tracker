@@ -80,7 +80,7 @@ Tests: `TestGitBackedRemoteURL` (`sync_test.go`), `TestGitBackedRemoteURLIsIdemp
 - `Ahead==0` → `SyncBehind` (`"behind"`)
 - else → `SyncDiverged` (`"diverged"`)
 
-Constants at `storage/sync.go`. Test `TestSyncFreshnessStateClassification` (`sync_test.go`); `TestSyncFreshnessTracksAheadBehindAgainstRemote` (`sync_test.go`); `TestSyncFreshnessRequiresRemoteAndBranch` (`sync_test.go`).
+Constants at `storage/sync.go`. Test `TestSyncFreshnessStateClassification` (`sync_test.go`); `TestSyncFreshnessTracksAheadBehindAgainstRemote` (`sync_test.go`); `TestSyncFreshnessRequiresBranch` (`sync_test.go`).
 
 ### 1.6 `SyncReceive` — fetch + fast-forward only
 
@@ -235,7 +235,7 @@ Report type at `/Users/bmf/code/links-issue-tracker/internal/storage/sync.go`.
 ### 1.10 Reset / adopt primitives
 
 - `LocalIssueCount(ctx)` (`sync.go`): first `SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'issues'`; count 0 → returns `0, nil` (no error for a pristine store). Otherwise `SELECT COUNT(*) FROM issues`. Test `TestLocalIssueCountAcrossLifecycle` (`sync_test.go`).
-- `SyncResetToRemoteHead(ctx, remote, branch)` (`sync.go`): both args required; builds `remotes/<remote>/<branch>`; runs `resetHardToRef` under `runSyncMutation`. Destructive of local commits by design (`sync.go`). Tests `TestSyncResetToRemoteHeadAdoptsUnrelatedHistory` (`sync_test.go`), `TestSyncResetToRemoteHeadRequiresRemoteAndBranch` (`sync_test.go`).
+- `SyncResetToRemoteHead(ctx, remote, branch)` (`sync.go`): the branch is required, and the remote arrives parsed; builds `remotes/<remote>/<branch>`; runs `resetHardToRef` under `runSyncMutation`. Destructive of local commits by design (`sync.go`). Tests `TestSyncResetToRemoteHeadAdoptsUnrelatedHistory` (`sync_test.go`), `TestSyncResetToRemoteHeadRequiresBranch` (`sync_test.go`).
 - `resetHardToRef(ctx, db, ref)` (`sync.go`): `CALL DOLT_RESET('--hard', ref)`; error `"reset to remote head %q: %w"`. Shared by the init-adopt and the take-remote resolution.
 
 ### 1.11 Procedure-call plumbing
