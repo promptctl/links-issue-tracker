@@ -687,7 +687,7 @@ func TestADeclinedFollowRecordsItsCutAndReason(t *testing.T) {
 
 	st := openSyncOrFatal(t, ctx, r.bravo)
 	defer func() { _ = st.Close() }()
-	if err := st.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+	if err := st.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch error = %v", err)
 	}
 	if err := st.SyncFollowReRoot(ctx, remoteName(t, "origin"), "master", storage.SyncEntryFetch); err != nil {
