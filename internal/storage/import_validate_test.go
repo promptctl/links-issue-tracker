@@ -137,6 +137,18 @@ func TestImportGateJudgesTheFilesReferences(t *testing.T) {
 			_, err := ParseBulkFile([]BulkIssueSpec{{ID: "lit-real-1", Title: str("t"), BlockedBy: ptr([]string{"lit-real-2", "lit-real-2"})}}, nil)
 			return err
 		}, `bulk: doc 0: blocked_by names "lit-real-2" twice`},
+		{"bulk: an update naming its own id in blocked_by is refused", func() error {
+			_, err := ParseBulkFile([]BulkIssueSpec{{ID: "lit-real-1", BlockedBy: ptr([]string{"lit-real-2", "lit-real-1"})}}, nil)
+			return err
+		}, `bulk: doc 0 ("lit-real-1") cannot depend on itself`},
+		{"bulk: a create naming its own local_id in blocked_by is refused", func() error {
+			_, err := ParseBulkFile([]BulkIssueSpec{create("t", "task", "lit-e", "t")}, nil)
+			return err
+		}, `bulk: doc 0 ("t") cannot depend on itself`},
+		{"bulk: an update stating only blocked_by, naming another issue, is admitted", func() error {
+			_, err := ParseBulkFile([]BulkIssueSpec{{ID: "lit-real-1", BlockedBy: ptr([]string{"lit-real-2"})}}, nil)
+			return err
+		}, ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

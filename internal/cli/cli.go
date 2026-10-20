@@ -2258,6 +2258,7 @@ func runImportTreeJSON(ctx context.Context, stdout io.Writer, ap *app.App, data 
 //	title: Renamed
 //	labels: [reviewed]
 //	parent: epic-x           # optional; reparents the issue, and "" clears its parent
+//	blocked_by: [epic-y]     # optional; the issue's whole blocked-by set, and [] empties it
 //	rank: top                # optional; the file's rank: top documents are stacked, in file order, at the top of their frame
 func runImportBulk(ctx context.Context, stdout io.Writer, ap *app.App, data []byte, actor string) error {
 	specs, err := storage.ParseBulkSpecs(data)
@@ -2276,6 +2277,11 @@ func runImportBulk(ctx context.Context, stdout io.Writer, ap *app.App, data []by
 	telemetry.Set(ctx, "import.reparented", len(result.Reparented))
 	telemetry.Set(ctx, "import.parent_held", len(result.ParentHeld))
 	telemetry.Set(ctx, "import.reparents_undone", len(result.ReparentsUndone))
+	telemetry.Set(ctx, "import.blocked_by_set", len(result.BlockedBySet))
+	telemetry.Set(ctx, "import.blocked_by_held", len(result.BlockedByHeld))
+	telemetry.Set(ctx, "import.blocked_by_undone", len(result.BlockedByUndone))
+	telemetry.Set(ctx, "import.edges_added", result.EdgesAdded)
+	telemetry.Set(ctx, "import.edges_removed", result.EdgesRemoved)
 	telemetry.Set(ctx, "import.ranked", len(result.Ranked.Resolutions))
 	if err != nil {
 		return err
@@ -2291,13 +2297,21 @@ func runImportBulk(ctx context.Context, stdout io.Writer, ap *app.App, data []by
 	if err := printIDs(stdout, fmt.Sprintf("updated %d issues", len(result.Updated)), result.Updated); err != nil {
 		return err
 	}
-	// A file that states no parent on an update moved nothing, so there is
-	// nothing to report, as with an order it did not state.
+	// A file that states no parent or blocked_by on an update changed no such
+	// set, so there is nothing to report, as with an order it did not state.
 	if len(result.Reparented)+len(result.ParentHeld) > 0 {
 		if err := printIDs(stdout, fmt.Sprintf("reparented %d issues", len(result.Reparented)), result.Reparented); err != nil {
 			return err
 		}
 		if err := printIDs(stdout, fmt.Sprintf("%d issues already had the parent the file states", len(result.ParentHeld)), result.ParentHeld); err != nil {
+			return err
+		}
+	}
+	if len(result.BlockedBySet)+len(result.BlockedByHeld) > 0 {
+		if err := printIDs(stdout, fmt.Sprintf("set blocked_by on %d issues", len(result.BlockedBySet)), result.BlockedBySet); err != nil {
+			return err
+		}
+		if err := printIDs(stdout, fmt.Sprintf("%d issues already had the blocked_by the file states", len(result.BlockedByHeld)), result.BlockedByHeld); err != nil {
 			return err
 		}
 	}

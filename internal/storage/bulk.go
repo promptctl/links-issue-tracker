@@ -113,10 +113,12 @@ func (r *BulkApplyResult) RecordEdges(step EdgeStep) {
 }
 
 // EdgesUndone is the account once a refusal's Undo put the step's sets back:
-// none stays changed, and each is reported undone.
+// none stays changed, each is reported undone, and no edge it wrote stays
+// written.
 func (r *BulkApplyResult) EdgesUndone() {
 	r.ReparentsUndone, r.Reparented = r.Reparented, nil
 	r.BlockedByUndone, r.BlockedBySet = r.BlockedBySet, nil
+	r.EdgesAdded, r.EdgesRemoved = 0, 0
 }
 
 // AfterRollback is what stays written once a refused batch's creates are

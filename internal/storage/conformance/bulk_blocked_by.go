@@ -206,9 +206,10 @@ func aBulkFileRefusedAfterItsEdgesPutsBackTheBlockedBy(t *testing.T, ctx context
 
 // aBulkFileJudgesAnUpdatesBlockedByOnTheHierarchyItEndsWith: two leaves of one
 // epic may not block each other, so an update document's blocked_by between
-// them applies only because another document moves one of them out, and it
-// does in either document order: the hierarchy is written before any
-// blocked-by edge.
+// them applies when another document moves one of them out, and is refused,
+// with nothing written, when another moves one of them in — in either
+// document order, because the hierarchy is written before any blocked-by
+// edge.
 func aBulkFileJudgesAnUpdatesBlockedByOnTheHierarchyItEndsWith(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	for _, reversed := range []bool{false, true} {
 		t.Run(fmt.Sprintf("reversed=%t", reversed), func(t *testing.T) {
@@ -229,6 +230,21 @@ func aBulkFileJudgesAnUpdatesBlockedByOnTheHierarchyItEndsWith(t *testing.T, ctx
 			}
 			assertStrings(t, "x's blockers", blockersOf(t, ctx, st, x.ID), []string{y.ID})
 			assertStrings(t, "y's parents", parentsOf(t, ctx, st, y.ID), []string{away.ID})
+
+			z := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "z", Topic: "core", ParentID: away.ID})
+			into := []storage.BulkIssueSpec{
+				{ID: x.ID, BlockedBy: blockedBy(y.ID, z.ID)},
+				{ID: z.ID, Parent: ptr(home.ID)},
+			}
+			if reversed {
+				slices.Reverse(into)
+			}
+			_, err := st.BulkApply(ctx, prefix, "ada", into)
+			if err == nil || !strings.Contains(err.Error(), storage.SameEpicBlocksRejectionMessage) {
+				t.Fatalf("BulkApply moving z in beside x = %v, want the blocked_by inside one epic refused", err)
+			}
+			assertStrings(t, "x's blockers after the refusal", blockersOf(t, ctx, st, x.ID), []string{y.ID})
+			assertStrings(t, "z's parents after the refusal", parentsOf(t, ctx, st, z.ID), []string{away.ID})
 		})
 	}
 }

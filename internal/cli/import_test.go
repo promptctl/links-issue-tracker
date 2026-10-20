@@ -531,7 +531,8 @@ func TestRunImportYAMLRankTopOrdersTheBacklogInOneCall(t *testing.T) {
 // The invocation's event counts what each import format wrote — a JSON tree
 // that creates two, then a YAML file that creates, updates and ranks one issue
 // each, moves one under another epic and restates the parent another already
-// has — and a file whose order names one issue reports it in the singular.
+// has, and sets one issue's blocked_by and restates another's — and a file
+// whose order names one issue reports it in the singular.
 func TestRunImportEventCountsWhatTheFileWrote(t *testing.T) {
 	isolateEvents(t)
 	dir := newInitTestRepo(t)
@@ -542,9 +543,9 @@ func TestRunImportEventCountsWhatTheFileWrote(t *testing.T) {
 	]`)
 	created := runCLIInDir(t, dir, "import", "--path", tree)
 	assertFacts(t, map[string]string{"import.created": "2"})
-	child := importedID(t, created, "t1")
+	child, e1 := importedID(t, created, "t1"), importedID(t, created, "e1")
 
-	yaml := writeImportFile(t, "mixed.yaml", fmt.Sprintf("title: fresh\ntype: task\ntopic: demo\nparent: %s\nrank: top\n---\nid: %s\ntitle: home, renamed\nparent: \"\"\n---\nid: %s\nparent: %s\n", epic, epic, child, epic))
+	yaml := writeImportFile(t, "mixed.yaml", fmt.Sprintf("title: fresh\ntype: task\ntopic: demo\nparent: %s\nrank: top\n---\nid: %s\ntitle: home, renamed\nparent: \"\"\nblocked_by: [%s]\n---\nid: %s\nparent: %s\n---\nid: %s\nblocked_by: []\n", epic, epic, e1, child, epic, e1))
 	out := runCLIInDir(t, dir, "import", "--path", yaml)
 	if line := "ranked 1 issue at the top of " + epic + " in order: "; !strings.Contains(out, line) {
 		t.Errorf("import output lacks %q:\n%s", line, out)
@@ -552,24 +553,32 @@ func TestRunImportEventCountsWhatTheFileWrote(t *testing.T) {
 	if lines := fmt.Sprintf("reparented 1 issues\n  %s\n1 issues already had the parent the file states\n  %s\n", child, epic); !strings.Contains(out, lines) {
 		t.Errorf("import output lacks %q:\n%s", lines, out)
 	}
-	assertFacts(t, map[string]string{"import.created": "1", "import.updated": "1", "import.ranked": "1", "import.reparented": "1", "import.parent_held": "1", "import.reparents_undone": "0"})
+	if lines := fmt.Sprintf("set blocked_by on 1 issues\n  %s\n1 issues already had the blocked_by the file states\n  %s\n", epic, e1); !strings.Contains(out, lines) {
+		t.Errorf("import output lacks %q:\n%s", lines, out)
+	}
+	// The child's move removes one edge and adds one; home's blocked_by adds
+	// the other.
+	assertFacts(t, map[string]string{"import.created": "1", "import.updated": "1", "import.ranked": "1", "import.reparented": "1", "import.parent_held": "1", "import.reparents_undone": "0",
+		"import.blocked_by_set": "1", "import.blocked_by_held": "1", "import.blocked_by_undone": "0", "import.edges_added": "2", "import.edges_removed": "1"})
 }
 
 // A file refused at an update keeps the updates applied before it, and the
-// invocation's event counts them, and counts no reparent: the refusal put the
-// moved issue back, which the event counts as an undone reparent.
+// invocation's event counts them, and counts no reparent and no edge: the
+// refusal put the moved issue back and its blocked_by with it, which the event
+// counts as an undone reparent and an undone blocked_by set.
 func TestRunImportEventCountsWhatARefusedFileKept(t *testing.T) {
 	isolateEvents(t)
 	dir := newInitTestRepo(t)
 	// One import seeds the fixture: a `lit new` per issue would cost this
 	// serial test three invocations for no behavior it pins.
 	seeded := runCLIInDir(t, dir, "import", "--path", writeImportFile(t, "seed.yaml", "local_id: from\ntitle: from\ntype: epic\ntopic: demo\n---\nlocal_id: to\ntitle: to\ntype: epic\ntopic: demo\n---\nlocal_id: mover\ntitle: mover\ntype: task\ntopic: demo\nparent: from\n"))
-	to, mover := importedID(t, seeded, "to"), importedID(t, seeded, "mover")
-	yaml := writeImportFile(t, "refused.yaml", fmt.Sprintf("id: %s\nparent: %s\ntitle: renamed\n---\nid: missing-1\ntitle: ghost\n", mover, to))
+	from, to, mover := importedID(t, seeded, "from"), importedID(t, seeded, "to"), importedID(t, seeded, "mover")
+	yaml := writeImportFile(t, "refused.yaml", fmt.Sprintf("id: %s\nparent: %s\nblocked_by: [%s]\ntitle: renamed\n---\nid: missing-1\ntitle: ghost\n", mover, to, from))
 	if out, err := runCLIInDirAllowError(t, dir, "import", "--path", yaml); err == nil {
 		t.Fatalf("import succeeded; want the missing update refused:\n%s", out)
 	}
-	assertFacts(t, map[string]string{"import.created": "0", "import.updated": "1", "import.ranked": "0", "import.reparented": "0", "import.parent_held": "0", "import.reparents_undone": "1"})
+	assertFacts(t, map[string]string{"import.created": "0", "import.updated": "1", "import.ranked": "0", "import.reparented": "0", "import.parent_held": "0", "import.reparents_undone": "1",
+		"import.blocked_by_set": "0", "import.blocked_by_held": "0", "import.blocked_by_undone": "1", "import.edges_added": "0", "import.edges_removed": "0"})
 }
 
 func assertFacts(t *testing.T, want map[string]string) {
