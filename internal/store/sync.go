@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"runtime/debug"
+	"slices"
 	"strconv"
 	"strings"
 
+	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 	doltenv "github.com/dolthub/dolt/go/libraries/doltcore/env"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"golang.org/x/mod/semver"
@@ -760,7 +762,7 @@ func (s *Store) chooseCompactionDepth() (GCMode, error) {
 // after a mutation, and reclaiming local disk is not worth that on every change.
 func (s *Store) SyncPush(ctx context.Context, remote string, branch string, setUpstream bool, force bool) (storage.SyncPushResult, error) {
 	result, pushErr := s.pushMutation(ctx, remote, branch, setUpstream, force)
-	result, pushErr, _, followErr := s.retryPushAfterFollow(ctx, remote, branch, setUpstream, force, result, pushErr)
+	result, pushErr, _, followErr := s.retryPushAfterFollow(ctx, remote, branch, setUpstream, result, pushErr)
 	if err := joinFollowFailure(pushErr, followErr); err != nil {
 		return storage.SyncPushResult{}, err
 	}
@@ -777,12 +779,11 @@ func joinFollowFailure(pushErr, followErr error) error {
 	return pushErr
 }
 
-// pushRefusedError is a push the remote answered with a refusal: DOLT_PUSH
-// reached a verdict, and it was not the transport giving out
-// (RemoteUnreachableError) or the caller's context ending. Only a refusal can
-// be a re-root of the remote's history, so it is the one push failure
-// retryPushAfterFollow acts on. [LAW:parse-dont-validate] the failure is
-// classified once, where DOLT_PUSH returns it.
+// pushRefusedError is a push the remote refused on its history: it holds
+// commits the pushed head does not descend from, or shares no ancestor with
+// it. Only a refusal can be a re-root of the remote's history, so it is the
+// one push failure retryPushAfterFollow acts on. [LAW:parse-dont-validate]
+// the failure is classified once, where DOLT_PUSH returns it.
 type pushRefusedError struct {
 	remote string
 	cause  error
@@ -794,14 +795,43 @@ func (e pushRefusedError) Error() string {
 
 func (e pushRefusedError) Unwrap() error { return e.cause }
 
+// pushRefusalTexts are the texts DOLT_PUSH's two refusals carry. The SQL
+// boundary renders DOLT_PUSH's error as text (MySQL error 1105), so a refusal
+// is recognized by its text, as pushLeasedWithinLock recognizes a stale
+// lease.
+//   - The first is the hint of env.ErrFailedToPush, which Dolt returns only
+//     when a target was rejected non-fast-forward. Its opening line is not
+//     used: it is git's own "failed to push some refs" line, which a git
+//     remote's rejected write carries too. Git gives this hint only for a
+//     non-fast-forward rejection, and a git remote's writes are all forced.
+//     TestPushRefusalTextsAreDoltsOwn holds it to Dolt's message
+//     [LAW:one-source-of-truth].
+//   - The second is a re-rooted remote, which shares no ancestor with the
+//     push.
+//
+// Both come from the fast-forward check, which a forced push skips, so a
+// forced push is never refused.
+var pushRefusalTexts = []string{pushRejectedHint, pushNoAncestorText}
+
+const pushRejectedHint = "hint: Updates were rejected because the tip of your current branch is behind"
+
+var pushNoAncestorText = doltdb.ErrNoCommonAncestor.Error()
+
 // classifyPushFailure is DOLT_PUSH's error as pushRefusedError when the remote
-// refused it, and otherwise the same failure wrapped as it always is.
-func classifyPushFailure(ctx context.Context, remote string, pushErr error) error {
-	var unreachable RemoteUnreachableError
-	if errors.As(pushErr, &unreachable) || ctx.Err() != nil {
-		return fmt.Errorf("push remote %q: %w", remote, pushErr)
+// refused it, and otherwise the failure as it came: an unreachable remote, one
+// that never opened, a write the remote's storage failed, or the caller's
+// context ending. An unreachable remote is already a parsed type, so its
+// rendering is never read [LAW:parse-dont-validate].
+func classifyPushFailure(remote string, pushErr error) error {
+	wrapped := fmt.Errorf("push remote %q: %w", remote, pushErr)
+	if errors.As(pushErr, new(RemoteUnreachableError)) {
+		return wrapped
 	}
-	return pushRefusedError{remote: remote, cause: pushErr}
+	text := pushErr.Error()
+	if slices.ContainsFunc(pushRefusalTexts, func(refusal string) bool { return strings.Contains(text, refusal) }) {
+		return pushRefusedError{remote: remote, cause: pushErr}
+	}
+	return wrapped
 }
 
 // pushMutation is one push as its own sync mutation.
@@ -838,7 +868,7 @@ func (s *Store) pushMutation(ctx context.Context, remote string, branch string, 
 //
 // A push with no branch names no tracking ref, so its refusal stands with
 // nothing fetched: there is no history on the other side to follow.
-func (s *Store) retryPushAfterFollow(ctx context.Context, remote, branch string, setUpstream, force bool, pushed storage.SyncPushResult, pushErr error) (result storage.SyncPushResult, _ error, followed storage.FollowedReRoot, followErr error) {
+func (s *Store) retryPushAfterFollow(ctx context.Context, remote, branch string, setUpstream bool, pushed storage.SyncPushResult, pushErr error) (result storage.SyncPushResult, _ error, followed storage.FollowedReRoot, followErr error) {
 	trimmedBranch := strings.TrimSpace(branch)
 	var refusal pushRefusedError
 	if !errors.As(pushErr, &refusal) || trimmedBranch == "" {
@@ -852,7 +882,7 @@ func (s *Store) retryPushAfterFollow(ctx context.Context, remote, branch string,
 		return storage.SyncPushResult{}, pushErr, followed, err
 	}
 	if followed.Head != "" {
-		result, pushErr = s.pushMutation(ctx, remote, trimmedBranch, setUpstream, force)
+		result, pushErr = s.pushMutation(ctx, remote, trimmedBranch, setUpstream, false)
 		if !errors.As(pushErr, &refusal) {
 			return result, pushErr, followed, nil
 		}
@@ -862,17 +892,13 @@ func (s *Store) retryPushAfterFollow(ctx context.Context, remote, branch string,
 			return storage.SyncPushResult{}, unjudgedRefusal(pushErr, err), followed, nil
 		}
 	}
-	return storage.SyncPushResult{}, s.judgeStandingRefusal(ctx, remote, trimmedBranch, force, pushErr), followed, nil
+	return storage.SyncPushResult{}, s.judgeStandingRefusal(ctx, remote, trimmedBranch, pushErr), followed, nil
 }
 
 // judgeStandingRefusal is a refusal that stands, after its fetch, wrapped in
 // storage.ErrPushDiverged when the branch and the remote each hold commits
-// the other lacks. A forced push is never refused over divergence, which it
-// overwrites, so its refusal is returned as it came.
-func (s *Store) judgeStandingRefusal(ctx context.Context, remote, branch string, force bool, refusal error) error {
-	if force {
-		return refusal
-	}
+// the other lacks.
+func (s *Store) judgeStandingRefusal(ctx context.Context, remote, branch string, refusal error) error {
 	fresh, err := s.SyncFreshness(ctx, remote, branch)
 	if err != nil {
 		return unjudgedRefusal(refusal, err)
@@ -921,7 +947,7 @@ func (s *Store) SyncCompactAndPush(ctx context.Context, remote string, branch st
 	// A push refused over a re-root it follows runs again without
 	// compacting: the follow collected the store below the cut, and that
 	// collection joins the maintenance account.
-	result, err, followed, followErr := s.retryPushAfterFollow(ctx, remote, branch, setUpstream, force, result, err)
+	result, err, followed, followErr := s.retryPushAfterFollow(ctx, remote, branch, setUpstream, result, err)
 	err = joinFollowFailure(err, followErr)
 	// DOLT_GC above compacts `noms`; the prune collects the other half of the
 	// store's local footprint, the abandoned git remote mirrors. All three jobs
@@ -1017,7 +1043,7 @@ func (s *Store) pushWithinLock(ctx context.Context, remote string, branch string
 		return s.db.QueryRowContext(ctx, query, stringArgsToAny(args)...).Scan(&result.Status, &message)
 	})
 	if pushErr != nil {
-		return storage.SyncPushResult{}, classifyPushFailure(ctx, trimmedRemote, pushErr)
+		return storage.SyncPushResult{}, classifyPushFailure(trimmedRemote, pushErr)
 	}
 	result.Message = nullStringValue(message)
 	result.Head = head
@@ -1057,7 +1083,7 @@ func (s *Store) SyncPushFromClone(ctx context.Context, remote string, branch str
 		return storage.SyncPushResult{}, err
 	}
 	result, pushErr := s.pushMutation(ctx, trimmedRemote, trimmedBranch, setUpstream, force)
-	result, pushErr, _, followErr := s.retryPushAfterFollow(ctx, trimmedRemote, trimmedBranch, setUpstream, force, result, pushErr)
+	result, pushErr, _, followErr := s.retryPushAfterFollow(ctx, trimmedRemote, trimmedBranch, setUpstream, result, pushErr)
 	if pushErr == nil {
 		return result, nil
 	}

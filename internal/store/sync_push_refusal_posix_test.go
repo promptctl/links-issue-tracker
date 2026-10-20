@@ -14,41 +14,39 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
-// TestARefusalNoMergeCanFixIsNotDiverged is the control beside
-// TestAPushRefusedOverAPeersCommitsIsDiverged: a remote made read-only refuses
-// every push, and two refusals that a merge cannot fix come back plainly. The
-// live store holds c4 and is only ahead of the remote. The clone diverged
-// from it, but its push is forced, and a forced push overwrites divergence.
-// Each refusal is a judged pushRefusedError: the fetch and the freshness read
-// both ran, so the judgment, not a read that failed, is what declined to call
-// it diverged. A read-only directory is POSIX semantics, hence the build tag.
-func TestARefusalNoMergeCanFixIsNotDiverged(t *testing.T) {
+// TestAPushTheRemotesStorageFailsIsNotARefusal is the control beside
+// TestAPushRefusedOverAPeersCommitsIsDiverged: a remote made read-only opens,
+// then fails the push's write. The remote ruled nothing on history, so
+// neither failure is a refusal: neither is judged diverged, and no fetch or
+// freshness read is joined to it. The live store holds c4 and is only ahead
+// of the remote. The clone diverged from it and pushes forced, so judging its
+// failure would tell the user to merge what --force meant to overwrite. A
+// read-only directory is POSIX semantics, hence the build tag.
+func TestAPushTheRemotesStorageFailsIsNotARefusal(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	race := buildDivergedClone(t, ctx)
 	commitTitled(t, ctx, race.liveRoot, race.epicID, "c4")
 	makeTreeReadOnly(t, race.remoteDir)
 
-	refusals := []struct {
+	for _, failed := range []struct {
 		name  string
 		root  string
 		force bool
 	}{
 		{"SyncPush() of c4, only ahead", race.liveRoot, false},
 		{"SyncPush(force) of the diverged c3", race.cloneRoot, true},
-	}
-	for _, refused := range refusals {
-		st, err := OpenSync(ctx, refused.root, "ws")
+	} {
+		st, err := OpenSync(ctx, failed.root, "ws")
 		if err != nil {
-			t.Fatalf("%s: OpenSync() error = %v", refused.name, err)
+			t.Fatalf("%s: OpenSync() error = %v", failed.name, err)
 		}
-		_, err = st.SyncPush(ctx, "origin", "master", false, refused.force)
+		_, err = st.SyncPush(ctx, "origin", "master", false, failed.force)
 		if closeErr := st.Close(); closeErr != nil {
-			t.Fatalf("%s: Close() error = %v", refused.name, closeErr)
+			t.Fatalf("%s: Close() error = %v", failed.name, closeErr)
 		}
-		var refusal pushRefusedError
-		if !errors.As(err, &refusal) || errors.Is(err, storage.ErrPushDiverged) || strings.Contains(err.Error(), "could not be") {
-			t.Fatalf("%s to a read-only remote error = %v; want a judged refusal that is not storage.ErrPushDiverged", refused.name, err)
+		if err == nil || errors.As(err, new(pushRefusedError)) || errors.Is(err, storage.ErrPushDiverged) || strings.Contains(err.Error(), "could not be") {
+			t.Fatalf("%s to a read-only remote error = %v; want the write's failure as it came, not a refusal and not storage.ErrPushDiverged", failed.name, err)
 		}
 	}
 }
