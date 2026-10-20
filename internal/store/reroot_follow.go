@@ -79,15 +79,26 @@ func (s *Store) moveOntoRemoteReRoot(ctx context.Context, remote storage.RemoteN
 	if err != nil {
 		return storage.FollowedReRoot{}, err
 	}
-	// The one branch is the relation the probe read: only histories that share
-	// no commit can be a re-root to follow, and finding out costs the engine.
-	// [LAW:dataflow-not-control-flow]
+	// The probe decides only whether a hold is worth closing the engine for:
+	// only histories that share no commit can be a re-root to follow. It
+	// decides nothing about the follow, since another writer can follow in
+	// the gap before the hold; the hold reads the relation again
+	// (recognizeReRootCut). [LAW:no-ambient-temporal-coupling]
 	if !unrelated {
 		return storage.FollowedReRoot{}, nil
 	}
+	return s.followUnderHold(ctx, remote, local, trimmedBranch, entry)
+}
+
+// followUnderHold is moveOntoRemoteReRoot after its probe: it re-roots local
+// onto remotes/<remote>/<branch> under the hold that rewrites the branch, if
+// that tracking ref's history is a re-root local can follow when the hold
+// opens, and records a declined cut. The returned record has a head exactly
+// when the branch moved.
+func (s *Store) followUnderHold(ctx context.Context, remote storage.RemoteName, local, trimmedBranch string, entry storage.SyncEntry) (storage.FollowedReRoot, error) {
 	followed := storage.FollowedReRoot{Entry: entry}
 	var declined []storage.DeclinedReRoot
-	err = s.withEngineClosed(ctx, func(holdCtx context.Context, ddb *doltdb.DoltDB) error {
+	err := s.withEngineClosed(ctx, func(holdCtx context.Context, ddb *doltdb.DoltDB) error {
 		var err error
 		followed.ReRooted, declined, err = followReRoot(holdCtx, ddb, ref.NewBranchRef(local), ref.NewRemoteRef(remote.String(), trimmedBranch), entry)
 		return err
@@ -260,9 +271,12 @@ func followReRoot(ctx context.Context, ddb *doltdb.DoltDB, branch, tracking ref.
 // re-commit is the one root of tracking's history: the cut, since the re-root
 // at it writes that same re-commit and so arrives at the remote's root. ok is
 // false when tracking's
-// history has more than one root, or when not exactly one local commit rebuilds
-// to it. The caller has read that the two histories share no commit, so the
-// local history does not hold the root itself.
+// history has more than one root, when the local history holds that root, or
+// when not exactly one local commit rebuilds to it. Every commit of tracking's
+// history descends from its one root, so a local history holding the root
+// shares commits with it, and is not a re-root to follow: this is where the
+// follow reads that the histories are unrelated, under the hold that rewrites
+// the branch. [LAW:no-ambient-temporal-coupling]
 //
 // Rebuilding a candidate writes its parentless commit, as the re-root that
 // follows would; a candidate that does not match leaves that commit dangling
@@ -297,6 +311,9 @@ func recognizeReRootCut(ctx context.Context, ddb *doltdb.DoltDB, branch, trackin
 	localHistory, err := readHistory(ctx, ddb, localHead, nil)
 	if err != nil {
 		return hash.Hash{}, false, fmt.Errorf("read the local history: %w", err)
+	}
+	if _, related := localHistory[root.addr]; related {
+		return hash.Hash{}, false, nil
 	}
 	var matches []hash.Hash
 	for addr, c := range localHistory {

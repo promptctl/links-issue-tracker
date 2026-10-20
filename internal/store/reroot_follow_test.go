@@ -632,6 +632,54 @@ func TestSyncDoesNotFollowARemoteRootMatchedByMetadataAlone(t *testing.T) {
 	}
 }
 
+// TestAFollowReadsTheRelationUnderItsHold interleaves two follows of one
+// re-root on bravo, as two processes would: the first probes the histories
+// unrelated and gives the engine up; the second follows in that gap; the
+// first's hold then opens on a branch already across the cut. The hold reads
+// the histories as related and leaves the branch where the second follow put
+// it, recording no follow and no declined cut.
+func TestAFollowReadsTheRelationUnderItsHold(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	r := newReRootedRemote(t, ctx, false)
+	origin := remoteName(t, "origin")
+
+	first := openSyncOrFatal(t, ctx, r.bravo)
+	if err := first.SyncFetch(ctx, origin); err != nil {
+		t.Fatalf("SyncFetch error = %v", err)
+	}
+	local, unrelated, err := first.unrelatedToRemote(ctx, origin, "master")
+	if err != nil || !unrelated {
+		t.Fatalf("the first follow's probe = unrelated %t, err %v; want the re-rooted remote unrelated", unrelated, err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("Close(first) error = %v", err)
+	}
+
+	second := openSyncOrFatal(t, ctx, r.bravo)
+	if err := second.SyncFollowReRoot(ctx, origin, "master", storage.SyncEntryFetch); err != nil {
+		t.Fatalf("the second follow error = %v", err)
+	}
+	r.assertFollowed(t, second, storage.SyncEntryFetch)
+	acrossTheCut := headCommit(t, ctx, second)
+	if err := second.Close(); err != nil {
+		t.Fatalf("Close(second) error = %v", err)
+	}
+
+	first = openSyncOrFatal(t, ctx, r.bravo)
+	defer func() { _ = first.Close() }()
+	followed, err := first.followUnderHold(ctx, origin, local, "master", storage.SyncEntryFetch)
+	if err != nil {
+		t.Fatalf("the first follow's hold error = %v", err)
+	}
+	if followed.Head != "" || len(first.FollowedReRoots()) != 0 || len(first.DeclinedReRoots()) != 0 {
+		t.Fatalf("the first follow's hold = %+v, follows %+v, declines %+v; want no follow and no declined cut", followed, first.FollowedReRoots(), first.DeclinedReRoots())
+	}
+	if head := headCommit(t, ctx, first); head != acrossTheCut {
+		t.Fatalf("bravo's head after the first follow's hold = %s, want %s where the second follow left it", head, acrossTheCut)
+	}
+}
+
 // TestSyncDoesNotFollowWhenTwoLocalCommitsRebuildToTheRoot gives bravo a
 // second commit carrying the cut's tables and metadata over different
 // parents. Both rebuild to the remote's root, and each would re-root bravo
