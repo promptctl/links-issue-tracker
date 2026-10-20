@@ -838,7 +838,7 @@ reports on success and rolls back when a file fails partway through.
 ```text
 lit sync status
 lit sync remote ls
-lit sync fetch [--remote <name>] [--prune] [--verbose]
+lit sync fetch [--remote <name>] [--verbose]
 lit sync pull  [--remote <name>] [--verbose]
 lit sync push  [--remote <name>] [--force] [--set-upstream] [--verbose]
 lit sync compact [--full]                                       # reclaim local storage; needs no remote

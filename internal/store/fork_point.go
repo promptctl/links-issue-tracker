@@ -125,35 +125,48 @@ func (s *Store) recordForkPoint(ctx context.Context, local, forkPoint, head stri
 	return storage.ForkPointRecorded, nil
 }
 
-// dropOrphanForkPoints deletes every fork point of remote whose tracking ref
-// a fetch pruned, so no fork point keeps its commit's chunks through GC once
-// nothing can read it. A fork point lives exactly as long as its tracking ref.
-// [LAW:one-source-of-truth]
-func (s *Store) dropOrphanForkPoints(ctx context.Context, remote refOwner) ([]storage.ForkPointRecord, error) {
-	tracked, err := refHeadsUnder(ctx, s.db, `SELECT name, hash FROM dolt_remote_branches`, trackingRefPrefix(remote))
-	if err != nil {
-		return nil, err
+// prunedRefs is what a pruning fetch removed: each tracking ref recordForkPoints
+// saw before the fetch (one record per ref) that is not in tracked after it.
+func prunedRefs(before []storage.ForkPointRecord, tracked map[string]string) []storage.PrunedRef {
+	var pruned []storage.PrunedRef
+	for _, r := range before {
+		if _, ok := tracked[r.Branch]; !ok {
+			pruned = append(pruned, storage.PrunedRef{Remote: r.Remote, Branch: r.Branch, Head: r.Head})
+		}
 	}
-	return s.dropForkPoints(ctx, remote, tracked)
+	return pruned
 }
 
-// dropForkPoints deletes every fork point of remote but those of the branches
-// in keep. Each deletion stands once made, so a retried run deletes only what
-// is left.
-func (s *Store) dropForkPoints(ctx context.Context, remote refOwner, keep map[string]string) ([]storage.ForkPointRecord, error) {
+// orphanForkPoints is the rule that a fork point lives exactly as long as its
+// tracking ref: of the recorded fork points, branch to head, those whose
+// branch has no tracking ref in tracked. Every path that deletes a fork point
+// decides here, the SQL one (dropForkPoints) and the landing's, which opens no
+// SQL engine (LandFetchedHead). [LAW:single-enforcer]
+func orphanForkPoints(tracked, recorded map[string]string) map[string]string {
+	orphans := map[string]string{}
+	for branch, head := range recorded {
+		if _, ok := tracked[branch]; !ok {
+			orphans[branch] = head
+		}
+	}
+	return orphans
+}
+
+// dropForkPoints deletes every fork point of remote whose branch has no
+// tracking ref in tracked (orphanForkPoints). Each deletion stands once made,
+// so a retried run deletes only what is left.
+func (s *Store) dropForkPoints(ctx context.Context, remote refOwner, tracked map[string]string) ([]storage.ForkPointRecord, error) {
 	recorded, err := refHeadsUnder(ctx, s.db, `SELECT name, hash FROM dolt_branches`, forkPointBranch(remote, ""))
 	if err != nil {
 		return nil, err
 	}
+	orphans := orphanForkPoints(tracked, recorded)
 	var dropped []storage.ForkPointRecord
-	for _, branch := range slices.Sorted(maps.Keys(recorded)) {
-		if _, ok := keep[branch]; ok {
-			continue
-		}
+	for _, branch := range slices.Sorted(maps.Keys(orphans)) {
 		if err := execProcedureDiscard(ctx, s.db, "DOLT_BRANCH", "-D", forkPointBranch(remote, branch)); err != nil {
 			return dropped, fmt.Errorf("drop fork point %s: %w", forkPointBranch(remote, branch), err)
 		}
-		dropped = append(dropped, storage.ForkPointRecord{Remote: remote.String(), Branch: branch, Head: recorded[branch], Outcome: storage.ForkPointDropped})
+		dropped = append(dropped, storage.ForkPointRecord{Remote: remote.String(), Branch: branch, Head: orphans[branch], Outcome: storage.ForkPointDropped})
 	}
 	return dropped, nil
 }

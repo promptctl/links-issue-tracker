@@ -39,7 +39,7 @@ func TestSyncReconcileDetectsUnrelatedHistories(t *testing.T) {
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	defer func() { _ = syncB.Close() }()
-	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
 
@@ -113,7 +113,7 @@ func TestSyncReconcileUnrelatedInventoryPartitionsAllThreeSides(t *testing.T) {
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	defer func() { _ = syncB.Close() }()
-	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
 
@@ -169,7 +169,7 @@ func TestSyncResolveUnrelatedTakeRemote(t *testing.T) {
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	defer func() { _ = syncB.Close() }()
-	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
 
@@ -222,7 +222,7 @@ func TestSyncResolveUnrelatedTakeLocal(t *testing.T) {
 	localEpicID, localIssueID := forkUnrelatedClone(t, ctx, rootB, remoteURL)
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
-	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
 
@@ -294,7 +294,7 @@ func TestSyncResolveUnrelatedOwnerApprovalBindsForkAndSide(t *testing.T) {
 	_, localIssueID := forkUnrelatedClone(t, ctx, rootB, remoteURL)
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
-	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
 	localToken := ownerApprovedTakeToken(t, ctx, syncB, "origin", "master", storage.TakeLocal)
@@ -355,7 +355,7 @@ func TestSyncReconcileCombineUnionsBothSides(t *testing.T) {
 	localOnly, remoteOnly, shared := seedUnrelatedPairWithShared(t, ctx, rootA, rootB, remoteURL, "")
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
-	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
 
@@ -426,7 +426,7 @@ func TestSyncReconcileCombineHoldsAndFinalizesProse(t *testing.T) {
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	defer func() { _ = syncB.Close() }()
-	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
 	headBefore := headCommit(t, ctx, syncB)
@@ -576,7 +576,7 @@ func TestSyncResolveUnrelatedRefusesSharedHistory(t *testing.T) {
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	defer func() { _ = syncB.Close() }()
-	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
 	headBefore := headCommit(t, ctx, syncB)
@@ -623,7 +623,7 @@ func TestSyncResolveUnrelatedTakeLocalRefusesSchemaAheadRemote(t *testing.T) {
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	defer func() { _ = syncB.Close() }()
-	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
 	headBefore := headCommit(t, ctx, syncB)
@@ -745,7 +745,7 @@ func TestSyncReconcileCombinePreservesFoldedProvenance(t *testing.T) {
 	addLabelLocal(t, ctx, rootB, localIssueID, "fold-label")
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
-	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
 	foldedMessages := []string{forkEpicCommitMessage, "create issue", "apply update", "add label"}
@@ -818,7 +818,7 @@ func TestSyncResolveUnrelatedTakeLocalPreservesFoldedProvenance(t *testing.T) {
 	addLabelLocal(t, ctx, rootB, localIssueID, "fold-label")
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
-	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
 	foldedMessages := []string{forkEpicCommitMessage, "create issue", "apply update", "add label"}
@@ -1011,7 +1011,7 @@ func TestSyncReconcileCombineRecoversFromTransientFailureMidReplay(t *testing.T)
 
 			syncB := openSyncOrFatal(t, ctx, rootB)
 			defer func() { _ = syncB.Close() }()
-			if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+			if err := syncB.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 				t.Fatalf("SyncFetch(B): %v", err)
 			}
 			foldedMessages := []string{forkEpicCommitMessage, "create issue", "apply update"}

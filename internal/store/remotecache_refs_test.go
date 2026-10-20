@@ -52,10 +52,10 @@ func TestRemoteOperationsLeaveTheMirrorHoldingOnlyItsLastKnownRef(t *testing.T) 
 			_, err := s.SyncCompactAndPush(ctx, remoteName(t, "origin"), "master", true, false)
 			return err
 		}},
-		{"fetch", func(s *Store) error { return s.SyncFetch(ctx, remoteName(t, "origin"), false) }},
+		{"fetch", func(s *Store) error { return s.SyncFetch(ctx, remoteName(t, "origin")) }},
 		{"pull", func(s *Store) error { _, err := s.SyncPull(ctx, remoteName(t, "origin"), "master"); return err }},
 		{"receive", func(s *Store) error { _, err := s.SyncReceive(ctx, remoteName(t, "origin"), "master"); return err }},
-		{"fetch again", func(s *Store) error { return s.SyncFetch(ctx, remoteName(t, "origin"), false) }},
+		{"fetch again", func(s *Store) error { return s.SyncFetch(ctx, remoteName(t, "origin")) }},
 	}
 	var mirror string
 	for _, op := range operations {
@@ -373,14 +373,14 @@ func TestBackgroundReceiveLandsTheClonesLastKnownRef(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenSync(clone) error = %v", err)
 	}
-	fetchErr := cloneSync.SyncFetch(ctx, remoteName(t, "origin"), false)
+	fetchErr := cloneSync.SyncFetch(ctx, remoteName(t, "origin"))
 	if err := cloneSync.Close(); err != nil {
 		t.Fatalf("Close(clone) error = %v", err)
 	}
 	if fetchErr != nil {
 		t.Fatalf("SyncFetch(clone) error = %v", fetchErr)
 	}
-	if _, err := LandFetchedHead(ctx, live, clone, remoteName(t, "origin"), "master"); err != nil {
+	if _, err := LandFetchedHead(ctx, live, clone, remoteName(t, "origin"), "master", nil); err != nil {
 		t.Fatalf("LandFetchedHead() error = %v", err)
 	}
 

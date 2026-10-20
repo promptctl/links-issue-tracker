@@ -26,7 +26,7 @@ func TestSyncResolveUnrelatedTakeLocalKeepsTheRemotesPurge(t *testing.T) {
 	purgeAndPush(t, ctx, rootA, sharedID)
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
-	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
 	token := ownerApprovedTakeToken(t, ctx, syncB, "origin", "master", storage.TakeLocal)
@@ -73,7 +73,7 @@ func TestSyncResolveUnrelatedTakeRemoteCarriesTheLocalPurge(t *testing.T) {
 	purgeIssue(t, ctx, rootB, sharedID)
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
-	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
 	token := ownerApprovedTakeToken(t, ctx, syncB, "origin", "master", storage.TakeRemote)
@@ -207,7 +207,7 @@ func TestSyncResolveUnrelatedTakeRemoteAdoptsAPrePurgeRemote(t *testing.T) {
 			}
 
 			syncB := openSyncOrFatal(t, ctx, rootB)
-			if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+			if err := syncB.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 				t.Fatalf("SyncFetch(B): %v", err)
 			}
 			token := ownerApprovedTakeToken(t, ctx, syncB, "origin", "master", storage.TakeRemote)

@@ -62,7 +62,7 @@ func TestLeasedPushLandsOnlyOverTheHeadItNames(t *testing.T) {
 	}
 	remoteHead := func() string {
 		t.Helper()
-		if err := st.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+		if err := st.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 			t.Fatalf("SyncFetch(alpha) error = %v", err)
 		}
 		head, err := commitHashOfRef(ctx, st.db, "remotes/origin/master")
@@ -162,7 +162,7 @@ func TestLeasedPushRefusesToReplaceASchemaAheadHead(t *testing.T) {
 	if err := st.SyncAddRemote(ctx, remoteName(t, "mirror"), remoteURL); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.SyncFetch(ctx, remoteName(t, "mirror"), false); err != nil {
+	if err := st.SyncFetch(ctx, remoteName(t, "mirror")); err != nil {
 		t.Fatal(err)
 	}
 	err = st.runSyncMutation(ctx, func(ctx context.Context) error {
@@ -172,7 +172,7 @@ func TestLeasedPushRefusesToReplaceASchemaAheadHead(t *testing.T) {
 	if !errors.As(err, new(*RemoteSchemaAheadError)) {
 		t.Fatalf("leased push over a schema-ahead head = %v, want *RemoteSchemaAheadError", err)
 	}
-	if err := st.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+	if err := st.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := commitHashOfRef(ctx, st.db, "remotes/origin/master"); err != nil || got != ahead {

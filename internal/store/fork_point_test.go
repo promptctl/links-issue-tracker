@@ -160,7 +160,7 @@ func TestAForkPointOutlivesTheFetchThatJumpedPastIt(t *testing.T) {
 	f := newForkBelowTheCut(t, ctx)
 
 	crashed := openSyncOrFatal(t, ctx, f.delta)
-	if err := crashed.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+	if err := crashed.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch(delta) error = %v", err)
 	}
 	if err := crashed.Close(); err != nil {
@@ -310,7 +310,7 @@ func TestAQuietForkBelowTheCutLandsOnTheRemoteHead(t *testing.T) {
 
 	delta := openSyncOrFatal(t, ctx, f.delta)
 	defer func() { _ = delta.Close() }()
-	if err := delta.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+	if err := delta.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch(delta) error = %v", err)
 	}
 	fresh, err := delta.SyncFreshness(ctx, remoteName(t, "origin"), "master")
@@ -353,7 +353,7 @@ func TestAForkPointIsNoneWhenNothingWasShared(t *testing.T) {
 		t.Fatalf("SyncAddRemote(other) error = %v", err)
 	}
 	for range 2 {
-		if err := other.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+		if err := other.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 			t.Fatalf("SyncFetch(other) error = %v", err)
 		}
 	}
@@ -381,7 +381,7 @@ func TestRemovingARemoteDropsItsForkPoints(t *testing.T) {
 
 	st := openSyncOrFatal(t, ctx, delta)
 	defer func() { _ = st.Close() }()
-	if err := st.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+	if err := st.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch(delta) error = %v", err)
 	}
 	if err := st.SyncRemoveRemote(ctx, "origin"); err != nil {
@@ -404,8 +404,9 @@ func TestRemovingARemoteDropsItsForkPoints(t *testing.T) {
 }
 
 // TestAPrunedTrackingRefTakesItsForkPointWithIt deletes a branch on the
-// remote after delta recorded its fork point: the pruning fetch drops the
-// tracking ref, and the fork point goes with it.
+// remote after delta recorded its fork point: the next fetch, which always
+// prunes, drops the tracking ref, the fork point goes with it, and PrunedRefs
+// says so.
 func TestAPrunedTrackingRefTakesItsForkPointWithIt(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -424,7 +425,7 @@ func TestAPrunedTrackingRefTakesItsForkPointWithIt(t *testing.T) {
 	adoptRemote(t, ctx, delta, remoteURL)
 	st := openSyncOrFatal(t, ctx, delta)
 	defer func() { _ = st.Close() }()
-	if err := st.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+	if err := st.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch(delta) error = %v", err)
 	}
 	feature, err := commitHashOfRef(ctx, st.db, "remotes/origin/feature")
@@ -434,13 +435,20 @@ func TestAPrunedTrackingRefTakesItsForkPointWithIt(t *testing.T) {
 	if err := execProcedureDiscard(ctx, pusher.db, "DOLT_PUSH", "origin", ":feature"); err != nil {
 		t.Fatalf("delete the remote's feature branch: %v", err)
 	}
-	if err := st.SyncFetch(ctx, remoteName(t, "origin"), true); err != nil {
-		t.Fatalf("SyncFetch(delta, prune) error = %v", err)
+	if err := st.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
+		t.Fatalf("SyncFetch(delta) error = %v", err)
 	}
 	records := st.ForkPointRecords()
 	want := storage.ForkPointRecord{Remote: "origin", Branch: "feature", Head: feature, Outcome: storage.ForkPointDropped}
 	if len(records) == 0 || records[len(records)-1] != want {
 		t.Fatalf("ForkPointRecords() = %+v, want the pruning fetch to end with %+v", records, want)
+	}
+	wantPruned := []storage.PrunedRef{{Remote: "origin", Branch: "feature", Head: feature}}
+	if pruned := st.PrunedRefs(); !slices.Equal(pruned, wantPruned) {
+		t.Fatalf("PrunedRefs() = %+v, want %+v", pruned, wantPruned)
+	}
+	if _, err := commitHashOfRef(ctx, st.db, "remotes/origin/feature"); err == nil {
+		t.Fatalf("remotes/origin/feature survived the fetch after the remote deleted feature")
 	}
 	left, err := refHeadsUnder(ctx, st.db, `SELECT name, hash FROM dolt_branches`, forkPointBranch(ownerOf(remoteName(t, "origin")), ""))
 	if err != nil {
@@ -466,7 +474,7 @@ func TestARemotesNewURLKeepsItsForkPoint(t *testing.T) {
 
 	delta := openSyncOrFatal(t, ctx, f.delta)
 	defer func() { _ = delta.Close() }()
-	if err := delta.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+	if err := delta.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch(delta) error = %v", err)
 	}
 	if err := delta.SyncSetRemoteURL(ctx, remoteName(t, "origin"), "file://"+link); err != nil {
@@ -520,7 +528,7 @@ func TestAQuietForksRefusedPushIsNotSuperseded(t *testing.T) {
 	f := newForkBelowTheCutAfter(t, ctx, func(forkBelowTheCut) {})
 	delta := openSyncOrFatal(t, ctx, f.delta)
 	defer func() { _ = delta.Close() }()
-	if err := delta.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+	if err := delta.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch(delta) error = %v", err)
 	}
 	pushed, err := delta.SyncPushFromClone(ctx, remoteName(t, "origin"), "master", false, false)
@@ -624,7 +632,7 @@ func TestAStrandedWriteSurvivesAReconcile(t *testing.T) {
 	strandWrite(t, ctx, beta, ticket)
 	st := openSyncOrFatal(t, ctx, beta)
 	defer func() { _ = st.Close() }()
-	if err := st.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+	if err := st.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch() error = %v", err)
 	}
 	if _, err := st.SyncReconcile(ctx, remoteName(t, "origin"), "master"); err != nil {
@@ -693,14 +701,14 @@ func TestTheReceiveLandsTheClonesForkPoint(t *testing.T) {
 		t.Fatalf("CloneTree(delta) error = %v", err)
 	}
 	fetcher := openSyncOrFatal(t, ctx, clone)
-	if err := fetcher.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+	if err := fetcher.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch(clone) error = %v", err)
 	}
 	if err := fetcher.Close(); err != nil {
 		t.Fatalf("Close(clone) error = %v", err)
 	}
 	for _, want := range []FetchedHeadRecord{FetchedHeadMoved, FetchedHeadUnchanged} {
-		landed, err := LandFetchedHead(ctx, f.delta, clone, remoteName(t, "origin"), "master")
+		landed, err := LandFetchedHead(ctx, f.delta, clone, remoteName(t, "origin"), "master", nil)
 		if err != nil {
 			t.Fatalf("LandFetchedHead() error = %v", err)
 		}

@@ -78,6 +78,7 @@ func openSyncSessionAt(ctx context.Context, databasePath, workspaceID string) (s
 	return syncSession{engine: st, syncer: syncer}, func() error {
 		reportEventValues(ctx, "reroot.follows", syncer.FollowedReRoots())
 		reportEventValues(ctx, "fork_point.records", syncer.ForkPointRecords())
+		reportEventValues(ctx, "fetch.pruned", syncer.PrunedRefs())
 		reportEventValues(ctx, "remote.removals", syncer.RemoteRemovals())
 		reportEventValues(ctx, "reconcile.bases", syncer.ReconcileBases())
 		reportEventValues(ctx, "stranded_writes.commits", syncer.StrandedWritesCommits())
@@ -204,7 +205,6 @@ func syncRemoteLsLeaf() syncLeaf {
 func syncFetchLeaf() syncLeaf {
 	fs := newCobraFlagSet("sync fetch")
 	remote := fs.String("remote", "", "Remote name (defaults to upstream remote, then single configured remote)")
-	prune := fs.Bool("prune", false, "Pass --prune to dolt fetch")
 	verbose := fs.Bool("verbose", false, "Include detailed remote output")
 	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, scope syncScope, positional []string) error {
 		ws, session := scope.ws, scope.session
@@ -232,7 +232,7 @@ func syncFetchLeaf() syncLeaf {
 			_, err := fmt.Fprintln(stdout, "skipped sync fetch: no eligible git remote; name one with --remote")
 			return err
 		}
-		err = fetchAndFollow(ctx, session, ws, syncState.gitRemotes, remoteName, *prune)
+		err = fetchAndFollow(ctx, session, ws, syncState.gitRemotes, remoteName)
 		recordSyncCommandTrace(ws, "lit sync fetch", "fetched", err, map[string]string{"remote": remoteName.String()})
 		if err != nil {
 			return err
@@ -254,8 +254,8 @@ func syncFetchLeaf() syncLeaf {
 // network: a workspace with no sync remote, one Dolt cannot hold, or none
 // whose default branch is known here, has no freshness a re-root could
 // misreport, and follows nothing.
-func fetchAndFollow(ctx context.Context, session syncSession, ws workspace.Info, gitRemotes []workspace.GitRemote, remote storage.RemoteName, prune bool) error {
-	if err := session.syncer.SyncFetch(ctx, remote, prune); err != nil {
+func fetchAndFollow(ctx context.Context, session syncSession, ws workspace.Info, gitRemotes []workspace.GitRemote, remote storage.RemoteName) error {
+	if err := session.syncer.SyncFetch(ctx, remote); err != nil {
 		return err
 	}
 	if err := markFetchSuccess(ws, remote); err != nil {

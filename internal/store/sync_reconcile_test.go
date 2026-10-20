@@ -36,7 +36,7 @@ func TestSyncReconcileLinearizesDivergenceAndFastForwardPushes(t *testing.T) {
 	updateLocal(t, ctx, rootB, id, storage.UpdateIssueInput{Priority: ptr(model.PriorityUrgent)})
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
-	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
 	// B's folded side is its one "apply update" commit; capture its original
@@ -134,7 +134,7 @@ func TestSyncReconcileHoldsProseDivergenceForAgent(t *testing.T) {
 	updateLocal(t, ctx, rootB, id, storage.UpdateIssueInput{Title: strptr("B's rewritten title")})
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
-	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
 	// Capture the local head before reconcile: the prose-pending path reads the
@@ -204,7 +204,7 @@ func TestSyncReconcileResolvedFinalizesWithAgentText(t *testing.T) {
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	defer func() { _ = syncB.Close() }()
-	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
 	// Read the live conflict to obtain the fingerprint the agent would copy from the
@@ -260,7 +260,7 @@ func TestSyncReconcileResolvedRecordsTheMergedText(t *testing.T) {
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	defer func() { _ = syncB.Close() }()
-	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
 	pendingRes, err := syncB.SyncReconcile(ctx, remoteName(t, "origin"), "master")
@@ -348,7 +348,7 @@ func TestSyncReconcileResolvedRecordsNothingForTheProvisionalText(t *testing.T) 
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	defer func() { _ = syncB.Close() }()
-	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
 	pendingRes, err := syncB.SyncReconcile(ctx, remoteName(t, "origin"), "master")
@@ -402,7 +402,7 @@ func TestSyncReconcileResolvedRejectsStaleResolutions(t *testing.T) {
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	defer func() { _ = syncB.Close() }()
-	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
 	headBefore := headCommit(t, ctx, syncB)
@@ -470,7 +470,7 @@ func adoptRemote(t *testing.T, ctx context.Context, root, remoteURL string) {
 	if err := sync.SyncAddRemote(ctx, remoteName(t, "origin"), remoteURL); err != nil {
 		t.Fatalf("SyncAddRemote(adopt): %v", err)
 	}
-	if err := sync.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+	if err := sync.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch(adopt): %v", err)
 	}
 	if err := sync.SyncResetToRemoteHead(ctx, remoteName(t, "origin"), "master"); err != nil {

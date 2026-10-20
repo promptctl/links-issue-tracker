@@ -547,6 +547,9 @@ type pushedHead struct {
 	// remote after the push (SyncPushResult.Bound.Publication): published or
 	// possibly so, the remote may carry it in head's place.
 	reRoot storage.ReRootPublication
+	// pruned is every tracking ref the clone's fetches pruned, for the
+	// receive that lands the clone on the live store to carry over.
+	pruned []storage.PrunedRef
 }
 
 // landed reports whether a push landed and its head is known.
@@ -730,7 +733,7 @@ func mirrorCycle(ctx context.Context, log io.Writer, ws workspace.Info, stopAnsw
 // for the mirror's log.
 func receivePushedReRoot(ctx context.Context, ws workspace.Info, clone liveClone, landed pushedHead) error {
 	target := syncTarget{remote: landed.remote, branch: landed.branch, skip: syncTargetReady}
-	outcome, closeLive, err := performSyncReceive(ctx, ws, clone, receiveFetch{target: target})
+	outcome, closeLive, err := performSyncReceive(ctx, ws, clone, receiveFetch{target: target, pruned: landed.pruned})
 	if err != nil {
 		err = fmt.Errorf("receive the re-rooted push on the live store: %w", err)
 		recordReceiveError(ws, err)
@@ -841,7 +844,7 @@ func mirrorOnce(ctx, completionCtx context.Context, session syncSession, ws work
 	// of a re-root, a peer's or the one the clone's history bound published,
 	// which followedReRoot reports. The live store learns it through
 	// RecordPushedHead, or by receiving a re-rooted push.
-	return pushedHead{remote: outcome.remote, branch: outcome.branch, head: outcome.head, proven: outcome.proven, followedReRoot: len(session.syncer.FollowedReRoots()) > 0, reRoot: outcome.reRoot}, nil
+	return pushedHead{remote: outcome.remote, branch: outcome.branch, head: outcome.head, proven: outcome.proven, followedReRoot: len(session.syncer.FollowedReRoots()) > 0, reRoot: outcome.reRoot, pruned: session.syncer.PrunedRefs()}, nil
 }
 
 // waitForParentExit blocks until the spawning command has exited, returning

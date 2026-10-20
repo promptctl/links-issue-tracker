@@ -2,9 +2,11 @@ package store
 
 import (
 	"context"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -130,7 +132,7 @@ func (f *landFixture) fetchedClone() string {
 	clone := f.copyOf(f.live)
 	st := f.openSync(clone)
 	defer f.close(st)
-	if err := st.SyncFetch(f.ctx, remoteName(f.t, "origin"), false); err != nil {
+	if err := st.SyncFetch(f.ctx, remoteName(f.t, "origin")); err != nil {
 		f.t.Fatalf("SyncFetch(clone) error = %v", err)
 	}
 	return clone
@@ -161,7 +163,7 @@ func TestLandFetchedHeadCarriesAClonesFetchToTheLiveStore(t *testing.T) {
 	f.push(peer, false)
 
 	clone := f.fetchedClone()
-	landed, err := LandFetchedHead(f.ctx, f.live, clone, remoteName(t, "origin"), "master")
+	landed, err := LandFetchedHead(f.ctx, f.live, clone, remoteName(t, "origin"), "master", nil)
 	if err != nil {
 		t.Fatalf("LandFetchedHead() error = %v", err)
 	}
@@ -209,13 +211,13 @@ func TestLandFetchedHeadRecordsWhatTheFetchSaw(t *testing.T) {
 		t.Helper()
 		st := f.openSync(f.live)
 		defer f.close(st)
-		if err := st.SyncFetch(f.ctx, remoteName(f.t, "origin"), false); err != nil {
+		if err := st.SyncFetch(f.ctx, remoteName(f.t, "origin")); err != nil {
 			t.Fatalf("SyncFetch(live) error = %v", err)
 		}
 	}
 	land := func(f *landFixture, clone string) LandedFetch {
 		t.Helper()
-		landed, err := LandFetchedHead(f.ctx, f.live, clone, remoteName(t, "origin"), "master")
+		landed, err := LandFetchedHead(f.ctx, f.live, clone, remoteName(t, "origin"), "master", nil)
 		if err != nil {
 			t.Fatalf("LandFetchedHead() error = %v", err)
 		}
@@ -285,7 +287,7 @@ func TestLandFetchedHeadLeavesTheLiveStoreAloneForAnAbsentBranch(t *testing.T) {
 	f := newLandFixture(t)
 	before := f.trackingRef()
 	clone := f.fetchedClone()
-	landed, err := LandFetchedHead(f.ctx, f.live, clone, remoteName(t, "origin"), "no-such-branch")
+	landed, err := LandFetchedHead(f.ctx, f.live, clone, remoteName(t, "origin"), "no-such-branch", nil)
 	if err != nil {
 		t.Fatalf("LandFetchedHead() error = %v", err)
 	}
@@ -294,6 +296,191 @@ func TestLandFetchedHeadLeavesTheLiveStoreAloneForAnAbsentBranch(t *testing.T) {
 	}
 	if got := f.trackingRef(); got != before {
 		t.Fatalf("landing an absent branch moved remotes/origin/master from %s to %s", before, got)
+	}
+}
+
+// exec runs procedure with args on the store at root.
+func (f *landFixture) exec(root, procedure string, args ...string) {
+	f.t.Helper()
+	st := f.openSync(root)
+	defer f.close(st)
+	if err := execProcedureDiscard(f.ctx, st.db, procedure, args...); err != nil {
+		f.t.Fatalf("%s%v on %s: %v", procedure, args, root, err)
+	}
+}
+
+// liveFetch fetches origin into the live store itself, as a foreground sync
+// does.
+func (f *landFixture) liveFetch() {
+	f.t.Helper()
+	st := f.openSync(f.live)
+	defer f.close(st)
+	if err := st.SyncFetch(f.ctx, remoteName(f.t, "origin")); err != nil {
+		f.t.Fatalf("SyncFetch(live) error = %v", err)
+	}
+}
+
+// prunedClone is fetchedClone with what the clone's fetch pruned, as the
+// receive reads it off the clone's session.
+func (f *landFixture) prunedClone() (string, []storage.PrunedRef) {
+	f.t.Helper()
+	clone := f.copyOf(f.live)
+	st := f.openSync(clone)
+	defer f.close(st)
+	if err := st.SyncFetch(f.ctx, remoteName(f.t, "origin")); err != nil {
+		f.t.Fatalf("SyncFetch(clone) error = %v", err)
+	}
+	return clone, st.PrunedRefs()
+}
+
+// liveRefs is the live store's tracking refs and fork points of origin, by
+// branch.
+func (f *landFixture) liveRefs() (tracked, forkPoints map[string]string) {
+	f.t.Helper()
+	st := f.openSync(f.live)
+	defer f.close(st)
+	owner := ownerOf(remoteName(f.t, "origin"))
+	tracked, err := refHeadsUnder(f.ctx, st.db, `SELECT name, hash FROM dolt_remote_branches`, trackingRefPrefix(owner))
+	if err != nil {
+		f.t.Fatalf("list tracking refs: %v", err)
+	}
+	forkPoints, err = refHeadsUnder(f.ctx, st.db, `SELECT name, hash FROM dolt_branches`, forkPointBranch(owner, ""))
+	if err != nil {
+		f.t.Fatalf("list fork points: %v", err)
+	}
+	return tracked, forkPoints
+}
+
+// TestLandFetchedHeadCarriesTheClonesPrunes deletes a branch on the remote
+// whose live fork point trails its tracking ref — the live store fetched it
+// across a move, so the fork point holds the older head — and lands a clone
+// whose fetch pruned it. The live tracking ref goes because it still holds
+// the head the clone pruned, and the fork point goes because it is left
+// without its ref, whatever head it trails at; the sync branch's ref and fork
+// point stay.
+func TestLandFetchedHeadCarriesTheClonesPrunes(t *testing.T) {
+	t.Parallel()
+	f := newLandFixture(t)
+	peer := f.copyOf(f.live)
+	f.exec(peer, "DOLT_BRANCH", "feature")
+	f.exec(peer, "DOLT_PUSH", "origin", "feature")
+	f.liveFetch()
+	_, before := f.liveRefs()
+	older := f.commit(peer, "peer-ticket")
+	f.exec(peer, "DOLT_BRANCH", "-f", "feature", "master")
+	f.exec(peer, "DOLT_PUSH", "origin", "feature")
+	f.liveFetch()
+	tracked, forkPoints := f.liveRefs()
+	if tracked["feature"] != older || forkPoints["feature"] == "" || forkPoints["feature"] == older {
+		t.Fatalf("live feature ref %s, fork point %q; want the ref at %s and a fork point trailing it", tracked["feature"], forkPoints["feature"], older)
+	}
+	trailing := forkPoints["feature"]
+	if before["master"] == "" {
+		t.Fatalf("live fork points before the prune = %v, want master's recorded", before)
+	}
+	f.exec(peer, "DOLT_PUSH", "origin", ":feature")
+
+	clone, pruned := f.prunedClone()
+	wantPruned := []storage.PrunedRef{{Remote: "origin", Branch: "feature", Head: older}}
+	if !slices.Equal(pruned, wantPruned) {
+		t.Fatalf("the clone's PrunedRefs() = %+v, want %+v", pruned, wantPruned)
+	}
+	landed, err := LandFetchedHead(f.ctx, f.live, clone, remoteName(t, "origin"), "master", pruned)
+	if err != nil {
+		t.Fatalf("LandFetchedHead() error = %v", err)
+	}
+	if !slices.Equal(landed.Pruned, wantPruned) {
+		t.Errorf("LandedFetch.Pruned = %+v, want %+v", landed.Pruned, wantPruned)
+	}
+	wantDropped := []storage.ForkPointRecord{{Remote: "origin", Branch: "feature", Head: trailing, Outcome: storage.ForkPointDropped}}
+	if !slices.Equal(landed.ForkPointsDropped, wantDropped) {
+		t.Errorf("LandedFetch.ForkPointsDropped = %+v, want %+v", landed.ForkPointsDropped, wantDropped)
+	}
+	tracked, forkPoints = f.liveRefs()
+	if _, ok := tracked["feature"]; ok || tracked["master"] == "" {
+		t.Errorf("live tracking refs after the landing = %v, want master's alone", tracked)
+	}
+	if _, ok := forkPoints["feature"]; ok || forkPoints["master"] == "" {
+		t.Errorf("live fork points after the landing = %v, want master's alone", forkPoints)
+	}
+}
+
+// TestLandFetchedHeadLeavesRefsTheLiveStoreWroteSinceTheTake lands a clone
+// whose fetch pruned feature after the live store, meanwhile, fetched the
+// remote with feature recreated at another head and a branch newer the clone
+// never saw. Neither is the ref the clone pruned, so both stand, with their
+// fork points.
+func TestLandFetchedHeadLeavesRefsTheLiveStoreWroteSinceTheTake(t *testing.T) {
+	t.Parallel()
+	f := newLandFixture(t)
+	peer := f.copyOf(f.live)
+	f.exec(peer, "DOLT_BRANCH", "feature")
+	f.exec(peer, "DOLT_PUSH", "origin", "feature")
+	f.liveFetch()
+	f.exec(peer, "DOLT_PUSH", "origin", ":feature")
+
+	clone, pruned := f.prunedClone()
+	if len(pruned) != 1 || pruned[0].Branch != "feature" {
+		t.Fatalf("the clone's PrunedRefs() = %+v, want feature's", pruned)
+	}
+	recreated := f.commit(peer, "peer-ticket")
+	f.exec(peer, "DOLT_BRANCH", "-f", "feature", "master")
+	f.exec(peer, "DOLT_PUSH", "origin", "feature")
+	f.exec(peer, "DOLT_BRANCH", "newer")
+	f.exec(peer, "DOLT_PUSH", "origin", "newer")
+	f.liveFetch()
+	trackedBefore, forkPointsBefore := f.liveRefs()
+	if trackedBefore["feature"] != recreated || trackedBefore["newer"] == "" {
+		t.Fatalf("live tracking refs before the landing = %v, want feature at %s and newer", trackedBefore, recreated)
+	}
+
+	landed, err := LandFetchedHead(f.ctx, f.live, clone, remoteName(t, "origin"), "master", pruned)
+	if err != nil {
+		t.Fatalf("LandFetchedHead() error = %v", err)
+	}
+	if len(landed.Pruned) != 0 || len(landed.ForkPointsDropped) != 0 {
+		t.Errorf("LandFetchedHead() pruned %+v and dropped %+v; want nothing deleted", landed.Pruned, landed.ForkPointsDropped)
+	}
+	tracked, forkPoints := f.liveRefs()
+	if !maps.Equal(tracked, trackedBefore) || !maps.Equal(forkPoints, forkPointsBefore) {
+		t.Errorf("live refs after the landing = %v / %v, want them as they stood, %v / %v", tracked, forkPoints, trackedBefore, forkPointsBefore)
+	}
+}
+
+// TestLandFetchedHeadKeepsTheSyncBranchsForkPointAcrossARePoint lands a
+// clone's fetch on a live store whose remote was re-pointed, which removes
+// the tracking refs and keeps the fork points until a fetch brings the refs
+// back. The landing sets the sync branch's ref before it drops orphans, so
+// the sync branch's fork point stays.
+func TestLandFetchedHeadKeepsTheSyncBranchsForkPointAcrossARePoint(t *testing.T) {
+	t.Parallel()
+	f := newLandFixture(t)
+	f.liveFetch()
+	_, forkPointsBefore := f.liveRefs()
+	if forkPointsBefore["master"] == "" {
+		t.Fatalf("live fork points before the re-point = %v, want master's", forkPointsBefore)
+	}
+	link := filepath.Join(f.base, "remote-link")
+	if err := os.Symlink(strings.TrimPrefix(f.remoteURL, "file://"), link); err != nil {
+		t.Fatalf("link the remote: %v", err)
+	}
+	st := f.openSync(f.live)
+	if err := st.SyncSetRemoteURL(f.ctx, remoteName(t, "origin"), "file://"+link); err != nil {
+		t.Fatalf("SyncSetRemoteURL() error = %v", err)
+	}
+	f.close(st)
+
+	clone, pruned := f.prunedClone()
+	landed, err := LandFetchedHead(f.ctx, f.live, clone, remoteName(t, "origin"), "master", pruned)
+	if err != nil {
+		t.Fatalf("LandFetchedHead() error = %v", err)
+	}
+	if len(landed.ForkPointsDropped) != 0 {
+		t.Errorf("LandedFetch.ForkPointsDropped = %+v, want none", landed.ForkPointsDropped)
+	}
+	tracked, forkPoints := f.liveRefs()
+	if tracked["master"] == "" || forkPoints["master"] != forkPointsBefore["master"] {
+		t.Errorf("live refs after the landing = %v / %v, want master's ref back and its fork point at %s", tracked, forkPoints, forkPointsBefore["master"])
 	}
 }
 

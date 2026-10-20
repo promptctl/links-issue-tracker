@@ -46,7 +46,7 @@ lit sync push
 
 - `lit sync status`
 - `lit sync remote ls`
-- `lit sync fetch [--remote <name>] [--prune] [--verbose]`
+- `lit sync fetch [--remote <name>] [--verbose]`
 - `lit sync pull [--remote <name>] [--verbose]`
 - `lit sync push [--remote <name>] [--set-upstream] [--force] [--verbose]`
 - `lit sync reconcile` — merge a diverged clone into linear history; surfaces a concurrent free-text rewrite for the calling agent to merge

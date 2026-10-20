@@ -621,7 +621,7 @@ func freshReconcileTarget(ctx context.Context, session syncSession, ws workspace
 	if target.skip != syncTargetReady {
 		return storage.RemoteName{}, "", false, nil
 	}
-	if err := session.syncer.SyncFetch(ctx, target.remote, false); err != nil {
+	if err := session.syncer.SyncFetch(ctx, target.remote); err != nil {
 		return storage.RemoteName{}, "", false, fmt.Errorf("fetch %q before reconcile: %w", target.remote, err)
 	}
 	if err := markFetchSuccess(ws, target.remote); err != nil {

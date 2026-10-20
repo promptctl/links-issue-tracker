@@ -94,7 +94,7 @@ func TestDoltTransferKeepsStdoutClean(t *testing.T) {
 	sync := openSyncOrFatal(t, ctx, consumer)
 	defer sync.Close()
 	fetchOut := captureStdout(t, func() error {
-		return sync.SyncFetch(ctx, remoteName(t, "origin"), false)
+		return sync.SyncFetch(ctx, remoteName(t, "origin"))
 	})
 	if len(fetchOut) != 0 {
 		t.Fatalf("sync fetch wrote %d bytes to stdout, want 0: %q", len(fetchOut), fetchOut)

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
@@ -616,7 +617,7 @@ func performSyncReceive(ctx context.Context, ws workspace.Info, clone liveClone,
 	receiveErr := fetch.fetchErr
 	var landed store.LandedFetch
 	if receiveErr == nil {
-		landed, receiveErr = landFetch(ctx, ws, clone, target)
+		landed, receiveErr = landFetch(ctx, ws, clone, fetch)
 	}
 	var session syncSession
 	if receiveErr == nil {
@@ -645,6 +646,9 @@ func performSyncReceive(ctx context.Context, ws workspace.Info, clone liveClone,
 		"landed":      landed.Record.String(),
 		"fork_point":  landed.ForkPoint.String(),
 		"land_held":   landed.Held.Round(time.Millisecond).String(),
+		// [LAW:nothing-unseen] what the landing deleted, by branch.
+		"landed_pruned":              joinBranches(landed.Pruned, func(p storage.PrunedRef) string { return p.Branch }),
+		"landed_fork_points_dropped": joinBranches(landed.ForkPointsDropped, func(d storage.ForkPointRecord) string { return d.Branch }),
 	}
 	traceStatus := "ok"
 	traceReason := receiveReasonForState(result.State)
@@ -849,4 +853,14 @@ func recordReceiveError(ws workspace.Info, cause error) {
 			"lit: automatic receive could not record failure trace (%v); original error: %v\n",
 			traceErr, cause)
 	}
+}
+
+// joinBranches is the branches of items, comma-separated, as a trace's
+// metadata carries a list: empty when there are none.
+func joinBranches[T any](items []T, branch func(T) string) string {
+	names := make([]string, len(items))
+	for i, item := range items {
+		names[i] = branch(item)
+	}
+	return strings.Join(names, ",")
 }
