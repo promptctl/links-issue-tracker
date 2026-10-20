@@ -35,7 +35,18 @@ type MySQLError struct {
 	// with whatever identifiers it names. It is for humans to read, not for
 	// callers to match on.
 	Message string
+
+	// cause is the engine error this one was translated from. The embedded
+	// engine runs in-process, so its error is still a Go value here, carrying
+	// the sentinels Dolt raises (doltdb.ErrNoCommonAncestor, datas.ErrStaleInfo
+	// and the rest); Unwrap hands that chain to errors.Is and errors.As.
+	// [LAW:types-are-the-program] a caller decides a Dolt verdict off its type,
+	// never off Message.
+	cause error
 }
+
+// Unwrap returns the engine error this one was translated from.
+func (e *MySQLError) Unwrap() error { return e.cause }
 
 // Error renders the error in MySQL's own conventional form, "Error <code>:
 // <message>" — the shape the mysql client and every tool built against the

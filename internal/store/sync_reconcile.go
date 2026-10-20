@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
 	"github.com/promptctl/links-issue-tracker/internal/merge"
 	"github.com/promptctl/links-issue-tracker/internal/model"
@@ -1284,45 +1285,20 @@ func (r mergeBaseResult) shared() (commit string, ok bool) {
 	return r.commit, r.hasBase
 }
 
-// noCommonAncestorMsg is the message DOLT_MERGE_BASE raises — as a generic
-// Error 1105 — when two refs share no history: it surfaces doltdb.ErrNoCommonAncestor
-// (errors.New("no common ancestor")) verbatim through the engine and driver.
-const noCommonAncestorMsg = "no common ancestor"
-
-// isNoCommonAncestor reports whether err is DOLT_MERGE_BASE's way of signalling that
-// two refs have unrelated histories. The pinned dolt backend raises a real SQL error
-// ("Error 1105: no common ancestor") for this case; other/older backends report it as
-// an empty result set (sql.ErrNoRows). Both mean the same domain state — no base for a
-// three-way merge — not a query failure. The match is on the message, not the 1105
-// code, which is MySQL's catch-all ER_UNKNOWN_ERROR and would over-match unrelated
-// failures. [LAW:no-defensive-null-guards] the absence is matched as a value at this
-// backend boundary, not papered over downstream.
-func isNoCommonAncestor(err error) bool {
-	if err == nil {
-		return false
-	}
-	return errors.Is(err, sql.ErrNoRows) || strings.Contains(err.Error(), noCommonAncestorMsg)
-}
-
 // mergeBase returns the merge-base of two refs — the most recent commit reachable
 // from both, i.e. the three-way merge's base — or the unrelated-histories state
-// when they share none. The refs are bound, not interpolated.
+// when they share none. The refs are bound, not interpolated. DOLT_MERGE_BASE
+// raises doltdb.ErrNoCommonAncestor for unrelated histories, and the driver's
+// error unwraps to it; that is a domain state, carried as hasBase=false. Every
+// other failure of the call is an error [LAW:no-silent-failure].
 func mergeBase(ctx context.Context, db *sql.DB, ref1, ref2 string) (mergeBaseResult, error) {
-	var base sql.NullString
+	var base string
 	err := db.QueryRowContext(ctx, `SELECT DOLT_MERGE_BASE(?, ?)`, ref1, ref2).Scan(&base)
-	if isNoCommonAncestor(err) {
-		// Unrelated histories: a real domain state, carried as shared=false rather than
-		// surfaced as an obscure error. See isNoCommonAncestor for the backend forms.
+	if errors.Is(err, doltdb.ErrNoCommonAncestor) {
 		return mergeBaseResult{}, nil
 	}
 	if err != nil {
 		return mergeBaseResult{}, fmt.Errorf("merge-base of %q and %q: %w", ref1, ref2, err)
 	}
-	// Belt-and-suspenders across backend versions: a NULL or empty scalar spells the
-	// same "no ancestor" as an empty result set. [LAW:no-defensive-null-guards] the
-	// absence is a real value at the boundary, handled identically to the no-row form.
-	if trimmed := strings.TrimSpace(base.String); base.Valid && trimmed != "" {
-		return mergeBaseResult{commit: trimmed, hasBase: true}, nil
-	}
-	return mergeBaseResult{}, nil
+	return mergeBaseResult{commit: base, hasBase: true}, nil
 }

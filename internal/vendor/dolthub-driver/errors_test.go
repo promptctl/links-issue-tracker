@@ -16,6 +16,7 @@ package embedded
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/dolthub/go-mysql-server/sql"
@@ -55,4 +56,17 @@ func TestTranslateError(t *testing.T) {
 func TestMySQLErrorMessage(t *testing.T) {
 	err := &MySQLError{Number: 1146, Message: "table not found: goose_db_version"}
 	require.Equal(t, "Error 1146: table not found: goose_db_version", err.Error())
+}
+
+// TestTranslatedErrorKeepsTheEngineChain asserts that a sentinel the engine
+// wrapped is still reachable through the translated error, while its code and
+// rendering are the protocol's.
+func TestTranslatedErrorKeepsTheEngineChain(t *testing.T) {
+	sentinel := errors.New("no common ancestor")
+	err := translateError(fmt.Errorf("merge-base: %w", sentinel))
+	require.ErrorIs(t, err, sentinel)
+	var mysqlErr *MySQLError
+	require.True(t, errors.As(err, &mysqlErr))
+	require.Equal(t, uint16(1105), mysqlErr.Number)
+	require.Equal(t, "Error 1105: merge-base: no common ancestor", err.Error())
 }

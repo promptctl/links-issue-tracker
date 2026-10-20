@@ -14,6 +14,8 @@ import (
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 	doltenv "github.com/dolthub/dolt/go/libraries/doltcore/env"
+	"github.com/dolthub/dolt/go/libraries/doltcore/env/actions"
+	"github.com/dolthub/dolt/go/store/datas"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"golang.org/x/mod/semver"
 )
@@ -861,27 +863,17 @@ func (e pushRefusedError) Error() string {
 
 func (e pushRefusedError) Unwrap() error { return e.cause }
 
-// pushRefusalTexts are the texts DOLT_PUSH's two refusals carry. The SQL
-// boundary renders DOLT_PUSH's error as text (MySQL error 1105), so a refusal
-// is recognized by its text, as pushLeasedWithinLock recognizes a stale
-// lease.
-//   - The first is the hint of env.ErrFailedToPush, which Dolt returns only
-//     when a target was rejected non-fast-forward. Its opening line is not
-//     used: it is git's own "failed to push some refs" line, which a git
-//     remote's rejected write carries too. Git gives this hint only for a
-//     non-fast-forward rejection, and a git remote's writes are all forced.
-//     TestPushRefusalTextsAreDoltsOwn holds it to Dolt's message
-//     [LAW:one-source-of-truth].
-//   - The second is a re-rooted remote, which shares no ancestor with the
-//     push.
+// pushRefusals are the errors DOLT_PUSH wraps when the remote refused the
+// push on its history:
+//   - doltdb.ErrIsAhead, actions.ErrCantFF and datas.ErrMergeNeeded are the
+//     target rejections DoPush reports as non-fast-forward: the remote holds
+//     commits the pushed head does not descend from.
+//   - doltdb.ErrNoCommonAncestor is a re-rooted remote, which shares no
+//     ancestor with the push.
 //
-// Both come from the fast-forward check, which a forced push skips, so a
+// All come from the fast-forward check, which a forced push skips, so a
 // forced push is never refused.
-var pushRefusalTexts = []string{pushRejectedHint, pushNoAncestorText}
-
-const pushRejectedHint = "hint: Updates were rejected because the tip of your current branch is behind"
-
-var pushNoAncestorText = doltdb.ErrNoCommonAncestor.Error()
+var pushRefusals = []error{doltdb.ErrIsAhead, actions.ErrCantFF, datas.ErrMergeNeeded, doltdb.ErrNoCommonAncestor}
 
 // classifyPushFailure is DOLT_PUSH's error as pushRefusedError when the remote
 // refused it, and otherwise the failure as it came: an unreachable remote, one
@@ -893,8 +885,7 @@ func classifyPushFailure(remote storage.RemoteName, pushErr error) error {
 	if errors.As(pushErr, new(RemoteUnreachableError)) {
 		return wrapped
 	}
-	text := pushErr.Error()
-	if slices.ContainsFunc(pushRefusalTexts, func(refusal string) bool { return strings.Contains(text, refusal) }) {
+	if slices.ContainsFunc(pushRefusals, func(refusal error) bool { return errors.Is(pushErr, refusal) }) {
 		return pushRefusedError{remote: remote.String(), cause: pushErr}
 	}
 	return wrapped
