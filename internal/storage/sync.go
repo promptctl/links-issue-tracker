@@ -12,8 +12,26 @@ import (
 // remote said: a peer pushed first, and this checkout has to merge the
 // remote's commits (the background receive, or `lit sync pull`) before its
 // next push can land. Every push method of Syncer returns an unforced push's
-// refusal that stands in that state wrapped in it.
+// refusal that stands in that state as a PushDivergedError, which matches it.
 var ErrPushDiverged = errors.New("the remote and this checkout each hold commits the other lacks; the remote's must be merged before a push can land")
+
+// PushDivergedError is a push refusal that stands while the branch and the
+// remote each hold commits the other lacks: ErrPushDiverged, with the remote
+// and branch it was judged on, so a caller names them without re-deriving
+// them, and the remote's refusal.
+type PushDivergedError struct {
+	Remote  RemoteName
+	Branch  string
+	Refusal error
+}
+
+func (e PushDivergedError) Error() string {
+	return fmt.Sprintf("%v: %v", ErrPushDiverged, e.Refusal)
+}
+
+// Unwrap is the sentinel and the refusal, so errors.Is(err, ErrPushDiverged)
+// and an errors.As for the refusal's own type both still answer.
+func (e PushDivergedError) Unwrap() []error { return []error{ErrPushDiverged, e.Refusal} }
 
 // This file is the vocabulary the sync and reconcile capabilities speak. It
 // lives beside the contract rather than inside an engine because a capability

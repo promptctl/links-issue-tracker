@@ -518,7 +518,7 @@ Every way a receive ends puts exactly one value on the event's `receive.outcomes
   1. `context.Canceled` in `err` or `outcome.pushErr` → `canceled` with the first non-nil error's text, plus remote/branch.
   2. `store.ErrWorkspaceBusy` in `err` or `outcome.pushErr` → `workspace_busy` with the first non-nil error's text, plus remote/branch.
   3. any other `err` → `error` with err text.
-  4. `outcome.pushErr != nil` → `pushFailureDecision(outcome.pushErr, outcome.receiveMerges)` plus remote/branch: `diverged` with its text when it holds `storage.ErrPushDiverged` and a receive merges; `error` with its text plus `; no automatic receive runs here to merge the peer's commits: run 'lit sync pull', then 'lit sync push'` when it holds it and none does; otherwise `error` with its text.
+  4. `outcome.pushErr != nil` → `pushFailureDecision(outcome.pushErr, outcome.remote, outcome.receiveMerges)` plus remote/branch: `diverged` with its text when it holds `storage.ErrPushDiverged` and a receive merges; `error` with its text plus `; no automatic receive runs here to merge the peer's commits: run ` and `pushDivergedRemedy`'s commands for that remote, single-quoted and joined by `, then `, when it holds it and none does; otherwise `error` with its text.
   5. `outcome.skip != syncTargetReady` → decision = `string(outcome.skip)`, remote only.
   6. default → `pushed` with remote/branch.
 - `completePushAttempt` — `sync_push_outcome.go`: derives the record, appends it to the event's `push.outcomes` occurrences as `{push.decision, push.reason, push.remote, push.branch, push.receive_merges}`, writes it, and feeds `observePushOutcomeForOwner`.

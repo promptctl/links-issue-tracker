@@ -307,6 +307,7 @@ func TestEveryClassRendersItsOwnBlock(t *testing.T) {
 	classes := []syncFailureClass{
 		syncFailureProseHeld, syncFailureDivergedUnresolved, syncFailureRemoteSchemaAhead,
 		syncFailureUnrelatedHistories, syncFailureIDCollision, syncFailureReceiveUnsettled,
+		syncFailurePushDiverged,
 	}
 	for _, class := range classes {
 		failure := SyncFailure{

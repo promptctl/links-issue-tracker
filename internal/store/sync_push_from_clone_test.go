@@ -63,7 +63,8 @@ func TestSyncPushFromCloneReportsARaceItLostAsSuperseded(t *testing.T) {
 // lose when both write: a clone is taken at c1, the live store commits c2
 // and pushes it, and the clone commits c3. The remote refuses the clone's
 // push, and the clone and the remote each hold a commit the other lacks, so
-// every push step reports the refusal as storage.ErrPushDiverged.
+// every push step reports the refusal as storage.ErrPushDiverged, naming the
+// remote and branch it judged.
 func TestAPushRefusedOverAPeersCommitsIsDiverged(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -82,8 +83,13 @@ func TestAPushRefusedOverAPeersCommitsIsDiverged(t *testing.T) {
 		{"SyncPush", clone.SyncPush},
 	}
 	for _, step := range steps {
-		if _, err := step.push(ctx, remoteName(t, "origin"), "master", false, false); !errors.Is(err, storage.ErrPushDiverged) {
+		_, err := step.push(ctx, remoteName(t, "origin"), "master", false, false)
+		if !errors.Is(err, storage.ErrPushDiverged) {
 			t.Fatalf("%s() over the peer's c2 error = %v; want storage.ErrPushDiverged", step.name, err)
+		}
+		var diverged storage.PushDivergedError
+		if !errors.As(err, &diverged) || diverged.Remote.String() != "origin" || diverged.Branch != "master" {
+			t.Fatalf("%s() refusal = %#v; want a PushDivergedError judged on origin/master", step.name, diverged)
 		}
 	}
 }

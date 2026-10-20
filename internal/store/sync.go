@@ -970,8 +970,8 @@ func (s *Store) retryOverFollow(ctx context.Context, remote storage.RemoteName, 
 	return storage.SyncPushResult{}, s.judgeStandingRefusal(ctx, remote, branch, pushErr)
 }
 
-// judgeStandingRefusal is a refusal that stands, after its fetch, wrapped in
-// storage.ErrPushDiverged when the branch and the remote each hold commits
+// judgeStandingRefusal is a refusal that stands, after its fetch, as a
+// storage.PushDivergedError when the branch and the remote each hold commits
 // the other lacks.
 func (s *Store) judgeStandingRefusal(ctx context.Context, remote storage.RemoteName, branch string, refusal error) error {
 	fresh, err := s.SyncFreshness(ctx, remote, branch)
@@ -979,7 +979,7 @@ func (s *Store) judgeStandingRefusal(ctx context.Context, remote storage.RemoteN
 		return unjudgedRefusal(refusal, err)
 	}
 	if fresh.CommitsDiverged() {
-		return fmt.Errorf("%w: %w", storage.ErrPushDiverged, refusal)
+		return storage.PushDivergedError{Remote: remote, Branch: branch, Refusal: refusal}
 	}
 	return refusal
 }

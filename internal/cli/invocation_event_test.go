@@ -451,6 +451,30 @@ func TestASchemaAheadRefusalEndsTheEventAsSchemaAheadAtEitherBoundary(t *testing
 	}
 }
 
+// A sync-failure block's event records which class it was: every class ends on
+// the one sync_divergence reason, so the reason alone cannot say.
+func TestASyncFailureEndsTheEventWithItsClass(t *testing.T) {
+	failure := SyncFailureError{Failure: SyncFailure{Class: syncFailurePushDiverged, Remote: "origin", Branch: "master", Cause: storage.ErrPushDiverged}}
+	line, err := telemetry.Line(telemetry.Begin(telemetry.Event{}).Finish(invocationEnd(time.Now(), failure, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var written struct {
+		ExitCode int            `json:"exit_code"`
+		Reason   string         `json:"reason"`
+		Facts    map[string]any `json:"facts"`
+	}
+	if err := json.Unmarshal(line, &written); err != nil {
+		t.Fatal(err)
+	}
+	if written.ExitCode != ExitConflict || written.Reason != "sync_divergence" {
+		t.Errorf("event ended exit_code=%d reason=%q, want %d sync_divergence", written.ExitCode, written.Reason, ExitConflict)
+	}
+	if got := written.Facts["sync.failure_class"]; got != "push_diverged" {
+		t.Errorf("sync.failure_class = %#v, want push_diverged", got)
+	}
+}
+
 // A schema-ahead refusal's event records which snapshot it offered as the
 // lossy rollback — none is an empty name — why snapshots could not be read, and
 // how many it read, and a wrapped refusal records the same.

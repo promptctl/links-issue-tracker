@@ -502,10 +502,12 @@ func syncPushLeaf() syncLeaf {
 		// the skipped/ok outcome is never printed over a failed push.
 		recordPushedAdvertisement(ws, outcome.proven)
 		if outcome.pushErr != nil {
-			// A remote schema ahead of this binary surfaces as the one sync-failure
-			// contract (exit ExitValidation as the schema-ahead refusal it wraps,
-			// naming `lit upgrade`) rather than the raw non-fast-forward/refusal
-			// string. [LAW:single-enforcer]
+			// A remote schema ahead of this binary, and a push refused over a
+			// peer's commits, surface as the one sync-failure contract rather
+			// than the raw non-fast-forward/refusal string: the first exits
+			// ExitValidation as the schema-ahead refusal it wraps, naming `lit
+			// upgrade`, the second exits 5 naming the pull that merges the peer's
+			// commits. [LAW:single-enforcer]
 			return asSyncFailure(outcome.pushErr)
 		}
 		return printSyncPushOutcome(stdout, outcome, *verbose)
