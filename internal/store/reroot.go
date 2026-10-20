@@ -270,22 +270,31 @@ func readHistory(ctx context.Context, ddb *doltdb.DoltDB, from hash.Hash, stop m
 		if _, stopped := stop[addr]; stopped {
 			continue
 		}
-		commit, err := readFullCommit(ctx, ddb, addr)
-		if err != nil {
-			return nil, fmt.Errorf("read commit %s: %w", addr, err)
-		}
-		height, err := commit.Height()
+		c, err := readHistoryCommit(ctx, ddb, addr)
 		if err != nil {
 			return nil, err
 		}
-		parents, err := commit.ParentHashes(ctx)
-		if err != nil {
-			return nil, err
-		}
-		read[addr] = historyCommit{commit: commit, addr: addr, height: height, parents: parents}
-		pending = append(pending, parents...)
+		read[addr] = c
+		pending = append(pending, c.parents...)
 	}
 	return read, nil
+}
+
+// readHistoryCommit reads the commit at addr with its height and parents.
+func readHistoryCommit(ctx context.Context, ddb *doltdb.DoltDB, addr hash.Hash) (historyCommit, error) {
+	commit, err := readFullCommit(ctx, ddb, addr)
+	if err != nil {
+		return historyCommit{}, fmt.Errorf("read commit %s: %w", addr, err)
+	}
+	height, err := commit.Height()
+	if err != nil {
+		return historyCommit{}, fmt.Errorf("read the height of %s: %w", addr, err)
+	}
+	parents, err := commit.ParentHashes(ctx)
+	if err != nil {
+		return historyCommit{}, fmt.Errorf("read the parents of %s: %w", addr, err)
+	}
+	return historyCommit{commit: commit, addr: addr, height: height, parents: parents}, nil
 }
 
 // commitRoot writes the parentless copy of c: committed to reRootRef, which

@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"reflect"
 	"strings"
@@ -377,7 +378,11 @@ func TestAHeldLeaseTheBranchCannotFollowIsTheBoundsError(t *testing.T) {
 	withChunkStore(t, alpha, func(ddb *doltdb.DoltDB) {
 		branch := ref.NewBranchRef("master")
 		headCommit := readCommit(t, ctx, ddb, hash.Parse(head))
-		cut, err := longestLineAncestor(ctx, ddb, headCommit, keep-1)
+		headHistory, err := readHistoryCommit(ctx, ddb, hash.Parse(head))
+		if err != nil {
+			t.Fatal(err)
+		}
+		cut, err := cutKeeping(ctx, ddb, headHistory, keep)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -408,84 +413,95 @@ func TestAHeldLeaseTheBranchCannotFollowIsTheBoundsError(t *testing.T) {
 	}
 }
 
-// TestABoundThatFiresCutsOnTheLineItsHeightCounts keeps the bound over a
-// history whose long line came in as a second parent, the shape a checkout
-// with a short line of its own leaves after merging a peer's:
+// TestABoundThatFiresCutsWhereEveryLineMeets keeps the bound over a history
+// whose long line came in as a second parent, the shape a checkout with a
+// short line of its own leaves after merging a peer's:
 //
 //	r - C - a1 ------------ X - Y
 //	     \                 /
 //	      s1 - s2 - s3 - s4
 //
-// Y's height is 8, so a window of 8 fires, but its first-parent line (Y X a1
-// C r) holds 5 commits, short of the 7 the window keeps. The cut is on the
-// line the height counts, at C, which every line passes through; the re-root
-// lands, alpha follows it, and leaves the head at height 7, the window's
-// keep, with the backlog unchanged.
-func TestABoundThatFiresCutsOnTheLineItsHeightCounts(t *testing.T) {
+// Y's height is 8, but its first-parent line (Y X a1 C r) holds 5 commits.
+// Every line meets at Y, X, C and r, and nowhere between X and C: a window
+// that keeps 7 cuts at C, at the height it keeps; one that keeps 6 would cut
+// inside the bubble, so it cuts at C too and keeps 7; one that keeps 2 cuts at
+// X. Each re-root lands, alpha follows it, and the backlog is unchanged.
+func TestABoundThatFiresCutsWhereEveryLineMeets(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
-	remoteURL, _ := gitRemote(t)
-	alpha := migratedDoltDir(t)
-	c := map[string]hash.Hash{}
-	withChunkStore(t, alpha, func(ddb *doltdb.DoltDB) {
-		root, err := commitRoot(ctx, ddb, readCommit(t, ctx, ddb, branchHead(t, ctx, ddb, "master")))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if c["r"], err = root.HashOf(); err != nil {
-			t.Fatal(err)
-		}
-		value, _, err := commitContent(ctx, root)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for i, spec := range []struct{ name, parents string }{
-			{"C", "r"}, {"a1", "C"}, {"s1", "C"}, {"s2", "s1"}, {"s3", "s2"}, {"s4", "s3"}, {"X", "a1 s4"},
-		} {
-			var parents []*doltdb.Commit
-			for _, p := range strings.Fields(spec.parents) {
-				parents = append(parents, readCommit(t, ctx, ddb, c[p]))
-			}
-			meta := &datas.CommitMeta{Name: "t", Email: "t@links.local", Description: spec.name, Timestamp: uint64(1_800_000_000_000 + i), UserTimestamp: int64(1_800_000_000_000 + i)}
-			nc, err := ddb.CommitDanglingWithParentCommits(ctx, value, parents, meta)
-			if err != nil {
-				t.Fatalf("commit %s: %v", spec.name, err)
-			}
-			if c[spec.name], err = nc.HashOf(); err != nil {
+	for _, tc := range []struct {
+		keep, height uint64
+		cut          string
+	}{
+		{keep: 7, height: 7, cut: "C"},
+		{keep: 6, height: 7, cut: "C"},
+		{keep: 2, height: 2, cut: "X"},
+	} {
+		t.Run(fmt.Sprintf("keep %d", tc.keep), func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			remoteURL, _ := gitRemote(t)
+			alpha := migratedDoltDir(t)
+			c := map[string]hash.Hash{}
+			withChunkStore(t, alpha, func(ddb *doltdb.DoltDB) {
+				root, err := commitRoot(ctx, ddb, readCommit(t, ctx, ddb, branchHead(t, ctx, ddb, "master")))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if c["r"], err = root.HashOf(); err != nil {
+					t.Fatal(err)
+				}
+				value, _, err := commitContent(ctx, root)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for i, spec := range []struct{ name, parents string }{
+					{"C", "r"}, {"a1", "C"}, {"s1", "C"}, {"s2", "s1"}, {"s3", "s2"}, {"s4", "s3"}, {"X", "a1 s4"},
+				} {
+					var parents []*doltdb.Commit
+					for _, p := range strings.Fields(spec.parents) {
+						parents = append(parents, readCommit(t, ctx, ddb, c[p]))
+					}
+					meta := &datas.CommitMeta{Name: "t", Email: "t@links.local", Description: spec.name, Timestamp: uint64(1_800_000_000_000 + i), UserTimestamp: int64(1_800_000_000_000 + i)}
+					nc, err := ddb.CommitDanglingWithParentCommits(ctx, value, parents, meta)
+					if err != nil {
+						t.Fatalf("commit %s: %v", spec.name, err)
+					}
+					if c[spec.name], err = nc.HashOf(); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := ddb.SetHead(ctx, ref.NewBranchRef("master"), c["X"]); err != nil {
+					t.Fatal(err)
+				}
+			})
+			seedReconcileRemote(t, ctx, alpha, remoteURL)
+			head := headAt(t, ctx, alpha)
+			before := exportOf(t, ctx, alpha)
+			st := openSyncOrFatal(t, ctx, alpha)
+			height := heightOf(t, ctx, st, head)
+			if err := st.Close(); err != nil {
 				t.Fatal(err)
 			}
-		}
-		if err := ddb.SetHead(ctx, ref.NewBranchRef("master"), c["X"]); err != nil {
-			t.Fatal(err)
-		}
-	})
-	seedReconcileRemote(t, ctx, alpha, remoteURL)
-	head := headAt(t, ctx, alpha)
-	before := exportOf(t, ctx, alpha)
-	st := openSyncOrFatal(t, ctx, alpha)
-	height := heightOf(t, ctx, st, head)
-	if err := st.Close(); err != nil {
-		t.Fatal(err)
-	}
-	const keep = 7
-	if fired := (storage.HistoryBound{Height: height, Window: windowOf(t, keep+1, keep)}).Fired(); height != 8 || !fired {
-		t.Fatalf("Y's height = %d (fired %t); want 8, firing a window of 8", height, fired)
-	}
+			if fired := (storage.HistoryBound{Height: height, Window: windowOf(t, tc.keep+1, tc.keep)}).Fired(); height != 8 || !fired {
+				t.Fatalf("Y's height = %d (fired %t); want 8, firing a window that keeps %d", height, fired, tc.keep)
+			}
 
-	b := boundAt(t, ctx, alpha, head, keep)
-	if b.Err != nil || b.ReRooted.Cut != c["C"].String() || b.Lease != storage.LeaseHeld || b.Publication != storage.ReRootPublished || !b.Collection.Ran {
-		t.Fatalf("the bound over a merge-heavy history = %+v; want it cut at C %s, published, followed and collected", b, c["C"])
-	}
-	st = openSyncOrFatal(t, ctx, alpha)
-	got := heightOf(t, ctx, st, "HEAD")
-	if err := st.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if got != keep {
-		t.Fatalf("the head's height after the re-root = %d; want the window's keep, %d", got, keep)
-	}
-	if after := exportOf(t, ctx, alpha); !reflect.DeepEqual(after, before) {
-		t.Fatalf("the backlog after the re-root:\n%+v\nwant\n%+v", after, before)
+			b := boundAt(t, ctx, alpha, head, tc.keep)
+			if b.Err != nil || b.ReRooted.Cut != c[tc.cut].String() || b.Lease != storage.LeaseHeld || b.Publication != storage.ReRootPublished || !b.Collection.Ran {
+				t.Fatalf("the bound over a merge-heavy history = %+v; want it cut at %s %s, published, followed and collected", b, tc.cut, c[tc.cut])
+			}
+			st = openSyncOrFatal(t, ctx, alpha)
+			got := heightOf(t, ctx, st, "HEAD")
+			if err := st.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.height {
+				t.Fatalf("the head's height after the re-root = %d; want %d, Y's height less the cut's plus one", got, tc.height)
+			}
+			if after := exportOf(t, ctx, alpha); !reflect.DeepEqual(after, before) {
+				t.Fatalf("the backlog after the re-root:\n%+v\nwant\n%+v", after, before)
+			}
+		})
 	}
 }
 
