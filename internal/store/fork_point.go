@@ -47,13 +47,11 @@ func ownerOf(remote storage.RemoteName) refOwner {
 }
 
 // ownerOfHeld is the owner of the refs a remote Dolt holds writes, whatever
-// its name: its first segment.
-func ownerOfHeld(name string) (refOwner, error) {
+// its name: its first segment. For a name such as /x that segment is empty,
+// and Dolt reads no remote off such refs, so that owner owns none.
+func ownerOfHeld(name string) refOwner {
 	first, _, _ := strings.Cut(name, "/")
-	if first == "" {
-		return refOwner{}, fmt.Errorf("remote %q names no owner for its refs: its first segment is empty", name)
-	}
-	return refOwner{name: first}, nil
+	return refOwner{name: first}
 }
 
 // forkPointBranch is the branch holding the fork point of

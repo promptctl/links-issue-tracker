@@ -171,9 +171,12 @@ const pushProofDeadline = 10 * time.Second
 // for the receive. [LAW:parse-dont-validate] the non-zero advertisement is the
 // proof; nothing downstream re-asks.
 func provePushedAdvertisement(ctx context.Context, syncer storage.Syncer, ws workspace.Info, remoteName storage.RemoteName, gitRemotes []workspace.GitRemote) (proven remoteAdvertisement, unproven string) {
-	receiveRemote, _, err := resolveSyncRemote("", workspace.UpstreamRemote(ctx, ws.RootDir), gitRemotes)
+	receiveRemote, ok, err := resolveSyncRemote("", workspace.UpstreamRemote(ctx, ws.RootDir), gitRemotes)
 	if err != nil {
 		return remoteAdvertisement{}, "resolve the remote the automatic receive asks: " + err.Error()
+	}
+	if !ok {
+		return remoteAdvertisement{}, "the automatic receive asks no remote"
 	}
 	if receiveRemote != remoteName {
 		return remoteAdvertisement{}, fmt.Sprintf("pushed remote %q is not the remote the automatic receive asks (%q)", remoteName, receiveRemote)

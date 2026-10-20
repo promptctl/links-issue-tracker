@@ -37,10 +37,7 @@ func TestRemoteNameCharactersAreDolts(t *testing.T) {
 func TestRefOwnerIsDoltsRemote(t *testing.T) {
 	t.Parallel()
 	for _, name := range []string{"origin", "a/b", "team/origin", "a/b/c", "a//b"} {
-		owner, err := ownerOfHeld(name)
-		if err != nil {
-			t.Fatalf("ownerOfHeld(%q): %v", name, err)
-		}
+		owner := ownerOfHeld(name)
 		tracking, err := ref.NewRemoteRefFromPathStr("remotes/" + name + "/master")
 		if err != nil {
 			t.Fatalf("Dolt's parse of %s's tracking ref: %v", name, err)

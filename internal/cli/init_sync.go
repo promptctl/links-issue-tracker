@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -216,6 +217,19 @@ func planRemoteAdopt(ctx context.Context, ws workspace.Info) (*adoptClonePlan, i
 		return nil, initSyncOutcome{State: initSyncFailed, Error: err.Error()}
 	}
 	remote, ok, err := resolveSyncRemote("", workspace.UpstreamRemote(ctx, ws.RootDir), gitRemotes)
+	// A remote Dolt cannot hold is no eligible remote, so init starts fresh,
+	// unless it carries lit data: a fresh store would fork from that backlog,
+	// which only the remote renamed can adopt. [LAW:no-silent-failure]
+	if refused := (storage.RefusedRemoteNameError{}); errors.As(err, &refused) {
+		hasData, dataErr := workspace.RemoteHasDoltData(ctx, ws.RootDir, refused.Name)
+		if dataErr != nil {
+			return nil, initSyncOutcome{State: initSyncFailed, Remote: refused.Name, Error: dataErr.Error()}
+		}
+		if hasData {
+			return nil, initSyncOutcome{State: initSyncFailed, Remote: refused.Name, Error: fmt.Sprintf("remote %q carries lit ticket data (refs/dolt/*), which lit cannot adopt: %v", refused.Name, err)}
+		}
+		return freshOutcome(initSyncOutcome{State: initSyncNotConfigured, Remote: refused.Name})
+	}
 	if err != nil {
 		return nil, initSyncOutcome{State: initSyncFailed, Error: err.Error()}
 	}

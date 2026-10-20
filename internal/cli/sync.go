@@ -1126,7 +1126,8 @@ func planRemoteSync(gitRemotes []workspace.GitRemote, doltRemotes []storage.Sync
 		remove:  []string{},
 		refused: []string{},
 	}
-	held := map[string]bool{}
+	// wanted is every name git asks Dolt to hold.
+	wanted := map[string]bool{}
 	for _, remote := range gitRemotes {
 		name, err := storage.ParseRemoteName(remote.Name)
 		if err != nil {
@@ -1134,7 +1135,7 @@ func planRemoteSync(gitRemotes []workspace.GitRemote, doltRemotes []storage.Sync
 			continue
 		}
 		desired := plannedRemote{name: name, url: store.GitBackedRemoteURL(remote.URL)}
-		held[name.String()] = true
+		wanted[name.String()] = true
 		currentURL, exists := doltByName[name.String()]
 		if !exists {
 			plan.add = append(plan.add, desired)
@@ -1145,7 +1146,7 @@ func planRemoteSync(gitRemotes []workspace.GitRemote, doltRemotes []storage.Sync
 		}
 	}
 	for name := range doltByName {
-		if !held[name] {
+		if !wanted[name] {
 			plan.remove = append(plan.remove, name)
 		}
 	}

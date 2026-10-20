@@ -197,10 +197,7 @@ func (s *Store) SyncRemoveRemote(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
-	owner, err := ownerOfHeld(trimmedName)
-	if err != nil {
-		return err
-	}
+	owner := ownerOfHeld(trimmedName)
 	return s.runSyncMutation(ctx, func(ctx context.Context) error {
 		record := storage.RemoteRemovalRecord{Remote: trimmedName, Owner: owner.String()}
 		err := s.removeRemote(ctx, owner, &record)

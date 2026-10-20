@@ -526,6 +526,7 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "sync reconcile take", Src: "sync reconcile take"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "sync: no git remote configured — ticket history stays on this machine; add a remote and run 'lit sync push' to share it", Src: "sync: no git remote configured — ticket history stays on this machine; add a remote and run 'lit sync push' to share it"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "take the receive's clone (live store held %s): %w", Src: "take the receive's clone (live store held %s): %w"},
+	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "the automatic receive asks no remote", Src: "the automatic receive asks no remote"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "the configured remote", Src: "the configured remote"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "the divergence changed since you read it; your resolutions were not applied. Re-merge the CURRENT conflicts below:", Src: "the divergence changed since you read it; your resolutions were not applied. Re-merge the CURRENT conflicts below:"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "the store's git mirror does not hold every commit the remote advertises", Src: "the store's git mirror does not hold every commit the remote advertises"},
