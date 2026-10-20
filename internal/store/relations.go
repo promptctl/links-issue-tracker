@@ -780,8 +780,7 @@ func clearParentTx(ctx context.Context, tx *sql.Tx, childID string) error {
 }
 
 // detachParentsTx removes every parent edge of childID on tx, judging nothing:
-// it is the raw half of a clear, and a bulk reparent's detach before the
-// attach that judges the child's new place.
+// it is the raw half of a clear.
 func detachParentsTx(ctx context.Context, tx *sql.Tx, childID string) (int64, error) {
 	res, err := tx.ExecContext(ctx, `DELETE FROM relations WHERE src_id = ? AND type = 'parent-child'`, childID)
 	if err != nil {

@@ -3668,7 +3668,7 @@ func aBulkFileFailingAtAnUpdateNamesWhatItKept(t *testing.T, ctx context.Context
 		// An id the gate cannot judge: it names no issue, so its write fails.
 		{ID: "no-such-issue", Title: &renamed},
 	})
-	want := fmt.Sprintf("kept 0 reparents [], 1 updates [%s] and the order of 2 issues [%s,%s]", c.ID, b.ID, a.ID)
+	want := fmt.Sprintf("kept 0 reparents [], 0 blocked_by sets [], 1 updates [%s] and the order of 2 issues [%s,%s]", c.ID, b.ID, a.ID)
 	if err == nil || !strings.Contains(err.Error(), want) {
 		t.Fatalf("BulkApply error = %v, want it to name what it kept: %q", err, want)
 	}

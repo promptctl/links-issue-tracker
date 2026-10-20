@@ -133,8 +133,8 @@ func TestABulkUpdateKeyStatesTheFieldItNames(t *testing.T) {
 		case err == nil:
 			admitted++
 			if len(file.Updates) == 0 {
-				if carried := len(file.Reparents) + len(file.Ranked); carried != 1 {
-					t.Errorf("a document stating only %s parsed to no patch and %d reparents or ranked entries, want 1", field.Name, carried)
+				if carried := len(file.Reparents) + len(file.BlockedBy) + len(file.Ranked); carried != 1 {
+					t.Errorf("a document stating only %s parsed to no patch and %d reparents, blocked_by sets or ranked entries, want 1", field.Name, carried)
 				}
 				continue
 			}
