@@ -210,11 +210,11 @@ func syncFetchLeaf() syncLeaf {
 			return err
 		}
 		if remoteName == "" {
+			// Said in every mode: the staleness banner sends people here, and a
+			// fetch that silently fetched nothing would leave them stale with no
+			// sign why. [LAW:no-silent-failure]
 			recordSyncCommandTrace(ws, "lit sync fetch", string(syncTargetNoRemote), nil, nil)
-			if !*verbose {
-				return nil
-			}
-			_, err := fmt.Fprintln(stdout, "skipped sync fetch: no eligible git remote")
+			_, err := fmt.Fprintln(stdout, "skipped sync fetch: no eligible git remote; name one with --remote")
 			return err
 		}
 		err = fetchAndFollow(ctx, session, ws, syncState.gitRemotes, remoteName, *prune)

@@ -57,4 +57,12 @@ func TestSyncFetchSelectsTheSyncRemoteAndFailsOnAnUnreadableBranchRecord(t *test
 	if !strings.Contains(err.Error(), "unreadable") {
 		t.Fatalf("`lit sync fetch` error = %v, want the unreadable record named", err)
 	}
+
+	// Two remotes and no upstream select none: the fetch says it skipped,
+	// without --verbose, since the staleness banner sends people to it.
+	runGit(t, dir, "branch", "--unset-upstream")
+	runGit(t, dir, "remote", "add", "other", filepath.Join(base, "remote.git"))
+	if out := runCLIInDir(t, dir, "sync", "fetch"); strings.TrimSpace(out) != "skipped sync fetch: no eligible git remote; name one with --remote" {
+		t.Fatalf("`lit sync fetch` with no remote selected = %q, want the skip said", out)
+	}
 }
