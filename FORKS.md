@@ -15,7 +15,7 @@ one below carries the condition that would let it be deleted.
 
 | Module in `go.mod` | Upstream | What `lit` builds | Branch | Current pin |
 | --- | --- | --- | --- | --- |
-| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20261020002142-ea297070ed0c` |
+| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20261020012139-02c851d38721` |
 | `github.com/dolthub/go-mysql-server` | [dolthub/go-mysql-server](https://github.com/dolthub/go-mysql-server) | [promptctl/go-mysql-server](https://github.com/promptctl/go-mysql-server) | `lit` | `v0.20.1-0.20260821032251-ab5cb9ec3b69` |
 | `github.com/dolthub/driver` | [dolthub/driver](https://github.com/dolthub/driver) | [`internal/vendor/dolthub-driver`](internal/vendor/dolthub-driver) | — | `v0.2.1-0.20260314000741-0fe74e7ee31a` |
 
@@ -330,12 +330,14 @@ deadline never returned. It now rebases onto the manifest before the retry,
 whose ref check then runs against the files the store holds, so a chunk
 referencing one the new generation dropped fails with
 `ErrTableFileNotFound`. The manifest write checks the generation again
-against its own read, and on a git remote the two reads can disagree:
-`GitBlobstore` serves the manifest it last synced for a second after a sync,
-so the first check can pass on the pre-GC manifest while the write's read
-finds the new one. That `ErrGCGenerationExpired` gets the same rebase and
-retry, for a caller that asked for the generation to be checked
-(`links-storage-3k6u.a53`). `nbs.ReplaceStoreTableFiles` points a store's manifest
+against its own read, and the two reads can disagree on any manifest when a
+new generation lands between them. On a git remote they can also disagree
+without one landing in that window: `GitBlobstore` serves the manifest it
+last synced for a second after a sync, so the first check can pass on the
+pre-GC manifest while the write's read finds the new one. That
+`ErrGCGenerationExpired` gets the same rebase and retry, for a caller that
+asked for the generation to be checked, and the retry's ref check still
+refuses a chunk the new generation dropped (`links-storage-3k6u.a53`). `nbs.ReplaceStoreTableFiles` points a store's manifest
 at exactly the given table files, keeping its root and starting a new GC
 generation, in one manifest write; a refusal while the manifest has moved past
 the view is `ErrConcurrentManifestWriteDuringOverwrite`.
@@ -343,8 +345,9 @@ the view is `ErrConcurrentManifestWriteDuringOverwrite`.
 re-root (`links-storage-3k6u`): the remote never collects itself, and a force
 push only adds table files.
 
-**Retire it when** upstream rebases on a GC-generation mismatch and offers a
-way to replace a remote's table set under a new generation, and the `require`
+**Retire it when** upstream rebases on a GC-generation mismatch, whether the
+check before the write finds it or the manifest write does, and offers a way
+to replace a remote's table set under a new generation, and the `require`
 line moves past that change. Dropping it without that leaves the shared
 remote holding every write ever pushed, and the bare
 `OverwriteStoreManifest` in its place keeps the generation, so a writer
