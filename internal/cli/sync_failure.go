@@ -181,8 +181,8 @@ func remoteSchemaAheadFailure(err error) (SyncFailure, bool) {
 
 // pushDivergedFailure builds the sync-failure contract for a push the remote
 // refused over a peer's commits, or ok=false when err is not one. The remote
-// and branch come off the store's refusal; the refusal is the block's cause,
-// since its text is the remote's.
+// and branch come off the store's refusal. The whole refused attempt's error is
+// the block's cause, fenced because it carries the remote's text.
 func pushDivergedFailure(err error) (SyncFailure, bool) {
 	var diverged storage.PushDivergedError
 	if !errors.As(err, &diverged) {
@@ -503,7 +503,7 @@ func (f SyncFailure) escalationLine() string {
 		// The push path reads no divergence age or span, so the line is fixed.
 		// It names what clears the refusal and when it stops being the agent's
 		// to clear; it never calls it routine, which the directive above denies.
-		return "ESCALATION — resolve now: the pull above merges the peer's commits, and the push after it lands them. If the pull reports a conflict, resolve it as its block says; if the push is refused again after the pull, surface it to the user as blocking."
+		return "ESCALATION — resolve now: the pull above merges the peer's commits, and the push after it lands them. If the pull reports a conflict, resolve it as its block says. If the push is refused again, another peer pushed in between: run the steps once more, and if the push is still refused after that, surface it to the user as blocking."
 	case syncFailureProseHeld, syncFailureDivergedUnresolved:
 		span := f.Ahead + f.Behind
 		if f.persistent() {
