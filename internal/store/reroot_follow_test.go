@@ -7,6 +7,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -632,51 +633,99 @@ func TestSyncDoesNotFollowARemoteRootMatchedByMetadataAlone(t *testing.T) {
 	}
 }
 
+// probeThenGap has a store on bravo probe the re-rooted remote as unrelated
+// and give its engine up, as its follow does before the hold waits for LOCK;
+// gap then runs, as another process would in that wait, and the store's hold
+// opens after it. It returns the store, open, and what the hold returned.
+func probeThenGap(t *testing.T, ctx context.Context, r reRootedRemote, gap func()) (*Store, storage.FollowedReRoot) {
+	t.Helper()
+	origin := remoteName(t, "origin")
+	first := openSyncOrFatal(t, ctx, r.bravo)
+	t.Cleanup(func() { _ = first.Close() })
+	if err := first.SyncFetch(ctx, origin); err != nil {
+		t.Fatalf("SyncFetch error = %v", err)
+	}
+	unrelated, err := first.unrelatedToRemote(ctx, origin, "master")
+	if err != nil || !unrelated {
+		t.Fatalf("the probe = unrelated %t, err %v; want the re-rooted remote unrelated", unrelated, err)
+	}
+	if err := first.closeEngine(); err != nil {
+		t.Fatalf("closeEngine error = %v", err)
+	}
+	gap()
+	if err := first.reopenEngine(ctx); err != nil {
+		t.Fatalf("reopenEngine error = %v", err)
+	}
+	followed, err := first.followUnderHold(ctx, origin, "master", storage.SyncEntryFetch)
+	if err != nil {
+		t.Fatalf("the hold error = %v", err)
+	}
+	return first, followed
+}
+
+// assertCutNotFound fails unless st's one hold found no cut, for reason, and
+// neither moved the branch nor declined a cut.
+func assertCutNotFound(t *testing.T, st *Store, followed storage.FollowedReRoot, reason storage.CutNotFoundReason) {
+	t.Helper()
+	want := []storage.CutNotFound{{Entry: storage.SyncEntryFetch, Reason: reason}}
+	if followed.Head != "" || len(st.DeclinedReRoots()) != 0 || !slices.Equal(st.CutsNotFound(), want) {
+		t.Fatalf("the hold = %+v, declines %+v, cuts not found %+v; want no follow, no declined cut, and %+v", followed, st.DeclinedReRoots(), st.CutsNotFound(), want)
+	}
+}
+
 // TestAFollowReadsTheRelationUnderItsHold interleaves two follows of one
-// re-root on bravo, as two processes would: the first probes the histories
-// unrelated and gives the engine up; the second follows in that gap; the
-// first's hold then opens on a branch already across the cut. The hold reads
-// the histories as related and leaves the branch where the second follow put
-// it, recording no follow and no declined cut.
+// re-root on bravo, as two processes would: the second follows in the gap
+// between the first's probe and its hold, so the first's hold opens on a
+// branch already across the cut. The hold reads the histories as sharing
+// commits and leaves the branch where the second follow put it.
 func TestAFollowReadsTheRelationUnderItsHold(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	r := newReRootedRemote(t, ctx, false)
-	origin := remoteName(t, "origin")
-
-	first := openSyncOrFatal(t, ctx, r.bravo)
-	if err := first.SyncFetch(ctx, origin); err != nil {
-		t.Fatalf("SyncFetch error = %v", err)
-	}
-	local, unrelated, err := first.unrelatedToRemote(ctx, origin, "master")
-	if err != nil || !unrelated {
-		t.Fatalf("the first follow's probe = unrelated %t, err %v; want the re-rooted remote unrelated", unrelated, err)
-	}
-	if err := first.Close(); err != nil {
-		t.Fatalf("Close(first) error = %v", err)
-	}
-
-	second := openSyncOrFatal(t, ctx, r.bravo)
-	if err := second.SyncFollowReRoot(ctx, origin, "master", storage.SyncEntryFetch); err != nil {
-		t.Fatalf("the second follow error = %v", err)
-	}
-	r.assertFollowed(t, second, storage.SyncEntryFetch)
-	acrossTheCut := headCommit(t, ctx, second)
-	if err := second.Close(); err != nil {
-		t.Fatalf("Close(second) error = %v", err)
-	}
-
-	first = openSyncOrFatal(t, ctx, r.bravo)
-	defer func() { _ = first.Close() }()
-	followed, err := first.followUnderHold(ctx, origin, local, "master", storage.SyncEntryFetch)
-	if err != nil {
-		t.Fatalf("the first follow's hold error = %v", err)
-	}
-	if followed.Head != "" || len(first.FollowedReRoots()) != 0 || len(first.DeclinedReRoots()) != 0 {
-		t.Fatalf("the first follow's hold = %+v, follows %+v, declines %+v; want no follow and no declined cut", followed, first.FollowedReRoots(), first.DeclinedReRoots())
-	}
+	var acrossTheCut string
+	first, followed := probeThenGap(t, ctx, r, func() {
+		second := openSyncOrFatal(t, ctx, r.bravo)
+		defer func() { _ = second.Close() }()
+		if err := second.SyncFollowReRoot(ctx, remoteName(t, "origin"), "master", storage.SyncEntryFetch); err != nil {
+			t.Fatalf("the second follow error = %v", err)
+		}
+		r.assertFollowed(t, second, storage.SyncEntryFetch)
+		acrossTheCut = headCommit(t, ctx, second)
+	})
+	assertCutNotFound(t, first, followed, storage.CutNotFoundSharedHistory)
 	if head := headCommit(t, ctx, first); head != acrossTheCut {
 		t.Fatalf("bravo's head after the first follow's hold = %s, want %s where the second follow left it", head, acrossTheCut)
+	}
+}
+
+// TestAFollowWhoseTrackingRefIsPrunedUnderItsHoldFollowsNothing has another
+// writer prune the tracking ref, as a receive lands a fetch's prune
+// (landPrunes), between a follow's probe and its hold. The hold reads the ref
+// gone, which is nothing to follow, as the probe reads a ref never fetched.
+func TestAFollowWhoseTrackingRefIsPrunedUnderItsHoldFollowsNothing(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	r := newReRootedRemote(t, ctx, false)
+	var before string
+	first, followed := probeThenGap(t, ctx, r, func() {
+		withChunkStore(t, r.bravo, func(ddb *doltdb.DoltDB) {
+			head, err := ddb.ResolveCommitRef(ctx, ref.NewBranchRef("master"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			addr, err := head.HashOf()
+			if err != nil {
+				t.Fatal(err)
+			}
+			before = addr.String()
+			if err := ddb.DeleteBranch(ctx, ref.NewRemoteRef("origin", "master"), nil); err != nil {
+				t.Fatal(err)
+			}
+		})
+	})
+	assertCutNotFound(t, first, followed, storage.CutNotFoundNoTrackingRef)
+	if head := headCommit(t, ctx, first); head != before {
+		t.Fatalf("bravo's head after the hold = %s, want %s, unmoved", head, before)
 	}
 }
 
@@ -718,8 +767,9 @@ func TestSyncDoesNotFollowWhenTwoLocalCommitsRebuildToTheRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncReconcile error = %v", err)
 	}
-	if len(st.FollowedReRoots()) != 0 || len(st.DeclinedReRoots()) != 0 {
-		t.Fatalf("follows = %+v, declines = %+v; want neither, since no one cut is evidenced", st.FollowedReRoots(), st.DeclinedReRoots())
+	notOneRebuild := []storage.CutNotFound{{Entry: storage.SyncEntryReconcile, Reason: storage.CutNotFoundNotOneRebuild}}
+	if len(st.FollowedReRoots()) != 0 || len(st.DeclinedReRoots()) != 0 || !slices.Equal(st.CutsNotFound(), notOneRebuild) {
+		t.Fatalf("follows = %+v, declines = %+v, cuts not found = %+v; want neither and %+v, since no one cut is evidenced", st.FollowedReRoots(), st.DeclinedReRoots(), st.CutsNotFound(), notOneRebuild)
 	}
 	if bases := st.ReconcileBases(); reconciled.State != storage.SyncReconcileLinearized || len(bases) != 1 || bases[0].Source != storage.ReconcileBaseForkPoint {
 		t.Fatalf("reconcile = %q against %+v; want a merge against the fork point", reconciled.State, bases)

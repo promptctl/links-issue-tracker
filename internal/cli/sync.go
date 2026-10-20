@@ -70,6 +70,7 @@ func openSyncSessionAt(ctx context.Context, databasePath, workspaceID string) (s
 	return syncSession{engine: st, syncer: syncer}, func() error {
 		reportEventValues(ctx, "reroot.follows", syncer.FollowedReRoots())
 		reportEventValues(ctx, "reroot.declines", syncer.DeclinedReRoots())
+		reportEventValues(ctx, "reroot.cuts_not_found", syncer.CutsNotFound())
 		reportEventValues(ctx, "fork_point.records", syncer.ForkPointRecords())
 		reportEventValues(ctx, "fetch.pruned", syncer.PrunedRefs())
 		reportEventValues(ctx, "remote.removals", syncer.RemoteRemovals())

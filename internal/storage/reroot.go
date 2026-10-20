@@ -99,6 +99,41 @@ func (d DeclinedReRoot) EventValue() map[string]any {
 	}
 }
 
+// CutNotFound is a follow whose probe read the histories as sharing no
+// commit, and whose hold, reading them again, found no cut to follow. The
+// branch did not move.
+type CutNotFound struct {
+	Entry  SyncEntry
+	Reason CutNotFoundReason
+}
+
+// CutNotFoundReason is what the hold read instead of a cut.
+type CutNotFoundReason string
+
+const (
+	// CutNotFoundNoTrackingRef: the tracking ref was gone, pruned by another
+	// writer's fetch after the probe read it.
+	CutNotFoundNoTrackingRef CutNotFoundReason = "no_tracking_ref"
+	// CutNotFoundNotOneRoot: the remote's history has more than one root.
+	CutNotFoundNotOneRoot CutNotFoundReason = "not_one_remote_root"
+	// CutNotFoundSharedHistory: the local history holds the remote's root,
+	// so the two share commits, as when another writer followed after the
+	// probe read them.
+	CutNotFoundSharedHistory CutNotFoundReason = "shared_history"
+	// CutNotFoundNotOneRebuild: no local commit, or more than one, rebuilds
+	// parentless to the remote's root.
+	CutNotFoundNotOneRebuild CutNotFoundReason = "not_one_rebuild"
+)
+
+// EventValue is the hold's reading as one value of the event's
+// reroot.cuts_not_found list.
+func (c CutNotFound) EventValue() map[string]any {
+	return map[string]any{
+		"reroot.cut_not_found":        string(c.Entry),
+		"reroot.cut_not_found_reason": string(c.Reason),
+	}
+}
+
 // Collection is the reclaim that follows a re-root onto a store's branch: the
 // local refs naming commits below the cut dropped, then the full GC. Ran is
 // whether the GC ran, and the two byte counts are the store's size on disk

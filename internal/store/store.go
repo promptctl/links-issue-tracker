@@ -60,6 +60,9 @@ type Store struct {
 	// declined is every re-root cut followRemoteReRoot recognized and could
 	// not follow since the store opened; DeclinedReRoots is its one reader.
 	declined []storage.DeclinedReRoot
+	// cutsNotFound is every follow's hold since the store opened that found
+	// no cut; CutsNotFound is its one reader.
+	cutsNotFound []storage.CutNotFound
 	// forkPoints is what every fetch since the store opened did to each fork
 	// point (recordForkPoints); ForkPointRecords is its one reader.
 	forkPoints []storage.ForkPointRecord
