@@ -881,7 +881,7 @@ error that does not. Implementers: `store.UnsupportedSchemaVersionError`
 `SchemaAhead` (`validation.go`) is `error` plus a marker method
 `SchemaAheadOfBinary()`: an error raised because the workspace's schema is past
 this binary's schema support. It is not a `Refusal`. The CLI maps it to exit 3
-and reason `workspace_schema_ahead` (`exit.go`, `error_output.go`).
+and reason `workspace_schema_ahead` (`error_output.go`).
 Implementers: `store.UnsupportedSchemaVersionError` (`migration_runner.go`) and
 `store.DowngradeSpanUnsupportedError` (`downgrade.go`), each with a
 compile-time `var _ model.SchemaAhead` assertion.

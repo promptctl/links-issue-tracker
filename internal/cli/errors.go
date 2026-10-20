@@ -2,9 +2,9 @@ package cli
 
 // The typed error-definition taxonomy of the shared command surface: each type
 // carries a machine-dispatchable classification constructed by handlers at the
-// point of failure. The sinks are exit.go (ExitCode) and error_output.go
-// (reason/remediation), which dispatch on these types via errors.As; no sink
-// inspects message text. Feature-specific errors (e.g. SyncFailureError) live
+// point of failure. One classifier dispatches on these types via errors.As,
+// commandErrorReason (error_output.go), and the exit code and remediation both
+// follow from the reason it returns; nothing inspects message text. Feature-specific errors (e.g. SyncFailureError) live
 // with their features.
 //
 // [LAW:decomposition] The taxonomy has its own file so the flag-parsing

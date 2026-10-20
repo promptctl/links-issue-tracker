@@ -28,21 +28,21 @@ data — described as assets, not as documentation of behavior).
   - Every other parse error (unknown flag, missing value, invalid value, bad syntax) → `UsageError` (exit 2) — `flagset.go`.
 - `internal/cli/cli.go` `StringOptional(name, defaultIfPresent, defaultIfAbsent, usage)` — used only by `quickstart --eject`.
 - `internal/cli/flagset.go` `splitArgs(args []string, positionalCount int, fs *cobraFlagSet)` splits leading positionals from flags; its one non-test call site is `parseLeaf` (`internal/cli/register.go`).
-- `internal/cli/register.go` `commandFamily.resolve`: a missing / unknown / flag-shaped first argument returns `errors.New(family.usage)` — a plain error → exit 1 (`internal/cli/exit.go`), not exit 2. Match is exact (no trimming).
+- `internal/cli/register.go` `commandFamily.resolve`: a missing / unknown / flag-shaped first argument returns `errors.New(family.usage)` — a plain error → exit 1 (`internal/cli/error_output.go`), not exit 2. Match is exact (no trimming).
 - `internal/cli/completion.go` `visibleSubcommands(subs)` drops `Hidden` rows from completion at every depth; `internal/cli/register.go` `subcommandSpecs()` marks a retired row `Hidden`.
 
-### 0.3 Exit codes (constants `internal/cli/exit.go`, dispatch)
+### 0.3 Exit codes (constants `internal/cli/exit.go`, each read off the reason `internal/cli/error_output.go` declares)
 
 | Code | Constant | Trigger |
 |---|---|---|
 | 0 | `ExitOK` (`exit.go`) | nil error |
-| 1 | `ExitGeneric` (`exit.go`) | default; also `BulkFailureError` (`exit.go`), `store.ErrTransientGCContention` (`exit.go`) |
-| 2 | `ExitUsage` (`exit.go`) | `UsageError` (`exit.go`) |
-| 3 | `ExitValidation` (`exit.go`) | `templateShapeError` (`exit.go`), `UnknownCommandError` (`exit.go`), `RetiredCommandError` (`exit.go`), any `model.Refusal` — `model.ValidationError`, `model.FrozenIssueError`, and the upgrade/downgrade target refusals (`exit.go`), any `model.StateRequestError` — `model.ContainerActionError`, `lifecycle.RetentionError` — when not `Satisfied()` (`exit.go`), `UnsupportedError` (`exit.go`), `takeoverUnconfirmedError` (`exit.go`), `purgeUnconfirmedError` (`exit.go`), `OutsideWorkspaceError` (`exit.go`), `store.ErrWorkspaceNotInitialized` (`exit.go`), any `model.SchemaAhead` — `*store.UnsupportedSchemaVersionError`, `*store.DowngradeSpanUnsupportedError`, `*store.RemoteSchemaAheadError`, which a remote-schema-ahead `SyncFailureError` unwraps to (`exit.go`), `*store.QuarantineBlockError` (`exit.go`), `workspace.ErrIssuePrefixRefused` (`exit.go`) |
-| 4 | `ExitNotFound` (`exit.go`) | `storage.NotFoundError` (`exit.go`), `storage.VersionNotFoundError` (`exit.go`) |
-| 5 | `ExitConflict` (`exit.go`) | `MergeConflictError` (`exit.go`), `SyncFailureError` except one that unwraps to a `model.SchemaAhead` (`exit.go`), `ownerApprovalRefusalError` (`exit.go`) |
-| 6 | `ExitNoWork` (`exit.go`) | `Exhausted` (`exit.go`), `NoWork` (`exit.go`), any `model.StateRequestError` when `Satisfied()` (`exit.go`) |
-| 7 | `ExitCorruption` (`exit.go`) | `CorruptionError` (`exit.go`), `storage.ParentCycleError` (`exit.go`) |
+| 1 | `ExitGeneric` (`exit.go`) | default; also `BulkFailureError` (`error_output.go`), `store.ErrTransientGCContention` (`error_output.go`) |
+| 2 | `ExitUsage` (`exit.go`) | `UsageError` (`error_output.go`) |
+| 3 | `ExitValidation` (`exit.go`) | `templateShapeError` (`error_output.go`), `UnknownCommandError` (`error_output.go`), `RetiredCommandError` (`error_output.go`), any `model.Refusal` — `model.ValidationError`, `model.FrozenIssueError`, and the upgrade/downgrade target refusals (`error_output.go`), any `model.StateRequestError` — `model.ContainerActionError`, `lifecycle.RetentionError` — when not `Satisfied()` (`error_output.go`), `UnsupportedError` (`error_output.go`), `takeoverUnconfirmedError` (`error_output.go`), `purgeUnconfirmedError` (`error_output.go`), `OutsideWorkspaceError` (`error_output.go`), `store.ErrWorkspaceNotInitialized` (`error_output.go`), any `model.SchemaAhead` — `*store.UnsupportedSchemaVersionError`, `*store.DowngradeSpanUnsupportedError`, `*store.RemoteSchemaAheadError`, which a remote-schema-ahead `SyncFailureError` unwraps to (`error_output.go`), `*store.QuarantineBlockError` (`error_output.go`), `workspace.ErrIssuePrefixRefused` (`error_output.go`) |
+| 4 | `ExitNotFound` (`exit.go`) | `storage.NotFoundError` (`error_output.go`), `storage.VersionNotFoundError` (`error_output.go`) |
+| 5 | `ExitConflict` (`exit.go`) | `MergeConflictError` (`error_output.go`), `SyncFailureError` except one that unwraps to a `model.SchemaAhead` (`error_output.go`), `ownerApprovalRefusalError` (`error_output.go`) |
+| 6 | `ExitNoWork` (`exit.go`) | `Exhausted` (`error_output.go`), `NoWork` (`error_output.go`), any `model.StateRequestError` when `Satisfied()` (`error_output.go`) |
+| 7 | `ExitCorruption` (`exit.go`) | `CorruptionError` (`error_output.go`), `storage.ParentCycleError` (`error_output.go`) |
 
 `ExitCode` runs these checks in a fixed order and the first match wins; the order is listed in `inventory-cli-issue.md` §1.8.
 
@@ -732,7 +732,7 @@ Refusals and sequence (`upgradeLeafWith`, `upgrade.go`):
 6. **Backward-move refusal, before any install**: `target.Manifest.Schema.Max < applied` → `*UpgradeTargetBehindError` (`upgrade.go`), whose message depends on whether `Running.Covers(Target, Current)` — this binary's schema support covers every version from the target up to the workspace (`upgrade.go`, `version.go`):
    - covers it → `cannot upgrade to <tag>: its schema support ends at v<target> but this workspace is already at v<current> — that is a backward move; use \`lit downgrade --to <tag>\` instead (it reverses the schema before installing the older binary)`
    - does not (the workspace is past this binary's support, whether or not this binary could open it, or the target is below its baseline) → `cannot upgrade to <tag>: it supports only through schema v<target> but this workspace is at v<current> — pick an upgrade target whose schema support reaches v<current> or newer (this binary's schema support, v<min>–v<max>, does not cover v<target>–v<current>, so it cannot reverse the schema to this target)`
-   Exit 3, reason `validation_refused` (`exit.go`, `error_output.go`).
+   Exit 3, reason `validation_refused` (`error_output.go`).
 7. **Already current**: when `--to` was omitted, this binary is not a dev build (`IsDev`) and `v<version>` compares at or above the tag → stdout `already current: keeping v<version> (latest published release is <tag>); nothing to install.`, exit 0, nothing installed (`upgrade.go`). A given `--to` always installs. The event records the decision as `upgrade.already_current` (`upgrade.go`).
 8. `currentBinaryPath()` (`os.Executable` + `filepath.EvalSymlinks`, `downgrade.go`); error → `upgrade: resolve current binary: %w`.
 9. `installer.Install(ctx, target, binPath)`; error → `upgrade: installing <tag> failed: <err>\n\nrecover by installing <tag> manually (download from <artifactURL>), then re-running lit` (`upgrade.go`). Once it succeeds, the event records the path as `upgrade.installed_path` (`upgrade.go`).
@@ -1086,17 +1086,17 @@ All nine are also the payload of `lit quickstart --eject`, written to `<config.C
 | Take without owner approval | `sync reconcile take` | `ownerApprovalRefusalError` block, exit 5 | `sync_reconcile_cmd.go` |
 | Persistent divergence (≥24h or >10 commits) | `doctor` | `SyncFailureError`, exit 5 | `doctor.go` |
 | Store corruption | `doctor` | `CorruptionError`, exit 7 (reason `parent_cycle` when the report names a parent loop) | `doctor.go`, `error_output.go` |
-| Parent loop | `ls` and any read that hydrates the loop's epics; a rank verb whose walk up the parent chain meets a loop | `storage.ParentCycleError`, exit 7, reason `parent_cycle` | `exit.go`, `error_output.go` |
+| Parent loop | `ls` and any read that hydrates the loop's epics; a rank verb whose walk up the parent chain meets a loop | `storage.ParentCycleError`, exit 7, reason `parent_cycle` | `error_output.go` |
 | Unsynced local changes | `backup restore` without `--force` | `MergeConflictError`, exit 5 | `backup.go` |
 | `--latest` + `--path` together | `backup restore` | `UsageError`, exit 2 | `backup.go` |
 | Existing global override without `--force` | `quickstart --eject` | `MergeConflictError`, exit 5, nothing written | `quickstart_eject.go` |
 | Non-bash existing pre-push hook | `hooks install`, `init`, `quickstart --refresh` | left untouched, reported `incompatible`, exit 0 | `hooks.go` |
 | Pending-adopt marker | `snapshots new` | refused via `store.PendingAdopt` | `snapshots.go` |
-| Workspace schema newer than this binary | any command that opens the store | `*store.UnsupportedSchemaVersionError`, exit 3, reason `workspace_schema_ahead` | `migration_runner.go`, `exit.go` |
-| Pending migration quarantined after a failed attempt | any command that opens the store with that migration pending | `*store.QuarantineBlockError`, exit 3, reason `migration_quarantined` | `migration_runner.go`, `exit.go` |
+| Workspace schema newer than this binary | any command that opens the store | `*store.UnsupportedSchemaVersionError`, exit 3, reason `workspace_schema_ahead` | `migration_runner.go`, `error_output.go` |
+| Pending migration quarantined after a failed attempt | any command that opens the store with that migration pending | `*store.QuarantineBlockError`, exit 3, reason `migration_quarantined` | `migration_runner.go`, `error_output.go` |
 | Backward-move upgrade target | `upgrade` | `*UpgradeTargetBehindError`, exit 3, nothing installed | `upgrade.go` |
 | Forward-move or below-baseline downgrade target | `downgrade` | `*store.DowngradeTargetAheadError` / `*store.DowngradeBelowBaselineError`, exit 3, before any snapshot | `downgrade.go` |
-| Workspace schema past this binary's schema support | `downgrade` | `*store.DowngradeSpanUnsupportedError`, exit 3, reason `workspace_schema_ahead`, before any snapshot | `downgrade.go`, `exit.go`, `error_output.go` |
+| Workspace schema past this binary's schema support | `downgrade` | `*store.DowngradeSpanUnsupportedError`, exit 3, reason `workspace_schema_ahead`, before any snapshot | `downgrade.go`, `error_output.go` |
 | Empty/invalid `--to` | `upgrade`, `downgrade` | `ValidationError`, exit 3 | `downgrade.go` |
 | Unknown `--fix` name | `doctor` | `unknown fix %q; available: integrity, rank`, exit 1 | `doctor.go` |
 | Unknown quickstart topic | `quickstart` | `UsageError`, exit 2 | `cli.go` |

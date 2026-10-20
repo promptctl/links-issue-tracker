@@ -137,7 +137,7 @@ Records law reviews of a ticket's plan. A review is never edited or removed thro
 **`PlanDigestNotFoundError{IssueID string; Digest model.PlanDigest}`** — `internal/storage/plan_review.go`
 - A plan review naming a digest no text of the issue's plan history holds (`PlanReviewOf`).
 - `Error()` renders ``fmt.Sprintf("%s has no plan text with digest %s; `lit show %s` prints the current plan beside its digest", e.IssueID, e.Digest, e.IssueID)``.
-- The CLI maps it the way it maps `VersionNotFoundError`: exit 4 (`exit.go`), reason `version_not_found` (`error_output.go`).
+- The CLI maps it the way it maps `VersionNotFoundError`: exit 4 and reason `version_not_found` (`error_output.go`).
 - Distinct from `NotFoundError`, whose remediation sends the caller to check the issue id: here the id resolved.
 
 **`DescribeVersions(count int) string`** — `internal/storage/plan_review.go`: `"1 version"` when `count == 1`, else `fmt.Sprintf("%d versions", count)`.
