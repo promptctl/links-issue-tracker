@@ -457,6 +457,40 @@ func TestSyncPushFromCloneFollowsAReRootedRemote(t *testing.T) {
 	}
 }
 
+// TestARefusedPushIsRetriedBeforeItsFollowIsFinished drives a push the
+// re-rooted remote refuses, with a finish that reads what the remote carries
+// when it runs. The retry has already landed by then, so nothing a finish
+// does — a live store's collection below the cut — delays the retry.
+func TestARefusedPushIsRetriedBeforeItsFollowIsFinished(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	r := newReRootedRemote(t, ctx, false)
+	bravo := openSyncOrFatal(t, ctx, r.bravo)
+	defer func() { _ = bravo.Close() }()
+	origin := remoteName(t, "origin")
+
+	var carriedAtFinish bool
+	finish := func(ctx context.Context, remote storage.RemoteName, followed storage.FollowedReRoot, moveErr error) storage.FollowedReRoot {
+		fresh, err := bravo.SyncFreshness(ctx, remote, "master")
+		if err != nil {
+			t.Errorf("SyncFreshness at the finish: %v", err)
+		}
+		carriedAtFinish = fresh.RemoteCarriesHead()
+		return bravo.recordFollow(ctx, remote, followed, moveErr)
+	}
+	pushed, pushErr := bravo.pushMutation(ctx, origin, "master", false, false)
+	pushed, pushErr, followed, followErr := bravo.retryPushAfterFollow(ctx, origin, "master", false, pushed, pushErr, finish)
+	if pushErr != nil || followErr != nil {
+		t.Fatalf("retryPushAfterFollow error = %v, follow error = %v", pushErr, followErr)
+	}
+	if followed.Head == "" || pushed.Head != headCommit(t, ctx, bravo) {
+		t.Fatalf("followed %+v and pushed %+v; want the follow and its retry landed", followed, pushed)
+	}
+	if !carriedAtFinish {
+		t.Fatalf("the remote did not carry bravo's head when the follow was finished; want the retry landed first")
+	}
+}
+
 // TestTakeFollowsAReRootedRemoteBeforeItCanDiscardASide asks to take the
 // remote's side of what the tracking ref shows as unrelated histories. The
 // take follows the re-root first, finds the histories shared, and refuses as
