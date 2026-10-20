@@ -11,11 +11,12 @@ import (
 )
 
 // TestAGitRemoteDoltCannotHoldIsRefusedAndStopsNoOtherSync gives a checkout
-// syncing with remote a a second git remote, a/b, whose name Dolt refuses. The
-// reconcile mirrors a and refuses a/b, so syncing with a goes on; the event
-// and the reports name the refusal, and naming a/b as the sync target fails
-// with the reason. A branch tracking a/b syncs with a/b, so its sync is
-// refused rather than taken to a, and a fetch naming a still lands.
+// syncing with remote a a second git remote, team/fork, whose name Dolt
+// refuses. The reconcile mirrors a and refuses team/fork, so syncing with a
+// goes on; the event and the reports name the refusal, and naming team/fork
+// as the sync target fails with the reason. A branch tracking team/fork syncs
+// with team/fork, so its sync is refused rather than read as some other
+// remote's, and a fetch naming a still lands.
 func TestAGitRemoteDoltCannotHoldIsRefusedAndStopsNoOtherSync(t *testing.T) {
 	isolateEvents(t)
 	dir, remoteURL := soloCheckoutSyncingWithA(t)
@@ -23,31 +24,31 @@ func TestAGitRemoteDoltCannotHoldIsRefusedAndStopsNoOtherSync(t *testing.T) {
 		t.Fatalf("remotes.refused with a alone = %#v, want []", refused)
 	}
 
-	runGit(t, dir, "remote", "add", "a/b", remoteURL)
+	runGit(t, dir, "remote", "add", "team/fork", remoteURL)
 	if out := runCLIInDir(t, dir, "sync", "fetch", "--verbose"); strings.TrimSpace(out) != "fetched a" {
-		t.Fatalf("`lit sync fetch --verbose` beside a/b = %q, want %q", out, "fetched a")
+		t.Fatalf("`lit sync fetch --verbose` beside team/fork = %q, want %q", out, "fetched a")
 	}
-	if refused := lastEvent(t).Facts["remotes.refused"]; !reflect.DeepEqual(refused, []any{"a/b"}) {
-		t.Fatalf("remotes.refused = %#v, want [a/b]", refused)
+	if refused := lastEvent(t).Facts["remotes.refused"]; !reflect.DeepEqual(refused, []any{"team/fork"}) {
+		t.Fatalf("remotes.refused = %#v, want [team/fork]", refused)
 	}
-	if out := runCLIInDir(t, dir, "sync", "remote", "ls"); strings.TrimSpace(out) != "git=2 dolt=1 added=0 updated=0 removed=0 refused=1\nrefused a/b: Dolt cannot hold this name; rename it (git remote rename) to sync with it" {
-		t.Fatalf("`lit sync remote ls` = %q, want a/b refused and a mirrored", out)
+	if out := runCLIInDir(t, dir, "sync", "remote", "ls"); strings.TrimSpace(out) != "git=2 dolt=1 added=0 updated=0 removed=0 refused=1\nrefused team/fork: Dolt cannot hold this name; rename it (git remote rename) to sync with it" {
+		t.Fatalf("`lit sync remote ls` = %q, want team/fork refused and a mirrored", out)
 	}
 
-	out, err := runCLIInDirAllowError(t, dir, "sync", "fetch", "--remote", "a/b")
+	out, err := runCLIInDirAllowError(t, dir, "sync", "fetch", "--remote", "team/fork")
 	if err == nil {
-		t.Fatalf("`lit sync fetch --remote a/b` succeeded:\n%s", out)
+		t.Fatalf("`lit sync fetch --remote team/fork` succeeded:\n%s", out)
 	}
-	if !strings.Contains(err.Error(), `remote "a/b" has "/" in its name`) {
-		t.Fatalf("`lit sync fetch --remote a/b` error = %v, want the refusal naming a/b", err)
+	if !strings.Contains(err.Error(), `remote "team/fork" has "/" in its name`) {
+		t.Fatalf("`lit sync fetch --remote team/fork` error = %v, want the refusal naming team/fork", err)
 	}
 
-	runGit(t, dir, "push", "--set-upstream", "a/b", "HEAD")
-	if out, err := runCLIInDirAllowError(t, dir, "sync", "fetch", "--verbose"); err == nil || !strings.Contains(err.Error(), `remote "a/b" has "/" in its name`) {
-		t.Fatalf("`lit sync fetch` tracking a/b = %q, %v; want the refusal naming a/b", out, err)
+	runGit(t, dir, "push", "--set-upstream", "team/fork", "HEAD")
+	if out, err := runCLIInDirAllowError(t, dir, "sync", "fetch", "--verbose"); err == nil || !strings.Contains(err.Error(), `remote "team/fork" has "/" in its name`) {
+		t.Fatalf("`lit sync fetch` tracking team/fork = %q, %v; want the refusal naming team/fork", out, err)
 	}
 	if out := runCLIInDir(t, dir, "sync", "fetch", "--remote", "a", "--verbose"); strings.TrimSpace(out) != "fetched a" {
-		t.Fatalf("`lit sync fetch --remote a` tracking a/b = %q, want %q", out, "fetched a")
+		t.Fatalf("`lit sync fetch --remote a` tracking team/fork = %q, want %q", out, "fetched a")
 	}
 
 	// The automatic receive ends on the refusal before it clones the store,
@@ -59,8 +60,8 @@ func TestAGitRemoteDoltCannotHoldIsRefusedAndStopsNoOtherSync(t *testing.T) {
 	before := len(readSyncTraceRecords(t, ws))
 	receiveNow(t, dir)
 	records := readSyncTraceRecords(t, ws)[before:]
-	if len(records) != 1 || records[0].Decision != "error" || !strings.Contains(records[0].Reason, `remote "a/b" has "/" in its name`) {
-		t.Fatalf("receive tracking a/b traced %+v; want one error naming the refusal", records)
+	if len(records) != 1 || records[0].Decision != "error" || !strings.Contains(records[0].Reason, `remote "team/fork" has "/" in its name`) {
+		t.Fatalf("receive tracking team/fork traced %+v; want one error naming the refusal", records)
 	}
 }
 
