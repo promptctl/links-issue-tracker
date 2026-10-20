@@ -88,8 +88,14 @@ type Event struct {
 	// command ran and found none, which an absent key cannot.
 	Counts map[string]int `json:"counts"`
 	// Facts holds what the command decided, under dot-namespaced keys
-	// ("next.outcome").
+	// ("next.outcome"), each set once: a later Set of a key replaces it.
 	Facts map[string]any `json:"facts"`
+	// Occurrences holds what can happen more than once in one invocation, one
+	// entry per occurrence in the order they happened, under keys of their
+	// own. A key Append accumulates and a key Set replaces live in different
+	// maps, so neither writer can write over the other's value.
+	// [LAW:types-are-the-program]
+	Occurrences map[string][]any `json:"occurrences"`
 }
 
 // Recorder is one invocation's event while it is still open.
@@ -105,6 +111,7 @@ func Begin(identity Event) *Recorder {
 	ev.TraceID = newTraceID()
 	ev.Counts = map[string]int{}
 	ev.Facts = map[string]any{}
+	ev.Occurrences = map[string][]any{}
 	return &Recorder{ev: ev}
 }
 
@@ -137,6 +144,7 @@ func (r *Recorder) Finish(end End) Event {
 	ev.Flags = append([]string{}, ev.Flags...)
 	ev.Counts = maps.Clone(ev.Counts)
 	ev.Facts = maps.Clone(ev.Facts)
+	ev.Occurrences = maps.Clone(ev.Occurrences)
 	maps.Copy(ev.Facts, end.Facts)
 	maps.Copy(ev.Counts, end.Counts)
 	return ev
@@ -233,17 +241,16 @@ func Count(ctx context.Context, key string, n int) {
 	r.ev.Counts[key] = n
 }
 
-// Append adds values to the list fact key, after every value an earlier
-// Append gave it, for a fact that can occur more than once in one invocation.
-// An Append of no values still records the empty list, so "none occurred"
-// reads as [] and not as an absent key, which says nothing was looked at.
-// [LAW:nothing-unseen]
+// Append adds values to the occurrences under key, after every value an
+// earlier Append gave it. An Append of no values still records the empty
+// list, so "none occurred" reads as [] and not as an absent key, which says
+// nothing was looked at. [LAW:nothing-unseen] Each Append builds a new list,
+// so an event Finish returned never shares storage with the open one.
 func Append(ctx context.Context, key string, values ...any) {
 	r := from(ctx)
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	list, _ := r.ev.Facts[key].([]any)
-	r.ev.Facts[key] = append(append([]any{}, list...), values...)
+	r.ev.Occurrences[key] = append(append([]any{}, r.ev.Occurrences[key]...), values...)
 }
 
 // Record records facts and counts a value declared about itself, such as a

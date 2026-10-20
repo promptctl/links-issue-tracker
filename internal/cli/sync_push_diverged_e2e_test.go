@@ -58,9 +58,9 @@ func TestAPushRefusedOverAPeersPushNotifiesNobody(t *testing.T) {
 // decision.
 func assertPushDecision(t *testing.T, ev telemetry.Event, decision string) {
 	t.Helper()
-	outcomes, _ := ev.Facts["push.outcomes"].([]any)
+	outcomes := ev.Occurrences["push.outcomes"]
 	if len(outcomes) != 1 {
-		t.Fatalf("event %q push.outcomes = %v; want the one attempt", ev.Event, ev.Facts["push.outcomes"])
+		t.Fatalf("event %q push.outcomes = %v; want the one attempt", ev.Event, ev.Occurrences["push.outcomes"])
 	}
 	if outcome, _ := outcomes[0].(map[string]any); outcome["push.decision"] != decision || outcome["push.remote"] != "origin" || outcome["push.branch"] != "master" {
 		t.Fatalf("event %q push outcome = %v; want decision %s on origin/master", ev.Event, outcome, decision)

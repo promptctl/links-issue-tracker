@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -24,7 +25,7 @@ func TestTheMirrorAloneKeepsTheHistoryBound(t *testing.T) {
 	r, _ := newSharedCheckouts(t)
 	isolateEvents(t)
 	runCLIInDir(t, r.alpha, "sync", "push")
-	seeded := boundRecordOf(t, lastEvent(t).Facts)["history_bound.height"].(float64)
+	seeded := boundRecordOf(t, lastEvent(t))["history_bound.height"].(float64)
 
 	setHistoryWindow(t, r.alpha, uint64(seeded)+3, 2)
 	for _, title := range []string{"one", "two", "three"} {
@@ -37,16 +38,16 @@ func TestTheMirrorAloneKeepsTheHistoryBound(t *testing.T) {
 	before := dirBytes(t, alphaWS.DatabasePath)
 
 	runCLIInDir(t, r.alpha, "sync", backgroundMirrorSubcommand, "--parent-pid", "0")
-	facts := lastEvent(t).Facts
-	bound := boundRecordOf(t, facts)
+	ev := lastEvent(t)
+	bound := boundRecordOf(t, ev)
 	if bound["history_bound.fired"] != true || bound["history_bound.lease"] != "held" || bound["history_bound.error"] != nil || bound["reroot.kept"] != float64(2) {
 		t.Fatalf("the mirror's bound = %v; want it fired, published under a held lease and keeping 2 commits", bound)
 	}
 	// The clone follows the re-root it published, and the live store follows
 	// the same re-root when it receives the clone's push.
-	follows, _ := facts["reroot.follows"].([]any)
+	follows := ev.Occurrences["reroot.follows"]
 	if len(follows) != 2 {
-		t.Fatalf("reroot.follows = %v; want the clone's bound follow and the live store's receive", facts["reroot.follows"])
+		t.Fatalf("reroot.follows = %v; want the clone's bound follow and the live store's receive", follows)
 	}
 	for i, entry := range []string{"bound", "receive"} {
 		follow, _ := follows[i].(map[string]any)
@@ -63,7 +64,7 @@ func TestTheMirrorAloneKeepsTheHistoryBound(t *testing.T) {
 
 	runCLIInDir(t, r.alpha, "new", "--title", "four", "--topic", "demo", "--type", "task", "--parent", r.epic)
 	runCLIInDir(t, r.alpha, "sync", backgroundMirrorSubcommand, "--parent-pid", "0")
-	if next := boundRecordOf(t, lastEvent(t).Facts); next["history_bound.fired"] != false || next["history_bound.height"] != float64(3) {
+	if next := boundRecordOf(t, lastEvent(t)); next["history_bound.fired"] != false || next["history_bound.height"] != float64(3) {
 		t.Fatalf("the next mirror's bound = %v; want the remote head one commit above the 2 kept, short of the bound", next)
 	}
 }
@@ -77,7 +78,7 @@ func TestAPushWhoseBoundFiredProvesNothing(t *testing.T) {
 	r, _ := newSharedCheckouts(t)
 	isolateEvents(t)
 	runCLIInDir(t, r.alpha, "sync", "push")
-	seeded := boundRecordOf(t, lastEvent(t).Facts)["history_bound.height"].(float64)
+	seeded := boundRecordOf(t, lastEvent(t))["history_bound.height"].(float64)
 	alphaWS, err := workspace.Resolve(r.alpha)
 	if err != nil {
 		t.Fatalf("resolve alpha: %v", err)
@@ -90,7 +91,7 @@ func TestAPushWhoseBoundFiredProvesNothing(t *testing.T) {
 	setHistoryWindow(t, r.alpha, uint64(seeded)+1, 2)
 	runCLIInDir(t, r.alpha, "new", "--title", "one", "--topic", "demo", "--type", "task", "--parent", r.epic)
 	runCLIInDir(t, r.alpha, "sync", "push")
-	bound := boundRecordOf(t, lastEvent(t).Facts)
+	bound := boundRecordOf(t, lastEvent(t))
 	if bound["history_bound.fired"] != true || bound["history_bound.lease"] != "held" {
 		t.Fatalf("the push's bound = %v; want it fired and published", bound)
 	}
@@ -111,12 +112,12 @@ func TestAPushWhoseBoundFiredProvesNothing(t *testing.T) {
 	}
 }
 
-// boundRecordOf is the one history bound an event's facts carry.
-func boundRecordOf(t *testing.T, facts map[string]any) map[string]any {
+// boundRecordOf is the one history bound an event's occurrences carry.
+func boundRecordOf(t *testing.T, ev telemetry.Event) map[string]any {
 	t.Helper()
-	records, _ := facts["history_bound.records"].([]any)
+	records := ev.Occurrences["history_bound.records"]
 	if len(records) != 1 {
-		t.Fatalf("history_bound.records = %v; want one bound", facts["history_bound.records"])
+		t.Fatalf("history_bound.records = %v; want one bound", records)
 	}
 	record, _ := records[0].(map[string]any)
 	return record
@@ -185,8 +186,8 @@ func TestAnIllegalHistoryWindowFailsTheBoundAndNotThePush(t *testing.T) {
 	if got, _ := ev.Facts["history_bound.window_error"].(string); got != refusal {
 		t.Fatalf("event %q history_bound.window_error = %v; want %q", ev.Event, ev.Facts["history_bound.window_error"], refusal)
 	}
-	if records, ok := ev.Facts["history_bound.records"].([]any); !ok || len(records) != 0 {
-		t.Fatalf("event %q history_bound.records = %v; want an empty list: no bound ran", ev.Event, ev.Facts["history_bound.records"])
+	if records, ok := ev.Occurrences["history_bound.records"]; !ok || len(records) != 0 {
+		t.Fatalf("event %q history_bound.records = %v; want an empty list: no bound ran", ev.Event, ev.Occurrences["history_bound.records"])
 	}
 	runCLIInDir(t, r.bravo, "sync", "pull")
 	runCLIInDir(t, r.bravo, "show", pushed)

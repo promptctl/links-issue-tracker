@@ -64,8 +64,9 @@ func TestFactsAddedThroughTheContextLandOnTheFinishedEvent(t *testing.T) {
 	}
 }
 
-// A fact that can occur more than once keeps every occurrence, in order, and
-// a list nothing was appended to reads as empty rather than absent.
+// What can occur more than once keeps every occurrence, in order, and a key
+// nothing was appended to reads as an empty list rather than absent, on the
+// event and on its line.
 func TestAppendKeepsEveryValueInOrder(t *testing.T) {
 	recorder := Begin(Event{})
 	ctx := With(context.Background(), recorder)
@@ -74,12 +75,35 @@ func TestAppendKeepsEveryValueInOrder(t *testing.T) {
 	Append(ctx, "reroot.follows", "push")
 	Append(ctx, "reroot.follows", "receive", "pull")
 	ev := recorder.Finish(End{})
-	if got, ok := empty.Facts["reroot.follows"].([]any); !ok || len(got) != 0 {
-		t.Errorf("after an empty Append, Facts[reroot.follows] = %#v; want an empty list", empty.Facts["reroot.follows"])
+	if got, ok := empty.Occurrences["reroot.follows"]; !ok || got == nil || len(got) != 0 {
+		t.Errorf("after an empty Append, Occurrences[reroot.follows] = %#v; want an empty list", got)
 	}
-	got, _ := ev.Facts["reroot.follows"].([]any)
+	if line, err := Line(empty); err != nil || !strings.Contains(string(line), `"occurrences":{"reroot.follows":[]}`) {
+		t.Errorf("the empty Append's line = %s, %v; want occurrences carrying reroot.follows as []", line, err)
+	}
+	got := ev.Occurrences["reroot.follows"]
 	if len(got) != 3 || got[0] != "push" || got[1] != "receive" || got[2] != "pull" {
-		t.Errorf("Facts[reroot.follows] = %#v; want [push receive pull]", ev.Facts["reroot.follows"])
+		t.Errorf("Occurrences[reroot.follows] = %#v; want [push receive pull]", got)
+	}
+}
+
+// A key Set replaces and a key Append accumulates are separate, so the same
+// name written both ways keeps both values, whichever came first.
+func TestASetAndAnAppendOfOneKeyBothSurvive(t *testing.T) {
+	for _, setFirst := range []bool{true, false} {
+		recorder := Begin(Event{})
+		ctx := With(context.Background(), recorder)
+		if setFirst {
+			Set(ctx, "push.outcomes", "decided")
+		}
+		Append(ctx, "push.outcomes", "landed")
+		if !setFirst {
+			Record(ctx, map[string]any{"push.outcomes": "decided"}, nil)
+		}
+		ev := recorder.Finish(End{})
+		if ev.Facts["push.outcomes"] != "decided" || len(ev.Occurrences["push.outcomes"]) != 1 || ev.Occurrences["push.outcomes"][0] != "landed" {
+			t.Errorf("set first %t: Facts = %#v, Occurrences = %#v; want the set value and the appended one both kept", setFirst, ev.Facts, ev.Occurrences)
+		}
 	}
 }
 
