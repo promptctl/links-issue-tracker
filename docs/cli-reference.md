@@ -733,6 +733,13 @@ annotation with no scheduling effect. Adding an edge that already exists, a
 `related-to` named either way round included, exits 6 with
 `state_already_holds`: there is nothing to add.
 
+`dep add`, `dep rm`, and a `lit import` update document that states `blocked_by`
+change an existing ticket's dependencies. The import document states the ticket's
+whole blocked-by set and replaces the one it holds: a ticket blocked by B and C,
+given `blocked_by: [A]`, ends blocked by A alone, and B and C are gone.
+`blocked_by: []` empties the set. To remove one edge and keep the rest, use
+`lit dep rm`.
+
 ### `lit parent set` / `lit parent clear`
 
 ```text
@@ -828,6 +835,13 @@ them are required, how `local_id` lets one record name another before real IDs e
 the value rules the two share — a topic must be 3 to 30 characters after slug
 normalization, `priority` is `0` or `1` and nothing else — and what the command
 reports on success and rolls back when a file fails partway through.
+
+A YAML update document's `parent` and `blocked_by` change existing tickets in bulk.
+`blocked_by` replaces the ticket's whole blocked-by set, the way `labels` replaces its
+labels, so list every blocker the ticket should keep: `blocked_by: [A]` on a ticket
+blocked by B and C drops B and C. Every `parent` and `blocked_by` in a file is written
+in one step that lands whole or not at all, judged on the graph the file ends with,
+so a file whose edges would close a cycle changes no edge.
 
 ---
 
