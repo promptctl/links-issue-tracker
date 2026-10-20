@@ -57,12 +57,22 @@ type remoteAdvertisement struct {
 	refs   string
 }
 
-// nothingToReceive reports an answered question that leaves a fetch nothing
-// to bring: no remote the selection rule can pick, or a remote advertising no
-// refs/dolt/*. Neither case ever writes a received-refs record, so without
+// skip is the skip an answered question leaves a fetch with nothing to
+// bring: no remote the selection rule can pick (syncTargetNoRemote), or a
+// remote advertising no refs/dolt/* (syncTargetRemoteEmpty); syncTargetReady
+// otherwise. Neither skip ever writes a received-refs record, so without
 // this the receive would clone the whole store every interval only to skip.
-func (a remoteAdvertisement) nothingToReceive() bool {
-	return a.remote == (storage.RemoteName{}) || strings.TrimSpace(a.refs) == ""
+// [LAW:one-source-of-truth] the skips the clone's target would reach, named
+// as resolveSyncTarget names them.
+func (a remoteAdvertisement) skip() syncTargetSkip {
+	switch {
+	case a.remote == (storage.RemoteName{}):
+		return syncTargetNoRemote
+	case strings.TrimSpace(a.refs) == "":
+		return syncTargetRemoteEmpty
+	default:
+		return syncTargetReady
+	}
 }
 
 // record is the marker payload for this advertisement; nil for the zero value.
@@ -241,16 +251,14 @@ func recordReceived(ws workspace.Info, outcome syncReceiveOutcome, observed remo
 
 // confirmRemoteUnmoved records what an unmoved answer proved: local knowledge
 // of the remote is as current as a fetch would have made it, so the
-// fetch-success marker moves, and the receive trace says a receive ran and
-// what it decided — a skipped fetch is a decision, not silence.
+// fetch-success marker moves, and the receive's trace and event say a receive
+// ran and what it decided — a skipped fetch is a decision, not silence.
 // [LAW:no-silent-failure]
-func confirmRemoteUnmoved(ws workspace.Info, observed remoteAdvertisement) {
+func confirmRemoteUnmoved(ctx context.Context, ws workspace.Info, observed remoteAdvertisement) {
 	if err := markFetchSuccess(ws, observed.remote); err != nil {
 		fmt.Fprintf(os.Stderr, "lit: fetch-success marker not written: %v\n", err)
 	}
-	if err := recordReceiveTrace(ws, receiveDecisionRemoteUnmoved, "ok",
+	recordReceiveDecided(ctx, ws, receiveDecisionRemoteUnmoved, "ok",
 		"automatic receive found the remote unmoved since the last receive; nothing fetched",
-		map[string]string{"remote": observed.remote.String()}); err != nil {
-		fmt.Fprintf(os.Stderr, "lit: automatic receive trace not recorded: %v\n", err)
-	}
+		map[string]string{"remote": observed.remote.String()})
 }

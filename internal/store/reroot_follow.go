@@ -44,7 +44,9 @@ import (
 // failure is carried on the record and never fails the sync that followed,
 // as a push's other maintenance never fails the push. The follow and its
 // collection are recorded under entry, for FollowedReRoots, and returned; the
-// record is zero when the branch did not move.
+// record is zero when the branch did not move. A cut recognized and not
+// followed, because a side line goes around it, is recorded under entry with
+// its reason, for DeclinedReRoots.
 //
 // Every public sync entry point that reads the tracking ref runs it first, so
 // none of them meets a re-root it could follow as a divergence; the private
@@ -73,13 +75,17 @@ func (s *Store) followRemoteReRoot(ctx context.Context, remote storage.RemoteNam
 		return storage.FollowedReRoot{}, nil
 	}
 	followed := storage.FollowedReRoot{Entry: entry}
-	var moved bool
+	var declined []storage.DeclinedReRoot
 	err = s.withEngineClosed(ctx, func(holdCtx context.Context, ddb *doltdb.DoltDB) error {
 		var err error
-		followed.ReRooted, moved, err = followReRoot(holdCtx, ddb, ref.NewBranchRef(local), ref.NewRemoteRef(remote.String(), trimmedBranch))
+		followed.ReRooted, declined, err = followReRoot(holdCtx, ddb, ref.NewBranchRef(local), ref.NewRemoteRef(remote.String(), trimmedBranch), entry)
 		return err
 	})
-	if !moved {
+	// A cut recognized and not followed is the store's decision too, recorded
+	// with its reason; the branch has not moved. [LAW:nothing-unseen]
+	s.declined = append(s.declined, declined...)
+	// reRootBranch sets Head exactly when the branch moved, whatever the error.
+	if followed.Head == "" {
 		return storage.FollowedReRoot{}, wrapFollowErr(remote, trimmedBranch, err)
 	}
 	// A branch that moved stands even when something after the move failed,
@@ -113,6 +119,12 @@ func (s *Store) SyncFollowReRoot(ctx context.Context, remote storage.RemoteName,
 // since it opened, oldest first.
 func (s *Store) FollowedReRoots() []storage.FollowedReRoot {
 	return slices.Clone(s.followed)
+}
+
+// DeclinedReRoots is every re-root cut followRemoteReRoot recognized on this
+// store since it opened and did not follow, oldest first.
+func (s *Store) DeclinedReRoots() []storage.DeclinedReRoot {
+	return slices.Clone(s.declined)
 }
 
 // unrelatedToRemote reads the active branch and whether it shares no commit
@@ -168,22 +180,23 @@ func (s *Store) reopenEngine(ctx context.Context) error {
 }
 
 // followReRoot is the follow inside the hold: recognize the cut, then re-root
-// branch at it. moved reports whether the branch moved, which a re-root that
-// failed after its move still did; it is false, with nothing written to any
-// ref, when the tracking ref's history is not a re-root branch can follow.
-func followReRoot(ctx context.Context, ddb *doltdb.DoltDB, branch, tracking ref.DoltRef) (followed storage.ReRooted, moved bool, err error) {
+// branch at it. followed.Head is set exactly when the branch moved, which a
+// re-root that failed after its move still did; it is empty, with nothing
+// written to any ref, when the tracking ref's history is not a re-root branch
+// can follow. declined holds the one cut it recognized and could not follow,
+// under entry, and is empty otherwise.
+func followReRoot(ctx context.Context, ddb *doltdb.DoltDB, branch, tracking ref.DoltRef, entry storage.SyncEntry) (followed storage.ReRooted, declined []storage.DeclinedReRoot, err error) {
 	cut, ok, err := recognizeReRootCut(ctx, ddb, branch, tracking)
 	if err != nil || !ok {
-		return storage.ReRooted{}, false, err
+		return storage.ReRooted{}, nil, err
 	}
 	followed, err = reRootBranch(ctx, ddb, branch, cut)
 	if errors.Is(err, ErrSideLineAcrossCut) {
 		// A line of the local history goes around the cut, so no re-root of
 		// it reproduces the remote's: not a history this branch can follow.
-		return storage.ReRooted{}, false, nil
+		return storage.ReRooted{}, []storage.DeclinedReRoot{{Entry: entry, Cut: cut.String(), Reason: err.Error()}}, nil
 	}
-	// reRootBranch sets Head exactly when the branch moved, whatever the error.
-	return followed, followed.Head != "", err
+	return followed, nil, err
 }
 
 // recognizeReRootCut finds the commit of branch's history whose parentless

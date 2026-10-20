@@ -50,9 +50,9 @@ type syncSession struct {
 	syncer storage.Syncer
 }
 
-// openSyncSession is the one place a sync engine is opened and its capability
-// resolved. [LAW:single-enforcer] The returned close is the caller's to defer;
-// it releases the workspace lock, so a caller that drops it strands the lock.
+// openSyncSession opens a sync session on the workspace's store. The returned
+// close is the caller's to defer; it releases the workspace lock, so a caller
+// that drops it strands the lock.
 func openSyncSession(ctx context.Context, ws workspace.Info) (syncSession, func() error, error) {
 	return openSyncSessionAt(ctx, ws.DatabasePath, ws.WorkspaceID)
 }
@@ -63,20 +63,13 @@ func openSyncSession(ctx context.Context, ws workspace.Info) (syncSession, func(
 // same workspace identity. [LAW:one-type-per-behavior] one opener, the path
 // is data.
 func openSyncSessionAt(ctx context.Context, databasePath, workspaceID string) (syncSession, func() error, error) {
-	st, err := engine.Open(ctx, engine.Sync, databasePath, workspaceID)
+	st, syncer, err := openSyncEngineAt(ctx, databasePath, workspaceID)
 	if err != nil {
 		return syncSession{}, nil, err
 	}
-	syncer, err := storage.Sync.Of(st)
-	if err != nil {
-		// An engine that cannot sync cannot serve any subcommand of this
-		// family, so it is refused here rather than at each verb — and the
-		// store is closed because no session is returned to close it.
-		// [LAW:no-silent-failure]
-		return syncSession{}, nil, errors.Join(err, st.Close())
-	}
 	return syncSession{engine: st, syncer: syncer}, func() error {
 		reportEventValues(ctx, "reroot.follows", syncer.FollowedReRoots())
+		reportEventValues(ctx, "reroot.declines", syncer.DeclinedReRoots())
 		reportEventValues(ctx, "fork_point.records", syncer.ForkPointRecords())
 		reportEventValues(ctx, "fetch.pruned", syncer.PrunedRefs())
 		reportEventValues(ctx, "remote.removals", syncer.RemoteRemovals())
@@ -86,6 +79,25 @@ func openSyncSessionAt(ctx context.Context, databasePath, workspaceID string) (s
 		reportEventValues(ctx, "history_bound.records", syncer.HistoryBounds())
 		return st.Close()
 	}, nil
+}
+
+// openSyncEngineAt is the one place a sync engine is opened and its
+// capability resolved. [LAW:single-enforcer] A sync session wraps it with the
+// close that reports what the engine did; compaction wraps it with a plain one.
+func openSyncEngineAt(ctx context.Context, databasePath, workspaceID string) (storage.Store, storage.Syncer, error) {
+	st, err := engine.Open(ctx, engine.Sync, databasePath, workspaceID)
+	if err != nil {
+		return nil, nil, err
+	}
+	syncer, err := storage.Sync.Of(st)
+	if err != nil {
+		// An engine that cannot sync cannot serve any subcommand of this
+		// family, so it is refused here rather than at each verb — and the
+		// store is closed because no engine is returned to close it.
+		// [LAW:no-silent-failure]
+		return nil, nil, errors.Join(err, st.Close())
+	}
+	return st, syncer, nil
 }
 
 // reportEventValues appends one value per item to the event's occurrences
@@ -320,6 +332,12 @@ func syncPullLeaf() syncLeaf {
 			fmt.Fprintf(os.Stderr, "lit: fetch-success marker not written: %v\n", err)
 		}
 		pullTraceMetadata["state"] = string(result.State)
+		pullTraceMetadata["base"] = string(result.Base)
+		// The pull's decision and the base it settled from land on the event,
+		// so a landing across a fork point reads apart from a fast-forward
+		// along shared history. [LAW:nothing-unseen]
+		telemetry.Set(ctx, "pull.state", string(result.State))
+		telemetry.Set(ctx, "pull.base", string(result.Base))
 		// A held free-text conflict is a non-transient divergence the agent must
 		// resolve: it routes through the one sync-failure contract and is RETURNED, so
 		// the command exits ExitConflict — the same exit `lit sync reconcile` gives for

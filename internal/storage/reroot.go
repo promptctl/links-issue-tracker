@@ -76,6 +76,26 @@ type FollowedReRoot struct {
 	Collection Collection
 }
 
+// DeclinedReRoot is a re-root of the remote a store recognized and did not
+// follow: Cut is the local commit whose parentless re-commit is the remote's
+// root, and Reason is why no re-root of the local history at Cut reproduces
+// the remote's. The branch did not move; the sync goes on to meet the remote
+// as the unrelated histories the reconcile reports.
+type DeclinedReRoot struct {
+	Entry  SyncEntry
+	Cut    string
+	Reason string
+}
+
+// EventValue is the decline as one value of the event's reroot.declines list.
+func (d DeclinedReRoot) EventValue() map[string]any {
+	return map[string]any{
+		"reroot.decline":        string(d.Entry),
+		"reroot.cut":            d.Cut,
+		"reroot.decline_reason": d.Reason,
+	}
+}
+
 // Collection is the reclaim that follows a re-root onto a store's branch: the
 // local refs naming commits below the cut dropped, then the full GC. Ran is
 // whether the GC ran, and the two byte counts are the store's size on disk

@@ -287,7 +287,7 @@ func TestRunSyncCompactSurfacesAndTracesAFailedPass(t *testing.T) {
 	}
 }
 
-// compactThroughSession is what the backstop records with, and these are the
+// compactThrough is what the backstop records with, and these are the
 // three things the durable trail can say about an automatic pass. None is
 // reachable from the cadence e2e tests: they drive a fresh workspace whose
 // footprint is under every threshold, so CompactIfDue always declines there.
@@ -302,7 +302,7 @@ func TestCompactThroughSessionRecordsEachOutcome(t *testing.T) {
 			Ran: true, Depth: storage.GCFull, Detail: "journal 2.0 KiB -> 0 B",
 		}}
 
-		compactThroughSession(context.Background(), ws, syncSession{syncer: syncer})
+		compactThrough(context.Background(), ws, syncer)
 
 		traces := readSyncTraces(t, ws)
 		if len(traces) != 1 {
@@ -326,7 +326,7 @@ func TestCompactThroughSessionRecordsEachOutcome(t *testing.T) {
 
 		// The zero outcome: nothing was owed, which is the common case on every
 		// mutating command. A trace here would be one row per command forever.
-		compactThroughSession(context.Background(), ws, syncSession{syncer: &compactSyncer{}})
+		compactThrough(context.Background(), ws, &compactSyncer{})
 
 		if traces := readSyncTraces(t, ws); len(traces) != 0 {
 			t.Fatalf("traces = %+v, want none — nothing was owed, and recording that would drown the trail", traces)
@@ -338,7 +338,7 @@ func TestCompactThroughSessionRecordsEachOutcome(t *testing.T) {
 		ws := compactWorkspace(t)
 		failure := errors.New("dolt gc: store is read-only")
 
-		compactThroughSession(context.Background(), ws, syncSession{syncer: &compactSyncer{err: failure}})
+		compactThrough(context.Background(), ws, &compactSyncer{err: failure})
 
 		traces := readSyncTraces(t, ws)
 		if len(traces) != 1 || traces[0].Status != "error" {
@@ -356,8 +356,8 @@ func TestCompactThroughSessionRecordsEachOutcome(t *testing.T) {
 		t.Parallel()
 		ws := compactWorkspace(t)
 
-		compactThroughSession(context.Background(), ws,
-			syncSession{syncer: &compactSyncer{err: errors.New("measure store footprint: permission denied")}})
+		compactThrough(context.Background(), ws,
+			&compactSyncer{err: errors.New("measure store footprint: permission denied")})
 
 		traces := readSyncTraces(t, ws)
 		if len(traces) != 1 {
@@ -375,10 +375,10 @@ func TestCompactThroughSessionRecordsEachOutcome(t *testing.T) {
 		t.Parallel()
 		ws := compactWorkspace(t)
 
-		compactThroughSession(context.Background(), ws, syncSession{syncer: &compactSyncer{
+		compactThrough(context.Background(), ws, &compactSyncer{
 			outcome: storage.CompactionOutcome{Depth: storage.GCFull},
 			err:     errors.New("compact dolt store (full): connection refused"),
-		}})
+		})
 
 		traces := readSyncTraces(t, ws)
 		if len(traces) != 1 {
@@ -401,12 +401,12 @@ func TestCompactThroughSessionRecordsEachOutcome(t *testing.T) {
 		t.Parallel()
 		ws := compactWorkspace(t)
 
-		compactThroughSession(context.Background(), ws, syncSession{syncer: &compactSyncer{
+		compactThrough(context.Background(), ws, &compactSyncer{
 			outcome: storage.CompactionOutcome{
 				Ran: true, Depth: storage.GCFull, Detail: "journal 4.0 MiB -> 0 B, old-generation archives 148 -> 2",
 			},
 			err: errors.New("reopen dolt: context deadline exceeded"),
-		}})
+		})
 
 		traces := readSyncTraces(t, ws)
 		if len(traces) != 1 || traces[0].Status != "error" {

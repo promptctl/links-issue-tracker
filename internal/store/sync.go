@@ -405,6 +405,7 @@ func (s *Store) SyncPull(ctx context.Context, remote storage.RemoteName, branch 
 		}
 		result.Ahead, result.Behind = recv.Ahead, recv.Behind
 		result.OldestDivergedUnix = recv.OldestDivergedUnix
+		result.Base = recv.Base
 		switch recv.State {
 		case storage.SyncReceiveUpToDate:
 			result.State = storage.SyncPullUpToDate
