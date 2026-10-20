@@ -38,6 +38,10 @@ const (
 	// fetch pruned goes by LandedFetch.Pruned, and a fork point left without
 	// its ref by LandedFetch.ForkPointsDropped.
 	FetchedHeadAbsent
+	// FetchedHeadSuperseded: the live store moved the ref after the take, so
+	// a writer that saw the remote later than the take did set it, and it
+	// stands.
+	FetchedHeadSuperseded
 )
 
 func (r FetchedHeadRecord) String() string {
@@ -48,6 +52,8 @@ func (r FetchedHeadRecord) String() string {
 		return "unchanged"
 	case FetchedHeadAbsent:
 		return "absent"
+	case FetchedHeadSuperseded:
+		return "superseded"
 	}
 	return "unlanded"
 }
@@ -79,10 +85,11 @@ type LandedFetch struct {
 	Held time.Duration
 }
 
-// LandFetchedHead carries a fetch that ran on a clone back to the live store
-// at doltRootDir: every chunk the clone's `remotes/<remote>/<branch>` reaches
-// is copied into the live store, the live fork point is recorded and then the
-// live ref is set to the clone's head, and the git objects the fetch brought
+// LandFetchedHead carries a fetch that ran on clone back to the live store at
+// doltRootDir: when the live `remotes/<remote>/<branch>` still stands as the
+// take saw it, every chunk the clone's ref reaches is copied into the live
+// store; the live fork point is recorded and then the live ref is set to the
+// clone's head; and the git objects the fetch brought
 // into the clone's mirror of the remote are copied into the live store's
 // mirror. It contacts no network and opens no SQL engine; the copies are
 // local.
@@ -105,15 +112,21 @@ type LandedFetch struct {
 // live tracking ref's head, a commit the live store already holds, so
 // recording it copies nothing.
 //
-// The ref is set to what the fetch found whenever it differs, forwards,
-// backwards, or onto an unrelated history, because that is what a fetch does:
-// it records where the remote was when it looked. The one case in which that
-// is older than the ref is a push the mirror recorded after the clone's fetch
-// read the remote; the ref then reads that push as unpushed until the next
-// receive, which finds the remote's advertisement changed and fetches again.
-// Refusing to move the ref instead would leave it wrong for good whenever the
-// remote really was reset, since the receive would then record the reset
-// advertisement as received and stop asking.
+// Every ref the landing writes, it writes only while the live ref still names
+// what the take saw (clone, a TakenClone): the head the clone held it at, or
+// absent at both. [LAW:single-enforcer] one rule, TakenClone.at, for the
+// tracking ref (landingOf) and the prunes (landPrunes). While it holds, the ref is set to what the
+// fetch found whenever it differs, forwards, backwards, or onto an unrelated
+// history, because that is what a fetch does: it records where the remote was
+// when it looked, and a remote that really was reset is recorded as reset.
+// A live ref that moved since the take was moved by a push, a fetch, a follow
+// or a mirror's record on the live store, each of which saw the remote after
+// the take did — a re-rooting push among them, which collects the history
+// below its cut, and which the clone's pre-cut head would make reachable
+// again. That ref stands (FetchedHeadSuperseded), and no chunk of the clone's
+// head is copied in. The receive still records the advertisement it observed
+// before the take, which the live writer's move has left behind, so the next
+// receive finds the remote moved and fetches again.
 //
 // The hold is holdForRefWrite's: the workspace shared lock around Dolt's LOCK
 // and the commit lock. Its budget is the receive's own deadline, not the
@@ -126,11 +139,8 @@ type LandedFetch struct {
 //
 // The clone's fetch pruned too, and pruned is what it pruned (its session's
 // PrunedRefs). Each of remote's pruned refs the clone still lacks is deleted
-// from the live store only while it still names the head the clone pruned.
-// For a session whose first fetch pruned the ref, that head is the live one
-// at the take, since the clone is a copy of the live store; a ref the live
-// store moved or created since is left as it stands, and so is one an earlier
-// fetch of the session moved before a later one pruned it, until the next
+// from the live store only while it still names the head the take saw; a ref
+// the live store moved or created since is left as it stands, until the next
 // receive's own fetch prunes it. Then every live
 // fork point of remote whose tracking ref the live store no longer holds goes,
 // by the one rule a fetch's own drop follows (orphanForkPoints). It runs after
@@ -140,12 +150,8 @@ type LandedFetch struct {
 // The mirror's objects land last: a failure there is returned wrapping
 // ErrRemoteCacheNotLanded with the result, because the chunks and ref it
 // follows are already written and stand.
-func LandFetchedHead(ctx context.Context, doltRootDir, cloneRootDir string, remote storage.RemoteName, branch string, pruned []storage.PrunedRef) (landed LandedFetch, err error) {
+func LandFetchedHead(ctx context.Context, doltRootDir string, clone TakenClone, remote storage.RemoteName, branch string, pruned []storage.PrunedRef) (landed LandedFetch, err error) {
 	root, err := validateDoltRootDir(doltRootDir)
-	if err != nil {
-		return LandedFetch{}, err
-	}
-	cloneRoot, err := validateDoltRootDir(cloneRootDir)
 	if err != nil {
 		return LandedFetch{}, err
 	}
@@ -157,22 +163,18 @@ func LandFetchedHead(ctx context.Context, doltRootDir, cloneRootDir string, remo
 
 	// The clone is this caller's alone — nothing else opens it — so it is read
 	// before the live store is held, and stays open for the copy.
-	clone, err := openCloneChunkStore(ctx, cloneRoot)
+	cloneDB, err := openCloneChunkStore(ctx, clone.root)
 	if err != nil {
 		return LandedFetch{}, err
 	}
-	defer func() { err = errors.Join(err, clone.Close()) }()
-	fetched, found, err := resolveRefHead(ctx, clone, trackingRef)
+	defer func() { err = errors.Join(err, cloneDB.Close()) }()
+	fetched, err := readRefHead(ctx, cloneDB, trackingRef)
 	if err != nil {
 		return LandedFetch{}, fmt.Errorf("read the clone's %s: %w", trackingRef.String(), err)
 	}
-	pruned, err = clonePrunes(ctx, clone, remote, pruned)
+	pruned, err = clonePrunes(ctx, cloneDB, remote, pruned)
 	if err != nil {
 		return LandedFetch{}, err
-	}
-	var heads []hash.Hash
-	if found {
-		heads = append(heads, fetched)
 	}
 	// Which mirror refs to copy is decided before the hold: the listing is two
 	// git subprocesses per mirror. The plan names only the fetched remote's
@@ -180,7 +182,7 @@ func LandFetchedHead(ctx context.Context, doltRootDir, cloneRootDir string, remo
 	// instance republished on close, and the plan going stale there costs
 	// nothing: the copy sets the ref to the clone's value, the same
 	// last-writer-wins rule every close follows.
-	cachePlan, cacheErr := planRemoteCacheLanding(ctx, remoteCacheBaseAt(root), remoteCacheBaseAt(cloneRoot), remote)
+	cachePlan, cacheErr := planRemoteCacheLanding(ctx, remoteCacheBaseAt(root), remoteCacheBaseAt(clone.root), remote)
 
 	releaseWorkspace, err := acquireLiveStoreHold(ctx, root)
 	if err != nil {
@@ -190,26 +192,32 @@ func LandFetchedHead(ctx context.Context, doltRootDir, cloneRootDir string, remo
 	err = holdForRefWrite(ctx, root, ReceiveDeadline, func(holdCtx context.Context, ddb *doltdb.DoltDB) error {
 		start := time.Now()
 		defer func() { landed.Held = time.Since(start) }()
+		live, err := readRefHead(holdCtx, ddb, trackingRef)
+		if err != nil {
+			return fmt.Errorf("read the live %s: %w", trackingRef.String(), err)
+		}
+		landed.Record = landingOf(clone.at(trackingRef), live, fetched)
+		// [LAW:dataflow-not-control-flow] the record decides what moves — the
+		// fetched head, or nothing — and the copy and the move run on that.
+		moves := landed.Record.moves(fetched)
 		tempDir := LandingTempDir(root)
 		if err := os.MkdirAll(tempDir, 0o755); err != nil {
 			return fmt.Errorf("create temp table file dir: %w", err)
 		}
-		if err := ddb.PullChunks(holdCtx, tempDir, clone, heads, nil, nil); err != nil {
-			return fmt.Errorf("copy the fetched chunks of %v into the live store: %w", heads, err)
+		if err := ddb.PullChunks(holdCtx, tempDir, cloneDB, moves, nil, nil); err != nil {
+			return fmt.Errorf("copy the fetched chunks of %v into the live store: %w", moves, err)
 		}
 		var landErr error
 		landed.ForkPoints, landErr = recordLiveForkPoint(holdCtx, ddb, root, ownerOf(remote), trackingRef)
 		if landErr != nil {
 			return landErr
 		}
-		landed.Record = FetchedHeadAbsent
-		if found {
-			landed.Record, landErr = landRef(holdCtx, ddb, trackingRef, fetched)
-			if landErr != nil {
-				return landErr
+		for _, head := range moves {
+			if err := moveRef(holdCtx, ddb, trackingRef, head); err != nil {
+				return err
 			}
 		}
-		landed.Pruned, landErr = landPrunes(holdCtx, ddb, pruned)
+		landed.Pruned, landErr = landPrunes(holdCtx, ddb, clone, pruned)
 		if landErr != nil {
 			return landErr
 		}
@@ -217,7 +225,7 @@ func LandFetchedHead(ctx context.Context, doltRootDir, cloneRootDir string, remo
 		if landErr != nil {
 			return landErr
 		}
-		cacheErr = errors.Join(cacheErr, cachePlan.apply(holdCtx))
+		cacheErr = errors.Join(cacheErr, cachePlan.landedBy(landed.Record).apply(holdCtx))
 		return nil
 	})
 	// A failed hold returns what it did before the failure: each deletion
@@ -237,25 +245,106 @@ func LandingTempDir(doltRootDir string) string {
 	return filepath.Join(doltRootDir, doltDatabaseName, dbfactory.DoltDir, "temptf")
 }
 
-// landRef sets the tracking ref r to fetched unless it already names it — a
-// fetch's own semantics, whatever the relation between the two
-// (LandFetchedHead says why). It reads fetched as a commit first, so a copy
-// that did not land it is refused rather than pointed at.
-func landRef(ctx context.Context, ddb *doltdb.DoltDB, r ref.DoltRef, fetched hash.Hash) (FetchedHeadRecord, error) {
-	if _, err := readFullCommit(ctx, ddb, fetched); err != nil {
-		return 0, fmt.Errorf("land fetched head %s: the copied chunks do not hold it as a commit: %w", fetched, err)
-	}
-	current, found, err := resolveRefHead(ctx, ddb, r)
+// TakenClone is a clone of the live store and every tracking ref it held when
+// it was taken. The clone is a file copy made under the take's hold and read
+// before anything ran on it, so its refs are the live store's as of the take:
+// what LandFetchedHead requires a live ref to still name before it writes it.
+// [LAW:types-are-the-program] a landing cannot be handed a clone without what
+// its take saw.
+type TakenClone struct {
+	root string
+	// tracking is every tracking ref the clone held, by ref.DoltRef.String().
+	tracking map[string]refHead
+}
+
+// ReadTakenClone reads the clone at cloneRootDir as it was taken. It must run
+// before any session opens on the clone, whose fetch or push moves the refs
+// it reads.
+func ReadTakenClone(ctx context.Context, cloneRootDir string) (taken TakenClone, err error) {
+	root, err := validateDoltRootDir(cloneRootDir)
 	if err != nil {
-		return 0, fmt.Errorf("land fetched head %s: read %s: %w", fetched, r.String(), err)
+		return TakenClone{}, err
 	}
-	if found && current == fetched {
-		return FetchedHeadUnchanged, nil
+	clone, err := openCloneChunkStore(ctx, root)
+	if err != nil {
+		return TakenClone{}, err
 	}
-	if err := ddb.SetHead(ctx, r, fetched); err != nil {
-		return 0, fmt.Errorf("land fetched head %s on %s: %w", fetched, r.String(), err)
+	defer func() { err = errors.Join(err, clone.Close()) }()
+	tracking := map[string]refHead{}
+	err = clone.VisitRefsOfType(ctx, map[ref.RefType]struct{}{ref.RemoteRefType: {}}, func(r ref.DoltRef, head hash.Hash) error {
+		tracking[r.String()] = refHead{addr: head, held: true}
+		return nil
+	})
+	if err != nil {
+		return TakenClone{}, fmt.Errorf("read the tracking refs of the clone at %s as taken: %w", root, err)
 	}
-	return FetchedHeadMoved, nil
+	return TakenClone{root: root, tracking: tracking}, nil
+}
+
+// at is where the take saw r.
+func (t TakenClone) at(r ref.DoltRef) refHead {
+	return t.tracking[r.String()]
+}
+
+// refHead is where a ref stands: the commit it names, or, zero, absent.
+type refHead struct {
+	addr hash.Hash
+	held bool
+}
+
+// readRefHead is resolveRefHead as a refHead.
+func readRefHead(ctx context.Context, ddb *doltdb.DoltDB, r ref.DoltRef) (refHead, error) {
+	addr, held, err := resolveRefHead(ctx, ddb, r)
+	if err != nil || !held {
+		return refHead{}, err
+	}
+	return refHead{addr: addr, held: true}, nil
+}
+
+// landingOf decides what a landing does to the tracking ref the take saw at
+// taken, the live store holds at live, and the clone's fetch left at fetched.
+// Nothing of the fetch lands over a ref the live store moved since the take
+// (LandFetchedHead says why), whether or not the fetch found the branch; a
+// ref already at fetched is unchanged whichever way it got there.
+func landingOf(taken, live, fetched refHead) FetchedHeadRecord {
+	switch {
+	case fetched.held && live == fetched:
+		return FetchedHeadUnchanged
+	case live != taken:
+		return FetchedHeadSuperseded
+	case !fetched.held:
+		return FetchedHeadAbsent
+	}
+	return FetchedHeadMoved
+}
+
+// LandsTheFetch reports whether a landing of r landed what the clone fetched:
+// every record but FetchedHeadSuperseded, which lands nothing of it — no
+// chunk, no ref, no mirror ref — because the live store moved the ref since
+// the take.
+func (r FetchedHeadRecord) LandsTheFetch() bool {
+	return r != FetchedHeadSuperseded
+}
+
+// moves is the head a landing of record moves the ref onto: fetched when the
+// record is FetchedHeadMoved, and nothing otherwise.
+func (r FetchedHeadRecord) moves(fetched refHead) []hash.Hash {
+	if r != FetchedHeadMoved {
+		return nil
+	}
+	return []hash.Hash{fetched.addr}
+}
+
+// moveRef sets the tracking ref r to head. It reads head as a commit first,
+// so a copy that did not land it is refused rather than pointed at.
+func moveRef(ctx context.Context, ddb *doltdb.DoltDB, r ref.DoltRef, head hash.Hash) error {
+	if _, err := readFullCommit(ctx, ddb, head); err != nil {
+		return fmt.Errorf("land fetched head %s: the copied chunks do not hold it as a commit: %w", head, err)
+	}
+	if err := ddb.SetHead(ctx, r, head); err != nil {
+		return fmt.Errorf("land fetched head %s on %s: %w", head, r.String(), err)
+	}
+	return nil
 }
 
 // recordLiveForkPoint is recordForkPoints for the one tracking ref a landing
@@ -358,17 +447,17 @@ func clonePrunes(ctx context.Context, clone *doltdb.DoltDB, remote storage.Remot
 }
 
 // landPrunes deletes each pruned tracking ref the live store still holds at
-// the head the clone pruned, and returns those it deleted. A ref already
-// gone, or moved since the take, is left as it stands.
-func landPrunes(ctx context.Context, ddb *doltdb.DoltDB, pruned []storage.PrunedRef) ([]storage.PrunedRef, error) {
+// the head the take saw, and returns those it deleted. A ref already gone, or
+// moved or created since the take, is left as it stands.
+func landPrunes(ctx context.Context, ddb *doltdb.DoltDB, clone TakenClone, pruned []storage.PrunedRef) ([]storage.PrunedRef, error) {
 	var deleted []storage.PrunedRef
 	for _, p := range pruned {
 		r := ref.NewRemoteRef(p.Remote, p.Branch)
-		current, found, err := resolveRefHead(ctx, ddb, r)
+		live, err := readRefHead(ctx, ddb, r)
 		if err != nil {
 			return deleted, fmt.Errorf("land the prune of %s: read it: %w", r.String(), err)
 		}
-		if !found || current.String() != p.Head {
+		if !live.held || live != clone.at(r) {
 			continue
 		}
 		if err := deleteRef(ctx, ddb, r); err != nil {
@@ -513,16 +602,18 @@ type mirrorCopy struct {
 // it copied from the live mirror, which carries no news and, if a live push
 // has moved the ref since, would wind it back.
 //
-// A differing ref is set to the clone's value, for the reason LandFetchedHead
-// sets the tracking ref: the value is where the remote was when the clone's
-// fetch looked, and recording that is what a fetch does. The live value may be
-// a later state — a live push closing after the clone's fetch — and is then
-// replaced by an earlier one: a last-known ref is the base the next fetch
-// negotiates from, not a record of the newest state, and any state the remote
-// held serves, an earlier one costing that fetch the delta again. Git cannot
-// tell which of two states is later, since the blobstore severs its history
-// chain periodically. A ref both hold at the same value costs nothing under
-// the hold. A mirror that cannot be listed is reported and skipped.
+// A differing ref is set to the clone's value: the value is where the remote
+// was when the clone's fetch looked, and recording that is what a fetch does.
+// The plan lands only with the fetch it describes (landedBy): a landing the
+// live store superseded copies none of it, so the live mirror keeps the refs
+// its own writer left. Otherwise the live value may still be a later state,
+// and is then replaced by an earlier one: a last-known ref is
+// the base the next fetch negotiates from, not a record of the newest state,
+// and any state the remote held serves, an earlier one costing that fetch the
+// delta again. Git cannot tell which of two states is later, since the
+// blobstore severs its history chain periodically. A ref both hold at the
+// same value costs nothing under the hold. A mirror that cannot be listed is
+// reported and skipped.
 func planRemoteCacheLanding(ctx context.Context, liveBase string, cloneBase string, remote storage.RemoteName) (remoteCacheLanding, error) {
 	fetched := lastKnownRefNamespace + remote.String() + "/"
 	keys, err := listRemoteCacheKeys(cloneBase)
@@ -564,6 +655,15 @@ func planRemoteCacheLanding(ctx context.Context, liveBase string, cloneBase stri
 		}
 	}
 	return plan, errors.Join(errs...)
+}
+
+// landedBy is the plan a landing of record carries out: all of it when the
+// landing lands the fetch, and nothing when the live store superseded it.
+func (p remoteCacheLanding) landedBy(record FetchedHeadRecord) remoteCacheLanding {
+	if !record.LandsTheFetch() {
+		return remoteCacheLanding{}
+	}
+	return p
 }
 
 // apply carries the plan out. It runs inside the live store's hold because

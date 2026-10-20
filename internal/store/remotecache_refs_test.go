@@ -369,8 +369,9 @@ func TestBackgroundReceiveLandsTheClonesLastKnownRef(t *testing.T) {
 	}
 	head := gitRevParse(t, remote, "refs/dolt/data")
 
-	clone := copyOf("clone")
-	cloneSync, err := OpenSync(ctx, clone, "ws")
+	cloneRoot := copyOf("clone")
+	clone := takenClone(t, ctx, cloneRoot)
+	cloneSync, err := OpenSync(ctx, cloneRoot, "ws")
 	if err != nil {
 		t.Fatalf("OpenSync(clone) error = %v", err)
 	}

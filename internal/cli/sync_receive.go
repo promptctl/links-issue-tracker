@@ -608,6 +608,9 @@ type syncReceiveOutcome struct {
 	behind             int64
 	oldestDivergedUnix int64 // Unix time the divergence began; 0 unless diverged
 	traceErr           error
+	// landed is what the landing did to the tracking ref (store.LandFetchedHead),
+	// zero when the receive stopped before it.
+	landed store.FetchedHeadRecord
 	// stopped is the step the receive stopped at, receiveStepNone when it ran
 	// to the end, and err is that step's failure; the trace is already
 	// recorded when it is set. [LAW:one-source-of-truth] the one record of
@@ -711,6 +714,7 @@ func performSyncReceive(ctx context.Context, ws workspace.Info, clone liveClone,
 		ahead:              result.Ahead,
 		behind:             result.Behind,
 		oldestDivergedUnix: result.OldestDivergedUnix,
+		landed:             landed.Record,
 		stopped:            stopped,
 		err:                stepErr,
 	}
@@ -769,6 +773,7 @@ func performSyncReceive(ctx context.Context, ws workspace.Info, clone liveClone,
 		"receive.ahead":                   result.Ahead,
 		"receive.behind":                  result.Behind,
 		"receive.base":                    traceMetadata["base"],
+		"receive.landed":                  landed.Record.String(),
 		"receive.stopped":                 outcome.stopped.String(),
 		"receive.unsettled_since":         unixOrZero(run.since),
 		"receive.unsettled_previous_stop": unixOrZero(run.previousStop),

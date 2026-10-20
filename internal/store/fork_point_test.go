@@ -722,11 +722,12 @@ func TestTheReceiveRecordsTheForkPointOnTheLiveStore(t *testing.T) {
 	ctx := context.Background()
 	f := newForkBelowTheCut(t, ctx)
 
-	clone := filepath.Join(t.TempDir(), "clone", "dolt")
-	if err := dbsnapshot.CloneTree(ctx, f.delta, clone); err != nil {
+	cloneRoot := filepath.Join(t.TempDir(), "clone", "dolt")
+	if err := dbsnapshot.CloneTree(ctx, f.delta, cloneRoot); err != nil {
 		t.Fatalf("CloneTree(delta) error = %v", err)
 	}
-	fetcher := openSyncOrFatal(t, ctx, clone)
+	clone := takenClone(t, ctx, cloneRoot)
+	fetcher := openSyncOrFatal(t, ctx, cloneRoot)
 	if err := fetcher.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch(clone) error = %v", err)
 	}

@@ -200,8 +200,9 @@ func markerModTime(t *testing.T, markerPath string) time.Time {
 
 // TestRecordReceivedWritesOnlyWhatASettledReceiveLearned pins the record's
 // one writer to its contract: the advertisement observed before the fetch is
-// recorded only when the receive settled cleanly and the question was
-// answered, while the fetch-success marker follows the fetch alone. Each row
+// recorded only when the receive landed its fetch, settled cleanly and the
+// question was answered, while the fetch-success marker follows the fetch
+// alone. Each row
 // is a receive outcome the inline path can produce; the assertion is what is
 // on disk afterwards. [LAW:behavior-not-structure]
 func TestRecordReceivedWritesOnlyWhatASettledReceiveLearned(t *testing.T) {
@@ -218,7 +219,8 @@ func TestRecordReceivedWritesOnlyWhatASettledReceiveLearned(t *testing.T) {
 		wantFetchOK bool   // whether origin's fetch-success marker was written
 	}{
 		{"up to date, answered", syncReceiveOutcome{skip: syncTargetReady, state: storage.SyncReceiveUpToDate}, observed, observed.record(), true},
-		{"fast-forwarded, answered", syncReceiveOutcome{skip: syncTargetReady, state: storage.SyncReceiveFastForwarded}, observed, observed.record(), true},
+		{"fast-forwarded, answered", syncReceiveOutcome{skip: syncTargetReady, state: storage.SyncReceiveFastForwarded, landed: store.FetchedHeadMoved}, observed, observed.record(), true},
+		{"up to date, landing superseded", syncReceiveOutcome{skip: syncTargetReady, state: storage.SyncReceiveUpToDate, landed: store.FetchedHeadSuperseded}, observed, previous, true},
 		{"diverged, reconcile converged", syncReceiveOutcome{skip: syncTargetReady, state: storage.SyncReceiveDiverged, reconcile: converged}, observed, observed.record(), true},
 		{"diverged, reconcile unconverged", syncReceiveOutcome{skip: syncTargetReady, state: storage.SyncReceiveDiverged, reconcile: unconverged}, observed, previous, true},
 		{"diverged, reconcile failed", syncReceiveOutcome{skip: syncTargetReady, state: storage.SyncReceiveDiverged, reconcile: &reconcileOutcome{}, stopped: receiveStepReconcile, err: errors.New("reconcile backend unavailable")}, observed, previous, true},
