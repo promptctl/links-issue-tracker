@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -306,25 +307,21 @@ func TestSyncPushFailureLines(t *testing.T) {
 	}
 }
 
-// TestFetchStalenessLinesRefIsData pins the one renderer serving both the
-// read-side banner (resolved ref) and the store-free mutation-side banner
-// (no ref): the warning text adapts, the condition does not.
-func TestFetchStalenessLinesRefIsData(t *testing.T) {
+// TestFetchStalenessLinesNamesTheFetchedRemote pins the stale-fetch line: it
+// names the remote whose fetch it measures, and warns only on a known age at
+// or past the threshold.
+func TestFetchStalenessLinesNamesTheFetchedRemote(t *testing.T) {
 	t.Parallel()
-	stale := 25 * time.Hour
+	origin := remoteName(t, "origin")
+	stale := remoteFetch{remote: origin, age: 25 * time.Hour}
 
-	withRef := fetchStalenessLines("origin/master", stale, true)
-	if len(withRef) != 1 || !strings.Contains(withRef[0], "fetch from origin/master") {
-		t.Fatalf("fetchStalenessLines(ref) = %q, want the ref named", withRef)
+	if got := fetchStalenessLines(stale, true); len(got) != 1 || !strings.Contains(got[0], "fetch from origin was") {
+		t.Fatalf("fetchStalenessLines(stale) = %q, want the remote named", got)
 	}
-	refless := fetchStalenessLines("", stale, true)
-	if len(refless) != 1 || strings.Contains(refless[0], " from ") {
-		t.Fatalf("fetchStalenessLines(no ref) = %q, want no ref clause", refless)
-	}
-	if got := fetchStalenessLines("origin/master", 2*time.Hour, true); len(got) != 0 {
+	if got := fetchStalenessLines(remoteFetch{remote: origin, age: 2 * time.Hour}, true); len(got) != 0 {
 		t.Fatalf("fetchStalenessLines(fresh) = %q, want none", got)
 	}
-	if got := fetchStalenessLines("origin/master", stale, false); len(got) != 0 {
+	if got := fetchStalenessLines(stale, false); len(got) != 0 {
 		t.Fatalf("fetchStalenessLines(unknown age) = %q, want none", got)
 	}
 }
@@ -346,45 +343,53 @@ func TestOneLineReason(t *testing.T) {
 }
 
 // TestPrintMutationSyncStalenessWarning pins the store-free printer end to
-// end over real marker files: a failing workspace warns on a mutating
-// command's writer; a healthy one stays silent.
+// end over real marker files and a real repository whose one remote is
+// origin: a failing workspace warns on a mutating command's writer; a healthy
+// one stays silent.
 func TestPrintMutationSyncStalenessWarning(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
+	ctx := context.Background()
+	workspaceWithOrigin := func(t *testing.T) workspace.Info {
+		dir := t.TempDir()
+		runGit(t, dir, "init")
+		runGit(t, dir, "remote", "add", "origin", filepath.Join(t.TempDir(), "remote.git"))
+		return workspace.Info{RootDir: dir, Location: workspace.Location{StorageDir: t.TempDir()}}
+	}
 
 	t.Run("failed last push warns", func(t *testing.T) {
-		ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}}
+		ws := workspaceWithOrigin(t)
 		recordPushOutcome(ws, pushOutcomeRecord{Decision: pushDecisionError, Reason: "connection refused", Remote: "origin", Branch: "master"})
 		var out bytes.Buffer
-		printMutationSyncStalenessWarning(&out, ws, now)
+		printMutationSyncStalenessWarning(ctx, &out, ws, now)
 		if !strings.Contains(out.String(), "FAILING") || !strings.Contains(out.String(), "connection refused") {
 			t.Fatalf("printMutationSyncStalenessWarning() = %q, want the failure surfaced", out.String())
 		}
 	})
 
 	t.Run("healthy workspace prints nothing", func(t *testing.T) {
-		ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}}
+		ws := workspaceWithOrigin(t)
 		recordPushOutcome(ws, pushOutcomeRecord{Decision: pushDecisionPushed, Remote: "origin", Branch: "master"})
-		if err := markFetchSuccess(ws); err != nil {
+		if err := markFetchSuccess(ws, remoteName(t, "origin")); err != nil {
 			t.Fatalf("markFetchSuccess: %v", err)
 		}
 		var out bytes.Buffer
-		printMutationSyncStalenessWarning(&out, ws, now)
+		printMutationSyncStalenessWarning(ctx, &out, ws, now)
 		if out.Len() != 0 {
 			t.Fatalf("printMutationSyncStalenessWarning() = %q, want silence", out.String())
 		}
 	})
 
 	t.Run("stale fetch warns even with pushes healthy", func(t *testing.T) {
-		ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}}
+		ws := workspaceWithOrigin(t)
 		recordPushOutcome(ws, pushOutcomeRecord{Decision: pushDecisionPushed, Remote: "origin", Branch: "master"})
-		if err := markFetchSuccess(ws); err != nil {
+		if err := markFetchSuccess(ws, remoteName(t, "origin")); err != nil {
 			t.Fatalf("markFetchSuccess: %v", err)
 		}
 		var out bytes.Buffer
-		printMutationSyncStalenessWarning(&out, ws, now.Add(25*time.Hour))
-		if !strings.Contains(out.String(), "last successful fetch") {
-			t.Fatalf("printMutationSyncStalenessWarning() = %q, want the stale-fetch warning", out.String())
+		printMutationSyncStalenessWarning(ctx, &out, ws, now.Add(25*time.Hour))
+		if !strings.Contains(out.String(), "last successful fetch from origin") {
+			t.Fatalf("printMutationSyncStalenessWarning() = %q, want the stale-fetch warning naming origin", out.String())
 		}
 	})
 }

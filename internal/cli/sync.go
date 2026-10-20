@@ -258,7 +258,7 @@ func fetchAndFollow(ctx context.Context, session syncSession, ws workspace.Info,
 	if err := session.syncer.SyncFetch(ctx, remote, prune); err != nil {
 		return err
 	}
-	if err := markFetchSuccess(ws); err != nil {
+	if err := markFetchSuccess(ws, remote); err != nil {
 		fmt.Fprintf(os.Stderr, "lit: fetch-success marker not written: %v\n", err)
 	}
 	syncRemote, branch, ok, err := freshnessSyncTarget(ctx, ws, gitRemotes)
@@ -315,7 +315,7 @@ func syncPullLeaf() syncLeaf {
 		// SyncPull succeeding means its internal SyncReceive fetched the remote
 		// successfully (the fetch is the first step of every outcome branch below),
 		// so this is a real "we talked to the remote" moment regardless of state.
-		if err := markFetchSuccess(ws); err != nil {
+		if err := markFetchSuccess(ws, remoteName); err != nil {
 			fmt.Fprintf(os.Stderr, "lit: fetch-success marker not written: %v\n", err)
 		}
 		pullTraceMetadata["state"] = string(result.State)

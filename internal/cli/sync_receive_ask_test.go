@@ -49,7 +49,8 @@ func TestAutomaticReceiveAsksBeforeFetching(t *testing.T) {
 	// stays quiet. The marker is aged first so "moved" is distinguishable from
 	// "left alone".
 	fetchedBefore := time.Now().Add(-time.Hour)
-	if err := os.Chtimes(fetchSuccessMarkerPath(ws), fetchedBefore, fetchedBefore); err != nil {
+	origin := remoteName(t, "origin")
+	if err := os.Chtimes(fetchSuccessMarkerPath(ws, origin), fetchedBefore, fetchedBefore); err != nil {
 		t.Fatalf("age fetch-success marker error = %v", err)
 	}
 	receiveNow(t, consumer)
@@ -60,7 +61,7 @@ func TestAutomaticReceiveAsksBeforeFetching(t *testing.T) {
 	if unmoved.Metadata["remote"] != "origin" {
 		t.Fatalf("unmoved receive metadata remote = %q, want origin", unmoved.Metadata["remote"])
 	}
-	if !markerModTime(t, fetchSuccessMarkerPath(ws)).After(fetchedBefore) {
+	if !markerModTime(t, fetchSuccessMarkerPath(ws, origin)).After(fetchedBefore) {
 		t.Fatalf("fetch-success marker did not move across an unmoved answer")
 	}
 
@@ -215,7 +216,7 @@ func TestRecordReceivedWritesOnlyWhatASettledReceiveLearned(t *testing.T) {
 		outcome     syncReceiveOutcome
 		observed    remoteAdvertisement
 		wantRecord  []byte // what received-refs.last holds afterwards
-		wantFetchOK bool   // whether fetch-success.last was written
+		wantFetchOK bool   // whether origin's fetch-success marker was written
 	}{
 		{"up to date, answered", syncReceiveOutcome{skip: syncTargetReady, state: storage.SyncReceiveUpToDate}, observed, observed.record(), true},
 		{"fast-forwarded, answered", syncReceiveOutcome{skip: syncTargetReady, state: storage.SyncReceiveFastForwarded}, observed, observed.record(), true},
@@ -232,11 +233,15 @@ func TestRecordReceivedWritesOnlyWhatASettledReceiveLearned(t *testing.T) {
 			if err := store.WriteReceivedRefs(ws.DatabasePath, previous); err != nil {
 				t.Fatalf("seed record error = %v", err)
 			}
-			recordReceived(ws, tc.outcome, tc.observed)
+			// Every outcome is a receive of origin; the marker follows the
+			// remote the receive fetched, even when the question went unanswered.
+			outcome := tc.outcome
+			outcome.remote = observed.remote
+			recordReceived(ws, outcome, tc.observed)
 			if got := readReceivedRefs(ws); string(got) != string(tc.wantRecord) {
 				t.Fatalf("record = %q, want %q", got, tc.wantRecord)
 			}
-			_, err := os.Stat(fetchSuccessMarkerPath(ws))
+			_, err := os.Stat(fetchSuccessMarkerPath(ws, observed.remote))
 			if gotFetchOK := err == nil; gotFetchOK != tc.wantFetchOK {
 				t.Fatalf("fetch-success marker written = %v, want %v (stat: %v)", gotFetchOK, tc.wantFetchOK, err)
 			}

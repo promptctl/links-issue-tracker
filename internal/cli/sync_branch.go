@@ -93,12 +93,11 @@ func (e syncBranchNotKnownError) Error() string {
 }
 
 // freshnessSyncTarget is the remote and branch the freshness reads report on
-// — doctor and every read command's banner — resolved as `lit sync` resolves
-// its remote, and with no network: the branch is knownSyncBranch's. ok false
-// is a workspace with no sync remote. [LAW:one-source-of-truth] the one
-// reading of what freshness is about.
+// — doctor and every read command's banner — with no network: the remote is
+// freshnessSyncRemote's and the branch is knownSyncBranch's. ok false is a
+// workspace with no sync remote.
 func freshnessSyncTarget(ctx context.Context, ws workspace.Info, gitRemotes []workspace.GitRemote) (remote storage.RemoteName, branch string, ok bool, err error) {
-	remote, ok, err = resolveSyncRemote("", workspace.UpstreamRemote(ctx, ws.RootDir), gitRemotes)
+	remote, ok, err = freshnessSyncRemote(ctx, ws, gitRemotes)
 	if err != nil || !ok {
 		return remote, "", ok, err
 	}
@@ -106,11 +105,26 @@ func freshnessSyncTarget(ctx context.Context, ws workspace.Info, gitRemotes []wo
 	return remote, branch, true, err
 }
 
+// freshnessSyncRemote is the remote the freshness reads report on, resolved as
+// `lit sync` resolves its remote. ok false is a workspace with no sync remote.
+// [LAW:one-source-of-truth] the one reading of which remote freshness is
+// about, shared by the freshness report and the fetch-age line.
+func freshnessSyncRemote(ctx context.Context, ws workspace.Info, gitRemotes []workspace.GitRemote) (storage.RemoteName, bool, error) {
+	return resolveSyncRemote("", workspace.UpstreamRemote(ctx, ws.RootDir), gitRemotes)
+}
+
 // advertisedSyncBranchPath is where resolveSyncBranch records the branch a
-// remote advertised, one file per remote: a RemoteName holds no "/", so the
-// record is a file directly in StorageDir. The name is still path-escaped
-// because a RemoteName admits characters the escape rewrites (";" among
-// them), and every earlier lit wrote the record under the escaped name.
+// remote advertised.
 func advertisedSyncBranchPath(ws workspace.Info, remote storage.RemoteName) string {
-	return filepath.Join(ws.StorageDir, "sync-branch."+url.PathEscape(remote.String()))
+	return perRemotePath(ws, "sync-branch", remote)
+}
+
+// perRemotePath is the file holding one fact about one remote: a RemoteName
+// holds no "/", so it is a file directly in StorageDir. The name is still
+// path-escaped because a RemoteName admits characters the escape rewrites
+// (";" among them), and every earlier lit wrote the sync-branch record under
+// the escaped name. [LAW:one-type-per-behavior] one naming rule, the stem is
+// data.
+func perRemotePath(ws workspace.Info, stem string, remote storage.RemoteName) string {
+	return filepath.Join(ws.StorageDir, stem+"."+url.PathEscape(remote.String()))
 }

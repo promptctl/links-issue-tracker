@@ -195,7 +195,7 @@ func runWithApp(ctx context.Context, stdout io.Writer, accessMode app.AccessMode
 	// markers, needing no engine, and precedes the auto-sync below so the banner
 	// reports the last COMPLETED attempt rather than racing the one about to spawn.
 	if accessMode == app.AccessWrite {
-		printMutationSyncStalenessWarning(stdout, ws, time.Now())
+		printMutationSyncStalenessWarning(ctx, stdout, ws, time.Now())
 	}
 	// [LAW:single-enforcer] One owner consults the auto-sync policy after a
 	// successful command, AND after that command's engine is closed: the on-change

@@ -227,7 +227,7 @@ func recordPushedAdvertisement(ws workspace.Info, proven remoteAdvertisement) {
 // decide; the caller runs this after every fetch path.
 func recordReceived(ws workspace.Info, outcome syncReceiveOutcome, observed remoteAdvertisement) {
 	if outcome.fetched() {
-		if err := markFetchSuccess(ws); err != nil {
+		if err := markFetchSuccess(ws, outcome.remote); err != nil {
 			fmt.Fprintf(os.Stderr, "lit: fetch-success marker not written: %v\n", err)
 		}
 	}
@@ -245,7 +245,7 @@ func recordReceived(ws workspace.Info, outcome syncReceiveOutcome, observed remo
 // what it decided — a skipped fetch is a decision, not silence.
 // [LAW:no-silent-failure]
 func confirmRemoteUnmoved(ws workspace.Info, observed remoteAdvertisement) {
-	if err := markFetchSuccess(ws); err != nil {
+	if err := markFetchSuccess(ws, observed.remote); err != nil {
 		fmt.Fprintf(os.Stderr, "lit: fetch-success marker not written: %v\n", err)
 	}
 	if err := recordReceiveTrace(ws, receiveDecisionRemoteUnmoved, "ok",

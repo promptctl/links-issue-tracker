@@ -22,6 +22,7 @@ func TestSyncStalenessLines(t *testing.T) {
 	t.Parallel()
 	freshAge := 2 * time.Hour
 	staleAge := 25 * time.Hour
+	origin := remoteName(t, "origin")
 
 	cases := []struct {
 		name          string
@@ -33,24 +34,17 @@ func TestSyncStalenessLines(t *testing.T) {
 		dontWant      []string
 	}{
 		{
-			name:          "no remote emits nothing, even with a stale fetch",
-			report:        doctorSyncReport{Kind: doctorSyncNoRemote},
-			fetchAge:      staleAge,
-			fetchAgeKnown: true,
-			wantLines:     0,
-		},
-		{
 			name:      "unresolved emits nothing",
 			report:    doctorSyncReport{Kind: doctorSyncUnresolved, Detail: "boom"},
 			wantLines: 0,
 		},
 		{
-			name:          "unresolved still warns about a stale fetch, without the ref",
+			name:          "unresolved still warns about a stale fetch",
 			report:        doctorSyncReport{Kind: doctorSyncUnresolved, Detail: "boom"},
 			fetchAge:      staleAge,
 			fetchAgeKnown: true,
 			wantLines:     1,
-			wantSubstrs:   []string{"sync: last successful fetch was", "lit sync fetch"},
+			wantSubstrs:   []string{"sync: last successful fetch from origin was", "lit sync fetch"},
 		},
 		{
 			name: "up to date and freshly fetched emits nothing",
@@ -87,7 +81,7 @@ func TestSyncStalenessLines(t *testing.T) {
 			fetchAge:      staleAge,
 			fetchAgeKnown: true,
 			wantLines:     1,
-			wantSubstrs:   []string{"sync:", "last successful fetch from origin/master", "ago", "at least 24 hours old", "lit sync fetch"},
+			wantSubstrs:   []string{"sync:", "last successful fetch from origin was", "ago", "at least 24 hours old", "lit sync fetch"},
 		},
 		{
 			name: "ahead AND stale fetch produce both lines",
@@ -150,7 +144,7 @@ func TestSyncStalenessLines(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			lines := syncStalenessLines(tc.report, tc.fetchAge, tc.fetchAgeKnown)
+			lines := syncStalenessLines(tc.report, remoteFetch{remote: origin, age: tc.fetchAge}, tc.fetchAgeKnown)
 			if len(lines) != tc.wantLines {
 				t.Fatalf("syncStalenessLines() = %v (%d lines), want %d", lines, len(lines), tc.wantLines)
 			}
@@ -170,21 +164,29 @@ func TestSyncStalenessLines(t *testing.T) {
 }
 
 // TestMarkFetchSuccessAndLastFetchSuccessAge pins the marker's round trip: no
-// marker reads as unknown (not zero-age, not infinite-age), and writing it
-// makes the age observable and monotonically increasing from that write.
+// marker reads as unknown (not zero-age, not infinite-age), a fetch of another
+// remote leaves it unknown, and marking the remote itself makes the age
+// observable and monotonically increasing from that write.
 func TestMarkFetchSuccessAndLastFetchSuccessAge(t *testing.T) {
 	t.Parallel()
 	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}}
+	origin, fork := remoteName(t, "origin"), remoteName(t, "fork")
 	now := time.Now()
 
-	if _, ok := lastFetchSuccessAge(ws, now); ok {
+	if _, ok := lastFetchSuccessAge(ws, origin, now); ok {
 		t.Fatalf("lastFetchSuccessAge() ok = true before any fetch ever succeeded")
 	}
-
-	if err := markFetchSuccess(ws); err != nil {
-		t.Fatalf("markFetchSuccess() error = %v", err)
+	if err := markFetchSuccess(ws, fork); err != nil {
+		t.Fatalf("markFetchSuccess(fork) error = %v", err)
 	}
-	age, ok := lastFetchSuccessAge(ws, now.Add(90*time.Minute))
+	if _, ok := lastFetchSuccessAge(ws, origin, now); ok {
+		t.Fatalf("lastFetchSuccessAge(origin) ok = true after only fork was fetched")
+	}
+
+	if err := markFetchSuccess(ws, origin); err != nil {
+		t.Fatalf("markFetchSuccess(origin) error = %v", err)
+	}
+	age, ok := lastFetchSuccessAge(ws, origin, now.Add(90*time.Minute))
 	if !ok {
 		t.Fatalf("lastFetchSuccessAge() ok = false after markFetchSuccess")
 	}
@@ -210,7 +212,7 @@ func TestLastFetchSuccessAgeSurfacesNonNotExistStatErrorsToStderr(t *testing.T) 
 	ws := workspace.Info{Location: workspace.Location{StorageDir: notADir}}
 
 	stderr := captureStderr(t, func() {
-		if _, ok := lastFetchSuccessAge(ws, time.Now()); ok {
+		if _, ok := lastFetchSuccessAge(ws, remoteName(t, "origin"), time.Now()); ok {
 			t.Errorf("lastFetchSuccessAge() ok = true for an unreadable marker path")
 		}
 	})
@@ -226,14 +228,15 @@ func TestLastFetchSuccessAgeSurfacesNonNotExistStatErrorsToStderr(t *testing.T) 
 func TestMarkFetchSuccessBackdatedMarkerIsStale(t *testing.T) {
 	t.Parallel()
 	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}}
-	if err := markFetchSuccess(ws); err != nil {
+	origin := remoteName(t, "origin")
+	if err := markFetchSuccess(ws, origin); err != nil {
 		t.Fatalf("markFetchSuccess() error = %v", err)
 	}
 	backdated := time.Now().Add(-30 * time.Hour)
-	if err := os.Chtimes(fetchSuccessMarkerPath(ws), backdated, backdated); err != nil {
+	if err := os.Chtimes(fetchSuccessMarkerPath(ws, origin), backdated, backdated); err != nil {
 		t.Fatalf("os.Chtimes() error = %v", err)
 	}
-	age, ok := lastFetchSuccessAge(ws, time.Now())
+	age, ok := lastFetchSuccessAge(ws, origin, time.Now())
 	if !ok {
 		t.Fatalf("lastFetchSuccessAge() ok = false for a backdated marker")
 	}
@@ -244,7 +247,7 @@ func TestMarkFetchSuccessBackdatedMarkerIsStale(t *testing.T) {
 
 // TestPrintSyncStalenessWarningResolvesAgainstRealWorkspace drives
 // printStalenessWarning's boundary step (resolveDoctorSyncFreshness +
-// lastFetchSuccessAge) against a real git repo with no remote — the common
+// lastTargetFetch) against a real git repo with no remote — the common
 // single-machine case — and confirms it stays silent rather than printing a
 // no-remote warning: this banner is supplementary, not a diagnostic in its
 // own right, matching resolveDoctorSyncFreshness's own no-remote handling.
@@ -273,8 +276,8 @@ func TestPrintSyncStalenessWarningResolvesAgainstRealWorkspace(t *testing.T) {
 func TestFetchSuccessMarkerPathLivesUnderStorageDir(t *testing.T) {
 	t.Parallel()
 	ws := workspace.Info{Location: workspace.Location{StorageDir: "/tmp/some-workspace/.lit"}}
-	got := fetchSuccessMarkerPath(ws)
-	want := filepath.Join("/tmp/some-workspace/.lit", "fetch-success.last")
+	got := fetchSuccessMarkerPath(ws, remoteName(t, "origin"))
+	want := filepath.Join("/tmp/some-workspace/.lit", "fetched.origin")
 	if got != want {
 		t.Fatalf("fetchSuccessMarkerPath() = %q, want %q", got, want)
 	}
