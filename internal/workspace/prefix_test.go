@@ -27,7 +27,9 @@ func repoNamed(t *testing.T, name string) string {
 // component, so "wt\nprunable" cannot be created there and "..." resolves to
 // parent itself. A test about such a name guards a state that cannot exist on
 // that filesystem. Whether the name was held is read back from parent's
-// listing, not assumed from the platform.
+// listing, not assumed from the platform, and a plainly named sibling is the
+// control: when it cannot be created either, the filesystem refused the
+// directory rather than the name, and the test fails instead of skipping.
 func dirNamedExactly(t *testing.T, parent, name string) string {
 	t.Helper()
 	dir := filepath.Join(parent, name)
@@ -44,6 +46,12 @@ func dirNamedExactly(t *testing.T, parent, name string) string {
 			t.Fatalf("Mkdir(%q) error = %v", dir, mkdirErr)
 		}
 		return dir
+	}
+	// [LAW:no-silent-failure] a full disk or a read-only parent refuses every
+	// name; only a refusal of this one is a reason to skip.
+	control := filepath.Join(parent, "control")
+	if err := os.Mkdir(control, 0o755); err != nil {
+		t.Fatalf("Mkdir(%q) error = %v; the filesystem refuses directories outright, so the failure to create %q (mkdir: %v) says nothing about the name", control, err, dir, mkdirErr)
 	}
 	t.Skipf("this filesystem holds no directory named %q (mkdir: %v)", name, mkdirErr)
 	return ""
