@@ -890,6 +890,7 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "bulk: doc %d (id %q) sets topic; topic is immutable and update cannot change it", Src: "bulk: doc %d (id %q) sets topic; topic is immutable and update cannot change it"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "bulk: doc %d (id %q): %w", Src: "bulk: doc %d (id %q): %w"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "bulk: doc %d blocked_by entry %q has surrounding whitespace", Src: "bulk: doc %d blocked_by entry %q has surrounding whitespace"},
+	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "bulk: doc %d blocked_by has an empty entry", Src: "bulk: doc %d blocked_by has an empty entry"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "bulk: doc %d id %q has surrounding whitespace", Src: "bulk: doc %d id %q has surrounding whitespace"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "bulk: doc %d local_id %q has surrounding whitespace", Src: "bulk: doc %d local_id %q has surrounding whitespace"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "bulk: doc %d missing title", Src: "bulk: doc %d missing title"},
