@@ -79,6 +79,16 @@ func TestPushOutcomeOf(t *testing.T) {
 			err:  fmt.Errorf("open sync store: %w", store.ErrWorkspaceBusy),
 			want: pushOutcomeRecord{Decision: pushDecisionWorkspaceBusy, Reason: "open sync store: workspace busy"},
 		},
+		{
+			// A push refused over a re-root follows it, and the follow's hold on
+			// the store can find it busy: that busy comes back on pushErr.
+			name: "workspace busy mid-push records busy with the resolved ref, not error",
+			outcome: syncPushOutcome{
+				remote: "origin", branch: "master",
+				pushErr: fmt.Errorf("push remote \"origin\": rejected (and whether the remote re-rooted its history could not be checked: %w)", store.ErrWorkspaceBusy),
+			},
+			want: pushOutcomeRecord{Decision: pushDecisionWorkspaceBusy, Reason: "push remote \"origin\": rejected (and whether the remote re-rooted its history could not be checked: workspace busy)", Remote: "origin", Branch: "master"},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
