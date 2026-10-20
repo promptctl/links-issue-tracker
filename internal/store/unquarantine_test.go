@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 )
@@ -43,6 +44,22 @@ func TestUnquarantineClearsTheBlockingQuarantineAndTheNextOpenRunsIt(t *testing.
 	}
 	if done.Cleared.Version != version || done.Next != nil {
 		t.Fatalf("Unquarantine() = cleared v%d, next %v; want cleared v%d, next nil", done.Cleared.Version, done.Next, version)
+	}
+	// Dolt history names the clear as its own commit, not folded into
+	// whatever commits next.
+	st, err := openInitialized(ctx, doltRoot, "test-workspace-id", engineRead)
+	if err != nil {
+		t.Fatalf("openInitialized() error = %v", err)
+	}
+	var head string
+	if err := st.db.QueryRowContext(ctx, `SELECT message FROM dolt_log() LIMIT 1`).Scan(&head); err != nil {
+		t.Fatalf("read dolt_log error = %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if want := fmt.Sprintf("unquarantine v%d failed.sql", version); head != want {
+		t.Errorf("Dolt HEAD message = %q, want %q", head, want)
 	}
 	withStore(t, ctx, doltRoot, func(st *Store) {
 		applied, err := st.recordedMigrationVersion(ctx)
