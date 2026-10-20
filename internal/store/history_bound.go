@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -31,8 +32,8 @@ const reRootScratchPrefix = "lit-reroot/"
 // push left, which is one row of dolt_log: its commit_order is the commit's
 // height. Below the bound that is all it does. Once the bound is reached:
 //
-//  1. it re-roots a scratch branch at that head, keeping window.Keep() commits
-//     of the head's first-parent line (reRootScratch);
+//  1. it re-roots a scratch branch at that head, leaving it at a height from
+//     window.Keep() up to window.ReRootAt() (reRootScratch);
 //  2. it force-pushes the scratch to the remote's branch under a lease that
 //     names the head (publishReRoot);
 //  3. it runs the remote's GC, which replaces the remote's table files with
@@ -110,7 +111,7 @@ func (s *Store) publishBound(ctx context.Context, remote storage.RemoteName, b *
 	}()
 	trackingRef := fmt.Sprintf("remotes/%s/%s", remote, b.Branch)
 	var publishErr error
-	b.ReRooted, publishErr = s.reRootScratch(ctx, b.Branch, b.Head, b.Window.Keep())
+	b.ReRooted, publishErr = s.reRootScratch(ctx, b.Branch, b.Head, b.Window)
 	if publishErr == nil {
 		b.Lease, publishErr = s.publishReRoot(ctx, remote, b.Branch, b.Head)
 	}
@@ -211,20 +212,20 @@ func (s *Store) followCarriedReRoot(ctx context.Context, remote storage.RemoteNa
 }
 
 // reRootScratch writes the re-root of head onto branch's scratch branch, cut
-// where head's first-parent line keeps keep commits.
-func (s *Store) reRootScratch(ctx context.Context, branch, head string, keep uint64) (storage.ReRooted, error) {
+// where it brings head back inside window (cutIn).
+func (s *Store) reRootScratch(ctx context.Context, branch, head string, window historywindow.Window) (storage.ReRooted, error) {
 	scratch := ref.NewBranchRef(reRootScratchPrefix + branch)
 	var reRooted storage.ReRooted
 	err := s.withEngineClosed(ctx, func(holdCtx context.Context, ddb *doltdb.DoltDB) error {
-		headCommit, err := readFullCommit(holdCtx, ddb, hash.Parse(head))
+		headCommit, err := readHistoryCommit(holdCtx, ddb, hash.Parse(head))
 		if err != nil {
-			return fmt.Errorf("read the remote head %s: %w", head, err)
+			return fmt.Errorf("read the remote head: %w", err)
 		}
-		cut, err := firstParentAncestor(holdCtx, ddb, headCommit, keep-1)
+		cut, err := cutIn(holdCtx, ddb, headCommit, window)
 		if err != nil {
 			return err
 		}
-		if err := ddb.SetHeadToCommit(holdCtx, scratch, headCommit); err != nil {
+		if err := ddb.SetHeadToCommit(holdCtx, scratch, headCommit.commit); err != nil {
 			return fmt.Errorf("point %s at %s: %w", scratch, head, err)
 		}
 		start := time.Now()
@@ -238,26 +239,56 @@ func (s *Store) reRootScratch(ctx context.Context, branch, head string, keep uin
 	return reRooted, err
 }
 
-// firstParentAncestor is the commit steps first parents below c.
-func firstParentAncestor(ctx context.Context, ddb *doltdb.DoltDB, c *doltdb.Commit, steps uint64) (hash.Hash, error) {
-	addr, err := c.HashOf()
-	if err != nil {
-		return hash.Hash{}, err
+// cutIn is where a re-root of head brings it back inside window: the highest
+// commit every line from head passes through that leaves head at a height
+// from window.Keep() up to, not reaching, window.ReRootAt(). Every line
+// passing through it is what reRootBranch requires of a cut
+// (ErrSideLineAcrossCut), so a cut inside a merge bubble moves down to where
+// the bubble opened, keeping more than Keep and never less, which is what lets
+// a peer lagging by up to Keep follow. [LAW:one-source-of-truth] the bound
+// fires on the height and cuts by it: the longest line passes through the
+// cut, so the head the re-root leaves is at height head - cut + 1, Keep
+// wherever every line meets at that height, and below ReRootAt, so the next
+// push does not fire again. A bound that fired has head at ReRootAt or above,
+// so its root, which would keep head's whole height, is never a cut.
+//
+// The walk takes the highest commit not yet read through, and stops below
+// the last height that could be a cut, so it reads at most window.ReRootAt()
+// heights of history. Every line from head is waiting at some commit in
+// pending, so pending holding only the commit taken means every line passes
+// through it. A side line spanning the window leaves no such commit inside
+// it: the bound's error, naming where the lines last met above it, which is
+// where it cuts once head has climbed Keep above.
+func cutIn(ctx context.Context, ddb *doltdb.DoltDB, head historyCommit, window historywindow.Window) (hash.Hash, error) {
+	pending := map[hash.Hash]historyCommit{head.addr: head}
+	met := head
+	for len(pending) > 0 {
+		c := slices.MaxFunc(slices.Collect(maps.Values(pending)), func(a, b historyCommit) int {
+			return cmp.Compare(a.height, b.height)
+		})
+		delete(pending, c.addr)
+		kept := head.height - c.height + 1
+		if kept >= window.ReRootAt() {
+			break
+		}
+		if len(pending) == 0 {
+			if kept >= window.Keep() {
+				return c.addr, nil
+			}
+			met = c
+		}
+		for _, p := range c.parents {
+			if _, ok := pending[p]; ok {
+				continue
+			}
+			parent, err := readHistoryCommit(ctx, ddb, p)
+			if err != nil {
+				return hash.Hash{}, err
+			}
+			pending[p] = parent
+		}
 	}
-	for step := range steps {
-		parents, err := c.ParentHashes(ctx)
-		if err != nil {
-			return hash.Hash{}, err
-		}
-		if len(parents) == 0 {
-			return hash.Hash{}, fmt.Errorf("the first-parent line below %s ends after %d commits, short of the %d the bound keeps", addr, step+1, steps+1)
-		}
-		addr = parents[0]
-		if c, err = readFullCommit(ctx, ddb, addr); err != nil {
-			return hash.Hash{}, fmt.Errorf("read commit %s: %w", addr, err)
-		}
-	}
-	return addr, nil
+	return hash.Hash{}, fmt.Errorf("no commit every line below %s passes through leaves it at a height from %d to %d; the lowest they meet at above that is %s, at height %d, where the bound cuts once the head is at height %d", head.addr, window.Keep(), window.ReRootAt()-1, met.addr, met.height, met.height+window.Keep()-1)
 }
 
 // publishReRoot force-pushes branch's scratch to the remote's branch, landing

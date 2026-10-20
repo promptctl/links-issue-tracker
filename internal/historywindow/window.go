@@ -7,7 +7,7 @@ import "fmt"
 
 // Window is the bound on the sync branch's reachable history, as a
 // commit count: a push that leaves the remote head at height ReRootAt or
-// above re-roots it, keeping the Keep commits of the head's first-parent line.
+// above re-roots it, leaving the head at a height from Keep up to ReRootAt.
 // It is a count, not an age, because the store grows linearly with its
 // commits while the rate of commits swings month to month (the decision on
 // links-storage-3k6u). A re-root always keeps the head and always drops
@@ -41,7 +41,9 @@ func (w Window) built() Window {
 // ReRootAt is the remote head height at which a push re-roots.
 func (w Window) ReRootAt() uint64 { return w.built().reRootAt }
 
-// Keep is how many commits of the head's first-parent line a re-root keeps.
+// Keep is the least height a re-root leaves the head at: it cuts at the
+// highest commit every line passes through that keeps that many, and below
+// ReRootAt.
 func (w Window) Keep() uint64 { return w.built().keep }
 
 // String is the window as the config spells it.

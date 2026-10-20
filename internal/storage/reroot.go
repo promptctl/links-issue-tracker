@@ -17,6 +17,8 @@ type ReRooted struct {
 	Root string
 	// Head is the branch's head after the re-root.
 	Head string
+	// Height is Head's height: the commits on its longest line back to Root.
+	Height uint64
 	// Rewritten maps every commit the branch keeps — Cut and each commit
 	// after it — from its hash before the re-root to its hash after.
 	Rewritten map[string]string
@@ -39,6 +41,7 @@ func (r ReRooted) EventRecord() (map[string]any, map[string]int) {
 			"reroot.cut":        r.Cut,
 			"reroot.root":       r.Root,
 			"reroot.head":       r.Head,
+			"reroot.height":     r.Height,
 			"reroot.elapsed_ms": r.Elapsed.Milliseconds(),
 		}, map[string]int{
 			"reroot.kept":    r.Kept(),
