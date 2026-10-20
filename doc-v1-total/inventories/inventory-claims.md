@@ -25,10 +25,10 @@ type Attribution struct {
 - Both halves unexported; `NewAttribution` is the only constructor (`internal/model/model.go`).
 - `NewAttribution(stream, workspace)` returns the zero value if **either** half is empty — "complete pair or nothing" (`internal/model/model.go`). The collapse is silent by design (`internal/model/model.go`).
 - Accessors: `Stream()`, `Workspace()` (`internal/model/model.go`); `IsZero()` = `a == Attribution{}` (`internal/model/model.go`); `Present()` = `!IsZero()` (`internal/model/model.go`).
-- Wire form is a separate struct `attributionWire{Stream string \`json:"stream,omitempty"\`; Workspace string \`json:"workspace,omitempty"\`}` (`internal/model/model.go`), marshalled at `internal/model/model.go`.
+- Wire form is a separate struct ``attributionWire{Stream string `json:"stream,omitempty"`; Workspace string `json:"workspace,omitempty"`}`` (`internal/model/model.go`), marshalled at `internal/model/model.go`.
 - `UnmarshalJSON` routes through `NewAttribution`, so `{"stream":"x"}` with no workspace decodes to the absent pair (`internal/model/model.go`).
 - Absence is a permanent legal state: attribution is never backfilled onto events that predate the feature (`internal/model/model.go`).
-- Field on the event: `Attribution Attribution \`json:"attribution,omitzero"\`` (`internal/model/model.go`) — `omitzero` consults `IsZero`, so an unattributed event writes no attribution object at all (`internal/model/model.go`).
+- Field on the event: `` Attribution Attribution `json:"attribution,omitzero"` `` (`internal/model/model.go`) — `omitzero` consults `IsZero`, so an unattributed event writes no attribution object at all (`internal/model/model.go`).
 
 ### 1.3 The derived value: `Standing`
 

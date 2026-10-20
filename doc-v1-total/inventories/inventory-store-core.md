@@ -1636,7 +1636,7 @@ label `"backfill legacy issue topics"`.
   ```
  and keeps rows whose normalized clause contains the substring `"priority"`. Errors: `"query issue check constraints: %w"`, `"scan issue check constraint: %w"`, `"iterate issue check constraints: %w"`.
 - `hasCanonicalPriorityConstraint`: requires **exactly one** matching constraint, and its normalized clause must contain `"priority<=1"` (formatted from `model.PriorityUrgent`). If true → skip, `(false, nil)`.
-- Otherwise: `guard.ensure` (error → `"reset priorities to normal: %w"`); `UPDATE issues SET priority = 0` (error → `"reset priorities to normal: %w"`); for every matched constraint `ALTER TABLE issues DROP CHECK \`<name>\`` with backticks in the name doubled (error → `"drop priority check %s: %w"`); then `ALTER TABLE issues ADD CONSTRAINT issues_priority_check CHECK (priority >= 0 AND priority <= 1)` (error → `"add priority check: %w"`). Returns `(true, nil)`.
+- Otherwise: `guard.ensure` (error → `"reset priorities to normal: %w"`); `UPDATE issues SET priority = 0` (error → `"reset priorities to normal: %w"`); for every matched constraint `` ALTER TABLE issues DROP CHECK `<name>` `` with backticks in the name doubled (error → `"drop priority check %s: %w"`); then `ALTER TABLE issues ADD CONSTRAINT issues_priority_check CHECK (priority >= 0 AND priority <= 1)` (error → `"add priority check: %w"`). Returns `(true, nil)`.
 
 ### 5.10 `ensureStatusConstraint`
 
@@ -1654,7 +1654,7 @@ label `"backfill legacy issue topics"`.
   5. `hasNegatedEpicGuard` is true
 - `hasNegatedEpicGuard`: true if the clause contains `issue_typenotin('epic')`, or if any occurrence of `not(` — after skipping any run of further `(` characters — is immediately followed by `issue_typein('epic')`.
 - `normalizeConstraintClause`: strips spaces, tabs, newlines, and backticks, then lowercases.
-- If not canonical: `guard.ensure` (error → `"ensure status constraint: %w"`); drop each matched constraint via `ALTER TABLE issues DROP CHECK \`<name>\`` with doubled backticks (error → `"drop status check %s: %w"`); then `ALTER TABLE issues ADD CONSTRAINT issues_status_check CHECK ((issue_type IN ('epic') AND status IS NULL) OR (issue_type NOT IN ('epic') AND status IS NOT NULL AND status IN ('open','in_progress','closed')))` (error → `"add canonical status check: %w"`).
+- If not canonical: `guard.ensure` (error → `"ensure status constraint: %w"`); drop each matched constraint via `` ALTER TABLE issues DROP CHECK `<name>` `` with doubled backticks (error → `"drop status check %s: %w"`); then `ALTER TABLE issues ADD CONSTRAINT issues_status_check CHECK ((issue_type IN ('epic') AND status IS NULL) OR (issue_type NOT IN ('epic') AND status IS NOT NULL AND status IN ('open','in_progress','closed')))` (error → `"add canonical status check: %w"`).
 
 The tolerance for Dolt's rewriting (`NOT IN` → `NOT(... IN ...)`,
 `IS NOT NULL` → `NOT(... IS NULL)`, added backticks) is documented at
@@ -2499,7 +2499,7 @@ Note `aheadColumnMapping()` uses `identity` on `issue_events.action/reason/actor
 - `TestDeterministicMapDeclinesThinRequiredTargets`: declines `issues` missing `id`/`title` (columns `description,status,priority,issue_type,closed_at,created_at,updated_at`) and `issue_events` missing `reason`/`actor` (columns `id,issue_id,action,created_at`).
 - `TestValidateRejectsRowArityMismatch`: 9 columns, an 8-cell row → error contains `cells, want`.
 - `TestClassifyDropDistinguishesProvenance`: `classifyDrop("goose_db_version","version_id")` → `DropIntended` with a non-empty reason; `classifyDrop("issues","a_column_no_migration_ever_made")` → `DropUnexplained`.
-- `TestParseDroppedColumnsReadsMigrationHistory`: from `"ALTER TABLE issues DROP COLUMN legacy_field;\nALTER TABLE \`relations\` DROP COLUMN IF EXISTS \`old_col\`;\nALTER TABLE issues DROP COLUMN a, DROP COLUMN b;"` the results must include `{issues,legacy_field}`, `{relations,old_col}`, `{issues,a}`, `{issues,b}`.
+- `TestParseDroppedColumnsReadsMigrationHistory`: from ``"ALTER TABLE issues DROP COLUMN legacy_field;\nALTER TABLE `relations` DROP COLUMN IF EXISTS `old_col`;\nALTER TABLE issues DROP COLUMN a, DROP COLUMN b;"`` the results must include `{issues,legacy_field}`, `{relations,old_col}`, `{issues,a}`, `{issues,b}`.
 - `TestGooseUpSectionExcludesDownDrops`: an Up-`ADD`/Down-`DROP` migration yields zero refs; an Up-`DROP legacy`/Down-`ADD` migration yields exactly `[{issues, legacy}]`.
 - `TestDeterministicMapCleanAhead`: a real v1 workspace (epic + child task + solo task, one comment, one label, one `Start` transition) is dumped with `DumpRaw`, mapped, validated, applied, and `ReplaceFromExport`ed into a fresh store; `Doctor` must report `IntegrityCheck == "ok"` with zero errors (`mustClean`, 289-294), every original issue id must survive, and the epic's status must round-trip as `""` (NULL), i.e. `epic.StatusValue() == ""`. The solo task carries lane `solo`, plan `"solo plan"`, and one `fail` review of plan version 1 citing `one-source-of-truth`; after map+apply and again after the rebuild, the solo issue keeps its lane and plan, and the export holds exactly that review, which `Judges("solo plan")`.
 - `TestDeterministicMapPreGoose`: a hand-built pre-goose dump — `issues` with `prompt` (not `agent_prompt`), no `topic`/`item_rank`/`lane`/`resolution`/`redirect_target`/`archived_at`/`deleted_at`; `labels` with column `label`; `issue_events` with `assignee` (not `actor`); statuses `"todo"`/`"done"`; no `goose_db_version` table — is accepted by `DeterministicMap`, validates, and applies to: 2 issues; exactly 1 event with exactly 1 nested change; `export.Events[0].Actor == "claude"` (proving `issue_events.assignee → events.actor`). After `ReplaceFromExport`: Doctor-clean; `i1.Prompt == "the historical prompt"`; `i1.StatusValue() == "open"` (from `"todo"`); `i1.Topic == "misc"` (defaulted by the write path, not by the mapper); `i2.StatusValue() == "closed"` (from `"done"`).
@@ -2997,7 +2997,7 @@ Frame behavior pinned by tests — `internal/store/ranking_frame_test.go`:
   SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank != '' AND <frame> = ? ORDER BY item_rank ASC, id ASC
   ```
   bound with the frame alone, through `rankRows`; error → `fmt.Errorf("rank set: read the keys of frame %q: %w", f, err)`.
-- A permutation leaves two slots on one key sharing it, and a listing breaks the tie by id. Where adjacent slots share a key and the id of the issue ordered into the later one sorts before the earlier one's, the set is refused with a `model.ValidationError`: `fmt.Sprintf("rank set: %s and %s share the key %q, which a listing breaks by id, so %s cannot be written above %s; separate them first with `lit rank %s --above %s`", …)`.
+- A permutation leaves two slots on one key sharing it, and a listing breaks the tie by id. Where adjacent slots share a key and the id of the issue ordered into the later one sorts before the earlier one's, the set is refused with a `model.ValidationError`: ``fmt.Sprintf("rank set: %s and %s share the key %q, which a listing breaks by id, so %s cannot be written above %s; separate them first with `lit rank %s --above %s`", …)``.
 - `storage.RankSetOrder(f, occupants, ranked)` (`internal/storage/rank.go`) names each slot's new occupant: the representatives in the order named, then every other frame member in its current order. A representative that is not one of the frame's ranked members makes the result longer than the frame → `fmt.Errorf("rank set: %d issues resolved into %s but the frame holds %d ranked — refusing to rewrite a partial order", len(ordered), f, len(occupants))`. The memory engine applies the same function to its slots (`internal/storage/memory/rank.go`).
 - Each slot's key passes to its new occupant; a slot whose occupant is unchanged is not written. `writeRanksTx` writes the moved keys in one statement per `idBatches` batch — `UPDATE issues SET item_rank = CASE id WHEN ? THEN ? … END, updated_at = COALESCE(CASE id WHEN ? THEN ? … END, updated_at) WHERE deleted_at IS NULL AND id IN (…)`, error → `fmt.Errorf("rewrite the keys of %v: %w", batch, err)`, wrapped `fmt.Errorf("rank set: %w", err)`. A write is `touched` only for a representative whose key changed; it takes one shared `now`, and every other write is bound NULL, so it keeps its `updated_at`. No key is minted, so the frame holds the same set of keys before and after, and a repeat of an order that has arrived writes nothing.
 - Atomic: all assignments in one mutation.
@@ -3778,13 +3778,13 @@ Test `TestImportTreeRejectsCycle` (`import_tree_test.go`) uses `a blocked_by b`,
 
 ### 4.5 Rollback
 
-`rollbackCreatedIssues` (`import_tree.go`), shared by ImportTree and BulkApply: for each created real id, `s.Apply(ctx, realID, storage.Change{Action: model.Delete{}, Actor: "links", Reason: "import rollback"})`. Ids whose Apply fails are collected and returned as `leaked`. **It is a soft delete (`model.Delete{}` stamping `deleted_at`), not a row removal.** `leaked` is initialized to `[]string{}`, so the `%d`/`%s` in error messages read `0`/`` on a clean rollback. The caller returns the original error, decorated (`import_tree.go`).
+`rollbackCreatedIssues` (`import_tree.go`), shared by ImportTree and BulkApply: for each created real id, `s.Apply(ctx, realID, storage.Change{Action: model.Delete{}, Actor: "links", Reason: "import rollback"})`. Ids whose Apply fails are collected and returned as `leaked`. **It is a soft delete (`model.Delete{}` stamping `deleted_at`), not a row removal.** `leaked` is initialized to `[]string{}`, so the `%d`/`%s` in error messages read `0`/an empty string on a clean rollback. The caller returns the original error, decorated (`import_tree.go`).
 
 Atomicity: best-effort only. Doc comment `import_tree.go` states partial state may remain and the error names every dangling step; the surviving surface is `lit doctor`.
 
 ### 4.6 CLI surface
 
-`lit import --path <file>` (`internal/cli/cli.go`). `importUsage = "usage: lit import --path <tree-spec.json | bulk-file.yaml> (run `lit import --help` for both formats)"` (`cli.go`) — raised for an empty `--path` or any positional argument. The file is read with `os.ReadFile`, error `"read import spec: %w"`. Dispatch is on `strings.ToLower(filepath.Ext(path))`: `.yaml`/`.yml` → bulk; **anything else** (including `.json` and no extension) → tree JSON (`cli.go`).
+`lit import --path <file>` (`internal/cli/cli.go`). ``importUsage = "usage: lit import --path <tree-spec.json | bulk-file.yaml> (run `lit import --help` for both formats)"`` (`cli.go`) — raised for an empty `--path` or any positional argument. The file is read with `os.ReadFile`, error `"read import spec: %w"`. Dispatch is on `strings.ToLower(filepath.Ext(path))`: `.yaml`/`.yml` → bulk; **anything else** (including `.json` and no extension) → tree JSON (`cli.go`).
 
 Both branches pass the resolved actor (session, else `--by`) to the store (`cli.go`).
 
@@ -4773,7 +4773,7 @@ Exact ordering:
 - `var ErrMissingDumpProvenance = errors.New("dump has no recorded head commit")` (`promote.go`).
 
 `verifyHeadUnchanged(ctx, canonicalDoltDir, workspaceID, expectedHead) error` — `promote.go`:
-1. `if expectedHead == ""` → `fmt.Errorf("%w: cannot verify the live workspace has not advanced; re-run `lit lifeboat dump` against the current workspace and recover from that artifact", ErrMissingDumpProvenance)` (`promote.go`).
+1. `if expectedHead == ""` → ``fmt.Errorf("%w: cannot verify the live workspace has not advanced; re-run `lit lifeboat dump` against the current workspace and recover from that artifact", ErrMissingDumpProvenance)`` (`promote.go`).
 2. `openStoreConnection(ctx, canonicalDoltDir, workspaceID, engineRead)`; error → `"re-read live workspace head: %w"` (`promote.go`). **Takes no workspace lock** — the caller already holds the exclusive hold (`promote.go`).
 3. Deferred `s.db.Close()`, joined into the named return unless `errors.Is(closeErr, context.Canceled)` (`promote.go`).
 4. `live, err := readDoltHead(ctx, s.db)` (defined `internal/store/rawdump.go`); error returned unwrapped (`promote.go`).

@@ -1076,7 +1076,7 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 **`parseBulkUpdateDoc`** — refuses the fields an update document has no business setting, each somebody else's verb, and otherwise returns the update's patch:
 - `LocalID != ""` → `"bulk: doc %d (id %q) sets local_id; local_id only applies to new tickets"`.
 - `Topic != nil` → `"... sets topic; topic is immutable and update cannot change it"`.
-- `len(BlockedBy) > 0` → `"... sets blocked_by; wire dependencies with \`lit dep add\` instead"`.
+- `len(BlockedBy) > 0` → ``"... sets blocked_by; wire dependencies with `lit dep add` instead"``.
 - `Title` set and trims to `""` → `"bulk: doc %d (id %q) sets an empty title"`.
 - A `bulkUpdatePatch` error → `fmt.Errorf("bulk: doc %d (id %q): %w", i, spec.ID, err)`, so an invalid type reads `bulk: doc 0 (id "x"): has invalid type "ghost": issue type must be …`.
 - A stated `Parent` (non-nil) becomes a `storage.FileReparent{ID, Parent}` in `file.Reparents`; `""` clears. `bulkUpdatePatch(spec).IsEmpty()` with no `parent` and no `rank` → `"bulk: doc %d (id %q) has no fields to update, no parent and no rank"`; a document stating only `parent` and/or `rank: top` writes no `BulkUpdate`, and one that also states a `reason` → `"bulk: doc %d (id %q) sets reason but changes no field; reason annotates a field change, and parent and rank write none"`. A `rank` other than `top` → `"bulk: doc %d: rank %q is not a placement; …"`. Updatable fields are exactly the rows of `issueFields`: `Title`, `Description`, `Prompt`, `Plan`, `IssueType`, `Priority`, `Assignee`, `Labels`, `Lane`.
