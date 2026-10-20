@@ -60,10 +60,14 @@ func forkPointBranch(owner refOwner, branch string) string {
 	return forkPointPrefix + owner.String() + "/" + branch
 }
 
+// trackingRefsRoot is the prefix of every tracking ref, as
+// dolt_remote_branches names them.
+const trackingRefsRoot = "remotes/"
+
 // trackingRefPrefix is the prefix of every tracking ref owner has,
-// remotes/<owner>/, as dolt_remote_branches names them.
+// remotes/<owner>/.
 func trackingRefPrefix(owner refOwner) string {
-	return "remotes/" + owner.String() + "/"
+	return trackingRefsRoot + owner.String() + "/"
 }
 
 // recordForkPoints runs before a fetch moves remotes/<remote>/*: each

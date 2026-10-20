@@ -64,7 +64,7 @@ func TestASettleRecordsThatItSettled(t *testing.T) {
 		if _, err := LandFetchedHead(f.ctx, f.live, clone, remoteName(t, "origin"), "master", nil); err != nil {
 			t.Fatalf("LandFetchedHead() error = %v", err)
 		}
-		if err := os.RemoveAll(filepath.Dir(clone)); err != nil {
+		if err := os.RemoveAll(filepath.Dir(clone.root)); err != nil {
 			t.Fatalf("remove clone: %v", err)
 		}
 		if err := os.MkdirAll(SettledLastPath(f.live), 0o755); err != nil {

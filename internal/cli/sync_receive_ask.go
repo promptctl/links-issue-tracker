@@ -224,11 +224,14 @@ func recordPushedAdvertisement(ws workspace.Info, proven remoteAdvertisement) {
 // recordReceived writes what the receive established, and only that. A fetch
 // that returned without error, whatever state it reached, means a fetch
 // of outcome.remote succeeded now (its fetch-success marker, which the
-// 24-hour staleness banner reads). A receive that settled cleanly — that fetch, and a reconcile that
-// converged if one ran — means the store now holds what the remote advertised
-// before the fetch, so that advertisement becomes the record the next
-// question is measured against; an unconverged divergence leaves the record
-// alone, so the next receive fetches and surfaces it again. Nothing learned
+// 24-hour staleness banner reads). A receive that settled cleanly — that fetch
+// landed, and a reconcile that converged if one ran — means the store now
+// holds what the remote advertised before the fetch, so that advertisement
+// becomes the record the next question is measured against; an unconverged
+// divergence leaves the record alone, so the next receive fetches and
+// surfaces it again, and so does a landing the live store superseded
+// (FetchedHeadRecord.LandsTheFetch), so the next receive takes a clone that
+// sees the live writer's ref and lands over it. Nothing learned
 // (the question failed) records nothing, so the previous record stands. This
 // is the receive's only write of the record. The only other writer is a push
 // whose advertisement was proven, so a failed fetch, an unsettled one, or an
@@ -242,7 +245,7 @@ func recordReceived(ws workspace.Info, outcome syncReceiveOutcome, observed remo
 		}
 	}
 	payload := observed.record()
-	if outcome.settledCleanly() && payload != nil {
+	if outcome.settledCleanly() && outcome.landed.LandsTheFetch() && payload != nil {
 		if err := store.WriteReceivedRefs(ws.DatabasePath, payload); err != nil {
 			fmt.Fprintf(os.Stderr, "lit: received-refs marker not written: %v\n", err)
 		}

@@ -420,6 +420,10 @@ type liveClone struct {
 	// held is how long the live store was held for the take: from the last
 	// lock acquired to the first released, measured inside the hold.
 	held time.Duration
+	// taken is the clone as it was taken, read before any session opened on
+	// it: what a landing of its fetch requires the live store to still hold
+	// (store.LandFetchedHead).
+	taken store.TakenClone
 }
 
 // cloneLiveStore sweeps base, then clones the live store into a fresh
@@ -435,6 +439,11 @@ type liveClone struct {
 // holding. cut reports that the budget, not the work, ended the hold; the
 // wording of that is the caller's. [LAW:single-enforcer] one take, whoever
 // clones.
+//
+// Once the hold is released the clone is read as taken (store.ReadTakenClone),
+// before anything runs on it; a clone that will not open for that read fails
+// the take, since the session the caller opens on it next would not open
+// either.
 func cloneLiveStore(ctx context.Context, ws workspace.Info, base string, underHold func()) (clone liveClone, cut bool, err error) {
 	if err := os.RemoveAll(base); err != nil {
 		return liveClone{}, false, fmt.Errorf("collect a dead holder's clone under %s: %w", base, err)
@@ -458,6 +467,9 @@ func cloneLiveStore(ctx context.Context, ws workspace.Info, base string, underHo
 	})
 	if !holdStart.IsZero() {
 		clone.held = time.Since(holdStart)
+	}
+	if err == nil {
+		clone.taken, err = store.ReadTakenClone(ctx, clone.databasePath)
 	}
 	if err != nil {
 		// A failed take leaves nothing for the caller to remove. A removal

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"maps"
 	"os"
 	"os/exec"
@@ -11,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/dolthub/dolt/go/libraries/utils/gitcmd"
+	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/google/uuid"
 
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
@@ -127,15 +129,22 @@ func (f *landFixture) push(root string, force bool) {
 	}
 }
 
-// fetchedClone is the receive's shape: a clone of the live store that fetched.
-func (f *landFixture) fetchedClone() string {
-	f.t.Helper()
-	clone := f.copyOf(f.live)
-	st := f.openSync(clone)
-	defer f.close(st)
-	if err := st.SyncFetch(f.ctx, remoteName(f.t, "origin")); err != nil {
-		f.t.Fatalf("SyncFetch(clone) error = %v", err)
+// takenClone reads the clone at root as the receive's take does, before
+// anything runs on it.
+func takenClone(t *testing.T, ctx context.Context, root string) TakenClone {
+	t.Helper()
+	taken, err := ReadTakenClone(ctx, root)
+	if err != nil {
+		t.Fatalf("ReadTakenClone(%s) error = %v", root, err)
 	}
+	return taken
+}
+
+// fetchedClone is the receive's shape: a clone of the live store, taken, that
+// fetched.
+func (f *landFixture) fetchedClone() TakenClone {
+	f.t.Helper()
+	clone, _ := f.prunedClone()
 	return clone
 }
 
@@ -177,7 +186,7 @@ func TestLandFetchedHeadCarriesAClonesFetchToTheLiveStore(t *testing.T) {
 	if got := f.trackingRef(); got != peerHead {
 		t.Fatalf("tracking ref after landing = %s, want the peer's head %s", got, peerHead)
 	}
-	if err := os.RemoveAll(filepath.Dir(clone)); err != nil {
+	if err := os.RemoveAll(filepath.Dir(clone.root)); err != nil {
 		t.Fatalf("remove clone: %v", err)
 	}
 
@@ -199,13 +208,14 @@ func TestLandFetchedHeadCarriesAClonesFetchToTheLiveStore(t *testing.T) {
 	}
 }
 
-// TestLandFetchedHeadRecordsWhatTheFetchSaw pins that the ref follows the
-// fetch whatever the relation: backwards (the live store fetched a later push
-// itself, then a clone taken before that push lands), onto a rewritten history
-// that shares an ancestor, and onto an unrelated one. A fetch records where
-// the remote was when it looked; LandFetchedHead's comment says why a ref that
-// refused to move backwards would be wrong for good. The unchanged arm is the
-// pair: a fetch that found what the ref already names writes nothing.
+// TestLandFetchedHeadRecordsWhatTheFetchSaw pins that a ref the live store
+// left as the take saw it follows the fetch whatever the relation: backwards
+// onto a remote that was reset, onto a rewritten history that shares an
+// ancestor, and onto an unrelated one. A fetch records where the remote was
+// when it looked. The superseded arm is the other side of the take: a clone
+// taken before the live store fetched a later push itself lands nothing, and
+// the live fetch's ref stands. The unchanged arm is the pair: a fetch that
+// found what the ref already names writes nothing.
 func TestLandFetchedHeadRecordsWhatTheFetchSaw(t *testing.T) {
 	t.Parallel()
 	liveFetch := func(f *landFixture) {
@@ -216,7 +226,7 @@ func TestLandFetchedHeadRecordsWhatTheFetchSaw(t *testing.T) {
 			t.Fatalf("SyncFetch(live) error = %v", err)
 		}
 	}
-	land := func(f *landFixture, clone string) LandedFetch {
+	land := func(f *landFixture, clone TakenClone) LandedFetch {
 		t.Helper()
 		landed, err := LandFetchedHead(f.ctx, f.live, clone, remoteName(t, "origin"), "master", nil)
 		if err != nil {
@@ -224,10 +234,23 @@ func TestLandFetchedHeadRecordsWhatTheFetchSaw(t *testing.T) {
 		}
 		return landed
 	}
-	t.Run("backwards", func(t *testing.T) {
+	t.Run("backwards onto a reset remote", func(t *testing.T) {
 		t.Parallel()
 		f := newLandFixture(t)
 		seed := f.trackingRef()
+		resetter := f.copyOf(f.live)
+		peer := f.copyOf(f.live)
+		f.commit(peer, "peer-ticket")
+		f.push(peer, false)
+		liveFetch(f)
+		f.push(resetter, true)
+		if landed := land(f, f.fetchedClone()); landed.Record != FetchedHeadMoved || f.trackingRef() != seed {
+			t.Fatalf("LandFetchedHead() = %s, ref %s; want moved back onto the reset remote's head %s", landed.Record, f.trackingRef(), seed)
+		}
+	})
+	t.Run("superseded by a live fetch since the take", func(t *testing.T) {
+		t.Parallel()
+		f := newLandFixture(t)
 		stale := f.fetchedClone()
 		peer := f.copyOf(f.live)
 		peerHead := f.commit(peer, "peer-ticket")
@@ -236,8 +259,8 @@ func TestLandFetchedHeadRecordsWhatTheFetchSaw(t *testing.T) {
 		if got := f.trackingRef(); got != peerHead {
 			t.Fatalf("tracking ref after the live fetch = %s, want %s", got, peerHead)
 		}
-		if landed := land(f, stale); landed.Record != FetchedHeadMoved || f.trackingRef() != seed {
-			t.Fatalf("LandFetchedHead() = %s, ref %s; want moved back to what the stale fetch saw, %s", landed.Record, f.trackingRef(), seed)
+		if landed := land(f, stale); landed.Record != FetchedHeadSuperseded || f.trackingRef() != peerHead {
+			t.Fatalf("LandFetchedHead() = %s, ref %s; want superseded, the live fetch's %s standing", landed.Record, f.trackingRef(), peerHead)
 		}
 	})
 	t.Run("rewritten with a shared ancestor", func(t *testing.T) {
@@ -278,6 +301,101 @@ func TestLandFetchedHeadRecordsWhatTheFetchSaw(t *testing.T) {
 			t.Fatalf("LandFetchedHead() = %s, ref %s; want unchanged at %s", landed.Record, f.trackingRef(), before)
 		}
 	})
+}
+
+// TestLandingOfMovesOnlyARefStandingAsTaken pins the landing's decision over
+// every way the take, the live store and the clone's fetch can see the ref.
+func TestLandingOfMovesOnlyARefStandingAsTaken(t *testing.T) {
+	t.Parallel()
+	at := func(s string) refHead { return refHead{addr: hash.Of([]byte(s)), held: true} }
+	absent := refHead{}
+	for _, c := range []struct {
+		name                 string
+		taken, live, fetched refHead
+		want                 FetchedHeadRecord
+	}{
+		{"the remote moved", at("a"), at("a"), at("b"), FetchedHeadMoved},
+		{"a first fetch", absent, absent, at("b"), FetchedHeadMoved},
+		{"the remote did not move", at("a"), at("a"), at("a"), FetchedHeadUnchanged},
+		{"the live store reached the fetched head since the take", at("a"), at("b"), at("b"), FetchedHeadUnchanged},
+		{"the live store moved the ref since the take", at("a"), at("c"), at("b"), FetchedHeadSuperseded},
+		{"the live store moved the ref back to the fetched head's parent", at("a"), at("c"), at("a"), FetchedHeadSuperseded},
+		{"the live store created the ref since the take", absent, at("c"), at("b"), FetchedHeadSuperseded},
+		{"the live store deleted the ref since the take", at("a"), absent, at("b"), FetchedHeadSuperseded},
+		{"the remote has no such branch", at("a"), at("a"), absent, FetchedHeadAbsent},
+		{"the remote has no such branch and the live store moved", at("a"), at("c"), absent, FetchedHeadSuperseded},
+		{"the remote has no such branch the live store never held", absent, absent, absent, FetchedHeadAbsent},
+		{"the live store pruned the branch the fetch found gone", at("a"), absent, absent, FetchedHeadAbsent},
+	} {
+		if got := landingOf(c.taken, c.live, c.fetched); got != c.want {
+			t.Errorf("%s: landingOf() = %s, want %s", c.name, got, c.want)
+		}
+	}
+}
+
+// TestALandingNeverWindsTheLiveRefBackAcrossACut is the receive racing a
+// re-rooting push: the receive's clone is taken and fetches the remote's
+// pre-cut head, then a push on the live store reaches the bound, re-roots the
+// remote, moves the live tracking ref onto the re-rooted head and collects the
+// history below the cut, and only then does the landing run. The ref stays on
+// the re-rooted head, the pre-cut head stays collected, and the settle finds
+// the branch up to date with the remote rather than unrelated to it.
+func TestALandingNeverWindsTheLiveRefBackAcrossACut(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	remoteURL, _ := gitRemote(t)
+	live := migratedDoltDir(t)
+	epic := seedReconcileRemote(t, ctx, live, remoteURL)
+	st := openSyncOrFatal(t, ctx, live)
+	seeded := heightOf(t, ctx, st, "HEAD")
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	bound := windowOf(t, seeded+2, 3)
+	under := compactPush(t, ctx, live, epic, "under", bound)
+	if under.Fired() || under.Err != nil {
+		t.Fatalf("a push under the bound = %+v; want it not fired", under)
+	}
+
+	cloneRoot := filepath.Join(t.TempDir(), "dolt")
+	if err := dbsnapshot.CloneTree(ctx, live, cloneRoot); err != nil {
+		t.Fatalf("CloneTree() error = %v", err)
+	}
+	clone := takenClone(t, ctx, cloneRoot)
+	fetcher := openSyncOrFatal(t, ctx, cloneRoot)
+	if err := fetcher.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
+		t.Fatalf("SyncFetch(clone) error = %v", err)
+	}
+	fetched, err := commitHashOfRef(ctx, fetcher.db, "remotes/origin/master")
+	if err != nil || fetched != under.Head {
+		t.Fatalf("the clone fetched %s (%v); want the pre-cut head %s", fetched, err, under.Head)
+	}
+	if err := fetcher.Close(); err != nil {
+		t.Fatalf("Close(clone) error = %v", err)
+	}
+
+	fired := compactPush(t, ctx, live, epic, "past", bound)
+	if !fired.Fired() || fired.Err != nil || !fired.Collection.Ran {
+		t.Fatalf("the push past the bound = %+v; want it fired and the store collected", fired)
+	}
+
+	landed, err := LandFetchedHead(ctx, live, clone, remoteName(t, "origin"), "master", nil)
+	if err != nil {
+		t.Fatalf("LandFetchedHead() error = %v", err)
+	}
+	if landed.Record != FetchedHeadSuperseded {
+		t.Fatalf("LandFetchedHead() = %s, want superseded by the re-rooting push", landed.Record)
+	}
+	st = openSyncOrFatal(t, ctx, live)
+	defer func() { _ = st.Close() }()
+	if ref, err := commitHashOfRef(ctx, st.db, "remotes/origin/master"); err != nil || ref != fired.ReRooted.Head {
+		t.Fatalf("the live tracking ref is %s (%v); want the re-rooted head %s", ref, err, fired.ReRooted.Head)
+	}
+	assertCollected(t, ctx, st, under.Head)
+	result, err := st.SyncSettleReceived(ctx, remoteName(t, "origin"), "master")
+	if err != nil || result.State != storage.SyncReceiveUpToDate {
+		t.Fatalf("SyncSettleReceived() = %+v (%v); want up to date with the re-rooted remote", result, err)
+	}
 }
 
 // TestLandFetchedHeadLeavesTheLiveStoreAloneForAnAbsentBranch pins the absent
@@ -323,15 +441,16 @@ func (f *landFixture) liveFetch() {
 
 // prunedClone is fetchedClone with what the clone's fetch pruned, as the
 // receive reads it off the clone's session.
-func (f *landFixture) prunedClone() (string, []storage.PrunedRef) {
+func (f *landFixture) prunedClone() (TakenClone, []storage.PrunedRef) {
 	f.t.Helper()
 	clone := f.copyOf(f.live)
+	taken := takenClone(f.t, f.ctx, clone)
 	st := f.openSync(clone)
 	defer f.close(st)
 	if err := st.SyncFetch(f.ctx, remoteName(f.t, "origin")); err != nil {
 		f.t.Fatalf("SyncFetch(clone) error = %v", err)
 	}
-	return clone, st.PrunedRefs()
+	return taken, st.PrunedRefs()
 }
 
 // liveRefs is the live store's tracking refs and fork points of origin, by
@@ -463,8 +582,9 @@ func TestLandFetchedHeadLeavesARefTheClonesSessionFetchedBack(t *testing.T) {
 	trackedBefore, forkPointsBefore := f.liveRefs()
 	f.exec(peer, "DOLT_PUSH", "origin", ":feature")
 
-	clone := f.copyOf(f.live)
-	st := f.openSync(clone)
+	cloneRoot := f.copyOf(f.live)
+	clone := takenClone(t, f.ctx, cloneRoot)
+	st := f.openSync(cloneRoot)
 	if err := st.SyncFetch(f.ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch(clone) error = %v", err)
 	}
@@ -489,6 +609,52 @@ func TestLandFetchedHeadLeavesARefTheClonesSessionFetchedBack(t *testing.T) {
 	tracked, forkPoints := f.liveRefs()
 	if !maps.Equal(tracked, trackedBefore) || !maps.Equal(forkPoints, forkPointsBefore) {
 		t.Errorf("live refs after the landing = %v / %v, want them as they stood, %v / %v", tracked, forkPoints, trackedBefore, forkPointsBefore)
+	}
+}
+
+// TestLandFetchedHeadPrunesARefTheClonesSessionMovedFirst lands a clone
+// whose session fetched twice: the first fetch moved feature past the head
+// the take saw, and the second pruned it there. The live ref still stands as
+// taken, so the prune is the newest word on it and it goes, though the clone
+// pruned it at another head.
+func TestLandFetchedHeadPrunesARefTheClonesSessionMovedFirst(t *testing.T) {
+	t.Parallel()
+	f := newLandFixture(t)
+	peer := f.copyOf(f.live)
+	f.exec(peer, "DOLT_BRANCH", "feature")
+	f.exec(peer, "DOLT_PUSH", "origin", "feature")
+	f.liveFetch()
+	trackedBefore, _ := f.liveRefs()
+
+	cloneRoot := f.copyOf(f.live)
+	clone := takenClone(t, f.ctx, cloneRoot)
+	moved := f.commit(peer, "peer-ticket")
+	f.exec(peer, "DOLT_BRANCH", "-f", "feature", "master")
+	f.exec(peer, "DOLT_PUSH", "origin", "feature")
+	st := f.openSync(cloneRoot)
+	if err := st.SyncFetch(f.ctx, remoteName(t, "origin")); err != nil {
+		t.Fatalf("SyncFetch(clone) error = %v", err)
+	}
+	f.exec(peer, "DOLT_PUSH", "origin", ":feature")
+	if err := st.SyncFetch(f.ctx, remoteName(t, "origin")); err != nil {
+		t.Fatalf("second SyncFetch(clone) error = %v", err)
+	}
+	pruned := st.PrunedRefs()
+	f.close(st)
+	wantPruned := []storage.PrunedRef{{Remote: "origin", Branch: "feature", Head: moved}}
+	if !slices.Equal(pruned, wantPruned) || moved == trackedBefore["feature"] {
+		t.Fatalf("the clone's PrunedRefs() = %+v, want %+v, pruned past the taken %s", pruned, wantPruned, trackedBefore["feature"])
+	}
+
+	landed, err := LandFetchedHead(f.ctx, f.live, clone, remoteName(t, "origin"), "master", pruned)
+	if err != nil {
+		t.Fatalf("LandFetchedHead() error = %v", err)
+	}
+	if !slices.Equal(landed.Pruned, wantPruned) {
+		t.Errorf("LandedFetch.Pruned = %+v, want %+v", landed.Pruned, wantPruned)
+	}
+	if tracked, _ := f.liveRefs(); tracked["feature"] != "" {
+		t.Errorf("live tracking refs after the landing = %v, want feature's gone", tracked)
 	}
 }
 
@@ -540,10 +706,11 @@ func TestLandFetchedHeadKeepsAFollowTheLiveStoreRanDuringTheClonesFetch(t *testi
 	t.Parallel()
 	ctx := context.Background()
 	r := newReRootedRemote(t, ctx, true)
-	clone := filepath.Join(t.TempDir(), "dolt")
-	if err := dbsnapshot.CloneTree(ctx, r.bravo, clone); err != nil {
+	cloneRoot := filepath.Join(t.TempDir(), "dolt")
+	if err := dbsnapshot.CloneTree(ctx, r.bravo, cloneRoot); err != nil {
 		t.Fatalf("CloneTree() error = %v", err)
 	}
+	clone := takenClone(t, ctx, cloneRoot)
 
 	bravo := openSyncOrFatal(t, ctx, r.bravo)
 	if _, err := bravo.SyncPull(ctx, remoteName(t, "origin"), "master"); err != nil {
@@ -554,7 +721,7 @@ func TestLandFetchedHeadKeepsAFollowTheLiveStoreRanDuringTheClonesFetch(t *testi
 		t.Fatalf("Close(bravo) error = %v", err)
 	}
 
-	cloneStore := openSyncOrFatal(t, ctx, clone)
+	cloneStore := openSyncOrFatal(t, ctx, cloneRoot)
 	if err := cloneStore.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch(clone) error = %v", err)
 	}
@@ -650,10 +817,7 @@ func TestRemoteCacheLandingCopiesTheFetchedRemotesLastKnownRefs(t *testing.T) {
 	livePushed := commitOn(liveRepo, unfetched, "where a live push left upstream since")
 	commitOn(cloneRepo, orphan, "an orphan the clone copied before the live sweep")
 
-	plan, err := planRemoteCacheLanding(ctx, liveBase, cloneBase, remoteName(t, "origin"))
-	if err != nil {
-		t.Fatalf("planRemoteCacheLanding() error = %v", err)
-	}
+	plan := planRemoteCacheLanding(ctx, liveBase, cloneBase, remoteName(t, "origin"))
 	if err := plan.apply(ctx); err != nil {
 		t.Fatalf("apply() error = %v", err)
 	}
@@ -680,5 +844,27 @@ func TestRemoteCacheLandingCopiesTheFetchedRemotesLastKnownRefs(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(liveBase, onlyCloneKey, "repo.git")); err != nil {
 		t.Fatalf("the mirror only the clone had was not moved into the live store: %v", err)
+	}
+}
+
+// TestARemoteCachePlanReportsItsFailuresOnlyWhereItLands pins the plan's
+// failures to the landing that carries it out: a landing that lands the fetch
+// reports a mirror it could not plan, and a superseded one, which copies none
+// of the plan, reports nothing of it.
+func TestARemoteCachePlanReportsItsFailuresOnlyWhereItLands(t *testing.T) {
+	unlisted := errors.New("list the clone's mirrors")
+	plan := remoteCacheLanding{unplanned: unlisted}
+	for _, tc := range []struct {
+		record FetchedHeadRecord
+		want   error
+	}{
+		{FetchedHeadMoved, unlisted},
+		{FetchedHeadUnchanged, unlisted},
+		{FetchedHeadAbsent, unlisted},
+		{FetchedHeadSuperseded, nil},
+	} {
+		if err := plan.landedBy(tc.record).apply(context.Background()); !errors.Is(err, tc.want) {
+			t.Errorf("a %s landing's apply() = %v, want %v", tc.record, err, tc.want)
+		}
 	}
 }
