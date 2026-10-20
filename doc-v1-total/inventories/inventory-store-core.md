@@ -4721,7 +4721,7 @@ Fixture `preGooseDump()` (`candidate_test.go`): `WorkspaceID: "legacy-ws"`, **no
 ### 2.9 Removal retry under a refused removal (`candidate_test.go`)
 
 `TestDiscardRetriesDirectoryRemoval` (`candidate_test.go`):
-- Injection is `fsperm.Deny(t, cand.root, fsperm.RemoveAll)`: the candidate root refuses `os.RemoveAll` with what it holds. `fsperm` skips the test where the fault does not take (root, and Windows, where `os.RemoveAll` deletes a read-only directory). No rename or fsync behavior is exercised.
+- Injection is `fsperm.Deny(t, cand.root, fsperm.RemoveAll)`: the candidate root refuses `os.RemoveAll`; it and its own entries stay, though what they hold may go. `fsperm` skips the test where the fault does not take (root, and Windows, where `os.RemoveAll` deletes a read-only directory). No rename or fsync behavior is exercised.
 - Under the refused removal, the first `cand.Discard()` **must error**.
 - After `restore()` puts the root's mode back, the second `cand.Discard()` must return nil.
 - `dirEntryCount(t, parent)` must then be **0**.

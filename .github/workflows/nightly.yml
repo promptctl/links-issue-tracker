@@ -75,10 +75,12 @@ jobs:
   # ci.yml, plus the vendored driver module they build with, and -short for
   # the same reason: the scale tests add volume, not platform coverage.
   # -timeout 30m, as the full suite has: internal/cli alone runs past go test's
-  # 10-minute per-package default here (run 39496042580).
+  # 10-minute per-package default here (run 39496042580). The job runs about
+  # 46 minutes (run 39511640688), so it outlasts one package that hangs to its
+  # 30-minute timeout and prints that hang's goroutine dump.
   windows:
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 100
     defaults:
       run:
         shell: msys2 {0}

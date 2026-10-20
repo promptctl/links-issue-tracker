@@ -497,7 +497,7 @@ func TestRefusalReportsUnreadableSnapshots(t *testing.T) {
 	stampGooseVersionAhead(t, ctx, doltRoot)
 	// An unreadable snapshots directory makes the listing fail. A file where the
 	// directory belongs does not on Windows, whose listing of a regular file
-	// can come back empty and without an error.
+	// can come back empty and without an error (links-windows-qr8l.k1v).
 	snapshotsDir := dbsnapshot.DirFor(doltRoot)
 	if err := os.MkdirAll(snapshotsDir, 0o755); err != nil {
 		t.Fatalf("create snapshots dir: %v", err)

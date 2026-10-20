@@ -847,7 +847,8 @@ func aReportedHandoverIsTheOneRecorded(t *testing.T, ctx context.Context, st sto
 	// Each write is stamped a second after the one before, so the newest start a
 	// stream wrote is decided by its instant. A real clock can stamp two writes
 	// in a row with one instant — Windows' does, at its tick — and the tie then
-	// falls to the event ids, which say nothing about which start came last.
+	// falls to the event ids, which say nothing about which start came last
+	// (links-scale-dy46.i49).
 	stamped := 0
 	stamp := func() {
 		clk.Pin(earlierInstant.Add(time.Duration(stamped) * time.Second))

@@ -21,18 +21,21 @@ import (
 	"testing"
 )
 
-// An Op is an operation on a directory that Deny makes it refuse.
+// An Op is an operation on a directory that Deny makes it refuse. A refused
+// removal keeps the directory and its own entries; what those entries hold,
+// writable as ever, can still go before the refusal.
 type Op int
 
 const (
 	// Write changes the directory's entries: creating one, renaming one into
 	// or out of it, or removing one from it.
 	Write Op = iota
-	// RemoveAll removes the directory with what it holds by os.RemoveAll,
+	// RemoveAll removes the directory and what it holds by os.RemoveAll,
 	// which on Windows deletes a read-only directory.
 	RemoveAll
 	// Remove removes the directory's entries and then the directory itself by
-	// os.Remove, which Windows refuses for a read-only directory.
+	// os.Remove, which Windows refuses for a read-only directory, once the
+	// entries are gone.
 	Remove
 	// Read lists the directory's entries.
 	Read
