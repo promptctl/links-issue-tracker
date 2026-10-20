@@ -143,7 +143,7 @@ func classifyPushOutcome(outcome syncPushOutcome, err error) pushOutcomeRecord {
 	case err != nil:
 		return pushOutcomeRecord{Decision: pushDecisionError, Reason: err.Error()}
 	case outcome.pushErr != nil:
-		decision, reason := pushFailureDecision(outcome.pushErr, outcome.receiveMerges)
+		decision, reason := pushFailureDecision(outcome.pushErr, outcome.remote, outcome.receiveMerges)
 		return pushOutcomeRecord{
 			Decision: decision,
 			Reason:   reason,
@@ -164,16 +164,17 @@ func classifyPushOutcome(outcome syncPushOutcome, err error) pushOutcomeRecord {
 // pushFailureDecision is the decision and reason a push that ran and did not
 // land ended in: diverged when the remote refused it over a peer's commits an
 // automatic receive will merge, error for every other failure. A refusal
-// nothing will merge says so, and names the command that merges it.
-func pushFailureDecision(pushErr error, receiveMerges bool) (decision, reason string) {
+// nothing will merge says so, and names the commands that merge it on remote.
+func pushFailureDecision(pushErr error, remote storage.RemoteName, receiveMerges bool) (decision, reason string) {
 	if !errors.Is(pushErr, storage.ErrPushDiverged) {
 		return pushDecisionError, pushErr.Error()
 	}
 	if receiveMerges {
 		return pushDecisionDiverged, pushErr.Error()
 	}
-	commands := make([]string, 0, len(pushDivergedRemedy))
-	for _, step := range pushDivergedRemedy {
+	remedy := pushDivergedRemedy(remote.String())
+	commands := make([]string, 0, len(remedy))
+	for _, step := range remedy {
 		commands = append(commands, "'"+step.command+"'")
 	}
 	return pushDecisionError, pushErr.Error() + "; no automatic receive runs here to merge the peer's commits: run " + strings.Join(commands, ", then ")

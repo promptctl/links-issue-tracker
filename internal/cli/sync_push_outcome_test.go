@@ -86,7 +86,7 @@ func TestPushOutcomeOf(t *testing.T) {
 				remote: remoteName(t, "origin"), branch: "master",
 				pushErr: fmt.Errorf("%w: push remote \"origin\": rejected", storage.ErrPushDiverged),
 			},
-			want: pushOutcomeRecord{Decision: pushDecisionError, Reason: storage.ErrPushDiverged.Error() + ": push remote \"origin\": rejected; no automatic receive runs here to merge the peer's commits: run 'lit sync pull', then 'lit sync push'", Remote: "origin", Branch: "master"},
+			want: pushOutcomeRecord{Decision: pushDecisionError, Reason: storage.ErrPushDiverged.Error() + ": push remote \"origin\": rejected; no automatic receive runs here to merge the peer's commits: run 'lit sync pull --remote origin', then 'lit sync push --remote origin'", Remote: "origin", Branch: "master"},
 		},
 		{
 			name: "push that failed otherwise records error whether or not a receive merges",

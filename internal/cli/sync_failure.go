@@ -112,8 +112,9 @@ type SyncFailure struct {
 	// Fields carries the held free-text conflicts, populated only for
 	// syncFailureProseHeld — it names WHICH fields need the agent's merge.
 	Fields []merge.ProsePending
-	// Cause is the backend error that prevented convergence, populated only for a
-	// syncFailureDivergedUnresolved that arose from a reconcile hard-failure. It
+	// Cause is the backend error that prevented convergence, populated for a
+	// syncFailureDivergedUnresolved that arose from a reconcile hard-failure, and
+	// for a syncFailurePushDiverged, where it is the remote's refusal. It
 	// renders as a trailing cause line, never as the headline. [LAW:no-silent-failure]
 	// the backend detail is preserved; it is just demoted below the directive so
 	// it cannot read as the whole (ignorable) message. Its text can carry
@@ -180,9 +181,9 @@ func remoteSchemaAheadFailure(err error) (SyncFailure, bool) {
 }
 
 // pushDivergedFailure builds the sync-failure contract for a push the remote
-// refused over a peer's commits, or ok=false when err is not one. The remote
-// and branch come off the store's refusal. The whole refused attempt's error is
-// the block's cause, fenced because it carries the remote's text.
+// refused over a peer's commits, or ok=false when err is not one. The remote,
+// the branch and the cause all come off the store's refusal; the cause is the
+// remote's own refusal text, the one part of the error lit did not write.
 func pushDivergedFailure(err error) (SyncFailure, bool) {
 	var diverged storage.PushDivergedError
 	if !errors.As(err, &diverged) {
@@ -192,7 +193,7 @@ func pushDivergedFailure(err error) (SyncFailure, bool) {
 		Class:     syncFailurePushDiverged,
 		Remote:    diverged.Remote.String(),
 		Branch:    diverged.Branch,
-		Cause:     err,
+		Cause:     diverged.Refusal,
 		BuildNote: resolveBuildStatusNote(time.Now()),
 	}, true
 }
@@ -202,22 +203,36 @@ type remedyStep struct {
 	command, gloss string
 }
 
-// line is the step as the block's HOW TO RESOLVE renders it.
-func (r remedyStep) line() string {
-	return fmt.Sprintf("%-26s# %s", r.command, r.gloss)
+// remedyLines renders steps as the block's HOW TO RESOLVE lines, each gloss
+// aligned two columns past the longest command.
+func remedyLines(steps []remedyStep) []string {
+	width := 0
+	for _, step := range steps {
+		width = max(width, len(step.command))
+	}
+	lines := make([]string, 0, len(steps))
+	for _, step := range steps {
+		lines = append(lines, fmt.Sprintf("%-*s  # %s", width, step.command, step.gloss))
+	}
+	return lines
 }
 
-// pushDivergedRemedy is how a push refused over a peer's commits clears, in
-// order. [LAW:one-source-of-truth] the block's steps and the mirror's one-line
-// push-outcome reason (pushFailureDecision) both render from it.
-var pushDivergedRemedy = []remedyStep{
-	{"lit sync pull", "merges the peer's commits in the foreground and reports what it settled"},
-	{"lit sync push", "lands the merged history on the remote"},
+// pushDivergedRemedy is how a push refused over a peer's commits on remote
+// clears, in order. Both commands name the remote, since the refused push may
+// have targeted one other than the default. [LAW:one-source-of-truth] the
+// block's steps and the mirror's one-line push-outcome reason
+// (pushFailureDecision) both render from it.
+func pushDivergedRemedy(remote string) []remedyStep {
+	return []remedyStep{
+		{"lit sync pull --remote " + remote, "merges the peer's commits in the foreground and reports what it settled"},
+		{"lit sync push --remote " + remote, "lands the merged history on the remote"},
+	}
 }
 
-// asSyncFailure converts a store *RemoteSchemaAheadError into the returnable
-// sync-failure contract (so the command prints the block, and exits as the
-// schema-ahead refusal it unwraps to), or returns err unchanged. The explicit sync commands route their store error
+// asSyncFailure converts a store *RemoteSchemaAheadError (exiting as the
+// schema-ahead refusal it unwraps to) or a storage.PushDivergedError (exiting
+// as the block) into the returnable sync-failure contract, so the command
+// prints the block, or returns err unchanged. The explicit sync commands route their store error
 // through this one adapter so none of them renders the raw refusal instead of the
 // contract. [LAW:single-enforcer]
 func asSyncFailure(err error) error {
@@ -461,11 +476,7 @@ func (f SyncFailure) resolutionSteps() []string {
 			"lit sync pull             # fetches and settles in the foreground and reports the error it stops on",
 		}
 	case syncFailurePushDiverged:
-		steps := make([]string, 0, len(pushDivergedRemedy))
-		for _, step := range pushDivergedRemedy {
-			steps = append(steps, step.line())
-		}
-		return steps
+		return remedyLines(pushDivergedRemedy(f.Remote))
 	default:
 		return []string{"lit doctor                # unrecognized sync-failure class; report this"}
 	}
@@ -503,7 +514,7 @@ func (f SyncFailure) escalationLine() string {
 		// The push path reads no divergence age or span, so the line is fixed.
 		// It names what clears the refusal and when it stops being the agent's
 		// to clear; it never calls it routine, which the directive above denies.
-		return "ESCALATION — resolve now: the pull above merges the peer's commits, and the push after it lands them. If the pull reports a conflict, resolve it as its block says. If the push is refused again, another peer pushed in between: run the steps once more, and if the push is still refused after that, surface it to the user as blocking."
+		return "ESCALATION — resolve now: the pull above merges the peer's commits, and the push after it lands them. If the pull reports a conflict, resolve it as its block says. If the push is refused again, another peer pushed in between: resolve it once more with the same steps, and if the push is still refused after that, surface it to the user as blocking."
 	case syncFailureProseHeld, syncFailureDivergedUnresolved:
 		span := f.Ahead + f.Behind
 		if f.persistent() {

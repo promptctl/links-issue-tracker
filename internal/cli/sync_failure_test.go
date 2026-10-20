@@ -385,9 +385,9 @@ func TestDoctorDivergenceExit(t *testing.T) {
 func TestADivergedPushIsTheSyncFailureBlock(t *testing.T) {
 	t.Parallel()
 	refusal := storage.PushDivergedError{
-		Remote:  remoteName(t, "origin"),
+		Remote:  remoteName(t, "mirror"),
 		Branch:  "master",
-		Refusal: errors.New(`push remote "origin": ! [rejected] HEAD -> master (non-fast-forward)`),
+		Refusal: errors.New(`push remote "mirror": ! [rejected] HEAD -> master (non-fast-forward)`),
 	}
 	var stderr bytes.Buffer
 	if code := WriteCommandError(&stderr, asSyncFailure(fmt.Errorf("sync push: %w", refusal))); code != ExitConflict {
@@ -397,12 +397,12 @@ func TestADivergedPushIsTheSyncFailureBlock(t *testing.T) {
 	if !strings.HasPrefix(out, "error (code=5, reason=sync_divergence): ") {
 		t.Fatalf("header is not the sync_divergence conflict:\n%s", out)
 	}
-	pull := strings.Index(out, "lit sync pull             #")
-	push := strings.Index(out, "lit sync push             #")
+	pull := strings.Index(out, "lit sync pull --remote mirror  #")
+	push := strings.Index(out, "lit sync push --remote mirror  #")
 	if pull < 0 || push < pull {
-		t.Fatalf("resolution must run `lit sync pull`, then `lit sync push`:\n%s", out)
+		t.Fatalf("resolution must run `lit sync pull`, then `lit sync push`, on the refused push's remote:\n%s", out)
 	}
-	for _, want := range []string{"origin/master holds commits a peer pushed", storage.ErrPushDiverged.Error(), "non-fast-forward"} {
+	for _, want := range []string{"mirror/master holds commits a peer pushed", "non-fast-forward"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("block missing %q:\n%s", want, out)
 		}
