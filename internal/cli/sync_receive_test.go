@@ -33,6 +33,21 @@ func TestASkippedReceiveRecordsNoOutcomes(t *testing.T) {
 	}
 }
 
+// A receive that ends before it settles anything, here on a repo with no git
+// remote, still says it owes no push, rather than leaving the fact absent.
+func TestAReceiveThatSettlesNothingOwesNoPush(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	gitInit(t, dir)
+	recorder := telemetry.Begin(telemetry.Event{})
+	ctx := telemetry.With(context.Background(), recorder)
+	receiveOnce(ctx, workspace.Info{Location: workspace.LocationFromStorageDir(t.TempDir()), RootDir: dir})
+	facts := writtenFacts(t, recorder.Finish(invocationEnd(time.Now(), nil, nil)))
+	if owed, present := facts["receive.push_owed"]; !present || owed != false {
+		t.Fatalf("receive.push_owed = %#v (present %t); want false", owed, present)
+	}
+}
+
 // TestAutomaticReceiveFastForwardsEstablishedClone is the end-to-end proof of the
 // feature: an established clone that adopted the remote on init, then has another
 // machine push a new ticket, sees that ticket after running an ordinary command —
