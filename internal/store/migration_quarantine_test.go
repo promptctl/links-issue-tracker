@@ -252,8 +252,8 @@ func TestQuarantineRowInsertedAfterReset(t *testing.T) {
 
 // TestMigrationFailureCheckpointPath pins the full failure path: a simulated
 // migration failure creates a Dolt checkpoint, resets the working set, records
-// a quarantine row, and returns a CheckpointResetError wrapped in a
-// MigrationRollbackError. A subsequent Open succeeds (phaseManaged,
+// a quarantine row, and returns the migration step's SchemaConvergenceError,
+// whose cause is the CheckpointResetError. A subsequent Open succeeds (phaseManaged,
 // appliedVersion=registryMax, willMutate=false), and the test verifies the
 // checkpoint branch and quarantine commit persisted across the reset.
 func TestMigrationFailureCheckpointPath(t *testing.T) {
@@ -290,16 +290,16 @@ func TestMigrationFailureCheckpointPath(t *testing.T) {
 	_, openErr := Open(ctx, doltRoot, "test-workspace-id")
 	migrationUpByOneForTest = nil
 	if openErr == nil {
-		t.Fatal("Open() returned nil error; expected CheckpointResetError wrapped in MigrationRollbackError")
+		t.Fatal("Open() returned nil error; expected the migration step's failure")
 	}
 
-	// Error chain must include MigrationRollbackError (outer, from snapshot layer).
-	rollback, ok := asMigrationRollbackError(openErr)
-	if !ok {
-		t.Fatalf("error = %v (%T); expected wrapped *MigrationRollbackError", openErr, openErr)
+	// The failure names the migration step and the snapshot the open took.
+	rollback := asConvergenceError(t, openErr)
+	if rollback.Step != stepMigration || rollback.Snapshot == nil {
+		t.Fatalf("failure = step %s, snapshot %v; want step %s with the snapshot", rollback.Step, rollback.Snapshot, stepMigration)
 	}
 
-	// Cause must be a CheckpointResetError (inner, from Dolt-checkpoint layer).
+	// Cause must be a CheckpointResetError (from the Dolt-checkpoint layer).
 	var cpErr *CheckpointResetError
 	if !errors.As(rollback.Cause, &cpErr) {
 		t.Fatalf("rollback.Cause = %v (%T); expected *CheckpointResetError", rollback.Cause, rollback.Cause)
@@ -320,13 +320,17 @@ func TestMigrationFailureCheckpointPath(t *testing.T) {
 		t.Errorf("failed Open error = %v, want it to carry the quarantine of v%d", openErr, failVersion)
 	}
 
-	// Error message must mention the checkpoint name and the restore command.
+	// Error message must name the checkpoint and the snapshot. It gives no
+	// restore instruction: the reset already restored the pre-migration state.
 	msg := rollback.Error()
 	if !strings.Contains(msg, cpErr.Checkpoint.Name) {
 		t.Errorf("error message missing checkpoint name %q: %s", cpErr.Checkpoint.Name, msg)
 	}
-	if !strings.Contains(msg, "lit snapshots restore") {
-		t.Errorf("error message missing 'lit snapshots restore': %s", msg)
+	if !strings.Contains(msg, rollback.Snapshot.Name) {
+		t.Errorf("error message missing snapshot name %q: %s", rollback.Snapshot.Name, msg)
+	}
+	if strings.Contains(msg, "lit snapshots restore") {
+		t.Errorf("error message advises a restore the reset already did: %s", msg)
 	}
 
 	// The quarantine recorded during the failed migration persisted across the
@@ -571,10 +575,10 @@ func TestVersionContentDriftCommitCancelResets(t *testing.T) {
 		t.Cleanup(func() { versionContentDriftRepairForTest = nil })
 
 		mismatch := &VersionContentMismatchError{Version: 2, Name: "00002_add_lane.sql", Missing: []string{"issues.lane"}}
-		err = st.repairVersionContentDriftWithRollback(ctx, applied, mismatch)
+		_, fail := st.repairVersionContentDriftWithRollback(ctx, applied, mismatch)
 		versionContentDriftRepairForTest = nil
-		if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "working set reset to checkpoint") {
-			t.Fatalf("repairVersionContentDriftWithRollback() error = %v; want the failed commit reported with a completed reset", err)
+		if fail == nil || fail.Step != stepDriftRepair || !errors.Is(fail, context.Canceled) || !strings.Contains(fail.Error(), "working set reset to checkpoint") {
+			t.Fatalf("repairVersionContentDriftWithRollback() failure = %v; want step drift_repair reporting the failed commit with a completed reset", fail)
 		}
 		cols, err := st.tableColumns(bg, "issues")
 		if err != nil {
@@ -692,9 +696,9 @@ func TestCheckpointResetErrorUnknownVersion(t *testing.T) {
 		t.Fatal("Open() returned nil error; expected CheckpointResetError")
 	}
 
-	rollback, ok := asMigrationRollbackError(openErr)
-	if !ok {
-		t.Fatalf("error = %v (%T); expected *MigrationRollbackError", openErr, openErr)
+	rollback := asConvergenceError(t, openErr)
+	if rollback.Step != stepMigration {
+		t.Errorf("failure step = %s; want %s", rollback.Step, stepMigration)
 	}
 	var cpErr *CheckpointResetError
 	if !errors.As(rollback.Cause, &cpErr) {
@@ -721,8 +725,8 @@ func TestCheckpointResetErrorUnknownVersion(t *testing.T) {
 	}
 }
 
-// TestReopenBlockedByQuarantineOnAdoptionPath pins that Open returns a
-// QuarantineBlockError NOT wrapped in MigrationRollbackError when the adoption
+// TestReopenBlockedByQuarantineOnAdoptionPath pins that Open fails at the
+// check_quarantine step, carrying no recovery snapshot, when the adoption
 // path encounters a quarantine row for a version above the baseline. The
 // quarantine fast-fail fires before guard.ensure(), so no recovery snapshot is
 // created. This tests criterion 2 end-to-end through Open() itself.
@@ -778,10 +782,10 @@ func TestReopenBlockedByQuarantineOnAdoptionPath(t *testing.T) {
 		t.Errorf("QuarantineBlockError.Version = %d, want 2", qErr.Version)
 	}
 	// The quarantine fast-fail fires before guard.ensure(), so no recovery
-	// snapshot is created. A MigrationRollbackError wrapper is proof that a
-	// snapshot was taken; its absence pins the no-snapshot-on-quarantine guarantee.
-	if _, ok := asMigrationRollbackError(openErr); ok {
-		t.Errorf("QuarantineBlockError must not be wrapped in MigrationRollbackError; quarantine fast-fail must fire before guard.ensure()")
+	// snapshot is created: the failure carries none.
+	fail := asConvergenceError(t, openErr)
+	if fail.Step != stepCheckQuarantine || fail.Snapshot != nil {
+		t.Errorf("failure = step %s, snapshot %v; want step %s with no snapshot: quarantine fast-fail must fire before guard.ensure()", fail.Step, fail.Snapshot, stepCheckQuarantine)
 	}
 }
 
@@ -901,10 +905,12 @@ func TestQuarantineTableRefusesToDiscardStaleShapeHistory(t *testing.T) {
 
 // TestFailedMigrationReportsCheckpointPruneFailure pins that a checkpoint
 // prune failing on the migration-failure path reaches the caller beside the
-// migration failure, while the reset before it succeeded.
+// migration failure, while the reset before it succeeded: on the failure's
+// PruneErr and in its message, never in its cause, so it never decides how
+// the failure is classified.
 func TestFailedMigrationReportsCheckpointPruneFailure(t *testing.T) {
 	// serial: no t.Parallel — installs the package-level migrationUpByOneForTest
-	// and migrationCheckpointPruneForTest hooks.
+	// hook and failpointForTest.
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -923,11 +929,8 @@ func TestFailedMigrationReportsCheckpointPruneFailure(t *testing.T) {
 	migrationUpByOneForTest = func(context.Context, *goose.Provider) (*goose.MigrationResult, error) {
 		return nil, migrationFailure
 	}
-	migrationCheckpointPruneForTest = func() error { return pruneFailure }
-	t.Cleanup(func() {
-		migrationUpByOneForTest = nil
-		migrationCheckpointPruneForTest = nil
-	})
+	injectFailpoint(t, pruneFailure, pruneMigrationCheckpoints)
+	t.Cleanup(func() { migrationUpByOneForTest = nil })
 
 	_, openErr := Open(ctx, doltRoot, "test-workspace-id")
 	if openErr == nil {
@@ -940,7 +943,11 @@ func TestFailedMigrationReportsCheckpointPruneFailure(t *testing.T) {
 	if !errors.Is(openErr, migrationFailure) {
 		t.Errorf("error = %v; expected it to carry the migration failure", openErr)
 	}
-	if !errors.Is(openErr, pruneFailure) {
-		t.Errorf("error = %v; expected it to carry the checkpoint prune failure", openErr)
+	fail := asConvergenceError(t, openErr)
+	if !errors.Is(fail.PruneErr, pruneFailure) || !strings.Contains(fail.Error(), pruneFailure.Error()) {
+		t.Errorf("failure = %v (PruneErr %v); expected the checkpoint prune failure on PruneErr and in the message", fail, fail.PruneErr)
+	}
+	if errors.Is(fail.Cause, pruneFailure) {
+		t.Errorf("cause = %v; the prune failure must not be in the cause the failure is classified by", fail.Cause)
 	}
 }

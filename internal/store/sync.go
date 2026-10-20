@@ -74,10 +74,11 @@ func OpenSync(ctx context.Context, doltRootDir string, workspaceID string) (_ *S
 	// it meets the floor a write rule sets, as the migrating open does. It
 	// applies no migration: a workspace behind this binary is the migrating
 	// open's to bring forward. [LAW:single-enforcer] both write opens apply
-	// the one floor, refuseUnwritable.
-	_, op, err := s.assessOperability(ctx)
-	if err == nil {
-		err = s.refuseUnwritable(ctx, op)
+	// the one floor through checkWritable, so a failure of either step is
+	// the same SchemaConvergenceError in both.
+	_, op, fail := s.checkWritable(ctx)
+	if fail != nil {
+		err = fail
 	}
 	s.migrated = storage.Migrated{Bootstrap: bootstrap, SchemaAhead: op.schemaAhead()}
 	// Same per-open branch normalization Store.Open runs: the bootstrap only

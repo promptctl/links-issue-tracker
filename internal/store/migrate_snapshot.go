@@ -15,14 +15,6 @@ import (
 // off via Prune at the tail of every mutating Open.
 const migrationSnapshotRetention = 10
 
-// migrationPostSnapshotHookForTest is a test-only injection point that fires
-// inside runMigration *after* the snapshot guard has had a chance to take
-// the recovery snapshot. Production callers leave it nil; tests reassign it
-// to simulate a mutation failure with the snapshot already in hand, so the
-// MigrationRollbackError path is exercised. A package-level var defaulting
-// to no-op, settable from store_test.go.
-var migrationPostSnapshotHookForTest func() error
-
 // migrationSnapshotLabel is the label prefix every migration-recovery snapshot
 // carries. The pre-restore rotation in dbsnapshot.Restore uses the directory
 // itself, not the label, so the label is purely human-facing.
@@ -103,8 +95,9 @@ func isAllDigits(s string) bool {
 // [LAW:single-enforcer] All migration-driven snapshot creation flows through
 // guard.ensure(); helpers must NOT call dbsnapshot.Take directly.
 // [LAW:types-are-the-program] The taken pointer is the discriminator that
-// distinguishes "we have a recovery point" from "we don't"; the rollback
-// error and the tail-end Prune both branch on this single field.
+// distinguishes "we have a recovery point" from "we don't"; the tail-end Prune
+// branches on it. The steps after the snapshot receive it from ensure as a
+// value instead (snapshotted), so their failures carry it by construction.
 type snapshotGuard struct {
 	databaseDir string
 	label       string
@@ -141,27 +134,6 @@ func (g *snapshotGuard) took() (dbsnapshot.Snapshot, bool) {
 	}
 	return *g.taken, true
 }
-
-// MigrationRollbackError wraps a migration failure that occurred after the
-// recovery snapshot was taken. The error message includes the literal
-// `lit snapshots restore <name>` command so the operator can recover without
-// reading docs or guessing the snapshot path.
-//
-// [LAW:single-enforcer] The recovery-instruction format lives here so every
-// caller sees the same words and the operator playbook stays consistent.
-type MigrationRollbackError struct {
-	Snapshot dbsnapshot.Snapshot
-	Cause    error
-}
-
-func (e *MigrationRollbackError) Error() string {
-	return fmt.Sprintf(
-		"migrate: %v\n\nthe workspace state before this migration is preserved at:\n  %s\n\nto restore, run:\n  lit snapshots restore %s",
-		e.Cause, e.Snapshot.Path, e.Snapshot.Name,
-	)
-}
-
-func (e *MigrationRollbackError) Unwrap() error { return e.Cause }
 
 // formatMigrationSnapshotLabel returns the label used for migration-recovery
 // snapshots. The trailing timestamp is purely cosmetic — dbsnapshot.Take
@@ -249,15 +221,4 @@ func snapshotWritable(ctx context.Context, snapshotPath, workspaceID string, max
 	}
 	op, err := snap.operability(ctx, state.appliedVersion, maxSupported)
 	return op.writable(), err
-}
-
-// asMigrationRollbackError unwraps err to find a *MigrationRollbackError if
-// any. Centralized so test code (and any future caller that needs to surface
-// recovery instructions) doesn't reimplement errors.As at every callsite.
-func asMigrationRollbackError(err error) (*MigrationRollbackError, bool) {
-	var target *MigrationRollbackError
-	if errors.As(err, &target) {
-		return target, true
-	}
-	return nil, false
 }
