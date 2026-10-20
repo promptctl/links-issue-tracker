@@ -4,9 +4,10 @@
 //
 // Mode bits are the fault on POSIX, and they do not hold everywhere: root
 // bypasses them, and Windows enforces only part of them (a file's read-only
-// bit, and a directory's against its own removal). So each fault is measured
-// once it is set, and a test runs where it holds and is skipped, saying why,
-// where it does not — never run against a fault that silently did nothing.
+// bit, and a directory's against os.Remove of the directory). So each fault
+// is measured once it is set, and a test runs where it holds and is skipped,
+// saying why, where it does not — never run against a fault that silently did
+// nothing.
 // Windows keeps a single read-only bit where POSIX keeps nine, so a mode a
 // test asserts is the one the platform stores.
 // [LAW:single-enforcer] This is the one place a test learns either.
@@ -27,28 +28,32 @@ const (
 	// Write changes the directory's entries: creating one, renaming one into
 	// or out of it, or removing one from it.
 	Write Op = iota
-	// Removal removes the directory with what it holds.
-	Removal
+	// RemoveAll removes the directory with what it holds by os.RemoveAll,
+	// which on Windows deletes a read-only directory.
+	RemoveAll
+	// Remove removes the directory's entries and then the directory itself by
+	// os.Remove, which Windows refuses for a read-only directory.
+	Remove
 	// Read lists the directory's entries.
 	Read
 )
 
 func (op Op) String() string {
-	return [...]string{Write: "a new entry", Removal: "its removal", Read: "a listing"}[op]
+	return [...]string{Write: "a new entry", RemoveAll: "its os.RemoveAll", Remove: "its os.Remove", Read: "a listing"}[op]
 }
 
 // Deny takes permission off dir so it refuses op, and restores dir's mode when
 // the test ends. restore puts the mode back sooner, for a test that goes on to
 // show what happens once the fault is gone; calling it twice is harmless.
 // [LAW:one-type-per-behavior] Every fault is a mode change on dir; the caller
-// names the operation its code under test meets, because that operation is
-// what the platforms enforce apart and so what the measurement attempts.
+// names the call its code under test makes on dir, because the platforms
+// enforce the mode apart by call, and the measurement makes that same call.
 func Deny(t testing.TB, dir string, op Op) (restore func()) {
 	t.Helper()
 	restore, err := op.inject(t, dir)
 	if err == nil {
 		restore()
-		t.Skipf("%s did not refuse %s with its permission off: this process bypasses directory permissions (root does, and Windows enforces a directory's read-only mode only against its removal), so the fault cannot be injected", dir, op)
+		t.Skipf("%s did not refuse %s with its permission off: this process bypasses directory permissions (root does, and Windows enforces a directory's read-only mode only against os.Remove of the directory), so the fault cannot be injected", dir, op)
 	}
 	if !errors.Is(err, fs.ErrPermission) {
 		t.Fatalf("probe %s for refusing %s: %v; want a permission error", dir, op, err)
@@ -71,7 +76,7 @@ func (op Op) inject(t testing.TB, dir string) (restore func(), attempt error) {
 			}
 		}
 		return restore, err
-	case Removal:
+	case RemoveAll, Remove:
 		// On POSIX a directory's own mode guards only its entries; an empty
 		// one is removed on its parent's permission.
 		if entries, err := os.ReadDir(dir); err != nil || len(entries) == 0 {
@@ -83,11 +88,19 @@ func (op Op) inject(t testing.TB, dir string) (restore func(), attempt error) {
 		if err := os.Mkdir(twin, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(twin, "entry"), nil, 0o644); err != nil {
+		entry := filepath.Join(twin, "entry")
+		if err := os.WriteFile(entry, nil, 0o644); err != nil {
 			t.Fatal(err)
 		}
 		set(t, twin, 0o555)
-		return set(t, dir, 0o555), os.RemoveAll(twin)
+		restore = set(t, dir, 0o555)
+		if op == RemoveAll {
+			return restore, os.RemoveAll(twin)
+		}
+		if err := os.Remove(entry); err != nil {
+			return restore, err
+		}
+		return restore, os.Remove(twin)
 	case Read:
 		restore = set(t, dir, 0o000)
 		_, err := os.ReadDir(dir)

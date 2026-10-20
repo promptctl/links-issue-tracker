@@ -300,7 +300,7 @@ func TestTake_CollectionFailureDoesNotFailTake(t *testing.T) {
 	snapshotsDir := DirFor(src)
 	tmpPath, _ := fabricateDeadResidue(t, snapshotsDir, "1700000000000000008")
 	nested := filepath.Join(tmpPath, "nested")
-	fsperm.Deny(t, nested, fsperm.Removal)
+	fsperm.Deny(t, nested, fsperm.RemoveAll)
 	t.Cleanup(func() { restoreCondemnedPerms(t, snapshotsDir) })
 
 	snap, err := Take(context.Background(), src, "")
@@ -442,7 +442,7 @@ func TestCollectOrphanedResidue_ErrorNamesThePath(t *testing.T) {
 	// Classification renames the residue (to a uniquely-stamped .condemned
 	// name) before deleting, so the undeletable dir lives under a *.condemned
 	// path by the time RemoveAll hits it — located by glob below.
-	fsperm.Deny(t, filepath.Join(tmpPath, "nested"), fsperm.Removal)
+	fsperm.Deny(t, filepath.Join(tmpPath, "nested"), fsperm.RemoveAll)
 	t.Cleanup(func() { restoreCondemnedPerms(t, snapshotsDir) })
 
 	err := collectOrphanedResidue(snapshotsDir)

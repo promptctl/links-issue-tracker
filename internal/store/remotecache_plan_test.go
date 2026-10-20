@@ -92,7 +92,7 @@ func TestCollectAbandonedMirrorReportsAFailureNamingTheKey(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(key, "pack"), nil, 0o644); err != nil {
 		t.Fatalf("plant orphan payload: %v", err)
 	}
-	fsperm.Deny(t, key, fsperm.Removal)
+	fsperm.Deny(t, key, fsperm.Remove)
 
 	_, collected, err := collectAbandonedMirror(base, orphanKey)
 	if err == nil {

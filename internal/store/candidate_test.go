@@ -188,7 +188,7 @@ func TestDiscardRetriesDirectoryRemoval(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = cand.Discard() })
 
-	restore := fsperm.Deny(t, cand.root, fsperm.Removal)
+	restore := fsperm.Deny(t, cand.root, fsperm.RemoveAll)
 
 	if err := cand.Discard(); err == nil {
 		t.Fatal("Discard succeeded despite a root that cannot be removed; expected a removal error")

@@ -256,7 +256,7 @@ func TestPruneRemoteCacheIsNotBlockedByOneStuckMirror(t *testing.T) {
 			t.Fatalf("plant orphan payload %s: %v", key, err)
 		}
 	}
-	fsperm.Deny(t, filepath.Join(cacheBase, stuck), fsperm.Removal)
+	fsperm.Deny(t, filepath.Join(cacheBase, stuck), fsperm.Remove)
 
 	outcome := sync.pruneRemoteCache(ctx)
 

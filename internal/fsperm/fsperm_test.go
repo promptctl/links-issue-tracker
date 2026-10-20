@@ -38,37 +38,57 @@ func TestDenyReadRefusesAListingUntilRestored(t *testing.T) {
 	assertOnlyEntry(t, dir, "entry")
 }
 
+// Each removal fault is measured by the call it names, and the code under test
+// making that call meets it.
 func TestDenyRemovalKeepsTheDirectoryUntilRestored(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "held")
-	if err := os.MkdirAll(filepath.Join(dir, "sub"), 0o755); err != nil {
-		t.Fatal(err)
+	removals := map[Op]func(dir string) error{
+		RemoveAll: os.RemoveAll,
+		Remove: func(dir string) error {
+			if err := os.Remove(filepath.Join(dir, "entry")); err != nil {
+				return err
+			}
+			return os.Remove(dir)
+		},
 	}
-	restore := Deny(t, dir, Removal)
-	if err := os.RemoveAll(dir); !errors.Is(err, fs.ErrPermission) {
-		t.Fatalf("remove a denied directory = %v; want a permission error", err)
-	}
-	if _, err := os.Stat(dir); err != nil {
-		t.Fatalf("the denied directory is gone: %v", err)
-	}
-	restore()
-	if err := os.RemoveAll(dir); err != nil {
-		t.Fatalf("remove once restored = %v; want it gone", err)
+	for op, remove := range removals {
+		t.Run(op.String(), func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "held")
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "entry"), nil, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			restore := Deny(t, dir, op)
+			if err := remove(dir); !errors.Is(err, fs.ErrPermission) {
+				t.Fatalf("remove a denied directory = %v; want a permission error", err)
+			}
+			if _, err := os.Stat(dir); err != nil {
+				t.Fatalf("the denied directory is gone: %v", err)
+			}
+			restore()
+			if err := os.RemoveAll(dir); err != nil {
+				t.Fatalf("remove once restored = %v; want it gone", err)
+			}
+		})
 	}
 }
 
 // On POSIX an empty directory is removed on its parent's permission, whatever
 // its own mode, so its removal cannot be refused on every platform.
 func TestDenyRemovalFailsOnAnEmptyDirectory(t *testing.T) {
-	dir := t.TempDir()
-	rec := &fatalRecorder{TB: t}
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		Deny(rec, dir, Removal)
-	}()
-	<-done
-	if !strings.Contains(rec.fatal, "must hold an entry") {
-		t.Fatalf("Deny(empty dir, Removal) fatal = %q; want it refused for holding nothing", rec.fatal)
+	for _, op := range []Op{RemoveAll, Remove} {
+		dir := t.TempDir()
+		rec := &fatalRecorder{TB: t}
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			Deny(rec, dir, op)
+		}()
+		<-done
+		if !strings.Contains(rec.fatal, "must hold an entry") {
+			t.Fatalf("Deny(empty dir, %v) fatal = %q; want it refused for holding nothing", op, rec.fatal)
+		}
 	}
 }
 
