@@ -435,7 +435,7 @@ func TestSyncPushFromCloneFollowsAReRootedRemote(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncPushFromClone error = %v", err)
 	}
-	if pushed.Superseded != "" || pushed.Head != headCommit(t, ctx, st) {
+	if pushed.Superseded != nil || pushed.Head != headCommit(t, ctx, st) {
 		t.Fatalf("push = %+v, want bravo's re-rooted head %s landed", pushed, headCommit(t, ctx, st))
 	}
 	r.assertFollowed(t, st, storage.SyncEntryPush)

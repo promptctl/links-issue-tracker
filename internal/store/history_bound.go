@@ -1,6 +1,7 @@
 package store
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -37,12 +38,13 @@ const reRootScratchPrefix = "lit-reroot/"
 //  3. it runs the remote's GC, which replaces the remote's table files with
 //     the ones the re-rooted head reaches while the remote carries it
 //     (collectRemote);
-//  4. it fetches, and follows whatever re-root the remote now carries. A held
-//     lease means the remote carries this one. A stale lease is only the last
-//     transport attempt's verdict, and an earlier attempt may have landed
-//     before a peer built on it (storage.LeaseStale), so the fetch is what
-//     says whether the remote carries the re-root; a remote a peer pushed to
-//     in between carries none, and the branch stays where it was;
+//  4. it fetches, reads whether the remote carries the re-root, and follows
+//     whatever re-root the remote now carries. Every lease outcome that
+//     reached the remote is settled by that one reading, because each is
+//     only the last transport attempt's verdict and an earlier attempt may
+//     have landed (storage.LeaseStale, storage.LeaseUnsettled); it is the
+//     bound's Publication. A remote a peer pushed to in between carries
+//     none, and the branch stays where it was;
 //  5. once the branch has followed, it reclaims the history below the cut,
 //     as every follow does (collectBelowTheCut).
 //
@@ -64,15 +66,12 @@ func (s *Store) boundHistory(ctx context.Context, remote, branch string, window 
 	return b
 }
 
-// SyncKeepHistoryBound runs boundHistory after a push that landed, says so
-// on the push's result once it wrote a re-root (AfterPush), and joins its
-// account to the push's maintenance. See the storage.Syncer contract.
+// SyncKeepHistoryBound runs boundHistory after a push that landed, carries
+// the bound on the push's result, and joins its account to the push's
+// maintenance. See the storage.Syncer contract.
 func (s *Store) SyncKeepHistoryBound(ctx context.Context, remote, branch string, window historywindow.Window, pushed storage.SyncPushResult) storage.SyncPushResult {
-	bound := s.boundHistory(ctx, strings.TrimSpace(remote), strings.TrimSpace(branch), window)
-	if bound.ReRooted.Head != "" {
-		pushed.AfterPush = fmt.Sprintf("the history bound wrote re-root %s of %s after the push", bound.ReRooted.Head, bound.Head)
-	}
-	pushed.Maintenance = joinMaintenance(pushed.Maintenance, historyBoundReport(bound))
+	pushed.Bound = s.boundHistory(ctx, strings.TrimSpace(remote), strings.TrimSpace(branch), window)
+	pushed.Maintenance = joinMaintenance(pushed.Maintenance, historyBoundReport(pushed.Bound))
 	return pushed
 }
 
@@ -95,47 +94,101 @@ func (s *Store) keepHistoryBound(ctx context.Context, b *storage.HistoryBound) e
 }
 
 // publishBound is boundHistory's steps once the bound fired at b.Head.
-func (s *Store) publishBound(ctx context.Context, b *storage.HistoryBound) error {
+func (s *Store) publishBound(ctx context.Context, b *storage.HistoryBound) (err error) {
+	// The scratch lives as long as the bound needs the re-root's commit, and
+	// goes however the bound ended. While the remote lacks the re-root, the
+	// scratch is the only ref naming that commit, and the reading resolves
+	// it. A re-root is deterministic, so the next push past the bound writes
+	// the same commit again, while a scratch left behind would keep the whole
+	// history below the cut reachable through every GC until then. One a
+	// killed bound left goes with the next collection below a cut
+	// (collectBelowTheCut).
+	defer func() {
+		err = errors.Join(err, s.runSyncMutation(ctx, func(ctx context.Context) error {
+			return s.deleteBranchesUnder(ctx, reRootScratchPrefix)
+		}))
+	}()
 	trackingRef := fmt.Sprintf("remotes/%s/%s", b.Remote, b.Branch)
-	var err error
-	b.ReRooted, err = s.reRootScratch(ctx, b.Branch, b.Head, b.Window.Keep())
-	if err == nil {
-		b.Lease, err = s.publishReRoot(ctx, b.Remote, b.Branch, b.Head)
+	var publishErr error
+	b.ReRooted, publishErr = s.reRootScratch(ctx, b.Branch, b.Head, b.Window.Keep())
+	if publishErr == nil {
+		b.Lease, publishErr = s.publishReRoot(ctx, b.Remote, b.Branch, b.Head)
 	}
-	// The scratch lives only as long as the re-root and its push, and goes
-	// however they ended. A re-root is deterministic, so the next push past
-	// the bound writes the same commit again, while a scratch left behind
-	// would keep the whole history below the cut reachable through every GC
-	// until then. One a killed bound left goes with the next collection below
-	// a cut (collectBelowTheCut).
-	sweepErr := s.runSyncMutation(ctx, func(ctx context.Context) error {
-		return s.deleteBranchesUnder(ctx, reRootScratchPrefix)
-	})
-	if err = errors.Join(err, sweepErr); err != nil {
-		return err
+	// A re-root never written, or a lease push never sent, left the remote
+	// without it, so there is nothing to collect, read or follow, and the
+	// publication stays ReRootNotPushed.
+	// [LAW:types-are-the-program] the lease's empty outcome is that fact,
+	// set by the push itself.
+	if b.Lease == "" {
+		return publishErr
 	}
-	// [LAW:dataflow-not-control-flow] the remote's GC, the fetch and the
-	// follow run whatever the lease said. The remote's root decides whether
-	// its GC replaces anything: only while the remote carries this re-root and
-	// nothing on top of it, a held lease and a stale verdict over an attempt
-	// that landed alike. Its error is the bound's, and stops nothing after it:
-	// this branch follows the re-root it published whatever became of the
-	// remote's table files.
+	// [LAW:dataflow-not-control-flow] the remote's GC, the fetch, the reading
+	// and the follow run on every lease outcome that was sent: held, stale,
+	// and unsettled alike, and no error among them stops the steps after it.
+	// The remote's root decides whether its GC replaces anything: only while
+	// the remote carries this re-root and nothing on top of it. The reading
+	// only classifies the publication, so the follow does not wait on it:
+	// this branch follows the re-root the remote carries whatever became of
+	// the remote's table files or the reading.
 	var remoteGCErr error
 	b.RemoteGC, remoteGCErr = s.collectRemote(ctx, b.Remote, b.Branch, b.ReRooted.Head)
 	if remoteGCErr != nil {
 		remoteGCErr = fmt.Errorf("collect %s: %w", trackingRef, remoteGCErr)
 	}
-	return errors.Join(s.followPublishedReRoot(ctx, b, trackingRef), remoteGCErr)
+	reading, readErr := s.readPublication(ctx, b, trackingRef)
+	b.Publication = publicationOf(b.Lease, reading)
+	return errors.Join(publishErr, remoteGCErr, readErr, s.followCarriedReRoot(ctx, b, trackingRef))
 }
 
-// followPublishedReRoot is publishBound's steps after the remote's GC: fetch,
-// and follow whatever re-root the remote carries, collecting below the cut
-// as every follow does.
-func (s *Store) followPublishedReRoot(ctx context.Context, b *storage.HistoryBound, trackingRef string) error {
-	if err := s.SyncFetch(ctx, b.Remote, false); err != nil {
-		return fmt.Errorf("fetch to learn whether %s carries the re-root: %w", trackingRef, err)
+// remoteReading is what the fetch after a lease push showed of the re-root.
+type remoteReading int
+
+const (
+	// remoteUnread: no fetch or reading completed.
+	remoteUnread remoteReading = iota
+	// remoteCarries: the remote's head is the re-root or a descendant of it.
+	remoteCarries
+	// remoteLacks: the remote's head is neither the re-root nor a descendant of it.
+	remoteLacks
+)
+
+// publicationOf is how far a re-root whose lease push reached the remote got:
+// the reading after it decides, and without one, a held lease is the proof
+// it landed, while a stale or unsettled one leaves it possibly published.
+// [LAW:single-enforcer] the one place a bound's publication is decided.
+func publicationOf(lease storage.LeaseOutcome, reading remoteReading) storage.ReRootPublication {
+	switch {
+	case reading == remoteCarries:
+		return storage.ReRootPublished
+	case reading == remoteLacks:
+		return storage.ReRootNotCarried
+	case lease == storage.LeaseHeld:
+		return storage.ReRootPublished
+	default:
+		return storage.ReRootPossiblyPublished
 	}
+}
+
+// readPublication is publishBound's reading after the remote's GC: it
+// fetches and reads whether the remote carries b's re-root. It comes before
+// the follow, whose GC would collect a re-root the remote does not carry.
+func (s *Store) readPublication(ctx context.Context, b *storage.HistoryBound, trackingRef string) (remoteReading, error) {
+	if err := s.SyncFetch(ctx, b.Remote, false); err != nil {
+		return remoteUnread, fmt.Errorf("fetch to learn whether %s carries the re-root: %w", trackingRef, err)
+	}
+	base, err := mergeBase(ctx, s.db, b.ReRooted.Head, trackingRef)
+	if err != nil {
+		return remoteUnread, fmt.Errorf("read whether %s carries the re-root %s: %w", trackingRef, b.ReRooted.Head, err)
+	}
+	if commit, shared := base.shared(); shared && commit == b.ReRooted.Head {
+		return remoteCarries, nil
+	}
+	return remoteLacks, nil
+}
+
+// followCarriedReRoot follows whatever re-root the remote carries, and
+// reports a branch the follow left unrelated to the remote.
+func (s *Store) followCarriedReRoot(ctx context.Context, b *storage.HistoryBound, trackingRef string) error {
 	followed, err := s.followRemoteReRoot(ctx, b.Remote, b.Branch, storage.SyncEntryBound)
 	b.Collection = followed.Collection
 	// The follow's record has a head exactly when the branch moved.
@@ -208,12 +261,15 @@ func firstParentAncestor(ctx context.Context, ddb *doltdb.DoltDB, c *doltdb.Comm
 }
 
 // publishReRoot force-pushes branch's scratch to the remote's branch, landing
-// only while that branch still names head.
+// only while that branch still names head. The outcome is none only when no
+// attempt reached the remote: the mutation retries its whole body on GC
+// contention, and an attempt that stops short of the remote does not undo an
+// earlier one that reached it.
 func (s *Store) publishReRoot(ctx context.Context, remote, branch, head string) (storage.LeaseOutcome, error) {
 	var outcome storage.LeaseOutcome
 	err := s.runSyncMutation(ctx, func(ctx context.Context) error {
-		var err error
-		outcome, err = s.pushLeasedWithinLock(ctx, remote, reRootScratchPrefix+branch, branch, head)
+		attempt, err := s.pushLeasedWithinLock(ctx, remote, reRootScratchPrefix+branch, branch, head)
+		outcome = cmp.Or(attempt, outcome)
 		return err
 	})
 	return outcome, err
@@ -290,15 +346,15 @@ func (s *Store) HistoryBounds() []storage.HistoryBound {
 
 // historyBoundReport is the bound's part of a push's maintenance account:
 // nothing while the head is under the bound, as an ordinary push says nothing,
-// and once the bound fired, what it published and reclaimed, or where it
-// stopped.
+// and once the bound fired, the re-root it wrote and how far that got toward
+// the remote, what it reclaimed, or where it stopped.
 func historyBoundReport(b storage.HistoryBound) string {
 	var parts []string
 	if b.Fired() {
 		parts = append(parts, fmt.Sprintf("history bound: the remote head reached height %d (bound %d)", b.Height, b.Window.ReRootAt()))
 	}
 	if b.ReRooted.Head != "" {
-		parts = append(parts, fmt.Sprintf("re-rooted at %s, keeping %d commits and dropping %d", b.ReRooted.Cut, b.ReRooted.Kept(), b.ReRooted.Dropped))
+		parts = append(parts, fmt.Sprintf("re-root at %s, keeping %d commits and dropping %d: %s", b.ReRooted.Cut, b.ReRooted.Kept(), b.ReRooted.Dropped, b.Publication))
 	}
 	if b.Lease != "" {
 		parts = append(parts, "lease "+string(b.Lease))

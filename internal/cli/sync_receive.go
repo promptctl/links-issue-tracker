@@ -173,7 +173,8 @@ func receiveMirrorWait() time.Duration { return 2 * mirrorNetworkDeadline() }
 // mirrorNetworkDeadline is the longest one mirror cycle's network work runs:
 // the push under its deadline, then a landed push's history bound under its
 // own. The proof's deadline is not added: the proof runs only after a bound
-// that wrote no re-root, which reached no network. [LAW:one-source-of-truth]
+// that took no re-root to the remote, which reached no network.
+// [LAW:one-source-of-truth]
 func mirrorNetworkDeadline() time.Duration {
 	return store.MirrorPushDeadline + historyBoundDeadline()
 }

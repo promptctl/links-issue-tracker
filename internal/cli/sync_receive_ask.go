@@ -161,8 +161,9 @@ const pushProofDeadline = 10 * time.Second
 // session, since the mirror's clone is private to its cycle and a foreground
 // push holds the store. A superseded push is left out because it did fetch,
 // so its mirror can hold a peer's head that the store never took in, and so
-// is a push its history bound re-rooted after (AfterPush), whose re-root and
-// fetch went through the mirror after the push.
+// is a push whose history bound took its re-root to the remote (any
+// publication but ReRootNotPushed), whose re-root and fetch went through the
+// mirror after the push.
 //
 // Only the remote the automatic receive asks is worth proving: the record
 // holds one remote's advertisement, and a push to another remote would

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/historywindow"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
 )
 
 // historyCanBeReRootedVersion is the schema version that marks a store's
@@ -55,15 +57,15 @@ func compactPush(t *testing.T, ctx context.Context, root, epic, title string, bo
 	if len(bounds) != 1 {
 		t.Fatalf("HistoryBounds() after one push = %+v, want one", bounds)
 	}
-	// The kept push says the bound wrote a re-root after it exactly when the
-	// remote's tracking ref, which the bound's fetch leaves on whatever the
-	// remote carries, no longer names the pushed head.
+	// The kept push carries the bound, and says it published its re-root
+	// exactly when the remote's tracking ref, which the bound's fetch leaves
+	// on whatever the remote carries, no longer names the pushed head.
 	remote, err := commitHashOfRef(ctx, sync.db, "remotes/origin/master")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if moved := remote != pushed.Head; moved != (kept.AfterPush != "") || kept.Head != pushed.Head {
-		t.Fatalf("the kept push = %+v over the pushed head %s, the remote at %s; want AfterPush set exactly when the remote moved off the pushed head, and the pushed head kept", kept, pushed.Head, remote)
+	if moved := remote != pushed.Head; moved != (kept.Bound.Publication == storage.ReRootPublished) || kept.Head != pushed.Head || kept.Bound.Publication != bounds[0].Publication {
+		t.Fatalf("the kept push = %+v over the pushed head %s, the remote at %s; want the bound published exactly when the remote moved off the pushed head, and the pushed head kept", kept, pushed.Head, remote)
 	}
 	return bounds[0]
 }
@@ -114,7 +116,7 @@ func TestAPushPastTheBoundReRootsWithNoCommandRun(t *testing.T) {
 	bound := windowOf(t, seeded+2, 3)
 
 	under := compactPush(t, ctx, alpha, epic, "under", bound)
-	if under.Fired() || under.Height != seeded+1 || under.Err != nil || under.ReRooted.Head != "" || under.Lease != "" || under.Collection.Ran {
+	if under.Fired() || under.Height != seeded+1 || under.Err != nil || under.ReRooted.Head != "" || under.Lease != "" || under.Publication != storage.ReRootNotPushed || under.Collection.Ran {
 		t.Fatalf("a push under the bound = %+v; want height %d, not fired, nothing published", under, seeded+1)
 	}
 	// A fetch records the fork point every checkout that syncs holds, here on
@@ -269,8 +271,14 @@ func TestAStaleLeaseLeavesTheBranchOnItsHistory(t *testing.T) {
 	}
 
 	b := boundAt(t, ctx, alpha, alphaHead, 3)
-	if b.Err != nil || b.Lease != storage.LeaseStale || b.Collection.Ran || b.ReRooted.Head == "" {
-		t.Fatalf("the bound over a remote a peer moved = %+v; want a published re-root refused as stale and nothing collected", b)
+	if b.Err != nil || b.Lease != storage.LeaseStale || b.Publication != storage.ReRootNotCarried || b.Collection.Ran || b.ReRooted.Head == "" {
+		t.Fatalf("the bound over a remote a peer moved = %+v; want a re-root refused as stale, the remote read without it, and nothing collected", b)
+	}
+	if got := b.EventValue()["history_bound.publication"]; got != "not carried" {
+		t.Fatalf("the bound's history_bound.publication = %v; want not carried", got)
+	}
+	if report := historyBoundReport(b); !strings.Contains(report, " commits and dropping ") || !strings.Contains(report, ": not carried") {
+		t.Fatalf("the bound's maintenance account = %q; want the re-root reported not carried", report)
 	}
 	st = openSyncOrFatal(t, ctx, alpha)
 	defer func() { _ = st.Close() }()
@@ -328,8 +336,8 @@ func TestAStaleLeaseOverTheLandedReRootStillFollowsIt(t *testing.T) {
 	if b.Lease != storage.LeaseStale {
 		t.Fatalf("the retried push = %+v; want its lease stale over bravo's push", b)
 	}
-	if b.Err != nil || !b.Collection.Ran {
-		t.Fatalf("the bound after a stale lease over its own landed re-root = %+v; want alpha to follow and collect", b)
+	if b.Err != nil || b.Publication != storage.ReRootPublished || !b.Collection.Ran {
+		t.Fatalf("the bound after a stale lease over its own landed re-root = %+v; want it read as published, and alpha to follow and collect", b)
 	}
 	st = openSyncOrFatal(t, ctx, alpha)
 	defer func() { _ = st.Close() }()
@@ -385,7 +393,7 @@ func TestAHeldLeaseTheBranchCannotFollowIsTheBoundsError(t *testing.T) {
 	})
 
 	b := boundAt(t, ctx, alpha, head, keep)
-	if b.Lease != storage.LeaseHeld || b.Collection.Ran {
+	if b.Lease != storage.LeaseHeld || b.Publication != storage.ReRootPublished || b.Collection.Ran {
 		t.Fatalf("the bound = %+v; want its re-root to land and nothing collected", b)
 	}
 	if b.Err == nil || !strings.Contains(b.Err.Error(), "carries a re-root the branch did not follow") {
@@ -399,9 +407,11 @@ func TestAHeldLeaseTheBranchCannotFollowIsTheBoundsError(t *testing.T) {
 }
 
 // TestAReRootPushWithNoVerdictLeavesNoScratch has the bound's lease push
-// fail before it reaches the remote: the remote's path is a file, not a git
-// repository. The push reaches no verdict, and the scratch the re-root was written
-// on is gone anyway, so nothing keeps the history below the cut reachable.
+// reach no verdict: the remote's path is a file, not a git repository. The
+// push ran, so the fetch after it is what could settle whether an attempt
+// landed; it fails too, and the re-root stays possibly published. The scratch
+// the re-root was written on is gone anyway, so nothing keeps the history
+// below the cut reachable.
 func TestAReRootPushWithNoVerdictLeavesNoScratch(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -418,12 +428,108 @@ func TestAReRootPushWithNoVerdictLeavesNoScratch(t *testing.T) {
 	}
 
 	b := boundAt(t, ctx, alpha, head, 3)
-	if b.Err == nil || b.Lease != "" || b.ReRooted.Head == "" {
-		t.Fatalf("the bound over a remote that is a file = %+v; want a re-root written, no verdict and an error", b)
+	if b.Err == nil || b.Lease != storage.LeaseUnsettled || b.Publication != storage.ReRootPossiblyPublished || b.ReRooted.Head == "" {
+		t.Fatalf("the bound over a remote that is a file = %+v; want a re-root written, its push unsettled, possibly published, and an error", b)
+	}
+	if !strings.Contains(b.Err.Error(), "fetch to learn whether") {
+		t.Fatalf("the bound's error = %v; want the fetch that would settle the unsettled push to have run", b.Err)
 	}
 	st := openSyncOrFatal(t, ctx, alpha)
 	defer func() { _ = st.Close() }()
 	if left := branchesUnder(t, ctx, st, reRootScratchPrefix); len(left) != 0 {
 		t.Fatalf("the re-root's scratch branch was left behind: %v", left)
+	}
+}
+
+// TestAReRootRefusedBeforeTheRemoteIsNotPushed has the bound's lease push
+// refused before it is sent: the head it would replace is at a schema above
+// this binary's. The re-root is written and never leaves the checkout, so the
+// bound says not pushed and reads nothing: alpha's tracking ref still lags
+// where its last fetch left it.
+func TestAReRootRefusedBeforeTheRemoteIsNotPushed(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	remoteURL, _ := gitRemote(t)
+	alpha, bravo := migratedDoltDir(t), migratedDoltDir(t)
+	seedReconcileRemote(t, ctx, alpha, remoteURL)
+	adoptRemote(t, ctx, bravo, remoteURL)
+
+	// bravo, as a newer binary would, advances the remote's schema.
+	registryMax, err := migrations.MaxVersion()
+	if err != nil {
+		t.Fatal(err)
+	}
+	newer, err := Open(ctx, bravo, "ws")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newer.db.ExecContext(ctx, `INSERT INTO goose_db_version (version_id, is_applied) VALUES (?, 1)`, registryMax+1); err != nil {
+		t.Fatal(err)
+	}
+	if err := newer.commitWorkingSet(ctx, "a newer binary's schema"); err != nil {
+		t.Fatal(err)
+	}
+	if err := newer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	pusher := openSyncOrFatal(t, ctx, bravo)
+	if _, err := pusher.SyncPush(ctx, "origin", "master", false, false); err != nil {
+		t.Fatalf("SyncPush(bravo) error = %v", err)
+	}
+	if err := pusher.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ahead := headAt(t, ctx, bravo)
+
+	// alpha reads the remote's head through a second name for it, so the
+	// head is in alpha's store while remotes/origin/master still lags.
+	st := openSyncOrFatal(t, ctx, alpha)
+	if err := st.SyncAddRemote(ctx, "mirror", remoteURL); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SyncFetch(ctx, "mirror", false); err != nil {
+		t.Fatal(err)
+	}
+	lagging, err := commitHashOfRef(ctx, st.db, "remotes/origin/master")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	b := boundAt(t, ctx, alpha, ahead, 3)
+	if !errors.As(b.Err, new(*RemoteSchemaAheadError)) || b.ReRooted.Head == "" || b.Lease != "" || b.Publication != storage.ReRootNotPushed || b.RemoteGC.Outcome != "" {
+		t.Fatalf("the bound over a schema-ahead head = %+v; want a re-root written, refused before the remote, not pushed, and no remote GC", b)
+	}
+	st = openSyncOrFatal(t, ctx, alpha)
+	defer func() { _ = st.Close() }()
+	if got, err := commitHashOfRef(ctx, st.db, "remotes/origin/master"); err != nil || got != lagging {
+		t.Fatalf("remotes/origin/master after the refusal = %s (%v); want it left at %s, no fetch run", got, err, lagging)
+	}
+}
+
+// TestAReRootsPublicationIsTheReadingsElseTheLeases walks every lease
+// outcome that reached the remote against every reading of it: a reading
+// decides, and without one only a held lease says the remote carries it.
+func TestAReRootsPublicationIsTheReadingsElseTheLeases(t *testing.T) {
+	for _, tc := range []struct {
+		lease   storage.LeaseOutcome
+		reading remoteReading
+		want    storage.ReRootPublication
+	}{
+		{storage.LeaseHeld, remoteCarries, storage.ReRootPublished},
+		{storage.LeaseStale, remoteCarries, storage.ReRootPublished},
+		{storage.LeaseUnsettled, remoteCarries, storage.ReRootPublished},
+		{storage.LeaseHeld, remoteLacks, storage.ReRootNotCarried},
+		{storage.LeaseStale, remoteLacks, storage.ReRootNotCarried},
+		{storage.LeaseUnsettled, remoteLacks, storage.ReRootNotCarried},
+		{storage.LeaseHeld, remoteUnread, storage.ReRootPublished},
+		{storage.LeaseStale, remoteUnread, storage.ReRootPossiblyPublished},
+		{storage.LeaseUnsettled, remoteUnread, storage.ReRootPossiblyPublished},
+	} {
+		if got := publicationOf(tc.lease, tc.reading); got != tc.want {
+			t.Errorf("publicationOf(%s, %d) = %s; want %s", tc.lease, tc.reading, got, tc.want)
+		}
 	}
 }
