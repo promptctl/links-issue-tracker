@@ -212,7 +212,7 @@ Every compile recipe sources `cgo-env.sh` first (`Justfile`).
 
 ### `ci.yml` — merge gate
 
-Push to `master` and PRs targeting `master`; concurrency-cancelled per ref; `ubuntu-latest` only, no matrix. Six parallel jobs, then two that run only on PRs (`.github/workflows/ci.yml`). Master's ruleset requires one check, `gate`; CodeQL default setup, configured in repo settings, also runs on PRs and is required by nothing:
+Push to `master` and PRs targeting `master`; concurrency-cancelled per ref; `ubuntu-latest` only, no matrix. Seven parallel jobs, the seventh (`smoke`) on PRs only, then `gate`, also on PRs only (`.github/workflows/ci.yml`). Master's ruleset requires one check, `gate`; CodeQL default setup, configured in repo settings, also runs on PRs and is required by nothing:
 
 1. **build-and-test** — installs Dolt and Claude Code, builds, then runs `go test -short -json ./... | go run ./tools/testbudget` and the same for the vendored driver module (`go -C internal/vendor/dolthub-driver test …`), under `shell: bash` (pipefail load-bearing); no `-timeout` override by policy.
 2. **race** — installs Dolt and Claude Code, then `go test -short -race -timeout 30m ./cmd/... ./internal/...` (tools excluded deliberately; no budget pipe). The timeout is sized above internal/cli's testbudget ceiling as the detector inflates it, so slowness fails build-and-test's budget check, not this lane's timeout.
@@ -221,7 +221,9 @@ Push to `master` and PRs targeting `master`; concurrency-cancelled per ref; `ubu
 5. **docs** — `mkdocs build --strict` (mkdocs 1.6.1 / material 9.7.6), so a missing docs page or broken nav link fails the merge gate. (`mkdocs.yml` defines the `links` material-theme site with a seven-entry nav.)
 6. **candybar** — Go plus Node 22 (`actions/setup-node`), then `go run ./tools/candybar-check`, so a lit cc-candybar plugin that does not render each case's cells fails the merge gate.
 7. **smoke** — PRs only; calls `release-smoke.yml` with `packages: read`.
-8. **gate** — PRs only, `if: always()`, needing the other seven. Prints each needed job's result, then fails unless its `needs` names every other job in `ci.yml`, unless every other workflow's triggers are among `schedule`, `workflow_dispatch`, `workflow_call` and a `push` filtered to exactly `branches: [master]`, and unless every needed job's result is `success`.
+8. **gate** — PRs only, `if: always()`, needing the other seven, no checkout. Prints each needed job's result and fails unless every one is `success`.
+
+`tools/cigate`'s tests, run by build-and-test, fail when `gate`'s `needs` differs from the other jobs in `ci.yml` or its `if` is not exactly `always() && github.event_name == 'pull_request'`, when another workflow has a trigger outside `schedule`, `workflow_dispatch`, `workflow_call` and a `push` filtered to exactly `branches: [master]` (or no trigger at all), and when any job other than `ci.yml`'s `gate` has the check name `gate` (`tools/cigate/cigate_test.go`).
 
 The composite action `.github/actions/install-claude` installs Node 22 and the pinned Claude Code CLI 2.1.292, with its auto-updater disabled for the rest of the job — the test-only oracle for `claude plugin validate --json`. Every job that runs `go test` (build-and-test, race, nightly `full-suite` and `windows`) runs it, and under `GITHUB_ACTIONS=true` a test whose oracle is missing fails instead of skipping (`internal/testoracle`).
 

@@ -15,14 +15,18 @@ concurrency:
 
 # What gates merge: master's ruleset requires one check, `gate` (the last job
 # here), and `gate` passes only when every other job in this file succeeded on
-# the PR. It also refuses any other workflow in .github/workflows that could
-# run on a PR, so this file is the one list of what gates merge
-# [LAW:one-source-of-truth]. CodeQL default setup, configured in repo settings
-# rather than here, also runs on PRs; its checks are advisory and gate nothing.
+# the PR. tools/cigate's tests, run by build-and-test, fail when gate's needs
+# miss a job here, when any other workflow in .github/workflows could run on a
+# PR, or when another job's check is also named `gate` — so this file is the
+# one list of what gates merge [LAW:one-source-of-truth]. CodeQL default setup,
+# configured in repo settings rather than here, also runs on PRs; its checks
+# are advisory and gate nothing.
 #
-# Every job here must stay fast — <5 min total is the target, and two jobs are
-# over it: build-and-test at 4m52s (measured 2026-08-26), and
-# race at ~11m (measured 2026-09-28), which sets the gate's critical path. The
+# Every job here must stay fast — <5 min total is the target, and three jobs
+# can be over it: build-and-test at 4m52s (measured 2026-08-26); race at ~11m
+# (measured 2026-09-28), which sets the gate's critical path; and smoke, but
+# only on a PR that edits build/, which finds no published toolchain image and
+# rebuilds it from source (~1hr, release-smoke.yml). The
 # race lane's overage is instrumentation, not slow tests — the detector
 # multiplies whatever the tests already cost — so it has no fix of its own: its
 # floor comes down only when internal/cli's un-instrumented time does, and it
@@ -230,8 +234,7 @@ jobs:
 
   # The release path's per-PR rehearsal; release-smoke.yml says what it proves.
   # PRs only: on master, release-validate.yml builds all five targets of the
-  # same recipe and is the one writer of the caches and the toolchain image
-  # this job reads.
+  # same recipe and publishes the toolchain image this job pulls.
   smoke:
     if: github.event_name == 'pull_request'
     permissions:
@@ -242,51 +245,19 @@ jobs:
   # The one check master's ruleset requires. It runs only on PRs, because
   # merges only happen through PRs, and there every job it needs runs.
   # `always()` is load-bearing: without it a failed need skips this job, and
-  # GitHub counts a skipped required check as passing.
+  # GitHub counts a skipped required check as passing. tools/cigate's tests
+  # hold needs to every other job here.
   gate:
     if: always() && github.event_name == 'pull_request'
     needs: [build-and-test, race, verify, lint, candybar, docs, smoke]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      # Three refusals, each naming what it refused. Every list here names
-      # what is allowed, never what is forbidden, so a value nobody thought of
-      # fails rather than passes [LAW:no-silent-failure].
-      - name: Every job this file defines passed
+      - name: Every job gate needs passed
         shell: bash
         env:
           NEEDS: ${{ toJSON(needs) }}
         run: |
           jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<<"$NEEDS"
-
-          if ! diff <(yq '.jobs | keys | .[] | select(. != "gate")' .github/workflows/ci.yml | sort) \
-                    <(jq -r 'keys[]' <<<"$NEEDS" | sort); then
-            echo "::error file=.github/workflows/ci.yml::gate's needs must name every other job in this file (< only in the file, > only in needs)"
-            exit 1
-          fi
-
-          shopt -s nullglob
-          for f in .github/workflows/*.yml .github/workflows/*.yaml; do
-            [ "$f" = .github/workflows/ci.yml ] && continue
-            triggers=$(yq '.on | ((select(tag == "!!map") | keys) // .) | [] + . | .[]' "$f")
-            for t in $triggers; do
-              case "$t" in
-                schedule|workflow_dispatch|workflow_call) ;;
-                push)
-                  if [ "$(yq -o=json -I=0 '.on.push' "$f")" != '{"branches":["master"]}' ]; then
-                    echo "::error file=$f::push must be filtered to exactly branches: [master]; a wider push runs on PR branches outside gate"
-                    exit 1
-                  fi
-                  ;;
-                *)
-                  echo "::error file=$f::trigger '$t' can run on a PR outside gate; make this a job of ci.yml so gate needs it"
-                  exit 1
-                  ;;
-              esac
-            done
-          done
-
           if ! jq -e 'all(.[]; .result == "success")' <<<"$NEEDS" >/dev/null; then
             echo "::error::a job gate needs did not succeed; the results are listed above"
             exit 1

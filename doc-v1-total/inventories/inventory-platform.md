@@ -866,7 +866,7 @@ Justfile or any workflow in `.github/workflows/`.
 - Master's ruleset requires one check from this workflow, `gate`. CodeQL default
   setup (languages `actions`, `go`, `python`), configured in repo settings and in no
   workflow file, also runs on PRs; none of its checks is required.
-- Six jobs in parallel, then `smoke` and `gate`:
+- Seven jobs in parallel (`smoke` on PRs only), then `gate`:
   1. **`build-and-test`**: checkout@v4 → setup-go@v5 (`go-version-file: go.mod`) →
      `./.github/actions/install-claude` (§11.8) →
      `go build ./cmd/lit` → `go test -short -json ./... | go run ./tools/testbudget` →
@@ -888,18 +888,20 @@ Justfile or any workflow in `.github/workflows/`.
   7. **`smoke`**: `if: github.event_name == 'pull_request'`, `permissions: contents: read,
      packages: read`, `uses: ./.github/workflows/release-smoke.yml` (§11.4).
   8. **`gate`**: `if: always() && github.event_name == 'pull_request'`,
-     `needs: [build-and-test, race, verify, lint, candybar, docs, smoke]`. Steps:
-     checkout@v4 → one bash step with `NEEDS: ${{ toJSON(needs) }}` that prints
-     `<job>: <result>` per need, then exits 1 on the first of: the job keys of
-     `ci.yml` other than `gate` (read with `yq`) differ from the keys of `NEEDS`
-     (`::error file=.github/workflows/ci.yml::gate's needs must name every other job in this file (< only in the file, > only in needs)`);
-     another `.github/workflows/*.yml` or `*.yaml` has a `push` trigger whose value is
-     not exactly `{"branches":["master"]}`
-     (`::error file=<file>::push must be filtered to exactly branches: [master]; a wider push runs on PR branches outside gate`)
-     or a trigger other than `schedule`, `workflow_dispatch`, `workflow_call` and `push`
-     (`::error file=<file>::trigger '<trigger>' can run on a PR outside gate; make this a job of ci.yml so gate needs it`);
-     a need whose `result` is not `success`
+     `needs: [build-and-test, race, verify, lint, candybar, docs, smoke]`, no checkout.
+     One bash step with `NEEDS: ${{ toJSON(needs) }}` prints `<job>: <result>` per need,
+     then exits 1 unless every `result` is `success`
      (`::error::a job gate needs did not succeed; the results are listed above`).
+- `tools/cigate/cigate_test.go` (package `cigate`, test files only; run by
+  `build-and-test`'s `go test ./...`) parses every `.github/workflows/*.yml` and
+  `*.yaml` with `yaml.v3`:
+  - `TestGateNeedsEveryOtherCIJob`: `gate.needs`, sorted, equals `ci.yml`'s other job
+    keys, sorted; `gate.if` equals `always() && github.event_name == 'pull_request'`.
+  - `TestOnlyCIRunsOnPullRequests`: every workflow other than `ci.yml` has at least one
+    trigger, and each is `schedule`, `workflow_dispatch`, `workflow_call`, or `push` whose
+    value decodes to exactly `{branches: [master]}`.
+  - `TestGateIsTheOnlyCheckNamedGate`: across all workflows, the only job whose `name`
+    (or, without one, key) is `gate` is `ci.yml`'s `gate`.
 
 ### 11.2 `.github/workflows/nightly.yml` — "Nightly full suite"
 
