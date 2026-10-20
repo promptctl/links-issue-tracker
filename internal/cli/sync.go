@@ -248,8 +248,8 @@ func fetchAndFollow(ctx context.Context, session syncSession, ws workspace.Info,
 	}
 	syncRemote, branch, err := freshnessSyncTarget(ctx, ws, gitRemotes)
 	// Only a branch nothing here names skips the follow; a record that would
-	// name it but cannot be read is the error it wraps, and fails the fetch.
-	if err == (syncBranchNotKnownError{remote: syncRemote}) || (err == nil && syncRemote == "") {
+	// name it but cannot be read is not that error, and fails the fetch.
+	if notKnown := (syncBranchNotKnownError{}); errors.As(err, &notKnown) || (err == nil && syncRemote == "") {
 		return nil
 	}
 	if err != nil {

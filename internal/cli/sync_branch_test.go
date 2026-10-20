@@ -158,8 +158,12 @@ func TestKnownSyncBranchPrefersGitsRefOverAnUnreadableRecord(t *testing.T) {
 		t.Fatalf("knownSyncBranch() = %q, %v; want trunk", got, err)
 	}
 	runGit(t, ws.RootDir, "remote", "set-head", "origin", "--delete")
-	if _, err := knownSyncBranch(context.Background(), ws, "origin"); err == nil || !strings.Contains(err.Error(), "unreadable") {
+	_, err = knownSyncBranch(context.Background(), ws, "origin")
+	if err == nil || !strings.Contains(err.Error(), "unreadable") {
 		t.Fatalf("knownSyncBranch() error = %v, want the unreadable record named", err)
+	}
+	if errors.As(err, new(syncBranchNotKnownError)) {
+		t.Fatalf("knownSyncBranch() error = %v is a syncBranchNotKnownError; an unreadable record is a fault, not the absence a caller skips on", err)
 	}
 }
 
