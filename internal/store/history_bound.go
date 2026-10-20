@@ -226,13 +226,13 @@ func firstParentAncestor(ctx context.Context, ddb *doltdb.DoltDB, c *doltdb.Comm
 // publishReRoot force-pushes branch's scratch to the remote's branch, landing
 // only while that branch still names head.
 func (s *Store) publishReRoot(ctx context.Context, remote, branch, head string) (storage.LeaseOutcome, error) {
-	var leased leasedPush
+	var outcome storage.LeaseOutcome
 	err := s.runSyncMutation(ctx, func(ctx context.Context) error {
 		var err error
-		leased, err = s.pushLeasedWithinLock(ctx, remote, reRootScratchPrefix+branch, branch, head)
+		outcome, err = s.pushLeasedWithinLock(ctx, remote, reRootScratchPrefix+branch, branch, head)
 		return err
 	})
-	return leased.Outcome, err
+	return outcome, err
 }
 
 // collectBelowTheCut reclaims the history below the cut once the sync branch

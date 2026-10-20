@@ -45,9 +45,9 @@ func TestLeasedPushLandsOnlyOverTheHeadItNames(t *testing.T) {
 
 	st := openSyncOrFatal(t, ctx, alpha)
 	defer func() { _ = st.Close() }()
-	push := func(expected string) leasedPush {
+	push := func(expected string) storage.LeaseOutcome {
 		t.Helper()
-		var pushed leasedPush
+		var pushed storage.LeaseOutcome
 		err := st.runSyncMutation(ctx, func(ctx context.Context) error {
 			var err error
 			pushed, err = st.pushLeasedWithinLock(ctx, "origin", "master", "master", expected)
@@ -70,26 +70,22 @@ func TestLeasedPushLandsOnlyOverTheHeadItNames(t *testing.T) {
 		return head
 	}
 
-	stale := push(seen)
-	want := leasedPush{Remote: "origin", Branch: "master", Expected: seen, Pushed: rewritten.Head, Outcome: storage.LeaseStale}
-	if stale != want {
-		t.Fatalf("lease on the head alpha last saw = %+v, want %+v", stale, want)
+	if stale := push(seen); stale != storage.LeaseStale {
+		t.Fatalf("lease on the head alpha last saw = %q, want %q", stale, storage.LeaseStale)
 	}
 	if got := remoteHead(); got != bravoHead {
 		t.Fatalf("after a stale lease the remote is at %s, want bravo's push %s", got, bravoHead)
 	}
 
-	held := push(bravoHead)
-	want = leasedPush{Remote: "origin", Branch: "master", Expected: bravoHead, Pushed: rewritten.Head, Outcome: storage.LeaseHeld}
-	if held != want {
-		t.Fatalf("lease on the remote's head = %+v, want %+v", held, want)
+	if held := push(bravoHead); held != storage.LeaseHeld {
+		t.Fatalf("lease on the remote's head = %q, want %q", held, storage.LeaseHeld)
 	}
 	if got := remoteHead(); got != rewritten.Head {
 		t.Fatalf("after a held lease the remote is at %s, want alpha's rewritten head %s", got, rewritten.Head)
 	}
 
-	if again := push(bravoHead); again.Outcome != storage.LeaseHeld {
-		t.Fatalf("the same leased push again = %+v, want it held over its own landed head", again)
+	if again := push(bravoHead); again != storage.LeaseHeld {
+		t.Fatalf("the same leased push again = %q, want it held over its own landed head", again)
 	}
 
 	// A remote that cannot be opened gives no verdict on the lease, so it is
@@ -109,7 +105,7 @@ func TestLeasedPushLandsOnlyOverTheHeadItNames(t *testing.T) {
 	err = st.runSyncMutation(ctx, func(ctx context.Context) error {
 		unreached, err := st.pushLeasedWithinLock(ctx, "gone", "master", "master", bravoHead)
 		if !errors.As(err, new(pushRefusedError)) && !errors.As(err, new(RemoteUnreachableError)) {
-			t.Errorf("leased push to a remote that cannot be opened = %+v, %v; want the push failure classifyPushFailure reports", unreached, err)
+			t.Errorf("leased push to a remote that cannot be opened = %q, %v; want the push failure classifyPushFailure reports", unreached, err)
 		}
 		return nil
 	})
