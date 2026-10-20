@@ -64,8 +64,9 @@ func TestFactsAddedThroughTheContextLandOnTheFinishedEvent(t *testing.T) {
 	}
 }
 
-// A fact that can occur more than once keeps every occurrence, in order, and
-// a list nothing was appended to reads as empty rather than absent.
+// What can occur more than once keeps every occurrence, in order, and a key
+// nothing was appended to reads as an empty list rather than absent, on the
+// event and on its line.
 func TestAppendKeepsEveryValueInOrder(t *testing.T) {
 	recorder := Begin(Event{})
 	ctx := With(context.Background(), recorder)
@@ -74,12 +75,54 @@ func TestAppendKeepsEveryValueInOrder(t *testing.T) {
 	Append(ctx, "reroot.follows", "push")
 	Append(ctx, "reroot.follows", "receive", "pull")
 	ev := recorder.Finish(End{})
-	if got, ok := empty.Facts["reroot.follows"].([]any); !ok || len(got) != 0 {
-		t.Errorf("after an empty Append, Facts[reroot.follows] = %#v; want an empty list", empty.Facts["reroot.follows"])
+	if got, ok := empty.Occurrences["reroot.follows"]; !ok || got == nil || len(got) != 0 {
+		t.Errorf("after an empty Append, Occurrences[reroot.follows] = %#v; want an empty list", got)
 	}
-	got, _ := ev.Facts["reroot.follows"].([]any)
+	if line, err := Line(empty); err != nil || !strings.Contains(string(line), `"occurrences":{"reroot.follows":[]}`) {
+		t.Errorf("the empty Append's line = %s, %v; want occurrences carrying reroot.follows as []", line, err)
+	}
+	got := ev.Occurrences["reroot.follows"]
 	if len(got) != 3 || got[0] != "push" || got[1] != "receive" || got[2] != "pull" {
-		t.Errorf("Facts[reroot.follows] = %#v; want [push receive pull]", ev.Facts["reroot.follows"])
+		t.Errorf("Occurrences[reroot.follows] = %#v; want [push receive pull]", got)
+	}
+}
+
+// A command that appended nothing still writes its occurrences, as {}.
+func TestAnEventWithNoOccurrencesWritesAnEmptyObject(t *testing.T) {
+	line, err := Line(Begin(Event{}).Finish(End{}))
+	if err != nil || !strings.Contains(string(line), `"occurrences":{}`) {
+		t.Fatalf("Line() = %s, %v; want \"occurrences\":{}", line, err)
+	}
+}
+
+// A key Set replaces and a key Append accumulates are separate, so the same
+// name written both ways keeps both values, whichever writer of facts it is
+// (Set, Record, or the End Finish merges) and whichever came first.
+func TestASetAndAnAppendOfOneKeyBothSurvive(t *testing.T) {
+	const key = "push.outcomes"
+	set := func(ctx context.Context) { Set(ctx, key, "decided") }
+	record := func(ctx context.Context) { Record(ctx, map[string]any{key: "decided"}, nil) }
+	none := func(context.Context) {}
+	for _, tc := range []struct {
+		name          string
+		before, after func(context.Context)
+		end           End
+	}{
+		{"Set, then Append", set, none, End{}},
+		{"Append, then Set", none, set, End{}},
+		{"Record, then Append", record, none, End{}},
+		{"Append, then Record", none, record, End{}},
+		{"Append, then the End's facts", none, none, End{Facts: map[string]any{key: "decided"}}},
+	} {
+		recorder := Begin(Event{})
+		ctx := With(context.Background(), recorder)
+		tc.before(ctx)
+		Append(ctx, key, "landed")
+		tc.after(ctx)
+		ev := recorder.Finish(tc.end)
+		if ev.Facts[key] != "decided" || len(ev.Occurrences[key]) != 1 || ev.Occurrences[key][0] != "landed" {
+			t.Errorf("%s: Facts = %#v, Occurrences = %#v; want the set value and the appended one both kept", tc.name, ev.Facts, ev.Occurrences)
+		}
 	}
 }
 

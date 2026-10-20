@@ -38,17 +38,22 @@ func TestEveryReachKindHasAnEventName(t *testing.T) {
 // writtenFacts is the event's facts as the events file holds them.
 func writtenFacts(t *testing.T, ev telemetry.Event) map[string]any {
 	t.Helper()
+	return writtenEvent(t, ev).Facts
+}
+
+// writtenEvent is ev as its line reads back: what a reader of the events file
+// gets, nulls and empty lists as written.
+func writtenEvent(t *testing.T, ev telemetry.Event) telemetry.Event {
+	t.Helper()
 	line, err := telemetry.Line(ev)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var written struct {
-		Facts map[string]any `json:"facts"`
-	}
+	var written telemetry.Event
 	if err := json.Unmarshal(line, &written); err != nil {
 		t.Fatal(err)
 	}
-	return written.Facts
+	return written
 }
 
 func decodeJSON(t *testing.T, raw string) map[string]any {

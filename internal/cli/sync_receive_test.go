@@ -27,9 +27,9 @@ func TestASkippedReceiveRecordsNoOutcomes(t *testing.T) {
 	if err := closeLive(); err != nil {
 		t.Fatal(err)
 	}
-	facts := writtenFacts(t, recorder.Finish(invocationEnd(time.Now(), nil, nil)))
-	if outcomes, present := facts["receive.outcomes"].([]any); !present || len(outcomes) != 0 {
-		t.Fatalf("receive.outcomes = %#v; want an empty list", facts["receive.outcomes"])
+	written := writtenEvent(t, recorder.Finish(invocationEnd(time.Now(), nil, nil)))
+	if outcomes, present := written.Occurrences["receive.outcomes"]; !present || outcomes == nil || len(outcomes) != 0 {
+		t.Fatalf("receive.outcomes = %#v; want an empty list", outcomes)
 	}
 }
 

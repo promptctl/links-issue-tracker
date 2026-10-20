@@ -158,17 +158,17 @@ func driveTheBound(t *testing.T, rounds int) {
 func (c *boundCheckout) mirror(t *testing.T, remote string) (decision string, reRooted bool) {
 	t.Helper()
 	runCLIInDir(t, c.dir, "sync", backgroundMirrorSubcommand, "--parent-pid", "0")
-	facts := lastEvent(t).Facts
-	outcomes, _ := facts["push.outcomes"].([]any)
+	ev := lastEvent(t)
+	outcomes := ev.Occurrences["push.outcomes"]
 	if len(outcomes) != 1 {
-		t.Fatalf("%s's mirror push.outcomes = %v; want the one attempt", c.name, facts["push.outcomes"])
+		t.Fatalf("%s's mirror push.outcomes = %v; want the one attempt", c.name, outcomes)
 	}
 	outcome, _ := outcomes[0].(map[string]any)
 	decision = stringFact(t, outcome, "push.decision")
 	if decision != pushDecisionPushed {
 		return decision, false
 	}
-	bound := boundRecordOf(t, facts)
+	bound := boundRecordOf(t, ev)
 	if bound["history_bound.error"] != nil {
 		t.Fatalf("%s's mirror bound = %v; want no error", c.name, bound)
 	}
@@ -190,7 +190,7 @@ func (c *boundCheckout) mirror(t *testing.T, remote string) (decision string, re
 func (c *boundCheckout) receive(t *testing.T) {
 	t.Helper()
 	runCLIInDir(t, c.dir, "sync", backgroundReceiveSubcommand, "--parent-pid", "0")
-	follows, _ := lastEvent(t).Facts["reroot.follows"].([]any)
+	follows := lastEvent(t).Occurrences["reroot.follows"]
 	for _, entry := range follows {
 		follow, _ := entry.(map[string]any)
 		if follow["reroot.follow"] != "receive" {

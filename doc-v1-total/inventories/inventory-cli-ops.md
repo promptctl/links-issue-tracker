@@ -183,7 +183,7 @@ Every visible row is wrapped in `withSyncStore` (`sync.go`) which opens one sync
 
 ### 2.1 Session opening
 
-`openSyncSession` (`sync.go`): `engine.Open(ctx, engine.Sync, DatabasePath, WorkspaceID)`, then `storage.Sync.Of(st)`. If the engine cannot sync, the store is closed and the joined error is returned — the whole family is refused at this point, not per-verb (`sync.go`). The close it returns first appends, through `reportEventValues` (`telemetry.Append` of each item's `EventValue()`; an empty list when none), to the command's `reroot.follows` list every re-root the session's engine followed (`storage.FollowedReRoot`), to `fork_point.records` what each of its fetches did to each fork point (`storage.ForkPointRecord`), to `reconcile.bases` the base each of its reconcile plans decided on (`storage.ReconcileBase`), and to `history_bound.records` what each of its `SyncKeepHistoryBound` calls did to keep the history bound (`storage.HistoryBound`), then closes the store; `openSyncSessionAt` is the one opener, so the clone sessions of the receive and the mirror record theirs too.
+`openSyncSession` (`sync.go`): `engine.Open(ctx, engine.Sync, DatabasePath, WorkspaceID)`, then `storage.Sync.Of(st)`. If the engine cannot sync, the store is closed and the joined error is returned — the whole family is refused at this point, not per-verb (`sync.go`). The close it returns first appends, through `reportEventValues` (`telemetry.Append` of each item's `EventValue()`; an empty list when none), under the event's `occurrences`: to `reroot.follows` every re-root the session's engine followed (`storage.FollowedReRoot`), to `fork_point.records` what each of its fetches did to each fork point (`storage.ForkPointRecord`), to `reconcile.bases` the base each of its reconcile plans decided on (`storage.ReconcileBase`), to `stranded_writes.commits` every commit its engine landed over writes a failed commit left in the working set (`storage.StrandedWritesCommit`), and to `history_bound.records` what each of its `SyncKeepHistoryBound` calls did to keep the history bound (`storage.HistoryBound`), then closes the store; `openSyncSessionAt` is the one opener, so the clone sessions of the receive and the mirror record theirs too.
 
 ### 2.2 `lit sync status`
 
@@ -515,7 +515,7 @@ Flag parse output is `io.Discard` (`sync_bg.go`).
   4. `outcome.pushErr != nil` → `pushFailureDecision(outcome.pushErr)` (`diverged` when it holds `storage.ErrPushDiverged`, otherwise `error`) with its text plus remote/branch.
   5. `outcome.skip != syncTargetReady` → decision = `string(outcome.skip)`, remote only.
   6. default → `pushed` with remote/branch.
-- `completePushAttempt` — `sync_push_outcome.go`: derives the record, appends it to the event's `push.outcomes` list as `{push.decision, push.reason, push.remote, push.branch}`, writes it, and feeds `observePushOutcomeForOwner`.
+- `completePushAttempt` — `sync_push_outcome.go`: derives the record, appends it to the event's `push.outcomes` occurrences as `{push.decision, push.reason, push.remote, push.branch}`, writes it, and feeds `observePushOutcomeForOwner`.
 - `recordPushOutcome` — `sync_push_outcome.go`: atomic temp-and-rename write of the JSON plus a newline; failure → stderr `lit: push-outcome marker not written: <err>`, never returned.
 - `lastPushOutcome` — `sync_push_outcome.go`: missing marker → `ok=false` silently; other stat/read failure → stderr `lit: push-outcome marker unreadable: <err>`; bad JSON → stderr `lit: push-outcome marker corrupt: <err>`; returns record + age from mtime.
 

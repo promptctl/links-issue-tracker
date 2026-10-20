@@ -69,9 +69,9 @@ func TestEverySettlingEntryPointMergesAForkBelowTheCut(t *testing.T) {
 				assertForkPointRecorded(t, adopted)
 			}
 			ev := lastEvent(t)
-			bases, _ := ev.Facts["reconcile.bases"].([]any)
+			bases := ev.Occurrences["reconcile.bases"]
 			if len(bases) != 1 {
-				t.Fatalf("event %q reconcile.bases = %v; want the one reconcile's base", ev.Event, ev.Facts["reconcile.bases"])
+				t.Fatalf("event %q reconcile.bases = %v; want the one reconcile's base", ev.Event, ev.Occurrences["reconcile.bases"])
 			}
 			base, _ := bases[0].(map[string]any)
 			if base["reconcile.base"] != "fork_point" || base["reconcile.base_commit"] != adopted || base["reconcile.fork_point"] != adopted {
@@ -100,7 +100,7 @@ func TestAGitRemoteWithANewURLKeepsItsForkPoint(t *testing.T) {
 	}
 	runGit(t, r.bravo, "remote", "set-url", "origin", link)
 	runCLIInDir(t, r.bravo, "sync", "pull")
-	bases, _ := lastEvent(t).Facts["reconcile.bases"].([]any)
+	bases := lastEvent(t).Occurrences["reconcile.bases"]
 	if len(bases) != 1 {
 		t.Fatalf("reconcile.bases = %v; want the one reconcile's base", bases)
 	}
@@ -115,9 +115,9 @@ func TestAGitRemoteWithANewURLKeepsItsForkPoint(t *testing.T) {
 func assertForkPointRecorded(t *testing.T, adopted string) {
 	t.Helper()
 	ev := lastEvent(t)
-	records, _ := ev.Facts["fork_point.records"].([]any)
+	records := ev.Occurrences["fork_point.records"]
 	if len(records) == 0 {
-		t.Fatalf("event %q fork_point.records = %v; want the fetch's record", ev.Event, ev.Facts["fork_point.records"])
+		t.Fatalf("event %q fork_point.records = %v; want the fetch's record", ev.Event, ev.Occurrences["fork_point.records"])
 	}
 	record, _ := records[0].(map[string]any)
 	if record["fork_point.outcome"] != "recorded" || record["fork_point.head"] != adopted || record["fork_point.branch"] != "master" {
@@ -133,18 +133,18 @@ func TestAQuietForkReceivesOntoTheRemoteHead(t *testing.T) {
 	r, _ := newForkedBelowTheCutAfter(t, func(reRootedCheckouts) {})
 	runCLIInDir(t, r.bravo, "sync", backgroundReceiveSubcommand, "--parent-pid", "0")
 	ev := lastEvent(t)
-	outcomes, _ := ev.Facts["receive.outcomes"].([]any)
+	outcomes := ev.Occurrences["receive.outcomes"]
 	if len(outcomes) != 1 {
-		t.Fatalf("event %q receive.outcomes = %v; want the one receive's outcome", ev.Event, ev.Facts["receive.outcomes"])
+		t.Fatalf("event %q receive.outcomes = %v; want the one receive's outcome", ev.Event, ev.Occurrences["receive.outcomes"])
 	}
 	if outcome, _ := outcomes[0].(map[string]any); outcome["receive.decision"] != "fast_forwarded" || outcome["receive.base"] != "fork_point" ||
 		outcome["receive.ahead"] != float64(0) || !(outcome["receive.behind"].(float64) > 0) {
 		t.Fatalf("receive outcome = %v; want fast_forwarded across the fork_point base, nothing ahead and alpha's history behind", outcome)
 	}
-	if stranded, present := ev.Facts["stranded_writes.commits"].([]any); !present || len(stranded) != 0 {
-		t.Fatalf("stranded_writes.commits = %#v; want an empty list: bravo stranded no write", ev.Facts["stranded_writes.commits"])
+	if stranded, present := ev.Occurrences["stranded_writes.commits"]; !present || len(stranded) != 0 {
+		t.Fatalf("stranded_writes.commits = %#v; want an empty list: bravo stranded no write", ev.Occurrences["stranded_writes.commits"])
 	}
-	if bases, _ := ev.Facts["reconcile.bases"].([]any); len(bases) != 0 {
+	if bases, present := ev.Occurrences["reconcile.bases"]; !present || len(bases) != 0 {
 		t.Fatalf("reconcile.bases = %v; want none: bravo has nothing to replay", bases)
 	}
 	alphaHead, _ := syncHeadAndBranch(t, r.alpha)

@@ -127,9 +127,9 @@ func syncHeadAndBranch(t *testing.T, dir string) (head, branch string) {
 func (r reRootedCheckouts) assertFollowedCleanly(t *testing.T, entries []string, wantDescription bool) {
 	t.Helper()
 	ev := lastEvent(t)
-	follows, _ := ev.Facts["reroot.follows"].([]any)
+	follows := ev.Occurrences["reroot.follows"]
 	if len(follows) != len(entries) {
-		t.Fatalf("event %q reroot.follows = %v; want one follow for each of %v", ev.Event, ev.Facts["reroot.follows"], entries)
+		t.Fatalf("event %q reroot.follows = %v; want one follow for each of %v", ev.Event, ev.Occurrences["reroot.follows"], entries)
 	}
 	for i, entry := range entries {
 		follow, _ := follows[i].(map[string]any)
@@ -249,8 +249,8 @@ func TestSyncFetchWithNoKnownSyncBranchFetchesAndFollowsNothing(t *testing.T) {
 	if out := runCLIInDir(t, alpha, "sync", "fetch"); strings.TrimSpace(out) != "fetched" {
 		t.Fatalf("lit sync fetch printed %q, want fetched", out)
 	}
-	if follows, ok := lastEvent(t).Facts["reroot.follows"].([]any); !ok || len(follows) != 0 {
-		t.Fatalf("reroot.follows = %v; want an empty list", lastEvent(t).Facts["reroot.follows"])
+	if follows, ok := lastEvent(t).Occurrences["reroot.follows"]; !ok || len(follows) != 0 {
+		t.Fatalf("reroot.follows = %v; want an empty list", lastEvent(t).Occurrences["reroot.follows"])
 	}
 }
 
@@ -265,9 +265,9 @@ func TestSyncPushPutsTheHistoryBoundOnItsEvent(t *testing.T) {
 	runCLIInDir(t, r.alpha, "sync", "push")
 	head, _ := syncHeadAndBranch(t, r.alpha)
 	ev := readEvents(t)[0]
-	records, _ := ev.Facts["history_bound.records"].([]any)
+	records := ev.Occurrences["history_bound.records"]
 	if len(records) != 1 {
-		t.Fatalf("event %q history_bound.records = %v; want the push's one bound", ev.Event, ev.Facts["history_bound.records"])
+		t.Fatalf("event %q history_bound.records = %v; want the push's one bound", ev.Event, ev.Occurrences["history_bound.records"])
 	}
 	record, _ := records[0].(map[string]any)
 	height, _ := record["history_bound.height"].(float64)
@@ -277,8 +277,8 @@ func TestSyncPushPutsTheHistoryBoundOnItsEvent(t *testing.T) {
 	if record["history_bound.lease"] != "" || record["history_bound.error"] != nil || record["reroot.head"] != "" {
 		t.Fatalf("event %q bound = %v; want nothing published or failed", ev.Event, record)
 	}
-	if follows, ok := ev.Facts["reroot.follows"].([]any); !ok || len(follows) != 0 {
-		t.Fatalf("event %q reroot.follows = %v; want an empty list: nothing followed, so nothing collected", ev.Event, ev.Facts["reroot.follows"])
+	if follows, ok := ev.Occurrences["reroot.follows"]; !ok || len(follows) != 0 {
+		t.Fatalf("event %q reroot.follows = %v; want an empty list: nothing followed, so nothing collected", ev.Event, ev.Occurrences["reroot.follows"])
 	}
 	if windowErr, ok := ev.Facts["history_bound.window_error"]; !ok || windowErr != nil {
 		t.Fatalf("event %q history_bound.window_error = %v (present %t); want null: the window was read", ev.Event, windowErr, ok)
