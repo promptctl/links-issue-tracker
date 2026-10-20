@@ -200,7 +200,7 @@ func landReRootWithoutGC(t *testing.T, ctx context.Context, alpha string, keep u
 	if err != nil {
 		t.Fatal(err)
 	}
-	landed, err := st.reRootScratch(ctx, "master", seen, keep)
+	landed, err := st.reRootScratch(ctx, "master", seen, windowOf(t, keep+1, keep))
 	if err != nil {
 		t.Fatalf("reRootScratch error = %v", err)
 	}

@@ -243,11 +243,11 @@ func backlogGrewBy(before, after model.Export, title string) bool {
 // boundAt fires the bound on alpha at head, keeping keep commits, as a push
 // that left the remote at head and reached the bound would; the re-root reads
 // only what the window keeps.
-func boundAt(t *testing.T, ctx context.Context, alpha, head string, keep uint64) storage.HistoryBound {
+func boundAt(t *testing.T, ctx context.Context, alpha, head string, window historywindow.Window) storage.HistoryBound {
 	t.Helper()
 	st := openSyncOrFatal(t, ctx, alpha)
 	defer func() { _ = st.Close() }()
-	b := storage.HistoryBound{Remote: "origin", Branch: "master", Head: head, Window: windowOf(t, keep+1, keep)}
+	b := storage.HistoryBound{Remote: "origin", Branch: "master", Head: head, Window: window}
 	b.Err = st.publishBound(ctx, remoteName(t, "origin"), &b)
 	return b
 }
@@ -273,7 +273,7 @@ func TestAStaleLeaseLeavesTheBranchOnItsHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	b := boundAt(t, ctx, alpha, alphaHead, 3)
+	b := boundAt(t, ctx, alpha, alphaHead, windowOf(t, 4, 3))
 	if b.Err != nil || b.Lease != storage.LeaseStale || b.Publication != storage.ReRootNotCarried || b.Collection.Ran || b.ReRooted.Head == "" {
 		t.Fatalf("the bound over a remote a peer moved = %+v; want a re-root refused as stale, the remote read without it, and nothing collected", b)
 	}
@@ -322,7 +322,7 @@ func TestAStaleLeaseOverTheLandedReRootStillFollowsIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	landed, err := st.reRootScratch(ctx, "master", seen, 3)
+	landed, err := st.reRootScratch(ctx, "master", seen, windowOf(t, 4, 3))
 	if err != nil {
 		t.Fatalf("reRootScratch error = %v", err)
 	}
@@ -335,7 +335,7 @@ func TestAStaleLeaseOverTheLandedReRootStillFollowsIt(t *testing.T) {
 	adoptRemote(t, ctx, bravo, remoteURL)
 	createAndPush(t, ctx, bravo, epic, "b1")
 
-	b := boundAt(t, ctx, alpha, seen, 3)
+	b := boundAt(t, ctx, alpha, seen, windowOf(t, 4, 3))
 	if b.Lease != storage.LeaseStale {
 		t.Fatalf("the retried push = %+v; want its lease stale over bravo's push", b)
 	}
@@ -381,7 +381,7 @@ func TestAHeldLeaseTheBranchCannotFollowIsTheBoundsError(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		cut, err := cutKeeping(ctx, ddb, headCommit, keep)
+		cut, err := cutIn(ctx, ddb, headCommit, windowOf(t, keep+1, keep))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -398,7 +398,7 @@ func TestAHeldLeaseTheBranchCannotFollowIsTheBoundsError(t *testing.T) {
 		}
 	})
 
-	b := boundAt(t, ctx, alpha, head, keep)
+	b := boundAt(t, ctx, alpha, head, windowOf(t, keep+1, keep))
 	if b.Lease != storage.LeaseHeld || b.Publication != storage.ReRootPublished || b.Collection.Ran {
 		t.Fatalf("the bound = %+v; want its re-root to land and nothing collected", b)
 	}
@@ -460,45 +460,56 @@ func mergeBubbleHistory(t *testing.T, ctx context.Context, alpha string) map[str
 	return c
 }
 
+// bubbleHeadOf is mergeBubbleHistory on alpha with the commit seeding the
+// remote on top of X: its commits by name, the seeded head, and its height,
+// 8.
+func bubbleHeadOf(t *testing.T, ctx context.Context, alpha string) (map[string]hash.Hash, string) {
+	t.Helper()
+	remoteURL, _ := gitRemote(t)
+	c := mergeBubbleHistory(t, ctx, alpha)
+	seedReconcileRemote(t, ctx, alpha, remoteURL)
+	head := headAt(t, ctx, alpha)
+	st := openSyncOrFatal(t, ctx, alpha)
+	defer func() { _ = st.Close() }()
+	if height := heightOf(t, ctx, st, head); height != 8 {
+		t.Fatalf("the seeded head's height = %d; want 8, one above X", height)
+	}
+	return c, head
+}
+
 // TestABoundThatFiresCutsWhereEveryLineMeets keeps the bound over
-// mergeBubbleHistory with the commit seeding the remote on top of X, at
-// height 8. A window that keeps 7 cuts at C, at the height it keeps; one
-// that keeps 6 would cut inside the bubble, so it cuts at C too and keeps 7;
-// one that keeps 2 cuts at X. Each re-root lands, alpha follows it, the
-// head's height is the re-root's, and the backlog is unchanged.
+// bubbleHeadOf's head, at height 8, where every line meets at X (height 7)
+// and C (height 2) and nowhere between. A window that keeps 7 cuts at C, at
+// the height it keeps; one that keeps 6 under 8 would cut inside the bubble,
+// so it cuts at C too, keeping 7; one that keeps 2 cuts at X. Each re-root
+// lands, leaves the head where the window no longer fires, alpha follows it,
+// and the backlog is unchanged.
 func TestABoundThatFiresCutsWhereEveryLineMeets(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		keep, height uint64
-		cut          string
+		reRootAt, keep, height uint64
+		cut                    string
 	}{
-		{keep: 7, height: 7, cut: "C"},
-		{keep: 6, height: 7, cut: "C"},
-		{keep: 2, height: 2, cut: "X"},
+		{reRootAt: 8, keep: 7, height: 7, cut: "C"},
+		{reRootAt: 8, keep: 6, height: 7, cut: "C"},
+		{reRootAt: 3, keep: 2, height: 2, cut: "X"},
 	} {
-		t.Run(fmt.Sprintf("keep %d", tc.keep), func(t *testing.T) {
+		t.Run(fmt.Sprintf("window %d/%d", tc.reRootAt, tc.keep), func(t *testing.T) {
 			t.Parallel()
 			ctx := context.Background()
-			remoteURL, _ := gitRemote(t)
 			alpha := migratedDoltDir(t)
-			c := mergeBubbleHistory(t, ctx, alpha)
-			seedReconcileRemote(t, ctx, alpha, remoteURL)
-			head := headAt(t, ctx, alpha)
+			c, head := bubbleHeadOf(t, ctx, alpha)
 			before := exportOf(t, ctx, alpha)
-			st := openSyncOrFatal(t, ctx, alpha)
-			height := heightOf(t, ctx, st, head)
-			if err := st.Close(); err != nil {
-				t.Fatal(err)
-			}
-			if fired := (storage.HistoryBound{Height: height, Window: windowOf(t, tc.keep+1, tc.keep)}).Fired(); height != 8 || !fired {
-				t.Fatalf("the seeded head's height = %d (fired %t); want 8, firing a window that keeps %d", height, fired, tc.keep)
-			}
+			window := windowOf(t, tc.reRootAt, tc.keep)
 
-			b := boundAt(t, ctx, alpha, head, tc.keep)
+			b := boundAt(t, ctx, alpha, head, window)
 			if b.Err != nil || b.ReRooted.Cut != c[tc.cut].String() || b.ReRooted.Height != tc.height || b.Lease != storage.LeaseHeld || b.Publication != storage.ReRootPublished || !b.Collection.Ran {
 				t.Fatalf("the bound over a merge-heavy history = %+v; want it cut at %s %s leaving height %d, published, followed and collected", b, tc.cut, c[tc.cut], tc.height)
 			}
-			st = openSyncOrFatal(t, ctx, alpha)
+			if (storage.HistoryBound{Height: b.ReRooted.Height, Window: window}).Fired() {
+				t.Fatalf("the re-root left the head at height %d, where %s fires again", b.ReRooted.Height, window)
+			}
+			st := openSyncOrFatal(t, ctx, alpha)
 			got := heightOf(t, ctx, st, "HEAD")
 			if err := st.Close(); err != nil {
 				t.Fatal(err)
@@ -513,25 +524,25 @@ func TestABoundThatFiresCutsWhereEveryLineMeets(t *testing.T) {
 	}
 }
 
-// TestACutNoLineMeetsLowEnoughIsAnError asks mergeBubbleHistory's X for a
-// cut keeping all 7 of its height. Below X the lines meet only at C, which
-// keeps 6, and the root r, which has nothing to drop, so there is no cut, and
-// the error names C as where the bound cuts once the head reaches height 8.
-func TestACutNoLineMeetsLowEnoughIsAnError(t *testing.T) {
+// TestABubbleSpanningTheWindowLeavesNoCut keeps a window that re-roots at 7
+// and keeps 6 over bubbleHeadOf's head, at height 8. Only a cut at height 2
+// or 3 leaves the head inside it; the lines meet at C, at 2, which leaves 7,
+// and not at 3, inside the bubble. Nothing is written or pushed, and the
+// bound's error names X, the lowest the lines meet above the window, where it
+// cuts once the head is at height 12.
+func TestABubbleSpanningTheWindowLeavesNoCut(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	alpha := migratedDoltDir(t)
-	c := mergeBubbleHistory(t, ctx, alpha)
-	withChunkStore(t, alpha, func(ddb *doltdb.DoltDB) {
-		head, err := readHistoryCommit(ctx, ddb, c["X"])
-		if err != nil {
-			t.Fatal(err)
-		}
-		cut, err := cutKeeping(ctx, ddb, head, 7)
-		if err == nil || !strings.Contains(err.Error(), "no lower than "+c["C"].String()+", at height 2") || !strings.Contains(err.Error(), "once the head is at height 8") {
-			t.Fatalf("cutKeeping(X, 7) = %s, %v; want no cut, naming C at height 2 and height 8", cut, err)
-		}
-	})
+	c, head := bubbleHeadOf(t, ctx, alpha)
+
+	b := boundAt(t, ctx, alpha, head, windowOf(t, 7, 6))
+	if b.Err == nil || !strings.Contains(b.Err.Error(), c["X"].String()+", at height 7, where the bound cuts once the head is at height 12") || b.Lease != "" || b.ReRooted.Head != "" {
+		t.Fatalf("the bound over a bubble spanning the window = %+v; want no cut, nothing pushed, naming X at height 7 and height 12", b)
+	}
+	if got := headAt(t, ctx, alpha); got != head {
+		t.Fatalf("alpha's head = %s; want it unchanged at %s", got, head)
+	}
 }
 
 // TestAReRootPushWithNoVerdictLeavesNoScratch has the bound's lease push
@@ -555,7 +566,7 @@ func TestAReRootPushWithNoVerdictLeavesNoScratch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	b := boundAt(t, ctx, alpha, head, 3)
+	b := boundAt(t, ctx, alpha, head, windowOf(t, 4, 3))
 	if b.Err == nil || b.Lease != storage.LeaseUnsettled || b.Publication != storage.ReRootPossiblyPublished || b.ReRooted.Head == "" {
 		t.Fatalf("the bound over a remote that is a file = %+v; want a re-root written, its push unsettled, possibly published, and an error", b)
 	}
@@ -626,7 +637,7 @@ func TestAReRootRefusedBeforeTheRemoteIsNotPushed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	b := boundAt(t, ctx, alpha, ahead, 3)
+	b := boundAt(t, ctx, alpha, ahead, windowOf(t, 4, 3))
 	if !errors.As(b.Err, new(*RemoteSchemaAheadError)) || b.ReRooted.Head == "" || b.Lease != "" || b.Publication != storage.ReRootNotPushed || b.RemoteGC.Outcome != "" {
 		t.Fatalf("the bound over a schema-ahead head = %+v; want a re-root written, refused before the remote, not pushed, and no remote GC", b)
 	}
