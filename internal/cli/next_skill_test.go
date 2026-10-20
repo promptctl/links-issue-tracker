@@ -27,7 +27,8 @@ const emptyHandedOpener = "no ready work"
 // answer with other opening words is held too. [LAW:one-source-of-truth] the
 // shipped text is the fact and the skill is a copy, so the two are compared in
 // both directions: every lead the product ships is quoted, and every quotation
-// still renders a shipped lead.
+// opening with the opener still renders a shipped lead — the quotations an
+// agent could match against the wrong answer by its opening words.
 func TestNextSkillQuotesEveryEmptyHandedLead(t *testing.T) {
 	root := mustRepoRoot(t)
 	corpus, err := docclaims.ShippedText(os.DirFS(root))
