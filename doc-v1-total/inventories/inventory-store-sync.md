@@ -894,12 +894,12 @@ Builders (`convergence.go`): `attempt(step, work)` = `failAt(step, atFailpoint(s
 ### 8.6 Failure handling and quarantine
 
 `handleMigrationFailure(ctx, p, failed, reset, result, cause, quarantine, checkpoint) *SchemaConvergenceError` (`migration_runner.go`), ordering **reset first, quarantine second**:
-1. `version, name := migrationIdentity(result)`; `outcome := &CheckpointResetError{Version, Name, Checkpoint, Cause}` (`migration_runner.go`).
-2. `atFailpoint(reset, s.ResetToCheckpoint(ctx, checkpoint.Name))`. Failure → `p.failAt(reset, errors.Join("reset to Dolt checkpoint %q: %w", "it was resetting after migration v%d %q failed: %w"))` — `migration_reset` after a goose failure, `commit_migration_reset` after a commit failure (`migration_runner.go`).
-3. Not `quarantine` → `p.failAt(failed, outcome)`. A failure that earned no quarantine (unknown version, a cancelled caller, GC contention, or a failed step commit) skips quarantine insertion entirely (`migration_runner.go`).
-4. `atFailpoint(stepRecordQuarantine, s.recordQuarantine(ctx, version, name, cause.Error()))`; failure → `p.failAt(stepRecordQuarantine, errors.Join(err, outcome))`, `outcome.Quarantined` false.
-5. `outcome.Quarantined = true` — the row is in the working set, committed or not.
-6. `atFailpoint(stepCommitQuarantine, s.commitWorkingSet(ctx, fmt.Sprintf("migrate: quarantine v%d %s", version, name)))`; failure → `p.failAt(stepCommitQuarantine, errors.Join("commit quarantine v%d: %w", outcome))` (`migration_runner.go`).
+1. `version, name := migrationIdentity(result)`; `migration := &MigrationStepError{Version, Name, Cause}` (`migration_runner.go`).
+2. `atFailpoint(reset, s.ResetToCheckpoint(ctx, checkpoint.Name))`. Failure → `p.failAt(reset, &CheckpointResetFailedError{Checkpoint, Cause: migration, ResetErr})` — `migration_reset` after a goose failure, `commit_migration_reset` after a commit failure (`migration_runner.go`).
+3. `outcome := &CheckpointResetError{Checkpoint, Cause: migration}`. Not `quarantine` → `p.failAt(failed, outcome)`. A failure that earned no quarantine (unknown version, a cancelled caller, GC contention, or a failed step commit) skips quarantine insertion entirely (`migration_runner.go`).
+4. `atFailpoint(stepRecordQuarantine, s.recordQuarantine(ctx, version, name, cause.Error()))`; failure → `outcome.QuarantineErr = err`, `p.failAt(stepRecordQuarantine, outcome)`, `outcome.Quarantine` nil.
+5. `outcome.Quarantine = &QuarantineBlockError{Version, Name, ErrorText: cause.Error()}` — the row is in the working set, committed or not.
+6. `atFailpoint(stepCommitQuarantine, s.commitWorkingSet(ctx, fmt.Sprintf("migrate: quarantine v%d %s", version, name)))`; failure → `outcome.QuarantineErr = fmt.Errorf("commit quarantine v%d: %w", version, err)`, `p.failAt(stepCommitQuarantine, outcome)` (`migration_runner.go`).
 7. Return `p.failAt(failed, outcome)`.
 
 `recordQuarantine` (`migration_runner.go`): `INSERT INTO migration_quarantine (version, name, error_text, created_at) VALUES (?,?,?,?) ON DUPLICATE KEY UPDATE name = VALUES(name), error_text = VALUES(error_text), created_at = VALUES(created_at)` with `created_at = time.Now().UTC().Format(time.RFC3339Nano)`.
@@ -980,8 +980,8 @@ Tests: `TestParseAddColumnTargetsRecognizesPlainForm` (`migration_runner_test.go
 Returns `(pruneErr error, fail *SchemaConvergenceError)`:
 1. `attempt(stepDriftCheckpoint, s.CreateCheckpoint(ctx, "pre-drift-repair"))`.
 2. `repairVersionContentDrift`, or `versionContentDriftRepairForTest(ctx)` when that test hook is set; on success, `s.commitWorkingSet(ctx, migrationDriftRepairCommitMessage(repaired))`, whose failure becomes the repair's failure as `"commit version-content drift repair: %w"`. Either failure is wrapped `"repair version-content drift (detected at v%d %q): %w"`, and the reset runs on `context.WithoutCancel(ctx)` through `atFailpoint(stepDriftRepairReset, …)`:
-   - reset also fails → `failAt(stepDriftRepairReset, errors.Join("reset to checkpoint %q: %w", repairErr))` (`migration_runner.go`).
-   - reset succeeds → `failAt(stepDriftRepair, "%w (working set reset to checkpoint %q)")` (`migration_runner.go`).
+   - reset also fails → `failAt(stepDriftRepairReset, &CheckpointResetFailedError{Checkpoint, Cause: repairErr, ResetErr})` (`migration_runner.go`).
+   - reset succeeds → `failAt(stepDriftRepair, &CheckpointResetError{Checkpoint, Cause: repairErr})` (`migration_runner.go`).
 3. `prune(pruneDriftCheckpoints, "prune version-content drift repair checkpoints", s.PruneCheckpoints(context.WithoutCancel(ctx), "pre-drift-repair", 5))`, returned as `pruneErr` beside a nil failure — the repair committed, so it never fails the open.
 
 `migrationDriftRepairCommitMessage(repaired)` = `fmt.Sprintf("migrate: repair version-content drift (%s)", strings.Join(repaired, ", "))` (`migration_runner.go`).
@@ -1034,9 +1034,15 @@ Tests: `TestPreGooseAdoptionStampsWithoutRerunningBaseline` (`migration_runner_t
 
 ### 8.13 Migration error types
 
-`CheckpointResetError{Version int64; Name string; Checkpoint storage.Checkpoint; Cause error; Quarantined bool}` (`migration_runner.go`); `Quarantined` says `handleMigrationFailure` committed a quarantine for `Version`. `Error()` (`migration_runner.go`) is `"%s failed: %v\n\nthe working set was automatically reset to Dolt checkpoint %q\n%s"`: the migration is `migration v%d %q`, or `migration (version unknown)` when `Version == 0`; the last line is `to retry after fixing the migration, clear the quarantine:\n  DELETE FROM migration_quarantine WHERE version = %d` when `Quarantined`, else `the next open runs it again`. `Unwrap() []error`: `[Cause]`, plus `&QuarantineBlockError{Version, Name, ErrorText: Cause.Error()}` when `Quarantined`.
+`MigrationStepError{Version int64; Name string; Cause error}` (`migration_runner.go`): a goose step, or its commit, that failed. `Error()` is `migration v%d %q failed: %v`, or `migration (version unknown) failed: %v` when `Version == 0`; `Unwrap() error` is `Cause`. `EventRecord()` records `migration.failed_version`.
 
-`QuarantineBlockError{Version, Name, ErrorText}` (`migration_runner.go`). `Error()` (`migration_runner.go`):
+`CheckpointResetError{Checkpoint storage.Checkpoint; Cause error; Quarantine *QuarantineBlockError; QuarantineErr error}` (`migration_runner.go`): checkpointed work (the migration run or a drift repair) that failed, after which the reset to `Checkpoint` held. `Quarantine` is the quarantine in force, nil when none; `QuarantineErr` is why recording it did not complete. `Error()` (`migration_runner.go`) is `"%v\n\nthe working set was automatically reset to Dolt checkpoint %q"`, then a line `recording its quarantine failed: %v` when `QuarantineErr` is set, then `"\nthe quarantine is in force; to retry after fixing the migration, clear it:\n  DELETE FROM migration_quarantine WHERE version = %d"` when `Quarantine` is set, else a line `no quarantine is in force, so the next open runs it again` when `QuarantineErr` is set, else a line `the next open runs it again`. `Unwrap() []error`: `[Cause]`, plus `QuarantineErr` and `Quarantine` when set.
+
+`CheckpointResetFailedError{Checkpoint storage.Checkpoint; Cause error; ResetErr error}` (`migration_runner.go`): checkpointed work that failed, after which the reset failed too. `Error()` is `"%v\n\nresetting the working set to Dolt checkpoint %q failed too: %v\nthe working set may still hold the failed work's changes"`; `Unwrap() []error` is `[ResetErr, Cause]`.
+
+Both reset outcomes' `EventRecord()` is `checkpointRecoveryFacts(Checkpoint, recoveryErr)`: `migration.checkpoint` and `migration.recovery_error`, the latter `QuarantineErr` or `ResetErr` (`migration_runner.go`).
+
+`QuarantineBlockError{Version, Name, ErrorText}` (`migration_runner.go`); `EventRecord()` records `migration.quarantine_version`. `Error()` (`migration_runner.go`):
 `"migration v%d %q is quarantined after a previous failure:\n  %s\n\nto recover, either:\n  (a) restore from a dbsnapshot: lit snapshots restore <name>\n  (b) clear the quarantine row (if transient): DELETE FROM migration_quarantine WHERE version = %d"`.
 
 `UnsupportedSchemaVersionError{WorkspaceVersion, MaxSupported int64; MissingBaseline []string; MinWriterSchema int64; MinWriterSchemaErr error; SnapshotName string; SnapshotLookupErr error; SnapshotsExamined, SnapshotsUnreadable int}` (`migration_runner.go`). `Error()` (`migration_runner.go`) composes:

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -280,7 +281,7 @@ func TestMigrationFailureCheckpointPath(t *testing.T) {
 	failVersion := headVersion(t) + 1
 	failName := fmt.Sprintf("%05d_test.sql", failVersion)
 	sentinel := errors.New("simulated migration body error")
-	migrationUpByOneForTest = func(ctx context.Context, provider *goose.Provider) (*goose.MigrationResult, error) {
+	migrationUpByOneForTest = func(ctx context.Context, _ *sql.DB, provider *goose.Provider) (*goose.MigrationResult, error) {
 		return &goose.MigrationResult{
 			Source: &goose.Source{Version: failVersion, Path: failName},
 		}, sentinel
@@ -304,8 +305,9 @@ func TestMigrationFailureCheckpointPath(t *testing.T) {
 	if !errors.As(rollback.Cause, &cpErr) {
 		t.Fatalf("rollback.Cause = %v (%T); expected *CheckpointResetError", rollback.Cause, rollback.Cause)
 	}
-	if cpErr.Version != failVersion {
-		t.Errorf("CheckpointResetError.Version = %d, want %d", cpErr.Version, failVersion)
+	var step *MigrationStepError
+	if !errors.As(cpErr.Cause, &step) || step.Version != failVersion {
+		t.Errorf("CheckpointResetError.Cause = %v; want the *MigrationStepError of v%d", cpErr.Cause, failVersion)
 	}
 	if cpErr.Checkpoint.Name == "" {
 		t.Error("CheckpointResetError.Checkpoint.Name is empty")
@@ -392,8 +394,12 @@ func TestRealMigrationFailureIsQuarantined(t *testing.T) {
 	if !errors.As(openErr, &cpErr) {
 		t.Fatalf("Open() error = %v; want a *CheckpointResetError", openErr)
 	}
-	if cpErr.Version != failVersion || cpErr.Name != failName || !cpErr.Quarantined {
-		t.Errorf("CheckpointResetError = {Version: %d, Name: %q, Quarantined: %t}, want {Version: %d, Name: %q, Quarantined: true}", cpErr.Version, cpErr.Name, cpErr.Quarantined, failVersion, failName)
+	var step *MigrationStepError
+	if !errors.As(cpErr.Cause, &step) || step.Version != failVersion || step.Name != failName {
+		t.Errorf("CheckpointResetError.Cause = %v; want the *MigrationStepError of v%d %q", cpErr.Cause, failVersion, failName)
+	}
+	if cpErr.Quarantine == nil || cpErr.Quarantine.Version != failVersion {
+		t.Errorf("CheckpointResetError.Quarantine = %v; want the quarantine of v%d in force", cpErr.Quarantine, failVersion)
 	}
 
 	_, reopenErr := Open(ctx, doltRoot, "test-workspace-id")
@@ -413,7 +419,7 @@ func TestTransientMigrationFailureIsNotQuarantined(t *testing.T) {
 	// hook.
 	doltRoot := migratedWorkspaceWithGooseHistoryDropped(t)
 	failVersion := headVersion(t) + 1
-	migrationUpByOneForTest = func(context.Context, *goose.Provider) (*goose.MigrationResult, error) {
+	migrationUpByOneForTest = func(context.Context, *sql.DB, *goose.Provider) (*goose.MigrationResult, error) {
 		return nil, &goose.PartialError{
 			Failed: &goose.MigrationResult{Source: &goose.Source{Version: failVersion, Path: fmt.Sprintf("%05d_test.sql", failVersion)}},
 			Err:    errors.New("cannot update manifest: database is read only"),
@@ -427,8 +433,9 @@ func TestTransientMigrationFailureIsNotQuarantined(t *testing.T) {
 	if !errors.As(openErr, &cpErr) {
 		t.Fatalf("Open() error = %v; want a *CheckpointResetError", openErr)
 	}
-	if cpErr.Version != failVersion || cpErr.Quarantined {
-		t.Errorf("CheckpointResetError = {Version: %d, Quarantined: %t}, want {Version: %d, Quarantined: false}", cpErr.Version, cpErr.Quarantined, failVersion)
+	var step *MigrationStepError
+	if !errors.As(cpErr.Cause, &step) || step.Version != failVersion || cpErr.Quarantine != nil {
+		t.Errorf("CheckpointResetError = {Cause: %v, Quarantine: %v}, want v%d's *MigrationStepError and no quarantine", cpErr.Cause, cpErr.Quarantine, failVersion)
 	}
 	reopened, err := Open(context.Background(), doltRoot, "test-workspace-id")
 	if err != nil {
@@ -513,7 +520,7 @@ func TestMigrationFailureResetSurvivesCallerCancel(t *testing.T) {
 	failVersion := headVersion(t) + 1
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	migrationUpByOneForTest = func(ctx context.Context, _ *goose.Provider) (*goose.MigrationResult, error) {
+	migrationUpByOneForTest = func(ctx context.Context, _ *sql.DB, _ *goose.Provider) (*goose.MigrationResult, error) {
 		cancel()
 		return &goose.MigrationResult{
 			Source: &goose.Source{Version: failVersion, Path: fmt.Sprintf("%05d_test.sql", failVersion)},
@@ -537,7 +544,7 @@ func TestMigrationCommitCancelResetsWithoutQuarantine(t *testing.T) {
 	failVersion := headVersion(t) + 1
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	migrationUpByOneForTest = func(context.Context, *goose.Provider) (*goose.MigrationResult, error) {
+	migrationUpByOneForTest = func(context.Context, *sql.DB, *goose.Provider) (*goose.MigrationResult, error) {
 		cancel()
 		return &goose.MigrationResult{
 			Source: &goose.Source{Version: failVersion, Path: fmt.Sprintf("%05d_test.sql", failVersion)},
@@ -577,7 +584,8 @@ func TestVersionContentDriftCommitCancelResets(t *testing.T) {
 		mismatch := &VersionContentMismatchError{Version: 2, Name: "00002_add_lane.sql", Missing: []string{"issues.lane"}}
 		_, fail := st.repairVersionContentDriftWithRollback(ctx, applied, mismatch)
 		versionContentDriftRepairForTest = nil
-		if fail == nil || fail.Step != stepDriftRepair || !errors.Is(fail, context.Canceled) || !strings.Contains(fail.Error(), "working set reset to checkpoint") {
+		var held *CheckpointResetError
+		if fail == nil || fail.Step != stepDriftRepair || !errors.Is(fail, context.Canceled) || !errors.As(fail, &held) {
 			t.Fatalf("repairVersionContentDriftWithRollback() failure = %v; want step drift_repair reporting the failed commit with a completed reset", fail)
 		}
 		cols, err := st.tableColumns(bg, "issues")
@@ -600,7 +608,7 @@ func TestMigrationSuccessPruneSurvivesCallerCancel(t *testing.T) {
 	doltRoot := migratedWorkspaceWithGooseHistoryDropped(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	migrationUpByOneForTest = func(context.Context, *goose.Provider) (*goose.MigrationResult, error) {
+	migrationUpByOneForTest = func(context.Context, *sql.DB, *goose.Provider) (*goose.MigrationResult, error) {
 		cancel()
 		return nil, goose.ErrNoNextVersion
 	}
@@ -642,8 +650,9 @@ func assertCancelledRunResetWithoutQuarantine(t *testing.T, openErr error, failV
 	if !errors.As(openErr, &cpErr) {
 		t.Fatalf("Open() error = %v; want a *CheckpointResetError from a reset that completed", openErr)
 	}
-	if cpErr.Version != failVersion || !errors.Is(cpErr.Cause, context.Canceled) {
-		t.Errorf("CheckpointResetError = {Version: %d, Cause: %v}, want {Version: %d, Cause: context canceled}", cpErr.Version, cpErr.Cause, failVersion)
+	var step *MigrationStepError
+	if !errors.As(cpErr.Cause, &step) || step.Version != failVersion || !errors.Is(cpErr.Cause, context.Canceled) {
+		t.Errorf("CheckpointResetError.Cause = %v, want v%d's *MigrationStepError caused by context canceled", cpErr.Cause, failVersion)
 	}
 	if strings.Contains(openErr.Error(), "prune migration checkpoints") {
 		t.Errorf("Open() error = %v; the checkpoint prune stopped on the caller's cancellation", openErr)
@@ -685,7 +694,7 @@ func TestCheckpointResetErrorUnknownVersion(t *testing.T) {
 	withGooseHistoryDropped(t, ctx, doltRoot)
 
 	sentinel := errors.New("simulated nil-result error")
-	migrationUpByOneForTest = func(ctx context.Context, provider *goose.Provider) (*goose.MigrationResult, error) {
+	migrationUpByOneForTest = func(ctx context.Context, _ *sql.DB, provider *goose.Provider) (*goose.MigrationResult, error) {
 		return nil, sentinel
 	}
 	t.Cleanup(func() { migrationUpByOneForTest = nil })
@@ -704,8 +713,9 @@ func TestCheckpointResetErrorUnknownVersion(t *testing.T) {
 	if !errors.As(rollback.Cause, &cpErr) {
 		t.Fatalf("rollback.Cause = %v (%T); expected *CheckpointResetError", rollback.Cause, rollback.Cause)
 	}
-	if cpErr.Version != 0 {
-		t.Errorf("CheckpointResetError.Version = %d, want 0 (nil result)", cpErr.Version)
+	var step *MigrationStepError
+	if !errors.As(cpErr.Cause, &step) || step.Version != 0 {
+		t.Errorf("CheckpointResetError.Cause = %v; want a *MigrationStepError of version 0 (nil result)", cpErr.Cause)
 	}
 	// No version, no quarantine row: nothing here may read as quarantined.
 	var q *QuarantineBlockError
@@ -926,7 +936,7 @@ func TestFailedMigrationReportsCheckpointPruneFailure(t *testing.T) {
 
 	migrationFailure := errors.New("simulated migration failure")
 	pruneFailure := errors.New("simulated prune failure")
-	migrationUpByOneForTest = func(context.Context, *goose.Provider) (*goose.MigrationResult, error) {
+	migrationUpByOneForTest = func(context.Context, *sql.DB, *goose.Provider) (*goose.MigrationResult, error) {
 		return nil, migrationFailure
 	}
 	injectFailpoint(t, pruneFailure, pruneMigrationCheckpoints)

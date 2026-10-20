@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -9,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/pressly/goose/v3"
+	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
 // Each test here fails one recovery step through Open, then opens again with
@@ -21,13 +24,60 @@ import (
 func failingMigration(t *testing.T, sentinel error) int64 {
 	t.Helper()
 	version := headVersion(t) + 1
-	migrationUpByOneForTest = func(context.Context, *goose.Provider) (*goose.MigrationResult, error) {
+	migrationUpByOneForTest = func(context.Context, *sql.DB, *goose.Provider) (*goose.MigrationResult, error) {
 		return &goose.MigrationResult{
 			Source: &goose.Source{Version: version, Path: fmt.Sprintf("%05d_test.sql", version)},
 		}, sentinel
 	}
 	t.Cleanup(func() { migrationUpByOneForTest = nil })
 	return version
+}
+
+// assertRecovery checks the facts the reset outcome err carries records: the
+// checkpoint it reset to or tried to, and why the recovery step failed, want,
+// or null when want is "".
+func assertRecovery(t *testing.T, err error, want string) {
+	t.Helper()
+	var held *CheckpointResetError
+	var failed *CheckpointResetFailedError
+	var recorded model.RecordedError
+	var checkpoint string
+	switch {
+	case errors.As(err, &held):
+		recorded, checkpoint = held, held.Checkpoint.Name
+	case errors.As(err, &failed):
+		recorded, checkpoint = failed, failed.Checkpoint.Name
+	default:
+		t.Fatalf("error = %v; want a reset outcome", err)
+	}
+	facts, _ := recorded.EventRecord()
+	if checkpoint == "" || facts["migration.checkpoint"] != checkpoint {
+		t.Errorf("migration.checkpoint = %v; want the outcome's checkpoint %q", facts["migration.checkpoint"], checkpoint)
+	}
+	got, recordedKey := facts["migration.recovery_error"]
+	text, _ := got.(*string)
+	switch {
+	case !recordedKey:
+		t.Error("migration.recovery_error is not recorded")
+	case want == "" && text != nil:
+		t.Errorf("migration.recovery_error = %q; want null, the recovery held", *text)
+	case want != "" && (text == nil || !strings.Contains(*text, want)):
+		t.Errorf("migration.recovery_error = %v; want it to say %q", got, want)
+	}
+}
+
+// recordedFact is what the first error of type T in err's tree records under key.
+func recordedFact[T interface {
+	error
+	model.RecordedError
+}](t *testing.T, err error, key string) any {
+	t.Helper()
+	var target T
+	if !errors.As(err, &target) {
+		t.Fatalf("error = %v; want a %T in its tree", err, target)
+	}
+	facts, _ := target.EventRecord()
+	return facts[key]
 }
 
 // openErr is the error an Open returns, closing the store when it opened.
@@ -42,25 +92,78 @@ func openErr(t *testing.T, doltRoot string) error {
 	return err
 }
 
-// A failed reset after a failed goose step leaves a working set that may hold
-// the step's partial changes: the failure says to restore the snapshot it
-// names, and it names one.
-func TestAFailedResetAfterAFailedMigrationCallsForTheSnapshot(t *testing.T) {
+// A failed reset after a failed goose step leaves the step's partial changes in
+// the working set, and every later open runs the step again on top of them:
+// the failure calls for the snapshot it names, and restoring that snapshot is
+// what clears them.
+func TestAFailedResetAfterAFailedMigrationLeavesWhatOnlyTheSnapshotClears(t *testing.T) {
+	ctx := context.Background()
 	doltRoot := migratedWorkspaceWithGooseHistoryDropped(t)
 	sentinel := errors.New("simulated migration failure")
-	failingMigration(t, sentinel)
-	injectFailpoint(t, errors.New("simulated reset failure"), stepMigrationReset)
+	resetErr := errors.New("simulated reset failure")
+	version := headVersion(t) + 1
+	// The step creates a table, then fails, as a real step whose second
+	// statement fails leaves its first applied. found records, for each run,
+	// whether that table was already there when the step started.
+	var found []bool
+	migrationUpByOneForTest = func(ctx context.Context, db *sql.DB, _ *goose.Provider) (*goose.MigrationResult, error) {
+		var tables int
+		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'partial_step'`).Scan(&tables); err != nil {
+			return nil, err
+		}
+		found = append(found, tables > 0)
+		if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS partial_step (id INT PRIMARY KEY)`); err != nil {
+			return nil, err
+		}
+		return &goose.MigrationResult{
+			Source: &goose.Source{Version: version, Path: fmt.Sprintf("%05d_test.sql", version)},
+		}, sentinel
+	}
+	t.Cleanup(func() { migrationUpByOneForTest = nil })
+	clear := injectFailpoint(t, resetErr, stepMigrationReset)
 
 	fail := asConvergenceError(t, openErr(t, doltRoot))
+	clear()
 	if fail.Step != stepMigrationReset || fail.Step.Act() != ActRestoreSnapshot {
 		t.Fatalf("failure step = %s (act %d); want %s, which restores the snapshot", fail.Step, fail.Step.Act(), stepMigrationReset)
 	}
 	if fail.Snapshot == nil {
 		t.Fatal("a failure that calls for the snapshot carries none")
 	}
-	if !errors.Is(fail, sentinel) {
-		t.Errorf("failure = %v; want it to carry the migration failure it was resetting after", fail)
+	var resetFailed *CheckpointResetFailedError
+	if !errors.As(fail, &resetFailed) || !errors.Is(resetFailed.ResetErr, resetErr) {
+		t.Fatalf("failure = %v; want a *CheckpointResetFailedError whose ResetErr is the reset's failure", fail)
 	}
+	var step *MigrationStepError
+	if !errors.As(resetFailed.Cause, &step) || step.Version != version || !errors.Is(step, sentinel) {
+		t.Errorf("CheckpointResetFailedError.Cause = %v; want v%d's *MigrationStepError carrying the migration failure", resetFailed.Cause, version)
+	}
+	assertRecovery(t, fail, "simulated reset failure")
+	if got := recordedFact[*MigrationStepError](t, fail, "migration.failed_version"); got != version {
+		t.Errorf("migration.failed_version = %v, want %d", got, version)
+	}
+
+	// The retry runs the step on top of what the failed run left.
+	_ = openErr(t, doltRoot)
+	if len(found) != 2 || found[0] || !found[1] {
+		t.Fatalf("partial_step present at each run's start = %v; want [false true]: absent before the first run, left for the retry", found)
+	}
+
+	// Restoring the snapshot the failure named gives back the workspace as it
+	// was before the run, and the next open migrates cleanly.
+	migrationUpByOneForTest = nil
+	if _, err := dbsnapshot.Restore(doltRoot, fail.Snapshot.Name); err != nil {
+		t.Fatalf("Restore(%s) error = %v", fail.Snapshot.Name, err)
+	}
+	withStore(t, ctx, doltRoot, func(st *Store) {
+		cols, err := st.tableColumns(ctx, "partial_step")
+		if err != nil {
+			t.Fatalf("tableColumns(partial_step) error = %v", err)
+		}
+		if len(cols) != 0 {
+			t.Errorf("after the restore partial_step still exists with columns %v; want it gone", cols)
+		}
+	})
 }
 
 // A failed reset after a failed migration commit leaves a complete step goose
@@ -74,6 +177,11 @@ func TestAFailedResetAfterAFailedCommitLeavesAStepTheNextOpenCompletes(t *testin
 	if fail.Step != stepCommitMigrationReset || fail.Step.Act() != ActClearCause {
 		t.Fatalf("failure step = %s (act %d); want %s, which a retry clears", fail.Step, fail.Step.Act(), stepCommitMigrationReset)
 	}
+	var resetFailed *CheckpointResetFailedError
+	if !errors.As(fail, &resetFailed) || resetFailed.ResetErr == nil {
+		t.Fatalf("failure = %v; want a *CheckpointResetFailedError carrying why the reset failed", fail)
+	}
+	assertRecovery(t, fail, "simulated failure")
 
 	withStore(t, context.Background(), doltRoot, func(st *Store) {
 		applied, err := st.recordedMigrationVersion(context.Background())
@@ -91,20 +199,25 @@ func TestAFailedResetAfterAFailedCommitLeavesAStepTheNextOpenCompletes(t *testin
 func TestAFailedQuarantineInsertLeavesNoQuarantine(t *testing.T) {
 	doltRoot := migratedWorkspaceWithGooseHistoryDropped(t)
 	failingMigration(t, errors.New("simulated migration failure"))
-	clear := injectFailpoint(t, errors.New("simulated insert failure"), stepRecordQuarantine)
+	insertErr := errors.New("simulated insert failure")
+	clear := injectFailpoint(t, insertErr, stepRecordQuarantine)
 
 	err := openErr(t, doltRoot)
 	clear()
 	migrationUpByOneForTest = nil
 	fail := asConvergenceError(t, err)
 	var reset *CheckpointResetError
-	if fail.Step != stepRecordQuarantine || !errors.As(fail, &reset) || reset.Quarantined {
-		t.Fatalf("failure = step %s, reset %+v; want %s with the reset held and no quarantine in force", fail.Step, reset, stepRecordQuarantine)
+	if fail.Step != stepRecordQuarantine || !errors.As(fail, &reset) || reset.Quarantine != nil || !errors.Is(reset.QuarantineErr, insertErr) {
+		t.Fatalf("failure = step %s, reset %+v; want %s with the reset held, the insert's failure, and no quarantine in force", fail.Step, reset, stepRecordQuarantine)
 	}
 	var quarantined *QuarantineBlockError
 	if errors.As(fail, &quarantined) {
 		t.Errorf("failure carries a quarantine (v%d); none was recorded", quarantined.Version)
 	}
+	if !errors.Is(fail, insertErr) {
+		t.Errorf("failure = %v; want the insert's failure in its tree, for the classifier", fail)
+	}
+	assertRecovery(t, fail, "simulated insert failure")
 	if err := openErr(t, doltRoot); err != nil {
 		t.Errorf("second Open() error = %v; want it to run the migrations, unblocked", err)
 	}
@@ -115,7 +228,8 @@ func TestAFailedQuarantineInsertLeavesNoQuarantine(t *testing.T) {
 func TestAFailedQuarantineCommitLeavesTheQuarantineInForce(t *testing.T) {
 	doltRoot := migratedWorkspaceWithGooseHistoryDropped(t)
 	version := failingMigration(t, errors.New("simulated migration failure"))
-	clear := injectFailpoint(t, errors.New("simulated commit failure"), stepCommitQuarantine)
+	commitErr := errors.New("simulated commit failure")
+	clear := injectFailpoint(t, commitErr, stepCommitQuarantine)
 
 	err := openErr(t, doltRoot)
 	clear()
@@ -125,8 +239,20 @@ func TestAFailedQuarantineCommitLeavesTheQuarantineInForce(t *testing.T) {
 	if fail.Step != stepCommitQuarantine || !errors.As(fail, &quarantined) || quarantined.Version != version {
 		t.Fatalf("failure = step %s, %v; want %s carrying the quarantine of v%d", fail.Step, fail, stepCommitQuarantine, version)
 	}
-	if !errors.As(openErr(t, doltRoot), &quarantined) || quarantined.Version != version {
+	var reset *CheckpointResetError
+	if !errors.As(fail, &reset) || reset.Quarantine == nil || !errors.Is(reset.QuarantineErr, commitErr) {
+		t.Fatalf("failure = %v; want a *CheckpointResetError with the quarantine in force and the commit's failure", fail)
+	}
+	assertRecovery(t, fail, "simulated commit failure")
+	if got := recordedFact[*QuarantineBlockError](t, fail, "migration.quarantine_version"); got != version {
+		t.Errorf("migration.quarantine_version = %v, want %d", got, version)
+	}
+	refusal := openErr(t, doltRoot)
+	if !errors.As(refusal, &quarantined) || quarantined.Version != version {
 		t.Errorf("second Open() did not refuse on the quarantine of v%d", version)
+	}
+	if got := recordedFact[*QuarantineBlockError](t, refusal, "migration.quarantine_version"); got != version {
+		t.Errorf("the refusal's migration.quarantine_version = %v, want %d", got, version)
 	}
 }
 
@@ -150,11 +276,12 @@ func driftedWorkspace(t *testing.T) string {
 // open's probe repairs.
 func TestAFailedDriftRepairIsRepairedByTheNextOpen(t *testing.T) {
 	for name, tc := range map[string]struct {
-		resetFails bool
-		want       ConvergenceStep
+		resetFails    bool
+		want          ConvergenceStep
+		recoveryError string
 	}{
-		"the reset held":   {false, stepDriftRepair},
-		"the reset failed": {true, stepDriftRepairReset},
+		"the reset held":   {false, stepDriftRepair, ""},
+		"the reset failed": {true, stepDriftRepairReset, "simulated reset failure"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			doltRoot := driftedWorkspace(t)
@@ -171,6 +298,12 @@ func TestAFailedDriftRepairIsRepairedByTheNextOpen(t *testing.T) {
 			if fail.Step != tc.want || fail.Step.Act() != ActClearCause {
 				t.Fatalf("failure step = %s (act %d); want %s, which a retry clears", fail.Step, fail.Step.Act(), tc.want)
 			}
+			var held *CheckpointResetError
+			var resetFailed *CheckpointResetFailedError
+			if tc.resetFails != errors.As(fail, &resetFailed) || !tc.resetFails != errors.As(fail, &held) {
+				t.Fatalf("failure = %v (reset held %t, reset failed %t); want the reset outcome for resetFails=%t", fail, held != nil, resetFailed != nil, tc.resetFails)
+			}
+			assertRecovery(t, fail, tc.recoveryError)
 			withStore(t, context.Background(), doltRoot, func(st *Store) {
 				cols, err := st.tableColumns(context.Background(), "issues")
 				if err != nil {
