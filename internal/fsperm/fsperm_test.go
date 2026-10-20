@@ -92,6 +92,44 @@ func TestDenyRemovalFailsOnAnEmptyDirectory(t *testing.T) {
 	}
 }
 
+func TestFreezeTreeRefusesAFileWriteUntilTheTestEnds(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "sub", "file")
+	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, []byte("kept"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Run("frozen", func(t *testing.T) {
+		FreezeTree(t, root)
+		if err := os.WriteFile(file, []byte("lost"), 0o644); !errors.Is(err, fs.ErrPermission) {
+			t.Fatalf("write a frozen file = %v; want a permission error", err)
+		}
+	})
+	if err := os.WriteFile(file, []byte("thawed"), 0o644); err != nil {
+		t.Fatalf("write once the freezing test ended = %v; want it to land", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "sub", "new"), nil, 0o644); err != nil {
+		t.Fatalf("create once the freezing test ended = %v; want it to land", err)
+	}
+}
+
+// A tree with no file has nothing whose freeze every platform enforces.
+func TestFreezeTreeFailsOnATreeWithNoFile(t *testing.T) {
+	root := t.TempDir()
+	rec := &fatalRecorder{TB: t}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		FreezeTree(rec, root)
+	}()
+	<-done
+	if !strings.Contains(rec.fatal, "holds no file") {
+		t.Fatalf("FreezeTree(no file) fatal = %q; want it refused for holding no file", rec.fatal)
+	}
+}
+
 // fatalRecorder records a Fatalf and ends the goroutine that called it, as
 // testing.T does, without failing the test it wraps.
 type fatalRecorder struct {

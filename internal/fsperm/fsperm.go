@@ -50,6 +50,9 @@ func (op Op) String() string {
 // enforce the mode apart by call, and the measurement makes that same call.
 func Deny(t testing.TB, dir string, op Op) (restore func()) {
 	t.Helper()
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		t.Fatalf("%s is not a directory to deny %s on: %v", dir, op, err)
+	}
 	restore, err := op.inject(t, dir)
 	if err == nil {
 		restore()
@@ -127,27 +130,52 @@ func RequireReadOnly(t testing.TB, file string) {
 	}
 }
 
-// set changes dir's mode to perm and returns what puts the old mode back,
+// FreezeTree makes the tree at root read-only until the test ends: every
+// directory 0o555 and every file 0o444. It is measured on a file, whose
+// read-only bit every platform enforces and root bypasses; the directories
+// refuse new entries too on POSIX, and do not on Windows, so a test of a
+// frozen tree asserts only that a write into it fails.
+func FreezeTree(t testing.TB, root string) {
+	t.Helper()
+	var file string
+	if err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			set(t, path, 0o555)
+			return nil
+		}
+		set(t, path, 0o444)
+		file = path
+		return nil
+	}); err != nil {
+		t.Fatalf("freeze %s: %v", root, err)
+	}
+	if file == "" {
+		t.Fatalf("%s holds no file to measure its freeze on", root)
+	}
+	RequireReadOnly(t, file)
+}
+
+// set changes path's mode to perm and returns what puts the old mode back,
 // registered to run when the test ends too, so the test's temporary directory
-// can still be removed. A directory no longer at dir was moved by the code
-// under test, and the test that knows where it went restores it; one left
+// can still be removed. A path no longer there was moved by the code under
+// test, and the test that knows where it went restores it; a directory left
 // unwritable makes removing the temporary directory fail, so that is not
 // silent either.
-func set(t testing.TB, dir string, perm fs.FileMode) (restore func()) {
+func set(t testing.TB, path string, perm fs.FileMode) (restore func()) {
 	t.Helper()
-	info, err := os.Stat(dir)
+	info, err := os.Stat(path)
 	if err != nil {
-		t.Fatalf("stat %s before injecting a permission fault: %v", dir, err)
+		t.Fatalf("stat %s before injecting a permission fault: %v", path, err)
 	}
-	if !info.IsDir() {
-		t.Fatalf("%s is not a directory; a permission fault here is a directory's", dir)
-	}
-	if err := os.Chmod(dir, perm); err != nil {
-		t.Fatalf("chmod %s %v: %v", dir, perm, err)
+	if err := os.Chmod(path, perm); err != nil {
+		t.Fatalf("chmod %s %v: %v", path, perm, err)
 	}
 	restore = func() {
-		if err := os.Chmod(dir, info.Mode().Perm()); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			t.Errorf("restore %s to %v: %v", dir, info.Mode().Perm(), err)
+		if err := os.Chmod(path, info.Mode().Perm()); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("restore %s to %v: %v", path, info.Mode().Perm(), err)
 		}
 	}
 	t.Cleanup(restore)
