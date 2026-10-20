@@ -175,16 +175,16 @@ var doltWorkspaceMachinery = map[string][]string{
 	//
 	// SchemaConvergenceError is every failure of an open's schema
 	// convergence, a Dolt-era migration and reconcile run. Its
-	// ConvergenceStep and the step's act (ActRestoreSnapshot, ActEscalate)
-	// travel with it: the CLI reads the reason off the act, and its tests
-	// walk ConvergenceSteps to hold every step to a reason.
+	// ConvergenceStep and the step's act (ActClearCause, ActRestoreSnapshot,
+	// ActEscalate) travel with it: the CLI reads the reason off the act, and
+	// its tests walk ConvergenceSteps to hold every step to a reason.
 	"typed engine failures": {
 		"ErrWorkspaceBusy", "ErrTransientGCContention", "WorkspaceWriteBlockedError",
 		"RemoteUnreachableError", "ErrWorkspaceNotInitialized",
 		"UnsupportedSchemaVersionError", "QuarantineBlockError", "RemoteSchemaAheadError",
 		"OwnerApprovalRequiredError",
 		"SchemaConvergenceError", "ConvergenceStep", "ConvergenceSteps",
-		"ActRestoreSnapshot", "ActEscalate",
+		"ActClearCause", "ActRestoreSnapshot", "ActEscalate",
 	},
 }
 
