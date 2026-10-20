@@ -73,6 +73,13 @@ func TestAnAutomaticReceivePrunesABranchTheRemoteDeleted(t *testing.T) {
 			landing.Metadata["landed_pruned"], landing.Metadata["landed_fork_points_dropped"], landing)
 	}
 	written := writtenEvent(t, recorder.Finish(invocationEnd(time.Now(), nil, nil)))
+	outcomes := written.Occurrences["receive.outcomes"]
+	if len(outcomes) != 1 {
+		t.Fatalf("receive.outcomes = %#v; want the one receive", outcomes)
+	}
+	if outcome, _ := outcomes[0].(map[string]any); outcome["receive.landed_pruned"] != "feature" || outcome["receive.landed_fork_points_dropped"] != "feature" {
+		t.Fatalf("receive.outcomes[0] = %#v; want feature landed pruned and its fork point dropped", outcomes[0])
+	}
 	pruned := written.Occurrences["fetch.pruned"]
 	if len(pruned) != 1 {
 		t.Fatalf("fetch.pruned = %#v; want the clone's one prune", pruned)

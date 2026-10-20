@@ -254,7 +254,9 @@ func (s *Store) RemoteRemovals() []storage.RemoteRemovalRecord {
 // SyncSetRemoteURL re-points a remote in one mutation. Dolt has no set-url, so
 // it is a remove and an add; the fork points stay, because the name still
 // names the remote they record, and the next fetch brings its tracking refs
-// back (SyncFetch drops fork points only after its fetch). The remove runs only
+// back (SyncFetch drops fork points only after its fetch). A receive's landing
+// brings back the sync branch's ref alone, so the sync branch's fork point,
+// the one a reconcile reads, is the one it keeps (LandFetchedHead). The remove runs only
 // while the remote is there, so an attempt retried after its remove landed
 // goes on to the add.
 func (s *Store) SyncSetRemoteURL(ctx context.Context, name storage.RemoteName, url string) error {
@@ -285,7 +287,14 @@ func (s *Store) SyncSetRemoteURL(ctx context.Context, name storage.RemoteName, u
 // [LAW:dataflow-not-control-flow] one fetch, the same every call.
 func (s *Store) SyncFetch(ctx context.Context, remote storage.RemoteName) error {
 	owner := ownerOf(remote)
-	return s.runSyncMutation(ctx, func(ctx context.Context) error {
+	// What the fetch pruned is read against the tracking refs as the first
+	// attempt found them, before any fetch ran: an attempt retried after a
+	// fetch that landed finds the pruned refs already gone.
+	// [LAW:no-ambient-temporal-coupling] the before is recorded once, never
+	// re-listed after the move.
+	var before []storage.ForkPointRecord
+	var pruned []storage.PrunedRef
+	err := s.runSyncMutation(ctx, func(ctx context.Context) error {
 		// The fork points are recorded in the same mutation as the fetch and
 		// ahead of it, because the fetch moves every tracking ref of the remote
 		// however the remote's history moved (recordForkPoints). Every attempt
@@ -294,6 +303,9 @@ func (s *Store) SyncFetch(ctx context.Context, remote storage.RemoteName) error 
 		s.forkPoints = append(s.forkPoints, forkPoints...)
 		if err != nil {
 			return err
+		}
+		if before == nil {
+			before = forkPoints
 		}
 		// [LAW:single-enforcer] Remote transport retry wraps the one network-touching
 		// call, inside the mutation's own GC-contention retry: the two loops recover
@@ -309,13 +321,15 @@ func (s *Store) SyncFetch(ctx context.Context, remote storage.RemoteName) error 
 		if err != nil {
 			return err
 		}
+		pruned = prunedRefs(before, tracked)
 		// A fork point lives exactly as long as its tracking ref, so every one
 		// the fetch left without a ref goes. [LAW:one-source-of-truth]
 		dropped, err := s.dropForkPoints(ctx, owner, tracked)
 		s.forkPoints = append(s.forkPoints, dropped...)
-		s.pruned = append(s.pruned, prunedRefs(forkPoints, tracked)...)
 		return err
 	})
+	s.pruned = append(s.pruned, pruned...)
+	return err
 }
 
 // PrunedRefs is every branch a fetch since the store opened found gone from

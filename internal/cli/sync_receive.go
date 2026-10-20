@@ -662,10 +662,12 @@ func performSyncReceive(ctx context.Context, ws workspace.Info, clone liveClone,
 	// The settle's decision lands on the invocation's event too, one value per
 	// receive, read off the trace's own fields. [LAW:nothing-unseen]
 	telemetry.Append(ctx, "receive.outcomes", map[string]any{
-		"receive.decision": receiveDecision,
-		"receive.ahead":    result.Ahead,
-		"receive.behind":   result.Behind,
-		"receive.base":     traceMetadata["base"],
+		"receive.decision":                   receiveDecision,
+		"receive.ahead":                      result.Ahead,
+		"receive.behind":                     result.Behind,
+		"receive.base":                       traceMetadata["base"],
+		"receive.landed_pruned":              traceMetadata["landed_pruned"],
+		"receive.landed_fork_points_dropped": traceMetadata["landed_fork_points_dropped"],
 	})
 	traceRecordErr := recordReceiveTrace(ws, receiveDecision, traceStatus, traceReason, traceMetadata)
 	outcome = syncReceiveOutcome{

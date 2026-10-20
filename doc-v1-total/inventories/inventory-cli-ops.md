@@ -297,7 +297,7 @@ Dispatch (`sync_reconcile_cmd.go`): a first arg not starting with `-` routes to 
 `reconcilerFor` (`sync_reconcile_cmd.go`) resolves `storage.Reconcile.Of(session.engine)`; a decline is traced under the requesting command and returned.
 Surplus positionals are refused by the shared `refuseSurplusPositionals` (`register.go`): `lit sync reconcile abort stray` → `UsageError{"usage: lit sync reconcile abort takes no positional arguments; got unexpected argument(s) [\"stray\"]"}` (exit 2).
 
-`freshReconcileTarget` (`sync_reconcile_cmd.go`) — shared pre-step, through `resolveSyncTarget` (`sync.go`) for the steps before the fetch: reconcile remotes → resolve remote (none ⇒ ok=false) → `RemoteHasRefs` (error wrapped `check remote refs %q`; false ⇒ ok=false) → resolve branch → `syncer.SyncFetch(ctx, remote, false)` (error wrapped `fetch %q before reconcile`) → `markFetchSuccess` of that remote.
+`freshReconcileTarget` (`sync_reconcile_cmd.go`) — shared pre-step, through `resolveSyncTarget` (`sync.go`) for the steps before the fetch: reconcile remotes → resolve remote (none ⇒ ok=false) → `RemoteHasRefs` (error wrapped `check remote refs %q`; false ⇒ ok=false) → resolve branch → `syncer.SyncFetch(ctx, remote)` (error wrapped `fetch %q before reconcile`) → `markFetchSuccess` of that remote.
 `ok=false` at every command prints `nothing to reconcile: no remote with shared ticket history yet` and traces decision `nothing_to_reconcile` (e.g. `sync_reconcile_cmd.go`).
 
 #### 2.8.1 bare `lit sync reconcile`

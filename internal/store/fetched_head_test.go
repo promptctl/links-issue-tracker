@@ -447,6 +447,50 @@ func TestLandFetchedHeadLeavesRefsTheLiveStoreWroteSinceTheTake(t *testing.T) {
 	}
 }
 
+// TestLandFetchedHeadLeavesARefTheClonesSessionFetchedBack lands a clone
+// whose session fetched twice: the first fetch pruned feature, and the
+// second brought it back at the very head it pruned, as a peer re-pushing it
+// does. The clone ends holding feature, so the prune is undone and the live
+// ref, at the same head, stands with its fork point.
+func TestLandFetchedHeadLeavesARefTheClonesSessionFetchedBack(t *testing.T) {
+	t.Parallel()
+	f := newLandFixture(t)
+	peer := f.copyOf(f.live)
+	f.exec(peer, "DOLT_BRANCH", "feature")
+	f.exec(peer, "DOLT_PUSH", "origin", "feature")
+	f.liveFetch()
+	trackedBefore, forkPointsBefore := f.liveRefs()
+	f.exec(peer, "DOLT_PUSH", "origin", ":feature")
+
+	clone := f.copyOf(f.live)
+	st := f.openSync(clone)
+	if err := st.SyncFetch(f.ctx, remoteName(t, "origin")); err != nil {
+		t.Fatalf("SyncFetch(clone) error = %v", err)
+	}
+	f.exec(peer, "DOLT_PUSH", "origin", "feature")
+	if err := st.SyncFetch(f.ctx, remoteName(t, "origin")); err != nil {
+		t.Fatalf("second SyncFetch(clone) error = %v", err)
+	}
+	pruned := st.PrunedRefs()
+	f.close(st)
+	wantPruned := []storage.PrunedRef{{Remote: "origin", Branch: "feature", Head: trackedBefore["feature"]}}
+	if !slices.Equal(pruned, wantPruned) {
+		t.Fatalf("the clone's PrunedRefs() = %+v, want %+v", pruned, wantPruned)
+	}
+
+	landed, err := LandFetchedHead(f.ctx, f.live, clone, remoteName(t, "origin"), "master", pruned)
+	if err != nil {
+		t.Fatalf("LandFetchedHead() error = %v", err)
+	}
+	if len(landed.Pruned) != 0 || len(landed.ForkPointsDropped) != 0 {
+		t.Errorf("LandFetchedHead() pruned %+v and dropped %+v; want nothing deleted", landed.Pruned, landed.ForkPointsDropped)
+	}
+	tracked, forkPoints := f.liveRefs()
+	if !maps.Equal(tracked, trackedBefore) || !maps.Equal(forkPoints, forkPointsBefore) {
+		t.Errorf("live refs after the landing = %v / %v, want them as they stood, %v / %v", tracked, forkPoints, trackedBefore, forkPointsBefore)
+	}
+}
+
 // TestLandFetchedHeadKeepsTheSyncBranchsForkPointAcrossARePoint lands a
 // clone's fetch on a live store whose remote was re-pointed, which removes
 // the tracking refs and keeps the fork points until a fetch brings the refs
