@@ -234,9 +234,9 @@ func TestOnlyAnUnsatisfiableConstraintExcludesAFile(t *testing.T) {
 }
 
 // TestSpansInReadsBothQuotingShapes covers the corpus's two backtick shapes and
-// its fenced blocks. A single-backtick pattern alone cuts a “…“ span at its
-// inner backtick and protects a fragment instead of the message; reading inside
-// fences protects shell transcripts that assert nothing about lit.
+// its fenced blocks. A “…“ span is read whole, inner backticks and all, so
+// the claim is the message rather than a fragment of it; reading inside fences
+// would protect shell transcripts that assert nothing about lit.
 func TestSpansInReadsBothQuotingShapes(t *testing.T) {
 	src := "Both exit 6 with ``no ready work in %s — not a bare `next` `` and `the backlog is not empty` here.\n" +
 		"Short: `a b` and one-word: `NoWork` are not claims.\n" +
@@ -256,6 +256,26 @@ func TestSpansInReadsBothQuotingShapes(t *testing.T) {
 		if slices.Contains(got, rejected) {
 			t.Errorf("%q was kept as a claim; it is too short, single-word, or inside a fence", rejected)
 		}
+	}
+}
+
+// TestSpansInReadsTheCommandsAQuotedMessageQuotes: a chapter names a message's
+// placeholders, so the message as quoted may never match shipped text, and the
+// command it quotes must still be a claim of its own.
+func TestSpansInReadsTheCommandsAQuotedMessageQuotes(t *testing.T) {
+	src := "Refused with ``repository name <name> yields none; run `lit init --prefix <prefix>` to set one``.\n" +
+		"An odd count pairs nothing: ``a lone ` tick and then some text `lit next --all` here``.\n"
+	got, err := spansIn(src)
+	if err != nil {
+		t.Fatalf("spansIn: %v", err)
+	}
+	want := []string{
+		"repository name <name> yields none; run `lit init --prefix <prefix>` to set one",
+		"lit init --prefix <prefix>",
+		"a lone ` tick and then some text `lit next --all` here",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("claims = %q, want %q", got, want)
 	}
 }
 

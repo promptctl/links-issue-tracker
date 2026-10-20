@@ -491,7 +491,7 @@ input surfaces) (`label.go`). Otherwise returns the normalized form.
 
 ## 2.6 `Capabilities` / `StatusView` — `capabilities.go`
 
-- `type Capabilities struct { Status *StatusView \`json:"status,omitempty"\` }` —
+- ``type Capabilities struct { Status *StatusView `json:"status,omitempty"` }`` —
   `capabilities.go`.
 - `type StatusView struct` — `capabilities.go`:
   - `Value State` (`json:"value"`)

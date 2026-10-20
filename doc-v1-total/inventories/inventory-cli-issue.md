@@ -135,7 +135,7 @@ into* one of those, the call and its observable effect are recorded here.
     leaf's sentence → exit 3 (`flagset.go`). `registerActor` retires `assignee`
     with ``"--assignee does not name who is acting here; name yourself with --by <name> (CLAUDE_CODE_SESSION_ID wins when set), or change a ticket's assignee with `lit update <id> --assignee <name>`"`` (`cli.go`), inert on a leaf that registers its own
     `--assignee`; `next` retires `continue` (`next.go`) →
-    `UnsupportedError{Message: "--continue is retired; claim routing already keeps `lit next` in your checkout's own epic first — run `lit next` with no flag"}`
+    ``UnsupportedError{Message: "--continue is retired; claim routing already keeps `lit next` in your checkout's own epic first — run `lit next` with no flag"}``
     → exit 3 (`flagset.go`).
   - Every other parse error — unknown flag, missing value, invalid value, bad
     syntax — → `UsageError{Message: err.Error()}` → exit 2 (`flagset.go`).
@@ -704,7 +704,7 @@ else ready.
 - Presence of `--at` is `l.fs.Changed(lsAtFlag)`, where `lsAtFlag = "at"`
   (`cli.go`).
 - If `--at` is present and its value is blank-after-trim or starts with `-` →
-  `UsageError{"usage: lit ls --at <store-dir>  (a storage directory from `lit stores`)"}`
+  ``UsageError{"usage: lit ls --at <store-dir>  (a storage directory from `lit stores`)"}``
   (`cli.go`); the command name in the message is `surface.name`.
 - Otherwise opens `app.OpenLocationForRead(ctx, workspace.LocationFromStorageDir(atDir))`;
   a failure becomes `fmt.Errorf("open store at %q read-only: %w", atDir, …)`,
@@ -1040,7 +1040,7 @@ history:
   if not already among them, so a field never changed holds one version. n
   past them is `storage.VersionNotFoundError` → exit 4, reason `version_not_found`,
   message
-  `<id> has no <field>@<n>: its record holds <N> versions of <field>, numbered from 1; `lit show <id> --field <field>` prints the current text`.
+  ``<id> has no <field>@<n>: its record holds <N> versions of <field>, numbered from 1; `lit show <id> --field <field>` prints the current text``.
 
 ### 2.7 `lit update` — Update issue fields
 
@@ -1762,7 +1762,7 @@ claim; this command claims nothing.
   `UsageError{"usage: lit children <parent-id> [flags]  (got N positional arguments: [...])"}`
   (the list printed with `%q`) → exit 2, checked after the parse and before any
   store opens (`cli.go`).
-  A blank or `-`-prefixed `--at` → `UsageError{"usage: lit children --at <store-dir>  (a storage directory from `lit stores`)"}`
+  A blank or `-`-prefixed `--at` → ``UsageError{"usage: lit children --at <store-dir>  (a storage directory from `lit stores`)"}``
   (`cli.go`).
 - Filter: the positional is appended to the `--parent` ids (`cli.go`), so
   `lit children <id> [flags]` builds the filter `lit ls --parent <id> [flags]` builds
@@ -2028,7 +2028,7 @@ outside a git repository (`register.go`; asserted in `retired_command_test.go`).
   create/update file"), `--by` (`cli.go`).
 - Refusals: blank `--path` (after trim) →
   `UsageError{importUsage}` → exit 2. `importUsage` verbatim:
-  `"usage: lit import --path <tree-spec.json | bulk-file.yaml> (run `lit import --help` for both formats)"`
+  ``"usage: lit import --path <tree-spec.json | bulk-file.yaml> (run `lit import --help` for both formats)"``
   (`cli.go`).
 - Reads the file; a read error → `fmt.Errorf("read import spec: %w", err)` → exit 1
   (`cli.go`).

@@ -178,8 +178,7 @@ func TestExclusionLinesAreRefusedWithoutAReason(t *testing.T) {
 
 // TestSpanLinesPointAtTheSpan: the gate's report sends a reader to a line, so
 // the line must be the span's own, including past a fence and a double span,
-// and the report must read top to bottom even though double-backtick spans are
-// read first.
+// and the report must read top to bottom.
 func TestSpanLinesPointAtTheSpan(t *testing.T) {
 	doc := "intro `firstName`\n```\n`fencedName`\n```\n``a `b` c`` then `secondName`\n\n``thirdName``\n"
 	refs, err := Refs(fstest.MapFS{"d.md": {Data: []byte(doc)}}, []string{"d.md"})

@@ -397,7 +397,7 @@ Test `TestSyncCompactRunsCleanlyAndPreservesData` (`sync_test.go`).
 Fields (`sync_schema_guard.go`): `Remote`, `Branch`, `RemoteVersion int64`, `BinarySupportedMax int64`. It declares `SchemaAheadOfBinary()`, so it is a `model.SchemaAhead` (`sync_schema_guard.go`).
 
 `Error()` (`sync_schema_guard.go`) renders:
-`"remote %s/%s is at schema version %d but this binary supports only up to %d; refusing to write a commit below the remote head's schema — run `lit upgrade` to install a lit that supports schema version %d"` (Remote, Branch, RemoteVersion, BinarySupportedMax, RemoteVersion).
+``"remote %s/%s is at schema version %d but this binary supports only up to %d; refusing to write a commit below the remote head's schema — run `lit upgrade` to install a lit that supports schema version %d"`` (Remote, Branch, RemoteVersion, BinarySupportedMax, RemoteVersion).
 
 ### 4.2 Guard paths
 
@@ -702,7 +702,7 @@ Test `TestSyncResolveUnrelatedOwnerApprovalBindsForkAndSide` (`sync_unrelated_te
 5. `captureReconcilePlan`; copy `Ahead`/`Behind`.
 6. `!plan.diverged` → `SyncReconcileNotDiverged`, return (`sync_unrelated_take.go`).
 7. Set `result.LocalHead`, `result.RemoteHead`.
-8. **If the divergence HAS a base** → refuse: `"sync reconcile take applies only to unrelated histories, but the local backlog has a base to merge %s/%s against (%s); run \`lit sync reconcile\` to field-merge it"`; the parenthesis names where the base came from (`merge_base` or `fork_point`) (`sync_unrelated_take.go`). Test `TestSyncResolveUnrelatedRefusesSharedHistory` (`sync_unrelated_test.go`).
+8. **If the divergence HAS a base** → refuse: ``"sync reconcile take applies only to unrelated histories, but the local backlog has a base to merge %s/%s against (%s); run `lit sync reconcile` to field-merge it"``; the parenthesis names where the base came from (`merge_base` or `fork_point`) (`sync_unrelated_take.go`). Test `TestSyncResolveUnrelatedRefusesSharedHistory` (`sync_unrelated_test.go`).
 9. `unrelatedInventory(localHead, remoteHead)` → `result.Unrelated` (read **before** the approval check so the refusal can name what would be destroyed).
 10. `expected := takeApprovalToken(plan.localHead, plan.remoteHead, choice)`; if `ownerApproval != expected` → return `OwnerApprovalRequiredError{..., Stale: ownerApproval != ""}` with **nothing mutated** (`sync_unrelated_take.go`).
 11. `s.applyUnrelatedTake(...)`.
@@ -1044,7 +1044,7 @@ Tests: `TestPreGooseAdoptionStampsWithoutRerunningBaseline` (`migration_runner_t
 3. If `MinWriterSchema > MaxSupported`: `"; schema version %d changed a write rule this binary predates, so it reads this workspace but does not write to it or sync it"` (`MinWriterSchema`).
 4. If `MinWriterSchemaErr != nil`: `"; its minimum writer schema cannot be read (%v), so this binary reads this workspace but does not write to it or sync it"`.
 5. `")"`.
-6. Always: `"\n\nto operate this workspace, install a lit that supports schema version %d:\n  lit upgrade\n\n(this is the supported path — `lit upgrade` runs even from this too-old binary, installs the latest release, and refuses a release that cannot operate this workspace.)"` (`WorkspaceVersion`).
+6. Always: ``"\n\nto operate this workspace, install a lit that supports schema version %d:\n  lit upgrade\n\n(this is the supported path — `lit upgrade` runs even from this too-old binary, installs the latest release, and refuses a release that cannot operate this workspace.)"`` (`WorkspaceVersion`).
 7. If `SnapshotName != ""` → `"\n\nif you are stuck and need to roll back this workspace to match this binary:\n  lit snapshots restore %s\n\nthis is a LOSSY recovery — any data written under the newer binary will be discarded."`; else if `SnapshotLookupErr == nil` → `"\n\nno migration snapshot holds this workspace's data in a shape this binary writes; lossy rollback is not possible from this workspace."`.
 8. If `SnapshotLookupErr != nil`, after either: `"\n\nsome snapshots could not be read while looking for one to roll this workspace back to: %v"`.
 Tests: `TestUnsupportedSchemaVersionMessageShape` (`migration_runner_test.go`), `TestRefusalSurfacesRecoveryDataFromWorkspace`, `TestRefusalReportsUnreadableSnapshots`.
@@ -1576,7 +1576,7 @@ sha256 `2ab61664b7a73c4e36dc0a11d37e2f5b86b261a97aebf67ffa364ae9596e9deb`.
 No column change; renames the dependency relation type. The edge was stored as `'blocks'` with `src` the ticket that waits, so the row read the opposite of what it meant; `'blocked-by'` reads the way it means. Every row keeps its `src_id` and `dst_id`.
 
 **Up** — six statements:
-1. `SET @drop_relations_check = (SELECT CONCAT('ALTER TABLE relations DROP CONSTRAINT `', tc.constraint_name, '`') FROM information_schema.table_constraints tc WHERE tc.table_schema = DATABASE() AND tc.table_name = 'relations' AND tc.constraint_type = 'CHECK');` — found by table, not name, because a pre-goose store declared the CHECK inline and the engine named it per store (`relations_chk_<suffix>`).
+1. ``SET @drop_relations_check = (SELECT CONCAT('ALTER TABLE relations DROP CONSTRAINT `', tc.constraint_name, '`') FROM information_schema.table_constraints tc WHERE tc.table_schema = DATABASE() AND tc.table_name = 'relations' AND tc.constraint_type = 'CHECK');`` — found by table, not name, because a pre-goose store declared the CHECK inline and the engine named it per store (`relations_chk_<suffix>`).
 2. `PREPARE drop_relations_check FROM @drop_relations_check;` — with no CHECK the variable is NULL and the PREPARE fails; with more than one, the scalar subquery in statement 1 already failed ("the subquery returned more than 1 row"). Either way the migration fails. The file's own comment says both cases fail the PREPARE; the file is frozen by its sha256 pin (`version_reuse_test.go`), so the comment stays.
 3. `EXECUTE drop_relations_check;`
 4. `DEALLOCATE PREPARE drop_relations_check;`
@@ -1787,7 +1787,7 @@ External dependency `github.com/promptctl/primitives/filelock` (`snapshot.go`, `
 
 ### 13.2 Exported surface
 
-- `type Snapshot struct { Path string \`json:"path"\`; Name string \`json:"name"\`; Created time.Time \`json:"created"\` }` — `snapshot.go`
+- ``type Snapshot struct { Path string `json:"path"`; Name string `json:"name"`; Created time.Time `json:"created"` }`` — `snapshot.go`
 - `var ErrSnapshotMissing = errors.New("dbsnapshot: snapshot not found")` — `snapshot.go`
 - `var ErrSnapshotsBusy = errors.New("snapshot producer beacon busy")` — `snapshot.go`
 - `func DirFor(databaseDir string) string` — `snapshot.go`

@@ -344,9 +344,9 @@ Defaults are set in `Load` (`internal/config/config.go`).
   split on `-`, take the first hyphen-part that normalizes to a valid prefix, else the whole
   normalized base. Both ways of coming up short — nothing survives normalization, or too
   little does — are one failure wrapping `ErrIssuePrefixRefused` ⇒
-  `issue prefix refused: repository name %q yields none (a prefix needs %d or more characters
-  once punctuation is normalized away); run ``lit init --prefix <prefix>`` to set one
-  explicitly`. `internal/cli` maps that sentinel to reason `validation_refused` and exit 3.
+  ``issue prefix refused: repository name %q yields none (a prefix needs %d or more characters
+  once punctuation is normalized away); run `lit init --prefix <prefix>` to set one
+  explicitly``. `internal/cli` maps that sentinel to reason `validation_refused` and exit 3.
 
 ---
 
@@ -435,7 +435,7 @@ All geometry git calls use `context.Background()` deliberately (`internal/worksp
   - `worktree <path>` opens a record; an empty field is a record terminator
     and is skipped.
   - An attribute field before any `worktree` field ⇒
-    `git worktree list --porcelain -z opened with %q, which is not a `worktree <path>` field`.
+    ``git worktree list --porcelain -z opened with %q, which is not a `worktree <path>` field``.
   - Recognized attributes: `branch` (stripped of `refs/heads/`), `prunable`, `bare`
 . `detached`, `locked`, `HEAD`, and anything else are ignored.
   - Zero records ⇒ `git worktree list --porcelain -z named no worktrees at all`.
@@ -517,7 +517,7 @@ All geometry git calls use `context.Background()` deliberately (`internal/worksp
 - Line 2 (only when `BuildAge` is ok): `built %s ago\n`.
 - Line 3 (only when `Info.StaleSourceBuild(now)` is true — a from-source build whose age is
   ≥ `StaleBuildThreshold`):
-  `WARNING: this build is at least <threshold> old — run `just build` (or `just install`) to refresh`
+  ``WARNING: this build is at least <threshold> old — run `just build` (or `just install`) to refresh``
   — rendered by `versionStalenessWarning` from `stalenessThresholdClause` and
   `buildRefreshRemedy`, so "at least" tracks the `>=` comparison.
 - Final line: `schema versions supported: %d–%d\n`.
@@ -627,7 +627,7 @@ manifests (`internal/release/manifest.go`). `Signature` is reserved and unverifi
   paths (manual download from the artifact URL, or `lit snapshots list` + `lit snapshots restore`)
 .
 - Success prints
-  `downgraded to %s (schema v%d) installed at %s\nre-run \`lit version\` to confirm.\n`.
+  ``downgraded to %s (schema v%d) installed at %s\nre-run `lit version` to confirm.\n``.
   No re-exec is performed.
 
 ### 7.6 `scripts/install.sh` (492 lines)
