@@ -2,11 +2,11 @@
 // on the platform it runs on: faults that take a permission away, and the
 // mode a requested permission reads back as.
 //
-// A directory's mode bits are the fault on POSIX, and they do not hold
-// everywhere: root bypasses them, and Windows does not enforce a directory's
-// mode at all. So each fault is measured once it is set, and a test runs where
-// it holds and is skipped, saying why, where it does not — never run against a
-// fault that silently did nothing. Windows keeps a single read-only bit where
+// Mode bits are the fault on POSIX, and they do not hold everywhere: root
+// bypasses them, and Windows enforces only part of them (a file's read-only
+// bit, and a directory's against its own removal). So each fault is measured
+// once it is set, and a test runs where it holds and is skipped, saying why,
+// where it does not — never run against a fault that silently did nothing. Windows keeps a single read-only bit where
 // POSIX keeps nine, so a mode a test asserts is the one the platform stores.
 // [LAW:single-enforcer] This is the one place a test learns either.
 package fsperm
@@ -40,6 +40,49 @@ func DenyWrite(t testing.TB, dir string) (restore func()) {
 		t.Fatalf("probe %s for the write fault: %v; want a permission error", dir, err)
 	}
 	return restore
+}
+
+// DenyRemoval takes write permission off dir so it cannot be removed with
+// what it holds, and restores dir's mode when the test ends, as DenyWrite does.
+// It is a fault apart from DenyWrite because the platforms keep it apart:
+// Windows lets a new file into a directory marked read-only, but will not
+// remove the directory. It is measured on a twin directory holding one file,
+// since removing dir itself would take its contents.
+func DenyRemoval(t testing.TB, dir string) (restore func()) {
+	t.Helper()
+	twin := filepath.Join(t.TempDir(), "fsperm-removal-probe")
+	if err := os.Mkdir(twin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(twin, "entry"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	set(t, twin, 0o555)
+	removeErr := os.RemoveAll(twin)
+	if removeErr == nil {
+		t.Skipf("a directory with its write permission off was removed with what it held: this process bypasses directory permissions (root does), so %s cannot be made unremovable", dir)
+	}
+	if !errors.Is(removeErr, fs.ErrPermission) {
+		t.Fatalf("probe the removal fault: %v; want a permission error", removeErr)
+	}
+	return set(t, dir, 0o555)
+}
+
+// RequireReadOnly skips the test unless file, whose write permission the
+// caller has taken off, refuses to be opened for writing: root opens it
+// anyway. Windows enforces a file's read-only bit, so the test runs there.
+func RequireReadOnly(t testing.TB, file string) {
+	t.Helper()
+	f, err := os.OpenFile(file, os.O_WRONLY, 0)
+	if err == nil {
+		if err := f.Close(); err != nil {
+			t.Fatalf("close the write probe of %s: %v", file, err)
+		}
+		t.Skipf("%s opened for writing with its write permission off: this process bypasses file permissions (root does)", file)
+	}
+	if !errors.Is(err, fs.ErrPermission) {
+		t.Fatalf("probe %s for the read-only fault: %v; want a permission error", file, err)
+	}
 }
 
 // DenyRead takes every permission off dir, so its entries cannot be listed,

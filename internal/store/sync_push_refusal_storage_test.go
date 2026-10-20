@@ -1,5 +1,3 @@
-//go:build !windows
-
 package store
 
 import (
@@ -11,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/fsperm"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -20,8 +19,7 @@ import (
 // neither failure is a refusal: neither is judged diverged, and no fetch or
 // freshness read is joined to it. The live store holds c4 and is only ahead
 // of the remote. The clone diverged from it and pushes forced, so judging its
-// failure would tell the user to merge what --force meant to overwrite. A
-// read-only directory is POSIX semantics, hence the build tag.
+// failure would tell the user to merge what --force meant to overwrite.
 func TestAPushTheRemotesStorageFailsIsNotARefusal(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -52,9 +50,10 @@ func TestAPushTheRemotesStorageFailsIsNotARefusal(t *testing.T) {
 }
 
 // makeTreeReadOnly makes the directory tree at root read-only until the test
-// ends.
+// ends: nothing can be created in root, and no file in the tree written.
 func makeTreeReadOnly(t *testing.T, root string) {
 	t.Helper()
+	fsperm.DenyWrite(t, root)
 	if err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
@@ -73,7 +72,4 @@ func makeTreeReadOnly(t *testing.T, root string) {
 			t.Errorf("restore %s's permissions: %v", root, err)
 		}
 	})
-	if err := os.Chmod(root, 0o555); err != nil {
-		t.Fatalf("make %s read-only: %v", root, err)
-	}
 }

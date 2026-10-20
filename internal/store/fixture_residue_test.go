@@ -11,6 +11,7 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/fsperm"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -136,13 +137,11 @@ func TestFixtureResidueCannotCrossCopies(t *testing.T) {
 // consumer. [LAW:no-silent-failure]
 func TestFrozenTemplateRefusesDirectOpen(t *testing.T) {
 	t.Parallel()
-	if os.Geteuid() == 0 {
-		t.Skip("permission bits are inert under CAP_DAC_OVERRIDE (root); the freeze's documented scope excludes this environment")
-	}
 	ctx := context.Background()
 
 	// Force the template build, then record its pre-open digest.
 	_ = migratedDoltDir(t)
+	fsperm.RequireReadOnly(t, aFrozenFile(t, storeTemplates[0].dir))
 	before := digestDir(t, storeTemplates[0].dir)
 
 	st, err := Open(ctx, storeTemplates[0].dir, "freeze-probe")
@@ -154,4 +153,23 @@ func TestFrozenTemplateRefusesDirectOpen(t *testing.T) {
 	if after := digestDir(t, storeTemplates[0].dir); after != before {
 		t.Fatalf("the refused open still mutated the template: digest %s -> %s", before, after)
 	}
+}
+
+// aFrozenFile is any regular file of the frozen template at root.
+func aFrozenFile(t *testing.T, root string) string {
+	t.Helper()
+	var found string
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || found != "" {
+			return err
+		}
+		if d.Type().IsRegular() {
+			found = path
+		}
+		return nil
+	})
+	if err != nil || found == "" {
+		t.Fatalf("find a file in the template %s: %q, %v", root, found, err)
+	}
+	return found
 }

@@ -35,6 +35,38 @@ func TestDenyReadRefusesAListingUntilRestored(t *testing.T) {
 	assertOnlyEntry(t, dir, "entry")
 }
 
+func TestDenyRemovalKeepsTheDirectoryUntilRestored(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "held")
+	if err := os.MkdirAll(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	restore := DenyRemoval(t, dir)
+	if err := os.RemoveAll(dir); !errors.Is(err, fs.ErrPermission) {
+		t.Fatalf("remove a denied directory = %v; want a permission error", err)
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("the denied directory is gone: %v", err)
+	}
+	restore()
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatalf("remove once restored = %v; want it gone", err)
+	}
+}
+
+func TestRequireReadOnlyRunsWhereAReadOnlyFileRefusesAWrite(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "frozen")
+	if err := os.WriteFile(file, []byte("kept"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	RequireReadOnly(t, file)
+	if err := os.WriteFile(file, []byte("lost"), 0o444); !errors.Is(err, fs.ErrPermission) {
+		t.Fatalf("write a read-only file = %v; want a permission error", err)
+	}
+	if err := os.Chmod(file, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // assertOnlyEntry also shows the write probe left nothing behind.
 func assertOnlyEntry(t *testing.T, dir, want string) {
 	t.Helper()
