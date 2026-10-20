@@ -659,7 +659,7 @@ func TestSnapshotsNew_RecordSurvivesPruneFailure(t *testing.T) {
 		t.Fatal("no user snapshots on disk after five takes")
 	}
 	oldestPath := filepath.Join(dir, oldest)
-	fsperm.Deny(t, oldestPath, fsperm.Read)
+	fsperm.Deny(t, oldestPath, fsperm.RemoveAll)
 
 	var stdout, stderr bytes.Buffer
 	runErr := Run(context.Background(), &stdout, &stderr, []string{"snapshots", "new"})
