@@ -259,6 +259,26 @@ func TestSpansInReadsBothQuotingShapes(t *testing.T) {
 	}
 }
 
+// TestSpansInReadsTheCommandsAQuotedMessageQuotes: a chapter names a message's
+// placeholders, so the message as quoted may never match shipped text, and the
+// command it quotes must still be a claim of its own.
+func TestSpansInReadsTheCommandsAQuotedMessageQuotes(t *testing.T) {
+	src := "Refused with ``repository name <name> yields none; run `lit init --prefix <prefix>` to set one``.\n" +
+		"An odd count pairs nothing: ``a lone ` tick and then some text `lit next --all` here``.\n"
+	got, err := spansIn(src)
+	if err != nil {
+		t.Fatalf("spansIn: %v", err)
+	}
+	want := []string{
+		"repository name <name> yields none; run `lit init --prefix <prefix>` to set one",
+		"lit init --prefix <prefix>",
+		"a lone ` tick and then some text `lit next --all` here",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("claims = %q, want %q", got, want)
+	}
+}
+
 // TestACollidingHandleIsRefusedRatherThanOverwritten covers the corpus holding
 // two kinds of source in one key space: a Go literal keyed by its own text, an
 // embedded asset keyed by its path. A literal is collected only when it

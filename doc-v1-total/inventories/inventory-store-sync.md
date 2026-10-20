@@ -1575,7 +1575,7 @@ sha256 `2ab61664b7a73c4e36dc0a11d37e2f5b86b261a97aebf67ffa364ae9596e9deb`.
 No column change; renames the dependency relation type. The edge was stored as `'blocks'` with `src` the ticket that waits, so the row read the opposite of what it meant; `'blocked-by'` reads the way it means. Every row keeps its `src_id` and `dst_id`.
 
 **Up** — six statements:
-1. `SET @drop_relations_check = (SELECT CONCAT('ALTER TABLE relations DROP CONSTRAINT `', tc.constraint_name, '`') FROM information_schema.table_constraints tc WHERE tc.table_schema = DATABASE() AND tc.table_name = 'relations' AND tc.constraint_type = 'CHECK');` — found by table, not name, because a pre-goose store declared the CHECK inline and the engine named it per store (`relations_chk_<suffix>`).
+1. ``SET @drop_relations_check = (SELECT CONCAT('ALTER TABLE relations DROP CONSTRAINT `', tc.constraint_name, '`') FROM information_schema.table_constraints tc WHERE tc.table_schema = DATABASE() AND tc.table_name = 'relations' AND tc.constraint_type = 'CHECK');`` — found by table, not name, because a pre-goose store declared the CHECK inline and the engine named it per store (`relations_chk_<suffix>`).
 2. `PREPARE drop_relations_check FROM @drop_relations_check;` — with no CHECK the variable is NULL and the PREPARE fails; with more than one, the scalar subquery in statement 1 already failed ("the subquery returned more than 1 row"). Either way the migration fails. The file's own comment says both cases fail the PREPARE; the file is frozen by its sha256 pin (`version_reuse_test.go`), so the comment stays.
 3. `EXECUTE drop_relations_check;`
 4. `DEALLOCATE PREPARE drop_relations_check;`

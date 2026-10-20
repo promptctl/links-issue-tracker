@@ -917,8 +917,12 @@ func DocClaims(fsys fs.FS, names []string) ([]Claim, error) {
 	return claims, nil
 }
 
-// spansIn pulls the candidate claims out of one document: the code spans long
-// enough and multi-word enough to be a quoted message.
+// spansIn pulls the candidate claims out of one document: the code spans, and
+// the commands a quoted message quotes in its own backticks, long enough and
+// multi-word enough to be a quoted message. A chapter names a message's
+// placeholders (`<prefix>` where the source has %q), so the whole message may
+// never match shipped text; the command it quotes is verbatim, and is a claim
+// about the binary all the same.
 func spansIn(src string) ([]string, error) {
 	spans, err := CodeSpans(src)
 	if err != nil {
@@ -926,11 +930,27 @@ func spansIn(src string) ([]string, error) {
 	}
 	var out []string
 	for _, s := range spans {
-		if len(s.Text) >= minClaimLen && strings.Contains(s.Text, " ") {
-			out = append(out, s.Text)
+		for _, q := range append([]string{s.Text}, innerQuotes(s.Text)...) {
+			if len(q) >= minClaimLen && strings.Contains(q, " ") {
+				out = append(out, q)
+			}
 		}
 	}
 	return out, nil
+}
+
+// innerQuotes is each stretch a span's own backticks quote, paired in order, as
+// a message pairs them. An odd count pairs nothing.
+func innerQuotes(span string) []string {
+	parts := strings.Split(span, "`")
+	if len(parts)%2 == 0 {
+		return nil
+	}
+	var out []string
+	for i := 1; i < len(parts); i += 2 {
+		out = append(out, parts[i])
+	}
+	return out
 }
 
 // Matched keeps the claims whose text appears in shipped text, recording which

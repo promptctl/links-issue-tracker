@@ -4167,7 +4167,7 @@ Test pins: `TestVerifyCandidateRejectsMisMappedRank` builds a candidate from a p
 `type Mapper func(dump RawDump, feedback string) (ShapeMapping, error)` (`recover.go`).
 
 `DeterministicMapper(dump RawDump, _ string)` ignores feedback; delegates to `DeterministicMap(dump)`, and on `!ok` returns the exact error text (`recover.go`):
-`workspace shape not recognized by any built-in mapper; the LLM mapping path is required (feed `+"`lit lifeboat dump`"+` to the mapper, then apply+verify)` (`recover.go`).
+``workspace shape not recognized by any built-in mapper; the LLM mapping path is required (feed `lit lifeboat dump` to the mapper, then apply+verify)`` (`recover.go`).
 
 ### 2.2 The three outcome variants
 
@@ -4277,7 +4277,7 @@ Signature `DumpRaw(ctx, doltRootDir string, workspaceID string) (RawDump, error)
 2. `acquireWorkspaceShared(ctx, doltRootDir)` — a **shared** workspace lock, excluding directory rotators such as `lit snapshots restore` (`rawdump.go`). On contention the error text is `a lit operation is rebuilding this workspace's Dolt directory (e.g. snapshots restore, an init backlog adopt, or lifeboat recover); retry after it completes: %w` wrapping `ErrWorkspaceBusy` (`internal/store/workspace_lock.go`).
 3. A deferred release joins any release error into the returned error (`rawdump.go`).
 4. `requireInitializedWorkspace(doltRootDir)` (`rawdump.go`) — the same shared helper `OpenForRead` calls: `os.ErrNotExist` → the package sentinel `ErrWorkspaceNotInitialized` (`workspace_initialized.go`), `repository not initialized with lit — run 'lit init' first`; any other stat error → `stat database dir: %w`.
-5. `requireNoPendingAdopt(doltRootDir)` — run **after** the lock is taken (`rawdump.go`). Its message (`internal/store/adopt.go`): `%w: a `+"`lit init`"+` backlog adopt was interrupted before completing (%s; marker %s), so the on-disk store is that adopt's leftover partial state, not a usable backlog. Run `+"`lit init`"+` to retry: it sets the leftover aside and re-clones the remote backlog. If the remote no longer carries the backlog, delete %s to abandon the adopt and start fresh`, with the `%s` context either the literal `a backlog adopt` or `the adopt of %s/%s started %s` (`adopt.go`); a marker read failure yields `read adopt-pending marker: %w` (`adopt.go`).
+5. `requireNoPendingAdopt(doltRootDir)` — run **after** the lock is taken (`rawdump.go`). Its message (`internal/store/adopt.go`): ``%w: a `lit init` backlog adopt was interrupted before completing (%s; marker %s), so the on-disk store is that adopt's leftover partial state, not a usable backlog. Run `lit init` to retry: it sets the leftover aside and re-clones the remote backlog. If the remote no longer carries the backlog, delete %s to abandon the adopt and start fresh``, with the `%s` context either the literal `a backlog adopt` or `the adopt of %s/%s started %s` (`adopt.go`); a marker read failure yields `read adopt-pending marker: %w` (`adopt.go`).
 6. `openStoreConnection(ctx, doltRootDir, workspaceID, engineRead)` — **no `migrate()` call**, which is what lets it read a workspace `store.Open` refuses (`rawdump.go`, doc at `rawdump.go`). `engineRead` is the first `engineAccess` value (`store.go`).
 7. Deferred `s.db.Close()`, whose error is joined into the return unless it is `context.Canceled` (`rawdump.go`).
 8. `readDoltHead(ctx, s.db)` — mandatory, not best-effort (`rawdump.go`, rationale `rawdump.go`).
@@ -4291,7 +4291,7 @@ The dump is **read-only** on the database — the only SQL issued is the three S
 
 - Head: `SELECT commit_hash FROM dolt_log() LIMIT 1` (`rawdump.go`), error `read dolt head: %w` (`rawdump.go`). This is the single HEAD reader shared with promote-time re-checks and migration checkpointing (`rawdump.go`).
 - Table list: `SELECT table_name FROM information_schema.tables WHERE table_schema = DATABASE() ORDER BY table_name` (`rawdump.go`) — i.e. **every base table in the database in ascending catalog-name order**, including Dolt/goose bookkeeping tables; there is no hand-maintained include/exclude list (`rawdump.go`). Errors: `list tables: %w` (`rawdump.go`), `scan table name: %w` (`rawdump.go`), `iterate tables: %w` (`rawdump.go`).
-- Per table: `"SELECT * FROM `" + name + "`"` — the table name is interpolated inside backticks, not parameterized (`rawdump.go`). Errors: `select %q: %w` (`rawdump.go`), `columns %q: %w` (`rawdump.go`), `scan row of %q: %w` (`rawdump.go`), `iterate rows of %q: %w` (`rawdump.go`).
+- Per table: ``"SELECT * FROM `" + name + "`"`` — the table name is interpolated inside backticks, not parameterized (`rawdump.go`). Errors: `select %q: %w` (`rawdump.go`), `columns %q: %w` (`rawdump.go`), `scan row of %q: %w` (`rawdump.go`), `iterate rows of %q: %w` (`rawdump.go`).
 
 ### 3.5 Cell value rules (`dumpTable`, `rawdump.go`)
 

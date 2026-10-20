@@ -1,7 +1,6 @@
 package docclaims
 
 import (
-	"bytes"
 	"fmt"
 	"sort"
 	"strings"
@@ -60,15 +59,16 @@ func CodeSpans(src string) ([]Span, error) {
 				return ast.WalkStop, fmt.Errorf("unclosed code fence opened at line %d", lineAt(opened.(int)))
 			}
 		case *ast.CodeSpan:
-			body, start := spanBody(n, source)
-			if cutShort(n, body, source) {
+			raw, start := spanBody(n, source)
+			body := lineEnding.Replace(raw)
+			if cutShort(n, raw, source) {
 				return ast.WalkStop, fmt.Errorf("line %d: the code span %q is cut short by a backtick inside it; quote the whole message in a longer backtick run (``…``)", lineAt(start), body)
 			}
 			out = append(out, Span{Text: strings.TrimSpace(body), Line: lineAt(start)})
 			return ast.WalkSkipChildren, nil
 		case *ast.Text:
-			if bytes.IndexByte(n.Segment.Value(source), '`') >= 0 {
-				return ast.WalkStop, fmt.Errorf("line %d: a backtick renders as text in %q; a span that quotes backticks needs a longer backtick run around it (``…``), a backslash does not escape inside a span, and in a table a pipe inside a span is written \\|", lineAt(n.Segment.Start), n.Segment.Value(source))
+			if strayBacktick(n.Segment, source) {
+				return ast.WalkStop, fmt.Errorf("line %d: a backtick renders as text in %q; a span that quotes backticks needs a longer backtick run around it (``…``), a backslash does not escape inside a span, a backtick meant as text in prose is written \\`, and in a table a pipe inside a span is written \\|", lineAt(n.Segment.Start), n.Segment.Value(source))
 			}
 		}
 		return ast.WalkContinue, nil
@@ -79,38 +79,98 @@ func CodeSpans(src string) ([]Span, error) {
 	return out, nil
 }
 
-// spanBody is a span's text as rendered, a line ending inside it read as a
-// space, and the offset of its first character.
+// lineEnding reads each CommonMark line ending inside a span as the space it
+// renders as.
+var lineEnding = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ")
+
+// spanBody is a span's text as written, line endings and all, and the offset
+// of its first character.
 func spanBody(n *ast.CodeSpan, source []byte) (string, int) {
 	var body strings.Builder
 	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
 		body.Write(c.(*ast.Text).Segment.Value(source))
 	}
-	return strings.ReplaceAll(body.String(), "\n", " "), n.FirstChild().(*ast.Text).Segment.Start
+	return body.String(), n.FirstChild().(*ast.Text).Segment.Start
 }
 
-// cutShort reports a span closed early by a backtick inside the quotation.
-// `run `x` now` renders as the span "run ", the text "x" and the span " now":
-// a space at the span's edge sits against a word outside it, which nobody
-// writes on purpose. A per-paragraph backtick count cannot see this; that line
-// holds four backticks, an even number.
-func cutShort(n *ast.CodeSpan, body string, source []byte) bool {
-	if prev, ok := n.PreviousSibling().(*ast.Text); ok && !prev.SoftLineBreak() && !prev.HardLineBreak() {
-		r, _ := utf8.DecodeLastRune(prev.Segment.Value(source))
-		if isWord(r) && strings.HasPrefix(body, " ") {
-			return true
+// strayBacktick reports a backtick in prose that no backslash escapes: one
+// meant to open or close a span that renders as text instead.
+func strayBacktick(seg text.Segment, source []byte) bool {
+	for p := seg.Start; p < seg.Stop; p++ {
+		if source[p] != '`' {
+			continue
 		}
-	}
-	if next, ok := n.NextSibling().(*ast.Text); ok {
-		r, _ := utf8.DecodeRune(next.Segment.Value(source))
-		if isWord(r) && strings.HasSuffix(body, " ") {
+		q := p
+		for q > 0 && source[q-1] == '\\' {
+			q--
+		}
+		if (p-q)%2 == 0 {
 			return true
 		}
 	}
 	return false
 }
 
+// cutShort reports a span closed early by a backtick inside the quotation.
+// `run `x` now` renders as the span "run ", the text "x" and the span " now".
+// The tell is a space typed at a span's edge, facing outward: against a word,
+// which nobody writes on purpose, or into text that touches both its own
+// backtick run and the next span's, which is the quotation the inner backticks
+// cut apart, whatever characters it opens and closes with. A line ending at the
+// edge is only the paragraph wrapping. A per-paragraph backtick count cannot
+// see any of this; `run `x` now` holds four backticks, an even number.
+func cutShort(n *ast.CodeSpan, raw string, source []byte) bool {
+	open, close := runs(n, source)
+	lead, trail := raw[0] == ' ', raw[len(raw)-1] == ' '
+	if lead && isWord(lastRune(source[:open])) || trail && isWord(firstRune(source[close:])) {
+		return true
+	}
+	next := nextSpan(n)
+	if next == nil {
+		return false
+	}
+	nextRaw, _ := spanBody(next, source)
+	nextOpen, _ := runs(next, source)
+	gap := source[close:nextOpen]
+	return (trail || nextRaw[0] == ' ') && !unicode.IsSpace(firstRune(gap)) && !unicode.IsSpace(lastRune(gap))
+}
+
+// runs is the extent of a span in the source, its backtick runs included: the
+// offset of its opening run and the offset just past its closing run. Between
+// a run and the body sits nothing, or the one space CommonMark strips from
+// each end of a span padded on both.
+func runs(n *ast.CodeSpan, source []byte) (open, close int) {
+	open = n.FirstChild().(*ast.Text).Segment.Start
+	close = n.LastChild().(*ast.Text).Segment.Stop
+	for open > 0 && source[open-1] != '`' {
+		open--
+	}
+	for open > 0 && source[open-1] == '`' {
+		open--
+	}
+	for close < len(source) && source[close] != '`' {
+		close++
+	}
+	for close < len(source) && source[close] == '`' {
+		close++
+	}
+	return open, close
+}
+
+func nextSpan(n ast.Node) *ast.CodeSpan {
+	for s := n.NextSibling(); s != nil; s = s.NextSibling() {
+		if span, ok := s.(*ast.CodeSpan); ok {
+			return span
+		}
+	}
+	return nil
+}
+
 func isWord(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }
+
+func firstRune(b []byte) rune { r, _ := utf8.DecodeRune(b); return r }
+
+func lastRune(b []byte) rune { r, _ := utf8.DecodeLastRune(b); return r }
 
 // lineIndex maps a byte offset to its 1-based line. Line starts are indexed
 // once: the inventories run to 446KB and thousands of spans, and counting

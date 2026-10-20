@@ -28,6 +28,10 @@ func TestCodeSpansReadsWhatGitHubRenders(t *testing.T) {
 		{"an escaped pipe in a table cell", "| a | b |\n|---|---|\n| `x\\|y` | z |\n", []string{"x|y:3"}},
 		{"nothing inside a fence", "```\n`fenced span`\n```\nafter `real one`\n", []string{"real one:4"}},
 		{"nothing inside an indented code block", "intro\n\n    `indented span`\n\nafter `real one`\n", []string{"real one:5"}},
+		{"a backslash-escaped backtick in prose", "prose with an escaped \\` backtick and `a span`\n", []string{"a span:1"}},
+		{"a span opening at a line's end after a word", "word`\n tail` here\n", []string{"tail:1"}},
+		{"a span closing at a line's start before a word", "`a\n`b c\n", []string{"a:1"}},
+		{"a span wrapped across a CRLF line ending", "a `run\r\nit` b\r\n", []string{"run it:1"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			spans, err := CodeSpans(tc.doc)
@@ -60,6 +64,9 @@ func TestCodeSpansRefusesWhatDoesNotRenderAsWritten(t *testing.T) {
 		{"an inner span closing the outer early", "`run `just install` to refresh`\n", "line 1:"},
 		{"a span glued to the word before it", "intro\n\nword` tail` here\n", "line 3:"},
 		{"a span glued to the word after it", "`head `word here\n", "line 1:"},
+		{"an inner span opening and closing on punctuation", "`see `(a)` now`\n", "line 1:"},
+		{"an inner span closing against a comma", "x\n`x `--flag`, then`\n", "line 2:"},
+		{"a backtick after an escaped backslash", "a \\\\` stray\n", "line 1:"},
 		{"an unescaped pipe splitting a table cell's span", "| a |\n|---|\n| `x|y` |\n", "line 3:"},
 		{"an unclosed fence", "intro\n```\nnever closed\n", "line 2"},
 		{"a shorter fence cannot close a longer one", "````\n```\nstill inside\n", "line 1"},
