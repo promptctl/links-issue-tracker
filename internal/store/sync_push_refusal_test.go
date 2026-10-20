@@ -3,7 +3,11 @@ package store
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
+
+	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
+	doltenv "github.com/dolthub/dolt/go/libraries/doltcore/env"
 
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
@@ -30,6 +34,7 @@ func TestOnlyARefusedPushIsFollowedAndRetried(t *testing.T) {
 		{"remote never opened", errors.New("Error 1105: failed to get remote db; the remote: gone 'file:///r' could not be accessed; operation not valid on a file"), false},
 		{"remote not configured", errors.New("Error 1105: fatal: remote 'no-such-remote' not found.\nPlease make sure the remote exists."), false},
 		{"remote's storage failed the write", errors.New("Error 1105: unknown push error; open /r/.git permission denied"), false},
+		{"git remote declined the write", errors.New("Error 1105: unknown push error; git command failed (exit 1)\ncommand: git push --porcelain --force-with-lease=refs/dolt/data:abc origin refs/dolt/blobstore:refs/dolt/data\noutput:\nTo /r\n!\trefs/dolt/blobstore:refs/dolt/data\t[remote rejected] (pre-receive hook declined)\nDone\nerror: failed to push some refs to '/r'"), false},
 		{"context ended", context.Canceled, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -47,11 +52,30 @@ func TestOnlyARefusedPushIsFollowedAndRetried(t *testing.T) {
 		})
 	}
 	lockTimeout := errors.New("acquire commit lock: timed out")
-	for _, pushErr := range []error{nil, lockTimeout, classifyPushFailure("origin", RemoteUnreachableError{Attempts: 3, Symptom: "connection refused", Cause: noAncestor})} {
+	for _, pushErr := range []error{
+		nil,
+		lockTimeout,
+		classifyPushFailure("origin", RemoteUnreachableError{Attempts: 3, Symptom: "connection refused", Cause: noAncestor}),
+		classifyPushFailure("origin", errors.New("Error 1105: failed to get remote db; the remote: gone 'file:///r' could not be accessed; operation not valid on a file")),
+		classifyPushFailure("origin", errors.New("Error 1105: unknown push error; open /r/.git permission denied")),
+	} {
 		pushed := storage.SyncPushResult{Head: "h"}
 		result, gotErr, _, followErr := (&Store{}).retryPushAfterFollow(live, "origin", "master", false, false, pushed, pushErr)
 		if result != pushed || gotErr != pushErr || followErr != nil {
 			t.Fatalf("retryPushAfterFollow(%v) = %+v, %v, %v; want the push's own outcome untouched", pushErr, result, gotErr, followErr)
 		}
+	}
+}
+
+// The refusal texts are Dolt's: a reworded ErrFailedToPush or
+// ErrNoCommonAncestor fails here rather than silently turning refusals into
+// plain failures.
+func TestPushRefusalTextsAreDoltsOwn(t *testing.T) {
+	rejected := doltenv.ErrFailedToPush.New("file:///r").Error()
+	if !strings.Contains(rejected, pushRefusalTexts[0]) {
+		t.Fatalf("Dolt's ErrFailedToPush is %q; it no longer carries the refusal text %q", rejected, pushRefusalTexts[0])
+	}
+	if pushRefusalTexts[1] != doltdb.ErrNoCommonAncestor.Error() {
+		t.Fatalf("refusal text %q is not Dolt's ErrNoCommonAncestor %q", pushRefusalTexts[1], doltdb.ErrNoCommonAncestor)
 	}
 }

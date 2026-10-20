@@ -16,10 +16,12 @@ import (
 
 // TestAPushTheRemotesStorageFailsIsNotARefusal is the control beside
 // TestAPushRefusedOverAPeersCommitsIsDiverged: a remote made read-only opens,
-// then fails the push's write. The remote ruled nothing on history, so the
-// failure is not a refusal: it is not judged diverged, and no fetch or
+// then fails the push's write. The remote ruled nothing on history, so
+// neither failure is a refusal: neither is judged diverged, and no fetch or
 // freshness read is joined to it. The live store holds c4 and is only ahead
-// of the remote. A read-only directory is POSIX semantics, hence the build tag.
+// of the remote. The clone diverged from it and pushes forced, so judging its
+// failure would tell the user to merge what --force meant to overwrite. A
+// read-only directory is POSIX semantics, hence the build tag.
 func TestAPushTheRemotesStorageFailsIsNotARefusal(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -27,16 +29,25 @@ func TestAPushTheRemotesStorageFailsIsNotARefusal(t *testing.T) {
 	commitTitled(t, ctx, race.liveRoot, race.epicID, "c4")
 	makeTreeReadOnly(t, race.remoteDir)
 
-	st, err := OpenSync(ctx, race.liveRoot, "ws")
-	if err != nil {
-		t.Fatalf("OpenSync() error = %v", err)
-	}
-	_, err = st.SyncPush(ctx, "origin", "master", false, false)
-	if closeErr := st.Close(); closeErr != nil {
-		t.Fatalf("Close() error = %v", closeErr)
-	}
-	if err == nil || errors.As(err, new(pushRefusedError)) || errors.Is(err, storage.ErrPushDiverged) || strings.Contains(err.Error(), "could not be") {
-		t.Fatalf("SyncPush() of c4 to a read-only remote error = %v; want the write's failure as it came, not a refusal and not storage.ErrPushDiverged", err)
+	for _, failed := range []struct {
+		name  string
+		root  string
+		force bool
+	}{
+		{"SyncPush() of c4, only ahead", race.liveRoot, false},
+		{"SyncPush(force) of the diverged c3", race.cloneRoot, true},
+	} {
+		st, err := OpenSync(ctx, failed.root, "ws")
+		if err != nil {
+			t.Fatalf("%s: OpenSync() error = %v", failed.name, err)
+		}
+		_, err = st.SyncPush(ctx, "origin", "master", false, failed.force)
+		if closeErr := st.Close(); closeErr != nil {
+			t.Fatalf("%s: Close() error = %v", failed.name, closeErr)
+		}
+		if err == nil || errors.As(err, new(pushRefusedError)) || errors.Is(err, storage.ErrPushDiverged) || strings.Contains(err.Error(), "could not be") {
+			t.Fatalf("%s to a read-only remote error = %v; want the write's failure as it came, not a refusal and not storage.ErrPushDiverged", failed.name, err)
+		}
 	}
 }
 

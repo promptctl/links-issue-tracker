@@ -795,29 +795,42 @@ func (e pushRefusedError) Error() string {
 
 func (e pushRefusedError) Unwrap() error { return e.cause }
 
-// pushRefusalTexts are the texts DOLT_PUSH's two refusals carry, taken from
-// Dolt's own errors [LAW:one-source-of-truth]: the SQL boundary renders the
-// error as text (MySQL error 1105), so a refusal is recognized by its text, as
-// pushLeasedWithinLock recognizes a stale lease. ErrFailedToPush is returned
-// only when a target was rejected, and its message opens with the part before
-// the URL it names; a re-rooted remote shares no ancestor with the push.
+// pushRefusalTexts are the texts DOLT_PUSH's two refusals carry. The SQL
+// boundary renders DOLT_PUSH's error as text (MySQL error 1105), so a refusal
+// is recognized by its text, as pushLeasedWithinLock recognizes a stale
+// lease.
+//   - The first is the hint of env.ErrFailedToPush, which Dolt returns only
+//     when a target was rejected non-fast-forward. Its opening line is not
+//     used: it is git's own "failed to push some refs" line, which a git
+//     remote's rejected write carries too. Git gives this hint only for a
+//     non-fast-forward rejection, and a git remote's writes are all forced.
+//     TestPushRefusalTextsAreDoltsOwn holds it to Dolt's message
+//     [LAW:one-source-of-truth].
+//   - The second is a re-rooted remote, which shares no ancestor with the
+//     push.
+//
 // Both come from the fast-forward check, which a forced push skips, so a
 // forced push is never refused.
 var pushRefusalTexts = []string{
-	strings.SplitN(doltenv.ErrFailedToPush.Message, "%s", 2)[0],
+	"hint: Updates were rejected because the tip of your current branch is behind",
 	doltdb.ErrNoCommonAncestor.Error(),
 }
 
 // classifyPushFailure is DOLT_PUSH's error as pushRefusedError when the remote
 // refused it, and otherwise the failure as it came: an unreachable remote, one
 // that never opened, a write the remote's storage failed, or the caller's
-// context ending.
+// context ending. An unreachable remote is already a parsed type, so its
+// rendering is never read [LAW:parse-dont-validate].
 func classifyPushFailure(remote string, pushErr error) error {
+	wrapped := fmt.Errorf("push remote %q: %w", remote, pushErr)
+	if errors.As(pushErr, new(RemoteUnreachableError)) {
+		return wrapped
+	}
 	text := pushErr.Error()
 	if slices.ContainsFunc(pushRefusalTexts, func(refusal string) bool { return strings.Contains(text, refusal) }) {
 		return pushRefusedError{remote: remote, cause: pushErr}
 	}
-	return fmt.Errorf("push remote %q: %w", remote, pushErr)
+	return wrapped
 }
 
 // pushMutation is one push as its own sync mutation.
