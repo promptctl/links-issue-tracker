@@ -48,12 +48,14 @@
 // engine opens eagerly inside openStoreConnection — before any commit lock
 // — and refuses Dolt's read-only fallback, retrying its open boundedly, so
 // a live write Store stands at "holds LOCK, takes commit per mutation" for
-// its whole lifetime, but for one gap: a follow of a re-rooted remote
-// (reroot_follow.go), which runs with no commit lock held, closes the engine
-// to give up LOCK, retakes it through holdForRefWrite to rewrite the branch,
-// and reopens. Another writer can take LOCK inside that gap; the follow and
-// the reopen then wait for it exactly as any open does, and a reopen that
-// cannot get LOCK fails loudly, its closed engine failing every later query.
+// its whole lifetime, but for one gap: a rewrite of its history, a follow of
+// a re-rooted remote (reroot_follow.go) or the history bound's own re-root
+// (history_bound.go). Each runs with no commit lock held and through
+// withEngineClosed, which closes the engine to give up LOCK, retakes it
+// through holdForRefWrite to rewrite the branch, and reopens. Another writer
+// can take LOCK inside that gap; the rewrite and the reopen then wait for it
+// exactly as any open does, and a reopen that cannot get LOCK fails loudly,
+// its closed engine failing every later query.
 // A read engine opens eagerly too and never waits on
 // LOCK (a 100ms attempt, then the read-only fallback), so it contributes no
 // wait edge anywhere — and a read Store takes no commit lock at all: its
@@ -92,9 +94,10 @@
 // engine beside a live writer is on the read-only fallback and never sees
 // that writer's commits. So an engine answers from the moment it opened plus
 // its Store's own writes. A Store changes engines at two places: at
-// Store.reconnect, inside a mutation under the commit lock, and at a follow
-// of a re-rooted remote, between commit-lock holds — the follow must reopen,
-// since its engine would never see the branch it rewrote. Either way the new
+// Store.reconnect, inside a mutation under the commit lock, and at
+// withEngineClosed, between commit-lock holds, for a follow of a re-rooted
+// remote or the history bound's re-root — each must reopen, since its engine
+// would never see the branch it rewrote. Either way the new
 // engine loads the root as it then stands, and neither runs inside a read. A
 // read call
 // therefore answers from one moment however many statements it runs — one
