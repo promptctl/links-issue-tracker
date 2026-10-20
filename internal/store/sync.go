@@ -762,7 +762,7 @@ func (s *Store) chooseCompactionDepth() (GCMode, error) {
 // after a mutation, and reclaiming local disk is not worth that on every change.
 func (s *Store) SyncPush(ctx context.Context, remote string, branch string, setUpstream bool, force bool) (storage.SyncPushResult, error) {
 	result, pushErr := s.pushMutation(ctx, remote, branch, setUpstream, force)
-	result, pushErr, _, followErr := s.retryPushAfterFollow(ctx, remote, branch, setUpstream, force, result, pushErr)
+	result, pushErr, _, followErr := s.retryPushAfterFollow(ctx, remote, branch, setUpstream, result, pushErr)
 	if err := joinFollowFailure(pushErr, followErr); err != nil {
 		return storage.SyncPushResult{}, err
 	}
@@ -811,10 +811,11 @@ func (e pushRefusedError) Unwrap() error { return e.cause }
 //
 // Both come from the fast-forward check, which a forced push skips, so a
 // forced push is never refused.
-var pushRefusalTexts = []string{
-	"hint: Updates were rejected because the tip of your current branch is behind",
-	doltdb.ErrNoCommonAncestor.Error(),
-}
+var pushRefusalTexts = []string{pushRejectedHint, pushNoAncestorText}
+
+const pushRejectedHint = "hint: Updates were rejected because the tip of your current branch is behind"
+
+var pushNoAncestorText = doltdb.ErrNoCommonAncestor.Error()
 
 // classifyPushFailure is DOLT_PUSH's error as pushRefusedError when the remote
 // refused it, and otherwise the failure as it came: an unreachable remote, one
@@ -867,7 +868,7 @@ func (s *Store) pushMutation(ctx context.Context, remote string, branch string, 
 //
 // A push with no branch names no tracking ref, so its refusal stands with
 // nothing fetched: there is no history on the other side to follow.
-func (s *Store) retryPushAfterFollow(ctx context.Context, remote, branch string, setUpstream, force bool, pushed storage.SyncPushResult, pushErr error) (result storage.SyncPushResult, _ error, followed storage.FollowedReRoot, followErr error) {
+func (s *Store) retryPushAfterFollow(ctx context.Context, remote, branch string, setUpstream bool, pushed storage.SyncPushResult, pushErr error) (result storage.SyncPushResult, _ error, followed storage.FollowedReRoot, followErr error) {
 	trimmedBranch := strings.TrimSpace(branch)
 	var refusal pushRefusedError
 	if !errors.As(pushErr, &refusal) || trimmedBranch == "" {
@@ -881,7 +882,7 @@ func (s *Store) retryPushAfterFollow(ctx context.Context, remote, branch string,
 		return storage.SyncPushResult{}, pushErr, followed, err
 	}
 	if followed.Head != "" {
-		result, pushErr = s.pushMutation(ctx, remote, trimmedBranch, setUpstream, force)
+		result, pushErr = s.pushMutation(ctx, remote, trimmedBranch, setUpstream, false)
 		if !errors.As(pushErr, &refusal) {
 			return result, pushErr, followed, nil
 		}
@@ -946,7 +947,7 @@ func (s *Store) SyncCompactAndPush(ctx context.Context, remote string, branch st
 	// A push refused over a re-root it follows runs again without
 	// compacting: the follow collected the store below the cut, and that
 	// collection joins the maintenance account.
-	result, err, followed, followErr := s.retryPushAfterFollow(ctx, remote, branch, setUpstream, force, result, err)
+	result, err, followed, followErr := s.retryPushAfterFollow(ctx, remote, branch, setUpstream, result, err)
 	err = joinFollowFailure(err, followErr)
 	// DOLT_GC above compacts `noms`; the prune collects the other half of the
 	// store's local footprint, the abandoned git remote mirrors. All three jobs
@@ -1082,7 +1083,7 @@ func (s *Store) SyncPushFromClone(ctx context.Context, remote string, branch str
 		return storage.SyncPushResult{}, err
 	}
 	result, pushErr := s.pushMutation(ctx, trimmedRemote, trimmedBranch, setUpstream, force)
-	result, pushErr, _, followErr := s.retryPushAfterFollow(ctx, trimmedRemote, trimmedBranch, setUpstream, force, result, pushErr)
+	result, pushErr, _, followErr := s.retryPushAfterFollow(ctx, trimmedRemote, trimmedBranch, setUpstream, result, pushErr)
 	if pushErr == nil {
 		return result, nil
 	}
