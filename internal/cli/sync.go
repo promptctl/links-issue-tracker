@@ -1134,12 +1134,8 @@ func syncDoltRemotesFromGit(ctx context.Context, session syncSession, ws workspa
 
 func planRemoteSync(gitRemotes []workspace.GitRemote, doltRemotes []storage.SyncRemote) remoteSyncPlan {
 	doltByName := mapRemotesByName(doltRemotes)
-	plan := remoteSyncPlan{
-		add:     []plannedRemote{},
-		update:  []plannedRemote{},
-		remove:  []string{},
-		refused: []string{},
-	}
+	// refused is never nil: the event's remotes.refused is [] when none.
+	plan := remoteSyncPlan{refused: []string{}}
 	// wanted is every name git asks Dolt to hold.
 	wanted := map[string]bool{}
 	for _, remote := range gitRemotes {
