@@ -167,6 +167,9 @@ func TestAReceiveThatFetchedAndKeepsStoppingReachesTheFailureSurface(t *testing.
 		t.Fatalf("re-leave the block: %v", err)
 	}
 	third := receive()
+	if writes := lastEvent(t).Occurrences["settled_last.writes"]; len(writes) != 1 || writes[0].(map[string]any)["settled_last.error"] != "" {
+		t.Fatalf("settled_last.writes = %v; want the one settle's record, written", writes)
+	}
 	if third["receive.stopped"] != "" || third["receive.unsettled_since"] != float64(0) || !(third["receive.settled_last"].(float64) > 0) {
 		t.Fatalf("third receive outcome = %v; want a receive that ran to the end, settled, with no run current", third)
 	}
