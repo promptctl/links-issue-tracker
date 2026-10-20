@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -311,6 +312,36 @@ func TestTheMirrorsReceiveStartsNoRun(t *testing.T) {
 	}
 	if at, ok, err := store.ReadUnsettledFirst(ws.DatabasePath); ok || err != nil {
 		t.Fatalf("unsettled.first after the mirror's stop = %s ok %v err %v; want no record", at, ok, err)
+	}
+}
+
+// TestAMirrorWhoseLiveStoreReceiveFailsSaysWhere: the live store learns a
+// re-rooted push by receiving it, and here its open fails. The receive's one
+// value says it stopped at the open with an error, not the [] a skipped
+// receive once left, and the mirror's live-store step says the receive it
+// chose failed and where.
+func TestAMirrorWhoseLiveStoreReceiveFailsSaysWhere(t *testing.T) {
+	_, ws, clone, fetch := unsettlingCheckout(t)
+	ws.WorkspaceID = "" // the open refuses a store with no workspace identity; the land never reads it
+	recorder := telemetry.Begin(telemetry.Event{})
+	ctx := telemetry.With(context.Background(), recorder)
+	landed := pushedHead{remote: fetch.target.remote, branch: fetch.target.branch, head: "pushed", followedReRoot: true}
+	liveStoreLearns(ctx, io.Discard, ws, clone, landed)
+	ev := writtenEvent(t, recorder.Finish(invocationEnd(time.Now(), nil, nil)))
+	outcomes := ev.Occurrences["receive.outcomes"]
+	if len(outcomes) != 1 {
+		t.Fatalf("receive.outcomes = %v; want the live store's one receive", outcomes)
+	}
+	if outcome, _ := outcomes[0].(map[string]any); outcome["receive.decision"] != "error" || outcome["receive.stopped"] != "open" {
+		t.Fatalf("receive outcome = %v; want an error stopped at the open", outcome)
+	}
+	steps := ev.Occurrences["mirror.live_store_steps"]
+	if len(steps) != 1 {
+		t.Fatalf("mirror.live_store_steps = %v; want the cycle's one step", steps)
+	}
+	step, _ := steps[0].(map[string]any)
+	if text, _ := step["mirror.live_store_error"].(string); step["mirror.live_store_step"] != "receive" || !strings.Contains(text, "stopped at open") {
+		t.Fatalf("live-store step = %v; want receive, failed at the open", step)
 	}
 }
 

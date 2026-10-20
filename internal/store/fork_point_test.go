@@ -338,6 +338,29 @@ func TestAQuietForkBelowTheCutLandsOnTheRemoteHead(t *testing.T) {
 	}
 }
 
+// TestAQuietForkBelowTheCutPullsAcrossItsForkPoint is the same checkout
+// pulling instead: the pull lands on the remote head with no merge commit,
+// and its result says the base was the fork point, which a fast-forward along
+// shared history never reports.
+func TestAQuietForkBelowTheCutPullsAcrossItsForkPoint(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := newForkBelowTheCutAfter(t, ctx, func(forkBelowTheCut) {})
+
+	delta := openSyncOrFatal(t, ctx, f.delta)
+	defer func() { _ = delta.Close() }()
+	pulled, err := delta.SyncPull(ctx, remoteName(t, "origin"), "master")
+	if err != nil {
+		t.Fatalf("SyncPull(delta) error = %v", err)
+	}
+	if pulled.State != storage.SyncPullFastForwarded || pulled.Base != storage.ReconcileBaseForkPoint {
+		t.Fatalf("pull = %q across base %q, want %q across %q", pulled.State, pulled.Base, storage.SyncPullFastForwarded, storage.ReconcileBaseForkPoint)
+	}
+	if head := headCommit(t, ctx, delta); head != f.remoteHead {
+		t.Fatalf("delta's head after the pull = %s, want the remote head %s", head, f.remoteHead)
+	}
+}
+
 // TestAForkPointIsNoneWhenNothingWasShared fetches twice into a store whose
 // history shares no commit with the remote's: the second fetch has a tracking
 // ref to record and no history in common with it, and no fork point was ever

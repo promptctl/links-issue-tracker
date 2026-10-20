@@ -159,8 +159,8 @@ func TestSyncPullFollowsAReRootedRemote(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncPull(alpha) error = %v", err)
 	}
-	if back.State != storage.SyncPullFastForwarded || len(alpha.FollowedReRoots()) != 0 {
-		t.Fatalf("alpha's pull = %q with follows %+v, want a fast-forward and no follow", back.State, alpha.FollowedReRoots())
+	if back.State != storage.SyncPullFastForwarded || back.Base != storage.ReconcileBaseMergeBase || len(alpha.FollowedReRoots()) != 0 {
+		t.Fatalf("alpha's pull = %q across base %q with follows %+v, want a fast-forward along shared history (%q) and no follow", back.State, back.Base, alpha.FollowedReRoots(), storage.ReconcileBaseMergeBase)
 	}
 	r.assertMerged(t, ctx, alpha)
 	if a, b := headCommit(t, ctx, alpha), headCommit(t, ctx, bravo); a != b {
@@ -630,11 +630,79 @@ func TestSyncDoesNotFollowWhenTwoLocalCommitsRebuildToTheRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncReconcile error = %v", err)
 	}
-	if len(st.FollowedReRoots()) != 0 {
-		t.Fatalf("follows = %+v; want none, since no one cut is evidenced", st.FollowedReRoots())
+	if len(st.FollowedReRoots()) != 0 || len(st.DeclinedReRoots()) != 0 {
+		t.Fatalf("follows = %+v, declines = %+v; want neither, since no one cut is evidenced", st.FollowedReRoots(), st.DeclinedReRoots())
 	}
 	if bases := st.ReconcileBases(); reconciled.State != storage.SyncReconcileLinearized || len(bases) != 1 || bases[0].Source != storage.ReconcileBaseForkPoint {
 		t.Fatalf("reconcile = %q against %+v; want a merge against the fork point", reconciled.State, bases)
+	}
+}
+
+// TestADeclinedFollowRecordsItsCutAndReason gives bravo a side line that
+// forks below the cut and merges back above it. The cut is recognized — one
+// local commit rebuilds to the remote's root — but no re-root of bravo's
+// history at it reproduces the remote's, so the branch stays where it was and
+// the decline is recorded under the entry that met it, with the cut and the
+// side line that went around it.
+func TestADeclinedFollowRecordsItsCutAndReason(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	r := newReRootedRemote(t, ctx, false)
+	var sideLine, head hash.Hash
+	withChunkStore(t, r.bravo, func(ddb *doltdb.DoltDB) {
+		branch := ref.NewBranchRef("master")
+		tip, err := ddb.ResolveCommitRef(ctx, branch)
+		if err != nil {
+			t.Fatal(err)
+		}
+		value, _, err := commitContent(ctx, tip)
+		if err != nil {
+			t.Fatal(err)
+		}
+		belowCut, err := readCommit(t, ctx, ddb, hash.Parse(r.cut)).ParentHashes(ctx)
+		if err != nil || len(belowCut) == 0 {
+			t.Fatalf("the cut has no parent to fork a side line from: %v", err)
+		}
+		meta := func(description string, at uint64) *datas.CommitMeta {
+			return &datas.CommitMeta{Name: "t", Email: "t@links.local", Description: description, Timestamp: at, UserTimestamp: int64(at)}
+		}
+		side, err := ddb.CommitDanglingWithParentCommits(ctx, value, []*doltdb.Commit{readCommit(t, ctx, ddb, belowCut[0])}, meta("side line", 1_900_000_000_000))
+		if err != nil {
+			t.Fatal(err)
+		}
+		merged, err := ddb.CommitDanglingWithParentCommits(ctx, value, []*doltdb.Commit{tip, side}, meta("merge the side line", 1_900_000_000_001))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if sideLine, err = side.HashOf(); err != nil {
+			t.Fatal(err)
+		}
+		if head, err = merged.HashOf(); err != nil {
+			t.Fatal(err)
+		}
+		if err := ddb.SetHeadToCommit(ctx, branch, merged); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	st := openSyncOrFatal(t, ctx, r.bravo)
+	defer func() { _ = st.Close() }()
+	if err := st.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+		t.Fatalf("SyncFetch error = %v", err)
+	}
+	if err := st.SyncFollowReRoot(ctx, remoteName(t, "origin"), "master", storage.SyncEntryFetch); err != nil {
+		t.Fatalf("SyncFollowReRoot error = %v; a declined follow is not a failure", err)
+	}
+	declined := st.DeclinedReRoots()
+	if len(declined) != 1 || declined[0].Entry != storage.SyncEntryFetch || declined[0].Cut != r.cut ||
+		!strings.Contains(declined[0].Reason, ErrSideLineAcrossCut.Error()) || !strings.Contains(declined[0].Reason, sideLine.String()) {
+		t.Fatalf("DeclinedReRoots() = %+v; want one decline under %q at the cut %s naming the side line %s", declined, storage.SyncEntryFetch, r.cut, sideLine)
+	}
+	if followed := st.FollowedReRoots(); len(followed) != 0 {
+		t.Fatalf("FollowedReRoots() = %+v; want none", followed)
+	}
+	if got := headCommit(t, ctx, st); got != head.String() {
+		t.Fatalf("head after the decline = %s; want it unmoved at %s", got, head)
 	}
 }
 

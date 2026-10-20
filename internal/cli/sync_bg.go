@@ -696,19 +696,30 @@ func mirrorCycle(ctx context.Context, log io.Writer, ws workspace.Info, stopAnsw
 		recordMirrorTraceError(ws, errors.Join(cause, onceErr))
 	}
 
-	var recordHeld time.Duration
-	var record store.PushedHeadRecord
-	// A push of a re-root the clone followed is received on the live store
-	// rather than recorded: the live store holds none of the rewritten
-	// commits, so it lands the clone's fetch and follows the same re-root,
-	// which arrives at the hashes the clone pushed. [LAW:one-source-of-truth]
-	// the tracking ref still says where the remote is, through the receive's
-	// own landing.
+	record, recordHeld := liveStoreLearns(ctx, log, ws, clone.liveClone, landed)
+	fmt.Fprintf(log, "%s mirror cycle end attempted=%t push_deadline_cut=%t hold=%s record=%s ref=%s open=%s push=%s elapsed=%s\n",
+		time.Now().UTC().Format(time.RFC3339), attempted, deadlineCut,
+		clone.held.Round(time.Millisecond), recordHeld.Round(time.Millisecond), record, openElapsed.Round(time.Millisecond), pushElapsed.Round(time.Millisecond), time.Since(start).Round(time.Millisecond))
+	return attempted
+}
+
+// liveStoreLearns runs the live-store step a cycle's facts chose
+// (pushedHead.liveStoreStep) and puts the step, and how it ended, on the
+// event: one value per cycle, since a mirror invocation can run several.
+// [LAW:nothing-unseen] It returns the pushed head it recorded and how long
+// the record held the live store, both zero unless the step records.
+//
+// A push of a re-root the clone followed is received on the live store
+// rather than recorded: the live store holds none of the rewritten commits,
+// so it lands the clone's fetch and follows the same re-root, which arrives
+// at the hashes the clone pushed. [LAW:one-source-of-truth] the tracking ref
+// still says where the remote is, through the receive's own landing.
+func liveStoreLearns(ctx context.Context, log io.Writer, ws workspace.Info, clone liveClone, landed pushedHead) (record store.PushedHeadRecord, recordHeld time.Duration) {
 	step := landed.liveStoreStep()
 	var stepErr error
 	switch step {
 	case liveStoreReceives:
-		stepErr = receivePushedReRoot(ctx, ws, clone.liveClone, landed)
+		stepErr = receivePushedReRoot(ctx, ws, clone, landed)
 		fmt.Fprintf(log, "%s mirror step=receive_reroot received=%t err=%v\n", time.Now().UTC().Format(time.RFC3339), stepErr == nil, stepErr)
 	case liveStoreRecords:
 		recordStart := time.Now()
@@ -737,16 +748,11 @@ func mirrorCycle(ctx context.Context, log io.Writer, ws workspace.Info, stopAnsw
 		}
 		fmt.Fprintf(log, "%s mirror hold released step=record elapsed=%s ref=%s\n", time.Now().UTC().Format(time.RFC3339), recordHeld.Round(time.Millisecond), record)
 	}
-	// Which step the cycle chose and how it ended land on the event, one value
-	// per cycle: a mirror invocation can run several. [LAW:nothing-unseen]
 	telemetry.Append(ctx, "mirror.live_store_steps", map[string]any{
 		"mirror.live_store_step":  step.String(),
 		"mirror.live_store_error": telemetry.ErrorText(stepErr),
 	})
-	fmt.Fprintf(log, "%s mirror cycle end attempted=%t push_deadline_cut=%t hold=%s record=%s ref=%s open=%s push=%s elapsed=%s\n",
-		time.Now().UTC().Format(time.RFC3339), attempted, deadlineCut,
-		clone.held.Round(time.Millisecond), recordHeld.Round(time.Millisecond), record, openElapsed.Round(time.Millisecond), pushElapsed.Round(time.Millisecond), time.Since(start).Round(time.Millisecond))
-	return attempted
+	return record, recordHeld
 }
 
 // receivePushedReRoot brings the live store to a push its clone made after

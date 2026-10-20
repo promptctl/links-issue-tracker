@@ -15,21 +15,29 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
-// A receive whose target is skipped settles nothing, and its event says so
-// with an empty receive.outcomes rather than no key at all.
-func TestASkippedReceiveRecordsNoOutcomes(t *testing.T) {
+// A receive whose target the clone skipped settles nothing, and its event and
+// trace name the skip, each once.
+func TestASkippedReceiveRecordsItsSkip(t *testing.T) {
+	ws := compactWorkspace(t)
 	recorder := telemetry.Begin(telemetry.Event{})
 	ctx := telemetry.With(context.Background(), recorder)
-	outcome, closeLive := performSyncReceive(ctx, workspace.Info{}, liveClone{}, receiveFetch{target: syncTarget{skip: syncTargetNoRemote}}, leaveUnsettledRun(filepath.Join(t.TempDir(), "dolt")))
-	if outcome.skip != syncTargetNoRemote {
+	target := syncTarget{remote: remoteName(t, "origin"), skip: syncTargetRemoteEmpty}
+	outcome, closeLive := performSyncReceive(ctx, ws, liveClone{}, receiveFetch{target: target}, leaveUnsettledRun(filepath.Join(t.TempDir(), "dolt")))
+	if outcome.skip != syncTargetRemoteEmpty {
 		t.Fatalf("performSyncReceive() = %+v; want the skip", outcome)
 	}
 	if err := closeLive(); err != nil {
 		t.Fatal(err)
 	}
-	written := writtenEvent(t, recorder.Finish(invocationEnd(time.Now(), nil, nil)))
-	if outcomes, present := written.Occurrences["receive.outcomes"]; !present || outcomes == nil || len(outcomes) != 0 {
-		t.Fatalf("receive.outcomes = %#v; want an empty list", outcomes)
+	outcomes := writtenEvent(t, recorder.Finish(invocationEnd(time.Now(), nil, nil))).Occurrences["receive.outcomes"]
+	if len(outcomes) != 1 {
+		t.Fatalf("receive.outcomes = %#v; want the skip's one value", outcomes)
+	}
+	if value, _ := outcomes[0].(map[string]any); value["receive.decision"] != string(syncTargetRemoteEmpty) || value["receive.remote"] != "origin" {
+		t.Fatalf("receive.outcomes value = %v; want the remote_empty skip on origin", value)
+	}
+	if traces := readSyncTraces(t, ws); len(traces) != 1 || traces[0].Decision != string(syncTargetRemoteEmpty) {
+		t.Fatalf("sync traces = %+v; want the one remote_empty trace", traces)
 	}
 }
 

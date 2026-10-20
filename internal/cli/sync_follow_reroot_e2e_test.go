@@ -198,6 +198,7 @@ func TestEverySyncEntryPointFollowsAReRootedRemote(t *testing.T) {
 	t.Run("on-change mirror", func(t *testing.T) {
 		r := newReRootedCheckouts(t, false)
 		runCLIInDir(t, r.bravo, "sync", backgroundMirrorSubcommand, "--parent-pid", "0")
+		assertLiveStoreSteps(t, lastEvent(t), "receive")
 		// The clone follows and pushes, and the live store receives that
 		// push by following the same re-root: the event carries both.
 		r.assertFollowedCleanly(t, []string{"push", "receive"}, false)
