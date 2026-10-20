@@ -39,9 +39,9 @@ const (
 	// fetch pruned goes by LandedFetch.Pruned, and a fork point left without
 	// its ref by LandedFetch.ForkPointsDropped.
 	FetchedHeadAbsent
-	// FetchedHeadSuperseded: the live store moved the ref after the take, so
-	// a writer that saw the remote later than the take did set it, and it
-	// stands.
+	// FetchedHeadSuperseded: the live store moved the ref after the take to
+	// where the fetch did not find it, so a writer that saw the remote later
+	// than the take did set it, and it stands.
 	FetchedHeadSuperseded
 )
 
@@ -123,14 +123,15 @@ type LandedFetch struct {
 // fetch found whenever it differs, forwards, backwards, or onto an unrelated
 // history, because that is what a fetch does: it records where the remote was
 // when it looked, and a remote that really was reset is recorded as reset.
-// A live ref that moved since the take was moved by a push, a fetch, a follow
+// A live ref that moved since the take, to where the fetch did not find it,
+// was moved by a push, a fetch, a follow
 // or a mirror's record on the live store, each of which saw the remote after
 // the take did — a re-rooting push among them, which collects the history
 // below its cut, and which the clone's pre-cut head would make reachable
 // again. That ref stands (FetchedHeadSuperseded), and no chunk of the clone's
-// head is copied in. The receive still records the advertisement it observed
-// before the take, which the live writer's move has left behind, so the next
-// receive finds the remote moved and fetches again.
+// head is copied in. The receive leaves its record of the remote's
+// advertisement as it stood (FetchedHeadRecord.LandsTheFetch), so the next
+// receive asks again and lands over the live writer's ref.
 //
 // The hold is holdForRefWrite's: the workspace shared lock around Dolt's LOCK
 // and the commit lock. Its budget is the receive's own deadline, not the
@@ -311,17 +312,18 @@ func readRefHead(ctx context.Context, ddb *doltdb.DoltDB, r ref.DoltRef) (refHea
 
 // landingOf decides what a landing does to the tracking ref the take saw at
 // taken, the live store holds at live, and the clone's fetch left at fetched.
-// Nothing of the fetch lands over a ref the live store moved since the take
-// (LandFetchedHead says why), whether or not the fetch found the branch; a
-// ref already at fetched is unchanged whichever way it got there.
+// Nothing of the fetch lands over a live ref that agrees with neither the
+// take nor the fetch — one the live store moved since the take to somewhere
+// the fetch did not find (LandFetchedHead says why); a ref already at fetched
+// is unchanged, or absent, whichever way it got there.
 func landingOf(taken, live, fetched refHead) FetchedHeadRecord {
 	switch {
-	case fetched.held && live == fetched:
-		return FetchedHeadUnchanged
-	case live != taken:
+	case live != taken && live != fetched:
 		return FetchedHeadSuperseded
 	case !fetched.held:
 		return FetchedHeadAbsent
+	case live == fetched:
+		return FetchedHeadUnchanged
 	}
 	return FetchedHeadMoved
 }

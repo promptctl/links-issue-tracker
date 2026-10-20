@@ -325,6 +325,7 @@ func TestLandingOfMovesOnlyARefStandingAsTaken(t *testing.T) {
 		{"the remote has no such branch", at("a"), at("a"), absent, FetchedHeadAbsent},
 		{"the remote has no such branch and the live store moved", at("a"), at("c"), absent, FetchedHeadSuperseded},
 		{"the remote has no such branch the live store never held", absent, absent, absent, FetchedHeadAbsent},
+		{"the live store pruned the branch the fetch found gone", at("a"), absent, absent, FetchedHeadAbsent},
 	} {
 		if got := landingOf(c.taken, c.live, c.fetched); got != c.want {
 			t.Errorf("%s: landingOf() = %s, want %s", c.name, got, c.want)
