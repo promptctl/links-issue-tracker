@@ -21,6 +21,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"path/filepath"
 	"regexp"
@@ -28,6 +29,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/docclaims"
 	"github.com/promptctl/links-issue-tracker/internal/templates"
 )
 
@@ -37,10 +39,6 @@ import (
 // capture requires a command-shaped first word.
 var litToken = regexp.MustCompile(`\blit\s+([a-z][a-z0-9_-]*(?:[ \t]+[a-z][a-z0-9_-]*)*)`)
 
-// inlineCodeSpan delimits markdown inline code. The shipped markdown templates
-// carry no fenced blocks, so single-backtick spans are the whole code surface.
-var inlineCodeSpan = regexp.MustCompile("`[^`]+`")
-
 // undispatchedLitTokens returns every command path taught in one shipped
 // template that the surface refuses: a first word that is not a live command,
 // or a longer path that names a retired subcommand.
@@ -48,13 +46,22 @@ var inlineCodeSpan = regexp.MustCompile("`[^`]+`")
 // What counts as an invocation is the template language's own quoting, not a
 // guess over prose: in markdown only inline code spans are scanned (prose like
 // "when lit errors" or "lit tracks tickets" never reaches the token match),
-// while a shell template is scanned whole — it is code, and even its message
-// strings quote real invocations. [LAW:dataflow-not-control-flow] the file
-// extension selects the scan region; the token rule is the same everywhere.
-func undispatchedLitTokens(templateName string, content []byte, surface taughtSurface) []string {
+// read by the one markdown span reader the doc gates share, while a shell
+// template is scanned whole — it is code, and even its message strings quote
+// real invocations. [LAW:dataflow-not-control-flow] the file extension selects
+// the scan region; the token rule is the same everywhere.
+// [LAW:single-enforcer] a code span is what docclaims.CodeSpans says it is.
+func undispatchedLitTokens(templateName string, content []byte, surface taughtSurface) ([]string, error) {
 	regions := []string{string(content)}
 	if filepath.Ext(templateName) == ".md" {
-		regions = inlineCodeSpan.FindAllString(string(content), -1)
+		spans, err := docclaims.CodeSpans(string(content))
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", templateName, err)
+		}
+		regions = regions[:0]
+		for _, s := range spans {
+			regions = append(regions, s.Text)
+		}
 	}
 	var bad []string
 	for _, region := range regions {
@@ -66,7 +73,7 @@ func undispatchedLitTokens(templateName string, content []byte, surface taughtSu
 			}
 		}
 	}
-	return bad
+	return bad, nil
 }
 
 // invocations splits one captured word run at each later `lit`: the run of
@@ -171,7 +178,11 @@ func TestTaughtSurfaceReadsRetiredNotHidden(t *testing.T) {
 		{"`lit family group retired`", []string{"family group retired"}},
 	}
 	for _, tc := range cases {
-		if got := undispatchedLitTokens("t.md", []byte(tc.content), surface); !slices.Equal(got, tc.want) {
+		got, err := undispatchedLitTokens("t.md", []byte(tc.content), surface)
+		if err != nil {
+			t.Fatalf("undispatchedLitTokens(%q): %v", tc.content, err)
+		}
+		if !slices.Equal(got, tc.want) {
 			t.Errorf("undispatchedLitTokens(%q) = %v, want %v", tc.content, got, tc.want)
 		}
 	}
@@ -188,7 +199,11 @@ func TestShippedTemplatesNameOnlyDispatchedCommands(t *testing.T) {
 		if err != nil {
 			t.Fatalf("EmbeddedDefault(%q): %v", name, err)
 		}
-		for _, token := range undispatchedLitTokens(name, content, surface) {
+		tokens, err := undispatchedLitTokens(name, content, surface)
+		if err != nil {
+			t.Fatalf("undispatchedLitTokens: %v", err)
+		}
+		for _, token := range tokens {
 			t.Errorf("template %s teaches `lit %s`, which lit does not dispatch as a live command (retired or unknown); update the template or the registry in the same change", name, token)
 		}
 	}
@@ -225,7 +240,10 @@ func TestGateRefusesRetiredAndUnknownTokens(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := undispatchedLitTokens(tc.template, []byte(tc.content), surface)
+			got, err := undispatchedLitTokens(tc.template, []byte(tc.content), surface)
+			if err != nil {
+				t.Fatalf("undispatchedLitTokens(%q): %v", tc.content, err)
+			}
 			if !slices.Equal(got, tc.want) {
 				t.Errorf("undispatchedLitTokens(%q) = %v, want %v", tc.content, got, tc.want)
 			}

@@ -344,9 +344,9 @@ Defaults are set in `Load` (`internal/config/config.go`).
   split on `-`, take the first hyphen-part that normalizes to a valid prefix, else the whole
   normalized base. Both ways of coming up short — nothing survives normalization, or too
   little does — are one failure wrapping `ErrIssuePrefixRefused` ⇒
-  `issue prefix refused: repository name %q yields none (a prefix needs %d or more characters
-  once punctuation is normalized away); run ``lit init --prefix <prefix>`` to set one
-  explicitly`. `internal/cli` maps that sentinel to reason `validation_refused` and exit 3.
+  ``issue prefix refused: repository name %q yields none (a prefix needs %d or more characters
+  once punctuation is normalized away); run `lit init --prefix <prefix>` to set one
+  explicitly``. `internal/cli` maps that sentinel to reason `validation_refused` and exit 3.
 
 ---
 

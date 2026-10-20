@@ -234,9 +234,9 @@ func TestOnlyAnUnsatisfiableConstraintExcludesAFile(t *testing.T) {
 }
 
 // TestSpansInReadsBothQuotingShapes covers the corpus's two backtick shapes and
-// its fenced blocks. A single-backtick pattern alone cuts a “…“ span at its
-// inner backtick and protects a fragment instead of the message; reading inside
-// fences protects shell transcripts that assert nothing about lit.
+// its fenced blocks. A “…“ span is read whole, inner backticks and all, so
+// the claim is the message rather than a fragment of it; reading inside fences
+// would protect shell transcripts that assert nothing about lit.
 func TestSpansInReadsBothQuotingShapes(t *testing.T) {
 	src := "Both exit 6 with ``no ready work in %s — not a bare `next` `` and `the backlog is not empty` here.\n" +
 		"Short: `a b` and one-word: `NoWork` are not claims.\n" +

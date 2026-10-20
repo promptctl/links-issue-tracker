@@ -119,7 +119,6 @@ func Refs(fsys fs.FS, docs []string) ([]Ref, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", doc, err)
 		}
-		slices.SortStableFunc(spans, func(a, b docclaims.Span) int { return a.Line - b.Line })
 		for _, s := range spans {
 			out = append(out, refsIn(doc, s)...)
 		}
