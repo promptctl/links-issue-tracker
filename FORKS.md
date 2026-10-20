@@ -15,7 +15,7 @@ one below carries the condition that would let it be deleted.
 
 | Module in `go.mod` | Upstream | What `lit` builds | Branch | Current pin |
 | --- | --- | --- | --- | --- |
-| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20261020194339-6839d5fdc5e8` |
+| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20261020200859-593561a4c1e4` |
 | `github.com/dolthub/go-mysql-server` | [dolthub/go-mysql-server](https://github.com/dolthub/go-mysql-server) | [promptctl/go-mysql-server](https://github.com/promptctl/go-mysql-server) | `lit` | `v0.20.1-0.20260821032251-ab5cb9ec3b69` |
 | `github.com/dolthub/driver` | [dolthub/driver](https://github.com/dolthub/driver) | [`internal/vendor/dolthub-driver`](internal/vendor/dolthub-driver) | — | `v0.2.1-0.20260314000741-0fe74e7ee31a` |
 
@@ -307,7 +307,7 @@ Publishing a re-rooted history (`links-storage-3k6u`) has to refuse instead.
 root update, on every retry, and refuses with `datas.ErrStaleInfo` unless it
 is `<commit>` or already the pushed commit — the second so that a push
 retried after its first attempt landed does not report its own write as
-stale. Patch 13 carries that error through `DOLT_PUSH` to the driver, so
+stale. Patch 14 carries that error through `DOLT_PUSH` to the driver, so
 `internal/store/push_lease.go` recognizes a stale lease by `errors.Is`.
 
 **Retire it when** upstream ships a conditional push (git's
@@ -451,7 +451,7 @@ platform and reports the cancel to its caller, and the `require` line moves
 past that change. Dropping it without that brings back a cancelled push or
 fetch whose transport outlives `lit`.
 
-#### Patch 13 — a push rejection keeps its cause through `DOLT_PUSH`
+#### Patch 14 — a push rejection keeps its cause through `DOLT_PUSH`
 
 `go/libraries/doltcore/env/actions/remotes.go`,
 `go/libraries/doltcore/sqle/dprocedures/dolt_push.go`.
