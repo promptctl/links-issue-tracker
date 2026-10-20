@@ -96,10 +96,10 @@ func (s *Store) keepHistoryBound(ctx context.Context, b *storage.HistoryBound) e
 // publishBound is boundHistory's steps once the bound fired at b.Head.
 func (s *Store) publishBound(ctx context.Context, b *storage.HistoryBound) error {
 	trackingRef := fmt.Sprintf("remotes/%s/%s", b.Remote, b.Branch)
-	var pushErr error
-	b.ReRooted, pushErr = s.reRootScratch(ctx, b.Branch, b.Head, b.Window.Keep())
-	if pushErr == nil {
-		b.Lease, pushErr = s.publishReRoot(ctx, b.Remote, b.Branch, b.Head)
+	var publishErr error
+	b.ReRooted, publishErr = s.reRootScratch(ctx, b.Branch, b.Head, b.Window.Keep())
+	if publishErr == nil {
+		b.Lease, publishErr = s.publishReRoot(ctx, b.Remote, b.Branch, b.Head)
 	}
 	// The scratch lives only as long as the re-root and its push, and goes
 	// however they ended. A re-root is deterministic, so the next push past
@@ -110,11 +110,12 @@ func (s *Store) publishBound(ctx context.Context, b *storage.HistoryBound) error
 	sweepErr := s.runSyncMutation(ctx, func(ctx context.Context) error {
 		return s.deleteBranchesUnder(ctx, reRootScratchPrefix)
 	})
-	stopped := errors.Join(pushErr, sweepErr)
-	// A lease push that never reached the remote left it without the re-root,
-	// so there is nothing to collect, read or follow, and the publication
-	// stays ReRootNotPushed. [LAW:types-are-the-program] the lease's empty
-	// outcome is that fact, set by the push itself.
+	stopped := errors.Join(publishErr, sweepErr)
+	// A re-root never written, or a lease push that never reached the remote,
+	// left the remote without it, so there is nothing to collect, read or
+	// follow, and the publication stays ReRootNotPushed.
+	// [LAW:types-are-the-program] the lease's empty outcome is that fact,
+	// set by the push itself.
 	if b.Lease == "" {
 		return stopped
 	}
@@ -143,7 +144,7 @@ const (
 	remoteUnread remoteReading = iota
 	// remoteCarries: the remote's head is the re-root or a descendant of it.
 	remoteCarries
-	// remoteLacks: the remote's head shares no line with the re-root above it.
+	// remoteLacks: the remote's head is neither the re-root nor a descendant of it.
 	remoteLacks
 )
 
