@@ -597,8 +597,13 @@ func (s *Store) settleReceivedWithinLock(ctx context.Context, remote, branch str
 		result.State = storage.SyncReceiveAhead
 	case storage.SyncNeverSynced:
 		result.State = storage.SyncReceiveNeverSynced
-	default:
+	case storage.SyncUpToDate:
 		result.State = storage.SyncReceiveUpToDate
+	default:
+		// A freshness state this mapping does not know must not settle as
+		// up to date, where neither the receive nor the reconcile gate would
+		// act on it. [LAW:no-silent-failure]
+		return result, fmt.Errorf("sync receive: unhandled freshness state %q", fresh.State())
 	}
 	return result, nil
 }
