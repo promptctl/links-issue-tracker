@@ -899,11 +899,21 @@ func unjudgedRefusal(refusal, readErr error) error {
 // history bound: the bound follows whichever push landed, through
 // SyncKeepHistoryBound.
 func (s *Store) SyncCompactAndPush(ctx context.Context, remote string, branch string, setUpstream bool, force bool) (storage.SyncPushResult, error) {
+	// The arguments are refused before the compaction, which rewrites the
+	// store under the commit lock, not after it in the push.
+	remote, err := requireSyncArg("remote", remote)
+	if err != nil {
+		return storage.SyncPushResult{}, err
+	}
+	branch, err = requireSyncArg("branch", branch)
+	if err != nil {
+		return storage.SyncPushResult{}, err
+	}
 	var attempt compactionAttempt
 	var depthErr error
 	var sweep refSweepOutcome
 	var result storage.SyncPushResult
-	err := s.runSyncMutation(ctx, func(ctx context.Context) error {
+	err = s.runSyncMutation(ctx, func(ctx context.Context) error {
 		// Measured inside the lock, where no other mutation can grow the
 		// journal between the reading and the pass it selects.
 		var depth GCMode

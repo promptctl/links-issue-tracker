@@ -322,6 +322,23 @@ func TestSyncRemoteValidation(t *testing.T) {
 	}
 }
 
+// TestSyncCompactAndPushRefusesABlankBranchBeforeAnyWork pins where the
+// compacting push refuses its arguments: before the commit lock and the
+// compaction under it. A context already canceled fails any work that
+// starts, so only a refusal that runs first reports the blank branch.
+func TestSyncCompactAndPushRefusesABlankBranchBeforeAnyWork(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openSyncOrFatal(t, ctx, migratedDoltDir(t))
+	defer func() { _ = st.Close() }()
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	_, err := st.SyncCompactAndPush(canceled, "origin", "   ", false, false)
+	if err == nil || err.Error() != "branch is required" {
+		t.Fatalf("SyncCompactAndPush(blank branch) error = %v, want only %q", err, "branch is required")
+	}
+}
+
 func TestSyncCompactRunsCleanlyAndPreservesData(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
