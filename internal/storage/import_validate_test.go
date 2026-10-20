@@ -21,7 +21,7 @@ func TestImportGateJudgesTheFilesReferences(t *testing.T) {
 		return ImportTreeSpec{LocalID: localID, Title: localID, IssueType: issueType, Topic: "core", Parent: parent, BlockedBy: blockedBy}
 	}
 	create := func(localID, issueType, parent string, blockedBy ...string) BulkIssueSpec {
-		return BulkIssueSpec{LocalID: localID, Title: str("title"), IssueType: str(issueType), Topic: str("core"), Parent: ptr(parent), BlockedBy: blockedBy}
+		return BulkIssueSpec{LocalID: localID, Title: str("title"), IssueType: str(issueType), Topic: str("core"), Parent: ptr(parent), BlockedBy: ptr(blockedBy)}
 	}
 	sameEpic := ": " + SameEpicBlocksRejectionMessage
 	cases := []struct {
@@ -134,7 +134,7 @@ func TestImportGateJudgesTheFilesReferences(t *testing.T) {
 			return err
 		}, `bulk: doc 0 (id "lit-x") sets reason but changes no field; reason annotates a field change, and parent and rank write none`},
 		{"bulk: an update with a doubled blocked_by is told update takes none", func() error {
-			_, err := ParseBulkFile([]BulkIssueSpec{{ID: "lit-real-1", Title: str("t"), BlockedBy: []string{"lit-real-2", "lit-real-2"}}}, nil)
+			_, err := ParseBulkFile([]BulkIssueSpec{{ID: "lit-real-1", Title: str("t"), BlockedBy: ptr([]string{"lit-real-2", "lit-real-2"})}}, nil)
 			return err
 		}, `bulk: doc 0 (id "lit-real-1") sets blocked_by; wire dependencies with ` + "`lit dep add`" + ` instead`},
 	}

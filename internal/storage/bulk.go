@@ -41,8 +41,12 @@ type BulkIssueSpec struct {
 	// Parent on a create names the new issue's parent. On an update it
 	// reparents the issue, and the empty string clears its parent: nil is
 	// "not stated", so the two cannot be confused.
-	Parent    *string  `yaml:"parent,omitempty"`
-	BlockedBy []string `yaml:"blocked_by,omitempty"`
+	Parent *string `yaml:"parent,omitempty"`
+	// BlockedBy on a create names the issues the new one waits on. On an
+	// update it is the issue's whole blocked-by set, replacing the one it
+	// holds as labels replace, and `blocked_by: []` empties it: nil is "not
+	// stated", so the two cannot be confused.
+	BlockedBy *[]string `yaml:"blocked_by,omitempty"`
 	// Rank places the document's issue in the file's ordering. Its one
 	// value is "top"; the gate refuses any other.
 	Rank *string `yaml:"rank,omitempty"`
@@ -78,24 +82,33 @@ func NewIDMapping(localID, realID string) IDMapping {
 // whose parent the file changed, and ParentHeld those whose parent already
 // was what the file states, each in file order; ReparentsUndone lists the
 // issues a refusal put back under the parents they held before the file,
-// which a landed file leaves empty; Updated lists the real IDs of
+// which a landed file leaves empty; BlockedBySet, BlockedByHeld and
+// BlockedByUndone say the same of the update documents' blocked_by sets, and
+// BlockedByAdded and BlockedByRemoved count the edges those sets wrote;
+// Updated lists the real IDs of
 // every updated issue, in the order they were applied; Ranked is the RankSet
 // the file's `rank: top` documents made, with no resolutions when the file
 // states no rank. A refused BulkApply returns its AfterRollback beside the
 // error, so the caller reads one account of the batch whether it landed or
 // not. [LAW:nothing-unseen]
 type BulkApplyResult struct {
-	Created         []IDMapping
-	Reparented      []string
-	ParentHeld      []string
-	ReparentsUndone []string
-	Updated         []string
-	Ranked          RankSetResult
+	Created          []IDMapping
+	Reparented       []string
+	ParentHeld       []string
+	ReparentsUndone  []string
+	BlockedBySet     []string
+	BlockedByHeld    []string
+	BlockedByUndone  []string
+	BlockedByAdded   int
+	BlockedByRemoved int
+	Updated          []string
+	Ranked           RankSetResult
 }
 
 // AfterRollback is what stays written once a refused batch's creates are
 // rolled back, given leaked, the creates the rollback could not delete: those
-// creates, the reparents its undo could not put back, the updates applied
+// creates, the reparents and blocked_by sets its undo could not put back, the
+// updates applied
 // before the refusal, and the order the file's `rank: top` documents wrote,
 // among the issues that outlive the rollback. [LAW:one-source-of-truth]
 func (r BulkApplyResult) AfterRollback(leaked []string) BulkApplyResult {
@@ -128,7 +141,7 @@ func (r BulkApplyResult) Kept(leaked []string) string {
 	for i, res := range kept.Ranked.Resolutions {
 		ranked[i] = res.RankedID
 	}
-	return fmt.Sprintf("kept %d reparents [%s], %d updates [%s] and the order of %d issues [%s]", len(kept.Reparented), strings.Join(kept.Reparented, ","), len(kept.Updated), strings.Join(kept.Updated, ","), len(ranked), strings.Join(ranked, ","))
+	return fmt.Sprintf("kept %d reparents [%s], %d blocked_by sets [%s], %d updates [%s] and the order of %d issues [%s]", len(kept.Reparented), strings.Join(kept.Reparented, ","), len(kept.BlockedBySet), strings.Join(kept.BlockedBySet, ","), len(kept.Updated), strings.Join(kept.Updated, ","), len(ranked), strings.Join(ranked, ","))
 }
 
 // BulkFile is a bulk file the gate admitted, parsed: the issues it creates,
@@ -149,11 +162,26 @@ func (r BulkApplyResult) Kept(leaked []string) string {
 // one hierarchy rule. [LAW:single-enforcer] It writes them after the creates,
 // which a reparent may name as its parent, and before the creates' blocked_by
 // edges, so each edge is judged on the hierarchy the file ends with.
+//
+// BlockedBy are the update documents that state blocked_by, in document order.
+// An engine writes them as one step, whole or not at all, after the creates'
+// edges, through the relation write `lit dep add` uses, so an edge a file
+// writes obeys the one rule every blocked-by edge obeys. [LAW:single-enforcer]
 type BulkFile struct {
 	Creates   []FileCreate
 	Reparents []FileReparent
+	BlockedBy []FileBlockedBy
 	Updates   []BulkUpdate
 	Ranked    []FileRef
+}
+
+// FileBlockedBy is one update document's blocked_by, parsed: the issue whose
+// blocked-by set it states and that whole set, each entry a local_id in the
+// file or a real id, which only the write can resolve. An empty set is no
+// blockers.
+type FileBlockedBy struct {
+	ID        string
+	BlockedBy []string
 }
 
 // FileReparent is one update document's parent, parsed: the issue it moves and
@@ -275,6 +303,105 @@ func (f BulkFile) WriteReparents(resolve func(ref string) string, w ParentWriter
 			step.Held = append(step.Held, r.ID)
 		} else {
 			step.Moved = append(step.Moved, r.ID)
+		}
+	}
+	return step, nil
+}
+
+// BlockedByWriter is the dependency write an engine runs a file's blocked_by
+// sets through, inside the one step that makes them whole or not at all. Add
+// is the write `lit dep add` makes, with the rules it carries, and Remove
+// drops one edge as `lit dep rm` does. Blockers and Restore read and write an
+// issue's blocked-by edges as stored, judging nothing, so a refused batch can
+// put back the edges its sets replaced.
+type BlockedByWriter interface {
+	// Blockers lists the blocked-by edges id holds.
+	Blockers(id string) ([]model.Relation, error)
+	Add(id, blockerID string) error
+	Remove(id, blockerID string) error
+	// Restore makes id's blocked-by edges exactly edges.
+	Restore(id string, edges []model.Relation) error
+}
+
+// BlockedByStep is a file's written blocked_by sets, sorted by what each
+// found: Set, the issues whose blocked-by set changed, and Held, those that
+// already held exactly the set the file states, each in document order. Added
+// and Removed count the edges it wrote. It keeps the edges each changed issue
+// held before, which Undo writes back.
+type BlockedByStep struct {
+	Set, Held      []string
+	Added, Removed int
+	prior          map[string][]model.Relation
+}
+
+// Undo gives every changed issue back the blocked-by edges it held before the
+// step, as stored. [LAW:no-silent-failure]
+func (s BlockedByStep) Undo(w BlockedByWriter) error {
+	for _, id := range s.Set {
+		if err := w.Restore(id, s.prior[id]); err != nil {
+			return fmt.Errorf("bulk: restore the blocked_by of %q: %w", id, err)
+		}
+	}
+	return nil
+}
+
+// WriteBlockedBy writes the file's blocked_by sets through w and returns the
+// step it wrote. Each entry is resolved first.
+//
+// The file is judged on the dependency graph it ends with, never on its
+// document order: every edge a set drops is removed before any edge a set
+// introduces is added, so Add's cycle rule refuses a file exactly when the
+// graph it ends with holds a cycle, and a set that swaps one blocker for
+// another applies whichever document comes first. An edge the issue already
+// holds is neither removed nor added. [LAW:no-ambient-temporal-coupling]
+// [LAW:single-enforcer]
+//
+// The first refusal ends the step, naming the document it refused.
+func (f BulkFile) WriteBlockedBy(resolve func(ref string) string, w BlockedByWriter) (BlockedByStep, error) {
+	refuse := func(id, blocker string, err error) (BlockedByStep, error) {
+		return BlockedByStep{}, fmt.Errorf("bulk: blocked_by of %q -> %q: %w", id, blocker, err)
+	}
+	step := BlockedByStep{prior: make(map[string][]model.Relation, len(f.BlockedBy))}
+	adds := make([][]string, len(f.BlockedBy))
+	for i, d := range f.BlockedBy {
+		stated := make([]string, len(d.BlockedBy))
+		for j, ref := range d.BlockedBy {
+			stated[j] = resolve(ref)
+		}
+		prior, err := w.Blockers(d.ID)
+		if err != nil {
+			return BlockedByStep{}, fmt.Errorf("bulk: blocked_by of %q: %w", d.ID, err)
+		}
+		held := make(map[string]bool, len(prior))
+		removed := 0
+		for _, rel := range prior {
+			held[rel.DstID] = true
+			if !slices.Contains(stated, rel.DstID) {
+				if err := w.Remove(d.ID, rel.DstID); err != nil {
+					return refuse(d.ID, rel.DstID, err)
+				}
+				removed++
+			}
+		}
+		for _, blocker := range stated {
+			if !held[blocker] {
+				adds[i] = append(adds[i], blocker)
+			}
+		}
+		if removed+len(adds[i]) == 0 {
+			step.Held = append(step.Held, d.ID)
+			continue
+		}
+		step.prior[d.ID] = prior
+		step.Set = append(step.Set, d.ID)
+		step.Removed += removed
+	}
+	for i, d := range f.BlockedBy {
+		for _, blocker := range adds[i] {
+			if err := w.Add(d.ID, blocker); err != nil {
+				return refuse(d.ID, blocker, err)
+			}
+			step.Added++
 		}
 	}
 	return step, nil

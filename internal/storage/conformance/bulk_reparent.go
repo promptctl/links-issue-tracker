@@ -240,7 +240,7 @@ func aBulkFileJudgesItsBlockedByOnTheHierarchyItEndsWith(t *testing.T, ctx conte
 	x := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "x", Topic: "core", ParentID: e.ID})
 	title, topic, taskType := "t", "core", "task"
 	create := func(parent string) storage.BulkIssueSpec {
-		return storage.BulkIssueSpec{LocalID: "t", Title: &title, Topic: &topic, IssueType: &taskType, Parent: ptr(parent), BlockedBy: []string{x.ID}}
+		return storage.BulkIssueSpec{LocalID: "t", Title: &title, Topic: &topic, IssueType: &taskType, Parent: ptr(parent), BlockedBy: ptr([]string{x.ID})}
 	}
 
 	result, err := st.BulkApply(ctx, prefix, "ada", []storage.BulkIssueSpec{create(e.ID), {ID: x.ID, Parent: ptr(f.ID)}})

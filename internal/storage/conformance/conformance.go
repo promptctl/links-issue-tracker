@@ -2868,7 +2868,7 @@ func anImportFileThatBreaksARuleIsRefusedWhole(t *testing.T, ctx context.Context
 	epic := func(localID, blockedBy string) storage.BulkIssueSpec {
 		spec := storage.BulkIssueSpec{LocalID: localID, Title: &title, Topic: &topic, IssueType: &epicType}
 		if blockedBy != "" {
-			spec.BlockedBy = []string{blockedBy}
+			spec.BlockedBy = ptr([]string{blockedBy})
 		}
 		return spec
 	}
@@ -2930,16 +2930,16 @@ func anImportFileThatBreaksARuleIsRefusedWhole(t *testing.T, ctx context.Context
 		{"BulkApply(a duplicate local_id)", bulk(epic("a", ""), epic("a", ""))},
 		{"BulkApply(a blocked_by cycle)", bulk(epic("a", "b"), epic("b", "a"))},
 		{"BulkApply(a blocked_by naming one existing issue twice)", bulk(
-			storage.BulkIssueSpec{Title: &title, Topic: &topic, IssueType: &epicType, BlockedBy: []string{existing.ID, existing.ID}})},
+			storage.BulkIssueSpec{Title: &title, Topic: &topic, IssueType: &epicType, BlockedBy: ptr([]string{existing.ID, existing.ID})})},
 		{"BulkApply(a task with no local_id blocked by the epic it sits under)", bulk(epic("e", ""),
-			storage.BulkIssueSpec{Title: &title, Topic: &topic, IssueType: &taskType, Parent: ptr("e"), BlockedBy: []string{"e"}})},
+			storage.BulkIssueSpec{Title: &title, Topic: &topic, IssueType: &taskType, Parent: ptr("e"), BlockedBy: ptr([]string{"e"})})},
 		{"BulkApply(a task blocked by a task beside it under one epic)", bulk(epic("e", ""),
 			storage.BulkIssueSpec{LocalID: "a", Title: &title, Topic: &topic, IssueType: &taskType, Parent: ptr("e")},
-			storage.BulkIssueSpec{Title: &title, Topic: &topic, IssueType: &taskType, Parent: ptr("e"), BlockedBy: []string{"a"}})},
+			storage.BulkIssueSpec{Title: &title, Topic: &topic, IssueType: &taskType, Parent: ptr("e"), BlockedBy: ptr([]string{"a"})})},
 		{"BulkApply(an update, then a task blocked by a task beside it under an existing epic)", bulk(
 			storage.BulkIssueSpec{ID: existing.ID, Title: &renamed},
 			storage.BulkIssueSpec{LocalID: "a", Title: &title, Topic: &topic, IssueType: &taskType, Parent: ptr(existing.ID)},
-			storage.BulkIssueSpec{Title: &title, Topic: &topic, IssueType: &taskType, Parent: ptr(existing.ID), BlockedBy: []string{"a"}})},
+			storage.BulkIssueSpec{Title: &title, Topic: &topic, IssueType: &taskType, Parent: ptr(existing.ID), BlockedBy: ptr([]string{"a"})})},
 	} {
 		assertRefused(t, imp.do(), imp.what)
 	}
@@ -2968,7 +2968,7 @@ func aBulkFileRefusedAtAWriteAppliesNoUpdate(t *testing.T, ctx context.Context, 
 		after []storage.BulkIssueSpec // the documents after the update
 	}{
 		{"an update, then an epic blocked by an issue that does not exist", []storage.BulkIssueSpec{
-			{LocalID: "e", Title: &title, Topic: &topic, IssueType: &epicType, BlockedBy: []string{"no-such-issue"}}}},
+			{LocalID: "e", Title: &title, Topic: &topic, IssueType: &epicType, BlockedBy: ptr([]string{"no-such-issue"})}}},
 		{"an update, then an epic, then a task under a parent that does not exist", []storage.BulkIssueSpec{
 			{LocalID: "e", Title: &title, Topic: &topic, IssueType: &epicType},
 			{Title: &title, Topic: &topic, IssueType: &taskType, Parent: ptr("no-such-issue")}}},
@@ -3248,7 +3248,7 @@ func blocksNeverRunsAlongTheHierarchy(t *testing.T, ctx context.Context, st stor
 
 	title, topic, issueType := "bulk leaf", "core", "task"
 	_, err = st.BulkApply(ctx, prefix, "ada", []storage.BulkIssueSpec{
-		{Title: &title, Topic: &topic, IssueType: &issueType, Parent: ptr(mid.ID), BlockedBy: []string{root.ID}},
+		{Title: &title, Topic: &topic, IssueType: &issueType, Parent: ptr(mid.ID), BlockedBy: ptr([]string{root.ID})},
 	})
 	assertHierarchyBlocksRefused(t, err, "BulkApply(a leaf depending on its grandparent epic)")
 }
@@ -3294,11 +3294,11 @@ func blocksNeverOrdersTwoLeavesOfOneEpic(t *testing.T, ctx context.Context, st s
 	_, err = st.BulkApply(ctx, prefix, "ada", []storage.BulkIssueSpec{
 		{LocalID: "e", Title: &title, Topic: &topic, IssueType: &epicType},
 		{LocalID: "a", Title: &title, Topic: &topic, IssueType: &taskType, Parent: ptr("e")},
-		{Title: &title, Topic: &topic, IssueType: &taskType, Parent: ptr("e"), BlockedBy: []string{"a"}},
+		{Title: &title, Topic: &topic, IssueType: &taskType, Parent: ptr("e"), BlockedBy: ptr([]string{"a"})},
 	})
 	assertHierarchyBlocksRefused(t, err, "BulkApply(a leaf blocked by the leaf beside it, epic in the file)")
 	_, err = st.BulkApply(ctx, prefix, "ada", []storage.BulkIssueSpec{
-		{Title: &title, Topic: &topic, IssueType: &taskType, Parent: ptr(epic.ID), BlockedBy: []string{first.ID}},
+		{Title: &title, Topic: &topic, IssueType: &taskType, Parent: ptr(epic.ID), BlockedBy: ptr([]string{first.ID})},
 	})
 	assertHierarchyBlocksRefused(t, err, "BulkApply(a leaf blocked by an existing leaf beside it)")
 
