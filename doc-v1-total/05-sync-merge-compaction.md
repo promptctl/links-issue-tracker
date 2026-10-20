@@ -17,7 +17,7 @@ Remotes live in Dolt's own `dolt_remotes` table, managed by SQL procedures (`syn
 | list | `SELECT name, url FROM dolt_remotes ORDER BY name`; result never nil |
 | add | `CALL DOLT_REMOTE('add', name, url)` under the sync-mutation envelope; both args required (trimmed, `"%s is required"`) |
 | remove | `CALL DOLT_REMOTE('remove', name)` |
-| fetch | `CALL DOLT_FETCH('--prune', remote)`, every fetch: a tracking ref of a branch the remote deleted goes, and each one is appended to the event's `fetch.pruned` occurrences (`fetch.pruned.remote`, `fetch.pruned.branch`, `fetch.pruned.head`) |
+| fetch | `CALL DOLT_FETCH('--prune', remote)`, every fetch: a tracking ref of a branch the remote deleted goes, and each one is appended to the event's `fetch.pruned` occurrences (`pruned_ref.remote`, `pruned_ref.branch`, `pruned_ref.head`); a receive's landing appends the live refs it deleted to `receive.landed_pruned` in the same shape, and the live fork points it dropped to `receive.landed_fork_points_dropped` as fork-point records |
 
 `GitBackedRemoteURL` (`sync.go`) converts a git remote URL to Dolt's transport form: trim (empty → empty); try Dolt's `NormalizeGitRemoteUrl`; on failure retry with a synthetic `.git` suffix and strip it from the result; otherwise return the input unchanged. The function is idempotent.
 

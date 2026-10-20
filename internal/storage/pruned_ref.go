@@ -9,11 +9,12 @@ type PrunedRef struct {
 	Head string
 }
 
-// EventValue is the record as one value of the event's fetch.pruned list.
+// EventValue is the record as one value of an event list: fetch.pruned, or
+// receive.landed_pruned for those a landing deleted from the live store.
 func (r PrunedRef) EventValue() map[string]any {
 	return map[string]any{
-		"fetch.pruned.remote": r.Remote,
-		"fetch.pruned.branch": r.Branch,
-		"fetch.pruned.head":   r.Head,
+		"pruned_ref.remote": r.Remote,
+		"pruned_ref.branch": r.Branch,
+		"pruned_ref.head":   r.Head,
 	}
 }

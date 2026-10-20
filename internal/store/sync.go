@@ -292,20 +292,24 @@ func (s *Store) SyncFetch(ctx context.Context, remote storage.RemoteName) error 
 	// fetch that landed finds the pruned refs already gone.
 	// [LAW:no-ambient-temporal-coupling] the before is recorded once, never
 	// re-listed after the move.
-	var before []storage.ForkPointRecord
+	var before map[string]string
 	var pruned []storage.PrunedRef
 	err := s.runSyncMutation(ctx, func(ctx context.Context) error {
-		// The fork points are recorded in the same mutation as the fetch and
-		// ahead of it, because the fetch moves every tracking ref of the remote
-		// however the remote's history moved (recordForkPoints). Every attempt
-		// records, so a retried attempt reports what it found as well.
-		forkPoints, err := s.recordForkPoints(ctx, owner)
-		s.forkPoints = append(s.forkPoints, forkPoints...)
+		tracked, err := s.trackingRefs(ctx, owner)
 		if err != nil {
 			return err
 		}
 		if before == nil {
-			before = forkPoints
+			before = tracked
+		}
+		// The fork points are recorded in the same mutation as the fetch and
+		// ahead of it, because the fetch moves every tracking ref of the remote
+		// however the remote's history moved (recordForkPoints). Every attempt
+		// records, so a retried attempt reports what it found as well.
+		forkPoints, err := s.recordForkPoints(ctx, owner, tracked)
+		s.forkPoints = append(s.forkPoints, forkPoints...)
+		if err != nil {
+			return err
 		}
 		// [LAW:single-enforcer] Remote transport retry wraps the one network-touching
 		// call, inside the mutation's own GC-contention retry: the two loops recover
@@ -317,14 +321,14 @@ func (s *Store) SyncFetch(ctx context.Context, remote storage.RemoteName) error 
 		if err != nil {
 			return fmt.Errorf("fetch remote %q: %w", remote, err)
 		}
-		tracked, err := refHeadsUnder(ctx, s.db, `SELECT name, hash FROM dolt_remote_branches`, trackingRefPrefix(owner))
+		after, err := s.trackingRefs(ctx, owner)
 		if err != nil {
 			return err
 		}
-		pruned = prunedRefs(before, tracked)
+		pruned = prunedRefs(owner, before, after)
 		// A fork point lives exactly as long as its tracking ref, so every one
 		// the fetch left without a ref goes. [LAW:one-source-of-truth]
-		dropped, err := s.dropForkPoints(ctx, owner, tracked)
+		dropped, err := s.dropForkPoints(ctx, owner, after)
 		s.forkPoints = append(s.forkPoints, dropped...)
 		return err
 	})

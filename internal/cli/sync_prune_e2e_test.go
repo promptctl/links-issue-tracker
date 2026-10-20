@@ -73,18 +73,25 @@ func TestAnAutomaticReceivePrunesABranchTheRemoteDeleted(t *testing.T) {
 			landing.Metadata["landed_pruned"], landing.Metadata["landed_fork_points_dropped"], landing)
 	}
 	written := writtenEvent(t, recorder.Finish(invocationEnd(time.Now(), nil, nil)))
-	outcomes := written.Occurrences["receive.outcomes"]
-	if len(outcomes) != 1 {
-		t.Fatalf("receive.outcomes = %#v; want the one receive", outcomes)
+	landedPruned := written.Occurrences["receive.landed_pruned"]
+	if len(landedPruned) != 1 {
+		t.Fatalf("receive.landed_pruned = %#v; want the one ref the landing deleted", landedPruned)
 	}
-	if outcome, _ := outcomes[0].(map[string]any); outcome["receive.landed_pruned"] != "feature" || outcome["receive.landed_fork_points_dropped"] != "feature" {
-		t.Fatalf("receive.outcomes[0] = %#v; want feature landed pruned and its fork point dropped", outcomes[0])
+	if value, _ := landedPruned[0].(map[string]any); value["pruned_ref.branch"] != "feature" || value["pruned_ref.remote"] != "origin" || value["pruned_ref.head"] == "" {
+		t.Fatalf("receive.landed_pruned[0] = %#v; want origin's feature at its head", landedPruned[0])
+	}
+	dropped := written.Occurrences["receive.landed_fork_points_dropped"]
+	if len(dropped) != 1 {
+		t.Fatalf("receive.landed_fork_points_dropped = %#v; want feature's fork point", dropped)
+	}
+	if value, _ := dropped[0].(map[string]any); value["fork_point.branch"] != "feature" || value["fork_point.outcome"] != string(storage.ForkPointDropped) {
+		t.Fatalf("receive.landed_fork_points_dropped[0] = %#v; want feature's fork point dropped", dropped[0])
 	}
 	pruned := written.Occurrences["fetch.pruned"]
 	if len(pruned) != 1 {
 		t.Fatalf("fetch.pruned = %#v; want the clone's one prune", pruned)
 	}
-	if value, ok := pruned[0].(map[string]any); !ok || value["fetch.pruned.branch"] != "feature" || value["fetch.pruned.remote"] != "origin" {
+	if value, ok := pruned[0].(map[string]any); !ok || value["pruned_ref.branch"] != "feature" || value["pruned_ref.remote"] != "origin" {
 		t.Fatalf("fetch.pruned[0] = %#v; want origin's feature", pruned[0])
 	}
 }

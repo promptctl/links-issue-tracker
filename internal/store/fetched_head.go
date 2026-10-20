@@ -113,10 +113,12 @@ type LandedFetch struct {
 //
 // The clone's fetch pruned too, and pruned is what it pruned (its session's
 // PrunedRefs). Each of remote's pruned refs the clone still lacks is deleted
-// from the live store only while it still names the head the clone pruned:
-// that head is the live one at the take, since the clone is a copy of the
-// live store, so a ref the live store moved or created since is left as it
-// stands. Then every live
+// from the live store only while it still names the head the clone pruned.
+// For a session whose first fetch pruned the ref, that head is the live one
+// at the take, since the clone is a copy of the live store; a ref the live
+// store moved or created since is left as it stands, and so is one an earlier
+// fetch of the session moved before a later one pruned it, until the next
+// receive's own fetch prunes it. Then every live
 // fork point of remote whose tracking ref the live store no longer holds goes,
 // by the one rule a fetch's own drop follows (orphanForkPoints). It runs after
 // the sync branch's ref is set, so the sync branch keeps its fork point

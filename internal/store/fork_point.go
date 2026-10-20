@@ -73,14 +73,10 @@ func trackingRefPrefix(owner refOwner) string {
 // fetch that brings a re-rooted remote leaves the ref unrelated, so neither a
 // second fetch nor a crash before the reconcile can replace the head the
 // reconcile needs. [LAW:no-ambient-temporal-coupling] the record is written
-// before the move, never reconstructed after it.
-func (s *Store) recordForkPoints(ctx context.Context, remote refOwner) ([]storage.ForkPointRecord, error) {
+// before the move, never reconstructed after it. tracked is remote's tracking
+// refs as trackingRefs lists them ahead of the fetch.
+func (s *Store) recordForkPoints(ctx context.Context, remote refOwner, tracked map[string]string) ([]storage.ForkPointRecord, error) {
 	local, err := activeBranch(ctx, s.db)
-	if err != nil {
-		return nil, err
-	}
-	trackingPrefix := trackingRefPrefix(remote)
-	tracked, err := refHeadsUnder(ctx, s.db, `SELECT name, hash FROM dolt_remote_branches`, trackingPrefix)
 	if err != nil {
 		return nil, err
 	}
@@ -125,13 +121,18 @@ func (s *Store) recordForkPoint(ctx context.Context, local, forkPoint, head stri
 	return storage.ForkPointRecorded, nil
 }
 
-// prunedRefs is what a pruning fetch removed: each tracking ref recordForkPoints
-// saw before the fetch (one record per ref) that is not in tracked after it.
-func prunedRefs(before []storage.ForkPointRecord, tracked map[string]string) []storage.PrunedRef {
+// trackingRefs is owner's tracking refs, branch to head.
+func (s *Store) trackingRefs(ctx context.Context, owner refOwner) (map[string]string, error) {
+	return refHeadsUnder(ctx, s.db, `SELECT name, hash FROM dolt_remote_branches`, trackingRefPrefix(owner))
+}
+
+// prunedRefs is what a pruning fetch of owner removed: each tracking ref in
+// before, listed ahead of the fetch, that after, listed behind it, lacks.
+func prunedRefs(owner refOwner, before, after map[string]string) []storage.PrunedRef {
 	var pruned []storage.PrunedRef
-	for _, r := range before {
-		if _, ok := tracked[r.Branch]; !ok {
-			pruned = append(pruned, storage.PrunedRef{Remote: r.Remote, Branch: r.Branch, Head: r.Head})
+	for _, branch := range slices.Sorted(maps.Keys(before)) {
+		if _, ok := after[branch]; !ok {
+			pruned = append(pruned, storage.PrunedRef{Remote: owner.String(), Branch: branch, Head: before[branch]})
 		}
 	}
 	return pruned
@@ -175,7 +176,7 @@ func (s *Store) dropForkPoints(ctx context.Context, remote refOwner, tracked map
 // it deleted, a failure included. Each deletion stands once made, so a
 // retried run deletes only what is left.
 func (s *Store) dropTrackingRefs(ctx context.Context, owner refOwner) (int, error) {
-	tracked, err := refHeadsUnder(ctx, s.db, `SELECT name, hash FROM dolt_remote_branches`, trackingRefPrefix(owner))
+	tracked, err := s.trackingRefs(ctx, owner)
 	if err != nil {
 		return 0, err
 	}

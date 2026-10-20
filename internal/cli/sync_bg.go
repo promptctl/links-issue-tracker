@@ -548,7 +548,9 @@ type pushedHead struct {
 	// possibly so, the remote may carry it in head's place.
 	reRoot storage.ReRootPublication
 	// pruned is every tracking ref the clone's fetches pruned, for the
-	// receive that lands the clone on the live store to carry over.
+	// receive that lands a re-rooted push (receivePushedReRoot) to carry
+	// over. RecordPushedHead moves the sync ref alone, so after any other push
+	// the next receive's own fetch prunes the live store.
 	pruned []storage.PrunedRef
 }
 
