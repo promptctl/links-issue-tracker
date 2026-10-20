@@ -575,13 +575,14 @@ func TestFocusScopeNeverHidesThisCheckoutsOwnWork(t *testing.T) {
 	}
 }
 
-// `lit backlog` answers over the scope `lit next` routes by, so the work next
-// hands back is never missing from the list. The case it exists for is an agent
-// back from a crash or a reset, running `lit backlog` to learn what it was
-// doing: its in-flight ticket off the focused path must be on screen, together
-// with the rest of the epic next would keep it in, and named as its own work
-// rather than counted among the rows the focus withheld. Driven through the CLI
-// so the event the run leaves is the one asserted.
+// `lit backlog` answers over the scope `lit next` routes by, so this checkout's
+// lanes and the rest of their epics are never missing from the list. The case
+// it exists for is an agent back from a crash or a reset, running `lit backlog`
+// to learn what it was doing: its in-flight ticket off the focused path must be
+// on screen, together with the rest of the epic next would keep it in, and
+// named as off the path for those lanes rather than counted among the rows the
+// focus withheld. Driven through the CLI so the event the run leaves is the one
+// asserted.
 func TestFocusedBacklogListsThisCheckoutsOwnWork(t *testing.T) {
 	isolateEvents(t)
 	repo := newInitTestRepo(t)

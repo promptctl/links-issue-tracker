@@ -187,9 +187,12 @@ func workableLeaf(view workableView) appLeaf {
 		// partition serves every case and nothing downstream learns the flag exists.
 		// [LAW:dataflow-not-control-flow]
 		//
-		// It owns this checkout's work exactly as `lit next`'s does, so the work
-		// next would hand back is never missing from the list. That is why the
-		// claim context is read before the partition rather than after it.
+		// It owns this checkout's lanes and the rest of their epics exactly as
+		// `lit next`'s does, so the work next routes over first is never missing
+		// from the list. A dependency next hands back from outside them is not
+		// this checkout's until `lit start` claims its lane; until then it shows
+		// on the row it blocks, as that row's `blocked by:` line. The claim
+		// context is read before the partition because the scope needs it.
 		scope := gathered.scope.scopeFor(knobs.all).owning(ownScope(cc.standings, cc.self))
 		scoped, excluded := scope.partition(gathered.rows, gathered.details)
 		view.order(scoped, gathered.details, knobs)
