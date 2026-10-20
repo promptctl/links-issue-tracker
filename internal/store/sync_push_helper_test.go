@@ -14,7 +14,8 @@ import (
 // production push the bound never follows is what this keeps unwritable.
 func (s *Store) SyncPush(ctx context.Context, remote storage.RemoteName, branch string, setUpstream bool, force bool) (storage.SyncPushResult, error) {
 	result, pushErr := s.pushMutation(ctx, remote, branch, setUpstream, force)
-	result, pushErr, _, followErr := s.retryPushAfterFollow(ctx, remote, branch, setUpstream, result, pushErr, s.collectAndRecordFollow)
+	result, pushErr, followed, followErr := s.retryPushAfterFollow(ctx, remote, branch, setUpstream, result, pushErr)
+	s.collectAndRecordFollow(ctx, remote, followed, followErr)
 	if err := joinFollowFailure(pushErr, followErr); err != nil {
 		return storage.SyncPushResult{}, err
 	}

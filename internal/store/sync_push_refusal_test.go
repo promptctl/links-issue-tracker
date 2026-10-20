@@ -60,8 +60,7 @@ func TestOnlyARefusedPushIsFollowedAndRetried(t *testing.T) {
 		classifyPushFailure(remoteName(t, "origin"), errors.New("Error 1105: unknown push error; open /r/.git permission denied")),
 	} {
 		pushed := storage.SyncPushResult{Head: "h"}
-		st := &Store{}
-		result, gotErr, _, followErr := st.retryPushAfterFollow(live, remoteName(t, "origin"), "master", false, pushed, pushErr, st.recordFollow)
+		result, gotErr, _, followErr := (&Store{}).retryPushAfterFollow(live, remoteName(t, "origin"), "master", false, pushed, pushErr)
 		if !reflect.DeepEqual(result, pushed) || gotErr != pushErr || followErr != nil {
 			t.Fatalf("retryPushAfterFollow(%v) = %+v, %v, %v; want the push's own outcome untouched", pushErr, result, gotErr, followErr)
 		}

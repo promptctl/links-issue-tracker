@@ -47,7 +47,7 @@ const reRootScratchPrefix = "lit-reroot/"
 //     bound's Publication. A remote a peer pushed to in between carries
 //     none, and the branch stays where it was;
 //  5. once the branch has followed, it reclaims the history below the cut,
-//     as every follow does (collectBelowTheCut).
+//     as every follow outside the mirror's push does (collectBelowTheCut).
 //
 // A branch that did not follow is left on the history it had, and the next
 // push past the bound tries again; that is only sound while the remote still
@@ -307,14 +307,15 @@ func (s *Store) publishReRoot(ctx context.Context, remote storage.RemoteName, br
 }
 
 // collectBelowTheCut reclaims the history below the cut once the sync branch
-// has followed a re-root, which moved remote's fork points across the cut
-// too (moveForkPointsAcrossTheCut): under one commit lock, it drops the
-// migration checkpoints, the reconcile scratch branches and any re-root
-// scratch a killed bound left, every one of which names a commit from before
-// the re-root, and runs the full GC. Every follow runs after a fetch moved
-// the tracking ref onto the re-rooted head; while that ref still named the
-// old head, the same GC freed nothing (links-storage-3k6u.ge9). A ref it
-// could not drop still pins that history, so it stops the pass before the GC.
+// has followed a re-root: under one commit lock, it moves remote's fork
+// points across the cut (moveForkPointsAcrossTheCut), drops the migration
+// checkpoints, the reconcile scratch branches and any re-root scratch a
+// killed bound left, every one of which names a commit from before the
+// re-root, and runs the full GC. Every follow runs after a fetch moved the
+// tracking ref onto the re-rooted head; while that ref still named the old
+// head, the same GC freed nothing (links-storage-3k6u.ge9). A ref it could
+// not move or drop still pins that history, so it stops the pass before the
+// GC.
 //
 // The store is measured around the pass, outside the lock, as SyncCompact
 // measures it: the two readings are an account of what happened and never an
@@ -326,6 +327,9 @@ func (s *Store) collectBelowTheCut(ctx context.Context, remote storage.RemoteNam
 	c.BytesBefore, beforeErr = storeBytes(s.doltRootDir)
 	var sweep refSweepOutcome
 	err := s.runSyncMutation(ctx, func(ctx context.Context) error {
+		if err := s.moveForkPointsAcrossTheCut(ctx, remote); err != nil {
+			return err
+		}
 		for _, prefix := range []string{migrationCheckpointPrefix, migrationDriftRepairCheckpointPrefix} {
 			if err := s.PruneCheckpoints(ctx, prefix, 0); err != nil {
 				return err

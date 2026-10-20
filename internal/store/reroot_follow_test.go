@@ -452,16 +452,18 @@ func TestSyncPushFromCloneFollowsAReRootedRemote(t *testing.T) {
 	if len(branchesUnder(t, ctx, st, migrationCheckpointPrefix+"-")) == 0 {
 		t.Fatalf("the clone's %s checkpoints are gone; want them left for the clone's removal, not collected", migrationCheckpointPrefix)
 	}
-	if forkPoint, remote := branchesUnder(t, ctx, st, forkPointPrefix)["origin/master"], r.alphaReRoot.Head; forkPoint != remote {
-		t.Fatalf("the clone's fork point is %q; want it moved onto the remote's re-rooted head %s", forkPoint, remote)
+	// The fork point moves after the retry, onto the head the remote then
+	// carries: the clone's own push, above the cut.
+	if forkPoint := branchesUnder(t, ctx, st, forkPointPrefix)["origin/master"]; forkPoint != pushed.Head {
+		t.Fatalf("the clone's fork point is %q; want it moved across the cut onto the pushed head %s", forkPoint, pushed.Head)
 	}
 }
 
-// TestARefusedPushIsRetriedBeforeItsFollowIsFinished drives a push the
-// re-rooted remote refuses, with a finish that reads what the remote carries
-// when it runs. The retry has already landed by then, so nothing a finish
-// does — a live store's collection below the cut — delays the retry.
-func TestARefusedPushIsRetriedBeforeItsFollowIsFinished(t *testing.T) {
+// TestARefusedPushIsRetriedWithNothingCollected drives a push the re-rooted
+// remote refuses through retryPushAfterFollow alone. The retry lands while
+// the history below the cut still stands, so nothing a caller finishes the
+// follow with — a live store's collection below the cut — delays the retry.
+func TestARefusedPushIsRetriedWithNothingCollected(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	r := newReRootedRemote(t, ctx, false)
@@ -469,25 +471,16 @@ func TestARefusedPushIsRetriedBeforeItsFollowIsFinished(t *testing.T) {
 	defer func() { _ = bravo.Close() }()
 	origin := remoteName(t, "origin")
 
-	var carriedAtFinish bool
-	finish := func(ctx context.Context, remote storage.RemoteName, followed storage.FollowedReRoot, moveErr error) storage.FollowedReRoot {
-		fresh, err := bravo.SyncFreshness(ctx, remote, "master")
-		if err != nil {
-			t.Errorf("SyncFreshness at the finish: %v", err)
-		}
-		carriedAtFinish = fresh.RemoteCarriesHead()
-		return bravo.recordFollow(ctx, remote, followed, moveErr)
-	}
 	pushed, pushErr := bravo.pushMutation(ctx, origin, "master", false, false)
-	pushed, pushErr, followed, followErr := bravo.retryPushAfterFollow(ctx, origin, "master", false, pushed, pushErr, finish)
+	pushed, pushErr, followed, followErr := bravo.retryPushAfterFollow(ctx, origin, "master", false, pushed, pushErr)
 	if pushErr != nil || followErr != nil {
 		t.Fatalf("retryPushAfterFollow error = %v, follow error = %v", pushErr, followErr)
 	}
 	if followed.Head == "" || pushed.Head != headCommit(t, ctx, bravo) {
 		t.Fatalf("followed %+v and pushed %+v; want the follow and its retry landed", followed, pushed)
 	}
-	if !carriedAtFinish {
-		t.Fatalf("the remote did not carry bravo's head when the follow was finished; want the retry landed first")
+	if len(branchesUnder(t, ctx, bravo, migrationCheckpointPrefix+"-")) == 0 {
+		t.Fatalf("bravo's %s checkpoints are gone once the retry landed; want nothing collected before the caller finishes the follow", migrationCheckpointPrefix)
 	}
 }
 
