@@ -58,7 +58,8 @@ const (
 	// then stopped before it settled — landing the fetch, opening the live store,
 	// reconciling its remotes, or the settle itself (a re-root follow included) —
 	// at least unsettledLastingAfter after a receive first stopped that way, with
-	// no settle anywhere in between. One stop is never this class:
+	// another such stop between them and no settle anywhere in between. One
+	// stop is never this class:
 	// the receive's one deadline spans the fetch and the local steps, so a
 	// single cut is as often contention as a fault; a run that outlives two
 	// debounce intervals is retries that did not clear it. The checkout stays
@@ -428,7 +429,7 @@ func (f SyncFailure) escalationLine() string {
 		// the class most likely to be misread as routine.
 		return "ESCALATION — BLOCKED: two tickets share one id and will collide on every retry. lit cannot resolve this for you: one of the two jobs has to be re-filed under a free id, and that is a decision about which piece of work keeps the name. Surface it to the user as blocking before continuing ticket work."
 	case syncFailureReceiveUnsettled:
-		// The class exists only once a receive has stopped again at least two
+		// The class exists only once a third receive has stopped at least two
 		// debounce intervals after the first, so retrying is already what failed.
 		return fmt.Sprintf(
 			"ESCALATION — BLOCKED: no settle has succeeded on this checkout since a receive first stopped after its fetch at %s (%s), and the latest receive stopped at %s; this checkout is not receiving the shared backlog. Run the resolution above, and surface it to the user as blocking if it fails.",

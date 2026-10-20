@@ -206,10 +206,10 @@ converges the divergence, retires a block no command has printed yet. A receive
 that fetched and then could not land the fetch, open the store, or settle onto
 the fetched head records where it stopped; one such stop is left to the next
 receive, since its 15-second limit covers the fetch and the store waits alike.
-When those stops have kept coming for 10 minutes with no settle in between, the
-receive leaves a block saying the checkout is not receiving the shared backlog
-and naming `lit sync pull`, which runs the same steps in the foreground and
-reports the error. A fetch that worked keeps the 24-hour staleness line quiet
+When those stops keep coming, with a third at least 10 minutes after the first
+and no settle in between, the receive leaves a block saying the checkout is not
+receiving the shared backlog and naming `lit sync pull`, which fetches and
+settles in the foreground and reports the error. A fetch that worked keeps the 24-hour staleness line quiet
 either way.
 Set `LIT_DISABLE_AUTO_SYNC=1` to disable all automatic sync (mirror and receive)
 for a process — useful for CI and sandboxes.
