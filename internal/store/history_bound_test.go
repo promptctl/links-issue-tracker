@@ -274,6 +274,12 @@ func TestAStaleLeaseLeavesTheBranchOnItsHistory(t *testing.T) {
 	if b.Err != nil || b.Lease != storage.LeaseStale || b.Publication != storage.ReRootNotCarried || b.Collection.Ran || b.ReRooted.Head == "" {
 		t.Fatalf("the bound over a remote a peer moved = %+v; want a re-root refused as stale, the remote read without it, and nothing collected", b)
 	}
+	if got := b.EventValue()["history_bound.publication"]; got != "not carried" {
+		t.Fatalf("the bound's history_bound.publication = %v; want not carried", got)
+	}
+	if report := historyBoundReport(b); !strings.Contains(report, " commits and dropping ") || !strings.Contains(report, ": not carried") {
+		t.Fatalf("the bound's maintenance account = %q; want the re-root reported not carried", report)
+	}
 	st = openSyncOrFatal(t, ctx, alpha)
 	defer func() { _ = st.Close() }()
 	if head := headCommit(t, ctx, st); head != alphaHead {
