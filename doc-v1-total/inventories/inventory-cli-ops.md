@@ -61,6 +61,7 @@ data — described as assets, not as documentation of behavior).
 | `backup` | data | `familyCmd(backupFamily)` | per-row | `register.go` |
 | `snapshots` | data | `wsFamilyCmd(snapshotsFamily)` | workspace | `register.go` |
 | `lifeboat` | maintenance | `wsFamilyCmd(lifeboatFamily)` | workspace | `register.go` |
+| `unquarantine` | maintenance | `wsCmd(unquarantineLeaf)` | workspace (opens below the migration gate) | `register.go` |
 | `downgrade` | maintenance | `appCmd(app.AccessWrite, downgradeLeaf)` | write | `register.go` |
 | `upgrade` | maintenance | `wsCmd(upgradeLeaf)` | workspace only (never opens the app store) | `register.go` |
 
@@ -885,6 +886,16 @@ Family usage `usage: lit lifeboat <dump|recover> ...` (`lifeboat.go`). Workspace
   - Any other type → `unknown recovery outcome %T`.
 - `promoteReconciled` (`lifeboat.go`): `store.PromoteCandidate`; a deferred `Candidate.Discard()` failure is joined as `discard candidate scratch after promotion: %w`. stdout: `recovered: rebuilt workspace promoted to <canonical> (<previous contents preserved at <backup> | no previous contents to preserve>)`.
 - `formatDrops` renders `  - <column>` per line (`lifeboat.go`).
+
+### 9.3 `lit unquarantine`
+
+`unquarantineLeaf` — `unquarantine.go`. Workspace-mode, beside lifeboat below the migration gate: the app open is what a quarantine refuses. No flags. Any positional → `UsageError{"usage: lit unquarantine"}`.
+
+- `store.Unquarantine(ctx, DatabasePath, WorkspaceID)` clears the quarantine every write open is refused on and commits the clear (`internal/store/unquarantine.go`; chapter `inventory-store-sync.md`).
+- The outcome's `EventRecord()` is recorded on the invocation's event: `unquarantine.cleared_version`, and `unquarantine.next_version` when a quarantine remains.
+- stdout: the outcome's `String()`, `cleared the quarantine of migration v<N> "<name>"`, then either `the next command that opens the store runs it again` or ``migration v<M> "<name>" is still quarantined, so the next command that opens the store refuses on it; `lit unquarantine` clears it``.
+- The clear's commit failing → `*store.UnquarantineCommitError`, whose message carries the same two lines; its `EventRecord()` records the same facts, through the failed invocation's event.
+- Nothing quarantined → `store.NoQuarantineError` (`no migration is quarantined: no open of this workspace is refused, so there is nothing to clear`), a satisfied state request: reason `state_already_holds`, exit 6.
 
 ---
 

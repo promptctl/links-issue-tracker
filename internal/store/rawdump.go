@@ -47,49 +47,25 @@ type RawTable struct {
 // [LAW:locality-or-seam] This is the below-the-gate seam. Every other entry
 // point routes through store.Open -> migrate(), and migrate() is exactly what
 // refuses a too-new or genuinely-incompatible workspace. DumpRaw reuses the
-// connection primitive (openStoreConnection) but never invokes migrate, so it
+// connection primitive (openInitialized) but never invokes migrate, so it
 // cannot land in the deadend the gate creates.
 //
-// [LAW:single-enforcer] The workspace shared lock is acquired here for the same
-// reason store.OpenForRead acquires it: it excludes `lit snapshots restore`,
-// which rotates the Dolt directory under an exclusive hold. Reading below the
-// gate does not exempt the read from that coordination.
+// [LAW:single-enforcer] It opens through openInitialized, as OpenForRead does,
+// so it takes the workspace shared lock that excludes `lit snapshots restore`
+// rotating the Dolt directory. Reading below the gate does not exempt the read
+// from that coordination.
 //
 // Read-only on the broken DB is the safety property: the worst case is a read
 // error, with the user's data still intact on disk.
 func DumpRaw(ctx context.Context, doltRootDir string, workspaceID string) (_ RawDump, err error) {
-	if err := validateOpenArgs(doltRootDir, workspaceID); err != nil {
-		return RawDump{}, err
-	}
-	release, err := acquireWorkspaceShared(ctx, doltRootDir)
+	s, err := openInitialized(ctx, doltRootDir, workspaceID, engineRead)
 	if err != nil {
 		return RawDump{}, err
 	}
-	// [LAW:no-silent-failure] A release failure is rare but real and leaves
-	// the workspace stuck busy for subsequent commands; surface it via the
-	// named return joined with any read error rather than discarding it.
+	// [LAW:no-silent-failure] A close or release failure is joined, never
+	// dropped: a leaked hold leaves the workspace busy for later commands.
 	defer func() {
-		if relErr := release(); relErr != nil {
-			err = errors.Join(err, relErr)
-		}
-	}()
-	if err = requireInitializedWorkspace(doltRootDir); err != nil {
-		return RawDump{}, err
-	}
-	// Post-lock, same as every open: an interrupted adopt's residue is not a
-	// store to dump — nothing local-only can exist under the marker, so the
-	// honest lifeboat answer is "re-run lit init", not a dump of half-cloned
-	// bytes. [LAW:no-ambient-temporal-coupling] checked under the shared
-	// hold so a live adopt reads as workspace-busy, never as condemned.
-	if err = requireNoPendingAdopt(doltRootDir); err != nil {
-		return RawDump{}, err
-	}
-	s, err := openStoreConnection(ctx, doltRootDir, workspaceID, engineRead)
-	if err != nil {
-		return RawDump{}, err
-	}
-	defer func() {
-		if closeErr := s.db.Close(); closeErr != nil && !errors.Is(closeErr, context.Canceled) {
+		if closeErr := s.Close(); closeErr != nil {
 			err = errors.Join(err, closeErr)
 		}
 	}()

@@ -106,6 +106,12 @@ var doltWorkspaceMachinery = map[string][]string{
 		"ColumnRef", "FromColumn",
 		"Reconciled", "Unconverged", "UnexplainedDrop", "RequiresDrop",
 	},
+	// Clearing a migration quarantine: the quarantine is what makes every
+	// engine open refuse, so the clear runs below the gate like lifeboat and
+	// cannot go through the contract. NoQuarantineError is its satisfied
+	// answer, which the CLI classifies through model.StateRequestError and
+	// its tests match by type.
+	"migration quarantine recovery": {"Unquarantine", "NoQuarantineError"},
 	// The detached mirror's clone-and-push machinery: the deadline each hold
 	// on the live store runs under, the deadline the push from the clone runs
 	// under with the lag its cut takes to unwind, and the ref write that

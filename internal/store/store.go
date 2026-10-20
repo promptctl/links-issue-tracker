@@ -198,50 +198,16 @@ func Open(ctx context.Context, doltRootDir string, workspaceID string) (_ *Store
 }
 
 func OpenForRead(ctx context.Context, doltRootDir string, workspaceID string) (_ *Store, err error) {
-	if err := validateOpenArgs(doltRootDir, workspaceID); err != nil {
-		return nil, err
-	}
-	// [LAW:dataflow-not-control-flow] Acquire the workspace shared lock
-	// BEFORE the existence stat so the stat cannot observe the transient
-	// ENOENT that dbsnapshot.Restore opens between rotate-away and
-	// install-snapshot. The lock blocks until restore releases its
-	// exclusive hold, after which the stat sees a real result every time.
-	release, err := acquireWorkspaceShared(ctx, doltRootDir)
+	s, err := openInitialized(ctx, doltRootDir, workspaceID, engineRead)
 	if err != nil {
 		return nil, err
 	}
-	success := false
-	defer func() {
-		if success {
-			return
-		}
-		if relErr := release(); relErr != nil {
-			err = errors.Join(err, relErr)
-		}
-	}()
-	if err = requireInitializedWorkspace(doltRootDir); err != nil {
-		return nil, err
-	}
-	// Post-lock, same as Open: a shared hold excludes a live adopt (which
-	// holds the workspace lock exclusively), so a marker seen here always
-	// belongs to a dead one. [LAW:no-ambient-temporal-coupling]
-	if err = requireNoPendingAdopt(doltRootDir); err != nil {
-		return nil, err
-	}
-	s, err := openStoreConnection(ctx, doltRootDir, workspaceID, engineRead)
-	if err != nil {
-		return nil, err
-	}
-	s.releaseWorkspaceLock = release
 	// The schema check is answered with reads and no commit lock: a read
 	// command that queued behind that lock waited out whichever writer held
 	// it — a 70ms mutation, or a receive holding the store across the
 	// network — for nothing it needed, since the read engine reads beside a
 	// live writer by design. [LAW:no-ambient-temporal-coupling] a reader's
 	// only wait is on its own engine; it has no wait edge to any lit lock.
-	// From here the Store owns the hold: Close releases it, and the deferred
-	// release above stands down.
-	success = true
 	assessment, fail := s.assessMigration(ctx)
 	if fail != nil {
 		return nil, errors.Join(fail, s.Close())
@@ -267,6 +233,31 @@ func OpenForRead(ctx context.Context, doltRootDir string, workspaceID string) (_
 		return nil, fmt.Errorf("this read open found %s and handed off to the write open to bring it forward: %w", assessment, err)
 	}
 	return writer, nil
+}
+
+// openInitialized opens an engine on an initialized workspace without
+// migrating it: the shared hold every reader of the Dolt directory takes, then
+// the connection. The Store owns the hold from the moment it exists, so Close
+// releases both. Open and OpenSync do not use it: they create the database
+// when it is missing, where this refuses.
+//
+// [LAW:single-enforcer] The read open and the below-the-gate entry points
+// (DumpRaw, Unquarantine) reach the database through this one sequence, so the
+// post-lock adopt check cannot be left out of any of them.
+func openInitialized(ctx context.Context, doltRootDir string, workspaceID string, access engineAccess) (*Store, error) {
+	if err := validateOpenArgs(doltRootDir, workspaceID); err != nil {
+		return nil, err
+	}
+	release, err := acquireLiveStoreHold(ctx, doltRootDir)
+	if err != nil {
+		return nil, err
+	}
+	s, err := openStoreConnection(ctx, doltRootDir, workspaceID, access)
+	if err != nil {
+		return nil, errors.Join(err, release())
+	}
+	s.releaseWorkspaceLock = release
+	return s, nil
 }
 
 // AttributeTo names the checkout whose work this store is about to record, so
