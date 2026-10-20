@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
@@ -92,7 +93,7 @@ func TestAPushWhoseBoundFiredProvesNothing(t *testing.T) {
 	runCLIInDir(t, r.alpha, "new", "--title", "one", "--topic", "demo", "--type", "task", "--parent", r.epic)
 	runCLIInDir(t, r.alpha, "sync", "push")
 	bound := boundRecordOf(t, lastEvent(t))
-	if bound["history_bound.fired"] != true || bound["history_bound.lease"] != "held" {
+	if bound["history_bound.fired"] != true || bound["history_bound.lease"] != "held" || bound["history_bound.publication"] != "published" {
 		t.Fatalf("the push's bound = %v; want it fired and published", bound)
 	}
 	// The trace keeps the commit the push sent and says why it carries no
@@ -104,7 +105,7 @@ func TestAPushWhoseBoundFiredProvesNothing(t *testing.T) {
 		}
 	}
 	reRoot, _ := bound["reroot.head"].(string)
-	if trace.Metadata["head"] != bound["history_bound.head"] || reRoot == "" || !strings.Contains(trace.Metadata["after_push"], reRoot) || trace.Metadata["advertisement"] != "" {
+	if trace.Metadata["head"] != bound["history_bound.head"] || reRoot == "" || !strings.Contains(trace.Metadata["after_push"], reRoot) || !strings.HasSuffix(trace.Metadata["after_push"], ": published") || trace.Metadata["advertisement"] != "" {
 		t.Fatalf("the push's trace metadata = %v; want the pushed head %v, after_push naming the re-root %q, and no advertisement", trace.Metadata, bound["history_bound.head"], reRoot)
 	}
 	if after, err := store.ReadReceivedRefs(alphaWS.DatabasePath); err != nil || string(after) != string(proved) {
@@ -145,23 +146,28 @@ func dirBytes(t *testing.T, root string) int64 {
 }
 
 // TestTheLiveStoreLearnsWhereTheCycleLeftTheRemote walks every combination
-// of a cycle's facts to the step it gives the live store.
+// of a cycle's facts to the step it gives the live store. A push whose bound
+// never got its re-root to the remote, or got it there and found the remote
+// without it, leaves the mirror recording the pushed head, as an ordinary
+// push does; one the remote may carry the re-root in place of waits.
 func TestTheLiveStoreLearnsWhereTheCycleLeftTheRemote(t *testing.T) {
-	landed := pushedHead{remote: "origin", branch: "master", head: "abc"}
-	followed, reRooted, both := landed, landed, landed
-	followed.followedReRoot = true
-	reRooted.reRootedAfter = true
-	both.followedReRoot, both.reRootedAfter = true, true
+	landed := func(reRoot storage.ReRootPublication, followed bool) pushedHead {
+		return pushedHead{remote: "origin", branch: "master", head: "abc", reRoot: reRoot, followedReRoot: followed}
+	}
 	for _, tc := range []struct {
 		name   string
 		pushed pushedHead
 		want   liveStoreStep
 	}{
 		{"nothing landed", pushedHead{}, liveStoreWaits},
-		{"an ordinary landed push", landed, liveStoreRecords},
-		{"the clone followed a re-root", followed, liveStoreReceives},
-		{"the bound re-rooted after, the clone not following", reRooted, liveStoreWaits},
-		{"the bound re-rooted after, the clone following", both, liveStoreReceives},
+		{"a landed push whose re-root never left the checkout", landed(storage.ReRootNotPushed, false), liveStoreRecords},
+		{"a landed push whose re-root the remote does not carry", landed(storage.ReRootNotCarried, false), liveStoreRecords},
+		{"a landed push whose re-root is possibly published", landed(storage.ReRootPossiblyPublished, false), liveStoreWaits},
+		{"a landed push whose re-root is published", landed(storage.ReRootPublished, false), liveStoreWaits},
+		{"the clone followed a peer's re-root", landed(storage.ReRootNotPushed, true), liveStoreReceives},
+		{"the clone followed a re-root the remote does not carry as its own", landed(storage.ReRootNotCarried, true), liveStoreReceives},
+		{"the clone followed, its re-root possibly published", landed(storage.ReRootPossiblyPublished, true), liveStoreReceives},
+		{"the clone followed its published re-root", landed(storage.ReRootPublished, true), liveStoreReceives},
 	} {
 		if got := tc.pushed.liveStoreStep(); got != tc.want {
 			t.Errorf("%s: liveStoreStep() = %d; want %d", tc.name, got, tc.want)

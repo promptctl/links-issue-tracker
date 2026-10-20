@@ -1104,7 +1104,7 @@ func (s *Store) SyncPushFromClone(ctx context.Context, remote string, branch str
 		if headErr != nil {
 			return fmt.Errorf("%w (superseded by a concurrent push, but the head could not be read: %v)", pushErr, headErr)
 		}
-		result = storage.SyncPushResult{Head: head, Superseded: pushErr.Error()}
+		result = storage.SyncPushResult{Head: head, Superseded: pushErr}
 		return nil
 	})
 	if err != nil {

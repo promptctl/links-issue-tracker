@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"fmt"
 	"maps"
 	"time"
 
@@ -20,12 +21,16 @@ type HistoryBound struct {
 	Height uint64
 	// Window is the bound the push was kept inside.
 	Window historywindow.Window
-	// ReRooted is the re-root published in Head's place: zero until the bound
-	// fires, and zero when the re-root was refused.
+	// ReRooted is the re-root written to replace Head: zero until the bound
+	// fires, and zero when the re-root was refused. Whether it left this
+	// checkout is Publication's to say.
 	ReRooted ReRooted
 	// Lease is what the force push of ReRooted found at the remote branch:
-	// empty when nothing was pushed.
+	// empty when the push never reached the remote.
 	Lease LeaseOutcome
+	// Publication is how far ReRooted got toward the remote: whether the
+	// remote carries it in Head's place. [LAW:types-are-the-program]
+	Publication ReRootPublication
 	// RemoteGC is the remote's GC that follows the force push, whatever the
 	// lease said: the remote's root decides whether it replaces anything.
 	RemoteGC RemoteGC
@@ -39,6 +44,42 @@ type HistoryBound struct {
 	// Err is where the bound stopped, if it did. The push before it landed
 	// whatever Err says.
 	Err error
+}
+
+// ReRootPublication is how far a history bound's re-root got toward the
+// remote. Its zero value is the bound whose re-root never left this
+// checkout, which is every bound that wrote none.
+type ReRootPublication int
+
+const (
+	// ReRootNotPushed: the bound wrote no re-root, or its lease push stopped
+	// before it reached the remote. Nothing the bound did crossed the network.
+	ReRootNotPushed ReRootPublication = iota
+	// ReRootNotCarried: the lease push reached the remote, and the fetch after
+	// it shows the remote without the re-root.
+	ReRootNotCarried
+	// ReRootPossiblyPublished: the lease push reached the remote without a held
+	// verdict, and no fetch settled whether an attempt landed.
+	ReRootPossiblyPublished
+	// ReRootPublished: the remote carries the re-root: the fetch after the
+	// lease push shows it, or the lease held and no fetch said otherwise.
+	ReRootPublished
+)
+
+// String is the publication as the event and the maintenance account spell it.
+func (p ReRootPublication) String() string {
+	switch p {
+	case ReRootNotPushed:
+		return "not pushed"
+	case ReRootNotCarried:
+		return "not carried"
+	case ReRootPossiblyPublished:
+		return "possibly published"
+	case ReRootPublished:
+		return "published"
+	default:
+		return fmt.Sprintf("ReRootPublication(%d)", int(p))
+	}
 }
 
 // Fired is whether the remote head reached the height at which a push
@@ -55,16 +96,17 @@ func (b HistoryBound) Fired() bool {
 // [LAW:one-source-of-truth]
 func (b HistoryBound) EventValue() map[string]any {
 	value := map[string]any{
-		"history_bound.remote":     b.Remote,
-		"history_bound.branch":     b.Branch,
-		"history_bound.head":       b.Head,
-		"history_bound.height":     b.Height,
-		"history_bound.reroot_at":  b.Window.ReRootAt(),
-		"history_bound.keep":       b.Window.Keep(),
-		"history_bound.fired":      b.Fired(),
-		"history_bound.lease":      string(b.Lease),
-		"history_bound.elapsed_ms": b.Elapsed.Milliseconds(),
-		"history_bound.error":      telemetry.ErrorText(b.Err),
+		"history_bound.remote":      b.Remote,
+		"history_bound.branch":      b.Branch,
+		"history_bound.head":        b.Head,
+		"history_bound.height":      b.Height,
+		"history_bound.reroot_at":   b.Window.ReRootAt(),
+		"history_bound.keep":        b.Window.Keep(),
+		"history_bound.fired":       b.Fired(),
+		"history_bound.lease":       string(b.Lease),
+		"history_bound.publication": b.Publication.String(),
+		"history_bound.elapsed_ms":  b.Elapsed.Milliseconds(),
+		"history_bound.error":       telemetry.ErrorText(b.Err),
 	}
 	facts, counts := b.ReRooted.EventRecord()
 	maps.Copy(value, facts)

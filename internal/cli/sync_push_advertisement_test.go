@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -103,15 +104,15 @@ func TestAPushRecordsTheAdvertisementItLeft(t *testing.T) {
 	// a peer's head the store never took in. The consumer's mirror holds the
 	// head now (it just fetched), so a landed push step proves and a
 	// superseded one, identical in every other respect, must not.
-	pushStep := func(superseded string) syncPushStep {
+	pushStep := func(superseded error) syncPushStep {
 		return func(context.Context, string, string, bool, bool) (storage.SyncPushResult, error) {
 			return storage.SyncPushResult{Head: "unused", Superseded: superseded}, nil
 		}
 	}
 	for _, tc := range []struct {
-		superseded string
+		superseded error
 		wantProven bool
-	}{{"", true}, {"rejected, remote already carries HEAD", false}} {
+	}{{nil, true}, {errors.New("rejected, remote already carries HEAD"), false}} {
 		session, closeStore, err := openSyncSession(underInvocation(context.Background()), resolved)
 		if err != nil {
 			t.Fatalf("open consumer sync session: %v", err)
@@ -122,10 +123,10 @@ func TestAPushRecordsTheAdvertisementItLeft(t *testing.T) {
 			t.Fatalf("close consumer sync session: %v", closeErr)
 		}
 		if err != nil {
-			t.Fatalf("performSyncPush(superseded=%q) error = %v", tc.superseded, err)
+			t.Fatalf("performSyncPush(superseded=%v) error = %v", tc.superseded, err)
 		}
 		if got := outcome.proven != (remoteAdvertisement{}); got != tc.wantProven {
-			t.Fatalf("performSyncPush(superseded=%q) proven = %t, want %t", tc.superseded, got, tc.wantProven)
+			t.Fatalf("performSyncPush(superseded=%v) proven = %t, want %t", tc.superseded, got, tc.wantProven)
 		}
 	}
 }

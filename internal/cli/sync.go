@@ -495,9 +495,10 @@ type syncPushOutcome struct {
 	// push output. [LAW:one-source-of-truth]
 	maintenance string
 	head        string // the commit the push sent as HEAD; empty on a skip or a failure
-	// afterPush is the push's SyncPushResult.AfterPush: what its history
-	// bound wrote after it, empty when nothing.
-	afterPush string
+	// reRoot is how far the push's history bound got its re-root toward the
+	// remote (SyncPushResult.Bound.Publication); ReRootNotPushed when the
+	// bound wrote none.
+	reRoot storage.ReRootPublication
 	// proven is the advertisement this push proved it left the remote showing
 	// (provePushedAdvertisement); zero when it proved none.
 	proven remoteAdvertisement
@@ -585,12 +586,14 @@ func syncPushTraceMetadata(remoteName, syncBranch string, result storage.SyncPus
 	// the rejection is kept in the record, under its own key, so the trail
 	// shows the race and not a push that quietly succeeded.
 	// [LAW:no-silent-failure]
-	if superseded := strings.TrimSpace(result.Superseded); superseded != "" {
-		metadata["superseded"] = superseded
+	if result.Superseded != nil {
+		metadata["superseded"] = result.Superseded.Error()
 	}
-	// Why a landed push carries no advertisement proof. [LAW:nothing-unseen]
-	if afterPush := strings.TrimSpace(result.AfterPush); afterPush != "" {
-		metadata["after_push"] = afterPush
+	// Why a landed push carries no advertisement proof, and whether the
+	// remote may carry the bound's re-root in the pushed head's place.
+	// [LAW:nothing-unseen]
+	if bound := result.Bound; bound.ReRooted.Head != "" {
+		metadata["after_push"] = fmt.Sprintf("the history bound wrote re-root %s of %s after the push: %s", bound.ReRooted.Head, bound.Head, bound.Publication)
 	}
 	if pushErr != nil {
 		metadata["error"] = pushErr.Error()
@@ -685,14 +688,15 @@ func performSyncPush(ctx, completionCtx context.Context, session syncSession, ws
 	// A push that landed on its own moved the remote to its own write, and the
 	// next receive would fetch to learn nothing unless the push records that.
 	// Proving it costs one ls-remote. A failed or superseded push proves
-	// nothing, nor does one its history bound re-rooted after (AfterPush):
-	// the mirror may hold a re-root the store's branch never followed, or a
-	// peer's push the bound's fetch brought in. The trace says which way the
-	// proof went. [LAW:nothing-unseen]
+	// nothing, nor does one whose history bound took its re-root to the
+	// remote (any publication but ReRootNotPushed): the mirror may hold a
+	// re-root the store's branch never followed, or a peer's push the bound's
+	// fetch brought in. The trace says which way the proof went.
+	// [LAW:nothing-unseen]
 	// The proof runs under its own deadline off the completion lifetime: the
 	// push has done its work, so the push's deadline is not the proof's.
 	var proven remoteAdvertisement
-	if pushErr == nil && result.Superseded == "" && result.AfterPush == "" {
+	if pushErr == nil && result.Superseded == nil && result.Bound.Publication == storage.ReRootNotPushed {
 		proofCtx, cancelProof := context.WithTimeout(completionCtx, pushProofDeadline)
 		var unproven string
 		proven, unproven = provePushedAdvertisement(proofCtx, session.syncer, ws, remoteName, target.gitRemotes)
@@ -740,7 +744,7 @@ func performSyncPush(ctx, completionCtx context.Context, session syncSession, ws
 		message:     result.Message,
 		maintenance: result.Maintenance,
 		head:        result.Head,
-		afterPush:   result.AfterPush,
+		reRoot:      result.Bound.Publication,
 		proven:      proven,
 		// The workspace's config, not this process's kill switch: the marker
 		// this classifies is read by every later command, and their receives

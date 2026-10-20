@@ -46,7 +46,7 @@ func TestSyncPushFromCloneReportsARaceItLostAsSuperseded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncPushFromClone() after the live store outran it error = %v; want superseded, the remote carries c2 inside c3", err)
 	}
-	if result.Superseded == "" {
+	if !errors.As(result.Superseded, new(pushRefusedError)) {
 		t.Fatalf("SyncPushFromClone() reported a landed push (%+v); the remote rejected c2 as behind c3 and that rejection must stay in the record", result)
 	}
 	if result.Head != c2 {

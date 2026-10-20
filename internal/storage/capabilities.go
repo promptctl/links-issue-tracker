@@ -133,8 +133,8 @@ type Syncer interface {
 
 	// SyncKeepHistoryBound keeps the sync branch's history inside window
 	// once pushed has landed on remote's branch, whichever push landed it,
-	// and returns pushed with AfterPush set once it wrote a re-root and the
-	// bound's account joined to its Maintenance.
+	// and returns pushed with the bound it kept as Bound and the bound's
+	// account joined to its Maintenance.
 	// Below the bound it reads the remote head's height and nothing else;
 	// once the height reaches it, it publishes a re-root of that head, runs
 	// the remote's GC, and follows the re-root. The push landed whatever the

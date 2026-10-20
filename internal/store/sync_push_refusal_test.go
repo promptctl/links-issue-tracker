@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -60,7 +61,7 @@ func TestOnlyARefusedPushIsFollowedAndRetried(t *testing.T) {
 	} {
 		pushed := storage.SyncPushResult{Head: "h"}
 		result, gotErr, _, followErr := (&Store{}).retryPushAfterFollow(live, "origin", "master", false, pushed, pushErr)
-		if result != pushed || gotErr != pushErr || followErr != nil {
+		if !reflect.DeepEqual(result, pushed) || gotErr != pushErr || followErr != nil {
 			t.Fatalf("retryPushAfterFollow(%v) = %+v, %v, %v; want the push's own outcome untouched", pushErr, result, gotErr, followErr)
 		}
 	}
