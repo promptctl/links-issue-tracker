@@ -274,7 +274,7 @@ func TestTheMirrorsReceiveStartsNoRun(t *testing.T) {
 func TestAReceiveWhoseOpenFailsHasNothingToClose(t *testing.T) {
 	ctx, ws, clone, fetch := unsettlingCheckout(t)
 	ws.WorkspaceID = "" // the open refuses a store with no workspace identity; the land never reads it
-	outcome, closeLive := performSyncReceive(ctx, ws, clone, fetch, leaveUnsettledRun)
+	outcome, closeLive := performSyncReceive(ctx, ws, clone, fetch, leaveUnsettledRun(ws.DatabasePath))
 	if outcome.stopped != receiveStepOpen {
 		t.Fatalf("receive stopped at %q (err %v); want the open", outcome.stopped, outcome.err)
 	}

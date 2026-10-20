@@ -57,13 +57,14 @@ const (
 	// syncFailureReceiveUnsettled: the automatic receive fetched the remote and
 	// then stopped before it settled — landing the fetch, opening the live store,
 	// reconciling its remotes, or the settle itself (a re-root follow included) —
-	// and it has kept stopping there, with no settle anywhere since the run
-	// began, for at least unsettledLastingAfter. One stop is never this class:
+	// at least unsettledLastingAfter after a receive first stopped that way, with
+	// no settle anywhere in between. One stop is never this class:
 	// the receive's one deadline spans the fetch and the local steps, so a
 	// single cut is as often contention as a fault; a run that outlives two
 	// debounce intervals is retries that did not clear it. The checkout stays
 	// on whatever history it last settled to. Remedy: a foreground pull, which
-	// runs the same land and settle and returns the error to its caller.
+	// fetches into the live store, settles through the same settle, and returns
+	// the error to its caller.
 	syncFailureReceiveUnsettled syncFailureClass = "receive_unsettled"
 )
 
@@ -284,9 +285,11 @@ func (f SyncFailure) blockString() string {
 // one. [LAW:dataflow-not-control-flow] the class selects the line.
 func (f SyncFailure) headline() string {
 	switch f.Class {
-	case syncFailureProseHeld, syncFailureDivergedUnresolved, syncFailureRemoteSchemaAhead,
+	case syncFailureProseHeld, syncFailureDivergedUnresolved,
 		syncFailureUnrelatedHistories, syncFailureIDCollision:
 		return "lit sync could not resolve a backlog divergence automatically and needs you."
+	case syncFailureRemoteSchemaAhead:
+		return "lit sync cannot write to the remote's backlog until this lit is upgraded, and needs you."
 	case syncFailureReceiveUnsettled:
 		return "lit's automatic receive fetched the remote but could not bring it into this checkout, and needs you."
 	default:
@@ -329,7 +332,7 @@ func (f SyncFailure) whatLine() string {
 			ref, describeCollidedIDs(f.Collisions))
 	case syncFailureReceiveUnsettled:
 		return fmt.Sprintf(
-			"the automatic receive fetched %s and then stopped at %s, and it has stopped after its fetch on every receive since %s — no settle has succeeded on this checkout since then, so it is still on the history it last settled to and is not receiving the shared backlog. The cause from the latest stop is below.",
+			"the automatic receive fetched %s and then stopped at %s. A receive first stopped after its fetch at %s, and no settle has succeeded on this checkout since then, so it is still on the history it last settled to and is not receiving the shared backlog. The cause from the latest stop is below.",
 			ref, f.StoppedAt.describe(), f.UnsettledSince.UTC().Format(time.RFC3339))
 	default:
 		// A class this renderer does not know must not render as a bland,
@@ -395,7 +398,7 @@ func (f SyncFailure) resolutionSteps() []string {
 		}
 	case syncFailureReceiveUnsettled:
 		return []string{
-			"lit sync pull             # runs the same land and settle in the foreground and reports the error it stops on",
+			"lit sync pull             # fetches and settles in the foreground and reports the error it stops on",
 		}
 	default:
 		return []string{"lit doctor                # unrecognized sync-failure class; report this"}
@@ -425,11 +428,11 @@ func (f SyncFailure) escalationLine() string {
 		// the class most likely to be misread as routine.
 		return "ESCALATION — BLOCKED: two tickets share one id and will collide on every retry. lit cannot resolve this for you: one of the two jobs has to be re-filed under a free id, and that is a decision about which piece of work keeps the name. Surface it to the user as blocking before continuing ticket work."
 	case syncFailureReceiveUnsettled:
-		// The class exists only once the receive has stopped and retried past
-		// two debounce intervals, so retrying is already what failed.
+		// The class exists only once a receive has stopped again at least two
+		// debounce intervals after the first, so retrying is already what failed.
 		return fmt.Sprintf(
-			"ESCALATION — BLOCKED: the automatic receive has stopped at %s since %s (%s) and no settle has succeeded since; this checkout is not receiving the shared backlog. Run the resolution above, and surface it to the user as blocking if it fails.",
-			f.StoppedAt.describe(), f.UnsettledSince.UTC().Format(time.RFC3339), f.agePhrase())
+			"ESCALATION — BLOCKED: no settle has succeeded on this checkout since a receive first stopped after its fetch at %s (%s), and the latest receive stopped at %s; this checkout is not receiving the shared backlog. Run the resolution above, and surface it to the user as blocking if it fails.",
+			f.UnsettledSince.UTC().Format(time.RFC3339), f.agePhrase(), f.StoppedAt.describe())
 	case syncFailureProseHeld, syncFailureDivergedUnresolved:
 		span := f.Ahead + f.Behind
 		if f.persistent() {

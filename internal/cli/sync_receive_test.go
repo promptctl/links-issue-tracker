@@ -20,7 +20,7 @@ import (
 func TestASkippedReceiveRecordsNoOutcomes(t *testing.T) {
 	recorder := telemetry.Begin(telemetry.Event{})
 	ctx := telemetry.With(context.Background(), recorder)
-	outcome, closeLive := performSyncReceive(ctx, workspace.Info{}, liveClone{}, receiveFetch{target: syncTarget{skip: syncTargetNoRemote}}, leaveUnsettledRun)
+	outcome, closeLive := performSyncReceive(ctx, workspace.Info{}, liveClone{}, receiveFetch{target: syncTarget{skip: syncTargetNoRemote}}, leaveUnsettledRun(filepath.Join(t.TempDir(), "dolt")))
 	if outcome.skip != syncTargetNoRemote {
 		t.Fatalf("performSyncReceive() = %+v; want the skip", outcome)
 	}

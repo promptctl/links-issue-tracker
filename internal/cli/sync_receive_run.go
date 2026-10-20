@@ -109,16 +109,32 @@ type unsettledObservation struct {
 }
 
 // observeUnsettledRun is how a receive takes part in the run of post-fetch
-// stops. The automatic receive owns the run (ownUnsettledRun); the mirror's
-// receive of its re-rooted push does not hold the receive lock, so it neither
-// reads nor writes it (leaveUnsettledRun), and its stop is counted by the next
-// automatic receive, which fetches past the remote head the push moved.
+// stops. Every receive reads the run (readUnsettledRun), so its trace and
+// event carry the two times as they stand. Only the automatic receive, under
+// the receive lock, writes it (ownUnsettledRun); the mirror's receive of its
+// re-rooted push does not hold that lock, so it only reads
+// (leaveUnsettledRun), and its stop is counted by the next automatic receive,
+// which fetches past the remote head the push moved.
 // [LAW:one-type-per-behavior] one call on every receive, the owner is data.
 type observeUnsettledRun func(o syncReceiveOutcome, now time.Time) unsettledObservation
 
-// leaveUnsettledRun is the receive that does not own the run.
-func leaveUnsettledRun(syncReceiveOutcome, time.Time) unsettledObservation {
-	return unsettledObservation{}
+// readUnsettledRun is the run as the two records describe it now.
+func readUnsettledRun(databasePath string) unsettledObservation {
+	first, firstOK, firstErr := store.ReadUnsettledFirst(databasePath)
+	settled, settledOK, settledErr := store.ReadSettledLast(databasePath)
+	return unsettledObservation{
+		since:       currentRunStart(first, firstOK, settled, settledOK),
+		settledLast: settled,
+		err:         errors.Join(firstErr, settledErr),
+	}
+}
+
+// leaveUnsettledRun is the receive that does not own the run: it reads it and
+// writes nothing.
+func leaveUnsettledRun(databasePath string) observeUnsettledRun {
+	return func(syncReceiveOutcome, time.Time) unsettledObservation {
+		return readUnsettledRun(databasePath)
+	}
 }
 
 // ownUnsettledRun is the automatic receive's part in the run, under the
@@ -126,27 +142,21 @@ func leaveUnsettledRun(syncReceiveOutcome, time.Time) unsettledObservation {
 // by writing unsettled.first. It never reads that record to write it back,
 // and it never touches settled.last, which only the settle writes
 // (store/receive_episode.go). [LAW:single-enforcer] one writer per record.
-// settled.last is read again after the write, so a settle that finished
-// anywhere before this decision ends the run it would otherwise report.
+// After that write settled.last is read again, so a settle that finished
+// between the first read and the write ends the run the write started.
 func ownUnsettledRun(databasePath string) observeUnsettledRun {
 	return func(o syncReceiveOutcome, now time.Time) unsettledObservation {
-		first, firstOK, firstErr := store.ReadUnsettledFirst(databasePath)
-		settled, settledOK, settledErr := store.ReadSettledLast(databasePath)
-		since := currentRunStart(first, firstOK, settled, settledOK)
-		var writeErr error
-		if o.countsTowardUnsettled() && since.IsZero() {
-			since = now
-			writeErr = store.WriteUnsettledFirst(databasePath, now)
+		obs := readUnsettledRun(databasePath)
+		if !o.countsTowardUnsettled() || !obs.since.IsZero() {
+			return obs
 		}
+		writeErr := store.WriteUnsettledFirst(databasePath, now)
 		settled, settledOK, rereadErr := store.ReadSettledLast(databasePath)
-		obs := unsettledObservation{
-			since: currentRunStart(since, !since.IsZero(), settled, settledOK),
-			err:   errors.Join(firstErr, settledErr, writeErr, rereadErr),
+		return unsettledObservation{
+			since:       currentRunStart(now, true, settled, settledOK),
+			settledLast: settled,
+			err:         errors.Join(obs.err, writeErr, rereadErr),
 		}
-		if settledOK {
-			obs.settledLast = settled
-		}
-		return obs
 	}
 }
 

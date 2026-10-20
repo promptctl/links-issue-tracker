@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
-	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/store"
 )
 
 // everyReceiveStep is the closed set, in the order the receive runs it.
@@ -165,12 +165,50 @@ func TestARunRecordThatCannotBeWrittenSaysSo(t *testing.T) {
 	}
 }
 
-// TestTheMirrorLeavesTheRunAlone: the mirror's receive does not hold the
-// receive lock, so it neither reads nor writes the run.
-func TestTheMirrorLeavesTheRunAlone(t *testing.T) {
+// TestTheMirrorReadsTheRunAndWritesNothing: the mirror's receive does not
+// hold the receive lock, so it never writes the run, but it reads both
+// records, so its trace and event carry the times as they stand, not zeros
+// that read as "never settled". A stop that would start a run with none
+// current starts none.
+func TestTheMirrorReadsTheRunAndWritesNothing(t *testing.T) {
 	t.Parallel()
-	if obs := leaveUnsettledRun(syncReceiveOutcome{stopped: receiveStepSettle, err: errors.New("follow")}, time.Now()); obs != (unsettledObservation{}) {
-		t.Fatalf("leaveUnsettledRun = %+v; want nothing observed", obs)
+	now := time.Now().Truncate(time.Second)
+	t0 := now.Add(-time.Hour)
+	t1 := now.Add(-30 * time.Minute)
+	stop := syncReceiveOutcome{stopped: receiveStepSettle, err: errors.New("follow")}
+	cases := []struct {
+		name      string
+		first     time.Time // zero: no record
+		settled   time.Time // zero: no record
+		wantSince time.Time
+	}{
+		{"no records", time.Time{}, time.Time{}, time.Time{}},
+		{"a current run", t1, t0, t1},
+		{"a run a settle ended", t0, t1, time.Time{}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			databasePath := filepath.Join(t.TempDir(), "dolt")
+			if !tc.first.IsZero() {
+				if err := store.WriteUnsettledFirst(databasePath, tc.first); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if !tc.settled.IsZero() {
+				if err := os.WriteFile(store.SettledLastPath(databasePath), []byte(tc.settled.UTC().Format(time.RFC3339Nano)+"\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			obs := leaveUnsettledRun(databasePath)(stop, now)
+			if obs.err != nil || !obs.since.Equal(tc.wantSince) || !obs.settledLast.Equal(tc.settled) {
+				t.Fatalf("observation = %+v; want since %s, settled %s, no error", obs, tc.wantSince, tc.settled)
+			}
+			first, ok, err := store.ReadUnsettledFirst(databasePath)
+			if err != nil || ok != !tc.first.IsZero() || !first.Equal(tc.first) {
+				t.Fatalf("unsettled.first afterwards = %s ok %v err %v; want %s untouched", first, ok, err, tc.first)
+			}
+		})
 	}
 }
 
@@ -259,14 +297,21 @@ func TestEveryClassRendersItsOwnBlock(t *testing.T) {
 	block := unsettled.blockString()
 	for _, want := range []string{
 		"lit's automatic receive fetched the remote but could not bring it into this checkout, and needs you.",
-		"stopped at landing the fetch on the live store",
-		"2026-10-20T09:00:00Z",
-		"ESCALATION — BLOCKED: the automatic receive has stopped at landing the fetch on the live store since 2026-10-20T09:00:00Z (45 minutes)",
-		"lit sync pull",
+		"the automatic receive fetched origin/master and then stopped at landing the fetch on the live store. A receive first stopped after its fetch at 2026-10-20T09:00:00Z, and no settle has succeeded on this checkout since then",
+		"ESCALATION — BLOCKED: no settle has succeeded on this checkout since a receive first stopped after its fetch at 2026-10-20T09:00:00Z (45 minutes), and the latest receive stopped at landing the fetch on the live store;",
+		"lit sync pull             # fetches and settles in the foreground",
 	} {
 		if !strings.Contains(block, want) {
 			t.Errorf("receive_unsettled block missing %q:\n%s", want, block)
 		}
+	}
+	// A remote schema ahead of this binary reaches the block from any step,
+	// the fetch and the settle included, so its headline names the upgrade,
+	// not a divergence.
+	schemaAhead := SyncFailure{Class: syncFailureRemoteSchemaAhead, Remote: "origin", Branch: "master",
+		RemoteAhead: &store.RemoteSchemaAheadError{Remote: "origin", Branch: "master", RemoteVersion: 9, BinarySupportedMax: 8}}
+	if want := "lit sync cannot write to the remote's backlog until this lit is upgraded, and needs you.\n"; !strings.HasPrefix(schemaAhead.blockString(), agentInstructionsOpen+"\n"+want) {
+		t.Errorf("remote_schema_ahead block does not open with %q:\n%s", want, schemaAhead.blockString())
 	}
 }
 
