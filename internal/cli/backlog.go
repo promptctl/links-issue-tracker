@@ -71,18 +71,19 @@ func (n focusNotice) line() string {
 	return n.scopeClause() + n.ownClause() + n.trimClause()
 }
 
-// record puts the scope's decision on the command's event, under the names
-// `lit next` gives the same facts: which goals narrowed the view, the rows it
-// withheld, and the rows it listed off the path as this checkout's own work.
-// The goals are empty when nothing narrowed the run — an unfocused workspace,
-// or --all. [LAW:nothing-unseen]
+// record puts the scope's decision on the command's event: which goals
+// narrowed the view, the rows it withheld, and the rows it listed off the path
+// as this checkout's own work. The withheld rows are written as `lit next`
+// writes its own, through the same encoder, so one key name means one shape on
+// both commands. The goals are empty when nothing narrowed the run — an
+// unfocused workspace, or --all. [LAW:nothing-unseen] [LAW:one-source-of-truth]
 func (n focusNotice) record(ctx context.Context, view string) {
 	goals := []string{}
 	if n.applied {
 		goals = append(goals, n.scope.goals...)
 	}
 	telemetry.Set(ctx, view+".focus_goals", goals)
-	telemetry.Set(ctx, view+".off_path", append([]string{}, n.offPath...))
+	telemetry.Set(ctx, view+".off_path", offPathFacts(n.offPath))
 	telemetry.Set(ctx, view+".own_off_path", append([]string{}, n.ownOffPath...))
 }
 

@@ -135,6 +135,17 @@ none), and `reach` is what this checkout can do about it:
 | `out_of_view` | Nothing that would clear it was among the tickets this run read, for example an epic with no open ticket under it. A filter never causes it: `lit next` reads every workable ticket and filters only what it hands you. |
 | `off_focus_path` | Outside the focus label's scope, so the pick never considered it. |
 
+## What `lit backlog` records
+
+Every `lit backlog` that lists its rows writes the keys below, empty when no
+focus label narrowed the run.
+
+| Key | Meaning |
+| --- | --- |
+| `backlog.focus_goals` | The focus goals whose prerequisite path the list was narrowed to. Empty when nothing is focused and under `--all`. |
+| `backlog.off_path` | Tickets a focus label kept off the list, in the entry shape `next.off_path` uses, each with `reach` `off_focus_path`. Your own work is never among them. |
+| `backlog.own_off_path` | The ids of tickets listed although off the focus path, because they are your own work: in a lane you hold, or in another lane of that lane's epic. |
+
 ## What a statusline-file write records
 
 Every command that works on the tickets of the checkout it runs in, such as

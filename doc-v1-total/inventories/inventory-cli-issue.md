@@ -1377,7 +1377,7 @@ just that — visibility; only 'lit next' routes by claim, serving this checkout
 Use 'lit next' to pick the top workable item to start.
 ```
 2. The focus notice, one line, printed on every run (`focusNotice.line`,
-   `backlog.go`): a scope clause followed by a trim clause. The scope clause is
+   `backlog.go`): a scope clause, an own-work clause, then a trim clause. The scope clause is
    one of:
    - unfocused, nothing trimmed: `Nothing is hidden: every workable item is listed.`
    - unfocused, `--limit` trimmed rows: `Every workable item is in scope.`
@@ -1387,7 +1387,11 @@ Use 'lit next' to pick the top workable item to start.
    The first `%s` is the focus goals' ids joined by `", "`
    (`focusScope.describe`, `ready_state.go`), `%d` is the count of rows the
    partition excluded, and the last `%s` is the escape `` `lit backlog --all` ``,
-   backticks included (`workable.go`). The trim
+   backticks included (`workable.go`). The own-work clause is empty when no
+   listed row is off the focus path, else a space and then
+   `Listed although off that path, as this checkout's own work (a lane it holds, or that lane's epic): %s.`,
+   where `%s` is the ids of the listed rows the scope holds only as this
+   checkout's own work, joined by `", "` (`ownClause`, `backlog.go`). The trim
    clause is empty when `--limit` cut nothing, else a space and then
    `--limit trimmed this run: %d more workable row(s) are not shown.`, where
    `%d` is the rows `--limit` cut after keep (`trimClause`, `backlog.go`).

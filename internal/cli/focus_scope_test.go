@@ -620,7 +620,7 @@ func TestFocusedBacklogListsThisCheckoutsOwnWork(t *testing.T) {
 	if got, want := ev.Facts["backlog.focus_goals"], []any{goal}; !reflect.DeepEqual(got, want) {
 		t.Errorf("backlog.focus_goals = %#v, want %#v", got, want)
 	}
-	if got, want := ev.Facts["backlog.off_path"], []any{unrelated}; !reflect.DeepEqual(got, want) {
+	if got, want := ev.Facts["backlog.off_path"], []any{map[string]any{"id": unrelated, "ticket": unrelated, "reach": "off_focus_path"}}; !reflect.DeepEqual(got, want) {
 		t.Errorf("backlog.off_path = %#v, want %#v", got, want)
 	}
 	if got := ev.Facts["backlog.own_off_path"]; !sameIDs(got, mine, sibling) {
