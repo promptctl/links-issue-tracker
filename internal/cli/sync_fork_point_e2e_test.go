@@ -144,7 +144,7 @@ func TestAQuietForkReceivesOntoTheRemoteHead(t *testing.T) {
 	if stranded, present := ev.Occurrences["stranded_writes.commits"]; !present || len(stranded) != 0 {
 		t.Fatalf("stranded_writes.commits = %#v; want an empty list: bravo stranded no write", ev.Occurrences["stranded_writes.commits"])
 	}
-	if bases := ev.Occurrences["reconcile.bases"]; len(bases) != 0 {
+	if bases, present := ev.Occurrences["reconcile.bases"]; !present || len(bases) != 0 {
 		t.Fatalf("reconcile.bases = %v; want none: bravo has nothing to replay", bases)
 	}
 	alphaHead, _ := syncHeadAndBranch(t, r.alpha)

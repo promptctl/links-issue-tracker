@@ -87,6 +87,14 @@ func TestAppendKeepsEveryValueInOrder(t *testing.T) {
 	}
 }
 
+// A command that appended nothing still writes its occurrences, as {}.
+func TestAnEventWithNoOccurrencesWritesAnEmptyObject(t *testing.T) {
+	line, err := Line(Begin(Event{}).Finish(End{}))
+	if err != nil || !strings.Contains(string(line), `"occurrences":{}`) {
+		t.Fatalf("Line() = %s, %v; want \"occurrences\":{}", line, err)
+	}
+}
+
 // A key Set replaces and a key Append accumulates are separate, so the same
 // name written both ways keeps both values, whichever writer of facts it is
 // (Set, Record, or the End Finish merges) and whichever came first.
