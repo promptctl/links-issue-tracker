@@ -288,7 +288,9 @@ pool carries neither, unless the pool was reached past an exhausted epic or past
 the ticket a filter hid, when the lines above it say so. Under a `focus` label, a
 pick from the global pool closes on a qualifier naming the focus goals and
 `lit next --all`, because the label narrowed the pool it was picked from; picks
-from your own lanes and epic never carry it.
+from your own lanes and epic never carry it. The same qualifier follows the
+pool's ticket a filter hid: the filter emptied a pool the label had already
+narrowed.
 
 Work already in flight in one of your own lanes reports the state it is in rather
 than a command to run. When the ticket carries an assignee that is not the

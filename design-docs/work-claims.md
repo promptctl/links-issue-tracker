@@ -293,13 +293,15 @@ step, so each step below says only which lanes it looks in:
 
   A pick from the global pool under a `focus` label closes on a clause naming
   the focus it was drawn under — "… to claim lane one of epic B (focused on G:
-  picked from its prerequisite path alone — `lit next --all` to route over the
+  picked from the focus path alone — `lit next --all` to route over the
   whole queue)". The focus narrows the pool and nothing else, so a ticket ranked
   above the pick but off the path was never asked about, and a pick that said
   nothing would read as a ranking bug. The clause rides on the pool's row
-  wherever it is printed, including the route past an exhausted epic or past
-  the ticket a filter hid. Steps 1–3 never carry it, since no scope narrowed
-  them, and neither does a pick over the whole queue.
+  wherever it is printed: the route step 3 offers past an exhausted epic or
+  past the ticket a filter hid, and the pool's ticket a filter hid when
+  dropping the filter is the route named. A row steps 1 and 2 serve never
+  carries it, since no scope narrowed them, and neither does a row from a pool
+  over the whole queue.
 
   Nothing here may be said in the perfect tense. A line that reports a start or
   a claim describes a side effect `next` does not have, and an agent that

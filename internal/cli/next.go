@@ -113,7 +113,7 @@ func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[string]stor
 		row = o.Row
 		announce = o.advice() + "\n"
 	// Steps 1b and 2b say what they are for: "this unblocks work on your path"
-	// is a fact about the WALK the row cannot show on its own, as step 2's
+	// is a fact about the WALK the row cannot show on its own, whereas step 2's
 	// shared epic is visible in the id. A pool pick's one such fact, the focus
 	// scope that narrowed it, is said by its advice.
 	case ServedFromDependency:
@@ -274,12 +274,13 @@ func (p poolPick) advice() string {
 	return startAdvice(p.Row, p.Lane) + p.Scope.pickClause()
 }
 
-// pickClause is how a pick names the focus scope it was drawn under, in the
-// words backlog's notice uses for the same scope, and the empty string for the
-// whole queue.
+// pickClause is how a row the pool offered names the focus scope it was drawn
+// under, in the words offFocusPathNote uses for the same scope, and the empty
+// string for the whole queue. "The focus path" is one path however many goals
+// carry the label.
 func (s focusScope) pickClause() string {
 	if !s.active() {
 		return ""
 	}
-	return fmt.Sprintf(" (focused on %s: picked from its prerequisite path alone — `lit next --all` to route over the whole queue)", s.describe())
+	return fmt.Sprintf(" (focused on %s: picked from the focus path alone — `lit next --all` to route over the whole queue)", s.describe())
 }

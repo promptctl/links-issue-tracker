@@ -168,10 +168,18 @@ type ServedPastExhaustion struct {
 // was narrowed, not the work. Hidden is that unfiltered pick, so the agent
 // learns exactly which ticket dropping the filter hands it.
 //
+// Scope is the focus scope Hidden was drawn under: the pool's when the pool
+// offered it, so a focus that also kept rows the filter selects out of the
+// pool is said beside it as on a pool pick, and the zero scope for the held
+// scope's next ticket, which no scope narrows.
+//
 // It is an error on the same terms as Exhausted and NoWork, whose answers it
 // replaces when the filter is the reason for them.
 // [LAW:types-are-the-program] [LAW:no-silent-failure]
-type Narrowed struct{ Hidden annotation.AnnotatedIssue }
+type Narrowed struct {
+	Hidden annotation.AnnotatedIssue
+	Scope  focusScope
+}
 
 // ServedPastNarrowing is Narrowed with somewhere to go: the pool's top ready
 // ticket the filter selects, which lies outside the scope, served beneath the
@@ -613,7 +621,7 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 		// whole queue the pool may still serve a row, and then the filter is why
 		// nothing outside is on offer: "nothing ready outside it" would be false.
 		if hidden, ok := fromPool(anyRow); ok {
-			exhausted.Narrowing = &Narrowed{Hidden: hidden.Row}
+			exhausted.Narrowing = &Narrowed{Hidden: hidden.Row, Scope: hidden.Scope}
 			return exhausted
 		}
 		// The pool offered nothing, so what the focus kept from it is the rest
@@ -639,7 +647,7 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 		return ServedFromNewLane{pick}
 	}
 	if hidden, ok := fromPool(anyRow); ok {
-		return Narrowed{Hidden: hidden.Row}
+		return Narrowed{Hidden: hidden.Row, Scope: hidden.Scope}
 	}
 	return NoWork{Unreachable: passedOver(selectedOf(pool), reachFor), OffPath: withheldByScope(selectedOf(offPath))}
 }
@@ -961,7 +969,7 @@ func onPathDependency(deps []gatedDep, serves func(annotation.AnnotatedIssue) bo
 // four flags are named rather than "the filter" because routing never learns
 // which of them the run was given, and every one of them narrows the same way.
 func (o Narrowed) Error() string {
-	return fmt.Sprintf("`lit next` without --type, --status, --labels or --assignee hands you %s, which this run's filter leaves out", o.Hidden.ID)
+	return fmt.Sprintf("`lit next` without --type, --status, --labels or --assignee hands you %s%s, which this run's filter leaves out", o.Hidden.ID, o.Scope.pickClause())
 }
 
 // Error renders Exhausted as the loud diagnostic it is when the pool offered

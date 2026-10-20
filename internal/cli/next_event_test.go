@@ -107,6 +107,7 @@ func TestNextRecordsWhatAnExhaustedScopeNamed(t *testing.T) {
 				"next.held": [{"id": "test-held", "ticket": "test-held", "reach": "not_ready"}],
 				"next.off_path": [],
 				"next.hidden_by_filter": null,
+				"next.hidden_focus_goals": [],
 				"next.unreachable": [],
 				"next.stay_offered": true
 			}`,
@@ -139,6 +140,7 @@ func TestNextRecordsWhatAnExhaustedScopeNamed(t *testing.T) {
 				"next.held": [],
 				"next.off_path": [{"id": "test-off", "ticket": "test-off", "reach": "off_focus_path"}],
 				"next.hidden_by_filter": null,
+				"next.hidden_focus_goals": [],
 				"next.unreachable": [],
 				"next.stay_offered": true
 			}`,
@@ -162,6 +164,7 @@ func TestNextRecordsWhatAnExhaustedScopeNamed(t *testing.T) {
 				"next.held": [],
 				"next.off_path": [],
 				"next.hidden_by_filter": null,
+				"next.hidden_focus_goals": [],
 				"next.unreachable": [],
 				"next.stay_offered": false
 			}`,
@@ -185,6 +188,7 @@ func TestNextRecordsWhatAnExhaustedScopeNamed(t *testing.T) {
 				"next.held": [],
 				"next.off_path": [],
 				"next.hidden_by_filter": null,
+				"next.hidden_focus_goals": [],
 				"next.unreachable": [],
 				"next.stay_offered": true
 			}`,
@@ -471,6 +475,47 @@ func TestNextRecordsTheFocusThatNarrowedItsPick(t *testing.T) {
 			recordNextEvent(telemetry.With(context.Background(), recorder), tc.outcome, 1)
 			if got := writtenFacts(t, recorder.Finish(telemetry.End{}))["next.picked_focus_goals"]; !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("next.picked_focus_goals = %#v, want %#v", got, tc.want)
+			}
+		})
+	}
+}
+
+// The ticket a filter hid records the focus goals it was drawn under, the same
+// fact a pick records: the pool's goals when the pool offered it, and none for
+// the held scope's next ticket, which no scope narrows.
+func TestNextRecordsTheFocusTheHiddenTicketWasDrawnUnder(t *testing.T) {
+	focused := focusScope{goals: []string{"test-goal"}}
+	for _, tc := range []struct {
+		name    string
+		outcome NextOutcome
+		want    []any
+	}{
+		{
+			name:    "the pool's ticket under a focus",
+			outcome: Narrowed{Hidden: rowFor("test-path"), Scope: focused},
+			want:    []any{"test-goal"},
+		},
+		{
+			name:    "the pool's ticket past an exhausted scope under a focus",
+			outcome: Exhausted{Epics: []string{"test-epic"}, Narrowing: &Narrowed{Hidden: rowFor("test-path"), Scope: focused}},
+			want:    []any{"test-goal"},
+		},
+		{
+			name:    "the held scope's next ticket",
+			outcome: ServedPastNarrowing{poolPick: poolPick{Row: rowFor("test-path"), Scope: focused}, Narrowing: Narrowed{Hidden: rowFor("test-ours")}},
+			want:    []any{},
+		},
+		{
+			name:    "the pool's ticket over the whole queue",
+			outcome: Narrowed{Hidden: rowFor("test-fresh")},
+			want:    []any{},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := telemetry.Begin(telemetry.Event{})
+			recordNextEvent(telemetry.With(context.Background(), recorder), tc.outcome, 1)
+			if got := writtenFacts(t, recorder.Finish(telemetry.End{}))["next.hidden_focus_goals"]; !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("next.hidden_focus_goals = %#v, want %#v", got, tc.want)
 			}
 		})
 	}

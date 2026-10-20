@@ -1573,16 +1573,16 @@ serves nothing, over every row; both dependency walks read every row either way:
      `onPathDependency(gating, serves, reachFor, workToward, laneOf)` →
      **`ServedFromDependency`**, as in step 1b.
 3. Else, if steps 1–2b over every row serve a row, that row is `Hidden`: step
-   4's pick → **`ServedPastNarrowing{Row, Lane: laneOf(row), Narrowing: Narrowed{Hidden}}`**,
+   4's pick → **`ServedPastNarrowing{poolPick: pick, Narrowing: Narrowed{Hidden}}`**,
    else → **`Narrowed{Hidden}`**. Otherwise `exhausted := Exhausted{Epics, Blocked, Held}` (`next_route.go`), where
    `Epics` is `slices.Sorted(maps.Keys(ownEpics))` and `Blocked` is
    `blockersOf(gating, workToward)` — the walk step 2b declined; `blockersOf`
    drops the gated id and marks each entry `Clearable`. `Held` is `heldByThemselves` over the rows in `ourScope`: in rank order, the rows `reachOf` classifies `reachHeldByItself` or `reachAwaitingOutside` that `IssueReadiness.HeldByItself()` reports held by a reason about the row itself (a reserved label, a missing field) rather than by a dependency or an earlier sibling. When step 4's pick finds nothing, `OffPath` is set to
    `withheldByScope` over the focus-excluded rows whose lane `ourScope` does
    not admit. If step 4's pick finds a row →
-   **`ServedPastExhaustion{Row, Lane: laneOf(row), Exhaustion: exhausted}`**;
+   **`ServedPastExhaustion{poolPick: pick, Exhaustion: exhausted}`**;
    else, if the pool over every row picks one, `Narrowing` is set to
-   `&Narrowed{Hidden: row}` in place of `OffPath`; → **`exhausted`**. The pick
+   `&Narrowed{Hidden: pick.Row, Scope: pick.Scope}` in place of `OffPath`; → **`exhausted`**. The pick
    is outside our epic by construction.
 
 Step 4 is reached directly by a checkout holding no lanes:
@@ -1591,7 +1591,7 @@ Step 4 is reached directly by a checkout holding no lanes:
    (`next_route.go`, `ready_state.go`), then
    `pickFrom(pool, selected, func(model.LaneID) bool { return true }, serveWork)` →
    **`ServedFromNewLane{poolPick{Row, Lane: laneOf(row), Scope: scope}}`**.
-   Else, the same pick over every row → **`Narrowed{Hidden: row}`**.
+   Else, the same pick over every row → **`Narrowed{Hidden: pick.Row, Scope: pick.Scope}`**.
    Else → **`NoWork{Unreachable: passedOver(<pool rows asked selects>, reachFor), OffPath: withheldByScope(<offPath rows asked selects>)}`**
    (`next_route.go`), where `passedOver` stamps every walked pool row with
    `reachFor(row)` (`next_route.go`) and `withheldByScope` returns the ids of
@@ -1702,7 +1702,7 @@ that lane — and nothing about who left the row or when.
 
 `poolPick.advice()` (`next.go`) is `startAdvice(Row, Lane)` followed by
 `focusScope.pickClause()`: nothing for the whole queue, and under a `focus`
-label ``" (focused on <goals>: picked from its prerequisite path alone — `lit next --all` to route over the whole queue)"``, the goals joined by `", "`.
+label ``" (focused on <goals>: picked from the focus path alone — `lit next --all` to route over the whole queue)"``, the goals joined by `", "`.
 
 `LaneID.Describe() (string, bool)` (`model.go`):
 - solo lane → `("", false)`

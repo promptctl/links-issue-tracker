@@ -574,7 +574,7 @@ func TestFocusedPickSaysWhichQuestionProducedIt(t *testing.T) {
 	}
 
 	focused := h.runNextText()
-	if want := "run `lit start " + prereq.ID + "` to claim lane prereq of epic " + goalEpic.ID + " (focused on " + goal.ID + ": picked from its prerequisite path alone — `lit next --all` to route over the whole queue)\n"; !strings.Contains(focused, want) {
+	if want := "run `lit start " + prereq.ID + "` to claim lane prereq of epic " + goalEpic.ID + " (focused on " + goal.ID + ": picked from the focus path alone — `lit next --all` to route over the whole queue)\n"; !strings.Contains(focused, want) {
 		t.Fatalf("focused `lit next` printed:\n%s\nwant the pick line %q", focused, want)
 	}
 
@@ -595,7 +595,7 @@ func TestFocusClauseLandsOnThePoolsRoute(t *testing.T) {
 	rows, details, _ := h.gather()
 	row := rowByID(t, rows, ticket.ID)
 	pick := poolPick{Row: row, Lane: laneOf(t, details, row), Scope: focusScope{goals: []string{"test-goal"}}}
-	const clause = " (focused on test-goal: picked from its prerequisite path alone — `lit next --all` to route over the whole queue)"
+	const clause = " (focused on test-goal: picked from the focus path alone — `lit next --all` to route over the whole queue)"
 
 	for _, tc := range []struct {
 		name    string
@@ -603,9 +603,14 @@ func TestFocusClauseLandsOnThePoolsRoute(t *testing.T) {
 		route   string
 	}{
 		{
-			name:    "past an exhausted scope",
-			outcome: ServedPastExhaustion{poolPick: pick, Exhaustion: Exhausted{Epics: []string{"test-held"}}},
-			route:   "move on to the top ready ticket outside it: run `lit start " + ticket.ID + "` to claim lane pick of epic " + epic.ID + clause,
+			// A clearable blocker puts the stay route first, so the pool's route is
+			// the second of two joined on one block and not the only line.
+			name: "past an exhausted scope",
+			outcome: ServedPastExhaustion{poolPick: pick, Exhaustion: Exhausted{
+				Epics:   []string{"test-held"},
+				Blocked: []blockerReach{{depReach: depReach{ID: "test-dep"}, Clearable: true}},
+			}},
+			route: "or move on to the top ready ticket outside it: run `lit start " + ticket.ID + "` to claim lane pick of epic " + epic.ID + clause,
 		},
 		{
 			name:    "past a scope the filter narrowed",
@@ -628,5 +633,39 @@ func TestFocusClauseLandsOnThePoolsRoute(t *testing.T) {
 				t.Fatalf("lines naming the focus = %q, want exactly the pool's route %q in:\n%s", carrying, tc.route, buf.String())
 			}
 		})
+	}
+}
+
+// A focus that kept every row the filter selects out of the pool is said beside
+// the ticket the filter hid, as it is on a pool pick: "drop the filter" alone
+// would hand over the path ticket and never the bug the run asked for, which
+// sits off the path.
+func TestFilterHidingAFocusedPoolTicketNamesTheFocus(t *testing.T) {
+	h := newReadyTestHarness(t)
+	goalEpic := h.createIssue(storage.CreateIssueInput{Prefix: "test",
+		Title: "Goal epic", Topic: "goal", IssueType: "epic",
+	})
+	goal := h.createIssue(storage.CreateIssueInput{Prefix: "test",
+		Title: "Goal", Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: "goal",
+	})
+	prereq := h.createIssue(storage.CreateIssueInput{Prefix: "test",
+		Title: "Prereq", Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: "prereq",
+	})
+	h.addDependencyWithinEpic(goal.ID, prereq.ID)
+	h.setLabels(goal.ID, FocusLabel)
+	noise := h.createIssue(storage.CreateIssueInput{Prefix: "test",
+		Title: "Noise epic", Topic: "noise", IssueType: "epic",
+	})
+	bug := h.createIssue(storage.CreateIssueInput{Prefix: "test",
+		Title: "Ready bug, off the focus path", Topic: "noise", IssueType: "bug", ParentID: noise.ID, Lane: "off",
+	})
+
+	err := h.runNextErr("--type", "bug")
+	want := "`lit next` without --type, --status, --labels or --assignee hands you " + prereq.ID + " (focused on " + goal.ID + ": picked from the focus path alone — `lit next --all` to route over the whole queue), which this run's filter leaves out"
+	if err == nil || err.Error() != want {
+		t.Fatalf("focused `lit next --type bug` = %v, want %q", err, want)
+	}
+	if row := h.runNextRowArgs("--all", "--type", "bug"); row.ID != bug.ID {
+		t.Fatalf("`lit next --all --type bug` = %q, want the off-path bug %q the focus withheld", row.ID, bug.ID)
 	}
 }
