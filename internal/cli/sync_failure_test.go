@@ -170,17 +170,20 @@ func TestSyncFailureEscalationByValue(t *testing.T) {
 		{"span just over threshold (11) trips", time.Minute, 6, 5, true, "under a minute"},
 		{"unknown age, small span, stays recent", 0, 1, 1, false, "an unknown duration"},
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			line := SyncFailure{Age: tc.age, Ahead: tc.ahead, Behind: tc.behind}.escalationLine()
-			gotIncident := strings.Contains(line, "INCIDENT")
-			if gotIncident != tc.wantIncident {
-				t.Errorf("escalation incident=%v, want %v: %q", gotIncident, tc.wantIncident, line)
-			}
-			if !strings.Contains(line, tc.wantAge) {
-				t.Errorf("escalation age phrase missing %q: %q", tc.wantAge, line)
-			}
-		})
+	// The two divergence classes are the ones whose escalation the values select.
+	for _, class := range []syncFailureClass{syncFailureProseHeld, syncFailureDivergedUnresolved} {
+		for _, tc := range cases {
+			t.Run(string(class)+"/"+tc.name, func(t *testing.T) {
+				line := SyncFailure{Class: class, Age: tc.age, Ahead: tc.ahead, Behind: tc.behind}.escalationLine()
+				gotIncident := strings.Contains(line, "INCIDENT")
+				if gotIncident != tc.wantIncident {
+					t.Errorf("escalation incident=%v, want %v: %q", gotIncident, tc.wantIncident, line)
+				}
+				if !strings.Contains(line, tc.wantAge) {
+					t.Errorf("escalation age phrase missing %q: %q", tc.wantAge, line)
+				}
+			})
+		}
 	}
 }
 

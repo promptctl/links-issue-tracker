@@ -20,9 +20,9 @@ import (
 func TestASkippedReceiveRecordsNoOutcomes(t *testing.T) {
 	recorder := telemetry.Begin(telemetry.Event{})
 	ctx := telemetry.With(context.Background(), recorder)
-	outcome, closeLive, err := performSyncReceive(ctx, workspace.Info{}, liveClone{}, receiveFetch{target: syncTarget{skip: syncTargetNoRemote}})
-	if err != nil || outcome.skip != syncTargetNoRemote {
-		t.Fatalf("performSyncReceive() = %+v, %v; want the skip", outcome, err)
+	outcome, closeLive := performSyncReceive(ctx, workspace.Info{}, liveClone{}, receiveFetch{target: syncTarget{skip: syncTargetNoRemote}}, leaveUnsettledRun)
+	if outcome.skip != syncTargetNoRemote {
+		t.Fatalf("performSyncReceive() = %+v; want the skip", outcome)
 	}
 	if err := closeLive(); err != nil {
 		t.Fatal(err)
@@ -130,7 +130,8 @@ func TestTheReceiveBlockWaitsForTheNextCommandUntilAReceiveSettles(t *testing.T)
 
 	unconverged := syncReceiveOutcome{
 		remote: remoteName(t, "origin"), branch: "master", ahead: 1, behind: 1,
-		reconcile: &reconcileOutcome{err: errors.New("reconcile backend unavailable")},
+		reconcile: &reconcileOutcome{},
+		stopped:   receiveStepReconcile, err: errors.New("reconcile backend unavailable"),
 	}
 	surfaceReceiveOutcome(context.Background(), ws, unconverged, now)
 	block, err := os.ReadFile(receiveBlockPendingPath(ws))

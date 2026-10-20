@@ -134,9 +134,9 @@ func TestInlineReconcileSurfacesADeclineInsteadOfSettling(t *testing.T) {
 	t.Parallel()
 	ws := declineWorkspace(t)
 
-	outcome := performInlineReconcile(context.Background(), syncSession{engine: syncOnlyEngine{}}, ws, remoteName(t, "origin"), "lit-sync")
+	outcome, err := performInlineReconcile(context.Background(), syncSession{engine: syncOnlyEngine{}}, ws, remoteName(t, "origin"), "lit-sync")
 
-	wantUnsupported(t, outcome.err, "reconcile")
+	wantUnsupported(t, err, "reconcile")
 	for _, settled := range []storage.SyncReconcileState{
 		storage.SyncReconcileNotDiverged,
 		storage.SyncReconcileLinearized,
@@ -160,8 +160,8 @@ func TestInlineReconcileSurfacesADeclineInsteadOfSettling(t *testing.T) {
 		t.Fatalf("trace status/decision = %q/%q, want error/error: the durable trail is where an operator learns the divergence still stands",
 			trace.Status, trace.Decision)
 	}
-	if trace.Reason != outcome.err.Error() || trace.Metadata["error"] != outcome.err.Error() {
-		t.Fatalf("trace reason/metadata error = %q/%q, want the refusal (%q)", trace.Reason, trace.Metadata["error"], outcome.err.Error())
+	if trace.Reason != err.Error() || trace.Metadata["error"] != err.Error() {
+		t.Fatalf("trace reason/metadata error = %q/%q, want the refusal (%q)", trace.Reason, trace.Metadata["error"], err.Error())
 	}
 	if reason := reconcileReasonForState(outcome.state); trace.Reason == reason {
 		t.Fatalf("trace reason is the state reading %q rather than the failure; the decline would read as an outcome", reason)

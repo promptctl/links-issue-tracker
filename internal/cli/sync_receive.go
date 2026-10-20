@@ -310,7 +310,7 @@ func receiveOnce(ctx context.Context, ws workspace.Info) {
 	}()
 	outcome, err := receiveAndRecord(timeoutCtx, ws, observed)
 	if err != nil {
-		// Could-not-attempt (the clone, the target, the live open): record and stop.
+		// Could-not-attempt (the clone, or the clone's own target): record and stop.
 		recordReceiveError(ws, err)
 		return
 	}
@@ -342,10 +342,7 @@ func receiveAndRecord(ctx context.Context, ws workspace.Info, observed remoteAdv
 	if err != nil {
 		return syncReceiveOutcome{}, err
 	}
-	outcome, closeLive, err := performSyncReceive(ctx, ws, clone, fetch)
-	if err != nil {
-		return syncReceiveOutcome{}, err
-	}
+	outcome, closeLive := performSyncReceive(ctx, ws, clone, fetch, ownUnsettledRun(ws.DatabasePath))
 	// The live store stays open through the record below, so its workspace
 	// hold keeps a rotation of the Dolt directory from landing between the
 	// settle and the record that describes it.
@@ -458,30 +455,36 @@ func deliverPendingReceiveBlock(w io.Writer, ws workspace.Info) {
 	}
 }
 
-// fetched reports whether the receive's DOLT_FETCH returned without error —
-// true for every post-fetch state (up to date, fast-forwarded, ahead, diverged,
-// never synced), false for a skipped target or a failed fetch. It is what the
-// fetch-success marker is conditioned on, and the first condition of
-// settledCleanly, which the received-refs record is conditioned on.
-// [LAW:one-source-of-truth] one reading of "the fetch happened".
-func (o syncReceiveOutcome) fetched() bool {
-	return o.skip == syncTargetReady && o.receiveErr == nil
+// ranThrough reports whether the receive ran and did not stop at or before
+// step. [LAW:one-source-of-truth] every reading of how far a receive got is a
+// comparison against the one step it stopped at.
+func (o syncReceiveOutcome) ranThrough(step receiveStep) bool {
+	return o.skip == syncTargetReady && (o.stopped == receiveStepNone || o.stopped > step)
 }
 
-// settledCleanly reports whether the receive both contacted the remote and left
-// no unresolved divergence — the condition that ends a divergence episode. A
-// skipped receive (no remote, empty remote) and a failed one carry no such
+// fetched reports whether the receive's DOLT_FETCH returned without error —
+// true for every post-fetch state, including a receive that then stopped at
+// the landing, the open, the live remotes or the settle; false for a skipped
+// target or a failed fetch. It is what the fetch-success marker is
+// conditioned on, so a fetch that worked is never blamed by the staleness
+// banner for a step after it.
+func (o syncReceiveOutcome) fetched() bool {
+	return o.ranThrough(receiveStepFetch)
+}
+
+// settledCleanly reports whether the receive ran to the end and left no
+// unresolved divergence — the condition that ends a divergence episode. A
+// skipped receive (no remote, empty remote) and a stopped one carry no such
 // information and leave the episode standing. [LAW:dataflow-not-control-flow]
 // the outcome's values decide; the caller runs unconditionally.
 func (o syncReceiveOutcome) settledCleanly() bool {
-	if !o.fetched() {
+	if !o.ranThrough(receiveStepReconcile) {
 		return false
 	}
 	if o.reconcile == nil {
 		return true
 	}
-	return o.reconcile.err == nil &&
-		(o.reconcile.state == storage.SyncReconcileLinearized || o.reconcile.state == storage.SyncReconcileNotDiverged)
+	return o.reconcile.state == storage.SyncReconcileLinearized || o.reconcile.state == storage.SyncReconcileNotDiverged
 }
 
 // access is what the receive did to the branch as the cadence owner reads a
@@ -493,7 +496,7 @@ func (o syncReceiveOutcome) settledCleanly() bool {
 // store returns the zero result with any error), and its own counts are taken
 // before its replay.
 func (o syncReceiveOutcome) access() app.AccessMode {
-	if !o.fetched() {
+	if !o.ranThrough(receiveStepSettle) {
 		return app.AccessRead
 	}
 	if o.state == storage.SyncReceiveAhead ||
@@ -503,15 +506,26 @@ func (o syncReceiveOutcome) access() app.AccessMode {
 	return app.AccessRead
 }
 
-// inlineSyncFailure derives the sync-failure contract for an inline reconcile
-// that could not converge, or reports ok=false when the receive/reconcile settled
-// cleanly. Every non-converging outcome routes through the one contract, with the
-// reconcile error carried as the block's trailing cause rather than as an
-// ignorable headline. The divergence age is computed here, at the boundary that
-// holds the clock, from the timestamp the receive recorded. [LAW:dataflow-not-control-flow]
+// inlineSyncFailure derives the sync-failure contract for a receive that
+// could not converge, or reports ok=false when there is nothing to surface.
+// Every surfaced outcome routes through the one contract, with the error
+// carried as the block's trailing cause rather than as an ignorable headline:
+//   - a cause that is the remote's schema running ahead of this binary, at
+//     any step, is its own class — it never clears by retrying;
+//   - a stop at the reconcile is a divergence the reconcile could not resolve;
+//   - a run of post-fetch stops that has lasted (unsettledLasting) is an
+//     unsettled receive;
+//   - a reconcile that held (prose, an id collision, unrelated histories) is
+//     its own class;
+//   - anything else, a single post-fetch stop included, surfaces nothing: the
+//     trace and the event carry it.
+//
+// The ages are computed here, at the boundary that holds the clock, from the
+// timestamps the receive recorded. [LAW:dataflow-not-control-flow]
 func (o syncReceiveOutcome) inlineSyncFailure(now time.Time) (SyncFailure, bool) {
-	if o.reconcile == nil {
-		return SyncFailure{}, false
+	// [LAW:single-enforcer] one adapter, every surface, every step.
+	if failure, ok := remoteSchemaAheadFailure(o.err); ok {
+		return failure, true
 	}
 	base := SyncFailure{
 		Remote:    o.remote.String(),
@@ -522,26 +536,30 @@ func (o syncReceiveOutcome) inlineSyncFailure(now time.Time) (SyncFailure, bool)
 		BuildNote: resolveBuildStatusNote(now),
 	}
 	switch {
-	case o.reconcile.err != nil:
-		// A remote schema ahead of this binary is its own class — it will NOT clear
-		// by retrying, so it must not read as a generic "diverged, will reconcile"
-		// cause. Route it to the remote-schema-ahead contract naming `lit upgrade`.
-		// [LAW:single-enforcer] one adapter, every surface.
-		if failure, ok := remoteSchemaAheadFailure(o.reconcile.err); ok {
-			return failure, true
-		}
+	case o.stopped == receiveStepReconcile:
 		base.Class = syncFailureDivergedUnresolved
-		base.Cause = o.reconcile.err
+		base.Cause = o.err
 		return base, true
-	case o.reconcile.state == storage.SyncReconcileProsePending:
+	case o.unsettledLasting(now):
+		base.Class = syncFailureReceiveUnsettled
+		base.Cause = o.err
+		base.StoppedAt = o.stopped
+		base.UnsettledSince = o.unsettledSince
+		base.Age = now.Sub(o.unsettledSince)
+		return base, true
+	case o.stopped != receiveStepNone || o.reconcile == nil:
+		return SyncFailure{}, false
+	}
+	switch o.reconcile.state {
+	case storage.SyncReconcileProsePending:
 		base.Class = syncFailureProseHeld
 		base.Fields = o.reconcile.pending
 		return base, true
-	case o.reconcile.state == storage.SyncReconcileIDCollision:
+	case storage.SyncReconcileIDCollision:
 		base.Class = syncFailureIDCollision
 		base.Collisions = o.reconcile.collisions
 		return base, true
-	case o.reconcile.state == storage.SyncReconcileUnrelated:
+	case storage.SyncReconcileUnrelated:
 		// A no-common-ancestor divergence is non-transient like a held prose conflict —
 		// it will NOT clear on the next receive — so it routes through the same contract
 		// rather than falling to the ok=false "settled cleanly" default, which would
@@ -570,7 +588,15 @@ type syncReceiveOutcome struct {
 	behind             int64
 	oldestDivergedUnix int64 // Unix time the divergence began; 0 unless diverged
 	traceErr           error
-	receiveErr         error // the receive failure; the trace is already recorded when set
+	// stopped is the step the receive stopped at, receiveStepNone when it ran
+	// to the end, and err is that step's failure; the trace is already
+	// recorded when it is set. [LAW:one-source-of-truth] the one record of
+	// where a receive stopped, the reconcile included.
+	stopped receiveStep
+	err     error
+	// unsettledSince is when the current run of post-fetch stops began, zero
+	// when no run is current or this receive does not own the run.
+	unsettledSince time.Time
 	// reconcile carries the inline reconcile that runs when the receive found a
 	// divergence the fast-forward could not absorb. Zero-valued unless state was
 	// SyncReceiveDiverged. [LAW:decomposition] Receiving and reconciling are
@@ -585,85 +611,75 @@ type reconcileOutcome struct {
 	pending    []merge.ProsePending
 	unrelated  *storage.UnrelatedInventory // the both-sides partition; set only for SyncReconcileUnrelated
 	collisions []merge.Collision           // both rows of each colliding id; set only for SyncReconcileIDCollision
-	err        error                       // the reconcile failure; its trace is already recorded when set
 }
 
 // performSyncReceive takes the fetch that ran on the clone to the live store:
 // land it (store.LandFetchedHead), then open the live store and settle —
-// fast-forward when the local branch is strictly behind — recording an
-// automation trace for the attempt. The returned error is a "could not
-// attempt" failure (the live open); a receive that ran and failed — the fetch,
-// the landing, or the settle — is carried in outcome.receiveErr with its trace
-// already recorded, leaving local data untouched. The sync target is the one
-// the fetch resolved on the clone through the shared prologue, so push, pull,
-// receive and reconcile never disagree about it. [LAW:single-enforcer]
+// fast-forward when the local branch is strictly behind — and reconcile a
+// divergence, recording an automation trace for the attempt. A receive that
+// ran and stopped — at the fetch, the landing, the open, the live remotes,
+// the settle or the reconcile — says where in outcome.stopped, with that
+// step's error in outcome.err and its trace already recorded, leaving local
+// data untouched. The sync target is the one the fetch resolved on the clone
+// through the shared prologue, so push, pull, receive and reconcile never
+// disagree about it. [LAW:single-enforcer]
+//
+// observeRun is the receive's part in the run of post-fetch stops
+// (sync_receive_run.go); it runs on every receive that reached its target.
 //
 // closeLive closes the live store when the settle opened it and is a no-op
 // otherwise; it is the caller's to run once it has recorded the outcome.
-func performSyncReceive(ctx context.Context, ws workspace.Info, clone liveClone, fetch receiveFetch) (outcome syncReceiveOutcome, closeLive func() error, err error) {
+func performSyncReceive(ctx context.Context, ws workspace.Info, clone liveClone, fetch receiveFetch, observeRun observeUnsettledRun) (outcome syncReceiveOutcome, closeLive func() error) {
 	closeLive = func() error { return nil }
-	// A receive that skips its target or cannot open the store settles
-	// nothing, and its receive.outcomes reads [] rather than absent.
-	// [LAW:nothing-unseen]
+	// A receive that skips its target settles nothing, and its
+	// receive.outcomes reads [] rather than absent. [LAW:nothing-unseen]
 	telemetry.Append(ctx, "receive.outcomes")
 	target := fetch.target
 	if target.skip != syncTargetReady {
-		return syncReceiveOutcome{skip: target.skip, remote: target.remote}, closeLive, nil
+		return syncReceiveOutcome{skip: target.skip, remote: target.remote}, closeLive
 	}
 	remoteName, syncBranch := target.remote, target.branch
 
-	var result storage.SyncReceiveResult
-	receiveErr := fetch.fetchErr
+	// Each step runs while no step before it stopped, and the first that
+	// fails is where the receive stopped.
+	stopped, stepErr := receiveStepNone, error(nil)
+	stopAt := func(step receiveStep, err error) {
+		if err != nil && stopped == receiveStepNone {
+			stopped, stepErr = step, err
+		}
+	}
+	stopAt(receiveStepFetch, fetch.fetchErr)
 	var landed store.LandedFetch
-	if receiveErr == nil {
-		landed, receiveErr = landFetch(ctx, ws, clone, target)
+	if stopped == receiveStepNone {
+		var err error
+		landed, err = landFetch(ctx, ws, clone, target)
+		stopAt(receiveStepLand, err)
 	}
 	var session syncSession
-	if receiveErr == nil {
-		session, closeLive, err = openSyncSession(ctx, ws)
-		if err != nil {
-			return syncReceiveOutcome{}, func() error { return nil }, fmt.Errorf("open sync store: %w", err)
+	if stopped == receiveStepNone {
+		var close func() error
+		var err error
+		session, close, err = openSyncSession(ctx, ws)
+		stopAt(receiveStepOpen, err)
+		if err == nil {
+			closeLive = close
 		}
+	}
+	if stopped == receiveStepNone {
 		// The clone's copy of the remotes was reconciled from git when the
 		// target was resolved there; the live store's is reconciled here, so
 		// a re-pointed git remote reaches it without an explicit sync command.
 		// Local only: git's remote config and the store's remote table.
 		if _, err := syncDoltRemotesFromGit(ctx, session, ws); err != nil {
-			receiveErr = fmt.Errorf("reconcile the live store's remotes from git: %w", err)
+			stopAt(receiveStepLiveRemotes, fmt.Errorf("reconcile the live store's remotes from git: %w", err))
 		}
 	}
-	if receiveErr == nil {
-		result, receiveErr = session.syncer.SyncSettleReceived(ctx, remoteName, syncBranch)
+	var result storage.SyncReceiveResult
+	if stopped == receiveStepNone {
+		var err error
+		result, err = session.syncer.SyncSettleReceived(ctx, remoteName, syncBranch)
+		stopAt(receiveStepSettle, err)
 	}
-	traceMetadata := map[string]string{
-		"remote":      remoteName.String(),
-		"sync_branch": syncBranch,
-		"state":       string(result.State),
-		"ahead":       strconv.FormatInt(result.Ahead, 10),
-		"behind":      strconv.FormatInt(result.Behind, 10),
-		"base":        string(result.Base),
-		"landed":      landed.Record.String(),
-		"fork_point":  landed.ForkPoint.String(),
-		"land_held":   landed.Held.Round(time.Millisecond).String(),
-	}
-	traceStatus := "ok"
-	traceReason := receiveReasonForState(result.State)
-	receiveDecision := string(result.State)
-	if receiveErr != nil {
-		traceStatus = "error"
-		traceReason = receiveErr.Error()
-		traceMetadata["error"] = receiveErr.Error()
-		receiveDecision = "error"
-	}
-	// The settle's decision lands on the invocation's event too, one value per
-	// receive, read off the trace's own fields. [LAW:nothing-unseen]
-	telemetry.Append(ctx, "receive.outcomes", map[string]any{
-		"receive.decision": receiveDecision,
-		"receive.ahead":    result.Ahead,
-		"receive.behind":   result.Behind,
-		"receive.base":     traceMetadata["base"],
-	})
-	traceRecordErr := recordReceiveTrace(ws, receiveDecision, traceStatus, traceReason, traceMetadata)
 	outcome = syncReceiveOutcome{
 		remote:             remoteName,
 		branch:             syncBranch,
@@ -671,16 +687,64 @@ func performSyncReceive(ctx context.Context, ws workspace.Info, clone liveClone,
 		ahead:              result.Ahead,
 		behind:             result.Behind,
 		oldestDivergedUnix: result.OldestDivergedUnix,
-		traceErr:           traceRecordErr,
-		receiveErr:         receiveErr,
+		stopped:            stopped,
+		err:                stepErr,
 	}
+	run := observeRun(outcome, time.Now())
+	outcome.unsettledSince = run.since
+	if run.err != nil {
+		fmt.Fprintf(os.Stderr, "lit: automatic receive's unsettled-run records not read or written: %v\n", run.err)
+	}
+	traceMetadata := map[string]string{
+		"remote":          remoteName.String(),
+		"sync_branch":     syncBranch,
+		"state":           string(result.State),
+		"ahead":           strconv.FormatInt(result.Ahead, 10),
+		"behind":          strconv.FormatInt(result.Behind, 10),
+		"base":            string(result.Base),
+		"landed":          landed.Record.String(),
+		"fork_point":      landed.ForkPoint.String(),
+		"land_held":       landed.Held.Round(time.Millisecond).String(),
+		"stopped":         stopped.String(),
+		"unsettled_since": strconv.FormatInt(unixOrZero(run.since), 10),
+		"settled_last":    strconv.FormatInt(unixOrZero(run.settledLast), 10),
+	}
+	if run.err != nil {
+		traceMetadata["unsettled_record_error"] = run.err.Error()
+	}
+	traceStatus := "ok"
+	traceReason := receiveReasonForState(result.State)
+	receiveDecision := string(result.State)
+	if stepErr != nil {
+		traceStatus = "error"
+		traceReason = stepErr.Error()
+		traceMetadata["error"] = stepErr.Error()
+		receiveDecision = "error"
+	}
+	outcome.traceErr = recordReceiveTrace(ws, receiveDecision, traceStatus, traceReason, traceMetadata)
 	// The reconcile runs INLINE on this same engine because embedded Dolt permits
 	// only one read-write engine per path — a worker would collide with the next
 	// foreground command. [LAW:no-ambient-temporal-coupling]
-	if receiveErr == nil && result.State == storage.SyncReceiveDiverged {
-		outcome.reconcile = performInlineReconcile(ctx, session, ws, remoteName, syncBranch)
+	if stopped == receiveStepNone && result.State == storage.SyncReceiveDiverged {
+		reconciled, err := performInlineReconcile(ctx, session, ws, remoteName, syncBranch)
+		outcome.reconcile = reconciled
+		if err != nil {
+			outcome.stopped, outcome.err = receiveStepReconcile, err
+		}
 	}
-	return outcome, closeLive, nil
+	// The settle's decision lands on the invocation's event too, one value per
+	// receive, with where the receive stopped — the reconcile included — and the
+	// run's two times. [LAW:nothing-unseen]
+	telemetry.Append(ctx, "receive.outcomes", map[string]any{
+		"receive.decision":        receiveDecision,
+		"receive.ahead":           result.Ahead,
+		"receive.behind":          result.Behind,
+		"receive.base":            traceMetadata["base"],
+		"receive.stopped":         outcome.stopped.String(),
+		"receive.unsettled_since": unixOrZero(run.since),
+		"receive.settled_last":    unixOrZero(run.settledLast),
+	})
+	return outcome, closeLive
 }
 
 // reconcileOnce resolves the reconcile capability and runs it.
@@ -708,7 +772,7 @@ func reconcileOnce(ctx context.Context, session syncSession, remote storage.Remo
 // prose-pending for the agent surface, never auto-committed by picking a side.
 // [LAW:single-enforcer] One reconcile entrypoint and one trace writer, whether
 // the receive was inline or foreground.
-func performInlineReconcile(ctx context.Context, session syncSession, ws workspace.Info, remote storage.RemoteName, branch string) *reconcileOutcome {
+func performInlineReconcile(ctx context.Context, session syncSession, ws workspace.Info, remote storage.RemoteName, branch string) (*reconcileOutcome, error) {
 	result, reconcileErr := reconcileOnce(ctx, session, remote, branch)
 	// "replayed" matches the explicit reconcile/take reporters: the durable
 	// trace carries the provenance-replay count for every outcome, zero
@@ -773,8 +837,7 @@ func performInlineReconcile(ctx context.Context, session syncSession, ws workspa
 		pending:    result.Pending,
 		unrelated:  result.Unrelated,
 		collisions: result.Collisions,
-		err:        reconcileErr,
-	}
+	}, reconcileErr
 }
 
 // reconcileReasonForState maps a reconcile outcome to its automation-trace

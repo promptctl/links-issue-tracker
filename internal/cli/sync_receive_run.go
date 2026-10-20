@@ -1,0 +1,170 @@
+package cli
+
+import (
+	"context"
+	"errors"
+	"time"
+
+	"github.com/promptctl/links-issue-tracker/internal/store"
+)
+
+// receiveStep is where a receive stopped: the closed, ordered set of the
+// steps it runs, in the order it runs them, and receiveStepNone when it ran to
+// the end. [LAW:types-are-the-program] one value answers "how far did this
+// receive get", and every reading of the outcome is a comparison against it,
+// so no two readings can disagree about whether the fetch happened.
+type receiveStep int
+
+const (
+	receiveStepNone receiveStep = iota
+	receiveStepFetch
+	receiveStepLand
+	receiveStepOpen
+	receiveStepLiveRemotes
+	receiveStepSettle
+	receiveStepReconcile
+)
+
+// String is the step's name on the event and the trace; empty for a receive
+// that ran to the end.
+func (s receiveStep) String() string {
+	switch s {
+	case receiveStepNone:
+		return ""
+	case receiveStepFetch:
+		return "fetch"
+	case receiveStepLand:
+		return "land"
+	case receiveStepOpen:
+		return "open"
+	case receiveStepLiveRemotes:
+		return "live_remotes"
+	case receiveStepSettle:
+		return "settle"
+	case receiveStepReconcile:
+		return "reconcile"
+	default:
+		return "unknown"
+	}
+}
+
+// describe is the step in a sentence a reader of the sync-failure block acts on.
+func (s receiveStep) describe() string {
+	switch s {
+	case receiveStepFetch:
+		return "fetching from the remote"
+	case receiveStepLand:
+		return "landing the fetch on the live store"
+	case receiveStepOpen:
+		return "opening the live store"
+	case receiveStepLiveRemotes:
+		return "reconciling the live store's remotes from git"
+	case receiveStepSettle:
+		return "settling onto the fetched head (following a re-root of the remote, when there is one)"
+	case receiveStepReconcile:
+		return "reconciling a divergence"
+	default:
+		return "an unknown step (" + s.String() + ")"
+	}
+}
+
+// unsettles reports whether a stop at this step leaves the receive fetched but
+// unsettled: after the fetch, before the settle finished. A stop at the fetch
+// is the staleness banner's, and a stop at the reconcile is a divergence's.
+func (s receiveStep) unsettles() bool {
+	return s >= receiveStepLand && s <= receiveStepSettle
+}
+
+// unsettledLastingAfter is how long a run of post-fetch stops lasts, with no
+// settle anywhere, before it is surfaced. Two debounce intervals: the stop
+// that starts the run is zero old, so surfacing takes a second stop at least
+// this much later, and one cut of the receive's shared deadline — as often
+// contention behind a slow fetch as a fault — never qualifies on its own.
+const unsettledLastingAfter = 2 * receiveDebounceInterval
+
+// countsTowardUnsettled reports whether this outcome is a post-fetch stop that
+// belongs to a run. A cancellation is the attempt being torn down, not
+// evidence about the checkout, so it neither starts nor extends one.
+func (o syncReceiveOutcome) countsTowardUnsettled() bool {
+	return o.stopped.unsettles() && !errors.Is(o.err, context.Canceled)
+}
+
+// unsettledLasting reports whether this receive is surfaced as
+// syncFailureReceiveUnsettled: it stopped after its fetch, a run of such stops
+// is current, and that run has lasted at least unsettledLastingAfter.
+// [LAW:dataflow-not-control-flow] read off the outcome's values and the clock
+// passed in; nothing here reads a record.
+func (o syncReceiveOutcome) unsettledLasting(now time.Time) bool {
+	return o.countsTowardUnsettled() && !o.unsettledSince.IsZero() && now.Sub(o.unsettledSince) >= unsettledLastingAfter
+}
+
+// unsettledObservation is what a receive learned about the run of post-fetch
+// stops: when the current run began (zero when none is current), when a
+// settle last succeeded (zero when none ever has), and any failure reading or
+// writing the records.
+type unsettledObservation struct {
+	since       time.Time
+	settledLast time.Time
+	err         error
+}
+
+// observeUnsettledRun is how a receive takes part in the run of post-fetch
+// stops. The automatic receive owns the run (ownUnsettledRun); the mirror's
+// receive of its re-rooted push does not hold the receive lock, so it neither
+// reads nor writes it (leaveUnsettledRun), and its stop is counted by the next
+// automatic receive, which fetches past the remote head the push moved.
+// [LAW:one-type-per-behavior] one call on every receive, the owner is data.
+type observeUnsettledRun func(o syncReceiveOutcome, now time.Time) unsettledObservation
+
+// leaveUnsettledRun is the receive that does not own the run.
+func leaveUnsettledRun(syncReceiveOutcome, time.Time) unsettledObservation {
+	return unsettledObservation{}
+}
+
+// ownUnsettledRun is the automatic receive's part in the run, under the
+// receive lock it holds: a stop that counts starts a run when none is current,
+// by writing unsettled.first. It never reads that record to write it back,
+// and it never touches settled.last, which only the settle writes
+// (store/receive_episode.go). [LAW:single-enforcer] one writer per record.
+// settled.last is read again after the write, so a settle that finished
+// anywhere before this decision ends the run it would otherwise report.
+func ownUnsettledRun(databasePath string) observeUnsettledRun {
+	return func(o syncReceiveOutcome, now time.Time) unsettledObservation {
+		first, firstOK, firstErr := store.ReadUnsettledFirst(databasePath)
+		settled, settledOK, settledErr := store.ReadSettledLast(databasePath)
+		since := currentRunStart(first, firstOK, settled, settledOK)
+		var writeErr error
+		if o.countsTowardUnsettled() && since.IsZero() {
+			since = now
+			writeErr = store.WriteUnsettledFirst(databasePath, now)
+		}
+		settled, settledOK, rereadErr := store.ReadSettledLast(databasePath)
+		obs := unsettledObservation{
+			since: currentRunStart(since, !since.IsZero(), settled, settledOK),
+			err:   errors.Join(firstErr, settledErr, writeErr, rereadErr),
+		}
+		if settledOK {
+			obs.settledLast = settled
+		}
+		return obs
+	}
+}
+
+// currentRunStart is the start of the run of post-fetch stops that is still
+// current, or zero: a run is current until a settle succeeds after it began.
+func currentRunStart(first time.Time, firstOK bool, settled time.Time, settledOK bool) time.Time {
+	if !firstOK || (settledOK && !first.After(settled)) {
+		return time.Time{}
+	}
+	return first
+}
+
+// unixOrZero is a time on the event: Unix seconds, or 0 for no time.
+// [LAW:nothing-unseen] zero and absent are different facts, and the event
+// always carries the key.
+func unixOrZero(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.Unix()
+}

@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 	doltenv "github.com/dolthub/dolt/go/libraries/doltcore/env"
@@ -553,7 +554,13 @@ func (s *Store) SyncSettleReceived(ctx context.Context, remote storage.RemoteNam
 }
 
 // settleReceived runs settleReceivedWithinLock as a sync mutation, joining a
-// commit lock the caller already holds.
+// commit lock the caller already holds, and records that the settle succeeded
+// (settled.last, receive_episode.go). Every settle runs through here, so this
+// is the one writer of that record whatever surface settled.
+// [LAW:single-enforcer] A record that could not be written comes back as the
+// error beside the full result: the settle's effect on the branch stands, and
+// a settle this checkout cannot account for reaches every caller's error path.
+// [LAW:no-silent-failure]
 func (s *Store) settleReceived(ctx context.Context, remote storage.RemoteName, branch string) (storage.SyncReceiveResult, error) {
 	var result storage.SyncReceiveResult
 	err := s.runSyncMutation(ctx, func(ctx context.Context) error {
@@ -563,6 +570,9 @@ func (s *Store) settleReceived(ctx context.Context, remote storage.RemoteName, b
 	})
 	if err != nil {
 		return storage.SyncReceiveResult{}, err
+	}
+	if err := writeSettledLast(s.doltRootDir, time.Now()); err != nil {
+		return result, fmt.Errorf("the settle landed, but this checkout's record of it was not written: %w", err)
 	}
 	return result, nil
 }
