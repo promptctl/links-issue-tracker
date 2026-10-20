@@ -85,7 +85,7 @@ func NewIDMapping(localID, realID string) IDMapping {
 // error, so the caller reads one account of the batch whether it landed or
 // not. [LAW:nothing-unseen]
 type BulkApplyResult struct {
-	Created    []IDMapping
+	Created         []IDMapping
 	Reparented      []string
 	ParentHeld      []string
 	ReparentsUndone []string
