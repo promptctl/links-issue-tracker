@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/promptctl/links-issue-tracker/internal/fsfault"
+	"github.com/promptctl/links-issue-tracker/internal/fsperm"
 	"github.com/promptctl/primitives/filelock"
 )
 
@@ -300,7 +300,7 @@ func TestTake_CollectionFailureDoesNotFailTake(t *testing.T) {
 	snapshotsDir := DirFor(src)
 	tmpPath, _ := fabricateDeadResidue(t, snapshotsDir, "1700000000000000008")
 	nested := filepath.Join(tmpPath, "nested")
-	fsfault.DenyWrite(t, nested)
+	fsperm.DenyWrite(t, nested)
 	t.Cleanup(func() { restoreCondemnedPerms(t, snapshotsDir) })
 
 	snap, err := Take(context.Background(), src, "")
@@ -442,7 +442,7 @@ func TestCollectOrphanedResidue_ErrorNamesThePath(t *testing.T) {
 	// Classification renames the residue (to a uniquely-stamped .condemned
 	// name) before deleting, so the undeletable dir lives under a *.condemned
 	// path by the time RemoveAll hits it — located by glob below.
-	fsfault.DenyWrite(t, filepath.Join(tmpPath, "nested"))
+	fsperm.DenyWrite(t, filepath.Join(tmpPath, "nested"))
 	t.Cleanup(func() { restoreCondemnedPerms(t, snapshotsDir) })
 
 	err := collectOrphanedResidue(snapshotsDir)

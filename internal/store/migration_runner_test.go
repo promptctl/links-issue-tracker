@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
-	"github.com/promptctl/links-issue-tracker/internal/fsfault"
+	"github.com/promptctl/links-issue-tracker/internal/fsperm"
 	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
 )
 
@@ -502,7 +502,7 @@ func TestRefusalReportsUnreadableSnapshots(t *testing.T) {
 	if err := os.MkdirAll(snapshotsDir, 0o755); err != nil {
 		t.Fatalf("create snapshots dir: %v", err)
 	}
-	fsfault.DenyRead(t, snapshotsDir)
+	fsperm.DenyRead(t, snapshotsDir)
 
 	_, err := Open(ctx, doltRoot, "test-workspace-id")
 	var refusal *UnsupportedSchemaVersionError

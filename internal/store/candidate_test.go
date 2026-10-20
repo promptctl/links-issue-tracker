@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/promptctl/links-issue-tracker/internal/fsfault"
+	"github.com/promptctl/links-issue-tracker/internal/fsperm"
 )
 
 // preGooseDump is a known, valid pre-goose shape (the same vocabulary
@@ -188,7 +188,7 @@ func TestDiscardRetriesDirectoryRemoval(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = cand.Discard() })
 
-	restore := fsfault.DenyWrite(t, parent)
+	restore := fsperm.DenyWrite(t, parent)
 
 	if err := cand.Discard(); err == nil {
 		t.Fatal("Discard succeeded despite an unwritable parent; expected a removal error")

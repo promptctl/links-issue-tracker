@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/dbfactory"
-	"github.com/promptctl/links-issue-tracker/internal/fsfault"
+	"github.com/promptctl/links-issue-tracker/internal/fsperm"
 )
 
 const (
@@ -90,7 +90,7 @@ func TestCollectAbandonedMirrorReportsAFailureNamingTheKey(t *testing.T) {
 	}
 	// Unlinking the key directory needs write on its parent, so a read-only base
 	// fails the removal while leaving the walk that measures it working.
-	fsfault.DenyWrite(t, base)
+	fsperm.DenyWrite(t, base)
 
 	_, collected, err := collectAbandonedMirror(base, orphanKey)
 	if err == nil {
@@ -211,7 +211,7 @@ func TestCollectAbandonedMirrorKeepsCollectingPastAStuckFile(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(stuck, "pack"), make([]byte, 1024), 0o644); err != nil {
 		t.Fatalf("plant stuck payload: %v", err)
 	}
-	fsfault.DenyWrite(t, stuck)
+	fsperm.DenyWrite(t, stuck)
 
 	reclaimed, collected, err := collectAbandonedMirror(base, orphanKey)
 	if err == nil || collected {

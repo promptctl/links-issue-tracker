@@ -17,7 +17,7 @@ import (
 	"github.com/dolthub/dolt/go/store/hash"
 
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
-	"github.com/promptctl/links-issue-tracker/internal/fsfault"
+	"github.com/promptctl/links-issue-tracker/internal/fsperm"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -232,7 +232,7 @@ func TestAFollowCarriesAFailedCollection(t *testing.T) {
 	if err := os.Mkdir(unreadable, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	fsfault.DenyRead(t, unreadable)
+	fsperm.DenyRead(t, unreadable)
 
 	bravo := openSyncOrFatal(t, ctx, r.bravo)
 	defer func() { _ = bravo.Close() }()

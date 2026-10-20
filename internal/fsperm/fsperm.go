@@ -1,18 +1,21 @@
-// Package fsfault injects filesystem permission faults into tests: a
-// directory the test process cannot write, or cannot read.
+// Package fsperm holds what a test needs to know about filesystem permissions
+// on the platform it runs on: faults that take a permission away, and the
+// mode a requested permission reads back as.
 //
 // A directory's mode bits are the fault on POSIX, and they do not hold
 // everywhere: root bypasses them, and Windows does not enforce a directory's
 // mode at all. So each fault is measured once it is set, and a test runs where
 // it holds and is skipped, saying why, where it does not — never run against a
-// fault that silently did nothing. [LAW:single-enforcer] This is the one place
-// a test learns whether the platform enforces the fault it needs.
-package fsfault
+// fault that silently did nothing. Windows keeps a single read-only bit where
+// POSIX keeps nine, so a mode a test asserts is the one the platform stores.
+// [LAW:single-enforcer] This is the one place a test learns either.
+package fsperm
 
 import (
 	"errors"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -23,7 +26,7 @@ import (
 func DenyWrite(t testing.TB, dir string) (restore func()) {
 	t.Helper()
 	restore = set(t, dir, 0o555)
-	probe, err := os.CreateTemp(dir, "fsfault-probe-*")
+	probe, err := os.CreateTemp(dir, "fsperm-probe-*")
 	if err == nil {
 		name := probe.Name()
 		closeErr := probe.Close()
@@ -80,4 +83,43 @@ func set(t testing.TB, dir string, perm fs.FileMode) (restore func()) {
 	}
 	t.Cleanup(restore)
 	return restore
+}
+
+// FileModeAsStored is the mode a file chmodded to perm reads back with: perm
+// on POSIX, and 0o666 or 0o444 on Windows. It chmods a file of its own, by
+// name, so it measures the platform and not the code a test is checking.
+func FileModeAsStored(t testing.TB, perm fs.FileMode) fs.FileMode {
+	t.Helper()
+	probe := filepath.Join(t.TempDir(), "mode-probe")
+	if err := os.WriteFile(probe, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return chmodded(t, probe, perm)
+}
+
+// DirModeAsStored is FileModeAsStored for a directory.
+func DirModeAsStored(t testing.TB, perm fs.FileMode) fs.FileMode {
+	t.Helper()
+	probe := filepath.Join(t.TempDir(), "mode-probe")
+	if err := os.Mkdir(probe, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	mode := chmodded(t, probe, perm)
+	// Back to writable, so the test's temporary directory can be removed.
+	if err := os.Chmod(probe, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return mode
+}
+
+func chmodded(t testing.TB, probe string, perm fs.FileMode) fs.FileMode {
+	t.Helper()
+	if err := os.Chmod(probe, perm); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(probe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return info.Mode().Perm()
 }

@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
-	"github.com/promptctl/links-issue-tracker/internal/fsfault"
+	"github.com/promptctl/links-issue-tracker/internal/fsperm"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
@@ -282,7 +282,7 @@ func TestMigratingOpenReportsAFailedSnapshotPrune(t *testing.T) {
 			stuck = path
 		}
 	}
-	fsfault.DenyWrite(t, stuck)
+	fsperm.DenyWrite(t, stuck)
 	withGooseHistoryDropped(t, ctx, doltRoot)
 
 	st, err := Open(ctx, doltRoot, "test-workspace-id")

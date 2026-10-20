@@ -11,7 +11,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
 	"github.com/promptctl/links-issue-tracker/internal/engine"
-	"github.com/promptctl/links-issue-tracker/internal/fsfault"
+	"github.com/promptctl/links-issue-tracker/internal/fsperm"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/version"
@@ -160,7 +160,7 @@ func workspaceWhosePruneWillFail(t *testing.T) (repo string, ws workspace.Info, 
 			t.Fatalf("plant snapshot file: %v", err)
 		}
 	}
-	fsfault.DenyWrite(t, stuck)
+	fsperm.DenyWrite(t, stuck)
 	return repo, ws, stuck
 }
 

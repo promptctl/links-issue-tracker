@@ -1,4 +1,4 @@
-package fsfault
+package fsperm
 
 import (
 	"errors"

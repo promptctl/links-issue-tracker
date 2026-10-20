@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/promptctl/links-issue-tracker/internal/fsfault"
+	"github.com/promptctl/links-issue-tracker/internal/fsperm"
 )
 
 var (
@@ -486,7 +486,7 @@ func TestAFailedWriteReportsWhatItHadDone(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	fsfault.DenyWrite(t, dir)
+	fsperm.DenyWrite(t, dir)
 	out, err := Write(loc, Facts{Started{alpha, progress}}, at)
 	if err == nil {
 		t.Fatal("Write into a read-only directory succeeded; want an error")
@@ -511,7 +511,7 @@ func TestAFailedRewriteOfAnUnreadableFileIsNotReplaced(t *testing.T) {
 	if err := os.WriteFile(loc.File, []byte("{working_on"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	fsfault.DenyWrite(t, dir)
+	fsperm.DenyWrite(t, dir)
 	out, err := Write(loc, Facts{Started{alpha, progress}}, at)
 	if err == nil {
 		t.Fatal("Write into a read-only directory succeeded; want an error")

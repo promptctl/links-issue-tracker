@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/promptctl/links-issue-tracker/internal/fsfault"
+	"github.com/promptctl/links-issue-tracker/internal/fsperm"
 	"github.com/promptctl/links-issue-tracker/internal/statusline"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
@@ -422,7 +422,7 @@ func TestAFailedStatuslineWriteIsRecordedOnTheEvent(t *testing.T) {
 	if err := os.MkdirAll(litDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	fsfault.DenyWrite(t, litDir)
+	fsperm.DenyWrite(t, litDir)
 	rec := telemetry.Begin(telemetry.Event{Event: "lit start"})
 	ctx := telemetry.With(context.Background(), rec)
 	ws := workspace.Info{RootDir: root, Location: workspace.Location{GitCommonDir: filepath.Join(root, "git")}}

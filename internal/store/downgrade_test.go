@@ -12,7 +12,7 @@ import (
 
 	"github.com/pressly/goose/v3"
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
-	"github.com/promptctl/links-issue-tracker/internal/fsfault"
+	"github.com/promptctl/links-issue-tracker/internal/fsperm"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
 	"github.com/promptctl/links-issue-tracker/internal/version"
@@ -387,7 +387,7 @@ func TestDowngradeSnapshotFailureReportsTheVersionItRead(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir snapshots: %v", err)
 	}
-	fsfault.DenyWrite(t, dir)
+	fsperm.DenyWrite(t, dir)
 
 	done, err := st.Downgrade(ctx, registryMax-1)
 	if err == nil {
@@ -427,7 +427,7 @@ func TestDowngradePruneFailureReportsTheCommittedReverse(t *testing.T) {
 			stuck = path
 		}
 	}
-	fsfault.DenyWrite(t, stuck)
+	fsperm.DenyWrite(t, stuck)
 
 	done, err := st.Downgrade(ctx, registryMax-1)
 	if err != nil {
