@@ -186,6 +186,9 @@ func reRootBranch(ctx context.Context, ddb *doltdb.DoltDB, branch ref.DoltRef, c
 	}
 	result.Root = result.Rewritten[result.Cut]
 	result.Head = result.Rewritten[head.String()]
+	if result.Height, err = rewritten[head].Height(); err != nil {
+		return storage.ReRooted{}, fmt.Errorf("read the height of the rewritten head %s: %w", result.Head, err)
+	}
 	if err := ddb.SetHeadToCommit(ctx, branch, rewritten[head]); err != nil {
 		return whereTheMoveLeft(ctx, ddb, branch, result, err)
 	}

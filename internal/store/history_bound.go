@@ -251,17 +251,23 @@ func (s *Store) reRootScratch(ctx context.Context, branch, head string, keep uin
 //
 // The walk takes the highest commit not yet read through. Every line from
 // head is waiting at some commit in pending, so pending holding only the
-// commit taken means every line passes through it. A history whose lines
-// meet nowhere above its roots, high enough, is the error.
+// commit taken means every line passes through it. A side line spanning the
+// window leaves no such commit low enough above the roots: the bound's error,
+// naming where the lines last met, which is where it cuts once head has
+// climbed far enough above it.
 func cutKeeping(ctx context.Context, ddb *doltdb.DoltDB, head historyCommit, keep uint64) (hash.Hash, error) {
 	pending := map[hash.Hash]historyCommit{head.addr: head}
+	met := head
 	for len(pending) > 0 {
 		c := slices.MaxFunc(slices.Collect(maps.Values(pending)), func(a, b historyCommit) int {
 			return cmp.Compare(a.height, b.height)
 		})
 		delete(pending, c.addr)
-		if len(pending) == 0 && head.height-c.height+1 >= keep && len(c.parents) > 0 {
-			return c.addr, nil
+		if len(pending) == 0 && len(c.parents) > 0 {
+			if head.height-c.height+1 >= keep {
+				return c.addr, nil
+			}
+			met = c
 		}
 		for _, p := range c.parents {
 			if _, ok := pending[p]; ok {
@@ -274,7 +280,7 @@ func cutKeeping(ctx context.Context, ddb *doltdb.DoltDB, head historyCommit, kee
 			pending[p] = parent
 		}
 	}
-	return hash.Hash{}, fmt.Errorf("no commit below %s, at height %d, is on every line of its history above the root and keeps at least %d commits", head.addr, head.height, keep)
+	return hash.Hash{}, fmt.Errorf("the lines below %s, at height %d, meet above its roots no lower than %s, at height %d, which keeps fewer than the %d commits the bound keeps; the bound cuts there once the head is at height %d", head.addr, head.height, met.addr, met.height, keep, met.height+keep-1)
 }
 
 // publishReRoot force-pushes branch's scratch to the remote's branch, landing

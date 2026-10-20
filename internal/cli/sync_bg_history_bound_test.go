@@ -41,8 +41,8 @@ func TestTheMirrorAloneKeepsTheHistoryBound(t *testing.T) {
 	runCLIInDir(t, r.alpha, "sync", backgroundMirrorSubcommand, "--parent-pid", "0")
 	ev := lastEvent(t)
 	bound := boundRecordOf(t, ev)
-	if bound["history_bound.fired"] != true || bound["history_bound.lease"] != "held" || bound["history_bound.error"] != nil || bound["reroot.kept"] != float64(2) {
-		t.Fatalf("the mirror's bound = %v; want it fired, published under a held lease and keeping 2 commits", bound)
+	if bound["history_bound.fired"] != true || bound["history_bound.lease"] != "held" || bound["history_bound.error"] != nil || bound["reroot.kept"] != float64(2) || bound["reroot.height"] != float64(2) {
+		t.Fatalf("the mirror's bound = %v; want it fired, published under a held lease and keeping 2 commits at height 2", bound)
 	}
 	// The clone follows the re-root it published, and the live store follows
 	// the same re-root when it receives the clone's push.
