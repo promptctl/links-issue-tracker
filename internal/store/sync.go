@@ -757,20 +757,6 @@ func (s *Store) chooseCompactionDepth() (GCMode, error) {
 	return GCNewGen, nil
 }
 
-// SyncPush is SyncCompactAndPush without the compaction: a push, and on a
-// refusal the fetch, follow and one retry every push runs
-// (retryPushAfterFollow). It is no part of storage.Syncer, whose pushes —
-// SyncCompactAndPush and SyncPushFromClone — are each followed by
-// SyncKeepHistoryBound; this package's tests push with it.
-func (s *Store) SyncPush(ctx context.Context, remote string, branch string, setUpstream bool, force bool) (storage.SyncPushResult, error) {
-	result, pushErr := s.pushMutation(ctx, remote, branch, setUpstream, force)
-	result, pushErr, _, followErr := s.retryPushAfterFollow(ctx, remote, branch, setUpstream, force, result, pushErr)
-	if err := joinFollowFailure(pushErr, followErr); err != nil {
-		return storage.SyncPushResult{}, err
-	}
-	return result, nil
-}
-
 // joinFollowFailure is a failed push as its caller reports it: the push's
 // error, with the fetch or follow that could not explain a refusal joined, or
 // nil when the push landed. The join carries that check's text and not its
