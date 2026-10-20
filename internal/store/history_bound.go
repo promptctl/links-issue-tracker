@@ -97,6 +97,9 @@ func (s *Store) keepHistoryBound(ctx context.Context, b *storage.HistoryBound) e
 	if _, err := requireSyncArg("branch", b.Branch); err != nil {
 		return err
 	}
+	if err := refuseLOCKUnderCommitLock(ctx); err != nil {
+		return err
+	}
 	trackingRef := fmt.Sprintf("remotes/%s/%s", b.Remote, b.Branch)
 	if err := s.db.QueryRowContext(ctx, `SELECT commit_hash, commit_order FROM dolt_log(?) LIMIT 1`, trackingRef).Scan(&b.Head, &b.Height); err != nil {
 		return fmt.Errorf("read the height of %s: %w", trackingRef, err)
@@ -223,13 +226,13 @@ func firstParentAncestor(ctx context.Context, ddb *doltdb.DoltDB, c *doltdb.Comm
 // publishReRoot force-pushes branch's scratch to the remote's branch, landing
 // only while that branch still names head.
 func (s *Store) publishReRoot(ctx context.Context, remote, branch, head string) (storage.LeaseOutcome, error) {
-	var leased storage.LeasedPush
+	var outcome storage.LeaseOutcome
 	err := s.runSyncMutation(ctx, func(ctx context.Context) error {
 		var err error
-		leased, err = s.pushLeasedWithinLock(ctx, remote, reRootScratchPrefix+branch, branch, head)
+		outcome, err = s.pushLeasedWithinLock(ctx, remote, reRootScratchPrefix+branch, branch, head)
 		return err
 	})
-	return leased.Outcome, err
+	return outcome, err
 }
 
 // collectBelowTheCut reclaims the history below the cut once the sync branch

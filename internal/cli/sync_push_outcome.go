@@ -123,8 +123,13 @@ func classifyPushOutcome(outcome syncPushOutcome, err error) pushOutcomeRecord {
 			Remote:   outcome.remote,
 			Branch:   outcome.branch,
 		}
-	case errors.Is(err, store.ErrWorkspaceBusy):
-		return pushOutcomeRecord{Decision: pushDecisionWorkspaceBusy, Reason: err.Error()}
+	case errors.Is(err, store.ErrWorkspaceBusy) || errors.Is(outcome.pushErr, store.ErrWorkspaceBusy):
+		return pushOutcomeRecord{
+			Decision: pushDecisionWorkspaceBusy,
+			Reason:   firstError(err, outcome.pushErr).Error(),
+			Remote:   outcome.remote,
+			Branch:   outcome.branch,
+		}
 	case err != nil:
 		return pushOutcomeRecord{Decision: pushDecisionError, Reason: err.Error()}
 	case outcome.pushErr != nil:

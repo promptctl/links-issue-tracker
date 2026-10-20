@@ -502,8 +502,7 @@ They live beside the specs rather than in an engine because the schema is the co
 - `SyncStatus(ctx) (SyncStatusReport, error)` — local side only: build, position, pending changes, peers; **contacts no network**
 - `SyncFreshness(ctx, remote, branch string) (SyncFreshness, error)` — local branch position against a peer as of the last fetch or push; reads local refs, never contacts the network, which is what lets a read-only command call it
 - `SyncFetch(ctx, remote string, prune bool) error`
-- `SyncPush(ctx, remote, branch string, setUpstream, force bool) (SyncPushResult, error)`
-- `SyncPushFromClone(ctx, remote, branch string, setUpstream, force bool) (SyncPushResult, error)` — `SyncPush` for a store that is a frozen clone of a live one (the on-change mirror's push): a push the remote rejects is re-checked, and a remote already carrying the store's HEAD yields a `Superseded` result rather than an error.
+- `SyncPushFromClone(ctx, remote, branch string, setUpstream, force bool) (SyncPushResult, error)` — the push of a store that is a frozen clone of a live one (the on-change mirror's push): a push the remote rejects is re-checked, and a remote already carrying the store's HEAD yields a `Superseded` result rather than an error.
 - `SyncRemoteMirrorHolds(ctx, remote string, commits []string) (bool, error)`: whether this store's local mirror of the remote's data holds every one of the given git commit ids; no network. After a push from this store that landed without being superseded, a held advertised commit is this store's own push, never a peer's later one.
 - `SyncPull(ctx, remote, branch string) (SyncPullResult, error)`
 - `SyncReceive(ctx, remote, branch string) (SyncReceiveResult, error)` — fetches and fast-forwards when and only when local is strictly behind; never merges; a divergence it meets is reported, never healed here
@@ -515,10 +514,10 @@ They live beside the specs rather than in an engine because the schema is the co
 - `FollowedReRoots() []FollowedReRoot` — every re-root the engine applied to its own branch since it opened, to follow a re-rooted remote; an engine whose history is never re-rooted returns none.
 - `SyncKeepHistoryBound(ctx, remote, branch string, pushed SyncPushResult) SyncPushResult` — keeps the sync branch's history under its bound once `pushed` landed, whichever push landed it, and returns `pushed` with `AfterPush` set once it wrote a re-root and the bound's account joined to its `Maintenance`; fails nothing
 - `HistoryBounds() []HistoryBound` — what every `SyncKeepHistoryBound` since the engine opened did to keep the sync branch's history under its bound, oldest first; an engine whose history has no bound to keep returns none.
-- `ForkPointRecords() []ForkPointRecord` — what every fetch the engine ran since it opened did to each fork point before it moved the tracking ref, oldest first.
+- `ForkPointRecords() []ForkPointRecord` — what the engine did to each fork point since it opened, oldest first: every fetch before it moved the tracking ref, every collection below a cut, and every removal of a remote.
 - `ReconcileBases() []ReconcileBase` — the base every reconcile since the engine opened decided on, and where it came from, oldest first.
 - `GetSyncState(ctx) (SyncState, error)` / `RecordSyncState(ctx, state SyncState) error` — carry the staleness marker across commands
-- Compaction sits inside `Syncer` because `SyncCompactAndPush` compacts and pushes under a single commit-lock acquisition — one atomic operation not assemblable from `SyncCompact` + `SyncPush` (`internal/storage/capabilities.go`).
+- Compaction sits inside `Syncer` because `SyncCompactAndPush` compacts and pushes under a single commit-lock acquisition — one atomic operation not assemblable from `SyncCompact` plus a push (`internal/storage/capabilities.go`).
 - Nothing in `Syncer` resolves a divergence — that is `Reconciler` (`internal/storage/capabilities.go`).
 
 #### `Reconciler` (`internal/storage/capabilities.go`)

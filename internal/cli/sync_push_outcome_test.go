@@ -79,6 +79,27 @@ func TestPushOutcomeOf(t *testing.T) {
 			err:  fmt.Errorf("open sync store: %w", store.ErrWorkspaceBusy),
 			want: pushOutcomeRecord{Decision: pushDecisionWorkspaceBusy, Reason: "open sync store: workspace busy"},
 		},
+		{
+			// The push itself, or its retry after a follow, found the commit
+			// lock held: that busy is the push's own and comes back on pushErr.
+			name: "workspace busy mid-push records busy with the resolved ref, not error",
+			outcome: syncPushOutcome{
+				remote: "origin", branch: "master",
+				pushErr: fmt.Errorf("acquire the commit lock: %w", store.ErrWorkspaceBusy),
+			},
+			want: pushOutcomeRecord{Decision: pushDecisionWorkspaceBusy, Reason: "acquire the commit lock: workspace busy", Remote: "origin", Branch: "master"},
+		},
+		{
+			// A refusal whose follow-up check met a busy store is still a
+			// refusal: the store names the check's failure without wrapping it
+			// (joinFollowFailure), so the record says error and the banner warns.
+			name: "push refused with a busy follow-up check records error, not busy",
+			outcome: syncPushOutcome{
+				remote: "origin", branch: "master",
+				pushErr: fmt.Errorf("push remote \"origin\": rejected (and whether the remote re-rooted its history could not be checked: %v)", store.ErrWorkspaceBusy),
+			},
+			want: pushOutcomeRecord{Decision: pushDecisionError, Reason: "push remote \"origin\": rejected (and whether the remote re-rooted its history could not be checked: workspace busy)", Remote: "origin", Branch: "master"},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

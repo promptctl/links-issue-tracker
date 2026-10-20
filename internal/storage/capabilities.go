@@ -43,7 +43,7 @@ import (
 // capability of its own because SyncCompactAndPush compacts and pushes under a
 // single commit-lock acquisition — one atomic operation, so the push reflects
 // exactly the compacted state, and not something a caller could assemble from
-// SyncCompact plus SyncPush. Any engine offering this interface therefore
+// SyncCompact plus a push. Any engine offering this interface therefore
 // already owes compaction, so splitting the two explicit compaction methods out
 // would not let an engine decline one and keep the other; it would only move
 // them. Nor could SyncCompactAndPush follow them out, since it pushes and would
@@ -72,9 +72,8 @@ type Syncer interface {
 	SyncFreshness(ctx context.Context, remote string, branch string) (SyncFreshness, error)
 
 	SyncFetch(ctx context.Context, remote string, prune bool) error
-	SyncPush(ctx context.Context, remote string, branch string, setUpstream bool, force bool) (SyncPushResult, error)
 
-	// SyncPushFromClone is SyncPush for a store that is a frozen clone of a
+	// SyncPushFromClone is the push of a store that is a frozen clone of a
 	// live one — the on-change mirror's push. Nothing serializes it against
 	// the live store's own network traffic, so a push the remote rejects is
 	// re-checked before it is reported: when the remote already carries this
@@ -148,8 +147,9 @@ type Syncer interface {
 	// whose history has no bound to keep returns none.
 	HistoryBounds() []HistoryBound
 
-	// ForkPointRecords is what every fetch the engine ran since it opened did
-	// to each fork point before it moved the tracking ref, oldest first. A
+	// ForkPointRecords is what the engine did to each fork point since it
+	// opened, oldest first: every fetch before it moved the tracking ref,
+	// every collection below a cut, and every removal of a remote. A
 	// fork point is the remote head this checkout last knew while the two
 	// still shared history: the base a reconcile merges against once the
 	// remote re-roots above every commit this checkout holds.

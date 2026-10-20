@@ -236,8 +236,8 @@ func (s *Store) landProse(export model.Export, texts map[string]merge.ProseTexts
 }
 
 // SyncReconcile reconciles a DIVERGED local branch into LINEAR history using the
-// pure field-aware merge engine. It reads the three-way state (base = merge-base,
-// ours = local head, theirs = remote head) from Dolt, runs the engine, and — when
+// pure field-aware merge engine. It reads the three-way state (base = the plan's
+// base, ours = local head, theirs = remote head) from Dolt, runs the engine, and — when
 // every field resolves — adopts the remote head as the new base and replays the
 // folded local commits forward onto it under their own provenance (original
 // message, timestamp, author), settling with the reconcile's marker commit, so
@@ -329,7 +329,9 @@ type reconcilePlan struct {
 // captureReconcilePlan reads the reconcile decision state under the already-held
 // commit lock. When the branch is not diverged it returns early with diverged=false
 // and no anchors (nothing to reconcile); when diverged it captures the data branch,
-// both heads, and the merge-base in one pass. It is the single reader of this state,
+// both heads, and the base in one pass: the heads' merge base, or, when they
+// share no history, what the fork point offers, a base the remote head does not
+// descend from (reconcileBase). It is the single reader of this state,
 // so the three-way reconcile and the take-one resolver share one definition of the
 // divergence rather than each re-deriving it. [LAW:single-enforcer]
 func (s *Store) captureReconcilePlan(ctx context.Context, remote, branch string) (reconcilePlan, error) {
@@ -1138,27 +1140,16 @@ func (s *Store) cleanupReconcileScratch(ctx context.Context, dataBranch string, 
 // live and every such branch is an orphan. Every branch it lists is tried,
 // and every failure is returned, joined: what one costs is the caller's to
 // judge, since a reconcile can run beside a leftover branch and the history
-// bound cannot collect under one.
+// bound cannot collect under one. [LAW:one-source-of-truth] "under prefix"
+// is refHeadsUnder's literal match, never LIKE's wildcards.
 func (s *Store) deleteBranchesUnder(ctx context.Context, prefix string) error {
-	rows, err := s.db.QueryContext(ctx, `SELECT name FROM dolt_branches WHERE name LIKE ?`, prefix+"%")
+	under, err := refHeadsUnder(ctx, s.db, `SELECT name, hash FROM dolt_branches`, prefix)
 	if err != nil {
-		return fmt.Errorf("list the branches under %q: %w", prefix, err)
-	}
-	var names []string
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			rows.Close()
-			return fmt.Errorf("scan a branch under %q: %w", prefix, err)
-		}
-		names = append(names, name)
+		return err
 	}
 	var errs []error
-	if err := rows.Err(); err != nil {
-		errs = append(errs, fmt.Errorf("iterate the branches under %q: %w", prefix, err))
-	}
-	rows.Close()
-	for _, name := range names {
+	for rest := range under {
+		name := prefix + rest
 		if err := execProcedureDiscard(ctx, s.db, "DOLT_BRANCH", "-D", name); err != nil {
 			errs = append(errs, fmt.Errorf("delete branch %q: %w", name, err))
 		}

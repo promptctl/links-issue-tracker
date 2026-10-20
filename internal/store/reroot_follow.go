@@ -51,7 +51,8 @@ import (
 // settle and reconcile cores never do, because SyncPull composes them under
 // one commit lock. The follow takes Dolt's LOCK to rewrite the branch, closing
 // and reopening this store's own engine around it, so it refuses to run under
-// the commit lock: LOCK comes before the commit lock (doc.go).
+// the commit lock, whether or not this run would follow: LOCK comes before
+// the commit lock (doc.go).
 // [LAW:no-ambient-temporal-coupling]
 func (s *Store) followRemoteReRoot(ctx context.Context, remote, branch string, entry storage.SyncEntry) (storage.FollowedReRoot, error) {
 	trimmedRemote, err := requireSyncArg("remote", remote)
@@ -62,8 +63,8 @@ func (s *Store) followRemoteReRoot(ctx context.Context, remote, branch string, e
 	if err != nil {
 		return storage.FollowedReRoot{}, err
 	}
-	if since, held := commitLockHeldSince(ctx); held {
-		return storage.FollowedReRoot{}, fmt.Errorf("follow a re-root of %s/%s: the commit lock is held (since %s), and the follow takes Dolt's LOCK, which is taken before the commit lock or not at all", trimmedRemote, trimmedBranch, since.Format("15:04:05.000"))
+	if err := refuseLOCKUnderCommitLock(ctx); err != nil {
+		return storage.FollowedReRoot{}, wrapFollowErr(trimmedRemote, trimmedBranch, err)
 	}
 	local, unrelated, err := s.unrelatedToRemote(ctx, trimmedRemote, trimmedBranch)
 	if err != nil {
@@ -147,6 +148,9 @@ func (s *Store) unrelatedToRemote(ctx context.Context, remote, branch string) (l
 // caller's work, so a deadline that cut the work does not cut it; the
 // engine open's own wait on Dolt's LOCK bounds it.
 func (s *Store) withEngineClosed(ctx context.Context, write func(holdCtx context.Context, ddb *doltdb.DoltDB) error) error {
+	if err := refuseLOCKUnderCommitLock(ctx); err != nil {
+		return err
+	}
 	reopenCtx := context.WithoutCancel(ctx)
 	if err := s.closeEngine(); err != nil {
 		return errors.Join(fmt.Errorf("close the engine: %w", err), s.reopenEngine(reopenCtx))

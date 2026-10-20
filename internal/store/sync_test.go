@@ -297,12 +297,71 @@ func TestSyncRemoteValidation(t *testing.T) {
 			},
 			wantErr: "remote is required",
 		},
+		{
+			name: "push requires branch",
+			run: func() error {
+				_, err := syncStore.SyncPush(ctx, "origin", "   ", false, false)
+				return err
+			},
+			wantErr: "branch is required",
+		},
+		{
+			name: "compacting push requires branch",
+			run: func() error {
+				_, err := syncStore.SyncCompactAndPush(ctx, "origin", "   ", false, false)
+				return err
+			},
+			wantErr: "branch is required",
+		},
 	}
 
 	for _, tc := range testCases {
 		if err := tc.run(); err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 			t.Fatalf("%s error = %v, want %q", tc.name, err, tc.wantErr)
 		}
+	}
+}
+
+// TestAFailedCheckAfterARefusalDoesNotReclassifyIt pins that a refused push
+// keeps its own class when the check after it failed: a follow that met a
+// busy store or a cancellation is named in the text, but errors.Is answers
+// for the refusal alone, so the push-outcome record never calls a refusal
+// busy or canceled.
+func TestAFailedCheckAfterARefusalDoesNotReclassifyIt(t *testing.T) {
+	t.Parallel()
+	refusal := pushRefusedError{remote: "origin", cause: errors.New("permission denied")}
+	for _, check := range []error{
+		fmt.Errorf("fetch: %w", ErrWorkspaceBusy),
+		fmt.Errorf("fetch: %w", context.Canceled),
+	} {
+		for name, joined := range map[string]error{
+			"joinFollowFailure": joinFollowFailure(refusal, check),
+			"unjudgedRefusal":   unjudgedRefusal(refusal, check),
+		} {
+			if errors.Is(joined, ErrWorkspaceBusy) || errors.Is(joined, context.Canceled) {
+				t.Errorf("%s(refusal, %v) matches the check's class: %v", name, check, joined)
+			}
+			if !errors.As(joined, new(pushRefusedError)) || !strings.Contains(joined.Error(), check.Error()) {
+				t.Errorf("%s(refusal, %v) = %v; want the refusal, naming the check", name, check, joined)
+			}
+		}
+	}
+}
+
+// TestSyncCompactAndPushRefusesABlankBranchBeforeAnyWork pins where the
+// compacting push refuses its arguments: before the commit lock and the
+// compaction under it. A context already canceled fails any work that
+// starts, so only a refusal that runs first reports the blank branch.
+func TestSyncCompactAndPushRefusesABlankBranchBeforeAnyWork(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openSyncOrFatal(t, ctx, migratedDoltDir(t))
+	defer func() { _ = st.Close() }()
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	_, err := st.SyncCompactAndPush(canceled, "origin", "   ", false, false)
+	if err == nil || err.Error() != "branch is required" {
+		t.Fatalf("SyncCompactAndPush(blank branch) error = %v, want only %q", err, "branch is required")
 	}
 }
 

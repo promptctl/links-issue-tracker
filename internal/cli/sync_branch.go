@@ -73,7 +73,10 @@ func knownSyncBranch(ctx context.Context, ws workspace.Info, remote string) (str
 	}
 	notKnown := syncBranchNotKnownError{remote: remote}
 	if readErr != nil && !errors.Is(readErr, fs.ErrNotExist) {
-		return "", fmt.Errorf("%w; the record of what the remote last said is unreadable: %w", notKnown, readErr)
+		// The text says what is not known, but the error is the unreadable
+		// record's alone: a record that would name the branch is a fault,
+		// not the absence a caller skips on.
+		return "", fmt.Errorf("%v; the record of what the remote last said is unreadable: %w", notKnown, readErr)
 	}
 	return "", notKnown
 }

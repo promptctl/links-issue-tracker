@@ -565,10 +565,10 @@ type UnrelatedInventory struct {
 // wholesale. It is the field-level resolve concept (internal/merge, twoTier's Tier-2
 // pick between two sides that both moved) lifted from field scope to the whole store:
 // with no merge-base every issue is "changed on both sides from empty", so the only
-// resolution is which side to take entire. The epic's later `combine` is a third
-// value of this same type, flowing through the same reconcile boundary, never a
-// parallel mode. [LAW:types-are-the-program] the value carries the whole decision;
-// there is no legal take with no side.
+// resolution is which side to take entire. Combining the two is not a side, and
+// is its own verb (Reconciler.SyncReconcileCombine).
+// [LAW:types-are-the-program] the value carries the whole decision; there is no
+// legal take with no side.
 type UnrelatedResolution string
 
 const (
