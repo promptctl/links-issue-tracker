@@ -236,7 +236,10 @@ func readFullCommit(ctx context.Context, ddb *doltdb.DoltDB, addr hash.Hash) (*d
 // refuseLOCKUnderCommitLock is the package's lock order where a write from
 // outside the engine takes Dolt's LOCK: before the commit lock or not at all.
 // holdForRefWrite and withEngineClosed, the two places that take LOCK for
-// such a write, both ask it before they take or give up anything.
+// such a write, both ask it before they take or give up anything. The follow
+// and the history bound reach those places only on the runs that rewrite
+// history, so they ask it on entry too: a caller holding the commit lock is
+// refused on every run, not only on the rare one that re-roots.
 // [LAW:single-enforcer]
 func refuseLOCKUnderCommitLock(ctx context.Context) error {
 	if since, held := commitLockHeldSince(ctx); held {

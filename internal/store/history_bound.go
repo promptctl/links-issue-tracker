@@ -97,6 +97,9 @@ func (s *Store) keepHistoryBound(ctx context.Context, b *storage.HistoryBound) e
 	if _, err := requireSyncArg("branch", b.Branch); err != nil {
 		return err
 	}
+	if err := refuseLOCKUnderCommitLock(ctx); err != nil {
+		return err
+	}
 	trackingRef := fmt.Sprintf("remotes/%s/%s", b.Remote, b.Branch)
 	if err := s.db.QueryRowContext(ctx, `SELECT commit_hash, commit_order FROM dolt_log(?) LIMIT 1`, trackingRef).Scan(&b.Head, &b.Height); err != nil {
 		return fmt.Errorf("read the height of %s: %w", trackingRef, err)

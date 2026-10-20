@@ -638,6 +638,36 @@ func TestSyncDoesNotFollowWhenTwoLocalCommitsRebuildToTheRoot(t *testing.T) {
 	}
 }
 
+// TestFollowAndBoundRefuseUnderTheCommitLockOnEveryRun pins where the lock
+// order is asked for the two operations that take Dolt's LOCK only on the
+// runs that rewrite history: on entry. Neither run here would rewrite
+// anything (no remote was ever fetched), so only an entry refusal reports the
+// misplaced caller.
+func TestFollowAndBoundRefuseUnderTheCommitLockOnEveryRun(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openSyncOrFatal(t, ctx, migratedDoltDir(t))
+	defer func() { _ = st.Close() }()
+	err := st.withCommitLock(ctx, func(ctx context.Context) error {
+		_, err := st.followRemoteReRoot(ctx, "origin", "master", storage.SyncEntryPull)
+		return err
+	})
+	if err == nil || !strings.Contains(err.Error(), "commit lock is held") {
+		t.Fatalf("follow under the commit lock error = %v, want the lock-order refusal", err)
+	}
+	var bound storage.HistoryBound
+	err = st.withCommitLock(ctx, func(ctx context.Context) error {
+		bound = st.boundHistory(ctx, "origin", "master")
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bound.Err == nil || !strings.Contains(bound.Err.Error(), "commit lock is held") {
+		t.Fatalf("bound under the commit lock error = %v, want the lock-order refusal", bound.Err)
+	}
+}
+
 // TestWithEngineClosedRefusesUnderTheCommitLock pins the lock order for the
 // rewrites a follow and the bound's re-root run: they take Dolt's LOCK, which
 // comes before the commit lock, so a caller holding the commit lock is

@@ -51,7 +51,8 @@ import (
 // settle and reconcile cores never do, because SyncPull composes them under
 // one commit lock. The follow takes Dolt's LOCK to rewrite the branch, closing
 // and reopening this store's own engine around it, so it refuses to run under
-// the commit lock: LOCK comes before the commit lock (doc.go).
+// the commit lock, whether or not this run would follow: LOCK comes before
+// the commit lock (doc.go).
 // [LAW:no-ambient-temporal-coupling]
 func (s *Store) followRemoteReRoot(ctx context.Context, remote, branch string, entry storage.SyncEntry) (storage.FollowedReRoot, error) {
 	trimmedRemote, err := requireSyncArg("remote", remote)
@@ -61,6 +62,9 @@ func (s *Store) followRemoteReRoot(ctx context.Context, remote, branch string, e
 	trimmedBranch, err := requireSyncArg("branch", branch)
 	if err != nil {
 		return storage.FollowedReRoot{}, err
+	}
+	if err := refuseLOCKUnderCommitLock(ctx); err != nil {
+		return storage.FollowedReRoot{}, wrapFollowErr(trimmedRemote, trimmedBranch, err)
 	}
 	local, unrelated, err := s.unrelatedToRemote(ctx, trimmedRemote, trimmedBranch)
 	if err != nil {
