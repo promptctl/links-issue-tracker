@@ -297,6 +297,22 @@ func TestSyncRemoteValidation(t *testing.T) {
 			},
 			wantErr: "remote is required",
 		},
+		{
+			name: "push requires branch",
+			run: func() error {
+				_, err := syncStore.SyncPush(ctx, "origin", "   ", false, false)
+				return err
+			},
+			wantErr: "branch is required",
+		},
+		{
+			name: "compacting push requires branch",
+			run: func() error {
+				_, err := syncStore.SyncCompactAndPush(ctx, "origin", "   ", false, false)
+				return err
+			},
+			wantErr: "branch is required",
+		},
 	}
 
 	for _, tc := range testCases {
