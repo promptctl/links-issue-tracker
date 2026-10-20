@@ -88,21 +88,32 @@ func TestAppendKeepsEveryValueInOrder(t *testing.T) {
 }
 
 // A key Set replaces and a key Append accumulates are separate, so the same
-// name written both ways keeps both values, whichever came first.
+// name written both ways keeps both values, whichever writer of facts it is
+// (Set, Record, or the End Finish merges) and whichever came first.
 func TestASetAndAnAppendOfOneKeyBothSurvive(t *testing.T) {
-	for _, setFirst := range []bool{true, false} {
+	const key = "push.outcomes"
+	set := func(ctx context.Context) { Set(ctx, key, "decided") }
+	record := func(ctx context.Context) { Record(ctx, map[string]any{key: "decided"}, nil) }
+	none := func(context.Context) {}
+	for _, tc := range []struct {
+		name          string
+		before, after func(context.Context)
+		end           End
+	}{
+		{"Set, then Append", set, none, End{}},
+		{"Append, then Set", none, set, End{}},
+		{"Record, then Append", record, none, End{}},
+		{"Append, then Record", none, record, End{}},
+		{"Append, then the End's facts", none, none, End{Facts: map[string]any{key: "decided"}}},
+	} {
 		recorder := Begin(Event{})
 		ctx := With(context.Background(), recorder)
-		if setFirst {
-			Set(ctx, "push.outcomes", "decided")
-		}
-		Append(ctx, "push.outcomes", "landed")
-		if !setFirst {
-			Record(ctx, map[string]any{"push.outcomes": "decided"}, nil)
-		}
-		ev := recorder.Finish(End{})
-		if ev.Facts["push.outcomes"] != "decided" || len(ev.Occurrences["push.outcomes"]) != 1 || ev.Occurrences["push.outcomes"][0] != "landed" {
-			t.Errorf("set first %t: Facts = %#v, Occurrences = %#v; want the set value and the appended one both kept", setFirst, ev.Facts, ev.Occurrences)
+		tc.before(ctx)
+		Append(ctx, key, "landed")
+		tc.after(ctx)
+		ev := recorder.Finish(tc.end)
+		if ev.Facts[key] != "decided" || len(ev.Occurrences[key]) != 1 || ev.Occurrences[key][0] != "landed" {
+			t.Errorf("%s: Facts = %#v, Occurrences = %#v; want the set value and the appended one both kept", tc.name, ev.Facts, ev.Occurrences)
 		}
 	}
 }

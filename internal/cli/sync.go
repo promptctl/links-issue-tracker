@@ -84,8 +84,8 @@ func openSyncSessionAt(ctx context.Context, databasePath, workspaceID string) (s
 	}, nil
 }
 
-// reportEventValues appends one value per item to the command's list fact
-// key: what a sync session's engine did, each item once, in the order it
+// reportEventValues appends one value per item to the event's occurrences
+// under key: what a sync session's engine did, each item once, in the order it
 // happened. A session that did none of it leaves the list empty but present,
 // so "none happened" reads apart from "nothing looked". Every sync session
 // closes through openSyncSessionAt, so no entry point has to remember to.

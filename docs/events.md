@@ -89,7 +89,6 @@ lines here for reading:
 | `sink_rotation_error` | Present only when `sink_rotation` is `failed`: why. |
 | `counts` | The command's counts. A count of zero is written as `0`, so "ran and found none" is distinguishable from a command that does not count that thing. |
 | `facts` | What the command decided, under keys prefixed with the command's name, with `statusline.` for what it wrote to the statusline file, with `workflows.` for the workflow occasion it fired, with `config.` for its config check, or with `schema_ahead.` for a refusal because the workspace's schema is ahead of this lit. |
-
 | `occurrences` | What can happen more than once in one invocation, under keys of their own: one entry per occurrence, in the order they happened. A key that was looked at and found nothing is `[]`; an absent key was not looked at. A sync command records `push.outcomes`, `receive.outcomes`, `reroot.follows`, `fork_point.records`, `reconcile.bases`, `stranded_writes.commits` and `history_bound.records` here. A key in `occurrences` and the same key in `facts` are two different values. |
 
 A command that records no counts, facts or occurrences writes `{}` for each.
