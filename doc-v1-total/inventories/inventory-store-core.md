@@ -4270,17 +4270,17 @@ The dump is a **JSON** document, not SQL and not TSV. The only producer path to 
 
 Signature `DumpRaw(ctx, doltRootDir string, workspaceID string) (RawDump, error)` with a named error return (`rawdump.go`).
 
-1. `openInitialized(ctx, doltRootDir, workspaceID, engineRead)` (`store.go`), the open `OpenForRead` and `Unquarantine` share, in this order:
-2. `validateOpenArgs(doltRootDir, workspaceID)` — rejects an empty/whitespace root dir with `dolt root dir is required` (`store.go`) and an empty/whitespace workspace id with `workspace id is required` (`store.go`).
-3. `acquireWorkspaceShared(ctx, doltRootDir)`, through `acquireLiveStoreHold` (`pushed_head.go`) — a **shared** workspace lock, excluding directory rotators such as `lit snapshots restore`. On contention the error text is `a lit operation is rebuilding this workspace's Dolt directory (e.g. snapshots restore, an init backlog adopt, or lifeboat recover); retry after it completes: %w` wrapping `ErrWorkspaceBusy` (`internal/store/workspace_lock.go`).
-4. `requireInitializedWorkspace(doltRootDir)`: `os.ErrNotExist` → the package sentinel `ErrWorkspaceNotInitialized` (`workspace_initialized.go`), `repository not initialized with lit — run 'lit init' first`; any other stat error → `stat database dir: %w`.
-5. `requireNoPendingAdopt(doltRootDir)` — run **after** the lock is taken; either refusal is joined with the release. Its message (`internal/store/adopt.go`): ``%w: a `lit init` backlog adopt was interrupted before completing (%s; marker %s), so the on-disk store is that adopt's leftover partial state, not a usable backlog. Run `lit init` to retry: it sets the leftover aside and re-clones the remote backlog. If the remote no longer carries the backlog, delete %s to abandon the adopt and start fresh``, with the `%s` context either the literal `a backlog adopt` or `the adopt of %s/%s started %s` (`adopt.go`); a marker read failure yields `read adopt-pending marker: %w` (`adopt.go`).
-6. `openStoreConnection(ctx, doltRootDir, workspaceID, engineRead)` — **no `migrate()` call**, which is what lets it read a workspace `store.Open` refuses (`rawdump.go`, doc at `rawdump.go`). `engineRead` is the first `engineAccess` value (`store.go`). The store then owns the hold.
-7. Deferred `s.Close()` (`rawdump.go`) — the engine closed (its error dropped when it is `context.Canceled`), then the workspace hold released — whose error is joined into the return.
-8. `readDoltHead(ctx, s.db)` — mandatory, not best-effort (`rawdump.go`, rationale `rawdump.go`).
-9. `listTables(ctx, s.db)` (`rawdump.go`).
-10. `dumpTable` per table, in the order `listTables` returned; the first table error aborts the whole dump (`rawdump.go`).
-11. Returns `RawDump{WorkspaceID: workspaceID, DoltHead: head, Tables: tables}` (`rawdump.go`).
+1. `openInitialized(ctx, doltRootDir, workspaceID, engineRead)` (`store.go`), the open `OpenForRead` and `Unquarantine` share; it runs, in this order:
+   1. `validateOpenArgs(doltRootDir, workspaceID)` — rejects an empty/whitespace root dir with `dolt root dir is required` (`store.go`) and an empty/whitespace workspace id with `workspace id is required` (`store.go`).
+   2. `acquireWorkspaceShared(ctx, doltRootDir)`, through `acquireLiveStoreHold` (`pushed_head.go`) — a **shared** workspace lock, excluding directory rotators such as `lit snapshots restore`. On contention the error text is `a lit operation is rebuilding this workspace's Dolt directory (e.g. snapshots restore, an init backlog adopt, or lifeboat recover); retry after it completes: %w` wrapping `ErrWorkspaceBusy` (`internal/store/workspace_lock.go`).
+   3. `requireInitializedWorkspace(doltRootDir)`: `os.ErrNotExist` → the package sentinel `ErrWorkspaceNotInitialized` (`workspace_initialized.go`), `repository not initialized with lit — run 'lit init' first`; any other stat error → `stat database dir: %w`.
+   4. `requireNoPendingAdopt(doltRootDir)` — run **after** the lock is taken; either refusal is joined with the release. Its message (`internal/store/adopt.go`): ``%w: a `lit init` backlog adopt was interrupted before completing (%s; marker %s), so the on-disk store is that adopt's leftover partial state, not a usable backlog. Run `lit init` to retry: it sets the leftover aside and re-clones the remote backlog. If the remote no longer carries the backlog, delete %s to abandon the adopt and start fresh``, with the `%s` context either the literal `a backlog adopt` or `the adopt of %s/%s started %s` (`adopt.go`); a marker read failure yields `read adopt-pending marker: %w` (`adopt.go`).
+   5. `openStoreConnection(ctx, doltRootDir, workspaceID, access)` with the `access` the caller passed (`engineRead` here) — **no `migrate()` call**, which is what lets it read a workspace `store.Open` refuses (`rawdump.go`, doc at `rawdump.go`). `engineRead` is the first `engineAccess` value (`store.go`). The store then owns the hold.
+2. Deferred `s.Close()` (`rawdump.go`) — the engine closed (its error dropped when it is `context.Canceled`), then the workspace hold released — whose error is joined into the return.
+3. `readDoltHead(ctx, s.db)` — mandatory, not best-effort (`rawdump.go`, rationale `rawdump.go`).
+4. `listTables(ctx, s.db)` (`rawdump.go`).
+5. `dumpTable` per table, in the order `listTables` returned; the first table error aborts the whole dump (`rawdump.go`).
+6. Returns `RawDump{WorkspaceID: workspaceID, DoltHead: head, Tables: tables}` (`rawdump.go`).
 
 The dump is **read-only** on the database — the only SQL issued is the three SELECT-family statements below; nothing is written, committed, reset, or checked out (`rawdump.go`).
 
