@@ -44,7 +44,7 @@ data — described as assets, not as documentation of behavior).
 | 6 | `ExitNoWork` (`exit.go`) | `Exhausted` (`error_output.go`), `NoWork` (`error_output.go`), any `model.StateRequestError` when `Satisfied()` (`error_output.go`) |
 | 7 | `ExitCorruption` (`exit.go`) | `CorruptionError` (`error_output.go`), `storage.ParentCycleError` (`error_output.go`) |
 
-`ExitCode` runs these checks in a fixed order and the first match wins; the order is listed in `inventory-cli-issue.md` §1.8.
+`ExitCode` reads the code off the reason `commandErrorReason` returns, whose checks run in a fixed order with the first match winning; the order is listed in `inventory-cli-issue.md` §1.9.
 
 ### 0.4 Command registry rows relevant to operations (`internal/cli/register.go`)
 

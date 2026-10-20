@@ -4,8 +4,8 @@ package cli
 // carries a machine-dispatchable classification constructed by handlers at the
 // point of failure. One classifier dispatches on these types via errors.As,
 // commandErrorReason (error_output.go), and the exit code and remediation both
-// follow from the reason it returns; nothing inspects message text. Feature-specific errors (e.g. SyncFailureError) live
-// with their features.
+// follow from the reason it returns; nothing inspects message text.
+// Feature-specific errors (e.g. SyncFailureError) live with their features.
 //
 // [LAW:decomposition] The taxonomy has its own file so the flag-parsing
 // framework, the business command handlers, and the typed error taxonomy do
@@ -34,7 +34,7 @@ func (e CorruptionError) Error() string { return e.Message }
 func (e CorruptionError) Unwrap() error { return e.Cause }
 
 // UsageError signals wrong CLI usage (bad argument count, unrecognised flag).
-// [LAW:types-are-the-program] The type carries the ExitUsage classification so sinks dispatch on type.
+// [LAW:types-are-the-program] The type is what the classifier dispatches on to reach usage_error and ExitUsage.
 type UsageError struct {
 	Message string
 }

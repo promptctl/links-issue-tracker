@@ -178,8 +178,9 @@ func (f SyncFailure) persistent() bool {
 
 // SyncFailureError makes a SyncFailure returnable from a command: its Error() is
 // the full contract block, so the top-level error sink prints the same block a
-// passive surface prints inline, and ExitCode maps it to the conflict exit, or,
-// for a remote-schema-ahead block, to the schema-ahead exit it unwraps to. One
+// passive surface prints inline, and it classifies as sync_divergence, on the
+// conflict exit, or, for a remote-schema-ahead block, as the schema-ahead
+// reason it unwraps to. One
 // value, one rendering, whether it flows out as an error or is printed directly.
 // [LAW:single-enforcer]
 type SyncFailureError struct {

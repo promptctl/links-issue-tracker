@@ -13,9 +13,9 @@ import (
 //
 // [LAW:one-source-of-truth] This sentence has one home, here, so no copy of it
 // can drift.
-// [LAW:types-are-the-program] It exists so the CLI's reason and exit-code sinks
-// dispatch on the condition itself; a bare fmt.Errorf would carry no type, so
-// those sinks could not recognize a terminal precondition and would tell the
+// [LAW:types-are-the-program] It exists so the CLI's error classifier
+// dispatches on the condition itself; a bare fmt.Errorf would carry no type, so
+// the classifier could not recognize a terminal precondition and would tell the
 // agent to retry it forever.
 var ErrWorkspaceNotInitialized = errors.New("repository not initialized with lit — run 'lit init' first")
 

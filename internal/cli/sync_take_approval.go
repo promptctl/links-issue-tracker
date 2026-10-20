@@ -10,8 +10,8 @@ import (
 
 // ownerApprovalRefusalError makes the store's take gate returnable from the
 // command: its Error() is the full agent-facing refusal block, so the top-level
-// error sink prints it exactly as SyncFailureError's block prints, and ExitCode
-// maps it to the conflict exit — the divergence is still unresolved, which is
+// error sink prints it exactly as SyncFailureError's block prints, and its
+// reason carries the conflict exit — the divergence is still unresolved, which is
 // what that exit already means. [LAW:single-enforcer] one value, one rendering.
 type ownerApprovalRefusalError struct {
 	Approval       store.OwnerApprovalRequiredError

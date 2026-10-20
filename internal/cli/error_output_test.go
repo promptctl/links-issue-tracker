@@ -262,14 +262,15 @@ func TestCommandErrorReason(t *testing.T) {
 }
 
 // TestCommandReasonVocabulary holds the published reason list to the code:
-// the constants in error_output.go, reasonCodes, and the table in
+// the reasons error_output.go declares, reasonCodes, and the table in
 // docs/cli-reference.md name the same tokens, and the doc gives each the code
 // reasonCodes does. A script branches on these tokens, so a reason added,
 // renamed, or moved to another code without the reference changing is a
 // broken contract, not a doc nit.
 func TestCommandReasonVocabulary(t *testing.T) {
 	t.Parallel()
-	file, err := parser.ParseFile(token.NewFileSet(), "error_output.go", nil, 0)
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "error_output.go", nil, 0)
 	if err != nil {
 		t.Fatalf("parse error_output.go: %v", err)
 	}
@@ -288,10 +289,20 @@ func TestCommandReasonVocabulary(t *testing.T) {
 				if ident, ok := reason.Type.(*ast.Ident); !ok || ident.Name != "commandReason" {
 					continue
 				}
-				raw := reason.Elts[0].(*ast.BasicLit).Value
-				lit, err := strconv.Unquote(raw)
+				// Only the unkeyed {token, code} form refuses to compile
+				// without its code; a keyed or short literal compiles with
+				// exit 0 and would report a failed command as a success.
+				var tok *ast.BasicLit
+				if len(reason.Elts) == 2 {
+					tok, _ = reason.Elts[0].(*ast.BasicLit)
+				}
+				if tok == nil || tok.Kind != token.STRING {
+					t.Errorf("%s: a reason must be declared as commandReason{\"token\", ExitX}", fset.Position(reason.Pos()))
+					continue
+				}
+				lit, err := strconv.Unquote(tok.Value)
 				if err != nil {
-					t.Fatalf("unquote %s: %v", raw, err)
+					t.Fatalf("unquote %s: %v", tok.Value, err)
 				}
 				declared[lit] = true
 			}
@@ -304,7 +315,7 @@ func TestCommandReasonVocabulary(t *testing.T) {
 	}
 	for reason := range reasonCodes {
 		if !declared[reason] {
-			t.Errorf("reasonCodes lists %q; error_output.go declares no such constant", reason)
+			t.Errorf("reasonCodes lists %q; error_output.go declares no such reason", reason)
 		}
 	}
 
