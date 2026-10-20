@@ -31,6 +31,7 @@ func TestCodeSpansReadsWhatGitHubRenders(t *testing.T) {
 		{"a backslash-escaped backtick in prose", "prose with an escaped \\` backtick and `a span`\n", []string{"a span:1"}},
 		{"a span opening at a line's end after a word", "word`\n tail` here\n", []string{"tail:1"}},
 		{"a span closing at a line's start before a word", "`a\n`b c\n", []string{"a:1"}},
+		{"a span whose opening run ends a line", "intro `\nfoo bar\n` end\n\n``\nbaz qux\n`` end\n", []string{"foo bar:1", "baz qux:5"}},
 		{"a span wrapped across a CRLF line ending", "a `run\r\nit` b\r\n", []string{"run it:1"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

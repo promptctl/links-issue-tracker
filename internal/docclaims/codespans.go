@@ -59,12 +59,13 @@ func CodeSpans(src string) ([]Span, error) {
 				return ast.WalkStop, fmt.Errorf("unclosed code fence opened at line %d", lineAt(opened.(int)))
 			}
 		case *ast.CodeSpan:
-			raw, start := spanBody(n, source)
+			raw := spanBody(n, source)
 			body := lineEnding.Replace(raw)
+			open, _ := runs(n, source)
 			if cutShort(n, raw, source) {
-				return ast.WalkStop, fmt.Errorf("line %d: the code span %q is cut short by a backtick inside it; quote the whole message in a longer backtick run (``…``)", lineAt(start), body)
+				return ast.WalkStop, fmt.Errorf("line %d: the code span %q is cut short by a backtick inside it; quote the whole message in a longer backtick run (``…``)", lineAt(open), body)
 			}
-			out = append(out, Span{Text: strings.TrimSpace(body), Line: lineAt(start)})
+			out = append(out, Span{Text: strings.TrimSpace(body), Line: lineAt(open)})
 			return ast.WalkSkipChildren, nil
 		case *ast.Text:
 			if strayBacktick(n.Segment, source) {
@@ -83,14 +84,13 @@ func CodeSpans(src string) ([]Span, error) {
 // renders as.
 var lineEnding = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ")
 
-// spanBody is a span's text as written, line endings and all, and the offset
-// of its first character.
-func spanBody(n *ast.CodeSpan, source []byte) (string, int) {
+// spanBody is a span's text as written, line endings and all.
+func spanBody(n *ast.CodeSpan, source []byte) string {
 	var body strings.Builder
 	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
 		body.Write(c.(*ast.Text).Segment.Value(source))
 	}
-	return body.String(), n.FirstChild().(*ast.Text).Segment.Start
+	return body.String()
 }
 
 // strayBacktick reports a backtick in prose that no backslash escapes: one
@@ -129,7 +129,7 @@ func cutShort(n *ast.CodeSpan, raw string, source []byte) bool {
 	if next == nil {
 		return false
 	}
-	nextRaw, _ := spanBody(next, source)
+	nextRaw := spanBody(next, source)
 	nextOpen, _ := runs(next, source)
 	gap := source[close:nextOpen]
 	return (trail || nextRaw[0] == ' ') && !unicode.IsSpace(firstRune(gap)) && !unicode.IsSpace(lastRune(gap))
