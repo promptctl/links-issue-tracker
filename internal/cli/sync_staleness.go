@@ -83,23 +83,27 @@ type remoteFetch struct {
 	age    time.Duration
 }
 
-// lastTargetFetch is the last successful fetch of the remote the freshness
-// reads report on (freshnessSyncRemote), the one both staleness banners warn
-// about. ok is false when that remote was never fetched here, or when there
-// is no such remote to read: no remote configured, or remotes that cannot be
-// read or resolved. The banner is best-effort, so an unresolved remote prints
-// no fetch line, as it prints no freshness line; `lit doctor` names why.
-func lastTargetFetch(ctx context.Context, ws workspace.Info, now time.Time) (remoteFetch, bool) {
+// lastTargetFetch is the last successful fetch of the remote lit syncs with
+// (defaultSyncRemote), the one both staleness banners warn about. nil when
+// that remote was never fetched here, or when there is no such remote to
+// read: no remote configured, or remotes that cannot be read or resolved. The
+// banner is best-effort, so an unresolved remote prints no fetch line, as it
+// prints no freshness line; `lit doctor` names why.
+// [LAW:types-are-the-program] a known fetch always names its remote.
+func lastTargetFetch(ctx context.Context, ws workspace.Info, now time.Time) *remoteFetch {
 	gitRemotes, err := workspace.GitRemotes(ctx, ws.RootDir)
 	if err != nil {
-		return remoteFetch{}, false
+		return nil
 	}
-	remote, ok, err := freshnessSyncRemote(ctx, ws, gitRemotes)
+	remote, ok, err := defaultSyncRemote(ctx, ws, gitRemotes)
 	if err != nil || !ok {
-		return remoteFetch{}, false
+		return nil
 	}
 	age, ok := lastFetchSuccessAge(ws, remote, now)
-	return remoteFetch{remote: remote, age: age}, ok
+	if !ok {
+		return nil
+	}
+	return &remoteFetch{remote: remote, age: age}
 }
 
 // syncStalenessLines renders zero or more prominent warning lines from a sync
@@ -121,7 +125,7 @@ func lastTargetFetch(ctx context.Context, ws workspace.Info, now time.Time) (rem
 // answers; a NeverSynced workspace is left to the second condition below (a
 // never-fetched-in-threshold remote still warns) rather than a speculative
 // third case.
-func syncStalenessLines(report doctorSyncReport, fetch remoteFetch, fetchKnown bool) []string {
+func syncStalenessLines(report doctorSyncReport, fetch *remoteFetch) []string {
 	var lines []string
 	if f := report.Freshness; report.Kind == doctorSyncResolved && f.State() == storage.SyncAhead {
 		lines = append(lines, fmt.Sprintf(
@@ -129,15 +133,15 @@ func syncStalenessLines(report doctorSyncReport, fetch remoteFetch, fetchKnown b
 			f.Ahead, f.Remote, f.Branch,
 		))
 	}
-	// The fetch age is its own read of the freshness remote, so an unresolved
+	// The fetch age is its own read of the sync remote, so an unresolved
 	// report still warns about it.
-	return append(lines, fetchStalenessLines(fetch, fetchKnown)...)
+	return append(lines, fetchStalenessLines(fetch)...)
 }
 
 // fetchStalenessLines renders the stale-fetch warning, naming the remote the
-// fetch is of: a fetch is per remote, not per branch.
-func fetchStalenessLines(fetch remoteFetch, known bool) []string {
-	if !known || fetch.age < unfetchedStalenessThreshold {
+// fetch is of: a fetch is per remote, not per branch. nil is no known fetch.
+func fetchStalenessLines(fetch *remoteFetch) []string {
+	if fetch == nil || fetch.age < unfetchedStalenessThreshold {
 		return nil
 	}
 	return []string{fmt.Sprintf(
@@ -206,7 +210,7 @@ func oneLineReason(reason string) string {
 // itself a diagnostic. [LAW:no-silent-failure] [LAW:effects-at-boundaries]
 func printStalenessWarning(ctx context.Context, w io.Writer, ws workspace.Info, st storage.Store, now time.Time) error {
 	report := resolveDoctorSyncFreshness(ctx, ws, st)
-	fetch, fetchKnown := lastTargetFetch(ctx, ws, now)
+	fetch := lastTargetFetch(ctx, ws, now)
 	// Build drift leads the whole banner. It is the deepest of the three: a
 	// binary that predates master can be the reason the sync lines below read
 	// the way they do, so a reader who takes it in first interprets everything
@@ -218,7 +222,7 @@ func printStalenessWarning(ctx context.Context, w io.Writer, ws workspace.Info, 
 	// effect of.
 	rec, pushAge, pushKnown := lastPushOutcome(ws, now)
 	lines = append(lines, syncPushFailureLines(rec, pushAge, pushKnown, runningBinaryVersion())...)
-	lines = append(lines, syncStalenessLines(report, fetch, fetchKnown)...)
+	lines = append(lines, syncStalenessLines(report, fetch)...)
 	for _, line := range lines {
 		if _, err := fmt.Fprintln(w, line); err != nil {
 			return err
@@ -244,9 +248,8 @@ func printStalenessWarning(ctx context.Context, w io.Writer, ws workspace.Info, 
 // failure is still loud, on the channel that cannot lie about the mutation.
 func printMutationSyncStalenessWarning(ctx context.Context, w io.Writer, ws workspace.Info, now time.Time) {
 	rec, pushAge, pushKnown := lastPushOutcome(ws, now)
-	fetch, fetchKnown := lastTargetFetch(ctx, ws, now)
 	lines := syncPushFailureLines(rec, pushAge, pushKnown, runningBinaryVersion())
-	lines = append(lines, fetchStalenessLines(fetch, fetchKnown)...)
+	lines = append(lines, fetchStalenessLines(lastTargetFetch(ctx, ws, now))...)
 	for _, line := range lines {
 		if _, err := fmt.Fprintln(w, line); err != nil {
 			fmt.Fprintf(os.Stderr, "lit: staleness banner not written: %v\n", err)

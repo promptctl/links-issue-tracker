@@ -25,13 +25,12 @@ func TestSyncStalenessLines(t *testing.T) {
 	origin := remoteName(t, "origin")
 
 	cases := []struct {
-		name          string
-		report        doctorSyncReport
-		fetchAge      time.Duration
-		fetchAgeKnown bool
-		wantLines     int
-		wantSubstrs   []string
-		dontWant      []string
+		name        string
+		report      doctorSyncReport
+		fetch       *remoteFetch
+		wantLines   int
+		wantSubstrs []string
+		dontWant    []string
 	}{
 		{
 			name:      "unresolved emits nothing",
@@ -39,112 +38,101 @@ func TestSyncStalenessLines(t *testing.T) {
 			wantLines: 0,
 		},
 		{
-			name:          "unresolved still warns about a stale fetch",
-			report:        doctorSyncReport{Kind: doctorSyncUnresolved, Detail: "boom"},
-			fetchAge:      staleAge,
-			fetchAgeKnown: true,
-			wantLines:     1,
-			wantSubstrs:   []string{"sync: last successful fetch from origin was", "lit sync fetch"},
+			name:        "unresolved still warns about a stale fetch",
+			report:      doctorSyncReport{Kind: doctorSyncUnresolved, Detail: "boom"},
+			fetch:       &remoteFetch{remote: origin, age: staleAge},
+			wantLines:   1,
+			wantSubstrs: []string{"sync: last successful fetch from origin was", "lit sync fetch"},
 		},
 		{
 			name: "up to date and freshly fetched emits nothing",
 			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: storage.SyncFreshness{
 				Remote: "origin", Branch: "master", Synced: true,
 			}},
-			fetchAge:      freshAge,
-			fetchAgeKnown: true,
-			wantLines:     0,
+			fetch:     &remoteFetch{remote: origin, age: freshAge},
+			wantLines: 0,
 		},
 		{
 			name: "fetch age unknown (never fetched yet) does not warn",
 			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: storage.SyncFreshness{
 				Remote: "origin", Branch: "master", Synced: true,
 			}},
-			fetchAgeKnown: false,
-			wantLines:     0,
+			wantLines: 0,
 		},
 		{
 			name: "ahead warns and names the push fix",
 			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: storage.SyncFreshness{
 				Remote: "origin", Branch: "master", Synced: true, Ahead: 3,
 			}},
-			fetchAge:      freshAge,
-			fetchAgeKnown: true,
-			wantLines:     1,
-			wantSubstrs:   []string{"sync:", "3 local change(s) not pushed to origin/master", "as of last fetch", "lit sync push"},
+			fetch:       &remoteFetch{remote: origin, age: freshAge},
+			wantLines:   1,
+			wantSubstrs: []string{"sync:", "3 local change(s) not pushed to origin/master", "as of last fetch", "lit sync push"},
 		},
 		{
 			name: "stale fetch warns and names the fetch fix",
 			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: storage.SyncFreshness{
 				Remote: "origin", Branch: "master", Synced: true,
 			}},
-			fetchAge:      staleAge,
-			fetchAgeKnown: true,
-			wantLines:     1,
-			wantSubstrs:   []string{"sync:", "last successful fetch from origin was", "ago", "at least 24 hours old", "lit sync fetch"},
+			fetch:       &remoteFetch{remote: origin, age: staleAge},
+			wantLines:   1,
+			wantSubstrs: []string{"sync:", "last successful fetch from origin was", "ago", "at least 24 hours old", "lit sync fetch"},
 		},
 		{
 			name: "ahead AND stale fetch produce both lines",
 			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: storage.SyncFreshness{
 				Remote: "origin", Branch: "master", Synced: true, Ahead: 1,
 			}},
-			fetchAge:      staleAge,
-			fetchAgeKnown: true,
-			wantLines:     2,
-			wantSubstrs:   []string{"not pushed", "last successful fetch"},
+			fetch:       &remoteFetch{remote: origin, age: staleAge},
+			wantLines:   2,
+			wantSubstrs: []string{"not pushed", "last successful fetch"},
 		},
 		{
 			name: "diverged does not duplicate the sync-failure escalation",
 			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: storage.SyncFreshness{
 				Remote: "origin", Branch: "master", Synced: true, Ahead: 2, Behind: 3,
 			}},
-			fetchAge:      freshAge,
-			fetchAgeKnown: true,
-			wantLines:     0,
-			dontWant:      []string{"not pushed"},
+			fetch:     &remoteFetch{remote: origin, age: freshAge},
+			wantLines: 0,
+			dontWant:  []string{"not pushed"},
 		},
 		{
 			name: "diverged AND stale fetch still warns about the fetch (independent conditions)",
 			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: storage.SyncFreshness{
 				Remote: "origin", Branch: "master", Synced: true, Ahead: 2, Behind: 3,
 			}},
-			fetchAge:      staleAge,
-			fetchAgeKnown: true,
-			wantLines:     1,
-			wantSubstrs:   []string{"last successful fetch"},
-			dontWant:      []string{"not pushed"},
+			fetch:       &remoteFetch{remote: origin, age: staleAge},
+			wantLines:   1,
+			wantSubstrs: []string{"last successful fetch"},
+			dontWant:    []string{"not pushed"},
 		},
 		{
 			name: "behind alone does not warn (auto-receive fast-forwards it)",
 			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: storage.SyncFreshness{
 				Remote: "origin", Branch: "master", Synced: true, Behind: 4,
 			}},
-			fetchAge:      freshAge,
-			fetchAgeKnown: true,
-			wantLines:     0,
+			fetch:     &remoteFetch{remote: origin, age: freshAge},
+			wantLines: 0,
 		},
 		{
 			name: "never synced alone (no local Ahead signal) does not warn",
 			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: storage.SyncFreshness{
 				Remote: "origin", Branch: "master", Synced: false,
 			}},
-			fetchAge:      freshAge,
-			fetchAgeKnown: true,
-			wantLines:     0,
+			fetch:     &remoteFetch{remote: origin, age: freshAge},
+			wantLines: 0,
 		},
 		{
 			name: "boundary: exactly the threshold warns (>=, not >)",
 			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: storage.SyncFreshness{
 				Remote: "origin", Branch: "master", Synced: true,
 			}},
-			fetchAge:      unfetchedStalenessThreshold,
-			fetchAgeKnown: true,
-			wantLines:     1,
+			fetch:     &remoteFetch{remote: origin, age: unfetchedStalenessThreshold},
+			wantLines: 1,
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			lines := syncStalenessLines(tc.report, remoteFetch{remote: origin, age: tc.fetchAge}, tc.fetchAgeKnown)
+			lines := syncStalenessLines(tc.report, tc.fetch)
 			if len(lines) != tc.wantLines {
 				t.Fatalf("syncStalenessLines() = %v (%d lines), want %d", lines, len(lines), tc.wantLines)
 			}
@@ -259,6 +247,18 @@ func TestPrintSyncStalenessWarningResolvesAgainstRealWorkspace(t *testing.T) {
 		t.Fatalf("engine.Open() error = %v", err)
 	}
 	defer st.Close()
+
+	// A stale marker on disk for a remote the workspace does not have: with no
+	// sync remote there is nothing to fetch, so no fetch line, whatever is on
+	// disk.
+	origin := remoteName(t, "origin")
+	if err := markFetchSuccess(ws, origin); err != nil {
+		t.Fatalf("markFetchSuccess() error = %v", err)
+	}
+	backdated := time.Now().Add(-30 * time.Hour)
+	if err := os.Chtimes(fetchSuccessMarkerPath(ws, origin), backdated, backdated); err != nil {
+		t.Fatalf("os.Chtimes() error = %v", err)
+	}
 
 	var buf bytes.Buffer
 	if err := printStalenessWarning(ctx, &buf, ws, st, time.Now()); err != nil {

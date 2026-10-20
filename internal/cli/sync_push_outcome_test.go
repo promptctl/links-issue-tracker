@@ -313,16 +313,16 @@ func TestSyncPushFailureLines(t *testing.T) {
 func TestFetchStalenessLinesNamesTheFetchedRemote(t *testing.T) {
 	t.Parallel()
 	origin := remoteName(t, "origin")
-	stale := remoteFetch{remote: origin, age: 25 * time.Hour}
+	stale := &remoteFetch{remote: origin, age: 25 * time.Hour}
 
-	if got := fetchStalenessLines(stale, true); len(got) != 1 || !strings.Contains(got[0], "fetch from origin was") {
+	if got := fetchStalenessLines(stale); len(got) != 1 || !strings.Contains(got[0], "fetch from origin was") {
 		t.Fatalf("fetchStalenessLines(stale) = %q, want the remote named", got)
 	}
-	if got := fetchStalenessLines(remoteFetch{remote: origin, age: 2 * time.Hour}, true); len(got) != 0 {
+	if got := fetchStalenessLines(&remoteFetch{remote: origin, age: 2 * time.Hour}); len(got) != 0 {
 		t.Fatalf("fetchStalenessLines(fresh) = %q, want none", got)
 	}
-	if got := fetchStalenessLines(stale, false); len(got) != 0 {
-		t.Fatalf("fetchStalenessLines(unknown age) = %q, want none", got)
+	if got := fetchStalenessLines(nil); len(got) != 0 {
+		t.Fatalf("fetchStalenessLines(nil) = %q, want none", got)
 	}
 }
 
