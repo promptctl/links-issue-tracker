@@ -1306,7 +1306,6 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/inventories/inventory-store-sync.md", Text: "stat snapshot: %w", Src: "stat snapshot: %w"},
 	{Doc: "doc-v1-total/inventories/inventory-store-sync.md", Text: "stat snapshots dir: %w", Src: "stat snapshots dir: %w"},
 	{Doc: "doc-v1-total/inventories/inventory-store-sync.md", Text: "the next open runs it again", Src: "the next open runs it again"},
-	{Doc: "doc-v1-total/inventories/inventory-store-sync.md", Text: "the settle landed, but this checkout's record of it was not written: %w", Src: "the settle landed, but this checkout's record of it was not written: %w"},
 	{Doc: "doc-v1-total/inventories/inventory-store-sync.md", Text: "title = 'Unfiled tickets'", Src: "internal/store/migrations/00007_every_ticket_inside_a_container.sql"},
 	{Doc: "doc-v1-total/inventories/inventory-store-sync.md", Text: "to_value TEXT NULL", Src: "CREATE TABLE issue_event_changes (\n\t\t\tevent_id VARCHAR(191) NOT NULL,\n\t\t\tfield VARCHAR(64) NOT NULL,\n\t\t\tfrom_value TEXT NULL,\n\t\t\tto_value TEXT NULL,\n\t\t\tPRIMARY KEY (event_id, field),\n\t\t\tFOREIGN KEY (event_id) REFERENCES issue_events(id) ON DELETE CASCADE\n\t\t);"},
 	{Doc: "doc-v1-total/inventories/inventory-store-sync.md", Text: "topic = 'unfiled'", Src: "internal/store/migrations/00007_every_ticket_inside_a_container.sql"},

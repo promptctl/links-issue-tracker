@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,9 +16,10 @@ import (
 )
 
 // TestAReceiveThatFetchedAndKeepsStoppingReachesTheFailureSurface drives the
-// automatic receive on a checkout whose fetch succeeds and whose settle then
-// fails, from a real cause: the settle's record of itself cannot be written,
-// because its path is a directory. The first stop is a run of one: the event
+// automatic receive on a checkout whose fetch succeeds and whose landing then
+// fails, from a real cause: a standing holder of the live store's commit lock,
+// taken after the clone and its fetch, the one place a held live store does
+// not already refuse the receive. The first stop is a run of one: the event
 // and the fetch-success marker say what happened, and nobody is paged. Once
 // the run has lasted past unsettledLastingAfter with no settle, the next
 // receive leaves the receive_unsettled block for the next command and pages
@@ -59,31 +61,51 @@ func TestAReceiveThatFetchedAndKeepsStoppingReachesTheFailureSurface(t *testing.
 	}
 	sink := filepath.Join(t.TempDir(), "notifications")
 	addOwnerNotifyHook(t, ws, `printf "%s\n" "$LIT_NOTIFY_KIND" >> `+sink)
-	// The settle's record of itself cannot be written: its path is a directory.
-	if err := os.MkdirAll(store.SettledLastPath(ws.DatabasePath), 0o755); err != nil {
-		t.Fatalf("block the settle's record: %v", err)
-	}
 	if err := os.Remove(fetchSuccessMarkerPath(ws)); err != nil && !os.IsNotExist(err) {
 		t.Fatalf("clear the fetch-success marker: %v", err)
 	}
-	receive := func() map[string]any {
+	oneOutcome := func(outcomes []any) map[string]any {
 		t.Helper()
-		runCLIInDir(t, consumer, "sync", backgroundReceiveSubcommand, "--parent-pid", "0")
-		outcomes := lastEvent(t).Occurrences["receive.outcomes"]
 		if len(outcomes) != 1 {
 			t.Fatalf("receive.outcomes = %v; want the one receive's outcome", outcomes)
 		}
 		outcome, _ := outcomes[0].(map[string]any)
 		return outcome
 	}
+	// stoppedReceive is the automatic receive's tail (receiveOnce) run after
+	// its clone and fetch, with the commit lock held from the fetch on.
+	stoppedReceive := func() map[string]any {
+		t.Helper()
+		recorder := telemetry.Begin(telemetry.Event{})
+		ctx := telemetry.With(context.Background(), recorder)
+		clone, err := takeReceiveClone(ctx, ws)
+		if err != nil {
+			t.Fatalf("takeReceiveClone() error = %v", err)
+		}
+		defer removeReceiveClone(clone)
+		fetch, err := fetchIntoClone(ctx, ws, clone)
+		if err != nil || fetch.fetchErr != nil {
+			t.Fatalf("fetchIntoClone() = %+v, %v; want a fetch that worked", fetch, err)
+		}
+		release := holdTheCommitLock(t, ws)
+		outcome := landAndRecord(ctx, ws, clone, fetch, remoteAdvertisement{})
+		release()
+		surfaceReceiveOutcome(ctx, ws, outcome, time.Now())
+		return oneOutcome(writtenEvent(t, recorder.Finish(invocationEnd(time.Now(), nil, nil))).Occurrences["receive.outcomes"])
+	}
+	receive := func() map[string]any {
+		t.Helper()
+		runCLIInDir(t, consumer, "sync", backgroundReceiveSubcommand, "--parent-pid", "0")
+		return oneOutcome(lastEvent(t).Occurrences["receive.outcomes"])
+	}
 
 	// The first stop starts a run and surfaces nothing but its record.
-	first := receive()
-	if first["receive.stopped"] != "settle" || first["receive.decision"] != "error" || !(first["receive.unsettled_since"].(float64) > 0) {
-		t.Fatalf("first receive outcome = %v; want a settle stop that starts a run", first)
+	first := stoppedReceive()
+	if first["receive.stopped"] != "land" || first["receive.decision"] != "error" || !(first["receive.unsettled_since"].(float64) > 0) {
+		t.Fatalf("first receive outcome = %v; want a landing stop that starts a run", first)
 	}
-	if stops := receiveTraceStops(t, ws); len(stops) != 1 || stops[0] != "settle" {
-		t.Fatalf("receive traces' stopped = %q; want the one receive's settle stop", stops)
+	if stops := receiveTraceStops(t, ws); len(stops) != 1 || stops[0] != "land" {
+		t.Fatalf("receive traces' stopped = %q; want the one receive's landing stop", stops)
 	}
 	if _, err := os.Stat(fetchSuccessMarkerPath(ws)); err != nil {
 		t.Fatalf("a fetch that worked did not move the fetch-success marker: %v", err)
@@ -100,9 +122,9 @@ func TestAReceiveThatFetchedAndKeepsStoppingReachesTheFailureSurface(t *testing.
 	if err := store.WriteUnsettledFirst(ws.DatabasePath, began); err != nil {
 		t.Fatalf("age the run: %v", err)
 	}
-	second := receive()
-	if second["receive.stopped"] != "settle" || second["receive.unsettled_since"] != float64(began.Unix()) {
-		t.Fatalf("second receive outcome = %v; want a settle stop in the run that began at %d", second, began.Unix())
+	second := stoppedReceive()
+	if second["receive.stopped"] != "land" || second["receive.unsettled_since"] != float64(began.Unix()) {
+		t.Fatalf("second receive outcome = %v; want a landing stop in the run that began at %d", second, began.Unix())
 	}
 	block, err := os.ReadFile(receiveBlockPendingPath(ws))
 	if err != nil {
@@ -110,7 +132,7 @@ func TestAReceiveThatFetchedAndKeepsStoppingReachesTheFailureSurface(t *testing.
 	}
 	for _, want := range []string{
 		"lit's automatic receive fetched the remote but could not bring it into this checkout",
-		"stopped at settling onto the fetched head",
+		"stopped at landing the fetch on the live store",
 		"lit sync pull",
 		"ESCALATION — BLOCKED",
 	} {
@@ -141,9 +163,6 @@ func TestAReceiveThatFetchedAndKeepsStoppingReachesTheFailureSurface(t *testing.
 	}
 
 	// The cause is gone: the next receive settles and ends the run.
-	if err := os.Remove(store.SettledLastPath(ws.DatabasePath)); err != nil {
-		t.Fatalf("unblock the settle's record: %v", err)
-	}
 	if err := writeMarkerAtomic(receiveBlockPendingPath(ws), block); err != nil {
 		t.Fatalf("re-leave the block: %v", err)
 	}
@@ -160,6 +179,28 @@ func TestAReceiveThatFetchedAndKeepsStoppingReachesTheFailureSurface(t *testing.
 	if pages, _ := os.ReadFile(sink); string(pages) != "receive_unsettled\n" {
 		t.Fatalf("owner hook output after the settle = %q; want still the one page", pages)
 	}
+}
+
+// holdTheCommitLock makes every settle on ws's live store stop from a real
+// cause after its fetch has worked: a standing holder of the live store's
+// commit lock, which the receive's clone and its fetch never take. The
+// returned release ends the hold; the test's cleanup ends it otherwise.
+func holdTheCommitLock(t *testing.T, ws workspace.Info) (release func()) {
+	t.Helper()
+	unlock, err := store.LockCommitPath(context.Background(), ws.DatabasePath)
+	if err != nil {
+		t.Fatalf("hold the commit lock: %v", err)
+	}
+	var once sync.Once
+	release = func() {
+		once.Do(func() {
+			if err := unlock(); err != nil {
+				t.Errorf("release the commit lock: %v", err)
+			}
+		})
+	}
+	t.Cleanup(release)
+	return release
 }
 
 // addOwnerNotifyHook turns the owner channel on for an initialized workspace,
@@ -238,9 +279,6 @@ func unsettlingCheckout(t *testing.T) (context.Context, workspace.Info, liveClon
 	if err != nil {
 		t.Fatalf("resolve workspace: %v", err)
 	}
-	if err := os.MkdirAll(store.SettledLastPath(ws.DatabasePath), 0o755); err != nil {
-		t.Fatalf("block the settle's record: %v", err)
-	}
 	ctx := telemetry.With(context.Background(), telemetry.Begin(telemetry.Event{}))
 	clone, err := takeReceiveClone(ctx, ws)
 	if err != nil {
@@ -259,9 +297,10 @@ func unsettlingCheckout(t *testing.T) (context.Context, workspace.Info, liveClon
 // unsettled.first unwritten, and the next automatic receive counts it.
 func TestTheMirrorsReceiveStartsNoRun(t *testing.T) {
 	ctx, ws, clone, fetch := unsettlingCheckout(t)
+	holdTheCommitLock(t, ws)
 	err := receivePushedReRoot(ctx, ws, clone, pushedHead{remote: fetch.target.remote, branch: fetch.target.branch})
-	if err == nil || !strings.Contains(err.Error(), "settled.last") {
-		t.Fatalf("receivePushedReRoot() error = %v; want the settle's stop", err)
+	if err == nil {
+		t.Fatal("receivePushedReRoot() succeeded under a held commit lock; want the settle's stop")
 	}
 	if at, ok, err := store.ReadUnsettledFirst(ws.DatabasePath); ok || err != nil {
 		t.Fatalf("unsettled.first after the mirror's stop = %s ok %v err %v; want no record", at, ok, err)

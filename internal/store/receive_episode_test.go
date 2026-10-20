@@ -14,9 +14,9 @@ import (
 // TestASettleRecordsThatItSettled pins the settle as the writer of
 // settled.last: a settle that succeeds writes it, whatever state it settled
 // to; a settle that fails writes nothing; and a settle whose record cannot be
-// written returns its full result with the error beside it, because its
-// effect on the branch stands and a settle this checkout cannot account for
-// must reach the caller. [LAW:no-silent-failure]
+// written still returns its result with no error, because the record is
+// bookkeeping after the settle completed, while the write's failure lands on
+// the engine's SettledLastWrites. [LAW:no-silent-failure] [LAW:nothing-unseen]
 func TestASettleRecordsThatItSettled(t *testing.T) {
 	t.Parallel()
 
@@ -49,9 +49,12 @@ func TestASettleRecordsThatItSettled(t *testing.T) {
 		if err != nil || !ok || at.Before(before.Add(-time.Second)) || at.After(time.Now()) {
 			t.Fatalf("ReadSettledLast() after a %s settle = %s ok %v err %v; want the settle's time", result.State, at, ok, err)
 		}
+		if writes := st.SettledLastWrites(); len(writes) != 1 || writes[0].Err != "" {
+			t.Fatalf("SettledLastWrites() = %+v; want one write that succeeded", writes)
+		}
 	})
 
-	t.Run("a record that cannot be written comes back beside the result", func(t *testing.T) {
+	t.Run("a record that cannot be written leaves the settle standing", func(t *testing.T) {
 		t.Parallel()
 		f := newLandFixture(t)
 		peer := f.copyOf(f.live)
@@ -70,11 +73,11 @@ func TestASettleRecordsThatItSettled(t *testing.T) {
 		st := f.openSync(f.live)
 		defer f.close(st)
 		result, err := st.SyncSettleReceived(f.ctx, remoteName(t, "origin"), "master")
-		if err == nil || !strings.Contains(err.Error(), "settled.last") {
-			t.Fatalf("SyncSettleReceived() error = %v; want the record's write failure", err)
+		if err != nil || result.State != storage.SyncReceiveFastForwarded || result.Behind != 1 {
+			t.Fatalf("SyncSettleReceived() = %+v, %v; want the fast-forward, no error", result, err)
 		}
-		if result.State != storage.SyncReceiveFastForwarded || result.Behind != 1 {
-			t.Fatalf("SyncSettleReceived() result = %+v; want the settle's full result beside the error", result)
+		if writes := st.SettledLastWrites(); len(writes) != 1 || !strings.Contains(writes[0].Err, "settled.last") {
+			t.Fatalf("SettledLastWrites() = %+v; want the one write's failure", writes)
 		}
 	})
 }

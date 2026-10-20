@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"runtime/debug"
 	"slices"
 	"strconv"
@@ -557,10 +558,11 @@ func (s *Store) SyncSettleReceived(ctx context.Context, remote storage.RemoteNam
 // commit lock the caller already holds, and records that the settle succeeded
 // (settled.last, receive_episode.go). Every settle runs through here, so this
 // is the one writer of that record whatever surface settled.
-// [LAW:single-enforcer] A record that could not be written comes back as the
-// error beside the full result: the settle's effect on the branch stands, and
-// a settle this checkout cannot account for reaches every caller's error path.
-// [LAW:no-silent-failure]
+// [LAW:single-enforcer] The record is bookkeeping after the settle completed,
+// not part of it: a record that could not be written leaves the settle's
+// result standing, so the caller's reconcile and push go on, and the failure
+// is printed and lands on the event (SettledLastWrites).
+// [LAW:no-silent-failure] [LAW:nothing-unseen]
 func (s *Store) settleReceived(ctx context.Context, remote storage.RemoteName, branch string) (storage.SyncReceiveResult, error) {
 	var result storage.SyncReceiveResult
 	err := s.runSyncMutation(ctx, func(ctx context.Context) error {
@@ -571,9 +573,12 @@ func (s *Store) settleReceived(ctx context.Context, remote storage.RemoteName, b
 	if err != nil {
 		return storage.SyncReceiveResult{}, err
 	}
+	var write storage.SettledLastWrite
 	if err := writeSettledLast(s.doltRootDir, time.Now()); err != nil {
-		return result, fmt.Errorf("the settle landed, but this checkout's record of it was not written: %w", err)
+		write.Err = err.Error()
+		fmt.Fprintf(os.Stderr, "lit: the settle landed and stands, but this checkout's record of it (settled.last) was not written: %v\n", err)
 	}
+	s.settledLastWrites = append(s.settledLastWrites, write)
 	return result, nil
 }
 

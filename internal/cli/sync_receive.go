@@ -342,6 +342,13 @@ func receiveAndRecord(ctx context.Context, ws workspace.Info, observed remoteAdv
 	if err != nil {
 		return syncReceiveOutcome{}, err
 	}
+	return landAndRecord(ctx, ws, clone, fetch, observed), nil
+}
+
+// landAndRecord is the receive after its fetch: land the fetch on the live
+// store, settle there, and record what that established. Every step from
+// here touches the live store; nothing before it did.
+func landAndRecord(ctx context.Context, ws workspace.Info, clone liveClone, fetch receiveFetch, observed remoteAdvertisement) syncReceiveOutcome {
 	outcome, closeLive := performSyncReceive(ctx, ws, clone, fetch, ownUnsettledRun(ws.DatabasePath))
 	// The live store stays open through the record below, so its workspace
 	// hold keeps a rotation of the Dolt directory from landing between the
@@ -362,7 +369,7 @@ func receiveAndRecord(ctx context.Context, ws workspace.Info, observed remoteAdv
 	// advertisement observed before the fetch the record the next question is
 	// measured against (sync_receive_ask.go).
 	recordReceived(ws, outcome, observed)
-	return outcome, nil
+	return outcome
 }
 
 // surfaceReceiveOutcome leaves a non-converging reconcile — a held free-text
