@@ -219,7 +219,7 @@ func syncFetchLeaf() syncLeaf {
 			return err
 		}
 		// [LAW:one-source-of-truth] the remote every sync verb selects.
-		remoteName, ok, err := resolveSyncRemote(*remote, workspace.UpstreamRemote(ctx, ws.RootDir), syncState.gitRemotes)
+		remoteName, ok, err := workspaceSyncRemote(ctx, ws, *remote, syncState.gitRemotes)
 		if err != nil {
 			recordSyncCommandTrace(ws, "lit sync fetch", "error", err, nil)
 			return err
@@ -924,7 +924,7 @@ func resolveSyncTarget(ctx context.Context, session syncSession, ws workspace.In
 	if err != nil {
 		return syncTarget{}, err
 	}
-	remoteName, ok, err := resolveSyncRemote(requestedRemote, workspace.UpstreamRemote(ctx, ws.RootDir), syncState.gitRemotes)
+	remoteName, ok, err := workspaceSyncRemote(ctx, ws, requestedRemote, syncState.gitRemotes)
 	if err != nil {
 		return syncTarget{}, err
 	}

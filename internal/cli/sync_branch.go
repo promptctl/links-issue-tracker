@@ -94,10 +94,10 @@ func (e syncBranchNotKnownError) Error() string {
 
 // freshnessSyncTarget is the remote and branch the freshness reads report on
 // — doctor and every read command's banner — with no network: the remote is
-// defaultSyncRemote's and the branch is knownSyncBranch's. ok false is a
+// workspaceSyncRemote's and the branch is knownSyncBranch's. ok false is a
 // workspace with no sync remote.
 func freshnessSyncTarget(ctx context.Context, ws workspace.Info, gitRemotes []workspace.GitRemote) (remote storage.RemoteName, branch string, ok bool, err error) {
-	remote, ok, err = defaultSyncRemote(ctx, ws, gitRemotes)
+	remote, ok, err = workspaceSyncRemote(ctx, ws, "", gitRemotes)
 	if err != nil || !ok {
 		return remote, "", ok, err
 	}
@@ -105,13 +105,14 @@ func freshnessSyncTarget(ctx context.Context, ws workspace.Info, gitRemotes []wo
 	return remote, branch, true, err
 }
 
-// defaultSyncRemote is the remote lit syncs with when no --remote names one:
-// the upstream remote, else the single remote. ok false is a workspace with no
-// sync remote. [LAW:one-source-of-truth] the one reading of that remote: the
-// automatic receive asks it and marks its fetch, the banners read that mark,
-// and init adopts from it, so none of them can name a different remote.
-func defaultSyncRemote(ctx context.Context, ws workspace.Info, gitRemotes []workspace.GitRemote) (storage.RemoteName, bool, error) {
-	return resolveSyncRemote("", workspace.UpstreamRemote(ctx, ws.RootDir), gitRemotes)
+// workspaceSyncRemote is the remote lit syncs with in this workspace: the one
+// --remote requested, else the upstream remote, else the single remote ("" is
+// no request). ok false is a workspace with no sync remote.
+// [LAW:one-source-of-truth] every caller reads the remote here: the sync verbs
+// and the automatic receive fetch it and mark its fetch, the banners read that
+// mark, and init adopts from it, so no two of them can name different remotes.
+func workspaceSyncRemote(ctx context.Context, ws workspace.Info, requested string, gitRemotes []workspace.GitRemote) (storage.RemoteName, bool, error) {
+	return resolveSyncRemote(requested, workspace.UpstreamRemote(ctx, ws.RootDir), gitRemotes)
 }
 
 // advertisedSyncBranchPath is where resolveSyncBranch records the branch a

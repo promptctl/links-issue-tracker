@@ -84,7 +84,7 @@ type remoteFetch struct {
 }
 
 // lastTargetFetch is the last successful fetch of the remote lit syncs with
-// (defaultSyncRemote), the one both staleness banners warn about. nil when
+// (workspaceSyncRemote), the one both staleness banners warn about. nil when
 // that remote was never fetched here, or when there is no such remote to
 // read: no remote configured, or remotes that cannot be read or resolved. The
 // banner is best-effort, so an unresolved remote prints no fetch line, as it
@@ -95,7 +95,7 @@ func lastTargetFetch(ctx context.Context, ws workspace.Info, now time.Time) *rem
 	if err != nil {
 		return nil
 	}
-	remote, ok, err := defaultSyncRemote(ctx, ws, gitRemotes)
+	remote, ok, err := workspaceSyncRemote(ctx, ws, "", gitRemotes)
 	if err != nil || !ok {
 		return nil
 	}

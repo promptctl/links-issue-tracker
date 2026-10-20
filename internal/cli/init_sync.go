@@ -219,7 +219,7 @@ func planRemoteAdopt(ctx context.Context, ws workspace.Info) (*adoptClonePlan, i
 	if err != nil {
 		return nil, initSyncOutcome{State: initSyncFailed, Error: err.Error()}
 	}
-	remote, ok, err := defaultSyncRemote(ctx, ws, gitRemotes)
+	remote, ok, err := workspaceSyncRemote(ctx, ws, "", gitRemotes)
 	// A remote Dolt cannot hold has nothing init can adopt, so init starts
 	// fresh, unless it carries lit data: a fresh store would fork from that backlog,
 	// which only the remote renamed can adopt. [LAW:no-silent-failure]
