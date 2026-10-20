@@ -63,6 +63,7 @@ the code it arrives on:
 | `workspace_busy` | 1 | Another lit process holds a lock this command needs: the workspace's store, or its `config.json` |
 | `workspace_write_blocked` | 1 | Another process holds the store and did not release it |
 | `transient_gc_contention` | 1 | The store was briefly contended; one retry usually clears it |
+| `migration_failed` | 1 | A step of the store open's schema migration failed in a way the next open recovers from; the message names the step |
 | `usage_error` | 2 | Bad arguments or flags |
 | `unknown_command` | 3 | No such command |
 | `retired_command` | 3 | The command was retired; the message names its replacement |
@@ -76,6 +77,8 @@ the code it arrives on:
 | `workspace_not_initialized` | 3 | The repository has no lit workspace (`lit init` has never run) |
 | `workspace_schema_ahead` | 3 | The schema of the workspace, or of the sync remote, is newer than this `lit` supports |
 | `migration_quarantined` | 3 | A migration this workspace has pending failed and is quarantined, on the run that failed and every one after; the message names both ways to recover |
+| `migration_partially_applied` | 3 | A migration step failed and the store may hold its partial changes, which every later open would build on; restore the recovery snapshot the message names before running any other lit command |
+| `schema_shape_refused` | 3 | The store holds a shape the open's migration does not converge on its own, so every open repeats the refusal; the message names the shape |
 | `entity_not_found` | 4 | The named issue or resource does not exist |
 | `version_not_found` | 4 | `lit history --version` named a version past the ones the issue's history records, or `lit verdict --plan` a digest of no plan text it records |
 | `merge_conflict` | 5 | A sync merge conflict |

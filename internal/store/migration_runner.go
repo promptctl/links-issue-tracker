@@ -38,21 +38,15 @@ const migrationDriftRepairCheckpointPrefix = "pre-drift-repair"
 // only to the caller that needs it, not to every consumer of the shared stepper.
 var migrationUpByOneForTest func(ctx context.Context, provider *goose.Provider) (*goose.MigrationResult, error)
 
-// migrationCheckpointPruneForTest, if non-nil, replaces the checkpoint prune
-// inside applyPendingMigrations, so a test can fail the prune while the reset
-// before it succeeds.
-var migrationCheckpointPruneForTest func() error
-
 // versionContentDriftRepairForTest, if non-nil, replaces the repair inside
 // repairVersionContentDriftWithRollback, so a test can fail the repair after
 // its checkpoint exists.
 var versionContentDriftRepairForTest func(ctx context.Context) ([]string, error)
 
-// CheckpointResetError is returned when a migration run stops short and the
-// working set is automatically reset to its Dolt checkpoint. The error message
-// names the checkpoint so the operator can use it as a lightweight forensics
-// anchor alongside the dbsnapshot layer described in the wrapping
-// MigrationRollbackError.
+// CheckpointResetError is a migration run that stopped short after the working
+// set was automatically reset to its Dolt checkpoint. The error message names
+// the checkpoint so the operator can use it as a lightweight forensics anchor
+// beside the recovery snapshot the open's SchemaConvergenceError names.
 //
 // [LAW:single-enforcer] The recovery-instruction format lives here so every
 // caller sees the same operator-facing words.
@@ -61,10 +55,12 @@ type CheckpointResetError struct {
 	Name       string
 	Checkpoint storage.Checkpoint
 	Cause      error
-	// Quarantined says handleMigrationFailure committed a quarantine for
-	// Version. It is false when the version is unknown, or the run stopped
-	// for a reason that says nothing against the migration and the next open
-	// runs it again (see earnsQuarantine).
+	// Quarantined says a quarantine for Version is in force: committed, or
+	// inserted and left in the working set by a commit that failed, which the
+	// next open reads all the same. It is false when the version is unknown,
+	// when the run stopped for a reason that says nothing against the
+	// migration (see earnsQuarantine), or when recording the quarantine
+	// failed; the next open then runs the migration again.
 	Quarantined bool
 }
 
@@ -86,8 +82,8 @@ func (e *CheckpointResetError) Error() string {
 	)
 }
 
-// Unwrap exposes the cause and the quarantine handleMigrationFailure committed,
-// if it committed one: from this run on the workspace is quarantined, so the
+// Unwrap exposes the cause and the quarantine in force, if there is one: from
+// this run on the workspace is quarantined, so the
 // failure carries the same *QuarantineBlockError every later open refuses
 // with, and a caller classifying it sees one state, not two.
 // [LAW:one-source-of-truth]
@@ -332,23 +328,21 @@ func (st migrationState) willMutate() bool {
 
 // migrate is the single startup migration boundary. It owns the snapshot
 // guard: runMigration takes exactly one recovery snapshot before its first
-// write, migrate wraps any post-snapshot failure with the operator restore
-// command, and prunes migration snapshots at the tail of a mutating Open. It
-// reports what it did as a storage.Migrated; a prune failure is reported there,
-// not as its error, because the migration has already committed.
+// write, and migrate prunes migration snapshots at the tail of a mutating
+// Open. It reports what it did as a storage.Migrated, and a failure as one
+// *SchemaConvergenceError naming the step that failed. A prune that ran after
+// the work it trails committed is reported on the outcome, never as its error.
 //
 // [LAW:single-enforcer] Store-level Open routes all schema convergence through
 // this one boundary; the snapshot/prune budget lives here, not at callsites.
 func (s *Store) migrate(ctx context.Context) (storage.Migrated, error) {
 	guard := newSnapshotGuard(s.doltRootDir, formatMigrationSnapshotLabel(time.Now()))
-	op, err := s.runMigration(ctx, guard)
-	if err != nil {
-		if snap, ok := guard.took(); ok {
-			return storage.Migrated{}, &MigrationRollbackError{Snapshot: snap, Cause: err}
-		}
-		return storage.Migrated{}, err
+	op, pruneErr, fail := s.runMigration(ctx, guard)
+	if fail != nil {
+		fail.PruneErr = pruneErr
+		return storage.Migrated{}, fail
 	}
-	done := storage.Migrated{SchemaAhead: op.schemaAhead()}
+	done := storage.Migrated{SchemaAhead: op.schemaAhead(), PruneErr: pruneErr}
 	snap, ok := guard.took()
 	if !ok {
 		return done, nil
@@ -357,9 +351,9 @@ func (s *Store) migrate(ctx context.Context) (storage.Migrated, error) {
 	// [LAW:one-source-of-truth] Migration retention bounds migration
 	// snapshots only; user snapshots share the directory under an
 	// independent budget. IsMigrationSnapshotName is the kind discriminator.
-	if err := dbsnapshot.PruneMatching(s.doltRootDir, migrationSnapshotRetention, IsMigrationSnapshotName); err != nil {
-		done.PruneErr = fmt.Errorf("prune migration snapshots: %w", err)
-	}
+	done.PruneErr = errors.Join(done.PruneErr, prune(pruneMigrationSnapshots, "prune migration snapshots", func() error {
+		return dbsnapshot.PruneMatching(s.doltRootDir, migrationSnapshotRetention, IsMigrationSnapshotName)
+	}))
 	return done, nil
 }
 
@@ -426,35 +420,69 @@ func (a migrationAssessment) String() string {
 // mismatch on an already-applied version is invisible to goose bookkeeping
 // whether or not later migrations are pending, so a workspace with nothing
 // pending must still be checked (that is exactly the "reported as fully
-// migrated" failure this guards against). [LAW:single-enforcer] This is the
+// migrated" failure this guards against). [LAW:single-enforcer] assessContent is the
 // only call site for verifyAppliedVersionsMatchRegistry. Only phaseManaged
 // carries goose-recorded applied versions to check content for; phaseFresh
 // has none yet and phaseAdopt's pre-goose shape is verified by
 // verifyIssuesReconcilable/reconcileToBaseline instead.
-func (s *Store) assessMigration(ctx context.Context) (migrationAssessment, error) {
-	state, op, err := s.assessOperability(ctx)
-	if err != nil {
-		return migrationAssessment{}, err
+func (s *Store) assessMigration(ctx context.Context) (migrationAssessment, *SchemaConvergenceError) {
+	state, op, fail := s.classify(ctx)
+	if fail != nil {
+		return migrationAssessment{}, fail
 	}
+	return s.assessContent(ctx, state, op)
+}
+
+// classify is every open's first convergence step: the workspace's phase and
+// what this binary may do with it, refusing one it may not read.
+func (s *Store) classify(ctx context.Context) (migrationState, operability, *SchemaConvergenceError) {
+	var state migrationState
+	var op operability
+	fail := attempt(stepClassify, func() (err error) {
+		state, op, err = s.assessOperability(ctx)
+		return err
+	})
+	return state, op, fail
+}
+
+// checkWritable classifies the workspace and applies the floor a write rule
+// sets, for every open whose engine writes: the migrating open and the sync
+// open. [LAW:single-enforcer] one function, so both opens report a failure of
+// either step as the same step.
+func (s *Store) checkWritable(ctx context.Context) (migrationState, operability, *SchemaConvergenceError) {
+	state, op, fail := s.classify(ctx)
+	if fail != nil {
+		return migrationState{}, operability{}, fail
+	}
+	return state, op, attempt(stepRefuseUnwritable, func() error { return s.refuseUnwritable(ctx, op) })
+}
+
+// assessContent verifies a managed workspace's applied versions against the
+// registry and carries the content drift it finds as data, for the write open
+// to repair and the read open to hand off on.
+func (s *Store) assessContent(ctx context.Context, state migrationState, op operability) (migrationAssessment, *SchemaConvergenceError) {
 	if op.ahead() || state.phase != phaseManaged {
 		return migrationAssessment{state: state, op: op}, nil
 	}
-	err = s.verifyAppliedVersionsMatchRegistry(ctx, state.appliedVersion)
 	var mismatch *VersionContentMismatchError
-	switch {
-	case err == nil:
-		return migrationAssessment{state: state, op: op}, nil
-	case errors.As(err, &mismatch):
-		return migrationAssessment{state: state, op: op, drift: mismatch}, nil
-	default:
-		return migrationAssessment{}, err
+	fail := attempt(stepVerifyContent, func() error {
+		err := s.verifyAppliedVersionsMatchRegistry(ctx, state.appliedVersion)
+		if errors.As(err, &mismatch) {
+			return nil
+		}
+		return err
+	})
+	if fail != nil {
+		return migrationAssessment{}, fail
 	}
+	return migrationAssessment{state: state, op: op, drift: mismatch}, nil
 }
 
 // runMigration classifies the workspace once, refuses one this binary may not
 // write, snapshots before the first write, adopts a pre-goose workspace if
 // needed, then applies pending migrations one Dolt commit each. It returns what
-// this binary may do with the workspace, for the open to report.
+// this binary may do with the workspace, for the open to report, and why a
+// prune failed, beside its failure or on its own.
 //
 // [LAW:single-enforcer] One runner owns migration ordering and the snapshot/
 // commit boundary; goose is its only changeset registry and no other code
@@ -462,19 +490,22 @@ func (s *Store) assessMigration(ctx context.Context) (migrationAssessment, error
 // [LAW:dataflow-not-control-flow] The same assess -> repair -> snapshot ->
 // adopt -> apply sequence runs every Open; variability lives in the phase and
 // the set of pending versions, not in whether stages execute.
-func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard) (operability, error) {
-	assessment, err := s.assessMigration(ctx)
-	if err != nil {
-		return operability{}, err
+func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard) (op operability, pruneErr error, fail *SchemaConvergenceError) {
+	state, op, fail := s.checkWritable(ctx)
+	if fail != nil {
+		return operability{}, nil, fail
 	}
-	if err := s.refuseUnwritable(ctx, assessment.op); err != nil {
-		return operability{}, err
+	assessment, fail := s.assessContent(ctx, state, op)
+	if fail != nil {
+		return operability{}, nil, fail
 	}
-	return assessment.op, s.applyMigration(ctx, guard, assessment)
+	pruneErr, fail = s.applyMigration(ctx, guard, assessment)
+	return op, pruneErr, fail
 }
 
-// applyMigration is runMigration's work on a workspace this binary may write.
-func (s *Store) applyMigration(ctx context.Context, guard *snapshotGuard, assessment migrationAssessment) error {
+// applyMigration is runMigration's work on a workspace this binary may write,
+// up to and including the recovery snapshot; applySnapshotted does the rest.
+func (s *Store) applyMigration(ctx context.Context, guard *snapshotGuard, assessment migrationAssessment) (pruneErr error, fail *SchemaConvergenceError) {
 	state := assessment.state
 	// A detected content mismatch is not a terminal refusal: it is the signal
 	// to self-heal. Unlike ensureQuarantineTable's detect-then-recreate
@@ -489,12 +520,12 @@ func (s *Store) applyMigration(ctx context.Context, guard *snapshotGuard, assess
 	// repairing (as opposed to detecting) still aborts Open loudly; only a
 	// clean repair is swallowed into a routine commit.
 	if assessment.drift != nil {
-		if err := s.repairVersionContentDriftWithRollback(ctx, state.appliedVersion, assessment.drift); err != nil {
-			return err
+		if pruneErr, fail = s.repairVersionContentDriftWithRollback(ctx, state.appliedVersion, assessment.drift); fail != nil {
+			return pruneErr, fail
 		}
 	}
 	if !state.willMutate() {
-		return nil
+		return pruneErr, nil
 	}
 	// Ensure the quarantine table exists — and self-heal it to the canonical
 	// shape if a prior lit build left it in an older one — BEFORE
@@ -506,19 +537,21 @@ func (s *Store) applyMigration(ctx context.Context, guard *snapshotGuard, assess
 	//
 	// [LAW:single-enforcer] Quarantine table creation is decoupled from goose
 	// migrations so a goose rollback cannot erase the table it depends on.
-	if err := s.ensureQuarantineTable(ctx); err != nil {
-		return err
+	if fail := attempt(stepEnsureQuarantineTable, func() error { return s.ensureQuarantineTable(ctx) }); fail != nil {
+		return pruneErr, fail
 	}
-	if err := s.commitWorkingSet(ctx, "migrate: ensure migration_quarantine table"); err != nil {
-		return fmt.Errorf("commit quarantine table: %w", err)
+	if fail := attempt(stepCommitQuarantineTable, func() error {
+		return s.commitWorkingSet(ctx, "migrate: ensure migration_quarantine table")
+	}); fail != nil {
+		return pruneErr, fail
 	}
 	// Fast-fail before the snapshot guard so a permanently-quarantined workspace
 	// does not accumulate recovery snapshots on every Open.
 	//
 	// [LAW:single-enforcer] The quarantine gate lives here and nowhere else; this
 	// is the only site that calls checkPendingQuarantine.
-	if err := s.quarantineFastFail(ctx, state); err != nil {
-		return err
+	if fail := attempt(stepCheckQuarantine, func() error { return s.quarantineFastFail(ctx, state) }); fail != nil {
+		return pruneErr, fail
 	}
 	// [LAW:no-silent-failure] Verify reconcile prerequisites BEFORE
 	// the snapshot guard fires, so a workspace whose shape reconcile
@@ -531,18 +564,26 @@ func (s *Store) applyMigration(ctx context.Context, guard *snapshotGuard, assess
 	// non-adopt phases would either no-op pointlessly or produce a
 	// misleadingly-wrapped error.
 	if state.phase == phaseAdopt {
-		if err := s.verifyIssuesReconcilable(ctx); err != nil {
-			return fmt.Errorf("reconcile pre-goose workspace: %w", err)
+		if fail := attempt(stepCheckReconcilePrerequisites, func() error { return s.verifyIssuesReconcilable(ctx) }); fail != nil {
+			return pruneErr, fail
 		}
 	}
-	if _, err := guard.ensure(ctx); err != nil {
-		return fmt.Errorf("migrate: %w", err)
+	var snap dbsnapshot.Snapshot
+	if fail := attempt(stepSnapshot, func() (err error) {
+		snap, err = guard.ensure(ctx)
+		return err
+	}); fail != nil {
+		return pruneErr, fail
 	}
-	if hook := migrationPostSnapshotHookForTest; hook != nil {
-		if err := hook(); err != nil {
-			return err
-		}
-	}
+	migrationPruneErr, fail := s.applySnapshotted(ctx, snapshotted{snap: snap}, guard, state)
+	return errors.Join(pruneErr, migrationPruneErr), fail
+}
+
+// applySnapshotted is the convergence's work after the open took its recovery
+// snapshot: adopt a pre-goose workspace if needed, then apply the pending
+// migrations. Every failure it returns is built from p, so it carries the
+// snapshot.
+func (s *Store) applySnapshotted(ctx context.Context, p snapshotted, guard *snapshotGuard, state migrationState) (pruneErr error, fail *SchemaConvergenceError) {
 	if state.phase == phaseAdopt {
 		// [LAW:single-enforcer] Pre-goose workspaces at any historical
 		// canonical shape forward-migrate through reconcileToBaseline
@@ -553,8 +594,11 @@ func (s *Store) applyMigration(ctx context.Context, guard *snapshotGuard, assess
 		//
 		// The reconcile is a HISTORICAL ARTIFACT — no new operations
 		// get added here. Goose owns v1 → vN going forward.
-		if _, err := s.reconcileToBaseline(ctx, guard); err != nil {
-			return fmt.Errorf("reconcile pre-goose workspace: %w", err)
+		if fail := p.attempt(stepReconcile, func() error {
+			_, err := s.reconcileToBaseline(ctx, guard)
+			return err
+		}); fail != nil {
+			return nil, fail
 		}
 		// [LAW:no-silent-failure] After reconcile, verify the
 		// workspace shape actually matches the baseline before
@@ -567,30 +611,35 @@ func (s *Store) applyMigration(ctx context.Context, guard *snapshotGuard, assess
 		// verifyBaselineShape compares against the baseline file and
 		// names every remaining gap; if any gaps survive, refuse with
 		// a structural error before the stamp lands.
-		_, missing, err := s.verifyBaselineShape(ctx)
-		if err != nil {
-			return fmt.Errorf("verify post-reconcile baseline shape: %w", err)
+		var missing []string
+		if fail := p.attempt(stepVerifyReconciledShape, func() (err error) {
+			_, missing, err = s.verifyBaselineShape(ctx)
+			return err
+		}); fail != nil {
+			return nil, fail
 		}
 		if len(missing) > 0 {
-			return fmt.Errorf(
+			return nil, p.failAt(stepReconciledShapeDiffers, fmt.Errorf(
 				"post-reconcile workspace shape still differs from baseline "+
 					"(remaining gaps: %s); reconcile cannot bring this workspace "+
 					"to v1 — the shape is structurally beyond what pre-goose "+
 					"reconcile can recover",
 				strings.Join(missing, ", "),
-			)
+			))
 		}
-		if err := s.adoptPreGooseWorkspace(ctx); err != nil {
-			return err
+		if fail := s.adoptPreGooseWorkspace(ctx, p); fail != nil {
+			return nil, fail
 		}
 		// commitWorkingSet (not ...Once) so the adoption stamp gets the
 		// transient-manifest retry wrapper. migrate() already holds the commit
 		// lock, so the nested withCommitLock short-circuits acquisition.
-		if err := s.commitWorkingSet(ctx, fmt.Sprintf("migrate: adopt pre-goose workspace at v%d", baselineVersion)); err != nil {
-			return fmt.Errorf("commit adoption stamp: %w", err)
+		if fail := p.attempt(stepCommitAdoptionStamp, func() error {
+			return s.commitWorkingSet(ctx, fmt.Sprintf("migrate: adopt pre-goose workspace at v%d", baselineVersion))
+		}); fail != nil {
+			return nil, fail
 		}
 	}
-	return s.applyPendingMigrations(ctx)
+	return s.applyPendingMigrations(ctx, p)
 }
 
 // upByOne applies the single next pending migration via goose. It is the ONE
@@ -671,7 +720,9 @@ func (s *Store) liftWorkingSetToRegistry(ctx context.Context) error {
 // one Dolt commit per applied migration. Before the first migration runs it
 // creates a Dolt checkpoint so a failure can reset the working set. On
 // failure it quarantines the failed version (persisted after the reset) and
-// returns a CheckpointResetError naming both recovery layers.
+// returns the failed step, whose cause is the CheckpointResetError when the
+// reset held. A checkpoint prune failure is returned beside it, or on its own
+// once every migration committed.
 //
 // [LAW:single-enforcer] The checkpoint and per-migration commit boundary live
 // here; goose is stepped only through upByOne (shared with the transient
@@ -682,20 +733,26 @@ func (s *Store) liftWorkingSetToRegistry(ctx context.Context) error {
 // [LAW:dataflow-not-control-flow] The same sequence (checkpoint → goose loop
 // → prune) runs on every call; variability lives in the applied-vs-registry
 // set, not in whether stages execute.
-func (s *Store) applyPendingMigrations(ctx context.Context) error {
+func (s *Store) applyPendingMigrations(ctx context.Context, p snapshotted) (pruneErr error, fail *SchemaConvergenceError) {
 	// Construct the provider before creating the checkpoint so a provider
 	// construction failure leaves no orphaned branch behind.
-	provider, err := newGooseProvider(s.db)
-	if err != nil {
-		return fmt.Errorf("construct migration provider: %w", err)
+	var provider *goose.Provider
+	if fail := p.attempt(stepMigrationProvider, func() (err error) {
+		provider, err = newGooseProvider(s.db)
+		return err
+	}); fail != nil {
+		return nil, fail
 	}
 
 	// Create Dolt checkpoint before any mutation. The quarantine table is
 	// already committed (ensureQuarantineTable ran before this call), so
 	// the checkpoint state includes it — the table survives a hard reset.
-	checkpoint, err := s.CreateCheckpoint(ctx, migrationCheckpointPrefix)
-	if err != nil {
-		return fmt.Errorf("create migration checkpoint: %w", err)
+	var checkpoint storage.Checkpoint
+	if fail := p.attempt(stepMigrationCheckpoint, func() (err error) {
+		checkpoint, err = s.CreateCheckpoint(ctx, migrationCheckpointPrefix)
+		return err
+	}); fail != nil {
+		return nil, fail
 	}
 
 	// The startup path is the only one that injects synthetic goose failures
@@ -709,11 +766,10 @@ func (s *Store) applyPendingMigrations(ctx context.Context) error {
 		}
 		return s.upByOne(ctx, provider)
 	}
-	prune := func(ctx context.Context) error {
-		if hook := migrationCheckpointPruneForTest; hook != nil {
-			return hook()
-		}
-		return s.PruneCheckpoints(ctx, migrationCheckpointPrefix, migrationCheckpointRetention)
+	pruneCheckpoints := func(ctx context.Context) error {
+		return prune(pruneMigrationCheckpoints, "prune migration checkpoints", func() error {
+			return s.PruneCheckpoints(ctx, migrationCheckpointPrefix, migrationCheckpointRetention)
+		})
 	}
 
 	// recoverFrom resets the working set the run left part-way, records the
@@ -721,35 +777,32 @@ func (s *Store) applyPendingMigrations(ctx context.Context) error {
 	// a context the caller cannot cancel: a caller that gave up (lit init's
 	// adopt timeout cancels the context Open ran under) must not leave the
 	// workspace half-migrated. [LAW:no-ambient-temporal-coupling]
-	recoverFrom := func(result *goose.MigrationResult, cause error, quarantine bool) error {
+	//
+	// Prune on the failure path too: a quarantined failure blocks future
+	// Opens before they create a new checkpoint, but a failure that earned no
+	// quarantine leaves the door open for repeated retries to accumulate
+	// branches. The prune failure rides beside the step's failure, never in
+	// its cause, so it never decides how the failure is classified, and it
+	// is still printed: it is the only sign those branches are piling up.
+	// [LAW:no-silent-failure]
+	recoverFrom := func(failed, reset ConvergenceStep, result *goose.MigrationResult, cause error, quarantine bool) (error, *SchemaConvergenceError) {
 		recoveryCtx := context.WithoutCancel(ctx)
-		cpErr := s.handleMigrationFailure(recoveryCtx, result, cause, quarantine, checkpoint)
-		// Prune on the failure path too: a quarantined failure blocks future
-		// Opens before they create a new checkpoint, but a failure that earned
-		// no quarantine leaves the door open for repeated retries to accumulate
-		// branches. The migration failure stays the error callers classify; a
-		// prune failure rides beside it, since it is the only sign those
-		// branches are piling up. [LAW:no-silent-failure]
-		if pruneErr := prune(recoveryCtx); pruneErr != nil {
-			return errors.Join(cpErr, fmt.Errorf("prune migration checkpoints: %w", pruneErr))
-		}
-		return cpErr
+		fail := s.handleMigrationFailure(recoveryCtx, p, failed, reset, result, cause, quarantine, checkpoint)
+		return pruneCheckpoints(recoveryCtx), fail
 	}
 
 	for {
 		result, gooseErr := step()
 		if errors.Is(gooseErr, goose.ErrNoNextVersion) {
-			// Success: prune old checkpoints to the retention count. The run's
-			// outcome is settled, so a caller that gives up now cannot turn a
-			// migrated workspace into a failed Open.
-			// [LAW:no-ambient-temporal-coupling]
-			if err := prune(context.WithoutCancel(ctx)); err != nil {
-				return fmt.Errorf("prune migration checkpoints: %w", err)
-			}
-			return nil
+			// Success: prune old checkpoints to the retention count. Every
+			// migration has committed, so the run's outcome is settled: a
+			// caller that gives up now cannot turn a migrated workspace into a
+			// failed Open, and neither can a prune that fails, which is
+			// reported on the open's outcome. [LAW:no-ambient-temporal-coupling]
+			return pruneCheckpoints(context.WithoutCancel(ctx)), nil
 		}
 		if gooseErr != nil {
-			return recoverFrom(result, gooseErr, earnsQuarantine(ctx, result, gooseErr))
+			return recoverFrom(stepMigration, stepMigrationReset, result, gooseErr, earnsQuarantine(ctx, result, gooseErr))
 		}
 		// commitWorkingSet (not ...Once) so each migration commit gets the
 		// transient-manifest retry — startup migration is a critical path and a
@@ -757,9 +810,12 @@ func (s *Store) applyPendingMigrations(ctx context.Context) error {
 		// already held, so re-entering withCommitLock short-circuits. A commit
 		// that still fails leaves the step applied but unversioned, so it is
 		// reset like any other stop; it says nothing against the migration, so
-		// it earns no quarantine.
-		if err := s.commitWorkingSet(ctx, migrationCommitMessage(result)); err != nil {
-			return recoverFrom(result, fmt.Errorf("commit migration v%d: %w", result.Source.Version, err), false)
+		// it earns no quarantine. goose recorded the step before the commit, so
+		// a reset that then fails leaves a complete step, not a partial one.
+		if err := atFailpoint(stepCommitMigration, func() error {
+			return s.commitWorkingSet(ctx, migrationCommitMessage(result))
+		}); err != nil {
+			return recoverFrom(stepCommitMigration, stepCommitMigrationReset, result, fmt.Errorf("commit migration v%d: %w", result.Source.Version, err), false)
 		}
 	}
 }
@@ -786,43 +842,43 @@ func migrationIdentity(result *goose.MigrationResult) (int64, string) {
 
 // handleMigrationFailure resets the working set to the pre-migrate checkpoint,
 // records quarantine, when the failure earned one, in the post-reset database,
-// and returns a CheckpointResetError naming both recovery surfaces.
+// and returns the step that failed: failed, with the CheckpointResetError as
+// its cause, when the recovery held; reset, or the quarantine step, when the
+// recovery did not. A failure at a recovery step carries the
+// CheckpointResetError too when the reset held, so its cause says whether a
+// quarantine is in force.
 //
 // Ordering: reset first, quarantine second — the reset discards all working-set
 // changes since the checkpoint, but the quarantine table itself was committed
 // before the checkpoint, so it survives and the post-reset INSERT lands cleanly.
-func (s *Store) handleMigrationFailure(ctx context.Context, result *goose.MigrationResult, cause error, quarantine bool, checkpoint storage.Checkpoint) error {
+func (s *Store) handleMigrationFailure(ctx context.Context, p snapshotted, failed, reset ConvergenceStep, result *goose.MigrationResult, cause error, quarantine bool, checkpoint storage.Checkpoint) *SchemaConvergenceError {
 	version, name := migrationIdentity(result)
+	outcome := &CheckpointResetError{Version: version, Name: name, Checkpoint: checkpoint, Cause: cause}
 
-	if resetErr := s.ResetToCheckpoint(ctx, checkpoint.Name); resetErr != nil {
-		return fmt.Errorf(
-			"migration v%d failed and Dolt reset to %q failed (%v); restore from dbsnapshot. Root cause: %w",
-			version, checkpoint.Name, resetErr, cause,
-		)
+	if err := atFailpoint(reset, func() error { return s.ResetToCheckpoint(ctx, checkpoint.Name) }); err != nil {
+		return p.failAt(reset, errors.Join(
+			fmt.Errorf("reset to Dolt checkpoint %q: %w", checkpoint.Name, err),
+			fmt.Errorf("it was resetting after migration v%d %q failed: %w", version, name, cause),
+		))
 	}
-
-	if quarantine {
-		if recordErr := s.recordQuarantine(ctx, version, name, cause.Error()); recordErr != nil {
-			return fmt.Errorf(
-				"migration v%d failed (reset to %q); quarantine insert failed (%v); restore from dbsnapshot. Root cause: %w",
-				version, checkpoint.Name, recordErr, cause,
-			)
-		}
-		if commitErr := s.commitWorkingSet(ctx, fmt.Sprintf("migrate: quarantine v%d %s", version, name)); commitErr != nil {
-			return fmt.Errorf(
-				"migration v%d failed (reset to %q); quarantine commit failed (%v); restore from dbsnapshot. Root cause: %w",
-				version, checkpoint.Name, commitErr, cause,
-			)
-		}
+	if !quarantine {
+		return p.failAt(failed, outcome)
 	}
-
-	return &CheckpointResetError{
-		Version:     version,
-		Name:        name,
-		Checkpoint:  checkpoint,
-		Cause:       cause,
-		Quarantined: quarantine,
+	if err := atFailpoint(stepRecordQuarantine, func() error {
+		return s.recordQuarantine(ctx, version, name, cause.Error())
+	}); err != nil {
+		return p.failAt(stepRecordQuarantine, errors.Join(err, outcome))
 	}
+	// The row is in the working set from here on, so the quarantine is in
+	// force whether or not its commit lands: an uncommitted row is what the
+	// next open reads.
+	outcome.Quarantined = true
+	if err := atFailpoint(stepCommitQuarantine, func() error {
+		return s.commitWorkingSet(ctx, fmt.Sprintf("migrate: quarantine v%d %s", version, name))
+	}); err != nil {
+		return p.failAt(stepCommitQuarantine, errors.Join(fmt.Errorf("commit quarantine v%d: %w", version, err), outcome))
+	}
+	return p.failAt(failed, outcome)
 }
 
 // quarantineTableStmt is the canonical migration_quarantine shape. Shared by
@@ -905,11 +961,13 @@ func (s *Store) recreateQuarantineTable(ctx context.Context, cols map[string]boo
 			names = append(names, c)
 		}
 		sort.Strings(names)
-		return fmt.Errorf(
+		// The one exit of this step that every open repeats, so it names its
+		// own step. [LAW:types-are-the-program]
+		return failAt(stepQuarantineTableShape, fmt.Errorf(
 			"migration_quarantine has a non-canonical shape (columns: %s) and %d row(s) of history; "+
 				"refusing to recreate automatically — this needs manual triage, not self-heal",
 			strings.Join(names, ", "), count,
-		)
+		))
 	}
 	if _, err := s.db.ExecContext(ctx, `DROP TABLE migration_quarantine`); err != nil {
 		return fmt.Errorf("ensure migration_quarantine table: drop stale-shape table: %w", err)
@@ -1220,11 +1278,16 @@ func migrationDriftRepairCommitMessage(repaired []string) string {
 // appliedVersion, not just mismatch's earliest one.
 //
 // [LAW:no-silent-failure] A reset failure is itself surfaced, never silently
-// dropped, mirroring handleMigrationFailure's ordering below.
-func (s *Store) repairVersionContentDriftWithRollback(ctx context.Context, appliedVersion int64, mismatch *VersionContentMismatchError) error {
-	checkpoint, err := s.CreateCheckpoint(ctx, migrationDriftRepairCheckpointPrefix)
-	if err != nil {
-		return fmt.Errorf("create version-content drift repair checkpoint: %w", err)
+// dropped, mirroring handleMigrationFailure's ordering below. The checkpoint
+// prune runs after the repair committed, so its failure is returned beside a
+// nil failure, for the open to report, not to fail on.
+func (s *Store) repairVersionContentDriftWithRollback(ctx context.Context, appliedVersion int64, mismatch *VersionContentMismatchError) (pruneErr error, fail *SchemaConvergenceError) {
+	var checkpoint storage.Checkpoint
+	if fail := attempt(stepDriftCheckpoint, func() (err error) {
+		checkpoint, err = s.CreateCheckpoint(ctx, migrationDriftRepairCheckpointPrefix)
+		return err
+	}); fail != nil {
+		return nil, fail
 	}
 	repair := func() ([]string, error) {
 		if hook := versionContentDriftRepairForTest; hook != nil {
@@ -1239,23 +1302,20 @@ func (s *Store) repairVersionContentDriftWithRollback(ctx context.Context, appli
 		}
 	}
 	if repairErr != nil {
+		repairErr = fmt.Errorf("repair version-content drift (detected at v%d %q): %w", mismatch.Version, mismatch.Name, repairErr)
 		// The reset runs to the end on a context the caller cannot cancel, as
 		// applyPendingMigrations' recovery does. [LAW:no-ambient-temporal-coupling]
-		if resetErr := s.ResetToCheckpoint(context.WithoutCancel(ctx), checkpoint.Name); resetErr != nil {
-			return fmt.Errorf(
-				"repair version-content drift (detected at v%d %q) failed (%v) and reset to checkpoint %q failed (%v); restore from dbsnapshot",
-				mismatch.Version, mismatch.Name, repairErr, checkpoint.Name, resetErr,
-			)
+		if resetErr := atFailpoint(stepDriftRepairReset, func() error {
+			return s.ResetToCheckpoint(context.WithoutCancel(ctx), checkpoint.Name)
+		}); resetErr != nil {
+			return nil, failAt(stepDriftRepairReset, errors.Join(
+				fmt.Errorf("reset to checkpoint %q: %w", checkpoint.Name, resetErr), repairErr))
 		}
-		return fmt.Errorf(
-			"repair version-content drift (detected at v%d %q) failed: %w (working set reset to checkpoint %q)",
-			mismatch.Version, mismatch.Name, repairErr, checkpoint.Name,
-		)
+		return nil, failAt(stepDriftRepair, fmt.Errorf("%w (working set reset to checkpoint %q)", repairErr, checkpoint.Name))
 	}
-	if err := s.PruneCheckpoints(context.WithoutCancel(ctx), migrationDriftRepairCheckpointPrefix, migrationCheckpointRetention); err != nil {
-		return fmt.Errorf("prune version-content drift repair checkpoints: %w", err)
-	}
-	return nil
+	return prune(pruneDriftCheckpoints, "prune version-content drift repair checkpoints", func() error {
+		return s.PruneCheckpoints(context.WithoutCancel(ctx), migrationDriftRepairCheckpointPrefix, migrationCheckpointRetention)
+	}), nil
 }
 
 // AppliedSchemaVersion reports the schema version currently recorded for this
@@ -1285,21 +1345,32 @@ func (s *Store) AppliedSchemaVersion(ctx context.Context) (int64, error) {
 // [LAW:one-source-of-truth] After adoption, goose_db_version owns applied-state;
 // the legacy meta.schema_version key is deleted so two authorities cannot
 // coexist and drift.
-func (s *Store) adoptPreGooseWorkspace(ctx context.Context) error {
-	store, err := database.NewStore(goose.DialectMySQL, gooseVersionTable)
-	if err != nil {
-		return fmt.Errorf("adopt: construct goose store: %w", err)
+//
+// The key is dropped first, while no goose table exists: a failed drop or a
+// failed version-table create leaves a workspace the next open classifies as
+// pre-goose and adopts again, and only a failed stamp leaves goose state, an
+// empty goose table. Stamping first would leave a failed drop's key in a
+// workspace every later open reads as managed, and no open drops it.
+func (s *Store) adoptPreGooseWorkspace(ctx context.Context, p snapshotted) *SchemaConvergenceError {
+	if fail := p.attempt(stepAdoptDropLegacyKey, func() error {
+		_, err := s.db.ExecContext(ctx, `DELETE FROM meta WHERE meta_key = 'schema_version'`)
+		return err
+	}); fail != nil {
+		return fail
 	}
-	if err := store.CreateVersionTable(ctx, s.db); err != nil {
-		return fmt.Errorf("adopt: create version table: %w", err)
+	var store database.Store
+	if fail := p.attempt(stepAdoptVersionTable, func() (err error) {
+		store, err = database.NewStore(goose.DialectMySQL, gooseVersionTable)
+		if err != nil {
+			return fmt.Errorf("construct goose store: %w", err)
+		}
+		return store.CreateVersionTable(ctx, s.db)
+	}); fail != nil {
+		return fail
 	}
-	if err := store.Insert(ctx, s.db, database.InsertRequest{Version: baselineVersion}); err != nil {
-		return fmt.Errorf("adopt: stamp baseline version: %w", err)
-	}
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM meta WHERE meta_key = 'schema_version'`); err != nil {
-		return fmt.Errorf("adopt: drop legacy schema_version key: %w", err)
-	}
-	return nil
+	return p.attempt(stepAdoptStamp, func() error {
+		return store.Insert(ctx, s.db, database.InsertRequest{Version: baselineVersion})
+	})
 }
 
 // recordedMigrationVersion returns goose's recorded version, or 0 when none has

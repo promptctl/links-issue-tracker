@@ -178,9 +178,9 @@ Constants (`exit.go`):
 the reason `commandErrorReason(err)` returns (`exit.go`), so an error's code is
 decided by the classification order in §1.9. Each `commandReason` is declared
 with its code (`error_output.go`):
-- 1: `bulk_partial_failure`, `command_failed`, `remote_unreachable`, `transient_gc_contention`, `workspace_busy`, `workspace_write_blocked`
+- 1: `bulk_partial_failure`, `command_failed`, `migration_failed`, `remote_unreachable`, `transient_gc_contention`, `workspace_busy`, `workspace_write_blocked`
 - 2: `usage_error`
-- 3: `migration_quarantined`, `outside_git_workspace`, `purge_unconfirmed`, `retired_command`, `stored_prefix_refused`, `takeover_unconfirmed`, `template_shape_refused`, `unknown_command`, `unsupported_flag`, `validation_refused`, `workspace_not_initialized`, `workspace_schema_ahead`
+- 3: `migration_partially_applied`, `migration_quarantined`, `outside_git_workspace`, `purge_unconfirmed`, `retired_command`, `schema_shape_refused`, `stored_prefix_refused`, `takeover_unconfirmed`, `template_shape_refused`, `unknown_command`, `unsupported_flag`, `validation_refused`, `workspace_not_initialized`, `workspace_schema_ahead`
 - 4: `entity_not_found`, `version_not_found`
 - 5: `merge_conflict`, `owner_approval_required`, `sync_divergence`
 - 6: `no_ready_work`, `scope_exhausted`, `scope_narrowed`, `state_already_holds`
@@ -206,9 +206,15 @@ rules in `internal/model/validation.go`.
   `err.Error()`, which may itself span lines).
 - Then, only when non-empty: `remediation: %s\n`.
 
-`commandErrorReason(err)` maps type → reason string (`error_output.go`). The
-checks run in this order and the first match wins, so an error that wraps
-several of these types gets the reason of the earliest one:
+`commandErrorReason(err)` maps type → reason string (`error_output.go`). Its
+first check is a `*store.SchemaConvergenceError` anywhere in the tree, read
+off the failed step's act: `ActRestoreSnapshot` →
+`migration_partially_applied`; `ActEscalate` → `schema_shape_refused`;
+`ActClearCause` → the checks below over the whole error, with
+`migration_failed` in place of `command_failed` when none matches
+(`typedErrorReason(err, unnamed)`). Every other check runs in
+this order and the first match wins, so an error that wraps several of these
+types gets the reason of the earliest one:
 1. `storage.NotFoundError` → `entity_not_found`
 2. `storage.VersionNotFoundError` and `storage.PlanDigestNotFoundError` → `version_not_found`
 3. `MergeConflictError` → `merge_conflict`
@@ -266,8 +272,11 @@ empty string means no `remediation:` line is printed:
 - `owner_approval_required`: "" (empty — the refusal message carries the steps)
 - `parent_cycle`: "Do not retry unchanged: the loop stays until one of its parent edges is replaced. Break it the way the message above names, then rerun the command."
 - `corruption_detected`: "Run `lit doctor --fix integrity` and retry. \<agent-instructions>This command is idempotent and safe to run without confirmation.\</agent-instructions>"
-- `transient_gc_contention`: "Retry once. If the error persists, run `lit doctor --fix`. \<agent-instructions>This command is idempotent and safe to run without confirmation.\</agent-instructions>"
-- `workspace_write_blocked`: "Wait a moment and retry — a normal command releases the store in well under a second. If it persists, a lit process is stuck: find it with `ps aux | grep '[l]it'` and terminate it, then retry; if none is running the hold is stale, so run `lit doctor --fix`. \<agent-instructions>This is a mechanical, self-diagnosable state — the steps above resolve it without needing the user's input.\</agent-instructions>"
+- `transient_gc_contention`: "Retry once: online garbage collection held the store for a moment. If it fails the same way again, surface it to the user as blocking."
+- `migration_failed`: "Retry the command: the next open runs the step the message names again from the state it left, and converges. If it fails the same way again, surface it to the user as blocking."
+- `migration_partially_applied`: "Do not retry, and run no other lit command first: every command opens the store and runs this migration again on top of its partial changes. Run `lit snapshots restore <name>` with the snapshot the message above names — it holds the workspace as it was just before this open migrated it, and restore moves the current store aside rather than deleting it — then rerun the command."
+- `schema_shape_refused`: "Do not retry unchanged — this workspace's stored shape is one lit does not converge on its own, and every command that opens the store repeats this refusal. The message above names the shape. \<agent-instructions>Repairing a stored shape by hand is the user's call: surface this refusal to the user as blocking.\</agent-instructions>"
+- `workspace_write_blocked`: "Wait a moment and retry: a normal command releases the store in well under a second. If it fails the same way again, surface it to the user as blocking."
 - `scope_narrowed`: "Do not retry unchanged — routing is deterministic and repeats this answer while the filter stays. Run `lit next` without the filter, as the message says, to be handed the ticket it names."
 - `scope_exhausted`: "Do not retry unchanged — routing is deterministic and repeats this answer until the work named above moves. Act on what the message names — the route it offers, or the rows off your focus path — or finish or hand off what you already hold."
 - `no_ready_work`: "Do not retry unchanged — routing is deterministic and repeats this answer until something in the backlog moves. That is the backlog's state, not a fault. If `--type`, `--labels`, `--assignee`, or `--status` narrowed this run, drop the filter and ask again. If a `focus` label narrowed it, `lit next --all` routes over the whole queue for one run and `lit label rm <id> focus` lifts the scope. Otherwise `lit backlog --all` shows the whole queue and who holds what, and `lit new` adds work if it is genuinely empty."

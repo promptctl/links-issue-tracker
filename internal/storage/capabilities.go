@@ -275,13 +275,14 @@ type SchemaMigrator interface {
 
 // Migrated is what an open did to the stored shape: whether it had to build
 // the database first, the recovery snapshot it took before migrating, "" when
-// it found nothing to migrate, why rolling older recovery snapshots off
-// afterwards failed, if it did, and the newer schema it served, if it did.
-// [LAW:types-are-the-program] PruneErr is a field, not the open's error: the
-// prune runs after the migration has committed, so its failure leaves the
+// it found nothing to migrate, why rolling older migration snapshots or
+// checkpoints off after its work committed failed, if it did, and the newer
+// schema it served, if it did.
+// [LAW:types-are-the-program] PruneErr is a field, not the open's error: each
+// prune runs after the work it trails has committed, so its failure leaves the
 // store at the shape this binary reads. An open that failed on it would stop
-// the command over a leftover snapshot, and the next open, finding nothing to
-// migrate, would succeed without retrying the prune.
+// the command over a leftover snapshot or checkpoint, and the next open,
+// finding nothing to migrate, would succeed without retrying the prune.
 type Migrated struct {
 	Bootstrap   Bootstrap
 	Snapshot    string
@@ -366,10 +367,19 @@ func OpenMigration(st Store) Migrated {
 // EventRecord is the open's migration as event facts.
 func (m Migrated) EventRecord() map[string]any {
 	facts := m.Bootstrap.EventRecord()
-	facts["migration.snapshot"] = m.Snapshot
-	facts["migration.snapshot_prune_error"] = telemetry.ErrorText(m.PruneErr)
+	maps.Copy(facts, MigrationRecoveryFacts(m.Snapshot, m.PruneErr))
 	maps.Copy(facts, m.SchemaAhead.EventRecord())
 	return facts
+}
+
+// MigrationRecoveryFacts is the recovery snapshot an open took, "" when none,
+// and why its prunes failed, as event facts. A successful open and a failed
+// one record them under these same keys. [LAW:one-source-of-truth]
+func MigrationRecoveryFacts(snapshot string, pruneErr error) map[string]any {
+	return map[string]any{
+		"migration.snapshot":    snapshot,
+		"migration.prune_error": telemetry.ErrorText(pruneErr),
+	}
 }
 
 // Downgraded is what a Downgrade did: the shape version it read under the lock

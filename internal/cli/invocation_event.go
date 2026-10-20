@@ -72,16 +72,56 @@ func invocationEnd(at time.Time, err error, panicked any) telemetry.End {
 	return end
 }
 
-// errorRecord is what a failed command's typed error decided and counted, as
+// errorRecord is what a failed command's typed errors decided and counted, as
 // event facts and counts, so it is countable without parsing the error's
 // message. Each error type declares its own record (model.RecordedError);
-// an error that declares none records nothing here. [LAW:nothing-unseen]
-func errorRecord(err error) (map[string]any, map[string]int) {
-	var recorded model.RecordedError
-	if !errors.As(err, &recorded) {
-		return nil, nil
+// an error that declares none records nothing here. It merges the record of
+// every error in the tree — each wrapped error and each branch of a join,
+// depth-first in the order errors.As visits them — so a wrapper that records
+// does not hide the facts of the error it wraps. A key two records both set
+// keeps the first value: the outermost, earliest record wins, the precedence
+// a single errors.As match gives. [LAW:nothing-unseen]
+func errorRecord(err error) (facts map[string]any, counts map[string]int) {
+	walkErrorTree(err, func(e error) {
+		recorded, ok := e.(model.RecordedError)
+		if !ok {
+			return
+		}
+		f, c := recorded.EventRecord()
+		facts = mergeFirstWins(facts, f)
+		counts = mergeFirstWins(counts, c)
+	})
+	return facts, counts
+}
+
+// walkErrorTree visits err and every error it wraps, depth-first, in the order
+// errors.As visits them.
+func walkErrorTree(err error, visit func(error)) {
+	if err == nil {
+		return
 	}
-	return recorded.EventRecord()
+	visit(err)
+	switch wrapper := err.(type) {
+	case interface{ Unwrap() error }:
+		walkErrorTree(wrapper.Unwrap(), visit)
+	case interface{ Unwrap() []error }:
+		for _, branch := range wrapper.Unwrap() {
+			walkErrorTree(branch, visit)
+		}
+	}
+}
+
+// mergeFirstWins adds src's keys that dst does not already hold.
+func mergeFirstWins[V any](dst, src map[string]V) map[string]V {
+	for key, value := range src {
+		if dst == nil {
+			dst = make(map[string]V, len(src))
+		}
+		if _, held := dst[key]; !held {
+			dst[key] = value
+		}
+	}
+	return dst
 }
 
 // interruptedEnd is an invocation the interrupt guard hard-exited with code:

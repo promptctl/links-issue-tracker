@@ -192,6 +192,10 @@ func TestSyncOpenMeetsTheWriteFloor(t *testing.T) {
 				if unsupported.WorkspaceVersion != ahead {
 					t.Errorf("refusal = %+v, want workspace v%d", unsupported, ahead)
 				}
+				// The same step the migrating open refuses at.
+				if step := asConvergenceError(t, err).Step; step != stepRefuseUnwritable {
+					t.Errorf("refusal step = %s, want %s", step, stepRefuseUnwritable)
+				}
 				return
 			}
 			defer func() {

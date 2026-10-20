@@ -11,7 +11,7 @@ import (
 
 // reportOpenMigration is what a command does with what opening a store did to
 // its stored shape: it records the facts on the command's event, and writes
-// the warning a failed snapshot prune leaves, "" when nothing failed. The
+// the warning a failed prune leaves, "" when nothing failed. The
 // migration has committed either way, so the command goes on to run.
 //
 // The warning goes to stderr, as the statusline's warnings do: it is about the
@@ -26,11 +26,11 @@ func reportOpenMigration(ctx context.Context, done storage.Migrated) {
 }
 
 // migrationPruneWarning is the line an open's migration adds to the command's
-// output when rolling old migration snapshots off failed after the migration
-// committed, or "" when nothing failed.
+// output when rolling old migration snapshots or checkpoints off failed after
+// the work it trails committed, or "" when nothing failed.
 func migrationPruneWarning(pruneErr error) string {
 	if pruneErr == nil {
 		return ""
 	}
-	return fmt.Sprintf("warning: old migration snapshots were not removed: %v\n", pruneErr)
+	return fmt.Sprintf("warning: old migration snapshots or checkpoints were not removed: %v\n", pruneErr)
 }

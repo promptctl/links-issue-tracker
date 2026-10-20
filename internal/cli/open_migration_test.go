@@ -39,7 +39,7 @@ func TestACommandWhoseMigratingOpenCannotPruneStillRuns(t *testing.T) {
 	if jerr := json.Unmarshal([]byte(out), &export); jerr != nil {
 		t.Errorf("lit export stdout is not the export alone: %v\n%s", jerr, out)
 	}
-	if !strings.HasPrefix(stderr, "warning: old migration snapshots were not removed: prune migration snapshots: ") {
+	if !strings.HasPrefix(stderr, "warning: old migration snapshots or checkpoints were not removed: prune migration snapshots: ") {
 		t.Errorf("stderr = %q, want it to begin with the prune warning", stderr)
 	}
 	assertMigrationPruneFailureRecorded(t, stuck)
@@ -85,7 +85,7 @@ func TestInitsAdoptGateReportsItsOpensMigration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("lit init error = %v, want it to run\noutput:\n%s", err, out)
 	}
-	if !strings.Contains(stderr, "warning: old migration snapshots were not removed: prune migration snapshots: ") {
+	if !strings.Contains(stderr, "warning: old migration snapshots or checkpoints were not removed: prune migration snapshots: ") {
 		t.Errorf("stderr = %q, want the prune warning", stderr)
 	}
 	assertMigrationPruneFailureRecorded(t, stuck)
@@ -102,8 +102,8 @@ func assertMigrationPruneFailureRecorded(t *testing.T, stuck string) {
 	if snap, _ := ev.Facts["migration.snapshot"].(string); !strings.Contains(snap, "-pre-migrate-") || snap == filepath.Base(stuck) {
 		t.Errorf("migration.snapshot = %v, want the snapshot the open took", ev.Facts["migration.snapshot"])
 	}
-	if pruneErr, _ := ev.Facts["migration.snapshot_prune_error"].(string); !strings.HasPrefix(pruneErr, "prune migration snapshots: ") {
-		t.Errorf("migration.snapshot_prune_error = %v, want the prune failure", ev.Facts["migration.snapshot_prune_error"])
+	if pruneErr, _ := ev.Facts["migration.prune_error"].(string); !strings.HasPrefix(pruneErr, "prune migration snapshots: ") {
+		t.Errorf("migration.prune_error = %v, want the prune failure", ev.Facts["migration.prune_error"])
 	}
 }
 
@@ -120,11 +120,11 @@ func TestTheRollupCountsStoresWhoseMigratingOpenCannotPrune(t *testing.T) {
 	if err != nil {
 		t.Fatalf("lit stores --counts error = %v\noutput:\n%s", err, out)
 	}
-	if want := "~ " + ws.StorageDir + ": warning: old migration snapshots were not removed: prune migration snapshots: "; !strings.Contains(out, want) {
+	if want := "~ " + ws.StorageDir + ": warning: old migration snapshots or checkpoints were not removed: prune migration snapshots: "; !strings.Contains(out, want) {
 		t.Errorf("lit stores --counts output = %q, want the prune note %q", out, want)
 	}
 	counts := lastEvent(t).Counts
-	for key, want := range map[string]int{"stores.migrated": 1, "stores.snapshot_prune_failures": 1} {
+	for key, want := range map[string]int{"stores.migrated": 1, "stores.prune_failures": 1} {
 		if counts[key] != want {
 			t.Errorf("counts.%s = %d, want %d", key, counts[key], want)
 		}
