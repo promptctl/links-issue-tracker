@@ -85,12 +85,14 @@ func TestCollectAbandonedMirrorReclaimsWhatItRemoves(t *testing.T) {
 func TestCollectAbandonedMirrorReportsAFailureNamingTheKey(t *testing.T) {
 	t.Parallel()
 	base := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(base, orphanKey), 0o755); err != nil {
+	key := filepath.Join(base, orphanKey)
+	if err := os.MkdirAll(key, 0o755); err != nil {
 		t.Fatalf("plant orphan: %v", err)
 	}
-	// Unlinking the key directory needs write on its parent, so a read-only base
-	// fails the removal while leaving the walk that measures it working.
-	fsperm.Deny(t, base, fsperm.Write)
+	if err := os.WriteFile(filepath.Join(key, "pack"), nil, 0o644); err != nil {
+		t.Fatalf("plant orphan payload: %v", err)
+	}
+	fsperm.Deny(t, key, fsperm.Removal)
 
 	_, collected, err := collectAbandonedMirror(base, orphanKey)
 	if err == nil {

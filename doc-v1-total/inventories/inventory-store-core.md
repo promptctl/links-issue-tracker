@@ -4718,15 +4718,15 @@ Fixture `preGooseDump()` (`candidate_test.go`): `WorkspaceID: "legacy-ws"`, **no
 
 `TestRebuildCandidateAttemptsAreIsolated` (`candidate_test.go`): two candidates from one dump under one parent; `first.Discard()` twice must both return nil (idempotence); `second.store.Export(ctx)` still yields 2 issues.
 
-### 2.9 Removal retry under a refused write (`candidate_test.go`)
+### 2.9 Removal retry under a refused removal (`candidate_test.go`)
 
 `TestDiscardRetriesDirectoryRemoval` (`candidate_test.go`):
-- Injection is `fsperm.Deny(t, parent, fsperm.Write)`: the parent refuses changes to its entries, and removing an entry requires write permission on its parent. `fsperm` skips the test where the fault does not take (root, and Windows, which does not enforce a directory's mode for its entries). No rename or fsync behavior is exercised.
-- Under the unwritable parent, the first `cand.Discard()` **must error**.
-- After `restore()` puts the parent's mode back, the second `cand.Discard()` must return nil.
+- Injection is `fsperm.Deny(t, cand.root, fsperm.Removal)`: the candidate root refuses its removal with what it holds. `fsperm` skips the test where the fault does not take (root). No rename or fsync behavior is exercised.
+- Under the refused removal, the first `cand.Discard()` **must error**.
+- After `restore()` puts the root's mode back, the second `cand.Discard()` must return nil.
 - `dirEntryCount(t, parent)` must then be **0**.
 - Rationale pinned: "A single shared release flag would have nulled everything on the first attempt and the retry would no-op, stranding the directory".
-- `fsperm` also restores the mode at test end, so an early `Fatalf` cannot strand an unwritable parent.
+- `fsperm` also restores the mode at test end, so an early `Fatalf` cannot strand an unremovable root.
 
 ---
 

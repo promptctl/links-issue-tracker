@@ -114,22 +114,6 @@ func RequireReadOnly(t testing.TB, file string) {
 	}
 }
 
-// DenyRead takes every permission off dir, so its entries cannot be listed,
-// and restores dir's mode when the test ends, as DenyWrite does.
-func DenyRead(t testing.TB, dir string) (restore func()) {
-	t.Helper()
-	restore = set(t, dir, 0o000)
-	_, err := os.ReadDir(dir)
-	if err == nil {
-		restore()
-		t.Skipf("%s listed with every permission off: this process bypasses directory permissions (root does, and Windows does not enforce them), so the fault cannot be injected", dir)
-	}
-	if !errors.Is(err, fs.ErrPermission) {
-		t.Fatalf("probe %s for the read fault: %v; want a permission error", dir, err)
-	}
-	return restore
-}
-
 // set changes dir's mode to perm and returns what puts the old mode back,
 // registered to run when the test ends too, so the test's temporary directory
 // can still be removed. A directory no longer at dir was moved by the code

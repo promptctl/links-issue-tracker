@@ -170,10 +170,10 @@ func TestRebuildCandidateAttemptsAreIsolated(t *testing.T) {
 }
 
 // TestDiscardRetriesDirectoryRemoval proves the zero-residue guarantee survives
-// a transient filesystem failure. With the parent dir made unwritable, the first
-// Discard closes the store but cannot unlink the candidate root, so it errors and
-// keeps root tracked; once the parent is writable again a second Discard
-// re-attempts removal and clears it. A single shared release flag would have
+// a transient filesystem failure. With the candidate root's removal denied, the
+// first Discard closes the store but cannot remove the root, so it errors and
+// keeps root tracked; once the fault is lifted a second Discard re-attempts
+// removal and clears it. A single shared release flag would have
 // nulled everything on the first attempt and the retry would no-op, stranding the
 // directory.
 func TestDiscardRetriesDirectoryRemoval(t *testing.T) {
@@ -188,10 +188,10 @@ func TestDiscardRetriesDirectoryRemoval(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = cand.Discard() })
 
-	restore := fsperm.Deny(t, parent, fsperm.Write)
+	restore := fsperm.Deny(t, cand.root, fsperm.Removal)
 
 	if err := cand.Discard(); err == nil {
-		t.Fatal("Discard succeeded despite an unwritable parent; expected a removal error")
+		t.Fatal("Discard succeeded despite a root that cannot be removed; expected a removal error")
 	}
 	restore()
 
