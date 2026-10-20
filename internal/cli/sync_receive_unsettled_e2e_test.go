@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -17,9 +16,9 @@ import (
 
 // TestAReceiveThatFetchedAndKeepsStoppingReachesTheFailureSurface drives the
 // automatic receive on a checkout whose fetch succeeds and whose landing then
-// fails, from a real cause: a standing holder of the live store's commit lock,
-// taken after the clone and its fetch, the one place a held live store does
-// not already refuse the receive. The first stop is a run of one: the event
+// fails, from a real cause: a file stands where the landing stages its table
+// files, placed after the clone and its fetch so the clone does not copy it.
+// The first stop is a run of one: the event
 // and the fetch-success marker say what happened, and nobody is paged. Once
 // the run has lasted past unsettledLastingAfter with no settle, the next
 // receive leaves the receive_unsettled block for the next command and pages
@@ -73,7 +72,7 @@ func TestAReceiveThatFetchedAndKeepsStoppingReachesTheFailureSurface(t *testing.
 		return outcome
 	}
 	// stoppedReceive is the automatic receive's tail (receiveOnce) run after
-	// its clone and fetch, with the commit lock held from the fetch on.
+	// its clone and fetch, with the landing blocked from the fetch on.
 	stoppedReceive := func() map[string]any {
 		t.Helper()
 		recorder := telemetry.Begin(telemetry.Event{})
@@ -87,9 +86,9 @@ func TestAReceiveThatFetchedAndKeepsStoppingReachesTheFailureSurface(t *testing.
 		if err != nil || fetch.fetchErr != nil {
 			t.Fatalf("fetchIntoClone() = %+v, %v; want a fetch that worked", fetch, err)
 		}
-		release := holdTheCommitLock(t, ws)
+		unblock := blockTheLanding(t, ws)
 		outcome := landAndRecord(ctx, ws, clone, fetch, remoteAdvertisement{})
-		release()
+		unblock()
 		surfaceReceiveOutcome(ctx, ws, outcome, time.Now())
 		return oneOutcome(writtenEvent(t, recorder.Finish(invocationEnd(time.Now(), nil, nil))).Occurrences["receive.outcomes"])
 	}
@@ -189,26 +188,26 @@ func TestAReceiveThatFetchedAndKeepsStoppingReachesTheFailureSurface(t *testing.
 	}
 }
 
-// holdTheCommitLock makes every settle on ws's live store stop from a real
-// cause after its fetch has worked: a standing holder of the live store's
-// commit lock, which the receive's clone and its fetch never take. The
-// returned release ends the hold; the test's cleanup ends it otherwise.
-func holdTheCommitLock(t *testing.T, ws workspace.Info) (release func()) {
+// blockTheLanding makes every landing on ws's live store stop from a real
+// cause: a file stands where the landing stages its table files. A clone
+// taken while it stands copies it, so callers block after the clone. The
+// returned unblock removes it; the test's cleanup removes it otherwise.
+func blockTheLanding(t *testing.T, ws workspace.Info) (unblock func()) {
 	t.Helper()
-	unlock, err := store.LockCommitPath(context.Background(), ws.DatabasePath)
-	if err != nil {
-		t.Fatalf("hold the commit lock: %v", err)
+	path := store.LandingTempDir(ws.DatabasePath)
+	if err := os.RemoveAll(path); err != nil {
+		t.Fatalf("clear the landing's temp dir: %v", err)
 	}
-	var once sync.Once
-	release = func() {
-		once.Do(func() {
-			if err := unlock(); err != nil {
-				t.Errorf("release the commit lock: %v", err)
-			}
-		})
+	if err := os.WriteFile(path, []byte("not a directory\n"), 0o600); err != nil {
+		t.Fatalf("block the landing: %v", err)
 	}
-	t.Cleanup(release)
-	return release
+	unblock = func() {
+		if err := os.RemoveAll(path); err != nil {
+			t.Errorf("unblock the landing: %v", err)
+		}
+	}
+	t.Cleanup(unblock)
+	return unblock
 }
 
 // addOwnerNotifyHook turns the owner channel on for an initialized workspace,
@@ -305,10 +304,10 @@ func unsettlingCheckout(t *testing.T) (context.Context, workspace.Info, liveClon
 // unsettled.first unwritten, and the next automatic receive counts it.
 func TestTheMirrorsReceiveStartsNoRun(t *testing.T) {
 	ctx, ws, clone, fetch := unsettlingCheckout(t)
-	holdTheCommitLock(t, ws)
+	blockTheLanding(t, ws)
 	err := receivePushedReRoot(ctx, ws, clone, pushedHead{remote: fetch.target.remote, branch: fetch.target.branch})
-	if err == nil {
-		t.Fatal("receivePushedReRoot() succeeded under a held commit lock; want the settle's stop")
+	if err == nil || !strings.Contains(err.Error(), "stopped at land") {
+		t.Fatalf("receivePushedReRoot() error = %v; want the landing's stop", err)
 	}
 	if at, ok, err := store.ReadUnsettledFirst(ws.DatabasePath); ok || err != nil {
 		t.Fatalf("unsettled.first after the mirror's stop = %s ok %v err %v; want no record", at, ok, err)
