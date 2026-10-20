@@ -17,12 +17,13 @@ import (
 // the caller is told: a batch that fails partway undoes the issues it created
 // and names every one it could not undo, so a partial application is always
 // reported rather than inferred, and it returns what stays written beside the
-// error, having put back the parents its reparents replaced. The update
-// documents' reparents are written after the creates as one step and before the creates' blocked_by edges, so each edge is judged on the
-// hierarchy the file ends with; the file's ordering follows as one RankSet,
-// and updates are applied last, so a failing create, reparent, edge, or
-// ordering leaves none applied, but a failing update does not revert the ones
-// before it, which is why the error text is the caller's only complete account
+// error, having put back the edges its sets replaced. Every edge set the file
+// states — the update documents' parents and blocked_by, and the creates'
+// blocked_by — is written after the creates as one step, judged on the graph
+// the file ends with; the file's ordering follows as one RankSet, and updates
+// are applied last, so a failing create, edge, or ordering leaves none
+// applied, but a failing update does not revert the ones before it, which is
+// why the error text is the caller's only complete account
 // of what happened. [LAW:no-silent-failure]
 func (e *Engine) BulkApply(ctx context.Context, prefix, actor string, specs []storage.BulkIssueSpec) (storage.BulkApplyResult, error) {
 	e.mu.Lock()
@@ -41,12 +42,12 @@ func (e *Engine) BulkApply(ctx context.Context, prefix, actor string, specs []st
 
 	batch := newBatch(len(specs))
 	result := storage.BulkApplyResult{}
-	var reparents storage.ReparentStep
+	var edges storage.EdgeStep
 	refuse := func(err error) (storage.BulkApplyResult, error) {
-		if undoErr := reparents.Undo(parentWriter{e: e, actor: actor}); undoErr != nil {
+		if undoErr := edges.Undo(edgeWriter{e: e, actor: actor}); undoErr != nil {
 			err = fmt.Errorf("%w; %w", err, undoErr)
 		} else {
-			result.ReparentsUndone, result.Reparented = result.Reparented, nil
+			result.EdgesUndone()
 		}
 		leaked := e.rollbackCreated(batch, actor)
 		return result.AfterRollback(leaked), fmt.Errorf("%w; %s (rollback leaked %d: %s)", err, result.Kept(leaked), len(leaked), strings.Join(leaked, ","))
@@ -59,17 +60,10 @@ func (e *Engine) BulkApply(ctx context.Context, prefix, actor string, specs []st
 		batch.created(create.Index, create.LocalID, issue.ID)
 	}
 	result.Created = batch.createdMappings()
-	if reparents, err = e.reparent(file, batch.resolve, actor); err != nil {
+	if edges, err = e.writeEdges(file, batch, actor); err != nil {
 		return refuse(err)
 	}
-	result.Reparented, result.ParentHeld = reparents.Moved, reparents.Held
-	for _, create := range file.Creates {
-		for _, dep := range create.BlockedBy {
-			if err := e.wireDependency(batch.realID(create.Index), batch.resolve(dep), actor); err != nil {
-				return refuse(fmt.Errorf("bulk: blocked_by doc %d -> %q: %w", create.Index, dep, err))
-			}
-		}
-	}
+	result.RecordEdges(edges)
 	if ranked := file.RankedIDs(batch.createdIDs); len(ranked) > 0 {
 		if result.Ranked, err = e.rankSet(ranked); err != nil {
 			return refuse(fmt.Errorf("bulk: rank: %w", err))
@@ -115,56 +109,55 @@ func (e *Engine) ImportTree(ctx context.Context, prefix, actor string, specs []s
 	return storage.ImportTreeResult{Created: batch.createdMappings()}, nil
 }
 
-// reparent writes a file's reparents whole or not at all: a refusal restores
-// the relations as they were before the first, since a relation write changes
-// nothing else in this engine.
-func (e *Engine) reparent(file storage.BulkFile, resolve func(string) string, actor string) (storage.ReparentStep, error) {
+// writeEdges writes a file's edge sets whole or not at all: a refusal
+// restores the relations as they were before the first, since a relation write
+// changes nothing else in this engine.
+func (e *Engine) writeEdges(file storage.BulkFile, batch *batchIDs, actor string) (storage.EdgeStep, error) {
 	before := slices.Clone(e.relations)
-	step, err := file.WriteReparents(resolve, parentWriter{e: e, actor: actor})
+	step, err := file.WriteEdges(batch.createdIDs, edgeWriter{e: e, actor: actor})
 	if err != nil {
 		e.relations = before
 	}
 	return step, err
 }
 
-// parentWriter is a bulk file's hierarchy write: the writes `lit parent set`
-// and `lit parent clear` make, so a bulk reparent obeys the one hierarchy
-// rule. [LAW:single-enforcer]
-type parentWriter struct {
+// edgeWriter is a bulk file's relation write: every edge it adds goes through
+// addRelation, the write `lit dep add` and `lit parent set` make, so an edge a
+// file writes obeys the one rule its type carries. [LAW:single-enforcer]
+type edgeWriter struct {
 	e     *Engine
 	actor string
 }
 
-func (w parentWriter) Holds(childID, parentID string) (bool, error) {
-	return w.e.relationHeld(childID, parentID, model.RelParentChild), nil
-}
-
-func (w parentWriter) Clear(childID string) error { return w.e.clearParent(childID) }
-
-func (w parentWriter) Detach(childID string) error {
-	w.e.detachParents(childID)
-	return nil
-}
-
-func (w parentWriter) Parents(childID string) ([]model.Relation, error) {
+func (w edgeWriter) Edges(id string, relType model.RelationType) ([]model.Relation, error) {
+	if _, err := w.e.mustRecord(id); err != nil {
+		return nil, err
+	}
 	var edges []model.Relation
 	for _, rel := range w.e.relations {
-		if rel.SrcID == childID && rel.Type == model.RelParentChild {
+		if rel.SrcID == id && rel.Type == relType {
 			edges = append(edges, rel)
 		}
 	}
 	return edges, nil
 }
 
-func (w parentWriter) Restore(childID string, edges []model.Relation) error {
-	w.e.detachParents(childID)
-	w.e.relations = append(w.e.relations, edges...)
+func (w edgeWriter) Add(id, target string, relType model.RelationType) error {
+	_, err := w.e.addRelation(storage.AddRelationInput{SrcID: id, DstID: target, Type: relType, CreatedBy: w.actor})
+	return err
+}
+
+func (w edgeWriter) Remove(edge model.Relation) error {
+	w.e.dropRelations(func(rel model.Relation) bool {
+		return rel.SrcID == edge.SrcID && rel.DstID == edge.DstID && rel.Type == edge.Type
+	})
 	return nil
 }
 
-func (w parentWriter) Attach(childID, parentID string) error {
-	_, err := w.e.addRelation(storage.AddRelationInput{SrcID: childID, DstID: parentID, Type: model.RelParentChild, CreatedBy: w.actor})
-	return err
+func (w edgeWriter) Restore(id string, relType model.RelationType, edges []model.Relation) error {
+	w.e.dropRelations(func(rel model.Relation) bool { return rel.SrcID == id && rel.Type == relType })
+	w.e.relations = append(w.e.relations, edges...)
+	return nil
 }
 
 func (e *Engine) wireDependency(dependent, dependency, actor string) error {
@@ -225,17 +218,9 @@ func (b *batchIDs) created(index int, localID, realID string) {
 
 func (b *batchIDs) realID(index int) string { return b.byIndex[index] }
 
-// resolve maps a reference against this batch's names, passing anything it
-// does not recognize through unchanged — a reference that matches nothing
-// local is a real, pre-existing id, and the create or edge write that receives
-// it is what decides whether it is a real one. [LAW:dataflow-not-control-flow]
-// One unconditional lookup-with-fallback, not a branch on "is this local".
-func (b *batchIDs) resolve(ref string) string {
-	if real, ok := b.byLocalID[ref]; ok {
-		return real
-	}
-	return ref
-}
+// resolve maps a reference against this batch's names by the one rule every
+// engine resolves a file's references by. [LAW:one-source-of-truth]
+func (b *batchIDs) resolve(ref string) string { return storage.ResolveRef(ref, b.byLocalID) }
 
 // resolveLocal maps a reference that must be local. A tree import validates
 // every reference against the file before the first create, so an unresolved

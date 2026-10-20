@@ -20,7 +20,7 @@ func TestBulkApplyCreatesEpicWithChildAndDep(t *testing.T) {
 		{LocalID: "e0", Title: title("Upstream"), IssueType: title("epic"), Topic: title("bulk")},
 		{LocalID: "e1", Title: title("Epic"), IssueType: title("epic"), Topic: title("bulk")},
 		{LocalID: "t1", Title: title("First"), IssueType: title("task"), Topic: title("bulk"), Parent: ptr("e0")},
-		{LocalID: "t2", Title: title("Second"), IssueType: title("task"), Topic: title("bulk"), Parent: ptr("e1"), BlockedBy: []string{"t1"}},
+		{LocalID: "t2", Title: title("Second"), IssueType: title("task"), Topic: title("bulk"), Parent: ptr("e1"), BlockedBy: ptr([]string{"t1"})},
 	}
 	result, err := st.BulkApply(ctx, "test", "agent", specs)
 	if err != nil {

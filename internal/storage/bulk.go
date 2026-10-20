@@ -1,9 +1,9 @@
 package storage
 
 import (
-	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
@@ -41,8 +41,12 @@ type BulkIssueSpec struct {
 	// Parent on a create names the new issue's parent. On an update it
 	// reparents the issue, and the empty string clears its parent: nil is
 	// "not stated", so the two cannot be confused.
-	Parent    *string  `yaml:"parent,omitempty"`
-	BlockedBy []string `yaml:"blocked_by,omitempty"`
+	Parent *string `yaml:"parent,omitempty"`
+	// BlockedBy on a create names the issues the new one waits on. On an
+	// update it is the issue's whole blocked-by set, replacing the one it
+	// holds as labels replace, and `blocked_by: []` empties it: nil is "not
+	// stated", so the two cannot be confused.
+	BlockedBy *[]string `yaml:"blocked_by,omitempty"`
 	// Rank places the document's issue in the file's ordering. Its one
 	// value is "top"; the gate refuses any other.
 	Rank *string `yaml:"rank,omitempty"`
@@ -78,8 +82,10 @@ func NewIDMapping(localID, realID string) IDMapping {
 // whose parent the file changed, and ParentHeld those whose parent already
 // was what the file states, each in file order; ReparentsUndone lists the
 // issues a refusal put back under the parents they held before the file,
-// which a landed file leaves empty; Updated lists the real IDs of
-// every updated issue, in the order they were applied; Ranked is the RankSet
+// which a landed file leaves empty; BlockedBySet, BlockedByHeld and
+// BlockedByUndone say the same of the update documents' blocked_by sets;
+// EdgesAdded and EdgesRemoved count every edge the file wrote, a create's
+// blocked_by included; Updated lists the real IDs of every updated issue, in the order they were applied; Ranked is the RankSet
 // the file's `rank: top` documents made, with no resolutions when the file
 // states no rank. A refused BulkApply returns its AfterRollback beside the
 // error, so the caller reads one account of the batch whether it landed or
@@ -89,13 +95,36 @@ type BulkApplyResult struct {
 	Reparented      []string
 	ParentHeld      []string
 	ReparentsUndone []string
+	BlockedBySet    []string
+	BlockedByHeld   []string
+	BlockedByUndone []string
+	EdgesAdded      int
+	EdgesRemoved    int
 	Updated         []string
 	Ranked          RankSetResult
 }
 
+// RecordEdges is the account of a written edge step: the update documents'
+// sets, by type, and every edge it wrote. [LAW:one-source-of-truth]
+func (r *BulkApplyResult) RecordEdges(step EdgeStep) {
+	r.Reparented, r.ParentHeld = updatedIDs(step.Changed, model.RelParentChild), updatedIDs(step.Held, model.RelParentChild)
+	r.BlockedBySet, r.BlockedByHeld = updatedIDs(step.Changed, model.RelBlockedBy), updatedIDs(step.Held, model.RelBlockedBy)
+	r.EdgesAdded, r.EdgesRemoved = step.Added, step.Removed
+}
+
+// EdgesUndone is the account once a refusal's Undo put the step's sets back:
+// none stays changed, each is reported undone, and no edge it wrote stays
+// written.
+func (r *BulkApplyResult) EdgesUndone() {
+	r.ReparentsUndone, r.Reparented = r.Reparented, nil
+	r.BlockedByUndone, r.BlockedBySet = r.BlockedBySet, nil
+	r.EdgesAdded, r.EdgesRemoved = 0, 0
+}
+
 // AfterRollback is what stays written once a refused batch's creates are
 // rolled back, given leaked, the creates the rollback could not delete: those
-// creates, the reparents its undo could not put back, the updates applied
+// creates, the reparents and blocked_by sets its undo could not put back, the
+// updates applied
 // before the refusal, and the order the file's `rank: top` documents wrote,
 // among the issues that outlive the rollback. [LAW:one-source-of-truth]
 func (r BulkApplyResult) AfterRollback(leaked []string) BulkApplyResult {
@@ -128,7 +157,7 @@ func (r BulkApplyResult) Kept(leaked []string) string {
 	for i, res := range kept.Ranked.Resolutions {
 		ranked[i] = res.RankedID
 	}
-	return fmt.Sprintf("kept %d reparents [%s], %d updates [%s] and the order of %d issues [%s]", len(kept.Reparented), strings.Join(kept.Reparented, ","), len(kept.Updated), strings.Join(kept.Updated, ","), len(ranked), strings.Join(ranked, ","))
+	return fmt.Sprintf("kept %d reparents [%s], %d blocked_by sets [%s], %d updates [%s] and the order of %d issues [%s]", len(kept.Reparented), strings.Join(kept.Reparented, ","), len(kept.BlockedBySet), strings.Join(kept.BlockedBySet, ","), len(kept.Updated), strings.Join(kept.Updated, ","), len(ranked), strings.Join(ranked, ","))
 }
 
 // BulkFile is a bulk file the gate admitted, parsed: the issues it creates,
@@ -143,17 +172,27 @@ func (r BulkApplyResult) Kept(leaked []string) string {
 // none minted, and an order that has already landed writes nothing.
 // [LAW:single-enforcer]
 //
-// Reparents are the update documents that state a parent, in document order.
-// An engine writes them as one step, whole or not at all, through the relation
-// write `lit parent set` and `lit parent clear` use, so a reparent obeys the
-// one hierarchy rule. [LAW:single-enforcer] It writes them after the creates,
-// which a reparent may name as its parent, and before the creates' blocked_by
-// edges, so each edge is judged on the hierarchy the file ends with.
+// Reparents are the update documents that state a parent, and BlockedBy those
+// that state blocked_by, each in document order. An engine writes them, with
+// the creates' blocked_by, as one step after the creates, which any of them
+// may name: WriteEdges, whole or not at all, through the relation write every
+// edge goes through, so an edge a file writes obeys the one rule its type
+// carries. [LAW:single-enforcer]
 type BulkFile struct {
 	Creates   []FileCreate
 	Reparents []FileReparent
+	BlockedBy []FileBlockedBy
 	Updates   []BulkUpdate
 	Ranked    []FileRef
+}
+
+// FileBlockedBy is one update document's blocked_by, parsed: the issue whose
+// blocked-by set it states and that whole set, each entry a local_id in the
+// file or a real id, which only the write can resolve. An empty set is no
+// blockers.
+type FileBlockedBy struct {
+	ID        string
+	BlockedBy []string
 }
 
 // FileReparent is one update document's parent, parsed: the issue it moves and
@@ -172,112 +211,201 @@ type FileRef struct {
 	index int
 }
 
-// ParentWriter is the hierarchy write an engine runs a file's reparents
-// through, inside the one step that makes them whole or not at all. Clear and
-// Attach are the writes `lit parent clear` and `lit parent set` make, each
-// with the rules it carries; Detach drops a child's parent edges with no rule,
-// because an attach follows it in the same step. Parents and Restore read and
-// write a child's parent edges as stored, judging nothing, so a refused batch
-// can put back the hierarchy its reparents replaced.
-type ParentWriter interface {
-	// Holds reports whether childID's parents are exactly parentID.
-	Holds(childID, parentID string) (bool, error)
-	// Clear detaches childID as `lit parent clear` does, answering a child
-	// with no parent with RelationAbsentError.
-	Clear(childID string) error
-	Detach(childID string) error
-	Attach(childID, parentID string) error
-	// Parents lists the parent edges childID holds.
-	Parents(childID string) ([]model.Relation, error)
-	// Restore makes childID's parent edges exactly edges.
-	Restore(childID string, edges []model.Relation) error
+// String is the name a refusal calls the document by: an update by its id, a
+// create by its position.
+func (r FileRef) String() string {
+	if r.id != "" {
+		return strconv.Quote(r.id)
+	}
+	return fmt.Sprintf("doc %d", r.index)
 }
 
-// ReparentStep is a file's written reparents, sorted by what each found:
-// Moved, the issues whose parent changed, and Held, those whose parent already
-// was the one the file states, each in document order. It keeps the parent
-// edges each moved issue held before, which Undo writes back.
-type ReparentStep struct {
-	Moved, Held []string
-	prior       map[string][]model.Relation
+// EdgeSet states one issue's whole set of outgoing edges of one relation
+// type: a parent is a set of zero or one, a blocked_by list a set of any size.
+// Doc is the document that states the set.
+type EdgeSet struct {
+	Doc     FileRef
+	ID      string
+	Type    model.RelationType
+	Targets []EdgeTarget
 }
 
-// Undo puts every moved issue back under the parents it held before the step,
-// as stored. A batch refused after its reparents runs it before it rolls back
-// its creates, so no issue is left under a create the rollback deletes, and
-// none loses the parent it had. [LAW:no-silent-failure]
-func (s ReparentStep) Undo(w ParentWriter) error {
-	for _, id := range s.Moved {
-		if err := w.Restore(id, s.prior[id]); err != nil {
-			return fmt.Errorf("bulk: restore the parents of %q: %w", id, err)
+// EdgeTarget is one target an edge set states: Ref as the file wrote it, a
+// local_id in the file or a real id, and ID, the real id it resolves to. A
+// refusal names the Ref, the one the author can find in the file.
+type EdgeTarget struct {
+	Ref, ID string
+}
+
+// ResolveRef resolves a reference a file states against minted, the ids its
+// creates were minted under by local_id: a reference that matches no create
+// passes through unchanged as a real, pre-existing id, for the write that
+// receives it to judge. [LAW:dataflow-not-control-flow] one lookup with a
+// fallback, not a branch on "is this local".
+func ResolveRef(ref string, minted map[string]string) string {
+	if id, ok := minted[ref]; ok {
+		return id
+	}
+	return ref
+}
+
+// EdgeWriter is the relation write an engine runs a file's edge sets through,
+// inside the one step that makes them whole or not at all. Add is the write
+// every edge of its type goes through, `lit dep add` and `lit parent set`
+// alike, with the rules it carries. Edges, Remove and Restore read and write
+// edges as stored, judging nothing: a move removes a leaf's parent before it
+// attaches the new one, so a rule judged at the removal would refuse a file
+// whose final hierarchy obeys it. A refused batch restores what a step
+// replaced through Restore. [LAW:single-enforcer]
+type EdgeWriter interface {
+	// Edges lists the edges of relType id holds, and refuses an id that names
+	// no issue, so a set stated on a missing issue is never read as held.
+	Edges(id string, relType model.RelationType) ([]model.Relation, error)
+	Add(id, target string, relType model.RelationType) error
+	Remove(edge model.Relation) error
+	// Restore makes id's edges of relType exactly edges.
+	Restore(id string, relType model.RelationType, edges []model.Relation) error
+}
+
+// EdgeStep is a file's written edge sets, sorted by what each found: Changed,
+// the sets the file changed, and Held, those already exactly as stated, each in
+// write order. Added and Removed count the edges it wrote. It keeps the edges
+// each changed set held before, which Undo writes back.
+type EdgeStep struct {
+	Changed, Held  []EdgeSet
+	Added, Removed int
+	prior          [][]model.Relation
+}
+
+// Undo gives every changed set back the edges it held before the step, as
+// stored. A batch refused after the step runs it before it rolls back its
+// creates, so no issue is left under or behind a create the rollback deletes,
+// and none loses an edge it had. [LAW:no-silent-failure]
+func (s EdgeStep) Undo(w EdgeWriter) error {
+	for i, set := range s.Changed {
+		if err := w.Restore(set.ID, set.Type, s.prior[i]); err != nil {
+			return fmt.Errorf("bulk: restore the %s of %s: %w", fileKey(set.Type), set.Doc, err)
 		}
 	}
 	return nil
 }
 
-// WriteReparents writes the file's reparents through w and returns the step
-// it wrote. Each parent is resolved first; an empty one clears.
+// WriteEdges writes every edge set the file states through w and returns the
+// step it wrote, given created: the id the write minted for each of f.Creates,
+// in that order.
 //
-// The file is judged on the hierarchy it ends with, never on its document
-// order: every moved child is detached before any is attached, so each
-// hierarchy in between is part of the final one, and Attach's cycle rule
-// refuses a file exactly when the hierarchy it ends with holds a cycle.
-// Swapping an epic with the epic above it applies in either order.
+// The file is judged on the graph it ends with, never on its document order:
+// every edge any set drops is removed before any set's edge is added, so the
+// cycle rules refuse a file exactly when the graph it ends with holds a
+// cycle, and swapping an epic with the epic above it, or one blocker for
+// another, applies in either order. The sets are added hierarchy first, so the
+// rule that keeps blocked_by out of one epic reads the hierarchy the file ends
+// with. An edge an issue already holds is neither removed nor added.
 // [LAW:no-ambient-temporal-coupling] [LAW:single-enforcer]
 //
 // The first refusal ends the step, naming the document it refused.
-func (f BulkFile) WriteReparents(resolve func(ref string) string, w ParentWriter) (ReparentStep, error) {
-	refuse := func(r FileReparent, err error) (ReparentStep, error) {
-		return ReparentStep{}, fmt.Errorf("bulk: parent of %q -> %q: %w", r.ID, r.Parent, err)
+func (f BulkFile) WriteEdges(created []string, w EdgeWriter) (EdgeStep, error) {
+	refuse := func(set EdgeSet, ref string, err error) (EdgeStep, error) {
+		return EdgeStep{}, fmt.Errorf("bulk: %s of %s -> %q: %w", fileKey(set.Type), set.Doc, ref, err)
 	}
-	isHeld := make([]bool, len(f.Reparents))
-	for i, r := range f.Reparents {
-		if parent := resolve(r.Parent); parent != "" {
-			held, err := w.Holds(r.ID, parent)
-			if err != nil {
-				return refuse(r, err)
-			}
-			isHeld[i] = held
-		}
-	}
-	step := ReparentStep{prior: make(map[string][]model.Relation, len(f.Reparents))}
-	for i, r := range f.Reparents {
-		if isHeld[i] {
-			continue
-		}
-		prior, err := w.Parents(r.ID)
+	var step EdgeStep
+	sets := f.edgeSets(created)
+	adds := make([][]EdgeTarget, len(sets))
+	for i, set := range sets {
+		prior, err := w.Edges(set.ID, set.Type)
 		if err != nil {
-			return refuse(r, err)
+			return EdgeStep{}, fmt.Errorf("bulk: %s of %s: %w", fileKey(set.Type), set.Doc, err)
 		}
-		step.prior[r.ID] = prior
-		if r.Parent != "" {
-			if err := w.Detach(r.ID); err != nil {
-				return refuse(r, err)
+		held := make(map[string]bool, len(prior))
+		removed := 0
+		for _, edge := range prior {
+			held[edge.DstID] = true
+			if !slices.ContainsFunc(set.Targets, func(t EdgeTarget) bool { return t.ID == edge.DstID }) {
+				if err := w.Remove(edge); err != nil {
+					return refuse(set, edge.DstID, err)
+				}
+				removed++
 			}
+		}
+		for _, target := range set.Targets {
+			if !held[target.ID] {
+				adds[i] = append(adds[i], target)
+			}
+		}
+		if removed+len(adds[i]) == 0 {
+			step.Held = append(step.Held, set)
 			continue
 		}
-		err = w.Clear(r.ID)
-		if absent := (RelationAbsentError{}); errors.As(err, &absent) {
-			isHeld[i] = true
-		} else if err != nil {
-			return refuse(r, err)
-		}
+		step.Changed = append(step.Changed, set)
+		step.prior = append(step.prior, prior)
+		step.Removed += removed
 	}
-	for i, r := range f.Reparents {
-		if r.Parent != "" && !isHeld[i] {
-			if err := w.Attach(r.ID, resolve(r.Parent)); err != nil {
-				return refuse(r, err)
+	for i, set := range sets {
+		for _, target := range adds[i] {
+			if err := w.Add(set.ID, target.ID, set.Type); err != nil {
+				return refuse(set, target.Ref, err)
 			}
-		}
-	}
-	for i, r := range f.Reparents {
-		if isHeld[i] {
-			step.Held = append(step.Held, r.ID)
-		} else {
-			step.Moved = append(step.Moved, r.ID)
+			step.Added++
 		}
 	}
 	return step, nil
+}
+
+// edgeSets lists every edge set the file states, given the ids its creates
+// were minted under, in the order they are written: the update documents'
+// parents, then the creates' blocked_by, then the update documents'
+// blocked_by. A create's parent is not among them; the create writes it.
+func (f BulkFile) edgeSets(created []string) []EdgeSet {
+	minted := make(map[string]string, len(f.Creates))
+	for pos, c := range f.Creates {
+		if c.LocalID != "" {
+			minted[c.LocalID] = created[pos]
+		}
+	}
+	targets := func(refs []string) []EdgeTarget {
+		resolved := make([]EdgeTarget, len(refs))
+		for i, ref := range refs {
+			resolved[i] = EdgeTarget{Ref: ref, ID: ResolveRef(ref, minted)}
+		}
+		return resolved
+	}
+	sets := make([]EdgeSet, 0, len(f.Reparents)+len(f.Creates)+len(f.BlockedBy))
+	for _, r := range f.Reparents {
+		set := EdgeSet{Doc: FileRef{id: r.ID}, ID: r.ID, Type: model.RelParentChild}
+		if r.Parent != "" {
+			set.Targets = targets([]string{r.Parent})
+		}
+		sets = append(sets, set)
+	}
+	for pos, c := range f.Creates {
+		if len(c.BlockedBy) > 0 {
+			sets = append(sets, EdgeSet{Doc: FileRef{index: c.Index}, ID: created[pos], Type: model.RelBlockedBy, Targets: targets(c.BlockedBy)})
+		}
+	}
+	for _, b := range f.BlockedBy {
+		sets = append(sets, EdgeSet{Doc: FileRef{id: b.ID}, ID: b.ID, Type: model.RelBlockedBy, Targets: targets(b.BlockedBy)})
+	}
+	return sets
+}
+
+// fileKey is the bulk file key that states edges of relType.
+func fileKey(relType model.RelationType) string {
+	if relType == model.RelParentChild {
+		return "parent"
+	}
+	return "blocked_by"
+}
+
+// updatedIDs lists the ids of the sets of relType that update documents
+// state. The set a create states is part of its create, reported with it.
+func updatedIDs(sets []EdgeSet, relType model.RelationType) []string {
+	var ids []string
+	for _, set := range sets {
+		if set.Type == relType && set.Doc.id != "" {
+			ids = append(ids, set.ID)
+		}
+	}
+	return ids
 }
 
 // RankedIDs is the file's ordering as the issue ids an engine hands its
