@@ -140,7 +140,7 @@ func TestFocusScopePartitionKeepsBothHalvesInOrder(t *testing.T) {
 	}
 	rows := []annotation.AnnotatedIssue{row("a", false), row("b", true), row("c", false), row("d", true)}
 
-	inScope, excluded := focusScope{goals: []string{"g"}}.partition(rows, soloLaneOfRow)
+	inScope, excluded := focusScope{goals: []string{"g"}}.partition(rows, nil)
 	if got := rowIDsJoined(inScope); got != "b,d" {
 		t.Fatalf("in-scope ids = %q, want %q", got, "b,d")
 	}
@@ -150,19 +150,13 @@ func TestFocusScopePartitionKeepsBothHalvesInOrder(t *testing.T) {
 
 	// --all resolves to the unfocused scope, so everything is in and the
 	// excluded half is empty — not "everything is excluded".
-	inScope, excluded = focusScope{goals: []string{"g"}}.scopeFor(true).partition(rows, soloLaneOfRow)
+	inScope, excluded = focusScope{goals: []string{"g"}}.scopeFor(true).partition(rows, nil)
 	if got := rowIDsJoined(inScope); got != "a,b,c,d" {
 		t.Fatalf("--all in-scope ids = %q, want %q", got, "a,b,c,d")
 	}
 	if len(excluded) != 0 {
 		t.Fatalf("--all excluded = %v, want none", rowIDsJoined(excluded))
 	}
-}
-
-// soloLaneOfRow is the lane of a parentless row, for partitions whose scope
-// owns no lane and so never asks which lane a row is in.
-func soloLaneOfRow(row annotation.AnnotatedIssue) model.LaneID {
-	return model.LaneOf(row.Issue, nil)
 }
 
 func rowIDsJoined(rows []annotation.AnnotatedIssue) string {
@@ -261,7 +255,7 @@ func TestBacklogNoticeReportsTheLimitTrimNotJustTheScope(t *testing.T) {
 	// what removed them.
 	h.setLabels(goal.ID, FocusLabel)
 	text = h.runWorkableText("--limit", "1")
-	wantScope := "Focused on " + goal.ID + " — listing only its unfinished prerequisite path, in rank order; 1 workable row(s) off that path are not shown (`lit backlog --all` for the whole queue)."
+	wantScope := "Focused on " + goal.ID + " — listing only its unfinished prerequisite path and this checkout's lanes with the rest of their epics, in rank order; 1 workable row(s) outside them are not shown (`lit backlog --all` for the whole queue)."
 	if !strings.Contains(text, wantScope) {
 		t.Fatalf("focused+trimmed backlog missing scope clause %q\n%s", wantScope, text)
 	}
@@ -348,7 +342,7 @@ func TestFocusedBacklogNamesItsScopeAndItsEscape(t *testing.T) {
 
 	// Focused: scoped, and it says exactly what it withheld and how to get it.
 	text = h.runWorkableText()
-	want := "Focused on " + goal.ID + " — listing only its unfinished prerequisite path, in rank order; 1 workable row(s) off that path are not shown (`lit backlog --all` for the whole queue)."
+	want := "Focused on " + goal.ID + " — listing only its unfinished prerequisite path and this checkout's lanes with the rest of their epics, in rank order; 1 workable row(s) outside them are not shown (`lit backlog --all` for the whole queue)."
 	if !strings.Contains(text, want) {
 		t.Fatalf("focused backlog missing notice %q\n%s", want, text)
 	}
@@ -609,10 +603,10 @@ func TestFocusedBacklogListsThisCheckoutsOwnWork(t *testing.T) {
 	if strings.Contains(text, unrelated) {
 		t.Fatalf("focused backlog lists %s, which is neither on the path nor this checkout's work:\n%s", unrelated, text)
 	}
-	if want := "Focused on " + goal + " — listing only its unfinished prerequisite path, in rank order; 1 workable row(s) off that path are not shown (`lit backlog --all` for the whole queue)."; !strings.Contains(text, want) {
+	if want := "Focused on " + goal + " — listing only its unfinished prerequisite path and this checkout's lanes with the rest of their epics, in rank order; 1 workable row(s) outside them are not shown (`lit backlog --all` for the whole queue)."; !strings.Contains(text, want) {
 		t.Fatalf("focused backlog missing %q — own work counted as withheld?\n%s", want, text)
 	}
-	ownClause := " Listed although off that path, as this checkout's own work (a lane it holds, or that lane's epic): "
+	ownClause := " Off that path but in this checkout's lanes or their epics: "
 	if !strings.Contains(text, ownClause) {
 		t.Fatalf("focused backlog does not name the own work it listed off the path:\n%s", text)
 	}
@@ -625,6 +619,21 @@ func TestFocusedBacklogListsThisCheckoutsOwnWork(t *testing.T) {
 	}
 	if got := ev.Facts["backlog.own_off_path"]; !sameIDs(got, mine, sibling) {
 		t.Errorf("backlog.own_off_path = %#v, want exactly %s and %s", got, mine, sibling)
+	}
+	if got := ev.Facts["backlog.trimmed"]; got != float64(0) {
+		t.Errorf("backlog.trimmed = %#v, want 0", got)
+	}
+
+	// --limit cuts rows the scope kept; it does not change what the scope
+	// decided. The own rows stay on the event whether or not they were printed,
+	// and the trim count accounts for the ones that were not.
+	runCLIInDir(t, repo, "backlog", "--limit", "1")
+	ev = lastEvent(t)
+	if got := ev.Facts["backlog.own_off_path"]; !sameIDs(got, mine, sibling) {
+		t.Errorf("--limit 1: backlog.own_off_path = %#v, want exactly %s and %s", got, mine, sibling)
+	}
+	if got := ev.Facts["backlog.trimmed"]; got != float64(2) {
+		t.Errorf("--limit 1: backlog.trimmed = %#v, want 2", got)
 	}
 
 	// --all lists the whole queue, so nothing is off a path and no fact says

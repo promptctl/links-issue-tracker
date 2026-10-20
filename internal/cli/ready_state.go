@@ -910,9 +910,13 @@ func (s focusScope) scopeFor(all bool) focusScope {
 // the excluded half is not discardable: a view that drops it silently cannot
 // tell "there is no work" from "there is no work ON YOUR PATH", and those are
 // the two facts an agent most needs kept apart. [LAW:parse-dont-validate]
-func (s focusScope) partition(rows []annotation.AnnotatedIssue, laneOf func(annotation.AnnotatedIssue) model.LaneID) (inScope, excluded []annotation.AnnotatedIssue) {
+//
+// A row's lane is read here, from its parent in details, rather than handed in
+// by each caller: `lit next` and `lit backlog` agree on what the scope owns
+// only while they derive lanes one way. [LAW:one-source-of-truth]
+func (s focusScope) partition(rows []annotation.AnnotatedIssue, details map[string]storage.IssueRelations) (inScope, excluded []annotation.AnnotatedIssue) {
 	for _, row := range rows {
-		if s.holds(row, laneOf(row)) {
+		if s.holds(row, model.LaneOf(row.Issue, details[row.ID].Parent)) {
 			inScope = append(inScope, row)
 			continue
 		}

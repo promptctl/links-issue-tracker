@@ -475,8 +475,8 @@ func (o ownWork) covers(lane model.LaneID) bool {
 	return o.holds(lane) || o.epics[lane.Epic()]
 }
 
-// any reports whether this checkout holds a lane at all.
-func (o ownWork) any() bool { return len(o.lanes) > 0 }
+// holdsAny reports whether this checkout holds a lane at all.
+func (o ownWork) holdsAny() bool { return len(o.lanes) > 0 }
 
 // routeNext applies the claim-aware selection precedence over an already
 // gathered, already ordered workable set. Pure — standings and self are
@@ -568,7 +568,7 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 	// every row of ours it could serve.
 	own := ownScope(standings, self)
 	scope = scope.owning(own)
-	pool, offPath := scope.partition(rows, laneOf)
+	pool, offPath := scope.partition(rows, details)
 	fromPool := func(serves func(annotation.AnnotatedIssue) bool) (poolPick, bool) {
 		row, _, ok := pickFrom(pool, serves, func(model.LaneID) bool { return true }, serveWork)
 		return poolPick{Row: row, Lane: laneOf(row), Scope: scope}, ok
@@ -579,7 +579,7 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 		return slices.DeleteFunc(slices.Clone(from), func(row annotation.AnnotatedIssue) bool { return !selected(row) })
 	}
 
-	if own.any() {
+	if own.holdsAny() {
 		workToward := workTowardEach(rows, details, epics)
 		// Both dependency walks read every row and are shared by both runs of
 		// ownSteps; the walk step 2b declines is the walk step 3 reports, so

@@ -137,14 +137,15 @@ none), and `reach` is what this checkout can do about it:
 
 ## What `lit backlog` records
 
-Every `lit backlog` that lists its rows writes the keys below, empty when no
-focus label narrowed the run.
+Every `lit backlog` that lists its rows writes the keys below. The three focus
+keys are empty when no focus label narrowed the run.
 
 | Key | Meaning |
 | --- | --- |
 | `backlog.focus_goals` | The focus goals whose prerequisite path the list was narrowed to. Empty when nothing is focused and under `--all`. |
-| `backlog.off_path` | Tickets a focus label kept off the list, in the entry shape `next.off_path` uses, each with `reach` `off_focus_path`. Your own work is never among them. |
-| `backlog.own_off_path` | The ids of tickets listed although off the focus path, because they are your own work: in a lane you hold, or in another lane of that lane's epic. |
+| `backlog.off_path` | Tickets a focus label kept off the list, in the entry shape `next.off_path` uses, each with `reach` `off_focus_path`. A ticket in a lane you hold, or in another lane of that lane's epic, is never among them. |
+| `backlog.own_off_path` | The ids of tickets off the focus path that the list kept because they sit in a lane you hold or in another lane of that lane's epic, which another checkout may hold. Read before `--limit`, so a ticket `--limit` cut is still here. |
+| `backlog.trimmed` | How many rows `--limit` cut from the list; 0 when it cut none. |
 
 ## What a statusline-file write records
 

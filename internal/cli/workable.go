@@ -191,10 +191,7 @@ func workableLeaf(view workableView) appLeaf {
 		// next would hand back is never missing from the list. That is why the
 		// claim context is read before the partition rather than after it.
 		scope := gathered.scope.scopeFor(knobs.all).owning(ownScope(cc.standings, cc.self))
-		laneOf := func(row annotation.AnnotatedIssue) model.LaneID {
-			return model.LaneOf(row.Issue, gathered.details[row.ID].Parent)
-		}
-		scoped, excluded := scope.partition(gathered.rows, laneOf)
+		scoped, excluded := scope.partition(gathered.rows, gathered.details)
 		view.order(scoped, gathered.details, knobs)
 		kept := view.keep(scoped)
 		rows := applyLimit(kept, knobs.limit)
@@ -210,15 +207,19 @@ func workableLeaf(view workableView) appLeaf {
 		// drops as a --limit trim.
 		// The endpoints say which narrowing is being measured.
 		// [LAW:one-source-of-truth]
+		//
+		// ownOffPath is the scope's decision too, so it is read from kept, before
+		// --limit: an own row the trim cut is still one the scope kept, and the
+		// trim count is what accounts for it.
 		notice := focusNotice{
 			scope:      gathered.scope,
 			applied:    !knobs.all,
 			offPath:    withheldByScope(excluded),
-			ownOffPath: rowIDs(slices.DeleteFunc(slices.Clone(rows), scope.onPath)),
+			ownOffPath: rowIDs(slices.DeleteFunc(slices.Clone(kept), scope.onPath)),
 			trimmed:    len(kept) - len(rows),
 			escape:     "`lit " + view.name + " --all`",
 		}
-		notice.record(ctx, view.name)
+		notice.record(ctx)
 		// Derived unconditionally from the rows and graph data already gathered
 		// above: no extra query, and no branch deciding whether the renderer gets
 		// its data. [LAW:dataflow-not-control-flow]

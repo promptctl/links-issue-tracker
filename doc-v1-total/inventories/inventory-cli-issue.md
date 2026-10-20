@@ -1355,11 +1355,13 @@ line for `done` and `close`, each group omitted when empty:
 - Runs the shared workable pipeline (§1.18) via `gatherWorkableAnnotated`
   (`workable.go`), then `gatherClaimContext` (`workable.go`). The focus scope
   then partitions the rows,
-  `scopeFor(all).owning(ownScope(cc.standings, cc.self)).partition(rows, laneOf)`
-  (`ready_state.go`): `--all` resolves to the zero `focusScope`, which holds
-  every row; otherwise a row is in scope when it is on the focus path or its
-  lane is this checkout's own work (`ownWork.covers`, `next_route.go`). The
-  excluded rows are counted in the notice and recorded by id on the event.
+  `scopeFor(all).owning(ownScope(cc.standings, cc.self)).partition(rows, details)`
+  (`ready_state.go`), which reads each row's lane as
+  `model.LaneOf(row.Issue, details[row.ID].Parent)`: `--all` resolves to the
+  zero `focusScope`, which holds every row; otherwise a row is in scope when it
+  is on the focus path or its lane is one this checkout holds or another lane
+  of that lane's epic (`ownWork.covers`, `next_route.go`). The excluded rows
+  are counted in the notice and recorded by id on the event.
   Order, keep and `--limit` run on the in-scope rows, in that order.
 - Dispatches `EventShowBacklog` after rendering (`workable.go`).
 
@@ -1385,16 +1387,17 @@ Use 'lit next' to pick the top workable item to start.
    - unfocused, nothing trimmed: `Nothing is hidden: every workable item is listed.`
    - unfocused, `--limit` trimmed rows: `Every workable item is in scope.`
    - focused, `--all` given: `Focus is on %s; this run bypassed it and lists the whole queue.`
-   - focused: `Focused on %s — listing only its unfinished prerequisite path, in rank order; %d workable row(s) off that path are not shown (%s for the whole queue).`
+   - focused: `Focused on %s — listing only its unfinished prerequisite path and this checkout's lanes with the rest of their epics, in rank order; %d workable row(s) outside them are not shown (%s for the whole queue).`
 
    The first `%s` is the focus goals' ids joined by `", "`
    (`focusScope.describe`, `ready_state.go`), `%d` is the count of rows the
    partition excluded, and the last `%s` is the escape `` `lit backlog --all` ``,
    backticks included (`workable.go`). The own-work clause is empty when no
-   listed row is off the focus path, else a space and then
-   `Listed although off that path, as this checkout's own work (a lane it holds, or that lane's epic): %s.`,
-   where `%s` is the ids of the listed rows the scope holds only as this
-   checkout's own work, joined by `", "` (`ownClause`, `backlog.go`). The trim
+   kept row is off the focus path, else a space and then
+   `Off that path but in this checkout's lanes or their epics: %s.`,
+   where `%s` is the ids of the rows kept before `--limit` that the scope
+   holds only through `ownWork.covers`, joined by `", "` (`ownClause`,
+   `backlog.go`). The trim
    clause is empty when `--limit` cut nothing, else a space and then
    `--limit trimmed this run: %d more workable row(s) are not shown.`, where
    `%d` is the rows `--limit` cut after keep (`trimClause`, `backlog.go`).
@@ -1541,7 +1544,7 @@ rank order is the only tiebreak routing applies (`next_route.go`).
 that or any lane of a held lane's epic. `scope = scope.owning(own)` before the
 pool is partitioned (`next_route.go`).
 
-If `own.any()` (`next_route.go`), steps 1–2b run as one closure,
+If `own.holdsAny()` (`next_route.go`), steps 1–2b run as one closure,
 `ownSteps(serves)`, first with `serves` = `asked.Selects` and then, if that
 serves nothing, over every row; both dependency walks read every row either way:
 
@@ -1578,7 +1581,7 @@ serves nothing, over every row; both dependency walks read every row either way:
 
 Step 4 is reached directly by a checkout holding no lanes:
 
-4. **The global pool, focus-scoped.** `pool, offPath := scope.partition(rows, laneOf)`
+4. **The global pool, focus-scoped.** `pool, offPath := scope.partition(rows, details)`
    (`next_route.go`, `ready_state.go`), then
    `pickFrom(pool, selected, func(model.LaneID) bool { return true }, serveWork)` →
    **`ServedFromNewLane{poolPick{Row, Lane: laneOf(row), Scope: scope}}`**.
