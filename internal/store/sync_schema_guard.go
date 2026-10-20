@@ -9,6 +9,7 @@ import (
 	embedded "github.com/dolthub/driver"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/version"
 )
 
@@ -73,7 +74,7 @@ var (
 // remote head to fall behind, so the guard is a no-op there. [LAW:single-enforcer]
 // the push and the reconcile share this one detection of "remote schema ahead".
 func (s *Store) guardRemoteSchemaAhead(ctx context.Context, remote, branch string) error {
-	trimmedRemote, err := requireSyncArg("remote", remote)
+	trimmedRemote, err := storage.ParseRemoteName(remote)
 	if err != nil {
 		return err
 	}
@@ -81,14 +82,14 @@ func (s *Store) guardRemoteSchemaAhead(ctx context.Context, remote, branch strin
 	if err != nil {
 		return err
 	}
-	head, synced, err := s.trackingHeadHash(ctx, trimmedRemote, trimmedBranch)
+	head, synced, err := s.trackingHeadHash(ctx, trimmedRemote.String(), trimmedBranch)
 	if err != nil {
 		return err
 	}
 	if !synced {
 		return nil
 	}
-	return s.guardCommitSchemaAhead(ctx, trimmedRemote, trimmedBranch, head)
+	return s.guardCommitSchemaAhead(ctx, trimmedRemote.String(), trimmedBranch, head)
 }
 
 // guardCommitSchemaAhead is the shared core: it reads the schema version recorded

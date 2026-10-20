@@ -101,7 +101,7 @@ func (e OwnerApprovalRequiredError) Error() string {
 // [LAW:single-enforcer] the gate lives on the destructive operation itself, not on
 // any of its surfaces.
 func (s *Store) SyncResolveUnrelated(ctx context.Context, remote string, branch string, choice storage.UnrelatedResolution, ownerApproval string) (storage.SyncReconcileResult, error) {
-	trimmedRemote, err := requireSyncArg("remote", remote)
+	trimmedRemote, err := storage.ParseRemoteName(remote)
 	if err != nil {
 		return storage.SyncReconcileResult{}, err
 	}
@@ -116,13 +116,13 @@ func (s *Store) SyncResolveUnrelated(ctx context.Context, remote string, branch 
 	}
 	// A re-root this branch can follow is not an unrelated history, so it is
 	// followed before the take can discard either side of it.
-	if _, err := s.followRemoteReRoot(ctx, trimmedRemote, trimmedBranch, storage.SyncEntryReconcile); err != nil {
+	if _, err := s.followRemoteReRoot(ctx, trimmedRemote.String(), trimmedBranch, storage.SyncEntryReconcile); err != nil {
 		return storage.SyncReconcileResult{}, err
 	}
 
 	var result storage.SyncReconcileResult
 	err = s.withCommitLock(ctx, func(ctx context.Context) error {
-		plan, err := s.captureReconcilePlan(ctx, trimmedRemote, trimmedBranch)
+		plan, err := s.captureReconcilePlan(ctx, trimmedRemote.String(), trimmedBranch)
 		if err != nil {
 			return err
 		}
@@ -167,7 +167,7 @@ func (s *Store) SyncResolveUnrelated(ctx context.Context, remote string, branch 
 			}
 		}
 
-		return s.applyUnrelatedTake(ctx, &result, plan, trimmedRemote, trimmedBranch, choice)
+		return s.applyUnrelatedTake(ctx, &result, plan, trimmedRemote.String(), trimmedBranch, choice)
 	})
 	if err != nil {
 		return storage.SyncReconcileResult{}, err

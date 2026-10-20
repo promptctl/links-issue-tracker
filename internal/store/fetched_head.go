@@ -16,6 +16,7 @@ import (
 	"github.com/dolthub/dolt/go/libraries/utils/filesys"
 	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/types"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // FetchedHeadRecord is what LandFetchedHead did to one of the live store's
@@ -112,7 +113,7 @@ func LandFetchedHead(ctx context.Context, doltRootDir, cloneRootDir, remote, bra
 	if err != nil {
 		return LandedFetch{}, err
 	}
-	trimmedRemote, err := requireSyncArg("remote", remote)
+	trimmedRemote, err := storage.ParseRemoteName(remote)
 	if err != nil {
 		return LandedFetch{}, err
 	}
@@ -120,7 +121,7 @@ func LandFetchedHead(ctx context.Context, doltRootDir, cloneRootDir, remote, bra
 	if err != nil {
 		return LandedFetch{}, err
 	}
-	trackingRef := ref.NewRemoteRef(trimmedRemote, trimmedBranch)
+	trackingRef := ref.NewRemoteRef(trimmedRemote.String(), trimmedBranch)
 
 	// The clone is this caller's alone — nothing else opens it — so it is read
 	// before the live store is held, and stays open for the copy.
@@ -151,7 +152,7 @@ func LandFetchedHead(ctx context.Context, doltRootDir, cloneRootDir, remote, bra
 	// instance republished on close, and the plan going stale there costs
 	// nothing: the copy sets the ref to the clone's value, the same
 	// last-writer-wins rule every close follows.
-	cachePlan, cacheErr := planRemoteCacheLanding(ctx, remoteCacheBaseAt(root), remoteCacheBaseAt(cloneRoot), trimmedRemote)
+	cachePlan, cacheErr := planRemoteCacheLanding(ctx, remoteCacheBaseAt(root), remoteCacheBaseAt(cloneRoot), trimmedRemote.String())
 
 	releaseWorkspace, err := acquireLiveStoreHold(ctx, root)
 	if err != nil {

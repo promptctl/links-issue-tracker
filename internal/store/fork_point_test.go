@@ -442,7 +442,7 @@ func TestAPrunedTrackingRefTakesItsForkPointWithIt(t *testing.T) {
 	if len(records) == 0 || records[len(records)-1] != want {
 		t.Fatalf("ForkPointRecords() = %+v, want the pruning fetch to end with %+v", records, want)
 	}
-	left, err := refHeadsUnder(ctx, st.db, `SELECT name, hash FROM dolt_branches`, forkPointBranch("origin", ""))
+	left, err := refHeadsUnder(ctx, st.db, `SELECT name, hash FROM dolt_branches`, forkPointBranch(remoteName(t, "origin"), ""))
 	if err != nil {
 		t.Fatalf("list fork points: %v", err)
 	}

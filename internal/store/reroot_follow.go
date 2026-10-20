@@ -55,7 +55,7 @@ import (
 // the commit lock (doc.go).
 // [LAW:no-ambient-temporal-coupling]
 func (s *Store) followRemoteReRoot(ctx context.Context, remote, branch string, entry storage.SyncEntry) (storage.FollowedReRoot, error) {
-	trimmedRemote, err := requireSyncArg("remote", remote)
+	trimmedRemote, err := storage.ParseRemoteName(remote)
 	if err != nil {
 		return storage.FollowedReRoot{}, err
 	}
@@ -64,9 +64,9 @@ func (s *Store) followRemoteReRoot(ctx context.Context, remote, branch string, e
 		return storage.FollowedReRoot{}, err
 	}
 	if err := refuseLOCKUnderCommitLock(ctx); err != nil {
-		return storage.FollowedReRoot{}, wrapFollowErr(trimmedRemote, trimmedBranch, err)
+		return storage.FollowedReRoot{}, wrapFollowErr(trimmedRemote.String(), trimmedBranch, err)
 	}
-	local, unrelated, err := s.unrelatedToRemote(ctx, trimmedRemote, trimmedBranch)
+	local, unrelated, err := s.unrelatedToRemote(ctx, trimmedRemote.String(), trimmedBranch)
 	if err != nil {
 		return storage.FollowedReRoot{}, err
 	}
@@ -80,11 +80,11 @@ func (s *Store) followRemoteReRoot(ctx context.Context, remote, branch string, e
 	var moved bool
 	err = s.withEngineClosed(ctx, func(holdCtx context.Context, ddb *doltdb.DoltDB) error {
 		var err error
-		followed.ReRooted, moved, err = followReRoot(holdCtx, ddb, ref.NewBranchRef(local), ref.NewRemoteRef(trimmedRemote, trimmedBranch))
+		followed.ReRooted, moved, err = followReRoot(holdCtx, ddb, ref.NewBranchRef(local), ref.NewRemoteRef(trimmedRemote.String(), trimmedBranch))
 		return err
 	})
 	if !moved {
-		return storage.FollowedReRoot{}, wrapFollowErr(trimmedRemote, trimmedBranch, err)
+		return storage.FollowedReRoot{}, wrapFollowErr(trimmedRemote.String(), trimmedBranch, err)
 	}
 	// A branch that moved stands even when something after the move failed,
 	// as ReRoot's own result does, so the follow is recorded either way; only
@@ -94,7 +94,7 @@ func (s *Store) followRemoteReRoot(ctx context.Context, remote, branch string, e
 		followed.Collection = s.collectBelowTheCut(ctx, trimmedRemote)
 	}
 	s.followed = append(s.followed, followed)
-	return followed, wrapFollowErr(trimmedRemote, trimmedBranch, err)
+	return followed, wrapFollowErr(trimmedRemote.String(), trimmedBranch, err)
 }
 
 // wrapFollowErr is a follow's error as it reaches the entry point, naming the

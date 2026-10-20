@@ -16,6 +16,7 @@ import (
 	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/nbs"
 	"github.com/dolthub/dolt/go/store/types"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // PushedHeadRecord is what RecordPushedHead did to the tracking ref: moved it
@@ -122,7 +123,7 @@ func RecordPushedHead(ctx context.Context, doltRootDir string, remote string, br
 	if err != nil {
 		return 0, err
 	}
-	trimmedRemote, err := requireSyncArg("remote", remote)
+	trimmedRemote, err := storage.ParseRemoteName(remote)
 	if err != nil {
 		return 0, err
 	}
@@ -139,7 +140,7 @@ func RecordPushedHead(ctx context.Context, doltRootDir string, remote string, br
 		return 0, err
 	}
 	defer func() { err = errors.Join(err, releaseWorkspace()) }()
-	record, atHead, err := settlePushedHead(ctx, root, trimmedRemote, trimmedBranch, trimmedHead)
+	record, atHead, err := settlePushedHead(ctx, root, trimmedRemote.String(), trimmedBranch, trimmedHead)
 	if err != nil {
 		return 0, err
 	}

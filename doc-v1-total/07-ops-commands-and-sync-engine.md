@@ -73,12 +73,12 @@ Subcommands: `status`, `remote ls`, `fetch`, `pull`, `push`, `compact`, `reconci
 
 - Remote (`sync.go`): an explicitly named remote must exist among the configured git remotes; otherwise precedence is the validated upstream remote, then the single configured remote when exactly one exists, else none.
 - Branch (`sync.go`): the env override `LINKS_DEBUG_DOLT_SYNC_BRANCH` beats the remote's default branch; an unresolvable branch is an error naming that override as the escape hatch.
-- Dolt remotes are reconciled from git remotes before every operation: added when missing, replaced when the URL differs, removed when the git remote is gone (`sync.go`).
+- Dolt remotes are reconciled from git remotes before every operation, by one plan (`planRemoteSync`) the reconcile executes and the reports count: added when missing, replaced when the URL differs, removed when the git remote is gone, and refused when the git remote's name is one Dolt cannot hold (`storage.ParseRemoteName`, Dolt's own character set), so a refused remote is never added and stops no sync with the others. The event carries the sorted refused names as the fact `remotes.refused` (`[]` when none) (`sync.go`). The store parses every remote name it is given the same way and refuses one Dolt cannot hold, naming the character (`storage/remote_name.go`).
 
 ### `sync status`, `sync remote ls`, `sync fetch`
 
-- `status` (no flags) prints one line: `version=<dolt> branch=<b> head=<commit[ msg]> git=<n> dolt=<n> added=<n> updated=<n> removed=<n>` (`sync.go`).
-- `remote ls` prints `git=<n> dolt=<n> added=<n> updated=<n> removed=<n>` — the add/update/remove sets from comparing git remotes to Dolt remotes (`sync.go`).
+- `status` (no flags) prints one line: `version=<dolt> branch=<b> head=<commit[ msg]> git=<n> dolt=<n> added=<n> updated=<n> removed=<n> refused=<n>` (`sync.go`).
+- `remote ls` prints `git=<n> dolt=<n> added=<n> updated=<n> removed=<n> refused=<n>` — the reconcile plan's add, update, remove and refused sets (`sync.go`).
 - `fetch` (`--remote`, defaulting to the upstream remote, then the single configured remote, as pull and push select it; `--prune`, `--verbose`): reconciles remotes, and with no remote selected skips, saying so in every mode (`skipped sync fetch: no eligible git remote; name one with --remote`). Otherwise it fetches, and on success writes the fetch-success marker (a marker failure is stderr-only), then follows a re-root on the remote and branch the freshness reads report on (`SyncFollowReRoot`), resolved as they resolve them with no network, so none of them shows it as a divergence. With no sync remote, or no default branch known on this machine, it follows nothing; a branch record that exists but will not read fails the fetch. One sync trace records the fetch and the follow together. Output `fetched` (or `fetched <remote>` verbose) (`sync.go`).
 
 ### `sync pull`

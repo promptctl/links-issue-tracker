@@ -264,7 +264,7 @@ func TestSyncRemoteValidation(t *testing.T) {
 		{
 			name:    "add remote requires name",
 			run:     func() error { return syncStore.SyncAddRemote(ctx, "   ", "https://example.com/repo.git") },
-			wantErr: "remote name is required",
+			wantErr: "remote is required",
 		},
 		{
 			name:    "add remote requires url",
@@ -274,7 +274,7 @@ func TestSyncRemoteValidation(t *testing.T) {
 		{
 			name:    "remove remote requires name",
 			run:     func() error { return syncStore.SyncRemoveRemote(ctx, "   ") },
-			wantErr: "remote name is required",
+			wantErr: "remote is required",
 		},
 		{
 			name:    "fetch requires remote",

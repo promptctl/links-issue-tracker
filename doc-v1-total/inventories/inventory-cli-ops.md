@@ -189,14 +189,14 @@ Every visible row is wrapped in `withSyncStore` (`sync.go`) which opens one sync
 
 `syncStatusLeaf` — `sync.go`. No flags. Reads remote state (`readSyncRemoteState`) and `syncer.SyncStatus(ctx)`.
 Output, one line:
-`version=<doltVersion> branch=<branch> head=<headCommit[ headMessage]> git=<n> dolt=<n> added=<n> updated=<n> removed=<n>` (`sync.go`). `head` is `HeadCommit` alone when `HeadMessage` is blank (`sync.go`).
+`version=<doltVersion> branch=<branch> head=<headCommit[ headMessage]> git=<n> dolt=<n> added=<n> updated=<n> removed=<n> refused=<n>` (`sync.go`). `head` is `HeadCommit` alone when `HeadMessage` is blank (`sync.go`).
 
 ### 2.3 `lit sync remote ls`
 
 Family usage `usage: lit sync remote ls` (`sync.go`); only row is `ls` (`sync.go`).
 `syncRemoteLsLeaf` — `sync.go`. No flags. Output:
-`git=<n> dolt=<n> added=<n> updated=<n> removed=<n>` (`sync.go`).
-`added/updated/removed` come from `buildRemoteSyncChanges` (`sync.go`) — sorted name lists comparing git remotes (translated via `store.GitBackedRemoteURL`) to Dolt remotes.
+`git=<n> dolt=<n> added=<n> updated=<n> removed=<n> refused=<n>` (`sync.go`).
+The counts are the sets of `planRemoteSync` (`sync.go`), the one plan `syncDoltRemotesFromGit` executes: sorted lists comparing git remotes (translated via `store.GitBackedRemoteURL`) to Dolt remotes, with a git remote `storage.ParseRemoteName` refuses listed as refused and never added. Reading the plan sets the event fact `remotes.refused`.
 
 ### 2.4 `lit sync fetch`
 
@@ -357,6 +357,7 @@ Trace reasons for the explicit commands (`reconcileCommandReasonForState`, `sync
 `resolveSyncRemote` — `sync.go`:
 - Explicit remote that is not among the configured git remotes → error `requested remote %q not found in configured git remotes` (`sync.go`).
 - Otherwise precedence: validated upstream remote (from `workspace.UpstreamRemote`), then the single configured remote when exactly one exists; else `""` (`sync.go`).
+- The chosen remote, however chosen, is parsed by `storage.ParseRemoteName`; a name Dolt cannot hold returns its refusal (`remote %q has %q in its name, which Dolt does not allow in a remote's name; rename it (git remote rename) to sync with it`) rather than falling through to another remote (`sync.go`).
 
 `resolveSyncBranch` — `sync_branch.go` (push, pull, receive, reconcile, init):
 - Precedence: env override `LINKS_DEBUG_DOLT_SYNC_BRANCH` (`sync.go`), then `workspace.LocalRemoteHead`, then `workspace.AdvertisedRemoteHead` — asked only when the two before it are empty.

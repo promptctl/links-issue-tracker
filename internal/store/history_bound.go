@@ -233,7 +233,7 @@ func (s *Store) publishReRoot(ctx context.Context, remote, branch, head string) 
 // measures it: the two readings are an account of what happened and never an
 // input to it, so a reading that fails joins the collection's error and stops
 // nothing. The collection's error is its own (storage.Collection.Err).
-func (s *Store) collectBelowTheCut(ctx context.Context, remote string) storage.Collection {
+func (s *Store) collectBelowTheCut(ctx context.Context, remote storage.RemoteName) storage.Collection {
 	var c storage.Collection
 	var beforeErr, afterErr error
 	c.BytesBefore, beforeErr = storeBytes(s.doltRootDir)

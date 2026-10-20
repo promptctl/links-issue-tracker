@@ -368,7 +368,7 @@ func (s *Store) captureReconcilePlan(ctx context.Context, remote, branch string)
 
 // reconcileBase is the base of a divergence: the heads' merge base when they
 // share history, and otherwise what the fork point offers (forkPointBase).
-func (s *Store) reconcileBase(ctx context.Context, remote, branch, localHead, remoteHead string) (storage.ReconcileBase, error) {
+func (s *Store) reconcileBase(ctx context.Context, remote storage.RemoteName, branch, localHead, remoteHead string) (storage.ReconcileBase, error) {
 	merged, err := mergeBase(ctx, s.db, localHead, remoteHead)
 	if err != nil {
 		return storage.ReconcileBase{}, err
@@ -392,7 +392,7 @@ func (s *Store) followThenReconcile(ctx context.Context, remote string, branch s
 }
 
 func (s *Store) reconcile(ctx context.Context, remote string, branch string, settle settleFn, unrelated unrelatedHandling) (storage.SyncReconcileResult, error) {
-	trimmedRemote, err := requireSyncArg("remote", remote)
+	trimmedRemote, err := storage.ParseRemoteName(remote)
 	if err != nil {
 		return storage.SyncReconcileResult{}, err
 	}
@@ -403,7 +403,7 @@ func (s *Store) reconcile(ctx context.Context, remote string, branch string, set
 
 	var result storage.SyncReconcileResult
 	err = s.withCommitLock(ctx, func(ctx context.Context) error {
-		plan, err := s.captureReconcilePlan(ctx, trimmedRemote, trimmedBranch)
+		plan, err := s.captureReconcilePlan(ctx, trimmedRemote.String(), trimmedBranch)
 		if err != nil {
 			return err
 		}
@@ -444,12 +444,12 @@ func (s *Store) reconcile(ctx context.Context, remote string, branch string, set
 			// two-way union; combineFromAnchors is the only difference from the shared path.
 			// [LAW:dataflow-not-control-flow] the handling value selects the export producer,
 			// not a duplicated engine.
-			return s.replayUnderGuard(ctx, trimmedRemote, trimmedBranch, plan.remoteHead, func(ctx context.Context, guard *snapshotGuard, scratch reconcileScratch) error {
+			return s.replayUnderGuard(ctx, trimmedRemote.String(), trimmedBranch, plan.remoteHead, func(ctx context.Context, guard *snapshotGuard, scratch reconcileScratch) error {
 				return s.combineFromAnchors(ctx, &result, settle, guard, plan.dataBranch, scratch, plan.localHead, plan.remoteHead)
 			})
 		}
 
-		return s.replayUnderGuard(ctx, trimmedRemote, trimmedBranch, plan.remoteHead, func(ctx context.Context, guard *snapshotGuard, scratch reconcileScratch) error {
+		return s.replayUnderGuard(ctx, trimmedRemote.String(), trimmedBranch, plan.remoteHead, func(ctx context.Context, guard *snapshotGuard, scratch reconcileScratch) error {
 			return s.reconcileFromAnchors(ctx, &result, settle, guard, plan.dataBranch, scratch, plan.localHead, plan.remoteHead, baseCommit)
 		})
 	})

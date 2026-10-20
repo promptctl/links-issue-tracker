@@ -287,25 +287,52 @@ func TestPrintSyncPushOutcomeDefaultSuccessTextHidesRemoteDetails(t *testing.T) 
 	}
 }
 
-func TestBuildRemoteSyncChanges(t *testing.T) {
+func TestPlanRemoteSync(t *testing.T) {
 	t.Parallel()
 	gitRemotes := []workspace.GitRemote{
 		{Name: "origin", URL: "https://example.com/new-origin.git"},
 		{Name: "upstream", URL: "https://example.com/upstream.git"},
+		{Name: "a/b", URL: "https://example.com/a-b.git"},
+		{Name: "old.fork", URL: "https://example.com/old-fork.git"},
 	}
 	doltRemotes := []storage.SyncRemote{
 		{Name: "origin", URL: "https://example.com/old-origin.git"},
 		{Name: "fork", URL: "https://example.com/fork.git"},
 	}
 
-	got := buildRemoteSyncChanges(gitRemotes, doltRemotes)
-	want := remoteSyncChanges{
-		Added:   []string{"upstream"},
-		Updated: []string{"origin"},
-		Removed: []string{"fork"},
+	got := planRemoteSync(gitRemotes, doltRemotes)
+	want := remoteSyncPlan{
+		add:     []storage.SyncRemote{{Name: "upstream", URL: "git+https://example.com/upstream.git"}},
+		update:  []storage.SyncRemote{{Name: "origin", URL: "git+https://example.com/new-origin.git"}},
+		remove:  []string{"fork"},
+		refused: []string{"a/b", "old.fork"},
 	}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("buildRemoteSyncChanges() = %#v, want %#v", got, want)
+		t.Fatalf("planRemoteSync() = %#v, want %#v", got, want)
+	}
+}
+
+// A chosen remote Dolt cannot hold is refused however it was chosen, never
+// passed over for another remote.
+func TestResolveSyncRemoteRefusesARemoteDoltCannotHold(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name                string
+		requested, upstream string
+		remotes             []string
+	}{
+		{name: "requested", requested: "a/b", upstream: "origin", remotes: []string{"origin", "a/b"}},
+		{name: "upstream", upstream: "a/b", remotes: []string{"origin", "a/b"}},
+		{name: "single", remotes: []string{"a/b"}},
+	} {
+		remotes := make([]workspace.GitRemote, 0, len(tc.remotes))
+		for _, name := range tc.remotes {
+			remotes = append(remotes, workspace.GitRemote{Name: name})
+		}
+		got, err := resolveSyncRemote(tc.requested, tc.upstream, remotes)
+		if err == nil || !strings.Contains(err.Error(), `remote "a/b" has "/" in its name`) {
+			t.Errorf("%s: resolveSyncRemote() = %q, %v; want the refusal naming a/b", tc.name, got, err)
+		}
 	}
 }
 

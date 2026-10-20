@@ -63,6 +63,7 @@ Sync remote selection for pull/push when `--remote` is omitted:
 - branch upstream remote (when configured)
 - otherwise, the single configured Git remote
 - if no eligible remote exists, sync pull/push return `status=skipped` and do not run Dolt sync side effects
+- a selected remote whose name Dolt cannot hold fails the command, naming the remote; it is never passed over for another
 
 Text output behavior:
 
@@ -74,6 +75,7 @@ Before each `lit sync` command, `lit` reconciles Dolt remotes to exactly match `
 - add missing Dolt remotes
 - update changed remote URLs
 - remove Dolt remotes that no longer exist in Git
+- refuse a Git remote whose name Dolt cannot hold (one with a `/`, `.`, space or another character Dolt's remote names exclude), so it is never added and stops no sync with the others; naming it as the sync remote, or having it as the upstream or only remote, fails with the reason. Rename it (`git remote rename`) to sync with it.
 
 ## Push automation
 

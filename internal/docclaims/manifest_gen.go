@@ -513,6 +513,7 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "reconcile a diverged clone into linear history with the field-aware merge engine", Src: "reconcile a diverged clone into linear history with the field-aware merge engine"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "reconcile the live store's remotes from git: %w", Src: "reconcile the live store's remotes from git: %w"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "refresh reclaimed mirror-pending marker: %w", Src: "refresh reclaimed mirror-pending marker: %w"},
+	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "remote %q has %q in its name, which Dolt does not allow in a remote's name; rename it (git remote rename) to sync with it", Src: "remote %q has %q in its name, which Dolt does not allow in a remote's name; rename it (git remote rename) to sync with it"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "requested remote %q not found in configured git remotes", Src: "requested remote %q not found in configured git remotes"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "resolve current binary: %w", Src: "resolve current binary: %w"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "resolve lit binary: %w", Src: "resolve lit binary: %w"},
