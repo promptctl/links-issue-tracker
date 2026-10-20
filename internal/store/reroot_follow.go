@@ -62,9 +62,6 @@ func (s *Store) followRemoteReRoot(ctx context.Context, remote, branch string, e
 	if err != nil {
 		return storage.FollowedReRoot{}, err
 	}
-	if since, held := commitLockHeldSince(ctx); held {
-		return storage.FollowedReRoot{}, fmt.Errorf("follow a re-root of %s/%s: the commit lock is held (since %s), and the follow takes Dolt's LOCK, which is taken before the commit lock or not at all", trimmedRemote, trimmedBranch, since.Format("15:04:05.000"))
-	}
 	local, unrelated, err := s.unrelatedToRemote(ctx, trimmedRemote, trimmedBranch)
 	if err != nil {
 		return storage.FollowedReRoot{}, err
@@ -147,6 +144,9 @@ func (s *Store) unrelatedToRemote(ctx context.Context, remote, branch string) (l
 // caller's work, so a deadline that cut the work does not cut it; the
 // engine open's own wait on Dolt's LOCK bounds it.
 func (s *Store) withEngineClosed(ctx context.Context, write func(holdCtx context.Context, ddb *doltdb.DoltDB) error) error {
+	if err := refuseLOCKUnderCommitLock(ctx); err != nil {
+		return err
+	}
 	reopenCtx := context.WithoutCancel(ctx)
 	if err := s.closeEngine(); err != nil {
 		return errors.Join(fmt.Errorf("close the engine: %w", err), s.reopenEngine(reopenCtx))

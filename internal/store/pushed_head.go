@@ -233,6 +233,18 @@ func readFullCommit(ctx context.Context, ddb *doltdb.DoltDB, addr hash.Hash) (*d
 	return commit, nil
 }
 
+// refuseLOCKUnderCommitLock is the package's lock order where a write from
+// outside the engine takes Dolt's LOCK: before the commit lock or not at all.
+// holdForRefWrite and withEngineClosed, the two places that take LOCK for
+// such a write, both ask it before they take or give up anything.
+// [LAW:single-enforcer]
+func refuseLOCKUnderCommitLock(ctx context.Context) error {
+	if since, held := commitLockHeldSince(ctx); held {
+		return fmt.Errorf("the commit lock is held (since %s), and this write takes Dolt's LOCK, which is taken before the commit lock or not at all", since.Format("15:04:05.000"))
+	}
+	return nil
+}
+
 // holdForRefWrite is the one hold a write to the live store from outside its
 // engine takes: the chunk-store open (Dolt's LOCK, waited out like any write
 // open), the commit lock, and write, all released before it returns. The
@@ -249,6 +261,9 @@ func readFullCommit(ctx context.Context, ddb *doltdb.DoltDB, addr hash.Hash) (*d
 // holds the workspace shared lock around it, so a rotation of the Dolt
 // directory cannot land inside the hold.
 func holdForRefWrite(ctx context.Context, root string, budget time.Duration, write func(holdCtx context.Context, ddb *doltdb.DoltDB) error) (err error) {
+	if err := refuseLOCKUnderCommitLock(ctx); err != nil {
+		return err
+	}
 	ddb, releaseRecord, err := openChunkStoreForRefWrite(ctx, root)
 	if err != nil {
 		return err

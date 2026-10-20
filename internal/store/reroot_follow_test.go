@@ -638,20 +638,28 @@ func TestSyncDoesNotFollowWhenTwoLocalCommitsRebuildToTheRoot(t *testing.T) {
 	}
 }
 
-// TestFollowRefusesToRunUnderTheCommitLock pins the lock order: the follow
-// takes Dolt's LOCK, which comes before the commit lock, so a caller holding
-// the commit lock is refused before anything is read.
-func TestFollowRefusesToRunUnderTheCommitLock(t *testing.T) {
+// TestWithEngineClosedRefusesUnderTheCommitLock pins the lock order for the
+// rewrites a follow and the bound's re-root run: they take Dolt's LOCK, which
+// comes before the commit lock, so a caller holding the commit lock is
+// refused before the engine is closed.
+func TestWithEngineClosedRefusesUnderTheCommitLock(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openSyncOrFatal(t, ctx, migratedDoltDir(t))
 	defer func() { _ = st.Close() }()
+	engine := st.db
+	wrote := false
 	err := st.withCommitLock(ctx, func(ctx context.Context) error {
-		_, err := st.followRemoteReRoot(ctx, "origin", "master", storage.SyncEntryPull)
-		return err
+		return st.withEngineClosed(ctx, func(context.Context, *doltdb.DoltDB) error {
+			wrote = true
+			return nil
+		})
 	})
 	if err == nil || !strings.Contains(err.Error(), "commit lock is held") {
-		t.Fatalf("follow under the commit lock error = %v, want the lock-order refusal", err)
+		t.Fatalf("withEngineClosed() under the commit lock error = %v, want the lock-order refusal", err)
+	}
+	if wrote || st.db != engine {
+		t.Fatalf("withEngineClosed() under the commit lock wrote = %t, engine replaced = %t; want neither", wrote, st.db != engine)
 	}
 }
 
