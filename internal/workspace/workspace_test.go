@@ -506,10 +506,13 @@ func TestGitOutputCancellationKillsSubprocess(t *testing.T) {
 	}
 	// Returning is not enough: on Windows the git that holds the connection
 	// is a child of the git lit started. It must be gone too.
-	// git wrote its request when it connected; the rest is EOF or nothing.
+	// git wrote its request when it connected. A connection still open is a
+	// read that times out; a closed one ends, with EOF or, from a process
+	// Windows terminated, a reset.
 	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	if _, err := io.Copy(io.Discard, conn); err != nil {
-		t.Fatalf("the connection is still open after the cancel (%v) — a process git started outlived it", err)
+	var netErr net.Error
+	if _, err := io.Copy(io.Discard, conn); errors.As(err, &netErr) && netErr.Timeout() {
+		t.Fatalf("the connection is still open 2s after the cancel — a process git started outlived it")
 	}
 }
 
