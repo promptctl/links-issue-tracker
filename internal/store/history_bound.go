@@ -32,7 +32,7 @@ const reRootScratchPrefix = "lit-reroot/"
 // height. Below the bound that is all it does. Once the bound is reached:
 //
 //  1. it re-roots a scratch branch at that head, keeping window.Keep() commits
-//     of the head's first-parent line (reRootScratch);
+//     of the line the head's height counts (reRootScratch);
 //  2. it force-pushes the scratch to the remote's branch under a lease that
 //     names the head (publishReRoot);
 //  3. it runs the remote's GC, which replaces the remote's table files with
@@ -211,7 +211,7 @@ func (s *Store) followCarriedReRoot(ctx context.Context, remote storage.RemoteNa
 }
 
 // reRootScratch writes the re-root of head onto branch's scratch branch, cut
-// where head's first-parent line keeps keep commits.
+// where the line head's height counts keeps keep commits.
 func (s *Store) reRootScratch(ctx context.Context, branch, head string, keep uint64) (storage.ReRooted, error) {
 	scratch := ref.NewBranchRef(reRootScratchPrefix + branch)
 	var reRooted storage.ReRooted
@@ -220,7 +220,7 @@ func (s *Store) reRootScratch(ctx context.Context, branch, head string, keep uin
 		if err != nil {
 			return fmt.Errorf("read the remote head %s: %w", head, err)
 		}
-		cut, err := firstParentAncestor(holdCtx, ddb, headCommit, keep-1)
+		cut, err := longestLineAncestor(holdCtx, ddb, headCommit, keep-1)
 		if err != nil {
 			return err
 		}
@@ -238,26 +238,46 @@ func (s *Store) reRootScratch(ctx context.Context, branch, head string, keep uin
 	return reRooted, err
 }
 
-// firstParentAncestor is the commit steps first parents below c.
-func firstParentAncestor(ctx context.Context, ddb *doltdb.DoltDB, c *doltdb.Commit, steps uint64) (hash.Hash, error) {
+// longestLineAncestor is the commit steps commits below c on the line c's
+// height counts: each step goes to the first parent, in c's own parent order,
+// one height below. [LAW:one-source-of-truth] the bound fires on the height
+// and cuts on the line it measures, so a bound that fired always reaches its
+// cut, and the head the re-root leaves is at height steps+1. Dolt makes every
+// commit above the root one height above its highest parent, so a step finds
+// no parent only on a history that breaks that, or below the root.
+func longestLineAncestor(ctx context.Context, ddb *doltdb.DoltDB, c *doltdb.Commit, steps uint64) (hash.Hash, error) {
 	addr, err := c.HashOf()
 	if err != nil {
 		return hash.Hash{}, err
 	}
-	for step := range steps {
-		parents, err := c.ParentHashes(ctx)
-		if err != nil {
+	for range steps {
+		if addr, c, err = parentOneBelow(ctx, ddb, addr, c); err != nil {
 			return hash.Hash{}, err
-		}
-		if len(parents) == 0 {
-			return hash.Hash{}, fmt.Errorf("the first-parent line below %s ends after %d commits, short of the %d the bound keeps", addr, step+1, steps+1)
-		}
-		addr = parents[0]
-		if c, err = readFullCommit(ctx, ddb, addr); err != nil {
-			return hash.Hash{}, fmt.Errorf("read commit %s: %w", addr, err)
 		}
 	}
 	return addr, nil
+}
+
+// parentOneBelow is the first of c's parents whose height is one below c's.
+func parentOneBelow(ctx context.Context, ddb *doltdb.DoltDB, addr hash.Hash, c *doltdb.Commit) (hash.Hash, *doltdb.Commit, error) {
+	height, err := c.Height()
+	if err != nil {
+		return hash.Hash{}, nil, err
+	}
+	parents, err := c.ParentHashes(ctx)
+	if err != nil {
+		return hash.Hash{}, nil, err
+	}
+	for _, p := range parents {
+		parent, err := readFullCommit(ctx, ddb, p)
+		if err != nil {
+			return hash.Hash{}, nil, fmt.Errorf("read commit %s: %w", p, err)
+		}
+		if h, err := parent.Height(); err != nil || h == height-1 {
+			return p, parent, err
+		}
+	}
+	return hash.Hash{}, nil, fmt.Errorf("no parent of %s, at height %d, is at height %d", addr, height, height-1)
 }
 
 // publishReRoot force-pushes branch's scratch to the remote's branch, landing
