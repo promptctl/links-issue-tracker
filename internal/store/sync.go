@@ -916,22 +916,25 @@ func (s *Store) pushMutation(ctx context.Context, remote storage.RemoteName, bra
 
 // retryPushAfterFollow takes the outcome of a push the caller ran. A push the
 // remote refused (pushRefusedError) is followed by a fetch and a follow of a
-// re-root the fetch revealed (followRemoteReRoot). When the follow moved the
+// re-root the fetch revealed (moveOntoRemoteReRoot). When the follow moved the
 // branch, the refusal was the re-root's and the follow removed it, so the
 // push runs once more, as a plain push, and that push's outcome is the
-// result. Otherwise the refusal stands, returned as pushErr with the fetch
+// result. The follow is finished by finish only once that retry has run, so
+// no collection below the cut stands between the follow and the retry it
+// exists for. Otherwise the refusal stands, returned as pushErr with the fetch
 // already run, so a caller judging it reads the remote as it stands now. A
 // refusal that stands, the first push's or the retry's, comes back judged by
 // judgeStandingRefusal: every push step's refusal passes through here, so one
 // judgment covers them all. [LAW:single-enforcer]
 // followErr is a fetch or follow that failed, beside the refusal it could not
-// explain, for the caller to word; followed is the follow's record, zero when
-// the branch did not move, for the caller's maintenance account. Every other
+// explain, for the caller to word; followed is the follow's record as finish
+// left it, zero when the branch did not move, for the caller's maintenance
+// account. Every other
 // outcome — a push that landed,
 // or one that failed without a refusal (an unreachable remote, a commit lock
 // not acquired, a compaction that failed first) — passes through untouched
 // with nothing fetched.
-func (s *Store) retryPushAfterFollow(ctx context.Context, remote storage.RemoteName, branch string, setUpstream bool, pushed storage.SyncPushResult, pushErr error) (result storage.SyncPushResult, _ error, followed storage.FollowedReRoot, followErr error) {
+func (s *Store) retryPushAfterFollow(ctx context.Context, remote storage.RemoteName, branch string, setUpstream bool, pushed storage.SyncPushResult, pushErr error, finish finishFollow) (result storage.SyncPushResult, _ error, followed storage.FollowedReRoot, followErr error) {
 	trimmedBranch := strings.TrimSpace(branch)
 	var refusal pushRefusedError
 	if !errors.As(pushErr, &refusal) {
@@ -940,22 +943,32 @@ func (s *Store) retryPushAfterFollow(ctx context.Context, remote storage.RemoteN
 	if err := s.SyncFetch(ctx, remote); err != nil {
 		return storage.SyncPushResult{}, pushErr, storage.FollowedReRoot{}, err
 	}
-	followed, err := s.followRemoteReRoot(ctx, remote, trimmedBranch, storage.SyncEntryPush)
-	if err != nil {
-		return storage.SyncPushResult{}, pushErr, followed, err
+	followed, moveErr := s.moveOntoRemoteReRoot(ctx, remote, trimmedBranch, storage.SyncEntryPush)
+	if moveErr != nil {
+		return storage.SyncPushResult{}, pushErr, finish(ctx, remote, followed, moveErr), moveErr
 	}
+	result, pushErr = s.retryOverFollow(ctx, remote, trimmedBranch, setUpstream, followed, pushErr)
+	return result, pushErr, finish(ctx, remote, followed, nil), nil
+}
+
+// retryOverFollow is retryPushAfterFollow once the follow finished: the one
+// retry when the follow moved the branch, then the judgment of a refusal that
+// still stands.
+func (s *Store) retryOverFollow(ctx context.Context, remote storage.RemoteName, branch string, setUpstream bool, followed storage.FollowedReRoot, pushErr error) (storage.SyncPushResult, error) {
+	var refusal pushRefusedError
 	if followed.Head != "" {
-		result, pushErr = s.pushMutation(ctx, remote, trimmedBranch, setUpstream, false)
-		if !errors.As(pushErr, &refusal) {
-			return result, pushErr, followed, nil
+		result, retryErr := s.pushMutation(ctx, remote, branch, setUpstream, false)
+		if !errors.As(retryErr, &refusal) {
+			return result, retryErr
 		}
+		pushErr = retryErr
 		// The retry was refused over a remote that moved after the first
 		// fetch, so its judgment reads the remote as it stands now too.
 		if err := s.SyncFetch(ctx, remote); err != nil {
-			return storage.SyncPushResult{}, unjudgedRefusal(pushErr, err), followed, nil
+			return storage.SyncPushResult{}, unjudgedRefusal(pushErr, err)
 		}
 	}
-	return storage.SyncPushResult{}, s.judgeStandingRefusal(ctx, remote, trimmedBranch, pushErr), followed, nil
+	return storage.SyncPushResult{}, s.judgeStandingRefusal(ctx, remote, branch, pushErr)
 }
 
 // judgeStandingRefusal is a refusal that stands, after its fetch, wrapped in
@@ -1014,9 +1027,9 @@ func (s *Store) SyncCompactAndPush(ctx context.Context, remote storage.RemoteNam
 		return pushErr
 	})
 	// A push refused over a re-root it follows runs again without
-	// compacting: the follow collected the store below the cut, and that
-	// collection joins the maintenance account.
-	result, err, followed, followErr := s.retryPushAfterFollow(ctx, remote, branch, setUpstream, result, err)
+	// compacting, and the live store collects below the cut after that
+	// retry; the collection joins the maintenance account.
+	result, err, followed, followErr := s.retryPushAfterFollow(ctx, remote, branch, setUpstream, result, err, s.collectAndRecordFollow)
 	err = joinFollowFailure(err, followErr)
 	// DOLT_GC above compacts `noms`; the prune collects the other half of the
 	// store's local footprint, the abandoned git remote mirrors. All three jobs
@@ -1142,7 +1155,11 @@ func (s *Store) SyncPushFromClone(ctx context.Context, remote storage.RemoteName
 		return storage.SyncPushResult{}, err
 	}
 	result, pushErr := s.pushMutation(ctx, remote, trimmedBranch, setUpstream, force)
-	result, pushErr, _, followErr := s.retryPushAfterFollow(ctx, remote, trimmedBranch, setUpstream, result, pushErr)
+	// The clone is removed when the mirror's cycle ends, so a follow on it
+	// only records: a collection below the cut would spend the push deadline
+	// on a store about to be deleted. The live store collects when it follows
+	// the same re-root.
+	result, pushErr, _, followErr := s.retryPushAfterFollow(ctx, remote, trimmedBranch, setUpstream, result, pushErr, s.recordFollow)
 	if pushErr == nil {
 		return result, nil
 	}

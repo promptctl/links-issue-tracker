@@ -419,7 +419,11 @@ func TestSyncPushFollowsAReRootedRemote(t *testing.T) {
 }
 
 // TestSyncPushFromCloneFollowsAReRootedRemote drives the on-change mirror's
-// push, from a clone of bravo: it follows on the clone and lands.
+// push, from a clone of bravo: it follows on the clone and lands. The clone
+// is thrown away after the push, so the follow collects nothing on it — its
+// checkpoints still stand and its record says no GC ran — while its fork
+// point is across the cut, since the receive that carries the push lands
+// that fork point on the live store.
 func TestSyncPushFromCloneFollowsAReRootedRemote(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -439,6 +443,18 @@ func TestSyncPushFromCloneFollowsAReRootedRemote(t *testing.T) {
 		t.Fatalf("push = %+v, want bravo's re-rooted head %s landed", pushed, headCommit(t, ctx, st))
 	}
 	r.assertFollowed(t, st, storage.SyncEntryPush)
+	if c := st.FollowedReRoots()[0].Collection; c != (storage.Collection{}) {
+		t.Fatalf("the clone's follow collected %+v; want no collection on a clone", c)
+	}
+	if event := st.FollowedReRoots()[0].EventValue(); event["collection.ran"] != false {
+		t.Fatalf("the clone's follow event = %v; want collection.ran false", event)
+	}
+	if len(branchesUnder(t, ctx, st, migrationCheckpointPrefix+"-")) == 0 {
+		t.Fatalf("the clone's %s checkpoints are gone; want them left for the clone's removal, not collected", migrationCheckpointPrefix)
+	}
+	if forkPoint, remote := branchesUnder(t, ctx, st, forkPointPrefix)["origin/master"], r.alphaReRoot.Head; forkPoint != remote {
+		t.Fatalf("the clone's fork point is %q; want it moved onto the remote's re-rooted head %s", forkPoint, remote)
+	}
 }
 
 // TestTakeFollowsAReRootedRemoteBeforeItCanDiscardASide asks to take the
