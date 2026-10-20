@@ -699,15 +699,18 @@ func TestRepairVersionContentDriftWithRollbackResetsOnFailure(t *testing.T) {
 		}
 		mismatch := &VersionContentMismatchError{Version: 2, Name: "00002_add_lane.sql", Missing: []string{"issues.lane"}}
 
-		err = st.repairVersionContentDriftWithRollback(ctx, applied, mismatch)
-		if err == nil {
-			t.Fatal("repairVersionContentDriftWithRollback() error = nil; want a loud failure, not a silent no-op")
+		_, fail := st.repairVersionContentDriftWithRollback(ctx, applied, mismatch)
+		if fail == nil {
+			t.Fatal("repairVersionContentDriftWithRollback() failure = nil; want a loud failure, not a silent no-op")
 		}
-		if !strings.Contains(err.Error(), "v2") || !strings.Contains(err.Error(), "00002_add_lane.sql") {
-			t.Errorf("error = %q; want it to name the triggering version and migration file", err.Error())
+		if fail.Step != stepDriftRepair {
+			t.Errorf("failure step = %s; want %s", fail.Step, stepDriftRepair)
 		}
-		if !strings.Contains(err.Error(), "checkpoint") {
-			t.Errorf("error = %q; want it to name the checkpoint reset outcome", err.Error())
+		if !strings.Contains(fail.Error(), "v2") || !strings.Contains(fail.Error(), "00002_add_lane.sql") {
+			t.Errorf("error = %q; want it to name the triggering version and migration file", fail.Error())
+		}
+		if !strings.Contains(fail.Error(), "checkpoint") {
+			t.Errorf("error = %q; want it to name the checkpoint reset outcome", fail.Error())
 		}
 
 		cps, err := st.ListCheckpoints(ctx, migrationDriftRepairCheckpointPrefix)
@@ -746,10 +749,10 @@ func TestVersionContentDriftResetSurvivesCallerCancel(t *testing.T) {
 		t.Cleanup(func() { versionContentDriftRepairForTest = nil })
 
 		mismatch := &VersionContentMismatchError{Version: 2, Name: "00002_add_lane.sql", Missing: []string{"issues.lane"}}
-		err = st.repairVersionContentDriftWithRollback(ctx, applied, mismatch)
+		_, fail := st.repairVersionContentDriftWithRollback(ctx, applied, mismatch)
 		versionContentDriftRepairForTest = nil
-		if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "working set reset to checkpoint") {
-			t.Fatalf("repairVersionContentDriftWithRollback() error = %v; want the cancelled repair reported with a completed reset", err)
+		if fail == nil || fail.Step != stepDriftRepair || !errors.Is(fail, context.Canceled) || !strings.Contains(fail.Error(), "working set reset to checkpoint") {
+			t.Fatalf("repairVersionContentDriftWithRollback() failure = %v; want step drift_repair reporting the cancelled repair with a completed reset", fail)
 		}
 		cols, err := st.tableColumns(bg, "issues")
 		if err != nil {

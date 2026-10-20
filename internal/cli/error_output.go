@@ -56,6 +56,7 @@ var (
 	// message. [LAW:no-silent-failure]
 	reasonBulkPartialFailure    = commandReason{"bulk_partial_failure", ExitGeneric}
 	reasonCommandFailed         = commandReason{"command_failed", ExitGeneric}
+	reasonMigrationFailed       = commandReason{"migration_failed", ExitGeneric}
 	reasonRemoteUnreachable     = commandReason{"remote_unreachable", ExitGeneric}
 	reasonTransientGcContention = commandReason{"transient_gc_contention", ExitGeneric}
 	reasonWorkspaceBusy         = commandReason{"workspace_busy", ExitGeneric}
@@ -73,18 +74,20 @@ var (
 	// file, run `lit init`, install a different lit), and the reason printed
 	// beside the code carries that difference, not a code of its own.
 	// [LAW:no-mode-explosion]
-	reasonMigrationQuarantined    = commandReason{"migration_quarantined", ExitValidation}
-	reasonOutsideGitWorkspace     = commandReason{"outside_git_workspace", ExitValidation}
-	reasonPurgeUnconfirmed        = commandReason{"purge_unconfirmed", ExitValidation}
-	reasonRetiredCommand          = commandReason{"retired_command", ExitValidation}
-	reasonStoredPrefixRefused     = commandReason{"stored_prefix_refused", ExitValidation}
-	reasonTakeoverUnconfirmed     = commandReason{"takeover_unconfirmed", ExitValidation}
-	reasonTemplateShapeRefused    = commandReason{"template_shape_refused", ExitValidation}
-	reasonUnknownCommand          = commandReason{"unknown_command", ExitValidation}
-	reasonUnsupportedFlag         = commandReason{"unsupported_flag", ExitValidation}
-	reasonValidationRefused       = commandReason{"validation_refused", ExitValidation}
-	reasonWorkspaceNotInitialized = commandReason{"workspace_not_initialized", ExitValidation}
-	reasonWorkspaceSchemaAhead    = commandReason{"workspace_schema_ahead", ExitValidation}
+	reasonMigrationPartiallyApplied = commandReason{"migration_partially_applied", ExitValidation}
+	reasonMigrationQuarantined      = commandReason{"migration_quarantined", ExitValidation}
+	reasonSchemaShapeRefused        = commandReason{"schema_shape_refused", ExitValidation}
+	reasonOutsideGitWorkspace       = commandReason{"outside_git_workspace", ExitValidation}
+	reasonPurgeUnconfirmed          = commandReason{"purge_unconfirmed", ExitValidation}
+	reasonRetiredCommand            = commandReason{"retired_command", ExitValidation}
+	reasonStoredPrefixRefused       = commandReason{"stored_prefix_refused", ExitValidation}
+	reasonTakeoverUnconfirmed       = commandReason{"takeover_unconfirmed", ExitValidation}
+	reasonTemplateShapeRefused      = commandReason{"template_shape_refused", ExitValidation}
+	reasonUnknownCommand            = commandReason{"unknown_command", ExitValidation}
+	reasonUnsupportedFlag           = commandReason{"unsupported_flag", ExitValidation}
+	reasonValidationRefused         = commandReason{"validation_refused", ExitValidation}
+	reasonWorkspaceNotInitialized   = commandReason{"workspace_not_initialized", ExitValidation}
+	reasonWorkspaceSchemaAhead      = commandReason{"workspace_schema_ahead", ExitValidation}
 
 	reasonEntityNotFound  = commandReason{"entity_not_found", ExitNotFound}
 	reasonVersionNotFound = commandReason{"version_not_found", ExitNotFound}
@@ -121,6 +124,33 @@ var (
 // its answer.
 // [LAW:types-are-the-program] No message text is inspected; classification is carried by the type.
 func commandErrorReason(err error) commandReason {
+	// A failure of an open's schema convergence: the act that clears it is a
+	// property of the step that failed, read off the step. A step that may
+	// have left partial changes, or a shape no open converges, outranks
+	// everything else in the tree: a contended reset still leaves a dirty
+	// working set, and the busy and GC-contention arms below would answer
+	// "retry" to it. A step a retry clears is classified like any other error,
+	// so a wrapper's reason or the cause's own reason still holds, and only an
+	// error no arm names gets migration_failed rather than command_failed,
+	// whose doctor advice cannot help: doctor opens the store through the
+	// same convergence. [LAW:single-enforcer] [LAW:one-type-per-behavior]
+	unnamed := reasonCommandFailed
+	var convergence *store.SchemaConvergenceError
+	if errors.As(err, &convergence) {
+		switch convergence.Step.Act() {
+		case store.ActRestoreSnapshot:
+			return reasonMigrationPartiallyApplied
+		case store.ActEscalate:
+			return reasonSchemaShapeRefused
+		case store.ActClearCause:
+			unnamed = reasonMigrationFailed
+		}
+	}
+	return typedErrorReason(err, unnamed)
+}
+
+// typedErrorReason is the reason err's types name, or unnamed when none does.
+func typedErrorReason(err error, unnamed commandReason) commandReason {
 	var notFound storage.NotFoundError
 	if errors.As(err, &notFound) {
 		return reasonEntityNotFound
@@ -325,7 +355,7 @@ func commandErrorReason(err error) commandReason {
 	if errors.Is(err, store.ErrTransientGCContention) {
 		return reasonTransientGcContention
 	}
-	return reasonCommandFailed
+	return unnamed
 }
 
 // installReplacesLit is why installing a lit is the user's call: the
@@ -391,12 +421,30 @@ func commandErrorRemediation(reason commandReason) string {
 	case reasonCorruptionDetected:
 		return "Run `lit doctor --fix integrity` and retry. " + agentInstructionsOpen + "This command is idempotent and safe to run without confirmation." + agentInstructionsClose
 	case reasonTransientGcContention:
-		return "Retry once. If the error persists, run `lit doctor --fix`. " + agentInstructionsOpen + "This command is idempotent and safe to run without confirmation." + agentInstructionsClose
+		// `lit doctor --fix` is not named: doctor opens the store through the
+		// same convergence, and its fixes (integrity, rank) clear neither
+		// contention nor a held store. [LAW:no-silent-failure]
+		return "Retry once: online garbage collection held the store for a moment. If it fails the same way again, surface it to the user as blocking."
+	case reasonMigrationFailed:
+		// `lit doctor` is not named even to rule it out: doctor opens the store
+		// through the same migration, and an agent that skims acts on the
+		// command it sees, as workspace_not_initialized's remediation records.
+		// The line claims only what every step behind this reason shares: the
+		// next open converges from the state the step left.
+		return "Retry the command: the next open runs the step the message names again from the state it left, and converges. If it fails the same way again, surface it to the user as blocking."
+	case reasonMigrationPartiallyApplied:
+		// The message names the snapshot as a fact; this line is the one place
+		// that says to restore it. [LAW:one-source-of-truth]
+		return "Do not retry, and run no other lit command first: every command opens the store and runs this migration again on top of its partial changes. Run `lit snapshots restore <name>` with the snapshot the message above names — it holds the workspace as it was just before this open migrated it, and restore moves the current store aside rather than deleting it — then rerun the command."
+	case reasonSchemaShapeRefused:
+		return "Do not retry unchanged — this workspace's stored shape is one lit does not converge on its own, and every command that opens the store repeats this refusal. The message above names the shape. " + agentInstructionsOpen + "Repairing a stored shape by hand is the user's call: surface this refusal to the user as blocking." + agentInstructionsClose
 	case reasonWorkspaceWriteBlocked:
 		// Action-only: the error line above already states the diagnosis (another
-		// process holds the store), so the remediation jumps straight to the steps,
-		// like every other case here. [LAW:one-source-of-truth]
-		return "Wait a moment and retry — a normal command releases the store in well under a second. If it persists, a lit process is stuck: find it with `ps aux | grep '[l]it'` and terminate it, then retry; if none is running the hold is stale, so run `lit doctor --fix`. " + agentInstructionsOpen + "This is a mechanical, self-diagnosable state — the steps above resolve it without needing the user's input." + agentInstructionsClose
+		// process holds the store). No process hunt: a command-line pattern
+		// cannot tell lit's holder from any other process whose command line
+		// contains "lit", and terminating the wrong one is the user's to answer
+		// for. [LAW:one-source-of-truth]
+		return "Wait a moment and retry: a normal command releases the store in well under a second. If it fails the same way again, surface it to the user as blocking."
 	case reasonScopeExhausted:
 		// Stands where the message cannot: the message names what stops the
 		// scope and each route it has, but not that a bare retry changes

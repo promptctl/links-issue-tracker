@@ -1673,7 +1673,7 @@ called from `runMigration` before the snapshot guard, only in `phaseAdopt`
   ```
   workspace's issues table is missing reconcile prerequisites (<comma-joined missing>); the shape is structurally beyond what pre-goose reconcile can recover — this is not a known historical shape
   ```
-  (`internal/store/schema_reconcile.go`). Wrapped by the caller as `"reconcile pre-goose workspace: %w"` (`internal/store/migration_runner.go`).
+  (`internal/store/schema_reconcile.go`), returned as the failure of step `reconcile_prerequisites_missing`; a failure to read the columns is step `check_reconcile_prerequisites` (`internal/store/migration_runner.go`).
 
 **Post-gate — `verifyBaselineShape`** (`internal/store/migration_runner.go`):
 for each baseline table (sorted), read `tableColumns`; absent table appends the
@@ -1687,11 +1687,10 @@ remaining gap aborts before the stamp with:
 ```
 post-reconcile workspace shape still differs from baseline (remaining gaps: <comma-joined>); reconcile cannot bring this workspace to v1 — the shape is structurally beyond what pre-goose reconcile can recover
 ```
-(`internal/store/migration_runner.go`). Wrapping error for a probe
-failure: `"verify post-reconcile baseline shape: %w"`
-(`internal/store/migration_runner.go`). The whole reconcile call is
-wrapped `"reconcile pre-goose workspace: %w"`
-(`internal/store/migration_runner.go`).
+(`internal/store/migration_runner.go`), the failure of step
+`reconciled_shape_differs`. A probe failure is step
+`verify_reconciled_shape`, and a failure of the reconcile itself is step
+`reconcile` (`internal/store/migration_runner.go`).
 
 `operability` (`internal/store/schema_operability.go`) uses
 the same shape check when the goose log records a version above the registry
@@ -1768,9 +1767,6 @@ Adjacent, from `internal/store/migration_runner.go`:
 
 | Text | Line |
 |---|---|
-| `reconcile pre-goose workspace: %w` (pre-gate) | 399 |
-| `reconcile pre-goose workspace: %w` (reconcile itself) | 423 |
-| `verify post-reconcile baseline shape: %w` | 439 |
 | `post-reconcile workspace shape still differs from baseline (remaining gaps: %s); reconcile cannot bring this workspace to v1 — the shape is structurally beyond what pre-goose reconcile can recover` | 442-448 |
 | `probe columns of %q: %w` / `scan column of %q: %w` / `iterate columns of %q: %w` | 1343, 1350, 1355 |
 | `probe table %q: %w` | 1373 |
@@ -1844,7 +1840,7 @@ goose_db_version` and commits. `assertReachedBaseline` asserts
 - **`TestReconcileTopicHasNoDefault`**: after reconcile re-adds `issues.topic`, `information_schema.columns.column_default` for it must be NULL.
 - **`TestReconcileRankBackfillCoexistsWithExistingRanks`**: with one already-ranked row and one `item_rank=''` row, both end non-empty and distinct.
 - **`TestPostReconcileBaselineVerificationCatchesNonIssuesGaps`**: dropping `relations.created_by` makes Open fail with an error containing the literal `"relations.created_by"`, and `goose_db_version` must **not** exist afterwards.
-- **`TestReconcileErrorMessageIsActionable`**: against `CREATE TABLE issues (id VARCHAR(191) PRIMARY KEY)`, Open's error must contain `"reconcile pre-goose workspace"`, `"status"`, and `"not a known historical shape"`, and must **not** contain `"restore it from a snapshot or recreate"`.
+- **`TestReconcileErrorMessageIsActionable`**: against `CREATE TABLE issues (id VARCHAR(191) PRIMARY KEY)`, Open's error must be a `SchemaConvergenceError` at step `reconcile_prerequisites_missing` and must contain `"status"` and `"not a known historical shape"`, and must **not** contain `"restore it from a snapshot or recreate"`.
 - **`TestDerivedTypeCheckClausesMatchHistoricalLiterals`** pins the generated clause text byte-for-byte:
   - `issueTypeCheckClause == "issue_type IN ('task','feature','bug','chore','epic')"`
   - `containerTypeMembership == "issue_type IN ('epic')"`
@@ -4423,11 +4419,11 @@ Constants (`internal/store/migration_runner.go`):
 - `migrationCheckpointRetention = 5` (`migration_runner.go`)
 - `migrationDriftRepairCheckpointPrefix = "pre-drift-repair"` (`migration_runner.go`) — deliberately distinct so the two retained sets prune independently (`migration_runner.go`).
 
-**Startup migration path** `applyPendingMigrations` (`migration_runner.go`): builds the goose provider first so a provider failure leaves no orphan branch (`migration_runner.go`, error `construct migration provider: %w`); then `CreateCheckpoint(ctx, "pre-migrate")` before any mutation, error `create migration checkpoint: %w` (`migration_runner.go`). On `goose.ErrNoNextVersion` (success) it calls `PruneCheckpoints(context.WithoutCancel(ctx), "pre-migrate", 5)`, error `prune migration checkpoints: %w` (`migration_runner.go`). On a goose failure, and on a failed step commit (`commit migration v%d: %w`), it calls `handleMigrationFailure` and also prunes, both on `context.WithoutCancel(ctx)` so a caller's cancellation cannot stop the recovery; a prune failure is joined to the migration failure with `errors.Join`, as `prune migration checkpoints: %w` (`migration_runner.go`). Only a goose failure while the caller's ctx is live earns a quarantine (`earnsQuarantine`); a cancelled caller or a failed step commit leaves the migration to run again on the next open (`migration_runner.go`). Each successful step commits with `migrationCommitMessage(result)` (`migration_runner.go`).
+**Startup migration path** `applyPendingMigrations` (`migration_runner.go`): builds the goose provider first so a provider failure leaves no orphan branch (`migration_runner.go`, step `migration_provider`); then `CreateCheckpoint(ctx, "pre-migrate")` before any mutation, step `migration_checkpoint` (`migration_runner.go`). On `goose.ErrNoNextVersion` (success) it calls `PruneCheckpoints(context.WithoutCancel(ctx), "pre-migrate", 5)`, a failure labeled `"prune migration checkpoints"` returned as the open's prune error, never its failure (`migration_runner.go`). On a goose failure (step `migration`), and on a failed step commit (`commit migration v%d: %w`, step `commit_migration`), it calls `handleMigrationFailure` and also prunes, both on `context.WithoutCancel(ctx)` so a caller's cancellation cannot stop the recovery; a prune failure rides on the failure's `PruneErr`, labeled `"prune migration checkpoints"`, never in its cause (`migration_runner.go`). Only a goose failure while the caller's ctx is live earns a quarantine (`earnsQuarantine`); a cancelled caller or a failed step commit leaves the migration to run again on the next open (`migration_runner.go`). Each successful step commits with `migrationCommitMessage(result)` (`migration_runner.go`).
 
-**Failure handling** `handleMigrationFailure` (`migration_runner.go`): reset first, quarantine second, the quarantine only when the caller passes one (`migration_runner.go`). `ResetToCheckpoint(checkpoint.Name)` failure yields `migration v%d failed and Dolt reset to %q failed (%v); restore from dbsnapshot. Root cause: %w` (`migration_runner.go`). A quarantine insert failure yields `migration v%d failed (reset to %q); quarantine insert failed (%v); restore from dbsnapshot. Root cause: %w` (`migration_runner.go`). The quarantine record is committed with the message `fmt.Sprintf("migrate: quarantine v%d %s", version, name)` (`migration_runner.go`), whose failure yields `migration v%d failed (reset to %q); quarantine commit failed (%v); ...` (`migration_runner.go`).
+**Failure handling** `handleMigrationFailure` (`migration_runner.go`): reset first, quarantine second, the quarantine only when the caller passes one (`migration_runner.go`). A `ResetToCheckpoint(checkpoint.Name)` failure is step `migration_reset` after a goose failure and `commit_migration_reset` after a commit failure, its cause `reset to Dolt checkpoint %q: %w` joined with `it was resetting after migration v%d %q failed: %w` (`migration_runner.go`). A quarantine insert failure is step `record_quarantine`, its cause the insert error joined with the `CheckpointResetError` (no quarantine in force) (`migration_runner.go`). The quarantine record is committed with the message `fmt.Sprintf("migrate: quarantine v%d %s", version, name)` (`migration_runner.go`), whose failure is step `commit_quarantine`, its cause `commit quarantine v%d: %w` joined with the `CheckpointResetError` with `Quarantined` true: the uncommitted row stays in the working set (`migration_runner.go`).
 
-**Drift-repair path** `repairVersionContentDriftWithRollback` (`migration_runner.go`): `CreateCheckpoint(ctx, "pre-drift-repair")`, error `create version-content drift repair checkpoint: %w` (`migration_runner.go`); on repair failure it resets on `context.WithoutCancel(ctx)`, and a reset failure gives `repair version-content drift (detected at v%d %q) failed (%v) and reset to checkpoint %q failed (%v); restore from dbsnapshot` (`migration_runner.go`), while a successful reset gives `repair version-content drift (detected at v%d %q) failed: %w (working set reset to checkpoint %q)` (`migration_runner.go`). A successful repair commits with `migrationDriftRepairCommitMessage(repaired)`, and a commit failure (`commit version-content drift repair: %w`) is reset like a repair failure (`migration_runner.go`); then `PruneCheckpoints(context.WithoutCancel(ctx), "pre-drift-repair", 5)` with error `prune version-content drift repair checkpoints: %w` (`migration_runner.go`).
+**Drift-repair path** `repairVersionContentDriftWithRollback` (`migration_runner.go`): `CreateCheckpoint(ctx, "pre-drift-repair")`, step `drift_checkpoint` (`migration_runner.go`); a repair failure is wrapped `repair version-content drift (detected at v%d %q): %w` and reset on `context.WithoutCancel(ctx)`: a reset failure is step `drift_repair_reset`, its cause `reset to checkpoint %q: %w` joined with the repair failure (`migration_runner.go`), while a successful reset is step `drift_repair`, cause `%w (working set reset to checkpoint %q)` (`migration_runner.go`). A successful repair commits with `migrationDriftRepairCommitMessage(repaired)`, and a commit failure (`commit version-content drift repair: %w`) is reset like a repair failure (`migration_runner.go`); then `PruneCheckpoints(context.WithoutCancel(ctx), "pre-drift-repair", 5)`, a failure labeled `"prune version-content drift repair checkpoints"` returned as the open's prune error, never its failure (`migration_runner.go`).
 
 Checkpoint branches are never garbage-collected other than by `PruneCheckpoints`; there is no expiry by age, only by count under a prefix (`checkpoint.go`).
 

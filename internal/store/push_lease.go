@@ -16,8 +16,11 @@ import (
 // rewritten history without overwriting a push that landed after the pusher
 // last read the remote. A stale lease is an outcome,
 // not an error — it is the one answer a lease exists to give — so the error
-// is reserved for a push that reached no verdict. The caller holds the commit
-// lock (via runSyncMutation), as it does for pushWithinLock.
+// is reserved for a push that reached no verdict. Where it stopped is the
+// outcome beside it: none for a push refused before it reached the remote,
+// LeaseUnsettled for one whose transport ran, since an attempt before the
+// last may have landed. The caller holds the commit lock (via
+// runSyncMutation), as it does for pushWithinLock.
 //
 // A transport retry that finds its own earlier attempt landed reports it
 // held: a remote branch already at the pushed commit satisfies the lease
@@ -59,7 +62,7 @@ func (s *Store) pushLeasedWithinLock(ctx context.Context, remote storage.RemoteN
 	case pushErr != nil && strings.Contains(pushErr.Error(), datas.ErrStaleInfo.Error()):
 		return storage.LeaseStale, nil
 	case pushErr != nil:
-		return "", classifyPushFailure(remote, pushErr)
+		return storage.LeaseUnsettled, classifyPushFailure(remote, pushErr)
 	default:
 		return storage.LeaseHeld, nil
 	}

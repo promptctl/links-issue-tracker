@@ -239,9 +239,9 @@ func OpenForRead(ctx context.Context, doltRootDir string, workspaceID string) (_
 	// From here the Store owns the hold: Close releases it, and the deferred
 	// release above stands down.
 	success = true
-	assessment, err := s.assessMigration(ctx)
-	if err != nil {
-		return nil, errors.Join(err, s.Close())
+	assessment, fail := s.assessMigration(ctx)
+	if fail != nil {
+		return nil, errors.Join(fail, s.Close())
 	}
 	if !assessment.needsWrite() {
 		s.migrated = storage.Migrated{SchemaAhead: assessment.op.schemaAhead()}

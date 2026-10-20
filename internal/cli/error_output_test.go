@@ -26,36 +26,39 @@ import (
 // equal to the reasons error_output.go declares and to the table in
 // docs/cli-reference.md.
 var reasonCodes = map[string]int{
-	"bulk_partial_failure":      1,
-	"command_failed":            1,
-	"corruption_detected":       7,
-	"entity_not_found":          4,
-	"merge_conflict":            5,
-	"migration_quarantined":     3,
-	"no_ready_work":             6,
-	"outside_git_workspace":     3,
-	"owner_approval_required":   5,
-	"parent_cycle":              7,
-	"purge_unconfirmed":         3,
-	"remote_unreachable":        1,
-	"retired_command":           3,
-	"scope_exhausted":           6,
-	"scope_narrowed":            6,
-	"state_already_holds":       6,
-	"stored_prefix_refused":     3,
-	"sync_divergence":           5,
-	"takeover_unconfirmed":      3,
-	"template_shape_refused":    3,
-	"transient_gc_contention":   1,
-	"unknown_command":           3,
-	"unsupported_flag":          3,
-	"usage_error":               2,
-	"validation_refused":        3,
-	"version_not_found":         4,
-	"workspace_busy":            1,
-	"workspace_not_initialized": 3,
-	"workspace_schema_ahead":    3,
-	"workspace_write_blocked":   1,
+	"bulk_partial_failure":        1,
+	"command_failed":              1,
+	"corruption_detected":         7,
+	"entity_not_found":            4,
+	"merge_conflict":              5,
+	"migration_failed":            1,
+	"migration_partially_applied": 3,
+	"migration_quarantined":       3,
+	"no_ready_work":               6,
+	"outside_git_workspace":       3,
+	"owner_approval_required":     5,
+	"parent_cycle":                7,
+	"purge_unconfirmed":           3,
+	"remote_unreachable":          1,
+	"retired_command":             3,
+	"schema_shape_refused":        3,
+	"scope_exhausted":             6,
+	"scope_narrowed":              6,
+	"state_already_holds":         6,
+	"stored_prefix_refused":       3,
+	"sync_divergence":             5,
+	"takeover_unconfirmed":        3,
+	"template_shape_refused":      3,
+	"transient_gc_contention":     1,
+	"unknown_command":             3,
+	"unsupported_flag":            3,
+	"usage_error":                 2,
+	"validation_refused":          3,
+	"version_not_found":           4,
+	"workspace_busy":              1,
+	"workspace_not_initialized":   3,
+	"workspace_schema_ahead":      3,
+	"workspace_write_blocked":     1,
 }
 
 func TestCommandErrorReason(t *testing.T) {
@@ -198,6 +201,11 @@ func TestCommandErrorReason(t *testing.T) {
 		// refusal the block wraps, never as sync_divergence.
 		{"remote schema ahead", asSyncFailure(remoteSchemaAheadError()), "workspace_schema_ahead"},
 		{"migration quarantined wrapped", fmt.Errorf("open store: %w", quarantineBlockError()), "migration_quarantined"},
+		// A failure of the open's schema convergence takes its reason from the
+		// step's act (convergence_error_test.go covers every step).
+		{"convergence step a retry clears", convergenceFailure("migration_provider"), "migration_failed"},
+		{"convergence step that may leave partial changes", convergenceFailure("migration_reset"), "migration_partially_applied"},
+		{"convergence step no open converges", convergenceFailure("quarantine_table_shape"), "schema_shape_refused"},
 		{"upgrade target behind wrapped", fmt.Errorf("upgrade: %w", upgradeTargetBehindError()), "validation_refused"},
 		// A stat that failed for any reason but ENOENT is an unclassified fault,
 		// and the retry-then-doctor default is the right advice for it. The
@@ -383,7 +391,7 @@ func TestWriteCommandErrorWorkspaceWriteBlocked(t *testing.T) {
 	if !strings.Contains(out, "another lit process is holding this workspace open for writing") {
 		t.Fatalf("missing holder-aware headline: %q", out)
 	}
-	if !strings.Contains(out, "remediation:") || !strings.Contains(out, "ps aux | grep") {
+	if !strings.Contains(out, "remediation: Wait a moment and retry") || !strings.Contains(out, "surface it to the user as blocking") {
 		t.Fatalf("missing holder remediation steps: %q", out)
 	}
 	// The backend cause is preserved for diagnosis (demoted behind the holder
@@ -464,6 +472,17 @@ func schemaAheadError() *store.UnsupportedSchemaVersionError {
 // at schema 999, from a binary that supports up to 5.
 func remoteSchemaAheadError() *store.RemoteSchemaAheadError {
 	return &store.RemoteSchemaAheadError{Remote: "origin", Branch: "master", RemoteVersion: 999, BinarySupportedMax: 5}
+}
+
+// convergenceFailure is the open's failure at the convergence step token,
+// wrapped the way an open's caller wraps it.
+func convergenceFailure(token string) error {
+	for _, step := range store.ConvergenceSteps() {
+		if step.String() == token {
+			return fmt.Errorf("open store: %w", &store.SchemaConvergenceError{Step: step, Cause: errors.New("synthetic")})
+		}
+	}
+	panic("no convergence step " + token)
 }
 
 // quarantineBlockError is the refusal every open returns once migration v9

@@ -178,9 +178,9 @@ Constants (`exit.go`):
 the reason `commandErrorReason(err)` returns (`exit.go`), so an error's code is
 decided by the classification order in §1.9. Each `commandReason` is declared
 with its code (`error_output.go`):
-- 1: `bulk_partial_failure`, `command_failed`, `remote_unreachable`, `transient_gc_contention`, `workspace_busy`, `workspace_write_blocked`
+- 1: `bulk_partial_failure`, `command_failed`, `migration_failed`, `remote_unreachable`, `transient_gc_contention`, `workspace_busy`, `workspace_write_blocked`
 - 2: `usage_error`
-- 3: `migration_quarantined`, `outside_git_workspace`, `purge_unconfirmed`, `retired_command`, `stored_prefix_refused`, `takeover_unconfirmed`, `template_shape_refused`, `unknown_command`, `unsupported_flag`, `validation_refused`, `workspace_not_initialized`, `workspace_schema_ahead`
+- 3: `migration_partially_applied`, `migration_quarantined`, `outside_git_workspace`, `purge_unconfirmed`, `retired_command`, `schema_shape_refused`, `stored_prefix_refused`, `takeover_unconfirmed`, `template_shape_refused`, `unknown_command`, `unsupported_flag`, `validation_refused`, `workspace_not_initialized`, `workspace_schema_ahead`
 - 4: `entity_not_found`, `version_not_found`
 - 5: `merge_conflict`, `owner_approval_required`, `sync_divergence`
 - 6: `no_ready_work`, `scope_exhausted`, `scope_narrowed`, `state_already_holds`
@@ -206,9 +206,15 @@ rules in `internal/model/validation.go`.
   `err.Error()`, which may itself span lines).
 - Then, only when non-empty: `remediation: %s\n`.
 
-`commandErrorReason(err)` maps type → reason string (`error_output.go`). The
-checks run in this order and the first match wins, so an error that wraps
-several of these types gets the reason of the earliest one:
+`commandErrorReason(err)` maps type → reason string (`error_output.go`). Its
+first check is a `*store.SchemaConvergenceError` anywhere in the tree, read
+off the failed step's act: `ActRestoreSnapshot` →
+`migration_partially_applied`; `ActEscalate` → `schema_shape_refused`;
+`ActClearCause` → the checks below over the whole error, with
+`migration_failed` in place of `command_failed` when none matches
+(`typedErrorReason(err, unnamed)`). Every other check runs in
+this order and the first match wins, so an error that wraps several of these
+types gets the reason of the earliest one:
 1. `storage.NotFoundError` → `entity_not_found`
 2. `storage.VersionNotFoundError` and `storage.PlanDigestNotFoundError` → `version_not_found`
 3. `MergeConflictError` → `merge_conflict`
@@ -266,8 +272,11 @@ empty string means no `remediation:` line is printed:
 - `owner_approval_required`: "" (empty — the refusal message carries the steps)
 - `parent_cycle`: "Do not retry unchanged: the loop stays until one of its parent edges is replaced. Break it the way the message above names, then rerun the command."
 - `corruption_detected`: "Run `lit doctor --fix integrity` and retry. \<agent-instructions>This command is idempotent and safe to run without confirmation.\</agent-instructions>"
-- `transient_gc_contention`: "Retry once. If the error persists, run `lit doctor --fix`. \<agent-instructions>This command is idempotent and safe to run without confirmation.\</agent-instructions>"
-- `workspace_write_blocked`: "Wait a moment and retry — a normal command releases the store in well under a second. If it persists, a lit process is stuck: find it with `ps aux | grep '[l]it'` and terminate it, then retry; if none is running the hold is stale, so run `lit doctor --fix`. \<agent-instructions>This is a mechanical, self-diagnosable state — the steps above resolve it without needing the user's input.\</agent-instructions>"
+- `transient_gc_contention`: "Retry once: online garbage collection held the store for a moment. If it fails the same way again, surface it to the user as blocking."
+- `migration_failed`: "Retry the command: the next open runs the step the message names again from the state it left, and converges. If it fails the same way again, surface it to the user as blocking."
+- `migration_partially_applied`: "Do not retry, and run no other lit command first: every command opens the store and runs this migration again on top of its partial changes. Run `lit snapshots restore <name>` with the snapshot the message above names — it holds the workspace as it was just before this open migrated it, and restore moves the current store aside rather than deleting it — then rerun the command."
+- `schema_shape_refused`: "Do not retry unchanged — this workspace's stored shape is one lit does not converge on its own, and every command that opens the store repeats this refusal. The message above names the shape. \<agent-instructions>Repairing a stored shape by hand is the user's call: surface this refusal to the user as blocking.\</agent-instructions>"
+- `workspace_write_blocked`: "Wait a moment and retry: a normal command releases the store in well under a second. If it fails the same way again, surface it to the user as blocking."
 - `scope_narrowed`: "Do not retry unchanged — routing is deterministic and repeats this answer while the filter stays. Run `lit next` without the filter, as the message says, to be handed the ticket it names."
 - `scope_exhausted`: "Do not retry unchanged — routing is deterministic and repeats this answer until the work named above moves. Act on what the message names — the route it offers, or the rows off your focus path — or finish or hand off what you already hold."
 - `no_ready_work`: "Do not retry unchanged — routing is deterministic and repeats this answer until something in the backlog moves. That is the backlog's state, not a fault. If `--type`, `--labels`, `--assignee`, or `--status` narrowed this run, drop the filter and ask again. If a `focus` label narrowed it, `lit next --all` routes over the whole queue for one run and `lit label rm <id> focus` lifts the scope. Otherwise `lit backlog --all` shows the whole queue and who holds what, and `lit new` adds work if it is genuinely empty."
@@ -588,7 +597,7 @@ epic's own place — and one sort is applied:
    (`ready_state.go`).
 Then `enrichWithParentEpic` sets `ParentEpic{ID,Title}` on rows whose parent is a
 container (`ready_state.go`). Focus does not reorder rows: the `FocusPath`
-annotation is read as a scope (`focusScope.holds`, `ready_state.go`), never as
+annotation is read as a scope (`focusScope.onPath`, `ready_state.go`), never as
 a sort key.
 
 **Partition used by rollups**: `partitionWorkable` (`ready_state.go`):
@@ -1353,11 +1362,16 @@ line for `done` and `close`, each group omitted when empty:
   (`workableFilterFlags.parse`, `workable.go`; `cli.go`).
 - Prints the sync-staleness warning first (`workable.go`).
 - Runs the shared workable pipeline (§1.18) via `gatherWorkableAnnotated`
-  (`workable.go`). The focus scope then partitions the rows,
-  `scopeFor(all).partition(rows)` (`ready_state.go`): `--all` resolves to the
-  zero `focusScope`, which holds every row, and the excluded rows are only
-  counted. Order, keep and `--limit` run on the in-scope rows, in that order.
-  Then `gatherClaimContext` (`workable.go`).
+  (`workable.go`), then `gatherClaimContext` (`workable.go`). The focus scope
+  then partitions the rows,
+  `scopeFor(all).owning(ownScope(cc.standings, cc.self)).partition(rows, details)`
+  (`ready_state.go`), which reads each row's lane as
+  `model.LaneOf(row.Issue, details[row.ID].Parent)`: `--all` resolves to the
+  zero `focusScope`, which holds every row; otherwise a row is in scope when it
+  is on the focus path or its lane is one this checkout holds or another lane
+  of that lane's epic (`ownWork.covers`, `next_route.go`). The excluded rows
+  are counted in the notice and recorded by id on the event.
+  Order, keep and `--limit` run on the in-scope rows, in that order.
 - Dispatches `EventShowBacklog` after rendering (`workable.go`).
 
 **Output** (`printBacklogOutput`, `backlog.go`):
@@ -1377,17 +1391,22 @@ just that — visibility; only 'lit next' routes by claim, serving this checkout
 Use 'lit next' to pick the top workable item to start.
 ```
 2. The focus notice, one line, printed on every run (`focusNotice.line`,
-   `backlog.go`): a scope clause followed by a trim clause. The scope clause is
+   `backlog.go`): a scope clause, an own-work clause, then a trim clause. The scope clause is
    one of:
    - unfocused, nothing trimmed: `Nothing is hidden: every workable item is listed.`
    - unfocused, `--limit` trimmed rows: `Every workable item is in scope.`
    - focused, `--all` given: `Focus is on %s; this run bypassed it and lists the whole queue.`
-   - focused: `Focused on %s — listing only its unfinished prerequisite path, in rank order; %d workable row(s) off that path are not shown (%s for the whole queue).`
+   - focused: `Focused on %s — listing only its unfinished prerequisite path and this checkout's lanes with the rest of their epics, in rank order; %d workable row(s) outside them are not shown (%s for the whole queue).`
 
    The first `%s` is the focus goals' ids joined by `", "`
    (`focusScope.describe`, `ready_state.go`), `%d` is the count of rows the
    partition excluded, and the last `%s` is the escape `` `lit backlog --all` ``,
-   backticks included (`workable.go`). The trim
+   backticks included (`workable.go`). The own-work clause is empty when no
+   kept row is off the focus path, else a space and then
+   `Off that path but in this checkout's lanes or their epics: %s.`,
+   where `%s` is the ids of the rows kept before `--limit` that the scope
+   holds only through `ownWork.covers`, joined by `", "` (`ownClause`,
+   `backlog.go`). The trim
    clause is empty when `--limit` cut nothing, else a space and then
    `--limit trimmed this run: %d more workable row(s) are not shown.`, where
    `%d` is the rows `--limit` cut after keep (`trimClause`, `backlog.go`).
@@ -1528,18 +1547,20 @@ epic above them.
 `from`, in rank order, that `serves` admits, whose lane `inScope` admits and
 whose verdict is in `accept` (`next_route.go`). `accept` is a **set**, never a preference order —
 rank order is the only tiebreak routing applies (`next_route.go`).
-`ownScope(standings, self)` yields `ownLanes` and `ownEpics`, read from the
-**standings** and not from the gathered rows (`next_route.go`);
-`mine(lane) = ownLanes[lane]` (`next_route.go`).
+`own := ownScope(standings, self)` is an `ownWork`, read from the
+**standings** and not from the gathered rows (`next_route.go`):
+`own.holds(lane)` is a lane this checkout holds, and `own.covers(lane)` is
+that or any lane of a held lane's epic. `scope = scope.owning(own)` before the
+pool is partitioned (`next_route.go`).
 
-If `len(ownLanes) > 0` (`next_route.go`), steps 1–2b run as one closure,
+If `own.holdsAny()` (`next_route.go`), steps 1–2b run as one closure,
 `ownSteps(serves)`, first with `serves` = `asked.Selects` and then, if that
 serves nothing, over every row; both dependency walks read every row either way:
 
 1. **Own lanes**, accepting `{serveWork, resumeWork}`, whichever the backlog ranks
    first (`next_route.go`). `resumeWork` → **`ResumedOwnWork{Row}`**;
    `serveWork` → **`ServedFromClaim{Row}`**.
-   - 1b. Else `onPathDependency(gatingDependencies(rows, laneOf, mine, reachFor, workToward), serves, reachFor, workToward, laneOf)`
+   - 1b. Else `onPathDependency(gatingDependencies(rows, laneOf, own.holds, reachFor, workToward), serves, reachFor, workToward, laneOf)`
      — work toward the first dependency gating one of our own lanes that
      `reachFor` reads `reachTakeable` (`next_route.go`), drawn from
      `gatingDependencies`, which collects the distinct open dependency IDs of
@@ -1549,20 +1570,19 @@ serves nothing, over every row; both dependency walks read every row either way:
      (`next_route.go`) →
      **`ServedFromDependency{Row: work, Lane: laneOf(work), Gates: dep.Gates, Via: dep.Via, Blocker: dep.ID}`** (`next_route.go`), the `Gates` being the blocked row the dependency gates and `work` the first row of `workToward[dep.ID]` the run may serve that `reachFor` reads `reachTakeable` — the dependency itself or, for an epic, a ticket under it.
 2. Else **the rest of our epic, in lanes we do not already hold** — predicate
-   `lane.Epic() != "" && ownEpics[lane.Epic()] && !mine(lane)`, accepting
+   `own.covers(lane) && !own.holds(lane)`, accepting
    `serveWork` → **`ServedFromEpicLane{Row, Lane: laneOf(row)}`**.
-   - 2b. Else, with `gating := gatingDependencies(rows, laneOf, ourScope, reachFor, workToward)`
-     where `ourScope` is `func(lane) bool { return mine(lane) || ourEpic(lane) }`,
+   - 2b. Else, with `gating := gatingDependencies(rows, laneOf, own.covers, reachFor, workToward)`,
      `onPathDependency(gating, serves, reachFor, workToward, laneOf)` →
      **`ServedFromDependency`**, as in step 1b.
 3. Else, if steps 1–2b over every row serve a row, that row is `Hidden`: step
    4's pick → **`ServedPastNarrowing{poolPick: pick, Narrowing: Narrowed{Hidden}}`**,
    else → **`Narrowed{Hidden}`**. Otherwise `exhausted := Exhausted{Epics, Blocked, Held}` (`next_route.go`), where
-   `Epics` is `slices.Sorted(maps.Keys(ownEpics))` and `Blocked` is
+   `Epics` is `slices.Sorted(maps.Keys(own.epics))` and `Blocked` is
    `blockersOf(gating, workToward)` — the walk step 2b declined; `blockersOf`
-   drops the gated id and marks each entry `Clearable`. `Held` is `heldByThemselves` over the rows in `ourScope`: in rank order, the rows `reachOf` classifies `reachHeldByItself` or `reachAwaitingOutside` that `IssueReadiness.HeldByItself()` reports held by a reason about the row itself (a reserved label, a missing field) rather than by a dependency or an earlier sibling. When step 4's pick finds nothing, `OffPath` is set to
-   `withheldByScope` over the focus-excluded rows whose lane `ourScope` does
-   not admit. If step 4's pick finds a row →
+   drops the gated id and marks each entry `Clearable`. `Held` is `heldByThemselves` over the rows whose lane `own.covers` admits: in rank order, the rows `reachOf` classifies `reachHeldByItself` or `reachAwaitingOutside` that `IssueReadiness.HeldByItself()` reports held by a reason about the row itself (a reserved label, a missing field) rather than by a dependency or an earlier sibling. When step 4's pick finds nothing, `OffPath` is set to
+   `withheldByScope` over the focus-excluded rows, none of them ours since the
+   scope owns our work. If step 4's pick finds a row →
    **`ServedPastExhaustion{poolPick: pick, Exhaustion: exhausted}`**;
    else, if the pool over every row picks one, `Narrowing` is set to
    `&Narrowed{Hidden: pick.Row, Scope: pick.Scope}` in place of `OffPath`; → **`exhausted`**. The pick
@@ -1570,7 +1590,7 @@ serves nothing, over every row; both dependency walks read every row either way:
 
 Step 4 is reached directly by a checkout holding no lanes:
 
-4. **The global pool, focus-scoped.** `pool, offPath := scope.partition(rows)`
+4. **The global pool, focus-scoped.** `pool, offPath := scope.partition(rows, details)`
    (`next_route.go`, `ready_state.go`), then
    `pickFrom(pool, selected, func(model.LaneID) bool { return true }, serveWork)` →
    **`ServedFromNewLane{poolPick{Row, Lane: laneOf(row), Scope: scope}}`**.

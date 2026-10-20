@@ -81,6 +81,32 @@ func servedRow(outcome NextOutcome) (annotation.AnnotatedIssue, bool) {
 	return annotation.AnnotatedIssue{}, false
 }
 
+// sealedSumRow is the row each serving variant in sealedNextOutcomes carries.
+var sealedSumRow = annotation.AnnotatedIssue{Issue: model.Issue{ID: "test-served-1"}}
+
+// sealedNextOutcomes is one value of every NextOutcome variant, and whether it
+// hands a row over. Every test that ranges over the whole sum reads it here,
+// so the count TestServedRowIsTotalOverTheSealedSum holds it to covers them
+// all. [LAW:one-source-of-truth]
+var sealedNextOutcomes = []struct {
+	name    string
+	outcome NextOutcome
+	served  bool
+}{
+	{"the claimed lane", ServedFromClaim{Row: sealedSumRow}, true},
+	{"own work resumed", ResumedOwnWork{Row: sealedSumRow}, true},
+	{"the epic's next lane", ServedFromEpicLane{Row: sealedSumRow}, true},
+	{"the global pool", ServedFromNewLane{poolPick{Row: sealedSumRow}}, true},
+	{"the on-path dependency", ServedFromDependency{Row: sealedSumRow, Gates: "test-gated-1", Blocker: sealedSumRow.ID}, true},
+	{"past an exhausted scope", ServedPastExhaustion{poolPick: poolPick{Row: sealedSumRow}, Exhaustion: Exhausted{Epics: []string{"test-epic-1"}}}, true},
+	{"past a scope the filter narrowed", ServedPastNarrowing{poolPick: poolPick{Row: sealedSumRow}, Narrowing: Narrowed{Hidden: annotation.AnnotatedIssue{Issue: model.Issue{ID: "test-hidden-1"}}}}, true},
+	{"exhausted carries none", Exhausted{}, false},
+	// Hidden is the ticket the filter kept from being served, so it must
+	// not read as the row this outcome hands over.
+	{"narrowed carries none", Narrowed{Hidden: sealedSumRow}, false},
+	{"no work carries none", NoWork{}, false},
+}
+
 // Go type switches are not exhaustive, so nothing in the compiler holds
 // servedRow level with the sealed sum — the renderer's default panics, but this
 // helper just reports "routing declined to serve", which is the WRONG answer
@@ -88,25 +114,7 @@ func servedRow(outcome NextOutcome) (annotation.AnnotatedIssue, bool) {
 // outcome that carries a row fails here by name instead of turning a served row
 // into a confusing failure far from its cause.
 func TestServedRowIsTotalOverTheSealedSum(t *testing.T) {
-	row := annotation.AnnotatedIssue{Issue: model.Issue{ID: "test-served-1"}}
-	cases := []struct {
-		name    string
-		outcome NextOutcome
-		served  bool
-	}{
-		{"the claimed lane", ServedFromClaim{Row: row}, true},
-		{"own work resumed", ResumedOwnWork{Row: row}, true},
-		{"the epic's next lane", ServedFromEpicLane{Row: row}, true},
-		{"the global pool", ServedFromNewLane{poolPick{Row: row}}, true},
-		{"the on-path dependency", ServedFromDependency{Row: row, Gates: "test-gated-1", Blocker: row.ID}, true},
-		{"past an exhausted scope", ServedPastExhaustion{poolPick: poolPick{Row: row}, Exhaustion: Exhausted{Epics: []string{"test-epic-1"}}}, true},
-		{"past a scope the filter narrowed", ServedPastNarrowing{poolPick: poolPick{Row: row}, Narrowing: Narrowed{Hidden: annotation.AnnotatedIssue{Issue: model.Issue{ID: "test-hidden-1"}}}}, true},
-		{"exhausted carries none", Exhausted{}, false},
-		// Hidden is the ticket the filter kept from being served, so it must
-		// not read as the row this outcome hands over.
-		{"narrowed carries none", Narrowed{Hidden: row}, false},
-		{"no work carries none", NoWork{}, false},
-	}
+	row, cases := sealedSumRow, sealedNextOutcomes
 	// The sum is sealed at ten cases (isNextOutcome, next_route.go). Counting
 	// them here is what makes an added variant fail loudly at this table instead
 	// of passing unnoticed because nobody thought to cover it.

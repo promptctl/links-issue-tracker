@@ -198,16 +198,17 @@ Tests: `TestSyncPushDelivers` (`sync_test.go`), `TestSyncCompactAndPushDelivers`
 
 ### 1.8a `boundHistory` — a push past the history bound re-roots history
 
-`boundHistory(ctx, remote, branch, window historywindow.Window) storage.HistoryBound` (`history_bound.go`). The window is the caller's: `historywindow.Window` (`internal/historywindow/window.go`), built by `historywindow.New(reRootAt, keep)`, which fails `"a history window keeps at least one commit and fewer than it re-roots at; re_root_at %d, keep %d is not one"` when `keep < 1 || keep >= reRootAt`; its fields are `reRootAt, keep uint64`; the zero value is the one window `New` never builds, and `ReRootAt()`, `Keep()` and `String()` (`re_root_at %d, keep %d`) panic on it (`historywindow: the zero Window read; every window is built by New`). The store holds no bound of its own. After a push that landed, `performSyncPush` calls `keepHistoryBound(ctx, session, cfg, err, remote, branch, pushed)` (`internal/cli/sync.go`) with the one `config.Load` it runs after the push; it sets `history_bound.window_error` to `telemetry.ErrorText` of that load's error, and passes `cfg.Sync.HistoryWindow` to `SyncKeepHistoryBound`; on a `Load` error it does not call it and joins `"history bound not kept: " + err` to `pushed.Maintenance` with `"; "`. `HistoryBound.Window` is the window; `Fired()` is `Height >= Window.ReRootAt()`. The result starts as `HistoryBound{Remote, Branch, Window}`; `keepHistoryBound` fills it in step by step; its error becomes `Err`, and the time it took `Elapsed`. `SyncKeepHistoryBound(ctx, remote, branch, window, pushed)` runs it on the trimmed remote and branch and returns `pushed` with `AfterPush` = `"the history bound wrote re-root %s of %s after the push"` when `ReRooted.Head` is set and `historyBoundReport` joined to its `Maintenance` (`joinMaintenance`). Every result, whatever its error, is appended to the store's `bounds`; `HistoryBounds()` returns a copy, oldest first.
+`boundHistory(ctx, remote, branch, window historywindow.Window) storage.HistoryBound` (`history_bound.go`). The window is the caller's: `historywindow.Window` (`internal/historywindow/window.go`), built by `historywindow.New(reRootAt, keep)`, which fails `"a history window keeps at least one commit and fewer than it re-roots at; re_root_at %d, keep %d is not one"` when `keep < 1 || keep >= reRootAt`; its fields are `reRootAt, keep uint64`; the zero value is the one window `New` never builds, and `ReRootAt()`, `Keep()` and `String()` (`re_root_at %d, keep %d`) panic on it (`historywindow: the zero Window read; every window is built by New`). The store holds no bound of its own. After a push that landed, `performSyncPush` calls `keepHistoryBound(ctx, session, cfg, err, remote, branch, pushed)` (`internal/cli/sync.go`) with the one `config.Load` it runs after the push; it sets `history_bound.window_error` to `telemetry.ErrorText` of that load's error, and passes `cfg.Sync.HistoryWindow` to `SyncKeepHistoryBound`; on a `Load` error it does not call it and joins `"history bound not kept: " + err` to `pushed.Maintenance` with `"; "`. `HistoryBound.Window` is the window; `Fired()` is `Height >= Window.ReRootAt()`. The result starts as `HistoryBound{Remote, Branch, Window}`; `keepHistoryBound` fills it in step by step; its error becomes `Err`, and the time it took `Elapsed`. `SyncKeepHistoryBound(ctx, remote, branch, window, pushed)` runs it on the trimmed remote and branch and returns `pushed` with the result as `Bound` and `historyBoundReport` joined to its `Maintenance` (`joinMaintenance`). Every result, whatever its error, is appended to the store's `bounds`; `HistoryBounds()` returns a copy, oldest first.
 1. `requireSyncArg("branch", branch)`, then `refuseLOCKUnderCommitLock`, on every run and not only one that fires. Then `SELECT commit_hash, commit_order FROM dolt_log(?) LIMIT 1` on `remotes/<remote>/<branch>` into `Head` and `Height` (`commit_order` is the commit's height); a failure is `"read the height of %s: %w"`. `Fired()` is `Height >= Window.ReRootAt()`; below it nothing else runs.
 2. `publishBound`. `reRootScratch(branch, Head, Keep)` under `withEngineClosed`: read `Head` (`readFullCommit`), take the commit `Keep-1` first parents below it (`firstParentAncestor`; a line that ends first is `"the first-parent line below %s ends after %d commits, short of the %d the bound keeps"`), point the branch `lit-reroot/<branch>` (`reRootScratchPrefix`) at `Head` (`SetHeadToCommit`), and `reRootBranch` it at that commit (§1.6b), timing `Elapsed`. A re-root that fails is `"re-root %s at %s: %w"`. The result is `ReRooted`.
-3. Only if the re-root returned no error, `publishReRoot(remote, branch, Head)`: one `runSyncMutation` of `pushLeasedWithinLock(remote, "lit-reroot/<branch>", branch, Head)`. The verdict is `Lease`. Then, however steps 2 and 3 ended, one `runSyncMutation` of `deleteBranchesUnder("lit-reroot/")` (§5.10); its error is joined with theirs, and any of them ends the bound.
+3. Only if the re-root returned no error, `publishReRoot(remote, branch, Head)`: one `runSyncMutation` of `pushLeasedWithinLock(remote, "lit-reroot/<branch>", branch, Head)`. Across the mutation's retries it keeps the latest attempt's outcome, or an earlier attempt's when the latest has none (`cmp.Or`). `pushLeasedWithinLock` returns `held`, `stale`, `unsettled` with the classified error once `DOLT_PUSH` ran and reached no verdict, or no outcome with the error when it stopped before `DOLT_PUSH` (argument checks, `guardCommitSchemaAhead`), as `runSyncMutation` does when it cannot take the commit lock. The outcome is `Lease`. An empty `Lease` ends the bound there, with `Publication` left `ReRootNotPushed`; any other goes on to step 4, whatever the errors.
 4. `collectRemote(remote, branch, ReRooted.Head)` (§1.8b), whatever `Lease` says, into `RemoteGC`. Its error is wrapped `"collect %s: %w"` with the tracking ref, joined with the bound's error after step 5, and stops nothing.
-5. `SyncFetch(remote, false)` (`"fetch to learn whether %s carries the re-root: %w"`), then `followRemoteReRoot(remote, branch, SyncEntryBound)` (§1.6c), whatever `Lease` says; the follow's `Collection` becomes the bound's, and a follow error ends the bound. A branch that did not follow is read with `unrelatedToRemote` (`"read whether the branch still shares history with %s: %w"`): unrelated is `"%s carries a re-root the branch did not follow, so the branch is on history unrelated to it"`; otherwise the bound ends with no error.
+5. `SyncFetch(remote, false)` (`"fetch to learn whether %s carries the re-root: %w"`), then the reading: `mergeBase(ReRooted.Head, remotes/<remote>/<branch>)` (`"read whether %s carries the re-root %s: %w"`), which carries the re-root when the base is `ReRooted.Head` and lacks it otherwise, then `followRemoteReRoot(remote, branch, SyncEntryBound)` (§1.6c), whatever `Lease` says and whether or not the fetch and the reading failed; their error is joined with the bound's. `Publication` = `publicationOf(Lease, reading)`: carries is `ReRootPublished`, lacks is `ReRootNotCarried`, and with no reading a `held` lease is `ReRootPublished` and `stale` or `unsettled` is `ReRootPossiblyPublished`. The follow's `Collection` becomes the bound's, and a follow error ends the bound. A branch that did not follow is read with `unrelatedToRemote` (`"read whether the branch still shares history with %s: %w"`): unrelated is `"%s carries a re-root the branch did not follow, so the branch is on history unrelated to it"`.
+6. However `publishBound` ended, one `runSyncMutation` of `deleteBranchesUnder("lit-reroot/")` (§5.10); its error is joined with the bound's.
 `collectBelowTheCut(remote) storage.Collection`, run by every follow (§1.6c): `BytesBefore = storeBytes(doltRootDir)` (`dirSize` of the chunk store, `"measure the store's size on disk: %w"`, 0 on a failed walk); then one `runSyncMutation`: `recordForkPoints(remote)` (§1.6d; its records join the store's fork point records), `PruneCheckpoints(prefix, 0)` for `pre-migrate` and `pre-drift-repair`, `deleteBranchesUnder` of `"links-reconcile-scratch-"` and `"lit-reroot/"` (§5.10), each failure returned before the GC; then `compactWithinLock(GCFull)` with `Ran = attempt.Ran` and its sweep accumulated with `plus`; then `BytesAfter = storeBytes(...)`, whatever the mutation returned, and `Sweep` = the sweep's `Report()`. The mutation's error and both readings' errors are joined into `Err`.
 `collectionReport(Collection)` joins with `joinMaintenance`: `"store %s -> %s"` (`humanBytes`) when `Ran`, `Sweep` when non-empty, `"history below the cut not collected: %v"` on `Err`; a zero collection is empty. Tests: `TestAFollowCollectsTheHistoryBelowTheCut`, `TestAFollowCarriesAFailedCollection`, `TestACollectionIsReportedWhole`, `TestACompactingPushReportsItsFollowsCollection` (`reroot_follow_test.go`).
 
-`historyBoundReport` joins with `joinMaintenance`: `"history bound: the remote head reached height %d (bound %d)"` when fired, `"re-rooted at %s, keeping %d commits and dropping %d"` when `ReRooted.Head` is set, `"lease "` + the outcome when pushed, `"remote GC %s: %s of table files, %s collected, %d other branches dropped"` (the count of `DroppedBranches`) when `RemoteGC.Outcome` is set, `collectionReport(Collection)`, `"history bound not kept: %v"` on `Err`; under the bound with no error it is empty. Tests: `TestAPushPastTheBoundReRootsWithNoCommandRun`, `TestAStaleLeaseLeavesTheBranchOnItsHistory`, `TestAStaleLeaseOverTheLandedReRootStillFollowsIt`, `TestAHeldLeaseTheBranchCannotFollowIsTheBoundsError`, `TestAReRootPushWithNoVerdictLeavesNoScratch` (`history_bound_test.go`), each against a `git+file` remote (`gitRemote`, `remote_gc_test.go`).
+`historyBoundReport` joins with `joinMaintenance`: `"history bound: the remote head reached height %d (bound %d)"` when fired, `"re-root at %s, keeping %d commits and dropping %d: %s"` with `Publication` when `ReRooted.Head` is set, `"lease "` + the outcome when pushed, `"remote GC %s: %s of table files, %s collected, %d other branches dropped"` (the count of `DroppedBranches`) when `RemoteGC.Outcome` is set, `collectionReport(Collection)`, `"history bound not kept: %v"` on `Err`; under the bound with no error it is empty. Tests: `TestAPushPastTheBoundReRootsWithNoCommandRun`, `TestAStaleLeaseLeavesTheBranchOnItsHistory`, `TestAStaleLeaseOverTheLandedReRootStillFollowsIt`, `TestAHeldLeaseTheBranchCannotFollowIsTheBoundsError`, `TestAReRootPushWithNoVerdictLeavesNoScratch`, `TestAReRootRefusedBeforeTheRemoteIsNotPushed`, `TestAReRootsPublicationIsTheReadingsElseTheLeases` (`history_bound_test.go`), each against a `git+file` remote (`gitRemote`, `remote_gc_test.go`).
 
 ### 1.8b `collectRemote` — the remote's GC after a re-root
 
@@ -817,7 +818,7 @@ The schema fact this rests on: every child table is `ON DELETE CASCADE` from iss
 - `migrationSnapshotRetention = 10` (`/Users/bmf/code/links-issue-tracker/internal/store/migrate_snapshot.go`)
 - `migrationSnapshotLabel = "pre-migrate"` (`migrate_snapshot.go`)
 
-Test hooks: `migrationUpByOneForTest` (`migration_runner.go`) applies **only** to `applyPendingMigrations`, never the reconcile lift; `migrationCheckpointPruneForTest` (`migration_runner.go`) replaces that function's checkpoint prune; `migrationPostSnapshotHookForTest` (`migrate_snapshot.go`) fires inside `runMigration` after the snapshot guard.
+Test hooks: `migrationUpByOneForTest` (`migration_runner.go`) applies **only** to `applyPendingMigrations`, never the reconcile lift; `versionContentDriftRepairForTest` (`migration_runner.go`) replaces the drift repair; `failpointForTest func(at failpoint) error` (`convergence.go`) is consulted by `atFailpoint` before each `ConvergenceStep` run through `attempt` and each `pruneStep`, and an error it returns fails that point in place of its work; steps raised only through `failAt` (`migration`, `drift_repair`, `quarantine_table_shape`, `reconcile_prerequisites_missing`, `reconciled_shape_differs`) are never consulted. `failpoint` is sealed by an unexported method; its only implementations are `ConvergenceStep` and `pruneStep` (`migration_checkpoint_prune`, `drift_checkpoint_prune`, `snapshot_prune`).
 
 ### 8.2 Phases
 
@@ -839,45 +840,48 @@ Test hooks: `migrationUpByOneForTest` (`migration_runner.go`) applies **only** t
 
 `(*Store).migrate(ctx) (storage.Migrated, error)` (`migration_runner.go`):
 1. `guard := newSnapshotGuard(s.doltRootDir, formatMigrationSnapshotLabel(time.Now()))`.
-2. `s.runMigration(ctx, guard)`.
-3. On error: if `guard.took()` → wrap as `&MigrationRollbackError{Snapshot: snap, Cause: err}`; otherwise return the raw error (`migration_runner.go`).
-4. On success with no snapshot taken → the zero `storage.Migrated`. With one → `Migrated{Snapshot: snap.Name}`, then `dbsnapshot.PruneMatching(s.doltRootDir, 10, IsMigrationSnapshotName)`; a prune failure is **not** the returned error, because the migration has committed: it is `Migrated.PruneErr`, `"prune migration snapshots: %w"` (`migration_runner.go`). `Open` keeps the report on the handle, read back through `(*Store).Migrated()`; a sync open, and a read open that migrated nothing, report the zero value (`store.go`, `migration_runner.go`).
+2. `op, pruneErr, fail := s.runMigration(ctx, guard)`.
+3. On `fail != nil`: `fail.PruneErr = pruneErr`; return `fail`, a `*SchemaConvergenceError`.
+4. On success: `Migrated{SchemaAhead: op.schemaAhead(), PruneErr: pruneErr}`. With no snapshot taken, return it. With one → `Snapshot: snap.Name`, then `prune(pruneMigrationSnapshots, "prune migration snapshots", dbsnapshot.PruneMatching(s.doltRootDir, 10, IsMigrationSnapshotName))`, joined into `PruneErr`. No prune failure is the returned error (`migration_runner.go`). `Open` keeps the report on the handle, read back through `(*Store).Migrated()`; a sync open reports its bootstrap and the newer schema it served, and a read open that migrated nothing reports only the newer schema it served (`store.go`, `sync.go`, `migration_runner.go`).
+
+**`SchemaConvergenceError`** (`convergence.go`): `{Step ConvergenceStep; Snapshot *dbsnapshot.Snapshot; PruneErr error; Cause error}`; `Unwrap()` is `Cause`. `Error()`: `"schema convergence step %s failed: %v"` (step token, cause), then, when `Snapshot` is set, `"this open took recovery snapshot %s before migrating; it holds the workspace as it was then:\n  %s"` (name, path), then, when `PruneErr` is set, `"removing old migration checkpoints or snapshots also failed: %v"`. No restore instruction. `EventRecord()`: `storage.MigrationRecoveryFacts(snapshot name or "", PruneErr)` plus `migration.failed_step` = the step token.
+
+**Steps** (`convergence.go`): `ConvergenceStep` int enum with sentinel `convergenceStepCount`; `convergenceSteps [convergenceStepCount]struct{token; act}` declares each step's token and `ConvergenceAct`. `ConvergenceAct`: 0 is no act; `ActClearCause`; `ActRestoreSnapshot`; `ActEscalate`. `String()`, `Act()`, `ConvergenceSteps()` (every step, in order). Tokens and acts, in order: `classify`, `verify_content`, `refuse_unwritable`, `drift_checkpoint`, `drift_repair`, `drift_repair_reset`, `ensure_quarantine_table` (ClearCause); `quarantine_table_shape` (Escalate); `commit_quarantine_table`, `check_quarantine`, `check_reconcile_prerequisites` (ClearCause); `reconcile_prerequisites_missing` (Escalate); `snapshot`, `reconcile`, `verify_reconciled_shape` (ClearCause); `reconciled_shape_differs` (Escalate); `adopt_drop_legacy_key`, `adopt_version_table` (ClearCause); `adopt_stamp` (RestoreSnapshot); `commit_adoption_stamp`, `migration_provider`, `migration_checkpoint`, `migration`, `commit_migration` (ClearCause); `migration_reset` (RestoreSnapshot); `commit_migration_reset`, `record_quarantine`, `commit_quarantine` (ClearCause).
+
+Builders (`convergence.go`): `attempt(step, work)` = `failAt(step, atFailpoint(step, work))`; `failAt(step, err)` is nil for a nil err, passes a `*SchemaConvergenceError` found in err through unchanged (a callee that named a finer step for its own exit), else wraps err with step. `prune(at, label, work)` labels a failure `"<label>: %w"`. `snapshotted{snap}` has the same `attempt`/`failAt`, setting `Snapshot = &snap`.
 
 ### 8.4 `runMigration` — the full sequence
 
-`runMigration(ctx, guard)` (`migration_runner.go`), in exact order:
+`runMigration(ctx, guard) (operability, error, *SchemaConvergenceError)` (`migration_runner.go`), in exact order:
 
-1. `state = classifyMigrationState(ctx)`.
-2. **Ahead-of-registry check**: `assessOperability` — `op = s.operability(ctx, state.appliedVersion, state.support.Max)`; `!op.readable()` → `return s.schemaAheadRefusal(ctx, op)`; then `op.ahead()` → return the assessment. `runMigration` then calls `refuseUnwritable`, which refuses `!op.writable()` with the same `schemaAheadRefusal` before any write; `OpenSync` calls it too; `OpenForRead` does not. **No bookkeeping mutation ever happens on this path** — trimming the goose log would destroy true information (`migration_runner.go`).
-3. **Version-content drift check** — `state.phase == phaseManaged` only, and run **independently of `willMutate`** (`migration_runner.go`):
-   - `verifyAppliedVersionsMatchRegistry(ctx, state.appliedVersion)`.
-   - A non-`*VersionContentMismatchError` error is returned as-is.
-   - A mismatch triggers `repairVersionContentDriftWithRollback(ctx, appliedVersion, mismatch)`; on clean repair, **no error reaches the caller**.
-4. `!state.willMutate()` → return nil (no snapshot, no writes).
-5. `s.ensureQuarantineTable(ctx)` (`migration_runner.go`), then `s.commitWorkingSet(ctx, "migrate: ensure migration_quarantine table")`; commit failure → `"commit quarantine table: %w"`. Committed **before** `guard.ensure` so it survives a later checkpoint reset (`migration_runner.go`).
-6. `s.quarantineFastFail(ctx, state)` — **before** the snapshot guard, so a permanently-quarantined workspace does not accumulate a snapshot per Open (`migration_runner.go`).
-7. If `phaseAdopt`: `s.verifyIssuesReconcilable(ctx)`; failure → `"reconcile pre-goose workspace: %w"` — also **before** the snapshot (`migration_runner.go`).
-8. `guard.ensure(ctx)`; failure → `"migrate: %w"` (`migration_runner.go`).
-9. `migrationPostSnapshotHookForTest` if set (`migration_runner.go`).
-10. If `phaseAdopt` (`migration_runner.go`):
-    a. `s.reconcileToBaseline(ctx, guard)`; failure → `"reconcile pre-goose workspace: %w"`. Idempotent probe-driven forward migrator; explicitly a historical artifact to which no new operations get added (`migration_runner.go`).
-    b. `s.verifyBaselineShape(ctx)`; error → `"verify post-reconcile baseline shape: %w"`. If any gaps remain → refuse with `"post-reconcile workspace shape still differs from baseline (remaining gaps: %s); reconcile cannot bring this workspace to v1 — the shape is structurally beyond what pre-goose reconcile can recover"` (`migration_runner.go`).
-    c. `s.adoptPreGooseWorkspace(ctx)`.
-    d. `s.commitWorkingSet(ctx, fmt.Sprintf("migrate: adopt pre-goose workspace at v%d", baselineVersion))`; failure → `"commit adoption stamp: %w"`.
-11. `s.applyPendingMigrations(ctx)`.
+1. `checkWritable(ctx)`: `classify` — `attempt(stepClassify, assessOperability)`, where `assessOperability` runs `classifyMigrationState`, then `op = s.operability(ctx, state.appliedVersion, state.support.Max)`, and `!op.readable()` → `s.schemaAheadRefusal(ctx, op)` — then `attempt(stepRefuseUnwritable, refuseUnwritable(ctx, op))`, which refuses `!op.writable()` with the same `schemaAheadRefusal` before any write. `OpenSync` calls `checkWritable` too; `OpenForRead` calls `assessMigration` (`classify`, then `assessContent`) and never refuses unwritable.
+2. **Version-content drift check** — `assessContent(ctx, state, op)`: returns at once when `op.ahead()` or `state.phase != phaseManaged`; otherwise **independently of `willMutate`** (`migration_runner.go`):
+   - `attempt(stepVerifyContent, verifyAppliedVersionsMatchRegistry(ctx, state.appliedVersion))`, with a `*VersionContentMismatchError` taken as data (the drift), not a failure.
+   - In `applyMigration`, a drift triggers `repairVersionContentDriftWithRollback(ctx, appliedVersion, mismatch)`; on clean repair, **no error reaches the caller**, and its prune failure is returned beside a nil failure.
+3. `!state.willMutate()` → return (no snapshot, no writes).
+4. `attempt(stepEnsureQuarantineTable, ensureQuarantineTable)` (`migration_runner.go`), then `attempt(stepCommitQuarantineTable, commitWorkingSet(ctx, "migrate: ensure migration_quarantine table"))`. Committed **before** `guard.ensure` so it survives a later checkpoint reset (`migration_runner.go`).
+5. `attempt(stepCheckQuarantine, quarantineFastFail(ctx, state))` — **before** the snapshot guard, so a permanently-quarantined workspace does not accumulate a snapshot per Open (`migration_runner.go`).
+6. If `phaseAdopt`: `attempt(stepCheckReconcilePrerequisites, verifyIssuesReconcilable(ctx))` — also **before** the snapshot (`migration_runner.go`); its missing-prerequisites exit is `failAt(stepReconcilePrerequisitesMissing, …)` (`schema_reconcile.go`).
+7. `attempt(stepSnapshot, guard.ensure(ctx))`, keeping the returned `dbsnapshot.Snapshot`.
+8. `applySnapshotted(ctx, snapshotted{snap}, guard, state)`, whose every failure is built from the snapshot. If `phaseAdopt` (`migration_runner.go`):
+    a. `p.attempt(stepReconcile, reconcileToBaseline(ctx, guard))`. Idempotent probe-driven forward migrator; explicitly a historical artifact to which no new operations get added (`migration_runner.go`).
+    b. `p.attempt(stepVerifyReconciledShape, verifyBaselineShape(ctx))`. If any gaps remain → `p.failAt(stepReconciledShapeDiffers, "post-reconcile workspace shape still differs from baseline (remaining gaps: %s); reconcile cannot bring this workspace to v1 — the shape is structurally beyond what pre-goose reconcile can recover")` (`migration_runner.go`).
+    c. `s.adoptPreGooseWorkspace(ctx, p)`: `p.attempt(stepAdoptDropLegacyKey, DELETE FROM meta WHERE meta_key = 'schema_version')`; `p.attempt(stepAdoptVersionTable, …)` (construct the goose store, `"construct goose store: %w"`, then `CreateVersionTable`); `p.attempt(stepAdoptStamp, store.Insert(…baselineVersion))`.
+    d. `p.attempt(stepCommitAdoptionStamp, commitWorkingSet(ctx, fmt.Sprintf("migrate: adopt pre-goose workspace at v%d", baselineVersion)))`.
+9. `s.applyPendingMigrations(ctx, p)`.
 
 ### 8.5 `applyPendingMigrations` — the goose loop
 
-`applyPendingMigrations(ctx)` (`migration_runner.go`):
-1. `newGooseProvider(s.db)` — constructed **before** the checkpoint so a construction failure leaves no orphan branch. Failure → `"construct migration provider: %w"` (`migration_runner.go`).
-2. `checkpoint, err := s.CreateCheckpoint(ctx, "pre-migrate")`; failure → `"create migration checkpoint: %w"` (`migration_runner.go`).
+`applyPendingMigrations(ctx, p) (pruneErr error, fail *SchemaConvergenceError)` (`migration_runner.go`):
+1. `p.attempt(stepMigrationProvider, newGooseProvider(s.db))` — constructed **before** the checkpoint so a construction failure leaves no orphan branch (`migration_runner.go`).
+2. `p.attempt(stepMigrationCheckpoint, s.CreateCheckpoint(ctx, "pre-migrate"))` (`migration_runner.go`).
 3. `step` closure: uses `migrationUpByOneForTest` when set, else `s.upByOne(ctx, provider)` (`migration_runner.go`).
-4. `prune` closure: uses `migrationCheckpointPruneForTest` when set, else `s.PruneCheckpoints(ctx, "pre-migrate", 5)` (`migration_runner.go`).
+4. `pruneCheckpoints` closure: `prune(pruneMigrationCheckpoints, "prune migration checkpoints", s.PruneCheckpoints(ctx, "pre-migrate", 5))` (`migration_runner.go`).
 5. Loop:
-   - `errors.Is(gooseErr, goose.ErrNoNextVersion)` → `prune(context.WithoutCancel(ctx))`; a prune failure IS returned as `"prune migration checkpoints: %w"`; then return nil (`migration_runner.go`).
-   - other `gooseErr != nil` → `recoverFrom(result, gooseErr, earnsQuarantine(ctx, result))` (`migration_runner.go`).
-   - success → `s.commitWorkingSet(ctx, migrationCommitMessage(result))`; failure → `recoverFrom(result, "commit migration v%d: %w", false)`, so the applied step is reset and earns no quarantine (`migration_runner.go`).
-6. `recoverFrom(result, cause, quarantine)` closure: `recoveryCtx := context.WithoutCancel(ctx)`, `cpErr := s.handleMigrationFailure(recoveryCtx, result, cause, quarantine, checkpoint)`, then `prune(recoveryCtx)`; a prune failure is returned as `errors.Join(cpErr, "prune migration checkpoints: %w")`, else `cpErr` (`migration_runner.go`).
+   - `errors.Is(gooseErr, goose.ErrNoNextVersion)` → return `pruneCheckpoints(context.WithoutCancel(ctx))` beside a nil failure: every migration committed, so a prune failure is reported, never the open's failure (`migration_runner.go`).
+   - other `gooseErr != nil` → `recoverFrom(stepMigration, stepMigrationReset, result, gooseErr, earnsQuarantine(ctx, result, gooseErr))` (`migration_runner.go`).
+   - success → `atFailpoint(stepCommitMigration, commitWorkingSet(ctx, migrationCommitMessage(result)))`; failure → `recoverFrom(stepCommitMigration, stepCommitMigrationReset, result, "commit migration v%d: %w", false)`, so the applied step is reset and earns no quarantine (`migration_runner.go`).
+6. `recoverFrom(failed, reset, result, cause, quarantine)` closure: `recoveryCtx := context.WithoutCancel(ctx)`, `fail := s.handleMigrationFailure(recoveryCtx, p, failed, reset, result, cause, quarantine, checkpoint)`, then returns `pruneCheckpoints(recoveryCtx)` beside it: the prune failure rides on the failure's `PruneErr`, never in its cause (`migration_runner.go`).
 
 `earnsQuarantine(ctx, result)` (`migration_runner.go`): false when goose identified no version or `ctx.Err() != nil` (the caller cancelled, so the next open runs the migration again); else true. `migrationIdentity(result)` gives `(result.Source.Version, filepath.Base(result.Source.Path))`, or zero values when `result` or `result.Source` is nil (`migration_runner.go`).
 
@@ -889,14 +893,14 @@ Test hooks: `migrationUpByOneForTest` (`migration_runner.go`) applies **only** t
 
 ### 8.6 Failure handling and quarantine
 
-`handleMigrationFailure(ctx, result, cause, quarantine, checkpoint)` (`migration_runner.go`), ordering **reset first, quarantine second**:
-1. `version, name := migrationIdentity(result)` (`migration_runner.go`).
-2. `s.ResetToCheckpoint(ctx, checkpoint.Name)`. Failure → `"migration v%d failed and Dolt reset to %q failed (%v); restore from dbsnapshot. Root cause: %w"` (`migration_runner.go`).
-3. If `quarantine`:
-   - `s.recordQuarantine(ctx, version, name, cause.Error())`; failure → `"migration v%d failed (reset to %q); quarantine insert failed (%v); restore from dbsnapshot. Root cause: %w"`.
-   - `s.commitWorkingSet(ctx, fmt.Sprintf("migrate: quarantine v%d %s", version, name))`; failure → `"...quarantine commit failed (%v)..."` (`migration_runner.go`).
-   A failure that earned no quarantine (unknown version, a cancelled caller, or a failed step commit) skips quarantine insertion entirely (`migration_runner.go`).
-4. Return `&CheckpointResetError{Version, Name, Checkpoint, Cause, Quarantined: quarantine}`.
+`handleMigrationFailure(ctx, p, failed, reset, result, cause, quarantine, checkpoint) *SchemaConvergenceError` (`migration_runner.go`), ordering **reset first, quarantine second**:
+1. `version, name := migrationIdentity(result)`; `outcome := &CheckpointResetError{Version, Name, Checkpoint, Cause}` (`migration_runner.go`).
+2. `atFailpoint(reset, s.ResetToCheckpoint(ctx, checkpoint.Name))`. Failure → `p.failAt(reset, errors.Join("reset to Dolt checkpoint %q: %w", "it was resetting after migration v%d %q failed: %w"))` — `migration_reset` after a goose failure, `commit_migration_reset` after a commit failure (`migration_runner.go`).
+3. Not `quarantine` → `p.failAt(failed, outcome)`. A failure that earned no quarantine (unknown version, a cancelled caller, GC contention, or a failed step commit) skips quarantine insertion entirely (`migration_runner.go`).
+4. `atFailpoint(stepRecordQuarantine, s.recordQuarantine(ctx, version, name, cause.Error()))`; failure → `p.failAt(stepRecordQuarantine, errors.Join(err, outcome))`, `outcome.Quarantined` false.
+5. `outcome.Quarantined = true` — the row is in the working set, committed or not.
+6. `atFailpoint(stepCommitQuarantine, s.commitWorkingSet(ctx, fmt.Sprintf("migrate: quarantine v%d %s", version, name)))`; failure → `p.failAt(stepCommitQuarantine, errors.Join("commit quarantine v%d: %w", outcome))` (`migration_runner.go`).
+7. Return `p.failAt(failed, outcome)`.
 
 `recordQuarantine` (`migration_runner.go`): `INSERT INTO migration_quarantine (version, name, error_text, created_at) VALUES (?,?,?,?) ON DUPLICATE KEY UPDATE name = VALUES(name), error_text = VALUES(error_text), created_at = VALUES(created_at)` with `created_at = time.Now().UTC().Format(time.RFC3339Nano)`.
 
@@ -973,15 +977,16 @@ Tests: `TestParseAddColumnTargetsRecognizesPlainForm` (`migration_runner_test.go
 **Documented scope limit** (`migration_runner.go`): only `ADD COLUMN` targets are ever tracked or repaired. A version's `ADD CONSTRAINT` or data-backfill statements — explicitly naming `00003_add_resolution.sql`'s `issues_resolution_check` and `00004`'s `redirect_target` backfill — are **never re-applied**, even when the column they depend on was just repaired. `CREATE TABLE`, `ADD CONSTRAINT`-only, `DROP`/`RENAME COLUMN`, and data-only migrations are not tracked as content to verify or repair.
 
 `repairVersionContentDriftWithRollback(ctx, appliedVersion, mismatch)` (`migration_runner.go`):
-1. `s.CreateCheckpoint(ctx, "pre-drift-repair")`; failure → `"create version-content drift repair checkpoint: %w"`.
-2. `repairVersionContentDrift`, or `versionContentDriftRepairForTest(ctx)` when that test hook is set; on success, `s.commitWorkingSet(ctx, migrationDriftRepairCommitMessage(repaired))`, whose failure becomes the repair's failure as `"commit version-content drift repair: %w"`. On either failure the reset runs on `context.WithoutCancel(ctx)`:
-   - reset also fails → `"repair version-content drift (detected at v%d %q) failed (%v) and reset to checkpoint %q failed (%v); restore from dbsnapshot"` (`migration_runner.go`).
-   - reset succeeds → `"repair version-content drift (detected at v%d %q) failed: %w (working set reset to checkpoint %q)"` (`migration_runner.go`).
-3. `s.PruneCheckpoints(context.WithoutCancel(ctx), "pre-drift-repair", 5)`; failure → `"prune version-content drift repair checkpoints: %w"` (**is** promoted).
+Returns `(pruneErr error, fail *SchemaConvergenceError)`:
+1. `attempt(stepDriftCheckpoint, s.CreateCheckpoint(ctx, "pre-drift-repair"))`.
+2. `repairVersionContentDrift`, or `versionContentDriftRepairForTest(ctx)` when that test hook is set; on success, `s.commitWorkingSet(ctx, migrationDriftRepairCommitMessage(repaired))`, whose failure becomes the repair's failure as `"commit version-content drift repair: %w"`. Either failure is wrapped `"repair version-content drift (detected at v%d %q): %w"`, and the reset runs on `context.WithoutCancel(ctx)` through `atFailpoint(stepDriftRepairReset, …)`:
+   - reset also fails → `failAt(stepDriftRepairReset, errors.Join("reset to checkpoint %q: %w", repairErr))` (`migration_runner.go`).
+   - reset succeeds → `failAt(stepDriftRepair, "%w (working set reset to checkpoint %q)")` (`migration_runner.go`).
+3. `prune(pruneDriftCheckpoints, "prune version-content drift repair checkpoints", s.PruneCheckpoints(context.WithoutCancel(ctx), "pre-drift-repair", 5))`, returned as `pruneErr` beside a nil failure — the repair committed, so it never fails the open.
 
 `migrationDriftRepairCommitMessage(repaired)` = `fmt.Sprintf("migrate: repair version-content drift (%s)", strings.Join(repaired, ", "))` (`migration_runner.go`).
 
-Tests: `TestOpenRepairsVersionSlotReuseContentMismatch` (`migration_runner_test.go`), `TestRepairVersionContentDriftWithRollbackResetsOnFailure` (`migration_runner_test.go`).
+Tests: `TestOpenRepairsVersionSlotReuseContentMismatch` (`migration_runner_test.go`), `TestRepairVersionContentDriftWithRollbackResetsOnFailure` (`migration_runner_test.go`), `TestAFailedDriftRepairIsRepairedByTheNextOpen` (`convergence_recovery_test.go`).
 
 ### 8.10 Baseline shape verification
 
@@ -1092,12 +1097,11 @@ Helpers must not call `dbsnapshot.Take` directly (`migrate_snapshot.go`).
 
 `formatMigrationSnapshotLabel(t)` (`migrate_snapshot.go`) = `fmt.Sprintf("pre-migrate-%d", t.UTC().UnixNano())`.
 
-### 9.4 `MigrationRollbackError`
+### 9.4 The snapshot on a failed open
 
-`{Snapshot dbsnapshot.Snapshot; Cause error}` (`migrate_snapshot.go`). `Error()` (`migrate_snapshot.go`):
-`"migrate: %v\n\nthe workspace state before this migration is preserved at:\n  %s\n\nto restore, run:\n  lit snapshots restore %s"` with `Snapshot.Path` and `Snapshot.Name`. `Unwrap()` at `migrate_snapshot.go`. `asMigrationRollbackError(err)` (`migrate_snapshot.go`) is the centralized `errors.As`.
+A failure after `guard.ensure` is built by `snapshotted{snap}` from the snapshot `ensure` returned, so its `SchemaConvergenceError.Snapshot` is set; a failure before it carries none (§8.3). The message names the snapshot by name and path as a fact; only the `migration_partially_applied` remediation (`internal/cli/error_output.go`) says to run `lit snapshots restore <name>`.
 
-Tests: `TestMigrateSnapshotFreshDBOpenTakesExactlyOneSnapshot` (`migrate_snapshot_test.go`), `TestMigrateSnapshotNoOpOpenTakesNoSnapshot`, `TestMigrateSnapshotFailureSurfacesRestoreCommand`, `TestMigrateSnapshotRestoreRoundTripsPreMutationState`, `TestMigrateSnapshotPruneEnforcesRetention`, `TestDataSurvivesFailedMigrationSnapshotRestore`.
+Tests: `TestMigrateSnapshotFreshDBOpenTakesExactlyOneSnapshot` (`migrate_snapshot_test.go`), `TestMigrateSnapshotNoOpOpenTakesNoSnapshot`, `TestMigrateSnapshotFailureNamesTheSnapshot`, `TestMigrateSnapshotRestoreRoundTripsPreMutationState`, `TestMigrateSnapshotPruneEnforcesRetention`, `TestDataSurvivesFailedMigrationSnapshotRestore`.
 
 ---
 

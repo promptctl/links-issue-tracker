@@ -83,39 +83,34 @@ func TestMigrateSnapshotNoOpOpenTakesNoSnapshot(t *testing.T) {
 	}
 }
 
-// TestMigrateSnapshotFailureSurfacesRestoreCommand pins the "simulated
-// reconcile failure produces an error whose message contains the snapshot
-// directory name and the literal `lit snapshots restore <name>` command"
-// acceptance criterion. The failure injection fires post-snapshot, ensuring
-// the rollback path is exercised.
-func TestMigrateSnapshotFailureSurfacesRestoreCommand(t *testing.T) {
-	// serial: no t.Parallel — rewrites the package-level
-	// migrationPostSnapshotHookForTest hook.
+// TestMigrateSnapshotFailureNamesTheSnapshot pins that a failure after the
+// recovery snapshot names that snapshot by name and path: a fresh workspace's
+// first step after the snapshot fails, and the failure carries the snapshot
+// the open took.
+func TestMigrateSnapshotFailureNamesTheSnapshot(t *testing.T) {
+	// serial: no t.Parallel — rewrites the package-level failpointForTest.
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
 	sentinel := errors.New("synthetic post-snapshot failure")
-	migrationPostSnapshotHookForTest = func() error { return sentinel }
-	t.Cleanup(func() { migrationPostSnapshotHookForTest = nil })
+	injectFailpoint(t, sentinel, stepMigrationProvider)
 
 	_, err := Open(ctx, doltRoot, "test-workspace-id")
 	if err == nil {
-		t.Fatal("Open() returned nil error; expected MigrationRollbackError")
+		t.Fatal("Open() returned nil error; expected the migration_provider step's failure")
 	}
-	rollback, ok := asMigrationRollbackError(err)
-	if !ok {
-		t.Fatalf("error = %v (%T); expected *MigrationRollbackError", err, err)
+	fail := asConvergenceError(t, err)
+	if fail.Step != stepMigrationProvider || !errors.Is(fail, sentinel) {
+		t.Fatalf("failure = step %s, cause %v; want step %s unwrapping to the sentinel", fail.Step, fail.Cause, stepMigrationProvider)
 	}
-	if !errors.Is(rollback, sentinel) {
-		t.Fatalf("rollback cause = %v; expected to unwrap to sentinel", rollback.Cause)
+	if fail.Snapshot == nil {
+		t.Fatal("failure after the snapshot carries no snapshot")
 	}
-	msg := rollback.Error()
-	if !strings.Contains(msg, rollback.Snapshot.Path) {
-		t.Fatalf("error message missing snapshot path %q: %s", rollback.Snapshot.Path, msg)
-	}
-	want := fmt.Sprintf("lit snapshots restore %s", rollback.Snapshot.Name)
-	if !strings.Contains(msg, want) {
-		t.Fatalf("error message missing literal %q: %s", want, msg)
+	msg := fail.Error()
+	for _, want := range []string{fail.Snapshot.Name, fail.Snapshot.Path} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("error message missing %q: %s", want, msg)
+		}
 	}
 }
 
@@ -125,8 +120,7 @@ func TestMigrateSnapshotFailureSurfacesRestoreCommand(t *testing.T) {
 // dbsnapshot.Restore against the snapshot's name must produce a workspace
 // directory that Open can succeed on.
 func TestMigrateSnapshotRestoreRoundTripsPreMutationState(t *testing.T) {
-	// serial: no t.Parallel — rewrites the package-level
-	// migrationPostSnapshotHookForTest hook.
+	// serial: no t.Parallel — rewrites the package-level failpointForTest.
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -152,22 +146,21 @@ func TestMigrateSnapshotRestoreRoundTripsPreMutationState(t *testing.T) {
 	// The drop runs before the hook is installed so the helper's own
 	// internal Open cannot trip it.
 	withGooseHistoryDropped(t, ctx, doltRoot)
-	// Inject a synthetic failure so a *new* Open captures a snapshot and
-	// then errors out; the snapshot it captures should restore cleanly.
-	// t.Cleanup guards against early-fail leaks; the explicit reset below
-	// scopes the hook to exactly the failing Open so subsequent Opens in
-	// this test cannot accidentally trigger it.
-	migrationPostSnapshotHookForTest = func() error { return errors.New("synthetic failure") }
-	t.Cleanup(func() { migrationPostSnapshotHookForTest = nil })
+	// Inject a synthetic failure at the adopt phase's first step after the
+	// snapshot, so a *new* Open captures a snapshot and then errors out; the
+	// snapshot it captures should restore cleanly. The explicit clear scopes
+	// the failpoint to exactly the failing Open so subsequent Opens in this
+	// test cannot trip it.
+	clear := injectFailpoint(t, errors.New("synthetic failure"), stepReconcile)
 	failedOpen, openErr := Open(ctx, doltRoot, "test-workspace-id")
-	migrationPostSnapshotHookForTest = nil
+	clear()
 	if openErr == nil {
 		_ = failedOpen.Close()
-		t.Fatal("Open() after goose-history drop returned nil error; expected rollback")
+		t.Fatal("Open() after goose-history drop returned nil error; expected the reconcile step's failure")
 	}
-	rollback, ok := asMigrationRollbackError(openErr)
-	if !ok {
-		t.Fatalf("error = %v (%T); expected MigrationRollbackError", openErr, openErr)
+	rollback := asConvergenceError(t, openErr)
+	if rollback.Snapshot == nil {
+		t.Fatal("failure after the snapshot carries no snapshot")
 	}
 
 	// Round-trip: restore the snapshot the failure carried.
@@ -438,8 +431,7 @@ func TestIsMigrationSnapshotNameRejectsUserCollisions(t *testing.T) {
 // field-history events) is byte-identical after a failed migration is recovered
 // via dbsnapshot.Restore. [LAW:behavior-not-structure] [LAW:verifiable-goals]
 func TestDataSurvivesFailedMigrationSnapshotRestore(t *testing.T) {
-	// serial: no t.Parallel — rewrites the package-level
-	// migrationPostSnapshotHookForTest hook.
+	// serial: no t.Parallel — rewrites the package-level failpointForTest.
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -558,22 +550,19 @@ func TestDataSurvivesFailedMigrationSnapshotRestore(t *testing.T) {
 	// Step 3: Drop goose history so the next Open re-enters phaseAdopt.
 	withGooseHistoryDropped(t, ctx, doltRoot)
 
-	// Step 4: Inject a post-snapshot failure so a mutating Open captures a
-	// snapshot then errors, returning a MigrationRollbackError carrying it.
+	// Step 4: Inject a failure at the adopt phase's first step after the
+	// snapshot, so a mutating Open captures a snapshot then errors with a
+	// failure carrying it.
 	sentinel := errors.New("synthetic post-snapshot failure")
-	migrationPostSnapshotHookForTest = func() error { return sentinel }
-	t.Cleanup(func() { migrationPostSnapshotHookForTest = nil })
+	clear := injectFailpoint(t, sentinel, stepReconcile)
 	_, openErr := Open(ctx, doltRoot, "test-workspace-id")
-	migrationPostSnapshotHookForTest = nil
+	clear()
 	if openErr == nil {
-		t.Fatal("Open() after goose-history drop returned nil error; expected MigrationRollbackError")
+		t.Fatal("Open() after goose-history drop returned nil error; expected the reconcile step's failure")
 	}
-	rollback, ok := asMigrationRollbackError(openErr)
-	if !ok {
-		t.Fatalf("error = %v (%T); expected *MigrationRollbackError", openErr, openErr)
-	}
-	if !errors.Is(rollback, sentinel) {
-		t.Fatalf("rollback cause = %v; want to unwrap to sentinel", rollback.Cause)
+	rollback := asConvergenceError(t, openErr)
+	if !errors.Is(rollback, sentinel) || rollback.Snapshot == nil {
+		t.Fatalf("failure = %v (snapshot %v); want the sentinel, with the snapshot", rollback, rollback.Snapshot)
 	}
 
 	// Step 5: Restore the snapshot the failure carried.
@@ -641,7 +630,7 @@ func assertExportStateIdentical(t *testing.T, want, got model.Export) {
 // classifies the workspace as phaseAdopt (pre-goose schema, no history) and
 // re-stamps the baseline version — a mutating migrate() pass, which is what
 // the snapshot/failure/prune tests need to drive.
-// Callers that install migrationPostSnapshotHookForTest (all serial) do so
+// Callers that install failpointForTest (all serial) do so
 // only after this helper returns; the helper itself must not touch that
 // package-level hook, because it also runs inside parallel tests, where any
 // write to it races every concurrently migrating Open.

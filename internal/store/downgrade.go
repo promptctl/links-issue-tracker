@@ -150,12 +150,11 @@ func (*DowngradeSpanUnsupportedError) SchemaAheadOfBinary() {}
 var _ model.SchemaAhead = (*DowngradeSpanUnsupportedError)(nil)
 
 // DowngradeRollbackError wraps a downgrade failure that occurred after the
-// recovery snapshot was taken. Parallel in shape and intent to
-// MigrationRollbackError — the operator-facing recovery instruction is the
-// same: `lit snapshots restore <name>`.
+// recovery snapshot was taken, with the operator-facing recovery instruction:
+// `lit snapshots restore <name>`.
 //
 // [LAW:single-enforcer] The recovery-instruction format lives here so every
-// downgrade caller sees the same words, mirroring the migrate side.
+// downgrade caller sees the same words.
 type DowngradeRollbackError struct {
 	Snapshot dbsnapshot.Snapshot
 	Cause    error

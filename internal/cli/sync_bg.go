@@ -543,10 +543,10 @@ type pushedHead struct {
 	// peer's before the push or its own history bound's after it, so the
 	// live store must follow the same re-root to reach where the clone is.
 	followedReRoot bool
-	// reRootedAfter says the clone's history bound wrote a re-root after the
-	// push (SyncPushResult.AfterPush), so the remote may carry it in head's
-	// place.
-	reRootedAfter bool
+	// reRoot is how far the clone's history bound got its re-root toward the
+	// remote after the push (SyncPushResult.Bound.Publication): published or
+	// possibly so, the remote may carry it in head's place.
+	reRoot storage.ReRootPublication
 }
 
 // landed reports whether a push landed and its head is known.
@@ -568,19 +568,24 @@ const (
 
 // liveStoreStep is the step for p: nothing landed waits; a clone that
 // followed a re-root is received, since the live store holds none of the
-// rewritten commits; a push its bound re-rooted after, with the clone not
-// following, waits, since the remote may no longer carry its head; any other
-// landed push records its head.
+// rewritten commits; a push whose bound published its re-root, or may have,
+// with the clone not following, waits, since the remote may no longer carry
+// its head; a landed push whose bound's re-root never reached the remote, or
+// that the remote does not carry, records its head.
 func (p pushedHead) liveStoreStep() liveStoreStep {
 	switch {
 	case !p.landed():
 		return liveStoreWaits
 	case p.followedReRoot:
 		return liveStoreReceives
-	case p.reRootedAfter:
+	}
+	switch p.reRoot {
+	case storage.ReRootPublished, storage.ReRootPossiblyPublished:
 		return liveStoreWaits
-	default:
+	case storage.ReRootNotPushed, storage.ReRootNotCarried:
 		return liveStoreRecords
+	default:
+		panic(fmt.Sprintf("liveStoreStep: unknown re-root publication %d", int(p.reRoot)))
 	}
 }
 
@@ -836,7 +841,7 @@ func mirrorOnce(ctx, completionCtx context.Context, session syncSession, ws work
 	// of a re-root, a peer's or the one the clone's history bound published,
 	// which followedReRoot reports. The live store learns it through
 	// RecordPushedHead, or by receiving a re-rooted push.
-	return pushedHead{remote: outcome.remote, branch: outcome.branch, head: outcome.head, proven: outcome.proven, followedReRoot: len(session.syncer.FollowedReRoots()) > 0, reRootedAfter: outcome.afterPush != ""}, nil
+	return pushedHead{remote: outcome.remote, branch: outcome.branch, head: outcome.head, proven: outcome.proven, followedReRoot: len(session.syncer.FollowedReRoots()) > 0, reRoot: outcome.reRoot}, nil
 }
 
 // waitForParentExit blocks until the spawning command has exited, returning

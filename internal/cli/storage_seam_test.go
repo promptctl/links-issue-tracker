@@ -172,11 +172,19 @@ var doltWorkspaceMachinery = map[string][]string{
 	// engine to ask through the contract and never was. The CLI matches it to
 	// answer "your environment is not ready" at a precondition exit code
 	// instead of the unclassified-fault one.
+	//
+	// SchemaConvergenceError is every failure of an open's schema
+	// convergence, a Dolt-era migration and reconcile run. Its
+	// ConvergenceStep and the step's act (ActClearCause, ActRestoreSnapshot,
+	// ActEscalate) travel with it: the CLI reads the reason off the act, and
+	// its tests walk ConvergenceSteps to hold every step to a reason.
 	"typed engine failures": {
 		"ErrWorkspaceBusy", "ErrTransientGCContention", "WorkspaceWriteBlockedError",
 		"RemoteUnreachableError", "ErrWorkspaceNotInitialized",
 		"UnsupportedSchemaVersionError", "QuarantineBlockError", "RemoteSchemaAheadError",
 		"OwnerApprovalRequiredError",
+		"SchemaConvergenceError", "ConvergenceStep", "ConvergenceSteps",
+		"ActClearCause", "ActRestoreSnapshot", "ActEscalate",
 	},
 }
 

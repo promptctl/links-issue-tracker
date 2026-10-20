@@ -838,7 +838,15 @@ func focusQueue(ctx context.Context, src focusGraphSource, queue workableGather)
 // as "nothing is focused" and silently serve the whole queue back — the exact
 // substitution this type exists to make unrepresentable.
 // [LAW:parse-dont-validate] the walk's answer is kept, not re-derived downstream.
-type focusScope struct{ goals []string }
+//
+// own is this checkout's own work, which the scope never narrows away: focus
+// decides where a fresh session goes, never whether your own work is still
+// yours. It is set by owning, from the claim standings, and is the zero value
+// on a scope nobody owned — every row the path holds, and no other.
+type focusScope struct {
+	goals []string
+	own   ownWork
+}
 
 // focusScopeOf reads the goals out of the walk's path map, where a goal is
 // exactly an issue attributed to itself: fetchFocusPathGoals seeds every goal as
@@ -860,15 +868,29 @@ func focusScopeOf(pathGoals map[string]string) focusScope {
 // the unfocused workspace, whose scope is the whole queue.
 func (s focusScope) active() bool { return len(s.goals) > 0 }
 
-// holds reports whether a row belongs to the scope. An inactive scope holds
-// every row, so callers run the same partition over focused and unfocused
-// workspaces alike rather than asking first whether focus is on.
-// [LAW:dataflow-not-control-flow]
-//
-// Membership is read off the FocusPath annotation the walk already emitted, so
-// the rule that decides what is on the path lives in fetchFocusPathGoals alone.
-// [LAW:single-enforcer]
-func (s focusScope) holds(row annotation.AnnotatedIssue) bool {
+// owning returns the scope with this checkout's own work in it, so a focused
+// view lists that work wherever the focus path runs. `lit next` and `lit
+// backlog` both call it with ownScope's answer, which is how the two agree on
+// what a focused view answers over. [LAW:one-source-of-truth]
+func (s focusScope) owning(own ownWork) focusScope {
+	s.own = own
+	return s
+}
+
+// holds reports whether a row in the given lane belongs to the scope: every row
+// when the scope is inactive, and otherwise a row on the focus path or in this
+// checkout's own work. An inactive scope holding every row is what lets callers
+// run the same partition over focused and unfocused workspaces alike rather
+// than asking first whether focus is on. [LAW:dataflow-not-control-flow]
+func (s focusScope) holds(row annotation.AnnotatedIssue, lane model.LaneID) bool {
+	return s.onPath(row) || s.own.covers(lane)
+}
+
+// onPath reports whether the row is on the focus path, which an inactive scope
+// reads as the whole queue. Membership is read off the FocusPath annotation
+// the walk already emitted, so the rule that decides what is on the path lives
+// in fetchFocusPathGoals alone. [LAW:single-enforcer]
+func (s focusScope) onPath(row annotation.AnnotatedIssue) bool {
 	return !s.active() || annotation.HasAny(row.Annotations, annotation.FocusPath)
 }
 
@@ -888,9 +910,13 @@ func (s focusScope) scopeFor(all bool) focusScope {
 // the excluded half is not discardable: a view that drops it silently cannot
 // tell "there is no work" from "there is no work ON YOUR PATH", and those are
 // the two facts an agent most needs kept apart. [LAW:parse-dont-validate]
-func (s focusScope) partition(rows []annotation.AnnotatedIssue) (inScope, excluded []annotation.AnnotatedIssue) {
+//
+// A row's lane is read here, from its parent in details, rather than handed in
+// by each caller: `lit next` and `lit backlog` agree on what the scope owns
+// only while they derive lanes one way. [LAW:one-source-of-truth]
+func (s focusScope) partition(rows []annotation.AnnotatedIssue, details map[string]storage.IssueRelations) (inScope, excluded []annotation.AnnotatedIssue) {
 	for _, row := range rows {
-		if s.holds(row) {
+		if s.holds(row, model.LaneOf(row.Issue, details[row.ID].Parent)) {
 			inScope = append(inScope, row)
 			continue
 		}

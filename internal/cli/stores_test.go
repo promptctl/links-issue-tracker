@@ -261,7 +261,7 @@ func TestPrintCrossProjectRollupNotesAFailedSnapshotPrune(t *testing.T) {
 	}
 	got := out.String()
 	for _, dir := range []string{"/repos/alpha/.git/links", "/repos/beta/.git/links"} {
-		want := "~ " + dir + ": warning: old migration snapshots were not removed: prune migration snapshots: stuck\n"
+		want := "~ " + dir + ": warning: old migration snapshots or checkpoints were not removed: prune migration snapshots: stuck\n"
 		if !strings.Contains(got, want) {
 			t.Errorf("output %q missing %q", got, want)
 		}
@@ -271,7 +271,7 @@ func TestPrintCrossProjectRollupNotesAFailedSnapshotPrune(t *testing.T) {
 			t.Errorf("output %q notes %s, whose open did not fail a prune", got, dir)
 		}
 	}
-	want := map[string]int{"stores.migrated": 3, "stores.snapshot_prune_failures": 2, "stores.schema_ahead": 2, "stores.read_only": 1}
+	want := map[string]int{"stores.migrated": 3, "stores.prune_failures": 2, "stores.schema_ahead": 2, "stores.read_only": 1}
 	if got := rollupMigrationCounts(rows); !reflect.DeepEqual(got, want) {
 		t.Errorf("rollupMigrationCounts() = %v, want %v", got, want)
 	}

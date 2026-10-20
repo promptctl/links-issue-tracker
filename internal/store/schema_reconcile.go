@@ -468,12 +468,14 @@ func (s *Store) verifyIssuesReconcilable(ctx context.Context) error {
 		}
 	}
 	if len(missing) > 0 {
-		return fmt.Errorf(
+		// Every open repeats this exit, unlike the read above, so it names
+		// its own step. [LAW:types-are-the-program]
+		return failAt(stepReconcilePrerequisitesMissing, fmt.Errorf(
 			"workspace's issues table is missing reconcile prerequisites (%s); "+
 				"the shape is structurally beyond what pre-goose reconcile can recover — "+
 				"this is not a known historical shape",
 			strings.Join(missing, ", "),
-		)
+		))
 	}
 	return nil
 }

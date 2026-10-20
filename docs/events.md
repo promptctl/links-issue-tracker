@@ -135,6 +135,18 @@ none), and `reach` is what this checkout can do about it:
 | `out_of_view` | Nothing that would clear it was among the tickets this run read, for example an epic with no open ticket under it. A filter never causes it: `lit next` reads every workable ticket and filters only what it hands you. |
 | `off_focus_path` | Outside the focus label's scope, so the pick never considered it. |
 
+## What `lit backlog` records
+
+Every `lit backlog` that lists its rows writes the keys below. The three focus
+keys are empty when no focus label narrowed the run.
+
+| Key | Meaning |
+| --- | --- |
+| `backlog.focus_goals` | The focus goals whose prerequisite path the list was narrowed to. Empty when nothing is focused and under `--all`. |
+| `backlog.off_path` | Tickets a focus label kept off the list, in the entry shape `next.off_path` uses, each with `reach` `off_focus_path`. A ticket in a lane you hold, or in another lane of that lane's epic, is never among them. |
+| `backlog.own_off_path` | The ids of tickets off the focus path that the list kept because they sit in a lane you hold or in another lane of that lane's epic, which another checkout may hold. Read before `--limit`, so a ticket `--limit` cut is still here. |
+| `backlog.trimmed` | How many rows `--limit` cut from the list; 0 when it cut none. |
+
 ## What a statusline-file write records
 
 Every command that works on the tickets of the checkout it runs in, such as
@@ -164,14 +176,16 @@ sync` command, records what the open did to the store: whether it had to build
 the database, and what it did to the store's schema. An open that finds the
 schema behind this lit
 migrates it forward, taking a recovery snapshot first, then removes the oldest
-migration snapshots past the ten it keeps. For `lit ls --at`, that store is the
+migration snapshots past the ten it keeps and the oldest Dolt checkpoints past
+the five of each kind it keeps. For `lit ls --at`, that store is the
 one `--at` names, not the working directory's.
 
 | Key | Meaning |
 | --- | --- |
 | `bootstrap` | `built` when the open found no database and built it; `built_over_dead_build` when it built it after removing what a lit process that died while building left behind; `none` when the database was already there, and for opens that only read. |
-| `migration.snapshot` | The recovery snapshot the open took before migrating, or `""` when there was nothing to migrate. |
-| `migration.snapshot_prune_error` | Why older migration snapshots could not be removed after the migration, or `null`. The command runs all the same, and prints a `warning: old migration snapshots were not removed:` line on stderr. A command whose open fails after migrating records neither key, and its error includes the failure. |
+| `migration.snapshot` | The recovery snapshot the open took before migrating, or `""` when it took none. |
+| `migration.prune_error` | Why older migration snapshots or checkpoints could not be removed after the work they trail committed, or `null`. The command runs all the same, and prints a `warning: old migration snapshots or checkpoints were not removed:` line on stderr. |
+| `migration.failed_step` | Recorded only when the open fails: the step of its schema migration that failed, such as `migration`, `migration_reset` or `quarantine_table_shape`. The command's reason is read off this step. A failed open also records `migration.snapshot` (the snapshot it took before the failure, or `""`) and `migration.prune_error`, and its message names both. |
 | `migration.schema_ahead` | The workspace's schema version when it is newer than this lit supports and the open served it anyway, or `0` when it is not newer. |
 | `migration.min_writer_schema` | The oldest schema version a lit must support to write that newer workspace, as a migration this lit lacks recorded it, or `0` when none did or the workspace is not newer. A read open serves a workspace whose minimum is above this lit; a write open, and every `lit sync` command, refuses it. |
 | `migration.min_writer_schema_error` | Why that minimum is not a schema version, or `null`. A read open serves the workspace; a write open refuses it. |
@@ -185,7 +199,7 @@ instead.
 | `counts.stores.migrated` | The stores whose open migrated them. |
 | `counts.stores.schema_ahead` | The stores at a schema newer than this lit. |
 | `counts.stores.read_only` | Those of them this lit reads but does not write. |
-| `counts.stores.snapshot_prune_failures` | The stores whose open migrated them and then could not remove older migration snapshots. Each gets a `~ <storage dir>: warning: old migration snapshots were not removed:` line after the table. |
+| `counts.stores.prune_failures` | The stores whose open could not remove older migration snapshots or checkpoints after the work they trail committed: a migration or a repair of a recorded migration whose content changed. Each gets a `~ <storage dir>: warning: old migration snapshots or checkpoints were not removed:` line after the table. |
 
 ## What checking the config records
 

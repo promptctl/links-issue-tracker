@@ -646,7 +646,7 @@ func TestRunUpgradeOnAnOpenableWorkspacePastRunningSupportNamesNoDowngrade(t *te
 		// The reader's open built nothing and found nothing to migrate.
 		"bootstrap":                         "none",
 		"migration.snapshot":                "",
-		"migration.snapshot_prune_error":    nil,
+		"migration.prune_error":             nil,
 		"migration.schema_ahead":            float64(ahead),
 		"migration.min_writer_schema":       float64(0),
 		"migration.min_writer_schema_error": nil,
