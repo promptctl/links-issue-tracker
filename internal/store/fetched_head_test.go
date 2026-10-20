@@ -528,6 +528,59 @@ func TestLandFetchedHeadKeepsTheSyncBranchsForkPointAcrossARePoint(t *testing.T)
 	}
 }
 
+// TestLandFetchedHeadKeepsAFollowTheLiveStoreRanDuringTheClonesFetch runs the
+// follow inside the receive: bravo's clone is taken, bravo pulls alpha's
+// re-root and collects the history below the cut, and only then does the
+// clone fetch, recording its fork point against its own pre-cut snapshot.
+// The landing derives the fork point from bravo's own branch instead: it
+// stays at the remote's re-rooted head where the follow put it, and the
+// clone's pre-cut fork point is not copied back into bravo's store.
+func TestLandFetchedHeadKeepsAFollowTheLiveStoreRanDuringTheClonesFetch(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	r := newReRootedRemote(t, ctx, true)
+	clone := filepath.Join(t.TempDir(), "dolt")
+	if err := dbsnapshot.CloneTree(ctx, r.bravo, clone); err != nil {
+		t.Fatalf("CloneTree() error = %v", err)
+	}
+
+	bravo := openSyncOrFatal(t, ctx, r.bravo)
+	if _, err := bravo.SyncPull(ctx, remoteName(t, "origin"), "master"); err != nil {
+		t.Fatalf("SyncPull(bravo) error = %v", err)
+	}
+	r.assertFollowed(t, bravo, storage.SyncEntryPull)
+	if err := bravo.Close(); err != nil {
+		t.Fatalf("Close(bravo) error = %v", err)
+	}
+
+	cloneStore := openSyncOrFatal(t, ctx, clone)
+	if err := cloneStore.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
+		t.Fatalf("SyncFetch(clone) error = %v", err)
+	}
+	cloneForkPoint := branchesUnder(t, ctx, cloneStore, forkPointPrefix)["origin/master"]
+	if err := cloneStore.Close(); err != nil {
+		t.Fatalf("Close(clone) error = %v", err)
+	}
+	if cloneForkPoint == "" || cloneForkPoint == r.alphaReRoot.Head {
+		t.Fatalf("the clone's fork point is %q; want the pre-cut head its snapshot shared with the remote", cloneForkPoint)
+	}
+
+	landed, err := LandFetchedHead(ctx, r.bravo, clone, remoteName(t, "origin"), "master", nil)
+	if err != nil {
+		t.Fatalf("LandFetchedHead() error = %v", err)
+	}
+	want := []storage.ForkPointRecord{{Remote: "origin", Branch: "master", Head: r.alphaReRoot.Head, Outcome: storage.ForkPointUnchanged}}
+	if !slices.Equal(landed.ForkPoints, want) {
+		t.Fatalf("LandedFetch.ForkPoints = %+v, want %+v", landed.ForkPoints, want)
+	}
+	bravo = openSyncOrFatal(t, ctx, r.bravo)
+	defer func() { _ = bravo.Close() }()
+	if forkPoint := branchesUnder(t, ctx, bravo, forkPointPrefix)["origin/master"]; forkPoint != r.alphaReRoot.Head {
+		t.Fatalf("bravo's fork point after the landing is %s; want the re-rooted head %s the follow recorded", forkPoint, r.alphaReRoot.Head)
+	}
+	assertCollected(t, ctx, bravo, cloneForkPoint)
+}
+
 // TestRemoteCacheLandingCopiesTheFetchedRemotesLastKnownRefs drives the git
 // half with plain git, for a clone that fetched origin: its mirror gained a
 // last-known ref of origin, moved origin's other one onto an unrelated commit —

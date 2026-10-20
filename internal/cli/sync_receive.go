@@ -728,11 +728,11 @@ func performSyncReceive(ctx context.Context, ws workspace.Info, clone liveClone,
 		"behind":      strconv.FormatInt(result.Behind, 10),
 		"base":        string(result.Base),
 		"landed":      landed.Record.String(),
-		"fork_point":  landed.ForkPoint.String(),
+		"fork_point":  joinTrace(landed.ForkPoints, func(r storage.ForkPointRecord) string { return string(r.Outcome) }),
 		"land_held":   landed.Held.Round(time.Millisecond).String(),
 		// [LAW:nothing-unseen] what the landing deleted, by branch.
-		"landed_pruned":              joinBranches(landed.Pruned, func(p storage.PrunedRef) string { return p.Branch }),
-		"landed_fork_points_dropped": joinBranches(landed.ForkPointsDropped, func(d storage.ForkPointRecord) string { return d.Branch }),
+		"landed_pruned":              joinTrace(landed.Pruned, func(p storage.PrunedRef) string { return p.Branch }),
+		"landed_fork_points_dropped": joinTrace(landed.ForkPointsDropped, func(d storage.ForkPointRecord) string { return d.Branch }),
 		"stopped":                    stopped.String(),
 		"unsettled_since":            strconv.FormatInt(unixOrZero(run.since), 10),
 		"unsettled_previous_stop":    strconv.FormatInt(unixOrZero(run.previousStop), 10),
@@ -775,8 +775,9 @@ func performSyncReceive(ctx context.Context, ws workspace.Info, clone liveClone,
 		"receive.settled_last":            unixOrZero(run.settledLast),
 	})
 	telemetry.Append(ctx, "receive.outcomes", value)
-	// What the landing deleted from the live store, record by record.
-	// [LAW:nothing-unseen]
+	// What the landing recorded on the live store's fork point and deleted
+	// from it, record by record. [LAW:nothing-unseen]
+	reportEventValues(ctx, "receive.landed_fork_points", landed.ForkPoints)
 	reportEventValues(ctx, "receive.landed_pruned", landed.Pruned)
 	reportEventValues(ctx, "receive.landed_fork_points_dropped", landed.ForkPointsDropped)
 	return outcome, closeLive
@@ -993,12 +994,12 @@ func receiveSkipReason(skip syncTargetSkip) string {
 	}
 }
 
-// joinBranches is the branches of items, comma-separated, as a trace's
+// joinTrace is one field of each of items, comma-separated, as a trace's
 // metadata carries a list: empty when there are none.
-func joinBranches[T any](items []T, branch func(T) string) string {
-	names := make([]string, len(items))
+func joinTrace[T any](items []T, field func(T) string) string {
+	values := make([]string, len(items))
 	for i, item := range items {
-		names[i] = branch(item)
+		values[i] = field(item)
 	}
-	return strings.Join(names, ",")
+	return strings.Join(values, ",")
 }

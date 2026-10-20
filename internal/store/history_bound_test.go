@@ -83,6 +83,21 @@ func heightOf(t *testing.T, ctx context.Context, st *Store, rev string) uint64 {
 	return height
 }
 
+// assertCollected fails unless each of heads is gone from st's store, not
+// merely unlisted: dolt_log finds no commit for it. Any other error is not
+// proof it was collected. The error crosses the SQL wire as text, so it is
+// matched by Dolt's own sentinel's text.
+func assertCollected(t *testing.T, ctx context.Context, st *Store, heads ...string) {
+	t.Helper()
+	for _, head := range heads {
+		var n int
+		err := st.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM dolt_log(?)`, head).Scan(&n)
+		if err == nil || !strings.Contains(err.Error(), datas.ErrCommitNotFound.Error()) {
+			t.Fatalf("dolt_log(%s) = %d commits, error %v; want it collected (%v)", head, n, err, datas.ErrCommitNotFound)
+		}
+	}
+}
+
 // branchesUnder is every branch of st whose name begins with prefix.
 func branchesUnder(t *testing.T, ctx context.Context, st *Store, prefix string) map[string]string {
 	t.Helper()
@@ -163,12 +178,7 @@ func TestAPushPastTheBoundReRootsWithNoCommandRun(t *testing.T) {
 	}
 	// The old history is gone from the store, not merely unlisted: neither the
 	// head the push replaced nor the one the old fork point named resolves.
-	for _, old := range []string{fired.Head, under.Head} {
-		var n int
-		if err := st.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM dolt_log(?)`, old).Scan(&n); err == nil {
-			t.Fatalf("the old head %s still resolves, with %d commits below it; want it collected", old, n)
-		}
-	}
+	assertCollected(t, ctx, st, fired.Head, under.Head)
 	if err := st.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatal(err)
 	}
