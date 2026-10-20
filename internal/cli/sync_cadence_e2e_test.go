@@ -149,7 +149,7 @@ func TestTheCompactionBackstopLeavesNoSyncListsOnItsCommandsEvent(t *testing.T) 
 	}
 	ev := lastEvent(t)
 	for _, key := range []string{
-		"reroot.follows", "reroot.declines", "fork_point.records", "remote.removals", "reconcile.bases",
+		"reroot.follows", "reroot.declines", "reroot.cuts_not_found", "fork_point.records", "remote.removals", "reconcile.bases",
 		"stranded_writes.commits", "settled_last.writes", "history_bound.records",
 	} {
 		if values, present := ev.Occurrences[key]; present {
