@@ -29,13 +29,9 @@ import (
 // resolution; what it writes is the file storage.ParseBulkFile parsed once
 // it judged it.
 func (s *Store) BulkApply(ctx context.Context, prefix, actor string, specs []storage.BulkIssueSpec) (storage.BulkApplyResult, error) {
-	existing, err := s.getIssuesByIDs(ctx, storage.BulkExistingRefs(specs))
+	existingTypes, err := s.issueTypesByIDs(ctx, storage.BulkExistingRefs(specs))
 	if err != nil {
 		return storage.BulkApplyResult{}, fmt.Errorf("bulk: read the issues the file places: %w", err)
-	}
-	existingTypes := make(map[string]model.IssueType, len(existing))
-	for id, issue := range existing {
-		existingTypes[id] = issue.IssueType
 	}
 	file, err := storage.ParseBulkFile(specs, existingTypes)
 	if err != nil {
@@ -52,11 +48,11 @@ func (s *Store) BulkApply(ctx context.Context, prefix, actor string, specs []sto
 			}); undoErr != nil {
 				err = fmt.Errorf("%w; %w", err, undoErr)
 			} else {
-				result.Reparented = nil
+				result.ReparentsUndone, result.Reparented = result.Reparented, nil
 			}
 		}
 		leaked := s.rollbackCreatedIssues(ctx, actor, createdIDs)
-		return result.AfterRollback(), fmt.Errorf("%w; %s (rollback leaked %d: %s)", err, result.Kept(), len(leaked), strings.Join(leaked, ","))
+		return result.AfterRollback(leaked), fmt.Errorf("%w; %s (rollback leaked %d: %s)", err, result.Kept(leaked), len(leaked), strings.Join(leaked, ","))
 	}
 	localRealID := make(map[string]string, len(file.Creates))
 	for _, create := range file.Creates {

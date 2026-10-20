@@ -46,9 +46,10 @@ func (e *Engine) BulkApply(ctx context.Context, prefix, actor string, specs []st
 		if undoErr := reparents.Undo(parentWriter{e: e, actor: actor}); undoErr != nil {
 			err = fmt.Errorf("%w; %w", err, undoErr)
 		} else {
-			result.Reparented = nil
+			result.ReparentsUndone, result.Reparented = result.Reparented, nil
 		}
-		return result.AfterRollback(), e.compensate(batch, actor, fmt.Errorf("%w; %s", err, result.Kept()))
+		leaked := e.rollbackCreated(batch, actor)
+		return result.AfterRollback(leaked), fmt.Errorf("%w; %s (rollback leaked %d: %s)", err, result.Kept(leaked), len(leaked), strings.Join(leaked, ","))
 	}
 	for _, create := range file.Creates {
 		issue, err := e.createIssue(create.Input(batch.resolve(create.Parent), prefix, actor))
@@ -177,13 +178,20 @@ func (e *Engine) wireDependency(dependent, dependency, actor string) error {
 // undo into the error the caller sees. The original failure travels unchanged;
 // the rollback only adds an account of what is left behind. [LAW:no-silent-failure]
 func (e *Engine) compensate(batch *batchIDs, actor string, cause error) error {
+	leaked := e.rollbackCreated(batch, actor)
+	return fmt.Errorf("%w (rollback leaked %d: %s)", cause, len(leaked), strings.Join(leaked, ","))
+}
+
+// rollbackCreated deletes the issues the batch created and returns the ones it
+// could not, as the Dolt engine's rollbackCreatedIssues does.
+func (e *Engine) rollbackCreated(batch *batchIDs, actor string) []string {
 	leaked := []string{}
 	for _, id := range batch.createdIDs {
 		if _, err := e.apply(id, storage.Change{Action: model.Delete{}, Actor: actor, Reason: "import rollback"}); err != nil {
 			leaked = append(leaked, id)
 		}
 	}
-	return fmt.Errorf("%w (rollback leaked %d: %s)", cause, len(leaked), strings.Join(leaked, ","))
+	return leaked
 }
 
 // batchIDs is a batch's answer to "what did the file's names turn into". It

@@ -191,7 +191,8 @@ func aBulkFileRanksIssuesInTheFrameItMovesThemTo(t *testing.T, ctx context.Conte
 // before the file's edges, ordering and updates, so a refusal at any of those
 // puts every moved issue back under the parents it had — whether the file
 // moved it under an existing epic or under one it creates, which the refusal
-// deletes — and the result reports no reparent kept. [LAW:no-silent-failure]
+// deletes — and the result reports no reparent kept and every one undone.
+// [LAW:no-silent-failure]
 func aBulkFileRefusedAfterItsReparentsPutsBackTheParents(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	from := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "from", Topic: "core", IssueType: model.TypeEpic})
 	to := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "to", Topic: "core", IssueType: model.TypeEpic})
@@ -213,6 +214,7 @@ func aBulkFileRefusedAfterItsReparentsPutsBackTheParents(t *testing.T, ctx conte
 	assertStrings(t, "the mover's parents", parentsOf(t, ctx, st, mover.ID), []string{from.ID})
 	assertStrings(t, "the cleared epic's parents", parentsOf(t, ctx, st, nested.ID), []string{from.ID})
 	assertStrings(t, "the refusal's result, reparented", result.Reparented, nil)
+	assertStrings(t, "the refusal's result, reparents undone", result.ReparentsUndone, []string{mover.ID, nested.ID})
 
 	title, topic, epicType, ghost := "new home", "core", "epic", "renamed"
 	if _, err := st.BulkApply(ctx, prefix, "ada", []storage.BulkIssueSpec{

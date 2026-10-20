@@ -556,12 +556,12 @@ func TestRunImportEventCountsWhatTheFileWrote(t *testing.T) {
 	if lines := fmt.Sprintf("reparented 1 issues\n  %s\n1 issues already had the parent the file states\n  %s\n", child, epic); !strings.Contains(out, lines) {
 		t.Errorf("import output lacks %q:\n%s", lines, out)
 	}
-	assertFacts(t, map[string]string{"import.created": "1", "import.updated": "1", "import.ranked": "1", "import.reparented": "1", "import.parent_held": "1"})
+	assertFacts(t, map[string]string{"import.created": "1", "import.updated": "1", "import.ranked": "1", "import.reparented": "1", "import.parent_held": "1", "import.reparents_undone": "0"})
 }
 
 // A file refused at an update keeps the updates applied before it, and the
 // invocation's event counts them, and counts no reparent: the refusal put the
-// moved issue back.
+// moved issue back, which the event counts as an undone reparent.
 func TestRunImportEventCountsWhatARefusedFileKept(t *testing.T) {
 	isolateEvents(t)
 	dir := newInitTestRepo(t)
@@ -572,7 +572,7 @@ func TestRunImportEventCountsWhatARefusedFileKept(t *testing.T) {
 	if out, err := runCLIInDirAllowError(t, dir, "import", "--path", yaml); err == nil {
 		t.Fatalf("import succeeded; want the missing update refused:\n%s", out)
 	}
-	assertFacts(t, map[string]string{"import.created": "0", "import.updated": "1", "import.ranked": "0", "import.reparented": "0", "import.parent_held": "0"})
+	assertFacts(t, map[string]string{"import.created": "0", "import.updated": "1", "import.ranked": "0", "import.reparented": "0", "import.parent_held": "0", "import.reparents_undone": "1"})
 }
 
 func assertFacts(t *testing.T, want map[string]string) {

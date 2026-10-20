@@ -415,9 +415,13 @@ Rule for the whole struct: **every slice is an OR within itself and an AND again
 
 #### `BulkApplyResult` (`internal/storage/bulk.go`)
 - `Created []IDMapping` — each create document's own reference (its `LocalID` if set, otherwise its new real ID) paired with the real ID it was created under, in creation order, so every create is nameable even when the file gave no `LocalID` (`internal/storage/bulk.go`).
+- `Reparented []string` — the update documents' issues whose parent the file changed, in file order (`internal/storage/bulk.go`).
+- `ParentHeld []string` — the update documents' issues whose parent already was the one the file states, in file order (`internal/storage/bulk.go`).
+- `ReparentsUndone []string` — the issues a refusal put back under the parents they held before the file; empty on a landed file (`internal/storage/bulk.go`).
 - `Updated []string` — real IDs of every updated issue, in the order applied (`internal/storage/bulk.go`).
 - `Ranked RankSetResult` — the `RankSet` the file's `rank: top` documents made, in file order; no resolutions when the file states no rank (`internal/storage/bulk.go`).
-- `Kept() string` — what a batch refused at an update leaves written: `"kept %d updates [%s] and the order of %d issues [%s]"` over `Updated` and the `RankedID`s of `Ranked` that are not among `Created` (the rollback deletes those), comma-joined, zero counts included; both engines put it in the update-failure error (`internal/storage/bulk.go`).
+- `AfterRollback(leaked []string) BulkApplyResult` — what stays written once a refused batch's creates are rolled back, `leaked` being the creates the rollback could not delete: `Created` keeps only those, and `Ranked` only the `RankedID`s that are not a create the rollback deleted; every other field is kept as is. Both engines return it beside a refusal (`internal/storage/bulk.go`).
+- `Kept(leaked []string) string` — `AfterRollback(leaked)` in words: `"kept %d reparents [%s], %d updates [%s] and the order of %d issues [%s]"`, comma-joined, zero counts included; both engines put it in every refusal's error, after the reparent step's undo (`internal/storage/bulk.go`).
 
 #### `ImportTreeSpec` (`internal/storage/bulk.go`)
 JSON tags: `local_id`, `title`, `description,omitempty`, `prompt,omitempty`, `plan,omitempty`, `type`, `topic`, `priority`, `assignee,omitempty`, `labels,omitempty`, `parent,omitempty`, `blocked_by,omitempty`. `LocalID` is opaque — used inside the spec to wire `Parent` and `BlockedBy`, replaced with the generated lit issue ID at import time (`internal/storage/bulk.go`).
@@ -1013,7 +1017,7 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 
 **`BulkApply(ctx, prefix, actor, specs)`**
 1. `existingTypes` maps each id among `storage.BulkExistingRefs(specs)` that names an issue in `e.issues` to its type; `file, err := storage.ParseBulkFile(specs, existingTypes)` (`internal/storage/import_validate.go`, shared with the Dolt engine) — the entire file is gated before any document is applied, and the gate returns it parsed: `file.Creates` in write order, `file.Reparents` and `file.Updates` in file order. Its error is returned as is. The engine parses nothing itself.
-2. `refuse(err)` is every failure from here on: it runs `reparents.Undo(parentWriter{e, actor})` (`internal/storage/bulk.go`), which writes each moved issue's parent edges back as `Parents` read them — an undo error is joined to the refusal, otherwise `result.Reparented` is emptied — then returns `result.AfterRollback()` (`internal/storage/bulk.go`: no creates, and only the ordered issues that outlive the rollback) beside `e.compensate(batch, actor, fmt.Errorf("%w; %s", err, result.Kept()))`, so a refused file reports what stays written in its result and in its error text.
+2. `refuse(err)` is every failure from here on: it runs `reparents.Undo(parentWriter{e, actor})` (`internal/storage/bulk.go`), which writes each moved issue's parent edges back as `Parents` read them — an undo error is joined to the refusal, otherwise `result.Reparented` moves to `result.ReparentsUndone` — then `leaked := e.rollbackCreated(batch, actor)`, and returns `result.AfterRollback(leaked)` (`internal/storage/bulk.go`) beside `fmt.Errorf("%w; %s (rollback leaked %d: %s)", err, result.Kept(leaked), len(leaked), strings.Join(leaked, ","))`, so a refused file reports what stays written in its result and in its error text.
 3. Per create in `file.Creates`: `e.createIssue(create.Input(batch.resolve(create.Parent), prefix, actor))`. On failure → `refuse(fmt.Errorf("bulk: create doc %d: %w", create.Index, err))`. Records into the batch; `result.Created` is the batch's mappings, under `create.LocalID` if set, else under the new real id.
 4. **The reparents**, `e.reparent(file, batch.resolve, actor)` into the `storage.ReparentStep` `reparents`, whose `Moved` and `Held` become `result.Reparented` and `result.ParentHeld`: it copies `e.relations`, runs `file.WriteReparents(resolve, parentWriter{e, actor})` (`internal/storage/bulk.go`), and restores the copy on any error. `WriteReparents` asks `Holds` (`relationHeld`) of every reparent naming a parent, then, for each reparent not held, reads `Parents` — the edges `ReparentStep.Undo` writes back — and runs `Clear` (`clearParent`) for each `parent: ""` — `storage.RelationAbsentError` marks it held — and `Detach` (`detachParents`) for each move not held, then `Attach` (`addRelation`, `RelParentChild`) for each move not held; an error → `"bulk: parent of %q -> %q: %w"`. On failure → `refuse(err)`.
 5. **The edges, after the reparents, over `file.Creates` in write order**: wires every `BlockedBy` edge as `blocked-by` with `src = the document's own issue`, `dst = batch.resolve(dep)`, so each is judged on the hierarchy the file ends with. On failure → `refuse(fmt.Errorf("bulk: blocked_by doc %d -> %q: %w", create.Index, dep, err))`.
@@ -1029,9 +1033,11 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 
 **`wireDependency(dependent, dependency, actor)`** — `addRelation` with `Type: model.RelBlockedBy`, `CreatedBy: actor`.
 
-**`compensate(batch, cause)`**
-- For each created id, applies `storage.Change{Action: model.Delete{}, Actor: actor, Reason: "import rollback"}`; ids whose delete failed are collected as "leaked".
-- Returns `fmt.Errorf("%w (rollback leaked %d: %s)", cause, len(leaked), strings.Join(leaked, ","))` — the original failure travels unchanged; the rollback only adds an account of what is left behind.
+**`rollbackCreated(batch, actor) []string`**
+- For each created id, applies `storage.Change{Action: model.Delete{}, Actor: actor, Reason: "import rollback"}`; returns the ids whose delete failed, the "leaked" ones.
+
+**`compensate(batch, actor, cause)`**
+- `rollbackCreated(batch, actor)`, then returns `fmt.Errorf("%w (rollback leaked %d: %s)", cause, len(leaked), strings.Join(leaked, ","))` — the original failure travels unchanged; the rollback only adds an account of what is left behind.
 - **Compensation is a soft delete, not a removal**: the issues remain in the store with `Deleted` retention (hence invisible to a default listing and to `ListTopics`, but counted by `LocalIssueCount`).
 - **Updates already applied are not reverted.**
 

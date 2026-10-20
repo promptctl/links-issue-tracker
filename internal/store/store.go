@@ -1267,6 +1267,37 @@ func (s *Store) getIssuesByIDs(ctx context.Context, ids []string) (map[string]mo
 	return out, nil
 }
 
+// issueTypesByIDs reads each id's issue_type as a column, keyed by id, with
+// getIssuesByIDs' absence contract. It hydrates nothing, so it answers on a
+// hierarchy holding a parent loop, which hydration refuses
+// (storage.ParentCycleError) — the state a caller clearing a parent is there
+// to repair, as ClearParent explains.
+func (s *Store) issueTypesByIDs(ctx context.Context, ids []string) (map[string]model.IssueType, error) {
+	types := make(map[string]model.IssueType, len(ids))
+	for _, batch := range idBatches(ids) {
+		inList, args := batch.inList()
+		rows, err := s.db.QueryContext(ctx, `SELECT id, issue_type FROM issues WHERE id IN (`+inList+`)`, args...)
+		if err != nil {
+			return nil, fmt.Errorf("batch load issue types: %w", err)
+		}
+		for rows.Next() {
+			var id string
+			var issueType model.IssueType
+			if err := rows.Scan(&id, &issueType); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("scan batch-loaded issue type: %w", err)
+			}
+			types[id] = issueType
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return nil, fmt.Errorf("iterate batch-loaded issue types: %w", err)
+		}
+	}
+	return types, nil
+}
+
 // scanIssueRows runs one id-batch query and reads its rows. It is separate from
 // the batching above so that closing the rows stays tied to the one query that
 // opened them, rather than to the whole batched read.

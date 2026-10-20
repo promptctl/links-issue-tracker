@@ -2273,6 +2273,7 @@ func runImportBulk(ctx context.Context, stdout io.Writer, ap *app.App, data []by
 	telemetry.Set(ctx, "import.updated", len(result.Updated))
 	telemetry.Set(ctx, "import.reparented", len(result.Reparented))
 	telemetry.Set(ctx, "import.parent_held", len(result.ParentHeld))
+	telemetry.Set(ctx, "import.reparents_undone", len(result.ReparentsUndone))
 	telemetry.Set(ctx, "import.ranked", len(result.Ranked.Resolutions))
 	if err != nil {
 		return err

@@ -3,6 +3,7 @@ package storage
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
@@ -75,7 +76,9 @@ func NewIDMapping(localID, realID string) IDMapping {
 // BulkApplyResult reports what a BulkApply left written. Created lists
 // every created issue in the order it was created; Reparented lists the issues
 // whose parent the file changed, and ParentHeld those whose parent already
-// was what the file states, each in file order; Updated lists the real IDs of
+// was what the file states, each in file order; ReparentsUndone lists the
+// issues a refusal put back under the parents they held before the file,
+// which a landed file leaves empty; Updated lists the real IDs of
 // every updated issue, in the order they were applied; Ranked is the RankSet
 // the file's `rank: top` documents made, with no resolutions when the file
 // states no rank. A refused BulkApply returns its AfterRollback beside the
@@ -83,28 +86,33 @@ func NewIDMapping(localID, realID string) IDMapping {
 // not. [LAW:nothing-unseen]
 type BulkApplyResult struct {
 	Created    []IDMapping
-	Reparented []string
-	ParentHeld []string
-	Updated    []string
-	Ranked     RankSetResult
+	Reparented      []string
+	ParentHeld      []string
+	ReparentsUndone []string
+	Updated         []string
+	Ranked          RankSetResult
 }
 
 // AfterRollback is what stays written once a refused batch's creates are
-// rolled back: the reparents its undo could not put back, the updates applied
-// before the refusal, and the
-// order the file's `rank: top` documents wrote, among the issues that outlive
-// the rollback. It creates nothing; any create the rollback leaked is named by
-// the refusal's error.
-func (r BulkApplyResult) AfterRollback() BulkApplyResult {
-	created := make(map[string]struct{}, len(r.Created))
+// rolled back, given leaked, the creates the rollback could not delete: those
+// creates, the reparents its undo could not put back, the updates applied
+// before the refusal, and the order the file's `rank: top` documents wrote,
+// among the issues that outlive the rollback. [LAW:one-source-of-truth]
+func (r BulkApplyResult) AfterRollback(leaked []string) BulkApplyResult {
+	rolledBack := make(map[string]bool, len(r.Created))
 	for _, m := range r.Created {
-		created[m.ID] = struct{}{}
+		rolledBack[m.ID] = !slices.Contains(leaked, m.ID)
 	}
 	kept := r
 	kept.Created = nil
+	for _, m := range r.Created {
+		if !rolledBack[m.ID] {
+			kept.Created = append(kept.Created, m)
+		}
+	}
 	kept.Ranked.Resolutions = nil
 	for _, res := range r.Ranked.Resolutions {
-		if _, rolledBack := created[res.RankedID]; !rolledBack {
+		if !rolledBack[res.RankedID] {
 			kept.Ranked.Resolutions = append(kept.Ranked.Resolutions, res)
 		}
 	}
@@ -112,9 +120,10 @@ func (r BulkApplyResult) AfterRollback() BulkApplyResult {
 }
 
 // Kept is AfterRollback in words, the account a refused batch's error owes its
-// caller. Zero of any is said, not omitted. [LAW:no-silent-failure]
-func (r BulkApplyResult) Kept() string {
-	kept := r.AfterRollback()
+// caller beside the creates the rollback leaked, which the error names. Zero
+// of any is said, not omitted. [LAW:no-silent-failure]
+func (r BulkApplyResult) Kept(leaked []string) string {
+	kept := r.AfterRollback(leaked)
 	ranked := make([]string, len(kept.Ranked.Resolutions))
 	for i, res := range kept.Ranked.Resolutions {
 		ranked[i] = res.RankedID
