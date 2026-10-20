@@ -1338,7 +1338,7 @@ line for `done` and `close`, each group omitted when empty:
 - `\nrelated:` (`output.go`)
 - `\nunblocks: <comma-joined ids of still-live dependents>` (`output.go`)
 
-### 2.13 `lit backlog` — Full workable backlog
+### 2.13 `lit backlog` — Workable backlog
 
 - Registration `register.go`, `app.AccessRead`, handler
   `workableLeafFn(backlogView)`. Summary: "List the workable backlog in
@@ -1403,14 +1403,15 @@ Use 'lit next' to pick the top workable item to start.
 
    The first `%s` is the focus goals' ids joined by `", "`
    (`focusScope.describe`, `ready_state.go`), `%d` is the count of rows the
-   partition excluded, and the last `%s` is ``"`lit backlog --all`"``. The trim
+   partition excluded, and the last `%s` is the escape `` `lit backlog --all` ``,
+   backticks included (`workable.go`). The trim
    clause is empty when `--limit` cut nothing, else a space and then
    `--limit trimmed this run: %d more workable row(s) are not shown.`, where
    `%d` is the rows `--limit` cut after keep (`trimClause`, `backlog.go`).
 3. A rule of 80 `─` characters, then a blank line (`backlog.go`).
 4. If no row survived: one line from `focusNotice.emptyLine` (`backlog.go`) —
    `(nothing workable on the focus path — %d row(s) off it, %s to see them)`,
-   with the excluded count and ``"`lit backlog --all`"``, when the scope is
+   with the excluded count and the same escape, when the scope is
    active, `--all` was not given and the partition excluded at least one row;
    else `(backlog empty)`. The output does not stop there: step 7 still runs.
 5. Otherwise, per row: `"%2d. %s"` — a right-aligned 1-based index, then the
@@ -2173,7 +2174,7 @@ completion (`register.go`, `completion.go`).
 
 | Command | Group | Replacement guidance (verbatim) | Citation |
 |---|---|---|---|
-| `ready` | operations | "use `lit backlog` for the full ranked queue (blocked items shown inline) or `lit next` for the single leaf to start" | `register.go` |
+| `ready` | operations | "use `lit backlog` for the ranked queue (blocked items shown inline) or `lit next` for the single leaf to start" | `register.go` |
 | `queue` | operations | same as `ready` | `register.go` |
 | `assign` | operations | "reassigning is a field write: use `lit update <id> --assignee <name>` (with an optional `--reason`)" | `register.go` |
 | `ls-at` | maintenance | "use `lit ls --at <store-dir>` — listing a discovered store read-only is now a flag on `ls`, not a separate command" | `register.go` |
