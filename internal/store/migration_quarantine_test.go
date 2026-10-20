@@ -727,8 +727,8 @@ func TestCheckpointResetErrorUnknownVersion(t *testing.T) {
 	if !strings.Contains(msg, "version unknown") {
 		t.Errorf("error message missing 'version unknown': %s", msg)
 	}
-	if strings.Contains(msg, "DELETE FROM migration_quarantine") {
-		t.Errorf("error message must not contain quarantine-clear SQL when version is unknown: %s", msg)
+	if strings.Contains(msg, "lit unquarantine") {
+		t.Errorf("error message must not advise clearing a quarantine when version is unknown: %s", msg)
 	}
 	if !strings.Contains(msg, "the next open runs it again") {
 		t.Errorf("error message does not say the next open runs the migration again: %s", msg)

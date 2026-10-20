@@ -112,7 +112,7 @@ func (e *CheckpointResetError) Error() string {
 	}
 	switch {
 	case e.Quarantine != nil:
-		fmt.Fprintf(&b, "\nthe quarantine is in force; to retry after fixing the migration, clear it:\n  DELETE FROM migration_quarantine WHERE version = %d", e.Quarantine.Version)
+		b.WriteString("\nthe quarantine is in force; to retry after fixing the migration, clear it:\n  lit unquarantine")
 	case e.QuarantineErr != nil:
 		b.WriteString("\nno quarantine is in force, so the next open runs it again")
 	default:
@@ -198,6 +198,16 @@ type QuarantineBlockError struct {
 	Version   int64
 	Name      string
 	ErrorText string // original failure message recorded at quarantine time
+	// Next is the quarantine the open is refused on once this one is cleared,
+	// nil when none. Clearing a quarantine changes neither the applied version
+	// nor the phase, so it is what the gate refuses on after the clear.
+	Next *QuarantinedMigration
+}
+
+// QuarantinedMigration names a migration whose quarantine is in force.
+type QuarantinedMigration struct {
+	Version int64
+	Name    string
 }
 
 func (e *QuarantineBlockError) Error() string {
@@ -205,8 +215,8 @@ func (e *QuarantineBlockError) Error() string {
 		"migration v%d %q is quarantined after a previous failure:\n  %s\n\n"+
 			"to recover, either:\n"+
 			"  (a) restore from a dbsnapshot: lit snapshots restore <name>\n"+
-			"  (b) clear the quarantine row (if transient): DELETE FROM migration_quarantine WHERE version = %d",
-		e.Version, e.Name, e.ErrorText, e.Version,
+			"  (b) clear the quarantine (if transient): lit unquarantine",
+		e.Version, e.Name, e.ErrorText,
 	)
 }
 
@@ -629,30 +639,9 @@ func (s *Store) applyMigration(ctx context.Context, guard *snapshotGuard, assess
 	if !state.willMutate() {
 		return pruneErr, nil
 	}
-	// Ensure the quarantine table exists — and self-heal it to the canonical
-	// shape if a prior lit build left it in an older one — BEFORE
-	// quarantineFastFail reads it. Reading a stale-shaped table would fail
-	// with a raw column-not-found SQL error instead of proceeding; ordering
-	// the self-heal first means the fast-fail below always sees a table it
-	// can query. Committed immediately, ahead of guard.ensure(ctx), so it also
-	// survives a checkpoint reset should one fire later in this Open.
-	//
-	// [LAW:single-enforcer] Quarantine table creation is decoupled from goose
-	// migrations so a goose rollback cannot erase the table it depends on.
-	if fail := attempt(stepEnsureQuarantineTable, func() error { return s.ensureQuarantineTable(ctx) }); fail != nil {
-		return pruneErr, fail
-	}
-	if fail := attempt(stepCommitQuarantineTable, func() error {
-		return s.commitWorkingSet(ctx, "migrate: ensure migration_quarantine table")
-	}); fail != nil {
-		return pruneErr, fail
-	}
 	// Fast-fail before the snapshot guard so a permanently-quarantined workspace
 	// does not accumulate recovery snapshots on every Open.
-	//
-	// [LAW:single-enforcer] The quarantine gate lives here and nowhere else; this
-	// is the only site that calls checkPendingQuarantine.
-	if fail := attempt(stepCheckQuarantine, func() error { return s.quarantineFastFail(ctx, state) }); fail != nil {
+	if fail := s.quarantineGate(ctx, state); fail != nil {
 		return pruneErr, fail
 	}
 	// [LAW:no-silent-failure] Verify reconcile prerequisites BEFORE
@@ -829,7 +818,7 @@ func (s *Store) liftWorkingSetToRegistry(ctx context.Context) error {
 // [LAW:single-enforcer] The checkpoint and per-migration commit boundary live
 // here; goose is stepped only through upByOne (shared with the transient
 // reconcile lift), and no other code checkpoints/commits/quarantines for
-// migration purposes. The quarantine check lives in quarantineFastFail (called
+// migration purposes. The quarantine check lives in quarantineGate (called
 // before the snapshot guard in runMigration) so the gate fires without a
 // snapshot.
 // [LAW:dataflow-not-control-flow] The same sequence (checkpoint → goose loop
@@ -1081,41 +1070,72 @@ func (s *Store) recreateQuarantineTable(ctx context.Context, cols map[string]boo
 	return nil
 }
 
-// quarantineFastFail checks for blocking quarantine rows before the snapshot
-// guard fires. runMigration always calls ensureQuarantineTable immediately
-// before this, so migration_quarantine exists in the canonical shape by the
-// time this reads it.
+// quarantineGate refuses a write open with the quarantine in force: the
+// lowest quarantined version above the applied one.
+//
+// It first ensures the quarantine table exists — and self-heals it to the
+// canonical shape if a prior lit build left it in an older one — because
+// reading a stale-shaped table fails with a raw column-not-found SQL error.
+// The table is committed at once, so it survives a checkpoint reset should one
+// fire later in the open.
 //
 // For phaseAdopt, adoptPreGooseWorkspace will stamp baselineVersion before any
 // migration runs, so the effective applied version is baselineVersion — a
 // quarantine row for the baseline itself must not block after adoption confirms
 // the schema is present.
 //
-// [LAW:single-enforcer] This is the only call site for checkPendingQuarantine.
-func (s *Store) quarantineFastFail(ctx context.Context, state migrationState) error {
+// [LAW:single-enforcer] The one gate: migrate refuses on it, and Unquarantine
+// clears what it refuses on. [LAW:no-ambient-temporal-coupling] the read
+// cannot precede the ensure, because no caller can reach one without the
+// other. Quarantine table creation is decoupled from goose migrations so a
+// goose rollback cannot erase the table it depends on.
+func (s *Store) quarantineGate(ctx context.Context, state migrationState) *SchemaConvergenceError {
+	if fail := attempt(stepEnsureQuarantineTable, func() error { return s.ensureQuarantineTable(ctx) }); fail != nil {
+		return fail
+	}
+	if fail := attempt(stepCommitQuarantineTable, func() error {
+		return s.commitWorkingSet(ctx, "migrate: ensure migration_quarantine table")
+	}); fail != nil {
+		return fail
+	}
 	effectiveApplied := state.appliedVersion
 	if state.phase == phaseAdopt {
 		effectiveApplied = baselineVersion
 	}
-	return s.checkPendingQuarantine(ctx, effectiveApplied)
+	return attempt(stepCheckQuarantine, func() error { return s.checkPendingQuarantine(ctx, effectiveApplied) })
 }
 
-// checkPendingQuarantine returns a QuarantineBlockError if any migration
-// version greater than appliedVersion has a quarantine record.
+// checkPendingQuarantine returns a QuarantineBlockError for the lowest
+// quarantined version above appliedVersion, its Next the one after it, and
+// nil when none is quarantined.
 func (s *Store) checkPendingQuarantine(ctx context.Context, appliedVersion int64) error {
-	var version int64
-	var name, errorText string
-	err := s.db.QueryRowContext(ctx,
-		`SELECT version, name, error_text FROM migration_quarantine WHERE version > ? ORDER BY version LIMIT 1`,
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT version, name, error_text FROM migration_quarantine WHERE version > ? ORDER BY version LIMIT 2`,
 		appliedVersion,
-	).Scan(&version, &name, &errorText)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil
-	}
+	)
 	if err != nil {
 		return fmt.Errorf("check pending quarantine: %w", err)
 	}
-	return &QuarantineBlockError{Version: version, Name: name, ErrorText: errorText}
+	defer rows.Close()
+	var inForce []QuarantineBlockError
+	for rows.Next() {
+		var q QuarantineBlockError
+		if err := rows.Scan(&q.Version, &q.Name, &q.ErrorText); err != nil {
+			return fmt.Errorf("check pending quarantine: %w", err)
+		}
+		inForce = append(inForce, q)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("check pending quarantine: %w", err)
+	}
+	if len(inForce) == 0 {
+		return nil
+	}
+	blocked := inForce[0]
+	if len(inForce) > 1 {
+		blocked.Next = &QuarantinedMigration{Version: inForce[1].Version, Name: inForce[1].Name}
+	}
+	return &blocked
 }
 
 // recordQuarantine upserts the quarantine row for q's migration version.

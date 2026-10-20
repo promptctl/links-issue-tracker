@@ -391,6 +391,19 @@ the ones it had.
 | `downgrade.snapshot_prune_error` | Why older downgrade snapshots could not be removed after the reverse, or `null`. The downgrade prints the failure as a `warning:` line and still installs the `--to` release. |
 | `downgrade.installed_path` | The path the `--to` release was installed to. Absent when nothing was installed. |
 
+## What `lit unquarantine` records
+
+`lit unquarantine` clears the quarantine that every command opening the store
+is refused on. When no quarantine blocks the store, the command exits 6, reason
+`state_already_holds`, and its event carries none of these keys. When the clear's
+commit fails, the command fails and its event still carries them: the clear is in
+force.
+
+| Key | Meaning |
+| --- | --- |
+| `unquarantine.cleared_version` | The version of the migration whose quarantine was cleared. |
+| `unquarantine.next_version` | The version of the migration whose quarantine is still in force, which the next command that opens the store is refused on. Absent when none remains, so the cleared migration runs on the next open. |
+
 ## What `lit doctor` records
 
 Doctor sets its keys once the report it prints is read, after any `--fix`
