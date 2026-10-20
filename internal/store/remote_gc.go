@@ -32,7 +32,7 @@ import (
 // write to the remote safe is not the lock but the remote's own manifest,
 // which takes each of the GC's writes only over the view it read
 // (collectRemoteView). The scratch store goes however the GC ended.
-func (s *Store) collectRemote(ctx context.Context, remote, branch, head string) (gc storage.RemoteGC, err error) {
+func (s *Store) collectRemote(ctx context.Context, remote storage.RemoteName, branch string, head string) (gc storage.RemoteGC, err error) {
 	scratch, err := os.MkdirTemp("", "lit-remote-gc-")
 	if err != nil {
 		return gc, fmt.Errorf("create the remote GC's scratch store: %w", err)
@@ -271,13 +271,13 @@ func storeBytesOf(ctx context.Context, cs chunks.TableFileStore) (int64, error) 
 // reads through the mirror every push and fetch keeps. Like the provider, it
 // opens past dolt's in-process singleton cache: the caller owns the handle and
 // closes it, so no cached entry is left serving a closed store.
-func (s *Store) openRemoteDB(ctx context.Context, remote string) (*doltdb.DoltDB, error) {
+func (s *Store) openRemoteDB(ctx context.Context, remote storage.RemoteName) (*doltdb.DoltDB, error) {
 	var remoteURL string
 	var rawParams sql.NullString
-	if err := s.db.QueryRowContext(ctx, `SELECT url, params FROM dolt_remotes WHERE name = ?`, remote).Scan(&remoteURL, &rawParams); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT url, params FROM dolt_remotes WHERE name = ?`, remote.String()).Scan(&remoteURL, &rawParams); err != nil {
 		return nil, fmt.Errorf("read remote %q: %w", remote, err)
 	}
-	params, err := decodeRemoteParams(remote, rawParams)
+	params, err := decodeRemoteParams(remote.String(), rawParams)
 	if err != nil {
 		return nil, err
 	}

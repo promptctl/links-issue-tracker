@@ -116,13 +116,13 @@ func (s *Store) SyncResolveUnrelated(ctx context.Context, remote string, branch 
 	}
 	// A re-root this branch can follow is not an unrelated history, so it is
 	// followed before the take can discard either side of it.
-	if _, err := s.followRemoteReRoot(ctx, trimmedRemote.String(), trimmedBranch, storage.SyncEntryReconcile); err != nil {
+	if _, err := s.followRemoteReRoot(ctx, trimmedRemote, trimmedBranch, storage.SyncEntryReconcile); err != nil {
 		return storage.SyncReconcileResult{}, err
 	}
 
 	var result storage.SyncReconcileResult
 	err = s.withCommitLock(ctx, func(ctx context.Context) error {
-		plan, err := s.captureReconcilePlan(ctx, trimmedRemote.String(), trimmedBranch)
+		plan, err := s.captureReconcilePlan(ctx, trimmedRemote, trimmedBranch)
 		if err != nil {
 			return err
 		}
@@ -167,7 +167,7 @@ func (s *Store) SyncResolveUnrelated(ctx context.Context, remote string, branch 
 			}
 		}
 
-		return s.applyUnrelatedTake(ctx, &result, plan, trimmedRemote.String(), trimmedBranch, choice)
+		return s.applyUnrelatedTake(ctx, &result, plan, trimmedRemote, trimmedBranch, choice)
 	})
 	if err != nil {
 		return storage.SyncReconcileResult{}, err
@@ -181,7 +181,7 @@ func (s *Store) SyncResolveUnrelated(ctx context.Context, remote string, branch 
 // the data branch to the remote head; take-local replays the local export as a forward
 // commit on the remote head. [LAW:dataflow-not-control-flow] the choice is a value
 // selecting the domain operation, not a mode threaded through duplicated plumbing.
-func (s *Store) applyUnrelatedTake(ctx context.Context, result *storage.SyncReconcileResult, plan reconcilePlan, remote, branch string, choice storage.UnrelatedResolution) error {
+func (s *Store) applyUnrelatedTake(ctx context.Context, result *storage.SyncReconcileResult, plan reconcilePlan, remote storage.RemoteName, branch string, choice storage.UnrelatedResolution) error {
 	switch choice {
 	case storage.TakeRemote:
 		carry, err := s.purgesMissingAt(ctx, plan.remoteHead)

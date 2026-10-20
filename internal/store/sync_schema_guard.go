@@ -73,23 +73,19 @@ var (
 // remote as of the last fetch; a branch that never synced (no tracking ref) has no
 // remote head to fall behind, so the guard is a no-op there. [LAW:single-enforcer]
 // the push and the reconcile share this one detection of "remote schema ahead".
-func (s *Store) guardRemoteSchemaAhead(ctx context.Context, remote, branch string) error {
-	trimmedRemote, err := storage.ParseRemoteName(remote)
-	if err != nil {
-		return err
-	}
+func (s *Store) guardRemoteSchemaAhead(ctx context.Context, remote storage.RemoteName, branch string) error {
 	trimmedBranch, err := requireSyncArg("branch", branch)
 	if err != nil {
 		return err
 	}
-	head, synced, err := s.trackingHeadHash(ctx, trimmedRemote.String(), trimmedBranch)
+	head, synced, err := s.trackingHeadHash(ctx, remote, trimmedBranch)
 	if err != nil {
 		return err
 	}
 	if !synced {
 		return nil
 	}
-	return s.guardCommitSchemaAhead(ctx, trimmedRemote.String(), trimmedBranch, head)
+	return s.guardCommitSchemaAhead(ctx, remote, trimmedBranch, head)
 }
 
 // guardCommitSchemaAhead is the shared core: it reads the schema version recorded
@@ -99,7 +95,7 @@ func (s *Store) guardRemoteSchemaAhead(ctx context.Context, remote, branch strin
 // head. [LAW:no-ambient-temporal-coupling] the version is read from a fixed commit
 // hash, so the decision cannot shift under a concurrent fetch. remote and branch
 // are carried only to name the failure for the sync-failure contract.
-func (s *Store) guardCommitSchemaAhead(ctx context.Context, remote, branch, commitHash string) error {
+func (s *Store) guardCommitSchemaAhead(ctx context.Context, remote storage.RemoteName, branch string, commitHash string) error {
 	support, err := version.CarriedSchemaSupport()
 	if err != nil {
 		return err
@@ -114,7 +110,7 @@ func (s *Store) guardCommitSchemaAhead(ctx context.Context, remote, branch, comm
 		return nil
 	}
 	return &RemoteSchemaAheadError{
-		Remote:             remote,
+		Remote:             remote.String(),
 		Branch:             branch,
 		RemoteVersion:      remoteVersion,
 		BinarySupportedMax: support.Max,
@@ -125,7 +121,7 @@ func (s *Store) guardCommitSchemaAhead(ctx context.Context, remote, branch, comm
 // `remotes/<remote>/<branch>` points at, or synced=false when that ref does not
 // exist yet (the branch has never been fetched/pushed). It mirrors SyncFreshness's
 // ref-existence probe so the guard and the freshness read agree on "never synced".
-func (s *Store) trackingHeadHash(ctx context.Context, remote, branch string) (hash string, synced bool, err error) {
+func (s *Store) trackingHeadHash(ctx context.Context, remote storage.RemoteName, branch string) (hash string, synced bool, err error) {
 	trackingRef := fmt.Sprintf("remotes/%s/%s", remote, branch)
 	var count int64
 	if err := s.db.QueryRowContext(ctx,

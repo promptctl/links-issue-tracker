@@ -334,7 +334,7 @@ type reconcilePlan struct {
 // descend from (reconcileBase). It is the single reader of this state,
 // so the three-way reconcile and the take-one resolver share one definition of the
 // divergence rather than each re-deriving it. [LAW:single-enforcer]
-func (s *Store) captureReconcilePlan(ctx context.Context, remote, branch string) (reconcilePlan, error) {
+func (s *Store) captureReconcilePlan(ctx context.Context, remote storage.RemoteName, branch string) (reconcilePlan, error) {
 	var plan reconcilePlan
 	fresh, err := s.freshnessOverEveryWrite(ctx, remote, branch)
 	if err != nil {
@@ -385,17 +385,17 @@ func (s *Store) reconcileBase(ctx context.Context, remote storage.RemoteName, br
 // SyncPull calls reconcile directly, inside the commit lock it took after
 // following.
 func (s *Store) followThenReconcile(ctx context.Context, remote string, branch string, settle settleFn, unrelated unrelatedHandling) (storage.SyncReconcileResult, error) {
-	if _, err := s.followRemoteReRoot(ctx, remote, branch, storage.SyncEntryReconcile); err != nil {
-		return storage.SyncReconcileResult{}, err
-	}
-	return s.reconcile(ctx, remote, branch, settle, unrelated)
-}
-
-func (s *Store) reconcile(ctx context.Context, remote string, branch string, settle settleFn, unrelated unrelatedHandling) (storage.SyncReconcileResult, error) {
-	trimmedRemote, err := storage.ParseRemoteName(remote)
+	parsed, err := storage.ParseRemoteName(remote)
 	if err != nil {
 		return storage.SyncReconcileResult{}, err
 	}
+	if _, err := s.followRemoteReRoot(ctx, parsed, branch, storage.SyncEntryReconcile); err != nil {
+		return storage.SyncReconcileResult{}, err
+	}
+	return s.reconcile(ctx, parsed, branch, settle, unrelated)
+}
+
+func (s *Store) reconcile(ctx context.Context, remote storage.RemoteName, branch string, settle settleFn, unrelated unrelatedHandling) (storage.SyncReconcileResult, error) {
 	trimmedBranch, err := requireSyncArg("branch", branch)
 	if err != nil {
 		return storage.SyncReconcileResult{}, err
@@ -403,7 +403,7 @@ func (s *Store) reconcile(ctx context.Context, remote string, branch string, set
 
 	var result storage.SyncReconcileResult
 	err = s.withCommitLock(ctx, func(ctx context.Context) error {
-		plan, err := s.captureReconcilePlan(ctx, trimmedRemote.String(), trimmedBranch)
+		plan, err := s.captureReconcilePlan(ctx, remote, trimmedBranch)
 		if err != nil {
 			return err
 		}
@@ -444,12 +444,12 @@ func (s *Store) reconcile(ctx context.Context, remote string, branch string, set
 			// two-way union; combineFromAnchors is the only difference from the shared path.
 			// [LAW:dataflow-not-control-flow] the handling value selects the export producer,
 			// not a duplicated engine.
-			return s.replayUnderGuard(ctx, trimmedRemote.String(), trimmedBranch, plan.remoteHead, func(ctx context.Context, guard *snapshotGuard, scratch reconcileScratch) error {
+			return s.replayUnderGuard(ctx, remote, trimmedBranch, plan.remoteHead, func(ctx context.Context, guard *snapshotGuard, scratch reconcileScratch) error {
 				return s.combineFromAnchors(ctx, &result, settle, guard, plan.dataBranch, scratch, plan.localHead, plan.remoteHead)
 			})
 		}
 
-		return s.replayUnderGuard(ctx, trimmedRemote.String(), trimmedBranch, plan.remoteHead, func(ctx context.Context, guard *snapshotGuard, scratch reconcileScratch) error {
+		return s.replayUnderGuard(ctx, remote, trimmedBranch, plan.remoteHead, func(ctx context.Context, guard *snapshotGuard, scratch reconcileScratch) error {
 			return s.reconcileFromAnchors(ctx, &result, settle, guard, plan.dataBranch, scratch, plan.localHead, plan.remoteHead, baseCommit)
 		})
 	})
@@ -469,7 +469,7 @@ func (s *Store) reconcile(ctx context.Context, remote string, branch string, set
 // [LAW:single-enforcer] the mutation envelope is written once; the body is the only variable.
 // [LAW:no-ambient-temporal-coupling] the schema-ahead read reuses the captured remoteHead, so
 // no concurrent fetch can shift the decision between guard and replay.
-func (s *Store) replayUnderGuard(ctx context.Context, remote, branch, remoteHead string, body func(ctx context.Context, guard *snapshotGuard, scratchBranch reconcileScratch) error) error {
+func (s *Store) replayUnderGuard(ctx context.Context, remote storage.RemoteName, branch string, remoteHead string, body func(ctx context.Context, guard *snapshotGuard, scratchBranch reconcileScratch) error) error {
 	if err := s.guardCommitSchemaAhead(ctx, remote, branch, remoteHead); err != nil {
 		return err
 	}

@@ -365,7 +365,7 @@ func TestRemoteCacheLandingCopiesTheFetchedRemotesLastKnownRefs(t *testing.T) {
 	livePushed := commitOn(liveRepo, unfetched, "where a live push left upstream since")
 	commitOn(cloneRepo, orphan, "an orphan the clone copied before the live sweep")
 
-	plan, err := planRemoteCacheLanding(ctx, liveBase, cloneBase, "origin")
+	plan, err := planRemoteCacheLanding(ctx, liveBase, cloneBase, remoteName(t, "origin"))
 	if err != nil {
 		t.Fatalf("planRemoteCacheLanding() error = %v", err)
 	}

@@ -108,8 +108,10 @@ func freshnessSyncTarget(ctx context.Context, ws workspace.Info, gitRemotes []wo
 }
 
 // advertisedSyncBranchPath is where resolveSyncBranch records the branch a
-// remote advertised, one file per remote. The name is path-escaped because a
-// git remote name may contain '/'.
+// remote advertised, one file per remote. The remote comes through
+// resolveSyncRemote, whose parse leaves no "/" in it; the name is still
+// path-escaped because the parse admits characters the escape rewrites (";"
+// among them), and every earlier lit wrote the record under the escaped name.
 func advertisedSyncBranchPath(ws workspace.Info, remote string) string {
 	return filepath.Join(ws.StorageDir, "sync-branch."+url.PathEscape(remote))
 }

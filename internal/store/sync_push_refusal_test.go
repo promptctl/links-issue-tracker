@@ -37,7 +37,7 @@ func TestOnlyARefusedPushIsFollowedAndRetried(t *testing.T) {
 		{"context ended", context.Canceled, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			classified := classifyPushFailure("origin", tc.pushErr)
+			classified := classifyPushFailure(remoteName(t, "origin"), tc.pushErr)
 			var refusal pushRefusedError
 			if errors.As(classified, &refusal) != tc.wantRefused {
 				t.Fatalf("classifyPushFailure(%v) = %#v; refusal %v, want %v", tc.pushErr, classified, !tc.wantRefused, tc.wantRefused)
@@ -54,12 +54,12 @@ func TestOnlyARefusedPushIsFollowedAndRetried(t *testing.T) {
 	for _, pushErr := range []error{
 		nil,
 		lockTimeout,
-		classifyPushFailure("origin", RemoteUnreachableError{Attempts: 3, Symptom: "connection refused", Cause: noAncestor}),
-		classifyPushFailure("origin", errors.New("Error 1105: failed to get remote db; the remote: gone 'file:///r' could not be accessed; operation not valid on a file")),
-		classifyPushFailure("origin", errors.New("Error 1105: unknown push error; open /r/.git permission denied")),
+		classifyPushFailure(remoteName(t, "origin"), RemoteUnreachableError{Attempts: 3, Symptom: "connection refused", Cause: noAncestor}),
+		classifyPushFailure(remoteName(t, "origin"), errors.New("Error 1105: failed to get remote db; the remote: gone 'file:///r' could not be accessed; operation not valid on a file")),
+		classifyPushFailure(remoteName(t, "origin"), errors.New("Error 1105: unknown push error; open /r/.git permission denied")),
 	} {
 		pushed := storage.SyncPushResult{Head: "h"}
-		result, gotErr, _, followErr := (&Store{}).retryPushAfterFollow(live, "origin", "master", false, pushed, pushErr)
+		result, gotErr, _, followErr := (&Store{}).retryPushAfterFollow(live, remoteName(t, "origin"), "master", false, pushed, pushErr)
 		if result != pushed || gotErr != pushErr || followErr != nil {
 			t.Fatalf("retryPushAfterFollow(%v) = %+v, %v, %v; want the push's own outcome untouched", pushErr, result, gotErr, followErr)
 		}

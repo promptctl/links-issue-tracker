@@ -152,7 +152,7 @@ func LandFetchedHead(ctx context.Context, doltRootDir, cloneRootDir, remote, bra
 	// instance republished on close, and the plan going stale there costs
 	// nothing: the copy sets the ref to the clone's value, the same
 	// last-writer-wins rule every close follows.
-	cachePlan, cacheErr := planRemoteCacheLanding(ctx, remoteCacheBaseAt(root), remoteCacheBaseAt(cloneRoot), trimmedRemote.String())
+	cachePlan, cacheErr := planRemoteCacheLanding(ctx, remoteCacheBaseAt(root), remoteCacheBaseAt(cloneRoot), trimmedRemote)
 
 	releaseWorkspace, err := acquireLiveStoreHold(ctx, root)
 	if err != nil {
@@ -307,8 +307,8 @@ type mirrorCopy struct {
 // tell which of two states is later, since the blobstore severs its history
 // chain periodically. A ref both hold at the same value costs nothing under
 // the hold. A mirror that cannot be listed is reported and skipped.
-func planRemoteCacheLanding(ctx context.Context, liveBase, cloneBase, remote string) (remoteCacheLanding, error) {
-	fetched := lastKnownRefNamespace + remote + "/"
+func planRemoteCacheLanding(ctx context.Context, liveBase string, cloneBase string, remote storage.RemoteName) (remoteCacheLanding, error) {
+	fetched := lastKnownRefNamespace + remote.String() + "/"
 	keys, err := listRemoteCacheKeys(cloneBase)
 	if err != nil {
 		return remoteCacheLanding{}, err

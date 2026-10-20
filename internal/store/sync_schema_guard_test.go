@@ -81,7 +81,7 @@ func TestRemoteHeadSchemaReadsVersion(t *testing.T) {
 	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
 		t.Fatalf("SyncFetch: %v", err)
 	}
-	head, synced, err := syncB.trackingHeadHash(ctx, "origin", "master")
+	head, synced, err := syncB.trackingHeadHash(ctx, remoteName(t, "origin"), "master")
 	if err != nil || !synced {
 		t.Fatalf("trackingHeadHash: synced=%v err=%v", synced, err)
 	}
@@ -113,7 +113,7 @@ func TestGuardRemoteSchemaAheadDetects(t *testing.T) {
 	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
 		t.Fatalf("SyncFetch: %v", err)
 	}
-	err := syncB.guardRemoteSchemaAhead(ctx, "origin", "master")
+	err := syncB.guardRemoteSchemaAhead(ctx, remoteName(t, "origin"), "master")
 	var ahead *RemoteSchemaAheadError
 	if !errors.As(err, &ahead) {
 		t.Fatalf("guardRemoteSchemaAhead = %v, want *RemoteSchemaAheadError", err)
@@ -143,12 +143,12 @@ func TestGuardRemoteSchemaNotAheadAtOrBelowMax(t *testing.T) {
 	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
 		t.Fatalf("SyncFetch: %v", err)
 	}
-	if err := syncB.guardRemoteSchemaAhead(ctx, "origin", "master"); err != nil {
+	if err := syncB.guardRemoteSchemaAhead(ctx, remoteName(t, "origin"), "master"); err != nil {
 		t.Fatalf("guard at-or-below max = %v, want nil", err)
 	}
 	// A branch the remote has never seen has no tracking ref, so the guard cannot
 	// and must not block it.
-	if err := syncB.guardRemoteSchemaAhead(ctx, "origin", "no-such-branch"); err != nil {
+	if err := syncB.guardRemoteSchemaAhead(ctx, remoteName(t, "origin"), "no-such-branch"); err != nil {
 		t.Fatalf("guard never-synced branch = %v, want nil", err)
 	}
 }

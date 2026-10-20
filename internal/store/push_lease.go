@@ -24,11 +24,7 @@ import (
 // (Patch 9 in FORKS.md). The verdict is the last attempt's, so a peer that
 // built on a landed attempt before the retry reached the remote makes it
 // stale (see storage.LeaseStale).
-func (s *Store) pushLeasedWithinLock(ctx context.Context, remote, source, branch, expected string) (storage.LeaseOutcome, error) {
-	trimmedRemote, err := storage.ParseRemoteName(remote)
-	if err != nil {
-		return "", err
-	}
+func (s *Store) pushLeasedWithinLock(ctx context.Context, remote storage.RemoteName, source string, branch string, expected string) (storage.LeaseOutcome, error) {
 	trimmedSource, err := requireSyncArg("source", source)
 	if err != nil {
 		return "", err
@@ -39,16 +35,16 @@ func (s *Store) pushLeasedWithinLock(ctx context.Context, remote, source, branch
 	}
 	trimmedExpected := strings.TrimSpace(expected)
 	if !isDoltCommitHash(trimmedExpected) {
-		return "", fmt.Errorf("leased push to %s/%s: %q is not a Dolt commit hash", trimmedRemote, trimmedBranch, expected)
+		return "", fmt.Errorf("leased push to %s/%s: %q is not a Dolt commit hash", remote, trimmedBranch, expected)
 	}
 	// [LAW:single-enforcer] the same schema-ahead refusal every push runs,
 	// on the one commit a held lease can replace: expected. The tracking ref
 	// may lag it, and a lease over a schema-ahead head would regress the
 	// shared remote to this binary's schema.
-	if err := s.guardCommitSchemaAhead(ctx, trimmedRemote.String(), trimmedBranch, trimmedExpected); err != nil {
+	if err := s.guardCommitSchemaAhead(ctx, remote, trimmedBranch, trimmedExpected); err != nil {
 		return "", err
 	}
-	args := []string{"--force-with-lease=" + trimmedBranch + ":" + trimmedExpected, trimmedRemote.String(), trimmedSource + ":" + trimmedBranch}
+	args := []string{"--force-with-lease=" + trimmedBranch + ":" + trimmedExpected, remote.String(), trimmedSource + ":" + trimmedBranch}
 	query := buildProcedureCall("DOLT_PUSH", len(args))
 	pushErr := runRemoteIO(ctx, func(ctx context.Context) error {
 		var status int64
@@ -63,7 +59,7 @@ func (s *Store) pushLeasedWithinLock(ctx context.Context, remote, source, branch
 	case pushErr != nil && strings.Contains(pushErr.Error(), datas.ErrStaleInfo.Error()):
 		return storage.LeaseStale, nil
 	case pushErr != nil:
-		return "", classifyPushFailure(trimmedRemote.String(), pushErr)
+		return "", classifyPushFailure(remote, pushErr)
 	default:
 		return storage.LeaseHeld, nil
 	}

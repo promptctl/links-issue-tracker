@@ -52,7 +52,7 @@ func TestLeasedPushLandsOnlyOverTheHeadItNames(t *testing.T) {
 		var pushed storage.LeaseOutcome
 		err := st.runSyncMutation(ctx, func(ctx context.Context) error {
 			var err error
-			pushed, err = st.pushLeasedWithinLock(ctx, "origin", "master", "master", expected)
+			pushed, err = st.pushLeasedWithinLock(ctx, remoteName(t, "origin"), "master", "master", expected)
 			return err
 		})
 		if err != nil {
@@ -105,7 +105,7 @@ func TestLeasedPushLandsOnlyOverTheHeadItNames(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = st.runSyncMutation(ctx, func(ctx context.Context) error {
-		unreached, err := st.pushLeasedWithinLock(ctx, "gone", "master", "master", bravoHead)
+		unreached, err := st.pushLeasedWithinLock(ctx, remoteName(t, "gone"), "master", "master", bravoHead)
 		if err == nil || errors.As(err, new(pushRefusedError)) || errors.As(err, new(RemoteUnreachableError)) || !strings.Contains(err.Error(), actions.ErrFailedToGetRemoteDb.Error()) {
 			t.Errorf("leased push to a remote that cannot be opened = %q, %v; want Dolt's %q, neither a refusal nor unreachable", unreached, err, actions.ErrFailedToGetRemoteDb)
 		}
@@ -166,7 +166,7 @@ func TestLeasedPushRefusesToReplaceASchemaAheadHead(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = st.runSyncMutation(ctx, func(ctx context.Context) error {
-		_, err := st.pushLeasedWithinLock(ctx, "origin", "master", "master", ahead)
+		_, err := st.pushLeasedWithinLock(ctx, remoteName(t, "origin"), "master", "master", ahead)
 		return err
 	})
 	if !errors.As(err, new(*RemoteSchemaAheadError)) {

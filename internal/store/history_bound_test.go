@@ -243,7 +243,7 @@ func boundAt(t *testing.T, ctx context.Context, alpha, head string, keep uint64)
 	st := openSyncOrFatal(t, ctx, alpha)
 	defer func() { _ = st.Close() }()
 	b := storage.HistoryBound{Remote: "origin", Branch: "master", Head: head, Window: windowOf(t, keep+1, keep)}
-	b.Err = st.publishBound(ctx, &b)
+	b.Err = st.publishBound(ctx, remoteName(t, "origin"), &b)
 	return b
 }
 
@@ -315,7 +315,7 @@ func TestAStaleLeaseOverTheLandedReRootStillFollowsIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reRootScratch error = %v", err)
 	}
-	if lease, err := st.publishReRoot(ctx, "origin", "master", seen); err != nil || lease != storage.LeaseHeld {
+	if lease, err := st.publishReRoot(ctx, remoteName(t, "origin"), "master", seen); err != nil || lease != storage.LeaseHeld {
 		t.Fatalf("the landed attempt = %q, %v; want held", lease, err)
 	}
 	if err := st.Close(); err != nil {

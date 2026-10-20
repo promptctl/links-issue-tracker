@@ -649,7 +649,7 @@ func TestFollowAndBoundRefuseUnderTheCommitLockOnEveryRun(t *testing.T) {
 	st := openSyncOrFatal(t, ctx, migratedDoltDir(t))
 	defer func() { _ = st.Close() }()
 	err := st.withCommitLock(ctx, func(ctx context.Context) error {
-		_, err := st.followRemoteReRoot(ctx, "origin", "master", storage.SyncEntryPull)
+		_, err := st.followRemoteReRoot(ctx, remoteName(t, "origin"), "master", storage.SyncEntryPull)
 		return err
 	})
 	if err == nil || !strings.Contains(err.Error(), "commit lock is held") {

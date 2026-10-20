@@ -54,19 +54,15 @@ import (
 // the commit lock, whether or not this run would follow: LOCK comes before
 // the commit lock (doc.go).
 // [LAW:no-ambient-temporal-coupling]
-func (s *Store) followRemoteReRoot(ctx context.Context, remote, branch string, entry storage.SyncEntry) (storage.FollowedReRoot, error) {
-	trimmedRemote, err := storage.ParseRemoteName(remote)
-	if err != nil {
-		return storage.FollowedReRoot{}, err
-	}
+func (s *Store) followRemoteReRoot(ctx context.Context, remote storage.RemoteName, branch string, entry storage.SyncEntry) (storage.FollowedReRoot, error) {
 	trimmedBranch, err := requireSyncArg("branch", branch)
 	if err != nil {
 		return storage.FollowedReRoot{}, err
 	}
 	if err := refuseLOCKUnderCommitLock(ctx); err != nil {
-		return storage.FollowedReRoot{}, wrapFollowErr(trimmedRemote.String(), trimmedBranch, err)
+		return storage.FollowedReRoot{}, wrapFollowErr(remote, trimmedBranch, err)
 	}
-	local, unrelated, err := s.unrelatedToRemote(ctx, trimmedRemote.String(), trimmedBranch)
+	local, unrelated, err := s.unrelatedToRemote(ctx, remote, trimmedBranch)
 	if err != nil {
 		return storage.FollowedReRoot{}, err
 	}
@@ -80,26 +76,26 @@ func (s *Store) followRemoteReRoot(ctx context.Context, remote, branch string, e
 	var moved bool
 	err = s.withEngineClosed(ctx, func(holdCtx context.Context, ddb *doltdb.DoltDB) error {
 		var err error
-		followed.ReRooted, moved, err = followReRoot(holdCtx, ddb, ref.NewBranchRef(local), ref.NewRemoteRef(trimmedRemote.String(), trimmedBranch))
+		followed.ReRooted, moved, err = followReRoot(holdCtx, ddb, ref.NewBranchRef(local), ref.NewRemoteRef(remote.String(), trimmedBranch))
 		return err
 	})
 	if !moved {
-		return storage.FollowedReRoot{}, wrapFollowErr(trimmedRemote.String(), trimmedBranch, err)
+		return storage.FollowedReRoot{}, wrapFollowErr(remote, trimmedBranch, err)
 	}
 	// A branch that moved stands even when something after the move failed,
 	// as ReRoot's own result does, so the follow is recorded either way; only
 	// a follow that finished is across the cut and collects below it.
 	// [LAW:no-silent-failure]
 	if err == nil {
-		followed.Collection = s.collectBelowTheCut(ctx, trimmedRemote)
+		followed.Collection = s.collectBelowTheCut(ctx, remote)
 	}
 	s.followed = append(s.followed, followed)
-	return followed, wrapFollowErr(trimmedRemote.String(), trimmedBranch, err)
+	return followed, wrapFollowErr(remote, trimmedBranch, err)
 }
 
 // wrapFollowErr is a follow's error as it reaches the entry point, naming the
 // remote branch it followed; nil stays nil.
-func wrapFollowErr(remote, branch string, err error) error {
+func wrapFollowErr(remote storage.RemoteName, branch string, err error) error {
 	if err == nil {
 		return nil
 	}
@@ -109,7 +105,11 @@ func wrapFollowErr(remote, branch string, err error) error {
 // SyncFollowReRoot is followRemoteReRoot for a caller that fetched and
 // settles nothing. See the storage.Syncer contract.
 func (s *Store) SyncFollowReRoot(ctx context.Context, remote, branch string, entry storage.SyncEntry) error {
-	_, err := s.followRemoteReRoot(ctx, remote, branch, entry)
+	parsed, err := storage.ParseRemoteName(remote)
+	if err != nil {
+		return err
+	}
+	_, err = s.followRemoteReRoot(ctx, parsed, branch, entry)
 	return err
 }
 
@@ -122,7 +122,7 @@ func (s *Store) FollowedReRoots() []storage.FollowedReRoot {
 // unrelatedToRemote reads the active branch and whether it shares no commit
 // with remotes/<remote>/<branch>. A ref never fetched relates to nothing and
 // is not unrelated either: there is nothing on the other side.
-func (s *Store) unrelatedToRemote(ctx context.Context, remote, branch string) (local string, unrelated bool, err error) {
+func (s *Store) unrelatedToRemote(ctx context.Context, remote storage.RemoteName, branch string) (local string, unrelated bool, err error) {
 	trackingRef := fmt.Sprintf("remotes/%s/%s", remote, branch)
 	tracked, err := trackingRefExists(ctx, s.db, trackingRef)
 	if err != nil || !tracked {
