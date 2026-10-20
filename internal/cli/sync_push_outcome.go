@@ -171,7 +171,7 @@ func pushFailureDecision(pushErr error, receiveMerges bool) (decision, reason st
 	if receiveMerges {
 		return pushDecisionDiverged, pushErr.Error()
 	}
-	return pushDecisionError, pushErr.Error() + "; no automatic receive runs here to merge the peer's commits: run `lit sync pull`"
+	return pushDecisionError, pushErr.Error() + "; no automatic receive runs here to merge the peer's commits: run 'lit sync pull'"
 }
 
 // completePushAttempt is the one completion seam for how a push attempt ended
