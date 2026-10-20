@@ -188,7 +188,7 @@ func syncRemoteLsLeaf() syncLeaf {
 
 func syncFetchLeaf() syncLeaf {
 	fs := newCobraFlagSet("sync fetch")
-	remote := fs.String("remote", "origin", "Remote name")
+	remote := fs.String("remote", "", "Remote name (defaults to upstream remote, then single configured remote)")
 	prune := fs.Bool("prune", false, "Pass --prune to dolt fetch")
 	verbose := fs.Bool("verbose", false, "Include detailed remote output")
 	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, scope syncScope, positional []string) error {
@@ -203,7 +203,20 @@ func syncFetchLeaf() syncLeaf {
 			recordSyncCommandTrace(ws, "lit sync fetch", "error", err, nil)
 			return err
 		}
-		remoteName := strings.TrimSpace(*remote)
+		// [LAW:one-source-of-truth] the remote every sync verb selects.
+		remoteName, err := resolveSyncRemote(*remote, workspace.UpstreamRemote(ctx, ws.RootDir), syncState.gitRemotes)
+		if err != nil {
+			recordSyncCommandTrace(ws, "lit sync fetch", "error", err, nil)
+			return err
+		}
+		if remoteName == "" {
+			recordSyncCommandTrace(ws, "lit sync fetch", string(syncTargetNoRemote), nil, nil)
+			if !*verbose {
+				return nil
+			}
+			_, err := fmt.Fprintln(stdout, "skipped sync fetch: no eligible git remote")
+			return err
+		}
 		err = fetchAndFollow(ctx, session, ws, syncState.gitRemotes, remoteName, *prune)
 		recordSyncCommandTrace(ws, "lit sync fetch", "fetched", err, map[string]string{"remote": remoteName})
 		if err != nil {
@@ -234,7 +247,9 @@ func fetchAndFollow(ctx context.Context, session syncSession, ws workspace.Info,
 		fmt.Fprintf(os.Stderr, "lit: fetch-success marker not written: %v\n", err)
 	}
 	syncRemote, branch, err := freshnessSyncTarget(ctx, ws, gitRemotes)
-	if notKnown := (syncBranchNotKnownError{}); errors.As(err, &notKnown) || (err == nil && syncRemote == "") {
+	// Only a branch nothing here names skips the follow; a record that would
+	// name it but cannot be read is the error it wraps, and fails the fetch.
+	if err == (syncBranchNotKnownError{remote: syncRemote}) || (err == nil && syncRemote == "") {
 		return nil
 	}
 	if err != nil {
