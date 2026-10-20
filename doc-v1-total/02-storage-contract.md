@@ -38,7 +38,7 @@ Contract points a reimplementation must not lose:
 
 Four error types (`internal/storage/errors.go`, `capabilities.go`, `internal/storage/plan_review.go`, `internal/model/validation.go`):
 
-- `NotFoundError{Entity, ID}` — renders `<entity> "<id>" not found`; matched with `errors.As`; entity strings pinned by conformance: `issue`, `comment`, `label`, `relation`, `parent relation`.
+- `NotFoundError{Entity, ID}` — renders `<entity> "<id>" not found`; matched with `errors.As`; entity strings pinned by conformance: `issue`, `comment`, `label`, `relation`.
 - `model.ValidationError{Message}` — a domain-constraint violation; message verbatim. It is defined in `internal/model` beside the rules, so a rule raises it where it is written; conformance pins a blank title and a refused topic to it.
 - `UnsupportedError{Capability, Engine}` — renders `<engine> engine does not offer the <capability> capability`.
 - `VersionNotFoundError{IssueID, Field, Number, Held}` (`plan_review.go`) — a reference to version `Number` of a long text field past the `Held` versions the issue's record holds; renders `<id> has no <field>@<n>: its record holds <count> of <field>, numbered from 1; ` followed by the `lit show <id> --field <field>` command and `prints the current text`, `<count>` spelled by `DescribeVersions` (`1 version`, `<n> versions`). It is not `NotFoundError`, whose remediation is to check the issue id: here the id resolved.

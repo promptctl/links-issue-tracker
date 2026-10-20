@@ -415,9 +415,13 @@ Rule for the whole struct: **every slice is an OR within itself and an AND again
 
 #### `BulkApplyResult` (`internal/storage/bulk.go`)
 - `Created []IDMapping` — each create document's own reference (its `LocalID` if set, otherwise its new real ID) paired with the real ID it was created under, in creation order, so every create is nameable even when the file gave no `LocalID` (`internal/storage/bulk.go`).
+- `Reparented []string` — the update documents' issues whose parent the file changed, in file order (`internal/storage/bulk.go`).
+- `ParentHeld []string` — the update documents' issues whose parent already was the one the file states, in file order (`internal/storage/bulk.go`).
+- `ReparentsUndone []string` — the issues a refusal put back under the parents they held before the file; empty on a landed file (`internal/storage/bulk.go`).
 - `Updated []string` — real IDs of every updated issue, in the order applied (`internal/storage/bulk.go`).
 - `Ranked RankSetResult` — the `RankSet` the file's `rank: top` documents made, in file order; no resolutions when the file states no rank (`internal/storage/bulk.go`).
-- `Kept() string` — what a batch refused at an update leaves written: `"kept %d updates [%s] and the order of %d issues [%s]"` over `Updated` and the `RankedID`s of `Ranked` that are not among `Created` (the rollback deletes those), comma-joined, zero counts included; both engines put it in the update-failure error (`internal/storage/bulk.go`).
+- `AfterRollback(leaked []string) BulkApplyResult` — what stays written once a refused batch's creates are rolled back, `leaked` being the creates the rollback could not delete: `Created` keeps only those, and `Ranked` only the `RankedID`s that are not a create the rollback deleted; every other field is kept as is. Both engines return it beside a refusal (`internal/storage/bulk.go`).
+- `Kept(leaked []string) string` — `AfterRollback(leaked)` in words: `"kept %d reparents [%s], %d updates [%s] and the order of %d issues [%s]"`, comma-joined, zero counts included; both engines put it in every refusal's error, after the reparent step's undo (`internal/storage/bulk.go`).
 
 #### `ImportTreeSpec` (`internal/storage/bulk.go`)
 JSON tags: `local_id`, `title`, `description,omitempty`, `prompt,omitempty`, `plan,omitempty`, `type`, `topic`, `priority`, `assignee,omitempty`, `labels,omitempty`, `parent,omitempty`, `blocked_by,omitempty`. `LocalID` is opaque — used inside the spec to wire `Parent` and `BlockedBy`, replaced with the generated lit issue ID at import time (`internal/storage/bulk.go`).
@@ -955,7 +959,7 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 
 **`ClearParent`**
 - `mustRecord(childID)` → `NotFoundError`.
-- Drops every `RelParentChild` edge with `SrcID == childID`; **removed == 0** → `storage.NotFoundError{Entity: "parent relation", ID: childID}`.
+- `clearParent`: `mustRecord(childID)`, `storage.RejectDetachingALeaf`, then `detachParents` drops every `RelParentChild` edge with `SrcID == childID`; **removed == 0** → `storage.RelationAbsentError{SrcID: childID, Type: model.RelParentChild}` (`Satisfied()` true).
 
 **`incidentRelations`** — every edge touching the id in either direction, in write order.
 
@@ -1012,11 +1016,13 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 ### 2.13 Bulk / import (`internal/storage/memory/bulk.go`)
 
 **`BulkApply(ctx, prefix, actor, specs)`**
-1. `parentTypes` maps each id among `storage.BulkParentRefs(specs)` that names an issue in `e.issues` to its type; `file, err := storage.ParseBulkFile(specs, parentTypes)` (`internal/storage/import_validate.go`, shared with the Dolt engine) — the entire file is gated before any document is applied, and the gate returns it parsed: `file.Creates` in write order, `file.Updates` in file order. Its error is returned as is. The engine parses nothing itself.
-2. Per create in `file.Creates`: `e.createIssue(create.Input(batch.resolve(create.Parent), prefix, actor))`. On failure → `e.compensate(batch, actor, fmt.Errorf("bulk: create doc %d: %w", create.Index, err))`. Records into the batch, and into `result.Created` under `create.LocalID` if set, else under the new real id.
-3. **Second pass, over `file.Creates` in write order**: wires every `BlockedBy` edge as `blocked-by` with `src = the document's own issue`, `dst = batch.resolve(dep)`. On failure → `e.compensate(batch, actor, fmt.Errorf("bulk: blocked_by doc %d -> %q: %w", create.Index, dep, err))`.
-4. **The ordering**, when `file.RankedIDs(batch.createdIDs)` is non-empty: one `e.rankSet(ranked)` — `RankSet` under the lock `BulkApply` already holds — into `result.Ranked`. On failure → `e.compensate(batch, actor, fmt.Errorf("bulk: rank: %w", err))`.
-5. **Updates last**, per `file.Updates` in file order: `e.apply(update.ID, storage.Change{Actor: actor, Fields: update.Patch})`. On failure → `e.compensate(batch, actor, fmt.Errorf("bulk: update %q: %w; %s", update.ID, err, result.Kept()))`. Appends `issue.ID` to `result.Updated`. A failing create, edge, or ordering therefore leaves no update applied.
+1. `existingTypes` maps each id among `storage.BulkExistingRefs(specs)` that names an issue in `e.issues` to its type; `file, err := storage.ParseBulkFile(specs, existingTypes)` (`internal/storage/import_validate.go`, shared with the Dolt engine) — the entire file is gated before any document is applied, and the gate returns it parsed: `file.Creates` in write order, `file.Reparents` and `file.Updates` in file order. Its error is returned as is. The engine parses nothing itself.
+2. `refuse(err)` is every failure from here on: it runs `reparents.Undo(parentWriter{e, actor})` (`internal/storage/bulk.go`), which writes each moved issue's parent edges back as `Parents` read them — an undo error is joined to the refusal, otherwise `result.Reparented` moves to `result.ReparentsUndone` — then `leaked := e.rollbackCreated(batch, actor)`, and returns `result.AfterRollback(leaked)` (`internal/storage/bulk.go`) beside `fmt.Errorf("%w; %s (rollback leaked %d: %s)", err, result.Kept(leaked), len(leaked), strings.Join(leaked, ","))`, so a refused file reports what stays written in its result and in its error text.
+3. Per create in `file.Creates`: `e.createIssue(create.Input(batch.resolve(create.Parent), prefix, actor))`. On failure → `refuse(fmt.Errorf("bulk: create doc %d: %w", create.Index, err))`. Records into the batch; `result.Created` is the batch's mappings, under `create.LocalID` if set, else under the new real id.
+4. **The reparents**, `e.reparent(file, batch.resolve, actor)` into the `storage.ReparentStep` `reparents`, whose `Moved` and `Held` become `result.Reparented` and `result.ParentHeld`: it copies `e.relations`, runs `file.WriteReparents(resolve, parentWriter{e, actor})` (`internal/storage/bulk.go`), and restores the copy on any error. `WriteReparents` asks `Holds` (`relationHeld`) of every reparent naming a parent, then, for each reparent not held, reads `Parents` — the edges `ReparentStep.Undo` writes back — and runs `Clear` (`clearParent`) for each `parent: ""` — `storage.RelationAbsentError` marks it held — and `Detach` (`detachParents`) for each move not held, then `Attach` (`addRelation`, `RelParentChild`) for each move not held; an error → `"bulk: parent of %q -> %q: %w"`. On failure → `refuse(err)`.
+5. **The edges, after the reparents, over `file.Creates` in write order**: wires every `BlockedBy` edge as `blocked-by` with `src = the document's own issue`, `dst = batch.resolve(dep)`, so each is judged on the hierarchy the file ends with. On failure → `refuse(fmt.Errorf("bulk: blocked_by doc %d -> %q: %w", create.Index, dep, err))`.
+6. **The ordering**, when `file.RankedIDs(batch.createdIDs)` is non-empty: one `e.rankSet(ranked)` — `RankSet` under the lock `BulkApply` already holds — into `result.Ranked`. On failure → `refuse(fmt.Errorf("bulk: rank: %w", err))`.
+7. **Updates last**, per `file.Updates` in file order: `e.apply(update.ID, storage.Change{Actor: actor, Fields: update.Patch})`. On failure → `refuse(fmt.Errorf("bulk: update %q: %w", update.ID, err))`. Appends `issue.ID` to `result.Updated`. A failing create, reparent, edge, or ordering therefore leaves no update applied.
 
 **`ImportTree(ctx, prefix, actor, specs)`**
 1. `creates, err := storage.ParseImportTreeFile(specs)` (`internal/storage/import_validate.go`, shared with the Dolt engine) — the parsed creates in write order; its error is returned as is.
@@ -1027,9 +1033,11 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 
 **`wireDependency(dependent, dependency, actor)`** — `addRelation` with `Type: model.RelBlockedBy`, `CreatedBy: actor`.
 
-**`compensate(batch, cause)`**
-- For each created id, applies `storage.Change{Action: model.Delete{}, Actor: actor, Reason: "import rollback"}`; ids whose delete failed are collected as "leaked".
-- Returns `fmt.Errorf("%w (rollback leaked %d: %s)", cause, len(leaked), strings.Join(leaked, ","))` — the original failure travels unchanged; the rollback only adds an account of what is left behind.
+**`rollbackCreated(batch, actor) []string`**
+- For each created id, applies `storage.Change{Action: model.Delete{}, Actor: actor, Reason: "import rollback"}`; returns the ids whose delete failed, the "leaked" ones.
+
+**`compensate(batch, actor, cause)`**
+- `rollbackCreated(batch, actor)`, then returns `fmt.Errorf("%w (rollback leaked %d: %s)", cause, len(leaked), strings.Join(leaked, ","))` — the original failure travels unchanged; the rollback only adds an account of what is left behind.
 - **Compensation is a soft delete, not a removal**: the issues remain in the store with `Deleted` retention (hence invisible to a default listing and to `ListTopics`, but counted by `LocalIssueCount`).
 - **Updates already applied are not reverted.**
 
@@ -1045,7 +1053,7 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 - `IssueType` and `Priority` are parsed by `model.ParseIssueType` / `model.ParsePriority`; a parse error → `fmt.Errorf("has invalid %s %#v: %w", key, raw, err)` with `key` `type` / `priority`.
 - The engine applies `storage.Change{Actor: actor, Fields: patch}` — **an update document never carries an Action**.
 
-**`storage.ParseBulkFile(specs, existingParentTypes)`** / **`storage.ParseImportTreeFile(specs)`** (`internal/storage/import_validate.go`) — run `parseBulkSpecs` / `parseImportTreeSpecs`, then `storage.writeOrder(format, specs, refsOf)` (`internal/storage/import_validate.go`) with `format` `"bulk"` / `"import"` and each spec's references as `Parent` followed by `BlockedBy`. Every refusal either returns is a `model.ValidationError`; the `%w` rows below wrap the containment helpers' own `ValidationError`.
+**`storage.ParseBulkFile(specs, existingTypes)`** / **`storage.ParseImportTreeFile(specs)`** (`internal/storage/import_validate.go`) — run `parseBulkSpecs` / `parseImportTreeSpecs`, then `storage.writeOrder(format, specs, refsOf)` (`internal/storage/import_validate.go`) with `format` `"bulk"` / `"import"` and each spec's references as `Parent` followed by `BlockedBy`. In a bulk file a `parent` or `blocked_by` resolves to a document by its `local_id`, then by an update document's `id`, so a create blocked by an issue the file reparents is judged where the file puts it. `ParseBulkFile` then refuses a `parent: ""` on an update whose stored type is not a container, by `storage.RejectDetachingALeaf` → `"bulk: parent of %q -> %q: %w"`, before any write. Every refusal either returns is a `model.ValidationError`; the `%w` rows below wrap the containment helpers' own `ValidationError`.
 
 `storage.writeOrder(format, specs, refsOf)` (`internal/storage/import_validate.go`) — DFS topological sort over intra-file references only. States `unvisited`/`visiting`/`done`; re-entering `visiting` → `model.ValidationError{Message: fmt.Sprintf("%s: cycle detected involving %q", format, localIDs[i])}`. A reference matching no local_id is not an edge.
 
@@ -1069,11 +1077,10 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 **`parseBulkUpdateDoc`** — refuses the fields an update document has no business setting, each somebody else's verb, and otherwise returns the update's patch:
 - `LocalID != ""` → `"bulk: doc %d (id %q) sets local_id; local_id only applies to new tickets"`.
 - `Topic != nil` → `"... sets topic; topic is immutable and update cannot change it"`.
-- `Parent != ""` → `"... sets parent; reparent with \`lit parent set\` instead"`.
 - `len(BlockedBy) > 0` → `"... sets blocked_by; wire dependencies with \`lit dep add\` instead"`.
 - `Title` set and trims to `""` → `"bulk: doc %d (id %q) sets an empty title"`.
 - A `bulkUpdatePatch` error → `fmt.Errorf("bulk: doc %d (id %q): %w", i, spec.ID, err)`, so an invalid type reads `bulk: doc 0 (id "x"): has invalid type "ghost": issue type must be …`.
-- `bulkUpdatePatch(spec).IsEmpty()` and no `rank` → `"bulk: doc %d (id %q) has no fields to update and no rank"`; a document stating only `rank: top` joins the file's ordering and writes no `BulkUpdate`, and one that also states a `reason` → `"bulk: doc %d (id %q) sets reason but changes no field; reason annotates a field change, and rank writes none"`. A `rank` other than `top` → `"bulk: doc %d: rank %q is not a placement; …"`. Updatable fields are exactly the rows of `issueFields`: `Title`, `Description`, `Prompt`, `Plan`, `IssueType`, `Priority`, `Assignee`, `Labels`, `Lane`.
+- A stated `Parent` (non-nil) becomes a `storage.FileReparent{ID, Parent}` in `file.Reparents`; `""` clears. `bulkUpdatePatch(spec).IsEmpty()` with no `parent` and no `rank` → `"bulk: doc %d (id %q) has no fields to update, no parent and no rank"`; a document stating only `parent` and/or `rank: top` writes no `BulkUpdate`, and one that also states a `reason` → `"bulk: doc %d (id %q) sets reason but changes no field; reason annotates a field change, and parent and rank write none"`. A `rank` other than `top` → `"bulk: doc %d: rank %q is not a placement; …"`. Updatable fields are exactly the rows of `issueFields`: `Title`, `Description`, `Prompt`, `Plan`, `IssueType`, `Priority`, `Assignee`, `Labels`, `Lane`.
 
 **`storage.parseImportTreeSpecs`** (`internal/storage/import_validate.go`) — returns each spec parsed, its type and priority the ones the create writes
 - Empty → `"import: no issues in input"`.
@@ -1476,7 +1483,7 @@ Stated in `internal/storage/memory/doc.go`:
 - `SetParent` wires a child under an epic; `mustChildren` (a `ListIssues` with `ParentIDs: [parent]`, `IncludeArchived` and `IncludeDeleted`) shows it.
 - **Reparenting replaces rather than adds**: after a second `SetParent`, the old epic has no children and the new one has the child.
 - `ClearParent` detaches; the parent then has no children.
-- `ClearParent` on a parentless child → `NotFoundError{Entity: "parent relation"}`.
+- `ClearParent` on a parentless child → `storage.RelationAbsentError{SrcID: child, Type: RelParentChild}`.
 - `SetParent` to itself is an error.
 - `SetParent` under a missing parent → `NotFoundError{Entity: "issue"}`.
 
@@ -1493,7 +1500,7 @@ Stated in `internal/storage/memory/doc.go`:
 - `ClearParent(leaf)` and `RemoveRelation(leaf, epic, RelParentChild)` each return a `model.ValidationError` whose message contains `"lit parent set"`.
 - After those refusals, the epic's children are still exactly leaf, nested.
 - `RemoveRelation(nested, epic, RelParentChild)` succeeds, and the epic's children become exactly leaf.
-- `ClearParent(nested)` then returns `NotFoundError{Entity: "parent relation"}`.
+- `ClearParent(nested)` then returns `storage.RelationAbsentError`.
 - `RemoveRelation(leaf, nested, RelParentChild)` returns `NotFoundError{Entity: "relation"}`.
 
 **`an_import_file_that_breaks_a_rule_is_refused_whole`**
@@ -1577,7 +1584,7 @@ Stated in `internal/storage/memory/doc.go`:
 - `assertPrecedes` pins a relative position without pinning the whole listing.
 - `assertStrings` compares by content and order joined with `"|"`; **a nil result and an empty one compare equal on purpose** — an engine spelling "nothing here" as nil rather than a zero-length slice has not behaved differently.
 - `assertNotFound` requires `errors.As` to a `storage.NotFoundError` **and** an exact `Entity` match — callers dispatch on the type, and the entity tells a user WHICH thing was missing when an operation touches several.
-- Entity strings the suite pins: `"issue"`, `"comment"`, `"label"`, `"relation"`, `"parent relation"`.
+- Entity strings the suite pins: `"issue"`, `"comment"`, `"label"`, `"relation"`.
 - Every helper fails the test rather than returning an error, so a case body reads as the behavioral statement it is.
 
 ### 3.5 What the conformance suite does NOT require

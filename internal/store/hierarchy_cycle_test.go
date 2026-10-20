@@ -664,6 +664,32 @@ func TestRemovingOneOfTwoParentEdgesKeepsALeafInside(t *testing.T) {
 // "No such issue" and "that issue has no parent" send the operator to
 // different places, and a typo'd id reported as a missing edge is the opposite
 // answer: it says the hierarchy is fine when the id is not.
+// A bulk file's `parent: ""` is the same repair as 'lit parent clear', so it
+// has to work on the same state: a hierarchy holding a loop. The bulk gate
+// reads the types of the issues the file places, and a read that hydrated
+// them would be refused by the loop it was asked to break.
+func TestBulkParentClearBreaksAStoredCycle(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	chain := parentChain(t, ctx, st, "E", "S")
+	seedParentEdge(t, ctx, st, chain[0].ID, chain[1].ID)
+	if report, err := st.Doctor(ctx); err != nil || len(report.ParentCycle) == 0 {
+		t.Fatalf("Doctor() = %v, %v; the fixture did not create a loop", report.ParentCycle, err)
+	}
+
+	clear := ""
+	if _, err := st.BulkApply(ctx, "test", "agent", []storage.BulkIssueSpec{{ID: chain[0].ID, Parent: &clear}}); err != nil {
+		t.Fatalf("BulkApply(%s parent: \"\") on a looped hierarchy error = %v, want the loop broken", chain[0].ID, err)
+	}
+	after, err := st.Doctor(ctx)
+	if err != nil {
+		t.Fatalf("Doctor() after repair error = %v", err)
+	}
+	if len(after.ParentCycle) != 0 {
+		t.Errorf("Doctor().ParentCycle = %v after a bulk parent clear, want the loop gone", after.ParentCycle)
+	}
+}
+
 func TestClearParentReportsAnUnknownIssueAsMissing(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
@@ -681,19 +707,17 @@ func TestClearParentReportsAnUnknownIssueAsMissing(t *testing.T) {
 	}
 
 	// Anti-vacuity: an issue that exists and simply has no parent — an epic,
-	// the one shape that can be parentless — still reports the edge as the
-	// missing thing, so the case above is not passing because every absence is
-	// called an issue.
+	// the one shape that can be parentless — answers that its parent is
+	// already absent, so the case above is not passing because every absence
+	// is called an issue.
 	solo, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Solo", Topic: "hier", IssueType: "epic", Placement: storage.RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue error = %v", err)
 	}
 	err = st.ClearParent(ctx, solo.ID)
-	if err == nil {
-		t.Fatal("ClearParent on a parentless issue succeeded, want an absence report")
-	}
-	if !errors.As(err, &notFound) || notFound.Entity != "parent relation" {
-		t.Errorf("ClearParent(parentless issue) error = %v, want a missing \"parent relation\"", err)
+	var absent storage.RelationAbsentError
+	if !errors.As(err, &absent) {
+		t.Errorf("ClearParent(parentless issue) error = %v, want storage.RelationAbsentError", err)
 	}
 }
 

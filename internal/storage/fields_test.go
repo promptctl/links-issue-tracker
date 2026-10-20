@@ -93,12 +93,13 @@ func TestAPatchStatingAnyOneFieldIsNotEmpty(t *testing.T) {
 }
 
 // TestABulkUpdateKeyStatesTheFieldItNames: an update document that states one
-// key is either refused for that key or admitted as a patch stating exactly
-// the field of that key's name — never refused as stating nothing, which is
-// the refusal a key the patch translation forgot would get, and never a patch
-// stating some other field, which is what a miswired row would make. The keys
-// are read off the type, so a key added to the document is held to this with
-// no edit here.
+// key is either refused for that key, or admitted as a patch stating exactly
+// the field of that key's name, or admitted as one entry of a part of the
+// file that is not a patch (its reparents or its ordering) — never refused as
+// stating nothing, which is the refusal a key the patch translation forgot
+// would get, and never a patch stating some other field, which is what a
+// miswired row would make. The keys are read off the type, so a key added to
+// the document is held to this with no edit here.
 func TestABulkUpdateKeyStatesTheFieldItNames(t *testing.T) {
 	samples := map[reflect.Type]any{
 		reflect.TypeFor[string]():   "task",
@@ -131,6 +132,12 @@ func TestABulkUpdateKeyStatesTheFieldItNames(t *testing.T) {
 		switch {
 		case err == nil:
 			admitted++
+			if len(file.Updates) == 0 {
+				if carried := len(file.Reparents) + len(file.Ranked); carried != 1 {
+					t.Errorf("a document stating only %s parsed to no patch and %d reparents or ranked entries, want 1", field.Name, carried)
+				}
+				continue
+			}
 			if len(file.Updates) != 1 {
 				t.Fatalf("a document stating only %s parsed to %d updates, want 1", field.Name, len(file.Updates))
 			}

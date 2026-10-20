@@ -1,8 +1,12 @@
 package storage
 
 import (
+	"errors"
 	"fmt"
+	"slices"
 	"strings"
+
+	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
 // BulkIssueSpec is a single YAML document in a bulk-input file. ID is the
@@ -34,8 +38,11 @@ type BulkIssueSpec struct {
 	Assignee    *string   `yaml:"assignee,omitempty"`
 	Labels      *[]string `yaml:"labels,omitempty"`
 	Lane        *string   `yaml:"lane,omitempty"`
-	Parent      string    `yaml:"parent,omitempty"`
-	BlockedBy   []string  `yaml:"blocked_by,omitempty"`
+	// Parent on a create names the new issue's parent. On an update it
+	// reparents the issue, and the empty string clears its parent: nil is
+	// "not stated", so the two cannot be confused.
+	Parent    *string  `yaml:"parent,omitempty"`
+	BlockedBy []string `yaml:"blocked_by,omitempty"`
 	// Rank places the document's issue in the file's ordering. Its one
 	// value is "top"; the gate refuses any other.
 	Rank *string `yaml:"rank,omitempty"`
@@ -66,34 +73,62 @@ func NewIDMapping(localID, realID string) IDMapping {
 	return IDMapping{Ref: localID, ID: realID}
 }
 
-// BulkApplyResult reports what a successful BulkApply did. Created lists
-// every created issue in the order it was created; Updated lists the real IDs
-// of every updated issue, in the order they were applied; Ranked is the
-// RankSet the file's `rank: top` documents made, with no resolutions when
-// the file states no rank.
+// BulkApplyResult reports what a BulkApply left written. Created lists
+// every created issue in the order it was created; Reparented lists the issues
+// whose parent the file changed, and ParentHeld those whose parent already
+// was what the file states, each in file order; ReparentsUndone lists the
+// issues a refusal put back under the parents they held before the file,
+// which a landed file leaves empty; Updated lists the real IDs of
+// every updated issue, in the order they were applied; Ranked is the RankSet
+// the file's `rank: top` documents made, with no resolutions when the file
+// states no rank. A refused BulkApply returns its AfterRollback beside the
+// error, so the caller reads one account of the batch whether it landed or
+// not. [LAW:nothing-unseen]
 type BulkApplyResult struct {
-	Created []IDMapping
-	Updated []string
-	Ranked  RankSetResult
+	Created         []IDMapping
+	Reparented      []string
+	ParentHeld      []string
+	ReparentsUndone []string
+	Updated         []string
+	Ranked          RankSetResult
 }
 
-// Kept is the account a batch that fails at an update owes its caller: what
-// stays written once its creates are rolled back — the updates applied before
-// the failure and the order the file's `rank: top` documents wrote, among the
-// issues that outlive the rollback. Zero of either is said, not omitted.
-// [LAW:no-silent-failure]
-func (r BulkApplyResult) Kept() string {
-	created := make(map[string]struct{}, len(r.Created))
+// AfterRollback is what stays written once a refused batch's creates are
+// rolled back, given leaked, the creates the rollback could not delete: those
+// creates, the reparents its undo could not put back, the updates applied
+// before the refusal, and the order the file's `rank: top` documents wrote,
+// among the issues that outlive the rollback. [LAW:one-source-of-truth]
+func (r BulkApplyResult) AfterRollback(leaked []string) BulkApplyResult {
+	rolledBack := make(map[string]bool, len(r.Created))
 	for _, m := range r.Created {
-		created[m.ID] = struct{}{}
+		rolledBack[m.ID] = !slices.Contains(leaked, m.ID)
 	}
-	ranked := make([]string, 0, len(r.Ranked.Resolutions))
-	for _, res := range r.Ranked.Resolutions {
-		if _, rolledBack := created[res.RankedID]; !rolledBack {
-			ranked = append(ranked, res.RankedID)
+	kept := r
+	kept.Created = nil
+	for _, m := range r.Created {
+		if !rolledBack[m.ID] {
+			kept.Created = append(kept.Created, m)
 		}
 	}
-	return fmt.Sprintf("kept %d updates [%s] and the order of %d issues [%s]", len(r.Updated), strings.Join(r.Updated, ","), len(ranked), strings.Join(ranked, ","))
+	kept.Ranked.Resolutions = nil
+	for _, res := range r.Ranked.Resolutions {
+		if !rolledBack[res.RankedID] {
+			kept.Ranked.Resolutions = append(kept.Ranked.Resolutions, res)
+		}
+	}
+	return kept
+}
+
+// Kept is AfterRollback in words, the account a refused batch's error owes its
+// caller beside the creates the rollback leaked, which the error names. Zero
+// of any is said, not omitted. [LAW:no-silent-failure]
+func (r BulkApplyResult) Kept(leaked []string) string {
+	kept := r.AfterRollback(leaked)
+	ranked := make([]string, len(kept.Ranked.Resolutions))
+	for i, res := range kept.Ranked.Resolutions {
+		ranked[i] = res.RankedID
+	}
+	return fmt.Sprintf("kept %d reparents [%s], %d updates [%s] and the order of %d issues [%s]", len(kept.Reparented), strings.Join(kept.Reparented, ","), len(kept.Updated), strings.Join(kept.Updated, ","), len(ranked), strings.Join(ranked, ","))
 }
 
 // BulkFile is a bulk file the gate admitted, parsed: the issues it creates,
@@ -107,10 +142,26 @@ func (r BulkApplyResult) Kept() string {
 // issues exactly as `lit rank set` does — one transaction, keys permuted and
 // none minted, and an order that has already landed writes nothing.
 // [LAW:single-enforcer]
+//
+// Reparents are the update documents that state a parent, in document order.
+// An engine writes them as one step, whole or not at all, through the relation
+// write `lit parent set` and `lit parent clear` use, so a reparent obeys the
+// one hierarchy rule. [LAW:single-enforcer] It writes them after the creates,
+// which a reparent may name as its parent, and before the creates' blocked_by
+// edges, so each edge is judged on the hierarchy the file ends with.
 type BulkFile struct {
-	Creates []FileCreate
-	Updates []BulkUpdate
-	Ranked  []FileRef
+	Creates   []FileCreate
+	Reparents []FileReparent
+	Updates   []BulkUpdate
+	Ranked    []FileRef
+}
+
+// FileReparent is one update document's parent, parsed: the issue it moves and
+// the parent it moves it under, a local_id in the file or a real id, which only
+// the write can resolve. An empty Parent is no parent, as a create's is.
+type FileReparent struct {
+	ID     string
+	Parent string
 }
 
 // FileRef names a document's issue before the file is written: an update
@@ -119,6 +170,114 @@ type BulkFile struct {
 type FileRef struct {
 	id    string
 	index int
+}
+
+// ParentWriter is the hierarchy write an engine runs a file's reparents
+// through, inside the one step that makes them whole or not at all. Clear and
+// Attach are the writes `lit parent clear` and `lit parent set` make, each
+// with the rules it carries; Detach drops a child's parent edges with no rule,
+// because an attach follows it in the same step. Parents and Restore read and
+// write a child's parent edges as stored, judging nothing, so a refused batch
+// can put back the hierarchy its reparents replaced.
+type ParentWriter interface {
+	// Holds reports whether childID's parents are exactly parentID.
+	Holds(childID, parentID string) (bool, error)
+	// Clear detaches childID as `lit parent clear` does, answering a child
+	// with no parent with RelationAbsentError.
+	Clear(childID string) error
+	Detach(childID string) error
+	Attach(childID, parentID string) error
+	// Parents lists the parent edges childID holds.
+	Parents(childID string) ([]model.Relation, error)
+	// Restore makes childID's parent edges exactly edges.
+	Restore(childID string, edges []model.Relation) error
+}
+
+// ReparentStep is a file's written reparents, sorted by what each found:
+// Moved, the issues whose parent changed, and Held, those whose parent already
+// was the one the file states, each in document order. It keeps the parent
+// edges each moved issue held before, which Undo writes back.
+type ReparentStep struct {
+	Moved, Held []string
+	prior       map[string][]model.Relation
+}
+
+// Undo puts every moved issue back under the parents it held before the step,
+// as stored. A batch refused after its reparents runs it before it rolls back
+// its creates, so no issue is left under a create the rollback deletes, and
+// none loses the parent it had. [LAW:no-silent-failure]
+func (s ReparentStep) Undo(w ParentWriter) error {
+	for _, id := range s.Moved {
+		if err := w.Restore(id, s.prior[id]); err != nil {
+			return fmt.Errorf("bulk: restore the parents of %q: %w", id, err)
+		}
+	}
+	return nil
+}
+
+// WriteReparents writes the file's reparents through w and returns the step
+// it wrote. Each parent is resolved first; an empty one clears.
+//
+// The file is judged on the hierarchy it ends with, never on its document
+// order: every moved child is detached before any is attached, so each
+// hierarchy in between is part of the final one, and Attach's cycle rule
+// refuses a file exactly when the hierarchy it ends with holds a cycle.
+// Swapping an epic with the epic above it applies in either order.
+// [LAW:no-ambient-temporal-coupling] [LAW:single-enforcer]
+//
+// The first refusal ends the step, naming the document it refused.
+func (f BulkFile) WriteReparents(resolve func(ref string) string, w ParentWriter) (ReparentStep, error) {
+	refuse := func(r FileReparent, err error) (ReparentStep, error) {
+		return ReparentStep{}, fmt.Errorf("bulk: parent of %q -> %q: %w", r.ID, r.Parent, err)
+	}
+	isHeld := make([]bool, len(f.Reparents))
+	for i, r := range f.Reparents {
+		if parent := resolve(r.Parent); parent != "" {
+			held, err := w.Holds(r.ID, parent)
+			if err != nil {
+				return refuse(r, err)
+			}
+			isHeld[i] = held
+		}
+	}
+	step := ReparentStep{prior: make(map[string][]model.Relation, len(f.Reparents))}
+	for i, r := range f.Reparents {
+		if isHeld[i] {
+			continue
+		}
+		prior, err := w.Parents(r.ID)
+		if err != nil {
+			return refuse(r, err)
+		}
+		step.prior[r.ID] = prior
+		if r.Parent != "" {
+			if err := w.Detach(r.ID); err != nil {
+				return refuse(r, err)
+			}
+			continue
+		}
+		err = w.Clear(r.ID)
+		if absent := (RelationAbsentError{}); errors.As(err, &absent) {
+			isHeld[i] = true
+		} else if err != nil {
+			return refuse(r, err)
+		}
+	}
+	for i, r := range f.Reparents {
+		if r.Parent != "" && !isHeld[i] {
+			if err := w.Attach(r.ID, resolve(r.Parent)); err != nil {
+				return refuse(r, err)
+			}
+		}
+	}
+	for i, r := range f.Reparents {
+		if isHeld[i] {
+			step.Held = append(step.Held, r.ID)
+		} else {
+			step.Moved = append(step.Moved, r.ID)
+		}
+	}
+	return step, nil
 }
 
 // RankedIDs is the file's ordering as the issue ids an engine hands its

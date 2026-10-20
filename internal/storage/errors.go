@@ -44,3 +44,23 @@ func (e RelationExistsError) Error() string {
 
 // Satisfied is always true: an edge that exists is the state the add asked for.
 func (RelationExistsError) Satisfied() bool { return true }
+
+// RelationAbsentError is the contract's answer to removing edges a src does
+// not hold: clearing the parent of an issue that has none. The state asked
+// for already holds, so the request is satisfied rather than refused, the
+// mirror of RelationExistsError. `lit parent clear` and a bulk file's
+// `parent: ""` both answer with it, so the two say one thing about one state.
+// [LAW:one-source-of-truth]
+type RelationAbsentError struct {
+	SrcID string
+	Type  model.RelationType
+}
+
+var _ model.StateRequestError = RelationAbsentError{}
+
+func (e RelationAbsentError) Error() string {
+	return fmt.Sprintf("%s has no %s relation, so there is nothing to remove", e.SrcID, e.Type)
+}
+
+// Satisfied is always true: no edge is the state the removal asked for.
+func (RelationAbsentError) Satisfied() bool { return true }

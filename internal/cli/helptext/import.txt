@@ -14,10 +14,14 @@ A YAML file can also name issues that already exist, and a rule about
 one of those is checked as the file is written: an id, parent or
 blocked_by naming no existing issue, a parent that is not an epic, a
 blocked_by naming an epic the new issue sits under or another non-epic
-issue directly under its epic, or an update that changes type to or
-from epic. Every create and update is written before
-any blocked_by, so a file that breaks one of these fails partway
-through. See Results for what rollback covers.
+issue directly under its epic, a reparent that would close a parent
+cycle through issues already stored, or an update that changes type to
+or from epic. Clearing the parent of an issue that is not an epic is
+refused before anything is written. A YAML file is written in this
+order: creates, then reparents, then blocked_by, then the order rank:
+top states, then updates, so a blocked_by is judged on the hierarchy
+the file ends with. A file that breaks one of these rules therefore
+fails partway through. See Results for what rollback covers.
 
 JSON tree spec (creates only)
 
@@ -81,23 +85,36 @@ YAML bulk file (creates and updates)
   create: there is no prior value for it to annotate.
 
   An update document must set at least one of title, description, prompt,
-  plan, type, priority, assignee, labels, lane, rank. A document carrying only
-  id, or only id and reason, has nothing to apply and is rejected; reason is
-  free text recorded on the change event, not itself a change. --by
+  plan, type, priority, assignee, labels, lane, parent, rank. A document
+  carrying only id, or only id and reason, has nothing to apply and is
+  rejected; reason is free text recorded on the change event, not itself
+  a change, so a document that only reparents or ranks takes no reason. --by
   names the actor those change events record; only a YAML file with an
   update document takes it, and any other import given --by is refused.
 
-  Four keys are rejected outright on an update document, each belonging
+  Three keys are rejected outright on an update document, each belonging
   to something else: topic (immutable — no command changes it after
-  create), local_id (create-only), parent (reparent with lit parent set),
-  blocked_by (wire dependencies with lit dep add).
+  create), local_id (create-only), blocked_by (wire dependencies with lit
+  dep add).
+
+  parent on an update document reparents the issue, as lit parent set
+  does, and parent: "" clears it, as lit parent clear does; the same rules
+  apply. parent may name a local_id in this file or an existing issue,
+  including one another document in the file updates. An issue whose
+  parent already is the one stated is reported, not refused. A key left
+  out, or parent: with no value, leaves the parent alone. Every reparent
+  in the file is written in one step, whole or not at all, and the file
+  is judged on the hierarchy it ends with, so the order of its documents
+  never decides whether it is accepted: moving an epic under the epic it
+  sits above, while moving that one elsewhere, applies in either order.
 
   rank: top, on a create or an update document, orders the file's issues.
   Every document that says it is stacked at the top of its issue's frame
   in file order: the first leads, the next ranks directly below it, and
   so on, exactly as lit rank set <ids in file order> would, and one such
   document alone is lit rank <id> --top. top is the only value. The order
-  is written after every create and before any update, in one step, so it
+  is written after every create and reparent and before any update, in one
+  step, so an issue is ordered in the epic the file moves it to, the order
   lands whole or not at all, a refused order applies no update, and a
   file whose order has already landed changes no rank when it is imported
   again. An issue ordered against issues outside its epic is ordered by
@@ -127,7 +144,9 @@ Values both formats enforce
 
   A local_id may not be used twice in one file, a record may not name its
   own local_id in its own blocked_by or name any entry there twice,
-  parent/blocked_by references within the file may not form a cycle,
+  parent/blocked_by references within the file may not form a cycle (in
+  a YAML file, a parent naming an id another document updates is such a
+  reference, so an update may not be put under itself),
   and a record may not be blocked_by an epic it sits under in the file,
   nor a non-epic record by another non-epic record of the same epic:
   rank orders the work inside one epic.
@@ -139,13 +158,16 @@ Results
   Created issues land at the bottom of the ranked order. Output is the
   number created and one "name -> real id" line each, where the name is
   the local_id (or the new real ID when the document gave none), followed
-  for a YAML file by the number updated and their IDs, and, when the file
-  ranks, the order written, as lit rank set reports it.
+  for a YAML file by the number updated and their IDs; when the file
+  states a parent on an update, the issues reparented and the issues that
+  already had the parent stated; and, when the file ranks, the order
+  written, as lit rank set reports it.
 
-  On any failure, issues created earlier in the same run are rolled back
-  on a best-effort basis by deleting them; updates already applied, and
-  the order a YAML file wrote, are not rolled back, since there is no
-  prior state to restore, and an error at an update names both. If the error
+  On any failure, a YAML file's reparents are undone, putting each moved
+  issue back under the parents it had, and issues created earlier in the
+  same run are rolled back on a best-effort basis by deleting them.
+  Updates already applied, and the order a YAML file wrote, are not
+  rolled back, and the error names what stays written. If the error
   reports that rollback leaked IDs, run lit doctor.
 
   A full-database export is a different shape than either format above;

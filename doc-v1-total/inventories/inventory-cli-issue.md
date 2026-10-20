@@ -1858,7 +1858,7 @@ Family `parentFamily`, usage `"usage: lit parent <set|clear> ..."`
   `UsageError{"usage: lit parent clear <child-id>"}` → exit 2
   (`issue_relations.go`). Surplus positionals refused by
   `refuseSurplusPositionals` (`register.go`) before `parent clear`'s work runs.
-- Calls `Store.ClearParent(childID)`, which refuses a leaf (`storage.RejectDetachingALeaf`, exit 3) and detaches an epic; prints `ok` then the `update` breadcrumb.
+- Calls `Store.ClearParent(childID)`, which refuses a leaf (`storage.RejectDetachingALeaf`, exit 3), answers an epic with no parent with `storage.RelationAbsentError` (satisfied, exit 6), and detaches an epic; prints `ok` then the `update` breadcrumb.
 
 ### 2.20 `lit dep` — Manage dependency edges
 
