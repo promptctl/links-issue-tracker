@@ -101,7 +101,7 @@ func TestAReceiveThatFetchedAndKeepsStoppingReachesTheFailureSurface(t *testing.
 
 	// The first stop starts a run and surfaces nothing but its record.
 	first := stoppedReceive()
-	if first["receive.stopped"] != "land" || first["receive.decision"] != "error" || !(first["receive.unsettled_since"].(float64) > 0) {
+	if first["receive.stopped"] != "land" || first["receive.decision"] != "error" || first["receive.error"] == nil || first["receive.remote"] != "origin" || !(first["receive.unsettled_since"].(float64) > 0) {
 		t.Fatalf("first receive outcome = %v; want a landing stop that starts a run", first)
 	}
 	if stops := receiveTraceStops(t, ws); len(stops) != 1 || stops[0] != "land" {
@@ -175,7 +175,7 @@ func TestAReceiveThatFetchedAndKeepsStoppingReachesTheFailureSurface(t *testing.
 	if writes := lastEvent(t).Occurrences["settled_last.writes"]; len(writes) != 1 || writes[0].(map[string]any)["settled_last.error"] != "" {
 		t.Fatalf("settled_last.writes = %v; want the one settle's record, written", writes)
 	}
-	if third["receive.stopped"] != "" || third["receive.unsettled_since"] != float64(0) || !(third["receive.settled_last"].(float64) > 0) {
+	if third["receive.stopped"] != "" || third["receive.error"] != nil || third["receive.unsettled_since"] != float64(0) || !(third["receive.settled_last"].(float64) > 0) {
 		t.Fatalf("third receive outcome = %v; want a receive that ran to the end, settled, with no run current", third)
 	}
 	if stops := receiveTraceStops(t, ws); len(stops) != 3 || stops[2] != "" {
@@ -332,7 +332,7 @@ func TestAMirrorWhoseLiveStoreReceiveFailsSaysWhere(t *testing.T) {
 	if len(outcomes) != 1 {
 		t.Fatalf("receive.outcomes = %v; want the live store's one receive", outcomes)
 	}
-	if outcome, _ := outcomes[0].(map[string]any); outcome["receive.decision"] != "error" || outcome["receive.stopped"] != "open" {
+	if outcome, _ := outcomes[0].(map[string]any); outcome["receive.decision"] != "error" || outcome["receive.stopped"] != "open" || outcome["receive.error"] == nil {
 		t.Fatalf("receive outcome = %v; want an error stopped at the open", outcome)
 	}
 	steps := ev.Occurrences["mirror.live_store_steps"]
