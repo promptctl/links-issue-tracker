@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dolthub/dolt/go/libraries/utils/gitcmd"
 	"github.com/google/uuid"
 	"github.com/promptctl/links-issue-tracker/internal/atomicfile"
 	"github.com/promptctl/links-issue-tracker/internal/issueid"
@@ -466,34 +467,29 @@ func LocationFromStorageDir(storageDir string) Location {
 	}
 }
 
-// gitOutput runs one git subprocess and returns its trimmed stdout. It spawns
-// through exec.CommandContext so a cancelled ctx kills the subprocess promptly:
-// a network-wedged call (ls-remote/fetch to an unreachable remote) abandons on
-// cancellation instead of outliving it. Cancellation is a value crossing this one
-// seam, not a second code path — a caller whose git call cannot hang on the network
-// (local rev-parse geometry) passes context.Background(), which never cancels.
-// [LAW:dataflow-not-control-flow]
+// gitOutput runs one git subprocess and returns its trimmed stdout. It starts
+// git through gitcmd, so a cancelled ctx ends git and everything git started: a
+// network-wedged call (ls-remote/fetch to an unreachable remote) abandons on
+// cancellation, its transport included, instead of outliving it. Cancellation
+// is a value crossing this one seam, not a second code path — a caller whose
+// git call cannot hang on the network (local rev-parse geometry) passes
+// context.Background(), which never cancels. [LAW:dataflow-not-control-flow]
 // [LAW:no-ambient-temporal-coupling] the subprocess lifecycle is owned by ctx, not
 // left to outlive a cancelled command until a grace-timer hard-exit reaps it.
 func gitOutput(ctx context.Context, cwd string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Dir = cwd
-	out, err := cmd.Output()
+	out, err := gitcmd.Command(ctx, gitcmd.Spec{Dir: cwd}, args...).Output()
 	if err != nil {
-		return "", gitFailure(ctx, err)
+		return "", gitFailure(err)
 	}
 	return strings.TrimSpace(string(out)), nil
 }
 
-// gitFailure names why a git call failed. A git that ctx killed exits with
-// "signal: killed", so the ctx error is put in the chain as the cause; a git
-// that failed on its own said why on stderr, which Output captured and the bare
-// exit status drops. The *exec.ExitError stays in the chain for
-// classifyGitError. [LAW:no-silent-failure]
-func gitFailure(ctx context.Context, err error) error {
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		return fmt.Errorf("%w (%w)", ctxErr, err)
-	}
+// gitFailure names why a git call failed. A git that failed on its own said
+// why on stderr, which Output captured and the bare exit status drops. A git
+// its ctx ended is a *gitcmd.Cancelled, which names the cause itself. The
+// *exec.ExitError stays in the chain for classifyGitError.
+// [LAW:no-silent-failure]
+func gitFailure(err error) error {
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
 		if stderr := strings.TrimSpace(string(exitErr.Stderr)); stderr != "" {

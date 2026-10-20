@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/dolthub/dolt/go/libraries/utils/gitcmd"
 	"github.com/google/uuid"
 
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
@@ -604,7 +605,7 @@ func TestRemoteCacheLandingCopiesTheFetchedRemotesLastKnownRefs(t *testing.T) {
 	onlyCloneKey := strings.Repeat("b", 64)
 	git := func(gitDir string, args ...string) string {
 		t.Helper()
-		out, err := mirrorGit(context.Background(), gitDir, args...).CombinedOutput()
+		out, err := mirrorGit(context.Background(), gitDir, gitcmd.Spec{}, args...).CombinedOutput()
 		if err != nil {
 			t.Fatalf("git %v: %v\n%s", args, err, out)
 		}
@@ -613,9 +614,9 @@ func TestRemoteCacheLandingCopiesTheFetchedRemotesLastKnownRefs(t *testing.T) {
 	commitOn := func(gitDir, refName, message string) string {
 		t.Helper()
 		tree := git(gitDir, "mktree")
-		cmd := mirrorGit(context.Background(), gitDir, "commit-tree", tree, "-m", message)
-		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
-		out, err := cmd.CombinedOutput()
+		out, err := mirrorGit(context.Background(), gitDir, gitcmd.Spec{
+			Env: append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t"),
+		}, "commit-tree", tree, "-m", message).CombinedOutput()
 		if err != nil {
 			t.Fatalf("commit-tree: %v\n%s", err, out)
 		}
@@ -629,7 +630,7 @@ func TestRemoteCacheLandingCopiesTheFetchedRemotesLastKnownRefs(t *testing.T) {
 		if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if out, err := mirrorGit(context.Background(), dir, "init", "--bare", "--quiet").CombinedOutput(); err != nil {
+		if out, err := mirrorGit(context.Background(), dir, gitcmd.Spec{}, "init", "--bare", "--quiet").CombinedOutput(); err != nil {
 			t.Fatalf("git init %s: %v\n%s", dir, err, out)
 		}
 	}
@@ -671,7 +672,7 @@ func TestRemoteCacheLandingCopiesTheFetchedRemotesLastKnownRefs(t *testing.T) {
 	if got := git(liveRepo, "rev-parse", unchanged); got != liveUnchanged {
 		t.Fatalf("live mirror's %s = %s, want it left at %s", unchanged, got, liveUnchanged)
 	}
-	if out, err := mirrorGit(context.Background(), liveRepo, "rev-parse", "--verify", "--quiet", orphan).CombinedOutput(); err == nil {
+	if out, err := mirrorGit(context.Background(), liveRepo, gitcmd.Spec{}, "rev-parse", "--verify", "--quiet", orphan).CombinedOutput(); err == nil {
 		t.Fatalf("landing put the swept orphan %s back in the live mirror at %s", orphan, strings.TrimSpace(string(out)))
 	}
 	if len(plan.copies) != 1 || len(plan.copies[0].refspecs) != 2 {

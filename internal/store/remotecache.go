@@ -11,13 +11,13 @@ import (
 	"io/fs"
 	"maps"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/dbfactory"
+	"github.com/dolthub/dolt/go/libraries/utils/gitcmd"
 
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
@@ -39,27 +39,25 @@ import (
 // directory that holds `.dolt`.
 const remoteCacheDirName = "git-remote-cache"
 
-// mirrorGit builds "git <args...>" against the mirror at gitDir. It is the one
-// way lit runs git on a mirror. [LAW:single-enforcer] core.longpaths lets git for
-// Windows open paths past MAX_PATH (260 characters): a mirror ref sits about 175
-// characters below the database directory, so a database a few directories deep
-// passes it, and other platforms ignore the key. Dolt's own git commands on a
-// mirror pass it too (Patch 12 in FORKS.md). git hands -c settings on to the
+// mirrorGit builds "git <args...>" against the mirror at gitDir, run as spec
+// says. It is the one way lit runs git on a mirror.
+// [LAW:single-enforcer] gitcmd starts it, so it runs with core.longpaths (a
+// mirror ref sits about 175 characters below the database directory, past
+// Windows' MAX_PATH from a database a few directories deep), and a cancelled
+// ctx ends it and everything it started. git hands -c settings on to the
 // processes it spawns on this side, but not to the upload-pack it starts in a
 // local repository, so a fetch from another mirror goes through mirrorFetch.
-func mirrorGit(ctx context.Context, gitDir string, args ...string) *exec.Cmd {
-	return exec.CommandContext(ctx, "git", append([]string{"-c", gitLongPaths, "--git-dir", gitDir}, args...)...)
+func mirrorGit(ctx context.Context, gitDir string, spec gitcmd.Spec, args ...string) *gitcmd.Cmd {
+	return gitcmd.Command(ctx, spec, append([]string{"--git-dir", gitDir}, args...)...)
 }
 
 // mirrorFetch builds a fetch of refspecs into the mirror at gitDir from the
 // mirror at source. It names an upload-pack that sets core.longpaths itself,
-// because git starts a local source's upload-pack without mirrorGit's -c.
-func mirrorFetch(ctx context.Context, gitDir, source string, refspecs ...string) *exec.Cmd {
-	return mirrorGit(ctx, gitDir, append([]string{"fetch", "--no-tags", "--quiet", "--upload-pack", "git -c " + gitLongPaths + " upload-pack", source}, refspecs...)...)
+// because git starts a local source's upload-pack without the -c gitcmd gives
+// git.
+func mirrorFetch(ctx context.Context, gitDir, source string, refspecs ...string) *gitcmd.Cmd {
+	return mirrorGit(ctx, gitDir, gitcmd.Spec{}, append([]string{"fetch", "--no-tags", "--quiet", "--upload-pack", "git -c " + gitcmd.LongPaths + " upload-pack", source}, refspecs...)...)
 }
-
-// gitLongPaths is the setting mirrorGit passes to git.
-const gitLongPaths = "core.longpaths=true"
 
 // isRemoteCacheKey reports whether a directory name is one of dbfactory's cache
 // keys — a lowercase hex sha256 and nothing else. Anything else under the cache
@@ -511,9 +509,7 @@ func (s *Store) SyncRemoteMirrorHolds(ctx context.Context, remote storage.Remote
 // "<oid> <type> <size>" or "<input> missing", so absence is an answer and only
 // git failing to run is an error.
 func gitDirHoldsCommits(ctx context.Context, gitDir string, commits []string) (bool, error) {
-	cmd := mirrorGit(ctx, gitDir, "cat-file", "--batch-check")
-	cmd.Stdin = strings.NewReader(strings.Join(commits, "\n") + "\n")
-	out, err := cmd.Output()
+	out, err := mirrorGit(ctx, gitDir, gitcmd.Spec{Stdin: strings.NewReader(strings.Join(commits, "\n") + "\n")}, "cat-file", "--batch-check").Output()
 	if err != nil {
 		return false, fmt.Errorf("ask git mirror %s for %d commit(s): %w", gitDir, len(commits), err)
 	}
