@@ -64,6 +64,12 @@ func (e *MigrationStepError) Error() string {
 
 func (e *MigrationStepError) Unwrap() error { return e.Cause }
 
+// quarantine is the quarantine this failure earns: the row recordQuarantine
+// writes and the value the failure reports in force are this one value.
+func (e *MigrationStepError) quarantine() *QuarantineBlockError {
+	return &QuarantineBlockError{Version: e.Version, Name: e.Name, ErrorText: e.Cause.Error()}
+}
+
 // EventRecord is the version goose reported for the failed step, 0 when it
 // reported none.
 func (e *MigrationStepError) EventRecord() (map[string]any, map[string]int) {
@@ -958,8 +964,9 @@ func (s *Store) handleMigrationFailure(ctx context.Context, p snapshotted, faile
 	if !quarantine {
 		return p.failAt(failed, outcome)
 	}
+	quarantined := migration.quarantine()
 	if err := atFailpoint(stepRecordQuarantine, func() error {
-		return s.recordQuarantine(ctx, version, name, cause.Error())
+		return s.recordQuarantine(ctx, quarantined)
 	}); err != nil {
 		outcome.QuarantineErr = err
 		return p.failAt(stepRecordQuarantine, outcome)
@@ -967,11 +974,11 @@ func (s *Store) handleMigrationFailure(ctx context.Context, p snapshotted, faile
 	// The row is in the working set from here on, so the quarantine is in
 	// force whether or not its commit lands: an uncommitted row is what the
 	// next open reads.
-	outcome.Quarantine = &QuarantineBlockError{Version: version, Name: name, ErrorText: cause.Error()}
+	outcome.Quarantine = quarantined
 	if err := atFailpoint(stepCommitQuarantine, func() error {
-		return s.commitWorkingSet(ctx, fmt.Sprintf("migrate: quarantine v%d %s", version, name))
+		return s.commitWorkingSet(ctx, fmt.Sprintf("migrate: quarantine v%d %s", quarantined.Version, quarantined.Name))
 	}); err != nil {
-		outcome.QuarantineErr = fmt.Errorf("commit quarantine v%d: %w", version, err)
+		outcome.QuarantineErr = fmt.Errorf("commit quarantine v%d: %w", quarantined.Version, err)
 		return p.failAt(stepCommitQuarantine, outcome)
 	}
 	return p.failAt(failed, outcome)
@@ -1111,18 +1118,18 @@ func (s *Store) checkPendingQuarantine(ctx context.Context, appliedVersion int64
 	return &QuarantineBlockError{Version: version, Name: name, ErrorText: errorText}
 }
 
-// recordQuarantine upserts a quarantine row for the given migration version.
+// recordQuarantine upserts the quarantine row for q's migration version.
 // ON DUPLICATE KEY UPDATE handles the case where a previous run already
 // recorded a quarantine row for this version (e.g., operator cleared and
 // retried, failed again).
-func (s *Store) recordQuarantine(ctx context.Context, version int64, name, errorText string) error {
+func (s *Store) recordQuarantine(ctx context.Context, q *QuarantineBlockError) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO migration_quarantine (version, name, error_text, created_at) VALUES (?, ?, ?, ?)
 		 ON DUPLICATE KEY UPDATE name = VALUES(name), error_text = VALUES(error_text), created_at = VALUES(created_at)`,
-		version, name, errorText, time.Now().UTC().Format(time.RFC3339Nano),
+		q.Version, q.Name, q.ErrorText, time.Now().UTC().Format(time.RFC3339Nano),
 	)
 	if err != nil {
-		return fmt.Errorf("record quarantine for v%d: %w", version, err)
+		return fmt.Errorf("record quarantine for v%d: %w", q.Version, err)
 	}
 	return nil
 }

@@ -234,7 +234,7 @@ func TestQuarantineRowInsertedAfterReset(t *testing.T) {
 	}
 
 	// Insert quarantine row AFTER reset — this is the key ordering.
-	if err := st.recordQuarantine(ctx, 3, "00003_test.sql", "simulated v3 failure"); err != nil {
+	if err := st.recordQuarantine(ctx, &QuarantineBlockError{Version: 3, Name: "00003_test.sql", ErrorText: "simulated v3 failure"}); err != nil {
 		t.Fatalf("recordQuarantine error = %v", err)
 	}
 	if err := st.commitWorkingSet(ctx, "migrate: quarantine v3"); err != nil {

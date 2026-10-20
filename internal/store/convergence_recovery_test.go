@@ -33,24 +33,23 @@ func failingMigration(t *testing.T, sentinel error) int64 {
 	return version
 }
 
-// assertRecovery checks the facts the reset outcome err carries records: the
-// checkpoint it reset to or tried to, and why the recovery step failed, want,
-// or null when want is "".
+// assertRecovery checks what the event of the failure err records for its
+// reset outcome: the checkpoint it reset to or tried to, and why the recovery
+// step failed, want, or null when want is "".
 func assertRecovery(t *testing.T, err error, want string) {
 	t.Helper()
 	var held *CheckpointResetError
 	var failed *CheckpointResetFailedError
-	var recorded model.RecordedError
 	var checkpoint string
 	switch {
 	case errors.As(err, &held):
-		recorded, checkpoint = held, held.Checkpoint.Name
+		checkpoint = held.Checkpoint.Name
 	case errors.As(err, &failed):
-		recorded, checkpoint = failed, failed.Checkpoint.Name
+		checkpoint = failed.Checkpoint.Name
 	default:
 		t.Fatalf("error = %v; want a reset outcome", err)
 	}
-	facts, _ := recorded.EventRecord()
+	facts, _ := model.ErrorRecord(err)
 	if checkpoint == "" || facts["migration.checkpoint"] != checkpoint {
 		t.Errorf("migration.checkpoint = %v; want the outcome's checkpoint %q", facts["migration.checkpoint"], checkpoint)
 	}
@@ -66,17 +65,10 @@ func assertRecovery(t *testing.T, err error, want string) {
 	}
 }
 
-// recordedFact is what the first error of type T in err's tree records under key.
-func recordedFact[T interface {
-	error
-	model.RecordedError
-}](t *testing.T, err error, key string) any {
-	t.Helper()
-	var target T
-	if !errors.As(err, &target) {
-		t.Fatalf("error = %v; want a %T in its tree", err, target)
-	}
-	facts, _ := target.EventRecord()
+// eventFact is what the event of the failure err records under key, through
+// the walk the CLI's invocation event takes over the whole error tree.
+func eventFact(err error, key string) any {
+	facts, _ := model.ErrorRecord(err)
 	return facts[key]
 }
 
@@ -123,7 +115,6 @@ func TestAFailedResetAfterAFailedMigrationLeavesWhatOnlyTheSnapshotClears(t *tes
 	clear := injectFailpoint(t, resetErr, stepMigrationReset)
 
 	fail := asConvergenceError(t, openErr(t, doltRoot))
-	clear()
 	if fail.Step != stepMigrationReset || fail.Step.Act() != ActRestoreSnapshot {
 		t.Fatalf("failure step = %s (act %d); want %s, which restores the snapshot", fail.Step, fail.Step.Act(), stepMigrationReset)
 	}
@@ -139,12 +130,17 @@ func TestAFailedResetAfterAFailedMigrationLeavesWhatOnlyTheSnapshotClears(t *tes
 		t.Errorf("CheckpointResetFailedError.Cause = %v; want v%d's *MigrationStepError carrying the migration failure", resetFailed.Cause, version)
 	}
 	assertRecovery(t, fail, "simulated reset failure")
-	if got := recordedFact[*MigrationStepError](t, fail, "migration.failed_version"); got != version {
+	if got := eventFact(fail, "migration.failed_version"); got != version {
 		t.Errorf("migration.failed_version = %v, want %d", got, version)
 	}
 
-	// The retry runs the step on top of what the failed run left.
-	_ = openErr(t, doltRoot)
+	// The retry runs the step on top of what the failed run left, and its reset
+	// fails too, so the partial change is still there for the restore to clear.
+	retry := asConvergenceError(t, openErr(t, doltRoot))
+	clear()
+	if retry.Step != stepMigrationReset {
+		t.Fatalf("retry failure step = %s (%v); want %s again", retry.Step, retry, stepMigrationReset)
+	}
 	if len(found) != 2 || found[0] || !found[1] {
 		t.Fatalf("partial_step present at each run's start = %v; want [false true]: absent before the first run, left for the retry", found)
 	}
@@ -244,14 +240,14 @@ func TestAFailedQuarantineCommitLeavesTheQuarantineInForce(t *testing.T) {
 		t.Fatalf("failure = %v; want a *CheckpointResetError with the quarantine in force and the commit's failure", fail)
 	}
 	assertRecovery(t, fail, "simulated commit failure")
-	if got := recordedFact[*QuarantineBlockError](t, fail, "migration.quarantine_version"); got != version {
+	if got := eventFact(fail, "migration.quarantine_version"); got != version {
 		t.Errorf("migration.quarantine_version = %v, want %d", got, version)
 	}
 	refusal := openErr(t, doltRoot)
 	if !errors.As(refusal, &quarantined) || quarantined.Version != version {
 		t.Errorf("second Open() did not refuse on the quarantine of v%d", version)
 	}
-	if got := recordedFact[*QuarantineBlockError](t, refusal, "migration.quarantine_version"); got != version {
+	if got := eventFact(refusal, "migration.quarantine_version"); got != version {
 		t.Errorf("the refusal's migration.quarantine_version = %v, want %d", got, version)
 	}
 }
