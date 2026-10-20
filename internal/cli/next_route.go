@@ -469,8 +469,10 @@ func (o ownWork) holds(lane model.LaneID) bool { return o.lanes[lane] }
 // covers reports whether the lane is this checkout's own work: a lane it holds,
 // or any lane of an epic one of those sits in — the epic-major rule, which
 // keeps `lit next` serving the epic in flight until it has nothing workable.
+// A lane of one has no epic, and epics never holds the empty id, so holding a
+// lane of one covers that lane alone.
 func (o ownWork) covers(lane model.LaneID) bool {
-	return o.holds(lane) || lane.Epic() != "" && o.epics[lane.Epic()]
+	return o.holds(lane) || o.epics[lane.Epic()]
 }
 
 // any reports whether this checkout holds a lane at all.
