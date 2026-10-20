@@ -132,3 +132,42 @@ func TestUnreadableConfigStillReachesTheCompactionBackstop(t *testing.T) {
 		t.Fatalf("the compaction backstop was never reached after a config failure (%v); a config nobody can read must cost the mirror, not the collection", err)
 	}
 }
+
+// The backstop runs inside a command that is not a sync command, and that
+// command's event carries none of a sync session's lists: each list's []
+// says a sync looked and found none, and no sync ran. This checkout has no
+// remote, so no mirror or receive runs either. [LAW:nothing-unseen]
+func TestTheCompactionBackstopLeavesNoSyncListsOnItsCommandsEvent(t *testing.T) {
+	isolateEvents(t)
+	dir, marker := litRepoForCadence(t)
+	t.Setenv(DisableAutoSyncEnvVar, "0")
+
+	newTicket(t, dir)
+
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("no compaction probe after a write command (%v); the backstop never ran, so this test proves nothing", err)
+	}
+	ev := lastEvent(t)
+	for _, key := range []string{
+		"reroot.follows", "reroot.declines", "fork_point.records", "remote.removals", "reconcile.bases",
+		"stranded_writes.commits", "settled_last.writes", "history_bound.records",
+	} {
+		if values, present := ev.Occurrences[key]; present {
+			t.Errorf("%s event carries %s = %v; no sync ran", ev.Event, key, values)
+		}
+	}
+}
+
+// A pull with no remote to pull from says which skip on its event, and
+// carries no base: it settled nothing. [LAW:nothing-unseen]
+func TestAPullWithNoRemoteRecordsItsSkip(t *testing.T) {
+	dir, _ := litRepoForCadence(t)
+	runCLIInDir(t, dir, "sync", "pull")
+	ev := lastEvent(t)
+	if ev.Facts["pull.state"] != string(syncTargetNoRemote) {
+		t.Fatalf("event %q pull.state = %v; want %s", ev.Event, ev.Facts["pull.state"], syncTargetNoRemote)
+	}
+	if base, present := ev.Facts["pull.base"]; present {
+		t.Fatalf("event %q pull.base = %v; want absent, since nothing settled", ev.Event, base)
+	}
+}

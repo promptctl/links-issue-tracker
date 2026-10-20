@@ -325,8 +325,8 @@ func TestSyncPullStateTransitions(t *testing.T) {
 		if err != nil {
 			t.Fatalf("SyncPull: %v", err)
 		}
-		if res.State != storage.SyncPullNeverSynced {
-			t.Fatalf("state = %q, want %q", res.State, storage.SyncPullNeverSynced)
+		if res.State != storage.SyncPullNeverSynced || res.Base != storage.ReconcileBaseNone {
+			t.Fatalf("state = %q base = %q, want %q base %q", res.State, res.Base, storage.SyncPullNeverSynced, storage.ReconcileBaseNone)
 		}
 	})
 }

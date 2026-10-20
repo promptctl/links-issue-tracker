@@ -91,32 +91,51 @@ func compactInline(ctx context.Context, ws workspace.Info) {
 
 	timeoutCtx, cancel := context.WithTimeout(ctx, compactTimeout)
 	defer cancel()
-	session, closeStore, err := openSyncSession(timeoutCtx, ws)
+	c, closeStore, err := openCompactor(timeoutCtx, ws)
 	if err != nil {
 		recordBackstopFailure(ws, fmt.Errorf("open store for compaction: %w", err))
 		return
 	}
 	defer closeStore()
 
-	compactThroughSession(timeoutCtx, ws, session)
+	compactThrough(timeoutCtx, ws, c)
 }
 
-// compactThroughSession asks the engine whether a pass is owed and records what
-// came back. It is split from opening the store because those are two jobs: the
-// caller above owns a session's lifetime, while everything here is the decision
-// about what the durable trail should say. [LAW:decomposition]
+// compactor is all compaction asks of the engine. The backstop runs after a
+// command that is not a sync command, so it holds no sync session: nothing it
+// holds can follow, fetch or settle, and the command's event carries none of
+// a sync session's lists, whose [] says a sync looked and found none.
+// [LAW:types-are-the-program] [LAW:nothing-unseen]
+type compactor interface {
+	CompactIfDue(ctx context.Context) (storage.CompactionOutcome, error)
+}
+
+// openCompactor opens the workspace's sync engine for compaction alone. The
+// returned close is the caller's to defer; it releases the workspace lock.
+func openCompactor(ctx context.Context, ws workspace.Info) (compactor, func() error, error) {
+	st, syncer, err := openSyncEngineAt(ctx, ws.DatabasePath, ws.WorkspaceID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return syncer, st.Close, nil
+}
+
+// compactThrough asks the engine whether a pass is owed and records what came
+// back. It is split from opening the store because those are two jobs: the
+// caller above owns the engine's lifetime, while everything here is the
+// decision about what the durable trail should say. [LAW:decomposition]
 //
 // The split is also what makes those decisions reachable. compactInline opens
-// its own session, so a test could only drive this through a real store whose
+// its own engine, so a test could only drive this through a real store whose
 // footprint had crossed a threshold — and reaching one from the command layer
 // would mean spelling the engine's on-disk layout here, which is exactly what
-// the storage seam exists to prevent. Taking the session as a parameter lets a
-// fake engine produce each outcome directly, the way runSyncCompact is already
-// tested.
-func compactThroughSession(ctx context.Context, ws workspace.Info, session syncSession) {
+// the storage seam exists to prevent. Taking the compactor as a parameter lets
+// a fake engine produce each outcome directly, the way runSyncCompact is
+// already tested.
+func compactThrough(ctx context.Context, ws workspace.Info, c compactor) {
 	// Whether a pass is owed is the engine's judgment, not this caller's: it is
 	// a fact about how the engine stores data. [LAW:decomposition]
-	outcome, err := session.syncer.CompactIfDue(ctx)
+	outcome, err := c.CompactIfDue(ctx)
 	if err != nil {
 		// The outcome goes with the error rather than being dropped for it: a
 		// pass whose reconnect failed still rewrote the store, and the depth is

@@ -198,6 +198,7 @@ func TestEverySyncEntryPointFollowsAReRootedRemote(t *testing.T) {
 	t.Run("on-change mirror", func(t *testing.T) {
 		r := newReRootedCheckouts(t, false)
 		runCLIInDir(t, r.bravo, "sync", backgroundMirrorSubcommand, "--parent-pid", "0")
+		assertLiveStoreSteps(t, lastEvent(t), "receive")
 		// The clone follows and pushes, and the live store receives that
 		// push by following the same re-root: the event carries both.
 		r.assertFollowedCleanly(t, []string{"push", "receive"}, false)
@@ -249,8 +250,11 @@ func TestSyncFetchWithNoKnownSyncBranchFetchesAndFollowsNothing(t *testing.T) {
 	if out := runCLIInDir(t, alpha, "sync", "fetch"); strings.TrimSpace(out) != "fetched" {
 		t.Fatalf("lit sync fetch printed %q, want fetched", out)
 	}
-	if follows, ok := lastEvent(t).Occurrences["reroot.follows"]; !ok || len(follows) != 0 {
-		t.Fatalf("reroot.follows = %v; want an empty list", lastEvent(t).Occurrences["reroot.follows"])
+	ev := lastEvent(t)
+	for _, key := range []string{"reroot.follows", "reroot.declines"} {
+		if values, ok := ev.Occurrences[key]; !ok || len(values) != 0 {
+			t.Fatalf("%s = %v (present %t); want an empty list: the session looked and nothing was followed or declined", key, values, ok)
+		}
 	}
 }
 

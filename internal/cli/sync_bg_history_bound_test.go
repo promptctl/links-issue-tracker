@@ -40,6 +40,7 @@ func TestTheMirrorAloneKeepsTheHistoryBound(t *testing.T) {
 
 	runCLIInDir(t, r.alpha, "sync", backgroundMirrorSubcommand, "--parent-pid", "0")
 	ev := lastEvent(t)
+	assertLiveStoreSteps(t, ev, "receive")
 	bound := boundRecordOf(t, ev)
 	if bound["history_bound.fired"] != true || bound["history_bound.lease"] != "held" || bound["history_bound.error"] != nil || bound["reroot.kept"] != float64(2) {
 		t.Fatalf("the mirror's bound = %v; want it fired, published under a held lease and keeping 2 commits", bound)
@@ -65,6 +66,7 @@ func TestTheMirrorAloneKeepsTheHistoryBound(t *testing.T) {
 
 	runCLIInDir(t, r.alpha, "new", "--title", "four", "--topic", "demo", "--type", "task", "--parent", r.epic)
 	runCLIInDir(t, r.alpha, "sync", backgroundMirrorSubcommand, "--parent-pid", "0")
+	assertLiveStoreSteps(t, lastEvent(t), "record")
 	if next := boundRecordOf(t, lastEvent(t)); next["history_bound.fired"] != false || next["history_bound.height"] != float64(3) {
 		t.Fatalf("the next mirror's bound = %v; want the remote head one commit above the 2 kept, short of the bound", next)
 	}
@@ -122,6 +124,21 @@ func boundRecordOf(t *testing.T, ev telemetry.Event) map[string]any {
 	}
 	record, _ := records[0].(map[string]any)
 	return record
+}
+
+// assertLiveStoreSteps checks a mirror invocation's event names one
+// live-store step per cycle, in order, each ended without an error.
+func assertLiveStoreSteps(t *testing.T, ev telemetry.Event, want ...string) {
+	t.Helper()
+	steps := ev.Occurrences["mirror.live_store_steps"]
+	if len(steps) != len(want) {
+		t.Fatalf("event %q mirror.live_store_steps = %v; want %q", ev.Event, steps, want)
+	}
+	for i, name := range want {
+		if step, _ := steps[i].(map[string]any); step["mirror.live_store_step"] != name || step["mirror.live_store_error"] != nil {
+			t.Fatalf("event %q live-store step %d = %v; want %s with no error", ev.Event, i, step, name)
+		}
+	}
 }
 
 // dirBytes is the size of every file under root.

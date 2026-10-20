@@ -158,8 +158,10 @@ type SyncReceiveState string
 const (
 	// SyncReceiveUpToDate: local already at the remote head; fetch found nothing.
 	SyncReceiveUpToDate SyncReceiveState = "up_to_date"
-	// SyncReceiveFastForwarded: local was strictly behind and landed on the
-	// remote head with no merge commit — the only state that moves the branch.
+	// SyncReceiveFastForwarded: local was behind and landed on the remote head
+	// with no merge commit — the only state that moves the branch. Behind is
+	// along shared history, or across a re-root from a fork point no local
+	// commit is past; Base says which.
 	SyncReceiveFastForwarded SyncReceiveState = "fast_forwarded"
 	// SyncReceiveAhead: local has unpushed commits and the remote has nothing
 	// new; there is nothing to receive (the push side delivers local commits).
@@ -225,8 +227,9 @@ type SyncPullState string
 const (
 	// SyncPullUpToDate: local already at the remote head; nothing to pull.
 	SyncPullUpToDate SyncPullState = "up_to_date"
-	// SyncPullFastForwarded: local was strictly behind and advanced to the
-	// remote head with no merge commit.
+	// SyncPullFastForwarded: local was behind and advanced to the remote head
+	// with no merge commit, along shared history or across a re-root from a
+	// fork point no local commit is past; Base says which.
 	SyncPullFastForwarded SyncPullState = "fast_forwarded"
 	// SyncPullLinearized: local diverged and the field-aware reconcile merged
 	// the divergence into linear history — the same outcome the automatic
@@ -258,9 +261,13 @@ const (
 // decided from, and — for SyncPullProsePending only — the free-text conflicts
 // held for the agent surface.
 type SyncPullResult struct {
-	State   SyncPullState        `json:"state"`
-	Ahead   int64                `json:"ahead"`
-	Behind  int64                `json:"behind"`
+	State  SyncPullState `json:"state"`
+	Ahead  int64         `json:"ahead"`
+	Behind int64         `json:"behind"`
+	// Base is where the settle's base came from, carried from the receive as
+	// SyncReceiveResult carries it, so a pull that landed across a fork point
+	// reads apart from a fast-forward along shared history.
+	Base    ReconcileBaseSource  `json:"base"`
 	Pending []merge.ProsePending `json:"pending,omitempty"`
 	// OldestDivergedUnix dates the divergence this pull observed (Unix seconds),
 	// so a held-conflict surface can escalate by age. Zero unless the pull met a

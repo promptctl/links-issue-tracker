@@ -265,22 +265,23 @@ func remoteDoltHead(t *testing.T, bareRemote string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// TestNothingToReceiveIsOnlyAnEmptyAnswer pins the pre-clone stop: the zero
-// advertisement and an empty listing end the receive, and a listing with a
-// ref does not.
-func TestNothingToReceiveIsOnlyAnEmptyAnswer(t *testing.T) {
+// TestAnAdvertisementSkipsOnlyOnAnEmptyAnswer pins the pre-clone stop: the
+// zero advertisement is the no-remote skip, an empty listing the empty-remote
+// skip, and a listing with a ref is ready.
+func TestAnAdvertisementSkipsOnlyOnAnEmptyAnswer(t *testing.T) {
 	cases := []struct {
 		name string
 		ad   remoteAdvertisement
-		want bool
+		want syncTargetSkip
 	}{
-		{"no remote picked", remoteAdvertisement{}, true},
-		{"remote with no lit data", remoteAdvertisement{remote: remoteName(t, "origin"), url: "u", refs: ""}, true},
-		{"remote with lit data", remoteAdvertisement{remote: remoteName(t, "origin"), url: "u", refs: "abc\trefs/dolt/data"}, false},
+		{"no remote picked", remoteAdvertisement{}, syncTargetNoRemote},
+		{"remote with no lit data", remoteAdvertisement{remote: remoteName(t, "origin"), url: "u", refs: ""}, syncTargetRemoteEmpty},
+		{"remote listing only whitespace", remoteAdvertisement{remote: remoteName(t, "origin"), url: "u", refs: "\n"}, syncTargetRemoteEmpty},
+		{"remote with lit data", remoteAdvertisement{remote: remoteName(t, "origin"), url: "u", refs: "abc\trefs/dolt/data"}, syncTargetReady},
 	}
 	for _, c := range cases {
-		if got := c.ad.nothingToReceive(); got != c.want {
-			t.Errorf("%s: nothingToReceive() = %t, want %t", c.name, got, c.want)
+		if got := c.ad.skip(); got != c.want {
+			t.Errorf("%s: skip() = %q, want %q", c.name, got, c.want)
 		}
 	}
 }

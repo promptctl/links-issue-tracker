@@ -125,6 +125,23 @@ func assertForkPointRecorded(t *testing.T, adopted string) {
 	}
 }
 
+// TestAQuietForkPullsAcrossItsForkPoint is bravo with nothing of its own past
+// the head it adopted, pulling the history alpha re-rooted above it. The pull
+// lands bravo on alpha's head, and its event says the fast-forward was across
+// the fork point, not along shared history.
+func TestAQuietForkPullsAcrossItsForkPoint(t *testing.T) {
+	r, _ := newForkedBelowTheCutAfter(t, func(reRootedCheckouts) {})
+	runCLIInDir(t, r.bravo, "sync", "pull")
+	ev := lastEvent(t)
+	if ev.Facts["pull.state"] != "fast_forwarded" || ev.Facts["pull.base"] != "fork_point" {
+		t.Fatalf("event %q pull.state, pull.base = %v, %v; want fast_forwarded across fork_point", ev.Event, ev.Facts["pull.state"], ev.Facts["pull.base"])
+	}
+	alphaHead, _ := syncHeadAndBranch(t, r.alpha)
+	if bravoHead, _ := syncHeadAndBranch(t, r.bravo); bravoHead != alphaHead {
+		t.Fatalf("bravo's head after the pull = %s, want alpha's %s", bravoHead, alphaHead)
+	}
+}
+
 // TestAQuietForkReceivesOntoTheRemoteHead is bravo with nothing of its own
 // past the head it adopted, receiving the history alpha re-rooted above it.
 // The receive lands bravo on alpha's head, reconciles nothing, and its event

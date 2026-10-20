@@ -176,7 +176,8 @@ Push cadence governs getting *local* work onto the remote; receive governs
 seeing *other machines'* work arrive. An established clone (one that already
 adopted the remote on init) no longer needs a manual `lit sync pull` to observe
 another machine's pushes — after a command runs, lit fetches the remote and
-**fast-forwards** the local store when it is strictly behind. It is enabled by
+**fast-forwards** the local store when it is behind with nothing of its own to
+merge, including across a re-root of the remote's history. It is enabled by
 default and toggled independently of push cadence:
 
 ```toml

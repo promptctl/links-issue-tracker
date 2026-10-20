@@ -33,8 +33,11 @@ func TestAPushRefusedOverAPeersPushNotifiesOnlyWhenNothingMergesIt(t *testing.T)
 			// fails is whether the step exits with the refusal: `lit sync push`
 			// answers the terminal, the mirror has no terminal to answer.
 			fails bool
+			// liveStoreSteps is the mirror's live-store step: a refused push
+			// landed nothing, so the live store waits for the next receive.
+			liveStoreSteps []string
 		}{
-			{name: "on-change mirror", args: []string{"sync", backgroundMirrorSubcommand, "--parent-pid", "0"}},
+			{name: "on-change mirror", args: []string{"sync", backgroundMirrorSubcommand, "--parent-pid", "0"}, liveStoreSteps: []string{"wait"}},
 			{name: "lit sync push", args: []string{"sync", "push"}, fails: true},
 		} {
 			t.Run(receive.name+"/"+step.name, func(t *testing.T) {
@@ -45,12 +48,16 @@ func TestAPushRefusedOverAPeersPushNotifiesOnlyWhenNothingMergesIt(t *testing.T)
 				runCLIInDir(t, r.bravo, "update", r.ticket, "--title", "bravo-title")
 				runCLIInDir(t, r.alpha, "sync", backgroundMirrorSubcommand, "--parent-pid", "0")
 				assertPushDecision(t, lastEvent(t), pushDecisionPushed)
+				assertLiveStoreSteps(t, lastEvent(t), "record")
 
 				if _, err := runCLIInDirAllowError(t, r.bravo, step.args...); (err != nil) != step.fails {
 					t.Fatalf("bravo's %s error = %v; want an error: %t", step.name, err, step.fails)
 				}
 				ev := lastEvent(t)
 				assertPushDecision(t, ev, receive.decision)
+				if step.liveStoreSteps != nil {
+					assertLiveStoreSteps(t, ev, step.liveStoreSteps...)
+				}
 				if merges := ev.Occurrences["push.outcomes"][0].(map[string]any)["push.receive_merges"]; merges != receive.on {
 					t.Fatalf("bravo's push.receive_merges = %v; want %t", merges, receive.on)
 				}

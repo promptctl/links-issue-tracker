@@ -142,6 +142,11 @@ type Syncer interface {
 	// nothing and returns none.
 	FollowedReRoots() []FollowedReRoot
 
+	// DeclinedReRoots is every re-root of the remote the engine recognized
+	// since it opened and did not follow, oldest first, with the cut and why
+	// no re-root at it reproduces the remote's history.
+	DeclinedReRoots() []DeclinedReRoot
+
 	// SyncKeepHistoryBound keeps the sync branch's history inside window
 	// once pushed has landed on remote's branch, whichever push landed it,
 	// and returns pushed with the bound it kept as Bound and the bound's
