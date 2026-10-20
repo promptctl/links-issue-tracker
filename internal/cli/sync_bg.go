@@ -100,7 +100,9 @@ const (
 	// after spawning a detached worker: every bounded step
 	// maybeAutoSyncAfterCommand has scheduled for after the spawn, summed from
 	// those steps' own caps. The receive is not one of them: it is a detached
-	// worker itself, and spawning it returns at once.
+	// worker itself, and spawning it returns at once. A receive worker that
+	// owes its settle a mirror (mirrorAfterReceive) spawns it as its last step
+	// and exits, so its tail is inside a command's.
 	//
 	// It is a sum rather than a number because prose does not fail to compile
 	// when a step joins the tail. A step left unsummed here lets a pass

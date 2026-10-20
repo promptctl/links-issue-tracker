@@ -500,9 +500,13 @@ type syncPushOutcome struct {
 	afterPush string
 	// proven is the advertisement this push proved it left the remote showing
 	// (provePushedAdvertisement); zero when it proved none.
-	proven   remoteAdvertisement
-	traceErr error
-	pushErr  error // the push failure; the trace is already recorded when set
+	proven remoteAdvertisement
+	// receiveMerges is whether this workspace's config runs the automatic
+	// receive that merges the peer's commits a refused push was refused over;
+	// false when the attempt did not reach the push.
+	receiveMerges bool
+	traceErr      error
+	pushErr       error // the push failure; the trace is already recorded when set
 }
 
 // syncPushStep is the push the orchestrator runs once it has resolved the
@@ -519,8 +523,7 @@ type syncPushStep func(ctx context.Context, remote, branch string, setUpstream, 
 // line says the bound was not kept and why, and the event's
 // history_bound.window_error carries the refusal, null when the window was
 // read. [LAW:no-silent-failure]
-func keepHistoryBound(ctx context.Context, session syncSession, ws workspace.Info, remote, branch string, pushed storage.SyncPushResult) storage.SyncPushResult {
-	cfg, err := config.Load(pathspec.New(ws.RootDir))
+func keepHistoryBound(ctx context.Context, session syncSession, cfg config.Config, err error, remote, branch string, pushed storage.SyncPushResult) storage.SyncPushResult {
 	telemetry.Set(ctx, "history_bound.window_error", telemetry.ErrorText(err))
 	if err != nil {
 		notKept := "history bound not kept: " + err.Error()
@@ -662,6 +665,9 @@ func performSyncPush(ctx, completionCtx context.Context, session syncSession, ws
 	if pushErr != nil && ctx.Err() != nil && completionCtx.Err() == nil {
 		pushErr = fmt.Errorf("%w: %w", pushDeadlineCutExplanation(), pushErr)
 	}
+	// One read of the workspace's config serves the bound's window and the
+	// receive question a refusal is classified by. [LAW:one-source-of-truth]
+	cfg, cfgErr := config.Load(pathspec.New(ws.RootDir))
 	// Every push that lands keeps the history bound, whichever step landed
 	// it: `lit sync push` and the pre-push hook from the live store, the
 	// on-change mirror from its clone. A clone's bound publishes the re-root
@@ -672,7 +678,7 @@ func performSyncPush(ctx, completionCtx context.Context, session syncSession, ws
 	// is spent, and the bound's network legs need their own.
 	if pushErr == nil {
 		boundCtx, cancelBound := context.WithTimeout(completionCtx, historyBoundDeadline())
-		result = keepHistoryBound(boundCtx, session, ws, remoteName, syncBranch, result)
+		result = keepHistoryBound(boundCtx, session, cfg, cfgErr, remoteName, syncBranch, result)
 		cancelBound()
 	}
 	traceMetadata := syncPushTraceMetadata(remoteName, syncBranch, result, pushErr)
@@ -736,8 +742,13 @@ func performSyncPush(ctx, completionCtx context.Context, session syncSession, ws
 		head:        result.Head,
 		afterPush:   result.AfterPush,
 		proven:      proven,
-		traceErr:    traceRecordErr,
-		pushErr:     pushErr,
+		// The workspace's config, not this process's kill switch: the marker
+		// this classifies is read by every later command, and their receives
+		// are what merge the refusal. An unreadable config schedules no
+		// receive (syncOnPolicy), and every command that reads it says so.
+		receiveMerges: cfgErr == nil && cfg.Sync.Receive,
+		traceErr:      traceRecordErr,
+		pushErr:       pushErr,
 	}
 	decided := classifyPushOutcome(outcome, nil)
 	recordSyncTraceLogged(ws, syncTraceRecord{

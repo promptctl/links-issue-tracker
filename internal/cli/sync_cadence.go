@@ -76,7 +76,7 @@ func shouldSyncAfterMutation(accessMode app.AccessMode, cadence config.SyncCaden
 // checkout, if one is waiting: the receive has no terminal, and this is the
 // seam every command passes through. [LAW:single-enforcer]
 func maybeAutoSyncAfterCommand(ctx context.Context, accessMode app.AccessMode, ws workspace.Info) {
-	if isTruthyEnv(os.Getenv(DisableAutoSyncEnvVar)) {
+	if autoSyncDisabled() {
 		return
 	}
 	deliverPendingReceiveBlock(os.Stderr, ws)
@@ -111,16 +111,48 @@ func syncOnPolicy(ctx context.Context, accessMode app.AccessMode, ws workspace.I
 		fmt.Fprintf(os.Stderr, "lit: automatic sync skipped, config unreadable: %v\n", err)
 		return
 	}
-	if shouldSyncAfterMutation(accessMode, cfg.Sync.Cadence) {
-		ensureMirrorCoverage(ctx, ws)
-	}
+	mirrorOnPolicy(ctx, accessMode, ws, cfg)
 	if cfg.Sync.Receive {
 		scheduleReceive(ctx, ws)
 	}
 }
 
+// mirrorAfterReceive is the push half of the policy for an automatic receive:
+// a settle that left the branch holding commits the remote lacks
+// (AccessWrite) is owed the mirror a write command's commit is owed, under the
+// same cadence. A mirror schedules no receive, so the chain ends at that
+// mirror. [LAW:single-enforcer] one cadence decision, whichever unit wrote.
+func mirrorAfterReceive(ctx context.Context, accessMode app.AccessMode, ws workspace.Info) {
+	if autoSyncDisabled() {
+		return
+	}
+	cfg, err := config.Load(pathspec.New(ws.RootDir))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "lit: the receive's push not scheduled, config unreadable: %v\n", err)
+		return
+	}
+	mirrorOnPolicy(ctx, accessMode, ws, cfg)
+}
+
+// mirrorOnPolicy owes the on-change mirror to a unit of work that wrote.
+// [LAW:dataflow-not-control-flow] the access mode and the cadence are the
+// values that decide; every caller runs it.
+func mirrorOnPolicy(ctx context.Context, accessMode app.AccessMode, ws workspace.Info, cfg config.Config) {
+	if shouldSyncAfterMutation(accessMode, cfg.Sync.Cadence) {
+		ensureMirrorCoverage(ctx, ws)
+	}
+}
+
+// autoSyncDisabled reports whether the process-level kill switch
+// (DisableAutoSyncEnvVar) is set. [LAW:single-enforcer] every scheduled side
+// effect reads the switch through here.
+func autoSyncDisabled() bool {
+	return isTruthyEnv(os.Getenv(DisableAutoSyncEnvVar))
+}
+
 // ensureMirrorCoverage upholds the on-change tail guarantee for the mutation
-// that just committed (links-sync-pgct.12): claim the mirror-pending marker,
+// that just committed — a write command's, or the merge an automatic receive
+// settled (links-sync-pgct.12): claim the mirror-pending marker,
 // and either a marker under a live mirror beacon proves an already-spawned,
 // not-yet-cleared mirror will read HEAD after this command's closed engine
 // session (see sync_mirror_pending.go for the ordering proof), or this

@@ -147,7 +147,7 @@ func ownerNotifyDue(markerPath, fingerprint string, now time.Time) bool {
 // live here, behind one named boundary, and every caller stays a pure
 // "detected this" report.
 func maybeNotifyOwner(ctx context.Context, ws workspace.Info, ev ownerNotifyEvent) {
-	if isTruthyEnv(os.Getenv(DisableAutoSyncEnvVar)) {
+	if autoSyncDisabled() {
 		return
 	}
 	markerPath := ownerNotifyMarkerPath(ws, ev.Kind)

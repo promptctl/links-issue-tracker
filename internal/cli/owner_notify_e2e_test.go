@@ -1,11 +1,15 @@
 package cli
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
 // These are the end-to-end proofs of links-sync-pgct.4's acceptance criteria:
@@ -15,17 +19,38 @@ import (
 // owner the day it happens.
 
 // writeOwnerNotifyProjectConfig points the repo's project config at a
-// file-appending hook and pins auto-sync fully off via CONFIG (cadence on-push,
-// receive off), so a test can re-enable LIT_DISABLE_AUTO_SYNC=0 — which the
-// notify path requires — without the mirror or the automatic receive reconciling
-// state out from under its assertions.
+// file-appending hook, so a test can re-enable LIT_DISABLE_AUTO_SYNC=0 — which
+// the notify path requires — without the mirror or a background receive
+// reconciling state out from under its assertions. Cadence is on-push, so no
+// command spawns a mirror. The receive is on, as a checkout whose refused
+// pushes a receive merges is configured, and not yet due: the debounce marker
+// is dated a day ahead, so no command spawns one and the test runs each
+// receive itself.
 func writeOwnerNotifyProjectConfig(t *testing.T, repo, sink string) {
+	t.Helper()
+	writeOwnerNotifyConfig(t, repo, sink, true)
+	ws, err := workspace.Resolve(repo)
+	if err != nil {
+		t.Fatalf("resolve %s: %v", repo, err)
+	}
+	if err := markReceiveAttempt(ws); err != nil {
+		t.Fatalf("mark the receive attempted in %s: %v", repo, err)
+	}
+	notDue := time.Now().Add(24 * time.Hour)
+	if err := os.Chtimes(receiveMarkerPath(ws), notDue, notDue); err != nil {
+		t.Fatalf("date the receive debounce marker in %s: %v", repo, err)
+	}
+}
+
+// writeOwnerNotifyConfig writes the repo's project config: on-push cadence,
+// the receive on or off, and the file-appending owner hook.
+func writeOwnerNotifyConfig(t *testing.T, repo, sink string, receive bool) {
 	t.Helper()
 	litDir := filepath.Join(repo, ".lit")
 	if err := os.MkdirAll(litDir, 0o755); err != nil {
 		t.Fatalf("mkdir %s: %v", litDir, err)
 	}
-	payload := "[sync]\ncadence = 'on-push'\nreceive = false\n" +
+	payload := fmt.Sprintf("[sync]\ncadence = 'on-push'\nreceive = %t\n", receive) +
 		"owner_notify_cmd = 'printf \"%s %s/%s\\n\" \"$LIT_NOTIFY_KIND\" \"$LIT_NOTIFY_REMOTE\" \"$LIT_NOTIFY_BRANCH\" >> " + sink + "'\n"
 	if err := os.WriteFile(filepath.Join(litDir, "config.toml"), []byte(payload), 0o644); err != nil {
 		t.Fatalf("write project config: %v", err)

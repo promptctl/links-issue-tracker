@@ -506,16 +506,16 @@ Flag parse output is `io.Discard` (`sync_bg.go`).
 ### 3.8 Push-outcome marker (`sync_push_outcome.go`)
 
 - Decisions: `pushed`, `error`, `canceled`, `workspace_busy`, `diverged` (`sync_push_outcome.go`), plus the skip reasons `no_sync_remote` / `remote_empty` carried through from `syncPushOutcome.skip`.
-- Record JSON: `{decision, reason?, remote?, branch?, observed_by?}` (`sync_push_outcome.go`); marker `<StorageDir>/push-outcome.last` (`sync_push_outcome.go`); mtime = attempt completion time.
+- Record JSON: `{decision, reason?, remote?, branch?, observed_by?, receive_merges}` (`sync_push_outcome.go`); marker `<StorageDir>/push-outcome.last` (`sync_push_outcome.go`); mtime = attempt completion time.
 - `failed()` is `Decision == "error"` only (`sync_push_outcome.go`).
-- `pushOutcomeOf(outcome, err, observedBy)` — `sync_push_outcome.go`: stamps `observed_by` on the record `classifyPushOutcome` derives, in order:
+- `pushOutcomeOf(outcome, err, observedBy)` — `sync_push_outcome.go`: stamps `observed_by` and `receive_merges` (`outcome.receiveMerges`, which `performSyncPush` sets to `sync.receive` from the one `config.Load` it runs after the push; a load error reads false) on the record `classifyPushOutcome` derives, in order:
   1. `context.Canceled` in `err` or `outcome.pushErr` → `canceled` with the first non-nil error's text, plus remote/branch.
   2. `store.ErrWorkspaceBusy` in `err` or `outcome.pushErr` → `workspace_busy` with the first non-nil error's text, plus remote/branch.
   3. any other `err` → `error` with err text.
-  4. `outcome.pushErr != nil` → `pushFailureDecision(outcome.pushErr)` (`diverged` when it holds `storage.ErrPushDiverged`, otherwise `error`) with its text plus remote/branch.
+  4. `outcome.pushErr != nil` → `pushFailureDecision(outcome.pushErr, outcome.receiveMerges)` plus remote/branch: `diverged` with its text when it holds `storage.ErrPushDiverged` and a receive merges; `error` with its text plus `; no automatic receive runs here to merge the peer's commits: run 'lit sync pull', then 'lit sync push'` when it holds it and none does; otherwise `error` with its text.
   5. `outcome.skip != syncTargetReady` → decision = `string(outcome.skip)`, remote only.
   6. default → `pushed` with remote/branch.
-- `completePushAttempt` — `sync_push_outcome.go`: derives the record, appends it to the event's `push.outcomes` occurrences as `{push.decision, push.reason, push.remote, push.branch}`, writes it, and feeds `observePushOutcomeForOwner`.
+- `completePushAttempt` — `sync_push_outcome.go`: derives the record, appends it to the event's `push.outcomes` occurrences as `{push.decision, push.reason, push.remote, push.branch, push.receive_merges}`, writes it, and feeds `observePushOutcomeForOwner`.
 - `recordPushOutcome` — `sync_push_outcome.go`: atomic temp-and-rename write of the JSON plus a newline; failure → stderr `lit: push-outcome marker not written: <err>`, never returned.
 - `lastPushOutcome` — `sync_push_outcome.go`: missing marker → `ok=false` silently; other stat/read failure → stderr `lit: push-outcome marker unreadable: <err>`; bad JSON → stderr `lit: push-outcome marker corrupt: <err>`; returns record + age from mtime.
 

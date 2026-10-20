@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/merge"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
@@ -246,6 +247,9 @@ func awaitNoLiveMirror(ctx context.Context, ws workspace.Info, bound time.Durati
 // recorded as a trace and never reaches a command's exit code.
 // [LAW:no-silent-failure]
 func receiveOnce(ctx context.Context, ws workspace.Info) {
+	// Every receive says whether it owes a push; one that settles nothing
+	// owes none. [LAW:nothing-unseen]
+	telemetry.Set(ctx, "receive.push_owed", false)
 	gitRemotes, err := workspace.GitRemotes(ctx, ws.RootDir)
 	if err != nil {
 		// Couldn't read remotes — unexpected; surface it loudly rather than treat
@@ -304,6 +308,12 @@ func receiveOnce(ctx context.Context, ws workspace.Info) {
 	// The store is closed by now: surfacing can run the owner-notify hook,
 	// and nothing waiting on the store should wait on that too.
 	surfaceReceiveOutcome(ctx, ws, outcome, time.Now())
+	// What the settle left unpushed is owed the push a write's commit is: a
+	// refusal over a peer's commits is recorded diverged on the promise that
+	// this merge reaches the remote. The mirror waits for this worker to exit.
+	access := outcome.access()
+	telemetry.Set(ctx, "receive.push_owed", access == app.AccessWrite)
+	mirrorAfterReceive(ctx, access, ws)
 }
 
 // receiveAndRecord is the receive proper, run under the receive lock: clone
@@ -463,6 +473,25 @@ func (o syncReceiveOutcome) settledCleanly() bool {
 	}
 	return o.reconcile.err == nil &&
 		(o.reconcile.state == storage.SyncReconcileLinearized || o.reconcile.state == storage.SyncReconcileNotDiverged)
+}
+
+// access is what the receive did to the branch as the cadence owner reads a
+// command: AccessWrite when its settle left commits the remote lacks — a
+// re-root follow that replayed local work onto the remote head (ahead), or a
+// reconcile that linearized a divergence onto it — and AccessRead otherwise.
+// [LAW:types-are-the-program] read off the settle's closed state sets: a
+// reconcile reports linearized only once the data branch has advanced (the
+// store returns the zero result with any error), and its own counts are taken
+// before its replay.
+func (o syncReceiveOutcome) access() app.AccessMode {
+	if !o.fetched() {
+		return app.AccessRead
+	}
+	if o.state == storage.SyncReceiveAhead ||
+		(o.reconcile != nil && o.reconcile.state == storage.SyncReconcileLinearized) {
+		return app.AccessWrite
+	}
+	return app.AccessRead
 }
 
 // inlineSyncFailure derives the sync-failure contract for an inline reconcile

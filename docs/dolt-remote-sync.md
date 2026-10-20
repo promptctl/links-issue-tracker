@@ -142,11 +142,16 @@ storage dir, and two banners read it:
   after the process exits.)
 
 A push the remote refuses because another checkout pushed first is not a
-failure. When this checkout and the remote each hold commits the other lacks,
+failure when this checkout's config runs the automatic receive (`sync.receive`
+on). When this checkout and the remote each hold commits the other lacks,
 the attempt records `diverged`: no FAILING banner, no `push_failed`
-notification. The automatic receive merges the remote's commits, and the next
-push lands them. `lit sync push` still exits with the refusal, so whoever ran
-it sees it.
+notification. The automatic receive merges the remote's commits, and a receive
+that leaves this checkout ahead of the remote is owed a push, as a write is:
+under the `on-change` cadence it spawns the mirror, which pushes the merge with
+no further write. With no automatic receive, nothing merges the refusal, so it
+records `error`, with the FAILING banner and a `push_failed` notification whose
+reason names `lit sync pull`, then `lit sync push`. `lit sync push` still exits with the refusal, so
+whoever ran it sees it.
 
 `lit doctor` additionally names the durable evidence when the last attempt
 failed: the failure reason and the mirror worker's log

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
@@ -209,10 +210,11 @@ func TestObservePushOutcomeForOwner(t *testing.T) {
 		t.Fatalf("a cancelled push notified the owner: %q", payload)
 	}
 
-	// A push refused over a peer's commits neither notifies nor ends a live
-	// episode: the channel is not broken, and it has not been shown healthy.
+	// A push refused over a peer's commits a receive merges neither notifies
+	// nor ends a live episode: the channel is not broken, and it has not been
+	// shown healthy.
 	observePushOutcomeForOwner(ctx, ws, failed)
-	diverged := pushOutcomeOf(syncPushOutcome{remote: "origin", branch: "master", pushErr: fmt.Errorf("%w: rejected", storage.ErrPushDiverged)}, nil, "")
+	diverged := pushOutcomeOf(syncPushOutcome{remote: "origin", branch: "master", receiveMerges: true, pushErr: fmt.Errorf("%w: rejected", storage.ErrPushDiverged)}, nil, "")
 	if diverged.Decision != pushDecisionDiverged || diverged.failed() {
 		t.Fatalf("pushOutcomeOf(diverged) = %+v, want the non-failed diverged decision", diverged)
 	}
@@ -249,6 +251,40 @@ func TestSyncReceiveOutcomeSettledCleanly(t *testing.T) {
 	for _, tc := range cases {
 		if got := tc.outcome.settledCleanly(); got != tc.want {
 			t.Errorf("%s: settledCleanly = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// TestSyncReceiveOutcomeAccess pins which receives the cadence owner reads as
+// a write owed a push: a settle that left commits the remote lacks. Every
+// receive state is listed, and every reconcile state on the diverged settle
+// the inline reconcile runs after.
+func TestSyncReceiveOutcomeAccess(t *testing.T) {
+	t.Parallel()
+	settled := func(state storage.SyncReceiveState) syncReceiveOutcome { return syncReceiveOutcome{state: state} }
+	reconciled := func(state storage.SyncReconcileState, err error) syncReceiveOutcome {
+		return syncReceiveOutcome{state: storage.SyncReceiveDiverged, reconcile: &reconcileOutcome{state: state, err: err}}
+	}
+	cases := []struct {
+		name    string
+		outcome syncReceiveOutcome
+		want    app.AccessMode
+	}{
+		{"up to date", settled(storage.SyncReceiveUpToDate), app.AccessRead},
+		{"fast-forwarded", settled(storage.SyncReceiveFastForwarded), app.AccessRead},
+		{"ahead", settled(storage.SyncReceiveAhead), app.AccessWrite},
+		{"never synced", settled(storage.SyncReceiveNeverSynced), app.AccessRead},
+		{"skipped no remote", syncReceiveOutcome{skip: syncTargetNoRemote, state: storage.SyncReceiveAhead}, app.AccessRead},
+		{"receive failed", syncReceiveOutcome{state: storage.SyncReceiveAhead, receiveErr: errors.New("network")}, app.AccessRead},
+		{"reconcile linearized", reconciled(storage.SyncReconcileLinearized, nil), app.AccessWrite},
+		{"reconcile no longer diverged", reconciled(storage.SyncReconcileNotDiverged, nil), app.AccessRead},
+		{"reconcile held prose", reconciled(storage.SyncReconcileProsePending, nil), app.AccessRead},
+		{"reconcile refused an id collision", reconciled(storage.SyncReconcileIDCollision, nil), app.AccessRead},
+		{"reconcile unrelated", reconciled(storage.SyncReconcileUnrelated, nil), app.AccessRead},
+	}
+	for _, tc := range cases {
+		if got := tc.outcome.access(); got != tc.want {
+			t.Errorf("%s: access = %v, want %v", tc.name, got, tc.want)
 		}
 	}
 }
