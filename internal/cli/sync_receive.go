@@ -602,8 +602,10 @@ type syncReceiveOutcome struct {
 	stopped receiveStep
 	err     error
 	// unsettledSince is when the current run of post-fetch stops began, zero
-	// when no run is current or this receive does not own the run.
-	unsettledSince time.Time
+	// when no run is current; unsettledPreviousStop is the latest stop in that
+	// run before this receive's, zero when none.
+	unsettledSince        time.Time
+	unsettledPreviousStop time.Time
 	// reconcile carries the inline reconcile that runs when the receive found a
 	// divergence the fast-forward could not absorb. Zero-valued unless state was
 	// SyncReceiveDiverged. [LAW:decomposition] Receiving and reconciling are
@@ -667,6 +669,9 @@ func performSyncReceive(ctx context.Context, ws workspace.Info, clone liveClone,
 		var close func() error
 		var err error
 		session, close, err = openSyncSession(ctx, ws)
+		if err != nil {
+			err = fmt.Errorf("open sync store: %w", err)
+		}
 		stopAt(receiveStepOpen, err)
 		if err == nil {
 			closeLive = close
@@ -699,22 +704,24 @@ func performSyncReceive(ctx context.Context, ws workspace.Info, clone liveClone,
 	}
 	run := observeRun(outcome, time.Now())
 	outcome.unsettledSince = run.since
+	outcome.unsettledPreviousStop = run.previousStop
 	if run.err != nil {
 		fmt.Fprintf(os.Stderr, "lit: automatic receive's unsettled-run records not read or written: %v\n", run.err)
 	}
 	traceMetadata := map[string]string{
-		"remote":          remoteName.String(),
-		"sync_branch":     syncBranch,
-		"state":           string(result.State),
-		"ahead":           strconv.FormatInt(result.Ahead, 10),
-		"behind":          strconv.FormatInt(result.Behind, 10),
-		"base":            string(result.Base),
-		"landed":          landed.Record.String(),
-		"fork_point":      landed.ForkPoint.String(),
-		"land_held":       landed.Held.Round(time.Millisecond).String(),
-		"stopped":         stopped.String(),
-		"unsettled_since": strconv.FormatInt(unixOrZero(run.since), 10),
-		"settled_last":    strconv.FormatInt(unixOrZero(run.settledLast), 10),
+		"remote":                  remoteName.String(),
+		"sync_branch":             syncBranch,
+		"state":                   string(result.State),
+		"ahead":                   strconv.FormatInt(result.Ahead, 10),
+		"behind":                  strconv.FormatInt(result.Behind, 10),
+		"base":                    string(result.Base),
+		"landed":                  landed.Record.String(),
+		"fork_point":              landed.ForkPoint.String(),
+		"land_held":               landed.Held.Round(time.Millisecond).String(),
+		"stopped":                 stopped.String(),
+		"unsettled_since":         strconv.FormatInt(unixOrZero(run.since), 10),
+		"unsettled_previous_stop": strconv.FormatInt(unixOrZero(run.previousStop), 10),
+		"settled_last":            strconv.FormatInt(unixOrZero(run.settledLast), 10),
 	}
 	if run.err != nil {
 		traceMetadata["unsettled_record_error"] = run.err.Error()
@@ -743,13 +750,14 @@ func performSyncReceive(ctx context.Context, ws workspace.Info, clone liveClone,
 	// receive, with where the receive stopped — the reconcile included — and the
 	// run's two times. [LAW:nothing-unseen]
 	telemetry.Append(ctx, "receive.outcomes", map[string]any{
-		"receive.decision":        receiveDecision,
-		"receive.ahead":           result.Ahead,
-		"receive.behind":          result.Behind,
-		"receive.base":            traceMetadata["base"],
-		"receive.stopped":         outcome.stopped.String(),
-		"receive.unsettled_since": unixOrZero(run.since),
-		"receive.settled_last":    unixOrZero(run.settledLast),
+		"receive.decision":                receiveDecision,
+		"receive.ahead":                   result.Ahead,
+		"receive.behind":                  result.Behind,
+		"receive.base":                    traceMetadata["base"],
+		"receive.stopped":                 outcome.stopped.String(),
+		"receive.unsettled_since":         unixOrZero(run.since),
+		"receive.unsettled_previous_stop": unixOrZero(run.previousStop),
+		"receive.settled_last":            unixOrZero(run.settledLast),
 	})
 	return outcome, closeLive
 }

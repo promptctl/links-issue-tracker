@@ -77,9 +77,13 @@ func (s receiveStep) unsettles() bool {
 
 // unsettledLastingAfter is how long a run of post-fetch stops lasts, with no
 // settle anywhere, before it is surfaced. Two debounce intervals: the stop
-// that starts the run is zero old, so surfacing takes a second stop at least
-// this much later, and one cut of the receive's shared deadline — as often
+// that starts the run is zero old, so surfacing takes a later stop at least
+// this much after it, and one cut of the receive's shared deadline — as often
 // contention behind a slow fetch as a fault — never qualifies on its own.
+// Surfacing also takes a stop between the first and this one (unsettled.last),
+// so two cuts with an idle gap between them are not a run that retries failed
+// to clear; under use the receives run every debounce interval, so that stop
+// is there by the time the run is this old.
 const unsettledLastingAfter = 2 * receiveDebounceInterval
 
 // countsTowardUnsettled reports whether this outcome is a post-fetch stop that
@@ -91,26 +95,30 @@ func (o syncReceiveOutcome) countsTowardUnsettled() bool {
 
 // unsettledLasting reports whether this receive is surfaced as
 // syncFailureReceiveUnsettled: it stopped after its fetch, a run of such stops
-// is current, and that run has lasted at least unsettledLastingAfter.
+// is current, another stop came between the run's first and this one, and the
+// run has lasted at least unsettledLastingAfter.
 // [LAW:dataflow-not-control-flow] read off the outcome's values and the clock
 // passed in; nothing here reads a record.
 func (o syncReceiveOutcome) unsettledLasting(now time.Time) bool {
-	return o.countsTowardUnsettled() && !o.unsettledSince.IsZero() && now.Sub(o.unsettledSince) >= unsettledLastingAfter
+	return o.countsTowardUnsettled() && !o.unsettledSince.IsZero() &&
+		o.unsettledPreviousStop.After(o.unsettledSince) && now.Sub(o.unsettledSince) >= unsettledLastingAfter
 }
 
 // unsettledObservation is what a receive learned about the run of post-fetch
-// stops: when the current run began (zero when none is current), when a
-// settle last succeeded (zero when none ever has), and any failure reading or
+// stops: when the current run began (zero when none is current), the latest
+// stop before this receive's within that run (zero when none), when a settle
+// last succeeded (zero when none ever has), and any failure reading or
 // writing the records.
 type unsettledObservation struct {
-	since       time.Time
-	settledLast time.Time
-	err         error
+	since        time.Time
+	previousStop time.Time
+	settledLast  time.Time
+	err          error
 }
 
 // observeUnsettledRun is how a receive takes part in the run of post-fetch
 // stops. Every receive reads the run (readUnsettledRun), so its trace and
-// event carry the two times as they stand. Only the automatic receive, under
+// event carry the times as they stand. Only the automatic receive, under
 // the receive lock, writes it (ownUnsettledRun); the mirror's receive of its
 // re-rooted push does not hold that lock, so it only reads
 // (leaveUnsettledRun), and its stop is counted by the next automatic receive,
@@ -118,15 +126,20 @@ type unsettledObservation struct {
 // [LAW:one-type-per-behavior] one call on every receive, the owner is data.
 type observeUnsettledRun func(o syncReceiveOutcome, now time.Time) unsettledObservation
 
-// readUnsettledRun is the run as the two records describe it now.
+// readUnsettledRun is the run as the three records describe it now.
 func readUnsettledRun(databasePath string) unsettledObservation {
 	first, firstOK, firstErr := store.ReadUnsettledFirst(databasePath)
+	last, lastOK, lastErr := store.ReadUnsettledLast(databasePath)
 	settled, settledOK, settledErr := store.ReadSettledLast(databasePath)
-	return unsettledObservation{
+	obs := unsettledObservation{
 		since:       currentRunStart(first, firstOK, settled, settledOK),
 		settledLast: settled,
-		err:         errors.Join(firstErr, settledErr),
+		err:         errors.Join(firstErr, lastErr, settledErr),
 	}
+	if lastOK && !obs.since.IsZero() && !last.Before(obs.since) {
+		obs.previousStop = last
+	}
+	return obs
 }
 
 // leaveUnsettledRun is the receive that does not own the run: it reads it and
@@ -138,24 +151,30 @@ func leaveUnsettledRun(databasePath string) observeUnsettledRun {
 }
 
 // ownUnsettledRun is the automatic receive's part in the run, under the
-// receive lock it holds: a stop that counts starts a run when none is current,
-// by writing unsettled.first. It never reads that record to write it back,
-// and it never touches settled.last, which only the settle writes
-// (store/receive_episode.go). [LAW:single-enforcer] one writer per record.
-// After that write settled.last is read again, so a settle that finished
-// between the first read and the write ends the run the write started.
+// receive lock it holds: a stop that counts records itself in unsettled.last,
+// and starts a run when none is current by writing unsettled.first. It never
+// reads a record to write it back, and it never touches settled.last, which
+// only the settle writes (store/receive_episode.go). [LAW:single-enforcer]
+// one writer per record. After a run is started settled.last is read again,
+// so a settle that finished between the first read and the write ends the
+// run the write started.
 func ownUnsettledRun(databasePath string) observeUnsettledRun {
 	return func(o syncReceiveOutcome, now time.Time) unsettledObservation {
 		obs := readUnsettledRun(databasePath)
-		if !o.countsTowardUnsettled() || !obs.since.IsZero() {
+		if !o.countsTowardUnsettled() {
 			return obs
 		}
-		writeErr := store.WriteUnsettledFirst(databasePath, now)
+		lastErr := store.WriteUnsettledLast(databasePath, now)
+		if !obs.since.IsZero() {
+			obs.err = errors.Join(obs.err, lastErr)
+			return obs
+		}
+		firstErr := store.WriteUnsettledFirst(databasePath, now)
 		settled, settledOK, rereadErr := store.ReadSettledLast(databasePath)
 		return unsettledObservation{
 			since:       currentRunStart(now, true, settled, settledOK),
 			settledLast: settled,
-			err:         errors.Join(obs.err, writeErr, rereadErr),
+			err:         errors.Join(obs.err, lastErr, firstErr, rereadErr),
 		}
 	}
 }

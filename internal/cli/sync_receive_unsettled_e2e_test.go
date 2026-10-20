@@ -117,14 +117,19 @@ func TestAReceiveThatFetchedAndKeepsStoppingReachesTheFailureSurface(t *testing.
 		t.Fatalf("a single post-fetch stop paged the owner (stat err = %v)", err)
 	}
 
-	// The run has lasted past the threshold with no settle anywhere.
+	// The run has lasted past the threshold with no settle anywhere, and a
+	// stop came between its first and the next.
 	began := time.Now().Add(-unsettledLastingAfter - time.Minute)
 	if err := store.WriteUnsettledFirst(ws.DatabasePath, began); err != nil {
 		t.Fatalf("age the run: %v", err)
 	}
+	between := began.Add(time.Minute)
+	if err := store.WriteUnsettledLast(ws.DatabasePath, between); err != nil {
+		t.Fatalf("record a stop between: %v", err)
+	}
 	second := stoppedReceive()
-	if second["receive.stopped"] != "land" || second["receive.unsettled_since"] != float64(began.Unix()) {
-		t.Fatalf("second receive outcome = %v; want a landing stop in the run that began at %d", second, began.Unix())
+	if second["receive.stopped"] != "land" || second["receive.unsettled_since"] != float64(began.Unix()) || second["receive.unsettled_previous_stop"] != float64(between.Unix()) {
+		t.Fatalf("second receive outcome = %v; want a landing stop in the run that began at %d, after the stop at %d", second, began.Unix(), between.Unix())
 	}
 	block, err := os.ReadFile(receiveBlockPendingPath(ws))
 	if err != nil {

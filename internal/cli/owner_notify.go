@@ -102,9 +102,9 @@ func (ev ownerNotifyEvent) fingerprint() string {
 }
 
 // ownerNotifyEventForFailure maps a surfaced sync failure to its owner
-// notification, or ok=false for the classes that are not divergences (a
-// remote-schema-ahead block is a version condition, not the ticket's "real
-// divergence" set). [LAW:dataflow-not-control-flow] every surface calls this
+// notification: the divergence classes and an unsettled receive notify, and a
+// remote-schema-ahead block, a version condition only an upgrade clears, is
+// ok=false. [LAW:dataflow-not-control-flow] every surface calls this
 // unconditionally; the class value decides.
 func ownerNotifyEventForFailure(failure SyncFailure) (ownerNotifyEvent, bool) {
 	switch failure.Class {

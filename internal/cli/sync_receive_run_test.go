@@ -61,10 +61,12 @@ func TestEveryReadingOfAnOutcomeIsWhereItStopped(t *testing.T) {
 }
 
 // TestOnlyALastingRunOfPostFetchStopsIsUnsettled is the two-sided table for
-// unsettledLasting: every step, both kinds of cause, and a run that is absent,
-// younger than the threshold, exactly at it, and past it. Only a post-fetch
-// stop (land, open, live remotes, settle) with a cause other than a
-// cancellation, in a run at least unsettledLastingAfter old, is lasting.
+// unsettledLasting: every step, both kinds of cause, a run that is absent,
+// younger than the threshold, exactly at it, and past it, and a previous stop
+// that is absent, the run's first, or between the first and this one. Only a
+// post-fetch stop (land, open, live remotes, settle) with a cause other than a
+// cancellation, in a run at least unsettledLastingAfter old with a stop
+// between its first and this one, is lasting.
 func TestOnlyALastingRunOfPostFetchStopsIsUnsettled(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
@@ -79,13 +81,23 @@ func TestOnlyALastingRunOfPostFetchStopsIsUnsettled(t *testing.T) {
 		"exactly at":     {now.Add(-unsettledLastingAfter), true},
 		"past threshold": {now.Add(-unsettledLastingAfter - time.Hour), true},
 	}
+	previous := map[string]struct {
+		at       func(since time.Time) time.Time
+		repeated bool
+	}{
+		"no previous stop":           {func(time.Time) time.Time { return time.Time{} }, false},
+		"previous stop is the first": {func(since time.Time) time.Time { return since }, false},
+		"a stop between":             {func(since time.Time) time.Time { return since.Add(time.Minute) }, true},
+	}
 	for _, step := range everyReceiveStep {
 		for causeName, cause := range causes {
 			for runName, run := range runs {
-				o := syncReceiveOutcome{stopped: step, err: cause, unsettledSince: run.since}
-				want := postFetch[step] && causeName == "plain" && run.lasted
-				if got := o.unsettledLasting(now); got != want {
-					t.Errorf("stopped at %q, %s cause, %s: unsettledLasting = %v, want %v", step, causeName, runName, got, want)
+				for previousName, prev := range previous {
+					o := syncReceiveOutcome{stopped: step, err: cause, unsettledSince: run.since, unsettledPreviousStop: prev.at(run.since)}
+					want := postFetch[step] && causeName == "plain" && run.lasted && prev.repeated
+					if got := o.unsettledLasting(now); got != want {
+						t.Errorf("stopped at %q, %s cause, %s, %s: unsettledLasting = %v, want %v", step, causeName, runName, previousName, got, want)
+					}
 				}
 			}
 		}
@@ -93,60 +105,85 @@ func TestOnlyALastingRunOfPostFetchStopsIsUnsettled(t *testing.T) {
 }
 
 // TestTheAutomaticReceiveOwnsTheRun pins ownUnsettledRun's writer rules
-// through the records it leaves: a stop that counts starts a run when none is
-// current and extends the current one otherwise; a settle that came after a
-// run began ends it, so the next stop starts a new run; and a receive that
-// stops at the fetch, the reconcile, by cancellation, or not at all writes
-// nothing.
+// through the records it leaves: a stop that counts records itself in
+// unsettled.last, starts a run when none is current and extends the current
+// one otherwise, and reports the latest stop before it in that run; a settle
+// that came after a run began ends it, so the next stop starts a new run with
+// no previous stop; and a receive that stops at the fetch, the reconcile, by
+// cancellation, or not at all writes nothing.
 func TestTheAutomaticReceiveOwnsTheRun(t *testing.T) {
 	t.Parallel()
 	now := time.Now().Truncate(time.Second)
 	t0 := now.Add(-time.Hour)
 	t1 := now.Add(-30 * time.Minute)
 	settleStop := syncReceiveOutcome{stopped: receiveStepSettle, err: errors.New("follow")}
+	none := time.Time{}
+	type records struct{ first, last, settled time.Time } // zero: no record
 	cases := []struct {
-		name      string
-		first     time.Time // zero: no record
-		settled   time.Time // zero: no record
-		outcome   syncReceiveOutcome
-		wantSince time.Time
-		wantFirst time.Time // what unsettled.first holds afterwards; zero: none
+		name         string
+		before       records
+		outcome      syncReceiveOutcome
+		wantSince    time.Time
+		wantPrevious time.Time
+		after        records
 	}{
-		{"first stop starts a run", time.Time{}, time.Time{}, settleStop, now, now},
-		{"a later stop extends the run", t0, time.Time{}, settleStop, t0, t0},
-		{"a run a settle has not ended goes on", t1, t0, settleStop, t1, t1},
-		{"a settle after the run began ends it; the stop starts a new one", t0, t1, settleStop, now, now},
-		{"a settle that finished after this receive read its clock ends the run it starts", time.Time{}, now.Add(time.Second), settleStop, time.Time{}, now},
-		{"a landing stop counts", time.Time{}, t0, syncReceiveOutcome{stopped: receiveStepLand, err: errors.New("land")}, now, now},
-		{"a fetch stop does not count", time.Time{}, time.Time{}, syncReceiveOutcome{stopped: receiveStepFetch, err: errors.New("net")}, time.Time{}, time.Time{}},
-		{"a reconcile stop does not count", time.Time{}, time.Time{}, syncReceiveOutcome{stopped: receiveStepReconcile, err: errors.New("gc")}, time.Time{}, time.Time{}},
-		{"a cancellation does not count", time.Time{}, time.Time{}, syncReceiveOutcome{stopped: receiveStepSettle, err: context.Canceled}, time.Time{}, time.Time{}},
-		{"a receive that ran to the end writes nothing", time.Time{}, time.Time{}, syncReceiveOutcome{}, time.Time{}, time.Time{}},
-		{"a fetch stop inside a run reports the run", t1, t0, syncReceiveOutcome{stopped: receiveStepFetch, err: errors.New("net")}, t1, t1},
+		{"first stop starts a run", records{}, settleStop, now, none, records{now, now, none}},
+		{"a second stop extends the run; its previous stop is the first", records{t0, t0, none}, settleStop, t0, t0, records{t0, now, none}},
+		{"a later stop reports the stop between", records{t0, t1, none}, settleStop, t0, t1, records{t0, now, none}},
+		{"a run a settle has not ended goes on", records{t1, t1, t0}, settleStop, t1, t1, records{t1, now, t0}},
+		{"a settle after the run began ends it; the stop starts a new one", records{t0, t0, t1}, settleStop, now, none, records{now, now, t1}},
+		{"a settle that finished after this receive read its clock ends the run it starts", records{settled: now.Add(time.Second)}, settleStop, none, none, records{now, now, now.Add(time.Second)}},
+		{"a landing stop counts", records{settled: t0}, syncReceiveOutcome{stopped: receiveStepLand, err: errors.New("land")}, now, none, records{now, now, t0}},
+		{"a fetch stop does not count", records{}, syncReceiveOutcome{stopped: receiveStepFetch, err: errors.New("net")}, none, none, records{}},
+		{"a reconcile stop does not count", records{}, syncReceiveOutcome{stopped: receiveStepReconcile, err: errors.New("gc")}, none, none, records{}},
+		{"a cancellation does not count", records{}, syncReceiveOutcome{stopped: receiveStepSettle, err: context.Canceled}, none, none, records{}},
+		{"a receive that ran to the end writes nothing", records{}, syncReceiveOutcome{}, none, none, records{}},
+		{"a fetch stop inside a run reports the run and writes nothing", records{t1, t1, t0}, syncReceiveOutcome{stopped: receiveStepFetch, err: errors.New("net")}, t1, t1, records{t1, t1, t0}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			databasePath := filepath.Join(t.TempDir(), "dolt")
-			if !tc.first.IsZero() {
-				if err := store.WriteUnsettledFirst(databasePath, tc.first); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if !tc.settled.IsZero() {
-				if err := os.WriteFile(store.SettledLastPath(databasePath), []byte(tc.settled.UTC().Format(time.RFC3339Nano)+"\n"), 0o600); err != nil {
-					t.Fatal(err)
-				}
-			}
+			seedUnsettledRecords(t, databasePath, tc.before.first, tc.before.last, tc.before.settled)
 			obs := ownUnsettledRun(databasePath)(tc.outcome, now)
-			if obs.err != nil || !obs.since.Equal(tc.wantSince) || !obs.settledLast.Equal(tc.settled) {
-				t.Fatalf("observation = %+v; want since %s, settled %s, no error", obs, tc.wantSince, tc.settled)
+			if obs.err != nil || !obs.since.Equal(tc.wantSince) || !obs.previousStop.Equal(tc.wantPrevious) || !obs.settledLast.Equal(tc.before.settled) {
+				t.Fatalf("observation = %+v; want since %s, previous stop %s, settled %s, no error", obs, tc.wantSince, tc.wantPrevious, tc.before.settled)
 			}
-			first, ok, err := store.ReadUnsettledFirst(databasePath)
-			if err != nil || ok != !tc.wantFirst.IsZero() || !first.Equal(tc.wantFirst) {
-				t.Fatalf("unsettled.first afterwards = %s ok %v err %v; want %s", first, ok, err, tc.wantFirst)
+			for name, read := range map[string]func(string) (time.Time, bool, error){
+				"unsettled.first": store.ReadUnsettledFirst, "unsettled.last": store.ReadUnsettledLast, "settled.last": store.ReadSettledLast,
+			} {
+				want := map[string]time.Time{"unsettled.first": tc.after.first, "unsettled.last": tc.after.last, "settled.last": tc.after.settled}[name]
+				at, ok, err := read(databasePath)
+				if err != nil || ok != !want.IsZero() || !at.Equal(want) {
+					t.Errorf("%s afterwards = %s ok %v err %v; want %s", name, at, ok, err, want)
+				}
 			}
 		})
+	}
+}
+
+// seedUnsettledRecords writes each of the run's records that is not zero.
+// settled.last has no exported writer, since only the settle writes it, so
+// the test writes the file the way the store does.
+func seedUnsettledRecords(t *testing.T, databasePath string, first, last, settled time.Time) {
+	t.Helper()
+	if !first.IsZero() {
+		if err := store.WriteUnsettledFirst(databasePath, first); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !last.IsZero() {
+		if err := store.WriteUnsettledLast(databasePath, last); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !settled.IsZero() {
+		if err := os.MkdirAll(filepath.Dir(store.SettledLastPath(databasePath)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(store.SettledLastPath(databasePath), []byte(settled.UTC().Format(time.RFC3339Nano)+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
@@ -166,7 +203,7 @@ func TestARunRecordThatCannotBeWrittenSaysSo(t *testing.T) {
 }
 
 // TestTheMirrorReadsTheRunAndWritesNothing: the mirror's receive does not
-// hold the receive lock, so it never writes the run, but it reads both
+// hold the receive lock, so it never writes the run, but it reads the
 // records, so its trace and event carry the times as they stand, not zeros
 // that read as "never settled". A stop that would start a run with none
 // current starts none.
@@ -177,36 +214,27 @@ func TestTheMirrorReadsTheRunAndWritesNothing(t *testing.T) {
 	t1 := now.Add(-30 * time.Minute)
 	stop := syncReceiveOutcome{stopped: receiveStepSettle, err: errors.New("follow")}
 	cases := []struct {
-		name      string
-		first     time.Time // zero: no record
-		settled   time.Time // zero: no record
-		wantSince time.Time
+		name                    string
+		first, last, settled    time.Time // zero: no record
+		wantSince, wantPrevious time.Time
 	}{
-		{"no records", time.Time{}, time.Time{}, time.Time{}},
-		{"a current run", t1, t0, t1},
-		{"a run a settle ended", t0, t1, time.Time{}},
+		{"no records", time.Time{}, time.Time{}, time.Time{}, time.Time{}, time.Time{}},
+		{"a current run", t0, t1, time.Time{}, t0, t1},
+		{"a run a settle ended", t0, t0, t1, time.Time{}, time.Time{}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			databasePath := filepath.Join(t.TempDir(), "dolt")
-			if !tc.first.IsZero() {
-				if err := store.WriteUnsettledFirst(databasePath, tc.first); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if !tc.settled.IsZero() {
-				if err := os.WriteFile(store.SettledLastPath(databasePath), []byte(tc.settled.UTC().Format(time.RFC3339Nano)+"\n"), 0o600); err != nil {
-					t.Fatal(err)
-				}
-			}
+			seedUnsettledRecords(t, databasePath, tc.first, tc.last, tc.settled)
 			obs := leaveUnsettledRun(databasePath)(stop, now)
-			if obs.err != nil || !obs.since.Equal(tc.wantSince) || !obs.settledLast.Equal(tc.settled) {
-				t.Fatalf("observation = %+v; want since %s, settled %s, no error", obs, tc.wantSince, tc.settled)
+			if obs.err != nil || !obs.since.Equal(tc.wantSince) || !obs.previousStop.Equal(tc.wantPrevious) || !obs.settledLast.Equal(tc.settled) {
+				t.Fatalf("observation = %+v; want since %s, previous stop %s, settled %s, no error", obs, tc.wantSince, tc.wantPrevious, tc.settled)
 			}
-			first, ok, err := store.ReadUnsettledFirst(databasePath)
-			if err != nil || ok != !tc.first.IsZero() || !first.Equal(tc.first) {
-				t.Fatalf("unsettled.first afterwards = %s ok %v err %v; want %s untouched", first, ok, err, tc.first)
+			first, okFirst, errFirst := store.ReadUnsettledFirst(databasePath)
+			last, okLast, errLast := store.ReadUnsettledLast(databasePath)
+			if errFirst != nil || errLast != nil || okFirst != !tc.first.IsZero() || !first.Equal(tc.first) || okLast != !tc.last.IsZero() || !last.Equal(tc.last) {
+				t.Fatalf("records afterwards: first %s (%v, %v), last %s (%v, %v); want %s and %s untouched", first, okFirst, errFirst, last, okLast, errLast, tc.first, tc.last)
 			}
 		})
 	}
@@ -241,7 +269,7 @@ func TestEveryStopMapsToItsSyncFailure(t *testing.T) {
 		{receiveStepReconcile, old, syncFailureDivergedUnresolved},
 	}
 	for _, tc := range cases {
-		o := syncReceiveOutcome{remote: remoteName(t, "origin"), branch: "master", stopped: tc.stopped, unsettledSince: tc.since}
+		o := syncReceiveOutcome{remote: remoteName(t, "origin"), branch: "master", stopped: tc.stopped, unsettledSince: tc.since, unsettledPreviousStop: tc.since.Add(time.Minute)}
 		if tc.stopped != receiveStepNone {
 			o.err = errors.New("cause-" + tc.stopped.String())
 		}

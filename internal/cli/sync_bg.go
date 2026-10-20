@@ -741,7 +741,10 @@ func receivePushedReRoot(ctx context.Context, ws workspace.Info, clone liveClone
 		fmt.Fprintf(os.Stderr, "lit: on-change mirror: receive trace not recorded: %v\n", outcome.traceErr)
 	}
 	surfaceReceiveOutcome(ctx, ws, outcome, time.Now())
-	return outcome.err
+	if outcome.err != nil {
+		return fmt.Errorf("receive the re-rooted push on the live store: stopped at %s: %w", outcome.stopped, outcome.err)
+	}
+	return nil
 }
 
 // holdBudgetCutExplanation is the one wording of "the holder cut itself
