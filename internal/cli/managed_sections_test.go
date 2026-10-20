@@ -99,7 +99,7 @@ func TestParseRejectsShapesThatCannotConverge(t *testing.T) {
 			if !errors.As(err, &shape) {
 				t.Fatalf("parse(%q) error = %v, want a templateShapeError", content, err)
 			}
-			if got := commandErrorReason(err); got != "template_shape_refused" {
+			if got := commandErrorReason(err); got != reasonTemplateShapeRefused {
 				t.Fatalf("parse(%q) reason = %q, want template_shape_refused", content, got)
 			}
 			if rem := commandErrorRemediation(commandErrorReason(err)); !strings.Contains(rem, "template override") {

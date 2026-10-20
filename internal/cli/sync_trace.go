@@ -182,7 +182,7 @@ func recordEngineOpenContentionTrace(ctx context.Context, err error) {
 	}
 	recordSyncTraceLogged(open.ws, syncTraceRecord{
 		Command:   telemetry.EventName(ctx),
-		Decision:  string(commandErrorReason(err)),
+		Decision:  commandErrorReason(err).String(),
 		Status:    "error",
 		Reason:    err.Error(),
 		BuildNote: resolveBuildStatusNote(time.Now()),

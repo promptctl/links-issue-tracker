@@ -21,10 +21,11 @@ import (
 )
 
 // reasonCodes is the published reason vocabulary, each token with the exit code
-// it arrives on, written out by hand: the expected code must not come from
-// ExitCode, the function under test. TestCommandReasonVocabulary holds it equal
-// to the constants in error_output.go and to the table in docs/cli-reference.md.
-var reasonCodes = map[commandReason]int{
+// it arrives on, written out by hand: the expected code must not come from the
+// reason declarations, the code under test. TestCommandReasonVocabulary holds it
+// equal to the reasons error_output.go declares and to the table in
+// docs/cli-reference.md.
+var reasonCodes = map[string]int{
 	"bulk_partial_failure":      1,
 	"command_failed":            1,
 	"corruption_detected":       7,
@@ -62,7 +63,7 @@ func TestCommandErrorReason(t *testing.T) {
 	tests := []struct {
 		name string
 		err  error
-		want commandReason
+		want string
 	}{
 		{"merge conflict", MergeConflictError{Message: "sync conflict"}, "merge_conflict"},
 		{
@@ -233,7 +234,7 @@ func TestCommandErrorReason(t *testing.T) {
 	// Asserted on the rendered header, not on commandErrorReason: the header
 	// is where a caller reads the reason, so a reason computed correctly and
 	// printed nowhere must fail here.
-	produced := map[commandReason]bool{}
+	produced := map[string]bool{}
 	for _, tc := range tests {
 		tc := tc
 		produced[tc.want] = true
@@ -272,23 +273,27 @@ func TestCommandReasonVocabulary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse error_output.go: %v", err)
 	}
-	declared := map[commandReason]bool{}
+	declared := map[string]bool{}
 	for _, decl := range file.Decls {
 		gen, ok := decl.(*ast.GenDecl)
-		if !ok || gen.Tok != token.CONST {
+		if !ok || gen.Tok != token.VAR {
 			continue
 		}
 		for _, spec := range gen.Specs {
-			vs := spec.(*ast.ValueSpec)
-			if ident, ok := vs.Type.(*ast.Ident); !ok || ident.Name != "commandReason" {
-				continue
-			}
-			for _, v := range vs.Values {
-				lit, err := strconv.Unquote(v.(*ast.BasicLit).Value)
-				if err != nil {
-					t.Fatalf("unquote %s: %v", v.(*ast.BasicLit).Value, err)
+			for _, v := range spec.(*ast.ValueSpec).Values {
+				reason, ok := v.(*ast.CompositeLit)
+				if !ok {
+					continue
 				}
-				declared[commandReason(lit)] = true
+				if ident, ok := reason.Type.(*ast.Ident); !ok || ident.Name != "commandReason" {
+					continue
+				}
+				raw := reason.Elts[0].(*ast.BasicLit).Value
+				lit, err := strconv.Unquote(raw)
+				if err != nil {
+					t.Fatalf("unquote %s: %v", raw, err)
+				}
+				declared[lit] = true
 			}
 		}
 	}
@@ -308,9 +313,9 @@ func TestCommandReasonVocabulary(t *testing.T) {
 		t.Fatalf("read reference: %v", err)
 	}
 	row := regexp.MustCompile("(?m)^\\| `([a-z_]+)` \\| ([0-9]) \\|")
-	documented := map[commandReason]int{}
+	documented := map[string]int{}
 	for _, m := range row.FindAllStringSubmatch(string(doc), -1) {
-		documented[commandReason(m[1])] = int(m[2][0] - '0')
+		documented[m[1]] = int(m[2][0] - '0')
 	}
 	for reason, code := range reasonCodes {
 		got, ok := documented[reason]

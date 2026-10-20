@@ -153,7 +153,7 @@ func TestAFailedInvocationRecordsItsExitCodeAndReason(t *testing.T) {
 			t.Fatalf("Run(%v) succeeded, want a failure", tc.args)
 		}
 		ev := lastEvent(t)
-		if ev.Event != tc.event || ev.Outcome != telemetry.OutcomeError || ev.ExitCode != ExitCode(err) || ev.Reason != string(tc.reason) || ev.Error != err.Error() {
+		if ev.Event != tc.event || ev.Outcome != telemetry.OutcomeError || ev.ExitCode != ExitCode(err) || ev.Reason != tc.reason.String() || ev.Error != err.Error() {
 			t.Errorf("Run(%v) event = %q %q %d %q %q; want %q error %d %q %q", tc.args, ev.Event, ev.Outcome, ev.ExitCode, ev.Reason, ev.Error, tc.event, ExitCode(err), tc.reason, err.Error())
 		}
 	}
@@ -165,7 +165,7 @@ func TestAFailedInvocationRecordsItsExitCodeAndReason(t *testing.T) {
 func TestAnExistingEdgeEndsTheEventAsAlreadyHolding(t *testing.T) {
 	exists := storage.RelationExistsError{SrcID: "test-a", DstID: "test-b", Type: model.RelBlockedBy}
 	end := invocationEnd(time.Now(), fmt.Errorf("add relation: %w", exists), nil)
-	if end.Outcome != telemetry.OutcomeError || end.ExitCode != ExitNoWork || end.Reason != string(reasonStateAlreadyHolds) || !strings.Contains(end.Error, exists.Error()) {
+	if end.Outcome != telemetry.OutcomeError || end.ExitCode != ExitNoWork || end.Reason != reasonStateAlreadyHolds.String() || !strings.Contains(end.Error, exists.Error()) {
 		t.Errorf("invocationEnd(existing edge) = %+v, want exit %d %s naming the edge", end, ExitNoWork, reasonStateAlreadyHolds)
 	}
 }

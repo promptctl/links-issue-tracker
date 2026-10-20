@@ -20,14 +20,6 @@ const (
 	doctorAdvice = "run `lit doctor`"
 )
 
-// The two answers a container rejection can be. They are named here so the grid
-// below reads as the truth table it is, with the literal strings the CLI emits
-// declared once beside each other.
-const (
-	reasonSatisfied = "state_already_holds"
-	reasonRefused   = "validation_refused"
-)
-
 // epicFixture builds an epic with childCount children and closes closedCount of
 // them, returning the epic's id. It drives the real store, so the epic's state
 // is the derived one production computes rather than a planted value.
@@ -137,11 +129,11 @@ func TestStartAndDoneOnOneClosedEpicDoNotShareOneAnswer(t *testing.T) {
 // declared reason selects the phrases as a value, so the loop below runs one
 // set of assertions for every cell rather than branching per answer.
 var renderedPhrases = map[commandReason]struct{ want, forbidden []string }{
-	reasonSatisfied: {
+	reasonStateAlreadyHolds: {
 		want:      []string{"nothing to do"},
 		forbidden: []string{retryAdvice, doctorAdvice},
 	},
-	reasonRefused: {
+	reasonValidationRefused: {
 		want:      []string{"cannot `"},
 		forbidden: []string{retryAdvice, doctorAdvice, "nothing to do"},
 	},
@@ -175,25 +167,25 @@ func TestEveryContainerRejectionCellHasItsOwnReasonAndExit(t *testing.T) {
 		wantReason       commandReason
 		wantExit         int
 	}{
-		{"childless", 0, 0, "done", doneSpec, reasonRefused, ExitValidation},
-		{"childless", 0, 0, "close", closeSpec, reasonRefused, ExitValidation},
-		{"childless", 0, 0, "start", startSpec, reasonRefused, ExitValidation},
-		{"childless", 0, 0, "open", openSpec, reasonRefused, ExitValidation},
+		{"childless", 0, 0, "done", doneSpec, reasonValidationRefused, ExitValidation},
+		{"childless", 0, 0, "close", closeSpec, reasonValidationRefused, ExitValidation},
+		{"childless", 0, 0, "start", startSpec, reasonValidationRefused, ExitValidation},
+		{"childless", 0, 0, "open", openSpec, reasonValidationRefused, ExitValidation},
 
-		{"no child started", 2, 0, "done", doneSpec, reasonRefused, ExitValidation},
-		{"no child started", 2, 0, "close", closeSpec, reasonRefused, ExitValidation},
-		{"no child started", 2, 0, "start", startSpec, reasonRefused, ExitValidation},
-		{"no child started", 2, 0, "open", openSpec, reasonRefused, ExitValidation},
+		{"no child started", 2, 0, "done", doneSpec, reasonValidationRefused, ExitValidation},
+		{"no child started", 2, 0, "close", closeSpec, reasonValidationRefused, ExitValidation},
+		{"no child started", 2, 0, "start", startSpec, reasonValidationRefused, ExitValidation},
+		{"no child started", 2, 0, "open", openSpec, reasonValidationRefused, ExitValidation},
 
-		{"part done", 2, 1, "done", doneSpec, reasonRefused, ExitValidation},
-		{"part done", 2, 1, "close", closeSpec, reasonRefused, ExitValidation},
-		{"part done", 2, 1, "start", startSpec, reasonRefused, ExitValidation},
-		{"part done", 2, 1, "open", openSpec, reasonRefused, ExitValidation},
+		{"part done", 2, 1, "done", doneSpec, reasonValidationRefused, ExitValidation},
+		{"part done", 2, 1, "close", closeSpec, reasonValidationRefused, ExitValidation},
+		{"part done", 2, 1, "start", startSpec, reasonValidationRefused, ExitValidation},
+		{"part done", 2, 1, "open", openSpec, reasonValidationRefused, ExitValidation},
 
-		{"fully closed", 2, 2, "done", doneSpec, reasonSatisfied, ExitNoWork},
-		{"fully closed", 2, 2, "close", closeSpec, reasonSatisfied, ExitNoWork},
-		{"fully closed", 2, 2, "start", startSpec, reasonRefused, ExitValidation},
-		{"fully closed", 2, 2, "open", openSpec, reasonRefused, ExitValidation},
+		{"fully closed", 2, 2, "done", doneSpec, reasonStateAlreadyHolds, ExitNoWork},
+		{"fully closed", 2, 2, "close", closeSpec, reasonStateAlreadyHolds, ExitNoWork},
+		{"fully closed", 2, 2, "start", startSpec, reasonValidationRefused, ExitValidation},
+		{"fully closed", 2, 2, "open", openSpec, reasonValidationRefused, ExitValidation},
 	}
 	for _, cell := range cells {
 		t.Run(cell.shape+"/"+cell.action, func(t *testing.T) {

@@ -63,7 +63,7 @@ func invocationEnd(at time.Time, err error, panicked any) telemetry.End {
 		end.Error = fmt.Sprint(panicked)
 	case err != nil:
 		end.Outcome = telemetry.OutcomeError
-		end.Reason = string(commandErrorReason(err))
+		end.Reason = commandErrorReason(err).String()
 		end.Error = err.Error()
 		end.Facts, end.Counts = errorRecord(err)
 	}

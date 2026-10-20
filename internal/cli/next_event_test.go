@@ -301,7 +301,7 @@ func TestNextLeavesTheRowsItWentPastOnTheEvent(t *testing.T) {
 		t.Fatal("lit next served a ticket that waits on an outside event")
 	}
 	ev := lastEvent(t)
-	if ev.Event != "lit next" || ev.ExitCode != ExitCode(err) || ev.Reason != string(commandErrorReason(err)) {
+	if ev.Event != "lit next" || ev.ExitCode != ExitCode(err) || ev.Reason != commandErrorReason(err).String() {
 		t.Errorf("event = %q exit %d reason %q, want lit next exit %d reason %q", ev.Event, ev.ExitCode, ev.Reason, ExitCode(err), commandErrorReason(err))
 	}
 	want := decodeJSON(t, `{"unreachable": [{"id": "`+waiting+`", "ticket": "`+waiting+`", "reach": "awaiting_outside"}]}`)["unreachable"]
@@ -398,7 +398,7 @@ func TestNextUnderAFilterNamesTheTicketItHidFromTheHeldEpic(t *testing.T) {
 		t.Fatalf("lit next --type bug = %q, want it to name %s as the ticket the filter hid", err.Error(), second)
 	}
 	ev := lastEvent(t)
-	if ev.ExitCode != ExitNoWork || ev.Reason != string(reasonScopeNarrowed) {
+	if ev.ExitCode != ExitNoWork || ev.Reason != reasonScopeNarrowed.String() {
 		t.Errorf("event exit %d reason %q, want %d %q", ev.ExitCode, ev.Reason, ExitNoWork, reasonScopeNarrowed)
 	}
 	if ev.Facts["next.outcome"] != "narrowed" || ev.Facts["next.hidden_by_filter"] != second {
@@ -426,7 +426,7 @@ func TestNextUnderAFilterNamesThePoolTicketItHid(t *testing.T) {
 		t.Fatalf("lit next --type bug = %q, want %q", err.Error(), want)
 	}
 	ev := lastEvent(t)
-	if ev.ExitCode != ExitNoWork || ev.Reason != string(reasonScopeNarrowed) {
+	if ev.ExitCode != ExitNoWork || ev.Reason != reasonScopeNarrowed.String() {
 		t.Errorf("event exit %d reason %q, want %d %q", ev.ExitCode, ev.Reason, ExitNoWork, reasonScopeNarrowed)
 	}
 	if ev.Facts["next.outcome"] != "narrowed" || ev.Facts["next.hidden_by_filter"] != task {

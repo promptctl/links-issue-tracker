@@ -24,58 +24,101 @@ import (
 // message can span lines, so a reason printed after it would sit at an offset
 // no caller can find without parsing the message.
 func WriteCommandError(stderr io.Writer, err error) int {
-	exitCode := ExitCode(err)
 	reason := commandErrorReason(err)
-	_, _ = fmt.Fprintf(stderr, "error (code=%d, reason=%s): %v\n", exitCode, reason, err)
+	_, _ = fmt.Fprintf(stderr, "error (code=%d, reason=%s): %v\n", reason.exit, reason, err)
 	if remediation := commandErrorRemediation(reason); remediation != "" {
 		_, _ = fmt.Fprintf(stderr, "remediation: %s\n", remediation)
 	}
-	return exitCode
+	return reason.exit
 }
 
 // commandReason is the machine-readable reason a failed command prints beside
-// its exit code. The tokens are a published contract (docs/cli-reference.md
-// lists them): a script branches on them where one exit code covers failures
-// that call for different acts. [LAW:types-are-the-program] each token is
+// its exit code, and the exit code it arrives on. The tokens are a published
+// contract (docs/cli-reference.md lists each with its code): a script branches
+// on them where one exit code covers failures that call for different acts.
+// [LAW:one-source-of-truth] a reason is declared once, with its code, so the
+// code is a property of the reason and no second classifier can give a failure
+// a code its reason does not carry. [LAW:types-are-the-program] each token is
 // spelled once, here, so the classifier and the remediation switch cannot
 // disagree on a spelling and silently fall through to the default retry advice.
-type commandReason string
+type commandReason struct {
+	token string
+	exit  int
+}
 
-const (
-	reasonBulkPartialFailure      commandReason = "bulk_partial_failure"
-	reasonCommandFailed           commandReason = "command_failed"
-	reasonCorruptionDetected      commandReason = "corruption_detected"
-	reasonEntityNotFound          commandReason = "entity_not_found"
-	reasonMergeConflict           commandReason = "merge_conflict"
-	reasonMigrationQuarantined    commandReason = "migration_quarantined"
-	reasonNoReadyWork             commandReason = "no_ready_work"
-	reasonOutsideGitWorkspace     commandReason = "outside_git_workspace"
-	reasonOwnerApprovalRequired   commandReason = "owner_approval_required"
-	reasonParentCycle             commandReason = "parent_cycle"
-	reasonPurgeUnconfirmed        commandReason = "purge_unconfirmed"
-	reasonRemoteUnreachable       commandReason = "remote_unreachable"
-	reasonRetiredCommand          commandReason = "retired_command"
-	reasonScopeExhausted          commandReason = "scope_exhausted"
-	reasonScopeNarrowed           commandReason = "scope_narrowed"
-	reasonStateAlreadyHolds       commandReason = "state_already_holds"
-	reasonStoredPrefixRefused     commandReason = "stored_prefix_refused"
-	reasonSyncDivergence          commandReason = "sync_divergence"
-	reasonTakeoverUnconfirmed     commandReason = "takeover_unconfirmed"
-	reasonTemplateShapeRefused    commandReason = "template_shape_refused"
-	reasonTransientGcContention   commandReason = "transient_gc_contention"
-	reasonUnknownCommand          commandReason = "unknown_command"
-	reasonUnsupportedFlag         commandReason = "unsupported_flag"
-	reasonUsageError              commandReason = "usage_error"
-	reasonValidationRefused       commandReason = "validation_refused"
-	reasonVersionNotFound         commandReason = "version_not_found"
-	reasonWorkspaceBusy           commandReason = "workspace_busy"
-	reasonWorkspaceNotInitialized commandReason = "workspace_not_initialized"
-	reasonWorkspaceSchemaAhead    commandReason = "workspace_schema_ahead"
-	reasonWorkspaceWriteBlocked   commandReason = "workspace_write_blocked"
+func (r commandReason) String() string { return r.token }
+
+// Every reason is an unkeyed literal, which does not compile without its code.
+var (
+	// ExitGeneric: lit could not do what was asked. A bulk command's per-item
+	// failures are heterogeneous (not-found, conflict, …), so its code carries
+	// only the any-failed signal and the per-item typed reasons live in the
+	// message. [LAW:no-silent-failure]
+	reasonBulkPartialFailure    = commandReason{"bulk_partial_failure", ExitGeneric}
+	reasonCommandFailed         = commandReason{"command_failed", ExitGeneric}
+	reasonRemoteUnreachable     = commandReason{"remote_unreachable", ExitGeneric}
+	reasonTransientGcContention = commandReason{"transient_gc_contention", ExitGeneric}
+	reasonWorkspaceBusy         = commandReason{"workspace_busy", ExitGeneric}
+	reasonWorkspaceWriteBlocked = commandReason{"workspace_write_blocked", ExitGeneric}
+
+	reasonUsageError = commandReason{"usage_error", ExitUsage}
+
+	// ExitValidation: deterministic for the command as issued, so no retry
+	// clears it. That covers a refusal of the command, of a file or stored
+	// value it reads, and of the environment it ran in: no repository, no
+	// workspace, a schema past this binary, a quarantined migration. None is
+	// ExitGeneric, which also means "lit is broken": under one code a script
+	// could tell a self-fixable precondition from a fault only by parsing the
+	// English. The act each calls for differs (adjust the command, edit a
+	// file, run `lit init`, install a different lit), and the reason printed
+	// beside the code carries that difference, not a code of its own.
+	// [LAW:no-mode-explosion]
+	reasonMigrationQuarantined    = commandReason{"migration_quarantined", ExitValidation}
+	reasonOutsideGitWorkspace     = commandReason{"outside_git_workspace", ExitValidation}
+	reasonPurgeUnconfirmed        = commandReason{"purge_unconfirmed", ExitValidation}
+	reasonRetiredCommand          = commandReason{"retired_command", ExitValidation}
+	reasonStoredPrefixRefused     = commandReason{"stored_prefix_refused", ExitValidation}
+	reasonTakeoverUnconfirmed     = commandReason{"takeover_unconfirmed", ExitValidation}
+	reasonTemplateShapeRefused    = commandReason{"template_shape_refused", ExitValidation}
+	reasonUnknownCommand          = commandReason{"unknown_command", ExitValidation}
+	reasonUnsupportedFlag         = commandReason{"unsupported_flag", ExitValidation}
+	reasonValidationRefused       = commandReason{"validation_refused", ExitValidation}
+	reasonWorkspaceNotInitialized = commandReason{"workspace_not_initialized", ExitValidation}
+	reasonWorkspaceSchemaAhead    = commandReason{"workspace_schema_ahead", ExitValidation}
+
+	reasonEntityNotFound  = commandReason{"entity_not_found", ExitNotFound}
+	reasonVersionNotFound = commandReason{"version_not_found", ExitNotFound}
+
+	// ExitConflict: a divergence the agent must resolve. A non-transient sync
+	// divergence shares the code an unresolved reconcile uses, so the
+	// held-conflict exit is one value across `lit sync pull` and `lit sync
+	// reconcile`, and the take gate's refusal is that same divergence
+	// persisting. [LAW:one-source-of-truth]
+	reasonMergeConflict         = commandReason{"merge_conflict", ExitConflict}
+	reasonOwnerApprovalRequired = commandReason{"owner_approval_required", ExitConflict}
+	reasonSyncDivergence        = commandReason{"sync_divergence", ExitConflict}
+
+	// ExitNoWork: the command ran correctly and changed nothing. The router's
+	// three terminal answers share it because the caller's question is binary
+	// (was a ticket handed back?), and a state request that already holds is
+	// the same answer asked of a mutation; under ExitGeneric the
+	// release-closing `lit done <epic>` would report its workflow's final step
+	// as a failure while the state it asked for is exactly the state that
+	// holds. Which emptiness it was is the reason's to say.
+	// [LAW:no-mode-explosion]
+	reasonNoReadyWork       = commandReason{"no_ready_work", ExitNoWork}
+	reasonScopeExhausted    = commandReason{"scope_exhausted", ExitNoWork}
+	reasonScopeNarrowed     = commandReason{"scope_narrowed", ExitNoWork}
+	reasonStateAlreadyHolds = commandReason{"state_already_holds", ExitNoWork}
+
+	reasonCorruptionDetected = commandReason{"corruption_detected", ExitCorruption}
+	reasonParentCycle        = commandReason{"parent_cycle", ExitCorruption}
 )
 
-// commandErrorReason maps a typed error to its machine-readable reason string.
-// [LAW:single-enforcer] All error→reason mappings live here; dispatch is by type via errors.As.
+// commandErrorReason maps a typed error to its reason, and so to its exit code.
+// [LAW:single-enforcer] This is the one classifier: every error→reason mapping
+// lives here, dispatched by type via errors.As, and ExitCode reads the code off
+// its answer.
 // [LAW:types-are-the-program] No message text is inspected; classification is carried by the type.
 func commandErrorReason(err error) commandReason {
 	var notFound storage.NotFoundError
