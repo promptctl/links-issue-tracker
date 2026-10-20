@@ -1265,15 +1265,13 @@ func commitHashOfRef(ctx context.Context, db *sql.DB, ref string) (string, error
 
 // mergeBaseResult is the outcome of a merge-base query: either the two refs share
 // history — commit is their most-recent common ancestor — or they do not, and
-// there is no base for a three-way merge. DOLT_MERGE_BASE reports the no-ancestor
-// case as an empty result set (and some backends as an empty/NULL scalar); this
-// type lifts that absence into an explicit discriminator so "no common ancestor"
-// can never be mistaken for a commit hash and driven into the base-assuming export
-// path, which resets to it and fails obscurely. [LAW:types-are-the-program] the
-// absent base is unrepresentable as a commit; a caller reaches the hash only
-// through shared(), which reports its absence. How the backend spells that absence
-// varies — a real SQL error ("no common ancestor"), an empty result set, or a
-// NULL/empty scalar — and mergeBase() folds all three into hasBase=false.
+// there is no base for a three-way merge. DOLT_MERGE_BASE raises
+// doltdb.ErrNoCommonAncestor for the no-ancestor case; this type lifts that
+// absence into an explicit discriminator so "no common ancestor" can never be
+// mistaken for a commit hash and driven into the base-assuming export path, which
+// resets to it and fails obscurely. [LAW:types-are-the-program] the absent base is
+// unrepresentable as a commit; a caller reaches the hash only through shared(),
+// which reports its absence.
 type mergeBaseResult struct {
 	commit  string
 	hasBase bool
