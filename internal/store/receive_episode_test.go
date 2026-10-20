@@ -27,7 +27,7 @@ func TestASettleRecordsThatItSettled(t *testing.T) {
 		defer f.close(st)
 		canceled, cancel := context.WithCancel(f.ctx)
 		cancel()
-		if _, err := st.SyncSettleReceived(canceled, "origin", "master"); err == nil {
+		if _, err := st.SyncSettleReceived(canceled, remoteName(t, "origin"), "master"); err == nil {
 			t.Fatal("SyncSettleReceived() on a canceled context succeeded; the case needs a settle that fails")
 		}
 		if _, ok, err := ReadSettledLast(f.live); ok || err != nil {
@@ -41,7 +41,7 @@ func TestASettleRecordsThatItSettled(t *testing.T) {
 		st := f.openSync(f.live)
 		defer f.close(st)
 		before := time.Now()
-		result, err := st.SyncSettleReceived(f.ctx, "origin", "master")
+		result, err := st.SyncSettleReceived(f.ctx, remoteName(t, "origin"), "master")
 		if err != nil {
 			t.Fatalf("SyncSettleReceived() error = %v", err)
 		}
@@ -58,7 +58,7 @@ func TestASettleRecordsThatItSettled(t *testing.T) {
 		f.commit(peer, "peer-ticket")
 		f.push(peer, false)
 		clone := f.fetchedClone()
-		if _, err := LandFetchedHead(f.ctx, f.live, clone, "origin", "master"); err != nil {
+		if _, err := LandFetchedHead(f.ctx, f.live, clone, remoteName(t, "origin"), "master"); err != nil {
 			t.Fatalf("LandFetchedHead() error = %v", err)
 		}
 		if err := os.RemoveAll(filepath.Dir(clone)); err != nil {
@@ -69,7 +69,7 @@ func TestASettleRecordsThatItSettled(t *testing.T) {
 		}
 		st := f.openSync(f.live)
 		defer f.close(st)
-		result, err := st.SyncSettleReceived(f.ctx, "origin", "master")
+		result, err := st.SyncSettleReceived(f.ctx, remoteName(t, "origin"), "master")
 		if err == nil || !strings.Contains(err.Error(), "settled.last") {
 			t.Fatalf("SyncSettleReceived() error = %v; want the record's write failure", err)
 		}

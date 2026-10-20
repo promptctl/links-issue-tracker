@@ -203,7 +203,7 @@ func TestEveryStopMapsToItsSyncFailure(t *testing.T) {
 		{receiveStepReconcile, old, syncFailureDivergedUnresolved},
 	}
 	for _, tc := range cases {
-		o := syncReceiveOutcome{remote: "origin", branch: "master", stopped: tc.stopped, unsettledSince: tc.since}
+		o := syncReceiveOutcome{remote: remoteName(t, "origin"), branch: "master", stopped: tc.stopped, unsettledSince: tc.since}
 		if tc.stopped != receiveStepNone {
 			o.err = errors.New("cause-" + tc.stopped.String())
 		}
@@ -225,7 +225,7 @@ func TestEveryStopMapsToItsSyncFailure(t *testing.T) {
 	}
 	for _, step := range []receiveStep{receiveStepSettle, receiveStepReconcile} {
 		ahead := &store.RemoteSchemaAheadError{Remote: "origin", Branch: "master", RemoteVersion: 9, BinarySupportedMax: 8}
-		o := syncReceiveOutcome{remote: "origin", branch: "master", stopped: step, err: ahead}
+		o := syncReceiveOutcome{remote: remoteName(t, "origin"), branch: "master", stopped: step, err: ahead}
 		if failure, ok := o.inlineSyncFailure(now); !ok || failure.Class != syncFailureRemoteSchemaAhead {
 			t.Errorf("schema-ahead cause at %q on the first stop = %q (ok %v); want the schema-ahead class", step, failure.Class, ok)
 		}
