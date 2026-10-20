@@ -5,9 +5,11 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
+	"github.com/dolthub/dolt/go/libraries/doltcore/env/actions"
 
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
@@ -89,9 +91,9 @@ func TestLeasedPushLandsOnlyOverTheHeadItNames(t *testing.T) {
 	}
 
 	// A remote that cannot be opened gives no verdict on the lease, so it is
-	// the push failure every push reports, never a stale outcome. A file
-	// remote is created wherever it can be, so this one's directory becomes
-	// a regular file.
+	// reported as the failure it is: not a stale outcome, not a refusal, and
+	// not the transport giving out. A file remote is created wherever it can
+	// be, so this one's directory becomes a regular file.
 	gone := filepath.Join(t.TempDir(), "remote")
 	if err := st.SyncAddRemote(ctx, "gone", "file://"+gone); err != nil {
 		t.Fatalf("SyncAddRemote(gone) error = %v", err)
@@ -104,8 +106,8 @@ func TestLeasedPushLandsOnlyOverTheHeadItNames(t *testing.T) {
 	}
 	err = st.runSyncMutation(ctx, func(ctx context.Context) error {
 		unreached, err := st.pushLeasedWithinLock(ctx, "gone", "master", "master", bravoHead)
-		if !errors.As(err, new(pushRefusedError)) && !errors.As(err, new(RemoteUnreachableError)) {
-			t.Errorf("leased push to a remote that cannot be opened = %q, %v; want the push failure classifyPushFailure reports", unreached, err)
+		if err == nil || errors.As(err, new(pushRefusedError)) || errors.As(err, new(RemoteUnreachableError)) || !strings.Contains(err.Error(), actions.ErrFailedToGetRemoteDb.Error()) {
+			t.Errorf("leased push to a remote that cannot be opened = %q, %v; want Dolt's %q, neither a refusal nor unreachable", unreached, err, actions.ErrFailedToGetRemoteDb)
 		}
 		return nil
 	})

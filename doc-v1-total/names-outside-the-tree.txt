@@ -24,7 +24,6 @@ ErrTimeout            github.com/promptctl/primitives/filelock
 ErrLocked             github.com/promptctl/primitives/filelock
 tryLockFile           github.com/promptctl/primitives/filelock
 unlockFile            github.com/promptctl/primitives/filelock
-doltdb.ErrNoCommonAncestor  Dolt, libraries/doltcore/doltdb
 corruptIndexRecovery  Dolt fork, store/nbs/journal_writer.go
 CollectDBs            Dolt fork, cmd/dolt/commands/engine
 cli.CliErr            Dolt's cmd/dolt/cli package, which lit imports as doltcli

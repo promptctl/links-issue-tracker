@@ -752,27 +752,44 @@ func (s *Store) SetParent(ctx context.Context, in storage.SetParentInput) (model
 // a missing edge. [LAW:no-silent-failure]
 func (s *Store) ClearParent(ctx context.Context, childID string) error {
 	return s.withMutation(ctx, "clear parent", func(ctx context.Context, tx *sql.Tx) error {
-		// The type read also proves the child exists, so an unknown id is
-		// reported as a missing issue, not a missing edge. Every parent edge
-		// goes, so none is left. [LAW:single-enforcer]
-		childType, err := issueTypeTx(ctx, tx, childID)
-		if err != nil {
-			return err
-		}
-		if err := storage.RejectDetachingALeaf(childID, childType, 0); err != nil {
-			return err
-		}
-		res, err := tx.ExecContext(ctx, `DELETE FROM relations WHERE src_id = ? AND type = 'parent-child'`, childID)
-		if err != nil {
-			return fmt.Errorf("delete parent relation: %w", err)
-		}
-		affected, err := res.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("rows affected: %w", err)
-		}
-		if affected == 0 {
-			return storage.NotFoundError{Entity: "parent relation", ID: childID}
-		}
-		return nil
+		return clearParentTx(ctx, tx, childID)
 	})
+}
+
+// clearParentTx is `lit parent clear` on tx: it refuses a leaf, which lives
+// inside an epic, and removes every parent edge of childID. A child with no
+// parent is the state asked for, answered with storage.RelationAbsentError.
+// The type read also proves the child exists, so an unknown id is reported as
+// a missing issue, not as a parent already absent. [LAW:single-enforcer]
+func clearParentTx(ctx context.Context, tx *sql.Tx, childID string) error {
+	childType, err := issueTypeTx(ctx, tx, childID)
+	if err != nil {
+		return err
+	}
+	if err := storage.RejectDetachingALeaf(childID, childType, 0); err != nil {
+		return err
+	}
+	removed, err := detachParentsTx(ctx, tx, childID)
+	if err != nil {
+		return err
+	}
+	if removed == 0 {
+		return storage.RelationAbsentError{SrcID: childID, Type: model.RelParentChild}
+	}
+	return nil
+}
+
+// detachParentsTx removes every parent edge of childID on tx, judging nothing:
+// it is the raw half of a clear, and a bulk reparent's detach before the
+// attach that judges the child's new place.
+func detachParentsTx(ctx context.Context, tx *sql.Tx, childID string) (int64, error) {
+	res, err := tx.ExecContext(ctx, `DELETE FROM relations WHERE src_id = ? AND type = 'parent-child'`, childID)
+	if err != nil {
+		return 0, fmt.Errorf("delete parent relation: %w", err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("rows affected: %w", err)
+	}
+	return affected, nil
 }

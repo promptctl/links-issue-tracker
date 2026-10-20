@@ -15,7 +15,7 @@ one below carries the condition that would let it be deleted.
 
 | Module in `go.mod` | Upstream | What `lit` builds | Branch | Current pin |
 | --- | --- | --- | --- | --- |
-| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20261019182839-d1c522accf0f` |
+| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20261020015807-0eb248a259c5` |
 | `github.com/dolthub/go-mysql-server` | [dolthub/go-mysql-server](https://github.com/dolthub/go-mysql-server) | [promptctl/go-mysql-server](https://github.com/promptctl/go-mysql-server) | `lit` | `v0.20.1-0.20260821032251-ab5cb9ec3b69` |
 | `github.com/dolthub/driver` | [dolthub/driver](https://github.com/dolthub/driver) | [`internal/vendor/dolthub-driver`](internal/vendor/dolthub-driver) | — | `v0.2.1-0.20260314000741-0fe74e7ee31a` |
 
@@ -319,26 +319,48 @@ would overwrite a peer's push.
 
 #### Patch 10 — re-check against a new GC generation, and replace a store's table files under one
 
-`go/store/nbs/store.go`, plus `go/store/nbs/gc_generation_test.go` (a new
-file, not upstream's).
+`go/store/nbs/store.go` and `go/store/nbs/generational_chunk_store.go`, plus
+`go/store/nbs/gc_generation_test.go` (a new file, not upstream's).
 
 A writer adding table files reads its view of the store's GC generation, and
 retried a manifest whose generation had changed against that same view, so it
 found the same mismatch every time: a writer whose view predated another
 process collecting the store spun until its context ended, and without a
-deadline never returned. It now rebases onto the manifest before the retry,
-whose ref check then runs against the files the store holds, so a chunk
-referencing one the new generation dropped fails with
-`ErrTableFileNotFound`. `nbs.ReplaceStoreTableFiles` points a store's manifest
-at exactly the given table files, keeping its root and starting a new GC
-generation, in one manifest write; a refusal while the manifest has moved past
-the view is `ErrConcurrentManifestWriteDuringOverwrite`.
+deadline never returned. A writer (`AddTableFilesToManifest`, plain or
+generational) now rebases onto the manifest before the retry, whose ref check
+then runs against the files the store holds, so a chunk referencing one the
+new generation dropped fails with `ErrTableFileNotFound`.
+
+- The manifest write checks the generation again against its own read. The
+  two reads disagree when a new generation lands between them, and on a git
+  remote also when `GitBlobstore`'s one-second read TTL lapses between them:
+  the check is served the manifest it last synced, and the write's read
+  fetches the new one. That `ErrGCGenerationExpired` gets the same rebase and
+  retry (`links-storage-3k6u.a53`).
+- A rebase that leaves the view on the generation it just checked against
+  would find the same mismatch on every pass, so the writer fails with
+  `ErrGCGenerationExpired` instead. `rebase` adopts a manifest whose
+  generation changed under an unchanged lock, as `swapTables` writes when the
+  specs are unchanged, so that case moves the view.
+- A collection (the GC finalizer's add) does not rebase. A new generation
+  another process started under it invalidates its mark, and swapping its
+  specs in over that generation would drop files the mark never saw, so it
+  fails with `ErrGCGenerationExpired`.
+
+`nbs.ReplaceStoreTableFiles`
+points a store's manifest at exactly the given table files, keeping its root
+and starting a new GC generation, in one manifest write; a refusal while the
+manifest has moved past the view is
+`ErrConcurrentManifestWriteDuringOverwrite`.
 `internal/store/remote_gc.go` uses it to run a git remote's GC after a
 re-root (`links-storage-3k6u`): the remote never collects itself, and a force
 push only adds table files.
 
-**Retire it when** upstream rebases on a GC-generation mismatch and offers a
-way to replace a remote's table set under a new generation, and the `require`
+**Retire it when** upstream rebases a writer on a GC-generation mismatch,
+whether the check before the write finds it or the manifest write does, fails
+a writer whose rebase does not move it off the generation, fails a collection
+that finds one, and offers a way to replace a remote's table set under a new
+generation, and the `require`
 line moves past that change. Dropping it without that leaves the shared
 remote holding every write ever pushed, and the bare
 `OverwriteStoreManifest` in its place keeps the generation, so a writer

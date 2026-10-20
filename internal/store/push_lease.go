@@ -63,7 +63,7 @@ func (s *Store) pushLeasedWithinLock(ctx context.Context, remote, source, branch
 	case pushErr != nil && strings.Contains(pushErr.Error(), datas.ErrStaleInfo.Error()):
 		return storage.LeaseStale, nil
 	case pushErr != nil:
-		return "", classifyPushFailure(ctx, trimmedRemote, pushErr)
+		return "", classifyPushFailure(trimmedRemote, pushErr)
 	default:
 		return storage.LeaseHeld, nil
 	}

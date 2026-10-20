@@ -2255,6 +2255,7 @@ func runImportTreeJSON(ctx context.Context, stdout io.Writer, ap *app.App, data 
 //	id: existing-issue-7     # present => update that issue instead of creating
 //	title: Renamed
 //	labels: [reviewed]
+//	parent: epic-x           # optional; reparents the issue, and "" clears its parent
 //	rank: top                # optional; the file's rank: top documents are stacked, in file order, at the top of their frame
 func runImportBulk(ctx context.Context, stdout io.Writer, ap *app.App, data []byte, actor string) error {
 	specs, err := storage.ParseBulkSpecs(data)
@@ -2265,13 +2266,18 @@ func runImportBulk(ctx context.Context, stdout io.Writer, ap *app.App, data []by
 	if err != nil {
 		return err
 	}
+	// A refused file still returns what it left written, so the event counts
+	// that whether the file landed or not. [LAW:nothing-unseen]
 	result, err := ap.Store.BulkApply(ctx, prefix.Value(), actor, specs)
+	telemetry.Set(ctx, "import.created", len(result.Created))
+	telemetry.Set(ctx, "import.updated", len(result.Updated))
+	telemetry.Set(ctx, "import.reparented", len(result.Reparented))
+	telemetry.Set(ctx, "import.parent_held", len(result.ParentHeld))
+	telemetry.Set(ctx, "import.reparents_undone", len(result.ReparentsUndone))
+	telemetry.Set(ctx, "import.ranked", len(result.Ranked.Resolutions))
 	if err != nil {
 		return err
 	}
-	telemetry.Set(ctx, "import.created", len(result.Created))
-	telemetry.Set(ctx, "import.updated", len(result.Updated))
-	telemetry.Set(ctx, "import.ranked", len(result.Ranked.Resolutions))
 	if _, err := fmt.Fprintf(stdout, "created %d issues\n", len(result.Created)); err != nil {
 		return err
 	}
@@ -2280,11 +2286,16 @@ func runImportBulk(ctx context.Context, stdout io.Writer, ap *app.App, data []by
 			return err
 		}
 	}
-	if _, err := fmt.Fprintf(stdout, "updated %d issues\n", len(result.Updated)); err != nil {
+	if err := printIDs(stdout, fmt.Sprintf("updated %d issues", len(result.Updated)), result.Updated); err != nil {
 		return err
 	}
-	for _, id := range result.Updated {
-		if _, err := fmt.Fprintf(stdout, "  %s\n", id); err != nil {
+	// A file that states no parent on an update moved nothing, so there is
+	// nothing to report, as with an order it did not state.
+	if len(result.Reparented)+len(result.ParentHeld) > 0 {
+		if err := printIDs(stdout, fmt.Sprintf("reparented %d issues", len(result.Reparented)), result.Reparented); err != nil {
+			return err
+		}
+		if err := printIDs(stdout, fmt.Sprintf("%d issues already had the parent the file states", len(result.ParentHeld)), result.ParentHeld); err != nil {
 			return err
 		}
 	}
@@ -2293,6 +2304,19 @@ func runImportBulk(ctx context.Context, stdout io.Writer, ap *app.App, data []by
 		return nil
 	}
 	return printRankSet(stdout, result.Ranked)
+}
+
+// printIDs writes a heading line and one indented id per line beneath it.
+func printIDs(stdout io.Writer, heading string, ids []string) error {
+	if _, err := fmt.Fprintln(stdout, heading); err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if _, err := fmt.Fprintf(stdout, "  %s\n", id); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func workspaceLeaf() wsLeaf {
