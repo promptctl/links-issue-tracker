@@ -751,7 +751,8 @@ func TestVersionContentDriftResetSurvivesCallerCancel(t *testing.T) {
 		mismatch := &VersionContentMismatchError{Version: 2, Name: "00002_add_lane.sql", Missing: []string{"issues.lane"}}
 		_, fail := st.repairVersionContentDriftWithRollback(ctx, applied, mismatch)
 		versionContentDriftRepairForTest = nil
-		if fail == nil || fail.Step != stepDriftRepair || !errors.Is(fail, context.Canceled) || !strings.Contains(fail.Error(), "working set reset to checkpoint") {
+		var held *CheckpointResetError
+		if fail == nil || fail.Step != stepDriftRepair || !errors.Is(fail, context.Canceled) || !errors.As(fail, &held) {
 			t.Fatalf("repairVersionContentDriftWithRollback() failure = %v; want step drift_repair reporting the cancelled repair with a completed reset", fail)
 		}
 		cols, err := st.tableColumns(bg, "issues")

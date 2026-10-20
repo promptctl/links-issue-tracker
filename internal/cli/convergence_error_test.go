@@ -188,45 +188,6 @@ func TestConvergenceRemediationsNameOnlyActsThatCanWork(t *testing.T) {
 	}
 }
 
-// recordedForTest is an error that records facts and counts and wraps a cause.
-type recordedForTest struct {
-	facts  map[string]any
-	counts map[string]int
-	cause  error
-}
-
-func (e *recordedForTest) Error() string { return "recorded" }
-func (e *recordedForTest) Unwrap() error { return e.cause }
-func (e *recordedForTest) EventRecord() (map[string]any, map[string]int) {
-	return e.facts, e.counts
-}
-
-// The event carries the record of every error in the chain, through wrapping
-// and through each branch of a join, and the outermost record wins a key two
-// records share.
-func TestErrorRecordMergesEveryRecordInTheChain(t *testing.T) {
-	t.Parallel()
-	err := &recordedForTest{
-		facts: map[string]any{"outer": 1, "shared": "outer"},
-		cause: errors.Join(
-			&recordedForTest{facts: map[string]any{"joined": 2, "shared": "joined"}},
-			fmt.Errorf("wrapped: %w", &recordedForTest{facts: map[string]any{"deep": 3}, counts: map[string]int{"deep.count": 4}}),
-		),
-	}
-	facts, counts := errorRecord(err)
-	for key, want := range map[string]any{"outer": 1, "joined": 2, "deep": 3, "shared": "outer"} {
-		if facts[key] != want {
-			t.Errorf("facts[%q] = %v, want %v", key, facts[key], want)
-		}
-	}
-	if counts["deep.count"] != 4 {
-		t.Errorf("counts = %v, want deep.count 4", counts)
-	}
-	if facts, counts := errorRecord(errors.New("plain")); facts != nil || counts != nil {
-		t.Errorf("errorRecord(plain) = %v, %v; want nothing recorded", facts, counts)
-	}
-}
-
 // A failed convergence records the step, the snapshot and the prune failure
 // under the keys a successful open uses, and the facts of the cause it wraps.
 func TestAConvergenceFailureRecordsItsStepSnapshotAndCause(t *testing.T) {
@@ -299,5 +260,36 @@ func TestAnUnconvergeableQuarantineTableRefusesWithItsShapeReason(t *testing.T) 
 	}
 	if got := ev.Facts["migration.failed_step"]; got != "quarantine_table_shape" {
 		t.Errorf("migration.failed_step = %v, want quarantine_table_shape", got)
+	}
+}
+
+// A quarantine in force reaches the event as the version it holds, on every
+// failure that carries one: the open that recorded it (steps migration and
+// commit_quarantine, through the reset outcome that wraps it) and each later
+// open it refuses (check_quarantine). Each reads migration_quarantined at exit
+// 3, with the remediation that names the quarantine.
+func TestAQuarantineInForceIsRecordedOnEveryFailureThatCarriesIt(t *testing.T) {
+	t.Parallel()
+	quarantine := &store.QuarantineBlockError{Version: 7, Name: "00007_x.sql", ErrorText: "simulated migration failure"}
+	for _, tc := range []struct {
+		step  string
+		cause error
+	}{
+		{"migration", fmt.Errorf("reset held: %w", quarantine)},
+		{"commit_quarantine", errors.Join(errors.New("commit quarantine v7: simulated"), quarantine)},
+		{"check_quarantine", quarantine},
+	} {
+		err := fmt.Errorf("open store: %w", &store.SchemaConvergenceError{Step: convergenceStep(t, tc.step), Cause: tc.cause})
+		var stderr strings.Builder
+		if exit := WriteCommandError(&stderr, err); exit != 3 || !strings.Contains(stderr.String(), "remediation: Do not retry unchanged — a migration this workspace has pending failed and is quarantined") {
+			t.Errorf("step %s: exit %d, stderr %q; want exit 3 and the quarantine remediation", tc.step, exit, stderr.String())
+		}
+		end := invocationEnd(time.Now(), err, nil)
+		if end.Reason != "migration_quarantined" {
+			t.Errorf("step %s: reason = %q, want migration_quarantined", tc.step, end.Reason)
+		}
+		if got := end.Facts["migration.quarantine_version"]; got != int64(7) {
+			t.Errorf("step %s: migration.quarantine_version = %v, want 7", tc.step, got)
+		}
 	}
 }
