@@ -177,6 +177,18 @@ func mappingRefs(t *testing.T, output string) []string {
 	return refs
 }
 
+// importedID is the real id an import report maps ref to.
+func importedID(t *testing.T, output, ref string) string {
+	t.Helper()
+	for _, line := range strings.Split(output, "\n") {
+		if id, ok := strings.CutPrefix(line, "  "+ref+" -> "); ok {
+			return id
+		}
+	}
+	t.Fatalf("import report maps no %q:\n%s", ref, output)
+	return ""
+}
+
 // Both determinism tests print a five-issue mapping and require the exact
 // same ref sequence on every run: the engine's creation order (dependencies
 // before dependents — t1 before t2 even though the file lists t2 first),
@@ -487,15 +499,7 @@ func TestRunImportYAMLRankTopOrdersTheBacklogInOneCall(t *testing.T) {
 	seeded := runCLIInDir(t, dir, "import", "--path", writeImportFile(t, "seed.yaml", seed.String()))
 	epics := make([]string, 10)
 	for i := range epics {
-		prefix := fmt.Sprintf("e%d -> ", i)
-		for _, line := range strings.Split(seeded, "\n") {
-			if rest, ok := strings.CutPrefix(strings.TrimSpace(line), prefix); ok {
-				epics[i] = rest
-			}
-		}
-		if epics[i] == "" {
-			t.Fatalf("seed import did not report e%d:\n%s", i, seeded)
-		}
+		epics[i] = importedID(t, seeded, fmt.Sprintf("e%d", i))
 	}
 	var file strings.Builder
 	var want []string
@@ -538,15 +542,7 @@ func TestRunImportEventCountsWhatTheFileWrote(t *testing.T) {
 	]`)
 	created := runCLIInDir(t, dir, "import", "--path", tree)
 	assertFacts(t, map[string]string{"import.created": "2"})
-	var child string
-	for _, line := range strings.Split(created, "\n") {
-		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "t1 -> "); ok {
-			child = rest
-		}
-	}
-	if child == "" {
-		t.Fatalf("tree import did not report t1:\n%s", created)
-	}
+	child := importedID(t, created, "t1")
 
 	yaml := writeImportFile(t, "mixed.yaml", fmt.Sprintf("title: fresh\ntype: task\ntopic: demo\nparent: %s\nrank: top\n---\nid: %s\ntitle: home, renamed\nparent: \"\"\n---\nid: %s\nparent: %s\n", epic, epic, child, epic))
 	out := runCLIInDir(t, dir, "import", "--path", yaml)
@@ -565,9 +561,10 @@ func TestRunImportEventCountsWhatTheFileWrote(t *testing.T) {
 func TestRunImportEventCountsWhatARefusedFileKept(t *testing.T) {
 	isolateEvents(t)
 	dir := newInitTestRepo(t)
-	from := newEpicInDir(t, dir, "from")
-	to := newEpicInDir(t, dir, "to")
-	mover := extractTicketID(t, runCLIInDir(t, dir, "new", "--type", "task", "--title", "mover", "--topic", "demo", "--parent", from))
+	// One import seeds the fixture: a `lit new` per issue would cost this
+	// serial test three invocations for no behavior it pins.
+	seeded := runCLIInDir(t, dir, "import", "--path", writeImportFile(t, "seed.yaml", "local_id: from\ntitle: from\ntype: epic\ntopic: demo\n---\nlocal_id: to\ntitle: to\ntype: epic\ntopic: demo\n---\nlocal_id: mover\ntitle: mover\ntype: task\ntopic: demo\nparent: from\n"))
+	to, mover := importedID(t, seeded, "to"), importedID(t, seeded, "mover")
 	yaml := writeImportFile(t, "refused.yaml", fmt.Sprintf("id: %s\nparent: %s\ntitle: renamed\n---\nid: missing-1\ntitle: ghost\n", mover, to))
 	if out, err := runCLIInDirAllowError(t, dir, "import", "--path", yaml); err == nil {
 		t.Fatalf("import succeeded; want the missing update refused:\n%s", out)
