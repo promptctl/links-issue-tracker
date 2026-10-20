@@ -157,3 +157,17 @@ func TestTheCompactionBackstopLeavesNoSyncListsOnItsCommandsEvent(t *testing.T) 
 		}
 	}
 }
+
+// A pull with no remote to pull from says which skip on its event, and
+// carries no base: it settled nothing. [LAW:nothing-unseen]
+func TestAPullWithNoRemoteRecordsItsSkip(t *testing.T) {
+	dir, _ := litRepoForCadence(t)
+	runCLIInDir(t, dir, "sync", "pull")
+	ev := lastEvent(t)
+	if ev.Facts["pull.state"] != string(syncTargetNoRemote) {
+		t.Fatalf("event %q pull.state = %v; want %s", ev.Event, ev.Facts["pull.state"], syncTargetNoRemote)
+	}
+	if base, present := ev.Facts["pull.base"]; present {
+		t.Fatalf("event %q pull.base = %v; want absent, since nothing settled", ev.Event, base)
+	}
+}

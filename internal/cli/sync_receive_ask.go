@@ -258,7 +258,7 @@ func confirmRemoteUnmoved(ctx context.Context, ws workspace.Info, observed remot
 	if err := markFetchSuccess(ws, observed.remote); err != nil {
 		fmt.Fprintf(os.Stderr, "lit: fetch-success marker not written: %v\n", err)
 	}
-	recordReceiveDecided(ctx, ws, receiveDecisionRemoteUnmoved, "ok",
+	recordReceiveDecided(ctx, ws, receiveDecisionRemoteUnmoved,
 		"automatic receive found the remote unmoved since the last receive; nothing fetched",
-		map[string]string{"remote": observed.remote.String()})
+		observed.remote, nil)
 }

@@ -1225,7 +1225,10 @@ func (s *Store) SyncFreshness(ctx context.Context, remote storage.RemoteName, br
 	if err != nil {
 		return storage.SyncFreshness{}, err
 	}
-	freshness := storage.SyncFreshness{Remote: remote.String(), Branch: trimmedBranch}
+	// A branch that never synced has no base: the base's source starts at
+	// none, so every freshness says where its base came from.
+	// [LAW:types-are-the-program]
+	freshness := storage.SyncFreshness{Remote: remote.String(), Branch: trimmedBranch, Base: storage.ReconcileBase{Source: storage.ReconcileBaseNone}}
 	trackingRef := fmt.Sprintf("remotes/%s/%s", remote, trimmedBranch)
 
 	tracked, err := trackingRefExists(ctx, s.db, trackingRef)

@@ -308,6 +308,9 @@ func syncPullLeaf() syncLeaf {
 			// traceMetadata is nil before a remote was selected, so the no-remote and
 			// empty-remote skips trace exactly what resolution established.
 			recordSyncCommandTrace(ws, "lit sync pull", string(target.skip), nil, target.traceMetadata())
+			// A pull with nothing to pull from says which skip, under the
+			// state's key; there was no settle, so no base. [LAW:nothing-unseen]
+			telemetry.Set(ctx, "pull.state", string(target.skip))
 			// [LAW:dataflow-not-control-flow] exception: explicit no-remote policy requires suppressing sync side effects when remote resolution yields empty input.
 			return printSyncPullOutcome(stdout, syncPullOutcome{skip: target.skip, remote: target.remote}, *verbose)
 		}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -87,7 +88,7 @@ func scheduleReceive(ctx context.Context, ws workspace.Info) {
 	if err != nil {
 		// Couldn't read remotes — unexpected; surface it loudly rather than treat
 		// it as "no remote". [LAW:no-silent-failure]
-		recordReceiveError(ctx, ws, fmt.Errorf("check git remotes: %w", err))
+		recordReceiveError(ctx, ws, storage.RemoteName{}, fmt.Errorf("check git remotes: %w", err))
 		return
 	}
 	if !hasRemote {
@@ -96,7 +97,7 @@ func scheduleReceive(ctx context.Context, ws workspace.Info) {
 	if err := spawnDetachedWorker(ws, backgroundReceiveSubcommand, ReceiveLogName, receiveEnv(), os.Getpid()); err != nil {
 		cause := fmt.Errorf("start the background receive: %w", err)
 		fmt.Fprintf(os.Stderr, "lit: automatic receive not started: %v\n", err)
-		recordReceiveError(ctx, ws, cause)
+		recordReceiveError(ctx, ws, storage.RemoteName{}, cause)
 	}
 }
 
@@ -144,10 +145,10 @@ func backgroundReceiveLeaf() wsLeaf {
 func receiveWhenQuiet(ctx context.Context, ws workspace.Info, parentPID int) time.Duration {
 	if !waitForParentExit(ctx, parentPID, os.Getppid, workerParentWaitTimeout, workerParentPollDelay) {
 		if ctx.Err() != nil {
-			recordReceiveError(ctx, ws, fmt.Errorf("receive torn down while waiting for the spawning command to exit: %w", ctx.Err()))
+			recordReceiveError(ctx, ws, storage.RemoteName{}, fmt.Errorf("receive torn down while waiting for the spawning command to exit: %w", ctx.Err()))
 			return 0
 		}
-		recordReceiveError(ctx, ws, fmt.Errorf(
+		recordReceiveError(ctx, ws, storage.RemoteName{}, fmt.Errorf(
 			"spawning command (pid %d) still running after %s; skipping the receive to avoid racing its engine",
 			parentPID, workerParentWaitTimeout))
 		return 0
@@ -155,7 +156,7 @@ func receiveWhenQuiet(ctx context.Context, ws workspace.Info, parentPID int) tim
 	waited, err := awaitNoLiveMirror(ctx, ws, receiveMirrorWait())
 	if err != nil {
 		if ctx.Err() != nil {
-			recordReceiveError(ctx, ws, fmt.Errorf("receive torn down while waiting for the mirror: %w", ctx.Err()))
+			recordReceiveError(ctx, ws, storage.RemoteName{}, fmt.Errorf("receive torn down while waiting for the mirror: %w", ctx.Err()))
 			return waited
 		}
 		// A mirror that will not finish, or a beacon that cannot be read, costs
@@ -260,7 +261,7 @@ func receiveOnce(ctx context.Context, ws workspace.Info) {
 	if err != nil {
 		// Couldn't read remotes — unexpected; surface it loudly rather than treat
 		// it as "no remote". [LAW:no-silent-failure]
-		recordReceiveError(ctx, ws, fmt.Errorf("check git remotes: %w", err))
+		recordReceiveError(ctx, ws, storage.RemoteName{}, fmt.Errorf("check git remotes: %w", err))
 		return
 	}
 	if len(gitRemotes) == 0 {
@@ -277,12 +278,16 @@ func receiveOnce(ctx context.Context, ws workspace.Info) {
 	defer cancel()
 
 	observed, askErr := askRemote(timeoutCtx, ws, gitRemotes)
+	// Whether the remote answered is a fact of every receive that asked: null
+	// when it did, and when it could not tell, why — the fetch that follows
+	// reads the same either way. [LAW:nothing-unseen]
+	telemetry.Set(ctx, "receive.remote_check_error", telemetry.ErrorText(askErr))
 	// A remote lit cannot sync with is known before the remote is asked, and
 	// the clone's own sync would refuse it the same way, so the receive fails
 	// here, before the lock and the clone, rather than trace "could not tell"
 	// and fetch. [LAW:no-silent-failure]
 	if refused := (storage.RefusedRemoteNameError{}); errors.As(askErr, &refused) {
-		recordReceiveError(ctx, ws, askErr)
+		recordReceiveError(ctx, ws, observed.remote, askErr)
 		return
 	}
 	if askErr != nil {
@@ -302,13 +307,13 @@ func receiveOnce(ctx context.Context, ws workspace.Info) {
 
 	release, acquired, err := store.TryAcquireReceiveLock(ws.DatabasePath)
 	if err != nil {
-		recordReceiveError(ctx, ws, fmt.Errorf("take the receive lock: %w", err))
+		recordReceiveError(ctx, ws, observed.remote, fmt.Errorf("take the receive lock: %w", err))
 		return
 	}
 	if !acquired {
-		recordReceiveDecided(ctx, ws, receiveDecisionLockHeld, "ok",
+		recordReceiveDecided(ctx, ws, receiveDecisionLockHeld,
 			"another automatic receive holds the receive lock; it fetches what this one would have",
-			syncTarget{remote: observed.remote}.traceMetadata())
+			observed.remote, nil)
 		return
 	}
 	defer func() {
@@ -319,7 +324,7 @@ func receiveOnce(ctx context.Context, ws workspace.Info) {
 	outcome, err := receiveAndRecord(timeoutCtx, ws, observed)
 	if err != nil {
 		// Could-not-attempt (the clone, or the clone's own target): record and stop.
-		recordReceiveError(ctx, ws, err)
+		recordReceiveError(ctx, ws, observed.remote, err)
 		return
 	}
 	// The store is closed by now: surfacing can run the owner-notify hook,
@@ -759,8 +764,8 @@ func performSyncReceive(ctx context.Context, ws workspace.Info, clone liveClone,
 	// The settle's decision lands on the invocation's event too, one value per
 	// receive, with where the receive stopped — the reconcile included — and the
 	// run's two times. [LAW:nothing-unseen]
-	telemetry.Append(ctx, "receive.outcomes", map[string]any{
-		"receive.decision":                receiveDecision,
+	value := receiveOutcomeValue(receiveDecision, remoteName, outcome.err)
+	maps.Copy(value, map[string]any{
 		"receive.ahead":                   result.Ahead,
 		"receive.behind":                  result.Behind,
 		"receive.base":                    traceMetadata["base"],
@@ -769,6 +774,7 @@ func performSyncReceive(ctx context.Context, ws workspace.Info, clone liveClone,
 		"receive.unsettled_previous_stop": unixOrZero(run.previousStop),
 		"receive.settled_last":            unixOrZero(run.settledLast),
 	})
+	telemetry.Append(ctx, "receive.outcomes", value)
 	// What the landing deleted from the live store, record by record.
 	// [LAW:nothing-unseen]
 	reportEventValues(ctx, "receive.landed_pruned", landed.Pruned)
@@ -930,19 +936,32 @@ func recordReceiveTrace(ws workspace.Info, decision, status, reason string, meta
 	return traceRecordErr
 }
 
-// recordReceiveDecided is the one record of a receive that ended without a
-// settle: its decision goes to both traces and, with the trace's metadata
-// under receive.*, as the receive's one value on the event's
-// receive.outcomes. A settle records its own value (performSyncReceive), so
-// every receive puts exactly one. [LAW:nothing-unseen] [LAW:single-enforcer]
-// A trace-write failure is not swallowed — it goes to stderr with the
-// decision beside it. [LAW:no-silent-failure]
-func recordReceiveDecided(ctx context.Context, ws workspace.Info, decision, status, reason string, metadata map[string]string) {
-	value := map[string]any{"receive.decision": decision}
-	for key, v := range metadata {
-		value["receive."+key] = v
+// receiveOutcomeValue is what every value on receive.outcomes carries,
+// settled or not: how the receive ended, the remote it chose ("" when it
+// ended before choosing one), and its error, null when it had none. A settle
+// adds its own keys beside these. [LAW:one-source-of-truth] one shape for
+// every receive's value.
+func receiveOutcomeValue(decision string, remote storage.RemoteName, cause error) map[string]any {
+	return map[string]any{
+		"receive.decision": decision,
+		"receive.remote":   remote.String(),
+		"receive.error":    telemetry.ErrorText(cause),
 	}
-	telemetry.Append(ctx, "receive.outcomes", value)
+}
+
+// recordReceiveDecided is the one record of a receive that ended without a
+// settle: its decision goes to both traces and, as receiveOutcomeValue, to
+// the receive's one value on the event's receive.outcomes. A settle records
+// its own value (performSyncReceive), so every receive puts exactly one.
+// [LAW:nothing-unseen] [LAW:single-enforcer] A trace-write failure is not
+// swallowed — it goes to stderr with the decision beside it.
+// [LAW:no-silent-failure]
+func recordReceiveDecided(ctx context.Context, ws workspace.Info, decision, reason string, remote storage.RemoteName, cause error) {
+	telemetry.Append(ctx, "receive.outcomes", receiveOutcomeValue(decision, remote, cause))
+	status, metadata := "ok", syncTarget{remote: remote}.traceMetadata()
+	if cause != nil {
+		status, metadata = "error", map[string]string{"error": cause.Error()}
+	}
 	if traceErr := recordReceiveTrace(ws, decision, status, reason, metadata); traceErr != nil {
 		fmt.Fprintf(os.Stderr, "lit: automatic receive could not record its trace (%v); it decided %s: %s\n", traceErr, decision, reason)
 	}
@@ -951,15 +970,15 @@ func recordReceiveDecided(ctx context.Context, ws workspace.Info, decision, stat
 // recordReceiveError records a could-not-attempt failure, so an automatic
 // receive that fails is loud out-of-band rather than silent.
 // [LAW:no-silent-failure]
-func recordReceiveError(ctx context.Context, ws workspace.Info, cause error) {
-	recordReceiveDecided(ctx, ws, "error", "error", cause.Error(), map[string]string{"error": cause.Error()})
+func recordReceiveError(ctx context.Context, ws workspace.Info, remote storage.RemoteName, cause error) {
+	recordReceiveDecided(ctx, ws, "error", cause.Error(), remote, cause)
 }
 
 // recordReceiveSkip records a receive that found nothing to sync against,
 // under the skip's own name, the one resolveSyncTarget gives it.
 // [LAW:one-source-of-truth]
 func recordReceiveSkip(ctx context.Context, ws workspace.Info, target syncTarget) {
-	recordReceiveDecided(ctx, ws, string(target.skip), "ok", receiveSkipReason(target.skip), target.traceMetadata())
+	recordReceiveDecided(ctx, ws, string(target.skip), receiveSkipReason(target.skip), target.remote, nil)
 }
 
 // receiveSkipReason is a skip's sentence in the receive's trace.

@@ -13,8 +13,8 @@ const (
 	// remote re-rooted above every commit this checkout holds, and the base is
 	// the merge base of the local head and the fork point.
 	ReconcileBaseForkPoint ReconcileBaseSource = "fork_point"
-	// ReconcileBaseNone: there is no base, and the divergence is unrelated
-	// histories.
+	// ReconcileBaseNone: there is no base — the branch never synced, or the
+	// heads share no history and the divergence is unrelated histories.
 	ReconcileBaseNone ReconcileBaseSource = "none"
 )
 

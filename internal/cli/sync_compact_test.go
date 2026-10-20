@@ -292,7 +292,7 @@ func TestRunSyncCompactSurfacesAndTracesAFailedPass(t *testing.T) {
 // reachable from the cadence e2e tests: they drive a fresh workspace whose
 // footprint is under every threshold, so CompactIfDue always declines there.
 // [LAW:behavior-not-structure]
-func TestCompactThroughSessionRecordsEachOutcome(t *testing.T) {
+func TestCompactThroughRecordsEachOutcome(t *testing.T) {
 	t.Parallel()
 
 	t.Run("a pass that ran is recorded under the backstop's own name", func(t *testing.T) {
