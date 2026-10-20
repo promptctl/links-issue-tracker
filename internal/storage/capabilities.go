@@ -147,8 +147,9 @@ type Syncer interface {
 	// whose history has no bound to keep returns none.
 	HistoryBounds() []HistoryBound
 
-	// ForkPointRecords is what every fetch the engine ran since it opened did
-	// to each fork point before it moved the tracking ref, oldest first. A
+	// ForkPointRecords is what the engine did to each fork point since it
+	// opened, oldest first: every fetch before it moved the tracking ref,
+	// every collection below a cut, and every removal of a remote. A
 	// fork point is the remote head this checkout last knew while the two
 	// still shared history: the base a reconcile merges against once the
 	// remote re-roots above every commit this checkout holds.

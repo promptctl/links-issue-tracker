@@ -204,11 +204,11 @@ Family usage `usage: lit sync remote ls` (`sync.go`); only row is `ls` (`sync.go
 
 | Flag | Default | Effect | Line |
 |---|---|---|---|
-| `--remote` | `"origin"` | Remote name | `sync.go` |
+| `--remote` | `""` | Remote name (defaults to upstream remote, then single configured remote) | `sync.go` |
 | `--prune` | `false` | Pass `--prune` to dolt fetch | `sync.go` |
 | `--verbose` | `false` | Include detailed remote output | `sync.go` |
 
-Behavior: reconciles Dolt remotes from git first; a reconcile failure records trace `lit sync fetch`/`error` and returns (`sync.go`). Then `fetchAndFollow` (`sync.go`): `syncer.SyncFetch(ctx, remote, prune)`; on success, `markFetchSuccess(ws)` (a marker write failure prints `lit: fetch-success marker not written: <err>` to stderr and is non-fatal); then `freshnessSyncTarget(ws, gitRemotes)` (`sync_branch.go`) and `syncer.SyncFollowReRoot(ctx, syncRemote, branch, SyncEntryFetch)` on what it resolves, whichever remote was fetched. No sync remote, or a `syncBranchNotKnownError`, follows nothing; any other resolution error is returned. Its one outcome is traced as `lit sync fetch` decision `"fetched"` with metadata `{remote}`, and an error is returned.
+Behavior: reconciles Dolt remotes from git first; a reconcile failure records trace `lit sync fetch`/`error` and returns (`sync.go`). The remote is `resolveSyncRemote(--remote, UpstreamRemote, gitRemotes)`, as pull and push select it; a resolution error is traced `error` and returned, and no remote selected is traced `no_sync_remote` and prints `skipped sync fetch: no eligible git remote` under `--verbose`, nothing otherwise (`sync.go`). Then `fetchAndFollow` (`sync.go`): `syncer.SyncFetch(ctx, remote, prune)`; on success, `markFetchSuccess(ws)` (a marker write failure prints `lit: fetch-success marker not written: <err>` to stderr and is non-fatal); then `freshnessSyncTarget(ws, gitRemotes)` (`sync_branch.go`) and `syncer.SyncFollowReRoot(ctx, syncRemote, branch, SyncEntryFetch)` on what it resolves, whichever remote was fetched. No sync remote, or a bare `syncBranchNotKnownError` (no record), follows nothing; a record that exists but will not read, and any other resolution error, is returned. Its one outcome is traced as `lit sync fetch` decision `"fetched"` with metadata `{remote}`, and an error is returned.
 Output: `fetched` (non-verbose) or `fetched <remote>` (verbose) (`sync.go`).
 
 ### 2.5 `lit sync pull`
@@ -510,7 +510,7 @@ Flag parse output is `io.Discard` (`sync_bg.go`).
 - `failed()` is `Decision == "error"` only (`sync_push_outcome.go`).
 - `pushOutcomeOf(outcome, err, observedBy)` — `sync_push_outcome.go`: stamps `observed_by` on the record `classifyPushOutcome` derives, in order:
   1. `context.Canceled` in `err` or `outcome.pushErr` → `canceled` with the first non-nil error's text, plus remote/branch.
-  2. `store.ErrWorkspaceBusy` in `err` → `workspace_busy` with err text (no remote/branch).
+  2. `store.ErrWorkspaceBusy` in `err` or `outcome.pushErr` → `workspace_busy` with the first non-nil error's text, plus remote/branch.
   3. any other `err` → `error` with err text.
   4. `outcome.pushErr != nil` → `pushFailureDecision(outcome.pushErr)` (`diverged` when it holds `storage.ErrPushDiverged`, otherwise `error`) with its text plus remote/branch.
   5. `outcome.skip != syncTargetReady` → decision = `string(outcome.skip)`, remote only.
