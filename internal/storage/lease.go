@@ -16,8 +16,9 @@ const (
 	// on it, so whether the remote carries the pushed commit is answered by a fetch, as
 	// SyncPushFromClone answers it for a refused push.
 	LeaseStale LeaseOutcome = "stale"
-	// LeaseUnsettled: the push reached the remote's transport and came back
-	// with no verdict, its error beside it. An attempt before the last may
-	// have landed, so it is answered by a fetch, as a stale lease is.
+	// LeaseUnsettled: the push was sent and came back with no verdict, its
+	// error beside it, an unreachable remote's among them. The write may have
+	// landed before the transport failed, or an attempt before the last may
+	// have, so it is answered by a fetch, as a stale lease is.
 	LeaseUnsettled LeaseOutcome = "unsettled"
 )

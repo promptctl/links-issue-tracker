@@ -592,7 +592,7 @@ func syncPushTraceMetadata(remoteName, syncBranch string, result storage.SyncPus
 	// Why a landed push carries no advertisement proof, and whether the
 	// remote may carry the bound's re-root in the pushed head's place.
 	// [LAW:nothing-unseen]
-	if bound := result.Bound; bound.ReRooted.Head != "" {
+	if bound := result.Bound; bound.Publication != storage.ReRootNotPushed {
 		metadata["after_push"] = fmt.Sprintf("the history bound wrote re-root %s of %s after the push: %s", bound.ReRooted.Head, bound.Head, bound.Publication)
 	}
 	if pushErr != nil {
