@@ -101,7 +101,7 @@ func remoteBranches(t *testing.T, ctx context.Context, alpha string) (master, ot
 	t.Helper()
 	st := openSyncOrFatal(t, ctx, alpha)
 	defer func() { _ = st.Close() }()
-	if err := st.SyncFetch(ctx, remoteName(t, "origin"), true); err != nil {
+	if err := st.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatal(err)
 	}
 	master, err := commitHashOfRef(ctx, st.db, "remotes/origin/master")

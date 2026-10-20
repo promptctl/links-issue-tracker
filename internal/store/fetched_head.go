@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -31,8 +33,9 @@ const (
 	FetchedHeadUnchanged
 	// FetchedHeadAbsent: the clone held no such ref — for the tracking ref,
 	// its fetch found no such branch on the remote; for the fork point, it
-	// recorded none — so there was nothing to land and the live ref was not
-	// touched.
+	// recorded none — so there was nothing to land on it. A tracking ref the
+	// fetch pruned goes by LandedFetch.Pruned, and a fork point left without
+	// its ref by LandedFetch.ForkPointsDropped.
 	FetchedHeadAbsent
 )
 
@@ -55,12 +58,19 @@ func (r FetchedHeadRecord) String() string {
 var ErrRemoteCacheNotLanded = errors.New("the fetched git objects did not reach the live store's mirror of the remote, so its next network operation downloads them again")
 
 // LandedFetch is what LandFetchedHead established: what it did to the tracking
-// ref and to its fork point, and how long the live store was held for the copy.
+// ref and to its fork point, which of the remote's tracking refs and fork
+// points it deleted, and how long the live store was held for the copy.
 type LandedFetch struct {
 	Record FetchedHeadRecord
 	// ForkPoint is what the landing did to the tracking ref's fork point:
 	// absent when the clone recorded none.
 	ForkPoint FetchedHeadRecord
+	// Pruned is every tracking ref the clone's fetch pruned that the live
+	// store still held at the head the clone pruned, and so deleted.
+	Pruned []storage.PrunedRef
+	// ForkPointsDropped is every live fork point of the remote left without
+	// its tracking ref once the landing's refs stood, and so deleted.
+	ForkPointsDropped []storage.ForkPointRecord
 	// Held is the landing's work under the hold, from the open's success to
 	// the end of the git copy; zero when nothing was landed.
 	Held time.Duration
@@ -101,10 +111,23 @@ type LandedFetch struct {
 // coResidentHolderWait fails a contender naming the receive worker, which
 // is the ordinary account of a long hold.
 //
+// The clone's fetch pruned too, and pruned is what it pruned (its session's
+// PrunedRefs). Each of remote's pruned refs the clone still lacks is deleted
+// from the live store only while it still names the head the clone pruned.
+// For a session whose first fetch pruned the ref, that head is the live one
+// at the take, since the clone is a copy of the live store; a ref the live
+// store moved or created since is left as it stands, and so is one an earlier
+// fetch of the session moved before a later one pruned it, until the next
+// receive's own fetch prunes it. Then every live
+// fork point of remote whose tracking ref the live store no longer holds goes,
+// by the one rule a fetch's own drop follows (orphanForkPoints). It runs after
+// the sync branch's ref is set, so the sync branch keeps its fork point
+// whenever the remote has the branch.
+//
 // The mirror's objects land last: a failure there is returned wrapping
 // ErrRemoteCacheNotLanded with the result, because the chunks and ref it
 // follows are already written and stand.
-func LandFetchedHead(ctx context.Context, doltRootDir, cloneRootDir string, remote storage.RemoteName, branch string) (landed LandedFetch, err error) {
+func LandFetchedHead(ctx context.Context, doltRootDir, cloneRootDir string, remote storage.RemoteName, branch string, pruned []storage.PrunedRef) (landed LandedFetch, err error) {
 	root, err := validateDoltRootDir(doltRootDir)
 	if err != nil {
 		return LandedFetch{}, err
@@ -130,15 +153,19 @@ func LandFetchedHead(ctx context.Context, doltRootDir, cloneRootDir string, remo
 	if err != nil {
 		return LandedFetch{}, fmt.Errorf("read the clone's %s: %w", trackingRef.String(), err)
 	}
-	if !found {
-		return LandedFetch{Record: FetchedHeadAbsent, ForkPoint: FetchedHeadAbsent}, nil
-	}
 	forkPointRef := ref.NewBranchRef(forkPointBranch(ownerOf(remote), trimmedBranch))
 	forkPoint, forkPointFound, err := resolveRefHead(ctx, clone, forkPointRef)
 	if err != nil {
 		return LandedFetch{}, fmt.Errorf("read the clone's %s: %w", forkPointRef.String(), err)
 	}
-	heads := []hash.Hash{fetched}
+	pruned, err = clonePrunes(ctx, clone, remote, pruned)
+	if err != nil {
+		return LandedFetch{}, err
+	}
+	var heads []hash.Hash
+	if found {
+		heads = append(heads, fetched)
+	}
 	if forkPointFound {
 		heads = append(heads, forkPoint)
 	}
@@ -173,15 +200,28 @@ func LandFetchedHead(ctx context.Context, doltRootDir, cloneRootDir string, remo
 				return landErr
 			}
 		}
-		landed.Record, landErr = landRef(holdCtx, ddb, trackingRef, fetched)
+		landed.Record = FetchedHeadAbsent
+		if found {
+			landed.Record, landErr = landRef(holdCtx, ddb, trackingRef, fetched)
+			if landErr != nil {
+				return landErr
+			}
+		}
+		landed.Pruned, landErr = landPrunes(holdCtx, ddb, pruned)
+		if landErr != nil {
+			return landErr
+		}
+		landed.ForkPointsDropped, landErr = dropOrphanForkPointsAt(holdCtx, ddb, ownerOf(remote))
 		if landErr != nil {
 			return landErr
 		}
 		cacheErr = errors.Join(cacheErr, cachePlan.apply(holdCtx))
 		return nil
 	})
+	// A failed hold returns what it did before the failure: each deletion
+	// stands once made. [LAW:nothing-unseen]
 	if err != nil {
-		return LandedFetch{Held: landed.Held}, err
+		return landed, err
 	}
 	if cacheErr != nil {
 		return landed, fmt.Errorf("%w: %s landed (%s): %w", ErrRemoteCacheNotLanded, trackingRef.String(), landed.Record, cacheErr)
@@ -222,6 +262,108 @@ func landRef(ctx context.Context, ddb *doltdb.DoltDB, r ref.DoltRef, fetched has
 		return 0, fmt.Errorf("land fetched head %s on %s: %w", fetched, r.String(), err)
 	}
 	return FetchedHeadMoved, nil
+}
+
+// clonePrunes is the prunes of remote the clone's session ended on: those
+// whose tracking ref the clone does not hold. A session fetches more than
+// once, so a later fetch that brought a branch back undid its prune.
+func clonePrunes(ctx context.Context, clone *doltdb.DoltDB, remote storage.RemoteName, pruned []storage.PrunedRef) ([]storage.PrunedRef, error) {
+	var standing []storage.PrunedRef
+	for _, p := range pruned {
+		if p.Remote != remote.String() {
+			continue
+		}
+		r := ref.NewRemoteRef(p.Remote, p.Branch)
+		_, held, err := resolveRefHead(ctx, clone, r)
+		if err != nil {
+			return nil, fmt.Errorf("read the clone's %s: %w", r.String(), err)
+		}
+		if !held {
+			standing = append(standing, p)
+		}
+	}
+	return standing, nil
+}
+
+// landPrunes deletes each pruned tracking ref the live store still holds at
+// the head the clone pruned, and returns those it deleted. A ref already
+// gone, or moved since the take, is left as it stands.
+func landPrunes(ctx context.Context, ddb *doltdb.DoltDB, pruned []storage.PrunedRef) ([]storage.PrunedRef, error) {
+	var deleted []storage.PrunedRef
+	for _, p := range pruned {
+		r := ref.NewRemoteRef(p.Remote, p.Branch)
+		current, found, err := resolveRefHead(ctx, ddb, r)
+		if err != nil {
+			return deleted, fmt.Errorf("land the prune of %s: read it: %w", r.String(), err)
+		}
+		if !found || current.String() != p.Head {
+			continue
+		}
+		if err := deleteRef(ctx, ddb, r); err != nil {
+			return deleted, fmt.Errorf("land the prune of %s: %w", r.String(), err)
+		}
+		deleted = append(deleted, p)
+	}
+	return deleted, nil
+}
+
+// dropOrphanForkPointsAt is dropForkPoints for a store held with no SQL engine:
+// every fork point of owner whose tracking ref the store does not hold goes,
+// decided by orphanForkPoints.
+func dropOrphanForkPointsAt(ctx context.Context, ddb *doltdb.DoltDB, owner refOwner) ([]storage.ForkPointRecord, error) {
+	tracked, err := refHeadsOfType(ctx, ddb, ref.RemoteRefType, trackingRefPrefix(owner))
+	if err != nil {
+		return nil, err
+	}
+	recorded, err := refHeadsOfType(ctx, ddb, ref.BranchRefType, forkPointBranch(owner, ""))
+	if err != nil {
+		return nil, err
+	}
+	orphans := orphanForkPoints(tracked, recorded)
+	var dropped []storage.ForkPointRecord
+	for _, branch := range slices.Sorted(maps.Keys(orphans)) {
+		r := ref.NewBranchRef(forkPointBranch(owner, branch))
+		if err := deleteRef(ctx, ddb, r); err != nil {
+			return dropped, fmt.Errorf("drop fork point %s: %w", r.String(), err)
+		}
+		dropped = append(dropped, storage.ForkPointRecord{Remote: owner.String(), Branch: branch, Head: orphans[branch], Outcome: storage.ForkPointDropped})
+	}
+	return dropped, nil
+}
+
+// refHeadsOfType maps every ref of type t whose path, as refHeadsUnder's
+// queries name it, begins with prefix, the prefix trimmed, to the commit it
+// names.
+func refHeadsOfType(ctx context.Context, ddb *doltdb.DoltDB, t ref.RefType, prefix string) (map[string]string, error) {
+	heads := map[string]string{}
+	err := ddb.VisitRefsOfType(ctx, map[ref.RefType]struct{}{t: {}}, func(r ref.DoltRef, head hash.Hash) error {
+		name := r.GetPath()
+		if t == ref.RemoteRefType {
+			name = "remotes/" + name
+		}
+		if rest, ok := strings.CutPrefix(name, prefix); ok {
+			heads[rest] = head.String()
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list refs under %s: %w", prefix, err)
+	}
+	return heads, nil
+}
+
+// deleteRef deletes r. A branch goes with its working set, as DOLT_BRANCH -D
+// deletes it, so nothing keeps the branch's data reachable; any other ref is
+// its head alone.
+func deleteRef(ctx context.Context, ddb *doltdb.DoltDB, r ref.DoltRef) error {
+	if ws, err := ref.WorkingSetRefForHead(r); err == nil {
+		if err := ddb.DeleteWorkingSet(ctx, ws); err != nil {
+			return fmt.Errorf("delete the working set of %s: %w", r.String(), err)
+		}
+	} else if !errors.Is(err, ref.ErrWorkingSetUnsupported) {
+		return err
+	}
+	return ddb.DeleteBranch(ctx, r, nil)
 }
 
 // resolveRefHead reads the commit a ref names. An absent ref is a real answer

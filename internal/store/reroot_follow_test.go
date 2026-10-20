@@ -239,7 +239,7 @@ func TestAFollowCarriesAFailedCollection(t *testing.T) {
 
 	bravo := openSyncOrFatal(t, ctx, r.bravo)
 	defer func() { _ = bravo.Close() }()
-	if err := bravo.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+	if err := bravo.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch(bravo) error = %v", err)
 	}
 	if err := bravo.SyncFollowReRoot(ctx, remoteName(t, "origin"), "master", storage.SyncEntryFetch); err != nil {
@@ -322,7 +322,7 @@ func TestSyncReconcileFollowsAReRootedRemote(t *testing.T) {
 
 	bravo := openSyncOrFatal(t, ctx, r.bravo)
 	defer func() { _ = bravo.Close() }()
-	if err := bravo.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+	if err := bravo.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch(bravo) error = %v", err)
 	}
 	reconciled, err := bravo.SyncReconcile(ctx, remoteName(t, "origin"), "master")
@@ -452,7 +452,7 @@ func TestTakeFollowsAReRootedRemoteBeforeItCanDiscardASide(t *testing.T) {
 	r := newReRootedRemote(t, ctx, true)
 	bravo := openSyncOrFatal(t, ctx, r.bravo)
 	defer func() { _ = bravo.Close() }()
-	if err := bravo.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+	if err := bravo.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch(bravo) error = %v", err)
 	}
 	_, err := bravo.SyncResolveUnrelated(ctx, remoteName(t, "origin"), "master", storage.TakeRemote, "")
@@ -580,7 +580,7 @@ func TestSyncDoesNotFollowARemoteRootMatchedByMetadataAlone(t *testing.T) {
 
 	st := openSyncOrFatal(t, ctx, stranger)
 	defer func() { _ = st.Close() }()
-	if err := st.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+	if err := st.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch error = %v", err)
 	}
 	reconciled, err := st.SyncReconcile(ctx, remoteName(t, "origin"), "master")
@@ -623,7 +623,7 @@ func TestSyncDoesNotFollowWhenTwoLocalCommitsRebuildToTheRoot(t *testing.T) {
 
 	st := openSyncOrFatal(t, ctx, r.bravo)
 	defer func() { _ = st.Close() }()
-	if err := st.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+	if err := st.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch error = %v", err)
 	}
 	reconciled, err := st.SyncReconcile(ctx, remoteName(t, "origin"), "master")

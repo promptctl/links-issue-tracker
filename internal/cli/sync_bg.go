@@ -547,6 +547,11 @@ type pushedHead struct {
 	// remote after the push (SyncPushResult.Bound.Publication): published or
 	// possibly so, the remote may carry it in head's place.
 	reRoot storage.ReRootPublication
+	// pruned is every tracking ref the clone's fetches pruned, for the
+	// receive that lands a re-rooted push (receivePushedReRoot) to carry
+	// over. RecordPushedHead moves the sync ref alone, so after any other push
+	// the next receive's own fetch prunes the live store.
+	pruned []storage.PrunedRef
 }
 
 // landed reports whether a push landed and its head is known.
@@ -733,7 +738,7 @@ func mirrorCycle(ctx context.Context, log io.Writer, ws workspace.Info, stopAnsw
 // (leaveUnsettledRun).
 func receivePushedReRoot(ctx context.Context, ws workspace.Info, clone liveClone, landed pushedHead) error {
 	target := syncTarget{remote: landed.remote, branch: landed.branch, skip: syncTargetReady}
-	outcome, closeLive := performSyncReceive(ctx, ws, clone, receiveFetch{target: target}, leaveUnsettledRun(ws.DatabasePath))
+	outcome, closeLive := performSyncReceive(ctx, ws, clone, receiveFetch{target: target, pruned: landed.pruned}, leaveUnsettledRun(ws.DatabasePath))
 	if err := closeLive(); err != nil {
 		fmt.Fprintf(os.Stderr, "lit: on-change mirror: live store not closed cleanly after receiving its re-rooted push: %v\n", err)
 	}
@@ -842,7 +847,7 @@ func mirrorOnce(ctx, completionCtx context.Context, session syncSession, ws work
 	// of a re-root, a peer's or the one the clone's history bound published,
 	// which followedReRoot reports. The live store learns it through
 	// RecordPushedHead, or by receiving a re-rooted push.
-	return pushedHead{remote: outcome.remote, branch: outcome.branch, head: outcome.head, proven: outcome.proven, followedReRoot: len(session.syncer.FollowedReRoots()) > 0, reRoot: outcome.reRoot}, nil
+	return pushedHead{remote: outcome.remote, branch: outcome.branch, head: outcome.head, proven: outcome.proven, followedReRoot: len(session.syncer.FollowedReRoots()) > 0, reRoot: outcome.reRoot, pruned: session.syncer.PrunedRefs()}, nil
 }
 
 // waitForParentExit blocks until the spawning command has exited, returning

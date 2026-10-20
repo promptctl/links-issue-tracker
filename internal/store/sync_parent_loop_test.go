@@ -73,7 +73,7 @@ func reconcileB(t *testing.T, ctx context.Context, rootB string) (storage.SyncRe
 	t.Helper()
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	t.Cleanup(func() { _ = syncB.Close() })
-	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
 	res, err := syncB.SyncReconcile(ctx, remoteName(t, "origin"), "master")

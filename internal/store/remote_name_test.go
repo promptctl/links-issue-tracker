@@ -74,13 +74,13 @@ func fetchedRemote(t *testing.T, ctx context.Context, st *Store, name, url strin
 	if err := st.SyncAddRemote(ctx, remoteName(t, name), url); err != nil {
 		t.Fatalf("SyncAddRemote(%s): %v", name, err)
 	}
-	if err := st.SyncFetch(ctx, remoteName(t, name), false); err != nil {
+	if err := st.SyncFetch(ctx, remoteName(t, name)); err != nil {
 		t.Fatalf("SyncFetch(%s): %v", name, err)
 	}
 	if err := st.SyncResetToRemoteHead(ctx, remoteName(t, name), "master"); err != nil {
 		t.Fatalf("SyncResetToRemoteHead(%s): %v", name, err)
 	}
-	if err := st.SyncFetch(ctx, remoteName(t, name), false); err != nil {
+	if err := st.SyncFetch(ctx, remoteName(t, name)); err != nil {
 		t.Fatalf("SyncFetch(%s) again: %v", name, err)
 	}
 	heads := headsUnder(t, ctx, st, `dolt_remote_branches`, "remotes/"+name+"/")
@@ -207,7 +207,7 @@ func TestRemovingACloneHeldSlashNamedRemoteTakesItsRefs(t *testing.T) {
 	if err := st.SyncAddRemote(ctx, remoteName(t, "team"), url); err != nil {
 		t.Fatalf("SyncAddRemote(team): %v", err)
 	}
-	if err := st.SyncFetch(ctx, remoteName(t, "team"), false); err != nil {
+	if err := st.SyncFetch(ctx, remoteName(t, "team")); err != nil {
 		t.Fatalf("SyncFetch(team): %v", err)
 	}
 	if tracked := headsUnder(t, ctx, st, `dolt_remote_branches`, "remotes/team/"); len(tracked) != 1 || tracked["master"] != heads["team/origin/master"] {
@@ -217,16 +217,19 @@ func TestRemovingACloneHeldSlashNamedRemoteTakesItsRefs(t *testing.T) {
 
 // TestRemovingACloneHeldSlashNamedRemoteLeavesItsOwnersRefs: a/b's refs are
 // a's refs for branches b/*, so removing a clone-held a/b beside a drops none
-// of them, and a's pruning fetch then leaves exactly a's own branches and
-// their fork points.
+// of them, and a's next fetch, an ordinary one, prunes them and their fork
+// points and leaves exactly a's own branches.
 func TestRemovingACloneHeldSlashNamedRemoteLeavesItsOwnersRefs(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	url := seededRemoteURL(t, ctx)
-	st, _ := cloneHeldRemote(t, ctx, "a/b", url)
-	aHeads := fetchedRemote(t, ctx, st, "a", url)
-	if _, ok := aHeads["b/master"]; !ok {
-		t.Fatalf("a's tracking refs = %v, want a/b's b/master among them, as Dolt reads it", aHeads)
+	st, heads := cloneHeldRemote(t, ctx, "a/b", url)
+	if err := st.SyncAddRemote(ctx, remoteName(t, "a"), url); err != nil {
+		t.Fatalf("SyncAddRemote(a): %v", err)
+	}
+	held := map[string]string{"b/master": heads["a/b/master"]}
+	if tracked := headsUnder(t, ctx, st, `dolt_remote_branches`, "remotes/a/"); !maps.Equal(tracked, held) {
+		t.Fatalf("a's tracking refs = %v, want a/b's b/master %v, as Dolt reads it", tracked, held)
 	}
 
 	if err := st.SyncRemoveRemote(ctx, "a/b"); err != nil {
@@ -236,22 +239,26 @@ func TestRemovingACloneHeldSlashNamedRemoteLeavesItsOwnersRefs(t *testing.T) {
 	if removals := st.RemoteRemovals(); !slices.Equal(removals, want) {
 		t.Errorf("RemoteRemovals() = %+v, want %+v", removals, want)
 	}
-	if tracked := headsUnder(t, ctx, st, `dolt_remote_branches`, "remotes/a/"); !maps.Equal(tracked, aHeads) {
-		t.Errorf("tracking refs under remotes/a/ after removing a/b = %v, want a's %v", tracked, aHeads)
+	if tracked := headsUnder(t, ctx, st, `dolt_remote_branches`, "remotes/a/"); !maps.Equal(tracked, held) {
+		t.Errorf("tracking refs under remotes/a/ after removing a/b = %v, want a's %v", tracked, held)
 	}
-	if forkPoints := headsUnder(t, ctx, st, `dolt_branches`, forkPointPrefix+"a/"); !maps.Equal(forkPoints, aHeads) {
-		t.Errorf("fork points under lit-fork-point/a/ after removing a/b = %v, want a's %v", forkPoints, aHeads)
+	if forkPoints := headsUnder(t, ctx, st, `dolt_branches`, forkPointPrefix+"a/"); !maps.Equal(forkPoints, held) {
+		t.Errorf("fork points under lit-fork-point/a/ after removing a/b = %v, want a's %v", forkPoints, held)
 	}
 
-	if err := st.SyncFetch(ctx, remoteName(t, "a"), true); err != nil {
-		t.Fatalf("SyncFetch(a, prune): %v", err)
+	if err := st.SyncFetch(ctx, remoteName(t, "a")); err != nil {
+		t.Fatalf("SyncFetch(a): %v", err)
 	}
-	own := map[string]string{"master": aHeads["master"]}
-	if tracked := headsUnder(t, ctx, st, `dolt_remote_branches`, "remotes/a/"); !maps.Equal(tracked, own) {
-		t.Errorf("tracking refs under remotes/a/ after the prune = %v, want a's own %v", tracked, own)
+	wantPruned := []storage.PrunedRef{{Remote: "a", Branch: "b/master", Head: held["b/master"]}}
+	if pruned := st.PrunedRefs(); !slices.Equal(pruned, wantPruned) {
+		t.Errorf("PrunedRefs() = %+v, want %+v", pruned, wantPruned)
 	}
-	if forkPoints := headsUnder(t, ctx, st, `dolt_branches`, forkPointPrefix+"a/"); !maps.Equal(forkPoints, own) {
-		t.Errorf("fork points under lit-fork-point/a/ after the prune = %v, want a's own %v", forkPoints, own)
+	tracked := headsUnder(t, ctx, st, `dolt_remote_branches`, "remotes/a/")
+	if _, ok := tracked["b/master"]; ok || tracked["master"] == "" || len(tracked) != 1 {
+		t.Errorf("tracking refs under remotes/a/ after the fetch = %v, want a's own master alone", tracked)
+	}
+	if forkPoints := headsUnder(t, ctx, st, `dolt_branches`, forkPointPrefix+"a/"); len(forkPoints) != 0 {
+		t.Errorf("fork points under lit-fork-point/a/ after the fetch = %v, want b/master's gone and none recorded for master yet", forkPoints)
 	}
 }
 

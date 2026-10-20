@@ -78,7 +78,7 @@ func TestRemoteHeadSchemaReadsVersion(t *testing.T) {
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	defer syncB.Close()
-	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch: %v", err)
 	}
 	head, synced, err := syncB.trackingHeadHash(ctx, remoteName(t, "origin"), "master")
@@ -110,7 +110,7 @@ func TestGuardRemoteSchemaAheadDetects(t *testing.T) {
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	defer syncB.Close()
-	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch: %v", err)
 	}
 	err := syncB.guardRemoteSchemaAhead(ctx, remoteName(t, "origin"), "master")
@@ -140,7 +140,7 @@ func TestGuardRemoteSchemaNotAheadAtOrBelowMax(t *testing.T) {
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	defer syncB.Close()
-	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch: %v", err)
 	}
 	if err := syncB.guardRemoteSchemaAhead(ctx, remoteName(t, "origin"), "master"); err != nil {
@@ -172,7 +172,7 @@ func TestSyncPushRefusesWhenRemoteSchemaAhead(t *testing.T) {
 	updateLocal(t, ctx, rootB, id, storage.UpdateIssueInput{Lane: strptr("from-b")})
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
-	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch: %v", err)
 	}
 	_, err := syncB.SyncPush(ctx, remoteName(t, "origin"), "master", false, false)
@@ -227,7 +227,7 @@ func TestSyncReconcileRefusesWhenRemoteSchemaAhead(t *testing.T) {
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	defer syncB.Close()
-	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
 	fresh, err := syncB.SyncFreshness(ctx, remoteName(t, "origin"), "master")

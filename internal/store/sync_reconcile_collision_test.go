@@ -141,7 +141,7 @@ func TestSyncReconcileRefusesIDCollisionAndCommitsNothing(t *testing.T) {
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	defer syncB.Close()
-	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
 	headBefore := headCommit(t, ctx, syncB)
@@ -219,7 +219,7 @@ func TestTwoDisconnectedStoresMintDistinctChildIDs(t *testing.T) {
 	// machines filing different work under one epic is ordinary, not a conflict.
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	defer syncB.Close()
-	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
 	res, err := syncB.SyncReconcile(ctx, remoteName(t, "origin"), "master")
@@ -368,7 +368,7 @@ func TestSyncReconcileCombineRefusesIDCollision(t *testing.T) {
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	defer syncB.Close()
-	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
 	headBefore := headCommit(t, ctx, syncB)
@@ -461,7 +461,7 @@ func TestSyncReconcileRefusesIDCollisionFoundInFoldedCommit(t *testing.T) {
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	defer syncB.Close()
-	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
 	// The premise of the FOLD half, asserted rather than assumed: the id is gone

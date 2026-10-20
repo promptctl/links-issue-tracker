@@ -1185,7 +1185,7 @@ func TestSyncResetToRemoteHeadAdoptsUnrelatedHistory(t *testing.T) {
 	if err := consumer.SyncAddRemote(ctx, remoteName(t, "origin"), remoteURL); err != nil {
 		t.Fatalf("SyncAddRemote(consumer) error = %v", err)
 	}
-	if err := consumer.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+	if err := consumer.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch(consumer) error = %v", err)
 	}
 	// The tracking ref exists post-fetch, so the consumer reports Synced — the
@@ -1484,7 +1484,7 @@ func TestSyncReceiveFastForwardsWhenBehindAndDefersDivergence(t *testing.T) {
 	if err := syncB.SyncAddRemote(ctx, remoteName(t, "origin"), remoteURL); err != nil {
 		t.Fatalf("SyncAddRemote(B) error = %v", err)
 	}
-	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch(B) error = %v", err)
 	}
 	if err := syncB.SyncResetToRemoteHead(ctx, remoteName(t, "origin"), "master"); err != nil {

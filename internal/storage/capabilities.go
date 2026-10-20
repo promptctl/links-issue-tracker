@@ -76,7 +76,14 @@ type Syncer interface {
 	// network, which is what lets a read-only command call it.
 	SyncFreshness(ctx context.Context, remote RemoteName, branch string) (SyncFreshness, error)
 
-	SyncFetch(ctx context.Context, remote RemoteName, prune bool) error
+	// SyncFetch fetches remote and prunes: every tracking ref of a branch the
+	// remote no longer has goes, with its fork point, so nothing keeps a
+	// deleted branch's history reachable. PrunedRefs says what went.
+	SyncFetch(ctx context.Context, remote RemoteName) error
+
+	// PrunedRefs is every branch a fetch since the engine opened found gone
+	// from its remote, oldest first.
+	PrunedRefs() []PrunedRef
 
 	// SyncPushFromClone is the push of a store that is a frozen clone of a
 	// live one — the on-change mirror's push. Nothing serializes it against

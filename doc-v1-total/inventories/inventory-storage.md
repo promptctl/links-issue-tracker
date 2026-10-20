@@ -501,7 +501,8 @@ They live beside the specs rather than in an engine because the schema is the co
 - `SyncListRemotes(ctx) ([]SyncRemote, error)`
 - `SyncStatus(ctx) (SyncStatusReport, error)` — local side only: build, position, pending changes, peers; **contacts no network**
 - `SyncFreshness(ctx, remote RemoteName, branch string) (SyncFreshness, error)` — local branch position against a peer as of the last fetch or push; reads local refs, never contacts the network, which is what lets a read-only command call it
-- `SyncFetch(ctx, remote RemoteName, prune bool) error`
+- `SyncFetch(ctx, remote RemoteName) error`
+- `PrunedRefs() []PrunedRef`
 - `SyncPushFromClone(ctx, remote RemoteName, branch string, setUpstream, force bool) (SyncPushResult, error)` — the push of a store that is a frozen clone of a live one (the on-change mirror's push): a push the remote rejects is re-checked, and a remote already carrying the store's HEAD yields a `Superseded` result rather than an error.
 - `SyncRemoteMirrorHolds(ctx, remote RemoteName, commits []string) (bool, error)`: whether this store's local mirror of the remote's data holds every one of the given git commit ids; no network. After a push from this store that landed without being superseded, a held advertised commit is this store's own push, never a peer's later one.
 - `SyncPull(ctx, remote RemoteName, branch string) (SyncPullResult, error)`

@@ -119,7 +119,7 @@ func TestSyncReconcileCombineIsBoundedOnALargeFoldedChain(t *testing.T) {
 	if err := syncB.SyncAddRemote(ctx, remoteName(t, "origin"), remoteURL); err != nil {
 		t.Fatalf("SyncAddRemote(B): %v", err)
 	}
-	if err := syncB.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
 

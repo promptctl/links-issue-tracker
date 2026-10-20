@@ -60,6 +60,9 @@ type Store struct {
 	// forkPoints is what every fetch since the store opened did to each fork
 	// point (recordForkPoints); ForkPointRecords is its one reader.
 	forkPoints []storage.ForkPointRecord
+	// pruned is every branch a fetch since the store opened found gone from
+	// its remote (SyncFetch); PrunedRefs is its one reader.
+	pruned []storage.PrunedRef
 	// removals is every SyncRemoveRemote attempt since the store opened;
 	// RemoteRemovals is its one reader.
 	removals []storage.RemoteRemovalRecord

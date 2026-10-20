@@ -189,7 +189,7 @@ func (s *Store) SyncAddRemote(ctx context.Context, name storage.RemoteName, url 
 // holds no other remote named that owner: for origin, origin's refs; for
 // team/origin, team's, which are every team/* name's, and the reconcile
 // removes each of those too; for a/b beside a, none, as they are a's
-// branches b/*, kept until a's next pruning fetch like any of a's stale
+// branches b/*, kept until a's next fetch prunes them like any of a's stale
 // branches. The drops go first and the remove last, and the remove runs only
 // while Dolt holds the name, so an attempt retried after its remove landed,
 // or a second reconcile planned before it, finds the removal done.
@@ -256,7 +256,9 @@ func (s *Store) RemoteRemovals() []storage.RemoteRemovalRecord {
 // SyncSetRemoteURL re-points a remote in one mutation. Dolt has no set-url, so
 // it is a remove and an add; the fork points stay, because the name still
 // names the remote they record, and the next fetch brings its tracking refs
-// back (dropOrphanForkPoints runs only after that fetch). The remove runs only
+// back (SyncFetch drops fork points only after its fetch). A receive's landing
+// brings back the sync branch's ref alone, so the sync branch's fork point,
+// the one a reconcile reads, is the one it keeps (LandFetchedHead). The remove runs only
 // while the remote is there, so an attempt retried after its remove landed
 // goes on to the add.
 func (s *Store) SyncSetRemoteURL(ctx context.Context, name storage.RemoteName, url string) error {
@@ -281,17 +283,32 @@ func (s *Store) SyncSetRemoteURL(ctx context.Context, name storage.RemoteName, u
 	})
 }
 
-func (s *Store) SyncFetch(ctx context.Context, remote storage.RemoteName, prune bool) error {
-	args := []string{remote.String()}
-	if prune {
-		args = append([]string{"--prune"}, args...)
-	}
-	return s.runSyncMutation(ctx, func(ctx context.Context) error {
+// SyncFetch always prunes: lit reads no branch but the sync branch, so a
+// tracking ref of a branch the remote deleted serves nothing and only keeps
+// that branch's history reachable through every GC, past the history bound.
+// [LAW:dataflow-not-control-flow] one fetch, the same every call.
+func (s *Store) SyncFetch(ctx context.Context, remote storage.RemoteName) error {
+	owner := ownerOf(remote)
+	// What the fetch pruned is read against the tracking refs as the first
+	// attempt found them, before any fetch ran: an attempt retried after a
+	// fetch that landed finds the pruned refs already gone.
+	// [LAW:no-ambient-temporal-coupling] the before is recorded once, never
+	// re-listed after the move.
+	var before map[string]string
+	var pruned []storage.PrunedRef
+	err := s.runSyncMutation(ctx, func(ctx context.Context) error {
+		tracked, err := s.trackingRefs(ctx, owner)
+		if err != nil {
+			return err
+		}
+		if before == nil {
+			before = tracked
+		}
 		// The fork points are recorded in the same mutation as the fetch and
 		// ahead of it, because the fetch moves every tracking ref of the remote
 		// however the remote's history moved (recordForkPoints). Every attempt
 		// records, so a retried attempt reports what it found as well.
-		forkPoints, err := s.recordForkPoints(ctx, ownerOf(remote))
+		forkPoints, err := s.recordForkPoints(ctx, owner, tracked)
 		s.forkPoints = append(s.forkPoints, forkPoints...)
 		if err != nil {
 			return err
@@ -300,16 +317,31 @@ func (s *Store) SyncFetch(ctx context.Context, remote storage.RemoteName, prune 
 		// call, inside the mutation's own GC-contention retry: the two loops recover
 		// unrelated failures under separate budgets (see remote_io.go).
 		err = runRemoteIO(ctx, func(ctx context.Context) error {
-			_, err := callIntProcedure(ctx, s.db, "DOLT_FETCH", args...)
+			_, err := callIntProcedure(ctx, s.db, "DOLT_FETCH", "--prune", remote.String())
 			return err
 		})
 		if err != nil {
 			return fmt.Errorf("fetch remote %q: %w", remote, err)
 		}
-		dropped, err := s.dropOrphanForkPoints(ctx, ownerOf(remote))
+		after, err := s.trackingRefs(ctx, owner)
+		if err != nil {
+			return err
+		}
+		pruned = prunedRefs(owner, before, after)
+		// A fork point lives exactly as long as its tracking ref, so every one
+		// the fetch left without a ref goes. [LAW:one-source-of-truth]
+		dropped, err := s.dropForkPoints(ctx, owner, after)
 		s.forkPoints = append(s.forkPoints, dropped...)
 		return err
 	})
+	s.pruned = append(s.pruned, pruned...)
+	return err
+}
+
+// PrunedRefs is every branch a fetch since the store opened found gone from
+// its remote, oldest first.
+func (s *Store) PrunedRefs() []storage.PrunedRef {
+	return slices.Clone(s.pruned)
 }
 
 // SyncPull brings the local branch up to date with the remote by fetching and
@@ -359,7 +391,7 @@ func (s *Store) SyncPull(ctx context.Context, remote storage.RemoteName, branch 
 		return storage.SyncPullResult{}, err
 	}
 	branch = trimmedBranch
-	if err := s.SyncFetch(ctx, remote, false); err != nil {
+	if err := s.SyncFetch(ctx, remote); err != nil {
 		return storage.SyncPullResult{}, err
 	}
 	if _, err := s.followRemoteReRoot(ctx, remote, branch, storage.SyncEntryPull); err != nil {
@@ -532,7 +564,7 @@ func (s *Store) SyncReceive(ctx context.Context, remote storage.RemoteName, bran
 		return storage.SyncReceiveResult{}, err
 	}
 
-	if err := s.SyncFetch(ctx, remote, false); err != nil {
+	if err := s.SyncFetch(ctx, remote); err != nil {
 		return storage.SyncReceiveResult{}, err
 	}
 	return s.SyncSettleReceived(ctx, remote, trimmedBranch)
@@ -904,7 +936,7 @@ func (s *Store) retryPushAfterFollow(ctx context.Context, remote storage.RemoteN
 	if !errors.As(pushErr, &refusal) {
 		return pushed, pushErr, storage.FollowedReRoot{}, nil
 	}
-	if err := s.SyncFetch(ctx, remote, false); err != nil {
+	if err := s.SyncFetch(ctx, remote); err != nil {
 		return storage.SyncPushResult{}, pushErr, storage.FollowedReRoot{}, err
 	}
 	followed, err := s.followRemoteReRoot(ctx, remote, trimmedBranch, storage.SyncEntryPush)
@@ -918,7 +950,7 @@ func (s *Store) retryPushAfterFollow(ctx context.Context, remote storage.RemoteN
 		}
 		// The retry was refused over a remote that moved after the first
 		// fetch, so its judgment reads the remote as it stands now too.
-		if err := s.SyncFetch(ctx, remote, false); err != nil {
+		if err := s.SyncFetch(ctx, remote); err != nil {
 			return storage.SyncPushResult{}, unjudgedRefusal(pushErr, err), followed, nil
 		}
 	}

@@ -173,7 +173,7 @@ func publicationOf(lease storage.LeaseOutcome, reading remoteReading) storage.Re
 // fetches and reads whether the remote carries b's re-root. It comes before
 // the follow, whose GC would collect a re-root the remote does not carry.
 func (s *Store) readPublication(ctx context.Context, remote storage.RemoteName, b *storage.HistoryBound, trackingRef string) (remoteReading, error) {
-	if err := s.SyncFetch(ctx, remote, false); err != nil {
+	if err := s.SyncFetch(ctx, remote); err != nil {
 		return remoteUnread, fmt.Errorf("fetch to learn whether %s carries the re-root: %w", trackingRef, err)
 	}
 	base, err := mergeBase(ctx, s.db, b.ReRooted.Head, trackingRef)
@@ -295,7 +295,11 @@ func (s *Store) collectBelowTheCut(ctx context.Context, remote storage.RemoteNam
 	c.BytesBefore, beforeErr = storeBytes(s.doltRootDir)
 	var sweep refSweepOutcome
 	err := s.runSyncMutation(ctx, func(ctx context.Context) error {
-		forkPoints, err := s.recordForkPoints(ctx, ownerOf(remote))
+		tracked, err := s.trackingRefs(ctx, ownerOf(remote))
+		if err != nil {
+			return err
+		}
+		forkPoints, err := s.recordForkPoints(ctx, ownerOf(remote), tracked)
 		s.forkPoints = append(s.forkPoints, forkPoints...)
 		if err != nil {
 			return err

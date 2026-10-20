@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
@@ -661,7 +662,7 @@ func performSyncReceive(ctx context.Context, ws workspace.Info, clone liveClone,
 	var landed store.LandedFetch
 	if stopped == receiveStepNone {
 		var err error
-		landed, err = landFetch(ctx, ws, clone, target)
+		landed, err = landFetch(ctx, ws, clone, fetch)
 		stopAt(receiveStepLand, err)
 	}
 	var session syncSession
@@ -709,19 +710,22 @@ func performSyncReceive(ctx context.Context, ws workspace.Info, clone liveClone,
 		fmt.Fprintf(os.Stderr, "lit: automatic receive's unsettled-run records not read or written: %v\n", run.err)
 	}
 	traceMetadata := map[string]string{
-		"remote":                  remoteName.String(),
-		"sync_branch":             syncBranch,
-		"state":                   string(result.State),
-		"ahead":                   strconv.FormatInt(result.Ahead, 10),
-		"behind":                  strconv.FormatInt(result.Behind, 10),
-		"base":                    string(result.Base),
-		"landed":                  landed.Record.String(),
-		"fork_point":              landed.ForkPoint.String(),
-		"land_held":               landed.Held.Round(time.Millisecond).String(),
-		"stopped":                 stopped.String(),
-		"unsettled_since":         strconv.FormatInt(unixOrZero(run.since), 10),
-		"unsettled_previous_stop": strconv.FormatInt(unixOrZero(run.previousStop), 10),
-		"settled_last":            strconv.FormatInt(unixOrZero(run.settledLast), 10),
+		"remote":      remoteName.String(),
+		"sync_branch": syncBranch,
+		"state":       string(result.State),
+		"ahead":       strconv.FormatInt(result.Ahead, 10),
+		"behind":      strconv.FormatInt(result.Behind, 10),
+		"base":        string(result.Base),
+		"landed":      landed.Record.String(),
+		"fork_point":  landed.ForkPoint.String(),
+		"land_held":   landed.Held.Round(time.Millisecond).String(),
+		// [LAW:nothing-unseen] what the landing deleted, by branch.
+		"landed_pruned":              joinBranches(landed.Pruned, func(p storage.PrunedRef) string { return p.Branch }),
+		"landed_fork_points_dropped": joinBranches(landed.ForkPointsDropped, func(d storage.ForkPointRecord) string { return d.Branch }),
+		"stopped":                    stopped.String(),
+		"unsettled_since":            strconv.FormatInt(unixOrZero(run.since), 10),
+		"unsettled_previous_stop":    strconv.FormatInt(unixOrZero(run.previousStop), 10),
+		"settled_last":               strconv.FormatInt(unixOrZero(run.settledLast), 10),
 	}
 	if run.err != nil {
 		traceMetadata["unsettled_record_error"] = run.err.Error()
@@ -759,6 +763,10 @@ func performSyncReceive(ctx context.Context, ws workspace.Info, clone liveClone,
 		"receive.unsettled_previous_stop": unixOrZero(run.previousStop),
 		"receive.settled_last":            unixOrZero(run.settledLast),
 	})
+	// What the landing deleted from the live store, record by record.
+	// [LAW:nothing-unseen]
+	reportEventValues(ctx, "receive.landed_pruned", landed.Pruned)
+	reportEventValues(ctx, "receive.landed_fork_points_dropped", landed.ForkPointsDropped)
 	return outcome, closeLive
 }
 
@@ -927,4 +935,14 @@ func recordReceiveError(ws workspace.Info, cause error) {
 			"lit: automatic receive could not record failure trace (%v); original error: %v\n",
 			traceErr, cause)
 	}
+}
+
+// joinBranches is the branches of items, comma-separated, as a trace's
+// metadata carries a list: empty when there are none.
+func joinBranches[T any](items []T, branch func(T) string) string {
+	names := make([]string, len(items))
+	for i, item := range items {
+		names[i] = branch(item)
+	}
+	return strings.Join(names, ",")
 }

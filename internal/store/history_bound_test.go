@@ -122,7 +122,7 @@ func TestAPushPastTheBoundReRootsWithNoCommandRun(t *testing.T) {
 	// A fetch records the fork point every checkout that syncs holds, here on
 	// the head the push under the bound left.
 	st = openSyncOrFatal(t, ctx, alpha)
-	if err := st.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+	if err := st.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatal(err)
 	}
 	if forkPoint := branchesUnder(t, ctx, st, forkPointPrefix)["origin/master"]; forkPoint != under.Head {
@@ -166,7 +166,7 @@ func TestAPushPastTheBoundReRootsWithNoCommandRun(t *testing.T) {
 			t.Fatalf("the old head %s still resolves, with %d commits below it; want it collected", old, n)
 		}
 	}
-	if err := st.SyncFetch(ctx, remoteName(t, "origin"), false); err != nil {
+	if err := st.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatal(err)
 	}
 	if head != fired.ReRooted.Head || heightOf(t, ctx, st, "HEAD") != bound.Keep() {
@@ -487,7 +487,7 @@ func TestAReRootRefusedBeforeTheRemoteIsNotPushed(t *testing.T) {
 	if err := st.SyncAddRemote(ctx, remoteName(t, "mirror"), remoteURL); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.SyncFetch(ctx, remoteName(t, "mirror"), false); err != nil {
+	if err := st.SyncFetch(ctx, remoteName(t, "mirror")); err != nil {
 		t.Fatal(err)
 	}
 	lagging, err := commitHashOfRef(ctx, st.db, "remotes/origin/master")
