@@ -218,10 +218,10 @@ func TestRecordReceivedWritesOnlyWhatASettledReceiveLearned(t *testing.T) {
 		wantRecord  []byte // what received-refs.last holds afterwards
 		wantFetchOK bool   // whether origin's fetch-success marker was written
 	}{
-		{"up to date, answered", syncReceiveOutcome{skip: syncTargetReady, state: storage.SyncReceiveUpToDate}, observed, observed.record(), true},
+		{"up to date, answered", syncReceiveOutcome{skip: syncTargetReady, state: storage.SyncReceiveUpToDate, landed: store.FetchedHeadUnchanged}, observed, observed.record(), true},
 		{"fast-forwarded, answered", syncReceiveOutcome{skip: syncTargetReady, state: storage.SyncReceiveFastForwarded, landed: store.FetchedHeadMoved}, observed, observed.record(), true},
 		{"up to date, landing superseded", syncReceiveOutcome{skip: syncTargetReady, state: storage.SyncReceiveUpToDate, landed: store.FetchedHeadSuperseded}, observed, previous, true},
-		{"diverged, reconcile converged", syncReceiveOutcome{skip: syncTargetReady, state: storage.SyncReceiveDiverged, reconcile: converged}, observed, observed.record(), true},
+		{"diverged, reconcile converged", syncReceiveOutcome{skip: syncTargetReady, state: storage.SyncReceiveDiverged, landed: store.FetchedHeadMoved, reconcile: converged}, observed, observed.record(), true},
 		{"diverged, reconcile unconverged", syncReceiveOutcome{skip: syncTargetReady, state: storage.SyncReceiveDiverged, reconcile: unconverged}, observed, previous, true},
 		{"diverged, reconcile failed", syncReceiveOutcome{skip: syncTargetReady, state: storage.SyncReceiveDiverged, reconcile: &reconcileOutcome{}, stopped: receiveStepReconcile, err: errors.New("reconcile backend unavailable")}, observed, previous, true},
 		{"fetch failed", syncReceiveOutcome{skip: syncTargetReady, stopped: receiveStepFetch, err: errors.New("remote unreachable")}, observed, previous, false},

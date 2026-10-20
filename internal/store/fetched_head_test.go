@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"maps"
 	"os"
 	"os/exec"
@@ -610,6 +611,52 @@ func TestLandFetchedHeadLeavesARefTheClonesSessionFetchedBack(t *testing.T) {
 	}
 }
 
+// TestLandFetchedHeadPrunesARefTheClonesSessionMovedFirst lands a clone
+// whose session fetched twice: the first fetch moved feature past the head
+// the take saw, and the second pruned it there. The live ref still stands as
+// taken, so the prune is the newest word on it and it goes, though the clone
+// pruned it at another head.
+func TestLandFetchedHeadPrunesARefTheClonesSessionMovedFirst(t *testing.T) {
+	t.Parallel()
+	f := newLandFixture(t)
+	peer := f.copyOf(f.live)
+	f.exec(peer, "DOLT_BRANCH", "feature")
+	f.exec(peer, "DOLT_PUSH", "origin", "feature")
+	f.liveFetch()
+	trackedBefore, _ := f.liveRefs()
+
+	cloneRoot := f.copyOf(f.live)
+	clone := takenClone(t, f.ctx, cloneRoot)
+	moved := f.commit(peer, "peer-ticket")
+	f.exec(peer, "DOLT_BRANCH", "-f", "feature", "master")
+	f.exec(peer, "DOLT_PUSH", "origin", "feature")
+	st := f.openSync(cloneRoot)
+	if err := st.SyncFetch(f.ctx, remoteName(t, "origin")); err != nil {
+		t.Fatalf("SyncFetch(clone) error = %v", err)
+	}
+	f.exec(peer, "DOLT_PUSH", "origin", ":feature")
+	if err := st.SyncFetch(f.ctx, remoteName(t, "origin")); err != nil {
+		t.Fatalf("second SyncFetch(clone) error = %v", err)
+	}
+	pruned := st.PrunedRefs()
+	f.close(st)
+	wantPruned := []storage.PrunedRef{{Remote: "origin", Branch: "feature", Head: moved}}
+	if !slices.Equal(pruned, wantPruned) || moved == trackedBefore["feature"] {
+		t.Fatalf("the clone's PrunedRefs() = %+v, want %+v, pruned past the taken %s", pruned, wantPruned, trackedBefore["feature"])
+	}
+
+	landed, err := LandFetchedHead(f.ctx, f.live, clone, remoteName(t, "origin"), "master", pruned)
+	if err != nil {
+		t.Fatalf("LandFetchedHead() error = %v", err)
+	}
+	if !slices.Equal(landed.Pruned, wantPruned) {
+		t.Errorf("LandedFetch.Pruned = %+v, want %+v", landed.Pruned, wantPruned)
+	}
+	if tracked, _ := f.liveRefs(); tracked["feature"] != "" {
+		t.Errorf("live tracking refs after the landing = %v, want feature's gone", tracked)
+	}
+}
+
 // TestLandFetchedHeadKeepsTheSyncBranchsForkPointAcrossARePoint lands a
 // clone's fetch on a live store whose remote was re-pointed, which removes
 // the tracking refs and keeps the fork points until a fetch brings the refs
@@ -769,10 +816,7 @@ func TestRemoteCacheLandingCopiesTheFetchedRemotesLastKnownRefs(t *testing.T) {
 	livePushed := commitOn(liveRepo, unfetched, "where a live push left upstream since")
 	commitOn(cloneRepo, orphan, "an orphan the clone copied before the live sweep")
 
-	plan, err := planRemoteCacheLanding(ctx, liveBase, cloneBase, remoteName(t, "origin"))
-	if err != nil {
-		t.Fatalf("planRemoteCacheLanding() error = %v", err)
-	}
+	plan := planRemoteCacheLanding(ctx, liveBase, cloneBase, remoteName(t, "origin"))
 	if err := plan.apply(ctx); err != nil {
 		t.Fatalf("apply() error = %v", err)
 	}
@@ -799,5 +843,27 @@ func TestRemoteCacheLandingCopiesTheFetchedRemotesLastKnownRefs(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(liveBase, onlyCloneKey, "repo.git")); err != nil {
 		t.Fatalf("the mirror only the clone had was not moved into the live store: %v", err)
+	}
+}
+
+// TestARemoteCachePlanReportsItsFailuresOnlyWhereItLands pins the plan's
+// failures to the landing that carries it out: a landing that lands the fetch
+// reports a mirror it could not plan, and a superseded one, which copies none
+// of the plan, reports nothing of it.
+func TestARemoteCachePlanReportsItsFailuresOnlyWhereItLands(t *testing.T) {
+	unlisted := errors.New("list the clone's mirrors")
+	plan := remoteCacheLanding{unplanned: unlisted}
+	for _, tc := range []struct {
+		record FetchedHeadRecord
+		want   error
+	}{
+		{FetchedHeadMoved, unlisted},
+		{FetchedHeadUnchanged, unlisted},
+		{FetchedHeadAbsent, unlisted},
+		{FetchedHeadSuperseded, nil},
+	} {
+		if err := plan.landedBy(tc.record).apply(context.Background()); !errors.Is(err, tc.want) {
+			t.Errorf("a %s landing's apply() = %v, want %v", tc.record, err, tc.want)
+		}
 	}
 }
