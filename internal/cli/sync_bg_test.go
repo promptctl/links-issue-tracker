@@ -2,10 +2,61 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 )
+
+// TestCutByPushDeadline pins the one verdict every step the push deadline
+// bounds takes where it returns — the clone's open, the remote resolution,
+// the push — and that the verdict is final once taken: a step that failed on
+// its own while its deadline was live stays uncut after the deadline passes,
+// whatever ran in between (links-storage-3k6u.98l).
+func TestCutByPushDeadline(t *testing.T) {
+	t.Parallel()
+	ended := func() context.Context {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		return ctx
+	}
+	live := context.Background()
+	stepErr := errors.New("check remote refs \"origin\": signal: killed")
+	cases := []struct {
+		name               string
+		ctx, completionCtx context.Context
+		err                error
+		wantCut            bool
+	}{
+		{"a step that succeeded is not cut, whatever its deadline did", ended(), live, nil, false},
+		{"a step that failed on its own while its deadline was live is not cut", live, live, stepErr, false},
+		{"a step that failed once its deadline ended is cut", ended(), live, stepErr, true},
+		{"a step the process tore down is not cut by its deadline", ended(), ended(), stepErr, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := cutByPushDeadline(tc.ctx, tc.completionCtx, tc.err)
+			if pushDeadlineCutOf(got) != tc.wantCut {
+				t.Fatalf("cutByPushDeadline() = %v, cut = %t; want cut = %t", got, pushDeadlineCutOf(got), tc.wantCut)
+			}
+			if !errors.Is(got, tc.err) {
+				t.Fatalf("cutByPushDeadline() = %v; it must keep the step's error %v readable", got, tc.err)
+			}
+			if tc.wantCut && !strings.HasPrefix(got.Error(), pushDeadlineCutExplanation().Error()+": ") {
+				t.Fatalf("cut error %q does not lead with the deadline's explanation", got)
+			}
+		})
+	}
+
+	// The verdict is taken once: the deadline ending after the step returned
+	// does not turn a failure the step reached on its own into a cut.
+	ctx, cancel := context.WithCancel(context.Background())
+	taken := cutByPushDeadline(ctx, live, stepErr)
+	cancel()
+	if pushDeadlineCutOf(taken) {
+		t.Fatalf("verdict taken under a live deadline reads cut after the deadline ended: %v", taken)
+	}
+}
 
 // TestMirrorEnvStripsInheritedTraceRefFile pins that the detached mirror never
 // inherits the parent command's automation-trace-ref file: otherwise it would

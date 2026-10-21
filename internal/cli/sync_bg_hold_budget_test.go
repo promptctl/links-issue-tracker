@@ -123,15 +123,31 @@ func TestMirrorPushHoldsNothingOnTheLiveStore(t *testing.T) {
 	if !found {
 		t.Fatalf("no push-attempt sync trace names the deadline cut; the episode is as unattributable as the field incident")
 	}
+	assertOutcomeRecordsTheCut(t, ws)
+}
+
+// assertOutcomeRecordsTheCut pins that the push-outcome record reads the same
+// verdict the cycle log and the trace did: the deadline cut the attempt, and
+// its reason says so.
+func assertOutcomeRecordsTheCut(t *testing.T, ws workspace.Info) {
+	t.Helper()
+	rec, _, ok := lastPushOutcome(ws, time.Now())
+	if !ok {
+		t.Fatalf("no push-outcome record after a cut attempt")
+	}
+	if !rec.DeadlineCut || !strings.Contains(rec.Reason, "before blaming the remote") {
+		t.Fatalf("push-outcome record = %+v; want deadline_cut and a reason naming the push deadline", rec)
+	}
 }
 
 // TestMirrorPushDeadlineCutsHungResolveJoinsOneTrace pins the could-not-attempt
 // arm of the deadline cut: the clone's session opens, but the pre-push remote
 // resolution (git ls-remote) hangs and the push deadline kills it, so
-// performSyncPush records no trace of its own and mirrorCycle's out-of-band
+// performSyncPush records no trace of its own and mirrorOnce's out-of-band
 // record is the event's one owner — the deadline explanation joined onto the
-// resolve failure. Exactly one record must carry the deadline text, and it
-// must be the join, not a push record.
+// resolve failure where the resolve returned. Exactly one record must carry
+// the deadline text, it must be the join, not a push record, and the
+// push-outcome record must read the same verdict.
 //
 // Not parallel: it mutates PATH (t.Setenv) and store.MirrorPushDeadline.
 func TestMirrorPushDeadlineCutsHungResolveJoinsOneTrace(t *testing.T) {
@@ -181,6 +197,7 @@ func TestMirrorPushDeadlineCutsHungResolveJoinsOneTrace(t *testing.T) {
 	if strings.Contains(deadlineRecords[0], "sync_branch") {
 		t.Fatalf("the deadline record carries push metadata for a push that never ran:\n%s", deadlineRecords[0])
 	}
+	assertOutcomeRecordsTheCut(t, ws)
 }
 
 // TestMirrorCycleSweepsADeadMirrorsClone pins the residue contract: a clone a

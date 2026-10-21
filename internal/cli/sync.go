@@ -686,9 +686,12 @@ func performSyncPush(ctx, completionCtx context.Context, session syncSession, ws
 		}
 		completePushAttempt(completionCtx, ws, outcome, retErr)
 	}()
+	// Each step the push deadline bounds takes its verdict where it returns,
+	// so the attempt's record — this function's own, through the defer — is
+	// the one that names a cut. [LAW:single-enforcer]
 	target, err := resolveSyncTarget(ctx, session, ws, remote)
 	if err != nil {
-		return syncPushOutcome{}, err
+		return syncPushOutcome{}, cutByPushDeadline(ctx, completionCtx, err)
 	}
 	if target.skip != syncTargetReady {
 		// traceMetadata is nil before a remote was selected, so the no-remote and
@@ -700,14 +703,7 @@ func performSyncPush(ctx, completionCtx context.Context, session syncSession, ws
 	remoteName, syncBranch := target.remote, target.branch
 	// [LAW:dataflow-not-control-flow] Sync push runs one deterministic embedded mutation path from resolved remote+branch state.
 	result, pushErr := push(ctx, remoteName, syncBranch, setUpstream, force)
-	// A push killed by the operation lifetime while the completion lifetime
-	// lives is a push-deadline cut, and this attempt's record is the event's
-	// one trace owner — so the explanation folds in here, never as a second
-	// record upstream. Foreground callers pass one lifetime twice, so the
-	// predicate can never hold for them. [LAW:single-enforcer]
-	if pushErr != nil && ctx.Err() != nil && completionCtx.Err() == nil {
-		pushErr = fmt.Errorf("%w: %w", pushDeadlineCutExplanation(), pushErr)
-	}
+	pushErr = cutByPushDeadline(ctx, completionCtx, pushErr)
 	// One read of the workspace's config serves the bound's window and the
 	// receive question a refusal is classified by. [LAW:one-source-of-truth]
 	cfg, cfgErr := config.Load(pathspec.New(ws.RootDir))

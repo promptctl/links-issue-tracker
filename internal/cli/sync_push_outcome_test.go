@@ -122,6 +122,21 @@ func TestPushOutcomeOf(t *testing.T) {
 			},
 			want: pushOutcomeRecord{Decision: pushDecisionError, Reason: "push remote \"origin\": rejected (and whether the remote re-rooted its history could not be checked: workspace busy)", Remote: "origin", Branch: "master"},
 		},
+		{
+			name: "could-not-attempt the push deadline cut records the verdict and names the deadline",
+			err:  pushDeadlineCut{cause: errors.New("check remote refs \"origin\": signal: killed")},
+			want: pushOutcomeRecord{Decision: pushDecisionError, Reason: pushDeadlineCut{cause: errors.New("check remote refs \"origin\": signal: killed")}.Error(), DeadlineCut: true},
+		},
+		{
+			// The verdict wraps the push's error, never replaces it, so the
+			// ending keeps its class.
+			name: "push the deadline cut keeps the class of the error it cut",
+			outcome: syncPushOutcome{
+				remote: remoteName(t, "origin"), branch: "master",
+				pushErr: pushDeadlineCut{cause: fmt.Errorf("acquire the commit lock: %w", store.ErrWorkspaceBusy)},
+			},
+			want: pushOutcomeRecord{Decision: pushDecisionWorkspaceBusy, Reason: pushDeadlineCut{cause: fmt.Errorf("acquire the commit lock: %w", store.ErrWorkspaceBusy)}.Error(), Remote: "origin", Branch: "master", DeadlineCut: true},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -129,8 +144,12 @@ func TestPushOutcomeOf(t *testing.T) {
 			// failing ones — a stamp present on some decisions only would make
 			// an empty ObservedBy mean two different things to a later reader.
 			tc.want.ObservedBy = "v1.2.3"
-			if got := pushOutcomeOf(tc.outcome, tc.err, "v1.2.3"); got != tc.want {
+			got := pushOutcomeOf(tc.outcome, tc.err, "v1.2.3")
+			if got != tc.want {
 				t.Fatalf("pushOutcomeOf() = %+v, want %+v", got, tc.want)
+			}
+			if cut := got.eventValue()["push.deadline_cut"]; cut != tc.want.DeadlineCut {
+				t.Fatalf("push.outcomes entry push.deadline_cut = %v, want %t", cut, tc.want.DeadlineCut)
 			}
 		})
 	}
