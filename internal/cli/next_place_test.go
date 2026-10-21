@@ -17,8 +17,8 @@ import (
 // checkout's own work starts where it is, work outside what it holds goes to a
 // worktree of its own, and new work leaves the primary clone — not read back off
 // placeFor. The sum's exhausted scope has no tickets left in it (0/0), so its
-// pick is new work; TestPlacePastExhaustionFollowsWhatTheScopeHasLeft holds the
-// unfinished case.
+// pick is new work; TestPlacePastExhaustionFollowsWhatTheCheckoutHasLeft holds
+// the unfinished case.
 func TestPlaceForIsTotalOverTheSealedSum(t *testing.T) {
 	want := map[string]struct{ primary, linked startPlace }{
 		"the claimed lane":                 {startHere, startHere},
@@ -51,25 +51,28 @@ func TestPlaceForIsTotalOverTheSealedSum(t *testing.T) {
 	}
 }
 
-// A pick past an exhausted scope leaves the checkout only while the scope has
-// work left; once every ticket in it is done the checkout holds nothing
-// unfinished, so the pick is new work like the global pool's.
-func TestPlacePastExhaustionFollowsWhatTheScopeHasLeft(t *testing.T) {
-	past := func(progress claims.Progress) NextOutcome {
-		return ServedPastExhaustion{poolPick: poolPick{Row: sealedSumRow}, Exhaustion: Exhausted{Epics: []string{"test-epic-1"}, Progress: progress}}
+// A pick past an exhausted scope leaves the checkout only while the lanes it
+// holds have work left; once every ticket in them is done the checkout holds
+// nothing unfinished, so the pick is new work like the global pool's — even
+// with the epic still open in lanes other checkouts hold.
+func TestPlacePastExhaustionFollowsWhatTheCheckoutHasLeft(t *testing.T) {
+	past := func(scope, own claims.Progress) NextOutcome {
+		return ServedPastExhaustion{poolPick: poolPick{Row: sealedSumRow}, Exhaustion: Exhausted{Epics: []string{"test-epic-1"}, Progress: scope, OwnProgress: own}}
 	}
+	unfinished, finished, epicOpen := claims.Progress{Done: 1, Total: 2}, claims.Progress{Done: 2, Total: 2}, claims.Progress{Done: 2, Total: 3}
 	for _, tc := range []struct {
-		name     string
-		progress claims.Progress
-		primary  bool
-		want     startPlace
+		name       string
+		scope, own claims.Progress
+		primary    bool
+		want       startPlace
 	}{
-		{"unfinished, primary clone", claims.Progress{Done: 1, Total: 2}, true, startBesideHeldWork},
-		{"unfinished, linked worktree", claims.Progress{Done: 1, Total: 2}, false, startBesideHeldWork},
-		{"finished, primary clone", claims.Progress{Done: 2, Total: 2}, true, startOffPrimaryClone},
-		{"finished, linked worktree", claims.Progress{Done: 2, Total: 2}, false, startHere},
+		{"own work unfinished, primary clone", unfinished, unfinished, true, startBesideHeldWork},
+		{"own work unfinished, linked worktree", unfinished, unfinished, false, startBesideHeldWork},
+		{"own work finished, epic open elsewhere, primary clone", epicOpen, finished, true, startOffPrimaryClone},
+		{"own work finished, epic open elsewhere, linked worktree", epicOpen, finished, false, startHere},
+		{"epic finished, linked worktree", finished, finished, false, startHere},
 	} {
-		if got := placeFor(past(tc.progress), tc.primary); got != tc.want {
+		if got := placeFor(past(tc.scope, tc.own), tc.primary); got != tc.want {
 			t.Errorf("%s: placeFor = %v, want %v", tc.name, got, tc.want)
 		}
 	}
@@ -101,7 +104,7 @@ func TestStartAdviceNamesTheWorktreeOnlyForAPickThatLeaves(t *testing.T) {
 // Where the pick goes lands on the event beside the checkout kind, and a run
 // that served nothing records the place as null rather than leaving it out.
 func TestNextRecordsWhereItsPickStarts(t *testing.T) {
-	unfinished := Exhausted{Epics: []string{"test-epic-1"}, Progress: claims.Progress{Done: 1, Total: 2}}
+	unfinished := Exhausted{Epics: []string{"test-epic-1"}, Progress: claims.Progress{Done: 1, Total: 2}, OwnProgress: claims.Progress{Done: 1, Total: 2}}
 	for _, tc := range []struct {
 		name    string
 		outcome NextOutcome

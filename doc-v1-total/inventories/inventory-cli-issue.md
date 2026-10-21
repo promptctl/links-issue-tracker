@@ -1734,7 +1734,8 @@ on an unnamed variant: `ServedFromClaim`, `ResumedOwnWork`, `ServedFromEpicLane`
 and `ServedFromDependency` → `startHere`; `ServedFromNewLane` →
 `startOffPrimaryClone` in the primary clone, `startHere` in a linked worktree;
 `ServedPastExhaustion` → the `ServedFromNewLane` place when
-`o.Exhaustion.Progress.Finished()` (`Done == Total`, `internal/claims/evidence.go`),
+`o.Exhaustion.OwnProgress.Finished()` (`Done == Total`, `internal/claims/evidence.go`;
+`OwnProgress` is `evidence.ScopeProgress(own.holds)`, `next_route.go`),
 else `startBesideHeldWork`; `ServedPastNarrowing` → `startBesideHeldWork`;
 `Exhausted`, `Narrowed`, `NoWork` → `startNoPick`. `startAdvice(row, lane, place)`
 prefixes `place.where()` to ``"run `lit start <id>` to claim <object>"``:

@@ -207,7 +207,10 @@ type ServedPastNarrowing struct {
 //
 // Progress is how far the stopped scope has come, counted over every lane of
 // it, closed tickets included: "blocked" and "eight-ninths done and blocked"
-// are different answers to an agent deciding whether to stay.
+// are different answers to an agent deciding whether to stay. OwnProgress is
+// the same count over only the lanes this checkout holds: whether its own work
+// is unfinished, which decides where a pick past the scope is started — the
+// rest of the epic may be open in lanes other checkouts hold.
 //
 // Narrowing is set when the pool offered nothing the filter selects but would
 // serve a row over the whole queue: the filter, not the backlog, is why nothing
@@ -222,12 +225,13 @@ type ServedPastNarrowing struct {
 // classifier reading the routing verdict rather than a copy of it that could drift
 // from these fields. [LAW:one-source-of-truth]
 type Exhausted struct {
-	Epics     []string
-	Progress  claims.Progress
-	Blocked   []blockerReach
-	Held      []rowReach
-	OffPath   []string
-	Narrowing *Narrowed
+	Epics       []string
+	Progress    claims.Progress
+	OwnProgress claims.Progress
+	Blocked     []blockerReach
+	Held        []rowReach
+	OffPath     []string
+	Narrowing   *Narrowed
 }
 
 // reachKind is what one row is to this checkout right now — the one fact both
@@ -636,10 +640,11 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 			return narrowing
 		}
 		exhausted := Exhausted{
-			Epics:    slices.Sorted(maps.Keys(own.epics)),
-			Progress: evidence.ScopeProgress(own.covers),
-			Blocked:  blockersOf(gating, workToward),
-			Held:     heldByThemselves(rows, func(row annotation.AnnotatedIssue) bool { return own.covers(laneOf(row)) }, reachFor),
+			Epics:       slices.Sorted(maps.Keys(own.epics)),
+			Progress:    evidence.ScopeProgress(own.covers),
+			OwnProgress: evidence.ScopeProgress(own.holds),
+			Blocked:     blockersOf(gating, workToward),
+			Held:        heldByThemselves(rows, func(row annotation.AnnotatedIssue) bool { return own.covers(laneOf(row)) }, reachFor),
 		}
 		if pick, ok := fromPool(selected); ok {
 			return ServedPastExhaustion{poolPick: pick, Exhaustion: exhausted}

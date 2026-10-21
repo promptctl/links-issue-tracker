@@ -105,6 +105,7 @@ func TestNextRecordsWhatAnExhaustedScopeNamed(t *testing.T) {
 				"next.dependency_path": [],
 				"next.exhausted_epics": ["test-epic"],
 				"next.exhausted_progress": {"done": 3, "total": 5},
+				"next.exhausted_own_progress": {"done": 0, "total": 0},
 				"next.blocked": [
 					{"id": "test-dep", "ticket": "test-dep-leaf", "reach": "held_fresh", "clearable": true},
 					{"id": "test-ext", "ticket": "test-ext", "reach": "awaiting_outside", "clearable": false}
@@ -139,6 +140,7 @@ func TestNextRecordsWhatAnExhaustedScopeNamed(t *testing.T) {
 				"next.dependency_path": [],
 				"next.exhausted_epics": ["test-epic"],
 				"next.exhausted_progress": {"done": 1, "total": 4},
+				"next.exhausted_own_progress": {"done": 0, "total": 0},
 				"next.blocked": [
 					{"id": "test-dep", "ticket": "test-dep", "reach": "not_ready", "clearable": false},
 					{"id": "test-gone", "ticket": "", "reach": "out_of_view", "clearable": true},
@@ -169,6 +171,7 @@ func TestNextRecordsWhatAnExhaustedScopeNamed(t *testing.T) {
 				"next.dependency_path": [],
 				"next.exhausted_epics": ["test-epic"],
 				"next.exhausted_progress": {"done": 0, "total": 2},
+				"next.exhausted_own_progress": {"done": 0, "total": 0},
 				"next.blocked": [{"id": "test-ext", "ticket": "test-ext", "reach": "awaiting_outside", "clearable": false}],
 				"next.held": [],
 				"next.off_path": [],
@@ -183,9 +186,10 @@ func TestNextRecordsWhatAnExhaustedScopeNamed(t *testing.T) {
 		{
 			name: "a pick served past the scope records how far the scope had come",
 			outcome: ServedPastExhaustion{poolPick: poolPick{Row: rowFor("test-bug")}, Exhaustion: Exhausted{
-				Epics:    []string{"test-epic"},
-				Progress: claims.Progress{Done: 8, Total: 9},
-				Blocked:  []blockerReach{{depReach: readThrough("test-dep", "test-dep", reachHeldFresh), Clearable: true}},
+				Epics:       []string{"test-epic"},
+				Progress:    claims.Progress{Done: 8, Total: 9},
+				OwnProgress: claims.Progress{Done: 3, Total: 4},
+				Blocked:     []blockerReach{{depReach: readThrough("test-dep", "test-dep", reachHeldFresh), Clearable: true}},
 			}},
 			gathered: 3,
 			want: `{
@@ -195,6 +199,7 @@ func TestNextRecordsWhatAnExhaustedScopeNamed(t *testing.T) {
 				"next.dependency_path": [],
 				"next.exhausted_epics": ["test-epic"],
 				"next.exhausted_progress": {"done": 8, "total": 9},
+				"next.exhausted_own_progress": {"done": 3, "total": 4},
 				"next.blocked": [{"id": "test-dep", "ticket": "test-dep", "reach": "held_fresh", "clearable": true}],
 				"next.held": [],
 				"next.off_path": [],

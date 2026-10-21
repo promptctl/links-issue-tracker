@@ -32,9 +32,11 @@ const (
 // A checkout with nothing unfinished carries the new work it is served: a
 // linked worktree starts it there, and the primary clone sends it to a worktree
 // of its own. That is a new lane served to a checkout that holds nothing — its
-// epic is done or its claim lapsed — and a pick past a scope whose every ticket
-// is done, the commonest exhaustion: a checkout that has just finished its
-// epic's last ticket, whose claim outlives the epic by up to six hours.
+// epic is done or its claim lapsed — and a pick past a scope once every ticket
+// in the lanes this checkout holds is done: the commonest exhaustion, a
+// checkout that has just finished its epic's last ticket, whose claim outlives
+// the work by up to six hours. Tickets left in lanes other checkouts hold are
+// their work, not this checkout's.
 func placeFor(outcome NextOutcome, primaryClone bool) startPlace {
 	newLane := startHere
 	if primaryClone {
@@ -46,7 +48,7 @@ func placeFor(outcome NextOutcome, primaryClone bool) startPlace {
 	case ServedFromNewLane:
 		return newLane
 	case ServedPastExhaustion:
-		if o.Exhaustion.Progress.Finished() {
+		if o.Exhaustion.OwnProgress.Finished() {
 			return newLane
 		}
 		return startBesideHeldWork

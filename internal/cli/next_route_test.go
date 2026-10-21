@@ -483,6 +483,47 @@ func TestRouteNextExhaustionNamesTheOutsideBlockerBehindASibling(t *testing.T) {
 	followStayRoute(t, h, []string{"--parent", epicA.ID, "--top"}, blocker.ID)
 }
 
+// This checkout finished its own lane of epic A while another checkout still
+// holds the epic's open lane, so the epic stops for it with work left — but
+// none of that work is this checkout's. Routing counts the two apart, and the
+// pick past the scope is new work: started here from a linked worktree, sent
+// out of the primary clone.
+func TestRouteNextCountsTheCheckoutsOwnLanesApartFromItsEpic(t *testing.T) {
+	h := newReadyTestHarness(t)
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
+	h.transition(a1.ID, model.Start{Assignee: "tester"})
+	h.transition(a1.ID, model.Done{})
+	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2, theirs", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
+	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
+	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
+
+	rows, details, epics := h.gather()
+	standings := claims.Standings{
+		model.LaneOf(a1, &epicA):                    heldBy(selfAttribution),
+		laneOf(t, details, rowByID(t, rows, a2.ID)): heldBy(otherAttribution),
+	}
+	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, storage.IssueCriteria{})
+	served, ok := outcome.(ServedPastExhaustion)
+	if !ok || served.Row.ID != b1.ID {
+		t.Fatalf("routeNext = %#v (%T), want ServedPastExhaustion serving %s", outcome, outcome, b1.ID)
+	}
+	if got, want := served.Exhaustion.Progress, (claims.Progress{Done: 1, Total: 2}); got != want {
+		t.Fatalf("Progress = %+v, want %+v — the epic's every lane", got, want)
+	}
+	if got, want := served.Exhaustion.OwnProgress, (claims.Progress{Done: 1, Total: 1}); got != want {
+		t.Fatalf("OwnProgress = %+v, want %+v — only the lane this checkout holds", got, want)
+	}
+	for _, tc := range []struct {
+		primary bool
+		want    startPlace
+	}{{false, startHere}, {true, startOffPrimaryClone}} {
+		if got := placeFor(outcome, tc.primary); got != tc.want {
+			t.Errorf("placeFor(primary=%v) = %v, want %v", tc.primary, got, tc.want)
+		}
+	}
+}
+
 // Under a focus label the pool is the focus path, so an empty pool is not
 // "nothing ready outside the epic": ready rows off the path were never asked
 // about. They are named, with the way to ask — and our own epic's rows are
