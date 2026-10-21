@@ -65,7 +65,7 @@ func TestLsAtListsForeignStoreIssues(t *testing.T) {
 	storeDir, issueID := foreignStore(t, "ws-foreign", "proj")
 
 	var out bytes.Buffer
-	if err := runList(underInvocation(context.Background()), &out, lsSurface, []string{"--at", storeDir}); err != nil {
+	if err := runList(underInvocation(context.Background()), cwdInvocation(&out, &out, nil), lsSurface, []string{"--at", storeDir}); err != nil {
 		t.Fatalf("ls --at error = %v", err)
 	}
 	if !strings.Contains(out.String(), issueID) {
@@ -81,7 +81,7 @@ func TestLsAtLeavesStoreWritable(t *testing.T) {
 	storeDir, _ := foreignStore(t, "ws-foreign", "proj")
 
 	var out bytes.Buffer
-	if err := runList(underInvocation(context.Background()), &out, lsSurface, []string{"--at", storeDir}); err != nil {
+	if err := runList(underInvocation(context.Background()), cwdInvocation(&out, &out, nil), lsSurface, []string{"--at", storeDir}); err != nil {
 		t.Fatalf("ls --at error = %v", err)
 	}
 
@@ -132,7 +132,7 @@ func TestLsAtContentionTraceFilesUnderTargetStore(t *testing.T) {
 	}()
 
 	var out bytes.Buffer
-	err = Run(context.Background(), &out, &out, []string{"ls", "--at", storeDir})
+	err = Run(context.Background(), cwdInvocation(&out, &out, []string{"ls", "--at", storeDir}))
 	if err == nil {
 		t.Fatalf("ls --at succeeded against an exclusively held store; expected workspace-busy refusal\noutput=%s", out.String())
 	}
@@ -209,7 +209,7 @@ func TestLsAtRejectsMissingStore(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "nope", "links")
 
 	var out bytes.Buffer
-	err := runList(underInvocation(context.Background()), &out, lsSurface, []string{"--at", missing})
+	err := runList(underInvocation(context.Background()), cwdInvocation(&out, &out, nil), lsSurface, []string{"--at", missing})
 	if err == nil {
 		t.Fatalf("ls --at (missing) returned nil error with output %q; want a surfaced failure", out.String())
 	}
@@ -246,7 +246,7 @@ func TestLsAtRejectsEmptyOrFlagShapedDir(t *testing.T) {
 	}
 	for _, tc := range cases {
 		var out bytes.Buffer
-		err := runList(underInvocation(context.Background()), &out, lsSurface, tc.args)
+		err := runList(underInvocation(context.Background()), cwdInvocation(&out, &out, nil), lsSurface, tc.args)
 		if err == nil {
 			t.Fatalf("ls %v = nil error, want a usage error", tc.args)
 		}
@@ -275,7 +275,7 @@ func TestLsAtAfterTerminatorIsNotARoute(t *testing.T) {
 	chdir(t, t.TempDir()) // no workspace anywhere near the cwd
 
 	var out bytes.Buffer
-	err := runList(underInvocation(context.Background()), &out, lsSurface, []string{"--", "--at", storeDir})
+	err := runList(underInvocation(context.Background()), cwdInvocation(&out, &out, nil), lsSurface, []string{"--", "--at", storeDir})
 
 	// Routing would have listed the foreign store's issue; as positionals, the two
 	// tokens are refused as usage before any store opens.

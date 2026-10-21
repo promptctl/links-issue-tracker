@@ -62,28 +62,28 @@ func workflowsDispatch(ctx context.Context, args []string) (wsLeaf, []string, er
 // error instead of a silently ignored token.
 func workflowsOverviewLeaf() wsLeaf {
 	fs := newCobraFlagSet("workflows")
-	return wsLeaf{fs: fs, positionals: 0, usage: workflowsUsage, work: func(_ context.Context, stdout io.Writer, ws workspace.Info, _ []string) error {
-		return renderWorkflowsOverview(stdout, workflows.Load(ws.RootDir))
+	return wsLeaf{fs: fs, positionals: 0, usage: workflowsUsage, work: func(_ context.Context, inv Invocation, ws workspace.Info, _ []string) error {
+		return renderWorkflowsOverview(inv.Stdout, workflows.Load(ws.RootDir))
 	}}
 }
 
 func workflowsShowLeaf() wsLeaf {
 	fs := newCobraFlagSet("workflows show")
-	return wsLeaf{fs: fs, positionals: 1, usage: workflowsUsage, work: func(_ context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
+	return wsLeaf{fs: fs, positionals: 1, usage: workflowsUsage, work: func(_ context.Context, inv Invocation, ws workspace.Info, positional []string) error {
 		if len(positional) != 1 {
 			return UsageError{Message: workflowsUsage}
 		}
-		return renderWorkflowDefinition(stdout, workflows.Load(ws.RootDir), positional[0])
+		return renderWorkflowDefinition(inv.Stdout, workflows.Load(ws.RootDir), positional[0])
 	}}
 }
 
 func workflowsEditLeaf() wsLeaf {
 	fs := newCobraFlagSet("workflows edit")
-	return wsLeaf{fs: fs, positionals: 1, usage: workflowsUsage, work: func(_ context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
+	return wsLeaf{fs: fs, positionals: 1, usage: workflowsUsage, work: func(_ context.Context, inv Invocation, ws workspace.Info, positional []string) error {
 		if len(positional) != 1 {
 			return UsageError{Message: workflowsUsage}
 		}
-		return runWorkflowsEdit(stdout, ws, positional[0])
+		return runWorkflowsEdit(inv, ws, positional[0])
 	}}
 }
 

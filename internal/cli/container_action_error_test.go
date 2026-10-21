@@ -343,7 +343,7 @@ func TestOpenRefusalNeverNamesThePersistedEncoding(t *testing.T) {
 // each word, and this reads the registry. [LAW:one-source-of-truth]
 func TestEveryVerbAMessageCanPrintIsACommandThatExists(t *testing.T) {
 	registered := map[string]bool{}
-	for _, spec := range commandSpecs(context.Background(), io.Discard, io.Discard) {
+	for _, spec := range commandSpecs(context.Background(), cwdInvocation(io.Discard, io.Discard, nil)) {
 		// A retired row is a pointer to a replacement, not a command that runs:
 		// its Run returns RetiredCommandError. Counting it would let `open` be
 		// retired the way `assign` was while refusals kept printing `open` and

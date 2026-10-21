@@ -69,7 +69,7 @@ type invocablePath struct {
 // skips a dispatchable path is a second, shorter map of the command surface.
 func leafPaths(t *testing.T) []invocablePath {
 	t.Helper()
-	specs := commandSpecs(context.Background(), io.Discard, io.Discard)
+	specs := commandSpecs(context.Background(), cwdInvocation(io.Discard, io.Discard, nil))
 	var paths []invocablePath
 	var walk func(prefix []string, subs []SubcommandSpec)
 	walk = func(prefix []string, subs []SubcommandSpec) {
@@ -130,7 +130,7 @@ func TestEveryLeafRefusesAnUndeclaredPositional(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			var out bytes.Buffer
-			err := Run(context.Background(), &out, &out, append(append([]string{}, cp.path...), surplus...))
+			err := Run(context.Background(), cwdInvocation(&out, &out, append(append([]string{}, cp.path...), surplus...)))
 			if err == nil {
 				t.Fatalf("lit %s <3 stray args> exited 0; the surplus was silently dropped", name)
 			}
@@ -201,7 +201,7 @@ func TestParseLeafRefusesSurplusPositionals(t *testing.T) {
 			t.Parallel()
 			fs := newCobraFlagSet("probe")
 			l := leaf[struct{}]{fs: fs, positionals: tc.declared}
-			got, err := parseLeaf(underInvocation(context.Background()), l, tc.args, io.Discard)
+			got, err := parseLeaf(underInvocation(context.Background()), l, tc.args, cwdInvocation(io.Discard, io.Discard, nil))
 			if tc.wantRefused {
 				if err == nil {
 					t.Fatalf("parseLeaf(declared=%d, %q) = %q, nil; want a usage refusal", tc.declared, tc.args, got)
@@ -233,7 +233,7 @@ func TestBooleanFlagDoesNotSwallowFollowingPositional(t *testing.T) {
 	fs := newCobraFlagSet("probe")
 	apply := fs.Bool("apply", false, "apply")
 
-	got, err := parseLeaf(underInvocation(context.Background()), leaf[struct{}]{fs: fs, positionals: 1}, []string{"--apply", "demo"}, io.Discard)
+	got, err := parseLeaf(underInvocation(context.Background()), leaf[struct{}]{fs: fs, positionals: 1}, []string{"--apply", "demo"}, cwdInvocation(io.Discard, io.Discard, nil))
 	if err != nil {
 		t.Fatalf("parseLeaf(--apply demo) error = %v, want the positional kept", err)
 	}
@@ -247,7 +247,7 @@ func TestBooleanFlagDoesNotSwallowFollowingPositional(t *testing.T) {
 	// consumes the token after it.
 	fs2 := newCobraFlagSet("probe")
 	value := fs2.String("value", "", "value")
-	got2, err := parseLeaf(underInvocation(context.Background()), leaf[struct{}]{fs: fs2, positionals: 1}, []string{"--value", "v", "pos"}, io.Discard)
+	got2, err := parseLeaf(underInvocation(context.Background()), leaf[struct{}]{fs: fs2, positionals: 1}, []string{"--value", "v", "pos"}, cwdInvocation(io.Discard, io.Discard, nil))
 	if err != nil {
 		t.Fatalf("parseLeaf(--value v pos) error = %v", err)
 	}
@@ -279,7 +279,7 @@ func TestAdaptLeafCarriesTheWholeDeclaration(t *testing.T) {
 
 	fs := newCobraFlagSet("probe")
 	from := leaf[int]{fs: fs, positionals: 2, usage: "usage: lit probe --from <id> --to <id>"}
-	got := adaptLeaf[int, string](from, func(context.Context, io.Writer, string, []string) error { return nil })
+	got := adaptLeaf[int, string](from, func(context.Context, Invocation, string, []string) error { return nil })
 
 	if got.fs != from.fs {
 		t.Error("adaptLeaf dropped fs")
@@ -297,7 +297,7 @@ func TestAdaptLeafCarriesTheWholeDeclaration(t *testing.T) {
 func TestAdaptedCommandsKeepTheirUsageSentence(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer
-	err := Run(context.Background(), &out, &out, []string{"upgrade", "v0.9.0"})
+	err := Run(context.Background(), cwdInvocation(&out, &out, []string{"upgrade", "v0.9.0"}))
 	if err == nil {
 		t.Fatal("lit upgrade v0.9.0 exited 0")
 	}
@@ -331,7 +331,7 @@ func TestNoValueTakingShorthandExists(t *testing.T) {
 	for _, cp := range leafPaths(t) {
 		name := strings.Join(cp.path, " ")
 		var out bytes.Buffer
-		_ = Run(context.Background(), &out, &out, append(append([]string{}, cp.path...), "--help"))
+		_ = Run(context.Background(), cwdInvocation(&out, &out, append(append([]string{}, cp.path...), "--help")))
 		rendered := out.String()
 		if !strings.Contains(rendered, "--help") {
 			// No flag block to read: a family bare form answers with its
@@ -360,7 +360,7 @@ func TestTerminatorMakesEverythingAfterItPositional(t *testing.T) {
 	fs := newCobraFlagSet("probe")
 	field := fs.String("field", "", "field")
 
-	got, err := parseLeaf(underInvocation(context.Background()), leaf[struct{}]{fs: fs, positionals: 1}, []string{"--field", "f", "--", "-x"}, io.Discard)
+	got, err := parseLeaf(underInvocation(context.Background()), leaf[struct{}]{fs: fs, positionals: 1}, []string{"--field", "f", "--", "-x"}, cwdInvocation(io.Discard, io.Discard, nil))
 	if err != nil {
 		t.Fatalf("parseLeaf(--field f -- -x) error = %v, want -x kept as the positional", err)
 	}
@@ -373,7 +373,7 @@ func TestTerminatorMakesEverythingAfterItPositional(t *testing.T) {
 
 	// A surplus after the terminator is still a surplus, and is still named.
 	fs2 := newCobraFlagSet("probe")
-	_, err = parseLeaf(underInvocation(context.Background()), leaf[struct{}]{fs: fs2, positionals: 1}, []string{"--", "a", "b"}, io.Discard)
+	_, err = parseLeaf(underInvocation(context.Background()), leaf[struct{}]{fs: fs2, positionals: 1}, []string{"--", "a", "b"}, cwdInvocation(io.Discard, io.Discard, nil))
 	var usage UsageError
 	if !errors.As(err, &usage) {
 		t.Fatalf("parseLeaf(-- a b) error = %v (%T), want UsageError", err, err)
@@ -531,7 +531,7 @@ func TestTerminatorThroughRealCommandPaths(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			var out bytes.Buffer
-			err := Run(context.Background(), &out, &out, tc.args)
+			err := Run(context.Background(), cwdInvocation(&out, &out, tc.args))
 			if err == nil {
 				t.Fatalf("lit %s exited 0; a surplus token behind the terminator was silently dropped", strings.Join(tc.args, " "))
 			}

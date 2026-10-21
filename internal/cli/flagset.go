@@ -48,6 +48,9 @@ type cobraFlagSet struct {
 	// declaration order: the fields that may read stdin, and so the set a
 	// second reader of stdin is checked against.
 	longTexts []*longTextFlag
+	// paths is every path flag registerPath declared here, which parseLeaf
+	// resolves against the invocation's directory.
+	paths []*pathFlag
 }
 
 func newCobraFlagSet(use string) *cobraFlagSet {

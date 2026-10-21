@@ -456,7 +456,7 @@ func doctorLeaf() appLeaf {
 	fs := newCobraFlagSet("doctor")
 	fix := fs.String("fix", "", "Apply fixes: --fix (all) or --fix=rank,thingA")
 	fs.cmd.Flags().Lookup("fix").NoOptDefVal = "all"
-	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, inv Invocation, ap *app.App, positional []string) error {
 		// [LAW:parse-dont-validate] Repair is a capability, not a duty every engine
 		// owes: what counts as a fault is engine-specific. Doctor asks once, here,
 		// and the fixes below take the interface rather than the app, so no fix can
@@ -503,7 +503,7 @@ func doctorLeaf() appLeaf {
 		// the report short, so neither hides the other. A report that prints in full
 		// exits on the repair: it is the outcome of the command the operator typed,
 		// and it outranks the health exits below as it did when it returned first.
-		if err := printDoctorReport(ctx, stdout, ap, report, syncReport); err != nil || run.repairErr != nil {
+		if err := printDoctorReport(ctx, inv.Stdout, ap, report, syncReport); err != nil || run.repairErr != nil {
 			return errors.Join(run.repairErr, err)
 		}
 		// [LAW:single-enforcer] Corruption classification is output-format agnostic and always enforced here.

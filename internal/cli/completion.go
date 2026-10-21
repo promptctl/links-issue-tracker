@@ -15,7 +15,7 @@ import (
 // subcommand names are declared, so a generated script cannot omit a command
 // the registry has nor invent one it lacks. [LAW:one-source-of-truth]
 func commandCompletionModel() []CommandSpec {
-	specs := advertisedCommandSpecs(commandSpecs(context.Background(), io.Discard, io.Discard))
+	specs := advertisedCommandSpecs(commandSpecs(context.Background(), Invocation{Stdout: io.Discard, Stderr: io.Discard}))
 	// help is cobra's built-in command (only the default completion command is
 	// disabled on root, not help), so it is a real invocable command the
 	// registry does not own. Listing it keeps completion faithful to the actual

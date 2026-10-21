@@ -43,7 +43,7 @@ func TestInitReportsAgentsSourceFromGlobalOverride(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(prevWD) })
 
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), &stdout, &stdout, []string{"init", "--skip-hooks"}); err != nil {
+	if err := Run(context.Background(), cwdInvocation(&stdout, &stdout, []string{"init", "--skip-hooks"})); err != nil {
 		t.Fatalf("Run(init --skip-hooks) error = %v", err)
 	}
 	output := stdout.String()
@@ -153,7 +153,7 @@ func TestInitHumanOutputShowsAgentsSource(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(prevWD) })
 
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), &stdout, &stdout, []string{"init", "--skip-hooks"}); err != nil {
+	if err := Run(context.Background(), cwdInvocation(&stdout, &stdout, []string{"init", "--skip-hooks"})); err != nil {
 		t.Fatalf("Run(init --skip-hooks) error = %v", err)
 	}
 	output := stdout.String()
@@ -241,7 +241,7 @@ func TestInitRejectsUnbalancedAgentsOverride(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(prevWD) })
 
 	var stdout bytes.Buffer
-	err = Run(context.Background(), &stdout, &stdout, []string{"init", "--skip-hooks"})
+	err = Run(context.Background(), cwdInvocation(&stdout, &stdout, []string{"init", "--skip-hooks"}))
 	if err == nil {
 		t.Fatalf("Run(init) succeeded on an unbalanced override; output = %q", stdout.String())
 	}

@@ -35,12 +35,12 @@ const eventsSink = "file"
 // of a panic, which is how an invocation that panics ends.
 const goPanicExitCode = 2
 
-// beginInvocation opens the event for an invocation starting at now, named
-// "lit" until the dispatch reaches a command and names it.
-func beginInvocation(now time.Time) *telemetry.Recorder {
+// beginInvocation opens the event for an invocation starting at now in dir,
+// named "lit" until the dispatch reaches a command and names it.
+func beginInvocation(now time.Time, dir WorkingDir) *telemetry.Recorder {
 	// A cwd that cannot be read is recorded as empty: every command that needs
 	// the cwd fails on it loudly, and that failure is on this same event.
-	cwd, _ := os.Getwd()
+	cwd, _ := dir.Path()
 	return telemetry.Begin(telemetry.Event{
 		Event:     "lit",
 		Service:   "lit",

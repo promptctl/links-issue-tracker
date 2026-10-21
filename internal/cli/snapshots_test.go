@@ -69,7 +69,7 @@ func TestSnapshotsList_NewestFirst(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), &stdout, &stdout, []string{"snapshots", "list"}); err != nil {
+	if err := Run(context.Background(), cwdInvocation(&stdout, &stdout, []string{"snapshots", "list"})); err != nil {
 		t.Fatalf("snapshots list: %v", err)
 	}
 	// Each row leads with the snapshot name ("<name> <created> <path>"). The
@@ -99,7 +99,7 @@ func TestSnapshotsRestore_RoundTrip(t *testing.T) {
 	chdir(t, repo)
 
 	var newOut bytes.Buffer
-	if err := Run(context.Background(), &newOut, &newOut, []string{"snapshots", "new"}); err != nil {
+	if err := Run(context.Background(), cwdInvocation(&newOut, &newOut, []string{"snapshots", "new"})); err != nil {
 		t.Fatalf("snapshots new: %v", err)
 	}
 	// `snapshots new` text prints "<name> <path>".
@@ -145,7 +145,7 @@ func TestSnapshotsCommands_SilentOnHappyPath(t *testing.T) {
 	for _, args := range cases {
 		var stderr bytes.Buffer
 		var stdout bytes.Buffer
-		if err := Run(context.Background(), &stdout, &stderr, args); err != nil {
+		if err := Run(context.Background(), cwdInvocation(&stdout, &stderr, args)); err != nil {
 			t.Fatalf("Run(%v): %v\nstderr=%s", args, err, stderr.String())
 		}
 		if stderr.Len() != 0 {
@@ -180,7 +180,7 @@ func TestSnapshotsNew_AcquiresCommitLock(t *testing.T) {
 
 	start := time.Now()
 	var stdout, stderr bytes.Buffer
-	if err := Run(context.Background(), &stdout, &stderr, []string{"snapshots", "new"}); err != nil {
+	if err := Run(context.Background(), cwdInvocation(&stdout, &stderr, []string{"snapshots", "new"})); err != nil {
 		t.Fatalf("snapshots new: %v\nstderr=%s", err, stderr.String())
 	}
 	elapsed := time.Since(start)
@@ -219,7 +219,7 @@ func TestSnapshotsNew_AcquiresDoltJournalLock(t *testing.T) {
 
 	start := time.Now()
 	var stdout, stderr bytes.Buffer
-	if err := Run(context.Background(), &stdout, &stderr, []string{"snapshots", "new"}); err != nil {
+	if err := Run(context.Background(), cwdInvocation(&stdout, &stderr, []string{"snapshots", "new"})); err != nil {
 		t.Fatalf("snapshots new: %v\nstderr=%s", err, stderr.String())
 	}
 	elapsed := time.Since(start)
@@ -248,7 +248,7 @@ func TestSnapshotsRestore_LockSurvivesRotation(t *testing.T) {
 	// restore released the lock, but the path semantics are unchanged).
 	captureRun(t, "snapshots", "new")
 	var listOut bytes.Buffer
-	if err := Run(context.Background(), &listOut, &listOut, []string{"snapshots", "list"}); err != nil {
+	if err := Run(context.Background(), cwdInvocation(&listOut, &listOut, []string{"snapshots", "list"})); err != nil {
 		t.Fatalf("snapshots list: %v", err)
 	}
 	// `snapshots list` is newest-first; the first row's leading token is the
@@ -360,7 +360,7 @@ func TestSnapshotsRestore_RefusesWhileWorkspaceBusy(t *testing.T) {
 
 	// Produce a snapshot to restore.
 	var newOut bytes.Buffer
-	if err := Run(context.Background(), &newOut, &newOut, []string{"snapshots", "new"}); err != nil {
+	if err := Run(context.Background(), cwdInvocation(&newOut, &newOut, []string{"snapshots", "new"})); err != nil {
 		t.Fatalf("snapshots new: %v", err)
 	}
 	snapName := firstSnapshotName(newOut.String())
@@ -377,7 +377,7 @@ func TestSnapshotsRestore_RefusesWhileWorkspaceBusy(t *testing.T) {
 	defer reader.Close()
 
 	var stdout, stderr bytes.Buffer
-	err = Run(context.Background(), &stdout, &stderr, []string{"snapshots", "restore", snapName})
+	err = Run(context.Background(), cwdInvocation(&stdout, &stderr, []string{"snapshots", "restore", snapName}))
 	if err == nil {
 		t.Fatalf("snapshots restore succeeded while a reader was open; expected workspace-busy refusal\nstdout=%s", stdout.String())
 	}
@@ -423,7 +423,7 @@ func TestSnapshotsNew_RefusesWhileWorkspaceExclusive(t *testing.T) {
 	before := rawSnapshotDirEntries(t, ws)
 
 	var stdout, stderr bytes.Buffer
-	err = Run(context.Background(), &stdout, &stderr, []string{"snapshots", "new"})
+	err = Run(context.Background(), cwdInvocation(&stdout, &stderr, []string{"snapshots", "new"}))
 	if err == nil {
 		t.Fatalf("snapshots new succeeded while the workspace was exclusively held; expected workspace-busy refusal\nstdout=%s", stdout.String())
 	}
@@ -478,7 +478,7 @@ func TestSnapshotsNew_RefusesOnPendingAdoptMarker(t *testing.T) {
 	before := rawSnapshotDirEntries(t, ws)
 
 	var stdout, stderr bytes.Buffer
-	err := Run(context.Background(), &stdout, &stderr, []string{"snapshots", "new"})
+	err := Run(context.Background(), cwdInvocation(&stdout, &stderr, []string{"snapshots", "new"}))
 	if err == nil {
 		t.Fatalf("snapshots new succeeded on a marker-condemned workspace; expected refusal\nstdout=%s", stdout.String())
 	}
@@ -503,7 +503,7 @@ func TestSnapshotsNew_RejectsPositionalArgs(t *testing.T) {
 	before := rawSnapshotDirEntries(t, ws)
 
 	var stdout, stderr bytes.Buffer
-	err := Run(context.Background(), &stdout, &stderr, []string{"snapshots", "new", "nightly-backup"})
+	err := Run(context.Background(), cwdInvocation(&stdout, &stderr, []string{"snapshots", "new", "nightly-backup"}))
 	if err == nil {
 		t.Fatalf("snapshots new with a positional succeeded; expected usage error\nstdout=%s", stdout.String())
 	}
@@ -542,7 +542,7 @@ func TestSnapshotsRestore_RequiresName(t *testing.T) {
 	chdir(t, repo)
 
 	var stdout bytes.Buffer
-	err := Run(context.Background(), &stdout, &stdout, []string{"snapshots", "restore"})
+	err := Run(context.Background(), cwdInvocation(&stdout, &stdout, []string{"snapshots", "restore"}))
 	if err == nil {
 		t.Fatal("snapshots restore with no name should error")
 	}
@@ -567,7 +567,7 @@ func chdir(t *testing.T, dir string) {
 func captureRun(t *testing.T, args ...string) *bytes.Buffer {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
-	if err := Run(context.Background(), &stdout, &stderr, args); err != nil {
+	if err := Run(context.Background(), cwdInvocation(&stdout, &stderr, args)); err != nil {
 		t.Fatalf("Run(%v): %v\nstdout=%s\nstderr=%s", args, err, stdout.String(), stderr.String())
 	}
 	return &stderr
@@ -599,7 +599,7 @@ func TestSnapshotsNew_CollectsInterruptOrphanedResidue(t *testing.T) {
 	// The residue is invisible to the listing (nothing an operator can see or
 	// prune).
 	var listOut bytes.Buffer
-	if err := Run(context.Background(), &listOut, &listOut, []string{"snapshots", "list"}); err != nil {
+	if err := Run(context.Background(), cwdInvocation(&listOut, &listOut, []string{"snapshots", "list"})); err != nil {
 		t.Fatalf("snapshots list: %v", err)
 	}
 	if strings.Contains(listOut.String(), "1700000000000000001") {
@@ -607,7 +607,7 @@ func TestSnapshotsNew_CollectsInterruptOrphanedResidue(t *testing.T) {
 	}
 
 	var newOut bytes.Buffer
-	if err := Run(context.Background(), &newOut, &newOut, []string{"snapshots", "new"}); err != nil {
+	if err := Run(context.Background(), cwdInvocation(&newOut, &newOut, []string{"snapshots", "new"})); err != nil {
 		t.Fatalf("snapshots new: %v", err)
 	}
 	if firstSnapshotName(newOut.String()) == "" {
@@ -677,7 +677,7 @@ func TestSnapshotsNew_RecordSurvivesPruneFailure(t *testing.T) {
 	fsperm.Deny(t, oldestPath, fsperm.RemoveAll)
 
 	var stdout, stderr bytes.Buffer
-	runErr := Run(context.Background(), &stdout, &stderr, []string{"snapshots", "new"})
+	runErr := Run(context.Background(), cwdInvocation(&stdout, &stderr, []string{"snapshots", "new"}))
 	if runErr == nil {
 		t.Fatal("expected the failed retention prune to surface as an error")
 	}

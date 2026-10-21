@@ -35,11 +35,11 @@ func TestStartAnnouncesNoTransferFromAPredecessorTheLaneNoLongerNames(t *testing
 	// replace with a fresh one, so the event below is the start's.
 	var out bytes.Buffer
 	start := transitionLeaf(startSpec)
-	positional, err := parseLeaf(h.ctx, start, []string{finished.ID}, &out)
+	positional, err := parseLeaf(h.ctx, start, []string{finished.ID}, cwdInvocation(&out, &out, nil))
 	if err != nil {
 		t.Fatalf("parse start %s error = %v", finished.ID, err)
 	}
-	if err := start.work(h.ctx, &out, h.ap, positional); err != nil {
+	if err := start.work(h.ctx, cwdInvocation(&out, &out, nil), h.ap, positional); err != nil {
 		t.Fatalf("start %s error = %v", finished.ID, err)
 	}
 	if strings.Contains(out.String(), "claim transferred") {

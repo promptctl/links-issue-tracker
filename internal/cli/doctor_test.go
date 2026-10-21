@@ -267,11 +267,11 @@ func runDoctorRecorded(t *testing.T, h readyTestHarness, args ...string) (map[st
 	ctx := telemetry.With(h.ctx, recorder)
 	l := doctorLeaf()
 	var out bytes.Buffer
-	positional, err := parseLeaf(ctx, l, args, &out)
+	positional, err := parseLeaf(ctx, l, args, cwdInvocation(&out, &out, nil))
 	if err != nil {
 		t.Fatalf("parseLeaf: %v", err)
 	}
-	err = l.work(ctx, &out, h.ap, positional)
+	err = l.work(ctx, cwdInvocation(&out, &out, nil), h.ap, positional)
 	if err != nil {
 		t.Fatalf("doctor %v error = %v\n%s", args, err, out.String())
 	}

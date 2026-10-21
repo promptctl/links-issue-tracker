@@ -423,11 +423,14 @@ func anchorGitPath(cwd string, gitPath string) (string, error) {
 	if filepath.IsAbs(gitPath) {
 		return filepath.Clean(gitPath), nil
 	}
-	absCwd, err := filepath.Abs(cwd)
-	if err != nil {
-		return "", fmt.Errorf("resolve absolute cwd: %w", err)
+	// Making a relative cwd absolute would read the process's working directory,
+	// which is not this call's to read: the CLI hands every resolution the
+	// directory its invocation ran in, already absolute.
+	// [LAW:effects-at-boundaries] [LAW:no-silent-failure]
+	if !filepath.IsAbs(cwd) {
+		return "", fmt.Errorf("anchor git path %q: cwd %q is not absolute", gitPath, cwd)
 	}
-	return filepath.Clean(filepath.Join(absCwd, gitPath)), nil
+	return filepath.Clean(filepath.Join(cwd, gitPath)), nil
 }
 
 // resolvePrivateGitDir locates the checkout's own git directory — the per-worktree

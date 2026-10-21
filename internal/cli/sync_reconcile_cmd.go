@@ -67,7 +67,7 @@ func reconcilerFor(ws workspace.Info, session syncSession, command string) (stor
 // with the guidance that resolves it, never a silent success.
 func syncReconcileShowLeaf() syncLeaf {
 	fs := newCobraFlagSet("sync reconcile")
-	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, scope syncScope, positional []string) error {
+	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, inv Invocation, scope syncScope, positional []string) error {
 		ws, session := scope.ws, scope.session
 		reconciler, err := reconcilerFor(ws, session, reconcileShowCommand)
 		if err != nil {
@@ -80,7 +80,7 @@ func syncReconcileShowLeaf() syncLeaf {
 		}
 		if !ok {
 			recordSyncCommandTrace(ws, reconcileShowCommand, "nothing_to_reconcile", nil, nil)
-			_, writeErr := fmt.Fprintln(stdout, "nothing to reconcile: no remote with shared ticket history yet")
+			_, writeErr := fmt.Fprintln(inv.Stdout, "nothing to reconcile: no remote with shared ticket history yet")
 			return writeErr
 		}
 		result, err := reconciler.SyncReconcile(ctx, remote, branch)
@@ -88,7 +88,7 @@ func syncReconcileShowLeaf() syncLeaf {
 			recordSyncCommandTrace(ws, reconcileShowCommand, "error", err, map[string]string{"remote": remote.String(), "sync_branch": branch})
 			return asSyncFailure(err)
 		}
-		return reportReconcileResult(ctx, stdout, ws, session, reconcileShowCommand, remote, branch, result, false)
+		return reportReconcileResult(ctx, inv.Stdout, ws, session, reconcileShowCommand, remote, branch, result, false)
 	}}
 }
 
@@ -100,7 +100,7 @@ func syncReconcileResolveLeaf() syncLeaf {
 	fs := newCobraFlagSet("sync reconcile resolve")
 	resolveValues := fs.StringArray("resolve", "Merged text for one diverged field, as FINGERPRINT=TEXT with the fingerprint from that field's heading (repeat for every pending field)")
 	resolveActor := registerActor(fs)
-	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, scope syncScope, positional []string) error {
+	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, inv Invocation, scope syncScope, positional []string) error {
 		ws, session := scope.ws, scope.session
 		if len(*resolveValues) == 0 {
 			return UsageError{Message: "sync reconcile resolve needs at least one --resolve FINGERPRINT=TEXT"}
@@ -128,7 +128,7 @@ func syncReconcileResolveLeaf() syncLeaf {
 		}
 		if !ok {
 			recordSyncCommandTrace(ws, proseResolveCommand, "nothing_to_reconcile", nil, nil)
-			_, writeErr := fmt.Fprintln(stdout, "nothing to reconcile: no remote with shared ticket history yet")
+			_, writeErr := fmt.Fprintln(inv.Stdout, "nothing to reconcile: no remote with shared ticket history yet")
 			return writeErr
 		}
 		result, err := reconciler.SyncReconcileResolved(ctx, remote, branch, resolutions, resolveActor())
@@ -136,7 +136,7 @@ func syncReconcileResolveLeaf() syncLeaf {
 			recordSyncCommandTrace(ws, proseResolveCommand, "error", err, map[string]string{"remote": remote.String(), "sync_branch": branch})
 			return asSyncFailure(err)
 		}
-		return reportReconcileResult(ctx, stdout, ws, session, proseResolveCommand, remote, branch, result, true)
+		return reportReconcileResult(ctx, inv.Stdout, ws, session, proseResolveCommand, remote, branch, result, true)
 	}}
 }
 
@@ -148,13 +148,13 @@ func syncReconcileResolveLeaf() syncLeaf {
 // ExitConflict.
 func syncReconcileAbortLeaf() syncLeaf {
 	fs := newCobraFlagSet("sync reconcile abort")
-	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, scope syncScope, positional []string) error {
+	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, inv Invocation, scope syncScope, positional []string) error {
 		ws := scope.ws
 		// abort is a real decision — the agent choosing to defer/escalate rather
 		// than merge inline — not merely a usage no-op, so it gets the same durable
 		// trace its three siblings (resolve/take/combine) do. [LAW:no-silent-failure]
 		recordSyncCommandTrace(ws, "lit sync reconcile abort", "aborted", nil, nil)
-		_, err := fmt.Fprintln(stdout, "reconcile deferred: the clone remains diverged and usable; a later command re-surfaces the divergence, or run `lit sync reconcile` when ready")
+		_, err := fmt.Fprintln(inv.Stdout, "reconcile deferred: the clone remains diverged and usable; a later command re-surfaces the divergence, or run `lit sync reconcile` when ready")
 		return err
 	}}
 }
@@ -175,7 +175,7 @@ func syncReconcileTakeLeaf() syncLeaf {
 	// The side is a declared positional, so the count travels with the leaf and
 	// parseLeaf refuses a second one. [LAW:one-source-of-truth]
 	const usage = "sync reconcile take needs exactly one side: 'local' (keep your backlog) or 'remote' (adopt theirs)"
-	return syncLeaf{fs: fs, positionals: 1, usage: usage, work: func(ctx context.Context, stdout io.Writer, scope syncScope, positional []string) error {
+	return syncLeaf{fs: fs, positionals: 1, usage: usage, work: func(ctx context.Context, inv Invocation, scope syncScope, positional []string) error {
 		ws, session := scope.ws, scope.session
 		if len(positional) != 1 {
 			return UsageError{Message: usage}
@@ -198,7 +198,7 @@ func syncReconcileTakeLeaf() syncLeaf {
 		}
 		if !ok {
 			recordSyncCommandTrace(ws, command, "nothing_to_reconcile", nil, nil)
-			_, writeErr := fmt.Fprintln(stdout, "nothing to reconcile: no remote with shared ticket history yet")
+			_, writeErr := fmt.Fprintln(inv.Stdout, "nothing to reconcile: no remote with shared ticket history yet")
 			return writeErr
 		}
 		result, err := reconciler.SyncResolveUnrelated(ctx, remote, branch, choice, strings.TrimSpace(*ownerApproved))
@@ -230,7 +230,7 @@ func syncReconcileTakeLeaf() syncLeaf {
 			recordSyncCommandTrace(ws, command, "error", err, map[string]string{"remote": remote.String(), "sync_branch": branch})
 			return asSyncFailure(err)
 		}
-		return reportTakeOutcome(stdout, ws, command, remote, branch, result)
+		return reportTakeOutcome(inv.Stdout, ws, command, remote, branch, result)
 	}}
 }
 
@@ -241,7 +241,7 @@ func syncReconcileTakeLeaf() syncLeaf {
 // free-text is ever auto-picked and no unique issue is dropped. [LAW:no-silent-failure]
 func syncReconcileCombineLeaf() syncLeaf {
 	fs := newCobraFlagSet("sync reconcile combine")
-	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, scope syncScope, positional []string) error {
+	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, inv Invocation, scope syncScope, positional []string) error {
 		ws, session := scope.ws, scope.session
 		reconciler, err := reconcilerFor(ws, session, reconcileCombineCommand)
 		if err != nil {
@@ -254,7 +254,7 @@ func syncReconcileCombineLeaf() syncLeaf {
 		}
 		if !ok {
 			recordSyncCommandTrace(ws, reconcileCombineCommand, "nothing_to_reconcile", nil, nil)
-			_, writeErr := fmt.Fprintln(stdout, "nothing to reconcile: no remote with shared ticket history yet")
+			_, writeErr := fmt.Fprintln(inv.Stdout, "nothing to reconcile: no remote with shared ticket history yet")
 			return writeErr
 		}
 		result, err := reconciler.SyncReconcileCombine(ctx, remote, branch)
@@ -262,7 +262,7 @@ func syncReconcileCombineLeaf() syncLeaf {
 			recordSyncCommandTrace(ws, reconcileCombineCommand, "error", err, map[string]string{"remote": remote.String(), "sync_branch": branch})
 			return asSyncFailure(err)
 		}
-		return reportReconcileResult(ctx, stdout, ws, session, reconcileCombineCommand, remote, branch, result, false)
+		return reportReconcileResult(ctx, inv.Stdout, ws, session, reconcileCombineCommand, remote, branch, result, false)
 	}}
 }
 

@@ -139,7 +139,7 @@ func TestRunHooksViaCLI(t *testing.T) {
 	})
 
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), &stdout, &stdout, []string{"hooks", "install"}); err != nil {
+	if err := Run(context.Background(), cwdInvocation(&stdout, &stdout, []string{"hooks", "install"})); err != nil {
 		t.Fatalf("Run(hooks install) error = %v", err)
 	}
 	output := stdout.String()

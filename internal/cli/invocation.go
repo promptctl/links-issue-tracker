@@ -1,0 +1,57 @@
+package cli
+
+import (
+	"io"
+	"path/filepath"
+)
+
+// Invocation is what one lit run takes from the process that started it: the
+// directory it ran in, its arguments, and its standard streams. The fields are
+// named as os/exec.Cmd names the same things. cmd/lit's main reads the process
+// once to build it, and a test builds its own, so nothing under internal/
+// reads the process's copies and two runs in one process cannot see each
+// other's. [LAW:effects-at-boundaries] [LAW:no-shared-mutable-globals]
+type Invocation struct {
+	Dir WorkingDir
+	// Args are the arguments after the program name.
+	Args   []string
+	Stdin  io.Reader
+	Stdout io.Writer
+	Stderr io.Writer
+}
+
+// WorkingDir is the absolute directory an invocation ran in, or the error
+// reading it gave. An unreadable one fails only what needs it, through Path:
+// the commands that resolve a workspace or a relative path refuse with it,
+// on the invocation's own event, while `lit version` still answers.
+// [LAW:parse-dont-validate] the failure is a value the caller has to unwrap.
+type WorkingDir struct {
+	path string
+	err  error
+}
+
+// WorkingDirOf is the working directory os.Getwd reported, in the two values
+// it returns them as.
+func WorkingDirOf(path string, err error) WorkingDir {
+	return WorkingDir{path: path, err: err}
+}
+
+// Path is the directory, or why it could not be read.
+func (d WorkingDir) Path() (string, error) {
+	return d.path, d.err
+}
+
+// resolve is the absolute path a caller-supplied path names: itself when
+// absolute, otherwise joined to the directory, as os/exec resolves a relative
+// Cmd.Path against Cmd.Dir. Only a relative path needs the directory, so only
+// a relative path fails when it could not be read.
+func (d WorkingDir) resolve(path string) (string, error) {
+	if filepath.IsAbs(path) {
+		return path, nil
+	}
+	dir, err := d.Path()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, path), nil
+}

@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"fmt"
-	"io"
 	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
@@ -67,7 +66,7 @@ func depAddLeaf() appLeaf {
 	edge := registerEdgeFlags(fs)
 	resolveActor := registerActor(fs)
 	const usageLine0 = "usage: lit dep add <id> " + edgeFlagsUsage
-	return appLeaf{fs: fs, usage: usageLine0, positionals: 1, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+	return appLeaf{fs: fs, usage: usageLine0, positionals: 1, work: func(ctx context.Context, inv Invocation, ap *app.App, positional []string) error {
 		if len(positional) != 1 {
 			return UsageError{Message: usageLine0}
 		}
@@ -86,10 +85,10 @@ func depAddLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		if _, err := fmt.Fprintln(stdout, depRelationLine(rel)); err != nil {
+		if _, err := fmt.Fprintln(inv.Stdout, depRelationLine(rel)); err != nil {
 			return err
 		}
-		return emitBreadcrumb(stdout, "update")
+		return emitBreadcrumb(inv.Stdout, "update")
 	}}
 }
 
@@ -97,7 +96,7 @@ func depRmLeaf() appLeaf {
 	fs := newCobraFlagSet("dep rm")
 	edge := registerEdgeFlags(fs)
 	const usageLine1 = "usage: lit dep rm <id> " + edgeFlagsUsage
-	return appLeaf{fs: fs, usage: usageLine1, positionals: 1, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+	return appLeaf{fs: fs, usage: usageLine1, positionals: 1, work: func(ctx context.Context, inv Invocation, ap *app.App, positional []string) error {
 		if len(positional) != 1 {
 			return UsageError{Message: usageLine1}
 		}
@@ -108,10 +107,10 @@ func depRmLeaf() appLeaf {
 		if err := ap.Store.RemoveRelation(ctx, positional[0], otherID, rt); err != nil {
 			return err
 		}
-		if _, err := fmt.Fprintln(stdout, "ok"); err != nil {
+		if _, err := fmt.Fprintln(inv.Stdout, "ok"); err != nil {
 			return err
 		}
-		return emitBreadcrumb(stdout, "update")
+		return emitBreadcrumb(inv.Stdout, "update")
 	}}
 }
 
@@ -119,7 +118,7 @@ func depLsLeaf() appLeaf {
 	fs := newCobraFlagSet("dep ls")
 	relType := fs.String("type", "", "Filter relation type: blocked-by|parent-child|related-to")
 	const usageLine2 = "usage: lit dep ls <issue-id> [--type blocked-by|parent-child|related-to]"
-	return appLeaf{fs: fs, usage: usageLine2, positionals: 1, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+	return appLeaf{fs: fs, usage: usageLine2, positionals: 1, work: func(ctx context.Context, inv Invocation, ap *app.App, positional []string) error {
 		if len(positional) != 1 {
 			return UsageError{Message: usageLine2}
 		}
@@ -139,7 +138,7 @@ func depLsLeaf() appLeaf {
 			return err
 		}
 		for _, rel := range relations {
-			if _, err := fmt.Fprintln(stdout, depRelationLine(rel)); err != nil {
+			if _, err := fmt.Fprintln(inv.Stdout, depRelationLine(rel)); err != nil {
 				return err
 			}
 		}

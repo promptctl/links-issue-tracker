@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"fmt"
-	"io"
 	"math"
 	"strings"
 
@@ -278,7 +277,7 @@ type leaf[R any] struct {
 	// fallback, never the goal.
 	// [LAW:decomposition] the rule is shared, the guidance is the leaf's.
 	usage string
-	work  func(ctx context.Context, stdout io.Writer, res R, positional []string) error
+	work  func(ctx context.Context, inv Invocation, res R, positional []string) error
 }
 
 // adaptLeaf carries a leaf's DECLARATION across to a leaf over a different
@@ -295,7 +294,7 @@ type leaf[R any] struct {
 // TestAdaptLeafCarriesTheWholeDeclaration pins it from the outside. What it
 // does buy is that there is ONE place to update. [LAW:one-source-of-truth]
 // [LAW:single-enforcer]
-func adaptLeaf[R, S any](from leaf[R], work func(ctx context.Context, stdout io.Writer, res S, positional []string) error) leaf[S] {
+func adaptLeaf[R, S any](from leaf[R], work func(ctx context.Context, inv Invocation, res S, positional []string) error) leaf[S] {
 	return leaf[S]{fs: from.fs, positionals: from.positionals, usage: from.usage, work: work}
 }
 
@@ -321,7 +320,7 @@ type (
 // invocation's event learns which command ran — the leaf's flag set carries its
 // whole invocation path — and which flags it was given, so no command has to
 // name itself. [LAW:single-enforcer] [LAW:nothing-unseen]
-func parseLeaf[R any](ctx context.Context, l leaf[R], args []string, stdout io.Writer) ([]string, error) {
+func parseLeaf[R any](ctx context.Context, l leaf[R], args []string, inv Invocation) ([]string, error) {
 	telemetry.Command(ctx, "lit "+l.fs.cmd.Use)
 	positional, flagArgs, err := splitArgs(args, l.positionals, l.fs)
 	if err != nil {
@@ -329,7 +328,7 @@ func parseLeaf[R any](ctx context.Context, l leaf[R], args []string, stdout io.W
 		// arity refusal uses: the act that works, then what was not understood.
 		return nil, UsageError{Message: fmt.Sprintf("%s; %s", usageSentence(l.fs, l.positionals, l.usage), err)}
 	}
-	parseErr := parseFlagSet(l.fs, flagArgs, stdout)
+	parseErr := parseFlagSet(l.fs, flagArgs, inv.Stdout)
 	telemetry.Flags(ctx, setFlagNames(l.fs.cmd.Flags()))
 	if parseErr != nil {
 		return nil, parseErr
@@ -347,9 +346,12 @@ func parseLeaf[R any](ctx context.Context, l leaf[R], args []string, stdout io.W
 	if err := refuseSurplusPositionals(l.fs, l.positionals, l.usage); err != nil {
 		return nil, err
 	}
+	if err := resolvePaths(l.fs, inv.Dir); err != nil {
+		return nil, err
+	}
 	// A long text read from a file or stdin is input, not work: it is read
 	// here, before acquisition, so waiting on it never holds the workspace.
-	if err := readLongTexts(ctx, l.fs); err != nil {
+	if err := readLongTexts(ctx, l.fs, inv); err != nil {
 		return nil, err
 	}
 	return positional, nil
@@ -453,9 +455,8 @@ func positionalAllowance(count int) string {
 // closure. Building specs through these methods absorbs the per-call variance
 // (closure capture + access mode + validation) into data.
 type commandRegistrar struct {
-	ctx    context.Context
-	stdout io.Writer
-	stderr io.Writer
+	ctx context.Context
+	inv Invocation
 }
 
 func (r *commandRegistrar) appCmd(access app.AccessMode, declare appLeafFn) CommandRunner {
@@ -488,12 +489,12 @@ func (r *commandRegistrar) appCmdDispatch(access app.AccessMode, dispatch func(a
 func (r *commandRegistrar) appCmdPipeline(resolve func([]string) app.AccessMode, dispatch func(args []string) (appLeaf, []string)) CommandRunner {
 	return func(args []string) error {
 		l, rest := dispatch(args)
-		positional, err := parseLeaf(r.ctx, l, rest, r.stdout)
+		positional, err := parseLeaf(r.ctx, l, rest, r.inv)
 		if err != nil {
 			return err
 		}
-		return runWithApp(r.ctx, r.stdout, resolve(args), func(commandCtx context.Context, ap *app.App) error {
-			return l.work(commandCtx, r.stdout, ap, positional)
+		return runWithApp(r.ctx, r.inv, resolve(args), func(commandCtx context.Context, ap *app.App) error {
+			return l.work(commandCtx, r.inv, ap, positional)
 		})
 	}
 }
@@ -508,12 +509,12 @@ func (r *commandRegistrar) familyCmd(f commandFamily[appSubcommand]) CommandRunn
 			return err
 		}
 		l := sub.declare()
-		positional, err := parseLeaf(r.ctx, l, args[1:], r.stdout)
+		positional, err := parseLeaf(r.ctx, l, args[1:], r.inv)
 		if err != nil {
 			return err
 		}
-		return runWithApp(r.ctx, r.stdout, sub.access, func(commandCtx context.Context, ap *app.App) error {
-			return l.work(commandCtx, r.stdout, ap, positional)
+		return runWithApp(r.ctx, r.inv, sub.access, func(commandCtx context.Context, ap *app.App) error {
+			return l.work(commandCtx, r.inv, ap, positional)
 		})
 	}
 }
@@ -568,15 +569,15 @@ func (r *commandRegistrar) wsCmdPipeline(dispatch func(args []string) (wsLeaf, w
 		if err != nil {
 			return err
 		}
-		positional, err := parseLeaf(r.ctx, l, rest, r.stdout)
+		positional, err := parseLeaf(r.ctx, l, rest, r.inv)
 		if err != nil {
 			return err
 		}
-		ws, err := acquire(r.ctx)
+		ws, err := acquire(r.ctx, r.inv.Dir)
 		if err != nil {
 			return err
 		}
-		return l.work(r.ctx, r.stdout, ws, positional)
+		return l.work(r.ctx, r.inv, ws, positional)
 	}
 }
 
@@ -587,12 +588,12 @@ func (r *commandRegistrar) wsCmdPipeline(dispatch func(args []string) (wsLeaf, w
 // leaf's flags are parsed. [LAW:dataflow-not-control-flow] the pipeline always
 // acquires; only the value it acquires with varies, so the ordering this
 // pipeline owns stays one ordering rather than forking for one command.
-type wsAcquire = func(ctx context.Context) (workspace.Info, error)
+type wsAcquire = func(ctx context.Context, dir WorkingDir) (workspace.Info, error)
 
 // acquireFromWD is what every command but `lit init` acquires with: the
 // workspace for the working directory, with no prefix of its own to offer.
-func acquireFromWD(ctx context.Context) (workspace.Info, error) {
-	return resolveWorkspaceFromWD(ctx, workspace.PrefixRequest{})
+func acquireFromWD(ctx context.Context, dir WorkingDir) (workspace.Info, error) {
+	return resolveWorkspace(ctx, dir, workspace.PrefixRequest{})
 }
 
 // withWDAcquire lifts a dispatch that only chooses a leaf into the pipeline's
@@ -633,8 +634,9 @@ func (r *commandRegistrar) transitionCmd(spec transitionSpec) CommandRunner {
 
 // commandSpecs returns the full registry. New commands are added here as a
 // single row; the runtime path in newRootCommand never grows.
-func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []CommandSpec {
-	r := &commandRegistrar{ctx: ctx, stdout: stdout, stderr: stderr}
+func commandSpecs(ctx context.Context, inv Invocation) []CommandSpec {
+	r := &commandRegistrar{ctx: ctx, inv: inv}
+	stdout := inv.Stdout
 
 	completionRun := func(args []string) error {
 		return runCompletion(ctx, stdout, args)
@@ -688,7 +690,7 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 		// standard appCmd wrapper would open the cwd store before the handler runs.
 		// runList picks the store, then shares one query path. [LAW:one-source-of-truth]
 		{Name: "ls", Summary: "List issues (rank by default; --at <store-dir> lists a discovered store read-only)", GroupID: "operations",
-			Run: func(args []string) error { return runList(ctx, stdout, lsSurface, args) }},
+			Run: func(args []string) error { return runList(ctx, inv, lsSurface, args) }},
 		{Name: "show", Summary: "Show issue details", GroupID: "operations",
 			Run: r.appCmd(app.AccessRead, showLeaf)},
 		{Name: "history", Summary: "Show an issue's state-transition history", GroupID: "operations",
@@ -735,7 +737,7 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 		// children is `ls --parent <id>` under its own name: the same leaf, so it
 		// takes every ls flag and cannot drift from ls. [LAW:one-type-per-behavior]
 		{Name: "children", Summary: "List an issue's direct children by rank (`lit ls --parent <id>`; takes every ls flag)", GroupID: "structure",
-			Run: func(args []string) error { return runList(ctx, stdout, childrenSurface, args) }},
+			Run: func(args []string) error { return runList(ctx, inv, childrenSurface, args) }},
 		{Name: "dep", Summary: "Manage dependency edges", GroupID: "structure",
 			Run: r.familyCmd(depFamily), Subcommands: depFamily.subcommandSpecs()},
 		// export/backup/snapshots are three snapshot-shaped names over two distinct
@@ -749,7 +751,7 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 		{Name: "workspace", Summary: "Show workspace metadata", GroupID: "maintenance",
 			Run: r.wsCmd(workspaceLeaf)},
 		{Name: "stores", Summary: "List discovered lit store locations under the given roots (default: current directory); --counts reports each store's ready / in-flight / blocked counts instead. Readiness is store-intrinsic; per-repo required-fields policy is not applied, so counts can differ from a project's own `lit backlog` when it configures required_fields", GroupID: "maintenance",
-			Run: func(args []string) error { return runStores(ctx, stdout, args) }},
+			Run: func(args []string) error { return runStores(ctx, inv, args) }},
 		// ls-at is folded into `lit ls --at <store-dir>`; overview is folded into
 		// `lit stores --counts`. Both kept hidden+dispatchable for the documented
 		// pointer. [LAW:no-silent-failure]

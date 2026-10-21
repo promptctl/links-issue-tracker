@@ -29,7 +29,7 @@ func workflowsDryRunLeaf() wsLeaf {
 	enter := fs.StringArray("enter", "State the hypothetical ticket enters (repeatable: a start enters in_progress and plan)")
 	exit := fs.StringArray("exit", "State the hypothetical ticket exits (repeatable)")
 	issue := fs.String("issue", "", "Issue id to interpolate into <id> in previewed bodies")
-	return wsLeaf{fs: fs, positionals: 0, usage: workflowsUsage, work: func(_ context.Context, stdout io.Writer, ws workspace.Info, _ []string) error {
+	return wsLeaf{fs: fs, positionals: 0, usage: workflowsUsage, work: func(_ context.Context, inv Invocation, ws workspace.Info, _ []string) error {
 
 		occasion := workflows.Occasion{
 			Event:   workflows.Event(*event),
@@ -41,10 +41,10 @@ func workflowsDryRunLeaf() wsLeaf {
 		set := workflows.Load(ws.RootDir)
 		matched := set.Matching(occasion)
 
-		if err := printDryRunOccasion(stdout, occasion); err != nil {
+		if err := printDryRunOccasion(inv.Stdout, occasion); err != nil {
 			return err
 		}
-		return printDryRunMatches(stdout, matched, occasion)
+		return printDryRunMatches(inv.Stdout, matched, occasion)
 	}}
 }
 

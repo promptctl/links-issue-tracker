@@ -34,18 +34,18 @@ import (
 // only under the project's `.lit/workflows/`, never into the global or
 // embedded layers, and never clobbers unrelated project content silently.
 // [LAW:no-silent-failure]
-func runWorkflowsEdit(stdout io.Writer, ws workspace.Info, target string) error {
+func runWorkflowsEdit(inv Invocation, ws workspace.Info, target string) error {
 	set := workflows.Load(ws.RootDir)
 	if def, ok := set.Lookup(target); ok {
-		return editExistingDefinition(stdout, ws, def)
+		return editExistingDefinition(inv, ws, def)
 	}
-	return editFreshDefinition(stdout, ws, target)
+	return editFreshDefinition(inv, ws, target)
 }
 
-func editExistingDefinition(stdout io.Writer, ws workspace.Info, def workflows.Definition) error {
+func editExistingDefinition(inv Invocation, ws workspace.Info, def workflows.Definition) error {
 	projectPath := projectWorkflowPath(ws, def.Path)
 	if def.Source == templates.SourceProject {
-		return openOrPrintWorkflowFile(stdout, projectPath)
+		return openOrPrintWorkflowFile(inv, projectPath)
 	}
 	if err := refuseExistingFile(projectPath, def.ID); err != nil {
 		return err
@@ -57,13 +57,13 @@ func editExistingDefinition(stdout io.Writer, ws workspace.Info, def workflows.D
 	if err := writeWorkflowScaffold(projectPath, def.ID, raw); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(stdout, "scaffolded override for %q (was %s) -> %s\n", def.ID, def.Source, projectPath); err != nil {
+	if _, err := fmt.Fprintf(inv.Stdout, "scaffolded override for %q (was %s) -> %s\n", def.ID, def.Source, projectPath); err != nil {
 		return err
 	}
-	return openOrPrintWorkflowFile(stdout, projectPath)
+	return openOrPrintWorkflowFile(inv, projectPath)
 }
 
-func editFreshDefinition(stdout io.Writer, ws workspace.Info, point string) error {
+func editFreshDefinition(inv Invocation, ws workspace.Info, point string) error {
 	dimension, liveLine, slug := classifyWorkflowPoint(point)
 	projectPath := projectWorkflowPath(ws, slug+".md")
 	if err := refuseExistingFile(projectPath, point); err != nil {
@@ -72,10 +72,10 @@ func editFreshDefinition(stdout io.Writer, ws workspace.Info, point string) erro
 	if err := writeWorkflowScaffold(projectPath, point, workflows.ScaffoldFresh(dimension, liveLine)); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(stdout, "scaffolded a new definition at %s\n", projectPath); err != nil {
+	if _, err := fmt.Fprintf(inv.Stdout, "scaffolded a new definition at %s\n", projectPath); err != nil {
 		return err
 	}
-	return openOrPrintWorkflowFile(stdout, projectPath)
+	return openOrPrintWorkflowFile(inv, projectPath)
 }
 
 func projectWorkflowPath(ws workspace.Info, relPath string) string {
@@ -130,11 +130,11 @@ func writeWorkflowScaffold(path string, subject string, content []byte) error {
 // non-interactive caller (an agent, a script, a pipe, or a test harness
 // capturing output into a buffer) or a terminal with no $EDITOR configured
 // gets just the path: enough to open the file themselves.
-func openOrPrintWorkflowFile(stdout io.Writer, path string) error {
-	if _, err := fmt.Fprintln(stdout, path); err != nil {
+func openOrPrintWorkflowFile(inv Invocation, path string) error {
+	if _, err := fmt.Fprintln(inv.Stdout, path); err != nil {
 		return err
 	}
-	if !isTerminal(stdout) {
+	if !isTerminal(inv.Stdout) {
 		return nil
 	}
 	editorCmd := strings.Fields(os.Getenv("EDITOR"))
@@ -142,7 +142,14 @@ func openOrPrintWorkflowFile(stdout io.Writer, path string) error {
 		return nil
 	}
 	cmd := exec.Command(editorCmd[0], append(editorCmd[1:], path)...)
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	// The editor runs where lit ran, on the invocation's own streams: the
+	// stdout isTerminal just found to be a terminal is the one it draws on.
+	dir, err := inv.Dir.Path()
+	if err != nil {
+		return fmt.Errorf("open %s in $EDITOR: %w", path, err)
+	}
+	cmd.Dir = dir
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = inv.Stdin, inv.Stdout, inv.Stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("open %s in $EDITOR (%s): %w", path, os.Getenv("EDITOR"), err)
 	}

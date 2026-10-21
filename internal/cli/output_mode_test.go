@@ -66,7 +66,7 @@ func TestParseGlobalArgsRejectsOutputFlag(t *testing.T) {
 func TestRunQuickstartDefaultsToText(t *testing.T) {
 	t.Parallel()
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), &stdout, &stdout, []string{"quickstart"}); err != nil {
+	if err := Run(context.Background(), cwdInvocation(&stdout, &stdout, []string{"quickstart"})); err != nil {
 		t.Fatalf("Run(quickstart) error = %v", err)
 	}
 	if strings.Contains(stdout.String(), "\"summary\"") {
@@ -98,7 +98,7 @@ func TestRejectsJSONFlag(t *testing.T) {
 		args := args
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			var stdout bytes.Buffer
-			err := Run(context.Background(), &stdout, &stdout, args)
+			err := Run(context.Background(), cwdInvocation(&stdout, &stdout, args))
 			if err == nil {
 				t.Fatalf("Run(%v) unexpectedly succeeded", args)
 			}

@@ -275,7 +275,7 @@ func renderedHelpPages(t *testing.T) map[string]string {
 	t.Cleanup(func() { _ = os.Chdir(prevWD) })
 
 	var initOut bytes.Buffer
-	if err := Run(context.Background(), &initOut, &initOut, []string{"init"}); err != nil {
+	if err := Run(context.Background(), cwdInvocation(&initOut, &initOut, []string{"init"})); err != nil {
 		t.Fatalf("Run(init) error = %v", err)
 	}
 
@@ -283,7 +283,7 @@ func renderedHelpPages(t *testing.T) map[string]string {
 	for _, path := range append(commandGroupPaths(), commandLeafPaths()...) {
 		var stdout, stderr bytes.Buffer
 		args := append(append([]string{}, path...), "--help")
-		if runErr := Run(context.Background(), &stdout, &stderr, args); runErr != nil {
+		if runErr := Run(context.Background(), cwdInvocation(&stdout, &stderr, args)); runErr != nil {
 			t.Fatalf("Run(%v) error = %v, want help answered as success", args, runErr)
 		}
 		pages[strings.Join(path, " ")] = stdout.String()
@@ -307,7 +307,7 @@ func TestHelpCommandAndHelpFlagRenderTheSamePage(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(prevWD) })
 
 	var initOut bytes.Buffer
-	if err := Run(context.Background(), &initOut, &initOut, []string{"init"}); err != nil {
+	if err := Run(context.Background(), cwdInvocation(&initOut, &initOut, []string{"init"})); err != nil {
 		t.Fatalf("Run(init) error = %v", err)
 	}
 
@@ -324,7 +324,7 @@ func TestHelpCommandAndHelpFlagRenderTheSamePage(t *testing.T) {
 func render(t *testing.T, args []string) string {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
-	if err := Run(context.Background(), &stdout, &stderr, args); err != nil {
+	if err := Run(context.Background(), cwdInvocation(&stdout, &stderr, args)); err != nil {
 		t.Fatalf("Run(%v) error = %v, want help answered as success", args, err)
 	}
 	if got := stderr.String(); got != "" {
@@ -362,7 +362,7 @@ func TestHelpRefusesATopicThatNamesNoCommand(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(prevWD) })
 
 	var stdout, stderr bytes.Buffer
-	runErr := Run(context.Background(), &stdout, &stderr, []string{"help", "nosuchcommand"})
+	runErr := Run(context.Background(), cwdInvocation(&stdout, &stderr, []string{"help", "nosuchcommand"}))
 
 	var unknown UnknownCommandError
 	if !errors.As(runErr, &unknown) {
@@ -396,7 +396,7 @@ func TestHelpAnswersForCobrasOwnHelpCommand(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(prevWD) })
 
 	var stdout, stderr bytes.Buffer
-	if runErr := Run(context.Background(), &stdout, &stderr, []string{"help", "help"}); runErr != nil {
+	if runErr := Run(context.Background(), cwdInvocation(&stdout, &stderr, []string{"help", "help"})); runErr != nil {
 		t.Fatalf("Run([help help]) error = %v, want help answered as success", runErr)
 	}
 	if stdout.Len() == 0 {
@@ -429,7 +429,7 @@ func TestUnknownCommandRefusesAHelpFlagOnEitherSide(t *testing.T) {
 		{"nosuchcommand", "--nosuchflag"},
 	} {
 		var stdout, stderr bytes.Buffer
-		runErr := Run(context.Background(), &stdout, &stderr, args)
+		runErr := Run(context.Background(), cwdInvocation(&stdout, &stderr, args))
 		if want := (UnknownCommandError{Command: "nosuchcommand"}); runErr != want {
 			t.Errorf("Run(%q) error = %#v, want %#v", args, runErr, want)
 		}
@@ -447,7 +447,7 @@ func TestRootRefusesAnUnknownFlagAsAUsageError(t *testing.T) {
 
 	for _, args := range [][]string{{"--nosuchflag"}, {"--nosuchflag", "nosuchcommand"}, {"-x"}} {
 		var stdout, stderr bytes.Buffer
-		runErr := Run(context.Background(), &stdout, &stderr, args)
+		runErr := Run(context.Background(), cwdInvocation(&stdout, &stderr, args))
 		if _, ok := runErr.(UsageError); !ok {
 			t.Errorf("Run(%q) error = %#v, want UsageError", args, runErr)
 		}
@@ -460,7 +460,7 @@ func TestBareLitOutsideARepositoryPrintsTheRootHelp(t *testing.T) {
 	chdir(t, t.TempDir())
 
 	var stdout, stderr bytes.Buffer
-	if runErr := Run(context.Background(), &stdout, &stderr, nil); runErr != nil {
+	if runErr := Run(context.Background(), cwdInvocation(&stdout, &stderr, nil)); runErr != nil {
 		t.Fatalf("Run() outside a repo error = %v, want the root help", runErr)
 	}
 	if got := stdout.String(); !strings.Contains(got, "Agent-native issue tracker") || !strings.Contains(got, "lit [command]") {
@@ -479,7 +479,7 @@ func TestHelpFlagBeforeACommandAnswersForThatCommand(t *testing.T) {
 
 	for _, args := range [][]string{{"--help", "ls"}, {"-h", "ls"}, {"--help", "--", "ls"}} {
 		var stdout, stderr bytes.Buffer
-		if runErr := Run(context.Background(), &stdout, &stderr, args); runErr != nil {
+		if runErr := Run(context.Background(), cwdInvocation(&stdout, &stderr, args)); runErr != nil {
 			t.Fatalf("Run(%q) error = %v, want the help for ls", args, runErr)
 		}
 		if got := stdout.String(); !strings.HasPrefix(got, "Usage of ls:") {

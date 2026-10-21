@@ -39,7 +39,7 @@ func gitRepoNamed(t *testing.T, name string) string {
 func runInit(t *testing.T, args ...string) error {
 	t.Helper()
 	var out bytes.Buffer
-	return Run(context.Background(), &out, &out, append([]string{"init", "--skip-hooks", "--skip-agents"}, args...))
+	return Run(context.Background(), cwdInvocation(&out, &out, append([]string{"init", "--skip-hooks", "--skip-agents"}, args...)))
 }
 
 // The whole contract in one test: a repository lit cannot name is unrunnable,
@@ -80,7 +80,7 @@ func TestABootstrappingCommandIsGivenAnActThatWorks(t *testing.T) {
 	gitRepoNamed(t, "ab")
 
 	var out bytes.Buffer
-	err := Run(context.Background(), &out, &out, []string{"new", "--type", "epic", "--title", "probe", "--topic", "probe"})
+	err := Run(context.Background(), cwdInvocation(&out, &out, []string{"new", "--type", "epic", "--title", "probe", "--topic", "probe"}))
 	if err == nil {
 		t.Fatal("Run(new) in a repository named \"ab\" succeeded, want a refusal")
 	}
@@ -215,7 +215,7 @@ func storedIllegalPrefixWorkspace(t *testing.T) (info workspace.Info, issueID st
 	}
 	runLit = func(args ...string) (string, error) {
 		var out bytes.Buffer
-		err := Run(context.Background(), &out, &out, args)
+		err := Run(context.Background(), cwdInvocation(&out, &out, args))
 		return out.String(), err
 	}
 	out, err := runLit("new", "--type", "epic", "--title", "filed before the typo", "--topic", "probe")
@@ -332,7 +332,7 @@ func TestPrefixSetRepairsAStoredIllegalPrefixBeforeTheStoreExists(t *testing.T) 
 	repo := gitRepoNamed(t, "myrepo")
 	runLit := func(args ...string) (string, error) {
 		var out bytes.Buffer
-		err := Run(context.Background(), &out, &out, args)
+		err := Run(context.Background(), cwdInvocation(&out, &out, args))
 		return out.String(), err
 	}
 	if out, err := runLit("workspace"); err != nil {
@@ -378,8 +378,8 @@ func TestInitReportsThePrefixItActuallyStored(t *testing.T) {
 	gitRepoNamed(t, "myrepo")
 
 	var out bytes.Buffer
-	err := Run(context.Background(), &out, &out,
-		[]string{"init", "--skip-hooks", "--skip-agents", "--prefix", "payment_service"})
+	err := Run(context.Background(), cwdInvocation(&out, &out,
+		[]string{"init", "--skip-hooks", "--skip-agents", "--prefix", "payment_service"}))
 	if err != nil {
 		t.Fatalf("Run(init --prefix payment_service) error = %v\n%s", err, out.String())
 	}

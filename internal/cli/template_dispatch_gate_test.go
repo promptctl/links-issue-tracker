@@ -146,7 +146,7 @@ func taughtSurfaceOf(specs []CommandSpec) taughtSurface {
 
 // registrySurface is taughtSurfaceOf over the real registry.
 func registrySurface() taughtSurface {
-	return taughtSurfaceOf(commandSpecs(context.Background(), io.Discard, io.Discard))
+	return taughtSurfaceOf(commandSpecs(context.Background(), cwdInvocation(io.Discard, io.Discard, nil)))
 }
 
 // TestTaughtSurfaceReadsRetiredNotHidden pins the field the projection reads,
@@ -260,7 +260,7 @@ func TestGateRefusesRetiredAndUnknownTokens(t *testing.T) {
 // behavior — the retirement error naming the command — not which closure the
 // row happens to hold. [LAW:behavior-not-structure]
 func TestRetiredSpecsStayCoherent(t *testing.T) {
-	for _, spec := range commandSpecs(context.Background(), io.Discard, io.Discard) {
+	for _, spec := range commandSpecs(context.Background(), cwdInvocation(io.Discard, io.Discard, nil)) {
 		if !spec.Retired {
 			continue
 		}

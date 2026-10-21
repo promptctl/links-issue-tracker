@@ -124,14 +124,14 @@ func receiveEnv() []string {
 // the mirror-pending claim and the beacon are the ordering witnesses, not a
 // sleep.
 func backgroundReceiveLeaf() wsLeaf {
-	return detachedWorkerLeaf(backgroundReceiveSubcommand, "PID of the spawning command; the receive waits for it to exit", func(ctx context.Context, stdout io.Writer, ws workspace.Info, parentPID int) error {
+	return detachedWorkerLeaf(backgroundReceiveSubcommand, "PID of the spawning command; the receive waits for it to exit", func(ctx context.Context, inv Invocation, ws workspace.Info, parentPID int) error {
 		start := time.Now()
 		pid := os.Getpid()
-		fmt.Fprintf(stdout, "%s receive start pid=%d deadline=%s\n", start.UTC().Format(time.RFC3339), pid, store.ReceiveDeadline)
+		fmt.Fprintf(inv.Stdout, "%s receive start pid=%d deadline=%s\n", start.UTC().Format(time.RFC3339), pid, store.ReceiveDeadline)
 		mirrorWait := receiveWhenQuiet(ctx, ws, parentPID)
 		// The decision is in the receive's sync trace; this line is the worker's
 		// own lifetime, which the trace does not carry.
-		fmt.Fprintf(stdout, "%s receive end pid=%d mirror_wait=%s elapsed=%s\n", time.Now().UTC().Format(time.RFC3339), pid,
+		fmt.Fprintf(inv.Stdout, "%s receive end pid=%d mirror_wait=%s elapsed=%s\n", time.Now().UTC().Format(time.RFC3339), pid,
 			mirrorWait.Round(time.Millisecond), time.Since(start).Round(time.Millisecond))
 		return nil
 	})

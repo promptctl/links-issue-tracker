@@ -38,7 +38,7 @@ func runCLIInDirWithin(t *testing.T, dir string, limit time.Duration, args ...st
 	ctx, cancel := context.WithTimeout(context.Background(), limit)
 	defer cancel()
 	var out bytes.Buffer
-	runErr := Run(ctx, &out, &out, args)
+	runErr := Run(ctx, cwdInvocation(&out, &out, args))
 	return out.String(), runErr
 }
 

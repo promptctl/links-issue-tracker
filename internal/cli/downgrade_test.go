@@ -109,11 +109,11 @@ func runDowngradeRecorded(t *testing.T, scope downgradeScope, res release.Resolv
 	ctx := telemetry.With(context.Background(), recorder)
 	l := downgradeLeafWith(res, inst, binPath)
 	var out bytes.Buffer
-	positional, err := parseLeaf(ctx, l, []string{"--to", "v0.4.1"}, &out)
+	positional, err := parseLeaf(ctx, l, []string{"--to", "v0.4.1"}, cwdInvocation(&out, &out, nil))
 	if err != nil {
 		t.Fatalf("parseLeaf: %v", err)
 	}
-	err = l.work(ctx, &out, scope, positional)
+	err = l.work(ctx, cwdInvocation(&out, &out, nil), scope, positional)
 	ev := recorder.Finish(invocationEnd(time.Now(), err, nil))
 	return writtenFacts(t, ev), ev.Counts, out.String(), err
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"time"
 
@@ -81,7 +80,7 @@ func relationOf(standing claims.Standing, self model.Attribution) laneRelation {
 // Enforcement lives here and only here per [LAW:single-enforcer]: `lit
 // start` is the one command that transfers a claim, so it is the one place
 // that gates the transfer.
-func authorizeStart(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, prior model.Issue, start model.Start, take bool) (afterApply, error) {
+func authorizeStart(ctx context.Context, inv Invocation, ap *app.App, issueID string, prior model.Issue, start model.Start, take bool) (afterApply, error) {
 	// A takeover is worth confirming only for a start that can land. Issue.Apply
 	// refuses a frozen issue and a container whoever holds the lane, so its
 	// refusal answers first; gating first would send the caller to --take and
@@ -95,7 +94,7 @@ func authorizeStart(ctx context.Context, stdout io.Writer, ap *app.App, issueID 
 		return nil, err
 	}
 	lane := model.LaneOf(prior, relations[issueID].Parent)
-	cc, err := gatherClaimContext(ctx, stdout, ap)
+	cc, err := gatherClaimContext(ctx, inv.Stdout, ap)
 	if err != nil {
 		return nil, err
 	}
@@ -106,7 +105,7 @@ func authorizeStart(ctx context.Context, stdout io.Writer, ap *app.App, issueID 
 	telemetry.Set(ctx, "start.lane_held", relation != laneUnclaimed)
 	var takeover string
 	if relation == laneHeldForeign {
-		if takeover, err = confirmFreshTakeover(stdout, cc, lane, take); err != nil {
+		if takeover, err = confirmFreshTakeover(inv.Stdin, inv.Stdout, cc, lane, take); err != nil {
 			return nil, err
 		}
 	}
@@ -137,7 +136,7 @@ func authorizeStart(ctx context.Context, stdout io.Writer, ap *app.App, issueID 
 // It fails loudly rather than proceeding without naming the holder: the caller
 // reaches here only for a Held standing, which formatClaimLine always renders,
 // so ok=false means the two have gone out of sync. [LAW:no-silent-failure]
-func confirmFreshTakeover(stdout io.Writer, cc claimContext, lane model.LaneID, take bool) (announcement string, err error) {
+func confirmFreshTakeover(stdin io.Reader, stdout io.Writer, cc claimContext, lane model.LaneID, take bool) (announcement string, err error) {
 	line, ok := formatClaimLine(cc, lane, time.Now())
 	if !ok {
 		return "", fmt.Errorf("claims: %v is held by another checkout but has no claim line to show", lane)
@@ -148,7 +147,7 @@ func confirmFreshTakeover(stdout io.Writer, cc claimContext, lane model.LaneID, 
 	if !isTerminal(stdout) {
 		return "", takeoverUnconfirmedError{Message: fmt.Sprintf("%s — this lane is claimed and active; pass --take to confirm the takeover", line)}
 	}
-	confirmed, err := askYesNo(os.Stdin, stdout, line+"\ntake over this lane?")
+	confirmed, err := askYesNo(stdin, stdout, line+"\ntake over this lane?")
 	if err != nil {
 		return "", err
 	}

@@ -326,7 +326,7 @@ func TestRenderQuickstartGuidanceAppendsSoilSectionWhenEnabled(t *testing.T) {
 func runQuickstartRefresh(t *testing.T) string {
 	t.Helper()
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), &stdout, &stdout, []string{"quickstart", "--refresh"}); err != nil {
+	if err := Run(context.Background(), cwdInvocation(&stdout, &stdout, []string{"quickstart", "--refresh"})); err != nil {
 		t.Fatalf("Run(quickstart --refresh) error = %v", err)
 	}
 	return stdout.String()

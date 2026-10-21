@@ -147,12 +147,12 @@ func spawnBackgroundMirror(ws workspace.Info, parentPID int) error {
 // backgrounded owner-notify hook, a git credential daemon — which would keep the
 // lock held, and every join waiting, long after this worker is gone.
 // [LAW:single-enforcer]
-func detachedWorkerLeaf(subcommand, parentPIDUsage string, work func(ctx context.Context, stdout io.Writer, ws workspace.Info, parentPID int) error) wsLeaf {
+func detachedWorkerLeaf(subcommand, parentPIDUsage string, work func(ctx context.Context, inv Invocation, ws workspace.Info, parentPID int) error) wsLeaf {
 	fs := newCobraFlagSet("sync " + subcommand)
 	parentPID := fs.Int("parent-pid", 0, parentPIDUsage)
-	return wsLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, _ []string) error {
+	return wsLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, inv Invocation, ws workspace.Info, _ []string) error {
 		keepWorkerHoldFromChildren()
-		return work(ctx, stdout, ws, *parentPID)
+		return work(ctx, inv, ws, *parentPID)
 	}}
 }
 
@@ -257,7 +257,7 @@ func workerEnv(strip []string, set ...string) []string {
 // the loser still exits without opening a store, writing a trace, or creating a
 // file — the quiescence property test cleanups rely on.
 func backgroundMirrorLeaf() wsLeaf {
-	return detachedWorkerLeaf(backgroundMirrorSubcommand, "PID of the spawning command; the mirror waits for it to exit", func(ctx context.Context, stdout io.Writer, ws workspace.Info, parentPID int) error {
+	return detachedWorkerLeaf(backgroundMirrorSubcommand, "PID of the spawning command; the mirror waits for it to exit", func(ctx context.Context, inv Invocation, ws workspace.Info, parentPID int) error {
 		// A live mirror IS the coverage the claim protocol counts on, and its
 		// liveness is proven by the kernel: hold the beacon shared from entry —
 		// before the parent-exit wait, so mutations claiming during that wait read
@@ -327,7 +327,7 @@ func backgroundMirrorLeaf() wsLeaf {
 			// marker older than it existed before this cycle's entry-clear ran,
 			// so its survival means the clear is failing, not that a claim landed.
 			cycleStart := time.Now()
-			attempted := mirrorCycle(ctx, stdout, ws, stopAnswering)
+			attempted := mirrorCycle(ctx, inv.Stdout, ws, stopAnswering)
 			// Released only after the cycle's engine has closed (mirrorCycle's
 			// deferred Close), so the lock brackets the whole session. The kernel
 			// drops the flock on process exit, so an unlock error cannot strand

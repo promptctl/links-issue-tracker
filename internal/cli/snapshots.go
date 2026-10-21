@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/config"
@@ -80,7 +79,7 @@ func snapshotsNewLeaf() wsLeaf {
 	// the sentence it prints names --label. It carries its own line anyway: the
 	// v1 specification quotes this exact message, and the docclaims gate holds
 	// the code to what the chapter says ships. [LAW:one-source-of-truth]
-	return wsLeaf{fs: fs, positionals: 0, usage: "usage: lit snapshots new [--label <text>]", work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
+	return wsLeaf{fs: fs, positionals: 0, usage: "usage: lit snapshots new [--label <text>]", work: func(ctx context.Context, inv Invocation, ws workspace.Info, positional []string) error {
 		cfg, err := config.Load(pathspec.New(ws.RootDir))
 		if err != nil {
 			return err
@@ -94,7 +93,7 @@ func snapshotsNewLeaf() wsLeaf {
 		// already have.
 		if snap.Name != "" {
 			telemetry.Set(ctx, "snapshots.left_out", snap.LeftOut)
-			if _, printErr := fmt.Fprintf(stdout, "%s %s\n", snap.Name, snap.Path); printErr != nil {
+			if _, printErr := fmt.Fprintf(inv.Stdout, "%s %s\n", snap.Name, snap.Path); printErr != nil {
 				err = errors.Join(err, printErr)
 			}
 		}
@@ -195,13 +194,13 @@ func withDoltDirectoryHeld(ctx context.Context, ws workspace.Info, fn func() err
 
 func snapshotsListLeaf() wsLeaf {
 	fs := newCobraFlagSet("snapshots list")
-	return wsLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
+	return wsLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, inv Invocation, ws workspace.Info, positional []string) error {
 		snapshots, err := dbsnapshot.List(ws.DatabasePath)
 		if err != nil {
 			return err
 		}
 		for _, snap := range snapshots {
-			if _, err := fmt.Fprintf(stdout, "%s %s %s\n", snap.Name, snap.Created.Format("2006-01-02T15:04:05Z"), snap.Path); err != nil {
+			if _, err := fmt.Fprintf(inv.Stdout, "%s %s %s\n", snap.Name, snap.Created.Format("2006-01-02T15:04:05Z"), snap.Path); err != nil {
 				return err
 			}
 		}
@@ -212,7 +211,7 @@ func snapshotsListLeaf() wsLeaf {
 func snapshotsRestoreLeaf() wsLeaf {
 	fs := newCobraFlagSet("snapshots restore")
 	const usage = "usage: lit snapshots restore <name>"
-	return wsLeaf{fs: fs, positionals: 1, usage: usage, work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
+	return wsLeaf{fs: fs, positionals: 1, usage: usage, work: func(ctx context.Context, inv Invocation, ws workspace.Info, positional []string) error {
 		if len(positional) != 1 {
 			return UsageError{Message: usage}
 		}
@@ -267,7 +266,7 @@ func snapshotsRestoreLeaf() wsLeaf {
 			if rotated != "" {
 				line = fmt.Sprintf("restored %s rotated_to=%s\n", name, rotated)
 			}
-			if _, printErr := fmt.Fprint(stdout, line); printErr != nil {
+			if _, printErr := fmt.Fprint(inv.Stdout, line); printErr != nil {
 				err = errors.Join(err, printErr)
 			}
 		}

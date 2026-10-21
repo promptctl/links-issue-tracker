@@ -148,7 +148,7 @@ func bulkLabelLeaf() appLeaf {
 	// --label -- the act that actually works -- and measurement said so: the
 	// derived sentence names both, and "takes 1 positional argument" is exactly
 	// true of a command whose one positional is the action. [LAW:one-source-of-truth]
-	return appLeaf{fs: fs, positionals: 1, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+	return appLeaf{fs: fs, positionals: 1, work: func(ctx context.Context, inv Invocation, ap *app.App, positional []string) error {
 		if len(positional) == 0 {
 			return UsageError{Message: bulkLabelFamily.usage}
 		}
@@ -168,7 +168,7 @@ func bulkLabelLeaf() appLeaf {
 			return err
 		}
 		actor := resolveActor()
-		return runBulkOver(ctx, stdout, issueIDs, func(ctx context.Context, issueID string) (string, error) {
+		return runBulkOver(ctx, inv.Stdout, issueIDs, func(ctx context.Context, issueID string) (string, error) {
 			return "", op(ctx, ap, issueID, *label, actor)
 		})
 	}}
@@ -189,7 +189,7 @@ func bulkTransitionLeaf(spec transitionSpec) appLeafFn {
 		usage := fmt.Sprintf("usage: lit bulk %s --ids <id,id,...>%s [--reason <text>]", spec.name, spec.synopsis)
 		buildAction := spec.registerFlags(fs, usage)
 		authorize := spec.authorize(fs)
-		return appLeaf{fs: fs, positionals: 0, usage: usage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+		return appLeaf{fs: fs, positionals: 0, usage: usage, work: func(ctx context.Context, inv Invocation, ap *app.App, positional []string) error {
 			issueIDs, err := issueIDsFlag()
 			if err != nil {
 				return err
@@ -199,8 +199,8 @@ func bulkTransitionLeaf(spec transitionSpec) appLeafFn {
 			if err != nil {
 				return err
 			}
-			return runBulkOver(ctx, stdout, issueIDs, func(ctx context.Context, issueID string) (string, error) {
-				did, err := applyTransition(ctx, stdout, ap, issueID, action, actor, *reason, authorize)
+			return runBulkOver(ctx, inv.Stdout, issueIDs, func(ctx context.Context, issueID string) (string, error) {
+				did, err := applyTransition(ctx, inv, ap, issueID, action, actor, *reason, authorize)
 				return did.notice, err
 			})
 		}}

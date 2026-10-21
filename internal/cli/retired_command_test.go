@@ -21,7 +21,7 @@ func TestRetiredCommandsPointToReplacements(t *testing.T) {
 	t.Parallel()
 	for _, name := range []string{"ready", "queue"} {
 		var out bytes.Buffer
-		err := Run(context.Background(), &out, &out, []string{name})
+		err := Run(context.Background(), cwdInvocation(&out, &out, []string{name}))
 
 		var retired RetiredCommandError
 		if !errors.As(err, &retired) {
@@ -66,7 +66,7 @@ func TestFoldedCommandsPointToTheirFlags(t *testing.T) {
 	}
 	for _, tc := range cases {
 		var out bytes.Buffer
-		err := Run(context.Background(), &out, &out, []string{tc.name})
+		err := Run(context.Background(), cwdInvocation(&out, &out, []string{tc.name}))
 
 		var retired RetiredCommandError
 		if !errors.As(err, &retired) {
@@ -108,7 +108,7 @@ func TestBulkImportRetiredPointsToBackupRestore(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(prevWD) })
 
 	var out bytes.Buffer
-	err = Run(context.Background(), &out, &out, []string{"bulk", "import"})
+	err = Run(context.Background(), cwdInvocation(&out, &out, []string{"bulk", "import"}))
 
 	var retired RetiredCommandError
 	if !errors.As(err, &retired) {
@@ -165,7 +165,7 @@ func TestRetiredSubcommandAnswersInAnyFamily(t *testing.T) {
 // and the completion projection.
 func TestRetiredCommandsAreHiddenButRegistered(t *testing.T) {
 	t.Parallel()
-	specs := commandSpecs(context.Background(), nil, nil)
+	specs := commandSpecs(context.Background(), Invocation{})
 	byName := map[string]CommandSpec{}
 	for _, s := range specs {
 		byName[s.Name] = s
@@ -187,7 +187,7 @@ func TestRetiredCommandsAreHiddenButRegistered(t *testing.T) {
 func TestRootHelpShowsCuratedWorkableSurface(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer
-	if err := Run(context.Background(), &out, &out, []string{"--help"}); err != nil {
+	if err := Run(context.Background(), cwdInvocation(&out, &out, []string{"--help"})); err != nil {
 		t.Fatalf("lit --help error = %v", err)
 	}
 	help := out.String()

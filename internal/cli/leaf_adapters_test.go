@@ -36,11 +36,11 @@ func underInvocation(ctx context.Context) context.Context {
 // supplies.
 func runLeaf[R any](l leaf[R], ctx context.Context, stdout io.Writer, res R, args []string) error {
 	ctx = underInvocation(ctx)
-	positional, err := parseLeaf(ctx, l, args, stdout)
+	positional, err := parseLeaf(ctx, l, args, cwdInvocation(stdout, stdout, nil))
 	if err != nil {
 		return err
 	}
-	return l.work(ctx, stdout, res, positional)
+	return l.work(ctx, cwdInvocation(stdout, stdout, nil), res, positional)
 }
 
 // App-mode handlers.
@@ -201,7 +201,7 @@ func runListWithStore(ctx context.Context, stdout io.Writer, st storage.Store, p
 func runListLeaf(ctx context.Context, stdout io.Writer, surface listSurface, scope listScope, args []string) error {
 	ctx = underInvocation(ctx)
 	l, _ := listLeaf(surface)
-	declared, err := parseLeaf(ctx, l, args, stdout)
+	declared, err := parseLeaf(ctx, l, args, cwdInvocation(stdout, stdout, nil))
 	if err != nil {
 		return err
 	}
@@ -209,5 +209,5 @@ func runListLeaf(ctx context.Context, stdout io.Writer, surface listSurface, sco
 	if err != nil {
 		return err
 	}
-	return l.work(ctx, stdout, scope, positional)
+	return l.work(ctx, cwdInvocation(stdout, stdout, nil), scope, positional)
 }

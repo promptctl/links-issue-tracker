@@ -58,7 +58,7 @@ func TestRunStoresListsDiscoveredStores(t *testing.T) {
 	gitInit(t, gitOnly)
 
 	var out bytes.Buffer
-	if err := runStores(context.Background(), &out, []string{root}); err != nil {
+	if err := runStores(context.Background(), cwdInvocation(&out, &out, nil), []string{root}); err != nil {
 		t.Fatalf("runStores() error = %v", err)
 	}
 
@@ -88,7 +88,7 @@ func TestRunStoresPropagatesDiscoverError(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "does-not-exist")
 
 	var out bytes.Buffer
-	err := runStores(context.Background(), &out, []string{missing})
+	err := runStores(context.Background(), cwdInvocation(&out, &out, nil), []string{missing})
 	if err == nil {
 		t.Fatalf("runStores() returned nil error with output %q; want a surfaced Discover failure", out.String())
 	}
@@ -107,7 +107,7 @@ func TestRunStoresEmptyWhenNoStores(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	if err := runStores(context.Background(), &out, []string{root}); err != nil {
+	if err := runStores(context.Background(), cwdInvocation(&out, &out, nil), []string{root}); err != nil {
 		t.Fatalf("runStores() error = %v", err)
 	}
 	if out.Len() != 0 {
@@ -509,7 +509,7 @@ func TestRunStoresCountsRendersRollup(t *testing.T) {
 	_, wantPrefix := seedDiscoverableStore(t, repo, "real", "real-workspace-id")
 
 	var counts bytes.Buffer
-	if err := runStores(underInvocation(context.Background()), &counts, []string{"--counts", root}); err != nil {
+	if err := runStores(underInvocation(context.Background()), cwdInvocation(&counts, &counts, nil), []string{"--counts", root}); err != nil {
 		t.Fatalf("runStores --counts error = %v", err)
 	}
 	got := counts.String()
@@ -521,7 +521,7 @@ func TestRunStoresCountsRendersRollup(t *testing.T) {
 
 	// Bare `stores` lists paths — no count table leaks in without the flag.
 	var plain bytes.Buffer
-	if err := runStores(context.Background(), &plain, []string{root}); err != nil {
+	if err := runStores(context.Background(), cwdInvocation(&plain, &plain, nil), []string{root}); err != nil {
 		t.Fatalf("runStores (no --counts) error = %v", err)
 	}
 	if strings.Contains(plain.String(), "PROJECT") || strings.Contains(plain.String(), "TOTAL") {

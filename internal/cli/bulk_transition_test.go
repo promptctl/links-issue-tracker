@@ -155,11 +155,11 @@ func TestBulkDoneRecordsEachItemsFactsOnItsOwnEntry(t *testing.T) {
 	// replace with a fresh one.
 	var out bytes.Buffer
 	done := bulkTransitionLeaf(doneSpec)()
-	positional, err := parseLeaf(h.ctx, done, []string{"--ids", unplanned + "," + closed + "," + missing}, &out)
+	positional, err := parseLeaf(h.ctx, done, []string{"--ids", unplanned + "," + closed + "," + missing}, cwdInvocation(&out, &out, nil))
 	if err != nil {
 		t.Fatalf("parse bulk done error = %v", err)
 	}
-	if err := done.work(h.ctx, &out, h.ap, positional); err == nil {
+	if err := done.work(h.ctx, cwdInvocation(&out, &out, nil), h.ap, positional); err == nil {
 		t.Fatalf("bulk done with %s returned nil, want its failure", missing)
 	}
 
