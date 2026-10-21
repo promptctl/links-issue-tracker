@@ -11,6 +11,8 @@
 os.LookupEnv          os package; the environment-variable survey names what it searched for
 os.UserHomeDir        os package; a read TestNothingRunReachesReadsTheProcess refuses
 os.UserConfigDir      os package; a read TestNothingRunReachesReadsTheProcess refuses
+os.UserCacheDir       os package; a read TestNothingRunReachesReadsTheProcess refuses
+os.ExpandEnv          os package; a read TestNothingRunReachesReadsTheProcess refuses
 json.Encoder          encoding/json; writeJSON builds one with json.NewEncoder
 LimitedReader         io.LimitedReader, unwrapped by *os.File.ReadFrom
 os.File.ReadFrom      os package

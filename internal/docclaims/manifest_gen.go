@@ -398,6 +398,7 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/inventories/inventory-cli-issue.md", Text: "parse updated term %q", Src: "parse updated term %q: %w"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-issue.md", Text: "ssh -o BatchMode=yes git@<host>", Src: "The remote host was unreachable over the network; credentials are not the problem, and lit already retried with backoff. Check connectivity to the remote host (for SSH remotes: `ssh -o BatchMode=yes git@<host>`), then retry once the network path is restored."},
 	{Doc: "doc-v1-total/inventories/inventory-cli-issue.md", Text: "task, feature, bug, chore, epic", Src: "internal/cli/helptext/import.txt"},
+	{Doc: "doc-v1-total/inventories/inventory-cli-issue.md", Text: "the invocation was given no environment", Src: "the invocation was given no environment"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-issue.md", Text: "the public checkout", Src: "the public checkout"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-issue.md", Text: "timestamp must be RFC3339, got %q", Src: "timestamp must be RFC3339, got %q"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-issue.md", Text: "unsupported has: filter %q", Src: "unsupported has: filter %q"},
