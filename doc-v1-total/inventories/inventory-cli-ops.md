@@ -907,7 +907,7 @@ Handler `runStores` — `stores.go`. Not app-mode; called raw with ctx and stdou
 |---|---|---|---|
 | `--counts` | `false` | "Report each discovered store's ready / in-flight / blocked counts (cross-project rollup) instead of listing storage paths" | `stores.go` |
 
-Positional args are the roots; with none, the cwd is used (`os.Getwd`, error `get cwd: %w`) (`stores.go`).
+Positional args are the roots, each resolved against the invocation's directory (error `resolve root %s: %w`); with none, the root is `.`, that directory itself (`stores.go`).
 
 **Default (path list)**: `workspace.Discover(roots)`; error wrapped `discover stores: %w` (`stores.go`). One canonical `StorageDir` per line, streaming; a write failure stops with non-zero exit after the lines already emitted (`stores.go`). No stores found ⇒ empty output, exit 0.
 

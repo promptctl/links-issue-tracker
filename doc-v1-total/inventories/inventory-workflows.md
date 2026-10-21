@@ -799,8 +799,9 @@ layers (`internal/cli/workflows_edit.go`).
    return false.
 3. `$EDITOR` is split on whitespace with `strings.Fields`; if empty → return
    (`internal/cli/workflows_edit.go`). So `EDITOR="code -w"` works as command + args.
-4. Otherwise `exec.Command(fields[0], fields[1:]... + path)` is run with the process's real
-   `os.Stdin/os.Stdout/os.Stderr` wired through, **synchronously** (`cmd.Run()`)
+4. Otherwise `exec.Command(fields[0], fields[1:]... + path)` is run in the invocation's
+   directory (an unreadable one → `open %s in $EDITOR: %w`) with the invocation's
+   stdin/stdout/stderr wired through, **synchronously** (`cmd.Run()`)
    (`internal/cli/workflows_edit.go`).
 5. A non-zero editor exit becomes the error
    `open %s in $EDITOR (%s): %w` (`internal/cli/workflows_edit.go`).

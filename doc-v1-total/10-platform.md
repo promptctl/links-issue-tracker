@@ -10,7 +10,7 @@ Module `github.com/promptctl/links-issue-tracker`, Go `1.25.7` (`go.mod`); CI de
 
 ### Startup
 
-`main()` is three steps (`cmd/lit/main.go`): install the signal guard, run `cli.Run(ctx, inv)` with a `cli.Invocation` built from the process (`os.Getwd`, `os.Args[1:]`, `os.Stdin`, `os.Stdout`, `os.Stderr`), and on error `os.Exit(cli.WriteCommandError(os.Stderr, err))`; a nil error exits 0. Nothing `cli.Run` reaches reads the working directory or stdin from the process again; it reads the invocation's (`TestNothingRunReachesReadsTheProcess`).
+`main()` is three steps (`cmd/lit/main.go`): install the signal guard, run `cli.Run(ctx, inv)` with a `cli.Invocation` built from the process (`os.Getwd`, `os.Args[1:]`, `os.Stdin`, `os.Stdout`, `os.Stderr`), and on error `os.Exit(cli.WriteCommandError(os.Stderr, err))`; a nil error exits 0. No non-test code `cli.Run` can reach names `os.Getwd`, `os.Args`, `os.Stdin` or `filepath.Abs`; it reads the invocation's (`TestNothingRunReachesReadsTheProcess`). `cli.WorkingDirOf` refuses a directory that is not absolute, and the workspace layer runs git only in an absolute one, so no relative path resolves against the process's directory there.
 
 Argument handling before any command runs (`internal/cli/cli.go`):
 

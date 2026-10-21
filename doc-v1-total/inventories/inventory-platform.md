@@ -368,7 +368,8 @@ Defaults are set in `Load` (`internal/config/config.go`).
 
 1. `git rev-parse --git-common-dir` run with `cmd.Dir = cwd` (`internal/workspace/workspace.go`,
 ).
-2. `anchorGitPath(cwd, out)` — a relative git answer is joined onto the **absolute cwd**, not the
+2. `anchorGitPath(cwd, out)` — a relative git answer is joined onto the **cwd**, which `gitOutput`
+   has already refused unless absolute (`run git in %q: the directory is not absolute`), not the
    repo toplevel; an absolute answer is only cleaned (`internal/workspace/workspace.go`).
 3. `filepath.EvalSymlinks` canonicalizes the common dir; failure ⇒
    `canonicalize git-common-dir %q: %w` (`internal/workspace/workspace.go`).
