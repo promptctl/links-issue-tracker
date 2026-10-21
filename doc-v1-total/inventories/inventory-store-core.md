@@ -5302,7 +5302,7 @@ Classification predicates:
 Dolt gives every **git-backed** remote its own bare-repo mirror at
 `<db>/.dolt/git-remote-cache/<sha256(url|ref)>/repo.git`, and never deletes one (`remotecache.go`).
 
-Constant: `remoteCacheDirName = "git-remote-cache"` (`remotecache.go`).
+Constant: `dbsnapshot.RemoteCacheDirName = "git-remote-cache"` (`internal/dbsnapshot/snapshot.go`).
 
 Base path (`remotecache.go`):
 ```go
@@ -5311,7 +5311,7 @@ func (s *Store) gitCacheRoot() string {
 }
 
 func (s *Store) remoteCacheBase() string {
-    return filepath.Join(s.gitCacheRoot(), dbfactory.DoltDir, remoteCacheDirName)
+    return filepath.Join(s.gitCacheRoot(), dbfactory.DoltDir, dbsnapshot.RemoteCacheDirName)
 }
 ```
 `gitCacheRoot()` is the `GitCacheRootParam` Dolt's SQL provider opens a git remote with; its last segment is `doltDatabaseName`, **not** the workspace id (`remotecache.go`).

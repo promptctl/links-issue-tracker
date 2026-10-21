@@ -583,7 +583,7 @@ func openCloneChunkStore(ctx context.Context, cloneRoot string) (*doltdb.DoltDB,
 // remoteCacheBaseAt is the git-remote-cache directory of the Dolt root at
 // root — Store.remoteCacheBase for a root with no Store open on it.
 func remoteCacheBaseAt(root string) string {
-	return filepath.Join(root, doltDatabaseName, dbfactory.DoltDir, remoteCacheDirName)
+	return filepath.Join(root, doltDatabaseName, dbfactory.DoltDir, dbsnapshot.RemoteCacheDirName)
 }
 
 // remoteCacheLanding is what a fetch on the clone changed in its mirrors of the

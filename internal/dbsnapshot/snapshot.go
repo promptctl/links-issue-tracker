@@ -39,7 +39,6 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"path"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -170,7 +169,7 @@ func Take(ctx context.Context, databaseDir, label string) (Snapshot, error) {
 		return Snapshot{}, err
 	}
 	defer os.Remove(reserved.reservePath)
-	if err := cloneTree(ctx, databaseDir, reserved.tmpPath, snapshotOmits); err != nil {
+	if _, err := cloneTree(ctx, databaseDir, reserved.tmpPath, snapshotOmits); err != nil {
 		_ = os.RemoveAll(reserved.tmpPath)
 		return Snapshot{}, fmt.Errorf("clone tree: %w", err)
 	}
@@ -199,7 +198,7 @@ func CloneTree(ctx context.Context, databaseDir, dst string) error {
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return ctxErr
 	}
-	if err := cloneTree(ctx, databaseDir, dst, cloneOmits); err != nil {
+	if _, err := cloneTree(ctx, databaseDir, dst, cloneOmits); err != nil {
 		_ = os.RemoveAll(dst)
 		return err
 	}
@@ -632,11 +631,12 @@ const (
 	TempTableFilesDirName = "temptf"
 )
 
-// omission is what a copy leaves out of the tree it copies: patterns,
-// slash-separated and relative to the copied root, in path.Match's syntax. A
-// directory a pattern matches is left out whole. Which copy leaves out what
-// is a value its caller passes, so the one copy engine serves every caller.
-// [LAW:dataflow-not-control-flow]
+// omission is what a copy leaves out of the tree it copies: tails of paths,
+// slash-separated. A path is left out when it ends in a tail at a segment
+// boundary, at any depth under the copied root, so the stats sidecar's own
+// .dolt/noms/LOCK is left out with the database's. A directory left out is
+// left out whole. Which copy leaves out what is a value its caller passes, so
+// the one copy engine serves every caller. [LAW:dataflow-not-control-flow]
 type omission []string
 
 // cloneOmits is what every copy of a Dolt storage directory leaves out:
@@ -646,7 +646,7 @@ type omission []string
 // own journal hold is a MANDATORY LockFileEx, and reading the file through a
 // second handle would either fail the copy outright or release the hold
 // mid-walk, reopening the tear window the hold exists to close.
-var cloneOmits = omission{"*/.dolt/noms/LOCK"}
+var cloneOmits = omission{".dolt/noms/LOCK"}
 
 // snapshotOmits is what a recovery snapshot also leaves out: the bytes
 // restoring it never needs. The remote cache is a mirror of the remote that
@@ -654,51 +654,57 @@ var cloneOmits = omission{"*/.dolt/noms/LOCK"}
 // what a Dolt process leaves when it dies before removing them. Together
 // they were 77% of a snapshot of this repository's store (links-scale-dy46.5u8).
 var snapshotOmits = append(slices.Clone(cloneOmits),
-	"*/.dolt/"+RemoteCacheDirName,
-	"*/.dolt/"+TempTableFilesDirName,
+	".dolt/"+RemoteCacheDirName,
+	".dolt/"+TempTableFilesDirName,
 )
 
 // omits reports whether the copy leaves out rel, a path relative to the
-// copied root. A malformed pattern is a defect in this package's own
-// declarations, so it panics rather than quietly matching nothing.
+// copied root. It is the one matcher both copy engines ask, so a walk and a
+// clone-then-remove leave out the same paths. [LAW:one-source-of-truth]
 func (o omission) omits(rel string) bool {
-	for _, pattern := range o {
-		matched, err := path.Match(pattern, filepath.ToSlash(rel))
-		if err != nil {
-			panic(fmt.Sprintf("dbsnapshot: omission pattern %q: %v", pattern, err))
-		}
-		if matched {
-			return true
-		}
-	}
-	return false
+	slashed := "/" + filepath.ToSlash(rel)
+	return slices.ContainsFunc(o, func(tail string) bool {
+		return strings.HasSuffix(slashed, "/"+tail)
+	})
 }
 
 // removeFrom deletes from dst, a finished copy, every path the omission
-// leaves out. It is how a copy made in one piece (Darwin's Clonefile) comes to
-// hold what a walk that skipped those paths would have.
-func (o omission) removeFrom(dst string) error {
-	for _, pattern := range o {
-		matches, err := filepath.Glob(filepath.Join(dst, filepath.FromSlash(pattern)))
+// leaves out, and returns them relative to dst. It is how a copy made in one
+// piece (Darwin's Clonefile) comes to hold what walkAndCopy would have: it
+// walks dst the way walkAndCopy walks its source, so dst's own path is never
+// read as a pattern and no symlink inside the copy is followed out of it.
+func (o omission) removeFrom(dst string) (leftOut []string, err error) {
+	err = filepath.WalkDir(dst, func(dstPath string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return fmt.Errorf("dbsnapshot: omission pattern %q: %w", pattern, err)
+			return err
 		}
-		for _, match := range matches {
-			if err := os.RemoveAll(match); err != nil {
-				return fmt.Errorf("leave %s out of the copy: %w", match, err)
-			}
+		rel, relErr := filepath.Rel(dst, dstPath)
+		if relErr != nil {
+			return relErr
 		}
-	}
-	return nil
+		if !o.omits(rel) {
+			return nil
+		}
+		if err := os.RemoveAll(dstPath); err != nil {
+			return fmt.Errorf("leave %s out of the copy: %w", rel, err)
+		}
+		leftOut = append(leftOut, filepath.ToSlash(rel))
+		if d.IsDir() {
+			return fs.SkipDir
+		}
+		return nil
+	})
+	return leftOut, err
 }
 
 // walkAndCopy creates dst as a tree-copy of src, less what omit leaves out,
-// using copyFile for each regular file. Directories are recreated with their source perm bits.
+// using copyFile for each regular file, and returns what it left out relative
+// to src. Directories are recreated with their source perm bits.
 // Symlinks are recreated; other special entries error out. The per-entry ctx
 // gate is what lets an interrupt abandon a long fallback copy mid-tree and
 // hand control back to Take's cleanup within the interrupt guard's grace.
-func walkAndCopy(ctx context.Context, src, dst string, omit omission, copyFile func(ctx context.Context, src, dst string) error) error {
-	return filepath.WalkDir(src, func(srcPath string, d fs.DirEntry, err error) error {
+func walkAndCopy(ctx context.Context, src, dst string, omit omission, copyFile func(ctx context.Context, src, dst string) error) (leftOut []string, err error) {
+	err = filepath.WalkDir(src, func(srcPath string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -710,6 +716,7 @@ func walkAndCopy(ctx context.Context, src, dst string, omit omission, copyFile f
 			return relErr
 		}
 		if omit.omits(rel) {
+			leftOut = append(leftOut, filepath.ToSlash(rel))
 			if d.IsDir() {
 				return fs.SkipDir
 			}
@@ -740,6 +747,7 @@ func walkAndCopy(ctx context.Context, src, dst string, omit omission, copyFile f
 			return fmt.Errorf("dbsnapshot: unsupported file type at %s: %v", srcPath, d.Type())
 		}
 	})
+	return leftOut, err
 }
 
 // plainFileCopy is the universal fallback: open src, create dst with the

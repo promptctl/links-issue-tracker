@@ -18,7 +18,7 @@ import (
 //
 // [LAW:dataflow-not-control-flow] Platform variability lives in which file Go
 // links in (a value), not in a runtime branch inside one function.
-func cloneTree(ctx context.Context, src, dst string, omit omission) error {
+func cloneTree(ctx context.Context, src, dst string, omit omission) (leftOut []string, err error) {
 	if err := unix.Clonefile(src, dst, unix.CLONE_NOFOLLOW); err == nil {
 		return omit.removeFrom(dst)
 	}

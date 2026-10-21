@@ -766,8 +766,8 @@ func TestRemoteCacheLandingCopiesTheFetchedRemotesLastKnownRefs(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
-	liveBase := filepath.Join(base, "live", remoteCacheDirName)
-	cloneBase := filepath.Join(base, "clone", remoteCacheDirName)
+	liveBase := filepath.Join(base, "live", dbsnapshot.RemoteCacheDirName)
+	cloneBase := filepath.Join(base, "clone", dbsnapshot.RemoteCacheDirName)
 	key := strings.Repeat("a", 64)
 	onlyCloneKey := strings.Repeat("b", 64)
 	git := func(gitDir string, args ...string) string {
