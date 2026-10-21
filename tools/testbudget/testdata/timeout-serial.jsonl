@@ -1,0 +1,67 @@
+{"Time":"2026-10-20T21:11:08.468709-06:00","Action":"start","Package":"example.com/hungpkg"}
+{"Time":"2026-10-20T21:11:08.473443-06:00","Action":"run","Package":"example.com/hungpkg","Test":"TestSerial100ms"}
+{"Time":"2026-10-20T21:11:08.473501-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerial100ms","Output":"=== RUN   TestSerial100ms\n"}
+{"Time":"2026-10-20T21:11:08.573634-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerial100ms","Output":"--- PASS: TestSerial100ms (0.10s)\n"}
+{"Time":"2026-10-20T21:11:08.57369-06:00","Action":"pass","Package":"example.com/hungpkg","Test":"TestSerial100ms","Elapsed":0.1}
+{"Time":"2026-10-20T21:11:08.573704-06:00","Action":"run","Package":"example.com/hungpkg","Test":"TestParallel300msBeforePauseNeverResumed"}
+{"Time":"2026-10-20T21:11:08.573708-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestParallel300msBeforePauseNeverResumed","Output":"=== RUN   TestParallel300msBeforePauseNeverResumed\n"}
+{"Time":"2026-10-20T21:11:08.874746-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestParallel300msBeforePauseNeverResumed","Output":"=== PAUSE TestParallel300msBeforePauseNeverResumed\n"}
+{"Time":"2026-10-20T21:11:08.874779-06:00","Action":"pause","Package":"example.com/hungpkg","Test":"TestParallel300msBeforePauseNeverResumed"}
+{"Time":"2026-10-20T21:11:08.874787-06:00","Action":"run","Package":"example.com/hungpkg","Test":"TestSerialHangs"}
+{"Time":"2026-10-20T21:11:08.874792-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs","Output":"=== RUN   TestSerialHangs\n"}
+{"Time":"2026-10-20T21:11:08.874804-06:00","Action":"run","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks"}
+{"Time":"2026-10-20T21:11:08.874807-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"=== RUN   TestSerialHangs/blocks\n"}
+{"Time":"2026-10-20T21:11:10.476632-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"panic: test timed out after 2s\n"}
+{"Time":"2026-10-20T21:11:10.476656-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\trunning tests:\n"}
+{"Time":"2026-10-20T21:11:10.47666-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\t\tTestSerialHangs (2s)\n"}
+{"Time":"2026-10-20T21:11:10.476664-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\t\tTestSerialHangs/blocks (2s)\n"}
+{"Time":"2026-10-20T21:11:10.476667-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\n"}
+{"Time":"2026-10-20T21:11:10.476671-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"goroutine 37 [running]:\n"}
+{"Time":"2026-10-20T21:11:10.476682-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"testing.(*M).startAlarm.func1()\n"}
+{"Time":"2026-10-20T21:11:10.476686-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\t/opt/homebrew/Cellar/go/1.25.7_1/libexec/src/testing/testing.go:2682 +0x2b0\n"}
+{"Time":"2026-10-20T21:11:10.476698-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"created by time.goFunc\n"}
+{"Time":"2026-10-20T21:11:10.476701-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\t/opt/homebrew/Cellar/go/1.25.7_1/libexec/src/time/sleep.go:215 +0x38\n"}
+{"Time":"2026-10-20T21:11:10.476703-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\n"}
+{"Time":"2026-10-20T21:11:10.476706-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"goroutine 1 [chan receive]:\n"}
+{"Time":"2026-10-20T21:11:10.476708-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"testing.(*T).Run(0x140001c4000, {0x10082505c?, 0x14000104b38?}, 0x1008a0c10)\n"}
+{"Time":"2026-10-20T21:11:10.47672-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\t/opt/homebrew/Cellar/go/1.25.7_1/libexec/src/testing/testing.go:2005 +0x378\n"}
+{"Time":"2026-10-20T21:11:10.476729-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"testing.runTests.func1(0x140001c4000)\n"}
+{"Time":"2026-10-20T21:11:10.476734-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\t/opt/homebrew/Cellar/go/1.25.7_1/libexec/src/testing/testing.go:2477 +0x38\n"}
+{"Time":"2026-10-20T21:11:10.476736-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"testing.tRunner(0x140001c4000, 0x14000104c68)\n"}
+{"Time":"2026-10-20T21:11:10.476744-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\t/opt/homebrew/Cellar/go/1.25.7_1/libexec/src/testing/testing.go:1934 +0xc8\n"}
+{"Time":"2026-10-20T21:11:10.476755-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"testing.runTests(0x140001c0000, {0x1009918c0, 0x3, 0x3}, {0x1400018a100?, 0x7?, 0x100996be0?})\n"}
+{"Time":"2026-10-20T21:11:10.47676-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\t/opt/homebrew/Cellar/go/1.25.7_1/libexec/src/testing/testing.go:2475 +0x3b8\n"}
+{"Time":"2026-10-20T21:11:10.476763-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"testing.(*M).Run(0x140001be000)\n"}
+{"Time":"2026-10-20T21:11:10.476766-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\t/opt/homebrew/Cellar/go/1.25.7_1/libexec/src/testing/testing.go:2337 +0x530\n"}
+{"Time":"2026-10-20T21:11:10.476768-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"main.main()\n"}
+{"Time":"2026-10-20T21:11:10.476771-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\t_testmain.go:49 +0x80\n"}
+{"Time":"2026-10-20T21:11:10.476773-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\n"}
+{"Time":"2026-10-20T21:11:10.476775-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"goroutine 34 [chan receive]:\n"}
+{"Time":"2026-10-20T21:11:10.476778-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"testing.(*T).Parallel(0x140001c4540)\n"}
+{"Time":"2026-10-20T21:11:10.47678-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\t/opt/homebrew/Cellar/go/1.25.7_1/libexec/src/testing/testing.go:1708 +0x190\n"}
+{"Time":"2026-10-20T21:11:10.476782-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"example.com/hungpkg.TestParallel300msBeforePauseNeverResumed(0x140001c4540)\n"}
+{"Time":"2026-10-20T21:11:10.476785-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\t/tmp/jdm-48abeef3/timeout/hung_test.go:15 +0x30\n"}
+{"Time":"2026-10-20T21:11:10.476787-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"testing.tRunner(0x140001c4540, 0x1008a0c00)\n"}
+{"Time":"2026-10-20T21:11:10.47679-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\t/opt/homebrew/Cellar/go/1.25.7_1/libexec/src/testing/testing.go:1934 +0xc8\n"}
+{"Time":"2026-10-20T21:11:10.476792-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"created by testing.(*T).Run in goroutine 1\n"}
+{"Time":"2026-10-20T21:11:10.476794-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\t/opt/homebrew/Cellar/go/1.25.7_1/libexec/src/testing/testing.go:1997 +0x364\n"}
+{"Time":"2026-10-20T21:11:10.4768-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\n"}
+{"Time":"2026-10-20T21:11:10.476803-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"goroutine 35 [chan receive]:\n"}
+{"Time":"2026-10-20T21:11:10.476805-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"testing.(*T).Run(0x140001c4700, {0x100822de2?, 0x14000101f58?}, 0x1008a0ca0)\n"}
+{"Time":"2026-10-20T21:11:10.476808-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\t/opt/homebrew/Cellar/go/1.25.7_1/libexec/src/testing/testing.go:2005 +0x378\n"}
+{"Time":"2026-10-20T21:11:10.47681-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"example.com/hungpkg.TestSerialHangs(0x140001c4700?)\n"}
+{"Time":"2026-10-20T21:11:10.476821-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\t/tmp/jdm-48abeef3/timeout/hung_test.go:22 +0x30\n"}
+{"Time":"2026-10-20T21:11:10.476824-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"testing.tRunner(0x140001c4700, 0x1008a0c10)\n"}
+{"Time":"2026-10-20T21:11:10.476826-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\t/opt/homebrew/Cellar/go/1.25.7_1/libexec/src/testing/testing.go:1934 +0xc8\n"}
+{"Time":"2026-10-20T21:11:10.476829-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"created by testing.(*T).Run in goroutine 1\n"}
+{"Time":"2026-10-20T21:11:10.476831-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\t/opt/homebrew/Cellar/go/1.25.7_1/libexec/src/testing/testing.go:1997 +0x364\n"}
+{"Time":"2026-10-20T21:11:10.476834-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\n"}
+{"Time":"2026-10-20T21:11:10.476836-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"goroutine 36 [select (no cases)]:\n"}
+{"Time":"2026-10-20T21:11:10.476838-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"example.com/hungpkg.TestSerialHangs.func1(0x140001c4a80?)\n"}
+{"Time":"2026-10-20T21:11:10.476841-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\t/tmp/jdm-48abeef3/timeout/hung_test.go:22 +0x1c\n"}
+{"Time":"2026-10-20T21:11:10.476844-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"testing.tRunner(0x140001c4a80, 0x1008a0ca0)\n"}
+{"Time":"2026-10-20T21:11:10.476846-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\t/opt/homebrew/Cellar/go/1.25.7_1/libexec/src/testing/testing.go:1934 +0xc8\n"}
+{"Time":"2026-10-20T21:11:10.476849-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"created by testing.(*T).Run in goroutine 35\n"}
+{"Time":"2026-10-20T21:11:10.476851-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\t/opt/homebrew/Cellar/go/1.25.7_1/libexec/src/testing/testing.go:1997 +0x364\n"}
+{"Time":"2026-10-20T21:11:10.477252-06:00","Action":"output","Package":"example.com/hungpkg","Output":"FAIL\texample.com/hungpkg\t2.008s\n"}
+{"Time":"2026-10-20T21:11:10.477267-06:00","Action":"fail","Package":"example.com/hungpkg","Elapsed":2.009}

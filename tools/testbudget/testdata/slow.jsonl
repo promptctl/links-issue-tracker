@@ -1,0 +1,68 @@
+{"Time":"2026-10-20T21:04:24.963824-06:00","Action":"start","Package":"example.com/slowpkg"}
+{"Time":"2026-10-20T21:04:24.968974-06:00","Action":"run","Package":"example.com/slowpkg","Test":"TestParallel600ms"}
+{"Time":"2026-10-20T21:04:24.969042-06:00","Action":"output","Package":"example.com/slowpkg","Test":"TestParallel600ms","Output":"=== RUN   TestParallel600ms\n"}
+{"Time":"2026-10-20T21:04:24.969063-06:00","Action":"output","Package":"example.com/slowpkg","Test":"TestParallel600ms","Output":"=== PAUSE TestParallel600ms\n"}
+{"Time":"2026-10-20T21:04:24.969067-06:00","Action":"pause","Package":"example.com/slowpkg","Test":"TestParallel600ms"}
+{"Time":"2026-10-20T21:04:24.969072-06:00","Action":"run","Package":"example.com/slowpkg","Test":"TestSerial520ms"}
+{"Time":"2026-10-20T21:04:24.969076-06:00","Action":"output","Package":"example.com/slowpkg","Test":"TestSerial520ms","Output":"=== RUN   TestSerial520ms\n"}
+{"Time":"2026-10-20T21:04:25.490044-06:00","Action":"output","Package":"example.com/slowpkg","Test":"TestSerial520ms","Output":"--- PASS: TestSerial520ms (0.52s)\n"}
+{"Time":"2026-10-20T21:04:25.490318-06:00","Action":"pass","Package":"example.com/slowpkg","Test":"TestSerial520ms","Elapsed":0.52}
+{"Time":"2026-10-20T21:04:25.490354-06:00","Action":"run","Package":"example.com/slowpkg","Test":"TestParallel440ms"}
+{"Time":"2026-10-20T21:04:25.49037-06:00","Action":"output","Package":"example.com/slowpkg","Test":"TestParallel440ms","Output":"=== RUN   TestParallel440ms\n"}
+{"Time":"2026-10-20T21:04:25.490385-06:00","Action":"output","Package":"example.com/slowpkg","Test":"TestParallel440ms","Output":"=== PAUSE TestParallel440ms\n"}
+{"Time":"2026-10-20T21:04:25.49039-06:00","Action":"pause","Package":"example.com/slowpkg","Test":"TestParallel440ms"}
+{"Time":"2026-10-20T21:04:25.490394-06:00","Action":"run","Package":"example.com/slowpkg","Test":"TestSerial360ms"}
+{"Time":"2026-10-20T21:04:25.490398-06:00","Action":"output","Package":"example.com/slowpkg","Test":"TestSerial360ms","Output":"=== RUN   TestSerial360ms\n"}
+{"Time":"2026-10-20T21:04:25.851431-06:00","Action":"output","Package":"example.com/slowpkg","Test":"TestSerial360ms","Output":"--- PASS: TestSerial360ms (0.36s)\n"}
+{"Time":"2026-10-20T21:04:25.851492-06:00","Action":"pass","Package":"example.com/slowpkg","Test":"TestSerial360ms","Elapsed":0.36}
+{"Time":"2026-10-20T21:04:25.851514-06:00","Action":"run","Package":"example.com/slowpkg","Test":"TestParallel280ms"}
+{"Time":"2026-10-20T21:04:25.851528-06:00","Action":"output","Package":"example.com/slowpkg","Test":"TestParallel280ms","Output":"=== RUN   TestParallel280ms\n"}
+{"Time":"2026-10-20T21:04:25.851544-06:00","Action":"output","Package":"example.com/slowpkg","Test":"TestParallel280ms","Output":"=== PAUSE TestParallel280ms\n"}
+{"Time":"2026-10-20T21:04:25.85156-06:00","Action":"pause","Package":"example.com/slowpkg","Test":"TestParallel280ms"}
+{"Time":"2026-10-20T21:04:25.851572-06:00","Action":"run","Package":"example.com/slowpkg","Test":"TestSerial200ms"}
+{"Time":"2026-10-20T21:04:25.851587-06:00","Action":"output","Package":"example.com/slowpkg","Test":"TestSerial200ms","Output":"=== RUN   TestSerial200ms\n"}
+{"Time":"2026-10-20T21:04:26.052325-06:00","Action":"output","Package":"example.com/slowpkg","Test":"TestSerial200ms","Output":"--- PASS: TestSerial200ms (0.20s)\n"}
+{"Time":"2026-10-20T21:04:26.052355-06:00","Action":"pass","Package":"example.com/slowpkg","Test":"TestSerial200ms","Elapsed":0.2}
+{"Time":"2026-10-20T21:04:26.052365-06:00","Action":"run","Package":"example.com/slowpkg","Test":"TestParallel120ms"}
+{"Time":"2026-10-20T21:04:26.05237-06:00","Action":"output","Package":"example.com/slowpkg","Test":"TestParallel120ms","Output":"=== RUN   TestParallel120ms\n"}
+{"Time":"2026-10-20T21:04:26.052376-06:00","Action":"output","Package":"example.com/slowpkg","Test":"TestParallel120ms","Output":"=== PAUSE TestParallel120ms\n"}
+{"Time":"2026-10-20T21:04:26.052379-06:00","Action":"pause","Package":"example.com/slowpkg","Test":"TestParallel120ms"}
+{"Time":"2026-10-20T21:04:26.052387-06:00","Action":"run","Package":"example.com/slowpkg","Test":"TestSerial80ms"}
+{"Time":"2026-10-20T21:04:26.052398-06:00","Action":"output","Package":"example.com/slowpkg","Test":"TestSerial80ms","Output":"=== RUN   TestSerial80ms\n"}
+{"Time":"2026-10-20T21:04:26.133467-06:00","Action":"output","Package":"example.com/slowpkg","Test":"TestSerial80ms","Output":"--- PASS: TestSerial80ms (0.08s)\n"}
+{"Time":"2026-10-20T21:04:26.136461-06:00","Action":"pass","Package":"example.com/slowpkg","Test":"TestSerial80ms","Elapsed":0.08}
+{"Time":"2026-10-20T21:04:26.136471-06:00","Action":"run","Package":"example.com/slowpkg","Test":"TestSerial40ms"}
+{"Time":"2026-10-20T21:04:26.136475-06:00","Action":"output","Package":"example.com/slowpkg","Test":"TestSerial40ms","Output":"=== RUN   TestSerial40ms\n"}
+{"Time":"2026-10-20T21:04:26.173866-06:00","Action":"output","Package":"example.com/slowpkg","Test":"TestSerial40ms","Output":"--- PASS: TestSerial40ms (0.04s)\n"}
+{"Time":"2026-10-20T21:04:26.173885-06:00","Action":"pass","Package":"example.com/slowpkg","Test":"TestSerial40ms","Elapsed":0.04}
+{"Time":"2026-10-20T21:04:26.173892-06:00","Action":"run","Package":"example.com/slowpkg","Test":"TestSerial10ms"}
+{"Time":"2026-10-20T21:04:26.173896-06:00","Action":"output","Package":"example.com/slowpkg","Test":"TestSerial10ms","Output":"=== RUN   TestSerial10ms\n"}
+{"Time":"2026-10-20T21:04:26.184605-06:00","Action":"output","Package":"example.com/slowpkg","Test":"TestSerial10ms","Output":"--- PASS: TestSerial10ms (0.01s)\n"}
+{"Time":"2026-10-20T21:04:26.184623-06:00","Action":"pass","Package":"example.com/slowpkg","Test":"TestSerial10ms","Elapsed":0.01}
+{"Time":"2026-10-20T21:04:26.184629-06:00","Action":"run","Package":"example.com/slowpkg","Test":"TestSerialParentOfA400msSubtest"}
+{"Time":"2026-10-20T21:04:26.184633-06:00","Action":"output","Package":"example.com/slowpkg","Test":"TestSerialParentOfA400msSubtest","Output":"=== RUN   TestSerialParentOfA400msSubtest\n"}
+{"Time":"2026-10-20T21:04:26.184729-06:00","Action":"run","Package":"example.com/slowpkg","Test":"TestSerialParentOfA400msSubtest/slow"}
+{"Time":"2026-10-20T21:04:26.184822-06:00","Action":"output","Package":"example.com/slowpkg","Test":"TestSerialParentOfA400msSubtest/slow","Output":"=== RUN   TestSerialParentOfA400msSubtest/slow\n"}
+{"Time":"2026-10-20T21:04:26.585258-06:00","Action":"output","Package":"example.com/slowpkg","Test":"TestSerialParentOfA400msSubtest/slow","Output":"--- PASS: TestSerialParentOfA400msSubtest/slow (0.40s)\n"}
+{"Time":"2026-10-20T21:04:26.585285-06:00","Action":"pass","Package":"example.com/slowpkg","Test":"TestSerialParentOfA400msSubtest/slow","Elapsed":0.4}
+{"Time":"2026-10-20T21:04:26.585318-06:00","Action":"output","Package":"example.com/slowpkg","Test":"TestSerialParentOfA400msSubtest","Output":"--- PASS: TestSerialParentOfA400msSubtest (0.40s)\n"}
+{"Time":"2026-10-20T21:04:26.585348-06:00","Action":"pass","Package":"example.com/slowpkg","Test":"TestSerialParentOfA400msSubtest","Elapsed":0.4}
+{"Time":"2026-10-20T21:04:26.585358-06:00","Action":"cont","Package":"example.com/slowpkg","Test":"TestParallel600ms"}
+{"Time":"2026-10-20T21:04:26.585365-06:00","Action":"output","Package":"example.com/slowpkg","Test":"TestParallel600ms","Output":"=== CONT  TestParallel600ms\n"}
+{"Time":"2026-10-20T21:04:26.585371-06:00","Action":"cont","Package":"example.com/slowpkg","Test":"TestParallel280ms"}
+{"Time":"2026-10-20T21:04:26.585376-06:00","Action":"output","Package":"example.com/slowpkg","Test":"TestParallel280ms","Output":"=== CONT  TestParallel280ms\n"}
+{"Time":"2026-10-20T21:04:26.585384-06:00","Action":"cont","Package":"example.com/slowpkg","Test":"TestParallel120ms"}
+{"Time":"2026-10-20T21:04:26.585389-06:00","Action":"output","Package":"example.com/slowpkg","Test":"TestParallel120ms","Output":"=== CONT  TestParallel120ms\n"}
+{"Time":"2026-10-20T21:04:26.585392-06:00","Action":"cont","Package":"example.com/slowpkg","Test":"TestParallel440ms"}
+{"Time":"2026-10-20T21:04:26.585395-06:00","Action":"output","Package":"example.com/slowpkg","Test":"TestParallel440ms","Output":"=== CONT  TestParallel440ms\n"}
+{"Time":"2026-10-20T21:04:26.706364-06:00","Action":"output","Package":"example.com/slowpkg","Test":"TestParallel120ms","Output":"--- PASS: TestParallel120ms (0.12s)\n"}
+{"Time":"2026-10-20T21:04:26.865921-06:00","Action":"pass","Package":"example.com/slowpkg","Test":"TestParallel120ms","Elapsed":0.12}
+{"Time":"2026-10-20T21:04:26.865943-06:00","Action":"output","Package":"example.com/slowpkg","Test":"TestParallel280ms","Output":"--- PASS: TestParallel280ms (0.28s)\n"}
+{"Time":"2026-10-20T21:04:27.026394-06:00","Action":"pass","Package":"example.com/slowpkg","Test":"TestParallel280ms","Elapsed":0.28}
+{"Time":"2026-10-20T21:04:27.026424-06:00","Action":"output","Package":"example.com/slowpkg","Test":"TestParallel440ms","Output":"--- PASS: TestParallel440ms (0.44s)\n"}
+{"Time":"2026-10-20T21:04:27.186323-06:00","Action":"pass","Package":"example.com/slowpkg","Test":"TestParallel440ms","Elapsed":0.44}
+{"Time":"2026-10-20T21:04:27.186652-06:00","Action":"output","Package":"example.com/slowpkg","Test":"TestParallel600ms","Output":"--- PASS: TestParallel600ms (0.60s)\n"}
+{"Time":"2026-10-20T21:04:27.186664-06:00","Action":"pass","Package":"example.com/slowpkg","Test":"TestParallel600ms","Elapsed":0.6}
+{"Time":"2026-10-20T21:04:27.18667-06:00","Action":"output","Package":"example.com/slowpkg","Output":"PASS\n"}
+{"Time":"2026-10-20T21:04:27.186937-06:00","Action":"output","Package":"example.com/slowpkg","Output":"ok  \texample.com/slowpkg\t2.223s\n"}
+{"Time":"2026-10-20T21:04:27.18696-06:00","Action":"pass","Package":"example.com/slowpkg","Elapsed":2.223}
