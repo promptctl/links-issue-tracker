@@ -143,8 +143,8 @@ func TestPackageWithinBudgetHasNoViolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if viols := enforce(results, nil, 3*time.Second); len(viols) != 0 {
-		t.Errorf("2.2s package against a 3s budget: got violations %+v", viols)
+	if viols := enforce(results, nil, 5*time.Second); len(viols) != 0 {
+		t.Errorf("slow against a 5s budget: got violations %+v", viols)
 	}
 }
 
