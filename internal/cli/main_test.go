@@ -2,9 +2,10 @@ package cli
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"testing"
+
+	"github.com/promptctl/links-issue-tracker/internal/dirtemplate"
 )
 
 // Parallelism convention for this package: a test calls t.Parallel() exactly
@@ -40,15 +41,9 @@ func TestMain(m *testing.M) {
 	}
 	stateHome := isolateXDGHome("XDG_STATE_HOME", "lit-cli-state-")
 	configHome := isolateXDGHome("XDG_CONFIG_HOME", "lit-cli-config-")
-	code := m.Run()
+	code := dirtemplate.Run(m, storeTemplate)
 	_ = os.RemoveAll(stateHome)
 	_ = os.RemoveAll(configHome)
-	// A template left behind is a frozen directory nothing else will ever
-	// delete, so a removal that fails fails the run. [LAW:no-silent-failure]
-	if err := storeTemplate.Remove(); err != nil {
-		fmt.Fprintf(os.Stderr, "remove the store template: %v\n", err)
-		code = max(code, 1)
-	}
 	os.Exit(code)
 }
 

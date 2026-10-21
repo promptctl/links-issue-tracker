@@ -26,7 +26,7 @@ func newTestCLIApp(t testing.TB) *app.App {
 	t.Setenv("LIT_CONFIG_GLOBAL_PATH", "")
 	t.Setenv("LIT_CONFIG_PROJECT_PATH", "")
 	ctx := context.Background()
-	databasePath := migratedDoltDir(t)
+	databasePath := storeTemplate.Copy(t)
 	workspaceRoot := filepath.Dir(databasePath)
 	st, err := engine.Open(ctx, engine.ReadWrite, databasePath, "test-workspace-id")
 	if err != nil {

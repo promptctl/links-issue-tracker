@@ -1,23 +1,23 @@
-package dirtemplate_test
+package dirtemplate
 
 import (
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"testing"
 
-	"github.com/promptctl/links-issue-tracker/internal/dirtemplate"
 	"github.com/promptctl/links-issue-tracker/internal/fsperm"
 )
 
 const seed = "as built"
 
 // newSeeded is a template holding one file, sub/seed.
-func newSeeded() *dirtemplate.Template {
-	return dirtemplate.New("tree", func(dir string) error {
+func newSeeded() *Template {
+	return New("tree", func(dir string) error {
 		if err := os.MkdirAll(filepath.Join(dir, "sub"), 0o755); err != nil {
 			return err
 		}
@@ -26,12 +26,12 @@ func newSeeded() *dirtemplate.Template {
 }
 
 // seededTemplate is newSeeded, removed when the test ends.
-func seededTemplate(t *testing.T) *dirtemplate.Template {
+func seededTemplate(t *testing.T) *Template {
 	t.Helper()
 	tpl := newSeeded()
 	t.Cleanup(func() {
-		if err := tpl.Remove(); err != nil {
-			t.Errorf("Remove: %v", err)
+		if err := tpl.remove(); err != nil {
+			t.Errorf("remove: %v", err)
 		}
 	})
 	return tpl
@@ -147,7 +147,7 @@ func TestTheTemplateRefusesWrites(t *testing.T) {
 func TestAFailedBuildLeavesNothing(t *testing.T) {
 	broken := errors.New("build broke")
 	var built string
-	tpl := dirtemplate.New("tree", func(dir string) error {
+	tpl := New("tree", func(dir string) error {
 		built = dir
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
@@ -167,17 +167,80 @@ func TestAFailedBuildLeavesNothing(t *testing.T) {
 	}
 }
 
-// Remove deletes everything the build left, frozen as it is.
+// remove deletes everything the build left, frozen as it is.
 func TestRemoveDeletesTheTemplate(t *testing.T) {
 	tpl := newSeeded()
 	dir, err := tpl.Dir()
 	if err != nil {
 		t.Fatalf("Dir: %v", err)
 	}
-	if err := tpl.Remove(); err != nil {
-		t.Fatalf("Remove: %v", err)
+	if err := tpl.remove(); err != nil {
+		t.Fatalf("remove: %v", err)
 	}
 	if _, err := os.Stat(filepath.Dir(dir)); !errors.Is(err, fs.ErrNotExist) {
-		t.Fatalf("the template is still there after Remove: stat = %v", err)
+		t.Fatalf("the template is still there after remove: stat = %v", err)
+	}
+}
+
+// TestMain runs through Run so a base this package's own failed tests left
+// behind is swept by the next run; each test removes its own templates.
+func TestMain(m *testing.M) {
+	os.Exit(Run(m))
+}
+
+// plantBase is a frozen base in os.TempDir(), as a test binary with the given
+// pid leaves one when it dies before its Run removes it.
+func plantBase(t *testing.T, pid int) string {
+	t.Helper()
+	base, err := os.MkdirTemp("", fmt.Sprintf("%s%d-*", basePrefix, pid))
+	if err != nil {
+		t.Fatalf("make a base: %v", err)
+	}
+	tree := filepath.Join(base, "tree")
+	if err := os.MkdirAll(filepath.Join(tree, "sub"), 0o755); err != nil {
+		t.Fatalf("make the tree: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tree, "sub", "seed"), []byte(seed), 0o644); err != nil {
+		t.Fatalf("write the seed: %v", err)
+	}
+	if err := freeze(tree); err != nil {
+		t.Fatalf("freeze the tree: %v", err)
+	}
+	return base
+}
+
+// The sweep deletes the frozen base a dead binary left, and leaves alone the
+// base of a binary that is still running.
+func TestTheSweepDeletesOnlyTheBasesOfDeadBinaries(t *testing.T) {
+	child := exec.Command(os.Args[0], "-test.run=^$")
+	if err := child.Run(); err != nil {
+		t.Fatalf("run a binary that exits: %v", err)
+	}
+	dead := plantBase(t, child.Process.Pid)
+	live := plantBase(t, os.Getpid())
+	t.Cleanup(func() {
+		if err := removeBase(live); err != nil {
+			t.Errorf("remove the live base: %v", err)
+		}
+	})
+
+	if err := sweepDead(); err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+
+	if _, err := os.Stat(dead); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("the dead binary's base survived the sweep: stat = %v", err)
+	}
+	requireHolds(t, filepath.Join(live, "tree"), seed)
+}
+
+// Under `go test ./...` two binaries can sweep one dead base at once; the one
+// that finds it already gone has nothing left to do.
+func TestRemovingAnAlreadyRemovedBaseSucceeds(t *testing.T) {
+	base := plantBase(t, os.Getpid())
+	for range 2 {
+		if err := removeBase(base); err != nil {
+			t.Fatalf("removeBase: %v", err)
+		}
 	}
 }

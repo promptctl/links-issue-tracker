@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"testing"
@@ -23,38 +22,14 @@ import (
 // history, while production workspaces are created independently and have
 // unrelated history. Single-store tests draw from storeTemplate; a
 // two-workspace sync test takes its second side from unrelatedStoreTemplate
-// (unrelatedDoltDir) so the pair stays production-shaped.
+// (unrelatedDoltDir) so the pair stays production-shaped;
+// TestTheStoreTemplatesShareNoCommit proves the histories unrelated.
+//
+// [LAW:one-type-per-behavior] Both are the same build run twice: independence
+// comes from two creations, not from anything either build does differently.
 var (
-	// storeTemplateCommits is every commit in storeTemplate's log, recorded by
-	// its build: the evidence unrelatedStoreTemplate's build compares against.
-	storeTemplateCommits map[string]bool
-
-	storeTemplate = dirtemplate.New("dolt", func(dir string) (err error) {
-		storeTemplateCommits, err = buildStoreTemplate(dir)
-		return err
-	})
-
-	unrelatedStoreTemplate = dirtemplate.New("dolt", func(dir string) error {
-		commits, err := buildStoreTemplate(dir)
-		if err != nil {
-			return err
-		}
-		if _, err := storeTemplate.Dir(); err != nil {
-			return fmt.Errorf("build the template this one must be unrelated to: %w", err)
-		}
-		// The unrelated-history guarantee is load-bearing for sync tests, so
-		// it is checked, not assumed — and against the WHOLE log, not the
-		// heads: a shared root commit would be a merge base that silently
-		// moves sync tests onto the related-history path even with distinct
-		// heads. If Dolt ever produced a common commit for two independent
-		// creations, this build fails loudly here. [LAW:no-silent-failure]
-		for hash := range commits {
-			if storeTemplateCommits[hash] {
-				return fmt.Errorf("independently built templates share commit %s — independent creations no longer yield unrelated histories", hash)
-			}
-		}
-		return nil
-	})
+	storeTemplate          = dirtemplate.New("dolt", buildStoreTemplate)
+	unrelatedStoreTemplate = dirtemplate.New("dolt", buildStoreTemplate)
 )
 
 // migratedDoltDir returns a fresh, private path holding a database
@@ -64,8 +39,10 @@ var (
 //
 // Adoptable piecemeal: any call site of the form
 // Open(ctx, filepath.Join(t.TempDir(), "dolt"), id) becomes
-// Open(ctx, migratedDoltDir(t), id). Tests whose subject is creation or
-// migration itself keep building from nothing — that cost is their premise.
+// Open(ctx, migratedDoltDir(t), id). Tests whose subject is Open's own
+// creation or migration of a store keep building from nothing — that cost is
+// their premise. A test that drives migrations itself, down and back up from
+// a migrated store (newContainmentFixture), starts from a copy like any other.
 // The SECOND store of a two-workspace test comes from unrelatedDoltDir,
 // never from a second migratedDoltDir call.
 func migratedDoltDir(t testing.TB) string {
@@ -83,51 +60,16 @@ func unrelatedDoltDir(t *testing.T) string {
 	return unrelatedStoreTemplate.Copy(t)
 }
 
-// buildStoreTemplate opens a new store at dir and returns every commit in its
-// log, closing it so the template holds no engine.
-func buildStoreTemplate(dir string) (map[string]bool, error) {
-	ctx := context.Background()
-	st, err := Open(ctx, dir, "test-workspace-id")
+// buildStoreTemplate opens a new store at dir and closes it, so the template
+// holds no engine.
+func buildStoreTemplate(dir string) error {
+	st, err := Open(context.Background(), dir, "test-workspace-id")
 	if err != nil {
-		return nil, fmt.Errorf("template Open: %w", err)
+		return fmt.Errorf("template Open: %w", err)
 	}
-	commits, logErr := templateCommits(ctx, st)
-	if err := st.Close(); err != nil {
-		return nil, fmt.Errorf("template Close: %w", err)
-	}
-	if logErr != nil {
-		return nil, fmt.Errorf("template log: %w", logErr)
-	}
-	return commits, nil
+	return st.Close()
 }
 
-// templateCommits reads every commit hash in the store's log, the evidence
-// the unrelated-templates check compares.
-func templateCommits(ctx context.Context, st *Store) (map[string]bool, error) {
-	rows, err := st.db.QueryContext(ctx, "SELECT commit_hash FROM dolt_log")
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	commits := map[string]bool{}
-	for rows.Next() {
-		var hash string
-		if err := rows.Scan(&hash); err != nil {
-			return nil, err
-		}
-		commits[hash] = true
-	}
-	return commits, rows.Err()
-}
-
-// TestMain exists only to remove the templates after the run. A template left
-// behind is a frozen directory nothing else will ever delete, so a removal
-// that fails fails the run. [LAW:no-silent-failure]
 func TestMain(m *testing.M) {
-	code := m.Run()
-	if err := errors.Join(storeTemplate.Remove(), unrelatedStoreTemplate.Remove()); err != nil {
-		fmt.Fprintf(os.Stderr, "remove the store templates: %v\n", err)
-		code = max(code, 1)
-	}
-	os.Exit(code)
+	os.Exit(dirtemplate.Run(m, storeTemplate, unrelatedStoreTemplate))
 }

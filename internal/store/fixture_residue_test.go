@@ -152,6 +152,51 @@ func TestFrozenTemplateRefusesDirectOpen(t *testing.T) {
 	}
 }
 
+// The unrelated-history guarantee is load-bearing for sync tests, so it is
+// checked, not assumed — and against the WHOLE log, not the heads: a shared
+// root commit would be a merge base that silently moves sync tests onto the
+// related-history path even with distinct heads. [LAW:no-silent-failure]
+func TestTheStoreTemplatesShareNoCommit(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	related := commitLog(t, ctx, migratedDoltDir(t))
+	if len(related) == 0 {
+		t.Fatal("read no commits from a migratedDoltDir copy; the comparison below would pass on nothing")
+	}
+	for hash := range commitLog(t, ctx, unrelatedDoltDir(t)) {
+		if related[hash] {
+			t.Fatalf("the two store templates share commit %s: independent creations no longer yield unrelated histories", hash)
+		}
+	}
+}
+
+// commitLog is every commit hash in the log of the store at dir.
+func commitLog(t *testing.T, ctx context.Context, dir string) map[string]bool {
+	t.Helper()
+	st, err := Open(ctx, dir, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open(%s): %v", dir, err)
+	}
+	defer st.Close()
+	rows, err := st.db.QueryContext(ctx, "SELECT commit_hash FROM dolt_log")
+	if err != nil {
+		t.Fatalf("read the log of %s: %v", dir, err)
+	}
+	defer rows.Close()
+	commits := map[string]bool{}
+	for rows.Next() {
+		var hash string
+		if err := rows.Scan(&hash); err != nil {
+			t.Fatalf("scan the log of %s: %v", dir, err)
+		}
+		commits[hash] = true
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read the log of %s: %v", dir, err)
+	}
+	return commits
+}
+
 // aFrozenFile is any regular file of the frozen template at root.
 func aFrozenFile(t *testing.T, root string) string {
 	t.Helper()
