@@ -13,11 +13,6 @@ import (
 // the push (links-storage-3k6u.98l).
 func TestCutByPushDeadline(t *testing.T) {
 	t.Parallel()
-	ended := func() context.Context {
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
-		return ctx
-	}
 	live := context.Background()
 	stepErr := errors.New("check remote refs \"origin\": signal: killed")
 	cases := []struct {
@@ -26,10 +21,10 @@ func TestCutByPushDeadline(t *testing.T) {
 		err                error
 		wantCut            bool
 	}{
-		{"a step that succeeded is not cut, whatever its deadline did", ended(), live, nil, false},
+		{"a step that succeeded is not cut, whatever its deadline did", endedContext(), live, nil, false},
 		{"a step that failed on its own while its deadline was live is not cut", live, live, stepErr, false},
-		{"a step that failed once its deadline ended is cut", ended(), live, stepErr, true},
-		{"a step the process tore down is not cut by its deadline", ended(), ended(), stepErr, false},
+		{"a step that failed once its deadline ended is cut", endedContext(), live, stepErr, true},
+		{"a step the process tore down is not cut by its deadline", endedContext(), endedContext(), stepErr, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -46,6 +41,20 @@ func TestCutByPushDeadline(t *testing.T) {
 		})
 	}
 
+}
+
+// endedContext is an operation lifetime that has already ended.
+func endedContext() context.Context {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	return ctx
+}
+
+// cutAtTheDeadline is err as a step returns it once its push deadline has
+// ended under a live completion lifetime: through cutByPushDeadline, the one
+// constructor of the verdict.
+func cutAtTheDeadline(err error) error {
+	return cutByPushDeadline(endedContext(), context.Background(), err)
 }
 
 // TestMirrorEnvStripsInheritedTraceRefFile pins that the detached mirror never

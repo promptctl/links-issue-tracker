@@ -797,11 +797,13 @@ func holdBudgetCutExplanation(step string) error {
 // record can name the deadline without the verdict or carry the verdict
 // without naming it. It unwraps to the cause, so every classification of
 // the ending (canceled, busy, diverged, remote schema ahead) still reads it.
-// [LAW:types-are-the-program]
-type pushDeadlineCut struct{ cause error }
+// The explanation is rendered when the cut is taken, so it names the deadline
+// that cut the attempt, not whatever the deadline reads when the error is.
+// cutByPushDeadline is its one constructor. [LAW:types-are-the-program]
+type pushDeadlineCut struct{ explanation, cause error }
 
 func (c pushDeadlineCut) Error() string {
-	return pushDeadlineCutExplanation().Error() + ": " + c.cause.Error()
+	return c.explanation.Error() + ": " + c.cause.Error()
 }
 
 func (c pushDeadlineCut) Unwrap() error { return c.cause }
@@ -818,7 +820,7 @@ func cutByPushDeadline(ctx, completionCtx context.Context, err error) error {
 	if err == nil || ctx.Err() == nil || completionCtx.Err() != nil {
 		return err
 	}
-	return pushDeadlineCut{cause: err}
+	return pushDeadlineCut{explanation: pushDeadlineCutExplanation(), cause: err}
 }
 
 // pushDeadlineCutOf reads the verdict cutByPushDeadline took for the

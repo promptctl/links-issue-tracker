@@ -124,8 +124,8 @@ func TestPushOutcomeOf(t *testing.T) {
 		},
 		{
 			name: "could-not-attempt the push deadline cut records the verdict and names the deadline",
-			err:  pushDeadlineCut{cause: errors.New("check remote refs \"origin\": signal: killed")},
-			want: pushOutcomeRecord{Decision: pushDecisionError, Reason: pushDeadlineCut{cause: errors.New("check remote refs \"origin\": signal: killed")}.Error(), PushDeadlineCut: true},
+			err:  cutAtTheDeadline(errors.New("check remote refs \"origin\": signal: killed")),
+			want: pushOutcomeRecord{Decision: pushDecisionError, Reason: cutAtTheDeadline(errors.New("check remote refs \"origin\": signal: killed")).Error(), PushDeadlineCut: true},
 		},
 		{
 			// The verdict wraps the push's error, never replaces it, so the
@@ -133,9 +133,9 @@ func TestPushOutcomeOf(t *testing.T) {
 			name: "push the deadline cut keeps the class of the error it cut",
 			outcome: syncPushOutcome{
 				remote: remoteName(t, "origin"), branch: "master",
-				pushErr: pushDeadlineCut{cause: fmt.Errorf("acquire the commit lock: %w", store.ErrWorkspaceBusy)},
+				pushErr: cutAtTheDeadline(fmt.Errorf("acquire the commit lock: %w", store.ErrWorkspaceBusy)),
 			},
-			want: pushOutcomeRecord{Decision: pushDecisionWorkspaceBusy, Reason: pushDeadlineCut{cause: fmt.Errorf("acquire the commit lock: %w", store.ErrWorkspaceBusy)}.Error(), Remote: "origin", Branch: "master", PushDeadlineCut: true},
+			want: pushOutcomeRecord{Decision: pushDecisionWorkspaceBusy, Reason: cutAtTheDeadline(fmt.Errorf("acquire the commit lock: %w", store.ErrWorkspaceBusy)).Error(), Remote: "origin", Branch: "master", PushDeadlineCut: true},
 		},
 	}
 	for _, tc := range cases {

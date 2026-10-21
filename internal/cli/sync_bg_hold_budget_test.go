@@ -200,6 +200,39 @@ func TestMirrorPushDeadlineCutsHungResolveJoinsOneTrace(t *testing.T) {
 	assertOutcomeRecordsTheCut(t, ws)
 }
 
+// TestMirrorPushDeadlineCutsTheOpen pins the open arm of the deadline cut: the
+// clone's session opens under the push deadline, so a deadline already spent
+// when the open begins ends the attempt there, before any transport. The
+// cycle log, the push-outcome record and its reason all read the one verdict.
+// The deadline is spent before the open starts, so the cut is certain, not a
+// race against the open's cost.
+//
+// Not parallel: it mutates store.MirrorPushDeadline.
+func TestMirrorPushDeadlineCutsTheOpen(t *testing.T) {
+	_, root, _, runInProcess, _ := setupMirrorDeadlineRepo(t)
+	restore := store.MirrorPushDeadline
+	store.MirrorPushDeadline = time.Nanosecond
+	t.Cleanup(func() { store.MirrorPushDeadline = restore })
+
+	out, err := runInProcess(unboundedRunTripwire(0, restore), "sync", backgroundMirrorSubcommand, "--parent-pid", "0")
+	if err != nil {
+		t.Fatalf("mirror run returned error (the mirror is best-effort and must exit 0): %v\noutput:\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "attempted=false push_deadline_cut=true") {
+		t.Fatalf("cycle log does not report the open the deadline cut:\noutput:\n%s", out.String())
+	}
+	ws, err := workspace.Resolve(root)
+	if err != nil {
+		t.Fatalf("resolve workspace: %v", err)
+	}
+	assertNoMirrorClone(t, ws)
+	assertOutcomeRecordsTheCut(t, ws)
+	rec, _, _ := lastPushOutcome(ws, time.Now())
+	if !strings.Contains(rec.Reason, "open sync store on the clone") {
+		t.Fatalf("push-outcome reason %q does not name the open the deadline cut", rec.Reason)
+	}
+}
+
 // TestMirrorCycleSweepsADeadMirrorsClone pins the residue contract: a clone a
 // crashed mirror left behind is collected by the next cycle before it takes
 // its own, and nothing of either survives the cycle — the next mirror trips on
