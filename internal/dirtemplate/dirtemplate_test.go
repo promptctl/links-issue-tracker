@@ -120,6 +120,21 @@ func TestTheTemplateRefusesWrites(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Dir: %v", err)
 	}
+	// The modes are asserted before the write probe: the probe skips where the
+	// process bypasses permissions, and a template that was never frozen would
+	// read to it exactly like that.
+	for path, want := range map[string]fs.FileMode{
+		filepath.Join(dir, "sub", "seed"): fsperm.FileModeAsStored(t, 0o444),
+		filepath.Join(dir, "sub"):         fsperm.DirModeAsStored(t, 0o555),
+	} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("stat %s: %v", path, err)
+		}
+		if got := info.Mode().Perm(); got != want {
+			t.Fatalf("%s mode = %v, want %v", path, got, want)
+		}
+	}
 	fsperm.RequireReadOnly(t, filepath.Join(dir, "sub", "seed"))
 	if err := os.WriteFile(filepath.Join(dir, "sub", "seed"), []byte("residue"), 0o644); !errors.Is(err, fs.ErrPermission) {
 		t.Fatalf("write into the template = %v, want a permission error", err)
