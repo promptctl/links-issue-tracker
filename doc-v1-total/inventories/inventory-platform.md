@@ -378,13 +378,16 @@ Defaults are set in `Load` (`internal/config/config.go`).
 
 1. `git rev-parse --show-toplevel` ⇒ `RootDir`; failure classified by `classifyGitError`.
 2. `Locate(cwd)`.
-3. `resolvePrivateGitDir(cwd)` = `git rev-parse --git-dir` anchored to cwd
-   (`internal/workspace/workspace.go`) — **not** symlink-canonicalized
-   (`internal/workspace/workspace.go`).
+3. `resolvePrivateGitDir(cwd)` = `git rev-parse --git-dir` anchored to cwd, then
+   symlink-canonicalized through `filepath.EvalSymlinks` like the common dir; failure ⇒
+   `canonicalize git-dir %q: %w` (`internal/workspace/workspace.go`).
 4. `os.MkdirAll(loc.StorageDir, 0o755)`; failure ⇒ `create storage dir: %w`
    (`internal/workspace/workspace.go`).
 5. `loadOrCreateConfig(rootDir, loc.ConfigPath)`.
 6. Returns `Info{Location, RootDir, WorkspaceID, IssuePrefix, PrivateGitDir}`.
+
+`Info.PrimaryClone()` is `PrivateGitDir == GitCommonDir`: true in the primary clone,
+false in a linked worktree (`internal/workspace/workspace.go`).
 
 All geometry git calls use `context.Background()` deliberately (`internal/workspace/workspace.go`,
 ).

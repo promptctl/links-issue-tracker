@@ -1725,6 +1725,20 @@ line never appears (`ready_state.go`). It then returns
 `nextPulledOccasion(row.Issue)` (`next.go`, `workflow_events.go`),
 dispatched as `EventNextPulled` (`next.go`).
 
+After `renderNextOutcome`, the leaf writes `placeFor(outcome, ap.Workspace.PrimaryClone()).note()`
+(`next_place.go`). `placeFor` is total over the sealed sum and panics on an
+unnamed variant: `ServedFromClaim`, `ResumedOwnWork`, `ServedFromEpicLane` and
+`ServedFromDependency` → `startHere`; `ServedFromNewLane` → `startOffPrimaryClone`
+in the primary clone, `startHere` in a linked worktree; `ServedPastExhaustion` and
+`ServedPastNarrowing` → `startBesideHeldWork`; `Exhausted`, `Narrowed`, `NoWork` →
+`startNoPick`. `note()` is the empty string for `startNoPick` and `startHere`;
+otherwise, with the row's id for `<id>`,
+``"start <id> from a worktree of its own, not the primary clone, where every session starts: create one off the trunk and run `lit start <id>` from inside it — the claim lands on the checkout `lit start` runs in\n"`` for `startOffPrimaryClone` and
+``"start <id> from a worktree of its own, not this checkout, whose own work is unfinished: create one off the trunk and run `lit start <id>` from inside it — the claim lands on the checkout `lit start` runs in\n"`` for `startBesideHeldWork`.
+`recordStartPlace` (`next_place.go`) sets the event facts `next.start_place`
+(`here`, `worktree_off_primary_clone`, `worktree_beside_held_work`, or `null` for
+`startNoPick`) and `next.primary_clone`.
+
 `lit next` performs **no writes** — it is registered `app.AccessRead`
 (`register.go`). `startAdvice` names what a subsequent `lit start` would
 claim; this command claims nothing.
