@@ -674,10 +674,7 @@ func performSyncPush(ctx, completionCtx context.Context, session syncSession, ws
 	// was read. [LAW:no-silent-failure]
 	cfg, cfgErr := config.Load(pathspec.New(ws.RootDir))
 	telemetry.Set(completionCtx, "history_bound.window_error", telemetry.ErrorText(cfgErr))
-	window := storage.BoundBy(cfg.Sync.HistoryWindow)
-	if cfgErr != nil {
-		window = storage.BoundUnread(cfgErr)
-	}
+	window := storage.BoundWindowRead(cfg.Sync.HistoryWindow, cfgErr)
 	// [LAW:dataflow-not-control-flow] Sync push runs one deterministic embedded mutation path from resolved remote+branch state.
 	// The step keeps the bound of a push it landed, whichever step it is:
 	// `lit sync push` and the pre-push hook from the live store, the

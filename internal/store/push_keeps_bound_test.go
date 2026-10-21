@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/historywindow"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -44,13 +45,14 @@ func atTheBound(t *testing.T, ctx context.Context) (string, storage.BoundWindow)
 	if err := st.Close(); err != nil {
 		t.Fatal(err)
 	}
-	return root, storage.BoundBy(windowOf(t, height, 3))
+	return root, storage.BoundWindowRead(windowOf(t, height, 3), nil)
 }
 
 // TestEveryPushVerbKeepsTheBound pushes through each of storage.Syncer's
 // pushes alone, with no call after it, to a remote head the window fires at.
-// The push comes back with the bound kept and the remote re-rooted: no push
-// through the contract lands without its bound.
+// The push comes back with the bound kept, the remote re-rooted, and its Head
+// still the commit it pushed: no push through the contract lands without its
+// bound.
 func TestEveryPushVerbKeepsTheBound(t *testing.T) {
 	t.Parallel()
 	for _, verb := range pushVerbs {
@@ -70,6 +72,9 @@ func TestEveryPushVerbKeepsTheBound(t *testing.T) {
 			if bounds := st.HistoryBounds(); len(bounds) != 1 || bounds[0].Head != b.Head {
 				t.Fatalf("%s() HistoryBounds() = %+v; want the one bound the push kept", verb.name, bounds)
 			}
+			if result.Head != b.Head {
+				t.Fatalf("%s() Head = %s; want %s, the head the push left and the bound re-rooted", verb.name, result.Head, b.Head)
+			}
 			if remote, err := commitHashOfRef(ctx, st.db, "remotes/origin/master"); err != nil || remote != b.ReRooted.Head {
 				t.Fatalf("%s() left the remote at %s (%v); want the re-root %s", verb.name, remote, err, b.ReRooted.Head)
 			}
@@ -87,7 +92,7 @@ func TestAPushWithItsWindowUnreadLandsAndSaysTheBoundWasNotKept(t *testing.T) {
 			t.Parallel()
 			ctx := context.Background()
 			root, _ := atTheBound(t, ctx)
-			st, result, err := verb.push(t, ctx, ctx, root, storage.BoundUnread(unread))
+			st, result, err := verb.push(t, ctx, ctx, root, storage.BoundWindowRead(historywindow.Window{}, unread))
 			defer func() { _ = st.Close() }()
 			if err != nil || result.Head == "" {
 				t.Fatalf("%s() = %+v, %v; want the push landed", verb.name, result, err)

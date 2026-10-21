@@ -38,7 +38,7 @@ func windowOf(t *testing.T, reRootAt, keep uint64) historywindow.Window {
 // the remote head's height and does nothing else.
 func unfiredBound(t *testing.T) storage.BoundWindow {
 	t.Helper()
-	return storage.BoundBy(windowOf(t, 2000, 1000))
+	return storage.BoundWindowRead(windowOf(t, 2000, 1000), nil)
 }
 
 // compactPush files a ticket under epic at root and pushes it the way `lit
@@ -58,7 +58,7 @@ func compactPush(t *testing.T, ctx context.Context, root, epic, title string, bo
 	}
 	sync := openSyncOrFatal(t, ctx, root)
 	defer func() { _ = sync.Close() }()
-	kept, err := sync.SyncCompactAndPush(ctx, ctx, remoteName(t, "origin"), "master", storage.BoundBy(bound), false, false)
+	kept, err := sync.SyncCompactAndPush(ctx, ctx, remoteName(t, "origin"), "master", storage.BoundWindowRead(bound, nil), false, false)
 	if err != nil {
 		t.Fatalf("SyncCompactAndPush(%s) error = %v", title, err)
 	}

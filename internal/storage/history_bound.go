@@ -13,19 +13,18 @@ import (
 // as the workspace's config names it, or the refusal that left the config
 // naming none. An unreadable config costs the bound and never the push: the
 // push lands, and its maintenance says the bound was not kept and why.
-// [LAW:types-are-the-program] BoundBy and BoundUnread are its two arms; no
-// value is both or neither, outside the zero one, whose window is a defect to
-// read.
 type BoundWindow struct {
 	window historywindow.Window
 	unread error
 }
 
-// BoundBy is the window config named.
-func BoundBy(window historywindow.Window) BoundWindow { return BoundWindow{window: window} }
-
-// BoundUnread is the refusal that left config naming no window.
-func BoundUnread(err error) BoundWindow { return BoundWindow{unread: err} }
+// BoundWindowRead is the window as one read of config left it: the window it
+// named, or readErr, the refusal, in its place. It takes the read's own pair,
+// so no window goes unread without the refusal that says why.
+// [LAW:types-are-the-program]
+func BoundWindowRead(window historywindow.Window, readErr error) BoundWindow {
+	return BoundWindow{window: window, unread: readErr}
+}
 
 // Window is the window, or the refusal in its place.
 func (b BoundWindow) Window() (historywindow.Window, error) { return b.window, b.unread }
