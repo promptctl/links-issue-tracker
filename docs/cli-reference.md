@@ -296,11 +296,12 @@ pool's ticket a filter hid: the filter emptied a pool the label had already
 narrowed.
 
 The same line says which checkout the start runs in. For new work served in
-the primary clone, where every session starts, and for a pick from outside the
-work this checkout holds — past an exhausted epic or past the ticket a filter
-hid — whose own work stays here, it opens "from a worktree of its own off the
-trunk (not …)", naming the checkout to leave, because the claim lands on the
-checkout `lit start` runs in. The checkout's own work, and new work served in a
+the primary clone, where every session starts, and for a pick from outside
+unfinished work this checkout holds — past an epic with work left in it or past
+the ticket a filter hid — whose own work stays here, it opens "from a worktree
+of its own off the trunk (not …)", naming the checkout to leave, because the
+claim lands on the checkout `lit start` runs in. A pick past an epic whose every
+ticket is done is new work. The checkout's own work, and new work served in a
 linked worktree that holds nothing, are started where `next` ran.
 
 Work already in flight in one of your own lanes reports the state it is in rather

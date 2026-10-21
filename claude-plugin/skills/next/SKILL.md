@@ -18,14 +18,14 @@ If the user provided specific information (e.g., a ticket id or area of the code
 lit counts a checkout — the primary clone or one linked worktree — as the claimant, not the session working in it.  A checkout carries one epic at a time, and every ticket `lit next` serves it is worked there: `lit next`, `lit start`, the branch, the commits and `lit done` all run from inside it.  Sessions are shifts at one desk: they come and go, and the work stays where it is.
 
 - **A handoff that names a checkout** is where you run this skill.  Go there first.
-- **`lit next` says where its pick is started.**  For a pick that belongs in a worktree of its own — new work served in the primary clone, or work from outside what this checkout holds — its start advice opens with `from a worktree of its own off the trunk (not …), run `.  Create the worktree and run `lit start <id>` from inside it, because the claim lands on the checkout `lit start` runs in:
+- **`lit next` says where its pick is started.**  For a pick that belongs in a worktree of its own — new work served in the primary clone, or work from outside unfinished work this checkout holds — its start advice says `from a worktree of its own off the trunk (not …), run `lit start <id>``.  Create the worktree and run `lit start <id>` from inside it, because the claim lands on the checkout `lit start` runs in:
 
   ```
   git fetch origin
-  git worktree add --no-track -b <ticket-id> <path> origin/master    # or the repo's default branch
+  git worktree add --detach <path> origin/master    # or the repo's default branch
   ```
 
-  Advice that opens with `run` is this checkout's own work: start it where you are.
+  The worktree starts on no branch: step 3 below finds the ticket's branch or cuts it there.  Start advice that names no worktree is started where you are.
 - **A ticket held by a checkout on this machine** names it on its claim line in `lit backlog`: `claimed here: <path> (<branch>)`.  That is where the ticket is worked.
 - **A merged ticket does not end the checkout's work.**  Keep the worktree and run `lit next` from inside it; the ticket it serves is cut on a fresh branch there (step 3 below).
 
@@ -159,7 +159,7 @@ A mature engineer knows when to ask for help, and it isn't at the slightest hint
 
 3. **Set up the workspace.**
 
-   - **Already on the ticket's branch?**  You are, if you arrived here from uncommitted work or an open PR, or created the ticket's worktree with `-b <ticket-id>` above.  Stay on it and skip to the cleanliness check — creating a second branch here strands the work you just claimed.
+   - **Already on the ticket's branch?**  You are, if you arrived here from uncommitted work or an open PR.  Stay on it and skip to the cleanliness check — creating a second branch here strands the work you just claimed.
 
    - **Otherwise, branch from an up-to-date trunk** — not from wherever HEAD happens to be sitting.  Finishing a ticket leaves you standing on its branch, and `git checkout -b` from there silently forks the new ticket off unmerged work: the PR opens carrying the previous ticket's diff on top of its own, and it cannot be reviewed or merged on its own.  Fetch the trunk first; the branch is cut from it below:
 

@@ -74,10 +74,10 @@ func nextLeaf() appLeaf {
 			return err
 		}
 		outcome := routeNext(gathered.rows, gathered.details, gathered.epics, cc.standings, cc.evidence, cc.self, gathered.scope.scopeFor(*all), asked)
-		recordNextEvent(ctx, outcome, len(gathered.keepRows(asked).rows))
-		recordStartPlace(ctx, placeFor(outcome, ap.Workspace.PrimaryClone()), ap.Workspace.PrimaryClone())
+		primaryClone := ap.Workspace.PrimaryClone()
+		recordNextEvent(ctx, outcome, len(gathered.keepRows(asked).rows), primaryClone)
 		ap.Statusline.Record(nextStatuslineFacts(outcome, !filter.narrows() && !*all, cc.evidence)...)
-		occasion, err := renderNextOutcome(stdout, outcome, gathered.details, cc, actor(), ap.Workspace.PrimaryClone())
+		occasion, err := renderNextOutcome(stdout, outcome, gathered.details, cc, actor(), primaryClone)
 		if err != nil {
 			return err
 		}
@@ -99,8 +99,8 @@ func nextLeaf() appLeaf {
 // in the perfect tense would be reporting a side effect this command does not
 // have.
 func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[string]storage.IssueRelations, cc claimContext, actingAs string, primaryClone bool) (workflows.Occasion, error) {
-	// [LAW:single-enforcer] the same decision the event records, so the advice
-	// and the record cannot disagree about where the pick is started.
+	// [LAW:single-enforcer] placeFor is the decision the event records too; it
+	// is pure, and the leaf hands both the one outcome and checkout kind.
 	place := placeFor(outcome, primaryClone)
 	var row annotation.AnnotatedIssue
 	var announce string

@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
+	"github.com/promptctl/links-issue-tracker/internal/claims"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
@@ -733,8 +734,9 @@ func TestFocusClauseLandsOnThePoolsRoute(t *testing.T) {
 			// the second of two joined on one block and not the only line.
 			name: "past an exhausted scope",
 			outcome: ServedPastExhaustion{poolPick: pick, Exhaustion: Exhausted{
-				Epics:   []string{"test-held"},
-				Blocked: []blockerReach{{depReach: depReach{ID: "test-dep"}, Clearable: true}},
+				Epics:    []string{"test-held"},
+				Progress: claims.Progress{Done: 0, Total: 1},
+				Blocked:  []blockerReach{{depReach: depReach{ID: "test-dep"}, Clearable: true}},
 			}},
 			route: "or move on to the top ready ticket outside it: from a worktree of its own off the trunk (not this checkout, whose own work is unfinished), run `lit start " + ticket.ID + "` to claim lane pick of epic " + epic.ID + clause,
 		},

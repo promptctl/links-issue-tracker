@@ -100,6 +100,10 @@ func (e Evidence) Lanes() []model.LaneID {
 // work, so it is neither done nor outstanding.
 type Progress struct{ Done, Total int }
 
+// Finished says nothing in the scope is left to do: every ticket in it is done,
+// or none is left in it at all.
+func (p Progress) Finished() bool { return p.Done == p.Total }
+
 // LaneProgress is the "how is it going" half of a lane's dossier: the lane's
 // Progress, and which member (if any) is the one actually in progress right
 // now. Active is its own field

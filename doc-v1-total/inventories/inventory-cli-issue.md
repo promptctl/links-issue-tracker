@@ -1727,17 +1727,20 @@ line never appears (`ready_state.go`). It then returns
 dispatched as `EventNextPulled` (`next.go`).
 
 `renderNextOutcome(w, outcome, details, cc, actingAs, primaryClone)` first takes
-`place := placeFor(outcome, primaryClone)` (`next_place.go`), which the leaf also
-passes to `recordStartPlace`. `placeFor` is total over the sealed sum and panics
+`place := placeFor(outcome, primaryClone)` (`next_place.go`); the leaf reads
+`primaryClone` once and passes it to `recordNextEvent` too, which takes the same
+`placeFor` for the event. `placeFor` is total over the sealed sum and panics
 on an unnamed variant: `ServedFromClaim`, `ResumedOwnWork`, `ServedFromEpicLane`
 and `ServedFromDependency` → `startHere`; `ServedFromNewLane` →
 `startOffPrimaryClone` in the primary clone, `startHere` in a linked worktree;
-`ServedPastExhaustion` and `ServedPastNarrowing` → `startBesideHeldWork`;
+`ServedPastExhaustion` → the `ServedFromNewLane` place when
+`o.Exhaustion.Progress.Finished()` (`Done == Total`, `internal/claims/evidence.go`),
+else `startBesideHeldWork`; `ServedPastNarrowing` → `startBesideHeldWork`;
 `Exhausted`, `Narrowed`, `NoWork` → `startNoPick`. `startAdvice(row, lane, place)`
 prefixes `place.where()` to ``"run `lit start <id>` to claim <object>"``:
 empty for `startNoPick` and `startHere`, ``"from a worktree of its own off the trunk (not the primary clone, where every session starts), "`` for
 `startOffPrimaryClone`, ``"from a worktree of its own off the trunk (not this checkout, whose own work is unfinished), "`` for `startBesideHeldWork`.
-`recordStartPlace` sets the event facts `next.start_place` (`here`,
+`recordNextEvent` sets the event facts `next.start_place` (`here`,
 `worktree_off_primary_clone`, `worktree_beside_held_work`, or `null` for
 `startNoPick`) and `next.primary_clone`.
 

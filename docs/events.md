@@ -118,7 +118,7 @@ filter, writes `"outcome": "error"` and none of these keys.
 | `next.hidden_focus_goals` | The focus goals whose prerequisite path the pool was narrowed to, when the global pool offered the ticket in `next.hidden_by_filter`. Empty when that ticket came from your own lanes or epic, for a pool over the whole queue, and when no filter hid one. |
 | `next.unreachable` | When it found nothing at all, every ticket it went past. |
 | `next.stay_offered` | Whether its output offered filing a ticket to unblock the epic instead of moving on. |
-| `next.start_place` | Where its output said to start the pick: `here`, `worktree_off_primary_clone` (new work served in the primary clone), `worktree_beside_held_work` (a pick from outside the work this checkout holds), or `null` when it picked nothing. |
+| `next.start_place` | Where its output said to start the pick: `here`, `worktree_off_primary_clone` (new work served in the primary clone), `worktree_beside_held_work` (a pick from outside unfinished work this checkout holds), or `null` when it picked nothing. |
 | `next.primary_clone` | Whether it ran in the repository's primary clone rather than a linked worktree. |
 | `counts.next.rows_gathered` | How many tickets it chose among: the workable tickets its filter selects. |
 

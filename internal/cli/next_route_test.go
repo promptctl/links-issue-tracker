@@ -247,6 +247,8 @@ func TestRouteNextServesPastAnExhaustedEpic(t *testing.T) {
 
 	// Nothing blocks epic A, so there is nothing a new ticket could clear:
 	// moving on is the only route, and it is not phrased as an alternative.
+	// Every ticket in epic A is done, so this checkout holds nothing unfinished
+	// and, as a linked worktree, starts the pick where it is.
 	var out strings.Builder
 	if _, err := renderNextOutcome(&out, served, details, claimContext{}, "", false); err != nil {
 		t.Fatalf("renderNextOutcome error = %v", err)
@@ -255,7 +257,7 @@ func TestRouteNextServesPastAnExhaustedEpic(t *testing.T) {
 	if strings.Contains(text, "to stay") {
 		t.Fatalf("rendered = %q, want no stay route — nothing blocks epic A", text)
 	}
-	if !strings.Contains(text, "\nmove on to the top ready ticket outside it: from a worktree of its own off the trunk (not this checkout, whose own work is unfinished), run `lit start "+b1.ID) {
+	if !strings.Contains(text, "\nmove on to the top ready ticket outside it: run `lit start "+b1.ID) {
 		t.Fatalf("rendered = %q, want the move-on route alone on its line, naming %q", text, b1.ID)
 	}
 }

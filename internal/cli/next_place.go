@@ -1,11 +1,6 @@
 package cli
 
-import (
-	"context"
-	"fmt"
-
-	"github.com/promptctl/links-issue-tracker/internal/telemetry"
-)
+import "fmt"
 
 // startPlace is where `lit next` tells a session to start the ticket it
 // served. A lane's tickets are worked in the one checkout that holds it, and a
@@ -34,19 +29,28 @@ const (
 // /next skill and quickstart work tell a session to follow the start advice it
 // shapes.
 //
-// A new lane served in a linked worktree is started there: that worktree holds
-// nothing — its epic is done or its claim lapsed — so it carries the new work.
+// A checkout with nothing unfinished carries the new work it is served: a
+// linked worktree starts it there, and the primary clone sends it to a worktree
+// of its own. That is a new lane served to a checkout that holds nothing — its
+// epic is done or its claim lapsed — and a pick past a scope whose every ticket
+// is done, the commonest exhaustion: a checkout that has just finished its
+// epic's last ticket, whose claim outlives the epic by up to six hours.
 func placeFor(outcome NextOutcome, primaryClone bool) startPlace {
 	newLane := startHere
 	if primaryClone {
 		newLane = startOffPrimaryClone
 	}
-	switch outcome.(type) {
+	switch o := outcome.(type) {
 	case ServedFromClaim, ResumedOwnWork, ServedFromEpicLane, ServedFromDependency:
 		return startHere
 	case ServedFromNewLane:
 		return newLane
-	case ServedPastExhaustion, ServedPastNarrowing:
+	case ServedPastExhaustion:
+		if o.Exhaustion.Progress.Finished() {
+			return newLane
+		}
+		return startBesideHeldWork
+	case ServedPastNarrowing:
 		return startBesideHeldWork
 	case Exhausted, Narrowed, NoWork:
 		return startNoPick
@@ -90,11 +94,4 @@ func (p startPlace) eventName() *string {
 		return spell("worktree_beside_held_work")
 	}
 	panic(fmt.Sprintf("startPlace.eventName: unhandled place %d", p))
-}
-
-// recordStartPlace puts where the pick goes on the invocation's event, beside
-// the checkout kind that decided it. [LAW:nothing-unseen]
-func recordStartPlace(ctx context.Context, place startPlace, primaryClone bool) {
-	telemetry.Set(ctx, "next.start_place", place.eventName())
-	telemetry.Set(ctx, "next.primary_clone", primaryClone)
 }

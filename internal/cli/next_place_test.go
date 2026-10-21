@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/claims"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
@@ -15,7 +16,9 @@ import (
 // checkout. The expected places are written per variant from the rule — a
 // checkout's own work starts where it is, work outside what it holds goes to a
 // worktree of its own, and new work leaves the primary clone — not read back off
-// placeFor.
+// placeFor. The sum's exhausted scope has no tickets left in it (0/0), so its
+// pick is new work; TestPlacePastExhaustionFollowsWhatTheScopeHasLeft holds the
+// unfinished case.
 func TestPlaceForIsTotalOverTheSealedSum(t *testing.T) {
 	want := map[string]struct{ primary, linked startPlace }{
 		"the claimed lane":                 {startHere, startHere},
@@ -23,7 +26,7 @@ func TestPlaceForIsTotalOverTheSealedSum(t *testing.T) {
 		"the epic's next lane":             {startHere, startHere},
 		"the global pool":                  {startOffPrimaryClone, startHere},
 		"the on-path dependency":           {startHere, startHere},
-		"past an exhausted scope":          {startBesideHeldWork, startBesideHeldWork},
+		"past an exhausted scope":          {startOffPrimaryClone, startHere},
 		"past a scope the filter narrowed": {startBesideHeldWork, startBesideHeldWork},
 		"exhausted carries none":           {startNoPick, startNoPick},
 		"narrowed carries none":            {startNoPick, startNoPick},
@@ -44,6 +47,30 @@ func TestPlaceForIsTotalOverTheSealedSum(t *testing.T) {
 			if got := placeFor(tc.outcome, checkout.primary); got != checkout.want {
 				t.Errorf("placeFor(%s, primary=%v) = %v, want %v", tc.name, checkout.primary, got, checkout.want)
 			}
+		}
+	}
+}
+
+// A pick past an exhausted scope leaves the checkout only while the scope has
+// work left; once every ticket in it is done the checkout holds nothing
+// unfinished, so the pick is new work like the global pool's.
+func TestPlacePastExhaustionFollowsWhatTheScopeHasLeft(t *testing.T) {
+	past := func(progress claims.Progress) NextOutcome {
+		return ServedPastExhaustion{poolPick: poolPick{Row: sealedSumRow}, Exhaustion: Exhausted{Epics: []string{"test-epic-1"}, Progress: progress}}
+	}
+	for _, tc := range []struct {
+		name     string
+		progress claims.Progress
+		primary  bool
+		want     startPlace
+	}{
+		{"unfinished, primary clone", claims.Progress{Done: 1, Total: 2}, true, startBesideHeldWork},
+		{"unfinished, linked worktree", claims.Progress{Done: 1, Total: 2}, false, startBesideHeldWork},
+		{"finished, primary clone", claims.Progress{Done: 2, Total: 2}, true, startOffPrimaryClone},
+		{"finished, linked worktree", claims.Progress{Done: 2, Total: 2}, false, startHere},
+	} {
+		if got := placeFor(past(tc.progress), tc.primary); got != tc.want {
+			t.Errorf("%s: placeFor = %v, want %v", tc.name, got, tc.want)
 		}
 	}
 }
@@ -74,20 +101,21 @@ func TestStartAdviceNamesTheWorktreeOnlyForAPickThatLeaves(t *testing.T) {
 // Where the pick goes lands on the event beside the checkout kind, and a run
 // that served nothing records the place as null rather than leaving it out.
 func TestNextRecordsWhereItsPickStarts(t *testing.T) {
+	unfinished := Exhausted{Epics: []string{"test-epic-1"}, Progress: claims.Progress{Done: 1, Total: 2}}
 	for _, tc := range []struct {
 		name    string
-		place   startPlace
+		outcome NextOutcome
 		primary bool
 		want    any
 	}{
-		{"new work in the primary clone", startOffPrimaryClone, true, "worktree_off_primary_clone"},
-		{"past held work in a linked worktree", startBesideHeldWork, false, "worktree_beside_held_work"},
-		{"own work", startHere, false, "here"},
-		{"no pick", startNoPick, true, nil},
+		{"new work in the primary clone", ServedFromNewLane{poolPick{Row: sealedSumRow}}, true, "worktree_off_primary_clone"},
+		{"past held work in a linked worktree", ServedPastExhaustion{poolPick: poolPick{Row: sealedSumRow}, Exhaustion: unfinished}, false, "worktree_beside_held_work"},
+		{"own work", ServedFromClaim{Row: sealedSumRow}, false, "here"},
+		{"no pick", NoWork{}, true, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			recorder := telemetry.Begin(telemetry.Event{})
-			recordStartPlace(telemetry.With(context.Background(), recorder), tc.place, tc.primary)
+			recordNextEvent(telemetry.With(context.Background(), recorder), tc.outcome, 1, tc.primary)
 			facts := writtenFacts(t, recorder.Finish(telemetry.End{}))
 			place, recorded := facts["next.start_place"]
 			if !recorded || place != tc.want {

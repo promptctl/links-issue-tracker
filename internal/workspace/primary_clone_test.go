@@ -7,9 +7,10 @@ import (
 )
 
 // PrimaryClone tells the repository's primary clone from a linked worktree,
-// from anywhere inside either. t.TempDir sits under a symlinked directory on
-// macOS (/var -> /private/var), so the primary clone is only recognised when the
-// two git directories are compared as physical paths.
+// from anywhere inside either. Reached through a symlink, the primary clone is
+// recognised only when the two git directories are compared as physical paths;
+// the test makes its own symlink, since only macOS puts one in t.TempDir's path
+// (/var -> /private/var).
 func TestResolveTellsThePrimaryCloneFromALinkedWorktree(t *testing.T) {
 	primary := litRepoWithCommit(t)
 	subdir := filepath.Join(primary, "nested", "deeper")
@@ -18,6 +19,10 @@ func TestResolveTellsThePrimaryCloneFromALinkedWorktree(t *testing.T) {
 	}
 	linked := filepath.Join(t.TempDir(), "linked")
 	run(t, primary, "git", "worktree", "add", "-b", "linked", linked)
+	viaSymlink := filepath.Join(t.TempDir(), "via-symlink")
+	if err := os.Symlink(primary, viaSymlink); err != nil {
+		t.Fatal(err)
+	}
 
 	for _, tc := range []struct {
 		name string
@@ -26,6 +31,7 @@ func TestResolveTellsThePrimaryCloneFromALinkedWorktree(t *testing.T) {
 	}{
 		{"the primary clone's root", primary, true},
 		{"a directory inside the primary clone", subdir, true},
+		{"the primary clone reached through a symlink", viaSymlink, true},
 		{"a linked worktree", linked, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

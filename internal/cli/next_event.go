@@ -160,12 +160,12 @@ func decideNextEvent(outcome NextOutcome) nextDecision {
 // focus goals it was drawn under, every
 // row its diagnostics named with what this checkout may do about each and, for
 // a blocker, whether a ticket filed here could free it, whether it offered the
-// route that stays in the scope, and how many rows it chose among — the ones
-// the filter selects, though routing reads the whole queue. Its stdout says
-// the same in prose, for the session that ran it; this is what is left of it
-// afterwards.
+// route that stays in the scope, where its pick is started beside the checkout
+// kind that decided it, and how many rows it chose among — the ones the filter
+// selects, though routing reads the whole queue. Its stdout says the same in
+// prose, for the session that ran it; this is what is left of it afterwards.
 // [LAW:nothing-unseen]
-func recordNextEvent(ctx context.Context, outcome NextOutcome, gathered int) {
+func recordNextEvent(ctx context.Context, outcome NextOutcome, gathered int, primaryClone bool) {
 	decision := decideNextEvent(outcome)
 	telemetry.Set(ctx, "next.outcome", decision.Outcome)
 	telemetry.Set(ctx, "next.picked", decision.Picked)
@@ -182,5 +182,7 @@ func recordNextEvent(ctx context.Context, outcome NextOutcome, gathered int) {
 	telemetry.Set(ctx, "next.hidden_focus_goals", append([]string{}, decision.HiddenFocusGoals...))
 	telemetry.Set(ctx, "next.unreachable", reachFacts(decision.NoWork.Unreachable))
 	telemetry.Set(ctx, "next.stay_offered", len(decision.Exhaustion.stay()) > 0)
+	telemetry.Set(ctx, "next.start_place", placeFor(outcome, primaryClone).eventName())
+	telemetry.Set(ctx, "next.primary_clone", primaryClone)
 	telemetry.Count(ctx, "next.rows_gathered", gathered)
 }

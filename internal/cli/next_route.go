@@ -1034,7 +1034,7 @@ func (o Exhausted) why() string {
 // archived or deleted, which is why it never says they were done — or only
 // work already underway.
 func unstopped(progress claims.Progress) string {
-	if progress.Done == progress.Total {
+	if progress.Finished() {
 		return "nothing in it is left to do"
 	}
 	return "nothing else is queued behind what's already in progress"
