@@ -114,12 +114,12 @@ const (
 	// CutNotFoundNoTrackingRef: the tracking ref was gone, pruned by another
 	// writer's fetch after the probe read it.
 	CutNotFoundNoTrackingRef CutNotFoundReason = "no_tracking_ref"
-	// CutNotFoundNotOneRoot: the remote's history has more than one root.
-	CutNotFoundNotOneRoot CutNotFoundReason = "not_one_remote_root"
-	// CutNotFoundSharedHistory: the local history holds the remote's root,
-	// so the two share commits, as when another writer followed after the
-	// probe read them.
+	// CutNotFoundSharedHistory: the two histories share a commit, as when
+	// another writer followed after the probe read them.
 	CutNotFoundSharedHistory CutNotFoundReason = "shared_history"
+	// CutNotFoundNotOneRoot: the histories share no commit, and the remote's
+	// has more than one root.
+	CutNotFoundNotOneRoot CutNotFoundReason = "not_one_remote_root"
 	// CutNotFoundNotOneRebuild: no local commit, or more than one, rebuilds
 	// parentless to the remote's root.
 	CutNotFoundNotOneRebuild CutNotFoundReason = "not_one_rebuild"
