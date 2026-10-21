@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 )
 
 // Discover walks each root recursively and returns the deduplicated set of lit
@@ -21,10 +23,10 @@ import (
 // no ticket data; every Location it returns is openable read-only by its
 // DatabasePath. [LAW:effects-at-boundaries] The filesystem walk and per-repo git
 // queries are the only effects; the result is a plain value.
-func Discover(roots []string) ([]Location, error) {
+func Discover(env environ.Env, roots []string) ([]Location, error) {
 	byStore := map[string]Location{}
 	for _, root := range roots {
-		if err := discoverUnder(root, byStore); err != nil {
+		if err := discoverUnder(env, root, byStore); err != nil {
 			return nil, err
 		}
 	}
@@ -45,7 +47,7 @@ func Discover(roots []string) ([]Location, error) {
 // entry. [LAW:no-shared-mutable-globals] byStore is owned by the calling
 // Discover and passed in explicitly; discoverUnder never reaches for ambient
 // state.
-func discoverUnder(root string, byStore map[string]Location) error {
+func discoverUnder(env environ.Env, root string, byStore map[string]Location) error {
 	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			// [LAW:no-silent-failure] A directory the scan cannot read is a real
@@ -76,7 +78,7 @@ func discoverUnder(root string, byStore map[string]Location) error {
 			}
 			return fmt.Errorf("stat %q: %w", gitEntry, statErr)
 		}
-		loc, derr := Locate(path)
+		loc, derr := Locate(env, path)
 		if derr != nil {
 			// A `.git` git itself refuses (a dangling gitfile, a non-repository)
 			// is simply not a discoverable store — the expected "this looked like

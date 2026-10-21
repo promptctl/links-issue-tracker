@@ -41,7 +41,7 @@ func benchGather(b *testing.B, rows int, rf workableFilter) {
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, err := gatherWorkableAnnotated(h.ctx, h.ap, rf); err != nil {
+		if _, err := gatherWorkableAnnotated(h.ctx, testEnv(), h.ap, rf); err != nil {
 			b.Fatal(err)
 		}
 	}

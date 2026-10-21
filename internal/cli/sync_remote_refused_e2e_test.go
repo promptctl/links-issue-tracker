@@ -53,7 +53,7 @@ func TestAGitRemoteDoltCannotHoldIsRefusedAndStopsNoOtherSync(t *testing.T) {
 
 	// The automatic receive ends on the refusal before it clones the store,
 	// with the one trace that names it.
-	ws, err := workspace.Resolve(dir)
+	ws, err := workspace.Resolve(testEnv(), dir)
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}

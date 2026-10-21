@@ -596,7 +596,7 @@ func TestRunUpgradeOnAnOpenableWorkspacePastRunningSupportNamesNoDowngrade(t *te
 	}
 	ahead := current.Schema.Max + 1
 	ctx := context.Background()
-	st, err := engine.Open(ctx, engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)
+	st, err := engine.Open(ctx, testEnv(), engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
 		t.Fatalf("engine.Open() error = %v", err)
 	}
@@ -612,7 +612,7 @@ func TestRunUpgradeOnAnOpenableWorkspacePastRunningSupportNamesNoDowngrade(t *te
 	}
 	// The precondition the case is about: the ahead workspace opens cleanly, so
 	// the version below comes from a clean open, not from a schema-ahead refusal.
-	ro, err := engine.Open(ctx, engine.ReadOnly, ws.DatabasePath, ws.WorkspaceID)
+	ro, err := engine.Open(ctx, testEnv(), engine.ReadOnly, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
 		t.Fatalf("read-only open of the ahead workspace: %v; want a clean open", err)
 	}
@@ -622,7 +622,7 @@ func TestRunUpgradeOnAnOpenableWorkspacePastRunningSupportNamesNoDowngrade(t *te
 
 	res := &stubResolver{target: newFakeTarget()} // Schema.Max == 3
 	inst := &stubInstaller{}
-	facts, err := runUpgradeRecorded(t, workspaceSchemaReader{ws: ws}, []string{"--to", "v0.9.0"}, current, res, inst)
+	facts, err := runUpgradeRecorded(t, workspaceSchemaReader{ws: ws, env: testEnv()}, []string{"--to", "v0.9.0"}, current, res, inst)
 
 	var behind *UpgradeTargetBehindError
 	if !errors.As(err, &behind) {

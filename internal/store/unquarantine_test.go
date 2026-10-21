@@ -38,7 +38,7 @@ func TestUnquarantineClearsTheBlockingQuarantineAndTheNextOpenRunsIt(t *testing.
 	ctx := context.Background()
 	doltRoot, version := quarantinedWorkspace(t, ctx, 1)
 
-	done, err := Unquarantine(ctx, doltRoot, "test-workspace-id")
+	done, err := Unquarantine(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Unquarantine() error = %v", err)
 	}
@@ -47,7 +47,7 @@ func TestUnquarantineClearsTheBlockingQuarantineAndTheNextOpenRunsIt(t *testing.
 	}
 	// Dolt history names the clear as its own commit, not folded into
 	// whatever commits next.
-	st, err := openInitialized(ctx, doltRoot, "test-workspace-id", engineRead)
+	st, err := openInitialized(ctx, testEnv(), doltRoot, "test-workspace-id", engineRead)
 	if err != nil {
 		t.Fatalf("openInitialized() error = %v", err)
 	}
@@ -79,14 +79,14 @@ func TestUnquarantineNamesTheQuarantineTheNextOpenStillMeets(t *testing.T) {
 	ctx := context.Background()
 	doltRoot, version := quarantinedWorkspace(t, ctx, 2)
 
-	done, err := Unquarantine(ctx, doltRoot, "test-workspace-id")
+	done, err := Unquarantine(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Unquarantine() error = %v", err)
 	}
 	if done.Cleared.Version != version || done.Cleared.Next == nil || done.Cleared.Next.Version != version+1 {
 		t.Fatalf("Unquarantine() = cleared v%d, next %v; want cleared v%d, next v%d", done.Cleared.Version, done.Cleared.Next, version, version+1)
 	}
-	_, openErr := Open(ctx, doltRoot, "test-workspace-id")
+	_, openErr := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	var blocked *QuarantineBlockError
 	if !errors.As(openErr, &blocked) || blocked.Version != version+1 {
 		t.Fatalf("Open() after Unquarantine = %v; want the quarantine of v%d", openErr, version+1)
@@ -107,7 +107,7 @@ func TestUnquarantineWithNothingQuarantinedWritesNothing(t *testing.T) {
 		}
 	})
 
-	_, err := Unquarantine(ctx, doltRoot, "test-workspace-id")
+	_, err := Unquarantine(ctx, testEnv(), doltRoot, "test-workspace-id")
 	var none NoQuarantineError
 	if !errors.As(err, &none) || !none.Satisfied() {
 		t.Fatalf("Unquarantine() error = %v (%T); want NoQuarantineError", err, err)
@@ -142,7 +142,7 @@ func TestUnquarantineEnsuresTheQuarantineTableBeforeReadingIt(t *testing.T) {
 		}
 	})
 
-	_, err := Unquarantine(ctx, doltRoot, "test-workspace-id")
+	_, err := Unquarantine(ctx, testEnv(), doltRoot, "test-workspace-id")
 	var none NoQuarantineError
 	if !errors.As(err, &none) {
 		t.Fatalf("Unquarantine() error = %v (%T); want NoQuarantineError", err, err)
@@ -164,7 +164,7 @@ func TestUnquarantineLeavesARowThatBlocksNothing(t *testing.T) {
 		}
 	})
 
-	_, err := Unquarantine(ctx, doltRoot, "test-workspace-id")
+	_, err := Unquarantine(ctx, testEnv(), doltRoot, "test-workspace-id")
 	var none NoQuarantineError
 	if !errors.As(err, &none) {
 		t.Fatalf("Unquarantine() error = %v (%T); want NoQuarantineError", err, err)
@@ -178,7 +178,7 @@ func TestUnquarantineWhoseCommitFailsLeavesTheClearInForce(t *testing.T) {
 	ctx := context.Background()
 	doltRoot, version := quarantinedWorkspace(t, ctx, 1)
 
-	st, err := openInitialized(ctx, doltRoot, "test-workspace-id", engineWrite)
+	st, err := openInitialized(ctx, testEnv(), doltRoot, "test-workspace-id", engineWrite)
 	if err != nil {
 		t.Fatalf("openInitialized() error = %v", err)
 	}

@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/promptctl/links-issue-tracker/internal/claims"
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/issueid"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
@@ -40,7 +41,10 @@ const (
 )
 
 type Store struct {
-	db                   *sql.DB
+	db *sql.DB
+	// env is the environment of the run that opened the store: the store's own
+	// git launches on its mirrors run in it (mirrorGit).
+	env                  environ.Env
 	workspaceID          string
 	doltRootDir          string
 	access               engineAccess
@@ -146,7 +150,7 @@ type Store struct {
 	migrated storage.Migrated
 }
 
-func Open(ctx context.Context, doltRootDir string, workspaceID string) (_ *Store, err error) {
+func Open(ctx context.Context, env environ.Env, doltRootDir string, workspaceID string) (_ *Store, err error) {
 	if err := validateOpenArgs(doltRootDir, workspaceID); err != nil {
 		return nil, err
 	}
@@ -190,7 +194,7 @@ func Open(ctx context.Context, doltRootDir string, workspaceID string) (_ *Store
 	if err != nil {
 		return nil, err
 	}
-	s, err := openStoreConnection(ctx, doltRootDir, workspaceID, engineWrite)
+	s, err := openStoreConnection(ctx, env, doltRootDir, workspaceID, engineWrite)
 	if err != nil {
 		return nil, err
 	}
@@ -228,8 +232,8 @@ func Open(ctx context.Context, doltRootDir string, workspaceID string) (_ *Store
 	return s, nil
 }
 
-func OpenForRead(ctx context.Context, doltRootDir string, workspaceID string) (_ *Store, err error) {
-	s, err := openInitialized(ctx, doltRootDir, workspaceID, engineRead)
+func OpenForRead(ctx context.Context, env environ.Env, doltRootDir string, workspaceID string) (_ *Store, err error) {
+	s, err := openInitialized(ctx, env, doltRootDir, workspaceID, engineRead)
 	if err != nil {
 		return nil, err
 	}
@@ -259,7 +263,7 @@ func OpenForRead(ctx context.Context, doltRootDir string, workspaceID string) (_
 	if err := s.Close(); err != nil {
 		return nil, err
 	}
-	writer, err := Open(ctx, doltRootDir, workspaceID)
+	writer, err := Open(ctx, env, doltRootDir, workspaceID)
 	if err != nil {
 		return nil, fmt.Errorf("this read open found %s and handed off to the write open to bring it forward: %w", assessment, err)
 	}
@@ -275,7 +279,7 @@ func OpenForRead(ctx context.Context, doltRootDir string, workspaceID string) (_
 // [LAW:single-enforcer] The read open and the below-the-gate entry points
 // (DumpRaw, Unquarantine) reach the database through this one sequence, so the
 // post-lock adopt check cannot be left out of any of them.
-func openInitialized(ctx context.Context, doltRootDir string, workspaceID string, access engineAccess) (*Store, error) {
+func openInitialized(ctx context.Context, env environ.Env, doltRootDir string, workspaceID string, access engineAccess) (*Store, error) {
 	if err := validateOpenArgs(doltRootDir, workspaceID); err != nil {
 		return nil, err
 	}
@@ -283,7 +287,7 @@ func openInitialized(ctx context.Context, doltRootDir string, workspaceID string
 	if err != nil {
 		return nil, err
 	}
-	s, err := openStoreConnection(ctx, doltRootDir, workspaceID, access)
+	s, err := openStoreConnection(ctx, env, doltRootDir, workspaceID, access)
 	if err != nil {
 		return nil, errors.Join(err, release())
 	}
@@ -463,13 +467,14 @@ func (s *Store) Close() error {
 // took LOCK or fell back past it, and a record naming a reader that holds
 // nothing would send an operator after the wrong pid. The one branch is the
 // open contract's own discriminator. [LAW:dataflow-not-control-flow]
-func openStoreConnection(ctx context.Context, doltRootDir string, workspaceID string, access engineAccess) (*Store, error) {
+func openStoreConnection(ctx context.Context, env environ.Env, doltRootDir string, workspaceID string, access engineAccess) (*Store, error) {
 	db, releaseEngineRecord, err := openEngine(ctx, doltRootDir, workspaceID, access)
 	if err != nil {
 		return nil, err
 	}
 	return &Store{
 		db:                  db,
+		env:                 env,
 		workspaceID:         workspaceID,
 		doltRootDir:         doltRootDir,
 		access:              access,

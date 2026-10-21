@@ -38,7 +38,7 @@ func run(t *testing.T, dir string, name string, args ...string) {
 // overlapping opens — which is also how the real commands use it.
 func openIn(t *testing.T, checkout string, mode AccessMode, body func(*App)) {
 	t.Helper()
-	ap, err := Open(context.Background(), resolvedWorkspace(t, checkout), mode)
+	ap, err := Open(context.Background(), testEnv(), resolvedWorkspace(t, checkout), mode)
 	if err != nil {
 		t.Fatalf("Open(%q, %v) error = %v", checkout, mode, err)
 	}
@@ -137,7 +137,7 @@ func TestDeletedCheckoutReleasesItsClaimHereAndAgesOutElsewhere(t *testing.T) {
 	openIn(t, primary, AccessRead, func(ap *App) {
 		workspaceID = ap.Workspace.WorkspaceID
 		evidence = readEvidence(t, ap)
-		local, err := ap.LocalCheckouts()
+		local, err := ap.LocalCheckouts(testEnv())
 		if err != nil {
 			t.Fatalf("LocalCheckouts() error = %v", err)
 		}
@@ -154,7 +154,7 @@ func TestDeletedCheckoutReleasesItsClaimHereAndAgesOutElsewhere(t *testing.T) {
 	run(t, primary, "git", "worktree", "remove", "--force", worker)
 
 	openIn(t, primary, AccessRead, func(ap *App) {
-		local, err := ap.LocalCheckouts()
+		local, err := ap.LocalCheckouts(testEnv())
 		if err != nil {
 			t.Fatalf("LocalCheckouts() after the removal error = %v", err)
 		}
@@ -208,7 +208,7 @@ func TestLiveCheckoutsOfCountsOnlyMintedIdentities(t *testing.T) {
 func TestLocalCheckoutsScopesTokensToThisWorkspace(t *testing.T) {
 	primary := gitRepoWithCommit(t)
 	openIn(t, primary, AccessWrite, func(ap *App) {
-		local, err := ap.LocalCheckouts()
+		local, err := ap.LocalCheckouts(testEnv())
 		if err != nil {
 			t.Fatalf("LocalCheckouts() error = %v", err)
 		}

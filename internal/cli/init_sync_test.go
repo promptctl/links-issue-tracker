@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
@@ -89,12 +90,12 @@ func TestAdoptRemoteTicketsOnInitGates(t *testing.T) {
 		repo := newInitTestRepo(t)
 		epicID := newEpicInDir(t, repo, "local-epic")
 		runCLIInDir(t, repo, "new", "--title", "local-work", "--topic", "demo", "--type", "task", "--parent", epicID)
-		ws, err := workspace.Resolve(repo)
+		ws, err := workspace.Resolve(testEnv(), repo)
 		if err != nil {
 			t.Fatalf("workspace.Resolve() error = %v", err)
 		}
 		progress := captureProgress(t)
-		outcome := adoptRemoteTicketsOnInit(underInvocation(context.Background()), ws)
+		outcome := adoptRemoteTicketsOnInit(underInvocation(context.Background()), testEnv(), ws)
 		if outcome.State != initSyncHasLocalTickets {
 			t.Fatalf("outcome.State = %q, want %q", outcome.State, initSyncHasLocalTickets)
 		}
@@ -108,12 +109,12 @@ func TestAdoptRemoteTicketsOnInitGates(t *testing.T) {
 
 	t.Run("reports not_configured when no git remote exists", func(t *testing.T) {
 		repo := newInitTestRepo(t)
-		ws, err := workspace.Resolve(repo)
+		ws, err := workspace.Resolve(testEnv(), repo)
 		if err != nil {
 			t.Fatalf("workspace.Resolve() error = %v", err)
 		}
 		progress := captureProgress(t)
-		outcome := adoptRemoteTicketsOnInit(underInvocation(context.Background()), ws)
+		outcome := adoptRemoteTicketsOnInit(underInvocation(context.Background()), testEnv(), ws)
 		if outcome.State != initSyncNotConfigured {
 			t.Fatalf("outcome.State = %q, want %q", outcome.State, initSyncNotConfigured)
 		}
@@ -215,7 +216,7 @@ func TestInitBesideARemoteDoltCannotHold(t *testing.T) {
 		dir := filepath.Join(base, name)
 		runGit(t, base, "clone", remote, name)
 		runGit(t, dir, "remote", "rename", "origin", "my.fork")
-		ws, err := workspace.Resolve(dir)
+		ws, err := workspace.Resolve(testEnv(), dir)
 		if err != nil {
 			t.Fatalf("workspace.Resolve(%s) error = %v", name, err)
 		}
@@ -308,7 +309,7 @@ func TestInitHardStopsWhenRemoteHasDataButAdoptCannotComplete(t *testing.T) {
 	// so the retry the error text asks for starts from a provably clean slate.
 	// (AdoptRemoteByClone still MkdirAlls the root itself; empty is the
 	// postcondition, absence is not.)
-	ws, err := workspace.Resolve(consumer)
+	ws, err := workspace.Resolve(testEnv(), consumer)
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}
@@ -375,7 +376,7 @@ func TestInitHealsAbandonedAdoptResidueOtherCommandsRefuse(t *testing.T) {
 	runGit(t, base, "clone", remote, "bravo")
 	runGit(t, consumer, "config", "user.email", "b@b.co")
 	runGit(t, consumer, "config", "user.name", "bravo")
-	ws, err := workspace.Resolve(consumer)
+	ws, err := workspace.Resolve(testEnv(), consumer)
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}
@@ -473,7 +474,7 @@ func TestInitHardStopsAndCreatesNoStoreWhenRemoteDetectionFails(t *testing.T) {
 	// remote to resolveSyncRemote/GitRemotes.
 	badRemote := filepath.Join(t.TempDir(), "gone", "does-not-exist.git")
 	runGit(t, repo, "remote", "add", "origin", badRemote)
-	ws, err := workspace.Resolve(repo)
+	ws, err := workspace.Resolve(testEnv(), repo)
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}
@@ -524,14 +525,14 @@ func TestInitAdoptHardStopsOnTimeout(t *testing.T) {
 	}()
 
 	started := make(chan struct{})
-	adoptRemoteTicketsBlockingFn = func(ctx context.Context, ws workspace.Info) initSyncOutcome {
+	adoptRemoteTicketsBlockingFn = func(ctx context.Context, _ environ.Env, ws workspace.Info) initSyncOutcome {
 		close(started)
 		<-ctx.Done() // a fetch that never finishes until it is abandoned
 		return initSyncOutcome{State: initSyncAdopted, Remote: "origin", Branch: "master"}
 	}
 	adoptRemoteTimeout = 20 * time.Millisecond
 
-	outcome := adoptRemoteTicketsOnInit(underInvocation(context.Background()), workspace.Info{})
+	outcome := adoptRemoteTicketsOnInit(underInvocation(context.Background()), testEnv(), workspace.Info{})
 
 	select {
 	case <-started:

@@ -56,7 +56,7 @@ func TestWriteOpenRefusesAWorkspaceWhoseWriteRulesItPredates(t *testing.T) {
 	}
 	ahead := stampWriteRuleChangeAhead(t, ctx, doltRoot, fmt.Sprint(registryMax+1))
 
-	_, err = Open(ctx, doltRoot, "test-workspace-id")
+	_, err = Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	var unsupported *UnsupportedSchemaVersionError
 	if !errors.As(err, &unsupported) {
 		t.Fatalf("Open() error = %v (%T); want *UnsupportedSchemaVersionError", err, err)
@@ -73,7 +73,7 @@ func TestWriteOpenRefusesAWorkspaceWhoseWriteRulesItPredates(t *testing.T) {
 		}
 	}
 
-	reader, err := OpenForRead(ctx, doltRoot, "test-workspace-id")
+	reader, err := OpenForRead(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("OpenForRead() error = %v; a lit that predates a write rule still reads", err)
 	}
@@ -134,7 +134,7 @@ func TestAMinWriterSchemaThatIsNotAVersionRefusesWritesOnly(t *testing.T) {
 	ahead := stampWriteRuleChangeAhead(t, ctx, doltRoot, "v12")
 
 	want := `meta min_writer_schema = "v12" is not a schema version`
-	_, err := Open(ctx, doltRoot, "test-workspace-id")
+	_, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	var unsupported *UnsupportedSchemaVersionError
 	if !errors.As(err, &unsupported) || unsupported.WorkspaceVersion != ahead || unsupported.MinWriterSchemaErr == nil {
 		t.Fatalf("Open() error = %v (%T); want *UnsupportedSchemaVersionError at v%d with the parse error", err, err, ahead)
@@ -143,7 +143,7 @@ func TestAMinWriterSchemaThatIsNotAVersionRefusesWritesOnly(t *testing.T) {
 		t.Errorf("refusal message lacks the parse error %q:\n%s", want, err)
 	}
 
-	reader, err := OpenForRead(ctx, doltRoot, "test-workspace-id")
+	reader, err := OpenForRead(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("OpenForRead() error = %v; a lit that cannot read the minimum still reads", err)
 	}
@@ -183,7 +183,7 @@ func TestSyncOpenMeetsTheWriteFloor(t *testing.T) {
 			doltRoot := filepath.Join(t.TempDir(), "dolt")
 			ahead := stampWriteRuleChangeAhead(t, ctx, doltRoot, tc.declared)
 
-			st, err := OpenSync(ctx, doltRoot, "test-workspace-id")
+			st, err := OpenSync(ctx, testEnv(), doltRoot, "test-workspace-id")
 			var unsupported *UnsupportedSchemaVersionError
 			if refused := errors.As(err, &unsupported); refused != tc.refused {
 				t.Fatalf("OpenSync() error = %v (%T); want refused %v", err, err, tc.refused)
@@ -222,7 +222,7 @@ func TestRollbackSnapshotIsOneTheOlderLitWrites(t *testing.T) {
 	snaps := rollbackHistory(t, ctx, doltRoot)
 	fromV5, fromV3 := snaps[0], snaps[1]
 
-	snap, err := openStoreConnection(ctx, fromV5.Path, "test-workspace-id", engineWrite)
+	snap, err := openStoreConnection(ctx, testEnv(), fromV5.Path, "test-workspace-id", engineWrite)
 	if err != nil {
 		t.Fatalf("open snapshot %s: %v", fromV5.Path, err)
 	}

@@ -16,7 +16,7 @@ import (
 func unquarantineLeaf() wsLeaf {
 	fs := newCobraFlagSet("unquarantine")
 	return wsLeaf{fs: fs, positionals: 0, usage: "usage: lit unquarantine", work: func(ctx context.Context, inv Invocation, ws workspace.Info, _ []string) error {
-		done, err := store.Unquarantine(ctx, ws.DatabasePath, ws.WorkspaceID)
+		done, err := store.Unquarantine(ctx, inv.Env, ws.DatabasePath, ws.WorkspaceID)
 		if err != nil {
 			return err
 		}

@@ -35,7 +35,7 @@ func TestVerifyCandidateReconciledOnFaithfulRebuild(t *testing.T) {
 	ctx := context.Background()
 	dump := rankedDump()
 
-	cand, err := RebuildCandidate(ctx, t.TempDir(), dump, mustMap(t, dump))
+	cand, err := RebuildCandidate(ctx, testEnv(), t.TempDir(), dump, mustMap(t, dump))
 	if err != nil {
 		t.Fatalf("RebuildCandidate rejected a valid mapping: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestVerifyCandidateRejectsMisMappedRank(t *testing.T) {
 	swapped := swapTargets(mustMap(t, dump),
 		ColumnRef{Table: "issues", Column: "priority"}, ColumnRef{Table: "issues", Column: "item_rank"})
 
-	cand, err := RebuildCandidate(ctx, t.TempDir(), dump, swapped)
+	cand, err := RebuildCandidate(ctx, testEnv(), t.TempDir(), dump, swapped)
 	if err != nil {
 		t.Fatalf("RebuildCandidate should accept the mis-map (it is well-formed); the gate, not the applier, must reject it: %v", err)
 	}

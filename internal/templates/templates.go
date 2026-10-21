@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/config"
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/pathspec"
 )
 
@@ -95,20 +96,20 @@ const (
 // Load resolves a managed template with project > global > embedded precedence.
 // It never writes; absence of a file at a given layer simply means that layer
 // contributes nothing. The embedded default is always available as the final fallback.
-func Load(name string, workspaceRoot string) (string, error) {
-	content, _, err := LoadWithSource(name, workspaceRoot)
+func Load(env environ.Env, name string, workspaceRoot string) (string, error) {
+	content, _, err := LoadWithSource(env, name, workspaceRoot)
 	return content, err
 }
 
 // LoadWithSource is like Load but also returns which layer the content came from.
-func LoadWithSource(name string, workspaceRoot string) (string, Source, error) {
+func LoadWithSource(env environ.Env, name string, workspaceRoot string) (string, Source, error) {
 	projectContent, projectErr := readOptionalFile(projectTemplatePath(workspaceRoot, name))
 	if projectErr != nil {
 		return "", "", fmt.Errorf("load project template %s: %w", projectTemplatePath(workspaceRoot, name), projectErr)
 	}
-	globalContent, globalErr := readOptionalFile(GlobalPath(name))
+	globalContent, globalErr := readOptionalFile(GlobalPath(env, name))
 	if globalErr != nil {
-		return "", "", fmt.Errorf("load global template %s: %w", GlobalPath(name), globalErr)
+		return "", "", fmt.Errorf("load global template %s: %w", GlobalPath(env, name), globalErr)
 	}
 	embedded, err := EmbeddedDefault(name)
 	if err != nil {
@@ -138,8 +139,8 @@ func EmbeddedDefault(name string) ([]byte, error) {
 
 // GlobalPath returns the override path in the user's global config directory for name.
 // Absent when no global config directory is configured.
-func GlobalPath(name string) pathspec.PathSpec {
-	return globalTemplatesDir().Join(name)
+func GlobalPath(env environ.Env, name string) pathspec.PathSpec {
+	return globalTemplatesDir(env).Join(name)
 }
 
 // ProjectPath returns the override path under the workspace's .lit/templates directory.
@@ -154,11 +155,11 @@ func ProjectPath(workspaceRoot string, name string) pathspec.PathSpec {
 // [LAW:one-source-of-truth] This helper resolves only the project/global override
 // layers; callers that need to know which override layer was selected can infer it
 // from the returned path.
-func ActiveOverride(workspaceRoot string, name string) (override pathspec.PathSpec, content []byte, err error) {
+func ActiveOverride(env environ.Env, workspaceRoot string, name string) (override pathspec.PathSpec, content []byte, err error) {
 	// [LAW:dataflow-not-control-flow] Inspect both layers in fixed order; presence/absence is data, not branching.
 	candidatePaths := []pathspec.PathSpec{
 		projectTemplatePath(workspaceRoot, name),
-		GlobalPath(name),
+		GlobalPath(env, name),
 	}
 	for _, p := range candidatePaths {
 		if p.IsEmpty() {
@@ -194,7 +195,7 @@ func projectTemplatePath(workspaceRoot string, name string) pathspec.PathSpec {
 	return pathspec.New(workspaceRoot).Join(".lit", "templates", name)
 }
 
-func globalTemplatesDir() pathspec.PathSpec {
+func globalTemplatesDir(env environ.Env) pathspec.PathSpec {
 	// [LAW:one-source-of-truth] Global template storage reuses config.ConfigDir as the canonical root.
-	return pathspec.New(config.ConfigDir()).Join("templates")
+	return pathspec.New(config.ConfigDir(env)).Join("templates")
 }

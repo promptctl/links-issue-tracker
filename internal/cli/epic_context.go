@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
@@ -265,14 +266,14 @@ func epicViewFor(issue model.Issue, parent *model.Issue) *epicTarget {
 // *app.App it could load from, for the reason classifyWorkable states: the
 // policy is repo config, the rest of that path is store data, and keeping them
 // apart is what lets a plain store drive the builder. [LAW:locality-or-seam]
-func resolveEpicContext(ctx context.Context, ap *app.App, detail model.IssueDetail) (*EpicContext, error) {
+func resolveEpicContext(ctx context.Context, env environ.Env, ap *app.App, detail model.IssueDetail) (*EpicContext, error) {
 	// [LAW:no-defensive-null-guards] target is an explicit optional: nil is the
 	// real "no epic membership" case, not a defended-against bug.
 	target := epicViewFor(detail.Issue, detail.Parent)
 	if target == nil {
 		return nil, nil
 	}
-	requiredFields, err := readyRequiredFields(ap)
+	requiredFields, err := readyRequiredFields(env, ap)
 	if err != nil {
 		return nil, err
 	}

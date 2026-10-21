@@ -13,7 +13,7 @@ func TestRecordAutomationTraceWritesCanonicalJSON(t *testing.T) {
 	t.Parallel()
 	repo := t.TempDir()
 	runGit(t, repo, "init")
-	ws, err := workspace.Resolve(repo)
+	ws, err := workspace.Resolve(testEnv(), repo)
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}
@@ -58,7 +58,7 @@ func TestRecordAutomationTraceWritesCanonicalJSON(t *testing.T) {
 func TestMaybeRecordAutomatedCommandTraceWritesTraceRefFile(t *testing.T) {
 	repo := t.TempDir()
 	runGit(t, repo, "init")
-	ws, err := workspace.Resolve(repo)
+	ws, err := workspace.Resolve(testEnv(), repo)
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}
@@ -69,6 +69,7 @@ func TestMaybeRecordAutomatedCommandTraceWritesTraceRefFile(t *testing.T) {
 	t.Setenv(automationTraceRefFileEnvVar, traceRefFile)
 
 	traceRef, err := maybeRecordAutomatedCommandTrace(
+		testEnv(),
 		ws,
 		"lit sync push --remote origin",
 		"mirror Dolt data to the configured git remote",

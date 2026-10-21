@@ -5,13 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/config"
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/pathspec"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
@@ -167,15 +167,15 @@ func ownerNotifyDue(markerPath, fingerprint string, now time.Time) bool {
 // sync trace; [LAW:effects-at-boundaries] the config read and the process spawn
 // live here, behind one named boundary, and every caller stays a pure
 // "detected this" report.
-func maybeNotifyOwner(ctx context.Context, ws workspace.Info, ev ownerNotifyEvent) {
-	if autoSyncDisabled() {
+func maybeNotifyOwner(ctx context.Context, env environ.Env, ws workspace.Info, ev ownerNotifyEvent) {
+	if autoSyncDisabled(env) {
 		return
 	}
 	markerPath := ownerNotifyMarkerPath(ws, ev.Kind)
 	if !ownerNotifyDue(markerPath, ev.fingerprint(), time.Now()) {
 		return
 	}
-	cfg, err := config.Load(pathspec.New(ws.RootDir))
+	cfg, err := config.Load(env, pathspec.New(ws.RootDir))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "lit: owner notification skipped, config unreadable: %v\n", err)
 		return
@@ -185,9 +185,9 @@ func maybeNotifyOwner(ctx context.Context, ws workspace.Info, ev ownerNotifyEven
 		return
 	}
 	metadata := map[string]string{"remote": ev.Remote, "sync_branch": ev.Branch}
-	if err := runOwnerNotifyHook(ctx, hook, ws.RootDir, ev); err != nil {
+	if err := runOwnerNotifyHook(ctx, env, hook, ws.RootDir, ev); err != nil {
 		fmt.Fprintf(os.Stderr, "lit: owner notification hook failed (retries on the next detection): %v\n", err)
-		recordSyncTraceLogged(ws, syncTraceRecord{
+		recordSyncTraceLogged(env, ws, syncTraceRecord{
 			Command:   ownerNotifyTraceCommand,
 			Decision:  string(ev.Kind),
 			Status:    "error",
@@ -200,7 +200,7 @@ func maybeNotifyOwner(ctx context.Context, ws workspace.Info, ev ownerNotifyEven
 	if err := writeMarkerAtomic(markerPath, []byte(ev.fingerprint()+"\n")); err != nil {
 		fmt.Fprintf(os.Stderr, "lit: owner-notify marker not written: %v\n", err)
 	}
-	recordSyncTraceLogged(ws, syncTraceRecord{
+	recordSyncTraceLogged(env, ws, syncTraceRecord{
 		Command:   ownerNotifyTraceCommand,
 		Decision:  string(ev.Kind),
 		Status:    "ok",
@@ -213,24 +213,22 @@ func maybeNotifyOwner(ctx context.Context, ws workspace.Info, ev ownerNotifyEven
 // runOwnerNotifyHook executes the configured command through the shell with the
 // event's facts in the environment, time-boxed. The hook's own output is not
 // lit's contract: it is surfaced only inside the error when the hook fails.
-func runOwnerNotifyHook(ctx context.Context, hook, repoRoot string, ev ownerNotifyEvent) error {
+func runOwnerNotifyHook(ctx context.Context, env environ.Env, hook, repoRoot string, ev ownerNotifyEvent) error {
 	hookCtx, cancel := context.WithTimeout(ctx, ownerNotifyHookTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(hookCtx, "sh", "-c", hook)
+	cmd := env.With(
+		"LIT_NOTIFY_KIND="+string(ev.Kind),
+		"LIT_NOTIFY_SUMMARY="+ev.Summary,
+		"LIT_NOTIFY_REMOTE="+ev.Remote,
+		"LIT_NOTIFY_BRANCH="+ev.Branch,
+		"LIT_NOTIFY_REPO="+repoRoot,
+	).CommandContext(hookCtx, repoRoot, "sh", "-c", hook)
 	// The deadline kills the sh, but CombinedOutput also waits for the output
 	// pipe to close — a hook's backgrounded child inheriting stdout would hold
 	// the caller past the cap indefinitely. WaitDelay forces Wait to abandon
 	// the pipe shortly after the kill, making the timeout the real bound.
 	// [LAW:no-ambient-temporal-coupling]
 	cmd.WaitDelay = ownerNotifyPipeWaitDelay
-	cmd.Dir = repoRoot
-	cmd.Env = append(os.Environ(),
-		"LIT_NOTIFY_KIND="+string(ev.Kind),
-		"LIT_NOTIFY_SUMMARY="+ev.Summary,
-		"LIT_NOTIFY_REMOTE="+ev.Remote,
-		"LIT_NOTIFY_BRANCH="+ev.Branch,
-		"LIT_NOTIFY_REPO="+repoRoot,
-	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		if detail := strings.TrimSpace(string(out)); detail != "" {
@@ -263,12 +261,12 @@ func clearOwnerNotify(ws workspace.Info, kinds ...ownerNotifyKind) {
 // classifies them as their own non-failed decisions, so this function needs no
 // error inspection of its own — the record IS the classification.
 // [LAW:single-enforcer]
-func observePushOutcomeForOwner(ctx context.Context, ws workspace.Info, rec pushOutcomeRecord) {
+func observePushOutcomeForOwner(ctx context.Context, env environ.Env, ws workspace.Info, rec pushOutcomeRecord) {
 	switch {
 	case rec.Decision == pushDecisionPushed:
 		clearOwnerNotify(ws, ownerNotifyPushFailed)
 	case rec.failed():
-		maybeNotifyOwner(ctx, ws, ownerNotifyEvent{
+		maybeNotifyOwner(ctx, env, ws, ownerNotifyEvent{
 			Kind:    ownerNotifyPushFailed,
 			Summary: fmt.Sprintf("a lit sync push to %s failed: %s — local ticket changes are not reaching the shared backlog.", pushTarget(rec.Remote, rec.Branch), rec.Reason),
 			Remote:  rec.Remote,

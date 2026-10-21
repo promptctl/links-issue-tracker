@@ -15,12 +15,14 @@ import (
 	"time"
 
 	"github.com/dolthub/dolt/go/libraries/utils/gitcmd"
+
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 )
 
 func TestResolveCreatesSharedConfigInGitCommonDir(t *testing.T) {
 	repo := t.TempDir()
 	run(t, repo, "git", "init")
-	info, err := Resolve(repo)
+	info, err := Resolve(testEnv(), repo)
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
@@ -51,7 +53,7 @@ func TestResolveCreatesSharedConfigInGitCommonDir(t *testing.T) {
 	if gotStorageDir != wantStorageDir {
 		t.Fatalf("storage dir = %q, want %q", info.StorageDir, wantStorageDir)
 	}
-	info2, err := Resolve(repo)
+	info2, err := Resolve(testEnv(), repo)
 	if err != nil {
 		t.Fatalf("Resolve second call error = %v", err)
 	}
@@ -76,11 +78,11 @@ func TestResolveFromSubdirIsCwdDepthIndependent(t *testing.T) {
 		t.Fatalf("MkdirAll(sub) error = %v", err)
 	}
 
-	fromRoot, err := Resolve(repo)
+	fromRoot, err := Resolve(testEnv(), repo)
 	if err != nil {
 		t.Fatalf("Resolve(repo) error = %v", err)
 	}
-	fromSub, err := Resolve(sub)
+	fromSub, err := Resolve(testEnv(), sub)
 	if err != nil {
 		t.Fatalf("Resolve(sub) error = %v", err)
 	}
@@ -122,11 +124,11 @@ func TestResolveYieldsOnePhysicalStorePerSpelling(t *testing.T) {
 		t.Skipf("symlink unsupported: %v", err)
 	}
 
-	viaPhysical, err := Resolve(physical)
+	viaPhysical, err := Resolve(testEnv(), physical)
 	if err != nil {
 		t.Fatalf("Resolve(physical) error = %v", err)
 	}
-	viaLink, err := Resolve(link)
+	viaLink, err := Resolve(testEnv(), link)
 	if err != nil {
 		t.Fatalf("Resolve(link) error = %v", err)
 	}
@@ -154,7 +156,7 @@ func TestResolveYieldsOnePhysicalStorePerSpelling(t *testing.T) {
 func TestLocateRefusesARelativeCwd(t *testing.T) {
 	t.Parallel()
 	for _, cwd := range []string{"", ".", "internal"} {
-		loc, err := Locate(cwd)
+		loc, err := Locate(testEnv(), cwd)
 		if err == nil || !strings.Contains(err.Error(), "not absolute") {
 			t.Errorf("Locate(%q) = %+v, %v; want a refusal naming the directory as not absolute", cwd, loc, err)
 		}
@@ -189,7 +191,7 @@ func TestClassifyGitError(t *testing.T) {
 }
 
 func TestResolveFailsOutsideGit(t *testing.T) {
-	_, err := Resolve(t.TempDir())
+	_, err := Resolve(testEnv(), t.TempDir())
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -202,14 +204,14 @@ func TestResolveNormalizesConfiguredIssuePrefix(t *testing.T) {
 	repo := t.TempDir()
 	run(t, repo, "git", "init")
 
-	info, err := Resolve(repo)
+	info, err := Resolve(testEnv(), repo)
 	if err != nil {
 		t.Fatalf("Resolve() initial error = %v", err)
 	}
 
 	rewriteConfigPrefix(t, info.ConfigPath, "Renderer Platform Team")
 
-	info, err = Resolve(repo)
+	info, err = Resolve(testEnv(), repo)
 	if err != nil {
 		t.Fatalf("Resolve() normalized error = %v", err)
 	}
@@ -225,13 +227,13 @@ func TestResolveDerivesPrefixWhenConfigValueAbsent(t *testing.T) {
 	repo := t.TempDir()
 	run(t, repo, "git", "init")
 
-	info, err := Resolve(repo)
+	info, err := Resolve(testEnv(), repo)
 	if err != nil {
 		t.Fatalf("Resolve() initial error = %v", err)
 	}
 	rewriteConfigPrefix(t, info.ConfigPath, "   ")
 
-	derivedInfo, err := Resolve(repo)
+	derivedInfo, err := Resolve(testEnv(), repo)
 	if err != nil {
 		t.Fatalf("Resolve() after blanking prefix error = %v", err)
 	}
@@ -263,13 +265,13 @@ func TestResolveCarriesAnIllegalStoredPrefixAsUnmintable(t *testing.T) {
 	repo := t.TempDir()
 	run(t, repo, "git", "init")
 
-	info, err := Resolve(repo)
+	info, err := Resolve(testEnv(), repo)
 	if err != nil {
 		t.Fatalf("Resolve() initial error = %v", err)
 	}
 	rewriteConfigPrefix(t, info.ConfigPath, "ab")
 
-	info, err = Resolve(repo)
+	info, err = Resolve(testEnv(), repo)
 	if err != nil {
 		t.Fatalf("Resolve() over a stored illegal prefix error = %v, want the workspace resolved", err)
 	}
@@ -300,12 +302,12 @@ func TestResolveCarriesAnIllegalStoredPrefixAsUnmintable(t *testing.T) {
 func TestResolveMintsUnderALegalStoredPrefix(t *testing.T) {
 	repo := t.TempDir()
 	run(t, repo, "git", "init")
-	info, err := Resolve(repo)
+	info, err := Resolve(testEnv(), repo)
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
 	rewriteConfigPrefix(t, info.ConfigPath, "abc")
-	info, err = Resolve(repo)
+	info, err = Resolve(testEnv(), repo)
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
@@ -342,7 +344,7 @@ func TestGitRemotesReturnsFetchURLsSortedByName(t *testing.T) {
 	run(t, repo, "git", "remote", "add", "origin", "https://github.com/acme/origin.git")
 	run(t, repo, "git", "remote", "set-url", "--push", "origin", "git@github.com:acme/origin.git")
 
-	remotes, err := GitRemotes(context.Background(), repo)
+	remotes, err := GitRemotes(context.Background(), testEnv(), repo)
 	if err != nil {
 		t.Fatalf("GitRemotes() error = %v", err)
 	}
@@ -394,10 +396,10 @@ func TestRemoteHeadIsUnsetLocallyAndAdvertisedByTheRemote(t *testing.T) {
 	run(t, repo, "git", "push", "-u", "origin", "master")
 	run(t, repo, "git", "--git-dir", remote, "symbolic-ref", "HEAD", "refs/heads/master")
 
-	if got := LocalRemoteHead(context.Background(), repo, "origin"); got != "" {
+	if got := LocalRemoteHead(context.Background(), testEnv(), repo, "origin"); got != "" {
 		t.Fatalf("LocalRemoteHead() = %q, want empty: git push does not set refs/remotes/origin/HEAD", got)
 	}
-	got, err := AdvertisedRemoteHead(context.Background(), repo, "origin")
+	got, err := AdvertisedRemoteHead(context.Background(), testEnv(), repo, "origin")
 	if err != nil {
 		t.Fatalf("AdvertisedRemoteHead() error = %v", err)
 	}
@@ -413,7 +415,7 @@ func TestRemoteHasRefsReturnsFalseForEmptyBareRemote(t *testing.T) {
 	run(t, repo, "git", "init", "--bare", remote)
 	run(t, repo, "git", "remote", "add", "origin", remote)
 
-	hasRefs, err := RemoteHasRefs(context.Background(), repo, "origin")
+	hasRefs, err := RemoteHasRefs(context.Background(), testEnv(), repo, "origin")
 	if err != nil {
 		t.Fatalf("RemoteHasRefs() error = %v, want nil for empty bare remote", err)
 	}
@@ -436,7 +438,7 @@ func TestRemoteHasRefsReturnsTrueForPopulatedRemote(t *testing.T) {
 	run(t, repo, "git", "remote", "add", "origin", remote)
 	run(t, repo, "git", "push", "-u", "origin", "master")
 
-	hasRefs, err := RemoteHasRefs(context.Background(), repo, "origin")
+	hasRefs, err := RemoteHasRefs(context.Background(), testEnv(), repo, "origin")
 	if err != nil {
 		t.Fatalf("RemoteHasRefs() error = %v, want nil for populated remote", err)
 	}
@@ -449,7 +451,7 @@ func TestRemoteHasRefsReturnsErrorForUnknownRemoteName(t *testing.T) {
 	repo := t.TempDir()
 	run(t, repo, "git", "init")
 
-	hasRefs, err := RemoteHasRefs(context.Background(), repo, "does-not-exist")
+	hasRefs, err := RemoteHasRefs(context.Background(), testEnv(), repo, "does-not-exist")
 	if err == nil {
 		t.Fatalf("RemoteHasRefs() error = nil, want error for unknown remote (got hasRefs=%v)", hasRefs)
 	}
@@ -490,7 +492,7 @@ func TestGitOutputCancellationKillsSubprocess(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		_, gitErr := gitOutput(ctx, t.TempDir(), "ls-remote", url)
+		_, gitErr := gitOutput(ctx, testEnv(), t.TempDir(), "ls-remote", url)
 		done <- gitErr
 	}()
 
@@ -549,11 +551,11 @@ func TestRemoteHasDoltDataFalseForCodeOnlyRemote(t *testing.T) {
 	run(t, repo, "git", "remote", "add", "origin", remote)
 	run(t, repo, "git", "push", "-u", "origin", "master")
 
-	hasRefs, err := RemoteHasRefs(context.Background(), repo, "origin")
+	hasRefs, err := RemoteHasRefs(context.Background(), testEnv(), repo, "origin")
 	if err != nil || !hasRefs {
 		t.Fatalf("precondition: RemoteHasRefs() = %v, err = %v; want true,nil", hasRefs, err)
 	}
-	hasData, err := RemoteHasDoltData(context.Background(), repo, "origin")
+	hasData, err := RemoteHasDoltData(context.Background(), testEnv(), repo, "origin")
 	if err != nil {
 		t.Fatalf("RemoteHasDoltData() error = %v, want nil", err)
 	}
@@ -579,7 +581,7 @@ func TestRemoteHasDoltDataTrueWhenDoltRefPresent(t *testing.T) {
 	// Mirror how lit's sync lands data: a ref under the refs/dolt/* namespace.
 	run(t, repo, "git", "push", "origin", "HEAD:refs/dolt/data")
 
-	hasData, err := RemoteHasDoltData(context.Background(), repo, "origin")
+	hasData, err := RemoteHasDoltData(context.Background(), testEnv(), repo, "origin")
 	if err != nil {
 		t.Fatalf("RemoteHasDoltData() error = %v, want nil", err)
 	}
@@ -591,7 +593,7 @@ func TestRemoteHasDoltDataTrueWhenDoltRefPresent(t *testing.T) {
 	// the object the remote's refs/dolt/data points at, in ls-remote's shape.
 	// This is what the automatic receive compares across runs, so its content —
 	// not just its emptiness — is the contract.
-	refs, err := RemoteDoltRefs(context.Background(), repo, "origin")
+	refs, err := RemoteDoltRefs(context.Background(), testEnv(), repo, "origin")
 	if err != nil {
 		t.Fatalf("RemoteDoltRefs() error = %v, want nil", err)
 	}
@@ -613,15 +615,15 @@ func TestUpstreamRemoteIsTheWholeName(t *testing.T) {
 	run(t, repo, "git", "remote", "add", "origin", remote)
 	run(t, repo, "git", "remote", "add", "team/fork", remote)
 	ctx := context.Background()
-	if got := UpstreamRemote(ctx, repo); got != "" {
+	if got := UpstreamRemote(ctx, testEnv(), repo); got != "" {
 		t.Fatalf("UpstreamRemote() with no upstream = %q, want empty", got)
 	}
 	run(t, repo, "git", "push", "--set-upstream", "team/fork", "master")
-	if got := UpstreamRemote(ctx, repo); got != "team/fork" {
+	if got := UpstreamRemote(ctx, testEnv(), repo); got != "team/fork" {
 		t.Fatalf("UpstreamRemote() tracking team/fork/master = %q, want team/fork", got)
 	}
 	run(t, repo, "git", "checkout", "--detach")
-	if got := UpstreamRemote(ctx, repo); got != "" {
+	if got := UpstreamRemote(ctx, testEnv(), repo); got != "" {
 		t.Fatalf("UpstreamRemote() on a detached HEAD = %q, want empty", got)
 	}
 }
@@ -645,3 +647,7 @@ func runOutput(t *testing.T, dir string, name string, args ...string) string {
 	}
 	return strings.TrimSpace(string(out))
 }
+
+// testEnv is the test process's environment, read when it is called, so a
+// test's t.Setenv reaches the git it runs.
+func testEnv() environ.Env { return environ.Of(os.Environ()) }

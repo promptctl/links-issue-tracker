@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
@@ -127,7 +128,7 @@ func doctorDivergenceExit(report doctorSyncReport) error {
 // a loud doctorSyncUnresolved line carrying the reason [LAW:no-silent-failure]
 // rather than aborting doctor, because sync freshness is a best-effort
 // diagnostic distinct from the integrity health check it sits beside.
-func resolveDoctorSyncFreshness(ctx context.Context, ws workspace.Info, st storage.Store) doctorSyncReport {
+func resolveDoctorSyncFreshness(ctx context.Context, env environ.Env, ws workspace.Info, st storage.Store) doctorSyncReport {
 	// An engine that does not sync has no freshness to report, which is the same
 	// kind of answer as a git remote that cannot be read: unresolved, with the
 	// reason named. It reaches the reader through the one arm this function
@@ -137,7 +138,7 @@ func resolveDoctorSyncFreshness(ctx context.Context, ws workspace.Info, st stora
 	if err != nil {
 		return doctorSyncReport{Kind: doctorSyncUnresolved, Detail: err.Error()}
 	}
-	gitRemotes, err := workspace.GitRemotes(ctx, ws.RootDir)
+	gitRemotes, err := workspace.GitRemotes(ctx, env, ws.RootDir)
 	if err != nil {
 		return doctorSyncReport{Kind: doctorSyncUnresolved, Detail: fmt.Sprintf("read git remotes: %v", err)}
 	}
@@ -146,7 +147,7 @@ func resolveDoctorSyncFreshness(ctx context.Context, ws workspace.Info, st stora
 	// branch is knownSyncBranch's, not resolveSyncBranch's, because this report
 	// is read by doctor and by every read command's banner, and neither waits
 	// on the network.
-	remoteName, branch, ok, err := freshnessSyncTarget(ctx, ws, gitRemotes)
+	remoteName, branch, ok, err := freshnessSyncTarget(ctx, env, ws, gitRemotes)
 	if err != nil {
 		return doctorSyncReport{Kind: doctorSyncUnresolved, Detail: err.Error()}
 	}
@@ -498,7 +499,7 @@ func doctorLeaf() appLeaf {
 		// [LAW:effects-at-boundaries] Freshness resolution shells out to git and
 		// reads the store, so it runs here, at the boundary, before the pure text
 		// rendering below.
-		syncReport := resolveDoctorSyncFreshness(ctx, ap.Workspace, ap.Store)
+		syncReport := resolveDoctorSyncFreshness(ctx, inv.Env, ap.Workspace, ap.Store)
 		// [LAW:no-silent-failure] A failed repair is joined to any error that cuts
 		// the report short, so neither hides the other. A report that prints in full
 		// exits on the repair: it is the outcome of the command the operator typed,
@@ -521,7 +522,7 @@ func doctorLeaf() appLeaf {
 		var syncFailure SyncFailureError
 		if errors.As(exitErr, &syncFailure) {
 			if ev, ok := ownerNotifyEventForFailure(syncFailure.Failure); ok {
-				maybeNotifyOwner(ctx, ap.Workspace, ev)
+				maybeNotifyOwner(ctx, inv.Env, ap.Workspace, ev)
 			}
 		}
 		// A workspace that cannot mint is not healthy, so doctor reports the

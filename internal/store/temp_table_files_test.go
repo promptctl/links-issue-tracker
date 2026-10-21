@@ -28,7 +28,7 @@ func TestAWriteOpenCollectsOnlyWhatADeadWriterStaged(t *testing.T) {
 
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
-	writer, err := Open(ctx, doltRoot, "test-workspace-id")
+	writer, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -39,7 +39,7 @@ func TestAWriteOpenCollectsOnlyWhatADeadWriterStaged(t *testing.T) {
 	staged := filepath.Join(dir, "buffered_file_byte_sink_4242")
 	writeFileForTest(t, staged, strings.Repeat("x", 1234))
 
-	if refused, err := Open(ctx, doltRoot, "test-workspace-id"); !errors.Is(err, ErrWorkspaceBusy) {
+	if refused, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id"); !errors.Is(err, ErrWorkspaceBusy) {
 		if refused != nil {
 			_ = refused.Close()
 		}
@@ -66,7 +66,7 @@ func TestAWriteOpenCollectsOnlyWhatADeadWriterStaged(t *testing.T) {
 	}
 	spared = append(spared, stagedNamedDir)
 
-	next, err := Open(ctx, doltRoot, "test-workspace-id")
+	next, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() after the writer closed: error = %v", err)
 	}
@@ -87,7 +87,7 @@ func TestAWriteOpenCollectsOnlyWhatADeadWriterStaged(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 
-	reader, err := OpenForRead(ctx, doltRoot, "test-workspace-id")
+	reader, err := OpenForRead(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("OpenForRead() error = %v", err)
 	}
@@ -97,7 +97,7 @@ func TestAWriteOpenCollectsOnlyWhatADeadWriterStaged(t *testing.T) {
 	if err := reader.Close(); err != nil {
 		t.Fatalf("reader Close() error = %v", err)
 	}
-	syncer, err := OpenSync(ctx, doltRoot, "test-workspace-id")
+	syncer, err := OpenSync(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("OpenSync() error = %v", err)
 	}
@@ -115,7 +115,7 @@ func TestAWriteOpenWhoseCollectionFailsStillOpens(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
-	first, err := Open(ctx, doltRoot, "test-workspace-id")
+	first, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -130,7 +130,7 @@ func TestAWriteOpenWhoseCollectionFailsStillOpens(t *testing.T) {
 	}
 	writeFileForTest(t, dir, "not a directory")
 
-	s, err := Open(ctx, doltRoot, "test-workspace-id")
+	s, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() over an unreadable staging dir: error = %v, want the open to stand", err)
 	}

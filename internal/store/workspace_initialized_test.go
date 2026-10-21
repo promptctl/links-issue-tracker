@@ -27,14 +27,14 @@ func TestUninitializedWorkspaceIsOneCondition(t *testing.T) {
 		run  func(ctx context.Context, doltRoot string) error
 	}{
 		{"OpenForRead", func(ctx context.Context, doltRoot string) error {
-			st, err := OpenForRead(ctx, doltRoot, "ws")
+			st, err := OpenForRead(ctx, testEnv(), doltRoot, "ws")
 			if st != nil {
 				_ = st.Close()
 			}
 			return err
 		}},
 		{"DumpRaw", func(ctx context.Context, doltRoot string) error {
-			_, err := DumpRaw(ctx, doltRoot, "ws")
+			_, err := DumpRaw(ctx, testEnv(), doltRoot, "ws")
 			return err
 		}},
 		{"LockDoltJournalExclusive", func(ctx context.Context, doltRoot string) error {

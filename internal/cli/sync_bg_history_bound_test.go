@@ -32,7 +32,7 @@ func TestTheMirrorAloneKeepsTheHistoryBound(t *testing.T) {
 	for _, title := range []string{"one", "two", "three"} {
 		runCLIInDir(t, r.alpha, "new", "--title", title, "--topic", "demo", "--type", "task", "--parent", r.epic)
 	}
-	alphaWS, err := workspace.Resolve(r.alpha)
+	alphaWS, err := workspace.Resolve(testEnv(), r.alpha)
 	if err != nil {
 		t.Fatalf("resolve alpha: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestAPushWhoseBoundFiredProvesNothing(t *testing.T) {
 	isolateEvents(t)
 	runCLIInDir(t, r.alpha, "sync", "push")
 	seeded := boundRecordOf(t, lastEvent(t))["history_bound.height"].(float64)
-	alphaWS, err := workspace.Resolve(r.alpha)
+	alphaWS, err := workspace.Resolve(testEnv(), r.alpha)
 	if err != nil {
 		t.Fatalf("resolve alpha: %v", err)
 	}

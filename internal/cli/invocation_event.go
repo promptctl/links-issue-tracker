@@ -12,6 +12,7 @@ import (
 
 	"github.com/dolthub/dolt/go/libraries/utils/gitcmd"
 	"github.com/promptctl/links-issue-tracker/internal/config"
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/version"
@@ -120,24 +121,25 @@ type invocationRecord struct {
 	once     sync.Once
 	recorder *telemetry.Recorder
 	stderr   io.Writer
+	env      environ.Env
 }
 
 func (r *invocationRecord) close(end telemetry.End) {
-	r.once.Do(func() { recordInvocation(r.stderr, r.recorder.Finish(end)) })
+	r.once.Do(func() { recordInvocation(r.stderr, r.env, r.recorder.Finish(end)) })
 }
 
 // recordInvocation is the export edge: the one place an invocation's event
 // leaves the process. A failure to write it is reported on stderr and never
 // becomes the command's failure — the command's own work is already decided.
 // [LAW:single-enforcer] [LAW:no-silent-failure]
-func recordInvocation(stderr io.Writer, ev telemetry.Event) {
-	if err := writeEvent(stderr, ev); err != nil {
+func recordInvocation(stderr io.Writer, env environ.Env, ev telemetry.Event) {
+	if err := writeEvent(stderr, env, ev); err != nil {
 		fmt.Fprintf(stderr, "lit: invocation event not recorded: %v\n", err)
 	}
 }
 
-func writeEvent(stderr io.Writer, ev telemetry.Event) error {
-	dir, err := config.StateDir()
+func writeEvent(stderr io.Writer, env environ.Env, ev telemetry.Event) error {
+	dir, err := config.StateDir(env)
 	if err != nil {
 		return err
 	}

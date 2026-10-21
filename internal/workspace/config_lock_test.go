@@ -34,7 +34,7 @@ func TestConcurrentFirstResolvesAgreeOnOneWorkspaceID(t *testing.T) {
 		ids := make([]string, racers)
 		errs := make([]error, racers)
 		raceN(racers, func(i int) {
-			info, err := Resolve(repo)
+			info, err := Resolve(testEnv(), repo)
 			ids[i], errs[i] = info.WorkspaceID, err
 		})
 		for i, err := range errs {
@@ -42,7 +42,7 @@ func TestConcurrentFirstResolvesAgreeOnOneWorkspaceID(t *testing.T) {
 				t.Fatalf("round %d racer %d: Resolve() error = %v", round, i, err)
 			}
 		}
-		info, err := Resolve(repo)
+		info, err := Resolve(testEnv(), repo)
 		if err != nil {
 			t.Fatalf("round %d: Resolve() after the race error = %v", round, err)
 		}
@@ -59,7 +59,7 @@ func TestConcurrentFirstResolvesAgreeOnOneWorkspaceID(t *testing.T) {
 func TestConcurrentUpdateConfigLosesNoWrite(t *testing.T) {
 	repo := t.TempDir()
 	run(t, repo, "git", "init")
-	info, err := Resolve(repo)
+	info, err := Resolve(testEnv(), repo)
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}

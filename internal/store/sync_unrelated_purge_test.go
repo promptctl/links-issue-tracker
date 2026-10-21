@@ -171,7 +171,7 @@ func assertPurged(t *testing.T, ctx context.Context, st *Store, id string) {
 
 func openOrFatal(t *testing.T, ctx context.Context, root string) *Store {
 	t.Helper()
-	st, err := Open(ctx, root, "ws")
+	st, err := Open(ctx, testEnv(), root, "ws")
 	if err != nil {
 		t.Fatalf("Open(%s): %v", root, err)
 	}

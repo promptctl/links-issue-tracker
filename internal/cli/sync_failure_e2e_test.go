@@ -133,7 +133,7 @@ func proseDivergedClones(t *testing.T) (consumer, ticketID string) {
 // [LAW:no-silent-failure]
 func TestInlineReconcileSurfacesContractOnProseHeld(t *testing.T) {
 	consumer, ticketID := proseDivergedClones(t)
-	ws, err := workspace.Resolve(consumer)
+	ws, err := workspace.Resolve(testEnv(), consumer)
 	if err != nil {
 		t.Fatalf("resolve consumer workspace: %v", err)
 	}

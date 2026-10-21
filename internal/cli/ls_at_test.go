@@ -39,7 +39,7 @@ func foreignStore(t *testing.T, wsID, prefix string) (storeDir, issueID string) 
 		t.Fatalf("WriteFile(config.json) error = %v", err)
 	}
 
-	st, err := engine.Open(ctx, engine.ReadWrite, loc.DatabasePath, wsID)
+	st, err := engine.Open(ctx, testEnv(), engine.ReadWrite, loc.DatabasePath, wsID)
 	if err != nil {
 		t.Fatalf("engine.Open() error = %v", err)
 	}
@@ -88,7 +88,7 @@ func TestLsAtLeavesStoreWritable(t *testing.T) {
 
 	ctx := context.Background()
 	loc := workspace.LocationFromStorageDir(storeDir)
-	st, err := engine.Open(ctx, engine.ReadWrite, loc.DatabasePath, "ws-foreign")
+	st, err := engine.Open(ctx, testEnv(), engine.ReadWrite, loc.DatabasePath, "ws-foreign")
 	if err != nil {
 		t.Fatalf("engine.Open() after read error = %v — read left the store un-writable", err)
 	}
@@ -154,7 +154,7 @@ func TestLsAtContentionTraceFilesUnderTargetStore(t *testing.T) {
 // Not parallel: it chdirs.
 func TestStarvedOpenTraceFilesUnderCwdWorkspace(t *testing.T) {
 	repo, runLit := initRepoForPrefixTest(t)
-	ws, err := workspace.Resolve(repo)
+	ws, err := workspace.Resolve(testEnv(), repo)
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}

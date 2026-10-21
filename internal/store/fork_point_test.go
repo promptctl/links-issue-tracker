@@ -210,7 +210,7 @@ func TestARemoteThatDropsTheForkPointsTicketsStaysUnrelated(t *testing.T) {
 	updateLocal(t, ctx, delta, ticket, storage.UpdateIssueInput{Title: strptr(deltaTitle)})
 
 	other := unrelatedDoltDir(t)
-	st, err := Open(ctx, other, "ws")
+	st, err := Open(ctx, testEnv(), other, "ws")
 	if err != nil {
 		t.Fatalf("Open(other) error = %v", err)
 	}
@@ -743,7 +743,7 @@ func TestTheReceiveRecordsTheForkPointOnTheLiveStore(t *testing.T) {
 		{FetchedHeadMoved, storage.ForkPointRecord{Remote: "origin", Branch: "master", Head: f.adopted, Outcome: storage.ForkPointRecorded}},
 		{FetchedHeadUnchanged, storage.ForkPointRecord{Remote: "origin", Branch: "master", Head: f.remoteHead, Outcome: storage.ForkPointKept}},
 	} {
-		landed, err := LandFetchedHead(ctx, f.delta, clone, remoteName(t, "origin"), "master", nil)
+		landed, err := LandFetchedHead(ctx, testEnv(), f.delta, clone, remoteName(t, "origin"), "master", nil)
 		if err != nil {
 			t.Fatalf("LandFetchedHead() error = %v", err)
 		}
@@ -776,7 +776,7 @@ func TestTheReceiveRecordsTheForkPointOnTheLiveStore(t *testing.T) {
 // its id.
 func createAndPush(t *testing.T, ctx context.Context, root, epic, title string) string {
 	t.Helper()
-	st, err := Open(ctx, root, "ws")
+	st, err := Open(ctx, testEnv(), root, "ws")
 	if err != nil {
 		t.Fatalf("Open(%s) error = %v", root, err)
 	}

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/templates"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
@@ -45,7 +46,7 @@ func hooksInstallLeaf() wsLeaf {
 	// guarantee. [LAW:one-source-of-truth]
 	return wsLeaf{fs: fs, positionals: 0, usage: hooksUsage, work: func(ctx context.Context, inv Invocation, ws workspace.Info, positional []string) error {
 
-		result, err := installHooks(ws)
+		result, err := installHooks(inv.Env, ws)
 		if err != nil {
 			return err
 		}
@@ -55,14 +56,14 @@ func hooksInstallLeaf() wsLeaf {
 	}}
 }
 
-func installHooks(ws workspace.Info) (hookInstallResult, error) {
+func installHooks(env environ.Env, ws workspace.Info) (hookInstallResult, error) {
 	hooksDir := filepath.Join(ws.GitCommonDir, "hooks")
 	hookPath := filepath.Join(hooksDir, "pre-push")
 	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
 		return hookInstallResult{}, fmt.Errorf("create hooks dir: %w", err)
 	}
 
-	section, err := renderLinksPrePushHookSection(ws.RootDir)
+	section, err := renderLinksPrePushHookSection(env, ws.RootDir)
 	if err != nil {
 		return hookInstallResult{}, err
 	}
@@ -128,8 +129,8 @@ func installHooks(ws workspace.Info) (hookInstallResult, error) {
 // an override the user wrote, or the embedded default — becomes a managed section.
 // [LAW:parse-dont-validate] Nothing downstream re-checks the shape, because
 // downstream only ever holds a managedSection.
-func renderLinksPrePushHookSection(workspaceRoot string) (managedSection, error) {
-	content, source, err := templates.LoadWithSource(templates.PrePushHookTemplateName, workspaceRoot)
+func renderLinksPrePushHookSection(env environ.Env, workspaceRoot string) (managedSection, error) {
+	content, source, err := templates.LoadWithSource(env, templates.PrePushHookTemplateName, workspaceRoot)
 	if err != nil {
 		return managedSection{}, fmt.Errorf("load pre-push hook template: %w", err)
 	}

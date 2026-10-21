@@ -126,7 +126,7 @@ func TestUnreadableConfigStillReachesTheCompactionBackstop(t *testing.T) {
 		t.Fatalf("write broken config error = %v", err)
 	}
 
-	maybeAutoSyncAfterCommand(t.Context(), app.AccessWrite, ws)
+	maybeAutoSyncAfterCommand(t.Context(), testEnv(), app.AccessWrite, ws)
 
 	if _, err := os.Stat(compactMarkerPath(ws)); err != nil {
 		t.Fatalf("the compaction backstop was never reached after a config failure (%v); a config nobody can read must cost the mirror, not the collection", err)

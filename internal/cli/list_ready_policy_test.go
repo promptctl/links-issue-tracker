@@ -36,7 +36,7 @@ func TestListReadsReadyPolicyOnlyWhenProjected(t *testing.T) {
 
 	runLS := func(args ...string) (string, error) {
 		var out bytes.Buffer
-		err := runListWithStore(h.ctx, &out, h.ap.Store, workspaceReadyPolicy(h.ap), args)
+		err := runListWithStore(h.ctx, &out, h.ap.Store, workspaceReadyPolicy(testEnv(), h.ap), args)
 		return out.String(), err
 	}
 

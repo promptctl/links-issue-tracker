@@ -40,7 +40,7 @@ func TestHelperBootstrapRacer(t *testing.T) {
 		readTheFirstDatabaseToAppear(t, ctx, root)
 		return
 	}
-	if _, _, err := LocalHasTickets(ctx, root, "test-workspace-id"); err != nil {
+	if _, _, err := LocalHasTickets(ctx, testEnv(), root, "test-workspace-id"); err != nil {
 		t.Fatalf("LocalHasTickets() error = %v", err)
 	}
 	bootstrap, err := EnsureDatabase(ctx, root, "test-workspace-id")
@@ -57,7 +57,7 @@ func TestHelperBootstrapRacer(t *testing.T) {
 func readTheFirstDatabaseToAppear(t *testing.T, ctx context.Context, root string) {
 	deadline := time.Now().Add(30 * time.Second)
 	for {
-		st, err := OpenForRead(ctx, root, "test-workspace-id")
+		st, err := OpenForRead(ctx, testEnv(), root, "test-workspace-id")
 		if errors.Is(err, ErrWorkspaceNotInitialized) {
 			if time.Now().After(deadline) {
 				t.Fatal("no database appeared before the deadline")
@@ -136,7 +136,7 @@ func TestRacingFirstOpensBuildOneDatabase(t *testing.T) {
 			t.Fatalf("round %d: %d racers report building the database, want exactly 1", round, built)
 		}
 		assertNoBootstrapStaging(t, root)
-		st, err := Open(context.Background(), root, "test-workspace-id")
+		st, err := Open(context.Background(), testEnv(), root, "test-workspace-id")
 		if err != nil {
 			t.Fatalf("round %d: Open() after the race = %v", round, err)
 		}
@@ -170,7 +170,7 @@ func TestBootstrapDiscardsADeadBuildsLeftover(t *testing.T) {
 			t.Fatalf("EnsureDatabase() over %s = %v, %v; want %v", dir, bootstrap, err, storage.BootstrapBuiltOverDeadBuild)
 		}
 		assertNoBootstrapStaging(t, root)
-		st, err := Open(context.Background(), root, "test-workspace-id")
+		st, err := Open(context.Background(), testEnv(), root, "test-workspace-id")
 		if err != nil {
 			t.Fatalf("Open() after building over %s = %v", dir, err)
 		}
@@ -206,7 +206,7 @@ func TestBootstrapBuildsIntoARootThatHoldsNoDatabase(t *testing.T) {
 			}
 		}
 		assertNoBootstrapStaging(t, root)
-		st, err := Open(ctx, root, "test-workspace-id")
+		st, err := Open(ctx, testEnv(), root, "test-workspace-id")
 		if err != nil {
 			t.Fatalf("Open(root holding %q) = %v", stray, err)
 		}

@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/promptctl/links-issue-tracker/internal/cli"
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/interrupt"
 )
 
@@ -21,6 +22,7 @@ func main() {
 	inv := cli.Invocation{
 		Dir:    cli.WorkingDirOf(os.Getwd()),
 		Args:   os.Args[1:],
+		Env:    environ.Of(os.Environ()),
 		Stdin:  os.Stdin,
 		Stdout: os.Stdout,
 		Stderr: os.Stderr,

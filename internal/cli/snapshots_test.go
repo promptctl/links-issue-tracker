@@ -370,7 +370,7 @@ func TestSnapshotsRestore_RefusesWhileWorkspaceBusy(t *testing.T) {
 
 	// Open a long-lived Store that holds the shared workspace lock — the
 	// concrete shape of an `lit ls`/`lit show` reader.
-	reader, err := engine.Open(context.Background(), engine.ReadOnly, ws.DatabasePath, ws.WorkspaceID)
+	reader, err := engine.Open(context.Background(), testEnv(), engine.ReadOnly, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
 		t.Fatalf("OpenForRead: %v", err)
 	}

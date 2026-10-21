@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
@@ -195,11 +196,11 @@ func pushFailureDecision(pushErr error, remote storage.RemoteName, receiveMerges
 // derived once, from the same two values, for every producer. The record also
 // lands on the invocation's event, one value per attempt on push.outcomes.
 // [LAW:nothing-unseen]
-func completePushAttempt(ctx context.Context, ws workspace.Info, outcome syncPushOutcome, attemptErr error) {
+func completePushAttempt(ctx context.Context, env environ.Env, ws workspace.Info, outcome syncPushOutcome, attemptErr error) {
 	rec := pushOutcomeOf(outcome, attemptErr, runningBinaryVersion())
 	telemetry.Append(ctx, "push.outcomes", rec.eventValue())
 	recordPushOutcome(ws, rec)
-	observePushOutcomeForOwner(ctx, ws, rec)
+	observePushOutcomeForOwner(ctx, env, ws, rec)
 }
 
 // eventValue is the record as one value of the event's push.outcomes list.

@@ -44,7 +44,7 @@ func TestPrintWorkspaceIdentityReportsDerivedPrefix(t *testing.T) {
 	}
 	// A derived PrefixSpec is only mintable by the workspace resolver itself —
 	// the first resolve of a fresh repo derives the prefix from the repo name.
-	ws, err := workspace.Resolve(repo)
+	ws, err := workspace.Resolve(testEnv(), repo)
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}
@@ -126,7 +126,7 @@ func TestPrintSyncFreshness(t *testing.T) {
 func TestRunDoctorReportsNoRemoteFreshness(t *testing.T) {
 	repo, _ := initBootstrapTestRepo(t)
 	ctx := context.Background()
-	ap, err := app.Open(ctx, resolvedWorkspace(t, repo), app.AccessRead)
+	ap, err := app.Open(ctx, testEnv(), resolvedWorkspace(t, repo), app.AccessRead)
 	if err != nil {
 		t.Fatalf("app.Open() error = %v", err)
 	}

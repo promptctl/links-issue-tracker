@@ -57,7 +57,7 @@ func TestBlockedColumnOnFrozenRows(t *testing.T) {
 				t.Helper()
 				var out bytes.Buffer
 				args = append([]string{"--columns", "id,blocked"}, args...)
-				if err := runListWithStore(h.ctx, &out, h.ap.Store, workspaceReadyPolicy(h.ap), args); err != nil {
+				if err := runListWithStore(h.ctx, &out, h.ap.Store, workspaceReadyPolicy(testEnv(), h.ap), args); err != nil {
 					t.Fatalf("lit ls %v: %v", args, err)
 				}
 				cells := fieldsOf(lineForID(t, out.String(), id))
@@ -87,7 +87,7 @@ func TestBlockedColumnOnFrozenRows(t *testing.T) {
 			// The rows are gone from a plain listing — otherwise the flag below
 			// proves nothing about frozen rows.
 			var plain bytes.Buffer
-			if err := runListWithStore(h.ctx, &plain, h.ap.Store, workspaceReadyPolicy(h.ap),
+			if err := runListWithStore(h.ctx, &plain, h.ap.Store, workspaceReadyPolicy(testEnv(), h.ap),
 				[]string{"--columns", "id,blocked"}); err != nil {
 				t.Fatalf("lit ls after %s: %v", freeze.spec.name, err)
 			}

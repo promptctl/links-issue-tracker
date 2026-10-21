@@ -65,7 +65,7 @@ func TestFixtureResidueCannotCrossCopies(t *testing.T) {
 
 	// Consumer 1: write every kind of state a store test plausibly leaks —
 	// an issue, a relation, a comment — then close.
-	first, err := Open(ctx, migratedDoltDir(t), "residue-writer")
+	first, err := Open(ctx, testEnv(), migratedDoltDir(t), "residue-writer")
 	if err != nil {
 		t.Fatalf("Open first copy: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestFixtureResidueCannotCrossCopies(t *testing.T) {
 
 	// Consumer 2: a later copy must be indistinguishable from a store Open
 	// just created — same schema version as a from-scratch store, zero issues.
-	second, err := Open(ctx, migratedDoltDir(t), "residue-reader")
+	second, err := Open(ctx, testEnv(), migratedDoltDir(t), "residue-reader")
 	if err != nil {
 		t.Fatalf("Open second copy: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestFixtureResidueCannotCrossCopies(t *testing.T) {
 
 	// From-scratch equivalence: the copy's schema version must match a store
 	// built by replaying the whole chain right now.
-	scratch, err := Open(ctx, filepath.Join(t.TempDir(), "dolt"), "residue-scratch")
+	scratch, err := Open(ctx, testEnv(), filepath.Join(t.TempDir(), "dolt"), "residue-scratch")
 	if err != nil {
 		t.Fatalf("Open from scratch: %v", err)
 	}
@@ -141,7 +141,7 @@ func TestFrozenTemplateRefusesDirectOpen(t *testing.T) {
 	fsperm.RequireReadOnly(t, aFrozenFile(t, templateDir))
 	before := digestDir(t, templateDir)
 
-	st, err := Open(ctx, templateDir, "freeze-probe")
+	st, err := Open(ctx, testEnv(), templateDir, "freeze-probe")
 	if err == nil {
 		_ = st.Close()
 		t.Fatal("Open on the frozen template path succeeded; the freeze no longer makes the direct-open mistake loud")
@@ -173,7 +173,7 @@ func TestTheStoreTemplatesShareNoCommit(t *testing.T) {
 // commitLog is every commit hash in the log of the store at dir.
 func commitLog(t *testing.T, ctx context.Context, dir string) map[string]bool {
 	t.Helper()
-	st, err := Open(ctx, dir, "test-workspace-id")
+	st, err := Open(ctx, testEnv(), dir, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(%s): %v", dir, err)
 	}

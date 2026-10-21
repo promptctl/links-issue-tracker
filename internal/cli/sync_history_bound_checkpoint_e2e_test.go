@@ -68,7 +68,7 @@ type boundCheckout struct {
 
 func newBoundCheckout(t *testing.T, name, dir, sink string) *boundCheckout {
 	t.Helper()
-	ws, err := workspace.Resolve(dir)
+	ws, err := workspace.Resolve(testEnv(), dir)
 	if err != nil {
 		t.Fatalf("resolve %s: %v", name, err)
 	}

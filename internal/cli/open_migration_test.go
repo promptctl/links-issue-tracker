@@ -138,7 +138,7 @@ func workspaceWhosePruneWillFail(t *testing.T) (repo string, ws workspace.Info, 
 		t.Fatalf("version.Get() error = %v", err)
 	}
 	ctx := context.Background()
-	st, err := engine.Open(ctx, engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)
+	st, err := engine.Open(ctx, testEnv(), engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
 		t.Fatalf("engine.Open() error = %v", err)
 	}
@@ -182,7 +182,7 @@ func TestAWorkspaceWhoseWriteRulesThisLitPredatesServesReadsOnly(t *testing.T) {
 	}
 	ahead := current.Schema.Max + 1
 	ctx := context.Background()
-	st, err := engine.Open(ctx, engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)
+	st, err := engine.Open(ctx, testEnv(), engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
 		t.Fatalf("engine.Open() error = %v", err)
 	}

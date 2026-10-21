@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
@@ -88,17 +89,17 @@ func lifeboatRecoverLeaf() wsLeaf {
 		if err := store.HealWorkspace(ctx, ws.DatabasePath); err != nil {
 			return err
 		}
-		dump, err := store.DumpRaw(ctx, ws.DatabasePath, ws.WorkspaceID)
+		dump, err := store.DumpRaw(ctx, inv.Env, ws.DatabasePath, ws.WorkspaceID)
 		if err != nil {
 			return err
 		}
-		outcome, err := store.Recover(ctx, ws.DatabasePath, dump, mapper, recoverAttempts)
+		outcome, err := store.Recover(ctx, inv.Env, ws.DatabasePath, dump, mapper, recoverAttempts)
 		if err != nil {
 			return err
 		}
 		switch o := outcome.(type) {
 		case store.Reconciled:
-			return promoteReconciled(ctx, inv.Stdout, ws, o)
+			return promoteReconciled(ctx, inv.Env, inv.Stdout, ws, o)
 		case store.RequiresDrop:
 			// [LAW:no-silent-failure] Discard the rebuild and refuse to commit: an
 			// unexplained drop silently loses data, so the human is notified and
@@ -114,7 +115,7 @@ func lifeboatRecoverLeaf() wsLeaf {
 	}}
 }
 
-func promoteReconciled(ctx context.Context, stdout io.Writer, ws workspace.Info, o store.Reconciled) (err error) {
+func promoteReconciled(ctx context.Context, env environ.Env, stdout io.Writer, ws workspace.Info, o store.Reconciled) (err error) {
 	// [LAW:no-silent-failure] Promotion has succeeded once PromoteCandidate
 	// returns, but a failure to remove the candidate's scratch tree leaves residue
 	// in the storage dir the operator must see; join it to the return rather than
@@ -124,7 +125,7 @@ func promoteReconciled(ctx context.Context, stdout io.Writer, ws workspace.Info,
 			err = errors.Join(err, fmt.Errorf("discard candidate scratch after promotion: %w", discErr))
 		}
 	}()
-	result, err := store.PromoteCandidate(ctx, ws.DatabasePath, o.Candidate)
+	result, err := store.PromoteCandidate(ctx, env, ws.DatabasePath, o.Candidate)
 	if err != nil {
 		return err
 	}
@@ -160,7 +161,7 @@ func lifeboatDumpLeaf() wsLeaf {
 	// leaving the chapters describing a message the binary no longer has, with
 	// the gate green. [LAW:one-source-of-truth]
 	return wsLeaf{fs: fs, positionals: 0, usage: "usage: lit lifeboat dump", work: func(ctx context.Context, inv Invocation, ws workspace.Info, positional []string) error {
-		dump, err := store.DumpRaw(ctx, ws.DatabasePath, ws.WorkspaceID)
+		dump, err := store.DumpRaw(ctx, inv.Env, ws.DatabasePath, ws.WorkspaceID)
 		if err != nil {
 			return err
 		}

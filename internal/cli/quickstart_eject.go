@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/templates"
 )
 
@@ -23,7 +24,7 @@ type ejectResult struct {
 // With force=true, every target is (over)written. Per-target write failures
 // (permission, disk, etc.) can leave partial state; each result's Changed
 // field reflects whether that specific target was successfully written.
-func ejectTemplates(selection string, force bool) ([]ejectResult, error) {
+func ejectTemplates(env environ.Env, selection string, force bool) ([]ejectResult, error) {
 	names, err := resolveEjectSelection(selection)
 	if err != nil {
 		return nil, err
@@ -32,7 +33,7 @@ func ejectTemplates(selection string, force bool) ([]ejectResult, error) {
 	plans := make([]ejectResult, 0, len(names))
 	hasConflict := false
 	for _, name := range names {
-		plan, planErr := planEject(name, force)
+		plan, planErr := planEject(env, name, force)
 		if planErr != nil {
 			return nil, planErr
 		}
@@ -52,8 +53,8 @@ func ejectTemplates(selection string, force bool) ([]ejectResult, error) {
 	return plans, nil
 }
 
-func planEject(name string, force bool) (ejectResult, error) {
-	path := templates.GlobalPath(name)
+func planEject(env environ.Env, name string, force bool) (ejectResult, error) {
+	path := templates.GlobalPath(env, name)
 	if path.IsEmpty() {
 		return ejectResult{}, fmt.Errorf("eject %s: no global config directory configured", name)
 	}

@@ -16,7 +16,7 @@ import (
 func TestResolveSyncBranchUsesDebugOverrideWhenPresent(t *testing.T) {
 	t.Setenv(debugSyncBranchEnvVar, "debug-branch")
 	ws := branchTestWorkspace(t, t.TempDir())
-	got, err := resolveSyncBranch(context.Background(), ws, remoteName(t, "origin"))
+	got, err := resolveSyncBranch(context.Background(), testEnv(), ws, remoteName(t, "origin"))
 	if err != nil {
 		t.Fatalf("resolveSyncBranch() error = %v", err)
 	}
@@ -31,7 +31,7 @@ func TestResolveSyncBranchErrorsWhenRemoteAdvertisesNoDefault(t *testing.T) {
 	t.Setenv(debugSyncBranchEnvVar, "")
 	ws := pushedRepoWithoutRemoteHead(t)
 	runGit(t, ws.RootDir, "--git-dir", remoteURL(t, ws), "symbolic-ref", "HEAD", "refs/heads/no-such-branch")
-	_, err := resolveSyncBranch(context.Background(), ws, remoteName(t, "origin"))
+	_, err := resolveSyncBranch(context.Background(), testEnv(), ws, remoteName(t, "origin"))
 	if err == nil {
 		t.Fatal("expected error when the remote advertises no default branch")
 	}
@@ -50,7 +50,7 @@ func TestResolveSyncBranchSurfacesCancellationNotMisleadingUnavailable(t *testin
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	ws := branchTestWorkspace(t, t.TempDir())
-	_, err := resolveSyncBranch(ctx, ws, remoteName(t, "origin"))
+	_, err := resolveSyncBranch(ctx, testEnv(), ws, remoteName(t, "origin"))
 	if err == nil {
 		t.Fatal("expected error when context is cancelled")
 	}
@@ -67,14 +67,14 @@ func TestResolveSyncBranchSurfacesCancellationNotMisleadingUnavailable(t *testin
 func TestKnownSyncBranchReportsWhatTheSyncVerbResolved(t *testing.T) {
 	t.Setenv(debugSyncBranchEnvVar, "")
 	ws := pushedRepoWithoutRemoteHead(t)
-	if _, err := knownSyncBranch(context.Background(), ws, remoteName(t, "origin")); err == nil {
+	if _, err := knownSyncBranch(context.Background(), testEnv(), ws, remoteName(t, "origin")); err == nil {
 		t.Fatal("knownSyncBranch() before any sync: want the not-known error")
 	}
-	synced, err := resolveSyncBranch(context.Background(), ws, remoteName(t, "origin"))
+	synced, err := resolveSyncBranch(context.Background(), testEnv(), ws, remoteName(t, "origin"))
 	if err != nil {
 		t.Fatalf("resolveSyncBranch() error = %v", err)
 	}
-	known, err := knownSyncBranch(context.Background(), ws, remoteName(t, "origin"))
+	known, err := knownSyncBranch(context.Background(), testEnv(), ws, remoteName(t, "origin"))
 	if err != nil {
 		t.Fatalf("knownSyncBranch() after sync error = %v", err)
 	}
@@ -95,7 +95,7 @@ func TestKnownSyncBranchNeverAsksTheRemote(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, err := knownSyncBranch(ctx, ws, remoteName(t, "origin"))
+	_, err := knownSyncBranch(ctx, testEnv(), ws, remoteName(t, "origin"))
 	if err == nil || !strings.Contains(err.Error(), "not known on this machine") || strings.Contains(err.Error(), "%!") {
 		t.Fatalf("knownSyncBranch() error = %v, want the not-known error", err)
 	}
@@ -113,7 +113,7 @@ func TestResolveSyncBranchSurfacesCancellationMidAsk(t *testing.T) {
 	runGit(t, repo, "remote", "add", "origin", silentRemoteURL(t))
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
-	_, err := resolveSyncBranch(ctx, branchTestWorkspace(t, repo), remoteName(t, "origin"))
+	_, err := resolveSyncBranch(ctx, testEnv(), branchTestWorkspace(t, repo), remoteName(t, "origin"))
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("error = %v, want context.DeadlineExceeded in the chain", err)
 	}
@@ -153,12 +153,12 @@ func TestKnownSyncBranchPrefersGitsRefOverAnUnreadableRecord(t *testing.T) {
 	if err := os.Mkdir(advertisedSyncBranchPath(ws, remoteName(t, "origin")), 0o755); err != nil {
 		t.Fatalf("make the record unreadable: %v", err)
 	}
-	got, err := knownSyncBranch(context.Background(), ws, remoteName(t, "origin"))
+	got, err := knownSyncBranch(context.Background(), testEnv(), ws, remoteName(t, "origin"))
 	if err != nil || got != "trunk" {
 		t.Fatalf("knownSyncBranch() = %q, %v; want trunk", got, err)
 	}
 	runGit(t, ws.RootDir, "remote", "set-head", "origin", "--delete")
-	_, err = knownSyncBranch(context.Background(), ws, remoteName(t, "origin"))
+	_, err = knownSyncBranch(context.Background(), testEnv(), ws, remoteName(t, "origin"))
 	if err == nil || !strings.Contains(err.Error(), "unreadable") {
 		t.Fatalf("knownSyncBranch() error = %v, want the unreadable record named", err)
 	}
@@ -191,7 +191,7 @@ func branchTestWorkspace(t *testing.T, root string) workspace.Info {
 
 func remoteURL(t *testing.T, ws workspace.Info) string {
 	t.Helper()
-	url, err := workspace.GitRemotes(context.Background(), ws.RootDir)
+	url, err := workspace.GitRemotes(context.Background(), testEnv(), ws.RootDir)
 	if err != nil || len(url) != 1 {
 		t.Fatalf("GitRemotes() = %v, %v; want one remote", url, err)
 	}

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
@@ -573,7 +574,7 @@ func (r *commandRegistrar) wsCmdPipeline(dispatch func(args []string) (wsLeaf, w
 		if err != nil {
 			return err
 		}
-		ws, err := acquire(r.ctx, r.inv.Dir)
+		ws, err := acquire(r.ctx, r.inv.Env, r.inv.Dir)
 		if err != nil {
 			return err
 		}
@@ -588,12 +589,12 @@ func (r *commandRegistrar) wsCmdPipeline(dispatch func(args []string) (wsLeaf, w
 // leaf's flags are parsed. [LAW:dataflow-not-control-flow] the pipeline always
 // acquires; only the value it acquires with varies, so the ordering this
 // pipeline owns stays one ordering rather than forking for one command.
-type wsAcquire = func(ctx context.Context, dir WorkingDir) (workspace.Info, error)
+type wsAcquire = func(ctx context.Context, env environ.Env, dir WorkingDir) (workspace.Info, error)
 
 // acquireFromWD is what every command but `lit init` acquires with: the
 // workspace for the working directory, with no prefix of its own to offer.
-func acquireFromWD(ctx context.Context, dir WorkingDir) (workspace.Info, error) {
-	return resolveWorkspace(ctx, dir, workspace.PrefixRequest{})
+func acquireFromWD(ctx context.Context, env environ.Env, dir WorkingDir) (workspace.Info, error) {
+	return resolveWorkspace(ctx, env, dir, workspace.PrefixRequest{})
 }
 
 // withWDAcquire lifts a dispatch that only chooses a leaf into the pipeline's

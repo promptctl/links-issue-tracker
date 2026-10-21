@@ -19,7 +19,7 @@ import (
 
 func openIssueStore(t testing.TB, ctx context.Context) *Store {
 	t.Helper()
-	st, err := Open(ctx, migratedDoltDir(t), "test-workspace-id")
+	st, err := Open(ctx, testEnv(), migratedDoltDir(t), "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -1786,7 +1786,7 @@ func TestIssueStatusClaimAndDoneAreDeterministic(t *testing.T) {
 //
 // Not parallel: it swaps the package's notice writer.
 func TestCloseTwiceRetiresTheHolderRecordOnce(t *testing.T) {
-	st, err := Open(context.Background(), filepath.Join(t.TempDir(), "dolt"), "test-workspace-id")
+	st, err := Open(context.Background(), testEnv(), filepath.Join(t.TempDir(), "dolt"), "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -1812,7 +1812,7 @@ func TestOpenDoesNotCreateStartupCommitWhenSchemaIsCurrent(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	st, err := Open(ctx, doltRoot, "test-workspace-id")
+	st, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() initial error = %v", err)
 	}
@@ -1822,7 +1822,7 @@ func TestOpenDoesNotCreateStartupCommitWhenSchemaIsCurrent(t *testing.T) {
 
 	before := observedHead(t, ctx, doltRoot, "test-workspace-id")
 
-	st, err = Open(ctx, doltRoot, "test-workspace-id")
+	st, err = Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() reopen error = %v", err)
 	}
@@ -1840,7 +1840,7 @@ func TestOpenPreservesExistingSchemaVersionMeta(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	st, err := Open(ctx, doltRoot, "test-workspace-id")
+	st, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() initial error = %v", err)
 	}
@@ -1854,7 +1854,7 @@ func TestOpenPreservesExistingSchemaVersionMeta(t *testing.T) {
 		t.Fatalf("Close() initial error = %v", err)
 	}
 
-	st, err = Open(ctx, doltRoot, "test-workspace-id")
+	st, err = Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() reopen error = %v", err)
 	}
@@ -1874,7 +1874,7 @@ func TestOpenForReadDoesNotCreateStartupCommitWhenSchemaIsCurrent(t *testing.T) 
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	st, err := Open(ctx, doltRoot, "test-workspace-id")
+	st, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() initial error = %v", err)
 	}
@@ -1884,7 +1884,7 @@ func TestOpenForReadDoesNotCreateStartupCommitWhenSchemaIsCurrent(t *testing.T) 
 
 	before := observedHead(t, ctx, doltRoot, "test-workspace-id")
 
-	readStore, err := OpenForRead(ctx, doltRoot, "test-workspace-id")
+	readStore, err := OpenForRead(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("OpenForRead() error = %v", err)
 	}
@@ -1905,7 +1905,7 @@ func TestOpenForReadDoesNotCreateDatabaseWhenMissing(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	readStore, err := OpenForRead(ctx, doltRoot, "test-workspace-id")
+	readStore, err := OpenForRead(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err == nil {
 		_ = readStore.Close()
 		t.Fatal("OpenForRead() error = nil, want missing database failure")
@@ -1940,7 +1940,7 @@ func TestOpenForReadRefusesUnreconcilableShape(t *testing.T) {
 	if _, err := EnsureDatabase(ctx, doltRoot, "test-workspace-id"); err != nil {
 		t.Fatalf("EnsureDatabase() error = %v", err)
 	}
-	seed, err := openStoreConnection(ctx, doltRoot, "test-workspace-id", engineWrite)
+	seed, err := openStoreConnection(ctx, testEnv(), doltRoot, "test-workspace-id", engineWrite)
 	if err != nil {
 		t.Fatalf("openStoreConnection() error = %v", err)
 	}
@@ -1956,7 +1956,7 @@ func TestOpenForReadRefusesUnreconcilableShape(t *testing.T) {
 		t.Fatalf("seed Close() error = %v", err)
 	}
 
-	_, err = OpenForRead(ctx, doltRoot, "test-workspace-id")
+	_, err = OpenForRead(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err == nil {
 		t.Fatal("OpenForRead() on an unreconcilable schema returned nil error; expected a specific structural error")
 	}
@@ -2183,7 +2183,7 @@ func TestMigrationIsIdempotentOnSecondOpen(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
-	first, err := Open(ctx, doltRoot, "test-workspace-id")
+	first, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
@@ -2191,7 +2191,7 @@ func TestMigrationIsIdempotentOnSecondOpen(t *testing.T) {
 		t.Fatalf("Close(first) error = %v", err)
 	}
 	before := observedHead(t, ctx, doltRoot, "test-workspace-id")
-	second, err := Open(ctx, doltRoot, "test-workspace-id")
+	second, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(second) error = %v", err)
 	}

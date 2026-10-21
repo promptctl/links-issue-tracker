@@ -26,7 +26,7 @@ func openWorkspaceForDowngrade(t *testing.T) (*Store, string) {
 	t.Helper()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
-	st, err := Open(ctx, doltRoot, "test-workspace-id")
+	st, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -504,7 +504,7 @@ func TestDowngradeSpanUnsupportedRefused(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 	ahead := stampGooseVersionAhead(t, ctx, doltRoot)
-	st, err := Open(ctx, doltRoot, "test-workspace-id")
+	st, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() on a workspace past the registry = %v, want it to open", err)
 	}
@@ -569,7 +569,7 @@ func TestDowngradeUntouchedOpen(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	first, err := Open(ctx, doltRoot, "test-workspace-id")
+	first, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(first) = %v", err)
 	}
@@ -587,7 +587,7 @@ func TestDowngradeUntouchedOpen(t *testing.T) {
 		t.Fatalf("Close(first) = %v", err)
 	}
 
-	second, err := Open(ctx, doltRoot, "test-workspace-id")
+	second, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(second) after downgrade = %v", err)
 	}
@@ -611,7 +611,7 @@ func TestDowngradeRequiresGooseManaged(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
-	st, err := Open(ctx, doltRoot, "test-workspace-id")
+	st, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() = %v", err)
 	}

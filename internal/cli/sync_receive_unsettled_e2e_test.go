@@ -55,7 +55,7 @@ func TestAReceiveThatFetchedAndKeepsStoppingReachesTheFailureSurface(t *testing.
 	runCLIInDir(t, producer, "new", "--title", "second-ticket", "--topic", "demo", "--type", "task", "--parent", epicID)
 	runCLIInDir(t, producer, "sync", "push")
 
-	ws, err := workspace.Resolve(consumer)
+	ws, err := workspace.Resolve(testEnv(), consumer)
 	if err != nil {
 		t.Fatalf("resolve consumer workspace: %v", err)
 	}
@@ -83,14 +83,14 @@ func TestAReceiveThatFetchedAndKeepsStoppingReachesTheFailureSurface(t *testing.
 			t.Fatalf("takeReceiveClone() error = %v", err)
 		}
 		defer removeReceiveClone(clone)
-		fetch, err := fetchIntoClone(ctx, ws, clone)
+		fetch, err := fetchIntoClone(ctx, testEnv(), ws, clone)
 		if err != nil || fetch.fetchErr != nil {
 			t.Fatalf("fetchIntoClone() = %+v, %v; want a fetch that worked", fetch, err)
 		}
 		unblock := blockTheLanding(t, ws)
-		outcome := landAndRecord(ctx, ws, clone, fetch, remoteAdvertisement{})
+		outcome := landAndRecord(ctx, testEnv(), ws, clone, fetch, remoteAdvertisement{})
 		unblock()
-		surfaceReceiveOutcome(ctx, ws, outcome, time.Now())
+		surfaceReceiveOutcome(ctx, testEnv(), ws, outcome, time.Now())
 		return oneOutcome(writtenEvent(t, recorder.Finish(invocationEnd(time.Now(), nil, nil))).Occurrences["receive.outcomes"])
 	}
 	receive := func() map[string]any {
@@ -283,7 +283,7 @@ func unsettlingCheckout(t *testing.T) (context.Context, workspace.Info, liveClon
 	runGit(t, dir, "push", "origin", "HEAD")
 	runCLIInDir(t, dir, "init", "--skip-hooks", "--skip-agents")
 	runCLIInDir(t, dir, "sync", "push", "--set-upstream")
-	ws, err := workspace.Resolve(dir)
+	ws, err := workspace.Resolve(testEnv(), dir)
 	if err != nil {
 		t.Fatalf("resolve workspace: %v", err)
 	}
@@ -293,7 +293,7 @@ func unsettlingCheckout(t *testing.T) (context.Context, workspace.Info, liveClon
 		t.Fatalf("takeReceiveClone() error = %v", err)
 	}
 	t.Cleanup(func() { removeReceiveClone(clone) })
-	fetch, err := fetchIntoClone(ctx, ws, clone)
+	fetch, err := fetchIntoClone(ctx, testEnv(), ws, clone)
 	if err != nil || fetch.fetchErr != nil || fetch.target.skip != syncTargetReady {
 		t.Fatalf("fetchIntoClone() = %+v, %v; want a ready target fetched cleanly", fetch, err)
 	}
@@ -306,7 +306,7 @@ func unsettlingCheckout(t *testing.T) (context.Context, workspace.Info, liveClon
 func TestTheMirrorsReceiveStartsNoRun(t *testing.T) {
 	ctx, ws, clone, fetch := unsettlingCheckout(t)
 	blockTheLanding(t, ws)
-	err := receivePushedReRoot(ctx, ws, clone, pushedHead{remote: fetch.target.remote, branch: fetch.target.branch})
+	err := receivePushedReRoot(ctx, testEnv(), ws, clone, pushedHead{remote: fetch.target.remote, branch: fetch.target.branch})
 	if err == nil || !strings.Contains(err.Error(), "stopped at land") {
 		t.Fatalf("receivePushedReRoot() error = %v; want the landing's stop", err)
 	}
@@ -326,7 +326,7 @@ func TestAMirrorWhoseLiveStoreReceiveFailsSaysWhere(t *testing.T) {
 	recorder := telemetry.Begin(telemetry.Event{})
 	ctx := telemetry.With(context.Background(), recorder)
 	landed := pushedHead{remote: fetch.target.remote, branch: fetch.target.branch, head: "pushed", followedReRoot: true}
-	liveStoreLearns(ctx, io.Discard, ws, clone, landed)
+	liveStoreLearns(ctx, testEnv(), io.Discard, ws, clone, landed)
 	ev := writtenEvent(t, recorder.Finish(invocationEnd(time.Now(), nil, nil)))
 	outcomes := ev.Occurrences["receive.outcomes"]
 	if len(outcomes) != 1 {
@@ -351,7 +351,7 @@ func TestAMirrorWhoseLiveStoreReceiveFailsSaysWhere(t *testing.T) {
 func TestAReceiveWhoseOpenFailsHasNothingToClose(t *testing.T) {
 	ctx, ws, clone, fetch := unsettlingCheckout(t)
 	ws.WorkspaceID = "" // the open refuses a store with no workspace identity; the land never reads it
-	outcome, closeLive := performSyncReceive(ctx, ws, clone, fetch, leaveUnsettledRun(ws.DatabasePath))
+	outcome, closeLive := performSyncReceive(ctx, testEnv(), ws, clone, fetch, leaveUnsettledRun(ws.DatabasePath))
 	if outcome.stopped != receiveStepOpen {
 		t.Fatalf("receive stopped at %q (err %v); want the open", outcome.stopped, outcome.err)
 	}

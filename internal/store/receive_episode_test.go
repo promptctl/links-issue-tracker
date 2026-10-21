@@ -61,7 +61,7 @@ func TestASettleRecordsThatItSettled(t *testing.T) {
 		f.commit(peer, "peer-ticket")
 		f.push(peer, false)
 		clone := f.fetchedClone()
-		if _, err := LandFetchedHead(f.ctx, f.live, clone, remoteName(t, "origin"), "master", nil); err != nil {
+		if _, err := LandFetchedHead(f.ctx, testEnv(), f.live, clone, remoteName(t, "origin"), "master", nil); err != nil {
 			t.Fatalf("LandFetchedHead() error = %v", err)
 		}
 		if err := os.RemoveAll(filepath.Dir(clone.root)); err != nil {

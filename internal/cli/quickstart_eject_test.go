@@ -12,7 +12,7 @@ func TestEjectTemplatesWritesAllByDefault(t *testing.T) {
 	xdgRoot := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", xdgRoot)
 
-	results, err := ejectTemplates("all", false)
+	results, err := ejectTemplates(testEnv(), "all", false)
 	if err != nil {
 		t.Fatalf("ejectTemplates() error = %v", err)
 	}
@@ -37,7 +37,7 @@ func TestEjectTemplatesAcceptsShortName(t *testing.T) {
 	xdgRoot := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", xdgRoot)
 
-	results, err := ejectTemplates("quickstart", false)
+	results, err := ejectTemplates(testEnv(), "quickstart", false)
 	if err != nil {
 		t.Fatalf("ejectTemplates() error = %v", err)
 	}
@@ -69,7 +69,7 @@ func TestEjectTemplatesIsAtomicOnConflict(t *testing.T) {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	results, err := ejectTemplates("all", false)
+	results, err := ejectTemplates(testEnv(), "all", false)
 	if err != nil {
 		t.Fatalf("ejectTemplates() returned error during plan phase: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestEjectTemplatesForceOverwrites(t *testing.T) {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	if _, err := ejectTemplates("quickstart", true); err != nil {
+	if _, err := ejectTemplates(testEnv(), "quickstart", true); err != nil {
 		t.Fatalf("ejectTemplates(force) error = %v", err)
 	}
 	content, err := os.ReadFile(quickstartPath)
@@ -131,7 +131,7 @@ func TestEjectTemplatesForceOverwrites(t *testing.T) {
 func TestEjectTemplatesRejectsUnknownAlias(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 
-	_, err := ejectTemplates("bogus", false)
+	_, err := ejectTemplates(testEnv(), "bogus", false)
 	if err == nil {
 		t.Fatal("ejectTemplates(bogus) expected error, got nil")
 	}

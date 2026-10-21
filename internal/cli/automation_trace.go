@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/trace"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
@@ -48,16 +49,16 @@ func automationTraceDir(ws workspace.Info) string {
 	return trace.Dir(ws.StorageDir, automationTraceKind)
 }
 
-func readAutomationContextFromEnv() automationContext {
+func readAutomationContextFromEnv(env environ.Env) automationContext {
 	return automationContext{
-		Trigger:      strings.TrimSpace(os.Getenv(automationTriggerEnvVar)),
-		Reason:       strings.TrimSpace(os.Getenv(automationReasonEnvVar)),
-		TraceRefFile: strings.TrimSpace(os.Getenv(automationTraceRefFileEnvVar)),
+		Trigger:      strings.TrimSpace(env.Get(automationTriggerEnvVar)),
+		Reason:       strings.TrimSpace(env.Get(automationReasonEnvVar)),
+		TraceRefFile: strings.TrimSpace(env.Get(automationTraceRefFileEnvVar)),
 	}
 }
 
-func maybeRecordAutomatedCommandTrace(ws workspace.Info, command string, sideEffect string, status string, reason string, metadata map[string]string) (*automationTraceRef, error) {
-	ctx := readAutomationContextFromEnv()
+func maybeRecordAutomatedCommandTrace(env environ.Env, ws workspace.Info, command string, sideEffect string, status string, reason string, metadata map[string]string) (*automationTraceRef, error) {
+	ctx := readAutomationContextFromEnv(env)
 	if ctx.Trigger == "" {
 		return nil, nil
 	}

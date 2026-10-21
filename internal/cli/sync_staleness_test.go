@@ -237,7 +237,7 @@ func TestMarkFetchSuccessBackdatedMarkerIsStale(t *testing.T) {
 func TestPrintSyncStalenessWarningResolvesAgainstRealWorkspace(t *testing.T) {
 	_, ws := initBootstrapTestRepo(t)
 	ctx := context.Background()
-	st, err := engine.Open(ctx, engine.Sync, ws.DatabasePath, ws.WorkspaceID)
+	st, err := engine.Open(ctx, testEnv(), engine.Sync, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
 		t.Fatalf("engine.Open() error = %v", err)
 	}
@@ -256,7 +256,7 @@ func TestPrintSyncStalenessWarningResolvesAgainstRealWorkspace(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := printStalenessWarning(ctx, &buf, ws, st, time.Now()); err != nil {
+	if err := printStalenessWarning(ctx, testEnv(), &buf, ws, st, time.Now()); err != nil {
 		t.Fatalf("printStalenessWarning() error = %v", err)
 	}
 	if buf.Len() != 0 {

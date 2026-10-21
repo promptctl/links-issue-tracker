@@ -65,22 +65,22 @@ func TestAPushRecordsTheAdvertisementItLeft(t *testing.T) {
 	runCLIInDir(t, producer, "sync", "pull")
 	runCLIInDir(t, producer, "new", "--title", "pushed-by-the-peer", "--topic", "demo", "--type", "task", "--parent", epicID)
 	runCLIInDir(t, producer, "sync", "push")
-	resolved, err := workspace.Resolve(consumer)
+	resolved, err := workspace.Resolve(testEnv(), consumer)
 	if err != nil {
 		t.Fatalf("resolve consumer workspace: %v", err)
 	}
-	session, closeStore, err := openSyncSession(underInvocation(context.Background()), resolved)
+	session, closeStore, err := openSyncSession(underInvocation(context.Background()), testEnv(), resolved)
 	if err != nil {
 		t.Fatalf("open consumer sync session: %v", err)
 	}
-	gitRemotes, err := workspace.GitRemotes(context.Background(), resolved.RootDir)
+	gitRemotes, err := workspace.GitRemotes(context.Background(), testEnv(), resolved.RootDir)
 	if err != nil {
 		t.Fatalf("read consumer git remotes: %v", err)
 	}
-	proven, unproven := provePushedAdvertisement(context.Background(), session.syncer, resolved, remoteName(t, "origin"), gitRemotes)
+	proven, unproven := provePushedAdvertisement(context.Background(), testEnv(), session.syncer, resolved, remoteName(t, "origin"), gitRemotes)
 	// A push to a remote the receive never asks proves nothing either: its
 	// record would replace one the receive can match with one it cannot.
-	_, otherRemote := provePushedAdvertisement(context.Background(), session.syncer, resolved, remoteName(t, "backup"), gitRemotes)
+	_, otherRemote := provePushedAdvertisement(context.Background(), testEnv(), session.syncer, resolved, remoteName(t, "backup"), gitRemotes)
 	if closeErr := closeStore(); closeErr != nil {
 		t.Fatalf("close consumer sync session: %v", closeErr)
 	}
@@ -113,12 +113,12 @@ func TestAPushRecordsTheAdvertisementItLeft(t *testing.T) {
 		superseded error
 		wantProven bool
 	}{{nil, true}, {errors.New("rejected, remote already carries HEAD"), false}} {
-		session, closeStore, err := openSyncSession(underInvocation(context.Background()), resolved)
+		session, closeStore, err := openSyncSession(underInvocation(context.Background()), testEnv(), resolved)
 		if err != nil {
 			t.Fatalf("open consumer sync session: %v", err)
 		}
 		ctx := underInvocation(context.Background())
-		outcome, err := performSyncPush(ctx, ctx, session, resolved, "", false, false, pushStep(tc.superseded))
+		outcome, err := performSyncPush(ctx, ctx, testEnv(), session, resolved, "", false, false, pushStep(tc.superseded))
 		if closeErr := closeStore(); closeErr != nil {
 			t.Fatalf("close consumer sync session: %v", closeErr)
 		}

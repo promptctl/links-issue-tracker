@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -31,14 +32,20 @@ import (
 // opened through the git mirror they all read and write. What keeps a peer's
 // write to the remote safe is not the lock but the remote's own manifest,
 // which takes each of the GC's writes only over the view it read
-// (collectRemoteView). The scratch store goes however the GC ended.
+// (collectRemoteView). The scratch store goes however the GC ended. It is
+// made beside the dolt root, as Recover makes its candidate, rather than in
+// the system temp directory, which only the process's TMPDIR names. Nothing
+// there is cleaned up for it, so it has one name, held under the commit lock
+// by one GC at a time, and each GC starts by removing the one a killed GC
+// left: an interrupted GC leaves at most one behind, until the next.
 func (s *Store) collectRemote(ctx context.Context, remote storage.RemoteName, branch string, head string) (gc storage.RemoteGC, err error) {
-	scratch, err := os.MkdirTemp("", "lit-remote-gc-")
-	if err != nil {
-		return gc, fmt.Errorf("create the remote GC's scratch store: %w", err)
-	}
-	defer func() { err = errors.Join(err, os.RemoveAll(scratch)) }()
-	err = s.withCommitLock(ctx, func(ctx context.Context) error {
+	var leftover bool
+	err = s.withCommitLock(ctx, func(ctx context.Context) (err error) {
+		scratch := filepath.Join(workspaceStorageDir(s.doltRootDir), remoteGCScratchName)
+		if leftover, err = emptyDir(scratch); err != nil {
+			return fmt.Errorf("create the remote GC's scratch store: %w", err)
+		}
+		defer func() { err = errors.Join(err, os.RemoveAll(scratch)) }()
 		remoteDB, err := s.openRemoteDB(ctx, remote)
 		if err != nil {
 			return err
@@ -47,7 +54,24 @@ func (s *Store) collectRemote(ctx context.Context, remote storage.RemoteName, br
 		gc, gcErr = collectRemoteView(ctx, remoteDB, scratch, branch, head)
 		return errors.Join(gcErr, remoteDB.Close())
 	})
+	gc.LeftoverScratch = leftover
 	return gc, err
+}
+
+// remoteGCScratchName is the remote GC's scratch store, beside the dolt root.
+const remoteGCScratchName = "lit-remote-gc"
+
+// emptyDir makes dir an empty directory, reporting whether one was there
+// already.
+func emptyDir(dir string) (existed bool, err error) {
+	_, statErr := os.Lstat(dir)
+	if statErr != nil && !errors.Is(statErr, fs.ErrNotExist) {
+		return false, statErr
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		return false, err
+	}
+	return statErr == nil, os.Mkdir(dir, 0o700)
 }
 
 // collectRemoteView is the remote's GC over the view remoteDB read when it

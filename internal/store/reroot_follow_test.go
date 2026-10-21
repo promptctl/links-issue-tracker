@@ -49,7 +49,7 @@ func newReRootedRemote(t *testing.T, ctx context.Context, concurrent bool) reRoo
 	remoteURL := "file://" + filepath.Join(t.TempDir(), "remote")
 	r := reRootedRemote{alpha: migratedDoltDir(t), bravo: migratedDoltDir(t), remoteURL: remoteURL}
 	epic := seedReconcileRemote(t, ctx, r.alpha, remoteURL)
-	st, err := Open(ctx, r.alpha, "ws")
+	st, err := Open(ctx, testEnv(), r.alpha, "ws")
 	if err != nil {
 		t.Fatalf("Open(alpha) error = %v", err)
 	}
@@ -615,7 +615,7 @@ func TestSyncFollowsARemoteReRootedAboveItsOwnCut(t *testing.T) {
 	remoteURL := "file://" + filepath.Join(t.TempDir(), "remote")
 	alpha, bravo := migratedDoltDir(t), migratedDoltDir(t)
 	epic := seedReconcileRemote(t, ctx, alpha, remoteURL)
-	st, err := Open(ctx, alpha, "ws")
+	st, err := Open(ctx, testEnv(), alpha, "ws")
 	if err != nil {
 		t.Fatalf("Open(alpha) error = %v", err)
 	}

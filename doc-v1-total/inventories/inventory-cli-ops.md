@@ -13,7 +13,7 @@ data — described as assets, not as documentation of behavior).
 ### 0.1 Entrypoint
 
 - `cmd/lit/main.go` wraps `context.Background()` in `interrupt.Guard(ctx, interrupt.DefaultGrace)` — a SIGINT/SIGTERM cancels the command context and escalates to a hard exit if in-flight work ignores the cancel.
-- `cmd/lit/main.go` builds a `cli.Invocation` from `os.Getwd`, `os.Args[1:]` and the three standard streams and runs `cli.Run(ctx, inv)`; on error exits with `cli.WriteCommandError(os.Stderr, err)`.
+- `cmd/lit/main.go` builds a `cli.Invocation` from `os.Getwd`, `os.Args[1:]`, `environ.Of(os.Environ())` and the three standard streams and runs `cli.Run(ctx, inv)`; on error exits with `cli.WriteCommandError(os.Stderr, err)`.
 - `internal/cli/cli.go` `Run`: normalizes global args (`parseGlobalArgs`), builds the cobra root, `SilenceErrors`/`SilenceUsage` true; `pflag.ErrHelp` and `errHelpHandled` are swallowed to a nil error (exit 0).
 - `internal/cli/cli.go` root command `lit`: `Long: "Agent-native issue tracker"`. Bare `lit` with no args prints `renderQuickstartGuidance(ws.RootDir)` (identical to `lit quickstart`) — `cli.go`. Outside a git repo (`OutsideWorkspaceError`) it prints cobra help instead (`cli.go`). A non-empty first arg that is not a registered command returns `UnknownCommandError`, with or without a help flag beside it (`cli.go`).
 - `internal/cli/cli.go` root flag errors are wrapped as `UsageError` (exit 2).
@@ -418,14 +418,14 @@ Config defaults (`internal/config/config.go`): `sync.cadence = "on-change"`, `sy
 - Hidden subcommand name `__mirror-bg` (`sync_bg.go`); registered hidden in `syncFamily` (`sync.go`), absent from usage and completion.
 - `spawnBackgroundMirror(ws, parentPID)` — `sync_bg.go`:
   - `os.Executable()`; failure → `resolve lit binary: %w`.
-  - `exec.Command(self, "sync", "__mirror-bg", "--parent-pid", <pid>)`, `cmd.Dir = ws.RootDir`, `cmd.Stdin = nil`.
+  - `env.Command(ws.RootDir, self, "sync", "__mirror-bg", "--parent-pid", <pid>)`, which runs the worker in `ws.RootDir` in `env`, `mirrorEnv(inv.Env)`; `cmd.Stdin = nil`.
   - Log sink `<StorageDir>/mirror.log` opened `O_CREATE|O_WRONLY|O_APPEND, 0o644` (`sync_bg.go`); on failure prints `lit: on-change mirror log unavailable (<err>); worker output will be discarded` and spawns anyway with discarded streams (`sync_bg.go`).
   - `cmd.SysProcAttr = detachSysProcAttr()` — POSIX `&syscall.SysProcAttr{Setsid: true}` (`detach_posix.go`); Windows returns an empty struct, and the file notes lit has no Windows build because embedded Dolt does not compile there (`detach_windows.go`).
   - Before building the command: `holdWorkerLock(ws.StorageDir)` opens `<StorageDir>/.links-detached-workers.lock` `O_CREATE|O_RDWR, 0o600` and takes `flock(LOCK_SH)`; an open failure returns `open the detached-worker lock: %w`, a lock failure `hold the detached-worker lock: %w`, and either fails the spawn. The hold is `cmd.ExtraFiles`, the worker's fd 3 (`worker_lock_posix.go`); on Windows `holdWorkerLock` returns no files (`worker_lock_windows.go`).
 - `detachedWorkerLeaf(subcommand, parentPIDUsage, work)` — `sync_bg.go`: the leaf both worker subcommands are built from. It declares `--parent-pid` (default `0`) and, before calling `work`, `keepWorkerHoldFromChildren()`: `syscall.CloseOnExec(3)` on POSIX, nothing on Windows.
-  - `cmd.Env = mirrorEnv()`; then `cmd.Start()`; the parent's log fd and its copy of each hold are closed after start (`sync_bg.go`).
+  - `cmd.Start()`; the parent's log fd and its copy of each hold are closed after start (`sync_bg.go`).
 - `JoinDetachedWorkers(storageDir, patience) error` — exported, POSIX only (`worker_lock_posix.go`): no lock file → `nil`; stat error → `find the detached-worker lock: %w`; else `filelock.Acquire` exclusive, `patience/20ms + 1` attempts 20ms apart; an Acquire error → `join detached workers: %w`; contention → `detached workers still hold <lock path> after <patience>`; acquired → the release's error.
-- `mirrorEnv()` — `sync_bg.go`: copies the parent env with `LNKS_AUTOMATION_TRIGGER=`, `LNKS_AUTOMATION_REASON=`, `LNKS_AUTOMATION_TRACE_REF_FILE=` prefixes stripped, then appends `LNKS_AUTOMATION_TRIGGER=on-change` and `LNKS_AUTOMATION_REASON=on-change cadence mirrored after a mutating command`. The mirror carries no trace-ref file.
+- `mirrorEnv(parent)` — `sync_bg.go`: the invocation's env with `LNKS_AUTOMATION_TRIGGER=`, `LNKS_AUTOMATION_REASON=`, `LNKS_AUTOMATION_TRACE_REF_FILE=` prefixes stripped, then appends `LNKS_AUTOMATION_TRIGGER=on-change` and `LNKS_AUTOMATION_REASON=on-change cadence mirrored after a mutating command`. The mirror carries no trace-ref file.
 - Timing constants (`sync_bg.go`):
   - `parentPostSpawnTail = compactTimeout(45s)`.
   - `workerParentWaitMargin = 30 * time.Second`.
@@ -465,7 +465,7 @@ Flag parse output is `io.Discard` (`sync_bg.go`).
 1. Debounce on `<StorageDir>/receive.last` mtime (`sync_cadence.go`); not due → return.
 2. Mark the attempt BEFORE any work; failure → stderr `lit: automatic receive debounce marker not written: <err>` (`sync_receive.go`).
 3. `workspaceHasGitRemote` error → `recordReceiveError("check git remotes: %w")`; no remote → silent return.
-4. `spawnDetachedWorker(ws, "__receive-bg", "receive.log", receiveEnv(), os.Getpid())`; failure → stderr `lit: automatic receive not started: <err>` and `recordReceiveError("start the background receive: %w")`. `receiveEnv()` is the parent env with `LNKS_AUTOMATION_TRACE_REF_FILE` stripped.
+4. `spawnDetachedWorker(ws, "__receive-bg", "receive.log", receiveEnv(inv.Env), os.Getpid())`; failure → stderr `lit: automatic receive not started: <err>` and `recordReceiveError("start the background receive: %w")`. `receiveEnv(parent)` is the invocation's env with `LNKS_AUTOMATION_TRACE_REF_FILE` stripped.
 
 `backgroundReceiveLeaf` — `sync_receive.go`, the worker (`--parent-pid`, default `0`): writes `<RFC3339> receive start pid=<pid> deadline=15s`; runs `receiveWhenQuiet`; then writes `<RFC3339> receive end pid=<pid> mirror_wait=<d> elapsed=<d>`. Always returns nil.
 
@@ -649,7 +649,7 @@ The block has no trailing newline after `</agent-instructions>` (`sync_failure.g
   4. Empty `sync.owner_notify_cmd` → return.
   5. Hook failure → stderr `lit: owner notification hook failed (retries on the next detection): <err>` and a sync trace `owner-notify`/`<kind>`/status `error`; **marker is not written**, so the next detection retries.
   6. Hook success → write the marker atomically (`lit: owner-notify marker not written: <err>` on failure), then a sync trace `owner-notify`/`<kind>`/status `ok` with reason = the event summary. Metadata `{remote, sync_branch}`.
-- `runOwnerNotifyHook` (`owner_notify.go`): `sh -c <hook>` via `exec.CommandContext` with a 10s deadline, `cmd.WaitDelay = 1s`, `cmd.Dir = repoRoot`, env = `os.Environ()` plus `LIT_NOTIFY_KIND`, `LIT_NOTIFY_SUMMARY`, `LIT_NOTIFY_REMOTE`, `LIT_NOTIFY_BRANCH`, `LIT_NOTIFY_REPO`. `CombinedOutput`; failure returns `<err>: <trimmed output>` when output is non-empty.
+- `runOwnerNotifyHook` (`owner_notify.go`): `sh -c <hook>` in `repoRoot` via the invocation env's `CommandContext` with a 10s deadline, `cmd.WaitDelay = 1s`, env = the invocation's plus `LIT_NOTIFY_KIND`, `LIT_NOTIFY_SUMMARY`, `LIT_NOTIFY_REMOTE`, `LIT_NOTIFY_BRANCH`, `LIT_NOTIFY_REPO`. `CombinedOutput`; failure returns `<err>: <trimmed output>` when output is non-empty.
 - `clearOwnerNotify(ws, kinds...)` (`owner_notify.go`): removes each kind's marker; non-ENOENT failures print `lit: owner-notify marker not cleared: <err>`.
 - `observePushOutcomeForOwner` (`owner_notify.go`): decision `pushed` → clear the `push_failed` marker; `failed()` → notify with summary `a lit sync push to <target> failed: <reason> — local ticket changes are not reaching the shared backlog.` `canceled`/`workspace_busy`/skip decisions reach neither arm.
 - `pushTarget` (`owner_notify.go`): `the configured remote` when the remote is empty; the remote alone when the branch is empty; else `remote/branch`.

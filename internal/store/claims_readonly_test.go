@@ -76,7 +76,7 @@ func deriveClaims(t *testing.T, ctx context.Context, st *Store) claims.Standings
 func TestDerivingClaimsWritesNothing(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, migratedDoltDir(t), "test-workspace-id")
+	st, err := Open(ctx, testEnv(), migratedDoltDir(t), "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -108,7 +108,7 @@ func TestDerivingClaimsWritesNothing(t *testing.T) {
 func TestDerivedClaimSurvivesARoundTripThroughTheDatabase(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, migratedDoltDir(t), "test-workspace-id")
+	st, err := Open(ctx, testEnv(), migratedDoltDir(t), "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}

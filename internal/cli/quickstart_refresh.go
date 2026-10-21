@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/config"
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/pathspec"
 	"github.com/promptctl/links-issue-tracker/internal/templates"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
@@ -26,17 +27,17 @@ type quickstartRefreshReport struct {
 	Quickstart []quickstartRefreshItem `json:"quickstart"`
 }
 
-func refreshQuickstartManagedAssets(ws workspace.Info) (quickstartRefreshReport, error) {
+func refreshQuickstartManagedAssets(env environ.Env, ws workspace.Info) (quickstartRefreshReport, error) {
 	// [LAW:single-enforcer] Quickstart refresh reuses the existing managed writers so AGENTS, CLAUDE, and hook updates stay owned at one boundary.
-	hookResult, hookErr := installHooks(ws)
+	hookResult, hookErr := installHooks(env, ws)
 	if hookErr != nil {
 		return quickstartRefreshReport{}, hookErr
 	}
-	agentsResult, claudeResult, agentsErr := ensureLinksAgentFiles(ws.RootDir)
+	agentsResult, claudeResult, agentsErr := ensureLinksAgentFiles(env, ws.RootDir)
 	if agentsErr != nil {
 		return quickstartRefreshReport{}, agentsErr
 	}
-	quickstartItems, qsErr := refreshQuickstartTemplates(ws.RootDir)
+	quickstartItems, qsErr := refreshQuickstartTemplates(env, ws.RootDir)
 	if qsErr != nil {
 		return quickstartRefreshReport{}, qsErr
 	}
@@ -66,12 +67,12 @@ func refreshQuickstartManagedAssets(ws workspace.Info) (quickstartRefreshReport,
 // "skipped" with reason "customized" and the override path is surfaced so the
 // user can decide whether it is genuinely customized or a stale verbatim copy
 // worth deleting / re-ejecting.
-func refreshQuickstartTemplates(workspaceRoot string) ([]quickstartRefreshItem, error) {
+func refreshQuickstartTemplates(env environ.Env, workspaceRoot string) ([]quickstartRefreshItem, error) {
 	// [LAW:one-type-per-behavior] Every guidance template gets the identical inspection; the set derives from the topic table.
 	names := quickstartGuidanceTemplateNames()
 	items := make([]quickstartRefreshItem, 0, len(names))
 	for _, name := range names {
-		item, err := refreshQuickstartTemplate(workspaceRoot, name)
+		item, err := refreshQuickstartTemplate(env, workspaceRoot, name)
 		if err != nil {
 			return nil, err
 		}
@@ -80,12 +81,12 @@ func refreshQuickstartTemplates(workspaceRoot string) ([]quickstartRefreshItem, 
 	return items, nil
 }
 
-func refreshQuickstartTemplate(workspaceRoot string, name string) (quickstartRefreshItem, error) {
+func refreshQuickstartTemplate(env environ.Env, workspaceRoot string, name string) (quickstartRefreshItem, error) {
 	embedded, err := templates.EmbeddedDefault(name)
 	if err != nil {
 		return quickstartRefreshItem{}, fmt.Errorf("refresh %s: read embedded default: %w", name, err)
 	}
-	path, content, err := templates.ActiveOverride(workspaceRoot, name)
+	path, content, err := templates.ActiveOverride(env, workspaceRoot, name)
 	if err != nil {
 		return quickstartRefreshItem{}, fmt.Errorf("refresh %s: read override: %w", name, err)
 	}
@@ -184,12 +185,12 @@ const soilSection = `
 ## Soil
 ` + agentInstructionsOpen + `When you notice how well — or poorly — this loop was *prepared* for you by what came before (the ticket's clarity, a doc's currency, a skill's presence, a deposit left), record it inline in chat as ` + "`" + `[SOIL:<judgement>]` + "`" + ` in your own words. This is about inherited preparation conditions, not transient in-the-moment friction or your own ongoing thinking — soil, not wind. Don't investigate; just express the judgement and continue. Chat only — never commit messages or code. The corpus is the only signal we have that garden-tending is doing anything; trivially cheap and disproportionately effective.` + agentInstructionsClose
 
-func renderQuickstartGuidance(workspaceRoot string) (string, error) {
-	tmpl, err := templates.Load(templates.QuickstartTemplateName, workspaceRoot)
+func renderQuickstartGuidance(env environ.Env, workspaceRoot string) (string, error) {
+	tmpl, err := templates.Load(env, templates.QuickstartTemplateName, workspaceRoot)
 	if err != nil {
 		return "", fmt.Errorf("load quickstart guidance: %w", err)
 	}
-	cfg, err := config.Load(pathspec.New(workspaceRoot))
+	cfg, err := config.Load(env, pathspec.New(workspaceRoot))
 	if err != nil {
 		return "", fmt.Errorf("load config for quickstart guidance: %w", err)
 	}
@@ -203,8 +204,8 @@ func renderQuickstartGuidance(workspaceRoot string) (string, error) {
 // renderQuickstartTopic loads one topic guidance template (project > global > embedded).
 // Topic output never carries the soil section: SOIL is a session-wide convention
 // surfaced once at the session-start router read, not per-task guidance.
-func renderQuickstartTopic(workspaceRoot string, name string) (string, error) {
-	tmpl, err := templates.Load(name, workspaceRoot)
+func renderQuickstartTopic(env environ.Env, workspaceRoot string, name string) (string, error) {
+	tmpl, err := templates.Load(env, name, workspaceRoot)
 	if err != nil {
 		return "", fmt.Errorf("load quickstart topic guidance: %w", err)
 	}

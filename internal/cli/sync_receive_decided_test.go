@@ -17,7 +17,7 @@ func receiveEvent(t *testing.T, ws workspace.Info) (telemetry.Event, map[string]
 	t.Helper()
 	recorder := telemetry.Begin(telemetry.Event{})
 	ctx := telemetry.With(context.Background(), recorder)
-	receiveOnce(ctx, ws)
+	receiveOnce(ctx, testEnv(), ws)
 	ev := writtenEvent(t, recorder.Finish(invocationEnd(time.Now(), nil, nil)))
 	outcomes := ev.Occurrences["receive.outcomes"]
 	if len(outcomes) != 1 {
@@ -96,11 +96,11 @@ func TestAReceiveThatEndsBeforeItFetchesSaysWhy(t *testing.T) {
 		}, receiveDecisionLockHeld, "origin"},
 		{"the remote unmoved since the last receive", func(t *testing.T) workspace.Info {
 			ws := receiveWorkspace(t, []string{"refs/dolt/data"}, "origin")
-			gitRemotes, err := workspace.GitRemotes(context.Background(), ws.RootDir)
+			gitRemotes, err := workspace.GitRemotes(context.Background(), testEnv(), ws.RootDir)
 			if err != nil {
 				t.Fatal(err)
 			}
-			observed, err := advertise(context.Background(), ws, remoteName(t, "origin"), gitRemotes)
+			observed, err := advertise(context.Background(), testEnv(), ws, remoteName(t, "origin"), gitRemotes)
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -101,7 +101,7 @@ func evidenceIn(t testing.TB, ctx context.Context, ap *app.App) claims.Evidence 
 
 func (h readyTestHarness) gather() ([]annotation.AnnotatedIssue, map[string]storage.IssueRelations, map[string]storage.IssueRelations) {
 	h.t.Helper()
-	gathered, err := gatherWorkableAnnotated(h.ctx, h.ap, workableFilter{})
+	gathered, err := gatherWorkableAnnotated(h.ctx, testEnv(), h.ap, workableFilter{})
 	if err != nil {
 		h.t.Fatalf("gatherWorkableAnnotated error = %v", err)
 	}

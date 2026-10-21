@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
@@ -76,7 +77,7 @@ func generate(bin litBinary, parent string, sz size, env []string, run stepRunne
 			return generatedStore{}, err
 		}
 	}
-	info, err := workspace.Resolve(root)
+	info, err := workspace.Resolve(environ.Of(env), root)
 	if err != nil {
 		return generatedStore{}, fmt.Errorf("resolving generated workspace %s: %w", root, err)
 	}

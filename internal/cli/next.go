@@ -60,16 +60,16 @@ func nextLeaf() appLeaf {
 		}
 		// [LAW:single-enforcer] Same staleness warning, same position, as every
 		// other ordinary read command.
-		if err := printStalenessWarning(ctx, inv.Stdout, ap.Workspace, ap.Store, time.Now()); err != nil {
+		if err := printStalenessWarning(ctx, inv.Env, inv.Stdout, ap.Workspace, ap.Store, time.Now()); err != nil {
 			return err
 		}
 		// The whole queue, not the filtered one: routing applies the filter to
 		// what it may serve, and reads every row to decide it (see routeNext).
-		gathered, err := gatherWorkableQueue(ctx, ap)
+		gathered, err := gatherWorkableQueue(ctx, inv.Env, ap)
 		if err != nil {
 			return err
 		}
-		cc, err := gatherClaimContext(ctx, inv.Stdout, ap)
+		cc, err := gatherClaimContext(ctx, inv.Env, inv.Stdout, ap)
 		if err != nil {
 			return err
 		}
@@ -77,11 +77,11 @@ func nextLeaf() appLeaf {
 		primaryClone := ap.Workspace.PrimaryClone()
 		recordNextEvent(ctx, outcome, len(gathered.keepRows(asked).rows), primaryClone)
 		ap.Statusline.Record(nextStatuslineFacts(outcome, !filter.narrows() && !*all, cc.evidence)...)
-		occasion, err := renderNextOutcome(inv.Stdout, outcome, gathered.details, cc, actor(), primaryClone)
+		occasion, err := renderNextOutcome(inv.Stdout, outcome, gathered.details, cc, actor(inv.Env), primaryClone)
 		if err != nil {
 			return err
 		}
-		return dispatchOccasion(ctx, inv.Stdout, ap.Workspace, occasion)
+		return dispatchOccasion(ctx, inv.Env, inv.Stdout, ap.Workspace, occasion)
 	}}
 }
 

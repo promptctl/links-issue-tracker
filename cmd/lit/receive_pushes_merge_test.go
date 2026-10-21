@@ -83,7 +83,7 @@ func TestAReceiveThatMergesARefusedPushPushesTheMerge(t *testing.T) {
 	}
 	// The refusal is classified by bravo's config, which runs the receive,
 	// not by the kill switch the push ran under.
-	bravoWS, err := workspace.Resolve(bravo)
+	bravoWS, err := workspace.Resolve(testEnv(), bravo)
 	if err != nil {
 		t.Fatalf("resolve bravo: %v", err)
 	}

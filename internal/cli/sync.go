@@ -13,6 +13,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/engine"
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/pathspec"
 	"github.com/promptctl/links-issue-tracker/internal/precedence"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
@@ -53,8 +54,8 @@ type syncSession struct {
 // openSyncSession opens a sync session on the workspace's store. The returned
 // close is the caller's to defer; it releases the workspace lock, so a caller
 // that drops it strands the lock.
-func openSyncSession(ctx context.Context, ws workspace.Info) (syncSession, func() error, error) {
-	return openSyncSessionAt(ctx, ws.DatabasePath, ws.WorkspaceID)
+func openSyncSession(ctx context.Context, env environ.Env, ws workspace.Info) (syncSession, func() error, error) {
+	return openSyncSessionAt(ctx, env, ws.DatabasePath, ws.WorkspaceID)
 }
 
 // openSyncSessionAt opens the sync engine on an explicit dolt root rather
@@ -62,8 +63,8 @@ func openSyncSession(ctx context.Context, ws workspace.Info) (syncSession, func(
 // workspace's store, which is the same database at another path, under the
 // same workspace identity. [LAW:one-type-per-behavior] one opener, the path
 // is data.
-func openSyncSessionAt(ctx context.Context, databasePath, workspaceID string) (syncSession, func() error, error) {
-	st, syncer, err := openSyncEngineAt(ctx, databasePath, workspaceID)
+func openSyncSessionAt(ctx context.Context, env environ.Env, databasePath, workspaceID string) (syncSession, func() error, error) {
+	st, syncer, err := openSyncEngineAt(ctx, env, databasePath, workspaceID)
 	if err != nil {
 		return syncSession{}, nil, err
 	}
@@ -86,8 +87,8 @@ func openSyncSessionAt(ctx context.Context, databasePath, workspaceID string) (s
 // openSyncEngineAt is the one place a sync engine is opened and its
 // capability resolved. [LAW:single-enforcer] A sync session wraps it with the
 // close that reports what the engine did; compaction wraps it with a plain one.
-func openSyncEngineAt(ctx context.Context, databasePath, workspaceID string) (storage.Store, storage.Syncer, error) {
-	st, err := engine.Open(ctx, engine.Sync, databasePath, workspaceID)
+func openSyncEngineAt(ctx context.Context, env environ.Env, databasePath, workspaceID string) (storage.Store, storage.Syncer, error) {
+	st, err := engine.Open(ctx, env, engine.Sync, databasePath, workspaceID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -140,7 +141,7 @@ func withSyncStore(declare syncLeafFn) wsLeafFn {
 	return func() wsLeaf {
 		l := declare()
 		return adaptLeaf[syncScope, workspace.Info](l, func(ctx context.Context, inv Invocation, ws workspace.Info, positional []string) error {
-			session, closeStore, err := openSyncSession(ctx, ws)
+			session, closeStore, err := openSyncSession(ctx, inv.Env, ws)
 			if err != nil {
 				// The open boundary stamps holder contention so Run's trace can
 				// tell a starved OPEN from a handler-traced mid-command contention.
@@ -189,7 +190,7 @@ func syncRemoteLsLeaf() syncLeaf {
 	fs := newCobraFlagSet("sync remote ls")
 	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, inv Invocation, scope syncScope, positional []string) error {
 		ws, session := scope.ws, scope.session
-		syncState, err := readSyncRemoteState(ctx, session, ws)
+		syncState, err := readSyncRemoteState(ctx, inv.Env, session, ws)
 		if err != nil {
 			return err
 		}
@@ -223,32 +224,32 @@ func syncFetchLeaf() syncLeaf {
 	verbose := fs.Bool("verbose", false, "Include detailed remote output")
 	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, inv Invocation, scope syncScope, positional []string) error {
 		ws, session := scope.ws, scope.session
-		syncState, err := syncDoltRemotesFromGit(ctx, session, ws)
+		syncState, err := syncDoltRemotesFromGit(ctx, inv.Env, session, ws)
 		if err != nil {
 			// A could-not-attempt failure (git-remote reconciliation itself failed,
 			// before any fetch was even tried) is still a decision this command
 			// reached — trace it, matching the coverage recordMirrorTraceError/
 			// recordReceiveError give this same failure class on the mirror/receive
 			// paths. [LAW:no-silent-failure]
-			recordSyncCommandTrace(ws, "lit sync fetch", "error", err, nil)
+			recordSyncCommandTrace(inv.Env, ws, "lit sync fetch", "error", err, nil)
 			return err
 		}
 		// [LAW:one-source-of-truth] the remote every sync verb selects.
-		remoteName, ok, err := workspaceSyncRemote(ctx, ws, *remote, syncState.gitRemotes)
+		remoteName, ok, err := workspaceSyncRemote(ctx, inv.Env, ws, *remote, syncState.gitRemotes)
 		if err != nil {
-			recordSyncCommandTrace(ws, "lit sync fetch", "error", err, nil)
+			recordSyncCommandTrace(inv.Env, ws, "lit sync fetch", "error", err, nil)
 			return err
 		}
 		if !ok {
 			// Said in every mode: the staleness banner sends people here, and a
 			// fetch that silently fetched nothing would leave them stale with no
 			// sign why. [LAW:no-silent-failure]
-			recordSyncCommandTrace(ws, "lit sync fetch", string(syncTargetNoRemote), nil, nil)
+			recordSyncCommandTrace(inv.Env, ws, "lit sync fetch", string(syncTargetNoRemote), nil, nil)
 			_, err := fmt.Fprintln(inv.Stdout, "skipped sync fetch: no eligible git remote; name one with --remote")
 			return err
 		}
-		err = fetchAndFollow(ctx, session, ws, syncState.gitRemotes, remoteName)
-		recordSyncCommandTrace(ws, "lit sync fetch", "fetched", err, map[string]string{"remote": remoteName.String()})
+		err = fetchAndFollow(ctx, inv.Env, session, ws, syncState.gitRemotes, remoteName)
+		recordSyncCommandTrace(inv.Env, ws, "lit sync fetch", "fetched", err, map[string]string{"remote": remoteName.String()})
 		if err != nil {
 			return err
 		}
@@ -269,14 +270,14 @@ func syncFetchLeaf() syncLeaf {
 // network: a workspace with no sync remote, one Dolt cannot hold, or none
 // whose default branch is known here, has no freshness a re-root could
 // misreport, and follows nothing.
-func fetchAndFollow(ctx context.Context, session syncSession, ws workspace.Info, gitRemotes []workspace.GitRemote, remote storage.RemoteName) error {
+func fetchAndFollow(ctx context.Context, env environ.Env, session syncSession, ws workspace.Info, gitRemotes []workspace.GitRemote, remote storage.RemoteName) error {
 	if err := session.syncer.SyncFetch(ctx, remote); err != nil {
 		return err
 	}
 	if err := markFetchSuccess(ws, remote); err != nil {
 		fmt.Fprintf(os.Stderr, "lit: fetch-success marker not written: %v\n", err)
 	}
-	syncRemote, branch, ok, err := freshnessSyncTarget(ctx, ws, gitRemotes)
+	syncRemote, branch, ok, err := freshnessSyncTarget(ctx, env, ws, gitRemotes)
 	// Only a branch nothing here names, or a remote lit cannot sync with,
 	// skips the follow; a record that would name the branch but cannot be
 	// read is not that error, and fails the fetch.
@@ -297,19 +298,19 @@ func syncPullLeaf() syncLeaf {
 	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, inv Invocation, scope syncScope, positional []string) error {
 		ws, session := scope.ws, scope.session
 		progressf("sync pull", "starting: reconciling remotes and resolving the sync source")
-		target, err := resolveSyncTarget(ctx, session, ws, *remote)
+		target, err := resolveSyncTarget(ctx, inv.Env, session, ws, *remote)
 		if err != nil {
 			// A could-not-attempt failure — traced like every other decision this
 			// command reaches, matching the coverage recordMirrorTraceError/
 			// recordReceiveError give this same failure class on the mirror/receive
 			// paths. [LAW:no-silent-failure]
-			recordSyncCommandTrace(ws, "lit sync pull", "error", err, target.traceMetadata())
+			recordSyncCommandTrace(inv.Env, ws, "lit sync pull", "error", err, target.traceMetadata())
 			return err
 		}
 		if target.skip != syncTargetReady {
 			// traceMetadata is nil before a remote was selected, so the no-remote and
 			// empty-remote skips trace exactly what resolution established.
-			recordSyncCommandTrace(ws, "lit sync pull", string(target.skip), nil, target.traceMetadata())
+			recordSyncCommandTrace(inv.Env, ws, "lit sync pull", string(target.skip), nil, target.traceMetadata())
 			// A pull with nothing to pull from says which skip, under the
 			// state's key; there was no settle, so no base. [LAW:nothing-unseen]
 			telemetry.Set(ctx, "pull.state", string(target.skip))
@@ -321,7 +322,7 @@ func syncPullLeaf() syncLeaf {
 		result, err := session.syncer.SyncPull(ctx, remoteName, resolvedBranch)
 		pullTraceMetadata := map[string]string{"remote": remoteName.String(), "sync_branch": resolvedBranch}
 		if err != nil {
-			recordSyncCommandTrace(ws, "lit sync pull", "error", err, pullTraceMetadata)
+			recordSyncCommandTrace(inv.Env, ws, "lit sync pull", "error", err, pullTraceMetadata)
 			// An explicit pull is not best-effort: a fetch or reconcile failure is
 			// surfaced as a command error, not swallowed the way the background
 			// receive tolerates a transient hiccup. [LAW:no-silent-failure] A remote
@@ -349,16 +350,16 @@ func syncPullLeaf() syncLeaf {
 		// the identical state, rather than a stdout line under a success exit. Every
 		// other pull outcome is rendered by the outcome printer. [LAW:single-enforcer]
 		if failure, held := syncFailureFromPull(remoteName, resolvedBranch, result, time.Now()); held {
-			recordSyncHeldTrace(ws, "lit sync pull", failure, pullTraceMetadata)
+			recordSyncHeldTrace(inv.Env, ws, "lit sync pull", failure, pullTraceMetadata)
 			// A held pull is a detection moment: the owner hears out-of-band, the day
 			// it happens, not through later archaeology (links-sync-pgct.4).
 			if ev, ok := ownerNotifyEventForFailure(failure.Failure); ok {
-				maybeNotifyOwner(ctx, ws, ev)
+				maybeNotifyOwner(ctx, inv.Env, ws, ev)
 			}
 			return failure
 		}
 		landingMetadata(pullTraceMetadata, result.Landing)
-		recordSyncCommandTrace(ws, "lit sync pull", string(result.State), nil, pullTraceMetadata)
+		recordSyncCommandTrace(inv.Env, ws, "lit sync pull", string(result.State), nil, pullTraceMetadata)
 		// A pull that completed without a held state converged (or found nothing to
 		// converge): the divergence episode, if one was notified, is over.
 		endDivergenceEpisode(ws)
@@ -437,7 +438,7 @@ func syncCompactLeaf() syncLeaf {
 			// failure — which this call site cannot see and would record as a bare
 			// error. Handing the recorder the local mode would leave two places
 			// spelling one fact. [LAW:one-source-of-truth]
-			recordCompactFailure(ws, syncCompactTraceCommand, outcome, err)
+			recordCompactFailure(inv.Env, ws, syncCompactTraceCommand, outcome, err)
 			return err
 		}
 		// Recorded before the write, so a stdout that has gone away cannot erase the
@@ -452,7 +453,7 @@ func syncCompactLeaf() syncLeaf {
 		// the outcome is gone. This records through the same seam the automatic pass
 		// uses, so the two cannot describe one event differently — only the command
 		// name distinguishes them. [LAW:one-source-of-truth]
-		recordCompactionSuccess(ws, syncCompactTraceCommand, outcome)
+		recordCompactionSuccess(inv.Env, ws, syncCompactTraceCommand, outcome)
 		// The engine reports what it reclaimed in its own vocabulary; this renders
 		// that account rather than re-deriving it from a storage layout the command
 		// layer has no business reading. [LAW:decomposition]
@@ -489,14 +490,14 @@ func syncPushLeaf() syncLeaf {
 		// backs) compacts atomically with the push; the on-change mirror pushes
 		// without compaction. The choice is the push step passed as a value, so
 		// performSyncPush has no compaction branch and a skipped push never compacts.
-		outcome, err := performSyncPush(ctx, ctx, session, ws, strings.TrimSpace(*remote), *setUpstream, *force, session.syncer.SyncCompactAndPush)
+		outcome, err := performSyncPush(ctx, ctx, inv.Env, session, ws, strings.TrimSpace(*remote), *setUpstream, *force, session.syncer.SyncCompactAndPush)
 		if err != nil {
 			// A could-not-attempt failure (performSyncPush returned before reaching
 			// its own trace-recording push attempt) — traced here, matching the
 			// coverage recordMirrorTraceError already gives this exact failure class on
 			// the on-change mirror path that shares performSyncPush.
 			// [LAW:no-silent-failure]
-			recordSyncCommandTrace(ws, "lit sync push", "error", err, nil)
+			recordSyncCommandTrace(inv.Env, ws, "lit sync push", "error", err, nil)
 			return err
 		}
 		// [LAW:no-silent-failure] The push error surfaces as the command's exit
@@ -632,7 +633,7 @@ func syncPushTraceMetadata(remoteName storage.RemoteName, syncBranch string, res
 // owner-notify hook — which must not inherit an operation budget that has, by
 // definition, already expired whenever a cut push needs them most.
 // A foreground caller passes the same context twice: its one lifetime is both.
-func performSyncPush(ctx, completionCtx context.Context, session syncSession, ws workspace.Info, remote string, setUpstream, force bool, push syncPushStep) (outcome syncPushOutcome, retErr error) {
+func performSyncPush(ctx, completionCtx context.Context, env environ.Env, session syncSession, ws workspace.Info, remote string, setUpstream, force bool, push syncPushStep) (outcome syncPushOutcome, retErr error) {
 	// Every completion — could-not-attempt, skip, pushed, push-failed — leaves
 	// the push-outcome marker behind, so "are pushes working?" is answerable by
 	// any later command without an engine. One deferred write over the named
@@ -647,22 +648,22 @@ func performSyncPush(ctx, completionCtx context.Context, session syncSession, ws
 	// [LAW:no-silent-failure]
 	defer func() {
 		if r := recover(); r != nil {
-			completePushAttempt(completionCtx, ws, outcome, fmt.Errorf("sync push panicked: %v", r))
+			completePushAttempt(completionCtx, env, ws, outcome, fmt.Errorf("sync push panicked: %v", r))
 			panic(r)
 		}
-		completePushAttempt(completionCtx, ws, outcome, retErr)
+		completePushAttempt(completionCtx, env, ws, outcome, retErr)
 	}()
 	// Each step the push deadline bounds takes its verdict where it returns,
 	// so the attempt's record — this function's own, through the defer — is
 	// the one that names a cut. [LAW:single-enforcer]
-	target, err := resolveSyncTarget(ctx, session, ws, remote)
+	target, err := resolveSyncTarget(ctx, env, session, ws, remote)
 	if err != nil {
 		return syncPushOutcome{}, cutByPushDeadline(ctx, completionCtx, err)
 	}
 	if target.skip != syncTargetReady {
 		// traceMetadata is nil before a remote was selected, so the no-remote and
 		// empty-remote skips trace exactly what resolution established.
-		recordSyncCommandTrace(ws, "lit sync push", string(target.skip), nil, target.traceMetadata())
+		recordSyncCommandTrace(env, ws, "lit sync push", string(target.skip), nil, target.traceMetadata())
 		// [LAW:dataflow-not-control-flow] exception: explicit no-remote policy requires suppressing sync side effects when remote resolution yields empty input.
 		return syncPushOutcome{skip: target.skip, remote: target.remote}, nil
 	}
@@ -673,7 +674,7 @@ func performSyncPush(ctx, completionCtx context.Context, session syncSession, ws
 	// maintenance says the bound was not kept and why, and the event's
 	// history_bound.window_error carries the refusal, null when the window
 	// was read. [LAW:no-silent-failure]
-	cfg, cfgErr := config.Load(pathspec.New(ws.RootDir))
+	cfg, cfgErr := config.Load(env, pathspec.New(ws.RootDir))
 	telemetry.Set(completionCtx, "history_bound.window_error", telemetry.ErrorText(cfgErr))
 	window := storage.BoundWindowRead(cfg.Sync.HistoryWindow, cfgErr)
 	// [LAW:dataflow-not-control-flow] Sync push runs one deterministic embedded mutation path from resolved remote+branch state.
@@ -702,7 +703,7 @@ func performSyncPush(ctx, completionCtx context.Context, session syncSession, ws
 	if pushErr == nil && result.Superseded == nil && result.Bound.Publication == storage.ReRootNotPushed {
 		proofCtx, cancelProof := context.WithTimeout(completionCtx, pushProofDeadline)
 		var unproven string
-		proven, unproven = provePushedAdvertisement(proofCtx, session.syncer, ws, remoteName, target.gitRemotes)
+		proven, unproven = provePushedAdvertisement(proofCtx, env, session.syncer, ws, remoteName, target.gitRemotes)
 		cancelProof()
 		traceMetadata["advertisement"] = advertisementProofTrace(unproven)
 	}
@@ -723,6 +724,7 @@ func performSyncPush(ctx, completionCtx context.Context, session syncSession, ws
 	// The pre-push hook reads the trace ref through the ref-file the writer
 	// itself maintains, so only the write error is kept. [LAW:no-silent-failure]
 	_, traceRecordErr := maybeRecordAutomatedCommandTrace(
+		env,
 		ws,
 		formatCommand(syncCommandArgs),
 		"mirror Dolt data to the configured git remote",
@@ -758,7 +760,7 @@ func performSyncPush(ctx, completionCtx context.Context, session syncSession, ws
 		pushErr:       pushErr,
 	}
 	decided := classifyPushOutcome(outcome, nil)
-	recordSyncTraceLogged(ws, syncTraceRecord{
+	recordSyncTraceLogged(env, ws, syncTraceRecord{
 		Command:   formatCommand(syncCommandArgs),
 		Decision:  decided.Decision,
 		Status:    traceStatus,
@@ -782,7 +784,7 @@ func syncStatusLeaf() syncLeaf {
 	fs := newCobraFlagSet("sync status")
 	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, inv Invocation, scope syncScope, positional []string) error {
 		ws, session := scope.ws, scope.session
-		syncState, err := readSyncRemoteState(ctx, session, ws)
+		syncState, err := readSyncRemoteState(ctx, inv.Env, session, ws)
 		if err != nil {
 			return err
 		}
@@ -907,26 +909,26 @@ func (t syncTarget) traceMetadata() map[string]string {
 // must be able to abandon: ctx flows to the subprocess so a network-hung fetch
 // cancels here rather than outliving the interrupt until the grace-timer
 // hard-exit. [LAW:no-ambient-temporal-coupling]
-func resolveSyncTarget(ctx context.Context, session syncSession, ws workspace.Info, requestedRemote string) (syncTarget, error) {
-	syncState, err := syncDoltRemotesFromGit(ctx, session, ws)
+func resolveSyncTarget(ctx context.Context, env environ.Env, session syncSession, ws workspace.Info, requestedRemote string) (syncTarget, error) {
+	syncState, err := syncDoltRemotesFromGit(ctx, env, session, ws)
 	if err != nil {
 		return syncTarget{}, err
 	}
-	remoteName, ok, err := workspaceSyncRemote(ctx, ws, requestedRemote, syncState.gitRemotes)
+	remoteName, ok, err := workspaceSyncRemote(ctx, env, ws, requestedRemote, syncState.gitRemotes)
 	if err != nil {
 		return syncTarget{}, err
 	}
 	if !ok {
 		return syncTarget{skip: syncTargetNoRemote}, nil
 	}
-	hasRefs, refsErr := workspace.RemoteHasRefs(ctx, ws.RootDir, remoteName.String())
+	hasRefs, refsErr := workspace.RemoteHasRefs(ctx, env, ws.RootDir, remoteName.String())
 	if refsErr != nil {
 		return syncTarget{remote: remoteName}, fmt.Errorf("check remote refs %q: %w", remoteName, refsErr)
 	}
 	if !hasRefs {
 		return syncTarget{remote: remoteName, skip: syncTargetRemoteEmpty}, nil
 	}
-	branch, err := resolveSyncBranch(ctx, ws, remoteName)
+	branch, err := resolveSyncBranch(ctx, env, ws, remoteName)
 	if err != nil {
 		return syncTarget{remote: remoteName}, err
 	}
@@ -1069,8 +1071,8 @@ type remoteSyncState struct {
 	plan        remoteSyncPlan
 }
 
-func readSyncRemoteState(ctx context.Context, session syncSession, ws workspace.Info) (remoteSyncState, error) {
-	gitRemotes, err := workspace.GitRemotes(ctx, ws.RootDir)
+func readSyncRemoteState(ctx context.Context, env environ.Env, session syncSession, ws workspace.Info) (remoteSyncState, error) {
+	gitRemotes, err := workspace.GitRemotes(ctx, env, ws.RootDir)
 	if err != nil {
 		return remoteSyncState{}, fmt.Errorf("read git remotes: %w", err)
 	}
@@ -1087,8 +1089,8 @@ func readSyncRemoteState(ctx context.Context, session syncSession, ws workspace.
 	}, nil
 }
 
-func syncDoltRemotesFromGit(ctx context.Context, session syncSession, ws workspace.Info) (remoteSyncState, error) {
-	state, err := readSyncRemoteState(ctx, session, ws)
+func syncDoltRemotesFromGit(ctx context.Context, env environ.Env, session syncSession, ws workspace.Info) (remoteSyncState, error) {
+	state, err := readSyncRemoteState(ctx, env, session, ws)
 	if err != nil {
 		return remoteSyncState{}, err
 	}

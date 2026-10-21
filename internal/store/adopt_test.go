@@ -18,7 +18,7 @@ func TestLocalHasTicketsDoesNotCreateStore(t *testing.T) {
 	ctx := context.Background()
 	root := filepath.Join(t.TempDir(), "dolt")
 
-	has, _, err := LocalHasTickets(ctx, root, "ws")
+	has, _, err := LocalHasTickets(ctx, testEnv(), root, "ws")
 	if err != nil {
 		t.Fatalf("LocalHasTickets(absent): %v", err)
 	}
@@ -32,7 +32,7 @@ func TestLocalHasTicketsDoesNotCreateStore(t *testing.T) {
 	if _, err := EnsureDatabase(ctx, root, "ws"); err != nil {
 		t.Fatalf("EnsureDatabase: %v", err)
 	}
-	has, _, err = LocalHasTickets(ctx, root, "ws")
+	has, _, err = LocalHasTickets(ctx, testEnv(), root, "ws")
 	if err != nil {
 		t.Fatalf("LocalHasTickets(empty): %v", err)
 	}
@@ -62,7 +62,7 @@ func TestAdoptRemoteByCloneBootstrapsAndReAdopts(t *testing.T) {
 		t.Fatalf("AdoptRemoteByClone(first): %v", err)
 	}
 	assertHasIssueAfterAdopt(t, ctx, consumer, id)
-	if has, _, err := LocalHasTickets(ctx, consumer, "ws"); err != nil || !has {
+	if has, _, err := LocalHasTickets(ctx, testEnv(), consumer, "ws"); err != nil || !has {
 		t.Fatalf("LocalHasTickets(after adopt) = %v, %v; want true, nil", has, err)
 	}
 
@@ -76,7 +76,7 @@ func TestAdoptRemoteByCloneBootstrapsAndReAdopts(t *testing.T) {
 
 func assertHasIssueAfterAdopt(t *testing.T, ctx context.Context, root, id string) {
 	t.Helper()
-	st, err := OpenForRead(ctx, root, "ws")
+	st, err := OpenForRead(ctx, testEnv(), root, "ws")
 	if err != nil {
 		t.Fatalf("OpenForRead(%s) after adopt: %v", root, err)
 	}
@@ -151,7 +151,7 @@ func TestAdoptRemoteByCloneHealsAbandonedAdoptResidue(t *testing.T) {
 		t.Fatalf("WriteFile(marker): %v", err)
 	}
 
-	has, _, err := LocalHasTickets(ctx, consumer, "ws")
+	has, _, err := LocalHasTickets(ctx, testEnv(), consumer, "ws")
 	if err != nil {
 		t.Fatalf("LocalHasTickets(residue) = %v, want nil — the gate must consume the marker, not open the junk", err)
 	}
@@ -225,7 +225,7 @@ func TestMarkerRefusalIsReservedForDeadAdopts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LockWorkspaceExclusive: %v", err)
 	}
-	_, openErr := OpenForRead(ctx, root, "ws")
+	_, openErr := OpenForRead(ctx, testEnv(), root, "ws")
 	if !errors.Is(openErr, ErrWorkspaceBusy) {
 		t.Fatalf("OpenForRead during live hold = %v, want ErrWorkspaceBusy", openErr)
 	}
@@ -236,7 +236,7 @@ func TestMarkerRefusalIsReservedForDeadAdopts(t *testing.T) {
 		t.Fatalf("release: %v", err)
 	}
 
-	_, openErr = OpenForRead(ctx, root, "ws")
+	_, openErr = OpenForRead(ctx, testEnv(), root, "ws")
 	if openErr == nil || !strings.Contains(openErr.Error(), "interrupted") {
 		t.Fatalf("OpenForRead after the hold died = %v, want the interrupted-adopt refusal", openErr)
 	}
@@ -272,21 +272,21 @@ func TestPendingAdoptMarkerCondemnsEveryNormalOpen(t *testing.T) {
 		}
 	}
 
-	_, err := Open(ctx, root, "ws")
+	_, err := Open(ctx, testEnv(), root, "ws")
 	assertCondemned("Open", err)
-	_, err = OpenForRead(ctx, root, "ws")
+	_, err = OpenForRead(ctx, testEnv(), root, "ws")
 	assertCondemned("OpenForRead", err)
 	_, err = EnsureDatabase(ctx, root, "ws")
 	assertCondemned("EnsureDatabase", err)
-	_, err = OpenSync(ctx, root, "ws")
+	_, err = OpenSync(ctx, testEnv(), root, "ws")
 	assertCondemned("OpenSync", err)
-	_, err = DumpRaw(ctx, root, "ws")
+	_, err = DumpRaw(ctx, testEnv(), root, "ws")
 	assertCondemned("DumpRaw", err)
 
 	if err := os.Remove(AdoptPendingMarkerPath(root)); err != nil {
 		t.Fatalf("Remove(marker): %v", err)
 	}
-	st, err := OpenForRead(ctx, root, "ws")
+	st, err := OpenForRead(ctx, testEnv(), root, "ws")
 	if err != nil {
 		t.Fatalf("OpenForRead after clearing the marker: %v — the marker must be the sole condemner", err)
 	}

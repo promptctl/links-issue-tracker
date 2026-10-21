@@ -12,6 +12,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/backup"
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/statusline"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
@@ -108,7 +109,7 @@ func backupRestoreLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		landing, err := restoreFromExportPath(ctx, ap, restorePath, *force)
+		landing, err := restoreFromExportPath(ctx, inv.Env, ap, restorePath, *force)
 		if err != nil {
 			return err
 		}
@@ -127,11 +128,11 @@ func syncBasePath(ap *app.App) string {
 // what the restore changed to land it. Every restore leaves one sync trace
 // record, failed or not: it rewrites the sync base the next push compares
 // against, and the record carries the changes. [LAW:nothing-unseen]
-func restoreFromExportPath(ctx context.Context, ap *app.App, path string, force bool) (landing storage.Landing, err error) {
+func restoreFromExportPath(ctx context.Context, env environ.Env, ap *app.App, path string, force bool) (landing storage.Landing, err error) {
 	defer func() {
 		metadata := map[string]string{"path": filepath.Clean(path)}
 		landingMetadata(metadata, landing)
-		recordSyncCommandTrace(ap.Workspace, "lit backup restore", "restored", err, metadata)
+		recordSyncCommandTrace(env, ap.Workspace, "lit backup restore", "restored", err, metadata)
 	}()
 	return restoreFromExport(ctx, ap, path, force)
 }

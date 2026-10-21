@@ -11,7 +11,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dolthub/dolt/go/libraries/utils/gitcmd"
 	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/google/uuid"
 
@@ -53,7 +52,7 @@ func newLandFixture(t *testing.T) *landFixture {
 
 func (f *landFixture) openSync(root string) *Store {
 	f.t.Helper()
-	st, err := OpenSync(f.ctx, root, "ws")
+	st, err := OpenSync(f.ctx, testEnv(), root, "ws")
 	if err != nil {
 		f.t.Fatalf("OpenSync(%s) error = %v", root, err)
 	}
@@ -70,7 +69,7 @@ func (f *landFixture) close(st *Store) {
 // seedEpic lands the epic commit() files tickets into on the store at root.
 func (f *landFixture) seedEpic(root string) {
 	f.t.Helper()
-	st, err := Open(f.ctx, root, "ws")
+	st, err := Open(f.ctx, testEnv(), root, "ws")
 	if err != nil {
 		f.t.Fatalf("Open(epic) error = %v", err)
 	}
@@ -89,7 +88,7 @@ func (f *landFixture) commit(root, title string) string {
 	if !ok {
 		f.t.Fatalf("commit(%q): no epic seeded on %s", title, root)
 	}
-	st, err := Open(f.ctx, root, "ws")
+	st, err := Open(f.ctx, testEnv(), root, "ws")
 	if err != nil {
 		f.t.Fatalf("Open(%q) error = %v", title, err)
 	}
@@ -173,7 +172,7 @@ func TestLandFetchedHeadCarriesAClonesFetchToTheLiveStore(t *testing.T) {
 	f.push(peer, false)
 
 	clone := f.fetchedClone()
-	landed, err := LandFetchedHead(f.ctx, f.live, clone, remoteName(t, "origin"), "master", nil)
+	landed, err := LandFetchedHead(f.ctx, testEnv(), f.live, clone, remoteName(t, "origin"), "master", nil)
 	if err != nil {
 		t.Fatalf("LandFetchedHead() error = %v", err)
 	}
@@ -228,7 +227,7 @@ func TestLandFetchedHeadRecordsWhatTheFetchSaw(t *testing.T) {
 	}
 	land := func(f *landFixture, clone TakenClone) LandedFetch {
 		t.Helper()
-		landed, err := LandFetchedHead(f.ctx, f.live, clone, remoteName(t, "origin"), "master", nil)
+		landed, err := LandFetchedHead(f.ctx, testEnv(), f.live, clone, remoteName(t, "origin"), "master", nil)
 		if err != nil {
 			t.Fatalf("LandFetchedHead() error = %v", err)
 		}
@@ -379,7 +378,7 @@ func TestALandingNeverWindsTheLiveRefBackAcrossACut(t *testing.T) {
 		t.Fatalf("the push past the bound = %+v, collection %+v; want it fired and the store collected", fired, collected)
 	}
 
-	landed, err := LandFetchedHead(ctx, live, clone, remoteName(t, "origin"), "master", nil)
+	landed, err := LandFetchedHead(ctx, testEnv(), live, clone, remoteName(t, "origin"), "master", nil)
 	if err != nil {
 		t.Fatalf("LandFetchedHead() error = %v", err)
 	}
@@ -406,7 +405,7 @@ func TestLandFetchedHeadLeavesTheLiveStoreAloneForAnAbsentBranch(t *testing.T) {
 	f := newLandFixture(t)
 	before := f.trackingRef()
 	clone := f.fetchedClone()
-	landed, err := LandFetchedHead(f.ctx, f.live, clone, remoteName(t, "origin"), "no-such-branch", nil)
+	landed, err := LandFetchedHead(f.ctx, testEnv(), f.live, clone, remoteName(t, "origin"), "no-such-branch", nil)
 	if err != nil {
 		t.Fatalf("LandFetchedHead() error = %v", err)
 	}
@@ -505,7 +504,7 @@ func TestLandFetchedHeadCarriesTheClonesPrunes(t *testing.T) {
 	if !slices.Equal(pruned, wantPruned) {
 		t.Fatalf("the clone's PrunedRefs() = %+v, want %+v", pruned, wantPruned)
 	}
-	landed, err := LandFetchedHead(f.ctx, f.live, clone, remoteName(t, "origin"), "master", pruned)
+	landed, err := LandFetchedHead(f.ctx, testEnv(), f.live, clone, remoteName(t, "origin"), "master", pruned)
 	if err != nil {
 		t.Fatalf("LandFetchedHead() error = %v", err)
 	}
@@ -554,7 +553,7 @@ func TestLandFetchedHeadLeavesRefsTheLiveStoreWroteSinceTheTake(t *testing.T) {
 		t.Fatalf("live tracking refs before the landing = %v, want feature at %s and newer", trackedBefore, recreated)
 	}
 
-	landed, err := LandFetchedHead(f.ctx, f.live, clone, remoteName(t, "origin"), "master", pruned)
+	landed, err := LandFetchedHead(f.ctx, testEnv(), f.live, clone, remoteName(t, "origin"), "master", pruned)
 	if err != nil {
 		t.Fatalf("LandFetchedHead() error = %v", err)
 	}
@@ -599,7 +598,7 @@ func TestLandFetchedHeadLeavesARefTheClonesSessionFetchedBack(t *testing.T) {
 		t.Fatalf("the clone's PrunedRefs() = %+v, want %+v", pruned, wantPruned)
 	}
 
-	landed, err := LandFetchedHead(f.ctx, f.live, clone, remoteName(t, "origin"), "master", pruned)
+	landed, err := LandFetchedHead(f.ctx, testEnv(), f.live, clone, remoteName(t, "origin"), "master", pruned)
 	if err != nil {
 		t.Fatalf("LandFetchedHead() error = %v", err)
 	}
@@ -646,7 +645,7 @@ func TestLandFetchedHeadPrunesARefTheClonesSessionMovedFirst(t *testing.T) {
 		t.Fatalf("the clone's PrunedRefs() = %+v, want %+v, pruned past the taken %s", pruned, wantPruned, trackedBefore["feature"])
 	}
 
-	landed, err := LandFetchedHead(f.ctx, f.live, clone, remoteName(t, "origin"), "master", pruned)
+	landed, err := LandFetchedHead(f.ctx, testEnv(), f.live, clone, remoteName(t, "origin"), "master", pruned)
 	if err != nil {
 		t.Fatalf("LandFetchedHead() error = %v", err)
 	}
@@ -682,7 +681,7 @@ func TestLandFetchedHeadKeepsTheSyncBranchsForkPointAcrossARePoint(t *testing.T)
 	f.close(st)
 
 	clone, pruned := f.prunedClone()
-	landed, err := LandFetchedHead(f.ctx, f.live, clone, remoteName(t, "origin"), "master", pruned)
+	landed, err := LandFetchedHead(f.ctx, testEnv(), f.live, clone, remoteName(t, "origin"), "master", pruned)
 	if err != nil {
 		t.Fatalf("LandFetchedHead() error = %v", err)
 	}
@@ -733,7 +732,7 @@ func TestLandFetchedHeadKeepsAFollowTheLiveStoreRanDuringTheClonesFetch(t *testi
 		t.Fatalf("the clone's fork point is %q; want the pre-cut head its snapshot shared with the remote", cloneForkPoint)
 	}
 
-	landed, err := LandFetchedHead(ctx, r.bravo, clone, remoteName(t, "origin"), "master", nil)
+	landed, err := LandFetchedHead(ctx, testEnv(), r.bravo, clone, remoteName(t, "origin"), "master", nil)
 	if err != nil {
 		t.Fatalf("LandFetchedHead() error = %v", err)
 	}
@@ -772,7 +771,7 @@ func TestRemoteCacheLandingCopiesTheFetchedRemotesLastKnownRefs(t *testing.T) {
 	onlyCloneKey := strings.Repeat("b", 64)
 	git := func(gitDir string, args ...string) string {
 		t.Helper()
-		out, err := mirrorGit(context.Background(), gitDir, gitcmd.Spec{}, args...).CombinedOutput()
+		out, err := mirrorGit(context.Background(), testEnv(), gitDir, nil, args...).CombinedOutput()
 		if err != nil {
 			t.Fatalf("git %v: %v\n%s", args, err, out)
 		}
@@ -781,9 +780,8 @@ func TestRemoteCacheLandingCopiesTheFetchedRemotesLastKnownRefs(t *testing.T) {
 	commitOn := func(gitDir, refName, message string) string {
 		t.Helper()
 		tree := git(gitDir, "mktree")
-		out, err := mirrorGit(context.Background(), gitDir, gitcmd.Spec{
-			Env: append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t"),
-		}, "commit-tree", tree, "-m", message).CombinedOutput()
+		out, err := mirrorGit(context.Background(), testEnv().With("GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t"), gitDir, nil,
+			"commit-tree", tree, "-m", message).CombinedOutput()
 		if err != nil {
 			t.Fatalf("commit-tree: %v\n%s", err, out)
 		}
@@ -797,7 +795,7 @@ func TestRemoteCacheLandingCopiesTheFetchedRemotesLastKnownRefs(t *testing.T) {
 		if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if out, err := mirrorGit(context.Background(), dir, gitcmd.Spec{}, "init", "--bare", "--quiet").CombinedOutput(); err != nil {
+		if out, err := mirrorGit(context.Background(), testEnv(), dir, nil, "init", "--bare", "--quiet").CombinedOutput(); err != nil {
 			t.Fatalf("git init %s: %v\n%s", dir, err, out)
 		}
 	}
@@ -809,7 +807,7 @@ func TestRemoteCacheLandingCopiesTheFetchedRemotesLastKnownRefs(t *testing.T) {
 	commitOn(liveRepo, lastKnown, "where live last saw the remote")
 	cloneLastKnown := commitOn(cloneRepo, lastKnown, "where the clone's fetch saw it")
 	liveUnchanged := commitOn(liveRepo, unchanged, "both hold this")
-	if out, err := mirrorFetch(context.Background(), cloneRepo, liveRepo, unchanged+":"+unchanged).CombinedOutput(); err != nil {
+	if out, err := mirrorFetch(context.Background(), testEnv(), cloneRepo, liveRepo, unchanged+":"+unchanged).CombinedOutput(); err != nil {
 		t.Fatalf("fetch %s from the live mirror: %v\n%s", unchanged, err, out)
 	}
 	addedOID := commitOn(cloneRepo, added, "what the clone fetched")
@@ -817,8 +815,8 @@ func TestRemoteCacheLandingCopiesTheFetchedRemotesLastKnownRefs(t *testing.T) {
 	livePushed := commitOn(liveRepo, unfetched, "where a live push left upstream since")
 	commitOn(cloneRepo, orphan, "an orphan the clone copied before the live sweep")
 
-	plan := planRemoteCacheLanding(ctx, liveBase, cloneBase, remoteName(t, "origin"))
-	if err := plan.apply(ctx); err != nil {
+	plan := planRemoteCacheLanding(ctx, testEnv(), liveBase, cloneBase, remoteName(t, "origin"))
+	if err := plan.apply(ctx, testEnv()); err != nil {
 		t.Fatalf("apply() error = %v", err)
 	}
 	if got := git(liveRepo, "rev-parse", added); got != addedOID {
@@ -836,7 +834,7 @@ func TestRemoteCacheLandingCopiesTheFetchedRemotesLastKnownRefs(t *testing.T) {
 	if got := git(liveRepo, "rev-parse", unchanged); got != liveUnchanged {
 		t.Fatalf("live mirror's %s = %s, want it left at %s", unchanged, got, liveUnchanged)
 	}
-	if out, err := mirrorGit(context.Background(), liveRepo, gitcmd.Spec{}, "rev-parse", "--verify", "--quiet", orphan).CombinedOutput(); err == nil {
+	if out, err := mirrorGit(context.Background(), testEnv(), liveRepo, nil, "rev-parse", "--verify", "--quiet", orphan).CombinedOutput(); err == nil {
 		t.Fatalf("landing put the swept orphan %s back in the live mirror at %s", orphan, strings.TrimSpace(string(out)))
 	}
 	if len(plan.copies) != 1 || len(plan.copies[0].refspecs) != 2 {
@@ -863,7 +861,7 @@ func TestARemoteCachePlanReportsItsFailuresOnlyWhereItLands(t *testing.T) {
 		{FetchedHeadAbsent, unlisted},
 		{FetchedHeadSuperseded, nil},
 	} {
-		if err := plan.landedBy(tc.record).apply(context.Background()); !errors.Is(err, tc.want) {
+		if err := plan.landedBy(tc.record).apply(context.Background(), testEnv()); !errors.Is(err, tc.want) {
 			t.Errorf("a %s landing's apply() = %v, want %v", tc.record, err, tc.want)
 		}
 	}

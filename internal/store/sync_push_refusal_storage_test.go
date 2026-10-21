@@ -32,7 +32,7 @@ func TestAPushTheRemotesStorageFailsIsNotARefusal(t *testing.T) {
 		{"SyncPush() of c4, only ahead", race.liveRoot, false},
 		{"SyncPush(force) of the diverged c3", race.cloneRoot, true},
 	} {
-		st, err := OpenSync(ctx, failed.root, "ws")
+		st, err := OpenSync(ctx, testEnv(), failed.root, "ws")
 		if err != nil {
 			t.Fatalf("%s: OpenSync() error = %v", failed.name, err)
 		}

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/dirtemplate"
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 )
 
 // The package's migrated-store templates: each built once per test binary by
@@ -63,7 +64,7 @@ func unrelatedDoltDir(t *testing.T) string {
 // buildStoreTemplate opens a new store at dir and closes it, so the template
 // holds no engine.
 func buildStoreTemplate(dir string) error {
-	st, err := Open(context.Background(), dir, "test-workspace-id")
+	st, err := Open(context.Background(), testEnv(), dir, "test-workspace-id")
 	if err != nil {
 		return fmt.Errorf("template Open: %w", err)
 	}
@@ -73,3 +74,7 @@ func buildStoreTemplate(dir string) error {
 func TestMain(m *testing.M) {
 	os.Exit(dirtemplate.Run(m, storeTemplate, unrelatedStoreTemplate))
 }
+
+// testEnv is the test process's environment, read when it is called, so a
+// test's t.Setenv reaches the git the store it opens runs.
+func testEnv() environ.Env { return environ.Of(os.Environ()) }

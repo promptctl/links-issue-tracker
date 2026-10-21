@@ -53,7 +53,7 @@ func TestASnapshotLeavesOutTheRemoteCacheAndStillSyncsOnceRestored(t *testing.T)
 
 	writeAndPush := func(root, title string) {
 		t.Helper()
-		st, err := Open(ctx, root, "ws")
+		st, err := Open(ctx, testEnv(), root, "ws")
 		if err != nil {
 			t.Fatalf("Open(%s) error = %v", root, err)
 		}

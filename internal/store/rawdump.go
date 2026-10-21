@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 )
 
 // RawDump is a schema-assumption-free snapshot of every table in a workspace's
@@ -57,8 +59,8 @@ type RawTable struct {
 //
 // Read-only on the broken DB is the safety property: the worst case is a read
 // error, with the user's data still intact on disk.
-func DumpRaw(ctx context.Context, doltRootDir string, workspaceID string) (_ RawDump, err error) {
-	s, err := openInitialized(ctx, doltRootDir, workspaceID, engineRead)
+func DumpRaw(ctx context.Context, env environ.Env, doltRootDir string, workspaceID string) (_ RawDump, err error) {
+	s, err := openInitialized(ctx, env, doltRootDir, workspaceID, engineRead)
 	if err != nil {
 		return RawDump{}, err
 	}

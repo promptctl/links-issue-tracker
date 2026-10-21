@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/templates"
 )
 
@@ -27,8 +28,8 @@ type agentsInstallResult struct {
 // override the user wrote, or the embedded default — becomes a managed section.
 // [LAW:parse-dont-validate] Nothing downstream re-checks the shape, because
 // downstream only ever holds a managedSection.
-func renderLinksAgentsSection(workspaceRoot string) (managedSection, templates.Source, error) {
-	content, source, err := templates.LoadWithSource(templates.AgentsSectionTemplateName, workspaceRoot)
+func renderLinksAgentsSection(env environ.Env, workspaceRoot string) (managedSection, templates.Source, error) {
+	content, source, err := templates.LoadWithSource(env, templates.AgentsSectionTemplateName, workspaceRoot)
 	if err != nil {
 		return managedSection{}, source, fmt.Errorf("load agent section template: %w", err)
 	}
@@ -85,8 +86,8 @@ func writeManagedFile(rootDir, filename, headerPrefix string, section managedSec
 // (AGENTS.md and CLAUDE.md). lit only owns the content between the BEGIN/END
 // markers; everything else in each file is the user's and is preserved.
 // [LAW:single-enforcer] All agent config file writes go through this one function.
-func ensureLinksAgentFiles(rootDir string) (agents agentsInstallResult, claude agentsInstallResult, err error) {
-	section, source, err := renderLinksAgentsSection(rootDir)
+func ensureLinksAgentFiles(env environ.Env, rootDir string) (agents agentsInstallResult, claude agentsInstallResult, err error) {
+	section, source, err := renderLinksAgentsSection(env, rootDir)
 	if err != nil {
 		return agentsInstallResult{}, agentsInstallResult{}, err
 	}

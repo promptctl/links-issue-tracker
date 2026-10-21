@@ -16,7 +16,7 @@ func TestLocationFromStorageDirMatchesDeriveLocation(t *testing.T) {
 	repo := mkdir(t, filepath.Join(t.TempDir(), "repo"))
 	run(t, repo, "git", "init")
 
-	derived, err := Locate(repo)
+	derived, err := Locate(testEnv(), repo)
 	if err != nil {
 		t.Fatalf("Locate() error = %v", err)
 	}

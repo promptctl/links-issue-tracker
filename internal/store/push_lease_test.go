@@ -133,7 +133,7 @@ func TestLeasedPushRefusesToReplaceASchemaAheadHead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	newer, err := Open(ctx, bravo, "ws")
+	newer, err := Open(ctx, testEnv(), bravo, "ws")
 	if err != nil {
 		t.Fatal(err)
 	}

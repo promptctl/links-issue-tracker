@@ -8,6 +8,7 @@ import (
 	"golang.org/x/mod/semver"
 
 	"github.com/promptctl/links-issue-tracker/internal/engine"
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/release"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
@@ -130,7 +131,7 @@ func withWorkspaceSchema(declare func() upgradeLeafShape) wsLeafFn {
 			if err != nil {
 				return fmt.Errorf("upgrade: read this binary's version info: %w", err)
 			}
-			return l.work(ctx, inv, upgradeScope{schema: workspaceSchemaReader{ws: ws}, current: current}, positional)
+			return l.work(ctx, inv, upgradeScope{schema: workspaceSchemaReader{ws: ws, env: inv.Env}, current: current}, positional)
 		})
 	}
 }
@@ -166,11 +167,12 @@ type schemaReader interface {
 // from a clean open's value OR the typed refusal — never inferred from a query
 // happening to succeed.
 type workspaceSchemaReader struct {
-	ws workspace.Info
+	ws  workspace.Info
+	env environ.Env
 }
 
 func (r workspaceSchemaReader) AppliedSchemaVersion(ctx context.Context) (applied int64, err error) {
-	st, err := engine.Open(ctx, engine.ReadOnly, r.ws.DatabasePath, r.ws.WorkspaceID)
+	st, err := engine.Open(ctx, r.env, engine.ReadOnly, r.ws.DatabasePath, r.ws.WorkspaceID)
 	if err != nil {
 		if v, ok := appliedVersionFromOpenErr(err); ok {
 			return v, nil

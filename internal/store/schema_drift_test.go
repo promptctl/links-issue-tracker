@@ -206,7 +206,7 @@ func unifiedSchemaDiff(fromLabel, toLabel, from, to string) string {
 func openFreshWorkspace(t *testing.T) *Store {
 	t.Helper()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
-	st, err := Open(context.Background(), doltRoot, "drift-canary")
+	st, err := Open(context.Background(), testEnv(), doltRoot, "drift-canary")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

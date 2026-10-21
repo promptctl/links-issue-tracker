@@ -17,10 +17,10 @@ import (
 	doltenv "github.com/dolthub/dolt/go/libraries/doltcore/env"
 	"github.com/dolthub/dolt/go/libraries/doltcore/ref"
 	"github.com/dolthub/dolt/go/libraries/utils/filesys"
-	"github.com/dolthub/dolt/go/libraries/utils/gitcmd"
 	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/types"
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -158,7 +158,7 @@ type LandedFetch struct {
 // because the chunks and ref they follow are already written and stand. A
 // superseded landing carries none of the plan out, and so none of its
 // failures.
-func LandFetchedHead(ctx context.Context, doltRootDir string, clone TakenClone, remote storage.RemoteName, branch string, pruned []storage.PrunedRef) (landed LandedFetch, err error) {
+func LandFetchedHead(ctx context.Context, env environ.Env, doltRootDir string, clone TakenClone, remote storage.RemoteName, branch string, pruned []storage.PrunedRef) (landed LandedFetch, err error) {
 	root, err := validateDoltRootDir(doltRootDir)
 	if err != nil {
 		return LandedFetch{}, err
@@ -190,7 +190,7 @@ func LandFetchedHead(ctx context.Context, doltRootDir string, clone TakenClone, 
 	// instance republished on close, and the plan going stale there costs
 	// nothing: the copy sets the ref to the clone's value, the same
 	// last-writer-wins rule every close follows.
-	cachePlan := planRemoteCacheLanding(ctx, remoteCacheBaseAt(root), remoteCacheBaseAt(clone.root), remote)
+	cachePlan := planRemoteCacheLanding(ctx, env, remoteCacheBaseAt(root), remoteCacheBaseAt(clone.root), remote)
 
 	releaseWorkspace, err := acquireLiveStoreHold(ctx, root)
 	if err != nil {
@@ -234,7 +234,7 @@ func LandFetchedHead(ctx context.Context, doltRootDir string, clone TakenClone, 
 		if landErr != nil {
 			return landErr
 		}
-		cacheErr = cachePlan.landedBy(landed.Record).apply(holdCtx)
+		cacheErr = cachePlan.landedBy(landed.Record).apply(holdCtx, env)
 		return nil
 	})
 	// A failed hold returns what it did before the failure: each deletion
@@ -635,7 +635,7 @@ type mirrorCopy struct {
 // same value costs nothing under the hold. A mirror that cannot be listed is
 // reported by the plan's apply and skipped, so a plan that is not carried out
 // reports nothing.
-func planRemoteCacheLanding(ctx context.Context, liveBase string, cloneBase string, remote storage.RemoteName) remoteCacheLanding {
+func planRemoteCacheLanding(ctx context.Context, env environ.Env, liveBase string, cloneBase string, remote storage.RemoteName) remoteCacheLanding {
 	fetched := lastKnownRefNamespace + remote.String() + "/"
 	keys, err := listRemoteCacheKeys(cloneBase)
 	if err != nil {
@@ -653,12 +653,12 @@ func planRemoteCacheLanding(ctx context.Context, liveBase string, cloneBase stri
 			errs = append(errs, fmt.Errorf("stat the live mirror %s: %w", key, err))
 			continue
 		}
-		cloneRefs, err := refsUnder(ctx, cloneRepo, fetched)
+		cloneRefs, err := refsUnder(ctx, env, cloneRepo, fetched)
 		if err != nil {
 			errs = append(errs, err)
 			continue
 		}
-		liveRefs, err := refsUnder(ctx, liveRepo, fetched)
+		liveRefs, err := refsUnder(ctx, env, liveRepo, fetched)
 		if err != nil {
 			errs = append(errs, err)
 			continue
@@ -692,7 +692,7 @@ func (p remoteCacheLanding) landedBy(record FetchedHeadRecord) remoteCacheLandin
 // every other writer of the live mirrors — Dolt's own fetch and push on the
 // live store — runs under that store's LOCK too, so a mirror has one writer at
 // a time.
-func (p remoteCacheLanding) apply(ctx context.Context) error {
+func (p remoteCacheLanding) apply(ctx context.Context, env environ.Env) error {
 	errs := []error{p.unplanned}
 	for _, m := range p.moves {
 		if err := os.MkdirAll(m.liveBase, 0o755); err != nil {
@@ -704,7 +704,7 @@ func (p remoteCacheLanding) apply(ctx context.Context) error {
 		}
 	}
 	for _, c := range p.copies {
-		if out, err := mirrorFetch(ctx, c.liveRepo, c.cloneRepo, c.refspecs...).CombinedOutput(); err != nil {
+		if out, err := mirrorFetch(ctx, env, c.liveRepo, c.cloneRepo, c.refspecs...).CombinedOutput(); err != nil {
 			errs = append(errs, fmt.Errorf("copy %d ref(s) of the clone's mirror %s into the live store: %w: %s", len(c.refspecs), filepath.Base(filepath.Dir(c.liveRepo)), err, strings.TrimSpace(string(out))))
 		}
 	}
@@ -720,8 +720,8 @@ type mirrorRef struct {
 // listMirrorRefs lists the refs under refs/dolt/ in one mirror, newest commit
 // first. It is the one reading of a mirror's refs: the landing and the sweep
 // both read through it. [LAW:one-source-of-truth]
-func listMirrorRefs(ctx context.Context, gitDir string) ([]mirrorRef, error) {
-	out, err := mirrorGit(ctx, gitDir, gitcmd.Spec{}, "for-each-ref",
+func listMirrorRefs(ctx context.Context, env environ.Env, gitDir string) ([]mirrorRef, error) {
+	out, err := mirrorGit(ctx, env, gitDir, nil, "for-each-ref",
 		"--sort=-committerdate", "--format=%(refname) %(objectname)", "refs/dolt/").Output()
 	if err != nil {
 		return nil, fmt.Errorf("list the refs of mirror %s: %w", gitDir, err)
@@ -736,8 +736,8 @@ func listMirrorRefs(ctx context.Context, gitDir string) ([]mirrorRef, error) {
 }
 
 // refsUnder maps each ref under prefix in one mirror to the object it names.
-func refsUnder(ctx context.Context, gitDir, prefix string) (map[string]string, error) {
-	refs, err := listMirrorRefs(ctx, gitDir)
+func refsUnder(ctx context.Context, env environ.Env, gitDir, prefix string) (map[string]string, error) {
+	refs, err := listMirrorRefs(ctx, env, gitDir)
 	if err != nil {
 		return nil, err
 	}

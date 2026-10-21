@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -35,7 +34,7 @@ import (
 // embedded layers, and never clobbers unrelated project content silently.
 // [LAW:no-silent-failure]
 func runWorkflowsEdit(inv Invocation, ws workspace.Info, target string) error {
-	set := workflows.Load(ws.RootDir)
+	set := workflows.Load(inv.Env, ws.RootDir)
 	if def, ok := set.Lookup(target); ok {
 		return editExistingDefinition(inv, ws, def)
 	}
@@ -50,7 +49,7 @@ func editExistingDefinition(inv Invocation, ws workspace.Info, def workflows.Def
 	if err := refuseExistingFile(projectPath, def.ID); err != nil {
 		return err
 	}
-	raw, err := workflows.RawDefault(def.Source, def.Path)
+	raw, err := workflows.RawDefault(inv.Env, def.Source, def.Path)
 	if err != nil {
 		return err
 	}
@@ -137,21 +136,20 @@ func openOrPrintWorkflowFile(inv Invocation, path string) error {
 	if !isTerminal(inv.Stdout) {
 		return nil
 	}
-	editorCmd := strings.Fields(os.Getenv("EDITOR"))
+	editorCmd := strings.Fields(inv.Env.Get("EDITOR"))
 	if len(editorCmd) == 0 {
 		return nil
 	}
-	cmd := exec.Command(editorCmd[0], append(editorCmd[1:], path)...)
 	// The editor runs where lit ran, on the invocation's own streams: the
 	// stdout isTerminal just found to be a terminal is the one it draws on.
 	dir, err := inv.Dir.Path()
 	if err != nil {
 		return fmt.Errorf("open %s in $EDITOR: %w", path, err)
 	}
-	cmd.Dir = dir
+	cmd := inv.Env.Command(dir, editorCmd[0], append(editorCmd[1:], path)...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = inv.Stdin, inv.Stdout, inv.Stderr
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("open %s in $EDITOR (%s): %w", path, os.Getenv("EDITOR"), err)
+		return fmt.Errorf("open %s in $EDITOR (%s): %w", path, inv.Env.Get("EDITOR"), err)
 	}
 	return nil
 }

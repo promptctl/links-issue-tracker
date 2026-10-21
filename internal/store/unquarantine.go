@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
@@ -87,8 +88,8 @@ var (
 // [LAW:locality-or-seam] This is a below-the-gate entry point like DumpRaw:
 // Open's migrate is exactly what refuses a quarantined workspace, so this
 // opens through openInitialized and never migrates.
-func Unquarantine(ctx context.Context, doltRootDir string, workspaceID string) (_ Unquarantined, err error) {
-	s, err := openInitialized(ctx, doltRootDir, workspaceID, engineWrite)
+func Unquarantine(ctx context.Context, env environ.Env, doltRootDir string, workspaceID string) (_ Unquarantined, err error) {
+	s, err := openInitialized(ctx, env, doltRootDir, workspaceID, engineWrite)
 	if err != nil {
 		return Unquarantined{}, err
 	}

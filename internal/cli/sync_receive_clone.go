@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
@@ -68,13 +69,13 @@ func removeReceiveClone(clone liveClone) {
 // network; the clone holds the live store's remotes as of the take. The
 // returned error is a could-not-attempt failure (the open, the target); a
 // fetch that ran and failed is receiveFetch.fetchErr.
-func fetchIntoClone(ctx context.Context, ws workspace.Info, clone liveClone) (fetch receiveFetch, err error) {
-	session, closeClone, err := openSyncSessionAt(ctx, clone.databasePath, ws.WorkspaceID)
+func fetchIntoClone(ctx context.Context, env environ.Env, ws workspace.Info, clone liveClone) (fetch receiveFetch, err error) {
+	session, closeClone, err := openSyncSessionAt(ctx, env, clone.databasePath, ws.WorkspaceID)
 	if err != nil {
 		return receiveFetch{}, fmt.Errorf("open sync store on the receive's clone: %w", err)
 	}
 	defer func() { err = errors.Join(err, closeClone()) }()
-	target, err := resolveSyncTarget(ctx, session, ws, "")
+	target, err := resolveSyncTarget(ctx, env, session, ws, "")
 	if err != nil {
 		return receiveFetch{}, err
 	}
@@ -93,8 +94,8 @@ func fetchIntoClone(ctx context.Context, ws workspace.Info, clone liveClone) (fe
 // and not failed: the chunks and the ref landed, which is the receive; what is
 // lost is that the live store's next network operation downloads those
 // objects again.
-func landFetch(ctx context.Context, ws workspace.Info, clone liveClone, fetch receiveFetch) (store.LandedFetch, error) {
-	landed, err := store.LandFetchedHead(ctx, ws.DatabasePath, clone.taken, fetch.target.remote, fetch.target.branch, fetch.pruned)
+func landFetch(ctx context.Context, env environ.Env, ws workspace.Info, clone liveClone, fetch receiveFetch) (store.LandedFetch, error) {
+	landed, err := store.LandFetchedHead(ctx, env, ws.DatabasePath, clone.taken, fetch.target.remote, fetch.target.branch, fetch.pruned)
 	if errors.Is(err, store.ErrRemoteCacheNotLanded) {
 		fmt.Fprintf(os.Stderr, "lit: automatic receive: %v\n", err)
 		return landed, nil

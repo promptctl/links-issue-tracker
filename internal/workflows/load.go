@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/config"
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/pathspec"
 	"github.com/promptctl/links-issue-tracker/internal/templates"
 )
@@ -42,14 +43,14 @@ func mustSub(fsys embed.FS, dir string) fs.FS {
 // problem — unreadable entry, malformed frontmatter, inert or unknown-event
 // definitions — is returned as a Warning instead of an error, because a
 // broken workflow file must never break a lit invocation.
-func Load(workspaceRoot string) Set {
+func Load(env environ.Env, workspaceRoot string) Set {
 	type layer struct {
 		fsys   fs.FS
 		source templates.Source
 	}
 	layers := []layer{
 		{dirFS(projectWorkflowsDir(workspaceRoot)), templates.SourceProject},
-		{dirFS(globalWorkflowsDir()), templates.SourceGlobal},
+		{dirFS(globalWorkflowsDir(env)), templates.SourceGlobal},
 		{embeddedDefaultsFS, templates.SourceEmbedded},
 	}
 
@@ -136,8 +137,8 @@ func projectWorkflowsDir(workspaceRoot string) pathspec.PathSpec {
 	return pathspec.New(workspaceRoot).Join(".lit", "workflows")
 }
 
-func globalWorkflowsDir() pathspec.PathSpec {
+func globalWorkflowsDir(env environ.Env) pathspec.PathSpec {
 	// [LAW:one-source-of-truth] Global workflow storage reuses config.ConfigDir
 	// as the canonical root, beside the templates directory.
-	return pathspec.New(config.ConfigDir()).Join("workflows")
+	return pathspec.New(config.ConfigDir(env)).Join("workflows")
 }

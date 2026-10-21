@@ -28,7 +28,7 @@ func newTestCLIApp(t testing.TB) *app.App {
 	ctx := context.Background()
 	databasePath := storeTemplate.Copy(t)
 	workspaceRoot := filepath.Dir(databasePath)
-	st, err := engine.Open(ctx, engine.ReadWrite, databasePath, "test-workspace-id")
+	st, err := engine.Open(ctx, testEnv(), engine.ReadWrite, databasePath, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("engine.Open() error = %v", err)
 	}
@@ -180,7 +180,7 @@ func (h readyTestHarness) addDependencyWithinEpic(dependentID, dependencyID stri
 // read real domain values rather than re-parsing text. [LAW:single-enforcer]
 func (h readyTestHarness) runWorkableAnnotated(rf workableFilter, limit int) []annotation.AnnotatedIssue {
 	h.t.Helper()
-	gathered, err := gatherWorkableAnnotated(h.ctx, h.ap, rf)
+	gathered, err := gatherWorkableAnnotated(h.ctx, testEnv(), h.ap, rf)
 	if err != nil {
 		h.t.Fatalf("gatherWorkableAnnotated(%+v) error = %v", rf, err)
 	}

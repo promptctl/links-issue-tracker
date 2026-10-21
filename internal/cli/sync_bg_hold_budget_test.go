@@ -95,7 +95,7 @@ func TestMirrorPushHoldsNothingOnTheLiveStore(t *testing.T) {
 		t.Fatalf("cycle log does not report the deadline cut:\noutput:\n%s", res.out.String())
 	}
 	// The clone the push ran from is gone with the cycle — success or cut.
-	ws, err := workspace.Resolve(root)
+	ws, err := workspace.Resolve(testEnv(), root)
 	if err != nil {
 		t.Fatalf("resolve workspace: %v", err)
 	}
@@ -166,7 +166,7 @@ func TestMirrorPushDeadlineCutsHungResolveJoinsOneTrace(t *testing.T) {
 		t.Fatalf("cycle log does not report the deadline cut:\noutput:\n%s", mirrorOut.String())
 	}
 
-	ws, err := workspace.Resolve(root)
+	ws, err := workspace.Resolve(testEnv(), root)
 	if err != nil {
 		t.Fatalf("resolve workspace: %v", err)
 	}
@@ -221,7 +221,7 @@ func TestMirrorPushDeadlineCutsTheOpen(t *testing.T) {
 	if !strings.Contains(out.String(), "attempted=false push_deadline_cut=true") {
 		t.Fatalf("cycle log does not report the open the deadline cut:\noutput:\n%s", out.String())
 	}
-	ws, err := workspace.Resolve(root)
+	ws, err := workspace.Resolve(testEnv(), root)
 	if err != nil {
 		t.Fatalf("resolve workspace: %v", err)
 	}
@@ -241,7 +241,7 @@ func TestMirrorPushDeadlineCutsTheOpen(t *testing.T) {
 // elapsed time, and the cycle end carries the phases apart.
 func TestMirrorCycleSweepsADeadMirrorsClone(t *testing.T) {
 	_, root, _, runInProcess, _ := setupMirrorDeadlineRepo(t)
-	ws, err := workspace.Resolve(root)
+	ws, err := workspace.Resolve(testEnv(), root)
 	if err != nil {
 		t.Fatalf("resolve workspace: %v", err)
 	}
@@ -527,7 +527,7 @@ func measureHealthyMirrorCycle(t *testing.T, root string, runInProcess func(time
 	if !strings.Contains(out.String(), "attempted=true push_deadline_cut=false") {
 		t.Fatalf("the sample cycle was cut or never attempted under the production deadline, so its cost is not the cost of a healthy cycle:\noutput:\n%s", out.String())
 	}
-	ws, err := workspace.Resolve(root)
+	ws, err := workspace.Resolve(testEnv(), root)
 	if err != nil {
 		t.Fatalf("resolve workspace: %v", err)
 	}

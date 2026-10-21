@@ -1166,7 +1166,7 @@ func TestWriteEngineRecordsItselfAsTheJournalHolder(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
-	s, err := Open(ctx, doltRoot, "test-workspace-id")
+	s, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -1191,7 +1191,7 @@ func TestWriteEngineRecordsItselfAsTheJournalHolder(t *testing.T) {
 	// A read engine records nothing: it cannot know whether it took LOCK or
 	// fell back past it, and a record naming a holder that holds nothing
 	// would send an operator after the wrong pid.
-	r, err := OpenForRead(ctx, doltRoot, "test-workspace-id")
+	r, err := OpenForRead(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("OpenForRead() error = %v", err)
 	}

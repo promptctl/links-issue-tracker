@@ -10,7 +10,7 @@ import (
 )
 
 func TestRawDefaultReadsEmbeddedDoneVerbatim(t *testing.T) {
-	raw, err := RawDefault(templates.SourceEmbedded, "done.md")
+	raw, err := RawDefault(testEnv(), templates.SourceEmbedded, "done.md")
 	if err != nil {
 		t.Fatalf("RawDefault(embedded, done.md) error = %v", err)
 	}
@@ -29,7 +29,7 @@ func TestRawDefaultReadsGlobalLayer(t *testing.T) {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	raw, err := RawDefault(templates.SourceGlobal, "custom.md")
+	raw, err := RawDefault(testEnv(), templates.SourceGlobal, "custom.md")
 	if err != nil {
 		t.Fatalf("RawDefault(global, custom.md) error = %v", err)
 	}
@@ -39,7 +39,7 @@ func TestRawDefaultReadsGlobalLayer(t *testing.T) {
 }
 
 func TestRawDefaultRejectsProjectLayer(t *testing.T) {
-	if _, err := RawDefault(templates.SourceProject, "whatever.md"); err == nil {
+	if _, err := RawDefault(testEnv(), templates.SourceProject, "whatever.md"); err == nil {
 		t.Fatal("RawDefault(project, ...) error = nil, want an error (project is the override target, not a source)")
 	}
 }

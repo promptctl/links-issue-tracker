@@ -38,7 +38,7 @@ func TestSyncFetchSelectsTheSyncRemoteAndFailsOnAnUnreadableBranchRecord(t *test
 		t.Fatalf("`lit sync fetch --verbose` = %q, want %q", out, "fetched gh")
 	}
 
-	ws, err := workspace.Resolve(dir)
+	ws, err := workspace.Resolve(testEnv(), dir)
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}

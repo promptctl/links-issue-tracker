@@ -29,7 +29,7 @@ const workerJoinPatience = 2 * time.Minute
 // git repository has no store, so no lit run there spawns a worker.
 func joinDetachedWorkers(t *testing.T, dir string) {
 	t.Helper()
-	loc, err := workspace.Locate(dir)
+	loc, err := workspace.Locate(testEnv(), dir)
 	if errors.Is(err, workspace.ErrNotGitRepo) {
 		return
 	}
