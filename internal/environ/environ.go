@@ -7,10 +7,14 @@
 package environ
 
 import (
+	"context"
 	"errors"
+	"os/exec"
 	"runtime"
 	"slices"
 	"strings"
+
+	"github.com/dolthub/dolt/go/libraries/utils/gitcmd"
 )
 
 // Env is an environment, as os.Environ lists one. The zero Env is the empty
@@ -63,28 +67,6 @@ func (e Env) HomeDir() (string, error) {
 	return "", errors.New(spelled + " is not defined")
 }
 
-// TempDir is the directory for temporary files, resolved as os.TempDir
-// resolves it on this GOOS. On windows that is the first of TMP, TEMP,
-// USERPROFILE and SystemRoot that is set, the order GetTempPath2 tries them
-// in, and an environment with none of them is refused.
-func (e Env) TempDir() (string, error) {
-	switch e.goos {
-	case "windows":
-		for _, key := range []string{"TMP", "TEMP", "USERPROFILE", "SystemRoot"} {
-			if dir := e.Get(key); dir != "" {
-				return dir, nil
-			}
-		}
-		return "", errors.New("none of TMP, TEMP, USERPROFILE or SystemRoot is defined")
-	case "plan9":
-		return "/tmp", nil
-	}
-	if dir := e.Get("TMPDIR"); dir != "" {
-		return dir, nil
-	}
-	return "/tmp", nil
-}
-
 // Without is the environment with every entry for the named keys removed.
 func (e Env) Without(keys ...string) Env {
 	kept := make([]string, 0, len(e.vars))
@@ -103,12 +85,36 @@ func (e Env) With(set ...string) Env {
 	return Env{vars: append(slices.Clone(e.vars), set...), goos: e.goos}
 }
 
-// List is the environment as os/exec's Cmd.Env and gitcmd's Spec.Env take it.
-// It is never nil: both read a nil list as "inherit the process", which is
-// the read this package exists to end, so the empty environment is an empty,
-// non-nil list.
+// List is the environment as a KEY=VALUE list, a copy of the Env's own. It is
+// never nil: os/exec and gitcmd read a nil list as "inherit the process",
+// which is the read this package exists to end.
 func (e Env) List() []string {
 	return append([]string{}, e.vars...)
+}
+
+// Command, CommandContext and Git are the one way code a run can reach builds
+// a child process: each runs the child in this environment, so no caller sets
+// Env itself or can leave it nil. TestNothingRunReachesReadsTheProcess refuses
+// every other way to build one. [LAW:single-enforcer]
+
+// Command is exec.Command run in this environment.
+func (e Env) Command(name string, args ...string) *exec.Cmd {
+	cmd := exec.Command(name, args...)
+	cmd.Env = e.List()
+	return cmd
+}
+
+// CommandContext is exec.CommandContext run in this environment.
+func (e Env) CommandContext(ctx context.Context, name string, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Env = e.List()
+	return cmd
+}
+
+// Git is gitcmd.Command run in this environment, whatever Env spec carries.
+func (e Env) Git(ctx context.Context, spec gitcmd.Spec, args ...string) *gitcmd.Cmd {
+	spec.Env = e.List()
+	return gitcmd.Command(ctx, spec, args...)
 }
 
 func (e Env) sameKey(a, b string) bool {

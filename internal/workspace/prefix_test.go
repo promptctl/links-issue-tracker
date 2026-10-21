@@ -66,7 +66,7 @@ var namesThatDeriveNothing = []string{"ab", "a", "AB", "Qz", "___", "...", "--"}
 func TestResolveRefusesEveryNameItCannotDeriveAPrefixFrom(t *testing.T) {
 	for _, name := range namesThatDeriveNothing {
 		t.Run(name, func(t *testing.T) {
-			_, err := Resolve(repoNamed(t, name))
+			_, err := Resolve(testEnv(), repoNamed(t, name))
 			if err == nil {
 				t.Fatalf("Resolve() in a repository named %q succeeded, want a refusal", name)
 			}
@@ -96,7 +96,7 @@ func TestResolveWithPrefixInitializesEveryNameDerivationRefuses(t *testing.T) {
 				t.Fatalf("RequestPrefix() error = %v", err)
 			}
 			repo := repoNamed(t, name)
-			info, err := ResolveWithPrefix(repo, requested)
+			info, err := ResolveWithPrefix(testEnv(), repo, requested)
 			if err != nil {
 				t.Fatalf("ResolveWithPrefix() in a repository named %q error = %v", name, err)
 			}
@@ -124,7 +124,7 @@ func TestResolveWithPrefixInitializesEveryNameDerivationRefuses(t *testing.T) {
 			// The next command needs no flag: the prefix is on disk now, so a
 			// plain Resolve of the same repository reads it back rather than
 			// re-deriving and refusing.
-			again, err := Resolve(repo)
+			again, err := Resolve(testEnv(), repo)
 			if err != nil {
 				t.Fatalf("Resolve() after an explicit prefix was persisted error = %v", err)
 			}
@@ -138,7 +138,7 @@ func TestResolveWithPrefixInitializesEveryNameDerivationRefuses(t *testing.T) {
 func TestResolveWithPrefixLeavesADerivableNameAlone(t *testing.T) {
 	// The escape hatch must not become the path: a name that derives keeps
 	// deriving, and the request is still honoured where one is given.
-	info, err := Resolve(repoNamed(t, "myrepo"))
+	info, err := Resolve(testEnv(), repoNamed(t, "myrepo"))
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
@@ -153,7 +153,7 @@ func TestResolveWithPrefixLeavesADerivableNameAlone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RequestPrefix() error = %v", err)
 	}
-	explicit, err := ResolveWithPrefix(repoNamed(t, "myrepo"), requested)
+	explicit, err := ResolveWithPrefix(testEnv(), repoNamed(t, "myrepo"), requested)
 	if err != nil {
 		t.Fatalf("ResolveWithPrefix() error = %v", err)
 	}
@@ -164,7 +164,7 @@ func TestResolveWithPrefixLeavesADerivableNameAlone(t *testing.T) {
 
 func TestResolveWithPrefixRefusesToContradictAWorkspaceThatHasOne(t *testing.T) {
 	repo := repoNamed(t, "myrepo")
-	if _, err := Resolve(repo); err != nil {
+	if _, err := Resolve(testEnv(), repo); err != nil {
 		t.Fatalf("Resolve() initial error = %v", err)
 	}
 
@@ -172,7 +172,7 @@ func TestResolveWithPrefixRefusesToContradictAWorkspaceThatHasOne(t *testing.T) 
 	if err != nil {
 		t.Fatalf("RequestPrefix() error = %v", err)
 	}
-	_, err = ResolveWithPrefix(repo, requested)
+	_, err = ResolveWithPrefix(testEnv(), repo, requested)
 	if err == nil {
 		t.Fatal("ResolveWithPrefix() overwrote an existing workspace's prefix, want a refusal")
 	}
@@ -187,7 +187,7 @@ func TestResolveWithPrefixRefusesToContradictAWorkspaceThatHasOne(t *testing.T) 
 	}
 
 	// And nothing was written on the way to refusing.
-	after, err := Resolve(repo)
+	after, err := Resolve(testEnv(), repo)
 	if err != nil {
 		t.Fatalf("Resolve() after refusal error = %v", err)
 	}
@@ -202,7 +202,7 @@ func TestResolveWithPrefixRefusesToContradictAWorkspaceThatHasOne(t *testing.T) 
 // refusal sends the caller, and nothing is written on the way.
 func TestResolveWithPrefixRefusesToOverrideAnIllegalStoredPrefix(t *testing.T) {
 	repo := repoNamed(t, "myrepo")
-	info, err := Resolve(repo)
+	info, err := Resolve(testEnv(), repo)
 	if err != nil {
 		t.Fatalf("Resolve() initial error = %v", err)
 	}
@@ -212,7 +212,7 @@ func TestResolveWithPrefixRefusesToOverrideAnIllegalStoredPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RequestPrefix() error = %v", err)
 	}
-	_, err = ResolveWithPrefix(repo, requested)
+	_, err = ResolveWithPrefix(testEnv(), repo, requested)
 	var stored StoredPrefixError
 	if err == nil || errors.As(err, &stored) || !errors.Is(err, ErrIssuePrefixRefused) {
 		t.Fatalf("ResolveWithPrefix() error = %v, want the contradiction refusal", err)
@@ -234,7 +234,7 @@ func TestResolveWithPrefixAcceptsAPrefixTheWorkspaceAlreadyHas(t *testing.T) {
 	// agreement, not contradiction. Normalization happens first, so a caller may
 	// spell it differently and still be agreeing.
 	repo := repoNamed(t, "myrepo")
-	if _, err := Resolve(repo); err != nil {
+	if _, err := Resolve(testEnv(), repo); err != nil {
 		t.Fatalf("Resolve() initial error = %v", err)
 	}
 	for _, spelling := range []string{"myrepo", "MyRepo", "  myrepo  "} {
@@ -242,7 +242,7 @@ func TestResolveWithPrefixAcceptsAPrefixTheWorkspaceAlreadyHas(t *testing.T) {
 		if err != nil {
 			t.Fatalf("RequestPrefix(%q) error = %v", spelling, err)
 		}
-		info, err := ResolveWithPrefix(repo, requested)
+		info, err := ResolveWithPrefix(testEnv(), repo, requested)
 		if err != nil {
 			t.Fatalf("ResolveWithPrefix(%q) error = %v, want agreement", spelling, err)
 		}

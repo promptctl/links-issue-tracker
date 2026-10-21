@@ -1,6 +1,11 @@
 package workflows
 
-import "testing"
+import (
+	"os"
+	"testing"
+
+	"github.com/promptctl/links-issue-tracker/internal/environ"
+)
 
 func TestSetLookup(t *testing.T) {
 	set := Set{Definitions: []Definition{{ID: "a"}, {ID: "b"}}}
@@ -12,3 +17,7 @@ func TestSetLookup(t *testing.T) {
 		t.Fatalf("Lookup(missing) ok = true, want false")
 	}
 }
+
+// testEnv is the test process's environment, read when it is called, so a
+// test's t.Setenv reaches the load it runs.
+func testEnv() environ.Env { return environ.Of(os.Environ()) }

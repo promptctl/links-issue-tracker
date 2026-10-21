@@ -5,13 +5,15 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 )
 
 func TestLoadReturnsEmbeddedDefaultWhenNoOverride(t *testing.T) {
 	xdgRoot := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", xdgRoot)
 
-	content, err := Load(AgentsSectionTemplateName, t.TempDir())
+	content, err := Load(testEnv(), AgentsSectionTemplateName, t.TempDir())
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -35,7 +37,7 @@ func TestLoadAbsentWorkspaceRootFallsThrough(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", xdgRoot)
 
 	for _, root := range []string{"", "   ", "\t\n"} {
-		content, source, err := LoadWithSource(AgentsSectionTemplateName, root)
+		content, source, err := LoadWithSource(testEnv(), AgentsSectionTemplateName, root)
 		if err != nil {
 			t.Fatalf("LoadWithSource(root=%q) error = %v", root, err)
 		}
@@ -61,7 +63,7 @@ func TestLoadGlobalOverrideWins(t *testing.T) {
 		t.Fatalf("WriteFile(global template) error = %v", err)
 	}
 
-	got, err := Load(AgentsSectionTemplateName, t.TempDir())
+	got, err := Load(testEnv(), AgentsSectionTemplateName, t.TempDir())
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -92,7 +94,7 @@ func TestLoadProjectOverrideWins(t *testing.T) {
 		t.Fatalf("WriteFile(project template) error = %v", err)
 	}
 
-	got, err := Load(AgentsSectionTemplateName, workspaceRoot)
+	got, err := Load(testEnv(), AgentsSectionTemplateName, workspaceRoot)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -110,7 +112,7 @@ func TestLoadPropagatesProjectFilesystemError(t *testing.T) {
 		t.Fatalf("MkdirAll(project template path as dir) error = %v", err)
 	}
 
-	_, err := Load(AgentsSectionTemplateName, workspaceRoot)
+	_, err := Load(testEnv(), AgentsSectionTemplateName, workspaceRoot)
 	if err == nil {
 		t.Fatal("Load() expected filesystem error, got nil")
 	}
@@ -120,7 +122,7 @@ func TestLoadWithSourceReportsLayer(t *testing.T) {
 	t.Run("embedded when no overrides", func(t *testing.T) {
 		t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 
-		content, source, err := LoadWithSource(AgentsSectionTemplateName, t.TempDir())
+		content, source, err := LoadWithSource(testEnv(), AgentsSectionTemplateName, t.TempDir())
 		if err != nil {
 			t.Fatalf("LoadWithSource() error = %v", err)
 		}
@@ -145,7 +147,7 @@ func TestLoadWithSourceReportsLayer(t *testing.T) {
 			t.Fatalf("WriteFile(global template) error = %v", err)
 		}
 
-		content, source, err := LoadWithSource(AgentsSectionTemplateName, t.TempDir())
+		content, source, err := LoadWithSource(testEnv(), AgentsSectionTemplateName, t.TempDir())
 		if err != nil {
 			t.Fatalf("LoadWithSource() error = %v", err)
 		}
@@ -179,7 +181,7 @@ func TestLoadWithSourceReportsLayer(t *testing.T) {
 			t.Fatalf("WriteFile(project template) error = %v", err)
 		}
 
-		content, source, err := LoadWithSource(AgentsSectionTemplateName, workspaceRoot)
+		content, source, err := LoadWithSource(testEnv(), AgentsSectionTemplateName, workspaceRoot)
 		if err != nil {
 			t.Fatalf("LoadWithSource() error = %v", err)
 		}
@@ -217,3 +219,7 @@ func TestNamesReturnsAllManagedTemplates(t *testing.T) {
 		}
 	}
 }
+
+// testEnv is the test process's environment, read when it is called, so a
+// test's t.Setenv reaches the load it runs.
+func testEnv() environ.Env { return environ.Of(os.Environ()) }

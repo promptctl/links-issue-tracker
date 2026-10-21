@@ -15,6 +15,7 @@ import (
 	"github.com/dolthub/dolt/go/libraries/utils/gitcmd"
 	"github.com/google/uuid"
 	"github.com/promptctl/links-issue-tracker/internal/atomicfile"
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/issueid"
 )
 
@@ -237,14 +238,14 @@ type GitRemote struct {
 // UpstreamRemote is the name of the remote the current branch tracks, whole
 // as git records it ("." for a local branch, "" for none or a detached HEAD).
 // It is never cut from the upstream ref: in a/b/main the remote is a/b.
-func UpstreamRemote(ctx context.Context, cwd string) string {
-	remote, _ := gitOutput(ctx, cwd, "for-each-ref", "--format=%(if)%(HEAD)%(then)%(upstream:remotename)%(end)", "refs/heads/")
+func UpstreamRemote(ctx context.Context, env environ.Env, cwd string) string {
+	remote, _ := gitOutput(ctx, env, cwd, "for-each-ref", "--format=%(if)%(HEAD)%(then)%(upstream:remotename)%(end)", "refs/heads/")
 	return strings.TrimSpace(remote)
 }
 
-func RemoteHasRefs(ctx context.Context, cwd string, remote string) (bool, error) {
+func RemoteHasRefs(ctx context.Context, env environ.Env, cwd string, remote string) (bool, error) {
 	remoteName := normalizeRemoteName(remote)
-	output, err := gitOutput(ctx, cwd, "ls-remote", remoteName)
+	output, err := gitOutput(ctx, env, cwd, "ls-remote", remoteName)
 	if err != nil {
 		return false, err
 	}
@@ -259,9 +260,9 @@ func RemoteHasRefs(ctx context.Context, cwd string, remote string) (bool, error)
 // is on the remote. Empty when the remote carries no Dolt data at all.
 // [LAW:one-source-of-truth] the one ls-remote of that namespace; the
 // has-data question below is derived from it, never asked again.
-func RemoteDoltRefs(ctx context.Context, cwd string, remote string) (string, error) {
+func RemoteDoltRefs(ctx context.Context, env environ.Env, cwd string, remote string) (string, error) {
 	remoteName := normalizeRemoteName(remote)
-	output, err := gitOutput(ctx, cwd, "ls-remote", remoteName, "refs/dolt/*")
+	output, err := gitOutput(ctx, env, cwd, "ls-remote", remoteName, "refs/dolt/*")
 	if err != nil {
 		return "", err
 	}
@@ -275,8 +276,8 @@ func RemoteDoltRefs(ctx context.Context, cwd string, remote string) (string, err
 // "remote has tickets to adopt" apart from "remote is just a code repo". The
 // adopt step keys its loud-vs-silent decision on this so an empty store that
 // hides a real remote backlog is unrepresentable. [LAW:one-source-of-truth]
-func RemoteHasDoltData(ctx context.Context, cwd string, remote string) (bool, error) {
-	refs, err := RemoteDoltRefs(ctx, cwd, remote)
+func RemoteHasDoltData(ctx context.Context, env environ.Env, cwd string, remote string) (bool, error) {
+	refs, err := RemoteDoltRefs(ctx, env, cwd, remote)
 	if err != nil {
 		return false, err
 	}
@@ -287,9 +288,9 @@ func RemoteHasDoltData(ctx context.Context, cwd string, remote string) (bool, er
 // records it: refs/remotes/<remote>/HEAD, which `git clone` sets and a plain
 // `git remote add` does not. It never touches the network, so any command may
 // ask it; "" when the ref is unset.
-func LocalRemoteHead(ctx context.Context, cwd string, remote string) string {
+func LocalRemoteHead(ctx context.Context, env environ.Env, cwd string, remote string) string {
 	remoteName := normalizeRemoteName(remote)
-	symbolicRefOutput, _ := gitOutput(ctx, cwd, "symbolic-ref", "--quiet", "--short", "refs/remotes/"+remoteName+"/HEAD")
+	symbolicRefOutput, _ := gitOutput(ctx, env, cwd, "symbolic-ref", "--quiet", "--short", "refs/remotes/"+remoteName+"/HEAD")
 	return strings.TrimSpace(defaultRemoteBranchFromSymbolicRef(remoteName, symbolicRefOutput))
 }
 
@@ -298,9 +299,9 @@ func LocalRemoteHead(ctx context.Context, cwd string, remote string) string {
 // that already talks to the remote asks it. "" with a nil error means the
 // remote answered and advertises no HEAD branch; a failed ask is the error.
 // [LAW:no-silent-failure]
-func AdvertisedRemoteHead(ctx context.Context, cwd string, remote string) (string, error) {
+func AdvertisedRemoteHead(ctx context.Context, env environ.Env, cwd string, remote string) (string, error) {
 	remoteName := normalizeRemoteName(remote)
-	lsRemoteOutput, err := gitOutput(ctx, cwd, "ls-remote", "--symref", remoteName, "HEAD")
+	lsRemoteOutput, err := gitOutput(ctx, env, cwd, "ls-remote", "--symref", remoteName, "HEAD")
 	if err != nil {
 		return "", fmt.Errorf("git ls-remote --symref %s HEAD: %w", remoteName, err)
 	}
@@ -309,8 +310,8 @@ func AdvertisedRemoteHead(ctx context.Context, cwd string, remote string) (strin
 
 // Resolve finds the workspace containing cwd, creating its config on first
 // sight, with no prefix of its own to offer — the repository name supplies one.
-func Resolve(cwd string) (Info, error) {
-	return ResolveWithPrefix(cwd, PrefixRequest{})
+func Resolve(env environ.Env, cwd string) (Info, error) {
+	return ResolveWithPrefix(env, cwd, PrefixRequest{})
 }
 
 // ResolveWithPrefix is Resolve for the one caller that may carry an explicit
@@ -320,18 +321,18 @@ func Resolve(cwd string) (Info, error) {
 // it crosses this boundary as a value, instead of being parked somewhere
 // ambient for this function to read back. [LAW:no-shared-mutable-globals]
 // [LAW:effects-at-boundaries] the request reaches the one write that consumes it.
-func ResolveWithPrefix(cwd string, requested PrefixRequest) (Info, error) {
+func ResolveWithPrefix(env environ.Env, cwd string, requested PrefixRequest) (Info, error) {
 	// [LAW:dataflow-not-control-flow] Store-geometry git calls are local rev-parse
 	// queries that cannot hang on a network, so cancellation buys nothing here;
 	// context.Background() is the honest "never cancels" value, and it keeps Resolve's
 	// many callers free of a ctx they would only forward to a subprocess that never
 	// blocks. Cancellation is threaded only through the receive/sync path's network
 	// git calls, where a wedge is reachable.
-	rootDir, err := gitOutput(context.Background(), cwd, "rev-parse", "--show-toplevel")
+	rootDir, err := gitOutput(context.Background(), env, cwd, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return Info{}, classifyGitError(fmt.Sprintf("git rev-parse --show-toplevel in %q", cwd), err)
 	}
-	loc, err := Locate(cwd)
+	loc, err := Locate(env, cwd)
 	if err != nil {
 		return Info{}, err
 	}
@@ -339,7 +340,7 @@ func ResolveWithPrefix(cwd string, requested PrefixRequest) (Info, error) {
 	// lives in it is deliberately NOT done here: Resolve runs for read-only
 	// commands too, and a checkout that has only ever been read must carry no
 	// identity. The mint hangs off the access mode instead, in app.Open.
-	privateGitDir, err := resolvePrivateGitDir(cwd)
+	privateGitDir, err := resolvePrivateGitDir(env, cwd)
 	if err != nil {
 		return Info{}, err
 	}
@@ -368,7 +369,7 @@ func ResolveWithPrefix(cwd string, requested PrefixRequest) (Info, error) {
 // [LAW:single-enforcer] This is the one place cwd becomes a set of store paths,
 // so Resolve (which then creates the store) and Discover (which then only
 // detects it) can never derive different paths for the same repository.
-func Locate(cwd string) (Location, error) {
+func Locate(env environ.Env, cwd string) (Location, error) {
 	// [LAW:one-source-of-truth] Git owns repository geometry. --git-common-dir is
 	// emitted relative to the invocation cwd (e.g. "../.git" from a subdirectory),
 	// so a relative result must be anchored to the cwd. Anchoring it to the
@@ -380,7 +381,7 @@ func Locate(cwd string) (Location, error) {
 	// [LAW:dataflow-not-control-flow] Local geometry query; never blocks on a
 	// network, so context.Background() (never cancels) is the correct value — see
 	// Resolve for why the receive/sync path threads a real ctx and this does not.
-	gitCommonDir, err := gitOutput(context.Background(), cwd, "rev-parse", "--git-common-dir")
+	gitCommonDir, err := gitOutput(context.Background(), env, cwd, "rev-parse", "--git-common-dir")
 	if err != nil {
 		return Location{}, classifyGitError(fmt.Sprintf("git rev-parse --git-common-dir in %q", cwd), err)
 	}
@@ -443,11 +444,11 @@ func anchorGitPath(cwd string, gitPath string) string {
 // primary clone a linked worktree. Identity does not depend on the spelling —
 // the token inside the file is the identity, and any spelling that opens the
 // file yields the same token.
-func resolvePrivateGitDir(cwd string) (string, error) {
+func resolvePrivateGitDir(env environ.Env, cwd string) (string, error) {
 	// [LAW:dataflow-not-control-flow] Local geometry query that cannot block on a
 	// network, so context.Background() — "never cancels" — is the honest value,
 	// matching every other rev-parse in this file. See Resolve for the full note.
-	privateGitDir, err := gitOutput(context.Background(), cwd, "rev-parse", "--git-dir")
+	privateGitDir, err := gitOutput(context.Background(), env, cwd, "rev-parse", "--git-dir")
 	if err != nil {
 		return "", classifyGitError(fmt.Sprintf("git rev-parse --git-dir in %q", cwd), err)
 	}
@@ -493,11 +494,11 @@ func LocationFromStorageDir(storageDir string) Location {
 // becomes a directory something runs in, and git run in an empty or relative
 // one would answer for the process's working directory instead of the
 // caller's. [LAW:single-enforcer] [LAW:effects-at-boundaries]
-func gitOutput(ctx context.Context, cwd string, args ...string) (string, error) {
+func gitOutput(ctx context.Context, env environ.Env, cwd string, args ...string) (string, error) {
 	if !filepath.IsAbs(cwd) {
 		return "", fmt.Errorf("run git in %q: the directory is not absolute", cwd)
 	}
-	out, err := gitcmd.Command(ctx, gitcmd.Spec{Dir: cwd}, args...).Output()
+	out, err := env.Git(ctx, gitcmd.Spec{Dir: cwd}, args...).Output()
 	if err != nil {
 		return "", gitFailure(err)
 	}
@@ -578,8 +579,8 @@ func defaultRemoteBranchFromLSRemote(output string) string {
 	return ""
 }
 
-func GitRemotes(ctx context.Context, cwd string) ([]GitRemote, error) {
-	output, err := gitOutput(ctx, cwd, "remote", "-v")
+func GitRemotes(ctx context.Context, env environ.Env, cwd string) ([]GitRemote, error) {
+	output, err := gitOutput(ctx, env, cwd, "remote", "-v")
 	if err != nil {
 		return nil, err
 	}

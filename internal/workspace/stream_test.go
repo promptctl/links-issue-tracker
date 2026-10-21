@@ -32,11 +32,11 @@ func TestAcceptanceThreeActorsTwoTokens(t *testing.T) {
 	linked := filepath.Join(t.TempDir(), "linked")
 	run(t, primary, "git", "worktree", "add", linked)
 
-	primaryInfo, err := Resolve(primary)
+	primaryInfo, err := Resolve(testEnv(), primary)
 	if err != nil {
 		t.Fatalf("Resolve(primary) error = %v", err)
 	}
-	linkedInfo, err := Resolve(linked)
+	linkedInfo, err := Resolve(testEnv(), linked)
 	if err != nil {
 		t.Fatalf("Resolve(linked) error = %v", err)
 	}
@@ -81,11 +81,11 @@ func TestOneRepositoryOneStoreManyIdentities(t *testing.T) {
 	linked := filepath.Join(t.TempDir(), "linked")
 	run(t, primary, "git", "worktree", "add", linked)
 
-	primaryInfo, err := Resolve(primary)
+	primaryInfo, err := Resolve(testEnv(), primary)
 	if err != nil {
 		t.Fatalf("Resolve(primary) error = %v", err)
 	}
-	linkedInfo, err := Resolve(linked)
+	linkedInfo, err := Resolve(testEnv(), linked)
 	if err != nil {
 		t.Fatalf("Resolve(linked) error = %v", err)
 	}
@@ -131,11 +131,11 @@ func TestPrivateGitDirResolvesFromSubdirectory(t *testing.T) {
 		t.Fatalf("MkdirAll error = %v", err)
 	}
 
-	fromRoot, err := Resolve(repo)
+	fromRoot, err := Resolve(testEnv(), repo)
 	if err != nil {
 		t.Fatalf("Resolve(repo) error = %v", err)
 	}
-	fromNested, err := Resolve(nested)
+	fromNested, err := Resolve(testEnv(), nested)
 	if err != nil {
 		t.Fatalf("Resolve(nested) error = %v", err)
 	}
@@ -172,7 +172,7 @@ func TestPrivateGitDirResolvesFromSubdirectory(t *testing.T) {
 // still having written to a checkout that never mutated.
 func TestReadOnlyNeverMints(t *testing.T) {
 	repo := litRepoWithCommit(t)
-	info, err := Resolve(repo)
+	info, err := Resolve(testEnv(), repo)
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
@@ -199,7 +199,7 @@ func TestIdentityDiesWithTheWorktree(t *testing.T) {
 	linked := filepath.Join(t.TempDir(), "linked")
 	run(t, primary, "git", "worktree", "add", linked)
 
-	linkedInfo, err := Resolve(linked)
+	linkedInfo, err := Resolve(testEnv(), linked)
 	if err != nil {
 		t.Fatalf("Resolve(linked) error = %v", err)
 	}
@@ -226,7 +226,7 @@ func TestIdentityDiesWithTheWorktree(t *testing.T) {
 // command in the checkout agrees with.
 func TestConcurrentFirstMutationsAgreeOnOneToken(t *testing.T) {
 	repo := litRepoWithCommit(t)
-	info, err := Resolve(repo)
+	info, err := Resolve(testEnv(), repo)
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
@@ -351,7 +351,7 @@ func TestTokenCarriesNothingIdentifying(t *testing.T) {
 		t.Fatalf("MkdirAll error = %v", err)
 	}
 	run(t, root, "git", "init")
-	info, err := Resolve(root)
+	info, err := Resolve(testEnv(), root)
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}

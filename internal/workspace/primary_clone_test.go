@@ -35,7 +35,7 @@ func TestResolveTellsThePrimaryCloneFromALinkedWorktree(t *testing.T) {
 		{"a linked worktree", linked, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			info, err := Resolve(tc.cwd)
+			info, err := Resolve(testEnv(), tc.cwd)
 			if err != nil {
 				t.Fatalf("Resolve(%q) error = %v", tc.cwd, err)
 			}

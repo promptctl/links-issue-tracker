@@ -69,7 +69,7 @@ func TestDiscoverListsExactlyTheDistinctStores(t *testing.T) {
 	// A non-git directory (with a nested non-git subdir) — must be skipped.
 	mkdir(t, filepath.Join(root, "plain", "nested"))
 
-	locations, err := Discover([]string{root})
+	locations, err := Discover(testEnv(), []string{root})
 	if err != nil {
 		t.Fatalf("Discover() error = %v", err)
 	}
@@ -99,7 +99,7 @@ func TestDiscoverReturnsNoStoresWhenNoneExist(t *testing.T) {
 	run(t, gitOnly, "git", "init")
 	mkdir(t, filepath.Join(root, "plain", "deeper"))
 
-	locations, err := Discover([]string{root})
+	locations, err := Discover(testEnv(), []string{root})
 	if err != nil {
 		t.Fatalf("Discover() error = %v", err)
 	}
@@ -123,7 +123,7 @@ func TestDiscoverSurfacesBrokenGitInsteadOfEmptySuccess(t *testing.T) {
 	// *exec.Error, not an *exec.ExitError — the infrastructure failure class.
 	t.Setenv("PATH", "")
 
-	locations, err := Discover([]string{root})
+	locations, err := Discover(testEnv(), []string{root})
 	if err == nil {
 		t.Fatalf("Discover() returned nil error with %d locations; want a surfaced git failure", len(locations))
 	}
@@ -143,7 +143,7 @@ func TestDiscoverSkipsFileShapedStoreDatabase(t *testing.T) {
 		t.Fatalf("WriteFile(dolt file) error = %v", err)
 	}
 
-	locations, err := Discover([]string{root})
+	locations, err := Discover(testEnv(), []string{root})
 	if err != nil {
 		t.Fatalf("Discover() error = %v", err)
 	}
@@ -161,7 +161,7 @@ func TestDiscoverMatchesResolveDerivation(t *testing.T) {
 	repo := mkdir(t, filepath.Join(root, "repo"))
 	run(t, repo, "git", "init")
 
-	info, err := Resolve(repo)
+	info, err := Resolve(testEnv(), repo)
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
@@ -169,7 +169,7 @@ func TestDiscoverMatchesResolveDerivation(t *testing.T) {
 	// discovery to count it, mirroring a real `lit init`.
 	addLitStore(t, repo)
 
-	locations, err := Discover([]string{root})
+	locations, err := Discover(testEnv(), []string{root})
 	if err != nil {
 		t.Fatalf("Discover() error = %v", err)
 	}

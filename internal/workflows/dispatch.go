@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -61,8 +62,8 @@ import (
 // It returns the definitions that fired, so the caller can say on its own
 // record what fired; they are returned with a write error too, since they
 // fired whether or not their bodies reached w.
-func Dispatch(w io.Writer, errOut io.Writer, ws workspace.Info, o Occasion) ([]Definition, error) {
-	set := Load(ws.RootDir)
+func Dispatch(env environ.Env, w io.Writer, errOut io.Writer, ws workspace.Info, o Occasion) ([]Definition, error) {
+	set := Load(env, ws.RootDir)
 	matched := set.Matching(o)
 	for _, def := range matched {
 		if _, err := fmt.Fprintln(w, Interpolate(def.Body, o.IssueID)); err != nil {

@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/viper"
 
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/historywindow"
 	"github.com/promptctl/links-issue-tracker/internal/pathspec"
 )
@@ -196,11 +197,11 @@ const (
 const appDirName = "links-issue-tracker"
 
 // ConfigDir returns the canonical directory where global config and templates live.
-func ConfigDir() string {
-	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+func ConfigDir(env environ.Env) string {
+	if xdg := env.Get("XDG_CONFIG_HOME"); xdg != "" {
 		return filepath.Join(xdg, appDirName)
 	}
-	home, err := os.UserHomeDir()
+	home, err := env.HomeDir()
 	if err != nil {
 		return ""
 	}
@@ -210,11 +211,11 @@ func ConfigDir() string {
 // StateDir returns the directory for lit's per-user state that outlives one
 // invocation but is no project's data: XDG_STATE_HOME, by default
 // ~/.local/state.
-func StateDir() (string, error) {
-	if xdg := os.Getenv("XDG_STATE_HOME"); xdg != "" {
+func StateDir(env environ.Env) (string, error) {
+	if xdg := env.Get("XDG_STATE_HOME"); xdg != "" {
 		return filepath.Join(xdg, appDirName), nil
 	}
-	home, err := os.UserHomeDir()
+	home, err := env.HomeDir()
 	if err != nil {
 		return "", fmt.Errorf("resolve state directory: %w", err)
 	}
@@ -264,10 +265,10 @@ type UnknownKey struct {
 // Keys are as viper reads them, lowercased, which is also how Load matches
 // them to settings. Each layer is its own file, so a layer that does not parse
 // adds its error and hides nothing another layer sets.
-func UnknownKeys(workspaceRoot pathspec.PathSpec) ([]UnknownKey, error) {
+func UnknownKeys(env environ.Env, workspaceRoot pathspec.PathSpec) ([]UnknownKey, error) {
 	unknown := []UnknownKey{}
 	var errs []error
-	for _, layer := range configLayers(workspaceRoot) {
+	for _, layer := range configLayers(env, workspaceRoot) {
 		file, err := readLayer(layer)
 		if err != nil {
 			errs = append(errs, err)
@@ -289,8 +290,8 @@ func UnknownKeys(workspaceRoot pathspec.PathSpec) ([]UnknownKey, error) {
 // the only encoding of global-vs-project precedence.
 type layers []pathspec.PathSpec
 
-func configLayers(workspaceRoot pathspec.PathSpec) layers {
-	return layers{globalConfigPath(), projectConfigPath(workspaceRoot)}
+func configLayers(env environ.Env, workspaceRoot pathspec.PathSpec) layers {
+	return layers{globalConfigPath(env), projectConfigPath(env, workspaceRoot)}
 }
 
 // merge folds every layer into v in precedence order and returns the
@@ -312,13 +313,13 @@ func (l layers) merge(v *viper.Viper) ([]string, error) {
 // Load reads config from ~/.config/links-issue-tracker/config.toml and from
 // <workspace>/.lit/config.toml when a workspace root is present.
 // A missing file is not an error; defaults are returned.
-func Load(workspaceRoot pathspec.PathSpec) (Config, error) {
+func Load(env environ.Env, workspaceRoot pathspec.PathSpec) (Config, error) {
 	v := viper.New()
 	for key, value := range settings {
 		v.SetDefault(key, value)
 	}
 
-	required, err := configLayers(workspaceRoot).merge(v)
+	required, err := configLayers(env, workspaceRoot).merge(v)
 	if err != nil {
 		return Config{}, err
 	}
@@ -366,13 +367,13 @@ func Load(workspaceRoot pathspec.PathSpec) (Config, error) {
 	return cfg, nil
 }
 
-func globalConfigPath() pathspec.PathSpec {
-	return pathspec.New(os.Getenv(globalConfigPathEnv)).
-		Or(pathspec.New(ConfigDir()).Join("config.toml"))
+func globalConfigPath(env environ.Env) pathspec.PathSpec {
+	return pathspec.New(env.Get(globalConfigPathEnv)).
+		Or(pathspec.New(ConfigDir(env)).Join("config.toml"))
 }
 
-func projectConfigPath(workspaceRoot pathspec.PathSpec) pathspec.PathSpec {
-	return pathspec.New(os.Getenv(projectConfigPathEnv)).
+func projectConfigPath(env environ.Env, workspaceRoot pathspec.PathSpec) pathspec.PathSpec {
+	return pathspec.New(env.Get(projectConfigPathEnv)).
 		Or(workspaceRoot.Join(".lit", "config.toml"))
 }
 

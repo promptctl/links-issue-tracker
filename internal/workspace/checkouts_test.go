@@ -13,7 +13,7 @@ import (
 // command in it would.
 func tokenOf(t *testing.T, worktree string) string {
 	t.Helper()
-	info, err := Resolve(worktree)
+	info, err := Resolve(testEnv(), worktree)
 	if err != nil {
 		t.Fatalf("Resolve(%q) error = %v", worktree, err)
 	}
@@ -28,7 +28,7 @@ func tokenOf(t *testing.T, worktree string) string {
 // compares: the set of tokens belonging to checkouts that still exist.
 func liveTokens(t *testing.T, cwd string) []string {
 	t.Helper()
-	checkouts, err := LiveCheckouts(cwd)
+	checkouts, err := LiveCheckouts(testEnv(), cwd)
 	if err != nil {
 		t.Fatalf("LiveCheckouts(%q) error = %v", cwd, err)
 	}
@@ -60,7 +60,7 @@ func TestLiveCheckoutsPairsEveryWorktreeWithItsOwnToken(t *testing.T) {
 	primaryToken := tokenOf(t, primary)
 	mutatedToken := tokenOf(t, mutated)
 
-	checkouts, err := LiveCheckouts(primary)
+	checkouts, err := LiveCheckouts(testEnv(), primary)
 	if err != nil {
 		t.Fatalf("LiveCheckouts() error = %v", err)
 	}
@@ -92,7 +92,7 @@ func TestLiveCheckoutsCarriesTheAddress(t *testing.T) {
 	run(t, primary, "git", "worktree", "add", "-b", "side-quest", onBranch)
 	run(t, primary, "git", "worktree", "add", "--detach", detached)
 
-	checkouts, err := LiveCheckouts(primary)
+	checkouts, err := LiveCheckouts(testEnv(), primary)
 	if err != nil {
 		t.Fatalf("LiveCheckouts() error = %v", err)
 	}
@@ -142,7 +142,7 @@ func TestLiveCheckoutsReportsTheLock(t *testing.T) {
 	run(t, primary, "git", "worktree", "add", open)
 	run(t, primary, "git", "worktree", "lock", held)
 
-	checkouts, err := LiveCheckouts(primary)
+	checkouts, err := LiveCheckouts(testEnv(), primary)
 	if err != nil {
 		t.Fatalf("LiveCheckouts() error = %v", err)
 	}
@@ -212,7 +212,7 @@ func TestDeletedWorktreeDirectoryIsNotLiveThoughItsTokenSurvives(t *testing.T) {
 	run(t, primary, "git", "worktree", "add", deleted)
 
 	orphan := tokenOf(t, deleted)
-	info, err := Resolve(deleted)
+	info, err := Resolve(testEnv(), deleted)
 	if err != nil {
 		t.Fatalf("Resolve(deleted) error = %v", err)
 	}
@@ -247,7 +247,7 @@ func TestLockedWorktreeIsNeverDeclaredDead(t *testing.T) {
 		t.Fatalf("RemoveAll(%q) error = %v", unplugged, err)
 	}
 
-	_, err := LiveCheckouts(primary)
+	_, err := LiveCheckouts(testEnv(), primary)
 	if err == nil {
 		t.Fatal("a checkout git lists as live but whose identity cannot be read must fail the enumeration, not be dropped from it")
 	}
@@ -268,7 +268,7 @@ func TestDamagedIdentityInAnotherCheckoutFailsLoudly(t *testing.T) {
 	run(t, primary, "git", "worktree", "add", neighbour)
 	tokenOf(t, neighbour)
 
-	info, err := Resolve(neighbour)
+	info, err := Resolve(testEnv(), neighbour)
 	if err != nil {
 		t.Fatalf("Resolve(neighbour) error = %v", err)
 	}
@@ -277,7 +277,7 @@ func TestDamagedIdentityInAnotherCheckoutFailsLoudly(t *testing.T) {
 		t.Fatalf("WriteFile error = %v", err)
 	}
 
-	if _, err := LiveCheckouts(primary); err == nil {
+	if _, err := LiveCheckouts(testEnv(), primary); err == nil {
 		t.Fatal("a checkout whose identity file is damaged must fail the enumeration, not be counted as having none")
 	} else if !strings.Contains(err.Error(), "malformed") {
 		t.Fatalf("LiveCheckouts() error = %q, want the malformed-token diagnosis", err)
@@ -296,7 +296,7 @@ func TestBareRepositoryContributesNoCheckout(t *testing.T) {
 	linked := filepath.Join(t.TempDir(), "linked")
 	run(t, bare, "git", "worktree", "add", linked)
 
-	checkouts, err := LiveCheckouts(linked)
+	checkouts, err := LiveCheckouts(testEnv(), linked)
 	if err != nil {
 		t.Fatalf("LiveCheckouts() error = %v", err)
 	}
@@ -341,7 +341,7 @@ func TestWorktreePathWhoseTailLooksLikeAnAttributeStaysLive(t *testing.T) {
 		t.Fatalf("token %q of a live worktree at %q is missing from %v — its path's tail was read as an attribute and the checkout was silently dropped", token, awkward, live)
 	}
 
-	checkouts, err := LiveCheckouts(primary)
+	checkouts, err := LiveCheckouts(testEnv(), primary)
 	if err != nil {
 		t.Fatalf("LiveCheckouts() error = %v", err)
 	}
@@ -374,7 +374,7 @@ func TestWorktreePathWhoseTailLooksLikeAnAttributeStaysLive(t *testing.T) {
 // way here would take a failed enumeration for an empty one — and an empty
 // enumeration is this machine declaring every checkout of the workspace deleted.
 func TestFailedEnumerationIsNeverTheNotARepoSentinel(t *testing.T) {
-	_, err := LiveCheckouts(t.TempDir())
+	_, err := LiveCheckouts(testEnv(), t.TempDir())
 	if err == nil {
 		t.Fatal("enumerating outside a repository must fail")
 	}

@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/templates"
 )
 
@@ -19,10 +20,10 @@ import (
 //
 // The project layer has no raw default to copy from — it IS the override
 // target — so passing templates.SourceProject is a caller error.
-func RawDefault(source templates.Source, relPath string) ([]byte, error) {
+func RawDefault(env environ.Env, source templates.Source, relPath string) ([]byte, error) {
 	switch source {
 	case templates.SourceGlobal:
-		path := globalWorkflowsDir().Join(relPath)
+		path := globalWorkflowsDir(env).Join(relPath)
 		raw, err := os.ReadFile(path.String())
 		if err != nil {
 			return nil, fmt.Errorf("read global workflow default %s: %w", path, err)

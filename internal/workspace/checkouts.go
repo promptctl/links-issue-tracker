@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 )
 
 // Checkout is one working tree of this repository as the machine can see it at
@@ -65,11 +67,11 @@ type Checkout struct {
 // of the live set, which is not "we skipped one" — it is this machine asserting
 // the checkout is deleted, and voiding a live claimant's evidence on the
 // strength of an error it declined to mention.
-func LiveCheckouts(cwd string) ([]Checkout, error) {
+func LiveCheckouts(env environ.Env, cwd string) ([]Checkout, error) {
 	// [LAW:dataflow-not-control-flow] A local enumeration that cannot block on a
 	// network, so context.Background() — "never cancels" — is the honest value,
 	// matching every other git query in this package. See Resolve for the note.
-	output, err := gitOutput(context.Background(), cwd, "worktree", "list", "--porcelain", "-z")
+	output, err := gitOutput(context.Background(), env, cwd, "worktree", "list", "--porcelain", "-z")
 	if err != nil {
 		// Deliberately NOT routed through classifyGitError. That function mints
 		// the ErrNotGitRepo sentinel, which means "this directory is not a
@@ -105,7 +107,7 @@ func LiveCheckouts(cwd string) ([]Checkout, error) {
 		// so asking it from each worktree's path is the whole resolution, and no
 		// second spelling of "where does this checkout keep its identity" exists
 		// to drift from Resolve's. [LAW:single-enforcer]
-		privateGitDir, err := resolvePrivateGitDir(record.path)
+		privateGitDir, err := resolvePrivateGitDir(env, record.path)
 		if err != nil {
 			return nil, fmt.Errorf("locate the git directory of worktree %q, which git lists as live: %w", record.path, err)
 		}
