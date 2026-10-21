@@ -60,10 +60,8 @@ func TestFixtureResidueCannotCrossCopies(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	// The template must exist before we can digest it; force the build via a
-	// throwaway copy, then record the template's pre-mutation digest.
-	_ = migratedDoltDir(t)
-	templateBefore := digestDir(t, storeTemplates[0].dir)
+	templateDir := storeTemplateDir(t)
+	templateBefore := digestDir(t, templateDir)
 
 	// Consumer 1: write every kind of state a store test plausibly leaks —
 	// an issue, a relation, a comment — then close.
@@ -123,7 +121,7 @@ func TestFixtureResidueCannotCrossCopies(t *testing.T) {
 
 	// And the template itself is byte-identical to before consumer 1 wrote:
 	// no write path reaches the shared original.
-	if after := digestDir(t, storeTemplates[0].dir); after != templateBefore {
+	if after := digestDir(t, templateDir); after != templateBefore {
 		t.Fatalf("template mutated by a consumer: digest %s -> %s", templateBefore, after)
 	}
 }
@@ -131,26 +129,25 @@ func TestFixtureResidueCannotCrossCopies(t *testing.T) {
 // TestFrozenTemplateRefusesDirectOpen pins the freeze layer the same way the
 // residue test pins copy isolation: opening the template path directly —
 // instead of a copy — must fail, and must leave the template byte-identical.
-// This is the automated form of the share-the-template mutation check, so a
-// refactor of freezeTemplate/copyOfStoreTemplate that silently un-freezes
-// the template turns CI red instead of quietly poisoning every parallel
+// dirtemplate's own tests pin that the freeze happens; this one pins that a
+// frozen directory is enough to make Dolt's Open refuse, so a template that
+// stops being frozen turns CI red instead of quietly poisoning every parallel
 // consumer. [LAW:no-silent-failure]
 func TestFrozenTemplateRefusesDirectOpen(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	// Force the template build, then record its pre-open digest.
-	_ = migratedDoltDir(t)
-	fsperm.RequireReadOnly(t, aFrozenFile(t, storeTemplates[0].dir))
-	before := digestDir(t, storeTemplates[0].dir)
+	templateDir := storeTemplateDir(t)
+	fsperm.RequireReadOnly(t, aFrozenFile(t, templateDir))
+	before := digestDir(t, templateDir)
 
-	st, err := Open(ctx, storeTemplates[0].dir, "freeze-probe")
+	st, err := Open(ctx, templateDir, "freeze-probe")
 	if err == nil {
 		_ = st.Close()
 		t.Fatal("Open on the frozen template path succeeded; the freeze no longer makes the direct-open mistake loud")
 	}
 
-	if after := digestDir(t, storeTemplates[0].dir); after != before {
+	if after := digestDir(t, templateDir); after != before {
 		t.Fatalf("the refused open still mutated the template: digest %s -> %s", before, after)
 	}
 }
@@ -172,4 +169,15 @@ func aFrozenFile(t *testing.T, root string) string {
 		t.Fatalf("find a file in the template %s: %q, %v", root, found, err)
 	}
 	return found
+}
+
+// storeTemplateDir is the frozen template migratedDoltDir copies, built if no
+// test has built it yet.
+func storeTemplateDir(t *testing.T) string {
+	t.Helper()
+	dir, err := storeTemplate.Dir()
+	if err != nil {
+		t.Fatalf("build the store template: %v", err)
+	}
+	return dir
 }
