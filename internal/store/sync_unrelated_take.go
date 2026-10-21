@@ -112,7 +112,7 @@ func (s *Store) SyncResolveUnrelated(ctx context.Context, remote storage.RemoteN
 	}
 	// A re-root this branch can follow is not an unrelated history, so it is
 	// followed before the take can discard either side of it.
-	if _, err := s.followRemoteReRoot(ctx, remote, trimmedBranch, storage.SyncEntryReconcile); err != nil {
+	if err := s.followRemoteReRoot(ctx, remote, trimmedBranch, storage.SyncEntryReconcile); err != nil {
 		return storage.SyncReconcileResult{}, err
 	}
 

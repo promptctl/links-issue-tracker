@@ -54,12 +54,8 @@ type HistoryBound struct {
 	// RemoteGC is the remote's GC that follows the force push, whatever the
 	// lease said: the remote's root decides whether it replaces anything.
 	RemoteGC RemoteGC
-	// Collection is what this checkout reclaimed once its branch followed the
-	// re-root the remote carries: the Collection of the bound's own follow,
-	// zero when the branch did not follow.
-	Collection Collection
 	// Elapsed is the bound's work end to end, from reading the head's height
-	// to the follow's collection.
+	// to the follow.
 	Elapsed time.Duration
 	// Err is where the bound stopped, if it did. The push before it landed
 	// whatever Err says.

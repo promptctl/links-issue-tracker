@@ -251,9 +251,9 @@ func TestSyncFetchWithNoKnownSyncBranchFetchesAndFollowsNothing(t *testing.T) {
 		t.Fatalf("lit sync fetch printed %q, want fetched", out)
 	}
 	ev := lastEvent(t)
-	for _, key := range []string{"reroot.follows", "reroot.declines", "reroot.cuts_not_found"} {
+	for _, key := range []string{"reroot.follows", "collection.records", "reroot.declines", "reroot.cuts_not_found"} {
 		if values, ok := ev.Occurrences[key]; !ok || len(values) != 0 {
-			t.Fatalf("%s = %v (present %t); want an empty list: the session looked and nothing was followed, declined or found without a cut", key, values, ok)
+			t.Fatalf("%s = %v (present %t); want an empty list: the session looked and nothing was followed, collected, declined or found without a cut", key, values, ok)
 		}
 	}
 }
@@ -281,8 +281,10 @@ func TestSyncPushPutsTheHistoryBoundOnItsEvent(t *testing.T) {
 	if record["history_bound.lease"] != "" || record["history_bound.error"] != nil || record["reroot.head"] != "" {
 		t.Fatalf("event %q bound = %v; want nothing published or failed", ev.Event, record)
 	}
-	if follows, ok := ev.Occurrences["reroot.follows"]; !ok || len(follows) != 0 {
-		t.Fatalf("event %q reroot.follows = %v; want an empty list: nothing followed, so nothing collected", ev.Event, ev.Occurrences["reroot.follows"])
+	for _, key := range []string{"reroot.follows", "collection.records"} {
+		if values, ok := ev.Occurrences[key]; !ok || len(values) != 0 {
+			t.Fatalf("event %q %s = %v; want an empty list: nothing followed, so nothing collected", ev.Event, key, values)
+		}
 	}
 	if windowErr, ok := ev.Facts["history_bound.window_error"]; !ok || windowErr != nil {
 		t.Fatalf("event %q history_bound.window_error = %v (present %t); want null: the window was read", ev.Event, windowErr, ok)

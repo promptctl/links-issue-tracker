@@ -356,8 +356,8 @@ func countUnaccounted(base, remote map[string]model.Issue, baseEvents, remoteEve
 	return tickets, events
 }
 
-// ForkPointRecords is what every fetch, every collection below a cut and
-// every remote removal since the store opened did to each fork point, oldest
+// ForkPointRecords is what every fetch, every follow of a re-root and every
+// remote removal since the store opened did to each fork point, oldest
 // first.
 func (s *Store) ForkPointRecords() []storage.ForkPointRecord {
 	return slices.Clone(s.forkPoints)

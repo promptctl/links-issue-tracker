@@ -352,7 +352,7 @@ func TestALandingNeverWindsTheLiveRefBackAcrossACut(t *testing.T) {
 		t.Fatal(err)
 	}
 	bound := windowOf(t, seeded+2, 3)
-	under := compactPush(t, ctx, live, epic, "under", bound)
+	under, _ := compactPush(t, ctx, live, epic, "under", bound)
 	if under.Fired() || under.Err != nil {
 		t.Fatalf("a push under the bound = %+v; want it not fired", under)
 	}
@@ -374,9 +374,9 @@ func TestALandingNeverWindsTheLiveRefBackAcrossACut(t *testing.T) {
 		t.Fatalf("Close(clone) error = %v", err)
 	}
 
-	fired := compactPush(t, ctx, live, epic, "past", bound)
-	if !fired.Fired() || fired.Err != nil || !fired.Collection.Ran {
-		t.Fatalf("the push past the bound = %+v; want it fired and the store collected", fired)
+	fired, collected := compactPush(t, ctx, live, epic, "past", bound)
+	if !fired.Fired() || fired.Err != nil || !collected.Ran {
+		t.Fatalf("the push past the bound = %+v, collection %+v; want it fired and the store collected", fired, collected)
 	}
 
 	landed, err := LandFetchedHead(ctx, live, clone, remoteName(t, "origin"), "master", nil)

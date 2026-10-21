@@ -37,14 +37,14 @@ import (
 // are; the last stays the unrelated-histories divergence the reconcile
 // reports.
 //
-// A branch that followed is across the cut, so the store then reclaims what
-// is below it (collectAndRecordFollow): a checkout that follows drops the
-// history the re-root dropped from its store too, and not only the checkout
-// whose push re-rooted it. The follow and its collection are recorded under
-// entry, for FollowedReRoots, and returned; the record is zero when the
-// branch did not move. A cut recognized and not followed, because a
-// side line goes around it, is recorded under entry with its reason, for
-// DeclinedReRoots.
+// The follow itself is moveOntoRemoteReRoot. Every caller of this one runs on
+// a store that outlives the sync, so once the branch followed it collects
+// below the cut (collectOwedCut): a checkout that follows drops the history
+// the re-root dropped from its store too, and not only the checkout whose
+// push re-rooted it. The follow and the collection are recorded under entry,
+// for FollowedReRoots and Collections. A cut recognized and not followed,
+// because a side line goes around it, is recorded under entry with its
+// reason, for DeclinedReRoots.
 //
 // Every public sync entry point that reads the tracking ref runs it first, so
 // none of them meets a re-root it could follow as a divergence; the private
@@ -54,22 +54,26 @@ import (
 // the commit lock, whether or not this run would follow: LOCK comes before
 // the commit lock (doc.go).
 // [LAW:no-ambient-temporal-coupling]
-func (s *Store) followRemoteReRoot(ctx context.Context, remote storage.RemoteName, branch string, entry storage.SyncEntry) (storage.FollowedReRoot, error) {
-	followed, _, err := s.moveOntoRemoteReRoot(ctx, remote, branch, entry)
-	return s.collectAndRecordFollow(ctx, remote, followed, err), err
+func (s *Store) followRemoteReRoot(ctx context.Context, remote storage.RemoteName, branch string, entry storage.SyncEntry) error {
+	_, _, err := s.moveOntoRemoteReRoot(ctx, remote, branch, entry)
+	s.collectOwedCut(ctx, entry)
+	return err
 }
 
-// moveOntoRemoteReRoot is followRemoteReRoot's move alone: it re-roots the
-// branch onto the remote's history, records a declined cut or what its hold
-// read instead of a cut, and finishes
-// nothing after the move. The returned record has a head exactly when the
-// branch moved, with the move's error beside it, and the caller finishes it:
-// collectAndRecordFollow on a store that outlives the sync, or
-// recordFollowOnClone on the mirror's throwaway clone. crossed is whether a
-// branch the probe read as unrelated to the remote shares its history when
-// the hold ends, by this move or by another writer's follow before the hold.
-// [LAW:decomposition] the move is the follow; what a store does across the
-// cut afterwards is maintenance.
+// moveOntoRemoteReRoot is the follow itself, on any store: it re-roots the
+// branch onto the remote's history, records the follow for FollowedReRoots,
+// or a declined cut or what its hold read instead of a cut, and once the move
+// finished, moves remote's fork points across the cut. The returned record
+// has a head exactly when the branch moved, with the move's error beside it.
+// crossed is whether a branch the probe read as unrelated to the remote
+// shares its history when the hold ends, by this move or by another writer's
+// follow before the hold.
+//
+// A move that finished leaves the store owing the collection below the cut
+// (collectOwedCut), which only a verb on a store that outlives the sync runs:
+// on the mirror's clone, which is deleted when its cycle ends, the debt goes
+// with it. [LAW:decomposition] the move and its fork points are the follow;
+// what a store does across the cut afterwards is maintenance.
 func (s *Store) moveOntoRemoteReRoot(ctx context.Context, remote storage.RemoteName, branch string, entry storage.SyncEntry) (followed storage.FollowedReRoot, crossed bool, err error) {
 	trimmedBranch, err := requireSyncArg("branch", branch)
 	if err != nil {
@@ -90,17 +94,30 @@ func (s *Store) moveOntoRemoteReRoot(ctx context.Context, remote storage.RemoteN
 	if !unrelated {
 		return storage.FollowedReRoot{}, false, nil
 	}
-	return s.followUnderHold(ctx, remote, trimmedBranch, entry)
+	followed, crossed, err = s.followUnderHold(ctx, remote, trimmedBranch, entry)
+	if followed.Head == "" || err != nil {
+		return followed, crossed, err
+	}
+	// The fetch that brought the re-root kept the old fork points, since the
+	// branch then shared no commit with the tracking refs; left there, a
+	// fork point below the cut pins that history through every GC and is
+	// the base a later reconcile merges against. [LAW:no-silent-failure] a
+	// fork-point move that fails is the follow's error, beside a branch that
+	// moved.
+	s.owesCollection = true
+	return followed, crossed, wrapFollowErr(remote, trimmedBranch, s.runSyncMutation(ctx, func(ctx context.Context) error {
+		return s.moveForkPointsAcrossTheCut(ctx, remote)
+	}))
 }
 
 // followUnderHold is moveOntoRemoteReRoot after its probe: under the hold
 // that rewrites the branch, it re-roots the local branch onto
 // remotes/<remote>/<branch> if that tracking ref's history is a re-root the
-// branch can follow when the hold opens, and records a declined cut or what
-// the hold read instead of a cut. The returned record has a head exactly when
-// the branch moved, and crossed is whether the branch shares the remote's
-// history when the hold ends: it moved, or the hold read the histories
-// sharing a commit.
+// branch can follow when the hold opens, and records the follow, a declined
+// cut, or what the hold read instead of a cut. The returned record has a head
+// exactly when the branch moved, and crossed is whether the branch shares the
+// remote's history when the hold ends: it moved, or the hold read the
+// histories sharing a commit.
 func (s *Store) followUnderHold(ctx context.Context, remote storage.RemoteName, trimmedBranch string, entry storage.SyncEntry) (followed storage.FollowedReRoot, crossed bool, _ error) {
 	followed = storage.FollowedReRoot{Entry: entry}
 	var declined []storage.DeclinedReRoot
@@ -123,53 +140,34 @@ func (s *Store) followUnderHold(ctx context.Context, remote storage.RemoteName, 
 		crossed = slices.ContainsFunc(notFound, func(c storage.CutNotFound) bool { return c.Reason == storage.CutNotFoundSharedHistory })
 		return storage.FollowedReRoot{}, crossed, wrapFollowErr(remote, trimmedBranch, err)
 	}
+	// A branch that moved stands even when something after the move failed,
+	// as ReRoot's own result does, so the follow is recorded either way.
+	// [LAW:no-silent-failure]
+	s.followed = append(s.followed, followed)
 	return followed, true, wrapFollowErr(remote, trimmedBranch, err)
 }
 
-// collectAndRecordFollow reclaims the history below the cut once the branch
-// has followed (collectBelowTheCut), then records the follow. The collection
-// is maintenance: its failure is carried on the record and never fails the
-// sync that followed, as a push's other maintenance never fails the push.
-func (s *Store) collectAndRecordFollow(ctx context.Context, remote storage.RemoteName, followed storage.FollowedReRoot, moveErr error) storage.FollowedReRoot {
-	// A branch that moved stands even when something after the move failed,
-	// as ReRoot's own result does, so the follow is recorded either way; only
-	// a follow that finished is across the cut and collects below it.
-	// [LAW:no-silent-failure]
-	if followed.Head != "" && moveErr == nil {
-		followed.Collection = s.collectBelowTheCut(ctx, remote)
+// collectOwedCut is the collection below the cut that a verb on a store
+// which outlives the sync runs once a follow left the branch across one
+// (moveOntoRemoteReRoot): collectBelowTheCut, recorded under entry for
+// Collections. A store that owes none collects and records nothing. The
+// attempt clears the debt whatever it did, so a failed collection is
+// reported once and never re-run by the next step of the same sync.
+// [LAW:dataflow-not-control-flow] every live verb calls it; the debt decides.
+func (s *Store) collectOwedCut(ctx context.Context, entry storage.SyncEntry) storage.Collection {
+	if !s.owesCollection {
+		return storage.Collection{}
 	}
-	return s.recordFollow(followed)
-}
-
-// recordFollowOnClone finishes a follow on the mirror's clone, which is
-// removed when the mirror's cycle ends: it moves remote's fork points across
-// the cut and collects nothing, so no GC spends the push deadline on a store
-// about to be deleted. The clone's fork point is what the receive carrying
-// its push lands on the live store (LandFetchedHead). The move is
-// maintenance, as the collection it stands in for is: its failure is the
-// record's Collection.Err, with Ran false.
-func (s *Store) recordFollowOnClone(ctx context.Context, remote storage.RemoteName, followed storage.FollowedReRoot, moveErr error) storage.FollowedReRoot {
-	if followed.Head != "" && moveErr == nil {
-		followed.Collection.Err = s.runSyncMutation(ctx, func(ctx context.Context) error {
-			return s.moveForkPointsAcrossTheCut(ctx, remote)
-		})
-	}
-	return s.recordFollow(followed)
-}
-
-// recordFollow records a follow that moved the branch, for FollowedReRoots.
-func (s *Store) recordFollow(followed storage.FollowedReRoot) storage.FollowedReRoot {
-	if followed.Head != "" {
-		s.followed = append(s.followed, followed)
-	}
-	return followed
+	s.owesCollection = false
+	c := s.collectBelowTheCut(ctx)
+	c.Entry = entry
+	s.collections = append(s.collections, c)
+	return c
 }
 
 // moveForkPointsAcrossTheCut moves remote's fork points onto the history
-// their tracking refs now name, inside the caller's commit lock. Every follow
-// runs after a fetch moved the tracking ref onto the re-rooted head; that
-// fetch kept the old fork point, since the branch then shared no commit with
-// it, and a fork point left below the cut pins that history through every GC.
+// their tracking refs now name, inside the caller's commit lock, once a
+// follow moved the branch onto it.
 func (s *Store) moveForkPointsAcrossTheCut(ctx context.Context, remote storage.RemoteName) error {
 	tracked, err := s.trackingRefs(ctx, ownerOf(remote))
 	if err != nil {
@@ -192,17 +190,22 @@ func wrapFollowErr(remote storage.RemoteName, branch string, err error) error {
 // SyncFollowReRoot is followRemoteReRoot for a caller that fetched and
 // settles nothing. See the storage.Syncer contract.
 func (s *Store) SyncFollowReRoot(ctx context.Context, remote storage.RemoteName, branch string, entry storage.SyncEntry) error {
-	_, err := s.followRemoteReRoot(ctx, remote, branch, entry)
-	return err
+	return s.followRemoteReRoot(ctx, remote, branch, entry)
 }
 
-// FollowedReRoots is every re-root followRemoteReRoot applied on this store
+// FollowedReRoots is every re-root moveOntoRemoteReRoot applied on this store
 // since it opened, oldest first.
 func (s *Store) FollowedReRoots() []storage.FollowedReRoot {
 	return slices.Clone(s.followed)
 }
 
-// DeclinedReRoots is every re-root cut followRemoteReRoot recognized on this
+// Collections is every collection below a cut collectOwedCut ran on this
+// store since it opened, oldest first.
+func (s *Store) Collections() []storage.Collection {
+	return slices.Clone(s.collections)
+}
+
+// DeclinedReRoots is every re-root cut moveOntoRemoteReRoot recognized on this
 // store since it opened and did not follow, oldest first.
 func (s *Store) DeclinedReRoots() []storage.DeclinedReRoot {
 	return slices.Clone(s.declined)

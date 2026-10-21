@@ -40,14 +40,17 @@ const reRootScratchPrefix = "lit-reroot/"
 //     the ones the re-rooted head reaches while the remote carries it
 //     (collectRemote);
 //  4. it fetches, reads whether the remote carries the re-root, and follows
-//     whatever re-root the remote now carries. Every lease outcome that
-//     reached the remote is settled by that one reading, because each is
-//     only the last transport attempt's verdict and an earlier attempt may
-//     have landed (storage.LeaseStale, storage.LeaseUnsettled); it is the
-//     bound's Publication. A remote a peer pushed to in between carries
-//     none, and the branch stays where it was;
-//  5. once the branch has followed, it reclaims the history below the cut,
-//     as every follow outside the mirror's push does (collectBelowTheCut).
+//     whatever re-root the remote now carries (moveOntoRemoteReRoot). Every
+//     lease outcome that reached the remote is settled by that one reading,
+//     because each is only the last transport attempt's verdict and an
+//     earlier attempt may have landed (storage.LeaseStale,
+//     storage.LeaseUnsettled); it is the bound's Publication. A remote a peer
+//     pushed to in between carries none, and the branch stays where it was.
+//
+// The bound collects nothing below the cut. The bound runs on the mirror's
+// clone as well as the live store, and a branch that followed leaves the
+// store owing the collection, which only the live store's push verb runs,
+// after the bound (collectOwedCut).
 //
 // A branch that did not follow is left on the history it had, and the next
 // push past the bound tries again; that is only sound while the remote still
@@ -185,8 +188,8 @@ func publicationOf(lease storage.LeaseOutcome, reading remoteReading) storage.Re
 }
 
 // readPublication is publishBound's reading after the remote's GC: it
-// fetches and reads whether the remote carries b's re-root. It comes before
-// the follow, whose GC would collect a re-root the remote does not carry.
+// fetches and reads whether the remote carries b's re-root, which the scratch
+// branch keeps in this store until the bound ends.
 func (s *Store) readPublication(ctx context.Context, remote storage.RemoteName, b *storage.HistoryBound, trackingRef string) (remoteReading, error) {
 	if err := s.SyncFetch(ctx, remote); err != nil {
 		return remoteUnread, fmt.Errorf("fetch to learn whether %s carries the re-root: %w", trackingRef, err)
@@ -204,8 +207,7 @@ func (s *Store) readPublication(ctx context.Context, remote storage.RemoteName, 
 // followCarriedReRoot follows whatever re-root the remote carries, and
 // reports a branch the follow left unrelated to the remote.
 func (s *Store) followCarriedReRoot(ctx context.Context, remote storage.RemoteName, b *storage.HistoryBound, trackingRef string) error {
-	followed, err := s.followRemoteReRoot(ctx, remote, b.Branch, storage.SyncEntryBound)
-	b.Collection = followed.Collection
+	followed, _, err := s.moveOntoRemoteReRoot(ctx, remote, b.Branch, storage.SyncEntryBound)
 	// The follow's record has a head exactly when the branch moved.
 	if err != nil || followed.Head != "" {
 		return err
@@ -321,29 +323,25 @@ func (s *Store) publishReRoot(ctx context.Context, remote storage.RemoteName, br
 }
 
 // collectBelowTheCut reclaims the history below the cut once the sync branch
-// has followed a re-root: under one commit lock, it moves remote's fork
-// points across the cut (moveForkPointsAcrossTheCut), drops the migration
-// checkpoints, the reconcile scratch branches and any re-root scratch a
-// killed bound left, every one of which names a commit from before the
-// re-root, and runs the full GC. Every follow runs after a fetch moved the
-// tracking ref onto the re-rooted head; while that ref still named the old
-// head, the same GC freed nothing (links-storage-3k6u.ge9). A ref it could
-// not move or drop still pins that history, so it stops the pass before the
-// GC.
+// has followed a re-root, its fork points with it (moveOntoRemoteReRoot):
+// under one commit lock, it drops the migration checkpoints, the reconcile
+// scratch branches and any re-root scratch a killed bound left, every one of
+// which names a commit from before the re-root, and runs the full GC. Every
+// follow runs after a fetch moved the tracking ref onto the re-rooted head;
+// while that ref still named the old head, the same GC freed nothing
+// (links-storage-3k6u.ge9). A ref it could not drop still pins that history,
+// so it stops the pass before the GC.
 //
 // The store is measured around the pass, outside the lock, as SyncCompact
 // measures it: the two readings are an account of what happened and never an
 // input to it, so a reading that fails joins the collection's error and stops
 // nothing. The collection's error is its own (storage.Collection.Err).
-func (s *Store) collectBelowTheCut(ctx context.Context, remote storage.RemoteName) storage.Collection {
+func (s *Store) collectBelowTheCut(ctx context.Context) storage.Collection {
 	var c storage.Collection
 	var beforeErr, afterErr error
 	c.BytesBefore, beforeErr = storeBytes(s.doltRootDir)
 	var sweep refSweepOutcome
 	err := s.runSyncMutation(ctx, func(ctx context.Context) error {
-		if err := s.moveForkPointsAcrossTheCut(ctx, remote); err != nil {
-			return err
-		}
 		for _, prefix := range []string{migrationCheckpointPrefix, migrationDriftRepairCheckpointPrefix} {
 			if err := s.PruneCheckpoints(ctx, prefix, 0); err != nil {
 				return err
@@ -391,7 +389,7 @@ func (s *Store) HistoryBounds() []storage.HistoryBound {
 // historyBoundReport is the bound's part of a push's maintenance account:
 // nothing while the head is under the bound, as an ordinary push says nothing,
 // and once the bound fired, the re-root it wrote and how far that got toward
-// the remote, what it reclaimed, or where it stopped.
+// the remote, or where it stopped.
 func historyBoundReport(b storage.HistoryBound) string {
 	var parts []string
 	if b.Fired() {
@@ -406,7 +404,6 @@ func historyBoundReport(b storage.HistoryBound) string {
 	if g := b.RemoteGC; g.Outcome != "" {
 		parts = append(parts, fmt.Sprintf("remote GC %s: %s of table files, %s collected, %d other branches dropped", g.Outcome, humanBytes(g.BytesBefore), humanBytes(g.CollectedBytes), len(g.DroppedBranches)))
 	}
-	parts = append(parts, collectionReport(b.Collection))
 	if b.Err != nil {
 		parts = append(parts, fmt.Sprintf("history bound not kept: %v", b.Err))
 	}

@@ -208,21 +208,25 @@ func TestAFollowCollectsTheHistoryBelowTheCut(t *testing.T) {
 		t.Fatalf("bravo's fork point is %q; want it moved onto the remote's re-rooted head %s", forkPoint, remote)
 	}
 
-	c := bravo.FollowedReRoots()[0].Collection
-	if !c.Ran || c.BytesAfter >= c.BytesBefore {
-		t.Fatalf("the follow's collection = %+v; want the GC run and the store smaller after it", c)
+	collections := bravo.Collections()
+	if len(collections) != 1 {
+		t.Fatalf("Collections() = %+v; want the pull's one collection", collections)
 	}
-	event := bravo.FollowedReRoots()[0].EventValue()
-	if event["collection.ran"] != true || event["collection.bytes_before"] != c.BytesBefore || event["collection.bytes_after"] != c.BytesAfter {
-		t.Fatalf("the follow's event = %v; want collection.ran true and %d -> %d bytes", event, c.BytesBefore, c.BytesAfter)
+	c := collections[0]
+	if c.Entry != storage.SyncEntryPull || !c.Ran || c.BytesAfter >= c.BytesBefore {
+		t.Fatalf("the pull's collection = %+v; want the GC run by the pull and the store smaller after it", c)
+	}
+	event := c.EventValue()
+	if event["collection.entry"] != "pull" || event["collection.ran"] != true || event["collection.bytes_before"] != c.BytesBefore || event["collection.bytes_after"] != c.BytesAfter {
+		t.Fatalf("the collection's event = %v; want collection.entry pull, collection.ran true and %d -> %d bytes", event, c.BytesBefore, c.BytesAfter)
 	}
 }
 
 // TestAFollowCarriesAFailedCollection has bravo's collection fail after its
 // fetch followed alpha's re-root: a directory under the chunk store that the
 // size reading cannot walk. The collection is maintenance, so the follow
-// still succeeds, the GC still runs, and the failure rides the follow's record
-// and its event's collection.error instead of failing the fetch. The fetch is
+// still succeeds, the GC still runs, and the failure rides the collection's
+// record and its event's collection.error instead of failing the fetch. The fetch is
 // the entry point because it settles nothing: a pull's reconcile snapshots the
 // whole store, which the same directory would fail first.
 func TestAFollowCarriesAFailedCollection(t *testing.T) {
@@ -245,12 +249,16 @@ func TestAFollowCarriesAFailedCollection(t *testing.T) {
 	}
 	r.assertFollowed(t, bravo, storage.SyncEntryFetch)
 
-	c := bravo.FollowedReRoots()[0].Collection
-	if !c.Ran || c.Err == nil || !strings.Contains(c.Err.Error(), "measure the store's size on disk") {
-		t.Fatalf("the follow's collection = %+v; want the GC run and the failed size reading carried", c)
+	collections := bravo.Collections()
+	if len(collections) != 1 {
+		t.Fatalf("Collections() = %+v; want the follow's one collection", collections)
 	}
-	if got, ok := bravo.FollowedReRoots()[0].EventValue()["collection.error"].(*string); !ok || got == nil || *got != c.Err.Error() {
-		t.Fatalf("the follow's event collection.error = %v; want %q", got, c.Err.Error())
+	c := collections[0]
+	if !c.Ran || c.Err == nil || !strings.Contains(c.Err.Error(), "measure the store's size on disk") {
+		t.Fatalf("the collection = %+v; want the GC run and the failed size reading carried", c)
+	}
+	if got, ok := c.EventValue()["collection.error"].(*string); !ok || got == nil || *got != c.Err.Error() {
+		t.Fatalf("the collection's event collection.error = %v; want %q", got, c.Err.Error())
 	}
 }
 
@@ -258,21 +266,22 @@ func TestAFollowCarriesAFailedCollection(t *testing.T) {
 // and in its maintenance line, and a collection that did nothing says nothing.
 func TestACollectionIsReportedWhole(t *testing.T) {
 	t.Parallel()
-	c := storage.Collection{Ran: true, BytesBefore: 3 << 20, BytesAfter: 1 << 20, Sweep: "remote-cache ref sweep: 2 orphaned refs", Err: errors.New("prune pre-migrate checkpoints: refused")}
+	c := storage.Collection{Entry: storage.SyncEntryPull, Ran: true, BytesBefore: 3 << 20, BytesAfter: 1 << 20, Sweep: "remote-cache ref sweep: 2 orphaned refs", Err: errors.New("prune pre-migrate checkpoints: refused")}
 	want := map[string]any{
+		"collection.entry":        "pull",
 		"collection.ran":          true,
 		"collection.bytes_before": int64(3 << 20),
 		"collection.bytes_after":  int64(1 << 20),
 		"collection.sweep":        "remote-cache ref sweep: 2 orphaned refs",
 	}
-	got := c.EventRecord()
+	got := c.EventValue()
 	errText, ok := got["collection.error"].(*string)
 	if !ok || errText == nil || *errText != "prune pre-migrate checkpoints: refused" {
-		t.Fatalf("EventRecord() collection.error = %v, want the collection's error text", got["collection.error"])
+		t.Fatalf("EventValue() collection.error = %v, want the collection's error text", got["collection.error"])
 	}
 	delete(got, "collection.error")
 	if !maps.Equal(got, want) {
-		t.Fatalf("EventRecord() = %v, want %v", got, want)
+		t.Fatalf("EventValue() = %v, want %v", got, want)
 	}
 	if got, want := collectionReport(c), "store 3.0 MiB -> 1.0 MiB; remote-cache ref sweep: 2 orphaned refs; history below the cut not collected: prune pre-migrate checkpoints: refused"; got != want {
 		t.Fatalf("collectionReport() = %q, want %q", got, want)
@@ -349,9 +358,43 @@ func TestACompactingPushReportsItsFollowsCollection(t *testing.T) {
 		t.Fatalf("SyncCompactAndPush(bravo) error = %v", err)
 	}
 	r.assertFollowed(t, bravo, storage.SyncEntryPush)
-	c := bravo.FollowedReRoots()[0].Collection
-	if want := fmt.Sprintf("store %s -> %s", humanBytes(c.BytesBefore), humanBytes(c.BytesAfter)); !c.Ran || !strings.Contains(pushed.Maintenance, want) {
-		t.Fatalf("the push's maintenance = %q; want the follow's collection %+v reported as %q", pushed.Maintenance, c, want)
+	collections := bravo.Collections()
+	if len(collections) != 1 {
+		t.Fatalf("Collections() = %+v; want the push's one collection", collections)
+	}
+	c := collections[0]
+	if want := fmt.Sprintf("store %s -> %s", humanBytes(c.BytesBefore), humanBytes(c.BytesAfter)); c.Entry != storage.SyncEntryPush || !c.Ran || !strings.Contains(pushed.Maintenance, want) {
+		t.Fatalf("the push's maintenance = %q; want the push's collection %+v reported as %q", pushed.Maintenance, c, want)
+	}
+}
+
+// TestACompactingPushCollectsOnceForItsRetryAndItsBound has `lit sync push`
+// refused over alpha's re-root under a bound the retried push reaches: bravo
+// follows alpha's re-root for the retry, then the bound re-roots again and
+// bravo follows its own, and the live store collects below the cut once,
+// after both.
+func TestACompactingPushCollectsOnceForItsRetryAndItsBound(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	r := newReRootedRemote(t, ctx, false)
+	bravo := openSyncOrFatal(t, ctx, r.bravo)
+	defer func() { _ = bravo.Close() }()
+
+	pushed, err := bravo.SyncCompactAndPush(ctx, ctx, remoteName(t, "origin"), "master", storage.BoundWindowRead(windowOf(t, 2, 1), nil), false, false)
+	if err != nil {
+		t.Fatalf("SyncCompactAndPush(bravo) error = %v", err)
+	}
+	// The fixture's remote is a file remote, whose GC the bound reports as its
+	// error; the re-root is published and followed all the same.
+	if b := pushed.Bound; !b.Fired() || b.Publication != storage.ReRootPublished {
+		t.Fatalf("the retried push's bound = %+v; want it fired and published", b)
+	}
+	follows := bravo.FollowedReRoots()
+	if len(follows) != 2 || follows[0].Entry != storage.SyncEntryPush || follows[1].Entry != storage.SyncEntryBound {
+		t.Fatalf("FollowedReRoots() = %+v; want the retry's follow, then the bound's", follows)
+	}
+	if c := bravo.Collections(); len(c) != 1 || c[0].Entry != storage.SyncEntryPush || !c[0].Ran {
+		t.Fatalf("Collections() = %+v; want the push's one collection, after both follows", c)
 	}
 }
 
@@ -418,10 +461,9 @@ func TestSyncPushFollowsAReRootedRemote(t *testing.T) {
 
 // TestSyncPushFromCloneFollowsAReRootedRemote drives the on-change mirror's
 // push, from a clone of bravo: it follows on the clone and lands. The clone
-// is thrown away after the push, so the follow collects nothing on it — its
-// checkpoints still stand and its record says no GC ran — while its fork
-// point is across the cut, since the receive that carries the push lands
-// that fork point on the live store.
+// is thrown away after the push, so nothing collects on it — its checkpoints
+// still stand and it records no collection — while the follow still moves
+// its fork point across the cut, as every follow does.
 func TestSyncPushFromCloneFollowsAReRootedRemote(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -441,26 +483,23 @@ func TestSyncPushFromCloneFollowsAReRootedRemote(t *testing.T) {
 		t.Fatalf("push = %+v, want bravo's re-rooted head %s landed", pushed, headCommit(t, ctx, st))
 	}
 	r.assertFollowed(t, st, storage.SyncEntryPush)
-	if c := st.FollowedReRoots()[0].Collection; c != (storage.Collection{}) {
-		t.Fatalf("the clone's follow collected %+v; want no collection on a clone", c)
-	}
-	if event := st.FollowedReRoots()[0].EventValue(); event["collection.ran"] != false {
-		t.Fatalf("the clone's follow event = %v; want collection.ran false", event)
+	if c := st.Collections(); len(c) != 0 {
+		t.Fatalf("the clone collected %+v; want no collection on a clone", c)
 	}
 	if len(branchesUnder(t, ctx, st, migrationCheckpointPrefix+"-")) == 0 {
 		t.Fatalf("the clone's %s checkpoints are gone; want them left for the clone's removal, not collected", migrationCheckpointPrefix)
 	}
-	// The fork point moves after the retry, onto the head the remote then
-	// carries: the clone's own push, above the cut.
-	if forkPoint := branchesUnder(t, ctx, st, forkPointPrefix)["origin/master"]; forkPoint != pushed.Head {
-		t.Fatalf("the clone's fork point is %q; want it moved across the cut onto the pushed head %s", forkPoint, pushed.Head)
+	// The follow moves the fork point before the retry, onto the head the
+	// remote then carried: alpha's re-root, above the cut.
+	if forkPoint := branchesUnder(t, ctx, st, forkPointPrefix)["origin/master"]; forkPoint != r.alphaReRoot.Head {
+		t.Fatalf("the clone's fork point is %q; want it moved across the cut onto the remote's re-rooted head %s", forkPoint, r.alphaReRoot.Head)
 	}
 }
 
 // TestARefusedPushIsRetriedWithNothingCollected drives a push the re-rooted
 // remote refuses through retryPushAfterFollow alone. The retry lands while
-// the history below the cut still stands, so nothing a caller finishes the
-// follow with — a live store's collection below the cut — delays the retry.
+// the history below the cut still stands, so a live store's collection below
+// the cut, which its verb runs afterwards, never delays the retry.
 func TestARefusedPushIsRetriedWithNothingCollected(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -470,15 +509,16 @@ func TestARefusedPushIsRetriedWithNothingCollected(t *testing.T) {
 	origin := remoteName(t, "origin")
 
 	pushed, pushErr := bravo.pushMutation(ctx, origin, "master", false, false)
-	pushed, pushErr, followed, followErr := bravo.retryPushAfterFollow(ctx, origin, "master", false, pushed, pushErr)
+	pushed, pushErr, followErr := bravo.retryPushAfterFollow(ctx, origin, "master", false, pushed, pushErr)
 	if pushErr != nil || followErr != nil {
 		t.Fatalf("retryPushAfterFollow error = %v, follow error = %v", pushErr, followErr)
 	}
-	if followed.Head == "" || pushed.Head != headCommit(t, ctx, bravo) {
-		t.Fatalf("followed %+v and pushed %+v; want the follow and its retry landed", followed, pushed)
+	r.assertFollowed(t, bravo, storage.SyncEntryPush)
+	if pushed.Head != headCommit(t, ctx, bravo) {
+		t.Fatalf("pushed %+v; want the retry landed at bravo's head %s", pushed, headCommit(t, ctx, bravo))
 	}
-	if len(branchesUnder(t, ctx, bravo, migrationCheckpointPrefix+"-")) == 0 {
-		t.Fatalf("bravo's %s checkpoints are gone once the retry landed; want nothing collected before the caller finishes the follow", migrationCheckpointPrefix)
+	if len(branchesUnder(t, ctx, bravo, migrationCheckpointPrefix+"-")) == 0 || len(bravo.Collections()) != 0 {
+		t.Fatalf("bravo's %s checkpoints are gone or it collected %+v once the retry landed; want nothing collected before its verb collects", migrationCheckpointPrefix, bravo.Collections())
 	}
 }
 
@@ -964,8 +1004,7 @@ func TestFollowAndBoundRefuseUnderTheCommitLockOnEveryRun(t *testing.T) {
 	st := openSyncOrFatal(t, ctx, migratedDoltDir(t))
 	defer func() { _ = st.Close() }()
 	err := st.withCommitLock(ctx, func(ctx context.Context) error {
-		_, err := st.followRemoteReRoot(ctx, remoteName(t, "origin"), "master", storage.SyncEntryPull)
-		return err
+		return st.followRemoteReRoot(ctx, remoteName(t, "origin"), "master", storage.SyncEntryPull)
 	})
 	if err == nil || !strings.Contains(err.Error(), "commit lock is held") {
 		t.Fatalf("follow under the commit lock error = %v, want the lock-order refusal", err)
