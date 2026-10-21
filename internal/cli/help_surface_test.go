@@ -178,11 +178,18 @@ func helpSurface(t *testing.T, root string) map[string]string {
 // [LAW:one-source-of-truth]
 func shippedPackageDirs(t *testing.T, root string) []string {
 	t.Helper()
-	cmd := exec.Command("go", "list", "-deps", "-f", "{{.Dir}}", "./cmd/lit")
+	return moduleDepDirs(t, root, "./cmd/lit")
+}
+
+// moduleDepDirs is the directory of pkg and of every package of this module it
+// depends on, as the toolchain resolves them.
+func moduleDepDirs(t *testing.T, root, pkg string) []string {
+	t.Helper()
+	cmd := exec.Command("go", "list", "-deps", "-f", "{{.Dir}}", pkg)
 	cmd.Dir = root
 	out, err := cmd.Output()
 	if err != nil {
-		t.Fatalf("go list -deps ./cmd/lit: %v", err)
+		t.Fatalf("go list -deps %s: %v", pkg, err)
 	}
 	var dirs []string
 	for _, dir := range strings.Split(strings.TrimSpace(string(out)), "\n") {
