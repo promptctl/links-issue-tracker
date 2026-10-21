@@ -44,8 +44,8 @@ to `/Users/bmf/code/links-issue-tracker`.
 
 1. `interrupt.Guard(context.Background(), interrupt.DefaultGrace)` installs the signal handler
    and returns `(ctx, stop)`; `stop` is deferred (`cmd/lit/main.go`).
-2. `cli.Run(ctx, os.Stdout, os.Stderr, os.Args[1:])` executes the command
-   (`cmd/lit/main.go`).
+2. `cli.Run(ctx, inv)` executes the command, `inv` being a `cli.Invocation` built from
+   `os.Getwd`, `os.Args[1:]`, `os.Stdin`, `os.Stdout` and `os.Stderr` (`cmd/lit/main.go`).
 3. On a non-nil error, `os.Exit(cli.WriteCommandError(os.Stderr, err))`
    (`cmd/lit/main.go`). On nil error the process returns from `main` normally (exit 0).
 
@@ -125,11 +125,11 @@ to `/Users/bmf/code/links-issue-tracker`.
 
 - `acquireFromWD` is what every command but `lit init` acquires with: the workspace for the
   working directory, with no prefix of its own to offer (`internal/cli/register.go`).
-  It calls `resolveWorkspaceFromWD`, which maps `workspace.ErrNotGitRepo` to
+  It calls `resolveWorkspace` with the invocation's directory, which maps `workspace.ErrNotGitRepo` to
   `OutsideWorkspaceError{Message: "links requires running inside a git repository/worktree"}`
   and a getcwd failure to `get cwd: %w` (`internal/cli/cli.go`).
 - `runWithApp` (`internal/cli/cli.go`):
-  1. `os.Getwd()`; failure ⇒ `get cwd: %w` (`internal/cli/cli.go`).
+  1. The invocation's directory; an unreadable one ⇒ `get cwd: %w` (`internal/cli/cli.go`).
   2. `app.Open(ctx, cwd, accessMode)`; `workspace.ErrNotGitRepo` ⇒
      `OutsideWorkspaceError{Message: "links requires running inside a git repository/worktree"}`
      (`internal/cli/cli.go`).

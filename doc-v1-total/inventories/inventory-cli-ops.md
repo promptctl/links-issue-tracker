@@ -13,7 +13,7 @@ data — described as assets, not as documentation of behavior).
 ### 0.1 Entrypoint
 
 - `cmd/lit/main.go` wraps `context.Background()` in `interrupt.Guard(ctx, interrupt.DefaultGrace)` — a SIGINT/SIGTERM cancels the command context and escalates to a hard exit if in-flight work ignores the cancel.
-- `cmd/lit/main.go` runs `cli.Run(ctx, os.Stdout, os.Stderr, os.Args[1:])`; on error exits with `cli.WriteCommandError(os.Stderr, err)`.
+- `cmd/lit/main.go` builds a `cli.Invocation` from `os.Getwd`, `os.Args[1:]` and the three standard streams and runs `cli.Run(ctx, inv)`; on error exits with `cli.WriteCommandError(os.Stderr, err)`.
 - `internal/cli/cli.go` `Run`: normalizes global args (`parseGlobalArgs`), builds the cobra root, `SilenceErrors`/`SilenceUsage` true; `pflag.ErrHelp` and `errHelpHandled` are swallowed to a nil error (exit 0).
 - `internal/cli/cli.go` root command `lit`: `Long: "Agent-native issue tracker"`. Bare `lit` with no args prints `renderQuickstartGuidance(ws.RootDir)` (identical to `lit quickstart`) — `cli.go`. Outside a git repo (`OutsideWorkspaceError`) it prints cobra help instead (`cli.go`). A non-empty first arg that is not a registered command returns `UnknownCommandError`, with or without a help flag beside it (`cli.go`).
 - `internal/cli/cli.go` root flag errors are wrapped as `UsageError` (exit 2).
@@ -71,7 +71,7 @@ Retired-but-dispatchable ops-adjacent commands (`Hidden: true`, return `RetiredC
 
 ### 0.5 Workspace resolution
 
-- `internal/cli/cli.go` `resolveWorkspaceFromWD()`: `os.Getwd()` then `workspace.Resolve(cwd)`; `workspace.ErrNotGitRepo` → `OutsideWorkspaceError{Message: "links requires running inside a git repository/worktree"}` (exit 3).
+- `internal/cli/cli.go` `resolveWorkspace()`: the invocation's directory (`WorkingDir.Path`, which carries the `os.Getwd` error `main` got) then `workspace.ResolveWithPrefix(cwd, requested)`; `workspace.ErrNotGitRepo` → `OutsideWorkspaceError{Message: "links requires running inside a git repository/worktree"}` (exit 3).
 - `workspace.Resolve` **creates** `<git-common-dir>/links` (`internal/workspace/workspace.go`) and loads-or-creates `config.json` (`workspace.go`). So even read commands materialize the storage dir.
 - Geometry: `StorageDir = <git-common-dir>/links`, `DatabasePath` under it, `GitCommonDir = filepath.Dir(StorageDir)` (`internal/workspace/workspace.go`).
 

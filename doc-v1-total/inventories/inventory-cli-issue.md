@@ -15,7 +15,7 @@ into* one of those, the call and its observable effect are recorded here.
 
 ### 1.1 Entry point and global argument handling
 
-- `Run(ctx, stdout, stderr, args)` is the package entry (`internal/cli/cli.go`).
+- `Run(ctx, inv)` is the package entry (`internal/cli/cli.go`); `inv` is the `Invocation` (directory, args, stdin, stdout, stderr) (`internal/cli/invocation.go`).
   It first runs `parseGlobalArgs` (`cli.go`), then builds the cobra root
   (`cli.go`), sets args/out/err, sets `SilenceErrors = true` and
   `SilenceUsage = true` (`cli.go`), and executes.
@@ -100,7 +100,7 @@ into* one of those, the call and its observable effect are recorded here.
     `sync_staleness.go`).
   - Then `maybeAutoSyncAfterCommand(ctx, accessMode, ws)` runs (`cli.go`).
   - Both only run when the command returned nil (`cli.go`).
-- `acquireFromWD` / `resolveWorkspaceFromWD` (`register.go`, `cli.go`):
+- `acquireFromWD` / `resolveWorkspace` (`register.go`, `cli.go`):
   same `OutsideWorkspaceError` translation (`cli.go`).
 
 ### 1.5 Family dispatch (`commandFamily[P]`)
