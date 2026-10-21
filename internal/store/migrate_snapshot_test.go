@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
+	"github.com/promptctl/links-issue-tracker/internal/fsperm"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
@@ -251,9 +252,6 @@ func TestMigrateSnapshotPruneEnforcesRetention(t *testing.T) {
 // reports rather than its error.
 func TestMigratingOpenReportsAFailedSnapshotPrune(t *testing.T) {
 	t.Parallel()
-	if os.Geteuid() == 0 {
-		t.Skip("removal-permission injection has no effect as root")
-	}
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 	first, err := Open(ctx, doltRoot, "test-workspace-id")
@@ -284,10 +282,7 @@ func TestMigratingOpenReportsAFailedSnapshotPrune(t *testing.T) {
 			stuck = path
 		}
 	}
-	if err := os.Chmod(stuck, 0o555); err != nil {
-		t.Fatalf("chmod stuck snapshot: %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(stuck, 0o755) })
+	fsperm.Deny(t, stuck, fsperm.RemoveAll)
 	withGooseHistoryDropped(t, ctx, doltRoot)
 
 	st, err := Open(ctx, doltRoot, "test-workspace-id")

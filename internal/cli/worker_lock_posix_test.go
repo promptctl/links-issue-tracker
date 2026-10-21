@@ -52,6 +52,14 @@ func TestJoinDetachedWorkersOfAStoreNoWorkerWasSpawnedForReturns(t *testing.T) {
 // whose child outlives it (runWorkerOutlivedByChild).
 const workerOutlivedByChildEnv = "LIT_TEST_WORKER_OUTLIVED_BY_CHILD"
 
+// init runs this test binary as that worker when a test spawned it so, before
+// TestMain sets up a suite the worker never runs.
+func init() {
+	if os.Getenv(workerOutlivedByChildEnv) != "" {
+		runWorkerOutlivedByChild()
+	}
+}
+
 // runWorkerOutlivedByChild is a worker that starts a child it never waits for,
 // prints the child's pid and exits — the shape of a backgrounded owner-notify
 // hook.

@@ -4,6 +4,8 @@ import (
 	"context"
 	"os"
 	"testing"
+
+	"github.com/promptctl/links-issue-tracker/internal/fsperm"
 )
 
 // preGooseDump is a known, valid pre-goose shape (the same vocabulary
@@ -164,5 +166,39 @@ func TestRebuildCandidateAttemptsAreIsolated(t *testing.T) {
 	}
 	if len(export.Issues) != 2 {
 		t.Fatalf("second candidate lost data: want 2 issues, got %d", len(export.Issues))
+	}
+}
+
+// TestDiscardRetriesDirectoryRemoval proves the zero-residue guarantee survives
+// a transient filesystem failure. With the candidate root's removal denied, the
+// first Discard closes the store but cannot remove the root, so it errors and
+// keeps root tracked; once the fault is lifted a second Discard re-attempts
+// removal and clears it. A single shared release flag would have
+// nulled everything on the first attempt and the retry would no-op, stranding the
+// directory.
+func TestDiscardRetriesDirectoryRemoval(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	parent := t.TempDir()
+	dump := preGooseDump()
+
+	cand, err := RebuildCandidate(ctx, parent, dump, mustMap(t, dump))
+	if err != nil {
+		t.Fatalf("RebuildCandidate: %v", err)
+	}
+	t.Cleanup(func() { _ = cand.Discard() })
+
+	restore := fsperm.Deny(t, cand.root, fsperm.RemoveAll)
+
+	if err := cand.Discard(); err == nil {
+		t.Fatal("Discard succeeded despite a root that cannot be removed; expected a removal error")
+	}
+	restore()
+
+	if err := cand.Discard(); err != nil {
+		t.Fatalf("retry Discard did not clear residue: %v", err)
+	}
+	if n := dirEntryCount(t, parent); n != 0 {
+		t.Fatalf("directory residue survived retry: %d entries remain", n)
 	}
 }

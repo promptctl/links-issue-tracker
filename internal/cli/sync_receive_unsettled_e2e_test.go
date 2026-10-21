@@ -60,7 +60,7 @@ func TestAReceiveThatFetchedAndKeepsStoppingReachesTheFailureSurface(t *testing.
 		t.Fatalf("resolve consumer workspace: %v", err)
 	}
 	sink := filepath.Join(t.TempDir(), "notifications")
-	addOwnerNotifyHook(t, ws, `printf "%s\n" "$LIT_NOTIFY_KIND" >> `+sink)
+	addOwnerNotifyHook(t, ws, `printf "%s\n" "$LIT_NOTIFY_KIND" >> `+shPath(sink))
 	if err := os.Remove(fetchSuccessMarkerPath(ws, remoteName(t, "origin"))); err != nil && !os.IsNotExist(err) {
 		t.Fatalf("clear the fetch-success marker: %v", err)
 	}

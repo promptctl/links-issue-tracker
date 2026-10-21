@@ -51,7 +51,7 @@ func writeOwnerNotifyConfig(t *testing.T, repo, sink string, receive bool) {
 		t.Fatalf("mkdir %s: %v", litDir, err)
 	}
 	payload := fmt.Sprintf("[sync]\ncadence = 'on-push'\nreceive = %t\n", receive) +
-		"owner_notify_cmd = 'printf \"%s %s/%s\\n\" \"$LIT_NOTIFY_KIND\" \"$LIT_NOTIFY_REMOTE\" \"$LIT_NOTIFY_BRANCH\" >> " + sink + "'\n"
+		"owner_notify_cmd = 'printf \"%s %s/%s\\n\" \"$LIT_NOTIFY_KIND\" \"$LIT_NOTIFY_REMOTE\" \"$LIT_NOTIFY_BRANCH\" >> " + shPath(sink) + "'\n"
 	if err := os.WriteFile(filepath.Join(litDir, "config.toml"), []byte(payload), 0o644); err != nil {
 		t.Fatalf("write project config: %v", err)
 	}

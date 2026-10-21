@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/config"
+	"github.com/promptctl/links-issue-tracker/internal/fsperm"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
@@ -105,7 +106,7 @@ func TestEveryInvocationLeavesOneEvent(t *testing.T) {
 		t.Errorf("both invocations carry trace id %q", events[0].TraceID)
 	}
 	// An event's error can quote what was typed, so only its owner reads it.
-	for path, want := range map[string]os.FileMode{eventsPath(t): 0o600, filepath.Dir(eventsPath(t)): 0o700} {
+	for path, want := range map[string]os.FileMode{eventsPath(t): fsperm.FileModeAsStored(t, 0o600), filepath.Dir(eventsPath(t)): fsperm.DirModeAsStored(t, 0o700)} {
 		info, err := os.Stat(path)
 		if err != nil {
 			t.Fatal(err)

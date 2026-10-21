@@ -7,25 +7,34 @@
 # <ticket> <package> <top-level test, or * for a package whose tests do not
 # compile on Windows>
 
-
-links-windows-qr8l.btw cmd/lit *
-links-windows-qr8l.btw internal/atomicfile TestAFailedWriteLeavesTheTargetAndNoTempFile
-links-windows-qr8l.btw internal/atomicfile TestWriteFileReplacesAnExistingFileAndItsMode
-links-windows-qr8l.btw internal/backup TestCreateListLatestAndPrune
-links-windows-qr8l.btw internal/cli *
-links-windows-qr8l.btw internal/dbsnapshot TestCollectOrphanedResidue_ErrorNamesThePath
-links-windows-qr8l.btw internal/dbsnapshot TestPlainFileCopy_PreservesPerms
-links-windows-qr8l.btw internal/statusline TestAFailedRewriteOfAnUnreadableFileIsNotReplaced
-links-windows-qr8l.btw internal/statusline TestAFailedWriteReportsWhatItHadDone
-links-windows-qr8l.btw internal/storage/memory TestConformance
-links-windows-qr8l.btw internal/store TestAFollowCarriesAFailedCollection
-links-windows-qr8l.btw internal/store TestASetRemoteURLRetriedAfterItsRemoveLandsTheAdd
-links-windows-qr8l.btw internal/store TestAdoptRemoteByCloneFailedCloneLeavesNoResidue
-links-windows-qr8l.btw internal/store TestCollectAbandonedMirrorKeepsCollectingPastAStuckFile
-links-windows-qr8l.btw internal/store TestCollectAbandonedMirrorReportsAFailureNamingTheKey
-links-windows-qr8l.btw internal/store TestDowngradePruneFailureReportsTheCommittedReverse
-links-windows-qr8l.btw internal/store TestDowngradeSnapshotFailureReportsTheVersionItRead
-links-windows-qr8l.btw internal/store TestMigratingOpenReportsAFailedSnapshotPrune
-links-windows-qr8l.btw internal/store TestRefusalReportsUnreadableSnapshots
-links-windows-qr8l.btw internal/store TestRequireInitializedWorkspaceSeparatesGenuineStatFaults
-links-windows-qr8l.btw internal/testoracle TestPathOutcomes
+links-windows-qr8l.fkh internal/backup TestCreateListLatestAndPrune
+links-windows-qr8l.bc1 internal/cli TestAMirrorWhoseLiveStoreReceiveFailsSaysWhere
+links-windows-qr8l.bc1 internal/cli TestAPushRecordsTheAdvertisementItLeft
+links-windows-qr8l.bc1 internal/cli TestAPushRefusedOverAPeersPushNotifiesOnlyWhenNothingMergesIt
+links-windows-qr8l.bc1 internal/cli TestAQuietForkReceivesOntoTheRemoteHead
+links-windows-qr8l.bc1 internal/cli TestAReceiveThatFetchedAndKeepsStoppingReachesTheFailureSurface
+links-windows-qr8l.bc1 internal/cli TestAReceiveTheLiveStoreSupersededLandsNothingAndTheNextLands
+links-windows-qr8l.bc1 internal/cli TestAReceiveWhoseOpenFailsHasNothingToClose
+links-windows-qr8l.bc1 internal/cli TestAnAutomaticReceivePrunesABranchTheRemoteDeleted
+links-windows-qr8l.bc1 internal/cli TestAutomaticReceiveAsksBeforeFetching
+links-windows-qr8l.bc1 internal/cli TestAutomaticReceiveFastForwardsEstablishedClone
+links-windows-qr8l.bc1 internal/cli TestAutomaticReconcileLinearizesDivergedClone
+links-windows-qr8l.nca internal/cli TestClaimMirrorPendingClockStepIrrelevant
+links-windows-qr8l.nca internal/cli TestClearMirrorPendingIdempotent
+links-windows-qr8l.nca internal/cli TestCompleteMirrorWithoutAttempt
+links-windows-qr8l.nca internal/cli TestCompleteMirrorWithoutAttemptBusySkipsOwner
+links-windows-qr8l.bc1 internal/cli TestEverySettlingEntryPointMergesAForkBelowTheCut
+links-windows-qr8l.bc1 internal/cli TestEverySyncEntryPointFollowsAReRootedRemote
+links-windows-qr8l.9j5 internal/cli TestInitHardStopsWhenRemoteHasDataButAdoptCannotComplete
+links-windows-qr8l.bc1 internal/cli TestInlineReconcileSurfacesContractOnProseHeld
+links-windows-qr8l.nca internal/cli TestMirrorOwedIgnoresLiveness
+links-windows-qr8l.bc1 internal/cli TestReadCommandsStaySilentOnAFreshOrReleasedBuild
+links-windows-qr8l.nca internal/cli TestRecheckMirrorPending
+links-windows-qr8l.bc1 internal/cli TestReconcileTakeAndCombineLeaveDurableTracesInteractively
+links-windows-qr8l.nca internal/cli TestRunBackgroundMirrorTeardownReleasesClaim
+links-windows-qr8l.bc1 internal/cli TestSyncFetchSelectsTheSyncRemoteAndFailsOnAnUnreadableBranchRecord
+links-windows-qr8l.bc1 internal/cli TestSyncReconcileNamesContestedLaneAfterPartitionedDoubleStart
+links-windows-qr8l.bc1 internal/cli TestTheMirrorAloneKeepsTheHistoryBound
+links-windows-qr8l.bc1 internal/cli TestTheMirrorsReceiveStartsNoRun
+links-windows-qr8l.bc1 internal/cli TestTwoCheckoutsSyncAcrossTheHistoryBound
+links-windows-qr8l.9j5 internal/store TestAdoptRemoteByCloneFailedCloneLeavesNoResidue

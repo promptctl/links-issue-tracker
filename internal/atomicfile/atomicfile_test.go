@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+
+	"github.com/promptctl/links-issue-tracker/internal/fsperm"
 )
 
 var durabilities = []Durability{Replaceable, Durable}
@@ -143,6 +145,8 @@ func TestAnIllegalDurabilityPanicsAndLeavesNothing(t *testing.T) {
 	}
 }
 
+// assertFile checks name holds contents with the mode perm reads back as on
+// this platform.
 func assertFile(t *testing.T, name, contents string, perm fs.FileMode) {
 	t.Helper()
 	got, err := os.ReadFile(name)
@@ -153,8 +157,8 @@ func assertFile(t *testing.T, name, contents string, perm fs.FileMode) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != perm {
-		t.Fatalf("%s mode = %v, want %v", name, info.Mode().Perm(), perm)
+	if want := fsperm.FileModeAsStored(t, perm); info.Mode().Perm() != want {
+		t.Fatalf("%s mode = %v, want %v (%v as this platform stores it)", name, info.Mode().Perm(), want, perm)
 	}
 }
 

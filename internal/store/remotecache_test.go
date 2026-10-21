@@ -14,6 +14,7 @@ import (
 	"github.com/dolthub/dolt/go/libraries/doltcore/dbfactory"
 
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
+	"github.com/promptctl/links-issue-tracker/internal/fsperm"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -214,9 +215,6 @@ func TestPruneRemoteCacheCollectsAbandonedMirrors(t *testing.T) {
 // being a gate on everyone else's collection.
 func TestPruneRemoteCacheIsNotBlockedByOneStuckMirror(t *testing.T) {
 	t.Parallel()
-	if os.Geteuid() == 0 {
-		t.Skip("running as root: directory permissions do not block unlink")
-	}
 	ctx := context.Background()
 	base := t.TempDir()
 
@@ -245,8 +243,8 @@ func TestPruneRemoteCacheIsNotBlockedByOneStuckMirror(t *testing.T) {
 	}
 
 	// Two orphans, and the stuck one sorts first so it is reached first. Its own
-	// directory is read-only, so the walk that measures it succeeds while the
-	// unlink of what is inside it cannot.
+	// directory cannot be removed, so the walk that measures it succeeds while
+	// its removal fails.
 	cacheBase := sync.remoteCacheBase()
 	stuck, collectible := strings.Repeat("aa", 32), strings.Repeat("bb", 32)
 	for _, key := range []string{stuck, collectible} {
@@ -258,10 +256,7 @@ func TestPruneRemoteCacheIsNotBlockedByOneStuckMirror(t *testing.T) {
 			t.Fatalf("plant orphan payload %s: %v", key, err)
 		}
 	}
-	if err := os.Chmod(filepath.Join(cacheBase, stuck), 0o500); err != nil {
-		t.Fatalf("chmod stuck orphan: %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(filepath.Join(cacheBase, stuck), 0o700) })
+	fsperm.Deny(t, filepath.Join(cacheBase, stuck), fsperm.Remove)
 
 	outcome := sync.pruneRemoteCache(ctx)
 

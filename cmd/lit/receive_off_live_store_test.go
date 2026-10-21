@@ -1,3 +1,5 @@
+//go:build !windows
+
 package main
 
 import (
@@ -21,7 +23,8 @@ import (
 // PATH of the command whose receive is due, which the receive worker it
 // spawns inherits: Dolt's blobstore fetch is the one git call that passes
 // `--refmap=`, and the shim marks its start and sleeps before running the
-// real git. The write runs with the ordinary PATH while that sleep is in
+// real git. The shim is a /bin/sh script, which Windows cannot run, so the test
+// is POSIX-only. The write runs with the ordinary PATH while that sleep is in
 // progress. The consumer then has a local commit the remote lacks while the
 // remote has one it lacks, so the receive also exercises the settle's
 // divergence arm: after it, the consumer holds both tickets.

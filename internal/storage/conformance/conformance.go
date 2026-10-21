@@ -844,10 +844,22 @@ func everyEditableFieldRecordsHistory(t *testing.T, ctx context.Context, st stor
 // only the checkout moves; that checkout handing it to a new assignee, so only
 // the assignee moves; and a done, which records a write and takes nothing.
 func aReportedHandoverIsTheOneRecorded(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	// Each write is stamped a second after the one before, so the newest start a
+	// stream wrote is decided by its instant. A real clock can stamp two writes
+	// in a row with one instant — Windows' does, at its tick — and the tie then
+	// falls to the event ids, which say nothing about which start came last
+	// (links-scale-dy46.i49).
+	stamped := 0
+	stamp := func() {
+		clk.Pin(earlierInstant.Add(time.Duration(stamped) * time.Second))
+		stamped++
+	}
+	stamp()
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
 	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "contested", Topic: "core", ParentID: epic.ID, Assignee: "ada"})
 	start := func(assignee string) storage.Applied {
 		t.Helper()
+		stamp()
 		applied, err := st.Apply(ctx, issue.ID, storage.Change{Action: model.Start{Assignee: assignee}, Actor: assignee})
 		if err != nil {
 			t.Fatalf("Apply start as %s error = %v", assignee, err)
@@ -915,6 +927,7 @@ func aReportedHandoverIsTheOneRecorded(t *testing.T, ctx context.Context, st sto
 		t.Errorf("a hand-off to a new assignee reported %+v, want %+v: the assignee row the start recorded", handed.Handover, want)
 	}
 
+	stamp()
 	done, err := st.Apply(ctx, issue.ID, storage.Change{Action: model.Done{}, Actor: "grace"})
 	if err != nil {
 		t.Fatalf("Apply done error = %v", err)

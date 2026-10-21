@@ -73,12 +73,14 @@ jobs:
   #
   # Scope is the shipped binary and its libraries, the race lane's boundary in
   # ci.yml, plus the vendored driver module they build with, and -short for
-  # the same reason: the scale tests add volume, not platform coverage. No -timeout:
-  # go test's 10m default sits far above the slowest package here
-  # (internal/store, 120s on run 39207582813), so it fires only on a hang.
+  # the same reason: the scale tests add volume, not platform coverage.
+  # -timeout 30m, as the full suite has: internal/cli alone runs past go test's
+  # 10-minute per-package default here (run 39496042580). The job runs about
+  # 46 minutes (run 39511640688), so it outlasts one package that hangs to its
+  # 30-minute timeout and prints that hang's goroutine dump.
   windows:
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 100
     defaults:
       run:
         shell: msys2 {0}
@@ -116,7 +118,9 @@ jobs:
       # runs. Every invocation runs even after one fails, so one red package
       # cannot hide another. [LAW:no-silent-failure] A line naming a test or a
       # package that does not exist fails the step, so the list cannot outlive
-      # the code it describes and the notice counts tests that exist.
+      # the code it describes and the notice counts tests that exist. -v puts
+      # each test's verdict in the log: a test whose fault this platform does
+      # not enforce skips itself saying why, and only -v shows that it did.
       - name: Test (-short)
         env:
           CGO_ENABLED: '1'
@@ -151,7 +155,7 @@ jobs:
                 echo "::error file=$known::$rel has no test named" $missing "- delete its line" >&2
                 status=1
               fi
-              go test -short -skip "$re" "./$rel" || status=1
+              go test -v -short -timeout 30m -skip "$re" "./$rel" || status=1
             else
               rest+=("./$rel")
             fi
@@ -159,7 +163,7 @@ jobs:
           for listed in "${!skip[@]}" "${!untested[@]}"; do
             [[ -v seen[$listed] ]] || { echo "::error file=$known::no package $listed under ./cmd/... ./internal/... - delete its lines" >&2; status=1; }
           done
-          go test -short "${rest[@]}" || status=1
+          go test -v -short -timeout 30m "${rest[@]}" || status=1
           echo "::notice file=$known,title=Known Windows failures::skipped $skipped tests in ${#skip[@]} packages; did not compile or run ${!untested[*]}"
           exit "$status"
 

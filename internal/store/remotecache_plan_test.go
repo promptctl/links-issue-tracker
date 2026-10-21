@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/dbfactory"
+	"github.com/promptctl/links-issue-tracker/internal/fsperm"
 )
 
 const (
@@ -83,19 +84,15 @@ func TestCollectAbandonedMirrorReclaimsWhatItRemoves(t *testing.T) {
 // its key leaves an operator with a count and nowhere to look.
 func TestCollectAbandonedMirrorReportsAFailureNamingTheKey(t *testing.T) {
 	t.Parallel()
-	if os.Geteuid() == 0 {
-		t.Skip("running as root: directory permissions do not block unlink")
-	}
 	base := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(base, orphanKey), 0o755); err != nil {
+	key := filepath.Join(base, orphanKey)
+	if err := os.MkdirAll(key, 0o755); err != nil {
 		t.Fatalf("plant orphan: %v", err)
 	}
-	// Unlinking the key directory needs write on its parent, so a read-only base
-	// fails the removal while leaving the walk that measures it working.
-	if err := os.Chmod(base, 0o500); err != nil {
-		t.Fatalf("chmod base: %v", err)
+	if err := os.WriteFile(filepath.Join(key, "pack"), nil, 0o644); err != nil {
+		t.Fatalf("plant orphan payload: %v", err)
 	}
-	t.Cleanup(func() { _ = os.Chmod(base, 0o700) })
+	fsperm.Deny(t, key, fsperm.Remove)
 
 	_, collected, err := collectAbandonedMirror(base, orphanKey)
 	if err == nil {
@@ -203,9 +200,6 @@ func TestPruneOutcomeReportIsEmptyOnlyWhenNothingHappened(t *testing.T) {
 // pin the rest of the mirror on every prune that reaches it.
 func TestCollectAbandonedMirrorKeepsCollectingPastAStuckFile(t *testing.T) {
 	t.Parallel()
-	if os.Geteuid() == 0 {
-		t.Skip("running as root: directory permissions do not block unlink")
-	}
 	base := t.TempDir()
 	stuck, free := filepath.Join(base, orphanKey, "a-stuck"), filepath.Join(base, orphanKey, "b-free")
 	for _, dir := range []string{free, stuck} {
@@ -219,10 +213,7 @@ func TestCollectAbandonedMirrorKeepsCollectingPastAStuckFile(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(stuck, "pack"), make([]byte, 1024), 0o644); err != nil {
 		t.Fatalf("plant stuck payload: %v", err)
 	}
-	if err := os.Chmod(stuck, 0o500); err != nil {
-		t.Fatalf("chmod stuck: %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(stuck, 0o700) })
+	fsperm.Deny(t, stuck, fsperm.Write)
 
 	reclaimed, collected, err := collectAbandonedMirror(base, orphanKey)
 	if err == nil || collected {

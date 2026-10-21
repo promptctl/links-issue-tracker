@@ -218,18 +218,15 @@ func TestClearMirrorPendingIdempotent(t *testing.T) {
 // permission to proceed, so a read that FAILED must never wear that shape.
 // [LAW:no-silent-failure]
 //
-// The unreadable marker is made by putting a regular file where the storage
-// directory belongs, so the path traversal fails with ENOTDIR. A permission
-// bit would have been the reflex and is the wrong instrument: root ignores it,
-// and the test would quietly stop testing anything in a container that runs as
-// root while still passing.
+// The unreadable marker is made by a NUL byte in the storage directory's name,
+// which every platform's stat refuses as an invalid argument. A permission bit
+// would have been the reflex and is the wrong instrument: root ignores it, and
+// the test would quietly stop testing anything in a container that runs as
+// root while still passing. A regular file where the directory belongs fails
+// with ENOTDIR on POSIX only: Windows reports that path not found.
 func TestMirrorOwedRefusesToGuessWhenTheMarkerIsUnreadable(t *testing.T) {
 	t.Parallel()
-	storageDir := filepath.Join(t.TempDir(), ".lit")
-	if err := os.WriteFile(storageDir, []byte("not a directory\n"), 0o644); err != nil {
-		t.Fatalf("write file in the storage dir's place: %v", err)
-	}
-	ws := workspace.Info{Location: workspace.LocationFromStorageDir(storageDir)}
+	ws := workspace.Info{Location: workspace.LocationFromStorageDir(filepath.Join(t.TempDir(), ".lit\x00"))}
 
 	owed, err := mirrorOwed(ws)
 	if err == nil {
@@ -272,7 +269,7 @@ func TestMirrorOwedIgnoresLiveness(t *testing.T) {
 func TestCompleteMirrorWithoutAttempt(t *testing.T) {
 	ws := notifyTestWorkspace(t)
 	sink := filepath.Join(t.TempDir(), "notifications")
-	enableOwnerNotify(t, ws, `printf "%s\n" "$LIT_NOTIFY_KIND" >> `+sink)
+	enableOwnerNotify(t, ws, `printf "%s\n" "$LIT_NOTIFY_KIND" >> `+shPath(sink))
 
 	if _, _, err := claimMirrorPending(context.Background(), ws, time.Now()); err != nil {
 		t.Fatalf("claim: %v", err)
@@ -311,7 +308,7 @@ func TestCompleteMirrorWithoutAttempt(t *testing.T) {
 func TestCompleteMirrorWithoutAttemptCancelledSkipsOwner(t *testing.T) {
 	ws := notifyTestWorkspace(t)
 	sink := filepath.Join(t.TempDir(), "notifications")
-	enableOwnerNotify(t, ws, `printf sent >> `+sink)
+	enableOwnerNotify(t, ws, `printf sent >> `+shPath(sink))
 
 	cause := fmt.Errorf("open sync store: %w", context.Canceled)
 	if err := completeMirrorWithoutAttempt(underInvocation(context.Background()), ws, cause, func() {}); err != nil {
@@ -334,7 +331,7 @@ func TestCompleteMirrorWithoutAttemptCancelledSkipsOwner(t *testing.T) {
 func TestCompleteMirrorWithoutAttemptBusySkipsOwner(t *testing.T) {
 	ws := notifyTestWorkspace(t)
 	sink := filepath.Join(t.TempDir(), "notifications")
-	enableOwnerNotify(t, ws, `printf sent >> `+sink)
+	enableOwnerNotify(t, ws, `printf sent >> `+shPath(sink))
 	if _, _, err := claimMirrorPending(context.Background(), ws, time.Now()); err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -367,7 +364,7 @@ func TestCompleteMirrorWithoutAttemptStopsAnsweringFirst(t *testing.T) {
 	dir := t.TempDir()
 	stamp := filepath.Join(dir, "stopped")
 	sink := filepath.Join(dir, "sink")
-	enableOwnerNotify(t, ws, `test -f `+stamp+` && printf yes >> `+sink+` || printf no >> `+sink)
+	enableOwnerNotify(t, ws, `test -f `+shPath(stamp)+` && printf yes >> `+shPath(sink)+` || printf no >> `+shPath(sink))
 
 	stopAnswering := func() {
 		f, err := os.Create(stamp)
