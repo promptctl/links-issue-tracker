@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -121,11 +122,13 @@ func TestAWriteOpenWhoseCollectionFailsStillOpens(t *testing.T) {
 	if err := first.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
+	// A file where the directory belongs fails the read for any user, root
+	// included, as a permission bit would not.
 	dir := TempTableFilesDir(doltRoot)
-	if err := os.Chmod(dir, 0o300); err != nil {
-		t.Fatalf("chmod: %v", err)
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatalf("clear the staging dir: %v", err)
 	}
-	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	writeFileForTest(t, dir, "not a directory")
 
 	s, err := Open(ctx, doltRoot, "test-workspace-id")
 	if err != nil {
@@ -133,11 +136,11 @@ func TestAWriteOpenWhoseCollectionFailsStillOpens(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = s.Close() })
 	got := s.Migrated()
-	if got.TempTableFiles == nil || !errors.Is(got.TempTableFiles.Err, os.ErrPermission) {
-		t.Fatalf("Migrated().TempTableFiles = %+v, want the permission failure", got.TempTableFiles)
+	if got.TempTableFiles == nil || !errors.Is(got.TempTableFiles.Err, syscall.ENOTDIR) {
+		t.Fatalf("Migrated().TempTableFiles = %+v, want the not-a-directory failure", got.TempTableFiles)
 	}
-	if !errors.Is(got.Failures(), os.ErrPermission) {
-		t.Errorf("Migrated().Failures() = %v, want it to carry the collection's failure", got.Failures())
+	if failures := got.Failures(); len(failures) != 1 || !errors.Is(failures[0], syscall.ENOTDIR) {
+		t.Errorf("Migrated().Failures() = %v, want the collection's failure alone", failures)
 	}
 }
 

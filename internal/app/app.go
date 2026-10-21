@@ -98,7 +98,7 @@ func Open(ctx context.Context, ws workspace.Info, mode AccessMode) (*App, error)
 		// none, so every failure the open survived rides this error: the next
 		// open finds nothing to migrate and would never retry a failed prune.
 		// [LAW:no-silent-failure]
-		return nil, errors.Join(err, storage.OpenMigration(st).Failures(), st.Close())
+		return nil, errors.Join(err, errors.Join(storage.OpenMigration(st).Failures()...), st.Close())
 	}
 	// Every mode attributes, and the mode's own identity contract decides what
 	// that means: a write open has just minted a token, while a read open in a

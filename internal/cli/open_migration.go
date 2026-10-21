@@ -27,18 +27,11 @@ func reportOpenMigration(ctx context.Context, done storage.Migrated) {
 }
 
 // openWarnings is the lines the failures an open survived add to a command's
-// output, one per failure, each ending in a newline: rolling old migration
-// snapshots or checkpoints off after the work it trails committed, and
-// collecting the temp table files a dead writer left. Every reader that warns
-// of an open's failures prints these, so none can warn of one and drop the
-// other. [LAW:single-enforcer]
+// output, one per failure, each ending in a newline.
 func openWarnings(done storage.Migrated) []string {
 	var warnings []string
-	if done.PruneErr != nil {
-		warnings = append(warnings, fmt.Sprintf("warning: old migration snapshots or checkpoints were not removed: %v\n", done.PruneErr))
-	}
-	if done.TempTableFiles != nil && done.TempTableFiles.Err != nil {
-		warnings = append(warnings, fmt.Sprintf("warning: temp table files a dead writer left were not all removed: %v\n", done.TempTableFiles.Err))
+	for _, failure := range done.Failures() {
+		warnings = append(warnings, fmt.Sprintf("warning: %v\n", failure))
 	}
 	return warnings
 }

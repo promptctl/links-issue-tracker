@@ -27,9 +27,11 @@ const tempTableFilePrefix = "buffered_file_byte_sink_"
 //
 // The caller must hold Dolt's journal LOCK through its own write engine and
 // have started no push, fetch or landing on it. That hold is the proof every
-// staged file is dead: each of those writers stages through an engine holding
-// LOCK for its whole life, so while this process holds it, no other can be
-// staging, and this one is not. [LAW:no-ambient-temporal-coupling] the kernel
+// staged file is dead: each of those writers stages through an engine, and an
+// engine holds LOCK from its open to its close, so while this engine holds
+// it, no other engine can be staging, and this one is not. A Store that
+// rotates its engine (doc.go's reconnect and withEngineClosed) is no
+// exception: what its closed engine staged died with it. [LAW:no-ambient-temporal-coupling] the kernel
 // owns the liveness answer — no age, no PID.
 //
 // Only a regular file with exactly Dolt's staged-file name is collected;

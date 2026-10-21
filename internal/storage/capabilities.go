@@ -2,7 +2,6 @@ package storage
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -337,15 +336,19 @@ type Migrated struct {
 	TempTableFiles *TempTableFilesCollection
 }
 
-// Failures is every failure the open survived, joined: the prune's and the
-// collection's. A reader that must carry an open's failures somewhere reads
-// them here, so none can carry one and drop the other. [LAW:single-enforcer]
-func (m Migrated) Failures() error {
-	var collectErr error
-	if m.TempTableFiles != nil {
-		collectErr = m.TempTableFiles.Err
+// Failures is every failure the open survived, each saying what the open
+// could not do: the prune's and the collection's. It is the one list of them;
+// every reader that carries or prints an open's failures ranges over it, so
+// none can carry one and drop the other. [LAW:one-source-of-truth]
+func (m Migrated) Failures() []error {
+	var failures []error
+	if m.PruneErr != nil {
+		failures = append(failures, fmt.Errorf("old migration snapshots or checkpoints were not removed: %w", m.PruneErr))
 	}
-	return errors.Join(m.PruneErr, collectErr)
+	if m.TempTableFiles != nil && m.TempTableFiles.Err != nil {
+		failures = append(failures, fmt.Errorf("temp table files a dead writer left were not all removed: %w", m.TempTableFiles.Err))
+	}
+	return failures
 }
 
 // TempTableFilesCollection is what an open's collection of temp table files a
