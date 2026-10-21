@@ -644,7 +644,6 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/inventories/inventory-model.md", Text: "updated supports only >=, >, <=, <", Src: "updated supports only >=, >, <=, <"},
 	{Doc: "doc-v1-total/inventories/inventory-model.md", Text: "updated-after cannot be greater than updated-before", Src: "updated-after cannot be greater than updated-before"},
 	{Doc: "doc-v1-total/inventories/inventory-model.md", Text: "write %s trace: %w", Src: "write %s trace: %w"},
-	{Doc: "doc-v1-total/inventories/inventory-platform.md", Text: "#!/usr/bin/env bash", Src: "#!/usr/bin/env bash\n"},
 	{Doc: "doc-v1-total/inventories/inventory-platform.md", Text: "%q is not a release tag (a release tag is vX.Y.Z with no leading zeros, e.g. v0.4.1)", Src: "%q is not a release tag (a release tag is vX.Y.Z with no leading zeros, e.g. v0.4.1)"},
 	{Doc: "doc-v1-total/inventories/inventory-platform.md", Text: "canonicalize git-common-dir %q: %w", Src: "canonicalize git-common-dir %q: %w"},
 	{Doc: "doc-v1-total/inventories/inventory-platform.md", Text: "config: %s must be a whole number of commits, got %#v (%T)", Src: "config: %s must be a whole number of commits, got %#v (%T)"},
