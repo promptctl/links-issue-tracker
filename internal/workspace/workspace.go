@@ -96,6 +96,13 @@ type Info struct {
 	// wrong in every reconstructed Location. Info is resolved from a cwd, so it
 	// is the type that legitimately knows. [LAW:types-are-the-program]
 	PrivateGitDir string
+	// MainCheckout says this checkout is the repository's main working tree
+	// rather than a linked worktree: its own git directory IS the common one.
+	// `lit next` reads it to say where a pick is started, because the main
+	// clone is where every session starts. Decided here, from the same two
+	// directories Info already resolves, so no caller re-derives it from a path
+	// spelling. [LAW:types-are-the-program]
+	MainCheckout bool
 }
 
 // Location is the on-disk geometry of a lit store — every path derived from a
@@ -333,6 +340,14 @@ func ResolveWithPrefix(cwd string, requested PrefixRequest) (Info, error) {
 	if err != nil {
 		return Info{}, err
 	}
+	// The common dir is canonical (Locate resolves its symlinks) and the private
+	// one is deliberately not, so they are compared as physical paths: on macOS
+	// a checkout under /var is the same directory as /private/var, and a string
+	// compare would call the main clone a linked worktree.
+	canonicalPrivateGitDir, err := filepath.EvalSymlinks(privateGitDir)
+	if err != nil {
+		return Info{}, fmt.Errorf("canonicalize git-dir %q: %w", privateGitDir, err)
+	}
 	// [LAW:effects-at-boundaries] Locate is pure geometry; store
 	// creation is the one mutation, gathered here where the write is intended.
 	if err := os.MkdirAll(loc.StorageDir, 0o755); err != nil {
@@ -348,6 +363,7 @@ func ResolveWithPrefix(cwd string, requested PrefixRequest) (Info, error) {
 		WorkspaceID:   cfg.WorkspaceID,
 		IssuePrefix:   prefix,
 		PrivateGitDir: privateGitDir,
+		MainCheckout:  filepath.Clean(canonicalPrivateGitDir) == loc.GitCommonDir,
 	}, nil
 }
 
