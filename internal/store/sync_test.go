@@ -282,7 +282,7 @@ func TestSyncRemoteValidation(t *testing.T) {
 		{
 			name: "compacting push requires branch",
 			run: func() error {
-				_, err := syncStore.SyncCompactAndPush(ctx, ctx, remoteName(t, "origin"), "   ", shippedBound(t), false, false)
+				_, err := syncStore.SyncCompactAndPush(ctx, ctx, remoteName(t, "origin"), "   ", unfiredBound(t), false, false)
 				return err
 			},
 			wantErr: "branch is required",
@@ -333,7 +333,7 @@ func TestSyncCompactAndPushRefusesABlankBranchBeforeAnyWork(t *testing.T) {
 	defer func() { _ = st.Close() }()
 	canceled, cancel := context.WithCancel(ctx)
 	cancel()
-	_, err := st.SyncCompactAndPush(canceled, canceled, remoteName(t, "origin"), "   ", shippedBound(t), false, false)
+	_, err := st.SyncCompactAndPush(canceled, canceled, remoteName(t, "origin"), "   ", unfiredBound(t), false, false)
 	if err == nil || err.Error() != "branch is required" {
 		t.Fatalf("SyncCompactAndPush(blank branch) error = %v, want only %q", err, "branch is required")
 	}
@@ -880,7 +880,7 @@ func TestSyncCompactAndPushDelivers(t *testing.T) {
 	if err := sync.SyncAddRemote(ctx, remoteName(t, "origin"), remoteURL); err != nil {
 		t.Fatalf("SyncAddRemote() error = %v", err)
 	}
-	if _, err := sync.SyncCompactAndPush(ctx, ctx, remoteName(t, "origin"), "master", shippedBound(t), true, false); err != nil {
+	if _, err := sync.SyncCompactAndPush(ctx, ctx, remoteName(t, "origin"), "master", unfiredBound(t), true, false); err != nil {
 		t.Fatalf("SyncCompactAndPush() error = %v", err)
 	}
 	got, err := sync.SyncFreshness(ctx, remoteName(t, "origin"), "master")
@@ -950,7 +950,7 @@ func TestSyncCompactAndPushDeepensOnAFragmentedOldGeneration(t *testing.T) {
 		t.Fatalf("SyncAddRemote() error = %v", err)
 	}
 
-	result, err := syncStore.SyncCompactAndPush(ctx, ctx, remoteName(t, "origin"), "master", shippedBound(t), true, false)
+	result, err := syncStore.SyncCompactAndPush(ctx, ctx, remoteName(t, "origin"), "master", unfiredBound(t), true, false)
 	if err != nil {
 		t.Fatalf("SyncCompactAndPush() error = %v", err)
 	}
@@ -1008,7 +1008,7 @@ func TestSyncCompactAndPushNamesADeepPassInsideAFailedPush(t *testing.T) {
 	}
 	defer syncStore.Close()
 
-	_, err = syncStore.SyncCompactAndPush(ctx, ctx, remoteName(t, "no-such-remote"), "master", shippedBound(t), false, false)
+	_, err = syncStore.SyncCompactAndPush(ctx, ctx, remoteName(t, "no-such-remote"), "master", unfiredBound(t), false, false)
 	if err == nil {
 		t.Fatal("SyncCompactAndPush() to a remote that does not exist succeeded; this test cannot say anything unless the push fails")
 	}

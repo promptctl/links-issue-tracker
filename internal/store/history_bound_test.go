@@ -34,10 +34,9 @@ func windowOf(t *testing.T, reRootAt, keep uint64) historywindow.Window {
 	return window
 }
 
-// shippedBound is the window config names by default, which no test store
-// grows near: a push under it reads the remote head's height and does
-// nothing else.
-func shippedBound(t *testing.T) storage.BoundWindow {
+// unfiredBound is a window no test store grows near: a push under it reads
+// the remote head's height and does nothing else.
+func unfiredBound(t *testing.T) storage.BoundWindow {
 	t.Helper()
 	return storage.BoundBy(windowOf(t, 2000, 1000))
 }

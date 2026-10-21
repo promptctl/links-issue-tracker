@@ -344,7 +344,7 @@ func TestACompactingPushReportsItsFollowsCollection(t *testing.T) {
 	bravo := openSyncOrFatal(t, ctx, r.bravo)
 	defer func() { _ = bravo.Close() }()
 
-	pushed, err := bravo.SyncCompactAndPush(ctx, ctx, remoteName(t, "origin"), "master", shippedBound(t), false, false)
+	pushed, err := bravo.SyncCompactAndPush(ctx, ctx, remoteName(t, "origin"), "master", unfiredBound(t), false, false)
 	if err != nil {
 		t.Fatalf("SyncCompactAndPush(bravo) error = %v", err)
 	}
@@ -433,7 +433,7 @@ func TestSyncPushFromCloneFollowsAReRootedRemote(t *testing.T) {
 	r.bravo = clone
 	st := openSyncOrFatal(t, ctx, clone)
 	defer func() { _ = st.Close() }()
-	pushed, err := st.SyncPushFromClone(ctx, ctx, remoteName(t, "origin"), "master", shippedBound(t), false, false)
+	pushed, err := st.SyncPushFromClone(ctx, ctx, remoteName(t, "origin"), "master", unfiredBound(t), false, false)
 	if err != nil {
 		t.Fatalf("SyncPushFromClone error = %v", err)
 	}
