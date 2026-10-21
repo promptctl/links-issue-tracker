@@ -557,7 +557,7 @@ func TestRunNextServesPastAnEpicWhoseWorkIsAllBlocked(t *testing.T) {
 		"no ready work in epic(s) " + epic.ID + " (1/2 done) — ",
 		blocker.ID + " (on your path but not startable right now",
 		upstream.ID + " (on your path but waiting on an event outside this repository",
-		"\nmove on to the top ready ticket outside it: run `lit start " + elsewhere.ID + "`",
+		"\nmove on to the top ready ticket outside it: from a worktree of its own off the trunk (not this checkout, whose own work is unfinished), run `lit start " + elsewhere.ID + "`",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("next output = %q, want it to contain %q", text, want)
@@ -641,7 +641,7 @@ func TestRunNextUnderAFilterServesPastTheTicketItHid(t *testing.T) {
 	if strings.Contains(text, "no ready work in") {
 		t.Fatalf("next --type bug = %q, want the epic not called exhausted — %s is ready in it", text, second.ID)
 	}
-	want := "`lit next` without --type, --status, --labels or --assignee hands you " + second.ID + ", which this run's filter leaves out\nor take the top ready ticket the filter selects, outside the work you hold: run `lit start " + bug.ID + "`"
+	want := "`lit next` without --type, --status, --labels or --assignee hands you " + second.ID + ", which this run's filter leaves out\nor take the top ready ticket the filter selects, outside the work you hold: from a worktree of its own off the trunk (not this checkout, whose own work is unfinished), run `lit start " + bug.ID + "`"
 	if !strings.Contains(text, want) {
 		t.Fatalf("next --type bug = %q, want it to contain %q", text, want)
 	}

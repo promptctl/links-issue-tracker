@@ -255,7 +255,7 @@ func TestRouteNextServesPastAnExhaustedEpic(t *testing.T) {
 	if strings.Contains(text, "to stay") {
 		t.Fatalf("rendered = %q, want no stay route — nothing blocks epic A", text)
 	}
-	if !strings.Contains(text, "\nmove on to the top ready ticket outside it: run `lit start "+b1.ID) {
+	if !strings.Contains(text, "\nmove on to the top ready ticket outside it: from a worktree of its own off the trunk (not this checkout, whose own work is unfinished), run `lit start "+b1.ID) {
 		t.Fatalf("rendered = %q, want the move-on route alone on its line, naming %q", text, b1.ID)
 	}
 }

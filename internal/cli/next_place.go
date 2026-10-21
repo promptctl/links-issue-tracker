@@ -28,14 +28,6 @@ const (
 	startBesideHeldWork
 )
 
-// startPlaceNames is how the invocation event spells each place; the no-pick
-// place records as null.
-var startPlaceNames = map[startPlace]string{
-	startHere:            "here",
-	startOffPrimaryClone: "worktree_off_primary_clone",
-	startBesideHeldWork:  "worktree_beside_held_work",
-}
-
 // placeFor decides where a pick is started. It is total over the sealed
 // NextOutcome sum and panics on a variant it does not name, as decideNextEvent
 // does. [LAW:single-enforcer] this is the one place the decision is made; the
@@ -62,32 +54,47 @@ func placeFor(outcome NextOutcome, primaryClone bool) startPlace {
 	panic(fmt.Sprintf("placeFor: unhandled NextOutcome %T", outcome))
 }
 
-// startPlaceReasons is why a pick goes to a worktree of its own, said after
-// "not". A place absent here starts where `lit next` ran.
-var startPlaceReasons = map[startPlace]string{
-	startOffPrimaryClone: "the primary clone, where every session starts",
-	startBesideHeldWork:  "this checkout, whose own work is unfinished",
-}
-
 // where is the clause that opens a pick's start advice, so the command and the
 // checkout it runs in are one instruction: empty for a pick started here, and
-// for one that leaves, the worktree to run `lit start` from, since the claim
-// lands on the checkout `lit start` runs in.
+// for one that leaves, the worktree to run `lit start` from — with why, said
+// after "not" — since the claim lands on the checkout `lit start` runs in.
+// [LAW:no-silent-failure] every place is named, as in placeFor, so a place
+// added later cannot print the plain advice by omission.
 func (p startPlace) where() string {
-	reason, leaves := startPlaceReasons[p]
-	if !leaves {
-		return ""
+	leave := func(reason string) string {
+		return fmt.Sprintf("from a worktree of its own off the trunk (not %s), ", reason)
 	}
-	return fmt.Sprintf("from a worktree of its own off the trunk (not %s), ", reason)
+	switch p {
+	case startNoPick, startHere:
+		return ""
+	case startOffPrimaryClone:
+		return leave("the primary clone, where every session starts")
+	case startBesideHeldWork:
+		return leave("this checkout, whose own work is unfinished")
+	}
+	panic(fmt.Sprintf("startPlace.where: unhandled place %d", p))
+}
+
+// eventName is how the invocation event spells the place; the no-pick place
+// records as null.
+func (p startPlace) eventName() *string {
+	spell := func(name string) *string { return &name }
+	switch p {
+	case startNoPick:
+		return nil
+	case startHere:
+		return spell("here")
+	case startOffPrimaryClone:
+		return spell("worktree_off_primary_clone")
+	case startBesideHeldWork:
+		return spell("worktree_beside_held_work")
+	}
+	panic(fmt.Sprintf("startPlace.eventName: unhandled place %d", p))
 }
 
 // recordStartPlace puts where the pick goes on the invocation's event, beside
 // the checkout kind that decided it. [LAW:nothing-unseen]
 func recordStartPlace(ctx context.Context, place startPlace, primaryClone bool) {
-	var name *string
-	if spelled, picked := startPlaceNames[place]; picked {
-		name = &spelled
-	}
-	telemetry.Set(ctx, "next.start_place", name)
+	telemetry.Set(ctx, "next.start_place", place.eventName())
 	telemetry.Set(ctx, "next.primary_clone", primaryClone)
 }

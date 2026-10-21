@@ -736,12 +736,12 @@ func TestFocusClauseLandsOnThePoolsRoute(t *testing.T) {
 				Epics:   []string{"test-held"},
 				Blocked: []blockerReach{{depReach: depReach{ID: "test-dep"}, Clearable: true}},
 			}},
-			route: "or move on to the top ready ticket outside it: run `lit start " + ticket.ID + "` to claim lane pick of epic " + epic.ID + clause,
+			route: "or move on to the top ready ticket outside it: from a worktree of its own off the trunk (not this checkout, whose own work is unfinished), run `lit start " + ticket.ID + "` to claim lane pick of epic " + epic.ID + clause,
 		},
 		{
 			name:    "past a scope the filter narrowed",
 			outcome: ServedPastNarrowing{poolPick: pick, Narrowing: Narrowed{Hidden: rowFor("test-hidden")}},
-			route:   "or take the top ready ticket the filter selects, outside the work you hold: run `lit start " + ticket.ID + "` to claim lane pick of epic " + epic.ID + clause,
+			route:   "or take the top ready ticket the filter selects, outside the work you hold: from a worktree of its own off the trunk (not this checkout, whose own work is unfinished), run `lit start " + ticket.ID + "` to claim lane pick of epic " + epic.ID + clause,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
