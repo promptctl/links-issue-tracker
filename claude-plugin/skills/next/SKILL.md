@@ -18,7 +18,7 @@ If the user provided specific information (e.g., a ticket id or area of the code
 lit counts a checkout — the primary clone or one linked worktree — as the claimant, not the session working in it.  A checkout carries one epic at a time, and every ticket `lit next` serves it is worked there: `lit next`, `lit start`, the branch, the commits and `lit done` all run from inside it.  Sessions are shifts at one desk: they come and go, and the work stays where it is.
 
 - **A handoff that names a checkout** is where you run this skill.  Go there first.
-- **`lit next` says where its pick is started.**  For a pick that belongs in a worktree of its own — new work served in the primary clone, or work from outside unfinished work this checkout holds — its start advice says `from a worktree of its own off the trunk (not …), run `lit start <id>``.  Create the worktree and run `lit start <id>` from inside it, because the claim lands on the checkout `lit start` runs in:
+- **`lit next` says where its pick is started.**  For a pick that belongs in a worktree of its own — new work served in the primary clone, or work from outside unfinished work this checkout holds — its start advice says `from a worktree of its own off the trunk (not …)` before `lit start <id>`.  Create the worktree and run `lit start <id>` from inside it, because the claim lands on the checkout `lit start` runs in:
 
   ```
   git fetch origin
