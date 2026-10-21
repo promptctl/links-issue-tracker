@@ -20,8 +20,8 @@ import (
 type SchemaConvergenceError struct {
 	Step ConvergenceStep
 	// Snapshot is the recovery snapshot this open took before migrating, nil
-	// when the open failed before taking one.
-	Snapshot *dbsnapshot.Snapshot
+	// when the open failed before taking one, with what its copy left out.
+	Snapshot *dbsnapshot.Taken
 	// PruneErr is why rolling older migration checkpoints or snapshots off
 	// failed, during this open, before or beside the failure.
 	PruneErr error
@@ -51,9 +51,9 @@ func (e *SchemaConvergenceError) Unwrap() error { return e.Cause }
 // EventRecord is the step that failed, and the snapshot and prune failure
 // under the keys a successful open records them under.
 func (e *SchemaConvergenceError) EventRecord() (map[string]any, map[string]int) {
-	snapshot := ""
+	var snapshot *storage.RecoverySnapshot
 	if e.Snapshot != nil {
-		snapshot = e.Snapshot.Name
+		snapshot = recoverySnapshot(*e.Snapshot)
 	}
 	facts := storage.MigrationRecoveryFacts(snapshot, e.PruneErr)
 	facts["migration.failed_step"] = e.Step.String()
@@ -267,7 +267,7 @@ func prune(at pruneStep, label string, work func() error) error {
 // [LAW:types-are-the-program] the snapshot is a value this phase receives,
 // not a field attached after the fact, so its failures carry it by
 // construction.
-type snapshotted struct{ snap dbsnapshot.Snapshot }
+type snapshotted struct{ snap dbsnapshot.Taken }
 
 func (p snapshotted) attempt(step ConvergenceStep, work func() error) *SchemaConvergenceError {
 	return p.failAt(step, atFailpoint(step, work))

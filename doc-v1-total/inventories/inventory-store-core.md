@@ -4902,7 +4902,7 @@ Additional inline error strings:
 
 ### 4.6 `downgradeLocked(ctx, targetSchemaVersion int64) (*storage.Downgraded, error)` — `downgrade.go`
 
-`Downgrade` returns what this reports: `*storage.Downgraded{From, Reversed, Snapshot, PruneErr}` (`internal/storage/capabilities.go`), whose `EventRecord()` is facts `downgrade.workspace_schema` (From), `downgrade.snapshot` and `downgrade.snapshot_prune_error` (`telemetry.ErrorText(PruneErr)`: `PruneErr.Error()`, null when nil), and count `downgrade.reversed`. Steps 1–2 return nil; every later return, error or not, carries the report as far as the pipeline got: `From` from step 3, `Snapshot` from step 8, `Reversed` from step 9, `PruneErr` from step 10.
+`Downgrade` returns what this reports: `*storage.Downgraded{From, Reversed, Snapshot, PruneErr}` (`internal/storage/capabilities.go`), whose `EventRecord()` is facts `downgrade.workspace_schema` (From), `downgrade.snapshot` and `downgrade.snapshot_left_out` (Snapshot's name and what its copy left out, `""` and null when nil) and `downgrade.snapshot_prune_error` (`telemetry.ErrorText(PruneErr)`: `PruneErr.Error()`, null when nil), and count `downgrade.reversed`. Steps 1–2 return nil; every later return, error or not, carries the report as far as the pipeline got: `From` from step 3, `Snapshot` (`recoverySnapshot(taken)`) from step 8, `Reversed` from step 9, `PruneErr` from step 10.
 
 Ordered:
 1. `state, err := s.classifyMigrationState(ctx)` (impl `internal/store/migration_runner.go`); error propagated unwrapped (`downgrade.go`).
@@ -5302,7 +5302,7 @@ Classification predicates:
 Dolt gives every **git-backed** remote its own bare-repo mirror at
 `<db>/.dolt/git-remote-cache/<sha256(url|ref)>/repo.git`, and never deletes one (`remotecache.go`).
 
-Constant: `remoteCacheDirName = "git-remote-cache"` (`remotecache.go`).
+Constant: `dbsnapshot.RemoteCacheDirName = "git-remote-cache"` (`internal/dbsnapshot/snapshot.go`).
 
 Base path (`remotecache.go`):
 ```go
@@ -5311,7 +5311,7 @@ func (s *Store) gitCacheRoot() string {
 }
 
 func (s *Store) remoteCacheBase() string {
-    return filepath.Join(s.gitCacheRoot(), dbfactory.DoltDir, remoteCacheDirName)
+    return filepath.Join(s.gitCacheRoot(), dbfactory.DoltDir, dbsnapshot.RemoteCacheDirName)
 }
 ```
 `gitCacheRoot()` is the `GitCacheRootParam` Dolt's SQL provider opens a git remote with; its last segment is `doltDatabaseName`, **not** the workspace id (`remotecache.go`).

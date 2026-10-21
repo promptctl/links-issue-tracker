@@ -186,8 +186,9 @@ one `--at` names, not the working directory's.
 | --- | --- |
 | `bootstrap` | `built` when the open found no database and built it; `built_over_dead_build` when it built it after removing what a lit process that died while building left behind; `none` when the database was already there, and for opens that only read. |
 | `migration.snapshot` | The recovery snapshot the open took before migrating, or `""` when it took none. |
+| `migration.snapshot_left_out` | What that snapshot's copy left out: paths relative to the store's Dolt directory, such as `links/.dolt/git-remote-cache` (the remote's mirror, which the first fetch after a restore clones again), `links/.dolt/temptf` (temp table files a dead Dolt process left) and `links/.dolt/noms/LOCK`; `[]` when it left out nothing, and `null` when the open took no snapshot. |
 | `migration.prune_error` | Why older migration snapshots or checkpoints could not be removed after the work they trail committed, or `null`. The command runs all the same, and prints a `warning: old migration snapshots or checkpoints were not removed:` line on stderr. |
-| `migration.failed_step` | Recorded only when the open fails: the step of its schema migration that failed, such as `migration`, `migration_reset` or `quarantine_table_shape`. The command's reason is read off this step. A failed open also records `migration.snapshot` (the snapshot it took before the failure, or `""`) and `migration.prune_error`, and its message names both. |
+| `migration.failed_step` | Recorded only when the open fails: the step of its schema migration that failed, such as `migration`, `migration_reset` or `quarantine_table_shape`. The command's reason is read off this step. A failed open also records `migration.snapshot` (the snapshot it took before the failure, or `""`), `migration.snapshot_left_out` and `migration.prune_error`, and its message names the snapshot and the prune failure. |
 | `migration.checkpoint` | Recorded when the open fails in work it ran under a Dolt checkpoint, so that a failure resets the working set to it: a migration (steps `migration`, `commit_migration`, `migration_reset`, `commit_migration_reset`, `record_quarantine`, `commit_quarantine`) or a drift repair (`drift_repair`, `drift_repair_reset`). The checkpoint's name. |
 | `migration.recovery_error` | Recorded with `migration.checkpoint`: why the recovery step `migration.failed_step` names failed (the reset to the checkpoint, or recording the quarantine), or `null` when the recovery held. |
 | `migration.failed_version` | Recorded when a migration's run or its commit failed (the first six steps above; `migration.failed_step` says which): the migration's version, or `0` when it is unknown. |
@@ -336,6 +337,12 @@ A recorded verdict sets these keys; a refused one has none of them.
 | `verdict.plan_digest` | The digest of the plan text the review judged, the one `--plan` names. |
 | `verdict.laws` | How many laws the verdict cites, each counted once. |
 
+## What `lit snapshots new` records
+
+| Key | Meaning |
+| --- | --- |
+| `snapshots.left_out` | What the snapshot's copy left out: paths relative to the store's Dolt directory, such as `links/.dolt/git-remote-cache` (the remote's mirror, which the first fetch after a restore clones again), `links/.dolt/temptf` (temp table files a dead Dolt process left) and `links/.dolt/noms/LOCK`; `[]` when it left out nothing. Absent when the command took no snapshot. |
+
 ## What `lit purge` records
 
 A purge counts, under `counts`, the rows that went with the issue.
@@ -414,6 +421,7 @@ the ones it had.
 | `downgrade.running_schema_max` | The highest schema version this lit supports. Set with the target. |
 | `downgrade.workspace_schema` | The workspace's applied schema version, as the reverse read it under the workspace lock and decided from. Set once the reverse has read it, whether the command then succeeds, refuses, or fails; absent, with the snapshot and the count, when it failed before that read. |
 | `downgrade.snapshot` | The recovery snapshot taken before the first down-migration, or `""` when none was taken. |
+| `downgrade.snapshot_left_out` | What that snapshot's copy left out, as `migration.snapshot_left_out` reads, or `null` when none was taken. |
 | `counts.downgrade.reversed` | The down-migrations applied. `0` when none ran; on a reverse that failed part-way, those applied before it stopped. |
 | `downgrade.snapshot_prune_error` | Why older downgrade snapshots could not be removed after the reverse, or `null`. The downgrade prints the failure as a `warning:` line and still installs the `--to` release. |
 | `downgrade.installed_path` | The path the `--to` release was installed to. Absent when nothing was installed. |

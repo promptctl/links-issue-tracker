@@ -176,7 +176,7 @@ func rollupMigrationCounts(rows []projectRollup) map[string]int {
 		if row.Migrated.SchemaAhead.ReadOnly {
 			counts["stores.read_only"]++
 		}
-		if row.Migrated.Snapshot != "" {
+		if row.Migrated.Snapshot != nil {
 			counts["stores.migrated"]++
 		}
 		if row.Migrated.PruneErr != nil {

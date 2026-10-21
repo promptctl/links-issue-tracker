@@ -249,9 +249,9 @@ func TestPrintCrossProjectRollupCloseWarningKeepsCounts(t *testing.T) {
 func TestPrintCrossProjectRollupNotesAFailedSnapshotPrune(t *testing.T) {
 	t.Parallel()
 	rows := []projectRollup{
-		{Label: "alpha", StorageDir: "/repos/alpha/.git/links", Ready: 3, Migrated: storage.Migrated{Snapshot: "a-pre-migrate-1", PruneErr: errors.New("prune migration snapshots: stuck")}},
-		{Label: "beta", StorageDir: "/repos/beta/.git/links", Err: errors.New("unreadable"), Migrated: storage.Migrated{Snapshot: "b-pre-migrate-1", PruneErr: errors.New("prune migration snapshots: stuck")}},
-		{Label: "gamma", StorageDir: "/repos/gamma/.git/links", Ready: 1, Migrated: storage.Migrated{Snapshot: "g-pre-migrate-1"}},
+		{Label: "alpha", StorageDir: "/repos/alpha/.git/links", Ready: 3, Migrated: storage.Migrated{Snapshot: &storage.RecoverySnapshot{Name: "a-pre-migrate-1"}, PruneErr: errors.New("prune migration snapshots: stuck")}},
+		{Label: "beta", StorageDir: "/repos/beta/.git/links", Err: errors.New("unreadable"), Migrated: storage.Migrated{Snapshot: &storage.RecoverySnapshot{Name: "b-pre-migrate-1"}, PruneErr: errors.New("prune migration snapshots: stuck")}},
+		{Label: "gamma", StorageDir: "/repos/gamma/.git/links", Ready: 1, Migrated: storage.Migrated{Snapshot: &storage.RecoverySnapshot{Name: "g-pre-migrate-1"}}},
 		{Label: "delta", StorageDir: "/repos/delta/.git/links", Ready: 2, Migrated: storage.Migrated{SchemaAhead: storage.SchemaAhead{WorkspaceSchema: 12}}},
 		{Label: "epsilon", StorageDir: "/repos/epsilon/.git/links", Ready: 2, Migrated: storage.Migrated{SchemaAhead: storage.SchemaAhead{WorkspaceSchema: 12, MinWriterSchema: 12, ReadOnly: true}}},
 	}

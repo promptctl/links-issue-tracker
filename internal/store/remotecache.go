@@ -19,6 +19,7 @@ import (
 	"github.com/dolthub/dolt/go/libraries/doltcore/dbfactory"
 	"github.com/dolthub/dolt/go/libraries/utils/gitcmd"
 
+	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -34,10 +35,6 @@ import (
 //
 // [LAW:effects-at-boundaries] Which directories are abandoned is a pure function
 // of two key sets (splitMirrors); only pruneRemoteCache touches disk.
-
-// remoteCacheDirName is dbfactory's cache directory, relative to the database
-// directory that holds `.dolt`.
-const remoteCacheDirName = "git-remote-cache"
 
 // mirrorGit builds "git <args...>" against the mirror at gitDir, run as spec
 // says. It is the one way lit runs git on a mirror.
@@ -204,7 +201,7 @@ func (s *Store) gitCacheRoot() string {
 
 // remoteCacheBase is where dbfactory keeps this store's mirrors.
 func (s *Store) remoteCacheBase() string {
-	return filepath.Join(s.gitCacheRoot(), dbfactory.DoltDir, remoteCacheDirName)
+	return filepath.Join(s.gitCacheRoot(), dbfactory.DoltDir, dbsnapshot.RemoteCacheDirName)
 }
 
 // listRemoteCacheKeys returns the cache keys present under base. A base that

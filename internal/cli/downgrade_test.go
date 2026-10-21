@@ -90,7 +90,7 @@ func (s *stubDowngrader) Downgrade(_ context.Context, target int64) (*storage.Do
 // reversedFromV4 is the store's report of a reverse from v4 to newFakeTarget's
 // v3: one down-migration, after one recovery snapshot.
 func reversedFromV4() *storage.Downgraded {
-	return &storage.Downgraded{From: 4, Reversed: 1, Snapshot: "1700000000000000000-lit-downgrade-1700000000000000001"}
+	return &storage.Downgraded{From: 4, Reversed: 1, Snapshot: &storage.RecoverySnapshot{Name: "1700000000000000000-lit-downgrade-1700000000000000001", LeftOut: []string{"links/.dolt/git-remote-cache"}}}
 }
 
 // newerCurrentInfo is a running binary whose schema support covers the span
@@ -212,6 +212,7 @@ func TestRunDowngradeRecordsWhatItReversedAndInstalled(t *testing.T) {
 		"downgrade.installed_path":       "/p/lit",
 		"downgrade.workspace_schema":     float64(4),
 		"downgrade.snapshot":             "1700000000000000000-lit-downgrade-1700000000000000001",
+		"downgrade.snapshot_left_out":    []any{"links/.dolt/git-remote-cache"},
 		"downgrade.snapshot_prune_error": nil,
 		"downgrade.target_schema_max":    float64(3),
 		"downgrade.running_schema_min":   float64(1),
@@ -237,6 +238,7 @@ func TestRunDowngradeRecordsWhatTheReverseReportedOnEveryOutcome(t *testing.T) {
 	reversed := map[string]any{
 		"downgrade.workspace_schema":     float64(4),
 		"downgrade.snapshot":             "1700000000000000000-lit-downgrade-1700000000000000001",
+		"downgrade.snapshot_left_out":    []any{"links/.dolt/git-remote-cache"},
 		"downgrade.snapshot_prune_error": nil,
 	}
 	tests := []struct {
@@ -253,6 +255,7 @@ func TestRunDowngradeRecordsWhatTheReverseReportedOnEveryOutcome(t *testing.T) {
 			wantFacts: map[string]any{
 				"downgrade.workspace_schema":     float64(3),
 				"downgrade.snapshot":             "",
+				"downgrade.snapshot_left_out":    nil,
 				"downgrade.snapshot_prune_error": nil,
 				"downgrade.installed_path":       "/p/lit",
 			},
@@ -367,6 +370,7 @@ func TestRunDowngradeOnAWorkspacePastRunningSupportIsSchemaAhead(t *testing.T) {
 		"downgrade.tag":                  "v0.4.1",
 		"downgrade.workspace_schema":     float64(ahead),
 		"downgrade.snapshot":             "",
+		"downgrade.snapshot_left_out":    nil,
 		"downgrade.snapshot_prune_error": nil,
 		"downgrade.target_schema_max":    float64(3),
 		"downgrade.running_schema_min":   float64(current.Schema.Min),

@@ -34,7 +34,7 @@ func TestCloneTree_PreservesPermsUnderRestrictiveUmask(t *testing.T) {
 		t.Fatal(err)
 	}
 	dst := filepath.Join(root, "dst")
-	if err := cloneTree(context.Background(), src, dst); err != nil {
+	if _, err := cloneTree(context.Background(), src, dst, cloneOmits); err != nil {
 		t.Fatal(err)
 	}
 	dirInfo, err := os.Stat(filepath.Join(dst, "nested"))

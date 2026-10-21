@@ -275,11 +275,11 @@ func (s *Store) downgradeLocked(ctx context.Context, targetSchemaVersion int64) 
 	if err != nil {
 		return done, fmt.Errorf("downgrade: %w", err)
 	}
-	done.Snapshot = snap.Name
+	done.Snapshot = recoverySnapshot(snap)
 
 	done.Reversed, err = s.applyDownMigrations(ctx, targetSchemaVersion)
 	if err != nil {
-		return done, &DowngradeRollbackError{Snapshot: snap, Cause: err}
+		return done, &DowngradeRollbackError{Snapshot: snap.Snapshot, Cause: err}
 	}
 	// [LAW:single-enforcer] Downgrade owns the prune budget for its own
 	// snapshots. IsDowngradeSnapshotName is disjoint from

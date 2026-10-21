@@ -9,6 +9,6 @@ import "context"
 //
 // [LAW:dataflow-not-control-flow] Platform variability lives in which file Go
 // links in (a value), not in a runtime branch inside one function.
-func cloneTree(ctx context.Context, src, dst string) error {
-	return walkAndCopy(ctx, src, dst, plainFileCopy)
+func cloneTree(ctx context.Context, src, dst string, omit omission) (leftOut []string, err error) {
+	return walkAndCopy(ctx, src, dst, omit, plainFileCopy)
 }

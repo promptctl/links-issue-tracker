@@ -966,7 +966,8 @@ lit snapshots restore <name>
 
 Dolt filesystem-level database snapshots — the whole-database mechanism, coarser
 and lower-level than the JSON `lit backup` data-export family, capturing the store
-directory wholesale.
+directory without the remote's mirror or Dolt's temp files. The first fetch after
+`restore` downloads the remote's mirror again.
 
 ### `lit lifeboat`
 

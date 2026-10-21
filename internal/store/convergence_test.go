@@ -70,7 +70,7 @@ func TestEveryConvergenceStepHasATokenAndAnAct(t *testing.T) {
 // instructs a restore: whether to restore is the act's to say, and only one
 // act says it.
 func TestAConvergenceFailureNamesItsSnapshotWithoutAdvisingARestore(t *testing.T) {
-	snap := &dbsnapshot.Snapshot{Name: "1-pre-migrate-1", Path: "/snapshots/1-pre-migrate-1"}
+	snap := &dbsnapshot.Taken{Snapshot: dbsnapshot.Snapshot{Name: "1-pre-migrate-1", Path: "/snapshots/1-pre-migrate-1"}}
 	for _, step := range ConvergenceSteps() {
 		msg := (&SchemaConvergenceError{Step: step, Snapshot: snap, PruneErr: errors.New("prune stuck"), Cause: errors.New("synthetic")}).Error()
 		for _, want := range []string{"step " + step.String() + " failed: synthetic", snap.Name, snap.Path, "prune stuck"} {

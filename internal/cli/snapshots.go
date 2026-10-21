@@ -11,6 +11,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
 	"github.com/promptctl/links-issue-tracker/internal/pathspec"
 	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -92,6 +93,7 @@ func snapshotsNewLeaf() wsLeaf {
 		// name sends the operator retrying into a duplicate of a snapshot they
 		// already have.
 		if snap.Name != "" {
+			telemetry.Set(ctx, "snapshots.left_out", snap.LeftOut)
 			if _, printErr := fmt.Fprintf(stdout, "%s %s\n", snap.Name, snap.Path); printErr != nil {
 				err = errors.Join(err, printErr)
 			}
@@ -120,7 +122,7 @@ func snapshotsNewLeaf() wsLeaf {
 // takeUserSnapshot brackets the Dolt-directory copy in exactly the holds the
 // copy needs and releases them at return, so the caller's housekeeping never
 // extends the exclusion window past the last directory read.
-func takeUserSnapshot(ctx context.Context, ws workspace.Info, label string) (snap dbsnapshot.Snapshot, err error) {
+func takeUserSnapshot(ctx context.Context, ws workspace.Info, label string) (snap dbsnapshot.Taken, err error) {
 	err = withDoltDirectoryHeld(ctx, ws, func() error {
 		s, err := dbsnapshot.Take(ctx, ws.DatabasePath, label)
 		if err != nil {

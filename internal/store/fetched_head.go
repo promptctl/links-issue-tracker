@@ -20,6 +20,7 @@ import (
 	"github.com/dolthub/dolt/go/libraries/utils/gitcmd"
 	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/types"
+	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -250,7 +251,7 @@ func LandFetchedHead(ctx context.Context, doltRootDir string, clone TakenClone, 
 // LandingTempDir is where LandFetchedHead stages the table files it copies
 // into the live store at doltRootDir.
 func LandingTempDir(doltRootDir string) string {
-	return filepath.Join(doltRootDir, doltDatabaseName, dbfactory.DoltDir, "temptf")
+	return filepath.Join(doltRootDir, doltDatabaseName, dbfactory.DoltDir, dbsnapshot.TempTableFilesDirName)
 }
 
 // TakenClone is a clone of the live store and every tracking ref it held when
@@ -582,7 +583,7 @@ func openCloneChunkStore(ctx context.Context, cloneRoot string) (*doltdb.DoltDB,
 // remoteCacheBaseAt is the git-remote-cache directory of the Dolt root at
 // root — Store.remoteCacheBase for a root with no Store open on it.
 func remoteCacheBaseAt(root string) string {
-	return filepath.Join(root, doltDatabaseName, dbfactory.DoltDir, remoteCacheDirName)
+	return filepath.Join(root, doltDatabaseName, dbfactory.DoltDir, dbsnapshot.RemoteCacheDirName)
 }
 
 // remoteCacheLanding is what a fetch on the clone changed in its mirrors of the

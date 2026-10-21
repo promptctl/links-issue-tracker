@@ -375,7 +375,7 @@ func TestWalkAndCopy_CancelMidWalkStopsAndSurfacesCancellation(t *testing.T) {
 	dst := filepath.Join(root, "dst")
 	ctx, cancel := context.WithCancel(context.Background())
 	copied := 0
-	err := walkAndCopy(ctx, src, dst, func(ctx context.Context, src, dst string) error {
+	_, err := walkAndCopy(ctx, src, dst, cloneOmits, func(ctx context.Context, src, dst string) error {
 		copied++
 		cancel()
 		return plainFileCopy(ctx, src, dst)

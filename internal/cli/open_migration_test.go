@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -93,6 +94,9 @@ func assertMigrationPruneFailureRecorded(t *testing.T, stuck string) {
 	}
 	if snap, _ := ev.Facts["migration.snapshot"].(string); !strings.Contains(snap, "-pre-migrate-") || snap == filepath.Base(stuck) {
 		t.Errorf("migration.snapshot = %v, want the snapshot the open took", ev.Facts["migration.snapshot"])
+	}
+	if leftOut, ok := ev.Facts["migration.snapshot_left_out"].([]any); !ok || !slices.Contains(leftOut, any("links/.dolt/noms/LOCK")) {
+		t.Errorf("migration.snapshot_left_out = %v, want what the snapshot's copy left out, the journal LOCK among it", ev.Facts["migration.snapshot_left_out"])
 	}
 	if pruneErr, _ := ev.Facts["migration.prune_error"].(string); !strings.HasPrefix(pruneErr, "prune migration snapshots: ") {
 		t.Errorf("migration.prune_error = %v, want the prune failure", ev.Facts["migration.prune_error"])

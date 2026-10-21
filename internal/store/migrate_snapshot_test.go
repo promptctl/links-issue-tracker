@@ -291,7 +291,7 @@ func TestMigratingOpenReportsAFailedSnapshotPrune(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	done := st.Migrated()
-	if !IsMigrationSnapshotName(done.Snapshot) || done.Snapshot == filepath.Base(stuck) {
+	if done.Snapshot == nil || !IsMigrationSnapshotName(done.Snapshot.Name) || done.Snapshot.Name == filepath.Base(stuck) {
 		t.Fatalf("Migrated() = %+v, want the snapshot the open took", done)
 	}
 	if done.PruneErr == nil || !strings.Contains(done.PruneErr.Error(), "prune migration snapshots") {
