@@ -1272,18 +1272,19 @@ transition row runs per id — §2.21):
      a lane whose claim has expired derives) → no ceremony: the start proceeds and
      prints nothing about the lane.
    - `Held` by another → `confirmFreshTakeover` (`claims_takeover.go`):
-     - `--take`, at a terminal or not → prints `"<claim line> — taking over (--take)\n"`
-       and proceeds.
+     - `--take`, at a terminal or not → proceeds; `"<claim line> — taking over (--take)\n"`
+       is printed after Apply, ahead of the transfer notice (step 4).
      - Non-interactive stdout (`!isTerminal(stdout)`) and no `--take` →
        `takeoverUnconfirmedError` "<claim line> — this lane is claimed and active; pass --take to confirm the takeover"
        → exit 3, reason `takeover_unconfirmed`.
-     - Interactive and no `--take` → `askYesNo(stdout, line+"\ntake over this lane?")`
+     - Interactive and no `--take` → `askYesNo(os.Stdin, stdout, line+"\ntake over this lane?")`
        (`claims_takeover.go`) prints `"<claim line>\ntake over this lane? [y/N] "`, reads a
        line from stdin; a read error other than EOF →
        `"read confirmation: %w"`; an answer not starting with `y`
        (case-insensitive, trimmed) → `takeoverUnconfirmedError` "takeover declined" → exit 3,
        reason `takeover_unconfirmed`.
-4. Returns what the start owes after Apply: `transferNotice(standing, handover)`
+4. Returns what the start owes after Apply: the `--take` takeover line, if any, then
+   `transferNotice(standing, handover)`
    (`claims_context.go`), which is `claim transferred: <old> -> <new>` when `Apply`
    reported a handover and the standing names the handover's predecessor as the
    lane's holder, and empty otherwise. `transitionLeaf` writes it after Apply
@@ -1959,8 +1960,10 @@ before any id is acted on.
   `telemetry.Occurrence` scope (`telemetry.go`): the facts and counts `op`
   records land in the scope, and one `bulk.items` entry per id is appended to
   the event — `bulk.item.id`, `bulk.item.error` (`telemetry.ErrorText`),
-  `bulk.item.facts`, `bulk.item.counts` (`bulk.go`).
-- Each success writes `"<id> ok\n"` to stdout, after whatever `op` wrote
+  `bulk.item.facts`, `bulk.item.counts` (`bulk.go`), with what the item's error
+  declares about itself (`model.ErrorRecord`) recorded into the scope.
+- `op` returns the item's notice and error. Each success writes the notice and
+  then `"<id> ok\n"` to stdout; a write error ends the run with that error
   (`bulk.go`).
 - Each failure is collected; **failures never reach stdout** (`bulk.go`).
 - If any failed, returns `BulkFailureError{Failures}` → exit 1
@@ -2245,7 +2248,7 @@ Description: `helptext/purge.txt`.
    - Non-interactive stdout (`!isTerminal(stdout)`) and no `--yes` →
      `purgeUnconfirmedError` "purging <id> cannot be undone; pass --yes to confirm it"
      → exit 3, reason `purge_unconfirmed`.
-   - Interactive and no `--yes` → `askYesNo(stdout, …)` (`claims_takeover.go`)
+   - Interactive and no `--yes` → `askYesNo(os.Stdin, stdout, …)` (`claims_takeover.go`)
      prints `"<id>: a purge removes it, its comments, labels, history and edges for good, here and in every store it syncs to\npurge it? [y/N] "`
      (no title), reads a line from stdin; a read error other than EOF →
      `"read confirmation: %w"`; an answer whose trimmed lowercase form does not

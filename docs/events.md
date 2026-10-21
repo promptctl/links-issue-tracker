@@ -323,8 +323,8 @@ carries the keys a `lit start` sets and a `lit bulk done` entry the keys a
 | --- | --- |
 | `bulk.item.id` | The issue id as given in `--ids`. |
 | `bulk.item.error` | The issue's error, or null when its change landed. |
-| `bulk.item.facts` | The facts that issue's change set; `{}` when it set none. |
-| `bulk.item.counts` | The counts that issue's change recorded; `{}` when it recorded none. |
+| `bulk.item.facts` | The facts that issue's change set, and those its error records about itself, as a failed `lit` command's event carries them; `{}` when there are none. |
+| `bulk.item.counts` | The counts that issue's change recorded, and those its error records; `{}` when there are none. |
 
 ## What `lit verdict` records
 
