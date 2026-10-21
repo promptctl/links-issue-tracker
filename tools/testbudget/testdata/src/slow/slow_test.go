@@ -54,3 +54,23 @@ func TestSerial10ms(t *testing.T) {
 func TestSerialParentOfA400msSubtest(t *testing.T) {
 	t.Run("slow", func(t *testing.T) { time.Sleep(400 * time.Millisecond) })
 }
+
+// Runs 150ms, pauses at t.Parallel, resumes, and runs 100ms: its duration
+// is the two runs, 250ms, counted once each.
+func TestParallel150msBeforePauseThen100ms(t *testing.T) {
+	time.Sleep(150 * time.Millisecond)
+	t.Parallel()
+	time.Sleep(100 * time.Millisecond)
+}
+
+// A serial parent of two parallel subtests: go test reports the parent at
+// 0.00s, because the subtests run after its body returns. Its clock spans
+// them, so it is listed at their 320ms.
+func TestSerialParentOfTwoParallel320msSubtests(t *testing.T) {
+	for _, name := range []string{"a", "b"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			time.Sleep(320 * time.Millisecond)
+		})
+	}
+}

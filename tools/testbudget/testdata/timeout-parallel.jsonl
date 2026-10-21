@@ -1,42 +1,42 @@
-{"Time":"2026-10-20T21:11:10.647403-06:00","Action":"start","Package":"example.com/hungparpkg"}
-{"Time":"2026-10-20T21:11:10.652058-06:00","Action":"run","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs"}
-{"Time":"2026-10-20T21:11:10.652111-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"=== RUN   TestParallel200msBeforePauseThenHangs\n"}
-{"Time":"2026-10-20T21:11:10.853103-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"=== PAUSE TestParallel200msBeforePauseThenHangs\n"}
-{"Time":"2026-10-20T21:11:10.853367-06:00","Action":"pause","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs"}
-{"Time":"2026-10-20T21:11:10.853397-06:00","Action":"run","Package":"example.com/hungparpkg","Test":"TestSerial100ms"}
-{"Time":"2026-10-20T21:11:10.853403-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestSerial100ms","Output":"=== RUN   TestSerial100ms\n"}
-{"Time":"2026-10-20T21:11:10.953903-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestSerial100ms","Output":"--- PASS: TestSerial100ms (0.10s)\n"}
-{"Time":"2026-10-20T21:11:10.953967-06:00","Action":"pass","Package":"example.com/hungparpkg","Test":"TestSerial100ms","Elapsed":0.1}
-{"Time":"2026-10-20T21:11:10.95399-06:00","Action":"cont","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs"}
-{"Time":"2026-10-20T21:11:10.953995-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"=== CONT  TestParallel200msBeforePauseThenHangs\n"}
-{"Time":"2026-10-20T21:11:12.655815-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"panic: test timed out after 2s\n"}
-{"Time":"2026-10-20T21:11:12.655957-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"\trunning tests:\n"}
-{"Time":"2026-10-20T21:11:12.655967-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"\t\tTestParallel200msBeforePauseThenHangs (2s)\n"}
-{"Time":"2026-10-20T21:11:12.655974-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"\n"}
-{"Time":"2026-10-20T21:11:12.655981-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"goroutine 9 [running]:\n"}
-{"Time":"2026-10-20T21:11:12.655986-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"testing.(*M).startAlarm.func1()\n"}
-{"Time":"2026-10-20T21:11:12.65599-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"\t/opt/homebrew/Cellar/go/1.25.7_1/libexec/src/testing/testing.go:2682 +0x2b0\n"}
-{"Time":"2026-10-20T21:11:12.656016-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"created by time.goFunc\n"}
-{"Time":"2026-10-20T21:11:12.65603-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"\t/opt/homebrew/Cellar/go/1.25.7_1/libexec/src/time/sleep.go:215 +0x38\n"}
-{"Time":"2026-10-20T21:11:12.656034-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"\n"}
-{"Time":"2026-10-20T21:11:12.656038-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"goroutine 1 [chan receive]:\n"}
-{"Time":"2026-10-20T21:11:12.656042-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"testing.tRunner.func1()\n"}
-{"Time":"2026-10-20T21:11:12.656046-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"\t/opt/homebrew/Cellar/go/1.25.7_1/libexec/src/testing/testing.go:1891 +0x3d0\n"}
-{"Time":"2026-10-20T21:11:12.656066-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"testing.tRunner(0x140000036c0, 0x14000104c68)\n"}
-{"Time":"2026-10-20T21:11:12.656069-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"\t/opt/homebrew/Cellar/go/1.25.7_1/libexec/src/testing/testing.go:1940 +0x104\n"}
-{"Time":"2026-10-20T21:11:12.656072-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"testing.runTests(0x1400000e030, {0x1025760a0, 0x2, 0x2}, {0x1400007c1a0?, 0x7?, 0x10257ebe0?})\n"}
-{"Time":"2026-10-20T21:11:12.656078-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"\t/opt/homebrew/Cellar/go/1.25.7_1/libexec/src/testing/testing.go:2475 +0x3b8\n"}
-{"Time":"2026-10-20T21:11:12.65608-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"testing.(*M).Run(0x14000108140)\n"}
-{"Time":"2026-10-20T21:11:12.656083-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"\t/opt/homebrew/Cellar/go/1.25.7_1/libexec/src/testing/testing.go:2337 +0x530\n"}
-{"Time":"2026-10-20T21:11:12.656085-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"main.main()\n"}
-{"Time":"2026-10-20T21:11:12.656087-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"\t_testmain.go:47 +0x80\n"}
-{"Time":"2026-10-20T21:11:12.656089-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"\n"}
-{"Time":"2026-10-20T21:11:12.656092-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"goroutine 7 [select (no cases)]:\n"}
-{"Time":"2026-10-20T21:11:12.656094-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"example.com/hungparpkg.TestParallel200msBeforePauseThenHangs(0x14000003880)\n"}
-{"Time":"2026-10-20T21:11:12.656097-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"\t/tmp/jdm-48abeef3/timeoutpar/hung_test.go:13 +0x34\n"}
-{"Time":"2026-10-20T21:11:12.656102-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"testing.tRunner(0x14000003880, 0x102488c00)\n"}
-{"Time":"2026-10-20T21:11:12.656104-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"\t/opt/homebrew/Cellar/go/1.25.7_1/libexec/src/testing/testing.go:1934 +0xc8\n"}
-{"Time":"2026-10-20T21:11:12.656107-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"created by testing.(*T).Run in goroutine 1\n"}
-{"Time":"2026-10-20T21:11:12.656113-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"\t/opt/homebrew/Cellar/go/1.25.7_1/libexec/src/testing/testing.go:1997 +0x364\n"}
-{"Time":"2026-10-20T21:11:12.656558-06:00","Action":"output","Package":"example.com/hungparpkg","Output":"FAIL\texample.com/hungparpkg\t2.009s\n"}
-{"Time":"2026-10-20T21:11:12.65661-06:00","Action":"fail","Package":"example.com/hungparpkg","Elapsed":2.009}
+{"Time":"2026-10-20T22:46:39.327067-06:00","Action":"start","Package":"example.com/hungparpkg"}
+{"Time":"2026-10-20T22:46:39.332454-06:00","Action":"run","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs"}
+{"Time":"2026-10-20T22:46:39.332515-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"=== RUN   TestParallel200msBeforePauseThenHangs\n"}
+{"Time":"2026-10-20T22:46:39.533569-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"=== PAUSE TestParallel200msBeforePauseThenHangs\n"}
+{"Time":"2026-10-20T22:46:39.53362-06:00","Action":"pause","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs"}
+{"Time":"2026-10-20T22:46:39.53363-06:00","Action":"run","Package":"example.com/hungparpkg","Test":"TestSerial100ms"}
+{"Time":"2026-10-20T22:46:39.533637-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestSerial100ms","Output":"=== RUN   TestSerial100ms\n"}
+{"Time":"2026-10-20T22:46:39.634699-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestSerial100ms","Output":"--- PASS: TestSerial100ms (0.10s)\n"}
+{"Time":"2026-10-20T22:46:39.634765-06:00","Action":"pass","Package":"example.com/hungparpkg","Test":"TestSerial100ms","Elapsed":0.1}
+{"Time":"2026-10-20T22:46:39.634784-06:00","Action":"cont","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs"}
+{"Time":"2026-10-20T22:46:39.634791-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"=== CONT  TestParallel200msBeforePauseThenHangs\n"}
+{"Time":"2026-10-20T22:46:41.336025-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"panic: test timed out after 2s\n"}
+{"Time":"2026-10-20T22:46:41.336135-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"\trunning tests:\n"}
+{"Time":"2026-10-20T22:46:41.336161-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"\t\tTestParallel200msBeforePauseThenHangs (2s)\n"}
+{"Time":"2026-10-20T22:46:41.336171-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"\n"}
+{"Time":"2026-10-20T22:46:41.336182-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"goroutine 37 [running]:\n"}
+{"Time":"2026-10-20T22:46:41.33619-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"testing.(*M).startAlarm.func1()\n"}
+{"Time":"2026-10-20T22:46:41.336199-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"\ttesting/testing.go:2682 +0x2b0\n"}
+{"Time":"2026-10-20T22:46:41.336225-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"created by time.goFunc\n"}
+{"Time":"2026-10-20T22:46:41.336234-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"\ttime/sleep.go:215 +0x38\n"}
+{"Time":"2026-10-20T22:46:41.336242-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"\n"}
+{"Time":"2026-10-20T22:46:41.336249-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"goroutine 1 [chan receive]:\n"}
+{"Time":"2026-10-20T22:46:41.336255-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"testing.tRunner.func1()\n"}
+{"Time":"2026-10-20T22:46:41.336262-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"\ttesting/testing.go:1891 +0x3d0\n"}
+{"Time":"2026-10-20T22:46:41.336268-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"testing.tRunner(0x1400008a700, 0x140000aac68)\n"}
+{"Time":"2026-10-20T22:46:41.336292-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"\ttesting/testing.go:1940 +0x104\n"}
+{"Time":"2026-10-20T22:46:41.336299-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"testing.runTests(0x140000ba018, {0x102bc5f40, 0x2, 0x2}, {0x140000c0180?, 0x7?, 0x102bceaa0?})\n"}
+{"Time":"2026-10-20T22:46:41.336305-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"\ttesting/testing.go:2475 +0x3b8\n"}
+{"Time":"2026-10-20T22:46:41.336312-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"testing.(*M).Run(0x140000ae140)\n"}
+{"Time":"2026-10-20T22:46:41.336318-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"\ttesting/testing.go:2337 +0x530\n"}
+{"Time":"2026-10-20T22:46:41.336323-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"main.main()\n"}
+{"Time":"2026-10-20T22:46:41.336329-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"\t_testmain.go:47 +0x80\n"}
+{"Time":"2026-10-20T22:46:41.336336-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"\n"}
+{"Time":"2026-10-20T22:46:41.336342-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"goroutine 35 [select (no cases)]:\n"}
+{"Time":"2026-10-20T22:46:41.336349-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"example.com/hungparpkg.TestParallel200msBeforePauseThenHangs(0x1400008a8c0)\n"}
+{"Time":"2026-10-20T22:46:41.336356-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"\texample.com/hungparpkg/hung_test.go:13 +0x34\n"}
+{"Time":"2026-10-20T22:46:41.336376-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"testing.tRunner(0x1400008a8c0, 0x102adcc00)\n"}
+{"Time":"2026-10-20T22:46:41.336383-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"\ttesting/testing.go:1934 +0xc8\n"}
+{"Time":"2026-10-20T22:46:41.33639-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"created by testing.(*T).Run in goroutine 1\n"}
+{"Time":"2026-10-20T22:46:41.336396-06:00","Action":"output","Package":"example.com/hungparpkg","Test":"TestParallel200msBeforePauseThenHangs","Output":"\ttesting/testing.go:1997 +0x364\n"}
+{"Time":"2026-10-20T22:46:41.337014-06:00","Action":"output","Package":"example.com/hungparpkg","Output":"FAIL\texample.com/hungparpkg\t2.010s\n"}
+{"Time":"2026-10-20T22:46:41.337032-06:00","Action":"fail","Package":"example.com/hungparpkg","Elapsed":2.01}

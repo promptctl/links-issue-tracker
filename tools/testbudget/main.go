@@ -64,14 +64,15 @@ type packageResult struct {
 }
 
 // testResult is one top-level test of a package that ended. Subtests are
-// never results: their time is already inside their top-level ancestor's.
+// never results: their time is already inside their top-level ancestor's,
+// because Elapsed is the ancestor's clock (see runningTest).
 type testResult struct {
 	Name     string
 	Elapsed  time.Duration
 	Parallel bool // it called t.Parallel (emitted a pause event)
 	// Unfinished: the package ended with no verdict for this test — a
-	// -timeout panic, or a binary that died mid-test. Elapsed is then its
-	// clock when the package ended, not go test's figure.
+	// -timeout panic, or a binary that died mid-test — so the package's end
+	// stopped its clock instead.
 	Unfinished bool
 }
 
@@ -90,15 +91,20 @@ type testKey struct{ pkg, test string }
 // verdict: its buffered output and its clock. [LAW:one-source-of-truth] output
 // replay, the parallel flag, and the unfinished listing all read this record.
 //
-// The clock measures what testing.(*T).Parallel measures: time before the
-// pause plus time since the resume, never the wait in between — the same
-// figure go test reports as a finished test's Elapsed.
+// The clock runs from the test's start to its end, less the wait at
+// t.Parallel: time before the pause plus time since the resume. It is every
+// listed test's Elapsed. [LAW:one-source-of-truth] A finished test's end is
+// the later of its own end and its subtests' — go test's Elapsed alone would
+// list a table of t.Parallel subtests at 0.00s, because testing.tRunner sums
+// a test's duration before it releases its parallel subtests. An unfinished
+// test's end is its package's.
 type runningTest struct {
 	output   []string
 	parallel bool
 	paused   bool
 	ran      time.Duration // accumulated up to the last pause
 	since    time.Time     // when the clock last started; read only while !paused
+	subEnd   time.Time     // the latest end of its finished subtests; set on top-level tests only
 }
 
 func (rt *runningTest) elapsedAt(end time.Time) time.Duration {
@@ -108,7 +114,42 @@ func (rt *runningTest) elapsedAt(end time.Time) time.Duration {
 	return rt.ran + end.Sub(rt.since)
 }
 
-func isTopLevel(test string) bool { return !strings.Contains(test, "/") }
+// endGiven is when a test that go test timed at elapsed ended, or its
+// subtests did, whichever is later. A verdict event's Time is no witness:
+// test2json holds each verdict until the stream's next line, so a parallel
+// test that ends in a quiet stretch is stamped late. The resume (or start)
+// it counts from is an update line, which test2json stamps on arrival.
+// Cleanup that runs after a test's parallel subtests is the one span lost.
+func (rt *runningTest) endGiven(elapsed time.Duration) time.Time {
+	return later(rt.since.Add(elapsed-rt.ran), rt.subEnd)
+}
+
+func later(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
+	}
+	return b
+}
+
+// topLevel is the top-level ancestor of test, or test itself.
+func topLevel(test string) string {
+	name, _, _ := strings.Cut(test, "/")
+	return name
+}
+
+func isTopLevel(test string) bool { return topLevel(test) == test }
+
+// track returns k's record, starting it at t on the test's first event. In a
+// real stream that event is `run`, which test2json emits from the `=== RUN`
+// line, so t is when the test started.
+func track(running map[testKey]*runningTest, k testKey, t time.Time) *runningTest {
+	rt := running[k]
+	if rt == nil {
+		rt = &runningTest{since: t}
+		running[k] = rt
+	}
+	return rt
+}
 
 // budgetFor resolves one package's budget — its listed entry or the default,
 // so no package is ever exempt. The one home of the resolution rule, shared
@@ -173,13 +214,7 @@ func consume(r io.Reader, w io.Writer) ([]packageResult, error) {
 		}
 
 		k := testKey{ev.Package, ev.Test}
-		rt := running[k]
-		if rt == nil {
-			// In a real stream the first event is `run`, which test2json
-			// emits from the `=== RUN` line, so this is when the test started.
-			rt = &runningTest{since: ev.Time}
-			running[k] = rt
-		}
+		rt := track(running, k, ev.Time)
 		switch ev.Action {
 		case "output":
 			rt.output = append(rt.output, ev.Output)
@@ -195,13 +230,19 @@ func consume(r io.Reader, w io.Writer) ([]packageResult, error) {
 				}
 			}
 			delete(running, k)
-			if isTopLevel(ev.Test) {
-				finished[ev.Package] = append(finished[ev.Package], testResult{
-					Name:     ev.Test,
-					Elapsed:  seconds(ev.Elapsed),
-					Parallel: rt.parallel,
-				})
+			end := rt.endGiven(seconds(ev.Elapsed))
+			if !isTopLevel(ev.Test) {
+				// A subtest's verdict precedes its ancestor's, which is
+				// still running.
+				top := track(running, testKey{ev.Package, topLevel(ev.Test)}, ev.Time)
+				top.subEnd = later(top.subEnd, end)
+				continue
 			}
+			finished[ev.Package] = append(finished[ev.Package], testResult{
+				Name:     ev.Test,
+				Elapsed:  rt.elapsedAt(end),
+				Parallel: rt.parallel,
+			})
 		}
 	}
 	if err := sc.Err(); err != nil {
@@ -231,7 +272,9 @@ type unfinishedTest struct {
 // still-running tests and prints their buffered output in name order, each
 // under a line saying why it has no verdict. That output is exactly what a
 // -timeout panic or a dying binary leaves behind, so it prints as the package
-// ends, beside the package's FAIL line. [LAW:single-enforcer]
+// ends, right after the package's FAIL line: go test prints it before that
+// line, but which tests will never get a verdict is known only at the
+// package's terminal event, which follows the line. [LAW:single-enforcer]
 func drain(w io.Writer, running map[testKey]*runningTest, pkg, why string) []unfinishedTest {
 	var drained []unfinishedTest
 	for k, rt := range running {

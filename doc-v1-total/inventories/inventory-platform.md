@@ -764,7 +764,8 @@ the Justfile or any workflow file in `.github/workflows/`.
 - Each violation line is followed by `slowest top-level tests, <n> of <ran>:` and up to
   ten rows, slowest first, ties by name: elapsed `%.2fs`, `parallel` (the test emitted
   `pause`) or `serial`, the name, and `[unfinished]` for a test the package ended without
-  a verdict for. An unfinished test's elapsed is run-to-pause plus cont-to-package-end
+  a verdict for. An unfinished test's elapsed is run-to-pause plus cont-to-package-end;
+  a finished test's is go test's `Elapsed`, extended to the end of its last subtest
   (`tools/testbudget/main.go`).
 - Prints a per-package `elapsed / budget` table headed
   `testbudget: per-package wall clock vs budget (budgets: tools/testbudget/budgets.go)`

@@ -46,22 +46,26 @@ func report(t *testing.T, streams ...io.Reader) string {
 }
 
 func TestOverBudgetPackageListsItsTenSlowestTopLevelTests(t *testing.T) {
-	// slow: eleven top-level tests, so the eleventh slowest (TestSerial10ms)
-	// is left off, and a 400ms subtest that would outrank TestSerial40ms if
-	// subtests were listed.
+	// slow: thirteen top-level tests, so the three fastest are left off, and
+	// subtests that would outrank most of the list if subtests were listed.
+	// The parent of two parallel 320ms subtests is listed at its subtests'
+	// end, not go test's 0.00s for it: subtest b ends at cont 36.078667 +
+	// 0.32s less its 0.000012s before the pause = 36.398655, 0.320067s after
+	// the parent's run at 36.078588. TestParallel150msBeforePauseThen100ms
+	// counts its 0.15s before the pause once: 0.25s, not 0.40s.
 	got := report(t, recorded(t, "slow"))
-	want := "test runtime budget exceeded: example.com/slowpkg took 2.2s, budget is 1s (over by 1.2s, +122%) — see tools/testbudget/budgets.go before raising the number\n" +
-		"  slowest top-level tests, 10 of 11:\n" +
+	want := "test runtime budget exceeded: example.com/slowpkg took 2.7s, budget is 1s (over by 1.7s, +170%) — see tools/testbudget/budgets.go before raising the number\n" +
+		"  slowest top-level tests, 10 of 13:\n" +
 		"      0.60s  parallel  TestParallel600ms\n" +
 		"      0.52s  serial    TestSerial520ms\n" +
 		"      0.44s  parallel  TestParallel440ms\n" +
 		"      0.40s  serial    TestSerialParentOfA400msSubtest\n" +
 		"      0.36s  serial    TestSerial360ms\n" +
+		"      0.32s  serial    TestSerialParentOfTwoParallel320msSubtests\n" +
 		"      0.28s  parallel  TestParallel280ms\n" +
+		"      0.25s  parallel  TestParallel150msBeforePauseThen100ms\n" +
 		"      0.20s  serial    TestSerial200ms\n" +
-		"      0.12s  parallel  TestParallel120ms\n" +
-		"      0.08s  serial    TestSerial80ms\n" +
-		"      0.04s  serial    TestSerial40ms\n"
+		"      0.12s  parallel  TestParallel120ms\n"
 	if got != want {
 		t.Errorf("violation report:\n%s\nwant:\n%s", got, want)
 	}
@@ -72,7 +76,7 @@ func TestTimedOutPackageListsItsHungTestsAsUnfinished(t *testing.T) {
 	// and never gets a verdict — go test emits only the package fail. The
 	// parallel test is still paused when the timeout fires, so its whole
 	// duration is the 300ms before t.Parallel. Hung elapsed = package fail
-	// Time 21:11:10.477267 - run Time 21:11:08.874787 = 1.60s.
+	// Time 22:46:39.174922 - run Time 22:46:37.572652 = 1.60s.
 	got := report(t, recorded(t, "timeout-serial"))
 	want := "  slowest top-level tests, 3 of 3:\n" +
 		"      1.60s  serial    TestSerialHangs  [unfinished]\n" +
@@ -84,8 +88,8 @@ func TestTimedOutPackageListsItsHungTestsAsUnfinished(t *testing.T) {
 }
 
 func TestUnfinishedParallelTestCountsTimeBeforeItsPauseAndSinceItsResume(t *testing.T) {
-	// timeout-parallel: run 10.652058 → pause 10.853367 (0.20s), then
-	// cont 10.953990 → package fail 12.656610 (1.70s): 1.90s, not the
+	// timeout-parallel: run 39.332454 → pause 39.533620 (0.20s), then
+	// cont 39.634784 → package fail 41.337032 (1.70s): 1.90s, not the
 	// 0.20s or 1.70s of either half, nor the 2.00s from run to fail.
 	got := report(t, recorded(t, "timeout-parallel"))
 	want := "  slowest top-level tests, 2 of 2:\n" +
