@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/statusline"
@@ -59,7 +60,7 @@ func confirmPurge(stdout io.Writer, id string, yes bool) error {
 	if !isTerminal(stdout) {
 		return purgeUnconfirmedError{Message: fmt.Sprintf("purging %s cannot be undone; pass --yes to confirm it", id)}
 	}
-	confirmed, err := askYesNo(stdout, fmt.Sprintf("%s: a purge removes it, its comments, labels, history and edges for good, here and in every store it syncs to\npurge it?", id))
+	confirmed, err := askYesNo(os.Stdin, stdout, fmt.Sprintf("%s: a purge removes it, its comments, labels, history and edges for good, here and in every store it syncs to\npurge it?", id))
 	if err != nil {
 		return err
 	}

@@ -58,22 +58,25 @@ func (e BulkFailureError) Error() string {
 	return fmt.Sprintf("bulk operation: %d item(s) failed: %s", len(e.Failures), strings.Join(parts, "; "))
 }
 
-// runBulkOver applies op to each issue ID in order, writing one "id ok" line per
-// success to stdout after whatever op printed for that item, and collecting
-// every failure. If any item failed it returns a BulkFailureError so the exit
+// runBulkOver applies op to each issue ID in order, writing to stdout, per
+// success, the notice op returned for that item and then one "id ok" line —
+// the data channel carries results only — and collecting every failure. If any item failed it returns a BulkFailureError so the exit
 // code reflects it; per-item failures never reach stdout. This is the single
 // place bulk success/failure is decided, so the exit-code contract cannot drift
 // between bulk verbs. [LAW:single-enforcer] [LAW:no-silent-failure]
 //
 // Each item runs in its own telemetry occurrence and leaves one bulk.items
-// entry: the id, its error, and the facts and counts its work recorded. Run on
-// the event itself, the second item's facts would replace the first's.
-// [LAW:nothing-unseen]
-func runBulkOver(ctx context.Context, stdout io.Writer, issueIDs []string, op func(ctx context.Context, issueID string) error) error {
+// entry: the id, its error, and the facts and counts its work recorded, with
+// those its error declared about itself, as a failed single command's join
+// its event. Run on the event itself, the second item's facts would replace
+// the first's. [LAW:nothing-unseen]
+func runBulkOver(ctx context.Context, stdout io.Writer, issueIDs []string, op func(ctx context.Context, issueID string) (notice string, err error)) error {
 	var failures []itemFailure
 	for _, issueID := range issueIDs {
 		itemCtx, closeScope := telemetry.Occurrence(ctx)
-		err := op(itemCtx, issueID)
+		notice, err := op(itemCtx, issueID)
+		errFacts, errCounts := model.ErrorRecord(err)
+		telemetry.Record(itemCtx, errFacts, errCounts)
 		facts, counts := closeScope()
 		telemetry.Append(ctx, "bulk.items", map[string]any{
 			"bulk.item.id":     issueID,
@@ -85,7 +88,7 @@ func runBulkOver(ctx context.Context, stdout io.Writer, issueIDs []string, op fu
 			failures = append(failures, itemFailure{IssueID: issueID, Err: err})
 			continue
 		}
-		if _, err := fmt.Fprintf(stdout, "%s ok\n", issueID); err != nil {
+		if _, err := io.WriteString(stdout, notice+issueID+" ok\n"); err != nil {
 			return err
 		}
 	}
@@ -165,8 +168,8 @@ func bulkLabelLeaf() appLeaf {
 			return err
 		}
 		actor := resolveActor()
-		return runBulkOver(ctx, stdout, issueIDs, func(ctx context.Context, issueID string) error {
-			return op(ctx, ap, issueID, *label, actor)
+		return runBulkOver(ctx, stdout, issueIDs, func(ctx context.Context, issueID string) (string, error) {
+			return "", op(ctx, ap, issueID, *label, actor)
 		})
 	}}
 }
@@ -196,13 +199,9 @@ func bulkTransitionLeaf(spec transitionSpec) appLeafFn {
 			if err != nil {
 				return err
 			}
-			return runBulkOver(ctx, stdout, issueIDs, func(ctx context.Context, issueID string) error {
+			return runBulkOver(ctx, stdout, issueIDs, func(ctx context.Context, issueID string) (string, error) {
 				did, err := applyTransition(ctx, stdout, ap, issueID, action, actor, *reason, authorize)
-				if err != nil {
-					return err
-				}
-				_, err = io.WriteString(stdout, did.notice)
-				return err
+				return did.notice, err
 			})
 		}}
 	}

@@ -2,7 +2,9 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"errors"
+	"fmt"
 	"io"
 	"reflect"
 	"strings"
@@ -191,5 +193,114 @@ func TestBulkDoneRecordsEachItemsFactsOnItsOwnEntry(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("bulk.items = %+v, want %+v", got, want)
+	}
+}
+
+// applyRefusingStore is a store whose every Apply fails with err, for a write
+// that passes every gate ahead of it and then does not land.
+type applyRefusingStore struct {
+	storage.Store
+	err error
+}
+
+func (s applyRefusingStore) Apply(context.Context, string, storage.Change) (storage.Applied, error) {
+	return storage.Applied{}, s.err
+}
+
+// The takeover line is what a landed start owes: a --take whose start then
+// fails at Apply prints none, and the same start landing prints it ahead of
+// its ok line.
+func TestBulkStartTakeAnnouncesOnlyATakeoverThatLanded(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "bulk-start-sess")
+	h := newReadyTestHarness(t)
+	held := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "held epic", Topic: "bulk", IssueType: "epic"})
+	theirs := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "theirs", Topic: "bulk", IssueType: "task", ParentID: held.ID})
+	contested := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "contested", Topic: "bulk", IssueType: "task", ParentID: held.ID})
+	h.asCheckout("otherstream01")
+	h.transition(theirs.ID, model.Start{Assignee: "other"})
+	h.asCheckout(h.ap.Stream.Value())
+	const takeover = " — taking over (--take)\n"
+
+	live := h.ap.Store
+	refusal := errors.New("store refused the write")
+	h.ap.Store = applyRefusingStore{Store: live, err: refusal}
+	var out bytes.Buffer
+	failed := bulkFailures(t, h, &out, startSpec, "--ids", contested.ID, "--take")
+	if !errors.Is(failed[contested.ID], refusal) {
+		t.Fatalf("failures = %v, want %s failed with %v", failed, contested.ID, refusal)
+	}
+	if strings.Contains(out.String(), takeover) {
+		t.Errorf("stdout = %q, want no takeover line for a start that did not land", out.String())
+	}
+
+	h.ap.Store = live
+	out.Reset()
+	if err := runBulkTransition(h.ctx, &out, h.ap, []string{"--ids", contested.ID, "--take"}, startSpec); err != nil {
+		t.Fatalf("bulk start --take error = %v", err)
+	}
+	if line, ok := strings.Index(out.String(), takeover), strings.Index(out.String(), contested.ID+" ok\n"); line < 0 || ok < 0 || line > ok {
+		t.Errorf("stdout = %q, want the takeover line ahead of %s ok", out.String(), contested.ID)
+	}
+}
+
+// recordedItemError declares facts and counts about itself, as a store's
+// typed errors do.
+type recordedItemError struct{}
+
+func (recordedItemError) Error() string { return "refused, with a record" }
+
+func (recordedItemError) EventRecord() (map[string]any, map[string]int) {
+	return map[string]any{"item.decision": "refused"}, map[string]int{"item.tries": 2}
+}
+
+// A failed item's entry carries what its error declared about itself, as a
+// failed single command's event does, wrapped or not.
+func TestBulkItemEntryCarriesWhatItsErrorDeclared(t *testing.T) {
+	recorder := telemetry.Begin(telemetry.Event{})
+	ctx := telemetry.With(context.Background(), recorder)
+	err := runBulkOver(ctx, io.Discard, []string{"a"}, func(context.Context, string) (string, error) {
+		return "", fmt.Errorf("apply: %w", recordedItemError{})
+	})
+	var bulk BulkFailureError
+	if !errors.As(err, &bulk) {
+		t.Fatalf("runBulkOver error = %v (%T), want a BulkFailureError", err, err)
+	}
+	entry := recorder.Finish(telemetry.End{}).Occurrences["bulk.items"][0].(map[string]any)
+	facts, counts := entry["bulk.item.facts"].(map[string]any), entry["bulk.item.counts"].(map[string]int)
+	if facts["item.decision"] != "refused" || counts["item.tries"] != 2 {
+		t.Errorf("entry facts = %v, counts = %v, want the error's item.decision=refused and item.tries=2", facts, counts)
+	}
+}
+
+// failingWriter refuses every write with err.
+type failingWriter struct{ err error }
+
+func (w failingWriter) Write([]byte) (int, error) { return 0, w.err }
+
+// An item whose change landed is never reported failed: a stdout that cannot
+// take its report ends the run with the write's error, not with the item as a
+// failure to re-run.
+func TestBulkEndsAtAStdoutItCannotWriteWithoutFailingTheItem(t *testing.T) {
+	ctx := telemetry.With(context.Background(), telemetry.Begin(telemetry.Event{}))
+	closed := errors.New("stdout closed")
+	err := runBulkOver(ctx, failingWriter{err: closed}, []string{"a"}, func(context.Context, string) (string, error) {
+		return "claim transferred: x -> y\n", nil
+	})
+	var bulk BulkFailureError
+	if !errors.Is(err, closed) || errors.As(err, &bulk) {
+		t.Errorf("runBulkOver error = %v (%T), want the write's %v and no item failure", err, err, closed)
+	}
+}
+
+// Start's usage line names --take, singly and in bulk: it is the flag a
+// refused takeover tells the caller to pass.
+func TestStartUsageNamesTake(t *testing.T) {
+	for name, usage := range map[string]string{
+		"lit start":      transitionLeaf(startSpec).usage,
+		"lit bulk start": bulkTransitionLeaf(startSpec)().usage,
+	} {
+		if !strings.Contains(usage, "[--take]") {
+			t.Errorf("%s usage = %q, want it to name [--take]", name, usage)
+		}
 	}
 }

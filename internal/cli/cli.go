@@ -1767,7 +1767,8 @@ func fixedAction(action model.Action) func(*cobraFlagSet, string) func(string) (
 
 var (
 	startSpec = transitionSpec{
-		name: "start",
+		name:     "start",
+		synopsis: " [--take]",
 		// Start is the claim transition and the only action that carries an
 		// assignee: whoever performs the start is who it assigns.
 		// [LAW:one-source-of-truth] the assignee is the actor transitionLeaf

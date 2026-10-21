@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -67,7 +66,8 @@ func relationOf(standing claims.Standing, self model.Attribution) laneRelation {
 // demands.
 //
 // Its result is what the start owes after Apply (transitionSpec.authorize):
-// the transfer notice when Apply reports the claim changed hands and the lane's
+// the takeover line when --take crossed a foreign hold, then the transfer
+// notice when Apply reports the claim changed hands and the lane's
 // standing names the predecessor as its holder, the empty string otherwise;
 // and, for the statusline file, the start with its lane's count for its rollup
 // progress, and the phase the start left the ticket in. A handover from anyone
@@ -104,22 +104,25 @@ func authorizeStart(ctx context.Context, stdout io.Writer, ap *app.App, issueID 
 	// Recorded before the gate, so a refused takeover's event still says whose
 	// lane it met.
 	telemetry.Set(ctx, "start.lane_held", relation != laneUnclaimed)
+	var takeover string
 	if relation == laneHeldForeign {
-		if err := confirmFreshTakeover(stdout, cc, lane, take); err != nil {
+		if takeover, err = confirmFreshTakeover(stdout, cc, lane, take); err != nil {
 			return nil, err
 		}
 	}
 	return func(written ticketState, handover *claims.Handover) (string, statusline.Facts) {
-		notice := transferNotice(standing, handover)
+		transfer := transferNotice(standing, handover)
 		telemetry.Set(ctx, "start.handover", handover != nil)
-		telemetry.Set(ctx, "start.transfer_announced", notice != "")
-		return notice, statusline.Facts{started(cc.evidence, written.issue), phaseRead(written)}
+		telemetry.Set(ctx, "start.transfer_announced", transfer != "")
+		return takeover + transfer, statusline.Facts{started(cc.evidence, written.issue), phaseRead(written)}
 	}, nil
 }
 
 // confirmFreshTakeover is the deliberate act the design demands before a
 // foreign hold may be overridden — never a lock, always an explicit crossing.
-// --take is that crossing wherever it is passed. Without it, an interactive
+// --take is that crossing wherever it is passed, and the line saying so is
+// returned for the start to print once Apply has landed it, so a start that
+// fails after the gate announces no takeover. Without it, an interactive
 // terminal is prompted and a non-interactive caller (an agent, a script, a test
 // capturing output into a buffer) is refused, matching the ticket's acceptance
 // line: "an agent without a TTY can take over a fresh-claimed lane only by
@@ -134,41 +137,54 @@ func authorizeStart(ctx context.Context, stdout io.Writer, ap *app.App, issueID 
 // It fails loudly rather than proceeding without naming the holder: the caller
 // reaches here only for a Held standing, which formatClaimLine always renders,
 // so ok=false means the two have gone out of sync. [LAW:no-silent-failure]
-func confirmFreshTakeover(stdout io.Writer, cc claimContext, lane model.LaneID, take bool) error {
+func confirmFreshTakeover(stdout io.Writer, cc claimContext, lane model.LaneID, take bool) (announcement string, err error) {
 	line, ok := formatClaimLine(cc, lane, time.Now())
 	if !ok {
-		return fmt.Errorf("claims: %v is held by another checkout but has no claim line to show", lane)
+		return "", fmt.Errorf("claims: %v is held by another checkout but has no claim line to show", lane)
 	}
 	if take {
-		_, err := fmt.Fprintf(stdout, "%s — taking over (--take)\n", line)
-		return err
+		return line + " — taking over (--take)\n", nil
 	}
 	if !isTerminal(stdout) {
-		return takeoverUnconfirmedError{Message: fmt.Sprintf("%s — this lane is claimed and active; pass --take to confirm the takeover", line)}
+		return "", takeoverUnconfirmedError{Message: fmt.Sprintf("%s — this lane is claimed and active; pass --take to confirm the takeover", line)}
 	}
-	confirmed, err := askYesNo(stdout, line+"\ntake over this lane?")
+	confirmed, err := askYesNo(os.Stdin, stdout, line+"\ntake over this lane?")
 	if err != nil {
-		return err
+		return "", err
 	}
 	if !confirmed {
-		return takeoverUnconfirmedError{Message: "takeover declined"}
+		return "", takeoverUnconfirmedError{Message: "takeover declined"}
 	}
-	return nil
+	return "", nil
 }
 
 // askYesNo asks question at the terminal and reports whether the answer
 // starts with y. Anything else — including no answer at all — is a no, so the
 // destructive side of every gate that asks is the one a person has to type.
 // [LAW:single-enforcer] the takeover and the purge gates ask through here.
-func askYesNo(stdout io.Writer, question string) (bool, error) {
+//
+// The answer is read a byte at a time, never through a buffer, so a run that
+// asks more than once — a bulk start meeting two held lanes — leaves each
+// later answer on stdin for the question it answers.
+func askYesNo(stdin io.Reader, stdout io.Writer, question string) (bool, error) {
 	if _, err := fmt.Fprintf(stdout, "%s [y/N] ", question); err != nil {
 		return false, err
 	}
-	answer, err := bufio.NewReader(os.Stdin).ReadString('\n')
-	if err != nil && err != io.EOF {
-		return false, fmt.Errorf("read confirmation: %w", err)
+	var answer []byte
+	for b := make([]byte, 1); ; {
+		n, err := stdin.Read(b)
+		if n == 1 && b[0] == '\n' {
+			break
+		}
+		answer = append(answer, b[:n]...)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return false, fmt.Errorf("read confirmation: %w", err)
+		}
 	}
-	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(answer)), "y"), nil
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(string(answer))), "y"), nil
 }
 
 // takeoverUnconfirmedError is the gate's answer when a live foreign hold was
