@@ -91,7 +91,7 @@ lines here for reading:
 | `sink_rotation_error` | Present only when `sink_rotation` is `failed`: why. |
 | `counts` | The command's counts. A count of zero is written as `0`, so "ran and found none" is distinguishable from a command that does not count that thing. |
 | `facts` | What the command decided, under keys prefixed with the command's name, with `statusline.` for what it wrote to the statusline file, with `workflows.` for the workflow occasion it fired, with `config.` for its config check, or with `schema_ahead.` for a refusal because the workspace's schema is ahead of this lit. A sync command that reads its remotes records `remotes.refused`: the git remotes whose names Dolt cannot hold, sorted, `[]` when none. `lit sync pull` records `pull.state`, its settle's state or, with nothing to pull from, its skip (`no_sync_remote`, `remote_empty`), and `pull.base` when it settled: where the settle's base came from, `merge_base` along shared history, `fork_point` across a re-root, or `none`. An automatic receive that asked its remote whether it moved records `receive.remote_check_error`: null when the remote answered, else why it could not tell. |
-| `occurrences` | What can happen more than once in one invocation, under keys of their own: one entry per occurrence, in the order they happened. A key that was looked at and found nothing is `[]`; an absent key was not looked at. A sync command records `push.outcomes`, `receive.outcomes`, `reroot.follows`, `reroot.declines`, `reroot.cuts_not_found`, `fork_point.records`, `remote.removals`, `reconcile.bases`, `stranded_writes.commits`, `settled_last.writes` and `history_bound.records` here, and the on-change mirror `mirror.live_store_steps`, one per cycle that took its clone. Every automatic receive puts exactly one entry on `receive.outcomes`, whose `receive.decision` says how it ended, a skip included, with `receive.remote` (`""` before one was chosen) and `receive.error` (null when none). Every invocation records `git.cancels`: one entry per git run that its context ended, lit's own or one Dolt started. Each entry has `git.cancel.cause` (the context's error), `git.cancel.processes` (how many processes the cancel ended, git and what it started; `0` when git had already exited), `git.cancel.survivors` (how many of those were still running 5s after the kill; null when no count was taken), `git.cancel.kill_error` (null when the kill succeeded) and `git.cancel.output_cut` (whether git's output was still open 1s after the processes the cancel ended had exited or been counted as survivors, and lit stopped reading it). A key's prefix names the command or part of lit that recorded it, not its map: `history_bound.window_error` is a fact, set once, and `history_bound.records` is an occurrence, one entry per push. |
+| `occurrences` | What can happen more than once in one invocation, under keys of their own: one entry per occurrence, in the order they happened. A key that was looked at and found nothing is `[]`; an absent key was not looked at. A `lit bulk` command records `bulk.items` here, one entry per issue it was given. A sync command records `push.outcomes`, `receive.outcomes`, `reroot.follows`, `reroot.declines`, `reroot.cuts_not_found`, `fork_point.records`, `remote.removals`, `reconcile.bases`, `stranded_writes.commits`, `settled_last.writes` and `history_bound.records` here, and the on-change mirror `mirror.live_store_steps`, one per cycle that took its clone. Every automatic receive puts exactly one entry on `receive.outcomes`, whose `receive.decision` says how it ended, a skip included, with `receive.remote` (`""` before one was chosen) and `receive.error` (null when none). Every invocation records `git.cancels`: one entry per git run that its context ended, lit's own or one Dolt started. Each entry has `git.cancel.cause` (the context's error), `git.cancel.processes` (how many processes the cancel ended, git and what it started; `0` when git had already exited), `git.cancel.survivors` (how many of those were still running 5s after the kill; null when no count was taken), `git.cancel.kill_error` (null when the kill succeeded) and `git.cancel.output_cut` (whether git's output was still open 1s after the processes the cancel ended had exited or been counted as survivors, and lit stopped reading it). A key's prefix names the command or part of lit that recorded it, not its map: `history_bound.window_error` is a fact, set once, and `history_bound.records` is an occurrence, one entry per push. |
 
 A command that records no counts or facts writes `{}` for each, and its `occurrences` holds only `"git.cancels": []`.
 
@@ -310,6 +310,21 @@ none of them.
 | `done.plan_standing` | `approved`; `already_closed` (the ticket was already closed, so the done finished nothing); or what kept the plan from approval, which the done also prints as a warning: `no_plan`, `unreviewed` (no review of the current text), or `failed` (the latest review of the current text failed it). |
 | `done.plan_digest` | The digest of the current plan text the ticket was finished on. |
 | `done.plan_review` | The id of the passing review the approval rested on, the latest review of the current text. |
+
+## What `lit bulk` records
+
+A bulk command puts one entry on `bulk.items` for each issue in `--ids`, in the
+order given, whether the issue's change landed or failed. Each entry holds the
+facts and counts that issue's change recorded, so a `lit bulk start` entry
+carries the keys a `lit start` sets and a `lit bulk done` entry the keys a
+`lit done` sets. Those keys never appear at the event's top level.
+
+| Key | Meaning |
+| --- | --- |
+| `bulk.item.id` | The issue id as given in `--ids`. |
+| `bulk.item.error` | The issue's error, or null when its change landed. |
+| `bulk.item.facts` | The facts that issue's change set; `{}` when it set none. |
+| `bulk.item.counts` | The counts that issue's change recorded; `{}` when it recorded none. |
 
 ## What `lit verdict` records
 

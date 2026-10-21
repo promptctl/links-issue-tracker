@@ -313,7 +313,7 @@ Commands that register `--by`: `update` (`cli.go`), every transition via
 `transitionLeaf` (`cli.go`), `comment add` (`cli.go`), `import`
 (`cli.go`), `dep add` (`dependency.go`), `label add`
 (`issue_relations.go`), `parent set` (`issue_relations.go`), `bulk label`
-(`bulk.go`), `bulk close` (`bulk.go`), `bulk archive` (`bulk.go`).
+(`bulk.go`), and every bulk transition via `bulkTransitionLeaf` (`bulk.go`).
 `next` registers it too (`next.go`) and is the only read command that does:
 it writes nothing, but its output names an identity, so it resolves the reader
 by the same rule every writer resolves the actor.
@@ -1172,7 +1172,9 @@ route through `transitionLeaf` — §2.29.
 positional is required; otherwise `errors.New("usage: lit <name> <id> [--reason <text>]")`
 — a **plain error**, so exit code 1, not 2.
 
-**Sequence** (`transitionLeaf`, `cli.go`):
+**Sequence** (`transitionLeaf`, `cli.go`; the pre-read, the hook, `Apply` and the
+`afterApply` call run in `applyTransition`, `cli.go`, which every `lit bulk`
+transition row runs per id — §2.21):
 1. `GetIssue(issueID)` pre-read (`cli.go`) — missing → exit 4.
 2. `buildAction()` (`cli.go`).
 3. `authorize(ctx, stdout, ap, issueID, prior)` — §2.11 (`cli.go`).
@@ -1200,7 +1202,7 @@ positional is required; otherwise `errors.New("usage: lit <name> <id> [--reason 
 9. Breadcrumb per `transitionBreadcrumbTopics` (`cli.go`).
 
 **Close outcome validation** — `closeOutcomeFromFlags(resolution, target, usage)`
-(`cli.go`), shared with `bulk close` (`bulk.go`):
+(`cli.go`), shared with `bulk close` through `closeSpec` (`cli.go`, `bulk.go`):
 - `model.ParseResolution` failure → `UsageError{"<usage>\n<parse error>"}` → exit 2
   (`cli.go`). For `lit close`, the usage string is
   `"usage: lit close <id> --resolution <duplicate|superseded|obsolete|wontfix> [--of <canonical-id>] [--reason <text>]"`
@@ -1940,9 +1942,9 @@ Family `depFamily`, usage `"usage: lit dep <add|rm|ls> ..."` (`dependency.go`).
 
 ### 2.21 `lit bulk` — Bulk issue operations
 
-Family `bulkFamily`, usage `"usage: lit bulk <label|close|archive> ..."`
+Family `bulkFamily`, usage `"usage: lit bulk <label|start|done|close|open|archive> ..."`
 (`bulk.go`). Group `operations` (`register.go`).
-Rows: `label` (write), `close` (write), `archive` (write), and hidden
+Rows: `label`, `start`, `done`, `close`, `open`, `archive` (all write), and hidden
 `import` (`retiredSubcommand`: retired, projected `Hidden`).
 
 **Shared `--ids`** — `registerBulkIDs` (`bulk.go`), declared once for every
@@ -1952,9 +1954,14 @@ bulk row: a string array, comma-separated and/or repeated, read by
 and no flag at all → `model.ValidationError{"--ids is required"}`, each → exit 3
 before any id is acted on.
 
-**Shared failure semantics** — `runBulkOver(stdout, ids, op)` (`bulk.go`):
-- Applies `op` to each id **in order**.
-- Each success writes `"<id> ok\n"` to stdout (`bulk.go`).
+**Shared failure semantics** — `runBulkOver(ctx, stdout, ids, op)` (`bulk.go`):
+- Applies `op` to each id **in order**, each under its own
+  `telemetry.Occurrence` scope (`telemetry.go`): the facts and counts `op`
+  records land in the scope, and one `bulk.items` entry per id is appended to
+  the event — `bulk.item.id`, `bulk.item.error` (`telemetry.ErrorText`),
+  `bulk.item.facts`, `bulk.item.counts` (`bulk.go`).
+- Each success writes `"<id> ok\n"` to stdout, after whatever `op` wrote
+  (`bulk.go`).
 - Each failure is collected; **failures never reach stdout** (`bulk.go`).
 - If any failed, returns `BulkFailureError{Failures}` → exit 1
   (`bulk.go`, `error_output.go`), whose message is
@@ -1977,26 +1984,24 @@ before any id is acted on.
 - `add` calls `Store.AddLabel` with the resolved actor; `rm` calls
   `Store.RemoveLabel` (actor unused) (`bulk.go`).
 
-**`lit bulk close --ids <csv> --resolution <res> [--of <id>] [--reason <text>]`**
-(`bulkCloseLeaf`, `bulk.go`):
-- Flags: `--ids`, `--reason` ("Lifecycle reason"), `--resolution` + `--of` (via the
-  shared `registerCloseOutcomeFlags`), `--by` (`bulk.go`).
-- `--ids` via `registerBulkIDs` (`bulk.go`).
-- Outcome via the same `closeOutcomeFromFlags` gate as `lit close`, with usage
-  string `"usage: lit bulk close --ids <id,id,...> --resolution <duplicate|superseded|obsolete|wontfix> [--of <canonical-id>] [--reason <text>]"`
-  (`bulk.go`) — so `--resolution` is required and `--of` is required
-  exactly for `duplicate`/`superseded`.
-- One shared outcome, actor and reason applied to every id via
-  `Store.Apply(Change{Action: model.Close{Outcome}, Actor, Reason})`
-  (`bulk.go`).
-- **No workflow events, no close-adjacency block, no breadcrumb** on the bulk path.
-
-**`lit bulk archive --ids <csv> [--reason <text>]`** (`bulkTransitionLeaf(model.Archive{})`,
-`bulk.go`, registered at `bulk.go`):
-- Flag set name is `"bulk archive"` derived from `action.Name()` (`bulk.go`).
-- Flags: `--ids`, `--reason`, `--by`.
-- `--ids` via `registerBulkIDs` (`bulk.go`).
-- Applies `model.Archive{}` per id.
+**`lit bulk <start|done|close|open|archive> --ids <csv> [<verb flags>] [--reason <text>]`**
+(`bulkTransitionLeaf(spec)`, `bulk.go`; rows built from `startSpec`, `doneSpec`,
+`closeSpec`, `openSpec`, `archiveSpec`, `cli.go`):
+- Flag set name `"bulk " + spec.name` (`bulk.go`).
+- Flags: `--ids` (`registerBulkIDs`), `--reason` ("Lifecycle reason"), `--by`,
+  then the spec's own: `spec.registerFlags` (close: `--resolution`, `--of`)
+  and `spec.authorize` (start: `--take`) (`bulk.go`).
+- Usage `"usage: lit bulk <spec.name> --ids <id,id,...><spec.synopsis> [--reason <text>]"`,
+  the arity refusal's sentence and the usage the spec's flag parsing quotes
+  (`bulk.go`); for close, `"usage: lit bulk close --ids <id,id,...> --resolution <duplicate|superseded|obsolete|wontfix> [--of <canonical-id>] [--reason <text>]"`.
+- Refusal order: `--ids` (exit 3), then the action built from the flags
+  (close's outcome gate, exit 2), before any id is read (`bulk.go`).
+- One action, actor and reason for every id. Each id runs
+  `applyTransition` (`cli.go`), the step `transitionLeaf` runs: `GetIssue`,
+  `readTicketState`, the spec's authorize hook, `Store.Apply`,
+  `readTicketState` again, the owed notice and statusline facts. Its notice is
+  written to stdout before `"<id> ok\n"` (`bulk.go`).
+- **No workflow events, no summary, no close-adjacency block, no breadcrumb** on the bulk path.
 
 **`lit bulk import`** (hidden, retired) →
 `RetiredCommandError{Command: "bulk import", Replacement: bulkImportRetirementGuidance}`

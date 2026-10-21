@@ -155,11 +155,10 @@ Every long free-text flag — `--body`, `--description`, `--prompt`, `--plan` �
 
 ## Bulk operations
 
-`lit bulk <label|close|archive>` (`bulk.go`). `--ids` is a set on all three, comma-separated and/or repeated (`registerBulkIDs`). Shared semantics: the operation applies to each ID **in order**; each success prints `<id> ok` to stdout; failures never reach stdout — they are collected into a partial-failure error (exit 1) whose message lists every `<id>: <err>`, with remediation "Re-run the command for only the failed IDs…".
+`lit bulk <label|start|done|close|open|archive>` (`bulk.go`). `--ids` is a set on every row, comma-separated and/or repeated (`registerBulkIDs`). Shared semantics: the operation applies to each ID **in order**; each success prints `<id> ok` to stdout; failures never reach stdout — they are collected into a partial-failure error (exit 1) whose message lists every `<id>: <err>`, with remediation "Re-run the command for only the failed IDs…". Each ID leaves one `bulk.items` entry on the invocation's event (`docs/events.md`).
 
 - `bulk label <add|rm> --ids <csv> --label <name>` — refusal precedence: missing `--ids` or a blank slot in it (exit 3), then missing `--label` (exit 3), then unknown action.
-- `bulk close --ids <csv> --resolution <res> [--of <id>] [--reason <t>]` — same outcome gate as `lit close`; one shared outcome/actor/reason applied to every ID. No workflow events, no adjacency block, no breadcrumb.
-- `bulk archive --ids <csv> [--reason <t>]`.
+- `bulk start --ids <csv> [--take] [--reason <t>]`, `bulk done --ids <csv> [--reason <t>]`, `bulk close --ids <csv> --resolution <res> [--of <id>] [--reason <t>]`, `bulk open --ids <csv> [--reason <t>]`, `bulk archive --ids <csv> [--reason <t>]` — each built from its single verb's transition spec (`bulkTransitionLeaf`), so it takes that verb's flags and runs each ID through the step the single verb runs (`applyTransition`, `cli.go`): the same authorize hook (start's takeover gate, done's plan standing), the same `Apply`, the same refusal errors. One shared action, actor and reason for every ID. Each ID's notice (a start's `claim transferred` line, a done's plan warning) prints before its `<id> ok`. No workflow events, no summary, no adjacency block, no breadcrumb.
 - `bulk import` is retired (hidden): points to `lit backup restore --path <export.json>`, exit 3, and answers even outside a git repository.
 
 ## Import and export
