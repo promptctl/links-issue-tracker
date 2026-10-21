@@ -91,9 +91,9 @@ func driveTheBound(t *testing.T, rounds int) {
 	pushes := 0
 	landOnSchedule := func(side *boundCheckout, what string) {
 		t.Helper()
-		decision, reRooted := side.mirror(t, remote)
-		if want := pushes%checkpointPeriod == 0; decision != pushDecisionPushed || reRooted != want {
-			t.Fatalf("%s's mirror push %d (%s): decision %s, re-rooted %v; want pushed, re-rooted %v", side.name, pushes, what, decision, reRooted, want)
+		outcome, reRooted := side.mirror(t, remote)
+		if want := pushes%checkpointPeriod == 0; outcome["push.decision"] != pushDecisionPushed || reRooted != want {
+			t.Fatalf("%s's mirror push %d (%s): outcome %v, re-rooted %v; want decision %s, re-rooted %v", side.name, pushes, what, outcome, reRooted, pushDecisionPushed, want)
 		}
 		pushes++
 	}
@@ -122,13 +122,13 @@ func driveTheBound(t *testing.T, rounds int) {
 	runCLIInDir(t, r.alpha, "update", r.ticket, "--description", "alpha-description")
 	runCLIInDir(t, r.bravo, "update", r.ticket, "--title", "bravo-title")
 	landOnSchedule(alpha, "the concurrent edit")
-	if decision, _ := bravo.mirror(t, remote); decision != pushDecisionDiverged {
-		t.Fatalf("bravo's mirror push of the concurrent edit: decision %s; want %s, the remote refusing it over alpha's", decision, pushDecisionDiverged)
+	if outcome, _ := bravo.mirror(t, remote); outcome["push.decision"] != pushDecisionDiverged {
+		t.Fatalf("bravo's mirror push of the concurrent edit: outcome %v; want decision %s, the remote refusing it over alpha's", outcome, pushDecisionDiverged)
 	}
 	bravo.receive(t)
 	runCLIInDir(t, r.bravo, "update", r.epic, "--description", "bravo-after-the-merge")
-	if decision, _ := bravo.mirror(t, remote); decision != pushDecisionPushed {
-		t.Fatalf("bravo's mirror push of the merge: decision %s; want %s", decision, pushDecisionPushed)
+	if outcome, _ := bravo.mirror(t, remote); outcome["push.decision"] != pushDecisionPushed {
+		t.Fatalf("bravo's mirror push of the merge: outcome %v; want decision %s", outcome, pushDecisionPushed)
 	}
 	alpha.receive(t)
 	for _, side := range []*boundCheckout{alpha, bravo} {
@@ -150,12 +150,14 @@ func driveTheBound(t *testing.T, rounds int) {
 	newBoundCheckout(t, "gamma", gammaDir, "").assertUnderTheBound(t)
 }
 
-// mirror runs c's on-change mirror and returns its push's decision and, for
-// a push that landed, whether its bound re-rooted. A landed push's bound keeps
-// the history without error. A re-root is published under a held lease,
-// after which the remote's GC leaves git's tree holding exactly the bytes it
-// collected.
-func (c *boundCheckout) mirror(t *testing.T, remote string) (decision string, reRooted bool) {
+// mirror runs c's on-change mirror and returns its push's whole outcome, the
+// event's one push.outcomes entry, and, for a push that landed, whether its
+// bound re-rooted. The entry comes back whole so a caller whose want misses
+// prints why the push ended: its reason and push_deadline_cut, not just its
+// decision. A landed push's bound keeps the history without error. A re-root
+// is published under a held lease, after which the remote's GC leaves git's
+// tree holding exactly the bytes it collected.
+func (c *boundCheckout) mirror(t *testing.T, remote string) (outcome map[string]any, reRooted bool) {
 	t.Helper()
 	runCLIInDir(t, c.dir, "sync", backgroundMirrorSubcommand, "--parent-pid", "0")
 	ev := lastEvent(t)
@@ -163,17 +165,16 @@ func (c *boundCheckout) mirror(t *testing.T, remote string) (decision string, re
 	if len(outcomes) != 1 {
 		t.Fatalf("%s's mirror push.outcomes = %v; want the one attempt", c.name, outcomes)
 	}
-	outcome, _ := outcomes[0].(map[string]any)
-	decision = stringFact(t, outcome, "push.decision")
-	if decision != pushDecisionPushed {
-		return decision, false
+	outcome, _ = outcomes[0].(map[string]any)
+	if stringFact(t, outcome, "push.decision") != pushDecisionPushed {
+		return outcome, false
 	}
 	bound := boundRecordOf(t, ev)
 	if bound["history_bound.error"] != nil {
 		t.Fatalf("%s's mirror bound = %v; want no error", c.name, bound)
 	}
 	if bound["history_bound.fired"] != true {
-		return decision, false
+		return outcome, false
 	}
 	if bound["history_bound.lease"] != "held" || bound["remote_gc.outcome"] != "replaced" {
 		t.Fatalf("%s's mirror bound = %v; want its re-root published under a held lease and the remote's table files replaced", c.name, bound)
@@ -182,7 +183,7 @@ func (c *boundCheckout) mirror(t *testing.T, remote string) (decision string, re
 		t.Fatalf("%s's bound collected %v bytes of the remote; git counts %v in its refs/dolt/data tree", c.name, collected, inTree)
 	}
 	c.published = append(c.published, stringFact(t, bound, "reroot.root"))
-	return decision, true
+	return outcome, true
 }
 
 // receive runs c's background receive and records the re-root it followed,
