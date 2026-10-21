@@ -23,6 +23,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/query"
 	"github.com/promptctl/links-issue-tracker/internal/statusline"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 	"github.com/spf13/cobra"
@@ -47,7 +48,10 @@ func Run(ctx context.Context, inv Invocation) (err error) {
 			panic(panicked)
 		}
 	}()
-	return dispatch(invocationContext(ctx, recorder), inv)
+	// Every store lock this run takes records this run's command line as its
+	// holder, not the process's, which one process running several runs shares.
+	ctx = store.WithHolderCommand(invocationContext(ctx, recorder), strings.Join(append([]string{"lit"}, inv.Args...), " "))
+	return dispatch(ctx, inv)
 }
 
 func dispatch(ctx context.Context, inv Invocation) error {

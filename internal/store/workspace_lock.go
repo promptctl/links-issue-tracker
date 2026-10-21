@@ -422,7 +422,7 @@ func acquireStoreLockOn(ctx context.Context, now func() time.Time, storageDir, l
 	if err != nil {
 		return nil, err
 	}
-	return recordLockHolder(storageDir, lockPath, release), nil
+	return recordLockHolder(ctx, storageDir, lockPath, release), nil
 }
 
 // DoltJournalLockPath returns Dolt's own journal-manifest lock path for a

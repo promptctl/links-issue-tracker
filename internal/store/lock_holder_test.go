@@ -236,6 +236,34 @@ func TestReleaseRetiresTheHolderRecord(t *testing.T) {
 	}
 }
 
+// A holder record names the command of the run that took the lock, which
+// its ctx carries, so two runs in one process are told apart. A lock taken
+// outside any run names none.
+func TestHolderRecordNamesTheRunsCommand(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		ctx  context.Context
+		want string
+	}{
+		{"named run", WithHolderCommand(context.Background(), "lit backlog"), "lit backlog"},
+		{"no run", context.Background(), ""},
+	} {
+		lockPath := filepath.Join(t.TempDir(), "test.lock")
+		release, err := acquireStoreLock(tc.ctx, storageDirOf(lockPath), lockPath, true, 0)
+		if err != nil {
+			t.Fatalf("%s: acquireStoreLock() error = %v", tc.name, err)
+		}
+		holders, problems := readLockHolders(storageDirOf(lockPath), lockPath)
+		if err := release(); err != nil {
+			t.Fatalf("%s: release: %v", tc.name, err)
+		}
+		if len(holders) != 1 || len(problems) != 0 || holders[0].Command != tc.want {
+			t.Errorf("%s: holders = %+v, problems = %v; want one holder with command %q", tc.name, holders, problems, tc.want)
+		}
+	}
+}
+
 // recordFiles lists the holder records currently on disk for one lock, without
 // reading them — the read path retires dead records, so it cannot be used to
 // ask what the writer left behind.
@@ -779,7 +807,7 @@ func TestARecordThatWillNotRetireIsReportedAndTheReleaseStillLands(t *testing.T)
 	storageDir := storageDirOf(lockPath)
 	dir := lockHolderDir(storageDir, lockPath)
 	lockErr := errors.New("lock release result")
-	release := recordLockHolder(storageDir, lockPath, func() error { return lockErr })
+	release := recordLockHolder(context.Background(), storageDir, lockPath, func() error { return lockErr })
 
 	// The swept name becomes a non-empty directory the release cannot remove,
 	// as on Windows it cannot remove a name a concurrent sweep's probe holds

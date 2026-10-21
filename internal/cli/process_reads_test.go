@@ -22,7 +22,7 @@ import (
 // inside the standard library where a scan of this module cannot see it.
 // [LAW:effects-at-boundaries] [LAW:no-shared-mutable-globals]
 var processReads = map[string][]string{
-	"os":            {"Getwd", "Stdin"},
+	"os":            {"Getwd", "Args", "Stdin"},
 	"path/filepath": {"Abs"},
 }
 
@@ -121,6 +121,7 @@ func TestProcessReadsInFindsEverySpelling(t *testing.T) {
 	}{
 		{"plain call", `import "os"; func f() { os.Getwd() }`, []string{"os.Getwd"}},
 		{"value use", `import "os"; var r = os.Stdin`, []string{"os.Stdin"}},
+		{"arguments", `import "os"; var a = os.Args[1:]`, []string{"os.Args"}},
 		{"aliased import", `import sys "os"; var r = sys.Stdin`, []string{"os.Stdin"}},
 		{"filepath.Abs", `import "path/filepath"; func f() { filepath.Abs("x") }`, []string{"path/filepath.Abs"}},
 		{"dot import", `import . "os"; var r = Stdin`, []string{"dot import of os"}},
