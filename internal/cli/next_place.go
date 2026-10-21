@@ -20,9 +20,9 @@ const (
 	// startHere is this checkout's own work: the lane it holds, the epic it
 	// carries, or a dependency on that epic's path.
 	startHere
-	// startOffMainClone is new work served in the main clone, where every
+	// startOffPrimaryClone is new work served in the primary clone, where every
 	// session starts, so work begun there is shared by all of them.
-	startOffMainClone
+	startOffPrimaryClone
 	// startBesideHeldWork is a pick from outside the work this checkout holds,
 	// which is unfinished and stays here.
 	startBesideHeldWork
@@ -31,9 +31,9 @@ const (
 // startPlaceNames is how the invocation event spells each place; the no-pick
 // place records as null.
 var startPlaceNames = map[startPlace]string{
-	startHere:           "here",
-	startOffMainClone:   "worktree_off_main_clone",
-	startBesideHeldWork: "worktree_beside_held_work",
+	startHere:            "here",
+	startOffPrimaryClone: "worktree_off_primary_clone",
+	startBesideHeldWork:  "worktree_beside_held_work",
 }
 
 // startPlacement is the place for one served ticket.
@@ -49,10 +49,10 @@ type startPlacement struct {
 //
 // A new lane served in a linked worktree is started there: that worktree holds
 // nothing — its epic is done or its claim lapsed — so it carries the new work.
-func placeFor(outcome NextOutcome, mainCheckout bool) startPlacement {
+func placeFor(outcome NextOutcome, primaryClone bool) startPlacement {
 	newLane := startHere
-	if mainCheckout {
-		newLane = startOffMainClone
+	if primaryClone {
+		newLane = startOffPrimaryClone
 	}
 	switch o := outcome.(type) {
 	case ServedFromClaim:
@@ -79,8 +79,8 @@ func placeFor(outcome NextOutcome, mainCheckout bool) startPlacement {
 // "not". A place absent here prints no line: work started where `lit next` ran
 // needs no direction.
 var startPlaceReasons = map[startPlace]string{
-	startOffMainClone:   "the main clone, where every session starts",
-	startBesideHeldWork: "this checkout, whose own work is unfinished",
+	startOffPrimaryClone: "the primary clone, where every session starts",
+	startBesideHeldWork:  "this checkout, whose own work is unfinished",
 }
 
 // note is the line `lit next` prints under a pick that belongs in a worktree
@@ -95,11 +95,11 @@ func (p startPlacement) note() string {
 
 // recordStartPlace puts where the pick goes on the invocation's event, beside
 // the checkout kind that decided it. [LAW:nothing-unseen]
-func recordStartPlace(ctx context.Context, placement startPlacement, mainCheckout bool) {
+func recordStartPlace(ctx context.Context, placement startPlacement, primaryClone bool) {
 	var place *string
 	if name, picked := startPlaceNames[placement.Place]; picked {
 		place = &name
 	}
 	telemetry.Set(ctx, "next.start_place", place)
-	telemetry.Set(ctx, "next.main_checkout", mainCheckout)
+	telemetry.Set(ctx, "next.primary_clone", primaryClone)
 }

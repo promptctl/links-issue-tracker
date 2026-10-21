@@ -75,8 +75,8 @@ func nextLeaf() appLeaf {
 		}
 		outcome := routeNext(gathered.rows, gathered.details, gathered.epics, cc.standings, cc.evidence, cc.self, gathered.scope.scopeFor(*all), asked)
 		recordNextEvent(ctx, outcome, len(gathered.keepRows(asked).rows))
-		placement := placeFor(outcome, ap.Workspace.MainCheckout)
-		recordStartPlace(ctx, placement, ap.Workspace.MainCheckout)
+		placement := placeFor(outcome, ap.Workspace.PrimaryClone())
+		recordStartPlace(ctx, placement, ap.Workspace.PrimaryClone())
 		ap.Statusline.Record(nextStatuslineFacts(outcome, !filter.narrows() && !*all, cc.evidence)...)
 		occasion, err := renderNextOutcome(stdout, outcome, gathered.details, cc, actor())
 		if err != nil {

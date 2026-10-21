@@ -15,19 +15,19 @@ If the user provided specific information (e.g., a ticket id or area of the code
 
 ## Work from the checkout that holds the work
 
-lit counts a checkout — the main clone or one linked worktree — as the claimant, not the session working in it.  A checkout carries one epic at a time: `lit next` keeps serving it that epic's lanes until the epic is done, and every ticket it serves is worked there — `lit next`, `lit start`, the branch, the commits and `lit done` all run from inside it.  Sessions are shifts at one desk: they come and go, and the work stays where it is.
+lit counts a checkout — the primary clone or one linked worktree — as the claimant, not the session working in it.  A checkout carries one epic at a time, and every ticket `lit next` serves it is worked there: `lit next`, `lit start`, the branch, the commits and `lit done` all run from inside it.  Sessions are shifts at one desk: they come and go, and the work stays where it is.
 
 - **A handoff that names a checkout** is where you run this skill.  Go there first.
-- **Run `lit next` where you are, and let its pick decide.**  A pick that is this checkout's own work is worked here: the lane it holds, `(a second lane of an epic you already hold a lane in)`, or `(gates <id>, which is on your path)`.
-- **A pick that begins new work gets a worktree of its own** when you are in the main clone, or when `lit next` served it from outside the epic this checkout holds — the move-on route after `no ready work in epic(s)`.  That epic is unfinished, and a checkout carries one epic at a time.  The main clone is where every new session lands, so work started there is shared with sessions that never agreed to share it.  Look first for the worktree the work had before its claim expired — a claim lapses after six hours of quiet, and its worktree stays: `git worktree list | grep -F '<epic-id>.'`.  Otherwise create one.  Either way run `lit start <id>` by id from inside it: the claim lands on the checkout `lit start` runs from, and a fresh worktree's own `lit next` holds nothing and may pick something else.
+- **`lit next` says where its pick is started.**  A pick that belongs in a worktree of its own — new work served in the primary clone, or work from outside what this checkout holds — carries a line under it: `start <id> from a worktree of its own, not …`.  Create the worktree off the trunk and run `lit start <id>` from inside it, because the claim lands on the checkout `lit start` runs in:
 
   ```
   git fetch origin
   git worktree add --no-track -b <ticket-id> <path> origin/master    # or the repo's default branch
   ```
 
+  With no such line, the pick is this checkout's own work: start it where you are.
 - **A ticket held by a checkout on this machine** names it on its claim line in `lit backlog`: `claimed here: <path> (<branch>)`.  That is where the ticket is worked.
-- **A merged ticket does not end the checkout's work.**  Keep the worktree, run `lit next` from inside it, and cut the next ticket's branch there (step 3 below).  Remove the worktree once its epic is done.
+- **A merged ticket does not end the checkout's work.**  Keep the worktree and run `lit next` from inside it; the ticket it serves is cut on a fresh branch there (step 3 below).
 
 The moment this goes wrong comes after a merge: the next ticket is in the same lane, and a fresh worktree off the trunk feels like the clean place to start it.  It is a second checkout for the same lane.  lit sees a new claimant take the lane and reports it `contested by` the old one, and `lit next` run from anywhere but the checkout that holds the lane routes away from the lane's next ticket.
 
@@ -204,7 +204,7 @@ A mature engineer knows when to ask for help, and it isn't at the slightest hint
 
 4. **State the plan in one paragraph, then start.** What the ticket asks for, how you'll verify it's done (the machine-verifiable criterion), and the first concrete step. Then begin.
 
-5. **Record the phase as the work moves.** `lit start` put the ticket in `plan`.  Run `lit phase <id> --to impl` when you start writing its code, `lit phase <id> --to review` when its PR opens, and `lit phase <id> --to merge` when review is done and the merge is under way; then `lit done <id>` once it has merged.  Then run `lit next` from the same checkout: the next ticket it serves is worked there too, on a fresh branch (step 3).  A statusline and other sessions read the phase to see where the work stands, so it is only as current as the last `lit phase` you ran.
+5. **Record the phase as the work moves.** `lit start` put the ticket in `plan`.  Run `lit phase <id> --to impl` when you start writing its code, `lit phase <id> --to review` when its PR opens, and `lit phase <id> --to merge` when review is done and the merge is under way; then `lit done <id>` once it has merged.  Then run `lit next` from the same checkout: the next ticket it serves is worked there too, on a fresh branch (step 3).  A handoff to the next session names this checkout's path, because a fresh session starts in the primary clone, and `lit next` run there routes away from the work this checkout holds.  A statusline and other sessions read the phase to see where the work stands, so it is only as current as the last `lit phase` you ran.
 
 ## When to stop and ask
 
