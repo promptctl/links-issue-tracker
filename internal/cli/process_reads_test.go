@@ -207,23 +207,34 @@ func importedAs(fset *token.FileSet, file *ast.File, watched map[string][]string
 	return local
 }
 
-// The scan has to see every spelling of a read, or the gate above passes on a
-// read it was blind to.
-func TestProcessReadsInFindsEverySpelling(t *testing.T) {
+// The scans have to see every spelling of a read and of a child build, or the
+// gate above passes on one it was blind to.
+func TestProcessScansFindEverySpelling(t *testing.T) {
 	t.Parallel()
+	const gitcmdImport = `import "github.com/dolthub/dolt/go/libraries/utils/gitcmd"; `
 	cases := []struct {
 		name string
+		scan func(*token.FileSet, *ast.File) []string
 		src  string
 		want []string
 	}{
-		{"plain call", `import "os"; func f() { os.Getwd() }`, []string{"os.Getwd"}},
-		{"value use", `import "os"; var r = os.Stdin`, []string{"os.Stdin"}},
-		{"arguments", `import "os"; var a = os.Args[1:]`, []string{"os.Args"}},
-		{"aliased import", `import sys "os"; var r = sys.Stdin`, []string{"os.Stdin"}},
-		{"filepath.Abs", `import "path/filepath"; func f() { filepath.Abs("x") }`, []string{"path/filepath.Abs"}},
-		{"dot import", `import . "os"; var r = Stdin`, []string{"dot import of os"}},
-		{"other os names", `import "os"; var w = os.Stdout; func f() { os.Getpid() }`, nil},
-		{"same name, other package", `import os "example.com/notos"; var r = os.Stdin`, nil},
+		{"plain call", processReadsIn, `import "os"; func f() { os.Getwd() }`, []string{"os.Getwd"}},
+		{"value use", processReadsIn, `import "os"; var r = os.Stdin`, []string{"os.Stdin"}},
+		{"arguments", processReadsIn, `import "os"; var a = os.Args[1:]`, []string{"os.Args"}},
+		{"aliased import", processReadsIn, `import sys "os"; var r = sys.Stdin`, []string{"os.Stdin"}},
+		{"filepath.Abs", processReadsIn, `import "path/filepath"; func f() { filepath.Abs("x") }`, []string{"path/filepath.Abs"}},
+		{"dot import", processReadsIn, `import . "os"; var r = Stdin`, []string{"dot import of os"}},
+		{"environment reads", processReadsIn, `import "os"; func f() { os.Getenv("A"); os.LookupEnv("A"); _ = os.Environ() }`, []string{"os.Getenv", "os.LookupEnv", "os.Environ"}},
+		{"directories the environment names", processReadsIn, `import "os"; func f() { os.UserHomeDir(); os.UserConfigDir(); os.TempDir() }`, []string{"os.UserHomeDir", "os.UserConfigDir", "os.TempDir"}},
+		{"other os names", processReadsIn, `import "os"; var w = os.Stdout; func f() { os.Getpid() }`, nil},
+		{"same name, other package", processReadsIn, `import os "example.com/notos"; var r = os.Stdin`, nil},
+		{"exec constructors", childBuildsIn, `import "os/exec"; func f() { exec.Command("x"); exec.CommandContext(nil, "x") }`, []string{"os/exec.Command", "os/exec.CommandContext"}},
+		{"aliased exec", childBuildsIn, `import run "os/exec"; func f() { run.Command("x") }`, []string{"os/exec.Command"}},
+		{"gitcmd constructor", childBuildsIn, gitcmdImport + `func f() { gitcmd.Command(nil, gitcmd.Spec{Dir: "/d"}) }`, []string{"github.com/dolthub/dolt/go/libraries/utils/gitcmd.Command"}},
+		{"exec.Cmd built by hand", childBuildsIn, `import "os/exec"; var a = exec.Cmd{Path: "x"}; var b = &exec.Cmd{}; var c = new(exec.Cmd); var d exec.Cmd`, []string{"os/exec.Cmd literal", "os/exec.Cmd literal", "new(os/exec.Cmd)", "os/exec.Cmd value"}},
+		{"Env written", childBuildsIn, gitcmdImport + `func f(c *T) { c.Env = nil; _ = gitcmd.Spec{Env: nil} }`, []string{"Env assignment", "Env key"}},
+		{"a child built through the run's Env", childBuildsIn, `import "os/exec"; func f(env E) *exec.Cmd { return env.Command("x") }`, nil},
+		{"Env key of a type from elsewhere", childBuildsIn, `var i = Invocation{Env: e}`, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -233,11 +244,11 @@ func TestProcessReadsInFindsEverySpelling(t *testing.T) {
 				t.Fatalf("parse: %v", err)
 			}
 			var got []string
-			for _, finding := range processReadsIn(fset, file) {
+			for _, finding := range tc.scan(fset, file) {
 				got = append(got, finding[strings.LastIndex(finding, ": ")+2:])
 			}
 			if !slices.Equal(got, tc.want) {
-				t.Errorf("processReadsIn = %q, want %q", got, tc.want)
+				t.Errorf("scan = %q, want %q", got, tc.want)
 			}
 		})
 	}
