@@ -189,10 +189,11 @@ func TestMain(m *testing.M) {
 }
 
 // plantBase is a frozen base in os.TempDir(), as a test binary with the given
-// pid leaves one when it dies before its Run removes it.
-func plantBase(t *testing.T, pid int) string {
+// pid, run by the user prefix names, leaves one when it dies before its Run
+// removes it.
+func plantBase(t *testing.T, prefix string, pid int) string {
 	t.Helper()
-	base, err := os.MkdirTemp("", fmt.Sprintf("%s%d-*", basePrefix, pid))
+	base, err := os.MkdirTemp("", fmt.Sprintf("%s%d-*", prefix, pid))
 	if err != nil {
 		t.Fatalf("make a base: %v", err)
 	}
@@ -220,14 +221,17 @@ func runBinary(t *testing.T) int {
 	return child.Process.Pid
 }
 
-// The next binary's Run deletes the frozen base a dead binary left, and
-// leaves alone the base of a binary that is still running.
-func TestRunSweepsOnlyTheBasesOfDeadBinaries(t *testing.T) {
-	dead := plantBase(t, runBinary(t))
-	live := plantBase(t, os.Getpid())
+// The next binary's Run deletes the frozen base a dead binary of this user's
+// left, and leaves alone the base of a binary that is still running and the
+// base of another user's dead binary, which this user could not delete.
+func TestRunSweepsOnlyThisUsersBasesOfDeadBinaries(t *testing.T) {
+	deadPID := runBinary(t)
+	dead := plantBase(t, basePrefix, deadPID)
+	live := plantBase(t, basePrefix, os.Getpid())
+	othersDead := plantBase(t, fmt.Sprintf("lit-template-%d-", os.Getuid()+1), deadPID)
 	t.Cleanup(func() {
-		if err := removeBase(live); err != nil {
-			t.Errorf("remove the live base: %v", err)
+		if err := errors.Join(removeBase(live), removeBase(othersDead)); err != nil {
+			t.Errorf("remove the bases the sweep must leave: %v", err)
 		}
 	})
 
@@ -237,12 +241,13 @@ func TestRunSweepsOnlyTheBasesOfDeadBinaries(t *testing.T) {
 		t.Fatalf("the dead binary's base survived the sweep: stat = %v", err)
 	}
 	requireHolds(t, filepath.Join(live, "tree"), seed)
+	requireHolds(t, filepath.Join(othersDead, "tree"), seed)
 }
 
 // Under `go test ./...` two binaries can sweep one dead base at once; the one
 // that finds it already gone has nothing left to do.
 func TestRemovingAnAlreadyRemovedBaseSucceeds(t *testing.T) {
-	base := plantBase(t, os.Getpid())
+	base := plantBase(t, basePrefix, os.Getpid())
 	for range 2 {
 		if err := removeBase(base); err != nil {
 			t.Fatalf("removeBase: %v", err)

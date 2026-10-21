@@ -21,10 +21,12 @@ import (
 	"testing"
 )
 
-// basePrefix starts the name of every template's base directory in
-// os.TempDir(). The pid of the test binary that built it follows, so a later
-// run can tell a base whose owner is still running from one whose owner died.
-const basePrefix = "lit-template-"
+// basePrefix starts the name of every base this user's test binaries make in
+// os.TempDir(). The uid scopes a sweep to bases this user made and can delete:
+// on Linux os.TempDir() is the /tmp every user shares. The pid of the test
+// binary that built the base follows the prefix, so a later run can tell a base
+// whose owner is still running from one whose owner died.
+var basePrefix = fmt.Sprintf("lit-template-%d-", os.Getuid())
 
 // Template is one directory, built on first use and frozen read-only, and the
 // copies taken from it. The template lives outside every t.TempDir on purpose,
@@ -170,8 +172,8 @@ func removeBase(base string) error {
 	return os.RemoveAll(base)
 }
 
-// sweepDead removes every base in os.TempDir() whose owning test binary has
-// died. A binary that panicked, hit -timeout or was killed never reached its
+// sweepDead removes every base of this user's in os.TempDir() whose owning
+// test binary has died. A binary that panicked, hit -timeout or was killed never reached its
 // Run's removal, and the frozen tree it left is one `rm -rf` cannot delete. A
 // base whose owner is alive — another package's binary running beside this
 // one — is left alone.
@@ -190,7 +192,8 @@ func sweepDead() error {
 	return errors.Join(errs...)
 }
 
-// ownerPID reads the owner's pid out of a base's name, basePrefix<pid>-<rand>.
+// ownerPID reads the owner's pid out of the name of one of this user's bases,
+// basePrefix<pid>-<rand>.
 func ownerPID(name string) (int, bool) {
 	rest, ok := strings.CutPrefix(name, basePrefix)
 	if !ok {
