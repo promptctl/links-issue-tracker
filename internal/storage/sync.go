@@ -435,8 +435,8 @@ type SyncPushResult struct {
 	// [LAW:one-source-of-truth]
 	Superseded error `json:"-"`
 
-	// Bound is the history bound SyncKeepHistoryBound kept after the push
-	// landed; zero when none ran, whose Publication is ReRootNotPushed. Any
+	// Bound is the history bound the push kept once it landed; zero when
+	// none ran, whose Publication is ReRootNotPushed. Any
 	// other Publication means the bound's lease push and the fetch after it
 	// went through the store's git mirror after the push, so the mirror may
 	// hold writes later than this push's, a peer's among them, and

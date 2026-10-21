@@ -6,7 +6,6 @@ import (
 	"maps"
 	"slices"
 
-	"github.com/promptctl/links-issue-tracker/internal/historywindow"
 	"github.com/promptctl/links-issue-tracker/internal/merge"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
@@ -92,7 +91,8 @@ type Syncer interface {
 	// store's HEAD (a concurrent push from the live store landed a descendant
 	// of it), the result is Superseded rather than an error, because the goal
 	// state holds. A rejection the re-check does not explain is the error.
-	SyncPushFromClone(ctx context.Context, remote RemoteName, branch string, setUpstream bool, force bool) (SyncPushResult, error)
+	// A push that lands keeps the history bound, as SyncCompactAndPush's does.
+	SyncPushFromClone(ctx, boundLifetime context.Context, remote RemoteName, branch string, window BoundWindow, setUpstream bool, force bool) (SyncPushResult, error)
 
 	// SyncRemoteMirrorHolds reports whether this store's local mirror of the
 	// remote's data holds every one of commits — git commit ids as the remote
@@ -125,7 +125,22 @@ type Syncer interface {
 	// exactly what this contract exists to keep it from needing.
 	// [LAW:decomposition]
 	CompactIfDue(ctx context.Context) (CompactionOutcome, error)
-	SyncCompactAndPush(ctx context.Context, remote RemoteName, branch string, setUpstream bool, force bool) (SyncPushResult, error)
+
+	// SyncCompactAndPush compacts and pushes under one commit-lock
+	// acquisition. Like SyncPushFromClone, a push that lands keeps the sync
+	// branch's history inside window before it returns, whichever of the two
+	// landed it, so no push leaves the remote past the bound with nobody
+	// asked to keep it. [LAW:no-ambient-temporal-coupling] The push runs on
+	// ctx; the bound runs on a deadline of its own taken from boundLifetime,
+	// so a push deadline the push nearly spent never cuts the bound, and a
+	// caller with one lifetime passes it twice. Result.Bound is the bound
+	// kept and its account joins Result.Maintenance. Below the bound it
+	// reads the remote head's height and nothing else; once the height
+	// reaches it, it publishes a re-root of that head, runs the remote's GC,
+	// and follows the re-root. The push landed whatever the bound did, so the
+	// bound fails nothing: where it stopped is on its record (HistoryBounds)
+	// and in the account, and a window config left unread is in the account.
+	SyncCompactAndPush(ctx, boundLifetime context.Context, remote RemoteName, branch string, window BoundWindow, setUpstream bool, force bool) (SyncPushResult, error)
 
 	// SyncFollowReRoot brings the local branch into the remote's history when
 	// another checkout re-rooted it, reading the tracking ref as the last fetch
@@ -152,18 +167,7 @@ type Syncer interface {
 	// what the hold read instead.
 	CutsNotFound() []CutNotFound
 
-	// SyncKeepHistoryBound keeps the sync branch's history inside window
-	// once pushed has landed on remote's branch, whichever push landed it,
-	// and returns pushed with the bound it kept as Bound and the bound's
-	// account joined to its Maintenance.
-	// Below the bound it reads the remote head's height and nothing else;
-	// once the height reaches it, it publishes a re-root of that head, runs
-	// the remote's GC, and follows the re-root. The push landed whatever the
-	// bound did, so the bound fails nothing: where it stopped is on its
-	// record (HistoryBounds) and in the account.
-	SyncKeepHistoryBound(ctx context.Context, remote RemoteName, branch string, window historywindow.Window, pushed SyncPushResult) SyncPushResult
-
-	// HistoryBounds is what every SyncKeepHistoryBound since the engine
+	// HistoryBounds is what every push's history bound since the engine
 	// opened did, oldest first: the remote head's height every time, and the
 	// re-root it published once that height reached the bound. An engine
 	// whose history has no bound to keep returns none.

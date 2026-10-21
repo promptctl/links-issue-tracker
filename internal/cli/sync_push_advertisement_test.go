@@ -105,7 +105,7 @@ func TestAPushRecordsTheAdvertisementItLeft(t *testing.T) {
 	// head now (it just fetched), so a landed push step proves and a
 	// superseded one, identical in every other respect, must not.
 	pushStep := func(superseded error) syncPushStep {
-		return func(context.Context, storage.RemoteName, string, bool, bool) (storage.SyncPushResult, error) {
+		return func(context.Context, context.Context, storage.RemoteName, string, storage.BoundWindow, bool, bool) (storage.SyncPushResult, error) {
 			return storage.SyncPushResult{Head: "unused", Superseded: superseded}, nil
 		}
 	}

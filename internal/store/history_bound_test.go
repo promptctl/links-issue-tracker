@@ -34,9 +34,16 @@ func windowOf(t *testing.T, reRootAt, keep uint64) historywindow.Window {
 	return window
 }
 
+// unfiredBound is a window no test store grows near: a push under it reads
+// the remote head's height and does nothing else.
+func unfiredBound(t *testing.T) storage.BoundWindow {
+	t.Helper()
+	return storage.BoundWindowRead(windowOf(t, 2000, 1000), nil)
+}
+
 // compactPush files a ticket under epic at root and pushes it the way `lit
-// sync push` and the pre-push hook do, then keeps bound as every landed push
-// does, returning what that did.
+// sync push` and the pre-push hook do, keeping bound as every landed push
+// does, and returns what the bound did.
 func compactPush(t *testing.T, ctx context.Context, root, epic, title string, bound historywindow.Window) storage.HistoryBound {
 	t.Helper()
 	st, err := Open(ctx, root, "ws")
@@ -51,11 +58,10 @@ func compactPush(t *testing.T, ctx context.Context, root, epic, title string, bo
 	}
 	sync := openSyncOrFatal(t, ctx, root)
 	defer func() { _ = sync.Close() }()
-	pushed, err := sync.SyncCompactAndPush(ctx, remoteName(t, "origin"), "master", false, false)
+	kept, err := sync.SyncCompactAndPush(ctx, ctx, remoteName(t, "origin"), "master", storage.BoundWindowRead(bound, nil), false, false)
 	if err != nil {
 		t.Fatalf("SyncCompactAndPush(%s) error = %v", title, err)
 	}
-	kept := sync.SyncKeepHistoryBound(ctx, remoteName(t, "origin"), "master", bound, pushed)
 	bounds := sync.HistoryBounds()
 	if len(bounds) != 1 {
 		t.Fatalf("HistoryBounds() after one push = %+v, want one", bounds)
@@ -67,8 +73,8 @@ func compactPush(t *testing.T, ctx context.Context, root, epic, title string, bo
 	if err != nil {
 		t.Fatal(err)
 	}
-	if moved := remote != pushed.Head; moved != (kept.Bound.Publication == storage.ReRootPublished) || kept.Head != pushed.Head || kept.Bound.Publication != bounds[0].Publication {
-		t.Fatalf("the kept push = %+v over the pushed head %s, the remote at %s; want the bound published exactly when the remote moved off the pushed head, and the pushed head kept", kept, pushed.Head, remote)
+	if moved := remote != kept.Head; moved != (kept.Bound.Publication == storage.ReRootPublished) || kept.Bound.Publication != bounds[0].Publication {
+		t.Fatalf("the push = %+v, the remote at %s; want the bound published exactly when the remote moved off the pushed head", kept, remote)
 	}
 	return bounds[0]
 }

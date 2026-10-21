@@ -9,6 +9,26 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 )
 
+// BoundWindow is the window a push keeps the sync branch's history inside,
+// as the workspace's config names it, or the refusal that left the config
+// naming none. An unreadable config costs the bound and never the push: the
+// push lands, and its maintenance says the bound was not kept and why.
+type BoundWindow struct {
+	window historywindow.Window
+	unread error
+}
+
+// BoundWindowRead is the window as one read of config left it: the window it
+// named, or readErr, the refusal, in its place. It takes the read's own pair,
+// so no window goes unread without the refusal that says why.
+// [LAW:types-are-the-program]
+func BoundWindowRead(window historywindow.Window, readErr error) BoundWindow {
+	return BoundWindow{window: window, unread: readErr}
+}
+
+// Window is the window, or the refusal in its place.
+func (b BoundWindow) Window() (historywindow.Window, error) { return b.window, b.unread }
+
 // HistoryBound is what one push did to keep the sync branch's history under
 // its bound: the height of the remote head the push left, against the height
 // at which a push re-roots, and, once that height is reached, the re-root the

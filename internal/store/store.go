@@ -3400,6 +3400,23 @@ var MirrorHoldBudget = mirrorHoldBudget
 // shrink it without sleeping through the production one.
 var MirrorPushDeadline = mirrorPushDeadline
 
+// HistoryBoundDeadline is the deadline a landed push's history bound runs
+// under. The bound crosses the network three times — the re-root's lease
+// push, the remote's GC, the fetch that learns what the remote carries — and
+// each leg is a transport of a push's kind, so each gets the push deadline.
+// The local legs ride in the stall factor's margin: the re-roots, whose cost
+// is reroot.elapsed_ms, and the follow's full GC, measured at 2.0s on an APFS
+// clone of this repository's 437 MB store. The remote GC's upload has not
+// been measured against a hosted remote; history_bound.elapsed_ms on the
+// push's event is the figure to re-measure from. A cut bound fails nothing:
+// the push landed. A cut before the re-root reaches the remote leaves the
+// next push past the bound to run it again; a cut after it leaves the
+// remote's history below the cut to the next re-root's GC, which collects it
+// with its own, since the remote's GC replaces nothing once a push lands on
+// top of the re-root. A function because the push deadline it derives from
+// is a variable. [LAW:one-source-of-truth]
+func HistoryBoundDeadline() time.Duration { return 3 * MirrorPushDeadline }
+
 // wrapEngineOpenContention attaches operator guidance to an engine open that
 // exhausted its wait against a held Dolt journal lock, naming who holds it;
 // every other error passes through untouched. The wrap carries BOTH

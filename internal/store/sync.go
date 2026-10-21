@@ -987,10 +987,15 @@ func unjudgedRefusal(refusal, readErr error) error {
 // the push reflects exactly the compacted state. [LAW:no-ambient-temporal-coupling]
 // The explicit `lit sync push` and the pre-push hook use this; the on-change
 // mirror uses SyncPushFromClone. They are distinct single-purpose entrypoints,
-// not one method with a compaction flag. [LAW:decomposition] Neither keeps the
-// history bound: the bound follows whichever push landed, through
-// SyncKeepHistoryBound.
-func (s *Store) SyncCompactAndPush(ctx context.Context, remote storage.RemoteName, branch string, setUpstream bool, force bool) (storage.SyncPushResult, error) {
+// not one method with a compaction flag. [LAW:decomposition] Both end in
+// keepHistoryBoundAfter, so whichever landed the push keeps the bound.
+func (s *Store) SyncCompactAndPush(ctx, boundLifetime context.Context, remote storage.RemoteName, branch string, window storage.BoundWindow, setUpstream bool, force bool) (storage.SyncPushResult, error) {
+	pushed, err := s.compactAndPush(ctx, remote, branch, setUpstream, force)
+	return s.keepHistoryBoundAfter(boundLifetime, remote, branch, window, pushed, err)
+}
+
+// compactAndPush is SyncCompactAndPush up to the push landing.
+func (s *Store) compactAndPush(ctx context.Context, remote storage.RemoteName, branch string, setUpstream bool, force bool) (storage.SyncPushResult, error) {
 	// The branch is refused before the compaction, which rewrites the store
 	// under the commit lock, not after it in the push.
 	branch, err := requireSyncArg("branch", branch)
@@ -1141,7 +1146,14 @@ func (s *Store) headCommitWithinLock(ctx context.Context) (string, error) {
 // store follows the same re-root when it receives it.
 // [LAW:no-silent-failure] [LAW:verifiable-goals] the goal is "the remote
 // carries HEAD", and a rejected push is judged by the goal, not by itself.
-func (s *Store) SyncPushFromClone(ctx context.Context, remote storage.RemoteName, branch string, setUpstream bool, force bool) (storage.SyncPushResult, error) {
+// A push the re-check found superseded landed too, and keeps the bound.
+func (s *Store) SyncPushFromClone(ctx, boundLifetime context.Context, remote storage.RemoteName, branch string, window storage.BoundWindow, setUpstream bool, force bool) (storage.SyncPushResult, error) {
+	pushed, err := s.pushFromClone(ctx, remote, branch, setUpstream, force)
+	return s.keepHistoryBoundAfter(boundLifetime, remote, branch, window, pushed, err)
+}
+
+// pushFromClone is SyncPushFromClone up to the push landing.
+func (s *Store) pushFromClone(ctx context.Context, remote storage.RemoteName, branch string, setUpstream bool, force bool) (storage.SyncPushResult, error) {
 	trimmedBranch, err := requireSyncArg("branch", branch)
 	if err != nil {
 		return storage.SyncPushResult{}, err

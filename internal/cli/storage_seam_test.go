@@ -136,7 +136,9 @@ var doltWorkspaceMachinery = map[string][]string{
 	// that only the received-refs write failed — and travel with it.
 	// ReceiveDeadline is the receive's own deadline, declared in store
 	// beside the holds it bounds; the cli reads it rather than keep a second
-	// copy.
+	// copy. HistoryBoundDeadline is the deadline the push verbs run a landed
+	// push's history bound under, derived from MirrorPushDeadline; the cli
+	// reads it to size the receive's wait on a mirror cycle's network work.
 	//
 	// LandFetchedHead is RecordPushedHead's counterpart for the receive, which
 	// fetches on a clone the same way the mirror pushes from one: it carries
@@ -171,7 +173,7 @@ var doltWorkspaceMachinery = map[string][]string{
 	// records are addressed by path beside ReceivedRefsPath. The tests reach
 	// the two paths to plant a record or to make one unwritable.
 	"mirror clone and push": {
-		"MirrorHoldBudget", "MirrorPushDeadline", "MirrorPushCancelLagObserved",
+		"MirrorHoldBudget", "MirrorPushDeadline", "MirrorPushCancelLagObserved", "HistoryBoundDeadline",
 		"RecordPushedHead", "PushedHeadRecord", "ErrHoldCut", "ErrReceivedRefsNotRecorded",
 		"ReceiveDeadline", "ReadReceivedRefs", "WriteReceivedRefs", "ReceivedRefsPath",
 		"LandFetchedHead", "LandedFetch", "ErrRemoteCacheNotLanded", "LandingTempDir",
@@ -185,7 +187,7 @@ var doltWorkspaceMachinery = map[string][]string{
 	// writing through the chunk store with no engine, so there is no handle to
 	// ask through the contract. The CLI's one caller is the follow's end-to-end
 	// test, which re-roots one checkout and force-pushes it to stand in for
-	// the push path's own trigger (SyncKeepHistoryBound). Dolt history
+	// the push verbs' own history bound. Dolt history
 	// machinery, deleted at S4 with the rest.
 	"history bound": {
 		"ReRoot",
