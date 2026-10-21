@@ -11,8 +11,9 @@ import (
 // directory it ran in, its arguments, and its standard streams. The fields are
 // named as os/exec.Cmd names the same things. cmd/lit's main reads the process
 // once to build it, and a test builds its own, so nothing under internal/
-// reads the process's copies and two runs in one process cannot see each
-// other's. [LAW:effects-at-boundaries] [LAW:no-shared-mutable-globals]
+// reads the process's working directory, arguments or stdin, and two runs in
+// one process cannot see each other's.
+// [LAW:effects-at-boundaries] [LAW:no-shared-mutable-globals]
 type Invocation struct {
 	Dir WorkingDir
 	// Args are the arguments after the program name.
