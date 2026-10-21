@@ -13,6 +13,7 @@ links-windows-qr8l.bc1 internal/cli TestAPushRecordsTheAdvertisementItLeft
 links-windows-qr8l.bc1 internal/cli TestAPushRefusedOverAPeersPushNotifiesOnlyWhenNothingMergesIt
 links-windows-qr8l.bc1 internal/cli TestAQuietForkReceivesOntoTheRemoteHead
 links-windows-qr8l.bc1 internal/cli TestAReceiveThatFetchedAndKeepsStoppingReachesTheFailureSurface
+links-windows-qr8l.bc1 internal/cli TestAReceiveTheLiveStoreSupersededLandsNothingAndTheNextLands
 links-windows-qr8l.bc1 internal/cli TestAReceiveWhoseOpenFailsHasNothingToClose
 links-windows-qr8l.bc1 internal/cli TestAnAutomaticReceivePrunesABranchTheRemoteDeleted
 links-windows-qr8l.bc1 internal/cli TestAutomaticReceiveAsksBeforeFetching
