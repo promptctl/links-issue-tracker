@@ -161,6 +161,13 @@ func TestBulkDoneRecordsEachItemsFactsOnItsOwnEntry(t *testing.T) {
 		t.Fatalf("bulk done with %s returned nil, want its failure", missing)
 	}
 
+	// A done's plan warning prints as `lit done` prints it, ahead of the
+	// item's ok line.
+	warning := "warning: finished without an approved plan: "
+	if w, ok := strings.Index(out.String(), warning), strings.Index(out.String(), unplanned+" ok\n"); w < 0 || ok < 0 || w > ok {
+		t.Errorf("stdout = %q, want %q ahead of %q", out.String(), warning, unplanned+" ok")
+	}
+
 	ev := writtenEvent(t, recorder.Finish(telemetry.End{}))
 	if _, leaked := ev.Facts["done.plan_standing"]; leaked {
 		t.Errorf("event facts carry done.plan_standing = %v; each item's belongs on its own entry", ev.Facts["done.plan_standing"])
