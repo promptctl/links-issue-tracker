@@ -758,13 +758,13 @@ func TestAFollowReadsARemoteWithTwoRootsAsNoCut(t *testing.T) {
 			r := newReRootedRemote(t, ctx, false)
 			first, followed, crossed := probeThenGap(t, ctx, r, func() {
 				if tc.followFirst {
-					second := openSyncOrFatal(t, ctx, r.bravo)
-					if err := second.SyncFollowReRoot(ctx, remoteName(t, "origin"), "master", storage.SyncEntryFetch); err != nil {
-						t.Fatalf("the second follow error = %v", err)
-					}
-					if err := second.Close(); err != nil {
-						t.Fatalf("Close error = %v", err)
-					}
+					func() {
+						second := openSyncOrFatal(t, ctx, r.bravo)
+						defer func() { _ = second.Close() }()
+						if err := second.SyncFollowReRoot(ctx, remoteName(t, "origin"), "master", storage.SyncEntryFetch); err != nil {
+							t.Fatalf("the second follow error = %v", err)
+						}
+					}()
 				}
 				withChunkStore(t, r.bravo, func(ddb *doltdb.DoltDB) { mergeASecondRoot(t, ctx, ddb, ref.NewRemoteRef("origin", "master")) })
 			})

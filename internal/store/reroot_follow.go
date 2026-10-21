@@ -60,7 +60,8 @@ func (s *Store) followRemoteReRoot(ctx context.Context, remote storage.RemoteNam
 }
 
 // moveOntoRemoteReRoot is followRemoteReRoot's move alone: it re-roots the
-// branch onto the remote's history and records a declined cut, and finishes
+// branch onto the remote's history, records a declined cut or what its hold
+// read instead of a cut, and finishes
 // nothing after the move. The returned record has a head exactly when the
 // branch moved, with the move's error beside it, and the caller finishes it:
 // collectAndRecordFollow on a store that outlives the sync, or
