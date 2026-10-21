@@ -2,7 +2,10 @@ package environ
 
 import (
 	"context"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -90,18 +93,55 @@ func TestEnvSharesNoListWithItsCallers(t *testing.T) {
 	}
 }
 
+// Only an Env no one built is zero: the empty environment is one a run can
+// be given.
+func TestIsZeroIsOnlyTheEnvNoOneBuilt(t *testing.T) {
+	t.Parallel()
+	if !(Env{}).IsZero() || !(Env{}).With("A=1").IsZero() {
+		t.Error("the zero Env, or one derived from it, is not IsZero")
+	}
+	for name, env := range map[string]Env{"of nil": Of(nil), "of a list": Of([]string{"A=1"}), "emptied": Of([]string{"A=1"}).Without("A")} {
+		if env.IsZero() {
+			t.Errorf("%s: IsZero() = true, want an environment a run can be given", name)
+		}
+	}
+}
+
 // Every child a constructor builds runs in the Env's own list, and an empty
-// Env still hands over a non-nil one, so no child inherits the process.
+// Env still hands over a non-nil one, so no child inherits the process. One
+// started in the caller's directory gets the list as it is.
 func TestConstructorsRunTheChildInTheEnv(t *testing.T) {
 	t.Parallel()
 	for name, env := range map[string]Env{"set": Of([]string{"A=1"}), "empty": {}} {
 		want := env.List()
 		ctx := context.Background()
-		if got := env.Command("true").Env; got == nil || !slices.Equal(got, want) {
+		if got := env.Command("", "true").Env; got == nil || !slices.Equal(got, want) {
 			t.Errorf("%s: Command(...).Env = %#v, want %#v", name, got, want)
 		}
-		if got := env.CommandContext(ctx, "true").Env; got == nil || !slices.Equal(got, want) {
+		if got := env.CommandContext(ctx, "", "true").Env; got == nil || !slices.Equal(got, want) {
 			t.Errorf("%s: CommandContext(...).Env = %#v, want %#v", name, got, want)
+		}
+	}
+}
+
+// A child started in a directory runs there with PWD naming it, as os/exec
+// sets it for a child that inherits the process, whatever PWD the Env holds;
+// windows and plan9 get none, as os/exec gives them none.
+func TestConstructorsGiveAChildItsDirectoryAsPWD(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	for goos, want := range map[string][]string{
+		"linux":   {"PWD=/lit/ran/here", "PWD=/child/dir"},
+		"darwin":  {"PWD=/lit/ran/here", "PWD=/child/dir"},
+		"windows": {"PWD=/lit/ran/here"},
+		"plan9":   {"PWD=/lit/ran/here"},
+	} {
+		env := of([]string{"PWD=/lit/ran/here"}, goos)
+		cmd, ctxCmd := env.Command("/child/dir/", "true"), env.CommandContext(ctx, "/child/dir/", "true")
+		for name, got := range map[string]*exec.Cmd{"Command": cmd, "CommandContext": ctxCmd} {
+			if got.Dir != "/child/dir/" || !slices.Equal(got.Env, want) {
+				t.Errorf("%s: %s in /child/dir/ = Dir %q, Env %q; want Dir %q, Env %q", goos, name, got.Dir, got.Env, "/child/dir/", want)
+			}
 		}
 	}
 }
@@ -118,5 +158,38 @@ func TestGitRunsInTheEnv(t *testing.T) {
 	}
 	if got := strings.TrimSpace(string(out)); got != "from-env" {
 		t.Errorf("git saw GIT_EDITOR=%q, want %q", got, "from-env")
+	}
+}
+
+// Git runs in its directory with PWD naming it, as the other constructors do.
+// The directory is a symlink, so the PWD its child sees tells the two apart:
+// sh keeps a PWD that names the directory it runs in, here the link, and
+// replaces any other with the physical path.
+func TestGitGivesItsChildItsDirectoryAsPWD(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	if runtime.GOOS == "windows" || runtime.GOOS == "plan9" {
+		t.Skip("os/exec gives no PWD here")
+	}
+	t.Parallel()
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, link := filepath.Join(base, "repo"), filepath.Join(base, "link")
+	if err := exec.Command("git", "init", "-q", repo).Run(); err != nil {
+		t.Fatalf("git init: %v", err)
+	}
+	if err := os.Symlink(repo, link); err != nil {
+		t.Fatal(err)
+	}
+	env := Of(os.Environ()).With("PWD=/", "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=alias.pwd", `GIT_CONFIG_VALUE_0=!printf %s "$PWD"`)
+	out, err := env.Git(context.Background(), link, nil, "pwd").Output()
+	if err != nil {
+		t.Fatalf("git pwd: %v", err)
+	}
+	if got := string(out); got != link {
+		t.Errorf("the child of git run in %s saw PWD=%q, want %q", link, got, link)
 	}
 }

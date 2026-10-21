@@ -140,14 +140,13 @@ func openOrPrintWorkflowFile(inv Invocation, path string) error {
 	if len(editorCmd) == 0 {
 		return nil
 	}
-	cmd := inv.Env.Command(editorCmd[0], append(editorCmd[1:], path)...)
 	// The editor runs where lit ran, on the invocation's own streams: the
 	// stdout isTerminal just found to be a terminal is the one it draws on.
 	dir, err := inv.Dir.Path()
 	if err != nil {
 		return fmt.Errorf("open %s in $EDITOR: %w", path, err)
 	}
-	cmd.Dir = dir
+	cmd := inv.Env.Command(dir, editorCmd[0], append(editorCmd[1:], path)...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = inv.Stdin, inv.Stdout, inv.Stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("open %s in $EDITOR (%s): %w", path, inv.Env.Get("EDITOR"), err)

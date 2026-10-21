@@ -611,7 +611,6 @@ func recordReconcileDecisionTrace(env environ.Env, ws workspace.Info, command st
 		BuildNote: resolveBuildStatusNote(time.Now()),
 		Metadata:  metadata,
 	})
-
 }
 
 // freshReconcileTarget fetches the latest remote and resolves the remote+branch

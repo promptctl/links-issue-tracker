@@ -68,14 +68,15 @@ func TestMaybeRecordAutomatedCommandTraceWritesTraceRefFile(t *testing.T) {
 	t.Setenv(automationReasonEnvVar, "git push triggered the managed pre-push sync")
 	t.Setenv(automationTraceRefFileEnvVar, traceRefFile)
 
-	traceRef, err := maybeRecordAutomatedCommandTrace(testEnv(),
+	traceRef, err := maybeRecordAutomatedCommandTrace(
+		testEnv(),
 		ws,
 		"lit sync push --remote origin",
 		"mirror Dolt data to the configured git remote",
 		"ok",
 		"",
-		map[string]string{"remote": "origin", "sync_branch": "master"})
-
+		map[string]string{"remote": "origin", "sync_branch": "master"},
+	)
 	if err != nil {
 		t.Fatalf("maybeRecordAutomatedCommandTrace() error = %v", err)
 	}

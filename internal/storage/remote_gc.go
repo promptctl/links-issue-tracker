@@ -18,6 +18,10 @@ type RemoteGC struct {
 	// CollectedBytes, the collected table files, which the remote holds
 	// exactly once the GC replaced its table set. Zero until collected.
 	BytesBefore, CollectedBytes int64
+	// LeftoverScratch is whether the GC found the scratch store of one that
+	// was killed before it could remove it, and removed it before building
+	// its own.
+	LeftoverScratch bool
 }
 
 // RemoteGCOutcome is how far the remote's GC got before a write landed on the
@@ -46,5 +50,6 @@ func (g RemoteGC) EventRecord() map[string]any {
 		"remote_gc.dropped_branches": g.DroppedBranches,
 		"remote_gc.bytes_before":     g.BytesBefore,
 		"remote_gc.collected_bytes":  g.CollectedBytes,
+		"remote_gc.leftover_scratch": g.LeftoverScratch,
 	}
 }

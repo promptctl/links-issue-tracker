@@ -117,7 +117,6 @@ func recordSyncCommandTrace(env environ.Env, ws workspace.Info, command, decisio
 		BuildNote: resolveBuildStatusNote(time.Now()),
 		Metadata:  metadata,
 	})
-
 }
 
 // engineOpenContentionError marks a failure as a store acquisition starved by
@@ -189,7 +188,6 @@ func recordEngineOpenContentionTrace(ctx context.Context, env environ.Env, err e
 		Reason:    err.Error(),
 		BuildNote: resolveBuildStatusNote(time.Now()),
 	})
-
 }
 
 // recordSyncHeldTrace records a held, agent-actionable outcome (a prose
@@ -211,5 +209,4 @@ func recordSyncHeldTrace(env environ.Env, ws workspace.Info, command string, fai
 		BuildNote: failure.Failure.BuildNote,
 		Metadata:  metadata,
 	})
-
 }

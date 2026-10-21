@@ -193,8 +193,10 @@ reason-to-code list is in inventory-cli-issue.md §1.8.
 
 `cmd/lit/main.go` reads the environment once, `environ.Of(os.Environ())`, into the
 `Invocation`'s `Env`; the code `cli.Run` reaches reads each variable from it (`Env.Get`), and
-names no `os.Getenv`, `os.LookupEnv`, `os.Environ`, `os.UserHomeDir`, `os.UserConfigDir` or
-`os.TempDir` (`TestNothingRunReachesReadsTheProcess`).
+names no `os.Getenv`, `os.LookupEnv`, `os.Environ`, `os.ExpandEnv`, `os.UserHomeDir`,
+`os.UserConfigDir`, `os.UserCacheDir`, `os.TempDir`, `syscall.Getenv` or `syscall.Environ`
+(`TestNothingRunReachesReadsTheProcess`). Two reads stay the process's: the `PATH` os/exec
+finds a child's program on, and Dolt's own (`internal/environ/environ.go`).
 
 ### 3.1 Read by the shipped binary
 
@@ -216,6 +218,10 @@ names no `os.Getenv`, `os.LookupEnv`, `os.Environ`, `os.UserHomeDir`, `os.UserCo
 
 ### 3.2 Environment variables the binary **writes** for child processes
 
+- Every child started in an absolute directory (`Env.Command`, `Env.CommandContext`,
+  `Env.Git`, `internal/environ/environ.go`): the invocation's environment with
+  `PWD=<that directory>` appended, as os/exec appends it for a child that inherits the
+  process; none on windows and plan9 (`internal/environ/environ.go`).
 - Detached background mirror (`mirrorEnv`, `internal/cli/sync_bg.go`): the invocation's
   environment with `LNKS_AUTOMATION_TRIGGER=`, `LNKS_AUTOMATION_REASON=`, and
   `LNKS_AUTOMATION_TRACE_REF_FILE=` prefixes **stripped** (`internal/cli/sync_bg.go`),
@@ -223,7 +229,7 @@ names no `os.Getenv`, `os.LookupEnv`, `os.Environ`, `os.UserHomeDir`, `os.UserCo
   `LNKS_AUTOMATION_REASON=on-change cadence mirrored after a mutating command`
   (`internal/cli/sync_bg.go`).
 - Owner-notify hook (`runOwnerNotifyHook`, `internal/cli/owner_notify.go`): the hook is
-  run as `sh -c <hook>` with `cmd.Dir = repoRoot` (`internal/cli/owner_notify.go`)
+  run as `sh -c <hook>` in `repoRoot` (`internal/cli/owner_notify.go`)
   and the invocation's environment plus:
   `LIT_NOTIFY_KIND`, `LIT_NOTIFY_SUMMARY`, `LIT_NOTIFY_REMOTE`, `LIT_NOTIFY_BRANCH`,
   `LIT_NOTIFY_REPO` (`internal/cli/owner_notify.go`). The hook is time-boxed by

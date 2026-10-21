@@ -1,8 +1,11 @@
 // Package environ is the environment one lit run was given: its KEY=VALUE
 // list, read the way the os package reads the process's own. cmd/lit's main
 // builds it from os.Environ once, and everything below takes it as a
-// parameter, so no code a run can reach reads the process's environment and
-// two runs in one process cannot see each other's.
+// parameter, so no code of this module a run can reach reads the process's
+// environment and two runs in one process cannot see each other's. Two reads
+// stay the process's: the PATH os/exec finds a child's program on, and
+// Dolt's own, which include the environment of the git it launches for a
+// git remote.
 // [LAW:effects-at-boundaries] [LAW:no-shared-mutable-globals]
 package environ
 
@@ -11,6 +14,7 @@ import (
 	"errors"
 	"io"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
@@ -18,11 +22,20 @@ import (
 	"github.com/dolthub/dolt/go/libraries/utils/gitcmd"
 )
 
-// Env is an environment, as os.Environ lists one. The zero Env is the empty
-// environment, which `env -i` runs a program in.
+// Env is an environment, as os.Environ lists one. The zero Env is no
+// environment at all, the value a literal that leaves its Env out holds: its
+// methods read it as the empty one, and cli.Run refuses an invocation that
+// carries it. Of(nil) is the empty environment, which `env -i` runs a
+// program in.
 type Env struct {
 	vars []string
 	goos string
+}
+
+// IsZero reports whether e is the zero Env, which no Env built by Of or
+// derived from one is.
+func (e Env) IsZero() bool {
+	return e.goos == ""
 }
 
 // Of is the environment list names, in os.Environ's KEY=VALUE form.
@@ -94,30 +107,45 @@ func (e Env) List() []string {
 }
 
 // Command, CommandContext and Git are the one way code a run can reach builds
-// a child process: each runs the child in this environment, so no caller sets
-// Env itself or can leave it nil. TestNothingRunReachesReadsTheProcess refuses
-// every other way to build one. [LAW:single-enforcer]
+// a child process: each runs the child in dir ("" is the caller's) in this
+// environment, so no caller sets Env itself or can leave it nil.
+// TestNothingRunReachesReadsTheProcess refuses every other way to build one.
+// [LAW:single-enforcer]
 
-// Command is exec.Command run in this environment.
-func (e Env) Command(name string, args ...string) *exec.Cmd {
+// Command is exec.Command run in dir in this environment.
+func (e Env) Command(dir, name string, args ...string) *exec.Cmd {
 	cmd := exec.Command(name, args...)
-	cmd.Env = e.List()
+	cmd.Dir, cmd.Env = dir, e.in(dir)
 	return cmd
 }
 
-// CommandContext is exec.CommandContext run in this environment.
-func (e Env) CommandContext(ctx context.Context, name string, args ...string) *exec.Cmd {
+// CommandContext is exec.CommandContext run in dir in this environment.
+func (e Env) CommandContext(ctx context.Context, dir, name string, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Env = e.List()
+	cmd.Dir, cmd.Env = dir, e.in(dir)
 	return cmd
 }
 
-// Git is gitcmd.Command run in dir ("" is the caller's) on stdin (nil is
-// none) in this environment. It takes no gitcmd.Spec, whose Env a caller could
-// set only to have it replaced: the environment is this Env, whole, and adding
-// to it is With's job.
+// Git is gitcmd.Command run in dir on stdin (nil is none) in this
+// environment. It takes no gitcmd.Spec, whose Env a caller could set only to
+// have it replaced: the environment is this Env, whole, and adding to it is
+// With's job.
 func (e Env) Git(ctx context.Context, dir string, stdin io.Reader, args ...string) *gitcmd.Cmd {
-	return gitcmd.Command(ctx, gitcmd.Spec{Dir: dir, Env: e.List(), Stdin: stdin}, args...)
+	return gitcmd.Command(ctx, gitcmd.Spec{Dir: dir, Env: e.in(dir), Stdin: stdin}, args...)
+}
+
+// in is the list a child started in dir runs with: this Env's, with PWD
+// naming dir, as os/exec adds it for a child that inherits the process, so
+// the child's $PWD is the directory it runs in and not lit's. "" is the
+// caller's own directory, for which os/exec adds none either, and a relative
+// dir could be made absolute only from the process's working directory;
+// windows and plan9 get no PWD, as os/exec gives them none.
+func (e Env) in(dir string) []string {
+	list := e.List()
+	if filepath.IsAbs(dir) && e.goos != "windows" && e.goos != "plan9" {
+		list = append(list, "PWD="+filepath.Clean(dir))
+	}
+	return list
 }
 
 func (e Env) sameKey(a, b string) bool {

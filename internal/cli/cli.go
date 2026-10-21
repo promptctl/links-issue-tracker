@@ -56,6 +56,12 @@ func Run(ctx context.Context, inv Invocation) (err error) {
 }
 
 func dispatch(ctx context.Context, inv Invocation) error {
+	// An invocation built without an environment is refused as one, as Path
+	// refuses one built without a working directory, rather than run in the
+	// empty environment its zero Env would read as. [LAW:no-silent-failure]
+	if inv.Env.IsZero() {
+		return errors.New("the invocation was given no environment")
+	}
 	stdout := inv.Stdout
 	normalizedArgs, err := parseGlobalArgs(inv.Args)
 	if err != nil {

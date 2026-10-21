@@ -723,14 +723,15 @@ func performSyncPush(ctx, completionCtx context.Context, env environ.Env, sessio
 	// [LAW:one-source-of-truth] Hook-triggered sync traces reuse the shared automation trace writer instead of shell-local trace formats.
 	// The pre-push hook reads the trace ref through the ref-file the writer
 	// itself maintains, so only the write error is kept. [LAW:no-silent-failure]
-	_, traceRecordErr := maybeRecordAutomatedCommandTrace(env,
+	_, traceRecordErr := maybeRecordAutomatedCommandTrace(
+		env,
 		ws,
 		formatCommand(syncCommandArgs),
 		"mirror Dolt data to the configured git remote",
 		traceStatus,
 		traceReason,
-		traceMetadata)
-
+		traceMetadata,
+	)
 	// The durable, unconditional counterpart: recorded whether or not
 	// LNKS_AUTOMATION_TRIGGER is set, so an interactive `lit sync push` (and the
 	// on-change mirror, which shares this function) both leave a trace behind.
@@ -767,7 +768,6 @@ func performSyncPush(ctx, completionCtx context.Context, env environ.Env, sessio
 		BuildNote: resolveBuildStatusNote(time.Now()),
 		Metadata:  traceMetadata,
 	})
-
 	return outcome, nil
 }
 

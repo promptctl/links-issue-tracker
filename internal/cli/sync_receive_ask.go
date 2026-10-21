@@ -265,5 +265,4 @@ func confirmRemoteUnmoved(ctx context.Context, env environ.Env, ws workspace.Inf
 	recordReceiveDecided(ctx, env, ws, receiveDecisionRemoteUnmoved,
 		"automatic receive found the remote unmoved since the last receive; nothing fetched",
 		observed.remote, nil)
-
 }

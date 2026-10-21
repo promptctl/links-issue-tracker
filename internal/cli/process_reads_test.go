@@ -19,12 +19,14 @@ import (
 // by import path: Run is handed its own copies in the Invocation cmd/lit's
 // main builds, and a second reader would make two runs in one process see each
 // other's. filepath.Abs is here because it reads os.Getwd for a relative path,
-// and os.TempDir because it reads TMPDIR, inside the standard library where a
-// scan of this module cannot see it.
+// os.ExpandEnv because it reads os.Getenv, and os.TempDir and the user
+// directories because they read the variables that name them, inside the
+// standard library where a scan of this module cannot see it.
 // [LAW:effects-at-boundaries] [LAW:no-shared-mutable-globals]
 var processReads = map[string][]string{
-	"os":            {"Getwd", "Args", "Stdin", "Getenv", "LookupEnv", "Environ", "UserHomeDir", "UserConfigDir", "TempDir"},
+	"os":            {"Getwd", "Args", "Stdin", "Getenv", "LookupEnv", "Environ", "ExpandEnv", "UserHomeDir", "UserConfigDir", "UserCacheDir", "TempDir"},
 	"path/filepath": {"Abs"},
+	"syscall":       {"Getenv", "Environ"},
 }
 
 // childBuilders are the ways to build a child process. A child built with one
@@ -224,8 +226,9 @@ func TestProcessScansFindEverySpelling(t *testing.T) {
 		{"aliased import", processReadsIn, `import sys "os"; var r = sys.Stdin`, []string{"os.Stdin"}},
 		{"filepath.Abs", processReadsIn, `import "path/filepath"; func f() { filepath.Abs("x") }`, []string{"path/filepath.Abs"}},
 		{"dot import", processReadsIn, `import . "os"; var r = Stdin`, []string{"dot import of os"}},
-		{"environment reads", processReadsIn, `import "os"; func f() { os.Getenv("A"); os.LookupEnv("A"); _ = os.Environ() }`, []string{"os.Getenv", "os.LookupEnv", "os.Environ"}},
-		{"directories the environment names", processReadsIn, `import "os"; func f() { os.UserHomeDir(); os.UserConfigDir(); os.TempDir() }`, []string{"os.UserHomeDir", "os.UserConfigDir", "os.TempDir"}},
+		{"environment reads", processReadsIn, `import "os"; func f() { os.Getenv("A"); os.LookupEnv("A"); _ = os.Environ(); os.ExpandEnv("$A") }`, []string{"os.Getenv", "os.LookupEnv", "os.Environ", "os.ExpandEnv"}},
+		{"syscall environment reads", processReadsIn, `import "syscall"; func f() { syscall.Getenv("A"); _ = syscall.Environ() }`, []string{"syscall.Getenv", "syscall.Environ"}},
+		{"directories the environment names", processReadsIn, `import "os"; func f() { os.UserHomeDir(); os.UserConfigDir(); os.UserCacheDir(); os.TempDir() }`, []string{"os.UserHomeDir", "os.UserConfigDir", "os.UserCacheDir", "os.TempDir"}},
 		{"other os names", processReadsIn, `import "os"; var w = os.Stdout; func f() { os.Getpid() }`, nil},
 		{"same name, other package", processReadsIn, `import os "example.com/notos"; var r = os.Stdin`, nil},
 		{"exec constructors", childBuildsIn, `import "os/exec"; func f() { exec.Command("x"); exec.CommandContext(nil, "x") }`, []string{"os/exec.Command", "os/exec.CommandContext"}},

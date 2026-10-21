@@ -2,6 +2,9 @@ package store
 
 import (
 	"context"
+	"errors"
+	"io/fs"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
@@ -175,9 +178,10 @@ func TestAPushPastTheBoundCollectsTheRemote(t *testing.T) {
 
 	event := fired.EventValue()
 	want := map[string]any{
-		"remote_gc.outcome":         string(storage.RemoteGCReplaced),
-		"remote_gc.bytes_before":    gc.BytesBefore,
-		"remote_gc.collected_bytes": bytes,
+		"remote_gc.outcome":          string(storage.RemoteGCReplaced),
+		"remote_gc.bytes_before":     gc.BytesBefore,
+		"remote_gc.collected_bytes":  bytes,
+		"remote_gc.leftover_scratch": false,
 	}
 	for key, value := range want {
 		if event[key] != value {
@@ -215,7 +219,8 @@ func landReRootWithoutGC(t *testing.T, ctx context.Context, alpha string, keep u
 // remote that also holds a branch other than the sync branch. The remote's
 // head is no longer the one alpha re-rooted, so the GC collects nothing and
 // writes nothing: the remote's tree is untouched, the other branch is still
-// there, and the peer's push is the head.
+// there, and the peer's push is the head. The scratch store a killed GC left
+// beside the dolt root is removed by this one, which says it found it.
 func TestARemoteAPeerWroteToAfterTheReRootKeepsItsTableFiles(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -230,14 +235,21 @@ func TestARemoteAPeerWroteToAfterTheReRootKeepsItsTableFiles(t *testing.T) {
 	bravoHead := headAt(t, ctx, bravo)
 	files, bytes := dataTree(t, gitDir)
 
+	leftover := filepath.Join(workspaceStorageDir(alpha), remoteGCScratchName)
+	if err := os.MkdirAll(filepath.Join(leftover, "workspace"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	st := openSyncOrFatal(t, ctx, alpha)
 	gc, err := st.collectRemote(ctx, remoteName(t, "origin"), "master", landed.Head)
 	if closeErr := st.Close(); err == nil {
 		err = closeErr
 	}
-	want := storage.RemoteGC{Outcome: storage.RemoteGCMoved, BytesBefore: bytes}
+	want := storage.RemoteGC{Outcome: storage.RemoteGCMoved, BytesBefore: bytes, LeftoverScratch: true}
 	if err != nil || !reflect.DeepEqual(gc, want) {
 		t.Fatalf("collectRemote over a remote bravo pushed to = %+v, %v; want %+v", gc, err, want)
+	}
+	if _, err := os.Lstat(leftover); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("the scratch store a killed GC left is still there after this GC: %v", err)
 	}
 	if gotFiles, gotBytes := dataTree(t, gitDir); gotFiles != files || gotBytes != bytes {
 		t.Fatalf("the remote's tree went from %d files of %d bytes to %d of %d; want it untouched", files, bytes, gotFiles, gotBytes)

@@ -368,5 +368,4 @@ func recordInitSyncTrace(env environ.Env, ws workspace.Info, outcome initSyncOut
 		BuildNote: resolveBuildStatusNote(now),
 		Metadata:  metadata,
 	})
-
 }

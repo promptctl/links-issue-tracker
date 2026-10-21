@@ -195,7 +195,6 @@ func maybeNotifyOwner(ctx context.Context, env environ.Env, ws workspace.Info, e
 			BuildNote: resolveBuildStatusNote(time.Now()),
 			Metadata:  metadata,
 		})
-
 		return
 	}
 	if err := writeMarkerAtomic(markerPath, []byte(ev.fingerprint()+"\n")); err != nil {
@@ -209,7 +208,6 @@ func maybeNotifyOwner(ctx context.Context, env environ.Env, ws workspace.Info, e
 		BuildNote: resolveBuildStatusNote(time.Now()),
 		Metadata:  metadata,
 	})
-
 }
 
 // runOwnerNotifyHook executes the configured command through the shell with the
@@ -224,14 +222,13 @@ func runOwnerNotifyHook(ctx context.Context, env environ.Env, hook, repoRoot str
 		"LIT_NOTIFY_REMOTE="+ev.Remote,
 		"LIT_NOTIFY_BRANCH="+ev.Branch,
 		"LIT_NOTIFY_REPO="+repoRoot,
-	).CommandContext(hookCtx, "sh", "-c", hook)
+	).CommandContext(hookCtx, repoRoot, "sh", "-c", hook)
 	// The deadline kills the sh, but CombinedOutput also waits for the output
 	// pipe to close — a hook's backgrounded child inheriting stdout would hold
 	// the caller past the cap indefinitely. WaitDelay forces Wait to abandon
 	// the pipe shortly after the kill, making the timeout the real bound.
 	// [LAW:no-ambient-temporal-coupling]
 	cmd.WaitDelay = ownerNotifyPipeWaitDelay
-	cmd.Dir = repoRoot
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		if detail := strings.TrimSpace(string(out)); detail != "" {
@@ -275,7 +272,6 @@ func observePushOutcomeForOwner(ctx context.Context, env environ.Env, ws workspa
 			Remote:  rec.Remote,
 			Branch:  rec.Branch,
 		})
-
 	}
 }
 

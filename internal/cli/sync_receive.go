@@ -152,7 +152,6 @@ func receiveWhenQuiet(ctx context.Context, env environ.Env, ws workspace.Info, p
 		recordReceiveError(ctx, env, ws, storage.RemoteName{}, fmt.Errorf(
 			"spawning command (pid %d) still running after %s; skipping the receive to avoid racing its engine",
 			parentPID, workerParentWaitTimeout))
-
 		return 0
 	}
 	waited, err := awaitNoLiveMirror(ctx, ws, receiveMirrorWait())
@@ -316,7 +315,6 @@ func receiveOnce(ctx context.Context, env environ.Env, ws workspace.Info) {
 		recordReceiveDecided(ctx, env, ws, receiveDecisionLockHeld,
 			"another automatic receive holds the receive lock; it fetches what this one would have",
 			observed.remote, nil)
-
 		return
 	}
 	defer func() {
@@ -844,13 +842,15 @@ func performInlineReconcile(ctx context.Context, env environ.Env, session syncSe
 	} else if result.State == storage.SyncReconcileIDCollision {
 		traceMetadata["collisions"] = strconv.Itoa(len(result.Collisions))
 	}
-	if _, traceErr := maybeRecordAutomatedCommandTrace(env,
+	if _, traceErr := maybeRecordAutomatedCommandTrace(
+		env,
 		ws,
 		"lit sync reconcile",
 		"reconcile a diverged clone into linear history with the field-aware merge engine",
 		traceStatus,
 		traceReason,
-		traceMetadata); traceErr != nil {
+		traceMetadata,
+	); traceErr != nil {
 		fmt.Fprintf(os.Stderr, "lit: automatic reconcile trace not recorded: %v\n", traceErr)
 	}
 	// The durable, unconditional counterpart — same reasoning as performSyncReceive's:
@@ -942,7 +942,6 @@ func recordReceiveTrace(env environ.Env, ws workspace.Info, decision, status, re
 		BuildNote: resolveBuildStatusNote(time.Now()),
 		Metadata:  metadata,
 	})
-
 	return traceRecordErr
 }
 

@@ -174,8 +174,7 @@ func spawnDetachedWorker(ws workspace.Info, subcommand, logName string, env envi
 	if err != nil {
 		return err
 	}
-	cmd := env.Command(self, "sync", subcommand, "--parent-pid", strconv.Itoa(parentPID))
-	cmd.Dir = ws.RootDir
+	cmd := env.Command(ws.RootDir, self, "sync", subcommand, "--parent-pid", strconv.Itoa(parentPID))
 	cmd.Stdin = nil
 	cmd.ExtraFiles = holds
 	// Route the detached worker's output to a durable log. [LAW:no-silent-failure]
@@ -293,7 +292,6 @@ func backgroundMirrorLeaf() wsLeaf {
 			return completeMirrorWithoutAttempt(ctx, inv.Env, ws, fmt.Errorf(
 				"spawning command (pid %d) still running after %s; skipping mirror to avoid racing its engine",
 				parentPID, workerParentWaitTimeout), stopAnswering)
-
 		}
 
 		for {
@@ -984,13 +982,15 @@ func completeMirrorWithoutAttempt(ctx context.Context, env environ.Env, ws works
 // is completeMirrorWithoutAttempt's job (a failure before it) — this function
 // writing it too would double-complete one attempt.
 func recordMirrorTraceError(env environ.Env, ws workspace.Info, cause error) {
-	if _, traceErr := maybeRecordAutomatedCommandTrace(env,
+	if _, traceErr := maybeRecordAutomatedCommandTrace(
+		env,
 		ws,
 		"lit sync push",
 		"mirror Dolt data to the configured git remote",
 		"error",
 		cause.Error(),
-		map[string]string{"error": cause.Error()}); traceErr != nil {
+		map[string]string{"error": cause.Error()},
+	); traceErr != nil {
 		fmt.Fprintf(os.Stderr,
 			"lit: on-change mirror could not record failure trace (%v); original error: %v\n",
 			traceErr, cause)
