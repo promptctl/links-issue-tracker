@@ -462,7 +462,7 @@ func TestCloneTree_PreservesContentAndStructure(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(src, "nested", "deeper", "c"), []byte("gamma"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := cloneTree(context.Background(), src, dst); err != nil {
+	if err := cloneTree(context.Background(), src, dst, cloneOmits); err != nil {
 		t.Fatal(err)
 	}
 	cases := []struct {

@@ -39,7 +39,9 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -97,8 +99,8 @@ func producerBeaconPath(snapshotsDir string) string {
 // message text as context guidance rather than the contract.
 var ErrSnapshotsBusy = errors.New("snapshot producer beacon busy")
 
-// Take clones databaseDir into <DirFor(databaseDir)>/<name>/ and returns the
-// snapshot. label is optional ("" = no suffix); non-safe characters are normalized.
+// Take clones databaseDir, less what restoring it never needs (snapshotOmits),
+// into <DirFor(databaseDir)>/<name>/ and returns the snapshot. label is optional ("" = no suffix); non-safe characters are normalized.
 // Atomicity: the clone lands in <name>.tmp first, then renames to <name> on
 // success — an interrupt leaves no half-snapshot in the listing, and whatever
 // .tmp/.reserve residue an uncleanable death (SIGKILL, the interrupt guard's
@@ -168,7 +170,7 @@ func Take(ctx context.Context, databaseDir, label string) (Snapshot, error) {
 		return Snapshot{}, err
 	}
 	defer os.Remove(reserved.reservePath)
-	if err := cloneTree(ctx, databaseDir, reserved.tmpPath); err != nil {
+	if err := cloneTree(ctx, databaseDir, reserved.tmpPath, snapshotOmits); err != nil {
 		_ = os.RemoveAll(reserved.tmpPath)
 		return Snapshot{}, fmt.Errorf("clone tree: %w", err)
 	}
@@ -179,11 +181,13 @@ func Take(ctx context.Context, databaseDir, label string) (Snapshot, error) {
 	return Snapshot{Path: reserved.finalPath, Name: reserved.name, Created: reserved.created}, nil
 }
 
-// CloneTree copies databaseDir to dst the way Take does — the platform's
-// copy-on-write clone when the filesystem offers one, a recursive copy
-// otherwise — but as a bare copy rather than a snapshot: dst is the caller's
-// path, nothing is reserved, listed, or collected, and the caller owns the
-// tree's whole lifetime. It exists for a copy that is consumed and discarded
+// CloneTree copies databaseDir to dst with Take's copy engine — the
+// platform's copy-on-write clone when the filesystem offers one, a recursive
+// copy otherwise — but as a bare copy rather than a snapshot: dst is the
+// caller's path, nothing is reserved, listed, or collected, and the caller
+// owns the tree's whole lifetime. It keeps the remote cache a snapshot leaves
+// out (cloneOmits, not snapshotOmits), because the copy is fetched and pushed
+// from at once. It exists for a copy that is consumed and discarded
 // within one operation (the on-change mirror clones the store, pushes from the
 // clone, and removes it), which the snapshot family's retention, naming and
 // residue machinery would only misdescribe. [LAW:decomposition]
@@ -195,7 +199,7 @@ func CloneTree(ctx context.Context, databaseDir, dst string) error {
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return ctxErr
 	}
-	if err := cloneTree(ctx, databaseDir, dst); err != nil {
+	if err := cloneTree(ctx, databaseDir, dst, cloneOmits); err != nil {
 		_ = os.RemoveAll(dst)
 		return err
 	}
@@ -616,21 +620,84 @@ func sanitizeLabel(label string) string {
 	return strings.Trim(clean, "-")
 }
 
-// isDoltJournalLockRel reports whether rel — a path relative to the database
-// root being copied — is a Dolt journal LOCK file: <database>/.dolt/noms/LOCK.
-// The suffix shape is the whole definition; any path of that shape under a
-// Dolt storage directory is that database's journal lock, whatever the
-// database is named.
-func isDoltJournalLockRel(rel string) bool {
-	return strings.HasSuffix(filepath.ToSlash(rel), "/.dolt/noms/LOCK")
+// RemoteCacheDirName is the directory inside a database's .dolt where Dolt
+// keeps its mirror of every git-backed remote (dbfactory/git_remote.go), and
+// TempTableFilesDirName the one where a Dolt process stages the table files it
+// is building (env/environment.go). Dolt exports neither name. They are
+// declared here, in the lowest package that describes a Dolt storage
+// directory's layout, and every package that reaches either directory reads
+// them from here. [LAW:one-source-of-truth]
+const (
+	RemoteCacheDirName    = "git-remote-cache"
+	TempTableFilesDirName = "temptf"
+)
+
+// omission is what a copy leaves out of the tree it copies: patterns,
+// slash-separated and relative to the copied root, in path.Match's syntax. A
+// directory a pattern matches is left out whole. Which copy leaves out what
+// is a value its caller passes, so the one copy engine serves every caller.
+// [LAW:dataflow-not-control-flow]
+type omission []string
+
+// cloneOmits is what every copy of a Dolt storage directory leaves out:
+// Dolt's journal LOCK file. It is contentless (the lock lives on holders'
+// open file descriptions, never in bytes) and Dolt recreates it at every
+// engine open, so a copy neither needs nor misses it. On Windows the copier's
+// own journal hold is a MANDATORY LockFileEx, and reading the file through a
+// second handle would either fail the copy outright or release the hold
+// mid-walk, reopening the tear window the hold exists to close.
+var cloneOmits = omission{"*/.dolt/noms/LOCK"}
+
+// snapshotOmits is what a recovery snapshot also leaves out: the bytes
+// restoring it never needs. The remote cache is a mirror of the remote that
+// the first fetch after a restore clones again, and the temp table files are
+// what a Dolt process leaves when it dies before removing them. Together
+// they were 77% of a snapshot of this repository's store (links-scale-dy46.5u8).
+var snapshotOmits = append(slices.Clone(cloneOmits),
+	"*/.dolt/"+RemoteCacheDirName,
+	"*/.dolt/"+TempTableFilesDirName,
+)
+
+// omits reports whether the copy leaves out rel, a path relative to the
+// copied root. A malformed pattern is a defect in this package's own
+// declarations, so it panics rather than quietly matching nothing.
+func (o omission) omits(rel string) bool {
+	for _, pattern := range o {
+		matched, err := path.Match(pattern, filepath.ToSlash(rel))
+		if err != nil {
+			panic(fmt.Sprintf("dbsnapshot: omission pattern %q: %v", pattern, err))
+		}
+		if matched {
+			return true
+		}
+	}
+	return false
 }
 
-// walkAndCopy creates dst as a tree-copy of src using copyFile for each
-// regular file. Directories are recreated with their source perm bits.
+// removeFrom deletes from dst, a finished copy, every path the omission
+// leaves out. It is how a copy made in one piece (Darwin's Clonefile) comes to
+// hold what a walk that skipped those paths would have.
+func (o omission) removeFrom(dst string) error {
+	for _, pattern := range o {
+		matches, err := filepath.Glob(filepath.Join(dst, filepath.FromSlash(pattern)))
+		if err != nil {
+			return fmt.Errorf("dbsnapshot: omission pattern %q: %w", pattern, err)
+		}
+		for _, match := range matches {
+			if err := os.RemoveAll(match); err != nil {
+				return fmt.Errorf("leave %s out of the copy: %w", match, err)
+			}
+		}
+	}
+	return nil
+}
+
+// walkAndCopy creates dst as a tree-copy of src, less what omit leaves out,
+// using copyFile for each regular file. Directories are recreated with their source perm bits.
 // Symlinks are recreated; other special entries error out. The per-entry ctx
 // gate is what lets an interrupt abandon a long fallback copy mid-tree and
 // hand control back to Take's cleanup within the interrupt guard's grace.
-func walkAndCopy(ctx context.Context, src, dst string, copyFile func(ctx context.Context, src, dst string) error) error {
+func walkAndCopy(ctx context.Context, src, dst string, omit omission, copyFile func(ctx context.Context, src, dst string) error) error {
 	return filepath.WalkDir(src, func(srcPath string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -641,6 +708,12 @@ func walkAndCopy(ctx context.Context, src, dst string, copyFile func(ctx context
 		rel, relErr := filepath.Rel(src, srcPath)
 		if relErr != nil {
 			return relErr
+		}
+		if omit.omits(rel) {
+			if d.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
 		}
 		dstPath := filepath.Join(dst, rel)
 		switch {
@@ -662,19 +735,6 @@ func walkAndCopy(ctx context.Context, src, dst string, copyFile func(ctx context
 			}
 			return os.Symlink(target, dstPath)
 		case d.Type().IsRegular():
-			// Dolt's journal LOCK file is the one entry the copy omits: it is
-			// contentless (the lock lives on holders' open file descriptions,
-			// never in bytes) and Dolt recreates it at every engine open, so
-			// a restored snapshot neither needs nor misses it — while on
-			// Windows the snapshot's own journal hold is a MANDATORY
-			// LockFileEx, and reading the file through a second handle here
-			// would either fail the copy outright or release the hold
-			// mid-walk, reopening the tear window the hold exists to close.
-			// (Darwin's single-syscall Clonefile fast path may still carry
-			// the file; under POSIX advisory flock that is inert.)
-			if isDoltJournalLockRel(rel) {
-				return nil
-			}
 			return copyFile(ctx, srcPath, dstPath)
 		default:
 			return fmt.Errorf("dbsnapshot: unsupported file type at %s: %v", srcPath, d.Type())

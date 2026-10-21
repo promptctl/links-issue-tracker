@@ -19,6 +19,7 @@ import (
 	"github.com/dolthub/dolt/go/libraries/doltcore/dbfactory"
 	"github.com/dolthub/dolt/go/libraries/utils/gitcmd"
 
+	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -37,7 +38,7 @@ import (
 
 // remoteCacheDirName is dbfactory's cache directory, relative to the database
 // directory that holds `.dolt`.
-const remoteCacheDirName = "git-remote-cache"
+const remoteCacheDirName = dbsnapshot.RemoteCacheDirName
 
 // mirrorGit builds "git <args...>" against the mirror at gitDir, run as spec
 // says. It is the one way lit runs git on a mirror.

@@ -1791,7 +1791,7 @@ Base: `/Users/bmf/code/links-issue-tracker/internal/dbsnapshot/`.
 | `clone_other.go` | `//go:build !darwin && !linux` | `clone_other.go` |
 | `snapshot_unix_test.go` | `//go:build unix` | `snapshot_unix_test.go` |
 
-Each `clone_*.go` defines exactly one function, `cloneTree(ctx context.Context, src, dst string) error` — Darwin `clone_darwin.go`, Linux `clone_linux.go`, other `clone_other.go`. Platform variance is link-time file selection, not a runtime branch.
+Each `clone_*.go` defines exactly one function, `cloneTree(ctx context.Context, src, dst string, omit omission) error` — Darwin `clone_darwin.go`, Linux `clone_linux.go`, other `clone_other.go`. Platform variance is link-time file selection, not a runtime branch.
 
 External dependency `github.com/promptctl/primitives/filelock` (`snapshot.go`, `residue.go`): `Acquire(ctx, lockPath string, exclusive bool, maxAttempts int, delay time.Duration) (func() error, bool, error)` returns `(release, true, nil)` on acquisition, `(nil, false, nil)` on contention, `(nil, false, err)` on real failure; `maxAttempts == 1` is a non-blocking probe.
 
@@ -1808,12 +1808,14 @@ External dependency `github.com/promptctl/primitives/filelock` (`snapshot.go`, `
 - `func PruneMatching(databaseDir string, keep int, match func(name string) bool) error` — `snapshot.go`
 - `func IsProducerArtifactName(name string) bool` — `snapshot.go`
 
-Unexported: `reservedPaths{created time.Time; name, finalPath, tmpPath, reservePath string}` (`snapshot.go`); `producerBeaconPath`; `reserveSnapshotPaths`; `pathFree`; `formatName`; `validateSnapshotName`; `isCollectibleResidue`; `isCollectibleArtifactName`; `isCollectorCondemnedName`; `parseName`; `parsePositiveDigits`; `isMintableLabel`; `sanitizeLabel`; `isDoltJournalLockRel`; `walkAndCopy`; `plainFileCopy`; `copyWithContext`; `collectOrphanedResidue`, `condemnResidue` (`residue.go`); `ficloneOrCopy` (Linux, `clone_linux.go`).
+Unexported: `reservedPaths{created time.Time; name, finalPath, tmpPath, reservePath string}` (`snapshot.go`); `producerBeaconPath`; `reserveSnapshotPaths`; `pathFree`; `formatName`; `validateSnapshotName`; `isCollectibleResidue`; `isCollectibleArtifactName`; `isCollectorCondemnedName`; `parseName`; `parsePositiveDigits`; `isMintableLabel`; `sanitizeLabel`; `omission` (`[]string`, with methods `omits` and `removeFrom`); `cloneOmits`, `snapshotOmits` (vars); `walkAndCopy`; `plainFileCopy`; `copyWithContext`; `collectOrphanedResidue`, `condemnResidue` (`residue.go`); `ficloneOrCopy` (Linux, `clone_linux.go`).
 
 ### 13.3 Constants
 
 | Identifier | Value | Ref |
 |---|---|---|
+| `RemoteCacheDirName` (exported) | `"git-remote-cache"` | `snapshot.go` |
+| `TempTableFilesDirName` (exported) | `"temptf"` | `snapshot.go` |
 | `producerBeaconName` | `".links-snapshot-producer.lock"` | `snapshot.go` |
 | `producerBeaconRetryAttempts` | `20` | `snapshot.go` |
 | `producerBeaconRetryDelay` | `50 * time.Millisecond` | `snapshot.go` |
@@ -1886,7 +1888,7 @@ Where `snapshotsDir` comes from: no exported function takes a snapshots director
 7. **Deferred beacon release.** Release error → stderr `"lit: could not release snapshot producer beacon (residue collection defers until this process exits): %v\n"`, never converted into a returned error.
 8. `reserveSnapshotPaths(snapshotsDir, label)`; error returned verbatim.
 9. **Deferred `os.Remove(reserved.reservePath)`** — LIFO after the beacon-release defer, so the `.reserve` dir is removed *before* the beacon drops.
-10. `cloneTree(ctx, databaseDir, reserved.tmpPath)`; on error `os.RemoveAll(reserved.tmpPath)` (error discarded) then `"clone tree: %w"`.
+10. `cloneTree(ctx, databaseDir, reserved.tmpPath, snapshotOmits)`; on error `os.RemoveAll(reserved.tmpPath)` (error discarded) then `"clone tree: %w"`.
 11. `os.Rename(reserved.tmpPath, reserved.finalPath)`; on error `os.RemoveAll(reserved.tmpPath)` (discarded) then `"rename tmp to final: %w"`.
 12. Return `Snapshot{Path: reserved.finalPath, Name: reserved.name, Created: reserved.created}`. `Created` is the reservation candidate time (UTC), identical to the timestamp encoded in the name.
 
@@ -1909,20 +1911,20 @@ Tests: `snapshot_test.go` (reserve, materialize `finalPath`, reserve again → d
 ### 13.9 Copy engine, syscalls, exclusions, permissions
 
 **`cloneTree` per platform.**
-- **Darwin** (`clone_darwin.go`): `unix.Clonefile(src, dst, unix.CLONE_NOFOLLOW)` — a single APFS clonefile syscall over the whole tree. On nil, done. **Any** error falls back to `walkAndCopy(ctx, src, dst, plainFileCopy)`. The `Clonefile` call is uncancelable; `ctx` governs only the fallback walk.
-- **Linux** (`clone_linux.go`): always `walkAndCopy(ctx, src, dst, ficloneOrCopy)` — per-file `FICLONE`.
-- **Other** (`clone_other.go`): `walkAndCopy(ctx, src, dst, plainFileCopy)`.
+- **Darwin** (`clone_darwin.go`): `unix.Clonefile(src, dst, unix.CLONE_NOFOLLOW)` — a single APFS clonefile syscall over the whole tree. On nil, `omit.removeFrom(dst)` deletes every `filepath.Glob` match of each pattern under `dst`, and its error is the result. **Any** clonefile error falls back to `walkAndCopy(ctx, src, dst, omit, plainFileCopy)`. The `Clonefile` call is uncancelable; `ctx` governs only the fallback walk.
+- **Linux** (`clone_linux.go`): always `walkAndCopy(ctx, src, dst, omit, ficloneOrCopy)` — per-file `FICLONE`.
+- **Other** (`clone_other.go`): `walkAndCopy(ctx, src, dst, omit, plainFileCopy)`.
 
 **`walkAndCopy`** (`snapshot.go`) — `filepath.WalkDir(src...)`, per entry:
 1. A walk error is returned as-is.
 2. `ctx.Err()` is checked **per entry** and returned if non-nil.
-3. `rel = filepath.Rel(src, srcPath)`, error returned; `dstPath = filepath.Join(dst, rel)`.
+3. `rel = filepath.Rel(src, srcPath)`, error returned. If `omit.omits(rel)`: a directory returns `fs.SkipDir` (left out whole), anything else returns nil. Otherwise `dstPath = filepath.Join(dst, rel)`.
 4. **Directory**: `d.Info()` (error returned), `os.MkdirAll(dstPath, info.Mode().Perm())`, then `os.Chmod(dstPath, info.Mode().Perm())` to defeat umask filtering.
 5. **Symlink** (`d.Type()&os.ModeSymlink != 0`): `os.Readlink` then `os.Symlink` — the link is recreated, **never followed**.
-6. **Regular file**: if `isDoltJournalLockRel(rel)` → `return nil` (skip); else `copyFile(ctx, srcPath, dstPath)`.
+6. **Regular file**: `copyFile(ctx, srcPath, dstPath)`.
 7. **Anything else** (FIFOs, sockets, devices) → `"dbsnapshot: unsupported file type at %s: %v"`.
 
-**The one exclusion — Dolt's journal LOCK.** `isDoltJournalLockRel(rel)` returns `strings.HasSuffix(filepath.ToSlash(rel), "/.dolt/noms/LOCK")` (`snapshot.go`). Because the check requires a leading `/`, it matches `<anything>/.dolt/noms/LOCK` — a database subdirectory under the copied root — and would **not** match a `rel` of exactly `.dolt/noms/LOCK` at the copy root. Rationale: the file is contentless, Dolt recreates it at every engine open, and on Windows the mandatory `LockFileEx` hold means reading it through a second handle would fail the copy or drop the hold. It is explicitly noted that **Darwin's `Clonefile` fast path may still carry the file**. `dolt_lock_skip_test.go` builds `src/links/.dolt/noms/LOCK` (0600) plus a sibling `manifest` (0644), runs `walkAndCopy(..., plainFileCopy)`, and asserts `LOCK` is absent while `manifest` is present. No other exclusion exists; the beacon lives in `snapshotsDir`, not `databaseDir`, so it is never part of a copy.
+**What a copy leaves out — `omission`.** An `omission` is a list of slash-separated `path.Match` patterns relative to the copied root; `omits(rel)` matches `filepath.ToSlash(rel)` against each and panics on a malformed pattern. `cloneOmits = {"*/.dolt/noms/LOCK"}`: Dolt's journal LOCK, contentless, recreated at every engine open, and on Windows held by a mandatory `LockFileEx` that a second read handle would fail or drop. `snapshotOmits` = `cloneOmits` plus `"*/.dolt/" + RemoteCacheDirName` and `"*/.dolt/" + TempTableFilesDirName`. `Take` copies with `snapshotOmits`; `CloneTree` copies with `cloneOmits`, keeping the remote cache that the mirror and receive clones fetch and push from. A pattern's leading `*` matches one database directory under the copied root, so `.dolt/noms/LOCK` at the root itself is not matched. `omission_test.go` runs both values through the platform's `cloneTree` and through `walkAndCopy`, over a tree holding noms, `LOCK`, a remote-cache mirror and a temp file. The beacon lives in `snapshotsDir`, not `databaseDir`, so it is never part of a copy.
 
 **`plainFileCopy`** (`snapshot.go`): `os.Open(src)` + `defer srcF.Close()`; `srcF.Stat()`; `os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, info.Mode().Perm())` — **`O_EXCL`**, so an existing destination fails; `copyWithContext` with `_ = dstF.Close()` on error; `dstF.Chmod(info.Mode().Perm())` to force exact source perms past umask, closing on error; `return dstF.Close()` — the close error is part of the copy's outcome, deliberately **not** deferred, because a failed write-back-at-close (NFS commit-on-close, delayed-allocation ENOSPC) is the only signal the file is truncated. Ownership and timestamps are **not** propagated — only permission bits.
 
