@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -42,24 +44,35 @@ func TestRelativePathsResolveAgainstTheInvocationDirectory(t *testing.T) {
 	}
 }
 
-// A path flag's value is resolved only when one was given: an absent or blank
-// one names no path, rather than the working directory.
-func TestResolvePathsLeavesAnAbsentFlagUnset(t *testing.T) {
+// A path flag is resolved only when it was given, and a given value follows
+// one rule: whitespace around it is not part of it, and an empty or
+// flag-shaped one is refused as usage rather than resolved to the working
+// directory or to a file named "--help".
+func TestResolvePathsResolvesOnlyAGivenPath(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	for _, tc := range []struct {
-		name, value, want string
+		name  string
+		args  []string
+		want  string
+		usage bool
 	}{
-		{"absent", "", ""},
-		{"blank", "  ", ""},
-		{"relative", " sub/file.json ", filepath.Join(dir, "sub", "file.json")},
-		{"absolute", "/abs/file.json", "/abs/file.json"},
+		{"absent", nil, "", false},
+		{"relative", []string{"--path", " sub/file.json "}, filepath.Join(dir, "sub", "file.json"), false},
+		{"absolute", []string{"--path", "/abs/file.json"}, "/abs/file.json", false},
+		{"empty", []string{"--path="}, "", true},
+		{"blank", []string{"--path", "  "}, "", true},
+		{"flag-shaped", []string{"--path", "--help"}, "", true},
 	} {
 		fs := newCobraFlagSet("probe")
 		flag := registerPath(fs, "path", "a path")
-		*flag.raw = tc.value
-		if err := resolvePaths(fs, WorkingDirOf(dir, nil)); err != nil {
-			t.Fatalf("%s: resolvePaths error = %v", tc.name, err)
+		if err := parseFlagSet(fs, tc.args, io.Discard); err != nil {
+			t.Fatalf("%s: parse error = %v", tc.name, err)
+		}
+		err := resolvePaths(fs, WorkingDirOf(dir, nil))
+		var usage UsageError
+		if refused := errors.As(err, &usage); refused != tc.usage || (err != nil && !refused) {
+			t.Errorf("%s: resolvePaths error = %v, want a UsageError: %t", tc.name, err, tc.usage)
 		}
 		if got := flag.path(); got != tc.want {
 			t.Errorf("%s: path() = %q, want %q", tc.name, got, tc.want)

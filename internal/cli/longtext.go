@@ -96,9 +96,9 @@ func (f *longTextFlag) read(ctx context.Context, inv Invocation) (*string, error
 	default:
 		// The file is not a pathFlag because "-" is not a path: it reads stdin
 		// even where the directory cannot be read.
-		path, resolveErr := inv.Dir.resolve(*f.file)
+		path, resolveErr := resolveFlagPath(inv.Dir, f.name+"-file", *f.file)
 		if resolveErr != nil {
-			return nil, fmt.Errorf("resolve --%s-file %s: %w", f.name, *f.file, resolveErr)
+			return nil, resolveErr
 		}
 		// A path that cannot be read is an argument to correct, not a failure
 		// to retry, so it is refused as usage.

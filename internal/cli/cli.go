@@ -523,14 +523,6 @@ func runList(ctx context.Context, inv Invocation, surface listSurface, args []st
 		return err
 	}
 	if l.fs.Changed(lsAtFlag) {
-		// pflag accepts any string as the value, so a flag-shaped one (`--at
-		// --help`, `--at --status`) and an empty one (`--at=`, `--at ""`) still
-		// reach here. Reject them as usage rather than handing "--help" to the
-		// store layer as a directory to open. A bare `--at` never arrives: pflag
-		// itself refuses the missing argument at the parse above.
-		if atDir.path() == "" || strings.HasPrefix(strings.TrimSpace(*atDir.raw), "-") {
-			return UsageError{Message: "usage: lit " + surface.name + " --at <store-dir>  (a storage directory from `lit stores`)"}
-		}
 		loc := workspace.LocationFromStorageDir(atDir.path())
 		st, err := app.OpenLocationForRead(ctx, loc)
 		if err != nil {
@@ -540,7 +532,7 @@ func runList(ctx context.Context, inv Invocation, surface listSurface, args []st
 			// reaches through it) bound to the --at TARGET, so the trace files
 			// beside the traces of whatever holds that store — from any cwd,
 			// including no workspace at all.
-			return fmt.Errorf("open store at %q read-only: %w", *atDir.raw, markEngineOpenContention(err, infoForLocation(loc)))
+			return fmt.Errorf("open store at %q read-only: %w", atDir.path(), markEngineOpenContention(err, infoForLocation(loc)))
 		}
 		defer func() { _ = st.Close() }()
 		reportOpenMigration(ctx, storage.OpenMigration(st))

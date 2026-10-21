@@ -34,17 +34,33 @@ func (f *pathFlag) path() string {
 // given against the process's directory. [LAW:single-enforcer]
 func resolvePaths(fs *cobraFlagSet, dir WorkingDir) error {
 	for _, f := range fs.paths {
-		// An absent flag names no path, and resolving "" would turn it into the
-		// working directory.
-		given := strings.TrimSpace(*f.raw)
-		if given == "" {
+		// An absent flag names no path; its value is the empty default.
+		if !fs.Changed(f.name) {
 			continue
 		}
-		abs, err := dir.resolve(given)
+		abs, err := resolveFlagPath(dir, f.name, *f.raw)
 		if err != nil {
-			return fmt.Errorf("resolve --%s %s: %w", f.name, *f.raw, err)
+			return err
 		}
 		f.abs = abs
 	}
 	return nil
+}
+
+// resolveFlagPath is the absolute path a flag's value names, by the one rule
+// every path given to a flag follows: whitespace around it is not part of it,
+// and an empty or flag-shaped value names no path. pflag takes any string as a
+// value, so `--at --help` hands over "--help"; resolving it would open a path
+// nobody meant, and resolving "" would open the working directory itself.
+// [LAW:single-enforcer] [LAW:parse-dont-validate]
+func resolveFlagPath(dir WorkingDir, flag, raw string) (string, error) {
+	given := strings.TrimSpace(raw)
+	if given == "" || strings.HasPrefix(given, "-") {
+		return "", UsageError{Message: fmt.Sprintf("--%s needs a path, got %q", flag, raw)}
+	}
+	abs, err := dir.resolve(given)
+	if err != nil {
+		return "", fmt.Errorf("resolve --%s %s: %w", flag, raw, err)
+	}
+	return abs, nil
 }
