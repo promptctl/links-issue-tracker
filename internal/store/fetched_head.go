@@ -209,7 +209,7 @@ func LandFetchedHead(ctx context.Context, doltRootDir string, clone TakenClone, 
 		// [LAW:dataflow-not-control-flow] the record decides what moves — the
 		// fetched head, or nothing — and the copy and the move run on that.
 		moves := landed.Record.moves(fetched)
-		tempDir := LandingTempDir(root)
+		tempDir := TempTableFilesDir(root)
 		if err := os.MkdirAll(tempDir, 0o755); err != nil {
 			return fmt.Errorf("create temp table file dir: %w", err)
 		}
@@ -248,9 +248,9 @@ func LandFetchedHead(ctx context.Context, doltRootDir string, clone TakenClone, 
 	return landed, nil
 }
 
-// LandingTempDir is where LandFetchedHead stages the table files it copies
-// into the live store at doltRootDir.
-func LandingTempDir(doltRootDir string) string {
+// TempTableFilesDir is where Dolt stages the table files it builds into the
+// store at doltRootDir: LandFetchedHead's copies, and every push and fetch.
+func TempTableFilesDir(doltRootDir string) string {
 	return filepath.Join(doltRootDir, doltDatabaseName, dbfactory.DoltDir, dbsnapshot.TempTableFilesDirName)
 }
 

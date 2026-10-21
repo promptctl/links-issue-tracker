@@ -171,10 +171,14 @@ func rollupLocation(ctx context.Context, loc workspace.Location) (row projectRol
 // rollupMigrationCounts is how many of the rolled-up stores their open
 // migrated, how many could not roll old migration snapshots or checkpoints off
 // after the work they trail committed,
-// how many were at a schema newer than this lit, and how many of those this
-// lit may read but not write.
+// how many were at a schema newer than this lit, how many of those this
+// lit may read but not write, how many temp table files a dead writer left
+// their opens collected, and how many of those collections failed. One count
+// names one fact. A read open collects only when it hands off to the write
+// open, which a store behind this lit's schema does.
 func rollupMigrationCounts(rows []projectRollup) map[string]int {
-	counts := map[string]int{"stores.migrated": 0, "stores.prune_failures": 0, "stores.schema_ahead": 0, "stores.read_only": 0}
+	counts := map[string]int{"stores.migrated": 0, "stores.prune_failures": 0, "stores.schema_ahead": 0, "stores.read_only": 0,
+		"stores.temp_table_files_collected": 0, "stores.temp_table_files_failures": 0}
 	for _, row := range rows {
 		if row.Migrated.SchemaAhead.WorkspaceSchema != 0 {
 			counts["stores.schema_ahead"]++
@@ -187,6 +191,12 @@ func rollupMigrationCounts(rows []projectRollup) map[string]int {
 		}
 		if row.Migrated.PruneErr != nil {
 			counts["stores.prune_failures"]++
+		}
+		if collected := row.Migrated.TempTableFiles; collected != nil {
+			counts["stores.temp_table_files_collected"] += collected.Files
+			if collected.Err != nil {
+				counts["stores.temp_table_files_failures"]++
+			}
 		}
 	}
 	return counts
@@ -262,8 +272,8 @@ func printCrossProjectRollup(w io.Writer, rows []projectRollup) error {
 	// Every row, readable or not: the open that migrated the store came before
 	// any read that could fail.
 	for _, row := range rows {
-		if row.Migrated.PruneErr != nil {
-			if _, err := fmt.Fprintf(w, "~ %s: %s", row.StorageDir, migrationPruneWarning(row.Migrated.PruneErr)); err != nil {
+		for _, warning := range openWarnings(row.Migrated) {
+			if _, err := fmt.Fprintf(w, "~ %s: %s", row.StorageDir, warning); err != nil {
 				return err
 			}
 		}

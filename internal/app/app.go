@@ -94,11 +94,11 @@ func Open(ctx context.Context, ws workspace.Info, mode AccessMode) (*App, error)
 		// "workspace busy". Joined rather than discarded so the identity failure
 		// and a stranded lock are both visible; this is the close-on-abort
 		// pattern internal/store/store.go already uses for the same reason.
-		// A migration the open committed is reported by whoever reads the App,
-		// and there is none, so a failed snapshot prune rides this error: the
-		// next open finds nothing to migrate and would never retry it.
+		// What the open did is reported by whoever reads the App, and there is
+		// none, so every failure the open survived rides this error: the next
+		// open finds nothing to migrate and would never retry a failed prune.
 		// [LAW:no-silent-failure]
-		return nil, errors.Join(err, storage.OpenMigration(st).PruneErr, st.Close())
+		return nil, errors.Join(err, storage.OpenMigration(st).Failures(), st.Close())
 	}
 	// Every mode attributes, and the mode's own identity contract decides what
 	// that means: a write open has just minted a token, while a read open in a

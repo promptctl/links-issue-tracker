@@ -29,7 +29,7 @@ func TestASnapshotLeavesOutTheRemoteCacheAndStillSyncsOnceRestored(t *testing.T)
 	if _, err := os.Stat(cache); err != nil {
 		t.Fatalf("the pushed store holds no remote cache to leave out: %v", err)
 	}
-	temp := LandingTempDir(root)
+	temp := TempTableFilesDir(root)
 	if err := os.MkdirAll(temp, 0o755); err != nil {
 		t.Fatal(err)
 	}

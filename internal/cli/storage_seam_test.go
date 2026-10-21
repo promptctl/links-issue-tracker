@@ -168,7 +168,7 @@ var doltWorkspaceMachinery = map[string][]string{
 	// ReadUnsettledFirst and WriteUnsettledFirst (at UnsettledFirstPath),
 	// ReadUnsettledLast and WriteUnsettledLast, and ReadSettledLast (at
 	// SettledLastPath, which only the settle writes), are the automatic
-	// receive's run of post-fetch stops. The tests reach LandingTempDir to
+	// receive's run of post-fetch stops. The tests reach TempTableFilesDir to
 	// stop a landing from a real cause. A stop at opening the
 	// live store counts toward that run, and it has no engine to ask, so the
 	// records are addressed by path beside ReceivedRefsPath. The tests reach
@@ -177,7 +177,7 @@ var doltWorkspaceMachinery = map[string][]string{
 		"MirrorHoldBudget", "MirrorPushDeadline", "MirrorPushCancelLagObserved", "HistoryBoundDeadline",
 		"RecordPushedHead", "PushedHeadRecord", "ErrHoldCut", "ErrReceivedRefsNotRecorded",
 		"ReceiveDeadline", "ReadReceivedRefs", "WriteReceivedRefs", "ReceivedRefsPath",
-		"LandFetchedHead", "LandedFetch", "ErrRemoteCacheNotLanded", "LandingTempDir",
+		"LandFetchedHead", "LandedFetch", "ErrRemoteCacheNotLanded", "TempTableFilesDir",
 		"FetchedHeadRecord", "FetchedHeadMoved", "FetchedHeadUnchanged", "FetchedHeadSuperseded",
 		"ReadTakenClone", "TakenClone",
 		"ReadUnsettledFirst", "WriteUnsettledFirst", "UnsettledFirstPath",

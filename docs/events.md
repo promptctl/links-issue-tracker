@@ -185,8 +185,11 @@ the database, and what it did to the store's schema. An open that finds the
 schema behind this lit
 migrates it forward, taking a recovery snapshot first, then removes the oldest
 migration snapshots past the ten it keeps and the oldest Dolt checkpoints past
-the five of each kind it keeps. For `lit ls --at`, that store is the
-one `--at` names, not the working directory's.
+the five of each kind it keeps. An open that changes tickets also removes the
+temp table files a Dolt process left staged when it was killed mid-push,
+mid-fetch or mid-landing; it does so only while it holds the store, so no live
+process's file is touched. For `lit ls --at`, that store is the one `--at`
+names, not the working directory's.
 
 | Key | Meaning |
 | --- | --- |
@@ -203,6 +206,9 @@ one `--at` names, not the working directory's.
 | `migration.min_writer_schema` | The oldest schema version a lit must support to write that newer workspace, as a migration this lit lacks recorded it, or `0` when none did or the workspace is not newer. A read open serves a workspace whose minimum is above this lit; a write open, and every `lit sync` command, refuses it. |
 | `migration.min_writer_schema_error` | Why that minimum is not a schema version, or `null`. A read open serves the workspace; a write open refuses it. |
 | `migration.read_only` | `true` when the open served the newer workspace for reading only, because its minimum is above this lit or cannot be read; `false` otherwise. |
+| `temp_table_files.files` | How many temp table files a dead Dolt process left the open removed from `links/.dolt/temptf`; `null` when the open did not look, which every open but one that changes tickets is. |
+| `temp_table_files.bytes` | How many bytes those files held, or `null` when the open did not look. |
+| `temp_table_files.error` | Why some could not be removed, or `null`. The command runs all the same, and prints a `warning: temp table files a dead writer left were not all removed:` line on stderr; the next open that changes tickets tries again. |
 
 `lit stores --counts` opens every store it finds, so it records counts
 instead.
@@ -213,6 +219,8 @@ instead.
 | `counts.stores.schema_ahead` | The stores at a schema newer than this lit. |
 | `counts.stores.read_only` | Those of them this lit reads but does not write. |
 | `counts.stores.prune_failures` | The stores whose open could not remove older migration snapshots or checkpoints after the work they trail committed: a migration or a repair of a recorded migration whose content changed. Each gets a `~ <storage dir>: warning: old migration snapshots or checkpoints were not removed:` line after the table. |
+| `counts.stores.temp_table_files_collected` | How many temp table files a dead Dolt process left the opens removed, summed over the stores. A read open removes them only when it hands a store behind this lit's schema to the open that migrates it. |
+| `counts.stores.temp_table_files_failures` | The stores whose open could not remove all of them. Each gets a `~ <storage dir>: warning: temp table files a dead writer left were not all removed:` line after the table. |
 
 ## What checking the config records
 

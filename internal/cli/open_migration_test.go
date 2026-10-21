@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/engine"
 	"github.com/promptctl/links-issue-tracker/internal/fsperm"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/version"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
@@ -231,6 +233,59 @@ func TestAWorkspaceWhoseWriteRulesThisLitPredatesServesReadsOnly(t *testing.T) {
 	} {
 		if got, ok := ev.Facts[key]; !ok || got != want {
 			t.Errorf("lit ls %s = %#v (present %v), want %#v", key, got, ok, want)
+		}
+	}
+}
+
+// A plain write command, with no sync command run and auto sync off (this
+// suite's default), collects the table files a dead writer left staged in the
+// store, and its event says how many.
+func TestAWriteCommandCollectsTheTempTableFilesADeadWriterLeft(t *testing.T) {
+	isolateEvents(t)
+	repo, ws := initBootstrapTestRepo(t)
+	staged := filepath.Join(store.TempTableFilesDir(ws.DatabasePath), "buffered_file_byte_sink_99")
+	if err := os.MkdirAll(filepath.Dir(staged), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(staged, []byte("dead"), 0o600); err != nil {
+		t.Fatalf("plant staged file: %v", err)
+	}
+
+	runCLIInDir(t, repo, "new", "--title", "after a dead writer", "--topic", "tempfiles", "--type", "epic")
+
+	if _, err := os.Stat(staged); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the dead writer's staged file: stat error = %v, want it removed", err)
+	}
+	facts := lastEvent(t).Facts
+	for key, want := range map[string]any{"temp_table_files.files": float64(1), "temp_table_files.bytes": float64(4), "temp_table_files.error": nil} {
+		if facts[key] != want {
+			t.Errorf("facts.%s = %v, want %v", key, facts[key], want)
+		}
+	}
+}
+
+// Each failure an open survived is its own warning line, and an open that
+// never looked for temp table files records that as null, not as zero.
+func TestOpenWarningsNameEachFailureAnOpenSurvived(t *testing.T) {
+	t.Parallel()
+	both := storage.Migrated{
+		PruneErr:       errors.New("prune migration snapshots: stuck"),
+		TempTableFiles: &storage.TempTableFilesCollection{Err: errors.New("read the temp table file dir: denied")},
+	}
+	want := []string{
+		"warning: old migration snapshots or checkpoints were not removed: prune migration snapshots: stuck\n",
+		"warning: temp table files a dead writer left were not all removed: read the temp table file dir: denied\n",
+	}
+	if got := openWarnings(both); !slices.Equal(got, want) {
+		t.Errorf("openWarnings() = %q, want %q", got, want)
+	}
+	if got := openWarnings(storage.Migrated{TempTableFiles: &storage.TempTableFilesCollection{Files: 2}}); len(got) != 0 {
+		t.Errorf("openWarnings() of a clean collection = %q, want none", got)
+	}
+	facts := storage.Migrated{}.EventRecord()
+	for _, key := range []string{"temp_table_files.files", "temp_table_files.bytes", "temp_table_files.error"} {
+		if v, ok := facts[key]; !ok || v != nil {
+			t.Errorf("an open that never looked records %s = %v (present %v), want null", key, v, ok)
 		}
 	}
 }

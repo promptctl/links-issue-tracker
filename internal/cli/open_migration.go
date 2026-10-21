@@ -4,33 +4,41 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 )
 
 // reportOpenMigration is what a command does with what opening a store did to
-// its stored shape: it records the facts on the command's event, and writes
-// the warning a failed prune leaves, "" when nothing failed. The
-// migration has committed either way, so the command goes on to run.
+// it: it records the facts on the command's event, and writes the warnings the
+// failures the open survived leave, none when nothing failed. The open has
+// done its work either way, so the command goes on to run.
 //
-// The warning goes to stderr, as the statusline's warnings do: it is about the
-// store, not the command's result, and stdout may be an export or a --json
+// The warnings go to stderr, as the statusline's warnings do: they are about
+// the store, not the command's result, and stdout may be an export or a --json
 // document that a leading line would corrupt. A failed write has no channel
 // left to report on and cannot change what the command did, so it changes
-// nothing. [LAW:dataflow-not-control-flow] the warning is a value written
+// nothing. [LAW:dataflow-not-control-flow] the warnings are values written
 // every time.
 func reportOpenMigration(ctx context.Context, done storage.Migrated) {
 	telemetry.Record(ctx, done.EventRecord(), nil)
-	fmt.Fprint(os.Stderr, migrationPruneWarning(done.PruneErr))
+	fmt.Fprint(os.Stderr, strings.Join(openWarnings(done), ""))
 }
 
-// migrationPruneWarning is the line an open's migration adds to the command's
-// output when rolling old migration snapshots or checkpoints off failed after
-// the work it trails committed, or "" when nothing failed.
-func migrationPruneWarning(pruneErr error) string {
-	if pruneErr == nil {
-		return ""
+// openWarnings is the lines the failures an open survived add to a command's
+// output, one per failure, each ending in a newline: rolling old migration
+// snapshots or checkpoints off after the work it trails committed, and
+// collecting the temp table files a dead writer left. Every reader that warns
+// of an open's failures prints these, so none can warn of one and drop the
+// other. [LAW:single-enforcer]
+func openWarnings(done storage.Migrated) []string {
+	var warnings []string
+	if done.PruneErr != nil {
+		warnings = append(warnings, fmt.Sprintf("warning: old migration snapshots or checkpoints were not removed: %v\n", done.PruneErr))
 	}
-	return fmt.Sprintf("warning: old migration snapshots or checkpoints were not removed: %v\n", pruneErr)
+	if done.TempTableFiles != nil && done.TempTableFiles.Err != nil {
+		warnings = append(warnings, fmt.Sprintf("warning: temp table files a dead writer left were not all removed: %v\n", done.TempTableFiles.Err))
+	}
+	return warnings
 }
