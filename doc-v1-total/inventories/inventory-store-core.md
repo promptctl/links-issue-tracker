@@ -4902,7 +4902,7 @@ Additional inline error strings:
 
 ### 4.6 `downgradeLocked(ctx, targetSchemaVersion int64) (*storage.Downgraded, error)` — `downgrade.go`
 
-`Downgrade` returns what this reports: `*storage.Downgraded{From, Reversed, Snapshot, SnapshotLeftOut, PruneErr}` (`internal/storage/capabilities.go`), whose `EventRecord()` is facts `downgrade.workspace_schema` (From), `downgrade.snapshot`, `downgrade.snapshot_left_out` (SnapshotLeftOut) and `downgrade.snapshot_prune_error` (`telemetry.ErrorText(PruneErr)`: `PruneErr.Error()`, null when nil), and count `downgrade.reversed`. Steps 1–2 return nil; every later return, error or not, carries the report as far as the pipeline got: `From` from step 3, `Snapshot` and `SnapshotLeftOut` from step 8, `Reversed` from step 9, `PruneErr` from step 10.
+`Downgrade` returns what this reports: `*storage.Downgraded{From, Reversed, Snapshot, PruneErr}` (`internal/storage/capabilities.go`), whose `EventRecord()` is facts `downgrade.workspace_schema` (From), `downgrade.snapshot` and `downgrade.snapshot_left_out` (Snapshot's name and what its copy left out, `""` and null when nil) and `downgrade.snapshot_prune_error` (`telemetry.ErrorText(PruneErr)`: `PruneErr.Error()`, null when nil), and count `downgrade.reversed`. Steps 1–2 return nil; every later return, error or not, carries the report as far as the pipeline got: `From` from step 3, `Snapshot` (`recoverySnapshot(taken)`) from step 8, `Reversed` from step 9, `PruneErr` from step 10.
 
 Ordered:
 1. `state, err := s.classifyMigrationState(ctx)` (impl `internal/store/migration_runner.go`); error propagated unwrapped (`downgrade.go`).

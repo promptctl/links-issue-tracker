@@ -90,7 +90,7 @@ func (s *stubDowngrader) Downgrade(_ context.Context, target int64) (*storage.Do
 // reversedFromV4 is the store's report of a reverse from v4 to newFakeTarget's
 // v3: one down-migration, after one recovery snapshot.
 func reversedFromV4() *storage.Downgraded {
-	return &storage.Downgraded{From: 4, Reversed: 1, Snapshot: "1700000000000000000-lit-downgrade-1700000000000000001", SnapshotLeftOut: []string{"links/.dolt/git-remote-cache"}}
+	return &storage.Downgraded{From: 4, Reversed: 1, Snapshot: &storage.RecoverySnapshot{Name: "1700000000000000000-lit-downgrade-1700000000000000001", LeftOut: []string{"links/.dolt/git-remote-cache"}}}
 }
 
 // newerCurrentInfo is a running binary whose schema support covers the span

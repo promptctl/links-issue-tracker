@@ -240,8 +240,8 @@ func TestDowngradeRollbackOnFailure(t *testing.T) {
 	if done == nil {
 		t.Fatal("Downgrade reported nothing, want what it did before the failure")
 	}
-	assertSnapshotLeftOutTheJournalLock(t, done)
-	if want := (storage.Downgraded{From: registryMax, Snapshot: rb.Snapshot.Name, SnapshotLeftOut: done.SnapshotLeftOut}); !reflect.DeepEqual(*done, want) {
+	snap := snapshotTaken(t, done, rb.Snapshot.Name)
+	if want := (storage.Downgraded{From: registryMax, Snapshot: snap}); !reflect.DeepEqual(*done, want) {
 		t.Fatalf("Downgrade reported %+v, want %+v", done, want)
 	}
 	if !errors.Is(rb, want) {
@@ -293,12 +293,12 @@ func TestDowngradeHappyPathSteppedAndCommitted(t *testing.T) {
 	}
 	// A fresh workspace holds no downgrade snapshot, so the one Downgrade
 	// names is the one it took.
-	assertSnapshotLeftOutTheJournalLock(t, done)
-	if want := (storage.Downgraded{From: registryMax, Reversed: 2, Snapshot: done.Snapshot, SnapshotLeftOut: done.SnapshotLeftOut}); !reflect.DeepEqual(*done, want) || !IsDowngradeSnapshotName(done.Snapshot) {
+	snap := snapshotTaken(t, done, "")
+	if want := (storage.Downgraded{From: registryMax, Reversed: 2, Snapshot: snap}); !reflect.DeepEqual(*done, want) || !IsDowngradeSnapshotName(snap.Name) {
 		t.Fatalf("Downgrade(%d) reported %+v, want %+v naming a downgrade snapshot", target, done, want)
 	}
-	if _, err := os.Stat(filepath.Join(dbsnapshot.DirFor(doltRoot), done.Snapshot)); err != nil {
-		t.Fatalf("reported snapshot %q: %v", done.Snapshot, err)
+	if _, err := os.Stat(filepath.Join(dbsnapshot.DirFor(doltRoot), snap.Name)); err != nil {
+		t.Fatalf("reported snapshot %q: %v", snap.Name, err)
 	}
 	if err := st.Close(); err != nil {
 		t.Fatalf("Close() = %v", err)
@@ -372,8 +372,8 @@ func TestDowngradeFailurePartWayReportsTheStepsApplied(t *testing.T) {
 			if done == nil {
 				t.Fatal("Downgrade reported nothing, want what it did before the failure")
 			}
-			assertSnapshotLeftOutTheJournalLock(t, done)
-			if want := (storage.Downgraded{From: registryMax, Reversed: 1, Snapshot: rb.Snapshot.Name, SnapshotLeftOut: done.SnapshotLeftOut}); !reflect.DeepEqual(*done, want) {
+			snap := snapshotTaken(t, done, rb.Snapshot.Name)
+			if want := (storage.Downgraded{From: registryMax, Reversed: 1, Snapshot: snap}); !reflect.DeepEqual(*done, want) {
 				t.Fatalf("Downgrade reported %+v, want %+v", done, want)
 			}
 			if got, err := st.recordedMigrationVersion(ctx); err != nil || got != registryMax-1 {
@@ -443,14 +443,17 @@ func TestDowngradePruneFailureReportsTheCommittedReverse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Downgrade() error = %v, want the reverse reported without one", err)
 	}
-	if done == nil || !IsDowngradeSnapshotName(done.Snapshot) || done.Snapshot == filepath.Base(stuck) {
-		t.Fatalf("Downgrade reported %+v, want the snapshot it took", done)
+	if done == nil {
+		t.Fatal("Downgrade reported nothing, want the snapshot it took")
+	}
+	snap := snapshotTaken(t, done, "")
+	if !IsDowngradeSnapshotName(snap.Name) || snap.Name == filepath.Base(stuck) {
+		t.Fatalf("Downgrade reported %+v, want the snapshot it took", snap)
 	}
 	if done.PruneErr == nil || !strings.Contains(done.PruneErr.Error(), "prune downgrade snapshots") {
 		t.Fatalf("PruneErr = %v, want the prune failure", done.PruneErr)
 	}
-	assertSnapshotLeftOutTheJournalLock(t, done)
-	if want := (storage.Downgraded{From: registryMax, Reversed: 1, Snapshot: done.Snapshot, SnapshotLeftOut: done.SnapshotLeftOut, PruneErr: done.PruneErr}); !reflect.DeepEqual(*done, want) {
+	if want := (storage.Downgraded{From: registryMax, Reversed: 1, Snapshot: snap, PruneErr: done.PruneErr}); !reflect.DeepEqual(*done, want) {
 		t.Fatalf("Downgrade reported %+v, want %+v", done, want)
 	}
 	if applied, err := st.AppliedSchemaVersion(ctx); err != nil || applied != registryMax-1 {
@@ -648,13 +651,20 @@ var (
 	_ dbsnapshot.Snapshot
 )
 
-// assertSnapshotLeftOutTheJournalLock is a downgrade's report naming what its
-// recovery snapshot's copy left out, the open store's journal LOCK among it.
-// The other fields' expectations take SnapshotLeftOut from here, so this is
-// the assertion behind it.
-func assertSnapshotLeftOutTheJournalLock(t *testing.T, done *storage.Downgraded) {
+// snapshotTaken is the recovery snapshot a downgrade's report names, checked:
+// it is there, it is named name (any name when name is ""), and what its copy
+// left out holds the open store's journal LOCK. The callers' expectations take
+// the snapshot from here, so these checks are the assertions behind it.
+func snapshotTaken(t *testing.T, done *storage.Downgraded, name string) *storage.RecoverySnapshot {
 	t.Helper()
-	if !slices.Contains(done.SnapshotLeftOut, "links/.dolt/noms/LOCK") {
-		t.Errorf("SnapshotLeftOut = %q, want what the snapshot's copy left out, the journal LOCK among it", done.SnapshotLeftOut)
+	if done.Snapshot == nil {
+		t.Fatalf("Downgrade reported %+v, want the recovery snapshot it took", done)
 	}
+	if name != "" && done.Snapshot.Name != name {
+		t.Errorf("Snapshot.Name = %q, want %q", done.Snapshot.Name, name)
+	}
+	if !slices.Contains(done.Snapshot.LeftOut, "links/.dolt/noms/LOCK") {
+		t.Errorf("Snapshot.LeftOut = %q, want what the snapshot's copy left out, the journal LOCK among it", done.Snapshot.LeftOut)
+	}
+	return done.Snapshot
 }

@@ -683,9 +683,10 @@ func (o omission) omits(rel string) bool {
 // leaves out, and returns them relative to dst. It is how a copy made in one
 // piece (Darwin's Clonefile) comes to hold what walkAndCopy would have: it
 // walks dst the way walkAndCopy walks its source, so dst's own path is never
-// read as a pattern and no symlink inside the copy is followed out of it, and
-// it checks ctx at every entry as walkAndCopy does, so the caller's deadline
-// and an interrupt cut the removal as they cut the walk.
+// read as a pattern and no symlink inside the copy is followed out of it. It
+// checks ctx at every entry it walks, as walkAndCopy does, so the caller's
+// deadline and an interrupt cut it between entries; an omitted directory goes
+// in one RemoveAll, which no ctx cuts (a 652-file remote cache: 40ms).
 func (o omission) removeFrom(ctx context.Context, dst string) (leftOut []string, err error) {
 	leftOut = []string{}
 	err = filepath.WalkDir(dst, func(dstPath string, d fs.DirEntry, err error) error {

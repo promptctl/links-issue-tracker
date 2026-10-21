@@ -51,11 +51,11 @@ func (e *SchemaConvergenceError) Unwrap() error { return e.Cause }
 // EventRecord is the step that failed, and the snapshot and prune failure
 // under the keys a successful open records them under.
 func (e *SchemaConvergenceError) EventRecord() (map[string]any, map[string]int) {
-	snapshot, leftOut := "", []string(nil)
+	var snapshot *storage.RecoverySnapshot
 	if e.Snapshot != nil {
-		snapshot, leftOut = e.Snapshot.Name, e.Snapshot.LeftOut
+		snapshot = recoverySnapshot(*e.Snapshot)
 	}
-	facts := storage.MigrationRecoveryFacts(snapshot, leftOut, e.PruneErr)
+	facts := storage.MigrationRecoveryFacts(snapshot, e.PruneErr)
 	facts["migration.failed_step"] = e.Step.String()
 	return facts, nil
 }

@@ -459,8 +459,7 @@ func (s *Store) migrate(ctx context.Context) (storage.Migrated, error) {
 	if !ok {
 		return done, nil
 	}
-	done.Snapshot = snap.Name
-	done.SnapshotLeftOut = snap.LeftOut
+	done.Snapshot = recoverySnapshot(snap)
 	// [LAW:one-source-of-truth] Migration retention bounds migration
 	// snapshots only; user snapshots share the directory under an
 	// independent budget. IsMigrationSnapshotName is the kind discriminator.

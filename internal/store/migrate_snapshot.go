@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // migrationSnapshotRetention bounds how many migration-recovery snapshots are
@@ -123,6 +124,11 @@ func (g *snapshotGuard) ensure(ctx context.Context) (dbsnapshot.Taken, error) {
 	}
 	g.taken = &snap
 	return snap, nil
+}
+
+// recoverySnapshot is a snapshot Take made, as the storage report of it.
+func recoverySnapshot(taken dbsnapshot.Taken) *storage.RecoverySnapshot {
+	return &storage.RecoverySnapshot{Name: taken.Name, LeftOut: taken.LeftOut}
 }
 
 // took reports the snapshot if one was taken during this migrate() invocation.

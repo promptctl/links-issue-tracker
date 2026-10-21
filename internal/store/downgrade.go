@@ -275,8 +275,7 @@ func (s *Store) downgradeLocked(ctx context.Context, targetSchemaVersion int64) 
 	if err != nil {
 		return done, fmt.Errorf("downgrade: %w", err)
 	}
-	done.Snapshot = snap.Name
-	done.SnapshotLeftOut = snap.LeftOut
+	done.Snapshot = recoverySnapshot(snap)
 
 	done.Reversed, err = s.applyDownMigrations(ctx, targetSchemaVersion)
 	if err != nil {
