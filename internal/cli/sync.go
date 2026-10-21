@@ -552,47 +552,12 @@ type syncPushOutcome struct {
 
 // syncPushStep is the push the orchestrator runs once it has resolved the
 // remote and branch — store.Store.SyncPushFromClone (the mirror's push from
-// its clone) or store.Store.SyncCompactAndPush (compact + push, atomic).
-// [LAW:dataflow-not-control-flow]
+// its clone) or store.Store.SyncCompactAndPush (compact + push, atomic). Each
+// keeps the history bound of a push it landed, inside window, on a deadline
+// taken from boundLifetime. [LAW:dataflow-not-control-flow]
 // The variant is a value the caller supplies, so performSyncPush carries no
 // compaction branch and never compacts a push it skips.
-type syncPushStep func(ctx context.Context, remote storage.RemoteName, branch string, setUpstream, force bool) (storage.SyncPushResult, error)
-
-// keepHistoryBound keeps the history bound of a push that landed, inside the
-// window the workspace's config names. The bound fails nothing, so a config
-// Load refuses fails only the bound: the push stays landed, its maintenance
-// line says the bound was not kept and why, and the event's
-// history_bound.window_error carries the refusal, null when the window was
-// read. [LAW:no-silent-failure]
-func keepHistoryBound(ctx context.Context, session syncSession, cfg config.Config, err error, remote storage.RemoteName, branch string, pushed storage.SyncPushResult) storage.SyncPushResult {
-	telemetry.Set(ctx, "history_bound.window_error", telemetry.ErrorText(err))
-	if err != nil {
-		notKept := "history bound not kept: " + err.Error()
-		if pushed.Maintenance != "" {
-			notKept = pushed.Maintenance + "; " + notKept
-		}
-		pushed.Maintenance = notKept
-		return pushed
-	}
-	return session.syncer.SyncKeepHistoryBound(ctx, remote, branch, cfg.Sync.HistoryWindow, pushed)
-}
-
-// historyBoundDeadline is the deadline a landed push's history bound runs
-// under. The bound crosses the network three times — the re-root's lease
-// push, the remote's GC, the fetch that learns what the remote carries — and
-// each leg is a transport of a push's kind, so each gets the push deadline.
-// The local legs ride in the stall factor's margin: the re-roots, whose cost
-// is reroot.elapsed_ms, and the follow's full GC, measured at 2.0s on an APFS
-// clone of this repository's 437 MB store. The remote GC's upload has not
-// been measured against a hosted remote; history_bound.elapsed_ms on the
-// push's event is the figure to re-measure from. A cut bound fails nothing:
-// the push landed. A cut before the re-root reaches the remote leaves the
-// next push past the bound to run it again; a cut after it leaves the
-// remote's history below the cut to the next re-root's GC, which collects it
-// with its own, since the remote's GC replaces nothing once a push lands on
-// top of the re-root. A function because the push deadline it derives from
-// is the store's variable. [LAW:one-source-of-truth]
-func historyBoundDeadline() time.Duration { return 3 * store.MirrorPushDeadline }
+type syncPushStep func(ctx, boundLifetime context.Context, remote storage.RemoteName, branch string, window storage.BoundWindow, setUpstream, force bool) (storage.SyncPushResult, error)
 
 // syncPushTraceMetadata is everything the durable record says about one push
 // attempt beyond its decision: where it went, what the engine said, what local
@@ -701,25 +666,29 @@ func performSyncPush(ctx, completionCtx context.Context, session syncSession, ws
 		return syncPushOutcome{skip: target.skip, remote: target.remote}, nil
 	}
 	remoteName, syncBranch := target.remote, target.branch
-	// [LAW:dataflow-not-control-flow] Sync push runs one deterministic embedded mutation path from resolved remote+branch state.
-	result, pushErr := push(ctx, remoteName, syncBranch, setUpstream, force)
-	pushErr = cutByPushDeadline(ctx, completionCtx, pushErr)
 	// One read of the workspace's config serves the bound's window and the
 	// receive question a refusal is classified by. [LAW:one-source-of-truth]
+	// A config Load refuses fails only the bound: the push still lands, its
+	// maintenance says the bound was not kept and why, and the event's
+	// history_bound.window_error carries the refusal, null when the window
+	// was read. [LAW:no-silent-failure]
 	cfg, cfgErr := config.Load(pathspec.New(ws.RootDir))
-	// Every push that lands keeps the history bound, whichever step landed
-	// it: `lit sync push` and the pre-push hook from the live store, the
+	telemetry.Set(completionCtx, "history_bound.window_error", telemetry.ErrorText(cfgErr))
+	window := storage.BoundBy(cfg.Sync.HistoryWindow)
+	if cfgErr != nil {
+		window = storage.BoundUnread(cfgErr)
+	}
+	// [LAW:dataflow-not-control-flow] Sync push runs one deterministic embedded mutation path from resolved remote+branch state.
+	// The step keeps the bound of a push it landed, whichever step it is:
+	// `lit sync push` and the pre-push hook from the live store, the
 	// on-change mirror from its clone. A clone's bound publishes the re-root
 	// as any peer would, and the mirror's live store then follows it
 	// (receivePushedReRoot), so no network leg ever holds the live store.
-	// [LAW:single-enforcer] The bound runs under its own deadline off the
-	// completion lifetime, as the proof below does: the push's deadline
-	// is spent, and the bound's network legs need their own.
-	if pushErr == nil {
-		boundCtx, cancelBound := context.WithTimeout(completionCtx, historyBoundDeadline())
-		result = keepHistoryBound(boundCtx, session, cfg, cfgErr, remoteName, syncBranch, result)
-		cancelBound()
-	}
+	// The bound's deadline is taken from the completion lifetime, as the
+	// proof's below is: the push's deadline is spent, and the bound's
+	// network legs need their own.
+	result, pushErr := push(ctx, completionCtx, remoteName, syncBranch, window, setUpstream, force)
+	pushErr = cutByPushDeadline(ctx, completionCtx, pushErr)
 	traceMetadata := syncPushTraceMetadata(remoteName, syncBranch, result, pushErr)
 	// A push that landed on its own moved the remote to its own write, and the
 	// next receive would fetch to learn nothing unless the push records that.

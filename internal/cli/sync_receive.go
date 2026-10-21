@@ -182,7 +182,7 @@ func receiveMirrorWait() time.Duration { return 2 * mirrorNetworkDeadline() }
 // that took no re-root to the remote, which reached no network.
 // [LAW:one-source-of-truth]
 func mirrorNetworkDeadline() time.Duration {
-	return store.MirrorPushDeadline + historyBoundDeadline()
+	return store.MirrorPushDeadline + store.HistoryBoundDeadline()
 }
 
 // mirrorQuietPoll is how often the receive re-reads the mirror liveness

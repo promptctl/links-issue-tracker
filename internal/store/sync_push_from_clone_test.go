@@ -42,7 +42,7 @@ func TestSyncPushFromCloneReportsARaceItLostAsSuperseded(t *testing.T) {
 		t.Fatalf("OpenSync(clone) error = %v", err)
 	}
 	defer clone.Close()
-	result, err := clone.SyncPushFromClone(ctx, remoteName(t, "origin"), "master", false, false)
+	result, err := clone.SyncPushFromClone(ctx, ctx, remoteName(t, "origin"), "master", shippedBound(t), false, false)
 	if err != nil {
 		t.Fatalf("SyncPushFromClone() after the live store outran it error = %v; want superseded, the remote carries c2 inside c3", err)
 	}
@@ -78,8 +78,12 @@ func TestAPushRefusedOverAPeersCommitsIsDiverged(t *testing.T) {
 		name string
 		push func(context.Context, storage.RemoteName, string, bool, bool) (storage.SyncPushResult, error)
 	}{
-		{"SyncPushFromClone", clone.SyncPushFromClone},
-		{"SyncCompactAndPush", clone.SyncCompactAndPush},
+		{"SyncPushFromClone", func(ctx context.Context, remote storage.RemoteName, branch string, setUpstream, force bool) (storage.SyncPushResult, error) {
+			return clone.SyncPushFromClone(ctx, ctx, remote, branch, shippedBound(t), setUpstream, force)
+		}},
+		{"SyncCompactAndPush", func(ctx context.Context, remote storage.RemoteName, branch string, setUpstream, force bool) (storage.SyncPushResult, error) {
+			return clone.SyncCompactAndPush(ctx, ctx, remote, branch, shippedBound(t), setUpstream, force)
+		}},
 		{"SyncPush", clone.SyncPush},
 	}
 	for _, step := range steps {

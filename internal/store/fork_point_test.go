@@ -556,7 +556,7 @@ func TestAQuietForksRefusedPushIsNotSuperseded(t *testing.T) {
 	if err := delta.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch(delta) error = %v", err)
 	}
-	pushed, err := delta.SyncPushFromClone(ctx, remoteName(t, "origin"), "master", false, false)
+	pushed, err := delta.SyncPushFromClone(ctx, ctx, remoteName(t, "origin"), "master", shippedBound(t), false, false)
 	if !errors.Is(err, storage.ErrPushDiverged) {
 		t.Fatalf("SyncPushFromClone() = %+v, %v; want the refusal as %v, since the remote does not carry delta's head", pushed, err, storage.ErrPushDiverged)
 	}
