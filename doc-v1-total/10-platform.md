@@ -261,5 +261,4 @@ One build, `./cmd/lit`, CGO enabled, cross-compiled with per-target zig wrapper 
 
 - `.claude-plugin/marketplace.json` declares a marketplace `lit` listing one plugin, `lit`, sourced from `./claude-plugin`.
 - The shipped plugin is two files: the manifest `claude-plugin/.claude-plugin/plugin.json` (name `lit`, no version, no hooks) and the skill `claude-plugin/skills/next/SKILL.md` (`next`, "Pull the next ticket"). No commands, agents, hooks, or MCP servers.
-- The repo's own dogfooding wiring: `.claude/settings.json` runs `.claude/hooks/session-start.sh` on `SessionStart`; the script extracts `session_id` from the hook's stdin JSON and prints "Your Claude Code session id is: <id>. When using lit, your assignee identity is claude_<id>." — the same identity string `resolveIdentity` derives from `CLAUDE_CODE_SESSION_ID` (`cli.go`).
 - `.claude/settings.local.json` carries local permissions (several `Bash(lit …)` allows, `gh pr`, two Read paths) and MCP server enablement.

@@ -36,7 +36,6 @@ LockFileEx            Windows API
 CoreFoundation.framework  macOS SDK framework directory
 
 # Agent-harness names.
-SessionStart          Claude Code hook event, registered in .claude/settings.json
 Bash                  Claude Code permission-rule tool name, as in Bash(lit *)
 
 # SQL migration directives.

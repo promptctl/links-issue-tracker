@@ -1222,7 +1222,7 @@ bundled SDK omits it (`build/zig-macos-stubs/tzfile.h`).
 
 ---
 
-## 14. Shipped Claude plugin and the repo's own hook wiring
+## 14. Shipped Claude plugin and the repo's own Claude settings
 
 ### 14.1 `.claude-plugin/marketplace.json`
 
@@ -1240,21 +1240,7 @@ no version, and no hooks. The skill `next` has description "Pull the next ticket
 
 There are no commands, agents, hooks, or MCP servers in the shipped plugin.
 
-### 14.3 `.claude/settings.json` (this repo's dogfooding wiring)
-
-One `SessionStart` hook with an empty matcher running the command
-`.claude/hooks/session-start.sh` (`.claude/settings.json`).
-
-### 14.4 `.claude/hooks/session-start.sh`
-
-`#!/usr/bin/env bash` under `set -euo pipefail`. Reads the SessionStart hook's JSON from
-stdin, extracts `session_id` with `grep -o '"session_id":"[^"]*"' || true` and
-`head -1 | cut -d'"' -f4`, and — only when non-empty — prints
-`Your Claude Code session id is: ${session_id}. When using lit, your assignee identity is claude_${session_id}.`
-. That identity string is the same one `resolveIdentity` produces from
-`CLAUDE_CODE_SESSION_ID` (`internal/cli/cli.go`).
-
-### 14.5 `.claude/settings.local.json`
+### 14.3 `.claude/settings.local.json`
 
 Local (untracked-style) permissions: allow list `Read(//Users/bmf/**)`,
 `Read(//Users/bmf/code/dotfiles/config/claude.zai/**)`, `Bash(gh pr *)`,
@@ -1262,7 +1248,7 @@ Local (untracked-style) permissions: allow list `Read(//Users/bmf/**)`,
 `enabledMcpjsonServers: ["chromedevtools/chrome-devtools-mcp"]`;
 `enableAllProjectMcpServers: true` (`.claude/settings.local.json`).
 
-### 14.6 `.mcp.json`
+### 14.4 `.mcp.json`
 
 One project MCP server, `chrome-devtools-mcp`, over stdio: `npx -y
 chrome-devtools-mcp@1.10.1 --isolated --no-usage-statistics` (`.mcp.json`).
