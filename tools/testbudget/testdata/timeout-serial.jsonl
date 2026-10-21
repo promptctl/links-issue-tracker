@@ -1,0 +1,67 @@
+{"Time":"2026-10-20T22:46:37.165032-06:00","Action":"start","Package":"example.com/hungpkg"}
+{"Time":"2026-10-20T22:46:37.170423-06:00","Action":"run","Package":"example.com/hungpkg","Test":"TestSerial100ms"}
+{"Time":"2026-10-20T22:46:37.170488-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerial100ms","Output":"=== RUN   TestSerial100ms\n"}
+{"Time":"2026-10-20T22:46:37.271517-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerial100ms","Output":"--- PASS: TestSerial100ms (0.10s)\n"}
+{"Time":"2026-10-20T22:46:37.271585-06:00","Action":"pass","Package":"example.com/hungpkg","Test":"TestSerial100ms","Elapsed":0.1}
+{"Time":"2026-10-20T22:46:37.271604-06:00","Action":"run","Package":"example.com/hungpkg","Test":"TestParallel300msBeforePauseNeverResumed"}
+{"Time":"2026-10-20T22:46:37.271609-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestParallel300msBeforePauseNeverResumed","Output":"=== RUN   TestParallel300msBeforePauseNeverResumed\n"}
+{"Time":"2026-10-20T22:46:37.572587-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestParallel300msBeforePauseNeverResumed","Output":"=== PAUSE TestParallel300msBeforePauseNeverResumed\n"}
+{"Time":"2026-10-20T22:46:37.572638-06:00","Action":"pause","Package":"example.com/hungpkg","Test":"TestParallel300msBeforePauseNeverResumed"}
+{"Time":"2026-10-20T22:46:37.572652-06:00","Action":"run","Package":"example.com/hungpkg","Test":"TestSerialHangs"}
+{"Time":"2026-10-20T22:46:37.572659-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs","Output":"=== RUN   TestSerialHangs\n"}
+{"Time":"2026-10-20T22:46:37.572671-06:00","Action":"run","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks"}
+{"Time":"2026-10-20T22:46:37.572677-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"=== RUN   TestSerialHangs/blocks\n"}
+{"Time":"2026-10-20T22:46:39.17409-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"panic: test timed out after 2s\n"}
+{"Time":"2026-10-20T22:46:39.174139-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\trunning tests:\n"}
+{"Time":"2026-10-20T22:46:39.174147-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\t\tTestSerialHangs (2s)\n"}
+{"Time":"2026-10-20T22:46:39.174152-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\t\tTestSerialHangs/blocks (2s)\n"}
+{"Time":"2026-10-20T22:46:39.174157-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\n"}
+{"Time":"2026-10-20T22:46:39.174162-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"goroutine 37 [running]:\n"}
+{"Time":"2026-10-20T22:46:39.174166-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"testing.(*M).startAlarm.func1()\n"}
+{"Time":"2026-10-20T22:46:39.17417-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\ttesting/testing.go:2682 +0x2b0\n"}
+{"Time":"2026-10-20T22:46:39.174184-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"created by time.goFunc\n"}
+{"Time":"2026-10-20T22:46:39.174189-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\ttime/sleep.go:215 +0x38\n"}
+{"Time":"2026-10-20T22:46:39.174194-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\n"}
+{"Time":"2026-10-20T22:46:39.174198-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"goroutine 1 [chan receive]:\n"}
+{"Time":"2026-10-20T22:46:39.174201-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"testing.(*T).Run(0x140001c4000, {0x1045a105c?, 0x14000104b38?}, 0x10461cc10)\n"}
+{"Time":"2026-10-20T22:46:39.174209-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\ttesting/testing.go:2005 +0x378\n"}
+{"Time":"2026-10-20T22:46:39.174224-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"testing.runTests.func1(0x140001c4000)\n"}
+{"Time":"2026-10-20T22:46:39.174229-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\ttesting/testing.go:2477 +0x38\n"}
+{"Time":"2026-10-20T22:46:39.174233-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"testing.tRunner(0x140001c4000, 0x14000104c68)\n"}
+{"Time":"2026-10-20T22:46:39.174245-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\ttesting/testing.go:1934 +0xc8\n"}
+{"Time":"2026-10-20T22:46:39.174249-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"testing.runTests(0x140001c0000, {0x104709780, 0x3, 0x3}, {0x1400018a100?, 0x7?, 0x10470eac0?})\n"}
+{"Time":"2026-10-20T22:46:39.174257-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\ttesting/testing.go:2475 +0x3b8\n"}
+{"Time":"2026-10-20T22:46:39.174261-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"testing.(*M).Run(0x140001be000)\n"}
+{"Time":"2026-10-20T22:46:39.174265-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\ttesting/testing.go:2337 +0x530\n"}
+{"Time":"2026-10-20T22:46:39.174269-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"main.main()\n"}
+{"Time":"2026-10-20T22:46:39.174273-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\t_testmain.go:49 +0x80\n"}
+{"Time":"2026-10-20T22:46:39.174276-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\n"}
+{"Time":"2026-10-20T22:46:39.17428-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"goroutine 34 [chan receive]:\n"}
+{"Time":"2026-10-20T22:46:39.174284-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"testing.(*T).Parallel(0x140001c4540)\n"}
+{"Time":"2026-10-20T22:46:39.174288-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\ttesting/testing.go:1708 +0x190\n"}
+{"Time":"2026-10-20T22:46:39.174292-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"example.com/hungpkg.TestParallel300msBeforePauseNeverResumed(0x140001c4540)\n"}
+{"Time":"2026-10-20T22:46:39.174295-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\texample.com/hungpkg/hung_test.go:15 +0x30\n"}
+{"Time":"2026-10-20T22:46:39.174299-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"testing.tRunner(0x140001c4540, 0x10461cc00)\n"}
+{"Time":"2026-10-20T22:46:39.174303-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\ttesting/testing.go:1934 +0xc8\n"}
+{"Time":"2026-10-20T22:46:39.174307-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"created by testing.(*T).Run in goroutine 1\n"}
+{"Time":"2026-10-20T22:46:39.17431-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\ttesting/testing.go:1997 +0x364\n"}
+{"Time":"2026-10-20T22:46:39.174314-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\n"}
+{"Time":"2026-10-20T22:46:39.174318-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"goroutine 35 [chan receive]:\n"}
+{"Time":"2026-10-20T22:46:39.174326-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"testing.(*T).Run(0x140001c4700, {0x10459ede2?, 0x14000101f58?}, 0x10461cca0)\n"}
+{"Time":"2026-10-20T22:46:39.174335-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\ttesting/testing.go:2005 +0x378\n"}
+{"Time":"2026-10-20T22:46:39.174339-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"example.com/hungpkg.TestSerialHangs(0x140001c4700?)\n"}
+{"Time":"2026-10-20T22:46:39.174343-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\texample.com/hungpkg/hung_test.go:22 +0x30\n"}
+{"Time":"2026-10-20T22:46:39.174347-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"testing.tRunner(0x140001c4700, 0x10461cc10)\n"}
+{"Time":"2026-10-20T22:46:39.17435-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\ttesting/testing.go:1934 +0xc8\n"}
+{"Time":"2026-10-20T22:46:39.174354-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"created by testing.(*T).Run in goroutine 1\n"}
+{"Time":"2026-10-20T22:46:39.174358-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\ttesting/testing.go:1997 +0x364\n"}
+{"Time":"2026-10-20T22:46:39.174361-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\n"}
+{"Time":"2026-10-20T22:46:39.174365-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"goroutine 36 [select (no cases)]:\n"}
+{"Time":"2026-10-20T22:46:39.174369-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"example.com/hungpkg.TestSerialHangs.func1(0x140001c4a80?)\n"}
+{"Time":"2026-10-20T22:46:39.174374-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\texample.com/hungpkg/hung_test.go:22 +0x1c\n"}
+{"Time":"2026-10-20T22:46:39.174377-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"testing.tRunner(0x140001c4a80, 0x10461cca0)\n"}
+{"Time":"2026-10-20T22:46:39.174387-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\ttesting/testing.go:1934 +0xc8\n"}
+{"Time":"2026-10-20T22:46:39.174392-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"created by testing.(*T).Run in goroutine 35\n"}
+{"Time":"2026-10-20T22:46:39.174395-06:00","Action":"output","Package":"example.com/hungpkg","Test":"TestSerialHangs/blocks","Output":"\ttesting/testing.go:1997 +0x364\n"}
+{"Time":"2026-10-20T22:46:39.174904-06:00","Action":"output","Package":"example.com/hungpkg","Output":"FAIL\texample.com/hungpkg\t2.010s\n"}
+{"Time":"2026-10-20T22:46:39.174922-06:00","Action":"fail","Package":"example.com/hungpkg","Elapsed":2.01}

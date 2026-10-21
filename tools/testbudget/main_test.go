@@ -1,8 +1,11 @@
 package main
 
 import (
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +14,138 @@ import (
 // stream builds a go test -json stream from raw lines.
 func stream(lines ...string) *strings.Reader {
 	return strings.NewReader(strings.Join(lines, "\n") + "\n")
+}
+
+// recorded opens a stream that testdata/src/record.sh recorded from a real
+// go test -json run of the package of the same name under testdata/src. Each
+// test's name states its designed timing, so the expectations below come from
+// the package's design, not from this tool's output.
+func recorded(t *testing.T, name string) *os.File {
+	t.Helper()
+	f, err := os.Open(filepath.Join("testdata", name+".jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { f.Close() })
+	return f
+}
+
+// report consumes streams and renders every package's violation against a
+// budget every package blows, as main writes them to stderr.
+func report(t *testing.T, streams ...io.Reader) string {
+	t.Helper()
+	results, err := consume(io.MultiReader(streams...), io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	for _, v := range enforce(results, nil, time.Second) {
+		writeViolation(&out, "", v)
+	}
+	return out.String()
+}
+
+func TestOverBudgetPackageListsItsTenSlowestTopLevelTests(t *testing.T) {
+	// slow: thirteen top-level tests, so the three fastest are left off, and
+	// subtests that would outrank most of the list if subtests were listed.
+	// The parent of two parallel 320ms subtests is listed at its subtests'
+	// end, not go test's 0.00s for it: subtest b ends at cont 36.078667 +
+	// 0.32s less its 0.000012s before the pause = 36.398655, 0.320067s after
+	// the parent's run at 36.078588. TestParallel150msBeforePauseThen100ms
+	// counts its 0.15s before the pause once: 0.25s, not 0.40s.
+	got := report(t, recorded(t, "slow"))
+	want := "test runtime budget exceeded: example.com/slowpkg took 2.7s, budget is 1s (over by 1.7s, +170%) — see tools/testbudget/budgets.go before raising the number\n" +
+		"  slowest top-level tests, 10 of 13:\n" +
+		"      0.60s  parallel  TestParallel600ms\n" +
+		"      0.52s  serial    TestSerial520ms\n" +
+		"      0.44s  parallel  TestParallel440ms\n" +
+		"      0.40s  serial    TestSerialParentOfA400msSubtest\n" +
+		"      0.36s  serial    TestSerial360ms\n" +
+		"      0.32s  serial    TestSerialParentOfTwoParallel320msSubtests\n" +
+		"      0.28s  parallel  TestParallel280ms\n" +
+		"      0.25s  parallel  TestParallel150msBeforePauseThen100ms\n" +
+		"      0.20s  serial    TestSerial200ms\n" +
+		"      0.12s  parallel  TestParallel120ms\n"
+	if got != want {
+		t.Errorf("violation report:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestTimedOutPackageListsItsHungTestsAsUnfinished(t *testing.T) {
+	// timeout-serial, under -timeout 2s: TestSerialHangs hangs in a subtest
+	// and never gets a verdict — go test emits only the package fail. The
+	// parallel test is still paused when the timeout fires, so its whole
+	// duration is the 300ms before t.Parallel. Hung elapsed = package fail
+	// Time 22:46:39.174922 - run Time 22:46:37.572652 = 1.60s.
+	got := report(t, recorded(t, "timeout-serial"))
+	want := "  slowest top-level tests, 3 of 3:\n" +
+		"      1.60s  serial    TestSerialHangs  [unfinished]\n" +
+		"      0.30s  parallel  TestParallel300msBeforePauseNeverResumed  [unfinished]\n" +
+		"      0.10s  serial    TestSerial100ms\n"
+	if !strings.HasSuffix(got, want) {
+		t.Errorf("violation report:\n%s\nwant it to end:\n%s", got, want)
+	}
+}
+
+func TestUnfinishedParallelTestCountsTimeBeforeItsPauseAndSinceItsResume(t *testing.T) {
+	// timeout-parallel: run 39.332454 → pause 39.533620 (0.20s), then
+	// cont 39.634784 → package fail 41.337032 (1.70s): 1.90s, not the
+	// 0.20s or 1.70s of either half, nor the 2.00s from run to fail.
+	got := report(t, recorded(t, "timeout-parallel"))
+	want := "  slowest top-level tests, 2 of 2:\n" +
+		"      1.90s  parallel  TestParallel200msBeforePauseThenHangs  [unfinished]\n" +
+		"      0.10s  serial    TestSerial100ms\n"
+	if !strings.HasSuffix(got, want) {
+		t.Errorf("violation report:\n%s\nwant it to end:\n%s", got, want)
+	}
+}
+
+func TestHungTestOutputPrintsWhenItsPackageEnds(t *testing.T) {
+	// The -timeout panic is output of the hung test, which never gets a
+	// verdict. It must print as its package ends, not after every package
+	// that finishes later in a concurrent go test ./... stream.
+	var out strings.Builder
+	if _, err := consume(io.MultiReader(recorded(t, "timeout-serial"), recorded(t, "slow")), &out); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	panicAt := strings.Index(got, "panic: test timed out after 2s")
+	header := "--- unfinished: example.com/hungpkg TestSerialHangs/blocks (no verdict before its package ended)"
+	headerAt := strings.Index(got, header)
+	laterPackageAt := strings.Index(got, "ok  \texample.com/slowpkg")
+	if panicAt < 0 || headerAt < 0 || laterPackageAt < 0 {
+		t.Fatalf("output missing the panic, %q, or the later package's ok line:\n%s", header, got)
+	}
+	if !(headerAt < panicAt && panicAt < laterPackageAt) {
+		t.Errorf("hung test's output not printed under its header before the later package's result:\n%s", got)
+	}
+}
+
+func TestSlowestBreaksTiesByNameSoTheCutIsStable(t *testing.T) {
+	// Eleven tests tied at one second: which ten are listed must not
+	// depend on stream order.
+	var tests []testResult
+	for i := 10; i >= 0; i-- {
+		tests = append(tests, testResult{Name: fmt.Sprintf("Test%02d", i), Elapsed: time.Second})
+	}
+	var got []string
+	for _, r := range slowest(tests) {
+		got = append(got, r.Name)
+	}
+	want := []string{"Test00", "Test01", "Test02", "Test03", "Test04", "Test05", "Test06", "Test07", "Test08", "Test09"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("slowest of eleven tied tests = %v, want %v", got, want)
+	}
+}
+
+func TestPackageWithinBudgetHasNoViolation(t *testing.T) {
+	results, err := consume(recorded(t, "slow"), io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if viols := enforce(results, nil, 5*time.Second); len(viols) != 0 {
+		t.Errorf("slow against a 5s budget: got violations %+v", viols)
+	}
 }
 
 func TestConsumeStampsTerminalPackageResults(t *testing.T) {
@@ -29,13 +164,8 @@ func TestConsumeStampsTerminalPackageResults(t *testing.T) {
 		{ImportPath: "example.com/b", Elapsed: 200 * time.Millisecond, Failed: true},
 		{ImportPath: "example.com/c"}, // no Elapsed in the event means zero
 	}
-	if len(results) != len(want) {
-		t.Fatalf("got %d results, want %d: %+v", len(results), len(want), results)
-	}
-	for i := range want {
-		if results[i] != want[i] {
-			t.Errorf("result %d = %+v, want %+v", i, results[i], want[i])
-		}
+	if !reflect.DeepEqual(results, want) {
+		t.Errorf("results = %+v, want %+v", results, want)
 	}
 }
 
