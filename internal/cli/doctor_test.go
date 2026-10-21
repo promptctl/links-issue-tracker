@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -393,4 +394,45 @@ func TestDoctorRecordsInterleavedEpicsAndNoCycle(t *testing.T) {
 func sortedIDs(ids ...string) []string {
 	slices.Sort(ids)
 	return ids
+}
+
+// Every doctor run states the store's size on disk against its ceiling, on
+// its output and on its event, and a store within its ceiling says so with
+// "none" rather than an absent value.
+func TestDoctorReportsTheFootprint(t *testing.T) {
+	h := newReadyTestHarness(t)
+	h.createIssue(storage.CreateIssueInput{Title: "sized", Topic: "footprint", IssueType: "epic"})
+
+	facts, out := runDoctorRecorded(t, h)
+	if !strings.Contains(out, "\nfootprint: ") || !strings.Contains(out, "chunk store ") || !strings.Contains(out, "remote cache 0 B (outside the ceiling)") {
+		t.Errorf("output lacks the footprint line naming every part:\n%s", out)
+	}
+	if governed, err := strconv.ParseInt(fmt.Sprint(facts["doctor.footprint_bytes"]), 10, 64); err != nil || governed <= 0 {
+		t.Errorf("event fact doctor.footprint_bytes = %v, want the store's positive governed bytes", facts["doctor.footprint_bytes"])
+	}
+	if ceiling, err := strconv.ParseInt(fmt.Sprint(facts["doctor.footprint_ceiling"]), 10, 64); err != nil || ceiling <= 0 {
+		t.Errorf("event fact doctor.footprint_ceiling = %v, want the engine's positive ceiling", facts["doctor.footprint_ceiling"])
+	}
+	if facts["doctor.over_ceiling"] != "none" {
+		t.Errorf("event fact doctor.over_ceiling = %v, want \"none\" for a store within its ceiling", facts["doctor.over_ceiling"])
+	}
+}
+
+func TestPrintFootprintAndOverCeilingPart(t *testing.T) {
+	t.Parallel()
+	fp := storage.Footprint{Ceiling: 2048, Components: []storage.FootprintComponent{
+		{Name: "chunk store", Bytes: 3072, Governed: true},
+		{Name: "remote cache", Bytes: 1 << 20, Governed: false},
+	}}
+	var out bytes.Buffer
+	if err := printFootprint(&out, fp); err != nil {
+		t.Fatalf("printFootprint() error = %v", err)
+	}
+	want := "footprint: 3.0 KiB of a 2.0 KiB ceiling; chunk store 3.0 KiB, remote cache 1.0 MiB (outside the ceiling)\n"
+	if out.String() != want {
+		t.Errorf("printFootprint() = %q, want %q", out.String(), want)
+	}
+	if got := overCeilingPart(fp); got != "chunk store" {
+		t.Errorf("overCeilingPart() = %q, want the governed part holding the bytes, not the larger ungoverned cache", got)
+	}
 }

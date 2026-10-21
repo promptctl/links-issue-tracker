@@ -212,8 +212,8 @@ Tests: `TestSyncPushDelivers` (`sync_test.go`), `TestSyncCompactAndPushDelivers`
 4. `collectRemote(remote, branch, ReRooted.Head)` (§1.8b), whatever `Lease` says, into `RemoteGC`. Its error is wrapped `"collect %s: %w"` with the tracking ref, joined with the bound's error after step 5, and stops nothing.
 5. `SyncFetch(remote)` (`"fetch to learn whether %s carries the re-root: %w"`), then the reading: `mergeBase(ReRooted.Head, remotes/<remote>/<branch>)` (`"read whether %s carries the re-root %s: %w"`), which carries the re-root when the base is `ReRooted.Head` and lacks it otherwise, then `moveOntoRemoteReRoot(remote, branch, SyncEntryBound)` (§1.6c steps 1–4; it collects nothing, on any store), whatever `Lease` says and whether or not the fetch and the reading failed; their error is joined with the bound's. `Publication` = `publicationOf(Lease, reading)`: carries is `ReRootPublished`, lacks is `ReRootNotCarried`, and with no reading a `held` lease is `ReRootPublished` and `stale` or `unsettled` is `ReRootPossiblyPublished`. A follow error ends the bound. A branch that did not follow is read with `unrelatedToRemote` (`"read whether the branch still shares history with %s: %w"`): unrelated is `"%s carries a re-root the branch did not follow, so the branch is on history unrelated to it"`.
 6. However `publishBound` ended, one `runSyncMutation` of `deleteBranchesUnder("lit-reroot/")` (§5.10); its error is joined with the bound's.
-`collectBelowTheCut(ctx) storage.Collection`, run by `collectOwedCut` (§1.6c): `BytesBefore = storeBytes(doltRootDir)` (`dirSize` of the chunk store, `"measure the store's size on disk: %w"`, 0 on a failed walk); then one `runSyncMutation`: `PruneCheckpoints(prefix, 0)` for `pre-migrate` and `pre-drift-repair`, `deleteBranchesUnder` of `"links-reconcile-scratch-"` and `"lit-reroot/"` (§5.10), each failure returned before the GC; then `compactWithinLock(GCFull)` with `Ran = attempt.Ran` and its sweep accumulated with `plus`; then `BytesAfter = storeBytes(...)`, whatever the mutation returned, and `Sweep` = the sweep's `Report()`. The mutation's error and both readings' errors are joined into `Err`.
-`collectionReport(Collection)` joins with `joinMaintenance`: `"store %s -> %s"` (`humanBytes`) when `Ran`, `Sweep` when non-empty, `"history below the cut not collected: %v"` on `Err`; a zero collection is empty. Tests: `TestAFollowCollectsTheHistoryBelowTheCut`, `TestAFollowCarriesAFailedCollection`, `TestACollectionIsReportedWhole`, `TestACompactingPushReportsItsFollowsCollection` (`reroot_follow_test.go`); `TestABoundKeptOnTheMirrorsCloneCollectsNothing` (`history_bound_test.go`).
+`collectBelowTheCut(ctx) storage.Collection`, run by `collectOwedCut` (§1.6c): `BytesBefore = chunkStoreBytes(doltRootDir)` (`bytesUnder` of the chunk store, `"measure the chunk store's size on disk: %w"`, 0 on a failed walk); then one `runSyncMutation`: `PruneCheckpoints(prefix, 0)` for `pre-migrate` and `pre-drift-repair`, `deleteBranchesUnder` of `"links-reconcile-scratch-"` and `"lit-reroot/"` (§5.10), each failure returned before the GC; then `compactWithinLock(GCFull)` with `Ran = attempt.Ran` and its sweep accumulated with `plus`; then `BytesAfter = chunkStoreBytes(...)`, whatever the mutation returned, and `Sweep` = the sweep's `Report()`. The mutation's error and both readings' errors are joined into `Err`.
+`collectionReport(Collection)` joins with `joinMaintenance`: `"store %s -> %s"` (`storage.FormatBytes`) when `Ran`, `Sweep` when non-empty, `"history below the cut not collected: %v"` on `Err`; a zero collection is empty. Tests: `TestAFollowCollectsTheHistoryBelowTheCut`, `TestAFollowCarriesAFailedCollection`, `TestACollectionIsReportedWhole`, `TestACompactingPushReportsItsFollowsCollection` (`reroot_follow_test.go`); `TestABoundKeptOnTheMirrorsCloneCollectsNothing` (`history_bound_test.go`).
 
 `historyBoundReport` joins with `joinMaintenance`: `"history bound: the remote head reached height %d (bound %d)"` when fired, `"re-root at %s, keeping %d commits and dropping %d: %s"` with `Publication` when `ReRooted.Head` is set, `"lease "` + the outcome when pushed, `"remote GC %s: %s of table files, %s collected, %d other branches dropped"` (the count of `DroppedBranches`) when `RemoteGC.Outcome` is set, `"history bound not kept: %v"` on `Err`; under the bound with no error it is empty. Tests: `TestAPushPastTheBoundReRootsWithNoCommandRun`, `TestABoundKeptOnTheMirrorsCloneCollectsNothing`, `TestAStaleLeaseLeavesTheBranchOnItsHistory`, `TestAStaleLeaseOverTheLandedReRootStillFollowsIt`, `TestAHeldLeaseTheBranchCannotFollowIsTheBoundsError`, `TestAReRootPushWithNoVerdictLeavesNoScratch`, `TestAReRootRefusedBeforeTheRemoteIsNotPushed`, `TestAReRootsPublicationIsTheReadingsElseTheLeases` (`history_bound_test.go`), each against a `git+file` remote (`gitRemote`, `remote_gc_test.go`).
 
@@ -322,21 +322,21 @@ At `compaction.go`:
 
 `nomsDir(doltRootDir)` (`compaction.go`) = `filepath.Join(doltRootDir, doltDatabaseName, dbfactory.DoltDir, dbfactory.DataDir)`.
 
-### 3.3 `storeFootprint` and measurement
+### 3.3 `compactionSignals` and measurement
 
-`storeFootprint{JournalBytes int64; OldGenArchives int}` (`compaction.go`).
+`compactionSignals{JournalBytes int64; OldGenArchives int}` (`compaction.go`): the two sizes the compaction policy decides on, read cheaply enough to sit on the push path inside the commit lock. The store's whole footprint is a different reading (§3.8).
 
-`measureFootprint(doltRootDir)` (`compaction.go`):
+`measureCompactionSignals(doltRootDir)` (`compaction.go`):
 1. `os.Stat(filepath.Join(noms, chunks.JournalFileID))` — Dolt's own exported journal filename constant. `err == nil` → `JournalBytes = info.Size()`; `os.IsNotExist` → left 0; any other error → `"measure chunk journal: %w"` (`compaction.go`).
 2. `os.ReadDir(filepath.Join(noms, "oldgen"))`. Count entries that are **not directories** and whose `filepath.Ext(name) == ".darc"` (`compaction.go`). `os.IsNotExist` → 0; any other error → `"measure old generation: %w"`.
-A store directory that does not exist yields an empty footprint with no error.
-`(*Store).measureFootprint()` (`compaction.go`) delegates using `s.doltRootDir`.
+A store directory that does not exist yields empty signals with no error.
+`(*Store).measureCompactionSignals()` (`compaction.go`) delegates using `s.doltRootDir`.
 
-Tests: `TestMeasureFootprintReadsJournalAndArchives` (`compaction_test.go`), `TestMeasureFootprintReadsAnAbsentStoreAsEmpty` (`compaction_test.go`), `TestMeasureFootprintCountsOnlyArchives` (`compaction_test.go`), `TestMeasureFootprintMatchesDoltsRealOldGenLayout` (`sync_test.go`).
+Tests: `TestMeasureCompactionSignalsReadsJournalAndArchives` (`compaction_test.go`), `TestMeasureCompactionSignalsReadsAnAbsentStoreAsEmpty` (`compaction_test.go`), `TestMeasureCompactionSignalsCountsOnlyArchives` (`compaction_test.go`), `TestMeasureCompactionSignalsMatchesDoltsRealOldGenLayout` (`sync_test.go`).
 
 ### 3.4 The legality/due rule
 
-`dueMode(footprint) (GCMode, bool)` (`compaction.go`) — pure:
+`dueMode(signals) (GCMode, bool)` (`compaction.go`) — pure:
 1. `OldGenArchives >= 64` → `(GCFull, true)`. **Tested first** because the deep pass subsumes the shallow one.
 2. `JournalBytes >= 16 MiB` → `(GCNewGen, true)`.
 3. otherwise → `(GCNewGen, false)`.
@@ -352,33 +352,34 @@ Test `TestDueModeSelectsDepthByFootprint` (`compaction_test.go`).
 
 `SyncCompact(ctx, mode)` (`sync.go`):
 1. **Door guard**: `!mode.Valid()` → `"compact: illegal depth %d (want %q or %q)"` with `storage.GCNewGen`/`storage.GCFull` named (`sync.go`). Test `TestSyncCompactRefusesAnIllegalDepth` (`sync_test.go`).
-2. `before, beforeErr := s.measureFootprint()` — **outside** the lock.
+2. `before, beforeErr := s.measureCompactionSignals()` — **outside** the lock.
 3. `runSyncMutation(compactWithinLock(mode))`, the sweep outcomes of every run joined with `plus`.
-4. `after, afterErr := s.measureFootprint()` — also outside the lock.
-5. Returns `CompactionOutcome{Ran: true, Depth: mode, Detail: joinMaintenance(footprintDelta(before, after, errors.Join(beforeErr, afterErr)), sweep.Report())}`; a failure is annotated with `joinMaintenance(compactionReport(attempt, nil), sweep.Report())`.
+4. `after, afterErr := s.measureCompactionSignals()` — also outside the lock.
+5. Returns `CompactionOutcome{Ran: true, Depth: mode, Detail: joinMaintenance(signalsDelta(before, after, errors.Join(beforeErr, afterErr)), sweep.Report())}`; a failure is annotated with `joinMaintenance(compactionReport(attempt, nil), sweep.Report())`.
 Test `TestSyncCompactRunsCleanlyAndPreservesData` (`sync_test.go`).
 
-`CompactIfDue(ctx)` (`sync.go`) — the backstop gate:
-1. `s.measureFootprint()`; a measurement error returns `"measure store footprint: %w"` (explicitly *not* "nothing due") (`sync.go`).
-2. `mode, due := dueMode(footprint)`; `!due` → zero `CompactionOutcome{}` and **nil error** (`sync.go`).
-3. else `s.SyncCompact(ctx, mode)`.
+`MaintainIfDue(ctx) (storage.MaintenanceOutcome, error)` (`sync.go`) — the backstop's entrypoint. Both steps run every time, neither is skipped for the other's failure, and their errors are joined:
+1. `compactIfDue(ctx)`: `s.measureCompactionSignals()`; a measurement error returns `"measure compaction signals: %w"` (explicitly *not* "nothing due"). `mode, due := dueMode(signals)`; `!due` → zero `CompactionOutcome{}` and **nil error**; else `s.SyncCompact(ctx, mode)` (`sync.go`).
+2. `s.pruneAutomaticSnapshots()` (§3.8).
+3. Returns `MaintenanceOutcome{Compaction, SnapshotsPruned, Footprint}` from the two steps. The ceiling is never an input to compaction: a store over it with nothing to reclaim runs no pass it did not already owe.
 
 `chooseCompactionDepth()` (`sync.go`) — the push path's depth selector:
-1. Measurement failure → returns `(GCNewGen, err)` — a usable floor **and** the error. The push always compacts at least the new generation; the footprint can only deepen, never cancel (`sync.go`).
+1. Measurement failure → returns `(GCNewGen, err)` — a usable floor **and** the error. The push always compacts at least the new generation; the signals can only deepen, never cancel (`sync.go`).
 2. `dueMode` due → that mode.
 3. otherwise `GCNewGen, nil`.
 
 ### 3.6 Reporting vocabulary
 
-- `footprintDelta(before, after, measureErr)` (`compaction.go`): on `measureErr != nil` → `"footprint not measured: %v"`. Otherwise exactly `"journal %s -> %s, old-generation archives %d -> %d"` with `humanBytes` for the two sizes.
+- `signalsDelta(before, after, measureErr)` (`compaction.go`): on `measureErr != nil` → `"compaction signals not measured: %v"`. Otherwise exactly `"journal %s -> %s, old-generation archives %d -> %d"` with `storage.FormatBytes` for the two sizes.
 - `compactionReport(mode, measureErr)` (`compaction.go`):
   - `measureErr != nil` → `"compaction: ran %s pass; could not measure whether a deeper one is due: %v"`.
   - `mode == GCFull` → `"compaction: ran full pass, rewriting the old generation"`.
   - default → `""` (a routine shallow pass says nothing).
   Test `TestCompactionReportSpeaksOnlyWhenItHasSomethingToSay` (`compaction_test.go`).
 - `joinMaintenance(reports…)` (`compaction.go`): drops empty strings and joins the rest with `"; "`. Test `TestJoinMaintenanceDropsSilentReports` (`compaction_test.go`).
-- `humanBytes(n)` (`/Users/bmf/code/links-issue-tracker/internal/store/remotecache.go`): `< 1024` → `"%d B"`; otherwise `"%.1f %ciB"` over the unit table `"KMGTPE"`.
+- `storage.FormatBytes(n)` (`internal/storage/footprint.go`): `< 1024` → `"%d B"`; otherwise `"%.1f %ciB"` over the unit table `"KMGTPE"`. Every size lit shows a person is spelled through it.
 - `CompactionOutcome{Ran bool; Depth GCMode; Detail string}` at `/Users/bmf/code/links-issue-tracker/internal/storage/sync.go`. `Detail` is empty **only** for the zero outcome that did nothing; a pass that ran but could not measure reports the failure in `Detail`.
+- `MaintenanceOutcome{Compaction CompactionOutcome; SnapshotsPruned []string; Footprint Footprint}` (`internal/storage/sync.go`). `Footprint` is the zero value exactly when the closing measurement failed.
 
 ### 3.7 Remote-cache prune (the other half of push maintenance)
 
@@ -393,8 +394,20 @@ Test `TestSyncCompactRunsCleanlyAndPreservesData` (`sync_test.go`).
   - problem only → `job + ": " + problem`
   - removals only → `"%s: removed %d %s, reclaimed %s"`
   - neither → `""`.
-- `dirSize(root)` (`remotecache.go`) walks and sums file sizes for the `Reclaimed` figure.
+- `bytesUnder(root)` (`remotecache.go`) walks and sums the apparent sizes of the files under `root` for the `Reclaimed` figure. An absent root, or a file that vanishes mid-walk, reads zero; any other failure is returned, never a partial sum.
 - Eligibility is **re-asked per directory** inside the deletion loop rather than trusted from the plan snapshot (`remotecache.go`).
+
+### 3.8 The size ceiling and automatic-snapshot retention (`footprint.go`)
+
+- **Parts.** `measureFootprint(doltRootDir)` walks every part of the store with `bytesUnder`, reading the filesystem only, with no engine and no lock: the chunk store (`chunkStoreBytes`), the temp table files (`TempTableFilesDir`; `"measure temp table files: %w"`), the remote cache (`remoteCacheBaseFor`; `"measure the remote cache: %w"`), and the snapshots directory (`measureSnapshots`). It runs in the backstop, in `Doctor`, and after an automatic snapshot's take, never on the push path.
+- `measureSnapshots` sizes each entry of the snapshots directory once (`"measure snapshot %s: %w"`). A snapshot `automaticSnapshotKind` classifies — a name stamped with one of `automaticSnapshotLabels` (`pre-migrate`, `pre-reconcile`, `lit-downgrade`) — is itemized, newest first, as a `sizedSnapshot`; everything else in the directory (the user's snapshots, a take in flight) is one sum.
+- `footprint.contract(ceiling)` renders `storage.Footprint` with five components, in order: `chunk store`, `temp table files`, `automatic snapshots`, `user snapshots` (all governed) and `remote cache` (not governed: its floor is the remote's reachable data, which no local action lowers).
+- `storeSizeCeiling` is derived: (`measuredDesignStoreBytes` + `designHistoryCommits` × `measuredCommitBytes` + `journalDueBytes`) × (1 + `len(automaticSnapshotLabels)`). That is room for a design-size store, the history the default window keeps (`designHistoryCommits` is the window's `re_root_at`) and a journal at the shallow-pass threshold, plus one snapshot of that store per automatic kind. The two measured figures are `just perf --sizes` readings at the design size; the source names the run. `Store.sizeCeiling` carries it into the retention rule as a value.
+- `automaticSnapshotsPerKind = 10`.
+- `snapshotsToPrune(f, ceiling)` — pure, the one retention rule. The newest snapshot of each kind always stays. The room the rest may take is the ceiling less the chunk store, the temp table files, the other snapshots and those newest ones. Newest first, each further snapshot stays while its kind holds fewer than `automaticSnapshotsPerKind` and it fits the room left; once one does not fit, it and every older one go. Test `TestSnapshotsToPrune` (`footprint_test.go`).
+- `(*Store).pruneAutomaticSnapshots() (ceilingHold, error)` — the one enforcer: `measureFootprint` (`"measure store footprint: %w"`), then `dbsnapshot.Remove` of each snapshot `snapshotsToPrune` names, stopping at the first removal error. It returns the names removed and the footprint less what was removed, without a second walk. It takes no lock of its own: `migrate` (§8.3), the reconcile (§5.16, step 13), take-remote and `Downgrade` call it inside the commit lock they took their snapshot under, and `MaintainIfDue` (§3.5) calls it holding Dolt's LOCK through its write engine.
+- `(*Store).footprint()` measures and renders. `overCeilingWarning(fp)` is `Doctor`'s warning for a store over its ceiling: `"store over its size ceiling: %s against %s; the largest part is the %s at %s"` — the governed bytes, the ceiling, and the largest governed part's name and size.
+- Tests: `TestMeasureFootprintReadsEveryPart`, `TestMeasureFootprintOfAnAbsentStoreIsEmpty`, `TestTheCeilingBudgetsTheDefaultHistoryWindow` (`footprint_test.go`); `TestOrdinaryUsePastTheCeilingComesBackUnderOnItsOwn`, `TestAStoreThatCannotShrinkNamesThePartHoldingTheBytes` (`footprint_ceiling_test.go`).
 
 ---
 
@@ -470,7 +483,7 @@ Fields (`sync_schema_guard.go`): `Remote`, `Branch`, `RemoteVersion int64`, `Bin
 ### 5.4 Snapshot budget
 
 - `reconcileSnapshotLabel = "pre-reconcile"` (`sync_reconcile.go`).
-- `reconcileSnapshotRetention = 10` (`sync_reconcile.go`).
+- Retention: `pruneAutomaticSnapshots` (§3.8), the one rule for every automatic kind.
 - `IsReconcileSnapshotName(name)` (`sync_reconcile.go`) = `isStampedSnapshotName(name, "pre-reconcile")`.
 - `formatReconcileSnapshotLabel(t)` = `fmt.Sprintf("%s-%d", "pre-reconcile", t.UTC().UnixNano())` (`sync_reconcile.go`).
 - Test `TestIsReconcileSnapshotNameDisjoint` (`sync_reconcile_schema_skew_test.go`).
@@ -629,7 +642,7 @@ Errors: `"read folded chain of %s excluding %v: %w"`, `"scan folded chain commit
 10. **Snapshot-first**: `guard.ensure(ctx)`; failure → `"snapshot before reconcile: %w"`, aborting **before** the data branch moves (`sync_reconcile.go`).
 11. `CALL DOLT_CHECKOUT(dataBranch)`; error `"return to data branch %q: %w"`.
 12. `CALL DOLT_RESET('--hard', replayedCommit)` — **the single atomic advance of the data branch**; error `"advance %q to replayed commit: %w"` (`sync_reconcile.go`).
-13. `dbsnapshot.PruneMatching(s.doltRootDir, 10, IsReconcileSnapshotName)`. A failure prints `"lit: reconcile could not prune old recovery snapshots (replay already committed): %v"` to stderr and is **not** promoted — the replay already committed (`sync_reconcile.go`).
+13. `s.pruneAutomaticSnapshots()` (§3.8). A failure prints `"lit: reconcile could not prune old recovery snapshots (replay already committed): %v"` to stderr and is **not** promoted — the replay already committed (`sync_reconcile.go`).
 14. Return `replayLanding{replayed, landing}`.
 
 Invariant: the data branch is at its pre-reconcile head before step 12 and at the complete replayed spine after — never in between.
@@ -722,7 +735,7 @@ Test `TestSyncResolveUnrelatedOwnerApprovalBindsForkAndSide` (`sync_unrelated_te
 `takeRemoteHead(ctx, result, guard, trackingRef)` (`sync_unrelated_take.go`):
 1. `guard.ensure(ctx)`; failure → `"snapshot before take-remote: %w"`.
 2. `resetHardToRef(ctx, s.db, trackingRef)`.
-3. `dbsnapshot.PruneMatching(s.doltRootDir, 10, IsReconcileSnapshotName)`; failure prints `"lit: take-remote could not prune old recovery snapshots (reset already done): %v"` to stderr, **not** promoted.
+3. `s.pruneAutomaticSnapshots()` (§3.8); failure prints `"lit: take-remote could not prune old recovery snapshots (reset already done): %v"` to stderr, **not** promoted.
 4. `result.State = SyncReconcileTookRemote`.
 Idempotent under retry (cached snapshot, fixed ref). The session's working set is left at the adopted head's own schema; the next `Open` lifts it. Tests `TestSyncResolveUnrelatedTakeRemote` (`sync_unrelated_test.go`), `TestSyncResolveUnrelatedTakeRemoteAdoptsAPrePurgeRemote` "nothing to carry" (`sync_unrelated_purge_test.go`).
 
@@ -817,7 +830,6 @@ The schema fact this rests on: every child table is `ON DELETE CASCADE` from iss
 - `migrationDriftRepairCheckpointPrefix = "pre-drift-repair"` (`migration_runner.go`)
 - `gooseVersionTable = "goose_db_version"` (`migration_runner.go`)
 - `baselineVersion = migrations.Baseline` (`migration_runner.go`)
-- `migrationSnapshotRetention = 10` (`/Users/bmf/code/links-issue-tracker/internal/store/migrate_snapshot.go`)
 - `migrationSnapshotLabel = "pre-migrate"` (`migrate_snapshot.go`)
 
 Test hooks: `migrationUpByOneForTest` (`migration_runner.go`) applies **only** to `applyPendingMigrations`, never the reconcile lift; `versionContentDriftRepairForTest` (`migration_runner.go`) replaces the drift repair; `failpointForTest func(at failpoint) error` (`convergence.go`) is consulted by `atFailpoint` before each `ConvergenceStep` run through `attempt` and each `pruneStep`, and an error it returns fails that point in place of its work; steps raised only through `failAt` (`migration`, `drift_repair`, `quarantine_table_shape`, `reconcile_prerequisites_missing`, `reconciled_shape_differs`) are never consulted. `failpoint` is sealed by an unexported method; its only implementations are `ConvergenceStep` and `pruneStep` (`migration_checkpoint_prune`, `drift_checkpoint_prune`, `snapshot_prune`).
@@ -844,7 +856,7 @@ Test hooks: `migrationUpByOneForTest` (`migration_runner.go`) applies **only** t
 1. `guard := newSnapshotGuard(s.doltRootDir, formatMigrationSnapshotLabel(time.Now()))`.
 2. `op, pruneErr, fail := s.runMigration(ctx, guard)`.
 3. On `fail != nil`: `fail.PruneErr = pruneErr`; return `fail`, a `*SchemaConvergenceError`.
-4. On success: `Migrated{SchemaAhead: op.schemaAhead(), PruneErr: pruneErr}`. With no snapshot taken, return it. With one → `Snapshot: snap.Name`, then `prune(pruneMigrationSnapshots, "prune migration snapshots", dbsnapshot.PruneMatching(s.doltRootDir, 10, IsMigrationSnapshotName))`, joined into `PruneErr`. No prune failure is the returned error (`migration_runner.go`). `Open` keeps the report on the handle, read back through `(*Store).Migrated()`; a sync open reports its bootstrap and the newer schema it served, and a read open that migrated nothing reports only the newer schema it served (`store.go`, `sync.go`, `migration_runner.go`).
+4. On success: `Migrated{SchemaAhead: op.schemaAhead(), PruneErr: pruneErr}`. With no snapshot taken, return it. With one → `Snapshot: snap.Name`, then `prune(pruneMigrationSnapshots, "prune migration snapshots", …)` over `s.pruneAutomaticSnapshots()` (§3.8), joined into `PruneErr`. No prune failure is the returned error (`migration_runner.go`). `Open` keeps the report on the handle, read back through `(*Store).Migrated()`; a sync open reports its bootstrap and the newer schema it served, and a read open that migrated nothing reports only the newer schema it served (`store.go`, `sync.go`, `migration_runner.go`).
 
 **`SchemaConvergenceError`** (`convergence.go`): `{Step ConvergenceStep; Snapshot *dbsnapshot.Taken; PruneErr error; Cause error}`; `Unwrap()` is `Cause`. `Error()`: `"schema convergence step %s failed: %v"` (step token, cause), then, when `Snapshot` is set, `"this open took recovery snapshot %s before migrating; it holds the workspace as it was then:\n  %s"` (name, path), then, when `PruneErr` is set, `"removing old migration checkpoints or snapshots also failed: %v"`. No restore instruction. `EventRecord()`: `storage.MigrationRecoveryFacts(recoverySnapshot(*Snapshot) or nil, PruneErr)` plus `migration.failed_step` = the step token.
 
@@ -1086,7 +1098,7 @@ So the full shape is `<unix-ns>-<label>-<unix-ns>`.
 
 `isAllDigits(s)` (`migrate_snapshot.go`): non-empty and every rune in `'0'..'9'`.
 
-Three disjoint classifiers share it: `IsMigrationSnapshotName` (label `"pre-migrate"`, `migrate_snapshot.go`), `IsDowngradeSnapshotName`, and `IsReconcileSnapshotName` (label `"pre-reconcile"`, `sync_reconcile.go`). Because the labels differ, the three retention budgets never collect each other's snapshots (`migrate_snapshot.go`).
+Three disjoint classifiers share it: `IsMigrationSnapshotName` (label `"pre-migrate"`, `migrate_snapshot.go`), `IsDowngradeSnapshotName`, and `IsReconcileSnapshotName` (label `"pre-reconcile"`, `sync_reconcile.go`). Because the labels differ, retention (§3.8) counts each automatic snapshot against its own kind, and a name none of them stamped is the user's, which it never removes (`footprint.go`).
 
 Tests: `TestIsMigrationSnapshotNameRejectsUserCollisions` (`migrate_snapshot_test.go`), `TestMigrationPruneSparesUserSnapshots` (`migrate_snapshot_test.go`), `TestRollbackSnapshotIsOneTheOlderLitOpens` (`migrate_snapshot_test.go`), `TestRollbackSnapshotPassesOverAnUnreadableSnapshot` (`migrate_snapshot_test.go`), `TestRollbackSnapshotSearchStopsWhenCanceled` (`migrate_snapshot_test.go`), `TestIsReconcileSnapshotNameDisjoint` (`sync_reconcile_schema_skew_test.go`).
 
@@ -1807,6 +1819,7 @@ External dependency `github.com/promptctl/primitives/filelock` (`snapshot.go`, `
 - `func Restore(databaseDir, name string) (string, error)` — `snapshot.go`
 - `func Prune(databaseDir string, keep int) error` — `snapshot.go`
 - `func PruneMatching(databaseDir string, keep int, match func(name string) bool) error` — `snapshot.go`
+- `func Remove(snapshot Snapshot) error` — `snapshot.go`
 - `func IsProducerArtifactName(name string) bool` — `snapshot.go`
 
 Unexported: `reservedPaths{created time.Time; name, finalPath, tmpPath, reservePath string}` (`snapshot.go`); `producerBeaconPath`; `reserveSnapshotPaths`; `pathFree`; `formatName`; `validateSnapshotName`; `isCollectibleResidue`; `isCollectibleArtifactName`; `isCollectorCondemnedName`; `parseName`; `parsePositiveDigits`; `isMintableLabel`; `sanitizeLabel`; `omission` (`[]string`, with methods `omits` and `removeFrom`); `cloneOmits`, `snapshotOmits` (vars); `walkAndCopy`; `plainFileCopy`; `copyWithContext`; `collectOrphanedResidue`, `condemnResidue` (`residue.go`); `ficloneOrCopy` (Linux, `clone_linux.go`).
@@ -1973,13 +1986,15 @@ Tests: `snapshot_test.go` (round trip — source mutated after the snapshot, sub
 2. `List(databaseDir)`; error propagated verbatim.
 3. `match == nil` ⇒ every snapshot matches; otherwise filter by `match(s.Name)` **preserving newest-first order**.
 4. `len(matched) <= keep` → nil, nothing removed.
-5. For each `matched[keep:]` (the oldest), `os.RemoveAll(snapshot.Path)`; the first error → `"remove snapshot %s: %w"`, aborting the rest.
+5. For each `matched[keep:]` (the oldest), `Remove(snapshot)`; the first error aborts the rest.
+
+`Remove(snapshot)` (`snapshot.go`) = `os.RemoveAll(snapshot.Path)`, error `"remove snapshot %s: %w"`. Every retention policy retires a snapshot through it.
 
 Non-matching snapshots are never removed regardless of age. Residue collection deliberately does **not** run here.
 
 Tests: `snapshot_test.go` (7 takes, keep=3 ⇒ `List` len 3 and on-disk non-`.tmp` dir count 3); `snapshot_test.go` (keep=0 and keep=-1 both error); `snapshot_test.go` (empty dir, keep=5, no error); `snapshot_test.go` (6 `kind-a` + 5 `kind-b` takes, `PruneMatching(dir, 2, contains "-kind-a")` ⇒ 2 matching remain, all 5 non-matching untouched); `snapshot_test.go` (`PruneMatching(..., 2, nil)` over 5 → 2 remain).
 
-This is the mechanism behind the three disjoint store-side retention budgets (`migrationSnapshotRetention=10`, `reconcileSnapshotRetention=10`, and the downgrade budget) described in §5.4 and §9.
+`PruneMatching` is the user-snapshot budget's mechanism (`lit snapshots new`). The automatic kinds are retired through `Remove` by `pruneAutomaticSnapshots` (§3.8).
 
 ### 13.13 Residue: what counts, what is destroyed, what is spared
 

@@ -31,12 +31,6 @@ var migrationDownForTest func(ctx context.Context, provider *goose.Provider) (*g
 // budget governs exactly its own snapshots.
 const downgradeSnapshotLabel = "lit-downgrade"
 
-// downgradeSnapshotRetention bounds how many downgrade-recovery snapshots are
-// kept on disk. Independent of migrationSnapshotRetention so the two reverse
-// boundaries (forward at Open, reverse at user-invoked downgrade) can evolve
-// their retention policies separately.
-const downgradeSnapshotRetention = 10
-
 // IsDowngradeSnapshotName reports whether name was stamped by Downgrade
 // (vs. migrate(), `lit snapshots new`, or any other producer).
 //
@@ -281,16 +275,14 @@ func (s *Store) downgradeLocked(ctx context.Context, targetSchemaVersion int64) 
 	if err != nil {
 		return done, &DowngradeRollbackError{Snapshot: snap.Snapshot, Cause: err}
 	}
-	// [LAW:single-enforcer] Downgrade owns the prune budget for its own
-	// snapshots. IsDowngradeSnapshotName is disjoint from
-	// IsMigrationSnapshotName, so this sweep cannot collect migration
-	// snapshots and migrate()'s sweep cannot collect downgrade ones.
+	// [LAW:single-enforcer] pruneAutomaticSnapshots is the one retention
+	// rule for every automatic kind, downgrade snapshots among them.
 	//
 	// The reverse has committed, so a prune failure is reported on done rather
 	// than returned: the workspace is at the target, and the caller still has
 	// to install the binary that reads it. The workspace never reads a
 	// snapshot, so one left over changes nothing it does.
-	if err := dbsnapshot.PruneMatching(s.doltRootDir, downgradeSnapshotRetention, IsDowngradeSnapshotName); err != nil {
+	if _, err := s.pruneAutomaticSnapshots(); err != nil {
 		done.PruneErr = fmt.Errorf("prune downgrade snapshots: %w", err)
 	}
 	return done, nil

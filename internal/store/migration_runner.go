@@ -460,11 +460,12 @@ func (s *Store) migrate(ctx context.Context) (storage.Migrated, error) {
 		return done, nil
 	}
 	done.Snapshot = recoverySnapshot(snap)
-	// [LAW:one-source-of-truth] Migration retention bounds migration
-	// snapshots only; user snapshots share the directory under an
-	// independent budget. IsMigrationSnapshotName is the kind discriminator.
+	// [LAW:single-enforcer] Automatic-snapshot retention is one rule
+	// (pruneAutomaticSnapshots); user snapshots share the directory under an
+	// independent budget the rule never touches.
 	done.PruneErr = errors.Join(done.PruneErr, prune(pruneMigrationSnapshots, "prune migration snapshots", func() error {
-		return dbsnapshot.PruneMatching(s.doltRootDir, migrationSnapshotRetention, IsMigrationSnapshotName)
+		_, err := s.pruneAutomaticSnapshots()
+		return err
 	}))
 	return done, nil
 }

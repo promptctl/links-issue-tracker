@@ -412,8 +412,24 @@ type CompactionOutcome struct {
 	// [LAW:no-silent-failure]
 	//
 	// Empty therefore belongs to the outcome that did nothing — the zero value
-	// CompactIfDue returns when no pass was owed — never to one that ran.
+	// MaintainIfDue carries when no pass was owed — never to one that ran.
 	Detail string
+}
+
+// MaintenanceOutcome reports what one maintenance probe did to a store and
+// the size it left the store at. Each step's account is here whatever became
+// of the others: a compaction that failed does not unprune a snapshot, and a
+// prune that failed does not un-run a pass. [LAW:no-silent-failure]
+type MaintenanceOutcome struct {
+	Compaction CompactionOutcome
+	// SnapshotsPruned names the recovery snapshots retired to hold the
+	// ceiling; empty when none had to go.
+	SnapshotsPruned []string
+	// Footprint is the store as the probe left it. It is the zero value
+	// exactly when the closing measurement failed, which the error then says:
+	// a measured footprint always carries the engine's ceiling, and a ceiling
+	// is never zero.
+	Footprint Footprint
 }
 
 // SyncPushResult reports what the peer said about the delivery.

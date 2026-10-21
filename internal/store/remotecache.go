@@ -144,12 +144,12 @@ func (o remoteCacheCollection) report(job, one, many string) string {
 	switch {
 	case o.Problem != "" && didWork:
 		return fmt.Sprintf("%s: removed %d %s (%s), then failed: %s",
-			job, o.Removed, plural(o.Removed, one, many), humanBytes(o.Reclaimed), o.Problem)
+			job, o.Removed, plural(o.Removed, one, many), storage.FormatBytes(o.Reclaimed), o.Problem)
 	case o.Problem != "":
 		return job + ": " + o.Problem
 	case didWork:
 		return fmt.Sprintf("%s: removed %d %s, reclaimed %s",
-			job, o.Removed, plural(o.Removed, one, many), humanBytes(o.Reclaimed))
+			job, o.Removed, plural(o.Removed, one, many), storage.FormatBytes(o.Reclaimed))
 	default:
 		return ""
 	}
@@ -162,26 +162,6 @@ type remoteCachePruneOutcome remoteCacheCollection
 // Report renders the prune's line; see remoteCacheCollection.report.
 func (o remoteCachePruneOutcome) Report() string {
 	return remoteCacheCollection(o).report("remote-cache prune", "abandoned mirror", "abandoned mirrors")
-}
-
-// humanBytes renders a byte count for operator-facing output. Package-private,
-// and shared by both of this package's maintenance reporters — compaction's
-// footprintDelta and the remote-cache collections' report — so the two cannot
-// disagree about how a size is spelled. The CLI renders no size of its own; it
-// prints the accounts these reporters already produced, which is why one
-// spelling here is enough to make every spelling agree.
-// [LAW:one-source-of-truth]
-func humanBytes(n int64) string {
-	const unit = 1024
-	if n < unit {
-		return fmt.Sprintf("%d B", n)
-	}
-	div, exp := int64(unit), 0
-	for size := n / unit; size >= unit; size /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
 }
 
 // gitCacheRoot is the directory dbfactory roots this store's git caches at:
@@ -198,12 +178,24 @@ func humanBytes(n int64) string {
 // it: the root from the Store, the database name from doltDatabaseName, and
 // `.dolt` from dbfactory rather than a second literal here.
 func (s *Store) gitCacheRoot() string {
-	return filepath.Join(s.doltRootDir, doltDatabaseName)
+	return gitCacheRootFor(s.doltRootDir)
+}
+
+// gitCacheRootFor is gitCacheRoot for the store rooted at doltRootDir, for a
+// reader that holds a path rather than an open store.
+func gitCacheRootFor(doltRootDir string) string {
+	return filepath.Join(doltRootDir, doltDatabaseName)
 }
 
 // remoteCacheBase is where dbfactory keeps this store's mirrors.
 func (s *Store) remoteCacheBase() string {
-	return filepath.Join(s.gitCacheRoot(), dbfactory.DoltDir, dbsnapshot.RemoteCacheDirName)
+	return remoteCacheBaseFor(s.doltRootDir)
+}
+
+// remoteCacheBaseFor is where dbfactory keeps the mirrors of the store rooted
+// at doltRootDir.
+func remoteCacheBaseFor(doltRootDir string) string {
+	return filepath.Join(gitCacheRootFor(doltRootDir), dbfactory.DoltDir, dbsnapshot.RemoteCacheDirName)
 }
 
 // listRemoteCacheKeys returns the cache keys present under base. A base that
@@ -226,11 +218,18 @@ func listRemoteCacheKeys(base string) ([]string, error) {
 	return keys, nil
 }
 
-// dirSize totals the bytes under root, so an outcome reports what collecting
-// actually reclaimed rather than how many things it touched.
-func dirSize(root string) (int64, error) {
+// bytesUnder totals the apparent bytes of the files under root, so an
+// outcome reports what collecting actually reclaimed rather than how many
+// things it touched. A root that does not exist holds nothing, and a file
+// that vanishes mid-walk — a concurrent prune, a collection finishing — holds
+// nothing now either: both read zero, the size they truly have. Any other
+// failure is returned, never a partial sum. [LAW:no-silent-failure]
+func bytesUnder(root string) (int64, error) {
 	var total int64
 	err := filepath.WalkDir(root, func(_ string, entry fs.DirEntry, err error) error {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
 		if err != nil {
 			return err
 		}
@@ -238,6 +237,9 @@ func dirSize(root string) (int64, error) {
 			return nil
 		}
 		info, err := entry.Info()
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
 		if err != nil {
 			return err
 		}

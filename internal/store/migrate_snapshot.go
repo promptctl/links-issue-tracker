@@ -12,11 +12,6 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
-// migrationSnapshotRetention bounds how many migration-recovery snapshots are
-// kept on disk. The retention budget is per-workspace; older snapshots roll
-// off via Prune at the tail of every mutating Open.
-const migrationSnapshotRetention = 10
-
 // migrationSnapshotLabel is the label prefix every migration-recovery snapshot
 // carries. The pre-restore rotation in dbsnapshot.Restore uses the directory
 // itself, not the label, so the label is purely human-facing.

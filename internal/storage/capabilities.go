@@ -118,13 +118,15 @@ type Syncer interface {
 	// remote involved — the entrypoint a workspace that never pushes needs.
 	SyncCompact(ctx context.Context, mode GCMode) (CompactionOutcome, error)
 
-	// CompactIfDue compacts only when the engine's own accounting says a pass
-	// is owed, and reports what it did. The engine owns that judgment because
-	// what makes a pass due is a fact about how it stores data — a caller that
-	// re-derived it would have to know the engine's on-disk shape, which is
-	// exactly what this contract exists to keep it from needing.
-	// [LAW:decomposition]
-	CompactIfDue(ctx context.Context) (CompactionOutcome, error)
+	// MaintainIfDue does what the engine's own accounting says is owed:
+	// it compacts when a pass is due, and it holds the store under its size
+	// ceiling by retiring what the engine may reclaim. It reports both, and
+	// the footprint it left. The engine owns these judgments because what
+	// makes a pass due and what a store may shed are facts about how it
+	// stores data — a caller that re-derived them would have to know the
+	// engine's on-disk shape, which is exactly what this contract exists to
+	// keep it from needing. [LAW:decomposition]
+	MaintainIfDue(ctx context.Context) (MaintenanceOutcome, error)
 
 	// SyncCompactAndPush compacts and pushes under one commit-lock
 	// acquisition. Like SyncPushFromClone, a push that lands keeps the sync

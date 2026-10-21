@@ -98,6 +98,11 @@ type Store struct {
 	// its one reader.
 	bounds []storage.HistoryBound
 
+	// sizeCeiling is the bound this store's governed parts are held under
+	// (footprint.go): storeSizeCeiling, carried as a value so the retention
+	// rule takes it as an input rather than reading a constant inside it.
+	sizeCeiling int64
+
 	// clock is where this store learns the instant it stamps a write with. It
 	// is a construction-time dependency rather than a read from inside the
 	// write path, so a caller that needs two rows whose timestamps no real
@@ -479,6 +484,7 @@ func openStoreConnection(ctx context.Context, env environ.Env, doltRootDir strin
 		doltRootDir:         doltRootDir,
 		access:              access,
 		releaseEngineRecord: releaseEngineRecord,
+		sizeCeiling:         storeSizeCeiling,
 		clock:               storage.SystemClock,
 		// Both facts about the commit lock, drawn side by side from the one
 		// root, so neither is ever recovered by inverting the other.

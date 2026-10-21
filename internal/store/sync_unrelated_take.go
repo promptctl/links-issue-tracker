@@ -9,7 +9,6 @@ import (
 	"slices"
 	"time"
 
-	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
@@ -249,7 +248,7 @@ func (s *Store) takeRemoteHead(ctx context.Context, result *storage.SyncReconcil
 	// Prune runs AFTER the durable reset, so a prune failure must not fail a completed
 	// take (a retry would find nothing to do). A leftover snapshot is inert.
 	// [LAW:no-silent-failure] surfaced, not promoted.
-	if err := dbsnapshot.PruneMatching(s.doltRootDir, reconcileSnapshotRetention, IsReconcileSnapshotName); err != nil {
+	if _, err := s.pruneAutomaticSnapshots(); err != nil {
 		fmt.Fprintf(os.Stderr, "lit: take-remote could not prune old recovery snapshots (reset already done): %v\n", err)
 	}
 	result.State = storage.SyncReconcileTookRemote

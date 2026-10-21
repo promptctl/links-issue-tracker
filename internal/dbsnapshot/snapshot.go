@@ -425,9 +425,18 @@ func PruneMatching(databaseDir string, keep int, match func(name string) bool) e
 		return nil
 	}
 	for _, snapshot := range matched[keep:] {
-		if err := os.RemoveAll(snapshot.Path); err != nil {
-			return fmt.Errorf("remove snapshot %s: %w", snapshot.Path, err)
+		if err := Remove(snapshot); err != nil {
+			return err
 		}
+	}
+	return nil
+}
+
+// Remove deletes one snapshot List returned. Every retention policy, whatever
+// it counts, retires a snapshot through here. [LAW:single-enforcer]
+func Remove(snapshot Snapshot) error {
+	if err := os.RemoveAll(snapshot.Path); err != nil {
+		return fmt.Errorf("remove snapshot %s: %w", snapshot.Path, err)
 	}
 	return nil
 }

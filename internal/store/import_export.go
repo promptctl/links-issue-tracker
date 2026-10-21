@@ -56,6 +56,16 @@ func (s *Store) Doctor(ctx context.Context) (storage.HealthReport, error) {
 		Warnings:        []string{},
 	}
 	report.IntegrityCheck = "ok"
+	// First, because it reads the filesystem and nothing else, so every report
+	// carries it — including one a looped hierarchy cuts short below.
+	footprint, err := s.footprint()
+	if err != nil {
+		return report, err
+	}
+	report.Footprint = footprint
+	if warning, over := overCeilingWarning(footprint); over {
+		report.Warnings = append(report.Warnings, warning)
+	}
 	var violations int
 	if err := s.db.QueryRowContext(ctx, `CALL DOLT_VERIFY_CONSTRAINTS()`).Scan(&violations); err != nil {
 		return report, fmt.Errorf("verify constraints: %w", err)

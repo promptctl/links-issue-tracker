@@ -84,10 +84,11 @@ func fixedResults() []result {
 		}
 	}
 	return []result{
-		{size: size{name: "empty", rows: 0}, bytes: 20_000,
+		{size: size{name: "empty", rows: 0}, bytes: 20_000, compacted: 15_000,
 			samples: samplesAt(70*time.Millisecond, 80*time.Millisecond, 7970*time.Millisecond, 8200*time.Millisecond)},
-		{size: size{name: "today", rows: 118}, bytes: 4_100_000,
-			samples: samplesAt(110*time.Millisecond, 120*time.Millisecond, 3330*time.Millisecond, 4440*time.Millisecond)},
+		{size: size{name: "today", rows: 118}, bytes: 4_100_000, compacted: 3_900_000,
+			samples: samplesAt(110*time.Millisecond, 120*time.Millisecond, 3330*time.Millisecond, 4440*time.Millisecond),
+			history: historyCost{edits: 100, before: 3_900_000, after: 5_250_000}},
 	}
 }
 
@@ -106,6 +107,9 @@ func TestRenderReportStatesEveryMeasuredFigure(t *testing.T) {
 		"0.11s", "0.12s", // the 118-row column's quickstart — distinct values, so a
 		"3.33s", "4.44s", // report reading the wrong result could not still pass
 		"store bytes", "20.00 KB", "4.10 MB",
+		"compacted bytes", "15.00 KB", "3.90 MB",
+		// 1.35 MB over 100 edits; the empty store had no row to edit.
+		"bytes/commit", "13.50 KB", "—",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("report omits %q\n--- report ---\n%s", want, got)

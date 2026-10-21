@@ -126,7 +126,21 @@ func run(args []string, out, progress io.Writer) error {
 		if err != nil {
 			return err
 		}
-		results = append(results, result{size: sz, bytes: bytes, samples: samples})
+		// Compaction and history run last, because they change the store
+		// every figure above describes. The empty store has no row to edit,
+		// so its history is the zero cost the report prints as absent.
+		compacted, err := compactedBytes(bin, store)
+		if err != nil {
+			return err
+		}
+		var history historyCost
+		if sz.rows > 0 {
+			fmt.Fprintf(progress, "measuring %s store history, %d single-row edits ...\n", sz.name, historyEdits)
+			if history, err = measureHistory(bin, store, compacted); err != nil {
+				return err
+			}
+		}
+		results = append(results, result{size: sz, bytes: bytes, compacted: compacted, samples: samples, history: history})
 	}
 
 	cond := conditions{goos: runtime.GOOS, goarch: runtime.GOARCH, cpus: runtime.NumCPU()}

@@ -86,7 +86,11 @@ type compactSyncer struct {
 	storage.Syncer
 	gotMode storage.GCMode
 	outcome storage.CompactionOutcome
-	err     error
+	// pruned and footprint are the ceiling's half of a maintenance probe;
+	// SyncCompact never reports them.
+	pruned    []string
+	footprint storage.Footprint
+	err       error
 }
 
 func (s *compactSyncer) SyncCompact(_ context.Context, mode storage.GCMode) (storage.CompactionOutcome, error) {
@@ -94,11 +98,11 @@ func (s *compactSyncer) SyncCompact(_ context.Context, mode storage.GCMode) (sto
 	return s.outcome, s.err
 }
 
-// CompactIfDue answers the backstop from the same configured outcome, so one
+// MaintainIfDue answers the backstop from the same configured outcome, so one
 // fake serves both compaction entry points and neither can be tested against a
 // engine the other never sees.
-func (s *compactSyncer) CompactIfDue(context.Context) (storage.CompactionOutcome, error) {
-	return s.outcome, s.err
+func (s *compactSyncer) MaintainIfDue(context.Context) (storage.MaintenanceOutcome, error) {
+	return storage.MaintenanceOutcome{Compaction: s.outcome, SnapshotsPruned: s.pruned, Footprint: s.footprint}, s.err
 }
 
 // refusingWriter is a stdout that has gone away — a closed pipe, a full disk.
@@ -209,9 +213,17 @@ func TestBothCompactionPathsRecordOneDecision(t *testing.T) {
 		Ran: true, Depth: storage.GCNewGen, Detail: "journal 8.0 KiB -> 0 B",
 	}
 
-	for _, command := range []string{compactTraceCommand, "lit sync compact"} {
+	record := map[string]func(workspace.Info){
+		compactTraceCommand: func(ws workspace.Info) {
+			maintainThrough(context.Background(), testEnv(), ws, &compactSyncer{outcome: outcome})
+		},
+		syncCompactTraceCommand: func(ws workspace.Info) {
+			recordCompactionSuccess(testEnv(), ws, syncCompactTraceCommand, outcome)
+		},
+	}
+	for command, recordPass := range record {
 		ws := compactWorkspace(t)
-		recordCompactionSuccess(testEnv(), ws, command, outcome)
+		recordPass(ws)
 
 		traces := readSyncTraces(t, ws)
 		if len(traces) != 1 {
@@ -228,13 +240,16 @@ func TestBothCompactionPathsRecordOneDecision(t *testing.T) {
 		if traces[0].Metadata["depth"] != outcome.Depth.String() {
 			t.Fatalf("%s: metadata depth = %q, want %q", command, traces[0].Metadata["depth"], outcome.Depth.String())
 		}
+		if traces[0].Metadata["detail"] != outcome.Detail {
+			t.Fatalf("%s: metadata detail = %q, want %q", command, traces[0].Metadata["detail"], outcome.Detail)
+		}
 	}
 }
 
-func TestCompactionTraceMetadataRendersOneShapeForEveryPath(t *testing.T) {
+func TestCompactionAttemptMetadataRendersOneShapeForEveryPath(t *testing.T) {
 	t.Parallel()
 
-	got := compactionTraceMetadata(storage.CompactionOutcome{
+	got := compactionAttemptMetadata(storage.CompactionOutcome{
 		Ran: true, Depth: storage.GCFull, Detail: "journal 1.0 KiB -> 0 B",
 	})
 	want := map[string]string{"depth": "full", "detail": "journal 1.0 KiB -> 0 B"}
@@ -287,12 +302,12 @@ func TestRunSyncCompactSurfacesAndTracesAFailedPass(t *testing.T) {
 	}
 }
 
-// compactThrough is what the backstop records with, and these are the
-// three things the durable trail can say about an automatic pass. None is
-// reachable from the cadence e2e tests: they drive a fresh workspace whose
-// footprint is under every threshold, so CompactIfDue always declines there.
+// maintainThrough is what the backstop records with, and these are the
+// things the durable trail can say about an automatic pass. None is reachable
+// from the cadence e2e tests: they drive a fresh workspace whose footprint is
+// under every threshold and its ceiling, so MaintainIfDue does nothing there.
 // [LAW:behavior-not-structure]
-func TestCompactThroughRecordsEachOutcome(t *testing.T) {
+func TestMaintainThroughRecordsEachOutcome(t *testing.T) {
 	t.Parallel()
 
 	t.Run("a pass that ran is recorded under the backstop's own name", func(t *testing.T) {
@@ -302,7 +317,7 @@ func TestCompactThroughRecordsEachOutcome(t *testing.T) {
 			Ran: true, Depth: storage.GCFull, Detail: "journal 2.0 KiB -> 0 B",
 		}}
 
-		compactThrough(context.Background(), testEnv(), ws, syncer)
+		maintainThrough(context.Background(), testEnv(), ws, syncer)
 
 		traces := readSyncTraces(t, ws)
 		if len(traces) != 1 {
@@ -326,7 +341,7 @@ func TestCompactThroughRecordsEachOutcome(t *testing.T) {
 
 		// The zero outcome: nothing was owed, which is the common case on every
 		// mutating command. A trace here would be one row per command forever.
-		compactThrough(context.Background(), testEnv(), ws, &compactSyncer{})
+		maintainThrough(context.Background(), testEnv(), ws, &compactSyncer{})
 
 		if traces := readSyncTraces(t, ws); len(traces) != 0 {
 			t.Fatalf("traces = %+v, want none — nothing was owed, and recording that would drown the trail", traces)
@@ -338,7 +353,7 @@ func TestCompactThroughRecordsEachOutcome(t *testing.T) {
 		ws := compactWorkspace(t)
 		failure := errors.New("dolt gc: store is read-only")
 
-		compactThrough(context.Background(), testEnv(), ws, &compactSyncer{err: failure})
+		maintainThrough(context.Background(), testEnv(), ws, &compactSyncer{err: failure})
 
 		traces := readSyncTraces(t, ws)
 		if len(traces) != 1 || traces[0].Status != "error" {
@@ -356,8 +371,8 @@ func TestCompactThroughRecordsEachOutcome(t *testing.T) {
 		t.Parallel()
 		ws := compactWorkspace(t)
 
-		compactThrough(context.Background(), testEnv(), ws,
-			&compactSyncer{err: errors.New("measure store footprint: permission denied")})
+		maintainThrough(context.Background(), testEnv(), ws,
+			&compactSyncer{err: errors.New("measure compaction signals: permission denied")})
 
 		traces := readSyncTraces(t, ws)
 		if len(traces) != 1 {
@@ -375,7 +390,7 @@ func TestCompactThroughRecordsEachOutcome(t *testing.T) {
 		t.Parallel()
 		ws := compactWorkspace(t)
 
-		compactThrough(context.Background(), testEnv(), ws, &compactSyncer{
+		maintainThrough(context.Background(), testEnv(), ws, &compactSyncer{
 			outcome: storage.CompactionOutcome{Depth: storage.GCFull},
 			err:     errors.New("compact dolt store (full): connection refused"),
 		})
@@ -401,7 +416,7 @@ func TestCompactThroughRecordsEachOutcome(t *testing.T) {
 		t.Parallel()
 		ws := compactWorkspace(t)
 
-		compactThrough(context.Background(), testEnv(), ws, &compactSyncer{
+		maintainThrough(context.Background(), testEnv(), ws, &compactSyncer{
 			outcome: storage.CompactionOutcome{
 				Ran: true, Depth: storage.GCFull, Detail: "journal 4.0 MiB -> 0 B, old-generation archives 148 -> 2",
 			},
@@ -418,6 +433,104 @@ func TestCompactThroughRecordsEachOutcome(t *testing.T) {
 		}
 		if !strings.Contains(traces[0].Metadata["detail"], "148 -> 2") {
 			t.Fatalf("trace detail = %q, want the reclaim the completed pass reported", traces[0].Metadata["detail"])
+		}
+	})
+}
+
+// The ceiling's half of a probe reaches the trail too: what retention retired,
+// the store's governed bytes against its ceiling, and — the reason a stuck
+// store stays discoverable — the part holding the bytes when it is still over.
+// A probe within its ceiling that did nothing records nothing.
+// [LAW:no-silent-failure]
+func TestMaintainThroughRecordsTheCeiling(t *testing.T) {
+	t.Parallel()
+	footprint := func(chunkStore, snapshots, ceiling int64) storage.Footprint {
+		return storage.Footprint{Ceiling: ceiling, Components: []storage.FootprintComponent{
+			{Name: "chunk store", Bytes: chunkStore, Governed: true},
+			{Name: "automatic snapshots", Bytes: snapshots, Governed: true},
+			{Name: "remote cache", Bytes: 1 << 40, Governed: false},
+		}}
+	}
+
+	t.Run("pruned snapshots are named, with the footprint they left", func(t *testing.T) {
+		t.Parallel()
+		ws := compactWorkspace(t)
+
+		maintainThrough(context.Background(), testEnv(), ws, &compactSyncer{
+			pruned:    []string{"1-pre-reconcile-1", "2-pre-reconcile-2"},
+			footprint: footprint(100, 50, 200),
+		})
+
+		traces := readSyncTraces(t, ws)
+		if len(traces) != 1 {
+			t.Fatalf("recorded %d traces, want exactly one", len(traces))
+		}
+		got := traces[0]
+		if got.Decision != "pruned snapshots" {
+			t.Fatalf("decision = %q, want %q", got.Decision, "pruned snapshots")
+		}
+		want := map[string]string{
+			"snapshots_pruned": "1-pre-reconcile-1,2-pre-reconcile-2",
+			"governed_bytes":   "150",
+			"ceiling_bytes":    "200",
+		}
+		for key, value := range want {
+			if got.Metadata[key] != value {
+				t.Fatalf("metadata[%q] = %q, want %q (all: %v)", key, got.Metadata[key], value, got.Metadata)
+			}
+		}
+		if over, ok := got.Metadata["over_ceiling"]; ok {
+			t.Fatalf("metadata carried over_ceiling %q for a store within its ceiling", over)
+		}
+	})
+
+	t.Run("a store still over names the part holding the bytes", func(t *testing.T) {
+		t.Parallel()
+		ws := compactWorkspace(t)
+
+		maintainThrough(context.Background(), testEnv(), ws, &compactSyncer{footprint: footprint(300, 50, 200)})
+
+		traces := readSyncTraces(t, ws)
+		if len(traces) != 1 {
+			t.Fatalf("recorded %d traces, want exactly one — a store that has stopped shrinking must be discoverable", len(traces))
+		}
+		if traces[0].Decision != "over ceiling" {
+			t.Fatalf("decision = %q, want %q", traces[0].Decision, "over ceiling")
+		}
+		if got := traces[0].Metadata["over_ceiling"]; got != "chunk store 300" {
+			t.Fatalf("over_ceiling = %q, want the largest governed part, %q — the ungoverned remote cache is larger and must not be named", got, "chunk store 300")
+		}
+	})
+
+	t.Run("a store within its ceiling that did nothing records nothing", func(t *testing.T) {
+		t.Parallel()
+		ws := compactWorkspace(t)
+
+		maintainThrough(context.Background(), testEnv(), ws, &compactSyncer{footprint: footprint(100, 50, 200)})
+
+		if traces := readSyncTraces(t, ws); len(traces) != 0 {
+			t.Fatalf("traces = %+v, want none — every write command would add one", traces)
+		}
+	})
+
+	t.Run("a failure keeps what the probe still knew", func(t *testing.T) {
+		t.Parallel()
+		ws := compactWorkspace(t)
+
+		maintainThrough(context.Background(), testEnv(), ws, &compactSyncer{
+			pruned: []string{"1-pre-migrate-1"},
+			err:    errors.New("remove snapshot: permission denied"),
+		})
+
+		traces := readSyncTraces(t, ws)
+		if len(traces) != 1 || traces[0].Status != "error" {
+			t.Fatalf("traces = %+v, want exactly one recorded error", traces)
+		}
+		if got := traces[0].Metadata["snapshots_pruned"]; got != "1-pre-migrate-1" {
+			t.Fatalf("snapshots_pruned = %q, want the snapshot retired before the failure", got)
+		}
+		if got, ok := traces[0].Metadata["governed_bytes"]; ok {
+			t.Fatalf("governed_bytes = %q for a footprint that was never measured; the trail must not invent one", got)
 		}
 	})
 }

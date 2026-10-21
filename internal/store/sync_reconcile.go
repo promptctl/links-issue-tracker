@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
-	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
 	"github.com/promptctl/links-issue-tracker/internal/merge"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
@@ -118,12 +117,6 @@ func newReconcileScratch() reconcileScratch {
 // producers' snapshots roll off under independent retention budgets and never
 // collect each other. [LAW:one-source-of-truth]
 const reconcileSnapshotLabel = "pre-reconcile"
-
-// reconcileSnapshotRetention bounds how many reconcile-recovery snapshots are
-// kept on disk; older ones roll off via PruneMatching after a successful
-// reconcile. It matches the migration/downgrade budgets — a reconcile is a rare,
-// divergence-only event, so a small history of recovery points is ample.
-const reconcileSnapshotRetention = 10
 
 // IsReconcileSnapshotName reports whether name was stamped by a reconcile (vs.
 // migrate(), Downgrade, `lit snapshots new`, or any other producer). It shares
@@ -1041,9 +1034,8 @@ func (s *Store) commitReplayAndAdvance(ctx context.Context, guard *snapshotGuard
 		return replayLanding{}, fmt.Errorf("advance %q to replayed commit: %w", dataBranch, err)
 	}
 	// The data branch now durably holds the result; roll the recovery snapshots off to
-	// the retention budget. IsReconcileSnapshotName is disjoint from the
-	// migration/downgrade classifiers, so this only collects reconcile snapshots.
-	// [LAW:single-enforcer] reconcile owns its own snapshot budget.
+	// the retention budget. [LAW:single-enforcer] pruneAutomaticSnapshots is the one
+	// retention rule for every automatic kind.
 	//
 	// The prune runs AFTER the durable advance, so a prune failure must NOT be promoted
 	// to fail the reconcile — the replay already committed, and returning an error here
@@ -1052,7 +1044,7 @@ func (s *Store) commitReplayAndAdvance(ctx context.Context, guard *snapshotGuard
 	// scratch branch cleanupReconcileScratch tolerates, so the failure is surfaced to
 	// stderr but not promoted. [LAW:no-silent-failure] loud, but not a false failure
 	// over a durable success.
-	if err := dbsnapshot.PruneMatching(s.doltRootDir, reconcileSnapshotRetention, IsReconcileSnapshotName); err != nil {
+	if _, err := s.pruneAutomaticSnapshots(); err != nil {
 		fmt.Fprintf(os.Stderr, "lit: reconcile could not prune old recovery snapshots (replay already committed): %v\n", err)
 	}
 	return replayLanding{replayed: replayed, landing: landing}, nil

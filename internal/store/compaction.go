@@ -132,10 +132,13 @@ const (
 	oldGenDirName = "oldgen"
 )
 
-// storeFootprint is the on-disk evidence the compaction policy decides on. It
-// holds sizes only — no verdict — so the measurement and the policy can be
-// tested apart, and so the policy stays a pure function of numbers.
-type storeFootprint struct {
+// compactionSignals is the on-disk evidence the compaction policy decides on.
+// It holds sizes only — no verdict — so the measurement and the policy can be
+// tested apart, and so the policy stays a pure function of numbers. It is not
+// the store's footprint (footprint.go): it reads two numbers cheaply enough
+// to sit on the push path, inside the commit lock, where a walk of the whole
+// store would hold every other writer. [LAW:decomposition]
+type compactionSignals struct {
 	// JournalBytes is the chunk journal's size: uncollected new-generation
 	// history. Zero is a truthful reading of a store whose journal has just
 	// been collected away, not a failure.
@@ -152,33 +155,33 @@ func nomsDir(doltRootDir string) string {
 	return filepath.Join(doltRootDir, doltDatabaseName, dbfactory.DoltDir, dbfactory.DataDir)
 }
 
-// measureFootprint reads the two sizes the compaction policy runs on. This is
-// the whole effect: one Stat and one directory read, with no engine open and no
-// lock held, which is what lets a cadence owner ask "is compaction due" on an
-// ordinary command without paying an engine open for the answer.
-// [LAW:effects-at-boundaries]
+// measureCompactionSignals reads the two sizes the compaction policy runs on.
+// This is the whole effect: one Stat and one directory read, with no engine
+// open and no lock held, which is what lets a cadence owner ask "is
+// compaction due" on an ordinary command without paying an engine open for
+// the answer. [LAW:effects-at-boundaries]
 //
 // It takes a path rather than an open store precisely so the question can be
 // asked before deciding to open one — the cheap probe is the entire point of
 // the threshold.
 //
-// A store directory that does not exist yet reads as an empty footprint — that
-// is the true size of a store with nothing in it. Any other failure is
-// returned: "I could not measure" and "there is nothing to collect" are
-// different facts, and a policy fed the second when the first is true would
-// skip maintenance forever on an unreadable store. [LAW:no-silent-failure]
-func measureFootprint(doltRootDir string) (storeFootprint, error) {
+// A store directory that does not exist yet reads as empty signals — that is
+// the true size of a store with nothing in it. Any other failure is returned:
+// "I could not measure" and "there is nothing to collect" are different
+// facts, and a policy fed the second when the first is true would skip
+// maintenance forever on an unreadable store. [LAW:no-silent-failure]
+func measureCompactionSignals(doltRootDir string) (compactionSignals, error) {
 	noms := nomsDir(doltRootDir)
-	footprint := storeFootprint{}
+	signals := compactionSignals{}
 
 	// The journal's filename is Dolt's own exported constant, so this reads the
 	// real file rather than a guessed one. [LAW:one-source-of-truth]
 	info, err := os.Stat(filepath.Join(noms, chunks.JournalFileID))
 	switch {
 	case err == nil:
-		footprint.JournalBytes = info.Size()
+		signals.JournalBytes = info.Size()
 	case !os.IsNotExist(err):
-		return storeFootprint{}, fmt.Errorf("measure chunk journal: %w", err)
+		return compactionSignals{}, fmt.Errorf("measure chunk journal: %w", err)
 	}
 
 	entries, err := os.ReadDir(filepath.Join(noms, oldGenDirName))
@@ -186,35 +189,34 @@ func measureFootprint(doltRootDir string) (storeFootprint, error) {
 	case err == nil:
 		for _, entry := range entries {
 			if !entry.IsDir() && filepath.Ext(entry.Name()) == archiveFileExt {
-				footprint.OldGenArchives++
+				signals.OldGenArchives++
 			}
 		}
 	case !os.IsNotExist(err):
-		return storeFootprint{}, fmt.Errorf("measure old generation: %w", err)
+		return compactionSignals{}, fmt.Errorf("measure old generation: %w", err)
 	}
 
-	return footprint, nil
+	return signals, nil
 }
 
-// storeBytes is the size on disk of everything the store at doltRootDir keeps
-// its chunks in: the journal, both generations and the manifests. Unlike
-// measureFootprint it walks the whole chunk store, so it is read around a
-// pass that can shrink the store, never as a cheap probe. A walk that fails
-// reads zero rather than the part it summed.
-func storeBytes(doltRootDir string) (int64, error) {
-	total, err := dirSize(nomsDir(doltRootDir))
+// chunkStoreBytes is the size on disk of everything the store at doltRootDir
+// keeps its chunks in: the journal, both generations and the manifests.
+// Unlike measureCompactionSignals it walks the whole chunk store, so it is
+// read around a pass that can shrink the store, never as a cheap probe.
+func chunkStoreBytes(doltRootDir string) (int64, error) {
+	total, err := bytesUnder(nomsDir(doltRootDir))
 	if err != nil {
-		return 0, fmt.Errorf("measure the store's size on disk: %w", err)
+		return 0, fmt.Errorf("measure the chunk store's size on disk: %w", err)
 	}
 	return total, nil
 }
 
-// measureFootprint measures the store this handle is open on.
-func (s *Store) measureFootprint() (storeFootprint, error) {
-	return measureFootprint(s.doltRootDir)
+// measureCompactionSignals measures the store this handle is open on.
+func (s *Store) measureCompactionSignals() (compactionSignals, error) {
+	return measureCompactionSignals(s.doltRootDir)
 }
 
-// dueMode reports which compaction depth this footprint warrants, if any.
+// dueMode reports which compaction depth these signals warrant, if any.
 // Pure — no clock, no filesystem, no store — so the policy is exercised by
 // handing it numbers. [LAW:effects-at-boundaries]
 //
@@ -227,17 +229,17 @@ func (s *Store) measureFootprint() (storeFootprint, error) {
 // the store call. A second enum would have to be kept in step with this one,
 // and the two could then disagree about what "full" means.
 // [LAW:one-source-of-truth]
-func dueMode(footprint storeFootprint) (GCMode, bool) {
-	if footprint.OldGenArchives >= archivesDueCount {
+func dueMode(signals compactionSignals) (GCMode, bool) {
+	if signals.OldGenArchives >= archivesDueCount {
 		return GCFull, true
 	}
-	if footprint.JournalBytes >= journalDueBytes {
+	if signals.JournalBytes >= journalDueBytes {
 		return GCNewGen, true
 	}
 	return GCNewGen, false
 }
 
-// footprintDelta renders what a pass changed, in this engine's own vocabulary.
+// signalsDelta renders what a pass changed, in this engine's own vocabulary.
 // Journals and generations are Dolt's words, so they are spoken here and handed
 // across the contract already rendered — a caller that had to format them would
 // need to understand a storage layout the contract exists to hide from it.
@@ -245,12 +247,12 @@ func dueMode(footprint storeFootprint) (GCMode, bool) {
 //
 // A measurement that failed says so instead of reporting a delta computed from
 // a number nobody read. [LAW:no-silent-failure]
-func footprintDelta(before, after storeFootprint, measureErr error) string {
+func signalsDelta(before, after compactionSignals, measureErr error) string {
 	if measureErr != nil {
-		return fmt.Sprintf("footprint not measured: %v", measureErr)
+		return fmt.Sprintf("compaction signals not measured: %v", measureErr)
 	}
 	return fmt.Sprintf("journal %s -> %s, old-generation archives %d -> %d",
-		humanBytes(before.JournalBytes), humanBytes(after.JournalBytes),
+		storage.FormatBytes(before.JournalBytes), storage.FormatBytes(after.JournalBytes),
 		before.OldGenArchives, after.OldGenArchives)
 }
 

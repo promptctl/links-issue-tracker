@@ -339,7 +339,7 @@ func (s *Store) publishReRoot(ctx context.Context, remote storage.RemoteName, br
 func (s *Store) collectBelowTheCut(ctx context.Context) storage.Collection {
 	var c storage.Collection
 	var beforeErr, afterErr error
-	c.BytesBefore, beforeErr = storeBytes(s.doltRootDir)
+	c.BytesBefore, beforeErr = chunkStoreBytes(s.doltRootDir)
 	var sweep refSweepOutcome
 	err := s.runSyncMutation(ctx, func(ctx context.Context) error {
 		for _, prefix := range []string{migrationCheckpointPrefix, migrationDriftRepairCheckpointPrefix} {
@@ -357,7 +357,7 @@ func (s *Store) collectBelowTheCut(ctx context.Context) storage.Collection {
 		sweep = sweep.plus(swept)
 		return err
 	})
-	c.BytesAfter, afterErr = storeBytes(s.doltRootDir)
+	c.BytesAfter, afterErr = chunkStoreBytes(s.doltRootDir)
 	c.Sweep = sweep.Report()
 	c.Err = errors.Join(err, beforeErr, afterErr)
 	return c
@@ -369,7 +369,7 @@ func (s *Store) collectBelowTheCut(ctx context.Context) storage.Collection {
 func collectionReport(c storage.Collection) string {
 	var parts []string
 	if c.Ran {
-		parts = append(parts, fmt.Sprintf("store %s -> %s", humanBytes(c.BytesBefore), humanBytes(c.BytesAfter)))
+		parts = append(parts, fmt.Sprintf("store %s -> %s", storage.FormatBytes(c.BytesBefore), storage.FormatBytes(c.BytesAfter)))
 	}
 	if c.Sweep != "" {
 		parts = append(parts, c.Sweep)
@@ -402,7 +402,7 @@ func historyBoundReport(b storage.HistoryBound) string {
 		parts = append(parts, "lease "+string(b.Lease))
 	}
 	if g := b.RemoteGC; g.Outcome != "" {
-		parts = append(parts, fmt.Sprintf("remote GC %s: %s of table files, %s collected, %d other branches dropped", g.Outcome, humanBytes(g.BytesBefore), humanBytes(g.CollectedBytes), len(g.DroppedBranches)))
+		parts = append(parts, fmt.Sprintf("remote GC %s: %s of table files, %s collected, %d other branches dropped", g.Outcome, storage.FormatBytes(g.BytesBefore), storage.FormatBytes(g.CollectedBytes), len(g.DroppedBranches)))
 	}
 	if b.Err != nil {
 		parts = append(parts, fmt.Sprintf("history bound not kept: %v", b.Err))
