@@ -11,27 +11,28 @@ Pick up the next ready ticket and start work.
 
 Run `lit quickstart` if you haven't already.  This provides instructions for using the work tracking system.
 
-If the user provided specific information (e.g., a ticket id or area of the codebase to work on), SKIP THE REST OF THESE INSTRUCTIONS except the next section, "Work from the lane's checkout", which holds for every ticket, and follow the guidance from `lit quickstart` to follow the user instructions.  The rest of this skill is for determining which work to pick when the user did not specify.
+If the user provided specific information (e.g., a ticket id or area of the codebase to work on), SKIP THE REST OF THESE INSTRUCTIONS except the next section, "Work from the checkout that holds the work", which holds for every ticket, and follow the guidance from `lit quickstart` to follow the user instructions.  The rest of this skill is for determining which work to pick when the user did not specify.
 
-## Work from the lane's checkout
+## Work from the checkout that holds the work
 
-lit counts a checkout — the main clone or one linked worktree — as the claimant of a lane, not the session working in it.  So a lane has one checkout, and every ticket in the lane is worked there: `lit next`, `lit start`, the branch, the commits and `lit done` all run from inside it.  Sessions are shifts at one desk: they come and go, and the lane's work stays where it is.
+lit counts a checkout — the main clone or one linked worktree — as the claimant, not the session working in it.  A checkout carries one epic at a time: `lit next` keeps serving it that epic's lanes until the epic is done, and every ticket it serves is worked there — `lit next`, `lit start`, the branch, the commits and `lit done` all run from inside it.  Sessions are shifts at one desk: they come and go, and the work stays where it is.
 
 - **A handoff that names a checkout** is where you run this skill.  Go there first.
-- **A lane held on this machine** says where on its claim line in `lit next` and `lit backlog`: `claimed here: <path> (<branch>)`.  When that is the lane of the ticket you are about to work, `<path>` is where you work.
-- **A lane nobody holds** may still have a worktree: a claim expires after six hours of quiet, and its worktree stays.  Look for one whose branch is named for one of the lane's tickets — for an epic's lane, `git worktree list | grep -F '<epic-id>.'` — and work there if you find it.  Otherwise give the lane a worktree of its own.  Either way `lit start` runs from inside it, because the claim lands on the checkout `lit start` runs from:
+- **Run `lit next` where you are, and let its pick decide.**  A pick that is this checkout's own work is worked here: the lane it holds, `(a second lane of an epic you already hold a lane in)`, or `(gates <id>, which is on your path)`.
+- **A pick that begins new work gets a worktree of its own** when you are in the main clone, or when `lit next` served it from outside the epic this checkout holds — the move-on route after `no ready work in epic(s)`.  That epic is unfinished, and a checkout carries one epic at a time.  The main clone is where every new session lands, so work started there is shared with sessions that never agreed to share it.  Look first for the worktree the work had before its claim expired — a claim lapses after six hours of quiet, and its worktree stays: `git worktree list | grep -F '<epic-id>.'`.  Otherwise create one.  Either way run `lit start <id>` by id from inside it: the claim lands on the checkout `lit start` runs from, and a fresh worktree's own `lit next` holds nothing and may pick something else.
 
   ```
   git fetch origin
   git worktree add --no-track -b <ticket-id> <path> origin/master    # or the repo's default branch
   ```
 
-- **A merged ticket does not end the lane.**  Keep its worktree, run `lit next` from inside it, and cut the next ticket's branch there (step 3 below).  Remove the worktree once its lane has no work left.
+- **A ticket held by a checkout on this machine** names it on its claim line in `lit backlog`: `claimed here: <path> (<branch>)`.  That is where the ticket is worked.
+- **A merged ticket does not end the checkout's work.**  Keep the worktree, run `lit next` from inside it, and cut the next ticket's branch there (step 3 below).  Remove the worktree once its epic is done.
 
-The moment this goes wrong comes after a merge: the next ticket is in the same lane, and a fresh worktree off the trunk feels like the clean place to start it.  It is a second checkout for the same lane.  lit sees a new claimant take the lane and reports it `contested by` the old one, and `lit next` run from anywhere but the lane's checkout routes away from the lane's next ticket.
+The moment this goes wrong comes after a merge: the next ticket is in the same lane, and a fresh worktree off the trunk feels like the clean place to start it.  It is a second checkout for the same lane.  lit sees a new claimant take the lane and reports it `contested by` the old one, and `lit next` run from anywhere but the checkout that holds the lane routes away from the lane's next ticket.
 
 - WRONG: an epic's four tickets worked in four worktrees, one per ticket — four claimants for one lane.
-- RIGHT: all four worked in the one worktree that holds the lane, one branch per ticket.
+- RIGHT: all four worked in the one worktree that holds the epic, one branch per ticket.
 
 ## Finding work
 
@@ -92,7 +93,7 @@ Every lane nobody holds is yours to wrap up — an expired claim is no claim, so
 
 ### Pull new work
 
-Run `lit next` first, always.  It is the routing decision itself, not a suggestion box, and it is the only thing that knows what this checkout holds — a claim in lit is an (assignee, checkout) pair you cannot read off any listing.  It serves your own live claims ahead of everything else: lanes you hold right now, work you left in progress there, and other lanes of the epic you are already in that nobody else holds.  Only once you hold nothing, or your epic has nothing workable left, does it reach the global pool — and a claim expires after six hours of silence in its lane, so a checkout that has been away longer than that holds nothing and is routed by rank like any other.  Whatever it hands you is your ticket — `lit start` it from its lane's checkout ("Work from the lane's checkout" above) and go to "Working the ticket".
+Run `lit next` first, always.  It is the routing decision itself, not a suggestion box, and it is the only thing that knows what this checkout holds — a claim in lit is an (assignee, checkout) pair you cannot read off any listing.  It serves your own live claims ahead of everything else: lanes you hold right now, work you left in progress there, and other lanes of the epic you are already in that nobody else holds.  Only once you hold nothing, or your epic has nothing workable left, does it reach the global pool — and a claim expires after six hours of silence in its lane, so a checkout that has been away longer than that holds nothing and is routed by rank like any other.  Whatever it hands you is your ticket — `lit start` it from the checkout "Work from the checkout that holds the work" above names and go to "Working the ticket".
 
 #### Orphaned tickets
 
