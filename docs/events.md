@@ -186,8 +186,8 @@ schema behind this lit
 migrates it forward, taking a recovery snapshot first, then removes the oldest
 migration snapshots past the ten it keeps and the oldest Dolt checkpoints past
 the five of each kind it keeps. An open by a command that changes tickets,
-other than a `lit sync` command, also removes the temp table files a Dolt
-process left staged when it was killed mid-push, mid-fetch or mid-landing, as
+other than a `lit sync` command, also removes the temp table files a push,
+fetch or landing left staged when it failed, was cut short or was killed, as
 does a read open that hands a store behind this lit's schema to its migration;
 it does so only while it holds the store, so no live process's file is
 touched. For `lit ls --at`, that store is the one `--at` names, not the

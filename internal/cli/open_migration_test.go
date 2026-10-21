@@ -264,8 +264,9 @@ func TestAWriteCommandCollectsTheTempTableFilesADeadWriterLeft(t *testing.T) {
 	}
 }
 
-// Each failure an open survived is its own warning line, and an open that
-// never looked for temp table files records that as null, not as zero.
+// Each failure an open survived is its own warning line, one line however
+// many it joins, and an open that never looked for temp table files records
+// that as null, not as zero.
 func TestOpenWarningsNameEachFailureAnOpenSurvived(t *testing.T) {
 	t.Parallel()
 	both := storage.Migrated{
@@ -278,6 +279,10 @@ func TestOpenWarningsNameEachFailureAnOpenSurvived(t *testing.T) {
 	}
 	if got := openWarnings(both); !slices.Equal(got, want) {
 		t.Errorf("openWarnings() = %q, want %q", got, want)
+	}
+	joined := storage.Migrated{TempTableFiles: &storage.TempTableFilesCollection{Err: errors.Join(errors.New("remove a: denied"), errors.New("remove b: denied"))}}
+	if got, want := openWarnings(joined), []string{"warning: temp table files a dead writer left were not all removed: remove a: denied; remove b: denied\n"}; !slices.Equal(got, want) {
+		t.Errorf("openWarnings() of a joined failure = %q, want it on one line: %q", got, want)
 	}
 	if got := openWarnings(storage.Migrated{TempTableFiles: &storage.TempTableFilesCollection{Files: 2}}); len(got) != 0 {
 		t.Errorf("openWarnings() of a clean collection = %q, want none", got)

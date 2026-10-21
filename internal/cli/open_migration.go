@@ -27,11 +27,14 @@ func reportOpenMigration(ctx context.Context, done storage.Migrated) {
 }
 
 // openWarnings is the lines the failures an open survived add to a command's
-// output, one per failure, each ending in a newline.
+// output, one per failure, each ending in a newline. A failure that joins
+// several (errors.Join breaks them onto lines) stays on its one line, so
+// every line a reader sees carries its "warning:" and, in lit stores, its
+// store.
 func openWarnings(done storage.Migrated) []string {
 	var warnings []string
 	for _, failure := range done.Failures() {
-		warnings = append(warnings, fmt.Sprintf("warning: %v\n", failure))
+		warnings = append(warnings, fmt.Sprintf("warning: %s\n", strings.ReplaceAll(failure.Error(), "\n", "; ")))
 	}
 	return warnings
 }

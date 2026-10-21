@@ -19,10 +19,11 @@ import (
 const tempTableFilePrefix = "buffered_file_byte_sink_"
 
 // collectDeadTempTableFiles removes every table file a dead writer left
-// staged in the store's TempTableFilesDir. Dolt removes each one when the
-// push, fetch or landing that staged it finishes; a writer killed in between
-// leaves it behind, and nothing else ever removes it — Dolt's own age-based
-// sweep at env load builds its path from the database URL and never finds the
+// staged in the store's TempTableFilesDir. Dolt removes a staged file only
+// once it has uploaded it (store/datas/pull/pull_table_file_writer.go:318-335):
+// a push, fetch or landing that fails, is cut short, or is killed leaves its
+// file behind, and nothing else ever removes it — Dolt's own age-based sweep
+// at env load builds its path from the database URL and never finds the
 // directory (env/environment.go:283).
 //
 // The caller must hold Dolt's journal LOCK through its own write engine and
@@ -31,25 +32,27 @@ const tempTableFilePrefix = "buffered_file_byte_sink_"
 // engine holds LOCK from its open to its close, so while this engine holds
 // it, no other engine can be staging, and this one is not. A Store that
 // rotates its engine (doc.go's reconnect and withEngineClosed) is no
-// exception: what its closed engine staged died with it. [LAW:no-ambient-temporal-coupling] the kernel
-// owns the liveness answer — no age, no PID.
+// exception: what its closed engine staged died with it.
+// [LAW:no-ambient-temporal-coupling] the kernel owns the liveness answer — no
+// age, no PID.
 //
 // Only a regular file with exactly Dolt's staged-file name is collected;
 // everything else in the directory (dolt_embedded_metrics, anything foreign)
-// stays. A directory Dolt has not made yet holds nothing to collect. A file
-// that cannot be removed does not stop the rest: the collection reports what
-// it removed and why the rest stayed, and the next writer's open tries again.
+// stays. A directory Dolt has not made yet holds nothing to collect. Neither
+// a file that cannot be removed nor a read that fails part-way stops the
+// rest: the collection removes every staged file it read, reports why the
+// rest stayed, and the next writer's open tries again.
 func collectDeadTempTableFiles(doltRootDir string) storage.TempTableFilesCollection {
 	dir := TempTableFilesDir(doltRootDir)
+	// [LAW:dataflow-not-control-flow] ReadDir returns what it read beside its
+	// error, so the loop always runs over those entries and a failed read is
+	// one more failure.
 	entries, err := os.ReadDir(dir)
-	if errors.Is(err, fs.ErrNotExist) {
-		return storage.TempTableFilesCollection{}
-	}
-	if err != nil {
-		return storage.TempTableFilesCollection{Err: fmt.Errorf("read the temp table file dir: %w", err)}
+	var failures []error
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		failures = append(failures, fmt.Errorf("read the temp table file dir: %w", err))
 	}
 	var collected storage.TempTableFilesCollection
-	var failures []error
 	for _, entry := range entries {
 		if !entry.Type().IsRegular() || !isStagedTableFileName(entry.Name()) {
 			continue
