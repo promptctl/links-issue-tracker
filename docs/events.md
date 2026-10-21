@@ -189,8 +189,9 @@ the five of each kind it keeps. An open by a command that changes tickets,
 other than a `lit sync` command, also removes the temp table files a Dolt
 process left staged when it was killed mid-push, mid-fetch or mid-landing, as
 does a read open that hands a store behind this lit's schema to its migration;
-it does so only while it holds the store, so no live process's file is touched. For `lit ls --at`, that store is the one `--at`
-names, not the working directory's.
+it does so only while it holds the store, so no live process's file is
+touched. For `lit ls --at`, that store is the one `--at` names, not the
+working directory's.
 
 | Key | Meaning |
 | --- | --- |
