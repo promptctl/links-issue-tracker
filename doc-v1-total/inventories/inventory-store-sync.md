@@ -1912,7 +1912,7 @@ Tests: `snapshot_test.go` (reserve, materialize `finalPath`, reserve again → d
 ### 13.9 Copy engine, syscalls, exclusions, permissions
 
 **`cloneTree` per platform.**
-- **Darwin** (`clone_darwin.go`): `unix.Clonefile(src, dst, unix.CLONE_NOFOLLOW)` — a single APFS clonefile syscall over the whole tree. On nil, `omit.removeFrom(dst)` is the result: it walks `dst` with `filepath.WalkDir`, and for every entry whose `rel` (relative to `dst`) `omit.omits`, `os.RemoveAll`s it (a directory then returns `fs.SkipDir`) and appends `rel`, slash-separated, to what it returns. `dst`'s own path is never read as a pattern, and the walk follows no symlink inside the copy. **Any** clonefile error falls back to `walkAndCopy(ctx, src, dst, omit, plainFileCopy)`. The `Clonefile` call is uncancelable; `ctx` governs only the fallback walk.
+- **Darwin** (`clone_darwin.go`): `unix.Clonefile(src, dst, unix.CLONE_NOFOLLOW)` — a single APFS clonefile syscall over the whole tree. On nil, `omit.removeFrom(ctx, dst)` is the result: it walks `dst` with `filepath.WalkDir`, returns `ctx.Err()` at the first entry after cancellation, and for every entry whose `rel` (relative to `dst`) `omit.omits`, `os.RemoveAll`s it (a directory then returns `fs.SkipDir`) and appends `rel`, slash-separated, to what it returns. `dst`'s own path is never read as a pattern, and the walk follows no symlink inside the copy. **Any** clonefile error falls back to `walkAndCopy(ctx, src, dst, omit, plainFileCopy)`. The `Clonefile` call is uncancelable; `ctx` governs the removal and the fallback walk.
 - **Linux** (`clone_linux.go`): always `walkAndCopy(ctx, src, dst, omit, ficloneOrCopy)` — per-file `FICLONE`.
 - **Other** (`clone_other.go`): `walkAndCopy(ctx, src, dst, omit, plainFileCopy)`.
 

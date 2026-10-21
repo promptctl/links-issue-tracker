@@ -317,11 +317,11 @@ type SchemaMigrator interface {
 }
 
 // Migrated is what an open did to the stored shape: whether it had to build
-// the database first, the recovery snapshot it took before migrating, "" when
-// it found nothing to migrate, and what that snapshot's copy left out, nil
-// when it took none, why rolling older migration snapshots or
-// checkpoints off after its work committed failed, if it did, and the newer
-// schema it served, if it did.
+// the database first; the recovery snapshot it took before migrating, "" when
+// it found nothing to migrate; what that snapshot's copy left out, nil when
+// it took none; why rolling older migration snapshots or checkpoints off
+// after its work committed failed, if it did; and the newer schema it served,
+// if it did.
 // [LAW:types-are-the-program] PruneErr is a field, not the open's error: each
 // prune runs after the work it trails has committed, so its failure leaves the
 // store at the shape this binary reads. An open that failed on it would stop

@@ -240,6 +240,7 @@ func TestDowngradeRollbackOnFailure(t *testing.T) {
 	if done == nil {
 		t.Fatal("Downgrade reported nothing, want what it did before the failure")
 	}
+	assertSnapshotLeftOutTheJournalLock(t, done)
 	if want := (storage.Downgraded{From: registryMax, Snapshot: rb.Snapshot.Name, SnapshotLeftOut: done.SnapshotLeftOut}); !reflect.DeepEqual(*done, want) {
 		t.Fatalf("Downgrade reported %+v, want %+v", done, want)
 	}
@@ -292,9 +293,7 @@ func TestDowngradeHappyPathSteppedAndCommitted(t *testing.T) {
 	}
 	// A fresh workspace holds no downgrade snapshot, so the one Downgrade
 	// names is the one it took.
-	if !slices.Contains(done.SnapshotLeftOut, "links/.dolt/noms/LOCK") {
-		t.Errorf("SnapshotLeftOut = %q, want what the snapshot's copy left out, the journal LOCK among it", done.SnapshotLeftOut)
-	}
+	assertSnapshotLeftOutTheJournalLock(t, done)
 	if want := (storage.Downgraded{From: registryMax, Reversed: 2, Snapshot: done.Snapshot, SnapshotLeftOut: done.SnapshotLeftOut}); !reflect.DeepEqual(*done, want) || !IsDowngradeSnapshotName(done.Snapshot) {
 		t.Fatalf("Downgrade(%d) reported %+v, want %+v naming a downgrade snapshot", target, done, want)
 	}
@@ -373,6 +372,7 @@ func TestDowngradeFailurePartWayReportsTheStepsApplied(t *testing.T) {
 			if done == nil {
 				t.Fatal("Downgrade reported nothing, want what it did before the failure")
 			}
+			assertSnapshotLeftOutTheJournalLock(t, done)
 			if want := (storage.Downgraded{From: registryMax, Reversed: 1, Snapshot: rb.Snapshot.Name, SnapshotLeftOut: done.SnapshotLeftOut}); !reflect.DeepEqual(*done, want) {
 				t.Fatalf("Downgrade reported %+v, want %+v", done, want)
 			}
@@ -449,6 +449,7 @@ func TestDowngradePruneFailureReportsTheCommittedReverse(t *testing.T) {
 	if done.PruneErr == nil || !strings.Contains(done.PruneErr.Error(), "prune downgrade snapshots") {
 		t.Fatalf("PruneErr = %v, want the prune failure", done.PruneErr)
 	}
+	assertSnapshotLeftOutTheJournalLock(t, done)
 	if want := (storage.Downgraded{From: registryMax, Reversed: 1, Snapshot: done.Snapshot, SnapshotLeftOut: done.SnapshotLeftOut, PruneErr: done.PruneErr}); !reflect.DeepEqual(*done, want) {
 		t.Fatalf("Downgrade reported %+v, want %+v", done, want)
 	}
@@ -646,3 +647,14 @@ var (
 	_ error = (*DowngradeRollbackError)(nil)
 	_ dbsnapshot.Snapshot
 )
+
+// assertSnapshotLeftOutTheJournalLock is a downgrade's report naming what its
+// recovery snapshot's copy left out, the open store's journal LOCK among it.
+// The other fields' expectations take SnapshotLeftOut from here, so this is
+// the assertion behind it.
+func assertSnapshotLeftOutTheJournalLock(t *testing.T, done *storage.Downgraded) {
+	t.Helper()
+	if !slices.Contains(done.SnapshotLeftOut, "links/.dolt/noms/LOCK") {
+		t.Errorf("SnapshotLeftOut = %q, want what the snapshot's copy left out, the journal LOCK among it", done.SnapshotLeftOut)
+	}
+}

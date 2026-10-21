@@ -62,7 +62,7 @@ func TestEveryCopyEngineLeavesOutWhatItsOmissionNames(t *testing.T) {
 			if _, err := walkAndCopy(ctx, src, dst, nil, plainFileCopy); err != nil {
 				return nil, err
 			}
-			return omit.removeFrom(dst)
+			return omit.removeFrom(ctx, dst)
 		}},
 	}
 	cases := []struct {
@@ -113,5 +113,21 @@ func TestEveryCopyEngineLeavesOutWhatItsOmissionNames(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// TestRemoveFromStopsOnACancelledContext pins that the removal Darwin's
+// Clonefile path runs inside the caller's hold answers ctx as the walk does:
+// a cancelled context stops it and surfaces as the context's error, so the
+// hold's deadline and an interrupt cut it.
+func TestRemoveFromStopsOnACancelledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	dst := doltStorageTree(t)
+	if _, err := snapshotOmits.removeFrom(ctx, dst); !errors.Is(err, context.Canceled) {
+		t.Fatalf("removeFrom() on a cancelled context error = %v, want context.Canceled", err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "links", ".dolt", RemoteCacheDirName)); err != nil {
+		t.Fatalf("a cancelled removal removed the remote cache anyway: %v", err)
 	}
 }

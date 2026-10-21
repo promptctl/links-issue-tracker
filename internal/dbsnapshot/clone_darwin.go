@@ -12,15 +12,15 @@ import (
 // the whole tree, then removes what omit leaves out (on a copy-on-write clone
 // that costs metadata), with walkAndCopy as the fallback when the filesystem
 // doesn't support clonefile (or any other failure). The Clonefile call itself
-// is uncancelable but metadata-only-fast; ctx governs the fallback walk,
-// which is the only path that can run long. Take's entry gate covers the
+// is uncancelable but metadata-only-fast; ctx governs the removal and the
+// fallback walk, the paths that grow with the tree. Take's entry gate covers the
 // pre-canceled case so cancellation semantics don't vary by platform.
 //
 // [LAW:dataflow-not-control-flow] Platform variability lives in which file Go
 // links in (a value), not in a runtime branch inside one function.
 func cloneTree(ctx context.Context, src, dst string, omit omission) (leftOut []string, err error) {
 	if err := unix.Clonefile(src, dst, unix.CLONE_NOFOLLOW); err == nil {
-		return omit.removeFrom(dst)
+		return omit.removeFrom(ctx, dst)
 	}
 	return walkAndCopy(ctx, src, dst, omit, plainFileCopy)
 }
