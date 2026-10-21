@@ -147,6 +147,20 @@ func TestResolveYieldsOnePhysicalStorePerSpelling(t *testing.T) {
 // silently treated as "not a repository". The three cases are produced by real
 // exec failures rather than fabricated errors, so the test exercises the exact
 // error shapes production sees.
+// A cwd that is not absolute is refused, whatever repository the process
+// itself happens to be in: git run there would answer for the process's
+// directory, not the caller's. This test's process runs inside this module's
+// own checkout, so a cwd resolved against it would succeed.
+func TestLocateRefusesARelativeCwd(t *testing.T) {
+	t.Parallel()
+	for _, cwd := range []string{"", ".", "internal"} {
+		loc, err := Locate(cwd)
+		if err == nil || !strings.Contains(err.Error(), "not absolute") {
+			t.Errorf("Locate(%q) = %+v, %v; want a refusal naming the directory as not absolute", cwd, loc, err)
+		}
+	}
+}
+
 func TestClassifyGitError(t *testing.T) {
 	// git's fatal exit code (128) — what rev-parse returns for "not a
 	// repository" / "not a work tree": the legitimate sentinel case.

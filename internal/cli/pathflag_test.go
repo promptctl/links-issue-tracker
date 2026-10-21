@@ -78,3 +78,25 @@ func TestUnreadableWorkingDirFailsOnlyARelativePath(t *testing.T) {
 		t.Error("resolve(relative) succeeded against an unreadable working directory")
 	}
 }
+
+// A working directory is absolute or it is an error: an empty or relative one,
+// or an invocation given none, would leave the process's directory to resolve
+// against.
+func TestWorkingDirIsAbsoluteOrAnError(t *testing.T) {
+	t.Parallel()
+	for name, dir := range map[string]WorkingDir{
+		"zero":     {},
+		"empty":    WorkingDirOf("", nil),
+		"relative": WorkingDirOf("sub", nil),
+	} {
+		if got, err := dir.Path(); err == nil {
+			t.Errorf("%s: Path() = %q, nil; want an error", name, got)
+		}
+		if got, err := dir.resolve("file.json"); err == nil {
+			t.Errorf("%s: resolve(relative) = %q, nil; want an error", name, got)
+		}
+	}
+	if got, err := WorkingDirOf("/abs", nil).Path(); err != nil || got != "/abs" {
+		t.Errorf("absolute: Path() = %q, %v; want /abs", got, err)
+	}
+}

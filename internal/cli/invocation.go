@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"errors"
+	"fmt"
 	"io"
 	"path/filepath"
 )
@@ -31,13 +33,25 @@ type WorkingDir struct {
 }
 
 // WorkingDirOf is the working directory os.Getwd reported, in the two values
-// it returns them as.
+// it returns them as. A path that is not absolute is refused here, as the
+// error, because every relative path is resolved against it and a relative
+// one would leave the process's own directory to finish the job.
+// [LAW:parse-dont-validate]
 func WorkingDirOf(path string, err error) WorkingDir {
+	if err == nil && !filepath.IsAbs(path) {
+		err = fmt.Errorf("working directory %q is not absolute", path)
+	}
 	return WorkingDir{path: path, err: err}
 }
 
-// Path is the directory, or why it could not be read.
+// Path is the directory, or why it could not be read. The zero WorkingDir is
+// an invocation built without one, and it is refused as such rather than read
+// as the empty path, which git and os would both take to mean the process's
+// directory.
 func (d WorkingDir) Path() (string, error) {
+	if d == (WorkingDir{}) {
+		return "", errors.New("the invocation was given no working directory")
+	}
 	return d.path, d.err
 }
 

@@ -384,10 +384,7 @@ func Locate(cwd string) (Location, error) {
 	if err != nil {
 		return Location{}, classifyGitError(fmt.Sprintf("git rev-parse --git-common-dir in %q", cwd), err)
 	}
-	gitCommonDir, err = anchorGitPath(cwd, gitCommonDir)
-	if err != nil {
-		return Location{}, err
-	}
+	gitCommonDir = anchorGitPath(cwd, gitCommonDir)
 	// [LAW:one-source-of-truth] A store's identity is its physical directory, not
 	// the path string a caller happened to hold. filepath.Abs makes a path
 	// absolute but does not resolve symlinks, so the same store reached from a
@@ -419,18 +416,14 @@ func Locate(cwd string) (Location, error) {
 // [LAW:single-enforcer] Both path-answering queries — Locate's
 // --git-common-dir and resolvePrivateGitDir's --git-dir — anchor through here,
 // so the two cannot drift into resolving the same git output differently.
-func anchorGitPath(cwd string, gitPath string) (string, error) {
+//
+// cwd is absolute: it is the directory gitOutput already ran git in, and
+// gitOutput refuses any other.
+func anchorGitPath(cwd string, gitPath string) string {
 	if filepath.IsAbs(gitPath) {
-		return filepath.Clean(gitPath), nil
+		return filepath.Clean(gitPath)
 	}
-	// Making a relative cwd absolute would read the process's working directory,
-	// which is not this call's to read: the CLI hands every resolution the
-	// directory its invocation ran in, already absolute.
-	// [LAW:effects-at-boundaries] [LAW:no-silent-failure]
-	if !filepath.IsAbs(cwd) {
-		return "", fmt.Errorf("anchor git path %q: cwd %q is not absolute", gitPath, cwd)
-	}
-	return filepath.Clean(filepath.Join(cwd, gitPath)), nil
+	return filepath.Clean(filepath.Join(cwd, gitPath))
 }
 
 // resolvePrivateGitDir locates the checkout's own git directory — the per-worktree
@@ -458,10 +451,7 @@ func resolvePrivateGitDir(cwd string) (string, error) {
 	if err != nil {
 		return "", classifyGitError(fmt.Sprintf("git rev-parse --git-dir in %q", cwd), err)
 	}
-	anchored, err := anchorGitPath(cwd, privateGitDir)
-	if err != nil {
-		return "", err
-	}
+	anchored := anchorGitPath(cwd, privateGitDir)
 	canonical, err := filepath.EvalSymlinks(anchored)
 	if err != nil {
 		return "", fmt.Errorf("canonicalize git-dir %q: %w", anchored, err)
@@ -498,7 +488,15 @@ func LocationFromStorageDir(storageDir string) Location {
 // context.Background(), which never cancels. [LAW:dataflow-not-control-flow]
 // [LAW:no-ambient-temporal-coupling] the subprocess lifecycle is owned by ctx, not
 // left to outlive a cancelled command until a grace-timer hard-exit reaps it.
+//
+// cwd must be absolute. This is the one place a workspace function's cwd
+// becomes a directory something runs in, and git run in an empty or relative
+// one would answer for the process's working directory instead of the
+// caller's. [LAW:single-enforcer] [LAW:effects-at-boundaries]
 func gitOutput(ctx context.Context, cwd string, args ...string) (string, error) {
+	if !filepath.IsAbs(cwd) {
+		return "", fmt.Errorf("run git in %q: the directory is not absolute", cwd)
+	}
 	out, err := gitcmd.Command(ctx, gitcmd.Spec{Dir: cwd}, args...).Output()
 	if err != nil {
 		return "", gitFailure(err)
