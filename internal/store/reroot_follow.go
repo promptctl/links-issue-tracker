@@ -55,9 +55,11 @@ import (
 // the commit lock (doc.go).
 // [LAW:no-ambient-temporal-coupling]
 func (s *Store) followRemoteReRoot(ctx context.Context, remote storage.RemoteName, branch string, entry storage.SyncEntry) error {
-	_, _, err := s.moveOntoRemoteReRoot(ctx, remote, branch, entry)
+	if _, _, err := s.moveOntoRemoteReRoot(ctx, remote, branch, entry); err != nil {
+		return err
+	}
 	s.collectOwedCut(ctx, entry)
-	return err
+	return nil
 }
 
 // moveOntoRemoteReRoot is the follow itself, on any store: it re-roots the
@@ -69,10 +71,10 @@ func (s *Store) followRemoteReRoot(ctx context.Context, remote storage.RemoteNam
 // shares its history when the hold ends, by this move or by another writer's
 // follow before the hold.
 //
-// A move that finished leaves the store owing the collection below the cut
-// (collectOwedCut), which only a verb on a store that outlives the sync runs:
-// on the mirror's clone, which is deleted when its cycle ends, the debt goes
-// with it. [LAW:decomposition] the move and its fork points are the follow;
+// A follow whose fork points crossed leaves the store owing the collection
+// below the cut (collectOwedCut), which only a verb on a store that outlives
+// the sync runs: on the mirror's clone, which is deleted when its cycle ends,
+// the debt goes with it. [LAW:decomposition] the move and its fork points are the follow;
 // what a store does across the cut afterwards is maintenance.
 func (s *Store) moveOntoRemoteReRoot(ctx context.Context, remote storage.RemoteName, branch string, entry storage.SyncEntry) (followed storage.FollowedReRoot, crossed bool, err error) {
 	trimmedBranch, err := requireSyncArg("branch", branch)
@@ -103,11 +105,17 @@ func (s *Store) moveOntoRemoteReRoot(ctx context.Context, remote storage.RemoteN
 	// fork point below the cut pins that history through every GC and is
 	// the base a later reconcile merges against. [LAW:no-silent-failure] a
 	// fork-point move that fails is the follow's error, beside a branch that
-	// moved.
-	s.owesCollection = true
-	return followed, crossed, wrapFollowErr(remote, trimmedBranch, s.runSyncMutation(ctx, func(ctx context.Context) error {
-		return s.moveForkPointsAcrossTheCut(ctx, remote)
-	}))
+	// moved. A collection frees nothing while a fork point pins the history
+	// below the cut, so only fork points that crossed leave the store owing
+	// one.
+	moveErr := s.runSyncMutation(ctx, func(ctx context.Context) error {
+		if err := s.moveForkPointsAcrossTheCut(ctx, remote); err != nil {
+			return fmt.Errorf("move fork points across the cut: %w", err)
+		}
+		return nil
+	})
+	s.owesCollection = moveErr == nil
+	return followed, crossed, wrapFollowErr(remote, trimmedBranch, moveErr)
 }
 
 // followUnderHold is moveOntoRemoteReRoot after its probe: under the hold
@@ -169,6 +177,11 @@ func (s *Store) collectOwedCut(ctx context.Context, entry storage.SyncEntry) sto
 // their tracking refs now name, inside the caller's commit lock, once a
 // follow moved the branch onto it.
 func (s *Store) moveForkPointsAcrossTheCut(ctx context.Context, remote storage.RemoteName) error {
+	if s.moveForkPointsHookForTest != nil {
+		if err := s.moveForkPointsHookForTest(); err != nil {
+			return err
+		}
+	}
 	tracked, err := s.trackingRefs(ctx, ownerOf(remote))
 	if err != nil {
 		return err

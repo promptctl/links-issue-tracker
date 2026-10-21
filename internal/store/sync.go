@@ -842,7 +842,7 @@ func (s *Store) chooseCompactionDepth() (GCMode, error) {
 // refusal joins its failure the same way.
 func joinFollowFailure(pushErr, followErr error) error {
 	if followErr != nil {
-		return fmt.Errorf("%w (and whether the remote re-rooted its history could not be checked: %v)", pushErr, followErr)
+		return fmt.Errorf("%w (and fetching and following the remote, which could explain the refusal, failed: %v)", pushErr, followErr)
 	}
 	return pushErr
 }

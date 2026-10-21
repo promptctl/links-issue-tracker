@@ -262,6 +262,36 @@ func TestAFollowCarriesAFailedCollection(t *testing.T) {
 	}
 }
 
+// TestAFollowWhoseForkPointsDoNotMoveFailsAndCollectsNothing has bravo's
+// fork-point move fail once its branch followed alpha's re-root. The branch
+// that moved stands and is recorded, the failure is the follow's error, and
+// nothing is collected: a fork point left below the cut pins the history a
+// GC would free, so the store owes no collection.
+func TestAFollowWhoseForkPointsDoNotMoveFailsAndCollectsNothing(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	r := newReRootedRemote(t, ctx, true)
+
+	bravo := openSyncOrFatal(t, ctx, r.bravo)
+	defer func() { _ = bravo.Close() }()
+	if err := bravo.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
+		t.Fatalf("SyncFetch(bravo) error = %v", err)
+	}
+	injected := errors.New("injected fork-point failure")
+	bravo.moveForkPointsHookForTest = func() error { return injected }
+	err := bravo.SyncFollowReRoot(ctx, remoteName(t, "origin"), "master", storage.SyncEntryFetch)
+	if !errors.Is(err, injected) || !strings.Contains(err.Error(), "follow a re-root of origin/master: move fork points across the cut") {
+		t.Fatalf("SyncFollowReRoot(bravo) error = %v; want the fork-point move's failure as the follow's error", err)
+	}
+	r.assertFollowed(t, bravo, storage.SyncEntryFetch)
+	if collections := bravo.Collections(); len(collections) != 0 {
+		t.Fatalf("Collections() = %+v; want none while a fork point pins the history below the cut", collections)
+	}
+	if len(branchesUnder(t, ctx, bravo, migrationCheckpointPrefix+"-")) == 0 {
+		t.Fatalf("bravo's %s checkpoints are gone; want them standing, since nothing collected", migrationCheckpointPrefix)
+	}
+}
+
 // TestACollectionIsReportedWhole puts every fact of a collection on its event
 // and in its maintenance line, and a collection that did nothing says nothing.
 func TestACollectionIsReportedWhole(t *testing.T) {

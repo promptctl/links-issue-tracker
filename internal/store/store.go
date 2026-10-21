@@ -57,9 +57,10 @@ type Store struct {
 	// followed is every re-root moveOntoRemoteReRoot applied since the store
 	// opened; FollowedReRoots is its one reader.
 	followed []storage.FollowedReRoot
-	// owesCollection is whether a follow left the branch across a cut since
-	// the store last collected below one: moveOntoRemoteReRoot sets it, and
-	// collectOwedCut, its one reader, clears it.
+	// owesCollection is whether a follow left the branch and its fork points
+	// across a cut since the store last collected below one:
+	// moveOntoRemoteReRoot sets it, and collectOwedCut, its one reader,
+	// clears it.
 	owesCollection bool
 	// collections is every collection below a cut since the store opened
 	// (collectOwedCut); Collections is its one reader.
@@ -134,6 +135,12 @@ type Store struct {
 	// exactly once, proving a retry resumes at versioning instead of re-running
 	// the staged mutation body. Same per-Store seam rationale as above.
 	commitWorkingSetHookForTest func() error
+
+	// moveForkPointsHookForTest, if non-nil, fires at the top of every
+	// moveForkPointsAcrossTheCut, and its error, if any, stands in for that
+	// move failing after a follow moved the branch. Production callers leave
+	// it nil. Same per-Store seam rationale as above.
+	moveForkPointsHookForTest func() error
 
 	// migrated is what Open's migrate did; see Migrated.
 	migrated storage.Migrated
