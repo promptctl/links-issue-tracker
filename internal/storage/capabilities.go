@@ -140,6 +140,9 @@ type Syncer interface {
 	// and follows the re-root. The push landed whatever the bound did, so the
 	// bound fails nothing: where it stopped is on its record (HistoryBounds)
 	// and in the account, and a window config left unread is in the account.
+	// Once the push and the bound have followed whatever they followed, it
+	// collects below the cut once, on ctx (Collections), and that account
+	// joins Result.Maintenance too.
 	SyncCompactAndPush(ctx, boundLifetime context.Context, remote RemoteName, branch string, window BoundWindow, setUpstream bool, force bool) (SyncPushResult, error)
 
 	// SyncFollowReRoot brings the local branch into the remote's history when
@@ -156,6 +159,13 @@ type Syncer interface {
 	// unrelated histories. An engine whose history is never re-rooted follows
 	// nothing and returns none.
 	FollowedReRoots() []FollowedReRoot
+
+	// Collections is every collection below a re-root's cut the engine ran
+	// since it opened, oldest first. A follow leaves the store across the
+	// cut, and only a verb on a store that outlives the sync collects what
+	// is below it; the mirror's clone, deleted when its cycle ends, never
+	// does.
+	Collections() []Collection
 
 	// DeclinedReRoots is every re-root of the remote the engine recognized
 	// since it opened and did not follow, oldest first, with the cut and why
@@ -175,7 +185,7 @@ type Syncer interface {
 
 	// ForkPointRecords is what the engine did to each fork point since it
 	// opened, oldest first: every fetch before it moved the tracking ref,
-	// every collection below a cut, and every removal of a remote. A
+	// every follow of a re-root, and every removal of a remote. A
 	// fork point is the remote head this checkout last knew while the two
 	// still shared history: the base a reconcile merges against once the
 	// remote re-roots above every commit this checkout holds.

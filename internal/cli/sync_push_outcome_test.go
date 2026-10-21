@@ -118,9 +118,9 @@ func TestPushOutcomeOf(t *testing.T) {
 			name: "push refused with a busy follow-up check records error, not busy",
 			outcome: syncPushOutcome{
 				remote: remoteName(t, "origin"), branch: "master",
-				pushErr: fmt.Errorf("push remote \"origin\": rejected (and whether the remote re-rooted its history could not be checked: %v)", store.ErrWorkspaceBusy),
+				pushErr: fmt.Errorf("push remote \"origin\": rejected (and fetching and following the remote, which could explain the refusal, failed: %v)", store.ErrWorkspaceBusy),
 			},
-			want: pushOutcomeRecord{Decision: pushDecisionError, Reason: "push remote \"origin\": rejected (and whether the remote re-rooted its history could not be checked: workspace busy)", Remote: "origin", Branch: "master"},
+			want: pushOutcomeRecord{Decision: pushDecisionError, Reason: "push remote \"origin\": rejected (and fetching and following the remote, which could explain the refusal, failed: workspace busy)", Remote: "origin", Branch: "master"},
 		},
 		{
 			name: "could-not-attempt the push deadline cut records the verdict and names the deadline",

@@ -386,7 +386,7 @@ func (s *Store) reconcileBase(ctx context.Context, remote storage.RemoteName, br
 // SyncPull calls reconcile directly, inside the commit lock it took after
 // following.
 func (s *Store) followThenReconcile(ctx context.Context, remote storage.RemoteName, branch string, settle settleFn, unrelated unrelatedHandling) (storage.SyncReconcileResult, error) {
-	if _, err := s.followRemoteReRoot(ctx, remote, branch, storage.SyncEntryReconcile); err != nil {
+	if err := s.followRemoteReRoot(ctx, remote, branch, storage.SyncEntryReconcile); err != nil {
 		return storage.SyncReconcileResult{}, err
 	}
 	return s.reconcile(ctx, remote, branch, settle, unrelated)

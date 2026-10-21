@@ -54,10 +54,18 @@ type Store struct {
 	// [LAW:dataflow-not-control-flow]
 	releaseEngineRecord func() error
 
-	// followed is every re-root followRemoteReRoot applied since the store
+	// followed is every re-root moveOntoRemoteReRoot applied since the store
 	// opened; FollowedReRoots is its one reader.
 	followed []storage.FollowedReRoot
-	// declined is every re-root cut followRemoteReRoot recognized and could
+	// owesCollection is whether a follow left the branch and its fork points
+	// across a cut since the store last collected below one:
+	// moveOntoRemoteReRoot sets it, and collectOwedCut, its one reader,
+	// clears it.
+	owesCollection bool
+	// collections is every collection below a cut since the store opened
+	// (collectOwedCut); Collections is its one reader.
+	collections []storage.Collection
+	// declined is every re-root cut moveOntoRemoteReRoot recognized and could
 	// not follow since the store opened; DeclinedReRoots is its one reader.
 	declined []storage.DeclinedReRoot
 	// cutsNotFound is every follow's hold since the store opened that found
@@ -127,6 +135,12 @@ type Store struct {
 	// exactly once, proving a retry resumes at versioning instead of re-running
 	// the staged mutation body. Same per-Store seam rationale as above.
 	commitWorkingSetHookForTest func() error
+
+	// moveForkPointsHookForTest, if non-nil, fires at the top of every
+	// moveForkPointsAcrossTheCut, and its error, if any, stands in for that
+	// move failing after a follow moved the branch. Production callers leave
+	// it nil. Same per-Store seam rationale as above.
+	moveForkPointsHookForTest func() error
 
 	// migrated is what Open's migrate did; see Migrated.
 	migrated storage.Migrated
@@ -3404,11 +3418,12 @@ var MirrorPushDeadline = mirrorPushDeadline
 // under. The bound crosses the network three times — the re-root's lease
 // push, the remote's GC, the fetch that learns what the remote carries — and
 // each leg is a transport of a push's kind, so each gets the push deadline.
-// The local legs ride in the stall factor's margin: the re-roots, whose cost
-// is reroot.elapsed_ms, and the follow's full GC, measured at 2.0s on an APFS
-// clone of this repository's 437 MB store. The remote GC's upload has not
-// been measured against a hosted remote; history_bound.elapsed_ms on the
-// push's event is the figure to re-measure from. A cut bound fails nothing:
+// The local legs, the re-roots, ride in the stall factor's margin; their cost
+// is reroot.elapsed_ms. The bound's follow collects nothing below the cut:
+// the live store's push verb runs that full GC after the bound, on its own
+// lifetime (collectOwedCut). The remote GC's upload has not been measured
+// against a hosted remote; history_bound.elapsed_ms on the push's event is
+// the figure to re-measure from. A cut bound fails nothing:
 // the push landed. A cut before the re-root reaches the remote leaves the
 // next push past the bound to run it again; a cut after it leaves the
 // remote's history below the cut to the next re-root's GC, which collects it

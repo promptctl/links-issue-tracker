@@ -57,6 +57,15 @@ func TestTheMirrorAloneKeepsTheHistoryBound(t *testing.T) {
 			t.Fatalf("follow %d = %v; want follow=%s onto the published head %v", i, follow, entry, bound["reroot.head"])
 		}
 	}
+	// Only the live store collects below the cut: the clone the bound ran on
+	// is deleted when the mirror's cycle ends.
+	collections := ev.Occurrences["collection.records"]
+	if len(collections) != 1 {
+		t.Fatalf("collection.records = %v; want the live store's receive alone", collections)
+	}
+	if c, _ := collections[0].(map[string]any); c["collection.entry"] != "receive" || c["collection.ran"] != true {
+		t.Fatalf("the collection = %v; want the live store's receive to have run it", c)
+	}
 	if head, _ := syncHeadAndBranch(t, r.alpha); head != bound["reroot.head"] {
 		t.Fatalf("alpha's live head is %s; want the published re-root %v", head, bound["reroot.head"])
 	}

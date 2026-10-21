@@ -71,12 +71,10 @@ const (
 )
 
 // FollowedReRoot is a re-root a store applied to its own branch to follow a
-// remote that another checkout re-rooted, the entry point that followed, and
-// what the store reclaimed below the cut once its branch was across it.
+// remote that another checkout re-rooted, and the entry point that followed.
 type FollowedReRoot struct {
 	Entry SyncEntry
 	ReRooted
-	Collection Collection
 }
 
 // DeclinedReRoot is a re-root of the remote a store recognized and did not
@@ -134,23 +132,28 @@ func (c CutNotFound) EventValue() map[string]any {
 	}
 }
 
-// Collection is the reclaim that follows a re-root onto a store's branch: the
-// local refs naming commits below the cut dropped, then the full GC. Ran is
-// whether the GC ran, and the two byte counts are the store's size on disk
-// around the pass. Sweep is the line the GC's sweep of orphaned remote-cache
-// refs rendered, empty when it found nothing to say. Err is where the pass
-// stopped, or a reading around it that failed: a collection is maintenance,
-// so its failure is carried here and never fails the follow it came after.
+// Collection is the reclaim a store that outlives the sync runs once a
+// follow left its branch across a re-root's cut: the local refs naming
+// commits below the cut dropped, then the full GC. Entry is the entry point
+// that ran it. Ran is whether the GC ran, and the two byte counts are the
+// store's size on disk around the pass. Sweep is the line the GC's sweep of
+// orphaned remote-cache refs rendered, empty when it found nothing to say.
+// Err is where the pass stopped, or a reading around it that failed: a
+// collection is maintenance, so its failure is carried here and never fails
+// the sync it came after.
 type Collection struct {
+	Entry                   SyncEntry
 	Ran                     bool
 	BytesBefore, BytesAfter int64
 	Sweep                   string
 	Err                     error
 }
 
-// EventRecord is the collection as event facts.
-func (c Collection) EventRecord() map[string]any {
+// EventValue is the collection as one value of the event's
+// collection.records list.
+func (c Collection) EventValue() map[string]any {
 	return map[string]any{
+		"collection.entry":        string(c.Entry),
 		"collection.ran":          c.Ran,
 		"collection.bytes_before": c.BytesBefore,
 		"collection.bytes_after":  c.BytesAfter,
@@ -160,15 +163,14 @@ func (c Collection) EventRecord() map[string]any {
 }
 
 // EventValue is the follow as one value of the event's reroot.follows list:
-// the re-root's facts and counts under their own keys, the collection under
-// collection.*, and the entry point under reroot.follow. A list, because one
+// the re-root's facts and counts under their own keys, and the entry point
+// under reroot.follow. A list, because one
 // invocation can follow more than once — the mirror's clone and then its live
 // store, or one long-lived mirror across cycles.
 func (f FollowedReRoot) EventValue() map[string]any {
 	facts, counts := f.ReRooted.EventRecord()
 	value := map[string]any{"reroot.follow": string(f.Entry)}
 	maps.Copy(value, facts)
-	maps.Copy(value, f.Collection.EventRecord())
 	for key, n := range counts {
 		value[key] = n
 	}
