@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -113,6 +114,23 @@ func TestHungTestOutputPrintsWhenItsPackageEnds(t *testing.T) {
 	}
 	if !(headerAt < panicAt && panicAt < laterPackageAt) {
 		t.Errorf("hung test's output not printed under its header before the later package's result:\n%s", got)
+	}
+}
+
+func TestSlowestBreaksTiesByNameSoTheCutIsStable(t *testing.T) {
+	// Eleven tests tied at one second: which ten are listed must not
+	// depend on stream order.
+	var tests []testResult
+	for i := 10; i >= 0; i-- {
+		tests = append(tests, testResult{Name: fmt.Sprintf("Test%02d", i), Elapsed: time.Second})
+	}
+	var got []string
+	for _, r := range slowest(tests) {
+		got = append(got, r.Name)
+	}
+	want := []string{"Test00", "Test01", "Test02", "Test03", "Test04", "Test05", "Test06", "Test07", "Test08", "Test09"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("slowest of eleven tied tests = %v, want %v", got, want)
 	}
 }
 
