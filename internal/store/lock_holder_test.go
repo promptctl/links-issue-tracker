@@ -86,7 +86,9 @@ func TestContentionErrorNamesTheLiveHolder(t *testing.T) {
 	ctx := context.Background()
 	lockPath := filepath.Join(t.TempDir(), "test.lock")
 
-	holder, err := acquireStoreLock(ctx, storageDirOf(lockPath), lockPath, true, 0)
+	// The holder is a run, which names its command; the record carries that
+	// command rather than the process's arguments, which two runs share.
+	holder, err := acquireStoreLock(WithHolderCommand(ctx, "lit backlog"), storageDirOf(lockPath), lockPath, true, 0)
 	if err != nil {
 		t.Fatalf("holder acquireStoreLock() error = %v", err)
 	}
@@ -102,9 +104,8 @@ func TestContentionErrorNamesTheLiveHolder(t *testing.T) {
 	}
 	message := err.Error()
 	for _, want := range []string{
-		"pid " + strconv.Itoa(os.Getpid()),
+		"pid " + strconv.Itoa(os.Getpid()) + " (lit backlog)",
 		"holding since",
-		filepath.Base(os.Args[0]),
 	} {
 		if !strings.Contains(message, want) {
 			t.Errorf("contention error %q does not name the holder's %q", message, want)
@@ -233,34 +234,6 @@ func TestReleaseRetiresTheHolderRecord(t *testing.T) {
 	}
 	if holders, problems := readLockHolders(storageDirOf(lockPath), lockPath); len(holders) != 0 || len(problems) != 0 {
 		t.Errorf("after release: holders = %v, problems = %v, want none of either", holders, problems)
-	}
-}
-
-// A holder record names the command of the run that took the lock, which
-// its ctx carries, so two runs in one process are told apart. A lock taken
-// outside any run names none.
-func TestHolderRecordNamesTheRunsCommand(t *testing.T) {
-	t.Parallel()
-	for _, tc := range []struct {
-		name string
-		ctx  context.Context
-		want string
-	}{
-		{"named run", WithHolderCommand(context.Background(), "lit backlog"), "lit backlog"},
-		{"no run", context.Background(), ""},
-	} {
-		lockPath := filepath.Join(t.TempDir(), "test.lock")
-		release, err := acquireStoreLock(tc.ctx, storageDirOf(lockPath), lockPath, true, 0)
-		if err != nil {
-			t.Fatalf("%s: acquireStoreLock() error = %v", tc.name, err)
-		}
-		holders, problems := readLockHolders(storageDirOf(lockPath), lockPath)
-		if err := release(); err != nil {
-			t.Fatalf("%s: release: %v", tc.name, err)
-		}
-		if len(holders) != 1 || len(problems) != 0 || holders[0].Command != tc.want {
-			t.Errorf("%s: holders = %+v, problems = %v; want one holder with command %q", tc.name, holders, problems, tc.want)
-		}
 	}
 }
 

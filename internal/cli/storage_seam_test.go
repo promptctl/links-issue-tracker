@@ -76,11 +76,12 @@ var engineHandles = []string{"Store", "Open", "OpenForRead", "OpenSync"}
 // proceeds. It is the honest map of where the seam actually is.
 var doltWorkspaceMachinery = map[string][]string{
 	// Kernel flocks and the paths they guard: taken around snapshot restore and
-	// commit, before and after any engine exists.
+	// commit, before and after any engine exists. WithHolderCommand names the
+	// run in the holder record each of these flocks publishes.
 	"workspace and commit locks": {
 		"CommitLockPath", "LockCommitPath", "SettleCommitLockRelease",
 		"LockWorkspaceExclusive", "LockWorkspaceShared", "LockDoltJournalExclusive",
-		"TryAcquireSyncPushLock", "TryAcquireReceiveLock",
+		"TryAcquireSyncPushLock", "TryAcquireReceiveLock", "WithHolderCommand",
 	},
 	// The detached mirror's cross-process handshake. Named in design.md §migration
 	// as mirror-flock machinery, deleted at S4.
