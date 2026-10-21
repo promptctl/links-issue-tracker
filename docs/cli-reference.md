@@ -894,7 +894,7 @@ run it. Two depths: the default collects recent history, while `--full` also
 rewrites the archived generation, which is the only way to reclaim what earlier
 passes left behind — at a cost proportional to the whole store rather than to
 recent activity. You rarely need to run it: a mutating command compacts on its
-own once the store's footprint warrants it, and `lit sync push` picks the depth
+own once enough has accumulated to warrant it, and `lit sync push` picks the depth
 its own accounting calls for. Run it explicitly to reclaim on demand, or to
 schedule maintenance on a workspace that goes long stretches without pushing.
 
@@ -979,6 +979,13 @@ and lower-level than the JSON `lit backup` data-export family, capturing the sto
 directory without the remote's mirror or Dolt's temp files. The first fetch after
 `restore` downloads the remote's mirror again.
 
+lit also takes its own recovery snapshots, before a migration, a reconcile, a
+take, and a downgrade, and retires the older ones to keep the store under its size
+ceiling: the newest of each kind always stays, and no kind keeps more than ten.
+The snapshots `new` takes are yours: lit keeps the newest
+`snapshot.retention_budget` of them (default 5), and they count toward the ceiling,
+but lit never retires one to meet it.
+
 ### `lit lifeboat`
 
 ```text
@@ -1029,6 +1036,18 @@ one another both ways through the epics holding them print an `interleaved:` lin
 no rank order lists every one of their dependencies first, so those edges are not
 counted as rank inversions and `--fix=rank` does not reorder them for those edges. A `--fix` repair
 that fails still prints the full report, then exits on the repair's error.
+
+A `footprint:` line gives the store's size on disk against its size ceiling, then
+each part:
+
+```text
+footprint: 412.3 MiB of a 972.9 MiB ceiling; chunk store 180.2 MiB, temp table files 0 B, automatic snapshots 220.1 MiB, user snapshots 12.0 MiB, remote cache 95.4 MiB (outside the ceiling)
+```
+
+The ceiling counts every part but the remote cache, whose size follows the
+remote's. lit holds the store under it by retiring its own older recovery
+snapshots. A store still over it prints a `warning:` naming its largest part,
+which lit has no way to shrink on its own.
 
 The report also includes a `sync:` line reporting freshness against the configured
 remote — ahead (local ticket changes not pushed), behind (remote changes not pulled,

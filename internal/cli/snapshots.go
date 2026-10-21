@@ -108,10 +108,10 @@ func snapshotsNewLeaf() wsLeaf {
 		// producers.
 		//
 		// [LAW:single-enforcer] User-snapshot retention bounds *user* snapshots
-		// only; migration snapshots share the directory but are pruned
-		// independently by migrate() under its own budget. Without the kind
-		// filter, `lit snapshots new` could evict a recovery snapshot the
-		// migration system is depending on.
+		// only; lit's automatic recovery snapshots share the directory but are
+		// retired by the store's size-ceiling rule (pruneAutomaticSnapshots).
+		// Without the kind filter, `lit snapshots new` could evict a recovery
+		// snapshot a migration, reconcile or downgrade is depending on.
 		return withCommitLock(ctx, ws, func() error {
 			return dbsnapshot.PruneMatching(ws.DatabasePath, cfg.Snapshot.RetentionBudget, isUserSnapshotName)
 		})
