@@ -106,6 +106,8 @@ func TestNextRecordsWhereItsPickStarts(t *testing.T) {
 func TestNextSendsNewWorkOutOfThePrimaryCloneOnly(t *testing.T) {
 	isolateEvents(t)
 	repo := newInitTestRepo(t)
+	runGit(t, repo, "config", "user.email", "next@example.com")
+	runGit(t, repo, "config", "user.name", "next")
 	runGit(t, repo, "commit", "--allow-empty", "-m", "seed")
 	epic := newEpicInDir(t, repo, "Home")
 	ticket := extractTicketID(t, runCLIInDir(t, repo, "new", "--type", "task", "--parent", epic, "--title", "Ready here", "--topic", "demo"))
