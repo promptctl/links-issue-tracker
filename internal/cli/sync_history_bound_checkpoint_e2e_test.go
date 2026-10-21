@@ -184,16 +184,16 @@ func (c *boundCheckout) mirror(t *testing.T, remote string) mirrorPush {
 	}
 	bound := boundRecordOf(t, ev)
 	if bound["history_bound.error"] != nil {
-		t.Fatalf("%s's mirror bound = %v; want no error", c.name, bound)
+		t.Fatalf("%s's mirror push: %v; want its bound to end without error", c.name, push)
 	}
 	if bound["history_bound.fired"] != true {
 		return push
 	}
 	if bound["history_bound.lease"] != "held" || bound["remote_gc.outcome"] != "replaced" {
-		t.Fatalf("%s's mirror bound = %v; want its re-root published under a held lease and the remote's table files replaced", c.name, bound)
+		t.Fatalf("%s's mirror push: %v; want its re-root published under a held lease and the remote's table files replaced", c.name, push)
 	}
 	if collected, inTree := bound["remote_gc.collected_bytes"], float64(remoteDataBytes(t, remote)); collected != inTree {
-		t.Fatalf("%s's bound collected %v bytes of the remote; git counts %v in its refs/dolt/data tree", c.name, collected, inTree)
+		t.Fatalf("%s's bound collected %v bytes of the remote; git counts %v in its refs/dolt/data tree; %v", c.name, collected, inTree, push)
 	}
 	c.published = append(c.published, stringFact(t, bound, "reroot.root"))
 	push.reRooted = true
