@@ -35,7 +35,7 @@ import (
 // embedded layers, and never clobbers unrelated project content silently.
 // [LAW:no-silent-failure]
 func runWorkflowsEdit(inv Invocation, ws workspace.Info, target string) error {
-	set := workflows.Load(ws.RootDir)
+	set := workflows.Load(inv.Env, ws.RootDir)
 	if def, ok := set.Lookup(target); ok {
 		return editExistingDefinition(inv, ws, def)
 	}
@@ -50,7 +50,7 @@ func editExistingDefinition(inv Invocation, ws workspace.Info, def workflows.Def
 	if err := refuseExistingFile(projectPath, def.ID); err != nil {
 		return err
 	}
-	raw, err := workflows.RawDefault(def.Source, def.Path)
+	raw, err := workflows.RawDefault(inv.Env, def.Source, def.Path)
 	if err != nil {
 		return err
 	}

@@ -16,6 +16,7 @@ import (
 	doltenv "github.com/dolthub/dolt/go/libraries/doltcore/env"
 	"github.com/dolthub/dolt/go/libraries/doltcore/env/actions"
 	"github.com/dolthub/dolt/go/store/datas"
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"golang.org/x/mod/semver"
 )
@@ -23,7 +24,7 @@ import (
 const minEmbeddedDoltVersion = "v0.40.5-0.20260314011441-62975ef6bf36"
 const minEmbeddedDriverVersion = "v0.2.1-0.20260314000741-0fe74e7ee31a"
 
-func OpenSync(ctx context.Context, doltRootDir string, workspaceID string) (_ *Store, err error) {
+func OpenSync(ctx context.Context, env environ.Env, doltRootDir string, workspaceID string) (_ *Store, err error) {
 	// [LAW:single-enforcer] Route through the one argument-validation boundary
 	// rather than re-inlining the same two checks, so OpenSync cannot drift from
 	// the rest of the store's exported entry points on what an acceptable path or
@@ -69,7 +70,7 @@ func OpenSync(ctx context.Context, doltRootDir string, workspaceID string) (_ *S
 	// earlier mirror's) still-live engine instead of colliding with it — the
 	// wait happens inside the eager engine open, on Dolt's own journal lock,
 	// bounded by coResidentHolderWait.
-	s, err := openStoreConnection(ctx, doltRootDir, workspaceID, engineWrite)
+	s, err := openStoreConnection(ctx, env, doltRootDir, workspaceID, engineWrite)
 	if err != nil {
 		return nil, err
 	}

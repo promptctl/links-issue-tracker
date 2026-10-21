@@ -106,7 +106,7 @@ func maybeAutoSyncAfterCommand(ctx context.Context, accessMode app.AccessMode, w
 // never the command. Saying so on stderr is what keeps it from being silent.
 // [LAW:no-silent-failure]
 func syncOnPolicy(ctx context.Context, accessMode app.AccessMode, ws workspace.Info) {
-	cfg, err := config.Load(pathspec.New(ws.RootDir))
+	cfg, err := config.Load(inv.Env, pathspec.New(ws.RootDir))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "lit: automatic sync skipped, config unreadable: %v\n", err)
 		return
@@ -126,7 +126,7 @@ func mirrorAfterReceive(ctx context.Context, accessMode app.AccessMode, ws works
 	if autoSyncDisabled() {
 		return
 	}
-	cfg, err := config.Load(pathspec.New(ws.RootDir))
+	cfg, err := config.Load(inv.Env, pathspec.New(ws.RootDir))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "lit: the receive's push not scheduled, config unreadable: %v\n", err)
 		return
@@ -325,7 +325,7 @@ func remoteAbsentMarkerPath(ws workspace.Info) string {
 // [LAW:no-defensive-null-guards] The two conditions are distinct values, not one
 // folded bool.
 func workspaceHasGitRemote(ctx context.Context, ws workspace.Info) (bool, error) {
-	remotes, err := workspace.GitRemotes(ctx, ws.RootDir)
+	remotes, err := workspace.GitRemotes(ctx, inv.Env, ws.RootDir)
 	if err != nil {
 		return false, err
 	}

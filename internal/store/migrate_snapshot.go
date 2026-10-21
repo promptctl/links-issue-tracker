@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -182,7 +183,7 @@ func (s *Store) searchRollbackSnapshot(ctx context.Context, maxSupported int64) 
 		if !IsMigrationSnapshotName(snap.Name) {
 			continue
 		}
-		writable, err := snapshotWritable(ctx, snap.Path, s.workspaceID, maxSupported)
+		writable, err := snapshotWritable(ctx, s.env, snap.Path, s.workspaceID, maxSupported)
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			errs = append(errs, fmt.Errorf("stopped looking for a rollback snapshot: %w", ctxErr))
 			break
@@ -212,8 +213,8 @@ func (s *Store) searchRollbackSnapshot(ctx context.Context, maxSupported int64) 
 // the snapshot is restored; the data the snapshot holds is unchanged. A clone
 // would avoid that rewrite at the price of a full copy on a filesystem with no
 // copy-on-write, and of a store-sized tree stranded by a hard exit.
-func snapshotWritable(ctx context.Context, snapshotPath, workspaceID string, maxSupported int64) (_ bool, err error) {
-	snap, err := openStoreConnection(ctx, snapshotPath, workspaceID, engineRead)
+func snapshotWritable(ctx context.Context, env environ.Env, snapshotPath, workspaceID string, maxSupported int64) (_ bool, err error) {
+	snap, err := openStoreConnection(ctx, env, snapshotPath, workspaceID, engineRead)
 	if err != nil {
 		return false, err
 	}

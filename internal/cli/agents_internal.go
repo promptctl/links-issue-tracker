@@ -28,7 +28,7 @@ type agentsInstallResult struct {
 // [LAW:parse-dont-validate] Nothing downstream re-checks the shape, because
 // downstream only ever holds a managedSection.
 func renderLinksAgentsSection(workspaceRoot string) (managedSection, templates.Source, error) {
-	content, source, err := templates.LoadWithSource(templates.AgentsSectionTemplateName, workspaceRoot)
+	content, source, err := templates.LoadWithSource(inv.Env, templates.AgentsSectionTemplateName, workspaceRoot)
 	if err != nil {
 		return managedSection{}, source, fmt.Errorf("load agent section template: %w", err)
 	}

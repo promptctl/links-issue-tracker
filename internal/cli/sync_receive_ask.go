@@ -128,7 +128,7 @@ func askRemote(ctx context.Context, ws workspace.Info, gitRemotes []workspace.Gi
 // [LAW:one-source-of-truth] the receive's question and the push's proof both
 // build their advertisement here, so the two can only ever agree byte for byte.
 func advertise(ctx context.Context, ws workspace.Info, remoteName storage.RemoteName, gitRemotes []workspace.GitRemote) (remoteAdvertisement, error) {
-	refs, err := workspace.RemoteDoltRefs(ctx, ws.RootDir, remoteName.String())
+	refs, err := workspace.RemoteDoltRefs(ctx, inv.Env, ws.RootDir, remoteName.String())
 	if err != nil {
 		return remoteAdvertisement{}, fmt.Errorf("list refs/dolt/* on remote %q: %w", remoteName, err)
 	}

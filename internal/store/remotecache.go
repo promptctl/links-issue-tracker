@@ -20,6 +20,7 @@ import (
 	"github.com/dolthub/dolt/go/libraries/utils/gitcmd"
 
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -44,16 +45,16 @@ import (
 // ctx ends it and everything it started. git hands -c settings on to the
 // processes it spawns on this side, but not to the upload-pack it starts in a
 // local repository, so a fetch from another mirror goes through mirrorFetch.
-func mirrorGit(ctx context.Context, gitDir string, spec gitcmd.Spec, args ...string) *gitcmd.Cmd {
-	return gitcmd.Command(ctx, spec, append([]string{"--git-dir", gitDir}, args...)...)
+func mirrorGit(ctx context.Context, env environ.Env, gitDir string, spec gitcmd.Spec, args ...string) *gitcmd.Cmd {
+	return env.Git(ctx, spec, append([]string{"--git-dir", gitDir}, args...)...)
 }
 
 // mirrorFetch builds a fetch of refspecs into the mirror at gitDir from the
 // mirror at source. It names an upload-pack that sets core.longpaths itself,
 // because git starts a local source's upload-pack without the -c gitcmd gives
 // git.
-func mirrorFetch(ctx context.Context, gitDir, source string, refspecs ...string) *gitcmd.Cmd {
-	return mirrorGit(ctx, gitDir, gitcmd.Spec{}, append([]string{"fetch", "--no-tags", "--quiet", "--upload-pack", "git -c " + gitcmd.LongPaths + " upload-pack", source}, refspecs...)...)
+func mirrorFetch(ctx context.Context, env environ.Env, gitDir, source string, refspecs ...string) *gitcmd.Cmd {
+	return mirrorGit(ctx, env, gitDir, gitcmd.Spec{}, append([]string{"fetch", "--no-tags", "--quiet", "--upload-pack", "git -c " + gitcmd.LongPaths + " upload-pack", source}, refspecs...)...)
 }
 
 // isRemoteCacheKey reports whether a directory name is one of dbfactory's cache
@@ -498,15 +499,15 @@ func (s *Store) SyncRemoteMirrorHolds(ctx context.Context, remote storage.Remote
 	} else if err != nil {
 		return false, fmt.Errorf("stat git mirror of remote %q: %w", remote, err)
 	}
-	return gitDirHoldsCommits(ctx, gitDir, commits)
+	return gitDirHoldsCommits(ctx, s.env, gitDir, commits)
 }
 
 // gitDirHoldsCommits asks one git repository whether every one of commits is
 // a commit object in it. `cat-file --batch-check` answers each input line with
 // "<oid> <type> <size>" or "<input> missing", so absence is an answer and only
 // git failing to run is an error.
-func gitDirHoldsCommits(ctx context.Context, gitDir string, commits []string) (bool, error) {
-	out, err := mirrorGit(ctx, gitDir, gitcmd.Spec{Stdin: strings.NewReader(strings.Join(commits, "\n") + "\n")}, "cat-file", "--batch-check").Output()
+func gitDirHoldsCommits(ctx context.Context, env environ.Env, gitDir string, commits []string) (bool, error) {
+	out, err := mirrorGit(ctx, env, gitDir, gitcmd.Spec{Stdin: strings.NewReader(strings.Join(commits, "\n") + "\n")}, "cat-file", "--batch-check").Output()
 	if err != nil {
 		return false, fmt.Errorf("ask git mirror %s for %d commit(s): %w", gitDir, len(commits), err)
 	}

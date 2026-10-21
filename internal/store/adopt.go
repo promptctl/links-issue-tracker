@@ -12,6 +12,7 @@ import (
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/dbfactory"
 	"github.com/promptctl/links-issue-tracker/internal/atomicfile"
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -143,7 +144,7 @@ func PendingAdopt(databasePath string) error {
 //
 // It also reports what opening the store to count did to its stored shape: the
 // read open migrates a store behind this binary, and the caller records that.
-func LocalHasTickets(ctx context.Context, doltRootDir, workspaceID string) (bool, storage.Migrated, error) {
+func LocalHasTickets(ctx context.Context, env environ.Env, doltRootDir, workspaceID string) (bool, storage.Migrated, error) {
 	cleanRoot, err := validateDoltRootDir(doltRootDir)
 	if err != nil {
 		return false, storage.Migrated{}, err
@@ -169,7 +170,7 @@ func LocalHasTickets(ctx context.Context, doltRootDir, workspaceID string) (bool
 	if !dirExists(filepath.Join(cleanRoot, doltDatabaseName)) {
 		return false, storage.Migrated{}, nil
 	}
-	s, err := OpenForRead(ctx, cleanRoot, workspaceID)
+	s, err := OpenForRead(ctx, env, cleanRoot, workspaceID)
 	if err != nil {
 		return false, storage.Migrated{}, err
 	}

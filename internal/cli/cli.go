@@ -166,7 +166,7 @@ func runWithApp(ctx context.Context, inv Invocation, accessMode app.AccessMode, 
 		return err
 	}
 	// [LAW:single-enforcer] Cobra command registration owns app access selection so startup mode is declared once per entrypoint.
-	ap, err := app.Open(ctx, ws, accessMode)
+	ap, err := app.Open(ctx, inv.Env, ws, accessMode)
 	if err != nil {
 		// The open boundary stamps holder contention so Run's trace can tell a
 		// starved OPEN from a handler-traced mid-command contention, filed under
@@ -227,7 +227,7 @@ func resolveWorkspace(ctx context.Context, dir WorkingDir, requested workspace.P
 	if err != nil {
 		return workspace.Info{}, fmt.Errorf("get cwd: %w", err)
 	}
-	ws, err := workspace.ResolveWithPrefix(cwd, requested)
+	ws, err := workspace.ResolveWithPrefix(inv.Env, cwd, requested)
 	if err != nil {
 		if errors.Is(err, workspace.ErrNotGitRepo) {
 			// [LAW:types-are-the-program] Typed error carries classification; message preserved for surface display.
@@ -524,7 +524,7 @@ func runList(ctx context.Context, inv Invocation, surface listSurface, args []st
 	}
 	if l.fs.Changed(lsAtFlag) {
 		loc := workspace.LocationFromStorageDir(atDir.path())
-		st, err := app.OpenLocationForRead(ctx, loc)
+		st, err := app.OpenLocationForRead(ctx, inv.Env, loc)
 		if err != nil {
 			// [LAW:no-silent-failure] Name the path so a wrong or un-initialized
 			// store dir is an actionable error, not an empty list. The open
@@ -982,7 +982,7 @@ func gatherWorkableQueue(ctx context.Context, ap *app.App) (focusedQueue, error)
 // a ticket must fill before it counts as startable.
 // [LAW:one-source-of-truth] One read of the policy, one place it is named.
 func readyRequiredFields(ap *app.App) ([]string, error) {
-	cfg, err := config.Load(pathspec.New(ap.Workspace.RootDir))
+	cfg, err := config.Load(inv.Env, pathspec.New(ap.Workspace.RootDir))
 	if err != nil {
 		return nil, err
 	}

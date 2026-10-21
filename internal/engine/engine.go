@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 )
@@ -56,7 +57,7 @@ const (
 // [LAW:one-source-of-truth] A mode's engine is decided here once. When S2
 // flips reads to the event store, a row changes and no caller does; when S4
 // deletes Dolt, this table is where the deletion lands.
-var openers = map[Mode]func(ctx context.Context, doltRootDir string, workspaceID string) (*store.Store, error){
+var openers = map[Mode]func(ctx context.Context, env environ.Env, doltRootDir string, workspaceID string) (*store.Store, error){
 	ReadWrite: store.Open,
 	ReadOnly:  store.OpenForRead,
 	Sync:      store.OpenSync,
@@ -69,7 +70,7 @@ var openers = map[Mode]func(ctx context.Context, doltRootDir string, workspaceID
 // which is what makes the seam hold without anyone having to remember it.
 // Capabilities beyond [storage.Store] are asked for with storage.<Cap>.Of on
 // the returned value.
-func Open(ctx context.Context, mode Mode, doltRootDir string, workspaceID string) (storage.Store, error) {
+func Open(ctx context.Context, env environ.Env, mode Mode, doltRootDir string, workspaceID string) (storage.Store, error) {
 	open, known := openers[mode]
 	if !known {
 		// [LAW:no-silent-failure] An unknown mode — including the zero value —
@@ -77,7 +78,7 @@ func Open(ctx context.Context, mode Mode, doltRootDir string, workspaceID string
 		// hand out write access nobody asked for.
 		return nil, fmt.Errorf("invalid storage engine mode %q", string(mode))
 	}
-	engine, err := open(ctx, doltRootDir, workspaceID)
+	engine, err := open(ctx, env, doltRootDir, workspaceID)
 	if err != nil {
 		// Returning err alone matters: a *store.Store typed nil wrapped in the
 		// storage.Store interface would be a non-nil interface holding a nil

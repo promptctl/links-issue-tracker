@@ -21,7 +21,7 @@ import (
 // times and which commands that read no setting never call.
 // [LAW:single-enforcer]
 func reportUnknownConfigKeys(ctx context.Context, workspaceRoot string) {
-	unknown, err := config.UnknownKeys(pathspec.New(workspaceRoot))
+	unknown, err := config.UnknownKeys(inv.Env, pathspec.New(workspaceRoot))
 	telemetry.Set(ctx, "config.unknown_keys", unknown)
 	telemetry.Set(ctx, "config.unknown_keys_error", telemetry.ErrorText(err))
 	fmt.Fprint(os.Stderr, unknownConfigKeyWarnings(unknown, err))

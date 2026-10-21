@@ -137,7 +137,7 @@ func recordInvocation(stderr io.Writer, ev telemetry.Event) {
 }
 
 func writeEvent(stderr io.Writer, ev telemetry.Event) error {
-	dir, err := config.StateDir()
+	dir, err := config.StateDir(inv.Env)
 	if err != nil {
 		return err
 	}

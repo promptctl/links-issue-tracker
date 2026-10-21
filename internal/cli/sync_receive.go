@@ -257,7 +257,7 @@ func receiveOnce(ctx context.Context, ws workspace.Info) {
 	// Every receive says whether it owes a push; one that settles nothing
 	// owes none. [LAW:nothing-unseen]
 	telemetry.Set(ctx, "receive.push_owed", false)
-	gitRemotes, err := workspace.GitRemotes(ctx, ws.RootDir)
+	gitRemotes, err := workspace.GitRemotes(ctx, inv.Env, ws.RootDir)
 	if err != nil {
 		// Couldn't read remotes — unexpected; surface it loudly rather than treat
 		// it as "no remote". [LAW:no-silent-failure]

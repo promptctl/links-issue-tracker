@@ -137,7 +137,7 @@ func resolveDoctorSyncFreshness(ctx context.Context, ws workspace.Info, st stora
 	if err != nil {
 		return doctorSyncReport{Kind: doctorSyncUnresolved, Detail: err.Error()}
 	}
-	gitRemotes, err := workspace.GitRemotes(ctx, ws.RootDir)
+	gitRemotes, err := workspace.GitRemotes(ctx, inv.Env, ws.RootDir)
 	if err != nil {
 		return doctorSyncReport{Kind: doctorSyncUnresolved, Detail: fmt.Sprintf("read git remotes: %v", err)}
 	}

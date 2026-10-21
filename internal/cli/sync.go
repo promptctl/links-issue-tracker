@@ -87,7 +87,7 @@ func openSyncSessionAt(ctx context.Context, databasePath, workspaceID string) (s
 // capability resolved. [LAW:single-enforcer] A sync session wraps it with the
 // close that reports what the engine did; compaction wraps it with a plain one.
 func openSyncEngineAt(ctx context.Context, databasePath, workspaceID string) (storage.Store, storage.Syncer, error) {
-	st, err := engine.Open(ctx, engine.Sync, databasePath, workspaceID)
+	st, err := engine.Open(ctx, inv.Env, engine.Sync, databasePath, workspaceID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -673,7 +673,7 @@ func performSyncPush(ctx, completionCtx context.Context, session syncSession, ws
 	// maintenance says the bound was not kept and why, and the event's
 	// history_bound.window_error carries the refusal, null when the window
 	// was read. [LAW:no-silent-failure]
-	cfg, cfgErr := config.Load(pathspec.New(ws.RootDir))
+	cfg, cfgErr := config.Load(inv.Env, pathspec.New(ws.RootDir))
 	telemetry.Set(completionCtx, "history_bound.window_error", telemetry.ErrorText(cfgErr))
 	window := storage.BoundWindowRead(cfg.Sync.HistoryWindow, cfgErr)
 	// [LAW:dataflow-not-control-flow] Sync push runs one deterministic embedded mutation path from resolved remote+branch state.
@@ -919,7 +919,7 @@ func resolveSyncTarget(ctx context.Context, session syncSession, ws workspace.In
 	if !ok {
 		return syncTarget{skip: syncTargetNoRemote}, nil
 	}
-	hasRefs, refsErr := workspace.RemoteHasRefs(ctx, ws.RootDir, remoteName.String())
+	hasRefs, refsErr := workspace.RemoteHasRefs(ctx, inv.Env, ws.RootDir, remoteName.String())
 	if refsErr != nil {
 		return syncTarget{remote: remoteName}, fmt.Errorf("check remote refs %q: %w", remoteName, refsErr)
 	}
@@ -1070,7 +1070,7 @@ type remoteSyncState struct {
 }
 
 func readSyncRemoteState(ctx context.Context, session syncSession, ws workspace.Info) (remoteSyncState, error) {
-	gitRemotes, err := workspace.GitRemotes(ctx, ws.RootDir)
+	gitRemotes, err := workspace.GitRemotes(ctx, inv.Env, ws.RootDir)
 	if err != nil {
 		return remoteSyncState{}, fmt.Errorf("read git remotes: %w", err)
 	}

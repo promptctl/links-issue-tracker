@@ -48,7 +48,7 @@ type idPrefixCount struct {
 // other. Not-initialized is read as the census of an absent store; every other
 // open failure propagates. [LAW:no-silent-failure]
 func readWorkspaceIDPrefixCensus(ctx context.Context, ws workspace.Info) (census idPrefixCensus, err error) {
-	st, err := engine.Open(ctx, engine.ReadOnly, ws.DatabasePath, ws.WorkspaceID)
+	st, err := engine.Open(ctx, inv.Env, engine.ReadOnly, ws.DatabasePath, ws.WorkspaceID)
 	if errors.Is(err, store.ErrWorkspaceNotInitialized) {
 		return idPrefixCensus{noStore: true}, nil
 	}

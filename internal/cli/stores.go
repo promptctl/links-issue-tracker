@@ -58,7 +58,7 @@ func runStores(ctx context.Context, inv Invocation, args []string) error {
 		telemetry.Record(ctx, nil, rollupMigrationCounts(rows))
 		return printCrossProjectRollup(stdout, rows)
 	}
-	locations, err := workspace.Discover(roots)
+	locations, err := workspace.Discover(inv.Env, roots)
 	if err != nil {
 		// [LAW:no-silent-failure] Wrap at the CLI boundary so the failure names
 		// the command the operator ran, not just the workspace-layer detail.
@@ -105,7 +105,7 @@ type projectRollup struct {
 // row [LAW:no-silent-failure] — surfaced, never skipped — so one broken store can
 // never hide the projects that read cleanly.
 func gatherCrossProjectRollup(ctx context.Context, roots []string) ([]projectRollup, error) {
-	locations, err := workspace.Discover(roots)
+	locations, err := workspace.Discover(inv.Env, roots)
 	if err != nil {
 		return nil, fmt.Errorf("discover stores: %w", err)
 	}
@@ -130,7 +130,7 @@ func rollupLocation(ctx context.Context, loc workspace.Location) (row projectRol
 	if cfg, err := workspace.ReadConfig(loc.ConfigPath); err == nil && cfg.IssuePrefix != "" {
 		row.Label = cfg.IssuePrefix
 	}
-	st, err := app.OpenLocationForRead(ctx, loc)
+	st, err := app.OpenLocationForRead(ctx, inv.Env, loc)
 	if err != nil {
 		row.Err = err
 		return row

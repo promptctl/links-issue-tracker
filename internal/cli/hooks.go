@@ -129,7 +129,7 @@ func installHooks(ws workspace.Info) (hookInstallResult, error) {
 // [LAW:parse-dont-validate] Nothing downstream re-checks the shape, because
 // downstream only ever holds a managedSection.
 func renderLinksPrePushHookSection(workspaceRoot string) (managedSection, error) {
-	content, source, err := templates.LoadWithSource(templates.PrePushHookTemplateName, workspaceRoot)
+	content, source, err := templates.LoadWithSource(inv.Env, templates.PrePushHookTemplateName, workspaceRoot)
 	if err != nil {
 		return managedSection{}, fmt.Errorf("load pre-push hook template: %w", err)
 	}

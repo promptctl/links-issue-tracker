@@ -27,7 +27,7 @@ import (
 func localSyncBranch(ctx context.Context, rootDir string, remote string) string {
 	return precedence.First(
 		strings.TrimSpace(os.Getenv(debugSyncBranchEnvVar)),
-		workspace.LocalRemoteHead(ctx, rootDir, remote),
+		workspace.LocalRemoteHead(ctx, inv.Env, rootDir, remote),
 	)
 }
 
@@ -40,7 +40,7 @@ func resolveSyncBranch(ctx context.Context, ws workspace.Info, remote storage.Re
 	if branch := localSyncBranch(ctx, ws.RootDir, remote.String()); branch != "" {
 		return branch, nil
 	}
-	branch, err := workspace.AdvertisedRemoteHead(ctx, ws.RootDir, remote.String())
+	branch, err := workspace.AdvertisedRemoteHead(ctx, inv.Env, ws.RootDir, remote.String())
 	if err != nil {
 		return "", fmt.Errorf("resolve sync branch for remote %q: %w", remote, err)
 	}
@@ -112,7 +112,7 @@ func freshnessSyncTarget(ctx context.Context, ws workspace.Info, gitRemotes []wo
 // and the automatic receive fetch it and mark its fetch, the banners read that
 // mark, and init adopts from it, so no two of them can name different remotes.
 func workspaceSyncRemote(ctx context.Context, ws workspace.Info, requested string, gitRemotes []workspace.GitRemote) (storage.RemoteName, bool, error) {
-	return resolveSyncRemote(requested, workspace.UpstreamRemote(ctx, ws.RootDir), gitRemotes)
+	return resolveSyncRemote(requested, workspace.UpstreamRemote(ctx, inv.Env, ws.RootDir), gitRemotes)
 }
 
 // advertisedSyncBranchPath is where resolveSyncBranch records the branch a

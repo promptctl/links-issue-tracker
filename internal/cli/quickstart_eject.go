@@ -53,7 +53,7 @@ func ejectTemplates(selection string, force bool) ([]ejectResult, error) {
 }
 
 func planEject(name string, force bool) (ejectResult, error) {
-	path := templates.GlobalPath(name)
+	path := templates.GlobalPath(inv.Env, name)
 	if path.IsEmpty() {
 		return ejectResult{}, fmt.Errorf("eject %s: no global config directory configured", name)
 	}

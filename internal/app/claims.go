@@ -2,6 +2,7 @@ package app
 
 import (
 	"github.com/promptctl/links-issue-tracker/internal/claims"
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -28,8 +29,8 @@ import (
 // partial answer. That is why the error arm returns the zero value and the
 // error: this reports what it proved, or it reports that it proved nothing.
 // [LAW:no-silent-failure]
-func (a *App) LocalCheckouts() (claims.LocalCheckouts, error) {
-	checkouts, err := workspace.LiveCheckouts(a.Workspace.RootDir)
+func (a *App) LocalCheckouts(env environ.Env) (claims.LocalCheckouts, error) {
+	checkouts, err := workspace.LiveCheckouts(env, a.Workspace.RootDir)
 	if err != nil {
 		return claims.LocalCheckouts{}, err
 	}

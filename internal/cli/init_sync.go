@@ -204,7 +204,7 @@ func planRemoteAdopt(ctx context.Context, ws workspace.Info) (*adoptClonePlan, i
 	// adopt, because adopt-by-clone replaces the store wholesale. The check does
 	// not create the store, so a fresh init leaves the target path untouched for
 	// the clone to be its first writer. [LAW:no-silent-failure]
-	hasTickets, migrated, err := store.LocalHasTickets(ctx, ws.DatabasePath, ws.WorkspaceID)
+	hasTickets, migrated, err := store.LocalHasTickets(ctx, inv.Env, ws.DatabasePath, ws.WorkspaceID)
 	reportOpenMigration(ctx, migrated)
 	if err != nil {
 		return nil, initSyncOutcome{State: initSyncFailed, Error: err.Error()}
@@ -215,7 +215,7 @@ func planRemoteAdopt(ctx context.Context, ws workspace.Info) (*adoptClonePlan, i
 
 	// The whole adopt decision is made from git signals alone — no Dolt store is
 	// opened — so a fresh store's first on-disk state is the clone itself.
-	gitRemotes, err := workspace.GitRemotes(ctx, ws.RootDir)
+	gitRemotes, err := workspace.GitRemotes(ctx, inv.Env, ws.RootDir)
 	if err != nil {
 		return nil, initSyncOutcome{State: initSyncFailed, Error: err.Error()}
 	}
@@ -224,7 +224,7 @@ func planRemoteAdopt(ctx context.Context, ws workspace.Info) (*adoptClonePlan, i
 	// fresh, unless it carries lit data: a fresh store would fork from that backlog,
 	// which only the remote renamed can adopt. [LAW:no-silent-failure]
 	if refused := (storage.RefusedRemoteNameError{}); errors.As(err, &refused) {
-		hasData, dataErr := workspace.RemoteHasDoltData(ctx, ws.RootDir, refused.Name)
+		hasData, dataErr := workspace.RemoteHasDoltData(ctx, inv.Env, ws.RootDir, refused.Name)
 		if dataErr != nil {
 			return nil, initSyncOutcome{State: initSyncFailed, Remote: refused.Name, Error: dataErr.Error()}
 		}
@@ -241,7 +241,7 @@ func planRemoteAdopt(ctx context.Context, ws workspace.Info) (*adoptClonePlan, i
 	}
 	// [LAW:single-enforcer] First-push detection is centralized so init, pull,
 	// and push share one definition of "remote is empty".
-	hasRefs, refsErr := workspace.RemoteHasRefs(ctx, ws.RootDir, remote.String())
+	hasRefs, refsErr := workspace.RemoteHasRefs(ctx, inv.Env, ws.RootDir, remote.String())
 	if refsErr != nil {
 		return nil, initSyncOutcome{State: initSyncFailed, Remote: remote.String(), Error: refsErr.Error()}
 	}
@@ -258,7 +258,7 @@ func planRemoteAdopt(ctx context.Context, ws workspace.Info) (*adoptClonePlan, i
 	// empty result, reported silently; a remote that DOES carry data is adopted
 	// by clone. hasData==true always leads to a clone, never to a silent empty
 	// store. [LAW:no-silent-failure] [LAW:types-are-the-program]
-	hasData, dataErr := workspace.RemoteHasDoltData(ctx, ws.RootDir, remote.String())
+	hasData, dataErr := workspace.RemoteHasDoltData(ctx, inv.Env, ws.RootDir, remote.String())
 	if dataErr != nil {
 		return nil, initSyncOutcome{State: initSyncFailed, Remote: remote.String(), Branch: branch, Error: dataErr.Error()}
 	}

@@ -38,7 +38,7 @@ func workflowsDryRunLeaf() wsLeaf {
 			Entered: *enter,
 			Exited:  *exit,
 		}
-		set := workflows.Load(ws.RootDir)
+		set := workflows.Load(inv.Env, ws.RootDir)
 		matched := set.Matching(occasion)
 
 		if err := printDryRunOccasion(inv.Stdout, occasion); err != nil {

@@ -94,7 +94,7 @@ func fetchIntoClone(ctx context.Context, ws workspace.Info, clone liveClone) (fe
 // lost is that the live store's next network operation downloads those
 // objects again.
 func landFetch(ctx context.Context, ws workspace.Info, clone liveClone, fetch receiveFetch) (store.LandedFetch, error) {
-	landed, err := store.LandFetchedHead(ctx, ws.DatabasePath, clone.taken, fetch.target.remote, fetch.target.branch, fetch.pruned)
+	landed, err := store.LandFetchedHead(ctx, inv.Env, ws.DatabasePath, clone.taken, fetch.target.remote, fetch.target.branch, fetch.pruned)
 	if errors.Is(err, store.ErrRemoteCacheNotLanded) {
 		fmt.Fprintf(os.Stderr, "lit: automatic receive: %v\n", err)
 		return landed, nil

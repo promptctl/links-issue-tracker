@@ -31,9 +31,11 @@ import (
 // opened through the git mirror they all read and write. What keeps a peer's
 // write to the remote safe is not the lock but the remote's own manifest,
 // which takes each of the GC's writes only over the view it read
-// (collectRemoteView). The scratch store goes however the GC ended.
+// (collectRemoteView). The scratch store goes however the GC ended. It is
+// made beside the dolt root, as Recover makes its candidate, rather than in
+// the system temp directory, which only the process's TMPDIR names.
 func (s *Store) collectRemote(ctx context.Context, remote storage.RemoteName, branch string, head string) (gc storage.RemoteGC, err error) {
-	scratch, err := os.MkdirTemp("", "lit-remote-gc-")
+	scratch, err := os.MkdirTemp(workspaceStorageDir(s.doltRootDir), "lit-remote-gc-")
 	if err != nil {
 		return gc, fmt.Errorf("create the remote GC's scratch store: %w", err)
 	}

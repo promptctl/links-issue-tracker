@@ -91,7 +91,7 @@ type remoteFetch struct {
 // prints no freshness line; `lit doctor` names why.
 // [LAW:types-are-the-program] a known fetch always names its remote.
 func lastTargetFetch(ctx context.Context, ws workspace.Info, now time.Time) *remoteFetch {
-	gitRemotes, err := workspace.GitRemotes(ctx, ws.RootDir)
+	gitRemotes, err := workspace.GitRemotes(ctx, inv.Env, ws.RootDir)
 	if err != nil {
 		return nil
 	}

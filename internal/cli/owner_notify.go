@@ -175,7 +175,7 @@ func maybeNotifyOwner(ctx context.Context, ws workspace.Info, ev ownerNotifyEven
 	if !ownerNotifyDue(markerPath, ev.fingerprint(), time.Now()) {
 		return
 	}
-	cfg, err := config.Load(pathspec.New(ws.RootDir))
+	cfg, err := config.Load(inv.Env, pathspec.New(ws.RootDir))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "lit: owner notification skipped, config unreadable: %v\n", err)
 		return

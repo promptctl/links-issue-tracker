@@ -5,19 +5,22 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 )
 
 // Invocation is what one lit run takes from the process that started it: the
-// directory it ran in, its arguments, and its standard streams. The fields are
-// named as os/exec.Cmd names the same things. cmd/lit's main reads the process
-// once to build it, and a test builds its own, so nothing under internal/
-// reads the process's working directory, arguments or stdin, and two runs in
-// one process cannot see each other's.
+// directory it ran in, its arguments, its environment and its standard
+// streams. The fields are named as os/exec.Cmd names the same things. cmd/lit's
+// main reads the process once to build it, and a test builds its own, so
+// nothing under internal/ reads the process's working directory, arguments,
+// environment or stdin, and two runs in one process cannot see each other's.
 // [LAW:effects-at-boundaries] [LAW:no-shared-mutable-globals]
 type Invocation struct {
 	Dir WorkingDir
 	// Args are the arguments after the program name.
 	Args   []string
+	Env    environ.Env
 	Stdin  io.Reader
 	Stdout io.Writer
 	Stderr io.Writer

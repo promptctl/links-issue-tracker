@@ -63,7 +63,7 @@ func workflowsDispatch(ctx context.Context, args []string) (wsLeaf, []string, er
 func workflowsOverviewLeaf() wsLeaf {
 	fs := newCobraFlagSet("workflows")
 	return wsLeaf{fs: fs, positionals: 0, usage: workflowsUsage, work: func(_ context.Context, inv Invocation, ws workspace.Info, _ []string) error {
-		return renderWorkflowsOverview(inv.Stdout, workflows.Load(ws.RootDir))
+		return renderWorkflowsOverview(inv.Stdout, workflows.Load(inv.Env, ws.RootDir))
 	}}
 }
 
@@ -73,7 +73,7 @@ func workflowsShowLeaf() wsLeaf {
 		if len(positional) != 1 {
 			return UsageError{Message: workflowsUsage}
 		}
-		return renderWorkflowDefinition(inv.Stdout, workflows.Load(ws.RootDir), positional[0])
+		return renderWorkflowDefinition(inv.Stdout, workflows.Load(inv.Env, ws.RootDir), positional[0])
 	}}
 }
 

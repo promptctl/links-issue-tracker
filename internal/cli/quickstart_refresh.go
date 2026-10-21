@@ -85,7 +85,7 @@ func refreshQuickstartTemplate(workspaceRoot string, name string) (quickstartRef
 	if err != nil {
 		return quickstartRefreshItem{}, fmt.Errorf("refresh %s: read embedded default: %w", name, err)
 	}
-	path, content, err := templates.ActiveOverride(workspaceRoot, name)
+	path, content, err := templates.ActiveOverride(inv.Env, workspaceRoot, name)
 	if err != nil {
 		return quickstartRefreshItem{}, fmt.Errorf("refresh %s: read override: %w", name, err)
 	}
@@ -185,11 +185,11 @@ const soilSection = `
 ` + agentInstructionsOpen + `When you notice how well — or poorly — this loop was *prepared* for you by what came before (the ticket's clarity, a doc's currency, a skill's presence, a deposit left), record it inline in chat as ` + "`" + `[SOIL:<judgement>]` + "`" + ` in your own words. This is about inherited preparation conditions, not transient in-the-moment friction or your own ongoing thinking — soil, not wind. Don't investigate; just express the judgement and continue. Chat only — never commit messages or code. The corpus is the only signal we have that garden-tending is doing anything; trivially cheap and disproportionately effective.` + agentInstructionsClose
 
 func renderQuickstartGuidance(workspaceRoot string) (string, error) {
-	tmpl, err := templates.Load(templates.QuickstartTemplateName, workspaceRoot)
+	tmpl, err := templates.Load(inv.Env, templates.QuickstartTemplateName, workspaceRoot)
 	if err != nil {
 		return "", fmt.Errorf("load quickstart guidance: %w", err)
 	}
-	cfg, err := config.Load(pathspec.New(workspaceRoot))
+	cfg, err := config.Load(inv.Env, pathspec.New(workspaceRoot))
 	if err != nil {
 		return "", fmt.Errorf("load config for quickstart guidance: %w", err)
 	}
@@ -204,7 +204,7 @@ func renderQuickstartGuidance(workspaceRoot string) (string, error) {
 // Topic output never carries the soil section: SOIL is a session-wide convention
 // surfaced once at the session-start router read, not per-task guidance.
 func renderQuickstartTopic(workspaceRoot string, name string) (string, error) {
-	tmpl, err := templates.Load(name, workspaceRoot)
+	tmpl, err := templates.Load(inv.Env, name, workspaceRoot)
 	if err != nil {
 		return "", fmt.Errorf("load quickstart topic guidance: %w", err)
 	}

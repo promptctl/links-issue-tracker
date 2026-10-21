@@ -16,7 +16,7 @@ import (
 // when none did. [LAW:nothing-unseen] [LAW:single-enforcer] every dispatching
 // command routes here, so none can fire guidance its event does not name.
 func dispatchOccasion(ctx context.Context, stdout io.Writer, ws workspace.Info, o workflows.Occasion) error {
-	fired, err := workflows.Dispatch(stdout, os.Stderr, ws, o)
+	fired, err := workflows.Dispatch(inv.Env, stdout, os.Stderr, ws, o)
 	ids := make([]string, len(fired))
 	for i, def := range fired {
 		ids[i] = def.ID

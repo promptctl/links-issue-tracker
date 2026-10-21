@@ -39,7 +39,7 @@ type claimContext struct {
 // evidence and local liveness — the store/filesystem boundary claim-aware
 // rendering and routing both sit behind. [LAW:effects-at-boundaries]
 func gatherClaimContext(ctx context.Context, stdout io.Writer, ap *app.App) (claimContext, error) {
-	cfg, err := config.Load(pathspec.New(ap.Workspace.RootDir))
+	cfg, err := config.Load(inv.Env, pathspec.New(ap.Workspace.RootDir))
 	if err != nil {
 		return claimContext{}, err
 	}
@@ -56,7 +56,7 @@ func gatherClaimContext(ctx context.Context, stdout io.Writer, ap *app.App) (cla
 	// this run.
 	var local claims.LocalCheckouts
 	var addresses map[model.Attribution]workspace.Checkout
-	checkouts, err := workspace.LiveCheckouts(ap.Workspace.RootDir)
+	checkouts, err := workspace.LiveCheckouts(inv.Env, ap.Workspace.RootDir)
 	if err != nil {
 		if _, printErr := fmt.Fprintf(stdout, "warning: could not enumerate local checkouts (%v) — claim liveness check and local addresses skipped, freshness alone governs\n", err); printErr != nil {
 			return claimContext{}, printErr
