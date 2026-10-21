@@ -15,7 +15,7 @@ into* one of those, the call and its observable effect are recorded here.
 
 ### 1.1 Entry point and global argument handling
 
-- `Run(ctx, stdout, stderr, args)` is the package entry (`internal/cli/cli.go`).
+- `Run(ctx, inv)` is the package entry (`internal/cli/cli.go`); `inv` is the `Invocation` (directory, args, stdin, stdout, stderr) (`internal/cli/invocation.go`).
   It first runs `parseGlobalArgs` (`cli.go`), then builds the cobra root
   (`cli.go`), sets args/out/err, sets `SilenceErrors = true` and
   `SilenceUsage = true` (`cli.go`), and executes.
@@ -89,7 +89,7 @@ into* one of those, the call and its observable effect are recorded here.
 - `r.transitionCmd(spec)` → `transitionLeaf(spec)` under `app.AccessWrite`
   (`register.go`).
 - `runWithApp` (`cli.go`):
-  - `os.Getwd()` failure → `fmt.Errorf("get cwd: %w", err)` (`cli.go`).
+  - The invocation's directory (`WorkingDir.Path`); an unreadable one → `fmt.Errorf("get cwd: %w", err)` (`cli.go`).
   - `app.Open` failing with `workspace.ErrNotGitRepo` →
     `OutsideWorkspaceError{Message: "links requires running inside a git repository/worktree"}`
     (`cli.go`).
@@ -100,7 +100,7 @@ into* one of those, the call and its observable effect are recorded here.
     `sync_staleness.go`).
   - Then `maybeAutoSyncAfterCommand(ctx, accessMode, ws)` runs (`cli.go`).
   - Both only run when the command returned nil (`cli.go`).
-- `acquireFromWD` / `resolveWorkspaceFromWD` (`register.go`, `cli.go`):
+- `acquireFromWD` / `resolveWorkspace` (`register.go`, `cli.go`):
   same `OutsideWorkspaceError` translation (`cli.go`).
 
 ### 1.5 Family dispatch (`commandFamily[P]`)
@@ -703,11 +703,11 @@ else ready.
   the parse as a `UsageError` → exit 2 (`flagset.go`).
 - Presence of `--at` is `l.fs.Changed(lsAtFlag)`, where `lsAtFlag = "at"`
   (`cli.go`).
-- If `--at` is present and its value is blank-after-trim or starts with `-` →
-  ``UsageError{"usage: lit ls --at <store-dir>  (a storage directory from `lit stores`)"}``
-  (`cli.go`); the command name in the message is `surface.name`.
-- Otherwise opens `app.OpenLocationForRead(ctx, workspace.LocationFromStorageDir(atDir))`;
-  a failure becomes `fmt.Errorf("open store at %q read-only: %w", atDir, …)`,
+- `--at` is a path flag, resolved in `parseLeaf` by `resolveFlagPath` (`pathflag.go`):
+  a value blank-after-trim or starting with `-` → `UsageError{"--at needs a path, got %q"}`;
+  any other is trimmed and resolved against the invocation's directory.
+- If `--at` is present, opens `app.OpenLocationForRead(ctx, workspace.LocationFromStorageDir(atDir))`;
+  a failure becomes `fmt.Errorf("open store at %q read-only: %w", atDir, …)` with the resolved path,
   wrapping the open error marked with holder contention for that location
   (`cli.go`). The store is closed on return (`cli.go`). The work runs
   with `noReadyPolicy`, which returns no required fields (`cli.go`).
@@ -1277,7 +1277,7 @@ transition row runs per id — §2.21):
      - Non-interactive stdout (`!isTerminal(stdout)`) and no `--take` →
        `takeoverUnconfirmedError` "<claim line> — this lane is claimed and active; pass --take to confirm the takeover"
        → exit 3, reason `takeover_unconfirmed`.
-     - Interactive and no `--take` → `askYesNo(os.Stdin, stdout, line+"\ntake over this lane?")`
+     - Interactive and no `--take` → `askYesNo(stdin, stdout, line+"\ntake over this lane?")`, `stdin` the invocation's
        (`claims_takeover.go`) prints `"<claim line>\ntake over this lane? [y/N] "`, reads a
        line from stdin; a read error other than EOF →
        `"read confirmation: %w"`; an answer not starting with `y`
@@ -1785,8 +1785,8 @@ claim; this command claims nothing.
   `UsageError{"usage: lit children <parent-id> [flags]  (got N positional arguments: [...])"}`
   (the list printed with `%q`) → exit 2, checked after the parse and before any
   store opens (`cli.go`).
-  A blank or `-`-prefixed `--at` → ``UsageError{"usage: lit children --at <store-dir>  (a storage directory from `lit stores`)"}``
-  (`cli.go`).
+  A blank or `-`-prefixed `--at` → `UsageError{"--at needs a path, got %q"}`
+  (`pathflag.go`).
 - Filter: the positional is appended to the `--parent` ids (`cli.go`), so
   `lit children <id> [flags]` builds the filter `lit ls --parent <id> [flags]` builds
   and prints the same output. The `ls` defaults apply: statuses default to
@@ -2268,7 +2268,7 @@ Description: `helptext/purge.txt`.
    - Non-interactive stdout (`!isTerminal(stdout)`) and no `--yes` →
      `purgeUnconfirmedError` "purging <id> cannot be undone; pass --yes to confirm it"
      → exit 3, reason `purge_unconfirmed`.
-   - Interactive and no `--yes` → `askYesNo(os.Stdin, stdout, …)` (`claims_takeover.go`)
+   - Interactive and no `--yes` → `askYesNo(stdin, stdout, …)`, `stdin` the invocation's (`claims_takeover.go`)
      prints `"<id>: a purge removes it, its comments, labels, history and edges for good, here and in every store it syncs to\npurge it? [y/N] "`
      (no title), reads a line from stdin; a read error other than EOF →
      `"read confirmation: %w"`; an answer whose trimmed lowercase form does not

@@ -123,7 +123,7 @@ func TestCompletionExcludesHiddenMirror(t *testing.T) {
 func TestRunHelpIncludesCompletion(t *testing.T) {
 	t.Parallel()
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), &stdout, &stdout, []string{"help"}); err != nil {
+	if err := Run(context.Background(), cwdInvocation(&stdout, &stdout, []string{"help"})); err != nil {
 		t.Fatalf("Run(help) error = %v", err)
 	}
 	help := normalizeWhitespace(stdout.String())
@@ -138,7 +138,7 @@ func TestRunHelpIncludesCompletion(t *testing.T) {
 func TestRunHelpDocumentsRankOrderingDefaults(t *testing.T) {
 	t.Parallel()
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), &stdout, &stdout, []string{"help"}); err != nil {
+	if err := Run(context.Background(), cwdInvocation(&stdout, &stdout, []string{"help"})); err != nil {
 		t.Fatalf("Run(help) error = %v", err)
 	}
 	help := normalizeWhitespace(stdout.String())

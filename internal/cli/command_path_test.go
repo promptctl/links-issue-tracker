@@ -39,7 +39,7 @@ func TestRunNestedInvalidPathsReturnUsageOutsideRepo(t *testing.T) {
 
 	for _, tc := range cases {
 		var stdout bytes.Buffer
-		err := Run(context.Background(), &stdout, &stdout, tc.args)
+		err := Run(context.Background(), cwdInvocation(&stdout, &stdout, tc.args))
 		if err == nil {
 			t.Fatalf("Run(%v) error = nil, want usage error", tc.args)
 		}
@@ -66,14 +66,14 @@ func TestRunNewCompletesWithoutDeadlock(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(prevWD) })
 
 	var initOut bytes.Buffer
-	if err := Run(context.Background(), &initOut, &initOut, []string{"init"}); err != nil {
+	if err := Run(context.Background(), cwdInvocation(&initOut, &initOut, []string{"init"})); err != nil {
 		t.Fatalf("Run(init) error = %v", err)
 	}
 
 	done := make(chan error, 1)
 	go func() {
 		var stdout bytes.Buffer
-		done <- Run(context.Background(), &stdout, &stdout, []string{"new", "--title", "deadlock guard", "--topic", "deadlock", "--type", "epic"})
+		done <- Run(context.Background(), cwdInvocation(&stdout, &stdout, []string{"new", "--title", "deadlock guard", "--topic", "deadlock", "--type", "epic"}))
 	}()
 
 	select {
@@ -100,12 +100,12 @@ func TestRunNestedHelpAfterValidSubcommandPassesThrough(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(prevWD) })
 
 	var initOut bytes.Buffer
-	if err := Run(context.Background(), &initOut, &initOut, []string{"init"}); err != nil {
+	if err := Run(context.Background(), cwdInvocation(&initOut, &initOut, []string{"init"})); err != nil {
 		t.Fatalf("Run(init) error = %v", err)
 	}
 
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), &stdout, &stdout, []string{"dep", "add", "--help"}); err != nil {
+	if err := Run(context.Background(), cwdInvocation(&stdout, &stdout, []string{"dep", "add", "--help"})); err != nil {
 		t.Fatalf("Run(dep add --help) error = %v", err)
 	}
 	output := stdout.String()

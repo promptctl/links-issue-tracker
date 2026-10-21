@@ -74,9 +74,9 @@ func recoverMapper(mappingPath string) (store.Mapper, error) {
 //   - Unconverged   → loud failure with the residual (exit non-zero).
 func lifeboatRecoverLeaf() wsLeaf {
 	fs := newCobraFlagSet("lifeboat recover")
-	mappingPath := fs.String("mapping", "", "Path to an operator-authored ShapeMapping JSON; default uses the built-in deterministic mapper")
-	return wsLeaf{fs: fs, positionals: 0, usage: "usage: lit lifeboat recover [--mapping <file>]", work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
-		mapper, err := recoverMapper(*mappingPath)
+	mappingPath := registerPath(fs, "mapping", "Path to an operator-authored ShapeMapping JSON; default uses the built-in deterministic mapper")
+	return wsLeaf{fs: fs, positionals: 0, usage: "usage: lit lifeboat recover [--mapping <file>]", work: func(ctx context.Context, inv Invocation, ws workspace.Info, positional []string) error {
+		mapper, err := recoverMapper(mappingPath.path())
 		if err != nil {
 			return err
 		}
@@ -98,7 +98,7 @@ func lifeboatRecoverLeaf() wsLeaf {
 		}
 		switch o := outcome.(type) {
 		case store.Reconciled:
-			return promoteReconciled(ctx, stdout, ws, o)
+			return promoteReconciled(ctx, inv.Stdout, ws, o)
 		case store.RequiresDrop:
 			// [LAW:no-silent-failure] Discard the rebuild and refuse to commit: an
 			// unexplained drop silently loses data, so the human is notified and
@@ -159,11 +159,11 @@ func lifeboatDumpLeaf() wsLeaf {
 	// unrelated error that merely contains the words "lit lifeboat dump",
 	// leaving the chapters describing a message the binary no longer has, with
 	// the gate green. [LAW:one-source-of-truth]
-	return wsLeaf{fs: fs, positionals: 0, usage: "usage: lit lifeboat dump", work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
+	return wsLeaf{fs: fs, positionals: 0, usage: "usage: lit lifeboat dump", work: func(ctx context.Context, inv Invocation, ws workspace.Info, positional []string) error {
 		dump, err := store.DumpRaw(ctx, ws.DatabasePath, ws.WorkspaceID)
 		if err != nil {
 			return err
 		}
-		return writeJSON(stdout, dump)
+		return writeJSON(inv.Stdout, dump)
 	}}
 }

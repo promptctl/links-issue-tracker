@@ -44,7 +44,7 @@ func initLeaf() (wsLeaf, wsAcquire) {
 	// `lit prefix set` uses, so `--prefix ""` is refused here instead of being
 	// demoted to "no flag" and then failing further in with a message telling
 	// them to pass the flag they just passed. [LAW:no-silent-failure]
-	acquire := func(ctx context.Context) (workspace.Info, error) {
+	acquire := func(ctx context.Context, dir WorkingDir) (workspace.Info, error) {
 		// Arity is settled before anything is created -- upstream, in
 		// parseLeaf, which every leaf's pipeline runs before it acquires.
 		// The ordering matters more here than anywhere: acquiring resolves the
@@ -59,16 +59,16 @@ func initLeaf() (wsLeaf, wsAcquire) {
 		// one every leaf gets. The usage sentence it prints is `initUsage`, set
 		// on the leaf below. [LAW:single-enforcer]
 		if !fs.Changed("prefix") {
-			return resolveWorkspaceFromWD(ctx, workspace.PrefixRequest{})
+			return resolveWorkspace(ctx, dir, workspace.PrefixRequest{})
 		}
 		requested, err := workspace.RequestPrefix(*prefix)
 		if err != nil {
 			return workspace.Info{}, model.ValidationError{Message: fmt.Sprintf("invalid --prefix %q: %v", *prefix, err)}
 		}
-		return resolveWorkspaceFromWD(ctx, requested)
+		return resolveWorkspace(ctx, dir, requested)
 	}
 
-	return wsLeaf{fs: fs, usage: initUsage, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
+	return wsLeaf{fs: fs, usage: initUsage, positionals: 0, work: func(ctx context.Context, inv Invocation, ws workspace.Info, positional []string) error {
 		// A workspace init leaves behind has to be able to mint, so a stored
 		// prefix the rules refuse is refused here, before any effect, with the
 		// remediation naming the command that repairs it.
@@ -174,7 +174,7 @@ func initLeaf() (wsLeaf, wsAcquire) {
 		// progress channel, this one covers the adopted/failed line here.
 		// [LAW:effects-at-boundaries]
 		buildNote := resolveBuildStatusNote(time.Now())
-		return writeInitHumanOutput(stdout, report, buildNote)
+		return writeInitHumanOutput(inv.Stdout, report, buildNote)
 	}}, acquire
 }
 

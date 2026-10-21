@@ -31,7 +31,7 @@ func TestMain(m *testing.M) {
 	// suite's tests call the receive body directly and never mean to spawn one.
 	if len(os.Args) > 2 && os.Args[1] == "sync" &&
 		(os.Args[2] == backgroundReceiveSubcommand || os.Args[2] == backgroundMirrorSubcommand) {
-		if err := Run(context.Background(), os.Stdout, os.Stderr, os.Args[1:]); err != nil {
+		if err := Run(context.Background(), cwdInvocation(os.Stdout, os.Stderr, os.Args[1:])); err != nil {
 			os.Exit(WriteCommandError(os.Stderr, err))
 		}
 		os.Exit(0)

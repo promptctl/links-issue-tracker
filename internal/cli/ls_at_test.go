@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -65,7 +66,7 @@ func TestLsAtListsForeignStoreIssues(t *testing.T) {
 	storeDir, issueID := foreignStore(t, "ws-foreign", "proj")
 
 	var out bytes.Buffer
-	if err := runList(underInvocation(context.Background()), &out, lsSurface, []string{"--at", storeDir}); err != nil {
+	if err := runList(underInvocation(context.Background()), cwdInvocation(&out, &out, nil), lsSurface, []string{"--at", storeDir}); err != nil {
 		t.Fatalf("ls --at error = %v", err)
 	}
 	if !strings.Contains(out.String(), issueID) {
@@ -81,7 +82,7 @@ func TestLsAtLeavesStoreWritable(t *testing.T) {
 	storeDir, _ := foreignStore(t, "ws-foreign", "proj")
 
 	var out bytes.Buffer
-	if err := runList(underInvocation(context.Background()), &out, lsSurface, []string{"--at", storeDir}); err != nil {
+	if err := runList(underInvocation(context.Background()), cwdInvocation(&out, &out, nil), lsSurface, []string{"--at", storeDir}); err != nil {
 		t.Fatalf("ls --at error = %v", err)
 	}
 
@@ -132,7 +133,7 @@ func TestLsAtContentionTraceFilesUnderTargetStore(t *testing.T) {
 	}()
 
 	var out bytes.Buffer
-	err = Run(context.Background(), &out, &out, []string{"ls", "--at", storeDir})
+	err = Run(context.Background(), cwdInvocation(&out, &out, []string{"ls", "--at", storeDir}))
 	if err == nil {
 		t.Fatalf("ls --at succeeded against an exclusively held store; expected workspace-busy refusal\noutput=%s", out.String())
 	}
@@ -203,21 +204,25 @@ func requireLsContentionTrace(t *testing.T, ws workspace.Info) {
 }
 
 // TestLsAtRejectsMissingStore pins the loud-failure contract: a path with no
-// lit store is an actionable error naming the path, not an empty success.
+// lit store is an actionable error naming the path that was opened — for a
+// relative one, the path it names under the invocation's directory — not an
+// empty success.
 func TestLsAtRejectsMissingStore(t *testing.T) {
 	t.Parallel()
-	missing := filepath.Join(t.TempDir(), "nope", "links")
-
-	var out bytes.Buffer
-	err := runList(underInvocation(context.Background()), &out, lsSurface, []string{"--at", missing})
-	if err == nil {
-		t.Fatalf("ls --at (missing) returned nil error with output %q; want a surfaced failure", out.String())
-	}
-	if !strings.Contains(err.Error(), missing) {
-		t.Fatalf("ls --at (missing) error = %v, want it to name the path %q", err, missing)
-	}
-	if out.Len() != 0 {
-		t.Fatalf("ls --at (missing) emitted %q before failing; want no output on the error path", out.String())
+	base := t.TempDir()
+	missing := filepath.Join(base, "nope", "links")
+	for _, given := range []string{missing, filepath.Join("nope", "links")} {
+		var out bytes.Buffer
+		err := runList(underInvocation(context.Background()), dirInvocation(base, &out, &out, nil), lsSurface, []string{"--at", given})
+		if err == nil {
+			t.Fatalf("ls --at %s returned nil error with output %q; want a surfaced failure", given, out.String())
+		}
+		if !strings.Contains(err.Error(), fmt.Sprintf("%q", missing)) {
+			t.Fatalf("ls --at %s error = %v, want it to name the path %q", given, err, missing)
+		}
+		if out.Len() != 0 {
+			t.Fatalf("ls --at %s emitted %q before failing; want no output on the error path", given, out.String())
+		}
 	}
 }
 
@@ -228,9 +233,10 @@ func TestLsAtRejectsMissingStore(t *testing.T) {
 //
 // The rejection has two authors, and the table says which is which. A bare `--at`
 // is a grammar error pflag itself refuses; every other shape is grammatically
-// fine — pflag takes any string as a value — so runList rejects it on the parsed
-// value. Both arrive as UsageError, which is the contract callers dispatch on;
-// the per-case message only records where the refusal came from.
+// fine — pflag takes any string as a value — so the path-flag rule every leaf
+// resolves its paths by rejects it on the parsed value. Both arrive as
+// UsageError, which is the contract callers dispatch on; the per-case message
+// only records where the refusal came from.
 func TestLsAtRejectsEmptyOrFlagShapedDir(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -238,15 +244,15 @@ func TestLsAtRejectsEmptyOrFlagShapedDir(t *testing.T) {
 		wantMsg string
 	}{
 		{[]string{"--at"}, "flag needs an argument: --at"}, // pflag: no value at all
-		{[]string{"--at="}, "--at <store-dir>"},
-		{[]string{"--at", ""}, "--at <store-dir>"},
-		{[]string{"--at", "--help"}, "--at <store-dir>"},
-		{[]string{"--at", "--status"}, "--at <store-dir>"},
-		{[]string{"--at=--nope"}, "--at <store-dir>"},
+		{[]string{"--at="}, "--at needs a path"},
+		{[]string{"--at", ""}, "--at needs a path"},
+		{[]string{"--at", "--help"}, "--at needs a path"},
+		{[]string{"--at", "--status"}, "--at needs a path"},
+		{[]string{"--at=--nope"}, "--at needs a path"},
 	}
 	for _, tc := range cases {
 		var out bytes.Buffer
-		err := runList(underInvocation(context.Background()), &out, lsSurface, tc.args)
+		err := runList(underInvocation(context.Background()), cwdInvocation(&out, &out, nil), lsSurface, tc.args)
 		if err == nil {
 			t.Fatalf("ls %v = nil error, want a usage error", tc.args)
 		}
@@ -275,7 +281,7 @@ func TestLsAtAfterTerminatorIsNotARoute(t *testing.T) {
 	chdir(t, t.TempDir()) // no workspace anywhere near the cwd
 
 	var out bytes.Buffer
-	err := runList(underInvocation(context.Background()), &out, lsSurface, []string{"--", "--at", storeDir})
+	err := runList(underInvocation(context.Background()), cwdInvocation(&out, &out, nil), lsSurface, []string{"--", "--at", storeDir})
 
 	// Routing would have listed the foreign store's issue; as positionals, the two
 	// tokens are refused as usage before any store opens.

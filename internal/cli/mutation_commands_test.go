@@ -33,7 +33,7 @@ func TestMutationCommandsDoNotDeadlock(t *testing.T) {
 
 		errCh := make(chan error, 1)
 		go func() {
-			errCh <- Run(ctx, &stdout, &stdout, args)
+			errCh <- Run(ctx, cwdInvocation(&stdout, &stdout, args))
 		}()
 		select {
 		case runErr := <-errCh:

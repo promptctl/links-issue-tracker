@@ -391,7 +391,7 @@ func setupMirrorDeadlineRepo(t *testing.T) (base, root, gitPath string, runInPro
 			ctx, cancel := context.WithTimeout(context.Background(), timeout)
 			defer cancel()
 			errCh := make(chan error, 1)
-			go func() { errCh <- Run(ctx, out, out, args) }()
+			go func() { errCh <- Run(ctx, cwdInvocation(out, out, args)) }()
 			select {
 			case runErr := <-errCh:
 				done <- inProcessResult{out: out, err: runErr}

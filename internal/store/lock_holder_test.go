@@ -86,7 +86,9 @@ func TestContentionErrorNamesTheLiveHolder(t *testing.T) {
 	ctx := context.Background()
 	lockPath := filepath.Join(t.TempDir(), "test.lock")
 
-	holder, err := acquireStoreLock(ctx, storageDirOf(lockPath), lockPath, true, 0)
+	// The holder is a run, which names its command; the record carries that
+	// command rather than the process's arguments, which two runs share.
+	holder, err := acquireStoreLock(WithHolderCommand(ctx, "lit backlog"), storageDirOf(lockPath), lockPath, true, 0)
 	if err != nil {
 		t.Fatalf("holder acquireStoreLock() error = %v", err)
 	}
@@ -102,9 +104,8 @@ func TestContentionErrorNamesTheLiveHolder(t *testing.T) {
 	}
 	message := err.Error()
 	for _, want := range []string{
-		"pid " + strconv.Itoa(os.Getpid()),
+		"pid " + strconv.Itoa(os.Getpid()) + " (lit backlog)",
 		"holding since",
-		filepath.Base(os.Args[0]),
 	} {
 		if !strings.Contains(message, want) {
 			t.Errorf("contention error %q does not name the holder's %q", message, want)
@@ -779,7 +780,7 @@ func TestARecordThatWillNotRetireIsReportedAndTheReleaseStillLands(t *testing.T)
 	storageDir := storageDirOf(lockPath)
 	dir := lockHolderDir(storageDir, lockPath)
 	lockErr := errors.New("lock release result")
-	release := recordLockHolder(storageDir, lockPath, func() error { return lockErr })
+	release := recordLockHolder(context.Background(), storageDir, lockPath, func() error { return lockErr })
 
 	// The swept name becomes a non-empty directory the release cannot remove,
 	// as on Windows it cannot remove a name a concurrent sweep's probe holds

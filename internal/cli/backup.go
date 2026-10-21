@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"path/filepath"
 	"strings"
 
@@ -33,7 +32,7 @@ var backupFamily = commandFamily[appSubcommand]{
 func backupCreateLeaf() appLeaf {
 	fs := newCobraFlagSet("backup create")
 	keep := fs.Int("keep", 20, "Snapshots to keep after rotation")
-	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, inv Invocation, ap *app.App, positional []string) error {
 		export, err := ap.Store.Export(ctx)
 		if err != nil {
 			return err
@@ -45,20 +44,20 @@ func backupCreateLeaf() appLeaf {
 		if err := backup.Prune(ap.Workspace.StorageDir, *keep); err != nil {
 			return err
 		}
-		_, err = fmt.Fprintf(stdout, "%s %s\n", snapshot.Name, snapshot.Path)
+		_, err = fmt.Fprintf(inv.Stdout, "%s %s\n", snapshot.Name, snapshot.Path)
 		return err
 	}}
 }
 
 func backupListLeaf() appLeaf {
 	fs := newCobraFlagSet("backup list")
-	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, inv Invocation, ap *app.App, positional []string) error {
 		snapshots, err := backup.List(ap.Workspace.StorageDir)
 		if err != nil {
 			return err
 		}
 		for _, snapshot := range snapshots {
-			if _, err := fmt.Fprintf(stdout, "%s %d %s\n", snapshot.Name, snapshot.Size, snapshot.Path); err != nil {
+			if _, err := fmt.Fprintf(inv.Stdout, "%s %d %s\n", snapshot.Name, snapshot.Size, snapshot.Path); err != nil {
 				return err
 			}
 		}
@@ -101,11 +100,11 @@ func resolveRestorePath(ap *app.App, explicitPath string, latest bool) (string, 
 
 func backupRestoreLeaf() appLeaf {
 	fs := newCobraFlagSet("backup restore")
-	path := fs.String("path", "", "Path to an export JSON (backup snapshot or sync file)")
+	path := registerPath(fs, "path", "Path to an export JSON (backup snapshot or sync file)")
 	latest := fs.Bool("latest", false, "Restore latest backup snapshot")
 	force := fs.Bool("force", false, "Force restore over unsynced state")
-	return appLeaf{fs: fs, positionals: 0, usage: restoreUsage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
-		restorePath, err := resolveRestorePath(ap, *path, *latest)
+	return appLeaf{fs: fs, positionals: 0, usage: restoreUsage, work: func(ctx context.Context, inv Invocation, ap *app.App, positional []string) error {
+		restorePath, err := resolveRestorePath(ap, path.path(), *latest)
 		if err != nil {
 			return err
 		}
@@ -113,10 +112,10 @@ func backupRestoreLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		if _, err := fmt.Fprintf(stdout, "restored %s\n", restorePath); err != nil {
+		if _, err := fmt.Fprintf(inv.Stdout, "restored %s\n", restorePath); err != nil {
 			return err
 		}
-		return writeLanding(stdout, "the backup", landing)
+		return writeLanding(inv.Stdout, "the backup", landing)
 	}}
 }
 

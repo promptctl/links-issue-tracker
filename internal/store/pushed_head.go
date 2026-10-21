@@ -334,5 +334,5 @@ func openChunkStoreForRefWrite(ctx context.Context, root string) (*doltdb.DoltDB
 	if err := wrapEngineOpenContention(backoff.Retry(open, backoff.WithContext(newEngineOpenBackOff(root), ctx)), root); err != nil {
 		return nil, nil, fmt.Errorf("open dolt chunk store at %s: %w", nomsDir, err)
 	}
-	return ddb, recordLockHolder(workspaceStorageDir(root), DoltJournalLockPath(root), func() error { return nil }), nil
+	return ddb, recordLockHolder(ctx, workspaceStorageDir(root), DoltJournalLockPath(root), func() error { return nil }), nil
 }

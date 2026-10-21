@@ -492,7 +492,7 @@ func openEngine(ctx context.Context, doltRootDir string, workspaceID string, acc
 		// The engine took LOCK through Dolt's own loader, so the record is
 		// published here rather than by acquireStoreLock, and the release it
 		// wraps is a no-op: the hold itself ends when the engine closes.
-		releaseEngineRecord = recordLockHolder(workspaceStorageDir(doltRootDir), DoltJournalLockPath(doltRootDir), func() error { return nil })
+		releaseEngineRecord = recordLockHolder(ctx, workspaceStorageDir(doltRootDir), DoltJournalLockPath(doltRootDir), func() error { return nil })
 	}
 	return db, releaseEngineRecord, nil
 }

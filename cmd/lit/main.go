@@ -16,7 +16,16 @@ func main() {
 	// the process never becomes SIGKILL-only.
 	ctx, stop := interrupt.Guard(context.Background(), interrupt.DefaultGrace)
 	defer stop()
-	if err := cli.Run(ctx, os.Stdout, os.Stderr, os.Args[1:]); err != nil {
+	// [LAW:effects-at-boundaries] The one place lit reads its process: the run
+	// below is handed everything it would otherwise read from it.
+	inv := cli.Invocation{
+		Dir:    cli.WorkingDirOf(os.Getwd()),
+		Args:   os.Args[1:],
+		Stdin:  os.Stdin,
+		Stdout: os.Stdout,
+		Stderr: os.Stderr,
+	}
+	if err := cli.Run(ctx, inv); err != nil {
 		os.Exit(cli.WriteCommandError(os.Stderr, err))
 	}
 }

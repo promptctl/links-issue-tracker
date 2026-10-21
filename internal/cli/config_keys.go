@@ -16,7 +16,7 @@ import (
 // writes a warning for each to stderr. The command runs either way, because a
 // key that changes nothing is a reason to look, not to stop.
 //
-// It runs in resolveWorkspaceFromWD, where every command acquires its
+// It runs in resolveWorkspace, where every command acquires its
 // workspace once, not inside config.Load, which one command can call several
 // times and which commands that read no setting never call.
 // [LAW:single-enforcer]

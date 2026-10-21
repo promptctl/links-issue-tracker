@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"fmt"
-	"io"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
@@ -21,7 +20,7 @@ func verdictLeaf() appLeaf {
 	laws := fs.StringArray("law", "A law the verdict cites, by its token (one-source-of-truth); repeat for each law; a fail cites at least one")
 	resolveActor := registerActor(fs)
 	const usage = "usage: lit verdict <id> <pass|fail> --plan <digest> [--law <token>]..."
-	return appLeaf{fs: fs, positionals: 2, usage: usage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+	return appLeaf{fs: fs, positionals: 2, usage: usage, work: func(ctx context.Context, inv Invocation, ap *app.App, positional []string) error {
 		if len(positional) != 2 || *plan == "" {
 			return UsageError{Message: usage}
 		}
@@ -38,7 +37,7 @@ func verdictLeaf() appLeaf {
 		telemetry.Set(ctx, "verdict.value", string(review.Verdict))
 		telemetry.Set(ctx, "verdict.plan_digest", string(review.PlanDigest))
 		telemetry.Set(ctx, "verdict.laws", len(review.Laws))
-		_, err = fmt.Fprintf(stdout, "%s %s: %s on plan %s — laws: %s\n", review.IssueID, review.ID, review.Verdict, review.PlanDigest, joinLaws(review.Laws))
+		_, err = fmt.Fprintf(inv.Stdout, "%s %s: %s on plan %s — laws: %s\n", review.IssueID, review.ID, review.Verdict, review.PlanDigest, joinLaws(review.Laws))
 		return err
 	}}
 }

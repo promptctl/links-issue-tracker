@@ -5,7 +5,6 @@ package cli
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"strconv"
@@ -64,7 +63,7 @@ func init() {
 // prints the child's pid and exits — the shape of a backgrounded owner-notify
 // hook.
 func runWorkerOutlivedByChild() {
-	leaf := detachedWorkerLeaf("worker-outlived-by-child", "", func(context.Context, io.Writer, workspace.Info, int) error {
+	leaf := detachedWorkerLeaf("worker-outlived-by-child", "", func(context.Context, Invocation, workspace.Info, int) error {
 		child := exec.Command("sleep", "60")
 		if err := child.Start(); err != nil {
 			return err
@@ -72,7 +71,7 @@ func runWorkerOutlivedByChild() {
 		fmt.Println(child.Process.Pid)
 		return nil
 	})
-	if err := leaf.work(context.Background(), os.Stdout, workspace.Info{}, nil); err != nil {
+	if err := leaf.work(context.Background(), cwdInvocation(os.Stdout, os.Stdout, nil), workspace.Info{}, nil); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

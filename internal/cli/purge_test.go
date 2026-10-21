@@ -59,11 +59,11 @@ func TestRunPurgeRefusesWithoutConfirmationAndPurgesWithIt(t *testing.T) {
 	invocation := telemetry.Begin(telemetry.Event{})
 	purge := purgeLeaf()
 	invoked := telemetry.With(ctx, invocation)
-	positional, err := parseLeaf(invoked, purge, []string{doomed.ID, "--yes"}, &stdout)
+	positional, err := parseLeaf(invoked, purge, []string{doomed.ID, "--yes"}, cwdInvocation(&stdout, &stdout, nil))
 	if err != nil {
 		t.Fatalf("parse purge --yes error = %v", err)
 	}
-	if err := purge.work(invoked, &stdout, ap, positional); err != nil {
+	if err := purge.work(invoked, cwdInvocation(&stdout, &stdout, nil), ap, positional); err != nil {
 		t.Fatalf("purge --yes error = %v", err)
 	}
 	counts := invocation.Finish(telemetry.End{}).Counts

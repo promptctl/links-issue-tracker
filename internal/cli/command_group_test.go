@@ -17,7 +17,7 @@ import (
 // how the registry is stored.
 func renderedGrouping(t *testing.T) (groupOf map[string]string, headerLine map[string]int) {
 	t.Helper()
-	root := newRootCommand(context.Background(), io.Discard, io.Discard)
+	root := newRootCommand(context.Background(), cwdInvocation(io.Discard, io.Discard, nil))
 	groupOf = map[string]string{}
 	headerLine = map[string]int{}
 	current := ""
@@ -65,7 +65,7 @@ func commandGroupPaths() [][]string {
 			walk(path, sub.Subcommands)
 		}
 	}
-	for _, spec := range advertisedCommandSpecs(commandSpecs(context.Background(), io.Discard, io.Discard)) {
+	for _, spec := range advertisedCommandSpecs(commandSpecs(context.Background(), cwdInvocation(io.Discard, io.Discard, nil))) {
 		if len(spec.Subcommands) == 0 {
 			continue
 		}
@@ -96,7 +96,7 @@ func commandLeafPaths() [][]string {
 	// A retired row is Hidden, so it is off this surface: it answers every
 	// invocation — help included — with its replacement pointer rather than a
 	// flag surface, which is the documented break, not a help answer.
-	for _, spec := range advertisedCommandSpecs(commandSpecs(context.Background(), io.Discard, io.Discard)) {
+	for _, spec := range advertisedCommandSpecs(commandSpecs(context.Background(), cwdInvocation(io.Discard, io.Discard, nil))) {
 		if len(spec.Subcommands) == 0 {
 			paths = append(paths, []string{spec.Name})
 			continue
@@ -159,7 +159,7 @@ func TestLeafHelpAnswersWithoutAcquiringResources(t *testing.T) {
 		for _, helpFlag := range []string{"-h", "--help"} {
 			args := append(append([]string{}, path...), helpFlag)
 			var stdout, stderr bytes.Buffer
-			if err := Run(context.Background(), &stdout, &stderr, args); err != nil {
+			if err := Run(context.Background(), cwdInvocation(&stdout, &stderr, args)); err != nil {
 				t.Errorf("Run(%v) outside a repo error = %v, want help answered without any workspace/store/app", args, err)
 				continue
 			}
@@ -210,7 +210,7 @@ func TestHelpFlagFollowsItsValue(t *testing.T) {
 
 	run := func(args ...string) (string, error) {
 		var stdout, stderr bytes.Buffer
-		err := Run(context.Background(), &stdout, &stderr, args)
+		err := Run(context.Background(), cwdInvocation(&stdout, &stderr, args))
 		return stdout.String(), err
 	}
 	with := func(path []string, flag string) []string {
@@ -280,7 +280,7 @@ func TestCommandGroupHelpExitsZeroWithUsageOnStdout(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(prevWD) })
 
 	var initOut bytes.Buffer
-	if err := Run(context.Background(), &initOut, &initOut, []string{"init"}); err != nil {
+	if err := Run(context.Background(), cwdInvocation(&initOut, &initOut, []string{"init"})); err != nil {
 		t.Fatalf("Run(init) error = %v", err)
 	}
 
@@ -288,7 +288,7 @@ func TestCommandGroupHelpExitsZeroWithUsageOnStdout(t *testing.T) {
 		for _, helpFlag := range []string{"-h", "--help"} {
 			args := append(append([]string{}, path...), helpFlag)
 			var stdout, stderr bytes.Buffer
-			if err := Run(context.Background(), &stdout, &stderr, args); err != nil {
+			if err := Run(context.Background(), cwdInvocation(&stdout, &stderr, args)); err != nil {
 				t.Fatalf("Run(%v) error = %v, want help answered as success", args, err)
 			}
 			if got := stdout.String(); !strings.Contains(got, path[len(path)-1]) {
@@ -328,7 +328,7 @@ func TestNestedGroupHelpAnswersWithoutAcquiringResources(t *testing.T) {
 		for _, helpFlag := range []string{"-h", "--help"} {
 			args := append(append([]string{}, path...), helpFlag)
 			var stdout, stderr bytes.Buffer
-			if err := Run(context.Background(), &stdout, &stderr, args); err != nil {
+			if err := Run(context.Background(), cwdInvocation(&stdout, &stderr, args)); err != nil {
 				t.Fatalf("Run(%v) outside a repo error = %v, want help answered without any workspace/store/app", args, err)
 			}
 			if got := stdout.String(); !strings.Contains(got, path[len(path)-1]) {

@@ -68,9 +68,14 @@ var traceID = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
 // Every invocation appends exactly one event, under its own trace id, saying
 // which command ran, where, and how it ended — outside any workspace too.
+// Where is the directory the invocation was handed, which is not the test
+// process's own.
 func TestEveryInvocationLeavesOneEvent(t *testing.T) {
 	isolateEvents(t)
 	dir := t.TempDir()
+	if wd, err := os.Getwd(); err != nil || wd == dir {
+		t.Fatalf("process cwd = %q, %v; the test needs it to differ from %q", wd, err, dir)
+	}
 	runCLIInDir(t, dir, "version")
 	runCLIInDir(t, dir, "version")
 
@@ -78,10 +83,7 @@ func TestEveryInvocationLeavesOneEvent(t *testing.T) {
 	if len(events) != 2 {
 		t.Fatalf("events file holds %d events, want 2 (one per invocation)", len(events))
 	}
-	wantCwd, err := filepath.EvalSymlinks(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	wantCwd := dir
 	for _, ev := range events {
 		if ev.Event != "lit version" || ev.Service != "lit" {
 			t.Errorf("event, service = %q, %q; want lit version, lit", ev.Event, ev.Service)

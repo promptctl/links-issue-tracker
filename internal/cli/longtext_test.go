@@ -15,23 +15,15 @@ import (
 // lands intact proves the file and stdin paths carried it byte for byte.
 const shellHostileText = "first line with `backticks`, $HOME and \"quotes\" and 'apostrophes'\n\nsecond paragraph"
 
-// withStdin makes text the process's stdin for the rest of the test.
-func withStdin(t *testing.T, text string) {
+// runWithStdin runs lit in dir with stdin as its standard input, failing the
+// test if the command fails.
+func runWithStdin(t *testing.T, dir, stdin string, args ...string) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "stdin")
-	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	file, err := os.Open(path)
+	out, err := runCLIInDirWithStdin(t, dir, stdin, args...)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("Run(%v) error = %v\noutput:\n%s", args, err, out)
 	}
-	previous := os.Stdin
-	os.Stdin = file
-	t.Cleanup(func() {
-		os.Stdin = previous
-		_ = file.Close()
-	})
+	return out
 }
 
 func writeTextFile(t *testing.T, text string) string {
@@ -90,8 +82,7 @@ func TestCommentAddTakesItsBodyInlineFromAFileOrFromStdin(t *testing.T) {
 	if got, want := sourceFacts(t), map[string]any{"text_source.body": "file"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("--body-file <path> event facts = %v, want %v", got, want)
 	}
-	withStdin(t, shellHostileText+" (stdin)\n")
-	runCLIInDir(t, dir, "comment", "add", id, "--body-file", "-")
+	runWithStdin(t, dir, shellHostileText+" (stdin)\n", "comment", "add", id, "--body-file", "-")
 	if got, want := sourceFacts(t), map[string]any{"text_source.body": "stdin"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("--body-file - event facts = %v, want %v", got, want)
 	}
@@ -152,8 +143,7 @@ func TestDescriptionAndPromptTakeAFileOrStdin(t *testing.T) {
 		t.Errorf("new --prompt-file stored %q", got)
 	}
 
-	withStdin(t, shellHostileText+" (followup)\n")
-	followup := extractTicketID(t, runCLIInDir(t, dir, "followup", "--on", origin, "--title", "Next", "--description-file", "-"))
+	followup := extractTicketID(t, runWithStdin(t, dir, shellHostileText+" (followup)\n", "followup", "--on", origin, "--title", "Next", "--description-file", "-"))
 	if got, want := sourceFacts(t), map[string]any{"text_source.description": "stdin", "text_source.prompt": "absent"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("followup event facts = %v, want %v", got, want)
 	}
@@ -161,8 +151,7 @@ func TestDescriptionAndPromptTakeAFileOrStdin(t *testing.T) {
 		t.Errorf("followup --description-file - stored %q", got)
 	}
 
-	withStdin(t, "revised prompt")
-	runCLIInDir(t, dir, "update", created, "--prompt-file", "-")
+	runWithStdin(t, dir, "revised prompt", "update", created, "--prompt-file", "-")
 	if got, want := sourceFacts(t), map[string]any{"text_source.description": "absent", "text_source.prompt": "stdin", "text_source.plan": "absent"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("update event facts = %v, want %v", got, want)
 	}
@@ -207,13 +196,14 @@ func TestLongTextRefusesBlankTextAndASecondStdinReader(t *testing.T) {
 			map[string]any{"text_source.description": "file"}},
 		{"blank stdin", "\n", []string{"--prompt-file", "-"}, "--prompt-file - supplied no text",
 			map[string]any{"text_source.description": "absent", "text_source.prompt": "stdin"}},
+		{"empty path", "", []string{"--description-file", ""}, `--description-file needs a path, got ""`,
+			map[string]any{"text_source.description": "file"}},
 		{"unreadable path", "", []string{"--prompt-file", filepath.Join(t.TempDir(), "missing.md")}, "read --prompt-file: open ",
 			map[string]any{"text_source.description": "absent", "text_source.prompt": "file"}},
 		{"two stdin readers", "one text", []string{"--description-file", "-", "--prompt-file", "-"}, "only one field can read stdin, and --description-file and --prompt-file each name it; give the others a path",
 			map[string]any{}},
 	} {
-		withStdin(t, tc.stdin)
-		_, err := runCLIInDirAllowError(t, dir, append([]string{"update", id}, tc.args...)...)
+		_, err := runCLIInDirWithStdin(t, dir, tc.stdin, append([]string{"update", id}, tc.args...)...)
 		var usage UsageError
 		if !errors.As(err, &usage) || !strings.HasPrefix(usage.Message, tc.want) {
 			t.Errorf("%s: update error = %v, want a UsageError starting %q", tc.name, err, tc.want)
@@ -229,7 +219,6 @@ func TestLongTextRefusesBlankTextAndASecondStdinReader(t *testing.T) {
 		t.Errorf("refused updates changed the prompt to %q", got)
 	}
 
-	withStdin(t, "")
 	runCLIInDir(t, dir, "update", id, "--description", "")
 	if got := field("description"); got != "" {
 		t.Errorf("update --description \"\" left the description %q, want it empty", got)

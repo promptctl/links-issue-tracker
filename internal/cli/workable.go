@@ -143,7 +143,7 @@ func workableLeaf(view workableView) appLeaf {
 	all := fs.Bool("all", false, "Ignore the focus scope and list the whole queue")
 	limit := optionalInt(fs, view.hasLimit, "limit", "Limit results")
 	columnsExpr := optionalString(fs, view.hasColumns, "columns", columnsFlagUsage())
-	return appLeaf{fs: fs, positionals: 0, usage: view.usage(), work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+	return appLeaf{fs: fs, positionals: 0, usage: view.usage(), work: func(ctx context.Context, inv Invocation, ap *app.App, positional []string) error {
 		filter, err := filterFlags.parse()
 		if err != nil {
 			return err
@@ -163,7 +163,7 @@ func workableLeaf(view workableView) appLeaf {
 		// so unpushed/unfetched drift is the first thing on screen rather than a
 		// diagnostic nobody runs. (`next` — next.go — prints the same warning at
 		// the same position, independently.)
-		if err := printStalenessWarning(ctx, stdout, ap.Workspace, ap.Store, time.Now()); err != nil {
+		if err := printStalenessWarning(ctx, inv.Stdout, ap.Workspace, ap.Store, time.Now()); err != nil {
 			return err
 		}
 		knobs := workableKnobs{
@@ -176,7 +176,7 @@ func workableLeaf(view workableView) appLeaf {
 		if err != nil {
 			return err
 		}
-		cc, err := gatherClaimContext(ctx, stdout, ap)
+		cc, err := gatherClaimContext(ctx, inv.Stdout, ap)
 		if err != nil {
 			return err
 		}
@@ -226,10 +226,10 @@ func workableLeaf(view workableView) appLeaf {
 		// Derived unconditionally from the rows and graph data already gathered
 		// above: no extra query, and no branch deciding whether the renderer gets
 		// its data. [LAW:dataflow-not-control-flow]
-		if err := view.render(stdout, knobs.columns, rows, gathered.facts, gathered.details, readinessColumnsFor(rows, gathered.details), cc, notice); err != nil {
+		if err := view.render(inv.Stdout, knobs.columns, rows, gathered.facts, gathered.details, readinessColumnsFor(rows, gathered.details), cc, notice); err != nil {
 			return err
 		}
-		return dispatchOccasion(ctx, stdout, ap.Workspace, view.occasion(rows))
+		return dispatchOccasion(ctx, inv.Stdout, ap.Workspace, view.occasion(rows))
 	}}
 }
 

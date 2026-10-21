@@ -23,6 +23,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/query"
 	"github.com/promptctl/links-issue-tracker/internal/statusline"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 	"github.com/spf13/cobra"
@@ -36,9 +37,9 @@ import (
 // interrupt guard, which never unwinds this stack and so is handed the
 // recording to do itself.
 // [LAW:nothing-unseen] [LAW:single-enforcer]
-func Run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string) (err error) {
-	recorder := beginInvocation(time.Now())
-	record := &invocationRecord{recorder: recorder, stderr: stderr}
+func Run(ctx context.Context, inv Invocation) (err error) {
+	recorder := beginInvocation(time.Now(), inv.Dir)
+	record := &invocationRecord{recorder: recorder, stderr: inv.Stderr}
 	interrupt.BeforeHardExit(ctx, func(signal string, code int) { record.close(interruptedEnd(time.Now(), signal, code)) })
 	defer func() {
 		panicked := recover()
@@ -47,19 +48,25 @@ func Run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string)
 			panic(panicked)
 		}
 	}()
-	return dispatch(invocationContext(ctx, recorder), stdout, stderr, args)
+	// Every store lock this run takes records this run's command line as its
+	// holder, not the process's, which one process running several runs shares.
+	ctx = store.WithHolderCommand(invocationContext(ctx, recorder), strings.Join(append([]string{"lit"}, inv.Args...), " "))
+	return dispatch(ctx, inv)
 }
 
-func dispatch(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string) error {
-	normalizedArgs, err := parseGlobalArgs(args)
+func dispatch(ctx context.Context, inv Invocation) error {
+	stdout := inv.Stdout
+	normalizedArgs, err := parseGlobalArgs(inv.Args)
 	if err != nil {
 		return err
 	}
-	root := newRootCommand(ctx, stdout, stderr)
+	root := newRootCommand(ctx, inv)
 	normalizedArgs = rewriteHelpCommand(normalizedArgs)
-	root.SetArgs(normalizedArgs)
+	// Never nil: cobra reads os.Args in place of a nil argument list, and
+	// parseGlobalArgs hands back nil for `lit --`.
+	root.SetArgs(append([]string{}, normalizedArgs...))
 	root.SetOut(stdout)
-	root.SetErr(stderr)
+	root.SetErr(inv.Stderr)
 	root.SilenceErrors = true
 	root.SilenceUsage = true
 	err = root.ExecuteContext(ctx)
@@ -85,7 +92,7 @@ func dispatch(ctx context.Context, stdout io.Writer, stderr io.Writer, args []st
 	return err
 }
 
-func newRootCommand(ctx context.Context, stdout io.Writer, stderr io.Writer) *cobra.Command {
+func newRootCommand(ctx context.Context, inv Invocation) *cobra.Command {
 	var helpRequested *bool
 	root := &cobra.Command{
 		Use:  "lit",
@@ -114,7 +121,7 @@ func newRootCommand(ctx context.Context, stdout io.Writer, stderr io.Writer) *co
 			}
 			// [LAW:one-source-of-truth] Default command reuses renderQuickstartGuidance
 			// so the output is always identical to `lit quickstart`.
-			ws, wsErr := resolveWorkspaceFromWD(cmd.Context(), workspace.PrefixRequest{})
+			ws, wsErr := resolveWorkspace(cmd.Context(), inv.Dir, workspace.PrefixRequest{})
 			// [LAW:dataflow-not-control-flow] Only the "outside git repo" case routes to help;
 			// other failures (getcwd, template load) surface so they remain diagnosable.
 			var outside OutsideWorkspaceError
@@ -147,14 +154,14 @@ func newRootCommand(ctx context.Context, stdout io.Writer, stderr io.Writer) *co
 	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
 		return UsageError{Message: err.Error()}
 	})
-	root.SetOut(stdout)
-	root.SetErr(stderr)
-	applyRegistry(root, commandGroups, commandSpecs(ctx, stdout, stderr))
+	root.SetOut(inv.Stdout)
+	root.SetErr(inv.Stderr)
+	applyRegistry(root, commandGroups, commandSpecs(ctx, inv))
 	return root
 }
 
-func runWithApp(ctx context.Context, stdout io.Writer, accessMode app.AccessMode, run func(context.Context, *app.App) error) error {
-	ws, err := resolveWorkspaceFromWD(ctx, workspace.PrefixRequest{})
+func runWithApp(ctx context.Context, inv Invocation, accessMode app.AccessMode, run func(context.Context, *app.App) error) error {
+	ws, err := resolveWorkspace(ctx, inv.Dir, workspace.PrefixRequest{})
 	if err != nil {
 		return err
 	}
@@ -196,7 +203,7 @@ func runWithApp(ctx context.Context, stdout io.Writer, accessMode app.AccessMode
 	// auto-sync below so the banner reports the last COMPLETED attempt rather
 	// than racing the one about to spawn.
 	if accessMode == app.AccessWrite {
-		printMutationSyncStalenessWarning(ctx, stdout, ws, time.Now())
+		printMutationSyncStalenessWarning(ctx, inv.Stdout, ws, time.Now())
 	}
 	// [LAW:single-enforcer] One owner consults the auto-sync policy after a
 	// successful command, AND after that command's engine is closed: the on-change
@@ -209,14 +216,14 @@ func runWithApp(ctx context.Context, stdout io.Writer, accessMode app.AccessMode
 	return nil
 }
 
-// resolveWorkspaceFromWD acquires the workspace for the process's working
+// resolveWorkspace acquires the workspace for the invocation's working
 // directory, carrying whatever issue prefix the caller's flags asked for — the
 // zero request for every command but `lit init --prefix`.
 // [LAW:single-enforcer] Every command acquires its workspace here, so this is
 // the one translation of ErrNotGitRepo into the typed CLI error and the one
 // place the workspace's config keys are checked.
-func resolveWorkspaceFromWD(ctx context.Context, requested workspace.PrefixRequest) (workspace.Info, error) {
-	cwd, err := os.Getwd()
+func resolveWorkspace(ctx context.Context, dir WorkingDir, requested workspace.PrefixRequest) (workspace.Info, error) {
+	cwd, err := dir.Path()
 	if err != nil {
 		return workspace.Info{}, fmt.Errorf("get cwd: %w", err)
 	}
@@ -319,7 +326,7 @@ func newLeaf() appLeaf {
 	lane := fs.String("lane", "", "Lane key partitioning an epic's children into parallel rank-ordered sub-sequences; shared lane serializes, distinct lane parallelizes")
 	top := fs.Bool("top", false, "Promote the new issue to the top of its frame (the default appends it to the bottom)")
 	resolveActor := registerActor(fs)
-	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, inv Invocation, ap *app.App, positional []string) error {
 		issueTypeValue, err := model.ParseIssueType(*issueType)
 		if err != nil {
 			return err
@@ -341,13 +348,13 @@ func newLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		if err := dispatchOccasion(ctx, stdout, ap.Workspace, ticketCreatedOccasion(issue)); err != nil {
+		if err := dispatchOccasion(ctx, inv.Stdout, ap.Workspace, ticketCreatedOccasion(issue)); err != nil {
 			return err
 		}
-		if err := printIssueSummary(stdout, issue); err != nil {
+		if err := printIssueSummary(inv.Stdout, issue); err != nil {
 			return err
 		}
-		return emitBreadcrumb(stdout, "new")
+		return emitBreadcrumb(inv.Stdout, "new")
 	}}
 }
 
@@ -387,7 +394,7 @@ func followupLeaf() appLeaf {
 	// work because the seam's arity check runs first and cannot reach a sentence
 	// written inside it. [LAW:one-source-of-truth]
 	usage := "usage: lit followup --on <id> --title <text> [--description <text> | --description-file <path|->] [--prompt <text> | --prompt-file <path|->] [--topic <slug>] [--type <task|feature|bug|chore|epic>] [--parent <epic-id>] [--priority <" + priorityChoices() + ">] [--assignee <user>] [--labels <csv>] [--top] [--by <name>]"
-	return appLeaf{fs: fs, positionals: 0, usage: usage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+	return appLeaf{fs: fs, positionals: 0, usage: usage, work: func(ctx context.Context, inv Invocation, ap *app.App, positional []string) error {
 		onID := strings.TrimSpace(*on)
 		titleValue := strings.TrimSpace(*title)
 		if onID == "" || titleValue == "" {
@@ -446,13 +453,13 @@ func followupLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		if err := dispatchOccasion(ctx, stdout, ap.Workspace, ticketCreatedOccasion(issue)); err != nil {
+		if err := dispatchOccasion(ctx, inv.Stdout, ap.Workspace, ticketCreatedOccasion(issue)); err != nil {
 			return err
 		}
-		if err := printIssueSummary(stdout, issue); err != nil {
+		if err := printIssueSummary(inv.Stdout, issue); err != nil {
 			return err
 		}
-		return emitBreadcrumb(stdout, "new")
+		return emitBreadcrumb(inv.Stdout, "new")
 	}}
 }
 
@@ -505,9 +512,9 @@ var (
 // rather than rescanning argv — pflag is the one reader of the flag grammar, so
 // the `--` terminator and every other flag's arity are its rules alone.
 // [LAW:one-source-of-truth]
-func runList(ctx context.Context, stdout io.Writer, surface listSurface, args []string) error {
+func runList(ctx context.Context, inv Invocation, surface listSurface, args []string) error {
 	l, atDir := listLeaf(surface)
-	declared, err := parseLeaf(ctx, l, args, stdout)
+	declared, err := parseLeaf(ctx, l, args, inv)
 	if err != nil {
 		return err
 	}
@@ -516,15 +523,7 @@ func runList(ctx context.Context, stdout io.Writer, surface listSurface, args []
 		return err
 	}
 	if l.fs.Changed(lsAtFlag) {
-		// pflag accepts any string as the value, so a flag-shaped one (`--at
-		// --help`, `--at --status`) and an empty one (`--at=`, `--at ""`) still
-		// reach here. Reject them as usage rather than handing "--help" to the
-		// store layer as a directory to open. A bare `--at` never arrives: pflag
-		// itself refuses the missing argument at the parse above.
-		if strings.TrimSpace(*atDir) == "" || strings.HasPrefix(*atDir, "-") {
-			return UsageError{Message: "usage: lit " + surface.name + " --at <store-dir>  (a storage directory from `lit stores`)"}
-		}
-		loc := workspace.LocationFromStorageDir(*atDir)
+		loc := workspace.LocationFromStorageDir(atDir.path())
 		st, err := app.OpenLocationForRead(ctx, loc)
 		if err != nil {
 			// [LAW:no-silent-failure] Name the path so a wrong or un-initialized
@@ -533,7 +532,7 @@ func runList(ctx context.Context, stdout io.Writer, surface listSurface, args []
 			// reaches through it) bound to the --at TARGET, so the trace files
 			// beside the traces of whatever holds that store — from any cwd,
 			// including no workspace at all.
-			return fmt.Errorf("open store at %q read-only: %w", *atDir, markEngineOpenContention(err, infoForLocation(loc)))
+			return fmt.Errorf("open store at %q read-only: %w", atDir.path(), markEngineOpenContention(err, infoForLocation(loc)))
 		}
 		defer func() { _ = st.Close() }()
 		reportOpenMigration(ctx, storage.OpenMigration(st))
@@ -543,10 +542,10 @@ func runList(ctx context.Context, stdout io.Writer, surface listSurface, args []
 		// store-intrinsic annotation — blockers, the lane gate, reserved blocking
 		// labels — still runs, so `--columns blocked` over a foreign store answers the
 		// registry's question minus the one input that store cannot supply.
-		return l.work(ctx, stdout, listScope{store: st, policy: noReadyPolicy}, positional)
+		return l.work(ctx, inv, listScope{store: st, policy: noReadyPolicy}, positional)
 	}
-	return runWithApp(ctx, stdout, app.AccessRead, func(ctx context.Context, ap *app.App) error {
-		return l.work(ctx, stdout, listScope{store: ap.Store, policy: workspaceReadyPolicy(ap)}, positional)
+	return runWithApp(ctx, inv, app.AccessRead, func(ctx context.Context, ap *app.App) error {
+		return l.work(ctx, inv, listScope{store: ap.Store, policy: workspaceReadyPolicy(ap)}, positional)
 	})
 }
 
@@ -581,11 +580,11 @@ func listPositionals(raw []string, surface listSurface) ([]string, error) {
 // [LAW:one-source-of-truth]
 const lsAtFlag = "at"
 
-func listLeaf(surface listSurface) (leaf[listScope], *string) {
+func listLeaf(surface listSurface) (leaf[listScope], *pathFlag) {
 	fs := newCobraFlagSet(surface.name)
 	// No backquotes in usage text: pflag reads the first backquoted span as the
 	// flag's value placeholder, so help would print `--at lit stores`.
-	at := fs.String(lsAtFlag, "", "List a discovered store by its storage directory (from lit stores), read-only, instead of the current workspace")
+	at := registerPath(fs, lsAtFlag, "List a discovered store by its storage directory (from lit stores), read-only, instead of the current workspace")
 	// StringArray, not String: the filter this feeds is a set both engines OR
 	// together, so a second --status has to widen the listing rather than
 	// silently keep the last value and drop the first.
@@ -625,7 +624,7 @@ func listLeaf(surface listSurface) (leaf[listScope], *string) {
 	if len(surface.positionals) > 0 {
 		usage = surface.usageLine()
 	}
-	return leaf[listScope]{fs: fs, positionals: len(surface.positionals), usage: usage, work: func(ctx context.Context, stdout io.Writer, scope listScope, positional []string) error {
+	return leaf[listScope]{fs: fs, positionals: len(surface.positionals), usage: usage, work: func(ctx context.Context, inv Invocation, scope listScope, positional []string) error {
 		st, policy := scope.store, scope.policy
 		// Parsed before the query runs and before anything prints: a rejection that
 		// had already emitted rows would be a partial answer, which is the silent
@@ -749,7 +748,7 @@ func listLeaf(surface listSurface) (leaf[listScope], *string) {
 		if err != nil {
 			return err
 		}
-		return render(stdout, issues, columns, cells)
+		return render(inv.Stdout, issues, columns, cells)
 	}}, at
 }
 
@@ -1173,7 +1172,7 @@ type annotatedRows struct {
 func orphanedLeaf() appLeaf {
 	fs := newCobraFlagSet("orphaned")
 	assignee := fs.StringArray("assignee", assigneeFlagUsage)
-	return appLeaf{fs: fs, positionals: 0, usage: "usage: lit orphaned [--assignee <user>]", work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+	return appLeaf{fs: fs, positionals: 0, usage: "usage: lit orphaned [--assignee <user>]", work: func(ctx context.Context, inv Invocation, ap *app.App, positional []string) error {
 		assignees, err := parseAssigneeSet(*assignee)
 		if err != nil {
 			return err
@@ -1209,7 +1208,7 @@ func orphanedLeaf() appLeaf {
 		sort.SliceStable(orphaned, func(i, j int) bool {
 			return orphaned[i].UpdatedAt.Before(orphaned[j].UpdatedAt)
 		})
-		return printOrphanedText(stdout, orphaned)
+		return printOrphanedText(inv.Stdout, orphaned)
 	}}
 }
 
@@ -1234,7 +1233,7 @@ func showLeaf() appLeaf {
 	fs := newCobraFlagSet("show")
 	fieldsExpr := fs.String("field", "", "Comma-separated field names (e.g. description) to print with no surrounding context; omit for the full detail view")
 	const usage = "usage: lit show <id> [--field <name>[,<name>...]]"
-	return appLeaf{fs: fs, positionals: 1, usage: usage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+	return appLeaf{fs: fs, positionals: 1, usage: usage, work: func(ctx context.Context, inv Invocation, ap *app.App, positional []string) error {
 		if len(positional) != 1 {
 			return UsageError{Message: usage}
 		}
@@ -1245,7 +1244,7 @@ func showLeaf() appLeaf {
 		// into `lit update`; prepending the banner there would corrupt it.
 		// [LAW:dataflow-not-control-flow]
 		if strings.TrimSpace(*fieldsExpr) == "" {
-			if err := printStalenessWarning(ctx, stdout, ap.Workspace, ap.Store, time.Now()); err != nil {
+			if err := printStalenessWarning(ctx, inv.Stdout, ap.Workspace, ap.Store, time.Now()); err != nil {
 				return err
 			}
 		}
@@ -1254,13 +1253,13 @@ func showLeaf() appLeaf {
 			return err
 		}
 		// The agent viewed the ticket's details either way, --field or full view.
-		if err := dispatchOccasion(ctx, stdout, ap.Workspace, showTicketOccasion(detail.Issue)); err != nil {
+		if err := dispatchOccasion(ctx, inv.Stdout, ap.Workspace, showTicketOccasion(detail.Issue)); err != nil {
 			return err
 		}
 		// --field is the compact, edit-oriented view: exactly the requested
 		// fields, none of the parent/epic/siblings context below. [LAW:dataflow-not-control-flow]
 		if fields := splitCSV(*fieldsExpr); len(fields) > 0 {
-			return printIssueFields(stdout, detail, fields)
+			return printIssueFields(inv.Stdout, detail, fields)
 		}
 		// Resolved before the body is printed, so the body and the plan block are
 		// all-or-nothing: a slice that cannot be built fails without a body, rather
@@ -1270,10 +1269,10 @@ func showLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		if err := printIssueDetail(stdout, detail); err != nil {
+		if err := printIssueDetail(inv.Stdout, detail); err != nil {
 			return err
 		}
-		return writeEpicContext(stdout, plan)
+		return writeEpicContext(inv.Stdout, plan)
 	}}
 }
 
@@ -1287,7 +1286,7 @@ func historyLeaf() appLeaf {
 	fs := newCobraFlagSet("history")
 	version := fs.String("version", "", "Print the text one version of a long text field held, as <field>@<n>; each text the field has held is numbered once, from 1, in the order its history first shows it, and the trail shows each change as vN → vM. A sync that merges in an older edit renumbers the versions after it")
 	const usage = "usage: lit history <id> [--version <field>@<n>]"
-	return appLeaf{fs: fs, positionals: 1, usage: usage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+	return appLeaf{fs: fs, positionals: 1, usage: usage, work: func(ctx context.Context, inv Invocation, ap *app.App, positional []string) error {
 		if len(positional) != 1 {
 			return UsageError{Message: usage}
 		}
@@ -1305,7 +1304,7 @@ func historyLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		return render(stdout, detail)
+		return render(inv.Stdout, detail)
 	}}
 }
 
@@ -1340,7 +1339,7 @@ func updateLeaf() appLeaf {
 	// stops naming them and points at --help. Its own sentence names them all, so
 	// it supplies it rather than taking the fallback. [LAW:one-source-of-truth]
 	usage := "usage: lit update <id> [--title <text>] [--description <text> | --description-file <path|->] [--prompt <text> | --prompt-file <path|->] [--plan <text> | --plan-file <path|->] [--type <task|feature|bug|chore|epic>] [--priority <" + priorityChoices() + ">] [--assignee <user>] [--labels <csv>] [--lane <key>] [--reason <text>]"
-	return appLeaf{fs: fs, positionals: 1, usage: usage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+	return appLeaf{fs: fs, positionals: 1, usage: usage, work: func(ctx context.Context, inv Invocation, ap *app.App, positional []string) error {
 		if len(positional) != 1 {
 			return UsageError{Message: usage}
 		}
@@ -1416,13 +1415,13 @@ func updateLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		if err := dispatchOccasion(ctx, stdout, ap.Workspace, ticketUpdatedOccasion(applied.Issue)); err != nil {
+		if err := dispatchOccasion(ctx, inv.Stdout, ap.Workspace, ticketUpdatedOccasion(applied.Issue)); err != nil {
 			return err
 		}
-		if err := printIssueSummary(stdout, applied.Issue); err != nil {
+		if err := printIssueSummary(inv.Stdout, applied.Issue); err != nil {
 			return err
 		}
-		return emitBreadcrumb(stdout, "update")
+		return emitBreadcrumb(inv.Stdout, "update")
 	}}
 }
 
@@ -1466,7 +1465,7 @@ func rankLeaf() appLeaf {
 	_ = fs.Bool("bottom", false, "Move to lowest rank")
 	above := fs.String("above", "", "Rank above this issue ID")
 	below := fs.String("below", "", "Rank below this issue ID")
-	return appLeaf{fs: fs, positionals: 1, usage: rankUsage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+	return appLeaf{fs: fs, positionals: 1, usage: rankUsage, work: func(ctx context.Context, inv Invocation, ap *app.App, positional []string) error {
 		if len(positional) != 1 {
 			return UsageError{Message: rankUsage}
 		}
@@ -1528,17 +1527,17 @@ func rankLeaf() appLeaf {
 			// success — the command exits 0 and shows the ticket either way.
 			// [LAW:no-silent-failure]
 			case !end.Moved:
-				if _, err := fmt.Fprintf(stdout, "%s is already at the %s of %s; nothing to rank\n", issueID, edgeWord, frameLabel(end.Frame)); err != nil {
+				if _, err := fmt.Fprintf(inv.Stdout, "%s is already at the %s of %s; nothing to rank\n", issueID, edgeWord, frameLabel(end.Frame)); err != nil {
 					return err
 				}
-				return emitBreadcrumb(stdout, "update")
+				return emitBreadcrumb(inv.Stdout, "update")
 			// --top/--bottom move within the issue's own frame, so a ticket inside
 			// an epic goes to the head of that epic's children and nowhere in the
 			// queue at large. Say which frame: the reader has just watched the
 			// relative verbs explain their substitution, and an unqualified "moved
 			// to the top" reads as the top of the backlog. [LAW:no-silent-failure]
 			case end.Frame != storage.TopLevel:
-				if _, err := fmt.Fprintf(stdout, "%s is inside %s; ranked it to the %s of %s's children, leaving the rest of the queue unchanged\n", issueID, end.Frame, edgeWord, end.Frame); err != nil {
+				if _, err := fmt.Fprintf(inv.Stdout, "%s is inside %s; ranked it to the %s of %s's children, leaving the rest of the queue unchanged\n", issueID, end.Frame, edgeWord, end.Frame); err != nil {
 					return err
 				}
 			}
@@ -1547,12 +1546,12 @@ func rankLeaf() appLeaf {
 		// A relative op against an issue inside an epic ranks the epic as its
 		// stand-in; report the substitution so it is never silent. [LAW:no-silent-failure]
 		if move.MovedID != issueID {
-			if _, err := fmt.Fprintf(stdout, "%s is inside %s; ranked the epic %s instead, leaving its internal order unchanged\n", issueID, move.MovedID, move.MovedID); err != nil {
+			if _, err := fmt.Fprintf(inv.Stdout, "%s is inside %s; ranked the epic %s instead, leaving its internal order unchanged\n", issueID, move.MovedID, move.MovedID); err != nil {
 				return err
 			}
 		}
 		if namedAnchor != "" && move.AnchorID != namedAnchor {
-			if _, err := fmt.Fprintf(stdout, "%s is inside %s; ranked relative to the epic %s instead\n", namedAnchor, move.AnchorID, move.AnchorID); err != nil {
+			if _, err := fmt.Fprintf(inv.Stdout, "%s is inside %s; ranked relative to the epic %s instead\n", namedAnchor, move.AnchorID, move.AnchorID); err != nil {
 				return err
 			}
 		}
@@ -1560,10 +1559,10 @@ func rankLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		if err := printIssueSummary(stdout, issue); err != nil {
+		if err := printIssueSummary(inv.Stdout, issue); err != nil {
 			return err
 		}
-		return emitBreadcrumb(stdout, "update")
+		return emitBreadcrumb(inv.Stdout, "update")
 	}}
 }
 
@@ -1579,7 +1578,7 @@ func rankSetLeaf() appLeaf {
 	// self-contradicting and no act a caller can perform. The sentence is one
 	// line below; the declaration and the body read it from here.
 	const usage = "usage: lit rank set <id1> <id2> [<id3> ...]"
-	return appLeaf{fs: fs, positionals: allPositionals, usage: usage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+	return appLeaf{fs: fs, positionals: allPositionals, usage: usage, work: func(ctx context.Context, inv Invocation, ap *app.App, positional []string) error {
 		if len(positional) < 2 {
 			return UsageError{Message: usage}
 		}
@@ -1587,10 +1586,10 @@ func rankSetLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		if err := printRankSet(stdout, result); err != nil {
+		if err := printRankSet(inv.Stdout, result); err != nil {
 			return err
 		}
-		return emitBreadcrumb(stdout, "update")
+		return emitBreadcrumb(inv.Stdout, "update")
 	}}
 }
 
@@ -1736,8 +1735,12 @@ type transitionSpec struct {
 	// row's history says about who once started it, since an expired claim is
 	// not a claim, and reading the lane again would be a second gather of
 	// every event in the store. [LAW:one-source-of-truth]
-	authorize func(fs *cobraFlagSet) func(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, prior ticketState, action model.Action) (afterApply, error)
+	authorize func(fs *cobraFlagSet) authorizeFunc
 }
+
+// authorizeFunc is a transition's gate ahead of Apply, run with the invocation
+// so a gate that asks can read the answer from its stdin.
+type authorizeFunc = func(ctx context.Context, inv Invocation, ap *app.App, issueID string, prior ticketState, action model.Action) (afterApply, error)
 
 // afterApply is what a transition owes once Apply has written the issue: the
 // line it prints and the facts it tells the statusline file. The authorize hook
@@ -1751,8 +1754,8 @@ type afterApply func(written ticketState, handover *claims.Handover) (notice str
 // noAuthorize is the authorize hook of every transition that gates nothing
 // beyond the ordinary state-machine check store.Apply already performs, and
 // owes nothing after it.
-func noAuthorize(*cobraFlagSet) func(context.Context, io.Writer, *app.App, string, ticketState, model.Action) (afterApply, error) {
-	return func(context.Context, io.Writer, *app.App, string, ticketState, model.Action) (afterApply, error) {
+func noAuthorize(*cobraFlagSet) authorizeFunc {
+	return func(context.Context, Invocation, *app.App, string, ticketState, model.Action) (afterApply, error) {
 		return func(ticketState, *claims.Handover) (string, statusline.Facts) { return "", nil }, nil
 	}
 }
@@ -1778,9 +1781,9 @@ var (
 				return model.Start{Assignee: actor}, nil
 			}
 		},
-		authorize: func(fs *cobraFlagSet) func(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, prior ticketState, action model.Action) (afterApply, error) {
+		authorize: func(fs *cobraFlagSet) authorizeFunc {
 			take := fs.Bool("take", false, "Confirm taking over a lane another checkout claims right now (required for non-interactive callers; without it an interactive terminal is prompted instead)")
-			return func(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, prior ticketState, action model.Action) (afterApply, error) {
+			return func(ctx context.Context, inv Invocation, ap *app.App, issueID string, prior ticketState, action model.Action) (afterApply, error) {
 				// registerFlags above builds every action this hook sees, so a
 				// different variant is a wiring error, not a caller's mistake.
 				// [LAW:no-silent-failure]
@@ -1788,14 +1791,14 @@ var (
 				if !ok {
 					return nil, fmt.Errorf("start: authorize hook received a %T action", action)
 				}
-				return authorizeStart(ctx, stdout, ap, issueID, prior.issue, start, *take)
+				return authorizeStart(ctx, inv, ap, issueID, prior.issue, start, *take)
 			}
 		},
 	}
 	doneSpec = transitionSpec{
 		name:          "done",
 		registerFlags: fixedAction(model.Done{}),
-		authorize: func(*cobraFlagSet) func(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, prior ticketState, action model.Action) (afterApply, error) {
+		authorize: func(*cobraFlagSet) authorizeFunc {
 			return authorizeDone
 		},
 	}
@@ -1828,7 +1831,7 @@ var (
 				return model.SetPhase{Phase: phase}, nil
 			}
 		},
-		authorize: func(*cobraFlagSet) func(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, prior ticketState, action model.Action) (afterApply, error) {
+		authorize: func(*cobraFlagSet) authorizeFunc {
 			return authorizePhase
 		},
 	}
@@ -1847,7 +1850,7 @@ var (
 // The phase left is the one transitionLeaf read before Apply on the same write
 // Store the move is planned on, whose engine holds Dolt's LOCK for the whole
 // command, so both reads answer from one history. [LAW:nothing-unseen]
-func authorizePhase(ctx context.Context, _ io.Writer, _ *app.App, _ string, prior ticketState, action model.Action) (afterApply, error) {
+func authorizePhase(ctx context.Context, _ Invocation, _ *app.App, _ string, prior ticketState, action model.Action) (afterApply, error) {
 	set, ok := action.(model.SetPhase)
 	if !ok {
 		return nil, fmt.Errorf("phase: authorize hook received a %T action", action)
@@ -1870,7 +1873,7 @@ func authorizePhase(ctx context.Context, _ io.Writer, _ *app.App, _ string, prio
 // adds the plan and the review it rested on; a done that found the ticket
 // already closed finished nothing, so its event says that instead.
 // [LAW:single-enforcer] [LAW:nothing-unseen]
-func authorizeDone(ctx context.Context, _ io.Writer, ap *app.App, issueID string, prior ticketState, action model.Action) (afterApply, error) {
+func authorizeDone(ctx context.Context, _ Invocation, ap *app.App, issueID string, prior ticketState, action model.Action) (afterApply, error) {
 	reviews, err := ap.Store.ListPlanReviews(ctx, issueID)
 	if err != nil {
 		return nil, err
@@ -1987,7 +1990,7 @@ type transitionDone struct {
 // statusline facts recorded. `lit <verb>` and `lit bulk <verb>` both run it,
 // so a transition one refuses the other refuses with the same error.
 // [LAW:single-enforcer]
-func applyTransition(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, action model.Action, actor, reason string, authorize func(context.Context, io.Writer, *app.App, string, ticketState, model.Action) (afterApply, error)) (transitionDone, error) {
+func applyTransition(ctx context.Context, inv Invocation, ap *app.App, issueID string, action model.Action, actor, reason string, authorize authorizeFunc) (transitionDone, error) {
 	// The pre-transition read is the state `authorize` gates on and the
 	// before-half of the caller's workflow occasion: the row, and the phase
 	// the ticket's history puts it in.
@@ -2006,7 +2009,7 @@ func applyTransition(ctx context.Context, stdout io.Writer, ap *app.App, issueID
 	// (claims_takeover.go). What it owes is decided on pre-Apply state and
 	// completed after Apply, so a failed Apply announces and records
 	// nothing.
-	owed, err := authorize(ctx, stdout, ap, issueID, prior, action)
+	owed, err := authorize(ctx, inv, ap, issueID, prior, action)
 	if err != nil {
 		return transitionDone{}, err
 	}
@@ -2040,7 +2043,7 @@ func transitionLeaf(spec transitionSpec) appLeaf {
 	usage := fmt.Sprintf("usage: lit %s <id>%s [--reason <text>]", spec.name, spec.synopsis)
 	buildAction := spec.registerFlags(fs, usage)
 	authorize := spec.authorize(fs)
-	return appLeaf{fs: fs, positionals: 1, usage: usage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+	return appLeaf{fs: fs, positionals: 1, usage: usage, work: func(ctx context.Context, inv Invocation, ap *app.App, positional []string) error {
 		if len(positional) != 1 {
 			// UsageError, not errors.New: a missing id is the caller mis-writing
 			// the command line, which exits 2 and says to re-read --help. A bare
@@ -2065,7 +2068,7 @@ func transitionLeaf(spec transitionSpec) appLeaf {
 			return err
 		}
 
-		did, err := applyTransition(ctx, stdout, ap, issueID, action, actor, *reason, authorize)
+		did, err := applyTransition(ctx, inv, ap, issueID, action, actor, *reason, authorize)
 		if err != nil {
 			return err
 		}
@@ -2076,7 +2079,7 @@ func transitionLeaf(spec transitionSpec) appLeaf {
 		// other transition says it as the empty string, so this write always
 		// runs and only its value varies. The authorize hook holds the rule.
 		// [LAW:dataflow-not-control-flow]
-		if _, err := io.WriteString(stdout, did.notice); err != nil {
+		if _, err := io.WriteString(inv.Stdout, did.notice); err != nil {
 			return err
 		}
 
@@ -2089,12 +2092,12 @@ func transitionLeaf(spec transitionSpec) appLeaf {
 		// injected — `done`'s embedded default is what prints the post-close
 		// capture reminder below.
 		if occasion, fires := transitionOccasion(action, prior, written); fires {
-			if err := dispatchOccasion(ctx, stdout, ap.Workspace, occasion); err != nil {
+			if err := dispatchOccasion(ctx, inv.Stdout, ap.Workspace, occasion); err != nil {
 				return err
 			}
 		}
 
-		if err := printIssueSummary(stdout, issue); err != nil {
+		if err := printIssueSummary(inv.Stdout, issue); err != nil {
 			return err
 		}
 		// At the capture moment a closing agent's freshest need is "which adjacent
@@ -2109,12 +2112,12 @@ func transitionLeaf(spec transitionSpec) appLeaf {
 			if err != nil {
 				return err
 			}
-			if err := printCloseAdjacency(stdout, detail); err != nil {
+			if err := printCloseAdjacency(inv.Stdout, detail); err != nil {
 				return err
 			}
 		}
 		if topic, ok := transitionBreadcrumbTopics[action.Name()]; ok {
-			return emitBreadcrumb(stdout, topic)
+			return emitBreadcrumb(inv.Stdout, topic)
 		}
 		return nil
 	}}
@@ -2139,7 +2142,7 @@ func commentAddLeaf() appLeaf {
 	body := registerLongText(fs, "body", "Comment body")
 	resolveActor := registerActor(fs)
 	const usage = "usage: lit comment add <id> (--body <text> | --body-file <path|->)"
-	return appLeaf{fs: fs, positionals: 1, usage: usage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+	return appLeaf{fs: fs, positionals: 1, usage: usage, work: func(ctx context.Context, inv Invocation, ap *app.App, positional []string) error {
 		if len(positional) != 1 {
 			return UsageError{Message: usage}
 		}
@@ -2149,17 +2152,17 @@ func commentAddLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		if err := dispatchOccasion(ctx, stdout, ap.Workspace, commentAddedOccasion(issue)); err != nil {
+		if err := dispatchOccasion(ctx, inv.Stdout, ap.Workspace, commentAddedOccasion(issue)); err != nil {
 			return err
 		}
-		return printComment(stdout, comment)
+		return printComment(inv.Stdout, comment)
 	}}
 }
 
 func commentRmLeaf() appLeaf {
 	fs := newCobraFlagSet("comment rm")
 	const usage = "usage: lit comment rm <comment-id>"
-	return appLeaf{fs: fs, positionals: 1, usage: usage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+	return appLeaf{fs: fs, positionals: 1, usage: usage, work: func(ctx context.Context, inv Invocation, ap *app.App, positional []string) error {
 		if len(positional) != 1 {
 			return UsageError{Message: usage}
 		}
@@ -2167,7 +2170,7 @@ func commentRmLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		return printComment(stdout, comment)
+		return printComment(inv.Stdout, comment)
 	}}
 }
 
@@ -2178,13 +2181,13 @@ func printComment(w io.Writer, c model.Comment) error {
 
 func exportLeaf() appLeaf {
 	fs := newCobraFlagSet("export")
-	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, inv Invocation, ap *app.App, positional []string) error {
 		export, err := ap.Store.Export(ctx)
 		if err != nil {
 			return err
 		}
 		// Export is JSON-only — there is no text representation of a full database export.
-		return writeJSON(stdout, export)
+		return writeJSON(inv.Stdout, export)
 	}}
 }
 
@@ -2200,21 +2203,21 @@ const importUsage = "usage: lit import --path <tree-spec.json | bulk-file.yaml> 
 // the file's own extension — not a second flag or mode.
 func importTreeLeaf() appLeaf {
 	fs := newCobraFlagSet("import").Detail(helpText("import"))
-	path := fs.String("path", "", "Path to a JSON tree-spec file or a YAML bulk create/update file")
+	path := registerPath(fs, "path", "Path to a JSON tree-spec file or a YAML bulk create/update file")
 	resolveActor := registerActor(fs)
-	return appLeaf{fs: fs, positionals: 0, usage: importUsage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
-		if strings.TrimSpace(*path) == "" {
+	return appLeaf{fs: fs, positionals: 0, usage: importUsage, work: func(ctx context.Context, inv Invocation, ap *app.App, positional []string) error {
+		if path.path() == "" {
 			return UsageError{Message: importUsage}
 		}
-		data, err := os.ReadFile(*path)
+		data, err := os.ReadFile(path.path())
 		if err != nil {
 			return fmt.Errorf("read import spec: %w", err)
 		}
-		switch strings.ToLower(filepath.Ext(*path)) {
+		switch strings.ToLower(filepath.Ext(path.path())) {
 		case ".yaml", ".yml":
-			return runImportBulk(ctx, stdout, ap, data, resolveActor())
+			return runImportBulk(ctx, inv.Stdout, ap, data, resolveActor())
 		default:
-			return runImportTreeJSON(ctx, stdout, ap, data, resolveActor())
+			return runImportTreeJSON(ctx, inv.Stdout, ap, data, resolveActor())
 		}
 	}}
 }
@@ -2358,7 +2361,7 @@ func printIDs(stdout io.Writer, heading string, ids []string) error {
 
 func workspaceLeaf() wsLeaf {
 	fs := newCobraFlagSet("workspace")
-	return wsLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
+	return wsLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, inv Invocation, ws workspace.Info, positional []string) error {
 		// [LAW:one-source-of-truth] The ordered slice is the single source of the
 		// output's field order; each line is `key: value`, parseable by an agent
 		// that needs one field (e.g. `lit workspace | sed -n 's/^traces_dir: //p'`).
@@ -2372,7 +2375,7 @@ func workspaceLeaf() wsLeaf {
 			{"traces_dir", automationTraceDir(ws)},
 		}
 		for _, f := range fields {
-			if _, err := fmt.Fprintf(stdout, "%s: %s\n", f.key, f.value); err != nil {
+			if _, err := fmt.Fprintf(inv.Stdout, "%s: %s\n", f.key, f.value); err != nil {
 				return err
 			}
 		}
@@ -2425,7 +2428,7 @@ func quickstartLeaf() wsLeaf {
 	eject := fs.StringOptional("eject", "all", "", "Eject embedded default(s) to the global override path (comma-separated short names; empty = all)")
 	force := fs.Bool("force", false, "With --eject, overwrite existing override files")
 	// The optional topic, declared. [LAW:single-enforcer]
-	return wsLeaf{fs: fs, positionals: 1, usage: quickstartUsage, work: func(_ context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
+	return wsLeaf{fs: fs, positionals: 1, usage: quickstartUsage, work: func(_ context.Context, inv Invocation, ws workspace.Info, positional []string) error {
 		ejectChanged := fs.Changed("eject")
 		ejectValue := *eject
 		if ejectChanged && ejectValue == "" {
@@ -2466,7 +2469,7 @@ func quickstartLeaf() wsLeaf {
 			if err != nil {
 				return err
 			}
-			_, err = fmt.Fprintln(stdout, guidance)
+			_, err = fmt.Fprintln(inv.Stdout, guidance)
 			return err
 		}
 
@@ -2475,7 +2478,7 @@ func quickstartLeaf() wsLeaf {
 			if err != nil {
 				return err
 			}
-			return writeEjectReport(stdout, results, *force)
+			return writeEjectReport(inv.Stdout, results, *force)
 		}
 
 		// [LAW:one-source-of-truth] Quickstart guidance is loaded from the managed quickstart template instead of being re-encoded in CLI data structures.
@@ -2486,11 +2489,8 @@ func quickstartLeaf() wsLeaf {
 
 		lines := []string{}
 		if *refresh {
-			// [LAW:single-enforcer] Quickstart refresh resolves the workspace once and delegates all file rewrites to the managed asset writers.
-			ws, err := workspace.Resolve(".")
-			if err != nil {
-				return err
-			}
+			// [LAW:single-enforcer] Quickstart refresh rewrites through the managed
+			// asset writers, in the workspace the leaf already resolved.
 			refreshReport, err := refreshQuickstartManagedAssets(ws)
 			if err != nil {
 				return err
@@ -2498,7 +2498,7 @@ func quickstartLeaf() wsLeaf {
 			lines = append(lines, formatQuickstartRefreshSummary(refreshReport), "")
 		}
 		lines = append(lines, guidance)
-		_, err = fmt.Fprintln(stdout, strings.Join(lines, "\n"))
+		_, err = fmt.Fprintln(inv.Stdout, strings.Join(lines, "\n"))
 		return err
 	}}
 }

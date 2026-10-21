@@ -43,7 +43,7 @@ var prefixFamily = commandFamily[wsSubcommand]{
 func prefixSetLeaf() wsLeaf {
 	fs := newCobraFlagSet("prefix set")
 	apply := fs.Bool("apply", false, "Apply the rename (without this flag, prints a preview)")
-	return wsLeaf{fs: fs, positionals: 1, usage: prefixSetUsage, work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
+	return wsLeaf{fs: fs, positionals: 1, usage: prefixSetUsage, work: func(ctx context.Context, inv Invocation, ws workspace.Info, positional []string) error {
 		if len(positional) != 1 {
 			return UsageError{Message: prefixSetUsage}
 		}
@@ -93,7 +93,7 @@ func prefixSetLeaf() wsLeaf {
 		case !*apply:
 			result.Note = "preview only — pass --apply to write config.json. Existing issue IDs keep their old prefix; only new issues use the new one."
 		}
-		return prefixSetTextOutput(stdout, result)
+		return prefixSetTextOutput(inv.Stdout, result)
 	}}
 }
 

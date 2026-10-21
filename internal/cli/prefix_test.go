@@ -44,13 +44,13 @@ func initRepoForPrefixTest(t *testing.T) (repo string, runLit func(args ...strin
 	t.Cleanup(func() { _ = os.Chdir(prevWD) })
 
 	var initBuf bytes.Buffer
-	if err := Run(context.Background(), &initBuf, &initBuf, []string{"init", "--skip-hooks", "--skip-agents"}); err != nil {
+	if err := Run(context.Background(), cwdInvocation(&initBuf, &initBuf, []string{"init", "--skip-hooks", "--skip-agents"})); err != nil {
 		t.Fatalf("Run(init) error = %v\n%s", err, initBuf.String())
 	}
 
 	runLit = func(args ...string) (string, error) {
 		var buf bytes.Buffer
-		err := Run(context.Background(), &buf, &buf, args)
+		err := Run(context.Background(), cwdInvocation(&buf, &buf, args))
 		return buf.String(), err
 	}
 	return repo, runLit
@@ -212,7 +212,7 @@ func TestPrefixSetApplyReportsThePrefixItReplaced(t *testing.T) {
 		t.Fatalf("Parse(--apply) error = %v", err)
 	}
 	var out bytes.Buffer
-	if err := leaf.work(underInvocation(context.Background()), &out, stale, []string{"newproj"}); err != nil {
+	if err := leaf.work(underInvocation(context.Background()), cwdInvocation(&out, &out, nil), stale, []string{"newproj"}); err != nil {
 		t.Fatalf("prefix set --apply error = %v\n%s", err, out.String())
 	}
 	if want := "issue_prefix: between -> newproj (applied)"; !strings.Contains(out.String(), want) {

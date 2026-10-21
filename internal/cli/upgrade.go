@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 
 	"golang.org/x/mod/semver"
 
@@ -126,12 +125,12 @@ type upgradeLeafShape = leaf[upgradeScope]
 func withWorkspaceSchema(declare func() upgradeLeafShape) wsLeafFn {
 	return func() wsLeaf {
 		l := declare()
-		return adaptLeaf[upgradeScope, workspace.Info](l, func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
+		return adaptLeaf[upgradeScope, workspace.Info](l, func(ctx context.Context, inv Invocation, ws workspace.Info, positional []string) error {
 			current, err := version.Get()
 			if err != nil {
 				return fmt.Errorf("upgrade: read this binary's version info: %w", err)
 			}
-			return l.work(ctx, stdout, upgradeScope{schema: workspaceSchemaReader{ws: ws}, current: current}, positional)
+			return l.work(ctx, inv, upgradeScope{schema: workspaceSchemaReader{ws: ws}, current: current}, positional)
 		})
 	}
 }
@@ -242,7 +241,7 @@ func upgradeLeafWith(
 	fs := newCobraFlagSet("upgrade")
 	to := fs.String("to", "", "Target binary version (release tag vX.Y.Z, e.g. v0.9.0); omit to upgrade to the latest release")
 	const usageLine = "usage: lit upgrade [--to <version>]"
-	return upgradeLeafShape{fs: fs, usage: usageLine, positionals: 0, work: func(ctx context.Context, stdout io.Writer, scope upgradeScope, _ []string) error {
+	return upgradeLeafShape{fs: fs, usage: usageLine, positionals: 0, work: func(ctx context.Context, inv Invocation, scope upgradeScope, _ []string) error {
 		// [LAW:parse-dont-validate] --to's default value is the latest published
 		// release. The flag set carries omitted-vs-given as typed data (Changed),
 		// so only a truly omitted flag selects the feed as the tag's source — an
@@ -313,7 +312,7 @@ func upgradeLeafWith(
 		// [LAW:nothing-unseen] keeping the binary and installing one both exit 0.
 		telemetry.Set(ctx, "upgrade.already_current", alreadyCurrent)
 		if alreadyCurrent {
-			_, err = fmt.Fprintf(stdout,
+			_, err = fmt.Fprintf(inv.Stdout,
 				"already current: keeping v%s (latest published release is %s); nothing to install.\n",
 				scope.current.Version, tag,
 			)
@@ -339,7 +338,7 @@ func upgradeLeafWith(
 		// [LAW:dataflow-not-control-flow] One print, every invocation. The forward
 		// migration (if the workspace trails the new registry) is the installed
 		// binary's job on its next Open — this command does not and cannot run it.
-		_, err = fmt.Fprintf(stdout,
+		_, err = fmt.Fprintf(inv.Stdout,
 			"upgraded %s → %s (schema support through v%d) installed at %s\nthe next lit run migrates this workspace forward if it trails; re-run `lit version` to confirm.\n",
 			fromLabel(scope.current), tag, target.Manifest.Schema.Max, binPath,
 		)

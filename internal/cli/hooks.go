@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,14 +43,14 @@ func hooksInstallLeaf() wsLeaf {
 	// specification names for the leaf, and a second spelling would pass the gate
 	// only while the family's literal stays identical — a coincidence, not a
 	// guarantee. [LAW:one-source-of-truth]
-	return wsLeaf{fs: fs, positionals: 0, usage: hooksUsage, work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
+	return wsLeaf{fs: fs, positionals: 0, usage: hooksUsage, work: func(ctx context.Context, inv Invocation, ws workspace.Info, positional []string) error {
 
 		result, err := installHooks(ws)
 		if err != nil {
 			return err
 		}
 
-		_, err = fmt.Fprintf(stdout, "installed %s\n", result.HookPath)
+		_, err = fmt.Fprintf(inv.Stdout, "installed %s\n", result.HookPath)
 		return err
 	}}
 }

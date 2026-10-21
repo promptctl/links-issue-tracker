@@ -28,7 +28,7 @@ func chdirTempRepo(t *testing.T) string {
 func runLit(t *testing.T, args ...string) (string, error) {
 	t.Helper()
 	var stdout bytes.Buffer
-	err := Run(context.Background(), &stdout, &stdout, args)
+	err := Run(context.Background(), cwdInvocation(&stdout, &stdout, args))
 	return stdout.String(), err
 }
 

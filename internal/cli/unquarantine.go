@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"fmt"
-	"io"
 
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
@@ -16,14 +15,14 @@ import (
 // refuses. [LAW:locality-or-seam]
 func unquarantineLeaf() wsLeaf {
 	fs := newCobraFlagSet("unquarantine")
-	return wsLeaf{fs: fs, positionals: 0, usage: "usage: lit unquarantine", work: func(ctx context.Context, stdout io.Writer, ws workspace.Info, _ []string) error {
+	return wsLeaf{fs: fs, positionals: 0, usage: "usage: lit unquarantine", work: func(ctx context.Context, inv Invocation, ws workspace.Info, _ []string) error {
 		done, err := store.Unquarantine(ctx, ws.DatabasePath, ws.WorkspaceID)
 		if err != nil {
 			return err
 		}
 		facts, counts := done.EventRecord()
 		telemetry.Record(ctx, facts, counts)
-		_, err = fmt.Fprintln(stdout, done)
+		_, err = fmt.Fprintln(inv.Stdout, done)
 		return err
 	}}
 }

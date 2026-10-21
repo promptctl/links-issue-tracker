@@ -49,7 +49,7 @@ func nextLeaf() appLeaf {
 	// silently different from this rule. One producer, one consumer, named at
 	// the call. [LAW:one-source-of-truth]
 	actor := registerActor(fs)
-	return appLeaf{fs: fs, positionals: 0, usage: nextUsage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+	return appLeaf{fs: fs, positionals: 0, usage: nextUsage, work: func(ctx context.Context, inv Invocation, ap *app.App, positional []string) error {
 		filter, err := filterFlags.parse()
 		if err != nil {
 			return err
@@ -60,7 +60,7 @@ func nextLeaf() appLeaf {
 		}
 		// [LAW:single-enforcer] Same staleness warning, same position, as every
 		// other ordinary read command.
-		if err := printStalenessWarning(ctx, stdout, ap.Workspace, ap.Store, time.Now()); err != nil {
+		if err := printStalenessWarning(ctx, inv.Stdout, ap.Workspace, ap.Store, time.Now()); err != nil {
 			return err
 		}
 		// The whole queue, not the filtered one: routing applies the filter to
@@ -69,7 +69,7 @@ func nextLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		cc, err := gatherClaimContext(ctx, stdout, ap)
+		cc, err := gatherClaimContext(ctx, inv.Stdout, ap)
 		if err != nil {
 			return err
 		}
@@ -77,11 +77,11 @@ func nextLeaf() appLeaf {
 		primaryClone := ap.Workspace.PrimaryClone()
 		recordNextEvent(ctx, outcome, len(gathered.keepRows(asked).rows), primaryClone)
 		ap.Statusline.Record(nextStatuslineFacts(outcome, !filter.narrows() && !*all, cc.evidence)...)
-		occasion, err := renderNextOutcome(stdout, outcome, gathered.details, cc, actor(), primaryClone)
+		occasion, err := renderNextOutcome(inv.Stdout, outcome, gathered.details, cc, actor(), primaryClone)
 		if err != nil {
 			return err
 		}
-		return dispatchOccasion(ctx, stdout, ap.Workspace, occasion)
+		return dispatchOccasion(ctx, inv.Stdout, ap.Workspace, occasion)
 	}}
 }
 

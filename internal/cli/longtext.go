@@ -61,9 +61,9 @@ func registerLongText(fs *cobraFlagSet, name, usage string) *longTextFlag {
 // readLongTexts reads every long-text field the leaf declares, once its flags
 // have parsed. parseLeaf runs it for every leaf, so no command reads its text
 // after the open. [LAW:single-enforcer] [LAW:no-ambient-temporal-coupling]
-func readLongTexts(ctx context.Context, fs *cobraFlagSet) error {
+func readLongTexts(ctx context.Context, fs *cobraFlagSet, inv Invocation) error {
 	for _, f := range fs.longTexts {
-		text, err := f.read(ctx)
+		text, err := f.read(ctx, inv)
 		if err != nil {
 			return err
 		}
@@ -76,7 +76,7 @@ func readLongTexts(ctx context.Context, fs *cobraFlagSet) error {
 // none, so a command that writes only the fields it was given can tell an
 // absent field from an emptied one. Supplying both flags is a usage error:
 // neither one silently outranks the other. [LAW:no-silent-failure]
-func (f *longTextFlag) read(ctx context.Context) (*string, error) {
+func (f *longTextFlag) read(ctx context.Context, inv Invocation) (*string, error) {
 	source, err := f.source()
 	if err != nil {
 		return nil, err
@@ -90,13 +90,19 @@ func (f *longTextFlag) read(ctx context.Context) (*string, error) {
 		text := *f.inline
 		return &text, nil
 	case textStdin:
-		if data, err = io.ReadAll(os.Stdin); err != nil {
+		if data, err = io.ReadAll(inv.Stdin); err != nil {
 			return nil, fmt.Errorf("read --%s-file from stdin: %w", f.name, err)
 		}
 	default:
+		// The file is not a pathFlag because "-" is not a path: it reads stdin
+		// even where the directory cannot be read.
+		path, resolveErr := resolveFlagPath(inv.Dir, f.name+"-file", *f.file)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
 		// A path that cannot be read is an argument to correct, not a failure
 		// to retry, so it is refused as usage.
-		if data, err = os.ReadFile(*f.file); err != nil {
+		if data, err = os.ReadFile(path); err != nil {
 			return nil, UsageError{Message: fmt.Sprintf("read --%s-file: %v", f.name, err)}
 		}
 	}

@@ -31,7 +31,7 @@ func TestCommentRemove(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
 		errCh := make(chan error, 1)
-		go func() { errCh <- Run(ctx, &stdout, &stdout, args) }()
+		go func() { errCh <- Run(ctx, cwdInvocation(&stdout, &stdout, args)) }()
 		select {
 		case runErr := <-errCh:
 			return stdout, runErr

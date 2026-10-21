@@ -139,7 +139,7 @@ type (
 func withSyncStore(declare syncLeafFn) wsLeafFn {
 	return func() wsLeaf {
 		l := declare()
-		return adaptLeaf[syncScope, workspace.Info](l, func(ctx context.Context, stdout io.Writer, ws workspace.Info, positional []string) error {
+		return adaptLeaf[syncScope, workspace.Info](l, func(ctx context.Context, inv Invocation, ws workspace.Info, positional []string) error {
 			session, closeStore, err := openSyncSession(ctx, ws)
 			if err != nil {
 				// The open boundary stamps holder contention so Run's trace can
@@ -148,7 +148,7 @@ func withSyncStore(declare syncLeafFn) wsLeafFn {
 			}
 			defer closeStore()
 			reportOpenMigration(ctx, storage.OpenMigration(session.engine))
-			return l.work(ctx, stdout, syncScope{ws: ws, session: session}, positional)
+			return l.work(ctx, inv, syncScope{ws: ws, session: session}, positional)
 		})
 	}
 }
@@ -187,14 +187,14 @@ var syncRemoteFamily = commandFamily[wsSubcommand]{
 
 func syncRemoteLsLeaf() syncLeaf {
 	fs := newCobraFlagSet("sync remote ls")
-	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, scope syncScope, positional []string) error {
+	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, inv Invocation, scope syncScope, positional []string) error {
 		ws, session := scope.ws, scope.session
 		syncState, err := readSyncRemoteState(ctx, session, ws)
 		if err != nil {
 			return err
 		}
 		_, err = fmt.Fprintf(
-			stdout,
+			inv.Stdout,
 			"git=%d dolt=%d added=%d updated=%d removed=%d refused=%d\n",
 			len(syncState.gitRemotes),
 			len(syncState.doltRemotes),
@@ -209,7 +209,7 @@ func syncRemoteLsLeaf() syncLeaf {
 		// A refused remote is named, since nothing syncs with it until it is
 		// renamed. [LAW:no-silent-failure]
 		for _, name := range syncState.plan.refused {
-			if _, err := fmt.Fprintf(stdout, "refused %s: Dolt cannot hold this name; rename it (git remote rename) to sync with it\n", name); err != nil {
+			if _, err := fmt.Fprintf(inv.Stdout, "refused %s: Dolt cannot hold this name; rename it (git remote rename) to sync with it\n", name); err != nil {
 				return err
 			}
 		}
@@ -221,7 +221,7 @@ func syncFetchLeaf() syncLeaf {
 	fs := newCobraFlagSet("sync fetch")
 	remote := fs.String("remote", "", "Remote name (defaults to upstream remote, then single configured remote)")
 	verbose := fs.Bool("verbose", false, "Include detailed remote output")
-	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, scope syncScope, positional []string) error {
+	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, inv Invocation, scope syncScope, positional []string) error {
 		ws, session := scope.ws, scope.session
 		syncState, err := syncDoltRemotesFromGit(ctx, session, ws)
 		if err != nil {
@@ -244,7 +244,7 @@ func syncFetchLeaf() syncLeaf {
 			// fetch that silently fetched nothing would leave them stale with no
 			// sign why. [LAW:no-silent-failure]
 			recordSyncCommandTrace(ws, "lit sync fetch", string(syncTargetNoRemote), nil, nil)
-			_, err := fmt.Fprintln(stdout, "skipped sync fetch: no eligible git remote; name one with --remote")
+			_, err := fmt.Fprintln(inv.Stdout, "skipped sync fetch: no eligible git remote; name one with --remote")
 			return err
 		}
 		err = fetchAndFollow(ctx, session, ws, syncState.gitRemotes, remoteName)
@@ -253,10 +253,10 @@ func syncFetchLeaf() syncLeaf {
 			return err
 		}
 		if !*verbose {
-			_, err := fmt.Fprintln(stdout, "fetched")
+			_, err := fmt.Fprintln(inv.Stdout, "fetched")
 			return err
 		}
-		_, err = fmt.Fprintf(stdout, "fetched %s\n", remoteName)
+		_, err = fmt.Fprintf(inv.Stdout, "fetched %s\n", remoteName)
 		return err
 	}}
 }
@@ -294,7 +294,7 @@ func syncPullLeaf() syncLeaf {
 	fs := newCobraFlagSet("sync pull")
 	remote := fs.String("remote", "", "Remote name (defaults to upstream remote, then single configured remote)")
 	verbose := fs.Bool("verbose", false, "Include detailed remote output")
-	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, scope syncScope, positional []string) error {
+	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, inv Invocation, scope syncScope, positional []string) error {
 		ws, session := scope.ws, scope.session
 		progressf("sync pull", "starting: reconciling remotes and resolving the sync source")
 		target, err := resolveSyncTarget(ctx, session, ws, *remote)
@@ -314,7 +314,7 @@ func syncPullLeaf() syncLeaf {
 			// state's key; there was no settle, so no base. [LAW:nothing-unseen]
 			telemetry.Set(ctx, "pull.state", string(target.skip))
 			// [LAW:dataflow-not-control-flow] exception: explicit no-remote policy requires suppressing sync side effects when remote resolution yields empty input.
-			return printSyncPullOutcome(stdout, syncPullOutcome{skip: target.skip, remote: target.remote}, *verbose)
+			return printSyncPullOutcome(inv.Stdout, syncPullOutcome{skip: target.skip, remote: target.remote}, *verbose)
 		}
 		remoteName, resolvedBranch := target.remote, target.branch
 		progressf("sync pull", "pulling lit data from %s/%s (transfer and apply may take a moment)", remoteName, resolvedBranch)
@@ -362,7 +362,7 @@ func syncPullLeaf() syncLeaf {
 		// A pull that completed without a held state converged (or found nothing to
 		// converge): the divergence episode, if one was notified, is over.
 		endDivergenceEpisode(ws)
-		return printSyncPullOutcome(stdout, syncPullOutcome{remote: remoteName, branch: resolvedBranch, state: result.State, landing: result.Landing}, *verbose)
+		return printSyncPullOutcome(inv.Stdout, syncPullOutcome{remote: remoteName, branch: resolvedBranch, state: result.State, landing: result.Landing}, *verbose)
 	}}
 }
 
@@ -415,7 +415,7 @@ func syncFailureFromPull(remote storage.RemoteName, branch string, result storag
 func syncCompactLeaf() syncLeaf {
 	fs := newCobraFlagSet("sync compact")
 	full := fs.Bool("full", false, "Rewrite the old generation too — reclaims what earlier passes archived, at a cost proportional to the whole store")
-	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, scope syncScope, positional []string) error {
+	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, inv Invocation, scope syncScope, positional []string) error {
 		ws, session := scope.ws, scope.session
 		// [LAW:dataflow-not-control-flow] The flag selects a depth value; there is
 		// one compaction call, not one per depth.
@@ -460,7 +460,7 @@ func syncCompactLeaf() syncLeaf {
 		// The write's own failure is the command's failure, as in every sibling
 		// handler: a store that was compacted but could not say so is not a
 		// successful run. [LAW:no-silent-failure]
-		_, err = fmt.Fprintf(stdout, "compacted (%s): %s\n", outcome.Depth, outcome.Detail)
+		_, err = fmt.Fprintf(inv.Stdout, "compacted (%s): %s\n", outcome.Depth, outcome.Detail)
 		return err
 	}}
 }
@@ -471,7 +471,7 @@ func syncPushLeaf() syncLeaf {
 	setUpstream := fs.Bool("set-upstream", false, "Pass -u to dolt push")
 	force := fs.Bool("force", false, "Pass --force to dolt push")
 	verbose := fs.Bool("verbose", false, "Include detailed remote output")
-	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, scope syncScope, positional []string) error {
+	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, inv Invocation, scope syncScope, positional []string) error {
 		ws, session := scope.ws, scope.session
 		// This push answers for every mutation committed before this engine
 		// session opened: clear the mirror-pending marker so their commands (and
@@ -512,7 +512,7 @@ func syncPushLeaf() syncLeaf {
 			// commits. [LAW:single-enforcer]
 			return asSyncFailure(outcome.pushErr)
 		}
-		return printSyncPushOutcome(stdout, outcome, *verbose)
+		return printSyncPushOutcome(inv.Stdout, outcome, *verbose)
 	}}
 }
 
@@ -780,7 +780,7 @@ func advertisementProofTrace(unproven string) string {
 
 func syncStatusLeaf() syncLeaf {
 	fs := newCobraFlagSet("sync status")
-	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, scope syncScope, positional []string) error {
+	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, inv Invocation, scope syncScope, positional []string) error {
 		ws, session := scope.ws, scope.session
 		syncState, err := readSyncRemoteState(ctx, session, ws)
 		if err != nil {
@@ -795,7 +795,7 @@ func syncStatusLeaf() syncLeaf {
 			head = strings.TrimSpace(report.HeadCommit + " " + report.HeadMessage)
 		}
 		_, err = fmt.Fprintf(
-			stdout,
+			inv.Stdout,
 			"version=%v branch=%v head=%v git=%d dolt=%d added=%d updated=%d removed=%d refused=%d\n",
 			report.EngineVersion,
 			report.Branch,

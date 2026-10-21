@@ -185,7 +185,7 @@ func runCLIInDirErr(t *testing.T, dir string, args ...string) (string, error) {
 	defer func() { _ = os.Chdir(prevWD) }()
 
 	var out bytes.Buffer
-	runErr := Run(context.Background(), &out, &out, args)
+	runErr := Run(context.Background(), cwdInvocation(&out, &out, args))
 	return out.String(), runErr
 }
 

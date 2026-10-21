@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/statusline"
@@ -22,7 +21,7 @@ func purgeLeaf() appLeaf {
 	yes := fs.Bool("yes", false, "Confirm the purge (required for non-interactive callers; without it an interactive terminal is prompted instead)")
 	resolveActor := registerActor(fs)
 	const usage = "usage: lit purge <id> [--yes]"
-	return appLeaf{fs: fs, positionals: 1, usage: usage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+	return appLeaf{fs: fs, positionals: 1, usage: usage, work: func(ctx context.Context, inv Invocation, ap *app.App, positional []string) error {
 		if len(positional) != 1 {
 			return UsageError{Message: usage}
 		}
@@ -32,7 +31,7 @@ func purgeLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		if err := confirmPurge(stdout, issue.ID, *yes); err != nil {
+		if err := confirmPurge(inv.Stdin, inv.Stdout, issue.ID, *yes); err != nil {
 			return err
 		}
 		result, err := ap.Store.Purge(ctx, storage.PurgeInput{IssueID: issue.ID, Actor: resolveActor()})
@@ -43,7 +42,7 @@ func purgeLeaf() appLeaf {
 		// what its text says.
 		ap.Statusline.Record(statusline.Invalidated{ID: result.Purge.IssueID})
 		telemetry.Record(ctx, nil, result.EventRecord())
-		_, err = fmt.Fprintf(stdout, "purged %s (comments=%d labels=%d edges=%d events=%d plan_reviews=%d)\n",
+		_, err = fmt.Fprintf(inv.Stdout, "purged %s (comments=%d labels=%d edges=%d events=%d plan_reviews=%d)\n",
 			result.Purge.IssueID, result.Comments, result.Labels, result.Relations, result.Events, result.PlanReviews)
 		return err
 	}}
@@ -53,14 +52,14 @@ func purgeLeaf() appLeaf {
 // asked, and anything else is refused. Neither the prompt nor any other line
 // the command prints shows the ticket's text: a ticket is often purged because
 // of what it says, and terminal output lands in scrollback, captures and logs.
-func confirmPurge(stdout io.Writer, id string, yes bool) error {
+func confirmPurge(stdin io.Reader, stdout io.Writer, id string, yes bool) error {
 	if yes {
 		return nil
 	}
 	if !isTerminal(stdout) {
 		return purgeUnconfirmedError{Message: fmt.Sprintf("purging %s cannot be undone; pass --yes to confirm it", id)}
 	}
-	confirmed, err := askYesNo(os.Stdin, stdout, fmt.Sprintf("%s: a purge removes it, its comments, labels, history and edges for good, here and in every store it syncs to\npurge it?", id))
+	confirmed, err := askYesNo(stdin, stdout, fmt.Sprintf("%s: a purge removes it, its comments, labels, history and edges for good, here and in every store it syncs to\npurge it?", id))
 	if err != nil {
 		return err
 	}

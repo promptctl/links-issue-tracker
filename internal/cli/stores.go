@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"text/tabwriter"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
@@ -23,7 +22,8 @@ import (
 // they are formatted: a write failure (a closed downstream pipe) stops with a
 // non-zero exit after the lines already emitted, the standard streaming-CLI
 // contract, rather than buffering the whole scan in memory to flush at once.
-func runStores(ctx context.Context, stdout io.Writer, args []string) error {
+func runStores(ctx context.Context, inv Invocation, args []string) error {
+	stdout := inv.Stdout
 	fs := newCobraFlagSet("stores")
 	// --counts: same discovery walk over the same roots, but each store is
 	// opened read-only and summarized by its ready/in-flight/blocked counts
@@ -33,16 +33,22 @@ func runStores(ctx context.Context, stdout io.Writer, args []string) error {
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
-	roots := make([]string, 0, fs.NArg())
+	// A root is a path the caller typed, so a relative one names a directory
+	// under the invocation's, and no root at all means that directory itself.
+	given := make([]string, 0, fs.NArg())
 	for i := 0; i < fs.NArg(); i++ {
-		roots = append(roots, fs.Arg(i))
+		given = append(given, fs.Arg(i))
 	}
-	if len(roots) == 0 {
-		cwd, err := os.Getwd()
+	if len(given) == 0 {
+		given = []string{"."}
+	}
+	roots := make([]string, 0, len(given))
+	for _, root := range given {
+		abs, err := inv.Dir.resolve(root)
 		if err != nil {
-			return fmt.Errorf("get cwd: %w", err)
+			return fmt.Errorf("resolve root %s: %w", root, err)
 		}
-		roots = []string{cwd}
+		roots = append(roots, abs)
 	}
 	if *counts {
 		rows, err := gatherCrossProjectRollup(ctx, roots)

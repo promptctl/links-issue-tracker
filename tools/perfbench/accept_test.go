@@ -79,15 +79,13 @@ func adoptEnv(t *testing.T, env []string) {
 // runLitIn is one lit invocation with dir as its working directory, answering
 // the exit code cmd/lit would have exited with. The budget is the context's
 // deadline, as runQuiet's is the subprocess's, so a write wedged on the store
-// lock fails this test instead of hanging it. lit resolves its workspace from
-// the process's cwd, and t.Chdir is the one way to move it that restores it
-// and refuses a parallel test.
+// lock fails this test instead of hanging it.
 func runLitIn(t *testing.T, dir string, budget time.Duration, args []string) (int, string) {
-	t.Chdir(dir)
 	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
 	var out bytes.Buffer
-	if err := cli.Run(ctx, &out, &out, args); err != nil {
+	inv := cli.Invocation{Dir: cli.WorkingDirOf(dir, nil), Args: args, Stdin: strings.NewReader(""), Stdout: &out, Stderr: &out}
+	if err := cli.Run(ctx, inv); err != nil {
 		return cli.WriteCommandError(&out, err), out.String()
 	}
 	return 0, out.String()

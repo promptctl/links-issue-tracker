@@ -579,18 +579,21 @@ func newEpicInDir(t *testing.T, dir, title string) string {
 // runCLIInDirAllowError is runCLIInDir's counterpart for callers that expect
 // (and must inspect) a command failure — runCLIInDir itself fatals on any
 // error, which is the wrong shape for a test asserting the failure path.
+//
+// Run is handed dir rather than run from it, so the process's own directory
+// plays no part in which workspace the command acts on.
 func runCLIInDirAllowError(t *testing.T, dir string, args ...string) (string, error) {
 	t.Helper()
-	prevWD, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatalf("Chdir(%q) error = %v", dir, err)
-	}
-	defer func() { _ = os.Chdir(prevWD) }()
+	return runCLIInDirWithStdin(t, dir, "", args...)
+}
 
+// runCLIInDirWithStdin is runCLIInDirAllowError with stdin as what the command
+// reads from its standard input.
+func runCLIInDirWithStdin(t *testing.T, dir, stdin string, args ...string) (string, error) {
+	t.Helper()
 	var out bytes.Buffer
-	runErr := Run(context.Background(), &out, &out, args)
+	inv := dirInvocation(dir, &out, &out, args)
+	inv.Stdin = strings.NewReader(stdin)
+	runErr := Run(context.Background(), inv)
 	return out.String(), runErr
 }

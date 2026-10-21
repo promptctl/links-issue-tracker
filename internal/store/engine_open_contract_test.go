@@ -227,7 +227,7 @@ func TestWriteOpenNamesTheJournalHolder(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 
-	releaseJournal, err := LockDoltJournalExclusive(ctx, doltRoot)
+	releaseJournal, err := LockDoltJournalExclusive(WithHolderCommand(ctx, "lit backlog"), doltRoot)
 	if err != nil {
 		t.Fatalf("LockDoltJournalExclusive() error = %v", err)
 	}
@@ -249,8 +249,7 @@ func TestWriteOpenNamesTheJournalHolder(t *testing.T) {
 	}
 	message := err.Error()
 	for _, want := range []string{
-		"pid " + strconv.Itoa(os.Getpid()),
-		filepath.Base(os.Args[0]),
+		"pid " + strconv.Itoa(os.Getpid()) + " (lit backlog)",
 		"holding since",
 	} {
 		if !strings.Contains(message, want) {

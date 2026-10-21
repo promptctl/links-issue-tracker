@@ -203,11 +203,11 @@ type lockHolderRecord struct {
 // its hold, so the next acquisition proves it unheld and retires it. On
 // Windows that failure needs nothing worse than a concurrent sweep's probe
 // holding the file open, since filelock's open denies the delete right.
-func recordLockHolder(storageDir, lockPath string, lockRelease func() error) func() error {
+func recordLockHolder(ctx context.Context, storageDir, lockPath string, lockRelease func() error) func() error {
 	if err := retireDeadLockHolders(storageDir, lockPath); err != nil {
 		fmt.Fprintf(lockWaitNoticeWriter, "lit: could not retire the records of holders gone from %s (the lock is held; every acquisition retries, so this repeats until they can be retired): %v\n", lockPath, err)
 	}
-	releaseRecord, err := publishLockHolder(storageDir, lockPath)
+	releaseRecord, err := publishLockHolder(ctx, storageDir, lockPath)
 	if err != nil {
 		fmt.Fprintf(lockWaitNoticeWriter, "lit: could not record this process as the holder of %s (the lock is held; only the diagnostic naming this holder is missing): %v\n", lockPath, err)
 		return lockRelease
@@ -225,24 +225,39 @@ func recordLockHolder(storageDir, lockPath string, lockRelease func() error) fun
 
 // publishLockHolder publishes this process's claim on lockPath: what this
 // process would want said about it, handed to the protocol that says it.
-func publishLockHolder(storageDir, lockPath string) (func() error, error) {
+func publishLockHolder(ctx context.Context, storageDir, lockPath string) (func() error, error) {
 	dir := lockHolderDir(storageDir, lockPath)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("ensure holder dir: %w", err)
 	}
-	// The binary's base name, not its path: the arguments are what tell one
-	// wedged lit from another (`backlog` vs `snapshots new`), and a long
-	// absolute path pushes them past the rendered length limit. Whoever needs
-	// the full path has the pid, which is the actionable handle anyway.
 	payload, err := json.Marshal(lockHolderRecord{
 		PID:     os.Getpid(),
-		Command: strings.Join(append([]string{filepath.Base(os.Args[0])}, os.Args[1:]...), " "),
+		Command: holderCommand(ctx),
 		Since:   time.Now(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("encode holder record: %w", err)
 	}
 	return mintHeldRecord(dir, payload)
+}
+
+type holderCommandKey struct{}
+
+// WithHolderCommand is ctx carrying the command line of the run it belongs
+// to, which every lock taken under it names in its holder record. The command,
+// not the pid, is what tells one wedged lit from another (`backlog` vs
+// `snapshots new`), and it comes from the run rather than the process because
+// one process can hold several runs, each its own command.
+// [LAW:no-shared-mutable-globals]
+func WithHolderCommand(ctx context.Context, command string) context.Context {
+	return context.WithValue(ctx, holderCommandKey{}, command)
+}
+
+// holderCommand is the command ctx carries, or "" for a lock taken outside
+// any run that named one: a test or tool opening a store directly.
+func holderCommand(ctx context.Context) string {
+	command, _ := ctx.Value(holderCommandKey{}).(string)
+	return command
 }
 
 // mintHeldRecord runs the four steps that make a holder record: create it,

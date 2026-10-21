@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -57,7 +56,7 @@ func downgradeLeaf() appLeaf {
 func withSchemaMigrator(declare func() downgradeLeafShape) appLeafFn {
 	return func() appLeaf {
 		l := declare()
-		return adaptLeaf[downgradeScope, *app.App](l, func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+		return adaptLeaf[downgradeScope, *app.App](l, func(ctx context.Context, inv Invocation, ap *app.App, positional []string) error {
 			migrator, err := storage.SchemaMigration.Of(ap.Store)
 			if err != nil {
 				return err
@@ -66,7 +65,7 @@ func withSchemaMigrator(declare func() downgradeLeafShape) appLeafFn {
 			if err != nil {
 				return fmt.Errorf("downgrade: read this binary's version info: %w", err)
 			}
-			return l.work(ctx, stdout, downgradeScope{schema: migrator, current: current}, positional)
+			return l.work(ctx, inv, downgradeScope{schema: migrator, current: current}, positional)
 		})
 	}
 }
@@ -113,7 +112,7 @@ func downgradeLeafWith(
 	// --to is required, not optional, and the derived sentence cannot say so:
 	// "values are passed as flags: --to" reads exactly like a flag you may omit.
 	// Requiredness is the leaf's own knowledge. [LAW:one-source-of-truth]
-	return downgradeLeafShape{fs: fs, positionals: 0, usage: "usage: lit downgrade --to <version>", work: func(ctx context.Context, stdout io.Writer, scope downgradeScope, _ []string) error {
+	return downgradeLeafShape{fs: fs, positionals: 0, usage: "usage: lit downgrade --to <version>", work: func(ctx context.Context, inv Invocation, scope downgradeScope, _ []string) error {
 		tag, err := normalizeReleaseTag(*to, "downgrade")
 		if err != nil {
 			return err
@@ -170,7 +169,7 @@ func downgradeLeafWith(
 		// re-run line on Windows would add a platform mode for no measurable
 		// benefit — the rename has already happened, the user's next shell
 		// prompt runs the prior binary.
-		_, err = fmt.Fprintf(stdout,
+		_, err = fmt.Fprintf(inv.Stdout,
 			"downgraded to %s (schema v%d) installed at %s\nre-run `lit version` to confirm.%s\n",
 			tag, target.Manifest.Schema.Max, binPath, pruneWarning,
 		)
