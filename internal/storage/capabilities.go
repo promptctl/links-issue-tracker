@@ -312,25 +312,67 @@ type SchemaMigrator interface {
 	// a failure part-way alike — and nil only when it failed before that read.
 	Downgrade(ctx context.Context, targetSchemaVersion int64) (*Downgraded, error)
 
-	// Migrated reports what opening this handle did to the stored shape.
+	// Migrated reports what opening this handle did to the store on disk.
 	Migrated() Migrated
 }
 
-// Migrated is what an open did to the stored shape: whether it had to build
+// Migrated is what an open did to the store on disk: whether it had to build
 // the database first; the recovery snapshot it took before migrating, nil
 // when it found nothing to migrate; why rolling older migration snapshots or
-// checkpoints off after its work committed failed, if it did; and the newer
-// schema it served, if it did.
+// checkpoints off after its work committed failed, if it did; the newer
+// schema it served, if it did; and the temp table files it collected, nil
+// when the open did not look.
 // [LAW:types-are-the-program] PruneErr is a field, not the open's error: each
 // prune runs after the work it trails has committed, so its failure leaves the
 // store at the shape this binary reads. An open that failed on it would stop
 // the command over a leftover snapshot or checkpoint, and the next open,
-// finding nothing to migrate, would succeed without retrying the prune.
+// finding nothing to migrate, would succeed without retrying the prune. The
+// collection's error is a field for the same reason.
 type Migrated struct {
-	Bootstrap   Bootstrap
-	Snapshot    *RecoverySnapshot
-	PruneErr    error
-	SchemaAhead SchemaAhead
+	Bootstrap      Bootstrap
+	Snapshot       *RecoverySnapshot
+	PruneErr       error
+	SchemaAhead    SchemaAhead
+	TempTableFiles *TempTableFilesCollection
+}
+
+// Failures is every failure the open survived, each saying what the open
+// could not do: the prune's and the collection's. It is the one list of them;
+// every reader that carries or prints an open's failures ranges over it, so
+// none can carry one and drop the other. [LAW:one-source-of-truth]
+func (m Migrated) Failures() []error {
+	var failures []error
+	if m.PruneErr != nil {
+		failures = append(failures, fmt.Errorf("old migration snapshots or checkpoints were not removed: %w", m.PruneErr))
+	}
+	if m.TempTableFiles != nil && m.TempTableFiles.Err != nil {
+		failures = append(failures, fmt.Errorf("temp table files a dead writer left were not all removed: %w", m.TempTableFiles.Err))
+	}
+	return failures
+}
+
+// TempTableFilesCollection is what an open's collection of temp table files a
+// dead writer left behind removed: how many, how many bytes, and why it could
+// not remove the rest, if it could not. An engine that stages no such files
+// leaves Migrated.TempTableFiles nil, as does an open that did not look, so
+// "never looked" is never read as "found none". [LAW:types-are-the-program]
+type TempTableFilesCollection struct {
+	Files int
+	Bytes int64
+	Err   error
+}
+
+// EventRecord is the collection as event facts, all null when the open did
+// not look.
+func (c *TempTableFilesCollection) EventRecord() map[string]any {
+	if c == nil {
+		return map[string]any{"temp_table_files.files": nil, "temp_table_files.bytes": nil, "temp_table_files.error": nil}
+	}
+	return map[string]any{
+		"temp_table_files.files": c.Files,
+		"temp_table_files.bytes": c.Bytes,
+		"temp_table_files.error": telemetry.ErrorText(c.Err),
+	}
 }
 
 // RecoverySnapshot is a recovery snapshot an operation took before changing
@@ -437,6 +479,7 @@ func (m Migrated) EventRecord() map[string]any {
 	facts := m.Bootstrap.EventRecord()
 	maps.Copy(facts, MigrationRecoveryFacts(m.Snapshot, m.PruneErr))
 	maps.Copy(facts, m.SchemaAhead.EventRecord())
+	maps.Copy(facts, m.TempTableFiles.EventRecord())
 	return facts
 }
 

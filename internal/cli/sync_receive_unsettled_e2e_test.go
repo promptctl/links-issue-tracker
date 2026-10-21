@@ -195,7 +195,7 @@ func TestAReceiveThatFetchedAndKeepsStoppingReachesTheFailureSurface(t *testing.
 // returned unblock removes it; the test's cleanup removes it otherwise.
 func blockTheLanding(t *testing.T, ws workspace.Info) (unblock func()) {
 	t.Helper()
-	path := store.LandingTempDir(ws.DatabasePath)
+	path := store.TempTableFilesDir(ws.DatabasePath)
 	if err := os.RemoveAll(path); err != nil {
 		t.Fatalf("clear the landing's temp dir: %v", err)
 	}

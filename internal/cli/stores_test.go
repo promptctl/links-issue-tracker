@@ -245,7 +245,9 @@ func TestPrintCrossProjectRollupCloseWarningKeepsCounts(t *testing.T) {
 // snapshots off gets a `~` note, whether its read went on to succeed or fail:
 // the migration committed before the read, and the count on the event says
 // how many stores it happened to. The event also counts the stores newer than
-// this lit, and those of them it may read but not write.
+// this lit, those of them it may read but not write, and the temp table files
+// the opens collected and the collections that failed. A store that failed
+// both gets a note for each, each under its own path.
 func TestPrintCrossProjectRollupNotesAFailedSnapshotPrune(t *testing.T) {
 	t.Parallel()
 	rows := []projectRollup{
@@ -254,24 +256,33 @@ func TestPrintCrossProjectRollupNotesAFailedSnapshotPrune(t *testing.T) {
 		{Label: "gamma", StorageDir: "/repos/gamma/.git/links", Ready: 1, Migrated: storage.Migrated{Snapshot: &storage.RecoverySnapshot{Name: "g-pre-migrate-1"}}},
 		{Label: "delta", StorageDir: "/repos/delta/.git/links", Ready: 2, Migrated: storage.Migrated{SchemaAhead: storage.SchemaAhead{WorkspaceSchema: 12}}},
 		{Label: "epsilon", StorageDir: "/repos/epsilon/.git/links", Ready: 2, Migrated: storage.Migrated{SchemaAhead: storage.SchemaAhead{WorkspaceSchema: 12, MinWriterSchema: 12, ReadOnly: true}}},
+		{Label: "zeta", StorageDir: "/repos/zeta/.git/links", Ready: 1, Migrated: storage.Migrated{
+			Snapshot: &storage.RecoverySnapshot{Name: "z-pre-migrate-1"}, PruneErr: errors.New("prune migration snapshots: stuck"),
+			TempTableFiles: &storage.TempTableFilesCollection{Files: 2, Bytes: 10, Err: errors.New("remove dead temp table file x: denied")},
+		}},
+		{Label: "eta", StorageDir: "/repos/eta/.git/links", Ready: 1, Migrated: storage.Migrated{TempTableFiles: &storage.TempTableFilesCollection{Files: 3, Bytes: 30}}},
 	}
 	var out bytes.Buffer
 	if err := printCrossProjectRollup(&out, rows); err != nil {
 		t.Fatalf("printCrossProjectRollup() error = %v", err)
 	}
 	got := out.String()
-	for _, dir := range []string{"/repos/alpha/.git/links", "/repos/beta/.git/links"} {
+	if want := "~ /repos/zeta/.git/links: warning: temp table files a dead writer left were not all removed: remove dead temp table file x: denied\n"; !strings.Contains(got, want) {
+		t.Errorf("output %q missing %q", got, want)
+	}
+	for _, dir := range []string{"/repos/alpha/.git/links", "/repos/beta/.git/links", "/repos/zeta/.git/links"} {
 		want := "~ " + dir + ": warning: old migration snapshots or checkpoints were not removed: prune migration snapshots: stuck\n"
 		if !strings.Contains(got, want) {
 			t.Errorf("output %q missing %q", got, want)
 		}
 	}
-	for _, dir := range []string{"/repos/gamma", "/repos/delta"} {
+	for _, dir := range []string{"/repos/gamma", "/repos/delta", "/repos/eta"} {
 		if strings.Contains(got, "~ "+dir) {
-			t.Errorf("output %q notes %s, whose open did not fail a prune", got, dir)
+			t.Errorf("output %q notes %s, whose open survived no failure", got, dir)
 		}
 	}
-	want := map[string]int{"stores.migrated": 3, "stores.prune_failures": 2, "stores.schema_ahead": 2, "stores.read_only": 1}
+	want := map[string]int{"stores.migrated": 4, "stores.prune_failures": 3, "stores.schema_ahead": 2, "stores.read_only": 1,
+		"stores.temp_table_files_collected": 5, "stores.temp_table_files_failures": 1}
 	if got := rollupMigrationCounts(rows); !reflect.DeepEqual(got, want) {
 		t.Errorf("rollupMigrationCounts() = %v, want %v", got, want)
 	}

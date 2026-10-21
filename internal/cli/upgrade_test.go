@@ -643,7 +643,8 @@ func TestRunUpgradeOnAnOpenableWorkspacePastRunningSupportNamesNoDowngrade(t *te
 		"upgrade.target_schema_max":  float64(3),
 		"upgrade.running_schema_min": float64(current.Schema.Min),
 		"upgrade.running_schema_max": float64(current.Schema.Max),
-		// The reader's open built nothing and found nothing to migrate.
+		// The reader's open built nothing, found nothing to migrate, and
+		// did not look for temp table files.
 		"bootstrap":                         "none",
 		"migration.snapshot":                "",
 		"migration.snapshot_left_out":       nil,
@@ -652,6 +653,9 @@ func TestRunUpgradeOnAnOpenableWorkspacePastRunningSupportNamesNoDowngrade(t *te
 		"migration.min_writer_schema":       float64(0),
 		"migration.min_writer_schema_error": nil,
 		"migration.read_only":               false,
+		"temp_table_files.files":            nil,
+		"temp_table_files.bytes":            nil,
+		"temp_table_files.error":            nil,
 	}
 	if !reflect.DeepEqual(facts, want) {
 		t.Errorf("facts = %v; want %v", facts, want)

@@ -216,6 +216,14 @@ func Open(ctx context.Context, doltRootDir string, workspaceID string) (_ *Store
 		s.releaseWorkspaceLock = nil
 		return nil, err
 	}
+	// The open has succeeded and nothing has been handed the Store, so this
+	// engine holds LOCK and has staged no table file: the one moment the
+	// staging directory is provably all dead writers' leftovers. Every app-mode
+	// write command opens here, whatever its sync settings, so what any killed
+	// writer left is collected by the next one. A failed collection leaves the
+	// store usable and is the open's to report, not to fail on.
+	collected := collectDeadTempTableFiles(doltRootDir)
+	s.migrated.TempTableFiles = &collected
 	success = true
 	return s, nil
 }
