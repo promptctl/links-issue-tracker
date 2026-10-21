@@ -209,14 +209,21 @@ func plantBase(t *testing.T, pid int) string {
 	return base
 }
 
-// The sweep deletes the frozen base a dead binary left, and leaves alone the
-// base of a binary that is still running.
-func TestTheSweepDeletesOnlyTheBasesOfDeadBinaries(t *testing.T) {
+// runBinary runs this test binary again, testing nothing, so its TestMain's
+// Run is all it does, and returns the pid it had.
+func runBinary(t *testing.T) int {
+	t.Helper()
 	child := exec.Command(os.Args[0], "-test.run=^$")
-	if err := child.Run(); err != nil {
-		t.Fatalf("run a binary that exits: %v", err)
+	if out, err := child.CombinedOutput(); err != nil {
+		t.Fatalf("run the test binary: %v\n%s", err, out)
 	}
-	dead := plantBase(t, child.Process.Pid)
+	return child.Process.Pid
+}
+
+// The next binary's Run deletes the frozen base a dead binary left, and
+// leaves alone the base of a binary that is still running.
+func TestRunSweepsOnlyTheBasesOfDeadBinaries(t *testing.T) {
+	dead := plantBase(t, runBinary(t))
 	live := plantBase(t, os.Getpid())
 	t.Cleanup(func() {
 		if err := removeBase(live); err != nil {
@@ -224,9 +231,7 @@ func TestTheSweepDeletesOnlyTheBasesOfDeadBinaries(t *testing.T) {
 		}
 	})
 
-	if err := sweepDead(); err != nil {
-		t.Fatalf("sweep: %v", err)
-	}
+	runBinary(t)
 
 	if _, err := os.Stat(dead); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("the dead binary's base survived the sweep: stat = %v", err)
