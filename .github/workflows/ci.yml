@@ -47,7 +47,8 @@ jobs:
       # is the alarm being switched off, and slow inner-loop tests are bugs.
       # The alarm that IS wired in: tools/testbudget consumes this run's -json
       # stream and fails the build when a package exceeds its wall-clock budget
-      # (tools/testbudget/budgets.go), naming the package and the overage.
+      # (tools/testbudget/budgets.go), naming the package, the overage, and
+      # the package's slowest top-level tests.
       # `shell: bash` is load-bearing — it enables pipefail, so go test's own
       # exit code still fails the step through the pipe. [LAW:no-silent-failure]
       - name: Test
