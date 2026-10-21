@@ -103,6 +103,8 @@ seconds.
 - `lit start <id>`, which records the ticket it started with its
   `rollup_progress`, counted once the start has landed. Starting a closed
   ticket takes it out of `rollup_completed_count`.
+- `lit bulk start`, which records each ticket it starts as `lit start` does,
+  in `--ids` order, so the file names the last one that started.
 - `lit next`, when it hands back a ticket that is already in progress in a lane
   this checkout holds. This happens with or without filter flags, and it also
   counts `rollup_progress` again, reads `phase` again and updates
@@ -140,7 +142,8 @@ text. Its `recorded_at` does not change.
 **Clearing.** A value becomes `null` when this checkout moves the ticket it names
 through any lifecycle change other than a start: `lit done`, `lit close`,
 `lit open`, `lit archive`, `lit unarchive`, `lit delete`, `lit restore`,
-`lit purge`, `lit bulk close` and `lit bulk archive`. After `lit done` on the
+`lit purge`, `lit bulk done`, `lit bulk close`, `lit bulk open` and
+`lit bulk archive`. After `lit done` on the
 ticket in the example above, both values are `null`. `lit backup restore`
 replaces every ticket in the store, so it sets both values to `null` whichever
 tickets they named.

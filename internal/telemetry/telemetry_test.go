@@ -174,3 +174,52 @@ func TestLineIsOneJSONLineInTheDefaultFieldNames(t *testing.T) {
 		}
 	}
 }
+
+// An occurrence keeps what its work Set, Counted and Recorded to itself, so a
+// second occurrence cannot replace the first's facts, while what only the
+// event holds — its occurrences and its name — still lands on the event.
+func TestAnOccurrenceKeepsItsFactsOffTheEvent(t *testing.T) {
+	r := Begin(Event{})
+	ctx := With(context.Background(), r)
+	Set(ctx, "shared", "event")
+	scoped, closeScope := Occurrence(ctx)
+	Set(scoped, "shared", "occurrence")
+	Count(scoped, "rows", 3)
+	Record(scoped, map[string]any{"recorded": true}, map[string]int{"recorded_rows": 4})
+	Append(scoped, "steps", "one")
+	Command(scoped, "lit bulk")
+	facts, counts := closeScope()
+
+	if want := map[string]any{"shared": "occurrence", "recorded": true}; !equalJSON(t, facts, want) {
+		t.Errorf("occurrence facts = %v, want %v", facts, want)
+	}
+	if want := map[string]int{"rows": 3, "recorded_rows": 4}; !equalJSON(t, counts, want) {
+		t.Errorf("occurrence counts = %v, want %v", counts, want)
+	}
+	ev := r.Finish(End{})
+	if want := map[string]any{"shared": "event"}; !equalJSON(t, ev.Facts, want) {
+		t.Errorf("event facts = %v, want %v: the occurrence's facts leaked onto the event", ev.Facts, want)
+	}
+	if len(ev.Counts) != 0 {
+		t.Errorf("event counts = %v, want none: the occurrence's counts leaked onto the event", ev.Counts)
+	}
+	if want := map[string][]any{"steps": {"one"}}; !equalJSON(t, ev.Occurrences, want) {
+		t.Errorf("event occurrences = %v, want %v", ev.Occurrences, want)
+	}
+	if ev.Event != "lit bulk" {
+		t.Errorf("event name = %q, want %q", ev.Event, "lit bulk")
+	}
+}
+
+func equalJSON(t *testing.T, got, want any) bool {
+	t.Helper()
+	g, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := json.Marshal(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(g) == string(w)
+}

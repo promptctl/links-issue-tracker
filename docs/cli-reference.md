@@ -790,26 +790,38 @@ use `lit ls --parent a,b`.
 
 ## Bulk operations
 
-### `lit bulk label` / `lit bulk close` / `lit bulk archive`
+### `lit bulk`
 
 ```text
 lit bulk label <add|rm> --ids <csv>... --label <label>
+lit bulk start --ids <csv>... [--take] [--reason <text>]
+lit bulk done --ids <csv>... [--reason <text>]
 lit bulk close --ids <csv>... --resolution <duplicate|superseded|obsolete|wontfix> [--of <canonical-id>] [--reason <text>]
+lit bulk open --ids <csv>... [--reason <text>]
 lit bulk archive --ids <csv>... [--reason <text>]
 ```
 
 Apply one label edit or lifecycle transition across many issues in one call.
 `--ids` is a set, so `--ids A --ids B` acts on both; a missing `--ids` or a blank slot
 in one is refused (exit 3) before any issue is touched.
-`bulk close` takes the same resolution flags as `lit close` — every closed
-issue records the shared outcome, so a bulk close cannot produce the
-resolution-less close the close command itself forbids.
 
-Each successful item prints `<id> ok` to stdout (the data channel carries
-results only). If any item fails, the per-item errors go to stderr and the
-command exits non-zero — so `lit bulk close --ids a,b,c && next-step` does **not**
-run `next-step` on partial or total failure. Successful items are still applied;
-re-run the command for only the failed IDs after addressing each error.
+Each transition verb runs on every listed issue exactly as its single command
+runs on one: `bulk start` is `lit start`, `bulk close` is `lit close`, and so on.
+It takes that command's flags, and an issue the single command refuses fails
+here with the same error. `bulk start` asks to take over a lane another checkout
+holds the way `lit start` does, and `--take` confirms every takeover in the run.
+A transition to the state an issue is already in, such as `bulk open` on an open
+issue, succeeds and changes nothing, as it does singly. `bulk close` records one
+shared outcome on every issue it closes.
+
+Each successful item prints `<id> ok` to stdout, after any line its single
+command prints first: the `claim transferred` line of a start, the takeover line
+of `--take`, the plan warning of a done. The summary, the workflow guidance and
+the follow-up hints a single transition prints are not printed. If any item
+fails, the per-item errors go to stderr and the command exits non-zero — so
+`lit bulk close --ids a,b,c && next-step` does **not** run `next-step` on partial
+or total failure. Successful items are still applied; re-run the command for
+only the failed IDs after addressing each error.
 
 ### `lit import`
 

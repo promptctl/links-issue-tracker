@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"io"
 	"reflect"
 	"strings"
 	"testing"
@@ -89,5 +90,22 @@ func TestRelationOf(t *testing.T) {
 				t.Errorf("relationOf(%#v, %v) = %v, want %v", tc.standing, tc.self, got, tc.want)
 			}
 		})
+	}
+}
+
+// Questions asked over one stdin each read their own answer, so a bulk start
+// prompting for two held lanes hears both of a piped pair of answers.
+func TestAskYesNoLeavesEachLaterAnswerForItsQuestion(t *testing.T) {
+	stdin := strings.NewReader("y\nn\ny\n")
+	var got []bool
+	for range 3 {
+		ok, err := askYesNo(stdin, io.Discard, "take over this lane?")
+		if err != nil {
+			t.Fatalf("askYesNo error = %v", err)
+		}
+		got = append(got, ok)
+	}
+	if want := []bool{true, false, true}; !reflect.DeepEqual(got, want) {
+		t.Errorf("answers = %v, want %v", got, want)
 	}
 }
