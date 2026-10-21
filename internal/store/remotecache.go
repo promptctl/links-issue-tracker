@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"maps"
 	"os"
@@ -45,8 +46,8 @@ import (
 // ctx ends it and everything it started. git hands -c settings on to the
 // processes it spawns on this side, but not to the upload-pack it starts in a
 // local repository, so a fetch from another mirror goes through mirrorFetch.
-func mirrorGit(ctx context.Context, env environ.Env, gitDir string, spec gitcmd.Spec, args ...string) *gitcmd.Cmd {
-	return env.Git(ctx, spec, append([]string{"--git-dir", gitDir}, args...)...)
+func mirrorGit(ctx context.Context, env environ.Env, gitDir string, stdin io.Reader, args ...string) *gitcmd.Cmd {
+	return env.Git(ctx, "", stdin, append([]string{"--git-dir", gitDir}, args...)...)
 }
 
 // mirrorFetch builds a fetch of refspecs into the mirror at gitDir from the
@@ -54,7 +55,7 @@ func mirrorGit(ctx context.Context, env environ.Env, gitDir string, spec gitcmd.
 // because git starts a local source's upload-pack without the -c gitcmd gives
 // git.
 func mirrorFetch(ctx context.Context, env environ.Env, gitDir, source string, refspecs ...string) *gitcmd.Cmd {
-	return mirrorGit(ctx, env, gitDir, gitcmd.Spec{}, append([]string{"fetch", "--no-tags", "--quiet", "--upload-pack", "git -c " + gitcmd.LongPaths + " upload-pack", source}, refspecs...)...)
+	return mirrorGit(ctx, env, gitDir, nil, append([]string{"fetch", "--no-tags", "--quiet", "--upload-pack", "git -c " + gitcmd.LongPaths + " upload-pack", source}, refspecs...)...)
 }
 
 // isRemoteCacheKey reports whether a directory name is one of dbfactory's cache
@@ -507,7 +508,7 @@ func (s *Store) SyncRemoteMirrorHolds(ctx context.Context, remote storage.Remote
 // "<oid> <type> <size>" or "<input> missing", so absence is an answer and only
 // git failing to run is an error.
 func gitDirHoldsCommits(ctx context.Context, env environ.Env, gitDir string, commits []string) (bool, error) {
-	out, err := mirrorGit(ctx, env, gitDir, gitcmd.Spec{Stdin: strings.NewReader(strings.Join(commits, "\n") + "\n")}, "cat-file", "--batch-check").Output()
+	out, err := mirrorGit(ctx, env, gitDir, strings.NewReader(strings.Join(commits, "\n")+"\n"), "cat-file", "--batch-check").Output()
 	if err != nil {
 		return false, fmt.Errorf("ask git mirror %s for %d commit(s): %w", gitDir, len(commits), err)
 	}

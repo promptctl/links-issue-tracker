@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dolthub/dolt/go/libraries/utils/gitcmd"
 	"github.com/google/uuid"
 	"github.com/promptctl/links-issue-tracker/internal/atomicfile"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
@@ -498,7 +497,7 @@ func gitOutput(ctx context.Context, env environ.Env, cwd string, args ...string)
 	if !filepath.IsAbs(cwd) {
 		return "", fmt.Errorf("run git in %q: the directory is not absolute", cwd)
 	}
-	out, err := env.Git(ctx, gitcmd.Spec{Dir: cwd}, args...).Output()
+	out, err := env.Git(ctx, cwd, nil, args...).Output()
 	if err != nil {
 		return "", gitFailure(err)
 	}

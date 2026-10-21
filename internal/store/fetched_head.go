@@ -17,7 +17,6 @@ import (
 	doltenv "github.com/dolthub/dolt/go/libraries/doltcore/env"
 	"github.com/dolthub/dolt/go/libraries/doltcore/ref"
 	"github.com/dolthub/dolt/go/libraries/utils/filesys"
-	"github.com/dolthub/dolt/go/libraries/utils/gitcmd"
 	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/types"
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
@@ -722,7 +721,7 @@ type mirrorRef struct {
 // first. It is the one reading of a mirror's refs: the landing and the sweep
 // both read through it. [LAW:one-source-of-truth]
 func listMirrorRefs(ctx context.Context, env environ.Env, gitDir string) ([]mirrorRef, error) {
-	out, err := mirrorGit(ctx, env, gitDir, gitcmd.Spec{}, "for-each-ref",
+	out, err := mirrorGit(ctx, env, gitDir, nil, "for-each-ref",
 		"--sort=-committerdate", "--format=%(refname) %(objectname)", "refs/dolt/").Output()
 	if err != nil {
 		return nil, fmt.Errorf("list the refs of mirror %s: %w", gitDir, err)

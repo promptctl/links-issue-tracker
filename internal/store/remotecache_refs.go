@@ -7,7 +7,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/dolthub/dolt/go/libraries/utils/gitcmd"
 	"github.com/google/uuid"
 
 	"github.com/promptctl/links-issue-tracker/internal/environ"
@@ -202,14 +201,14 @@ func sweepMirror(ctx context.Context, env environ.Env, gitDir string) (removed i
 	if err != nil {
 		return 0, 0, fmt.Errorf("measure: %w", err)
 	}
-	if out, err := mirrorGit(ctx, env, gitDir, gitcmd.Spec{Stdin: strings.NewReader(transaction.String())}, "update-ref", "--stdin").CombinedOutput(); err != nil {
+	if out, err := mirrorGit(ctx, env, gitDir, strings.NewReader(transaction.String()), "update-ref", "--stdin").CombinedOutput(); err != nil {
 		return 0, 0, fmt.Errorf("delete %d orphaned ref(s): %w: %s", len(orphans), err, strings.TrimSpace(string(out)))
 	}
 	// The refs are gone from here on, so what follows can fail without
 	// un-removing them; the count goes out with any error. --prune=now because
 	// nothing else is writing this mirror (sweepOrphanedInstanceRefs says why),
 	// so no object can be in flight toward a ref that does not exist yet.
-	if out, err := mirrorGit(ctx, env, gitDir, gitcmd.Spec{}, "gc", "--prune=now", "--quiet").CombinedOutput(); err != nil {
+	if out, err := mirrorGit(ctx, env, gitDir, nil, "gc", "--prune=now", "--quiet").CombinedOutput(); err != nil {
 		return len(orphans), 0, fmt.Errorf("git gc after removing %d orphaned ref(s): %w: %s", len(orphans), err, strings.TrimSpace(string(out)))
 	}
 	after, err := dirSize(gitDir)

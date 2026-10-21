@@ -6,8 +6,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-
-	"github.com/dolthub/dolt/go/libraries/utils/gitcmd"
 )
 
 func TestLookupReadsAsTheOSPackageDoes(t *testing.T) {
@@ -108,21 +106,17 @@ func TestConstructorsRunTheChildInTheEnv(t *testing.T) {
 	}
 }
 
-// Git overrides whatever Env its spec carried, nil included: git reads
-// GIT_EDITOR from the Env, not from the spec or the process.
+// Git runs git in the Env, not the process's: git reads GIT_EDITOR from it.
 func TestGitRunsInTheEnv(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
 	t.Setenv("GIT_EDITOR", "from-process")
-	env := Of([]string{"GIT_EDITOR=from-env"})
-	for name, spec := range map[string]gitcmd.Spec{"nil Env": {Dir: t.TempDir()}, "other Env": {Dir: t.TempDir(), Env: []string{"GIT_EDITOR=from-spec"}}} {
-		out, err := env.Git(context.Background(), spec, "var", "GIT_EDITOR").Output()
-		if err != nil {
-			t.Fatalf("%s: git var GIT_EDITOR: %v", name, err)
-		}
-		if got := strings.TrimSpace(string(out)); got != "from-env" {
-			t.Errorf("%s: git saw GIT_EDITOR=%q, want %q", name, got, "from-env")
-		}
+	out, err := Of([]string{"GIT_EDITOR=from-env"}).Git(context.Background(), t.TempDir(), nil, "var", "GIT_EDITOR").Output()
+	if err != nil {
+		t.Fatalf("git var GIT_EDITOR: %v", err)
+	}
+	if got := strings.TrimSpace(string(out)); got != "from-env" {
+		t.Errorf("git saw GIT_EDITOR=%q, want %q", got, "from-env")
 	}
 }

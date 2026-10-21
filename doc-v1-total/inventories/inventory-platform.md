@@ -45,7 +45,8 @@ to `/Users/bmf/code/links-issue-tracker`.
 1. `interrupt.Guard(context.Background(), interrupt.DefaultGrace)` installs the signal handler
    and returns `(ctx, stop)`; `stop` is deferred (`cmd/lit/main.go`).
 2. `cli.Run(ctx, inv)` executes the command, `inv` being a `cli.Invocation` built from
-   `os.Getwd`, `os.Args[1:]`, `os.Stdin`, `os.Stdout` and `os.Stderr` (`cmd/lit/main.go`).
+   `os.Getwd`, `os.Args[1:]`, `environ.Of(os.Environ())`, `os.Stdin`, `os.Stdout` and `os.Stderr`
+   (`cmd/lit/main.go`).
 3. On a non-nil error, `os.Exit(cli.WriteCommandError(os.Stderr, err))`
    (`cmd/lit/main.go`). On nil error the process returns from `main` normally (exit 0).
 
@@ -190,13 +191,18 @@ reason-to-code list is in inventory-cli-issue.md §1.8.
 
 ## 3. Every environment variable the program reads
 
-Complete grep of `os.Getenv` / `os.LookupEnv` / `os.Environ` across non-vendored source.
+`cmd/lit/main.go` reads the environment once, `environ.Of(os.Environ())`, into the
+`Invocation`'s `Env`; the code `cli.Run` reaches reads each variable from it (`Env.Get`), and
+names no `os.Getenv`, `os.LookupEnv`, `os.Environ`, `os.UserHomeDir`, `os.UserConfigDir` or
+`os.TempDir` (`TestNothingRunReachesReadsTheProcess`).
 
 ### 3.1 Read by the shipped binary
 
 | Variable | Where read | Effect |
 |---|---|---|
 | `XDG_CONFIG_HOME` | `internal/config/config.go` | When non-empty, `ConfigDir()` = `$XDG_CONFIG_HOME/links-issue-tracker`; otherwise `$HOME/.config/links-issue-tracker` (`internal/config/config.go`). |
+| `XDG_STATE_HOME` | `internal/config/config.go` | When non-empty, `StateDir(env)` = `$XDG_STATE_HOME/links-issue-tracker`; otherwise `$HOME/.local/state/links-issue-tracker` (`internal/config/config.go`). |
+| `HOME` | `internal/environ/environ.go` | `Env.HomeDir`, the home of `ConfigDir` and `StateDir`; `USERPROFILE` on Windows, `home` on Plan 9; unset → `$HOME is not defined` (`internal/environ/environ.go`). |
 | `LIT_CONFIG_GLOBAL_PATH` | `internal/config/config.go`, read at | Overrides the global config file path entirely; otherwise `ConfigDir()/config.toml` (`internal/config/config.go`). |
 | `LIT_CONFIG_PROJECT_PATH` | `internal/config/config.go`, read at | Overrides the project config file path; otherwise `<workspaceRoot>/.lit/config.toml` (`internal/config/config.go`). |
 | `LIT_DISABLE_AUTO_SYNC` | const at `internal/cli/sync_cadence.go`; read at `internal/cli/sync_cadence.go` and `internal/cli/owner_notify.go` | When truthy, no command schedules a push mirror or a receive, prints a pending receive block, **or** compacts (`internal/cli/sync_cadence.go`), and the owner-notify hook never runs (`internal/cli/owner_notify.go`). Truthiness = `strconv.ParseBool` of the trimmed value; a parse error is false (`internal/cli/sync_cadence.go`). |
@@ -206,19 +212,19 @@ Complete grep of `os.Getenv` / `os.LookupEnv` / `os.Environ` across non-vendored
 | `LNKS_AUTOMATION_TRACE_REF_FILE` | const `internal/cli/automation_trace.go`; read | When non-empty, the recorded trace's path is written (plus newline, mode 0644) to that file (`internal/cli/automation_trace.go`). |
 | `LINKS_DEBUG_DOLT_SYNC_BRANCH` | const `internal/cli/sync.go`; read `internal/cli/sync.go` | Overrides the resolved sync branch ahead of the remote's default branch (`internal/cli/sync.go`); named in the failure message when no branch can be resolved (`internal/cli/sync.go`). |
 | `EDITOR` | `internal/cli/workflows_edit.go` | Split on whitespace to form the editor command for `lit workflows edit`; named verbatim in the failure message. |
-| (whole environment) | `internal/cli/sync_bg.go`, `internal/cli/owner_notify.go` | Inherited by child processes — see 3.2. |
+| (whole environment) | `internal/environ/environ.go` | Every child process, git included, is built by `Env.Command`, `Env.CommandContext` or `Env.Git`, which run it in the invocation's environment — see 3.2. |
 
 ### 3.2 Environment variables the binary **writes** for child processes
 
-- Detached background mirror (`mirrorEnv`, `internal/cli/sync_bg.go`): inherits the
-  parent environment with `LNKS_AUTOMATION_TRIGGER=`, `LNKS_AUTOMATION_REASON=`, and
+- Detached background mirror (`mirrorEnv`, `internal/cli/sync_bg.go`): the invocation's
+  environment with `LNKS_AUTOMATION_TRIGGER=`, `LNKS_AUTOMATION_REASON=`, and
   `LNKS_AUTOMATION_TRACE_REF_FILE=` prefixes **stripped** (`internal/cli/sync_bg.go`),
   then appends `LNKS_AUTOMATION_TRIGGER=on-change` and
   `LNKS_AUTOMATION_REASON=on-change cadence mirrored after a mutating command`
   (`internal/cli/sync_bg.go`).
 - Owner-notify hook (`runOwnerNotifyHook`, `internal/cli/owner_notify.go`): the hook is
   run as `sh -c <hook>` with `cmd.Dir = repoRoot` (`internal/cli/owner_notify.go`)
-  and `os.Environ()` plus:
+  and the invocation's environment plus:
   `LIT_NOTIFY_KIND`, `LIT_NOTIFY_SUMMARY`, `LIT_NOTIFY_REMOTE`, `LIT_NOTIFY_BRANCH`,
   `LIT_NOTIFY_REPO` (`internal/cli/owner_notify.go`). The hook is time-boxed by
   `ownerNotifyHookTimeout` with a `WaitDelay` so a backgrounded child cannot hold the pipe

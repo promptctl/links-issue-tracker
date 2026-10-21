@@ -121,8 +121,8 @@ Cross-clone proof: attribution survives a real git-remote round trip and a secon
 ### 2.4 Acting identity — `resolveIdentity` (assignee and event actor)
 
 ```go
-func resolveIdentity(explicit string) string {
-	if sessionID := strings.TrimSpace(os.Getenv("CLAUDE_CODE_SESSION_ID")); sessionID != "" {
+func resolveIdentity(env environ.Env, explicit string) string {
+	if sessionID := strings.TrimSpace(env.Get("CLAUDE_CODE_SESSION_ID")); sessionID != "" {
 		return "claude_" + sessionID
 	}
 	return strings.TrimSpace(explicit)

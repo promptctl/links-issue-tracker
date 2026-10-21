@@ -319,7 +319,7 @@ func TestASecondEndWaitsForTheFirstEndsWrite(t *testing.T) {
 		t.Fatalf("hold the rotation lock: acquired %v, %v", acquired, err)
 	}
 
-	record := &invocationRecord{recorder: telemetry.Begin(telemetry.Event{Event: "lit sync push"}), stderr: io.Discard}
+	record := &invocationRecord{recorder: telemetry.Begin(telemetry.Event{Event: "lit sync push"}), stderr: io.Discard, env: testEnv()}
 	written := make(chan bool, 2)
 	for _, end := range []telemetry.End{{Outcome: telemetry.OutcomeOK}, interruptedEnd(time.Now(), "SIGTERM", 143)} {
 		go func() {

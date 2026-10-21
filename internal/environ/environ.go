@@ -9,6 +9,7 @@ package environ
 import (
 	"context"
 	"errors"
+	"io"
 	"os/exec"
 	"runtime"
 	"slices"
@@ -111,10 +112,12 @@ func (e Env) CommandContext(ctx context.Context, name string, args ...string) *e
 	return cmd
 }
 
-// Git is gitcmd.Command run in this environment, whatever Env spec carries.
-func (e Env) Git(ctx context.Context, spec gitcmd.Spec, args ...string) *gitcmd.Cmd {
-	spec.Env = e.List()
-	return gitcmd.Command(ctx, spec, args...)
+// Git is gitcmd.Command run in dir ("" is the caller's) on stdin (nil is
+// none) in this environment. It takes no gitcmd.Spec, whose Env a caller could
+// set only to have it replaced: the environment is this Env, whole, and adding
+// to it is With's job.
+func (e Env) Git(ctx context.Context, dir string, stdin io.Reader, args ...string) *gitcmd.Cmd {
+	return gitcmd.Command(ctx, gitcmd.Spec{Dir: dir, Env: e.List(), Stdin: stdin}, args...)
 }
 
 func (e Env) sameKey(a, b string) bool {

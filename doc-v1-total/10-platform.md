@@ -10,7 +10,7 @@ Module `github.com/promptctl/links-issue-tracker`, Go `1.25.7` (`go.mod`); CI de
 
 ### Startup
 
-`main()` is three steps (`cmd/lit/main.go`): install the signal guard, run `cli.Run(ctx, inv)` with a `cli.Invocation` built from the process (`os.Getwd`, `os.Args[1:]`, `os.Stdin`, `os.Stdout`, `os.Stderr`), and on error `os.Exit(cli.WriteCommandError(os.Stderr, err))`; a nil error exits 0. No non-test code `cli.Run` can reach names `os.Getwd`, `os.Args`, `os.Stdin` or `filepath.Abs`; it reads the invocation's (`TestNothingRunReachesReadsTheProcess`). `cli.WorkingDirOf` refuses a directory that is not absolute, and the workspace layer runs git only in an absolute one, so no relative path resolves against the process's directory there.
+`main()` is three steps (`cmd/lit/main.go`): install the signal guard, run `cli.Run(ctx, inv)` with a `cli.Invocation` built from the process (`os.Getwd`, `os.Args[1:]`, `environ.Of(os.Environ())`, `os.Stdin`, `os.Stdout`, `os.Stderr`), and on error `os.Exit(cli.WriteCommandError(os.Stderr, err))`; a nil error exits 0. No non-test code `cli.Run` can reach names `os.Getwd`, `os.Args`, `os.Stdin`, `os.Getenv`, `os.LookupEnv`, `os.Environ`, `os.UserHomeDir`, `os.UserConfigDir`, `os.TempDir` or `filepath.Abs`; it reads the invocation's. Nor does it build a child process but through `environ.Env`'s `Command`, `CommandContext` and `Git`, which run the child in the invocation's environment (`TestNothingRunReachesReadsTheProcess`). `cli.WorkingDirOf` refuses a directory that is not absolute, and the workspace layer runs git only in an absolute one, so no relative path resolves against the process's directory there.
 
 Argument handling before any command runs (`internal/cli/cli.go`):
 
@@ -49,6 +49,8 @@ Every variable the shipped binary reads:
 | Variable | Effect |
 |---|---|
 | `XDG_CONFIG_HOME` | Global config dir = `$XDG_CONFIG_HOME/links-issue-tracker`, else `$HOME/.config/links-issue-tracker` (`internal/config/config.go`) |
+| `XDG_STATE_HOME` | State dir = `$XDG_STATE_HOME/links-issue-tracker`, else `$HOME/.local/state/links-issue-tracker` (`config.go`) |
+| `HOME` | The home dir of the two above; `USERPROFILE` on Windows (`internal/environ/environ.go`) |
 | `LIT_CONFIG_GLOBAL_PATH` | Overrides the global config file path entirely (`config.go`) |
 | `LIT_CONFIG_PROJECT_PATH` | Overrides the project config file path (`config.go`) |
 | `LIT_DISABLE_AUTO_SYNC` | Truthy (`strconv.ParseBool`, parse error = false) → no command schedules a push mirror or a receive, prints a pending receive block, or compacts, and the owner-notify hook never runs (`internal/cli/sync_cadence.go`; `owner_notify.go`) |
@@ -59,7 +61,7 @@ Every variable the shipped binary reads:
 | `LINKS_DEBUG_DOLT_SYNC_BRANCH` | Overrides the resolved sync branch ahead of the remote's default branch (`internal/cli/sync.go`) |
 | `EDITOR` | Split on whitespace to form the editor command for `lit workflows edit` (`internal/cli/workflows_edit.go`) |
 
-Variables the binary **writes** for children: the detached background mirror inherits the environment with the three `LNKS_AUTOMATION_*` variables stripped, then re-set to `TRIGGER=on-change` / `REASON=on-change cadence mirrored after a mutating command` (`internal/cli/sync_bg.go`). The owner-notify hook runs as `sh -c <hook>` in the repo root with `LIT_NOTIFY_KIND`, `LIT_NOTIFY_SUMMARY`, `LIT_NOTIFY_REMOTE`, `LIT_NOTIFY_BRANCH`, `LIT_NOTIFY_REPO` added, time-boxed with a `WaitDelay` so a backgrounded child cannot hold the pipe (`internal/cli/owner_notify.go`).
+Variables the binary **writes** for children: the detached background mirror runs in the invocation's environment with the three `LNKS_AUTOMATION_*` variables stripped, then re-set to `TRIGGER=on-change` / `REASON=on-change cadence mirrored after a mutating command` (`internal/cli/sync_bg.go`). The owner-notify hook runs as `sh -c <hook>` in the repo root with `LIT_NOTIFY_KIND`, `LIT_NOTIFY_SUMMARY`, `LIT_NOTIFY_REMOTE`, `LIT_NOTIFY_BRANCH`, `LIT_NOTIFY_REPO` added, time-boxed with a `WaitDelay` so a backgrounded child cannot hold the pipe (`internal/cli/owner_notify.go`).
 
 Read only by tests/tooling: `GITHUB_ACTIONS` (testbudget emits `::error::` annotations; `internal/testoracle` fails, rather than skips, a test whose `claude` oracle is not on PATH), `LIT_LICENSE_GRAPH_AUDIT` (gates the whole-graph license test), `LIT_TEST_REEXEC` (test binary re-execs as real `lit`), plus test-only `USER`/`HOME` negative-evidence checks and a kill-helper coordination variable.
 
