@@ -584,7 +584,16 @@ func newEpicInDir(t *testing.T, dir, title string) string {
 // plays no part in which workspace the command acts on.
 func runCLIInDirAllowError(t *testing.T, dir string, args ...string) (string, error) {
 	t.Helper()
+	return runCLIInDirWithStdin(t, dir, "", args...)
+}
+
+// runCLIInDirWithStdin is runCLIInDirAllowError with stdin as what the command
+// reads from its standard input.
+func runCLIInDirWithStdin(t *testing.T, dir, stdin string, args ...string) (string, error) {
+	t.Helper()
 	var out bytes.Buffer
-	runErr := Run(context.Background(), dirInvocation(dir, &out, &out, args))
+	inv := dirInvocation(dir, &out, &out, args)
+	inv.Stdin = strings.NewReader(stdin)
+	runErr := Run(context.Background(), inv)
 	return out.String(), runErr
 }
