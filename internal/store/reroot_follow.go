@@ -105,16 +105,17 @@ func (s *Store) moveOntoRemoteReRoot(ctx context.Context, remote storage.RemoteN
 	// fork point below the cut pins that history through every GC and is
 	// the base a later reconcile merges against. [LAW:no-silent-failure] a
 	// fork-point move that fails is the follow's error, beside a branch that
-	// moved. A collection frees nothing while a fork point pins the history
-	// below the cut, so only fork points that crossed leave the store owing
-	// one.
+	// moved. A collection frees nothing below this cut while a fork point
+	// pins it, so only fork points that crossed leave the store owing one; a
+	// debt an earlier follow left stands, since the history below its cut no
+	// longer has them to pin it.
 	moveErr := s.runSyncMutation(ctx, func(ctx context.Context) error {
 		if err := s.moveForkPointsAcrossTheCut(ctx, remote); err != nil {
 			return fmt.Errorf("move fork points across the cut: %w", err)
 		}
 		return nil
 	})
-	s.owesCollection = moveErr == nil
+	s.owesCollection = s.owesCollection || moveErr == nil
 	return followed, crossed, wrapFollowErr(remote, trimmedBranch, moveErr)
 }
 

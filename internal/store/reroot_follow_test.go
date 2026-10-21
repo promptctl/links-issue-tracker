@@ -290,6 +290,33 @@ func TestAFollowWhoseForkPointsDoNotMoveFailsAndCollectsNothing(t *testing.T) {
 	if len(branchesUnder(t, ctx, bravo, migrationCheckpointPrefix+"-")) == 0 {
 		t.Fatalf("bravo's %s checkpoints are gone; want them standing, since nothing collected", migrationCheckpointPrefix)
 	}
+	if c := bravo.collectOwedCut(ctx, storage.SyncEntryPush); c.Ran {
+		t.Fatalf("collectOwedCut after the failed follow = %+v; want nothing owed", c)
+	}
+}
+
+// TestAFailedForkPointMoveKeepsAnEarlierDebt has a store already owe a
+// collection, as a push's retry follow leaves it before the bound follows,
+// when its next follow's fork-point move fails. The earlier cut's history is
+// no longer pinned, so the debt stands and the verb's collection runs.
+func TestAFailedForkPointMoveKeepsAnEarlierDebt(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	r := newReRootedRemote(t, ctx, true)
+
+	bravo := openSyncOrFatal(t, ctx, r.bravo)
+	defer func() { _ = bravo.Close() }()
+	if err := bravo.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
+		t.Fatalf("SyncFetch(bravo) error = %v", err)
+	}
+	bravo.owesCollection = true
+	bravo.moveForkPointsHookForTest = func() error { return errors.New("injected fork-point failure") }
+	if _, _, err := bravo.moveOntoRemoteReRoot(ctx, remoteName(t, "origin"), "master", storage.SyncEntryBound); err == nil {
+		t.Fatal("moveOntoRemoteReRoot(bravo) error = nil; want the fork-point move's failure")
+	}
+	if c := bravo.collectOwedCut(ctx, storage.SyncEntryPush); !c.Ran || c.Entry != storage.SyncEntryPush {
+		t.Fatalf("collectOwedCut = %+v; want the earlier debt collected under push", c)
+	}
 }
 
 // TestACollectionIsReportedWhole puts every fact of a collection on its event
