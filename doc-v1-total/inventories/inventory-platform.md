@@ -756,9 +756,15 @@ the Justfile or any workflow file in `.github/workflows/`.
 
 - Invoked as `go test -short -json ./... | go run ./tools/testbudget`
   (`tools/testbudget/main.go`, `.github/workflows/ci.yml`).
-- Reads `test2json` events (`Action`, `Package`, `Test`, `Elapsed`, `Output`) from stdin
-  (`tools/testbudget/main.go`), replays package result lines as they arrive and a failed
-  test's buffered output, and reports unfinished tests when the stream ends
+- Reads `test2json` events (`Time`, `Action`, `Package`, `Test`, `Elapsed`, `Output`) from
+  stdin (`tools/testbudget/main.go`), replays package result lines as they arrive and a
+  failed test's buffered output, and prints the buffered output of each test with no
+  verdict under `--- unfinished: <pkg> <test> (<why>)` when its package ends, or at
+  stream end for a package with no terminal event (`tools/testbudget/main.go`).
+- Each violation line is followed by `slowest top-level tests, <n> of <ran>:` and up to
+  ten rows, slowest first, ties by name: elapsed `%.2fs`, `parallel` (the test emitted
+  `pause`) or `serial`, the name, and `[unfinished]` for a test the package ended without
+  a verdict for. An unfinished test's elapsed is run-to-pause plus cont-to-package-end
   (`tools/testbudget/main.go`).
 - Prints a per-package `elapsed / budget` table headed
   `testbudget: per-package wall clock vs budget (budgets: tools/testbudget/budgets.go)`
