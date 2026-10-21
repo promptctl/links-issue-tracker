@@ -746,7 +746,7 @@ func TestFocusClauseLandsOnThePoolsRoute(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			if _, err := renderNextOutcome(&buf, tc.outcome, details, claimContext{self: selfAttribution}, ""); err != nil {
+			if _, err := renderNextOutcome(&buf, tc.outcome, details, claimContext{self: selfAttribution}, "", false); err != nil {
 				t.Fatalf("renderNextOutcome error = %v", err)
 			}
 			var carrying []string

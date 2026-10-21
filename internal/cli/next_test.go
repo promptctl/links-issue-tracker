@@ -814,7 +814,7 @@ func TestRenderNextOutcomeTerminalOutcomesKeepTheirType(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			occasion, err := renderNextOutcome(io.Discard, tc.outcome, nil, claimContext{}, "")
+			occasion, err := renderNextOutcome(io.Discard, tc.outcome, nil, claimContext{}, "", false)
 			if err == nil {
 				t.Fatalf("renderNextOutcome(%T) error = nil, want the terminal answer", tc.outcome)
 			}
@@ -911,7 +911,7 @@ func TestRenderNextOutcomeNamesTheOtherSessionWorkingOurLane(t *testing.T) {
 	const reader = "claude_sess-mine"
 
 	var out bytes.Buffer
-	if _, err := renderNextOutcome(&out, ResumedOwnWork{Row: inFlightRow}, map[string]storage.IssueRelations{}, cc, reader); err != nil {
+	if _, err := renderNextOutcome(&out, ResumedOwnWork{Row: inFlightRow}, map[string]storage.IssueRelations{}, cc, reader, false); err != nil {
 		t.Fatalf("renderNextOutcome() error = %v", err)
 	}
 	text := out.String()
@@ -940,7 +940,7 @@ func TestRenderNextOutcomeStillNamesTheHolderOfAQuietTicket(t *testing.T) {
 	const reader = "claude_sess-mine"
 
 	var out bytes.Buffer
-	if _, err := renderNextOutcome(&out, ResumedOwnWork{Row: rowByID(t, rows, quiet.ID)}, map[string]storage.IssueRelations{}, cc, reader); err != nil {
+	if _, err := renderNextOutcome(&out, ResumedOwnWork{Row: rowByID(t, rows, quiet.ID)}, map[string]storage.IssueRelations{}, cc, reader, false); err != nil {
 		t.Fatalf("renderNextOutcome() error = %v", err)
 	}
 	text := out.String()
@@ -968,7 +968,7 @@ func TestRenderNextOutcomeNamesTheHolderToAnUnidentifiedReader(t *testing.T) {
 	const reader = ""
 
 	var out bytes.Buffer
-	if _, err := renderNextOutcome(&out, ResumedOwnWork{Row: rowByID(t, rows, agents.ID)}, map[string]storage.IssueRelations{}, cc, reader); err != nil {
+	if _, err := renderNextOutcome(&out, ResumedOwnWork{Row: rowByID(t, rows, agents.ID)}, map[string]storage.IssueRelations{}, cc, reader, false); err != nil {
 		t.Fatalf("renderNextOutcome() error = %v", err)
 	}
 	if text := out.String(); !strings.Contains(text, "claude_sess-agent") {
@@ -994,7 +994,7 @@ func TestRenderNextOutcomeSaysNothingAboutAnUnassignedTicketInFlight(t *testing.
 	const reader = "claude_sess-mine"
 
 	var out bytes.Buffer
-	if _, err := renderNextOutcome(&out, ResumedOwnWork{Row: rowByID(t, rows, unassigned.ID)}, map[string]storage.IssueRelations{}, cc, reader); err != nil {
+	if _, err := renderNextOutcome(&out, ResumedOwnWork{Row: rowByID(t, rows, unassigned.ID)}, map[string]storage.IssueRelations{}, cc, reader, false); err != nil {
 		t.Fatalf("renderNextOutcome() error = %v", err)
 	}
 	if text := out.String(); !strings.Contains(text, unassigned.ID+" is already in progress in a lane you hold — continue where you left off") {
@@ -1059,7 +1059,7 @@ func TestRenderNextOutcomeSpeaksOnlyInTheConditional(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			if _, err := renderNextOutcome(&buf, tc.outcome, details, cc, reader); err != nil {
+			if _, err := renderNextOutcome(&buf, tc.outcome, details, cc, reader, false); err != nil {
 				t.Fatalf("renderNextOutcome(%T) error = %v", tc.outcome, err)
 			}
 			out := buf.String()
@@ -1144,7 +1144,7 @@ func TestDependencyPickIsDistinguishableFromThePool(t *testing.T) {
 
 	render := func(o NextOutcome) string {
 		var buf bytes.Buffer
-		if _, err := renderNextOutcome(&buf, o, details, cc, reader); err != nil {
+		if _, err := renderNextOutcome(&buf, o, details, cc, reader, false); err != nil {
 			t.Fatalf("renderNextOutcome(%T) error = %v", o, err)
 		}
 		return buf.String()

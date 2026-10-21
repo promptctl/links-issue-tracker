@@ -75,14 +75,10 @@ func nextLeaf() appLeaf {
 		}
 		outcome := routeNext(gathered.rows, gathered.details, gathered.epics, cc.standings, cc.evidence, cc.self, gathered.scope.scopeFor(*all), asked)
 		recordNextEvent(ctx, outcome, len(gathered.keepRows(asked).rows))
-		placement := placeFor(outcome, ap.Workspace.PrimaryClone())
-		recordStartPlace(ctx, placement, ap.Workspace.PrimaryClone())
+		recordStartPlace(ctx, placeFor(outcome, ap.Workspace.PrimaryClone()), ap.Workspace.PrimaryClone())
 		ap.Statusline.Record(nextStatuslineFacts(outcome, !filter.narrows() && !*all, cc.evidence)...)
-		occasion, err := renderNextOutcome(stdout, outcome, gathered.details, cc, actor())
+		occasion, err := renderNextOutcome(stdout, outcome, gathered.details, cc, actor(), ap.Workspace.PrimaryClone())
 		if err != nil {
-			return err
-		}
-		if _, err := io.WriteString(stdout, placement.note()); err != nil {
 			return err
 		}
 		return dispatchOccasion(ctx, stdout, ap.Workspace, occasion)
@@ -102,7 +98,10 @@ func nextLeaf() appLeaf {
 // `lit next` claims nothing and starts nothing — `lit start` does — so a line
 // in the perfect tense would be reporting a side effect this command does not
 // have.
-func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[string]storage.IssueRelations, cc claimContext, actingAs string) (workflows.Occasion, error) {
+func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[string]storage.IssueRelations, cc claimContext, actingAs string, primaryClone bool) (workflows.Occasion, error) {
+	// [LAW:single-enforcer] the same decision the event records, so the advice
+	// and the record cannot disagree about where the pick is started.
+	place := placeFor(outcome, primaryClone)
 	var row annotation.AnnotatedIssue
 	var announce string
 	switch o := outcome.(type) {
@@ -113,29 +112,29 @@ func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[string]stor
 		announce = resumeAdvice(o.Row, actingAs) + "\n"
 	case ServedFromEpicLane:
 		row = o.Row
-		announce = startAdvice(o.Row, o.Lane) + " (a second lane of an epic you already hold a lane in)\n"
+		announce = startAdvice(o.Row, o.Lane, place) + " (a second lane of an epic you already hold a lane in)\n"
 	case ServedFromNewLane:
 		row = o.Row
-		announce = o.advice() + "\n"
+		announce = o.advice(place) + "\n"
 	// Steps 1b and 2b say what they are for: "this unblocks work on your path"
 	// is a fact about the WALK the row cannot show on its own, whereas step 2's
 	// shared epic is visible in the id. A pool pick's one such fact, the focus
 	// scope that narrowed it, is said by its advice.
 	case ServedFromDependency:
 		row = o.Row
-		announce = startAdvice(o.Row, o.Lane) + dependencyReason(o) + "\n"
+		announce = startAdvice(o.Row, o.Lane, place) + dependencyReason(o) + "\n"
 	// Leaving the scope is the agent's choice, so every route is named and
 	// none is taken: the row is the last route, printed like any pick.
 	case ServedPastExhaustion:
 		row = o.Row
-		routes := append(o.Exhaustion.stay(), "move on to the top ready ticket outside it: "+o.advice())
+		routes := append(o.Exhaustion.stay(), "move on to the top ready ticket outside it: "+o.advice(place))
 		announce = o.Exhaustion.why() + "\n" + strings.Join(routes, "\nor ") + "\n"
 	// The hidden ticket's route comes first, as the stay route does above: it
 	// is the answer the unfiltered question gets, and the row is the one this
 	// question gets.
 	case ServedPastNarrowing:
 		row = o.Row
-		announce = o.Narrowing.Error() + "\nor take the top ready ticket the filter selects, outside the work you hold: " + o.advice() + "\n"
+		announce = o.Narrowing.Error() + "\nor take the top ready ticket the filter selects, outside the work you hold: " + o.advice(place) + "\n"
 	// The three terminal outcomes travel outward AS THEMSELVES. Rendering them
 	// into an untyped error here would discard the very discriminator routing
 	// has just established, so the classifier, commandErrorReason, would fall
@@ -255,12 +254,12 @@ func viaClause(via []hop) string {
 // command they have yet to run. The pronoun is the caller's answer to that,
 // available here and nowhere else because the ticket is named one clause
 // earlier. next_route_test.go pins all four cells of state and lane shape.
-func startAdvice(row annotation.AnnotatedIssue, lane model.LaneID) string {
+func startAdvice(row annotation.AnnotatedIssue, lane model.LaneID, place startPlace) string {
 	object, named := lane.Describe()
 	if !named {
 		object = "it"
 	}
-	advice := fmt.Sprintf("run `lit start %s` to claim %s", row.ID, object)
+	advice := fmt.Sprintf("%srun `lit start %s` to claim %s", place.where(), row.ID, object)
 	if row.State() == model.StateInProgress {
 		return fmt.Sprintf("%s is in progress and nobody holds it — %s", row.ID, advice)
 	}
@@ -275,8 +274,8 @@ func startAdvice(row annotation.AnnotatedIssue, lane model.LaneID) string {
 // because a pick over the whole queue is the backlog's top, as it reads.
 // [LAW:dataflow-not-control-flow] every pool pick renders through here; the
 // scope's value decides the clause.
-func (p poolPick) advice() string {
-	return startAdvice(p.Row, p.Lane) + p.Scope.pickClause()
+func (p poolPick) advice(place startPlace) string {
+	return startAdvice(p.Row, p.Lane, place) + p.Scope.pickClause()
 }
 
 // pickClause is how a row the pool offered names the focus scope it was drawn

@@ -248,7 +248,7 @@ func TestRouteNextServesPastAnExhaustedEpic(t *testing.T) {
 	// Nothing blocks epic A, so there is nothing a new ticket could clear:
 	// moving on is the only route, and it is not phrased as an alternative.
 	var out strings.Builder
-	if _, err := renderNextOutcome(&out, served, details, claimContext{}, ""); err != nil {
+	if _, err := renderNextOutcome(&out, served, details, claimContext{}, "", false); err != nil {
 		t.Fatalf("renderNextOutcome error = %v", err)
 	}
 	text := out.String()
@@ -1641,7 +1641,7 @@ func TestRouteNextServesAnAbandonedSiblingLane(t *testing.T) {
 	if served.Row.ID != a2.ID || served.Lane.Epic() != epicA.ID {
 		t.Fatalf("served = %q in epic %q, want %q in %q", served.Row.ID, served.Lane.Epic(), a2.ID, epicA.ID)
 	}
-	advice := startAdvice(served.Row, served.Lane)
+	advice := startAdvice(served.Row, served.Lane, startHere)
 	if !strings.Contains(advice, "in progress and nobody holds it") {
 		t.Fatalf("startAdvice = %q, want it to say the row is in flight and unheld — this pick inherits %q's unfinished work rather than beginning it", advice, a2.ID)
 	}
@@ -1772,7 +1772,7 @@ func TestStartAdviceNamesTheCommandAndTheLaneShape(t *testing.T) {
 			if tc.solo {
 				lane = model.LaneOf(row.Issue, nil)
 			}
-			got := startAdvice(row, lane)
+			got := startAdvice(row, lane, startHere)
 			if got != tc.want {
 				t.Fatalf("startAdvice = %q, want %q", got, tc.want)
 			}
@@ -1799,7 +1799,7 @@ func TestStartAdviceNeverSpellsASoloTicketTwice(t *testing.T) {
 
 	rows, _, _ := h.gather()
 	row := rowByID(t, rows, solo.ID)
-	got := startAdvice(row, model.LaneOf(row.Issue, nil))
+	got := startAdvice(row, model.LaneOf(row.Issue, nil), startHere)
 
 	if n := strings.Count(got, solo.ID); n != 1 {
 		t.Fatalf("startAdvice = %q names %q %d times, want exactly 1 — a solo lane is its ticket, so naming the lane repeats the id and reads as a log line rather than as advice", got, solo.ID, n)

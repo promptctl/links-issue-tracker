@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 )
 
@@ -39,35 +41,32 @@ func TestPlaceForIsTotalOverTheSealedSum(t *testing.T) {
 			primary bool
 			want    startPlace
 		}{{true, expected.primary}, {false, expected.linked}} {
-			got := placeFor(tc.outcome, checkout.primary)
-			if got.Place != checkout.want {
-				t.Errorf("placeFor(%s, primary=%v) = %v, want %v", tc.name, checkout.primary, got.Place, checkout.want)
-			}
-			wantTicket := ""
-			if tc.served {
-				wantTicket = sealedSumRow.ID
-			}
-			if got.Ticket != wantTicket {
-				t.Errorf("placeFor(%s, primary=%v).Ticket = %q, want %q", tc.name, checkout.primary, got.Ticket, wantTicket)
+			if got := placeFor(tc.outcome, checkout.primary); got != checkout.want {
+				t.Errorf("placeFor(%s, primary=%v) = %v, want %v", tc.name, checkout.primary, got, checkout.want)
 			}
 		}
 	}
 }
 
-// The line under a pick says where to start it only when that is somewhere
-// other than here, and names the ticket in the command it gives.
-func TestStartPlaceNoteDirectsOnlyAPickThatLeaves(t *testing.T) {
+// The start advice opens with the worktree to run `lit start` from only for a
+// pick that leaves, so the command and its checkout are one instruction.
+func TestStartAdviceNamesTheWorktreeOnlyForAPickThatLeaves(t *testing.T) {
+	h := newReadyTestHarness(t)
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "next", IssueType: "epic", Priority: 1})
+	ticket := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Pick", Topic: "next", IssueType: "task", Priority: 0, ParentID: epic.ID})
+	rows, _, _ := h.gather()
+	row := rowByID(t, rows, ticket.ID)
 	for _, tc := range []struct {
 		place startPlace
 		want  string
 	}{
-		{startNoPick, ""},
-		{startHere, ""},
-		{startOffPrimaryClone, "start test-1 from a worktree of its own, not the primary clone, where every session starts: create one off the trunk and run `lit start test-1` from inside it — the claim lands on the checkout `lit start` runs in\n"},
-		{startBesideHeldWork, "start test-1 from a worktree of its own, not this checkout, whose own work is unfinished: create one off the trunk and run `lit start test-1` from inside it — the claim lands on the checkout `lit start` runs in\n"},
+		{startNoPick, "run `lit start " + ticket.ID + "` to claim it"},
+		{startHere, "run `lit start " + ticket.ID + "` to claim it"},
+		{startOffPrimaryClone, "from a worktree of its own off the trunk (not the primary clone, where every session starts), run `lit start " + ticket.ID + "` to claim it"},
+		{startBesideHeldWork, "from a worktree of its own off the trunk (not this checkout, whose own work is unfinished), run `lit start " + ticket.ID + "` to claim it"},
 	} {
-		if got := (startPlacement{Place: tc.place, Ticket: "test-1"}).note(); got != tc.want {
-			t.Errorf("note(%v) = %q, want %q", tc.place, got, tc.want)
+		if got := startAdvice(row, model.LaneOf(row.Issue, nil), tc.place); got != tc.want {
+			t.Errorf("startAdvice(place %v) = %q, want %q", tc.place, got, tc.want)
 		}
 	}
 }
@@ -76,19 +75,19 @@ func TestStartPlaceNoteDirectsOnlyAPickThatLeaves(t *testing.T) {
 // that served nothing records the place as null rather than leaving it out.
 func TestNextRecordsWhereItsPickStarts(t *testing.T) {
 	for _, tc := range []struct {
-		name      string
-		placement startPlacement
-		primary   bool
-		want      any
+		name    string
+		place   startPlace
+		primary bool
+		want    any
 	}{
-		{"new work in the primary clone", startPlacement{Place: startOffPrimaryClone, Ticket: "test-1"}, true, "worktree_off_primary_clone"},
-		{"past held work in a linked worktree", startPlacement{Place: startBesideHeldWork, Ticket: "test-1"}, false, "worktree_beside_held_work"},
-		{"own work", startPlacement{Place: startHere, Ticket: "test-1"}, false, "here"},
-		{"no pick", startPlacement{Place: startNoPick}, true, nil},
+		{"new work in the primary clone", startOffPrimaryClone, true, "worktree_off_primary_clone"},
+		{"past held work in a linked worktree", startBesideHeldWork, false, "worktree_beside_held_work"},
+		{"own work", startHere, false, "here"},
+		{"no pick", startNoPick, true, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			recorder := telemetry.Begin(telemetry.Event{})
-			recordStartPlace(telemetry.With(context.Background(), recorder), tc.placement, tc.primary)
+			recordStartPlace(telemetry.With(context.Background(), recorder), tc.place, tc.primary)
 			facts := writtenFacts(t, recorder.Finish(telemetry.End{}))
 			place, recorded := facts["next.start_place"]
 			if !recorded || place != tc.want {
@@ -125,7 +124,7 @@ func TestNextSendsNewWorkOutOfThePrimaryCloneOnly(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			out := runCLIInDir(t, tc.dir, "next")
-			line := "start " + ticket + " from a worktree of its own, not the primary clone"
+			line := "from a worktree of its own off the trunk (not the primary clone, where every session starts), run `lit start " + ticket + "` to claim"
 			if strings.Contains(out, line) != tc.wantLine {
 				t.Errorf("output contains %q = %v, want %v\noutput:\n%s", line, !tc.wantLine, tc.wantLine, out)
 			}

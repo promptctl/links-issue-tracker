@@ -295,14 +295,13 @@ from your own lanes and epic never carry it. The same qualifier follows the
 pool's ticket a filter hid: the filter emptied a pool the label had already
 narrowed.
 
-A pick that belongs in a worktree of its own carries one more line under it,
-naming the command: new work served in the primary clone, where every session
-starts, and a pick from outside the work this checkout holds — past an
-exhausted epic or past the ticket a filter hid — whose own work stays here.
-The line names the place to leave and ends ``create one off the trunk and run
-`lit start <id>` from inside it``, because the claim lands on the checkout
-`lit start` runs in. The checkout's own work, and new work served in a
-linked worktree that holds nothing, carry no such line.
+The same line says which checkout the start runs in. For new work served in
+the primary clone, where every session starts, and for a pick from outside the
+work this checkout holds — past an exhausted epic or past the ticket a filter
+hid — whose own work stays here, it opens "from a worktree of its own off the
+trunk (not …)", naming the checkout to leave, because the claim lands on the
+checkout `lit start` runs in. The checkout's own work, and new work served in a
+linked worktree that holds nothing, are started where `next` ran.
 
 Work already in flight in one of your own lanes reports the state it is in rather
 than a command to run. When the ticket carries an assignee that is not the
