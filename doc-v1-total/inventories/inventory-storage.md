@@ -895,8 +895,8 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 
 **`AddComment`**
 - `getIssue(in.IssueID)` first → missing issue is `NotFoundError`.
-- `body = strings.TrimSpace(in.Body)`; empty → `model.ValidationError{Message: "comment body is required"}`.
-- Comment: `ID: "cmt-" + uuid.NewString()`, `IssueID`, trimmed `Body`, `CreatedAt: e.now()`, `CreatedBy: storage.Actor(in.CreatedBy)`.
+- `in.Body` is a `model.CommentBody`, already trimmed and non-blank by `model.ParseCommentBody`.
+- Comment: `ID: "cmt-" + uuid.NewString()`, `IssueID`, `Body`, `CreatedAt: e.now()`, `CreatedBy: storage.Actor(in.CreatedBy)`.
 - Appends and returns `(comment, issue, nil)` — the issue read is the caller's answer too, since a comment never changes the issue row.
 - **`AddComment` records no history event.**
 

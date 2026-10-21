@@ -827,8 +827,9 @@ shared outcome on every issue it closes.
 
 `bulk comment` adds the same comment to every listed issue, as `lit comment add`
 adds it to one, and leaves the comments an issue already has in place. The body is
-read once for the whole run, so `--body-file -` reads stdin once. A blank body fails
-every item with the error `lit comment add` gives.
+read once for the whole run, so `--body-file -` reads stdin once. A blank body is
+refused before any issue is touched, with the error and exit code `lit comment add`
+gives.
 
 Each successful item prints `<id> ok` to stdout, after any line its single
 command prints first: the `claim transferred` line of a start, the takeover line

@@ -175,10 +175,11 @@ func bulkLabelLeaf() appLeaf {
 	}}
 }
 
-// bulkCommentLeaf is `lit comment add` in bulk form: one body, read once, added
-// to every listed issue through the step the single verb runs, beside the
-// comments each issue already has. A landed item prints the single verb's
-// line, as every bulk verb does. [LAW:single-enforcer] [LAW:one-type-per-behavior]
+// bulkCommentLeaf is `lit comment add` in bulk form: one body, read and parsed
+// once before any issue is touched, added to every listed issue through the
+// step the single verb runs, beside the comments each issue already has. A
+// landed item prints the single verb's line, as every bulk verb does.
+// [LAW:single-enforcer] [LAW:one-type-per-behavior] [LAW:parse-dont-validate]
 func bulkCommentLeaf() appLeaf {
 	fs := newCobraFlagSet("bulk comment")
 	issueIDsFlag := registerBulkIDs(fs)
@@ -190,9 +191,13 @@ func bulkCommentLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
+		commentBody, err := model.ParseCommentBody(body.value())
+		if err != nil {
+			return err
+		}
 		actor := resolveActor(inv.Env)
 		return runBulkOver(ctx, inv.Stdout, issueIDs, func(ctx context.Context, issueID string) (string, error) {
-			comment, _, err := addComment(ctx, ap, issueID, body.value(), actor)
+			comment, _, err := addComment(ctx, ap, issueID, commentBody, actor)
 			return commentLine(comment), err
 		})
 	}}

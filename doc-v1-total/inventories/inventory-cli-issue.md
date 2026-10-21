@@ -1820,10 +1820,10 @@ usage string as a `UsageError` → exit 2 (`resolve`, `register.go`).
   and `lit new` and `lit update` `--plan` too (event fact `text_source.plan`).
 - Writes through `addComment` (`cli.go`), shared with `bulk comment`:
   `Store.AddComment`, then the event fact `comment.id`, the new comment's id.
-- Store refusal: a blank body (after trim) →
-  `model.ValidationError{Message: "comment body is required"}` → exit 3
-  (`internal/store/store.go`). A missing issue → exit 4
-  (`store.go`).
+- The body parses through `model.ParseCommentBody` (`internal/model/comment.go`)
+  before the store is called: a blank body (after trim) →
+  `model.ValidationError{Message: "comment body is required"}` → exit 3. A missing
+  issue → exit 4 (`store.go`).
 - The comment id is `"cmt-" + uuid` and `CreatedBy` empty is normalized to
   `"unknown"` (`store.go`).
 - Dispatches `EventCommentAdded` (`cli.go`).
@@ -2016,12 +2016,12 @@ before any id is acted on.
   opens, with `comment add`'s refusals), `--by` (`bulk.go`).
 - Usage `"usage: lit bulk comment --ids <id,id,...> (--body <text> | --body-file <path|->)"`
   (`bulk.go`).
-- One body and actor for every id. Each id runs `addComment` (`cli.go`), the
-  step `commentAddLeaf` runs: `Store.AddComment`, then the fact `comment.id`
-  in the id's `bulk.items` scope. A blank body is the store's
-  `"comment body is required"` on every id, so the run fails with one
-  `BulkFailureError` entry per id and writes no comment. The comments an issue
-  already has are untouched.
+- One body and actor for every id. The body parses through
+  `model.ParseCommentBody` once, before any id runs: a blank body is one
+  `"comment body is required"` refusal (exit 3), with no `bulk.items` entry and
+  no comment written. Each id runs `addComment` (`cli.go`), the step
+  `commentAddLeaf` runs: `Store.AddComment`, then the fact `comment.id` in the
+  id's `bulk.items` scope. The comments an issue already has are untouched.
 - Each landed id's notice is `commentLine` → `"<issueID> <commentID>\n"`
   (`cli.go`), written before `"<id> ok\n"`.
 - **No workflow events** (`EventCommentAdded` is not dispatched).

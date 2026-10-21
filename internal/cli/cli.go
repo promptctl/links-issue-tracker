@@ -2153,7 +2153,11 @@ func commentAddLeaf() appLeaf {
 		if len(positional) != 1 {
 			return UsageError{Message: usage}
 		}
-		comment, issue, err := addComment(ctx, ap, positional[0], body.value(), resolveActor(inv.Env))
+		commentBody, err := model.ParseCommentBody(body.value())
+		if err != nil {
+			return err
+		}
+		comment, issue, err := addComment(ctx, ap, positional[0], commentBody, resolveActor(inv.Env))
 		if err != nil {
 			return err
 		}
@@ -2168,7 +2172,7 @@ func commentAddLeaf() appLeaf {
 // both run, so a comment lands, and is recorded, the same way from either.
 // The author resolves through the same identity rule as every other actor.
 // [LAW:single-enforcer] [LAW:one-type-per-behavior]
-func addComment(ctx context.Context, ap *app.App, issueID, body, actor string) (model.Comment, model.Issue, error) {
+func addComment(ctx context.Context, ap *app.App, issueID string, body model.CommentBody, actor string) (model.Comment, model.Issue, error) {
 	comment, issue, err := ap.Store.AddComment(ctx, storage.AddCommentInput{IssueID: issueID, Body: body, CreatedBy: actor})
 	if err != nil {
 		return model.Comment{}, model.Issue{}, err

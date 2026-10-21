@@ -168,7 +168,7 @@ func TestConcurrentMutationsMixedOperations(t *testing.T) {
 		eg.Go(func() error {
 			_, _, err := st.AddComment(egCtx, storage.AddCommentInput{
 				IssueID:   id,
-				Body:      body,
+				Body:      model.CommentBody(body),
 				CreatedBy: "concurrent-tester",
 			})
 			return err

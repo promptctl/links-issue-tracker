@@ -27,14 +27,10 @@ func (e *Engine) AddComment(ctx context.Context, in storage.AddCommentInput) (mo
 	if err != nil {
 		return model.Comment{}, model.Issue{}, err
 	}
-	body := strings.TrimSpace(in.Body)
-	if body == "" {
-		return model.Comment{}, model.Issue{}, model.ValidationError{Message: "comment body is required"}
-	}
 	comment := model.Comment{
 		ID:        "cmt-" + uuid.NewString(),
 		IssueID:   in.IssueID,
-		Body:      body,
+		Body:      string(in.Body),
 		CreatedAt: e.clock.Now(),
 		CreatedBy: storage.Actor(in.CreatedBy),
 	}

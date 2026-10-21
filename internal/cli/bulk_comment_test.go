@@ -4,26 +4,13 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"maps"
 	"strings"
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
-	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 )
-
-// runCommentLeaf drives a comment leaf as runLeaf does, over inv, and returns
-// the event the run recorded beside its error.
-func runCommentLeaf(t *testing.T, h readyTestHarness, l appLeaf, inv Invocation, args ...string) (telemetry.Event, error) {
-	t.Helper()
-	recorder := telemetry.Begin(telemetry.Event{})
-	ctx := telemetry.With(h.ctx, recorder)
-	positional, err := parseLeaf(ctx, l, args, inv)
-	if err == nil {
-		err = l.work(ctx, inv, h.ap, positional)
-	}
-	return recorder.Finish(telemetry.End{}), err
-}
 
 func (h readyTestHarness) comments(issueID string) []model.Comment {
 	h.t.Helper()
@@ -51,14 +38,14 @@ func TestBulkCommentAddsToEveryTicketAndKeepsItsComments(t *testing.T) {
 	ids := h.bulkTickets(5)
 	prior := map[string][]model.Comment{}
 	for _, id := range ids[1:3] {
-		if _, _, err := h.ap.Store.AddComment(h.ctx, storage.AddCommentInput{IssueID: id, Body: "earlier note on " + id, CreatedBy: "ada"}); err != nil {
+		if _, _, err := h.ap.Store.AddComment(h.ctx, storage.AddCommentInput{IssueID: id, Body: model.CommentBody("earlier note on " + id), CreatedBy: "ada"}); err != nil {
 			t.Fatalf("AddComment(%s) error = %v", id, err)
 		}
 		prior[id] = h.comments(id)
 	}
 
 	var out bytes.Buffer
-	ev, err := runCommentLeaf(t, h, bulkCommentLeaf(), cwdInvocation(&out, io.Discard, nil), "--ids", strings.Join(ids, ","), "--body", "the epic's premise is falsified")
+	ev, err := recordLeaf(bulkCommentLeaf(), h.ctx, cwdInvocation(&out, io.Discard, nil), h.ap, []string{"--ids", strings.Join(ids, ","), "--body", "the epic's premise is falsified"})
 	if err != nil {
 		t.Fatalf("bulk comment error = %v", err)
 	}
@@ -68,25 +55,22 @@ func TestBulkCommentAddsToEveryTicketAndKeepsItsComments(t *testing.T) {
 	if len(items) != len(ids) {
 		t.Fatalf("bulk.items has %d entries, want %d", len(items), len(ids))
 	}
+	// The new comment is the one its item recorded; comments compare as sets,
+	// so the check holds whatever order the store lists them in.
 	for i, id := range ids {
-		got := h.comments(id)
-		if len(got) != len(prior[id])+1 {
-			t.Fatalf("%s has %d comments, want its %d prior ones and the new one", id, len(got), len(prior[id]))
+		addedID, _ := items[i].(map[string]any)["bulk.item.facts"].(map[string]any)["comment.id"].(string)
+		want := map[string]string{addedID: "the epic's premise is falsified"}
+		for _, c := range prior[id] {
+			want[c.ID] = c.Body
 		}
-		for j, c := range prior[id] {
-			if got[j].ID != c.ID || got[j].Body != c.Body {
-				t.Errorf("%s comment %d = %s %q, want the prior %s %q kept", id, j, got[j].ID, got[j].Body, c.ID, c.Body)
-			}
+		got := map[string]string{}
+		for _, c := range h.comments(id) {
+			got[c.ID] = c.Body
 		}
-		added := got[len(got)-1]
-		if added.Body != "the epic's premise is falsified" {
-			t.Errorf("%s new comment body = %q", id, added.Body)
+		if !maps.Equal(got, want) {
+			t.Errorf("%s comments = %v, want its prior ones and the one bulk.items[%d] records, %v", id, got, i, want)
 		}
-		wantOut.WriteString(id + " " + added.ID + "\n" + id + " ok\n")
-		facts := items[i].(map[string]any)["bulk.item.facts"].(map[string]any)
-		if facts["comment.id"] != added.ID {
-			t.Errorf("bulk.items[%d] comment.id = %v, want %s", i, facts["comment.id"], added.ID)
-		}
+		wantOut.WriteString(id + " " + addedID + "\n" + id + " ok\n")
 	}
 	if out.String() != wantOut.String() {
 		t.Errorf("stdout = %q, want %q", out.String(), wantOut.String())
@@ -99,7 +83,7 @@ func TestBulkCommentReadsStdinOnceForEveryTicket(t *testing.T) {
 	ids := h.bulkTickets(3)
 	inv := cwdInvocation(io.Discard, io.Discard, nil)
 	inv.Stdin = strings.NewReader("deferred until\nthe store lands\n")
-	if _, err := runCommentLeaf(t, h, bulkCommentLeaf(), inv, "--ids", strings.Join(ids, ","), "--body-file", "-"); err != nil {
+	if _, err := recordLeaf(bulkCommentLeaf(), h.ctx, inv, h.ap, []string{"--ids", strings.Join(ids, ","), "--body-file", "-"}); err != nil {
 		t.Fatalf("bulk comment error = %v", err)
 	}
 	for _, id := range ids {
@@ -117,7 +101,7 @@ func TestBulkCommentFailsAMissingTicketAndCommentsOnTheRest(t *testing.T) {
 	ids := h.bulkTickets(2)
 	missing := "test-nope"
 	var out bytes.Buffer
-	ev, err := runCommentLeaf(t, h, bulkCommentLeaf(), cwdInvocation(&out, io.Discard, nil), "--ids", ids[0]+","+missing+","+ids[1], "--body", "note")
+	ev, err := recordLeaf(bulkCommentLeaf(), h.ctx, cwdInvocation(&out, io.Discard, nil), h.ap, []string{"--ids", ids[0] + "," + missing + "," + ids[1], "--body", "note"})
 	var bulk BulkFailureError
 	if !errors.As(err, &bulk) || len(bulk.Failures) != 1 || bulk.Failures[0].IssueID != missing {
 		t.Fatalf("error = %v (%T), want one failure, for %s", err, err, missing)
@@ -139,24 +123,24 @@ func TestBulkCommentFailsAMissingTicketAndCommentsOnTheRest(t *testing.T) {
 	}
 }
 
-// A blank body is refused for every item with the error `lit comment add`
-// gives, and no ticket gets a comment.
-func TestBulkCommentRefusesABlankBodyOnEveryTicket(t *testing.T) {
+// A blank body is one refusal of the whole invocation, the one `lit comment
+// add` gives, before any ticket is touched: no item runs, so a missing id among
+// them does not mix its own error in, and no ticket gets a comment.
+func TestBulkCommentRefusesABlankBodyBeforeAnyTicket(t *testing.T) {
 	h := newReadyTestHarness(t)
 	ids := h.bulkTickets(2)
-	_, single := runCommentLeaf(t, h, commentAddLeaf(), cwdInvocation(io.Discard, io.Discard, nil), ids[0], "--body", "  ")
-	if single == nil {
-		t.Fatal("lit comment add with a blank body succeeded")
+	inv := cwdInvocation(io.Discard, io.Discard, nil)
+	singleEv, single := recordLeaf(commentAddLeaf(), h.ctx, inv, h.ap, []string{ids[0], "--body", "  "})
+	if single == nil || singleEv.ExitCode != ExitValidation {
+		t.Fatalf("lit comment add with a blank body: error = %v, exit = %d, want a refusal with exit %d", single, singleEv.ExitCode, ExitValidation)
 	}
-	_, err := runCommentLeaf(t, h, bulkCommentLeaf(), cwdInvocation(io.Discard, io.Discard, nil), "--ids", strings.Join(ids, ","), "--body", "  ")
-	var bulk BulkFailureError
-	if !errors.As(err, &bulk) || len(bulk.Failures) != len(ids) {
-		t.Fatalf("error = %v (%T), want every item failed", err, err)
+	var out bytes.Buffer
+	ev, err := recordLeaf(bulkCommentLeaf(), h.ctx, cwdInvocation(&out, io.Discard, nil), h.ap, []string{"--ids", ids[0] + ",test-nope," + ids[1], "--body", " \t\n"})
+	if err == nil || err.Error() != single.Error() || ev.ExitCode != singleEv.ExitCode {
+		t.Fatalf("bulk comment error = %v, exit = %d, want lit comment add's %q, exit %d", err, ev.ExitCode, single, singleEv.ExitCode)
 	}
-	for _, f := range bulk.Failures {
-		if f.Err.Error() != single.Error() {
-			t.Errorf("%s error = %q, want lit comment add's %q", f.IssueID, f.Err, single)
-		}
+	if items := ev.Occurrences["bulk.items"]; len(items) != 0 || out.Len() != 0 {
+		t.Errorf("bulk.items = %v, stdout = %q, want no item run", items, out.String())
 	}
 	for _, id := range ids {
 		if n := len(h.comments(id)); n != 0 {
@@ -170,7 +154,7 @@ func TestCommentAddRecordsTheCommentID(t *testing.T) {
 	h := newReadyTestHarness(t)
 	id := h.bulkTickets(1)[0]
 	var out bytes.Buffer
-	ev, err := runCommentLeaf(t, h, commentAddLeaf(), cwdInvocation(&out, io.Discard, nil), id, "--body", "note")
+	ev, err := recordLeaf(commentAddLeaf(), h.ctx, cwdInvocation(&out, io.Discard, nil), h.ap, []string{id, "--body", "note"})
 	if err != nil {
 		t.Fatalf("comment add error = %v", err)
 	}

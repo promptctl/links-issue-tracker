@@ -91,7 +91,7 @@ func climbsTo(tree EpicTree, from, to string) bool {
 
 type AddCommentInput struct {
 	IssueID   string
-	Body      string
+	Body      model.CommentBody
 	CreatedBy string
 }
 

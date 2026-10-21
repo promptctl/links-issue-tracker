@@ -852,8 +852,8 @@ Evidence: a create/close/reopen/archive sequence yields exactly 4 events with ac
 
 `store.go`:
 1. `s.GetIssue(ctx, in.IssueID)` — validates existence and doubles as the returned issue, avoiding a second read (`store.go`, doc).
-2. `body := strings.TrimSpace(in.Body)`; empty → `model.ValidationError{Message: "comment body is required"}` (`store.go`).
-3. `now := time.Now().UTC()`; `comment := model.Comment{ID: "cmt-" + uuid.NewString(), IssueID: in.IssueID, Body: body, CreatedAt: now, CreatedBy: storage.Actor(in.CreatedBy)}` — blank → `"unknown"` (`store.go`).
+2. `in.Body` is a `model.CommentBody`, already trimmed and non-blank by `model.ParseCommentBody` (`internal/model/comment.go`).
+3. `now := time.Now().UTC()`; `comment := model.Comment{ID: "cmt-" + uuid.NewString(), IssueID: in.IssueID, Body: string(in.Body), CreatedAt: now, CreatedBy: storage.Actor(in.CreatedBy)}` — blank → `"unknown"` (`store.go`).
 4. `withMutation(ctx, "add comment", ...)` runs:
 ```sql
 INSERT INTO comments(id, issue_id, body, created_at, created_by) VALUES (?, ?, ?, ?, ?)

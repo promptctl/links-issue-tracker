@@ -13,7 +13,6 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
-	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -259,24 +258,16 @@ func TestDoctorPrintsEachWarningItsHealthCheckFinds(t *testing.T) {
 	}
 }
 
-// runDoctorRecorded is doctor's parse and work under a recorder the test keeps,
-// ended the way the dispatcher ends it, so it can read the facts the
+// runDoctorRecorded runs doctor through recordLeaf and returns the facts the
 // invocation's event carries beside what it printed.
 func runDoctorRecorded(t *testing.T, h readyTestHarness, args ...string) (map[string]any, string) {
 	t.Helper()
-	recorder := telemetry.Begin(telemetry.Event{})
-	ctx := telemetry.With(h.ctx, recorder)
-	l := doctorLeaf()
 	var out bytes.Buffer
-	positional, err := parseLeaf(ctx, l, args, cwdInvocation(&out, &out, nil))
-	if err != nil {
-		t.Fatalf("parseLeaf: %v", err)
-	}
-	err = l.work(ctx, cwdInvocation(&out, &out, nil), h.ap, positional)
+	ev, err := recordLeaf(doctorLeaf(), h.ctx, cwdInvocation(&out, &out, nil), h.ap, args)
 	if err != nil {
 		t.Fatalf("doctor %v error = %v\n%s", args, err, out.String())
 	}
-	return writtenFacts(t, recorder.Finish(invocationEnd(time.Now(), err, nil))), out.String()
+	return writtenFacts(t, ev), out.String()
 }
 
 // A key two live tickets hold is named on the status line, in a warning line,
