@@ -11,7 +11,28 @@ Pick up the next ready ticket and start work.
 
 Run `lit quickstart` if you haven't already.  This provides instructions for using the work tracking system.
 
-If the user provided specific information (e.g., a ticket id or area of the codebase to work on), SKIP THE REST OF THESE INSTRUCTIONS and follow the guidance from `lit quickstart` to follow the user instructions.  The following information is for determining which work to pick when the user did not specify.
+If the user provided specific information (e.g., a ticket id or area of the codebase to work on), SKIP THE REST OF THESE INSTRUCTIONS except the next section, "Work from the checkout that holds the work", which holds for every ticket, and follow the guidance from `lit quickstart` to follow the user instructions.  The rest of this skill is for determining which work to pick when the user did not specify.
+
+## Work from the checkout that holds the work
+
+lit counts a checkout — the primary clone or one linked worktree — as the claimant, not the session working in it.  A checkout carries one epic at a time, and every ticket `lit next` serves it is worked there: `lit next`, `lit start`, the branch, the commits and `lit done` all run from inside it.  Sessions are shifts at one desk: they come and go, and the work stays where it is.
+
+- **A handoff that names a checkout** is where you run this skill.  Go there first.
+- **`lit next` says where its pick is started.**  For a pick that belongs in a worktree of its own — new work served in the primary clone, or work from outside unfinished work this checkout holds — its start advice says `from a worktree of its own off the trunk (not …)` before `lit start <id>`.  Create the worktree and run `lit start <id>` from inside it, because the claim lands on the checkout `lit start` runs in:
+
+  ```
+  git fetch origin
+  git worktree add --detach <path> origin/master    # or the repo's default branch
+  ```
+
+  The worktree starts on no branch: step 3 below finds the ticket's branch or cuts it there.  Start advice that names no worktree is started where you are.
+- **A ticket held by a checkout on this machine** names it on its claim line in `lit backlog`: `claimed here: <path> (<branch>)`.  That is where the ticket is worked.
+- **A merged ticket does not end the checkout's work.**  Keep the worktree and run `lit next` from inside it; the ticket it serves is cut on a fresh branch there (step 3 below).
+
+The moment this goes wrong comes after a merge: the next ticket is in the same lane, and a fresh worktree off the trunk feels like the clean place to start it.  It is a second checkout for the same lane.  lit sees a new claimant take the lane and reports it `contested by` the old one, and `lit next` run from anywhere but the checkout that holds the lane routes away from the lane's next ticket.
+
+- WRONG: an epic's four tickets worked in four worktrees, one per ticket — four claimants for one lane.
+- RIGHT: all four worked in the one worktree that holds the epic, one branch per ticket.
 
 ## Finding work
 
@@ -72,7 +93,7 @@ Every lane nobody holds is yours to wrap up — an expired claim is no claim, so
 
 ### Pull new work
 
-Run `lit next` first, always.  It is the routing decision itself, not a suggestion box, and it is the only thing that knows what this checkout holds — a claim in lit is an (assignee, checkout) pair you cannot read off any listing.  It serves your own live claims ahead of everything else: lanes you hold right now, work you left in progress there, and other lanes of the epic you are already in that nobody else holds.  Only once you hold nothing, or your epic has nothing workable left, does it reach the global pool — and a claim expires after six hours of silence in its lane, so a checkout that has been away longer than that holds nothing and is routed by rank like any other.  Whatever it hands you is your ticket — `lit start` it and go to "Working the ticket".
+Run `lit next` first, always.  It is the routing decision itself, not a suggestion box, and it is the only thing that knows what this checkout holds — a claim in lit is an (assignee, checkout) pair you cannot read off any listing.  It serves your own live claims ahead of everything else: lanes you hold right now, work you left in progress there, and other lanes of the epic you are already in that nobody else holds.  Only once you hold nothing, or your epic has nothing workable left, does it reach the global pool — and a claim expires after six hours of silence in its lane, so a checkout that has been away longer than that holds nothing and is routed by rank like any other.  Whatever it hands you is your ticket — `lit start` it from the checkout it belongs in ("Work from the checkout that holds the work" above), then go to "Working the ticket".
 
 #### Orphaned tickets
 
@@ -140,12 +161,13 @@ A mature engineer knows when to ask for help, and it isn't at the slightest hint
 
    - **Already on the ticket's branch?**  You are, if you arrived here from uncommitted work or an open PR.  Stay on it and skip to the cleanliness check — creating a second branch here strands the work you just claimed.
 
-   - **Otherwise, branch from an up-to-date trunk** — not from wherever HEAD happens to be sitting.  Finishing a ticket leaves you standing on its branch, and `git checkout -b` from there silently forks the new ticket off unmerged work: the PR opens carrying the previous ticket's diff on top of its own, and it cannot be reviewed or merged on its own.  Get onto the trunk and update it first:
+   - **Otherwise, branch from an up-to-date trunk** — not from wherever HEAD happens to be sitting.  Finishing a ticket leaves you standing on its branch, and `git checkout -b` from there silently forks the new ticket off unmerged work: the PR opens carrying the previous ticket's diff on top of its own, and it cannot be reviewed or merged on its own.  Fetch the trunk first; the branch is cut from it below:
 
      ```
-     git checkout master        # or the repo's default branch
-     git pull --rebase
+     git fetch origin
      ```
+
+     Cut from `origin/master` rather than checking `master` out: in a linked worktree, `git checkout master` fails while another checkout has it.
 
    - **Look for an existing branch before you create one.**  A previously-started ticket may already have one, and it may carry a slug — `<ticket-id>_slug` — so an exact-name checkout reads it as missing and you start a duplicate.  Search by substring, locally and on the remote, and ask for clean names:
 
@@ -173,7 +195,7 @@ A mature engineer knows when to ask for help, and it isn't at the slightest hint
      Only when the search prints nothing do you create one:
 
      ```
-     git checkout -b <ticket-id>
+     git checkout --no-track -b <ticket-id> origin/master    # or the repo's default branch
      ```
 
      Plain ticket id, no slug.  A slug is invented, so two sessions that both slug one ticket invent two different names for it, and the next search turns up "several genuinely different branches" and a judgment call that never needed to exist.  The bare id is the one name every session picks independently.
@@ -182,7 +204,7 @@ A mature engineer knows when to ask for help, and it isn't at the slightest hint
 
 4. **State the plan in one paragraph, then start.** What the ticket asks for, how you'll verify it's done (the machine-verifiable criterion), and the first concrete step. Then begin.
 
-5. **Record the phase as the work moves.** `lit start` put the ticket in `plan`.  Run `lit phase <id> --to impl` when you start writing its code, `lit phase <id> --to review` when its PR opens, and `lit phase <id> --to merge` when review is done and the merge is under way; then `lit done <id>` once it has merged.  A statusline and other sessions read the phase to see where the work stands, so it is only as current as the last `lit phase` you ran.
+5. **Record the phase as the work moves.** `lit start` put the ticket in `plan`.  Run `lit phase <id> --to impl` when you start writing its code, `lit phase <id> --to review` when its PR opens, and `lit phase <id> --to merge` when review is done and the merge is under way; then `lit done <id>` once it has merged.  Then run `lit next` from the same checkout: the next ticket it serves is worked there too, on a fresh branch (step 3).  A handoff to the next session names this checkout's path, because a fresh session starts in the primary clone, and `lit next` run there routes away from the work this checkout holds.  A statusline and other sessions read the phase to see where the work stands, so it is only as current as the last `lit phase` you ran.
 
 ## When to stop and ask
 

@@ -54,11 +54,14 @@ lines here for reading:
     "next.dependency_path": [],
     "next.exhausted_epics": [],
     "next.exhausted_progress": {"done": 0, "total": 0},
+    "next.exhausted_own_progress": {"done": 0, "total": 0},
     "next.blocked": [],
     "next.held": [],
     "next.off_path": [],
     "next.unreachable": [],
     "next.stay_offered": false,
+    "next.start_place": "worktree_off_primary_clone",
+    "next.primary_clone": true,
     "statusline.changed": ["next"],
     "statusline.rollup_progress": null,
     "statusline.phase": null,
@@ -109,6 +112,7 @@ filter, writes `"outcome": "error"` and none of these keys.
 | `next.dependency_path` | For `served_from_dependency`, how the pick clears the way: the ticket of yours it unblocks, each prerequisite between — an epic followed by the ticket under it the walk went through — then the dependency the pick is work toward, which is the pick itself or the epic it sits under. Empty for every other outcome. |
 | `next.exhausted_epics` | The epics whose open work it found unreachable. |
 | `next.exhausted_progress` | How far the stopped scope had come, counted over every lane of it: `done` is how many of its tickets are closed and `total` is how many there are, archived and deleted tickets left out. Both are `0` when no scope stopped. |
+| `next.exhausted_own_progress` | The same count over only the lanes this checkout holds: whether its own work was unfinished, which decides `next.start_place` for a pick past the scope. Both are `0` when no scope stopped. |
 | `next.blocked` | The prerequisites from outside those epics that block them, at any depth: dependencies, and the earlier ticket of a blocker's own lane. Each entry also carries `clearable`: whether a ticket filed here could free it, which is what the route to stay offers to clear. |
 | `next.held` | Tickets in those epics held by something about the ticket itself, such as a reserved label. |
 | `next.off_path` | Tickets a focus label kept out of the pick. |
@@ -116,6 +120,8 @@ filter, writes `"outcome": "error"` and none of these keys.
 | `next.hidden_focus_goals` | The focus goals whose prerequisite path the pool was narrowed to, when the global pool offered the ticket in `next.hidden_by_filter`. Empty when that ticket came from your own lanes or epic, for a pool over the whole queue, and when no filter hid one. |
 | `next.unreachable` | When it found nothing at all, every ticket it went past. |
 | `next.stay_offered` | Whether its output offered filing a ticket to unblock the epic instead of moving on. |
+| `next.start_place` | Where its output said to start the pick: `here`, `worktree_off_primary_clone` (new work served in the primary clone), `worktree_beside_held_work` (a pick from outside unfinished work this checkout holds), or `null` when it picked nothing. |
+| `next.primary_clone` | Whether it ran in the repository's primary clone rather than a linked worktree. |
 | `counts.next.rows_gathered` | How many tickets it chose among: the workable tickets its filter selects. |
 
 Each entry in the four ticket lists has the same shape:

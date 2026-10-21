@@ -98,6 +98,16 @@ type Info struct {
 	PrivateGitDir string
 }
 
+// PrimaryClone says this checkout is the repository's primary clone rather than
+// a linked worktree: its own git directory IS the common one. `lit next` reads
+// it to say where a pick is started, because the primary clone is where every
+// session starts. Read off the two directories rather than stored beside them,
+// so it cannot disagree with them; both are canonical, so the comparison is of
+// physical paths. [LAW:one-source-of-truth]
+func (i Info) PrimaryClone() bool {
+	return i.PrivateGitDir == i.GitCommonDir
+}
+
 // Location is the on-disk geometry of a lit store — every path derived from a
 // git repository's git-common-dir, and nothing that requires reading or writing
 // the store. It is what a filesystem scan can know about a store WITHOUT opening
@@ -431,11 +441,12 @@ func anchorGitPath(cwd string, gitPath string) (string, error) {
 // question of which directories belong to which checkout; lit reads the answer
 // and keeps no worktree registry of its own.
 //
-// Unlike the common dir this is NOT canonicalized through EvalSymlinks. That
-// canonicalization exists to collapse two spellings of one store path, because
-// the dolt driver caches engines per path string and serves a second spelling a
-// read-only handle. Nothing here is keyed by path: the identity is the token
-// inside the file, and any spelling that opens the file yields the same token.
+// It is canonicalized through EvalSymlinks, as the common dir is, so the two
+// compare as physical paths: on macOS a checkout under /var is the same
+// directory as /private/var, and Info.PrimaryClone would otherwise call the
+// primary clone a linked worktree. Identity does not depend on the spelling —
+// the token inside the file is the identity, and any spelling that opens the
+// file yields the same token.
 func resolvePrivateGitDir(cwd string) (string, error) {
 	// [LAW:dataflow-not-control-flow] Local geometry query that cannot block on a
 	// network, so context.Background() — "never cancels" — is the honest value,
@@ -444,7 +455,15 @@ func resolvePrivateGitDir(cwd string) (string, error) {
 	if err != nil {
 		return "", classifyGitError(fmt.Sprintf("git rev-parse --git-dir in %q", cwd), err)
 	}
-	return anchorGitPath(cwd, privateGitDir)
+	anchored, err := anchorGitPath(cwd, privateGitDir)
+	if err != nil {
+		return "", err
+	}
+	canonical, err := filepath.EvalSymlinks(anchored)
+	if err != nil {
+		return "", fmt.Errorf("canonicalize git-dir %q: %w", anchored, err)
+	}
+	return filepath.Clean(canonical), nil
 }
 
 // LocationFromStorageDir mints the store geometry rooted at an already-resolved

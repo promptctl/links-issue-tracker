@@ -105,6 +105,7 @@ func TestNextRecordsWhatAnExhaustedScopeNamed(t *testing.T) {
 				"next.dependency_path": [],
 				"next.exhausted_epics": ["test-epic"],
 				"next.exhausted_progress": {"done": 3, "total": 5},
+				"next.exhausted_own_progress": {"done": 0, "total": 0},
 				"next.blocked": [
 					{"id": "test-dep", "ticket": "test-dep-leaf", "reach": "held_fresh", "clearable": true},
 					{"id": "test-ext", "ticket": "test-ext", "reach": "awaiting_outside", "clearable": false}
@@ -114,7 +115,9 @@ func TestNextRecordsWhatAnExhaustedScopeNamed(t *testing.T) {
 				"next.hidden_by_filter": null,
 				"next.hidden_focus_goals": [],
 				"next.unreachable": [],
-				"next.stay_offered": true
+				"next.stay_offered": true,
+				"next.start_place": null,
+				"next.primary_clone": false
 			}`,
 		},
 		{
@@ -137,6 +140,7 @@ func TestNextRecordsWhatAnExhaustedScopeNamed(t *testing.T) {
 				"next.dependency_path": [],
 				"next.exhausted_epics": ["test-epic"],
 				"next.exhausted_progress": {"done": 1, "total": 4},
+				"next.exhausted_own_progress": {"done": 0, "total": 0},
 				"next.blocked": [
 					{"id": "test-dep", "ticket": "test-dep", "reach": "not_ready", "clearable": false},
 					{"id": "test-gone", "ticket": "", "reach": "out_of_view", "clearable": true},
@@ -147,7 +151,9 @@ func TestNextRecordsWhatAnExhaustedScopeNamed(t *testing.T) {
 				"next.hidden_by_filter": null,
 				"next.hidden_focus_goals": [],
 				"next.unreachable": [],
-				"next.stay_offered": true
+				"next.stay_offered": true,
+				"next.start_place": null,
+				"next.primary_clone": false
 			}`,
 		},
 		{
@@ -165,21 +171,25 @@ func TestNextRecordsWhatAnExhaustedScopeNamed(t *testing.T) {
 				"next.dependency_path": [],
 				"next.exhausted_epics": ["test-epic"],
 				"next.exhausted_progress": {"done": 0, "total": 2},
+				"next.exhausted_own_progress": {"done": 0, "total": 0},
 				"next.blocked": [{"id": "test-ext", "ticket": "test-ext", "reach": "awaiting_outside", "clearable": false}],
 				"next.held": [],
 				"next.off_path": [],
 				"next.hidden_by_filter": null,
 				"next.hidden_focus_goals": [],
 				"next.unreachable": [],
-				"next.stay_offered": false
+				"next.stay_offered": false,
+				"next.start_place": null,
+				"next.primary_clone": false
 			}`,
 		},
 		{
 			name: "a pick served past the scope records how far the scope had come",
 			outcome: ServedPastExhaustion{poolPick: poolPick{Row: rowFor("test-bug")}, Exhaustion: Exhausted{
-				Epics:    []string{"test-epic"},
-				Progress: claims.Progress{Done: 8, Total: 9},
-				Blocked:  []blockerReach{{depReach: readThrough("test-dep", "test-dep", reachHeldFresh), Clearable: true}},
+				Epics:       []string{"test-epic"},
+				Progress:    claims.Progress{Done: 8, Total: 9},
+				OwnProgress: claims.Progress{Done: 3, Total: 4},
+				Blocked:     []blockerReach{{depReach: readThrough("test-dep", "test-dep", reachHeldFresh), Clearable: true}},
 			}},
 			gathered: 3,
 			want: `{
@@ -189,19 +199,22 @@ func TestNextRecordsWhatAnExhaustedScopeNamed(t *testing.T) {
 				"next.dependency_path": [],
 				"next.exhausted_epics": ["test-epic"],
 				"next.exhausted_progress": {"done": 8, "total": 9},
+				"next.exhausted_own_progress": {"done": 3, "total": 4},
 				"next.blocked": [{"id": "test-dep", "ticket": "test-dep", "reach": "held_fresh", "clearable": true}],
 				"next.held": [],
 				"next.off_path": [],
 				"next.hidden_by_filter": null,
 				"next.hidden_focus_goals": [],
 				"next.unreachable": [],
-				"next.stay_offered": true
+				"next.stay_offered": true,
+				"next.start_place": "worktree_beside_held_work",
+				"next.primary_clone": false
 			}`,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			recorder := telemetry.Begin(telemetry.Event{})
-			recordNextEvent(telemetry.With(context.Background(), recorder), tc.outcome, tc.gathered)
+			recordNextEvent(telemetry.With(context.Background(), recorder), tc.outcome, tc.gathered, false)
 			ev := recorder.Finish(telemetry.End{})
 			if got, want := writtenFacts(t, ev), decodeJSON(t, tc.want); !reflect.DeepEqual(got, want) {
 				t.Errorf("facts =\n%v\nwant\n%v", got, want)
@@ -223,7 +236,7 @@ func TestNextRecordsWhatAFocusedEmptyPoolNamed(t *testing.T) {
 		Unreachable: []rowReach{{ID: "test-gate", reading: reading{Row: rowFor("test-gate"), Kind: reachNotReady}}},
 		OffPath:     []string{"test-off"},
 	}
-	recordNextEvent(telemetry.With(context.Background(), recorder), outcome, 2)
+	recordNextEvent(telemetry.With(context.Background(), recorder), outcome, 2, false)
 	want := decodeJSON(t, `{
 		"unreachable": [{"id": "test-gate", "ticket": "test-gate", "reach": "not_ready"}],
 		"off_path": [{"id": "test-off", "ticket": "test-off", "reach": "off_focus_path"}]
@@ -266,7 +279,7 @@ func TestNextRecordsTheChainADependencyPickWasReachedThrough(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			recorder := telemetry.Begin(telemetry.Event{})
-			recordNextEvent(telemetry.With(context.Background(), recorder), tc.outcome, 1)
+			recordNextEvent(telemetry.With(context.Background(), recorder), tc.outcome, 1, false)
 			if got := writtenFacts(t, recorder.Finish(telemetry.End{}))["next.dependency_path"]; !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("next.dependency_path = %#v, want %#v", got, tc.want)
 			}
@@ -364,7 +377,7 @@ func TestNextRecordsTheTicketAFilterHidFromTheScope(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			recorder := telemetry.Begin(telemetry.Event{})
-			recordNextEvent(telemetry.With(context.Background(), recorder), tc.outcome, 1)
+			recordNextEvent(telemetry.With(context.Background(), recorder), tc.outcome, 1, false)
 			facts := writtenFacts(t, recorder.Finish(telemetry.End{}))
 			if facts["next.outcome"] != tc.wantOutcome || facts["next.picked"] != tc.wantPicked {
 				t.Errorf("next.outcome, next.picked = %v, %v; want %v, %v", facts["next.outcome"], facts["next.picked"], tc.wantOutcome, tc.wantPicked)
@@ -477,7 +490,7 @@ func TestNextRecordsTheFocusThatNarrowedItsPick(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			recorder := telemetry.Begin(telemetry.Event{})
-			recordNextEvent(telemetry.With(context.Background(), recorder), tc.outcome, 1)
+			recordNextEvent(telemetry.With(context.Background(), recorder), tc.outcome, 1, false)
 			if got := writtenFacts(t, recorder.Finish(telemetry.End{}))["next.picked_focus_goals"]; !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("next.picked_focus_goals = %#v, want %#v", got, tc.want)
 			}
@@ -518,7 +531,7 @@ func TestNextRecordsTheFocusTheHiddenTicketWasDrawnUnder(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			recorder := telemetry.Begin(telemetry.Event{})
-			recordNextEvent(telemetry.With(context.Background(), recorder), tc.outcome, 1)
+			recordNextEvent(telemetry.With(context.Background(), recorder), tc.outcome, 1, false)
 			if got := writtenFacts(t, recorder.Finish(telemetry.End{}))["next.hidden_focus_goals"]; !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("next.hidden_focus_goals = %#v, want %#v", got, tc.want)
 			}

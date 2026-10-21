@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
+	"github.com/promptctl/links-issue-tracker/internal/claims"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
@@ -733,20 +734,22 @@ func TestFocusClauseLandsOnThePoolsRoute(t *testing.T) {
 			// the second of two joined on one block and not the only line.
 			name: "past an exhausted scope",
 			outcome: ServedPastExhaustion{poolPick: pick, Exhaustion: Exhausted{
-				Epics:   []string{"test-held"},
-				Blocked: []blockerReach{{depReach: depReach{ID: "test-dep"}, Clearable: true}},
+				Epics:       []string{"test-held"},
+				Progress:    claims.Progress{Done: 0, Total: 1},
+				OwnProgress: claims.Progress{Done: 0, Total: 1},
+				Blocked:     []blockerReach{{depReach: depReach{ID: "test-dep"}, Clearable: true}},
 			}},
-			route: "or move on to the top ready ticket outside it: run `lit start " + ticket.ID + "` to claim lane pick of epic " + epic.ID + clause,
+			route: "or move on to the top ready ticket outside it: from a worktree of its own off the trunk (not this checkout, whose own work is unfinished), run `lit start " + ticket.ID + "` to claim lane pick of epic " + epic.ID + clause,
 		},
 		{
 			name:    "past a scope the filter narrowed",
 			outcome: ServedPastNarrowing{poolPick: pick, Narrowing: Narrowed{Hidden: rowFor("test-hidden")}},
-			route:   "or take the top ready ticket the filter selects, outside the work you hold: run `lit start " + ticket.ID + "` to claim lane pick of epic " + epic.ID + clause,
+			route:   "or take the top ready ticket the filter selects, outside the work you hold: from a worktree of its own off the trunk (not this checkout, whose own work is unfinished), run `lit start " + ticket.ID + "` to claim lane pick of epic " + epic.ID + clause,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			if _, err := renderNextOutcome(&buf, tc.outcome, details, claimContext{self: selfAttribution}, ""); err != nil {
+			if _, err := renderNextOutcome(&buf, tc.outcome, details, claimContext{self: selfAttribution}, "", false); err != nil {
 				t.Fatalf("renderNextOutcome error = %v", err)
 			}
 			var carrying []string

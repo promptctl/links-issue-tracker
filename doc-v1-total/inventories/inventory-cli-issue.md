@@ -1679,34 +1679,35 @@ joined by `" — "`.
 Both map to `ExitNoWork` = **6** (`error_output.go`), with reasons
 `scope_exhausted` and `no_ready_work` respectively (`error_output.go`).
 
-**Rendering** — `renderNextOutcome(w, outcome, details, cc)` (`next.go`):
+**Rendering** — `renderNextOutcome(w, outcome, details, cc, actingAs, primaryClone)` (`next.go`):
 - `ServedFromClaim` → no announcement at all (`next.go`).
 - `ResumedOwnWork` → `resumeAdvice(o.Row, cc.actingAs)` + `"\n"` (`next.go`,
   `next.go`). The row's assignee decides which of two sentences: when it is
   non-empty and differs from the identity running the command,
   ``<RowID> is in progress and assigned to <assignee>, not to you — check that they have stopped before you continue it, or take other work from `lit backlog` ``;
   otherwise `"<RowID> is already in progress in a lane you hold — continue where you left off"`.
-- `ServedFromEpicLane` → `startAdvice(o.Row, o.Lane)`
+- `ServedFromEpicLane` → `startAdvice(o.Row, o.Lane, place)`
   + `" (a second lane of an epic you already hold a lane in)\n"`.
-- `ServedFromNewLane` → `o.advice()` + `"\n"`.
+- `ServedFromNewLane` → `o.advice(place)` + `"\n"`.
 - `ServedFromDependency` → the same `startAdvice(...)` + `dependencyReason(o)` + `"\n"`:
   `" (gates %s, which is on your path)"` on `Gates` when `Blocker == Row.ID`,
   else `" (it is in epic %s, which gates %s on your path)"` on `Blocker`, `Gates`.
-- `ServedPastExhaustion` → `"<why()>\n"`, then the `stay()` routes followed by `"move on to the top ready ticket outside it: <o.advice()>"`, joined by `"\nor "`, then `"\n"`.
-- `ServedPastNarrowing` → `"<o.Narrowing.Error()>\nor take the top ready ticket the filter selects, outside the work you hold: <o.advice()>\n"`.
+- `ServedPastExhaustion` → `"<why()>\n"`, then the `stay()` routes followed by `"move on to the top ready ticket outside it: <o.advice(place)>"`, joined by `"\nor "`, then `"\n"`.
+- `ServedPastNarrowing` → `"<o.Narrowing.Error()>\nor take the top ready ticket the filter selects, outside the work you hold: <o.advice(place)>\n"`.
 - `Exhausted`, `Narrowed`, `NoWork` → returned as themselves; no ticket printed.
 - Any other outcome type → panic.
 
-`startAdvice(row, lane)` (`next.go`) is one sentence with an optional
-lead clause. `object, named := lane.Describe()`, `object = "it"` when not named:
-- ``"run `lit start <id>` to claim <object>"``
-- in progress: ``"<id> is in progress and nobody holds it — run `lit start <id>` to claim <object>"``
+`startAdvice(row, lane, place)` (`next.go`) is one sentence with an optional
+lead clause. `object, named := lane.Describe()`, `object = "it"` when not named,
+and `<where>` is `place.where()` (below):
+- ``"<where>run `lit start <id>` to claim <object>"``
+- in progress: ``"<id> is in progress and nobody holds it — <where>run `lit start <id>` to claim <object>"``
 
 The lead clause says only what the standing proves — routing serves an
 in-progress row from a lane this checkout does not hold only when nobody holds
 that lane — and nothing about who left the row or when.
 
-`poolPick.advice()` (`next.go`) is `startAdvice(Row, Lane)` followed by
+`poolPick.advice(place)` (`next.go`) is `startAdvice(Row, Lane, place)` followed by
 `focusScope.pickClause()`: nothing for the whole queue, and under a `focus`
 label ``" (focused on <goals>: picked from the focus path alone — `lit next --all` to route over the whole queue)"``, the goals joined by `", "`.
 
@@ -1724,6 +1725,25 @@ and `    unblocks: …` — but `next` passes a **nil** unblocks map, so the unb
 line never appears (`ready_state.go`). It then returns
 `nextPulledOccasion(row.Issue)` (`next.go`, `workflow_events.go`),
 dispatched as `EventNextPulled` (`next.go`).
+
+`renderNextOutcome(w, outcome, details, cc, actingAs, primaryClone)` first takes
+`place := placeFor(outcome, primaryClone)` (`next_place.go`); the leaf reads
+`primaryClone` once and passes it to `recordNextEvent` too, which takes the same
+`placeFor` for the event. `placeFor` is total over the sealed sum and panics
+on an unnamed variant: `ServedFromClaim`, `ResumedOwnWork`, `ServedFromEpicLane`
+and `ServedFromDependency` → `startHere`; `ServedFromNewLane` →
+`startOffPrimaryClone` in the primary clone, `startHere` in a linked worktree;
+`ServedPastExhaustion` → the `ServedFromNewLane` place when
+`o.Exhaustion.OwnProgress.Finished()` (`Done == Total`, `internal/claims/evidence.go`;
+`OwnProgress` is `evidence.ScopeProgress(own.holds)`, `next_route.go`),
+else `startBesideHeldWork`; `ServedPastNarrowing` → `startBesideHeldWork`;
+`Exhausted`, `Narrowed`, `NoWork` → `startNoPick`. `startAdvice(row, lane, place)`
+prefixes `place.where()` to ``"run `lit start <id>` to claim <object>"``:
+empty for `startNoPick` and `startHere`, ``"from a worktree of its own off the trunk (not the primary clone, where every session starts), "`` for
+`startOffPrimaryClone`, ``"from a worktree of its own off the trunk (not this checkout, whose own work is unfinished), "`` for `startBesideHeldWork`.
+`recordNextEvent` sets the event facts `next.start_place` (`here`,
+`worktree_off_primary_clone`, `worktree_beside_held_work`, or `null` for
+`startNoPick`) and `next.primary_clone`.
 
 `lit next` performs **no writes** — it is registered `app.AccessRead`
 (`register.go`). `startAdvice` names what a subsequent `lit start` would
