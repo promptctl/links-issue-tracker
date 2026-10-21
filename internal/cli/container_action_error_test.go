@@ -394,15 +394,10 @@ func TestSatisfiedSentenceNamesTheTypedVerbToo(t *testing.T) {
 // TestBulkUsageNamesTheTypedVerb pins the one site of this class that the
 // mechanical gate in internal/model/lifecycle cannot see. That gate scans fmt
 // calls; this site builds its string by concatenation.
-//
-// No bulk row routes a Reopen today — `lit bulk` serves the retention verbs,
-// whose two names agree — so nothing reachable through the CLI can tell a right
-// answer here from a wrong one. The leaf builder takes the action as a
-// parameter, though, so the case is constructible, and constructing it is the
-// only way this site gets a check that can fail. Same reasoning as
-// TestSatisfiedSentenceNamesTheTypedVerbToo.
+// `lit bulk open` is the bulk row whose typed verb and events-table encoding
+// differ, so it is the row that can get this wrong.
 func TestBulkUsageNamesTheTypedVerb(t *testing.T) {
-	leaf := bulkTransitionLeaf(model.Reopen{})()
+	leaf := bulkTransitionLeaf(openSpec)()
 	help := leaf.fs.cmd.Flags().Lookup("help")
 	if help == nil {
 		t.Fatal("no help flag on the bulk leaf's flag set, so its usage string cannot be read")

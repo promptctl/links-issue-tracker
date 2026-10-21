@@ -9,14 +9,18 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 )
 
 var bulkFamily = commandFamily[appSubcommand]{
-	usage: "usage: lit bulk <label|close|archive> ...",
+	usage: "usage: lit bulk <label|start|done|close|open|archive> ...",
 	subcommands: []subcommandRow[appSubcommand]{
 		{name: "label", nestedUsage: bulkLabelFamily.usage, payload: appSubcommand{access: app.AccessWrite, declare: bulkLabelLeaf}},
-		{name: "close", payload: appSubcommand{access: app.AccessWrite, declare: bulkCloseLeaf}},
-		{name: "archive", payload: appSubcommand{access: app.AccessWrite, declare: bulkTransitionLeaf(model.Archive{})}},
+		{name: "start", payload: appSubcommand{access: app.AccessWrite, declare: bulkTransitionLeaf(startSpec)}},
+		{name: "done", payload: appSubcommand{access: app.AccessWrite, declare: bulkTransitionLeaf(doneSpec)}},
+		{name: "close", payload: appSubcommand{access: app.AccessWrite, declare: bulkTransitionLeaf(closeSpec)}},
+		{name: "open", payload: appSubcommand{access: app.AccessWrite, declare: bulkTransitionLeaf(openSpec)}},
+		{name: "archive", payload: appSubcommand{access: app.AccessWrite, declare: bulkTransitionLeaf(archiveSpec)}},
 		// `bulk import` is retired: it would be a second name for the
 		// export-restore `backup restore` owns, and it is the odd verb out in a
 		// family of per-`--ids` fan-out ops. Kept dispatchable so an old
@@ -55,15 +59,29 @@ func (e BulkFailureError) Error() string {
 }
 
 // runBulkOver applies op to each issue ID in order, writing one "id ok" line per
-// success to stdout — the data channel carries results only — and collecting
+// success to stdout after whatever op printed for that item, and collecting
 // every failure. If any item failed it returns a BulkFailureError so the exit
 // code reflects it; per-item failures never reach stdout. This is the single
 // place bulk success/failure is decided, so the exit-code contract cannot drift
 // between bulk verbs. [LAW:single-enforcer] [LAW:no-silent-failure]
-func runBulkOver(stdout io.Writer, issueIDs []string, op func(issueID string) error) error {
+//
+// Each item runs in its own telemetry occurrence and leaves one bulk.items
+// entry: the id, its error, and the facts and counts its work recorded. Run on
+// the event itself, the second item's facts would replace the first's.
+// [LAW:nothing-unseen]
+func runBulkOver(ctx context.Context, stdout io.Writer, issueIDs []string, op func(ctx context.Context, issueID string) error) error {
 	var failures []itemFailure
 	for _, issueID := range issueIDs {
-		if err := op(issueID); err != nil {
+		itemCtx, closeScope := telemetry.Occurrence(ctx)
+		err := op(itemCtx, issueID)
+		facts, counts := closeScope()
+		telemetry.Append(ctx, "bulk.items", map[string]any{
+			"bulk.item.id":     issueID,
+			"bulk.item.error":  telemetry.ErrorText(err),
+			"bulk.item.facts":  facts,
+			"bulk.item.counts": counts,
+		})
+		if err != nil {
 			failures = append(failures, itemFailure{IssueID: issueID, Err: err})
 			continue
 		}
@@ -147,61 +165,43 @@ func bulkLabelLeaf() appLeaf {
 			return err
 		}
 		actor := resolveActor()
-		return runBulkOver(stdout, issueIDs, func(issueID string) error {
+		return runBulkOver(ctx, stdout, issueIDs, func(ctx context.Context, issueID string) error {
 			return op(ctx, ap, issueID, *label, actor)
 		})
 	}}
 }
 
-// runBulkClose closes every listed issue with one shared outcome. The outcome
-// flags parse through the same gate `lit close` uses, so a bulk close cannot
-// record the resolution-less close that the close command itself forbids — the
-// two boundaries agree about what a close requires by sharing the enforcer.
-// [LAW:single-enforcer]
-func bulkCloseLeaf() appLeaf {
-	fs := newCobraFlagSet("bulk close")
-	issueIDsFlag := registerBulkIDs(fs)
-	reason := fs.String("reason", "", "Lifecycle reason")
-	resolution, target := registerCloseOutcomeFlags(fs)
-	resolveActor := registerActor(fs)
-	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
-		issueIDs, err := issueIDsFlag()
-		if err != nil {
-			return err
-		}
-		outcome, err := closeOutcomeFromFlags(*resolution, *target, "usage: lit bulk close --ids <id,id,...> --resolution <duplicate|superseded|obsolete|wontfix> [--of <canonical-id>] [--reason <text>]")
-		if err != nil {
-			return err
-		}
-		actor := resolveActor()
-		return runBulkOver(stdout, issueIDs, func(issueID string) error {
-			_, err := ap.Store.Apply(ctx, issueID, storage.Change{
-				Action: model.Close{Outcome: outcome},
-				Actor:  actor,
-				Reason: *reason,
-			})
-			return err
-		})
-	}}
-}
-
-// bulkTransitionLeaf builds the leaf for a bulk retention action. The action is
-// fixed by the family row, so the body never re-reads argv to learn which
-// subcommand it is serving. [LAW:dataflow-not-control-flow]
-func bulkTransitionLeaf(action model.Action) appLeafFn {
+// bulkTransitionLeaf is a transition verb in bulk form. It is built from the
+// verb's own spec, so it takes that verb's flags (start's --take, close's
+// --resolution and --of) and runs that verb's authorize hook, and every listed
+// issue goes through applyTransition, the step the single verb runs. A
+// transition the single verb refuses is that item's error here, in the same
+// words. [LAW:single-enforcer] [LAW:one-type-per-behavior]
+func bulkTransitionLeaf(spec transitionSpec) appLeafFn {
 	return func() appLeaf {
-		fs := newCobraFlagSet("bulk " + action.Name().Verb())
+		fs := newCobraFlagSet("bulk " + spec.name)
 		issueIDsFlag := registerBulkIDs(fs)
 		reason := fs.String("reason", "", "Lifecycle reason")
 		resolveActor := registerActor(fs)
-		return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
+		usage := fmt.Sprintf("usage: lit bulk %s --ids <id,id,...>%s [--reason <text>]", spec.name, spec.synopsis)
+		buildAction := spec.registerFlags(fs, usage)
+		authorize := spec.authorize(fs)
+		return appLeaf{fs: fs, positionals: 0, usage: usage, work: func(ctx context.Context, stdout io.Writer, ap *app.App, positional []string) error {
 			issueIDs, err := issueIDsFlag()
 			if err != nil {
 				return err
 			}
 			actor := resolveActor()
-			return runBulkOver(stdout, issueIDs, func(issueID string) error {
-				_, err := ap.Store.Apply(ctx, issueID, storage.Change{Action: action, Actor: actor, Reason: *reason})
+			action, err := buildAction(actor)
+			if err != nil {
+				return err
+			}
+			return runBulkOver(ctx, stdout, issueIDs, func(ctx context.Context, issueID string) error {
+				did, err := applyTransition(ctx, stdout, ap, issueID, action, actor, *reason, authorize)
+				if err != nil {
+					return err
+				}
+				_, err = io.WriteString(stdout, did.notice)
 				return err
 			})
 		}}

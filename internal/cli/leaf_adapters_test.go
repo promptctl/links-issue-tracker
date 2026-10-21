@@ -104,7 +104,11 @@ func runBulkLabel(ctx context.Context, stdout io.Writer, ap *app.App, args []str
 }
 
 func runBulkClose(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	return runLeaf(bulkCloseLeaf(), ctx, stdout, ap, args)
+	return runBulkTransition(ctx, stdout, ap, args, closeSpec)
+}
+
+func runBulkTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []string, spec transitionSpec) error {
+	return runLeaf(bulkTransitionLeaf(spec)(), ctx, stdout, ap, args)
 }
 
 // runRank keeps the `set` dispatch, so a test passing `{"set", ...}` still

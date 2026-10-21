@@ -98,10 +98,23 @@ type Event struct {
 	Occurrences map[string][]any `json:"occurrences"`
 }
 
-// Recorder is one invocation's event while it is still open.
+// Recorder is one invocation's event while it is still open, or one
+// occurrence scope inside it (see Occurrence).
 type Recorder struct {
 	mu sync.Mutex
 	ev Event
+	// invocation is the event a scope belongs to; nil on the event's own
+	// recorder. What only the event holds (its name, its flags, its
+	// occurrences) is always written there. [LAW:one-source-of-truth]
+	invocation *Recorder
+}
+
+// event is the invocation's own recorder, whichever recorder r is.
+func (r *Recorder) event() *Recorder {
+	if r.invocation != nil {
+		return r.invocation
+	}
+	return r
 }
 
 // Begin opens an invocation's event from its identity — everything known
@@ -180,7 +193,7 @@ func from(ctx context.Context) *Recorder {
 
 // Command names the command the invocation reached, by its full path.
 func Command(ctx context.Context, path string) {
-	r := from(ctx)
+	r := from(ctx).event()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.ev.Event = path
@@ -189,7 +202,7 @@ func Command(ctx context.Context, path string) {
 // EventName is the command the invocation has reached so far, by its full
 // path: the name its event carries.
 func EventName(ctx context.Context) string {
-	r := from(ctx)
+	r := from(ctx).event()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.ev.Event
@@ -198,7 +211,7 @@ func EventName(ctx context.Context) string {
 // Subcommand extends the command path by the subcommand dispatch resolved
 // next, for a family that knows the name it matched but not the path above it.
 func Subcommand(ctx context.Context, name string) {
-	r := from(ctx)
+	r := from(ctx).event()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.ev.Event += " " + name
@@ -206,7 +219,7 @@ func Subcommand(ctx context.Context, name string) {
 
 // Flags records the names of the flags the command was given.
 func Flags(ctx context.Context, names []string) {
-	r := from(ctx)
+	r := from(ctx).event()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.ev.Flags = append([]string{}, names...)
@@ -247,10 +260,29 @@ func Count(ctx context.Context, key string, n int) {
 // nothing was looked at. [LAW:nothing-unseen] Each Append builds a new list,
 // so an event Finish returned never shares storage with the open one.
 func Append(ctx context.Context, key string, values ...any) {
-	r := from(ctx)
+	r := from(ctx).event()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.ev.Occurrences[key] = append(append([]any{}, r.ev.Occurrences[key]...), values...)
+}
+
+// Occurrence opens a scope for one occurrence of work the command runs more
+// than once, such as one item of a bulk run. Facts and counts recorded on the
+// returned context land in the scope rather than on the event, so the next
+// occurrence's Set of the same key cannot replace this one's; Append and the
+// command's name still reach the event. closeScope returns what the scope
+// recorded, for the caller to Append as the occurrence's entry under a key of
+// its own. [LAW:nothing-unseen]
+func Occurrence(ctx context.Context) (scoped context.Context, closeScope func() (facts map[string]any, counts map[string]int)) {
+	scope := &Recorder{
+		ev:         Event{Facts: map[string]any{}, Counts: map[string]int{}},
+		invocation: from(ctx).event(),
+	}
+	return With(ctx, scope), func() (map[string]any, map[string]int) {
+		scope.mu.Lock()
+		defer scope.mu.Unlock()
+		return maps.Clone(scope.ev.Facts), maps.Clone(scope.ev.Counts)
+	}
 }
 
 // Record records facts and counts a value declared about itself, such as a

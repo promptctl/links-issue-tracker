@@ -141,7 +141,7 @@ func TestBulkRepeatedIDsActOnEveryID(t *testing.T) {
 			return runBulkClose(h.ctx, out, h.ap, append(idArgs, "--resolution", "obsolete"))
 		}, []string{"--status", "closed"}, true},
 		{"archive", func(h readyTestHarness, out *bytes.Buffer, idArgs []string) error {
-			return runLeaf(bulkTransitionLeaf(model.Archive{})(), h.ctx, out, h.ap, idArgs)
+			return runLeaf(bulkTransitionLeaf(archiveSpec)(), h.ctx, out, h.ap, idArgs)
 		}, nil, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

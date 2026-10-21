@@ -1974,6 +1974,57 @@ func ticketStateOf(issue model.Issue, events []model.IssueEvent) ticketState {
 	return ticketState{issue: issue, events: events, phase: phase}
 }
 
+// transitionDone is what one transition did to one ticket: where it found
+// the ticket, where it left it, and the line the transition owes for it.
+type transitionDone struct {
+	prior, written ticketState
+	notice         string
+}
+
+// applyTransition runs one transition on one ticket: the pre-transition read,
+// the spec's authorize hook, Apply, and what the transition owes, with its
+// statusline facts recorded. `lit <verb>` and `lit bulk <verb>` both run it,
+// so a transition one refuses the other refuses with the same error.
+// [LAW:single-enforcer]
+func applyTransition(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, action model.Action, actor, reason string, authorize func(context.Context, io.Writer, *app.App, string, ticketState, model.Action) (afterApply, error)) (transitionDone, error) {
+	// The pre-transition read is the state `authorize` gates on and the
+	// before-half of the caller's workflow occasion: the row, and the phase
+	// the ticket's history puts it in.
+	priorIssue, err := ap.Store.GetIssue(ctx, issueID)
+	if err != nil {
+		return transitionDone{}, err
+	}
+	prior, err := readTicketState(ctx, ap.Store, priorIssue)
+	if err != nil {
+		return transitionDone{}, err
+	}
+
+	// [LAW:single-enforcer] The one gate every transition's authorization
+	// passes through, ahead of Apply — a no-op for every transition but
+	// `start`. See transitionSpec.authorize and authorizeStart
+	// (claims_takeover.go). What it owes is decided on pre-Apply state and
+	// completed after Apply, so a failed Apply announces and records
+	// nothing.
+	owed, err := authorize(ctx, stdout, ap, issueID, prior, action)
+	if err != nil {
+		return transitionDone{}, err
+	}
+
+	applied, err := ap.Store.Apply(ctx, issueID, storage.Change{Action: action, Actor: actor, Reason: reason})
+	if err != nil {
+		return transitionDone{}, err
+	}
+	written, err := readTicketState(ctx, ap.Store, applied.Issue)
+	if err != nil {
+		return transitionDone{}, err
+	}
+	// Recorded after Apply, so these facts follow the ones the store's
+	// change observer recorded for this same write.
+	notice, facts := owed(written, applied.Handover)
+	ap.Statusline.Record(facts...)
+	return transitionDone{prior: prior, written: written, notice: notice}, nil
+}
+
 func transitionLeaf(spec transitionSpec) appLeaf {
 	fs := newCobraFlagSet(spec.name)
 	reason := fs.String("reason", "", "Transition reason")
@@ -2013,49 +2064,18 @@ func transitionLeaf(spec transitionSpec) appLeaf {
 			return err
 		}
 
-		// The pre-transition read is the state `authorize` gates on and the
-		// before-half of the workflow occasion below: the row, and the phase
-		// the ticket's history puts it in.
-		priorIssue, err := ap.Store.GetIssue(ctx, issueID)
+		did, err := applyTransition(ctx, stdout, ap, issueID, action, actor, *reason, authorize)
 		if err != nil {
 			return err
 		}
-		prior, err := readTicketState(ctx, ap.Store, priorIssue)
-		if err != nil {
-			return err
-		}
-
-		// [LAW:single-enforcer] The one gate every transition's authorization
-		// passes through, ahead of Apply — a no-op for every transition but
-		// `start`. See transitionSpec.authorize and authorizeStart
-		// (claims_takeover.go). What it owes is decided on pre-Apply state and
-		// completed after Apply, so a failed Apply announces and records
-		// nothing.
-		owed, err := authorize(ctx, stdout, ap, issueID, prior, action)
-		if err != nil {
-			return err
-		}
-
-		applied, err := ap.Store.Apply(ctx, issueID, storage.Change{Action: action, Actor: actor, Reason: *reason})
-		if err != nil {
-			return err
-		}
-		issue := applied.Issue
-		written, err := readTicketState(ctx, ap.Store, issue)
-		if err != nil {
-			return err
-		}
-		// Recorded after Apply, so these facts follow the ones the store's
-		// change observer recorded for this same write.
-		notice, facts := owed(written, applied.Handover)
-		ap.Statusline.Record(facts...)
+		prior, written, issue := did.prior, did.written, did.written.issue
 
 		// What the transition did is said first, ahead of any guidance about
 		// what to do next: a hand-off and a phase move say it out loud, every
 		// other transition says it as the empty string, so this write always
 		// runs and only its value varies. The authorize hook holds the rule.
 		// [LAW:dataflow-not-control-flow]
-		if _, err := io.WriteString(stdout, notice); err != nil {
+		if _, err := io.WriteString(stdout, did.notice); err != nil {
 			return err
 		}
 
