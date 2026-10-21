@@ -907,8 +907,9 @@ func (s *Store) pushMutation(ctx context.Context, remote storage.RemoteName, bra
 
 // retryPushAfterFollow takes the outcome of a push the caller ran. A push the
 // remote refused (pushRefusedError) is followed by a fetch and a follow of a
-// re-root the fetch revealed (moveOntoRemoteReRoot). When the follow moved the
-// branch, the refusal was the re-root's and the follow removed it, so the
+// re-root the fetch revealed (moveOntoRemoteReRoot). When the branch crossed
+// the cut, by this follow or by another writer's in the gap before its hold,
+// the refusal was the re-root's and the crossing removed it, so the
 // push runs once more, as a plain push, and that push's outcome is the
 // result. Otherwise the refusal stands, returned as pushErr with the fetch
 // already run, so a caller judging it reads the remote as it stands now. A
@@ -933,20 +934,20 @@ func (s *Store) retryPushAfterFollow(ctx context.Context, remote storage.RemoteN
 	if err := s.SyncFetch(ctx, remote); err != nil {
 		return storage.SyncPushResult{}, pushErr, storage.FollowedReRoot{}, err
 	}
-	followed, err := s.moveOntoRemoteReRoot(ctx, remote, trimmedBranch, storage.SyncEntryPush)
+	followed, crossed, err := s.moveOntoRemoteReRoot(ctx, remote, trimmedBranch, storage.SyncEntryPush)
 	if err != nil {
 		return storage.SyncPushResult{}, pushErr, followed, err
 	}
-	result, pushErr = s.retryOverFollow(ctx, remote, trimmedBranch, setUpstream, followed, pushErr)
+	result, pushErr = s.retryOverFollow(ctx, remote, trimmedBranch, setUpstream, crossed, pushErr)
 	return result, pushErr, followed, nil
 }
 
 // retryOverFollow is retryPushAfterFollow once the follow finished: the one
-// retry when the follow moved the branch, then the judgment of a refusal that
+// retry when the branch crossed the cut, then the judgment of a refusal that
 // still stands.
-func (s *Store) retryOverFollow(ctx context.Context, remote storage.RemoteName, branch string, setUpstream bool, followed storage.FollowedReRoot, pushErr error) (storage.SyncPushResult, error) {
+func (s *Store) retryOverFollow(ctx context.Context, remote storage.RemoteName, branch string, setUpstream bool, crossed bool, pushErr error) (storage.SyncPushResult, error) {
 	var refusal pushRefusedError
-	if followed.Head != "" {
+	if crossed {
 		result, retryErr := s.pushMutation(ctx, remote, branch, setUpstream, false)
 		if !errors.As(retryErr, &refusal) {
 			return result, retryErr

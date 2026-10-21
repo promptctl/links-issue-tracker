@@ -7,6 +7,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -632,6 +633,211 @@ func TestSyncDoesNotFollowARemoteRootMatchedByMetadataAlone(t *testing.T) {
 	}
 }
 
+// probeThenGap has a store on bravo probe the re-rooted remote as unrelated
+// and give its engine up, as its follow does before the hold waits for LOCK;
+// gap then runs, as another process would in that wait, and the store's hold
+// opens after it. It returns the store, open, and what the hold returned.
+func probeThenGap(t *testing.T, ctx context.Context, r reRootedRemote, gap func()) (*Store, storage.FollowedReRoot, bool) {
+	t.Helper()
+	origin := remoteName(t, "origin")
+	first := openSyncOrFatal(t, ctx, r.bravo)
+	t.Cleanup(func() { _ = first.Close() })
+	if err := first.SyncFetch(ctx, origin); err != nil {
+		t.Fatalf("SyncFetch error = %v", err)
+	}
+	unrelated, err := first.unrelatedToRemote(ctx, origin, "master")
+	if err != nil || !unrelated {
+		t.Fatalf("the probe = unrelated %t, err %v; want the re-rooted remote unrelated", unrelated, err)
+	}
+	if err := first.closeEngine(); err != nil {
+		t.Fatalf("closeEngine error = %v", err)
+	}
+	gap()
+	if err := first.reopenEngine(ctx); err != nil {
+		t.Fatalf("reopenEngine error = %v", err)
+	}
+	followed, crossed, err := first.followUnderHold(ctx, origin, "master", storage.SyncEntryFetch)
+	if err != nil {
+		t.Fatalf("the hold error = %v", err)
+	}
+	return first, followed, crossed
+}
+
+// assertCutNotFound fails unless st's one hold found no cut, for reason, and
+// neither moved the branch nor declined a cut, and the hold's reading is the
+// event value of reroot.cuts_not_found.
+func assertCutNotFound(t *testing.T, st *Store, followed storage.FollowedReRoot, reason storage.CutNotFoundReason) {
+	t.Helper()
+	want := []storage.CutNotFound{{Entry: storage.SyncEntryFetch, Reason: reason}}
+	if followed.Head != "" || len(st.DeclinedReRoots()) != 0 || !slices.Equal(st.CutsNotFound(), want) {
+		t.Fatalf("the hold = %+v, declines %+v, cuts not found %+v; want no follow, no declined cut, and %+v", followed, st.DeclinedReRoots(), st.CutsNotFound(), want)
+	}
+	wantEvent := map[string]any{"reroot.cut_not_found": "fetch", "reroot.cut_not_found_reason": string(reason)}
+	if event := st.CutsNotFound()[0].EventValue(); !maps.Equal(event, wantEvent) {
+		t.Fatalf("the cut not found's event value = %v, want %v", event, wantEvent)
+	}
+}
+
+// TestAFollowReadsTheRelationUnderItsHold interleaves two follows of one
+// re-root on bravo, as two processes would: the second follows in the gap
+// between the first's probe and its hold, so the first's hold opens on a
+// branch already across the cut. The hold reads the histories as sharing
+// commits and leaves the branch where the second follow put it.
+func TestAFollowReadsTheRelationUnderItsHold(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	r := newReRootedRemote(t, ctx, false)
+	first, followed, crossed, acrossTheCut := followInTheGap(t, ctx, r)
+	assertCutNotFound(t, first, followed, storage.CutNotFoundSharedHistory)
+	if head := headCommit(t, ctx, first); head != acrossTheCut || !crossed {
+		t.Fatalf("bravo's head after the first follow's hold = %s, crossed %t; want %s where the second follow left it, crossed", head, crossed, acrossTheCut)
+	}
+}
+
+// followInTheGap is probeThenGap with a second store following the re-root
+// on bravo in the gap. It also returns the head the second follow left.
+func followInTheGap(t *testing.T, ctx context.Context, r reRootedRemote) (*Store, storage.FollowedReRoot, bool, string) {
+	t.Helper()
+	var acrossTheCut string
+	first, followed, crossed := probeThenGap(t, ctx, r, func() {
+		second := openSyncOrFatal(t, ctx, r.bravo)
+		defer func() { _ = second.Close() }()
+		if err := second.SyncFollowReRoot(ctx, remoteName(t, "origin"), "master", storage.SyncEntryFetch); err != nil {
+			t.Fatalf("the second follow error = %v", err)
+		}
+		r.assertFollowed(t, second, storage.SyncEntryFetch)
+		acrossTheCut = headCommit(t, ctx, second)
+	})
+	return first, followed, crossed, acrossTheCut
+}
+
+// TestARefusedPushIsRetriedWhenAnotherFollowCrossedInTheGap has bravo's push
+// refused over the re-root, and another store follow it between the
+// refused push's probe and its hold. The hold moves nothing, but the branch
+// is across the cut, so the refusal was the re-root's and the retry lands.
+func TestARefusedPushIsRetriedWhenAnotherFollowCrossedInTheGap(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	r := newReRootedRemote(t, ctx, false)
+	origin := remoteName(t, "origin")
+	refused := openSyncOrFatal(t, ctx, r.bravo)
+	_, pushErr := refused.pushMutation(ctx, origin, "master", false, false)
+	if err := refused.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	var refusal pushRefusedError
+	if !errors.As(pushErr, &refusal) {
+		t.Fatalf("bravo's push over the re-root error = %v, want a refusal", pushErr)
+	}
+	first, _, crossed, _ := followInTheGap(t, ctx, r)
+	pushed, err := first.retryOverFollow(ctx, origin, "master", false, crossed, pushErr)
+	if err != nil || pushed.Head != headCommit(t, ctx, first) {
+		t.Fatalf("the retry = %+v, error %v; want bravo's head %s pushed", pushed, err, headCommit(t, ctx, first))
+	}
+}
+
+// TestAFollowReadsARemoteWithTwoRootsAsNoCut has another writer's fetch move
+// the tracking ref, between a follow's probe and its hold, onto a merge of
+// the re-rooted history with a second parentless commit. Histories that still
+// share no commit have no one cut to follow at a remote with two roots; a
+// branch another store followed first shares the remote's history, whatever
+// its roots.
+func TestAFollowReadsARemoteWithTwoRootsAsNoCut(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name        string
+		followFirst bool
+		want        storage.CutNotFoundReason
+	}{
+		{"unrelated", false, storage.CutNotFoundNotOneRoot},
+		{"followed in the gap", true, storage.CutNotFoundSharedHistory},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			r := newReRootedRemote(t, ctx, false)
+			first, followed, crossed := probeThenGap(t, ctx, r, func() {
+				if tc.followFirst {
+					func() {
+						second := openSyncOrFatal(t, ctx, r.bravo)
+						defer func() { _ = second.Close() }()
+						if err := second.SyncFollowReRoot(ctx, remoteName(t, "origin"), "master", storage.SyncEntryFetch); err != nil {
+							t.Fatalf("the second follow error = %v", err)
+						}
+					}()
+				}
+				withChunkStore(t, r.bravo, func(ddb *doltdb.DoltDB) { mergeASecondRoot(t, ctx, ddb, ref.NewRemoteRef("origin", "master")) })
+			})
+			assertCutNotFound(t, first, followed, tc.want)
+			if crossed != tc.followFirst {
+				t.Fatalf("the hold read crossed %t, want %t", crossed, tc.followFirst)
+			}
+		})
+	}
+}
+
+// mergeASecondRoot moves tracking onto a merge of its head with a parentless
+// commit of the same content, so its history has two roots.
+func mergeASecondRoot(t *testing.T, ctx context.Context, ddb *doltdb.DoltDB, tracking ref.DoltRef) {
+	t.Helper()
+	head, err := ddb.ResolveCommitRef(ctx, tracking)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, meta, err := commitContent(ctx, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondMeta := *meta
+	secondMeta.Description = "a second root"
+	scratch := ref.NewBranchRef("second-root")
+	secondRoot, err := ddb.CommitWithParentCommits(ctx, value, scratch, nil, &secondMeta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ddb.DeleteBranch(ctx, scratch, nil); err != nil {
+		t.Fatal(err)
+	}
+	merged, err := ddb.CommitDanglingWithParentCommits(ctx, value, []*doltdb.Commit{head, secondRoot}, meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ddb.SetHeadToCommit(ctx, tracking, merged); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestAFollowWhoseTrackingRefIsPrunedUnderItsHoldFollowsNothing has another
+// writer prune the tracking ref, as a receive lands a fetch's prune
+// (landPrunes), between a follow's probe and its hold. The hold reads the ref
+// gone, which is nothing to follow, as the probe reads a ref never fetched.
+func TestAFollowWhoseTrackingRefIsPrunedUnderItsHoldFollowsNothing(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	r := newReRootedRemote(t, ctx, false)
+	var before string
+	first, followed, crossed := probeThenGap(t, ctx, r, func() {
+		withChunkStore(t, r.bravo, func(ddb *doltdb.DoltDB) {
+			head, err := ddb.ResolveCommitRef(ctx, ref.NewBranchRef("master"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			addr, err := head.HashOf()
+			if err != nil {
+				t.Fatal(err)
+			}
+			before = addr.String()
+			if err := ddb.DeleteBranch(ctx, ref.NewRemoteRef("origin", "master"), nil); err != nil {
+				t.Fatal(err)
+			}
+		})
+	})
+	assertCutNotFound(t, first, followed, storage.CutNotFoundNoTrackingRef)
+	if head := headCommit(t, ctx, first); head != before || crossed {
+		t.Fatalf("bravo's head after the hold = %s, crossed %t; want %s, unmoved and not crossed", head, crossed, before)
+	}
+}
+
 // TestSyncDoesNotFollowWhenTwoLocalCommitsRebuildToTheRoot gives bravo a
 // second commit carrying the cut's tables and metadata over different
 // parents. Both rebuild to the remote's root, and each would re-root bravo
@@ -670,8 +876,9 @@ func TestSyncDoesNotFollowWhenTwoLocalCommitsRebuildToTheRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncReconcile error = %v", err)
 	}
-	if len(st.FollowedReRoots()) != 0 || len(st.DeclinedReRoots()) != 0 {
-		t.Fatalf("follows = %+v, declines = %+v; want neither, since no one cut is evidenced", st.FollowedReRoots(), st.DeclinedReRoots())
+	notOneRebuild := []storage.CutNotFound{{Entry: storage.SyncEntryReconcile, Reason: storage.CutNotFoundNotOneRebuild}}
+	if len(st.FollowedReRoots()) != 0 || len(st.DeclinedReRoots()) != 0 || !slices.Equal(st.CutsNotFound(), notOneRebuild) {
+		t.Fatalf("follows = %+v, declines = %+v, cuts not found = %+v; want neither and %+v, since no one cut is evidenced", st.FollowedReRoots(), st.DeclinedReRoots(), st.CutsNotFound(), notOneRebuild)
 	}
 	if bases := st.ReconcileBases(); reconciled.State != storage.SyncReconcileLinearized || len(bases) != 1 || bases[0].Source != storage.ReconcileBaseForkPoint {
 		t.Fatalf("reconcile = %q against %+v; want a merge against the fork point", reconciled.State, bases)

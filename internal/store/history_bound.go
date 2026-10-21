@@ -201,7 +201,7 @@ func (s *Store) followCarriedReRoot(ctx context.Context, remote storage.RemoteNa
 	// reconcile runs here, so the bound reports it: a remote carrying a re-root
 	// the branch did not follow, this push's own among them, leaves the branch
 	// on history unrelated to it. [LAW:no-silent-failure]
-	_, stranded, err := s.unrelatedToRemote(ctx, remote, b.Branch)
+	stranded, err := s.unrelatedToRemote(ctx, remote, b.Branch)
 	if err != nil {
 		return fmt.Errorf("read whether the branch still shares history with %s: %w", trackingRef, err)
 	}

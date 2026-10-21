@@ -147,6 +147,11 @@ type Syncer interface {
 	// no re-root at it reproduces the remote's history.
 	DeclinedReRoots() []DeclinedReRoot
 
+	// CutsNotFound is every follow since the engine opened whose probe read
+	// the remote as unrelated and whose hold found no cut, oldest first, with
+	// what the hold read instead.
+	CutsNotFound() []CutNotFound
+
 	// SyncKeepHistoryBound keeps the sync branch's history inside window
 	// once pushed has landed on remote's branch, whichever push landed it,
 	// and returns pushed with the bound it kept as Bound and the bound's
