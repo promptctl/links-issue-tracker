@@ -78,7 +78,7 @@ func TestRecoverReconcilesKnownShape(t *testing.T) {
 	ctx := context.Background()
 	dump := preGooseDump()
 
-	outcome, err := Recover(ctx, canonicalUnder(t), dump, DeterministicMapper, 1)
+	outcome, err := Recover(ctx, testEnv(), canonicalUnder(t), dump, DeterministicMapper, 1)
 	if err != nil {
 		t.Fatalf("Recover: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestRecoverSelfRepairsAcrossAttempts(t *testing.T) {
 		return good, nil
 	}
 
-	outcome, err := Recover(ctx, canonicalUnder(t), dump, mapper, 3)
+	outcome, err := Recover(ctx, testEnv(), canonicalUnder(t), dump, mapper, 3)
 	if err != nil {
 		t.Fatalf("Recover: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestRecoverRequiresDropOnUnexplainedDrop(t *testing.T) {
 	dropped := ColumnRef{Table: "issues", Column: "assignee"}
 	mapping := withUnexplainedDrop(mustMap(t, dump), dropped.Table, dropped.Column)
 
-	outcome, err := Recover(ctx, canonicalUnder(t), dump, staticMapper(mapping), 1)
+	outcome, err := Recover(ctx, testEnv(), canonicalUnder(t), dump, staticMapper(mapping), 1)
 	if err != nil {
 		t.Fatalf("Recover: %v", err)
 	}
@@ -181,7 +181,7 @@ func TestRecoverUnconvergedSurfacesResidual(t *testing.T) {
 	swapped := swapTargets(mustMap(t, dump),
 		ColumnRef{Table: "issues", Column: "priority"}, ColumnRef{Table: "issues", Column: "item_rank"})
 
-	outcome, err := Recover(ctx, canonicalUnder(t), dump, staticMapper(swapped), 3)
+	outcome, err := Recover(ctx, testEnv(), canonicalUnder(t), dump, staticMapper(swapped), 3)
 	if err != nil {
 		t.Fatalf("Recover: %v", err)
 	}
@@ -205,7 +205,7 @@ func TestRecoverRejectsNonPositiveBudget(t *testing.T) {
 	ctx := context.Background()
 	dump := preGooseDump()
 	for _, n := range []int{0, -1} {
-		outcome, err := Recover(ctx, canonicalUnder(t), dump, DeterministicMapper, n)
+		outcome, err := Recover(ctx, testEnv(), canonicalUnder(t), dump, DeterministicMapper, n)
 		if err == nil {
 			t.Fatalf("maxAttempts=%d must error, got outcome %T", n, outcome)
 		}
@@ -221,10 +221,10 @@ func TestRecoverRejectsNonPositiveBudget(t *testing.T) {
 func TestRecoveryEntryPointsRejectEmptyPath(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	if _, err := Recover(ctx, "  ", preGooseDump(), DeterministicMapper, 1); err == nil {
+	if _, err := Recover(ctx, testEnv(), "  ", preGooseDump(), DeterministicMapper, 1); err == nil {
 		t.Error("Recover must reject an empty canonical path")
 	}
-	if _, err := PromoteCandidate(ctx, "  ", nil); err == nil {
+	if _, err := PromoteCandidate(ctx, testEnv(), "  ", nil); err == nil {
 		t.Error("PromoteCandidate must reject an empty canonical path")
 	}
 	if err := HealWorkspace(ctx, "  "); err == nil {
@@ -257,7 +257,7 @@ func TestValidateDoltRootDirCleansPath(t *testing.T) {
 func TestRebuildCandidateTagsMappingRejection(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	_, err := RebuildCandidate(ctx, t.TempDir(), preGooseDump(), ShapeMapping{})
+	_, err := RebuildCandidate(ctx, testEnv(), t.TempDir(), preGooseDump(), ShapeMapping{})
 	if err == nil {
 		t.Fatal("a non-total mapping must be rejected")
 	}
@@ -276,7 +276,7 @@ func TestRecoverUnconvergedOnPersistentMapperDecline(t *testing.T) {
 		return ShapeMapping{}, errors.New("shape not recognized")
 	}
 
-	outcome, err := Recover(ctx, canonicalUnder(t), preGooseDump(), mapper, 2)
+	outcome, err := Recover(ctx, testEnv(), canonicalUnder(t), preGooseDump(), mapper, 2)
 	if err != nil {
 		t.Fatalf("Recover: %v", err)
 	}

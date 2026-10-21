@@ -9,6 +9,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/claims"
 	"github.com/promptctl/links-issue-tracker/internal/config"
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/pathspec"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
@@ -38,8 +39,8 @@ type claimContext struct {
 // gatherClaimContext is the one place `next` and `backlog` each read claim
 // evidence and local liveness — the store/filesystem boundary claim-aware
 // rendering and routing both sit behind. [LAW:effects-at-boundaries]
-func gatherClaimContext(ctx context.Context, stdout io.Writer, ap *app.App) (claimContext, error) {
-	cfg, err := config.Load(inv.Env, pathspec.New(ap.Workspace.RootDir))
+func gatherClaimContext(ctx context.Context, env environ.Env, stdout io.Writer, ap *app.App) (claimContext, error) {
+	cfg, err := config.Load(env, pathspec.New(ap.Workspace.RootDir))
 	if err != nil {
 		return claimContext{}, err
 	}
@@ -56,7 +57,7 @@ func gatherClaimContext(ctx context.Context, stdout io.Writer, ap *app.App) (cla
 	// this run.
 	var local claims.LocalCheckouts
 	var addresses map[model.Attribution]workspace.Checkout
-	checkouts, err := workspace.LiveCheckouts(inv.Env, ap.Workspace.RootDir)
+	checkouts, err := workspace.LiveCheckouts(env, ap.Workspace.RootDir)
 	if err != nil {
 		if _, printErr := fmt.Fprintf(stdout, "warning: could not enumerate local checkouts (%v) — claim liveness check and local addresses skipped, freshness alone governs\n", err); printErr != nil {
 			return claimContext{}, printErr

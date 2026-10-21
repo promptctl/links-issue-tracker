@@ -75,7 +75,7 @@ func newSharedCheckouts(t *testing.T) (reRootedCheckouts, string) {
 // returns the re-root's parentless root.
 func reRootAlphaAndForcePush(t *testing.T, r reRootedCheckouts, cut string) string {
 	t.Helper()
-	alphaWS, err := workspace.Resolve(r.alpha)
+	alphaWS, err := workspace.Resolve(testEnv(), r.alpha)
 	if err != nil {
 		t.Fatalf("resolve alpha: %v", err)
 	}
@@ -104,11 +104,11 @@ func finishSharedCheckouts(t *testing.T, r reRootedCheckouts, base string) {
 // syncHeadAndBranch reads the workspace's head commit and active branch.
 func syncHeadAndBranch(t *testing.T, dir string) (head, branch string) {
 	t.Helper()
-	ws, err := workspace.Resolve(dir)
+	ws, err := workspace.Resolve(testEnv(), dir)
 	if err != nil {
 		t.Fatalf("resolve %s: %v", dir, err)
 	}
-	session, closeStore, err := openSyncSession(underInvocation(context.Background()), ws)
+	session, closeStore, err := openSyncSession(underInvocation(context.Background()), testEnv(), ws)
 	if err != nil {
 		t.Fatalf("open sync session at %s: %v", dir, err)
 	}
@@ -141,7 +141,7 @@ func (r reRootedCheckouts) assertFollowedCleanly(t *testing.T, entries []string,
 	if !strings.Contains(show, "bravo-title") || strings.Contains(show, "alpha-description") != wantDescription {
 		t.Fatalf("bravo's ticket after the follow (alpha's description expected: %v):\n%s", wantDescription, show)
 	}
-	ws, err := workspace.Resolve(r.bravo)
+	ws, err := workspace.Resolve(testEnv(), r.bravo)
 	if err != nil {
 		t.Fatalf("resolve bravo: %v", err)
 	}
@@ -238,7 +238,7 @@ func TestSyncFetchWithNoKnownSyncBranchFetchesAndFollowsNothing(t *testing.T) {
 
 	runGit(t, remote, "symbolic-ref", "HEAD", "refs/heads/no-such-branch")
 	runGit(t, alpha, "remote", "set-head", "origin", "-d")
-	ws, err := workspace.Resolve(alpha)
+	ws, err := workspace.Resolve(testEnv(), alpha)
 	if err != nil {
 		t.Fatalf("resolve alpha: %v", err)
 	}

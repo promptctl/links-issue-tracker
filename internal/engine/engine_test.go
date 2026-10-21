@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 )
 
 // TestOpenRejectsUnknownMode pins that an unrecognized mode — including the
@@ -19,7 +21,7 @@ func TestOpenRejectsUnknownMode(t *testing.T) {
 	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "dolt")
 	for _, mode := range []Mode{"", "admin", "readwrite"} {
-		st, err := Open(context.Background(), mode, dir, "test-workspace-id")
+		st, err := Open(context.Background(), testEnv(), mode, dir, "test-workspace-id")
 		if err == nil {
 			st.Close()
 			t.Fatalf("Open(%q) succeeded, want invalid-mode error", mode)
@@ -53,3 +55,7 @@ func TestEveryModeHasAnOpener(t *testing.T) {
 		t.Errorf("openers has %d rows, but only 3 modes are declared; an unreachable row is a mode nobody can ask for", len(openers))
 	}
 }
+
+// testEnv is the test process's environment, read when it is called, so a
+// test's t.Setenv reaches the git the run starts.
+func testEnv() environ.Env { return environ.Of(os.Environ()) }

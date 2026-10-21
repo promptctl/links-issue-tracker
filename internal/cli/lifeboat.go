@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
@@ -98,7 +99,7 @@ func lifeboatRecoverLeaf() wsLeaf {
 		}
 		switch o := outcome.(type) {
 		case store.Reconciled:
-			return promoteReconciled(ctx, inv.Stdout, ws, o)
+			return promoteReconciled(ctx, inv.Env, inv.Stdout, ws, o)
 		case store.RequiresDrop:
 			// [LAW:no-silent-failure] Discard the rebuild and refuse to commit: an
 			// unexplained drop silently loses data, so the human is notified and
@@ -114,7 +115,7 @@ func lifeboatRecoverLeaf() wsLeaf {
 	}}
 }
 
-func promoteReconciled(ctx context.Context, stdout io.Writer, ws workspace.Info, o store.Reconciled) (err error) {
+func promoteReconciled(ctx context.Context, env environ.Env, stdout io.Writer, ws workspace.Info, o store.Reconciled) (err error) {
 	// [LAW:no-silent-failure] Promotion has succeeded once PromoteCandidate
 	// returns, but a failure to remove the candidate's scratch tree leaves residue
 	// in the storage dir the operator must see; join it to the return rather than
@@ -124,7 +125,7 @@ func promoteReconciled(ctx context.Context, stdout io.Writer, ws workspace.Info,
 			err = errors.Join(err, fmt.Errorf("discard candidate scratch after promotion: %w", discErr))
 		}
 	}()
-	result, err := store.PromoteCandidate(ctx, inv.Env, ws.DatabasePath, o.Candidate)
+	result, err := store.PromoteCandidate(ctx, env, ws.DatabasePath, o.Candidate)
 	if err != nil {
 		return err
 	}

@@ -211,7 +211,7 @@ func TestBothCompactionPathsRecordOneDecision(t *testing.T) {
 
 	for _, command := range []string{compactTraceCommand, "lit sync compact"} {
 		ws := compactWorkspace(t)
-		recordCompactionSuccess(ws, command, outcome)
+		recordCompactionSuccess(testEnv(), ws, command, outcome)
 
 		traces := readSyncTraces(t, ws)
 		if len(traces) != 1 {
@@ -302,7 +302,7 @@ func TestCompactThroughRecordsEachOutcome(t *testing.T) {
 			Ran: true, Depth: storage.GCFull, Detail: "journal 2.0 KiB -> 0 B",
 		}}
 
-		compactThrough(context.Background(), ws, syncer)
+		compactThrough(context.Background(), testEnv(), ws, syncer)
 
 		traces := readSyncTraces(t, ws)
 		if len(traces) != 1 {
@@ -326,7 +326,7 @@ func TestCompactThroughRecordsEachOutcome(t *testing.T) {
 
 		// The zero outcome: nothing was owed, which is the common case on every
 		// mutating command. A trace here would be one row per command forever.
-		compactThrough(context.Background(), ws, &compactSyncer{})
+		compactThrough(context.Background(), testEnv(), ws, &compactSyncer{})
 
 		if traces := readSyncTraces(t, ws); len(traces) != 0 {
 			t.Fatalf("traces = %+v, want none — nothing was owed, and recording that would drown the trail", traces)
@@ -338,7 +338,7 @@ func TestCompactThroughRecordsEachOutcome(t *testing.T) {
 		ws := compactWorkspace(t)
 		failure := errors.New("dolt gc: store is read-only")
 
-		compactThrough(context.Background(), ws, &compactSyncer{err: failure})
+		compactThrough(context.Background(), testEnv(), ws, &compactSyncer{err: failure})
 
 		traces := readSyncTraces(t, ws)
 		if len(traces) != 1 || traces[0].Status != "error" {
@@ -356,7 +356,7 @@ func TestCompactThroughRecordsEachOutcome(t *testing.T) {
 		t.Parallel()
 		ws := compactWorkspace(t)
 
-		compactThrough(context.Background(), ws,
+		compactThrough(context.Background(), testEnv(), ws,
 			&compactSyncer{err: errors.New("measure store footprint: permission denied")})
 
 		traces := readSyncTraces(t, ws)
@@ -375,7 +375,7 @@ func TestCompactThroughRecordsEachOutcome(t *testing.T) {
 		t.Parallel()
 		ws := compactWorkspace(t)
 
-		compactThrough(context.Background(), ws, &compactSyncer{
+		compactThrough(context.Background(), testEnv(), ws, &compactSyncer{
 			outcome: storage.CompactionOutcome{Depth: storage.GCFull},
 			err:     errors.New("compact dolt store (full): connection refused"),
 		})
@@ -401,7 +401,7 @@ func TestCompactThroughRecordsEachOutcome(t *testing.T) {
 		t.Parallel()
 		ws := compactWorkspace(t)
 
-		compactThrough(context.Background(), ws, &compactSyncer{
+		compactThrough(context.Background(), testEnv(), ws, &compactSyncer{
 			outcome: storage.CompactionOutcome{
 				Ran: true, Depth: storage.GCFull, Detail: "journal 4.0 MiB -> 0 B, old-generation archives 148 -> 2",
 			},

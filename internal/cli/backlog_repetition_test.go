@@ -81,7 +81,7 @@ func TestBacklogDescribesALaneClaimOncePerRun(t *testing.T) {
 		})
 	}
 
-	gathered, err := gatherWorkableAnnotated(h.ctx, h.ap, workableFilter{})
+	gathered, err := gatherWorkableAnnotated(h.ctx, testEnv(), h.ap, workableFilter{})
 	if err != nil {
 		t.Fatalf("gatherWorkableAnnotated error = %v", err)
 	}
@@ -125,7 +125,7 @@ func TestBacklogReopensARunAfterAnInterruption(t *testing.T) {
 	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "weave", IssueType: "epic", Priority: 1})
 	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B one", Topic: "weave", IssueType: "task", Priority: 1, ParentID: epicB})
 
-	gathered, err := gatherWorkableAnnotated(h.ctx, h.ap, workableFilter{})
+	gathered, err := gatherWorkableAnnotated(h.ctx, testEnv(), h.ap, workableFilter{})
 	if err != nil {
 		t.Fatalf("gatherWorkableAnnotated error = %v", err)
 	}
@@ -174,7 +174,7 @@ func TestBacklogSaysWhichEpicARunOpensUnder(t *testing.T) {
 	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "solo", IssueType: "epic", Priority: 1})
 	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B one, alone in its epic", Topic: "solo", IssueType: "task", Priority: 1, ParentID: epicB})
 
-	gathered, err := gatherWorkableAnnotated(h.ctx, h.ap, workableFilter{})
+	gathered, err := gatherWorkableAnnotated(h.ctx, testEnv(), h.ap, workableFilter{})
 	if err != nil {
 		t.Fatalf("gatherWorkableAnnotated error = %v", err)
 	}

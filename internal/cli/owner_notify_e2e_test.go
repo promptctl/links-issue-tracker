@@ -29,7 +29,7 @@ import (
 func writeOwnerNotifyProjectConfig(t *testing.T, repo, sink string) {
 	t.Helper()
 	writeOwnerNotifyConfig(t, repo, sink, true)
-	ws, err := workspace.Resolve(repo)
+	ws, err := workspace.Resolve(testEnv(), repo)
 	if err != nil {
 		t.Fatalf("resolve %s: %v", repo, err)
 	}

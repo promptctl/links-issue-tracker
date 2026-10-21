@@ -39,7 +39,7 @@ func TestOpenFailsLoudWhenForeignEngineHoldsJournalLock(t *testing.T) {
 	// failure.
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
-	s, err := Open(ctx, doltRoot, "test-workspace-id")
+	s, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("initial Open() error = %v", err)
 	}
@@ -58,7 +58,7 @@ func TestOpenFailsLoudWhenForeignEngineHoldsJournalLock(t *testing.T) {
 	t.Cleanup(func() { coResidentHolderWait = prevBudget })
 
 	start := time.Now()
-	opened, err := Open(ctx, doltRoot, "test-workspace-id")
+	opened, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	elapsed := time.Since(start)
 	if err == nil {
 		_ = opened.Close()
@@ -87,7 +87,7 @@ func TestOpenRecoversOnceForeignJournalHolderReleases(t *testing.T) {
 	// running Open.
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
-	s, err := Open(ctx, doltRoot, "test-workspace-id")
+	s, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("initial Open() error = %v", err)
 	}
@@ -102,7 +102,7 @@ func TestOpenRecoversOnceForeignJournalHolderReleases(t *testing.T) {
 	release := time.AfterFunc(300*time.Millisecond, func() { _ = releaseLock() })
 	defer release.Stop()
 
-	reopened, err := Open(ctx, doltRoot, "test-workspace-id")
+	reopened, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() after holder release error = %v; want the open retry to absorb the handoff", err)
 	}
@@ -135,7 +135,7 @@ func TestOpenSyncContentionCarriesWorkspaceBusy(t *testing.T) {
 	// running Open.
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
-	s, err := Open(ctx, doltRoot, "test-workspace-id")
+	s, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("initial Open() error = %v", err)
 	}
@@ -153,7 +153,7 @@ func TestOpenSyncContentionCarriesWorkspaceBusy(t *testing.T) {
 	coResidentHolderWait = 700 * time.Millisecond
 	t.Cleanup(func() { coResidentHolderWait = prevBudget })
 
-	opened, err := OpenSync(ctx, doltRoot, "test-workspace-id")
+	opened, err := OpenSync(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err == nil {
 		_ = opened.Close()
 		t.Fatalf("OpenSync() succeeded against a foreign journal-lock holder; want bounded contention")
@@ -174,7 +174,7 @@ func TestOpenForReadToleratesForeignJournalHolder(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
-	s, err := Open(ctx, doltRoot, "test-workspace-id")
+	s, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("initial Open() error = %v", err)
 	}
@@ -195,7 +195,7 @@ func TestOpenForReadToleratesForeignJournalHolder(t *testing.T) {
 	}
 	defer func() { _ = releaseLock() }()
 
-	reader, err := OpenForRead(ctx, doltRoot, "test-workspace-id")
+	reader, err := OpenForRead(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("OpenForRead() beside a journal-lock holder error = %v; want the read-only fallback to serve it", err)
 	}
@@ -219,7 +219,7 @@ func TestWriteOpenNamesTheJournalHolder(t *testing.T) {
 	// serial: no t.Parallel — rewrites the package-level coResidentHolderWait.
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
-	s, err := Open(ctx, doltRoot, "test-workspace-id")
+	s, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("initial Open() error = %v", err)
 	}
@@ -238,7 +238,7 @@ func TestWriteOpenNamesTheJournalHolder(t *testing.T) {
 	t.Cleanup(func() { coResidentHolderWait = prevWait })
 
 	start := time.Now()
-	opened, err := Open(ctx, doltRoot, "test-workspace-id")
+	opened, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	elapsed := time.Since(start)
 	if err == nil {
 		_ = opened.Close()
@@ -272,7 +272,7 @@ func TestWriteOpenNamesTheJournalHolder(t *testing.T) {
 func TestStoreOutlivesTheContextItWasOpenedUnder(t *testing.T) {
 	t.Parallel()
 	openCtx, cancel := context.WithCancel(context.Background())
-	st, err := Open(openCtx, migratedDoltDir(t), "test-workspace-id")
+	st, err := Open(openCtx, testEnv(), migratedDoltDir(t), "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}

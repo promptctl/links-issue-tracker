@@ -270,12 +270,13 @@ func TestReportReconcileResultCollisionCarriesBothTickets(t *testing.T) {
 	t.Parallel()
 	var sink strings.Builder
 	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}}
-	err := reportReconcileResult(context.Background(), &sink, ws, syncSession{}, "lit sync reconcile", remoteName(t, "origin"), "master", storage.SyncReconcileResult{
+	err := reportReconcileResult(context.Background(), testEnv(), &sink, ws, syncSession{}, "lit sync reconcile", remoteName(t, "origin"), "master", storage.SyncReconcileResult{
 		State:      storage.SyncReconcileIDCollision,
 		Ahead:      3,
 		Behind:     2,
 		Collisions: collisionFailure(t).Collisions,
 	}, false)
+
 	if err == nil {
 		t.Fatalf("reportReconcileResult returned nil for an id-collision result")
 	}
@@ -310,12 +311,13 @@ func TestReportReconcileResultCollisionExitsConflict(t *testing.T) {
 	t.Parallel()
 	var sink strings.Builder
 	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}}
-	err := reportReconcileResult(context.Background(), &sink, ws, syncSession{}, "lit sync reconcile", remoteName(t, "origin"), "master", storage.SyncReconcileResult{
+	err := reportReconcileResult(context.Background(), testEnv(), &sink, ws, syncSession{}, "lit sync reconcile", remoteName(t, "origin"), "master", storage.SyncReconcileResult{
 		State:      storage.SyncReconcileIDCollision,
 		Ahead:      3,
 		Behind:     2,
 		Collisions: collisionFailure(t).Collisions,
 	}, false)
+
 	if err == nil {
 		t.Fatalf("reportReconcileResult returned nil for an id-collision result; want a returned failure")
 	}

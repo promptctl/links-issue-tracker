@@ -22,7 +22,7 @@ func TestASkippedReceiveRecordsItsSkip(t *testing.T) {
 	recorder := telemetry.Begin(telemetry.Event{})
 	ctx := telemetry.With(context.Background(), recorder)
 	target := syncTarget{remote: remoteName(t, "origin"), skip: syncTargetRemoteEmpty}
-	outcome, closeLive := performSyncReceive(ctx, ws, liveClone{}, receiveFetch{target: target}, leaveUnsettledRun(filepath.Join(t.TempDir(), "dolt")))
+	outcome, closeLive := performSyncReceive(ctx, testEnv(), ws, liveClone{}, receiveFetch{target: target}, leaveUnsettledRun(filepath.Join(t.TempDir(), "dolt")))
 	if outcome.skip != syncTargetRemoteEmpty {
 		t.Fatalf("performSyncReceive() = %+v; want the skip", outcome)
 	}
@@ -49,7 +49,7 @@ func TestAReceiveThatSettlesNothingOwesNoPush(t *testing.T) {
 	gitInit(t, dir)
 	recorder := telemetry.Begin(telemetry.Event{})
 	ctx := telemetry.With(context.Background(), recorder)
-	receiveOnce(ctx, workspace.Info{Location: workspace.LocationFromStorageDir(t.TempDir()), RootDir: dir})
+	receiveOnce(ctx, testEnv(), workspace.Info{Location: workspace.LocationFromStorageDir(t.TempDir()), RootDir: dir})
 	facts := writtenFacts(t, recorder.Finish(invocationEnd(time.Now(), nil, nil)))
 	if owed, present := facts["receive.push_owed"]; !present || owed != false {
 		t.Fatalf("receive.push_owed = %#v (present %t); want false", owed, present)
@@ -118,11 +118,11 @@ func TestAutomaticReceiveFastForwardsEstablishedClone(t *testing.T) {
 // and without the wait for a parent that this test process never lets exit.
 func receiveNow(t *testing.T, dir string) {
 	t.Helper()
-	ws, err := workspace.Resolve(dir)
+	ws, err := workspace.Resolve(testEnv(), dir)
 	if err != nil {
 		t.Fatalf("resolve workspace %s: %v", dir, err)
 	}
-	receiveOnce(underInvocation(context.Background()), ws)
+	receiveOnce(underInvocation(context.Background()), testEnv(), ws)
 }
 
 // TestTheReceiveBlockWaitsForTheNextCommandUntilAReceiveSettles pins the
@@ -141,7 +141,7 @@ func TestTheReceiveBlockWaitsForTheNextCommandUntilAReceiveSettles(t *testing.T)
 		reconcile: &reconcileOutcome{},
 		stopped:   receiveStepReconcile, err: errors.New("reconcile backend unavailable"),
 	}
-	surfaceReceiveOutcome(context.Background(), ws, unconverged, now)
+	surfaceReceiveOutcome(context.Background(), testEnv(), ws, unconverged, now)
 	block, err := os.ReadFile(receiveBlockPendingPath(ws))
 	if err != nil {
 		t.Fatalf("an unconverged receive left no block for the next command: %v", err)
@@ -150,7 +150,7 @@ func TestTheReceiveBlockWaitsForTheNextCommandUntilAReceiveSettles(t *testing.T)
 		t.Fatalf("pending block does not carry the receive's failure:\n%s", block)
 	}
 
-	surfaceReceiveOutcome(context.Background(), ws, syncReceiveOutcome{remote: remoteName(t, "origin"), branch: "master"}, now)
+	surfaceReceiveOutcome(context.Background(), testEnv(), ws, syncReceiveOutcome{remote: remoteName(t, "origin"), branch: "master"}, now)
 	if _, err := os.Stat(receiveBlockPendingPath(ws)); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("a receive that settled cleanly left the earlier block pending (stat err = %v)", err)
 	}
@@ -158,7 +158,7 @@ func TestTheReceiveBlockWaitsForTheNextCommandUntilAReceiveSettles(t *testing.T)
 	// Every other surface that converges a divergence — `lit sync pull`,
 	// `lit sync reconcile` — ends the episode the same way, so a block left
 	// before it is retired too.
-	surfaceReceiveOutcome(context.Background(), ws, unconverged, now)
+	surfaceReceiveOutcome(context.Background(), testEnv(), ws, unconverged, now)
 	endDivergenceEpisode(ws)
 	if _, err := os.Stat(receiveBlockPendingPath(ws)); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("a converged divergence left the receive's block pending (stat err = %v)", err)

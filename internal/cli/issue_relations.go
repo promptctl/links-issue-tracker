@@ -32,7 +32,7 @@ func labelAddLeaf() appLeaf {
 		if len(positional) != 2 {
 			return UsageError{Message: usageLine0}
 		}
-		labels, err := ap.Store.AddLabel(ctx, storage.AddLabelInput{IssueID: positional[0], Name: positional[1], CreatedBy: resolveActor()})
+		labels, err := ap.Store.AddLabel(ctx, storage.AddLabelInput{IssueID: positional[0], Name: positional[1], CreatedBy: resolveActor(inv.Env)})
 		if err != nil {
 			return err
 		}
@@ -74,7 +74,7 @@ func parentSetLeaf() appLeaf {
 		rel, err := ap.Store.SetParent(ctx, storage.SetParentInput{
 			ChildID:   *child,
 			ParentID:  *parent,
-			CreatedBy: resolveActor(),
+			CreatedBy: resolveActor(inv.Env),
 		})
 		if err != nil {
 			return err

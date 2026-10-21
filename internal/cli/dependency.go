@@ -81,7 +81,7 @@ func depAddLeaf() appLeaf {
 		if issueID == otherID {
 			return model.ValidationError{Message: fmt.Sprintf("dep add: self-loop rejected (%s %s %s)", issueID, rt, otherID)}
 		}
-		rel, err := ap.Store.AddRelation(ctx, storage.AddRelationInput{SrcID: issueID, DstID: otherID, Type: rt, CreatedBy: resolveActor()})
+		rel, err := ap.Store.AddRelation(ctx, storage.AddRelationInput{SrcID: issueID, DstID: otherID, Type: rt, CreatedBy: resolveActor(inv.Env)})
 		if err != nil {
 			return err
 		}

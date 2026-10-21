@@ -261,7 +261,7 @@ func TestProseReconcileSurfacesAndResolves(t *testing.T) {
 	if version := runCLIInDir(t, consumer, "history", ticketID, "--version", "description@4"); !strings.Contains(version, "alpha-desc and bravo-desc merged") {
 		t.Fatalf("description@4 is not the merged text:\n%s", version)
 	}
-	ws, err := workspace.Resolve(consumer)
+	ws, err := workspace.Resolve(testEnv(), consumer)
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}

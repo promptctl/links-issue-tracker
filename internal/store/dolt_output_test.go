@@ -105,7 +105,7 @@ func TestDoltTransferKeepsStdoutClean(t *testing.T) {
 // store so a subsequent fetch has chunks to move.
 func seedSecondChange(t *testing.T, ctx context.Context, root, remoteURL string) {
 	t.Helper()
-	st, err := Open(ctx, root, "ws")
+	st, err := Open(ctx, testEnv(), root, "ws")
 	if err != nil {
 		t.Fatalf("Open(second change): %v", err)
 	}

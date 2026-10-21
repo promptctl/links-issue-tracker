@@ -167,7 +167,7 @@ func bulkLabelLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		actor := resolveActor()
+		actor := resolveActor(inv.Env)
 		return runBulkOver(ctx, inv.Stdout, issueIDs, func(ctx context.Context, issueID string) (string, error) {
 			return "", op(ctx, ap, issueID, *label, actor)
 		})
@@ -194,7 +194,7 @@ func bulkTransitionLeaf(spec transitionSpec) appLeafFn {
 			if err != nil {
 				return err
 			}
-			actor := resolveActor()
+			actor := resolveActor(inv.Env)
 			action, err := buildAction(actor)
 			if err != nil {
 				return err

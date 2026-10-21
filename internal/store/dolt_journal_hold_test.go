@@ -72,7 +72,7 @@ func TestOpenForReadPendingMigrationUnderJournalHolder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LockDoltJournalExclusive() error = %v", err)
 	}
-	reader, err := OpenForRead(ctx, doltRoot, "test-workspace-id")
+	reader, err := OpenForRead(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err == nil {
 		_ = reader.Close()
 		_ = release()
@@ -90,7 +90,7 @@ func TestOpenForReadPendingMigrationUnderJournalHolder(t *testing.T) {
 		t.Fatalf("release journal lock: %v", err)
 	}
 
-	healed, err := OpenForRead(ctx, doltRoot, "test-workspace-id")
+	healed, err := OpenForRead(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("OpenForRead() after release error = %v; want the retried open to apply the migration", err)
 	}
@@ -118,7 +118,7 @@ func TestJournalLockHoldExcludesJournalRecovery(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	s, err := Open(ctx, doltRoot, "test-workspace-id")
+	s, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -157,7 +157,7 @@ func TestJournalLockHoldExcludesJournalRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LockDoltJournalExclusive() error = %v", err)
 	}
-	reader, err := OpenForRead(ctx, doltRoot, "test-workspace-id")
+	reader, err := OpenForRead(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		_ = release()
 		t.Fatalf("OpenForRead() under the journal hold error = %v; the read-only fallback must serve it", err)
@@ -187,7 +187,7 @@ func TestJournalLockHoldExcludesJournalRecovery(t *testing.T) {
 	// Detector arm: lock free, the same open runs recovery and truncates the
 	// dirty tail — proving the first arm's byte-equality was exclusion, not a
 	// journal that needed no recovery.
-	reader2, err := OpenForRead(ctx, doltRoot, "test-workspace-id")
+	reader2, err := OpenForRead(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("OpenForRead() after release error = %v", err)
 	}

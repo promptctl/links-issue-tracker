@@ -29,7 +29,7 @@ func verdictLeaf() appLeaf {
 			Plan:      *plan,
 			Verdict:   positional[1],
 			Laws:      *laws,
-			CreatedBy: resolveActor(),
+			CreatedBy: resolveActor(inv.Env),
 		})
 		if err != nil {
 			return err

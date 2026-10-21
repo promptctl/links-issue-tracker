@@ -133,7 +133,7 @@ func TestWorkableQueueLoadsEachSubjectOnce(t *testing.T) {
 	counting := &countingGraphSource{Store: h.ap.Store}
 	ap := *h.ap
 	ap.Store = counting
-	if _, err := gatherWorkableQueue(h.ctx, &ap); err != nil {
+	if _, err := gatherWorkableQueue(h.ctx, testEnv(), &ap); err != nil {
 		t.Fatalf("gatherWorkableQueue error = %v", err)
 	}
 	for id, n := range counting.fetchCounts() {

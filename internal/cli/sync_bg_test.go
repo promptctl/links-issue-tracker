@@ -68,7 +68,7 @@ func TestMirrorEnvStripsInheritedTraceRefFile(t *testing.T) {
 	t.Setenv(automationReasonEnvVar, "parent reason")
 	t.Setenv("LIT_MIRROR_ENV_CANARY", "keep-me")
 
-	env := mirrorEnv()
+	env := mirrorEnv(testEnv()).List()
 
 	var trigger, reason, canary string
 	for _, kv := range env {

@@ -124,7 +124,7 @@ func revertToBaseline(t *testing.T, st *Store) {
 func assertReachedBaseline(t *testing.T, doltRoot string) *Store {
 	t.Helper()
 	ctx := context.Background()
-	st, err := Open(ctx, doltRoot, "test-workspace-id")
+	st, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v — reconcile must forward-migrate, not refuse", err)
 	}
@@ -155,7 +155,7 @@ func TestReconcileAddsMissingIssueEventsTables(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	first, err := Open(ctx, doltRoot, "test-workspace-id")
+	first, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
@@ -208,7 +208,7 @@ func TestReconcileRenamesPromptToAgentPrompt(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	first, err := Open(ctx, doltRoot, "test-workspace-id")
+	first, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
@@ -248,7 +248,7 @@ func TestReconcileNormalizesLegacyStatusValues(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	first, err := Open(ctx, doltRoot, "test-workspace-id")
+	first, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
@@ -305,7 +305,7 @@ func TestReconcileNullsEpicStatus(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	first, err := Open(ctx, doltRoot, "test-workspace-id")
+	first, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
@@ -361,7 +361,7 @@ func TestReconcileBackfillsTopicDefault(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	first, err := Open(ctx, doltRoot, "test-workspace-id")
+	first, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
@@ -398,7 +398,7 @@ func TestReconcileResetsLegacyPriorities(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	first, err := Open(ctx, doltRoot, "test-workspace-id")
+	first, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
@@ -450,7 +450,7 @@ func TestReconcileDropsLegacyIssueHistory(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	first, err := Open(ctx, doltRoot, "test-workspace-id")
+	first, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
@@ -668,7 +668,7 @@ func TestReconcileTranslatesLegacyIssueHistoryToEvents(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	first, err := Open(ctx, doltRoot, "test-workspace-id")
+	first, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
@@ -866,7 +866,7 @@ func TestReconcileTranslateSkipsOrphanedHistoryRows(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	first, err := Open(ctx, doltRoot, "test-workspace-id")
+	first, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
@@ -919,7 +919,7 @@ func TestReconcileTranslateRunsAfterActorRename(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	first, err := Open(ctx, doltRoot, "test-workspace-id")
+	first, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
@@ -1001,7 +1001,7 @@ func TestReconcileTranslateIsIdempotentWithExistingEvents(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	first, err := Open(ctx, doltRoot, "test-workspace-id")
+	first, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
@@ -1119,7 +1119,7 @@ func TestReconcileRecoversFromFabricatedGooseRows(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	first, err := Open(ctx, doltRoot, "test-workspace-id")
+	first, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
@@ -1213,7 +1213,7 @@ func TestReconcileIsIdempotent(t *testing.T) {
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
 	// Bootstrap, then strip goose so the next Open re-runs adoption.
-	first, err := Open(ctx, doltRoot, "test-workspace-id")
+	first, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
@@ -1259,7 +1259,7 @@ func TestReconcileCreatedTablesMatchBaselineConstraintNames(t *testing.T) {
 	// Bootstrap to lay down storage and a `links` database, then strip
 	// EVERY canonical table except meta. The reconcile must then CREATE
 	// issues, relations, comments, labels, issue_events, issue_event_changes.
-	first, err := Open(ctx, doltRoot, "test-workspace-id")
+	first, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
@@ -1324,7 +1324,7 @@ func TestReconcileTopicHasNoDefault(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	first, err := Open(ctx, doltRoot, "test-workspace-id")
+	first, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
@@ -1371,7 +1371,7 @@ func TestReconcileRankBackfillCoexistsWithExistingRanks(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	first, err := Open(ctx, doltRoot, "test-workspace-id")
+	first, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
@@ -1440,7 +1440,7 @@ func TestPostReconcileBaselineVerificationCatchesNonIssuesGaps(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	first, err := Open(ctx, doltRoot, "test-workspace-id")
+	first, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
@@ -1467,7 +1467,7 @@ func TestPostReconcileBaselineVerificationCatchesNonIssuesGaps(t *testing.T) {
 		t.Fatalf("Close(first) error = %v", err)
 	}
 
-	_, err = Open(ctx, doltRoot, "test-workspace-id")
+	_, err = Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err == nil {
 		t.Fatal("Open() stamped v1 on a workspace with a malformed relations table; the post-reconcile baseline check failed to catch the gap")
 	}
@@ -1477,7 +1477,7 @@ func TestPostReconcileBaselineVerificationCatchesNonIssuesGaps(t *testing.T) {
 		t.Fatalf("error %q does not name the remaining relations.created_by gap after reconcile", err)
 	}
 	// And the workspace must NOT have been stamped at v1.
-	st, err := openStoreConnection(ctx, doltRoot, "test-workspace-id", engineWrite)
+	st, err := openStoreConnection(ctx, testEnv(), doltRoot, "test-workspace-id", engineWrite)
 	if err != nil {
 		t.Fatalf("openStoreConnection() error = %v", err)
 	}
@@ -1503,7 +1503,7 @@ func TestReconcileErrorMessageIsActionable(t *testing.T) {
 	if _, err := EnsureDatabase(ctx, doltRoot, "test-workspace-id"); err != nil {
 		t.Fatalf("EnsureDatabase() error = %v", err)
 	}
-	seed, err := openStoreConnection(ctx, doltRoot, "test-workspace-id", engineWrite)
+	seed, err := openStoreConnection(ctx, testEnv(), doltRoot, "test-workspace-id", engineWrite)
 	if err != nil {
 		t.Fatalf("openStoreConnection() error = %v", err)
 	}
@@ -1516,7 +1516,7 @@ func TestReconcileErrorMessageIsActionable(t *testing.T) {
 		t.Fatalf("seed Close() error = %v", err)
 	}
 
-	_, err = Open(ctx, doltRoot, "test-workspace-id")
+	_, err = Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err == nil {
 		t.Fatal("Open() on a malformed shape returned nil; expected an actionable error")
 	}

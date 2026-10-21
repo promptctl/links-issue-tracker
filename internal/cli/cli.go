@@ -17,6 +17,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/claims"
 	"github.com/promptctl/links-issue-tracker/internal/config"
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/interrupt"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/pathspec"
@@ -39,7 +40,7 @@ import (
 // [LAW:nothing-unseen] [LAW:single-enforcer]
 func Run(ctx context.Context, inv Invocation) (err error) {
 	recorder := beginInvocation(time.Now(), inv.Dir)
-	record := &invocationRecord{recorder: recorder, stderr: inv.Stderr}
+	record := &invocationRecord{recorder: recorder, stderr: inv.Stderr, env: inv.Env}
 	interrupt.BeforeHardExit(ctx, func(signal string, code int) { record.close(interruptedEnd(time.Now(), signal, code)) })
 	defer func() {
 		panicked := recover()
@@ -88,7 +89,7 @@ func dispatch(ctx context.Context, inv Invocation) error {
 	// Recorded here because every command's error returns through this seam;
 	// the mirror never reaches it — its busy errors complete through the
 	// push-outcome seam and it exits 0. [LAW:single-enforcer]
-	recordEngineOpenContentionTrace(ctx, err)
+	recordEngineOpenContentionTrace(ctx, inv.Env, err)
 	return err
 }
 
@@ -121,7 +122,7 @@ func newRootCommand(ctx context.Context, inv Invocation) *cobra.Command {
 			}
 			// [LAW:one-source-of-truth] Default command reuses renderQuickstartGuidance
 			// so the output is always identical to `lit quickstart`.
-			ws, wsErr := resolveWorkspace(cmd.Context(), inv.Dir, workspace.PrefixRequest{})
+			ws, wsErr := resolveWorkspace(cmd.Context(), inv.Env, inv.Dir, workspace.PrefixRequest{})
 			// [LAW:dataflow-not-control-flow] Only the "outside git repo" case routes to help;
 			// other failures (getcwd, template load) surface so they remain diagnosable.
 			var outside OutsideWorkspaceError
@@ -131,7 +132,7 @@ func newRootCommand(ctx context.Context, inv Invocation) *cobra.Command {
 			if wsErr != nil {
 				return wsErr
 			}
-			guidance, guidanceErr := renderQuickstartGuidance(ws.RootDir)
+			guidance, guidanceErr := renderQuickstartGuidance(inv.Env, ws.RootDir)
 			if guidanceErr != nil {
 				return guidanceErr
 			}
@@ -161,7 +162,7 @@ func newRootCommand(ctx context.Context, inv Invocation) *cobra.Command {
 }
 
 func runWithApp(ctx context.Context, inv Invocation, accessMode app.AccessMode, run func(context.Context, *app.App) error) error {
-	ws, err := resolveWorkspace(ctx, inv.Dir, workspace.PrefixRequest{})
+	ws, err := resolveWorkspace(ctx, inv.Env, inv.Dir, workspace.PrefixRequest{})
 	if err != nil {
 		return err
 	}
@@ -203,7 +204,7 @@ func runWithApp(ctx context.Context, inv Invocation, accessMode app.AccessMode, 
 	// auto-sync below so the banner reports the last COMPLETED attempt rather
 	// than racing the one about to spawn.
 	if accessMode == app.AccessWrite {
-		printMutationSyncStalenessWarning(ctx, inv.Stdout, ws, time.Now())
+		printMutationSyncStalenessWarning(ctx, inv.Env, inv.Stdout, ws, time.Now())
 	}
 	// [LAW:single-enforcer] One owner consults the auto-sync policy after a
 	// successful command, AND after that command's engine is closed: the on-change
@@ -212,7 +213,7 @@ func runWithApp(ctx context.Context, inv Invocation, accessMode app.AccessMode, 
 	// a worker's open on the path together, which embedded Dolt forbids. Command
 	// handlers stay unaware of any of this.
 	// [LAW:no-ambient-temporal-coupling]
-	maybeAutoSyncAfterCommand(ctx, accessMode, ws)
+	maybeAutoSyncAfterCommand(ctx, inv.Env, accessMode, ws)
 	return nil
 }
 
@@ -222,12 +223,12 @@ func runWithApp(ctx context.Context, inv Invocation, accessMode app.AccessMode, 
 // [LAW:single-enforcer] Every command acquires its workspace here, so this is
 // the one translation of ErrNotGitRepo into the typed CLI error and the one
 // place the workspace's config keys are checked.
-func resolveWorkspace(ctx context.Context, dir WorkingDir, requested workspace.PrefixRequest) (workspace.Info, error) {
+func resolveWorkspace(ctx context.Context, env environ.Env, dir WorkingDir, requested workspace.PrefixRequest) (workspace.Info, error) {
 	cwd, err := dir.Path()
 	if err != nil {
 		return workspace.Info{}, fmt.Errorf("get cwd: %w", err)
 	}
-	ws, err := workspace.ResolveWithPrefix(inv.Env, cwd, requested)
+	ws, err := workspace.ResolveWithPrefix(env, cwd, requested)
 	if err != nil {
 		if errors.Is(err, workspace.ErrNotGitRepo) {
 			// [LAW:types-are-the-program] Typed error carries classification; message preserved for surface display.
@@ -235,7 +236,7 @@ func resolveWorkspace(ctx context.Context, dir WorkingDir, requested workspace.P
 		}
 		return workspace.Info{}, err
 	}
-	reportUnknownConfigKeys(ctx, ws.RootDir)
+	reportUnknownConfigKeys(ctx, env, ws.RootDir)
 	return ws, nil
 }
 
@@ -343,12 +344,12 @@ func newLeaf() appLeaf {
 			Title: *title, Description: description.value(), Prompt: prompt.value(), Plan: plan.value(), IssueType: issueTypeValue, Topic: *topic, ParentID: *parentID, Priority: priorityValue, Assignee: strings.TrimSpace(*assignee), Labels: splitCSV(*labels), Lane: *lane,
 			Placement: rankPlacement(*top),
 			Prefix:    prefix.Value(),
-			Actor:     resolveActor(),
+			Actor:     resolveActor(inv.Env),
 		})
 		if err != nil {
 			return err
 		}
-		if err := dispatchOccasion(ctx, inv.Stdout, ap.Workspace, ticketCreatedOccasion(issue)); err != nil {
+		if err := dispatchOccasion(ctx, inv.Env, inv.Stdout, ap.Workspace, ticketCreatedOccasion(issue)); err != nil {
 			return err
 		}
 		if err := printIssueSummary(inv.Stdout, issue); err != nil {
@@ -448,12 +449,12 @@ func followupLeaf() appLeaf {
 			Labels:      splitCSV(*labels),
 			Placement:   rankPlacement(*top),
 			Prefix:      prefix.Value(),
-			Actor:       resolveActor(),
+			Actor:       resolveActor(inv.Env),
 		})
 		if err != nil {
 			return err
 		}
-		if err := dispatchOccasion(ctx, inv.Stdout, ap.Workspace, ticketCreatedOccasion(issue)); err != nil {
+		if err := dispatchOccasion(ctx, inv.Env, inv.Stdout, ap.Workspace, ticketCreatedOccasion(issue)); err != nil {
 			return err
 		}
 		if err := printIssueSummary(inv.Stdout, issue); err != nil {
@@ -545,7 +546,7 @@ func runList(ctx context.Context, inv Invocation, surface listSurface, args []st
 		return l.work(ctx, inv, listScope{store: st, policy: noReadyPolicy}, positional)
 	}
 	return runWithApp(ctx, inv, app.AccessRead, func(ctx context.Context, ap *app.App) error {
-		return l.work(ctx, inv, listScope{store: ap.Store, policy: workspaceReadyPolicy(ap)}, positional)
+		return l.work(ctx, inv, listScope{store: ap.Store, policy: workspaceReadyPolicy(inv.Env, ap)}, positional)
 	})
 }
 
@@ -937,12 +938,12 @@ func (f workableFilter) criteria() (storage.IssueCriteria, error) {
 // The filter is parsed before a single row is read, so a label the vocabulary
 // cannot express fails here rather than after the queue is materialized.
 // [LAW:parse-dont-validate]
-func gatherWorkableAnnotated(ctx context.Context, ap *app.App, rf workableFilter) (focusedQueue, error) {
+func gatherWorkableAnnotated(ctx context.Context, env environ.Env, ap *app.App, rf workableFilter) (focusedQueue, error) {
 	criteria, err := rf.criteria()
 	if err != nil {
 		return focusedQueue{}, err
 	}
-	queue, err := gatherWorkableQueue(ctx, ap)
+	queue, err := gatherWorkableQueue(ctx, env, ap)
 	if err != nil {
 		return focusedQueue{}, err
 	}
@@ -955,8 +956,8 @@ func gatherWorkableAnnotated(ctx context.Context, ap *app.App, rf workableFilter
 // queue, for a caller that applies the filter itself. `lit next` is the one —
 // its filter decides which rows it may serve, not which rows its walks may read,
 // so it needs the rows a filter would drop (see routeNext).
-func gatherWorkableQueue(ctx context.Context, ap *app.App) (focusedQueue, error) {
-	requiredFields, err := readyRequiredFields(ap)
+func gatherWorkableQueue(ctx context.Context, env environ.Env, ap *app.App) (focusedQueue, error) {
+	requiredFields, err := readyRequiredFields(env, ap)
 	if err != nil {
 		return focusedQueue{}, err
 	}
@@ -981,8 +982,8 @@ func gatherWorkableQueue(ctx context.Context, ap *app.App) (focusedQueue, error)
 // slice — reads it through here, so the two cannot disagree about which fields
 // a ticket must fill before it counts as startable.
 // [LAW:one-source-of-truth] One read of the policy, one place it is named.
-func readyRequiredFields(ap *app.App) ([]string, error) {
-	cfg, err := config.Load(inv.Env, pathspec.New(ap.Workspace.RootDir))
+func readyRequiredFields(env environ.Env, ap *app.App) ([]string, error) {
+	cfg, err := config.Load(env, pathspec.New(ap.Workspace.RootDir))
 	if err != nil {
 		return nil, err
 	}
@@ -1006,8 +1007,8 @@ func readyRequiredFields(ap *app.App) ([]string, error) {
 type readyPolicy func() ([]string, error)
 
 // workspaceReadyPolicy reads the repo's policy when asked.
-func workspaceReadyPolicy(ap *app.App) readyPolicy {
-	return func() ([]string, error) { return readyRequiredFields(ap) }
+func workspaceReadyPolicy(env environ.Env, ap *app.App) readyPolicy {
+	return func() ([]string, error) { return readyRequiredFields(env, ap) }
 }
 
 // noReadyPolicy is the policy of a store with no repo root to read one from.
@@ -1244,7 +1245,7 @@ func showLeaf() appLeaf {
 		// into `lit update`; prepending the banner there would corrupt it.
 		// [LAW:dataflow-not-control-flow]
 		if strings.TrimSpace(*fieldsExpr) == "" {
-			if err := printStalenessWarning(ctx, inv.Stdout, ap.Workspace, ap.Store, time.Now()); err != nil {
+			if err := printStalenessWarning(ctx, inv.Env, inv.Stdout, ap.Workspace, ap.Store, time.Now()); err != nil {
 				return err
 			}
 		}
@@ -1253,7 +1254,7 @@ func showLeaf() appLeaf {
 			return err
 		}
 		// The agent viewed the ticket's details either way, --field or full view.
-		if err := dispatchOccasion(ctx, inv.Stdout, ap.Workspace, showTicketOccasion(detail.Issue)); err != nil {
+		if err := dispatchOccasion(ctx, inv.Env, inv.Stdout, ap.Workspace, showTicketOccasion(detail.Issue)); err != nil {
 			return err
 		}
 		// --field is the compact, edit-oriented view: exactly the requested
@@ -1265,7 +1266,7 @@ func showLeaf() appLeaf {
 		// all-or-nothing: a slice that cannot be built fails without a body, rather
 		// than after one that reads as a complete show of an epic-less ticket.
 		// [LAW:parse-dont-validate]
-		plan, err := resolveEpicContext(ctx, ap, detail)
+		plan, err := resolveEpicContext(ctx, inv.Env, ap, detail)
 		if err != nil {
 			return err
 		}
@@ -1363,7 +1364,7 @@ func updateLeaf() appLeaf {
 		// Fields.Reason annotates that event; with no action, there is no transition
 		// event for update to reason about. [LAW:single-enforcer]
 		in := storage.Change{
-			Actor: resolveActor(),
+			Actor: resolveActor(inv.Env),
 			Fields: storage.UpdateIssueInput{
 				Reason: strings.TrimSpace(*reason),
 			},
@@ -1415,7 +1416,7 @@ func updateLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		if err := dispatchOccasion(ctx, inv.Stdout, ap.Workspace, ticketUpdatedOccasion(applied.Issue)); err != nil {
+		if err := dispatchOccasion(ctx, inv.Env, inv.Stdout, ap.Workspace, ticketUpdatedOccasion(applied.Issue)); err != nil {
 			return err
 		}
 		if err := printIssueSummary(inv.Stdout, applied.Issue); err != nil {
@@ -1648,8 +1649,8 @@ func filterWorkableIssues(issues []model.Issue) []model.Issue {
 // actor cannot diverge because both derive from this one rule.
 // [LAW:types-are-the-program] env presence is the discriminator; no callsite
 // re-decides precedence or re-parses the env var.
-func resolveIdentity(explicit string) string {
-	if sessionID := strings.TrimSpace(os.Getenv("CLAUDE_CODE_SESSION_ID")); sessionID != "" {
+func resolveIdentity(env environ.Env, explicit string) string {
+	if sessionID := strings.TrimSpace(env.Get("CLAUDE_CODE_SESSION_ID")); sessionID != "" {
 		return "claude_" + sessionID
 	}
 	return strings.TrimSpace(explicit)
@@ -1662,7 +1663,7 @@ func resolveIdentity(explicit string) string {
 // actor for every mutating command; [LAW:types-are-the-program] an unresolved
 // --by cannot reach a CreatedBy/actor field, so a new mutating command
 // cannot split provenance by forgetting to resolve.
-type actorResolver func() string
+type actorResolver func(env environ.Env) string
 
 // byUsage is the one help line for --by, shown on every command that registers
 // it, so the flag reads the same wherever an operator meets it.
@@ -1686,7 +1687,7 @@ func registerActor(fs *cobraFlagSet) actorResolver {
 	// A command that registers its own --assignee (a filter, a field write)
 	// parses it normally; everywhere else it is pointed here.
 	fs.Retire("assignee", "--assignee does not name who is acting here; name yourself with --by <name> (CLAUDE_CODE_SESSION_ID wins when set), or change a ticket's assignee with `lit update <id> --assignee <name>`")
-	return func() string { return resolveIdentity(*by) }
+	return func(env environ.Env) string { return resolveIdentity(env, *by) }
 }
 
 // transitionBreadcrumbTopics maps transition actions to the quickstart topic
@@ -2062,7 +2063,7 @@ func transitionLeaf(spec transitionSpec) appLeaf {
 		// the assignee `start` writes is that same value.
 		// The action is built before the store is read: a mis-written command
 		// line is a usage error whatever the id names. [LAW:parse-dont-validate]
-		actor := resolveActor()
+		actor := resolveActor(inv.Env)
 		action, err := buildAction(actor)
 		if err != nil {
 			return err
@@ -2092,7 +2093,7 @@ func transitionLeaf(spec transitionSpec) appLeaf {
 		// injected — `done`'s embedded default is what prints the post-close
 		// capture reminder below.
 		if occasion, fires := transitionOccasion(action, prior, written); fires {
-			if err := dispatchOccasion(ctx, inv.Stdout, ap.Workspace, occasion); err != nil {
+			if err := dispatchOccasion(ctx, inv.Env, inv.Stdout, ap.Workspace, occasion); err != nil {
 				return err
 			}
 		}
@@ -2148,11 +2149,11 @@ func commentAddLeaf() appLeaf {
 		}
 		// [LAW:single-enforcer] A comment is a recorded event; its author resolves
 		// through the same identity rule as every other actor.
-		comment, issue, err := ap.Store.AddComment(ctx, storage.AddCommentInput{IssueID: positional[0], Body: body.value(), CreatedBy: resolveActor()})
+		comment, issue, err := ap.Store.AddComment(ctx, storage.AddCommentInput{IssueID: positional[0], Body: body.value(), CreatedBy: resolveActor(inv.Env)})
 		if err != nil {
 			return err
 		}
-		if err := dispatchOccasion(ctx, inv.Stdout, ap.Workspace, commentAddedOccasion(issue)); err != nil {
+		if err := dispatchOccasion(ctx, inv.Env, inv.Stdout, ap.Workspace, commentAddedOccasion(issue)); err != nil {
 			return err
 		}
 		return printComment(inv.Stdout, comment)
@@ -2215,9 +2216,9 @@ func importTreeLeaf() appLeaf {
 		}
 		switch strings.ToLower(filepath.Ext(path.path())) {
 		case ".yaml", ".yml":
-			return runImportBulk(ctx, inv.Stdout, ap, data, resolveActor())
+			return runImportBulk(ctx, inv.Stdout, ap, data, resolveActor(inv.Env))
 		default:
-			return runImportTreeJSON(ctx, inv.Stdout, ap, data, resolveActor())
+			return runImportTreeJSON(ctx, inv.Stdout, ap, data, resolveActor(inv.Env))
 		}
 	}}
 }
@@ -2465,7 +2466,7 @@ func quickstartLeaf() wsLeaf {
 			if !ok {
 				return UsageError{Message: fmt.Sprintf("usage: unknown quickstart topic %q (must be one of: %s)", positional[0], strings.Join(quickstartTopicTokens(), ", "))}
 			}
-			guidance, err := renderQuickstartTopic(ws.RootDir, templateName)
+			guidance, err := renderQuickstartTopic(inv.Env, ws.RootDir, templateName)
 			if err != nil {
 				return err
 			}
@@ -2474,7 +2475,7 @@ func quickstartLeaf() wsLeaf {
 		}
 
 		if ejectChanged {
-			results, err := ejectTemplates(ejectValue, *force)
+			results, err := ejectTemplates(inv.Env, ejectValue, *force)
 			if err != nil {
 				return err
 			}
@@ -2482,7 +2483,7 @@ func quickstartLeaf() wsLeaf {
 		}
 
 		// [LAW:one-source-of-truth] Quickstart guidance is loaded from the managed quickstart template instead of being re-encoded in CLI data structures.
-		guidance, err := renderQuickstartGuidance(ws.RootDir)
+		guidance, err := renderQuickstartGuidance(inv.Env, ws.RootDir)
 		if err != nil {
 			return err
 		}
@@ -2491,7 +2492,7 @@ func quickstartLeaf() wsLeaf {
 		if *refresh {
 			// [LAW:single-enforcer] Quickstart refresh rewrites through the managed
 			// asset writers, in the workspace the leaf already resolved.
-			refreshReport, err := refreshQuickstartManagedAssets(ws)
+			refreshReport, err := refreshQuickstartManagedAssets(inv.Env, ws)
 			if err != nil {
 				return err
 			}

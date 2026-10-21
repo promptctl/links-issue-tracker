@@ -37,7 +37,7 @@ func TestReRootGivesTheSameHashesInEveryStore(t *testing.T) {
 	doltRoot := migratedDoltDir(t)
 	epic := seedCommitEpic(t, ctx, doltRoot)
 	for i := range 6 {
-		st, err := Open(ctx, doltRoot, "ws")
+		st, err := Open(ctx, testEnv(), doltRoot, "ws")
 		if err != nil {
 			t.Fatalf("Open(%d) error = %v", i, err)
 		}
@@ -354,7 +354,7 @@ func commitsReachedFromHead(t *testing.T, ctx context.Context, ddb *doltdb.DoltD
 // count, not the re-root's.
 func logLength(t *testing.T, ctx context.Context, root, rev string) int {
 	t.Helper()
-	st, err := Open(ctx, root, "ws")
+	st, err := Open(ctx, testEnv(), root, "ws")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -368,7 +368,7 @@ func logLength(t *testing.T, ctx context.Context, root, rev string) int {
 
 func exportOf(t *testing.T, ctx context.Context, root string) model.Export {
 	t.Helper()
-	st, err := Open(ctx, root, "ws")
+	st, err := Open(ctx, testEnv(), root, "ws")
 	if err != nil {
 		t.Fatal(err)
 	}

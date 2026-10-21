@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
@@ -90,12 +91,12 @@ type remoteFetch struct {
 // banner is best-effort, so an unresolved remote prints no fetch line, as it
 // prints no freshness line; `lit doctor` names why.
 // [LAW:types-are-the-program] a known fetch always names its remote.
-func lastTargetFetch(ctx context.Context, ws workspace.Info, now time.Time) *remoteFetch {
-	gitRemotes, err := workspace.GitRemotes(ctx, inv.Env, ws.RootDir)
+func lastTargetFetch(ctx context.Context, env environ.Env, ws workspace.Info, now time.Time) *remoteFetch {
+	gitRemotes, err := workspace.GitRemotes(ctx, env, ws.RootDir)
 	if err != nil {
 		return nil
 	}
-	remote, ok, err := workspaceSyncRemote(ctx, ws, "", gitRemotes)
+	remote, ok, err := workspaceSyncRemote(ctx, env, ws, "", gitRemotes)
 	if err != nil || !ok {
 		return nil
 	}
@@ -208,9 +209,9 @@ func oneLineReason(reason string) string {
 // Best-effort throughout: an unresolved or no-remote workspace prints no
 // freshness line rather than aborting the caller, because this banner is supplementary, not
 // itself a diagnostic. [LAW:no-silent-failure] [LAW:effects-at-boundaries]
-func printStalenessWarning(ctx context.Context, w io.Writer, ws workspace.Info, st storage.Store, now time.Time) error {
-	report := resolveDoctorSyncFreshness(ctx, ws, st)
-	fetch := lastTargetFetch(ctx, ws, now)
+func printStalenessWarning(ctx context.Context, env environ.Env, w io.Writer, ws workspace.Info, st storage.Store, now time.Time) error {
+	report := resolveDoctorSyncFreshness(ctx, env, ws, st)
+	fetch := lastTargetFetch(ctx, env, ws, now)
 	// Build drift leads the whole banner. It is the deepest of the three: a
 	// binary that predates master can be the reason the sync lines below read
 	// the way they do, so a reader who takes it in first interprets everything
@@ -246,10 +247,10 @@ func printStalenessWarning(ctx context.Context, w io.Writer, ws workspace.Info, 
 // would tell the caller the mutation failed when it succeeded — the exit code
 // stays truthful about the command's own work. [LAW:no-silent-failure] the
 // failure is still loud, on the channel that cannot lie about the mutation.
-func printMutationSyncStalenessWarning(ctx context.Context, w io.Writer, ws workspace.Info, now time.Time) {
+func printMutationSyncStalenessWarning(ctx context.Context, env environ.Env, w io.Writer, ws workspace.Info, now time.Time) {
 	rec, pushAge, pushKnown := lastPushOutcome(ws, now)
 	lines := syncPushFailureLines(rec, pushAge, pushKnown, runningBinaryVersion())
-	lines = append(lines, fetchStalenessLines(lastTargetFetch(ctx, ws, now))...)
+	lines = append(lines, fetchStalenessLines(lastTargetFetch(ctx, env, ws, now))...)
 	for _, line := range lines {
 		if _, err := fmt.Fprintln(w, line); err != nil {
 			fmt.Fprintf(os.Stderr, "lit: staleness banner not written: %v\n", err)

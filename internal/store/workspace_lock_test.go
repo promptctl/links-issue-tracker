@@ -32,7 +32,7 @@ func TestWorkspaceLockSharedHoldersCoexist(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
 
-	bootstrap, err := Open(ctx, doltRoot, "test-workspace-id")
+	bootstrap, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("bootstrap Open() error = %v", err)
 	}
@@ -40,7 +40,7 @@ func TestWorkspaceLockSharedHoldersCoexist(t *testing.T) {
 		t.Fatalf("bootstrap Close() error = %v", err)
 	}
 
-	first, err := OpenForRead(ctx, doltRoot, "test-workspace-id")
+	first, err := OpenForRead(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("first OpenForRead() error = %v", err)
 	}
@@ -55,7 +55,7 @@ func TestWorkspaceLockSharedHoldersCoexist(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		s, err := OpenForRead(openCtx, doltRoot, "test-workspace-id")
+		s, err := OpenForRead(openCtx, testEnv(), doltRoot, "test-workspace-id")
 		if err != nil {
 			done <- err
 			return
@@ -86,7 +86,7 @@ func TestWorkspaceLockExclusiveRefusesWhileSharedHeld(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
 
-	st, err := Open(ctx, doltRoot, "test-workspace-id")
+	st, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -112,7 +112,7 @@ func TestWorkspaceLockSharedRefusesWhileExclusiveHeld(t *testing.T) {
 	doltRoot := migratedDoltDir(t)
 
 	// Bootstrap the database so Open's only failure mode here is the lock.
-	bootstrap, err := Open(ctx, doltRoot, "test-workspace-id")
+	bootstrap, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("bootstrap Open() error = %v", err)
 	}
@@ -149,7 +149,7 @@ func TestWorkspaceLockExclusiveReleasedAfterClose(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
 
-	st, err := Open(ctx, doltRoot, "test-workspace-id")
+	st, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -178,7 +178,7 @@ func TestWorkspaceBusyErrorsWrapSentinel(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
 
-	bootstrap, err := Open(ctx, doltRoot, "test-workspace-id")
+	bootstrap, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("bootstrap Open() error = %v", err)
 	}
@@ -203,7 +203,7 @@ func TestWorkspaceBusyErrorsWrapSentinel(t *testing.T) {
 	_ = exclusive()
 
 	// Now hold shared and verify LockWorkspaceExclusive's refusal wraps the sentinel.
-	st, err := Open(ctx, doltRoot, "test-workspace-id")
+	st, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open under no contention error = %v", err)
 	}
@@ -234,7 +234,7 @@ func TestOpenForReadAcquiresLockBeforeStat(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
 
-	bootstrap, err := Open(ctx, doltRoot, "test-workspace-id")
+	bootstrap, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("bootstrap Open() error = %v", err)
 	}
@@ -261,7 +261,7 @@ func TestOpenForReadAcquiresLockBeforeStat(t *testing.T) {
 
 	shortCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
 	defer cancel()
-	_, err = OpenForRead(shortCtx, doltRoot, "test-workspace-id")
+	_, err = OpenForRead(shortCtx, testEnv(), doltRoot, "test-workspace-id")
 	if err == nil {
 		t.Fatal("OpenForRead succeeded while exclusive workspace lock held; expected workspace-busy refusal")
 	}
@@ -286,7 +286,7 @@ func TestOpenSyncHoldsWorkspaceLock(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
 
-	st, err := OpenSync(ctx, doltRoot, "test-workspace-id")
+	st, err := OpenSync(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("OpenSync() error = %v", err)
 	}
@@ -480,7 +480,7 @@ func TestWorkspaceLockExclusiveSerializes(t *testing.T) {
 
 	// Initialize the parent dir by opening and closing a Store once. The lock
 	// file lives in the workspace storage dir, so its parent must exist.
-	bootstrap, err := Open(ctx, doltRoot, "test-workspace-id")
+	bootstrap, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("bootstrap Open() error = %v", err)
 	}

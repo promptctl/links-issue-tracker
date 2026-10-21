@@ -163,7 +163,7 @@ func workableLeaf(view workableView) appLeaf {
 		// so unpushed/unfetched drift is the first thing on screen rather than a
 		// diagnostic nobody runs. (`next` — next.go — prints the same warning at
 		// the same position, independently.)
-		if err := printStalenessWarning(ctx, inv.Stdout, ap.Workspace, ap.Store, time.Now()); err != nil {
+		if err := printStalenessWarning(ctx, inv.Env, inv.Stdout, ap.Workspace, ap.Store, time.Now()); err != nil {
 			return err
 		}
 		knobs := workableKnobs{
@@ -172,11 +172,11 @@ func workableLeaf(view workableView) appLeaf {
 			columns: columns,
 			all:     *all,
 		}
-		gathered, err := gatherWorkableAnnotated(ctx, ap, knobs.filter)
+		gathered, err := gatherWorkableAnnotated(ctx, inv.Env, ap, knobs.filter)
 		if err != nil {
 			return err
 		}
-		cc, err := gatherClaimContext(ctx, inv.Stdout, ap)
+		cc, err := gatherClaimContext(ctx, inv.Env, inv.Stdout, ap)
 		if err != nil {
 			return err
 		}
@@ -229,7 +229,7 @@ func workableLeaf(view workableView) appLeaf {
 		if err := view.render(inv.Stdout, knobs.columns, rows, gathered.facts, gathered.details, readinessColumnsFor(rows, gathered.details), cc, notice); err != nil {
 			return err
 		}
-		return dispatchOccasion(ctx, inv.Stdout, ap.Workspace, view.occasion(rows))
+		return dispatchOccasion(ctx, inv.Env, inv.Stdout, ap.Workspace, view.occasion(rows))
 	}}
 }
 

@@ -23,11 +23,11 @@ import (
 // hold lanes as this checkout. Use asCheckout to write as somebody else.
 func (h readyTestHarness) runNextOutcome() NextOutcome {
 	h.t.Helper()
-	gathered, err := gatherWorkableAnnotated(h.ctx, h.ap, workableFilter{})
+	gathered, err := gatherWorkableAnnotated(h.ctx, testEnv(), h.ap, workableFilter{})
 	if err != nil {
 		h.t.Fatalf("gatherWorkableAnnotated error = %v", err)
 	}
-	cc, err := gatherClaimContext(h.ctx, io.Discard, h.ap)
+	cc, err := gatherClaimContext(h.ctx, testEnv(), io.Discard, h.ap)
 	if err != nil {
 		h.t.Fatalf("gatherClaimContext error = %v", err)
 	}

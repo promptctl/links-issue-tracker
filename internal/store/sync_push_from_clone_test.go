@@ -37,7 +37,7 @@ func TestSyncPushFromCloneReportsARaceItLostAsSuperseded(t *testing.T) {
 		t.Fatalf("explicit push reported head %q, want c3 %s", got.Head, c3)
 	}
 
-	clone, err := OpenSync(ctx, cloneRoot, "ws")
+	clone, err := OpenSync(ctx, testEnv(), cloneRoot, "ws")
 	if err != nil {
 		t.Fatalf("OpenSync(clone) error = %v", err)
 	}
@@ -69,7 +69,7 @@ func TestAPushRefusedOverAPeersCommitsIsDiverged(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	race := buildDivergedClone(t, ctx)
-	clone, err := OpenSync(ctx, race.cloneRoot, "ws")
+	clone, err := OpenSync(ctx, testEnv(), race.cloneRoot, "ws")
 	if err != nil {
 		t.Fatalf("OpenSync(clone) error = %v", err)
 	}
@@ -123,7 +123,7 @@ func buildDivergedClone(t *testing.T, ctx context.Context) divergedClone {
 // returns the head commit it left.
 func commitTitled(t *testing.T, ctx context.Context, root, epicID, title string) string {
 	t.Helper()
-	st, err := Open(ctx, root, "ws")
+	st, err := Open(ctx, testEnv(), root, "ws")
 	if err != nil {
 		t.Fatalf("Open(%q) error = %v", title, err)
 	}
@@ -144,7 +144,7 @@ func commitTitled(t *testing.T, ctx context.Context, root, epicID, title string)
 // addRemote adds origin at that URL first and sets the upstream.
 func pushSyncFrom(t *testing.T, ctx context.Context, root, addRemote, label string) storage.SyncPushResult {
 	t.Helper()
-	live, err := OpenSync(ctx, root, "ws")
+	live, err := OpenSync(ctx, testEnv(), root, "ws")
 	if err != nil {
 		t.Fatalf("%s: OpenSync() error = %v", label, err)
 	}

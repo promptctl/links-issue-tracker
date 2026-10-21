@@ -113,7 +113,7 @@ func TestBackupRestoreNamesTheTicketsItMovesIntoAnEpic(t *testing.T) {
 // moves on the trace all the same: the trace records what the store holds.
 func TestBackupRestoreTracesItsMovesWhenALaterStepFails(t *testing.T) {
 	repo, task, path := newPreContainmentBackup(t)
-	ws, err := workspace.Resolve(repo)
+	ws, err := workspace.Resolve(testEnv(), repo)
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}
@@ -169,7 +169,7 @@ func newPreContainmentBackup(t *testing.T) (repo, task, path string) {
 // restoreTraceRecord is the last sync trace record `lit backup restore` left.
 func restoreTraceRecord(t *testing.T, repo string) syncTraceRecord {
 	t.Helper()
-	ws, err := workspace.Resolve(repo)
+	ws, err := workspace.Resolve(testEnv(), repo)
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}

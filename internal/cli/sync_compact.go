@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
@@ -74,7 +75,7 @@ func compactMarkerPath(ws workspace.Info) string {
 // recorded through the same sync-trace seam every other automatic sync failure
 // uses, so a store that has stopped collecting is discoverable rather than
 // silently growing. [LAW:no-silent-failure]
-func compactInline(ctx context.Context, ws workspace.Info) {
+func compactInline(ctx context.Context, env environ.Env, ws workspace.Info) {
 	if !shouldRunNow(compactMarkerPath(ws), time.Now(), compactProbeInterval) {
 		return
 	}
@@ -91,14 +92,14 @@ func compactInline(ctx context.Context, ws workspace.Info) {
 
 	timeoutCtx, cancel := context.WithTimeout(ctx, compactTimeout)
 	defer cancel()
-	c, closeStore, err := openCompactor(timeoutCtx, ws)
+	c, closeStore, err := openCompactor(timeoutCtx, env, ws)
 	if err != nil {
-		recordBackstopFailure(ws, fmt.Errorf("open store for compaction: %w", err))
+		recordBackstopFailure(env, ws, fmt.Errorf("open store for compaction: %w", err))
 		return
 	}
 	defer closeStore()
 
-	compactThrough(timeoutCtx, ws, c)
+	compactThrough(timeoutCtx, env, ws, c)
 }
 
 // compactor is all compaction asks of the engine. The backstop runs after a
@@ -112,8 +113,8 @@ type compactor interface {
 
 // openCompactor opens the workspace's sync engine for compaction alone. The
 // returned close is the caller's to defer; it releases the workspace lock.
-func openCompactor(ctx context.Context, ws workspace.Info) (compactor, func() error, error) {
-	st, syncer, err := openSyncEngineAt(ctx, ws.DatabasePath, ws.WorkspaceID)
+func openCompactor(ctx context.Context, env environ.Env, ws workspace.Info) (compactor, func() error, error) {
+	st, syncer, err := openSyncEngineAt(ctx, env, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -132,7 +133,7 @@ func openCompactor(ctx context.Context, ws workspace.Info) (compactor, func() er
 // the storage seam exists to prevent. Taking the compactor as a parameter lets
 // a fake engine produce each outcome directly, the way runSyncCompact is
 // already tested.
-func compactThrough(ctx context.Context, ws workspace.Info, c compactor) {
+func compactThrough(ctx context.Context, env environ.Env, ws workspace.Info, c compactor) {
 	// Whether a pass is owed is the engine's judgment, not this caller's: it is
 	// a fact about how the engine stores data. [LAW:decomposition]
 	outcome, err := c.CompactIfDue(ctx)
@@ -141,14 +142,14 @@ func compactThrough(ctx context.Context, ws workspace.Info, c compactor) {
 		// pass whose reconnect failed still rewrote the store, and the depth is
 		// known here even when the pass never got that far. Neither survives
 		// anywhere else once this returns. [LAW:no-silent-failure]
-		recordCompactFailure(ws, compactTraceCommand, outcome, err)
+		recordCompactFailure(env, ws, compactTraceCommand, outcome, err)
 		return
 	}
 	if !outcome.Ran {
 		// Nothing was owed. The common case, and not worth a trace.
 		return
 	}
-	recordCompactionSuccess(ws, compactTraceCommand, outcome)
+	recordCompactionSuccess(env, ws, compactTraceCommand, outcome)
 }
 
 // recordCompactionSuccess is the one way a completed pass reaches the durable
@@ -168,8 +169,8 @@ func compactThrough(ctx context.Context, ws workspace.Info, c compactor) {
 // The decision is spelled here and nowhere else, which is what stops a third
 // entry point from inventing a fourth vocabulary: there is nothing left for it
 // to spell.
-func recordCompactionSuccess(ws workspace.Info, command string, outcome storage.CompactionOutcome) {
-	recordSyncCommandTrace(ws, command, "compacted", nil, compactionTraceMetadata(outcome))
+func recordCompactionSuccess(env environ.Env, ws workspace.Info, command string, outcome storage.CompactionOutcome) {
+	recordSyncCommandTrace(env, ws, command, "compacted", nil, compactionTraceMetadata(outcome))
 }
 
 // compactionTraceMetadata renders a finished pass into the trace's vocabulary.
@@ -221,8 +222,8 @@ func compactionDepthMetadata(depth storage.GCMode) map[string]string {
 // reconnect that failed behind a finished deep collection is recorded as the
 // rewrite it was, rather than as an error that reads like nothing happened.
 // [LAW:no-silent-failure]
-func recordCompactFailure(ws workspace.Info, command string, outcome storage.CompactionOutcome, cause error) {
-	recordSyncCommandTrace(ws, command, "error", cause, compactionFailureMetadata(outcome))
+func recordCompactFailure(env environ.Env, ws workspace.Info, command string, outcome storage.CompactionOutcome, cause error) {
+	recordSyncCommandTrace(env, ws, command, "error", cause, compactionFailureMetadata(outcome))
 }
 
 // compactionFailureMetadata renders what is known about a pass that errored.
@@ -268,6 +269,6 @@ const syncCompactTraceCommand = "lit sync compact"
 // The zero outcome is the honest argument for a failure with no pass behind it —
 // a store that could not even be opened attempted nothing, and the renderer
 // records no depth for it rather than inventing one.
-func recordBackstopFailure(ws workspace.Info, cause error) {
-	recordCompactFailure(ws, compactTraceCommand, storage.CompactionOutcome{}, cause)
+func recordBackstopFailure(env environ.Env, ws workspace.Info, cause error) {
+	recordCompactFailure(env, ws, compactTraceCommand, storage.CompactionOutcome{}, cause)
 }

@@ -21,7 +21,7 @@ func TestFollowsUpMigrationBackfill(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	st, err := Open(ctx, doltRoot, "test-workspace-id")
+	st, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}

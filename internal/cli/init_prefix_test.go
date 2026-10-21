@@ -115,7 +115,7 @@ func TestInitAcceptsAnExplicitPrefixWhereDerivationRefuses(t *testing.T) {
 	// Asked of the package that owns store geometry rather than rebuilt here, so
 	// this assertion cannot drift from where lit actually writes.
 	// [LAW:one-source-of-truth]
-	info, err := workspace.Resolve(repo)
+	info, err := workspace.Resolve(testEnv(), repo)
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}
@@ -223,7 +223,7 @@ func storedIllegalPrefixWorkspace(t *testing.T) (info workspace.Info, issueID st
 		t.Fatalf("Run(new) error = %v\n%s", err, out)
 	}
 	issueID = issueIDFromNew(out)
-	info, err = workspace.Resolve(repo)
+	info, err = workspace.Resolve(testEnv(), repo)
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
@@ -338,7 +338,7 @@ func TestPrefixSetRepairsAStoredIllegalPrefixBeforeTheStoreExists(t *testing.T) 
 	if out, err := runLit("workspace"); err != nil {
 		t.Fatalf("Run(workspace) error = %v\n%s", err, out)
 	}
-	info, err := workspace.Resolve(repo)
+	info, err := workspace.Resolve(testEnv(), repo)
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
@@ -398,7 +398,7 @@ func TestInitReportsThePrefixItActuallyStored(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Getwd() error = %v", err)
 	}
-	info, err := workspace.Resolve(repo)
+	info, err := workspace.Resolve(testEnv(), repo)
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}

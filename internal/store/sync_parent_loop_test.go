@@ -23,7 +23,7 @@ func loopedSyncPair(t *testing.T, ctx context.Context) (rootA, rootB, seedID str
 	rootB = unrelatedDoltDir(t)
 	remoteURL := "file://" + filepath.Join(t.TempDir(), "remote")
 	seedID = seedReconcileRemote(t, ctx, rootA, remoteURL)
-	st, err := Open(ctx, rootA, "ws")
+	st, err := Open(ctx, testEnv(), rootA, "ws")
 	if err != nil {
 		t.Fatalf("Open(A): %v", err)
 	}
@@ -42,7 +42,7 @@ func loopedSyncPair(t *testing.T, ctx context.Context) (rootA, rootB, seedID str
 // refuses the second, and commits them, so the loop is in the clone's history.
 func plantLoop(t *testing.T, ctx context.Context, root string, tree []model.Issue) {
 	t.Helper()
-	st, err := Open(ctx, root, "ws")
+	st, err := Open(ctx, testEnv(), root, "ws")
 	if err != nil {
 		t.Fatalf("Open(plant): %v", err)
 	}
@@ -161,7 +161,7 @@ func TestSyncReconcileReplaysALoopAnUnpushedCommitHeldAfterItsRepair(t *testing.
 	rootA, rootB, seedID, tree := loopedSyncPair(t, ctx)
 	updateAndPush(t, ctx, rootA, seedID, storage.UpdateIssueInput{Lane: strptr("alpha")})
 	plantLoop(t, ctx, rootB, tree)
-	st, err := Open(ctx, rootB, "ws")
+	st, err := Open(ctx, testEnv(), rootB, "ws")
 	if err != nil {
 		t.Fatalf("Open(B): %v", err)
 	}

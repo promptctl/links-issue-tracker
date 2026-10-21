@@ -511,7 +511,7 @@ func TestResolveIdentity(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("CLAUDE_CODE_SESSION_ID", tc.env)
-			got := resolveIdentity(tc.explicit)
+			got := resolveIdentity(testEnv(), tc.explicit)
 			if got != tc.want {
 				t.Fatalf("resolveIdentity(%q) with env=%q = %q, want %q", tc.explicit, tc.env, got, tc.want)
 			}

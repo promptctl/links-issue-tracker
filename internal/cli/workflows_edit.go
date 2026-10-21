@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -137,11 +136,11 @@ func openOrPrintWorkflowFile(inv Invocation, path string) error {
 	if !isTerminal(inv.Stdout) {
 		return nil
 	}
-	editorCmd := strings.Fields(os.Getenv("EDITOR"))
+	editorCmd := strings.Fields(inv.Env.Get("EDITOR"))
 	if len(editorCmd) == 0 {
 		return nil
 	}
-	cmd := exec.Command(editorCmd[0], append(editorCmd[1:], path)...)
+	cmd := inv.Env.Command(editorCmd[0], append(editorCmd[1:], path)...)
 	// The editor runs where lit ran, on the invocation's own streams: the
 	// stdout isTerminal just found to be a terminal is the one it draws on.
 	dir, err := inv.Dir.Path()
@@ -151,7 +150,7 @@ func openOrPrintWorkflowFile(inv Invocation, path string) error {
 	cmd.Dir = dir
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = inv.Stdin, inv.Stdout, inv.Stderr
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("open %s in $EDITOR (%s): %w", path, os.Getenv("EDITOR"), err)
+		return fmt.Errorf("open %s in $EDITOR (%s): %w", path, inv.Env.Get("EDITOR"), err)
 	}
 	return nil
 }

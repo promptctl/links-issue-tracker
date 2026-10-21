@@ -30,7 +30,7 @@ func TestRecordPushedHeadMovesTheTrackingRefWithoutTheNetwork(t *testing.T) {
 
 	epic := seedCommitEpic(t, ctx, doltRoot)
 	commit := func(title string) {
-		st, err := Open(ctx, doltRoot, "ws")
+		st, err := Open(ctx, testEnv(), doltRoot, "ws")
 		if err != nil {
 			t.Fatalf("Open(%q) error = %v", title, err)
 		}
@@ -51,7 +51,7 @@ func TestRecordPushedHeadMovesTheTrackingRefWithoutTheNetwork(t *testing.T) {
 	}
 
 	commit("c1")
-	live, err := OpenSync(ctx, doltRoot, "ws")
+	live, err := OpenSync(ctx, testEnv(), doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("OpenSync() error = %v", err)
 	}
@@ -77,7 +77,7 @@ func TestRecordPushedHeadMovesTheTrackingRefWithoutTheNetwork(t *testing.T) {
 	if err := dbsnapshot.CloneTree(ctx, doltRoot, cloneRoot); err != nil {
 		t.Fatalf("CloneTree() error = %v", err)
 	}
-	clone, err := OpenSync(ctx, cloneRoot, "ws")
+	clone, err := OpenSync(ctx, testEnv(), cloneRoot, "ws")
 	if err != nil {
 		t.Fatalf("OpenSync(clone) error = %v", err)
 	}
@@ -96,7 +96,7 @@ func TestRecordPushedHeadMovesTheTrackingRefWithoutTheNetwork(t *testing.T) {
 		t.Fatalf("Close(clone) error = %v", err)
 	}
 
-	live, err = OpenSync(ctx, doltRoot, "ws")
+	live, err = OpenSync(ctx, testEnv(), doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("OpenSync() after clone push error = %v", err)
 	}
@@ -123,7 +123,7 @@ func TestRecordPushedHeadMovesTheTrackingRefWithoutTheNetwork(t *testing.T) {
 		t.Fatalf("received-refs record after the push was recorded = %q, %v; want %q", got, err, proven)
 	}
 
-	live, err = OpenSync(ctx, doltRoot, "ws")
+	live, err = OpenSync(ctx, testEnv(), doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("OpenSync() after record error = %v", err)
 	}
@@ -147,7 +147,7 @@ func TestRecordPushedHeadMovesTheTrackingRefWithoutTheNetwork(t *testing.T) {
 		t.Fatalf("remove clone: %v", err)
 	}
 	commit("c3")
-	live, err = OpenSync(ctx, doltRoot, "ws")
+	live, err = OpenSync(ctx, testEnv(), doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("OpenSync() after clone removal error = %v", err)
 	}
@@ -195,7 +195,7 @@ func TestRecordPushedHeadWaitsOutALiveWriteEngine(t *testing.T) {
 	// a sibling test rewrites it.
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
-	st, err := Open(ctx, doltRoot, "ws")
+	st, err := Open(ctx, testEnv(), doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -238,7 +238,7 @@ func TestRecordPushedHeadNeverMovesTheTrackingRefBackwards(t *testing.T) {
 	epic := seedCommitEpic(t, ctx, doltRoot)
 	commit := func(title string) string {
 		t.Helper()
-		st, err := Open(ctx, doltRoot, "ws")
+		st, err := Open(ctx, testEnv(), doltRoot, "ws")
 		if err != nil {
 			t.Fatalf("Open(%q) error = %v", title, err)
 		}
@@ -256,7 +256,7 @@ func TestRecordPushedHeadNeverMovesTheTrackingRefBackwards(t *testing.T) {
 	}
 	pushLive := func(label string, setUpstream bool) {
 		t.Helper()
-		live, err := OpenSync(ctx, doltRoot, "ws")
+		live, err := OpenSync(ctx, testEnv(), doltRoot, "ws")
 		if err != nil {
 			t.Fatalf("%s: OpenSync() error = %v", label, err)
 		}
@@ -274,7 +274,7 @@ func TestRecordPushedHeadNeverMovesTheTrackingRefBackwards(t *testing.T) {
 	}
 	trackingRef := func(label string) string {
 		t.Helper()
-		live, err := OpenSync(ctx, doltRoot, "ws")
+		live, err := OpenSync(ctx, testEnv(), doltRoot, "ws")
 		if err != nil {
 			t.Fatalf("%s: OpenSync() error = %v", label, err)
 		}
@@ -357,7 +357,7 @@ func TestRecordPushedHeadCutsAtTheHoldBudget(t *testing.T) {
 	// serial: no t.Parallel — MirrorHoldBudget is a package variable.
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
-	st, err := Open(ctx, doltRoot, "ws")
+	st, err := Open(ctx, testEnv(), doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -386,7 +386,7 @@ func TestRecordPushedHeadCutInTheCommitLockWaitNamesTheHolder(t *testing.T) {
 	// serial: no t.Parallel — MirrorHoldBudget is a package variable.
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
-	st, err := Open(ctx, doltRoot, "ws")
+	st, err := Open(ctx, testEnv(), doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -427,7 +427,7 @@ func TestRecordPushedHeadCutInTheCommitLockWaitNamesTheHolder(t *testing.T) {
 // depend on.
 func seedCommitEpic(t *testing.T, ctx context.Context, doltRoot string) string {
 	t.Helper()
-	st, err := Open(ctx, doltRoot, "ws")
+	st, err := Open(ctx, testEnv(), doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("Open(epic) error = %v", err)
 	}

@@ -96,7 +96,7 @@ func TestReceiveFetchLeavesTheLiveStoreFree(t *testing.T) {
 	receiving := isolatedEnv(xdgConfigHome, "0")
 	receiving["PATH"] = shimDir + string(os.PathListSeparator) + os.Getenv("PATH")
 	mustLit(consumer, receiving, "backlog")
-	ws, err := workspace.Resolve(consumer)
+	ws, err := workspace.Resolve(testEnv(), consumer)
 	if err != nil {
 		t.Fatalf("resolve consumer workspace: %v", err)
 	}

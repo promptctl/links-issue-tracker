@@ -39,7 +39,7 @@ func rowPosition(t *testing.T, text, issueID string) int {
 func (h readyTestHarness) runNextRowArgs(args ...string) annotation.AnnotatedIssue {
 	h.t.Helper()
 	text := h.runNextText(args...)
-	gathered, err := gatherWorkableAnnotated(h.ctx, h.ap, workableFilter{})
+	gathered, err := gatherWorkableAnnotated(h.ctx, testEnv(), h.ap, workableFilter{})
 	if err != nil {
 		h.t.Fatalf("gatherWorkableAnnotated error = %v", err)
 	}

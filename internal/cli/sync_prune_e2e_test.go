@@ -54,12 +54,12 @@ func TestAnAutomaticReceivePrunesABranchTheRemoteDeleted(t *testing.T) {
 	runCLIInDir(t, producer, "new", "--title", "after-the-delete", "--topic", "demo", "--type", "task", "--parent", epicID)
 	runCLIInDir(t, producer, "sync", "push")
 
-	ws, err := workspace.Resolve(consumer)
+	ws, err := workspace.Resolve(testEnv(), consumer)
 	if err != nil {
 		t.Fatalf("resolve workspace %s: %v", consumer, err)
 	}
 	recorder := telemetry.Begin(telemetry.Event{})
-	receiveOnce(telemetry.With(context.Background(), recorder), ws)
+	receiveOnce(telemetry.With(context.Background(), recorder), testEnv(), ws)
 
 	var landing *syncTraceRecord
 	for _, record := range readSyncTraceRecords(t, ws) {
@@ -112,12 +112,12 @@ func TestAnAutomaticReceivePrunesABranchTheRemoteDeleted(t *testing.T) {
 // execOnStore runs each statement on the store of the workspace at dir.
 func execOnStore(t *testing.T, dir string, statements ...string) {
 	t.Helper()
-	ws, err := workspace.Resolve(dir)
+	ws, err := workspace.Resolve(testEnv(), dir)
 	if err != nil {
 		t.Fatalf("resolve workspace %s: %v", dir, err)
 	}
 	ctx := context.Background()
-	st, err := engine.Open(ctx, engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)
+	st, err := engine.Open(ctx, testEnv(), engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
 		t.Fatalf("engine.Open(%s) error = %v", dir, err)
 	}

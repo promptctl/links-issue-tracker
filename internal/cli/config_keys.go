@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/config"
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/pathspec"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 )
@@ -20,8 +21,8 @@ import (
 // workspace once, not inside config.Load, which one command can call several
 // times and which commands that read no setting never call.
 // [LAW:single-enforcer]
-func reportUnknownConfigKeys(ctx context.Context, workspaceRoot string) {
-	unknown, err := config.UnknownKeys(inv.Env, pathspec.New(workspaceRoot))
+func reportUnknownConfigKeys(ctx context.Context, env environ.Env, workspaceRoot string) {
+	unknown, err := config.UnknownKeys(env, pathspec.New(workspaceRoot))
 	telemetry.Set(ctx, "config.unknown_keys", unknown)
 	telemetry.Set(ctx, "config.unknown_keys_error", telemetry.ErrorText(err))
 	fmt.Fprint(os.Stderr, unknownConfigKeyWarnings(unknown, err))

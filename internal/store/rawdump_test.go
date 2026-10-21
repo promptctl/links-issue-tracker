@@ -82,7 +82,7 @@ func TestDumpRawReleasesDeadendedWorkspace(t *testing.T) {
 	})
 	stampGooseVersionAhead(t, ctx, doltRoot)
 
-	if _, err := Open(ctx, doltRoot, workspaceID); err == nil {
+	if _, err := Open(ctx, testEnv(), doltRoot, workspaceID); err == nil {
 		t.Fatal("Open() of deadended workspace returned nil; want refusal")
 	} else {
 		var unsupported *UnsupportedSchemaVersionError
@@ -91,7 +91,7 @@ func TestDumpRawReleasesDeadendedWorkspace(t *testing.T) {
 		}
 	}
 
-	dump, err := DumpRaw(ctx, doltRoot, workspaceID)
+	dump, err := DumpRaw(ctx, testEnv(), doltRoot, workspaceID)
 	if err != nil {
 		t.Fatalf("DumpRaw() error = %v", err)
 	}
@@ -162,7 +162,7 @@ func TestDumpRawHealthyWorkspaceRoundTripsValues(t *testing.T) {
 		id = issue.ID
 	})
 
-	dump, err := DumpRaw(ctx, doltRoot, workspaceID)
+	dump, err := DumpRaw(ctx, testEnv(), doltRoot, workspaceID)
 	if err != nil {
 		t.Fatalf("DumpRaw() error = %v", err)
 	}

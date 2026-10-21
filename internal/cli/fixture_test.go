@@ -21,7 +21,7 @@ import (
 // workspace as already initialized, and two checkouts seeded from one template
 // share history that production checkouts never would.
 var storeTemplate = dirtemplate.New("dolt", func(dir string) error {
-	st, err := engine.Open(context.Background(), engine.ReadWrite, dir, "test-workspace-id")
+	st, err := engine.Open(context.Background(), testEnv(), engine.ReadWrite, dir, "test-workspace-id")
 	if err != nil {
 		return err
 	}
@@ -37,7 +37,7 @@ func TestAStoreTemplateCopyOpensWithoutBuildingOrMigrating(t *testing.T) {
 	ws := workspace.Info{Location: workspace.Location{DatabasePath: storeTemplate.Copy(t)}, WorkspaceID: "test-workspace-id"}
 	before := doltHead(t, ws)
 
-	st, err := engine.Open(context.Background(), engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)
+	st, err := engine.Open(context.Background(), testEnv(), engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
 		t.Fatalf("engine.Open() error = %v", err)
 	}

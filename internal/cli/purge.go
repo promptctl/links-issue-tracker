@@ -34,7 +34,7 @@ func purgeLeaf() appLeaf {
 		if err := confirmPurge(inv.Stdin, inv.Stdout, issue.ID, *yes); err != nil {
 			return err
 		}
-		result, err := ap.Store.Purge(ctx, storage.PurgeInput{IssueID: issue.ID, Actor: resolveActor()})
+		result, err := ap.Store.Purge(ctx, storage.PurgeInput{IssueID: issue.ID, Actor: resolveActor(inv.Env)})
 		if err != nil {
 			return err
 		}

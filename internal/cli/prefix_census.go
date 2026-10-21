@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/engine"
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/issueid"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
@@ -47,8 +48,8 @@ type idPrefixCount struct {
 // store, so requiring one here would send each command's remediation to the
 // other. Not-initialized is read as the census of an absent store; every other
 // open failure propagates. [LAW:no-silent-failure]
-func readWorkspaceIDPrefixCensus(ctx context.Context, ws workspace.Info) (census idPrefixCensus, err error) {
-	st, err := engine.Open(ctx, inv.Env, engine.ReadOnly, ws.DatabasePath, ws.WorkspaceID)
+func readWorkspaceIDPrefixCensus(ctx context.Context, env environ.Env, ws workspace.Info) (census idPrefixCensus, err error) {
+	st, err := engine.Open(ctx, env, engine.ReadOnly, ws.DatabasePath, ws.WorkspaceID)
 	if errors.Is(err, store.ErrWorkspaceNotInitialized) {
 		return idPrefixCensus{noStore: true}, nil
 	}

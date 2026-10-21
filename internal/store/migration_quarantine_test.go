@@ -22,7 +22,7 @@ func TestQuarantineTableCreatedByFreshOpen(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	st, err := Open(ctx, doltRoot, "test-workspace-id")
+	st, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -45,7 +45,7 @@ func TestQuarantineTableCreatedByAdoption(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	first, err := Open(ctx, doltRoot, "test-workspace-id")
+	first, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
@@ -56,7 +56,7 @@ func TestQuarantineTableCreatedByAdoption(t *testing.T) {
 	// Simulate a pre-goose workspace by dropping goose history.
 	withGooseHistoryDropped(t, ctx, doltRoot)
 
-	second, err := Open(ctx, doltRoot, "test-workspace-id")
+	second, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(second/adoption) error = %v", err)
 	}
@@ -79,7 +79,7 @@ func TestCheckPendingQuarantineBlocksPendingVersion(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	st, err := Open(ctx, doltRoot, "test-workspace-id")
+	st, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -116,7 +116,7 @@ func TestCheckPendingQuarantineAllowsAlreadyApplied(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	st, err := Open(ctx, doltRoot, "test-workspace-id")
+	st, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -144,7 +144,7 @@ func TestQuarantineTableSurvivesCheckpointReset(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	st, err := Open(ctx, doltRoot, "test-workspace-id")
+	st, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -199,7 +199,7 @@ func TestQuarantineRowInsertedAfterReset(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	st, err := Open(ctx, doltRoot, "test-workspace-id")
+	st, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -264,7 +264,7 @@ func TestMigrationFailureCheckpointPath(t *testing.T) {
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
 	// First Open: bootstrap the workspace.
-	first, err := Open(ctx, doltRoot, "test-workspace-id")
+	first, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
@@ -288,7 +288,7 @@ func TestMigrationFailureCheckpointPath(t *testing.T) {
 	}
 	t.Cleanup(func() { migrationUpByOneForTest = nil })
 
-	_, openErr := Open(ctx, doltRoot, "test-workspace-id")
+	_, openErr := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	migrationUpByOneForTest = nil
 	if openErr == nil {
 		t.Fatal("Open() returned nil error; expected the migration step's failure")
@@ -338,7 +338,7 @@ func TestMigrationFailureCheckpointPath(t *testing.T) {
 	// The quarantine recorded during the failed migration persisted across the
 	// checkpoint reset, so reopening is refused: it guards the workspace against
 	// auto-retrying the known-bad migration until an operator clears the row.
-	_, reopenErr := Open(ctx, doltRoot, "test-workspace-id")
+	_, reopenErr := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if reopenErr == nil {
 		t.Fatal("reopen after quarantined failure returned nil error; expected QuarantineBlockError")
 	}
@@ -389,7 +389,7 @@ func TestRealMigrationFailureIsQuarantined(t *testing.T) {
 		}
 	})
 
-	_, openErr := Open(ctx, doltRoot, "test-workspace-id")
+	_, openErr := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	var cpErr *CheckpointResetError
 	if !errors.As(openErr, &cpErr) {
 		t.Fatalf("Open() error = %v; want a *CheckpointResetError", openErr)
@@ -402,7 +402,7 @@ func TestRealMigrationFailureIsQuarantined(t *testing.T) {
 		t.Errorf("CheckpointResetError.Quarantine = %v; want the quarantine of v%d in force", cpErr.Quarantine, failVersion)
 	}
 
-	_, reopenErr := Open(ctx, doltRoot, "test-workspace-id")
+	_, reopenErr := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	var qErr *QuarantineBlockError
 	if !errors.As(reopenErr, &qErr) || qErr.Version != failVersion {
 		t.Fatalf("reopen error = %v; want the *QuarantineBlockError of v%d", reopenErr, failVersion)
@@ -427,7 +427,7 @@ func TestTransientMigrationFailureIsNotQuarantined(t *testing.T) {
 	}
 	t.Cleanup(func() { migrationUpByOneForTest = nil })
 
-	_, openErr := Open(context.Background(), doltRoot, "test-workspace-id")
+	_, openErr := Open(context.Background(), testEnv(), doltRoot, "test-workspace-id")
 	migrationUpByOneForTest = nil
 	var cpErr *CheckpointResetError
 	if !errors.As(openErr, &cpErr) {
@@ -437,7 +437,7 @@ func TestTransientMigrationFailureIsNotQuarantined(t *testing.T) {
 	if !errors.As(cpErr.Cause, &step) || step.Version != failVersion || cpErr.Quarantine != nil {
 		t.Errorf("CheckpointResetError = {Cause: %v, Quarantine: %v}, want v%d's *MigrationStepError and no quarantine", cpErr.Cause, cpErr.Quarantine, failVersion)
 	}
-	reopened, err := Open(context.Background(), doltRoot, "test-workspace-id")
+	reopened, err := Open(context.Background(), testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("reopen after a transient migration failure error = %v; want the migration run again", err)
 	}
@@ -454,7 +454,7 @@ func TestMigrationCheckpointCreatedByFreshOpen(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	st, err := Open(ctx, doltRoot, "test-workspace-id")
+	st, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -478,7 +478,7 @@ func TestMigrationCheckpointRetentionBounded(t *testing.T) {
 
 	// Drive more Opens than the retention count by dropping goose history.
 	for i := 0; i < migrationCheckpointRetention+3; i++ {
-		st, err := Open(ctx, doltRoot, "test-workspace-id")
+		st, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 		if err != nil {
 			t.Fatalf("Open(%d) error = %v", i, err)
 		}
@@ -491,7 +491,7 @@ func TestMigrationCheckpointRetentionBounded(t *testing.T) {
 	}
 
 	// One final Open to read the checkpoint list.
-	st, err := Open(ctx, doltRoot, "test-workspace-id")
+	st, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("final Open() error = %v", err)
 	}
@@ -528,7 +528,7 @@ func TestMigrationFailureResetSurvivesCallerCancel(t *testing.T) {
 	}
 	t.Cleanup(func() { migrationUpByOneForTest = nil })
 
-	_, openErr := Open(ctx, doltRoot, "test-workspace-id")
+	_, openErr := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	migrationUpByOneForTest = nil
 	assertCancelledRunResetWithoutQuarantine(t, openErr, failVersion, doltRoot)
 }
@@ -552,7 +552,7 @@ func TestMigrationCommitCancelResetsWithoutQuarantine(t *testing.T) {
 	}
 	t.Cleanup(func() { migrationUpByOneForTest = nil })
 
-	_, openErr := Open(ctx, doltRoot, "test-workspace-id")
+	_, openErr := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	migrationUpByOneForTest = nil
 	assertCancelledRunResetWithoutQuarantine(t, openErr, failVersion, doltRoot)
 }
@@ -614,7 +614,7 @@ func TestMigrationSuccessPruneSurvivesCallerCancel(t *testing.T) {
 	}
 	t.Cleanup(func() { migrationUpByOneForTest = nil })
 
-	st, err := Open(ctx, doltRoot, "test-workspace-id")
+	st, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	migrationUpByOneForTest = nil
 	if err != nil {
 		t.Fatalf("Open() error = %v; the migrated workspace was reported as a failed open", err)
@@ -629,7 +629,7 @@ func TestMigrationSuccessPruneSurvivesCallerCancel(t *testing.T) {
 func migratedWorkspaceWithGooseHistoryDropped(t *testing.T) string {
 	t.Helper()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
-	first, err := Open(context.Background(), doltRoot, "test-workspace-id")
+	first, err := Open(context.Background(), testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
@@ -661,7 +661,7 @@ func assertCancelledRunResetWithoutQuarantine(t *testing.T, openErr error, failV
 	if errors.As(openErr, &quarantined) {
 		t.Errorf("Open() error carries a quarantine of v%d; a cancelled run says nothing against the migration", quarantined.Version)
 	}
-	reopened, err := Open(context.Background(), doltRoot, "test-workspace-id")
+	reopened, err := Open(context.Background(), testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("reopen after a cancelled migration run error = %v; want the migration run again", err)
 	}
@@ -683,7 +683,7 @@ func TestCheckpointResetErrorUnknownVersion(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	first, err := Open(ctx, doltRoot, "test-workspace-id")
+	first, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
@@ -699,7 +699,7 @@ func TestCheckpointResetErrorUnknownVersion(t *testing.T) {
 	}
 	t.Cleanup(func() { migrationUpByOneForTest = nil })
 
-	_, openErr := Open(ctx, doltRoot, "test-workspace-id")
+	_, openErr := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	migrationUpByOneForTest = nil
 	if openErr == nil {
 		t.Fatal("Open() returned nil error; expected CheckpointResetError")
@@ -746,7 +746,7 @@ func TestReopenBlockedByQuarantineOnAdoptionPath(t *testing.T) {
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
 	// First Open: bootstrap the workspace (creates quarantine table).
-	first, err := Open(ctx, doltRoot, "test-workspace-id")
+	first, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
@@ -774,7 +774,7 @@ func TestReopenBlockedByQuarantineOnAdoptionPath(t *testing.T) {
 	withGooseHistoryDropped(t, ctx, doltRoot)
 
 	openErr := func() error {
-		st, err := Open(ctx, doltRoot, "test-workspace-id")
+		st, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 		if st != nil {
 			_ = st.Close()
 		}
@@ -806,7 +806,7 @@ func TestReopenBlockedByQuarantineOnAdoptionPath(t *testing.T) {
 // commits directly rather than going through migrate().
 func withStaleShapeQuarantineTable(t *testing.T, ctx context.Context, doltRoot string, seedRow bool) {
 	t.Helper()
-	st, err := Open(ctx, doltRoot, "test-workspace-id")
+	st, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("withStaleShapeQuarantineTable Open error = %v", err)
 	}
@@ -849,7 +849,7 @@ func TestQuarantineTableSelfHealsStaleShapeWhenEmpty(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	first, err := Open(ctx, doltRoot, "test-workspace-id")
+	first, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
@@ -864,7 +864,7 @@ func TestQuarantineTableSelfHealsStaleShapeWhenEmpty(t *testing.T) {
 	// touches the table at all, so it would prove nothing about self-heal.
 	withGooseHistoryDropped(t, ctx, doltRoot)
 
-	second, err := Open(ctx, doltRoot, "test-workspace-id")
+	second, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() over a stale-shape empty migration_quarantine failed: %v — self-heal must succeed via ordinary Open", err)
 	}
@@ -889,7 +889,7 @@ func TestQuarantineTableRefusesToDiscardStaleShapeHistory(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	first, err := Open(ctx, doltRoot, "test-workspace-id")
+	first, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
@@ -900,7 +900,7 @@ func TestQuarantineTableRefusesToDiscardStaleShapeHistory(t *testing.T) {
 	withStaleShapeQuarantineTable(t, ctx, doltRoot, true)
 	withGooseHistoryDropped(t, ctx, doltRoot)
 
-	st, err := Open(ctx, doltRoot, "test-workspace-id")
+	st, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if st != nil {
 		_ = st.Close()
 	}
@@ -924,7 +924,7 @@ func TestFailedMigrationReportsCheckpointPruneFailure(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	first, err := Open(ctx, doltRoot, "test-workspace-id")
+	first, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
@@ -942,7 +942,7 @@ func TestFailedMigrationReportsCheckpointPruneFailure(t *testing.T) {
 	injectFailpoint(t, pruneFailure, pruneMigrationCheckpoints)
 	t.Cleanup(func() { migrationUpByOneForTest = nil })
 
-	_, openErr := Open(ctx, doltRoot, "test-workspace-id")
+	_, openErr := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if openErr == nil {
 		t.Fatal("Open() returned nil error; expected the migration failure")
 	}

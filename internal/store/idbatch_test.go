@@ -157,7 +157,7 @@ func TestGetRelationsByIDsAnswersFromTheMomentItsStoreOpened(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
-	writer, err := Open(ctx, doltRoot, "test-workspace-id")
+	writer, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -168,7 +168,7 @@ func TestGetRelationsByIDsAnswersFromTheMomentItsStoreOpened(t *testing.T) {
 	late := []int{1, idBatchSize + 2, last - 1}
 	fx.wire(t, ctx, writer, early)
 
-	reader, err := OpenForRead(ctx, doltRoot, "test-workspace-id")
+	reader, err := OpenForRead(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("OpenForRead() beside a live writer error = %v", err)
 	}
@@ -182,7 +182,7 @@ func TestGetRelationsByIDsAnswersFromTheMomentItsStoreOpened(t *testing.T) {
 	if err := writer.Close(); err != nil {
 		t.Fatalf("writer Close() error = %v", err)
 	}
-	later, err := OpenForRead(ctx, doltRoot, "test-workspace-id")
+	later, err := OpenForRead(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("OpenForRead() after the writes error = %v", err)
 	}

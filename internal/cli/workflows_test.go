@@ -280,7 +280,7 @@ func TestWorkflowsEditScaffoldsFreshStateWithCommaAsOneStateActivation(t *testin
 		t.Fatalf("scaffolded content = %q, want the comma-containing state name double-quoted", content)
 	}
 
-	set := workflows.Load(root)
+	set := workflows.Load(testEnv(), root)
 	def, ok := set.Lookup("foo-bar")
 	if !ok {
 		t.Fatalf("workflows.Load(%s) has no definition with id foo-bar; loaded ids: %+v", root, set.Definitions)

@@ -67,7 +67,7 @@ func TestEnsureLinksAgentFilesMigratesLegacyMarkers(t *testing.T) {
 		}
 	}
 
-	if _, _, err := ensureLinksAgentFiles(repo); err != nil {
+	if _, _, err := ensureLinksAgentFiles(testEnv(), repo); err != nil {
 		t.Fatalf("ensureLinksAgentFiles() error = %v", err)
 	}
 
@@ -97,7 +97,7 @@ func TestEnsureLinksAgentFilesMigratesMarkerOnlyDifference(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	repo := t.TempDir()
 
-	section, _, err := renderLinksAgentsSection(repo)
+	section, _, err := renderLinksAgentsSection(testEnv(), repo)
 	if err != nil {
 		t.Fatalf("renderLinksAgentsSection() error = %v", err)
 	}
@@ -111,7 +111,7 @@ func TestEnsureLinksAgentFilesMigratesMarkerOnlyDifference(t *testing.T) {
 		}
 	}
 
-	agentsResult, claudeResult, err := ensureLinksAgentFiles(repo)
+	agentsResult, claudeResult, err := ensureLinksAgentFiles(testEnv(), repo)
 	if err != nil {
 		t.Fatalf("ensureLinksAgentFiles() error = %v", err)
 	}
@@ -185,7 +185,7 @@ func TestEnsureLinksAgentFilesMarkerlessOverrideConverges(t *testing.T) {
 		}
 	}
 
-	if _, _, err := ensureLinksAgentFiles(repo); err != nil {
+	if _, _, err := ensureLinksAgentFiles(testEnv(), repo); err != nil {
 		t.Fatalf("ensureLinksAgentFiles() first run error = %v", err)
 	}
 	first := map[string]string{
@@ -194,7 +194,7 @@ func TestEnsureLinksAgentFilesMarkerlessOverrideConverges(t *testing.T) {
 	}
 
 	for run := 2; run <= 4; run++ {
-		agentsResult, claudeResult, err := ensureLinksAgentFiles(repo)
+		agentsResult, claudeResult, err := ensureLinksAgentFiles(testEnv(), repo)
 		if err != nil {
 			t.Fatalf("ensureLinksAgentFiles() run %d error = %v", run, err)
 		}
@@ -303,7 +303,7 @@ func TestAnOpenThatBuildsTheDatabaseSaysSoOnItsEvent(t *testing.T) {
 	dir := t.TempDir()
 	runGit(t, dir, "init")
 	runCLIInDir(t, dir, "init", "--skip-hooks", "--skip-agents")
-	ws, err := workspace.Resolve(dir)
+	ws, err := workspace.Resolve(testEnv(), dir)
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}

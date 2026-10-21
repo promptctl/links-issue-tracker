@@ -143,7 +143,7 @@ func TestBacklogWarnsOnStaleFetchUntilTheSyncRemoteIsFetched(t *testing.T) {
 	runCLIInDir(t, dir, "sync", "push", "--set-upstream")
 	runCLIInDir(t, dir, "sync", "push", "--remote", "fork")
 
-	ws, err := workspace.Resolve(dir)
+	ws, err := workspace.Resolve(testEnv(), dir)
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}

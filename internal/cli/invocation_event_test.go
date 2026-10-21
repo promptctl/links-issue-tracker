@@ -33,7 +33,7 @@ func isolateEvents(t *testing.T) {
 
 func eventsPath(t *testing.T) string {
 	t.Helper()
-	dir, err := config.StateDir()
+	dir, err := config.StateDir(testEnv())
 	if err != nil {
 		t.Fatalf("StateDir error = %v", err)
 	}

@@ -75,7 +75,7 @@ func eventFact(err error, key string) any {
 // openErr is the error an Open returns, closing the store when it opened.
 func openErr(t *testing.T, doltRoot string) error {
 	t.Helper()
-	st, err := Open(context.Background(), doltRoot, "test-workspace-id")
+	st, err := Open(context.Background(), testEnv(), doltRoot, "test-workspace-id")
 	if err == nil {
 		if closeErr := st.Close(); closeErr != nil {
 			t.Fatalf("Close() error = %v", closeErr)
@@ -329,7 +329,7 @@ func TestAPruneAfterCommittedWorkIsReportedNotFailed(t *testing.T) {
 			stuck := errors.New("simulated prune failure")
 			injectFailpoint(t, stuck, tc.at)
 
-			st, err := Open(context.Background(), doltRoot, "test-workspace-id")
+			st, err := Open(context.Background(), testEnv(), doltRoot, "test-workspace-id")
 			if err != nil {
 				t.Fatalf("Open() error = %v; want the open to succeed past its prune", err)
 			}

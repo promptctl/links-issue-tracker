@@ -197,7 +197,7 @@ func TestPrefixSetIdempotentWhenAlreadyCurrent(t *testing.T) {
 // reporting the stale one names a value config.json no longer held.
 func TestPrefixSetApplyReportsThePrefixItReplaced(t *testing.T) {
 	repo, _ := initRepoForPrefixTest(t)
-	stale, err := workspace.Resolve(repo)
+	stale, err := workspace.Resolve(testEnv(), repo)
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}

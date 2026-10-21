@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
@@ -44,7 +45,7 @@ func initLeaf() (wsLeaf, wsAcquire) {
 	// `lit prefix set` uses, so `--prefix ""` is refused here instead of being
 	// demoted to "no flag" and then failing further in with a message telling
 	// them to pass the flag they just passed. [LAW:no-silent-failure]
-	acquire := func(ctx context.Context, dir WorkingDir) (workspace.Info, error) {
+	acquire := func(ctx context.Context, env environ.Env, dir WorkingDir) (workspace.Info, error) {
 		// Arity is settled before anything is created -- upstream, in
 		// parseLeaf, which every leaf's pipeline runs before it acquires.
 		// The ordering matters more here than anywhere: acquiring resolves the
@@ -59,13 +60,13 @@ func initLeaf() (wsLeaf, wsAcquire) {
 		// one every leaf gets. The usage sentence it prints is `initUsage`, set
 		// on the leaf below. [LAW:single-enforcer]
 		if !fs.Changed("prefix") {
-			return resolveWorkspace(ctx, dir, workspace.PrefixRequest{})
+			return resolveWorkspace(ctx, env, dir, workspace.PrefixRequest{})
 		}
 		requested, err := workspace.RequestPrefix(*prefix)
 		if err != nil {
 			return workspace.Info{}, model.ValidationError{Message: fmt.Sprintf("invalid --prefix %q: %v", *prefix, err)}
 		}
-		return resolveWorkspace(ctx, dir, requested)
+		return resolveWorkspace(ctx, env, dir, requested)
 	}
 
 	return wsLeaf{fs: fs, usage: initUsage, positionals: 0, work: func(ctx context.Context, inv Invocation, ws workspace.Info, positional []string) error {
@@ -82,8 +83,8 @@ func initLeaf() (wsLeaf, wsAcquire) {
 		// poison dolt's in-process chunk-store cache). [LAW:types-are-the-program]
 		// adoptRemoteTicketsOnInit owns the whole decision and returns the
 		// discriminated outcome; only initSyncAdopted means the store now exists.
-		syncOutcome := adoptRemoteTicketsOnInit(ctx, ws)
-		recordInitSyncTrace(ws, syncOutcome, time.Now())
+		syncOutcome := adoptRemoteTicketsOnInit(ctx, inv.Env, ws)
+		recordInitSyncTrace(inv.Env, ws, syncOutcome, time.Now())
 
 		// A failed adopt is a genuinely uncertain result — lit could not confirm
 		// whether it is safe to start fresh, whether because reading the local
@@ -144,7 +145,7 @@ func initLeaf() (wsLeaf, wsAcquire) {
 		}
 
 		if !*skipHooks {
-			hookResult, hookErr := installHooks(ws)
+			hookResult, hookErr := installHooks(inv.Env, ws)
 			if hookErr != nil {
 				return hookErr
 			}
@@ -156,7 +157,7 @@ func initLeaf() (wsLeaf, wsAcquire) {
 		}
 
 		if !*skipAgents {
-			agentsResult, claudeResult, agentsErr := ensureLinksAgentFiles(ws.RootDir)
+			agentsResult, claudeResult, agentsErr := ensureLinksAgentFiles(inv.Env, ws.RootDir)
 			if agentsErr != nil {
 				return agentsErr
 			}

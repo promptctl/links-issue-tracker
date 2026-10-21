@@ -380,7 +380,7 @@ func TestPrintMutationSyncStalenessWarning(t *testing.T) {
 		ws := workspaceWithOrigin(t)
 		recordPushOutcome(ws, pushOutcomeRecord{Decision: pushDecisionError, Reason: "connection refused", Remote: "origin", Branch: "master"})
 		var out bytes.Buffer
-		printMutationSyncStalenessWarning(ctx, &out, ws, now)
+		printMutationSyncStalenessWarning(ctx, testEnv(), &out, ws, now)
 		if !strings.Contains(out.String(), "FAILING") || !strings.Contains(out.String(), "connection refused") {
 			t.Fatalf("printMutationSyncStalenessWarning() = %q, want the failure surfaced", out.String())
 		}
@@ -393,7 +393,7 @@ func TestPrintMutationSyncStalenessWarning(t *testing.T) {
 			t.Fatalf("markFetchSuccess: %v", err)
 		}
 		var out bytes.Buffer
-		printMutationSyncStalenessWarning(ctx, &out, ws, now)
+		printMutationSyncStalenessWarning(ctx, testEnv(), &out, ws, now)
 		if out.Len() != 0 {
 			t.Fatalf("printMutationSyncStalenessWarning() = %q, want silence", out.String())
 		}
@@ -406,7 +406,7 @@ func TestPrintMutationSyncStalenessWarning(t *testing.T) {
 			t.Fatalf("markFetchSuccess: %v", err)
 		}
 		var out bytes.Buffer
-		printMutationSyncStalenessWarning(ctx, &out, ws, now.Add(25*time.Hour))
+		printMutationSyncStalenessWarning(ctx, testEnv(), &out, ws, now.Add(25*time.Hour))
 		if !strings.Contains(out.String(), "last successful fetch from origin") {
 			t.Fatalf("printMutationSyncStalenessWarning() = %q, want the stale-fetch warning naming origin", out.String())
 		}

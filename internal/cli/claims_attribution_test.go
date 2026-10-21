@@ -17,7 +17,7 @@ import (
 // program does.
 func checkoutIdentity(t *testing.T, dir string) model.Attribution {
 	t.Helper()
-	ap, err := app.Open(context.Background(), resolvedWorkspace(t, dir), app.AccessRead)
+	ap, err := app.Open(context.Background(), testEnv(), resolvedWorkspace(t, dir), app.AccessRead)
 	if err != nil {
 		t.Fatalf("app.Open(%s) error = %v", dir, err)
 	}
@@ -34,7 +34,7 @@ func checkoutIdentity(t *testing.T, dir string) model.Attribution {
 // backlog, which checkout produced which work.
 func eventsByAttribution(t *testing.T, dir string) map[model.Attribution][]model.IssueEvent {
 	t.Helper()
-	ap, err := app.Open(context.Background(), resolvedWorkspace(t, dir), app.AccessRead)
+	ap, err := app.Open(context.Background(), testEnv(), resolvedWorkspace(t, dir), app.AccessRead)
 	if err != nil {
 		t.Fatalf("app.Open(%s) error = %v", dir, err)
 	}
@@ -145,7 +145,7 @@ func attributionsOf(grouped map[model.Attribution][]model.IssueEvent) []model.At
 // resolvedWorkspace is the workspace a command run in dir acquires.
 func resolvedWorkspace(t *testing.T, dir string) workspace.Info {
 	t.Helper()
-	ws, err := workspace.Resolve(dir)
+	ws, err := workspace.Resolve(testEnv(), dir)
 	if err != nil {
 		t.Fatalf("workspace.Resolve(%s) error = %v", dir, err)
 	}

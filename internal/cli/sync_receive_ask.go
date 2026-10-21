@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
@@ -112,23 +113,23 @@ func readReceivedRefs(ws workspace.Info) []byte {
 // the full path already owns, so the caller falls through to it.
 // [LAW:one-source-of-truth] workspaceSyncRemote is the one selection rule, so
 // the remote asked here is the remote the fetch would have used.
-func askRemote(ctx context.Context, ws workspace.Info, gitRemotes []workspace.GitRemote) (remoteAdvertisement, error) {
-	remoteName, ok, err := workspaceSyncRemote(ctx, ws, "", gitRemotes)
+func askRemote(ctx context.Context, env environ.Env, ws workspace.Info, gitRemotes []workspace.GitRemote) (remoteAdvertisement, error) {
+	remoteName, ok, err := workspaceSyncRemote(ctx, env, ws, "", gitRemotes)
 	if err != nil {
 		return remoteAdvertisement{}, err
 	}
 	if !ok {
 		return remoteAdvertisement{}, nil
 	}
-	return advertise(ctx, ws, remoteName, gitRemotes)
+	return advertise(ctx, env, ws, remoteName, gitRemotes)
 }
 
 // advertise is the round trip itself, against a named remote: the listing
 // comes from `git ls-remote`, the URL from the git config it was read from.
 // [LAW:one-source-of-truth] the receive's question and the push's proof both
 // build their advertisement here, so the two can only ever agree byte for byte.
-func advertise(ctx context.Context, ws workspace.Info, remoteName storage.RemoteName, gitRemotes []workspace.GitRemote) (remoteAdvertisement, error) {
-	refs, err := workspace.RemoteDoltRefs(ctx, inv.Env, ws.RootDir, remoteName.String())
+func advertise(ctx context.Context, env environ.Env, ws workspace.Info, remoteName storage.RemoteName, gitRemotes []workspace.GitRemote) (remoteAdvertisement, error) {
+	refs, err := workspace.RemoteDoltRefs(ctx, env, ws.RootDir, remoteName.String())
 	if err != nil {
 		return remoteAdvertisement{}, fmt.Errorf("list refs/dolt/* on remote %q: %w", remoteName, err)
 	}
@@ -181,8 +182,8 @@ const pushProofDeadline = 10 * time.Second
 // [LAW:one-source-of-truth] workspaceSyncRemote picks that remote, as it does
 // for the receive. [LAW:parse-dont-validate] the non-zero advertisement is the
 // proof; nothing downstream re-asks.
-func provePushedAdvertisement(ctx context.Context, syncer storage.Syncer, ws workspace.Info, remoteName storage.RemoteName, gitRemotes []workspace.GitRemote) (proven remoteAdvertisement, unproven string) {
-	receiveRemote, ok, err := workspaceSyncRemote(ctx, ws, "", gitRemotes)
+func provePushedAdvertisement(ctx context.Context, env environ.Env, syncer storage.Syncer, ws workspace.Info, remoteName storage.RemoteName, gitRemotes []workspace.GitRemote) (proven remoteAdvertisement, unproven string) {
+	receiveRemote, ok, err := workspaceSyncRemote(ctx, env, ws, "", gitRemotes)
 	if err != nil {
 		return remoteAdvertisement{}, "resolve the remote the automatic receive asks: " + err.Error()
 	}
@@ -192,7 +193,7 @@ func provePushedAdvertisement(ctx context.Context, syncer storage.Syncer, ws wor
 	if receiveRemote != remoteName {
 		return remoteAdvertisement{}, fmt.Sprintf("pushed remote %q is not the remote the automatic receive asks (%q)", remoteName, receiveRemote)
 	}
-	observed, err := advertise(ctx, ws, remoteName, gitRemotes)
+	observed, err := advertise(ctx, env, ws, remoteName, gitRemotes)
 	if err != nil {
 		return remoteAdvertisement{}, err.Error()
 	}
@@ -257,11 +258,12 @@ func recordReceived(ws workspace.Info, outcome syncReceiveOutcome, observed remo
 // fetch-success marker moves, and the receive's trace and event say a receive
 // ran and what it decided — a skipped fetch is a decision, not silence.
 // [LAW:no-silent-failure]
-func confirmRemoteUnmoved(ctx context.Context, ws workspace.Info, observed remoteAdvertisement) {
+func confirmRemoteUnmoved(ctx context.Context, env environ.Env, ws workspace.Info, observed remoteAdvertisement) {
 	if err := markFetchSuccess(ws, observed.remote); err != nil {
 		fmt.Fprintf(os.Stderr, "lit: fetch-success marker not written: %v\n", err)
 	}
-	recordReceiveDecided(ctx, ws, receiveDecisionRemoteUnmoved,
+	recordReceiveDecided(ctx, env, ws, receiveDecisionRemoteUnmoved,
 		"automatic receive found the remote unmoved since the last receive; nothing fetched",
 		observed.remote, nil)
+
 }

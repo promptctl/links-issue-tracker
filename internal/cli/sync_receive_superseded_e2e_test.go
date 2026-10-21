@@ -51,17 +51,17 @@ func TestAReceiveTheLiveStoreSupersededLandsNothingAndTheNextLands(t *testing.T)
 	runCLIInDir(t, producer, "new", "--title", "second-ticket", "--topic", "demo", "--type", "task", "--parent", epicID)
 	runCLIInDir(t, producer, "sync", "push")
 
-	ws, err := workspace.Resolve(consumer)
+	ws, err := workspace.Resolve(testEnv(), consumer)
 	if err != nil {
 		t.Fatalf("resolve consumer workspace: %v", err)
 	}
 	recorder := telemetry.Begin(telemetry.Event{})
 	ctx := telemetry.With(context.Background(), recorder)
-	gitRemotes, err := workspace.GitRemotes(ctx, ws.RootDir)
+	gitRemotes, err := workspace.GitRemotes(ctx, testEnv(), ws.RootDir)
 	if err != nil {
 		t.Fatalf("read the consumer's git remotes: %v", err)
 	}
-	observed, err := askRemote(ctx, ws, gitRemotes)
+	observed, err := askRemote(ctx, testEnv(), ws, gitRemotes)
 	if err != nil || observed.record() == nil {
 		t.Fatalf("askRemote() = %+v, %v; want the remote's advertisement", observed, err)
 	}
@@ -70,7 +70,7 @@ func TestAReceiveTheLiveStoreSupersededLandsNothingAndTheNextLands(t *testing.T)
 		t.Fatalf("takeReceiveClone() error = %v", err)
 	}
 	defer removeReceiveClone(clone)
-	fetch, err := fetchIntoClone(ctx, ws, clone)
+	fetch, err := fetchIntoClone(ctx, testEnv(), ws, clone)
 	if err != nil || fetch.fetchErr != nil {
 		t.Fatalf("fetchIntoClone() = %+v, %v; want a fetch that worked", fetch, err)
 	}
@@ -83,7 +83,7 @@ func TestAReceiveTheLiveStoreSupersededLandsNothingAndTheNextLands(t *testing.T)
 		t.Fatalf("seed received-refs.last: %v", err)
 	}
 
-	outcome := landAndRecord(ctx, ws, clone, fetch, observed)
+	outcome := landAndRecord(ctx, testEnv(), ws, clone, fetch, observed)
 	if outcome.err != nil || outcome.landed != store.FetchedHeadSuperseded {
 		t.Fatalf("landAndRecord() landed %s, err %v; want superseded by bravo's pull", outcome.landed, outcome.err)
 	}
@@ -118,11 +118,11 @@ func TestAReceiveTheLiveStoreSupersededLandsNothingAndTheNextLands(t *testing.T)
 // target name the same commit, as the last fetch or push left them.
 func assertLevelWithTheRemote(t *testing.T, dir string, target syncTarget) {
 	t.Helper()
-	ws, err := workspace.Resolve(dir)
+	ws, err := workspace.Resolve(testEnv(), dir)
 	if err != nil {
 		t.Fatalf("resolve %s: %v", dir, err)
 	}
-	session, closeStore, err := openSyncSession(underInvocation(context.Background()), ws)
+	session, closeStore, err := openSyncSession(underInvocation(context.Background()), testEnv(), ws)
 	if err != nil {
 		t.Fatalf("open sync session at %s: %v", dir, err)
 	}

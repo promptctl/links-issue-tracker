@@ -7,6 +7,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
@@ -51,7 +52,7 @@ func runStores(ctx context.Context, inv Invocation, args []string) error {
 		roots = append(roots, abs)
 	}
 	if *counts {
-		rows, err := gatherCrossProjectRollup(ctx, roots)
+		rows, err := gatherCrossProjectRollup(ctx, inv.Env, roots)
 		if err != nil {
 			return err
 		}
@@ -104,14 +105,14 @@ type projectRollup struct {
 // fatal and loud, but a single store that fails to open or read becomes an error
 // row [LAW:no-silent-failure] — surfaced, never skipped — so one broken store can
 // never hide the projects that read cleanly.
-func gatherCrossProjectRollup(ctx context.Context, roots []string) ([]projectRollup, error) {
-	locations, err := workspace.Discover(inv.Env, roots)
+func gatherCrossProjectRollup(ctx context.Context, env environ.Env, roots []string) ([]projectRollup, error) {
+	locations, err := workspace.Discover(env, roots)
 	if err != nil {
 		return nil, fmt.Errorf("discover stores: %w", err)
 	}
 	rows := make([]projectRollup, 0, len(locations))
 	for _, loc := range locations {
-		rows = append(rows, rollupLocation(ctx, loc))
+		rows = append(rows, rollupLocation(ctx, env, loc))
 	}
 	return rows, nil
 }
@@ -125,12 +126,12 @@ func gatherCrossProjectRollup(ctx context.Context, roots []string) ([]projectRol
 // here re-reads config that OpenLocationForRead also reads for the workspace_id —
 // cheap read-only JSON with no drift risk, and it keeps the cross-project open on
 // the single OpenLocationForRead path rather than opening the store by hand.
-func rollupLocation(ctx context.Context, loc workspace.Location) (row projectRollup) {
+func rollupLocation(ctx context.Context, env environ.Env, loc workspace.Location) (row projectRollup) {
 	row = projectRollup{Label: loc.StorageDir, StorageDir: loc.StorageDir}
 	if cfg, err := workspace.ReadConfig(loc.ConfigPath); err == nil && cfg.IssuePrefix != "" {
 		row.Label = cfg.IssuePrefix
 	}
-	st, err := app.OpenLocationForRead(ctx, inv.Env, loc)
+	st, err := app.OpenLocationForRead(ctx, env, loc)
 	if err != nil {
 		row.Err = err
 		return row

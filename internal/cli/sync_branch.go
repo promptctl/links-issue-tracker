@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/precedence"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
@@ -24,10 +25,10 @@ import (
 // localSyncBranch is the sync branch from the answers that cost no network: the
 // debug override, then git's refs/remotes/<remote>/HEAD.
 // [LAW:one-source-of-truth] the one local chain both resolvers below start from.
-func localSyncBranch(ctx context.Context, rootDir string, remote string) string {
+func localSyncBranch(ctx context.Context, env environ.Env, rootDir string, remote string) string {
 	return precedence.First(
-		strings.TrimSpace(os.Getenv(debugSyncBranchEnvVar)),
-		workspace.LocalRemoteHead(ctx, inv.Env, rootDir, remote),
+		strings.TrimSpace(env.Get(debugSyncBranchEnvVar)),
+		workspace.LocalRemoteHead(ctx, env, rootDir, remote),
 	)
 }
 
@@ -36,11 +37,11 @@ func localSyncBranch(ctx context.Context, rootDir string, remote string) string 
 // records the answer for knownSyncBranch.
 // [LAW:single-enforcer] Sync branch selection is centralized so pull/push/hooks
 // consume one canonical branch decision.
-func resolveSyncBranch(ctx context.Context, ws workspace.Info, remote storage.RemoteName) (string, error) {
-	if branch := localSyncBranch(ctx, ws.RootDir, remote.String()); branch != "" {
+func resolveSyncBranch(ctx context.Context, env environ.Env, ws workspace.Info, remote storage.RemoteName) (string, error) {
+	if branch := localSyncBranch(ctx, env, ws.RootDir, remote.String()); branch != "" {
 		return branch, nil
 	}
-	branch, err := workspace.AdvertisedRemoteHead(ctx, inv.Env, ws.RootDir, remote.String())
+	branch, err := workspace.AdvertisedRemoteHead(ctx, env, ws.RootDir, remote.String())
 	if err != nil {
 		return "", fmt.Errorf("resolve sync branch for remote %q: %w", remote, err)
 	}
@@ -64,9 +65,9 @@ func resolveSyncBranch(ctx context.Context, ws workspace.Info, remote storage.Re
 // sync verb on this machine. An unknown branch is an error, never a guess; an
 // unreadable record is that error's cause, and matters only when nothing
 // ahead of the record answered.
-func knownSyncBranch(ctx context.Context, ws workspace.Info, remote storage.RemoteName) (string, error) {
+func knownSyncBranch(ctx context.Context, env environ.Env, ws workspace.Info, remote storage.RemoteName) (string, error) {
 	recorded, readErr := os.ReadFile(advertisedSyncBranchPath(ws, remote))
-	branch := precedence.First(localSyncBranch(ctx, ws.RootDir, remote.String()), strings.TrimSpace(string(recorded)))
+	branch := precedence.First(localSyncBranch(ctx, env, ws.RootDir, remote.String()), strings.TrimSpace(string(recorded)))
 	if branch != "" {
 		return branch, nil
 	}
@@ -96,12 +97,12 @@ func (e syncBranchNotKnownError) Error() string {
 // — doctor and every read command's banner — with no network: the remote is
 // workspaceSyncRemote's and the branch is knownSyncBranch's. ok false is a
 // workspace with no sync remote.
-func freshnessSyncTarget(ctx context.Context, ws workspace.Info, gitRemotes []workspace.GitRemote) (remote storage.RemoteName, branch string, ok bool, err error) {
-	remote, ok, err = workspaceSyncRemote(ctx, ws, "", gitRemotes)
+func freshnessSyncTarget(ctx context.Context, env environ.Env, ws workspace.Info, gitRemotes []workspace.GitRemote) (remote storage.RemoteName, branch string, ok bool, err error) {
+	remote, ok, err = workspaceSyncRemote(ctx, env, ws, "", gitRemotes)
 	if err != nil || !ok {
 		return remote, "", ok, err
 	}
-	branch, err = knownSyncBranch(ctx, ws, remote)
+	branch, err = knownSyncBranch(ctx, env, ws, remote)
 	return remote, branch, true, err
 }
 
@@ -111,8 +112,8 @@ func freshnessSyncTarget(ctx context.Context, ws workspace.Info, gitRemotes []wo
 // [LAW:one-source-of-truth] every caller reads the remote here: the sync verbs
 // and the automatic receive fetch it and mark its fetch, the banners read that
 // mark, and init adopts from it, so no two of them can name different remotes.
-func workspaceSyncRemote(ctx context.Context, ws workspace.Info, requested string, gitRemotes []workspace.GitRemote) (storage.RemoteName, bool, error) {
-	return resolveSyncRemote(requested, workspace.UpstreamRemote(ctx, inv.Env, ws.RootDir), gitRemotes)
+func workspaceSyncRemote(ctx context.Context, env environ.Env, ws workspace.Info, requested string, gitRemotes []workspace.GitRemote) (storage.RemoteName, bool, error) {
+	return resolveSyncRemote(requested, workspace.UpstreamRemote(ctx, env, ws.RootDir), gitRemotes)
 }
 
 // advertisedSyncBranchPath is where resolveSyncBranch records the branch a

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/cli"
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/trace"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
@@ -282,7 +283,7 @@ func setupWedgeWorkspace(t *testing.T, self string) (workspace.Info, string) {
 		t.Fatalf("lit init: %v\noutput:\n%s", err, out)
 	}
 
-	ws, err := workspace.Resolve(root)
+	ws, err := workspace.Resolve(testEnv(), root)
 	if err != nil {
 		t.Fatalf("resolve workspace: %v", err)
 	}
@@ -514,7 +515,7 @@ func TestAPeerPushReachesTheStoreThroughTheReceiveWorker(t *testing.T) {
 	runGit(t, consumer, "config", "user.email", "b@b.co")
 	runGit(t, consumer, "config", "user.name", "bravo")
 	lit(consumer, quiet, "init", "--skip-hooks", "--skip-agents")
-	ws, err := workspace.Resolve(consumer)
+	ws, err := workspace.Resolve(testEnv(), consumer)
 	if err != nil {
 		t.Fatalf("resolve consumer workspace: %v", err)
 	}
@@ -602,9 +603,13 @@ func setupGitWedgeWorkspace(t *testing.T, self, remoteURL string) (workspace.Inf
 	runGit(t, root, "remote", "add", "origin", remoteURL)
 	runGit(t, root, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/master")
 
-	ws, err := workspace.Resolve(root)
+	ws, err := workspace.Resolve(testEnv(), root)
 	if err != nil {
 		t.Fatalf("resolve workspace: %v", err)
 	}
 	return ws, cadenceConfig
 }
+
+// testEnv is the test process's environment, read when it is called, so a
+// test's t.Setenv reaches the git the run starts.
+func testEnv() environ.Env { return environ.Of(os.Environ()) }

@@ -16,7 +16,7 @@ func TestQuickstartRefreshRewritesManagedAssetsAndIsIdempotent(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	repo := t.TempDir()
 	runGit(t, repo, "init")
-	ws, err := workspace.Resolve(repo)
+	ws, err := workspace.Resolve(testEnv(), repo)
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}
@@ -73,7 +73,7 @@ func TestQuickstartRefreshReportsIncompatibleHookAsSkipped(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	repo := t.TempDir()
 	runGit(t, repo, "init")
-	ws, err := workspace.Resolve(repo)
+	ws, err := workspace.Resolve(testEnv(), repo)
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}
@@ -300,7 +300,7 @@ func TestRenderQuickstartGuidanceAppendsSoilSectionWhenEnabled(t *testing.T) {
 	repo := t.TempDir()
 	runGit(t, repo, "init")
 
-	got, err := renderQuickstartGuidance(repo)
+	got, err := renderQuickstartGuidance(testEnv(), repo)
 	if err != nil {
 		t.Fatalf("renderQuickstartGuidance() error = %v", err)
 	}
@@ -314,7 +314,7 @@ func TestRenderQuickstartGuidanceAppendsSoilSectionWhenEnabled(t *testing.T) {
 	// Verify default (no config) does not include the soil section.
 	xdg2 := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", xdg2)
-	gotDefault, err := renderQuickstartGuidance(repo)
+	gotDefault, err := renderQuickstartGuidance(testEnv(), repo)
 	if err != nil {
 		t.Fatalf("renderQuickstartGuidance() default error = %v", err)
 	}

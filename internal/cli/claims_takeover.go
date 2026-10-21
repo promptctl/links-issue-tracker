@@ -94,7 +94,7 @@ func authorizeStart(ctx context.Context, inv Invocation, ap *app.App, issueID st
 		return nil, err
 	}
 	lane := model.LaneOf(prior, relations[issueID].Parent)
-	cc, err := gatherClaimContext(ctx, inv.Stdout, ap)
+	cc, err := gatherClaimContext(ctx, inv.Env, inv.Stdout, ap)
 	if err != nil {
 		return nil, err
 	}

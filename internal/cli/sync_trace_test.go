@@ -54,18 +54,19 @@ func TestRecordSyncTraceWritesCanonicalJSONUnconditionally(t *testing.T) {
 	}
 	repo := t.TempDir()
 	runGit(t, repo, "init")
-	ws, err := workspace.Resolve(repo)
+	ws, err := workspace.Resolve(testEnv(), repo)
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}
 
-	path, err := recordSyncTrace(ws, syncTraceRecord{
+	path, err := recordSyncTrace(testEnv(), ws, syncTraceRecord{
 		Command:   "lit sync fetch",
 		Decision:  "fetched",
 		Status:    "ok",
 		BuildNote: "build: TEST-SENTINEL",
 		Metadata:  map[string]string{"remote": "origin"},
 	})
+
 	if err != nil {
 		t.Fatalf("recordSyncTrace() error = %v", err)
 	}
@@ -107,13 +108,13 @@ func TestRecordSyncTraceWritesCanonicalJSONUnconditionally(t *testing.T) {
 func TestRecordSyncTraceCarriesTriggerWhenAutomated(t *testing.T) {
 	repo := t.TempDir()
 	runGit(t, repo, "init")
-	ws, err := workspace.Resolve(repo)
+	ws, err := workspace.Resolve(testEnv(), repo)
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}
 	t.Setenv(automationTriggerEnvVar, "git-pre-push")
 
-	path, err := recordSyncTrace(ws, syncTraceRecord{Command: "lit sync push", Decision: "pushed", Status: "ok"})
+	path, err := recordSyncTrace(testEnv(), ws, syncTraceRecord{Command: "lit sync push", Decision: "pushed", Status: "ok"})
 	if err != nil {
 		t.Fatalf("recordSyncTrace() error = %v", err)
 	}
@@ -137,7 +138,7 @@ func TestInitLeavesDurableSyncTraceInteractively(t *testing.T) {
 	repo := t.TempDir()
 	runGit(t, repo, "init")
 	runCLIInDir(t, repo, "init", "--skip-hooks", "--skip-agents")
-	ws, err := workspace.Resolve(repo)
+	ws, err := workspace.Resolve(testEnv(), repo)
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}
@@ -198,7 +199,7 @@ func TestExplicitSyncCommandsLeaveDurableTracesInteractively(t *testing.T) {
 	runGit(t, consumer, "config", "user.email", "b@b.co")
 	runGit(t, consumer, "config", "user.name", "bravo")
 	runCLIInDir(t, consumer, "init", "--skip-hooks", "--skip-agents")
-	ws, err := workspace.Resolve(consumer)
+	ws, err := workspace.Resolve(testEnv(), consumer)
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}
@@ -267,7 +268,7 @@ func TestReconcileAbortLeavesDurableTraceInteractively(t *testing.T) {
 	repo := t.TempDir()
 	runGit(t, repo, "init")
 	runCLIInDir(t, repo, "init", "--skip-hooks", "--skip-agents")
-	ws, err := workspace.Resolve(repo)
+	ws, err := workspace.Resolve(testEnv(), repo)
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}
@@ -337,7 +338,7 @@ func TestReconcileTakeAndCombineLeaveDurableTracesInteractively(t *testing.T) {
 		// history and the producer's are disjoint by the time consumer reconciles.
 		runCLIInDir(t, producer, "sync", "push", "--set-upstream")
 
-		resolvedWs, err := workspace.Resolve(consumer)
+		resolvedWs, err := workspace.Resolve(testEnv(), consumer)
 		if err != nil {
 			t.Fatalf("workspace.Resolve() error = %v", err)
 		}
@@ -431,13 +432,13 @@ func TestRecordSyncCommandTraceErrorPath(t *testing.T) {
 	t.Parallel()
 	repo := t.TempDir()
 	runGit(t, repo, "init")
-	ws, err := workspace.Resolve(repo)
+	ws, err := workspace.Resolve(testEnv(), repo)
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}
 
 	cause := fmt.Errorf("simulated backend failure")
-	recordSyncCommandTrace(ws, "lit sync fetch", "fetched", cause, map[string]string{"remote": "origin"})
+	recordSyncCommandTrace(testEnv(), ws, "lit sync fetch", "fetched", cause, map[string]string{"remote": "origin"})
 
 	records := readSyncTraceRecords(t, ws)
 	if len(records) != 1 {
