@@ -522,6 +522,7 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "nothing to reconcile: the clone is not diverged from the remote", Src: "nothing to reconcile: the clone is not diverged from the remote"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "nothing to refresh", Src: "  nothing to refresh"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "one or more free-text fields", Src: "one or more free-text fields"},
+	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "open sync store on the clone: %w", Src: "open sync store on the clone: %w"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "open sync store on the receive's clone: %w", Src: "open sync store on the receive's clone: %w"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "open the detached-worker lock: %w", Src: "open the detached-worker lock: %w"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "pre-push hook", Src: "pre-push hook"},

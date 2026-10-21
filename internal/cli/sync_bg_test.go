@@ -2,10 +2,60 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 )
+
+// TestCutByPushDeadline pins the one verdict every step the push deadline
+// bounds takes where it returns — the clone's open, the remote resolution,
+// the push (links-storage-3k6u.98l).
+func TestCutByPushDeadline(t *testing.T) {
+	t.Parallel()
+	live := context.Background()
+	stepErr := errors.New("check remote refs \"origin\": signal: killed")
+	cases := []struct {
+		name               string
+		ctx, completionCtx context.Context
+		err                error
+		wantCut            bool
+	}{
+		{"a step that succeeded is not cut, whatever its deadline did", endedContext(), live, nil, false},
+		{"a step that failed on its own while its deadline was live is not cut", live, live, stepErr, false},
+		{"a step that failed once its deadline ended is cut", endedContext(), live, stepErr, true},
+		{"a step the process tore down is not cut by its deadline", endedContext(), endedContext(), stepErr, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := cutByPushDeadline(tc.ctx, tc.completionCtx, tc.err)
+			if pushDeadlineCutOf(got) != tc.wantCut {
+				t.Fatalf("cutByPushDeadline() = %v, cut = %t; want cut = %t", got, pushDeadlineCutOf(got), tc.wantCut)
+			}
+			if !errors.Is(got, tc.err) {
+				t.Fatalf("cutByPushDeadline() = %v; it must keep the step's error %v readable", got, tc.err)
+			}
+			if tc.wantCut && !strings.HasPrefix(got.Error(), pushDeadlineCutExplanation().Error()+": ") {
+				t.Fatalf("cut error %q does not lead with the deadline's explanation", got)
+			}
+		})
+	}
+
+}
+
+// endedContext is an operation lifetime that has already ended.
+func endedContext() context.Context {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	return ctx
+}
+
+// cutAtTheDeadline is err as a step returns it once its push deadline has
+// ended under a live completion lifetime: through cutByPushDeadline, the one
+// constructor of the verdict.
+func cutAtTheDeadline(err error) error {
+	return cutByPushDeadline(endedContext(), context.Background(), err)
+}
 
 // TestMirrorEnvStripsInheritedTraceRefFile pins that the detached mirror never
 // inherits the parent command's automation-trace-ref file: otherwise it would

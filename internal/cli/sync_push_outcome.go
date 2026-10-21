@@ -84,6 +84,10 @@ type pushOutcomeRecord struct {
 	// diverged rather than error. False when the attempt never reached the
 	// push.
 	ReceiveMerges bool `json:"receive_merges"`
+	// PushDeadlineCut is the attempt's one verdict on whether its push deadline
+	// cut it (cutByPushDeadline), read off the error it ended on. False for
+	// an attempt that ran under no push deadline: nothing could cut it.
+	PushDeadlineCut bool `json:"push_deadline_cut"`
 }
 
 // failed reports whether the record describes a push attempt that did not
@@ -119,6 +123,7 @@ func pushOutcomeOf(outcome syncPushOutcome, err error, observedBy string) pushOu
 	// ObservedBy means only "no observer", never "not a failure".
 	rec.ObservedBy = observedBy
 	rec.ReceiveMerges = outcome.receiveMerges
+	rec.PushDeadlineCut = pushDeadlineCutOf(firstError(err, outcome.pushErr))
 	return rec
 }
 
@@ -205,7 +210,8 @@ func (r pushOutcomeRecord) eventValue() map[string]any {
 		"push.remote":   r.Remote,
 		"push.branch":   r.Branch,
 		// [LAW:nothing-unseen] which way the receive question went.
-		"push.receive_merges": r.ReceiveMerges,
+		"push.receive_merges":    r.ReceiveMerges,
+		"push.push_deadline_cut": r.PushDeadlineCut,
 	}
 }
 

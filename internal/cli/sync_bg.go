@@ -671,46 +671,31 @@ func mirrorCycle(ctx context.Context, log io.Writer, ws workspace.Info, stopAnsw
 	pushStart := time.Now()
 	pushCtx, cancel := context.WithTimeout(ctx, store.MirrorPushDeadline)
 	defer cancel()
-	var onceErr error
+	// ending is the error the attempt ended on, every step's verdict on the
+	// push deadline already taken inside it where that step returned. A push
+	// that dies of ITS OWN deadline (not the process's teardown) names the
+	// deadline in every record of it, so the next hung-remote episode is
+	// attributable. [LAW:no-silent-failure] [LAW:single-enforcer]
+	var ending error
 	var landed pushedHead
 	var openElapsed time.Duration
 	attempted = func() bool {
 		session, closeStore, err := openSyncSessionAt(pushCtx, clone.databasePath, ws.WorkspaceID)
 		openElapsed = time.Since(pushStart)
 		if err != nil {
-			_ = completeMirrorWithoutAttempt(ctx, ws, fmt.Errorf("open sync store on the clone: %w", err), stopAnswering)
+			ending = cutByPushDeadline(pushCtx, ctx, fmt.Errorf("open sync store on the clone: %w", err))
+			_ = completeMirrorWithoutAttempt(ctx, ws, ending, stopAnswering)
 			return false
 		}
 		defer closeStore()
-		landed, onceErr = mirrorOnce(pushCtx, ctx, session, ws)
+		landed, ending = mirrorOnce(pushCtx, ctx, session, ws)
 		return true
 	}()
 	pushElapsed := time.Since(pushStart)
-	// A push that dies of ITS OWN deadline (not the process's teardown) names
-	// the deadline in the durable trail — without that record the next
-	// hung-remote episode is as unattributable as the first.
-	// [LAW:no-silent-failure] Gated on a session having existed: a deadline
-	// that expires during the OPEN reached no transport, and that branch's
-	// accurate record was already written through completeMirrorWithoutAttempt.
-	// One trace owner per event: an attempt that RAN recorded itself inside
-	// performSyncPush (onceErr nil, the deadline explanation folded in there),
-	// so the out-of-band record here exists only for a could-not-attempt
-	// failure, which nothing else recorded — the deadline cause joins it
-	// instead of writing its own. [LAW:single-enforcer]
-	// A push that landed was not cut, whatever the clock read after it: the
-	// proof that follows a landed push runs past the push deadline by design.
-	deadlineCut := attempted && !landed.landed() && pushCtx.Err() != nil && ctx.Err() == nil
-	if onceErr != nil {
-		var cause error
-		if deadlineCut {
-			cause = pushDeadlineCutExplanation()
-		}
-		recordMirrorTraceError(ws, errors.Join(cause, onceErr))
-	}
 
 	record, recordHeld := liveStoreLearns(ctx, log, ws, clone.liveClone, landed)
 	fmt.Fprintf(log, "%s mirror cycle end attempted=%t push_deadline_cut=%t hold=%s record=%s ref=%s open=%s push=%s elapsed=%s\n",
-		time.Now().UTC().Format(time.RFC3339), attempted, deadlineCut,
+		time.Now().UTC().Format(time.RFC3339), attempted, pushDeadlineCutOf(ending),
 		clone.held.Round(time.Millisecond), recordHeld.Round(time.Millisecond), record, openElapsed.Round(time.Millisecond), pushElapsed.Round(time.Millisecond), time.Since(start).Round(time.Millisecond))
 	return attempted
 }
@@ -807,19 +792,58 @@ func holdBudgetCutExplanation(step string) error {
 		store.MirrorHoldBudget, step, mirrorLogName)
 }
 
+// pushDeadlineCut is an attempt's ending error once the push deadline is
+// known to have cut it: the verdict and its explanation are one value, so no
+// record can name the deadline without the verdict or carry the verdict
+// without naming it. It unwraps to the cause, so every classification of
+// the ending (canceled, busy, diverged, remote schema ahead) still reads it.
+// The explanation is rendered when the cut is taken, so it names the deadline
+// that cut the attempt, not whatever the deadline reads when the error is.
+// cutByPushDeadline is its one constructor. [LAW:types-are-the-program]
+type pushDeadlineCut struct{ explanation, cause error }
+
+func (c pushDeadlineCut) Error() string {
+	return c.explanation.Error() + ": " + c.cause.Error()
+}
+
+func (c pushDeadlineCut) Unwrap() error { return c.cause }
+
+// cutByPushDeadline takes an attempt's one verdict on whether its push
+// deadline cut it, at the moment a step that deadline bounds returns on err:
+// the operation lifetime (ctx) has ended while the completion lifetime has
+// not. Foreground callers pass one lifetime twice, so it never holds for
+// them. Every later reader — the log line, the trace, the outcome record —
+// reads the verdict off the error with pushDeadlineCutOf, never off a clock,
+// whose reading would drift with whatever ran after the step.
+// [LAW:single-enforcer]
+func cutByPushDeadline(ctx, completionCtx context.Context, err error) error {
+	if err == nil || ctx.Err() == nil || completionCtx.Err() != nil {
+		return err
+	}
+	return pushDeadlineCut{explanation: pushDeadlineCutExplanation(), cause: err}
+}
+
+// pushDeadlineCutOf reads the verdict cutByPushDeadline took for the
+// attempt err ended it.
+func pushDeadlineCutOf(err error) bool {
+	var cut pushDeadlineCut
+	return errors.As(err, &cut)
+}
+
 // pushDeadlineCutExplanation is the one wording of "the push cut itself
 // loose": the fact that explains a raw transport error killed by the push
-// deadline. Both record owners — performSyncPush folding it into an attempt's
-// own record, mirrorCycle joining it to a could-not-attempt failure — say it
-// through this function, so the durable trail names the deadline identically
-// wherever the cut landed. [LAW:one-source-of-truth]
+// deadline. pushDeadlineCut says it through this function, so the durable
+// trail names the deadline identically wherever the cut landed.
+// [LAW:one-source-of-truth]
 //
 // It refuses to name a cause, and that refusal is the point. A deadline knows
 // only that the work ran long. Naming a cause such as "a hung or slow remote
 // transport" would be a diagnosis nothing had observed, and it reads as
 // environmental and transient — something to retry past rather than a defect to
-// file. The text names what the deadline actually established, names both
-// causes that land here, and points at the evidence that separates them.
+// file. The text names what the deadline actually established, names every
+// cause that lands here — an undersized deadline, a stalled transport, a
+// stalled open of the clone (the open runs under the same deadline) — and
+// points at the evidence that separates them.
 // [FRAMING:representation] a message that asserts more than its signal carries
 // is a map of a territory nobody visited.
 //
@@ -832,12 +856,14 @@ func holdBudgetCutExplanation(step string) error {
 // nobody measures is how an invariant asserted in a comment stops being one.
 func pushDeadlineCutExplanation() error {
 	return fmt.Errorf(
-		"mirror push exceeded its %s deadline — a deadline, not a diagnosis: check %s's push= values before blaming the remote. Pushes clustered just under the deadline mean it is sized under this workspace's real push cost; one push far past it means the transport stopped answering. Nothing on the live store waits on the push, and the next mutation's mirror retries it",
+		"mirror push exceeded its %s deadline — a deadline, not a diagnosis: check %s's push= values before blaming the remote. Pushes clustered just under the deadline mean it is sized under this workspace's real push cost; one push far past it means the transport stopped answering, or the clone's open did when open= carries the time. Nothing on the live store waits on the push, and the next mutation's mirror retries it",
 		store.MirrorPushDeadline, mirrorLogName)
 }
 
 // mirrorOnce runs the one shared push path from the clone's session, without
-// compaction, and reports the head a landed push established. It is a single
+// compaction, and reports the head a landed push established, or the error
+// the attempt ended on — recorded already, its push-deadline verdict taken
+// inside it — when it landed nothing; a skip ends on neither. It is a single
 // path with no freshness branch: [LAW:dataflow-not-control-flow] the skip
 // decisions (no remote, empty remote) already live in performSyncPush, and an
 // up-to-date push is a cheap no-op, so the mirror does not pre-decide whether
@@ -860,10 +886,9 @@ func mirrorOnce(ctx, completionCtx context.Context, session syncSession, ws work
 	outcome, err := performSyncPush(ctx, completionCtx, session, ws, "", false, false, session.syncer.SyncPushFromClone)
 	if err != nil {
 		// Could-not-attempt (reconcile/remote resolution): performSyncPush's
-		// own deferred completion already recorded the outcome. The cycle's
-		// single out-of-band automation trace is the caller's to write — it
-		// alone knows whether the push deadline is what cut this attempt short.
-		// [LAW:single-enforcer]
+		// own deferred completion already recorded the outcome, but no trace,
+		// so this is the event's one trace owner. [LAW:single-enforcer]
+		recordMirrorTraceError(ws, err)
 		return pushedHead{}, err
 	}
 	// performSyncPush records its own trace (push-ok, push-failure, or skip). If
@@ -882,7 +907,7 @@ func mirrorOnce(ctx, completionCtx context.Context, session syncSession, ws work
 		fmt.Fprintln(os.Stderr, failure.blockString())
 	}
 	if outcome.skip != syncTargetReady || outcome.pushErr != nil {
-		return pushedHead{}, nil
+		return pushedHead{}, outcome.pushErr
 	}
 	// The head the push reports is the clone's HEAD — the push is
 	// HEAD:<branch> and the clone is frozen, so nothing moved it but a follow
