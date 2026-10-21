@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"database/sql"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -20,7 +19,7 @@ type containmentFixture struct {
 
 func newContainmentFixture(t *testing.T, ctx context.Context) (containmentFixture, *goose.Provider) {
 	t.Helper()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "dolt"), "test-workspace-id")
+	st, err := Open(ctx, migratedDoltDir(t), "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}

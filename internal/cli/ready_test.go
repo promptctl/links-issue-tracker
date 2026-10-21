@@ -26,8 +26,9 @@ func newTestCLIApp(t testing.TB) *app.App {
 	t.Setenv("LIT_CONFIG_GLOBAL_PATH", "")
 	t.Setenv("LIT_CONFIG_PROJECT_PATH", "")
 	ctx := context.Background()
-	workspaceRoot := t.TempDir()
-	st, err := engine.Open(ctx, engine.ReadWrite, filepath.Join(workspaceRoot, "dolt"), "test-workspace-id")
+	databasePath := storeTemplate.Copy(t)
+	workspaceRoot := filepath.Dir(databasePath)
+	st, err := engine.Open(ctx, engine.ReadWrite, databasePath, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("engine.Open() error = %v", err)
 	}
@@ -39,7 +40,7 @@ func newTestCLIApp(t testing.TB) *app.App {
 		t.Fatalf("workspace.EnsureStream() error = %v", err)
 	}
 	return app.New(workspace.Info{
-		Location:    workspace.Location{DatabasePath: filepath.Join(workspaceRoot, "dolt")},
+		Location:    workspace.Location{DatabasePath: databasePath},
 		RootDir:     workspaceRoot,
 		WorkspaceID: "test-workspace-id",
 		IssuePrefix: testIssuePrefix(t, "test"),

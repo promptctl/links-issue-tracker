@@ -4,6 +4,8 @@ import (
 	"context"
 	"os"
 	"testing"
+
+	"github.com/promptctl/links-issue-tracker/internal/dirtemplate"
 )
 
 // Parallelism convention for this package: a test calls t.Parallel() exactly
@@ -39,7 +41,7 @@ func TestMain(m *testing.M) {
 	}
 	stateHome := isolateXDGHome("XDG_STATE_HOME", "lit-cli-state-")
 	configHome := isolateXDGHome("XDG_CONFIG_HOME", "lit-cli-config-")
-	code := m.Run()
+	code := dirtemplate.Run(m, storeTemplate)
 	_ = os.RemoveAll(stateHome)
 	_ = os.RemoveAll(configHome)
 	os.Exit(code)

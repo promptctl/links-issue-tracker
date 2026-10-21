@@ -974,8 +974,8 @@ Called on every write open (`store.go`) and by the bootstrap (`store.go`).
 
 ### 12. Test-fixture behavior that constrains store.go semantics
 
-- The package builds **two** migrated-store templates via the real `Open` (`fixture_test.go`), copies them per test (`fixture_test.go`), and freezes the originals read-only (files `0o444`, dirs `0o555`, `fixture_test.go`) — directories are frozen too because Dolt swaps files via `rename(2)`.
-- Slot 1 is asserted to share **no** commit hash with slot 0, i.e. two independently created stores have unrelated Dolt histories (`fixture_test.go`, evidence read at `fixture_test.go`).
+- The package builds **two** migrated-store templates, `storeTemplate` and `unrelatedStoreTemplate`, via the real `Open` (`fixture_test.go`); `internal/dirtemplate` copies them per test and freezes the originals read-only (files `0o444`, dirs `0o555`, `dirtemplate.go`) — directories are frozen too because Dolt swaps files via `rename(2)`.
+- The two templates are asserted to share **no** commit hash, i.e. two independently created stores have unrelated Dolt histories (`fixture_residue_test.go`).
 - Writes through one copy leave no residue in the template or in another copy, and a copy's goose schema version equals a from-scratch `Open`'s (`fixture_residue_test.go`).
 - `TestDoltEngineConformance` runs `internal/storage/conformance.Run` against a store from `openIssueStore` (`conformance_test.go`), and `TestDoltEngineOffersEveryCapability` asserts `storage.Offered(engine)` equals `storage.Capabilities()` exactly, in order (`conformance_test.go`).
 - `LockDoltJournalExclusive` on an uninitialized workspace refuses with a message containing `"not initialized"` and creates nothing on disk (`dolt_journal_hold_test.go`).
