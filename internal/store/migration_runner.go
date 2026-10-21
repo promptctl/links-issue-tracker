@@ -460,6 +460,7 @@ func (s *Store) migrate(ctx context.Context) (storage.Migrated, error) {
 		return done, nil
 	}
 	done.Snapshot = snap.Name
+	done.SnapshotLeftOut = snap.LeftOut
 	// [LAW:one-source-of-truth] Migration retention bounds migration
 	// snapshots only; user snapshots share the directory under an
 	// independent budget. IsMigrationSnapshotName is the kind discriminator.
@@ -659,7 +660,7 @@ func (s *Store) applyMigration(ctx context.Context, guard *snapshotGuard, assess
 			return pruneErr, fail
 		}
 	}
-	var snap dbsnapshot.Snapshot
+	var snap dbsnapshot.Taken
 	if fail := attempt(stepSnapshot, func() (err error) {
 		snap, err = guard.ensure(ctx)
 		return err

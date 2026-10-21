@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -188,13 +189,14 @@ func TestConvergenceRemediationsNameOnlyActsThatCanWork(t *testing.T) {
 	}
 }
 
-// A failed convergence records the step, the snapshot and the prune failure
-// under the keys a successful open uses, and the facts of the cause it wraps.
+// A failed convergence records the step, the snapshot, what its copy left out
+// and the prune failure under the keys a successful open uses, and the facts
+// of the cause it wraps.
 func TestAConvergenceFailureRecordsItsStepSnapshotAndCause(t *testing.T) {
 	t.Parallel()
 	err := &store.SchemaConvergenceError{
 		Step:     convergenceStep(t, "refuse_unwritable"),
-		Snapshot: &dbsnapshot.Snapshot{Name: "1-pre-migrate-1", Path: "/snapshots/1-pre-migrate-1"},
+		Snapshot: &dbsnapshot.Taken{Snapshot: dbsnapshot.Snapshot{Name: "1-pre-migrate-1", Path: "/snapshots/1-pre-migrate-1"}, LeftOut: []string{"links/.dolt/git-remote-cache"}},
 		PruneErr: errors.New("prune stuck"),
 		Cause:    &store.UnsupportedSchemaVersionError{WorkspaceVersion: 99, MaxSupported: 11},
 	}
@@ -207,6 +209,9 @@ func TestAConvergenceFailureRecordsItsStepSnapshotAndCause(t *testing.T) {
 	}
 	if got := end.Facts["migration.snapshot"]; got != "1-pre-migrate-1" {
 		t.Errorf("migration.snapshot = %v, want the snapshot the open took", got)
+	}
+	if got, _ := end.Facts["migration.snapshot_left_out"].([]string); !slices.Equal(got, []string{"links/.dolt/git-remote-cache"}) {
+		t.Errorf("migration.snapshot_left_out = %v, want what the snapshot's copy left out", end.Facts["migration.snapshot_left_out"])
 	}
 	if got, _ := end.Facts["migration.prune_error"].(*string); got == nil || *got != "prune stuck" {
 		t.Errorf("migration.prune_error = %v, want the prune failure", end.Facts["migration.prune_error"])

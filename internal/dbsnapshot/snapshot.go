@@ -56,6 +56,15 @@ type Snapshot struct {
 	Created time.Time `json:"created"`
 }
 
+// Taken is a snapshot Take just made, with what its copy left out: the paths
+// snapshotOmits matched, relative to the database dir, [] when none matched.
+// A listed snapshot is a Snapshot and never a Taken, because what its copy
+// left out was never recorded on disk. [LAW:types-are-the-program]
+type Taken struct {
+	Snapshot
+	LeftOut []string
+}
+
 // DirFor is the snapshots directory of the database at databaseDir: its
 // sibling, named "snapshots". Every producer and reader of a workspace's
 // snapshots — the user's `lit snapshots` commands and the store's migration,
@@ -99,7 +108,8 @@ func producerBeaconPath(snapshotsDir string) string {
 var ErrSnapshotsBusy = errors.New("snapshot producer beacon busy")
 
 // Take clones databaseDir, less what restoring it never needs (snapshotOmits),
-// into <DirFor(databaseDir)>/<name>/ and returns the snapshot. label is optional ("" = no suffix); non-safe characters are normalized.
+// into <DirFor(databaseDir)>/<name>/ and returns the snapshot and what it
+// left out. label is optional ("" = no suffix); non-safe characters are normalized.
 // Atomicity: the clone lands in <name>.tmp first, then renames to <name> on
 // success — an interrupt leaves no half-snapshot in the listing, and whatever
 // .tmp/.reserve residue an uncleanable death (SIGKILL, the interrupt guard's
@@ -117,23 +127,23 @@ var ErrSnapshotsBusy = errors.New("snapshot producer beacon busy")
 // copy whose retry must first reclaim a dead predecessor's store-sized corpse
 // is the motivating regime, and any wiring downstream of a successful take
 // (the retention tail, say) is unreachable in exactly that regime.
-func Take(ctx context.Context, databaseDir, label string) (Snapshot, error) {
+func Take(ctx context.Context, databaseDir, label string) (Taken, error) {
 	// One explicit gate so a pre-canceled ctx refuses identically on every
 	// platform — Darwin's single-syscall Clonefile fast path would otherwise
 	// mint a snapshot the walk-based platforms refuse.
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return Snapshot{}, ctxErr
+		return Taken{}, ctxErr
 	}
 	info, err := os.Stat(databaseDir)
 	if err != nil {
-		return Snapshot{}, fmt.Errorf("stat database dir: %w", err)
+		return Taken{}, fmt.Errorf("stat database dir: %w", err)
 	}
 	if !info.IsDir() {
-		return Snapshot{}, fmt.Errorf("database dir is not a directory: %s", databaseDir)
+		return Taken{}, fmt.Errorf("database dir is not a directory: %s", databaseDir)
 	}
 	snapshotsDir := DirFor(databaseDir)
 	if err := os.MkdirAll(snapshotsDir, 0o755); err != nil {
-		return Snapshot{}, fmt.Errorf("create snapshots dir: %w", err)
+		return Taken{}, fmt.Errorf("create snapshots dir: %w", err)
 	}
 	// Collection runs before this Take holds the beacon shared — holding it
 	// would turn the collector's exclusive probe into a guaranteed self-skip.
@@ -148,10 +158,10 @@ func Take(ctx context.Context, databaseDir, label string) (Snapshot, error) {
 	}
 	releaseBeacon, acquired, err := filelock.Acquire(ctx, producerBeaconPath(snapshotsDir), false, producerBeaconRetryAttempts, producerBeaconRetryDelay)
 	if err != nil {
-		return Snapshot{}, fmt.Errorf("acquire snapshot producer beacon: %w", err)
+		return Taken{}, fmt.Errorf("acquire snapshot producer beacon: %w", err)
 	}
 	if !acquired {
-		return Snapshot{}, fmt.Errorf("dbsnapshot: residue collection is holding the snapshots directory at %s and did not finish within its budget; retry: %w", snapshotsDir, ErrSnapshotsBusy)
+		return Taken{}, fmt.Errorf("dbsnapshot: residue collection is holding the snapshots directory at %s and did not finish within its budget; retry: %w", snapshotsDir, ErrSnapshotsBusy)
 	}
 	// LIFO with the .reserve removal below: the beacon outlives every producer
 	// artifact, so a collector can never classify a live Take's paths as dead.
@@ -166,18 +176,19 @@ func Take(ctx context.Context, databaseDir, label string) (Snapshot, error) {
 	}()
 	reserved, err := reserveSnapshotPaths(snapshotsDir, label)
 	if err != nil {
-		return Snapshot{}, err
+		return Taken{}, err
 	}
 	defer os.Remove(reserved.reservePath)
-	if _, err := cloneTree(ctx, databaseDir, reserved.tmpPath, snapshotOmits); err != nil {
+	leftOut, err := cloneTree(ctx, databaseDir, reserved.tmpPath, snapshotOmits)
+	if err != nil {
 		_ = os.RemoveAll(reserved.tmpPath)
-		return Snapshot{}, fmt.Errorf("clone tree: %w", err)
+		return Taken{}, fmt.Errorf("clone tree: %w", err)
 	}
 	if err := os.Rename(reserved.tmpPath, reserved.finalPath); err != nil {
 		_ = os.RemoveAll(reserved.tmpPath)
-		return Snapshot{}, fmt.Errorf("rename tmp to final: %w", err)
+		return Taken{}, fmt.Errorf("rename tmp to final: %w", err)
 	}
-	return Snapshot{Path: reserved.finalPath, Name: reserved.name, Created: reserved.created}, nil
+	return Taken{Snapshot: Snapshot{Path: reserved.finalPath, Name: reserved.name, Created: reserved.created}, LeftOut: leftOut}, nil
 }
 
 // CloneTree copies databaseDir to dst with Take's copy engine — the
@@ -674,6 +685,7 @@ func (o omission) omits(rel string) bool {
 // walks dst the way walkAndCopy walks its source, so dst's own path is never
 // read as a pattern and no symlink inside the copy is followed out of it.
 func (o omission) removeFrom(dst string) (leftOut []string, err error) {
+	leftOut = []string{}
 	err = filepath.WalkDir(dst, func(dstPath string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -704,6 +716,7 @@ func (o omission) removeFrom(dst string) (leftOut []string, err error) {
 // gate is what lets an interrupt abandon a long fallback copy mid-tree and
 // hand control back to Take's cleanup within the interrupt guard's grace.
 func walkAndCopy(ctx context.Context, src, dst string, omit omission, copyFile func(ctx context.Context, src, dst string) error) (leftOut []string, err error) {
+	leftOut = []string{}
 	err = filepath.WalkDir(src, func(srcPath string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err

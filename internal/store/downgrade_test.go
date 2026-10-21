@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -137,7 +138,7 @@ func TestDowngradeTargetEqualIsNoOp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Downgrade(current) = %v, want nil", err)
 	}
-	if want := (storage.Downgraded{From: current}); done == nil || *done != want {
+	if want := (storage.Downgraded{From: current}); done == nil || !reflect.DeepEqual(*done, want) {
 		t.Fatalf("Downgrade(current) = %+v, want %+v", done, want)
 	}
 	if delta := snapshotCount(t, doltRoot) - before; delta != 0 {
@@ -158,7 +159,7 @@ func TestDowngradeTargetAheadRefused(t *testing.T) {
 	}
 	before := snapshotCount(t, doltRoot)
 	done, err := st.Downgrade(ctx, current+5)
-	if want := (storage.Downgraded{From: current}); done == nil || *done != want {
+	if want := (storage.Downgraded{From: current}); done == nil || !reflect.DeepEqual(*done, want) {
 		t.Fatalf("Downgrade(current+5) reported %+v, want %+v", done, want)
 	}
 	var ahead *DowngradeTargetAheadError
@@ -188,7 +189,7 @@ func TestDowngradeBelowBaselineRefused(t *testing.T) {
 	}
 	before := snapshotCount(t, doltRoot)
 	done, err := st.Downgrade(ctx, baselineVersion-1)
-	if want := (storage.Downgraded{From: current}); done == nil || *done != want {
+	if want := (storage.Downgraded{From: current}); done == nil || !reflect.DeepEqual(*done, want) {
 		t.Fatalf("Downgrade(baseline-1) reported %+v, want %+v", done, want)
 	}
 	var below *DowngradeBelowBaselineError
@@ -236,7 +237,10 @@ func TestDowngradeRollbackOnFailure(t *testing.T) {
 	if !errors.As(err, &rb) {
 		t.Fatalf("err = %v, want *DowngradeRollbackError", err)
 	}
-	if want := (storage.Downgraded{From: registryMax, Snapshot: rb.Snapshot.Name}); done == nil || *done != want {
+	if done == nil {
+		t.Fatal("Downgrade reported nothing, want what it did before the failure")
+	}
+	if want := (storage.Downgraded{From: registryMax, Snapshot: rb.Snapshot.Name, SnapshotLeftOut: done.SnapshotLeftOut}); !reflect.DeepEqual(*done, want) {
 		t.Fatalf("Downgrade reported %+v, want %+v", done, want)
 	}
 	if !errors.Is(rb, want) {
@@ -288,7 +292,10 @@ func TestDowngradeHappyPathSteppedAndCommitted(t *testing.T) {
 	}
 	// A fresh workspace holds no downgrade snapshot, so the one Downgrade
 	// names is the one it took.
-	if want := (storage.Downgraded{From: registryMax, Reversed: 2, Snapshot: done.Snapshot}); *done != want || !IsDowngradeSnapshotName(done.Snapshot) {
+	if !slices.Contains(done.SnapshotLeftOut, "links/.dolt/noms/LOCK") {
+		t.Errorf("SnapshotLeftOut = %q, want what the snapshot's copy left out, the journal LOCK among it", done.SnapshotLeftOut)
+	}
+	if want := (storage.Downgraded{From: registryMax, Reversed: 2, Snapshot: done.Snapshot, SnapshotLeftOut: done.SnapshotLeftOut}); !reflect.DeepEqual(*done, want) || !IsDowngradeSnapshotName(done.Snapshot) {
 		t.Fatalf("Downgrade(%d) reported %+v, want %+v naming a downgrade snapshot", target, done, want)
 	}
 	if _, err := os.Stat(filepath.Join(dbsnapshot.DirFor(doltRoot), done.Snapshot)); err != nil {
@@ -363,7 +370,10 @@ func TestDowngradeFailurePartWayReportsTheStepsApplied(t *testing.T) {
 			if !errors.As(err, &rb) {
 				t.Fatalf("err = %v, want *DowngradeRollbackError", err)
 			}
-			if want := (storage.Downgraded{From: registryMax, Reversed: 1, Snapshot: rb.Snapshot.Name}); done == nil || *done != want {
+			if done == nil {
+				t.Fatal("Downgrade reported nothing, want what it did before the failure")
+			}
+			if want := (storage.Downgraded{From: registryMax, Reversed: 1, Snapshot: rb.Snapshot.Name, SnapshotLeftOut: done.SnapshotLeftOut}); !reflect.DeepEqual(*done, want) {
 				t.Fatalf("Downgrade reported %+v, want %+v", done, want)
 			}
 			if got, err := st.recordedMigrationVersion(ctx); err != nil || got != registryMax-1 {
@@ -393,7 +403,7 @@ func TestDowngradeSnapshotFailureReportsTheVersionItRead(t *testing.T) {
 	if err == nil {
 		t.Fatal("Downgrade with an unwritable snapshots dir returned nil")
 	}
-	if want := (storage.Downgraded{From: registryMax}); done == nil || *done != want {
+	if want := (storage.Downgraded{From: registryMax}); done == nil || !reflect.DeepEqual(*done, want) {
 		t.Fatalf("Downgrade reported %+v, want %+v", done, want)
 	}
 }
@@ -439,7 +449,7 @@ func TestDowngradePruneFailureReportsTheCommittedReverse(t *testing.T) {
 	if done.PruneErr == nil || !strings.Contains(done.PruneErr.Error(), "prune downgrade snapshots") {
 		t.Fatalf("PruneErr = %v, want the prune failure", done.PruneErr)
 	}
-	if want := (storage.Downgraded{From: registryMax, Reversed: 1, Snapshot: done.Snapshot, PruneErr: done.PruneErr}); *done != want {
+	if want := (storage.Downgraded{From: registryMax, Reversed: 1, Snapshot: done.Snapshot, SnapshotLeftOut: done.SnapshotLeftOut, PruneErr: done.PruneErr}); !reflect.DeepEqual(*done, want) {
 		t.Fatalf("Downgrade reported %+v, want %+v", done, want)
 	}
 	if applied, err := st.AppliedSchemaVersion(ctx); err != nil || applied != registryMax-1 {
@@ -502,7 +512,7 @@ func TestDowngradeSpanUnsupportedRefused(t *testing.T) {
 
 	before := snapshotCount(t, doltRoot)
 	done, err := st.Downgrade(ctx, registryMax)
-	if want := (storage.Downgraded{From: ahead}); done == nil || *done != want {
+	if want := (storage.Downgraded{From: ahead}); done == nil || !reflect.DeepEqual(*done, want) {
 		t.Fatalf("Downgrade reported %+v, want %+v", done, want)
 	}
 	var unsupported *DowngradeSpanUnsupportedError

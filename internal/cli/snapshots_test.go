@@ -29,9 +29,20 @@ func firstSnapshotName(out string) string {
 	return ""
 }
 
+// TestSnapshotsNew_ProducesSnapshot also pins that what the snapshot's copy
+// left out lands on the command's event: here the temp table file a dead Dolt
+// process left.
 func TestSnapshotsNew_ProducesSnapshot(t *testing.T) {
+	isolateEvents(t)
 	repo, ws := initBootstrapTestRepo(t)
 	chdir(t, repo)
+	temp := filepath.Join(ws.DatabasePath, "links", ".dolt", dbsnapshot.TempTableFilesDirName)
+	if err := os.MkdirAll(temp, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(temp, "buffered_file_byte_sink_1"), []byte("left by a dead process"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	before := countUserSnapshots(t, ws)
 
@@ -42,6 +53,10 @@ func TestSnapshotsNew_ProducesSnapshot(t *testing.T) {
 	}
 	if got := countUserSnapshots(t, ws); got-before != 1 {
 		t.Fatalf("user-snapshot delta = %d, want 1 (before=%d)", got-before, before)
+	}
+	leftOut, _ := lastEvent(t).Facts["snapshots.left_out"].([]any)
+	if !slices.Contains(leftOut, any("links/.dolt/"+dbsnapshot.TempTableFilesDirName)) {
+		t.Errorf("snapshots.left_out = %v, want it to name the temp table files the snapshot left out", lastEvent(t).Facts["snapshots.left_out"])
 	}
 }
 

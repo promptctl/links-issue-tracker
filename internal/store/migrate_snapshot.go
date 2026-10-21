@@ -101,7 +101,7 @@ func isAllDigits(s string) bool {
 type snapshotGuard struct {
 	databaseDir string
 	label       string
-	taken       *dbsnapshot.Snapshot
+	taken       *dbsnapshot.Taken
 }
 
 func newSnapshotGuard(databaseDir, label string) *snapshotGuard {
@@ -113,13 +113,13 @@ func newSnapshotGuard(databaseDir, label string) *snapshotGuard {
 
 // ensure takes the snapshot on first call and returns the cached snapshot on
 // subsequent calls. Idempotent within one migrate() invocation.
-func (g *snapshotGuard) ensure(ctx context.Context) (dbsnapshot.Snapshot, error) {
+func (g *snapshotGuard) ensure(ctx context.Context) (dbsnapshot.Taken, error) {
 	if g.taken != nil {
 		return *g.taken, nil
 	}
 	snap, err := dbsnapshot.Take(ctx, g.databaseDir, g.label)
 	if err != nil {
-		return dbsnapshot.Snapshot{}, fmt.Errorf("snapshot before migration: %w", err)
+		return dbsnapshot.Taken{}, fmt.Errorf("snapshot before migration: %w", err)
 	}
 	g.taken = &snap
 	return snap, nil
@@ -128,9 +128,9 @@ func (g *snapshotGuard) ensure(ctx context.Context) (dbsnapshot.Snapshot, error)
 // took reports the snapshot if one was taken during this migrate() invocation.
 // The boolean discriminates "we have a recovery point" from "no mutation
 // happened, no recovery needed".
-func (g *snapshotGuard) took() (dbsnapshot.Snapshot, bool) {
+func (g *snapshotGuard) took() (dbsnapshot.Taken, bool) {
 	if g.taken == nil {
-		return dbsnapshot.Snapshot{}, false
+		return dbsnapshot.Taken{}, false
 	}
 	return *g.taken, true
 }

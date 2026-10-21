@@ -318,7 +318,8 @@ type SchemaMigrator interface {
 
 // Migrated is what an open did to the stored shape: whether it had to build
 // the database first, the recovery snapshot it took before migrating, "" when
-// it found nothing to migrate, why rolling older migration snapshots or
+// it found nothing to migrate, and what that snapshot's copy left out, nil
+// when it took none, why rolling older migration snapshots or
 // checkpoints off after its work committed failed, if it did, and the newer
 // schema it served, if it did.
 // [LAW:types-are-the-program] PruneErr is a field, not the open's error: each
@@ -327,10 +328,11 @@ type SchemaMigrator interface {
 // the command over a leftover snapshot or checkpoint, and the next open,
 // finding nothing to migrate, would succeed without retrying the prune.
 type Migrated struct {
-	Bootstrap   Bootstrap
-	Snapshot    string
-	PruneErr    error
-	SchemaAhead SchemaAhead
+	Bootstrap       Bootstrap
+	Snapshot        string
+	SnapshotLeftOut []string
+	PruneErr        error
+	SchemaAhead     SchemaAhead
 }
 
 // SchemaAhead is a workspace schema newer than the binary that served it: the
@@ -410,25 +412,28 @@ func OpenMigration(st Store) Migrated {
 // EventRecord is the open's migration as event facts.
 func (m Migrated) EventRecord() map[string]any {
 	facts := m.Bootstrap.EventRecord()
-	maps.Copy(facts, MigrationRecoveryFacts(m.Snapshot, m.PruneErr))
+	maps.Copy(facts, MigrationRecoveryFacts(m.Snapshot, m.SnapshotLeftOut, m.PruneErr))
 	maps.Copy(facts, m.SchemaAhead.EventRecord())
 	return facts
 }
 
 // MigrationRecoveryFacts is the recovery snapshot an open took, "" when none,
-// and why its prunes failed, as event facts. A successful open and a failed
-// one record them under these same keys. [LAW:one-source-of-truth]
-func MigrationRecoveryFacts(snapshot string, pruneErr error) map[string]any {
+// what its copy left out, nil when none was taken, and why its prunes failed,
+// as event facts. A successful open and a failed one record them under these
+// same keys. [LAW:one-source-of-truth]
+func MigrationRecoveryFacts(snapshot string, leftOut []string, pruneErr error) map[string]any {
 	return map[string]any{
-		"migration.snapshot":    snapshot,
-		"migration.prune_error": telemetry.ErrorText(pruneErr),
+		"migration.snapshot":          snapshot,
+		"migration.snapshot_left_out": leftOut,
+		"migration.prune_error":       telemetry.ErrorText(pruneErr),
 	}
 }
 
 // Downgraded is what a Downgrade did: the shape version it read under the lock
 // and decided from, how many down-migrations it applied, the recovery snapshot
 // it took first, and why rolling older recovery snapshots off afterwards
-// failed, if it did. A Downgrade that stops before a step leaves that step's
+// failed, if it did. SnapshotLeftOut is what the snapshot's copy left out.
+// A Downgrade that stops before a step leaves that step's
 // field zero: a refusal or a target equal to the applied version reverses
 // nothing and takes no snapshot.
 // [LAW:one-source-of-truth] the read that made the decision is the one
@@ -439,10 +444,11 @@ func MigrationRecoveryFacts(snapshot string, pruneErr error) map[string]any {
 // where the caller asked for it; a caller that stops on that error must not
 // stop on a leftover snapshot.
 type Downgraded struct {
-	From     int64
-	Reversed int
-	Snapshot string
-	PruneErr error
+	From            int64
+	Reversed        int
+	Snapshot        string
+	SnapshotLeftOut []string
+	PruneErr        error
 }
 
 // EventRecord is the downgrade as event facts and counts, so the success and
@@ -451,6 +457,7 @@ func (d Downgraded) EventRecord() (map[string]any, map[string]int) {
 	return map[string]any{
 			"downgrade.workspace_schema":     d.From,
 			"downgrade.snapshot":             d.Snapshot,
+			"downgrade.snapshot_left_out":    d.SnapshotLeftOut,
 			"downgrade.snapshot_prune_error": telemetry.ErrorText(d.PruneErr),
 		}, map[string]int{
 			"downgrade.reversed": d.Reversed,

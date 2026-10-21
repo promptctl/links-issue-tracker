@@ -846,7 +846,7 @@ Test hooks: `migrationUpByOneForTest` (`migration_runner.go`) applies **only** t
 3. On `fail != nil`: `fail.PruneErr = pruneErr`; return `fail`, a `*SchemaConvergenceError`.
 4. On success: `Migrated{SchemaAhead: op.schemaAhead(), PruneErr: pruneErr}`. With no snapshot taken, return it. With one → `Snapshot: snap.Name`, then `prune(pruneMigrationSnapshots, "prune migration snapshots", dbsnapshot.PruneMatching(s.doltRootDir, 10, IsMigrationSnapshotName))`, joined into `PruneErr`. No prune failure is the returned error (`migration_runner.go`). `Open` keeps the report on the handle, read back through `(*Store).Migrated()`; a sync open reports its bootstrap and the newer schema it served, and a read open that migrated nothing reports only the newer schema it served (`store.go`, `sync.go`, `migration_runner.go`).
 
-**`SchemaConvergenceError`** (`convergence.go`): `{Step ConvergenceStep; Snapshot *dbsnapshot.Snapshot; PruneErr error; Cause error}`; `Unwrap()` is `Cause`. `Error()`: `"schema convergence step %s failed: %v"` (step token, cause), then, when `Snapshot` is set, `"this open took recovery snapshot %s before migrating; it holds the workspace as it was then:\n  %s"` (name, path), then, when `PruneErr` is set, `"removing old migration checkpoints or snapshots also failed: %v"`. No restore instruction. `EventRecord()`: `storage.MigrationRecoveryFacts(snapshot name or "", PruneErr)` plus `migration.failed_step` = the step token.
+**`SchemaConvergenceError`** (`convergence.go`): `{Step ConvergenceStep; Snapshot *dbsnapshot.Taken; PruneErr error; Cause error}`; `Unwrap()` is `Cause`. `Error()`: `"schema convergence step %s failed: %v"` (step token, cause), then, when `Snapshot` is set, `"this open took recovery snapshot %s before migrating; it holds the workspace as it was then:\n  %s"` (name, path), then, when `PruneErr` is set, `"removing old migration checkpoints or snapshots also failed: %v"`. No restore instruction. `EventRecord()`: `storage.MigrationRecoveryFacts(snapshot name or "", its LeftOut or nil, PruneErr)` plus `migration.failed_step` = the step token.
 
 **Steps** (`convergence.go`): `ConvergenceStep` int enum with sentinel `convergenceStepCount`; `convergenceSteps [convergenceStepCount]struct{token; act}` declares each step's token and `ConvergenceAct`. `ConvergenceAct`: 0 is no act; `ActClearCause`; `ActRestoreSnapshot`; `ActEscalate`. `String()`, `Act()`, `ConvergenceSteps()` (every step, in order). Tokens and acts, in order: `classify`, `verify_content`, `refuse_unwritable`, `drift_checkpoint`, `drift_repair`, `drift_repair_reset`, `ensure_quarantine_table` (ClearCause); `quarantine_table_shape` (Escalate); `commit_quarantine_table`, `check_quarantine`, `check_reconcile_prerequisites` (ClearCause); `reconcile_prerequisites_missing` (Escalate); `snapshot`, `reconcile`, `verify_reconciled_shape` (ClearCause); `reconciled_shape_differs` (Escalate); `adopt_drop_legacy_key`, `adopt_version_table` (ClearCause); `adopt_stamp` (RestoreSnapshot); `commit_adoption_stamp`, `migration_provider`, `migration_checkpoint`, `migration`, `commit_migration` (ClearCause); `migration_reset` (RestoreSnapshot); `commit_migration_reset`, `record_quarantine`, `commit_quarantine` (ClearCause).
 
@@ -1092,7 +1092,7 @@ Tests: `TestIsMigrationSnapshotNameRejectsUserCollisions` (`migrate_snapshot_tes
 
 ### 9.2 `snapshotGuard`
 
-`snapshotGuard{databaseDir, label string; taken *dbsnapshot.Snapshot}` (`migrate_snapshot.go`); `newSnapshotGuard` (`migrate_snapshot.go`).
+`snapshotGuard{databaseDir, label string; taken *dbsnapshot.Taken}` (`migrate_snapshot.go`); `newSnapshotGuard` (`migrate_snapshot.go`).
 
 `ensure(ctx)` (`migrate_snapshot.go`): if `taken != nil` return the cached snapshot. Otherwise `dbsnapshot.Take(ctx, databaseDir, label)`; failure → `"snapshot before migration: %w"`. **Idempotent within one invocation** — this is what makes exactly one snapshot per reconcile survive N GC-contention retries.
 
@@ -1801,7 +1801,8 @@ External dependency `github.com/promptctl/primitives/filelock` (`snapshot.go`, `
 - `var ErrSnapshotMissing = errors.New("dbsnapshot: snapshot not found")` — `snapshot.go`
 - `var ErrSnapshotsBusy = errors.New("snapshot producer beacon busy")` — `snapshot.go`
 - `func DirFor(databaseDir string) string` — `snapshot.go`
-- `func Take(ctx context.Context, databaseDir, label string) (Snapshot, error)` — `snapshot.go`
+- `type Taken struct { Snapshot; LeftOut []string }` — `snapshot.go`: a snapshot `Take` just made and the root-relative paths its copy left out (`[]` when none). A listed snapshot is a `Snapshot`, never a `Taken`.
+- `func Take(ctx context.Context, databaseDir, label string) (Taken, error)` — `snapshot.go`
 - `func List(databaseDir string) ([]Snapshot, error)` — `snapshot.go`
 - `func Restore(databaseDir, name string) (string, error)` — `snapshot.go`
 - `func Prune(databaseDir string, keep int) error` — `snapshot.go`

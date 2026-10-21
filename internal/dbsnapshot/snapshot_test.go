@@ -537,7 +537,7 @@ func TestTake_ConcurrentNoCollisions(t *testing.T) {
 				errs <- err
 				return
 			}
-			results <- s
+			results <- s.Snapshot
 		}()
 	}
 	wg.Wait()
