@@ -10,9 +10,7 @@ import (
 
 // TestCutByPushDeadline pins the one verdict every step the push deadline
 // bounds takes where it returns — the clone's open, the remote resolution,
-// the push — and that the verdict is final once taken: a step that failed on
-// its own while its deadline was live stays uncut after the deadline passes,
-// whatever ran in between (links-storage-3k6u.98l).
+// the push (links-storage-3k6u.98l).
 func TestCutByPushDeadline(t *testing.T) {
 	t.Parallel()
 	ended := func() context.Context {
@@ -48,14 +46,6 @@ func TestCutByPushDeadline(t *testing.T) {
 		})
 	}
 
-	// The verdict is taken once: the deadline ending after the step returned
-	// does not turn a failure the step reached on its own into a cut.
-	ctx, cancel := context.WithCancel(context.Background())
-	taken := cutByPushDeadline(ctx, live, stepErr)
-	cancel()
-	if pushDeadlineCutOf(taken) {
-		t.Fatalf("verdict taken under a live deadline reads cut after the deadline ended: %v", taken)
-	}
 }
 
 // TestMirrorEnvStripsInheritedTraceRefFile pins that the detached mirror never

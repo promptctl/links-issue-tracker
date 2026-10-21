@@ -135,8 +135,8 @@ func assertOutcomeRecordsTheCut(t *testing.T, ws workspace.Info) {
 	if !ok {
 		t.Fatalf("no push-outcome record after a cut attempt")
 	}
-	if !rec.DeadlineCut || !strings.Contains(rec.Reason, "before blaming the remote") {
-		t.Fatalf("push-outcome record = %+v; want deadline_cut and a reason naming the push deadline", rec)
+	if !rec.PushDeadlineCut || !strings.Contains(rec.Reason, "before blaming the remote") {
+		t.Fatalf("push-outcome record = %+v; want push_deadline_cut and a reason naming the push deadline", rec)
 	}
 }
 

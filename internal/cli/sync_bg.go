@@ -838,8 +838,10 @@ func pushDeadlineCutOf(err error) bool {
 // only that the work ran long. Naming a cause such as "a hung or slow remote
 // transport" would be a diagnosis nothing had observed, and it reads as
 // environmental and transient — something to retry past rather than a defect to
-// file. The text names what the deadline actually established, names both
-// causes that land here, and points at the evidence that separates them.
+// file. The text names what the deadline actually established, names every
+// cause that lands here — an undersized deadline, a stalled transport, a
+// stalled open of the clone (the open runs under the same deadline) — and
+// points at the evidence that separates them.
 // [FRAMING:representation] a message that asserts more than its signal carries
 // is a map of a territory nobody visited.
 //
@@ -852,7 +854,7 @@ func pushDeadlineCutOf(err error) bool {
 // nobody measures is how an invariant asserted in a comment stops being one.
 func pushDeadlineCutExplanation() error {
 	return fmt.Errorf(
-		"mirror push exceeded its %s deadline — a deadline, not a diagnosis: check %s's push= values before blaming the remote. Pushes clustered just under the deadline mean it is sized under this workspace's real push cost; one push far past it means the transport stopped answering. Nothing on the live store waits on the push, and the next mutation's mirror retries it",
+		"mirror push exceeded its %s deadline — a deadline, not a diagnosis: check %s's push= values before blaming the remote. Pushes clustered just under the deadline mean it is sized under this workspace's real push cost; one push far past it means the transport stopped answering, or the clone's open did when open= carries the time. Nothing on the live store waits on the push, and the next mutation's mirror retries it",
 		store.MirrorPushDeadline, mirrorLogName)
 }
 
