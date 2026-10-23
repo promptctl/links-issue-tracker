@@ -114,7 +114,7 @@ type sizedSnapshot struct {
 func measureFootprint(doltRootDir string) (footprint, error) {
 	var f footprint
 	var err error
-	if f.chunkStore, err = chunkStoreBytes(doltRootDir); err != nil {
+	if f.chunkStore, err = ChunkStoreBytes(doltRootDir); err != nil {
 		return footprint{}, err
 	}
 	if f.tempTableFiles, err = bytesUnder(TempTableFilesDir(doltRootDir)); err != nil {

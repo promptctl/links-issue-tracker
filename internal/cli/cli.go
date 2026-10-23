@@ -185,14 +185,12 @@ func runWithApp(ctx context.Context, inv Invocation, accessMode app.AccessMode, 
 		}
 		return err
 	}
-	// The engine closes in the inner function below (including on panic, as a
-	// deferred close), so the close always precedes the automatic sync below,
-	// which needs only the workspace.
-	runErr := func() error {
-		defer ap.Close()
+	// The engine closes inside runThenMeasure (including on panic), so the close
+	// always precedes the automatic sync below, which needs only the workspace.
+	runErr := runThenMeasure(ctx, ws.DatabasePath, ap.Close, func() error {
 		reportOpenMigration(ctx, storage.OpenMigration(ap.Store))
 		return run(ctx, ap)
-	}()
+	})
 	// After the close, so the write happens outside the workspace lock, and
 	// before the error check, because a fact recorded before a failure is still
 	// true: `lit next` reports finding nothing as an error, and that is the fact.
@@ -541,15 +539,16 @@ func runList(ctx context.Context, inv Invocation, surface listSurface, args []st
 			// including no workspace at all.
 			return fmt.Errorf("open store at %q read-only: %w", atDir.path(), markEngineOpenContention(err, infoForLocation(loc)))
 		}
-		defer func() { _ = st.Close() }()
-		reportOpenMigration(ctx, storage.OpenMigration(st))
-		// noReadyPolicy, for the reason gatherCrossProjectRollup states at its own
-		// foreign-store call: a Location carries no repo root, so there is no ready
-		// policy to read. It opts out of ONLY the field-presence gate; every
-		// store-intrinsic annotation — blockers, the lane gate, reserved blocking
-		// labels — still runs, so `--columns blocked` over a foreign store answers the
-		// registry's question minus the one input that store cannot supply.
-		return l.work(ctx, inv, listScope{store: st, policy: noReadyPolicy}, positional)
+		return runThenMeasure(ctx, loc.DatabasePath, st.Close, func() error {
+			reportOpenMigration(ctx, storage.OpenMigration(st))
+			// noReadyPolicy, for the reason gatherCrossProjectRollup states at its own
+			// foreign-store call: a Location carries no repo root, so there is no ready
+			// policy to read. It opts out of ONLY the field-presence gate; every
+			// store-intrinsic annotation — blockers, the lane gate, reserved blocking
+			// labels — still runs, so `--columns blocked` over a foreign store answers the
+			// registry's question minus the one input that store cannot supply.
+			return l.work(ctx, inv, listScope{store: st, policy: noReadyPolicy}, positional)
+		})
 	}
 	return runWithApp(ctx, inv, app.AccessRead, func(ctx context.Context, ap *app.App) error {
 		return l.work(ctx, inv, listScope{store: ap.Store, policy: workspaceReadyPolicy(inv.Env, ap)}, positional)

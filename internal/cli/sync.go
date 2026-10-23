@@ -147,9 +147,10 @@ func withSyncStore(declare syncLeafFn) wsLeafFn {
 				// tell a starved OPEN from a handler-traced mid-command contention.
 				return markEngineOpenContention(err, ws)
 			}
-			defer closeStore()
-			reportOpenMigration(ctx, storage.OpenMigration(session.engine))
-			return l.work(ctx, inv, syncScope{ws: ws, session: session}, positional)
+			return runThenMeasure(ctx, ws.DatabasePath, closeStore, func() error {
+				reportOpenMigration(ctx, storage.OpenMigration(session.engine))
+				return l.work(ctx, inv, syncScope{ws: ws, session: session}, positional)
+			})
 		})
 	}
 }

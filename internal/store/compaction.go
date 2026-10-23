@@ -199,12 +199,23 @@ func measureCompactionSignals(doltRootDir string) (compactionSignals, error) {
 	return signals, nil
 }
 
-// chunkStoreBytes is the size on disk of everything the store at doltRootDir
+// ChunkStoreBytes is the size on disk of everything the store at doltRootDir
 // keeps its chunks in: the journal, both generations and the manifests.
 // Unlike measureCompactionSignals it walks the whole chunk store, so it is
-// read around a pass that can shrink the store, never as a cheap probe.
-func chunkStoreBytes(doltRootDir string) (int64, error) {
-	total, err := bytesUnder(nomsDir(doltRootDir))
+// read around a pass that can shrink the store, or once a command has closed
+// its store, never as a cheap probe.
+//
+// A store has a chunk store from the moment it exists, so one that is absent
+// has no size: the path is wrong, or the store was replaced underneath the
+// reader. That is an error, never 0 bytes, which would read as a confident
+// measurement. Files that vanish mid-walk are collection churn and read as
+// gone. [LAW:no-silent-failure]
+func ChunkStoreBytes(doltRootDir string) (int64, error) {
+	dir := nomsDir(doltRootDir)
+	if _, err := os.Stat(dir); err != nil {
+		return 0, fmt.Errorf("measure the chunk store's size on disk: %w", err)
+	}
+	total, err := bytesUnder(dir)
 	if err != nil {
 		return 0, fmt.Errorf("measure the chunk store's size on disk: %w", err)
 	}

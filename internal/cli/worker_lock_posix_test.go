@@ -71,7 +71,8 @@ func runWorkerOutlivedByChild() {
 		fmt.Println(child.Process.Pid)
 		return nil
 	})
-	if err := leaf.work(context.Background(), cwdInvocation(os.Stdout, os.Stdout, nil), workspace.Info{}, nil); err != nil {
+	// Under an invocation, as Run runs every leaf: the leaf records its event.
+	if err := leaf.work(underInvocation(context.Background()), cwdInvocation(os.Stdout, os.Stdout, nil), workspace.Info{}, nil); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

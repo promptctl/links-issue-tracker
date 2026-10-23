@@ -88,3 +88,12 @@ func Open(ctx context.Context, env environ.Env, mode Mode, doltRootDir string, w
 	}
 	return engine, nil
 }
+
+// ChunkStoreBytes is the size on disk of the data the engine keeps for the
+// workspace at doltRootDir, read from the filesystem alone, with no engine
+// open. For the Dolt engine that is store.ChunkStoreBytes, whose contract it
+// carries; callers above this package name no engine's layout.
+// [LAW:one-way-deps]
+func ChunkStoreBytes(doltRootDir string) (int64, error) {
+	return store.ChunkStoreBytes(doltRootDir)
+}

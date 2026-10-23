@@ -339,7 +339,7 @@ func (s *Store) publishReRoot(ctx context.Context, remote storage.RemoteName, br
 func (s *Store) collectBelowTheCut(ctx context.Context) storage.Collection {
 	var c storage.Collection
 	var beforeErr, afterErr error
-	c.BytesBefore, beforeErr = chunkStoreBytes(s.doltRootDir)
+	c.BytesBefore, beforeErr = ChunkStoreBytes(s.doltRootDir)
 	var sweep refSweepOutcome
 	err := s.runSyncMutation(ctx, func(ctx context.Context) error {
 		for _, prefix := range []string{migrationCheckpointPrefix, migrationDriftRepairCheckpointPrefix} {
@@ -357,7 +357,7 @@ func (s *Store) collectBelowTheCut(ctx context.Context) storage.Collection {
 		sweep = sweep.plus(swept)
 		return err
 	})
-	c.BytesAfter, afterErr = chunkStoreBytes(s.doltRootDir)
+	c.BytesAfter, afterErr = ChunkStoreBytes(s.doltRootDir)
 	c.Sweep = sweep.Report()
 	c.Err = errors.Join(err, beforeErr, afterErr)
 	return c
