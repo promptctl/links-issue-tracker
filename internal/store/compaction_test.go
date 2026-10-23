@@ -18,44 +18,44 @@ func TestDueModeSelectsDepthByFootprint(t *testing.T) {
 	t.Parallel()
 
 	for _, tc := range []struct {
-		name      string
-		footprint storeFootprint
-		wantMode  GCMode
-		wantDue   bool
+		name     string
+		signals  compactionSignals
+		wantMode GCMode
+		wantDue  bool
 	}{
 		{
-			name:      "an untouched store needs nothing",
-			footprint: storeFootprint{},
-			wantDue:   false,
+			name:    "an untouched store needs nothing",
+			signals: compactionSignals{},
+			wantDue: false,
 		},
 		{
-			name:      "a journal below the threshold needs nothing",
-			footprint: storeFootprint{JournalBytes: journalDueBytes - 1},
-			wantDue:   false,
+			name:    "a journal below the threshold needs nothing",
+			signals: compactionSignals{JournalBytes: journalDueBytes - 1},
+			wantDue: false,
 		},
 		{
-			name:      "a journal at the threshold earns a shallow pass",
-			footprint: storeFootprint{JournalBytes: journalDueBytes},
-			wantMode:  GCNewGen,
-			wantDue:   true,
+			name:     "a journal at the threshold earns a shallow pass",
+			signals:  compactionSignals{JournalBytes: journalDueBytes},
+			wantMode: GCNewGen,
+			wantDue:  true,
 		},
 		{
-			name:      "archives below the threshold do not earn a deep pass",
-			footprint: storeFootprint{OldGenArchives: archivesDueCount - 1},
-			wantDue:   false,
+			name:    "archives below the threshold do not earn a deep pass",
+			signals: compactionSignals{OldGenArchives: archivesDueCount - 1},
+			wantDue: false,
 		},
 		{
-			name:      "archives at the threshold earn a deep pass",
-			footprint: storeFootprint{OldGenArchives: archivesDueCount},
-			wantMode:  GCFull,
-			wantDue:   true,
+			name:     "archives at the threshold earn a deep pass",
+			signals:  compactionSignals{OldGenArchives: archivesDueCount},
+			wantMode: GCFull,
+			wantDue:  true,
 		},
 		{
 			// The deep pass collects the new generation too, so a store that
 			// warrants both wants one deep pass rather than a shallow one now
 			// and a deep one later.
 			name: "a store warranting both is collected deeply, once",
-			footprint: storeFootprint{
+			signals: compactionSignals{
 				JournalBytes:   journalDueBytes * 4,
 				OldGenArchives: archivesDueCount,
 			},
@@ -66,26 +66,26 @@ func TestDueModeSelectsDepthByFootprint(t *testing.T) {
 			// The gap this whole feature exists for: a workspace that never
 			// pushes accumulates journal and never accumulates archives, so
 			// the archive threshold alone would never fire for it.
-			name:      "a never-pushed store is caught by the journal alone",
-			footprint: storeFootprint{JournalBytes: journalDueBytes * 2, OldGenArchives: 0},
-			wantMode:  GCNewGen,
-			wantDue:   true,
+			name:     "a never-pushed store is caught by the journal alone",
+			signals:  compactionSignals{JournalBytes: journalDueBytes * 2, OldGenArchives: 0},
+			wantMode: GCNewGen,
+			wantDue:  true,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			mode, due := dueMode(tc.footprint)
+			mode, due := dueMode(tc.signals)
 			if due != tc.wantDue {
-				t.Fatalf("dueMode(%+v) due = %v, want %v", tc.footprint, due, tc.wantDue)
+				t.Fatalf("dueMode(%+v) due = %v, want %v", tc.signals, due, tc.wantDue)
 			}
 			if due && mode != tc.wantMode {
-				t.Fatalf("dueMode(%+v) mode = %v, want %v", tc.footprint, mode, tc.wantMode)
+				t.Fatalf("dueMode(%+v) mode = %v, want %v", tc.signals, mode, tc.wantMode)
 			}
 		})
 	}
 }
 
-// writeStore lays down the parts of a Dolt store layout the footprint reads,
+// writeStore lays down the parts of a Dolt store layout the compaction signals read,
 // using the same constants the production derivation uses so the fixture cannot
 // drift from what it stands in for.
 func writeStore(t *testing.T, journalBytes int, archives int) string {
@@ -123,13 +123,13 @@ func itoa(n int) string {
 	return string(digits)
 }
 
-func TestMeasureFootprintReadsJournalAndArchives(t *testing.T) {
+func TestMeasureCompactionSignalsReadsJournalAndArchives(t *testing.T) {
 	t.Parallel()
 
 	root := writeStore(t, 4096, 3)
-	got, err := measureFootprint(root)
+	got, err := measureCompactionSignals(root)
 	if err != nil {
-		t.Fatalf("measureFootprint() error = %v", err)
+		t.Fatalf("measureCompactionSignals() error = %v", err)
 	}
 	if got.JournalBytes != 4096 {
 		t.Fatalf("JournalBytes = %d, want 4096", got.JournalBytes)
@@ -142,22 +142,22 @@ func TestMeasureFootprintReadsJournalAndArchives(t *testing.T) {
 // A store with nothing in it is a real state with a real answer, not a failure:
 // this is what every workspace looks like immediately after `lit init`, and a
 // backstop that errored here would be loud on every fresh repo.
-func TestMeasureFootprintReadsAnAbsentStoreAsEmpty(t *testing.T) {
+func TestMeasureCompactionSignalsReadsAnAbsentStoreAsEmpty(t *testing.T) {
 	t.Parallel()
 
-	got, err := measureFootprint(t.TempDir())
+	got, err := measureCompactionSignals(t.TempDir())
 	if err != nil {
-		t.Fatalf("measureFootprint() on an absent store error = %v", err)
+		t.Fatalf("measureCompactionSignals() on an absent store error = %v", err)
 	}
-	if got != (storeFootprint{}) {
-		t.Fatalf("measureFootprint() on an absent store = %+v, want the empty footprint", got)
+	if got != (compactionSignals{}) {
+		t.Fatalf("measureCompactionSignals() on an absent store = %+v, want empty signals", got)
 	}
 }
 
 // Only Dolt's own archive suffix counts. The old generation also holds a
 // manifest and a lock file, and counting those would inflate the archive count
 // and trigger deep passes that reclaim nothing.
-func TestMeasureFootprintCountsOnlyArchives(t *testing.T) {
+func TestMeasureCompactionSignalsCountsOnlyArchives(t *testing.T) {
 	t.Parallel()
 
 	root := writeStore(t, 0, 2)
@@ -167,9 +167,9 @@ func TestMeasureFootprintCountsOnlyArchives(t *testing.T) {
 			t.Fatalf("write %s: %v", name, err)
 		}
 	}
-	got, err := measureFootprint(root)
+	got, err := measureCompactionSignals(root)
 	if err != nil {
-		t.Fatalf("measureFootprint() error = %v", err)
+		t.Fatalf("measureCompactionSignals() error = %v", err)
 	}
 	if got.OldGenArchives != 2 {
 		t.Fatalf("OldGenArchives = %d, want 2 (manifest and LOCK must not count)", got.OldGenArchives)

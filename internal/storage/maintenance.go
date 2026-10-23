@@ -81,6 +81,10 @@ type HealthReport struct {
 	// members. Naming the state an impossibility rather than a choice is what
 	// tells the operator the ordering is forced. [LAW:no-silent-failure]
 	Unchecked []string `json:"unchecked"`
-	Errors    []string `json:"errors"`
-	Warnings  []string `json:"warnings"`
+	// Footprint is the store's size on disk against its ceiling. A store over
+	// its ceiling is reported among Warnings, naming the part holding the
+	// bytes: it costs disk, never correctness.
+	Footprint Footprint `json:"footprint"`
+	Errors    []string  `json:"errors"`
+	Warnings  []string  `json:"warnings"`
 }

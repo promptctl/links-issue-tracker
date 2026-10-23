@@ -425,7 +425,7 @@ func TestDowngradePruneFailureReportsTheCommittedReverse(t *testing.T) {
 	dir := dbsnapshot.DirFor(doltRoot)
 	const base = int64(1700000000000000000)
 	var stuck string
-	for i := int64(0); i < downgradeSnapshotRetention; i++ {
+	for i := int64(0); i < automaticSnapshotsPerKind; i++ {
 		path := filepath.Join(dir, fmt.Sprintf("%d-lit-downgrade-%d", base+i, base+i))
 		if err := os.MkdirAll(path, 0o755); err != nil {
 			t.Fatalf("plant snapshot: %v", err)

@@ -220,15 +220,15 @@ func TestMigrateSnapshotPruneEnforcesRetention(t *testing.T) {
 	// budget. Kind-aware retention spares non-migration snapshots, so the
 	// labels here must satisfy IsMigrationSnapshotName for the prune to
 	// touch them at all.
-	for i := 0; i < migrationSnapshotRetention+5; i++ {
+	for i := 0; i < automaticSnapshotsPerKind+5; i++ {
 		label := formatMigrationSnapshotLabel(time.Now().Add(time.Duration(i) * time.Nanosecond))
 		if _, err := dbsnapshot.Take(context.Background(), doltRoot, label); err != nil {
 			t.Fatalf("Take migration-shaped snapshot %d error = %v", i, err)
 		}
 	}
 	beforeMigration := countMigrationSnapshots(t, doltRoot)
-	if beforeMigration <= migrationSnapshotRetention {
-		t.Fatalf("setup invariant: migration snapshot count = %d, expected > retention=%d", beforeMigration, migrationSnapshotRetention)
+	if beforeMigration <= automaticSnapshotsPerKind {
+		t.Fatalf("setup invariant: migration snapshot count = %d, expected > retention=%d", beforeMigration, automaticSnapshotsPerKind)
 	}
 
 	// Force the migration to do something so Prune runs at the tail.
@@ -242,8 +242,8 @@ func TestMigrateSnapshotPruneEnforcesRetention(t *testing.T) {
 		t.Fatalf("Close(second) error = %v", err)
 	}
 
-	if got := countMigrationSnapshots(t, doltRoot); got > migrationSnapshotRetention {
-		t.Fatalf("post-migrate migration-snapshot count = %d, want <= retention=%d", got, migrationSnapshotRetention)
+	if got := countMigrationSnapshots(t, doltRoot); got > automaticSnapshotsPerKind {
+		t.Fatalf("post-migrate migration-snapshot count = %d, want <= retention=%d", got, automaticSnapshotsPerKind)
 	}
 }
 
@@ -270,7 +270,7 @@ func TestMigratingOpenReportsAFailedSnapshotPrune(t *testing.T) {
 	}
 	const base = int64(1700000000000000000)
 	var stuck string
-	for i := int64(0); i < migrationSnapshotRetention; i++ {
+	for i := int64(0); i < automaticSnapshotsPerKind; i++ {
 		path := filepath.Join(dir, fmt.Sprintf("%d-%s-%d", base+i, migrationSnapshotLabel, base+i))
 		if err := os.MkdirAll(path, 0o755); err != nil {
 			t.Fatalf("plant snapshot: %v", err)
@@ -347,7 +347,7 @@ func TestMigrationPruneSparesUserSnapshots(t *testing.T) {
 			t.Fatalf("Take user snapshot %d: %v", i, err)
 		}
 	}
-	for i := 0; i < migrationSnapshotRetention+5; i++ {
+	for i := 0; i < automaticSnapshotsPerKind+5; i++ {
 		label := formatMigrationSnapshotLabel(time.Now().Add(time.Duration(i) * time.Nanosecond))
 		if _, err := dbsnapshot.Take(context.Background(), doltRoot, label); err != nil {
 			t.Fatalf("Take migration snapshot %d: %v", i, err)
@@ -379,8 +379,8 @@ func TestMigrationPruneSparesUserSnapshots(t *testing.T) {
 	if userKept != userSnaps {
 		t.Errorf("user snapshots after migration prune = %d, want %d (migration retention should not touch user snapshots)", userKept, userSnaps)
 	}
-	if migrationKept > migrationSnapshotRetention {
-		t.Errorf("migration snapshots after prune = %d, want <= %d", migrationKept, migrationSnapshotRetention)
+	if migrationKept > automaticSnapshotsPerKind {
+		t.Errorf("migration snapshots after prune = %d, want <= %d", migrationKept, automaticSnapshotsPerKind)
 	}
 }
 

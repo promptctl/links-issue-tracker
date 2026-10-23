@@ -254,7 +254,7 @@ func TestAFollowCarriesAFailedCollection(t *testing.T) {
 		t.Fatalf("Collections() = %+v; want the follow's one collection", collections)
 	}
 	c := collections[0]
-	if !c.Ran || c.Err == nil || !strings.Contains(c.Err.Error(), "measure the store's size on disk") {
+	if !c.Ran || c.Err == nil || !strings.Contains(c.Err.Error(), "measure the chunk store's size on disk") {
 		t.Fatalf("the collection = %+v; want the GC run and the failed size reading carried", c)
 	}
 	if got, ok := c.EventValue()["collection.error"].(*string); !ok || got == nil || *got != c.Err.Error() {
@@ -420,7 +420,7 @@ func TestACompactingPushReportsItsFollowsCollection(t *testing.T) {
 		t.Fatalf("Collections() = %+v; want the push's one collection", collections)
 	}
 	c := collections[0]
-	if want := fmt.Sprintf("store %s -> %s", humanBytes(c.BytesBefore), humanBytes(c.BytesAfter)); c.Entry != storage.SyncEntryPush || !c.Ran || !strings.Contains(pushed.Maintenance, want) {
+	if want := fmt.Sprintf("store %s -> %s", storage.FormatBytes(c.BytesBefore), storage.FormatBytes(c.BytesAfter)); c.Entry != storage.SyncEntryPush || !c.Ran || !strings.Contains(pushed.Maintenance, want) {
 		t.Fatalf("the push's maintenance = %q; want the push's collection %+v reported as %q", pushed.Maintenance, c, want)
 	}
 }

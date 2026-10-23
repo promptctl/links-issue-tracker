@@ -183,11 +183,12 @@ A command that opens a store to read or change its tickets, and every `lit
 sync` command, records what the open did to the store: whether it had to build
 the database, and what it did to the store's schema. An open that finds the
 schema behind this lit
-migrates it forward, taking a recovery snapshot first, then removes the oldest
-migration snapshots past the ten it keeps and the oldest Dolt checkpoints past
-the five of each kind it keeps. An open by a command that changes tickets,
-other than a `lit sync` command, also removes the temp table files a push,
-fetch or landing left staged when it failed, was cut short or was killed, as
+migrates it forward, taking a recovery snapshot first, then retires the older
+recovery snapshots lit took itself as far as the store's size ceiling requires
+(it keeps the newest of each kind and at most ten of each), and removes the
+oldest Dolt checkpoints past the five of each kind it keeps. An open by a
+command that changes tickets, other than a `lit sync` command, also removes the
+temp table files a push, fetch or landing left staged when it failed, was cut short or was killed, as
 does a read open that hands a store behind this lit's schema to its migration;
 it does so only while it holds the store, so no live process's file is
 touched. For `lit ls --at`, that store is the one `--at` names, not the
@@ -198,7 +199,7 @@ working directory's.
 | `bootstrap` | `built` when the open found no database and built it; `built_over_dead_build` when it built it after removing what a lit process that died while building left behind; `none` when the database was already there, and for opens that only read. |
 | `migration.snapshot` | The recovery snapshot the open took before migrating, or `""` when it took none. |
 | `migration.snapshot_left_out` | What that snapshot's copy left out: paths relative to the store's Dolt directory, such as `links/.dolt/git-remote-cache` (the remote's mirror, which the first fetch after a restore clones again), `links/.dolt/temptf` (temp table files a dead Dolt process left) and `links/.dolt/noms/LOCK`; `[]` when it left out nothing, and `null` when the open took no snapshot. |
-| `migration.prune_error` | Why older migration snapshots or checkpoints could not be removed after the work they trail committed, or `null`. The command runs all the same, and prints a `warning: old migration snapshots or checkpoints were not removed:` line on stderr. |
+| `migration.prune_error` | Why lit's older recovery snapshots or the migration checkpoints could not be removed after the work they trail committed, or `null`. The command runs all the same, and prints a `warning: old migration snapshots or checkpoints were not removed:` line on stderr. |
 | `migration.failed_step` | Recorded only when the open fails: the step of its schema migration that failed, such as `migration`, `migration_reset` or `quarantine_table_shape`. The command's reason is read off this step. A failed open also records `migration.snapshot` (the snapshot it took before the failure, or `""`), `migration.snapshot_left_out` and `migration.prune_error`, and its message names the snapshot and the prune failure. |
 | `migration.checkpoint` | Recorded when the open fails in work it ran under a Dolt checkpoint, so that a failure resets the working set to it: a migration (steps `migration`, `commit_migration`, `migration_reset`, `commit_migration_reset`, `record_quarantine`, `commit_quarantine`) or a drift repair (`drift_repair`, `drift_repair_reset`). The checkpoint's name. |
 | `migration.recovery_error` | Recorded with `migration.checkpoint`: why the recovery step `migration.failed_step` names failed (the reset to the checkpoint, or recording the quarantine), or `null` when the recovery held. |
@@ -220,7 +221,7 @@ instead.
 | `counts.stores.migrated` | The stores whose open migrated them. |
 | `counts.stores.schema_ahead` | The stores at a schema newer than this lit. |
 | `counts.stores.read_only` | Those of them this lit reads but does not write. |
-| `counts.stores.prune_failures` | The stores whose open could not remove older migration snapshots or checkpoints after the work they trail committed: a migration or a repair of a recorded migration whose content changed. Each gets a `~ <storage dir>: warning: old migration snapshots or checkpoints were not removed:` line after the table. |
+| `counts.stores.prune_failures` | The stores whose open could not remove lit's older recovery snapshots or the migration checkpoints after the work they trail committed: a migration or a repair of a recorded migration whose content changed. Each gets a `~ <storage dir>: warning: old migration snapshots or checkpoints were not removed:` line after the table. |
 | `counts.stores.temp_table_files_collected` | How many temp table files a dead Dolt process left the opens removed, summed over the stores. A read open removes them only when it hands a store behind this lit's schema to the open that migrates it. |
 | `counts.stores.temp_table_files_failures` | The stores whose open could not remove all of them. Each gets a `~ <storage dir>: warning: temp table files a dead writer left were not all removed:` line after the table. |
 
@@ -439,7 +440,7 @@ the ones it had.
 | `downgrade.snapshot` | The recovery snapshot taken before the first down-migration, or `""` when none was taken. |
 | `downgrade.snapshot_left_out` | What that snapshot's copy left out, as `migration.snapshot_left_out` reads, or `null` when none was taken. |
 | `counts.downgrade.reversed` | The down-migrations applied. `0` when none ran; on a reverse that failed part-way, those applied before it stopped. |
-| `downgrade.snapshot_prune_error` | Why older downgrade snapshots could not be removed after the reverse, or `null`. The downgrade prints the failure as a `warning:` line and still installs the `--to` release. |
+| `downgrade.snapshot_prune_error` | Why lit's older recovery snapshots could not be removed after the reverse, or `null`. The downgrade prints the failure as a `warning:` line and still installs the `--to` release. |
 | `downgrade.installed_path` | The path the `--to` release was installed to. Absent when nothing was installed. |
 
 ## What `lit unquarantine` records
@@ -467,6 +468,9 @@ exception is `doctor.reranked`, which the repair sets as it runs.
 | `doctor.rank_inversions` | The blocked-by edges between live issues whose dependency tree order lists after its dependent, as the status line prints it: a count, or `"unchecked"`. Edges inside a group of frame-mates whose lifted edges loop are not counted. |
 | `doctor.dependency_cycle` | A loop of blocked-by edges between live issues, its members joined by `->` with the first repeated last, `"none"` when there is no loop, or `"unchecked"`. `--fix=rank` refuses while one stands. |
 | `doctor.interleaved` | How many interleaved groups the report names, or `"unchecked"`: frame-mates whose issues wait on one another both ways through no loop of their own edges. |
+| `doctor.footprint_bytes` | The store's size on disk that its size ceiling counts, in bytes: every part but the remote cache; `"unmeasured"` when its size could not be read. |
+| `doctor.footprint_ceiling` | The store's size ceiling, in bytes; `"unmeasured"` when its size could not be read. |
+| `doctor.over_ceiling` | The part holding the most bytes when the store is over its ceiling, such as `chunk store` or `automatic snapshots`, `"none"` when it is within it, or `"unmeasured"` when its size could not be read. |
 | `doctor.reranked` | The issues `--fix=rank` gave a new rank key, as an integer. Present only when that repair runs. |
 
 ## Reading the file

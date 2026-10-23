@@ -92,7 +92,7 @@ func maybeAutoSyncAfterCommand(ctx context.Context, env environ.Env, accessMode 
 	// "nothing else collects this store" case, as the one workspace that
 	// silently loses its backstop. [LAW:decomposition]
 	if accessMode == app.AccessWrite {
-		compactInline(ctx, env, ws)
+		maintainInline(ctx, env, ws)
 	}
 }
 

@@ -308,7 +308,7 @@ Defaults are set in `Load` (`internal/config/config.go`).
   `LIT_DISABLE_AUTO_SYNC` is truthy; loads config (unreadable ⇒
   `lit: automatic sync skipped, config unreadable: %v` on stderr and return); runs
   `ensureMirrorCoverage` when the cadence says so; runs `scheduleReceive` when `sync.receive`;
-  runs `compactInline` when the access mode was write.
+  runs `maintainInline` when the access mode was write.
 - Timing constants: `receiveDebounceInterval = 5 * time.Minute`
   (`internal/cli/sync_cadence.go`); `remoteAbsentRecheckInterval = 10 * time.Second`
   (`internal/cli/sync_cadence.go`).

@@ -733,7 +733,7 @@ func (s *Store) compactWithinLock(ctx context.Context, mode GCMode) (compactionA
 // involved. It is what a workspace that never pushes has to reach for, and the
 // depth is the caller's to choose.
 //
-// The before/after footprint is measured around the pass and returned already
+// The before/after compaction signals are measured around the pass and returned already
 // rendered, so a caller learns what was reclaimed without having to read this
 // engine's on-disk layout for itself. The two readings straddle the lock rather
 // than sitting inside it: they are an account of what happened, never an input
@@ -747,7 +747,7 @@ func (s *Store) SyncCompact(ctx context.Context, mode GCMode) (storage.Compactio
 		// engine refuses the same set. [LAW:single-enforcer]
 		return storage.CompactionOutcome{}, fmt.Errorf("compact: illegal depth %d (want %q or %q)", int(mode), storage.GCNewGen, storage.GCFull)
 	}
-	before, beforeErr := s.measureFootprint()
+	before, beforeErr := s.measureCompactionSignals()
 	var attempt compactionAttempt
 	var sweep refSweepOutcome
 	// [LAW:single-enforcer] Dolt garbage collection is exposed through a single Store entrypoint so every caller routes through the same commit-lock and retry wrapper.
@@ -760,12 +760,12 @@ func (s *Store) SyncCompact(ctx context.Context, mode GCMode) (storage.Compactio
 	})
 	// Measured on both paths, because a pass that ran and then failed to
 	// reconnect rewrote the store exactly as much as one that succeeded. The
-	// reading survives a dead connection: measureFootprint is one Stat and one
+	// reading survives a dead connection: measureCompactionSignals is one Stat and one
 	// ReadDir against the filesystem, with no engine and no lock involved.
-	after, afterErr := s.measureFootprint()
-	// The sweep's line joins the footprint's: both are this pass's account of
+	after, afterErr := s.measureCompactionSignals()
+	// The sweep's line joins the signals': both are this pass's account of
 	// what it changed on disk, and Detail is where that account goes.
-	outcome := attempt.outcome(joinMaintenance(footprintDelta(before, after, errors.Join(beforeErr, afterErr)), sweep.Report()))
+	outcome := attempt.outcome(joinMaintenance(signalsDelta(before, after, errors.Join(beforeErr, afterErr)), sweep.Report()))
 	if err != nil {
 		// The outcome is returned populated ALONGSIDE the error, because it
 		// describes the compaction and the compaction may well have happened —
@@ -790,23 +790,44 @@ func (s *Store) SyncCompact(ctx context.Context, mode GCMode) (storage.Compactio
 	return outcome, nil
 }
 
-// CompactIfDue compacts only when this store's own footprint says a pass is
-// owed. It is the backstop's entrypoint: the judgment lives here, beside the
-// layout it reads, so a cadence owner never has to know what a journal is.
-// [LAW:decomposition]
+// MaintainIfDue is the backstop's entrypoint: it compacts when this store's
+// compaction signals say a pass is owed, then holds the store under its size
+// ceiling by retiring automatic recovery snapshots, and reports both with the
+// footprint the probe left. The judgments live here, beside the layout they
+// read, so a cadence owner never has to know what a journal or a snapshot
+// is. [LAW:decomposition]
 //
-// "Nothing was due" returns a zero outcome and no error, because it is the
-// ordinary result — the check is cheap and meant to be asked often, while the
-// pass is neither.
-func (s *Store) CompactIfDue(ctx context.Context) (storage.CompactionOutcome, error) {
-	footprint, err := s.measureFootprint()
+// Both steps run every time, and the measurements decide how much each does:
+// "nothing was due" is a zero compaction, "within the ceiling" is nothing
+// pruned. Neither step is skipped for the other's failure — a compaction
+// that failed leaves the snapshots exactly as prunable — and their errors
+// are joined. [LAW:dataflow-not-control-flow] [LAW:no-silent-failure]
+//
+// The ceiling is never an input to compaction: a store over its ceiling with
+// nothing to reclaim runs no pass it did not already owe.
+func (s *Store) MaintainIfDue(ctx context.Context) (storage.MaintenanceOutcome, error) {
+	compaction, compactErr := s.compactIfDue(ctx)
+	held, pruneErr := s.pruneAutomaticSnapshots(ctx)
+	return storage.MaintenanceOutcome{
+		Compaction:      compaction,
+		SnapshotsPruned: held.pruned,
+		Footprint:       held.footprint,
+	}, errors.Join(compactErr, pruneErr)
+}
+
+// compactIfDue compacts only when this store's compaction signals say a pass
+// is owed. "Nothing was due" returns a zero outcome and no error, because it
+// is the ordinary result — the check is cheap and meant to be asked often,
+// while the pass is neither.
+func (s *Store) compactIfDue(ctx context.Context) (storage.CompactionOutcome, error) {
+	signals, err := s.measureCompactionSignals()
 	if err != nil {
 		// "I could not measure" is not "nothing is due". Returning the error
 		// keeps an unreadable store from quietly ceasing to be maintained.
 		// [LAW:no-silent-failure]
-		return storage.CompactionOutcome{}, fmt.Errorf("measure store footprint: %w", err)
+		return storage.CompactionOutcome{}, fmt.Errorf("measure compaction signals: %w", err)
 	}
-	mode, due := dueMode(footprint)
+	mode, due := dueMode(signals)
 	if !due {
 		return storage.CompactionOutcome{}, nil
 	}
@@ -815,7 +836,7 @@ func (s *Store) CompactIfDue(ctx context.Context) (storage.CompactionOutcome, er
 
 // chooseCompactionDepth picks the depth for the push path. The push always
 // compacts at least the new generation — that is this path's contract and it
-// does not become conditional on a measurement succeeding — so the footprint
+// does not become conditional on a measurement succeeding — so the signals
 // can only ever deepen the pass, never cancel it.
 //
 // A measurement that fails therefore returns a usable depth AND its error: the
@@ -824,11 +845,11 @@ func (s *Store) CompactIfDue(ctx context.Context) (storage.CompactionOutcome, er
 // instead of the store silently choosing for it.
 // [LAW:no-silent-failure]
 func (s *Store) chooseCompactionDepth() (GCMode, error) {
-	footprint, err := s.measureFootprint()
+	signals, err := s.measureCompactionSignals()
 	if err != nil {
 		return GCNewGen, err
 	}
-	if mode, due := dueMode(footprint); due {
+	if mode, due := dueMode(signals); due {
 		return mode, nil
 	}
 	return GCNewGen, nil

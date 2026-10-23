@@ -342,6 +342,52 @@ func printReportWarnings(w io.Writer, warnings []string) error {
 	return nil
 }
 
+// printFootprint writes the store's size on disk against its ceiling, then
+// every part of it, so a reader asking where the disk went is answered from
+// one line. A part the ceiling does not count says so beside its size. A
+// footprint that could not be read says so, and the warnings say why.
+func printFootprint(w io.Writer, fp storage.Footprint) error {
+	if !fp.Measured() {
+		_, err := fmt.Fprintln(w, "footprint: not measured")
+		return err
+	}
+	parts := make([]string, 0, len(fp.Components))
+	for _, c := range fp.Components {
+		part := c.Name + " " + storage.FormatBytes(c.Bytes)
+		if !c.Governed {
+			part += " (outside the ceiling)"
+		}
+		parts = append(parts, part)
+	}
+	_, err := fmt.Fprintf(w, "footprint: %s of a %s ceiling; %s\n",
+		storage.FormatBytes(fp.GovernedBytes()), storage.FormatBytes(fp.Ceiling), strings.Join(parts, ", "))
+	return err
+}
+
+// footprintFieldValue renders one footprint fact for the event: value when
+// the footprint was measured, "unmeasured" when it could not be read, so a
+// size never read is not recorded as a store of zero bytes under a zero
+// ceiling — the same reason doctorFieldValue spells "unchecked".
+// [LAW:no-silent-failure] [LAW:single-enforcer] every footprint fact renders
+// through here.
+func footprintFieldValue(fp storage.Footprint, value string) string {
+	if !fp.Measured() {
+		return "unmeasured"
+	}
+	return value
+}
+
+// overCeilingPart names the part holding the bytes of a store over its
+// ceiling, or "none" for a store within it, which states a clean check
+// rather than leaving an absent value to be read as one.
+func overCeilingPart(fp storage.Footprint) string {
+	over, ok := fp.Over()
+	if !ok {
+		return "none"
+	}
+	return over.Largest.Name
+}
+
 // printDoctorReport writes the health report to stdout: the workspace identity,
 // the status line and the lines that name its findings, then sync freshness.
 func printDoctorReport(ctx context.Context, stdout io.Writer, ap *app.App, report storage.HealthReport, syncReport doctorSyncReport) error {
@@ -372,6 +418,9 @@ func printDoctorReport(ctx context.Context, stdout io.Writer, ap *app.App, repor
 		return err
 	}
 	if _, err := fmt.Fprintf(stdout, "integrity_check=%s foreign_key_issues=%d invalid_related_rows=%d orphan_history_rows=%d rank_inversions=%s duplicate_ranks=%s dependency_cycle=%s parent_cycle=%s wait_loops=%s\n", report.IntegrityCheck, report.ForeignKeyIssues, report.InvalidRelatedRows, report.OrphanHistoryRows, rankInversions, duplicateRanks, dependencyCycle, parentCycle, waitLoopCount); err != nil {
+		return err
+	}
+	if err := printFootprint(stdout, report.Footprint); err != nil {
 		return err
 	}
 	if err := printReportWarnings(stdout, report.Warnings); err != nil {
@@ -496,6 +545,9 @@ func doctorLeaf() appLeaf {
 		telemetry.Set(ctx, "doctor.rank_inversions", doctorFieldValue(report, storage.CheckRankInversions, strconv.Itoa(report.RankInversions)))
 		telemetry.Set(ctx, "doctor.dependency_cycle", doctorFieldValue(report, storage.CheckDependencyCycle, joinCycle(report.DependencyCycle)))
 		telemetry.Set(ctx, "doctor.interleaved", doctorFieldValue(report, storage.CheckRankInversions, strconv.Itoa(len(report.Interleaved))))
+		telemetry.Set(ctx, "doctor.footprint_bytes", footprintFieldValue(report.Footprint, strconv.FormatInt(report.Footprint.GovernedBytes(), 10)))
+		telemetry.Set(ctx, "doctor.footprint_ceiling", footprintFieldValue(report.Footprint, strconv.FormatInt(report.Footprint.Ceiling, 10)))
+		telemetry.Set(ctx, "doctor.over_ceiling", footprintFieldValue(report.Footprint, overCeilingPart(report.Footprint)))
 		// [LAW:effects-at-boundaries] Freshness resolution shells out to git and
 		// reads the store, so it runs here, at the boundary, before the pure text
 		// rendering below.

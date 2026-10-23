@@ -167,8 +167,8 @@ func (e *syncOnlyReconcileless) SyncCompact(_ context.Context, mode storage.GCMo
 	return storage.CompactionOutcome{Ran: true, Depth: mode}, nil
 }
 
-func (e *syncOnlyReconcileless) CompactIfDue(context.Context) (storage.CompactionOutcome, error) {
-	return storage.CompactionOutcome{}, nil
+func (e *syncOnlyReconcileless) MaintainIfDue(context.Context) (storage.MaintenanceOutcome, error) {
+	return storage.MaintenanceOutcome{}, nil
 }
 
 func TestSyncWithoutReconcileIsRepresentable(t *testing.T) {

@@ -24,19 +24,12 @@ var snapshotsFamily = commandFamily[wsSubcommand]{
 }
 
 // isUserSnapshotName reports whether name is a user snapshot (i.e. produced
-// by `lit snapshots new`). It excludes every system-stamped kind so each
-// producer's retention budget governs only its own snapshots — the user
-// budget cannot collect a migration recovery point or a downgrade recovery
-// point.
-//
-// [LAW:one-source-of-truth] Each system producer owns its own kind predicate
-// (store.IsMigrationSnapshotName, store.IsDowngradeSnapshotName); this helper
-// composes those — adding a new producer means adding the predicate to this
-// disjunction, in exactly one place.
+// by `lit snapshots new`): every snapshot lit did not take on its own, so the
+// user budget never collects a recovery point a migration, reconcile or
+// downgrade took. [LAW:one-source-of-truth] The automatic kinds are the
+// store's one list; a new kind joins it there and is excluded here unchanged.
 func isUserSnapshotName(name string) bool {
-	return !store.IsMigrationSnapshotName(name) &&
-		!store.IsDowngradeSnapshotName(name) &&
-		!store.IsReconcileSnapshotName(name)
+	return !store.IsAutomaticSnapshotName(name)
 }
 
 // withCommitLock acquires the path-based commit lock used by Store mutations
@@ -108,10 +101,10 @@ func snapshotsNewLeaf() wsLeaf {
 		// producers.
 		//
 		// [LAW:single-enforcer] User-snapshot retention bounds *user* snapshots
-		// only; migration snapshots share the directory but are pruned
-		// independently by migrate() under its own budget. Without the kind
-		// filter, `lit snapshots new` could evict a recovery snapshot the
-		// migration system is depending on.
+		// only; lit's automatic recovery snapshots share the directory but are
+		// retired by the store's size-ceiling rule (pruneAutomaticSnapshots).
+		// Without the kind filter, `lit snapshots new` could evict a recovery
+		// snapshot a migration, reconcile or downgrade is depending on.
 		return withCommitLock(ctx, ws, func() error {
 			return dbsnapshot.PruneMatching(ws.DatabasePath, cfg.Snapshot.RetentionBudget, isUserSnapshotName)
 		})

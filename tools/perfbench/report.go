@@ -10,9 +10,15 @@ import (
 // result is one store's complete measurement: its size, its bytes on disk, and
 // one sample per probe.
 type result struct {
-	size    size
-	bytes   int64
-	samples []sample
+	size  size
+	bytes int64
+	// compacted is the store's bytes after every probe and a full
+	// compaction: what its rows cost to keep.
+	compacted int64
+	samples   []sample
+	// history is what historyEdits single-row edits added, zero for a store
+	// with no row to edit.
+	history historyCost
 }
 
 // conditions is the machine the run happened on. It is passed in rather than
@@ -71,8 +77,31 @@ func renderReport(results []result, cond conditions) string {
 		fmt.Fprintf(w, "\t%s", formatBytes(r.bytes))
 	}
 	fmt.Fprintln(w)
+	fmt.Fprint(w, "compacted bytes")
+	for _, r := range results {
+		fmt.Fprintf(w, "\t%s", formatBytes(r.compacted))
+	}
+	fmt.Fprintln(w)
+	fmt.Fprint(w, "bytes/commit")
+	for _, r := range results {
+		fmt.Fprintf(w, "\t%s", formatHistory(r.history))
+	}
+	fmt.Fprintln(w)
 	w.Flush()
+	b.WriteString("\nstore bytes is the store as imported; compacted bytes is the same store after the\n")
+	b.WriteString("probes and a full compaction, which collects the import's garbage. bytes/commit is\n")
+	fmt.Fprintf(&b, "the store's growth across %d single-row edits, one commit each, measured after a\n", historyEdits)
+	b.WriteString("full compaction on both sides, so it is history the store keeps.\n")
 	return b.String()
+}
+
+// formatHistory prints one commit's cost, or a dash for a store that had no
+// row to edit and so measured none.
+func formatHistory(h historyCost) string {
+	if h.edits == 0 {
+		return "—"
+	}
+	return formatBytes(h.perCommit())
 }
 
 // probeNames reads the measured probe order off the results. An empty results

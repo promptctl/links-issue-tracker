@@ -56,6 +56,19 @@ func (s *Store) Doctor(ctx context.Context) (storage.HealthReport, error) {
 		Warnings:        []string{},
 	}
 	report.IntegrityCheck = "ok"
+	// First, because it reads the filesystem and nothing else, so every report
+	// carries it — including one a looped hierarchy cuts short below. A size
+	// that cannot be read is a warning beside the checks, never their end: the
+	// footprint costs disk, never correctness. The report keeps the zero
+	// Footprint, which reads as unmeasured. [LAW:no-silent-failure]
+	footprint, err := s.footprint()
+	if err != nil {
+		report.Warnings = append(report.Warnings, fmt.Sprintf("store footprint not measured: %v", err))
+	}
+	report.Footprint = footprint
+	if warning, over := overCeilingWarning(footprint); over {
+		report.Warnings = append(report.Warnings, warning)
+	}
 	var violations int
 	if err := s.db.QueryRowContext(ctx, `CALL DOLT_VERIFY_CONSTRAINTS()`).Scan(&violations); err != nil {
 		return report, fmt.Errorf("verify constraints: %w", err)

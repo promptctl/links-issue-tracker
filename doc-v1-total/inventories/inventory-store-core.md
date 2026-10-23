@@ -3652,6 +3652,7 @@ Usage strings: `restoreUsage = "usage: lit backup restore (--latest | --path <ex
 ### 3.6 Doctor / FixIntegrity (same file)
 
 `Doctor` (`import_export.go`) initializes `DependencyCycle`, `Errors`, `Warnings` to empty slices and `IntegrityCheck = "ok"`, then:
+- `s.footprint()` (`inventory-store-sync.md` §3.8) into `Footprint`, first, because it reads the filesystem alone, so a report a parent cycle cuts short still carries it; a measurement error is the warning `"store footprint not measured: %v"` and leaves the zero (unmeasured) `Footprint`; the checks below still run. Over the ceiling → warning from `overCeilingWarning`: `"store over its size ceiling: %s against %s; the largest part is the %s at %s"`.
 - `CALL DOLT_VERIFY_CONSTRAINTS()` scanned into `violations`; error wrap `"verify constraints: %w"`. `violations > 0` → `IntegrityCheck = "constraint_violations"` and error line `fmt.Sprintf("constraint violations: %d", violations)`.
 - Three FK-orphan counts summed into `ForeignKeyIssues` (error wrap `"count foreign key issues: %w"`):
   - `SELECT COUNT(*) FROM relations r LEFT JOIN issues s ON s.id = r.src_id LEFT JOIN issues d ON d.id = r.dst_id WHERE s.id IS NULL OR d.id IS NULL`
@@ -4864,9 +4865,7 @@ Helpers: `copyTree` (pure-Go recursive copy preserving `info.Mode().Perm()`, `pr
 | Constant | Literal | Citation |
 |---|---|---|
 | `downgradeSnapshotLabel` | `"lit-downgrade"` | `downgrade.go` |
-| `downgradeSnapshotRetention` | `10` | `downgrade.go` |
 | (comparison) `migrationSnapshotLabel` | `"pre-migrate"` | `internal/store/migrate_snapshot.go` |
-| (comparison) `migrationSnapshotRetention` | `10` | `internal/store/migrate_snapshot.go` |
 
 Test hook: `var migrationDownForTest func(ctx context.Context, provider *goose.Provider) (*goose.MigrationResult, error)` — when non-nil it replaces `provider.Down(ctx)` inside `applyDownMigrations` (`downgrade.go`).
 
@@ -4874,7 +4873,7 @@ Test hook: `var migrationDownForTest func(ctx context.Context, provider *goose.P
 
 `formatDowngradeSnapshotLabel(t time.Time) string` = `fmt.Sprintf("%s-%d", downgradeSnapshotLabel, t.UTC().UnixNano())` → `lit-downgrade-<unix-ns>` (`downgrade.go`). The trailing timestamp is documented as cosmetic — `dbsnapshot.Take` encodes take-time in the directory name (`downgrade.go`).
 
-`IsDowngradeSnapshotName(name string) bool` = `isStampedSnapshotName(name, downgradeSnapshotLabel)` (`downgrade.go`), matching `<unix-ns>-lit-downgrade-<unix-ns>` (`migrate_snapshot.go`). Documented as disjoint from `IsMigrationSnapshotName` so each producer's retention budget governs only its own snapshots (`downgrade.go`).
+`IsDowngradeSnapshotName(name string) bool` = `isStampedSnapshotName(name, downgradeSnapshotLabel)` (`downgrade.go`), matching `<unix-ns>-lit-downgrade-<unix-ns>` (`migrate_snapshot.go`). Disjoint from `IsMigrationSnapshotName`, so retention counts downgrade snapshots against their own kind (`footprint.go`).
 
 ### 4.4 Error types (every message text)
 
@@ -4914,7 +4913,7 @@ Ordered:
 7. The snapshots land in `dbsnapshot.DirFor(s.doltRootDir)` — the **same directory** migration snapshots use, because every `dbsnapshot` function derives it from the database directory (`dbsnapshot.Take` → `DirFor`, `internal/dbsnapshot/snapshot.go`).
 8. `guard := newSnapshotGuard(s.doltRootDir, formatDowngradeSnapshotLabel(time.Now()))`; `snap, err := guard.ensure(ctx)` → `dbsnapshot.Take(ctx, databaseDir, label)` (`downgrade.go`; guard at `migrate_snapshot.go`). Error → `"downgrade: %w"` (which itself wraps `"snapshot before migration: %w"`, `migrate_snapshot.go`). Then `done.Snapshot = snap.Name`.
 9. `done.Reversed, err = s.applyDownMigrations(ctx, targetSchemaVersion)`; on **any** error → `&DowngradeRollbackError{Snapshot: snap, Cause: err}` (`downgrade.go`).
-10. `dbsnapshot.PruneMatching(s.doltRootDir, downgradeSnapshotRetention, IsDowngradeSnapshotName)` (impl `internal/dbsnapshot/snapshot.go`); error → `done.PruneErr = "prune downgrade snapshots: %w"`, and the pipeline still returns nil error, because the reverse has committed (`downgrade.go`).
+10. `s.pruneAutomaticSnapshots()`, the one automatic-snapshot retention rule (`inventory-store-sync.md` §3.8); error → `done.PruneErr = "prune downgrade snapshots: %w"`, and the pipeline still returns nil error, because the reverse has committed (`downgrade.go`).
 11. Return `done`, nil error.
 
 Summarized refusal contract, verbatim from the doc comment (`downgrade.go`): "Refusals (no snapshot taken): target == current applied: no-op, reverses nothing. target > current applied: DowngradeTargetAheadError. target < baselineVersion: DowngradeBelowBaselineError. this binary's schema support does not cover target through current applied: DowngradeSpanUnsupportedError. workspace not in phaseManaged: a plain error (no goose log to reverse)."
@@ -5345,7 +5344,7 @@ lit does not derive a key itself. `(*Store).remoteMirrorKeys(ctx)` (`remotecache
 
 `removeTreeCounting(path)` (`remotecache.go`) removes depth first with `os.Lstat`, `os.ReadDir` and `os.Remove`, returning the sizes of the non-directory entries this call unlinked and whether it unlinked `path`. A child that fails does not stop its siblings: every child is attempted, and the failures are returned joined (`errors.Join`) with `path` left in place. A path already gone (`fs.ErrNotExist` at any step) counts for nothing and is not an error.
 
-`dirSize(root)` (`remotecache.go`) walks with `filepath.WalkDir` and sums `info.Size()` of non-directory entries; the ref sweep measures with it.
+`bytesUnder(root)` (`remotecache.go`) walks with `filepath.WalkDir` and sums `info.Size()` of non-directory entries; an absent root or an entry that vanishes mid-walk (`fs.ErrNotExist`) reads zero, and any other failure is returned. The ref sweep, the chunk-store reading and the store's footprint measure with it.
 
 `mirrorGit(ctx, gitDir, spec, args...)` (`remotecache.go`) is every git command lit runs on a mirror: `gitcmd.Command(ctx, spec, "--git-dir", <gitDir>, <args…>)`, which runs `git -c core.longpaths=true --git-dir <gitDir> <args…>` and, on a cancelled ctx, ends git and every process it started. `mirrorFetch(ctx, gitDir, source, refspecs...)` (`remotecache.go`) is a fetch into one mirror from another, through `mirrorGit`: `fetch --no-tags --quiet --upload-pack "git -c core.longpaths=true upload-pack" <source> <refspecs…>`; git starts a local source's upload-pack without the caller's `-c` settings.
 
@@ -5376,7 +5375,7 @@ type remoteCachePruneOutcome remoteCacheCollection
 
 `remoteCachePruneOutcome.Report()` (`remotecache.go`) = `report("remote-cache prune", "abandoned mirror", "abandoned mirrors")`.
 
-`humanBytes(n int64)` (`remotecache.go`): below `1024` renders `%d B`; otherwise divides by 1024 repeatedly and renders `%.1f %ciB` with the unit letter drawn from `"KMGTPE"` — i.e. `KiB`, `MiB`, `GiB`, `TiB`, `PiB`, `EiB`. Shared with compaction's `footprintDelta` so both maintenance reporters spell sizes identically.
+`storage.FormatBytes(n int64)` (`internal/storage/footprint.go`): below `1024` renders `%d B`; otherwise divides by 1024 repeatedly and renders `%.1f %ciB` with the unit letter drawn from `"KMGTPE"` — i.e. `KiB`, `MiB`, `GiB`, `TiB`, `PiB`, `EiB`. The remote-cache reports, compaction's `signalsDelta`, the collection report and the footprint all spell sizes through it.
 
 #### 7.6 Tests pinning remote-cache behavior
 
@@ -5410,9 +5409,9 @@ Dolt's git blobstore names two refs per open instance with the instance's UUID �
 1. `listMirrorRefs(ctx, gitDir)` (`fetched_head.go`: `git for-each-ref --sort=-committerdate --format=%(refname) %(objectname) refs/dolt/`); no instance refs → `(0, 0, nil)` with nothing else run.
 2. One `git update-ref --stdin` transaction: `create <last-known> <object>` for each remote whose last-known ref is absent, taking the newest (first-listed) tracking ref's object — a local ref is never published; then `delete <ref> <object>` for every instance ref. Any failure aborts the whole transaction, a last-known ref that appeared since the listing included → `delete %d orphaned ref(s): %w: <output>`.
 3. `git gc --prune=now --quiet`. Failure → `git gc after removing %d orphaned ref(s): %w: <output>`, reported with the removed count.
-4. `Reclaimed` = `dirSize(gitDir)` before step 2 minus after step 3.
+4. `Reclaimed` = `bytesUnder(gitDir)` before step 2 minus after step 3.
 
-Called only from `compactWithinLock`, after its `reconnect` succeeds (closing every remote database the previous engine held), under the commit lock — so `SyncCompact` (`lit sync compact`, the backstop's `CompactIfDue`) and `SyncCompactAndPush` both sweep (`sync.go`).
+Called only from `compactWithinLock`, after its `reconnect` succeeds (closing every remote database the previous engine held), under the commit lock — so `SyncCompact` (`lit sync compact`, the backstop's `MaintainIfDue`) and `SyncCompactAndPush` both sweep (`sync.go`).
 
 `refSweepOutcome` is a named type over `remoteCacheCollection`; `Report()` renders through `report("remote-cache ref sweep", "orphaned ref", "orphaned refs")`. `plus(next)` sums `Removed` and `Reclaimed` and joins non-empty problems with `"; "`, so a second run of the mutation body under the GC-contention retry does not replace the first run's account (`remotecache_refs.go`).
 

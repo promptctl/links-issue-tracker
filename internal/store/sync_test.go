@@ -389,12 +389,12 @@ func TestSyncCompactRunsCleanlyAndPreservesData(t *testing.T) {
 	// A freshly compacted store is under every threshold, so the backstop's own
 	// entrypoint must decline rather than collect again — that decline is what
 	// keeps it cheap to ask often.
-	idle, err := syncStore.CompactIfDue(ctx)
+	idle, err := syncStore.MaintainIfDue(ctx)
 	if err != nil {
-		t.Fatalf("CompactIfDue() on a just-compacted store error = %v", err)
+		t.Fatalf("MaintainIfDue() on a just-compacted store error = %v", err)
 	}
-	if idle.Ran {
-		t.Fatalf("CompactIfDue() ran a pass on a just-compacted store: %+v", idle)
+	if idle.Compaction.Ran {
+		t.Fatalf("MaintainIfDue() ran a pass on a just-compacted store: %+v", idle)
 	}
 
 	got, err := syncStore.GetIssue(ctx, issue.ID)
@@ -491,7 +491,7 @@ func TestCompactWithinLockReportsWhetherThePassLanded(t *testing.T) {
 	}
 }
 
-// TestMeasureFootprintMatchesDoltsRealOldGenLayout is the pin that makes
+// TestMeasureCompactionSignalsMatchesDoltsRealOldGenLayout is the pin that makes
 // oldGenDirName and archiveFileExt safe to ship. Dolt exports no constant for
 // either, so lit spells them itself — and every other footprint test writes the
 // layout it then reads using those same two constants, so fixture and code
@@ -506,7 +506,7 @@ func TestCompactWithinLockReportsWhetherThePassLanded(t *testing.T) {
 // happening — no error, no red test, just a backstop quietly doing nothing.
 // [LAW:no-silent-failure] The same pinning TestRemoteCacheKeyMatchesDoltLayout
 // does for the remote-cache key.
-func TestMeasureFootprintMatchesDoltsRealOldGenLayout(t *testing.T) {
+func TestMeasureCompactionSignalsMatchesDoltsRealOldGenLayout(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
@@ -585,12 +585,12 @@ func TestMeasureFootprintMatchesDoltsRealOldGenLayout(t *testing.T) {
 		t.Fatal("a real pass left no archive in the old generation; this test can prove nothing about a layout Dolt did not write")
 	}
 
-	got, err := measureFootprint(doltRoot)
+	got, err := measureCompactionSignals(doltRoot)
 	if err != nil {
-		t.Fatalf("measureFootprint() error = %v", err)
+		t.Fatalf("measureCompactionSignals() error = %v", err)
 	}
 	if got.OldGenArchives != archives {
-		t.Fatalf("OldGenArchives = %d, but Dolt wrote %d archive(s) — the footprint and the disk disagree", got.OldGenArchives, archives)
+		t.Fatalf("OldGenArchives = %d, but Dolt wrote %d archive(s) — the signals and the disk disagree", got.OldGenArchives, archives)
 	}
 }
 

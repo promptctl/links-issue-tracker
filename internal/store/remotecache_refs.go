@@ -197,7 +197,7 @@ func sweepMirror(ctx context.Context, env environ.Env, gitDir string) (removed i
 		fmt.Fprintf(&transaction, "delete %s %s\n", ref.name, ref.object)
 	}
 
-	before, err := dirSize(gitDir)
+	before, err := bytesUnder(gitDir)
 	if err != nil {
 		return 0, 0, fmt.Errorf("measure: %w", err)
 	}
@@ -211,7 +211,7 @@ func sweepMirror(ctx context.Context, env environ.Env, gitDir string) (removed i
 	if out, err := mirrorGit(ctx, env, gitDir, nil, "gc", "--prune=now", "--quiet").CombinedOutput(); err != nil {
 		return len(orphans), 0, fmt.Errorf("git gc after removing %d orphaned ref(s): %w: %s", len(orphans), err, strings.TrimSpace(string(out)))
 	}
-	after, err := dirSize(gitDir)
+	after, err := bytesUnder(gitDir)
 	if err != nil {
 		return len(orphans), 0, fmt.Errorf("measure after git gc: %w", err)
 	}
