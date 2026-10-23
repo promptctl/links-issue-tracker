@@ -1,10 +1,13 @@
 package store
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/config"
@@ -154,15 +157,16 @@ func TestMeasureFootprintReadsEveryPart(t *testing.T) {
 	}
 }
 
-// An absent store is a store with nothing in it, not a failure.
-func TestMeasureFootprintOfAnAbsentStoreIsEmpty(t *testing.T) {
+// An absent store has no size, so measuring one fails, naming the chunk
+// store: a store has a chunk store from the moment it exists, and a reading of
+// 0 bytes would pass a wrong path or a replaced store off as a measurement.
+// The parts a store can truly lack (its snapshots, temp files and remote
+// cache) still read as 0 when absent.
+func TestMeasureFootprintOfAnAbsentStoreFails(t *testing.T) {
 	t.Parallel()
-	f, err := measureFootprint(filepath.Join(t.TempDir(), "dolt"))
-	if err != nil {
-		t.Fatalf("measureFootprint() on an absent store error = %v", err)
-	}
-	if f.contract(1).GovernedBytes() != 0 || f.remoteCache != 0 {
-		t.Fatalf("footprint of an absent store = %+v, want empty", f)
+	_, err := measureFootprint(filepath.Join(t.TempDir(), "dolt"))
+	if !errors.Is(err, fs.ErrNotExist) || !strings.Contains(err.Error(), "chunk store") {
+		t.Fatalf("measureFootprint() on an absent store error = %v, want the chunk store's absence", err)
 	}
 }
 

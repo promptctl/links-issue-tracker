@@ -93,7 +93,7 @@ lines here for reading:
 | `sink_rotation` | What happened to the file's size cap before this line was appended: `none`, `rotated` (this is the first line of a new file), or `failed` (the file keeps growing past its cap). |
 | `sink_rotation_error` | Present only when `sink_rotation` is `failed`: why. |
 | `counts` | The command's counts. A count of zero is written as `0`, so "ran and found none" is distinguishable from a command that does not count that thing. |
-| `facts` | What the command decided, under keys prefixed with the command's name, with `statusline.` for what it wrote to the statusline file, with `workflows.` for the workflow occasion it fired, with `config.` for its config check, or with `schema_ahead.` for a refusal because the workspace's schema is ahead of this lit. A sync command that reads its remotes records `remotes.refused`: the git remotes whose names Dolt cannot hold, sorted, `[]` when none. `lit sync pull` records `pull.state`, its settle's state or, with nothing to pull from, its skip (`no_sync_remote`, `remote_empty`), and `pull.base` when it settled: where the settle's base came from, `merge_base` along shared history, `fork_point` across a re-root, or `none`. An automatic receive that asked its remote whether it moved records `receive.remote_check_error`: null when the remote answered, else why it could not tell. |
+| `facts` | What the command decided, under keys prefixed with the command's name, with `statusline.` for what it wrote to the statusline file, with `store.` for the size of the store it ran against, with `workflows.` for the workflow occasion it fired, with `config.` for its config check, or with `schema_ahead.` for a refusal because the workspace's schema is ahead of this lit. A sync command that reads its remotes records `remotes.refused`: the git remotes whose names Dolt cannot hold, sorted, `[]` when none. `lit sync pull` records `pull.state`, its settle's state or, with nothing to pull from, its skip (`no_sync_remote`, `remote_empty`), and `pull.base` when it settled: where the settle's base came from, `merge_base` along shared history, `fork_point` across a re-root, or `none`. An automatic receive that asked its remote whether it moved records `receive.remote_check_error`: null when the remote answered, else why it could not tell. |
 | `occurrences` | What can happen more than once in one invocation, under keys of their own: one entry per occurrence, in the order they happened. A key that was looked at and found nothing is `[]`; an absent key was not looked at. A `lit bulk` command records `bulk.items` here, one entry per issue it was given. A sync command records `push.outcomes`, `receive.outcomes`, `reroot.follows`, `collection.records`, `reroot.declines`, `reroot.cuts_not_found`, `fork_point.records`, `remote.removals`, `reconcile.bases`, `stranded_writes.commits`, `settled_last.writes` and `history_bound.records` here, and the on-change mirror `mirror.live_store_steps`, one per cycle that took its clone. Every automatic receive puts exactly one entry on `receive.outcomes`, whose `receive.decision` says how it ended, a skip included, with `receive.remote` (`""` before one was chosen) and `receive.error` (null when none). Every invocation records `git.cancels`: one entry per git run that its context ended, lit's own or one Dolt started. Each entry has `git.cancel.cause` (the context's error), `git.cancel.processes` (how many processes the cancel ended, git and what it started; `0` when git had already exited), `git.cancel.survivors` (how many of those were still running 5s after the kill; null when no count was taken), `git.cancel.kill_error` (null when the kill succeeded) and `git.cancel.output_cut` (whether git's output was still open 1s after the processes the cancel ended had exited or been counted as survivors, and lit stopped reading it). A key's prefix names the command or part of lit that recorded it, not its map: `history_bound.window_error` is a fact, set once, and `history_bound.records` is an occurrence, one entry per push. |
 
 A command that records no counts or facts writes `{}` for each, and its `occurrences` holds only `"git.cancels": []`.
@@ -154,6 +154,7 @@ keys are empty when no focus label narrowed the run.
 | `backlog.off_path` | Tickets a focus label kept off the list, in the entry shape `next.off_path` uses, each with `reach` `off_focus_path`. A ticket in a lane you hold, or in another lane of that lane's epic, is never among them. |
 | `backlog.own_off_path` | The ids of tickets off the focus path that the list kept because they sit in a lane you hold or in another lane of that lane's epic, which another checkout may hold. Read before `--limit`, so a ticket `--limit` cut is still here. |
 | `backlog.trimmed` | How many rows `--limit` cut from the list; 0 when it cut none. |
+| `counts.backlog.rows_gathered` | How many tickets the list was drawn from: the workable tickets its filter selects, before a focus label or `--limit` narrows them. |
 
 ## What a statusline-file write records
 
@@ -225,6 +226,21 @@ instead.
 | `counts.stores.temp_table_files_collected` | How many temp table files a dead Dolt process left the opens removed, summed over the stores. A read open removes them only when it hands a store behind this lit's schema to the open that migrates it. |
 | `counts.stores.temp_table_files_failures` | The stores whose open could not remove all of them. Each gets a `~ <storage dir>: warning: temp table files a dead writer left were not all removed:` line after the table. |
 
+## What the store a command ran against records
+
+A command that opens a store to read or change its tickets, and every `lit
+sync` command, records the store's size on disk once it has closed it, so a
+`duration_ms` read back later says what it was spent over. The reading is the
+chunk store, the part `lit doctor` lists as `chunk store`: what every read of
+the store runs against, without the recovery snapshots and caches beside it.
+It is taken after the close, outside the store's lock, so it never lengthens
+the time another writer waits. For `lit ls --at`, the store is the one `--at`
+names.
+
+| Key | Meaning |
+| --- | --- |
+| `store.chunk_store_bytes` | The chunk store's size in bytes, as the sum of its files' lengths; `null` when it could not be read. |
+| `store.chunk_store_bytes_error` | Why it could not be read, or `null`. A store with no chunk store at all is such a failure, never `0`. The command's own result is unchanged. |
 ## What checking the config records
 
 A command that runs in a workspace checks the global and project

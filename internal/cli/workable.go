@@ -13,6 +13,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/query"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workflows"
 )
 
@@ -176,6 +177,9 @@ func workableLeaf(view workableView) appLeaf {
 		if err != nil {
 			return err
 		}
+		// The view's workload, as `lit next` records its own: what a duration
+		// on this event was spent over. [LAW:one-source-of-truth] one key shape.
+		telemetry.Count(ctx, view.name+".rows_gathered", len(gathered.rows))
 		cc, err := gatherClaimContext(ctx, inv.Env, inv.Stdout, ap)
 		if err != nil {
 			return err
