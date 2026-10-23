@@ -91,6 +91,22 @@ func TestRelationLabelBulkVerbsResolveActingIdentity(t *testing.T) {
 		}
 		assertCloseEventActor(t, ap, id, want)
 	})
+
+	t.Run("bulk comment", func(t *testing.T) {
+		ap := newTestCLIApp(t)
+		id := newAttributionIssue(t, ap, "bulk comment target")
+		var out bytes.Buffer
+		if err := runLeaf(bulkCommentLeaf(), ctx, &out, ap, []string{"--ids", id, "--body", "note"}); err != nil {
+			t.Fatalf("bulk comment error = %v", err)
+		}
+		detail, err := ap.Store.GetIssueDetail(ctx, id)
+		if err != nil {
+			t.Fatalf("GetIssueDetail error = %v", err)
+		}
+		if len(detail.Comments) != 1 || detail.Comments[0].CreatedBy != want {
+			t.Fatalf("comments = %+v, want one by %q (raw $USER must not leak)", detail.Comments, want)
+		}
+	})
 }
 
 func assertLabelActor(t *testing.T, ap *app.App, issueID, label, want string) {

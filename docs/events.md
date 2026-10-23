@@ -334,8 +334,9 @@ none of them.
 A bulk command puts one entry on `bulk.items` for each issue in `--ids`, in the
 order given, whether the issue's change landed or failed. Each entry holds the
 facts and counts that issue's change recorded, so a `lit bulk start` entry
-carries the keys a `lit start` sets and a `lit bulk done` entry the keys a
-`lit done` sets. Those keys never appear at the event's top level.
+carries the keys a `lit start` sets, a `lit bulk done` entry the keys a
+`lit done` sets, and a `lit bulk comment` entry the `comment.id` a
+`lit comment add` sets. Those keys never appear at the event's top level.
 
 | Key | Meaning |
 | --- | --- |
@@ -343,6 +344,12 @@ carries the keys a `lit start` sets and a `lit bulk done` entry the keys a
 | `bulk.item.error` | The issue's error, or null when its change landed. |
 | `bulk.item.facts` | The facts that issue's change set, and those its error records about itself, as a failed `lit` command's event carries them; `{}` when there are none. |
 | `bulk.item.counts` | The counts that issue's change recorded, and those its error records; `{}` when there are none. |
+
+## What `lit comment add` records
+
+| Key | Meaning |
+| --- | --- |
+| `comment.id` | The id of the comment the command wrote. A refused comment has none. |
 
 ## What `lit verdict` records
 

@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"io"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/release"
@@ -19,11 +20,12 @@ import (
 // [LAW:behavior-not-structure] the contract under test is the command's output
 // and errors; which phase declares its flags is the implementation's business.
 //
-// Every adapter routes through runLeaf, which drives the two phases in exactly
-// the order the production pipelines do — declare, parse, then work. That is
-// what keeps these from becoming a second dispatch path: no test can reach a
-// work phase through an ordering appCmdPipeline/wsCmdPipeline would not
-// produce. [LAW:single-enforcer]
+// Every adapter routes through recordLeaf (runLeaf is recordLeaf with the
+// event dropped), which drives the two phases in exactly the order the
+// production pipelines do — declare, parse, then work. That is what keeps
+// these from becoming a second dispatch path: no test can reach a work phase
+// through an ordering appCmdPipeline/wsCmdPipeline would not produce.
+// [LAW:single-enforcer]
 
 // underInvocation is ctx carrying an open invocation event, as Run hands one
 // to everything an invocation runs.
@@ -35,12 +37,21 @@ func underInvocation(ctx context.Context) context.Context {
 // pipeline performs between parse and work: the resource is whatever the test
 // supplies.
 func runLeaf[R any](l leaf[R], ctx context.Context, stdout io.Writer, res R, args []string) error {
-	ctx = underInvocation(ctx)
-	positional, err := parseLeaf(ctx, l, args, cwdInvocation(stdout, stdout, nil))
-	if err != nil {
-		return err
+	_, err := recordLeaf(l, ctx, cwdInvocation(stdout, stdout, nil), res, args)
+	return err
+}
+
+// recordLeaf is runLeaf over the invocation the test builds, under a recorder
+// it ends the way the dispatcher ends one, so the test reads the event the run
+// recorded beside its error.
+func recordLeaf[R any](l leaf[R], ctx context.Context, inv Invocation, res R, args []string) (telemetry.Event, error) {
+	recorder := telemetry.Begin(telemetry.Event{})
+	ctx = telemetry.With(ctx, recorder)
+	positional, err := parseLeaf(ctx, l, args, inv)
+	if err == nil {
+		err = l.work(ctx, inv, res, positional)
 	}
-	return l.work(ctx, cwdInvocation(stdout, stdout, nil), res, positional)
+	return recorder.Finish(invocationEnd(time.Now(), err, nil)), err
 }
 
 // App-mode handlers.

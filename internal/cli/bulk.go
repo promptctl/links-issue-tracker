@@ -13,9 +13,10 @@ import (
 )
 
 var bulkFamily = commandFamily[appSubcommand]{
-	usage: "usage: lit bulk <label|start|done|close|open|archive> ...",
+	usage: "usage: lit bulk <label|comment|start|done|close|open|archive> ...",
 	subcommands: []subcommandRow[appSubcommand]{
 		{name: "label", nestedUsage: bulkLabelFamily.usage, payload: appSubcommand{access: app.AccessWrite, declare: bulkLabelLeaf}},
+		{name: "comment", payload: appSubcommand{access: app.AccessWrite, declare: bulkCommentLeaf}},
 		{name: "start", payload: appSubcommand{access: app.AccessWrite, declare: bulkTransitionLeaf(startSpec)}},
 		{name: "done", payload: appSubcommand{access: app.AccessWrite, declare: bulkTransitionLeaf(doneSpec)}},
 		{name: "close", payload: appSubcommand{access: app.AccessWrite, declare: bulkTransitionLeaf(closeSpec)}},
@@ -170,6 +171,34 @@ func bulkLabelLeaf() appLeaf {
 		actor := resolveActor(inv.Env)
 		return runBulkOver(ctx, inv.Stdout, issueIDs, func(ctx context.Context, issueID string) (string, error) {
 			return "", op(ctx, ap, issueID, *label, actor)
+		})
+	}}
+}
+
+// bulkCommentLeaf is `lit comment add` in bulk form: one body, read and parsed
+// once before any issue is touched, added to every listed issue through the
+// step the single verb runs, beside the comments each issue already has. A
+// landed item prints the single verb's `<id> <comment-id>` line.
+// [LAW:single-enforcer] [LAW:one-type-per-behavior] [LAW:parse-dont-validate]
+func bulkCommentLeaf() appLeaf {
+	fs := newCobraFlagSet("bulk comment")
+	issueIDsFlag := registerBulkIDs(fs)
+	body := registerLongText(fs, "body", "Comment body")
+	resolveActor := registerActor(fs)
+	const usage = "usage: lit bulk comment --ids <id,id,...> (--body <text> | --body-file <path|->)"
+	return appLeaf{fs: fs, positionals: 0, usage: usage, work: func(ctx context.Context, inv Invocation, ap *app.App, positional []string) error {
+		issueIDs, err := issueIDsFlag()
+		if err != nil {
+			return err
+		}
+		commentBody, err := model.ParseCommentBody(body.value())
+		if err != nil {
+			return err
+		}
+		actor := resolveActor(inv.Env)
+		return runBulkOver(ctx, inv.Stdout, issueIDs, func(ctx context.Context, issueID string) (string, error) {
+			comment, _, err := addComment(ctx, ap, issueID, commentBody, actor)
+			return commentLine(comment), err
 		})
 	}}
 }

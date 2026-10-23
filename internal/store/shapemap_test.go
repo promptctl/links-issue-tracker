@@ -9,6 +9,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/storage/storagetest"
 )
 
 // --- Validate: the single totality enforcer (acceptance #1) ---
@@ -324,7 +325,7 @@ func TestDeterministicMapCleanAhead(t *testing.T) {
 			t.Fatalf("add plan review: %v", err)
 		}
 		reviewID = review.ID
-		if _, _, err := st.AddComment(ctx, storage.AddCommentInput{IssueID: child.ID, Body: "a note", CreatedBy: "claude"}); err != nil {
+		if _, _, err := st.AddComment(ctx, storage.AddCommentInput{IssueID: child.ID, Body: storagetest.CommentBody(t, "a note"), CreatedBy: "claude"}); err != nil {
 			t.Fatalf("add comment: %v", err)
 		}
 		if _, err := st.AddLabel(ctx, storage.AddLabelInput{IssueID: child.ID, Name: "backend", CreatedBy: "claude"}); err != nil {

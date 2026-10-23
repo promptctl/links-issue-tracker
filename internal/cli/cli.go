@@ -2153,9 +2153,11 @@ func commentAddLeaf() appLeaf {
 		if len(positional) != 1 {
 			return UsageError{Message: usage}
 		}
-		// [LAW:single-enforcer] A comment is a recorded event; its author resolves
-		// through the same identity rule as every other actor.
-		comment, issue, err := ap.Store.AddComment(ctx, storage.AddCommentInput{IssueID: positional[0], Body: body.value(), CreatedBy: resolveActor(inv.Env)})
+		commentBody, err := model.ParseCommentBody(body.value())
+		if err != nil {
+			return err
+		}
+		comment, issue, err := addComment(ctx, ap, positional[0], commentBody, resolveActor(inv.Env))
 		if err != nil {
 			return err
 		}
@@ -2164,6 +2166,21 @@ func commentAddLeaf() appLeaf {
 		}
 		return printComment(inv.Stdout, comment)
 	}}
+}
+
+// addComment is the comment write `lit comment add` and `lit bulk comment`
+// both run, so a comment lands, and records its comment.id fact, the same way
+// from either. The comment_added workflow occasion is the single verb's own, as
+// every bulk verb leaves its single command's guidance unprinted.
+// The author resolves through the same identity rule as every other actor.
+// [LAW:single-enforcer] [LAW:one-type-per-behavior]
+func addComment(ctx context.Context, ap *app.App, issueID string, body model.CommentBody, actor string) (model.Comment, model.Issue, error) {
+	comment, issue, err := ap.Store.AddComment(ctx, storage.AddCommentInput{IssueID: issueID, Body: body, CreatedBy: actor})
+	if err != nil {
+		return model.Comment{}, model.Issue{}, err
+	}
+	telemetry.Set(ctx, "comment.id", comment.ID)
+	return comment, issue, nil
 }
 
 func commentRmLeaf() appLeaf {
@@ -2182,8 +2199,14 @@ func commentRmLeaf() appLeaf {
 }
 
 func printComment(w io.Writer, c model.Comment) error {
-	_, err := fmt.Fprintf(w, "%s %s\n", c.IssueID, c.ID)
+	_, err := io.WriteString(w, commentLine(c))
 	return err
+}
+
+// commentLine is the line a comment command prints for a comment: the issue
+// it is on, then its own id.
+func commentLine(c model.Comment) string {
+	return c.IssueID + " " + c.ID + "\n"
 }
 
 func exportLeaf() appLeaf {

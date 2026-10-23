@@ -1524,13 +1524,13 @@ func (s *Store) Apply(ctx context.Context, id string, c storage.Change) (storage
 // round-trip to re-fetch what this call already has in hand.
 // [LAW:one-source-of-truth]
 func (s *Store) AddComment(ctx context.Context, in storage.AddCommentInput) (model.Comment, model.Issue, error) {
-	issue, err := s.GetIssue(ctx, in.IssueID)
+	body, err := in.Body.Text()
 	if err != nil {
 		return model.Comment{}, model.Issue{}, err
 	}
-	body := strings.TrimSpace(in.Body)
-	if body == "" {
-		return model.Comment{}, model.Issue{}, model.ValidationError{Message: "comment body is required"}
+	issue, err := s.GetIssue(ctx, in.IssueID)
+	if err != nil {
+		return model.Comment{}, model.Issue{}, err
 	}
 	now := s.clock.Now()
 	comment := model.Comment{ID: "cmt-" + uuid.NewString(), IssueID: in.IssueID, Body: body, CreatedAt: now, CreatedBy: storage.Actor(in.CreatedBy)}

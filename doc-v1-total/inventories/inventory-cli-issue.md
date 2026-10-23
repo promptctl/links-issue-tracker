@@ -1818,14 +1818,16 @@ usage string as a `UsageError` → exit 2 (`resolve`, `register.go`).
   `inline`, `file` or `stdin`.
   `lit new`, `lit followup` and `lit update` resolve `--description`/`--prompt` the same way,
   and `lit new` and `lit update` `--plan` too (event fact `text_source.plan`).
-- Store refusal: a blank body (after trim) →
-  `model.ValidationError{Message: "comment body is required"}` → exit 3
-  (`internal/store/store.go`). A missing issue → exit 4
-  (`store.go`).
+- Writes through `addComment` (`cli.go`), shared with `bulk comment`:
+  `Store.AddComment`, then the event fact `comment.id`, the new comment's id.
+- The body parses through `model.ParseCommentBody` (`internal/model/comment.go`)
+  before the store is called: a blank body (after trim) →
+  `model.ValidationError{Message: "comment body is required"}` → exit 3. A missing
+  issue → exit 4 (`store.go`).
 - The comment id is `"cmt-" + uuid` and `CreatedBy` empty is normalized to
   `"unknown"` (`store.go`).
 - Dispatches `EventCommentAdded` (`cli.go`).
-- Output: `printComment` → `"<issueID> <commentID>\n"` (`cli.go`).
+- Output: `printComment` → `commentLine` → `"<issueID> <commentID>\n"` (`cli.go`).
   **No breadcrumb.**
 
 **`lit comment rm <comment-id>`** (`commentRmLeaf`, `cli.go`):
@@ -1963,9 +1965,9 @@ Family `depFamily`, usage `"usage: lit dep <add|rm|ls> ..."` (`dependency.go`).
 
 ### 2.21 `lit bulk` — Bulk issue operations
 
-Family `bulkFamily`, usage `"usage: lit bulk <label|start|done|close|open|archive> ..."`
+Family `bulkFamily`, usage `"usage: lit bulk <label|comment|start|done|close|open|archive> ..."`
 (`bulk.go`). Group `operations` (`register.go`).
-Rows: `label`, `start`, `done`, `close`, `open`, `archive` (all write), and hidden
+Rows: `label`, `comment`, `start`, `done`, `close`, `open`, `archive` (all write), and hidden
 `import` (`retiredSubcommand`: retired, projected `Hidden`).
 
 **Shared `--ids`** — `registerBulkIDs` (`bulk.go`), declared once for every
@@ -2006,6 +2008,23 @@ before any id is acted on.
   add/rm action resolved (`bulk.go`).
 - `add` calls `Store.AddLabel` with the resolved actor; `rm` calls
   `Store.RemoveLabel` (actor unused) (`bulk.go`).
+
+**`lit bulk comment --ids <csv> (--body <text> | --body-file <path|->)`**
+(`bulkCommentLeaf`, `bulk.go`):
+- Flags: `--ids` (`registerBulkIDs`), `--body` and `--body-file`
+  (`registerLongText`, read once by `readLongTexts` before the workspace
+  opens, with `comment add`'s refusals), `--by` (`bulk.go`).
+- Usage `"usage: lit bulk comment --ids <id,id,...> (--body <text> | --body-file <path|->)"`
+  (`bulk.go`).
+- One body and actor for every id. The body parses through
+  `model.ParseCommentBody` once, before any id runs: a blank body is one
+  `"comment body is required"` refusal (exit 3), with no `bulk.items` entry and
+  no comment written. Each id runs `addComment` (`cli.go`), the step
+  `commentAddLeaf` runs: `Store.AddComment`, then the fact `comment.id` in the
+  id's `bulk.items` scope. The comments an issue already has are untouched.
+- Each landed id's notice is `commentLine` → `"<issueID> <commentID>\n"`
+  (`cli.go`), written before `"<id> ok\n"`.
+- **No workflow events** (`EventCommentAdded` is not dispatched).
 
 **`lit bulk <start|done|close|open|archive> --ids <csv> [<verb flags>] [--reason <text>]`**
 (`bulkTransitionLeaf(spec)`, `bulk.go`; rows built from `startSpec`, `doneSpec`,

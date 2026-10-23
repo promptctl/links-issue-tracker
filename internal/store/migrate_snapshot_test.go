@@ -16,6 +16,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/fsperm"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/storage/storagetest"
 )
 
 // TestMigrateSnapshotFreshDBOpenTakesExactlyOneSnapshot pins the "fresh-DB
@@ -489,7 +490,7 @@ func TestDataSurvivesFailedMigrationSnapshotRestore(t *testing.T) {
 	}
 	if _, _, err := st.AddComment(ctx, storage.AddCommentInput{
 		IssueID:   issueB.ID,
-		Body:      "Needs review before merge.",
+		Body:      storagetest.CommentBody(t, "Needs review before merge."),
 		CreatedBy: "bob",
 	}); err != nil {
 		t.Fatalf("AddComment(B) error = %v", err)

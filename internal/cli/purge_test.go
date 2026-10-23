@@ -11,6 +11,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/storage/storagetest"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 )
 
@@ -31,7 +32,7 @@ func TestRunPurgeRefusesWithoutConfirmationAndPurgesWithIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(doomed) error = %v", err)
 	}
-	if _, _, err := ap.Store.AddComment(ctx, storage.AddCommentInput{IssueID: doomed.ID, Body: "more secret", CreatedBy: "tester"}); err != nil {
+	if _, _, err := ap.Store.AddComment(ctx, storage.AddCommentInput{IssueID: doomed.ID, Body: storagetest.CommentBody(t, "more secret"), CreatedBy: "tester"}); err != nil {
 		t.Fatalf("AddComment error = %v", err)
 	}
 	events, err := ap.Store.ListEvents(ctx, doomed.ID)

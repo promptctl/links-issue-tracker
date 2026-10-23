@@ -49,6 +49,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/claims"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/storage/storagetest"
 )
 
 // NewEngine mints a fresh, empty engine for one case, already registered for
@@ -1111,7 +1112,7 @@ func listFiltersSelect(t *testing.T, ctx context.Context, st storage.Store, clk 
 	if _, err := st.Apply(ctx, task.ID, storage.Change{Action: model.Start{Assignee: "grace"}, Actor: "grace"}); err != nil {
 		t.Fatalf("Apply start error = %v", err)
 	}
-	if _, _, err := st.AddComment(ctx, storage.AddCommentInput{IssueID: bug.ID, Body: "note", CreatedBy: "ada"}); err != nil {
+	if _, _, err := st.AddComment(ctx, storage.AddCommentInput{IssueID: bug.ID, Body: storagetest.CommentBody(t, "note"), CreatedBy: "ada"}); err != nil {
 		t.Fatalf("AddComment error = %v", err)
 	}
 
@@ -2358,7 +2359,7 @@ func commentsRoundtrip(t *testing.T, ctx context.Context, st storage.Store, clk 
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
 	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "discussed", Topic: "core", ParentID: epic.ID})
 
-	comment, withComment, err := st.AddComment(ctx, storage.AddCommentInput{IssueID: issue.ID, Body: "first", CreatedBy: "ada"})
+	comment, withComment, err := st.AddComment(ctx, storage.AddCommentInput{IssueID: issue.ID, Body: storagetest.CommentBody(t, "first"), CreatedBy: "ada"})
 	if err != nil {
 		t.Fatalf("AddComment error = %v", err)
 	}
@@ -2370,11 +2371,11 @@ func commentsRoundtrip(t *testing.T, ctx context.Context, st storage.Store, clk 
 	if withComment.ID != issue.ID {
 		t.Errorf("AddComment returned issue %q, want %q", withComment.ID, issue.ID)
 	}
-	// A blank body is refused, not stored: the rule lives in each engine, so
-	// this is the one place both are held to it. Whitespace-only counts as
-	// blank, because both engines trim before they look.
-	_, _, err = st.AddComment(ctx, storage.AddCommentInput{IssueID: issue.ID, Body: " \t\n", CreatedBy: "ada"})
-	assertRefused(t, err, "AddComment(blank body)")
+	// A body that never passed model.ParseCommentBody is refused, not stored
+	// blank: the zero value is the one body Go lets a caller build without
+	// parsing, and the detail read below finds only the first comment.
+	_, _, err = st.AddComment(ctx, storage.AddCommentInput{IssueID: issue.ID, CreatedBy: "ada"})
+	assertRefused(t, err, "AddComment(unparsed body)")
 
 	detail, err := st.GetIssueDetail(ctx, issue.ID)
 	if err != nil {
@@ -2407,7 +2408,7 @@ func commentsRoundtrip(t *testing.T, ctx context.Context, st storage.Store, clk 
 	_, err = st.DeleteComment(ctx, " \t")
 	assertRefused(t, err, "DeleteComment(blank id)")
 
-	_, _, err = st.AddComment(ctx, storage.AddCommentInput{IssueID: "no-such-issue", Body: "x", CreatedBy: "ada"})
+	_, _, err = st.AddComment(ctx, storage.AddCommentInput{IssueID: "no-such-issue", Body: storagetest.CommentBody(t, "x"), CreatedBy: "ada"})
 	assertNotFound(t, err, "issue", "AddComment on a missing issue")
 }
 
@@ -3425,7 +3426,7 @@ func exportCarriesWholeStore(t *testing.T, ctx context.Context, st storage.Store
 	clk.Pin(earlierInstant)
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
 	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "child", Topic: "core", ParentID: epic.ID, Labels: []string{"perf"}})
-	if _, _, err := st.AddComment(ctx, storage.AddCommentInput{IssueID: child.ID, Body: "note", CreatedBy: "ada"}); err != nil {
+	if _, _, err := st.AddComment(ctx, storage.AddCommentInput{IssueID: child.ID, Body: storagetest.CommentBody(t, "note"), CreatedBy: "ada"}); err != nil {
 		t.Fatalf("AddComment error = %v", err)
 	}
 	archived := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "archived", Topic: "core", ParentID: epic.ID})

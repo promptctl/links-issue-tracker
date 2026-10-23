@@ -7,6 +7,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/storage/storagetest"
 )
 
 // aPurgeRemovesTheIssueAndEverythingItOwns pins what a purge takes and what it
@@ -27,10 +28,10 @@ func aPurgeRemovesTheIssueAndEverythingItOwns(t *testing.T, ctx context.Context,
 	followUp := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "follow-up", Topic: "core", ParentID: epic.ID, FollowsUp: doomed.ID})
 	duplicate := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "duplicate", Topic: "core", ParentID: epic.ID})
 
-	if _, _, err := st.AddComment(ctx, storage.AddCommentInput{IssueID: doomed.ID, Body: "secret", CreatedBy: "ada"}); err != nil {
+	if _, _, err := st.AddComment(ctx, storage.AddCommentInput{IssueID: doomed.ID, Body: storagetest.CommentBody(t, "secret"), CreatedBy: "ada"}); err != nil {
 		t.Fatalf("AddComment error = %v", err)
 	}
-	if _, _, err := st.AddComment(ctx, storage.AddCommentInput{IssueID: waiter.ID, Body: "mentions " + doomed.ID, CreatedBy: "ada"}); err != nil {
+	if _, _, err := st.AddComment(ctx, storage.AddCommentInput{IssueID: waiter.ID, Body: storagetest.CommentBody(t, "mentions "+doomed.ID), CreatedBy: "ada"}); err != nil {
 		t.Fatalf("AddComment error = %v", err)
 	}
 	for _, planned := range []model.Issue{doomed, waiter} {

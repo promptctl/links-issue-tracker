@@ -13,6 +13,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/fsperm"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/storage/storagetest"
 )
 
 // digestDir folds every file's path and bytes into one hash, so any byte of
@@ -79,7 +80,7 @@ func TestFixtureResidueCannotCrossCopies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue child: %v", err)
 	}
-	if _, _, err := first.AddComment(ctx, storage.AddCommentInput{IssueID: child.ID, Body: "residue that must not travel", CreatedBy: "residue"}); err != nil {
+	if _, _, err := first.AddComment(ctx, storage.AddCommentInput{IssueID: child.ID, Body: storagetest.CommentBody(t, "residue that must not travel"), CreatedBy: "residue"}); err != nil {
 		t.Fatalf("AddComment: %v", err)
 	}
 	if err := first.Close(); err != nil {

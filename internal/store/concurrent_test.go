@@ -9,6 +9,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/storage/storagetest"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -165,10 +166,11 @@ func TestConcurrentMutationsMixedOperations(t *testing.T) {
 	for i, id := range issues[:5] {
 		body := fmt.Sprintf("Concurrent comment %d", i)
 		commentPlan[id] = body
+		parsed := storagetest.CommentBody(t, body)
 		eg.Go(func() error {
 			_, _, err := st.AddComment(egCtx, storage.AddCommentInput{
 				IssueID:   id,
-				Body:      body,
+				Body:      parsed,
 				CreatedBy: "concurrent-tester",
 			})
 			return err

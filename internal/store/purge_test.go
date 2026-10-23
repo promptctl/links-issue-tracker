@@ -8,6 +8,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/storage/storagetest"
 )
 
 // TestRestoreNeverUnpurges pins the restore half of "a purge is permanent": a
@@ -27,7 +28,7 @@ func TestRestoreNeverUnpurges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(doomed): %v", err)
 	}
-	if _, _, err := st.AddComment(ctx, storage.AddCommentInput{IssueID: doomed.ID, Body: "secret", CreatedBy: "tester"}); err != nil {
+	if _, _, err := st.AddComment(ctx, storage.AddCommentInput{IssueID: doomed.ID, Body: storagetest.CommentBody(t, "secret"), CreatedBy: "tester"}); err != nil {
 		t.Fatalf("AddComment: %v", err)
 	}
 	backup, err := st.Export(ctx)

@@ -20,16 +20,16 @@ import (
 // so that read is the caller's answer too — never a second round-trip for what
 // this call already holds. [LAW:one-source-of-truth]
 func (e *Engine) AddComment(ctx context.Context, in storage.AddCommentInput) (model.Comment, model.Issue, error) {
+	body, err := in.Body.Text()
+	if err != nil {
+		return model.Comment{}, model.Issue{}, err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	issue, err := e.getIssue(in.IssueID)
 	if err != nil {
 		return model.Comment{}, model.Issue{}, err
-	}
-	body := strings.TrimSpace(in.Body)
-	if body == "" {
-		return model.Comment{}, model.Issue{}, model.ValidationError{Message: "comment body is required"}
 	}
 	comment := model.Comment{
 		ID:        "cmt-" + uuid.NewString(),

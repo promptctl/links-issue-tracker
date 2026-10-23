@@ -804,6 +804,7 @@ use `lit ls --parent a,b`.
 
 ```text
 lit bulk label <add|rm> --ids <csv>... --label <label>
+lit bulk comment --ids <csv>... (--body <text> | --body-file <path|->)
 lit bulk start --ids <csv>... [--take] [--reason <text>]
 lit bulk done --ids <csv>... [--reason <text>]
 lit bulk close --ids <csv>... --resolution <duplicate|superseded|obsolete|wontfix> [--of <canonical-id>] [--reason <text>]
@@ -811,7 +812,7 @@ lit bulk open --ids <csv>... [--reason <text>]
 lit bulk archive --ids <csv>... [--reason <text>]
 ```
 
-Apply one label edit or lifecycle transition across many issues in one call.
+Apply one label edit, comment or lifecycle transition across many issues in one call.
 `--ids` is a set, so `--ids A --ids B` acts on both; a missing `--ids` or a blank slot
 in one is refused (exit 3) before any issue is touched.
 
@@ -824,10 +825,17 @@ A transition to the state an issue is already in, such as `bulk open` on an open
 issue, succeeds and changes nothing, as it does singly. `bulk close` records one
 shared outcome on every issue it closes.
 
+`bulk comment` adds the same comment to every listed issue, as `lit comment add`
+adds it to one, and leaves the comments an issue already has in place. The body is
+read once for the whole run, so `--body-file -` reads stdin once. A blank body is
+refused before any issue is touched, with the error and exit code `lit comment add`
+gives.
+
 Each successful item prints `<id> ok` to stdout, after any line its single
 command prints first: the `claim transferred` line of a start, the takeover line
-of `--take`, the plan warning of a done. The summary, the workflow guidance and
-the follow-up hints a single transition prints are not printed. If any item
+of `--take`, the plan warning of a done, the `<id> <comment-id>` line of a comment.
+The summary, the workflow guidance and the follow-up hints a single command prints
+are not printed. If any item
 fails, the per-item errors go to stderr and the command exits non-zero — so
 `lit bulk close --ids a,b,c && next-step` does **not** run `next-step` on partial
 or total failure. Successful items are still applied; re-run the command for
