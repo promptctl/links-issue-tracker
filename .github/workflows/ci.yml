@@ -126,8 +126,8 @@ jobs:
   # near half the budget on this runner, so a ~2x regression trips it and
   # runner noise does not. Store size is the lever when it does not fit; the
   # budget never moves. 700 rows is about the largest store that keeps that
-  # margin: backlog and next 0.39s at 500 rows (run 39981161732) and 0.89s at
-  # 1,400 (run 39978715159), so half the budget falls near 700. A breach exits 2
+  # margin: backlog 0.43s there (run 39981948947, 3m12s), 0.89s at 1,400 (run
+  # 39978715159). A breach exits 2
   # and names the command, its min and the ratio; the verdict is logged as soon
   # as each store's probes finish, so timeout-minutes, which only stops a hung
   # lit holding a runner for six hours, cannot cut it. The stores have no git
