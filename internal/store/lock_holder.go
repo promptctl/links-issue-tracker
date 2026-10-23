@@ -59,9 +59,9 @@ import (
 // (holdWait). It reads only the lock's latest arrival, a record name, never
 // what any record says, and it decides only when the contender stops — the
 // kernel still decides, alone, whether the lock is held. A wrong or missing
-// arrival costs a wait that
-// ends earlier or later than it should, never a lock taken or refused
-// wrongly, which keeps the registry descriptive in the sense that matters.
+// arrival costs a wait that ends earlier or later than it should, never a
+// lock taken or refused wrongly, which keeps the registry descriptive in the
+// sense that matters.
 
 // lockHolderDir is the directory of holder records for one lock, under the
 // workspace storage dir the caller names — the same rotation-surviving
@@ -272,10 +272,11 @@ const lockHolderArrivalName = "arrival"
 // to an earlier value.
 //
 // In place, with no temporary name and no rename: a reader can catch the file
-// torn, empty or half-written, but only while an acquisition is writing it.
-// A torn read can therefore count one real acquisition twice, restarting a
-// contender's clock one poll later than the acquisition itself would, but it
-// never counts an acquisition that did not happen. A rename would add a private name to strand
+// torn, empty, half-written, or — under two shared holders writing at once —
+// spliced from both names, but only while acquisitions are writing it. A
+// reading no acquisition wrote can therefore count real arrivals extra times,
+// each restarting a contender's clock a poll later than the arrivals alone
+// would, but it never reports a queue moving while nothing arrives. A rename would add a private name to strand
 // and, on Windows, fail against any reader holding the file open.
 // [LAW:no-ambient-temporal-coupling] the announcement is a value an
 // acquisition writes, not an interval a reader has to catch.

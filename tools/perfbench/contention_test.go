@@ -33,7 +33,7 @@ func TestStormNamesEveryWriterThatDidNotComplete(t *testing.T) {
 		return nil, nil
 	}
 
-	failed := storm(litBinary{path: "lit"}, store, run)
+	failed := storm(litBinary{path: "lit"}, store, latencyBudget, run)
 
 	if len(ran) != stormWriters {
 		t.Fatalf("the storm ran %d writers, want all %d", len(ran), stormWriters)
@@ -127,7 +127,7 @@ func TestAFailedWriterIsListedByItsFirstLine(t *testing.T) {
 // bounded so the last of a hundred writers may wait behind 99 writes that are
 // each within budget.
 func TestStormWritersRunTheTimedWrite(t *testing.T) {
-	st := stormStep(litBinary{path: "lit"}, 7)
+	st := stormStep(litBinary{path: "lit"}, 7, latencyBudget)
 	want := append([]string{"lit"}, benchWrite("perfbench storm writer 7")...)
 	if !slices.Equal(st.argv, want) {
 		t.Errorf("storm writer argv = %v, want %v", st.argv, want)

@@ -150,7 +150,7 @@ jobs:
 
       # Built, then run, rather than `go run`, which reports any child failure as
       # its own exit 1 and would erase perfbench's 2-for-a-breach contract.
-      - name: Commands stay under their latency budget
+      - name: Commands stay under their latency budget and 100 concurrent writers complete
         run: |
           go build -o "$RUNNER_TEMP/perfbench" ./tools/perfbench
           "$RUNNER_TEMP/perfbench" --sizes 500

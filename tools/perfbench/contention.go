@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 )
 
 // The contention gate: a hundred writers against one store, at once, and every
@@ -48,21 +49,24 @@ func (f writerFailure) verdict(err string) string {
 		f.store.name, f.store.rows, f.writer, stormWriters, err)
 }
 
-// stormBudget bounds one storm writer. The writers serialize on the store, so
-// the last of them waits behind every other, and each of those may take
-// latencyBudget; a fixed runBudget would kill the back of a healthy queue on a
-// store whose writes are slow but within budget, and report latency as
-// contention. A writer still running past this bound either hung on its own or
-// sat behind writes over their budget. [LAW:one-source-of-truth] derived from
-// the queue's length and the budget every write is held to.
-const stormBudget = runBudget + stormWriters*latencyBudget
+// stormBudget bounds one storm writer, given the latency budget the run judges
+// every write by. The writers serialize on the store, so the last of them
+// waits behind every other, and each of those may take that budget; a fixed
+// runBudget would kill the back of a healthy queue on a store whose writes are
+// slow but within budget, and report latency as contention. A writer still
+// running past this bound either hung on its own or sat behind writes over
+// their budget. [LAW:one-source-of-truth] derived from the queue's length and
+// the budget every write is held to.
+func stormBudget(latency time.Duration) time.Duration {
+	return runBudget + stormWriters*latency
+}
 
 // stormStep is writer i's invocation: the write the write probe times
 // (benchWrite), titled by its writer so a failure can be found in the store it
 // left, and bounded by stormBudget so a writer that never returns is named as
 // a failure rather than holding the run.
-func stormStep(bin litBinary, writer int) step {
-	return step{budget: stormBudget, argv: append([]string{bin.path}, benchWrite(fmt.Sprintf("perfbench storm writer %d", writer))...)}
+func stormStep(bin litBinary, writer int, latency time.Duration) step {
+	return step{budget: stormBudget(latency), argv: append([]string{bin.path}, benchWrite(fmt.Sprintf("perfbench storm writer %d", writer))...)}
 }
 
 // storm starts stormWriters writers against store at once and returns every one
@@ -70,12 +74,12 @@ func stormStep(bin litBinary, writer int) step {
 // others do: the verdict is the full list, because "writers 3, 41 and 77
 // failed" is the shape of a contention bug, and the first failure alone hides
 // it. [LAW:dataflow-not-control-flow]
-func storm(bin litBinary, store generatedStore, run stepRunner) []writerFailure {
+func storm(bin litBinary, store generatedStore, latency time.Duration, run stepRunner) []writerFailure {
 	errs := make([]error, stormWriters)
 	var wg sync.WaitGroup
 	for i := range stormWriters {
 		wg.Go(func() {
-			_, errs[i] = run(store.root, store.env, stormStep(bin, i+1))
+			_, errs[i] = run(store.root, store.env, stormStep(bin, i+1, latency))
 		})
 	}
 	wg.Wait()
