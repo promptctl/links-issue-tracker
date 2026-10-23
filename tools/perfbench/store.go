@@ -385,6 +385,7 @@ func runQuiet(dir string, env []string, st step) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, st.argv[0], st.argv[1:]...)
 	cmd.Dir = dir
 	cmd.Env = env
+	cmd.WaitDelay = killGrace
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

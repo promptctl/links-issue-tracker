@@ -163,12 +163,14 @@ func measurePhase(bin litBinary, store generatedStore, phase []invocation, devnu
 	kills := make([]*killed, len(phase))
 	for round := range repeats + 1 {
 		for i, inv := range phase {
-			elapsed, err := runProbe(bin, store, inv, devnull, lim.kill)
+			elapsed, err := runProbe(bin, store, inv, devnull, lim.kill())
 			if errors.Is(err, errKilled) {
 				if kills[i] == nil {
-					kills[i] = &killed{round: round, after: lim.kill}
-					fmt.Fprintf(progress, "killed: store %s (%d rows), probe %q, %s, still running at %s; measuring on\n",
-						store.size.name, store.size.rows, inv.probe.name, roundName(round), lim.kill)
+					kills[i] = &killed{round: round, after: lim.kill()}
+					// err carries what the command wrote before the kill, the
+					// one clue to why it hung.
+					fmt.Fprintf(progress, "killed: store %s (%d rows), probe %q, %s: %v; measuring on\n",
+						store.size.name, store.size.rows, inv.probe.name, roundName(round), err)
 				}
 				continue
 			}
@@ -230,11 +232,14 @@ func runProbe(bin litBinary, store generatedStore, inv invocation, devnull *os.F
 	cmd.Stdout = devnull
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
+	cmd.WaitDelay = killGrace
 	start := time.Now()
 	err := cmd.Run()
 	elapsed := time.Since(start)
 
-	if ctx.Err() != nil {
+	// Killed means the process ended on the kill's signal, not that the
+	// deadline has passed by now: a run that exits at 29.99s is a measurement.
+	if ctx.Err() != nil && !cmd.ProcessState.Exited() {
 		return 0, fmt.Errorf("%w (%s): %s", errKilled, kill, strings.TrimSpace(stderr.String()))
 	}
 	code, err := exitCode(err)

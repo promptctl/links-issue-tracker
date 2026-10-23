@@ -212,6 +212,7 @@ running at 30s is killed and recorded as killed, and the run keeps measuring:
 the killed probe still runs its remaining rounds, each bounded by the same 30s,
 and every other probe is measured as usual, so a regression that slows several
 commands names all of them.
+
 CI's `perf-budget` job runs this on every PR against a 500-row store. Because
 the budget is the destination and not a CI setting, `just perf` fails the same
 way on your machine. That includes the large sizes a scale question needs,

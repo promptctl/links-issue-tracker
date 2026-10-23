@@ -155,22 +155,27 @@ var probes = []probe{
 // and then guards nothing. [LAW:one-source-of-truth]
 const latencyBudget = time.Second
 
-// probeKillAfter is when a probe invocation is killed rather than waited on.
-// It is derived from the budget because a kill is only ever a verdict on it:
-// any run killed here is 30 times over. The factor is 30 so the slowest figure
-// the scale epic has recorded, `lit backlog` at 11.3s, is still a measurement
-// rather than a kill.
-const probeKillAfter = 30 * latencyBudget
+// killFactor is how many budgets a probe invocation may run before it is
+// killed rather than waited on. A kill is only ever a verdict on the budget,
+// so its limit is derived from it and can never sit at or below it. The factor
+// is 30 so the slowest figure the scale epic has recorded, `lit backlog` at
+// 11.3s, is still a measurement rather than a kill.
+const killFactor = 30
 
-// limits are the two figures a probe is held to. They travel as a value so a
-// test can drive a breach and a kill in milliseconds instead of seconds.
-type limits struct {
-	budget time.Duration
-	kill   time.Duration
-}
+// limits is the budget a probe is held to, and through it the kill limit. It
+// travels as a value so a test can drive a breach and a kill in milliseconds
+// instead of seconds.
+type limits struct{ budget time.Duration }
+
+func (l limits) kill() time.Duration { return killFactor * l.budget }
 
 // gateLimits are the limits every real run uses.
-var gateLimits = limits{budget: latencyBudget, kill: probeKillAfter}
+var gateLimits = limits{budget: latencyBudget}
+
+// killGrace is how long a killed command's output pipes are waited on before
+// they are closed. Without it a descendant that inherited stderr would hold
+// the wait open past the kill, and the kill would bound nothing.
+const killGrace = 5 * time.Second
 
 // size is one store to generate and measure at. rows is the store's TOTAL row
 // count, epics included, and it is not the same as its workable count: one row
@@ -253,7 +258,7 @@ const repeats = 5
 // never returns: the scale epic's own subject matter is a write path that can
 // wait fifteen minutes on a lock, so "slow" here is a plausible outcome and an
 // unbounded wait would make this tool unable to report it.
-// [LAW:no-silent-failure] Probes are not bounded by it; probeKillAfter does
+// [LAW:no-silent-failure] Probes are not bounded by it; their kill limit does
 // that, because a probe's limit is a verdict on the latency budget and a
 // step's is not.
 const runBudget = 2 * time.Minute

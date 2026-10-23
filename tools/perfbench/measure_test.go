@@ -83,7 +83,7 @@ func TestRunProbeRefusesAnUndeclaredExitCode(t *testing.T) {
 	bin, _ := fakeLit(t, 6)
 	store := fakeStore(t)
 	probeUnderTest := resolve(t, probe{name: "next", argv: fixed("next"), okCodes: exits(0)}, store)
-	elapsed, err := runProbe(bin, store, probeUnderTest, devNull(t), probeKillAfter)
+	elapsed, err := runProbe(bin, store, probeUnderTest, devNull(t), gateLimits.kill())
 	if err == nil {
 		t.Fatalf("runProbe accepted exit 6 for a probe declaring only {0}, returning %s; "+
 			"a failed invocation must not become a measurement", elapsed)
@@ -107,7 +107,7 @@ func TestRunProbeAcceptsADeclaredNonZeroExitCode(t *testing.T) {
 	bin, _ := fakeLit(t, 6)
 	store := fakeStore(t)
 	probeUnderTest := resolve(t, probe{name: "next", argv: fixed("next"), okCodes: exits(0, 6)}, store)
-	elapsed, err := runProbe(bin, store, probeUnderTest, devNull(t), probeKillAfter)
+	elapsed, err := runProbe(bin, store, probeUnderTest, devNull(t), gateLimits.kill())
 	if err != nil {
 		t.Fatalf("runProbe(exit 6, okCodes {0,6}) error = %v, want a sample", err)
 	}
@@ -136,11 +136,11 @@ func TestRunProbeJudgesTheExitAgainstTheStoreSize(t *testing.T) {
 		t.Fatal("no probe named next")
 	}
 	empty := generatedStore{size: size{name: "empty", rows: 0}, root: t.TempDir()}
-	if _, err := runProbe(bin, empty, resolve(t, next, empty), devNull(t), probeKillAfter); err != nil {
+	if _, err := runProbe(bin, empty, resolve(t, next, empty), devNull(t), gateLimits.kill()); err != nil {
 		t.Errorf("exit 6 on the empty store is the honest answer, got error: %v", err)
 	}
 	populated := generatedStore{size: size{name: "5x-target", rows: 590}, root: t.TempDir()}
-	if _, err := runProbe(bin, populated, resolve(t, next, populated), devNull(t), probeKillAfter); err == nil {
+	if _, err := runProbe(bin, populated, resolve(t, next, populated), devNull(t), gateLimits.kill()); err == nil {
 		t.Error("exit 6 on a 590-row store, where every row is open, was accepted as a measurement")
 	}
 }
@@ -163,7 +163,7 @@ func TestRunProbeRunsLitUnderTheStoresEnvironment(t *testing.T) {
 	}
 	configHome := filepath.Join(dir, "config-home")
 	store := generatedStore{size: size{name: "fake", rows: 7}, root: dir, env: hermeticEnv(os.Environ(), configHome, filepath.Join(dir, "state-home"))}
-	if _, err := runProbe(litBinary{path: path}, store, resolve(t, probe{name: "ls", argv: fixed("ls"), okCodes: exits(0)}, store), devNull(t), probeKillAfter); err != nil {
+	if _, err := runProbe(litBinary{path: path}, store, resolve(t, probe{name: "ls", argv: fixed("ls"), okCodes: exits(0)}, store), devNull(t), gateLimits.kill()); err != nil {
 		t.Fatalf("runProbe error = %v", err)
 	}
 	got, err := os.ReadFile(seen)
@@ -178,7 +178,7 @@ func TestRunProbeRunsLitUnderTheStoresEnvironment(t *testing.T) {
 func TestRunProbeReportsAMissingBinaryAsAHarnessFailure(t *testing.T) {
 	bin := litBinary{path: filepath.Join(t.TempDir(), "absent")}
 	store := fakeStore(t)
-	_, err := runProbe(bin, store, resolve(t, probe{name: "ls", argv: fixed("ls"), okCodes: exits(0)}, store), devNull(t), probeKillAfter)
+	_, err := runProbe(bin, store, resolve(t, probe{name: "ls", argv: fixed("ls"), okCodes: exits(0)}, store), devNull(t), gateLimits.kill())
 	if err == nil {
 		t.Fatal("runProbe with a nonexistent binary returned no error")
 	}
@@ -322,7 +322,7 @@ func TestAKilledProbeIsRecordedAndTheRunContinues(t *testing.T) {
 	}
 	dir := t.TempDir()
 	path := filepath.Join(dir, "lit")
-	script := "#!/bin/sh\nif [ \"$1\" = backlog ]; then exec sleep 30; fi\nexit 0\n"
+	script := "#!/bin/sh\nif [ \"$1\" = backlog ]; then echo 'waiting on lock' >&2; exec sleep 30; fi\nexit 0\n"
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -332,12 +332,12 @@ func TestAKilledProbeIsRecordedAndTheRunContinues(t *testing.T) {
 		resolve(t, probe{name: "ls", argv: fixed("ls"), okCodes: exits(0)}, store),
 	}
 	var progress strings.Builder
-	lim := limits{budget: time.Second, kill: 100 * time.Millisecond}
+	lim := limits{budget: 5 * time.Millisecond}
 	samples, err := measurePhase(litBinary{path: path}, store, phase, devNull(t), lim, &progress)
 	if err != nil {
 		t.Fatalf("measurePhase error = %v; a kill must not end the run", err)
 	}
-	if got, want := samples[0].outcome, (killed{round: 0, after: lim.kill}); got != want {
+	if got, want := samples[0].outcome, (killed{round: 0, after: lim.kill()}); got != want {
 		t.Errorf("backlog outcome = %#v, want %#v: killed in its warm-up", got, want)
 	}
 	if _, ok := samples[1].outcome.(completed); !ok {
@@ -346,7 +346,7 @@ func TestAKilledProbeIsRecordedAndTheRunContinues(t *testing.T) {
 	if got := strings.Count(progress.String(), "killed: "); got != 1 {
 		t.Errorf("progress names %d kills, want 1 (the first kill of backlog, as it happened):\n%s", got, progress.String())
 	}
-	for _, want := range []string{`"backlog"`, "warm-up", "100ms"} {
+	for _, want := range []string{`"backlog"`, "warm-up", "150ms", "waiting on lock"} {
 		if !strings.Contains(progress.String(), want) {
 			t.Errorf("kill line does not mention %q:\n%s", want, progress.String())
 		}
@@ -378,7 +378,7 @@ exit 0
 	}
 	var progress strings.Builder
 	env := hermeticEnv(os.Environ(), filepath.Join(dir, "config"), filepath.Join(dir, "state"))
-	lim := limits{budget: 100 * time.Millisecond, kill: 10 * time.Second}
+	lim := limits{budget: 100 * time.Millisecond}
 	_, _, err := measureSize(litBinary{path: path}, dir, size{name: "one", rows: 1}, env, lim, runQuiet, &progress)
 	if err == nil || !strings.Contains(err.Error(), "compaction broke") {
 		t.Fatalf("measureSize error = %v, want the failed compaction", err)
