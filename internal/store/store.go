@@ -790,7 +790,7 @@ func (s *Store) ListIssues(ctx context.Context, filter storage.ListIssuesFilter)
 		for _, t := range types {
 			args = append(args, t)
 		}
-		where = append(where, "i.issue_type IN ("+strings.Join(repeatPlaceholder(len(types)), ",")+")")
+		where = append(where, "i.issue_type IN ("+placeholders(len(types))+")")
 	}
 	// [LAW:single-enforcer] Exclusion filter mirrors the IssueTypes positive
 	// filter above, bound included; keeping both at the store boundary means
@@ -799,7 +799,7 @@ func (s *Store) ListIssues(ctx context.Context, filter storage.ListIssuesFilter)
 		for _, t := range types {
 			args = append(args, t)
 		}
-		where = append(where, "i.issue_type NOT IN ("+strings.Join(repeatPlaceholder(len(types)), ",")+")")
+		where = append(where, "i.issue_type NOT IN ("+placeholders(len(types))+")")
 	}
 	// Assignee is the one filter here whose values are neither a closed
 	// vocabulary nor ids — the list bounded by provenance that idSet's rule
@@ -813,7 +813,7 @@ func (s *Store) ListIssues(ctx context.Context, filter storage.ListIssuesFilter)
 		for _, assignee := range assignees {
 			args = append(args, assignee)
 		}
-		where = append(where, "i.assignee IN ("+strings.Join(repeatPlaceholder(len(assignees)), ",")+")")
+		where = append(where, "i.assignee IN ("+placeholders(len(assignees))+")")
 	}
 	if filter.UpdatedAfter != nil {
 		where = append(where, "i.updated_at >= ?")

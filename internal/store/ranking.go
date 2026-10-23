@@ -700,7 +700,7 @@ func unrankedAmongTx(ctx context.Context, tx *sql.Tx, ids []string) ([]string, e
 	rows, err := rankRows(ctx, tx, `SELECT i.id, i.item_rank FROM `+named+` JOIN issues i ON i.id = named.id
 		WHERE i.deleted_at IS NULL AND i.item_rank = ''`, arg)
 	if err != nil {
-		return nil, fmt.Errorf("read which of %v hold no key: %w", ids, err)
+		return nil, fmt.Errorf("read which of %d issues hold no key: %w", len(ids), err)
 	}
 	var unranked []string
 	for _, row := range rows {

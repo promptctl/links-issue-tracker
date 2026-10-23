@@ -37,7 +37,7 @@ func TestHydrationReadsCoverEveryID(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
-	const epicCount = 34
+	const epicCount = manyIDs
 	const label = "spans"
 
 	epics := make([]string, 0, epicCount)

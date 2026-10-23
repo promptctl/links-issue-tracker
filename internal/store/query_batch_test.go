@@ -29,6 +29,11 @@ func makeEpics(t *testing.T, ctx context.Context, st *Store, n int, titlef strin
 	return ids
 }
 
+// manyIDs is how many ids the every-id tests read. The number itself is
+// arbitrary: an id-keyed read is one join however many ids it carries, so
+// there is no boundary to straddle, only more than one id to lose.
+const manyIDs = 34
+
 // A long id filter must come back whole.
 //
 // The query cannot report this failure: a read that answers for only part of
@@ -44,7 +49,7 @@ func TestListIssuesByIDsAnswersForEveryID(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
-	const count = 34
+	const count = manyIDs
 	ids := makeEpics(t, ctx, st, count, "subject %d")
 
 	got, err := st.ListIssues(ctx, storage.ListIssuesFilter{IDs: ids})
@@ -70,7 +75,7 @@ func TestListIssuesByParentIDsAnswersForEveryParent(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
-	const count = 34
+	const count = manyIDs
 	parents := makeEpics(t, ctx, st, count, "parent %d")
 	children := make([]string, 0, count)
 	for i, parent := range parents {
@@ -100,7 +105,7 @@ func TestListIssuesByIDsIntersectsParentIDs(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
-	const count = 34
+	const count = manyIDs
 	parents := makeEpics(t, ctx, st, count, "parent %d")
 	children := make([]string, 0, count)
 	for i, parent := range parents {

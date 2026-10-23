@@ -39,7 +39,7 @@ import (
 // (ListIssues' assignee clause, whose values a person types and nothing derives
 // from the backlog — say so beside the clause, because that bound is invisible
 // in the SQL and a caller deriving the list from the backlog breaks it
-// silently). repeatPlaceholder renders those, and only those.
+// silently). placeholders renders those, and only those.
 //
 // One query rather than several also retires the soundness rules batching
 // needed — a NOT IN that inverted under splitting, an ORDER BY ... LIMIT no
@@ -103,5 +103,5 @@ const idChunkSize = 16
 
 // placeholders renders n `?` tokens as the body of an IN list.
 func placeholders(n int) string {
-	return strings.Join(repeatPlaceholder(n), ", ")
+	return strings.TrimSuffix(strings.Repeat("?, ", n), ", ")
 }

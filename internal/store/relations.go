@@ -299,15 +299,6 @@ func dedupeStrings(ids []string) []string {
 	return out
 }
 
-// repeatPlaceholder returns n "?" SQL placeholder tokens.
-func repeatPlaceholder(n int) []string {
-	out := make([]string, n)
-	for i := range out {
-		out[i] = "?"
-	}
-	return out
-}
-
 // mapKeys returns the keys of set in unspecified order.
 func mapKeys(set map[string]struct{}) []string {
 	out := make([]string, 0, len(set))
