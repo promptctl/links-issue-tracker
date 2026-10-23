@@ -25,11 +25,12 @@ const (
 )
 
 // HeadroomPercent is how far past its measurement each figure may grow while
-// the ceiling still holds a design-size store. Run to run the figures move
-// about 3% (a 590-row store, 23.1-23.8 MB), and from 2026-10-21 to 2026-10-23
-// they drifted 2.4% per store and 6.6% per commit; 25% clears both several
-// times over, and a store a quarter heavier per row or per commit is a
-// regression worth a ticket. A figure past its allowance is answered by that
+// the ceiling still holds a design-size store. Three design-size runs on
+// 2026-10-23 spread 2.6% per store (184.36-189.15 MB) and 3.9% per commit
+// (28.73-29.85 KB), and the figures above sit 1.2% and 11.3% over the
+// 2026-10-21 ones (184.61 MB, 26.82 KB). 25% clears that noise several times
+// over and that drift twice, and a store a quarter heavier per row or per
+// commit is a regression worth a ticket. A figure past its allowance is answered by that
 // ticket, never by raising this: an allowance raised to turn the nightly lane
 // green is the alarm disconnected.
 const HeadroomPercent = 25

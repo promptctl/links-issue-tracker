@@ -56,10 +56,17 @@ func (b inputBreach) String() string {
 		b.store.name, b.store.rows, b.input, formatBytes(b.measured), formatBytes(b.allowed))
 }
 
+// atDesignSize is whether a store is the one the allowances describe: the one
+// rule for which stores the input verdict judges, read by the judgment and by
+// the report that says whether anything was judged. [LAW:one-source-of-truth]
+func atDesignSize(s size) bool {
+	return s.rows == designstore.Rows
+}
+
 // inputBreaches judges one store's figures against the ceiling's allowances,
 // or judges nothing when the store is not at the design size.
 func inputBreaches(r result) []inputBreach {
-	if r.size.rows != designstore.Rows {
+	if !atDesignSize(r.size) {
 		return nil
 	}
 	var out []inputBreach
@@ -83,7 +90,7 @@ func renderCeilingInputs(results []result, found []inputBreach) string {
 	fmt.Fprintf(&b, "\nCEILING INPUTS: at the design size (%d rows), %s.\n", designstore.Rows, strings.Join(limits, ", "))
 	judged := false
 	for _, r := range results {
-		judged = judged || r.size.rows == designstore.Rows
+		judged = judged || atDesignSize(r.size)
 	}
 	for _, br := range found {
 		fmt.Fprintf(&b, "  OVER  %s\n", br)

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -82,9 +83,9 @@ type gateError struct {
 
 func (e gateError) join(o gateError) gateError {
 	return gateError{
-		breaches: append(e.breaches, o.breaches...),
-		inputs:   append(e.inputs, o.inputs...),
-		writers:  append(e.writers, o.writers...),
+		breaches: slices.Concat(e.breaches, o.breaches),
+		inputs:   slices.Concat(e.inputs, o.inputs),
+		writers:  slices.Concat(e.writers, o.writers),
 	}
 }
 

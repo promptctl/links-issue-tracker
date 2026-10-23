@@ -218,7 +218,7 @@ jobs:
           title: Nightly full test lane is failing
           token: ${{ github.token }}
           body: |
-            A step in the nightly full-suite job failed, or the job was cancelled (a job that hits its 60-minute timeout also reports cancelled); the run log names which step and why. This lane runs everything the PR gate's `-short` skips, the law-token upstream check, and perfbench at the design size (the size ceiling's input allowances, latency and the writer storm at 2,800 rows): triage it, do not mute it.
+            A step in the nightly full-suite job failed, or the job was cancelled (a job that hits its 60-minute timeout also reports cancelled); the run log names which step and why. This lane runs everything the PR gate's `-short` skips, the law-token upstream check, and perfbench at the design size (the size ceiling's input allowances, latency and the writer storm at that size): triage it, do not mute it.
 
   report-windows:
     needs: windows

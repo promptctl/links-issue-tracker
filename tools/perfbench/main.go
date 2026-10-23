@@ -54,7 +54,7 @@ func main() {
 func run(args []string, out, progress io.Writer) error {
 	fs := flag.NewFlagSet("perfbench", flag.ContinueOnError)
 	fs.SetOutput(progress)
-	sizesFlag := fs.String("sizes", "", "comma-separated store row counts to measure, or `design` for the store the size ceiling is derived to hold (default: the repository's envelope, 0,118,590)")
+	sizesFlag := fs.String("sizes", "", "comma-separated store row counts to measure, or design for the store the size ceiling is derived to hold (default: the repository's envelope, 0,118,590)")
 	keep := fs.String("keep", "", "directory to build the stores in and leave behind (default: a temporary directory, removed on exit)")
 	if err := fs.Parse(args); err != nil {
 		// -h is a request that was granted, not a failure: Parse has already
