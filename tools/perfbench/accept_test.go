@@ -31,12 +31,15 @@ func TestLitCarriesOutThePlan(t *testing.T) {
 			if err != nil {
 				t.Fatalf("generating %d rows: %v", sz.rows, err)
 			}
-			for _, phase := range phasesOf(probes) {
-				for _, p := range phase {
-					code, out := runLitIn(t, store.root, env, runBudget, p.args)
-					if !slices.Contains(p.okCodes(sz.rows), code) {
-						t.Errorf("probe %q exited %d at %d rows, want one of %v:\n%s",
-							p.name, code, sz.rows, p.okCodes(sz.rows), out)
+			if len(store.ids) != sz.rows {
+				t.Fatalf("generation read %d ids back from the import, want one per row (%d)", len(store.ids), sz.rows)
+			}
+			for _, phase := range phasesOf(invocationsFor(probes, store), invocation.probeOf) {
+				for _, inv := range phase {
+					code, stdout, stderr := runLitIn(t, store.root, env, probeKillAfter, inv.args)
+					if !slices.Contains(inv.okCodes, code) {
+						t.Errorf("probe %q exited %d at %d rows, want one of %v:\n%s%s",
+							inv.probe.name, code, sz.rows, inv.okCodes, stdout, stderr)
 					}
 				}
 			}
@@ -45,31 +48,34 @@ func TestLitCarriesOutThePlan(t *testing.T) {
 }
 
 // inProcess runs a generation step through runQuiet, except that a lit step
-// calls lit's entry point in this process rather than a built binary.
+// calls lit's entry point in this process rather than a built binary. Like
+// runQuiet it answers stdout alone, which is where the import's id mapping is.
 func inProcess(t *testing.T, bin litBinary) stepRunner {
-	return func(dir string, env []string, st step) error {
+	return func(dir string, env []string, st step) ([]byte, error) {
 		if st.argv[0] != bin.path {
 			return runQuiet(dir, env, st)
 		}
-		if code, out := runLitIn(t, dir, env, st.budget, st.argv[1:]); code != 0 {
-			return fmt.Errorf("%s exited %d:\n%s", strings.Join(st.argv, " "), code, out)
+		code, stdout, stderr := runLitIn(t, dir, env, st.budget, st.argv[1:])
+		if code != 0 {
+			return nil, fmt.Errorf("%s exited %d:\n%s%s", strings.Join(st.argv, " "), code, stdout, stderr)
 		}
-		return nil
+		return []byte(stdout), nil
 	}
 }
 
 // runLitIn is one lit invocation with dir as its working directory and env
 // as its environment, what a probe's subprocess would run under, answering
-// the exit code cmd/lit would have exited with. The budget is the context's
+// the exit code cmd/lit would have exited with and the two streams apart. The
+// budget is the context's
 // deadline, as runQuiet's is the subprocess's, so a write wedged on the store
 // lock fails this test instead of hanging it.
-func runLitIn(t *testing.T, dir string, env []string, budget time.Duration, args []string) (int, string) {
+func runLitIn(t *testing.T, dir string, env []string, budget time.Duration, args []string) (int, string, string) {
 	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
-	var out bytes.Buffer
-	inv := cli.Invocation{Dir: cli.WorkingDirOf(dir, nil), Args: args, Env: environ.Of(env), Stdin: strings.NewReader(""), Stdout: &out, Stderr: &out}
+	var stdout, stderr bytes.Buffer
+	inv := cli.Invocation{Dir: cli.WorkingDirOf(dir, nil), Args: args, Env: environ.Of(env), Stdin: strings.NewReader(""), Stdout: &stdout, Stderr: &stderr}
 	if err := cli.Run(ctx, inv); err != nil {
-		return cli.WriteCommandError(&out, err), out.String()
+		return cli.WriteCommandError(&stderr, err), stdout.String(), stderr.String()
 	}
-	return 0, out.String()
+	return 0, stdout.String(), stderr.String()
 }

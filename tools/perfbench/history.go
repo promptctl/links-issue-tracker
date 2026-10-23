@@ -1,11 +1,6 @@
 package main
 
-import (
-	"context"
-	"fmt"
-	"os/exec"
-	"strings"
-)
+import "fmt"
 
 // historyEdits is how many single-row edits the history measurement makes.
 // Every lit write is one Dolt commit, so this is a count of commits, and the
@@ -34,8 +29,8 @@ func (h historyCost) perCommit() int64 {
 // store carries the import's uncollected garbage, so this, not the imported
 // size, is what a store of these rows costs to keep.
 func compactedBytes(bin litBinary, store generatedStore) (int64, error) {
-	compact := step{runBudget, []string{bin.path, "sync", "compact", "--full"}}
-	if err := runQuiet(store.root, store.env, compact); err != nil {
+	compact := step{budget: runBudget, argv: []string{bin.path, "sync", "compact", "--full"}}
+	if _, err := runQuiet(store.root, store.env, compact); err != nil {
 		return 0, err
 	}
 	return storeBytes(store.databasePath)
@@ -46,21 +41,19 @@ func compactedBytes(bin litBinary, store generatedStore) (int64, error) {
 // It runs after every probe, because it changes the store the probes'
 // figures describe.
 //
-// The edits go round the store's own rows rather than one row many times, so
-// each commit touches the kind of row an ordinary write touches: one row of
-// many, not the same row again. A store with no row has nothing to edit, and
-// says so with an error instead of a figure of zero.
+// The edits go round the store's own rows, in the order they were generated,
+// rather than one row many times, so each commit touches the kind of row an
+// ordinary write touches: one row of many, not the same row again. A store
+// with no row has nothing to edit, and says so with an error instead of a
+// figure of zero.
 func measureHistory(bin litBinary, store generatedStore, before int64) (historyCost, error) {
-	ids, err := listIDs(bin, store)
-	if err != nil {
-		return historyCost{}, err
-	}
+	ids := store.ids
 	if len(ids) == 0 {
 		return historyCost{}, fmt.Errorf("store %s has no row to edit", store.size.name)
 	}
 	for i := range historyEdits {
-		edit := step{runBudget, []string{bin.path, "update", ids[i%len(ids)], "--title", fmt.Sprintf("perfbench history edit %d", i)}}
-		if err := runQuiet(store.root, store.env, edit); err != nil {
+		edit := step{budget: runBudget, argv: []string{bin.path, "update", ids[i%len(ids)], "--title", fmt.Sprintf("perfbench history edit %d", i)}}
+		if _, err := runQuiet(store.root, store.env, edit); err != nil {
 			return historyCost{}, err
 		}
 	}
@@ -69,27 +62,4 @@ func measureHistory(bin litBinary, store generatedStore, before int64) (historyC
 		return historyCost{}, err
 	}
 	return historyCost{edits: historyEdits, before: before, after: after}, nil
-}
-
-// listIDs reads the ids of the store's open rows from `lit ls`, whose lines
-// lead with the id and a " | ".
-func listIDs(bin litBinary, store generatedStore) ([]string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), runBudget)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, bin.path, "ls")
-	cmd.Dir = store.root
-	cmd.Env = store.env
-	out, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("lit ls (in %s): %w", store.root, err)
-	}
-	var ids []string
-	for _, line := range strings.FieldsFunc(string(out), func(r rune) bool { return r == '\n' }) {
-		id, _, found := strings.Cut(line, " | ")
-		if !found {
-			return nil, fmt.Errorf("lit ls printed a line with no id: %q", line)
-		}
-		ids = append(ids, id)
-	}
-	return ids, nil
 }

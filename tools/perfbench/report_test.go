@@ -79,8 +79,8 @@ func TestRunRejectsABadSizeBeforeDoingAnyWork(t *testing.T) {
 func fixedResults() []result {
 	samplesAt := func(quickMin, quickMax, backlogMin, backlogMax time.Duration) []sample {
 		return []sample{
-			{probe: probe{name: "quickstart"}, min: quickMin, max: quickMax},
-			{probe: probe{name: "backlog"}, min: backlogMin, max: backlogMax},
+			{probe: probe{name: "quickstart"}, outcome: completed{min: quickMin, max: quickMax}},
+			{probe: probe{name: "backlog"}, outcome: completed{min: backlogMin, max: backlogMax}},
 		}
 	}
 	return []result{
@@ -97,7 +97,7 @@ func fixedResults() []result {
 // the store's bytes stated per size. A figure measured and then dropped in
 // formatting is the failure this pins.
 func TestRenderReportStatesEveryMeasuredFigure(t *testing.T) {
-	got := renderReport(fixedResults(), conditions{goos: "darwin", goarch: "arm64", cpus: 12})
+	got := renderReport(probes, fixedResults(), latencyBudget, conditions{goos: "darwin", goarch: "arm64", cpus: 12})
 	for _, want := range []string{
 		"darwin/arm64", "12 CPUs",
 		"empty (0 rows)", "today (118 rows)",
@@ -121,7 +121,7 @@ func TestRenderReportStatesEveryMeasuredFigure(t *testing.T) {
 // 7.97s"), so a regenerated table has to be comparable to the pasted one
 // without converting units.
 func TestRenderReportMatchesTheEpicsUnits(t *testing.T) {
-	got := renderReport(fixedResults(), conditions{goos: "linux", goarch: "amd64", cpus: 2})
+	got := renderReport(probes, fixedResults(), latencyBudget, conditions{goos: "linux", goarch: "amd64", cpus: 2})
 	if strings.Contains(got, "ms") {
 		t.Errorf("report prints milliseconds; the epic states its figures in seconds:\n%s", got)
 	}
@@ -133,7 +133,7 @@ func TestRenderReportMatchesTheEpicsUnits(t *testing.T) {
 // Nothing measured must print no rows. A header listing every probe name over
 // columns that were never measured is a report that looks like a result.
 func TestRenderReportOverNoResultsNamesNoProbes(t *testing.T) {
-	got := renderReport(nil, conditions{goos: "darwin", goarch: "arm64", cpus: 1})
+	got := renderReport(probes, nil, latencyBudget, conditions{goos: "darwin", goarch: "arm64", cpus: 1})
 	for _, name := range []string{"backlog", "quickstart", "next"} {
 		if strings.Contains(got, name) {
 			t.Errorf("report over zero results names probe %q:\n%s", name, got)
@@ -159,5 +159,87 @@ func TestFormatBytesDoesNotPrintASmallStoreAsZero(t *testing.T) {
 	}
 	if got != "4.30 KB" {
 		t.Errorf("formatBytes(4300) = %q, want %q", got, "4.30 KB")
+	}
+}
+
+// A probe one store lacks must not move another command's figures. The empty
+// control has no `show`, and it is the first column; a report reading cells by
+// position would print the populated store's show time on the next probe's
+// row, with nothing to say so.
+func TestRenderReportKeepsEveryFigureUnderItsOwnProbe(t *testing.T) {
+	results := []result{
+		{size: size{name: "empty", rows: 0}, samples: []sample{
+			{probe: probe{name: "ls"}, outcome: completed{min: 110 * time.Millisecond, max: 120 * time.Millisecond}},
+			{probe: probe{name: "doctor"}, outcome: completed{min: 210 * time.Millisecond, max: 220 * time.Millisecond}},
+		}},
+		{size: size{name: "today", rows: 118}, samples: []sample{
+			{probe: probe{name: "ls"}, outcome: completed{min: 130 * time.Millisecond, max: 140 * time.Millisecond}},
+			{probe: probe{name: "show"}, outcome: completed{min: 330 * time.Millisecond, max: 340 * time.Millisecond}},
+			{probe: probe{name: "doctor"}, outcome: completed{min: 430 * time.Millisecond, max: 440 * time.Millisecond}},
+		}},
+	}
+	got := renderReport(probes, results, latencyBudget, conditions{goos: "linux", goarch: "amd64", cpus: 4})
+	for name, want := range map[string]string{
+		"ls":     "0.11s (0.12s) 0.13s (0.14s)",
+		"show":   "— 0.33s (0.34s)",
+		"doctor": "0.21s (0.22s) 0.43s (0.44s)",
+	} {
+		row := reportRow(t, got, name)
+		if cells := strings.Join(strings.Fields(row)[1:], " "); cells != want {
+			t.Errorf("row %q = %q, want its figures %q\n--- report ---\n%s", name, row, want, got)
+		}
+	}
+}
+
+// reportRow is the table line whose first column is name.
+func reportRow(t *testing.T, report, name string) string {
+	t.Helper()
+	for _, line := range strings.Split(report, "\n") {
+		if strings.HasPrefix(line, name+"  ") {
+			return line
+		}
+	}
+	t.Fatalf("report has no row for %q:\n%s", name, report)
+	return ""
+}
+
+// The verdict: a completed probe breaches when its min is over budget, not
+// when only its max is, since noise only adds time; a killed one always does.
+func TestBreachesJudgesTheMinAndEveryKill(t *testing.T) {
+	r := result{size: size{name: "today", rows: 118}, samples: []sample{
+		{probe: probe{name: "ls"}, outcome: completed{min: 900 * time.Millisecond, max: 3 * time.Second}},
+		{probe: probe{name: "backlog"}, outcome: completed{min: 2500 * time.Millisecond, max: 2600 * time.Millisecond}},
+		{probe: probe{name: "next"}, outcome: killed{round: 3, after: 30 * time.Second}},
+	}}
+	got := breaches(r, time.Second)
+	if len(got) != 2 || got[0].probe != "backlog" || got[1].probe != "next" {
+		t.Fatalf("breaches = %v, want backlog (min over) and next (killed), and not ls (only its max is over)", got)
+	}
+	for i, want := range []string{
+		"store today (118 rows): backlog took 2.50s, 2.5x its 1s budget",
+		"store today (118 rows): next was killed in its round 3, still running at 30s, over 30x its 1s budget",
+	} {
+		if got[i].String() != want {
+			t.Errorf("breach %d reads %q, want %q", i, got[i], want)
+		}
+	}
+}
+
+// The report ends with the verdict, so the table and the reason the run failed
+// are read together, and says so explicitly when nothing is over.
+func TestRenderReportStatesTheBudgetVerdict(t *testing.T) {
+	cond := conditions{goos: "linux", goarch: "amd64", cpus: 4}
+	over := renderReport(probes, fixedResults(), latencyBudget, cond)
+	for _, want := range []string{"BUDGET: every probe under 1s", "OVER  store empty (0 rows): backlog took 7.97s", "OVER  store today (118 rows): backlog took 3.33s"} {
+		if !strings.Contains(over, want) {
+			t.Errorf("report omits %q\n--- report ---\n%s", want, over)
+		}
+	}
+	if strings.Contains(over, "quickstart took") {
+		t.Errorf("report names quickstart, which is under budget, as over:\n%s", over)
+	}
+	under := renderReport(probes, fixedResults(), time.Minute, cond)
+	if !strings.Contains(under, "none over budget") {
+		t.Errorf("report with nothing over budget does not say so:\n%s", under)
 	}
 }

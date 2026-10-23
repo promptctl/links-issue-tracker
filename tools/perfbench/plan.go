@@ -13,8 +13,8 @@ import "time"
 // the variability in function names, so every new command measured would be
 // new code instead of a new row here. [LAW:one-type-per-behavior]
 
-// probe is one user-facing invocation to time — the argv after the binary, and
-// the exit codes that prove the command actually did its job.
+// probe is one user-facing command to time — the argv it runs against a store,
+// and the exit codes that prove the command actually did its job.
 //
 // okCodes is the load-bearing field. `lit next` exits 6 with "no ready work" on
 // an empty store: that is the command answering correctly, not failing. But a
@@ -26,10 +26,10 @@ import "time"
 // rather than a fact about how fast it can decline. [LAW:no-silent-failure]
 type probe struct {
 	// name is how the row prints, and it is written out rather than derived
-	// from args so a probe can be renamed in the table without changing what
+	// from argv so a probe can be renamed in the table without changing what
 	// is invoked.
 	name    string
-	args    []string
+	argv    argvRule
 	okCodes exitRule
 	// mutates marks a probe that writes to the store. It is a field rather
 	// than a separate write-probe list because the ordering it drives — every
@@ -37,6 +37,25 @@ type probe struct {
 	// data the runner sorts on, not a branch in the runner.
 	// [LAW:dataflow-not-control-flow]
 	mutates bool
+}
+
+// argvRule is the invocation a probe makes against a store whose rows carry
+// these ids, in import order: one argv, or none when the store holds nothing
+// the command can be pointed at.
+//
+// A list and not an argv-or-nil because "this store has no legal invocation of
+// this probe" is a case with its own meaning: the empty control has no row for
+// `show` to name, and timing `show <nonexistent-id>` instead would time the
+// refusal path, the answer-shaped void okCodes exists to refuse. A probe with no
+// invocation is simply not measured at that size, and the report prints its
+// cell as absent. [LAW:dataflow-not-control-flow] the variability is the
+// length of the list, not a branch in the runner.
+type argvRule func(ids []string) [][]string
+
+// fixed is the rule for every command that takes no id: the same argv against
+// every store.
+func fixed(args ...string) argvRule {
+	return func([]string) [][]string { return [][]string{args} }
 }
 
 // exitRule names the exit codes that prove a probe did its work against a
@@ -59,6 +78,29 @@ func exits(codes ...int) exitRule {
 	return func(int) []int { return codes }
 }
 
+// invocation is a probe resolved against one store: the argv it runs there and
+// the exit codes that prove it there.
+type invocation struct {
+	probe   probe
+	args    []string
+	okCodes []int
+}
+
+// invocationsFor resolves probes against store, in the order given, dropping
+// any probe the store admits no invocation of. It is the one place a probe
+// meets a store, so both ways a store shapes a probe, the argv it can name and
+// the codes that prove it at this size, are read here and nowhere else.
+// [LAW:single-enforcer]
+func invocationsFor(ps []probe, store generatedStore) []invocation {
+	var out []invocation
+	for _, p := range ps {
+		for _, args := range p.argv(store.ids) {
+			out = append(out, invocation{probe: p, args: args, okCodes: p.okCodes(store.size.rows)})
+		}
+	}
+	return out
+}
+
 // probes is the measured surface, in reading order: the two controls first,
 // then the read commands, then the one write.
 //
@@ -67,38 +109,67 @@ func exits(codes ...int) exitRule {
 // startup is not the cost, so everything above it is store open plus query.
 // Without them a whole-table regression (a slower Go runtime, a bigger binary,
 // a loaded machine) reads identically to a store regression.
-//
-// WHAT IS DELIBERATELY ABSENT: every command that takes an issue id — `show`,
-// `history`, `children`. A column is only comparable across sizes if the same
-// invocation is legal at every size, and on the empty control there is no id to
-// pass. Timing `show <nonexistent-id>` instead would measure the refusal path,
-// which is the answer-shaped void described on okCodes wearing a different
-// costume. Adding them means deciding what the empty control does first; that
-// decision belongs to whoever needs the column, not to a placeholder here.
 var probes = []probe{
-	{name: "version", args: []string{"version"}, okCodes: exits(0)},
-	{name: "quickstart", args: []string{"quickstart"}, okCodes: exits(0)},
-	{name: "ls", args: []string{"ls"}, okCodes: exits(0)},
-	{name: "backlog", args: []string{"backlog"}, okCodes: exits(0)},
+	{name: "version", argv: fixed("version"), okCodes: exits(0)},
+	{name: "quickstart", argv: fixed("quickstart"), okCodes: exits(0)},
+	{name: "ls", argv: fixed("ls"), okCodes: exits(0)},
+	{name: "backlog", argv: fixed("backlog"), okCodes: exits(0)},
 	// 6 is "no ready work" — the honest answer on the empty store, and the
 	// only size at which it can occur, since every generated row is open. The
 	// one branch here is the store's own discriminator, empty or populated.
-	{name: "next", args: []string{"next"}, okCodes: func(rows int) []int {
+	{name: "next", argv: fixed("next"), okCodes: func(rows int) []int {
 		if rows == 0 {
 			return []int{6}
 		}
 		return []int{0}
 	}},
-	{name: "stores --counts", args: []string{"stores", "--counts"}, okCodes: exits(0)},
-	{name: "doctor", args: []string{"doctor"}, okCodes: exits(0)},
-	{name: "workspace", args: []string{"workspace"}, okCodes: exits(0)},
+	// The first imported row, which is always an epic. Its children make
+	// `show` print the plan of a real epic, the relations work an agent's
+	// `lit show` pays.
+	{name: "show", argv: func(ids []string) [][]string {
+		if len(ids) == 0 {
+			return nil
+		}
+		return [][]string{{"show", ids[0]}}
+	}, okCodes: exits(0)},
+	{name: "stores --counts", argv: fixed("stores", "--counts"), okCodes: exits(0)},
+	{name: "doctor", argv: fixed("doctor"), okCodes: exits(0)},
+	{name: "workspace", argv: fixed("workspace"), okCodes: exits(0)},
 	// An epic, because it is the one ticket lit files with no parent: every
 	// other type names the epic it lives inside, and the empty control has
 	// none to name, so a task here would be a different invocation per size.
-	{name: "new (write)", args: []string{
+	{name: "new (write)", argv: fixed(
 		"new", "--title", "perfbench write probe", "--type", "epic", "--topic", "bench",
-	}, okCodes: exits(0), mutates: true},
+	), okCodes: exits(0), mutates: true},
 }
+
+// latencyBudget is the most any probe may take, at any store size: the scale
+// epic's destination, "every lit command returns in under a second", and not
+// a figure fitted to what the commands cost today. A probe is judged on its
+// min across rounds, because noise on a shared machine only ever adds time.
+//
+// It is one value for every probe because every probe has the same budget,
+// and it is a ceiling, not a ratchet: no baseline is recorded and no run is
+// compared with an earlier one. A ratchet fails on runner noise, gets muted,
+// and then guards nothing. [LAW:one-source-of-truth]
+const latencyBudget = time.Second
+
+// probeKillAfter is when a probe invocation is killed rather than waited on.
+// It is derived from the budget because a kill is only ever a verdict on it:
+// any run killed here is 30 times over. The factor is 30 so the slowest figure
+// the scale epic has recorded, `lit backlog` at 11.3s, is still a measurement
+// rather than a kill.
+const probeKillAfter = 30 * latencyBudget
+
+// limits are the two figures a probe is held to. They travel as a value so a
+// test can drive a breach and a kill in milliseconds instead of seconds.
+type limits struct {
+	budget time.Duration
+	kill   time.Duration
+}
+
+// gateLimits are the limits every real run uses.
+var gateLimits = limits{budget: latencyBudget, kill: probeKillAfter}
 
 // size is one store to generate and measure at. rows is the store's TOTAL row
 // count, epics included, and it is not the same as its workable count: one row
@@ -176,11 +247,14 @@ const blockedEveryNth = 3
 // the min means the run was fighting for CPU and only the min survived it.
 const repeats = 5
 
-// runBudget bounds a single probe invocation. It exists so a hang is reported
-// as a hang naming the probe, rather than as a tool that never returns: the
-// scale epic's own subject matter is a write path that can wait fifteen minutes
-// on a lock, so "slow" here is a plausible outcome and an unbounded wait would
-// make this tool unable to report it. [LAW:no-silent-failure]
+// runBudget bounds a single generation, compaction or history step. It exists
+// so a hang is reported as a hang naming the step, rather than as a tool that
+// never returns: the scale epic's own subject matter is a write path that can
+// wait fifteen minutes on a lock, so "slow" here is a plausible outcome and an
+// unbounded wait would make this tool unable to report it.
+// [LAW:no-silent-failure] Probes are not bounded by it; probeKillAfter does
+// that, because a probe's limit is a verdict on the latency budget and a
+// step's is not.
 const runBudget = 2 * time.Minute
 
 // importBudget bounds the one `lit import` that populates a store. It grows
