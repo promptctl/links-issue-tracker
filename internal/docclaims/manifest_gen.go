@@ -1025,6 +1025,7 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "issue_id VARCHAR(191) NOT NULL", Src: "CREATE TABLE comments (\n\t\t\tid VARCHAR(191) PRIMARY KEY,\n\t\t\tissue_id VARCHAR(191) NOT NULL,\n\t\t\tbody TEXT NOT NULL,\n\t\t\tcreated_at VARCHAR(64) NOT NULL,\n\t\t\tcreated_by TEXT NOT NULL,\n\t\t\tFOREIGN KEY (issue_id) REFERENCES issues(id) ON DELETE CASCADE\n\t\t);"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "issue_id, issue_created_at, purged_at, purged_by", Src: "SELECT issue_id, issue_created_at, purged_at, purged_by FROM purges"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "issue_type IN ('epic')", Src: "internal/store/migrations/00001_baseline.sql"},
+	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "issues i ON i.id = sel.id", Src: " JOIN issues i ON i.id = sel.id"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "item_rank != ''", Src: "SELECT MAX(item_rank) FROM issues WHERE item_rank != ''"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "item_rank < ? ORDER BY item_rank DESC", Src: "item_rank < ? ORDER BY item_rank DESC"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "item_rank > ? ORDER BY item_rank ASC", Src: "item_rank > ? ORDER BY item_rank ASC"},

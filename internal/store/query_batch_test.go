@@ -29,23 +29,22 @@ func makeEpics(t *testing.T, ctx context.Context, st *Store, n int, titlef strin
 	return ids
 }
 
-// An id filter longer than one batch must come back whole.
+// A long id filter must come back whole.
 //
-// This is the failure batching can hide and the query cannot report: a read
-// that asks only the first batch, or drops the trailing partial one, answers
-// with a union of whatever it did ask for, and at that point an issue whose
-// batch was never queried is indistinguishable from one the other filters
-// excluded. Nothing errors and the caller prints a shorter truth.
+// The query cannot report this failure: a read that answers for only part of
+// its ids is still well-formed, and an issue it never read is
+// indistinguishable from one the other filters excluded. Nothing errors and
+// the caller prints a shorter truth.
 //
-// The count assertion covers every batch at once; the three named probes sit in
-// the first batch, a middle one, and the trailing partial one, so a failure
-// says WHICH end was lost rather than only that a number was wrong.
-func TestListIssuesByIDsSpansEveryBatch(t *testing.T) {
+// The count assertion covers every id at once; the three named probes sit at
+// the start, the middle, and the end, so a failure says WHICH end was lost
+// rather than only that a number was wrong.
+func TestListIssuesByIDsAnswersForEveryID(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
-	const count = 2*idBatchSize + 2
+	const count = 34
 	ids := makeEpics(t, ctx, st, count, "subject %d")
 
 	got, err := st.ListIssues(ctx, storage.ListIssuesFilter{IDs: ids})
@@ -53,25 +52,25 @@ func TestListIssuesByIDsSpansEveryBatch(t *testing.T) {
 		t.Fatalf("ListIssues(%d ids) error = %v", len(ids), err)
 	}
 	if len(got) != count {
-		t.Fatalf("ListIssues(%d ids) returned %d issues, want %d — a batch went unqueried", len(ids), len(got), count)
+		t.Fatalf("ListIssues(%d ids) returned %d issues, want %d — some ids were never read", len(ids), len(got), count)
 	}
-	for _, i := range []int{0, idBatchSize + 1, count - 1} {
+	for _, i := range []int{0, count / 2, count - 1} {
 		if !containsIssueID(got, ids[i]) {
-			t.Fatalf("id %d of %d (%s) is missing: its batch was never queried", i, count, ids[i])
+			t.Fatalf("id %d of %d (%s) is missing: it was never read", i, count, ids[i])
 		}
 	}
 }
 
-// The parent filter batches over the PARENTS, so its boundary is the number of
-// parents named and not the number of children they hold. One child each is
-// what separates the two: a filter that queried only the first batch of parents
-// would still return rows, just fewer of them.
-func TestListIssuesByParentIDsSpansEveryBatch(t *testing.T) {
+// The parent filter reads over the PARENTS, so what it must cover is the
+// parents named and not the children they hold. One child each is what
+// separates the two: a filter that read only some of the parents would still
+// return rows, just fewer of them.
+func TestListIssuesByParentIDsAnswersForEveryParent(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
-	const count = 2*idBatchSize + 2
+	const count = 34
 	parents := makeEpics(t, ctx, st, count, "parent %d")
 	children := make([]string, 0, count)
 	for i, parent := range parents {
@@ -90,20 +89,18 @@ func TestListIssuesByParentIDsSpansEveryBatch(t *testing.T) {
 		t.Fatalf("ListIssues(%d parents) error = %v", len(parents), err)
 	}
 	if !slices.Equal(slices.Sorted(slices.Values(issueIDs(got))), slices.Sorted(slices.Values(children))) {
-		t.Fatalf("ListIssues(%d parents) returned %d issues, want exactly the %d children — a parent batch went unqueried", len(parents), len(got), len(children))
+		t.Fatalf("ListIssues(%d parents) returned %d issues, want exactly the %d children — some parents were never read", len(parents), len(got), len(children))
 	}
 }
 
 // The two id-shaped filters intersect, and the intersection is taken before the
-// scan rather than by the scan. Both boundaries are exercised at once: the ids
-// kept straddle the id filter's batches, and the parents naming them straddle
-// the parent filter's.
+// scan rather than by the scan.
 func TestListIssuesByIDsIntersectsParentIDs(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
-	const count = 2*idBatchSize + 2
+	const count = 34
 	parents := makeEpics(t, ctx, st, count, "parent %d")
 	children := make([]string, 0, count)
 	for i, parent := range parents {
@@ -116,10 +113,9 @@ func TestListIssuesByIDsIntersectsParentIDs(t *testing.T) {
 		}
 		children = append(children, child.ID)
 	}
-	// One child from the first batch, one from a middle batch, one from the
-	// trailing partial batch, and — the case that separates an intersection
-	// from a union — one id that is nobody's child.
-	wanted := []string{children[0], children[idBatchSize+1], children[count-1]}
+	// Children from the start, the middle and the end, and — the case that
+	// separates an intersection from a union — one id that is nobody's child.
+	wanted := []string{children[0], children[count/2], children[count-1]}
 	asked := append(slices.Clone(wanted), parents[0])
 
 	got, err := st.ListIssues(ctx, storage.ListIssuesFilter{IDs: asked, ParentIDs: parents})

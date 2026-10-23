@@ -90,9 +90,9 @@ var (
 	// Every `IN` list in this file is rendered from a closed vocabulary the
 	// model owns — the issue types, the container subset of them, the three
 	// statuses — so each is a fixed handful of literals baked into DDL at
-	// startup, with no caller-supplied length to grow. That is the bounded half
-	// of the rule idBatchSize states; the other half, batching, applies to the
-	// id-keyed reads, none of which live here.
+	// startup, with no caller-supplied length to grow. That is the bounded
+	// kind of IN list idSet's rule allows; the id-keyed reads, which join an
+	// idSet instead, do not live here.
 	issueTypeCheckClause    = fmt.Sprintf("issue_type IN (%s)", quotedIssueTypeList(model.IssueTypes()))
 	containerTypeMembership = fmt.Sprintf("issue_type IN (%s)", quotedIssueTypeList(model.ContainerTypes()))
 )

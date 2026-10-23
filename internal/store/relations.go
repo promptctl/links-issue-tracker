@@ -219,30 +219,19 @@ func (s *Store) relationsByEndpoint(ctx context.Context, column string, ids []st
 	if _, ok := relationEndpointColumns[column]; !ok {
 		return nil, fmt.Errorf("list relations by endpoint: unknown column %q", column)
 	}
-	// Bounded by a closed domain, so it is one clause and not a batch loop:
+	// The type list is bounded by a closed domain, so it stays an IN clause:
 	// structuralRelationTypes is a package-level constant list of two, and no
-	// caller can lengthen it. See idBatchSize for why an id list — which a
-	// caller CAN lengthen — may not be written this way.
-	typeClause := strings.Join(repeatPlaceholder(len(structuralRelationTypes)), ",")
-	rels := []model.Relation{}
-	for _, batch := range idBatches(ids) {
-		idClause, args := batch.inList()
-		for _, relType := range structuralRelationTypes {
-			args = append(args, string(relType))
-		}
-		query := fmt.Sprintf(`SELECT src_id, dst_id, type, created_at, created_by FROM relations WHERE %s IN (%s) AND type IN (%s)`, column, idClause, typeClause)
-		batched, err := s.scanRelationRows(ctx, query, args)
-		if err != nil {
-			return nil, err
-		}
-		rels = append(rels, batched...)
+	// caller can lengthen it. The id list is not, so it is a join; see idSet.
+	ends, arg := newIDSet(ids).rows("ends")
+	args := []any{arg}
+	for _, relType := range structuralRelationTypes {
+		args = append(args, string(relType))
 	}
-	return rels, nil
+	query := fmt.Sprintf(`SELECT r.src_id, r.dst_id, r.type, r.created_at, r.created_by FROM %s JOIN relations r ON r.%s = ends.id WHERE r.type IN (%s)`, ends, column, placeholders(len(structuralRelationTypes)))
+	return s.scanRelationRows(ctx, query, args)
 }
 
-// scanRelationRows runs one endpoint query and reads its rows. It is separate
-// from the batching above so that the shape of a relation row is stated once,
-// however many queries the id set turns into.
+// scanRelationRows runs an endpoint query and reads its rows.
 func (s *Store) scanRelationRows(ctx context.Context, query string, args []any) ([]model.Relation, error) {
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
