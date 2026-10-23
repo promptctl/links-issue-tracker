@@ -171,7 +171,7 @@ func TestScopeProgressCountsEveryAdmittedLaneAndNothingElse(t *testing.T) {
 	other := leaf(t, "F1", "", model.StateClosed)
 	epicF := container(t, "F", other)
 	issues = append(issues, epicF, other)
-	parents[other.ID] = &epicF
+	parents[other.ID] = epicF.ID
 	evidence, err := claims.NewEvidence(issues, parents, nil)
 	if err != nil {
 		t.Fatalf("NewEvidence() error = %v", err)

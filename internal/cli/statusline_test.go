@@ -19,9 +19,9 @@ func TestNextOutcomesBecomeStatuslineFacts(t *testing.T) {
 	inFlight := hydratedIssue(t, "t-1", nil, model.StateInProgress)
 	inFlight.Title = "One"
 	lanemates := []model.Issue{inFlight, hydratedIssue(t, "t-2", nil, model.StateClosed), hydratedIssue(t, "t-3", nil, model.StateOpen)}
-	parents := map[string]*model.Issue{}
+	parents := map[string]string{}
 	for _, issue := range lanemates {
-		parents[issue.ID] = &epic
+		parents[issue.ID] = epic.ID
 	}
 	// The in-flight ticket's history moves it to review; a lanemate's newer
 	// event names another phase, which is not the in-flight ticket's.
@@ -29,7 +29,7 @@ func TestNextOutcomesBecomeStatuslineFacts(t *testing.T) {
 		{ID: "e-1", IssueID: "t-1", Action: string(model.ActionPhase), Changes: []model.FieldChange{{Field: model.PhaseField, From: "plan", To: "review"}}, CreatedAt: time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC)},
 		{ID: "e-2", IssueID: "t-3", Action: string(model.ActionPhase), Changes: []model.FieldChange{{Field: model.PhaseField, From: "plan", To: "merge"}}, CreatedAt: time.Date(2026, 10, 16, 10, 0, 0, 0, time.UTC)},
 	}
-	evidence, err := claims.NewEvidence(lanemates, parents, events)
+	evidence, err := claims.NewEvidence(append(lanemates, epic), parents, events)
 	if err != nil {
 		t.Fatal(err)
 	}

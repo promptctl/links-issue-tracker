@@ -207,7 +207,7 @@ var cases = []engineCase{
 	{"labels_roundtrip", labelsRoundtrip},
 	{"relations_roundtrip", relationsRoundtrip},
 	{"relations_batch_buckets_edges", relationsBatchBucketsEdges},
-	{"parent_ids_map_every_child", parentIDsMapEveryChild},
+	{"parent_by_child_maps_every_child", parentByChildMapsEveryChild},
 	{"rank_inversions_read_tree_order", rankInversionsReadTreeOrder},
 	{"interleaved_epics_hold_no_rank_inversion", interleavedEpicsHoldNoRankInversion},
 	{"parent_wiring", parentWiring},
@@ -2728,34 +2728,39 @@ func relationsBatchBucketsEdges(t *testing.T, ctx context.Context, st storage.St
 	}
 }
 
-// ParentIDs answers for every issue under a parent, whatever its retention
-// state, and for nothing else: a blocked-by edge is not parentage, and a
-// top-level epic has no entry.
-func parentIDsMapEveryChild(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+// ParentByChild answers for every issue under a parent, whatever the retention
+// state at either end, and for nothing else: a blocked-by edge is not
+// parentage, and a top-level epic has no entry.
+func parentByChildMapsEveryChild(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
 	nested := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "nested", Topic: "core", IssueType: model.TypeEpic, ParentID: epic.ID})
 	live := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "live", Topic: "core", ParentID: nested.ID})
-	archived := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "archived", Topic: "core", ParentID: epic.ID})
-	deleted := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "deleted", Topic: "core", ParentID: epic.ID})
-	if _, err := st.Apply(ctx, archived.ID, storage.Change{Action: model.Archive{}, Actor: "ada"}); err != nil {
-		t.Fatalf("Apply archive error = %v", err)
-	}
-	if _, err := st.Apply(ctx, deleted.ID, storage.Change{Action: model.Delete{}, Actor: "ada"}); err != nil {
-		t.Fatalf("Apply delete error = %v", err)
+	shelved := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "shelved epic", Topic: "core", IssueType: model.TypeEpic, ParentID: epic.ID})
+	archived := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "archived", Topic: "core", ParentID: shelved.ID})
+	gone := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "gone epic", Topic: "core", IssueType: model.TypeEpic, ParentID: epic.ID})
+	deleted := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "deleted", Topic: "core", ParentID: gone.ID})
+	for _, step := range []struct {
+		id     string
+		action model.Action
+	}{{archived.ID, model.Archive{}}, {shelved.ID, model.Archive{}}, {deleted.ID, model.Delete{}}, {gone.ID, model.Delete{}}} {
+		if _, err := st.Apply(ctx, step.id, storage.Change{Action: step.action, Actor: "ada"}); err != nil {
+			t.Fatalf("Apply(%s, %T) error = %v", step.id, step.action, err)
+		}
 	}
 	other := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "other epic", Topic: "core", IssueType: model.TypeEpic})
 	dependency := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "dependency", Topic: "core", ParentID: other.ID})
 	mustBlock(t, ctx, st, live.ID, dependency.ID)
 
-	got, err := st.ParentIDs(ctx)
+	got, err := st.ParentByChild(ctx)
 	if err != nil {
-		t.Fatalf("ParentIDs error = %v", err)
+		t.Fatalf("ParentByChild error = %v", err)
 	}
 	want := map[string]string{
-		nested.ID: epic.ID, live.ID: nested.ID, archived.ID: epic.ID, deleted.ID: epic.ID, dependency.ID: other.ID,
+		nested.ID: epic.ID, live.ID: nested.ID, shelved.ID: epic.ID, archived.ID: shelved.ID,
+		gone.ID: epic.ID, deleted.ID: gone.ID, dependency.ID: other.ID,
 	}
 	if !maps.Equal(got, want) {
-		t.Errorf("ParentIDs = %v, want %v", got, want)
+		t.Errorf("ParentByChild = %v, want %v", got, want)
 	}
 }
 

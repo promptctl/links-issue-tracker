@@ -39,9 +39,9 @@ type Evidence struct {
 }
 
 // NewEvidence partitions issues into lanes and files every event under the lane
-// of the issue it touched. parents maps an issue id to the parent the caller
-// resolved for it; an issue absent from the map, or mapped to nil, is
-// parentless.
+// of the issue it touched. parentByChild maps an issue id to its parent's id; an
+// issue absent from the map is parentless. The parent is read from issues, so
+// it fails when a parent was not supplied, as it does for an event's issue.
 //
 // It fails when an event names an issue that was not supplied, and that check is
 // the reason this constructor exists. Claim derivation reads closed tickets:
@@ -57,7 +57,16 @@ type Evidence struct {
 // Evidence — which by its existence proves every event's issue was supplied —
 // comes out. Derive takes only Evidence, so no derivation can run on a partial
 // read, and nothing inland re-checks.
-func NewEvidence(issues []model.Issue, parents map[string]*model.Issue, events []model.IssueEvent) (Evidence, error) {
+func NewEvidence(issues []model.Issue, parentByChild map[string]string, events []model.IssueEvent) (Evidence, error) {
+	issuesByID := make(map[string]*model.Issue, len(issues))
+	for i := range issues {
+		issuesByID[issues[i].ID] = &issues[i]
+	}
+	for childID, parentID := range parentByChild {
+		if _, known := issuesByID[parentID]; !known {
+			return Evidence{}, fmt.Errorf("claims: issue %s sits under %s, which was not among the %d issues supplied: claim derivation places an issue by its parent, so every parent must be supplied", childID, parentID, len(issues))
+		}
+	}
 	lanes := make(map[string]model.LaneID, len(issues))
 	ev := Evidence{
 		lanes:   lanes,
@@ -65,7 +74,9 @@ func NewEvidence(issues []model.Issue, parents map[string]*model.Issue, events [
 		events:  make(map[model.LaneID][]model.IssueEvent),
 	}
 	for _, issue := range issues {
-		lane := model.LaneOf(issue, parents[issue.ID])
+		// A parentless issue looks up the empty id, which no issue has, so it
+		// reaches LaneOf with no parent.
+		lane := model.LaneOf(issue, issuesByID[parentByChild[issue.ID]])
 		lanes[issue.ID] = lane
 		ev.members[lane] = append(ev.members[lane], issue)
 	}

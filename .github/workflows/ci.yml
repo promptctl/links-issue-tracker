@@ -125,10 +125,9 @@ jobs:
   # run in parallel and finish inside the race job, and leave the slowest probe
   # near half the budget on this runner, so a ~2x regression trips it and
   # runner noise does not. Store size is the lever when it does not fit; the
-  # budget never moves. 1,400 rows is the largest store that keeps that margin
-  # (links-scale-dy46.zi4): backlog and next 0.47s there on the development
-  # machine (2026-10-23), which ran the old 500-row store within 0.02s of this
-  # runner (run 39970214684: 0.47s). A breach exits 2
+  # budget never moves. 500 rows is about the largest store that keeps that
+  # margin: backlog and next 0.47s at 500 rows (run 39970214684) and 0.89s at
+  # 1,400 (run 39978715159), so half the budget falls near 560. A breach exits 2
   # and names the command, its min and the ratio; the verdict is logged as soon
   # as each store's probes finish, so timeout-minutes, which only stops a hung
   # lit holding a runner for six hours, cannot cut it. The stores have no git
@@ -154,7 +153,7 @@ jobs:
       - name: Commands stay under their latency budget and 100 concurrent writers complete
         run: |
           go build -o "$RUNNER_TEMP/perfbench" ./tools/perfbench
-          "$RUNNER_TEMP/perfbench" --sizes 1400
+          "$RUNNER_TEMP/perfbench" --sizes 500
 
   # Repo/release hygiene gates — fast, platform-independent, ubuntu-only. These
   # check correctness properties of the repo, not the build, so they live apart

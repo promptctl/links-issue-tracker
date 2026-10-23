@@ -150,10 +150,10 @@ func (s *Store) GetRelationsByIDs(ctx context.Context, ids []string) (map[string
 	return out, nil
 }
 
-// ParentIDs is one query over the relations table: no id list to batch and no
+// ParentByChild is one query over the relations table: no id list to batch and no
 // issue to hydrate, which is the whole of its advantage over GetRelationsByIDs.
 // MIN is the two-parent rule the contract states. [LAW:one-source-of-truth]
-func (s *Store) ParentIDs(ctx context.Context) (map[string]string, error) {
+func (s *Store) ParentByChild(ctx context.Context) (map[string]string, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT src_id, MIN(dst_id) FROM relations WHERE type = ? GROUP BY src_id`, string(model.RelParentChild))
 	if err != nil {
 		return nil, fmt.Errorf("list parent ids: %w", err)

@@ -42,17 +42,9 @@ func deriveClaims(t *testing.T, ctx context.Context, st *Store) claims.Standings
 	if err != nil {
 		t.Fatalf("ListIssues() error = %v", err)
 	}
-	parentIDs, err := st.ParentIDs(ctx)
+	parents, err := st.ParentByChild(ctx)
 	if err != nil {
-		t.Fatalf("ParentIDs() error = %v", err)
-	}
-	issuesByID := make(map[string]*model.Issue, len(issues))
-	for i := range issues {
-		issuesByID[issues[i].ID] = &issues[i]
-	}
-	parents := make(map[string]*model.Issue, len(parentIDs))
-	for childID, parentID := range parentIDs {
-		parents[childID] = issuesByID[parentID]
+		t.Fatalf("ParentByChild() error = %v", err)
 	}
 	events, err := st.ListAllEvents(ctx)
 	if err != nil {

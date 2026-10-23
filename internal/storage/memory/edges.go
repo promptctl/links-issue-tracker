@@ -403,9 +403,9 @@ func (e *Engine) GetRelationsByIDs(ctx context.Context, ids []string) (map[strin
 	return out, nil
 }
 
-// ParentIDs maps each child to its parent, keeping the lower id when restored
+// ParentByChild maps each child to its parent, keeping the lower id when restored
 // data gives a child two — the rule the contract states for both engines.
-func (e *Engine) ParentIDs(ctx context.Context) (map[string]string, error) {
+func (e *Engine) ParentByChild(ctx context.Context) (map[string]string, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
