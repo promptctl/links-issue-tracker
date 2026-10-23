@@ -894,8 +894,8 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 ### 2.9 Comments (`internal/storage/memory/edges.go`)
 
 **`AddComment`**
-- `getIssue(in.IssueID)` first → missing issue is `NotFoundError`.
-- `in.Body` is a `model.CommentBody`, already trimmed and non-blank by `model.ParseCommentBody`.
+- `in.Body.Text()` first: a `model.CommentBody` built by `model.ParseCommentBody` is trimmed and non-blank; the zero value, never parsed, → `ValidationError` "comment body is required" before the lock is taken.
+- `getIssue(in.IssueID)` → missing issue is `NotFoundError`.
 - Comment: `ID: "cmt-" + uuid.NewString()`, `IssueID`, `Body`, `CreatedAt: e.now()`, `CreatedBy: storage.Actor(in.CreatedBy)`.
 - Appends and returns `(comment, issue, nil)` — the issue read is the caller's answer too, since a comment never changes the issue row.
 - **`AddComment` records no history event.**

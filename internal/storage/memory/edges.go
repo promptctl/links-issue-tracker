@@ -20,6 +20,10 @@ import (
 // so that read is the caller's answer too — never a second round-trip for what
 // this call already holds. [LAW:one-source-of-truth]
 func (e *Engine) AddComment(ctx context.Context, in storage.AddCommentInput) (model.Comment, model.Issue, error) {
+	body, err := in.Body.Text()
+	if err != nil {
+		return model.Comment{}, model.Issue{}, err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -30,7 +34,7 @@ func (e *Engine) AddComment(ctx context.Context, in storage.AddCommentInput) (mo
 	comment := model.Comment{
 		ID:        "cmt-" + uuid.NewString(),
 		IssueID:   in.IssueID,
-		Body:      string(in.Body),
+		Body:      body,
 		CreatedAt: e.clock.Now(),
 		CreatedBy: storage.Actor(in.CreatedBy),
 	}

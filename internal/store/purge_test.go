@@ -27,7 +27,7 @@ func TestRestoreNeverUnpurges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(doomed): %v", err)
 	}
-	if _, _, err := st.AddComment(ctx, storage.AddCommentInput{IssueID: doomed.ID, Body: "secret", CreatedBy: "tester"}); err != nil {
+	if _, _, err := st.AddComment(ctx, storage.AddCommentInput{IssueID: doomed.ID, Body: commentBody(t, "secret"), CreatedBy: "tester"}); err != nil {
 		t.Fatalf("AddComment: %v", err)
 	}
 	backup, err := st.Export(ctx)

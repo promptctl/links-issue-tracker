@@ -79,7 +79,7 @@ func TestFixtureResidueCannotCrossCopies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue child: %v", err)
 	}
-	if _, _, err := first.AddComment(ctx, storage.AddCommentInput{IssueID: child.ID, Body: "residue that must not travel", CreatedBy: "residue"}); err != nil {
+	if _, _, err := first.AddComment(ctx, storage.AddCommentInput{IssueID: child.ID, Body: commentBody(t, "residue that must not travel"), CreatedBy: "residue"}); err != nil {
 		t.Fatalf("AddComment: %v", err)
 	}
 	if err := first.Close(); err != nil {

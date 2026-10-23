@@ -38,7 +38,7 @@ func TestBulkCommentAddsToEveryTicketAndKeepsItsComments(t *testing.T) {
 	ids := h.bulkTickets(5)
 	prior := map[string][]model.Comment{}
 	for _, id := range ids[1:3] {
-		if _, _, err := h.ap.Store.AddComment(h.ctx, storage.AddCommentInput{IssueID: id, Body: model.CommentBody("earlier note on " + id), CreatedBy: "ada"}); err != nil {
+		if _, _, err := h.ap.Store.AddComment(h.ctx, storage.AddCommentInput{IssueID: id, Body: commentBody(t, "earlier note on "+id), CreatedBy: "ada"}); err != nil {
 			t.Fatalf("AddComment(%s) error = %v", id, err)
 		}
 		prior[id] = h.comments(id)

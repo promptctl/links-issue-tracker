@@ -489,7 +489,7 @@ func TestDataSurvivesFailedMigrationSnapshotRestore(t *testing.T) {
 	}
 	if _, _, err := st.AddComment(ctx, storage.AddCommentInput{
 		IssueID:   issueB.ID,
-		Body:      "Needs review before merge.",
+		Body:      commentBody(t, "Needs review before merge."),
 		CreatedBy: "bob",
 	}); err != nil {
 		t.Fatalf("AddComment(B) error = %v", err)

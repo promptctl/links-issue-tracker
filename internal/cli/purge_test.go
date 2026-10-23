@@ -31,7 +31,7 @@ func TestRunPurgeRefusesWithoutConfirmationAndPurgesWithIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(doomed) error = %v", err)
 	}
-	if _, _, err := ap.Store.AddComment(ctx, storage.AddCommentInput{IssueID: doomed.ID, Body: "more secret", CreatedBy: "tester"}); err != nil {
+	if _, _, err := ap.Store.AddComment(ctx, storage.AddCommentInput{IssueID: doomed.ID, Body: commentBody(t, "more secret"), CreatedBy: "tester"}); err != nil {
 		t.Fatalf("AddComment error = %v", err)
 	}
 	events, err := ap.Store.ListEvents(ctx, doomed.ID)

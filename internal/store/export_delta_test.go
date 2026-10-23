@@ -370,7 +370,7 @@ func buildDeltaScenarioStates(t *testing.T, ctx context.Context) []deltaScenario
 	}
 	snapshot("one field edited on one issue")
 
-	if _, _, err := st.AddComment(ctx, storage.AddCommentInput{IssueID: first.ID, Body: "a comment", CreatedBy: "tester"}); err != nil {
+	if _, _, err := st.AddComment(ctx, storage.AddCommentInput{IssueID: first.ID, Body: commentBody(t, "a comment"), CreatedBy: "tester"}); err != nil {
 		t.Fatalf("AddComment: %v", err)
 	}
 	snapshot("comment added")

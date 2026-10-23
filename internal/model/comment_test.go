@@ -16,15 +16,30 @@ func TestParseCommentBodyTrimsAndRefusesBlank(t *testing.T) {
 			t.Errorf("ParseCommentBody(%q) error = %v, want comment body is required", raw, err)
 		}
 	}
-	for raw, want := range map[string]CommentBody{
+	for raw, want := range map[string]string{
 		"note":            "note",
 		"  note \n":       "note",
 		"a  b\n\nc":       "a  b\n\nc",
 		"\t- item\n- two": "- item\n- two",
 	} {
-		got, err := ParseCommentBody(raw)
-		if err != nil || got != want {
-			t.Errorf("ParseCommentBody(%q) = %q, %v, want %q", raw, got, err, want)
+		body, err := ParseCommentBody(raw)
+		if err != nil {
+			t.Errorf("ParseCommentBody(%q) error = %v", raw, err)
+			continue
 		}
+		if got, err := body.Text(); err != nil || got != want {
+			t.Errorf("ParseCommentBody(%q).Text() = %q, %v, want %q", raw, got, err, want)
+		}
+	}
+}
+
+// The zero value was never parsed, so it holds no text, and reading it is the
+// same refusal a blank body gets: no engine can store a comment from it.
+func TestZeroCommentBodyIsRefused(t *testing.T) {
+	t.Parallel()
+	_, err := CommentBody{}.Text()
+	var invalid ValidationError
+	if !errors.As(err, &invalid) || invalid.Message != "comment body is required" {
+		t.Errorf("CommentBody{}.Text() error = %v, want comment body is required", err)
 	}
 }
