@@ -215,9 +215,10 @@ commands names all of them.
 
 Each store then takes a storm: 100 `lit new` started at once, the scale epic's
 bar for concurrent writers. Every one must exit 0. A writer that does not, or
-is still running after two minutes, is logged with its stderr the moment the
-storm ends, listed in a `CONTENTION` section, and exits the run 2 like a
-budget breach. The probes cannot see this failure, because each one runs
+is still running after two minutes plus one second per writer (enough for the
+last one to wait behind 99 writes inside the budget), is logged with its stderr
+the moment the storm ends, listed by its first line in a `CONTENTION` section,
+and exits the run 2 like a budget breach. The probes cannot see this failure, because each one runs
 alone.
 
 CI's `perf-budget` job runs this on every PR against a 500-row store. Because

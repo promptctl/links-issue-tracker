@@ -102,3 +102,37 @@ func TestRenderContentionStatesTheVerdict(t *testing.T) {
 		t.Errorf("report over a clean storm does not say so:\n%s", got)
 	}
 }
+
+// A failed writer's error carries its whole stdout and stderr. The report and
+// the gate's error list every failed writer, so each lists it by the first line
+// alone; the dump is the progress log's, once.
+func TestAFailedWriterIsListedByItsFirstLine(t *testing.T) {
+	failure := writerFailure{store: size{name: "n=500", rows: 500}, writer: 12,
+		err: errors.New("lit new (in /s): exit status 1\n--- stdout ---\n\n--- stderr ---\nworkspace busy")}
+	for name, got := range map[string]string{
+		"report":     renderContention([]writerFailure{failure}),
+		"gate error": gateError{writers: []writerFailure{failure}}.Error(),
+	} {
+		if !strings.Contains(got, "writer 12 of 100 did not complete: lit new (in /s): exit status 1") || strings.Contains(got, "--- stderr ---") {
+			t.Errorf("%s does not list writer 12 by its error's first line alone:\n%s", name, got)
+		}
+	}
+	if full := failure.full(); !strings.Contains(full, "--- stderr ---\nworkspace busy") {
+		t.Errorf("full() = %q, want the writer's stderr", full)
+	}
+}
+
+// Every storm writer runs the command the write probe times, so the gate
+// measures contention on the write path the latency table covers, and is
+// bounded so the last of a hundred writers may wait behind 99 writes that are
+// each within budget.
+func TestStormWritersRunTheTimedWrite(t *testing.T) {
+	st := stormStep(litBinary{path: "lit"}, 7)
+	want := append([]string{"lit"}, benchWrite("perfbench storm writer 7")...)
+	if !slices.Equal(st.argv, want) {
+		t.Errorf("storm writer argv = %v, want %v", st.argv, want)
+	}
+	if queue := (stormWriters - 1) * latencyBudget; st.budget <= queue {
+		t.Errorf("storm writer budget = %s, want more than the %s a full queue of in-budget writes takes", st.budget, queue)
+	}
+}

@@ -272,9 +272,10 @@ const lockHolderArrivalName = "arrival"
 // to an earlier value.
 //
 // In place, with no temporary name and no rename: a reader can catch the file
-// torn, empty or half-written, but only while an acquisition is writing it,
-// so a torn read never reports progress that did not happen, and the read
-// after it sees the whole name. A rename would add a private name to strand
+// torn, empty or half-written, but only while an acquisition is writing it.
+// A torn read can therefore count one real acquisition twice, restarting a
+// contender's clock one poll later than the acquisition itself would, but it
+// never counts an acquisition that did not happen. A rename would add a private name to strand
 // and, on Windows, fail against any reader holding the file open.
 // [LAW:no-ambient-temporal-coupling] the announcement is a value an
 // acquisition writes, not an interval a reader has to catch.
@@ -282,17 +283,58 @@ func announceArrival(dir, recordName string) error {
 	return os.WriteFile(filepath.Join(dir, lockHolderArrivalName), []byte(recordName), 0o644)
 }
 
-// latestArrival reads the lock's latest arrival, and false when it cannot: no
-// acquisition has announced one yet, or the file is unreadable. Either way the
-// reading is no arrival, so a wait that can never read one reduces to its
-// plain elapsed budget, exactly as under a holder that left no record, and
-// its refusal still names the holders from their records.
-func latestArrival(storageDir, lockPath string) (string, bool) {
-	name, err := os.ReadFile(filepath.Join(lockHolderDir(storageDir, lockPath), lockHolderArrivalName))
-	if err != nil {
-		return "", false
+// lockArrival is one reading of a lock's latest arrival: the record name that
+// announced it and when it was written. The zero value is a lock no
+// acquisition has announced.
+type lockArrival struct {
+	name string
+	at   time.Time
+}
+
+// latestArrival reads the lock's latest arrival. A lock nothing has announced
+// yet is the zero lockArrival, not an error: every lock starts that way, and
+// under a holder that announces nothing (a foreign dolt, a lit older than
+// arrivals) it stays that way, so the wait reduces to its plain elapsed
+// budget. Any other failure is returned, because a waiter that cannot read
+// arrivals is back to the blindness they exist to end, and someone has to
+// hear why. [LAW:no-silent-failure]
+func latestArrival(storageDir, lockPath string) (lockArrival, error) {
+	f, err := os.Open(filepath.Join(lockHolderDir(storageDir, lockPath), lockHolderArrivalName))
+	if errors.Is(err, os.ErrNotExist) {
+		return lockArrival{}, nil
 	}
-	return string(name), true
+	if err != nil {
+		return lockArrival{}, fmt.Errorf("read lock arrival: %w", err)
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return lockArrival{}, fmt.Errorf("read lock arrival: %w", err)
+	}
+	name, err := io.ReadAll(f)
+	if err != nil {
+		return lockArrival{}, fmt.Errorf("read lock arrival: %w", err)
+	}
+	return lockArrival{name: string(name), at: info.ModTime()}, nil
+}
+
+// describeArrival is the holder account's clause about the lock's latest
+// arrival: how long ago the lock last changed hands. Beside a refusal it
+// tells apart the two ways a wait ends — a queue that stopped moving a whole
+// wait ago, or a waiter that could not see a queue still moving — and it is
+// where an unreadable arrival surfaces, in every notice and every refusal.
+// The age is read from the file's modification time, for the account alone:
+// no wait decision reads it.
+func describeArrival(storageDir, lockPath string) string {
+	latest, err := latestArrival(storageDir, lockPath)
+	switch {
+	case err != nil:
+		return fmt.Sprintf("arrivals unreadable, so no waiter can see this lock change hands: %v", err)
+	case latest.at.IsZero():
+		return "no lit acquisition has announced an arrival here"
+	default:
+		return fmt.Sprintf("the lock last changed hands %s ago", time.Since(latest.at).Round(time.Millisecond))
+	}
 }
 
 type holderCommandKey struct{}
@@ -440,7 +482,7 @@ func describeLockHolders(storageDir, lockPath string) string {
 		described = append(described, unnamedHolder(problems))
 	}
 	account := "held by " + strings.Join(described, ", ")
-	return strings.Join(append([]string{account}, problems...), "; ")
+	return strings.Join(append([]string{account, describeArrival(storageDir, lockPath)}, problems...), "; ")
 }
 
 // unnamedHolder is what the account says about a holder no record named. After
@@ -610,14 +652,13 @@ func renderHolderCommand(command string) string {
 // promise about a holder that stands still.
 //
 // [LAW:dataflow-not-control-flow] Every wait runs the same loop; what varies
-// is the lock's directory and its budget, both values. A holder with no
-// record (a foreign dolt, a read engine, an older lit) contributes no name
-// and no progress, so under it the rule is the plain elapsed budget it
-// reduces to when there is nothing to read.
+// is the lock's directory and its budget, both values. A holder that
+// announces no arrival (a foreign dolt, a read engine, an older lit)
+// contributes no progress, so under it the rule is the plain elapsed budget
+// it reduces to when there is nothing to read.
 //
-// [LAW:no-ambient-temporal-coupling] No timestamp inside a record is
-// trusted; the signal is the existence of a name, which only an acquisition
-// creates.
+// [LAW:no-ambient-temporal-coupling] No timestamp is trusted; the signal is
+// the arrival's name changing, which only an acquisition writes.
 //
 // The policy also gives the wait notice. NextBackOff runs only after an
 // attempt was refused because something holds the lock, so "a contender is
@@ -685,11 +726,14 @@ func (w *holdWait) NextBackOff() time.Duration {
 // arrived reads the lock's latest arrival and reports whether it names a
 // holder other than the one this wait last read.
 func (w *holdWait) arrived() bool {
-	latest, ok := latestArrival(w.storageDir, w.lockPath)
-	if !ok || latest == w.arrival {
+	// An unreadable arrival reads as no progress here; the failure surfaces
+	// in the holder account (describeArrival), which every notice and every
+	// refusal renders.
+	latest, err := latestArrival(w.storageDir, w.lockPath)
+	if err != nil || latest.name == w.arrival {
 		return false
 	}
-	w.arrival = latest
+	w.arrival = latest.name
 	return true
 }
 

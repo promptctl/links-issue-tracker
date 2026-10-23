@@ -185,7 +185,7 @@ func measureSize(bin litBinary, workDir string, sz size, env []string, lim limit
 	fmt.Fprintf(progress, "storming %s store, %d concurrent writers ...\n", sz.name, stormWriters)
 	failed := storm(bin, store, run)
 	for _, f := range failed {
-		fmt.Fprintf(progress, "WRITER FAILED: %s\n", f)
+		fmt.Fprintf(progress, "WRITER FAILED: %s\n", f.full())
 	}
 	return r, over, failed, nil
 }

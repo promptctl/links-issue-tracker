@@ -1150,6 +1150,45 @@ func TestWaitSeesHoldersThatComeAndGoBetweenPolls(t *testing.T) {
 	}
 }
 
+// TestTheAccountSaysWhenTheLockLastChangedHands pins the account's arrival
+// clause, the one place a waiter's view of the queue surfaces: whether any
+// acquisition has announced itself, how long ago the last one did, and — when
+// the arrival cannot be read — the read failure itself, which leaves every
+// waiter judging its holders on the plain elapsed budget and would otherwise
+// say so nowhere.
+func TestTheAccountSaysWhenTheLockLastChangedHands(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	lockPath := filepath.Join(t.TempDir(), "test.lock")
+	storageDir := storageDirOf(lockPath)
+
+	if got := describeLockHolders(storageDir, lockPath); !strings.Contains(got, "no lit acquisition has announced an arrival here") {
+		t.Fatalf("account of a never-taken lock = %q, want it to say no arrival was announced", got)
+	}
+
+	release, err := acquireStoreLock(ctx, storageDir, lockPath, false, 0)
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	if err := release(); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	if got := describeLockHolders(storageDir, lockPath); !strings.Contains(got, "the lock last changed hands ") {
+		t.Fatalf("account after an acquisition = %q, want how long ago the lock changed hands", got)
+	}
+
+	arrival := filepath.Join(lockHolderDir(storageDir, lockPath), lockHolderArrivalName)
+	if err := os.Remove(arrival); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(arrival, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := describeLockHolders(storageDir, lockPath); !strings.Contains(got, "arrivals unreadable, so no waiter can see this lock change hands: read lock arrival") {
+		t.Fatalf("account over an unreadable arrival = %q, want the read failure", got)
+	}
+}
+
 // TestWaitFailsOnceHoldersStandStill pins the other edge of the same rule: a
 // holder that does not move fails the contender once the wait has elapsed —
 // no sooner, and without waiting out a second wait for a holder that was

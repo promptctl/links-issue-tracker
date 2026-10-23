@@ -21,29 +21,48 @@ import (
 const stormWriters = 100
 
 // writerFailure is one storm writer that did not complete: which writer, and
-// the error naming what it did instead, its stderr included. Its String is the
-// one rendering of the verdict, logged the moment it is reached and printed in
-// the report's CONTENTION section alike. [LAW:one-source-of-truth]
+// the error naming what it did instead, its stderr included.
 type writerFailure struct {
 	store  size
 	writer int
 	err    error
 }
 
+// String is the verdict on one line: the writer and the first line of its
+// error. The report's CONTENTION section and the gate's error each list every
+// failed writer, and a storm that refused 84 of them must not reprint 84
+// stderr dumps in both; the dump is logged once, as the storm ends (full).
 func (f writerFailure) String() string {
-	return fmt.Sprintf("store %s (%d rows): writer %d of %d did not complete: %v",
-		f.store.name, f.store.rows, f.writer, stormWriters, f.err)
+	summary, _, _ := strings.Cut(f.err.Error(), "\n")
+	return f.verdict(summary)
 }
 
-// stormStep is writer i's invocation: an epic, for the reason the write probe
-// files one (the one type that names no parent), titled by its writer so a
-// failure can be found in the store it left. Each writer is bounded by
-// runBudget like every other step, so a writer that never returns is named as
+// full is the verdict with the writer's whole error, stdout and stderr
+// included: what progress logs the moment the storm ends.
+func (f writerFailure) full() string { return f.verdict(f.err.Error()) }
+
+// verdict is the one sentence both renderings share, around the error text
+// each chooses. [LAW:one-source-of-truth]
+func (f writerFailure) verdict(err string) string {
+	return fmt.Sprintf("store %s (%d rows): writer %d of %d did not complete: %s",
+		f.store.name, f.store.rows, f.writer, stormWriters, err)
+}
+
+// stormBudget bounds one storm writer. The writers serialize on the store, so
+// the last of them waits behind every other, and each of those may take
+// latencyBudget; a fixed runBudget would kill the back of a healthy queue on a
+// store whose writes are slow but within budget, and report latency as
+// contention. A writer still running past this bound either hung on its own or
+// sat behind writes over their budget. [LAW:one-source-of-truth] derived from
+// the queue's length and the budget every write is held to.
+const stormBudget = runBudget + stormWriters*latencyBudget
+
+// stormStep is writer i's invocation: the write the write probe times
+// (benchWrite), titled by its writer so a failure can be found in the store it
+// left, and bounded by stormBudget so a writer that never returns is named as
 // a failure rather than holding the run.
 func stormStep(bin litBinary, writer int) step {
-	return step{budget: runBudget, argv: []string{
-		bin.path, "new", "--title", fmt.Sprintf("perfbench storm writer %d", writer), "--type", "epic", "--topic", "bench",
-	}}
+	return step{budget: stormBudget, argv: append([]string{bin.path}, benchWrite(fmt.Sprintf("perfbench storm writer %d", writer))...)}
 }
 
 // storm starts stormWriters writers against store at once and returns every one
