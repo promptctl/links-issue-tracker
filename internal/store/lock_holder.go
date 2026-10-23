@@ -56,10 +56,10 @@ import (
 // reason the sync-push lock needs none.
 //
 // One decision does read the registry: how long a contender keeps trying
-// (holdWait). It reads only the lock's latest arrival, a record name, never
-// what any record says, and it decides only when the contender stops — the
-// kernel still decides, alone, whether the lock is held. A wrong or missing
-// arrival costs a wait that ends earlier or later than it should, never a
+// (holdWait). It reads only holder names — the records standing and the
+// lock's latest arrival — never what any record says, and it decides only
+// when the contender stops — the kernel still decides, alone, whether the
+// lock is held. A wrong or missing name costs a wait that ends earlier or later than it should, never a
 // lock taken or refused wrongly, which keeps the registry descriptive in the
 // sense that matters.
 
@@ -276,8 +276,10 @@ const lockHolderArrivalName = "arrival"
 // spliced from both names, but only while acquisitions are writing it. A
 // reading no acquisition wrote can therefore count real arrivals extra times,
 // each restarting a contender's clock a poll later than the arrivals alone
-// would, but it never reports a queue moving while nothing arrives. A rename would add a private name to strand
-// and, on Windows, fail against any reader holding the file open.
+// would, but it never reports a queue moving while nothing arrives.
+//
+// A rename would add a private name to strand and, on Windows, fail against
+// any reader holding the file open.
 // [LAW:no-ambient-temporal-coupling] the announcement is a value an
 // acquisition writes, not an interval a reader has to catch.
 func announceArrival(dir, recordName string) error {
@@ -320,21 +322,23 @@ func latestArrival(storageDir, lockPath string) (lockArrival, error) {
 }
 
 // describeArrival is the holder account's clause about the lock's latest
-// arrival: how long ago the lock last changed hands. Beside a refusal it
-// tells apart the two ways a wait ends — a queue that stopped moving a whole
-// wait ago, or a waiter that could not see a queue still moving — and it is
-// where an unreadable arrival surfaces, in every notice and every refusal.
+// arrival: how long ago the last lit acquisition announced itself. It says
+// no more than that — a holder that announces nothing, or a shared holder
+// joining after it, can stand behind the age. Beside a refusal it tells apart
+// the two ways a wait ends — a queue that stopped moving a whole wait ago, or
+// a waiter that could not see a queue still moving — and it is where an
+// unreadable arrival surfaces, in every notice and every refusal.
 // The age is read from the file's modification time, for the account alone:
 // no wait decision reads it.
 func describeArrival(storageDir, lockPath string) string {
 	latest, err := latestArrival(storageDir, lockPath)
 	switch {
 	case err != nil:
-		return fmt.Sprintf("arrivals unreadable, so no waiter can see this lock change hands: %v", err)
+		return fmt.Sprintf("arrivals unreadable, so a waiter sees only the holders standing at each poll: %v", err)
 	case latest.at.IsZero():
 		return "no lit acquisition has announced an arrival here"
 	default:
-		return fmt.Sprintf("the lock last changed hands %s ago", time.Since(latest.at).Round(time.Millisecond))
+		return fmt.Sprintf("the last lit acquisition announced itself %s ago", time.Since(latest.at).Round(time.Millisecond))
 	}
 }
 
@@ -635,14 +639,20 @@ func renderHolderCommand(command string) string {
 // contender's attempt. "Cannot get the store" is a holder that is not
 // moving, not a store that is busy.
 //
-// Only an ARRIVAL restarts the clock, never a departure. The arrival file is
-// written by an acquisition and nothing else, so a change in it is proof of a
-// new holder; a record vanishing is not proof of anything the contender cares
-// about — a reader's sweep retires a dead record (readLockHolder) — and
-// counting that as progress would let a notice tick, or a peer's failure,
-// hold a contender past its wait. The arrival file outlives the hold it
-// announces, so a holder that came and went between two polls is still seen,
-// which reading the records themselves could not promise.
+// Only an ARRIVAL restarts the clock, never a departure, and an arrival is a
+// holder name this wait has never seen. A name is minted by an acquisition
+// and nothing else, and the wait reads names two ways: the records standing
+// at a poll, and the lock's latest arrival (lockHolderArrivalName), which
+// outlives the hold it announces, so a holder that came and went between two
+// polls is still seen. Either sighting is proof of a new holder, so they feed
+// one set rather than competing: a holder whose announcement failed, or a lit
+// older than arrivals, still shows by its record, and a brief holder still
+// shows by its arrival. A name vanishing is not proof of anything the
+// contender cares about — a reader's sweep retires a dead record
+// (readLockHolder), and its probe can put an empty one back under the same
+// name — and counting that as progress would let a notice tick, or a peer's
+// failure, hold a contender past its wait. Names ever seen are kept for the
+// life of the wait so the same name cannot arrive twice.
 //
 // There is no ceiling above the wait. Under holders that keep arriving the
 // contender keeps waiting, reporting who it waits on every
@@ -653,13 +663,13 @@ func renderHolderCommand(command string) string {
 // promise about a holder that stands still.
 //
 // [LAW:dataflow-not-control-flow] Every wait runs the same loop; what varies
-// is the lock's directory and its budget, both values. A holder that
-// announces no arrival (a foreign dolt, a read engine, an older lit)
-// contributes no progress, so under it the rule is the plain elapsed budget
-// it reduces to when there is nothing to read.
+// is the lock's directory and its budget, both values. A holder that leaves
+// no name (a foreign dolt, a read engine) contributes no progress, so under
+// it the rule is the plain elapsed budget it reduces to when there is nothing
+// to read.
 //
 // [LAW:no-ambient-temporal-coupling] No timestamp is trusted; the signal is
-// the arrival's name changing, which only an acquisition writes.
+// a name, which only an acquisition mints.
 //
 // The policy also gives the wait notice. NextBackOff runs only after an
 // attempt was refused because something holds the lock, so "a contender is
@@ -672,8 +682,11 @@ type holdWait struct {
 	lockPath   string
 	wait       func() time.Duration
 	now        func() time.Time
-	// arrival is the latest arrival this wait has read.
-	arrival string
+	// known is every holder name this wait has seen; nil until its first
+	// readable reading, which is the baseline every later one is judged
+	// against, so a reading that failed at Reset cannot make a long-standing
+	// holder look new at the next poll.
+	known map[string]struct{}
 	// started is when this wait began; since is when its holders last
 	// changed, the stand-still clock the wait is judged on.
 	started   time.Time
@@ -696,7 +709,7 @@ func newHoldWait(storageDir, lockPath string, wait func() time.Duration, now fun
 // Reset starts the clock and takes the first reading of who is there.
 func (w *holdWait) Reset() {
 	w.started = w.now()
-	w.arrival, w.since, w.noticeDue = "", w.started, w.started.Add(lockWaitNoticeGrace)
+	w.known, w.since, w.noticeDue = nil, w.started, w.started.Add(lockWaitNoticeGrace)
 	w.arrived()
 }
 
@@ -724,18 +737,39 @@ func (w *holdWait) NextBackOff() time.Duration {
 	return storeLockPollInterval
 }
 
-// arrived reads the lock's latest arrival and reports whether it names a
-// holder other than the one this wait last read.
+// arrived takes one reading of the holder names and reports whether any is
+// new to this wait, remembering every name it sees. The first readable
+// reading is the baseline and reports nothing.
 func (w *holdWait) arrived() bool {
-	// An unreadable arrival reads as no progress here; the failure surfaces
-	// in the holder account (describeArrival), which every notice and every
-	// refusal renders.
-	latest, err := latestArrival(w.storageDir, w.lockPath)
-	if err != nil || latest.name == w.arrival {
+	names, readable := w.holderNames()
+	if !readable {
 		return false
 	}
-	w.arrival = latest.name
-	return true
+	baseline := w.known == nil
+	if baseline {
+		w.known = map[string]struct{}{}
+	}
+	arrived := false
+	for _, name := range names {
+		if _, seen := w.known[name]; !seen {
+			w.known[name] = struct{}{}
+			arrived = !baseline
+		}
+	}
+	return arrived
+}
+
+// holderNames is every holder name the lock shows at one instant: its standing
+// records and its latest arrival. It is unreadable only when both are; either
+// failure alone surfaces in the holder account (readLockHolders,
+// describeArrival), which every notice and every refusal renders.
+func (w *holdWait) holderNames() ([]string, bool) {
+	names, listErr := holderRecordNames(lockHolderDir(w.storageDir, w.lockPath))
+	latest, arrivalErr := latestArrival(w.storageDir, w.lockPath)
+	if latest.name != "" {
+		names = append(names, latest.name)
+	}
+	return names, listErr == nil || arrivalErr == nil
 }
 
 // holderRecordNames lists the record names under a lock's holder directory —

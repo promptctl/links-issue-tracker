@@ -1150,13 +1150,13 @@ func TestWaitSeesHoldersThatComeAndGoBetweenPolls(t *testing.T) {
 	}
 }
 
-// TestTheAccountSaysWhenTheLockLastChangedHands pins the account's arrival
+// TestTheAccountSaysWhenTheLastAcquisitionAnnouncedItself pins the account's arrival
 // clause, the one place a waiter's view of the queue surfaces: whether any
 // acquisition has announced itself, how long ago the last one did, and — when
 // the arrival cannot be read — the read failure itself, which leaves every
 // waiter judging its holders on the plain elapsed budget and would otherwise
 // say so nowhere.
-func TestTheAccountSaysWhenTheLockLastChangedHands(t *testing.T) {
+func TestTheAccountSaysWhenTheLastAcquisitionAnnouncedItself(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	lockPath := filepath.Join(t.TempDir(), "test.lock")
@@ -1173,8 +1173,8 @@ func TestTheAccountSaysWhenTheLockLastChangedHands(t *testing.T) {
 	if err := release(); err != nil {
 		t.Fatalf("release: %v", err)
 	}
-	if got := describeLockHolders(storageDir, lockPath); !strings.Contains(got, "the lock last changed hands ") {
-		t.Fatalf("account after an acquisition = %q, want how long ago the lock changed hands", got)
+	if got := describeLockHolders(storageDir, lockPath); !strings.Contains(got, "the last lit acquisition announced itself ") {
+		t.Fatalf("account after an acquisition = %q, want how long ago the last acquisition announced itself", got)
 	}
 
 	arrival := filepath.Join(lockHolderDir(storageDir, lockPath), lockHolderArrivalName)
@@ -1184,8 +1184,83 @@ func TestTheAccountSaysWhenTheLockLastChangedHands(t *testing.T) {
 	if err := os.Mkdir(arrival, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if got := describeLockHolders(storageDir, lockPath); !strings.Contains(got, "arrivals unreadable, so no waiter can see this lock change hands: read lock arrival") {
+	if got := describeLockHolders(storageDir, lockPath); !strings.Contains(got, "arrivals unreadable, so a waiter sees only the holders standing at each poll: read lock arrival") {
 		t.Fatalf("account over an unreadable arrival = %q, want the read failure", got)
+	}
+}
+
+// TestWaitSeesHoldersThatAnnounceNoArrival pins the other sighting: a holder
+// whose record stands but whose arrival never lands — a lit older than
+// arrivals, or an acquisition whose announcement failed — is still a new
+// holder, so a queue of them is waited out like any other.
+func TestWaitSeesHoldersThatAnnounceNoArrival(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	lockPath := filepath.Join(t.TempDir(), "test.lock")
+	dir := lockHolderDir(storageDirOf(lockPath), lockPath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const (
+		wait  = 300 * time.Millisecond
+		steps = 6
+	)
+	release, acquired, err := filelock.Acquire(ctx, lockPath, false, 1, 0)
+	if err != nil || !acquired {
+		t.Fatalf("take lock as an unrecorded holder: acquired=%v err=%v", acquired, err)
+	}
+	defer func() { _ = release() }()
+
+	clock := newStepClock(t, storeLockPollInterval, func(read int) {
+		if read == 0 || read > steps {
+			return
+		}
+		_, recordPath := lockHolderRecordNames(dir)
+		if err := os.WriteFile(recordPath, []byte("{}"), 0o644); err != nil {
+			t.Fatalf("record holder %d: %v", read, err)
+		}
+	})
+
+	_, err = acquireStoreLockOn(ctx, clock.now, storageDirOf(lockPath), lockPath, true, wait)
+	if !errors.Is(err, ErrWorkspaceBusy) {
+		t.Fatalf("contended acquireStoreLockOn() error = %v, want ErrWorkspaceBusy once the holders stopped arriving", err)
+	}
+	lastArrival := steps * storeLockPollInterval
+	if got := clock.elapsed(); got != lastArrival+wait {
+		t.Fatalf("the contender gave up %s in, want %s: one %s wait after the last of %d recorded holders that announced nothing", got, lastArrival+wait, wait, steps)
+	}
+}
+
+// TestAWaitsFirstReadableReadingIsItsBaseline pins that a reading which failed
+// at Reset cannot make a holder that was there all along look new: the first
+// reading the wait can make is the baseline, and only a name after it counts.
+func TestAWaitsFirstReadableReadingIsItsBaseline(t *testing.T) {
+	t.Parallel()
+	lockPath := filepath.Join(t.TempDir(), "test.lock")
+	storageDir := storageDirOf(lockPath)
+	dir := lockHolderDir(storageDir, lockPath)
+	blockHolderDir(t, lockPath)
+
+	w := newHoldWait(storageDir, lockPath, func() time.Duration { return time.Second }, time.Now)
+	w.Reset()
+
+	if err := os.Remove(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := announceArrival(dir, "holder-standing"); err != nil {
+		t.Fatal(err)
+	}
+	if w.arrived() {
+		t.Fatal("the first readable reading counted the holder standing since before the wait as an arrival")
+	}
+	if err := announceArrival(dir, "holder-next"); err != nil {
+		t.Fatal(err)
+	}
+	if !w.arrived() {
+		t.Fatal("a holder announced after the baseline did not count as an arrival")
 	}
 }
 
