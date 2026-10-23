@@ -142,7 +142,7 @@ func TestMeasureFootprintReadsEveryPart(t *testing.T) {
 	}
 	wantAutomatic := []string{
 		"3000-" + reconcileSnapshotLabel + "-3000 " + reconcileSnapshotLabel + " 20",
-		"2000-" + migrationSnapshotLabel+"-2000" + " " + migrationSnapshotLabel + " 30",
+		"2000-" + migrationSnapshotLabel + "-2000" + " " + migrationSnapshotLabel + " 30",
 	}
 	if !slices.Equal(gotAutomatic, wantAutomatic) {
 		t.Fatalf("automatic snapshots = %v, want %v, newest first", gotAutomatic, wantAutomatic)

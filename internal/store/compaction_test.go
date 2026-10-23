@@ -18,37 +18,37 @@ func TestDueModeSelectsDepthByFootprint(t *testing.T) {
 	t.Parallel()
 
 	for _, tc := range []struct {
-		name      string
-		signals compactionSignals
-		wantMode  GCMode
-		wantDue   bool
+		name     string
+		signals  compactionSignals
+		wantMode GCMode
+		wantDue  bool
 	}{
 		{
-			name:      "an untouched store needs nothing",
+			name:    "an untouched store needs nothing",
 			signals: compactionSignals{},
-			wantDue:   false,
+			wantDue: false,
 		},
 		{
-			name:      "a journal below the threshold needs nothing",
+			name:    "a journal below the threshold needs nothing",
 			signals: compactionSignals{JournalBytes: journalDueBytes - 1},
-			wantDue:   false,
+			wantDue: false,
 		},
 		{
-			name:      "a journal at the threshold earns a shallow pass",
-			signals: compactionSignals{JournalBytes: journalDueBytes},
-			wantMode:  GCNewGen,
-			wantDue:   true,
+			name:     "a journal at the threshold earns a shallow pass",
+			signals:  compactionSignals{JournalBytes: journalDueBytes},
+			wantMode: GCNewGen,
+			wantDue:  true,
 		},
 		{
-			name:      "archives below the threshold do not earn a deep pass",
+			name:    "archives below the threshold do not earn a deep pass",
 			signals: compactionSignals{OldGenArchives: archivesDueCount - 1},
-			wantDue:   false,
+			wantDue: false,
 		},
 		{
-			name:      "archives at the threshold earn a deep pass",
-			signals: compactionSignals{OldGenArchives: archivesDueCount},
-			wantMode:  GCFull,
-			wantDue:   true,
+			name:     "archives at the threshold earn a deep pass",
+			signals:  compactionSignals{OldGenArchives: archivesDueCount},
+			wantMode: GCFull,
+			wantDue:  true,
 		},
 		{
 			// The deep pass collects the new generation too, so a store that
@@ -66,10 +66,10 @@ func TestDueModeSelectsDepthByFootprint(t *testing.T) {
 			// The gap this whole feature exists for: a workspace that never
 			// pushes accumulates journal and never accumulates archives, so
 			// the archive threshold alone would never fire for it.
-			name:      "a never-pushed store is caught by the journal alone",
-			signals: compactionSignals{JournalBytes: journalDueBytes * 2, OldGenArchives: 0},
-			wantMode:  GCNewGen,
-			wantDue:   true,
+			name:     "a never-pushed store is caught by the journal alone",
+			signals:  compactionSignals{JournalBytes: journalDueBytes * 2, OldGenArchives: 0},
+			wantMode: GCNewGen,
+			wantDue:  true,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
