@@ -92,18 +92,18 @@ func event(id, issueID string, action model.ActionName, at time.Time, by model.A
 
 // epicOf assembles an epic over the given children and returns the parent map
 // NewEvidence wants, so every case states only the children it cares about.
-func epicOf(t *testing.T, children ...model.Issue) (issues []model.Issue, parents map[string]*model.Issue) {
+func epicOf(t *testing.T, children ...model.Issue) (issues []model.Issue, parents map[string]string) {
 	t.Helper()
 	epic := container(t, epicID, children...)
 	issues = append([]model.Issue{epic}, children...)
-	parents = map[string]*model.Issue{}
+	parents = map[string]string{}
 	for _, child := range children {
-		parents[child.ID] = &epic
+		parents[child.ID] = epic.ID
 	}
 	return issues, parents
 }
 
-func derive(t *testing.T, issues []model.Issue, parents map[string]*model.Issue, events []model.IssueEvent, local claims.LocalCheckouts) claims.Standings {
+func derive(t *testing.T, issues []model.Issue, parents map[string]string, events []model.IssueEvent, local claims.LocalCheckouts) claims.Standings {
 	t.Helper()
 	evidence, err := claims.NewEvidence(issues, parents, events)
 	if err != nil {
@@ -464,7 +464,7 @@ func TestCrossEpicDependencyClaimsOnlyItsOwnLane(t *testing.T) {
 	epic := container(t, epicID, mine)
 
 	issues := []model.Issue{epic, other, mine, dependency, neighbour}
-	parents := map[string]*model.Issue{mine.ID: &epic, dependency.ID: &other, neighbour.ID: &other}
+	parents := map[string]string{mine.ID: epic.ID, dependency.ID: other.ID, neighbour.ID: other.ID}
 
 	standings := derive(t, issues, parents, []model.IssueEvent{
 		event("e1", "D1", model.ActionStart, ago(time.Hour), streamA),
@@ -520,6 +520,16 @@ func TestEvidenceRefusesAPartialRead(t *testing.T) {
 		event("e1", "T1", model.ActionDone, ago(time.Hour), streamA),
 	}); err == nil {
 		t.Fatal("NewEvidence() with an event about an unsupplied issue = nil error, want a refusal")
+	}
+}
+
+// TestEvidenceRefusesAnUnsuppliedParent: an issue's lane is read off its parent,
+// so a parent missing from the issues would place its children as solo lanes —
+// a plausible partition, and a wrong one.
+func TestEvidenceRefusesAnUnsuppliedParent(t *testing.T) {
+	child := leaf(t, "T1", "", model.StateOpen)
+	if _, err := claims.NewEvidence([]model.Issue{child}, map[string]string{child.ID: epicID}, nil); err == nil {
+		t.Fatal("NewEvidence() with a parent that was not supplied = nil error, want a refusal")
 	}
 }
 

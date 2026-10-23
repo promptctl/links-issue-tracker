@@ -42,17 +42,9 @@ func deriveClaims(t *testing.T, ctx context.Context, st *Store) claims.Standings
 	if err != nil {
 		t.Fatalf("ListIssues() error = %v", err)
 	}
-	ids := make([]string, 0, len(issues))
-	for _, issue := range issues {
-		ids = append(ids, issue.ID)
-	}
-	relations, err := st.GetRelationsByIDs(ctx, ids)
+	parents, err := st.ParentByChild(ctx)
 	if err != nil {
-		t.Fatalf("GetRelationsByIDs() error = %v", err)
-	}
-	parents := make(map[string]*model.Issue, len(relations))
-	for id, rel := range relations {
-		parents[id] = rel.Parent
+		t.Fatalf("ParentByChild() error = %v", err)
 	}
 	events, err := st.ListAllEvents(ctx)
 	if err != nil {

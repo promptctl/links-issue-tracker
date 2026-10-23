@@ -39,12 +39,13 @@ type Evidence struct {
 }
 
 // NewEvidence partitions issues into lanes and files every event under the lane
-// of the issue it touched. parents maps an issue id to the parent the caller
-// resolved for it; an issue absent from the map, or mapped to nil, is
-// parentless.
+// of the issue it touched. parentByChild maps an issue id to its parent's id; an
+// issue absent from the map is parentless.
 //
-// It fails when an event names an issue that was not supplied, and that check is
-// the reason this constructor exists. Claim derivation reads closed tickets:
+// It fails when an event names an issue that was not supplied, or a supplied
+// issue sits under one that was not, and that check is the reason this
+// constructor exists. A missing parent would leave its children as lanes of
+// one. Claim derivation reads closed tickets:
 // completing a ticket is an establishing act, so a checkout's hold on a lane can
 // rest entirely on a `done` against a ticket that is no longer open. A caller
 // that passes only the live issues would hand over a lane whose establishing
@@ -57,7 +58,11 @@ type Evidence struct {
 // Evidence — which by its existence proves every event's issue was supplied —
 // comes out. Derive takes only Evidence, so no derivation can run on a partial
 // read, and nothing inland re-checks.
-func NewEvidence(issues []model.Issue, parents map[string]*model.Issue, events []model.IssueEvent) (Evidence, error) {
+func NewEvidence(issues []model.Issue, parentByChild map[string]string, events []model.IssueEvent) (Evidence, error) {
+	issuesByID := make(map[string]*model.Issue, len(issues))
+	for i := range issues {
+		issuesByID[issues[i].ID] = &issues[i]
+	}
 	lanes := make(map[string]model.LaneID, len(issues))
 	ev := Evidence{
 		lanes:   lanes,
@@ -65,7 +70,13 @@ func NewEvidence(issues []model.Issue, parents map[string]*model.Issue, events [
 		events:  make(map[model.LaneID][]model.IssueEvent),
 	}
 	for _, issue := range issues {
-		lane := model.LaneOf(issue, parents[issue.ID])
+		var parent *model.Issue
+		if parentID, under := parentByChild[issue.ID]; under {
+			if parent = issuesByID[parentID]; parent == nil {
+				return Evidence{}, fmt.Errorf("claims: issue %s sits under %s, which was not among the %d issues supplied: claim derivation places an issue by its parent, so every parent must be supplied", issue.ID, parentID, len(issues))
+			}
+		}
+		lane := model.LaneOf(issue, parent)
 		lanes[issue.ID] = lane
 		ev.members[lane] = append(ev.members[lane], issue)
 	}

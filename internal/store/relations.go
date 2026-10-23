@@ -150,6 +150,26 @@ func (s *Store) GetRelationsByIDs(ctx context.Context, ids []string) (map[string
 	return out, nil
 }
 
+// ParentByChild is one query over the relations table: no id list to batch and no
+// issue to hydrate, which is the whole of its advantage over GetRelationsByIDs.
+// MIN is the two-parent rule the contract states. [LAW:one-source-of-truth]
+func (s *Store) ParentByChild(ctx context.Context) (map[string]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT src_id, MIN(dst_id) FROM relations WHERE type = ? GROUP BY src_id`, string(model.RelParentChild))
+	if err != nil {
+		return nil, fmt.Errorf("list parent ids: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var childID, parentID string
+		if err := rows.Scan(&childID, &parentID); err != nil {
+			return nil, fmt.Errorf("scan parent ids: %w", err)
+		}
+		out[childID] = parentID
+	}
+	return out, rows.Err()
+}
+
 // structuralRelationTypes are the edge types bucketRelations interprets and
 // GetRelationsByIDs returns. related-to is excluded so its endpoints are never
 // pulled into the batch's hydration set — that is the whole point of the

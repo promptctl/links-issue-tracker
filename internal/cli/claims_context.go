@@ -87,23 +87,18 @@ func readEvidence(ctx context.Context, ap *app.App) (claims.Evidence, error) {
 	if err != nil {
 		return claims.Evidence{}, err
 	}
-	ids := make([]string, len(allIssues))
-	for i, issue := range allIssues {
-		ids[i] = issue.ID
-	}
-	relations, err := ap.Store.GetRelationsByIDs(ctx, ids)
+	// Every parent is itself an issue, so it is already in allIssues: the edges
+	// are all this needs from the store, not a second hydrated copy of every
+	// issue. [LAW:one-source-of-truth]
+	parentByChild, err := ap.Store.ParentByChild(ctx)
 	if err != nil {
 		return claims.Evidence{}, err
-	}
-	parents := make(map[string]*model.Issue, len(allIssues))
-	for _, issue := range allIssues {
-		parents[issue.ID] = relations[issue.ID].Parent
 	}
 	events, err := ap.Store.ListAllEvents(ctx)
 	if err != nil {
 		return claims.Evidence{}, err
 	}
-	return claims.NewEvidence(allIssues, parents, events)
+	return claims.NewEvidence(allIssues, parentByChild, events)
 }
 
 // ownAttribution is the attribution this checkout's own work carries — the

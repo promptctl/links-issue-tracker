@@ -45,9 +45,9 @@ func laneWithProgress(t *testing.T, done, total int, activeID string) (claims.Ev
 		t.Fatalf("hydrate epic: %v", err)
 	}
 	issues := append([]model.Issue{epicHydrated}, children...)
-	parents := map[string]*model.Issue{}
+	parents := map[string]string{}
 	for _, c := range children {
-		parents[c.ID] = &epicHydrated
+		parents[c.ID] = epicHydrated.ID
 	}
 	evidence, err := claims.NewEvidence(issues, parents, nil)
 	if err != nil {
