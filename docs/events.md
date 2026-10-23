@@ -228,15 +228,15 @@ instead.
 
 ## What the store a command ran against records
 
-A command that opens a store to read or change its tickets, and every sync
-session, records the store's size on disk once it has closed it, so a
+A command that opens a store to read or change its tickets, and every `lit
+sync` command, records the store's size on disk once it has closed it, so a
 `duration_ms` read back later says what it was spent over. The reading is the
 chunk store, the part `lit doctor` lists as `chunk store`: what every read of
 the store runs against, without the recovery snapshots and caches beside it.
 It is taken after the close, outside the store's lock, so it never lengthens
 the time another writer waits. For `lit ls --at`, the store is the one `--at`
-names; for the on-change mirror and the automatic receive, it is the clone they
-push and fetch through.
+names. The on-change mirror and the automatic receive record the workspace's
+store once, when the worker ends, not the clones they push and fetch through.
 
 | Key | Meaning |
 | --- | --- |

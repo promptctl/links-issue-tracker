@@ -80,12 +80,7 @@ func openSyncSessionAt(ctx context.Context, env environ.Env, databasePath, works
 		reportEventValues(ctx, "stranded_writes.commits", syncer.StrandedWritesCommits())
 		reportEventValues(ctx, "settled_last.writes", syncer.SettledLastWrites())
 		reportEventValues(ctx, "history_bound.records", syncer.HistoryBounds())
-		err := st.Close()
-		// After the close, outside the store's lock, as runWithApp reads it: the
-		// store this session ran over, the clone for the background mirror and
-		// receive.
-		recordStoreBytes(ctx, databasePath)
-		return err
+		return st.Close()
 	}, nil
 }
 
@@ -152,9 +147,14 @@ func withSyncStore(declare syncLeafFn) wsLeafFn {
 				// tell a starved OPEN from a handler-traced mid-command contention.
 				return markEngineOpenContention(err, ws)
 			}
-			defer closeStore()
-			reportOpenMigration(ctx, storage.OpenMigration(session.engine))
-			return l.work(ctx, inv, syncScope{ws: ws, session: session}, positional)
+			runErr := func() error {
+				defer closeStore()
+				reportOpenMigration(ctx, storage.OpenMigration(session.engine))
+				return l.work(ctx, inv, syncScope{ws: ws, session: session}, positional)
+			}()
+			// After the close, outside the store's lock, as runWithApp reads it.
+			recordStoreBytes(ctx, ws.DatabasePath)
+			return runErr
 		})
 	}
 }

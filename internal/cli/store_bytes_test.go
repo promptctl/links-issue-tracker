@@ -62,21 +62,30 @@ func TestEveryStoreSeamRecordsTheStoresSize(t *testing.T) {
 		}
 		assertStoreMeasured(t, ev)
 	})
-	// The automatic receive runs in a background worker, not through a leaf;
-	// its session closes through the same sync-session close, so it records
-	// the size of the clone it fetched through.
+	// The automatic receive fetches through a clone and lands on the live
+	// store; what it records is the workspace's store, read once.
 	t.Run("automatic receive", func(t *testing.T) {
 		isolateEvents(t)
 		_, producer, consumer, _, epicID := twoClonesOverOneDoltRemote(t)
 		runCLIInDir(t, producer, "new", "--title", "second-ticket", "--topic", "demo", "--type", "task", "--parent", epicID)
 		runCLIInDir(t, producer, "sync", "push")
+		runCLIInDir(t, consumer, "sync", backgroundReceiveSubcommand, "--parent-pid", "0")
+		ev := lastEvent(t)
+		if ev.Event != "lit sync "+backgroundReceiveSubcommand {
+			t.Fatalf("last event = %q, want the receive worker's", ev.Event)
+		}
+		assertStoreMeasured(t, ev)
 		ws, err := workspace.Resolve(testEnv(), consumer)
 		if err != nil {
 			t.Fatal(err)
 		}
-		recorder := telemetry.Begin(telemetry.Event{})
-		receiveOnce(telemetry.With(context.Background(), recorder), testEnv(), ws)
-		assertStoreMeasured(t, recorder.Finish(telemetry.End{At: time.Now()}))
+		want, err := engine.ChunkStoreBytes(ws.DatabasePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := writtenFacts(t, ev)["store.chunk_store_bytes"]; got != float64(want) {
+			t.Errorf("store.chunk_store_bytes = %v, want %v: the workspace store's own size", got, want)
+		}
 	})
 	t.Run("ls --at", func(t *testing.T) {
 		isolateEvents(t)
