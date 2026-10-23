@@ -72,7 +72,7 @@ jobs:
       # allowance. `design` resolves to the ceiling's own row count, so the size
       # judged here cannot drift from the size the ceiling assumes. The same
       # run judges every command's latency and a 100-writer storm at that size.
-      # About 5.5 minutes on darwin/arm64. Built, then run, as ci.yml's
+      # About 4 minutes on this runner. Built, then run, as ci.yml's
       # perf-budget is, so exit 2 survives. [LAW:one-source-of-truth]
       - name: The design-size store fits the size ceiling's allowances
         if: ${{ !cancelled() }}
