@@ -40,22 +40,23 @@ type probe struct {
 }
 
 // argvRule is the invocation a probe makes against a store whose rows carry
-// these ids, in import order: one argv, or none when the store holds nothing
-// the command can be pointed at.
+// these ids, in import order: its one argv, or false when the store holds
+// nothing the command can be pointed at.
 //
-// A list and not an argv-or-nil because "this store has no legal invocation of
-// this probe" is a case with its own meaning: the empty control has no row for
-// `show` to name, and timing `show <nonexistent-id>` instead would time the
-// refusal path, the answer-shaped void okCodes exists to refuse. A probe with no
-// invocation is simply not measured at that size, and the report prints its
-// cell as absent. [LAW:dataflow-not-control-flow] the variability is the
-// length of the list, not a branch in the runner.
-type argvRule func(ids []string) [][]string
+// "This store has no legal invocation of this probe" is a case with its own
+// meaning: the empty control has no row for `show` to name, and timing
+// `show <nonexistent-id>` instead would time the refusal path, the
+// answer-shaped void okCodes exists to refuse. A probe with no invocation is
+// simply not measured at that size, and the report prints its cell as absent.
+// It is at most one argv because a sample, a report cell and a breach are each
+// keyed by probe name: a second argv would be a second figure under one name.
+// [LAW:types-are-the-program]
+type argvRule func(ids []string) (args []string, ok bool)
 
 // fixed is the rule for every command that takes no id: the same argv against
 // every store.
 func fixed(args ...string) argvRule {
-	return func([]string) [][]string { return [][]string{args} }
+	return func([]string) ([]string, bool) { return args, true }
 }
 
 // exitRule names the exit codes that prove a probe did its work against a
@@ -94,7 +95,7 @@ type invocation struct {
 func invocationsFor(ps []probe, store generatedStore) []invocation {
 	var out []invocation
 	for _, p := range ps {
-		for _, args := range p.argv(store.ids) {
+		if args, ok := p.argv(store.ids); ok {
 			out = append(out, invocation{probe: p, args: args, okCodes: p.okCodes(store.size.rows)})
 		}
 	}
@@ -126,11 +127,11 @@ var probes = []probe{
 	// The first imported row, which is always an epic. Its children make
 	// `show` print the plan of a real epic, the relations work an agent's
 	// `lit show` pays.
-	{name: "show", argv: func(ids []string) [][]string {
+	{name: "show", argv: func(ids []string) ([]string, bool) {
 		if len(ids) == 0 {
-			return nil
+			return nil, false
 		}
-		return [][]string{{"show", ids[0]}}
+		return []string{"show", ids[0]}, true
 	}, okCodes: exits(0)},
 	{name: "stores --counts", argv: fixed("stores", "--counts"), okCodes: exits(0)},
 	{name: "doctor", argv: fixed("doctor"), okCodes: exits(0)},

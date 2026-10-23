@@ -127,10 +127,10 @@ jobs:
   # runner noise does not. Store size is the lever when it does not fit; the
   # budget never moves (links-scale-dy46.zi4 raises the size once the commands
   # are fast at real size). Measured 2026-10-23 (run 39945620783): 3m08s, 2m14s
-  # of it the cgo build; backlog and next 0.48s at 500 rows. A breach exits 2 and names the command, its min
-  # and the ratio; the verdict is logged as soon as each store's probes finish,
-  # so timeout-minutes, which only stops a hung lit holding a runner for six
-  # hours, cannot cut it. The stores have no git remote, so a slowdown confined
+  # of it the cgo build; backlog and next 0.48s at 500 rows. A breach exits 2
+  # and names the command, its min and the ratio; the verdict is logged as soon
+  # as each store's probes finish, so timeout-minutes, which only stops a hung
+  # lit holding a runner for six hours, cannot cut it. The stores have no git remote, so a slowdown confined
   # to the receive path is outside what this measures.
   perf-budget:
     runs-on: ubuntu-latest

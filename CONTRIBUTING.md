@@ -208,8 +208,10 @@ every size: the scale epic's destination, judged on the min. A run with any
 probe over it prints the table, a `BUDGET` section naming each command, its min
 and the ratio, and exits 2. A broken run (a build that fails, a command that
 exits with a code that proves it did not do its job) exits 1. A probe still
-running at 30s is killed and recorded as killed, and the run goes on to the
-next probe, so a regression that slows several commands names all of them.
+running at 30s is killed and recorded as killed, and the run keeps measuring:
+the killed probe still runs its remaining rounds, each bounded by the same 30s,
+and every other probe is measured as usual, so a regression that slows several
+commands names all of them.
 CI's `perf-budget` job runs this on every PR against a 500-row store. Because
 the budget is the destination and not a CI setting, `just perf` fails the same
 way on your machine. That includes the large sizes a scale question needs,

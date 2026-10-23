@@ -126,11 +126,8 @@ func run(args []string, out, progress io.Writer) error {
 	}
 
 	cond := conditions{goos: runtime.GOOS, goarch: runtime.GOARCH, cpus: runtime.NumCPU()}
-	fmt.Fprint(out, renderReport(probes, results, gateLimits.budget, cond))
-	var found []breach
-	for _, r := range results {
-		found = append(found, breaches(r, gateLimits.budget)...)
-	}
+	found := verdict(results, gateLimits.budget)
+	fmt.Fprint(out, renderReport(probes, results, gateLimits.budget, found, cond))
 	if len(found) > 0 {
 		return budgetError{breaches: found}
 	}

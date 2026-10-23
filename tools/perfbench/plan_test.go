@@ -329,7 +329,7 @@ func TestIdsLoadedReadsTheImportMappingInSpecOrder(t *testing.T) {
 	if _, err := idsLoaded([]byte("  r0 -> bench-a\n  r0 -> bench-z\n  r1 -> b\n  r2 -> c\n"), loads); err == nil || !strings.Contains(err.Error(), "more than once") {
 		t.Errorf("idsLoaded with r0 mapped twice: error = %v, want a duplicate refusal", err)
 	}
-	if ids, err := idsLoaded([]byte("Initialized empty Git repository\n"), nil); err != nil || len(ids) != 0 {
+	if ids, err := idsLoaded([]byte("Initialized empty Git repository\n  hooks: x -> y\n  hooks: x -> z\n"), nil); err != nil || len(ids) != 0 {
 		t.Errorf("idsLoaded over a step that loads nothing = (%v, %v), want no ids and no error", ids, err)
 	}
 }

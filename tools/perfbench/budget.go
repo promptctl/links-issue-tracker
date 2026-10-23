@@ -56,6 +56,16 @@ func breaches(r result, budget time.Duration) []breach {
 	return out
 }
 
+// verdict is every breach across a run's stores, in the order they were
+// measured: the one list the run exits on and the report prints.
+func verdict(results []result, budget time.Duration) []breach {
+	var out []breach
+	for _, r := range results {
+		out = append(out, breaches(r, budget)...)
+	}
+	return out
+}
+
 func over(o outcome, budget time.Duration) bool {
 	switch o := o.(type) {
 	case completed:

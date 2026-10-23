@@ -75,11 +75,9 @@ perf *args:
     # exit 1, and perfbench's exit status is a contract (2 = a probe over its
     # latency budget, 1 = the run itself failed).
     dir="$(mktemp -d)"
+    trap 'rm -rf "$dir"' EXIT
     go build -o "$dir/perfbench" ./tools/perfbench
-    status=0
-    "$dir/perfbench" {{args}} || status=$?
-    rm -rf "$dir"
-    exit "$status"
+    "$dir/perfbench" {{args}}
 
 # Lint (depguard lifecycle-boundary rule + style). Needs golangci-lint installed.
 lint:

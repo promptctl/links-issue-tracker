@@ -46,7 +46,11 @@ type conditions struct {
 // `show` to name), and reading cells by position would shift every later
 // figure under the wrong command's name with nothing to say so.
 // [LAW:types-are-the-program]
-func renderReport(ps []probe, results []result, budget time.Duration, cond conditions) string {
+//
+// found is the verdict run exits on, passed in rather than judged again here,
+// so the BUDGET section is the list that set the exit status.
+// [LAW:one-source-of-truth]
+func renderReport(ps []probe, results []result, budget time.Duration, found []breach, cond conditions) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "lit perfbench — %s/%s, %d CPUs\n", cond.goos, cond.goarch, cond.cpus)
 	fmt.Fprintf(&b, "%d repeats per probe, round-robin after one unrecorded warm-up; the figure is the MIN, the max is in parentheses.\n", repeats)
@@ -91,10 +95,6 @@ func renderReport(ps []probe, results []result, budget time.Duration, cond condi
 	b.WriteString("full compaction on both sides, so it is history the store keeps.\n")
 
 	fmt.Fprintf(&b, "\nBUDGET: every probe under %s, judged on its min.\n", budget)
-	var found []breach
-	for _, r := range results {
-		found = append(found, breaches(r, budget)...)
-	}
 	for _, br := range found {
 		fmt.Fprintf(&b, "  OVER  %s\n", br)
 	}

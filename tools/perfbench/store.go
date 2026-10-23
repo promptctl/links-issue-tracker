@@ -130,12 +130,18 @@ type importSpec struct {
 // record's local id, because lit creates and prints in dependency order.
 // A record the output does not map, or a local id it maps twice, fails
 // loudly: a store missing an id it was built with would quietly drop the
-// probes that name it. [LAW:no-silent-failure]
+// probes that name it. [LAW:no-silent-failure] Only lines naming one of
+// loads' local ids are read, so a step that loads nothing reads nothing,
+// whatever its output happens to contain.
 func idsLoaded(stdout []byte, loads []storage.ImportTreeSpec) ([]string, error) {
+	wanted := map[string]bool{}
+	for _, rec := range loads {
+		wanted[rec.LocalID] = true
+	}
 	minted := map[string]string{}
 	for _, line := range strings.Split(string(stdout), "\n") {
 		local, id, found := strings.Cut(strings.TrimSpace(line), " -> ")
-		if !found {
+		if !found || !wanted[local] {
 			continue
 		}
 		if _, dup := minted[local]; dup {
@@ -361,8 +367,8 @@ func storeBytes(dir string) (int64, error) {
 
 // runQuiet runs one generation step, answering its stdout (the one thing a
 // caller reads from a step, an import's id mapping) and surfacing everything
-// about a failure: the command, its exit status, and both of its streams. It takes the step whole so the budget arrives with the argv it was
-// planned for, rather than as a second argument a caller could pair wrongly.
+// about a failure: the command, its exit status, and both of its streams. It
+// takes the step whole so the budget arrives with the argv it was planned for, rather than as a second argument a caller could pair wrongly.
 // Generation failures are the ones most likely to be misread — a store that
 // half-imported still produces a plausible-looking table — so nothing here is
 // allowed to continue past one. [LAW:no-silent-failure]

@@ -97,7 +97,7 @@ func fixedResults() []result {
 // the store's bytes stated per size. A figure measured and then dropped in
 // formatting is the failure this pins.
 func TestRenderReportStatesEveryMeasuredFigure(t *testing.T) {
-	got := renderReport(probes, fixedResults(), latencyBudget, conditions{goos: "darwin", goarch: "arm64", cpus: 12})
+	got := renderReport(probes, fixedResults(), latencyBudget, verdict(fixedResults(), latencyBudget), conditions{goos: "darwin", goarch: "arm64", cpus: 12})
 	for _, want := range []string{
 		"darwin/arm64", "12 CPUs",
 		"empty (0 rows)", "today (118 rows)",
@@ -121,7 +121,7 @@ func TestRenderReportStatesEveryMeasuredFigure(t *testing.T) {
 // 7.97s"), so a regenerated table has to be comparable to the pasted one
 // without converting units.
 func TestRenderReportMatchesTheEpicsUnits(t *testing.T) {
-	got := renderReport(probes, fixedResults(), latencyBudget, conditions{goos: "linux", goarch: "amd64", cpus: 2})
+	got := renderReport(probes, fixedResults(), latencyBudget, verdict(fixedResults(), latencyBudget), conditions{goos: "linux", goarch: "amd64", cpus: 2})
 	if strings.Contains(got, "ms") {
 		t.Errorf("report prints milliseconds; the epic states its figures in seconds:\n%s", got)
 	}
@@ -133,7 +133,7 @@ func TestRenderReportMatchesTheEpicsUnits(t *testing.T) {
 // Nothing measured must print no rows. A header listing every probe name over
 // columns that were never measured is a report that looks like a result.
 func TestRenderReportOverNoResultsNamesNoProbes(t *testing.T) {
-	got := renderReport(probes, nil, latencyBudget, conditions{goos: "darwin", goarch: "arm64", cpus: 1})
+	got := renderReport(probes, nil, latencyBudget, verdict(nil, latencyBudget), conditions{goos: "darwin", goarch: "arm64", cpus: 1})
 	for _, name := range []string{"backlog", "quickstart", "next"} {
 		if strings.Contains(got, name) {
 			t.Errorf("report over zero results names probe %q:\n%s", name, got)
@@ -178,7 +178,7 @@ func TestRenderReportKeepsEveryFigureUnderItsOwnProbe(t *testing.T) {
 			{probe: probe{name: "doctor"}, outcome: completed{min: 430 * time.Millisecond, max: 440 * time.Millisecond}},
 		}},
 	}
-	got := renderReport(probes, results, latencyBudget, conditions{goos: "linux", goarch: "amd64", cpus: 4})
+	got := renderReport(probes, results, latencyBudget, verdict(results, latencyBudget), conditions{goos: "linux", goarch: "amd64", cpus: 4})
 	for name, want := range map[string]string{
 		"ls":     "0.11s (0.12s) 0.13s (0.14s)",
 		"show":   "— 0.33s (0.34s)",
@@ -229,7 +229,7 @@ func TestBreachesJudgesTheMinAndEveryKill(t *testing.T) {
 // are read together, and says so explicitly when nothing is over.
 func TestRenderReportStatesTheBudgetVerdict(t *testing.T) {
 	cond := conditions{goos: "linux", goarch: "amd64", cpus: 4}
-	over := renderReport(probes, fixedResults(), latencyBudget, cond)
+	over := renderReport(probes, fixedResults(), latencyBudget, verdict(fixedResults(), latencyBudget), cond)
 	for _, want := range []string{"BUDGET: every probe under 1s", "OVER  store empty (0 rows): backlog took 7.97s", "OVER  store today (118 rows): backlog took 3.33s"} {
 		if !strings.Contains(over, want) {
 			t.Errorf("report omits %q\n--- report ---\n%s", want, over)
@@ -238,7 +238,7 @@ func TestRenderReportStatesTheBudgetVerdict(t *testing.T) {
 	if strings.Contains(over, "quickstart took") {
 		t.Errorf("report names quickstart, which is under budget, as over:\n%s", over)
 	}
-	under := renderReport(probes, fixedResults(), time.Minute, cond)
+	under := renderReport(probes, fixedResults(), time.Minute, verdict(fixedResults(), time.Minute), cond)
 	if !strings.Contains(under, "none over budget") {
 		t.Errorf("report with nothing over budget does not say so:\n%s", under)
 	}
