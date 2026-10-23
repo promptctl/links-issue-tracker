@@ -9,6 +9,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/pathspec"
 )
 
@@ -171,7 +172,7 @@ func TestMeasureFootprintOfAnAbsentStoreIsEmpty(t *testing.T) {
 // budgeting for a store no default setting produces. [LAW:one-source-of-truth]
 func TestTheCeilingBudgetsTheDefaults(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	cfg, err := config.Load(pathspec.PathSpec{})
+	cfg, err := config.Load(environ.Of(os.Environ()), pathspec.PathSpec{})
 	if err != nil {
 		t.Fatalf("config.Load() error = %v", err)
 	}
