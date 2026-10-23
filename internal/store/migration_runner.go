@@ -464,7 +464,7 @@ func (s *Store) migrate(ctx context.Context) (storage.Migrated, error) {
 	// (pruneAutomaticSnapshots); user snapshots share the directory under an
 	// independent budget the rule never touches.
 	done.PruneErr = errors.Join(done.PruneErr, prune(pruneMigrationSnapshots, "prune migration snapshots", func() error {
-		_, err := s.pruneAutomaticSnapshots()
+		_, err := s.pruneAutomaticSnapshots(ctx)
 		return err
 	}))
 	return done, nil

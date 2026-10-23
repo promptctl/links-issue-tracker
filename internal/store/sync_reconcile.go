@@ -1044,7 +1044,7 @@ func (s *Store) commitReplayAndAdvance(ctx context.Context, guard *snapshotGuard
 	// scratch branch cleanupReconcileScratch tolerates, so the failure is surfaced to
 	// stderr but not promoted. [LAW:no-silent-failure] loud, but not a false failure
 	// over a durable success.
-	if _, err := s.pruneAutomaticSnapshots(); err != nil {
+	if _, err := s.pruneAutomaticSnapshots(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "lit: reconcile could not prune old recovery snapshots (replay already committed): %v\n", err)
 	}
 	return replayLanding{replayed: replayed, landing: landing}, nil

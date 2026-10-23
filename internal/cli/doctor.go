@@ -344,8 +344,13 @@ func printReportWarnings(w io.Writer, warnings []string) error {
 
 // printFootprint writes the store's size on disk against its ceiling, then
 // every part of it, so a reader asking where the disk went is answered from
-// one line. A part the ceiling does not count says so beside its size.
+// one line. A part the ceiling does not count says so beside its size. A
+// footprint that could not be read says so, and the warnings say why.
 func printFootprint(w io.Writer, fp storage.Footprint) error {
+	if !fp.Measured() {
+		_, err := fmt.Fprintln(w, "footprint: not measured")
+		return err
+	}
 	parts := make([]string, 0, len(fp.Components))
 	for _, c := range fp.Components {
 		part := c.Name + " " + storage.FormatBytes(c.Bytes)
@@ -360,9 +365,13 @@ func printFootprint(w io.Writer, fp storage.Footprint) error {
 }
 
 // overCeilingPart names the part holding the bytes of a store over its
-// ceiling, or "none" for a store within it, which states a clean check
-// rather than leaving an absent value to be read as one.
+// ceiling, "none" for a store within it, which states a clean check rather
+// than leaving an absent value to be read as one, and "unmeasured" for a
+// footprint that could not be read, which is no check at all.
 func overCeilingPart(fp storage.Footprint) string {
+	if !fp.Measured() {
+		return "unmeasured"
+	}
 	over, ok := fp.Over()
 	if !ok {
 		return "none"

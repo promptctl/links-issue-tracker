@@ -435,4 +435,17 @@ func TestPrintFootprintAndOverCeilingPart(t *testing.T) {
 	if got := overCeilingPart(fp); got != "chunk store" {
 		t.Errorf("overCeilingPart() = %q, want the governed part holding the bytes, not the larger ungoverned cache", got)
 	}
+
+	// The zero Footprint is the one no measurement produced: it reads as
+	// unmeasured, never as an empty store within its ceiling.
+	out.Reset()
+	if err := printFootprint(&out, storage.Footprint{}); err != nil {
+		t.Fatalf("printFootprint(unmeasured) error = %v", err)
+	}
+	if want := "footprint: not measured\n"; out.String() != want {
+		t.Errorf("printFootprint(unmeasured) = %q, want %q", out.String(), want)
+	}
+	if got := overCeilingPart(storage.Footprint{}); got != "unmeasured" {
+		t.Errorf("overCeilingPart(unmeasured) = %q, want \"unmeasured\", not a clean check", got)
+	}
 }

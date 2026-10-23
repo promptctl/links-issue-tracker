@@ -454,6 +454,7 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "fetch %q before reconcile", Src: "fetch %q before reconcile: %w"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "fetch remote %q: %w", Src: "fetch remote %q: %w"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "find the detached-worker lock: %w", Src: "find the detached-worker lock: %w"},
+	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "footprint: not measured", Src: "footprint: not measured"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "git ls-remote <remote>", Src: "check the remote URL, credentials, or run `git ls-remote <remote>`."},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "hold the detached-worker lock: %w", Src: "hold the detached-worker lock: %w"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "hooks install", Src: "hooks install"},

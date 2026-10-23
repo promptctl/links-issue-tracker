@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -35,7 +36,8 @@ import (
 // its rows, the history the default window keeps, and a journal at the size
 // that makes a shallow pass due — plus one recovery snapshot of that store
 // per automatic kind, which is the newest of each that retention never
-// retires. The design size is twice this repository's 1,383 rows on
+// retires, plus the user snapshots the default snapshot.retention_budget
+// keeps, which retention never touches. The design size is twice this repository's 1,383 rows on
 // 2026-10-21, the largest lit store known, and both measured figures are
 // that size's column of `just perf --sizes 2800`, taken 2026-10-21 on
 // darwin/arm64; re-run it to check them. They are measured at the design
@@ -51,8 +53,11 @@ const (
 	// (sync.history_bound.re_root_at): the most commits a bounded history
 	// holds before a push re-roots it.
 	designHistoryCommits = 2_000
+	// designUserSnapshots is snapshot.retention_budget's default: the user
+	// snapshots a store on default settings keeps, each a copy of the store.
+	designUserSnapshots = 5
 
-	storeSizeCeiling = (measuredDesignStoreBytes + designHistoryCommits*measuredCommitBytes + journalDueBytes) * (1 + int64(len(automaticSnapshotLabels)))
+	storeSizeCeiling = (measuredDesignStoreBytes + designHistoryCommits*measuredCommitBytes + journalDueBytes) * (1 + int64(len(automaticSnapshotLabels)) + designUserSnapshots)
 
 	// automaticSnapshotsPerKind is the most snapshots of one automatic kind
 	// kept however much room the ceiling leaves: past ten recovery points
@@ -75,6 +80,14 @@ func automaticSnapshotKind(name string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// IsAutomaticSnapshotName reports whether name is a recovery snapshot lit took
+// on its own, so a reader outside this package tells lit's snapshots from the
+// user's by the one list of kinds above. [LAW:one-source-of-truth]
+func IsAutomaticSnapshotName(name string) bool {
+	_, ok := automaticSnapshotKind(name)
+	return ok
 }
 
 // footprint is the store at a doltRootDir on disk, part by part. It is the
@@ -240,9 +253,13 @@ type ceilingHold struct {
 // kind is never retired, which keeps the snapshot a producer just took out of
 // reach whoever is pruning.
 //
+// It stops between removals once ctx is done, so the caller's deadline bounds
+// the removals too — each is a whole copy of the store — and whatever it left
+// is retired by the next prune.
+//
 // The footprint it returns is measured once, before the removals, less what
 // was removed — the store as the prune left it, without a second walk.
-func (s *Store) pruneAutomaticSnapshots() (ceilingHold, error) {
+func (s *Store) pruneAutomaticSnapshots(ctx context.Context) (ceilingHold, error) {
 	f, err := measureFootprint(s.doltRootDir)
 	if err != nil {
 		return ceilingHold{}, fmt.Errorf("measure store footprint: %w", err)
@@ -250,6 +267,9 @@ func (s *Store) pruneAutomaticSnapshots() (ceilingHold, error) {
 	var hold ceilingHold
 	gone := map[string]bool{}
 	for _, snap := range snapshotsToPrune(f, s.sizeCeiling) {
+		if err = ctx.Err(); err != nil {
+			break
+		}
 		if err = dbsnapshot.Remove(snap.Snapshot); err != nil {
 			break
 		}

@@ -165,11 +165,11 @@ func TestMeasureFootprintOfAnAbsentStoreIsEmpty(t *testing.T) {
 	}
 }
 
-// The ceiling budgets for the history the default window keeps, so its
-// figure and the window's default are one fact. A window default that moves
-// without the ceiling would leave the ceiling budgeting for a history no
-// store keeps. [LAW:one-source-of-truth]
-func TestTheCeilingBudgetsTheDefaultHistoryWindow(t *testing.T) {
+// The ceiling budgets for the history the default window keeps and the user
+// snapshots the default budget keeps, so its figure and those defaults are
+// one fact. A default that moves without the ceiling would leave the ceiling
+// budgeting for a store no default setting produces. [LAW:one-source-of-truth]
+func TestTheCeilingBudgetsTheDefaults(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	cfg, err := config.Load(pathspec.PathSpec{})
 	if err != nil {
@@ -177,5 +177,8 @@ func TestTheCeilingBudgetsTheDefaultHistoryWindow(t *testing.T) {
 	}
 	if got := cfg.Sync.HistoryWindow.ReRootAt(); got != designHistoryCommits {
 		t.Fatalf("the default window re-roots at %d commits, but the ceiling budgets for %d", got, designHistoryCommits)
+	}
+	if got := cfg.Snapshot.RetentionBudget; got != designUserSnapshots {
+		t.Fatalf("the default snapshot budget keeps %d user snapshots, but the ceiling budgets for %d", got, designUserSnapshots)
 	}
 }

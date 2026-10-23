@@ -3652,7 +3652,7 @@ Usage strings: `restoreUsage = "usage: lit backup restore (--latest | --path <ex
 ### 3.6 Doctor / FixIntegrity (same file)
 
 `Doctor` (`import_export.go`) initializes `DependencyCycle`, `Errors`, `Warnings` to empty slices and `IntegrityCheck = "ok"`, then:
-- `s.footprint()` (`inventory-store-sync.md` §3.8) into `Footprint`, first, because it reads the filesystem alone, so a report a parent cycle cuts short still carries it; a measurement error returns the report with the error. Over the ceiling → warning from `overCeilingWarning`: `"store over its size ceiling: %s against %s; the largest part is the %s at %s"`.
+- `s.footprint()` (`inventory-store-sync.md` §3.8) into `Footprint`, first, because it reads the filesystem alone, so a report a parent cycle cuts short still carries it; a measurement error is the warning `"store footprint not measured: %v"` and leaves the zero (unmeasured) `Footprint`; the checks below still run. Over the ceiling → warning from `overCeilingWarning`: `"store over its size ceiling: %s against %s; the largest part is the %s at %s"`.
 - `CALL DOLT_VERIFY_CONSTRAINTS()` scanned into `violations`; error wrap `"verify constraints: %w"`. `violations > 0` → `IntegrityCheck = "constraint_violations"` and error line `fmt.Sprintf("constraint violations: %d", violations)`.
 - Three FK-orphan counts summed into `ForeignKeyIssues` (error wrap `"count foreign key issues: %w"`):
   - `SELECT COUNT(*) FROM relations r LEFT JOIN issues s ON s.id = r.src_id LEFT JOIN issues d ON d.id = r.dst_id WHERE s.id IS NULL OR d.id IS NULL`

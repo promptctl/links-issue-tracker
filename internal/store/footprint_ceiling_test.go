@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -200,5 +201,44 @@ func TestAStoreThatCannotShrinkNamesThePartHoldingTheBytes(t *testing.T) {
 	}
 	if !report.Footprint.Measured() || report.Footprint.Ceiling != st.sizeCeiling {
 		t.Fatalf("doctor footprint = %+v, want one measured under the handle's ceiling %d", report.Footprint, st.sizeCeiling)
+	}
+}
+
+// A footprint that cannot be read is a warning in doctor's report, never the
+// end of it: the integrity checks still run, and the report's footprint reads
+// as unmeasured rather than as an empty store. The size is read from a
+// directory doctor cannot list, which is the failure a walk meets in the field.
+func TestDoctorReportsAnUnreadableFootprintAndStillChecks(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a directory whatever its mode")
+	}
+	t.Parallel()
+	ctx := context.Background()
+	st := openFreshWorkspace(t)
+	sealed := filepath.Join(remoteCacheBaseFor(st.doltRootDir), "sealed")
+	if err := os.MkdirAll(sealed, 0o755); err != nil {
+		t.Fatalf("make the sealed cache dir: %v", err)
+	}
+	if err := os.Chmod(sealed, 0); err != nil {
+		t.Fatalf("seal the cache dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(sealed, 0o755) })
+
+	report, err := st.Doctor(ctx)
+	if err != nil {
+		t.Fatalf("Doctor(): %v, want the unreadable footprint reported, not returned", err)
+	}
+	if report.IntegrityCheck != "ok" {
+		t.Fatalf("integrity check = %q, want the checks run past the footprint", report.IntegrityCheck)
+	}
+	if report.Footprint.Measured() {
+		t.Fatalf("doctor footprint = %+v, want unmeasured", report.Footprint)
+	}
+	var named bool
+	for _, warning := range report.Warnings {
+		named = named || (strings.Contains(warning, "store footprint not measured") && strings.Contains(warning, "permission denied"))
+	}
+	if !named {
+		t.Fatalf("doctor warnings = %v, want one saying the footprint was not measured and why", report.Warnings)
 	}
 }

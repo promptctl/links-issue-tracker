@@ -360,7 +360,7 @@ Test `TestSyncCompactRunsCleanlyAndPreservesData` (`sync_test.go`).
 
 `MaintainIfDue(ctx) (storage.MaintenanceOutcome, error)` (`sync.go`) — the backstop's entrypoint. Both steps run every time, neither is skipped for the other's failure, and their errors are joined:
 1. `compactIfDue(ctx)`: `s.measureCompactionSignals()`; a measurement error returns `"measure compaction signals: %w"` (explicitly *not* "nothing due"). `mode, due := dueMode(signals)`; `!due` → zero `CompactionOutcome{}` and **nil error**; else `s.SyncCompact(ctx, mode)` (`sync.go`).
-2. `s.pruneAutomaticSnapshots()` (§3.8).
+2. `s.pruneAutomaticSnapshots(ctx)` (§3.8).
 3. Returns `MaintenanceOutcome{Compaction, SnapshotsPruned, Footprint}` from the two steps. The ceiling is never an input to compaction: a store over it with nothing to reclaim runs no pass it did not already owe.
 
 `chooseCompactionDepth()` (`sync.go`) — the push path's depth selector:
@@ -405,9 +405,9 @@ Test `TestSyncCompactRunsCleanlyAndPreservesData` (`sync_test.go`).
 - `storeSizeCeiling` is derived: (`measuredDesignStoreBytes` + `designHistoryCommits` × `measuredCommitBytes` + `journalDueBytes`) × (1 + `len(automaticSnapshotLabels)`). That is room for a design-size store, the history the default window keeps (`designHistoryCommits` is the window's `re_root_at`) and a journal at the shallow-pass threshold, plus one snapshot of that store per automatic kind. The two measured figures are `just perf --sizes` readings at the design size; the source names the run. `Store.sizeCeiling` carries it into the retention rule as a value.
 - `automaticSnapshotsPerKind = 10`.
 - `snapshotsToPrune(f, ceiling)` — pure, the one retention rule. The newest snapshot of each kind always stays. The room the rest may take is the ceiling less the chunk store, the temp table files, the other snapshots and those newest ones. Newest first, each further snapshot stays while its kind holds fewer than `automaticSnapshotsPerKind` and it fits the room left; once one does not fit, it and every older one go. Test `TestSnapshotsToPrune` (`footprint_test.go`).
-- `(*Store).pruneAutomaticSnapshots() (ceilingHold, error)` — the one enforcer: `measureFootprint` (`"measure store footprint: %w"`), then `dbsnapshot.Remove` of each snapshot `snapshotsToPrune` names, stopping at the first removal error. It returns the names removed and the footprint less what was removed, without a second walk. It takes no lock of its own: `migrate` (§8.3), the reconcile (§5.16, step 13), take-remote and `Downgrade` call it inside the commit lock they took their snapshot under, and `MaintainIfDue` (§3.5) calls it holding Dolt's LOCK through its write engine.
+- `(*Store).pruneAutomaticSnapshots(ctx) (ceilingHold, error)` — the one enforcer: `measureFootprint` (`"measure store footprint: %w"`), then `dbsnapshot.Remove` of each snapshot `snapshotsToPrune` names, stopping at the first removal error or once `ctx` is done (`ctx.Err()`, checked before each removal; the next prune retires the rest). It returns the names removed and the footprint less what was removed, without a second walk. It takes no lock of its own: `migrate` (§8.3), the reconcile (§5.16, step 13), take-remote and `Downgrade` call it inside the commit lock they took their snapshot under, and `MaintainIfDue` (§3.5) calls it holding Dolt's LOCK through its write engine.
 - `(*Store).footprint()` measures and renders. `overCeilingWarning(fp)` is `Doctor`'s warning for a store over its ceiling: `"store over its size ceiling: %s against %s; the largest part is the %s at %s"` — the governed bytes, the ceiling, and the largest governed part's name and size.
-- Tests: `TestMeasureFootprintReadsEveryPart`, `TestMeasureFootprintOfAnAbsentStoreIsEmpty`, `TestTheCeilingBudgetsTheDefaultHistoryWindow` (`footprint_test.go`); `TestOrdinaryUsePastTheCeilingComesBackUnderOnItsOwn`, `TestAStoreThatCannotShrinkNamesThePartHoldingTheBytes` (`footprint_ceiling_test.go`).
+- Tests: `TestMeasureFootprintReadsEveryPart`, `TestMeasureFootprintOfAnAbsentStoreIsEmpty`, `TestTheCeilingBudgetsTheDefaults` (`footprint_test.go`); `TestOrdinaryUsePastTheCeilingComesBackUnderOnItsOwn`, `TestAStoreThatCannotShrinkNamesThePartHoldingTheBytes`, `TestDoctorReportsAnUnreadableFootprintAndStillChecks` (`footprint_ceiling_test.go`).
 
 ---
 
@@ -642,7 +642,7 @@ Errors: `"read folded chain of %s excluding %v: %w"`, `"scan folded chain commit
 10. **Snapshot-first**: `guard.ensure(ctx)`; failure → `"snapshot before reconcile: %w"`, aborting **before** the data branch moves (`sync_reconcile.go`).
 11. `CALL DOLT_CHECKOUT(dataBranch)`; error `"return to data branch %q: %w"`.
 12. `CALL DOLT_RESET('--hard', replayedCommit)` — **the single atomic advance of the data branch**; error `"advance %q to replayed commit: %w"` (`sync_reconcile.go`).
-13. `s.pruneAutomaticSnapshots()` (§3.8). A failure prints `"lit: reconcile could not prune old recovery snapshots (replay already committed): %v"` to stderr and is **not** promoted — the replay already committed (`sync_reconcile.go`).
+13. `s.pruneAutomaticSnapshots(ctx)` (§3.8). A failure prints `"lit: reconcile could not prune old recovery snapshots (replay already committed): %v"` to stderr and is **not** promoted — the replay already committed (`sync_reconcile.go`).
 14. Return `replayLanding{replayed, landing}`.
 
 Invariant: the data branch is at its pre-reconcile head before step 12 and at the complete replayed spine after — never in between.
@@ -735,7 +735,7 @@ Test `TestSyncResolveUnrelatedOwnerApprovalBindsForkAndSide` (`sync_unrelated_te
 `takeRemoteHead(ctx, result, guard, trackingRef)` (`sync_unrelated_take.go`):
 1. `guard.ensure(ctx)`; failure → `"snapshot before take-remote: %w"`.
 2. `resetHardToRef(ctx, s.db, trackingRef)`.
-3. `s.pruneAutomaticSnapshots()` (§3.8); failure prints `"lit: take-remote could not prune old recovery snapshots (reset already done): %v"` to stderr, **not** promoted.
+3. `s.pruneAutomaticSnapshots(ctx)` (§3.8); failure prints `"lit: take-remote could not prune old recovery snapshots (reset already done): %v"` to stderr, **not** promoted.
 4. `result.State = SyncReconcileTookRemote`.
 Idempotent under retry (cached snapshot, fixed ref). The session's working set is left at the adopted head's own schema; the next `Open` lifts it. Tests `TestSyncResolveUnrelatedTakeRemote` (`sync_unrelated_test.go`), `TestSyncResolveUnrelatedTakeRemoteAdoptsAPrePurgeRemote` "nothing to carry" (`sync_unrelated_purge_test.go`).
 
@@ -856,7 +856,7 @@ Test hooks: `migrationUpByOneForTest` (`migration_runner.go`) applies **only** t
 1. `guard := newSnapshotGuard(s.doltRootDir, formatMigrationSnapshotLabel(time.Now()))`.
 2. `op, pruneErr, fail := s.runMigration(ctx, guard)`.
 3. On `fail != nil`: `fail.PruneErr = pruneErr`; return `fail`, a `*SchemaConvergenceError`.
-4. On success: `Migrated{SchemaAhead: op.schemaAhead(), PruneErr: pruneErr}`. With no snapshot taken, return it. With one → `Snapshot: snap.Name`, then `prune(pruneMigrationSnapshots, "prune migration snapshots", …)` over `s.pruneAutomaticSnapshots()` (§3.8), joined into `PruneErr`. No prune failure is the returned error (`migration_runner.go`). `Open` keeps the report on the handle, read back through `(*Store).Migrated()`; a sync open reports its bootstrap and the newer schema it served, and a read open that migrated nothing reports only the newer schema it served (`store.go`, `sync.go`, `migration_runner.go`).
+4. On success: `Migrated{SchemaAhead: op.schemaAhead(), PruneErr: pruneErr}`. With no snapshot taken, return it. With one → `Snapshot: snap.Name`, then `prune(pruneMigrationSnapshots, "prune migration snapshots", …)` over `s.pruneAutomaticSnapshots(ctx)` (§3.8), joined into `PruneErr`. No prune failure is the returned error (`migration_runner.go`). `Open` keeps the report on the handle, read back through `(*Store).Migrated()`; a sync open reports its bootstrap and the newer schema it served, and a read open that migrated nothing reports only the newer schema it served (`store.go`, `sync.go`, `migration_runner.go`).
 
 **`SchemaConvergenceError`** (`convergence.go`): `{Step ConvergenceStep; Snapshot *dbsnapshot.Taken; PruneErr error; Cause error}`; `Unwrap()` is `Cause`. `Error()`: `"schema convergence step %s failed: %v"` (step token, cause), then, when `Snapshot` is set, `"this open took recovery snapshot %s before migrating; it holds the workspace as it was then:\n  %s"` (name, path), then, when `PruneErr` is set, `"removing old migration checkpoints or snapshots also failed: %v"`. No restore instruction. `EventRecord()`: `storage.MigrationRecoveryFacts(recoverySnapshot(*Snapshot) or nil, PruneErr)` plus `migration.failed_step` = the step token.
 

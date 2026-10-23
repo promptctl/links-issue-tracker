@@ -807,7 +807,7 @@ func (s *Store) SyncCompact(ctx context.Context, mode GCMode) (storage.Compactio
 // nothing to reclaim runs no pass it did not already owe.
 func (s *Store) MaintainIfDue(ctx context.Context) (storage.MaintenanceOutcome, error) {
 	compaction, compactErr := s.compactIfDue(ctx)
-	held, pruneErr := s.pruneAutomaticSnapshots()
+	held, pruneErr := s.pruneAutomaticSnapshots(ctx)
 	return storage.MaintenanceOutcome{
 		Compaction:      compaction,
 		SnapshotsPruned: held.pruned,

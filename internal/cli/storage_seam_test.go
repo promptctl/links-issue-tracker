@@ -96,9 +96,7 @@ var doltWorkspaceMachinery = map[string][]string{
 		"AdoptRemoteByClone", "PendingAdopt", "AdoptPendingMarkerPath",
 	},
 	// Reading a snapshot's provenance out of its name, for the snapshots listing.
-	"snapshot naming": {
-		"IsMigrationSnapshotName", "IsDowngradeSnapshotName", "IsReconcileSnapshotName",
-	},
+	"snapshot naming": {"IsAutomaticSnapshotName", "IsMigrationSnapshotName"},
 	// Lifeboat: raw-table recovery for a workspace the engine will not open, so
 	// by definition it cannot go through the contract.
 	"lifeboat recovery": {

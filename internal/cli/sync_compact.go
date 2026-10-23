@@ -35,20 +35,22 @@ import (
 // there — precisely the workspace this backstop exists for.
 
 const (
-	// compactProbeInterval bounds how often this asks the engine whether a pass
-	// is owed. Asking costs an engine open, so it is debounced exactly the way
-	// the automatic receive is, and for the same reason.
+	// compactProbeInterval bounds how often this asks the engine what
+	// maintenance is owed. Asking costs an engine open and a walk of every file
+	// the store keeps on disk — the size ceiling is a sum over all of them — so
+	// it is debounced exactly the way the automatic receive is, and for the
+	// same reason.
 	//
 	// This is when to LOOK, never whether to collect — the engine's own
-	// footprint decides that, so a quiet workspace pays one cheap question and
-	// no pass. Dolt's own auto-GC splits the two the same way, polling on a
+	// readings decide that, so a quiet workspace pays the open and the walk
+	// and no pass. Dolt's own auto-GC splits the two the same way, polling on a
 	// timer and collecting on a threshold. [LAW:no-ambient-temporal-coupling]
 	//
 	// It doubles as the retry floor for a pass that failed: a successful pass
-	// needs none (it drops the footprint below the threshold, so the store
-	// itself stops asking), while a failing one would otherwise re-attempt on
-	// every subsequent mutation and turn one broken store into a stall on every
-	// command. [LAW:carrying-cost]
+	// needs none (it drops the compaction signals below their thresholds, so
+	// the store itself stops asking), while a failing one would otherwise
+	// re-attempt on every subsequent mutation and turn one broken store into a
+	// stall on every command. [LAW:carrying-cost]
 	compactProbeInterval = 15 * time.Minute
 
 	// compactTimeout bounds a single pass so a wedged collection cannot hang

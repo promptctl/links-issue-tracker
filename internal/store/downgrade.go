@@ -282,7 +282,7 @@ func (s *Store) downgradeLocked(ctx context.Context, targetSchemaVersion int64) 
 	// than returned: the workspace is at the target, and the caller still has
 	// to install the binary that reads it. The workspace never reads a
 	// snapshot, so one left over changes nothing it does.
-	if _, err := s.pruneAutomaticSnapshots(); err != nil {
+	if _, err := s.pruneAutomaticSnapshots(ctx); err != nil {
 		done.PruneErr = fmt.Errorf("prune downgrade snapshots: %w", err)
 	}
 	return done, nil
