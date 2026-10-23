@@ -9,16 +9,16 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
-// Hydration's two id-keyed reads must cover every id, not only the first batch.
+// Hydration's two id-keyed reads must cover every id they are given.
 //
 // hydrateIssues loads labels for every row it hydrates, and children for
-// every container among them. Batching them introduces the same failure the
-// relation gather has: a row whose labels were never queried is
+// every container among them. A read that answers for only part of them has the
+// same failure the relation gather does: a row whose labels were never read is
 // indistinguishable at the call site from one that genuinely has none, and a
-// container whose children were never queried hydrates as though it were
+// container whose children were never read hydrates as though it were
 // empty. Neither errors, and the listing simply shows less than is there.
 // The assertion is over every epic rather than over chosen positions. The ids
-// reach hydrateIssues from a map, so which batch any one of them lands in is
+// reach hydrateIssues from a map, so where any one of them falls in the list is
 // not something this test can arrange, and "all of them" is the property that
 // does not depend on the arrangement.
 //
@@ -32,12 +32,12 @@ import (
 // The childless epic is the other half of that control: it pins that the state
 // being compared against is the one an unloaded container would have fallen
 // back to, so "every epic differs from empty" cannot be satisfied vacuously.
-func TestHydrationReadsCoverEveryBatch(t *testing.T) {
+func TestHydrationReadsCoverEveryID(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
-	const epicCount = 2*idBatchSize + 2
+	const epicCount = manyIDs
 	const label = "spans"
 
 	epics := make([]string, 0, epicCount)
@@ -94,11 +94,11 @@ func TestHydrationReadsCoverEveryBatch(t *testing.T) {
 		}
 		got := issues[i]
 		if len(got.Labels) != 1 || got.Labels[0] != label {
-			t.Fatalf("epic %s (%d of %d) Labels = %v, want [%s] — a label batch went unqueried",
+			t.Fatalf("epic %s (%d of %d) Labels = %v, want [%s] — its labels were never read",
 				id, seen, epicCount, got.Labels, label)
 		}
 		if got.State() == empty {
-			t.Fatalf("epic %s (%d of %d) hydrated to %q, the state a childless epic has — a children batch went unqueried",
+			t.Fatalf("epic %s (%d of %d) hydrated to %q, the state a childless epic has — its children were never read",
 				id, seen, epicCount, got.State())
 		}
 		if got.State() != model.StateClosed {

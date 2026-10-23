@@ -742,7 +742,6 @@ func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (m
 }
 
 func (s *Store) ListIssues(ctx context.Context, filter storage.ListIssuesFilter) ([]model.Issue, error) {
-	query := `SELECT ` + issueColumnsQualified + ` FROM issues i`
 	var where []string
 	var args []any
 	if !filter.IncludeArchived {
@@ -785,13 +784,13 @@ func (s *Store) ListIssues(ctx context.Context, filter storage.ListIssuesFilter)
 	// a property of this clause rather than of the callers: `--type` parses to
 	// one value and internal/query dedupes, but storage.Store is an
 	// engine-facing interface and a direct caller passing a repeated list would
-	// otherwise get exactly the unbounded shape idBatchSize describes.
+	// otherwise get exactly the unbounded shape idSet describes.
 	// [LAW:parse-dont-validate]
 	if types := distinctTypes(filter.IssueTypes); len(types) > 0 {
 		for _, t := range types {
 			args = append(args, t)
 		}
-		where = append(where, "i.issue_type IN ("+strings.Join(repeatPlaceholder(len(types)), ",")+")")
+		where = append(where, "i.issue_type IN ("+placeholders(len(types))+")")
 	}
 	// [LAW:single-enforcer] Exclusion filter mirrors the IssueTypes positive
 	// filter above, bound included; keeping both at the store boundary means
@@ -800,21 +799,21 @@ func (s *Store) ListIssues(ctx context.Context, filter storage.ListIssuesFilter)
 		for _, t := range types {
 			args = append(args, t)
 		}
-		where = append(where, "i.issue_type NOT IN ("+strings.Join(repeatPlaceholder(len(types)), ",")+")")
+		where = append(where, "i.issue_type NOT IN ("+placeholders(len(types))+")")
 	}
 	// Assignee is the one filter here whose values are neither a closed
-	// vocabulary nor ids — the third kind idBatchSize's rule enumerates, bounded
-	// by provenance — and it stays a single clause on that narrower bound: the
-	// list is assembled from `--assignee` and from `assignee:` query terms, both
-	// of which a person types, and nothing derives it from the backlog. A caller
+	// vocabulary nor ids — the list bounded by provenance that idSet's rule
+	// names — and it stays a single clause on that narrower bound: the list is
+	// assembled from `--assignee` and from `assignee:` query terms, both of
+	// which a person types, and nothing derives it from the backlog. A caller
 	// that did derive it from the backlog would be handing the planner the
-	// quadratic shape idBatchSize describes, on a column the id batching cannot
-	// serve — so that caller batches here first, rather than being written.
+	// quadratic shape idSet describes, so that caller joins a set of its own
+	// here first, rather than being written.
 	if assignees := storage.TrimmedNonEmpty(filter.Assignees); len(assignees) > 0 {
 		for _, assignee := range assignees {
 			args = append(args, assignee)
 		}
-		where = append(where, "i.assignee IN ("+strings.Join(repeatPlaceholder(len(assignees)), ",")+")")
+		where = append(where, "i.assignee IN ("+placeholders(len(assignees))+")")
 	}
 	if filter.UpdatedAfter != nil {
 		where = append(where, "i.updated_at >= ?")
@@ -849,8 +848,7 @@ func (s *Store) ListIssues(ctx context.Context, filter storage.ListIssuesFilter)
 	// "Which issues are children of these parents" is a question about the
 	// relations table; answering it there instead of as an EXISTS subquery
 	// inside the issue scan leaves this query with a single open-ended id set
-	// to batch over. Two would have to batch as a product — |P|/K × |I|/K round
-	// trips for an answer that needs |I|/K. [LAW:decomposition]
+	// to join against. [LAW:decomposition]
 	selected, restricted, err := s.selectedIssueIDs(ctx, filter)
 	if err != nil {
 		return nil, err
@@ -860,38 +858,27 @@ func (s *Store) ListIssues(ctx context.Context, filter storage.ListIssuesFilter)
 		// they stay five however many terms the caller supplies — an extra term
 		// is an extra AND'd clause, never a longer OR. The planner's quadratic
 		// range merge needs a disjunct set that GROWS with caller input, which
-		// is the property this shape lacks; see idBatchSize.
+		// is the property this shape lacks; see idSet.
 		where = append(where, "(LOWER(i.title) LIKE ? OR LOWER(i.description) LIKE ? OR LOWER(COALESCE(i.agent_prompt, '')) LIKE ? OR LOWER(i.work_plan) LIKE ? OR LOWER(i.topic) LIKE ?)")
 		like := "%" + strings.ToLower(term) + "%"
 		args = append(args, like, like, like, like, like)
 	}
-	// One query when nothing narrows by id, one per batch when something does,
-	// and NO query at all when the id filters narrowed to the empty set — which
-	// falls out of idBatches returning no batches for no ids, rather than being
-	// guarded for here. An early return would have been a second statement of
-	// what restricted already says, and the cheaper one: zero round trips beats
-	// one. [LAW:dataflow-not-control-flow] [LAW:no-defensive-null-guards]
-	batches := []idBatch{nil}
+	// One query either way. An id restriction is a join against the selected
+	// set rather than a clause, so the restriction to no ids at all is a join
+	// against no rows, answered by the same query as any other.
+	// [LAW:dataflow-not-control-flow]
+	from, fromArgs := "issues i", []any{}
 	if restricted {
-		batches = idBatches(selected)
+		set, arg := newIDSet(selected).rows("sel")
+		from, fromArgs = set+" JOIN issues i ON i.id = sel.id", []any{arg}
 	}
-	rowsOut := []issueRow{}
-	for _, batch := range batches {
-		batchWhere, batchArgs := where, args
-		if batch != nil {
-			inList, inArgs := batch.inList()
-			batchWhere = append(slices.Clip(where), "i.id IN ("+inList+")")
-			batchArgs = append(slices.Clip(args), inArgs...)
-		}
-		batchQuery := query
-		if len(batchWhere) > 0 {
-			batchQuery += " WHERE " + strings.Join(batchWhere, " AND ")
-		}
-		batched, err := s.scanListRows(ctx, batchQuery, batchArgs)
-		if err != nil {
-			return nil, err
-		}
-		rowsOut = append(rowsOut, batched...)
+	query := `SELECT ` + issueColumnsQualified + ` FROM ` + from
+	if len(where) > 0 {
+		query += " WHERE " + strings.Join(where, " AND ")
+	}
+	rowsOut, err := s.scanListRows(ctx, query, append(fromArgs, args...))
+	if err != nil {
+		return nil, err
 	}
 	hydrated, err := s.hydrateIssues(ctx, rowsOut)
 	if err != nil {
@@ -917,9 +904,7 @@ func distinctTypes(types []model.IssueType) []model.IssueType {
 	return out
 }
 
-// scanListRows runs one of ListIssues' queries and reads its rows. It is
-// separate from the batch loop above so that closing the rows stays tied to the
-// one query that opened them, however many queries the id set turns into.
+// scanListRows runs ListIssues' query and reads its rows.
 func (s *Store) scanListRows(ctx context.Context, query string, args []any) ([]issueRow, error) {
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -950,11 +935,11 @@ func (s *Store) scanListRows(ctx context.Context, query string, args []any) ([]i
 // nothing, because every entry was dropped before the count was taken.
 // [LAW:parse-dont-validate]
 //
-// The ids are sorted so that the batch partition and the row order are
-// functions of the id set alone, not of the order a caller happened to type or
-// the order the relations table happened to store. ListIssues' comparator runs
-// over the union afterwards and is stable, so this is what keeps the order of
-// equal-sorting rows the same from call to call.
+// The ids are sorted so that the row order is a function of the id set
+// alone, not of the order a caller happened to type or the order the
+// relations table happened to store. ListIssues' comparator runs over the rows
+// afterwards and is stable, so this is what keeps the order of equal-sorting
+// rows the same from call to call.
 func (s *Store) selectedIssueIDs(ctx context.Context, filter storage.ListIssuesFilter) ([]string, bool, error) {
 	selected := storage.TrimmedNonEmpty(filter.IDs)
 	restricted := len(selected) > 0
@@ -966,10 +951,10 @@ func (s *Store) selectedIssueIDs(ctx context.Context, filter storage.ListIssuesF
 		if restricted {
 			// Intersected through a set rather than slices.Contains, which
 			// would be O(len(children) x len(selected)) — the same quadratic
-			// over two caller-supplied id lists that idBatchSize keeps out of
-			// the planner, in Go where no index hides it.
-			// The rule beside idBatchSize governs an id set wherever it is
-			// tested, not only where it is rendered into SQL.
+			// over two caller-supplied id lists that idSet keeps out of the
+			// planner, in Go where no index hides it.
+			// The rule beside idSet governs an id set wherever it is tested,
+			// not only where it is rendered into SQL.
 			// [LAW:one-type-per-behavior]
 			keep := make(map[string]bool, len(selected))
 			for _, id := range selected {
@@ -988,23 +973,15 @@ func (s *Store) selectedIssueIDs(ctx context.Context, filter storage.ListIssuesF
 //
 // This is the parent filter's whole implementation. The membership test it
 // carries is over dst_id, which is the leading column of
-// idx_relations_dst_type, so each batch is a short run of point lookups rather
+// idx_relations_dst_type, so the join is a run of point lookups rather
 // than the correlated subquery an EXISTS form would plan once per outer row.
 func (s *Store) childIDsOfParents(ctx context.Context, parentIDs []string) ([]string, error) {
-	children := []string{}
-	for _, batch := range idBatches(parentIDs) {
-		inList, args := batch.inList()
-		rows, err := s.db.QueryContext(ctx, `SELECT src_id FROM relations WHERE dst_id IN (`+inList+`) AND type = ?`, append(args, string(model.RelParentChild))...)
-		if err != nil {
-			return nil, fmt.Errorf("list children of parents: %w", err)
-		}
-		batched, err := scanIDColumn(rows)
-		if err != nil {
-			return nil, err
-		}
-		children = append(children, batched...)
+	parents, arg := newIDSet(parentIDs).rows("parents")
+	rows, err := s.db.QueryContext(ctx, `SELECT r.src_id FROM `+parents+` JOIN relations r ON r.dst_id = parents.id WHERE r.type = ?`, arg, string(model.RelParentChild))
+	if err != nil {
+		return nil, fmt.Errorf("list children of parents: %w", err)
 	}
-	return children, nil
+	return scanIDColumn(rows)
 }
 
 // scanIDColumn reads a single-column id result and closes it.
@@ -1028,26 +1005,21 @@ func (s *Store) requireIssues(ctx context.Context, ids []string) error {
 	if len(ids) == 0 {
 		return nil
 	}
-	// A membership test is the one shape batching is trivially sound for: the
-	// set of ids that exist is the union of the sets each batch finds, and the
-	// verdict below reads that union, not any one query's answer.
-	found := make(map[string]bool, len(ids))
-	for _, batch := range idBatches(ids) {
-		inList, args := batch.inList()
-		rows, err := s.db.QueryContext(ctx, `SELECT id FROM issues WHERE id IN (`+inList+`)`, args...)
-		if err != nil {
-			return fmt.Errorf("check issues exist: %w", err)
-		}
-		present, err := scanIDColumn(rows)
-		if err != nil {
-			return err
-		}
-		for _, id := range present {
-			found[id] = true
-		}
+	named, arg := newIDSet(ids).rows("named")
+	rows, err := s.db.QueryContext(ctx, `SELECT i.id FROM `+named+` JOIN issues i ON i.id = named.id`, arg)
+	if err != nil {
+		return fmt.Errorf("check issues exist: %w", err)
+	}
+	present, err := scanIDColumn(rows)
+	if err != nil {
+		return err
+	}
+	found := make(map[string]bool, len(present))
+	for _, id := range present {
+		found[id] = true
 	}
 	// Reported in the caller's order, over the caller's list, so a repeated id
-	// is still named once and the batching is invisible in the message.
+	// is still named once.
 	for _, id := range ids {
 		if !found[id] {
 			return storage.NotFoundError{Entity: "issue", ID: id}
@@ -1283,15 +1255,10 @@ func (s *Store) getIssuesByIDs(ctx context.Context, ids []string) (map[string]mo
 	if len(ids) == 0 {
 		return map[string]model.Issue{}, nil
 	}
-	scanned := make([]issueRow, 0, len(ids))
-	for _, batch := range idBatches(ids) {
-		inList, args := batch.inList()
-		query := `SELECT ` + issueColumnsBare + ` FROM issues WHERE id IN (` + inList + `)`
-		batched, err := s.scanIssueRows(ctx, query, args)
-		if err != nil {
-			return nil, err
-		}
-		scanned = append(scanned, batched...)
+	named, arg := newIDSet(ids).rows("named")
+	scanned, err := s.scanIssueRows(ctx, `SELECT `+issueColumnsQualified+` FROM `+named+` JOIN issues i ON i.id = named.id`, []any{arg})
+	if err != nil {
+		return nil, err
 	}
 	hydrated, err := s.hydrateIssues(ctx, scanned)
 	if err != nil {
@@ -1310,50 +1277,44 @@ func (s *Store) getIssuesByIDs(ctx context.Context, ids []string) (map[string]mo
 // (storage.ParentCycleError) — the state a caller clearing a parent is there
 // to repair, as ClearParent explains.
 func (s *Store) issueTypesByIDs(ctx context.Context, ids []string) (map[string]model.IssueType, error) {
+	named, arg := newIDSet(ids).rows("named")
+	rows, err := s.db.QueryContext(ctx, `SELECT i.id, i.issue_type FROM `+named+` JOIN issues i ON i.id = named.id`, arg)
+	if err != nil {
+		return nil, fmt.Errorf("load issue types: %w", err)
+	}
+	defer rows.Close()
 	types := make(map[string]model.IssueType, len(ids))
-	for _, batch := range idBatches(ids) {
-		inList, args := batch.inList()
-		rows, err := s.db.QueryContext(ctx, `SELECT id, issue_type FROM issues WHERE id IN (`+inList+`)`, args...)
-		if err != nil {
-			return nil, fmt.Errorf("batch load issue types: %w", err)
+	for rows.Next() {
+		var id string
+		var issueType model.IssueType
+		if err := rows.Scan(&id, &issueType); err != nil {
+			return nil, fmt.Errorf("scan loaded issue type: %w", err)
 		}
-		for rows.Next() {
-			var id string
-			var issueType model.IssueType
-			if err := rows.Scan(&id, &issueType); err != nil {
-				rows.Close()
-				return nil, fmt.Errorf("scan batch-loaded issue type: %w", err)
-			}
-			types[id] = issueType
-		}
-		err = rows.Err()
-		rows.Close()
-		if err != nil {
-			return nil, fmt.Errorf("iterate batch-loaded issue types: %w", err)
-		}
+		types[id] = issueType
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate loaded issue types: %w", err)
 	}
 	return types, nil
 }
 
-// scanIssueRows runs one id-batch query and reads its rows. It is separate from
-// the batching above so that closing the rows stays tied to the one query that
-// opened them, rather than to the whole batched read.
+// scanIssueRows runs an issue-row query and reads its rows.
 func (s *Store) scanIssueRows(ctx context.Context, query string, args []any) ([]issueRow, error) {
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("batch load issues: %w", err)
+		return nil, fmt.Errorf("load issues by id: %w", err)
 	}
 	defer rows.Close()
 	scanned := []issueRow{}
 	for rows.Next() {
 		row, err := scanIssue(rows)
 		if err != nil {
-			return nil, fmt.Errorf("scan batch-loaded issue: %w", err)
+			return nil, fmt.Errorf("scan loaded issue: %w", err)
 		}
 		scanned = append(scanned, row)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate batch-loaded issues: %w", err)
+		return nil, fmt.Errorf("iterate loaded issues: %w", err)
 	}
 	return scanned, nil
 }
@@ -2814,32 +2775,15 @@ func (s *Store) lifecycleChildrenByEpicIDs(ctx context.Context, epicIDs []string
 
 	// [LAW:dataflow-not-control-flow] Hydrate every epic's children in a single
 	// pass rather than once per epic. A parallel parentID slice carries the epic
-	// each child row belongs to, so the per-recursion-level query count is fixed
+	// each child row belongs to, so the per-recursion-level query count is one
 	// regardless of how many epics are open instead of scaling as one label query
 	// plus one child-relation query per epic. hydrateIssues preserves input order
 	// and the SELECT groups children by epic (dst_id) then item_rank, so
 	// re-bucketing the hydrated result by parentID reproduces the per-epic,
 	// rank-ordered grouping.
-	//
-	// Batching the epic ids does not disturb that ordering: an epic falls in
-	// exactly one batch, so its children are still produced consecutively and in
-	// item_rank order by a single query, and the concatenation only interleaves
-	// whole epics, which the re-bucketing discards anyway.
-	//
-	// It does change the count, and the sentence above is about fan-out rather
-	// than about a constant. One query per batch is ceil(N/idBatchSize), which
-	// grows with the epic count -- but the per-epic query fan-out stays
-	// absent, and the cap is what keeps the clause from costing more in
-	// planning than the extra round trips cost to make. See idbatch.go.
-	childRows := make([]issueRow, 0)
-	parentIDs := make([]string, 0)
-	for _, batch := range idBatches(epicIDs) {
-		batchRows, batchParents, err := s.scanLifecycleChildRows(ctx, batch)
-		if err != nil {
-			return nil, err
-		}
-		childRows = append(childRows, batchRows...)
-		parentIDs = append(parentIDs, batchParents...)
+	childRows, parentIDs, err := s.scanLifecycleChildRows(ctx, newIDSet(epicIDs))
+	if err != nil {
+		return nil, err
 	}
 	chains := make([]*descent, len(childRows))
 	for i, child := range childRows {
@@ -2858,13 +2802,10 @@ func (s *Store) lifecycleChildrenByEpicIDs(ctx context.Context, epicIDs []string
 	return out, nil
 }
 
-// scanLifecycleChildRows runs one batch of the children query and reads its
-// rows, returning each child beside the epic it hangs from.
-//
-// Separate from the batching above so that closing the rows stays tied to the
-// one query that opened them, however many queries the epic set turns into.
-func (s *Store) scanLifecycleChildRows(ctx context.Context, batch idBatch) ([]issueRow, []string, error) {
-	inList, args := batch.inList()
+// scanLifecycleChildRows runs the children query and reads its rows, returning
+// each child beside the epic it hangs from.
+func (s *Store) scanLifecycleChildRows(ctx context.Context, epics idSet) ([]issueRow, []string, error) {
+	epicRows, arg := epics.rows("epics")
 	// [LAW:one-source-of-truth] Active containers derive progress from active children; archived/deleted containers keep a full child snapshot so their lifecycle state does not collapse to empty/open.
 	// Children-of-epic visibility truth table:
 	//   parent live, child live -> include
@@ -2873,18 +2814,19 @@ func (s *Store) scanLifecycleChildRows(ctx context.Context, batch idBatch) ([]is
 	//   parent dead, child dead -> include (snapshot semantics)
 	// The WHERE clause encodes "include if parent is dead OR child is live."
 	rows, err := s.db.QueryContext(ctx, `SELECT r.dst_id, `+issueColumnsQualified+`
-		FROM relations r
+		FROM `+epicRows+`
+		JOIN relations r ON r.dst_id = epics.id
 		JOIN issues i ON i.id = r.src_id
 		JOIN issues p ON p.id = r.dst_id
-		WHERE r.dst_id IN (`+inList+`) AND r.type = 'parent-child'
+		WHERE r.type = 'parent-child'
 			AND (p.archived_at IS NOT NULL OR p.deleted_at IS NOT NULL OR (i.archived_at IS NULL AND i.deleted_at IS NULL))
-		ORDER BY r.dst_id ASC, i.item_rank ASC`, args...)
+		ORDER BY r.dst_id ASC, i.item_rank ASC`, arg)
 	if err != nil {
 		return nil, nil, fmt.Errorf("load lifecycle children: %w", err)
 	}
 	defer rows.Close()
-	childRows := make([]issueRow, 0, len(batch))
-	parentIDs := make([]string, 0, len(batch))
+	childRows := make([]issueRow, 0, len(epics.ids))
+	parentIDs := make([]string, 0, len(epics.ids))
 	for rows.Next() {
 		parentID, child, err := scanIssueWithParent(rows)
 		if err != nil {
@@ -2899,37 +2841,24 @@ func (s *Store) scanLifecycleChildRows(ctx context.Context, batch idBatch) ([]is
 	return childRows, parentIDs, nil
 }
 
+// loadLabelsByIssueIDs reads the labels of every issue in issueIDs, each
+// issue's in label order.
 func (s *Store) loadLabelsByIssueIDs(ctx context.Context, issueIDs []string) (map[string][]string, error) {
-	out := map[string][]string{}
-	for _, batch := range idBatches(issueIDs) {
-		if err := s.scanLabelRows(ctx, batch, out); err != nil {
-			return nil, err
-		}
-	}
-	return out, nil
-}
-
-// scanLabelRows reads one batch's label rows into out.
-//
-// Accumulating into the caller's map rather than returning one per batch keeps
-// closing the rows tied to the single query that opened them, and an id falls
-// in exactly one batch, so each issue's labels are appended by one query and
-// keep the ORDER BY's ordering. [LAW:one-source-of-truth]
-func (s *Store) scanLabelRows(ctx context.Context, batch idBatch, out map[string][]string) error {
-	inList, args := batch.inList()
-	rows, err := s.db.QueryContext(ctx, `SELECT issue_id, label FROM labels WHERE issue_id IN (`+inList+`) ORDER BY label ASC`, args...)
+	named, arg := newIDSet(issueIDs).rows("named")
+	rows, err := s.db.QueryContext(ctx, `SELECT l.issue_id, l.label FROM `+named+` JOIN labels l ON l.issue_id = named.id ORDER BY l.label ASC`, arg)
 	if err != nil {
-		return fmt.Errorf("load labels by issue ids: %w", err)
+		return nil, fmt.Errorf("load labels by issue ids: %w", err)
 	}
 	defer rows.Close()
+	out := map[string][]string{}
 	for rows.Next() {
 		var issueID, label string
 		if err := rows.Scan(&issueID, &label); err != nil {
-			return err
+			return nil, err
 		}
 		out[issueID] = append(out[issueID], label)
 	}
-	return rows.Err()
+	return out, rows.Err()
 }
 
 func nullableTime(value *time.Time) any {

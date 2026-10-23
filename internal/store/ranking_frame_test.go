@@ -1383,7 +1383,7 @@ func TestRankSetOverALargeFrameRewritesEveryDisplacedKey(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
-	ids := makeTopLevelIssues(t, ctx, st, 2*idBatchSize+3, "row %d")
+	ids := makeTopLevelIssues(t, ctx, st, 2*idChunkSize+3, "row %d")
 	before, err := st.ListIssues(ctx, storage.ListIssuesFilter{})
 	if err != nil {
 		t.Fatalf("ListIssues() error = %v", err)

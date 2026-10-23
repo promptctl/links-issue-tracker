@@ -494,17 +494,18 @@ updated_at, closed_at, resolution, redirect_target, follows_up, archived_at, del
 
 `loadLabelsByIssueIDs` (`store.go`):
 ```sql
-SELECT issue_id, label FROM labels WHERE issue_id IN (?, ?, ...) ORDER BY label ASC
+SELECT l.issue_id, l.label FROM JSON_TABLE(?, '$[*]' COLUMNS (id VARCHAR(191) PATH '$')) AS named JOIN labels l ON l.issue_id = named.id ORDER BY l.label ASC
 ```
 failure → `fmt.Errorf("load labels by issue ids: %w", err)`.
 
-`lifecycleChildrenByEpicIDs(ctx, epicIDs, below)` (`store.go`) — empty input returns an empty map without querying; otherwise one query per id batch (`idBatches`):
+`lifecycleChildrenByEpicIDs(ctx, epicIDs, below)` (`store.go`) — one query however many epics, the epic ids joined as an `idSet` (an empty set is a join against no rows):
 ```sql
 SELECT r.dst_id, <issueColumnsQualified>
-FROM relations r
+FROM JSON_TABLE(?, '$[*]' COLUMNS (id VARCHAR(191) PATH '$')) AS epics
+JOIN relations r ON r.dst_id = epics.id
 JOIN issues i ON i.id = r.src_id
 JOIN issues p ON p.id = r.dst_id
-WHERE r.dst_id IN (?, ...) AND r.type = 'parent-child'
+WHERE r.type = 'parent-child'
     AND (p.archived_at IS NOT NULL OR p.deleted_at IS NOT NULL OR (i.archived_at IS NULL AND i.deleted_at IS NULL))
 ORDER BY r.dst_id ASC, i.item_rank ASC
 ```
@@ -522,11 +523,11 @@ SELECT <issueColumnsBare> FROM issues WHERE id = ?
 
 #### 5.5 `getIssuesByIDs(ctx, ids) (map[string]model.Issue, error)`
 
-`store.go`. Empty input → empty map, no query. Otherwise:
+`store.go`. Empty input → empty map, no query. Otherwise one query:
 ```sql
-SELECT <issueColumnsBare> FROM issues WHERE id IN (?, ?, ...)
+SELECT <issueColumnsQualified> FROM JSON_TABLE(?, '$[*]' COLUMNS (id VARCHAR(191) PATH '$')) AS named JOIN issues i ON i.id = named.id
 ```
-Errors: `"batch load issues: %w"`, `"scan batch-loaded issue: %w"`, `"iterate batch-loaded issues: %w"`. Missing ids are simply absent from the map (`store.go`).
+Errors: `"load issues by id: %w"`, `"scan loaded issue: %w"`, `"iterate loaded issues: %w"`. Missing ids are simply absent from the map (`store.go`).
 
 #### 5.6 `GetIssueDetail(ctx, id) (model.IssueDetail, error)`
 
@@ -566,7 +567,7 @@ WHERE clauses, appended in this exact order:
 | `filter.HasComments != nil`, false | `NOT EXISTS (SELECT 1 FROM comments c WHERE c.issue_id = i.id)` | `store.go` |
 | each canonicalized label in `filter.LabelsAll` | `EXISTS (SELECT 1 FROM labels l WHERE l.issue_id = i.id AND l.label = ?)` (one clause per label — AND semantics) | `store.go` |
 | `len(filter.ParentIDs) > 0` (after `requireIssues(ctx, filter.ParentIDs)` passes) | no clause of its own: `selectedIssueIDs` resolves the parents to their children's ids and folds them into the id filter below | `store.go` |
-| the id set `selectedIssueIDs` returns is non-empty | `i.id IN (?, ?)` joined with `", "`, one query per batch of at most `idBatchSize` ids | `store.go` |
+| `selectedIssueIDs` reports the ids restricted (even to none) | no clause: the scan's row source becomes the `idSet` joined to `issues i ON i.id = sel.id`, so the listing is one query however many ids it names | `store.go` |
 | each non-blank `filter.SearchTerms` term, lowercased & trimmed | `(LOWER(i.title) LIKE ? OR LOWER(i.description) LIKE ? OR LOWER(COALESCE(i.agent_prompt, '')) LIKE ? OR LOWER(i.work_plan) LIKE ? OR LOWER(i.topic) LIKE ?)` with `%term%` bound five times | `store.go` |
 
 Clauses are joined with `" AND "` (`store.go`).
@@ -2678,7 +2679,7 @@ Error-vs-not-found distinction: `execDelete` wraps a delete failure as `fmt.Erro
 ### 3.5 ListLabels and other read paths
 
 - `Store.ListLabels` — `internal/store/labels.go`: `SELECT label FROM labels WHERE issue_id = ? ORDER BY label ASC`; query error → `fmt.Errorf("list labels: %w", err)`; scan errors returned bare; returns `nil` slice when there are no rows (the slice is never pre-allocated).
-- `loadLabelsByIssueIDs` — `internal/store/store.go`: `SELECT issue_id, label FROM labels WHERE issue_id IN (?, ?, …) ORDER BY label ASC`; error → `fmt.Errorf("load labels by issue ids: %w", err)`.
+- `loadLabelsByIssueIDs` — `internal/store/store.go`: one query, the ids joined as an `idSet` — `SELECT l.issue_id, l.label FROM <idSet> named JOIN labels l ON l.issue_id = named.id ORDER BY l.label ASC`; error → `fmt.Errorf("load labels by issue ids: %w", err)`.
 - `listAllLabels` — `internal/store/store.go`: `SELECT issue_id, label, created_at, created_by FROM labels ORDER BY issue_id ASC, label ASC`; error → `fmt.Errorf("list all labels: %w", err)`.
 - List filtering by label — `internal/store/store.go`: `filter.LabelsAll` is run through `canonicalizeLabels` and each label adds a conjunct `EXISTS (SELECT 1 FROM labels l WHERE l.issue_id = i.id AND l.label = ?)` (AND semantics, one clause per label).
 - Import/restore insert: `INSERT INTO labels(issue_id, label, created_at, created_by) VALUES (?, ?, ?, ?)` with error `fmt.Errorf("restore label %s:%s: %w", label.IssueID, label.Name, err)` — `internal/store/import_export.go`.
@@ -2832,9 +2833,9 @@ Query error → `fmt.Errorf("list relations: %w", err)`; created_at parsed with 
 
 `relationsByEndpoint(ctx, column, ids)` — `internal/store/relations.go`: builds
 ```sql
-SELECT src_id, dst_id, type, created_at, created_by FROM relations WHERE <column> IN (?,…) AND type IN (?,?)
+SELECT r.src_id, r.dst_id, r.type, r.created_at, r.created_by FROM JSON_TABLE(?, '$[*]' COLUMNS (id VARCHAR(191) PATH '$')) AS ends JOIN relations r ON r.<column> = ends.id WHERE r.type IN (?,?)
 ```
-via `fmt.Sprintf` with placeholder lists from `repeatPlaceholder` (`internal/store/relations.go`); args are the ids then the two type strings. No ORDER BY (ordering is `mergeRelations`' job). Reading the rows is `scanRelationRows`' job, called once per id batch: query error → `fmt.Errorf("list relations for ids: %w", err)`, and the scan of `created_at` goes through `scanTime`.
+via `fmt.Sprintf`, the type list from `placeholders` (`internal/store/idset.go`); args are the JSON id array then the two type strings. No ORDER BY (ordering is `mergeRelations`' job). Reading the rows is `scanRelationRows`' job: query error → `fmt.Errorf("list relations for ids: %w", err)`, and the scan of `created_at` goes through `scanTime`.
 
 `listRelationsForIDs(ctx, ids)` — `internal/store/relations.go`: empty ids → `(nil, nil)`; otherwise one query per endpoint column and `mergeRelations(bySrc, byDst)`. The documented reason for two conjunctive queries rather than one `src_id IN (…) OR dst_id IN (…)` is engine index-analysis blowup.
 
@@ -2853,8 +2854,8 @@ via `fmt.Sprintf` with placeholder lists from `repeatPlaceholder` (`internal/sto
 ### 4.11 Listing by parent
 
 Children are read through `Store.ListIssues` with `filter.ParentIDs` set (§5.7); there is no separate children query.
-- `requireIssues(ctx, filter.ParentIDs)` runs before the parents are resolved — `internal/store/store.go`, defined. Empty ids → no batches and so no query at all. Otherwise one `SELECT id FROM issues WHERE id IN (?,…)` per batch of at most `idBatchSize` ids; query error → `fmt.Errorf("check issues exist: %w", err)`. The batches' answers are unioned into one found-set, which is the only thing the verdict reads — a membership test is the shape batching is trivially sound for. Walking the caller's own ids in the order given, the first one absent from that set → `storage.NotFoundError{Entity: "issue", ID: id}`, so a repeated id is still named once and the batching is invisible in the message. The query reads existence only, so a soft-deleted or archived parent passes.
-- Parent clause: there is none. `selectedIssueIDs` (`internal/store/store.go`) resolves the parents through `childIDsOfParents`, which runs `SELECT src_id FROM relations WHERE dst_id IN (?,…) AND type = ?` one batch of at most `idBatchSize` parent ids at a time, and folds the result into the id filter — intersecting it with `filter.IDs` when both are set. Only direct children match, and several parent ids union together. The child rows go through the listing's other clauses, so `archived_at IS NULL` and `deleted_at IS NULL` apply unless `IncludeArchived`/`IncludeDeleted` is set, and ordering is the `storage.IssueOrdering` comparator over `sortKeys`, applied in Go after hydration (rank ascending, then id, when no `SortBy`).
+- `requireIssues(ctx, filter.ParentIDs)` runs before the parents are resolved — `internal/store/store.go`, defined. Empty ids → no query at all. Otherwise one query, the ids joined as an `idSet` against `issues`; query error → `fmt.Errorf("check issues exist: %w", err)`. Its answer is a found-set, the only thing the verdict reads. Walking the caller's own ids in the order given, the first one absent from that set → `storage.NotFoundError{Entity: "issue", ID: id}`, so a repeated id is still named once. The query reads existence only, so a soft-deleted or archived parent passes.
+- Parent clause: there is none. `selectedIssueIDs` (`internal/store/store.go`) resolves the parents through `childIDsOfParents`, which runs one `SELECT r.src_id FROM <idSet> parents JOIN relations r ON r.dst_id = parents.id WHERE r.type = ?`, and folds the result into the id filter — intersecting it with `filter.IDs` when both are set. Only direct children match, and several parent ids union together. The child rows go through the listing's other clauses, so `archived_at IS NULL` and `deleted_at IS NULL` apply unless `IncludeArchived`/`IncludeDeleted` is set, and ordering is the `storage.IssueOrdering` comparator over `sortKeys`, applied in Go after hydration (rank ascending, then id, when no `SortBy`).
 - `TestStoreListByParentDefaultsToRankOrder` — two children wired by `SetParent` list in rank order — `internal/store/store_test.go`.
 - `TestListByParentReturnsEpicChildrenWithDerivedLifecycle` — a sub-epic listed under its root carries container progress derived from its closed leaf (closed 1, total 1) — `internal/store/store_test.go`.
 
@@ -2989,14 +2990,14 @@ Frame behavior pinned by tests — `internal/store/ranking_frame_test.go`:
 - `resolveRankSet` — `internal/store/ranking.go`: per id, `GetIssue` then `ancestorChain`; `storage.FrameRepresentatives` errors are wrapped `fmt.Errorf("rank set: %w", err)`; `storage.RankSetResolutions(ids, reps)` (`internal/storage/rank.go`, shared with the memory engine) pairs each id with its representative, and two named ids collapsing to the same representative → `model.ValidationError`
   `fmt.Sprintf("rank set: %s and %s both resolve to %s — their relative order is internal to %s and cannot be set against outside issues; run rank set among siblings instead", prior, id, reps[i], reps[i])`.
   Returns `[]storage.RankSetResolution{{NamedID, RankedID}}` parallel to the input order.
-- In `withMutation(ctx, "rank set", …)`, `unrankedAmongTx` first reads which representatives are live and hold no key, one `SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank = '' AND id IN (…)` per `idBatches` batch, error → `fmt.Errorf("read which of %v hold no key: %w", batch, err)` wrapped `fmt.Errorf("rank set: %w", err)`; each is placed at the frame's bottom by `bottomEdge.placeBeyondTx`, error wrapped `fmt.Errorf("rank set: %w", err)`. Then the frame's keys are read lowest first, ties by id:
+- In `withMutation(ctx, "rank set", …)`, `unrankedAmongTx` first reads which representatives are live and hold no key, one `SELECT i.id, i.item_rank FROM <idSet> named JOIN issues i ON i.id = named.id WHERE i.deleted_at IS NULL AND i.item_rank = ''`, error → `fmt.Errorf("read which of %d issues hold no key: %w", len(ids), err)` wrapped `fmt.Errorf("rank set: %w", err)`; each is placed at the frame's bottom by `bottomEdge.placeBeyondTx`, error wrapped `fmt.Errorf("rank set: %w", err)`. Then the frame's keys are read lowest first, ties by id:
   ```sql
   SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank != '' AND <frame> = ? ORDER BY item_rank ASC, id ASC
   ```
   bound with the frame alone, through `rankRows`; error → `fmt.Errorf("rank set: read the keys of frame %q: %w", f, err)`.
 - A permutation leaves two slots on one key sharing it, and a listing breaks the tie by id. Where adjacent slots share a key and the id of the issue ordered into the later one sorts before the earlier one's, the set is refused with a `model.ValidationError`: ``fmt.Sprintf("rank set: %s and %s share the key %q, which a listing breaks by id, so %s cannot be written above %s; separate them first with `lit rank %s --above %s`", …)``.
 - `storage.RankSetOrder(f, occupants, ranked)` (`internal/storage/rank.go`) names each slot's new occupant: the representatives in the order named, then every other frame member in its current order. A representative that is not one of the frame's ranked members makes the result longer than the frame → `fmt.Errorf("rank set: %d issues resolved into %s but the frame holds %d ranked — refusing to rewrite a partial order", len(ordered), f, len(occupants))`. The memory engine applies the same function to its slots (`internal/storage/memory/rank.go`).
-- Each slot's key passes to its new occupant; a slot whose occupant is unchanged is not written. `writeRanksTx` writes the moved keys in one statement per `idBatches` batch — `UPDATE issues SET item_rank = CASE id WHEN ? THEN ? … END, updated_at = COALESCE(CASE id WHEN ? THEN ? … END, updated_at) WHERE deleted_at IS NULL AND id IN (…)`, error → `fmt.Errorf("rewrite the keys of %v: %w", batch, err)`, wrapped `fmt.Errorf("rank set: %w", err)`. A write is `touched` only for a representative whose key changed; it takes one shared `now`, and every other write is bound NULL, so it keeps its `updated_at`. No key is minted, so the frame holds the same set of keys before and after, and a repeat of an order that has arrived writes nothing.
+- Each slot's key passes to its new occupant; a slot whose occupant is unchanged is not written. `writeRanksTx` writes the moved keys in one statement per `idChunks` chunk of at most `idChunkSize` ids (a write cannot join an `idSet`: Dolt checks an UPDATE ... JOIN's constraints against the joined row) — `UPDATE issues SET item_rank = CASE id WHEN ? THEN ? … END, updated_at = COALESCE(CASE id WHEN ? THEN ? … END, updated_at) WHERE deleted_at IS NULL AND id IN (…)`, error → `fmt.Errorf("rewrite the keys of %v: %w", chunk, err)`, wrapped `fmt.Errorf("rank set: %w", err)`. A write is `touched` only for a representative whose key changed; it takes one shared `now`, and every other write is bound NULL, so it keeps its `updated_at`. No key is minted, so the frame holds the same set of keys before and after, and a repeat of an order that has arrived writes nothing.
 - Atomic: all assignments in one mutation.
 - On error the zero `RankSetResult` is returned (`mutationValue`), so no resolutions come back with a failed write.
 

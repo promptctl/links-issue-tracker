@@ -231,7 +231,7 @@ func (s *Store) Doctor(ctx context.Context) (storage.HealthReport, error) {
 func (s *Store) FixIntegrity(ctx context.Context) (storage.HealthReport, error) {
 	if err := s.withMutation(ctx, "fix integrity", func(ctx context.Context, tx *sql.Tx) error {
 		// The `NOT IN` here carries a SUBQUERY, not a placeholder list, and
-		// that is what keeps it off the quadratic path idBatchSize describes:
+		// that is what keeps it off the quadratic path idSet describes:
 		// the engine plans one anti-join against a table, where a list of N
 		// literals would become N index ranges to merge pairwise. It scales
 		// with the backlog, and linearly.

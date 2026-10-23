@@ -694,20 +694,17 @@ func (s *Store) RankSet(ctx context.Context, ids []string) (storage.RankSetResul
 	})
 }
 
-// unrankedAmongTx is which of the given issues are live and hold no key, one
-// read per id batch.
+// unrankedAmongTx is which of the given issues are live and hold no key.
 func unrankedAmongTx(ctx context.Context, tx *sql.Tx, ids []string) ([]string, error) {
+	named, arg := newIDSet(ids).rows("named")
+	rows, err := rankRows(ctx, tx, `SELECT i.id, i.item_rank FROM `+named+` JOIN issues i ON i.id = named.id
+		WHERE i.deleted_at IS NULL AND i.item_rank = ''`, arg)
+	if err != nil {
+		return nil, fmt.Errorf("read which of %d issues hold no key: %w", len(ids), err)
+	}
 	var unranked []string
-	for _, batch := range idBatches(ids) {
-		in, args := batch.inList()
-		rows, err := rankRows(ctx, tx, fmt.Sprintf(`SELECT id, item_rank FROM issues
-			WHERE deleted_at IS NULL AND item_rank = '' AND id IN (%s)`, in), args...)
-		if err != nil {
-			return nil, fmt.Errorf("read which of %v hold no key: %w", []string(batch), err)
-		}
-		for _, row := range rows {
-			unranked = append(unranked, row.id)
-		}
+	for _, row := range rows {
+		unranked = append(unranked, row.id)
 	}
 	return unranked, nil
 }
@@ -720,11 +717,11 @@ type rankWrite struct {
 }
 
 // writeRanksTx hands each issue the key its write names, one statement per id
-// batch.
+// chunk (see idChunks for why this write chunks where reads join).
 //
 // A rank set can displace every member of a large frame, so the keys are
-// written as a batched CASE rather than a statement per issue: the cost of the
-// write grows by round trips per batch, never per row. updated_at rides in the
+// written as a chunked CASE rather than a statement per issue: the cost of the
+// write grows by round trips per chunk, never per row. updated_at rides in the
 // same statement: a touched issue takes now, and an untouched one is handed
 // NULL, which COALESCE turns back into the stamp it already held. Every key
 // write a rank verb, a respace, or the inversion repair makes goes through
@@ -738,20 +735,21 @@ func writeRanksTx(ctx context.Context, tx *sql.Tx, writes []rankWrite, now strin
 		ids[i] = w.id
 	}
 	stampOf := map[bool]any{true: now, false: nil}
-	for _, batch := range idBatches(ids) {
-		in, inArgs := batch.inList()
-		keys := make([]any, 0, 2*len(batch))
-		stamps := make([]any, 0, 2*len(batch))
-		for _, id := range batch {
+	for _, chunk := range idChunks(ids) {
+		keys := make([]any, 0, 2*len(chunk))
+		stamps := make([]any, 0, 2*len(chunk))
+		inArgs := make([]any, 0, len(chunk))
+		for _, id := range chunk {
+			inArgs = append(inArgs, id)
 			keys = append(keys, id, byID[id].rank)
 			stamps = append(stamps, id, stampOf[byID[id].touched])
 		}
-		whens := strings.Repeat("WHEN ? THEN ? ", len(batch))
+		whens := strings.Repeat("WHEN ? THEN ? ", len(chunk))
 		query := fmt.Sprintf(`UPDATE issues SET item_rank = CASE id %s END,
 			updated_at = COALESCE(CASE id %s END, updated_at)
-			WHERE deleted_at IS NULL AND id IN (%s)`, whens, whens, in)
+			WHERE deleted_at IS NULL AND id IN (%s)`, whens, whens, placeholders(len(chunk)))
 		if _, err := tx.ExecContext(ctx, query, slices.Concat(keys, stamps, inArgs)...); err != nil {
-			return fmt.Errorf("rewrite the keys of %v: %w", []string(batch), err)
+			return fmt.Errorf("rewrite the keys of %v: %w", chunk, err)
 		}
 	}
 	return nil

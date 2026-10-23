@@ -17,14 +17,12 @@ import (
 // a tree of one epic and a tree of many epics of the same shape and depth must
 // cost the identical number of queries. (links-query-efficiency-988d.1)
 //
-// "Identical" holds while the id lists stay inside one batch, which for this
-// fixture means idBatchSize/2 epics, not idBatchSize: the binding read is the
-// label load, and it receives two ids per epic -- the epic and its child. The
-// counts below compare 1 against 5, well inside that. Past the bound the count
-// rises by one per batch rather than staying flat, a bound an unbatched clause
-// would not need but would pay for in quadratic planning instead. What this
-// test protects is the absence of per-epic fan-out: the growth is in the cap,
-// not in the epic count.
+// "Identical" holds at any size, not only while the ids are few: every
+// id-keyed read is one join against an idSet, so the label load — which
+// receives two ids per epic, the epic and its child — costs one query for 80
+// ids as for 2. The counts below compare 1 epic against 40, which under the
+// 16-id batching this replaced would have cost four more label queries and
+// four more children queries.
 //
 // This is observed behaviorally — real prepared statements are counted at the
 // driver boundary — rather than by asserting the shape of the Go code, so the
@@ -34,14 +32,14 @@ func TestLifecycleHydrationQueryCountIsEpicCountIndependent(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	// A single epic carrying one child, and five epics each carrying one child,
+	// A single epic carrying one child, and forty epics each carrying one child,
 	// are the same depth and per-epic shape — only the epic count differs. Their
 	// listing query counts must be equal.
 	oneEpicCount := listingQueryCount(t, ctx, 1)
-	fiveEpicCount := listingQueryCount(t, ctx, 5)
+	fortyEpicCount := listingQueryCount(t, ctx, 40)
 
-	if oneEpicCount != fiveEpicCount {
-		t.Fatalf("listing query count scales with epic count: 1 epic = %d queries, 5 epics = %d queries; the per-recursion-level count must be epic-independent", oneEpicCount, fiveEpicCount)
+	if oneEpicCount != fortyEpicCount {
+		t.Fatalf("listing query count scales with epic count: 1 epic = %d queries, 40 epics = %d queries; the per-recursion-level count must be epic-independent", oneEpicCount, fortyEpicCount)
 	}
 	if oneEpicCount == 0 {
 		t.Fatalf("counting driver observed no queries during ListIssues; the wrapper is not on the read path")

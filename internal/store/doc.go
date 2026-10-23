@@ -100,13 +100,12 @@
 // would never see the branch it rewrote. Either way the new
 // engine loads the root as it then stands, and neither runs inside a read. A
 // read call
-// therefore answers from one moment however many statements it runs — one
-// per idBatches batch, the relation gather's two endpoint queries and its
-// issue lookup, ListIssues' scan and the label and lifecycle reads that
-// hydrate it. TestGetRelationsByIDsAnswersFromTheMomentItsStoreOpened pins
+// therefore answers from one moment however many statements it runs — the
+// relation gather's two endpoint queries and its issue lookup, ListIssues'
+// scan and the label and lifecycle reads that hydrate it. TestGetRelationsByIDsAnswersFromTheMomentItsStoreOpened pins
 // it. Should an engine ever reload its root mid-life, every multi-statement
 // read in this package tears at once, and the fix is a read transaction over
-// the whole call, not over a batch loop.
+// the whole call.
 //
 // The "one write-capable engine per path" fact has one lock: every engine
 // open contends on LOCK itself with a bounded retry. A lock minted beside
