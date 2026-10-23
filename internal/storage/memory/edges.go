@@ -403,6 +403,21 @@ func (e *Engine) GetRelationsByIDs(ctx context.Context, ids []string) (map[strin
 	return out, nil
 }
 
+// ParentIDs maps each child to its parent, keeping the lower id when restored
+// data gives a child two — the rule the contract states for both engines.
+func (e *Engine) ParentIDs(ctx context.Context) (map[string]string, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	out := map[string]string{}
+	for _, rel := range e.relations {
+		if held, ok := out[rel.SrcID]; rel.Type == model.RelParentChild && (!ok || rel.DstID < held) {
+			out[rel.SrcID] = rel.DstID
+		}
+	}
+	return out, nil
+}
+
 func (e *Engine) SetParent(ctx context.Context, in storage.SetParentInput) (model.Relation, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()

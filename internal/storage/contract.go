@@ -166,6 +166,17 @@ type RelationStore interface {
 	// for edges they could read together.
 	GetRelationsByIDs(ctx context.Context, ids []string) (map[string]IssueRelations, error)
 
+	// ParentIDs maps every issue that sits under a parent to that parent's id,
+	// archived and deleted issues included at either end; a parentless issue
+	// is absent. It reads the parent-child edges and nothing else, for a caller
+	// that already holds every issue and needs only to know what each one is
+	// under — claim evidence, which places every issue in its lane. Asking
+	// GetRelationsByIDs that of the whole store re-reads and re-hydrates every
+	// issue and every edge, and at a few thousand issues that is a third of
+	// `lit next`. A child restored data gives two parents maps to the lower
+	// parent id, the parent [RankAncestry] frames it by.
+	ParentIDs(ctx context.Context) (map[string]string, error)
+
 	// DependencyOrder reads the blocked-by edges between live issues in tree
 	// order: the one answer to which of them are rank inversions.
 	DependencyOrder(ctx context.Context) (DependencyOrder, error)

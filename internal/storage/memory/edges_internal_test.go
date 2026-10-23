@@ -45,3 +45,35 @@ func TestRemovingOneOfTwoParentEdgesKeepsALeafInside(t *testing.T) {
 		t.Errorf("the refused removal dropped %s -> %s", child.ID, first.ID)
 	}
 }
+
+// ParentIDs answers over a leaf two parents claim with the lower parent id,
+// whichever edge was written first — the rule the Dolt engine's MIN applies.
+func TestParentIDsTakesTheLowerOfTwoParents(t *testing.T) {
+	ctx := context.Background()
+	e, err := New("ws", storage.SystemClock)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	first, err := e.CreateIssue(ctx, storage.CreateIssueInput{Title: "E1", Topic: "core", Prefix: "conf", IssueType: model.TypeEpic})
+	if err != nil {
+		t.Fatalf("CreateIssue(E1) error = %v", err)
+	}
+	second, err := e.CreateIssue(ctx, storage.CreateIssueInput{Title: "E2", Topic: "core", Prefix: "conf", IssueType: model.TypeEpic})
+	if err != nil {
+		t.Fatalf("CreateIssue(E2) error = %v", err)
+	}
+	higher, lower := max(first.ID, second.ID), min(first.ID, second.ID)
+	child, err := e.CreateIssue(ctx, storage.CreateIssueInput{Title: "C", Topic: "core", Prefix: "conf", ParentID: higher})
+	if err != nil {
+		t.Fatalf("CreateIssue(C) error = %v", err)
+	}
+	e.relations = append(e.relations, model.Relation{SrcID: child.ID, DstID: lower, Type: model.RelParentChild})
+
+	got, err := e.ParentIDs(ctx)
+	if err != nil {
+		t.Fatalf("ParentIDs() error = %v", err)
+	}
+	if got[child.ID] != lower {
+		t.Errorf("ParentIDs()[%s] = %q, want %q, the lower of its parents", child.ID, got[child.ID], lower)
+	}
+}

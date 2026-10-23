@@ -603,6 +603,13 @@ func TestAChildWithTwoParentsIsReportedAndRepairable(t *testing.T) {
 	if end.Frame != storage.Frame(lower) {
 		t.Errorf("RankToTop(%s).Frame = %q, want %q: the frame lookup and tree order must agree on its parent", child.ID, end.Frame, lower)
 	}
+	parentIDs, err := st.ParentIDs(ctx)
+	if err != nil {
+		t.Fatalf("ParentIDs() error = %v", err)
+	}
+	if parentIDs[child.ID] != lower {
+		t.Errorf("ParentIDs()[%s] = %q, want %q, the lower of its parents", child.ID, parentIDs[child.ID], lower)
+	}
 	if _, err := st.Export(ctx); err != nil {
 		t.Errorf("Export() error = %v, want the export behind backup and sync to answer", err)
 	}
