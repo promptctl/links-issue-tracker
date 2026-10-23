@@ -243,3 +243,13 @@ func TestRenderReportStatesTheBudgetVerdict(t *testing.T) {
 		t.Errorf("report with nothing over budget does not say so:\n%s", under)
 	}
 }
+
+// verdict is every breach across results, the list run collects store by
+// store, for handing renderReport fixed samples.
+func verdict(results []result, budget time.Duration) []breach {
+	var out []breach
+	for _, r := range results {
+		out = append(out, breaches(r, budget)...)
+	}
+	return out
+}

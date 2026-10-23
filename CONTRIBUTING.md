@@ -215,7 +215,8 @@ commands names all of them.
 CI's `perf-budget` job runs this on every PR against a 500-row store. Because
 the budget is the destination and not a CI setting, `just perf` fails the same
 way on your machine. That includes the large sizes a scale question needs,
-where the verdict reports a real distance from the destination, not noise.
+where the verdict reports a real distance from the destination, not noise, up
+to the 30s kill: past it a command reads as killed, a lower bound only.
 
 The measured `lit` runs under a scrubbed environment — your global lit config,
 ejected templates, `LIT_*` variables and `CLAUDE_CODE_SESSION_ID` are all out

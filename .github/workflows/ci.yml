@@ -130,8 +130,9 @@ jobs:
   # of it the cgo build; backlog and next 0.48s at 500 rows. A breach exits 2
   # and names the command, its min and the ratio; the verdict is logged as soon
   # as each store's probes finish, so timeout-minutes, which only stops a hung
-  # lit holding a runner for six hours, cannot cut it. The stores have no git remote, so a slowdown confined
-  # to the receive path is outside what this measures.
+  # lit holding a runner for six hours, cannot cut it. The stores have no git
+  # remote, so a slowdown confined to the receive path is outside what this
+  # measures.
   perf-budget:
     runs-on: ubuntu-latest
     timeout-minutes: 45

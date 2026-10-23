@@ -367,8 +367,10 @@ func storeBytes(dir string) (int64, error) {
 
 // runQuiet runs one generation step, answering its stdout (the one thing a
 // caller reads from a step, an import's id mapping) and surfacing everything
-// about a failure: the command, its exit status, and both of its streams. It
-// takes the step whole so the budget arrives with the argv it was planned for, rather than as a second argument a caller could pair wrongly.
+// about a failure: the command, its exit status, and both of its streams,
+// each labeled, since they are captured apart. It takes the step whole so the
+// budget arrives with the argv it was planned for, rather than as a second
+// argument a caller could pair wrongly.
 // Generation failures are the ones most likely to be misread — a store that
 // half-imported still produces a plausible-looking table — so nothing here is
 // allowed to continue past one. [LAW:no-silent-failure]
@@ -388,11 +390,16 @@ func runQuiet(dir string, env []string, st step) ([]byte, error) {
 	cmd.Stderr = &stderr
 	err := cmd.Run()
 	if ctx.Err() != nil {
-		return nil, fmt.Errorf("%s (in %s) exceeded the %s budget and was killed:\n%s%s",
-			strings.Join(st.argv, " "), dir, st.budget, stdout.Bytes(), stderr.Bytes())
+		return nil, fmt.Errorf("%s (in %s) exceeded the %s budget and was killed:\n%s",
+			strings.Join(st.argv, " "), dir, st.budget, streams(stdout.Bytes(), stderr.Bytes()))
 	}
 	if err != nil {
-		return nil, fmt.Errorf("%s (in %s): %w\n%s%s", strings.Join(st.argv, " "), dir, err, stdout.Bytes(), stderr.Bytes())
+		return nil, fmt.Errorf("%s (in %s): %w\n%s", strings.Join(st.argv, " "), dir, err, streams(stdout.Bytes(), stderr.Bytes()))
 	}
 	return stdout.Bytes(), nil
+}
+
+// streams prints a failed step's two outputs under their names.
+func streams(stdout, stderr []byte) string {
+	return fmt.Sprintf("--- stdout ---\n%s\n--- stderr ---\n%s", stdout, stderr)
 }

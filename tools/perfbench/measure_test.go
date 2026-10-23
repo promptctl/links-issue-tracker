@@ -379,7 +379,7 @@ exit 0
 	var progress strings.Builder
 	env := hermeticEnv(os.Environ(), filepath.Join(dir, "config"), filepath.Join(dir, "state"))
 	lim := limits{budget: 100 * time.Millisecond, kill: 10 * time.Second}
-	_, err := measureSize(litBinary{path: path}, dir, size{name: "one", rows: 1}, env, lim, runQuiet, &progress)
+	_, _, err := measureSize(litBinary{path: path}, dir, size{name: "one", rows: 1}, env, lim, runQuiet, &progress)
 	if err == nil || !strings.Contains(err.Error(), "compaction broke") {
 		t.Fatalf("measureSize error = %v, want the failed compaction", err)
 	}
