@@ -71,7 +71,15 @@ perf *args:
     #!/usr/bin/env bash
     set -euo pipefail
     source "{{justfile_directory()}}/scripts/cgo-env.sh"
-    go run ./tools/perfbench {{args}}
+    # Built and run, not `go run`: go run turns every child failure into its own
+    # exit 1, and perfbench's exit status is a contract (2 = a probe over its
+    # latency budget, 1 = the run itself failed).
+    dir="$(mktemp -d)"
+    go build -o "$dir/perfbench" ./tools/perfbench
+    status=0
+    "$dir/perfbench" {{args}} || status=$?
+    rm -rf "$dir"
+    exit "$status"
 
 # Lint (depguard lifecycle-boundary rule + style). Needs golangci-lint installed.
 lint:
