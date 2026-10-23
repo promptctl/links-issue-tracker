@@ -13,10 +13,9 @@
 //	just perf                      # the whole table
 //	just perf --sizes 0,118,590    # pick the store sizes
 //
-// WHAT IT IS NOT. This times one invocation at a time, so it says nothing about
-// contention — the epic's hundred concurrent writers need a harness that runs
-// writers against each other, which is its own ticket. Reading these figures as
-// though they covered the write path under load is the one misuse to avoid.
+// The probes time one invocation at a time, so they say nothing about
+// contention; the storm (contention.go) is the measurement that does, a
+// hundred writers against each store at once.
 package main
 
 import (
@@ -40,8 +39,8 @@ func main() {
 	// A breach is the gate working and anything else is the tool failing, and
 	// a caller (a CI lane, a nightly job) must be able to tell them apart
 	// without reading the log.
-	if errors.As(err, new(budgetError)) {
-		os.Exit(exitBudgetBreached)
+	if errors.As(err, new(gateError)) {
+		os.Exit(exitGateFailed)
 	}
 	os.Exit(1)
 }
@@ -117,51 +116,55 @@ func run(args []string, out, progress io.Writer) error {
 	env := hermeticEnv(os.Environ(), configHome, filepath.Join(workDir, "state-home"))
 
 	results := make([]result, 0, len(sizes))
-	var found []breach
+	var gate gateError
 	for _, sz := range sizes {
-		r, over, err := measureSize(bin, workDir, sz, env, gateLimits, runQuiet, progress)
+		r, over, failed, err := measureSize(bin, workDir, sz, env, gateLimits, runQuiet, progress)
 		if err != nil {
 			return err
 		}
 		results = append(results, r)
-		found = append(found, over...)
+		gate.breaches = append(gate.breaches, over...)
+		gate.writers = append(gate.writers, failed...)
 	}
 
 	cond := conditions{goos: runtime.GOOS, goarch: runtime.GOARCH, cpus: runtime.NumCPU()}
-	fmt.Fprint(out, renderReport(probes, results, gateLimits.budget, found, cond))
-	if len(found) > 0 {
-		return budgetError{breaches: found}
+	fmt.Fprint(out, renderReport(probes, results, gateLimits.budget, gate.breaches, cond))
+	fmt.Fprint(out, renderContention(gate.writers))
+	if len(gate.breaches)+len(gate.writers) > 0 {
+		return gate
 	}
 	return nil
 }
 
 // measureSize generates one store and takes every measurement of it, in the
 // one order they are valid in: bytes, then the probes, then compaction and
-// history, which change the store every figure before them describes.
+// history, which change the store every figure before them describes, then
+// the storm, whose hundred writes would change it more than any of them.
 //
 // The store's latency verdicts are written to progress as soon as its probes
 // are measured, before compaction and history run and before the next store is
 // generated. Those steps can still fail or hang, and a CI job can time out
 // during them; none of that may take a verdict already reached down with it.
-// Kills reach progress sooner still, as they happen (measurePhase). The
-// breaches it returns are the ones it logged, judged once, and they are what
+// Kills reach progress sooner still, as they happen (measurePhase), and each
+// storm writer that failed as soon as the storm ends. The breaches and
+// failures it returns are the ones it logged, judged once, and they are what
 // run exits on. [LAW:one-source-of-truth]
-func measureSize(bin litBinary, workDir string, sz size, env []string, lim limits, run stepRunner, progress io.Writer) (result, []breach, error) {
+func measureSize(bin litBinary, workDir string, sz size, env []string, lim limits, run stepRunner, progress io.Writer) (result, []breach, []writerFailure, error) {
 	fmt.Fprintf(progress, "generating %s store (%d rows) ...\n", sz.name, sz.rows)
 	store, err := generate(bin, workDir, sz, env, run)
 	if err != nil {
-		return result{}, nil, err
+		return result{}, nil, nil, err
 	}
 	// Bytes before probes, because one probe writes: this is the size of
 	// the store the read timings below describe.
 	bytes, err := storeBytes(store.databasePath)
 	if err != nil {
-		return result{}, nil, err
+		return result{}, nil, nil, err
 	}
 	fmt.Fprintf(progress, "measuring %s store, %d repeats per probe ...\n", sz.name, repeats)
 	samples, err := measure(bin, store, lim, progress)
 	if err != nil {
-		return result{}, nil, err
+		return result{}, nil, nil, err
 	}
 	r := result{size: sz, bytes: bytes, samples: samples}
 	over := breaches(r, lim.budget)
@@ -171,15 +174,20 @@ func measureSize(bin litBinary, workDir string, sz size, env []string, lim limit
 	// The empty store has no row to edit, so its history is the zero cost the
 	// report prints as absent.
 	if r.compacted, err = compactedBytes(bin, store); err != nil {
-		return result{}, nil, err
+		return result{}, nil, nil, err
 	}
 	if sz.rows > 0 {
 		fmt.Fprintf(progress, "measuring %s store history, %d single-row edits ...\n", sz.name, historyEdits)
 		if r.history, err = measureHistory(bin, store, r.compacted); err != nil {
-			return result{}, nil, err
+			return result{}, nil, nil, err
 		}
 	}
-	return r, over, nil
+	fmt.Fprintf(progress, "storming %s store, %d concurrent writers ...\n", sz.name, stormWriters)
+	failed := storm(bin, store, lim.budget, run)
+	for _, f := range failed {
+		fmt.Fprintf(progress, "WRITER FAILED: %s\n", f.full())
+	}
+	return r, over, failed, nil
 }
 
 // parseSizes turns the flag's text into the sizes to measure, or returns the

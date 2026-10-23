@@ -136,12 +136,18 @@ var probes = []probe{
 	{name: "stores --counts", argv: fixed("stores", "--counts"), okCodes: exits(0)},
 	{name: "doctor", argv: fixed("doctor"), okCodes: exits(0)},
 	{name: "workspace", argv: fixed("workspace"), okCodes: exits(0)},
-	// An epic, because it is the one ticket lit files with no parent: every
-	// other type names the epic it lives inside, and the empty control has
-	// none to name, so a task here would be a different invocation per size.
-	{name: "new (write)", argv: fixed(
-		"new", "--title", "perfbench write probe", "--type", "epic", "--topic", "bench",
-	), okCodes: exits(0), mutates: true},
+	{name: "new (write)", argv: fixed(benchWrite("perfbench write probe")...), okCodes: exits(0), mutates: true},
+}
+
+// benchWrite is the write perfbench measures, titled by whoever runs it: the
+// write probe times it alone and the storm runs a hundred of it at once, so
+// the contention gate exercises exactly the command the latency table times.
+// An epic, because it is the one ticket lit files with no parent: every other
+// type names the epic it lives inside, and the empty control has none to
+// name, so a task here would be a different invocation per size.
+// [LAW:one-source-of-truth]
+func benchWrite(title string) []string {
+	return []string{"new", "--title", title, "--type", "epic", "--topic", "bench"}
 }
 
 // latencyBudget is the most any probe may take, at any store size: the scale

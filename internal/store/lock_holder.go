@@ -56,11 +56,12 @@ import (
 // reason the sync-push lock needs none.
 //
 // One decision does read the registry: how long a contender keeps trying
-// (holdWait). It reads only WHICH records exist, never what they say, and it
-// decides only when the contender stops — the kernel still decides, alone,
-// whether the lock is held. A wrong or missing set of names costs a wait that
-// ends earlier or later than it should, never a lock taken or refused
-// wrongly, which keeps the registry descriptive in the sense that matters.
+// (holdWait). It reads only holder names — the records standing and the
+// lock's latest arrival — never what any record says, and it decides only
+// when the contender stops — the kernel still decides, alone, whether the
+// lock is held. A wrong or missing name costs a wait that ends earlier or later than it should, never a
+// lock taken or refused wrongly, which keeps the registry descriptive in the
+// sense that matters.
 
 // lockHolderDir is the directory of holder records for one lock, under the
 // workspace storage dir the caller names — the same rotation-surviving
@@ -224,7 +225,8 @@ func recordLockHolder(ctx context.Context, storageDir, lockPath string, lockRele
 }
 
 // publishLockHolder publishes this process's claim on lockPath: what this
-// process would want said about it, handed to the protocol that says it.
+// process would want said about it, handed to the protocol that says it, and
+// then announced as the lock's latest arrival.
 func publishLockHolder(ctx context.Context, storageDir, lockPath string) (func() error, error) {
 	dir := lockHolderDir(storageDir, lockPath)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -238,7 +240,106 @@ func publishLockHolder(ctx context.Context, storageDir, lockPath string) (func()
 	if err != nil {
 		return nil, fmt.Errorf("encode holder record: %w", err)
 	}
-	return mintHeldRecord(dir, payload)
+	// The arrival is announced whether or not the record could be minted: it
+	// is a fact about the acquisition, which has happened either way, and the
+	// drawn name is unique whether or not a record ever carries it.
+	privatePath, recordPath := lockHolderRecordNames(dir)
+	release, err := mintHeldRecord(privatePath, recordPath, payload)
+	if announceErr := announceArrival(dir, filepath.Base(recordPath)); announceErr != nil {
+		fmt.Fprintf(lockWaitNoticeWriter, "lit: could not announce this process's arrival at %s (the lock is held; a contender waiting now may miss this arrival): %v\n", lockPath, announceErr)
+	}
+	return release, err
+}
+
+// lockHolderArrivalName is the file in a lock's holder directory that names
+// the lock's latest arrival: the record name of the most recent acquisition.
+// It carries neither record prefix, so no sweep or listing ever reads it as a
+// record.
+//
+// It exists because a record lives exactly as long as its hold, and a hold can
+// begin and end between two of a contender's polls: a `lit new` holds Dolt's
+// LOCK for ~60ms against a 100ms poll, so a contender reading which records
+// exist misses most of a queue's arrivals. This file outlives the record that
+// announced it, so an arrival stays visible until the next one replaces it.
+// [FRAMING:representation] the contender's map of "the queue moved" is redrawn
+// on every acquisition, not sampled from a territory that changes faster than
+// it is read.
+const lockHolderArrivalName = "arrival"
+
+// announceArrival names recordName as the lock's latest arrival, overwriting
+// the last one in place. Record names are unique among every record ever
+// minted, so the file's content changes on every acquisition and never returns
+// to an earlier value.
+//
+// In place, with no temporary name and no rename: a reader can catch the file
+// torn, empty, half-written, or — under two shared holders writing at once —
+// spliced from both names, but only while acquisitions are writing it. A
+// reading no acquisition wrote can therefore count real arrivals extra times,
+// each restarting a contender's clock a poll later than the arrivals alone
+// would, but it never reports a queue moving while nothing arrives.
+//
+// A rename would add a private name to strand and, on Windows, fail against
+// any reader holding the file open.
+// [LAW:no-ambient-temporal-coupling] the announcement is a value an
+// acquisition writes, not an interval a reader has to catch.
+func announceArrival(dir, recordName string) error {
+	return os.WriteFile(filepath.Join(dir, lockHolderArrivalName), []byte(recordName), 0o644)
+}
+
+// lockArrival is one reading of a lock's latest arrival: the record name that
+// announced it and when it was written. The zero value is a lock no
+// acquisition has announced.
+type lockArrival struct {
+	name string
+	at   time.Time
+}
+
+// latestArrival reads the lock's latest arrival. A lock nothing has announced
+// yet is the zero lockArrival, not an error: every lock starts that way, and
+// under a holder that announces nothing (a foreign dolt, a lit older than
+// arrivals) it stays that way, so the wait reduces to its plain elapsed
+// budget. Any other failure is returned, because a waiter that cannot read
+// arrivals is back to the blindness they exist to end, and someone has to
+// hear why. [LAW:no-silent-failure]
+func latestArrival(storageDir, lockPath string) (lockArrival, error) {
+	f, err := os.Open(filepath.Join(lockHolderDir(storageDir, lockPath), lockHolderArrivalName))
+	if errors.Is(err, os.ErrNotExist) {
+		return lockArrival{}, nil
+	}
+	if err != nil {
+		return lockArrival{}, fmt.Errorf("read lock arrival: %w", err)
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return lockArrival{}, fmt.Errorf("read lock arrival: %w", err)
+	}
+	name, err := io.ReadAll(f)
+	if err != nil {
+		return lockArrival{}, fmt.Errorf("read lock arrival: %w", err)
+	}
+	return lockArrival{name: string(name), at: info.ModTime()}, nil
+}
+
+// describeArrival is the holder account's clause about the lock's latest
+// arrival: how long ago the last lit acquisition announced itself. It says
+// no more than that — a holder that announces nothing, or a shared holder
+// joining after it, can stand behind the age. Beside a refusal it tells apart
+// the two ways a wait ends — a queue that stopped moving a whole wait ago, or
+// a waiter that could not see a queue still moving — and it is where an
+// unreadable arrival surfaces, in every notice and every refusal.
+// The age is read from the file's modification time, for the account alone:
+// no wait decision reads it.
+func describeArrival(storageDir, lockPath string) string {
+	latest, err := latestArrival(storageDir, lockPath)
+	switch {
+	case err != nil:
+		return fmt.Sprintf("arrivals unreadable, so a waiter sees only the holders standing at each poll: %v", err)
+	case latest.at.IsZero():
+		return "no lit acquisition has announced an arrival here"
+	default:
+		return fmt.Sprintf("the last lit acquisition announced itself %s ago", time.Since(latest.at).Round(time.Millisecond))
+	}
 }
 
 type holderCommandKey struct{}
@@ -272,8 +373,7 @@ func holderCommand(ctx context.Context) string {
 // to every handle, the locker's own included. Filling first exposes nothing —
 // no reader ever opens a private name — so the swept name still arrives
 // complete and held.
-func mintHeldRecord(dir string, payload []byte) (func() error, error) {
-	privatePath, recordPath := lockHolderRecordNames(dir)
+func mintHeldRecord(privatePath, recordPath string, payload []byte) (func() error, error) {
 	if err := writeNewRecord(privatePath, payload); err != nil {
 		return nil, err
 	}
@@ -387,7 +487,7 @@ func describeLockHolders(storageDir, lockPath string) string {
 		described = append(described, unnamedHolder(problems))
 	}
 	account := "held by " + strings.Join(described, ", ")
-	return strings.Join(append([]string{account}, problems...), "; ")
+	return strings.Join(append([]string{account, describeArrival(storageDir, lockPath)}, problems...), "; ")
 }
 
 // unnamedHolder is what the account says about a holder no record named. After
@@ -531,21 +631,28 @@ func renderHolderCommand(command string) string {
 // through the engine connector and the chunk-store open, which take
 // backoff.BackOff. It polls every storeLockPollInterval and stops once the
 // holders in front of the contender have stood still for the wait: the clock
-// starts at Reset, and restarts whenever a holder record the contender has
-// never seen appears under the lock, so a queue of short holders — sixteen
-// `lit new` serializing at tens of milliseconds each — is waited out however
-// long it runs, while a single holder standing for the whole wait ends the
+// starts at Reset, and restarts whenever the lock's latest arrival
+// (lockHolderArrivalName) names a holder other than the one it named at the
+// last reading, so a queue of short holders — a hundred `lit new`
+// serializing at tens of milliseconds each — is waited out however long it
+// runs, while a single holder standing for the whole wait ends the
 // contender's attempt. "Cannot get the store" is a holder that is not
 // moving, not a store that is busy.
 //
-// Only an ARRIVAL restarts the clock, never a departure. A name is minted by
-// an acquisition and nothing else, so a new name is proof of a new holder;
-// a name vanishing is not proof of anything the contender cares about — a
-// reader's sweep retires a dead record (readLockHolder), and its probe can
-// put an empty one back under the same name — and counting those as
-// progress would let a notice tick, or a peer's failure, hold a contender
-// past its wait. Names ever seen are kept for the life of the wait so the
-// same name cannot arrive twice.
+// Only an ARRIVAL restarts the clock, never a departure, and an arrival is a
+// holder name this wait has never seen. A name is minted by an acquisition
+// and nothing else, and the wait reads names two ways: the records standing
+// at a poll, and the lock's latest arrival (lockHolderArrivalName), which
+// outlives the hold it announces, so a holder that came and went between two
+// polls is still seen. Either sighting is proof of a new holder, so they feed
+// one set rather than competing: a holder whose announcement failed, or a lit
+// older than arrivals, still shows by its record, and a brief holder still
+// shows by its arrival. A name vanishing is not proof of anything the
+// contender cares about — a reader's sweep retires a dead record
+// (readLockHolder), and its probe can put an empty one back under the same
+// name — and counting that as progress would let a notice tick, or a peer's
+// failure, hold a contender past its wait. Names ever seen are kept for the
+// life of the wait so the same name cannot arrive twice.
 //
 // There is no ceiling above the wait. Under holders that keep arriving the
 // contender keeps waiting, reporting who it waits on every
@@ -556,14 +663,13 @@ func renderHolderCommand(command string) string {
 // promise about a holder that stands still.
 //
 // [LAW:dataflow-not-control-flow] Every wait runs the same loop; what varies
-// is the lock's directory and its budget, both values. A holder with no
-// record (a foreign dolt, a read engine, an older lit) contributes no name
-// and no progress, so under it the rule is the plain elapsed budget it
-// reduces to when there is nothing to read.
+// is the lock's directory and its budget, both values. A holder that leaves
+// no name (a foreign dolt, a read engine) contributes no progress, so under
+// it the rule is the plain elapsed budget it reduces to when there is nothing
+// to read.
 //
-// [LAW:no-ambient-temporal-coupling] No timestamp inside a record is
-// trusted; the signal is the existence of a name, which only an acquisition
-// creates.
+// [LAW:no-ambient-temporal-coupling] No timestamp is trusted; the signal is
+// a name, which only an acquisition mints.
 //
 // The policy also gives the wait notice. NextBackOff runs only after an
 // attempt was refused because something holds the lock, so "a contender is
@@ -576,7 +682,11 @@ type holdWait struct {
 	lockPath   string
 	wait       func() time.Duration
 	now        func() time.Time
-	known      map[string]struct{}
+	// known is every holder name this wait has seen; nil until its first
+	// readable reading, which is the baseline every later one is judged
+	// against, so a reading that failed at Reset cannot make a long-standing
+	// holder look new at the next poll.
+	known map[string]struct{}
 	// started is when this wait began; since is when its holders last
 	// changed, the stand-still clock the wait is judged on.
 	started   time.Time
@@ -599,8 +709,8 @@ func newHoldWait(storageDir, lockPath string, wait func() time.Duration, now fun
 // Reset starts the clock and takes the first reading of who is there.
 func (w *holdWait) Reset() {
 	w.started = w.now()
-	w.known, w.since, w.noticeDue = map[string]struct{}{}, w.started, w.started.Add(lockWaitNoticeGrace)
-	w.arrivals()
+	w.known, w.since, w.noticeDue = nil, w.started, w.started.Add(lockWaitNoticeGrace)
+	w.arrived()
 }
 
 // NextBackOff is called after each failed attempt: it restarts the clock when
@@ -613,7 +723,7 @@ func (w *holdWait) Reset() {
 // notice and the elapsed figure are measured at the same instant.
 func (w *holdWait) NextBackOff() time.Duration {
 	now := w.now()
-	if w.arrivals() {
+	if w.arrived() {
 		w.since = now
 	}
 	if now.Sub(w.since) >= w.wait() {
@@ -627,21 +737,39 @@ func (w *holdWait) NextBackOff() time.Duration {
 	return storeLockPollInterval
 }
 
-// arrivals reads the holder names once and reports whether any is new to this
-// wait, remembering every name it sees.
-func (w *holdWait) arrivals() bool {
+// arrived takes one reading of the holder names and reports whether any is
+// new to this wait, remembering every name it sees. The first readable
+// reading is the baseline and reports nothing.
+func (w *holdWait) arrived() bool {
+	names, readable := w.holderNames()
+	if !readable {
+		return false
+	}
+	baseline := w.known == nil
+	if baseline {
+		w.known = map[string]struct{}{}
+	}
 	arrived := false
-	// An unreadable directory reads as no names here; the failure surfaces
-	// where the account is rendered (readLockHolders), which every exhausted
-	// wait reaches.
-	names, _ := holderRecordNames(lockHolderDir(w.storageDir, w.lockPath))
 	for _, name := range names {
 		if _, seen := w.known[name]; !seen {
 			w.known[name] = struct{}{}
-			arrived = true
+			arrived = !baseline
 		}
 	}
 	return arrived
+}
+
+// holderNames is every holder name the lock shows at one instant: its standing
+// records and its latest arrival. It is unreadable only when both are; either
+// failure alone surfaces in the holder account (readLockHolders,
+// describeArrival), which every notice and every refusal renders.
+func (w *holdWait) holderNames() ([]string, bool) {
+	names, listErr := holderRecordNames(lockHolderDir(w.storageDir, w.lockPath))
+	latest, arrivalErr := latestArrival(w.storageDir, w.lockPath)
+	if latest.name != "" {
+		names = append(names, latest.name)
+	}
+	return names, listErr == nil || arrivalErr == nil
 }
 
 // holderRecordNames lists the record names under a lock's holder directory —
