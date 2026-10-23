@@ -21,18 +21,34 @@ import (
 // epic, say) breaks `just perf` with every other test green. This runs the
 // plan through lit's own entry point at the empty control and at a size with
 // more than one epic and a dependency between them. [LAW:behavior-not-structure]
+//
+// The fleet case is a scale point of three stores, one of them a copy: lit
+// must read every store, the copy included, as a store of its own, which is
+// what `stores --counts` over the fleet root reports.
 func TestLitCarriesOutThePlan(t *testing.T) {
-	for _, sz := range []size{{name: "empty", rows: 0}, {name: "small", rows: 25}} {
+	for _, sz := range []size{{name: "empty", rows: 0}, {name: "small", rows: 25}, {name: "fleet", rows: 25, beside: []int{0, 25}}} {
 		t.Run(sz.name, func(t *testing.T) {
 			state := t.TempDir()
 			env := hermeticEnv(os.Environ(), filepath.Join(state, "config"), filepath.Join(state, "state"))
 			bin := litBinary{path: "lit"}
-			store, err := generate(bin, t.TempDir(), sz, env, inProcess(t, bin))
+			members, err := generate(bin, t.TempDir(), sz, env, inProcess(t, bin))
 			if err != nil {
 				t.Fatalf("generating %d rows: %v", sz.rows, err)
 			}
+			if len(members) != len(sz.members()) {
+				t.Fatalf("generated %d stores, want %d", len(members), len(sz.members()))
+			}
+			store := members[0]
 			if len(store.ids) != sz.rows {
 				t.Fatalf("generation read %d ids back from the import, want one per row (%d)", len(store.ids), sz.rows)
+			}
+			code, stdout, stderr := runLitIn(t, store.root, env, gateLimits.kill(), []string{"stores", "--counts", store.fleetRoot})
+			if code != 0 {
+				t.Fatalf("stores --counts over the fleet root exited %d:\n%s%s", code, stdout, stderr)
+			}
+			// A header, one row per store, and the TOTAL row.
+			if rows := len(strings.Split(strings.TrimSpace(stdout), "\n")) - 2; rows != len(members) {
+				t.Errorf("stores --counts over the fleet root lists %d stores, want %d:\n%s", rows, len(members), stdout)
 			}
 			for _, phase := range phasesOf(invocationsFor(probes, store), invocation.probeOf) {
 				for _, inv := range phase {

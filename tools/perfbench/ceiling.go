@@ -52,8 +52,8 @@ type inputBreach struct {
 // String is the one rendering of an input verdict: the progress line and the
 // report's CEILING INPUTS line are the same text. [LAW:one-source-of-truth]
 func (b inputBreach) String() string {
-	return fmt.Sprintf("store %s (%d rows): %s %s, over its %s allowance (internal/store/designstore)",
-		b.store.name, b.store.rows, b.input, formatBytes(b.measured), formatBytes(b.allowed))
+	return fmt.Sprintf("store %s: %s %s, over its %s allowance (internal/store/designstore)",
+		b.store, b.input, formatBytes(b.measured), formatBytes(b.allowed))
 }
 
 // atDesignSize is whether a store is the one the allowances describe: the one

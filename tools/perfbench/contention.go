@@ -7,8 +7,8 @@ import (
 	"time"
 )
 
-// The contention gate: a hundred writers against one store, at once, and every
-// one of them must complete.
+// The contention gate: a hundred writers against a scale point's stores, at
+// once, and every one of them must complete.
 //
 // It is the scale epic's headline bar ("100 concurrent writers all complete,
 // with no writer failing on contention") made a check that fails the build.
@@ -45,8 +45,8 @@ func (f writerFailure) full() string { return f.verdict(f.err.Error()) }
 // verdict is the one sentence both renderings share, around the error text
 // each chooses. [LAW:one-source-of-truth]
 func (f writerFailure) verdict(err string) string {
-	return fmt.Sprintf("store %s (%d rows): writer %d of %d did not complete: %s",
-		f.store.name, f.store.rows, f.writer, stormWriters, err)
+	return fmt.Sprintf("store %s: writer %d of %d did not complete: %s",
+		f.store, f.writer, stormWriters, err)
 }
 
 // stormBudget bounds one storm writer, given the latency budget the run judges
@@ -69,24 +69,28 @@ func stormStep(bin litBinary, writer int, latency time.Duration) step {
 	return step{budget: stormBudget(latency), argv: append([]string{bin.path}, benchWrite(fmt.Sprintf("perfbench storm writer %d", writer))...)}
 }
 
-// storm starts stormWriters writers against store at once and returns every one
-// that did not complete, in writer order. Every writer runs whatever the
-// others do: the verdict is the full list, because "writers 3, 41 and 77
-// failed" is the shape of a contention bug, and the first failure alone hides
-// it. [LAW:dataflow-not-control-flow]
-func storm(bin litBinary, store generatedStore, latency time.Duration, run stepRunner) []writerFailure {
+// storm starts stormWriters writers across members at once, writer i against
+// member i mod len(members), and returns every one that did not complete, in
+// writer order. Against one store that is a hundred writers on it; against a
+// fleet it is a hundred writers in different stores, the contention a machine
+// running the fleet sees, on whatever the stores share. Every writer runs
+// whatever the others do: the verdict is the full list, because "writers 3, 41
+// and 77 failed" is the shape of a contention bug, and the first failure alone
+// hides it. [LAW:dataflow-not-control-flow]
+func storm(bin litBinary, members []generatedStore, latency time.Duration, run stepRunner) []writerFailure {
 	errs := make([]error, stormWriters)
 	var wg sync.WaitGroup
 	for i := range stormWriters {
+		target := members[i%len(members)]
 		wg.Go(func() {
-			_, errs[i] = run(store.root, store.env, stormStep(bin, i+1, latency))
+			_, errs[i] = run(target.root, target.env, stormStep(bin, i+1, latency))
 		})
 	}
 	wg.Wait()
 	var failed []writerFailure
 	for i, err := range errs {
 		if err != nil {
-			failed = append(failed, writerFailure{store: store.size, writer: i + 1, err: err})
+			failed = append(failed, writerFailure{store: members[0].size, writer: i + 1, err: err})
 		}
 	}
 	return failed

@@ -33,7 +33,7 @@ func TestStormNamesEveryWriterThatDidNotComplete(t *testing.T) {
 		return nil, nil
 	}
 
-	failed := storm(litBinary{path: "lit"}, store, latencyBudget, run)
+	failed := storm(litBinary{path: "lit"}, []generatedStore{store}, latencyBudget, run)
 
 	if len(ran) != stormWriters {
 		t.Fatalf("the storm ran %d writers, want all %d", len(ran), stormWriters)
@@ -72,9 +72,9 @@ exit 0
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	var progress strings.Builder
+	var progress, recorded strings.Builder
 	env := hermeticEnv(os.Environ(), filepath.Join(dir, "config"), filepath.Join(dir, "state"))
-	_, verdict, err := measureSize(litBinary{path: path}, dir, size{name: "one", rows: 1}, env, limits{budget: time.Second}, runQuiet, &progress)
+	_, verdict, err := measureSize(litBinary{path: path}, dir, size{name: "one", rows: 1}, env, limits{budget: time.Second}, runQuiet, &progress, &recorded)
 	if err != nil {
 		t.Fatalf("measureSize error = %v; a failed writer is a verdict, not a broken run", err)
 	}
@@ -87,6 +87,9 @@ exit 0
 	}
 	if strings.Count(logged, "WRITER FAILED") != 1 {
 		t.Errorf("progress logged writers that completed:\n%s", logged)
+	}
+	if !strings.Contains(recorded.String(), `"limit":"one-storm"`) {
+		t.Errorf("writer 7's failure was not recorded under the storm's limit:\n%s", recorded.String())
 	}
 }
 

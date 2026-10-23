@@ -228,7 +228,7 @@ func TestImportBudgetGrowsWithRowsFromTheProbeBudget(t *testing.T) {
 // by outliving it.
 func TestGenerationStepsGiveTheImportTheRowScaledBudget(t *testing.T) {
 	bin := litBinary{path: "/bench/lit"}
-	steps := generationSteps(bin, size{name: "5x-target", rows: 590}, []importSpec{{path: "/bench/5x-target-spec-0.json", records: importBatches(590)[0]}})
+	steps := generationSteps(bin, 590, []importSpec{{path: "/bench/5x-target-spec-0.json", records: importBatches(590)[0]}})
 	imports := 0
 	for _, st := range steps {
 		isImport := st.argv[0] == bin.path && st.argv[1] == "import"
@@ -246,7 +246,7 @@ func TestGenerationStepsGiveTheImportTheRowScaledBudget(t *testing.T) {
 	if imports != 1 {
 		t.Errorf("plan has %d import steps for one spec, want 1", imports)
 	}
-	if got := len(generationSteps(bin, size{name: "empty", rows: 0}, nil)); got != 3 {
+	if got := len(generationSteps(bin, 0, nil)); got != 3 {
 		t.Errorf("the empty store's plan has %d steps, want 3 (git init, commit, lit init) and no import", got)
 	}
 }
@@ -399,6 +399,14 @@ func TestParseSizes(t *testing.T) {
 	// column comes to measure 2N rows.
 	if _, err := parseSizes("118,118"); err == nil {
 		t.Error("parseSizes accepted a duplicate size; both columns would name one workspace")
+	}
+	if _, err := parseSizes("10x-fleet,10x-fleet"); err == nil {
+		t.Error("parseSizes accepted a named scale point twice; both columns would name one workspace")
+	}
+	// Two names generate into two directories, whatever their measured
+	// stores' row counts.
+	if _, err := parseSizes("1074,10x-fleet"); err != nil {
+		t.Errorf("parseSizes refused two differently named sizes: %v", err)
 	}
 }
 

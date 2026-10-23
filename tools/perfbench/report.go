@@ -13,6 +13,10 @@ import (
 type result struct {
 	size  size
 	bytes int64
+	// fleetBytes is every store of the scale point on disk, the measured one
+	// included: bytes again for a single store, the machine's disk for a
+	// fleet.
+	fleetBytes int64
 	// compacted is the store's bytes after every probe and a full
 	// compaction: what its rows cost to keep.
 	compacted int64
@@ -62,7 +66,7 @@ func renderReport(ps []probe, results []result, budget time.Duration, found []br
 	w := tabwriter.NewWriter(&b, 0, 0, 2, ' ', 0)
 	fmt.Fprint(w, "COMMAND")
 	for _, r := range results {
-		fmt.Fprintf(w, "\t%s (%d rows)", r.size.name, r.size.rows)
+		fmt.Fprintf(w, "\t%s", r.size)
 	}
 	fmt.Fprintln(w)
 
@@ -78,6 +82,11 @@ func renderReport(ps []probe, results []result, budget time.Duration, found []br
 		fmt.Fprintf(w, "\t%s", formatBytes(r.bytes))
 	}
 	fmt.Fprintln(w)
+	fmt.Fprint(w, "fleet bytes")
+	for _, r := range results {
+		fmt.Fprintf(w, "\t%s", formatBytes(r.fleetBytes))
+	}
+	fmt.Fprintln(w)
 	fmt.Fprint(w, "compacted bytes")
 	for _, r := range results {
 		fmt.Fprintf(w, "\t%s", formatBytes(r.compacted))
@@ -89,7 +98,9 @@ func renderReport(ps []probe, results []result, budget time.Duration, found []br
 	}
 	fmt.Fprintln(w)
 	w.Flush()
-	b.WriteString("\nstore bytes is the store as imported; compacted bytes is the same store after the\n")
+	b.WriteString("\nstore bytes is the store as imported, and fleet bytes every store of its column with\n")
+	b.WriteString("it, row data only (no snapshots, remote cache or history but the import's); compacted\n")
+	b.WriteString("bytes is the same store after the\n")
 	b.WriteString("probes and a full compaction, which collects the import's garbage. bytes/commit is\n")
 	fmt.Fprintf(&b, "the store's growth across %d single-row edits, one commit each, measured after a\n", historyEdits)
 	b.WriteString("full compaction on both sides, so it is history the store keeps.\n")

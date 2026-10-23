@@ -130,9 +130,9 @@ exit 0
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	var progress strings.Builder
+	var progress, recorded strings.Builder
 	env := hermeticEnv(os.Environ(), filepath.Join(dir, "config"), filepath.Join(dir, "state"))
-	_, verdict, err := measureSize(litBinary{path: path}, dir, designSize, env, limits{budget: time.Minute}, runQuiet, &progress)
+	_, verdict, err := measureSize(litBinary{path: path}, dir, designSize, env, limits{budget: time.Minute}, runQuiet, &progress, &recorded)
 	if err != nil {
 		t.Fatalf("measureSize error = %v; an input over its allowance is a verdict, not a broken run", err)
 	}
@@ -143,5 +143,8 @@ exit 0
 	over := strings.Index(logged, "OVER ALLOWANCE: store design")
 	if over < 0 || over > strings.Index(logged, "storming") {
 		t.Errorf("the input verdict was not logged before the storm:\n%s", logged)
+	}
+	if !strings.Contains(recorded.String(), `"limit":"design-compacted-bytes"`) {
+		t.Errorf("the input verdict was not recorded under its limit:\n%s", recorded.String())
 	}
 }

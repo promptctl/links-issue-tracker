@@ -28,6 +28,10 @@ type generatedStore struct {
 	// this tool cannot drift from lit's own idea of where the store lives by
 	// hardcoding ".git/links/dolt". [LAW:one-source-of-truth]
 	databasePath string
+	// fleetRoot is the directory this store and every store generated beside
+	// it live in: what the fleet probes name, and for a single store a root
+	// holding that store alone.
+	fleetRoot string
 	// env is the environment every lit invocation against this store runs
 	// under — generation and probes alike, so the store is measured by the
 	// same lit that produced it. See hermeticEnv for what it excludes.
@@ -37,7 +41,55 @@ type generatedStore struct {
 	ids []string
 }
 
-// generate builds a workspace at the requested size under parent.
+// generate builds every store of a scale point under parent/<name>, the
+// measured store first: each distinct row count once, through lit, and every
+// further store of that count as a byte copy of the first.
+//
+// WHY COPIES. The generator is deterministic in content (filler is seeded by
+// row), so generating one count N times would produce the same rows N times at
+// N times the import cost: a ten-times fleet is 300 stores, and import cost
+// grows faster than its rows (20s at 700 rows, 146s at 2,800, measured
+// 2026-10-23). A copy is the generator's output, replicated; each copy is then
+// an independent store, written to and counted on its own.
+//
+// os.Mkdir, never MkdirAll: an existing directory must fail here rather
+// than be reused. lit init is idempotent and lit import appends, so
+// generating into a populated workspace silently produces a store of 2N
+// rows wearing an N-row label — the tool's own answer-shaped void, in the
+// one place nothing downstream could detect it. Two ordinary invocations
+// reach it: `--keep <dir>` pointed a second time at a directory that still
+// holds the first run's stores, and any repeated size, which parseSizes
+// rejects for the same reason. CONTRIBUTING states the fresh-directory
+// requirement where it documents the flag, so the two agree rather than
+// each describing a different tool. [LAW:no-silent-failure]
+func generate(bin litBinary, parent string, sz size, env []string, run stepRunner) ([]generatedStore, error) {
+	root := filepath.Join(parent, sz.name)
+	if err := os.Mkdir(root, 0o755); err != nil {
+		return nil, fmt.Errorf("creating workspace dir: %w "+
+			"(a store is generated into a fresh directory; remove it or pass a different --keep)", err)
+	}
+	first := map[int]generatedStore{}
+	members := make([]generatedStore, 0, 1+len(sz.beside))
+	for i, rows := range sz.members() {
+		dir := filepath.Join(root, fmt.Sprintf("store-%03d", i))
+		m, generated := first[rows]
+		var err error
+		if generated {
+			m, err = replicate(m, dir)
+		} else {
+			m, err = generateStore(bin, dir, sz, rows, env, run)
+			first[rows] = m
+		}
+		if err != nil {
+			return nil, err
+		}
+		members = append(members, m)
+	}
+	return members, nil
+}
+
+// generateStore builds one workspace of rows rows at root, for the scale
+// point sz.
 //
 // WHY IT SHELLS OUT INSTEAD OF CALLING internal/store. Seeding through the
 // store API would be faster, and it would also be a second definition of what a
@@ -48,25 +100,13 @@ type generatedStore struct {
 // a store lit itself produced. [LAW:one-source-of-truth]
 // Each step runs through run, which is runQuiet everywhere but the test that
 // proves lit accepts the plan, where it is lit's own entry point in-process.
-func generate(bin litBinary, parent string, sz size, env []string, run stepRunner) (generatedStore, error) {
-	root := filepath.Join(parent, sz.name)
-	// os.Mkdir, never MkdirAll: an existing directory must fail here rather
-	// than be reused. lit init is idempotent and lit import appends, so
-	// generating into a populated workspace silently produces a store of 2N
-	// rows wearing an N-row label — the tool's own answer-shaped void, in the
-	// one place nothing downstream could detect it. Two ordinary invocations
-	// reach it: `--keep <dir>` pointed a second time at a directory that still
-	// holds the first run's stores, and any repeated size, which parseSizes
-	// rejects for the same reason. CONTRIBUTING states the fresh-directory
-	// requirement where it documents the flag, so the two agree rather than
-	// each describing a different tool. [LAW:no-silent-failure]
+func generateStore(bin litBinary, root string, sz size, rows int, env []string, run stepRunner) (generatedStore, error) {
 	if err := os.Mkdir(root, 0o755); err != nil {
-		return generatedStore{}, fmt.Errorf("creating workspace dir: %w "+
-			"(a store is generated into a fresh directory; remove it or pass a different --keep)", err)
+		return generatedStore{}, fmt.Errorf("creating workspace dir: %w", err)
 	}
 	specs := make([]importSpec, 0, 1)
-	for i, batch := range importBatches(sz.rows) {
-		specPath := filepath.Join(parent, fmt.Sprintf("%s-spec-%d.json", sz.name, i))
+	for i, batch := range importBatches(rows) {
+		specPath := fmt.Sprintf("%s-spec-%d.json", root, i)
 		blob, err := json.Marshal(batch)
 		if err != nil {
 			return generatedStore{}, fmt.Errorf("encoding import spec: %w", err)
@@ -77,7 +117,7 @@ func generate(bin litBinary, parent string, sz size, env []string, run stepRunne
 		specs = append(specs, importSpec{path: specPath, records: batch})
 	}
 	var ids []string
-	for _, st := range generationSteps(bin, sz, specs) {
+	for _, st := range generationSteps(bin, rows, specs) {
 		out, err := run(root, env, st)
 		if err != nil {
 			return generatedStore{}, err
@@ -88,11 +128,29 @@ func generate(bin litBinary, parent string, sz size, env []string, run stepRunne
 		}
 		ids = append(ids, loaded...)
 	}
-	info, err := workspace.Resolve(environ.Of(env), root)
-	if err != nil {
-		return generatedStore{}, fmt.Errorf("resolving generated workspace %s: %w", root, err)
+	return resolved(generatedStore{size: sz, root: root, fleetRoot: filepath.Dir(root), env: env, ids: ids})
+}
+
+// replicate copies src's workspace to dir and answers the copy, the same rows
+// under the same ids in a store of its own.
+func replicate(src generatedStore, dir string) (generatedStore, error) {
+	if err := os.CopyFS(dir, os.DirFS(src.root)); err != nil {
+		return generatedStore{}, fmt.Errorf("copying workspace %s to %s: %w", src.root, dir, err)
 	}
-	return generatedStore{size: sz, root: root, databasePath: info.DatabasePath, env: env, ids: ids}, nil
+	src.root = dir
+	return resolved(src)
+}
+
+// resolved fills in where store's database lives. It comes from
+// workspace.Resolve, the package that owns lit's path geometry, rather than
+// from the workspace it was copied from, so a copy reports its own bytes.
+func resolved(store generatedStore) (generatedStore, error) {
+	info, err := workspace.Resolve(environ.Of(store.env), store.root)
+	if err != nil {
+		return generatedStore{}, fmt.Errorf("resolving generated workspace %s: %w", store.root, err)
+	}
+	store.databasePath = info.DatabasePath
+	return store, nil
 }
 
 // stepRunner performs one generation step in dir under env, answering the
@@ -161,7 +219,7 @@ func idsLoaded(stdout []byte, loads []storage.ImportTreeSpec) ([]string, error) 
 }
 
 // generationSteps is the plan that turns an empty directory into a workspace
-// of sz.rows rows: the commands, in order, each with its budget. It is a pure
+// of rows rows: the commands, in order, each with its budget. It is a pure
 // function of its inputs so the plan can be checked without running it —
 // which is how the one step whose budget scales with the row count is pinned.
 // [LAW:effects-at-boundaries]
@@ -184,7 +242,7 @@ func idsLoaded(stdout []byte, loads []storage.ImportTreeSpec) ([]string, error) 
 // The import carries importBudget rather than runBudget because its length
 // grows with the rows it loads; every other step is the same size at every
 // size.
-func generationSteps(bin litBinary, sz size, specs []importSpec) []step {
+func generationSteps(bin litBinary, rows int, specs []importSpec) []step {
 	steps := []step{
 		{budget: runBudget, argv: []string{"git", "init", "-q", "--template=", "."}},
 		{budget: runBudget, argv: []string{"git", "-c", "user.email=perfbench@invalid", "-c", "user.name=perfbench",
@@ -193,7 +251,7 @@ func generationSteps(bin litBinary, sz size, specs []importSpec) []step {
 		{budget: runBudget, argv: []string{bin.path, "init", "--prefix", "bench", "--skip-hooks", "--skip-agents"}},
 	}
 	for _, spec := range specs {
-		steps = append(steps, step{budget: importBudget(sz.rows), argv: []string{bin.path, "import", "--path", spec.path}, loads: spec.records})
+		steps = append(steps, step{budget: importBudget(rows), argv: []string{bin.path, "import", "--path", spec.path}, loads: spec.records})
 	}
 	return steps
 }

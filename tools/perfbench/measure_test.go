@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -376,15 +377,24 @@ exit 0
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	var progress strings.Builder
+	var progress, recorded strings.Builder
 	env := hermeticEnv(os.Environ(), filepath.Join(dir, "config"), filepath.Join(dir, "state"))
 	lim := limits{budget: 100 * time.Millisecond}
-	_, _, err := measureSize(litBinary{path: path}, dir, size{name: "one", rows: 1}, env, lim, runQuiet, &progress)
+	_, _, err := measureSize(litBinary{path: path}, dir, size{name: "one", rows: 1}, env, lim, runQuiet, &progress, &recorded)
 	if err == nil || !strings.Contains(err.Error(), "compaction broke") {
 		t.Fatalf("measureSize error = %v, want the failed compaction", err)
 	}
 	if !strings.Contains(progress.String(), "OVER BUDGET: store one (1 rows): next took") {
 		t.Errorf("the store's verdict on next was not logged before the compaction failed:\n%s", progress.String())
+	}
+	// The record is what the nightly lane files from, so it must survive the
+	// same failure the log line does, saying the same thing.
+	var rec limitRecord
+	if err := json.Unmarshal([]byte(recorded.String()), &rec); err != nil {
+		t.Fatalf("the verdict on next was not recorded before the compaction failed: %v\n%q", err, recorded.String())
+	}
+	if rec.Limit != "one-next" || !strings.Contains(progress.String(), rec.Measured) {
+		t.Errorf("record = %+v, want limit one-next measuring what the log printed:\n%s", rec, progress.String())
 	}
 }
 
@@ -411,7 +421,7 @@ exit 0
 	}
 	var progress strings.Builder
 	env := hermeticEnv(os.Environ(), filepath.Join(dir, "config"), filepath.Join(dir, "state"))
-	_, _, err := measureSize(litBinary{path: path}, dir, size{name: "one", rows: 1}, env, limits{budget: time.Minute}, runQuiet, &progress)
+	_, _, err := measureSize(litBinary{path: path}, dir, size{name: "one", rows: 1}, env, limits{budget: time.Minute}, runQuiet, &progress, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "grew the compacted store by 0 bytes") {
 		t.Fatalf("measureSize error = %v, want the history that did not grow", err)
 	}

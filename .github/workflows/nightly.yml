@@ -80,18 +80,157 @@ jobs:
           go build -o "$RUNNER_TEMP/perfbench" ./tools/perfbench
           "$RUNNER_TEMP/perfbench" --sizes design
 
+  # The budget at ten times, on both axes the fleet grows along: one store ten
+  # times today's largest (10x-store), and ten times today's stores, each at
+  # its own size (10x-fleet), both derived from one census
+  # (tools/perfbench/plan.go fleetCensus). The PR gate catches the cliff at
+  # today's size; this catches the slope, the night after it lands, and never
+  # blocks a pull request.
+  #
+  # A RED LIMIT IS THE DESIGN'S LIMIT, NOT A BAD COMMIT. Every verdict
+  # perfbench reaches is written to --limits the moment it is reached, keyed
+  # by the limit it breaks, and each limit is its own ticket: a new one
+  # arrives urgent, a known one gets that night's measured value as a comment.
+  # The answer to one is work on that limit. Raising a budget or an allowance
+  # to turn this green is the alarm disconnected. [LAW:no-silent-failure]
+  #
+  # The scale points are listed once, here, and the legs and the verdict both
+  # read them, so a leg that never reported is a leg the verdict knows is
+  # missing. [LAW:one-source-of-truth]
+  scale-points:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      points: ${{ steps.points.outputs.points }}
+    steps:
+      - id: points
+        run: echo 'points=["10x-store","10x-fleet"]' >> "$GITHUB_OUTPUT"
+
+  # One leg per scale point, each on its own runner and disk, so neither waits
+  # on the other and a failed fleet keeps the store's figures. Each leg's
+  # artifact is its report (every command's figure), its limits, and
+  # perfbench's exit code: 0 measured within every budget, 2 measured and
+  # breached, anything else (or nothing) the leg did not finish measuring.
   scale:
+    needs: scale-points
+    strategy:
+      fail-fast: false
+      matrix:
+        point: ${{ fromJSON(needs.scale-points.outputs.points) }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Provisional 10x measurement
+
+      # Built, then run, as ci.yml's perf-budget is, so exit 2 survives.
+      - name: The latency budget and the writer storm at ${{ matrix.point }}
+        env:
+          POINT: ${{ matrix.point }}
         run: |
+          out="$RUNNER_TEMP/scale"
+          mkdir -p "$out"
           go build -o "$RUNNER_TEMP/perfbench" ./tools/perfbench
-          "$RUNNER_TEMP/perfbench" --sizes 10740
+          status=0
+          "$RUNNER_TEMP/perfbench" --sizes "$POINT" --limits "$out/limits.jsonl" > "$out/report.txt" || status=$?
+          echo "$status" > "$out/exit-code"
+          cat "$out/report.txt"
+          exit "$status"
+
+      # always(): a leg cancelled at its timeout still uploads the limits it
+      # reached before it was cut off.
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: scale-${{ matrix.point }}
+          path: ${{ runner.temp }}/scale/
+
+  # The night's verdict, on every ref, so a dispatch on a branch runs it on
+  # that run's real limits: the limits grouped one entry per key, every
+  # failed writer of a storm under its one key, and whether the lane itself
+  # broke, which is any scale point without an exit code of 0 or 2.
+  scale-verdict:
+    needs: [scale-points, scale]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      limits: ${{ steps.verdict.outputs.limits }}
+      broken: ${{ steps.verdict.outputs.broken }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: scale-*
+          path: scale
+
+      - id: verdict
+        env:
+          POINTS: ${{ needs.scale-points.outputs.points }}
+        run: |
+          set -euo pipefail
+          broken=false
+          for point in $(jq -er '.[]' <<<"$POINTS"); do
+            code=$(cat "scale/scale-$point/exit-code" 2>&1) || code="none ($code)"
+            echo "$point: perfbench exit code $code"
+            case "$code" in 0|2) ;; *) broken=true ;; esac
+          done
+          limits=$(find scale -name limits.jsonl -exec cat {} + | jq -sc 'group_by(.limit) | map({limit: .[0].limit, title: .[0].title, measured: (map(.measured) | join("\n"))})')
+          jq -r '.[] | "LIMIT \(.limit): \(.title)\n\(.measured)\n"' <<<"$limits"
+          echo "limits=$limits" >> "$GITHUB_OUTPUT"
+          echo "broken=$broken" >> "$GITHUB_OUTPUT"
+
+  # One ticket per limit, filed or extended through the one reporter. Serial,
+  # because every one pushes the same store and a refused push costs a pull
+  # and a retry. Skipped on a night with no limit, where an empty matrix
+  # would fail the run on the night the design finally holds.
+  report-scale-limit:
+    needs: scale-verdict
+    if: ${{ always() && needs.scale-verdict.result == 'success' && needs.scale-verdict.outputs.limits != '[]' && github.ref == 'refs/heads/master' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    strategy:
+      max-parallel: 1
+      fail-fast: false
+      matrix:
+        limit: ${{ fromJSON(needs.scale-verdict.outputs.limits) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/report-to-lit
+        with:
+          label: ${{ matrix.limit.limit }}
+          title: ${{ matrix.limit.title }}
+          token: ${{ github.token }}
+          details: ${{ matrix.limit.measured }}
+          body: |
+            The nightly ten-times lane (perfbench at 10x-store and 10x-fleet) measured this limit broken. A red limit is the design reaching its limit, not a bad commit: answer it with work on the limit, never by raising a budget or an allowance. Each red night appends its measured value here. If this is the design's known slope rather than a regression, lower this ticket to normal priority and leave it open, so it keeps collecting each night's value and closes when the work on it turns the lane green.
+
+  # The lane itself broke: a scale point that did not finish measuring (a tool
+  # failure, a timeout, a cancelled leg), or a verdict that could not be read.
+  report-scale:
+    needs: [scale-points, scale, scale-verdict]
+    if: ${{ always() && github.ref == 'refs/heads/master' && (needs.scale-verdict.result != 'success' || needs.scale-verdict.outputs.broken == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/report-to-lit
+        with:
+          label: nightly-scale-failure
+          title: Nightly ten-times lane did not finish measuring
+          token: ${{ github.token }}
+          body: |
+            A scale point of the nightly ten-times lane (perfbench --sizes 10x-store / 10x-fleet) did not finish measuring: perfbench failed as a tool, its leg timed out or was cancelled, or the verdict could not be read. The run log names which. Any limit it reached before it stopped is filed under its own key. This is the instrument broken, not a limit: fix it so the lane measures again.
 
   # Windows is a release target, and this is the one lane that executes it.
   # The store's filesystem primitives - lock share modes, renaming over an open

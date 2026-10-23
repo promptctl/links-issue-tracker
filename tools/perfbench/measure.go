@@ -169,14 +169,14 @@ func measurePhase(bin litBinary, store generatedStore, phase []invocation, devnu
 					kills[i] = &killed{round: round, after: lim.kill()}
 					// err carries what the command wrote before the kill, the
 					// one clue to why it hung.
-					fmt.Fprintf(progress, "killed: store %s (%d rows), probe %q, %s: %v; measuring on\n",
-						store.size.name, store.size.rows, inv.probe.name, roundName(round), err)
+					fmt.Fprintf(progress, "killed: store %s, probe %q, %s: %v; measuring on\n",
+						store.size, inv.probe.name, roundName(round), err)
 				}
 				continue
 			}
 			if err != nil {
-				return nil, fmt.Errorf("store %s (%d rows), probe %q, %s: %w",
-					store.size.name, store.size.rows, inv.probe.name, roundName(round), err)
+				return nil, fmt.Errorf("store %s, probe %q, %s: %w",
+					store.size, inv.probe.name, roundName(round), err)
 			}
 			// Round 0 is the warm-up and is never recorded: its cold cost
 			// (page cache, dynamic linking, a never-written store's first

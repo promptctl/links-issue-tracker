@@ -221,6 +221,19 @@ the moment the storm ends, listed by its first line in a `CONTENTION` section,
 and exits the run 2 like a budget breach. The probes cannot see this failure,
 because each one runs alone.
 
+`--sizes` also takes named scale points. `design` is the store the size ceiling
+is derived to hold. `10x-store` and `10x-fleet` are ten times today on each axis
+the fleet grows along, both from one census of this machine's stores
+(`fleetCensus` in `tools/perfbench/plan.go`): one store of ten times the largest,
+and 300 stores, every census entry ten times, measured at the largest. A fleet's
+column times `lit stores` and `lit stores --counts` over all its stores, and its
+storm spreads the 100 writers across 100 of them. Each distinct row count is
+generated once and the rest are byte copies, so the fleet costs about one
+census of import. Its `fleet bytes` figure is row data only: a generated store
+has no snapshots, remote cache or history beyond its import. `--limits <file>`
+writes each verdict as a JSON line the moment it is reached, keyed by the
+limit it breaks; the nightly ten-times lane files one ticket per key from it.
+
 CI's `perf-budget` job runs this on every PR against a 700-row store. Because
 the budget is the destination and not a CI setting, `just perf` fails the same
 way on your machine. That includes the large sizes a scale question needs,

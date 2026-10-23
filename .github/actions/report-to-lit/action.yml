@@ -17,6 +17,10 @@ inputs:
   body:
     description: What the alarm means and how to triage it; the run URL is prepended.
     required: true
+  details:
+    description: This run's own evidence (the measured values that turned it red), appended to a new ticket and to every repeat comment, so each red run's facts land in the ticket rather than only in a log that expires.
+    required: false
+    default: ''
   token:
     description: Token with contents:write, for pushing the store's refs/dolt/data.
     required: true
@@ -33,6 +37,7 @@ runs:
         LABEL: ${{ inputs.label }}
         TITLE: ${{ inputs.title }}
         BODY: ${{ inputs.body }}
+        DETAILS: ${{ inputs.details }}
         TOKEN: ${{ inputs.token }}
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         # The explicit `lit sync push` below is the one push, and it fails this
@@ -57,13 +62,21 @@ runs:
         "$lit" init
         existing=$("$lit" ls --labels "$LABEL" --status open,in_progress --limit 1 --columns id)
         if [ -n "$existing" ]; then
-          "$lit" comment add "$existing" --body "Red again: ${RUN_URL}"
+          "$lit" comment add "$existing" --body "Red again: ${RUN_URL}
+
+        ${DETAILS}"
         else
-          "$lit" new --parent "$epic" --type bug --priority urgent --top \
+          # Each alarm is its own lane of the epic. Children sharing a lane
+          # wait on each other in rank order, so an alarm filed --top into one
+          # shared lane would hold every alarm already open unserved behind it
+          # for as long as its own run stayed red.
+          "$lit" new --parent "$epic" --type bug --priority urgent --top --lane "$LABEL" \
             --topic "$LABEL" --labels "$LABEL" --title "$TITLE" \
             --description "Red run: ${RUN_URL}
 
-        ${BODY}"
+        ${BODY}
+
+        ${DETAILS}"
         fi
         # A push is refused when another writer (an agent session, the other
         # scheduled lane) moved refs/dolt/data after `lit init` adopted it; the
