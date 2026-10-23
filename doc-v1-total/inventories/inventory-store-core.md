@@ -527,7 +527,7 @@ SELECT <issueColumnsBare> FROM issues WHERE id = ?
 ```sql
 SELECT <issueColumnsQualified> FROM JSON_TABLE(?, '$[*]' COLUMNS (id VARCHAR(191) PATH '$')) AS named JOIN issues i ON i.id = named.id
 ```
-Errors: `"batch load issues: %w"`, `"scan batch-loaded issue: %w"`, `"iterate batch-loaded issues: %w"`. Missing ids are simply absent from the map (`store.go`).
+Errors: `"load issues by id: %w"`, `"scan loaded issue: %w"`, `"iterate loaded issues: %w"`. Missing ids are simply absent from the map (`store.go`).
 
 #### 5.6 `GetIssueDetail(ctx, id) (model.IssueDetail, error)`
 
@@ -2835,7 +2835,7 @@ Query error → `fmt.Errorf("list relations: %w", err)`; created_at parsed with 
 ```sql
 SELECT r.src_id, r.dst_id, r.type, r.created_at, r.created_by FROM JSON_TABLE(?, '$[*]' COLUMNS (id VARCHAR(191) PATH '$')) AS ends JOIN relations r ON r.<column> = ends.id WHERE r.type IN (?,?)
 ```
-via `fmt.Sprintf`, the type list from `placeholders` (`internal/store/relations.go`); args are the JSON id array then the two type strings. No ORDER BY (ordering is `mergeRelations`' job). Reading the rows is `scanRelationRows`' job: query error → `fmt.Errorf("list relations for ids: %w", err)`, and the scan of `created_at` goes through `scanTime`.
+via `fmt.Sprintf`, the type list from `placeholders` (`internal/store/idset.go`); args are the JSON id array then the two type strings. No ORDER BY (ordering is `mergeRelations`' job). Reading the rows is `scanRelationRows`' job: query error → `fmt.Errorf("list relations for ids: %w", err)`, and the scan of `created_at` goes through `scanTime`.
 
 `listRelationsForIDs(ctx, ids)` — `internal/store/relations.go`: empty ids → `(nil, nil)`; otherwise one query per endpoint column and `mergeRelations(bySrc, byDst)`. The documented reason for two conjunctive queries rather than one `src_id IN (…) OR dst_id IN (…)` is engine index-analysis blowup.
 
@@ -2990,7 +2990,7 @@ Frame behavior pinned by tests — `internal/store/ranking_frame_test.go`:
 - `resolveRankSet` — `internal/store/ranking.go`: per id, `GetIssue` then `ancestorChain`; `storage.FrameRepresentatives` errors are wrapped `fmt.Errorf("rank set: %w", err)`; `storage.RankSetResolutions(ids, reps)` (`internal/storage/rank.go`, shared with the memory engine) pairs each id with its representative, and two named ids collapsing to the same representative → `model.ValidationError`
   `fmt.Sprintf("rank set: %s and %s both resolve to %s — their relative order is internal to %s and cannot be set against outside issues; run rank set among siblings instead", prior, id, reps[i], reps[i])`.
   Returns `[]storage.RankSetResolution{{NamedID, RankedID}}` parallel to the input order.
-- In `withMutation(ctx, "rank set", …)`, `unrankedAmongTx` first reads which representatives are live and hold no key, one `SELECT i.id, i.item_rank FROM <idSet> named JOIN issues i ON i.id = named.id WHERE i.deleted_at IS NULL AND i.item_rank = ''`, error → `fmt.Errorf("read which of %v hold no key: %w", ids, err)` wrapped `fmt.Errorf("rank set: %w", err)`; each is placed at the frame's bottom by `bottomEdge.placeBeyondTx`, error wrapped `fmt.Errorf("rank set: %w", err)`. Then the frame's keys are read lowest first, ties by id:
+- In `withMutation(ctx, "rank set", …)`, `unrankedAmongTx` first reads which representatives are live and hold no key, one `SELECT i.id, i.item_rank FROM <idSet> named JOIN issues i ON i.id = named.id WHERE i.deleted_at IS NULL AND i.item_rank = ''`, error → `fmt.Errorf("read which of %d issues hold no key: %w", len(ids), err)` wrapped `fmt.Errorf("rank set: %w", err)`; each is placed at the frame's bottom by `bottomEdge.placeBeyondTx`, error wrapped `fmt.Errorf("rank set: %w", err)`. Then the frame's keys are read lowest first, ties by id:
   ```sql
   SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank != '' AND <frame> = ? ORDER BY item_rank ASC, id ASC
   ```

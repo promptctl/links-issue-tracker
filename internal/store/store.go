@@ -936,10 +936,10 @@ func (s *Store) scanListRows(ctx context.Context, query string, args []any) ([]i
 // [LAW:parse-dont-validate]
 //
 // The ids are sorted so that the row order is a function of the id set
-// alone, not of the order a caller happened to type or
-// the order the relations table happened to store. ListIssues' comparator runs
-// over the union afterwards and is stable, so this is what keeps the order of
-// equal-sorting rows the same from call to call.
+// alone, not of the order a caller happened to type or the order the
+// relations table happened to store. ListIssues' comparator runs over the rows
+// afterwards and is stable, so this is what keeps the order of equal-sorting
+// rows the same from call to call.
 func (s *Store) selectedIssueIDs(ctx context.Context, filter storage.ListIssuesFilter) ([]string, bool, error) {
 	selected := storage.TrimmedNonEmpty(filter.IDs)
 	restricted := len(selected) > 0
@@ -1302,19 +1302,19 @@ func (s *Store) issueTypesByIDs(ctx context.Context, ids []string) (map[string]m
 func (s *Store) scanIssueRows(ctx context.Context, query string, args []any) ([]issueRow, error) {
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("batch load issues: %w", err)
+		return nil, fmt.Errorf("load issues by id: %w", err)
 	}
 	defer rows.Close()
 	scanned := []issueRow{}
 	for rows.Next() {
 		row, err := scanIssue(rows)
 		if err != nil {
-			return nil, fmt.Errorf("scan batch-loaded issue: %w", err)
+			return nil, fmt.Errorf("scan loaded issue: %w", err)
 		}
 		scanned = append(scanned, row)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate batch-loaded issues: %w", err)
+		return nil, fmt.Errorf("iterate loaded issues: %w", err)
 	}
 	return scanned, nil
 }
