@@ -2,11 +2,12 @@ package model
 
 import "strings"
 
-// CommentBody is a comment's text as it is stored: trimmed, and never blank.
-// Only ParseCommentBody builds one that holds text, so a body is parsed where
-// it enters and is never checked again. The zero value holds none: Go lets any
-// code write it without parsing, so Text refuses it rather than let a blank
-// comment be stored. [LAW:parse-dont-validate] [LAW:no-silent-failure]
+// CommentBody is a comment's text as a write takes it: trimmed, and never
+// blank. Only ParseCommentBody builds one that holds text, so a body is parsed
+// once, where it enters. The zero value holds none: Go lets any code write it
+// without parsing, so Text tells it from a parsed body and refuses it rather
+// than let a blank comment be stored. [LAW:parse-dont-validate]
+// [LAW:no-silent-failure]
 type CommentBody struct {
 	text string
 }

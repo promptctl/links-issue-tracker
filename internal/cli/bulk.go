@@ -178,7 +178,7 @@ func bulkLabelLeaf() appLeaf {
 // bulkCommentLeaf is `lit comment add` in bulk form: one body, read and parsed
 // once before any issue is touched, added to every listed issue through the
 // step the single verb runs, beside the comments each issue already has. A
-// landed item prints the single verb's line, as every bulk verb does.
+// landed item prints the single verb's `<id> <comment-id>` line.
 // [LAW:single-enforcer] [LAW:one-type-per-behavior] [LAW:parse-dont-validate]
 func bulkCommentLeaf() appLeaf {
 	fs := newCobraFlagSet("bulk comment")

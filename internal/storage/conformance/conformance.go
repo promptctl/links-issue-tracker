@@ -49,6 +49,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/claims"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/storage/storagetest"
 )
 
 // NewEngine mints a fresh, empty engine for one case, already registered for
@@ -1111,7 +1112,7 @@ func listFiltersSelect(t *testing.T, ctx context.Context, st storage.Store, clk 
 	if _, err := st.Apply(ctx, task.ID, storage.Change{Action: model.Start{Assignee: "grace"}, Actor: "grace"}); err != nil {
 		t.Fatalf("Apply start error = %v", err)
 	}
-	if _, _, err := st.AddComment(ctx, storage.AddCommentInput{IssueID: bug.ID, Body: commentBody(t, "note"), CreatedBy: "ada"}); err != nil {
+	if _, _, err := st.AddComment(ctx, storage.AddCommentInput{IssueID: bug.ID, Body: storagetest.CommentBody(t, "note"), CreatedBy: "ada"}); err != nil {
 		t.Fatalf("AddComment error = %v", err)
 	}
 
@@ -2358,7 +2359,7 @@ func commentsRoundtrip(t *testing.T, ctx context.Context, st storage.Store, clk 
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
 	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "discussed", Topic: "core", ParentID: epic.ID})
 
-	comment, withComment, err := st.AddComment(ctx, storage.AddCommentInput{IssueID: issue.ID, Body: commentBody(t, "first"), CreatedBy: "ada"})
+	comment, withComment, err := st.AddComment(ctx, storage.AddCommentInput{IssueID: issue.ID, Body: storagetest.CommentBody(t, "first"), CreatedBy: "ada"})
 	if err != nil {
 		t.Fatalf("AddComment error = %v", err)
 	}
@@ -2407,7 +2408,7 @@ func commentsRoundtrip(t *testing.T, ctx context.Context, st storage.Store, clk 
 	_, err = st.DeleteComment(ctx, " \t")
 	assertRefused(t, err, "DeleteComment(blank id)")
 
-	_, _, err = st.AddComment(ctx, storage.AddCommentInput{IssueID: "no-such-issue", Body: commentBody(t, "x"), CreatedBy: "ada"})
+	_, _, err = st.AddComment(ctx, storage.AddCommentInput{IssueID: "no-such-issue", Body: storagetest.CommentBody(t, "x"), CreatedBy: "ada"})
 	assertNotFound(t, err, "issue", "AddComment on a missing issue")
 }
 
@@ -3425,7 +3426,7 @@ func exportCarriesWholeStore(t *testing.T, ctx context.Context, st storage.Store
 	clk.Pin(earlierInstant)
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
 	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "child", Topic: "core", ParentID: epic.ID, Labels: []string{"perf"}})
-	if _, _, err := st.AddComment(ctx, storage.AddCommentInput{IssueID: child.ID, Body: commentBody(t, "note"), CreatedBy: "ada"}); err != nil {
+	if _, _, err := st.AddComment(ctx, storage.AddCommentInput{IssueID: child.ID, Body: storagetest.CommentBody(t, "note"), CreatedBy: "ada"}); err != nil {
 		t.Fatalf("AddComment error = %v", err)
 	}
 	archived := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "archived", Topic: "core", ParentID: epic.ID})
@@ -4005,16 +4006,6 @@ func assertStrings(t *testing.T, what string, got, want []string) {
 // assertRefused pins a rejected value to the contract's refusal type: the CLI
 // reads it as "change the input", where any other error reads as a fault worth
 // retrying.
-// commentBody parses raw as a comment's text, failing the test if it is blank.
-func commentBody(t *testing.T, raw string) model.CommentBody {
-	t.Helper()
-	body, err := model.ParseCommentBody(raw)
-	if err != nil {
-		t.Fatalf("model.ParseCommentBody(%q): %v", raw, err)
-	}
-	return body
-}
-
 func assertRefused(t *testing.T, err error, what string) {
 	t.Helper()
 	var refused model.ValidationError

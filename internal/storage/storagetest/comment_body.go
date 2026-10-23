@@ -1,4 +1,4 @@
-package store
+package storagetest
 
 import (
 	"testing"
@@ -6,7 +6,8 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
-func commentBody(t *testing.T, raw string) model.CommentBody {
+// CommentBody parses raw as a comment's text, failing the test if it is blank.
+func CommentBody(t testing.TB, raw string) model.CommentBody {
 	t.Helper()
 	body, err := model.ParseCommentBody(raw)
 	if err != nil {

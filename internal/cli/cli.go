@@ -2169,7 +2169,9 @@ func commentAddLeaf() appLeaf {
 }
 
 // addComment is the comment write `lit comment add` and `lit bulk comment`
-// both run, so a comment lands, and is recorded, the same way from either.
+// both run, so a comment lands, and records its comment.id fact, the same way
+// from either. The comment_added workflow occasion is the single verb's own, as
+// every bulk verb leaves its single command's guidance unprinted.
 // The author resolves through the same identity rule as every other actor.
 // [LAW:single-enforcer] [LAW:one-type-per-behavior]
 func addComment(ctx context.Context, ap *app.App, issueID string, body model.CommentBody, actor string) (model.Comment, model.Issue, error) {
