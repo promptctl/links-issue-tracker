@@ -10,6 +10,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/store/designstore"
 )
 
 // The store's size ceiling, and how the store holds it.
@@ -37,18 +38,12 @@ import (
 // that makes a shallow pass due — plus one recovery snapshot of that store
 // per automatic kind, which is the newest of each that retention never
 // retires, plus the user snapshots the default snapshot.retention_budget
-// keeps, which retention never touches. The design size is twice this repository's 1,383 rows on
-// 2026-10-21, the largest lit store known, and both measured figures are
-// that size's column of `just perf --sizes 2800`, taken 2026-10-21 on
-// darwin/arm64; re-run it to check them. They are measured at the design
-// size rather than scaled from a smaller store because neither scales
-// linearly: a row cost 35 KB at 590 rows and 66 KB at 2,800, a commit 18 KB
-// and 27 KB.
+// keeps, which retention never touches. The design-size store's rows and
+// commits are costed at designstore's allowances, its measured figures plus
+// stated headroom, so a store whose re-measured figures stay within them is a
+// store this ceiling holds; the nightly lane's `perfbench --sizes design`
+// fails when one does not. [LAW:one-source-of-truth]
 const (
-	// measuredDesignStoreBytes is the 2,800-row store's compacted bytes.
-	measuredDesignStoreBytes = 184_610_000
-	// measuredCommitBytes is the 2,800-row store's bytes/commit.
-	measuredCommitBytes = 26_820
 	// designHistoryCommits is the default window's re_root_at
 	// (sync.history_bound.re_root_at): the most commits a bounded history
 	// holds before a push re-roots it.
@@ -57,7 +52,7 @@ const (
 	// snapshots a store on default settings keeps, each a copy of the store.
 	designUserSnapshots = 5
 
-	storeSizeCeiling = (measuredDesignStoreBytes + designHistoryCommits*measuredCommitBytes + journalDueBytes) * (1 + int64(len(automaticSnapshotLabels)) + designUserSnapshots)
+	storeSizeCeiling = (designstore.CompactedBytesAllowance + designHistoryCommits*designstore.CommitBytesAllowance + journalDueBytes) * (1 + int64(len(automaticSnapshotLabels)) + designUserSnapshots)
 
 	// automaticSnapshotsPerKind is the most snapshots of one automatic kind
 	// kept however much room the ceiling leaves: past ten recovery points

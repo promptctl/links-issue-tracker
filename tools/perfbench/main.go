@@ -54,7 +54,7 @@ func main() {
 func run(args []string, out, progress io.Writer) error {
 	fs := flag.NewFlagSet("perfbench", flag.ContinueOnError)
 	fs.SetOutput(progress)
-	sizesFlag := fs.String("sizes", "", "comma-separated store row counts to measure (default: the repository's envelope, 0,118,590)")
+	sizesFlag := fs.String("sizes", "", "comma-separated store row counts to measure, or `design` for the store the size ceiling is derived to hold (default: the repository's envelope, 0,118,590)")
 	keep := fs.String("keep", "", "directory to build the stores in and leave behind (default: a temporary directory, removed on exit)")
 	if err := fs.Parse(args); err != nil {
 		// -h is a request that was granted, not a failure: Parse has already
@@ -118,19 +118,19 @@ func run(args []string, out, progress io.Writer) error {
 	results := make([]result, 0, len(sizes))
 	var gate gateError
 	for _, sz := range sizes {
-		r, over, failed, err := measureSize(bin, workDir, sz, env, gateLimits, runQuiet, progress)
+		r, verdict, err := measureSize(bin, workDir, sz, env, gateLimits, runQuiet, progress)
 		if err != nil {
 			return err
 		}
 		results = append(results, r)
-		gate.breaches = append(gate.breaches, over...)
-		gate.writers = append(gate.writers, failed...)
+		gate = gate.join(verdict)
 	}
 
 	cond := conditions{goos: runtime.GOOS, goarch: runtime.GOARCH, cpus: runtime.NumCPU()}
 	fmt.Fprint(out, renderReport(probes, results, gateLimits.budget, gate.breaches, cond))
+	fmt.Fprint(out, renderCeilingInputs(results, gate.inputs))
 	fmt.Fprint(out, renderContention(gate.writers))
-	if len(gate.breaches)+len(gate.writers) > 0 {
+	if gate.failed() {
 		return gate
 	}
 	return nil
@@ -141,53 +141,58 @@ func run(args []string, out, progress io.Writer) error {
 // history, which change the store every figure before them describes, then
 // the storm, whose hundred writes would change it more than any of them.
 //
-// The store's latency verdicts are written to progress as soon as its probes
-// are measured, before compaction and history run and before the next store is
-// generated. Those steps can still fail or hang, and a CI job can time out
-// during them; none of that may take a verdict already reached down with it.
-// Kills reach progress sooner still, as they happen (measurePhase), and each
-// storm writer that failed as soon as the storm ends. The breaches and
-// failures it returns are the ones it logged, judged once, and they are what
-// run exits on. [LAW:one-source-of-truth]
-func measureSize(bin litBinary, workDir string, sz size, env []string, lim limits, run stepRunner, progress io.Writer) (result, []breach, []writerFailure, error) {
+// Each verdict is written to progress as soon as it is reached: the latency
+// verdicts once the probes are measured, the ceiling-input verdicts once
+// compaction and history are, and each storm writer that failed as the storm
+// ends. Later steps can still fail or hang, and a CI job can time out during
+// them; none of that may take a verdict already reached down with it. Kills
+// reach progress sooner still, as they happen (measurePhase). The verdict it
+// returns is the one it logged, judged once, and it is what run exits on.
+// [LAW:one-source-of-truth]
+func measureSize(bin litBinary, workDir string, sz size, env []string, lim limits, run stepRunner, progress io.Writer) (result, gateError, error) {
 	fmt.Fprintf(progress, "generating %s store (%d rows) ...\n", sz.name, sz.rows)
 	store, err := generate(bin, workDir, sz, env, run)
 	if err != nil {
-		return result{}, nil, nil, err
+		return result{}, gateError{}, err
 	}
 	// Bytes before probes, because one probe writes: this is the size of
 	// the store the read timings below describe.
 	bytes, err := storeBytes(store.databasePath)
 	if err != nil {
-		return result{}, nil, nil, err
+		return result{}, gateError{}, err
 	}
 	fmt.Fprintf(progress, "measuring %s store, %d repeats per probe ...\n", sz.name, repeats)
 	samples, err := measure(bin, store, lim, progress)
 	if err != nil {
-		return result{}, nil, nil, err
+		return result{}, gateError{}, err
 	}
 	r := result{size: sz, bytes: bytes, samples: samples}
-	over := breaches(r, lim.budget)
-	for _, b := range over {
+	var verdict gateError
+	verdict.breaches = breaches(r, lim.budget)
+	for _, b := range verdict.breaches {
 		fmt.Fprintf(progress, "OVER BUDGET: %s\n", b)
 	}
 	// The empty store has no row to edit, so its history is the zero cost the
 	// report prints as absent.
 	if r.compacted, err = compactedBytes(bin, store); err != nil {
-		return result{}, nil, nil, err
+		return result{}, gateError{}, err
 	}
 	if sz.rows > 0 {
 		fmt.Fprintf(progress, "measuring %s store history, %d single-row edits ...\n", sz.name, historyEdits)
 		if r.history, err = measureHistory(bin, store, r.compacted); err != nil {
-			return result{}, nil, nil, err
+			return result{}, gateError{}, err
 		}
 	}
+	verdict.inputs = inputBreaches(r)
+	for _, b := range verdict.inputs {
+		fmt.Fprintf(progress, "OVER ALLOWANCE: %s\n", b)
+	}
 	fmt.Fprintf(progress, "storming %s store, %d concurrent writers ...\n", sz.name, stormWriters)
-	failed := storm(bin, store, lim.budget, run)
-	for _, f := range failed {
+	verdict.writers = storm(bin, store, lim.budget, run)
+	for _, f := range verdict.writers {
 		fmt.Fprintf(progress, "WRITER FAILED: %s\n", f.full())
 	}
-	return r, over, failed, nil
+	return r, verdict, nil
 }
 
 // parseSizes turns the flag's text into the sizes to measure, or returns the
@@ -201,13 +206,9 @@ func parseSizes(raw string) ([]size, error) {
 	fields := strings.Split(raw, ",")
 	sizes := make([]size, 0, len(fields))
 	for _, f := range fields {
-		f = strings.TrimSpace(f)
-		rows, err := strconv.Atoi(f)
+		sz, err := parseSize(strings.TrimSpace(f))
 		if err != nil {
-			return nil, fmt.Errorf("--sizes: %q is not a row count", f)
-		}
-		if rows < 0 {
-			return nil, fmt.Errorf("--sizes: %d is not a row count", rows)
+			return nil, err
 		}
 		// Duplicates are refused rather than deduplicated. Each size generates
 		// its own workspace named for it, so two entries of the same row count
@@ -216,15 +217,31 @@ func parseSizes(raw string) ([]size, error) {
 		// Failing here names the real mistake instead of surfacing it as a
 		// directory error three steps later.
 		for _, seen := range sizes {
-			if seen.rows == rows {
-				return nil, fmt.Errorf("--sizes: %d appears more than once", rows)
+			if seen.rows == sz.rows {
+				return nil, fmt.Errorf("--sizes: %d rows appears more than once", sz.rows)
 			}
 		}
-		// A named size carries its name into the column header, and a size
-		// given on the command line has only its row count to be called by.
-		sizes = append(sizes, size{name: fmt.Sprintf("n=%d", rows), rows: rows})
+		sizes = append(sizes, sz)
 	}
 	return sizes, nil
+}
+
+// parseSize reads one --sizes entry: `design`, the store the ceiling is
+// derived to hold, or a row count. A named size carries its name into the
+// column header, and a size given as a count has only its count to be called
+// by.
+func parseSize(f string) (size, error) {
+	if f == designSize.name {
+		return designSize, nil
+	}
+	rows, err := strconv.Atoi(f)
+	if err != nil {
+		return size{}, fmt.Errorf("--sizes: %q is not a row count or %q", f, designSize.name)
+	}
+	if rows < 0 {
+		return size{}, fmt.Errorf("--sizes: %d is not a row count", rows)
+	}
+	return size{name: fmt.Sprintf("n=%d", rows), rows: rows}, nil
 }
 
 // workspaceRoot resolves where the generated stores live and how they are
