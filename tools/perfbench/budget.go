@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -68,13 +69,28 @@ func over(o outcome, budget time.Duration) bool {
 }
 
 // gateError is a run that measured everything it was asked to and found the
-// gate failed: probes over budget, storm writers that did not complete, or
-// both. It is its own type so main can give it its own exit status: a failed
-// gate is the gate doing its job, and a caller has to be able to tell it from
-// the tool failing to do its job. [LAW:no-silent-failure]
+// gate failed: probes over budget, ceiling inputs over their allowance, storm
+// writers that did not complete, or any mix. It is its own type so main can
+// give it its own exit status: a failed gate is the gate doing its job, and a
+// caller has to be able to tell it from the tool failing to do its job.
+// [LAW:no-silent-failure] It is also one store's verdict, which run joins
+// store by store.
 type gateError struct {
 	breaches []breach
+	inputs   []inputBreach
 	writers  []writerFailure
+}
+
+func (e gateError) join(o gateError) gateError {
+	return gateError{
+		breaches: slices.Concat(e.breaches, o.breaches),
+		inputs:   slices.Concat(e.inputs, o.inputs),
+		writers:  slices.Concat(e.writers, o.writers),
+	}
+}
+
+func (e gateError) failed() bool {
+	return len(e.breaches)+len(e.inputs)+len(e.writers) > 0
 }
 
 func (e gateError) Error() string {
@@ -82,11 +98,14 @@ func (e gateError) Error() string {
 	for _, b := range e.breaches {
 		lines = append(lines, "  "+b.String())
 	}
+	for _, in := range e.inputs {
+		lines = append(lines, "  "+in.String())
+	}
 	for _, w := range e.writers {
 		lines = append(lines, "  "+w.String())
 	}
-	return fmt.Sprintf("the gate failed: %d probe(s) over budget, %d storm writer(s) that did not complete:\n%s",
-		len(e.breaches), len(e.writers), strings.Join(lines, "\n"))
+	return fmt.Sprintf("the gate failed: %d probe(s) over budget, %d ceiling input(s) over allowance, %d storm writer(s) that did not complete:\n%s",
+		len(e.breaches), len(e.inputs), len(e.writers), strings.Join(lines, "\n"))
 }
 
 // exitGateFailed is the exit status of a run whose only failure is the gate's

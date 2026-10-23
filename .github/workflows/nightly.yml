@@ -64,6 +64,22 @@ jobs:
         if: ${{ !cancelled() }}
         run: go run ./tools/lawtokens-sync -check
 
+      # The store size ceiling is derived from what a design-size store costs
+      # on disk, with headroom over each measured figure
+      # (internal/store/designstore). This measures that store and exits 2
+      # when its compacted bytes or bytes/commit pass their allowance: the
+      # derivation is then false, and the answer is a ticket, never a raised
+      # allowance. `design` resolves to the ceiling's own row count, so the size
+      # judged here cannot drift from the size the ceiling assumes. The same
+      # run judges every command's latency and a 100-writer storm at that size.
+      # About 4 minutes on this runner. Built, then run, as ci.yml's
+      # perf-budget is, so exit 2 survives. [LAW:one-source-of-truth]
+      - name: At the design size, the ceiling's allowances, the latency budget and the writer storm hold
+        if: ${{ !cancelled() }}
+        run: |
+          go build -o "$RUNNER_TEMP/perfbench" ./tools/perfbench
+          "$RUNNER_TEMP/perfbench" --sizes design
+
   # Windows is a release target, and this is the one lane that executes it.
   # The store's filesystem primitives - lock share modes, renaming over an open
   # handle, hard links, unlinking while open - behave differently there, and no
@@ -202,7 +218,7 @@ jobs:
           title: Nightly full test lane is failing
           token: ${{ github.token }}
           body: |
-            A step in the nightly full-suite job failed, or the job was cancelled (a job that hits its 60-minute timeout also reports cancelled); the run log names which step and why. This lane runs everything the PR gate's `-short` skips, plus the law-token upstream check: triage it, do not mute it.
+            A step in the nightly full-suite job failed, or the job was cancelled (a job that hits its 60-minute timeout also reports cancelled); the run log names which step and why. This lane runs everything the PR gate's `-short` skips, the law-token upstream check, and perfbench at the design size (the size ceiling's input allowances, latency and the writer storm at that size): triage it, do not mute it.
 
   report-windows:
     needs: windows

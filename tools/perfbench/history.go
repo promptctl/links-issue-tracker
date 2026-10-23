@@ -45,7 +45,10 @@ func compactedBytes(bin litBinary, store generatedStore) (int64, error) {
 // rather than one row many times, so each commit touches the kind of row an
 // ordinary write touches: one row of many, not the same row again. A store
 // with no row has nothing to edit, and says so with an error instead of a
-// figure of zero.
+// figure of zero. So does a store the edits did not grow: a hundred commits
+// that cost nothing on disk is a measurement that did not happen, and its zero
+// or negative figure would read as cheap history and pass the ceiling's
+// bytes/commit allowance. [LAW:no-silent-failure]
 func measureHistory(bin litBinary, store generatedStore, before int64) (historyCost, error) {
 	ids := store.ids
 	if len(ids) == 0 {
@@ -60,6 +63,9 @@ func measureHistory(bin litBinary, store generatedStore, before int64) (historyC
 	after, err := compactedBytes(bin, store)
 	if err != nil {
 		return historyCost{}, err
+	}
+	if after <= before {
+		return historyCost{}, fmt.Errorf("store %s: %d single-row edits grew the compacted store by %d bytes, so its history was not measured", store.size.name, historyEdits, after-before)
 	}
 	return historyCost{edits: historyEdits, before: before, after: after}, nil
 }

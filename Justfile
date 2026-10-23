@@ -66,6 +66,7 @@ test *args:
 # counts, times every user-facing command against each one, and reports each
 # store's bytes on disk. This is the one home of the scale epic's figures — they
 # are regenerated, never pasted. `just perf --sizes 0,118` to pick sizes,
+# `--sizes design` for the store the size ceiling is derived to hold,
 # `--keep <dir>` to leave the generated stores behind for inspection.
 perf *args:
     #!/usr/bin/env bash
@@ -73,8 +74,8 @@ perf *args:
     source "{{justfile_directory()}}/scripts/cgo-env.sh"
     # Built and run, not `go run`: go run turns every child failure into its own
     # exit 1, and perfbench's exit status is a contract (2 = the gate failed: a
-    # probe over its latency budget or a storm writer that did not complete,
-    # 1 = the run itself failed).
+    # probe over its latency budget, a ceiling input over its allowance, or a
+    # storm writer that did not complete, 1 = the run itself failed).
     dir="$(mktemp -d)"
     trap 'rm -rf "$dir"' EXIT
     go build -o "$dir/perfbench" ./tools/perfbench

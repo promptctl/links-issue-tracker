@@ -64,6 +64,7 @@ func TestAStoresFailedWritersAreLoggedAndReturned(t *testing.T) {
 case "$1" in
   init) mkdir -p .git/links/dolt ;;
   import) printf 'imported 1 issues\n  r0 -> bench-x\n' ;;
+  sync) truncate -s +1000 .git/links/dolt/store ;;
   new) [ "$3" = "perfbench storm writer 7" ] && { echo "workspace busy" >&2; exit 1; } ;;
 esac
 exit 0
@@ -73,12 +74,12 @@ exit 0
 	}
 	var progress strings.Builder
 	env := hermeticEnv(os.Environ(), filepath.Join(dir, "config"), filepath.Join(dir, "state"))
-	_, _, failed, err := measureSize(litBinary{path: path}, dir, size{name: "one", rows: 1}, env, limits{budget: time.Second}, runQuiet, &progress)
+	_, verdict, err := measureSize(litBinary{path: path}, dir, size{name: "one", rows: 1}, env, limits{budget: time.Second}, runQuiet, &progress)
 	if err != nil {
 		t.Fatalf("measureSize error = %v; a failed writer is a verdict, not a broken run", err)
 	}
-	if len(failed) != 1 || failed[0].writer != 7 {
-		t.Fatalf("failed writers = %v, want writer 7 alone", failed)
+	if len(verdict.writers) != 1 || verdict.writers[0].writer != 7 {
+		t.Fatalf("failed writers = %v, want writer 7 alone", verdict.writers)
 	}
 	logged := progress.String()
 	if !strings.Contains(logged, "WRITER FAILED: store one (1 rows): writer 7 of 100 did not complete") || !strings.Contains(logged, "workspace busy") {
