@@ -80,6 +80,19 @@ jobs:
           go build -o "$RUNNER_TEMP/perfbench" ./tools/perfbench
           "$RUNNER_TEMP/perfbench" --sizes design
 
+  scale:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Provisional 10x measurement
+        run: |
+          go build -o "$RUNNER_TEMP/perfbench" ./tools/perfbench
+          "$RUNNER_TEMP/perfbench" --sizes 10740
+
   # Windows is a release target, and this is the one lane that executes it.
   # The store's filesystem primitives - lock share modes, renaming over an open
   # handle, hard links, unlinking while open - behave differently there, and no
