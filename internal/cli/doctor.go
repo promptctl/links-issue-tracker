@@ -364,14 +364,23 @@ func printFootprint(w io.Writer, fp storage.Footprint) error {
 	return err
 }
 
-// overCeilingPart names the part holding the bytes of a store over its
-// ceiling, "none" for a store within it, which states a clean check rather
-// than leaving an absent value to be read as one, and "unmeasured" for a
-// footprint that could not be read, which is no check at all.
-func overCeilingPart(fp storage.Footprint) string {
+// footprintFieldValue renders one footprint fact for the event: value when
+// the footprint was measured, "unmeasured" when it could not be read, so a
+// size never read is not recorded as a store of zero bytes under a zero
+// ceiling — the same reason doctorFieldValue spells "unchecked".
+// [LAW:no-silent-failure] [LAW:single-enforcer] every footprint fact renders
+// through here.
+func footprintFieldValue(fp storage.Footprint, value string) string {
 	if !fp.Measured() {
 		return "unmeasured"
 	}
+	return value
+}
+
+// overCeilingPart names the part holding the bytes of a store over its
+// ceiling, or "none" for a store within it, which states a clean check
+// rather than leaving an absent value to be read as one.
+func overCeilingPart(fp storage.Footprint) string {
 	over, ok := fp.Over()
 	if !ok {
 		return "none"
@@ -536,9 +545,9 @@ func doctorLeaf() appLeaf {
 		telemetry.Set(ctx, "doctor.rank_inversions", doctorFieldValue(report, storage.CheckRankInversions, strconv.Itoa(report.RankInversions)))
 		telemetry.Set(ctx, "doctor.dependency_cycle", doctorFieldValue(report, storage.CheckDependencyCycle, joinCycle(report.DependencyCycle)))
 		telemetry.Set(ctx, "doctor.interleaved", doctorFieldValue(report, storage.CheckRankInversions, strconv.Itoa(len(report.Interleaved))))
-		telemetry.Set(ctx, "doctor.footprint_bytes", strconv.FormatInt(report.Footprint.GovernedBytes(), 10))
-		telemetry.Set(ctx, "doctor.footprint_ceiling", strconv.FormatInt(report.Footprint.Ceiling, 10))
-		telemetry.Set(ctx, "doctor.over_ceiling", overCeilingPart(report.Footprint))
+		telemetry.Set(ctx, "doctor.footprint_bytes", footprintFieldValue(report.Footprint, strconv.FormatInt(report.Footprint.GovernedBytes(), 10)))
+		telemetry.Set(ctx, "doctor.footprint_ceiling", footprintFieldValue(report.Footprint, strconv.FormatInt(report.Footprint.Ceiling, 10)))
+		telemetry.Set(ctx, "doctor.over_ceiling", footprintFieldValue(report.Footprint, overCeilingPart(report.Footprint)))
 		// [LAW:effects-at-boundaries] Freshness resolution shells out to git and
 		// reads the store, so it runs here, at the boundary, before the pure text
 		// rendering below.

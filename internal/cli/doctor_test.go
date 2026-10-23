@@ -445,7 +445,10 @@ func TestPrintFootprintAndOverCeilingPart(t *testing.T) {
 	if want := "footprint: not measured\n"; out.String() != want {
 		t.Errorf("printFootprint(unmeasured) = %q, want %q", out.String(), want)
 	}
-	if got := overCeilingPart(storage.Footprint{}); got != "unmeasured" {
-		t.Errorf("overCeilingPart(unmeasured) = %q, want \"unmeasured\", not a clean check", got)
+	if got := footprintFieldValue(storage.Footprint{}, "0"); got != "unmeasured" {
+		t.Errorf("footprintFieldValue(unmeasured) = %q, want \"unmeasured\", not a reading of zero", got)
+	}
+	if got := footprintFieldValue(fp, "3072"); got != "3072" {
+		t.Errorf("footprintFieldValue(measured) = %q, want the value", got)
 	}
 }

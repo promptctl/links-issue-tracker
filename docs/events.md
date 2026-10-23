@@ -468,8 +468,8 @@ exception is `doctor.reranked`, which the repair sets as it runs.
 | `doctor.rank_inversions` | The blocked-by edges between live issues whose dependency tree order lists after its dependent, as the status line prints it: a count, or `"unchecked"`. Edges inside a group of frame-mates whose lifted edges loop are not counted. |
 | `doctor.dependency_cycle` | A loop of blocked-by edges between live issues, its members joined by `->` with the first repeated last, `"none"` when there is no loop, or `"unchecked"`. `--fix=rank` refuses while one stands. |
 | `doctor.interleaved` | How many interleaved groups the report names, or `"unchecked"`: frame-mates whose issues wait on one another both ways through no loop of their own edges. |
-| `doctor.footprint_bytes` | The store's size on disk that its size ceiling counts, in bytes: every part but the remote cache. |
-| `doctor.footprint_ceiling` | The store's size ceiling, in bytes. |
+| `doctor.footprint_bytes` | The store's size on disk that its size ceiling counts, in bytes: every part but the remote cache; `"unmeasured"` when its size could not be read. |
+| `doctor.footprint_ceiling` | The store's size ceiling, in bytes; `"unmeasured"` when its size could not be read. |
 | `doctor.over_ceiling` | The part holding the most bytes when the store is over its ceiling, such as `chunk store` or `automatic snapshots`, `"none"` when it is within it, or `"unmeasured"` when its size could not be read. |
 | `doctor.reranked` | The issues `--fix=rank` gave a new rank key, as an integer. Present only when that repair runs. |
 
