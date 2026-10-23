@@ -218,7 +218,7 @@ func parseSizes(raw string) ([]size, error) {
 		// directory error three steps later.
 		for _, seen := range sizes {
 			if seen.rows == sz.rows {
-				return nil, fmt.Errorf("--sizes: %d rows appears more than once", sz.rows)
+				return nil, fmt.Errorf("--sizes: %s and %s are both %d rows", seen.name, sz.name, sz.rows)
 			}
 		}
 		sizes = append(sizes, sz)

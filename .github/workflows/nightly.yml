@@ -74,7 +74,7 @@ jobs:
       # run judges every command's latency and a 100-writer storm at that size.
       # About 4 minutes on this runner. Built, then run, as ci.yml's
       # perf-budget is, so exit 2 survives. [LAW:one-source-of-truth]
-      - name: The design-size store fits the size ceiling's allowances
+      - name: At the design size, the ceiling's allowances, the latency budget and the writer storm hold
         if: ${{ !cancelled() }}
         run: |
           go build -o "$RUNNER_TEMP/perfbench" ./tools/perfbench

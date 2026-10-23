@@ -64,6 +64,7 @@ func TestAStoresFailedWritersAreLoggedAndReturned(t *testing.T) {
 case "$1" in
   init) mkdir -p .git/links/dolt ;;
   import) printf 'imported 1 issues\n  r0 -> bench-x\n' ;;
+  sync) truncate -s +1000 .git/links/dolt/store ;;
   new) [ "$3" = "perfbench storm writer 7" ] && { echo "workspace busy" >&2; exit 1; } ;;
 esac
 exit 0

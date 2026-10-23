@@ -30,9 +30,11 @@ const (
 // (28.73-29.85 KB), and the figures above sit 1.2% and 11.3% over the
 // 2026-10-21 ones (184.61 MB, 26.82 KB). 25% clears that noise several times
 // over and that drift twice, and a store a quarter heavier per row or per
-// commit is a regression worth a ticket. A figure past its allowance is answered by that
-// ticket, never by raising this: an allowance raised to turn the nightly lane
-// green is the alarm disconnected.
+// commit is a regression worth a ticket. A figure past its allowance is
+// answered by that ticket, never by raising the allowance, and re-measuring
+// into the figures above raises it as surely as raising this does: either
+// turns the nightly lane green with the alarm disconnected. The figures move
+// only with the ticket that found why a design-size store's cost moved.
 const HeadroomPercent = 25
 
 // The allowances are the figures the ceiling is derived from, and the most a

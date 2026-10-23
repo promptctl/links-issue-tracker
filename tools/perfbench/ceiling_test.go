@@ -23,8 +23,9 @@ func TestDesignSizeIsTheCeilingsRowCount(t *testing.T) {
 	if len(got) != 2 || got[1].rows != designstore.Rows || got[1].name != "design" {
 		t.Fatalf("parseSizes(118,design) = %v, want 118 and design at %d rows", got, designstore.Rows)
 	}
-	if _, err := parseSizes("design," + strconv.Itoa(designstore.Rows)); err == nil {
-		t.Error("parseSizes accepted the design size twice, once by name and once by count")
+	want := "--sizes: design and n=" + strconv.Itoa(designstore.Rows) + " are both " + strconv.Itoa(designstore.Rows) + " rows"
+	if _, err := parseSizes("design," + strconv.Itoa(designstore.Rows)); err == nil || err.Error() != want {
+		t.Errorf("parseSizes(design,%d) error = %v, want %q", designstore.Rows, err, want)
 	}
 }
 
@@ -107,9 +108,10 @@ func TestAnInputOverItsAllowanceFailsTheGate(t *testing.T) {
 
 // End to end through measureSize: a design-size store whose compacted bytes
 // are past the allowance is logged as it is judged, before the storm runs,
-// and comes back as the store's verdict. The fake lit mints an id per row and
-// leaves a store file of the given apparent size; the file is sparse, so the
-// test writes no real bytes.
+// and comes back as the store's verdict. The fake lit mints an id per row,
+// and its first compaction leaves a store file of the given apparent size,
+// which each later one grows; the file is sparse, so the test writes no real
+// bytes.
 func TestADesignStoreOverItsAllowanceIsLoggedAndReturned(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the fake binary is a shell script")
@@ -121,7 +123,7 @@ func TestADesignStoreOverItsAllowanceIsLoggedAndReturned(t *testing.T) {
 case "$1" in
   init) mkdir -p .git/links/dolt ;;
   import) i=0; while [ $i -lt ` + strconv.Itoa(designstore.Rows) + ` ]; do echo "  r$i -> bench-$i"; i=$((i+1)); done ;;
-  sync) truncate -s ` + strconv.FormatInt(heavy, 10) + ` .git/links/dolt/store ;;
+  sync) [ -f .git/links/dolt/store ] && truncate -s +1000 .git/links/dolt/store || truncate -s ` + strconv.FormatInt(heavy, 10) + ` .git/links/dolt/store ;;
 esac
 exit 0
 `

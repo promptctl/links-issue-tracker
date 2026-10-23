@@ -388,6 +388,35 @@ exit 0
 	}
 }
 
+// History the edits did not grow is a broken measurement, and the run fails
+// on it: a zero bytes/commit would otherwise print as a figure and pass the
+// ceiling's allowance. The fake lit's compaction leaves the store one fixed
+// size however many commits it holds.
+func TestAHistoryTheEditsDidNotGrowFailsTheRun(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake binary is a shell script")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "lit")
+	script := `#!/bin/sh
+case "$1" in
+  init) mkdir -p .git/links/dolt ;;
+  import) printf 'imported 1 issues\n  r0 -> bench-x\n' ;;
+  sync) truncate -s 1000000 .git/links/dolt/store ;;
+esac
+exit 0
+`
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var progress strings.Builder
+	env := hermeticEnv(os.Environ(), filepath.Join(dir, "config"), filepath.Join(dir, "state"))
+	_, _, err := measureSize(litBinary{path: path}, dir, size{name: "one", rows: 1}, env, limits{budget: time.Minute}, runQuiet, &progress)
+	if err == nil || !strings.Contains(err.Error(), "grew the compacted store by 0 bytes") {
+		t.Fatalf("measureSize error = %v, want the history that did not grow", err)
+	}
+}
+
 func TestExitCodeSeparatesChildStatusFromHarnessFailure(t *testing.T) {
 	if code, err := exitCode(nil); code != 0 || err != nil {
 		t.Errorf("exitCode(nil) = (%d, %v), want (0, nil)", code, err)
