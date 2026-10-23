@@ -20,11 +20,12 @@ import (
 // [LAW:behavior-not-structure] the contract under test is the command's output
 // and errors; which phase declares its flags is the implementation's business.
 //
-// Every adapter routes through runLeaf, which drives the two phases in exactly
-// the order the production pipelines do — declare, parse, then work. That is
-// what keeps these from becoming a second dispatch path: no test can reach a
-// work phase through an ordering appCmdPipeline/wsCmdPipeline would not
-// produce. [LAW:single-enforcer]
+// Every adapter routes through recordLeaf (runLeaf is recordLeaf with the
+// event dropped), which drives the two phases in exactly the order the
+// production pipelines do — declare, parse, then work. That is what keeps
+// these from becoming a second dispatch path: no test can reach a work phase
+// through an ordering appCmdPipeline/wsCmdPipeline would not produce.
+// [LAW:single-enforcer]
 
 // underInvocation is ctx carrying an open invocation event, as Run hands one
 // to everything an invocation runs.
