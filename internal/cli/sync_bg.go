@@ -151,9 +151,9 @@ func detachedWorkerLeaf(subcommand, parentPIDUsage string, work func(ctx context
 	return wsLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, inv Invocation, ws workspace.Info, _ []string) error {
 		keepWorkerHoldFromChildren()
 		err := work(ctx, inv, ws, *parentPID)
-		// The workspace's store, once, as runWithApp reads it: the clones a
-		// worker pushes and fetches through are its means, not the store it ran
-		// against, and one fact read at each of their closes would keep only
+		// The workspace's store, once, after the worker's own closes: the clones
+		// a worker pushes and fetches through are its means, not the store it
+		// ran against, and one fact read at each of their closes would keep only
 		// whichever closed last.
 		recordStoreBytes(ctx, ws.DatabasePath)
 		return err

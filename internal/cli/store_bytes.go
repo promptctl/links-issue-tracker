@@ -18,6 +18,20 @@ func recordStoreBytes(ctx context.Context, databasePath string) {
 	telemetry.Record(ctx, storeBytesFacts(engine.ChunkStoreBytes(databasePath)), nil)
 }
 
+// runThenMeasure runs a command's work over the store closeStore releases,
+// then records that store's size: after the close, so the reading is outside
+// the store's lock, and before work's error is returned, because a fact
+// recorded before a failure is still true. The one owner of that order for
+// every seam that opens the store a command runs against. [LAW:single-enforcer]
+func runThenMeasure(ctx context.Context, databasePath string, closeStore func() error, work func() error) error {
+	err := func() error {
+		defer func() { _ = closeStore() }()
+		return work()
+	}()
+	recordStoreBytes(ctx, databasePath)
+	return err
+}
+
 // storeBytesFacts is one chunk-store reading as event facts.
 func storeBytesFacts(bytes int64, err error) map[string]any {
 	var measured *int64

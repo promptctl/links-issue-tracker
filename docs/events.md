@@ -228,8 +228,9 @@ instead.
 
 ## What the store a command ran against records
 
-A command that opens a store to read or change its tickets, and every `lit
-sync` command, records the store's size on disk once it has closed it, so a
+A ticket command (`lit ls`, `lit backlog`, `lit new` and the rest that open
+the workspace's store for its tickets) and every `lit sync` command record the
+store's size on disk once they have closed it, so a
 `duration_ms` read back later says what it was spent over. The reading is the
 chunk store, the part `lit doctor` lists as `chunk store`: what every read of
 the store runs against, without the recovery snapshots and caches beside it.
