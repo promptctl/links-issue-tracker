@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -39,7 +40,17 @@ type conditions struct {
 // is how a command's cost moves with the store: reading across one row answers
 // it directly, and a per-size block layout would make the reader hold three
 // numbers in their head to see it.
-func renderReport(results []result, cond conditions) string {
+//
+// The rows are the probes, in the order they run, and each cell is looked up
+// by probe name: a store can lack a probe (the empty control has no row for
+// `show` to name), and reading cells by position would shift every later
+// figure under the wrong command's name with nothing to say so.
+// [LAW:types-are-the-program]
+//
+// found is the verdict run exits on, passed in rather than judged again here,
+// so the BUDGET section is the list that set the exit status.
+// [LAW:one-source-of-truth]
+func renderReport(ps []probe, results []result, budget time.Duration, found []breach, cond conditions) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "lit perfbench — %s/%s, %d CPUs\n", cond.goos, cond.goarch, cond.cpus)
 	fmt.Fprintf(&b, "%d repeats per probe, round-robin after one unrecorded warm-up; the figure is the MIN, the max is in parentheses.\n", repeats)
@@ -55,20 +66,10 @@ func renderReport(results []result, cond conditions) string {
 	}
 	fmt.Fprintln(w)
 
-	// Probe order is taken from the first result rather than from the package
-	// list so the rows print in the order they were measured — reads first,
-	// then the write — which is the order the timings are only valid in.
-	//
-	// Indexing every result by that one order is sound because every result's
-	// samples come from measure() over the same package-level probes, so the
-	// slices are the same length in the same order by construction. It is an
-	// invariant of how results are produced rather than one this function can
-	// restate; a length check here would be guarding a state nothing can build.
-	for i, name := range probeNames(results) {
-		fmt.Fprint(w, name)
+	for _, p := range measuredRows(ps, results) {
+		fmt.Fprint(w, p.name)
 		for _, r := range results {
-			s := r.samples[i]
-			fmt.Fprintf(w, "\t%s (%s)", formatDuration(s.min), formatDuration(s.max))
+			fmt.Fprintf(w, "\t%s", formatCell(r, p.name))
 		}
 		fmt.Fprintln(w)
 	}
@@ -92,7 +93,60 @@ func renderReport(results []result, cond conditions) string {
 	b.WriteString("probes and a full compaction, which collects the import's garbage. bytes/commit is\n")
 	fmt.Fprintf(&b, "the store's growth across %d single-row edits, one commit each, measured after a\n", historyEdits)
 	b.WriteString("full compaction on both sides, so it is history the store keeps.\n")
+
+	fmt.Fprintf(&b, "\nBUDGET: every probe under %s, judged on its min.\n", budget)
+	for _, br := range found {
+		fmt.Fprintf(&b, "  OVER  %s\n", br)
+	}
+	if len(found) == 0 {
+		b.WriteString("  none over budget\n")
+	}
 	return b.String()
+}
+
+// measuredRows is the probes to print a row for, in the order they ran (reads,
+// then writes) and only those some store measured, so a report over nothing
+// names no probe: a header of names no column was measured for is a report
+// that looks like a result.
+func measuredRows(ps []probe, results []result) []probe {
+	var rows []probe
+	for _, p := range slices.Concat(phasesOf(ps, func(p probe) probe { return p })...) {
+		for _, r := range results {
+			if _, ok := r.sample(p.name); ok {
+				rows = append(rows, p)
+				break
+			}
+		}
+	}
+	return rows
+}
+
+// sample is r's sample of the named probe, or false when r has none.
+func (r result) sample(name string) (sample, bool) {
+	for _, s := range r.samples {
+		if s.probe.name == name {
+			return s, true
+		}
+	}
+	return sample{}, false
+}
+
+// formatCell prints one probe's figure against one store: its min and, in
+// parentheses, its max; the run it was killed in; or a dash where the store
+// admitted no invocation of it.
+func formatCell(r result, name string) string {
+	s, ok := r.sample(name)
+	if !ok {
+		return "—"
+	}
+	switch o := s.outcome.(type) {
+	case completed:
+		return fmt.Sprintf("%s (%s)", formatDuration(o.min), formatDuration(o.max))
+	case killed:
+		return fmt.Sprintf("killed (%s, >%s)", roundName(o.round), formatDuration(o.after))
+	default:
+		panic(fmt.Sprintf("formatCell: unknown outcome %T", s.outcome))
+	}
 }
 
 // formatHistory prints one commit's cost, or a dash for a store that had no
@@ -102,21 +156,6 @@ func formatHistory(h historyCost) string {
 		return "—"
 	}
 	return formatBytes(h.perCommit())
-}
-
-// probeNames reads the measured probe order off the results. An empty results
-// list has no order to read, which is why it yields none rather than falling
-// back to the package-level probes list: a report over nothing must print
-// nothing, not a header row of names no column was measured for.
-func probeNames(results []result) []string {
-	if len(results) == 0 {
-		return nil
-	}
-	names := make([]string, 0, len(results[0].samples))
-	for _, s := range results[0].samples {
-		names = append(names, s.probe.name)
-	}
-	return names
 }
 
 // formatDuration prints seconds to two decimals, matching the units the scale

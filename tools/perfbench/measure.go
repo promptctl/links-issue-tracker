@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"slices"
@@ -12,16 +13,39 @@ import (
 	"time"
 )
 
-// sample is the stamped fact that one probe ran to completion the declared
-// number of times against one store: nothing constructs a sample from an
-// invocation whose exit code failed to prove the command did its job, so no
-// consumer downstream has to ask whether a fast number is a real one.
-// [LAW:parse-dont-validate]
+// sample is the stamped fact that one probe ran against one store, and what
+// came of it. Nothing constructs a sample from an invocation whose exit code
+// failed to prove the command did its job, so no consumer downstream has to ask
+// whether a fast number is a real one. [LAW:parse-dont-validate]
 type sample struct {
-	probe probe
-	min   time.Duration
-	max   time.Duration
+	probe   probe
+	outcome outcome
 }
+
+// outcome is how a probe's runs against one store ended: every one finished
+// (completed), or one ran past the kill limit (killed). Two cases, so no field
+// means one thing when a flag is set and another when it is not.
+// [LAW:types-are-the-program]
+type outcome interface{ isOutcome() }
+
+// completed is a probe whose every run finished with a proving exit code.
+type completed struct {
+	min time.Duration
+	max time.Duration
+}
+
+// killed is a probe one of whose runs was still going at the kill limit. round
+// is the first such run: 0 is the warm-up, 1..repeats the recorded rounds. A
+// kill is final for the probe, whatever its other rounds did, because a
+// command that stalls one run in six past thirty times its budget is the
+// lock-wait this epic exists to find, not noise to take the min over.
+type killed struct {
+	round int
+	after time.Duration
+}
+
+func (completed) isOutcome() {}
+func (killed) isOutcome()    {}
 
 // measure times every probe against one store and returns one sample per probe.
 //
@@ -63,7 +87,11 @@ type sample struct {
 // it: each of its repeats adds a row, so `new` is timed against N, N+1, ...
 // N+4 rows. That is inherent to timing a write more than once, and it is the
 // reason writes go last rather than first.
-func measure(bin litBinary, store generatedStore) ([]sample, error) {
+//
+// A kill is written to progress the moment it happens, because whatever stops
+// the run later, a hung compaction or a CI job timeout, must not take a
+// verdict already reached down with it.
+func measure(bin litBinary, store generatedStore, lim limits, progress io.Writer) ([]sample, error) {
 	// Opened once for every invocation: handed an *os.File, exec passes the
 	// descriptor straight to the child, so a chatty command's stdout costs the
 	// child one write to the null device. An io.Discard writer instead would
@@ -76,8 +104,8 @@ func measure(bin litBinary, store generatedStore) ([]sample, error) {
 	defer devnull.Close()
 
 	var samples []sample
-	for _, phase := range phasesOf(probes) {
-		measured, err := measurePhase(bin, store, phase, devnull)
+	for _, phase := range phasesOf(invocationsFor(probes, store), invocation.probeOf) {
+		measured, err := measurePhase(bin, store, phase, devnull, lim, progress)
 		if err != nil {
 			return nil, err
 		}
@@ -96,17 +124,21 @@ func measure(bin litBinary, store generatedStore) ([]sample, error) {
 // omitted, so a probe set with no writes produces one phase rather than a
 // second, empty pass.
 // [LAW:dataflow-not-control-flow]
-func phasesOf(ps []probe) [][]probe {
-	var reads, writes []probe
-	for _, p := range ps {
-		if p.mutates {
-			writes = append(writes, p)
+//
+// It takes anything that carries a probe because the report orders its rows by
+// the same rule the runner orders its runs by, and the rule is stated once.
+// [LAW:one-source-of-truth]
+func phasesOf[T any](xs []T, probeOf func(T) probe) [][]T {
+	var reads, writes []T
+	for _, x := range xs {
+		if probeOf(x).mutates {
+			writes = append(writes, x)
 			continue
 		}
-		reads = append(reads, p)
+		reads = append(reads, x)
 	}
-	phases := make([][]probe, 0, 2)
-	for _, group := range [][]probe{reads, writes} {
+	phases := make([][]T, 0, 2)
+	for _, group := range [][]T{reads, writes} {
 		if len(group) == 0 {
 			continue
 		}
@@ -115,38 +147,71 @@ func phasesOf(ps []probe) [][]probe {
 	return phases
 }
 
-// measurePhase runs one phase to completion: every probe in it once unrecorded,
-// then repeats times round-robin, reporting the min and max of each.
-func measurePhase(bin litBinary, store generatedStore, phase []probe, devnull *os.File) ([]sample, error) {
-	for _, p := range phase {
-		if _, err := runProbe(bin, store, p, devnull); err != nil {
-			return nil, fmt.Errorf("store %s (%d rows), probe %q, warm-up: %w",
-				store.size.name, store.size.rows, p.name, err)
-		}
-	}
+func (inv invocation) probeOf() probe { return inv.probe }
+
+// measurePhase runs one phase to completion: every invocation in it once
+// unrecorded, then repeats times round-robin, reporting each one's outcome.
+//
+// A killed run does not stop the phase. Every invocation runs its warm-up and
+// every round whatever happened before, so the set of runs is the same for
+// every probe and the first kill is simply what the outcome records; a probe
+// killed in its warm-up costs its repeats at the kill limit, which is what
+// keeps that limit a fraction of a CI job. [LAW:dataflow-not-control-flow]
+func measurePhase(bin litBinary, store generatedStore, phase []invocation, devnull *os.File, lim limits, progress io.Writer) ([]sample, error) {
 	mins := make([]time.Duration, len(phase))
 	maxs := make([]time.Duration, len(phase))
-	for round := range repeats {
-		for i, p := range phase {
-			elapsed, err := runProbe(bin, store, p, devnull)
-			if err != nil {
-				return nil, fmt.Errorf("store %s (%d rows), probe %q, round %d: %w",
-					store.size.name, store.size.rows, p.name, round+1, err)
+	kills := make([]*killed, len(phase))
+	for round := range repeats + 1 {
+		for i, inv := range phase {
+			elapsed, err := runProbe(bin, store, inv, devnull, lim.kill())
+			if errors.Is(err, errKilled) {
+				if kills[i] == nil {
+					kills[i] = &killed{round: round, after: lim.kill()}
+					// err carries what the command wrote before the kill, the
+					// one clue to why it hung.
+					fmt.Fprintf(progress, "killed: store %s (%d rows), probe %q, %s: %v; measuring on\n",
+						store.size.name, store.size.rows, inv.probe.name, roundName(round), err)
+				}
+				continue
 			}
-			if round == 0 || elapsed < mins[i] {
+			if err != nil {
+				return nil, fmt.Errorf("store %s (%d rows), probe %q, %s: %w",
+					store.size.name, store.size.rows, inv.probe.name, roundName(round), err)
+			}
+			// Round 0 is the warm-up and is never recorded: its cold cost
+			// (page cache, dynamic linking, a never-written store's first
+			// write) would land on the max the report reads as contention.
+			if round == 0 {
+				continue
+			}
+			if round == 1 || elapsed < mins[i] {
 				mins[i] = elapsed
 			}
-			if elapsed > maxs[i] {
-				maxs[i] = elapsed
-			}
+			maxs[i] = max(maxs[i], elapsed)
 		}
 	}
 	samples := make([]sample, len(phase))
-	for i, p := range phase {
-		samples[i] = sample{probe: p, min: mins[i], max: maxs[i]}
+	for i, inv := range phase {
+		samples[i] = sample{probe: inv.probe, outcome: completed{min: mins[i], max: maxs[i]}}
+		if kills[i] != nil {
+			samples[i].outcome = *kills[i]
+		}
 	}
 	return samples, nil
 }
+
+// roundName is how an error names the run it came from.
+func roundName(round int) string {
+	if round == 0 {
+		return "warm-up"
+	}
+	return fmt.Sprintf("round %d", round)
+}
+
+// errKilled is the one way a probe run ends without a measurement and without
+// failing the run: it was still going at the kill limit. Every other error
+// from runProbe means the run cannot be trusted at all.
+var errKilled = errors.New("still running at the kill limit")
 
 // runProbe times one invocation and returns its wall clock, or an error naming
 // what the command did instead of its job.
@@ -158,31 +223,33 @@ func measurePhase(bin litBinary, store generatedStore, phase []probe, devnull *o
 // the empty control unmeasurable — while treating any exit as success would let
 // a refused invocation, which returns an order of magnitude faster than a real
 // answer, set the minimum this tool reports. [LAW:no-silent-failure]
-func runProbe(bin litBinary, store generatedStore, p probe, devnull *os.File) (time.Duration, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), runBudget)
+func runProbe(bin litBinary, store generatedStore, inv invocation, devnull *os.File, kill time.Duration) (time.Duration, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), kill)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, bin.path, p.args...)
+	cmd := exec.CommandContext(ctx, bin.path, inv.args...)
 	cmd.Dir = store.root
 	cmd.Env = store.env
 	cmd.Stdout = devnull
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
+	cmd.WaitDelay = killGrace
 	start := time.Now()
 	err := cmd.Run()
 	elapsed := time.Since(start)
 
-	if ctx.Err() != nil {
-		return 0, fmt.Errorf("exceeded the %s run budget (still running when it was killed): %s",
-			runBudget, strings.TrimSpace(stderr.String()))
+	// Killed means the process ended on the kill's signal, not that the
+	// deadline has passed by now: a run that exits at 29.99s is a measurement.
+	if ctx.Err() != nil && !cmd.ProcessState.Exited() {
+		return 0, fmt.Errorf("%w (%s): %s", errKilled, kill, strings.TrimSpace(stderr.String()))
 	}
 	code, err := exitCode(err)
 	if err != nil {
 		return 0, err
 	}
-	if okCodes := p.okCodes(store.size.rows); !slices.Contains(okCodes, code) {
+	if !slices.Contains(inv.okCodes, code) {
 		return 0, fmt.Errorf("`lit %s` exited %d, which is not among its expected codes %v at %d rows — "+
 			"the command did not do its work, so its %s is not a measurement of it:\n%s",
-			strings.Join(p.args, " "), code, okCodes, store.size.rows, elapsed.Round(time.Millisecond),
+			strings.Join(inv.args, " "), code, inv.okCodes, store.size.rows, elapsed.Round(time.Millisecond),
 			strings.TrimSpace(stderr.String()))
 	}
 	return elapsed, nil

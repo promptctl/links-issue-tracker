@@ -228,7 +228,7 @@ func TestImportBudgetGrowsWithRowsFromTheProbeBudget(t *testing.T) {
 // by outliving it.
 func TestGenerationStepsGiveTheImportTheRowScaledBudget(t *testing.T) {
 	bin := litBinary{path: "/bench/lit"}
-	steps := generationSteps(bin, size{name: "5x-target", rows: 590}, []string{"/bench/5x-target-spec-0.json"})
+	steps := generationSteps(bin, size{name: "5x-target", rows: 590}, []importSpec{{path: "/bench/5x-target-spec-0.json", records: importBatches(590)[0]}})
 	imports := 0
 	for _, st := range steps {
 		isImport := st.argv[0] == bin.path && st.argv[1] == "import"
@@ -262,11 +262,11 @@ func TestRunQuietRunsTheCommandUnderTheGivenEnvironment(t *testing.T) {
 	// so the control cannot be broken by a shell that happens to export the
 	// marker.
 	base := []string{"PATH=" + os.Getenv("PATH")}
-	check := step{30 * time.Second, []string{"sh", "-c", `[ "$PERFBENCH_MARK" = yes ]`}}
-	if err := runQuiet(t.TempDir(), append(base, "PERFBENCH_MARK=yes"), check); err != nil {
+	check := step{budget: 30 * time.Second, argv: []string{"sh", "-c", `[ "$PERFBENCH_MARK" = yes ]`}}
+	if _, err := runQuiet(t.TempDir(), append(base, "PERFBENCH_MARK=yes"), check); err != nil {
 		t.Errorf("the command did not see the environment it was given: %v", err)
 	}
-	if err := runQuiet(t.TempDir(), base, check); err == nil {
+	if _, err := runQuiet(t.TempDir(), base, check); err == nil {
 		t.Error("the command saw PERFBENCH_MARK from an environment that does not carry it")
 	}
 }
@@ -276,7 +276,7 @@ func TestRunQuietRunsTheCommandUnderTheGivenEnvironment(t *testing.T) {
 // path, which is where this epic's subject — a lock a writer can wait fifteen
 // minutes on — actually bites.
 func TestRunQuietKillsACommandOverBudget(t *testing.T) {
-	err := runQuiet(t.TempDir(), os.Environ(), step{50 * time.Millisecond, []string{"sleep", "30"}})
+	_, err := runQuiet(t.TempDir(), os.Environ(), step{budget: 50 * time.Millisecond, argv: []string{"sleep", "30"}})
 	if err == nil {
 		t.Fatal("runQuiet returned no error for a command that outlived its budget")
 	}
@@ -289,8 +289,72 @@ func TestRunQuietKillsACommandOverBudget(t *testing.T) {
 
 // And a command that finishes inside its budget is not reported as a hang.
 func TestRunQuietAcceptsACommandInsideItsBudget(t *testing.T) {
-	if err := runQuiet(t.TempDir(), os.Environ(), step{30 * time.Second, []string{"true"}}); err != nil {
+	if _, err := runQuiet(t.TempDir(), os.Environ(), step{budget: 30 * time.Second, argv: []string{"true"}}); err != nil {
 		t.Errorf("runQuiet(true) error = %v, want nil", err)
+	}
+}
+
+// runQuiet answers a step's stdout and nothing else: the import's id mapping
+// is read from it, so stderr mixed in would put lines in front of the parser
+// that are not lit's answer.
+func TestRunQuietAnswersStdoutAlone(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the check is a shell command")
+	}
+	out, err := runQuiet(t.TempDir(), os.Environ(), step{budget: 30 * time.Second, argv: []string{"sh", "-c", "echo answer; echo noise >&2"}})
+	if err != nil {
+		t.Fatalf("runQuiet error = %v", err)
+	}
+	if string(out) != "answer\n" {
+		t.Errorf("runQuiet stdout = %q, want %q", out, "answer\n")
+	}
+}
+
+// Ids come back in the spec's order whatever order lit printed them in, since
+// lit creates in dependency order; a record the output does not map, and a
+// local id mapped twice, are both failures rather than a shorter id list.
+func TestIdsLoadedReadsTheImportMappingInSpecOrder(t *testing.T) {
+	loads := []storage.ImportTreeSpec{{LocalID: "r0"}, {LocalID: "r1"}, {LocalID: "r2"}}
+	out := []byte("imported 3 issues\n  r1 -> bench-b\n  r0 -> bench-a\n  r2 -> bench-c\n")
+	ids, err := idsLoaded(out, loads)
+	if err != nil {
+		t.Fatalf("idsLoaded error = %v", err)
+	}
+	if got := strings.Join(ids, ","); got != "bench-a,bench-b,bench-c" {
+		t.Errorf("ids = %s, want bench-a,bench-b,bench-c (spec order)", got)
+	}
+	if _, err := idsLoaded([]byte("imported 2 issues\n  r0 -> bench-a\n  r2 -> bench-c\n"), loads); err == nil || !strings.Contains(err.Error(), `"r1"`) {
+		t.Errorf("idsLoaded with r1 unmapped: error = %v, want one naming r1", err)
+	}
+	if _, err := idsLoaded([]byte("  r0 -> bench-a\n  r0 -> bench-z\n  r1 -> b\n  r2 -> c\n"), loads); err == nil || !strings.Contains(err.Error(), "more than once") {
+		t.Errorf("idsLoaded with r0 mapped twice: error = %v, want a duplicate refusal", err)
+	}
+	if ids, err := idsLoaded([]byte("Initialized empty Git repository\n  hooks: x -> y\n  hooks: x -> z\n"), nil); err != nil || len(ids) != 0 {
+		t.Errorf("idsLoaded over a step that loads nothing = (%v, %v), want no ids and no error", ids, err)
+	}
+}
+
+// show is the one probe that names a row, so it has an invocation against
+// every store with a row and none against the empty control, where timing it
+// would time the refusal path instead of the command.
+func TestShowIsInvokedOnlyAgainstAStoreWithARow(t *testing.T) {
+	names := func(invs []invocation) map[string][]string {
+		out := map[string][]string{}
+		for _, inv := range invs {
+			out[inv.probe.name] = inv.args
+		}
+		return out
+	}
+	populated := names(invocationsFor(probes, generatedStore{size: size{rows: 2}, ids: []string{"bench-a", "bench-b"}}))
+	if got := strings.Join(populated["show"], " "); got != "show bench-a" {
+		t.Errorf("show against a populated store runs %q, want %q", got, "show bench-a")
+	}
+	empty := names(invocationsFor(probes, generatedStore{size: size{rows: 0}}))
+	if args, ok := empty["show"]; ok {
+		t.Errorf("show has an invocation against the empty store: %v", args)
+	}
+	if len(empty) != len(probes)-1 {
+		t.Errorf("the empty store has %d invocations, want every probe but show (%d)", len(empty), len(probes)-1)
 	}
 }
 

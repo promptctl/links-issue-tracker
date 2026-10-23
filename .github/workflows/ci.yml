@@ -114,6 +114,42 @@ jobs:
       - name: Test with race detector
         run: go test -short -race -timeout 30m ./cmd/... ./internal/...
 
+  # The latency budget: every command an agent runs in a loop answers in under
+  # a second (tools/perfbench/plan.go latencyBudget, the scale epic's
+  # destination), against a generated store, as a fresh process. It is its own
+  # job because it is its own question — not "do the tests pass" but "did a
+  # command get slower" — and it caught nothing until it was one: `lit backlog`
+  # reached 11.3s on 2026-08-25 with every test green.
+  #
+  # The store is smaller than this repository's real one on purpose. It must
+  # run in parallel and finish inside the race job, and leave the slowest probe
+  # near half the budget on this runner, so a ~2x regression trips it and
+  # runner noise does not. Store size is the lever when it does not fit; the
+  # budget never moves (links-scale-dy46.zi4 raises the size once the commands
+  # are fast at real size). Measured 2026-10-23 (run 39945620783): 3m08s, 2m14s
+  # of it the cgo build; backlog and next 0.48s at 500 rows. A breach exits 2
+  # and names the command, its min and the ratio; the verdict is logged as soon
+  # as each store's probes finish, so timeout-minutes, which only stops a hung
+  # lit holding a runner for six hours, cannot cut it. The stores have no git
+  # remote, so a slowdown confined to the receive path is outside what this
+  # measures.
+  perf-budget:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # Built, then run, rather than `go run`, which reports any child failure as
+      # its own exit 1 and would erase perfbench's 2-for-a-breach contract.
+      - name: Commands stay under their latency budget
+        run: |
+          go build -o "$RUNNER_TEMP/perfbench" ./tools/perfbench
+          "$RUNNER_TEMP/perfbench" --sizes 500
+
   # Repo/release hygiene gates — fast, platform-independent, ubuntu-only. These
   # check correctness properties of the repo, not the build, so they live apart
   # from build-and-test ([LAW:decomposition]) and run in parallel with it.

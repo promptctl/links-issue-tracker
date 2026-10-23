@@ -203,6 +203,22 @@ full runs minutes apart reproduced 24 of 27 latency cells to within 0.01s,
 worst case 18%. Store bytes come from a single generated store and vary about
 2–3% run to run, so a couple of percent is not a regression.
 
+The table ends with a verdict. Every probe is held to one budget, a second, at
+every size: the scale epic's destination, judged on the min. A run with any
+probe over it prints the table, a `BUDGET` section naming each command, its min
+and the ratio, and exits 2. A broken run (a build that fails, a command that
+exits with a code that proves it did not do its job) exits 1. A probe still
+running at 30s is killed and recorded as killed, and the run keeps measuring:
+the killed probe still runs its remaining rounds, each bounded by the same 30s,
+and every other probe is measured as usual, so a regression that slows several
+commands names all of them.
+
+CI's `perf-budget` job runs this on every PR against a 500-row store. Because
+the budget is the destination and not a CI setting, `just perf` fails the same
+way on your machine. That includes the large sizes a scale question needs,
+where the verdict reports a real distance from the destination, not noise, up
+to the 30s kill: past it a command reads as killed, a lower bound only.
+
 The measured `lit` runs under a scrubbed environment — your global lit config,
 ejected templates, `LIT_*` variables and `CLAUDE_CODE_SESSION_ID` are all out
 of scope — so two machines time the same code path and a difference in the

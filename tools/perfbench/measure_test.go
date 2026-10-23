@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -42,9 +43,23 @@ func invocations(t *testing.T, log string) []string {
 	return strings.Split(strings.TrimSpace(string(blob)), "\n")
 }
 
+// fakeStore is a store of seven rows that exist only as ids, so every probe,
+// `show` included, has an invocation against it.
 func fakeStore(t *testing.T) generatedStore {
 	t.Helper()
-	return generatedStore{size: size{name: "fake", rows: 7}, root: t.TempDir()}
+	return generatedStore{size: size{name: "fake", rows: 7}, root: t.TempDir(),
+		ids: []string{"bench-a", "bench-b", "bench-c", "bench-d", "bench-e", "bench-f", "bench-g"}}
+}
+
+// resolve is p's one invocation against store, failing the test if the store
+// admits none.
+func resolve(t *testing.T, p probe, store generatedStore) invocation {
+	t.Helper()
+	invs := invocationsFor([]probe{p}, store)
+	if len(invs) != 1 {
+		t.Fatalf("probe %q has %d invocations against store %s, want 1", p.name, len(invs), store.size.name)
+	}
+	return invs[0]
 }
 
 func devNull(t *testing.T) *os.File {
@@ -66,8 +81,9 @@ func devNull(t *testing.T) *os.File {
 // test cannot agree with a wrong okCodes value by construction.
 func TestRunProbeRefusesAnUndeclaredExitCode(t *testing.T) {
 	bin, _ := fakeLit(t, 6)
-	probeUnderTest := probe{name: "next", args: []string{"next"}, okCodes: exits(0)}
-	elapsed, err := runProbe(bin, fakeStore(t), probeUnderTest, devNull(t))
+	store := fakeStore(t)
+	probeUnderTest := resolve(t, probe{name: "next", argv: fixed("next"), okCodes: exits(0)}, store)
+	elapsed, err := runProbe(bin, store, probeUnderTest, devNull(t), gateLimits.kill())
 	if err == nil {
 		t.Fatalf("runProbe accepted exit 6 for a probe declaring only {0}, returning %s; "+
 			"a failed invocation must not become a measurement", elapsed)
@@ -89,8 +105,9 @@ func TestRunProbeRefusesAnUndeclaredExitCode(t *testing.T) {
 // first. Treating nonzero as failure would make it unmeasurable.
 func TestRunProbeAcceptsADeclaredNonZeroExitCode(t *testing.T) {
 	bin, _ := fakeLit(t, 6)
-	probeUnderTest := probe{name: "next", args: []string{"next"}, okCodes: exits(0, 6)}
-	elapsed, err := runProbe(bin, fakeStore(t), probeUnderTest, devNull(t))
+	store := fakeStore(t)
+	probeUnderTest := resolve(t, probe{name: "next", argv: fixed("next"), okCodes: exits(0, 6)}, store)
+	elapsed, err := runProbe(bin, store, probeUnderTest, devNull(t), gateLimits.kill())
 	if err != nil {
 		t.Fatalf("runProbe(exit 6, okCodes {0,6}) error = %v, want a sample", err)
 	}
@@ -119,11 +136,11 @@ func TestRunProbeJudgesTheExitAgainstTheStoreSize(t *testing.T) {
 		t.Fatal("no probe named next")
 	}
 	empty := generatedStore{size: size{name: "empty", rows: 0}, root: t.TempDir()}
-	if _, err := runProbe(bin, empty, next, devNull(t)); err != nil {
+	if _, err := runProbe(bin, empty, resolve(t, next, empty), devNull(t), gateLimits.kill()); err != nil {
 		t.Errorf("exit 6 on the empty store is the honest answer, got error: %v", err)
 	}
 	populated := generatedStore{size: size{name: "5x-target", rows: 590}, root: t.TempDir()}
-	if _, err := runProbe(bin, populated, next, devNull(t)); err == nil {
+	if _, err := runProbe(bin, populated, resolve(t, next, populated), devNull(t), gateLimits.kill()); err == nil {
 		t.Error("exit 6 on a 590-row store, where every row is open, was accepted as a measurement")
 	}
 }
@@ -146,7 +163,7 @@ func TestRunProbeRunsLitUnderTheStoresEnvironment(t *testing.T) {
 	}
 	configHome := filepath.Join(dir, "config-home")
 	store := generatedStore{size: size{name: "fake", rows: 7}, root: dir, env: hermeticEnv(os.Environ(), configHome, filepath.Join(dir, "state-home"))}
-	if _, err := runProbe(litBinary{path: path}, store, probe{name: "ls", args: []string{"ls"}, okCodes: exits(0)}, devNull(t)); err != nil {
+	if _, err := runProbe(litBinary{path: path}, store, resolve(t, probe{name: "ls", argv: fixed("ls"), okCodes: exits(0)}, store), devNull(t), gateLimits.kill()); err != nil {
 		t.Fatalf("runProbe error = %v", err)
 	}
 	got, err := os.ReadFile(seen)
@@ -160,7 +177,8 @@ func TestRunProbeRunsLitUnderTheStoresEnvironment(t *testing.T) {
 
 func TestRunProbeReportsAMissingBinaryAsAHarnessFailure(t *testing.T) {
 	bin := litBinary{path: filepath.Join(t.TempDir(), "absent")}
-	_, err := runProbe(bin, fakeStore(t), probe{name: "ls", args: []string{"ls"}, okCodes: exits(0)}, devNull(t))
+	store := fakeStore(t)
+	_, err := runProbe(bin, store, resolve(t, probe{name: "ls", argv: fixed("ls"), okCodes: exits(0)}, store), devNull(t), gateLimits.kill())
 	if err == nil {
 		t.Fatal("runProbe with a nonexistent binary returned no error")
 	}
@@ -179,7 +197,8 @@ func TestRunProbeReportsAMissingBinaryAsAHarnessFailure(t *testing.T) {
 // reads-before-writes no matter how the invocations were interleaved.
 func TestMeasureRunsEveryReadBeforeAnyWrite(t *testing.T) {
 	bin, log := fakeLit(t, 0)
-	samples, err := measure(bin, fakeStore(t))
+	store := fakeStore(t)
+	samples, err := measure(bin, store, gateLimits, io.Discard)
 	if err != nil {
 		t.Fatalf("measure() error = %v", err)
 	}
@@ -188,9 +207,9 @@ func TestMeasureRunsEveryReadBeforeAnyWrite(t *testing.T) {
 	}
 
 	writeArgs := map[string]bool{}
-	for _, p := range probes {
-		if p.mutates {
-			writeArgs[strings.Join(p.args, " ")] = true
+	for _, inv := range invocationsFor(probes, store) {
+		if inv.probe.mutates {
+			writeArgs[strings.Join(inv.args, " ")] = true
 		}
 	}
 	if len(writeArgs) == 0 {
@@ -222,8 +241,13 @@ func TestMeasureRunsEveryReadBeforeAnyWrite(t *testing.T) {
 		}
 	}
 	for _, s := range samples {
-		if s.min > s.max {
-			t.Errorf("sample %q has min %s above max %s", s.probe.name, s.min, s.max)
+		c, ok := s.outcome.(completed)
+		if !ok {
+			t.Errorf("sample %q is %#v, want completed: no run was slow", s.probe.name, s.outcome)
+			continue
+		}
+		if c.min > c.max {
+			t.Errorf("sample %q has min %s above max %s", s.probe.name, c.min, c.max)
 		}
 	}
 }
@@ -244,12 +268,13 @@ func TestMeasureDoesNotRecordTheWarmUp(t *testing.T) {
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	only := []probe{{name: "ls", args: []string{"ls"}, okCodes: exits(0)}}
-	samples, err := measurePhase(litBinary{path: path}, fakeStore(t), only, devNull(t))
+	store := fakeStore(t)
+	only := []invocation{resolve(t, probe{name: "ls", argv: fixed("ls"), okCodes: exits(0)}, store)}
+	samples, err := measurePhase(litBinary{path: path}, store, only, devNull(t), gateLimits, io.Discard)
 	if err != nil {
 		t.Fatalf("measurePhase error = %v", err)
 	}
-	if got := samples[0].max; got >= 300*time.Millisecond {
+	if got := samples[0].outcome.(completed).max; got >= 300*time.Millisecond {
 		t.Errorf("recorded max is %s; the 300ms cold invocation was recorded rather than discarded as the warm-up", got)
 	}
 }
@@ -259,7 +284,7 @@ func TestMeasureDoesNotRecordTheWarmUp(t *testing.T) {
 // would misdescribe what it measured.
 func TestMeasureReturnsReadSamplesFirst(t *testing.T) {
 	bin, _ := fakeLit(t, 0)
-	samples, err := measure(bin, fakeStore(t))
+	samples, err := measure(bin, fakeStore(t), gateLimits, io.Discard)
 	if err != nil {
 		t.Fatalf("measure() error = %v", err)
 	}
@@ -280,8 +305,86 @@ func TestMeasureReturnsReadSamplesFirst(t *testing.T) {
 // while a column silently lost an entry is worse than no table.
 func TestMeasureFailsTheRunWhenAnyProbeFails(t *testing.T) {
 	bin, _ := fakeLit(t, 3)
-	if _, err := measure(bin, fakeStore(t)); err == nil {
+	if _, err := measure(bin, fakeStore(t), gateLimits, io.Discard); err == nil {
 		t.Fatal("measure() with a binary exiting 3 returned no error")
+	}
+}
+
+// A probe that outlives the kill limit is a verdict, not a crash: it is
+// recorded as killed, the kill reaches progress when it happens, and the phase
+// goes on to measure every other probe. Before this, one hung command ended
+// the run and named only itself, so a regression slowing two commands showed
+// one of them. The fake hangs on `backlog` only; `exec` replaces the shell so
+// the kill reaches the sleeping process rather than orphaning it.
+func TestAKilledProbeIsRecordedAndTheRunContinues(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake binary is a shell script")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "lit")
+	script := "#!/bin/sh\nif [ \"$1\" = backlog ]; then echo 'waiting on lock' >&2; exec sleep 30; fi\nexit 0\n"
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	store := fakeStore(t)
+	phase := []invocation{
+		resolve(t, probe{name: "backlog", argv: fixed("backlog"), okCodes: exits(0)}, store),
+		resolve(t, probe{name: "ls", argv: fixed("ls"), okCodes: exits(0)}, store),
+	}
+	var progress strings.Builder
+	lim := limits{budget: 5 * time.Millisecond}
+	samples, err := measurePhase(litBinary{path: path}, store, phase, devNull(t), lim, &progress)
+	if err != nil {
+		t.Fatalf("measurePhase error = %v; a kill must not end the run", err)
+	}
+	if got, want := samples[0].outcome, (killed{round: 0, after: lim.kill()}); got != want {
+		t.Errorf("backlog outcome = %#v, want %#v: killed in its warm-up", got, want)
+	}
+	if _, ok := samples[1].outcome.(completed); !ok {
+		t.Errorf("ls outcome = %#v, want completed: the kill of another probe stopped it being measured", samples[1].outcome)
+	}
+	if got := strings.Count(progress.String(), "killed: "); got != 1 {
+		t.Errorf("progress names %d kills, want 1 (the first kill of backlog, as it happened):\n%s", got, progress.String())
+	}
+	for _, want := range []string{`"backlog"`, "warm-up", "150ms", "waiting on lock"} {
+		if !strings.Contains(progress.String(), want) {
+			t.Errorf("kill line does not mention %q:\n%s", want, progress.String())
+		}
+	}
+}
+
+// A store's verdicts reach progress before anything after its probes runs, so
+// a later failure (here, the compaction the history measurement starts with)
+// cannot erase them. The fake lit does just enough to be generated: init makes
+// the store directory, import prints the id mapping, and `sync` fails.
+// `next` is slow enough to break a budget lowered for the test.
+func TestAStoresVerdictsAreLoggedBeforeItsLaterStepsRun(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake binary is a shell script")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "lit")
+	script := `#!/bin/sh
+case "$1" in
+  init) mkdir -p .git/links/dolt ;;
+  import) printf 'imported 1 issues\n  r0 -> bench-x\n' ;;
+  next) sleep 0.2 ;;
+  sync) echo "compaction broke" >&2; exit 1 ;;
+esac
+exit 0
+`
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var progress strings.Builder
+	env := hermeticEnv(os.Environ(), filepath.Join(dir, "config"), filepath.Join(dir, "state"))
+	lim := limits{budget: 100 * time.Millisecond}
+	_, _, err := measureSize(litBinary{path: path}, dir, size{name: "one", rows: 1}, env, lim, runQuiet, &progress)
+	if err == nil || !strings.Contains(err.Error(), "compaction broke") {
+		t.Fatalf("measureSize error = %v, want the failed compaction", err)
+	}
+	if !strings.Contains(progress.String(), "OVER BUDGET: store one (1 rows): next took") {
+		t.Errorf("the store's verdict on next was not logged before the compaction failed:\n%s", progress.String())
 	}
 }
 

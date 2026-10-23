@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -31,6 +32,9 @@ type generatedStore struct {
 	// under — generation and probes alike, so the store is measured by the
 	// same lit that produced it. See hermeticEnv for what it excludes.
 	env []string
+	// ids are the issue ids lit minted for the generated rows, in the order
+	// importBatches wrote them: row i is ids[i]. Empty for the empty store.
+	ids []string
 }
 
 // generate builds a workspace at the requested size under parent.
@@ -60,7 +64,7 @@ func generate(bin litBinary, parent string, sz size, env []string, run stepRunne
 		return generatedStore{}, fmt.Errorf("creating workspace dir: %w "+
 			"(a store is generated into a fresh directory; remove it or pass a different --keep)", err)
 	}
-	specs := make([]string, 0, 1)
+	specs := make([]importSpec, 0, 1)
 	for i, batch := range importBatches(sz.rows) {
 		specPath := filepath.Join(parent, fmt.Sprintf("%s-spec-%d.json", sz.name, i))
 		blob, err := json.Marshal(batch)
@@ -70,27 +74,90 @@ func generate(bin litBinary, parent string, sz size, env []string, run stepRunne
 		if err := os.WriteFile(specPath, blob, 0o644); err != nil {
 			return generatedStore{}, fmt.Errorf("writing import spec: %w", err)
 		}
-		specs = append(specs, specPath)
+		specs = append(specs, importSpec{path: specPath, records: batch})
 	}
+	var ids []string
 	for _, st := range generationSteps(bin, sz, specs) {
-		if err := run(root, env, st); err != nil {
+		out, err := run(root, env, st)
+		if err != nil {
 			return generatedStore{}, err
 		}
+		loaded, err := idsLoaded(out, st.loads)
+		if err != nil {
+			return generatedStore{}, fmt.Errorf("%s (in %s): %w", strings.Join(st.argv, " "), root, err)
+		}
+		ids = append(ids, loaded...)
 	}
 	info, err := workspace.Resolve(environ.Of(env), root)
 	if err != nil {
 		return generatedStore{}, fmt.Errorf("resolving generated workspace %s: %w", root, err)
 	}
-	return generatedStore{size: sz, root: root, databasePath: info.DatabasePath, env: env}, nil
+	return generatedStore{size: sz, root: root, databasePath: info.DatabasePath, env: env, ids: ids}, nil
 }
 
-// stepRunner performs one generation step in dir under env.
-type stepRunner func(dir string, env []string, st step) error
+// stepRunner performs one generation step in dir under env, answering the
+// step's stdout.
+type stepRunner func(dir string, env []string, st step) ([]byte, error)
 
-// step is one command generation runs, with the budget that bounds it.
+// step is one command generation runs, with the budget that bounds it and the
+// records it loads into the store, if it is an import.
 type step struct {
 	budget time.Duration
 	argv   []string
+	// loads is the records this step creates, whose ids its stdout reports.
+	// Every step has it, empty for all but an import, so reading ids back is
+	// one operation run after every step rather than a branch on which step
+	// just ran. [LAW:dataflow-not-control-flow]
+	loads []storage.ImportTreeSpec
+}
+
+// importSpec is one import batch: the file `lit import` reads, and the records
+// written into it.
+type importSpec struct {
+	path    string
+	records []storage.ImportTreeSpec
+}
+
+// idsLoaded reads the issue ids lit minted for loads off an import's stdout,
+// in the order of loads.
+//
+// The source is the mapping `lit import` documents and prints, one
+// `  <local_id> -> <id>` line per record it created, and not a `lit ls`
+// afterwards: the import that made the ids is the one authority on which id
+// each record got, and a second read would be a second source with its own
+// failure modes, run before any probe could name a slow command.
+// [LAW:one-source-of-truth] The order is the spec's, mapped through each
+// record's local id, because lit creates and prints in dependency order.
+// A record the output does not map, or a local id it maps twice, fails
+// loudly: a store missing an id it was built with would quietly drop the
+// probes that name it. [LAW:no-silent-failure] Only lines naming one of
+// loads' local ids are read, so a step that loads nothing reads nothing,
+// whatever its output happens to contain.
+func idsLoaded(stdout []byte, loads []storage.ImportTreeSpec) ([]string, error) {
+	wanted := map[string]bool{}
+	for _, rec := range loads {
+		wanted[rec.LocalID] = true
+	}
+	minted := map[string]string{}
+	for _, line := range strings.Split(string(stdout), "\n") {
+		local, id, found := strings.Cut(strings.TrimSpace(line), " -> ")
+		if !found || !wanted[local] {
+			continue
+		}
+		if _, dup := minted[local]; dup {
+			return nil, fmt.Errorf("import output maps local id %q more than once:\n%s", local, stdout)
+		}
+		minted[local] = id
+	}
+	ids := make([]string, 0, len(loads))
+	for _, rec := range loads {
+		id, ok := minted[rec.LocalID]
+		if !ok {
+			return nil, fmt.Errorf("import output does not map local id %q:\n%s", rec.LocalID, stdout)
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
 }
 
 // generationSteps is the plan that turns an empty directory into a workspace
@@ -117,16 +184,16 @@ type step struct {
 // The import carries importBudget rather than runBudget because its length
 // grows with the rows it loads; every other step is the same size at every
 // size.
-func generationSteps(bin litBinary, sz size, specs []string) []step {
+func generationSteps(bin litBinary, sz size, specs []importSpec) []step {
 	steps := []step{
-		{runBudget, []string{"git", "init", "-q", "--template=", "."}},
-		{runBudget, []string{"git", "-c", "user.email=perfbench@invalid", "-c", "user.name=perfbench",
+		{budget: runBudget, argv: []string{"git", "init", "-q", "--template=", "."}},
+		{budget: runBudget, argv: []string{"git", "-c", "user.email=perfbench@invalid", "-c", "user.name=perfbench",
 			"-c", "commit.gpgsign=false",
 			"commit", "-q", "--no-verify", "--allow-empty", "-m", "perfbench workspace"}},
-		{runBudget, []string{bin.path, "init", "--prefix", "bench", "--skip-hooks", "--skip-agents"}},
+		{budget: runBudget, argv: []string{bin.path, "init", "--prefix", "bench", "--skip-hooks", "--skip-agents"}},
 	}
 	for _, spec := range specs {
-		steps = append(steps, step{importBudget(sz.rows), []string{bin.path, "import", "--path", spec}})
+		steps = append(steps, step{budget: importBudget(sz.rows), argv: []string{bin.path, "import", "--path", spec.path}, loads: spec.records})
 	}
 	return steps
 }
@@ -298,32 +365,42 @@ func storeBytes(dir string) (int64, error) {
 	return total, nil
 }
 
-// runQuiet runs one generation step, discarding its stdout and surfacing
-// everything about a failure: the command, its exit status, and its combined
-// output. It takes the step whole so the budget arrives with the argv it was
-// planned for, rather than as a second argument a caller could pair wrongly.
+// runQuiet runs one generation step, answering its stdout (the one thing a
+// caller reads from a step, an import's id mapping) and surfacing everything
+// about a failure: the command, its exit status, and both of its streams,
+// each labeled, since they are captured apart. It takes the step whole so the
+// budget arrives with the argv it was planned for, rather than as a second
+// argument a caller could pair wrongly.
 // Generation failures are the ones most likely to be misread — a store that
 // half-imported still produces a plausible-looking table — so nothing here is
 // allowed to continue past one. [LAW:no-silent-failure]
 //
-// It carries the same runBudget the probes do, and for a stronger reason.
-// runBudget exists because this epic's subject is a write path that can wait
-// fifteen minutes on a lock; generation is ENTIRELY write path, so an import
-// wedged behind a lock is at least as likely here as in any probe. Unbudgeted,
-// that hangs the tool with nothing on screen.
-func runQuiet(dir string, env []string, st step) error {
+// Every step carries a budget because this epic's subject is a write path
+// that can wait fifteen minutes on a lock; generation is ENTIRELY write path,
+// so an import wedged behind a lock is at least as likely here as anywhere.
+// Unbudgeted, that hangs the tool with nothing on screen.
+func runQuiet(dir string, env []string, st step) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), st.budget)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, st.argv[0], st.argv[1:]...)
 	cmd.Dir = dir
 	cmd.Env = env
-	out, err := cmd.CombinedOutput()
+	cmd.WaitDelay = killGrace
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
 	if ctx.Err() != nil {
-		return fmt.Errorf("%s (in %s) exceeded the %s budget and was killed:\n%s",
-			strings.Join(st.argv, " "), dir, st.budget, out)
+		return nil, fmt.Errorf("%s (in %s) exceeded the %s budget and was killed:\n%s",
+			strings.Join(st.argv, " "), dir, st.budget, streams(stdout.Bytes(), stderr.Bytes()))
 	}
 	if err != nil {
-		return fmt.Errorf("%s (in %s): %w\n%s", strings.Join(st.argv, " "), dir, err, out)
+		return nil, fmt.Errorf("%s (in %s): %w\n%s", strings.Join(st.argv, " "), dir, err, streams(stdout.Bytes(), stderr.Bytes()))
 	}
-	return nil
+	return stdout.Bytes(), nil
+}
+
+// streams prints a failed step's two outputs under their names.
+func streams(stdout, stderr []byte) string {
+	return fmt.Sprintf("--- stdout ---\n%s\n--- stderr ---\n%s", stdout, stderr)
 }

@@ -32,10 +32,18 @@ import (
 )
 
 func main() {
-	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
-		fmt.Fprintf(os.Stderr, "perfbench: %v\n", err)
-		os.Exit(1)
+	err := run(os.Args[1:], os.Stdout, os.Stderr)
+	if err == nil {
+		return
 	}
+	fmt.Fprintf(os.Stderr, "perfbench: %v\n", err)
+	// A breach is the gate working and anything else is the tool failing, and
+	// a caller (a CI lane, a nightly job) must be able to tell them apart
+	// without reading the log.
+	if errors.As(err, new(budgetError)) {
+		os.Exit(exitBudgetBreached)
+	}
+	os.Exit(1)
 }
 
 // run is main's body with its writers passed in, so the flag surface can be
@@ -109,43 +117,69 @@ func run(args []string, out, progress io.Writer) error {
 	env := hermeticEnv(os.Environ(), configHome, filepath.Join(workDir, "state-home"))
 
 	results := make([]result, 0, len(sizes))
+	var found []breach
 	for _, sz := range sizes {
-		fmt.Fprintf(progress, "generating %s store (%d rows) ...\n", sz.name, sz.rows)
-		store, err := generate(bin, workDir, sz, env, runQuiet)
+		r, over, err := measureSize(bin, workDir, sz, env, gateLimits, runQuiet, progress)
 		if err != nil {
 			return err
 		}
-		// Bytes before probes, because one probe writes: this is the size of
-		// the store the read timings below describe.
-		bytes, err := storeBytes(store.databasePath)
-		if err != nil {
-			return err
-		}
-		fmt.Fprintf(progress, "measuring %s store, %d repeats per probe ...\n", sz.name, repeats)
-		samples, err := measure(bin, store)
-		if err != nil {
-			return err
-		}
-		// Compaction and history run last, because they change the store
-		// every figure above describes. The empty store has no row to edit,
-		// so its history is the zero cost the report prints as absent.
-		compacted, err := compactedBytes(bin, store)
-		if err != nil {
-			return err
-		}
-		var history historyCost
-		if sz.rows > 0 {
-			fmt.Fprintf(progress, "measuring %s store history, %d single-row edits ...\n", sz.name, historyEdits)
-			if history, err = measureHistory(bin, store, compacted); err != nil {
-				return err
-			}
-		}
-		results = append(results, result{size: sz, bytes: bytes, compacted: compacted, samples: samples, history: history})
+		results = append(results, r)
+		found = append(found, over...)
 	}
 
 	cond := conditions{goos: runtime.GOOS, goarch: runtime.GOARCH, cpus: runtime.NumCPU()}
-	fmt.Fprint(out, renderReport(results, cond))
+	fmt.Fprint(out, renderReport(probes, results, gateLimits.budget, found, cond))
+	if len(found) > 0 {
+		return budgetError{breaches: found}
+	}
 	return nil
+}
+
+// measureSize generates one store and takes every measurement of it, in the
+// one order they are valid in: bytes, then the probes, then compaction and
+// history, which change the store every figure before them describes.
+//
+// The store's latency verdicts are written to progress as soon as its probes
+// are measured, before compaction and history run and before the next store is
+// generated. Those steps can still fail or hang, and a CI job can time out
+// during them; none of that may take a verdict already reached down with it.
+// Kills reach progress sooner still, as they happen (measurePhase). The
+// breaches it returns are the ones it logged, judged once, and they are what
+// run exits on. [LAW:one-source-of-truth]
+func measureSize(bin litBinary, workDir string, sz size, env []string, lim limits, run stepRunner, progress io.Writer) (result, []breach, error) {
+	fmt.Fprintf(progress, "generating %s store (%d rows) ...\n", sz.name, sz.rows)
+	store, err := generate(bin, workDir, sz, env, run)
+	if err != nil {
+		return result{}, nil, err
+	}
+	// Bytes before probes, because one probe writes: this is the size of
+	// the store the read timings below describe.
+	bytes, err := storeBytes(store.databasePath)
+	if err != nil {
+		return result{}, nil, err
+	}
+	fmt.Fprintf(progress, "measuring %s store, %d repeats per probe ...\n", sz.name, repeats)
+	samples, err := measure(bin, store, lim, progress)
+	if err != nil {
+		return result{}, nil, err
+	}
+	r := result{size: sz, bytes: bytes, samples: samples}
+	over := breaches(r, lim.budget)
+	for _, b := range over {
+		fmt.Fprintf(progress, "OVER BUDGET: %s\n", b)
+	}
+	// The empty store has no row to edit, so its history is the zero cost the
+	// report prints as absent.
+	if r.compacted, err = compactedBytes(bin, store); err != nil {
+		return result{}, nil, err
+	}
+	if sz.rows > 0 {
+		fmt.Fprintf(progress, "measuring %s store history, %d single-row edits ...\n", sz.name, historyEdits)
+		if r.history, err = measureHistory(bin, store, r.compacted); err != nil {
+			return result{}, nil, err
+		}
+	}
+	return r, over, nil
 }
 
 // parseSizes turns the flag's text into the sizes to measure, or returns the
