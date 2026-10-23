@@ -67,20 +67,28 @@ func over(o outcome, budget time.Duration) bool {
 	}
 }
 
-// budgetError is a run that measured everything it was asked to and found
-// probes over budget. It is its own type so main can give it its own exit
-// status: a breach is the gate doing its job, and a caller has to be able to
-// tell it from the tool failing to do its job. [LAW:no-silent-failure]
-type budgetError struct{ breaches []breach }
-
-func (e budgetError) Error() string {
-	lines := make([]string, len(e.breaches))
-	for i, b := range e.breaches {
-		lines[i] = "  " + b.String()
-	}
-	return fmt.Sprintf("%d probe(s) over budget:\n%s", len(e.breaches), strings.Join(lines, "\n"))
+// gateError is a run that measured everything it was asked to and found the
+// gate failed: probes over budget, storm writers that did not complete, or
+// both. It is its own type so main can give it its own exit status: a failed
+// gate is the gate doing its job, and a caller has to be able to tell it from
+// the tool failing to do its job. [LAW:no-silent-failure]
+type gateError struct {
+	breaches []breach
+	writers  []writerFailure
 }
 
-// exitBudgetBreached is the exit status of a run whose only failure is
-// probes over budget; any other failure exits 1.
-const exitBudgetBreached = 2
+func (e gateError) Error() string {
+	var lines []string
+	for _, b := range e.breaches {
+		lines = append(lines, "  "+b.String())
+	}
+	for _, w := range e.writers {
+		lines = append(lines, "  "+w.String())
+	}
+	return fmt.Sprintf("the gate failed: %d probe(s) over budget, %d storm writer(s) that did not complete:\n%s",
+		len(e.breaches), len(e.writers), strings.Join(lines, "\n"))
+}
+
+// exitGateFailed is the exit status of a run whose only failure is the gate's
+// verdict; any other failure exits 1.
+const exitGateFailed = 2

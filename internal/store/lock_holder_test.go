@@ -680,9 +680,11 @@ func TestEveryAcquisitionRetiresTheRecordsOfDepartedHolders(t *testing.T) {
 		if err != nil {
 			t.Fatalf("round %d: acquire: %v", round, err)
 		}
-		// Two holders, two names each: the live one and this acquisition.
-		if left := holderDirEntries(t, lockPath); len(left) != 4 {
-			t.Fatalf("round %d: holder dir = %v, want the two live holders' four names and nothing else", round, left)
+		// Two holders, two names each: the live one and this acquisition. Plus
+		// the lock's one arrival file, which every acquisition overwrites and
+		// so never adds to.
+		if left := holderDirEntries(t, lockPath); len(left) != 5 || !slices.Contains(left, lockHolderArrivalName) {
+			t.Fatalf("round %d: holder dir = %v, want the two live holders' four names, the arrival, and nothing else", round, left)
 		}
 		if err := release(); err != nil {
 			t.Fatalf("round %d: release: %v", round, err)
@@ -1095,6 +1097,56 @@ func TestWaitOutlastsHoldersThatKeepChanging(t *testing.T) {
 	}
 	if got := clock.elapsed(); got != lastArrival+wait {
 		t.Fatalf("the contender gave up %s in, want %s: one %s wait after the last holder arrived at %s", got, lastArrival+wait, wait, lastArrival)
+	}
+}
+
+// TestWaitSeesHoldersThatComeAndGoBetweenPolls pins the same rule for the
+// queue a hundred concurrent `lit new` actually form: each holder takes the
+// lock and lets it go well inside one of the contender's polls, so at no poll
+// is the holder that arrived since the last one still there to be seen. The
+// lock is never free at a poll — something always stands in front — and
+// every arrival is still progress the contender must wait out. Judged by
+// which records exist at each poll, this contender sees nobody move and
+// gives up one wait in, which is how 19 to 70 of 100 writers failed
+// workspace_busy against a store that was serving a writer every ~70ms.
+func TestWaitSeesHoldersThatComeAndGoBetweenPolls(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	lockPath := filepath.Join(t.TempDir(), "test.lock")
+	const (
+		wait  = 300 * time.Millisecond
+		steps = 8
+	)
+
+	// What keeps the lock held at every poll: a hold with no record, like
+	// the instants a write engine holds Dolt's LOCK before publishing its
+	// record and after retiring it.
+	release, acquired, err := filelock.Acquire(ctx, lockPath, false, 1, 0)
+	if err != nil || !acquired {
+		t.Fatalf("take lock as an unrecorded holder: acquired=%v err=%v", acquired, err)
+	}
+	defer func() { _ = release() }()
+
+	clock := newStepClock(t, storeLockPollInterval, func(read int) {
+		if read == 0 || read > steps {
+			return
+		}
+		brief, err := acquireStoreLock(ctx, storageDirOf(lockPath), lockPath, false, 0)
+		if err != nil {
+			t.Fatalf("brief holder %d: %v", read, err)
+		}
+		if err := brief(); err != nil {
+			t.Fatalf("release brief holder %d: %v", read, err)
+		}
+	})
+
+	_, err = acquireStoreLockOn(ctx, clock.now, storageDirOf(lockPath), lockPath, true, wait)
+	if !errors.Is(err, ErrWorkspaceBusy) {
+		t.Fatalf("contended acquireStoreLockOn() error = %v, want ErrWorkspaceBusy once the holders stopped arriving", err)
+	}
+	lastArrival := steps * storeLockPollInterval
+	if got := clock.elapsed(); got != lastArrival+wait {
+		t.Fatalf("the contender gave up %s in, want %s: one %s wait after the last of %d holders that each came and went between two polls", got, lastArrival+wait, wait, steps)
 	}
 }
 

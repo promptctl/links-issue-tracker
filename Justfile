@@ -72,8 +72,9 @@ perf *args:
     set -euo pipefail
     source "{{justfile_directory()}}/scripts/cgo-env.sh"
     # Built and run, not `go run`: go run turns every child failure into its own
-    # exit 1, and perfbench's exit status is a contract (2 = a probe over its
-    # latency budget, 1 = the run itself failed).
+    # exit 1, and perfbench's exit status is a contract (2 = the gate failed: a
+    # probe over its latency budget or a storm writer that did not complete,
+    # 1 = the run itself failed).
     dir="$(mktemp -d)"
     trap 'rm -rf "$dir"' EXIT
     go build -o "$dir/perfbench" ./tools/perfbench

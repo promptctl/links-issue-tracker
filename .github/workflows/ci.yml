@@ -133,6 +133,11 @@ jobs:
   # lit holding a runner for six hours, cannot cut it. The stores have no git
   # remote, so a slowdown confined to the receive path is outside what this
   # measures.
+  #
+  # The same run is the contention gate: after its probes, each store takes 100
+  # concurrent `lit new` (tools/perfbench/contention.go), and any writer that
+  # does not complete exits 2 naming the writer and its error. It rides this job
+  # because it needs the same built binary and generated store.
   perf-budget:
     runs-on: ubuntu-latest
     timeout-minutes: 45
