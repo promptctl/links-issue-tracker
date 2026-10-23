@@ -228,19 +228,21 @@ instead.
 
 ## What the store a command ran against records
 
-A command that opens a store to read or change its tickets, and every `lit
-sync` command, records the store's size on disk once it has closed it, so a
+A command that opens a store to read or change its tickets, and every sync
+session, records the store's size on disk once it has closed it, so a
 `duration_ms` read back later says what it was spent over. The reading is the
 chunk store, the part `lit doctor` lists as `chunk store`: what every read of
 the store runs against, without the recovery snapshots and caches beside it.
 It is taken after the close, outside the store's lock, so it never lengthens
 the time another writer waits. For `lit ls --at`, the store is the one `--at`
-names.
+names; for the on-change mirror and the automatic receive, it is the clone they
+push and fetch through.
 
 | Key | Meaning |
 | --- | --- |
 | `store.chunk_store_bytes` | The chunk store's size in bytes, as the sum of its files' lengths; `null` when it could not be read. |
 | `store.chunk_store_bytes_error` | Why it could not be read, or `null`. A store with no chunk store at all is such a failure, never `0`. The command's own result is unchanged. |
+
 ## What checking the config records
 
 A command that runs in a workspace checks the global and project

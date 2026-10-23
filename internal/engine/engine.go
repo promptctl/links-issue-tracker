@@ -91,10 +91,9 @@ func Open(ctx context.Context, env environ.Env, mode Mode, doltRootDir string, w
 
 // ChunkStoreBytes is the size on disk of the data the engine keeps for the
 // workspace at doltRootDir, read from the filesystem alone, with no engine
-// open and no lock. It is the chunk store, the part doctor's footprint names
-// "chunk store": what every read of the store runs against, without the
-// recovery snapshots and caches beside it. A root with no chunk store is an
-// error, never 0 bytes.
+// open. For the Dolt engine that is store.ChunkStoreBytes, whose contract it
+// carries; callers above this package name no engine's layout.
+// [LAW:one-way-deps]
 func ChunkStoreBytes(doltRootDir string) (int64, error) {
 	return store.ChunkStoreBytes(doltRootDir)
 }

@@ -62,6 +62,22 @@ func TestEveryStoreSeamRecordsTheStoresSize(t *testing.T) {
 		}
 		assertStoreMeasured(t, ev)
 	})
+	// The automatic receive runs in a background worker, not through a leaf;
+	// its session closes through the same sync-session close, so it records
+	// the size of the clone it fetched through.
+	t.Run("automatic receive", func(t *testing.T) {
+		isolateEvents(t)
+		_, producer, consumer, _, epicID := twoClonesOverOneDoltRemote(t)
+		runCLIInDir(t, producer, "new", "--title", "second-ticket", "--topic", "demo", "--type", "task", "--parent", epicID)
+		runCLIInDir(t, producer, "sync", "push")
+		ws, err := workspace.Resolve(testEnv(), consumer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		recorder := telemetry.Begin(telemetry.Event{})
+		receiveOnce(telemetry.With(context.Background(), recorder), testEnv(), ws)
+		assertStoreMeasured(t, recorder.Finish(telemetry.End{At: time.Now()}))
+	})
 	t.Run("ls --at", func(t *testing.T) {
 		isolateEvents(t)
 		storeDir, _ := foreignStore(t, "ws-foreign", "proj")
@@ -85,6 +101,9 @@ func TestEveryStoreSeamRecordsTheStoresSize(t *testing.T) {
 // store of 0 bytes: a store with no chunk store, and one whose chunk store
 // cannot be read.
 func TestAFailedStoreReadingIsNullBytesAndItsReason(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a directory whatever its mode")
+	}
 	unreadable := t.TempDir()
 	noms := filepath.Join(unreadable, "links", ".dolt", "noms")
 	if err := os.MkdirAll(filepath.Join(noms, "oldgen"), 0o755); err != nil {

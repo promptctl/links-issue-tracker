@@ -202,8 +202,8 @@ func measureCompactionSignals(doltRootDir string) (compactionSignals, error) {
 // ChunkStoreBytes is the size on disk of everything the store at doltRootDir
 // keeps its chunks in: the journal, both generations and the manifests.
 // Unlike measureCompactionSignals it walks the whole chunk store, so it is
-// never taken inside a lock: around a pass that can shrink the store, or once
-// a command has closed its store.
+// read around a pass that can shrink the store, or once a command has closed
+// its store, never as a cheap probe.
 //
 // A store has a chunk store from the moment it exists, so one that is absent
 // has no size: the path is wrong, or the store was replaced underneath the
