@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 )
@@ -90,12 +91,13 @@ func TestBulkLabelTotalFailureExitsNonZero(t *testing.T) {
 
 // commandAnswer is how the real CLI answers args in repo: the header line
 // main prints for its error ("error (code=N, reason=R): …"), the remediation
-// line after it, and stdout. A run that succeeds answers with empty lines.
+// line after it, and stdout alone. A run that succeeds answers with empty lines.
 func commandAnswer(t *testing.T, repo string, args ...string) (header, remediation, stdout string) {
 	t.Helper()
-	stdout, err := runCLIInDirAllowError(t, repo, args...)
+	var out bytes.Buffer
+	err := Run(context.Background(), dirInvocation(repo, &out, io.Discard, args))
 	if err == nil {
-		return "", "", stdout
+		return "", "", out.String()
 	}
 	var stderr bytes.Buffer
 	WriteCommandError(&stderr, err)
@@ -104,33 +106,37 @@ func commandAnswer(t *testing.T, repo string, args ...string) (header, remediati
 	if len(lines) > 1 {
 		remediation = lines[len(lines)-1]
 	}
-	return header, remediation, stdout
+	return header, remediation, out.String()
+}
+
+// codeAndReason reads "code=6, reason=state_already_holds" off a header
+// "error (code=6, reason=state_already_holds): …".
+func codeAndReason(t *testing.T, header string) string {
+	t.Helper()
+	start, end := strings.Index(header, "("), strings.Index(header, ")")
+	if !strings.HasPrefix(header, "error (") || end < start {
+		t.Fatalf("header = %q, want error (code=…, reason=…)", header)
+	}
+	return header[start+1 : end]
 }
 
 // The ticket's acceptance, through the real CLI: `lit bulk archive` over an
 // already-archived ticket answers as `lit archive` does (exit 6,
 // state_already_holds), over a deleted one as `lit archive` refuses it (exit 3,
-// validation_refused), whether or not another ticket in the run lands, and
-// over both at once as a partial failure that names each ticket's reason and
-// advises re-running none of them.
+// validation_refused). Beside a ticket that lands, and over both stuck tickets
+// at once, it answers as a partial failure. Every run names each stuck ticket
+// with its reason and advises re-running none of them.
 func TestBulkArchiveAnswersEachTicketItCannotMoveAsLitArchiveDoes(t *testing.T) {
 	repo := newInitTestRepo(t)
 	epic := newEpicInDir(t, repo, "bulk answers")
-	task := func(title string) string {
+	task := func(t *testing.T, title string) string {
 		t.Helper()
 		return extractTicketID(t, runCLIInDir(t, repo, "new", "--type", "task", "--title", title, "--topic", "demo", "--parent", epic))
 	}
-	archived, deleted := task("archived"), task("deleted")
+	archived, deleted := task(t, "archived"), task(t, "deleted")
 	runCLIInDir(t, repo, "archive", archived)
 	runCLIInDir(t, repo, "delete", deleted)
-	codeAndReason := func(header string) string {
-		// "error (code=6, reason=state_already_holds): …" → "code=6, reason=state_already_holds"
-		start, end := strings.Index(header, "("), strings.Index(header, ")")
-		if !strings.HasPrefix(header, "error (") || end < start {
-			t.Fatalf("header = %q, want error (code=…, reason=…)", header)
-		}
-		return header[start+1 : end]
-	}
+	const partial = "code=1, reason=bulk_partial_failure"
 
 	for _, tc := range []struct {
 		name   string
@@ -147,23 +153,26 @@ func TestBulkArchiveAnswersEachTicketItCannotMoveAsLitArchiveDoes(t *testing.T) 
 		t.Run(tc.name, func(t *testing.T) {
 			want := fmt.Sprintf("code=%d, reason=%s", tc.code, tc.reason)
 			single, _, _ := commandAnswer(t, repo, "archive", tc.stuck)
-			if got := codeAndReason(single); got != want {
+			if got := codeAndReason(t, single); got != want {
 				t.Fatalf("lit archive %s answers %q, want %q", tc.stuck, got, want)
 			}
 			ids, wantStdout := tc.stuck, ""
 			if tc.beside {
-				live := task("lands")
-				ids, wantStdout = tc.stuck+","+live, live+" ok\n"
+				live := task(t, "lands")
+				ids, wantStdout, want = tc.stuck+","+live, live+" ok\n", partial
 			}
 			header, remediation, stdout := commandAnswer(t, repo, "bulk", "archive", "--ids", ids)
-			if got := codeAndReason(header); got != want {
-				t.Errorf("lit bulk archive --ids %s answers %q, want %q as lit archive does", ids, got, want)
+			if got := codeAndReason(t, header); got != want {
+				t.Errorf("lit bulk archive --ids %s answers %q, want %q", ids, got, want)
 			}
 			if named := tc.stuck + " (" + tc.reason + ")"; !strings.Contains(header, named) {
 				t.Errorf("header = %q, want it to name %q", header, named)
 			}
 			if strings.Contains(remediation, "Re-run the command for only the failed IDs") {
 				t.Errorf("remediation = %q, advises re-running the ticket", remediation)
+			}
+			if tc.beside && !strings.HasPrefix(remediation, "remediation: Do not re-run the command unchanged") {
+				t.Errorf("remediation = %q, want it to advise against a re-run of what landed", remediation)
 			}
 			if stdout != wantStdout {
 				t.Errorf("stdout = %q, want %q", stdout, wantStdout)
@@ -173,8 +182,8 @@ func TestBulkArchiveAnswersEachTicketItCannotMoveAsLitArchiveDoes(t *testing.T) 
 
 	t.Run("already archived and deleted", func(t *testing.T) {
 		header, remediation, stdout := commandAnswer(t, repo, "bulk", "archive", "--ids", archived+","+deleted)
-		if got := codeAndReason(header); got != "code=1, reason=bulk_partial_failure" {
-			t.Errorf("answer = %q, want code=1, reason=bulk_partial_failure", got)
+		if got := codeAndReason(t, header); got != partial {
+			t.Errorf("answer = %q, want %q", got, partial)
 		}
 		for _, named := range []string{archived + " (state_already_holds)", deleted + " (validation_refused)"} {
 			if !strings.Contains(header, named) {

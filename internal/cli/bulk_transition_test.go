@@ -411,8 +411,9 @@ func TestBulkRetentionVerbsRoundTripTheirInverse(t *testing.T) {
 // Each retention verb in bulk answers every ticket its single verb will not
 // move — one the verb refuses, and one already where the verb would put it —
 // with the single verb's error and the ticket untouched, and the other ticket
-// in the run still lands. The run answers with the single verb's reason, so an
-// already-held ticket is never a failure to re-run.
+// in the run still lands. The run, in which the other ticket landed, answers as
+// a partial failure, never with the stuck ticket's reason alone: an exit 6
+// would claim it changed nothing.
 // The rows are every cell of lifecycle.Retain that does not move.
 func TestBulkRetentionVerbsAnswerEachTicketTheyCannotMoveAsTheSingleVerbDoes(t *testing.T) {
 	type retention struct {
@@ -453,8 +454,8 @@ func TestBulkRetentionVerbsAnswerEachTicketTheyCannotMoveAsTheSingleVerbDoes(t *
 			before := h.issueDetail(stuck)
 			var out bytes.Buffer
 			failed, reason := bulkFailures(t, h, &out, tc.spec, "--ids", stuck+","+landed)
-			if want := commandErrorReason(single); reason != want {
-				t.Errorf("bulk %s reason = %s (exit %d), want lit %s's %s (exit %d)", tc.spec.name, reason, reason.exit, tc.spec.name, want, want.exit)
+			if reason != reasonBulkPartialFailure {
+				t.Errorf("bulk %s reason = %s (exit %d), want bulk_partial_failure: %s landed", tc.spec.name, reason, reason.exit, landed)
 			}
 			if after := h.issueDetail(stuck); !reflect.DeepEqual(after, before) {
 				t.Errorf("bulk %s wrote %s it did not move: %+v, was %+v", tc.spec.name, stuck, after, before)

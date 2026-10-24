@@ -50,10 +50,11 @@ func (r commandReason) String() string { return r.token }
 
 // Every reason is an unkeyed literal, which does not compile without its code.
 var (
-	// ExitGeneric: lit could not do what was asked. A bulk run whose unlanded
-	// items share one reason answers with that reason (bulkReason); this one is
-	// a run whose items differ, so no single code is true of them all and the
-	// per-item reasons live in the message. [LAW:no-silent-failure]
+	// ExitGeneric: lit could not do what was asked. A bulk run whose every item
+	// answers with one reason answers with that reason (bulkReason); this one
+	// is a run whose items differ — some landed, or the rest did not land
+	// alike — so no single code is true of them all and the per-item reasons
+	// live in the message. [LAW:no-silent-failure]
 	reasonBulkPartialFailure    = commandReason{"bulk_partial_failure", ExitGeneric}
 	reasonCommandFailed         = commandReason{"command_failed", ExitGeneric}
 	reasonMigrationFailed       = commandReason{"migration_failed", ExitGeneric}
@@ -358,19 +359,25 @@ func typedErrorReason(err error, unnamed commandReason) commandReason {
 	return unnamed
 }
 
-// bulkReason is a bulk run's reason, derived from the reasons its unlanded
-// items classify as: the one they share, so a run over one item answers as its
-// single command does and a run refused alike answers as a refusal, or
-// bulk_partial_failure when they differ. [LAW:single-enforcer] each item is
-// classified by commandErrorReason, the one classifier, not by a bulk copy.
+// bulkReason is a bulk run's reason: the one every item it ran answers with,
+// so a run over one item answers as its single command does and a run refused
+// alike answers as a refusal, or bulk_partial_failure when they differ. A landed
+// item answers with no reason, so a run in which any item landed differs: under
+// its unlanded items' shared reason, state_already_holds would claim the run
+// changed nothing and a retry reason would re-apply what landed.
+// [LAW:single-enforcer] each item is classified by commandErrorReason, the one
+// classifier, not by a bulk copy.
 func bulkReason(bulk BulkError) commandReason {
-	shared := commandErrorReason(bulk.Unlanded[0].Err)
-	for _, item := range bulk.Unlanded[1:] {
-		if commandErrorReason(item.Err) != shared {
-			return reasonBulkPartialFailure
+	counts := map[commandReason]int{}
+	for _, item := range bulk.Unlanded {
+		counts[commandErrorReason(item.Err)]++
+	}
+	for reason, n := range counts {
+		if n == bulk.Ran {
+			return reason
 		}
 	}
-	return shared
+	return reasonBulkPartialFailure
 }
 
 // installReplacesLit is why installing a lit is the user's call: the
@@ -558,11 +565,11 @@ func commandErrorRemediation(reason commandReason) string {
 		// workspace_schema_ahead gates its paths.
 		return "Do not retry unchanged — a migration this workspace has pending failed and is quarantined, and every command that opens the store refuses until the quarantine is cleared or a snapshot taken before the failure is restored. The message above names both. " + agentInstructionsOpen + "Restoring a snapshot discards everything written since it was taken, and clearing the quarantine lets a migration that already failed run again: take either path only when the user directs it, and until then surface this refusal to the user as blocking." + agentInstructionsClose
 	case reasonBulkPartialFailure:
-		// No re-run is advised: an item a rule refused repeats its refusal, one
-		// whose state already holds has nothing to do, and re-running the whole
-		// command applies every landed item again. Each item's own reason says
+		// No re-run of the whole command is advised: it applies every landed
+		// item again, an item a rule refused repeats its refusal, and one whose
+		// state already holds has nothing to do. Each item's own reason says
 		// what it calls for. [LAW:no-silent-failure]
-		return "Do not re-run the command unchanged — every item it does not list landed, and the listed items did not land for different reasons, each named beside its id. Act on each as its reason calls for: an item refused by a rule repeats its refusal if run again unchanged, and an item whose state already holds needs nothing."
+		return "Do not re-run the command unchanged — every item it does not list landed, and running it again applies them again. Each listed item names beside its id the reason its single command answers with; act on each as that reason calls for, and re-run with only the ids that still need it: an item refused by a rule repeats its refusal until what refused it changes, an item whose state already holds needs nothing, and an item that met a fault can be re-run once the fault clears."
 	default:
 		return "Retry the command. If it still fails, run `lit doctor` for diagnostics."
 	}

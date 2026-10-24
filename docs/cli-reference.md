@@ -58,7 +58,7 @@ the code it arrives on:
 | Reason | Code | Failure |
 |--------|------|---------|
 | `command_failed` | 1 | An unclassified fault |
-| `bulk_partial_failure` | 1 | Items of a multi-id command did not land, for different reasons; the message names each item with its reason |
+| `bulk_partial_failure` | 1 | Items of a multi-id command answered differently: some landed and some did not, or those that did not land did not land alike; the message names each unlanded item with its reason |
 | `remote_unreachable` | 1 | The sync remote could not be reached after retries |
 | `workspace_busy` | 1 | Another lit process holds a lock this command needs: the workspace's store, or its `config.json` |
 | `workspace_write_blocked` | 1 | Another process holds the store and did not release it |
@@ -843,11 +843,12 @@ The summary, the workflow guidance and the follow-up hints a single command prin
 are not printed. If any item does not land, stderr names each such item with its
 reason and error, and the command exits non-zero — so
 `lit bulk close --ids a,b,c && next-step` does **not** run `next-step` unless every
-item landed. The items that landed are still applied. The run answers with the
-reason its unlanded items share, so a run over one issue answers exactly as its
-single command does: `bulk archive` over issues already archived exits 6
-(`state_already_holds`), and over issues the rules refuse exits 3
-(`validation_refused`). Items that did not land for different reasons answer
+item landed. The items that landed are still applied. When no item landed and
+every item answers with one reason, the run answers with that reason, so a run
+over one issue answers exactly as its single command does: `bulk archive` over
+issues already archived exits 6 (`state_already_holds`), and over issues the
+rules refuse exits 3 (`validation_refused`). A run in which some items landed,
+or whose unlanded items answer with different reasons, answers
 `bulk_partial_failure` (exit 1).
 
 ### `lit import`

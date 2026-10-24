@@ -95,9 +95,9 @@ func TestBulkCommentReadsStdinOnceForEveryTicket(t *testing.T) {
 	}
 }
 
-// A ticket that does not exist fails alone: the others get their comment, and
-// the run answers with the missing ticket's own reason, on its item's entry and
-// on the run.
+// A ticket that does not exist fails alone: the others get their comment, its
+// item's entry carries its own reason, and the run, in which the others landed,
+// answers as a partial failure.
 func TestBulkCommentFailsAMissingTicketAndCommentsOnTheRest(t *testing.T) {
 	h := newReadyTestHarness(t)
 	ids := h.bulkTickets(2)
@@ -108,11 +108,11 @@ func TestBulkCommentFailsAMissingTicketAndCommentsOnTheRest(t *testing.T) {
 	if !errors.As(err, &bulk) || len(bulk.Unlanded) != 1 || bulk.Unlanded[0].IssueID != missing {
 		t.Fatalf("error = %v (%T), want one unlanded item, %s", err, err, missing)
 	}
-	if got := commandErrorReason(err); got != reasonEntityNotFound {
-		t.Errorf("reason = %s, want entity_not_found", got)
+	if got := commandErrorReason(err); got != reasonBulkPartialFailure {
+		t.Errorf("reason = %s, want bulk_partial_failure", got)
 	}
-	if ev.Reason != "entity_not_found" {
-		t.Errorf("event reason = %q, want entity_not_found", ev.Reason)
+	if ev.Reason != "bulk_partial_failure" {
+		t.Errorf("event reason = %q, want bulk_partial_failure", ev.Reason)
 	}
 	reasons := []any{}
 	for _, raw := range ev.Occurrences["bulk.items"] {
