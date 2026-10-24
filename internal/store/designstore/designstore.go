@@ -8,10 +8,9 @@
 // against them without linking the engine. [LAW:one-source-of-truth]
 package designstore
 
-// Rows is the design size, fixed on 2026-10-21. Nothing in this tree derives
-// it: the measured figures below were taken at it, so it moves only with them.
-// The real stores' sizes are tools/perfbench's fleetCensus, counted on
-// 2026-10-23 by a stated rule.
+// Rows is the design size: a chosen figure above every real store, which
+// tools/perfbench's fleetCensus counts and its tests hold Rows over. The
+// measured figures below were taken at it, so it moves only with them.
 const Rows = 2_800
 
 // The measured figures are the design size's column of `just perf --sizes
