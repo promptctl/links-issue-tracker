@@ -20,10 +20,6 @@ import (
 // generatedStore is a lit workspace that exists at a known row count, with the
 // path of the store on disk resolved rather than assumed.
 type generatedStore struct {
-	// point is the scale point this store was generated for. Its rows are the
-	// measured store's, not necessarily this one's: a fleet's members hold
-	// every census count, and rows() is this store's own.
-	point size
 	// root is the workspace directory — the cwd every probe is invoked from.
 	root string
 	// databasePath is the store directory whose bytes get reported. It comes
@@ -54,12 +50,12 @@ type generatedStore struct {
 // count cannot disagree with the rows it counts. [LAW:one-source-of-truth]
 func (s generatedStore) rows() int { return len(s.ids) }
 
-// String names the store the way every verdict about it does: its scale
-// point, the directory it was generated in beneath that point, and its own
+// String names the store the way every verdict about it does: its directory
+// beneath the fleet root, which is named for its scale point, and its own
 // rows, so a verdict on a fleet member names that member and not the fleet's
 // largest.
 func (s generatedStore) String() string {
-	return fmt.Sprintf("%s %s (%d rows)", s.point.name, filepath.Base(s.root), s.rows())
+	return fmt.Sprintf("%s/%s (%d rows)", filepath.Base(s.fleetRoot), filepath.Base(s.root), s.rows())
 }
 
 // generate builds every store of a scale point under parent/<name>, the
@@ -98,7 +94,7 @@ func generate(bin litBinary, parent string, sz size, env []string, run stepRunne
 		if generated {
 			m, err = replicate(m, dir)
 		} else {
-			m, err = generateStore(bin, dir, sz, rows, env, run)
+			m, err = generateStore(bin, dir, rows, env, run)
 			first[rows] = m
 		}
 		if err != nil {
@@ -109,8 +105,7 @@ func generate(bin litBinary, parent string, sz size, env []string, run stepRunne
 	return members, nil
 }
 
-// generateStore builds one workspace of rows rows at root, for the scale
-// point sz.
+// generateStore builds one workspace of rows rows at root.
 //
 // WHY IT SHELLS OUT INSTEAD OF CALLING internal/store. Seeding through the
 // store API would be faster, and it would also be a second definition of what a
@@ -121,13 +116,17 @@ func generate(bin litBinary, parent string, sz size, env []string, run stepRunne
 // a store lit itself produced. [LAW:one-source-of-truth]
 // Each step runs through run, which is runQuiet everywhere but the test that
 // proves lit accepts the plan, where it is lit's own entry point in-process.
-func generateStore(bin litBinary, root string, sz size, rows int, env []string, run stepRunner) (generatedStore, error) {
+//
+// Each import spec is written beside the fleet root rather than in it, so the
+// fleet probes walk the generated stores and nothing of this tool's.
+func generateStore(bin litBinary, root string, rows int, env []string, run stepRunner) (generatedStore, error) {
 	if err := os.Mkdir(root, 0o755); err != nil {
 		return generatedStore{}, fmt.Errorf("creating workspace dir: %w", err)
 	}
+	fleetRoot := filepath.Dir(root)
 	specs := make([]importSpec, 0, 1)
 	for i, batch := range importBatches(rows) {
-		specPath := fmt.Sprintf("%s-spec-%d.json", root, i)
+		specPath := fmt.Sprintf("%s-%s-spec-%d.json", fleetRoot, filepath.Base(root), i)
 		blob, err := json.Marshal(batch)
 		if err != nil {
 			return generatedStore{}, fmt.Errorf("encoding import spec: %w", err)
@@ -155,7 +154,7 @@ func generateStore(bin litBinary, root string, sz size, rows int, env []string, 
 		}
 		ids = append(ids, loaded...)
 	}
-	return resolved(generatedStore{point: sz, root: root, fleetRoot: filepath.Dir(root), env: env, ids: ids, imported: imported})
+	return resolved(generatedStore{root: root, fleetRoot: fleetRoot, env: env, ids: ids, imported: imported})
 }
 
 // replicate copies src's workspace to dir and answers the copy, the same rows

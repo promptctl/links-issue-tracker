@@ -23,7 +23,7 @@ import (
 // limitRecord is one verdict as the lane files it: limit is the key one
 // ticket collects every night's breach of this limit under, and a lit topic
 // slug, because the reporter labels and topics the ticket by it; measured is
-// the verdict's own sentence, the line the log printed.
+// the verdict the log printed, without its tag.
 type limitRecord struct {
 	Limit    string `json:"limit"`
 	Title    string `json:"title"`
@@ -45,10 +45,9 @@ func limitKey(s size, what string) string {
 }
 
 // logVerdict writes v to progress and its record to records, together, so a
-// verdict reached is in both or the run fails. The record's measured sentence
-// is the verdict's String, the same line the report and the gate's error
-// print; the log line may carry more, as a failed writer's stderr.
-// [LAW:one-source-of-truth]
+// verdict reached is in both or the run fails. The record carries what the log
+// line does, a failed writer's stderr included: the ticket is where a night's
+// evidence outlives the run's log. [LAW:one-source-of-truth]
 func logVerdict(progress, records io.Writer, v limitVerdict) error {
 	fmt.Fprintln(progress, v.logLine())
 	line, err := json.Marshal(v.limit())
@@ -88,8 +87,8 @@ func (f writerFailure) logLine() string { return "WRITER FAILED: " + f.full() }
 
 func (f writerFailure) limit() limitRecord {
 	return limitRecord{
-		Limit:    limitKey(f.store.point, "storm"),
-		Title:    fmt.Sprintf("At %s, %d concurrent writers do not all complete", f.store.point, stormWriters),
-		Measured: f.String(),
+		Limit:    limitKey(f.point, "storm"),
+		Title:    fmt.Sprintf("At %s, %d concurrent writers do not all complete", f.point, stormWriters),
+		Measured: f.full(),
 	}
 }

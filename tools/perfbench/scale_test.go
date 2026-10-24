@@ -102,7 +102,7 @@ func TestTheStormSpreadsItsWritersAcrossTheMembers(t *testing.T) {
 		mu.Unlock()
 		return nil, nil
 	}
-	storm(litBinary{path: "lit"}, members, latencyBudget, run)
+	storm(litBinary{path: "lit"}, size{name: "f", rows: 0}, members, latencyBudget, run)
 	if wrote["/f/store-000"] != 34 || wrote["/f/store-001"] != 33 || wrote["/f/store-002"] != 33 {
 		t.Errorf("writers per member = %v, want 34/33/33", wrote)
 	}
@@ -114,8 +114,8 @@ func TestTheStormSpreadsItsWritersAcrossTheMembers(t *testing.T) {
 func TestAFailedFleetWriterNamesTheStoreItWroteTo(t *testing.T) {
 	point := size{name: "f", rows: 3, beside: []int{1}}
 	members := []generatedStore{
-		{point: point, root: "/f/store-000", ids: []string{"a", "b", "c"}},
-		{point: point, root: "/f/store-001", ids: []string{"a"}},
+		{root: "/f/store-000", fleetRoot: "/f", ids: []string{"a", "b", "c"}},
+		{root: "/f/store-001", fleetRoot: "/f", ids: []string{"a"}},
 	}
 	run := func(dir string, env []string, st step) ([]byte, error) {
 		if slices.Contains(st.argv, "perfbench storm writer 2") {
@@ -123,11 +123,11 @@ func TestAFailedFleetWriterNamesTheStoreItWroteTo(t *testing.T) {
 		}
 		return nil, nil
 	}
-	failed := storm(litBinary{path: "lit"}, members, latencyBudget, run)
+	failed := storm(litBinary{path: "lit"}, point, members, latencyBudget, run)
 	if len(failed) != 1 {
 		t.Fatalf("failed writers = %v, want writer 2 alone", failed)
 	}
-	if got, want := failed[0].String(), "store f store-001 (1 rows): writer 2 of 100 did not complete: workspace_busy"; got != want {
+	if got, want := failed[0].String(), "store f/store-001 (1 rows): writer 2 of 100 did not complete: workspace_busy"; got != want {
 		t.Errorf("verdict = %q, want %q", got, want)
 	}
 	if got, want := failed[0].limit().Limit, limitKey(point, "storm"); got != want {

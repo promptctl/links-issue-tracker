@@ -42,6 +42,15 @@ func TestLitCarriesOutThePlan(t *testing.T) {
 			if len(store.ids) != sz.rows {
 				t.Fatalf("generation read %d ids back from the import, want one per row (%d)", len(store.ids), sz.rows)
 			}
+			// The fleet root holds the stores and nothing else, so the fleet
+			// probes time lit's walk over stores alone.
+			entries, err := os.ReadDir(store.fleetRoot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(entries) != len(members) {
+				t.Errorf("the fleet root holds %d entries for %d stores: %v", len(entries), len(members), entries)
+			}
 			code, stdout, stderr := runLitIn(t, store.root, env, gateLimits.kill(), []string{"stores", "--counts", store.fleetRoot})
 			if code != 0 {
 				t.Fatalf("stores --counts over the fleet root exited %d:\n%s%s", code, stdout, stderr)

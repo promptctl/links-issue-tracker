@@ -29,6 +29,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 func main() {
@@ -102,6 +103,8 @@ func run(args []string, out, progress io.Writer) error {
 	if err != nil {
 		return err
 	}
+	// An early return is already a failed run, so the deferred close's error
+	// adds nothing; the one that matters is checked once every size is in.
 	defer closeRecords()
 
 	workDir, cleanup, err := workspaceRoot(*keep, progress)
@@ -132,6 +135,9 @@ func run(args []string, out, progress io.Writer) error {
 		results = append(results, r)
 		gate = gate.join(verdict)
 	}
+	if err := closeRecords(); err != nil {
+		return fmt.Errorf("--limits: %w", err)
+	}
 
 	cond := conditions{goos: runtime.GOOS, goarch: runtime.GOARCH, cpus: runtime.NumCPU()}
 	fmt.Fprint(out, renderReport(probes, results, gateLimits.budget, gate.breaches, cond))
@@ -147,16 +153,17 @@ func run(args []string, out, progress io.Writer) error {
 // verdicts alone, or discards the records when no file was named: every run
 // writes them, and only where they land varies. [LAW:dataflow-not-control-flow]
 // The file is unbuffered, so a record is the kernel's the moment it is
-// written and a run killed later keeps it.
-func limitsSink(path string) (io.Writer, func(), error) {
+// written and a run killed later keeps it. Its close runs once however often
+// it is called, and every call answers that one close's error.
+func limitsSink(path string) (io.Writer, func() error, error) {
 	if path == "" {
-		return io.Discard, func() {}, nil
+		return io.Discard, func() error { return nil }, nil
 	}
 	f, err := os.Create(path)
 	if err != nil {
 		return nil, nil, fmt.Errorf("--limits: %w", err)
 	}
-	return f, func() { f.Close() }, nil
+	return f, sync.OnceValue(f.Close), nil
 }
 
 // measureSize generates a scale point's stores and takes every measurement of
@@ -217,7 +224,7 @@ func measureSize(bin litBinary, workDir string, sz size, env []string, lim limit
 		return result{}, gateError{}, err
 	}
 	fmt.Fprintf(progress, "storming %s, %d concurrent writers across %d store(s) ...\n", sz, stormWriters, len(members))
-	verdict.writers = storm(bin, members, lim.budget, run)
+	verdict.writers = storm(bin, sz, members, lim.budget, run)
 	if err := logVerdicts(progress, records, verdict.writers); err != nil {
 		return result{}, gateError{}, err
 	}

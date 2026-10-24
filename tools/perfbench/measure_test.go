@@ -48,7 +48,7 @@ func invocations(t *testing.T, log string) []string {
 // `show` included, has an invocation against it.
 func fakeStore(t *testing.T) generatedStore {
 	t.Helper()
-	return generatedStore{point: size{name: "fake", rows: 7}, root: t.TempDir(),
+	return generatedStore{root: t.TempDir(),
 		ids: []string{"bench-a", "bench-b", "bench-c", "bench-d", "bench-e", "bench-f", "bench-g"}}
 }
 
@@ -136,11 +136,11 @@ func TestRunProbeJudgesTheExitAgainstTheStoreSize(t *testing.T) {
 	if next.name == "" {
 		t.Fatal("no probe named next")
 	}
-	empty := generatedStore{point: size{name: "empty", rows: 0}, root: t.TempDir()}
+	empty := generatedStore{root: t.TempDir()}
 	if _, err := runProbe(bin, empty, resolve(t, next, empty), devNull(t), gateLimits.kill()); err != nil {
 		t.Errorf("exit 6 on the empty store is the honest answer, got error: %v", err)
 	}
-	populated := generatedStore{point: size{name: "5x-target", rows: 590}, root: t.TempDir(), ids: make([]string, 590)}
+	populated := generatedStore{root: t.TempDir(), ids: make([]string, 590)}
 	if _, err := runProbe(bin, populated, resolve(t, next, populated), devNull(t), gateLimits.kill()); err == nil {
 		t.Error("exit 6 on a 590-row store, where every row is open, was accepted as a measurement")
 	}
@@ -163,7 +163,7 @@ func TestRunProbeRunsLitUnderTheStoresEnvironment(t *testing.T) {
 		t.Fatal(err)
 	}
 	configHome := filepath.Join(dir, "config-home")
-	store := generatedStore{point: size{name: "fake", rows: 7}, root: dir, env: hermeticEnv(os.Environ(), configHome, filepath.Join(dir, "state-home"))}
+	store := generatedStore{root: dir, env: hermeticEnv(os.Environ(), configHome, filepath.Join(dir, "state-home"))}
 	if _, err := runProbe(litBinary{path: path}, store, resolve(t, probe{name: "ls", argv: fixed("ls"), okCodes: exits(0)}, store), devNull(t), gateLimits.kill()); err != nil {
 		t.Fatalf("runProbe error = %v", err)
 	}
