@@ -26,7 +26,7 @@ This table is the corpus's single source for the code-to-error-type mapping; `07
 | Exit | Constant | Error types |
 |---|---|---|
 | 0 | `ExitOK` | nil error, including a handled `--help` |
-| 1 | `ExitGeneric` | a `BulkError` whose unlanded items differ in reason (one whose items share a reason exits with that reason's code), transient GC contention, everything else |
+| 1 | `ExitGeneric` | a `BulkError` whose items differ in reason, a landed item differing from every unlanded one (one whose every item shares a reason exits with that reason's code), transient GC contention, everything else |
 | 2 | `ExitUsage` | `UsageError` |
 | 3 | `ExitValidation` | `UnknownCommandError`, `RetiredCommandError`, any `model.Refusal` (`model.ValidationError`, `model.FrozenIssueError`, and the upgrade/downgrade target refusals), `UnsupportedError`, `templateShapeError`, `OutsideWorkspaceError`, `store.ErrWorkspaceNotInitialized`, any `model.SchemaAhead` (`*store.UnsupportedSchemaVersionError`, `*store.DowngradeSpanUnsupportedError`, `*store.RemoteSchemaAheadError`, which a remote-schema-ahead `SyncFailureError` unwraps to), `*store.QuarantineBlockError`, `workspace.ErrIssuePrefixRefused`, any `model.StateRequestError` (`model.ContainerActionError`, `lifecycle.RetentionError`) when not `Satisfied()`, `takeoverUnconfirmedError`, `purgeUnconfirmedError` |
 | 4 | `ExitNotFound` | `storage.NotFoundError`, `storage.VersionNotFoundError`, `storage.PlanDigestNotFoundError` |

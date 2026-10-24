@@ -89,37 +89,36 @@ func TestBulkLabelTotalFailureExitsNonZero(t *testing.T) {
 	}
 }
 
-// commandAnswer is how the real CLI answers args in repo: the header line
-// main prints for its error ("error (code=N, reason=R): …"), its
+// commandAnswer is how the real CLI answers args in repo: what main prints to
+// stderr for its error ("error (code=N, reason=R): …" and on), its
 // "remediation: …" line, and stdout alone. A run that succeeds, or a reason
-// with no remediation, answers with empty lines there.
-func commandAnswer(t *testing.T, repo string, args ...string) (header, remediation, stdout string) {
+// with no remediation, answers with empty strings there.
+func commandAnswer(t *testing.T, repo string, args ...string) (stderr, remediation, stdout string) {
 	t.Helper()
 	var out bytes.Buffer
 	err := Run(context.Background(), dirInvocation(repo, &out, io.Discard, args))
 	if err == nil {
 		return "", "", out.String()
 	}
-	var stderr bytes.Buffer
-	WriteCommandError(&stderr, err)
-	lines := strings.Split(strings.TrimSuffix(stderr.String(), "\n"), "\n")
-	for _, line := range lines[1:] {
+	var written bytes.Buffer
+	WriteCommandError(&written, err)
+	for _, line := range strings.Split(written.String(), "\n") {
 		if strings.HasPrefix(line, "remediation: ") {
 			remediation = line
 		}
 	}
-	return lines[0], remediation, out.String()
+	return written.String(), remediation, out.String()
 }
 
-// codeAndReason reads "code=6, reason=state_already_holds" off a header
-// "error (code=6, reason=state_already_holds): …".
-func codeAndReason(t *testing.T, header string) string {
+// codeAndReason reads "code=6, reason=state_already_holds" off stderr that
+// opens "error (code=6, reason=state_already_holds): …".
+func codeAndReason(t *testing.T, stderr string) string {
 	t.Helper()
-	start, end := strings.Index(header, "("), strings.Index(header, ")")
-	if !strings.HasPrefix(header, "error (") || end < start {
-		t.Fatalf("header = %q, want error (code=…, reason=…)", header)
+	start, end := strings.Index(stderr, "("), strings.Index(stderr, ")")
+	if !strings.HasPrefix(stderr, "error (") || end < start {
+		t.Fatalf("stderr = %q, want error (code=…, reason=…)", stderr)
 	}
-	return header[start+1 : end]
+	return stderr[start+1 : end]
 }
 
 // The ticket's acceptance, through the real CLI: `lit bulk archive` over an
@@ -163,12 +162,12 @@ func TestBulkArchiveAnswersEachTicketItCannotMoveAsLitArchiveDoes(t *testing.T) 
 				live := task(t, "lands")
 				ids, wantStdout, want = tc.stuck+","+live, live+" ok\n", partial
 			}
-			header, remediation, stdout := commandAnswer(t, repo, "bulk", "archive", "--ids", ids)
-			if got := codeAndReason(t, header); got != want {
+			stderr, remediation, stdout := commandAnswer(t, repo, "bulk", "archive", "--ids", ids)
+			if got := codeAndReason(t, stderr); got != want {
 				t.Errorf("lit bulk archive --ids %s answers %q, want %q", ids, got, want)
 			}
-			if named := tc.stuck + " (" + tc.reason + ")"; !strings.Contains(header, named) {
-				t.Errorf("header = %q, want it to name %q", header, named)
+			if named := tc.stuck + " (" + tc.reason + ")"; !strings.Contains(stderr, named) {
+				t.Errorf("stderr = %q, want it to name %q", stderr, named)
 			}
 			if strings.Contains(remediation, "Re-run the command for only the failed IDs") {
 				t.Errorf("remediation = %q, advises re-running the ticket", remediation)
@@ -183,13 +182,13 @@ func TestBulkArchiveAnswersEachTicketItCannotMoveAsLitArchiveDoes(t *testing.T) 
 	}
 
 	t.Run("already archived and deleted", func(t *testing.T) {
-		header, remediation, stdout := commandAnswer(t, repo, "bulk", "archive", "--ids", archived+","+deleted)
-		if got := codeAndReason(t, header); got != partial {
+		stderr, remediation, stdout := commandAnswer(t, repo, "bulk", "archive", "--ids", archived+","+deleted)
+		if got := codeAndReason(t, stderr); got != partial {
 			t.Errorf("answer = %q, want %q", got, partial)
 		}
 		for _, named := range []string{archived + " (state_already_holds)", deleted + " (validation_refused)"} {
-			if !strings.Contains(header, named) {
-				t.Errorf("header = %q, want it to name %q", header, named)
+			if !strings.Contains(stderr, named) {
+				t.Errorf("stderr = %q, want it to name %q", stderr, named)
 			}
 		}
 		if !strings.HasPrefix(remediation, "remediation: Do not re-run the command unchanged") {
