@@ -311,26 +311,20 @@ func TestStartUsageNamesTake(t *testing.T) {
 // item to land and returns the run's bulk.items entries as (id, error) pairs.
 func runBulkRecorded(t *testing.T, h readyTestHarness, spec transitionSpec, ids []string) [][2]any {
 	t.Helper()
-	recorder := telemetry.Begin(telemetry.Event{})
-	ctx := telemetry.With(h.ctx, recorder)
-	var out bytes.Buffer
-	row, err := bulkFamily.resolve(ctx, []string{spec.name})
+	row, err := bulkFamily.resolve(underInvocation(h.ctx), []string{spec.name})
 	if err != nil {
 		t.Fatalf("lit bulk %s does not resolve: %v", spec.name, err)
 	}
-	leaf := row.declare()
-	positional, err := parseLeaf(ctx, leaf, []string{"--ids", strings.Join(ids, ",")}, cwdInvocation(&out, &out, nil))
+	var out bytes.Buffer
+	ev, err := recordLeaf(row.declare(), h.ctx, cwdInvocation(&out, &out, nil), h.ap, []string{"--ids", strings.Join(ids, ",")})
 	if err != nil {
-		t.Fatalf("parse bulk %s error = %v", spec.name, err)
-	}
-	if err := leaf.work(ctx, cwdInvocation(&out, &out, nil), h.ap, positional); err != nil {
 		t.Fatalf("bulk %s error = %v", spec.name, err)
 	}
 	if want := strings.Join(ids, " ok\n") + " ok\n"; out.String() != want {
 		t.Errorf("bulk %s stdout = %q, want %q", spec.name, out.String(), want)
 	}
 	var items [][2]any
-	for _, raw := range writtenEvent(t, recorder.Finish(telemetry.End{})).Occurrences["bulk.items"] {
+	for _, raw := range writtenEvent(t, ev).Occurrences["bulk.items"] {
 		entry := raw.(map[string]any)
 		items = append(items, [2]any{entry["bulk.item.id"], entry["bulk.item.error"]})
 	}
@@ -339,8 +333,10 @@ func runBulkRecorded(t *testing.T, h readyTestHarness, spec transitionSpec, ids 
 
 // The ticket's acceptance: a batch moved out of the flow by bulk archive or
 // bulk delete comes back to its exact prior state through the inverse bulk
-// verb, whatever state each ticket was in. Each run leaves one clean
-// bulk.items entry per ticket.
+// verb, whether each live ticket was open, in progress or done. Each run
+// leaves one clean bulk.items entry per ticket. A live batch only: delete
+// drops an archived ticket's archive stamp, so restore lands it live
+// (lifecycle.Retain).
 func TestBulkRetentionVerbsRoundTripTheirInverse(t *testing.T) {
 	for _, pair := range []struct {
 		out, back transitionSpec
@@ -388,36 +384,52 @@ func TestBulkRetentionVerbsRoundTripTheirInverse(t *testing.T) {
 	}
 }
 
-// Each retention verb in bulk refuses what its single verb refuses, in the
-// single verb's words, and the other tickets in the run still land.
-func TestBulkRetentionVerbsRefuseWhatTheSingleVerbRefusesInItsWords(t *testing.T) {
+// Each retention verb in bulk answers every ticket its single verb will not
+// move — one the verb refuses, and one already where the verb would put it —
+// with the single verb's error, and the other ticket in the run still lands.
+// The rows are every cell of lifecycle.Retain that does not move.
+func TestBulkRetentionVerbsAnswerEachTicketTheyCannotMoveAsTheSingleVerbDoes(t *testing.T) {
+	type retention struct {
+		name string
+		via  []model.Action // from a new live ticket
+	}
+	var (
+		live     = retention{"live", nil}
+		archived = retention{"archived", []model.Action{model.Archive{}}}
+		deleted  = retention{"deleted", []model.Action{model.Delete{}}}
+	)
 	for _, tc := range []struct {
-		spec   transitionSpec
-		refuse model.Action // puts the refused ticket where the verb refuses it
-		land   model.Action // puts the other ticket where the verb moves it
+		spec         transitionSpec
+		stuck, moves retention // one ticket where the verb will not move it, the other where it does
 	}{
-		{unarchiveSpec, model.Delete{}, model.Archive{}},
-		{restoreSpec, model.Archive{}, model.Delete{}},
-		{deleteSpec, model.Delete{}, nil},
+		{archiveSpec, archived, live},
+		{archiveSpec, deleted, live},
+		{unarchiveSpec, live, archived},
+		{unarchiveSpec, deleted, archived},
+		{deleteSpec, deleted, live},
+		{restoreSpec, live, deleted},
+		{restoreSpec, archived, deleted},
 	} {
-		t.Run(tc.spec.name, func(t *testing.T) {
+		t.Run(tc.spec.name+"/"+tc.stuck.name, func(t *testing.T) {
 			h := newReadyTestHarness(t)
 			ids := h.bulkTickets(2)
-			refused, landed := ids[0], ids[1]
-			h.applyAction(refused, tc.refuse, "")
-			if tc.land != nil {
-				h.applyAction(landed, tc.land, "")
+			stuck, landed := ids[0], ids[1]
+			for _, a := range tc.stuck.via {
+				h.applyAction(stuck, a, "")
 			}
-			single := h.runTransitionErr(refused, tc.spec)
+			for _, a := range tc.moves.via {
+				h.applyAction(landed, a, "")
+			}
+			single := h.runTransitionErr(stuck, tc.spec)
 			if single == nil {
-				t.Fatalf("lit %s on %s succeeded; the test needs a refusal", tc.spec.name, refused)
+				t.Fatalf("lit %s on %s succeeded; the test needs a ticket it does not move", tc.spec.name, stuck)
 			}
 			var out bytes.Buffer
-			failed := bulkFailures(t, h, &out, tc.spec, "--ids", refused+","+landed)
-			if len(failed) != 1 || failed[refused] == nil {
-				t.Fatalf("bulk %s failures = %v, want exactly %s", tc.spec.name, failed, refused)
+			failed := bulkFailures(t, h, &out, tc.spec, "--ids", stuck+","+landed)
+			if len(failed) != 1 || failed[stuck] == nil {
+				t.Fatalf("bulk %s failures = %v, want exactly %s", tc.spec.name, failed, stuck)
 			}
-			if got := failed[refused]; got.Error() != single.Error() || reflect.TypeOf(got) != reflect.TypeOf(single) {
+			if got := failed[stuck]; got.Error() != single.Error() || reflect.TypeOf(got) != reflect.TypeOf(single) {
 				t.Errorf("bulk %s error = %q (%T), want lit %s's %q (%T)", tc.spec.name, got, got, tc.spec.name, single, single)
 			}
 			if want := landed + " ok\n"; out.String() != want {

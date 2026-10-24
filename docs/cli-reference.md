@@ -824,8 +824,10 @@ runs on one: `bulk start` is `lit start`, `bulk close` is `lit close`, and so on
 It takes that command's flags, and an issue the single command refuses fails
 here with the same error. `bulk start` asks to take over a lane another checkout
 holds the way `lit start` does, and `--take` confirms every takeover in the run.
-A transition to the state an issue is already in, such as `bulk open` on an open
-issue, succeeds and changes nothing, as it does singly. `bulk close` records one
+A lifecycle transition to the state an issue is already in, such as `bulk open`
+on an open issue, succeeds and changes nothing, as it does singly. A retention
+verb on an issue already in its state, such as `bulk delete` on a deleted issue,
+fails that issue with the error its single command gives. `bulk close` records one
 shared outcome on every issue it closes.
 
 `bulk comment` adds the same comment to every listed issue, as `lit comment add`
