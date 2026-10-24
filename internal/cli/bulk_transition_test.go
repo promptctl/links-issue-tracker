@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
-	"github.com/promptctl/links-issue-tracker/internal/model/lifecycle"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 )
@@ -343,8 +342,8 @@ func TestBulkRetentionVerbsRoundTripTheirInverse(t *testing.T) {
 		out, back transitionSpec
 		away      func(model.Retention) bool
 	}{
-		{archiveSpec, unarchiveSpec, func(r model.Retention) bool { _, ok := r.(lifecycle.Archived); return ok }},
-		{deleteSpec, restoreSpec, func(r model.Retention) bool { _, ok := r.(lifecycle.Deleted); return ok }},
+		{archiveSpec, unarchiveSpec, func(r model.Retention) bool { _, ok := r.(model.Archived); return ok }},
+		{deleteSpec, restoreSpec, func(r model.Retention) bool { _, ok := r.(model.Deleted); return ok }},
 	} {
 		t.Run(pair.out.name+"/"+pair.back.name, func(t *testing.T) {
 			h := newReadyTestHarness(t)
