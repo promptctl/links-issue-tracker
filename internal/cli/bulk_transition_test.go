@@ -333,8 +333,9 @@ func runBulkRecorded(t *testing.T, h readyTestHarness, spec transitionSpec, ids 
 
 // The ticket's acceptance: a batch moved out of the flow by bulk archive or
 // bulk delete comes back to its exact prior state through the inverse bulk
-// verb, whether each live ticket was open, in progress or done. Each run
-// leaves one clean bulk.items entry per ticket. A live batch only: delete
+// verb, whether each live ticket was open, in progress or done, with its
+// labels, edges and comments. Each run leaves one clean bulk.items entry per
+// ticket. A live batch only: delete
 // drops an archived ticket's archive stamp, so restore lands it live
 // (lifecycle.Retain).
 func TestBulkRetentionVerbsRoundTripTheirInverse(t *testing.T) {
@@ -349,11 +350,32 @@ func TestBulkRetentionVerbsRoundTripTheirInverse(t *testing.T) {
 			h := newReadyTestHarness(t)
 			ids := h.bulkTickets(3)
 			h.setLabels(ids[0], "keep")
+			if _, err := h.ap.Store.AddRelation(h.ctx, storage.AddRelationInput{SrcID: ids[0], DstID: ids[1], Type: model.RelRelatedTo, CreatedBy: "ada"}); err != nil {
+				t.Fatalf("AddRelation error = %v", err)
+			}
+			note, err := model.ParseCommentBody("kept through the round trip")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := h.ap.Store.AddComment(h.ctx, storage.AddCommentInput{IssueID: ids[2], Body: note, CreatedBy: "ada"}); err != nil {
+				t.Fatalf("AddComment error = %v", err)
+			}
 			h.applyAction(ids[1], model.Start{Assignee: "ada"}, "")
 			h.applyAction(ids[2], model.Done{}, "")
-			prior := map[string]model.Issue{}
+			state := func(id string) model.IssueDetail {
+				t.Helper()
+				d, err := h.ap.Store.GetIssueDetail(h.ctx, id)
+				if err != nil {
+					t.Fatalf("GetIssueDetail(%q) error = %v", id, err)
+				}
+				return model.IssueDetail{Issue: d.Issue, Relations: d.Relations, Comments: d.Comments}
+			}
+			prior := map[string]model.IssueDetail{}
 			for _, id := range ids {
-				prior[id] = h.issueDetail(id)
+				prior[id] = state(id)
+			}
+			if len(prior[ids[0]].Relations) == 0 || len(prior[ids[2]].Comments) == 0 {
+				t.Fatalf("fixture details = %+v; the round trip needs an edge and a comment to keep", prior)
 			}
 			wantItems := make([][2]any, len(ids))
 			for i, id := range ids {
@@ -372,10 +394,10 @@ func TestBulkRetentionVerbsRoundTripTheirInverse(t *testing.T) {
 				t.Errorf("bulk %s bulk.items = %v, want %v", pair.back.name, got, wantItems)
 			}
 			for _, id := range ids {
-				got := h.issueDetail(id)
+				got := state(id)
 				// The round trip is two writes, so the write clock moved; every
 				// other field is the ticket's state and must be what it was.
-				got.UpdatedAt = prior[id].UpdatedAt
+				got.Issue.UpdatedAt = prior[id].Issue.UpdatedAt
 				if !reflect.DeepEqual(got, prior[id]) {
 					t.Errorf("%s after bulk %s then bulk %s = %+v, want %+v", id, pair.out.name, pair.back.name, got, prior[id])
 				}
@@ -386,7 +408,8 @@ func TestBulkRetentionVerbsRoundTripTheirInverse(t *testing.T) {
 
 // Each retention verb in bulk answers every ticket its single verb will not
 // move — one the verb refuses, and one already where the verb would put it —
-// with the single verb's error, and the other ticket in the run still lands.
+// with the single verb's error and the ticket untouched, and the other ticket
+// in the run still lands.
 // The rows are every cell of lifecycle.Retain that does not move.
 func TestBulkRetentionVerbsAnswerEachTicketTheyCannotMoveAsTheSingleVerbDoes(t *testing.T) {
 	type retention struct {
@@ -424,8 +447,12 @@ func TestBulkRetentionVerbsAnswerEachTicketTheyCannotMoveAsTheSingleVerbDoes(t *
 			if single == nil {
 				t.Fatalf("lit %s on %s succeeded; the test needs a ticket it does not move", tc.spec.name, stuck)
 			}
+			before := h.issueDetail(stuck)
 			var out bytes.Buffer
 			failed := bulkFailures(t, h, &out, tc.spec, "--ids", stuck+","+landed)
+			if after := h.issueDetail(stuck); !reflect.DeepEqual(after, before) {
+				t.Errorf("bulk %s wrote %s it did not move: %+v, was %+v", tc.spec.name, stuck, after, before)
+			}
 			if len(failed) != 1 || failed[stuck] == nil {
 				t.Fatalf("bulk %s failures = %v, want exactly %s", tc.spec.name, failed, stuck)
 			}

@@ -827,7 +827,8 @@ holds the way `lit start` does, and `--take` confirms every takeover in the run.
 A lifecycle transition to the state an issue is already in, such as `bulk open`
 on an open issue, succeeds and changes nothing, as it does singly. A retention
 verb on an issue already in its state, such as `bulk delete` on a deleted issue,
-fails that issue with the message its single command gives. `bulk close` records one
+fails that issue with the message its single command gives, so the run exits 1
+where the single command exits 6 (`state_already_holds`). `bulk close` records one
 shared outcome on every issue it closes.
 
 `bulk comment` adds the same comment to every listed issue, as `lit comment add`
