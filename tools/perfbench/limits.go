@@ -44,18 +44,18 @@ func limitKey(s size, what string) string {
 	return issueid.NormalizeSlug(s.name + " " + what)
 }
 
-// logVerdict writes v to progress and its record to limits, together, so a
+// logVerdict writes v to progress and its record to records, together, so a
 // verdict reached is in both or the run fails. The record's measured sentence
 // is the verdict's String, the same line the report and the gate's error
 // print; the log line may carry more, as a failed writer's stderr.
 // [LAW:one-source-of-truth]
-func logVerdict(progress, limits io.Writer, v limitVerdict) error {
+func logVerdict(progress, records io.Writer, v limitVerdict) error {
 	fmt.Fprintln(progress, v.logLine())
 	line, err := json.Marshal(v.limit())
 	if err != nil {
 		return fmt.Errorf("encoding limit record: %w", err)
 	}
-	if _, err := fmt.Fprintf(limits, "%s\n", line); err != nil {
+	if _, err := fmt.Fprintf(records, "%s\n", line); err != nil {
 		return fmt.Errorf("writing --limits: %w", err)
 	}
 	return nil
@@ -88,8 +88,8 @@ func (f writerFailure) logLine() string { return "WRITER FAILED: " + f.full() }
 
 func (f writerFailure) limit() limitRecord {
 	return limitRecord{
-		Limit:    limitKey(f.store, "storm"),
-		Title:    fmt.Sprintf("At %s, %d concurrent writers do not all complete", f.store, stormWriters),
+		Limit:    limitKey(f.store.point, "storm"),
+		Title:    fmt.Sprintf("At %s, %d concurrent writers do not all complete", f.store.point, stormWriters),
 		Measured: f.String(),
 	}
 }

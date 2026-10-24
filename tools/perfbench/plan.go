@@ -107,7 +107,7 @@ func invocationsFor(ps []probe, store generatedStore) []invocation {
 	var out []invocation
 	for _, p := range ps {
 		if args, ok := p.argv(store); ok {
-			out = append(out, invocation{probe: p, args: args, okCodes: p.okCodes(store.size.rows)})
+			out = append(out, invocation{probe: p, args: args, okCodes: p.okCodes(store.rows())})
 		}
 	}
 	return out

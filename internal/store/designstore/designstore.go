@@ -8,9 +8,8 @@
 // against them without linking the engine. [LAW:one-source-of-truth]
 package designstore
 
-// Rows is the design size: about twice this repository's store on 2026-10-21,
-// the largest lit store known. tools/perfbench's fleetCensus counts that store
-// and every other on the machine by one stated rule.
+// Rows is the design size: twice this repository's 1,383 rows on 2026-10-21,
+// the largest lit store known.
 const Rows = 2_800
 
 // The measured figures are the design size's column of `just perf --sizes

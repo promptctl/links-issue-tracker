@@ -352,11 +352,11 @@ func TestShowIsInvokedOnlyAgainstAStoreWithARow(t *testing.T) {
 		}
 		return out
 	}
-	populated := names(invocationsFor(probes, generatedStore{size: size{rows: 2}, ids: []string{"bench-a", "bench-b"}}))
+	populated := names(invocationsFor(probes, generatedStore{ids: []string{"bench-a", "bench-b"}}))
 	if got := strings.Join(populated["show"], " "); got != "show bench-a" {
 		t.Errorf("show against a populated store runs %q, want %q", got, "show bench-a")
 	}
-	empty := names(invocationsFor(probes, generatedStore{size: size{rows: 0}}))
+	empty := names(invocationsFor(probes, generatedStore{}))
 	if args, ok := empty["show"]; ok {
 		t.Errorf("show has an invocation against the empty store: %v", args)
 	}

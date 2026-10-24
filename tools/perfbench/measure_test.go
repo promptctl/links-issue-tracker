@@ -48,7 +48,7 @@ func invocations(t *testing.T, log string) []string {
 // `show` included, has an invocation against it.
 func fakeStore(t *testing.T) generatedStore {
 	t.Helper()
-	return generatedStore{size: size{name: "fake", rows: 7}, root: t.TempDir(),
+	return generatedStore{point: size{name: "fake", rows: 7}, root: t.TempDir(),
 		ids: []string{"bench-a", "bench-b", "bench-c", "bench-d", "bench-e", "bench-f", "bench-g"}}
 }
 
@@ -58,7 +58,7 @@ func resolve(t *testing.T, p probe, store generatedStore) invocation {
 	t.Helper()
 	invs := invocationsFor([]probe{p}, store)
 	if len(invs) != 1 {
-		t.Fatalf("probe %q has %d invocations against store %s, want 1", p.name, len(invs), store.size.name)
+		t.Fatalf("probe %q has %d invocations against store %s, want 1", p.name, len(invs), store)
 	}
 	return invs[0]
 }
@@ -136,11 +136,11 @@ func TestRunProbeJudgesTheExitAgainstTheStoreSize(t *testing.T) {
 	if next.name == "" {
 		t.Fatal("no probe named next")
 	}
-	empty := generatedStore{size: size{name: "empty", rows: 0}, root: t.TempDir()}
+	empty := generatedStore{point: size{name: "empty", rows: 0}, root: t.TempDir()}
 	if _, err := runProbe(bin, empty, resolve(t, next, empty), devNull(t), gateLimits.kill()); err != nil {
 		t.Errorf("exit 6 on the empty store is the honest answer, got error: %v", err)
 	}
-	populated := generatedStore{size: size{name: "5x-target", rows: 590}, root: t.TempDir()}
+	populated := generatedStore{point: size{name: "5x-target", rows: 590}, root: t.TempDir(), ids: make([]string, 590)}
 	if _, err := runProbe(bin, populated, resolve(t, next, populated), devNull(t), gateLimits.kill()); err == nil {
 		t.Error("exit 6 on a 590-row store, where every row is open, was accepted as a measurement")
 	}
@@ -163,7 +163,7 @@ func TestRunProbeRunsLitUnderTheStoresEnvironment(t *testing.T) {
 		t.Fatal(err)
 	}
 	configHome := filepath.Join(dir, "config-home")
-	store := generatedStore{size: size{name: "fake", rows: 7}, root: dir, env: hermeticEnv(os.Environ(), configHome, filepath.Join(dir, "state-home"))}
+	store := generatedStore{point: size{name: "fake", rows: 7}, root: dir, env: hermeticEnv(os.Environ(), configHome, filepath.Join(dir, "state-home"))}
 	if _, err := runProbe(litBinary{path: path}, store, resolve(t, probe{name: "ls", argv: fixed("ls"), okCodes: exits(0)}, store), devNull(t), gateLimits.kill()); err != nil {
 		t.Fatalf("runProbe error = %v", err)
 	}

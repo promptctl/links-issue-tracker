@@ -170,13 +170,13 @@ func measurePhase(bin litBinary, store generatedStore, phase []invocation, devnu
 					// err carries what the command wrote before the kill, the
 					// one clue to why it hung.
 					fmt.Fprintf(progress, "killed: store %s, probe %q, %s: %v; measuring on\n",
-						store.size, inv.probe.name, roundName(round), err)
+						store, inv.probe.name, roundName(round), err)
 				}
 				continue
 			}
 			if err != nil {
 				return nil, fmt.Errorf("store %s, probe %q, %s: %w",
-					store.size, inv.probe.name, roundName(round), err)
+					store, inv.probe.name, roundName(round), err)
 			}
 			// Round 0 is the warm-up and is never recorded: its cold cost
 			// (page cache, dynamic linking, a never-written store's first
@@ -249,7 +249,7 @@ func runProbe(bin litBinary, store generatedStore, inv invocation, devnull *os.F
 	if !slices.Contains(inv.okCodes, code) {
 		return 0, fmt.Errorf("`lit %s` exited %d, which is not among its expected codes %v at %d rows — "+
 			"the command did not do its work, so its %s is not a measurement of it:\n%s",
-			strings.Join(inv.args, " "), code, inv.okCodes, store.size.rows, elapsed.Round(time.Millisecond),
+			strings.Join(inv.args, " "), code, inv.okCodes, store.rows(), elapsed.Round(time.Millisecond),
 			strings.TrimSpace(stderr.String()))
 	}
 	return elapsed, nil

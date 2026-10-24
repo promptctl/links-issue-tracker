@@ -98,11 +98,11 @@ func run(args []string, out, progress io.Writer) error {
 	if err != nil {
 		return err
 	}
-	limits, closeLimits, err := limitsSink(*limitsPath)
+	records, closeRecords, err := limitsSink(*limitsPath)
 	if err != nil {
 		return err
 	}
-	defer closeLimits()
+	defer closeRecords()
 
 	workDir, cleanup, err := workspaceRoot(*keep, progress)
 	if err != nil {
@@ -125,7 +125,7 @@ func run(args []string, out, progress io.Writer) error {
 	results := make([]result, 0, len(sizes))
 	var gate gateError
 	for _, sz := range sizes {
-		r, verdict, err := measureSize(bin, workDir, sz, env, gateLimits, runQuiet, progress, limits)
+		r, verdict, err := measureSize(bin, workDir, sz, env, gateLimits, runQuiet, progress, records)
 		if err != nil {
 			return err
 		}
@@ -164,7 +164,7 @@ func limitsSink(path string) (io.Writer, func(), error) {
 // history, which change the store every figure before them describes, then
 // the storm, whose hundred writes would change it more than any of them.
 //
-// Each verdict is written to progress, and its record to limits, as soon as it
+// Each verdict is written to progress, and its record to records, as soon as it
 // is reached: the latency
 // verdicts once the probes are measured, the ceiling-input verdicts once
 // compaction and history are, and each storm writer that failed as the storm
@@ -173,7 +173,7 @@ func limitsSink(path string) (io.Writer, func(), error) {
 // reach progress sooner still, as they happen (measurePhase). The verdict it
 // returns is the one it logged, judged once, and it is what run exits on.
 // [LAW:one-source-of-truth]
-func measureSize(bin litBinary, workDir string, sz size, env []string, lim limits, run stepRunner, progress, limits io.Writer) (result, gateError, error) {
+func measureSize(bin litBinary, workDir string, sz size, env []string, lim limits, run stepRunner, progress, records io.Writer) (result, gateError, error) {
 	fmt.Fprintf(progress, "generating %s: %d store(s) ...\n", sz, len(sz.members()))
 	members, err := generate(bin, workDir, sz, env, run)
 	if err != nil {
@@ -198,7 +198,7 @@ func measureSize(bin litBinary, workDir string, sz size, env []string, lim limit
 	r := result{size: sz, imported: store.imported, bytes: bytes, fleetBytes: fleetBytes, samples: samples}
 	var verdict gateError
 	verdict.breaches = breaches(r, lim.budget)
-	if err := logVerdicts(progress, limits, verdict.breaches); err != nil {
+	if err := logVerdicts(progress, records, verdict.breaches); err != nil {
 		return result{}, gateError{}, err
 	}
 	// The empty store has no row to edit, so its history is the zero cost the
@@ -213,12 +213,12 @@ func measureSize(bin litBinary, workDir string, sz size, env []string, lim limit
 		}
 	}
 	verdict.inputs = inputBreaches(r)
-	if err := logVerdicts(progress, limits, verdict.inputs); err != nil {
+	if err := logVerdicts(progress, records, verdict.inputs); err != nil {
 		return result{}, gateError{}, err
 	}
 	fmt.Fprintf(progress, "storming %s, %d concurrent writers across %d store(s) ...\n", sz, stormWriters, len(members))
 	verdict.writers = storm(bin, members, lim.budget, run)
-	if err := logVerdicts(progress, limits, verdict.writers); err != nil {
+	if err := logVerdicts(progress, records, verdict.writers); err != nil {
 		return result{}, gateError{}, err
 	}
 	return r, verdict, nil
@@ -227,9 +227,9 @@ func measureSize(bin litBinary, workDir string, sz size, env []string, lim limit
 // logVerdicts logs each of vs as it is reached. [LAW:no-silent-failure] a
 // limit that cannot be written fails the run: the lane files from that file,
 // so a verdict missing from it is a limit nobody is told about.
-func logVerdicts[V limitVerdict](progress, limits io.Writer, vs []V) error {
+func logVerdicts[V limitVerdict](progress, records io.Writer, vs []V) error {
 	for _, v := range vs {
-		if err := logVerdict(progress, limits, v); err != nil {
+		if err := logVerdict(progress, records, v); err != nil {
 			return err
 		}
 	}

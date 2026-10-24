@@ -21,10 +21,11 @@ import (
 // the epic's number, not a figure fitted to what lit sustains today.
 const stormWriters = 100
 
-// writerFailure is one storm writer that did not complete: which writer, and
-// the error naming what it did instead, its stderr included.
+// writerFailure is one storm writer that did not complete: which writer, the
+// store it wrote to, and the error naming what it did instead, its stderr
+// included.
 type writerFailure struct {
-	store  size
+	store  generatedStore
 	writer int
 	err    error
 }
@@ -78,19 +79,22 @@ func stormStep(bin litBinary, writer int, latency time.Duration) step {
 // and 77 failed" is the shape of a contention bug, and the first failure alone
 // hides it. [LAW:dataflow-not-control-flow]
 func storm(bin litBinary, members []generatedStore, latency time.Duration, run stepRunner) []writerFailure {
-	errs := make([]error, stormWriters)
+	// Each writer's outcome is paired with its store before it starts, so the
+	// store a failure names is the one the writer wrote to.
+	outcomes := make([]writerFailure, stormWriters)
 	var wg sync.WaitGroup
-	for i := range stormWriters {
-		target := members[i%len(members)]
+	for i := range outcomes {
+		outcomes[i] = writerFailure{store: members[i%len(members)], writer: i + 1}
+		w := &outcomes[i]
 		wg.Go(func() {
-			_, errs[i] = run(target.root, target.env, stormStep(bin, i+1, latency))
+			_, w.err = run(w.store.root, w.store.env, stormStep(bin, w.writer, latency))
 		})
 	}
 	wg.Wait()
 	var failed []writerFailure
-	for i, err := range errs {
-		if err != nil {
-			failed = append(failed, writerFailure{store: members[0].size, writer: i + 1, err: err})
+	for _, w := range outcomes {
+		if w.err != nil {
+			failed = append(failed, w)
 		}
 	}
 	return failed

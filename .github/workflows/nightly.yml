@@ -8,8 +8,10 @@
 #
 # A nightly job whose failures nobody sees is deletion with extra steps, so a
 # red lane files (or extends) an urgent lit bug under its own label,
-# `nightly-failure` or `nightly-windows-failure`, through
-# .github/actions/report-to-lit. [LAW:no-silent-failure]
+# `nightly-failure`, `nightly-windows-failure` or `nightly-scale-failure`, and
+# the ten-times lane files each limit it measured broken under that limit's
+# own key, all through .github/actions/report-to-lit, where each label is also
+# its ticket's topic and lane. [LAW:no-silent-failure]
 name: Nightly full suite
 
 on:
@@ -103,13 +105,18 @@ jobs:
     outputs:
       points: ${{ steps.points.outputs.points }}
     steps:
-      # Each leg's timeout frees a runner from a hang no step budget names.
-      # Measured on ubuntu-latest, run 40043414613: 10x-store took 1h33m (the
-      # import 86m, the probes, compaction, history and storm 7m), so 200
-      # minutes clears the import's own bound (2h55m, perfbench importBudget)
-      # plus the rest, and a hung import is named as one. 10x-fleet took 7m.
+      # minutes bounds a leg's perfbench run, freeing the runner from a hang
+      # no step budget names. Measured on ubuntu-latest, run 40043414613:
+      # 10x-store took 1h33m (the import 86m, the probes, compaction, history
+      # and storm 7m), so 200 minutes clears the import's own bound (2h55m,
+      # perfbench importBudget) plus the rest, and a hung import is named as
+      # one. 10x-fleet took 7m. job is that bound plus the leg's other steps,
+      # so a run cut off at its bound fails as a step and the job lives on to
+      # upload what it reached.
       - id: points
-        run: echo 'points=[{"name":"10x-store","minutes":200},{"name":"10x-fleet","minutes":30}]' >> "$GITHUB_OUTPUT"
+        run: |
+          points=$(jq -nc '[{name: "10x-store", minutes: 200}, {name: "10x-fleet", minutes: 30}] | map(.job = .minutes + 15)')
+          echo "points=$points" >> "$GITHUB_OUTPUT"
 
   # One leg per scale point, each on its own runner and disk, so neither waits
   # on the other and a failed fleet keeps the store's figures. Each leg's
@@ -124,7 +131,7 @@ jobs:
       matrix:
         point: ${{ fromJSON(needs.scale-points.outputs.points) }}
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ matrix.point.minutes }}
+    timeout-minutes: ${{ matrix.point.job }}
     steps:
       - uses: actions/checkout@v4
 
@@ -134,6 +141,7 @@ jobs:
 
       # Built, then run, as ci.yml's perf-budget is, so exit 2 survives.
       - name: The latency budget and the writer storm at ${{ matrix.point.name }}
+        timeout-minutes: ${{ matrix.point.minutes }}
         env:
           POINT: ${{ matrix.point.name }}
         run: |
@@ -146,8 +154,8 @@ jobs:
           cat "$out/report.txt"
           exit "$status"
 
-      # always(): a leg cancelled at its timeout still uploads the limits it
-      # reached before it was cut off.
+      # always(): a leg whose run was cut off at its bound still uploads the
+      # limits it reached before it was.
       - uses: actions/upload-artifact@v4
         if: ${{ always() }}
         with:
@@ -178,7 +186,10 @@ jobs:
         run: |
           set -euo pipefail
           broken=false
-          for point in $(jq -er '.[].name' <<<"$POINTS"); do
+          # Assigned before the loop: a for list's substitution fails silently
+          # under set -e, and a night with no points would read as measured.
+          names=$(jq -er '.[].name' <<<"$POINTS")
+          for point in $names; do
             code=$(cat "scale/scale-$point/exit-code" 2>&1) || code="none ($code)"
             echo "$point: perfbench exit code $code"
             case "$code" in 0|2) ;; *) broken=true ;; esac
@@ -219,8 +230,10 @@ jobs:
 
   # The lane itself broke: a scale point that did not finish measuring (a tool
   # failure, a timeout, a cancelled leg), or a verdict that could not be read.
+  # After the limits, for the reason they run serially: it pushes the same
+  # store.
   report-scale:
-    needs: [scale-points, scale, scale-verdict]
+    needs: [scale-points, scale, scale-verdict, report-scale-limit]
     if: ${{ always() && github.ref == 'refs/heads/master' && (needs.scale-verdict.result != 'success' || needs.scale-verdict.outputs.broken == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15

@@ -17,7 +17,7 @@ import (
 // runs whatever the others did, so a failure early in the storm cannot hide
 // the ones after it.
 func TestStormNamesEveryWriterThatDidNotComplete(t *testing.T) {
-	store := generatedStore{size: size{name: "one", rows: 1}, root: t.TempDir()}
+	store := generatedStore{point: size{name: "one", rows: 1}, root: filepath.Join(t.TempDir(), "store-000"), ids: []string{"bench-a"}}
 	var (
 		mu  sync.Mutex
 		ran []string
@@ -45,7 +45,7 @@ func TestStormNamesEveryWriterThatDidNotComplete(t *testing.T) {
 	if !slices.Equal(writers, []int{3, 77}) {
 		t.Fatalf("failed writers = %v, want [3 77]", writers)
 	}
-	if got := failed[0].String(); !strings.Contains(got, "store one (1 rows): writer 3 of 100 did not complete: workspace_busy") {
+	if got := failed[0].String(); !strings.Contains(got, "store one store-000 (1 rows): writer 3 of 100 did not complete: workspace_busy") {
 		t.Errorf("verdict %q does not name the store, the writer and its error", got)
 	}
 }
@@ -82,7 +82,7 @@ exit 0
 		t.Fatalf("failed writers = %v, want writer 7 alone", verdict.writers)
 	}
 	logged := progress.String()
-	if !strings.Contains(logged, "WRITER FAILED: store one (1 rows): writer 7 of 100 did not complete") || !strings.Contains(logged, "workspace busy") {
+	if !strings.Contains(logged, "WRITER FAILED: store one store-000 (1 rows): writer 7 of 100 did not complete") || !strings.Contains(logged, "workspace busy") {
 		t.Errorf("writer 7's failure and its stderr were not logged:\n%s", logged)
 	}
 	if strings.Count(logged, "WRITER FAILED") != 1 {
@@ -93,13 +93,18 @@ exit 0
 	}
 }
 
+// store500 is the measured store of a 500-row scale point.
+func store500() generatedStore {
+	return generatedStore{point: size{name: "n=500", rows: 500}, root: "/s/n=500/store-000", ids: make([]string, 500)}
+}
+
 // The report's CONTENTION section lists every failed writer, and says so in as
 // many words when there are none: a section that prints nothing reads the same
 // as a section that never ran.
 func TestRenderContentionStatesTheVerdict(t *testing.T) {
-	failure := writerFailure{store: size{name: "n=500", rows: 500}, writer: 12, err: errors.New("exit status 1")}
+	failure := writerFailure{store: store500(), writer: 12, err: errors.New("exit status 1")}
 	got := renderContention([]writerFailure{failure})
-	if !strings.Contains(got, "FAILED  store n=500 (500 rows): writer 12 of 100 did not complete: exit status 1") {
+	if !strings.Contains(got, "FAILED  store n=500 store-000 (500 rows): writer 12 of 100 did not complete: exit status 1") {
 		t.Errorf("report does not name the failed writer:\n%s", got)
 	}
 	if got := renderContention(nil); !strings.Contains(got, "every writer completed") {
@@ -111,7 +116,7 @@ func TestRenderContentionStatesTheVerdict(t *testing.T) {
 // the gate's error list every failed writer, so each lists it by the first line
 // alone; the dump is the progress log's, once.
 func TestAFailedWriterIsListedByItsFirstLine(t *testing.T) {
-	failure := writerFailure{store: size{name: "n=500", rows: 500}, writer: 12,
+	failure := writerFailure{store: store500(), writer: 12,
 		err: errors.New("lit new (in /s): exit status 1\n--- stdout ---\n\n--- stderr ---\nworkspace busy")}
 	for name, got := range map[string]string{
 		"report":     renderContention([]writerFailure{failure}),

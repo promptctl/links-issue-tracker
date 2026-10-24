@@ -52,7 +52,7 @@ func compactedBytes(bin litBinary, store generatedStore) (int64, error) {
 func measureHistory(bin litBinary, store generatedStore, before int64) (historyCost, error) {
 	ids := store.ids
 	if len(ids) == 0 {
-		return historyCost{}, fmt.Errorf("store %s has no row to edit", store.size.name)
+		return historyCost{}, fmt.Errorf("store %s has no row to edit", store)
 	}
 	for i := range historyEdits {
 		edit := step{budget: runBudget, argv: []string{bin.path, "update", ids[i%len(ids)], "--title", fmt.Sprintf("perfbench history edit %d", i)}}
@@ -65,7 +65,7 @@ func measureHistory(bin litBinary, store generatedStore, before int64) (historyC
 		return historyCost{}, err
 	}
 	if after <= before {
-		return historyCost{}, fmt.Errorf("store %s: %d single-row edits grew the compacted store by %d bytes, so its history was not measured", store.size.name, historyEdits, after-before)
+		return historyCost{}, fmt.Errorf("store %s: %d single-row edits grew the compacted store by %d bytes, so its history was not measured", store, historyEdits, after-before)
 	}
 	return historyCost{edits: historyEdits, before: before, after: after}, nil
 }

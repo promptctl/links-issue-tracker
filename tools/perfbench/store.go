@@ -20,7 +20,10 @@ import (
 // generatedStore is a lit workspace that exists at a known row count, with the
 // path of the store on disk resolved rather than assumed.
 type generatedStore struct {
-	size size
+	// point is the scale point this store was generated for. Its rows are the
+	// measured store's, not necessarily this one's: a fleet's members hold
+	// every census count, and rows() is this store's own.
+	point size
 	// root is the workspace directory — the cwd every probe is invoked from.
 	root string
 	// databasePath is the store directory whose bytes get reported. It comes
@@ -37,13 +40,26 @@ type generatedStore struct {
 	// same lit that produced it. See hermeticEnv for what it excludes.
 	env []string
 	// ids are the issue ids lit minted for the generated rows, in the order
-	// importBatches wrote them: row i is ids[i]. Empty for the empty store.
+	// importBatches wrote them: row i is ids[i]. Empty for the empty store, and
+	// the one record of how many rows this store holds.
 	ids []string
 	// imported is how long `lit import` took to load the rows, the slope of
 	// lit's write path made one figure: one write's cost grows with the
 	// store's size, so this grows faster than the rows do. A copy carries its
 	// source's.
 	imported time.Duration
+}
+
+// rows is how many rows this store holds: one id per generated row, so the
+// count cannot disagree with the rows it counts. [LAW:one-source-of-truth]
+func (s generatedStore) rows() int { return len(s.ids) }
+
+// String names the store the way every verdict about it does: its scale
+// point, the directory it was generated in beneath that point, and its own
+// rows, so a verdict on a fleet member names that member and not the fleet's
+// largest.
+func (s generatedStore) String() string {
+	return fmt.Sprintf("%s %s (%d rows)", s.point.name, filepath.Base(s.root), s.rows())
 }
 
 // generate builds every store of a scale point under parent/<name>, the
@@ -139,7 +155,7 @@ func generateStore(bin litBinary, root string, sz size, rows int, env []string, 
 		}
 		ids = append(ids, loaded...)
 	}
-	return resolved(generatedStore{size: sz, root: root, fleetRoot: filepath.Dir(root), env: env, ids: ids, imported: imported})
+	return resolved(generatedStore{point: sz, root: root, fleetRoot: filepath.Dir(root), env: env, ids: ids, imported: imported})
 }
 
 // replicate copies src's workspace to dir and answers the copy, the same rows
