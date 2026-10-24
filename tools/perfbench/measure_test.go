@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -47,7 +48,7 @@ func invocations(t *testing.T, log string) []string {
 // `show` included, has an invocation against it.
 func fakeStore(t *testing.T) generatedStore {
 	t.Helper()
-	return generatedStore{size: size{name: "fake", rows: 7}, root: t.TempDir(),
+	return generatedStore{root: t.TempDir(),
 		ids: []string{"bench-a", "bench-b", "bench-c", "bench-d", "bench-e", "bench-f", "bench-g"}}
 }
 
@@ -57,7 +58,7 @@ func resolve(t *testing.T, p probe, store generatedStore) invocation {
 	t.Helper()
 	invs := invocationsFor([]probe{p}, store)
 	if len(invs) != 1 {
-		t.Fatalf("probe %q has %d invocations against store %s, want 1", p.name, len(invs), store.size.name)
+		t.Fatalf("probe %q has %d invocations against store %s, want 1", p.name, len(invs), store)
 	}
 	return invs[0]
 }
@@ -135,11 +136,11 @@ func TestRunProbeJudgesTheExitAgainstTheStoreSize(t *testing.T) {
 	if next.name == "" {
 		t.Fatal("no probe named next")
 	}
-	empty := generatedStore{size: size{name: "empty", rows: 0}, root: t.TempDir()}
+	empty := generatedStore{root: t.TempDir()}
 	if _, err := runProbe(bin, empty, resolve(t, next, empty), devNull(t), gateLimits.kill()); err != nil {
 		t.Errorf("exit 6 on the empty store is the honest answer, got error: %v", err)
 	}
-	populated := generatedStore{size: size{name: "5x-target", rows: 590}, root: t.TempDir()}
+	populated := generatedStore{root: t.TempDir(), ids: make([]string, 590)}
 	if _, err := runProbe(bin, populated, resolve(t, next, populated), devNull(t), gateLimits.kill()); err == nil {
 		t.Error("exit 6 on a 590-row store, where every row is open, was accepted as a measurement")
 	}
@@ -162,7 +163,7 @@ func TestRunProbeRunsLitUnderTheStoresEnvironment(t *testing.T) {
 		t.Fatal(err)
 	}
 	configHome := filepath.Join(dir, "config-home")
-	store := generatedStore{size: size{name: "fake", rows: 7}, root: dir, env: hermeticEnv(os.Environ(), configHome, filepath.Join(dir, "state-home"))}
+	store := generatedStore{root: dir, env: hermeticEnv(os.Environ(), configHome, filepath.Join(dir, "state-home"))}
 	if _, err := runProbe(litBinary{path: path}, store, resolve(t, probe{name: "ls", argv: fixed("ls"), okCodes: exits(0)}, store), devNull(t), gateLimits.kill()); err != nil {
 		t.Fatalf("runProbe error = %v", err)
 	}
@@ -376,15 +377,24 @@ exit 0
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	var progress strings.Builder
+	var progress, recorded strings.Builder
 	env := hermeticEnv(os.Environ(), filepath.Join(dir, "config"), filepath.Join(dir, "state"))
 	lim := limits{budget: 100 * time.Millisecond}
-	_, _, err := measureSize(litBinary{path: path}, dir, size{name: "one", rows: 1}, env, lim, runQuiet, &progress)
+	_, _, err := measureSize(litBinary{path: path}, dir, size{name: "one", rows: 1}, env, lim, runQuiet, &progress, &recorded)
 	if err == nil || !strings.Contains(err.Error(), "compaction broke") {
 		t.Fatalf("measureSize error = %v, want the failed compaction", err)
 	}
 	if !strings.Contains(progress.String(), "OVER BUDGET: store one (1 rows): next took") {
 		t.Errorf("the store's verdict on next was not logged before the compaction failed:\n%s", progress.String())
+	}
+	// The record is what the nightly lane files from, so it must survive the
+	// same failure the log line does, saying the same thing.
+	var rec limitRecord
+	if err := json.Unmarshal([]byte(recorded.String()), &rec); err != nil {
+		t.Fatalf("the verdict on next was not recorded before the compaction failed: %v\n%q", err, recorded.String())
+	}
+	if rec.Limit != "one-next" || !strings.Contains(progress.String(), rec.Measured) {
+		t.Errorf("record = %+v, want limit one-next measuring what the log printed:\n%s", rec, progress.String())
 	}
 }
 
@@ -411,7 +421,7 @@ exit 0
 	}
 	var progress strings.Builder
 	env := hermeticEnv(os.Environ(), filepath.Join(dir, "config"), filepath.Join(dir, "state"))
-	_, _, err := measureSize(litBinary{path: path}, dir, size{name: "one", rows: 1}, env, limits{budget: time.Minute}, runQuiet, &progress)
+	_, _, err := measureSize(litBinary{path: path}, dir, size{name: "one", rows: 1}, env, limits{budget: time.Minute}, runQuiet, &progress, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "grew the compacted store by 0 bytes") {
 		t.Fatalf("measureSize error = %v, want the history that did not grow", err)
 	}

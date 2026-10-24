@@ -1,6 +1,10 @@
 package main
 
-import "time"
+import (
+	"fmt"
+	"slices"
+	"time"
+)
 
 // The measurement plan: which commands are timed, at which store sizes, and
 // what a generated row looks like. The one home of every number this tool
@@ -39,9 +43,9 @@ type probe struct {
 	mutates bool
 }
 
-// argvRule is the invocation a probe makes against a store whose rows carry
-// these ids, in import order: its one argv, or false when the store holds
-// nothing the command can be pointed at.
+// argvRule is the invocation a probe makes against a generated store: its one
+// argv, or false when the store holds nothing the command can be pointed at.
+// It reads the store's ids, in import order, and its fleet root.
 //
 // "This store has no legal invocation of this probe" is a case with its own
 // meaning: the empty control has no row for `show` to name, and timing
@@ -51,12 +55,19 @@ type probe struct {
 // It is at most one argv because a sample, a report cell and a breach are each
 // keyed by probe name: a second argv would be a second figure under one name.
 // [LAW:types-are-the-program]
-type argvRule func(ids []string) (args []string, ok bool)
+type argvRule func(store generatedStore) (args []string, ok bool)
 
 // fixed is the rule for every command that takes no id: the same argv against
 // every store.
 func fixed(args ...string) argvRule {
-	return func([]string) ([]string, bool) { return args, true }
+	return func(generatedStore) ([]string, bool) { return args, true }
+}
+
+// overFleet is the rule for a command that takes the stores beneath a root:
+// the store's fleet root, so a single store's column times it over one store
+// and a fleet's over every store in it.
+func overFleet(args ...string) argvRule {
+	return func(store generatedStore) ([]string, bool) { return append(slices.Clone(args), store.fleetRoot), true }
 }
 
 // exitRule names the exit codes that prove a probe did its work against a
@@ -95,8 +106,8 @@ type invocation struct {
 func invocationsFor(ps []probe, store generatedStore) []invocation {
 	var out []invocation
 	for _, p := range ps {
-		if args, ok := p.argv(store.ids); ok {
-			out = append(out, invocation{probe: p, args: args, okCodes: p.okCodes(store.size.rows)})
+		if args, ok := p.argv(store); ok {
+			out = append(out, invocation{probe: p, args: args, okCodes: p.okCodes(store.rows())})
 		}
 	}
 	return out
@@ -127,13 +138,16 @@ var probes = []probe{
 	// The first imported row, which is always an epic. Its children make
 	// `show` print the plan of a real epic, the relations work an agent's
 	// `lit show` pays.
-	{name: "show", argv: func(ids []string) ([]string, bool) {
-		if len(ids) == 0 {
+	{name: "show", argv: func(store generatedStore) ([]string, bool) {
+		if len(store.ids) == 0 {
 			return nil, false
 		}
-		return []string{"show", ids[0]}, true
+		return []string{"show", store.ids[0]}, true
 	}, okCodes: exits(0)},
-	{name: "stores --counts", argv: fixed("stores", "--counts"), okCodes: exits(0)},
+	// The two commands whose input is a set of stores, discovery alone and
+	// discovery plus a read of each, over the scale point's fleet root.
+	{name: "stores", argv: overFleet("stores"), okCodes: exits(0)},
+	{name: "stores --counts", argv: overFleet("stores", "--counts"), okCodes: exits(0)},
 	{name: "doctor", argv: fixed("doctor"), okCodes: exits(0)},
 	{name: "workspace", argv: fixed("workspace"), okCodes: exits(0)},
 	{name: "new (write)", argv: fixed(benchWrite("perfbench write probe")...), okCodes: exits(0), mutates: true},
@@ -183,8 +197,10 @@ var gateLimits = limits{budget: latencyBudget}
 // the wait open past the kill, and the kill would bound nothing.
 const killGrace = 5 * time.Second
 
-// size is one store to generate and measure at. rows is the store's TOTAL row
-// count, epics included, and it is not the same as its workable count: one row
+// size is one scale point to generate and measure: the store every per-store
+// figure describes, and the stores generated beside it. rows is the measured
+// store's TOTAL row count, epics included, and it is not the same as its
+// workable count: one row
 // in rowsPerEpic is an epic, an epic's children wait on each other in rank
 // order, and blockedEveryNth wires a third of the tasks behind another epic's
 // work. `lit stores --counts` on a generated 590-row store reports 40 ready
@@ -198,9 +214,90 @@ const killGrace = 5 * time.Second
 // is a controlled point on the row axis, which is the axis the ceiling and the
 // latency budget are both argued in. `lit backlog` reads every open row either
 // way, ready or not.
+//
+// beside is the row count of every other store generated with it, under one
+// fleet root: nil for a single store, which is a fleet of one. A scale point is
+// a set of stores rather than a store with a fleet mode, so every size runs the
+// same steps (generate the members, measure the first, storm across them all)
+// and only the set's size differs. [LAW:dataflow-not-control-flow]
 type size struct {
-	name string
-	rows int
+	name   string
+	rows   int
+	beside []int
+}
+
+// String names the scale point the way every verdict and column header does:
+// by name and the measured store's rows, and, beside more than one store, how
+// many stores the fleet holds. [LAW:one-source-of-truth]
+func (s size) String() string {
+	if len(s.beside) == 0 {
+		return fmt.Sprintf("%s (%d rows)", s.name, s.rows)
+	}
+	return fmt.Sprintf("%s (%d rows, 1 of %d stores)", s.name, s.rows, 1+len(s.beside))
+}
+
+// members is the row count of every store the scale point generates, the
+// measured store first.
+func (s size) members() []int {
+	return append([]int{s.rows}, s.beside...)
+}
+
+// fleetCensus is the row count of each lit store on the development machine,
+// measured 2026-10-23: `lit stores ~/code` found 30, and `lit ls --status
+// open,in_progress,closed --columns id | wc -l` in each counted its rows. It is
+// "today" for both ten-times scale points, counted by one rule, so the store
+// and the fleet cannot be ten times of two different todays.
+// [LAW:one-source-of-truth] Most stores are small (median 35) and one is this
+// repository (1,074); that shape is what a fleet of stores costs, and ten
+// copies of the largest would not be the fleet being modelled.
+var fleetCensus = []int{0, 3, 4, 7, 8, 11, 13, 16, 17, 22, 22, 28, 28, 32, 35, 38, 43, 66, 77, 81, 107, 119, 156, 157, 196, 221, 486, 568, 591, 1074}
+
+// scaleFactor is the ten in "ten times": the scale on both axes the budget is
+// asked to hold at, the store's rows and the machine's stores.
+const scaleFactor = 10
+
+// tenfoldStore is one store of ten times today's largest.
+var tenfoldStore = size{name: "10x-store", rows: scaleFactor * slices.Max(fleetCensus)}
+
+// tenfoldFleet is ten times today's stores, each at today's size: every census
+// entry scaleFactor times. The measured store is the largest, so the per-store
+// figures in its column describe the fleet's heaviest store. The rest follow
+// round-robin, copy k of every entry before copy k+1, because the storm writes
+// to the first stormWriters members: in this order those hundred cover every
+// census size more than three times rather than ten copies each of the ten
+// largest.
+//
+// WHAT IT CANNOT SEE. A generated workspace holds its store and nothing else,
+// so `lit stores`' walk over a real working tree (node_modules, build output)
+// costs nothing here. That walk is what made `lit stores ~/code` take 15.5s
+// over today's 30 stores on 2026-10-23 (links-scale-dy46.8lo); this fleet
+// measures what lit pays per store, not per file under the root. And a
+// generated store is row data: one import's history, no recovery snapshots,
+// no remote cache, and, with no remote, none of the background receive and
+// mirror work a live store does. So its fleet bytes are the rows' cost on
+// disk, not the machine's lit disk, which the same stores' history,
+// snapshots and caches multiply several times over.
+var tenfoldFleet = fleetOf("10x-fleet", fleetCensus, scaleFactor)
+
+// namedSizes are the scale points `--sizes` takes by name. Each is a value
+// defined beside the facts it is derived from; this list only gives them
+// their names. [LAW:one-source-of-truth]
+var namedSizes = []size{designSize, tenfoldStore, tenfoldFleet}
+
+// fleetOf is census, copies times over, as one scale point measured at its
+// largest store.
+func fleetOf(name string, census []int, copies int) size {
+	largest := slices.Index(census, slices.Max(census))
+	var beside []int
+	for k := range copies {
+		for i, rows := range census {
+			if k == 0 && i == largest {
+				continue
+			}
+			beside = append(beside, rows)
+		}
+	}
+	return size{name: name, rows: census[largest], beside: beside}
 }
 
 // defaultSizes is the repository's established performance envelope, and the
@@ -269,16 +366,36 @@ const repeats = 5
 // step's is not.
 const runBudget = 2 * time.Minute
 
-// importBudget bounds the one `lit import` that populates a store. It grows
-// with the row count because the work does: measured on 2026-09-27
-// (darwin/arm64, 12 CPUs), importing 590 rows in one batch took 22s, about
-// 37ms a row, so a fixed runBudget would report `--sizes 3000` — the natural
-// next probe once the ceiling estimate says ~1,200 rows — as a hang and kill
-// the import mid-transaction. The allowance is several times the measured
-// rate so a loaded machine still finishes inside it, on top of runBudget so
-// the empty store's zero rows keep the same hang detection every probe has.
+// importBudget bounds the one `lit import` that populates a store: runBudget
+// for the steps every import pays at any size, plus importSlack times what
+// the import is modelled to cost. It is a hang detector, not a verdict on lit:
+// it exists so an import wedged behind a lock is named as a hang naming the
+// step, and it must therefore hold a healthy import at every size measured.
+//
+// THE MODEL IS QUADRATIC because one write's cost grows with the store's size.
+// Measured 2026-10-23 (darwin/arm64), 2,800 rows imported as four 700-row
+// imports took 18s, 27s, 35s and 52s, against 146s as one: batching changes
+// nothing, and the n-th write costs about writeBase + writePerStoredRow * n,
+// so N rows cost N*writeBase + writePerStoredRow*N^2/2. A per-row allowance
+// fitted at 590 rows (the bound this replaces, 250ms a row) killed a healthy
+// 10,740-row import at 46m45s on ubuntu-latest (run 40037763869). The
+// constants are fitted to ubuntu-latest's own imports, where the PR gate and
+// the nightly lanes run: 700 rows in ~15s (ci.yml perf-budget), 2,800 in 188s
+// (nightly design, run 40037763869) and 10,740 in 86m04s (nightly 10x-store,
+// run 40043414613). The cost steepens past quadratic between the last two, so
+// writePerStoredRow is fitted through the largest, where the bound binds, and
+// the model runs high at the smaller sizes, the safe side for a hang detector.
+// That cost is a limit in its own right, filed as links-scale-dy46.48k; this
+// only keeps the instrument from mistaking it for a hang.
 func importBudget(rows int) time.Duration {
-	return runBudget + time.Duration(rows)*importRowAllowance
+	n := time.Duration(rows)
+	return runBudget + importSlack*(n*writeBase+writePerStoredRow*n*n/2)
 }
 
-const importRowAllowance = 250 * time.Millisecond
+const (
+	writeBase         = 5400 * time.Microsecond
+	writePerStoredRow = 89 * time.Microsecond
+	// importSlack is how many times the modelled cost the bound allows, room
+	// for a runner loaded harder than the one each import was measured on.
+	importSlack = 2
+)

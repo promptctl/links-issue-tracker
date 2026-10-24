@@ -7,8 +7,8 @@ import (
 	"time"
 )
 
-// The contention gate: a hundred writers against one store, at once, and every
-// one of them must complete.
+// The contention gate: a hundred writers against a scale point's stores, at
+// once, and every one of them must complete.
 //
 // It is the scale epic's headline bar ("100 concurrent writers all complete,
 // with no writer failing on contention") made a check that fails the build.
@@ -21,10 +21,12 @@ import (
 // the epic's number, not a figure fitted to what lit sustains today.
 const stormWriters = 100
 
-// writerFailure is one storm writer that did not complete: which writer, and
-// the error naming what it did instead, its stderr included.
+// writerFailure is one storm writer that did not complete: the scale point it
+// stormed, which writer, the store it wrote to, and the error naming what it
+// did instead, its stderr included.
 type writerFailure struct {
-	store  size
+	point  size
+	store  generatedStore
 	writer int
 	err    error
 }
@@ -32,21 +34,23 @@ type writerFailure struct {
 // String is the verdict on one line: the writer and the first line of its
 // error. The report's CONTENTION section and the gate's error each list every
 // failed writer, and a storm that refused 84 of them must not reprint 84
-// stderr dumps in both; the dump is logged once, as the storm ends (full).
+// stderr dumps in both; the dump is logged, and recorded for the lane's
+// ticket, once, as the storm ends (full).
 func (f writerFailure) String() string {
 	summary, _, _ := strings.Cut(f.err.Error(), "\n")
 	return f.verdict(summary)
 }
 
 // full is the verdict with the writer's whole error, stdout and stderr
-// included: what progress logs the moment the storm ends.
+// included: what progress logs and the limit record carries the moment the
+// storm ends.
 func (f writerFailure) full() string { return f.verdict(f.err.Error()) }
 
 // verdict is the one sentence both renderings share, around the error text
 // each chooses. [LAW:one-source-of-truth]
 func (f writerFailure) verdict(err string) string {
-	return fmt.Sprintf("store %s (%d rows): writer %d of %d did not complete: %s",
-		f.store.name, f.store.rows, f.writer, stormWriters, err)
+	return fmt.Sprintf("store %s: writer %d of %d did not complete: %s",
+		f.store, f.writer, stormWriters, err)
 }
 
 // stormBudget bounds one storm writer, given the latency budget the run judges
@@ -69,24 +73,31 @@ func stormStep(bin litBinary, writer int, latency time.Duration) step {
 	return step{budget: stormBudget(latency), argv: append([]string{bin.path}, benchWrite(fmt.Sprintf("perfbench storm writer %d", writer))...)}
 }
 
-// storm starts stormWriters writers against store at once and returns every one
-// that did not complete, in writer order. Every writer runs whatever the
-// others do: the verdict is the full list, because "writers 3, 41 and 77
-// failed" is the shape of a contention bug, and the first failure alone hides
-// it. [LAW:dataflow-not-control-flow]
-func storm(bin litBinary, store generatedStore, latency time.Duration, run stepRunner) []writerFailure {
-	errs := make([]error, stormWriters)
+// storm starts stormWriters writers across members at once, writer i against
+// member i mod len(members), and returns every one that did not complete, in
+// writer order. Against one store that is a hundred writers on it; against a
+// fleet it is a hundred writers in different stores, the contention a machine
+// running the fleet sees, on whatever the stores share. Every writer runs
+// whatever the others do: the verdict is the full list, because "writers 3, 41
+// and 77 failed" is the shape of a contention bug, and the first failure alone
+// hides it. [LAW:dataflow-not-control-flow]
+func storm(bin litBinary, point size, members []generatedStore, latency time.Duration, run stepRunner) []writerFailure {
+	// Each writer's outcome is paired with its store before it starts, so the
+	// store a failure names is the one the writer wrote to.
+	outcomes := make([]writerFailure, stormWriters)
 	var wg sync.WaitGroup
-	for i := range stormWriters {
+	for i := range outcomes {
+		outcomes[i] = writerFailure{point: point, store: members[i%len(members)], writer: i + 1}
+		w := &outcomes[i]
 		wg.Go(func() {
-			_, errs[i] = run(store.root, store.env, stormStep(bin, i+1, latency))
+			_, w.err = run(w.store.root, w.store.env, stormStep(bin, w.writer, latency))
 		})
 	}
 	wg.Wait()
 	var failed []writerFailure
-	for i, err := range errs {
-		if err != nil {
-			failed = append(failed, writerFailure{store: store.size, writer: i + 1, err: err})
+	for _, w := range outcomes {
+		if w.err != nil {
+			failed = append(failed, w)
 		}
 	}
 	return failed

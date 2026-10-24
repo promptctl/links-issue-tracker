@@ -32,7 +32,7 @@ type breach struct {
 }
 
 func (b breach) String() string {
-	at := fmt.Sprintf("store %s (%d rows): %s", b.store.name, b.store.rows, b.probe)
+	at := fmt.Sprintf("store %s: %s", b.store, b.probe)
 	switch o := b.outcome.(type) {
 	case completed:
 		return fmt.Sprintf("%s took %s, %.1fx its %s budget", at, formatDuration(o.min), o.min.Seconds()/b.budget.Seconds(), b.budget)

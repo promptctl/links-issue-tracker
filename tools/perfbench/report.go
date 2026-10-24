@@ -11,8 +11,15 @@ import (
 // result is one store's complete measurement: its size, its bytes on disk, and
 // one sample per probe.
 type result struct {
-	size  size
-	bytes int64
+	size size
+	// imported is how long `lit import` took to build the measured store, one
+	// run: the slope of lit's write path as a single figure.
+	imported time.Duration
+	bytes    int64
+	// fleetBytes is every store of the scale point on disk, the measured one
+	// included: bytes again for a single store, the machine's disk for a
+	// fleet.
+	fleetBytes int64
 	// compacted is the store's bytes after every probe and a full
 	// compaction: what its rows cost to keep.
 	compacted int64
@@ -62,7 +69,7 @@ func renderReport(ps []probe, results []result, budget time.Duration, found []br
 	w := tabwriter.NewWriter(&b, 0, 0, 2, ' ', 0)
 	fmt.Fprint(w, "COMMAND")
 	for _, r := range results {
-		fmt.Fprintf(w, "\t%s (%d rows)", r.size.name, r.size.rows)
+		fmt.Fprintf(w, "\t%s", r.size)
 	}
 	fmt.Fprintln(w)
 
@@ -73,9 +80,19 @@ func renderReport(ps []probe, results []result, budget time.Duration, found []br
 		}
 		fmt.Fprintln(w)
 	}
+	fmt.Fprint(w, "import")
+	for _, r := range results {
+		fmt.Fprintf(w, "\t%s", formatDuration(r.imported))
+	}
+	fmt.Fprintln(w)
 	fmt.Fprint(w, "store bytes")
 	for _, r := range results {
 		fmt.Fprintf(w, "\t%s", formatBytes(r.bytes))
+	}
+	fmt.Fprintln(w)
+	fmt.Fprint(w, "fleet bytes")
+	for _, r := range results {
+		fmt.Fprintf(w, "\t%s", formatBytes(r.fleetBytes))
 	}
 	fmt.Fprintln(w)
 	fmt.Fprint(w, "compacted bytes")
@@ -89,10 +106,13 @@ func renderReport(ps []probe, results []result, budget time.Duration, found []br
 	}
 	fmt.Fprintln(w)
 	w.Flush()
-	b.WriteString("\nstore bytes is the store as imported; compacted bytes is the same store after the\n")
-	b.WriteString("probes and a full compaction, which collects the import's garbage. bytes/commit is\n")
-	fmt.Fprintf(&b, "the store's growth across %d single-row edits, one commit each, measured after a\n", historyEdits)
-	b.WriteString("full compaction on both sides, so it is history the store keeps.\n")
+	b.WriteString("\nimport is how long `lit import` took to load the measured store's rows, one run.\n")
+	b.WriteString("store bytes is the store as imported. fleet bytes is every store of its column, row\n")
+	b.WriteString("data only: no snapshots, no remote cache, and no history but the import's. compacted\n")
+	b.WriteString("bytes is the store after the probes and a full compaction, which collects the\n")
+	fmt.Fprintf(&b, "import's garbage. bytes/commit is the store's growth across %d single-row edits,\n", historyEdits)
+	b.WriteString("one commit each, measured after a full compaction on both sides, so it is history\n")
+	b.WriteString("the store keeps.\n")
 
 	fmt.Fprintf(&b, "\nBUDGET: every probe under %s, judged on its min.\n", budget)
 	for _, br := range found {
