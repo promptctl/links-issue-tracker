@@ -13,7 +13,7 @@ import (
 )
 
 var bulkFamily = commandFamily[appSubcommand]{
-	usage: "usage: lit bulk <label|comment|start|done|close|open|archive> ...",
+	usage: "usage: lit bulk <label|comment|start|done|close|open|archive|unarchive|delete|restore> ...",
 	subcommands: []subcommandRow[appSubcommand]{
 		{name: "label", nestedUsage: bulkLabelFamily.usage, payload: appSubcommand{access: app.AccessWrite, declare: bulkLabelLeaf}},
 		{name: "comment", payload: appSubcommand{access: app.AccessWrite, declare: bulkCommentLeaf}},
@@ -22,6 +22,9 @@ var bulkFamily = commandFamily[appSubcommand]{
 		{name: "close", payload: appSubcommand{access: app.AccessWrite, declare: bulkTransitionLeaf(closeSpec)}},
 		{name: "open", payload: appSubcommand{access: app.AccessWrite, declare: bulkTransitionLeaf(openSpec)}},
 		{name: "archive", payload: appSubcommand{access: app.AccessWrite, declare: bulkTransitionLeaf(archiveSpec)}},
+		{name: "unarchive", payload: appSubcommand{access: app.AccessWrite, declare: bulkTransitionLeaf(unarchiveSpec)}},
+		{name: "delete", payload: appSubcommand{access: app.AccessWrite, declare: bulkTransitionLeaf(deleteSpec)}},
+		{name: "restore", payload: appSubcommand{access: app.AccessWrite, declare: bulkTransitionLeaf(restoreSpec)}},
 		// `bulk import` is retired: it would be a second name for the
 		// export-restore `backup restore` owns, and it is the odd verb out in a
 		// family of per-`--ids` fan-out ops. Kept dispatchable so an old

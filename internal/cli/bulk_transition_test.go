@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/model/lifecycle"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 )
@@ -302,5 +303,126 @@ func TestStartUsageNamesTake(t *testing.T) {
 		if !strings.Contains(usage, "[--take]") {
 			t.Errorf("%s usage = %q, want it to name [--take]", name, usage)
 		}
+	}
+}
+
+// runBulkRecorded runs `lit bulk <spec.name>` over ids, resolved through the
+// bulk family's own row, under a recorder of the test's own; it requires every
+// item to land and returns the run's bulk.items entries as (id, error) pairs.
+func runBulkRecorded(t *testing.T, h readyTestHarness, spec transitionSpec, ids []string) [][2]any {
+	t.Helper()
+	recorder := telemetry.Begin(telemetry.Event{})
+	ctx := telemetry.With(h.ctx, recorder)
+	var out bytes.Buffer
+	row, err := bulkFamily.resolve(ctx, []string{spec.name})
+	if err != nil {
+		t.Fatalf("lit bulk %s does not resolve: %v", spec.name, err)
+	}
+	leaf := row.declare()
+	positional, err := parseLeaf(ctx, leaf, []string{"--ids", strings.Join(ids, ",")}, cwdInvocation(&out, &out, nil))
+	if err != nil {
+		t.Fatalf("parse bulk %s error = %v", spec.name, err)
+	}
+	if err := leaf.work(ctx, cwdInvocation(&out, &out, nil), h.ap, positional); err != nil {
+		t.Fatalf("bulk %s error = %v", spec.name, err)
+	}
+	if want := strings.Join(ids, " ok\n") + " ok\n"; out.String() != want {
+		t.Errorf("bulk %s stdout = %q, want %q", spec.name, out.String(), want)
+	}
+	var items [][2]any
+	for _, raw := range writtenEvent(t, recorder.Finish(telemetry.End{})).Occurrences["bulk.items"] {
+		entry := raw.(map[string]any)
+		items = append(items, [2]any{entry["bulk.item.id"], entry["bulk.item.error"]})
+	}
+	return items
+}
+
+// The ticket's acceptance: a batch moved out of the flow by bulk archive or
+// bulk delete comes back to its exact prior state through the inverse bulk
+// verb, whatever state each ticket was in. Each run leaves one clean
+// bulk.items entry per ticket.
+func TestBulkRetentionVerbsRoundTripTheirInverse(t *testing.T) {
+	for _, pair := range []struct {
+		out, back transitionSpec
+		away      func(model.Retention) bool
+	}{
+		{archiveSpec, unarchiveSpec, func(r model.Retention) bool { _, ok := r.(lifecycle.Archived); return ok }},
+		{deleteSpec, restoreSpec, func(r model.Retention) bool { _, ok := r.(lifecycle.Deleted); return ok }},
+	} {
+		t.Run(pair.out.name+"/"+pair.back.name, func(t *testing.T) {
+			h := newReadyTestHarness(t)
+			ids := h.bulkTickets(3)
+			h.setLabels(ids[0], "keep")
+			h.applyAction(ids[1], model.Start{Assignee: "ada"}, "")
+			h.applyAction(ids[2], model.Done{}, "")
+			prior := map[string]model.Issue{}
+			for _, id := range ids {
+				prior[id] = h.issueDetail(id)
+			}
+			wantItems := make([][2]any, len(ids))
+			for i, id := range ids {
+				wantItems[i] = [2]any{id, nil}
+			}
+
+			if got := runBulkRecorded(t, h, pair.out, ids); !reflect.DeepEqual(got, wantItems) {
+				t.Errorf("bulk %s bulk.items = %v, want %v", pair.out.name, got, wantItems)
+			}
+			for _, id := range ids {
+				if r := h.issueDetail(id).Retention(); !pair.away(r) {
+					t.Fatalf("after bulk %s, %s retention = %#v", pair.out.name, id, r)
+				}
+			}
+			if got := runBulkRecorded(t, h, pair.back, ids); !reflect.DeepEqual(got, wantItems) {
+				t.Errorf("bulk %s bulk.items = %v, want %v", pair.back.name, got, wantItems)
+			}
+			for _, id := range ids {
+				got := h.issueDetail(id)
+				// The round trip is two writes, so the write clock moved; every
+				// other field is the ticket's state and must be what it was.
+				got.UpdatedAt = prior[id].UpdatedAt
+				if !reflect.DeepEqual(got, prior[id]) {
+					t.Errorf("%s after bulk %s then bulk %s = %+v, want %+v", id, pair.out.name, pair.back.name, got, prior[id])
+				}
+			}
+		})
+	}
+}
+
+// Each retention verb in bulk refuses what its single verb refuses, in the
+// single verb's words, and the other tickets in the run still land.
+func TestBulkRetentionVerbsRefuseWhatTheSingleVerbRefusesInItsWords(t *testing.T) {
+	for _, tc := range []struct {
+		spec   transitionSpec
+		refuse model.Action // puts the refused ticket where the verb refuses it
+		land   model.Action // puts the other ticket where the verb moves it
+	}{
+		{unarchiveSpec, model.Delete{}, model.Archive{}},
+		{restoreSpec, model.Archive{}, model.Delete{}},
+		{deleteSpec, model.Delete{}, nil},
+	} {
+		t.Run(tc.spec.name, func(t *testing.T) {
+			h := newReadyTestHarness(t)
+			ids := h.bulkTickets(2)
+			refused, landed := ids[0], ids[1]
+			h.applyAction(refused, tc.refuse, "")
+			if tc.land != nil {
+				h.applyAction(landed, tc.land, "")
+			}
+			single := h.runTransitionErr(refused, tc.spec)
+			if single == nil {
+				t.Fatalf("lit %s on %s succeeded; the test needs a refusal", tc.spec.name, refused)
+			}
+			var out bytes.Buffer
+			failed := bulkFailures(t, h, &out, tc.spec, "--ids", refused+","+landed)
+			if len(failed) != 1 || failed[refused] == nil {
+				t.Fatalf("bulk %s failures = %v, want exactly %s", tc.spec.name, failed, refused)
+			}
+			if got := failed[refused]; got.Error() != single.Error() || reflect.TypeOf(got) != reflect.TypeOf(single) {
+				t.Errorf("bulk %s error = %q (%T), want lit %s's %q (%T)", tc.spec.name, got, got, tc.spec.name, single, single)
+			}
+			if want := landed + " ok\n"; out.String() != want {
+				t.Errorf("bulk %s stdout = %q, want %q", tc.spec.name, out.String(), want)
+			}
+		})
 	}
 }

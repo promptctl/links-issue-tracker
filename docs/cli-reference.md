@@ -810,6 +810,9 @@ lit bulk done --ids <csv>... [--reason <text>]
 lit bulk close --ids <csv>... --resolution <duplicate|superseded|obsolete|wontfix> [--of <canonical-id>] [--reason <text>]
 lit bulk open --ids <csv>... [--reason <text>]
 lit bulk archive --ids <csv>... [--reason <text>]
+lit bulk unarchive --ids <csv>... [--reason <text>]
+lit bulk delete --ids <csv>... [--reason <text>]
+lit bulk restore --ids <csv>... [--reason <text>]
 ```
 
 Apply one label edit, comment or lifecycle transition across many issues in one call.

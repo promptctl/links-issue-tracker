@@ -1965,9 +1965,9 @@ Family `depFamily`, usage `"usage: lit dep <add|rm|ls> ..."` (`dependency.go`).
 
 ### 2.21 `lit bulk` — Bulk issue operations
 
-Family `bulkFamily`, usage `"usage: lit bulk <label|comment|start|done|close|open|archive> ..."`
+Family `bulkFamily`, usage `"usage: lit bulk <label|comment|start|done|close|open|archive|unarchive|delete|restore> ..."`
 (`bulk.go`). Group `operations` (`register.go`).
-Rows: `label`, `comment`, `start`, `done`, `close`, `open`, `archive` (all write), and hidden
+Rows: `label`, `comment`, `start`, `done`, `close`, `open`, `archive`, `unarchive`, `delete`, `restore` (all write), and hidden
 `import` (`retiredSubcommand`: retired, projected `Hidden`).
 
 **Shared `--ids`** — `registerBulkIDs` (`bulk.go`), declared once for every
@@ -2026,9 +2026,10 @@ before any id is acted on.
   (`cli.go`), written before `"<id> ok\n"`.
 - **No workflow events** (`EventCommentAdded` is not dispatched).
 
-**`lit bulk <start|done|close|open|archive> --ids <csv> [<verb flags>] [--reason <text>]`**
+**`lit bulk <start|done|close|open|archive|unarchive|delete|restore> --ids <csv> [<verb flags>] [--reason <text>]`**
 (`bulkTransitionLeaf(spec)`, `bulk.go`; rows built from `startSpec`, `doneSpec`,
-`closeSpec`, `openSpec`, `archiveSpec`, `cli.go`):
+`closeSpec`, `openSpec`, `archiveSpec`, `unarchiveSpec`, `deleteSpec`,
+`restoreSpec`, `cli.go`):
 - Flag set name `"bulk " + spec.name` (`bulk.go`).
 - Flags: `--ids` (`registerBulkIDs`), `--reason` ("Lifecycle reason"), `--by`,
   then the spec's own: `spec.registerFlags` (close: `--resolution`, `--of`)

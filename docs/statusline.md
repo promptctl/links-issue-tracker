@@ -142,8 +142,9 @@ text. Its `recorded_at` does not change.
 **Clearing.** A value becomes `null` when this checkout moves the ticket it names
 through any lifecycle change other than a start: `lit done`, `lit close`,
 `lit open`, `lit archive`, `lit unarchive`, `lit delete`, `lit restore`,
-`lit purge`, `lit bulk done`, `lit bulk close`, `lit bulk open` and
-`lit bulk archive`. After `lit done` on the
+`lit purge`, `lit bulk done`, `lit bulk close`, `lit bulk open`,
+`lit bulk archive`, `lit bulk unarchive`, `lit bulk delete` and
+`lit bulk restore`. After `lit done` on the
 ticket in the example above, both values are `null`. `lit backup restore`
 replaces every ticket in the store, so it sets both values to `null` whichever
 tickets they named.
