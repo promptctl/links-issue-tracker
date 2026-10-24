@@ -83,7 +83,7 @@ func (s *Store) BulkApply(ctx context.Context, prefix, actor string, specs []sto
 		if err != nil {
 			return refuse(fmt.Errorf("bulk: update %q: %w", update.ID, err))
 		}
-		result.Updated = append(result.Updated, applied.Issue.ID)
+		result.RecordUpdate(applied)
 	}
 	return result, nil
 }

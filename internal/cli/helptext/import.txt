@@ -98,6 +98,12 @@ YAML bulk file (creates and updates)
   (immutable — no command changes it after create) and local_id
   (create-only).
 
+  lit ls --format yaml prints the issues it lists as update documents
+  of this shape: each one's id and every key an update document may set,
+  at the value the issue holds, parent: "" and blocked_by: [] included.
+  Imported unedited, that file changes nothing; edit the values to
+  change and import it, and only what was edited moves.
+
   parent on an update document reparents the issue, as lit parent set
   does, and parent: "" clears it, as lit parent clear does; the same rules
   apply. parent may name a local_id in this file or an existing issue,
@@ -176,7 +182,8 @@ Results
   Created issues land at the bottom of the ranked order. Output is the
   number created and one "name -> real id" line each, where the name is
   the local_id (or the new real ID when the document gave none), followed
-  for a YAML file by the number updated and their IDs; when the file
+  for a YAML file by the number updated and their IDs, then the issues
+  whose update document stated only values they already held; when the file
   states a parent on an update, the issues reparented and the issues that
   already had the parent stated; when it states blocked_by on an update,
   the issues whose set changed and the issues that already had the set

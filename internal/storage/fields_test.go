@@ -2,13 +2,16 @@ package storage_test
 
 import (
 	"errors"
+	"maps"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/merge"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"gopkg.in/yaml.v3"
 )
 
 // TestApplyProseFieldsRecordsEachFieldItMoves pins the one mapping from a
@@ -165,4 +168,97 @@ func statedFields(patch storage.UpdateIssueInput) []string {
 		}
 	}
 	return stated
+}
+
+// TestABulkUpdateDocumentRoundTripsItsIssue: the document stating an issue's
+// editable state, written out as YAML and read back through the bulk gate,
+// states every field of the patch and moves none of them, and restates the
+// issue's parent and blocked-by set as they stand. The patch's fields are read
+// off the type, so a field added to the table without its way back out of it
+// fails here.
+func TestABulkUpdateDocumentRoundTripsItsIssue(t *testing.T) {
+	epic := model.Issue{ID: "links-x-epic", IssueType: model.TypeEpic}
+	blocker := model.Issue{ID: "links-x-blocker", IssueType: model.TypeTask}
+	issue := model.Issue{
+		ID:          "links-x-1",
+		Title:       "a title",
+		Description: "first line\n\nsecond paragraph",
+		Prompt:      "a prompt",
+		Plan:        "a plan",
+		IssueType:   model.TypeTask,
+		Priority:    model.PriorityUrgent,
+		Assignee:    "ada",
+		Lane:        "a-lane",
+		Labels:      []string{"alpha", "beta"},
+	}
+	text, err := yaml.Marshal(storage.BulkUpdateDocument(storage.IssueRelations{Issue: issue, Parent: &epic, BlockedBy: []model.Issue{blocker}}))
+	if err != nil {
+		t.Fatalf("marshal the document: %v", err)
+	}
+	specs, err := storage.ParseBulkSpecs(text)
+	if err != nil {
+		t.Fatalf("ParseBulkSpecs(the document) = %v; the document:\n%s", err, text)
+	}
+	file, err := storage.ParseBulkFile(specs, map[string]model.IssueType{issue.ID: issue.IssueType, epic.ID: epic.IssueType, blocker.ID: blocker.IssueType})
+	if err != nil {
+		t.Fatalf("ParseBulkFile(the document) = %v; the document:\n%s", err, text)
+	}
+	if len(file.Updates) != 1 {
+		t.Fatalf("the document parsed to %d updates, want 1", len(file.Updates))
+	}
+	var every []string
+	patchType := reflect.TypeFor[storage.UpdateIssueInput]()
+	for i := range patchType.NumField() {
+		if field := patchType.Field(i); field.Type.Kind() == reflect.Pointer {
+			every = append(every, field.Name)
+		}
+	}
+	if got := statedFields(file.Updates[0].Patch); !slices.Equal(got, every) {
+		t.Errorf("the document's patch states %v, want every field %v", got, every)
+	}
+	after, changes, err := storage.ApplyIssueFields(issue, file.Updates[0].Patch)
+	if err != nil {
+		t.Fatalf("ApplyIssueFields(the issue, its own document) = %v", err)
+	}
+	if len(changes) != 0 || !reflect.DeepEqual(after, issue) {
+		t.Errorf("the issue's own document moved %+v; after = %+v", changes, after)
+	}
+	if want := []storage.FileReparent{{ID: issue.ID, Parent: epic.ID}}; !slices.Equal(file.Reparents, want) {
+		t.Errorf("reparents = %+v, want %+v", file.Reparents, want)
+	}
+	if len(file.BlockedBy) != 1 || !slices.Equal(file.BlockedBy[0].BlockedBy, []string{blocker.ID}) {
+		t.Errorf("blocked_by = %+v, want %s's set [%s]", file.BlockedBy, issue.ID, blocker.ID)
+	}
+}
+
+// TestABulkUpdateDocumentStatesEveryKeyAnUpdateOwns: the document states every
+// key of the bulk file but the four an update cannot carry back — local_id
+// names a create, topic is immutable, rank moves an issue rather than saying
+// where it stands, and reason annotates an edit the document does not make —
+// and states each of the others even when the issue's value is empty, so an
+// agent sees every key it may edit. The keys are read off the type, so a key
+// added to the file and left out of the document fails here.
+func TestABulkUpdateDocumentStatesEveryKeyAnUpdateOwns(t *testing.T) {
+	text, err := yaml.Marshal(storage.BulkUpdateDocument(storage.IssueRelations{Issue: model.Issue{ID: "links-x-1", Title: "bare", IssueType: model.TypeTask}}))
+	if err != nil {
+		t.Fatalf("marshal the document: %v", err)
+	}
+	var stated map[string]any
+	if err := yaml.Unmarshal(text, &stated); err != nil {
+		t.Fatalf("unmarshal the document: %v", err)
+	}
+	notCarried := map[string]bool{"local_id": true, "topic": true, "rank": true, "reason": true}
+	var want []string
+	docType := reflect.TypeFor[storage.BulkIssueSpec]()
+	for i := range docType.NumField() {
+		key, _, _ := strings.Cut(docType.Field(i).Tag.Get("yaml"), ",")
+		if !notCarried[key] {
+			want = append(want, key)
+		}
+	}
+	got := slices.Sorted(maps.Keys(stated))
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Errorf("the document states keys %v, want %v; the document:\n%s", got, want, text)
+	}
 }

@@ -130,15 +130,17 @@ type Change struct {
 	Reason string
 }
 
-// Applied is what one Change did: the issue as the change left it, and the
-// claim it handed from one holder to another — nil for every change that
-// handed none, which is every change but a start taking a ticket somebody had
-// already taken. The engine reports the handover from the comparison that
-// decided its write, so nothing above it works the transfer out again.
+// Applied is what one Change did: the issue as the change left it, the claim
+// it handed from one holder to another — nil for every change that handed
+// none, which is every change but a start taking a ticket somebody had
+// already taken — and the change rows its field patch made, none for a patch
+// that moved no field. The engine reports both from the comparison that
+// decided its write, so nothing above it works them out again.
 // [LAW:one-source-of-truth]
 type Applied struct {
 	Issue    model.Issue
 	Handover *claims.Handover
+	Fields   []model.FieldChange
 }
 
 // PurgeInput names the issue to purge and who is purging it.
