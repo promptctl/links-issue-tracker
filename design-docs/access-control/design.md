@@ -190,8 +190,8 @@ acceptance, never at local surgery — which is the write layer's model
 everywhere, stated here because this is where it is easiest to get wrong. `lit import` is not its own verb:
 it fans out to `create` and `edit` checks per affected issue, so bulk
 ingest grants nothing the interactive verbs don't — and the same rule
-covers `bulk label/close/archive`, each fanning out to its per-issue verb
-(`relate`, `close`, `archive`). Decrypted egress
+covers every `bulk` verb, each fanning out to the per-issue verb it runs
+(`bulk label` to `relate`, `bulk delete` to `delete`). Decrypted egress
 (`export` and `backup create` emitting plaintext rather than envelopes —
 §2's redesign item 3; the lifeboat is not in this list because it has no
 decryption logic at all and can only ever dump envelopes) is the named

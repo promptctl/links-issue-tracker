@@ -296,6 +296,23 @@ func TestABackupRestoreClearsTheStatuslineFile(t *testing.T) {
 	}
 }
 
+// A bulk transition writes each ticket through the store as its single verb
+// does, so `lit bulk delete` clears both records of a ticket it deletes.
+func TestABulkDeleteClearsTheStatuslineRecordsOfItsTicket(t *testing.T) {
+	isolateEvents(t)
+	dir, first, _ := statuslineCheckout(t)
+	runCLIInDir(t, dir, "next")
+	runCLIInDir(t, dir, "start", first, "--by", "agent")
+	if got := readStatusline(t, dir); workingOnID(got) != first || nextID(got) != first {
+		t.Fatalf("before the bulk delete the file = %+v / %+v; the test needs both records of %s", got.WorkingOn, got.Next, first)
+	}
+
+	runCLIInDir(t, dir, "bulk", "delete", "--ids", first)
+	if got := readStatusline(t, dir); got.WorkingOn != nil || got.Next != nil {
+		t.Fatalf("after bulk delete the file = %+v; want both records of %s cleared", got, first)
+	}
+}
+
 // After each start, and after a lit next hands the work back, the file's
 // rollup progress is the "N/M done" the lit backlog claim line prints for that lane at
 // that moment — including a start that takes a closed ticket out of the done

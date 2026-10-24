@@ -304,3 +304,163 @@ func TestStartUsageNamesTake(t *testing.T) {
 		}
 	}
 }
+
+// runBulkRecorded runs `lit bulk <spec.name>` over ids, resolved through the
+// bulk family's own row, under a recorder of the test's own; it requires every
+// item to land and returns the run's bulk.items entries as (id, error) pairs.
+func runBulkRecorded(t *testing.T, h readyTestHarness, spec transitionSpec, ids []string) [][2]any {
+	t.Helper()
+	row, err := bulkFamily.resolve(underInvocation(h.ctx), []string{spec.name})
+	if err != nil {
+		t.Fatalf("lit bulk %s does not resolve: %v", spec.name, err)
+	}
+	var out bytes.Buffer
+	ev, err := recordLeaf(row.declare(), h.ctx, cwdInvocation(&out, &out, nil), h.ap, []string{"--ids", strings.Join(ids, ",")})
+	if err != nil {
+		t.Fatalf("bulk %s error = %v", spec.name, err)
+	}
+	if want := strings.Join(ids, " ok\n") + " ok\n"; out.String() != want {
+		t.Errorf("bulk %s stdout = %q, want %q", spec.name, out.String(), want)
+	}
+	var items [][2]any
+	for _, raw := range writtenEvent(t, ev).Occurrences["bulk.items"] {
+		entry := raw.(map[string]any)
+		items = append(items, [2]any{entry["bulk.item.id"], entry["bulk.item.error"]})
+	}
+	return items
+}
+
+// The ticket's acceptance: a batch moved out of the flow by bulk archive or
+// bulk delete comes back to its exact prior state through the inverse bulk
+// verb, whether each live ticket was open, in progress or done, with its
+// labels, edges and comments. Each run leaves one clean bulk.items entry per
+// ticket. A live batch only: delete
+// drops an archived ticket's archive stamp, so restore lands it live
+// (lifecycle.Retain).
+func TestBulkRetentionVerbsRoundTripTheirInverse(t *testing.T) {
+	for _, pair := range []struct {
+		out, back transitionSpec
+		away      func(model.Retention) bool
+	}{
+		{archiveSpec, unarchiveSpec, func(r model.Retention) bool { _, ok := r.(model.Archived); return ok }},
+		{deleteSpec, restoreSpec, func(r model.Retention) bool { _, ok := r.(model.Deleted); return ok }},
+	} {
+		t.Run(pair.out.name+"/"+pair.back.name, func(t *testing.T) {
+			h := newReadyTestHarness(t)
+			ids := h.bulkTickets(3)
+			h.setLabels(ids[0], "keep")
+			if _, err := h.ap.Store.AddRelation(h.ctx, storage.AddRelationInput{SrcID: ids[0], DstID: ids[1], Type: model.RelRelatedTo, CreatedBy: "ada"}); err != nil {
+				t.Fatalf("AddRelation error = %v", err)
+			}
+			note, err := model.ParseCommentBody("kept through the round trip")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := h.ap.Store.AddComment(h.ctx, storage.AddCommentInput{IssueID: ids[2], Body: note, CreatedBy: "ada"}); err != nil {
+				t.Fatalf("AddComment error = %v", err)
+			}
+			h.applyAction(ids[1], model.Start{Assignee: "ada"}, "")
+			h.applyAction(ids[2], model.Done{}, "")
+			state := func(id string) model.IssueDetail {
+				t.Helper()
+				d, err := h.ap.Store.GetIssueDetail(h.ctx, id)
+				if err != nil {
+					t.Fatalf("GetIssueDetail(%q) error = %v", id, err)
+				}
+				return model.IssueDetail{Issue: d.Issue, Relations: d.Relations, Comments: d.Comments}
+			}
+			prior := map[string]model.IssueDetail{}
+			for _, id := range ids {
+				prior[id] = state(id)
+			}
+			if len(prior[ids[0]].Relations) == 0 || len(prior[ids[2]].Comments) == 0 {
+				t.Fatalf("fixture details = %+v; the round trip needs an edge and a comment to keep", prior)
+			}
+			wantItems := make([][2]any, len(ids))
+			for i, id := range ids {
+				wantItems[i] = [2]any{id, nil}
+			}
+
+			if got := runBulkRecorded(t, h, pair.out, ids); !reflect.DeepEqual(got, wantItems) {
+				t.Errorf("bulk %s bulk.items = %v, want %v", pair.out.name, got, wantItems)
+			}
+			for _, id := range ids {
+				if r := h.issueDetail(id).Retention(); !pair.away(r) {
+					t.Fatalf("after bulk %s, %s retention = %#v", pair.out.name, id, r)
+				}
+			}
+			if got := runBulkRecorded(t, h, pair.back, ids); !reflect.DeepEqual(got, wantItems) {
+				t.Errorf("bulk %s bulk.items = %v, want %v", pair.back.name, got, wantItems)
+			}
+			for _, id := range ids {
+				got := state(id)
+				// The round trip is two writes, so the write clock moved; every
+				// other field is the ticket's state and must be what it was.
+				got.Issue.UpdatedAt = prior[id].Issue.UpdatedAt
+				if !reflect.DeepEqual(got, prior[id]) {
+					t.Errorf("%s after bulk %s then bulk %s = %+v, want %+v", id, pair.out.name, pair.back.name, got, prior[id])
+				}
+			}
+		})
+	}
+}
+
+// Each retention verb in bulk answers every ticket its single verb will not
+// move — one the verb refuses, and one already where the verb would put it —
+// with the single verb's error and the ticket untouched, and the other ticket
+// in the run still lands.
+// The rows are every cell of lifecycle.Retain that does not move.
+func TestBulkRetentionVerbsAnswerEachTicketTheyCannotMoveAsTheSingleVerbDoes(t *testing.T) {
+	type retention struct {
+		name string
+		via  []model.Action // from a new live ticket
+	}
+	var (
+		live     = retention{"live", nil}
+		archived = retention{"archived", []model.Action{model.Archive{}}}
+		deleted  = retention{"deleted", []model.Action{model.Delete{}}}
+	)
+	for _, tc := range []struct {
+		spec         transitionSpec
+		stuck, moves retention // one ticket where the verb will not move it, the other where it does
+	}{
+		{archiveSpec, archived, live},
+		{archiveSpec, deleted, live},
+		{unarchiveSpec, live, archived},
+		{unarchiveSpec, deleted, archived},
+		{deleteSpec, deleted, live},
+		{restoreSpec, live, deleted},
+		{restoreSpec, archived, deleted},
+	} {
+		t.Run(tc.spec.name+"/"+tc.stuck.name, func(t *testing.T) {
+			h := newReadyTestHarness(t)
+			ids := h.bulkTickets(2)
+			stuck, landed := ids[0], ids[1]
+			for _, a := range tc.stuck.via {
+				h.applyAction(stuck, a, "")
+			}
+			for _, a := range tc.moves.via {
+				h.applyAction(landed, a, "")
+			}
+			single := h.runTransitionErr(stuck, tc.spec)
+			if single == nil {
+				t.Fatalf("lit %s on %s succeeded; the test needs a ticket it does not move", tc.spec.name, stuck)
+			}
+			before := h.issueDetail(stuck)
+			var out bytes.Buffer
+			failed := bulkFailures(t, h, &out, tc.spec, "--ids", stuck+","+landed)
+			if after := h.issueDetail(stuck); !reflect.DeepEqual(after, before) {
+				t.Errorf("bulk %s wrote %s it did not move: %+v, was %+v", tc.spec.name, stuck, after, before)
+			}
+			if len(failed) != 1 || failed[stuck] == nil {
+				t.Fatalf("bulk %s failures = %v, want exactly %s", tc.spec.name, failed, stuck)
+			}
+			if got := failed[stuck]; got.Error() != single.Error() || reflect.TypeOf(got) != reflect.TypeOf(single) {
+				t.Errorf("bulk %s error = %q (%T), want lit %s's %q (%T)", tc.spec.name, got, got, tc.spec.name, single, single)
+			}
+			if want := landed + " ok\n"; out.String() != want {
+				t.Errorf("bulk %s stdout = %q, want %q", tc.spec.name, out.String(), want)
+			}
+		})
+	}
+}

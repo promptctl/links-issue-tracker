@@ -52,7 +52,7 @@ directory as files, bypassing the Dolt commit layer entirely.
 | `rank` | Move one issue (top/bottom/above/below) or set an absolute N-way order atomically | W |
 | `start` / `done` / `close` / `open` | The lifecycle verbs: claim into in_progress, close as finished, close unfinished with a resolution (duplicate/superseded/obsolete/wontfix, optionally redirecting to another id), reopen | W |
 | `comment add` / `comment rm` | Comments are first-class rows with their own ids | W |
-| `label add/rm`, `bulk label/close/archive` | Label edits and bulk fan-out of labels, closes, archives | W |
+| `label add/rm`, `bulk <verb>` | Label edits, and bulk fan-out of a label edit, comment or lifecycle or retention transition across many issues | W |
 
 ### Structure
 
