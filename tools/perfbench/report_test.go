@@ -86,7 +86,7 @@ func fixedResults() []result {
 	return []result{
 		{size: size{name: "empty", rows: 0}, bytes: 20_000, compacted: 15_000,
 			samples: samplesAt(70*time.Millisecond, 80*time.Millisecond, 7970*time.Millisecond, 8200*time.Millisecond)},
-		{size: size{name: "today", rows: 118}, bytes: 4_100_000, compacted: 3_900_000,
+		{size: size{name: "today", rows: 118}, imported: 4200 * time.Millisecond, bytes: 4_100_000, compacted: 3_900_000,
 			samples: samplesAt(110*time.Millisecond, 120*time.Millisecond, 3330*time.Millisecond, 4440*time.Millisecond),
 			history: historyCost{edits: 100, before: 3_900_000, after: 5_250_000}},
 	}

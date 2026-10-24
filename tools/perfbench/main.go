@@ -26,6 +26,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -194,7 +195,7 @@ func measureSize(bin litBinary, workDir string, sz size, env []string, lim limit
 	if err != nil {
 		return result{}, gateError{}, err
 	}
-	r := result{size: sz, bytes: bytes, fleetBytes: fleetBytes, samples: samples}
+	r := result{size: sz, imported: store.imported, bytes: bytes, fleetBytes: fleetBytes, samples: samples}
 	var verdict gateError
 	verdict.breaches = breaches(r, lim.budget)
 	if err := logVerdicts(progress, limits, verdict.breaches); err != nil {
@@ -263,17 +264,20 @@ func parseSizes(raw string) ([]size, error) {
 		if err != nil {
 			return nil, err
 		}
-		// Duplicates are refused rather than deduplicated. Each size generates
-		// into a directory named for it, so two entries of one name would name
-		// one directory twice — and generation into a directory that already
-		// holds a store is exactly what generate() refuses. Failing here names
-		// the real mistake instead of surfacing it as a directory error three
-		// steps later. The name is what collides, so the name is what is
-		// compared: `1074,10x-fleet` measure different things in different
-		// directories even though their measured stores share a row count.
+		// Duplicates are refused rather than deduplicated, and a duplicate is
+		// either of two mistakes. One name twice names one directory twice,
+		// and generation into a directory that already holds a store is
+		// exactly what generate() refuses; failing here names the real mistake
+		// instead of surfacing it as a directory error three steps later. And
+		// one set of stores under two names (`design,2800`) measures the same
+		// thing twice. `1074,10x-fleet` is neither: their measured stores share
+		// a row count, but one is a store and the other a fleet.
 		for _, seen := range sizes {
 			if seen.name == sz.name {
 				return nil, fmt.Errorf("--sizes: %s is named twice", sz.name)
+			}
+			if slices.Equal(seen.members(), sz.members()) {
+				return nil, fmt.Errorf("--sizes: %s and %s are both %d rows", seen.name, sz.name, sz.rows)
 			}
 		}
 		sizes = append(sizes, sz)

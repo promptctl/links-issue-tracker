@@ -366,16 +366,34 @@ const repeats = 5
 // step's is not.
 const runBudget = 2 * time.Minute
 
-// importBudget bounds the one `lit import` that populates a store. It grows
-// with the row count because the work does: measured on 2026-09-27
-// (darwin/arm64, 12 CPUs), importing 590 rows in one batch took 22s, about
-// 37ms a row, so a fixed runBudget would report `--sizes 3000` — the natural
-// next probe once the ceiling estimate says ~1,200 rows — as a hang and kill
-// the import mid-transaction. The allowance is several times the measured
-// rate so a loaded machine still finishes inside it, on top of runBudget so
-// the empty store's zero rows keep the same hang detection every probe has.
+// importBudget bounds the one `lit import` that populates a store: runBudget
+// for the steps every import pays at any size, plus importSlack times what
+// the import is modelled to cost. It is a hang detector, not a verdict on lit:
+// it exists so an import wedged behind a lock is named as a hang naming the
+// step, and it must therefore hold a healthy import at every size measured.
+//
+// THE MODEL IS QUADRATIC because one write's cost grows with the store's size.
+// Measured 2026-10-23 (darwin/arm64), 2,800 rows imported as four 700-row
+// imports took 18s, 27s, 35s and 52s, against 146s as one: batching changes
+// nothing, and the n-th write costs about writeBase + writePerStoredRow * n,
+// so N rows cost N*writeBase + writePerStoredRow*N^2/2. A per-row allowance
+// fitted at 590 rows (the bound this replaces, 250ms a row) killed a healthy
+// 10,740-row import at 46m45s on ubuntu-latest (run 40037763869). The
+// constants are fitted to ubuntu-latest's own imports, 700 rows in ~15s
+// (ci.yml perf-budget) and 2,800 in 188s (nightly design, run 40037763869),
+// where the PR gate and the nightly lanes run. That cost is a limit in its
+// own right, filed as links-scale-dy46.48k; this only keeps the instrument
+// from mistaking it for a hang.
 func importBudget(rows int) time.Duration {
-	return runBudget + time.Duration(rows)*importRowAllowance
+	n := time.Duration(rows)
+	return runBudget + importSlack*(n*writeBase+writePerStoredRow*n*n/2)
 }
 
-const importRowAllowance = 250 * time.Millisecond
+const (
+	writeBase         = 5400 * time.Microsecond
+	writePerStoredRow = 44 * time.Microsecond
+	// importSlack is how many times the modelled cost the bound allows: the
+	// model fits two sizes and runs low at 10,740 rows (it says ~43m, and the
+	// real import ran past 46m45s), and a loaded runner adds more.
+	importSlack = 3
+)

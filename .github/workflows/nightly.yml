@@ -104,7 +104,7 @@ jobs:
       points: ${{ steps.points.outputs.points }}
     steps:
       - id: points
-        run: echo 'points=["10x-store","10x-fleet"]' >> "$GITHUB_OUTPUT"
+        run: echo 'points=[{"name":"10x-store","minutes":300},{"name":"10x-fleet","minutes":120}]' >> "$GITHUB_OUTPUT"
 
   # One leg per scale point, each on its own runner and disk, so neither waits
   # on the other and a failed fleet keeps the store's figures. Each leg's
@@ -118,7 +118,7 @@ jobs:
       matrix:
         point: ${{ fromJSON(needs.scale-points.outputs.points) }}
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: ${{ matrix.point.minutes }}
     steps:
       - uses: actions/checkout@v4
 
@@ -127,9 +127,9 @@ jobs:
           go-version-file: go.mod
 
       # Built, then run, as ci.yml's perf-budget is, so exit 2 survives.
-      - name: The latency budget and the writer storm at ${{ matrix.point }}
+      - name: The latency budget and the writer storm at ${{ matrix.point.name }}
         env:
-          POINT: ${{ matrix.point }}
+          POINT: ${{ matrix.point.name }}
         run: |
           out="$RUNNER_TEMP/scale"
           mkdir -p "$out"
@@ -145,7 +145,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: ${{ always() }}
         with:
-          name: scale-${{ matrix.point }}
+          name: scale-${{ matrix.point.name }}
           path: ${{ runner.temp }}/scale/
 
   # The night's verdict, on every ref, so a dispatch on a branch runs it on
@@ -172,7 +172,7 @@ jobs:
         run: |
           set -euo pipefail
           broken=false
-          for point in $(jq -er '.[]' <<<"$POINTS"); do
+          for point in $(jq -er '.[].name' <<<"$POINTS"); do
             code=$(cat "scale/scale-$point/exit-code" 2>&1) || code="none ($code)"
             echo "$point: perfbench exit code $code"
             case "$code" in 0|2) ;; *) broken=true ;; esac

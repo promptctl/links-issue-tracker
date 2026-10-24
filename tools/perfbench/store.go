@@ -39,6 +39,11 @@ type generatedStore struct {
 	// ids are the issue ids lit minted for the generated rows, in the order
 	// importBatches wrote them: row i is ids[i]. Empty for the empty store.
 	ids []string
+	// imported is how long `lit import` took to load the rows, the slope of
+	// lit's write path made one figure: one write's cost grows with the
+	// store's size, so this grows faster than the rows do. A copy carries its
+	// source's.
+	imported time.Duration
 }
 
 // generate builds every store of a scale point under parent/<name>, the
@@ -117,10 +122,16 @@ func generateStore(bin litBinary, root string, sz size, rows int, env []string, 
 		specs = append(specs, importSpec{path: specPath, records: batch})
 	}
 	var ids []string
+	var imported time.Duration
 	for _, st := range generationSteps(bin, rows, specs) {
+		start := time.Now()
 		out, err := run(root, env, st)
+		elapsed := time.Since(start)
 		if err != nil {
 			return generatedStore{}, err
+		}
+		if st.imports() {
+			imported += elapsed
 		}
 		loaded, err := idsLoaded(out, st.loads)
 		if err != nil {
@@ -128,7 +139,7 @@ func generateStore(bin litBinary, root string, sz size, rows int, env []string, 
 		}
 		ids = append(ids, loaded...)
 	}
-	return resolved(generatedStore{size: sz, root: root, fleetRoot: filepath.Dir(root), env: env, ids: ids})
+	return resolved(generatedStore{size: sz, root: root, fleetRoot: filepath.Dir(root), env: env, ids: ids, imported: imported})
 }
 
 // replicate copies src's workspace to dir and answers the copy, the same rows
@@ -168,6 +179,9 @@ type step struct {
 	// just ran. [LAW:dataflow-not-control-flow]
 	loads []storage.ImportTreeSpec
 }
+
+// imports is whether st is an import: the step that loads rows.
+func (st step) imports() bool { return len(st.loads) > 0 }
 
 // importSpec is one import batch: the file `lit import` reads, and the records
 // written into it.
