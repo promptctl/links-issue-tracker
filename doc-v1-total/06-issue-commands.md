@@ -26,7 +26,7 @@ This table is the corpus's single source for the code-to-error-type mapping; `07
 | Exit | Constant | Error types |
 |---|---|---|
 | 0 | `ExitOK` | nil error, including a handled `--help` |
-| 1 | `ExitGeneric` | `BulkFailureError`, transient GC contention, everything else |
+| 1 | `ExitGeneric` | a `BulkError` whose items differ in reason, a landed item differing from every unlanded one (one whose every item shares a reason exits with that reason's code), transient GC contention, everything else |
 | 2 | `ExitUsage` | `UsageError` |
 | 3 | `ExitValidation` | `UnknownCommandError`, `RetiredCommandError`, any `model.Refusal` (`model.ValidationError`, `model.FrozenIssueError`, and the upgrade/downgrade target refusals), `UnsupportedError`, `templateShapeError`, `OutsideWorkspaceError`, `store.ErrWorkspaceNotInitialized`, any `model.SchemaAhead` (`*store.UnsupportedSchemaVersionError`, `*store.DowngradeSpanUnsupportedError`, `*store.RemoteSchemaAheadError`, which a remote-schema-ahead `SyncFailureError` unwraps to), `*store.QuarantineBlockError`, `workspace.ErrIssuePrefixRefused`, any `model.StateRequestError` (`model.ContainerActionError`, `lifecycle.RetentionError`) when not `Satisfied()`, `takeoverUnconfirmedError`, `purgeUnconfirmedError` |
 | 4 | `ExitNotFound` | `storage.NotFoundError`, `storage.VersionNotFoundError`, `storage.PlanDigestNotFoundError` |
@@ -157,7 +157,7 @@ Every long free-text flag — `--body`, `--description`, `--prompt`, `--plan` �
 
 ## Bulk operations
 
-`lit bulk <label|comment|start|done|close|open|archive|unarchive|delete|restore>` (`bulk.go`). `--ids` is a set on every row, comma-separated and/or repeated (`registerBulkIDs`). Shared semantics: the operation applies to each ID **in order**; each success prints `<id> ok` to stdout; failures never reach stdout — they are collected into a partial-failure error (exit 1) whose message lists every `<id>: <err>`, with remediation "Re-run the command for only the failed IDs…". Each ID leaves one `bulk.items` entry on the invocation's event (`docs/events.md`).
+`lit bulk <label|comment|start|done|close|open|archive|unarchive|delete|restore>` (`bulk.go`). `--ids` is a set on every row, comma-separated and/or repeated (`registerBulkIDs`). Shared semantics: the operation applies to each ID **in order**; each success prints `<id> ok` to stdout; items that do not land never reach stdout — they are collected into a `BulkError` whose message lists every `<id> (<reason>): <err>`, and whose reason and exit code are the ones those items share when no item landed (so a run over one ID answers as its single command does), or `bulk_partial_failure` (exit 1) when some item landed or the unlanded items differ. Each ID leaves one `bulk.items` entry on the invocation's event (`docs/events.md`).
 
 - `bulk label <add|rm> --ids <csv> --label <name>` — refusal precedence: missing `--ids` or a blank slot in it (exit 3), then missing `--label` (exit 3), then unknown action.
 - `bulk comment --ids <csv> (--body <t> | --body-file <path|->)` — the body is read once and parsed by `model.ParseCommentBody` before any ID runs, so a blank body is one "comment body is required" refusal (exit 3) and no ID runs; each ID runs `addComment` (`cli.go`), the step `comment add` runs: the same `Store.AddComment` and the same refusals. A ticket's existing comments stay. Each ID's `<issueID> <commentID>` line prints before its `<id> ok`, and its `bulk.items` entry carries `comment.id`. No workflow event.

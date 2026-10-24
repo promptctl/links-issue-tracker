@@ -15,23 +15,23 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 )
 
-// bulkFailures runs a bulk transition and returns its per-item failures by id,
-// failing the test unless the run failed as a bulk run fails.
-func bulkFailures(t *testing.T, h readyTestHarness, stdout io.Writer, spec transitionSpec, args ...string) map[string]error {
+// bulkFailures runs a bulk transition and returns its unlanded items' errors by
+// id and the run's reason, failing the test unless some item did not land.
+func bulkFailures(t *testing.T, h readyTestHarness, stdout io.Writer, spec transitionSpec, args ...string) (map[string]error, commandReason) {
 	t.Helper()
 	err := runBulkTransition(h.ctx, stdout, h.ap, args, spec)
-	var bulk BulkFailureError
+	var bulk BulkError
 	if !errors.As(err, &bulk) {
-		t.Fatalf("bulk %s %v error = %v (%T), want a BulkFailureError", spec.name, args, err, err)
+		t.Fatalf("bulk %s %v error = %v (%T), want a BulkError", spec.name, args, err, err)
 	}
 	if got := ExitCode(err); got == ExitOK {
 		t.Fatalf("bulk %s ExitCode = %d, want non-zero", spec.name, got)
 	}
 	failed := map[string]error{}
-	for _, f := range bulk.Failures {
+	for _, f := range bulk.Unlanded {
 		failed[f.IssueID] = f.Err
 	}
-	return failed
+	return failed, commandErrorReason(err)
 }
 
 // The ticket's acceptance, on a ticket `lit open` refuses: an archived one. A
@@ -54,7 +54,7 @@ func TestBulkOpenReopensTheRestAndFailsTheTicketOpenRefuses(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	failed := bulkFailures(t, h, &out, openSpec, "--ids", first+","+archived+","+second)
+	failed, _ := bulkFailures(t, h, &out, openSpec, "--ids", first+","+archived+","+second)
 
 	if len(failed) != 1 || failed[archived] == nil {
 		t.Fatalf("failures = %v, want exactly %s", failed, archived)
@@ -73,7 +73,7 @@ func TestBulkOpenReopensTheRestAndFailsTheTicketOpenRefuses(t *testing.T) {
 }
 
 // Every bulk transition refuses what its single verb refuses, with the single
-// verb's error: on a container, and on frozen work.
+// verb's error and reason: on a container, and on frozen work.
 func TestBulkTransitionsRefuseWhatTheSingleVerbRefusesInItsWords(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "bulk-parity-sess")
 	for _, spec := range []transitionSpec{startSpec, doneSpec, closeSpec, openSpec} {
@@ -89,10 +89,13 @@ func TestBulkTransitionsRefuseWhatTheSingleVerbRefusesInItsWords(t *testing.T) {
 				if single == nil {
 					t.Fatalf("lit %s on the %s succeeded; the test needs a refusal", spec.name, target)
 				}
-				failed := bulkFailures(t, h, io.Discard, spec, append([]string{"--ids", id}, actionFlags[spec.name]...)...)
+				failed, reason := bulkFailures(t, h, io.Discard, spec, append([]string{"--ids", id}, actionFlags[spec.name]...)...)
 				got := failed[id]
 				if got == nil {
 					t.Fatalf("bulk %s failures = %v, want %s", spec.name, failed, id)
+				}
+				if want := commandErrorReason(single); reason != want {
+					t.Errorf("bulk %s reason = %s, want lit %s's %s", spec.name, reason, spec.name, want)
 				}
 				if got.Error() != single.Error() || reflect.TypeOf(got) != reflect.TypeOf(single) {
 					t.Errorf("bulk %s error = %q (%T), want lit %s's %q (%T)", spec.name, got, got, spec.name, single, single)
@@ -117,7 +120,7 @@ func TestBulkStartRefusesAHeldLaneUnlessTaken(t *testing.T) {
 	h.asCheckout(h.ap.Stream.Value())
 
 	var out bytes.Buffer
-	failed := bulkFailures(t, h, &out, startSpec, "--ids", contested.ID+","+free.ID)
+	failed, _ := bulkFailures(t, h, &out, startSpec, "--ids", contested.ID+","+free.ID)
 	var refusal takeoverUnconfirmedError
 	if len(failed) != 1 || !errors.As(failed[contested.ID], &refusal) {
 		t.Fatalf("failures = %v, want only %s, refused by the takeover gate", failed, contested.ID)
@@ -225,7 +228,7 @@ func TestBulkStartTakeAnnouncesOnlyATakeoverThatLanded(t *testing.T) {
 	refusal := errors.New("store refused the write")
 	h.ap.Store = applyRefusingStore{Store: live, err: refusal}
 	var out bytes.Buffer
-	failed := bulkFailures(t, h, &out, startSpec, "--ids", contested.ID, "--take")
+	failed, _ := bulkFailures(t, h, &out, startSpec, "--ids", contested.ID, "--take")
 	if !errors.Is(failed[contested.ID], refusal) {
 		t.Fatalf("failures = %v, want %s failed with %v", failed, contested.ID, refusal)
 	}
@@ -261,9 +264,9 @@ func TestBulkItemEntryCarriesWhatItsErrorDeclared(t *testing.T) {
 	err := runBulkOver(ctx, io.Discard, []string{"a"}, func(context.Context, string) (string, error) {
 		return "", fmt.Errorf("apply: %w", recordedItemError{})
 	})
-	var bulk BulkFailureError
+	var bulk BulkError
 	if !errors.As(err, &bulk) {
-		t.Fatalf("runBulkOver error = %v (%T), want a BulkFailureError", err, err)
+		t.Fatalf("runBulkOver error = %v (%T), want a BulkError", err, err)
 	}
 	entry := recorder.Finish(telemetry.End{}).Occurrences["bulk.items"][0].(map[string]any)
 	facts, counts := entry["bulk.item.facts"].(map[string]any), entry["bulk.item.counts"].(map[string]int)
@@ -286,7 +289,7 @@ func TestBulkEndsAtAStdoutItCannotWriteWithoutFailingTheItem(t *testing.T) {
 	err := runBulkOver(ctx, failingWriter{err: closed}, []string{"a"}, func(context.Context, string) (string, error) {
 		return "claim transferred: x -> y\n", nil
 	})
-	var bulk BulkFailureError
+	var bulk BulkError
 	if !errors.Is(err, closed) || errors.As(err, &bulk) {
 		t.Errorf("runBulkOver error = %v (%T), want the write's %v and no item failure", err, err, closed)
 	}
@@ -408,7 +411,9 @@ func TestBulkRetentionVerbsRoundTripTheirInverse(t *testing.T) {
 // Each retention verb in bulk answers every ticket its single verb will not
 // move — one the verb refuses, and one already where the verb would put it —
 // with the single verb's error and the ticket untouched, and the other ticket
-// in the run still lands.
+// in the run still lands. The run, in which the other ticket landed, answers as
+// a partial failure, never with the stuck ticket's reason alone: an exit 6
+// would claim it changed nothing.
 // The rows are every cell of lifecycle.Retain that does not move.
 func TestBulkRetentionVerbsAnswerEachTicketTheyCannotMoveAsTheSingleVerbDoes(t *testing.T) {
 	type retention struct {
@@ -448,7 +453,10 @@ func TestBulkRetentionVerbsAnswerEachTicketTheyCannotMoveAsTheSingleVerbDoes(t *
 			}
 			before := h.issueDetail(stuck)
 			var out bytes.Buffer
-			failed := bulkFailures(t, h, &out, tc.spec, "--ids", stuck+","+landed)
+			failed, reason := bulkFailures(t, h, &out, tc.spec, "--ids", stuck+","+landed)
+			if reason != reasonBulkPartialFailure {
+				t.Errorf("bulk %s reason = %s (exit %d), want bulk_partial_failure: %s landed", tc.spec.name, reason, reason.exit, landed)
+			}
 			if after := h.issueDetail(stuck); !reflect.DeepEqual(after, before) {
 				t.Errorf("bulk %s wrote %s it did not move: %+v, was %+v", tc.spec.name, stuck, after, before)
 			}

@@ -361,6 +361,7 @@ carries the keys a `lit start` sets, a `lit bulk done` entry the keys a
 | --- | --- |
 | `bulk.item.id` | The issue id as given in `--ids`. |
 | `bulk.item.error` | The issue's error, or null when its change landed. |
+| `bulk.item.reason` | The reason token that error classifies as, the one its single command would print beside its exit code (`state_already_holds`, `validation_refused`, …), or null when its change landed. The event's own `reason` is the one every item shares when none landed, or `bulk_partial_failure` otherwise. |
 | `bulk.item.facts` | The facts that issue's change set, and those its error records about itself, as a failed `lit` command's event carries them; `{}` when there are none. |
 | `bulk.item.counts` | The counts that issue's change recorded, and those its error records; `{}` when there are none. |
 

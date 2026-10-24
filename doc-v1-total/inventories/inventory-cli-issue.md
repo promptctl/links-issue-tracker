@@ -194,7 +194,7 @@ one (`doctor.go` sets a `storage.ParentCycleError`), `UsageError`,
 `UnsupportedError` with a single `Message`
 field, `RetiredCommandError` — message
 `the "<cmd>" command has been retired; <replacement>`,
-`OutsideWorkspaceError`. `BulkFailureError` in
+`OutsideWorkspaceError`. `BulkError` in
 `bulk.go`. Value refusals use `model.ValidationError`, defined beside the
 rules in `internal/model/validation.go`.
 
@@ -246,7 +246,9 @@ types gets the reason of the earliest one:
 25. `workspace.StoredPrefixError` → `stored_prefix_refused`
 26. `errors.Is(err, workspace.ErrIssuePrefixRefused)` → `validation_refused`
     (`StoredPrefixError` unwraps to this sentinel; step 25 catches it first)
-27. `BulkFailureError` → `bulk_partial_failure`
+27. `BulkError` → `bulkReason`: the reason every item the run ran classifies
+    as (by this same classifier) when they all share one — so only when no
+    item landed — else `bulk_partial_failure`
 28. `store.WorkspaceWriteBlockedError` → `workspace_write_blocked` (it unwraps
     to `store.ErrTransientGCContention`; this step catches it first)
 29. `errors.Is(err, store.ErrWorkspaceBusy)` or
@@ -287,7 +289,7 @@ empty string means no `remediation:` line is printed:
 - `workspace_not_initialized`: "Do not retry unchanged — this repository has no lit workspace, and retrying this command cannot create one. Run `lit init` here to create it, or change to a directory that already has one."
 - `workspace_schema_ahead`: "Do not retry unchanged — this lit is older than the schema it was asked to operate on, this workspace's or the remote's it syncs with, and rerunning the command with the same binary repeats this refusal. The message above names the supported path. \<agent-instructions>Installing a different lit replaces it for every workspace on this machine, and any snapshot rollback the message offers discards data: take such a path only when the user directs it, and until then surface this refusal to the user as blocking.\</agent-instructions>"
 - `migration_quarantined`: "Do not retry unchanged — a migration this workspace has pending failed and is quarantined, and every command that opens the store refuses until the quarantine is cleared or a snapshot taken before the failure is restored. The message above names both. \<agent-instructions>Restoring a snapshot discards everything written since it was taken, and clearing the quarantine lets a migration that already failed run again: take either path only when the user directs it, and until then surface this refusal to the user as blocking.\</agent-instructions>"
-- `bulk_partial_failure`: "Some items failed; see the per-item errors above. Re-run the command for only the failed IDs after addressing each error."
+- `bulk_partial_failure`: "Do not re-run the command unchanged — any item it does not list landed, and running it again applies that item again. Each listed item names beside its id the reason its single command answers with; act on each as that reason calls for, and re-run with only the ids that still need it: an item refused by a rule repeats its refusal until what refused it changes, an item whose state already holds needs nothing, and an item that met a fault can be re-run once the fault clears."
 - default: "Retry the command. If it still fails, run `lit doctor` for diagnostics."
 
 ### 1.10 Progress channel
@@ -1982,17 +1984,20 @@ before any id is acted on.
   `telemetry.Occurrence` scope (`telemetry.go`): the facts and counts `op`
   records land in the scope, and one `bulk.items` entry per id is appended to
   the event — `bulk.item.id`, `bulk.item.error` (`telemetry.ErrorText`),
+  `bulk.item.reason` (the item error's reason token, null for a landed item),
   `bulk.item.facts`, `bulk.item.counts` (`bulk.go`), with what the item's error
   declares about itself (`model.ErrorRecord`) recorded into the scope.
 - `op` returns the item's notice and error. Each success writes the notice and
   then `"<id> ok\n"` to stdout; a write error ends the run with that error
   (`bulk.go`).
-- Each failure is collected; **failures never reach stdout** (`bulk.go`).
-- If any failed, returns `BulkFailureError{Failures}` → exit 1
-  (`bulk.go`, `error_output.go`), whose message is
-  `"bulk operation: <n> item(s) failed: <id>: <err>; <id>: <err>"`
-  (`bulk.go`), printed by `WriteCommandError` to stderr with the
-  `bulk_partial_failure` remediation (§1.9).
+- Each item that did not land is collected; **unlanded items never reach
+  stdout** (`bulk.go`).
+- If any did not land, returns `BulkError{Ran, Unlanded}` (`bulk.go`), whose
+  reason and exit code are those every item shares when none landed, else
+  `bulk_partial_failure` / exit 1 (`error_output.go`), and whose message is
+  `"bulk operation: <n> of <ran> item(s) did not land: <id> (<reason>): <err>; …"`
+  (`bulk.go`), printed by `WriteCommandError` to stderr with that reason's
+  remediation (§1.9).
 
 **`lit bulk label <add|rm> --ids <csv> --label <name>`** (`bulkLabelLeaf`,
 `bulk.go`):
