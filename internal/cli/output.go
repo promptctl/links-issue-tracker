@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"slices"
@@ -13,6 +14,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"gopkg.in/yaml.v3"
 )
 
 // contextIndent is the single indent used for every context line printed under
@@ -85,16 +87,23 @@ func printIssueSummary(w io.Writer, issue model.Issue) error {
 	return err
 }
 
-// issueListRenderer is what `lit ls --format` selects: one way to print a
-// projected listing.
-type issueListRenderer func(w io.Writer, issues []model.Issue, columns []columnSpec, cells map[string]derivedColumns) error
+// issueListRenderer is one way to print a listing: the issues a query
+// selected, rendered from whatever else of the store its shape needs.
+type issueListRenderer func(ctx context.Context, w io.Writer, st storage.Store, policy readyPolicy, issues []model.Issue) error
+
+// listFormat is what `lit ls --format` names: a parser of the `--columns`
+// expression that returns the renderer the format prints with. A format owns
+// the flags its shape reads, so one that has no columns to project refuses a
+// `--columns` rather than ignoring it. [LAW:parse-dont-validate]
+type listFormat func(columnsExpr string) (issueListRenderer, error)
 
 // listFormats is the whole `--format` vocabulary. The help text, the parser,
 // and the rejection message all read it, so a format added here is advertised
 // and accepted in one edit. [LAW:one-source-of-truth]
-var listFormats = map[string]issueListRenderer{
-	"lines": printIssueLines,
-	"table": printIssueTable,
+var listFormats = map[string]listFormat{
+	"lines": columnar(printIssueLines),
+	"table": columnar(printIssueTable),
+	"yaml":  updateDocuments,
 }
 
 func sortedListFormatNames() []string {
@@ -106,18 +115,65 @@ func sortedListFormatNames() []string {
 	return names
 }
 
-// parseListFormat is the one checkpoint for `--format`, run before the query so
-// a bad value costs no store read. It returns the renderer itself, so nothing
-// downstream holds a format name that could still be wrong. A bad value is a
-// model.ValidationError naming the valid formats: the same command can never succeed.
+// parseListFormat is the one checkpoint for the listing's output shape,
+// `--format` and the `--columns` it reads, run before the query so a bad value
+// costs no store read and no row is printed ahead of a refusal. It returns the
+// renderer itself, so nothing downstream holds a format name or a column
+// expression that could still be wrong, beside the format's name as the
+// vocabulary spells it. A bad format is a model.ValidationError naming the
+// valid formats: the same command can never succeed.
 // [LAW:parse-dont-validate] [LAW:no-silent-failure]
-func parseListFormat(expr string) (issueListRenderer, error) {
-	name := strings.ToLower(strings.TrimSpace(expr))
-	render, ok := listFormats[name]
+func parseListFormat(formatExpr, columnsExpr string) (string, issueListRenderer, error) {
+	name := strings.ToLower(strings.TrimSpace(formatExpr))
+	format, ok := listFormats[name]
 	if !ok {
-		return nil, model.ValidationError{Message: fmt.Sprintf("unsupported --format %q (valid: %s)", name, strings.Join(sortedListFormatNames(), ", "))}
+		return "", nil, model.ValidationError{Message: fmt.Sprintf("unsupported --format %q (valid: %s)", name, strings.Join(sortedListFormatNames(), ", "))}
 	}
-	return render, nil
+	render, err := format(columnsExpr)
+	return name, render, err
+}
+
+// columnar is a format that projects the selected columns, one row per issue,
+// loading the derived cells the columns name.
+func columnar(print func(w io.Writer, issues []model.Issue, columns []columnSpec, cells map[string]derivedColumns) error) listFormat {
+	return func(columnsExpr string) (issueListRenderer, error) {
+		columns, err := parseColumnSelection(columnsExpr)
+		if err != nil {
+			return nil, err
+		}
+		return func(ctx context.Context, w io.Writer, st storage.Store, policy readyPolicy, issues []model.Issue) error {
+			cells, err := listDerivedColumns(ctx, st, policy, columns, issues)
+			if err != nil {
+				return err
+			}
+			return print(w, issues, columns, cells)
+		}, nil
+	}
+}
+
+// updateDocuments is the format that prints each listed issue as the bulk
+// update document stating its editable state, multi-document YAML in listing
+// order: the file `lit import --path` reads back, so reading a selection out,
+// editing it, and writing it back is one round trip that edits only what the
+// file was edited to say. It projects no columns, so it refuses any.
+func updateDocuments(columnsExpr string) (issueListRenderer, error) {
+	if strings.TrimSpace(columnsExpr) != "" {
+		return nil, UsageError{Message: "--columns does not apply to --format yaml, which prints every editable field of each issue"}
+	}
+	return func(ctx context.Context, w io.Writer, st storage.Store, _ readyPolicy, issues []model.Issue) error {
+		relations, err := fetchIssueRelations(ctx, st, issues)
+		if err != nil {
+			return err
+		}
+		enc := yaml.NewEncoder(w)
+		enc.SetIndent(2)
+		for _, issue := range issues {
+			if err := enc.Encode(storage.BulkUpdateDocument(relations[issue.ID])); err != nil {
+				return fmt.Errorf("encode the update document of %s: %w", issue.ID, err)
+			}
+		}
+		return enc.Close()
+	}, nil
 }
 
 func printIssueTable(w io.Writer, issues []model.Issue, columns []columnSpec, cells map[string]derivedColumns) error {

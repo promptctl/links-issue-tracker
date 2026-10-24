@@ -63,7 +63,7 @@ func TestListFormatRejectsUnknownName(t *testing.T) {
 			if quoted := fmt.Sprintf("%q", tc.unknown); !strings.Contains(err.Error(), quoted) {
 				t.Errorf("--format %q error %q does not name the offending format as %s", tc.expr, err, quoted)
 			}
-			if !strings.Contains(err.Error(), "(valid: lines, table)") {
+			if !strings.Contains(err.Error(), "(valid: lines, table, yaml)") {
 				t.Errorf("--format %q error %q does not name the valid formats", tc.expr, err)
 			}
 			var stderr bytes.Buffer
@@ -81,7 +81,8 @@ func TestListFormatRejectsUnknownName(t *testing.T) {
 // added to the vocabulary without a row here fails.
 func TestListFormatAcceptsEveryAdvertisedName(t *testing.T) {
 	// firstLine is what each format puts on its first line: lines starts
-	// straight in on the issue row, table leads with a header.
+	// straight in on the issue row, table leads with a header, and yaml
+	// opens each update document with the id it updates.
 	cases := []struct {
 		expr      string
 		firstLine func(string) bool
@@ -89,6 +90,7 @@ func TestListFormatAcceptsEveryAdvertisedName(t *testing.T) {
 		{expr: "lines", firstLine: func(l string) bool { return strings.HasPrefix(l, "fmt-") && strings.Contains(l, " | ") }},
 		{expr: "table", firstLine: func(l string) bool { return strings.HasPrefix(l, "ID ") }},
 		{expr: " TABLE ", firstLine: func(l string) bool { return strings.HasPrefix(l, "ID ") }},
+		{expr: "yaml", firstLine: func(l string) bool { return strings.HasPrefix(l, "id: fmt-") }},
 	}
 	covered := map[string]bool{}
 	for _, tc := range cases {
