@@ -38,44 +38,54 @@ var bulkFamily = commandFamily[appSubcommand]{
 // is the resolved acting identity for the invocation, not a raw flag value.
 type bulkLabelOp func(ctx context.Context, ap *app.App, issueID, label, actor string) error
 
-// itemFailure pairs a bulk-operation target with the error that befell it.
-type itemFailure struct {
+// unlandedItem pairs a bulk-operation target with the error its change did not
+// land on: a refusal, a fault, or a state that already holds.
+type unlandedItem struct {
 	IssueID string
 	Err     error
 }
 
-// BulkFailureError aggregates the per-item failures of a bulk operation. Its
-// presence is the machine-checkable signal that at least one item failed, so the
-// exit-code boundary maps it to a non-zero code and a script chaining off a bulk
-// command does not proceed on partial or total failure. The per-item failures
-// are carried as data, never written to the stdout result channel.
+// BulkError is a bulk operation in which at least one item did not land: the
+// items that did not, each with its error, out of the Ran it was handed. Its
+// presence is the machine-checkable signal, so a script chaining off a bulk
+// command does not proceed as if every item moved. The unlanded items are
+// carried as data, never written to the stdout result channel.
 // [LAW:no-silent-failure] [LAW:types-are-the-program]
-type BulkFailureError struct {
-	Failures []itemFailure
+//
+// No Unwrap, deliberately: errors.As over a tree of items would classify the
+// run by whichever item it met first. The classifier reads the items itself
+// and derives the run's reason from all of them (bulkReason).
+type BulkError struct {
+	Ran      int
+	Unlanded []unlandedItem
 }
 
-func (e BulkFailureError) Error() string {
-	parts := make([]string, len(e.Failures))
-	for i, f := range e.Failures {
-		parts[i] = fmt.Sprintf("%s: %v", f.IssueID, f.Err)
+// Error names each unlanded item with the reason its error classifies as, the
+// reason its single command would have printed, so a run whose items differ
+// still says what each one calls for.
+func (e BulkError) Error() string {
+	parts := make([]string, len(e.Unlanded))
+	for i, item := range e.Unlanded {
+		parts[i] = fmt.Sprintf("%s (%s): %v", item.IssueID, commandErrorReason(item.Err), item.Err)
 	}
-	return fmt.Sprintf("bulk operation: %d item(s) failed: %s", len(e.Failures), strings.Join(parts, "; "))
+	return fmt.Sprintf("bulk operation: %d of %d item(s) did not land: %s", len(e.Unlanded), e.Ran, strings.Join(parts, "; "))
 }
 
 // runBulkOver applies op to each issue ID in order, writing to stdout, per
-// success, the notice op returned for that item and then one "id ok" line —
-// the data channel carries results only — and collecting every failure. If any item failed it returns a BulkFailureError so the exit
-// code reflects it; per-item failures never reach stdout. This is the single
-// place bulk success/failure is decided, so the exit-code contract cannot drift
+// landed item, the notice op returned for it and then one "id ok" line — the
+// data channel carries results only — and collecting every item that did not
+// land. If any did not, it returns a BulkError, whose reason the classifier
+// derives from those items; they never reach stdout. This is the single place
+// a bulk item's landing is decided, so the exit-code contract cannot drift
 // between bulk verbs. [LAW:single-enforcer] [LAW:no-silent-failure]
 //
 // Each item runs in its own telemetry occurrence and leaves one bulk.items
-// entry: the id, its error, and the facts and counts its work recorded, with
-// those its error declared about itself, as a failed single command's join
-// its event. Run on the event itself, the second item's facts would replace
-// the first's. [LAW:nothing-unseen]
+// entry: the id, its error and that error's reason, and the facts and counts
+// its work recorded, with those its error declared about itself, as a failed
+// single command's join its event. Run on the event itself, the second item's
+// facts would replace the first's. [LAW:nothing-unseen]
 func runBulkOver(ctx context.Context, stdout io.Writer, issueIDs []string, op func(ctx context.Context, issueID string) (notice string, err error)) error {
-	var failures []itemFailure
+	var unlanded []unlandedItem
 	for _, issueID := range issueIDs {
 		itemCtx, closeScope := telemetry.Occurrence(ctx)
 		notice, err := op(itemCtx, issueID)
@@ -85,21 +95,32 @@ func runBulkOver(ctx context.Context, stdout io.Writer, issueIDs []string, op fu
 		telemetry.Append(ctx, "bulk.items", map[string]any{
 			"bulk.item.id":     issueID,
 			"bulk.item.error":  telemetry.ErrorText(err),
+			"bulk.item.reason": itemReason(err),
 			"bulk.item.facts":  facts,
 			"bulk.item.counts": counts,
 		})
 		if err != nil {
-			failures = append(failures, itemFailure{IssueID: issueID, Err: err})
+			unlanded = append(unlanded, unlandedItem{IssueID: issueID, Err: err})
 			continue
 		}
 		if _, err := io.WriteString(stdout, notice+issueID+" ok\n"); err != nil {
 			return err
 		}
 	}
-	if len(failures) > 0 {
-		return BulkFailureError{Failures: failures}
+	if len(unlanded) > 0 {
+		return BulkError{Ran: len(issueIDs), Unlanded: unlanded}
 	}
 	return nil
+}
+
+// itemReason is the reason token an item's error classifies as, or nil for an
+// item that landed, as telemetry.ErrorText is nil for its error.
+func itemReason(err error) *string {
+	if err == nil {
+		return nil
+	}
+	reason := commandErrorReason(err).String()
+	return &reason
 }
 
 var bulkLabelFamily = commandFamily[bulkLabelOp]{

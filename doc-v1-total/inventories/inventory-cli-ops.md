@@ -36,7 +36,7 @@ data — described as assets, not as documentation of behavior).
 | Code | Constant | Trigger |
 |---|---|---|
 | 0 | `ExitOK` (`exit.go`) | nil error |
-| 1 | `ExitGeneric` (`exit.go`) | default; also `BulkFailureError` (`error_output.go`), `store.ErrTransientGCContention` (`error_output.go`) |
+| 1 | `ExitGeneric` (`exit.go`) | default; also a `BulkError` whose unlanded items differ in reason (`error_output.go`), `store.ErrTransientGCContention` (`error_output.go`) |
 | 2 | `ExitUsage` (`exit.go`) | `UsageError` (`error_output.go`) |
 | 3 | `ExitValidation` (`exit.go`) | `templateShapeError` (`error_output.go`), `UnknownCommandError` (`error_output.go`), `RetiredCommandError` (`error_output.go`), any `model.Refusal` — `model.ValidationError`, `model.FrozenIssueError`, and the upgrade/downgrade target refusals (`error_output.go`), any `model.StateRequestError` — `model.ContainerActionError`, `lifecycle.RetentionError` — when not `Satisfied()` (`error_output.go`), `UnsupportedError` (`error_output.go`), `takeoverUnconfirmedError` (`error_output.go`), `purgeUnconfirmedError` (`error_output.go`), `OutsideWorkspaceError` (`error_output.go`), `store.ErrWorkspaceNotInitialized` (`error_output.go`), any `model.SchemaAhead` — `*store.UnsupportedSchemaVersionError`, `*store.DowngradeSpanUnsupportedError`, `*store.RemoteSchemaAheadError`, which a remote-schema-ahead `SyncFailureError` unwraps to (`error_output.go`), `*store.QuarantineBlockError` (`error_output.go`), `workspace.ErrIssuePrefixRefused` (`error_output.go`) |
 | 4 | `ExitNotFound` (`exit.go`) | `storage.NotFoundError` (`error_output.go`), `storage.VersionNotFoundError` (`error_output.go`) |

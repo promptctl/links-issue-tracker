@@ -58,7 +58,7 @@ the code it arrives on:
 | Reason | Code | Failure |
 |--------|------|---------|
 | `command_failed` | 1 | An unclassified fault |
-| `bulk_partial_failure` | 1 | Some items of a multi-id command failed; the message lists each |
+| `bulk_partial_failure` | 1 | Items of a multi-id command did not land, for different reasons; the message names each item with its reason |
 | `remote_unreachable` | 1 | The sync remote could not be reached after retries |
 | `workspace_busy` | 1 | Another lit process holds a lock this command needs: the workspace's store, or its `config.json` |
 | `workspace_write_blocked` | 1 | Another process holds the store and did not release it |
@@ -827,9 +827,8 @@ holds the way `lit start` does, and `--take` confirms every takeover in the run.
 A lifecycle transition to the state an issue is already in, such as `bulk open`
 on an open issue, succeeds and changes nothing, as it does singly. A retention
 verb on an issue already in its state, such as `bulk delete` on a deleted issue,
-fails that issue with the message its single command gives, so the run exits 1
-where the single command exits 6 (`state_already_holds`). `bulk close` records one
-shared outcome on every issue it closes.
+does not land that issue and answers with the message its single command gives.
+`bulk close` records one shared outcome on every issue it closes.
 
 `bulk comment` adds the same comment to every listed issue, as `lit comment add`
 adds it to one, and leaves the comments an issue already has in place. The body is
@@ -841,11 +840,15 @@ Each successful item prints `<id> ok` to stdout, after any line its single
 command prints first: the `claim transferred` line of a start, the takeover line
 of `--take`, the plan warning of a done, the `<id> <comment-id>` line of a comment.
 The summary, the workflow guidance and the follow-up hints a single command prints
-are not printed. If any item
-fails, the per-item errors go to stderr and the command exits non-zero — so
-`lit bulk close --ids a,b,c && next-step` does **not** run `next-step` on partial
-or total failure. Successful items are still applied; re-run the command for
-only the failed IDs after addressing each error.
+are not printed. If any item does not land, stderr names each such item with its
+reason and error, and the command exits non-zero — so
+`lit bulk close --ids a,b,c && next-step` does **not** run `next-step` unless every
+item landed. The items that landed are still applied. The run answers with the
+reason its unlanded items share, so a run over one issue answers exactly as its
+single command does: `bulk archive` over issues already archived exits 6
+(`state_already_holds`), and over issues the rules refuse exits 3
+(`validation_refused`). Items that did not land for different reasons answer
+`bulk_partial_failure` (exit 1).
 
 ### `lit import`
 

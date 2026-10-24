@@ -89,9 +89,22 @@ func TestCommandErrorReason(t *testing.T) {
 		{"retired command", RetiredCommandError{Command: "ready", Replacement: "use `lit next`"}, "retired_command"},
 		{"outside git workspace", OutsideWorkspaceError{Message: "links requires running inside a git repository/worktree"}, "outside_git_workspace"},
 		{"transient gc contention", store.ErrTransientGCContention, "transient_gc_contention"},
+		// A bulk run answers with the reason its unlanded items share, and is a
+		// partial failure only when they differ.
 		{
-			"bulk partial failure",
-			BulkFailureError{Failures: []itemFailure{{IssueID: "lit-abc", Err: storage.NotFoundError{Entity: "issue", ID: "lit-abc"}}}},
+			"bulk run whose items share a reason",
+			BulkError{Ran: 3, Unlanded: []unlandedItem{
+				{IssueID: "lit-abc", Err: storage.NotFoundError{Entity: "issue", ID: "lit-abc"}},
+				{IssueID: "lit-def", Err: storage.NotFoundError{Entity: "issue", ID: "lit-def"}},
+			}},
+			"entity_not_found",
+		},
+		{
+			"bulk run whose items differ",
+			BulkError{Ran: 2, Unlanded: []unlandedItem{
+				{IssueID: "lit-abc", Err: storage.NotFoundError{Entity: "issue", ID: "lit-abc"}},
+				{IssueID: "lit-def", Err: model.ValidationError{Message: "refused"}},
+			}},
 			"bulk_partial_failure",
 		},
 		{"unknown command", UnknownCommandError{Command: "wat"}, "unknown_command"},

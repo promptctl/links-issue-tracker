@@ -50,10 +50,10 @@ func (r commandReason) String() string { return r.token }
 
 // Every reason is an unkeyed literal, which does not compile without its code.
 var (
-	// ExitGeneric: lit could not do what was asked. A bulk command's per-item
-	// failures are heterogeneous (not-found, conflict, …), so its code carries
-	// only the any-failed signal and the per-item typed reasons live in the
-	// message. [LAW:no-silent-failure]
+	// ExitGeneric: lit could not do what was asked. A bulk run whose unlanded
+	// items share one reason answers with that reason (bulkReason); this one is
+	// a run whose items differ, so no single code is true of them all and the
+	// per-item reasons live in the message. [LAW:no-silent-failure]
 	reasonBulkPartialFailure    = commandReason{"bulk_partial_failure", ExitGeneric}
 	reasonCommandFailed         = commandReason{"command_failed", ExitGeneric}
 	reasonMigrationFailed       = commandReason{"migration_failed", ExitGeneric}
@@ -334,9 +334,9 @@ func typedErrorReason(err error, unnamed commandReason) commandReason {
 	if errors.Is(err, workspace.ErrIssuePrefixRefused) {
 		return reasonValidationRefused
 	}
-	var bulkFailure BulkFailureError
-	if errors.As(err, &bulkFailure) {
-		return reasonBulkPartialFailure
+	var bulk BulkError
+	if errors.As(err, &bulk) {
+		return bulkReason(bulk)
 	}
 	// A write blocked by another process holding the store is checked BEFORE the
 	// transient-contention catch-all: WorkspaceWriteBlockedError unwraps to the
@@ -356,6 +356,21 @@ func typedErrorReason(err error, unnamed commandReason) commandReason {
 		return reasonTransientGcContention
 	}
 	return unnamed
+}
+
+// bulkReason is a bulk run's reason, derived from the reasons its unlanded
+// items classify as: the one they share, so a run over one item answers as its
+// single command does and a run refused alike answers as a refusal, or
+// bulk_partial_failure when they differ. [LAW:single-enforcer] each item is
+// classified by commandErrorReason, the one classifier, not by a bulk copy.
+func bulkReason(bulk BulkError) commandReason {
+	shared := commandErrorReason(bulk.Unlanded[0].Err)
+	for _, item := range bulk.Unlanded[1:] {
+		if commandErrorReason(item.Err) != shared {
+			return reasonBulkPartialFailure
+		}
+	}
+	return shared
 }
 
 // installReplacesLit is why installing a lit is the user's call: the
@@ -543,7 +558,11 @@ func commandErrorRemediation(reason commandReason) string {
 		// workspace_schema_ahead gates its paths.
 		return "Do not retry unchanged — a migration this workspace has pending failed and is quarantined, and every command that opens the store refuses until the quarantine is cleared or a snapshot taken before the failure is restored. The message above names both. " + agentInstructionsOpen + "Restoring a snapshot discards everything written since it was taken, and clearing the quarantine lets a migration that already failed run again: take either path only when the user directs it, and until then surface this refusal to the user as blocking." + agentInstructionsClose
 	case reasonBulkPartialFailure:
-		return "Some items failed; see the per-item errors above. Re-run the command for only the failed IDs after addressing each error."
+		// No re-run is advised: an item a rule refused repeats its refusal, one
+		// whose state already holds has nothing to do, and re-running the whole
+		// command applies every landed item again. Each item's own reason says
+		// what it calls for. [LAW:no-silent-failure]
+		return "Do not re-run the command unchanged — every item it does not list landed, and the listed items did not land for different reasons, each named beside its id. Act on each as its reason calls for: an item refused by a rule repeats its refusal if run again unchanged, and an item whose state already holds needs nothing."
 	default:
 		return "Retry the command. If it still fails, run `lit doctor` for diagnostics."
 	}
