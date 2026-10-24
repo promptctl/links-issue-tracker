@@ -103,8 +103,13 @@ jobs:
     outputs:
       points: ${{ steps.points.outputs.points }}
     steps:
+      # Each leg's timeout frees a runner from a hang no step budget names.
+      # Measured on ubuntu-latest, run 40043414613: 10x-store took 1h33m (the
+      # import 86m, the probes, compaction, history and storm 7m), so 200
+      # minutes clears the import's own bound (2h55m, perfbench importBudget)
+      # plus the rest, and a hung import is named as one. 10x-fleet took 7m.
       - id: points
-        run: echo 'points=[{"name":"10x-store","minutes":300},{"name":"10x-fleet","minutes":120}]' >> "$GITHUB_OUTPUT"
+        run: echo 'points=[{"name":"10x-store","minutes":200},{"name":"10x-fleet","minutes":30}]' >> "$GITHUB_OUTPUT"
 
   # One leg per scale point, each on its own runner and disk, so neither waits
   # on the other and a failed fleet keeps the store's figures. Each leg's
@@ -112,6 +117,7 @@ jobs:
   # perfbench's exit code: 0 measured within every budget, 2 measured and
   # breached, anything else (or nothing) the leg did not finish measuring.
   scale:
+    name: scale ${{ matrix.point.name }}
     needs: scale-points
     strategy:
       fail-fast: false

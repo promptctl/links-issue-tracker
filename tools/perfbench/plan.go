@@ -379,11 +379,14 @@ const runBudget = 2 * time.Minute
 // so N rows cost N*writeBase + writePerStoredRow*N^2/2. A per-row allowance
 // fitted at 590 rows (the bound this replaces, 250ms a row) killed a healthy
 // 10,740-row import at 46m45s on ubuntu-latest (run 40037763869). The
-// constants are fitted to ubuntu-latest's own imports, 700 rows in ~15s
-// (ci.yml perf-budget) and 2,800 in 188s (nightly design, run 40037763869),
-// where the PR gate and the nightly lanes run. That cost is a limit in its
-// own right, filed as links-scale-dy46.48k; this only keeps the instrument
-// from mistaking it for a hang.
+// constants are fitted to ubuntu-latest's own imports, where the PR gate and
+// the nightly lanes run: 700 rows in ~15s (ci.yml perf-budget), 2,800 in 188s
+// (nightly design, run 40037763869) and 10,740 in 86m04s (nightly 10x-store,
+// run 40043414613). The cost steepens past quadratic between the last two, so
+// writePerStoredRow is fitted through the largest, where the bound binds, and
+// the model runs high at the smaller sizes, the safe side for a hang detector.
+// That cost is a limit in its own right, filed as links-scale-dy46.48k; this
+// only keeps the instrument from mistaking it for a hang.
 func importBudget(rows int) time.Duration {
 	n := time.Duration(rows)
 	return runBudget + importSlack*(n*writeBase+writePerStoredRow*n*n/2)
@@ -391,9 +394,8 @@ func importBudget(rows int) time.Duration {
 
 const (
 	writeBase         = 5400 * time.Microsecond
-	writePerStoredRow = 44 * time.Microsecond
-	// importSlack is how many times the modelled cost the bound allows: the
-	// model fits two sizes and runs low at 10,740 rows (it says ~43m, and the
-	// real import ran past 46m45s), and a loaded runner adds more.
-	importSlack = 3
+	writePerStoredRow = 89 * time.Microsecond
+	// importSlack is how many times the modelled cost the bound allows, room
+	// for a runner loaded harder than the one each import was measured on.
+	importSlack = 2
 )

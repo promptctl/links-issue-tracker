@@ -217,12 +217,11 @@ func TestImportBudgetGrowsWithRowsFromTheProbeBudget(t *testing.T) {
 		t.Error("importBudget does not grow with rows")
 	}
 	// The bound holds every healthy import measured on the runners it bounds,
-	// with room for a loaded one: these are ubuntu-latest's own times, the
-	// last a lower bound (the import was killed still running).
+	// with room for a loaded one: these are ubuntu-latest's own times.
 	for _, measured := range []struct {
 		rows int
 		took time.Duration
-	}{{700, 15 * time.Second}, {2800, 188 * time.Second}, {10740, 46*time.Minute + 45*time.Second}} {
+	}{{700, 15 * time.Second}, {2800, 188 * time.Second}, {10740, 86*time.Minute + 4*time.Second}} {
 		if got := importBudget(measured.rows); got < 2*measured.took {
 			t.Errorf("importBudget(%d) = %s, under twice the %s ubuntu-latest took", measured.rows, got, measured.took)
 		}

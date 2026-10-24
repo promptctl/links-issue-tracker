@@ -110,9 +110,9 @@ func renderReport(ps []probe, results []result, budget time.Duration, found []br
 	b.WriteString("store bytes is the store as imported. fleet bytes is every store of its column, row\n")
 	b.WriteString("data only: no snapshots, no remote cache, and no history but the import's. compacted\n")
 	b.WriteString("bytes is the store after the probes and a full compaction, which collects the\n")
-	b.WriteString("import's garbage. bytes/commit is\n")
-	fmt.Fprintf(&b, "the store's growth across %d single-row edits, one commit each, measured after a\n", historyEdits)
-	b.WriteString("full compaction on both sides, so it is history the store keeps.\n")
+	fmt.Fprintf(&b, "import's garbage. bytes/commit is the store's growth across %d single-row edits,\n", historyEdits)
+	b.WriteString("one commit each, measured after a full compaction on both sides, so it is history\n")
+	b.WriteString("the store keeps.\n")
 
 	fmt.Fprintf(&b, "\nBUDGET: every probe under %s, judged on its min.\n", budget)
 	for _, br := range found {
