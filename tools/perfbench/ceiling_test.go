@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -26,6 +27,14 @@ func TestDesignSizeIsTheCeilingsRowCount(t *testing.T) {
 	want := "--sizes: design and n=" + strconv.Itoa(designstore.Rows) + " are both " + strconv.Itoa(designstore.Rows) + " rows"
 	if _, err := parseSizes("design," + strconv.Itoa(designstore.Rows)); err == nil || err.Error() != want {
 		t.Errorf("parseSizes(design,%d) error = %v, want %q", designstore.Rows, err, want)
+	}
+}
+
+// The ceiling holds a design-size store, so a counted store past the design
+// size is a real store the ceiling was never derived to hold.
+func TestDesignSizeExceedsEveryCountedStore(t *testing.T) {
+	if largest := slices.Max(fleetCensus); designstore.Rows <= largest {
+		t.Errorf("designstore.Rows = %d, but fleetCensus counts a %d-row store", designstore.Rows, largest)
 	}
 }
 
