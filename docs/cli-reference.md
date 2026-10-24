@@ -707,7 +707,7 @@ Retention (Issue Retention):
 | Command | Transition | Flags | Notes |
 |---------|-----------|-------|-------|
 | `lit archive` / `lit unarchive` | set / clear the archived flag | | Archived issues hide from listings. |
-| `lit delete` / `lit restore` | set / clear the deleted flag | | Soft delete; `restore` brings it back. |
+| `lit delete` / `lit restore` | set / clear the deleted flag | | Soft delete; `restore` brings it back unarchived, since deleting an archived issue drops its archived flag. |
 | `lit purge` | removes the issue for good | `[--yes]` | Removes the row, its comments, labels, history and every edge to or from it, and leaves a purge record naming the issue by its id and creation time. Sync carries the record, and every store that receives it drops the issue, even one that edited it meanwhile, but not a different issue another store created under the same id; a restored backup does not bring it back, and the id is never issued again. An epic is refused while purging it would leave a ticket under it outside any epic; a child epic becomes top-level. Past Dolt commits, the remote's `refs/dolt/data`, snapshots and JSON backups made before the purge still hold the issue. At a terminal it asks for confirmation; elsewhere `--yes` confirms. |
 
 ---
@@ -815,7 +815,7 @@ lit bulk delete --ids <csv>... [--reason <text>]
 lit bulk restore --ids <csv>... [--reason <text>]
 ```
 
-Apply one label edit, comment or lifecycle transition across many issues in one call.
+Apply one label edit, comment, or lifecycle or retention transition across many issues in one call.
 `--ids` is a set, so `--ids A --ids B` acts on both; a missing `--ids` or a blank slot
 in one is refused (exit 3) before any issue is touched.
 
@@ -827,7 +827,7 @@ holds the way `lit start` does, and `--take` confirms every takeover in the run.
 A lifecycle transition to the state an issue is already in, such as `bulk open`
 on an open issue, succeeds and changes nothing, as it does singly. A retention
 verb on an issue already in its state, such as `bulk delete` on a deleted issue,
-fails that issue with the error its single command gives. `bulk close` records one
+fails that issue with the message its single command gives. `bulk close` records one
 shared outcome on every issue it closes.
 
 `bulk comment` adds the same comment to every listed issue, as `lit comment add`
