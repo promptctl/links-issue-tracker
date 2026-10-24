@@ -845,7 +845,7 @@ reason and error, and the command exits non-zero — so
 `lit bulk close --ids a,b,c && next-step` does **not** run `next-step` unless every
 item landed. The items that landed are still applied. When no item landed and
 every item answers with one reason, the run answers with that reason, so a run
-over one issue answers exactly as its single command does: `bulk archive` over
+over one issue exits with the code and reason its single command does: `bulk archive` over
 issues already archived exits 6 (`state_already_holds`), and over issues the
 rules refuse exits 3 (`validation_refused`). A run in which some items landed,
 or whose unlanded items answer with different reasons, answers

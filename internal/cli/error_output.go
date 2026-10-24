@@ -569,7 +569,7 @@ func commandErrorRemediation(reason commandReason) string {
 		// item again, an item a rule refused repeats its refusal, and one whose
 		// state already holds has nothing to do. Each item's own reason says
 		// what it calls for. [LAW:no-silent-failure]
-		return "Do not re-run the command unchanged — every item it does not list landed, and running it again applies them again. Each listed item names beside its id the reason its single command answers with; act on each as that reason calls for, and re-run with only the ids that still need it: an item refused by a rule repeats its refusal until what refused it changes, an item whose state already holds needs nothing, and an item that met a fault can be re-run once the fault clears."
+		return "Do not re-run the command unchanged — any item it does not list landed, and running it again applies that item again. Each listed item names beside its id the reason its single command answers with; act on each as that reason calls for, and re-run with only the ids that still need it: an item refused by a rule repeats its refusal until what refused it changes, an item whose state already holds needs nothing, and an item that met a fault can be re-run once the fault clears."
 	default:
 		return "Retry the command. If it still fails, run `lit doctor` for diagnostics."
 	}

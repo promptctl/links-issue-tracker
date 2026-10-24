@@ -90,8 +90,9 @@ func TestBulkLabelTotalFailureExitsNonZero(t *testing.T) {
 }
 
 // commandAnswer is how the real CLI answers args in repo: the header line
-// main prints for its error ("error (code=N, reason=R): …"), the remediation
-// line after it, and stdout alone. A run that succeeds answers with empty lines.
+// main prints for its error ("error (code=N, reason=R): …"), its
+// "remediation: …" line, and stdout alone. A run that succeeds, or a reason
+// with no remediation, answers with empty lines there.
 func commandAnswer(t *testing.T, repo string, args ...string) (header, remediation, stdout string) {
 	t.Helper()
 	var out bytes.Buffer
@@ -102,11 +103,12 @@ func commandAnswer(t *testing.T, repo string, args ...string) (header, remediati
 	var stderr bytes.Buffer
 	WriteCommandError(&stderr, err)
 	lines := strings.Split(strings.TrimSuffix(stderr.String(), "\n"), "\n")
-	header = lines[0]
-	if len(lines) > 1 {
-		remediation = lines[len(lines)-1]
+	for _, line := range lines[1:] {
+		if strings.HasPrefix(line, "remediation: ") {
+			remediation = line
+		}
 	}
-	return header, remediation, out.String()
+	return lines[0], remediation, out.String()
 }
 
 // codeAndReason reads "code=6, reason=state_already_holds" off a header
