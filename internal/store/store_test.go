@@ -2305,7 +2305,7 @@ func TestCloseLeafUsesOptimisticConcurrency(t *testing.T) {
 	// UPDATE must see the row has moved and surface the conflict instead of
 	// silently re-closing. (Apply itself re-reads, which would turn this into a
 	// same-state no-op — the contention window under test is plan-vs-write.)
-	w, err := st.planStatusTransition(ctx, issue, "tester", "", model.Close{Outcome: model.Wontfix{}})
+	w, err := st.planStatusTransition(issue, currentHistory(t, ctx, st, issue.ID), st.clock.Now(), "tester", "", model.Close{Outcome: model.Wontfix{}})
 	if err != nil {
 		t.Fatalf("planStatusTransition(stale) error = %v", err)
 	}
@@ -2376,7 +2376,7 @@ func TestConflictNamesTheVerbTheCallerTyped(t *testing.T) {
 	}
 	// Plan the reopen against the CLOSED snapshot, then move the row out from
 	// under it, so the guarded UPDATE matches nothing and reports the conflict.
-	w, err := st.planStatusTransition(ctx, closed.Issue, "tester", "", model.Reopen{})
+	w, err := st.planStatusTransition(closed.Issue, currentHistory(t, ctx, st, issue.ID), st.clock.Now(), "tester", "", model.Reopen{})
 	if err != nil {
 		t.Fatalf("planStatusTransition(stale reopen) error = %v", err)
 	}
@@ -2429,7 +2429,7 @@ func TestFieldWriteDoesNotClobberConcurrentLifecycle(t *testing.T) {
 		t.Fatalf("Apply(competing archive) error = %v", err)
 	}
 	if err := st.withMutation(ctx, "apply update", func(ctx context.Context, tx *sql.Tx) error {
-		return st.applyFieldsTx(ctx, tx, w)
+		return st.applyFieldsTx(ctx, tx, w, st.clock.Now())
 	}); err != nil {
 		t.Fatalf("applyFieldsTx(stale field plan) error = %v", err)
 	}
@@ -3154,4 +3154,15 @@ func TestDeleteArchivedIssueDropsArchiveStamp(t *testing.T) {
 	if _, ok := restored.Issue.Retention().(model.Live); !ok {
 		t.Fatalf("restore after delete-on-archived = %#v, want Live", restored.Issue.Retention())
 	}
+}
+
+// currentHistory is issueID's history as it stands now, which a plan made
+// against a stale snapshot of the row still reads, as Apply's would.
+func currentHistory(t *testing.T, ctx context.Context, st *Store, issueID string) []model.IssueEvent {
+	t.Helper()
+	events, err := st.ListEvents(ctx, issueID)
+	if err != nil {
+		t.Fatalf("ListEvents(%s) error = %v", issueID, err)
+	}
+	return events
 }

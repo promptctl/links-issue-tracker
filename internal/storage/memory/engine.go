@@ -47,6 +47,9 @@ type Engine struct {
 	// caller that needs two issues whose timestamps no real clock would hand
 	// out in that order can say so. [LAW:effects-at-boundaries]
 	clock storage.Clock
+	// stamps turns a clock reading into the instant a write stamps, held past
+	// the history the write was planned against, and counts each hold.
+	stamps storage.StampTally
 
 	issues map[string]*record
 
@@ -150,6 +153,21 @@ func (e *Engine) AttributeTo(streamToken string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.attribution = model.NewAttribution(streamToken, e.workspaceID)
+}
+
+// StampCorrections is the account of every stamp this engine handed out
+// that history held back from its clock.
+func (e *Engine) StampCorrections() storage.StampCorrections {
+	return e.stamps.StampCorrections()
+}
+
+// stamp is the instant a write planned against family's history takes.
+func (e *Engine) stamp(family map[string]bool) time.Time {
+	var seen []model.IssueEvent
+	for id := range family {
+		seen = append(seen, e.events[id]...)
+	}
+	return e.stamps.Stamp(e.clock, seen)
 }
 
 // ObserveChanges adds observe to the observers apply calls, which is every

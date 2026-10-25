@@ -66,7 +66,7 @@ func (s *Store) ReplaceLabels(ctx context.Context, issueID string, labels []stri
 		return err
 	}
 	return s.withMutation(ctx, "replace labels", func(ctx context.Context, tx *sql.Tx) error {
-		return s.replaceLabelsTx(ctx, tx, issueID, normalized, createdBy)
+		return s.replaceLabelsTx(ctx, tx, issueID, normalized, createdBy, s.clock.Now())
 	})
 }
 
@@ -87,12 +87,12 @@ func (s *Store) ListLabels(ctx context.Context, issueID string) ([]string, error
 	return labels, rows.Err()
 }
 
-func (s *Store) replaceLabelsTx(ctx context.Context, tx *sql.Tx, issueID string, labels []string, createdBy string) error {
+func (s *Store) replaceLabelsTx(ctx context.Context, tx *sql.Tx, issueID string, labels []string, createdBy string, at time.Time) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM labels WHERE issue_id = ?`, issueID); err != nil {
 		return fmt.Errorf("clear labels: %w", err)
 	}
 	author := storage.Actor(createdBy)
-	timestamp := s.clock.Now().Format(time.RFC3339Nano)
+	timestamp := at.Format(time.RFC3339Nano)
 	for _, label := range labels {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO labels(issue_id, label, created_at, created_by) VALUES (?, ?, ?, ?)`, issueID, label, timestamp, author); err != nil {
 			return fmt.Errorf("insert label %q: %w", label, err)

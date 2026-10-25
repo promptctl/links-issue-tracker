@@ -171,6 +171,7 @@ var cases = []engineCase{
 	{"every_editable_field_records_history", everyEditableFieldRecordsHistory},
 	{"a_new_checkout_taking_a_ticket_records", takeoverByANewCheckoutRecords},
 	{"a_reported_handover_is_the_one_recorded", aReportedHandoverIsTheOneRecorded},
+	{"a_write_on_a_slow_clock_sorts_after_the_history_it_saw", aWriteOnASlowClockSortsAfterTheHistoryItSaw},
 	{"one_issues_history_matches_the_whole_log", oneIssuesHistoryMatchesTheWholeLog},
 	{"list_defaults_to_rank_order", listDefaultsToRankOrder},
 	{"list_filters_select", listFiltersSelect},
@@ -613,6 +614,11 @@ func containerStateFollowsLiveChildren(t *testing.T, ctx context.Context, st sto
 // a fresh start after a reopen enters plan again, whatever phase the earlier
 // run reached.
 func aPhaseMoveRecordsItsEvent(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	// Pinned from the start on: a phase is the newest event that set one, and
+	// a write is stamped past the history it was planned against, so every
+	// event here, the creates included, is stamped on the one clock the case
+	// controls.
+	clk.Pin(earlierInstant)
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
 	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "phased", Topic: "core", ParentID: epic.ID})
 	phaseOf := func() (model.Phase, bool) {
@@ -634,9 +640,6 @@ func aPhaseMoveRecordsItsEvent(t *testing.T, ctx context.Context, st storage.Sto
 	if phase, ok := phaseOf(); ok {
 		t.Errorf("open ticket has phase %q, want none", phase)
 	}
-	// Pinned from the start on: a phase is the newest event that set one, so
-	// every event here has to be stamped on the one clock the case controls.
-	clk.Pin(earlierInstant)
 	if _, err := st.Apply(ctx, issue.ID, storage.Change{Action: model.Start{Assignee: "ada"}, Actor: "ada"}); err != nil {
 		t.Fatalf("Apply start error = %v", err)
 	}
@@ -682,10 +685,10 @@ func aPhaseMoveRecordsItsEvent(t *testing.T, ctx context.Context, st storage.Sto
 		t.Errorf("a phase move that changed nothing wrote %d events, want none", after-before)
 	}
 
-	// A move stamped at the instant the row already holds still lands: the
-	// clock has not moved since the review move, so updated_at does not change.
+	// A move on a clock that has not moved since the review move still lands:
+	// it is stamped past the review move it was planned against.
 	if _, err := move(model.PhaseImpl); err != nil {
-		t.Errorf("a phase move at the row's own updated_at error = %v, want it to land", err)
+		t.Errorf("a phase move on an unmoved clock error = %v, want it to land", err)
 	}
 
 	if _, err := st.Apply(ctx, epic.ID, storage.Change{Action: model.SetPhase{Phase: model.PhaseImpl}, Actor: "ada"}); !errors.As(err, &refused) {
@@ -848,22 +851,16 @@ func everyEditableFieldRecordsHistory(t *testing.T, ctx context.Context, st stor
 // only the checkout moves; that checkout handing it to a new assignee, so only
 // the assignee moves; and a done, which records a write and takes nothing.
 func aReportedHandoverIsTheOneRecorded(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	// Each write is stamped a second after the one before, so the newest start a
-	// stream wrote is decided by its instant. A real clock can stamp two writes
-	// in a row with one instant — Windows' does, at its tick — and the tie then
-	// falls to the event ids, which say nothing about which start came last
-	// (links-scale-dy46.i49).
-	stamped := 0
-	stamp := func() {
-		clk.Pin(earlierInstant.Add(time.Duration(stamped) * time.Second))
-		stamped++
-	}
-	stamp()
+	// Every write is on one pinned instant, as a real clock hands out at its
+	// tick — Windows' does, for back-to-back writes. Each start is still the
+	// newest the moment it lands, because a write is stamped past the history
+	// it was planned against; left to the event ids, the tie would say nothing
+	// about which start came last.
+	clk.Pin(earlierInstant)
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
 	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "contested", Topic: "core", ParentID: epic.ID, Assignee: "ada"})
 	start := func(assignee string) storage.Applied {
 		t.Helper()
-		stamp()
 		applied, err := st.Apply(ctx, issue.ID, storage.Change{Action: model.Start{Assignee: assignee}, Actor: assignee})
 		if err != nil {
 			t.Fatalf("Apply start as %s error = %v", assignee, err)
@@ -931,13 +928,69 @@ func aReportedHandoverIsTheOneRecorded(t *testing.T, ctx context.Context, st sto
 		t.Errorf("a hand-off to a new assignee reported %+v, want %+v: the assignee row the start recorded", handed.Handover, want)
 	}
 
-	stamp()
 	done, err := st.Apply(ctx, issue.ID, storage.Change{Action: model.Done{}, Actor: "grace"})
 	if err != nil {
 		t.Fatalf("Apply done error = %v", err)
 	}
 	if done.Handover != nil {
 		t.Errorf("a done reported handover %+v; finishing a ticket takes nothing", *done.Handover)
+	}
+}
+
+// aWriteOnASlowClockSortsAfterTheHistoryItSaw is a clone whose clock runs
+// behind the history it has synced. Its phase move has to read as the phase
+// the ticket is in, and its takeover of the lane, made by starting a sibling
+// of the ticket the holder started, has to read as the lane's newest
+// establishing event: both are read off the newest event, and a write stamped
+// from the slow clock alone would sort before the history it was planned
+// against (links-scale-dy46.i49). The engine also has to say it held those
+// stamps back, and by how much.
+func aWriteOnASlowClockSortsAfterTheHistoryItSaw(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	clk.Pin(laterInstant)
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+	held := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "held", Topic: "core", ParentID: epic.ID})
+	sibling := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "sibling", Topic: "core", ParentID: epic.ID})
+	st.AttributeTo("checkout-a")
+	if _, err := st.Apply(ctx, held.ID, storage.Change{Action: model.Start{Assignee: "ada"}, Actor: "ada"}); err != nil {
+		t.Fatalf("Apply start error = %v", err)
+	}
+
+	clk.Pin(earlierInstant)
+	before := st.StampCorrections()
+	if _, err := st.Apply(ctx, held.ID, storage.Change{Action: model.SetPhase{Phase: model.PhaseImpl}, Actor: "ada"}); err != nil {
+		t.Fatalf("Apply phase move error = %v", err)
+	}
+	detail, err := st.GetIssueDetail(ctx, held.ID)
+	if err != nil {
+		t.Fatalf("GetIssueDetail error = %v", err)
+	}
+	if phase, _ := model.PhaseOf(detail.Issue, detail.Events); phase != model.PhaseImpl {
+		t.Errorf("phase after a move on a slow clock = %q, want impl: the move sorts before the start it was planned against", phase)
+	}
+
+	st.AttributeTo("checkout-b")
+	if _, err := st.Apply(ctx, sibling.ID, storage.Change{Action: model.Start{Assignee: "grace"}, Actor: "grace"}); err != nil {
+		t.Fatalf("Apply takeover start error = %v", err)
+	}
+	var lane []model.IssueEvent
+	for _, id := range []string{held.ID, sibling.ID} {
+		events, err := st.ListEvents(ctx, id)
+		if err != nil {
+			t.Fatalf("ListEvents(%s) error = %v", id, err)
+		}
+		lane = append(lane, events...)
+	}
+	latest, found := claims.LatestEstablisher(lane)
+	if !found || latest.IssueID != sibling.ID || latest.Attribution.Stream() != "checkout-b" {
+		t.Errorf("the lane's newest establishing event = %+v, want checkout-b's start of %s: the takeover on a slow clock lost to the start it took over", latest, sibling.ID)
+	}
+
+	after := st.StampCorrections()
+	if got := after.Count - before.Count; got != 2 {
+		t.Errorf("stamps held back by the two slow-clock writes = %d, want 2", got)
+	}
+	if lag := laterInstant.Sub(earlierInstant); after.Max <= lag {
+		t.Errorf("largest stamp correction = %s, want past the clock's %s lag", after.Max, lag)
 	}
 }
 
@@ -1424,14 +1477,18 @@ func listOrdersTimestampsByInstant(t *testing.T, ctx context.Context, st storage
 	// the clock entirely pass — its real stamps would land in the same relative
 	// order the case asserts — and the case would be pinning nothing.
 	// CreateIssue stamps created_at and updated_at from one read of the clock;
-	// the description patches below then move updated_at alone. The epic is
-	// stamped by the live clock, years past every pinned instant, and the
-	// listings are narrowed to the pair so it decides nothing below.
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "clock", IssueType: model.TypeEpic})
+	// the description patches below then move updated_at alone. Each of the
+	// pair is filed under its own epic: a write is stamped past the history of
+	// the issues it shares a parent with, so siblings would hold the earlier
+	// create past the later one and the trap would never be written. The epics
+	// are stamped by the live clock, years past every pinned instant, and the
+	// listings are narrowed to the pair so they decide nothing below.
+	newerEpic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "newer's epic", Topic: "clock", IssueType: model.TypeEpic})
+	olderEpic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "older's epic", Topic: "clock", IssueType: model.TypeEpic})
 	clk.Pin(laterInstant)
-	newer := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "created later", Topic: "clock", ParentID: epic.ID})
+	newer := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "created later", Topic: "clock", ParentID: newerEpic.ID})
 	clk.Pin(earlierInstant)
-	older := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "created earlier", Topic: "clock", ParentID: epic.ID})
+	older := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "created earlier", Topic: "clock", ParentID: olderEpic.ID})
 
 	for _, touch := range []struct {
 		issue   model.Issue
@@ -1465,29 +1522,36 @@ func listOrdersTimestampsByInstant(t *testing.T, ctx context.Context, st storage
 // Two pinned instants, several events inside each. Across the groups only the
 // timestamp key can order them, and it does so against the pair whose text
 // order is the reverse of their instant order, so an engine comparing the
-// spelling fails here as well as in the listing. Inside a group every event
-// shares one stamp, so only the id tie-break is left — which is the whole
+// spelling fails here as well as in the listing. Inside a group the events
+// share one stamp, so only the id tie-break is left — which is the whole
 // reason the rule names a second key, and it is unreachable unless the case
 // decides what time it is: on a live nanosecond clock the tie this settles
 // simply never occurs, and an engine returning raw recording order passes.
+// Each event of a group touches a different issue, each under its own epic:
+// a write is stamped past its lane family's history, so one family's events
+// never share a stamp, and a tie arises only between families — as it does
+// between two clones writing at one instant.
 func eventsAreTotallyOrdered(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	// The creates are inside the first group, not before it: an unpinned create
 	// would stamp the real instant, which is later than either pinned one, and
 	// the sequence would step backwards for a reason unrelated to the rule.
 	clk.Pin(earlierInstant)
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "audited", Topic: "core", ParentID: epic.ID})
+	var audited []model.Issue
+	for _, title := range []string{"ada", "grace", "edsger"} {
+		epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: title + "'s epic", Topic: "core", IssueType: model.TypeEpic})
+		audited = append(audited, mustCreate(t, ctx, st, storage.CreateIssueInput{Title: title, Topic: "core", ParentID: epic.ID}))
+	}
 	for _, group := range []struct {
-		at     time.Time
-		titles []string
+		at    time.Time
+		title string
 	}{
-		{earlierInstant, []string{"first", "second", "third"}},
-		{laterInstant, []string{"fourth", "fifth", "sixth"}},
+		{earlierInstant, "first"},
+		{laterInstant, "second"},
 	} {
 		clk.Pin(group.at)
-		for _, title := range group.titles {
-			if _, err := st.Apply(ctx, issue.ID, storage.Change{Fields: storage.UpdateIssueInput{Title: &title}, Actor: "conformance"}); err != nil {
-				t.Fatalf("apply %q: %v", title, err)
+		for _, issue := range audited {
+			if _, err := st.Apply(ctx, issue.ID, storage.Change{Fields: storage.UpdateIssueInput{Title: &group.title}, Actor: "conformance"}); err != nil {
+				t.Fatalf("apply %q to %s: %v", group.title, issue.ID, err)
 			}
 		}
 	}
@@ -1496,8 +1560,8 @@ func eventsAreTotallyOrdered(t *testing.T, ctx context.Context, st storage.Store
 	if err != nil {
 		t.Fatalf("ListAllEvents: %v", err)
 	}
-	if len(events) < 7 {
-		t.Fatalf("got %d events, want at least the create plus six changes", len(events))
+	if len(events) < 12 {
+		t.Fatalf("got %d events, want at least the six creates plus six changes", len(events))
 	}
 	// Each key is asserted on its own rather than through one comparator, and
 	// deliberately not through [storage.EventOrdering]: that is what both

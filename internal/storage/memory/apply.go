@@ -35,7 +35,7 @@ func (e *Engine) apply(id string, c storage.Change) (storage.Applied, error) {
 	// [LAW:one-source-of-truth] One change has one author, normalized once and
 	// recorded on every event the change produces.
 	actor := storage.Actor(c.Actor)
-	now := e.clock.Now()
+	now := e.stamp(model.LaneFamily(rec.id, e.relations))
 
 	// The field write baselines on the POST-action issue, so a start's new
 	// assignee is what the patch diffs against rather than a second assignee

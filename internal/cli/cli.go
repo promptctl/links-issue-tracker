@@ -195,6 +195,11 @@ func runWithApp(ctx context.Context, inv Invocation, accessMode app.AccessMode, 
 	// before the error check, because a fact recorded before a failure is still
 	// true: `lit next` reports finding nothing as an error, and that is the fact.
 	recordStatusline(ctx, ws, ap.Statusline)
+	// The store's account of the stamps it handed out, recorded beside the
+	// statusline for the same two reasons: it needs no engine, and a stamp a
+	// failed command handed out was still handed out. [LAW:nothing-unseen]
+	stampFacts, stampCounts := ap.Store.StampCorrections().EventRecord()
+	telemetry.Record(ctx, stampFacts, stampCounts)
 	if runErr != nil {
 		return runErr
 	}

@@ -3,6 +3,7 @@ package model
 import (
 	"cmp"
 	"fmt"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/model/lifecycle"
 )
@@ -36,6 +37,27 @@ const PhaseField = "phase"
 // agreeing about which event that is. [LAW:single-enforcer]
 func CompareEventRecency(a, b IssueEvent) int {
 	return cmp.Or(a.CreatedAt.Compare(b.CreatedAt), cmp.Compare(a.ID, b.ID))
+}
+
+// NextEventInstant is the instant an event written at now takes when the
+// history it was written against is seen: now, unless some event in seen is at
+// or after it, and then the instant just past the newest of them. It is a
+// hybrid logical clock: the wall clock, held back from ever running behind the
+// history a write observed. CompareEventRecency orders by the stamp, so a clone
+// whose clock runs behind would otherwise write an event that sorts before
+// history it already synced and planned against, and the phase and the lane
+// holder would both be read off the older event. The nanosecond step also
+// parts a write from an event stamped at the same instant, which the id
+// tie-break orders arbitrarily. [LAW:single-enforcer] the one statement of the
+// rule both engines stamp by.
+func NextEventInstant(now time.Time, seen []IssueEvent) time.Time {
+	at := now
+	for _, event := range seen {
+		if !event.CreatedAt.Before(at) {
+			at = event.CreatedAt.Add(time.Nanosecond)
+		}
+	}
+	return at
 }
 
 // PhaseOf is the phase issue's own history puts it in. Only an in-progress
