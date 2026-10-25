@@ -558,27 +558,51 @@ func TestRunImportEventCountsWhatTheFileWrote(t *testing.T) {
 	}
 	// The child's move removes one edge and adds one; home's blocked_by adds
 	// the other.
-	assertFacts(t, map[string]string{"import.created": "1", "import.updated": "1", "import.ranked": "1", "import.reparented": "1", "import.parent_held": "1", "import.reparents_undone": "0",
-		"import.blocked_by_set": "1", "import.blocked_by_held": "1", "import.blocked_by_undone": "0", "import.edges_added": "2", "import.edges_removed": "1"})
+	assertFacts(t, map[string]string{"import.created": "1", "import.updated": "1", "import.ranked": "1", "import.reparented": "1", "import.parent_held": "1",
+		"import.blocked_by_set": "1", "import.blocked_by_held": "1", "import.edges_added": "2", "import.edges_removed": "1"})
 }
 
-// A file refused at an update keeps the updates applied before it, and the
-// invocation's event counts them, and counts no reparent and no edge: the
-// refusal put the moved issue back and its blocked_by with it, which the event
-// counts as an undone reparent and an undone blocked_by set.
-func TestRunImportEventCountsWhatARefusedFileKept(t *testing.T) {
+// A refused file writes nothing, so the invocation's event counts nothing in
+// either format: no update, reparent or blocked_by set from a YAML file refused
+// at its last document, and no create from a JSON tree that is refused. The
+// event tells a refusal at a write, which reset the workspace, from one the
+// gate made before writing.
+func TestRunImportEventCountsNothingForARefusedFile(t *testing.T) {
 	isolateEvents(t)
 	dir := newInitTestRepo(t)
 	// One import seeds the fixture: a `lit new` per issue would cost this
 	// serial test three invocations for no behavior it pins.
 	seeded := runCLIInDir(t, dir, "import", "--path", writeImportFile(t, "seed.yaml", "local_id: from\ntitle: from\ntype: epic\ntopic: demo\n---\nlocal_id: to\ntitle: to\ntype: epic\ntopic: demo\n---\nlocal_id: mover\ntitle: mover\ntype: task\ntopic: demo\nparent: from\n"))
 	from, to, mover := importedID(t, seeded, "from"), importedID(t, seeded, "to"), importedID(t, seeded, "mover")
-	yaml := writeImportFile(t, "refused.yaml", fmt.Sprintf("id: %s\nparent: %s\nblocked_by: [%s]\ntitle: renamed\n---\nid: missing-1\ntitle: ghost\n", mover, to, from))
+	yaml := writeImportFile(t, "refused.yaml", fmt.Sprintf("title: fresh\ntype: epic\ntopic: demo\n---\nid: %s\nparent: %s\nblocked_by: [%s]\ntitle: renamed\n---\nid: missing-1\ntitle: ghost\n", mover, to, from))
 	if out, err := runCLIInDirAllowError(t, dir, "import", "--path", yaml); err == nil {
 		t.Fatalf("import succeeded; want the missing update refused:\n%s", out)
 	}
-	assertFacts(t, map[string]string{"import.created": "0", "import.updated": "1", "import.ranked": "0", "import.reparented": "0", "import.parent_held": "0", "import.reparents_undone": "1",
-		"import.blocked_by_set": "0", "import.blocked_by_held": "0", "import.blocked_by_undone": "1", "import.edges_added": "0", "import.edges_removed": "0"})
+	assertFacts(t, map[string]string{"import.created": "0", "import.updated": "0", "import.ranked": "0", "import.reparented": "0", "import.parent_held": "0",
+		"import.blocked_by_set": "0", "import.blocked_by_held": "0", "import.edges_added": "0", "import.edges_removed": "0"})
+	// Refused at a write, the file was reset to the commit it started from, and
+	// the event names that commit with no reset error.
+	if facts := writtenFacts(t, lastEvent(t)); facts["import.reset_to"] == nil || facts["import.reset_to"] == "" || facts["import.reset_error"] != "" {
+		t.Errorf("event import.reset_to = %v, import.reset_error = %v; want the commit the file reset to and no reset error", facts["import.reset_to"], facts["import.reset_error"])
+	}
+
+	tree := writeImportFile(t, "refused.json", `[
+		{"local_id":"a","title":"one","type":"epic","topic":"demo","priority":0},
+		{"local_id":"a","title":"two","type":"epic","topic":"demo","priority":0}
+	]`)
+	if out, err := runCLIInDirAllowError(t, dir, "import", "--path", tree); err == nil {
+		t.Fatalf("import succeeded; want the duplicate local_id refused:\n%s", out)
+	}
+	assertFacts(t, map[string]string{"import.created": "0"})
+	// The gate refused the tree before any write, so nothing was reset.
+	if resetTo, present := writtenFacts(t, lastEvent(t))["import.reset_to"]; present {
+		t.Errorf("event import.reset_to = %v; want none: the gate refused the tree before it wrote", resetTo)
+	}
+	// The event says whether the import committed a write another process left
+	// staged: none here, and the list is present rather than absent.
+	if stranded, present := lastEvent(t).Occurrences["stranded_writes.commits"]; !present || len(stranded) != 0 {
+		t.Errorf("event stranded_writes.commits = %v (present %v); want present and empty", stranded, present)
+	}
 }
 
 func assertFacts(t *testing.T, want map[string]string) {

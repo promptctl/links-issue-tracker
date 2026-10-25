@@ -196,8 +196,11 @@ func runWithApp(ctx context.Context, inv Invocation, accessMode app.AccessMode, 
 	// true: `lit next` reports finding nothing as an error, and that is the fact.
 	recordStatusline(ctx, ws, ap.Statusline)
 	// Beside the statusline for the same two reasons: it needs no engine, and a
-	// clock reading a failed command took was still taken.
+	// clock reading a failed command took was still taken. A write another
+	// process left staged that this command committed is reported the same way,
+	// as a sync session reports it. [LAW:nothing-unseen]
 	reportStampCorrections(ctx, ap.Store)
+	reportEventValues(ctx, "stranded_writes.commits", storage.StrandedWrites(ap.Store))
 	if runErr != nil {
 		return runErr
 	}
@@ -2271,11 +2274,13 @@ func runImportTreeJSON(ctx context.Context, stdout io.Writer, ap *app.App, data 
 	if err != nil {
 		return err
 	}
+	// Counted before the refusal is returned, as a bulk file is: the event
+	// counts what landed either way. [LAW:nothing-unseen]
 	result, err := ap.Store.ImportTree(ctx, prefix.Value(), actor, specs)
+	telemetry.Set(ctx, "import.created", len(result.Created))
 	if err != nil {
 		return err
 	}
-	telemetry.Set(ctx, "import.created", len(result.Created))
 	if _, err := fmt.Fprintf(stdout, "imported %d issues\n", len(result.Created)); err != nil {
 		return err
 	}
@@ -2318,18 +2323,17 @@ func runImportBulk(ctx context.Context, stdout io.Writer, ap *app.App, data []by
 	if err != nil {
 		return err
 	}
-	// A refused file still returns what it left written, so the event counts
-	// that whether the file landed or not. [LAW:nothing-unseen]
+	// A refused file returns what it left written — nothing, unless its reset
+	// failed too — so the event counts what landed either way.
+	// [LAW:nothing-unseen]
 	result, err := ap.Store.BulkApply(ctx, prefix.Value(), actor, specs)
 	telemetry.Set(ctx, "import.created", len(result.Created))
 	telemetry.Set(ctx, "import.updated", len(result.Updated))
 	telemetry.Set(ctx, "import.fields_held", len(result.FieldsHeld))
 	telemetry.Set(ctx, "import.reparented", len(result.Reparented))
 	telemetry.Set(ctx, "import.parent_held", len(result.ParentHeld))
-	telemetry.Set(ctx, "import.reparents_undone", len(result.ReparentsUndone))
 	telemetry.Set(ctx, "import.blocked_by_set", len(result.BlockedBySet))
 	telemetry.Set(ctx, "import.blocked_by_held", len(result.BlockedByHeld))
-	telemetry.Set(ctx, "import.blocked_by_undone", len(result.BlockedByUndone))
 	telemetry.Set(ctx, "import.edges_added", result.EdgesAdded)
 	telemetry.Set(ctx, "import.edges_removed", result.EdgesRemoved)
 	telemetry.Set(ctx, "import.ranked", len(result.Ranked.Resolutions))

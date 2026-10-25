@@ -335,8 +335,9 @@ func (s *Store) AttributeTo(streamToken string) {
 	s.attribution = model.NewAttribution(streamToken, s.workspaceID)
 }
 
-// ObserveChanges adds observe to the observers Apply calls, which is every
-// change this store makes to an issue: BulkApply's updates go through Apply.
+// ObserveChanges adds observe to the observers notify calls, once for every
+// change this store makes to an issue through Apply, BulkApply's updates
+// included once the batch stands.
 func (s *Store) ObserveChanges(observe func(storage.Change, model.Issue)) {
 	s.observers = append(s.observers, observe)
 }
@@ -1403,6 +1404,46 @@ func (s *Store) applyFieldsTx(ctx context.Context, tx *sql.Tx, w fieldWrite, at 
 // checkouts of one identity taking a lane from each other move nothing on the row and everything on
 // the record.
 func (s *Store) Apply(ctx context.Context, id string, c storage.Change) (storage.Applied, error) {
+	applied, err := s.apply(ctx, id, c)
+	if err != nil {
+		return storage.Applied{}, err
+	}
+	s.notify(ctx, c, applied.Issue)
+	return applied, nil
+}
+
+// heardChange is one change an observer is owed.
+type heardChange struct {
+	change storage.Change
+	issue  model.Issue
+}
+
+// batchHearingKey marks a context running inside withBatch; its value is the
+// queue of changes the batch's observers are owed.
+type batchHearingKey struct{}
+
+// notify is the one place a change reaches the observers. Inside a batch it is
+// queued, and withBatch delivers the queue only for writes that stand, so a
+// refused batch whose reset landed is heard by nobody. [LAW:single-enforcer]
+func (s *Store) notify(ctx context.Context, c storage.Change, issue model.Issue) {
+	if queue, ok := ctx.Value(batchHearingKey{}).(*[]heardChange); ok {
+		*queue = append(*queue, heardChange{c, issue})
+		return
+	}
+	s.deliver([]heardChange{{c, issue}})
+}
+
+// deliver tells every observer of each change, in order.
+func (s *Store) deliver(heard []heardChange) {
+	for _, h := range heard {
+		for _, observe := range s.observers {
+			observe(h.change, h.issue)
+		}
+	}
+}
+
+// apply writes one change and tells no observer; Apply notifies.
+func (s *Store) apply(ctx context.Context, id string, c storage.Change) (storage.Applied, error) {
 	// [LAW:no-ambient-temporal-coupling] The read, the stamp, the plan and the
 	// write share one commit-lock hold, so no write lands between what the plan
 	// read and what it writes: the holder a start takes the ticket from, the
@@ -1489,9 +1530,6 @@ func (s *Store) Apply(ctx context.Context, id string, c storage.Change) (storage
 		return nil
 	}); err != nil {
 		return storage.Applied{}, err
-	}
-	for _, observe := range s.observers {
-		observe(c, applied.Issue)
 	}
 	return applied, nil
 }

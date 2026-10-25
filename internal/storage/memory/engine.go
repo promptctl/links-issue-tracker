@@ -39,8 +39,12 @@ type Engine struct {
 	workspaceID string
 	attribution model.Attribution
 
-	// observers hear every change apply makes; see storage.ChangeObserver.
+	// observers hear every change that lands, through notify; see
+	// storage.ChangeObserver.
 	observers []func(storage.Change, model.Issue)
+	// hearing is the queue of changes a running batch owes its observers, nil
+	// outside a batch.
+	hearing *[]heardChange
 
 	// clock is where this engine learns the instant it stamps a write with.
 	// It is taken at construction rather than read from the write path, so a
@@ -51,6 +55,15 @@ type Engine struct {
 	// the history the write was planned against, and counts each hold.
 	stamps storage.StampTally
 
+	// state is everything the engine stores, as one value, so a batch can
+	// take it whole and put it back whole. [LAW:one-source-of-truth]
+	state
+}
+
+// state is the engine's stored data: every row, edge and event it holds. It is
+// one value so the copy a batch restores on refusal is taken where the fields
+// are declared, and a field added here is a field clone must copy, beside it.
+type state struct {
 	issues map[string]*record
 
 	// order is THE total rank order, top first. Issue.Rank is rendered from a
@@ -84,6 +97,57 @@ type Engine struct {
 	// purges are the records of the tickets this engine has purged. A purged
 	// ticket holds no row anywhere above, and its id is never minted again.
 	purges []model.Purge
+}
+
+// clone is a deep copy of s: no map, slice or record it holds is shared with
+// s, so writes to either never reach the other. A batch restores it on
+// refusal, which is what makes a refused batch write nothing.
+func (s state) clone() state {
+	issues := make(map[string]*record, len(s.issues))
+	for id, rec := range s.issues {
+		copied := *rec
+		issues[id] = &copied
+	}
+	return state{
+		issues:      issues,
+		order:       slices.Clone(s.order),
+		relations:   slices.Clone(s.relations),
+		comments:    slices.Clone(s.comments),
+		events:      cloneRuns(s.events),
+		labels:      cloneRuns(s.labels),
+		planReviews: slices.Clone(s.planReviews),
+		purges:      slices.Clone(s.purges),
+	}
+}
+
+// cloneRuns copies a map of per-issue runs, each run its own slice.
+func cloneRuns[T any](runs map[string][]T) map[string][]T {
+	copied := make(map[string][]T, len(runs))
+	for id, run := range runs {
+		copied[id] = slices.Clone(run)
+	}
+	return copied
+}
+
+// withBatch runs fn as one batch: on fn's error the engine's state is put back
+// as it was before fn ran, so a refused batch writes nothing, whatever wrote
+// before the refusal, and the changes it made are heard only once it lands.
+// The caller holds e.mu. [LAW:single-enforcer] the one
+// owner of a batch's atomicity in this engine.
+func (e *Engine) withBatch(fn func() error) error {
+	saved := e.state.clone()
+	var heard []heardChange
+	e.hearing = &heard
+	err := fn()
+	e.hearing = nil
+	if err != nil {
+		e.state = saved
+		return err
+	}
+	for _, h := range heard {
+		e.notify(h.change, h.issue)
+	}
+	return nil
 }
 
 // record is one stored issue: what an engine must keep to answer with a
@@ -140,9 +204,11 @@ func New(workspaceID string, clock storage.Clock) (*Engine, error) {
 	return &Engine{
 		workspaceID: id,
 		clock:       clock,
-		issues:      map[string]*record{},
-		labels:      map[string][]model.Label{},
-		events:      map[string][]model.IssueEvent{},
+		state: state{
+			issues: map[string]*record{},
+			labels: map[string][]model.Label{},
+			events: map[string][]model.IssueEvent{},
+		},
 	}, nil
 }
 
@@ -170,8 +236,9 @@ func (e *Engine) stamp(family map[string]bool) time.Time {
 	return e.stamps.Stamp(e.clock, seen)
 }
 
-// ObserveChanges adds observe to the observers apply calls, which is every
-// change this engine makes to an issue: BulkApply's updates go through apply.
+// ObserveChanges adds observe to the observers notify calls, once for every
+// change this engine makes to an issue: Apply's, and a landed BulkApply's
+// updates.
 func (e *Engine) ObserveChanges(observe func(storage.Change, model.Issue)) {
 	e.mu.Lock()
 	defer e.mu.Unlock()

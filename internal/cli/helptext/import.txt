@@ -22,7 +22,7 @@ this order: creates, then every parent and blocked_by the file states,
 in one step, then the order rank: top states, then updates. The step
 is judged on the graph the file ends with, so a blocked_by is judged on
 the hierarchy the file ends with. A file that breaks one of these rules
-therefore fails partway through. See Results for what rollback covers.
+is refused at that write, and, like every refused file, writes nothing.
 
 JSON tree spec (creates only)
 
@@ -193,12 +193,10 @@ Results
   stated; and, when the file ranks, the order written, as lit rank set
   reports it.
 
-  On any failure, a YAML file's parents and blocked_by are undone,
-  giving each issue back the edges it had, and issues created earlier in
-  the same run are rolled back on a best-effort basis by deleting them.
-  Updates already applied, and the order a YAML file wrote, are not
-  rolled back, and the error names what stays written. If the error
-  reports that rollback leaked IDs, run lit doctor.
+  A file is written whole or not at all: a file refused for any reason,
+  in either format, writes nothing, and the error names the document
+  and the rule that refused it. Should putting the workspace back fail
+  too, the error says so and names every write that stays.
 
   A full-database export is a different shape than either format above;
   load one with lit backup restore.

@@ -470,6 +470,17 @@ func OpenMigration(st Store) Migrated {
 	return migrator.Migrated()
 }
 
+// StrandedWrites is every commit st landed over writes a failed commit left
+// in its working set. An engine with no working set strands nothing, so it
+// landed none.
+func StrandedWrites(st Store) []StrandedWritesCommit {
+	syncer, err := Sync.Of(st)
+	if err != nil {
+		return nil
+	}
+	return syncer.StrandedWritesCommits()
+}
+
 // EventRecord is the open's migration as event facts.
 func (m Migrated) EventRecord() map[string]any {
 	facts := m.Bootstrap.EventRecord()

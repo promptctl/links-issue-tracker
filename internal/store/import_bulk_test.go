@@ -320,39 +320,6 @@ func TestBulkApplyCreateChildOfExistingIssue(t *testing.T) {
 	}
 }
 
-func TestBulkApplyRollsBackCreatesOnLaterFailure(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	st := openIssueStore(t, ctx)
-	epic := bulkEpic(t, ctx, st)
-	title := "will roll back"
-	issueType := "task"
-	topic := "bulk"
-	badTitle := "b"
-	// doc b's parent matches no local_id in the batch and no real issue, so
-	// it passes parseBulkSpecs (which cannot check external existence)
-	// and fails inside CreateIssue — after doc a has already been created.
-	specs := []storage.BulkIssueSpec{
-		{LocalID: "a", Title: &title, IssueType: &issueType, Topic: &topic, Parent: ptr(epic.ID)},
-		{LocalID: "b", Title: &badTitle, IssueType: &issueType, Topic: &topic, Parent: ptr("ghost-does-not-exist")},
-	}
-	_, err := st.BulkApply(ctx, "test", "agent", specs)
-	if err == nil {
-		t.Fatalf("BulkApply() error = nil, want failure on doc b's missing parent")
-	}
-	// Default ListIssues excludes deleted issues, so doc a's create surviving
-	// here means the rollback failed to remove it.
-	list, err := st.ListIssues(ctx, storage.ListIssuesFilter{})
-	if err != nil {
-		t.Fatalf("ListIssues() error = %v", err)
-	}
-	for _, issue := range list {
-		if issue.Title == title {
-			t.Fatalf("doc a's create was not rolled back: %#v", issue)
-		}
-	}
-}
-
 func TestBulkApplyRejectsEmptyInput(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

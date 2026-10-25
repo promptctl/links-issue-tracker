@@ -2104,8 +2104,8 @@ outside a git repository (`register.go`; asserted in `retired_command_test.go`).
   local_ids), `title`, `type`, `topic`, `priority`.
 - Output: `"imported %d issues\n"` then, per mapping, `"  <local> -> <real>\n"`
   (map iteration order is unspecified) (`cli.go`).
-- Best-effort rollback on failure is the store's behavior; the doc comment tells
-  the caller to run `lit doctor` after a failed import (`cli.go`).
+- `import.created` is set on the event before the error is checked, so a
+  refused tree counts what landed: nothing (`cli.go`).
 
 **YAML bulk path** (`runImportBulk`, `cli.go`):
 - `storage.ParseBulkSpecs(data)`.

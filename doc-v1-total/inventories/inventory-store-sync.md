@@ -244,7 +244,7 @@ Report type at `/Users/bmf/code/links-issue-tracker/internal/storage/sync.go`.
 
 - `LocalIssueCount(ctx)` (`sync.go`): first `SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'issues'`; count 0 → returns `0, nil` (no error for a pristine store). Otherwise `SELECT COUNT(*) FROM issues`. Test `TestLocalIssueCountAcrossLifecycle` (`sync_test.go`).
 - `SyncResetToRemoteHead(ctx, remote, branch)` (`sync.go`): the branch is required, and the remote arrives parsed; builds `remotes/<remote>/<branch>`; runs `resetHardToRef` under `runSyncMutation`. Destructive of local commits by design (`sync.go`). Tests `TestSyncResetToRemoteHeadAdoptsUnrelatedHistory` (`sync_test.go`), `TestSyncResetToRemoteHeadRequiresBranch` (`sync_test.go`).
-- `resetHardToRef(ctx, db, ref)` (`sync.go`): `CALL DOLT_RESET('--hard', ref)`; error `"reset to remote head %q: %w"`. Shared by the init-adopt and the take-remote resolution.
+- `resetHardToRef(ctx, db, ref)` (`sync.go`): `CALL DOLT_RESET('--hard', ref)`; error `"reset to %q: %w"`. Shared by the init-adopt, the take-remote resolution, `ResetToCheckpoint`, and a refused batch's reset (`batch.go`).
 
 ### 1.11 Procedure-call plumbing
 
@@ -1129,7 +1129,7 @@ Tests: `TestMigrateSnapshotFreshDBOpenTakesExactlyOneSnapshot` (`migrate_snapsho
 ## PART 10 — Dolt checkpoints (`internal/store/checkpoint.go`)
 
 - `CreateCheckpoint(ctx, prefix)` (`checkpoint.go`): `readDoltHead` → commit SHA (error `"checkpoint: %w"`); `ts := time.Now().UTC()`; `name := fmt.Sprintf("%s-%d", prefix, ts.UnixNano())`; `CALL DOLT_BRANCH(?)` with that name (error `"checkpoint: create branch %q: %w"`). Returns `storage.Checkpoint{Name, Prefix, CreatedAt: ts, Anchor: commitSHA}`.
-- `ResetToCheckpoint(ctx, name)` (`checkpoint.go`): `CALL DOLT_RESET('--hard', ?)`; error `"checkpoint: reset to %q: %w"`. Discards working-set changes **and** any Dolt commits made after the checkpoint.
+- `ResetToCheckpoint(ctx, name)` (`checkpoint.go`): `resetHardToRef(ctx, s.db, name)`; error `"checkpoint: %w"` around its `"reset to %q: %w"`. Discards working-set changes **and** any Dolt commits made after the checkpoint.
 - `ListCheckpoints(ctx, prefix)` (`checkpoint.go`): `SELECT name, hash FROM dolt_branches WHERE name LIKE ? ORDER BY name` with `prefix+"-%"`. Names failing `parseCheckpointName` are **skipped silently**. `Anchor` set from `hash`. Final sort is by `CreatedAt` ascending (oldest first).
 - `PruneCheckpoints(ctx, prefix, retain)` (`checkpoint.go`): `retain < 0` → `"checkpoint: retain must be non-negative, got %d"`. `len(cps) <= retain` → nil. Otherwise deletes `cps[:len(cps)-retain]` (the oldest) with `CALL DOLT_BRANCH('-d', '-f', ?)`; error `"checkpoint: delete branch %q: %w"`. `retain=0` deletes all.
 - `parseCheckpointName(name, prefix)` (`checkpoint.go`): requires the exact prefix + `'-'`, and the suffix must round-trip through `%d` unchanged (`fmt.Sprintf("%d", ns) != suffix` → reject). `CreatedAt = time.Unix(0, ns).UTC()`.
