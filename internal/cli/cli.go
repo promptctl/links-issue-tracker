@@ -1337,7 +1337,7 @@ func updateLeaf() appLeaf {
 	// update takes twelve value flags, past the point where the derived fallback
 	// stops naming them and points at --help. Its own sentence names them all, so
 	// it supplies it rather than taking the fallback. [LAW:one-source-of-truth]
-	usage := "usage: lit update <id> [--title <text>] [--description <text> | --description-file <path|->] [--prompt <text> | --prompt-file <path|->] [--plan <text> | --plan-file <path|->] [--type <task|feature|bug|chore|epic>] [--priority <" + priorityChoices() + ">] [--assignee <user>] [--labels <csv>] [--lane <key>] [--reason <text>]"
+	usage := "usage: lit update <id> [--title <text>] [--description <text> | --description-file <path|->] [--prompt <text> | --prompt-file <path|->] [--plan <text> | --plan-file <path|->] [--type <task|feature|bug|chore|epic>] [--priority <" + priorityChoices() + ">] [--assignee <user>] [--labels <csv>] [--lane <key>] [--reason <text>] " + bulkEditGuidance
 	return appLeaf{fs: fs, positionals: 1, usage: usage, work: func(ctx context.Context, inv Invocation, ap *app.App, positional []string) error {
 		if len(positional) != 1 {
 			return UsageError{Message: usage}

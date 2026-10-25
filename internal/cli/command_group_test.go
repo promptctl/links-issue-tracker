@@ -374,18 +374,12 @@ func TestTransitionVerbGrouping(t *testing.T) {
 
 // An agent that wants to edit many issues reads the command surface, not the
 // reference docs: the root help where `update` and `bulk` live, `lit update
-// --help`, and the refusal a guessed `lit bulk update` earns. Each of the three
-// must name the YAML file path through `lit import`, the claim `lit quickstart
-// update` makes. [LAW:behavior-not-structure] read off rendered output only.
+// --help`, and the refusals a guessed `lit bulk update` or `lit update <id>
+// <id>` earns. Each must name the YAML file path through `lit import`, the
+// claim `lit quickstart update` makes. [LAW:behavior-not-structure] read off
+// rendered output only.
 func TestBulkEditIsReachableFromTheCommandSurface(t *testing.T) {
-	prevWD, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
-	if err := os.Chdir(t.TempDir()); err != nil {
-		t.Fatalf("Chdir() error = %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(prevWD) })
+	t.Chdir(t.TempDir())
 
 	groupOf, _ := renderedGrouping(t)
 	for _, name := range []string{"import", "update", "bulk"} {
@@ -398,10 +392,12 @@ func TestBulkEditIsReachableFromTheCommandSurface(t *testing.T) {
 	if got := render(t, []string{"update", "--help"}); !strings.Contains(got, bulkEditPath) {
 		t.Errorf("`lit update --help` = %q, want it to name %q", got, bulkEditPath)
 	}
-	var stdout bytes.Buffer
-	err = Run(context.Background(), cwdInvocation(&stdout, &stdout, []string{"bulk", "update"}))
-	var usage UsageError
-	if !errors.As(err, &usage) || !strings.Contains(usage.Message, bulkEditPath) {
-		t.Errorf("`lit bulk update` error = %v, want a usage refusal naming %q", err, bulkEditPath)
+	for _, guess := range [][]string{{"bulk", "update"}, {"update", "a", "b", "--title", "x"}} {
+		var stdout bytes.Buffer
+		err := Run(context.Background(), cwdInvocation(&stdout, &stdout, guess))
+		var usage UsageError
+		if !errors.As(err, &usage) || !strings.Contains(usage.Message, bulkEditPath) {
+			t.Errorf("`lit %s` error = %v, want a usage refusal naming %q", strings.Join(guess, " "), err, bulkEditPath)
+		}
 	}
 }

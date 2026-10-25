@@ -750,7 +750,7 @@ func commandSpecs(ctx context.Context, inv Invocation) []CommandSpec {
 		// import lists beside update and bulk because editing many issues is what
 		// an agent comes to it for; the export/backup pair keeps the data-recovery
 		// story in Sync & Data.
-		{Name: "import", Summary: "Create or edit many issues from one file: YAML documents, where an `id:` edits that issue as `lit update` would (`lit ls --format yaml` writes them), or a JSON tree spec that only creates", GroupID: "operations",
+		{Name: "import", Summary: "Create or edit many issues from one .yaml file (`lit ls --format yaml` writes it), or create them from a JSON tree spec", GroupID: "operations",
 			Run: r.appCmd(app.AccessWrite, importTreeLeaf)},
 		{Name: "workspace", Summary: "Show workspace metadata", GroupID: "maintenance",
 			Run: r.wsCmd(workspaceLeaf)},
