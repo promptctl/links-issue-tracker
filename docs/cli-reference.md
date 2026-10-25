@@ -158,13 +158,12 @@ lit ships, so `lit workflows edit phase-impl` overrides one.
 ### `lit init`
 
 ```text
-lit init [--prefix <prefix>] [--skip-hooks] [--skip-agents]
+lit init [--prefix <prefix>] [--skip-hooks]
 ```
 
-Initializes the issue store under `$(git rev-parse --git-common-dir)/links/`, adds
-managed `lit` sections to `AGENTS.md` / `CLAUDE.md`, and installs the sync git hook.
-Idempotent: re-running reconciles the managed files. `--skip-hooks` and `--skip-agents`
-suppress the respective side effects. `--prefix` sets the issue ID prefix explicitly; by
+Initializes the issue store under `$(git rev-parse --git-common-dir)/links/` and
+installs the sync git hook. Idempotent: re-running reconciles the managed hook.
+`--skip-hooks` suppresses the hook. `--prefix` sets the issue ID prefix explicitly; by
 default it is derived from the repository directory name, which a name like `ab` or `___`
 cannot produce, so `--prefix` is the way to initialize those. It applies only to a
 workspace that has no prefix yet — supplying one that contradicts an existing workspace's
@@ -1194,9 +1193,9 @@ guidance at the moment of need: `work` (finding and starting work), `new` (creat
 tickets), `update` (managing existing tickets), `done` (finishing work), `doctor`
 (troubleshooting). `--eject` copies the embedded default templates to the global
 override path so you can customize them (`LIST` is comma-separated short names, e.g.
-`quickstart,quickstart-work,agents,hook`; `--force` overwrites existing
-overrides). The `agents` and `hook` templates are written into a marker-delimited
-region of a file you own, so an override of either must be plain content carrying no
+`quickstart,quickstart-work,hook`; `--force` overwrites existing
+overrides). The `hook` template is written into a marker-delimited
+region of a file you own, so an override of it must be plain content carrying no
 `LIT INTEGRATION` markers — lit wraps it — or exactly one whole marked block with
 nothing outside it; any other shape is refused by name at exit 3 rather than written.
 `--refresh` re-syncs managed repo assets and reports override drift without touching

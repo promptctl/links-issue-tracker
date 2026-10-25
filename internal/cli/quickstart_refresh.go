@@ -17,44 +17,25 @@ type quickstartRefreshItem struct {
 	Status  string `json:"status"`
 	Managed bool   `json:"managed"`
 	Reason  string `json:"reason,omitempty"`
-	Source  string `json:"source,omitempty"`
 }
 
 type quickstartRefreshReport struct {
-	Agents     quickstartRefreshItem   `json:"agents"`
-	Claude     quickstartRefreshItem   `json:"claude"`
 	Hooks      quickstartRefreshItem   `json:"hooks"`
 	Quickstart []quickstartRefreshItem `json:"quickstart"`
 }
 
 func refreshQuickstartManagedAssets(env environ.Env, ws workspace.Info) (quickstartRefreshReport, error) {
-	// [LAW:single-enforcer] Quickstart refresh reuses the existing managed writers so AGENTS, CLAUDE, and hook updates stay owned at one boundary.
+	// [LAW:single-enforcer] Quickstart refresh reuses the existing managed hook writer so hook updates stay owned at one boundary.
 	hookResult, hookErr := installHooks(env, ws)
 	if hookErr != nil {
 		return quickstartRefreshReport{}, hookErr
-	}
-	agentsResult, claudeResult, agentsErr := ensureLinksAgentFiles(env, ws.RootDir)
-	if agentsErr != nil {
-		return quickstartRefreshReport{}, agentsErr
 	}
 	quickstartItems, qsErr := refreshQuickstartTemplates(env, ws.RootDir)
 	if qsErr != nil {
 		return quickstartRefreshReport{}, qsErr
 	}
 	return quickstartRefreshReport{
-		Hooks: quickstartHookRefreshItem(hookResult),
-		Agents: quickstartRefreshItem{
-			Path:    agentsResult.Path,
-			Status:  managedAssetStatus(agentsResult.Changed, agentsResult.Created),
-			Managed: true,
-			Source:  string(agentsResult.Source),
-		},
-		Claude: quickstartRefreshItem{
-			Path:    claudeResult.Path,
-			Status:  managedAssetStatus(claudeResult.Changed, claudeResult.Created),
-			Managed: true,
-			Source:  string(claudeResult.Source),
-		},
+		Hooks:      quickstartHookRefreshItem(hookResult),
 		Quickstart: quickstartItems,
 	}, nil
 }
@@ -114,23 +95,9 @@ func refreshQuickstartTemplate(env environ.Env, workspaceRoot string, name strin
 	}, nil
 }
 
-func managedAssetStatus(changed bool, created bool) string {
-	statuses := []string{"unchanged", "updated", "created"}
-	index := 0
-	if changed {
-		index = 1
-	}
-	if created {
-		index = 2
-	}
-	return statuses[index]
-}
-
 func formatQuickstartRefreshSummary(refresh quickstartRefreshReport) string {
 	items := []labeledStatus{
 		{"pre-push hook", refresh.Hooks.Status, refresh.Hooks.Reason},
-		{"AGENTS.md", refresh.Agents.Status, composeSourceReason(refresh.Agents.Reason, refresh.Agents.Source, refresh.Agents.Status)},
-		{"CLAUDE.md", refresh.Claude.Status, composeSourceReason(refresh.Claude.Reason, refresh.Claude.Source, refresh.Claude.Status)},
 	}
 	for _, q := range refresh.Quickstart {
 		items = append(items, labeledStatus{fmt.Sprintf("%s template", strings.TrimSuffix(q.Name, ".md")), q.Status, q.Reason})
@@ -166,7 +133,10 @@ func formatQuickstartRefreshSummary(refresh quickstartRefreshReport) string {
 }
 
 func quickstartHookRefreshItem(result hookInstallResult) quickstartRefreshItem {
-	status := managedAssetStatus(result.Changed, false)
+	status := "unchanged"
+	if result.Changed {
+		status = "updated"
+	}
 	if !result.Managed && result.Reason != "" {
 		status = "skipped"
 	}

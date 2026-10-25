@@ -90,7 +90,7 @@ func TestEagerPushOnDefaultCadenceReachesRemoteWithoutExplicitPush(t *testing.T)
 	// sync relationship — this test is about an ESTABLISHED connected
 	// workspace's next mutation, not the never-synced bootstrap edge case.
 	if out, err := runLit(t, root, self, isolatedEnv(xdgConfigHome, "1"),
-		"init", "--skip-hooks", "--skip-agents"); err != nil {
+		"init", "--skip-hooks"); err != nil {
 		t.Fatalf("lit init: %v\noutput:\n%s", err, out)
 	}
 	// The epic the mutation under test files into is part of the bootstrap:
@@ -168,7 +168,7 @@ func newRemoteObserver(t *testing.T, base, remoteGit, self, xdgConfigHome string
 	o := remoteObserver{dir: dir, self: self, env: isolatedEnv(xdgConfigHome, "1")}
 	// runLit registers the clone's one worker join; count's polls run without
 	// queuing another per call.
-	if out, err := runLit(t, dir, self, o.env, "init", "--skip-hooks", "--skip-agents"); err != nil {
+	if out, err := runLit(t, dir, self, o.env, "init", "--skip-hooks"); err != nil {
 		t.Fatalf("observer lit init: %v\noutput:\n%s", err, out)
 	}
 	return o

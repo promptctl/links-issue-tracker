@@ -86,7 +86,7 @@ func TestStatuslineFileFollowsEachCheckoutsOwnWork(t *testing.T) {
 	}
 	runGit(t, main, "add", "-A")
 	runGit(t, main, "commit", "-m", "seed")
-	runCLIInDir(t, main, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, main, "init", "--skip-hooks")
 	tree := filepath.Join(t.TempDir(), "tree")
 	runGit(t, main, "worktree", "add", "-b", "tree", tree)
 
@@ -399,7 +399,7 @@ func TestATakeoverRecordsThePhaseTheWorkHadReached(t *testing.T) {
 	runGit(t, alpha, "config", "user.name", "alpha")
 	runGit(t, alpha, "commit", "--allow-empty", "-m", "seed")
 	runGit(t, alpha, "push", "origin", "HEAD")
-	runCLIInDir(t, alpha, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, alpha, "init", "--skip-hooks")
 	epic := newEpicInDir(t, alpha, "statusline epic")
 	ticket := extractTicketID(t, runCLIInDir(t, alpha, "new", "--title", "First", "--topic", "demo", "--type", "task", "--parent", epic))
 	runCLIInDir(t, alpha, "start", ticket, "--by", "alpha-agent")
@@ -410,7 +410,7 @@ func TestATakeoverRecordsThePhaseTheWorkHadReached(t *testing.T) {
 	runGit(t, base, "clone", remote, "bravo")
 	runGit(t, bravo, "config", "user.email", "b@b.co")
 	runGit(t, bravo, "config", "user.name", "bravo")
-	runCLIInDir(t, bravo, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, bravo, "init", "--skip-hooks")
 	if out := runCLIInDir(t, bravo, "start", ticket, "--by", "bravo-agent", "--take"); !strings.Contains(out, "claim transferred") {
 		t.Fatalf("start %s --take = %q, want the transfer announced", ticket, out)
 	}
@@ -470,7 +470,7 @@ func statuslineCheckout(t *testing.T) (dir, first, second string) {
 	runGit(t, dir, "config", "user.email", "m@m.co")
 	runGit(t, dir, "config", "user.name", "main")
 	runGit(t, dir, "commit", "--allow-empty", "-m", "seed")
-	runCLIInDir(t, dir, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, dir, "init", "--skip-hooks")
 	epic := newEpicInDir(t, dir, "statusline epic")
 	first = extractTicketID(t, runCLIInDir(t, dir, "new", "--title", "First", "--topic", "demo", "--type", "task", "--parent", epic))
 	second = extractTicketID(t, runCLIInDir(t, dir, "new", "--title", "Second", "--topic", "demo", "--type", "task", "--parent", epic))

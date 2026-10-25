@@ -13,16 +13,16 @@ func TestLoadReturnsEmbeddedDefaultWhenNoOverride(t *testing.T) {
 	xdgRoot := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", xdgRoot)
 
-	content, err := Load(testEnv(), AgentsSectionTemplateName, t.TempDir())
+	content, err := Load(testEnv(), QuickstartTemplateName, t.TempDir())
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if !strings.Contains(content, "BEGIN LIT INTEGRATION") {
+	if !strings.Contains(content, "lit quickstart") {
 		t.Fatalf("embedded default missing marker: %q", content)
 	}
 
 	// Absence of override must stay absence: Load must not write anything to the global path.
-	globalPath := filepath.Join(xdgRoot, "links-issue-tracker", "templates", AgentsSectionTemplateName)
+	globalPath := filepath.Join(xdgRoot, "links-issue-tracker", "templates", QuickstartTemplateName)
 	if _, err := os.Stat(globalPath); !os.IsNotExist(err) {
 		t.Fatalf("Load() wrote to global path %s; want absence, got err=%v", globalPath, err)
 	}
@@ -37,14 +37,14 @@ func TestLoadAbsentWorkspaceRootFallsThrough(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", xdgRoot)
 
 	for _, root := range []string{"", "   ", "\t\n"} {
-		content, source, err := LoadWithSource(testEnv(), AgentsSectionTemplateName, root)
+		content, source, err := LoadWithSource(testEnv(), QuickstartTemplateName, root)
 		if err != nil {
 			t.Fatalf("LoadWithSource(root=%q) error = %v", root, err)
 		}
 		if source != SourceEmbedded {
 			t.Fatalf("LoadWithSource(root=%q) source = %q, want %q", root, source, SourceEmbedded)
 		}
-		if !strings.Contains(content, "BEGIN LIT INTEGRATION") {
+		if !strings.Contains(content, "lit quickstart") {
 			t.Fatalf("LoadWithSource(root=%q) missing embedded marker", root)
 		}
 	}
@@ -59,11 +59,11 @@ func TestLoadGlobalOverrideWins(t *testing.T) {
 		t.Fatalf("MkdirAll(global templates) error = %v", err)
 	}
 	want := "custom global template\n"
-	if err := os.WriteFile(filepath.Join(globalTemplates, AgentsSectionTemplateName), []byte(want), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(globalTemplates, QuickstartTemplateName), []byte(want), 0o644); err != nil {
 		t.Fatalf("WriteFile(global template) error = %v", err)
 	}
 
-	got, err := Load(testEnv(), AgentsSectionTemplateName, t.TempDir())
+	got, err := Load(testEnv(), QuickstartTemplateName, t.TempDir())
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -80,7 +80,7 @@ func TestLoadProjectOverrideWins(t *testing.T) {
 	if err := os.MkdirAll(globalTemplates, 0o755); err != nil {
 		t.Fatalf("MkdirAll(global templates) error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(globalTemplates, AgentsSectionTemplateName), []byte("global\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(globalTemplates, QuickstartTemplateName), []byte("global\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile(global template) error = %v", err)
 	}
 
@@ -90,11 +90,11 @@ func TestLoadProjectOverrideWins(t *testing.T) {
 		t.Fatalf("MkdirAll(project templates) error = %v", err)
 	}
 	want := "project\n"
-	if err := os.WriteFile(filepath.Join(projectTemplates, AgentsSectionTemplateName), []byte(want), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(projectTemplates, QuickstartTemplateName), []byte(want), 0o644); err != nil {
 		t.Fatalf("WriteFile(project template) error = %v", err)
 	}
 
-	got, err := Load(testEnv(), AgentsSectionTemplateName, workspaceRoot)
+	got, err := Load(testEnv(), QuickstartTemplateName, workspaceRoot)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -107,12 +107,12 @@ func TestLoadPropagatesProjectFilesystemError(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 
 	workspaceRoot := t.TempDir()
-	projectTemplatePath := filepath.Join(workspaceRoot, ".lit", "templates", AgentsSectionTemplateName)
+	projectTemplatePath := filepath.Join(workspaceRoot, ".lit", "templates", QuickstartTemplateName)
 	if err := os.MkdirAll(projectTemplatePath, 0o755); err != nil {
 		t.Fatalf("MkdirAll(project template path as dir) error = %v", err)
 	}
 
-	_, err := Load(testEnv(), AgentsSectionTemplateName, workspaceRoot)
+	_, err := Load(testEnv(), QuickstartTemplateName, workspaceRoot)
 	if err == nil {
 		t.Fatal("Load() expected filesystem error, got nil")
 	}
@@ -122,14 +122,14 @@ func TestLoadWithSourceReportsLayer(t *testing.T) {
 	t.Run("embedded when no overrides", func(t *testing.T) {
 		t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 
-		content, source, err := LoadWithSource(testEnv(), AgentsSectionTemplateName, t.TempDir())
+		content, source, err := LoadWithSource(testEnv(), QuickstartTemplateName, t.TempDir())
 		if err != nil {
 			t.Fatalf("LoadWithSource() error = %v", err)
 		}
 		if source != SourceEmbedded {
 			t.Fatalf("LoadWithSource() source = %q, want %q", source, SourceEmbedded)
 		}
-		if !strings.Contains(content, "BEGIN LIT INTEGRATION") {
+		if !strings.Contains(content, "lit quickstart") {
 			t.Fatalf("embedded default missing marker: %q", content)
 		}
 	})
@@ -143,11 +143,11 @@ func TestLoadWithSourceReportsLayer(t *testing.T) {
 			t.Fatalf("MkdirAll(global templates) error = %v", err)
 		}
 		want := "custom global template\n"
-		if err := os.WriteFile(filepath.Join(globalTemplates, AgentsSectionTemplateName), []byte(want), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(globalTemplates, QuickstartTemplateName), []byte(want), 0o644); err != nil {
 			t.Fatalf("WriteFile(global template) error = %v", err)
 		}
 
-		content, source, err := LoadWithSource(testEnv(), AgentsSectionTemplateName, t.TempDir())
+		content, source, err := LoadWithSource(testEnv(), QuickstartTemplateName, t.TempDir())
 		if err != nil {
 			t.Fatalf("LoadWithSource() error = %v", err)
 		}
@@ -167,7 +167,7 @@ func TestLoadWithSourceReportsLayer(t *testing.T) {
 		if err := os.MkdirAll(globalTemplates, 0o755); err != nil {
 			t.Fatalf("MkdirAll(global templates) error = %v", err)
 		}
-		if err := os.WriteFile(filepath.Join(globalTemplates, AgentsSectionTemplateName), []byte("global\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(globalTemplates, QuickstartTemplateName), []byte("global\n"), 0o644); err != nil {
 			t.Fatalf("WriteFile(global template) error = %v", err)
 		}
 
@@ -177,11 +177,11 @@ func TestLoadWithSourceReportsLayer(t *testing.T) {
 			t.Fatalf("MkdirAll(project templates) error = %v", err)
 		}
 		want := "project\n"
-		if err := os.WriteFile(filepath.Join(projectTemplates, AgentsSectionTemplateName), []byte(want), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(projectTemplates, QuickstartTemplateName), []byte(want), 0o644); err != nil {
 			t.Fatalf("WriteFile(project template) error = %v", err)
 		}
 
-		content, source, err := LoadWithSource(testEnv(), AgentsSectionTemplateName, workspaceRoot)
+		content, source, err := LoadWithSource(testEnv(), QuickstartTemplateName, workspaceRoot)
 		if err != nil {
 			t.Fatalf("LoadWithSource() error = %v", err)
 		}
@@ -197,7 +197,6 @@ func TestLoadWithSourceReportsLayer(t *testing.T) {
 func TestNamesReturnsAllManagedTemplates(t *testing.T) {
 	names := Names()
 	want := map[string]bool{
-		AgentsSectionTemplateName:    false,
 		PrePushHookTemplateName:      false,
 		QuickstartTemplateName:       false,
 		QuickstartWorkTemplateName:   false,

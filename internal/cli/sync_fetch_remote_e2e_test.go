@@ -31,7 +31,7 @@ func TestSyncFetchSelectsTheSyncRemoteAndFailsOnAnUnreadableBranchRecord(t *test
 	runGit(t, dir, "remote", "rename", "origin", "gh")
 
 	t.Setenv(DisableAutoSyncEnvVar, "1")
-	runCLIInDir(t, dir, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, dir, "init", "--skip-hooks")
 	runCLIInDir(t, dir, "sync", "push", "--set-upstream")
 
 	if out := runCLIInDir(t, dir, "sync", "fetch", "--verbose"); strings.TrimSpace(out) != "fetched gh" {

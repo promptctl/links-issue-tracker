@@ -106,7 +106,7 @@ func TestShippedWorkflowsNameEachPhaseMove(t *testing.T) {
 // lit start with the command that records it.
 func TestAgentGuidanceNamesEveryPhaseMove(t *testing.T) {
 	texts := map[string]string{}
-	for _, name := range []string{"quickstart-work.md", "agents-section.md"} {
+	for _, name := range []string{"quickstart-work.md"} {
 		raw, err := templates.EmbeddedDefault(name)
 		if err != nil {
 			t.Fatalf("EmbeddedDefault(%s) error = %v", name, err)

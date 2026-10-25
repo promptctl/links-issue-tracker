@@ -409,7 +409,7 @@ func setupMirrorDeadlineRepo(t *testing.T) (base, root, gitPath string, runInPro
 		return res.out, res.err
 	}
 
-	if out, err := runInProcess(60*time.Second, "init", "--skip-hooks", "--skip-agents"); err != nil {
+	if out, err := runInProcess(60*time.Second, "init", "--skip-hooks"); err != nil {
 		t.Fatalf("lit init: %v\noutput:\n%s", err, out.String())
 	}
 	// First dolt push establishes the remote's dolt ref and upstream, with real

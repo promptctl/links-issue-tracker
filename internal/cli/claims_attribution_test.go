@@ -78,7 +78,7 @@ func TestSyncCarriesAttributionToASecondClone(t *testing.T) {
 	runGit(t, producer, "add", "-A")
 	runGit(t, producer, "commit", "-m", "seed")
 	runGit(t, producer, "push", "origin", "HEAD")
-	runCLIInDir(t, producer, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, producer, "init", "--skip-hooks")
 
 	// Creation and a lifecycle transition: the two event kinds the claim
 	// predicate treats as establishing, so both must arrive attributed.
@@ -95,7 +95,7 @@ func TestSyncCarriesAttributionToASecondClone(t *testing.T) {
 	runGit(t, base, "clone", remote, "bravo")
 	runGit(t, consumer, "config", "user.email", "b@b.co")
 	runGit(t, consumer, "config", "user.name", "bravo")
-	runCLIInDir(t, consumer, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, consumer, "init", "--skip-hooks")
 
 	// The consumer sees the producer's stamps, unchanged by the trip. Asserting
 	// on the exact pair — not merely that something is present — is what makes

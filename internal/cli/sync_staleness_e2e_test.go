@@ -34,7 +34,7 @@ func unpushedCloneWithOneLocalChange(t *testing.T) (dir, ticketID string) {
 	runGit(t, dir, "push", "origin", "HEAD")
 
 	t.Setenv(DisableAutoSyncEnvVar, "1")
-	runCLIInDir(t, dir, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, dir, "init", "--skip-hooks")
 	// The epic the ticket lives inside is filed before the push below, so it
 	// is part of what the push lands rather than a second unpushed change.
 	epicID := newEpicInDir(t, dir, "unpushed-epic")
@@ -139,7 +139,7 @@ func TestBacklogWarnsOnStaleFetchUntilTheSyncRemoteIsFetched(t *testing.T) {
 	runGit(t, dir, "push", "fork", "HEAD")
 
 	t.Setenv(DisableAutoSyncEnvVar, "1")
-	runCLIInDir(t, dir, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, dir, "init", "--skip-hooks")
 	runCLIInDir(t, dir, "sync", "push", "--set-upstream")
 	runCLIInDir(t, dir, "sync", "push", "--remote", "fork")
 

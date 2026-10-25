@@ -340,7 +340,7 @@ func writeInitSyncLine(w io.Writer, outcome initSyncOutcome, buildNote string) e
 // process exits. Every state reaches here, not only the two writeInitSyncLine
 // prints, so a benign "started fresh" decision is as durably recorded as an
 // adopt or a failure. [LAW:no-silent-failure]
-// Called before EnsureDatabase/installHooks/ensureLinksAgentFiles, any of
+// Called before EnsureDatabase/installHooks, either of
 // which can still fail and abort `lit init` as a whole — so this record
 // captures only the adopt decision, not a claim that init overall succeeded.
 // A trace-write failure here is reported to stderr, not fatal: the adopt

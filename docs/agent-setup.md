@@ -65,19 +65,17 @@ Run this from inside the target repository:
 lit init
 ```
 
-This creates the issue store under `$(git rev-parse --git-common-dir)/links/` and adds a
-short `lit` section to `AGENTS.md` and `CLAUDE.md` so future agents know to run
-`lit quickstart`. If the repo's remote already carries `lit` ticket data, `init` adopts
+This creates the issue store under `$(git rev-parse --git-common-dir)/links/`. Agents learn
+to run `lit quickstart` from the plugin's `quickstart` skill. If the repo's remote already carries `lit` ticket data, `init` adopts
 that backlog automatically, so a fresh clone starts with the project's real tickets
 rather than an empty store. Useful flags:
 
 - `--skip-hooks` — don't install the git sync hook
-- `--skip-agents` — don't touch `AGENTS.md` / `CLAUDE.md`
 - `--prefix <prefix>` — set the issue ID prefix instead of deriving it from the repository
   directory name. Required in a repository whose name yields no valid prefix (fewer than
   three characters once punctuation is normalized away, so `ab` or `___`).
 
-Already initialized? `lit init` is safe to run again; it reconciles the integration blocks.
+Already initialized? `lit init` is safe to run again; it reconciles the sync hook.
 
 To install the per-clone sync automation separately:
 

@@ -44,7 +44,7 @@ func initRepoForPrefixTest(t *testing.T) (repo string, runLit func(args ...strin
 	t.Cleanup(func() { _ = os.Chdir(prevWD) })
 
 	var initBuf bytes.Buffer
-	if err := Run(context.Background(), cwdInvocation(&initBuf, &initBuf, []string{"init", "--skip-hooks", "--skip-agents"})); err != nil {
+	if err := Run(context.Background(), cwdInvocation(&initBuf, &initBuf, []string{"init", "--skip-hooks"})); err != nil {
 		t.Fatalf("Run(init) error = %v\n%s", err, initBuf.String())
 	}
 

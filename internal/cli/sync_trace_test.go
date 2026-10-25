@@ -137,7 +137,7 @@ func TestRecordSyncTraceCarriesTriggerWhenAutomated(t *testing.T) {
 func TestInitLeavesDurableSyncTraceInteractively(t *testing.T) {
 	repo := t.TempDir()
 	runGit(t, repo, "init")
-	runCLIInDir(t, repo, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, repo, "init", "--skip-hooks")
 	ws, err := workspace.Resolve(testEnv(), repo)
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
@@ -189,7 +189,7 @@ func TestExplicitSyncCommandsLeaveDurableTracesInteractively(t *testing.T) {
 	runGit(t, producer, "add", "-A")
 	runGit(t, producer, "commit", "-m", "seed")
 	runGit(t, producer, "push", "origin", "HEAD")
-	runCLIInDir(t, producer, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, producer, "init", "--skip-hooks")
 	epicID := newEpicInDir(t, producer, "seed-epic")
 	runCLIInDir(t, producer, "new", "--title", "seed-ticket", "--topic", "demo", "--type", "task", "--parent", epicID)
 	runCLIInDir(t, producer, "sync", "push", "--set-upstream")
@@ -198,7 +198,7 @@ func TestExplicitSyncCommandsLeaveDurableTracesInteractively(t *testing.T) {
 	runGit(t, base, "clone", remote, "bravo")
 	runGit(t, consumer, "config", "user.email", "b@b.co")
 	runGit(t, consumer, "config", "user.name", "bravo")
-	runCLIInDir(t, consumer, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, consumer, "init", "--skip-hooks")
 	ws, err := workspace.Resolve(testEnv(), consumer)
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
@@ -267,7 +267,7 @@ func TestExplicitSyncCommandsLeaveDurableTracesInteractively(t *testing.T) {
 func TestReconcileAbortLeavesDurableTraceInteractively(t *testing.T) {
 	repo := t.TempDir()
 	runGit(t, repo, "init")
-	runCLIInDir(t, repo, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, repo, "init", "--skip-hooks")
 	ws, err := workspace.Resolve(testEnv(), repo)
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
@@ -322,7 +322,7 @@ func TestReconcileTakeAndCombineLeaveDurableTracesInteractively(t *testing.T) {
 		runGit(t, producer, "add", "-A")
 		runGit(t, producer, "commit", "-m", "seed")
 		runGit(t, producer, "push", "origin", "HEAD")
-		runCLIInDir(t, producer, "init", "--skip-hooks", "--skip-agents")
+		runCLIInDir(t, producer, "init", "--skip-hooks")
 		producerEpic := newEpicInDir(t, producer, "producer-epic")
 		runCLIInDir(t, producer, "new", "--title", "producer-ticket", "--topic", "demo", "--type", "task", "--parent", producerEpic)
 
@@ -330,7 +330,7 @@ func TestReconcileTakeAndCombineLeaveDurableTracesInteractively(t *testing.T) {
 		runGit(t, base, "clone", remote, "bravo")
 		runGit(t, consumer, "config", "user.email", "b@b.co")
 		runGit(t, consumer, "config", "user.name", "bravo")
-		runCLIInDir(t, consumer, "init", "--skip-hooks", "--skip-agents")
+		runCLIInDir(t, consumer, "init", "--skip-hooks")
 		consumerEpic := newEpicInDir(t, consumer, "consumer-epic")
 		runCLIInDir(t, consumer, "new", "--title", "consumer-ticket", "--topic", "demo", "--type", "task", "--parent", consumerEpic)
 

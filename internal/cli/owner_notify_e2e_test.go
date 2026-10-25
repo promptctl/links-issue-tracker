@@ -85,7 +85,7 @@ func forkedBacklogs(t *testing.T, base string) (producer, consumer, producerID, 
 	runGit(t, producer, "add", "-A")
 	runGit(t, producer, "commit", "-m", "seed")
 	runGit(t, producer, "push", "origin", "HEAD")
-	runCLIInDir(t, producer, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, producer, "init", "--skip-hooks")
 	producerEpic := firstIssueID(t, runCLIInDir(t, producer, "new", "--title", "producer-epic", "--topic", "demo", "--type", "epic"))
 	producerID = firstIssueID(t, runCLIInDir(t, producer, "new", "--title", "producer-ticket", "--topic", "demo", "--type", "task", "--parent", producerEpic))
 
@@ -93,7 +93,7 @@ func forkedBacklogs(t *testing.T, base string) (producer, consumer, producerID, 
 	runGit(t, base, "clone", remote, "bravo")
 	runGit(t, consumer, "config", "user.email", "b@b.co")
 	runGit(t, consumer, "config", "user.name", "bravo")
-	runCLIInDir(t, consumer, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, consumer, "init", "--skip-hooks")
 	consumerEpic := firstIssueID(t, runCLIInDir(t, consumer, "new", "--title", "consumer-epic", "--topic", "demo", "--type", "epic"))
 	consumerID = firstIssueID(t, runCLIInDir(t, consumer, "new", "--title", "consumer-ticket", "--topic", "demo", "--type", "task", "--parent", consumerEpic))
 
@@ -222,7 +222,7 @@ func TestPushFailureNotifiesOwner(t *testing.T) {
 	runGit(t, repo, "add", "-A")
 	runGit(t, repo, "commit", "-m", "seed")
 	runGit(t, repo, "push", "origin", "HEAD")
-	runCLIInDir(t, repo, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, repo, "init", "--skip-hooks")
 	soloEpic := firstIssueID(t, runCLIInDir(t, repo, "new", "--title", "solo-epic", "--topic", "demo", "--type", "epic"))
 	firstIssueID(t, runCLIInDir(t, repo, "new", "--title", "solo-ticket", "--topic", "demo", "--type", "task", "--parent", soloEpic))
 

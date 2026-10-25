@@ -48,7 +48,7 @@ func TestEjectTemplatesAcceptsShortName(t *testing.T) {
 		t.Fatalf("name = %q, want quickstart.md", results[0].Name)
 	}
 	// Sibling template must NOT have been written.
-	siblingPath := filepath.Join(xdgRoot, "links-issue-tracker", "templates", "agents-section.md")
+	siblingPath := filepath.Join(xdgRoot, "links-issue-tracker", "templates", "pre-push-hook.sh")
 	if _, statErr := os.Stat(siblingPath); !os.IsNotExist(statErr) {
 		t.Fatalf("eject=quickstart wrote sibling at %s (err=%v)", siblingPath, statErr)
 	}
@@ -74,7 +74,7 @@ func TestEjectTemplatesIsAtomicOnConflict(t *testing.T) {
 		t.Fatalf("ejectTemplates() returned error during plan phase: %v", err)
 	}
 	// No sibling may have been written because the plan phase detected a conflict.
-	for _, sibling := range []string{"agents-section.md", "pre-push-hook.sh"} {
+	for _, sibling := range []string{"pre-push-hook.sh"} {
 		p := filepath.Join(dir, sibling)
 		if _, statErr := os.Stat(p); !os.IsNotExist(statErr) {
 			t.Fatalf("atomicity violated: %s was written despite conflict (err=%v)", p, statErr)

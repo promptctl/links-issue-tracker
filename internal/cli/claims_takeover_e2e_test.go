@@ -54,7 +54,7 @@ func TestStartRefusesAndThenTakesOverAFreshForeignClaim(t *testing.T) {
 	runGit(t, alpha, "add", "-A")
 	runGit(t, alpha, "commit", "-m", "seed")
 	runGit(t, alpha, "push", "origin", "HEAD")
-	runCLIInDir(t, alpha, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, alpha, "init", "--skip-hooks")
 
 	epic := extractTicketID(t, runCLIInDir(t, alpha, "new", "--title", "takeover epic", "--topic", "takeover-e2e", "--type", "epic"))
 	ticket := extractTicketID(t, runCLIInDir(t, alpha, "new", "--title", "the one ticket of its epic", "--topic", "takeover-e2e", "--type", "task", "--parent", epic))
@@ -65,7 +65,7 @@ func TestStartRefusesAndThenTakesOverAFreshForeignClaim(t *testing.T) {
 	runGit(t, base, "clone", remote, "bravo")
 	runGit(t, bravo, "config", "user.email", "b@b.co")
 	runGit(t, bravo, "config", "user.name", "bravo")
-	runCLIInDir(t, bravo, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, bravo, "init", "--skip-hooks")
 
 	// A start that cannot land is refused before the takeover gate, so the
 	// caller is never sent to --take for a start that would still fail.
@@ -166,7 +166,7 @@ func TestStartOnAnExpiredForeignClaimIsSilent(t *testing.T) {
 	runGit(t, alpha, "add", "-A")
 	runGit(t, alpha, "commit", "-m", "seed")
 	runGit(t, alpha, "push", "origin", "HEAD")
-	runCLIInDir(t, alpha, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, alpha, "init", "--skip-hooks")
 
 	epic := extractTicketID(t, runCLIInDir(t, alpha, "new", "--title", "takeover epic", "--topic", "takeover-e2e", "--type", "epic"))
 	ticket := extractTicketID(t, runCLIInDir(t, alpha, "new", "--title", "the one ticket of its epic", "--topic", "takeover-e2e", "--type", "task", "--parent", epic))
@@ -177,7 +177,7 @@ func TestStartOnAnExpiredForeignClaimIsSilent(t *testing.T) {
 	runGit(t, base, "clone", remote, "bravo")
 	runGit(t, bravo, "config", "user.email", "b@b.co")
 	runGit(t, bravo, "config", "user.name", "bravo")
-	runCLIInDir(t, bravo, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, bravo, "init", "--skip-hooks")
 
 	writeTinyFreshnessWindow(t, bravo)
 	waitPastFreshnessWindow(t)
@@ -249,7 +249,7 @@ func TestStartTakesOverALiveLaneUnderOneSharedIdentity(t *testing.T) {
 	runGit(t, alpha, "add", "-A")
 	runGit(t, alpha, "commit", "-m", "seed")
 	runGit(t, alpha, "push", "origin", "HEAD")
-	runCLIInDir(t, alpha, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, alpha, "init", "--skip-hooks")
 
 	// One identity, both checkouts. Every start below names it.
 	const shared = "one-identity"
@@ -262,7 +262,7 @@ func TestStartTakesOverALiveLaneUnderOneSharedIdentity(t *testing.T) {
 	runGit(t, base, "clone", remote, "bravo")
 	runGit(t, bravo, "config", "user.email", "b@b.co")
 	runGit(t, bravo, "config", "user.name", "bravo")
-	runCLIInDir(t, bravo, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, bravo, "init", "--skip-hooks")
 
 	// Alpha's claim is live, so the takeover is the deliberate --take crossing;
 	// the notice it prints is the subject here.
@@ -315,7 +315,7 @@ func TestStartOnAPresetAssigneeAnnouncesNoTransfer(t *testing.T) {
 	runGit(t, repo, "add", "-A")
 	runGit(t, repo, "commit", "-m", "seed")
 	runGit(t, repo, "push", "origin", "HEAD")
-	runCLIInDir(t, repo, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, repo, "init", "--skip-hooks")
 
 	epic := extractTicketID(t, runCLIInDir(t, repo, "new", "--title", "takeover epic", "--topic", "takeover-e2e", "--type", "epic"))
 	sibling := extractTicketID(t, runCLIInDir(t, repo, "new", "--title", "sibling", "--topic", "takeover-e2e", "--type", "task", "--parent", epic))

@@ -111,7 +111,7 @@ func soloCheckoutSyncingWithA(t *testing.T) (dir, remoteURL string) {
 	runGit(t, dir, "remote", "rename", "origin", "a")
 
 	t.Setenv(DisableAutoSyncEnvVar, "1")
-	runCLIInDir(t, dir, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, dir, "init", "--skip-hooks")
 	runCLIInDir(t, dir, "sync", "push", "--set-upstream")
 	return dir, remoteURL
 }

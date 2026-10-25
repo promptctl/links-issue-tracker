@@ -103,9 +103,8 @@ Handler `initLeaf` — `internal/cli/init.go`.
 |---|---|---|---|
 | `--prefix` | `""` | Issue ID prefix for a new workspace (default: derived from the repository name) | `init.go` |
 | `--skip-hooks` | `false` | Skip git hook installation | `init.go` |
-| `--skip-agents` | `false` | Skip AGENTS.md integration update | `init.go` |
 
-Any positional argument → `UsageError{initUsage}`, exit 2 (`init.go`), where `initUsage` is the single constant (`init.go`) `"usage: lit init [--prefix <prefix>] [--skip-hooks] [--skip-agents]"`.
+Any positional argument → `UsageError{initUsage}`, exit 2 (`init.go`), where `initUsage` is the single constant (`init.go`) `"usage: lit init [--prefix <prefix>] [--skip-hooks]"`.
 
 `--prefix` is read by the acquisition rather than by the work below. `initLeaf` returns `(wsLeaf, wsAcquire)` and is registered with `wsCmdAcquiring`; the closure calls `workspace.RequestPrefix(*prefix)` only when `fs.Changed("prefix")`, so an untyped flag is the zero request and derivation is untouched, and `--prefix ""` is a `ValidationError` (exit 3) rather than a silent fall back to derivation.
 
@@ -117,8 +116,7 @@ Any positional argument → `UsageError{initUsage}`, exit 2 (`init.go`), where `
    `"could not confirm the workspace state, so init is refusing to create a fresh store: <error> (<buildNote>)"` → exit 1.
 4. Otherwise, unless adopted, `store.EnsureDatabase(ctx, ws.DatabasePath, ws.WorkspaceID)`; `dbCreated` is its `created` result (`init.go`). Adopted ⇒ `dbCreated` stays `true` (`init.go`).
 5. Hooks (unless `--skip-hooks`): `installHooks(ws)`; error aborts init (`init.go`). Report field is `"installed"` when `Changed`, else `"unchanged"`.
-6. Agents (unless `--skip-agents`): `ensureLinksAgentFiles(ws.RootDir)`; error aborts (`init.go`). Per-file status `"created"` / `"updated"` / `"unchanged"`, plus `AgentsSource` / `ClaudeSource` = the template layer (`project`/`global`/`embedded`).
-7. `buildNote := resolveBuildStatusNote(time.Now())` then `writeInitHumanOutput` (`init.go`).
+6. `buildNote := resolveBuildStatusNote(time.Now())` then `writeInitHumanOutput` (`init.go`).
 
 ### 1.3 Adopt decision machine (`internal/cli/init_sync.go`)
 
@@ -158,7 +156,7 @@ Outcome struct fields JSON-tagged `state`, `remote`, `branch`, `error` (`init_sy
   - `  Updated: <entries>` for statuses `created|updated|installed` (`init.go`)
   - `  Up to date: <entries>` for `unchanged` (`init.go`)
   - `  Skipped: <entries>` for `skipped` (`init.go`)
-  - Entry labels: `pre-push hook`, `AGENTS.md`, `CLAUDE.md` (`init.go`); AGENTS/CLAUDE entries append ` (via project|global|embedded)` (`init.go`) — suppressed when status is `skipped` (`init.go`).
+  - Entry labels: `pre-push hook` (`init.go`).
 - Final line, always: ``  Guidance: `lit workflows` shows the work lifecycle and the guidance active at each point (`lit workflows edit <id-or-point>` to customize)`` (`init.go`).
 
 ### 1.6 `initReport` JSON shape (struct only; no JSON output path in this command)
@@ -170,7 +168,6 @@ Outcome struct fields JSON-tagged `state`, `remote`, `branch`, `error` (`init_sy
 1. `<git-common-dir>/links/` and `config.json` — via `workspace.Resolve` before the handler (`internal/workspace/workspace.go`).
 2. Dolt store at `ws.DatabasePath` — via `store.EnsureDatabase` (`init.go`) or `store.AdoptRemoteByClone` (`init_sync.go`).
 3. `<GitCommonDir>/hooks/pre-push` (dir created `0o755`; see §9).
-4. `<RootDir>/AGENTS.md` and `<RootDir>/CLAUDE.md` managed sections (see §10).
 5. A sync trace file under `<StorageDir>/traces/sync/` (see §7.6).
 6. No git config keys are set by `init` (no `git config` write exists on this path).
 
@@ -979,7 +976,6 @@ Usage string, derived from the topic table: `usage: lit quickstart [work|new|upd
 
 `refreshQuickstartManagedAssets` (`quickstart_refresh.go`) runs the same writers `lit init` uses:
 1. `installHooks(ws)` — rewrites the managed pre-push section (error aborts).
-2. `ensureLinksAgentFiles(ws.RootDir)` — rewrites the AGENTS.md/CLAUDE.md managed sections (error aborts).
 3. `refreshQuickstartTemplates(ws.RootDir)` — **inspection only, never writes** (`quickstart_refresh.go`), over `quickstartGuidanceTemplateNames()` = `quickstart.md` then each topic template in router order (`quickstart_topics.go`).
 
 Per-template status (`refreshQuickstartTemplate`, `quickstart_refresh.go`):
@@ -987,13 +983,12 @@ Per-template status (`refreshQuickstartTemplate`, `quickstart_refresh.go`):
 - Override content identical to the embedded default → `{status: "unchanged", managed: true, path}`.
 - Override drifted → `{status: "skipped", managed: true, path, reason: "customized"}` — the file is left untouched.
 
-Hook item (`quickstartHookRefreshItem`, `quickstart_refresh.go`): status from `managedAssetStatus(Changed, false)` = `unchanged`/`updated`; forced to `skipped` when `!Managed && Reason != ""` (the incompatible-hook case).
-`managedAssetStatus(changed, created)` (`quickstart_refresh.go`): `created` wins over `changed` wins over `unchanged`.
+Hook item (`quickstartHookRefreshItem`, `quickstart_refresh.go`): status is `updated` when `Changed`, else `unchanged`; forced to `skipped` when `!Managed && Reason != ""` (the incompatible-hook case).
 
-JSON report shape (structs only; no JSON output path): `{agents, claude, hooks, quickstart[]}` with items `{name?, path, status, managed, reason?, source?}` (`quickstart_refresh.go`).
+JSON report shape (structs only; no JSON output path): `{hooks, quickstart[]}` with items `{name?, path, status, managed, reason?}` (`quickstart_refresh.go`).
 
-Human summary (`formatQuickstartRefreshSummary`, `quickstart_refresh.go`): labels `pre-push hook`, `AGENTS.md`, `CLAUDE.md`, then `<template-basename> template` per quickstart item; grouped into
-`  Refreshed: …` (created/updated), `  Skipped: …`, `  Up to date: …`; when all three groups are empty the summary is `  nothing to refresh`. AGENTS/CLAUDE reasons compose with the source: `composeSourceReason` yields `"<reason>, via <source>"` or `"via <source>"`, and nothing when the status is `skipped` (`init.go`).
+Human summary (`formatQuickstartRefreshSummary`, `quickstart_refresh.go`): labels `pre-push hook`, then `<template-basename> template` per quickstart item; grouped into
+`  Refreshed: …` (created/updated), `  Skipped: …`, `  Up to date: …`; when all three groups are empty the summary is `  nothing to refresh`.
 
 ### 12.4 `--eject` behavior (`quickstart_eject.go`)
 
@@ -1046,27 +1041,16 @@ Consumers: `lit init` human output and its adopt progress line (`init.go`, `init
 
 ---
 
-## 15. Managed-section machinery (`agents_internal.go`, `managed_sections.go`)
+## 15. Managed-section machinery (`managed_sections.go`)
 
-Markers (`agents_internal.go`): current `<!-- BEGIN LIT INTEGRATION -->` / `<!-- END LIT INTEGRATION -->`; legacy `<!-- BEGIN LINKS INTEGRATION -->` / `<!-- END LINKS INTEGRATION -->`.
-
-`ensureLinksAgentFiles(rootDir)` — `agents_internal.go`, the single writer for both files:
-1. `templates.LoadWithSource(templates.AgentsSectionTemplateName, rootDir)` (project > global > embedded); failure → `load agent section template: %w`.
-2. `writeManagedFile(rootDir, "AGENTS.md", headerPrefix: "# AGENTS\n\n", section, markers)`.
-3. `writeManagedFile(rootDir, "CLAUDE.md", headerPrefix: "", section, markers)` — CLAUDE.md gets **no** header prefix on creation.
-4. Both results carry the resolved `Source`.
-
-`writeManagedFile` — `agents_internal.go`:
-- File absent → write `headerPrefix + section` at `0o644`; result `{Created: true, Changed: true}`. A non-ENOENT read error → `read <filename>: %w`; a write error → `write <filename>: %w`.
-- File present → `migrateMarkers` then `upsertManagedSection`; the change signal compares the final content against the ORIGINAL bytes, so a marker-only migration counts as changed (`agents_internal.go`). Unchanged → no write. Changed → `os.WriteFile(..., 0o644)`; result `{Created: false, Changed: true}`.
-- Everything outside the markers is preserved (`agents_internal.go`).
+The only managed file is the pre-push hook (`hooks.go`). Markers: current `# --- BEGIN LIT INTEGRATION ---` / `# --- END LIT INTEGRATION ---`; legacy `# --- BEGIN LINKS INTEGRATION ---` / `# --- END LINKS INTEGRATION ---`, migrated by `migrateMarkers`. Everything outside the markers is preserved; a marker-only migration counts as a change.
 
 ---
 
 ## 16. `internal/templates` — the embed mechanism and asset list
 
 - `//go:embed defaults/*` into `defaultsFS embed.FS` (`templates.go`).
-- Canonical names (`templates.go`): `agents-section.md`, `pre-push-hook.sh`, `quickstart.md`, `quickstart-work.md`, `quickstart-new.md`, `quickstart-update.md`, `quickstart-done.md`, `quickstart-doctor.md`, `quickstart-review.md`. `Names()` returns this list in that order (`templates.go`).
+- Canonical names (`templates.go`): `pre-push-hook.sh`, `quickstart.md`, `quickstart-work.md`, `quickstart-new.md`, `quickstart-update.md`, `quickstart-done.md`, `quickstart-doctor.md`, `quickstart-review.md`. `Names()` returns this list in that order (`templates.go`).
 - Short aliases (`templates.go`): `quickstart`, `quickstart-work`, `quickstart-new`, `quickstart-update`, `quickstart-done`, `quickstart-doctor`, `quickstart-review`, `agents`, `hook`. `sortedAliasNames()` sorts them for error messages (`templates.go`).
 - Resolution precedence (`Load`/`LoadWithSource`, `templates.go`): **project** `<workspaceRoot>/.lit/templates/<name>` (`templates.go`) > **global** `<config.ConfigDir()>/templates/<name>` (`templates.go`) > **embedded**. A layer contributes nothing when its file is absent or empty; a read error at a layer is wrapped `load project template <path>: %w` / `load global template <path>: %w`. Sources are `project` / `global` / `embedded` (`templates.go`). All three empty → `load template <name>: no non-empty source`.
 - `EmbeddedDefault(name)` reads `defaults/<name>` raw (`templates.go`).
@@ -1076,7 +1060,6 @@ Markers (`agents_internal.go`): current `<!-- BEGIN LIT INTEGRATION -->` / `<!--
 
 | Asset | Written by | Destination | Role / structure |
 |---|---|---|---|
-| `agents-section.md` | `ensureLinksAgentFiles` (from `lit init`, `lit quickstart --refresh`) | the managed region of `<root>/AGENTS.md` and `<root>/CLAUDE.md` | 10 lines wrapped in `<!-- BEGIN/END LIT INTEGRATION -->`; a heading, a paragraph telling the agent to run `lit quickstart` first, and a paragraph naming the command that records each phase move (`lit phase <id> --to impl`, `--to review`, `--to merge`, `lit done <id>`) |
 | `pre-push-hook.sh` | `installHooks` (from `lit init`, `lit hooks install`, `lit quickstart --refresh`) | the managed region of `<git-common-dir>/hooks/pre-push` | 25-line bash fragment wrapped in `# --- BEGIN/END LIT INTEGRATION ---`; `set -u`, takes `$1` as the remote name (default `origin`), mktemps a trace-ref file, runs `lit sync push --remote "$remote"` with `LNKS_AUTOMATION_TRIGGER=git-pre-push`, `LNKS_AUTOMATION_REASON="git push triggered the managed pre-push sync"`, and `LNKS_AUTOMATION_TRACE_REF_FILE`; on failure prints a `[links] warning:` line to stderr carrying the trace path (or `unavailable`) inside an `<agent-instructions>` element; has a no-mktemp fallback branch; always `exit 0` so a sync failure never blocks the git push |
 | `quickstart.md` | `lit quickstart` (bare), bare `lit`, `lit quickstart --refresh` (rendered, never written to the repo) | stdout | 19-line router: an `<agent-instructions>` framing note, a paragraph on ticket provenance, a bulleted list of the six topic subcommands, and a "Fastpath" of `lit next` / `lit start <id>` / `lit workflows` |
 | `quickstart-work.md` | `lit quickstart work` | stdout | 15 lines on finding/starting work: `lit ls --limit --search`, `lit next`, `lit backlog`, `lit show`, claims-first selection, the checkout a ticket is worked from, `lit start` and `--take`, and recording each phase move with `lit phase <id> --to <phase>` and `lit done <id>` |
@@ -1086,7 +1069,7 @@ Markers (`agents_internal.go`): current `<!-- BEGIN LIT INTEGRATION -->` / `<!--
 | `quickstart-doctor.md` | `lit quickstart doctor` | stdout | 5 lines: `lit doctor [--fix]` plus an `<agent-instructions>` note to self-resolve first |
 | `quickstart-review.md` | `lit quickstart review` | stdout | the reviewer brief: load the `laws:code` skill, pin the plan's digest from `lit show`, find the whole mechanism and its history, judge the stack rather than the increment, record one `lit verdict` (and on a fail one `lit comment add`) |
 
-All nine are also the payload of `lit quickstart --eject`, written to `<config.ConfigDir()>/templates/<name>` at mode `0o644` (`quickstart_eject.go`).
+All eight are also the payload of `lit quickstart --eject`, written to `<config.ConfigDir()>/templates/<name>` at mode `0o644` (`quickstart_eject.go`).
 
 ---
 

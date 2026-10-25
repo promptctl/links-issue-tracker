@@ -70,8 +70,8 @@ func initBootstrapTestRepo(t *testing.T) (string, workspace.Info) {
 	t.Cleanup(func() { _ = os.Chdir(prevWD) })
 
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), cwdInvocation(&stdout, &stdout, []string{"init", "--skip-hooks", "--skip-agents"})); err != nil {
-		t.Fatalf("Run(init --skip-hooks --skip-agents) error = %v", err)
+	if err := Run(context.Background(), cwdInvocation(&stdout, &stdout, []string{"init", "--skip-hooks"})); err != nil {
+		t.Fatalf("Run(init --skip-hooks) error = %v", err)
 	}
 
 	ws, err := workspace.Resolve(testEnv(), repo)

@@ -40,7 +40,7 @@ Durations in every banner and age line render coarsely: ≥48h → "N days", ≥
 
 ## `lit init`
 
-Flags: `--prefix` (issue ID prefix for a new workspace; default derived from the repository name), `--skip-hooks` (skip git hook installation), `--skip-agents` (skip AGENTS.md/CLAUDE.md update); any positional is a usage error, exit 2 (`init.go`).
+Flags: `--prefix` (issue ID prefix for a new workspace; default derived from the repository name), `--skip-hooks` (skip git hook installation); any positional is a usage error, exit 2 (`init.go`).
 
 `--prefix` is consumed by the workspace ACQUISITION, not by the sequence below: `initLeaf` returns its leaf together with a `wsAcquire` closure over the same parsed flag, and `wsCmdAcquiring` runs that closure in the pipeline's acquire step. An absent flag is the zero `workspace.PrefixRequest` and derivation runs unchanged; a flag the caller typed is minted through `workspace.RequestPrefix` and an unusable value is a `ValidationError`, exit 3.
 
@@ -51,7 +51,6 @@ Sequence (`init.go`):
 3. If the adopt outcome is `failed`, init hard-stops with **no store created**: "could not confirm the workspace state, so init is refusing to create a fresh store: <error>", exit 1 (`init.go`).
 4. Otherwise, unless a remote backlog was adopted, `store.EnsureDatabase` creates the Dolt store (`init.go`).
 5. Hooks (unless skipped): install the managed `pre-push` hook; an error aborts init (`init.go`).
-6. Agents (unless skipped): write the managed sections of `AGENTS.md` and `CLAUDE.md`; an error aborts. Each file reports `created`/`updated`/`unchanged` plus which template layer supplied the section (`project`/`global`/`embedded`) (`init.go`).
 
 ### The adopt decision machine
 
@@ -61,9 +60,9 @@ Planning order (`init_sync.go`): pending-adopt residue check (residue converts e
 
 ### Output and disk footprint
 
-Human output (`init.go`): `Initialized lit workspace` (or `lit workspace already initialized`); then always `  issue_prefix: <value>`, the prefix actually stored rather than the one requested; when adopted, `  Pulled existing backlog from <remote>/<branch> (<build note>)`; then `Updated:` / `Up to date:` / `Skipped:` lines over the entries `pre-push hook`, `AGENTS.md`, `CLAUDE.md` (the latter two annotated `via project|global|embedded`); and always a final guidance line pointing at `lit workflows`.
+Human output (`init.go`): `Initialized lit workspace` (or `lit workspace already initialized`); then always `  issue_prefix: <value>`, the prefix actually stored rather than the one requested; when adopted, `  Pulled existing backlog from <remote>/<branch> (<build note>)`; then `Updated:` / `Up to date:` / `Skipped:` lines over the entries `pre-push hook`; and always a final guidance line pointing at `lit workflows`.
 
-What init writes to disk (`init.go` §1.7): the `links/` storage dir + `config.json` (via workspace resolution, before the handler), the Dolt store, `<git-common-dir>/hooks/pre-push`, the two managed markdown sections, and a sync trace under `<StorageDir>/traces/sync/`. Init sets **no** git config keys. (An `initReport` JSON struct exists — `status`, `workspace_id`, `issue_prefix`, `database_path`, `db_created`, `hooks`, `agents`, `claude`, `agents_source?`, `claude_source?`, `sync` — but no JSON output path renders it; `init.go`.)
+What init writes to disk (`init.go` §1.7): the `links/` storage dir + `config.json` (via workspace resolution, before the handler), the Dolt store, `<git-common-dir>/hooks/pre-push`, and a sync trace under `<StorageDir>/traces/sync/`. Init sets **no** git config keys. (An `initReport` JSON struct exists — `status`, `workspace_id`, `issue_prefix`, `database_path`, `db_created`, `hooks`, `sync` — but no JSON output path renders it; `init.go`.)
 
 ## The `lit sync` family
 
@@ -274,8 +273,8 @@ One row: `install`. Prints `installed <hookPath>` whether or not anything change
 `lit quickstart [work|new|update|done|doctor|review] [--refresh] [--eject[=LIST]] [--force]` (`quickstart_topics.go`). Validation (all exit 2): at most one positional; `--refresh` and `--eject` are mutually exclusive; `--force` only with `--eject`; a topic takes no flags; unknown topics are rejected naming the six valid ones (`cli.go`).
 
 - **Topic mode** renders the topic's template (project > global > embedded), trimmed; topic output never carries the soil section (`quickstart_refresh.go`).
-- **Bare / `--refresh`** renders `quickstart.md`, appending a "soil" section when config `quickstart.soil_mode = true` (default false). `--refresh` additionally runs the same writers `init` uses — hooks and agent files — plus an **inspection-only** pass over the quickstart templates: per template, `absent` (no override), `unchanged` (override identical to embedded), or `skipped`/`customized` (override drifted; left untouched — refresh never overwrites overrides). The human summary groups items into `Refreshed:` / `Skipped:` / `Up to date:`, or `nothing to refresh` (`quickstart_refresh.go`).
-- **`--eject`** copies embedded defaults to the global override path `<config-dir>/templates/<name>`. Selection: bare `--eject` = all nine; otherwise comma-separated short aliases (`agents, hook, quickstart, quickstart-done, quickstart-doctor, quickstart-new, quickstart-review, quickstart-update, quickstart-work`), unknown aliases erroring with the list. All targets are planned first; any existing file aborts the entire write phase (nothing written) unless `--force` overwrites everything. Report lines: `exists` / `skipped` / `ejected`; conflicts end in `MergeConflictError`, exit 5 (`quickstart_eject.go`).
+- **Bare / `--refresh`** renders `quickstart.md`, appending a "soil" section when config `quickstart.soil_mode = true` (default false). `--refresh` additionally runs the same hook writer `init` uses plus an **inspection-only** pass over the quickstart templates: per template, `absent` (no override), `unchanged` (override identical to embedded), or `skipped`/`customized` (override drifted; left untouched — refresh never overwrites overrides). The human summary groups items into `Refreshed:` / `Skipped:` / `Up to date:`, or `nothing to refresh` (`quickstart_refresh.go`).
+- **`--eject`** copies embedded defaults to the global override path `<config-dir>/templates/<name>`. Selection: bare `--eject` = all eight; otherwise comma-separated short aliases (`hook, quickstart, quickstart-done, quickstart-doctor, quickstart-new, quickstart-review, quickstart-update, quickstart-work`), unknown aliases erroring with the list. All targets are planned first; any existing file aborts the entire write phase (nothing written) unless `--force` overwrites everything. Report lines: `exists` / `skipped` / `ejected`; conflicts end in `MergeConflictError`, exit 5 (`quickstart_eject.go`).
 
 Commands emit **breadcrumbs** — `deeper guidance: lit quickstart <topic>` as a trailing output line; an unknown breadcrumb token panics (`quickstart_topics.go`).
 
@@ -293,15 +292,12 @@ A separate, rarer line carries build drift onto the ordinary read commands. `bui
 
 ## Managed sections and embedded templates
 
-`ensureLinksAgentFiles` is the single writer for both agent files (`agents_internal.go`): it loads the `agents-section.md` template (project > global > embedded) and upserts the managed region — markers `<!-- BEGIN LIT INTEGRATION -->`/`<!-- END LIT INTEGRATION -->`, legacy `LINKS` markers migrated — into `AGENTS.md` (created with a `# AGENTS` header) and `CLAUDE.md` (created with no header). Everything outside the markers is preserved; a marker-only migration counts as a change (`agents_internal.go`).
-
 Template resolution (`internal/templates/templates.go`): **project** `<root>/.lit/templates/<name>` > **global** `<config-dir>/templates/<name>` > **embedded**; a layer with an absent or empty file contributes nothing; all-empty is an error.
 
-The nine embedded assets (all also ejectable):
+The eight embedded assets (all also ejectable):
 
 | Asset | Written by | Destination | Role |
 |---|---|---|---|
-| `agents-section.md` | `ensureLinksAgentFiles` | managed region of `AGENTS.md`/`CLAUDE.md` | 10 lines telling the agent to run `lit quickstart` first and naming the command that records each phase move |
 | `pre-push-hook.sh` | `installHooks` | managed region of the git `pre-push` hook | runs `lit sync push --remote <r>` with `LNKS_AUTOMATION_TRIGGER=git-pre-push` and a trace-ref file; on failure prints an `<agent-instructions>` warning with the trace path; always exits 0 so a sync failure never blocks the git push |
 | `quickstart.md` | bare `lit` / `lit quickstart` | stdout | 19-line router over the six topics plus a fastpath (`lit next` / `lit start` / `lit workflows`) |
 | `quickstart-work.md` | `lit quickstart work` | stdout | finding/starting work: `ls`, `next`, `backlog`, `show`, claims-first selection, the checkout a ticket is worked from, `start --take`, recording each phase move |

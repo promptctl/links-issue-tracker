@@ -39,7 +39,7 @@ func gitRepoNamed(t *testing.T, name string) string {
 func runInit(t *testing.T, args ...string) error {
 	t.Helper()
 	var out bytes.Buffer
-	return Run(context.Background(), cwdInvocation(&out, &out, append([]string{"init", "--skip-hooks", "--skip-agents"}, args...)))
+	return Run(context.Background(), cwdInvocation(&out, &out, append([]string{"init", "--skip-hooks"}, args...)))
 }
 
 // The whole contract in one test: a repository lit cannot name is unrunnable,
@@ -167,7 +167,7 @@ func TestInitUsageNamesEveryFlagItAccepts(t *testing.T) {
 	}
 	// The usage line is the caller's map of the flag surface; a flag missing
 	// from it is a flag they will not find.
-	for _, flag := range []string{"--prefix", "--skip-hooks", "--skip-agents"} {
+	for _, flag := range []string{"--prefix", "--skip-hooks"} {
 		if !strings.Contains(err.Error(), flag) {
 			t.Fatalf("usage error = %v, want it to name %s", err, flag)
 		}
@@ -292,7 +292,7 @@ func TestPrefixSetRepairsAStoredIllegalPrefix(t *testing.T) {
 	}
 
 	// init --prefix is not a second door onto the repair: it cannot see the ids.
-	out, err = runLit("init", "--skip-hooks", "--skip-agents", "--prefix", "myrepo")
+	out, err = runLit("init", "--skip-hooks", "--prefix", "myrepo")
 	if err == nil || !strings.Contains(err.Error(), "lit prefix set myrepo") {
 		t.Fatalf("Run(init --prefix) error = %v, want the refusal naming `lit prefix set myrepo`\n%s", err, out)
 	}
@@ -379,7 +379,7 @@ func TestInitReportsThePrefixItActuallyStored(t *testing.T) {
 
 	var out bytes.Buffer
 	err := Run(context.Background(), cwdInvocation(&out, &out,
-		[]string{"init", "--skip-hooks", "--skip-agents", "--prefix", "payment_service"}))
+		[]string{"init", "--skip-hooks", "--prefix", "payment_service"}))
 	if err != nil {
 		t.Fatalf("Run(init --prefix payment_service) error = %v\n%s", err, out.String())
 	}

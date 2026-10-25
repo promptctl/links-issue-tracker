@@ -63,7 +63,7 @@ func TestAReceiveThatMergesARefusedPushPushesTheMerge(t *testing.T) {
 	runGit(t, alpha, "add", "-A")
 	runGit(t, alpha, "commit", "-m", "seed")
 	runGit(t, alpha, "push", "origin", "HEAD")
-	mustLit(alpha, "init", "--skip-hooks", "--skip-agents")
+	mustLit(alpha, "init", "--skip-hooks")
 	epic := newEpicViaLit(t, alpha, self, quiet, "shared-epic")
 	ticket := issueIDFromLitNew(t, mustLit(alpha, "new", "--title", "shared-ticket", "--topic", "demo", "--type", "task", "--parent", epic), "shared-ticket")
 	mustLit(alpha, "sync", "push", "--set-upstream")
@@ -72,7 +72,7 @@ func TestAReceiveThatMergesARefusedPushPushesTheMerge(t *testing.T) {
 	runGit(t, base, "clone", remote, "bravo")
 	runGit(t, bravo, "config", "user.email", "b@b.co")
 	runGit(t, bravo, "config", "user.name", "bravo")
-	mustLit(bravo, "init", "--skip-hooks", "--skip-agents")
+	mustLit(bravo, "init", "--skip-hooks")
 	observer := newRemoteObserver(t, base, remote, self, xdgConfigHome)
 
 	mustLit(alpha, "update", ticket, "--description", "alpha-description")

@@ -84,7 +84,7 @@ func TestBurstOfMutationsNeverHitsEngineReadOnlyCollision(t *testing.T) {
 	runGit(t, root, "push", "-u", "origin", branch)
 
 	if out, err := runLit(t, root, self, isolatedEnv(xdgConfigHome, "1"),
-		"init", "--skip-hooks", "--skip-agents"); err != nil {
+		"init", "--skip-hooks"); err != nil {
 		t.Fatalf("lit init: %v\noutput:\n%s", err, out)
 	}
 	// The epic the burst files into is part of the bootstrap, made with

@@ -42,7 +42,7 @@ func TestAReceiveThatFetchedAndKeepsStoppingReachesTheFailureSurface(t *testing.
 	runGit(t, producer, "add", "-A")
 	runGit(t, producer, "commit", "-m", "seed")
 	runGit(t, producer, "push", "origin", "HEAD")
-	runCLIInDir(t, producer, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, producer, "init", "--skip-hooks")
 	epicID := newEpicInDir(t, producer, "shared-epic")
 	runCLIInDir(t, producer, "new", "--title", "first-ticket", "--topic", "demo", "--type", "task", "--parent", epicID)
 	runCLIInDir(t, producer, "sync", "push", "--set-upstream")
@@ -51,7 +51,7 @@ func TestAReceiveThatFetchedAndKeepsStoppingReachesTheFailureSurface(t *testing.
 	runGit(t, base, "clone", remote, "bravo")
 	runGit(t, consumer, "config", "user.email", "b@b.co")
 	runGit(t, consumer, "config", "user.name", "bravo")
-	runCLIInDir(t, consumer, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, consumer, "init", "--skip-hooks")
 	runCLIInDir(t, producer, "new", "--title", "second-ticket", "--topic", "demo", "--type", "task", "--parent", epicID)
 	runCLIInDir(t, producer, "sync", "push")
 
@@ -281,7 +281,7 @@ func unsettlingCheckout(t *testing.T) (context.Context, workspace.Info, liveClon
 	runGit(t, dir, "add", "-A")
 	runGit(t, dir, "commit", "-m", "seed")
 	runGit(t, dir, "push", "origin", "HEAD")
-	runCLIInDir(t, dir, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, dir, "init", "--skip-hooks")
 	runCLIInDir(t, dir, "sync", "push", "--set-upstream")
 	ws, err := workspace.Resolve(testEnv(), dir)
 	if err != nil {

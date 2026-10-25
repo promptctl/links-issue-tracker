@@ -33,7 +33,7 @@ func TestNextRoutesEachCheckoutToItsOwnClaimedWork(t *testing.T) {
 	runGit(t, alpha, "add", "-A")
 	runGit(t, alpha, "commit", "-m", "seed")
 	runGit(t, alpha, "push", "origin", "HEAD")
-	runCLIInDir(t, alpha, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, alpha, "init", "--skip-hooks")
 
 	// Creation order sets rank: epicB and epicC both outrank epicA, so a
 	// claims-blind selector would never reach epicA's remaining work while
@@ -59,7 +59,7 @@ func TestNextRoutesEachCheckoutToItsOwnClaimedWork(t *testing.T) {
 	runGit(t, base, "clone", remote, "bravo")
 	runGit(t, bravo, "config", "user.email", "b@b.co")
 	runGit(t, bravo, "config", "user.name", "bravo")
-	runCLIInDir(t, bravo, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, bravo, "init", "--skip-hooks")
 	runCLIInDir(t, bravo, "start", b1)
 	runCLIInDir(t, bravo, "sync", "push")
 
@@ -83,7 +83,7 @@ func TestNextRoutesEachCheckoutToItsOwnClaimedWork(t *testing.T) {
 	runGit(t, base, "clone", remote, "charlie")
 	runGit(t, charlie, "config", "user.email", "c@c.co")
 	runGit(t, charlie, "config", "user.name", "charlie")
-	runCLIInDir(t, charlie, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, charlie, "init", "--skip-hooks")
 
 	charlieNext := runCLIInDir(t, charlie, "next")
 	if !strings.Contains(charlieNext, c1) {

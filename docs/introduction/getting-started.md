@@ -15,12 +15,10 @@ From inside any git repository (a scratch repo is fine):
 lit init
 ```
 
-This does three things:
+This does two things:
 
 - Creates the issue store under `$(git rev-parse --git-common-dir)/links/` — inside your
   clone's git directory, shared by all of its worktrees, and never committed to your repo.
-- Adds a managed `lit` section to `AGENTS.md` and `CLAUDE.md` so coding agents working in
-  the repo discover the tracker on their own.
 - Installs a git `pre-push` hook that keeps issue data synced (skip with `--skip-hooks`).
 
 `lit init` is idempotent — running it again reconciles the managed files rather than

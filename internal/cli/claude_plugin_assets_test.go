@@ -81,6 +81,26 @@ func TestClaudePluginShipsNextSkill(t *testing.T) {
 	}
 }
 
+// TestClaudePluginQuickstartSkillCarriesTheOpeningInstruction pins that the
+// quickstart skill's description is what tells an agent in a lit repository to
+// run `lit quickstart` first: the harness loads descriptions into every
+// session, so the instruction lives there rather than in a file lit writes
+// into the repository. [LAW:verifiable-goals]
+func TestClaudePluginQuickstartSkillCarriesTheOpeningInstruction(t *testing.T) {
+	t.Parallel()
+	skillPath := filepath.Join(mustRepoRoot(t), "claude-plugin", "skills", "quickstart", "SKILL.md")
+	content, err := os.ReadFile(skillPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%s) error = %v", skillPath, err)
+	}
+	if !strings.HasPrefix(string(content), "---\nname: quickstart\ndescription:") {
+		t.Fatalf("skill frontmatter missing/misplaced at byte 0: %q", content[:min(len(content), 80)])
+	}
+	if !strings.Contains(string(content), "Start by running `lit quickstart`") {
+		t.Fatalf("quickstart skill does not tell the agent to run `lit quickstart`")
+	}
+}
+
 // validationReport is the part of `claude plugin validate --json`'s report this
 // test judges. Manifest.Type is checked against the target, so a report whose
 // shape moved decodes to a mismatch rather than to empty, passing finding

@@ -41,7 +41,7 @@ func TestCommentRemove(t *testing.T) {
 		}
 	}
 
-	if _, err := run("init", "--skip-hooks", "--skip-agents"); err != nil {
+	if _, err := run("init", "--skip-hooks"); err != nil {
 		t.Fatalf("init error = %v", err)
 	}
 

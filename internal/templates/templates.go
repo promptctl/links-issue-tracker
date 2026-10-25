@@ -15,7 +15,6 @@ import (
 )
 
 const (
-	AgentsSectionTemplateName    = "agents-section.md"
 	PrePushHookTemplateName      = "pre-push-hook.sh"
 	QuickstartTemplateName       = "quickstart.md"
 	QuickstartWorkTemplateName   = "quickstart-work.md"
@@ -31,7 +30,6 @@ var (
 	defaultsFS embed.FS
 
 	allNames = []string{
-		AgentsSectionTemplateName,
 		PrePushHookTemplateName,
 		QuickstartTemplateName,
 		QuickstartWorkTemplateName,
@@ -52,7 +50,6 @@ var (
 		"quickstart-done":   QuickstartDoneTemplateName,
 		"quickstart-doctor": QuickstartDoctorTemplateName,
 		"quickstart-review": QuickstartReviewTemplateName,
-		"agents":            AgentsSectionTemplateName,
 		"hook":              PrePushHookTemplateName,
 	}
 )
@@ -65,7 +62,7 @@ func Names() []string {
 }
 
 // ResolveShortName returns the canonical filename for a short alias
-// (e.g. "quickstart", "agents", "hook"). Returns an error for unknown aliases.
+// (e.g. "quickstart", "hook"). Returns an error for unknown aliases.
 func ResolveShortName(alias string) (string, error) {
 	name, ok := shortAliases[strings.TrimSpace(alias)]
 	if !ok {
