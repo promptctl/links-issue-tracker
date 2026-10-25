@@ -165,13 +165,15 @@ func TestImportGateJudgesTheFilesReferences(t *testing.T) {
 			}, map[string]model.IssueType{"lit-e": model.TypeEpic, "lit-f": model.TypeEpic, "lit-b": model.TypeTask, "lit-x": model.TypeTask})
 			return err
 		}, ""},
-		{"bulk: two update documents under one existing epic, one blocked by the other, are the write's to judge", func() error {
+		{"bulk: an update document moved under the epic its own blocked_by names", func() error {
+			// The edge may already be held, which the write would not add, so
+			// only the file's hierarchy stops the move from making the shape.
 			_, err := ParseBulkFile([]BulkIssueSpec{
-				{ID: "lit-a", Parent: ptr("lit-epic")},
-				{ID: "lit-b", Parent: ptr("lit-epic"), BlockedBy: ptr([]string{"lit-a"})},
-			}, map[string]model.IssueType{"lit-epic": model.TypeEpic, "lit-a": model.TypeTask, "lit-b": model.TypeTask})
+				{ID: "lit-e", Parent: ptr("")},
+				{ID: "lit-x", Parent: ptr("lit-e"), BlockedBy: ptr([]string{"lit-e"})},
+			}, map[string]model.IssueType{"lit-e": model.TypeEpic, "lit-x": model.TypeTask})
 			return err
-		}, ""},
+		}, `bulk: doc 1 (id "lit-x") blocked_by "lit-e"` + sameEpic},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -330,14 +330,6 @@ func rejectBlocksWithinFileEpics(format string, refs fileReferences, existingTyp
 	}
 	for i, deps := range refs.blockedBy {
 		for _, j := range deps {
-			// Two update documents' issues may already hold the edge between
-			// them, and a held edge is no write: a reparent can leave one inside
-			// an epic, and restating it changes nothing. Only the write reads
-			// which edges are held, so it judges the ones it adds. An edge with a
-			// create at either end is new.
-			if refs.docs[i].id != "" && refs.docs[j].id != "" {
-				continue
-			}
 			if err := RejectBlocksWithinEpic(tree, node(i), node(j)); err != nil {
 				return fmt.Errorf("%s: %s blocked_by %q: %w", format, refs.docs[i].name, refs.docs[j].ref(), err)
 			}

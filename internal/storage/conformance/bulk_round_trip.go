@@ -13,11 +13,9 @@ import (
 // documents stating a selection's editable state, applied unedited, write
 // nothing — no event, no updated_at, no edge — and are reported as held, not
 // updated; the same documents with one title edited move exactly that title on
-// exactly that issue. The selection holds two shapes the store keeps and no
-// file may write: an epic waiting on a leaf of another epic that waits on a
-// leaf of the first, a loop only through the hierarchy, and two leaves of one
-// epic, one blocked by the other, which a reparent left behind. Restating them
-// writes nothing, so neither is refused.
+// exactly that issue. The selection holds an epic waiting on a leaf of another
+// epic that waits on a leaf of the first: a loop only through the hierarchy,
+// which the store keeps and restating it writes nothing, so it is no refusal.
 func aBulkFileReadOutOfTheStoreGoesBackInAsANoOp(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	clk.Pin(earlierInstant)
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
@@ -29,16 +27,12 @@ func aBulkFileReadOutOfTheStoreGoesBackInAsANoOp(t *testing.T, ctx context.Conte
 		Description: "first line\n\nsecond paragraph", Prompt: "a prompt", Plan: "a plan",
 		Assignee: "ada", Lane: "a-lane", Labels: []string{"alpha", "beta"},
 	})
-	drifted := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "drifted", Topic: "core", ParentID: elsewhere.ID})
-	for _, edge := range [][2]string{{full.ID, blocker.ID}, {elsewhere.ID, full.ID}, {full.ID, drifted.ID}} {
+	for _, edge := range [][2]string{{full.ID, blocker.ID}, {elsewhere.ID, full.ID}} {
 		if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: edge[0], DstID: edge[1], Type: model.RelBlockedBy, CreatedBy: "ada"}); err != nil {
 			t.Fatalf("AddRelation(%s blocked by %s) error = %v", edge[0], edge[1], err)
 		}
 	}
-	if _, err := st.SetParent(ctx, storage.SetParentInput{ChildID: drifted.ID, ParentID: epic.ID, CreatedBy: "ada"}); err != nil {
-		t.Fatalf("SetParent(%s under %s) error = %v", drifted.ID, epic.ID, err)
-	}
-	ids := []string{epic.ID, elsewhere.ID, blocker.ID, drifted.ID, full.ID}
+	ids := []string{epic.ID, elsewhere.ID, blocker.ID, full.ID}
 	// A write the round trip makes would stamp this instant, so an updated_at
 	// it bumped reads as different from the one the setup left.
 	clk.Pin(laterInstant)
