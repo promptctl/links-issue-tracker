@@ -226,6 +226,7 @@ var cases = []engineCase{
 	{"bulk_apply_compensates_a_failed_batch", bulkApplyCompensatesFailure},
 	{"a_bulk_file_failing_at_an_update_names_what_it_kept", aBulkFileFailingAtAnUpdateNamesWhatItKept},
 	{"a_bulk_file_reparents_its_update_documents", aBulkFileReparentsItsUpdateDocuments},
+	{"a_bulk_file_read_out_of_the_store_goes_back_in_as_a_no_op", aBulkFileReadOutOfTheStoreGoesBackInAsANoOp},
 	{"a_bulk_file_stating_a_parent_cycle_writes_nothing", aBulkFileStatingAParentCycleWritesNothing},
 	{"a_refused_reparent_applies_no_document", aRefusedReparentAppliesNoDocument},
 	{"a_bulk_file_is_judged_on_the_hierarchy_it_ends_with", aBulkFileIsJudgedOnTheHierarchyItEndsWith},

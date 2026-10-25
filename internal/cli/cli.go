@@ -635,14 +635,11 @@ func listLeaf(surface listSurface) (leaf[listScope], *pathFlag) {
 		// Parsed before the query runs and before anything prints: a rejection that
 		// had already emitted rows would be a partial answer, which is the silent
 		// drop this boundary exists to prevent, wearing an error message.
-		columns, err := parseColumnSelection(*columnsExpr)
+		formatName, render, err := parseListFormat(*format, *columnsExpr)
 		if err != nil {
 			return err
 		}
-		render, err := parseListFormat(*format)
-		if err != nil {
-			return err
-		}
+		telemetry.Set(ctx, "ls.format", formatName)
 		visited := map[string]bool{}
 		fs.Visit(func(f *pflag.Flag) { visited[f.Name] = true })
 		// A bad member of a set filter is a validation refusal: it repeats on
@@ -750,11 +747,7 @@ func listLeaf(surface listSurface) (leaf[listScope], *pathFlag) {
 		if err != nil {
 			return err
 		}
-		cells, err := listDerivedColumns(ctx, st, policy, columns, issues)
-		if err != nil {
-			return err
-		}
-		return render(inv.Stdout, issues, columns, cells)
+		return render(ctx, inv.Stdout, st, policy, issues)
 	}}, at
 }
 
@@ -2327,6 +2320,7 @@ func runImportBulk(ctx context.Context, stdout io.Writer, ap *app.App, data []by
 	result, err := ap.Store.BulkApply(ctx, prefix.Value(), actor, specs)
 	telemetry.Set(ctx, "import.created", len(result.Created))
 	telemetry.Set(ctx, "import.updated", len(result.Updated))
+	telemetry.Set(ctx, "import.fields_held", len(result.FieldsHeld))
 	telemetry.Set(ctx, "import.reparented", len(result.Reparented))
 	telemetry.Set(ctx, "import.parent_held", len(result.ParentHeld))
 	telemetry.Set(ctx, "import.reparents_undone", len(result.ReparentsUndone))
@@ -2349,6 +2343,11 @@ func runImportBulk(ctx context.Context, stdout io.Writer, ap *app.App, data []by
 	}
 	if err := printIDs(stdout, fmt.Sprintf("updated %d issues", len(result.Updated)), result.Updated); err != nil {
 		return err
+	}
+	if len(result.FieldsHeld) > 0 {
+		if err := printIDs(stdout, fmt.Sprintf("%d issues already had the fields the file states", len(result.FieldsHeld)), result.FieldsHeld); err != nil {
+			return err
+		}
 	}
 	// A file that states no parent or blocked_by on an update changed no such
 	// set, so there is nothing to report, as with an order it did not state.

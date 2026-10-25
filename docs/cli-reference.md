@@ -349,7 +349,7 @@ lit ls [--at <store-dir>] [--ids <csv>]... [--parent <csv>]... [--search <text>]
        [--updated-after <rfc3339>] [--updated-before <rfc3339>]
        [--include-archived] [--include-deleted]
        [--sort rank:asc,updated_at:desc] [--limit <n>] [--columns <csv>]
-       [--format lines|table]
+       [--format lines|table|yaml]
 ```
 
 General-purpose listing, ranked by default. `--at <store-dir>` points `ls` at a
@@ -433,6 +433,18 @@ any row is fetched or printed. Watch for near-misses: the status column is spell
 `state`, `lane` is a `lit show --field` name but not a column, and `description`,
 `prompt` and `plan` are multi-line, so they are read with `--field` rather than projected into
 a table.
+
+`--format yaml` prints each listed issue as a `lit import` update document instead
+of a row: its `id` and every key an update document may set, at the value the issue
+holds — `blocked_by: []` included, and `parent` whenever the issue has one — and
+never `topic` or `rank`.
+That is the read half of editing tickets in place: `lit ls --query <sel> --format
+yaml > f.yaml`, edit f.yaml, `lit import --path f.yaml`. Imported unedited, the file
+changes nothing and the import reports every document as already holding its fields;
+edited, it changes only the values edited. A file that would leave a blocked_by inside
+one epic is refused whole, so a selection holding one that a reparent left behind goes
+back in once that blocker is dropped from the file. It prints every editable field, so
+`--columns` with it is a usage error.
 
 The `state` cell names why a closed ticket closed: `closed:duplicate`,
 `closed:superseded`, `closed:obsolete` or `closed:wontfix` for a `lit close`, and a

@@ -153,6 +153,27 @@ func TestImportGateJudgesTheFilesReferences(t *testing.T) {
 			_, err := ParseBulkFile([]BulkIssueSpec{{ID: "lit-real-1", BlockedBy: ptr([]string{"lit-real-2"})}}, nil)
 			return err
 		}, ""},
+		{"tree: an epic waiting on a leaf of another epic that waits on a leaf of the first is accepted", func() error {
+			_, err := ParseImportTreeFile(loopThroughTheHierarchy())
+			return err
+		}, ""},
+		{"bulk: the same loop stated by update documents is accepted", func() error {
+			_, err := ParseBulkFile([]BulkIssueSpec{
+				{ID: "lit-e", Parent: ptr(""), BlockedBy: ptr([]string{"lit-x"})},
+				{ID: "lit-b", Parent: ptr("lit-e"), BlockedBy: ptr([]string{})},
+				{ID: "lit-x", Parent: ptr("lit-f"), BlockedBy: ptr([]string{"lit-b"})},
+			}, map[string]model.IssueType{"lit-e": model.TypeEpic, "lit-f": model.TypeEpic, "lit-b": model.TypeTask, "lit-x": model.TypeTask})
+			return err
+		}, ""},
+		{"bulk: an update document moved under the epic its own blocked_by names", func() error {
+			// The edge may already be held, which the write would not add, so
+			// only the file's hierarchy stops the move from making the shape.
+			_, err := ParseBulkFile([]BulkIssueSpec{
+				{ID: "lit-e", Parent: ptr("")},
+				{ID: "lit-x", Parent: ptr("lit-e"), BlockedBy: ptr([]string{"lit-e"})},
+			}, map[string]model.IssueType{"lit-e": model.TypeEpic, "lit-x": model.TypeTask})
+			return err
+		}, `bulk: doc 1 (id "lit-x") blocked_by "lit-e"` + sameEpic},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -171,6 +192,35 @@ func TestImportGateJudgesTheFilesReferences(t *testing.T) {
 				t.Errorf("gate error =\n  %s\nwant\n  %s", err, c.want)
 			}
 		})
+	}
+}
+
+// loopThroughTheHierarchy is a tree file whose epic e waits on leaf x of epic
+// f, which waits on leaf b of e: a loop through the hierarchy, with none in
+// either relation alone.
+func loopThroughTheHierarchy() []ImportTreeSpec {
+	tree := func(localID, issueType, parent string, blockedBy ...string) ImportTreeSpec {
+		return ImportTreeSpec{LocalID: localID, Title: localID, IssueType: issueType, Topic: "core", Parent: parent, BlockedBy: blockedBy}
+	}
+	return []ImportTreeSpec{tree("e", "epic", "", "x"), tree("f", "epic", ""), tree("b", "task", "e"), tree("x", "task", "f", "b")}
+}
+
+// A blocked_by orders a file's creates only where the hierarchy allows: through
+// a loop in it, every create still comes after the parent it is minted under,
+// and the epic still comes after the leaf it waits on.
+func TestWriteOrderPutsEveryParentFirstThroughALoopInTheHierarchy(t *testing.T) {
+	creates, err := ParseImportTreeFile(loopThroughTheHierarchy())
+	if err != nil {
+		t.Fatalf("ParseImportTreeFile error = %v", err)
+	}
+	at := make(map[string]int, len(creates))
+	for i, create := range creates {
+		at[create.LocalID] = i
+	}
+	for _, pair := range [][2]string{{"e", "b"}, {"f", "x"}, {"x", "e"}} {
+		if at[pair[0]] > at[pair[1]] {
+			t.Errorf("%s is written after %s; write order %v", pair[0], pair[1], at)
+		}
 	}
 }
 

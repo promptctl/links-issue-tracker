@@ -1363,16 +1363,16 @@ func planFieldUpdate(baseline model.Issue, in storage.UpdateIssueInput, actor st
 	if err != nil {
 		return fieldWrite{}, err
 	}
-	// [LAW:dataflow-not-control-flow] replaceLabels asks whether the patch
-	// STATED a label set, which is not the question the diff answers: a patch
-	// restating the set it already had rewrites the label rows — authorship and
-	// timestamps included — while changing nothing history would report.
-	return fieldWrite{issue: issue, replaceLabels: in.Labels != nil, actor: actor, reason: in.Reason, changes: changes}, nil
+	// replaceLabels asks whether the label set MOVED, not whether the patch
+	// stated one: a restated set keeps its rows, authorship and timestamps
+	// included, since rewriting them would change who added a label with no
+	// change row to say so.
+	return fieldWrite{issue: issue, replaceLabels: !slices.Equal(baseline.Labels, issue.Labels), actor: actor, reason: in.Reason, changes: changes}, nil
 }
 
-// applyFieldsTx writes a planned field mutation against tx: the issue UPDATE,
-// the label replacement (when requested), and the change event (when any field
-// moved). It owns only writes — every decision was made in planFieldUpdate — so
+// applyFieldsTx writes a planned field mutation that moved at least one field
+// against tx: the issue UPDATE, the label replacement (when the set moved), and
+// the change event. It owns only writes — every decision was made in planFieldUpdate — so
 // it composes into any transaction a caller already holds. [LAW:single-enforcer]
 // The UPDATE sets only the columns the field axis owns: the lifecycle columns
 // (status, closed_at, archived_at, deleted_at) belong to the transition and
@@ -1393,12 +1393,7 @@ func (s *Store) applyFieldsTx(ctx context.Context, tx *sql.Tx, w fieldWrite) err
 			return err
 		}
 	}
-	if len(w.changes) > 0 {
-		if err := insertEventTx(ctx, tx, event); err != nil {
-			return err
-		}
-	}
-	return nil
+	return insertEventTx(ctx, tx, event)
 }
 
 // [LAW:dataflow-not-control-flow] Apply is the single execution path for issue-record changes.
@@ -1439,14 +1434,16 @@ func (s *Store) Apply(ctx context.Context, id string, c storage.Change) (storage
 		baseline = lw.postIssue()
 		handover = lw.handover()
 	}
-	var fw fieldWrite
-	hasFields := !c.Fields.IsEmpty()
-	if hasFields {
-		fw, err = planFieldUpdate(baseline, c.Fields, actor)
-		if err != nil {
-			return storage.Applied{}, err
-		}
+	// Every patch is planned, an empty one included, and the field axis is
+	// written when the plan moved a field: a patch restating what the issue
+	// holds writes no row, stamps no updated_at, and makes no commit, which is
+	// what lets a bulk file read out of `lit ls --format yaml` go back in
+	// unedited as a no-op. [LAW:dataflow-not-control-flow]
+	fw, err := planFieldUpdate(baseline, c.Fields, actor)
+	if err != nil {
+		return storage.Applied{}, err
 	}
+	hasFields := len(fw.changes) > 0
 	needsActionWrite := lw != nil && !lw.isNoop()
 	// Test-only injection point for the plan→apply window; nil in production.
 	if hook := s.applyPreMutationHookForTest; hook != nil {
@@ -1476,7 +1473,7 @@ func (s *Store) Apply(ctx context.Context, id string, c storage.Change) (storage
 	for _, observe := range s.observers {
 		observe(c, issue)
 	}
-	return storage.Applied{Issue: issue, Handover: handover}, nil
+	return storage.Applied{Issue: issue, Handover: handover, Fields: fw.changes}, nil
 }
 
 // AddComment returns the commented-on issue alongside the comment: it already

@@ -85,7 +85,9 @@ func NewIDMapping(localID, realID string) IDMapping {
 // which a landed file leaves empty; BlockedBySet, BlockedByHeld and
 // BlockedByUndone say the same of the update documents' blocked_by sets;
 // EdgesAdded and EdgesRemoved count every edge the file wrote, a create's
-// blocked_by included; Updated lists the real IDs of every updated issue, in the order they were applied; Ranked is the RankSet
+// blocked_by included; Updated lists the real IDs of the issues whose fields an
+// update document moved, and FieldsHeld those whose fields already were what
+// the document states, each in the order they were applied; Ranked is the RankSet
 // the file's `rank: top` documents made, with no resolutions when the file
 // states no rank. A refused BulkApply returns its AfterRollback beside the
 // error, so the caller reads one account of the batch whether it landed or
@@ -101,7 +103,20 @@ type BulkApplyResult struct {
 	EdgesAdded      int
 	EdgesRemoved    int
 	Updated         []string
+	FieldsHeld      []string
 	Ranked          RankSetResult
+}
+
+// RecordUpdate is the account of one applied update document: updated when its
+// patch moved a field, held when the issue already held every field it states.
+// [LAW:one-source-of-truth] both engines sort an update by the change rows
+// their own write made, here.
+func (r *BulkApplyResult) RecordUpdate(applied Applied) {
+	if len(applied.Fields) == 0 {
+		r.FieldsHeld = append(r.FieldsHeld, applied.Issue.ID)
+		return
+	}
+	r.Updated = append(r.Updated, applied.Issue.ID)
 }
 
 // RecordEdges is the account of a written edge step: the update documents'

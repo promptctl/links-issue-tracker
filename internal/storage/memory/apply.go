@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -59,7 +60,7 @@ func (e *Engine) apply(id string, c storage.Change) (storage.Applied, error) {
 	for _, observe := range e.observers {
 		observe(c, issue)
 	}
-	return storage.Applied{Issue: issue, Handover: handover}, nil
+	return storage.Applied{Issue: issue, Handover: handover, Fields: patch.changes}, nil
 }
 
 // planLifecycle plans whichever axis the action drives. The three subsets
@@ -201,19 +202,21 @@ func (e *Engine) validateRedirectTarget(closing model.Issue) error {
 }
 
 // fieldPatch is a planned field write: the post-patch issue, whether the patch
-// stated the whole label set, and the event it owes.
+// moved the label set, the change rows it made, and the event it owes.
 //
-// statesLabels is not the same question as "did the labels change". A patch
-// that restates the set it already had rewrites the label rows — authorship
-// and timestamps included — while a patch that never mentions labels leaves
-// them exactly as some earlier writer left them.
+// movesLabels is "did the label set change", not "did the patch state one": a
+// patch restating the set the issue already has leaves the rows exactly as
+// their writers left them, authorship and timestamps included, as a patch that
+// never mentions labels does. Rewriting them would change who added a label
+// with no change row to say so.
 type fieldPatch struct {
-	issue        model.Issue
-	statesLabels bool
-	// actor authors the label rows a stated set writes, so the patch's one
+	issue       model.Issue
+	movesLabels bool
+	// actor authors the label rows a moved set writes, so the patch's one
 	// author is the one this write records.
-	actor  string
-	events []eventSpec
+	actor   string
+	changes []model.FieldChange
+	events  []eventSpec
 }
 
 // planFields computes the post-patch issue and the field-change rows it owes,
@@ -228,7 +231,7 @@ func planFields(baseline model.Issue, in storage.UpdateIssueInput, actor string,
 	if err != nil {
 		return fieldPatch{}, err
 	}
-	patch := fieldPatch{issue: issue, statesLabels: in.Labels != nil, actor: actor}
+	patch := fieldPatch{issue: issue, movesLabels: !slices.Equal(baseline.Labels, issue.Labels), actor: actor, changes: changes}
 	// An empty patch plans no change without anyone testing for one: no field
 	// moved, so there are no rows, so there is no event to owe.
 	if len(changes) == 0 {
@@ -301,11 +304,11 @@ func (e *Engine) writeIssue(rec *record, issue model.Issue) {
 	rec.status = statusViewOf(issue)
 }
 
-// writeLabels replaces the label set when — and only when — the patch stated
-// it. An unstated set keeps its rows, so a title edit does not silently
-// reassign authorship of every label on the issue.
+// writeLabels replaces the label set when — and only when — the patch moved
+// it. A set it left as it was keeps its rows, so neither a title edit nor a
+// restated set silently reassigns authorship of every label on the issue.
 func (e *Engine) writeLabels(issueID string, patch fieldPatch, now time.Time) {
-	if !patch.statesLabels {
+	if !patch.movesLabels {
 		return
 	}
 	e.setLabels(issueID, patch.issue.Labels, now, patch.actor)
