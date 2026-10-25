@@ -114,7 +114,7 @@ func readReceivedRefs(ws workspace.Info) []byte {
 // [LAW:one-source-of-truth] workspaceSyncRemote is the one selection rule, so
 // the remote asked here is the remote the fetch would have used.
 func askRemote(ctx context.Context, env environ.Env, ws workspace.Info, gitRemotes []workspace.GitRemote) (remoteAdvertisement, error) {
-	remoteName, ok, err := workspaceSyncRemote(ctx, env, ws, "", gitRemotes)
+	remoteName, ok, err := workspaceSyncRemote(ws, "")
 	if err != nil {
 		return remoteAdvertisement{}, err
 	}
@@ -183,7 +183,7 @@ const pushProofDeadline = 10 * time.Second
 // for the receive. [LAW:parse-dont-validate] the non-zero advertisement is the
 // proof; nothing downstream re-asks.
 func provePushedAdvertisement(ctx context.Context, env environ.Env, syncer storage.Syncer, ws workspace.Info, remoteName storage.RemoteName, gitRemotes []workspace.GitRemote) (proven remoteAdvertisement, unproven string) {
-	receiveRemote, ok, err := workspaceSyncRemote(ctx, env, ws, "", gitRemotes)
+	receiveRemote, ok, err := workspaceSyncRemote(ws, "")
 	if err != nil {
 		return remoteAdvertisement{}, "resolve the remote the automatic receive asks: " + err.Error()
 	}

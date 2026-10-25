@@ -106,7 +106,7 @@ Cadence semantics (`config.go`): `on-push` mirrors only when the managed pre-pus
 
 A `Location` is pure path geometry derived from the storage dir (`workspace.go`): `StorageDir` = `<git-common-dir>/links`, `ConfigPath` = `<storage>/config.json`, `DatabasePath` = `<storage>/dolt`, `DoltRepoPath` = `<storage>/dolt/links`.
 
-`Locate(cwd)` (`workspace.go`): run `git rev-parse --git-common-dir` anchored at cwd; join a relative answer onto the absolute cwd (not the repo toplevel); canonicalize through `filepath.EvalSymlinks`; append `links`. `Resolve(cwd)` adds: `git rev-parse --show-toplevel` for the root, `git rev-parse --git-dir` for the checkout's **private** git dir (deliberately not symlink-canonicalized, `workspace.go`), `MkdirAll` on the storage dir, and load-or-create of `config.json` (`workspace.go`). All geometry git calls use `context.Background()` deliberately.
+`Locate(cwd)` and `Resolve(cwd)` share one git query, `git rev-parse --show-toplevel --git-common-dir`, run in cwd (`workspace.go`). git prints the two paths one per line, unquoted, and a path may hold a newline, so the output is cut into a toplevel and a common dir every possible way and the one cut whose two paths both name an existing directory is the answer; no such cut, or more than one, is an error (`workspace.go`). A relative common dir is joined onto the absolute cwd (not the repo toplevel); `Locate` canonicalizes it through `filepath.EvalSymlinks` and appends `links`. `Resolve` adds: the toplevel as the root, the checkout's **private** git dir read from the `.git` entry at the root — the directory itself, or the path a gitfile names after `gitdir: ` (read whole, trailing `\n`/`\r` removed, relative to the root), symlink-canonicalized — `MkdirAll` on the storage dir, load-or-create of `config.json`, and the checkout's `Remotes` (`workspace.go`). The geometry query uses `context.Background()` deliberately.
 
 Git-error classification (`workspace.go`): only an `exec.ExitError` with exit code 128 maps to the sentinel `ErrNotGitRepo`; git missing from PATH, signal-killed git, or any other exit code is surfaced with context.
 
@@ -118,7 +118,7 @@ Because everything hangs off the git *common* dir, all worktrees of one reposito
 
 ### Multi-checkout enumeration
 
-`LiveCheckouts(cwd)` runs `git worktree list --porcelain -z` — any failure names the git ≥ 2.36 `-z` requirement (`internal/workspace/checkouts.go`). Records that are `prunable` or `bare` are filtered out; for each survivor the private git dir is located and its stream token read; any failure fails the whole enumeration (`checkouts.go`). The `-z` parser cuts each NUL-separated field on the first space, requires the record to open with `worktree <path>`, recognizes `branch` (stripped of `refs/heads/`), `prunable`, and `bare`, ignores `detached`/`locked`/`HEAD`/others, and errors on zero records (`checkouts.go`). `Checkout{Stream, Path, Branch}`; `Branch` is empty for detached HEAD.
+`LiveCheckouts(cwd)` runs `git worktree list --porcelain -z` — any failure names the git ≥ 2.36 `-z` requirement (`internal/workspace/checkouts.go`). Records that are `prunable` or `bare` are filtered out; for each survivor the private git dir is read from the `.git` entry at its path, by the same function `Resolve` uses, with no git subprocess per worktree, and its stream token read; any failure fails the whole enumeration (`checkouts.go`). The `-z` parser cuts each NUL-separated field on the first space, requires the record to open with `worktree <path>`, recognizes `branch` (stripped of `refs/heads/`), `prunable`, and `bare`, ignores `detached`/`locked`/`HEAD`/others, and errors on zero records (`checkouts.go`). `Checkout{Stream, Path, Branch}`; `Branch` is empty for detached HEAD.
 
 ### Stream identity
 
@@ -126,7 +126,7 @@ Each checkout's identity is a token in the file `lit-stream` inside its private 
 
 ### Git-remote helpers
 
-`UpstreamRemote` (the current branch's `%(upstream:remotename)`, whole, so a branch tracking `a/b` names `a/b`), `RemoteHasRefs` (`git ls-remote` non-empty), `RemoteDoltRefs` (the trimmed output of `git ls-remote <r> refs/dolt/*`, one round trip), `RemoteHasDoltData` (that output non-empty), `LocalRemoteHead` (`symbolic-ref` on the remote-HEAD ref, local only), `AdvertisedRemoteHead` (`ls-remote --symref`, one round trip, its failure returned), `GitRemotes` (`git remote -v` fetch lines, deduped, sorted). A blank remote name normalizes to `origin` (`workspace.go`).
+`Remotes` (`workspace.go`) is a checkout's remote configuration, minted by `Resolve` for its `Info` and asked of git at most once per question per invocation: `List` (`git remote -v` fetch lines, deduped, sorted) and `Upstream` (the current branch's `%(upstream:remotename)`, whole, so a branch tracking `a/b` names `a/b`; a git that fails to answer is an error). `RemoteHasRefs` (`git ls-remote` non-empty), `RemoteDoltRefs` (the trimmed output of `git ls-remote <r> refs/dolt/*`, one round trip), `RemoteHasDoltData` (that output non-empty), `LocalRemoteHead` (`symbolic-ref` on the remote-HEAD ref, local only), `AdvertisedRemoteHead` (`ls-remote --symref`, one round trip, its failure returned). A blank remote name normalizes to `origin` (`workspace.go`).
 
 ## Version identity
 

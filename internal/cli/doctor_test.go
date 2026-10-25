@@ -25,6 +25,7 @@ func TestPrintWorkspaceIdentityReportsPrefixSource(t *testing.T) {
 		Location:    workspace.Location{StorageDir: "/tmp/store", GitCommonDir: "/tmp/repo/.git"},
 		WorkspaceID: "ws-id",
 		IssuePrefix: testIssuePrefix(t, "test"),
+		Remotes:     workspace.NewRemotes(testEnv(), ""),
 	}
 	if err := printWorkspaceIdentity(&out, ws, idPrefixCensus{}); err != nil {
 		t.Fatalf("printWorkspaceIdentity() error = %v", err)

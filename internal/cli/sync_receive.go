@@ -85,7 +85,7 @@ func scheduleReceive(ctx context.Context, env environ.Env, ws workspace.Info) {
 	if err := markReceiveAttempt(ws); err != nil {
 		fmt.Fprintf(os.Stderr, "lit: automatic receive debounce marker not written: %v\n", err)
 	}
-	hasRemote, err := workspaceHasGitRemote(ctx, env, ws)
+	hasRemote, err := workspaceHasGitRemote(ws)
 	if err != nil {
 		// Couldn't read remotes — unexpected; surface it loudly rather than treat
 		// it as "no remote". [LAW:no-silent-failure]
@@ -258,7 +258,7 @@ func receiveOnce(ctx context.Context, env environ.Env, ws workspace.Info) {
 	// Every receive says whether it owes a push; one that settles nothing
 	// owes none. [LAW:nothing-unseen]
 	telemetry.Set(ctx, "receive.push_owed", false)
-	gitRemotes, err := workspace.GitRemotes(ctx, env, ws.RootDir)
+	gitRemotes, err := ws.Remotes.List()
 	if err != nil {
 		// Couldn't read remotes — unexpected; surface it loudly rather than treat
 		// it as "no remote". [LAW:no-silent-failure]

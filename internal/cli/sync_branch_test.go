@@ -186,12 +186,12 @@ func pushedRepoWithoutRemoteHead(t *testing.T) workspace.Info {
 
 func branchTestWorkspace(t *testing.T, root string) workspace.Info {
 	t.Helper()
-	return workspace.Info{RootDir: root, Location: workspace.Location{StorageDir: t.TempDir()}}
+	return workspace.Info{RootDir: root, Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(testEnv(), root)}
 }
 
 func remoteURL(t *testing.T, ws workspace.Info) string {
 	t.Helper()
-	url, err := workspace.GitRemotes(context.Background(), testEnv(), ws.RootDir)
+	url, err := workspace.NewRemotes(testEnv(), ws.RootDir).List()
 	if err != nil || len(url) != 1 {
 		t.Fatalf("GitRemotes() = %v, %v; want one remote", url, err)
 	}

@@ -216,11 +216,7 @@ func planRemoteAdopt(ctx context.Context, env environ.Env, ws workspace.Info) (*
 
 	// The whole adopt decision is made from git signals alone — no Dolt store is
 	// opened — so a fresh store's first on-disk state is the clone itself.
-	gitRemotes, err := workspace.GitRemotes(ctx, env, ws.RootDir)
-	if err != nil {
-		return nil, initSyncOutcome{State: initSyncFailed, Error: err.Error()}
-	}
-	remote, ok, err := workspaceSyncRemote(ctx, env, ws, "", gitRemotes)
+	remote, ok, err := workspaceSyncRemote(ws, "")
 	// A remote Dolt cannot hold has nothing init can adopt, so init starts
 	// fresh, unless it carries lit data: a fresh store would fork from that backlog,
 	// which only the remote renamed can adopt. [LAW:no-silent-failure]
@@ -265,6 +261,11 @@ func planRemoteAdopt(ctx context.Context, env environ.Env, ws workspace.Info) (*
 	}
 	if !hasData {
 		return freshOutcome(initSyncOutcome{State: initSyncNoRemoteData, Remote: remote.String(), Branch: branch})
+	}
+	// workspaceSyncRemote has already read the remotes, so this is that answer.
+	gitRemotes, err := ws.Remotes.List()
+	if err != nil {
+		return nil, initSyncOutcome{State: initSyncFailed, Remote: remote.String(), Branch: branch, Error: err.Error()}
 	}
 	url := gitBackedURLForRemote(gitRemotes, remote.String())
 	if url == "" {

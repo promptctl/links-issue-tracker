@@ -378,32 +378,39 @@ Defaults are set in `Load` (`internal/config/config.go`).
 
 ### 5.2 `Locate(cwd)` (`internal/workspace/workspace.go`)
 
-1. `git rev-parse --git-common-dir` run with `cmd.Dir = cwd` (`internal/workspace/workspace.go`,
-).
-2. `anchorGitPath(cwd, out)` — a relative git answer is joined onto the **cwd**, which `gitOutput`
-   has already refused unless absolute (`run git in %q: the directory is not absolute`), not the
-   repo toplevel; an absolute answer is only cleaned (`internal/workspace/workspace.go`).
+1. `askGeometry`: `git rev-parse --show-toplevel --git-common-dir` run with `cmd.Dir = cwd`, its
+   stdout untrimmed; failure classified by `classifyGitError` (`internal/workspace/workspace.go`).
+2. `parseGeometry(cwd, out)`: the output (one trailing newline removed) is split on newlines and
+   every cut into a toplevel and a common dir is tried; each half is passed through
+   `anchorGitPath(cwd, …)` — a relative answer is joined onto the **cwd**, which `gitOutput` has
+   already refused unless absolute (`run git in %q: the directory is not absolute`), not the repo
+   toplevel; an absolute answer is only cleaned. The cut whose two paths are both existing
+   directories is the answer; none ⇒ `… which names no working-tree root and common dir that both
+   exist`; more than one ⇒ `… which reads as %d different pairs of existing directories`
+   (`internal/workspace/workspace.go`).
 3. `filepath.EvalSymlinks` canonicalizes the common dir; failure ⇒
    `canonicalize git-common-dir %q: %w` (`internal/workspace/workspace.go`).
 4. `LocationFromStorageDir(filepath.Join(gitCommonDir, "links"))` (`internal/workspace/workspace.go`).
 
 ### 5.3 `Resolve(cwd)` (`internal/workspace/workspace.go`, `ResolveWithPrefix`)
 
-1. `git rev-parse --show-toplevel` ⇒ `RootDir`; failure classified by `classifyGitError`.
-2. `Locate(cwd)`.
-3. `resolvePrivateGitDir(cwd)` = `git rev-parse --git-dir` anchored to cwd, then
-   symlink-canonicalized through `filepath.EvalSymlinks` like the common dir; failure ⇒
-   `canonicalize git-dir %q: %w` (`internal/workspace/workspace.go`).
-4. `os.MkdirAll(loc.StorageDir, 0o755)`; failure ⇒ `create storage dir: %w`
+1. `askGeometry(cwd)` as in 5.2; the toplevel ⇒ `RootDir`, the common dir ⇒ the `Location`.
+2. `checkoutGitDir(RootDir)`: `os.Stat(<root>/.git)`; a directory is the private git dir; a
+   regular file is a gitfile, read whole — it must begin `gitdir: `, the path is the rest with
+   trailing `\r`/`\n` removed, relative to the root — else
+   `gitfile %q does not name a git dir: …`; anything else ⇒ an error naming the root. Then
+   `filepath.EvalSymlinks`; failure ⇒ `canonicalize the git dir %q of working tree %q: %w`
    (`internal/workspace/workspace.go`).
-5. `loadOrCreateConfig(rootDir, loc.ConfigPath)`.
-6. Returns `Info{Location, RootDir, WorkspaceID, IssuePrefix, PrivateGitDir}`.
+3. `os.MkdirAll(loc.StorageDir, 0o755)`; failure ⇒ `create storage dir: %w`
+   (`internal/workspace/workspace.go`).
+4. `loadOrCreateConfig(rootDir, loc.ConfigPath)`.
+5. Returns `Info{Location, RootDir, WorkspaceID, IssuePrefix, PrivateGitDir, Remotes}`, with
+   `Remotes = NewRemotes(env, RootDir)` (5.8).
 
 `Info.PrimaryClone()` is `PrivateGitDir == GitCommonDir`: true in the primary clone,
 false in a linked worktree (`internal/workspace/workspace.go`).
 
-All geometry git calls use `context.Background()` deliberately (`internal/workspace/workspace.go`,
-).
+The geometry query uses `context.Background()` deliberately (`internal/workspace/workspace.go`).
 
 ### 5.4 Git-error classification (`internal/workspace/workspace.go`)
 
@@ -442,7 +449,7 @@ All geometry git calls use `context.Background()` deliberately (`internal/worksp
   `classifyGitError` (`internal/workspace/checkouts.go`).
 - Records are filtered by `uninhabited()` = `prunable || bare`
   (`internal/workspace/checkouts.go`).
-- For each remaining record: `resolvePrivateGitDir(record.path)` (failure ⇒
+- For each remaining record: `checkoutGitDir(record.path)` (5.3; no git subprocess; failure ⇒
   `locate the git directory of worktree %q, which git lists as live: %w`,
   `internal/workspace/checkouts.go`) then `ReadStream(privateGitDir)` — any failure
   fails the whole enumeration (`internal/workspace/checkouts.go`).
@@ -481,9 +488,15 @@ All geometry git calls use `context.Background()` deliberately (`internal/worksp
 
 ### 5.8 Git-remote helpers (`internal/workspace/workspace.go`)
 
-- `UpstreamRemote(ctx, cwd)`: `git for-each-ref --format=%(if)%(HEAD)%(then)%(upstream:remotename)%(end) refs/heads/`,
-  trimmed: the current branch's remote whole as git records it (`a/b` for a branch tracking
-  `a/b/master`), `.` for a local upstream, empty for none or a detached HEAD.
+- `Remotes` (`NewRemotes(env, root)`): one checkout's remote configuration for one invocation;
+  each question is asked of git once, on first read, with `context.Background()`, and every later
+  read returns that answer.
+  - `List()`: `git remote -v`, keeps only lines whose third field is `(fetch)`, deduped by name
+    and sorted by name; failure ⇒ `git remote -v in %q: %w`.
+  - `Upstream()`: `git for-each-ref --format=%(if)%(HEAD)%(then)%(upstream:remotename)%(end) refs/heads/`,
+    trimmed: the current branch's remote whole as git records it (`a/b` for a branch tracking
+    `a/b/master`), `.` for a local upstream, empty for none or a detached HEAD; failure ⇒
+    `git for-each-ref refs/heads/ (the current branch's upstream) in %q: %w`.
 - `RemoteHasRefs(ctx, cwd, remote)`: `git ls-remote <remote>` non-empty.
 - `RemoteDoltRefs(ctx, cwd, remote)`: the trimmed output of `git ls-remote <remote> refs/dolt/*` — one round trip, no transfer; empty when the remote carries no Dolt data.
 - `RemoteHasDoltData(ctx, cwd, remote)`: `RemoteDoltRefs` non-empty
@@ -492,8 +505,6 @@ All geometry git calls use `context.Background()` deliberately (`internal/worksp
   `""` when unset; never touches the network.
 - `AdvertisedRemoteHead(ctx, cwd, remote)`: `git ls-remote --symref <r> HEAD` parsed for
   `ref: refs/heads/…\tHEAD`; a failed ls-remote is returned as an error.
-- `GitRemotes(ctx, cwd)`: `git remote -v`, keeps only lines whose third field is `(fetch)`,
-  deduped by name and sorted by name.
 - An empty/blank remote name normalizes to `origin`.
 
 ---

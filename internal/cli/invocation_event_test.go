@@ -523,3 +523,27 @@ func TestASchemaAheadRefusalRecordsItsRollbackOffer(t *testing.T) {
 		})
 	}
 }
+
+// Every event counts the git its invocation started, zero included, and the
+// count is the invocation's own when one environment serves several runs:
+// `lit workspace` asks git where the checkout is, once, each time it runs.
+func TestEveryEventCountsTheGitItsInvocationStarted(t *testing.T) {
+	isolateEvents(t)
+	outside := t.TempDir()
+	runCLIInDir(t, outside, "version")
+	if got, ok := lastEvent(t).Counts["git.lit_spawns"]; !ok || got != 0 {
+		t.Fatalf("lit version event git.lit_spawns = %d (present %v), want 0", got, ok)
+	}
+
+	repo := t.TempDir()
+	runGit(t, repo, "init")
+	inv := dirInvocation(repo, io.Discard, io.Discard, []string{"workspace"})
+	for run := range 2 {
+		if err := Run(context.Background(), inv); err != nil {
+			t.Fatalf("lit workspace run %d: %v", run, err)
+		}
+		if got := lastEvent(t).Counts["git.lit_spawns"]; got != 1 {
+			t.Fatalf("lit workspace run %d event git.lit_spawns = %d, want 1", run, got)
+		}
+	}
+}

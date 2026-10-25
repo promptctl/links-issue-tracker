@@ -58,7 +58,7 @@ type importOnlyEngine struct {
 // and backups, which is all any of these paths touches before it refuses.
 func declineWorkspace(t *testing.T) workspace.Info {
 	t.Helper()
-	return workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}}
+	return workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(testEnv(), "")}
 }
 
 // wantUnsupported asserts the error is the contract's typed refusal naming the

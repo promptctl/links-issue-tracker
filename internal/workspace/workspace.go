@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -96,6 +97,9 @@ type Info struct {
 	// wrong in every reconstructed Location. Info is resolved from a cwd, so it
 	// is the type that legitimately knows. [LAW:types-are-the-program]
 	PrivateGitDir string
+	// Remotes is this checkout's git remote configuration, asked of git once
+	// per invocation; see Remotes for who owns it.
+	Remotes *Remotes
 }
 
 // PrimaryClone says this checkout is the repository's primary clone rather than
@@ -234,12 +238,56 @@ type GitRemote struct {
 	URL  string `json:"url"`
 }
 
-// UpstreamRemote is the name of the remote the current branch tracks, whole
-// as git records it ("." for a local branch, "" for none or a detached HEAD).
-// It is never cut from the upstream ref: in a/b/main the remote is a/b.
-func UpstreamRemote(ctx context.Context, env environ.Env, cwd string) string {
-	remote, _ := gitOutput(ctx, env, cwd, "for-each-ref", "--format=%(if)%(HEAD)%(then)%(upstream:remotename)%(end)", "refs/heads/")
-	return strings.TrimSpace(remote)
+// Remotes is a checkout's git remote configuration as one invocation reads it:
+// the remotes git has, and the one the current branch tracks. Each is asked of
+// git at most once, on first use, and every later read in the invocation is
+// that answer — a command whose drift banner, sync-remote choice and automatic
+// receive all need the remotes spawns `git remote -v` once, not once each.
+//
+// [LAW:no-shared-mutable-globals] Resolve mints one for the Info it returns and
+// that Info is its owner: it lives exactly as long as the invocation that
+// resolved it, and detached workers resolve their own. Holding git's answer
+// for that long is sound because lit never writes git's remote or branch
+// configuration; a remote added by hand mid-command is seen by the next one.
+// NewRemotes is the only way to build one.
+type Remotes struct {
+	list     func() ([]GitRemote, error)
+	upstream func() (string, error)
+}
+
+// NewRemotes reads the remote configuration of the checkout at root, lazily.
+//
+// [LAW:dataflow-not-control-flow] Both queries read local config and cannot
+// hang on a network, so context.Background() — "never cancels" — is the honest
+// value, as for every geometry query in this file.
+func NewRemotes(env environ.Env, root string) *Remotes {
+	return &Remotes{
+		list: sync.OnceValues(func() ([]GitRemote, error) {
+			return gitRemotes(context.Background(), env, root)
+		}),
+		upstream: sync.OnceValues(func() (string, error) {
+			return upstreamRemote(context.Background(), env, root)
+		}),
+	}
+}
+
+// List is the checkout's remotes with their fetch URLs, sorted by name.
+func (r *Remotes) List() ([]GitRemote, error) { return r.list() }
+
+// Upstream is the name of the remote the current branch tracks, whole as git
+// records it ("." for a local branch, "" for none or a detached HEAD). It is
+// never cut from the upstream ref: in a/b/main the remote is a/b. A git that
+// fails to answer is an error, never "no upstream": read as none, it would
+// hand the sync-remote choice to whichever remote is the only one.
+// [LAW:no-silent-failure]
+func (r *Remotes) Upstream() (string, error) { return r.upstream() }
+
+func upstreamRemote(ctx context.Context, env environ.Env, cwd string) (string, error) {
+	remote, err := gitOutput(ctx, env, cwd, "for-each-ref", "--format=%(if)%(HEAD)%(then)%(upstream:remotename)%(end)", "refs/heads/")
+	if err != nil {
+		return "", fmt.Errorf("git for-each-ref refs/heads/ (the current branch's upstream) in %q: %w", cwd, err)
+	}
+	return remote, nil
 }
 
 func RemoteHasRefs(ctx context.Context, env environ.Env, cwd string, remote string) (bool, error) {
@@ -321,17 +369,11 @@ func Resolve(env environ.Env, cwd string) (Info, error) {
 // ambient for this function to read back. [LAW:no-shared-mutable-globals]
 // [LAW:effects-at-boundaries] the request reaches the one write that consumes it.
 func ResolveWithPrefix(env environ.Env, cwd string, requested PrefixRequest) (Info, error) {
-	// [LAW:dataflow-not-control-flow] Store-geometry git calls are local rev-parse
-	// queries that cannot hang on a network, so cancellation buys nothing here;
-	// context.Background() is the honest "never cancels" value, and it keeps Resolve's
-	// many callers free of a ctx they would only forward to a subprocess that never
-	// blocks. Cancellation is threaded only through the receive/sync path's network
-	// git calls, where a wedge is reachable.
-	rootDir, err := gitOutput(context.Background(), env, cwd, "rev-parse", "--show-toplevel")
+	geo, err := askGeometry(env, cwd)
 	if err != nil {
-		return Info{}, classifyGitError(fmt.Sprintf("git rev-parse --show-toplevel in %q", cwd), err)
+		return Info{}, err
 	}
-	loc, err := Locate(env, cwd)
+	loc, err := locationOf(geo)
 	if err != nil {
 		return Info{}, err
 	}
@@ -339,7 +381,7 @@ func ResolveWithPrefix(env environ.Env, cwd string, requested PrefixRequest) (In
 	// lives in it is deliberately NOT done here: Resolve runs for read-only
 	// commands too, and a checkout that has only ever been read must carry no
 	// identity. The mint hangs off the access mode instead, in app.Open.
-	privateGitDir, err := resolvePrivateGitDir(env, cwd)
+	privateGitDir, err := checkoutGitDir(geo.root)
 	if err != nil {
 		return Info{}, err
 	}
@@ -348,16 +390,17 @@ func ResolveWithPrefix(env environ.Env, cwd string, requested PrefixRequest) (In
 	if err := os.MkdirAll(loc.StorageDir, 0o755); err != nil {
 		return Info{}, fmt.Errorf("create storage dir: %w", err)
 	}
-	cfg, prefix, err := loadOrCreateConfig(rootDir, loc.ConfigPath, requested)
+	cfg, prefix, err := loadOrCreateConfig(geo.root, loc.ConfigPath, requested)
 	if err != nil {
 		return Info{}, err
 	}
 	return Info{
 		Location:      loc,
-		RootDir:       rootDir,
+		RootDir:       geo.root,
 		WorkspaceID:   cfg.WorkspaceID,
 		IssuePrefix:   prefix,
 		PrivateGitDir: privateGitDir,
+		Remotes:       NewRemotes(env, geo.root),
 	}, nil
 }
 
@@ -369,94 +412,183 @@ func ResolveWithPrefix(env environ.Env, cwd string, requested PrefixRequest) (In
 // so Resolve (which then creates the store) and Discover (which then only
 // detects it) can never derive different paths for the same repository.
 func Locate(env environ.Env, cwd string) (Location, error) {
-	// [LAW:one-source-of-truth] Git owns repository geometry. --git-common-dir is
-	// emitted relative to the invocation cwd (e.g. "../.git" from a subdirectory),
-	// so a relative result must be anchored to the cwd. Anchoring it to the
-	// toplevel instead would climb out of the repo and resolve a
-	// subdirectory/worktree invocation to the wrong store. Anchoring to the cwd is
-	// correct on every Git version (no dependency on the newer
-	// --path-format=absolute flag, which would break older Git with a misleading
-	// "not a git repo" error).
-	// [LAW:dataflow-not-control-flow] Local geometry query; never blocks on a
-	// network, so context.Background() (never cancels) is the correct value — see
-	// Resolve for why the receive/sync path threads a real ctx and this does not.
-	gitCommonDir, err := gitOutput(context.Background(), env, cwd, "rev-parse", "--git-common-dir")
+	geo, err := askGeometry(env, cwd)
 	if err != nil {
-		return Location{}, classifyGitError(fmt.Sprintf("git rev-parse --git-common-dir in %q", cwd), err)
+		return Location{}, err
 	}
-	gitCommonDir = anchorGitPath(cwd, gitCommonDir)
-	// [LAW:one-source-of-truth] A store's identity is its physical directory, not
-	// the path string a caller happened to hold. filepath.Abs makes a path
-	// absolute but does not resolve symlinks, so the same store reached from a
-	// symlinked ancestor (macOS /var -> /private/var) yields two spellings. The
-	// dolt driver caches its environment per path string and serves the second
-	// spelling a read-only handle, so two spellings of one store become a
-	// read-only conflict. Canonicalizing here collapses every spelling to the
-	// physical path before any storage path is derived from it. It also makes
-	// worktree deduplication exact: every worktree of one repository shares this
-	// canonical common dir, so all of them derive one identical StorageDir.
-	canonicalCommonDir, err := filepath.EvalSymlinks(gitCommonDir)
-	if err != nil {
-		return Location{}, fmt.Errorf("canonicalize git-common-dir %q: %w", gitCommonDir, err)
-	}
-	gitCommonDir = filepath.Clean(canonicalCommonDir)
-	return LocationFromStorageDir(filepath.Join(gitCommonDir, "links")), nil
+	return locationOf(geo)
 }
 
-// anchorGitPath makes a path git printed absolute. Every `rev-parse` query that
-// answers with a path answers RELATIVE TO THE INVOCATION CWD (e.g. "../.git" from
-// a subdirectory, ".git/worktrees/feature" from a linked worktree), so the cwd
-// git was run in is the only correct anchor — anchoring to the repository
-// toplevel instead climbs out of the repo and resolves a subdirectory
-// invocation to the wrong store. Anchoring by hand rather than asking git for
+// geometry is where git says the checkout containing a directory lives: the
+// root of its working tree and the repository's common git dir, both absolute.
+type geometry struct {
+	root      string
+	commonDir string
+}
+
+// askGeometry asks git, in one subprocess, for both halves of a checkout's
+// geometry. [LAW:single-enforcer] It is the one place lit asks git where a
+// checkout is, so Resolve and Locate — and through Locate, Discover — read one
+// answer to one question.
+//
+// [LAW:dataflow-not-control-flow] A local rev-parse cannot hang on a network,
+// so cancellation buys nothing here; context.Background() is the honest "never
+// cancels" value, and it keeps Resolve's many callers free of a ctx they would
+// only forward to a subprocess that never blocks. Cancellation is threaded only
+// through the receive/sync path's network git calls, where a wedge is reachable.
+func askGeometry(env environ.Env, cwd string) (geometry, error) {
+	out, err := gitStdout(context.Background(), env, cwd, "rev-parse", "--show-toplevel", "--git-common-dir")
+	if err != nil {
+		return geometry{}, classifyGitError(fmt.Sprintf("git rev-parse --show-toplevel --git-common-dir in %q", cwd), err)
+	}
+	return parseGeometry(cwd, out)
+}
+
+// parseGeometry reads rev-parse's two answers. git prints them one per line,
+// unquoted — `--sq` does not reach these options and rev-parse has no `-z` — and
+// a newline is a legal byte in a path, so a checkout at "wt\nprunable" prints
+// three lines for two answers. The lines are therefore not split at a guessed
+// boundary: every way of cutting them into a toplevel and a common dir is
+// tried, and the answer is the one cut whose two paths both name a directory
+// that exists. Two lines admit exactly one cut. [LAW:parse-dont-validate]
+//
+// --git-common-dir is printed relative to the invocation cwd (e.g. "../.git"
+// from a subdirectory), so a relative answer is anchored to the cwd; anchoring
+// to the toplevel instead would climb out of the repo and resolve a
+// subdirectory or worktree invocation to the wrong store.
+func parseGeometry(cwd string, out string) (geometry, error) {
+	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+	var cuts []geometry
+	for i := 1; i < len(lines); i++ {
+		cut := geometry{
+			root:      anchorGitPath(cwd, strings.Join(lines[:i], "\n")),
+			commonDir: anchorGitPath(cwd, strings.Join(lines[i:], "\n")),
+		}
+		if isDir(cut.root) && isDir(cut.commonDir) {
+			cuts = append(cuts, cut)
+		}
+	}
+	switch len(cuts) {
+	case 1:
+		return cuts[0], nil
+	case 0:
+		return geometry{}, fmt.Errorf("git rev-parse --show-toplevel --git-common-dir in %q printed %q, which names no working-tree root and common dir that both exist", cwd, out)
+	default:
+		return geometry{}, fmt.Errorf("git rev-parse --show-toplevel --git-common-dir in %q printed %q, which reads as %d different pairs of existing directories; lit cannot tell which one git meant", cwd, out, len(cuts))
+	}
+}
+
+func isDir(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
+}
+
+// locationOf is the store geometry of the repository geo names.
+// [LAW:one-source-of-truth] A store's identity is its physical directory, not
+// the path string a caller happened to hold. filepath.Abs makes a path
+// absolute but does not resolve symlinks, so the same store reached from a
+// symlinked ancestor (macOS /var -> /private/var) yields two spellings. The
+// dolt driver caches its environment per path string and serves the second
+// spelling a read-only handle, so two spellings of one store become a
+// read-only conflict. Canonicalizing here collapses every spelling to the
+// physical path before any storage path is derived from it. It also makes
+// worktree deduplication exact: every worktree of one repository shares this
+// canonical common dir, so all of them derive one identical StorageDir.
+func locationOf(geo geometry) (Location, error) {
+	canonicalCommonDir, err := filepath.EvalSymlinks(geo.commonDir)
+	if err != nil {
+		return Location{}, fmt.Errorf("canonicalize git-common-dir %q: %w", geo.commonDir, err)
+	}
+	return LocationFromStorageDir(filepath.Join(filepath.Clean(canonicalCommonDir), "links")), nil
+}
+
+// anchorGitPath makes a path git wrote absolute against the directory it is
+// relative to. rev-parse answers relative to the invocation cwd (e.g. "../.git"
+// from a subdirectory) and a gitfile relative to the working tree it sits in, so
+// the caller names that base. Anchoring by hand rather than asking git for
 // absolute paths keeps this working on every git version: the
 // --path-format=absolute flag that would do it is recent, and older git rejects
 // it with a misleading "not a git repository".
 //
-// [LAW:single-enforcer] Both path-answering queries — Locate's
-// --git-common-dir and resolvePrivateGitDir's --git-dir — anchor through here,
-// so the two cannot drift into resolving the same git output differently.
+// [LAW:single-enforcer] Every path lit reads out of git — the geometry's two
+// answers and a gitfile's target — anchors through here, so none of them can
+// drift into resolving a relative path differently.
 //
-// cwd is absolute: it is the directory gitOutput already ran git in, and
-// gitOutput refuses any other.
-func anchorGitPath(cwd string, gitPath string) string {
+// base is absolute: it is the directory gitOutput already ran git in, which
+// gitOutput refuses unless absolute, or a working-tree root git printed.
+func anchorGitPath(base string, gitPath string) string {
 	if filepath.IsAbs(gitPath) {
 		return filepath.Clean(gitPath)
 	}
-	return filepath.Clean(filepath.Join(cwd, gitPath))
+	return filepath.Clean(filepath.Join(base, gitPath))
 }
 
-// resolvePrivateGitDir locates the checkout's own git directory — the per-worktree
-// private area git keeps HEAD and the index in. It is the deliberate counterpart
-// to Locate's --git-common-dir query, and the difference between the two
-// is what lets one repository hold one shared backlog and many distinct
-// identities: --git-common-dir answers with the SAME directory from every
-// worktree, while --git-dir answers with a DIFFERENT one (".git" in the primary
-// clone, ".git/worktrees/<name>" in a linked worktree) and that directory is
-// removed by `git worktree remove`. [LAW:one-source-of-truth] Git owns the
-// question of which directories belong to which checkout; lit reads the answer
-// and keeps no worktree registry of its own.
+// checkoutGitDir is the checkout's own git directory — the per-worktree
+// private area git keeps HEAD and the index in, which `git worktree remove`
+// removes with the worktree. It is the counterpart to the common dir, and the
+// difference between the two is what lets one repository hold one shared
+// backlog and many distinct identities: the common dir is the SAME from every
+// worktree, while this is a DIFFERENT one per checkout.
+//
+// It is read from the `.git` entry git keeps at every working-tree root, in the
+// two forms gitrepository-layout(5) defines: a directory is the git dir itself
+// (a primary clone), and a regular file is a gitfile whose `gitdir: ` line names
+// it (a linked worktree, a submodule, a --separate-git-dir clone). A `.git` at
+// the root is also how Discover recognises a working tree. [LAW:one-source-of-truth]
+// Git owns which directory belongs to which checkout; lit reads git's own record
+// of it and keeps no worktree registry.
+//
+// [LAW:single-enforcer] Resolve derives the current checkout's identity here and
+// LiveCheckouts every live checkout's, from the root each one has, so the two
+// cannot disagree about where a checkout keeps its token. Nothing in the
+// environment reaches it either: a GIT_DIR a git hook exported answers rev-parse
+// in every directory, and would otherwise lend the hook's checkout's directory to
+// every checkout asked about.
 //
 // It is canonicalized through EvalSymlinks, as the common dir is, so the two
 // compare as physical paths: on macOS a checkout under /var is the same
 // directory as /private/var, and Info.PrimaryClone would otherwise call the
-// primary clone a linked worktree. Identity does not depend on the spelling —
-// the token inside the file is the identity, and any spelling that opens the
-// file yields the same token.
-func resolvePrivateGitDir(env environ.Env, cwd string) (string, error) {
-	// [LAW:dataflow-not-control-flow] Local geometry query that cannot block on a
-	// network, so context.Background() — "never cancels" — is the honest value,
-	// matching every other rev-parse in this file. See Resolve for the full note.
-	privateGitDir, err := gitOutput(context.Background(), env, cwd, "rev-parse", "--git-dir")
+// primary clone a linked worktree.
+func checkoutGitDir(root string) (string, error) {
+	entry := filepath.Join(root, ".git")
+	info, err := os.Stat(entry)
 	if err != nil {
-		return "", classifyGitError(fmt.Sprintf("git rev-parse --git-dir in %q", cwd), err)
+		return "", fmt.Errorf("read the .git entry of working tree %q: %w", root, err)
 	}
-	anchored := anchorGitPath(cwd, privateGitDir)
-	canonical, err := filepath.EvalSymlinks(anchored)
+	gitDir := entry
+	switch {
+	case info.IsDir():
+	case info.Mode().IsRegular():
+		gitDir, err = gitfileTarget(root, entry)
+		if err != nil {
+			return "", err
+		}
+	default:
+		return "", fmt.Errorf("the .git entry of working tree %q is neither a directory nor a gitfile", root)
+	}
+	canonical, err := filepath.EvalSymlinks(gitDir)
 	if err != nil {
-		return "", fmt.Errorf("canonicalize git-dir %q: %w", anchored, err)
+		return "", fmt.Errorf("canonicalize the git dir %q of working tree %q: %w", gitDir, root, err)
 	}
 	return filepath.Clean(canonical), nil
+}
+
+// gitfilePrefix opens the one line a gitfile holds.
+const gitfilePrefix = "gitdir: "
+
+// gitfileTarget reads the git dir a gitfile names, as git reads it: the file is
+// `gitdir: <path>`, the trailing line break is not part of the path, and a
+// relative path is relative to the directory the gitfile is in.
+func gitfileTarget(root string, gitfile string) (string, error) {
+	content, err := os.ReadFile(gitfile)
+	if err != nil {
+		return "", fmt.Errorf("read gitfile %q: %w", gitfile, err)
+	}
+	target, ok := strings.CutPrefix(strings.TrimRight(string(content), "\r\n"), gitfilePrefix)
+	if !ok || target == "" {
+		return "", fmt.Errorf("gitfile %q does not name a git dir: it holds %q, not a %q line", gitfile, content, gitfilePrefix+"<path>")
+	}
+	return anchorGitPath(root, target), nil
 }
 
 // LocationFromStorageDir mints the store geometry rooted at an already-resolved
@@ -494,6 +626,13 @@ func LocationFromStorageDir(storageDir string) Location {
 // one would answer for the process's working directory instead of the
 // caller's. [LAW:single-enforcer] [LAW:effects-at-boundaries]
 func gitOutput(ctx context.Context, env environ.Env, cwd string, args ...string) (string, error) {
+	out, err := gitStdout(ctx, env, cwd, args...)
+	return strings.TrimSpace(out), err
+}
+
+// gitStdout is gitOutput's stdout byte for byte, for an answer whose edges
+// are data: a path can begin or end with whitespace, which trimming would cut.
+func gitStdout(ctx context.Context, env environ.Env, cwd string, args ...string) (string, error) {
 	if !filepath.IsAbs(cwd) {
 		return "", fmt.Errorf("run git in %q: the directory is not absolute", cwd)
 	}
@@ -501,7 +640,7 @@ func gitOutput(ctx context.Context, env environ.Env, cwd string, args ...string)
 	if err != nil {
 		return "", gitFailure(err)
 	}
-	return strings.TrimSpace(string(out)), nil
+	return string(out), nil
 }
 
 // gitFailure names why a git call failed. A git that failed on its own said
@@ -537,9 +676,9 @@ const gitFatalExitCode = 128
 // stores found". Keying on the numeric code — not on git's human stderr text —
 // keeps the classification locale-independent. [LAW:no-silent-failure]
 //
-// [LAW:single-enforcer] Both git repo gates — Resolve's --show-toplevel and
-// Locate's --git-common-dir — route through here, so they cannot drift
-// into classifying the same git failure two different ways.
+// [LAW:single-enforcer] The git repo gate — askGeometry, which Resolve and
+// Locate share — routes through here, so no caller classifies the same git
+// failure a second way.
 func classifyGitError(context string, err error) error {
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) && exitErr.ExitCode() == gitFatalExitCode {
@@ -578,10 +717,10 @@ func defaultRemoteBranchFromLSRemote(output string) string {
 	return ""
 }
 
-func GitRemotes(ctx context.Context, env environ.Env, cwd string) ([]GitRemote, error) {
+func gitRemotes(ctx context.Context, env environ.Env, cwd string) ([]GitRemote, error) {
 	output, err := gitOutput(ctx, env, cwd, "remote", "-v")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("git remote -v in %q: %w", cwd, err)
 	}
 	entries := strings.Split(strings.TrimSpace(output), "\n")
 	byName := map[string]string{}

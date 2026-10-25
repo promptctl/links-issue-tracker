@@ -59,7 +59,7 @@ func receiveWorkspace(t *testing.T, doltRefs []string, remotes ...string) worksp
 		}
 		runGit(t, root, "remote", "add", name, bare)
 	}
-	return workspace.Info{Location: workspace.LocationFromStorageDir(filepath.Join(base, "storage")), RootDir: root}
+	return workspace.Info{Location: workspace.LocationFromStorageDir(filepath.Join(base, "storage")), RootDir: root, Remotes: workspace.NewRemotes(testEnv(), root)}
 }
 
 // Every way the automatic receive ends before it fetches is a decision, and
@@ -74,7 +74,8 @@ func TestAReceiveThatEndsBeforeItFetchesSaysWhy(t *testing.T) {
 		remote   string
 	}{
 		{"git remotes unreadable", func(t *testing.T) workspace.Info {
-			return workspace.Info{Location: workspace.LocationFromStorageDir(filepath.Join(t.TempDir(), "storage")), RootDir: t.TempDir()}
+			root := t.TempDir()
+			return workspace.Info{Location: workspace.LocationFromStorageDir(filepath.Join(t.TempDir(), "storage")), RootDir: root, Remotes: workspace.NewRemotes(testEnv(), root)}
 		}, "error", ""},
 		{"no git remote", func(t *testing.T) workspace.Info {
 			return receiveWorkspace(t, nil)
@@ -96,7 +97,7 @@ func TestAReceiveThatEndsBeforeItFetchesSaysWhy(t *testing.T) {
 		}, receiveDecisionLockHeld, "origin"},
 		{"the remote unmoved since the last receive", func(t *testing.T) workspace.Info {
 			ws := receiveWorkspace(t, []string{"refs/dolt/data"}, "origin")
-			gitRemotes, err := workspace.GitRemotes(context.Background(), testEnv(), ws.RootDir)
+			gitRemotes, err := workspace.NewRemotes(testEnv(), ws.RootDir).List()
 			if err != nil {
 				t.Fatal(err)
 			}

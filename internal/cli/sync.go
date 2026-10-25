@@ -245,7 +245,7 @@ func syncFetchLeaf() syncLeaf {
 			return err
 		}
 		// [LAW:one-source-of-truth] the remote every sync verb selects.
-		remoteName, ok, err := workspaceSyncRemote(ctx, inv.Env, ws, *remote, syncState.gitRemotes)
+		remoteName, ok, err := workspaceSyncRemote(ws, *remote)
 		if err != nil {
 			recordSyncCommandTrace(inv.Env, ws, "lit sync fetch", "error", err, nil)
 			return err
@@ -287,7 +287,7 @@ func fetchAndFollow(ctx context.Context, env environ.Env, session syncSession, w
 	if err := markFetchSuccess(ws, remote); err != nil {
 		fmt.Fprintf(os.Stderr, "lit: fetch-success marker not written: %v\n", err)
 	}
-	syncRemote, branch, ok, err := freshnessSyncTarget(ctx, env, ws, gitRemotes)
+	syncRemote, branch, ok, err := freshnessSyncTarget(ctx, env, ws)
 	// Only a branch nothing here names, or a remote lit cannot sync with,
 	// skips the follow; a record that would name the branch but cannot be
 	// read is not that error, and fails the fetch.
@@ -924,7 +924,7 @@ func resolveSyncTarget(ctx context.Context, env environ.Env, session syncSession
 	if err != nil {
 		return syncTarget{}, err
 	}
-	remoteName, ok, err := workspaceSyncRemote(ctx, env, ws, requestedRemote, syncState.gitRemotes)
+	remoteName, ok, err := workspaceSyncRemote(ws, requestedRemote)
 	if err != nil {
 		return syncTarget{}, err
 	}
@@ -1082,9 +1082,9 @@ type remoteSyncState struct {
 }
 
 func readSyncRemoteState(ctx context.Context, env environ.Env, session syncSession, ws workspace.Info) (remoteSyncState, error) {
-	gitRemotes, err := workspace.GitRemotes(ctx, env, ws.RootDir)
+	gitRemotes, err := ws.Remotes.List()
 	if err != nil {
-		return remoteSyncState{}, fmt.Errorf("read git remotes: %w", err)
+		return remoteSyncState{}, err
 	}
 	doltRemotes, err := session.syncer.SyncListRemotes(ctx)
 	if err != nil {

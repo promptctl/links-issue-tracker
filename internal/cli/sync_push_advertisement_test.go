@@ -73,7 +73,7 @@ func TestAPushRecordsTheAdvertisementItLeft(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open consumer sync session: %v", err)
 	}
-	gitRemotes, err := workspace.GitRemotes(context.Background(), testEnv(), resolved.RootDir)
+	gitRemotes, err := workspace.NewRemotes(testEnv(), resolved.RootDir).List()
 	if err != nil {
 		t.Fatalf("read consumer git remotes: %v", err)
 	}

@@ -258,7 +258,7 @@ type Checkout struct { Stream StreamID; Path string; Branch string }
 `LiveCheckouts(cwd)` (`internal/workspace/checkouts.go`):
 1. Runs `git worktree list --porcelain -z` with `context.Background()`. On failure the error names the git ≥ 2.36 requirement on **every** failure and is deliberately not routed through `classifyGitError`.
 2. `parseWorktreeList`, then `slices.DeleteFunc(records, worktreeRecord.uninhabited)`.
-3. For each remaining record: `resolvePrivateGitDir(record.path)` then `ReadStream(privateGitDir)`; any failure aborts the **whole** enumeration rather than dropping the checkout, because dropping it would silently assert the checkout is deleted (rationale).
+3. For each remaining record: `checkoutGitDir(record.path)` (the `.git` entry at the path, read with no git subprocess, by the function `Resolve` uses) then `ReadStream(privateGitDir)`; any failure aborts the **whole** enumeration rather than dropping the checkout, because dropping it would silently assert the checkout is deleted (rationale).
 
 `worktreeRecord{path, branch, prunable, bare}` (`internal/workspace/checkouts.go`); `uninhabited() = prunable || bare`. A worktree deleted with `rm -rf` leaves its private git dir behind, so filesystem listing would report it alive — git reports it `prunable`; a *locked* worktree is not prunable even with a missing directory (removable media), and this inherits git's judgment (`internal/workspace/checkouts.go`).
 
