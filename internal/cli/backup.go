@@ -114,14 +114,12 @@ func backupRestoreLeaf() appLeaf {
 			_, err = fmt.Fprintf(inv.Stdout, "restored %s\n", restorePath)
 		}
 		// A replace that committed before a later step failed has still removed
-		// and moved what it did, so the outcome is reported whether or not the
-		// restore finished; one that committed nothing reports nothing.
-		// [LAW:no-silent-failure]
-		if reportErr := writeRemoved(inv.Stdout, restored.replacement.Removed, restored.snapshot); reportErr != nil {
-			return errors.Join(err, reportErr)
-		}
-		if reportErr := writeLanding(inv.Stdout, "the backup", restored.replacement.Landing); reportErr != nil {
-			return errors.Join(err, reportErr)
+		// and moved what it did, so it is reported whether or not the restore
+		// finished. [LAW:no-silent-failure]
+		if restored.replacement != nil {
+			if reportErr := writeReplacement(inv.Stdout, *restored.replacement, restored.snapshot); reportErr != nil {
+				return errors.Join(err, reportErr)
+			}
 		}
 		return err
 	}}
@@ -133,10 +131,11 @@ func syncBasePath(ap *app.App) string {
 
 // restoreOutcome is what a restore did beyond loading the file: what its
 // replace removed and changed, and the pre-restore backup taken of the
-// workspace it replaced. The replacement is set only once the replace commits,
-// so a refused or failed-before-replace restore carries an empty one.
+// workspace it replaced. replacement is nil until the replace commits, so a
+// replace that removed and changed nothing is told apart from one that never
+// ran. [LAW:types-are-the-program]
 type restoreOutcome struct {
-	replacement storage.Replacement
+	replacement *storage.Replacement
 	snapshot    string
 }
 
@@ -145,18 +144,19 @@ type restoreOutcome struct {
 // record, failed or not: it rewrites the sync base the next push compares
 // against, and the record carries the changes. [LAW:nothing-unseen]
 func restoreFromExportPath(ctx context.Context, env environ.Env, ap *app.App, path string, force bool) (outcome restoreOutcome, err error) {
-	metadata := map[string]string{"path": filepath.Clean(path)}
 	defer func() {
-		landingMetadata(metadata, outcome.replacement.Landing)
+		metadata := map[string]string{"path": filepath.Clean(path)}
+		// A restore whose replace never committed counted nothing, so its record
+		// carries no counts rather than zeros nobody counted.
+		if outcome.replacement != nil {
+			replacementMetadata(metadata, *outcome.replacement)
+		}
 		recordSyncCommandTrace(env, ap.Workspace, "lit backup restore", "restored", err, metadata)
 	}()
-	return restoreFromExport(ctx, ap, path, force, metadata)
+	return restoreFromExport(ctx, ap, path, force)
 }
 
-// restoreFromExport records on metadata each fact the restore learns, as it
-// learns it, so a restore that fails before a fact exists leaves its key out
-// rather than recording a zero nobody counted. [LAW:nothing-unseen]
-func restoreFromExport(ctx context.Context, ap *app.App, path string, force bool, metadata map[string]string) (restoreOutcome, error) {
+func restoreFromExport(ctx context.Context, ap *app.App, path string, force bool) (restoreOutcome, error) {
 	restorePath := filepath.Clean(path)
 	var outcome restoreOutcome
 	// [LAW:parse-dont-validate] A restore needs two capabilities: the sync state
@@ -207,11 +207,11 @@ func restoreFromExport(ctx context.Context, ap *app.App, path string, force bool
 	if err := backup.Prune(ap.Workspace.StorageDir, 20); err != nil {
 		return outcome, err
 	}
-	outcome.replacement, err = importer.ReplaceFromExport(ctx, targetExport)
+	replacement, err := importer.ReplaceFromExport(ctx, targetExport)
 	if err != nil {
 		return outcome, err
 	}
-	removedMetadata(metadata, outcome.replacement.Removed)
+	outcome.replacement = &replacement
 	ap.Statusline.Record(statusline.Replaced{})
 	// The landing is committed from here on, so every later failure still
 	// returns it: the trace records what the store now holds, not what the

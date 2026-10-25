@@ -9,18 +9,19 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
-func TestWriteRemovedAndItsMetadataStateAZero(t *testing.T) {
+func TestWriteRemovedAndReplacementMetadataStateAZero(t *testing.T) {
 	var none bytes.Buffer
 	if err := writeRemoved(&none, nil, "/backups/x.json"); err != nil || none.Len() != 0 {
 		t.Errorf("writeRemoved(nil) printed %q (%v), want nothing", none.String(), err)
 	}
 	metadata := map[string]string{}
-	removedMetadata(metadata, nil)
-	if metadata["removed"] != "0" {
-		t.Errorf("metadata removed = %q, want %q: zero is recorded, not omitted", metadata["removed"], "0")
+	replacementMetadata(metadata, storage.Replacement{})
+	if metadata["removed"] != "0" || metadata["rehomed"] != "0" {
+		t.Errorf("metadata = %v, want removed=0 and rehomed=0: a committed replace's zero is recorded, not omitted", metadata)
 	}
 }
 
@@ -52,7 +53,7 @@ func TestBackupRestoreOfAnEditedExportNamesTheTicketsItDestroys(t *testing.T) {
 	later := extractTicketID(t, runCLIInDir(t, repo, "new", "--type", "task", "--title", "Made meanwhile", "--topic", "demo", "--parent", epic))
 
 	out := runCLIInDir(t, repo, "backup", "restore", "--path", path)
-	for _, want := range []string{"removed 1 ticket(s) the workspace held and the file does not", "the pre-restore backup ", later, "Made meanwhile", "lit ls --format yaml", "lit import --path"} {
+	for _, want := range []string{"removed 1 ticket(s) the workspace held and the file does not", "the pre-restore backup ", quotedTextNotice, quotedTextMarker + later + "  Made meanwhile", "lit ls --format yaml", "lit import --path"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("restore output %q lacks %q", out, want)
 		}
@@ -95,8 +96,10 @@ func TestBackupRestoreTracesWhatItRemovedOnlyOnceItsReplaceCommits(t *testing.T)
 	if strings.Contains(refused, "removed ") {
 		t.Errorf("refused restore printed %q, want no ticket named removed: the refusal destroyed nothing", refused)
 	}
-	if removed, ok := restoreTraceRecord(t, repo).Metadata["removed"]; ok {
-		t.Errorf("refused restore trace metadata removed = %q, want no key: nothing was removed or counted", removed)
+	for _, key := range []string{"removed", "rehomed"} {
+		if count, ok := restoreTraceRecord(t, repo).Metadata[key]; ok {
+			t.Errorf("refused restore trace metadata %s = %q, want no key: the replace never ran, so nothing was counted", key, count)
+		}
 	}
 }
 
