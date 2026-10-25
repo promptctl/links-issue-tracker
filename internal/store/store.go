@@ -634,8 +634,10 @@ func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (m
 		return model.Issue{}, err
 	}
 	// A new issue has no history of its own; the lane family it joins does,
-	// and the create is stamped past it, as every write is. Read once the
-	// input is known good, as the memory engine reads its clock.
+	// and the create is stamped past it, as every write is. Read once the pure
+	// checks pass. The parent itself is checked under the commit lock, so a
+	// create refused there has already taken its reading, and the tally counts
+	// it as it counts any refused write.
 	filed, err := s.historyFiledUnder(ctx, parentID)
 	if err != nil {
 		return model.Issue{}, err
@@ -2290,23 +2292,26 @@ func (s *Store) listComments(ctx context.Context, issueID string) ([]model.Comme
 	return out, rows.Err()
 }
 
-// allChanges is queryEvents' changes condition that joins every event's
-// change rows.
-const allChanges = "TRUE"
-
 // laneFamilyHistory reads issueID's history and its lane family's in one
 // statement, so the plan and the stamp come from one snapshot: issueID's own
 // events whole, for the plan to decide its holder and phase on, and the rest
 // of the family — every issue filed under a parent issueID is filed under,
 // the SQL statement of model.LaneFamily — as bare events, since the stamp
 // reads only their instants and a sibling's description history is no input
-// to it. queryEvents parses each stamp into its instant, so the stamp never
-// trusts the varchar's spelling.
+// to it. Every write reads it, so it costs the family's size and not the
+// store's: the two halves are a UNION rather than one condition ORed across
+// them, and each walks from the issue id it is given to the events filed
+// under it by lookup joins. The hints name that walk because Dolt plans every
+// unhinted spelling of this read as a scan of issue_events — at 3,000 issues
+// outside a 30-issue family, 7ms for the OR and 17ms for the UNION, where
+// the hinted read takes 1.2ms, as it does with nothing outside the family. queryEvents parses each stamp into its instant, so the stamp
+// never trusts the varchar's spelling.
 func (s *Store) laneFamilyHistory(ctx context.Context, issueID string) ([]model.IssueEvent, error) {
-	events, err := s.queryEvents(ctx, `e.issue_id = ?`, `e.issue_id = ? OR e.issue_id IN (
-		SELECT sibling.src_id FROM relations own
+	events, err := s.queryEvents(ctx, issueEventsQuery+` UNION ALL `+bareEvents(`JOIN_ORDER(own, sibling, e) LOOKUP_JOIN(own, sibling) LOOKUP_JOIN(sibling, e)`, `relations own
 		JOIN relations sibling ON sibling.dst_id = own.dst_id AND sibling.type = own.type
-		WHERE own.src_id = ? AND own.type = ?)`, issueID, issueID, issueID, string(model.RelParentChild))
+		JOIN issue_events e ON e.issue_id = sibling.src_id
+		WHERE own.src_id = ? AND own.type = ? AND sibling.src_id <> ?`),
+		issueID, issueID, string(model.RelParentChild), issueID)
 	if err != nil {
 		return nil, fmt.Errorf("read lane family history of %s: %w", issueID, err)
 	}
@@ -2316,12 +2321,11 @@ func (s *Store) laneFamilyHistory(ctx context.Context, issueID string) ([]model.
 // historyFiledUnder reads the events of every issue filed under parentID as
 // bare events, the SQL statement of model.FiledUnder: the history a create
 // filed there is stamped past, read only for its instants. No issue is filed
-// under the empty parent. The change condition names no issue, rather than
-// being the constant FALSE, which Dolt's planner folds into a join it cannot
-// replan.
+// under the empty parent. Hinted for the reason laneFamilyHistory is.
 func (s *Store) historyFiledUnder(ctx context.Context, parentID string) ([]model.IssueEvent, error) {
-	events, err := s.queryEvents(ctx, `e.issue_id = ?`, `e.issue_id IN (SELECT src_id FROM relations WHERE dst_id = ? AND type = ?)`,
-		"", parentID, string(model.RelParentChild))
+	events, err := s.queryEvents(ctx, bareEvents(`JOIN_ORDER(r, e) LOOKUP_JOIN(r, e)`, `relations r
+		JOIN issue_events e ON e.issue_id = r.src_id
+		WHERE r.dst_id = ? AND r.type = ?`), parentID, string(model.RelParentChild))
 	if err != nil {
 		return nil, fmt.Errorf("read the history filed under %q: %w", parentID, err)
 	}
@@ -2346,7 +2350,7 @@ func (s *Store) StampCorrections() storage.StampCorrections {
 }
 
 func (s *Store) ListEvents(ctx context.Context, issueID string) ([]model.IssueEvent, error) {
-	events, err := s.queryEvents(ctx, allChanges, "e.issue_id = ?", issueID)
+	events, err := s.queryEvents(ctx, issueEventsQuery, issueID)
 	if err != nil {
 		return nil, fmt.Errorf("list issue events: %w", err)
 	}
@@ -2405,29 +2409,45 @@ func (s *Store) listAllComments(ctx context.Context) ([]model.Comment, error) {
 // establishing event that decides a lane's holder can be arbitrarily old, so a
 // recency cutoff would silently drop exactly the claims it was meant to speed up.
 func (s *Store) ListAllEvents(ctx context.Context) ([]model.IssueEvent, error) {
-	events, err := s.queryEvents(ctx, allChanges, "")
+	events, err := s.queryEvents(ctx, allEventsQuery)
 	if err != nil {
 		return nil, fmt.Errorf("list all issue events: %w", err)
 	}
 	return events, nil
 }
 
-// queryEvents fetches issue_events joined with issue_event_changes in a single
-// LEFT JOIN query, collapsing the per-change rows back into IssueEvent.Changes
-// slices. changes is the SQL condition on e saying whose change rows to join:
-// allChanges for every event's, or a narrower one that reads the rest as
-// bare events — an instant and attribution, no Changes — for a caller that
-// orders by them and decides nothing from what they changed. Its placeholders
-// come first in args. whereClause is an optional SQL fragment applied after
-// the JOIN (e.g. "e.issue_id = ?"); pass "" for an unfiltered scan.
-// [LAW:dataflow-not-control-flow]
-func (s *Store) queryEvents(ctx context.Context, changes, whereClause string, args ...any) ([]model.IssueEvent, error) {
-	q := `SELECT e.id, e.issue_id, e.action, e.reason, e.actor, e.created_at, e.stream_id, e.workspace_id, c.field, c.from_value, c.to_value
-		FROM issue_events e LEFT JOIN issue_event_changes c ON c.event_id = e.id AND (` + changes + `)`
-	if whereClause != "" {
-		q += " WHERE " + whereClause
-	}
-	// c.field is in the sort because this is the one place event reads are made
+// eventColumns is an event as queryEvents reads it, before the change row
+// that follows it on each row.
+const eventColumns = `e.id, e.issue_id, e.action, e.reason, e.actor, e.created_at, e.stream_id, e.workspace_id`
+
+// allEventsQuery selects every event, one row per change row each, and one
+// row of NULL change columns for an event that changed no field.
+const allEventsQuery = `SELECT ` + eventColumns + `, c.field, c.from_value, c.to_value
+	FROM issue_events e LEFT JOIN issue_event_changes c ON c.event_id = e.id`
+
+// issueEventsQuery selects one issue's events as allEventsQuery does, its id
+// the one placeholder. The lookup hint is what makes it read the issue's
+// rows: unhinted, Dolt merge-joins the whole of both tables and filters
+// after, so one issue's history cost the store's size (4.6ms at 3,000 issues;
+// 0.2ms hinted).
+const issueEventsQuery = `SELECT /*+ LOOKUP_JOIN(e, c) */ ` + eventColumns + `, c.field, c.from_value, c.to_value
+	FROM issue_events e LEFT JOIN issue_event_changes c ON c.event_id = e.id
+	WHERE e.issue_id = ?`
+
+// bareEvents selects the events from names, a FROM clause that binds
+// issue_events as e, with no change rows: an instant and an attribution, no
+// Changes, for a reader that orders by them and decides nothing from what
+// they changed. hints is the optimizer hint that walks from to e by lookup.
+func bareEvents(hints, from string) string {
+	return `SELECT /*+ ` + hints + ` */ ` + eventColumns + `, NULL AS field, NULL AS from_value, NULL AS to_value FROM ` + from
+}
+
+// queryEvents runs selection, one of the event statements above or a UNION
+// ALL of them, and collapses the per-change rows back
+// into IssueEvent.Changes slices. [LAW:dataflow-not-control-flow]
+func (s *Store) queryEvents(ctx context.Context, selection string, args ...any) ([]model.IssueEvent, error) {
+	q := selection
+	// field is in the sort because this is the one place event reads are made
 	// deterministic. The export delta compares whole model.IssueEvent values,
 	// Changes slice included, so two reads of an event nothing touched have to
 	// come back identical or the delta deletes and reinserts it to express no
@@ -2437,11 +2457,13 @@ func (s *Store) queryEvents(ctx context.Context, changes, whereClause string, ar
 	// rather than in the comparison is deliberate: every consumer of this read
 	// gets the guarantee, and none of them grows its own. [LAW:single-enforcer]
 	//
-	// e.id groups an event's change rows together for the collapse below. It is
+	// id groups an event's change rows together for the collapse below. It is
 	// NOT the event order the contract asks for — created_at is a varchar here,
 	// so ordering events in SQL would sort each stamp by its spelling. The
 	// events are ordered after hydration instead, where they are instants.
-	q += " ORDER BY e.id ASC, c.field ASC"
+	// The sort names the result's columns, not e's and c's, so it orders a
+	// UNION as a whole rather than binding to its last branch.
+	q += " ORDER BY id ASC, field ASC"
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
