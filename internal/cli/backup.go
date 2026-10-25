@@ -117,10 +117,10 @@ func backupRestoreLeaf() appLeaf {
 		// and moved what it did, so the outcome is reported whether or not the
 		// restore finished; one that committed nothing reports nothing.
 		// [LAW:no-silent-failure]
-		if reportErr := writeDropped(inv.Stdout, restored.dropped, restored.snapshot); reportErr != nil {
+		if reportErr := writeRemoved(inv.Stdout, restored.replacement.Removed, restored.snapshot); reportErr != nil {
 			return errors.Join(err, reportErr)
 		}
-		if reportErr := writeLanding(inv.Stdout, "the backup", restored.landing); reportErr != nil {
+		if reportErr := writeLanding(inv.Stdout, "the backup", restored.replacement.Landing); reportErr != nil {
 			return errors.Join(err, reportErr)
 		}
 		return err
@@ -131,15 +131,13 @@ func syncBasePath(ap *app.App) string {
 	return filepath.Join(ap.Workspace.StorageDir, "last-sync-base.json")
 }
 
-// restoreOutcome is what a restore did beyond loading the file: the tickets it
-// destroyed, what it changed to land the file, and the pre-restore backup that
-// still holds the workspace it replaced. dropped and landing are set only once
-// the replace commits, so a refused or failed-before-replace restore carries
-// neither.
+// restoreOutcome is what a restore did beyond loading the file: what its
+// replace removed and changed, and the pre-restore backup taken of the
+// workspace it replaced. The replacement is set only once the replace commits,
+// so a refused or failed-before-replace restore carries an empty one.
 type restoreOutcome struct {
-	dropped  []model.Issue
-	landing  storage.Landing
-	snapshot string
+	replacement storage.Replacement
+	snapshot    string
 }
 
 // restoreFromExportPath restores the store from the export at path and returns
@@ -149,7 +147,7 @@ type restoreOutcome struct {
 func restoreFromExportPath(ctx context.Context, env environ.Env, ap *app.App, path string, force bool) (outcome restoreOutcome, err error) {
 	metadata := map[string]string{"path": filepath.Clean(path)}
 	defer func() {
-		landingMetadata(metadata, outcome.landing)
+		landingMetadata(metadata, outcome.replacement.Landing)
 		recordSyncCommandTrace(env, ap.Workspace, "lit backup restore", "restored", err, metadata)
 	}()
 	return restoreFromExport(ctx, ap, path, force, metadata)
@@ -182,8 +180,6 @@ func restoreFromExport(ctx context.Context, ap *app.App, path string, force bool
 	if err != nil {
 		return outcome, err
 	}
-	absent := droppedBy(localExport, targetExport)
-	absentMetadata(metadata, absent)
 	state, err := syncer.GetSyncState(ctx)
 	if err != nil {
 		return outcome, err
@@ -211,11 +207,11 @@ func restoreFromExport(ctx context.Context, ap *app.App, path string, force bool
 	if err := backup.Prune(ap.Workspace.StorageDir, 20); err != nil {
 		return outcome, err
 	}
-	outcome.landing, err = importer.ReplaceFromExport(ctx, targetExport)
+	outcome.replacement, err = importer.ReplaceFromExport(ctx, targetExport)
 	if err != nil {
 		return outcome, err
 	}
-	outcome.dropped = absent
+	removedMetadata(metadata, outcome.replacement.Removed)
 	ap.Statusline.Record(statusline.Replaced{})
 	// The landing is committed from here on, so every later failure still
 	// returns it: the trace records what the store now holds, not what the

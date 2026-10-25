@@ -276,10 +276,11 @@ func TestRestoreSeparatesASharedRankKey(t *testing.T) {
 	slices.Sort(holders)
 	wantOrder := listedOrder(backup)
 
-	landing, err := st.ReplaceFromExport(ctx, backup)
+	replacement, err := st.ReplaceFromExport(ctx, backup)
 	if err != nil {
 		t.Fatalf("ReplaceFromExport: %v", err)
 	}
+	landing := replacement.Landing
 	if len(landing.Rekeyed) != 1 || landing.Rekeyed[0].IssueID != holders[0] || landing.Rekeyed[0].From != shared {
 		t.Errorf("Rekeyed = %+v, want the holder listed first, %s, moved from %q", landing.Rekeyed, holders[0], shared)
 	}
