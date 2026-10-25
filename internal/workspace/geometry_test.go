@@ -9,8 +9,9 @@ import (
 )
 
 // git prints rev-parse's answers one per line, unquoted, so a path holding a
-// newline arrives as more lines than answers. The cut that names two existing
-// directories is the answer; no such cut, or more than one, is refused.
+// newline arrives as more lines than answers. The cut that names three
+// existing directories is the answer; no such cut, or more than one, is
+// refused.
 func TestParseGeometryTakesTheOneCutThatNamesExistingDirectories(t *testing.T) {
 	base := t.TempDir()
 	mk := func(path string) string {
@@ -20,15 +21,14 @@ func TestParseGeometryTakesTheOneCutThatNamesExistingDirectories(t *testing.T) {
 		}
 		return path
 	}
-	plainRoot, plainCommon := mk(filepath.Join(base, "plain")), mk(filepath.Join(base, "plain", ".git"))
+	plainRoot, plainGit := mk(filepath.Join(base, "plain")), mk(filepath.Join(base, "plain", ".git"))
 	newlineRoot := mk(filepath.Join(base, "wt\nprunable"))
-	newlineCommon := mk(filepath.Join(base, "repo\nb", ".git"))
+	newlineGit := mk(filepath.Join(base, "repo\nb", ".git"))
 	// Two cuts of one output that both name existing directories.
-	a, b, c := filepath.Join(base, "a"), filepath.Join(base, "b"), filepath.Join(base, "c")
-	mk(a)
-	mk(b + "\n" + c)
-	mk(a + "\n" + b)
-	mk(c)
+	a, b, c, d := filepath.Join(base, "a"), filepath.Join(base, "b"), filepath.Join(base, "c"), filepath.Join(base, "d")
+	for _, dir := range []string{a, b, c + "\n" + d, a + "\n" + b, c, d} {
+		mk(dir)
+	}
 
 	for _, tc := range []struct {
 		name   string
@@ -37,11 +37,11 @@ func TestParseGeometryTakesTheOneCutThatNamesExistingDirectories(t *testing.T) {
 		want   geometry
 		refuse string
 	}{
-		{"two lines", plainRoot, plainRoot + "\n.git\n", geometry{root: plainRoot, commonDir: plainCommon}, ""},
-		{"a newline in the toplevel", newlineRoot, newlineRoot + "\n" + plainCommon + "\n", geometry{root: newlineRoot, commonDir: plainCommon}, ""},
-		{"a newline in the common dir", plainRoot, plainRoot + "\n" + newlineCommon + "\n", geometry{root: plainRoot, commonDir: newlineCommon}, ""},
-		{"no cut names directories", plainRoot, plainRoot + "\n" + filepath.Join(base, "gone") + "\n", geometry{}, "names no working-tree root"},
-		{"two cuts name directories", base, a + "\n" + b + "\n" + c + "\n", geometry{}, "2 different pairs"},
+		{"three lines", plainRoot, plainRoot + "\n.git\n.git\n", geometry{root: plainRoot, commonDir: plainGit, gitDir: plainGit}, ""},
+		{"a newline in the toplevel", newlineRoot, newlineRoot + "\n" + plainGit + "\n" + plainGit + "\n", geometry{root: newlineRoot, commonDir: plainGit, gitDir: plainGit}, ""},
+		{"a newline in the git dirs", plainRoot, plainRoot + "\n" + newlineGit + "\n" + newlineGit + "\n", geometry{root: plainRoot, commonDir: newlineGit, gitDir: newlineGit}, ""},
+		{"no cut names directories", plainRoot, plainRoot + "\n.git\n" + filepath.Join(base, "gone") + "\n", geometry{}, "names no working-tree root"},
+		{"two cuts name directories", base, a + "\n" + b + "\n" + c + "\n" + d + "\n", geometry{}, "2 different sets"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := parseGeometry(tc.cwd, tc.out)
@@ -53,6 +53,40 @@ func TestParseGeometryTakesTheOneCutThatNamesExistingDirectories(t *testing.T) {
 			}
 			if err != nil || got != tc.want {
 				t.Fatalf("parseGeometry() = %+v, %v; want %+v", got, err, tc.want)
+			}
+		})
+	}
+}
+
+// Resolve takes the checkout it runs in from git's own answer, so a GIT_DIR
+// git honours is honoured: from a subdirectory under a hook's GIT_DIR, and for
+// a repository whose git dir lives apart from its working tree.
+func TestResolveFollowsTheGitDirGitIsGiven(t *testing.T) {
+	repo := litRepoWithCommit(t)
+	sub := filepath.Join(repo, "sub")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	apart := filepath.Join(t.TempDir(), "dotfiles.git")
+	run(t, home, "git", "init", "--bare", apart)
+	for _, tc := range []struct {
+		name, cwd, gitDir, workTree string
+	}{
+		{"a subdirectory under the hook's GIT_DIR", sub, filepath.Join(repo, ".git"), ""},
+		{"a git dir apart from its working tree", home, apart, home},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("GIT_DIR", tc.gitDir)
+			if tc.workTree != "" {
+				t.Setenv("GIT_WORK_TREE", tc.workTree)
+			}
+			info, err := Resolve(testEnv(), tc.cwd)
+			if err != nil {
+				t.Fatalf("Resolve(%q) error = %v", tc.cwd, err)
+			}
+			if want := physicalPath(t, tc.gitDir); info.PrivateGitDir != want {
+				t.Fatalf("Resolve(%q).PrivateGitDir = %q, want git's %q", tc.cwd, info.PrivateGitDir, want)
 			}
 		})
 	}

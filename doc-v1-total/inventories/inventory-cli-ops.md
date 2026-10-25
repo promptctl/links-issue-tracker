@@ -353,7 +353,7 @@ Trace reasons for the explicit commands (`reconcileCommandReasonForState`, `sync
 
 `resolveSyncRemote` — `sync.go`:
 - Explicit remote that is not among the configured git remotes → error `requested remote %q not found in configured git remotes` (`sync.go`).
-- Otherwise precedence: validated upstream remote (from `ws.Remotes.Upstream()`, whose failure is returned rather than read as none), then the single configured remote when exactly one exists; else none, `ok` false (`sync.go`).
+- Otherwise precedence: validated upstream remote (from `ws.Remotes.Upstream()`, read only when no remote was requested; its failure is returned rather than read as none), then the single configured remote when exactly one exists; else none, `ok` false (`sync.go`).
 - The chosen remote, however chosen, is parsed by `storage.ParseRemoteName` and returned as the `storage.RemoteName` every store call takes; a name Dolt cannot hold returns its refusal, a `storage.RefusedRemoteNameError` (`remote %q has %q in its name, which Dolt does not allow in a remote's name; rename it (git remote rename) to sync with it`), rather than falling through to another remote (`sync.go`).
 
 `resolveSyncBranch` — `sync_branch.go` (push, pull, receive, reconcile, init):

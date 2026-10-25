@@ -234,8 +234,7 @@ func syncFetchLeaf() syncLeaf {
 	verbose := fs.Bool("verbose", false, "Include detailed remote output")
 	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, inv Invocation, scope syncScope, positional []string) error {
 		ws, session := scope.ws, scope.session
-		syncState, err := syncDoltRemotesFromGit(ctx, inv.Env, session, ws)
-		if err != nil {
+		if _, err := syncDoltRemotesFromGit(ctx, inv.Env, session, ws); err != nil {
 			// A could-not-attempt failure (git-remote reconciliation itself failed,
 			// before any fetch was even tried) is still a decision this command
 			// reached — trace it, matching the coverage recordMirrorTraceError/
@@ -258,7 +257,7 @@ func syncFetchLeaf() syncLeaf {
 			_, err := fmt.Fprintln(inv.Stdout, "skipped sync fetch: no eligible git remote; name one with --remote")
 			return err
 		}
-		err = fetchAndFollow(ctx, inv.Env, session, ws, syncState.gitRemotes, remoteName)
+		err = fetchAndFollow(ctx, inv.Env, session, ws, remoteName)
 		recordSyncCommandTrace(inv.Env, ws, "lit sync fetch", "fetched", err, map[string]string{"remote": remoteName.String()})
 		if err != nil {
 			return err
@@ -280,7 +279,7 @@ func syncFetchLeaf() syncLeaf {
 // network: a workspace with no sync remote, one Dolt cannot hold, or none
 // whose default branch is known here, has no freshness a re-root could
 // misreport, and follows nothing.
-func fetchAndFollow(ctx context.Context, env environ.Env, session syncSession, ws workspace.Info, gitRemotes []workspace.GitRemote, remote storage.RemoteName) error {
+func fetchAndFollow(ctx context.Context, env environ.Env, session syncSession, ws workspace.Info, remote storage.RemoteName) error {
 	if err := session.syncer.SyncFetch(ctx, remote); err != nil {
 		return err
 	}
@@ -713,7 +712,7 @@ func performSyncPush(ctx, completionCtx context.Context, env environ.Env, sessio
 	if pushErr == nil && result.Superseded == nil && result.Bound.Publication == storage.ReRootNotPushed {
 		proofCtx, cancelProof := context.WithTimeout(completionCtx, pushProofDeadline)
 		var unproven string
-		proven, unproven = provePushedAdvertisement(proofCtx, env, session.syncer, ws, remoteName, target.gitRemotes)
+		proven, unproven = provePushedAdvertisement(proofCtx, env, session.syncer, ws, remoteName)
 		cancelProof()
 		traceMetadata["advertisement"] = advertisementProofTrace(unproven)
 	}
@@ -891,9 +890,6 @@ type syncTarget struct {
 	remote storage.RemoteName
 	branch string
 	skip   syncTargetSkip
-	// gitRemotes is the git remote list the target was resolved from, so a
-	// step after the push reads the same list rather than a second one.
-	gitRemotes []workspace.GitRemote
 }
 
 // traceMetadata renders the resolved remote as trace metadata — nil before one
@@ -920,8 +916,7 @@ func (t syncTarget) traceMetadata() map[string]string {
 // cancels here rather than outliving the interrupt until the grace-timer
 // hard-exit. [LAW:no-ambient-temporal-coupling]
 func resolveSyncTarget(ctx context.Context, env environ.Env, session syncSession, ws workspace.Info, requestedRemote string) (syncTarget, error) {
-	syncState, err := syncDoltRemotesFromGit(ctx, env, session, ws)
-	if err != nil {
+	if _, err := syncDoltRemotesFromGit(ctx, env, session, ws); err != nil {
 		return syncTarget{}, err
 	}
 	remoteName, ok, err := workspaceSyncRemote(ws, requestedRemote)
@@ -942,7 +937,7 @@ func resolveSyncTarget(ctx context.Context, env environ.Env, session syncSession
 	if err != nil {
 		return syncTarget{remote: remoteName}, err
 	}
-	return syncTarget{remote: remoteName, branch: branch, gitRemotes: syncState.gitRemotes}, nil
+	return syncTarget{remote: remoteName, branch: branch}, nil
 }
 
 // syncPullOutcome is the result of one pull attempt, independent of CLI

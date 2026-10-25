@@ -82,7 +82,7 @@ func TestEachCommandAsksGitEachQuestionOnce(t *testing.T) {
 	measured["PATH"] = shimDir + string(os.PathListSeparator) + os.Getenv("PATH")
 	measured["XDG_STATE_HOME"] = stateHome
 
-	geometry := "rev-parse --show-toplevel --git-common-dir"
+	geometry := "rev-parse --show-toplevel --git-common-dir --git-dir"
 	upstream := "for-each-ref --format=%(if)%(HEAD)%(then)%(upstream:remotename)%(end) refs/heads/"
 	freshness := []string{geometry, "remote -v", upstream, "symbolic-ref --quiet --short refs/remotes/origin/HEAD", "worktree list --porcelain -z"}
 	// Order matters only for the receive: the first command that wants one

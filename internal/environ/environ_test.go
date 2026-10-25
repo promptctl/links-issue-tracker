@@ -193,3 +193,24 @@ func TestGitGivesItsChildItsDirectoryAsPWD(t *testing.T) {
 		t.Errorf("the child of git run in %s saw PWD=%q, want %q", link, got, link)
 	}
 }
+
+// Git counts the git it builds for the lineage one Of starts, which Envs
+// derived from it share; the zero Env reads as the empty environment and
+// counts nothing.
+func TestGitCountsForTheLineage(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	env := Of([]string{"A=1"})
+	env.Git(ctx, "", nil, "version")
+	env.With("B=2").Without("A").Git(ctx, "", nil, "version")
+	if got := env.GitSpawns(); got != 2 {
+		t.Errorf("GitSpawns() = %d after one git on the Env and one on an Env derived from it, want 2", got)
+	}
+	if got := Of(nil).GitSpawns(); got != 0 {
+		t.Errorf("a new lineage's GitSpawns() = %d, want 0", got)
+	}
+	zero := Env{}
+	if cmd := zero.Git(ctx, "", nil, "version"); cmd == nil || zero.GitSpawns() != 0 {
+		t.Errorf("the zero Env's Git = %v and GitSpawns() = %d, want a command and 0", cmd, zero.GitSpawns())
+	}
+}

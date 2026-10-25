@@ -73,14 +73,10 @@ func TestAPushRecordsTheAdvertisementItLeft(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open consumer sync session: %v", err)
 	}
-	gitRemotes, err := workspace.NewRemotes(testEnv(), resolved.RootDir).List()
-	if err != nil {
-		t.Fatalf("read consumer git remotes: %v", err)
-	}
-	proven, unproven := provePushedAdvertisement(context.Background(), testEnv(), session.syncer, resolved, remoteName(t, "origin"), gitRemotes)
+	proven, unproven := provePushedAdvertisement(context.Background(), testEnv(), session.syncer, resolved, remoteName(t, "origin"))
 	// A push to a remote the receive never asks proves nothing either: its
 	// record would replace one the receive can match with one it cannot.
-	_, otherRemote := provePushedAdvertisement(context.Background(), testEnv(), session.syncer, resolved, remoteName(t, "backup"), gitRemotes)
+	_, otherRemote := provePushedAdvertisement(context.Background(), testEnv(), session.syncer, resolved, remoteName(t, "backup"))
 	if closeErr := closeStore(); closeErr != nil {
 		t.Fatalf("close consumer sync session: %v", closeErr)
 	}

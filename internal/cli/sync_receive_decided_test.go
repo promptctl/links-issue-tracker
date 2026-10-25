@@ -97,11 +97,7 @@ func TestAReceiveThatEndsBeforeItFetchesSaysWhy(t *testing.T) {
 		}, receiveDecisionLockHeld, "origin"},
 		{"the remote unmoved since the last receive", func(t *testing.T) workspace.Info {
 			ws := receiveWorkspace(t, []string{"refs/dolt/data"}, "origin")
-			gitRemotes, err := workspace.NewRemotes(testEnv(), ws.RootDir).List()
-			if err != nil {
-				t.Fatal(err)
-			}
-			observed, err := advertise(context.Background(), testEnv(), ws, remoteName(t, "origin"), gitRemotes)
+			observed, err := advertise(context.Background(), testEnv(), ws, remoteName(t, "origin"))
 			if err != nil {
 				t.Fatal(err)
 			}

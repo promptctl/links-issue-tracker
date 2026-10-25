@@ -101,11 +101,9 @@ func LiveCheckouts(env environ.Env, cwd string) ([]Checkout, error) {
 	inhabited := slices.DeleteFunc(records, worktreeRecord.uninhabited)
 	checkouts := make([]Checkout, 0, len(inhabited))
 	for _, record := range inhabited {
-		// The same derivation Resolve uses for the current checkout, pointed at
-		// another one: read off the `.git` entry at its root, with no git
-		// subprocess per worktree, so no second spelling of "where does this
-		// checkout keep its identity" exists to drift from Resolve's.
-		// [LAW:single-enforcer]
+		// Read off the `.git` entry git keeps at the worktree's root, with no
+		// git subprocess per worktree; see checkoutGitDir for how this agrees
+		// with the identity Resolve gives the checkout it runs in.
 		privateGitDir, err := checkoutGitDir(record.path)
 		if err != nil {
 			return nil, fmt.Errorf("locate the git directory of worktree %q, which git lists as live: %w", record.path, err)

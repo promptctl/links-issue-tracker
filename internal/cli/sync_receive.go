@@ -278,7 +278,7 @@ func receiveOnce(ctx context.Context, env environ.Env, ws workspace.Info) {
 	timeoutCtx, cancel := context.WithTimeout(ctx, store.ReceiveDeadline)
 	defer cancel()
 
-	observed, askErr := askRemote(timeoutCtx, env, ws, gitRemotes)
+	observed, askErr := askRemote(timeoutCtx, env, ws)
 	// Whether the remote answered is a fact of every receive that asked: null
 	// when it did, and when it could not tell, why — the fetch that follows
 	// reads the same either way. [LAW:nothing-unseen]

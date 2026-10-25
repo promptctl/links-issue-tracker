@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -196,4 +197,30 @@ func remoteURL(t *testing.T, ws workspace.Info) string {
 		t.Fatalf("GitRemotes() = %v, %v; want one remote", url, err)
 	}
 	return url[0].URL
+}
+
+// A git that cannot say which remote the branch tracks fails the selection
+// that needs the answer, loudly, and no selection that names its remote.
+//
+// Not parallel: it puts a git on PATH that fails `for-each-ref`.
+func TestAnUnreadableUpstreamFailsOnlyTheSelectionThatReadsIt(t *testing.T) {
+	repo := pushedRepoWithoutRemoteHead(t)
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	shimDir := t.TempDir()
+	shim := "#!/bin/sh\nfor a in \"$@\"; do [ \"$a\" = for-each-ref ] && { echo 'fatal: ref lock' >&2; exit 128; }; done\nexec " + gitPath + " \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(shimDir, "git"), []byte(shim), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", shimDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	ws := branchTestWorkspace(t, repo.RootDir)
+
+	if remote, ok, err := workspaceSyncRemote(ws, "origin"); err != nil || !ok || remote.String() != "origin" {
+		t.Fatalf("workspaceSyncRemote(origin) = %q, %v, %v; want origin, needing no upstream", remote, ok, err)
+	}
+	if remote, ok, err := workspaceSyncRemote(ws, ""); err == nil || !strings.Contains(err.Error(), "ref lock") {
+		t.Fatalf("workspaceSyncRemote(\"\") = %q, %v, %v; want the upstream read's failure, not a fallback to the single remote", remote, ok, err)
+	}
 }

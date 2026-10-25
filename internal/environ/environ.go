@@ -138,16 +138,26 @@ func (e Env) CommandContext(ctx context.Context, dir, name string, args ...strin
 // With's job.
 //
 // Every git lit itself starts is started here, so this is where they are
-// counted (GitSpawns); Dolt's own git, inside a fetch or push, is started by
-// Dolt and is not. The zero Env has no counter, and Run refuses it before any
-// git can start. [LAW:nothing-unseen] [LAW:single-enforcer]
+// counted (GitSpawns), whether or not the git then starts; Dolt's own git,
+// inside a fetch or push, is started by Dolt and is not.
+// [LAW:nothing-unseen] [LAW:single-enforcer]
 func (e Env) Git(ctx context.Context, dir string, stdin io.Reader, args ...string) *gitcmd.Cmd {
-	e.gitSpawns.Add(1)
+	e.countGit()
 	return gitcmd.Command(ctx, gitcmd.Spec{Dir: dir, Env: e.in(dir), Stdin: stdin}, args...)
 }
 
-// GitSpawns is how many git processes Git has started for this Env's lineage.
-// The zero Env, which is no environment, has started none.
+// countGit counts one git for the lineage. The zero Env is no run's
+// environment and has no lineage to count for, so its git is counted nowhere;
+// it still runs, in the empty environment the zero Env reads as.
+func (e Env) countGit() {
+	if e.IsZero() {
+		return
+	}
+	e.gitSpawns.Add(1)
+}
+
+// GitSpawns is how many git commands Git has built for this Env's lineage —
+// every git lit itself ran. The zero Env counts none.
 func (e Env) GitSpawns() int64 {
 	if e.IsZero() {
 		return 0

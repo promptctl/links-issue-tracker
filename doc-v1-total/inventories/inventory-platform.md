@@ -378,15 +378,15 @@ Defaults are set in `Load` (`internal/config/config.go`).
 
 ### 5.2 `Locate(cwd)` (`internal/workspace/workspace.go`)
 
-1. `askGeometry`: `git rev-parse --show-toplevel --git-common-dir` run with `cmd.Dir = cwd`, its
+1. `askGeometry`: `git rev-parse --show-toplevel --git-common-dir --git-dir` run with `cmd.Dir = cwd`, its
    stdout untrimmed; failure classified by `classifyGitError` (`internal/workspace/workspace.go`).
 2. `parseGeometry(cwd, out)`: the output (one trailing newline removed) is split on newlines and
-   every cut into a toplevel and a common dir is tried; each half is passed through
+   every cut into a toplevel, a common dir and a git dir is tried; each part is passed through
    `anchorGitPath(cwd, …)` — a relative answer is joined onto the **cwd**, which `gitOutput` has
    already refused unless absolute (`run git in %q: the directory is not absolute`), not the repo
-   toplevel; an absolute answer is only cleaned. The cut whose two paths are both existing
-   directories is the answer; none ⇒ `… which names no working-tree root and common dir that both
-   exist`; more than one ⇒ `… which reads as %d different pairs of existing directories`
+   toplevel; an absolute answer is only cleaned. The cut whose three paths are all existing
+   directories is the answer; none ⇒ `… which names no working-tree root, common dir and git dir
+   that all exist`; more than one ⇒ `… which reads as %d different sets of existing directories`
    (`internal/workspace/workspace.go`).
 3. `filepath.EvalSymlinks` canonicalizes the common dir; failure ⇒
    `canonicalize git-common-dir %q: %w` (`internal/workspace/workspace.go`).
@@ -395,12 +395,9 @@ Defaults are set in `Load` (`internal/config/config.go`).
 ### 5.3 `Resolve(cwd)` (`internal/workspace/workspace.go`, `ResolveWithPrefix`)
 
 1. `askGeometry(cwd)` as in 5.2; the toplevel ⇒ `RootDir`, the common dir ⇒ the `Location`.
-2. `checkoutGitDir(RootDir)`: `os.Stat(<root>/.git)`; a directory is the private git dir; a
-   regular file is a gitfile, read whole — it must begin `gitdir: `, the path is the rest with
-   trailing `\r`/`\n` removed, relative to the root — else
-   `gitfile %q does not name a git dir: …`; anything else ⇒ an error naming the root. Then
-   `filepath.EvalSymlinks`; failure ⇒ `canonicalize the git dir %q of working tree %q: %w`
-   (`internal/workspace/workspace.go`).
+2. The git dir answer, through `filepath.EvalSymlinks` (`canonicalGitDir`), ⇒ `PrivateGitDir`;
+   failure ⇒ `canonicalize git dir %q: %w`. Being git's own answer, it honours `GIT_DIR` and
+   `GIT_WORK_TREE` (`internal/workspace/workspace.go`).
 3. `os.MkdirAll(loc.StorageDir, 0o755)`; failure ⇒ `create storage dir: %w`
    (`internal/workspace/workspace.go`).
 4. `loadOrCreateConfig(rootDir, loc.ConfigPath)`.
@@ -449,7 +446,10 @@ The geometry query uses `context.Background()` deliberately (`internal/workspace
   `classifyGitError` (`internal/workspace/checkouts.go`).
 - Records are filtered by `uninhabited()` = `prunable || bare`
   (`internal/workspace/checkouts.go`).
-- For each remaining record: `checkoutGitDir(record.path)` (5.3; no git subprocess; failure ⇒
+- For each remaining record: `checkoutGitDir(record.path)` — `os.Stat(<path>/.git)`; a directory
+  is the private git dir; a regular file is a gitfile, read whole: it must begin `gitdir: `, the
+  path is the rest with trailing `\r`/`\n` removed, relative to the path, else
+  `gitfile %q does not name a git dir: …`; then `canonicalGitDir`; no git subprocess (failure ⇒
   `locate the git directory of worktree %q, which git lists as live: %w`,
   `internal/workspace/checkouts.go`) then `ReadStream(privateGitDir)` — any failure
   fails the whole enumeration (`internal/workspace/checkouts.go`).

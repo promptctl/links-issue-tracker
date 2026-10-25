@@ -295,8 +295,9 @@ func TestAPushToARemoteTheReceiveDoesNotAskIsUnproven(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	runGit(t, dir, "init", "-q")
-	gitRemotes := []workspace.GitRemote{{Name: "origin", URL: "https://example.com/a.git"}, {Name: "fork", URL: "https://example.com/b.git"}}
-	proven, unproven := provePushedAdvertisement(t.Context(), testEnv(), nil, workspace.Info{RootDir: dir, Remotes: workspace.NewRemotes(testEnv(), dir)}, remoteName(t, "origin"), gitRemotes)
+	runGit(t, dir, "remote", "add", "origin", "https://example.com/a.git")
+	runGit(t, dir, "remote", "add", "fork", "https://example.com/b.git")
+	proven, unproven := provePushedAdvertisement(t.Context(), testEnv(), nil, workspace.Info{RootDir: dir, Remotes: workspace.NewRemotes(testEnv(), dir)}, remoteName(t, "origin"))
 	if proven != (remoteAdvertisement{}) || unproven != "the automatic receive asks no remote" {
 		t.Fatalf("provePushedAdvertisement() = %+v, %q; want nothing proven because the receive asks no remote", proven, unproven)
 	}
