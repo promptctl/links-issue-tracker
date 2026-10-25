@@ -2251,12 +2251,11 @@ func importTreeLeaf() appLeaf {
 }
 
 // runImportTreeJSON consumes a JSON tree spec and creates issues in
-// dependency order with best-effort rollback on failure (see
-// Store.ImportTree). The spec is an array of records; each carries a
-// local_id used inside the spec to wire parent/blocked_by refs. Real issue
-// IDs are generated at create time and printed as an ordered mapping. Run
-// `lit doctor` after a failed import to detect any orphans left if rollback
-// itself failed.
+// dependency order as one batch, so a tree refused at any write writes
+// nothing (see Store.ImportTree). The spec is an array of records; each
+// carries a local_id used inside the spec to wire parent/blocked_by refs.
+// Real issue IDs are generated at create time and printed as an ordered
+// mapping.
 //
 // JSON shape (see storage.ImportTreeSpec):
 //

@@ -16,7 +16,7 @@
 //
 // No BEHAVIOR here is shared with the Dolt engine: not the field-patch diff,
 // not the transition planner, not the frame resolution behind the rank
-// intents, not the compensating bulk apply. Every one of those is a pure
+// intents. Every one of those is a pure
 // function of model values living in internal/store, and lifting them into the
 // contract package would look like the obvious [LAW:one-source-of-truth] fix.
 // It would also quietly destroy the proof — two engines calling one

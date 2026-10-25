@@ -12,10 +12,10 @@ import (
 
 // The two file imports — a tree file and a bulk file — are gated here, once,
 // before either engine writes anything. An import creates one issue at a
-// time and compensates a later refusal by deleting what already landed, so a
-// file the store would refuse at its third document is refused whole, with
-// nothing written, by judging up front everything that can be judged without
-// a read: every reference names a document in the file, every field parses
+// time, as one batch its engine resets whole on a refusal at any write; a file
+// the store would refuse at its third document is refused here instead,
+// before it writes anything, by judging up front everything that can be
+// judged without a read: every reference names a document in the file, every field parses
 // by the gate a create parses by, the references form no cycle, the
 // hierarchy the file describes obeys containment (RejectLeafWithoutParent,
 // RejectParentThatIsNotAContainer), and no blocked_by orders work inside one
