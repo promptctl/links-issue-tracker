@@ -100,6 +100,7 @@ var (
 	// persisting. [LAW:one-source-of-truth]
 	reasonMergeConflict         = commandReason{"merge_conflict", ExitConflict}
 	reasonOwnerApprovalRequired = commandReason{"owner_approval_required", ExitConflict}
+	reasonRestoreWouldOverwrite = commandReason{"restore_would_overwrite", ExitConflict}
 	reasonSyncDivergence        = commandReason{"sync_divergence", ExitConflict}
 
 	// ExitNoWork: the command ran correctly and changed nothing. The router's
@@ -167,6 +168,10 @@ func typedErrorReason(err error, unnamed commandReason) commandReason {
 	var mergeConflict MergeConflictError
 	if errors.As(err, &mergeConflict) {
 		return reasonMergeConflict
+	}
+	var restoreOverwrite RestoreOverwriteError
+	if errors.As(err, &restoreOverwrite) {
+		return reasonRestoreWouldOverwrite
 	}
 	// A schema ahead of this binary: a workspace it refuses to open or cannot
 	// downgrade, or a remote it will not write below. Terminal for the binary
@@ -407,6 +412,8 @@ func commandErrorRemediation(reason commandReason) string {
 		return ""
 	case reasonMergeConflict:
 		return "Sync and retry after resolving conflicts."
+	case reasonRestoreWouldOverwrite:
+		return "Rerun with `--force` to restore anyway: the restore first takes a backup of the workspace it replaces, and `lit backup list` names it."
 	case reasonSyncDivergence:
 		// The SyncFailureError message IS the full remediation (directive + steps +
 		// escalation), so a second remediation line here would be a drifting copy of

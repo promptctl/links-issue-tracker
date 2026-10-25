@@ -208,12 +208,6 @@ type Syncer interface {
 	// SettledLastWrites is every settle's write of its settled.last record
 	// since the engine opened, oldest first.
 	SettledLastWrites() []SettledLastWrite
-
-	// GetSyncState and RecordSyncState carry the staleness marker across
-	// commands: what the store's content was at the last sync, so a later
-	// command can tell whether anything has happened since.
-	GetSyncState(ctx context.Context) (SyncState, error)
-	RecordSyncState(ctx context.Context, state SyncState) error
 }
 
 // Reconciler settles a divergence — the state in which local and remote have

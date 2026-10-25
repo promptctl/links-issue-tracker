@@ -2,11 +2,10 @@ package cli
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -17,6 +16,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/statusline"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/syncfile"
+	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
 var backupFamily = commandFamily[appSubcommand]{
@@ -103,7 +103,7 @@ func backupRestoreLeaf() appLeaf {
 	fs := newCobraFlagSet("backup restore")
 	path := registerPath(fs, "path", "Path to an export JSON (backup snapshot or sync file)")
 	latest := fs.Bool("latest", false, "Restore latest backup snapshot")
-	force := fs.Bool("force", false, "Force restore over unsynced state")
+	force := fs.Bool("force", false, "Restore over changes made since the last restore")
 	return appLeaf{fs: fs, positionals: 0, usage: restoreUsage, work: func(ctx context.Context, inv Invocation, ap *app.App, positional []string) error {
 		restorePath, err := resolveRestorePath(ap, path.path(), *latest)
 		if err != nil {
@@ -125,27 +125,30 @@ func backupRestoreLeaf() appLeaf {
 	}}
 }
 
-func syncBasePath(ap *app.App) string {
-	return filepath.Join(ap.Workspace.StorageDir, "last-sync-base.json")
-}
-
-// restoreOutcome is what a restore did beyond loading the file: what its
-// replace removed and changed, and the pre-restore backup taken of the
-// workspace it replaced. replacement is nil until the replace commits, so a
-// replace that removed and changed nothing is told apart from one that never
-// ran. [LAW:types-are-the-program]
+// restoreOutcome is what a restore did beyond loading the file: its guard's
+// verdict, what its replace removed and changed, and the pre-restore backup
+// taken of the workspace it replaced. replacement is nil until the replace
+// commits, so a replace that removed and changed nothing is told apart from
+// one that never ran. [LAW:types-are-the-program]
 type restoreOutcome struct {
+	guard       restoreGuard
 	replacement *storage.Replacement
 	snapshot    string
 }
 
 // restoreFromExportPath restores the store from the export at path and returns
 // the restore's outcome, failed or not. Every restore leaves one sync trace
-// record, failed or not: it rewrites the sync base the next push compares
-// against, and the record carries the changes. [LAW:nothing-unseen]
+// record, failed or not: it records the digest the next restore's guard
+// compares against, and the record carries the verdict and the changes.
+// [LAW:nothing-unseen]
 func restoreFromExportPath(ctx context.Context, env environ.Env, ap *app.App, path string, force bool) (outcome restoreOutcome, err error) {
 	defer func() {
 		metadata := map[string]string{"path": filepath.Clean(path)}
+		// The guard's verdict says why a restore went ahead or was refused; a
+		// restore that failed before the guard ran has none to record.
+		if outcome.guard != "" {
+			metadata["restore_guard"] = string(outcome.guard)
+		}
 		// A restore whose replace never committed counted nothing, so its record
 		// carries no counts rather than zeros nobody counted.
 		if outcome.replacement != nil {
@@ -159,15 +162,9 @@ func restoreFromExportPath(ctx context.Context, env environ.Env, ap *app.App, pa
 func restoreFromExport(ctx context.Context, ap *app.App, path string, force bool) (restoreOutcome, error) {
 	restorePath := filepath.Clean(path)
 	var outcome restoreOutcome
-	// [LAW:parse-dont-validate] A restore needs two capabilities: the sync state
-	// it compares the local workspace against, and the import that replaces the
-	// contents. Both are asked for before anything is read, written, or backed
-	// up, so an engine offering one and not the other cannot strand a restore
-	// half-done. What comes back is the interface, so nothing below re-asks.
-	syncer, err := storage.Sync.Of(ap.Store)
-	if err != nil {
-		return outcome, err
-	}
+	// [LAW:parse-dont-validate] A restore needs the import capability. It is
+	// asked for before anything is read, written, or backed up, and what comes
+	// back is the interface, so nothing below re-asks.
 	importer, err := storage.Import.Of(ap.Store)
 	if err != nil {
 		return outcome, err
@@ -180,24 +177,12 @@ func restoreFromExport(ctx context.Context, ap *app.App, path string, force bool
 	if err != nil {
 		return outcome, err
 	}
-	state, err := syncer.GetSyncState(ctx)
+	outcome.guard, err = guardRestore(ap.Workspace, localExport, force)
 	if err != nil {
 		return outcome, err
 	}
-	if state.ContentHash != "" && !force {
-		baseHash, hashErr := syncfile.HashFile(syncBasePath(ap))
-		if hashErr != nil {
-			return outcome, hashErr
-		}
-		if baseHash != "" {
-			localHash, localHashErr := hashExport(localExport)
-			if localHashErr != nil {
-				return outcome, localHashErr
-			}
-			if localHash != baseHash {
-				return outcome, MergeConflictError{Message: "restore conflict: local workspace has unsynced changes since last sync base"}
-			}
-		}
+	if outcome.guard == guardChanged {
+		return outcome, RestoreOverwriteError{}
 	}
 	snapshot, err := backup.Create(ap.Workspace.StorageDir, localExport)
 	if err != nil {
@@ -216,32 +201,66 @@ func restoreFromExport(ctx context.Context, ap *app.App, path string, force bool
 	// The landing is committed from here on, so every later failure still
 	// returns it: the trace records what the store now holds, not what the
 	// command finished.
-	// [LAW:single-enforcer] Restored sync base is serialized from the store so container lifecycles pass through the hydration boundary before JSON output.
+	// [LAW:one-source-of-truth] The recorded digest is of what the store now
+	// holds, the one record the next restore's guard compares against. It is
+	// taken from a fresh store export, never from the file just restored: an
+	// epic decoded from a file awaits hydration and cannot be marshalled.
 	restoredExport, err := ap.Store.Export(ctx)
 	if err != nil {
 		return outcome, err
 	}
-	if _, err := syncfile.WriteAtomic(syncBasePath(ap), restoredExport); err != nil {
-		return outcome, err
-	}
-	hash, err := syncfile.HashFile(restorePath)
+	digest, err := syncfile.ContentHash(restoredExport)
 	if err != nil {
 		return outcome, err
 	}
-	return outcome, syncer.RecordSyncState(ctx, storage.SyncState{
-		Path:        restorePath,
-		ContentHash: hash,
-	})
+	return outcome, writeMarkerAtomic(restoreDigestPath(ap.Workspace), []byte(digest+"\n"))
 }
 
-func hashExport(export model.Export) (string, error) {
-	// Issue.MarshalJSON refuses partial values, so MarshalIndent below surfaces
-	// any unhydrated input as a marshal error — no need for a duplicate guard here.
-	payload, err := json.MarshalIndent(export, "", "  ")
-	if err != nil {
-		return "", fmt.Errorf("marshal export: %w", err)
+// restoreDigestPath is this clone's record of what its last restore left: the
+// content digest the next restore's guard compares against. It is a file in
+// the storage dir, never a row in the store, because the store syncs and the
+// record is of this clone's restore alone: a clone that pulled another's
+// digest would be refused over a restore it never ran.
+// [LAW:one-source-of-truth]
+func restoreDigestPath(ws workspace.Info) string {
+	return filepath.Join(ws.StorageDir, "restore.digest")
+}
+
+// restoreGuard is the overwrite guard's verdict on a restore: which check let
+// it through, or that the workspace moved since the last restore. Only
+// guardChanged refuses. The zero value is a guard that never ran.
+// [LAW:types-are-the-program]
+type restoreGuard string
+
+const (
+	guardForced     restoreGuard = "forced"     // --force skips the comparison
+	guardUnrecorded restoreGuard = "unrecorded" // no restore recorded a digest to compare against
+	guardUnchanged  restoreGuard = "unchanged"  // the workspace holds what the last restore left
+	guardChanged    restoreGuard = "changed"    // the workspace moved since the last restore
+)
+
+// guardRestore compares what the workspace holds with the content digest the
+// last restore in ws took of what it left. Reading that record is part of the
+// comparison --force skips, so an unreadable record never blocks a forced
+// restore. local must come from the store: syncfile.ContentHash cannot hash a
+// decoded file.
+func guardRestore(ws workspace.Info, local model.Export, force bool) (restoreGuard, error) {
+	if force {
+		return guardForced, nil
 	}
-	payload = append(payload, '\n')
-	sum := sha256.Sum256(payload)
-	return strings.ToLower(hex.EncodeToString(sum[:])), nil
+	recorded, err := os.ReadFile(restoreDigestPath(ws))
+	if errors.Is(err, fs.ErrNotExist) {
+		return guardUnrecorded, nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("read the last restore's digest: %w", err)
+	}
+	hash, err := syncfile.ContentHash(local)
+	if err != nil {
+		return "", err
+	}
+	if hash != strings.TrimSpace(string(recorded)) {
+		return guardChanged, nil
+	}
+	return guardUnchanged, nil
 }

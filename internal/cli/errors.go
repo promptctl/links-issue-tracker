@@ -13,6 +13,16 @@ package cli
 
 import "fmt"
 
+// RestoreOverwriteError is a restore refused because the workspace changed
+// since the last restore, so restoring would overwrite those changes. It is
+// not a merge conflict: nothing was synced or merged, and syncing does not
+// clear it; --force does, and the pre-restore backup keeps what it overwrites.
+type RestoreOverwriteError struct{}
+
+func (RestoreOverwriteError) Error() string {
+	return "restore refused: the workspace changed since the last restore, and restoring now would overwrite those changes"
+}
+
 type MergeConflictError struct {
 	Message string
 }

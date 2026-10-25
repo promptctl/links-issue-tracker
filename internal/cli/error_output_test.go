@@ -40,6 +40,7 @@ var reasonCodes = map[string]int{
 	"parent_cycle":                7,
 	"purge_unconfirmed":           3,
 	"remote_unreachable":          1,
+	"restore_would_overwrite":     5,
 	"retired_command":             3,
 	"schema_shape_refused":        3,
 	"scope_exhausted":             6,
@@ -69,6 +70,7 @@ func TestCommandErrorReason(t *testing.T) {
 		want string
 	}{
 		{"merge conflict", MergeConflictError{Message: "sync conflict"}, "merge_conflict"},
+		{"restore would overwrite", RestoreOverwriteError{}, "restore_would_overwrite"},
 		{
 			"sync divergence",
 			SyncFailureError{Failure: SyncFailure{Class: syncFailureProseHeld, Remote: "origin", Branch: "master"}},

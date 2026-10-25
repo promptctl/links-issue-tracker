@@ -522,7 +522,6 @@ They live beside the specs rather than in an engine because the schema is the co
 - `HistoryBounds() []HistoryBound` — what every push's history bound since the engine opened did to keep the sync branch's history under its bound, oldest first; an engine whose history has no bound to keep returns none.
 - `ForkPointRecords() []ForkPointRecord` — what the engine did to each fork point since it opened, oldest first: every fetch before it moved the tracking ref, every follow of a re-root, and every removal of a remote.
 - `ReconcileBases() []ReconcileBase` — the base every reconcile since the engine opened decided on, and where it came from, oldest first.
-- `GetSyncState(ctx) (SyncState, error)` / `RecordSyncState(ctx, state SyncState) error` — carry the staleness marker across commands
 - Compaction sits inside `Syncer` because `SyncCompactAndPush` compacts and pushes under a single commit-lock acquisition — one atomic operation not assemblable from `SyncCompact` plus a push (`internal/storage/capabilities.go`).
 - Nothing in `Syncer` resolves a divergence — that is `Reconciler` (`internal/storage/capabilities.go`).
 
@@ -578,7 +577,6 @@ They live beside the specs rather than in an engine because the schema is the co
 
 These types live in the contract, not in an engine, because a capability interface can only name types every engine can name (`internal/storage/sync.go`).
 
-- **`SyncState{Path, ContentHash string}`** — the store's on-disk content at a point in time: where it lives and a digest of what it held; the staleness signal (`internal/storage/sync.go`).
 - **`SyncRemote{Name, URL string}`** (json `name`, `url`) — `internal/storage/sync.go`.
 - **`SyncStatusRow{TableName string; Staged bool; Status string}`** (json `table_name`, `staged`, `status`) — one unit of pending local change; what a "table" is belongs to the engine, and the contract carries the row through uninterpreted (`internal/storage/sync.go`).
 - **`SyncStatusReport`** (`internal/storage/sync.go`) — `EngineVersion` (json `engine_version`; the build of whatever engine answered, singular because the whole report describes one engine), `Branch`, `HeadCommit`, `HeadMessage`, `Status []SyncStatusRow`, `Remotes []SyncRemote`.

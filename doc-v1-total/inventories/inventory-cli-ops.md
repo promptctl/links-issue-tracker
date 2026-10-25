@@ -658,7 +658,7 @@ The block has no trailing newline after `</agent-instructions>` (`sync_failure.g
 - `shouldRunNow(markerPath, now, interval)` (`sync_cadence.go`): a missing or unstattable marker means "allow".
 - `markRunAttempt` (`sync_cadence.go`): `MkdirAll(StorageDir, 0o755)` then `os.WriteFile(marker, nil, 0o644)`; errors wrapped `ensure storage dir for debounce marker` / `write debounce marker <base>`.
 - `writeMarkerAtomic(markerPath, payload)` (`sync_cadence.go`): `MkdirAll` of the marker's directory, then `atomicfile.WriteFile(markerPath, payload, 0o600, atomicfile.Replaceable)`. Used by the push-outcome, owner-notify, receive-block and advertised-sync-branch markers.
-- Marker inventory under `<StorageDir>`: `receive.last`, `received-refs.last` (`store/received_refs.go`; forgotten by `store.LockWorkspaceExclusive`), `settled.last` (written only by `Store.settleReceived`), `unsettled.first` and `unsettled.last` (written only by the automatic receive) (`store/receive_episode.go`; none forgotten by a rotation), `remote-absent.last`, `compact.last`, `fetched.<remote>`, `mirror-pending`, `push-outcome.last`, `owner-notify.<kind>.last`, `mirror.log`, `snapshots/`, `traces/{sync,automation,…}/`, `last-sync-base.json`.
+- Marker inventory under `<StorageDir>`: `receive.last`, `received-refs.last` (`store/received_refs.go`; forgotten by `store.LockWorkspaceExclusive`), `settled.last` (written only by `Store.settleReceived`), `unsettled.first` and `unsettled.last` (written only by the automatic receive) (`store/receive_episode.go`; none forgotten by a rotation), `remote-absent.last`, `compact.last`, `fetched.<remote>`, `mirror-pending`, `push-outcome.last`, `owner-notify.<kind>.last`, `mirror.log`, `snapshots/`, `traces/{sync,automation,…}/`.
 
 ### 3.16 Acceptance evidence in `cmd/lit`
 
@@ -799,7 +799,7 @@ Family usage `usage: lit backup <create|list|restore> ...` (`backup.go`). Access
 |---|---|---|---|
 | `--path` | `""` | "Path to an export JSON (backup snapshot or sync file)" | `backup.go` |
 | `--latest` | `false` | "Restore latest backup snapshot" | `backup.go` |
-| `--force` | `false` | "Force restore over unsynced state" | `backup.go` |
+| `--force` | `false` | "Restore over changes made since the last restore" | `backup.go` |
 
 `resolveRestorePath` (`backup.go`):
 - `--latest` with a non-empty `--path` → `UsageError{restoreUsage + " — --latest and --path are mutually exclusive"}` (exit 2).
@@ -807,15 +807,15 @@ Family usage `usage: lit backup <create|list|restore> ...` (`backup.go`). Access
 - Neither source → `UsageError{restoreUsage}` (exit 2).
 
 `restoreFromExportPath` (`backup.go`):
-1. Requires BOTH the `storage.Sync` and `storage.Import` capabilities up front, before any read/write (`backup.go`).
-2. `syncfile.Read(path)`, `ap.Store.Export(ctx)`, `syncer.GetSyncState(ctx)`.
-3. **Unsynced-state refusal** (`backup.go`): when `state.ContentHash != ""` and `--force` is absent, hash `<StorageDir>/last-sync-base.json` (`syncBasePath`, `backup.go`); if that base hash is non-empty and differs from the SHA-256 of the current export (`hashExport`, `backup.go` — canonical `MarshalIndent` + trailing newline, lowercase hex), return `MergeConflictError{"restore conflict: local workspace has unsynced changes since last sync base"}` → **exit 5**.
+1. Requires the `storage.Import` capability up front, before any read/write (`backup.go`).
+2. `syncfile.Read(path)`, `ap.Store.Export(ctx)`.
+3. **Overwrite refusal** (`guardRestore`, `backup.go`): the verdict is `forced` when `--force` is given (the digest is not read), `unrecorded` when `<StorageDir>/restore.digest` does not exist, else `unchanged` or `changed` as `syncfile.ContentHash` of the current export (canonical `MarshalIndent` + trailing newline with `exported_at` zeroed, lowercase hex) equals or differs from the recorded digest; `changed` returns `RestoreOverwriteError{}` → reason `restore_would_overwrite`, **exit 5**.
 4. Always takes a pre-restore backup: `backup.Create(StorageDir, localExport)` then `backup.Prune(StorageDir, 20)` — the 20 is hard-coded here (`backup.go`).
 5. `replacement := importer.ReplaceFromExport(ctx, targetExport)` — the tickets it removed (`Removed`, read inside the replace's transaction, so a write that landed after step 2's export is counted too) and, in `Landing`, the parent edges the restore cut because they closed a loop, the tickets it moved into an epic and the tickets it gave a rank key of their own (`04-store-operations.md`).
-6. Re-exports and writes `last-sync-base.json` atomically (`backup.go`).
-7. `syncer.RecordSyncState(ctx, {Path: restorePath, ContentHash: HashFile(restorePath)})` (`backup.go`).
+6. Re-exports the store (`backup.go`).
+7. `writeMarkerAtomic(<StorageDir>/restore.digest, syncfile.ContentHash(restoredExport))` — a file in the clone's storage dir, not a store row, because the store syncs and the digest is of this clone's restore (`backup.go`).
 8. stdout: `restored <path>` when every step finished, then `writeReplacement(stdout, replacement, snapshotPath)` (`restore_removed.go`: `writeRemoved`, then `writeLanding(stdout, "the backup", replacement.Landing)`); the outcome carries the replacement (a `*storage.Replacement`, nil until then) only once `ReplaceFromExport` committed, and the two writers run whether or not the restore finished, so a failure after the commit still names what it removed and moved.
-9. Whatever the outcome, one sync trace record on the way out: command `lit backup restore`, decision `restored` (`error` on failure), metadata `{path}`, plus, only when the replace committed, `{removed, removed_ids, unlooped, unlooped_cuts, rehomed, rehomed_moves, rekeyed, rekeyed_moves}` (`backup.go`).
+9. Whatever the outcome, one sync trace record on the way out: command `lit backup restore`, decision `restored` (`error` on failure), metadata `{path}`, `{restore_guard}` once step 3 reached a verdict, plus, only when the replace committed, `{removed, removed_ids, unlooped, unlooped_cuts, rehomed, rehomed_moves, rekeyed, rekeyed_moves}` (`backup.go`).
 
 `bulk import` is retired: guidance string ``to edit tickets in bulk, read them out with `lit ls --format yaml` and write them back with `lit import --path <f.yaml>`; `lit backup restore --path <export.json>` replaces the whole workspace from an export, the restore `bulk import` duplicated`` (`register.go`).
 
@@ -1091,7 +1091,7 @@ All eight are also the payload of `lit quickstart --eject`, written to `<config.
 | Persistent divergence (≥24h or >10 commits) | `doctor` | `SyncFailureError`, exit 5 | `doctor.go` |
 | Store corruption | `doctor` | `CorruptionError`, exit 7 (reason `parent_cycle` when the report names a parent loop) | `doctor.go`, `error_output.go` |
 | Parent loop | `ls` and any read that hydrates the loop's epics; a rank verb whose walk up the parent chain meets a loop | `storage.ParentCycleError`, exit 7, reason `parent_cycle` | `error_output.go` |
-| Unsynced local changes | `backup restore` without `--force` | `MergeConflictError`, exit 5 | `backup.go` |
+| Changes since the last restore | `backup restore` without `--force` | `RestoreOverwriteError`, reason `restore_would_overwrite`, exit 5 | `backup.go`, `errors.go` |
 | `--latest` + `--path` together | `backup restore` | `UsageError`, exit 2 | `backup.go` |
 | Existing global override without `--force` | `quickstart --eject` | `MergeConflictError`, exit 5, nothing written | `quickstart_eject.go` |
 | Non-bash existing pre-push hook | `hooks install`, `init`, `quickstart --refresh` | left untouched, reported `incompatible`, exit 0 | `hooks.go` |

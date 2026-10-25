@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/atomicfile"
 	"github.com/promptctl/links-issue-tracker/internal/model"
@@ -22,8 +23,8 @@ func WriteAtomic(path string, export model.Export) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(cleanPath), 0o755); err != nil {
 		return "", fmt.Errorf("create sync dir: %w", err)
 	}
-	// Durable: a backup or a sync base is the copy kept for when the store is
-	// lost, so nothing could recompute it.
+	// Durable: a backup is the copy kept for when the store is lost, so
+	// nothing could recompute it.
 	if err := atomicfile.WriteFile(cleanPath, payload, 0o600, atomicfile.Durable); err != nil {
 		return "", fmt.Errorf("write sync file: %w", err)
 	}
@@ -42,13 +43,15 @@ func Read(path string) (model.Export, string, error) {
 	return export, hashPayload(payload), nil
 }
 
-func HashFile(path string) (string, error) {
-	payload, err := os.ReadFile(filepath.Clean(path))
+// ContentHash is the digest of what export holds, not of when it was taken:
+// ExportedAt is left out, so two exports of an unchanged store hash alike.
+// export must come from a store: an epic decoded from a file awaits store
+// hydration and refuses to marshal.
+func ContentHash(export model.Export) (string, error) {
+	export.ExportedAt = time.Time{}
+	payload, err := marshalExport(export)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return "", nil
-		}
-		return "", fmt.Errorf("read sync file: %w", err)
+		return "", err
 	}
 	return hashPayload(payload), nil
 }

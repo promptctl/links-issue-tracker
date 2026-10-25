@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/storage"
-	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
 func TestWriteRemovedAndReplacementMetadataStateAZero(t *testing.T) {
@@ -71,7 +70,7 @@ func TestBackupRestoreOfAnEditedExportNamesTheTicketsItDestroys(t *testing.T) {
 }
 
 // A restore that removes nothing traces a counted zero, and one refused over
-// unsynced state traces no count at all: it removed nothing, and nothing was
+// a later change traces no count at all: it removed nothing, and nothing was
 // counted.
 func TestBackupRestoreTracesWhatItRemovedOnlyOnceItsReplaceCommits(t *testing.T) {
 	repo := newInitTestRepo(t)
@@ -89,9 +88,9 @@ func TestBackupRestoreTracesWhatItRemovedOnlyOnceItsReplaceCommits(t *testing.T)
 
 	runCLIInDir(t, repo, "new", "--type", "task", "--title", "Unsynced", "--topic", "demo", "--parent", epic)
 	refused, err := runCLIInDirAllowError(t, repo, "backup", "restore", "--path", created[1])
-	var conflict MergeConflictError
+	var conflict RestoreOverwriteError
 	if !errors.As(err, &conflict) {
-		t.Fatalf("restore over a ticket made since the last restore error = %v (%T), want the unsynced-state refusal", err, err)
+		t.Fatalf("restore over a ticket made since the last restore error = %v (%T), want the overwrite refusal", err, err)
 	}
 	if strings.Contains(refused, "removed ") {
 		t.Errorf("refused restore printed %q, want no ticket named removed: the refusal destroyed nothing", refused)
@@ -103,8 +102,8 @@ func TestBackupRestoreTracesWhatItRemovedOnlyOnceItsReplaceCommits(t *testing.T)
 	}
 }
 
-// A restore that fails after its replace committed — the sync base cannot be
-// written — has still removed the tickets the file lacks, so its output names
+// A restore that fails after its replace committed — the restore digest cannot
+// be recorded — has still removed the tickets the file lacks, so its output names
 // them beside the error.
 func TestBackupRestoreThatFailsAfterItsReplaceNamesTheTicketsItRemoved(t *testing.T) {
 	repo := newInitTestRepo(t)
@@ -114,22 +113,7 @@ func TestBackupRestoreThatFailsAfterItsReplaceNamesTheTicketsItRemoved(t *testin
 		t.Fatalf("backup create printed %v, want a name and a path", created)
 	}
 	later := extractTicketID(t, runCLIInDir(t, repo, "new", "--type", "task", "--title", "Made meanwhile", "--topic", "demo", "--parent", epic))
-	ws, err := workspace.Resolve(testEnv(), repo)
-	if err != nil {
-		t.Fatalf("workspace.Resolve() error = %v", err)
-	}
-	base := filepath.Join(ws.StorageDir, "last-sync-base.json")
-	if err := os.RemoveAll(base); err != nil {
-		t.Fatalf("clear sync base: %v", err)
-	}
-	if err := os.MkdirAll(filepath.Join(base, "blocked"), 0o755); err != nil {
-		t.Fatalf("block sync base: %v", err)
-	}
-
-	out, err := runCLIInDirAllowError(t, repo, "backup", "restore", "--path", created[1], "--force")
-	if err == nil {
-		t.Fatalf("restore succeeded with its sync base blocked; the test needs a failure after the commit")
-	}
+	out := restoreFailingAfterItsReplace(t, repo, "--path", created[1], "--force")
 	for _, want := range []string{"removed 1 ticket(s) the workspace held and the file does not", later} {
 		if !strings.Contains(out, want) {
 			t.Errorf("failed restore output %q lacks %q", out, want)
@@ -141,4 +125,20 @@ func TestBackupRestoreThatFailsAfterItsReplaceNamesTheTicketsItRemoved(t *testin
 	if restore := restoreTraceRecord(t, repo); restore.Metadata["removed"] != "1" || restore.Metadata["removed_ids"] != later {
 		t.Errorf("failed restore trace metadata = %v, want removed=1 (%s): the replace committed", restore.Metadata, later)
 	}
+}
+
+// restoreFailingAfterItsReplace runs `lit backup restore args` in repo with
+// its digest's path held by a directory, so the restore fails at its last
+// step, after its replace committed, and returns what it printed. args must
+// force the restore: an unforced one reads that path, and fails before it.
+func restoreFailingAfterItsReplace(t *testing.T, repo string, args ...string) string {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(restoreDigestPath(resolvedWorkspace(t, repo)), "blocked"), 0o755); err != nil {
+		t.Fatalf("block restore digest: %v", err)
+	}
+	out, err := runCLIInDirAllowError(t, repo, append([]string{"backup", "restore"}, args...)...)
+	if err == nil {
+		t.Fatalf("restore succeeded with its digest unwritable; the test needs a failure after the commit")
+	}
+	return out
 }

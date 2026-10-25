@@ -45,15 +45,6 @@ type syncOnlyEngine struct {
 	storage.Syncer
 }
 
-// importOnlyEngine offers import and declines sync — an engine that can replace
-// its own contents but has no remotes to compare them against. That is the
-// memory engine's shape, and it is what reaches restore's FIRST resolve, where
-// syncOnlyEngine reaches only the second.
-type importOnlyEngine struct {
-	storage.Store
-	storage.Importer
-}
-
 // declineWorkspace is a workspace with nothing but somewhere to write traces
 // and backups, which is all any of these paths touches before it refuses.
 func declineWorkspace(t *testing.T) workspace.Info {
@@ -168,39 +159,25 @@ func TestInlineReconcileSurfacesADeclineInsteadOfSettling(t *testing.T) {
 	}
 }
 
-// Restore asks for sync and import before it reads, writes, or backs up, so
-// that a half-capable engine cannot strand it half-done. Both halves of that
-// claim are asserted, and the ordering half is asserted WITHOUT naming an
-// internal call: the export path handed in does not exist, so a resolve that
-// slipped below syncfile.Read would surface a missing-file error instead of the
-// refusal, and a resolve below the export read would panic on the nil Store.
-// [LAW:behavior-not-structure]
-func TestRestoreRefusesAPartialEngineBeforeTouchingAnything(t *testing.T) {
+// Restore asks for import before it reads, writes, or backs up, so that an
+// engine without it cannot strand a restore half-done. The ordering is asserted
+// WITHOUT naming an internal call: the export path handed in does not exist,
+// so a resolve that slipped below syncfile.Read would surface a missing-file
+// error instead of the refusal, and a resolve below the export read would
+// panic on the nil Store. [LAW:behavior-not-structure]
+func TestRestoreRefusesAnEngineThatCannotImportBeforeTouchingAnything(t *testing.T) {
 	t.Parallel()
+	ws := declineWorkspace(t)
+	ap := &app.App{Workspace: ws, Store: syncOnlyEngine{}}
 
-	for _, tc := range []struct {
-		name       string
-		engine     storage.Store
-		capability string
-	}{
-		{"an engine that cannot sync is refused at the first resolve", importOnlyEngine{}, "sync"},
-		{"an engine that cannot import is refused at the second", syncOnlyEngine{}, "import"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			ws := declineWorkspace(t)
-			ap := &app.App{Workspace: ws, Store: tc.engine}
+	_, err := restoreFromExportPath(context.Background(), testEnv(), ap, filepath.Join(t.TempDir(), "no-such-export.json"), false)
 
-			_, err := restoreFromExportPath(context.Background(), testEnv(), ap, filepath.Join(t.TempDir(), "no-such-export.json"), false)
-
-			wantUnsupported(t, err, tc.capability)
-			snapshots, listErr := backup.List(ws.StorageDir)
-			if listErr != nil {
-				t.Fatalf("backup.List error = %v", listErr)
-			}
-			if len(snapshots) != 0 {
-				t.Fatalf("a refused restore left %d backup(s); the capability question must be settled before anything is written", len(snapshots))
-			}
-		})
+	wantUnsupported(t, err, "import")
+	snapshots, listErr := backup.List(ws.StorageDir)
+	if listErr != nil {
+		t.Fatalf("backup.List error = %v", listErr)
+	}
+	if len(snapshots) != 0 {
+		t.Fatalf("a refused restore left %d backup(s); the capability question must be settled before anything is written", len(snapshots))
 	}
 }

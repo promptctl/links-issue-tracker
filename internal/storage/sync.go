@@ -39,14 +39,6 @@ func (e PushDivergedError) Unwrap() []error { return []error{ErrPushDiverged, e.
 //
 // [LAW:one-source-of-truth] There is one declaration of each, not two.
 
-// SyncState identifies the store's on-disk content at a point in time: where it
-// lives, and a digest of what it held. It is the staleness signal a caller
-// records after a sync and compares against later.
-type SyncState struct {
-	Path        string
-	ContentHash string
-}
-
 // SyncRemote names one configured peer and where it is reached.
 type SyncRemote struct {
 	Name string `json:"name"`

@@ -183,11 +183,11 @@ with its code (`error_output.go`):
 - 2: `usage_error`
 - 3: `migration_partially_applied`, `migration_quarantined`, `outside_git_workspace`, `purge_unconfirmed`, `retired_command`, `schema_shape_refused`, `stored_prefix_refused`, `takeover_unconfirmed`, `template_shape_refused`, `unknown_command`, `unsupported_flag`, `validation_refused`, `workspace_not_initialized`, `workspace_schema_ahead`
 - 4: `entity_not_found`, `version_not_found`
-- 5: `merge_conflict`, `owner_approval_required`, `sync_divergence`
+- 5: `merge_conflict`, `owner_approval_required`, `restore_would_overwrite`, `sync_divergence`
 - 6: `no_ready_work`, `scope_exhausted`, `scope_narrowed`, `state_already_holds`
 - 7: `corruption_detected`, `parent_cycle`
 
-Error types defined in `errors.go`: `MergeConflictError`,
+Error types defined in `errors.go`: `RestoreOverwriteError`, `MergeConflictError`,
 `CorruptionError{Message string; Cause error}` — `Error()` is `Message`,
 `Unwrap()` is `Cause`, the typed fault behind the failure when the check named
 one (`doctor.go` sets a `storage.ParentCycleError`), `UsageError`,
@@ -219,43 +219,44 @@ types gets the reason of the earliest one:
 1. `storage.NotFoundError` → `entity_not_found`
 2. `storage.VersionNotFoundError` and `storage.PlanDigestNotFoundError` → `version_not_found`
 3. `MergeConflictError` → `merge_conflict`
-4. `model.SchemaAhead` (`*store.UnsupportedSchemaVersionError`, `*store.DowngradeSpanUnsupportedError`, `*store.RemoteSchemaAheadError`, which a remote-schema-ahead `SyncFailureError` unwraps to) → `workspace_schema_ahead`
-5. `SyncFailureError` → `sync_divergence`
-6. `store.RemoteUnreachableError` → `remote_unreachable`
-7. `ownerApprovalRefusalError` → `owner_approval_required`
-8. `storage.ParentCycleError` → `parent_cycle` (also reached through a `CorruptionError` whose `Cause` is one)
-9. `CorruptionError` → `corruption_detected`
-10. `UnknownCommandError` → `unknown_command`
-11. `RetiredCommandError` → `retired_command`
-12. `UsageError` → `usage_error`
-13. any error implementing `model.Refusal` → `validation_refused`
-14. `templateShapeError` → `template_shape_refused`
-15. `model.StateRequestError` → `state_already_holds` when its `Satisfied()`
+4. `RestoreOverwriteError` → `restore_would_overwrite`
+5. `model.SchemaAhead` (`*store.UnsupportedSchemaVersionError`, `*store.DowngradeSpanUnsupportedError`, `*store.RemoteSchemaAheadError`, which a remote-schema-ahead `SyncFailureError` unwraps to) → `workspace_schema_ahead`
+6. `SyncFailureError` → `sync_divergence`
+7. `store.RemoteUnreachableError` → `remote_unreachable`
+8. `ownerApprovalRefusalError` → `owner_approval_required`
+9. `storage.ParentCycleError` → `parent_cycle` (also reached through a `CorruptionError` whose `Cause` is one)
+10. `CorruptionError` → `corruption_detected`
+11. `UnknownCommandError` → `unknown_command`
+12. `RetiredCommandError` → `retired_command`
+13. `UsageError` → `usage_error`
+14. any error implementing `model.Refusal` → `validation_refused`
+15. `templateShapeError` → `template_shape_refused`
+16. `model.StateRequestError` → `state_already_holds` when its `Satisfied()`
     is true (for `ContainerActionError`: the epic has at least one child, its
     derived state already equals the requested one, and no child remains
     unfinished; for `RetentionError`: the `Retain` cell says so), otherwise
     `validation_refused`
-16. `Exhausted` → `scope_exhausted`
-17. `Narrowed` → `scope_narrowed`
-18. `NoWork` → `no_ready_work`
-19. `UnsupportedError` → `unsupported_flag`
-20. `takeoverUnconfirmedError` → `takeover_unconfirmed`
-21. `purgeUnconfirmedError` → `purge_unconfirmed`
-22. `OutsideWorkspaceError` → `outside_git_workspace`
-23. `errors.Is(err, store.ErrWorkspaceNotInitialized)` → `workspace_not_initialized`
-24. `*store.QuarantineBlockError` → `migration_quarantined`
-25. `workspace.StoredPrefixError` → `stored_prefix_refused`
-26. `errors.Is(err, workspace.ErrIssuePrefixRefused)` → `validation_refused`
-    (`StoredPrefixError` unwraps to this sentinel; step 25 catches it first)
-27. `BulkError` → `bulkReason`: the reason every item the run ran classifies
+17. `Exhausted` → `scope_exhausted`
+18. `Narrowed` → `scope_narrowed`
+19. `NoWork` → `no_ready_work`
+20. `UnsupportedError` → `unsupported_flag`
+21. `takeoverUnconfirmedError` → `takeover_unconfirmed`
+22. `purgeUnconfirmedError` → `purge_unconfirmed`
+23. `OutsideWorkspaceError` → `outside_git_workspace`
+24. `errors.Is(err, store.ErrWorkspaceNotInitialized)` → `workspace_not_initialized`
+25. `*store.QuarantineBlockError` → `migration_quarantined`
+26. `workspace.StoredPrefixError` → `stored_prefix_refused`
+27. `errors.Is(err, workspace.ErrIssuePrefixRefused)` → `validation_refused`
+    (`StoredPrefixError` unwraps to this sentinel; step 26 catches it first)
+28. `BulkError` → `bulkReason`: the reason every item the run ran classifies
     as (by this same classifier) when they all share one — so only when no
     item landed — else `bulk_partial_failure`
-28. `store.WorkspaceWriteBlockedError` → `workspace_write_blocked` (it unwraps
+29. `store.WorkspaceWriteBlockedError` → `workspace_write_blocked` (it unwraps
     to `store.ErrTransientGCContention`; this step catches it first)
-29. `errors.Is(err, store.ErrWorkspaceBusy)` or
+30. `errors.Is(err, store.ErrWorkspaceBusy)` or
     `errors.Is(err, workspace.ErrConfigBusy)` → `workspace_busy`
-30. `errors.Is(err, store.ErrTransientGCContention)` → `transient_gc_contention`
-31. anything else → `command_failed`
+31. `errors.Is(err, store.ErrTransientGCContention)` → `transient_gc_contention`
+32. anything else → `command_failed`
 
 `commandErrorRemediation(reason)` (`error_output.go`), verbatim strings. An
 empty string means no `remediation:` line is printed:
@@ -266,6 +267,7 @@ empty string means no `remediation:` line is printed:
 - `entity_not_found`: "Verify the target ID exists with `lit ls` or `lit show <id>`."
 - `version_not_found`: "" (empty — the `storage.VersionNotFoundError` message names how many versions there are and where the current text is)
 - `merge_conflict`: "Sync and retry after resolving conflicts."
+- `restore_would_overwrite`: "Rerun with `--force` to restore anyway: the restore first takes a backup of the workspace it replaces, and `lit backup list` names it."
 - `sync_divergence`: "" (empty — the `SyncFailureError` message carries the steps)
 - `remote_unreachable`: "The remote host was unreachable over the network; credentials are not the problem, and lit already retried with backoff. Check connectivity to the remote host (for SSH remotes: `ssh -o BatchMode=yes git@<host>`), then retry once the network path is restored."
 - `template_shape_refused`: "Edit the template override the message names so it is either plain content with no LIT INTEGRATION markers or exactly one whole marked block, or delete the override to fall back to lit's bundled default. The command itself is fine; rerunning it unchanged repeats this refusal."

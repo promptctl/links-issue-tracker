@@ -1319,7 +1319,7 @@ func issueWithStatus(t *testing.T, issue model.Issue, status model.State) model.
 	return hydrated
 }
 
-func TestReplaceFromExportAndSyncState(t *testing.T) {
+func TestReplaceFromExport(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
@@ -1386,19 +1386,6 @@ func TestReplaceFromExportAndSyncState(t *testing.T) {
 	replaced := getIssueOrFatal(t, ctx, st, "issue-replaced")
 	if len(replaced.Labels) != 1 || replaced.Labels[0] != "imported" {
 		t.Fatalf("labels = %#v", replaced.Labels)
-	}
-
-	state := storage.SyncState{Path: "/tmp/export.json", ContentHash: "abc123"}
-	if err := st.RecordSyncState(ctx, state); err != nil {
-		t.Fatalf("RecordSyncState() error = %v", err)
-	}
-	loadedState, err := st.GetSyncState(ctx)
-	if err != nil {
-		t.Fatalf("GetSyncState() error = %v", err)
-	}
-	encoded, _ := json.Marshal(loadedState)
-	if string(encoded) == "" || loadedState.Path != state.Path || loadedState.ContentHash != state.ContentHash {
-		t.Fatalf("loadedState = %#v", loadedState)
 	}
 
 	if _, err := st.GetIssue(ctx, issue.ID); err == nil {

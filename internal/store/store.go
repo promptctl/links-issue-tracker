@@ -579,34 +579,6 @@ func (s *Store) reconnect(ctx context.Context) error {
 	return nil
 }
 
-func (s *Store) GetSyncState(ctx context.Context) (storage.SyncState, error) {
-	state := storage.SyncState{}
-	var err error
-	state.Path, err = s.getMeta(ctx, nil, "last_sync_path")
-	if err != nil {
-		return storage.SyncState{}, err
-	}
-	state.ContentHash, err = s.getMeta(ctx, nil, "last_sync_hash")
-	if err != nil {
-		return storage.SyncState{}, err
-	}
-	return state, nil
-}
-
-func (s *Store) RecordSyncState(ctx context.Context, state storage.SyncState) error {
-	return s.withMutation(ctx, "record sync state", func(ctx context.Context, tx *sql.Tx) error {
-		for key, value := range map[string]string{
-			"last_sync_path": strings.TrimSpace(state.Path),
-			"last_sync_hash": strings.TrimSpace(state.ContentHash),
-		} {
-			if err := s.setMeta(ctx, tx, key, value); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-}
-
 func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (model.Issue, error) {
 	if strings.TrimSpace(in.Title) == "" {
 		return model.Issue{}, model.ValidationError{Message: "title is required"}
