@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/atomicfile"
 	"github.com/promptctl/links-issue-tracker/internal/model"
@@ -42,13 +43,15 @@ func Read(path string) (model.Export, string, error) {
 	return export, hashPayload(payload), nil
 }
 
-func HashFile(path string) (string, error) {
-	payload, err := os.ReadFile(filepath.Clean(path))
+// ContentHash is the digest of what export holds, not of when it was taken:
+// ExportedAt is left out, so two exports of an unchanged store hash alike.
+// export must come from a store: an epic decoded from a file awaits store
+// hydration and refuses to marshal.
+func ContentHash(export model.Export) (string, error) {
+	export.ExportedAt = time.Time{}
+	payload, err := marshalExport(export)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return "", nil
-		}
-		return "", fmt.Errorf("read sync file: %w", err)
+		return "", err
 	}
 	return hashPayload(payload), nil
 }

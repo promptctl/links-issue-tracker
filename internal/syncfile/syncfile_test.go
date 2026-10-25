@@ -2,6 +2,7 @@ package syncfile
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -46,5 +47,57 @@ func TestWriteAndReadAtomicExport(t *testing.T) {
 	}
 	if len(readExport.Issues) != 1 || readExport.Issues[0].ID != "issue-1" {
 		t.Fatalf("readExport = %#v", readExport)
+	}
+}
+
+// Two exports of an unchanged store differ only in when they were taken, and
+// their content hashes agree; a changed ticket changes the hash.
+func TestContentHashCoversWhatTheExportHoldsNotWhenItWasTaken(t *testing.T) {
+	taken := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
+	export := func(title string, at time.Time) model.Export {
+		return model.Export{
+			Version:     model.ExportVersion,
+			WorkspaceID: "workspace-test",
+			ExportedAt:  at,
+			Issues: []model.Issue{issueWithStatus(t, model.Issue{
+				ID:        "issue-1",
+				Title:     title,
+				IssueType: "task",
+				CreatedAt: taken,
+				UpdatedAt: taken,
+			}, model.StateOpen)},
+		}
+	}
+	hash := func(e model.Export) string {
+		t.Helper()
+		h, err := ContentHash(e)
+		if err != nil {
+			t.Fatalf("ContentHash() error = %v", err)
+		}
+		return h
+	}
+	first := hash(export("Before", taken))
+	if later := hash(export("Before", taken.Add(time.Hour))); later != first {
+		t.Errorf("ContentHash of the same content taken an hour later = %s, want %s", later, first)
+	}
+	if edited := hash(export("After", taken)); edited == first {
+		t.Errorf("ContentHash of an export with a retitled ticket = %s, the same as before the edit", edited)
+	}
+}
+
+func TestContentHashRefusesUnhydratedIssue(t *testing.T) {
+	t.Parallel()
+	// ContentHash relies on Issue.MarshalJSON to reject unhydrated values; the
+	// hydrator's post-condition keeps this path unreachable from store output,
+	// but the JSON boundary still enforces if any other producer slips one in.
+	export := model.Export{
+		Version:     1,
+		WorkspaceID: "ws",
+		ExportedAt:  time.Now().UTC(),
+		Issues:      []model.Issue{{ID: "unhydrated-x", IssueType: "task"}},
+	}
+	_, err := ContentHash(export)
+	if err == nil || !strings.Contains(err.Error(), "no hydrated lifecycle") {
+		t.Fatalf("ContentHash error = %v, want no hydrated lifecycle error", err)
 	}
 }

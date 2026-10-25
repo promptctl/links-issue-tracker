@@ -298,7 +298,7 @@ The `staged` flag is the phase marker: a retry after a successful `tx.Commit` re
 There is **no `--skip-empty`** flag anywhere; "nothing to commit" is absorbed by the string check above.
 
 **Commit message format strings actually used by store.go mutations** (the literal passed to `withMutation`):
-- `"record sync state"` (`store.go`)
+- `"record restore digest"` (`store.go`)
 - `"create issue"` (`store.go`)
 - `"apply update"` (`store.go`)
 - `"add comment"` (`store.go`)
@@ -834,7 +834,7 @@ Which mutations emit which event:
 | field update | SQL **NULL** (empty action) | `in.Reason` | same | one per moved field |
 | `AddComment` | — no event at all (`store.go`) | | | |
 | `DeleteComment` | — no event at all (`store.go`) | | | |
-| `RecordSyncState` | — no event at all (`store.go`) | | | |
+| `RecordRestoreDigest` | — no event at all (`store.go`) | | | |
 
 Evidence: a create/close/reopen/archive sequence yields exactly 4 events with actions `""(created)`, `close`, `reopen`, `archive` and the reasons given (`store_test.go`); an empty close reason is stored as `""` (`store_test.go`); attribution stamping/absence is covered by the four tests in `event_attribution_test.go` (§2.10). Deriving claims from `ListIssues`+`GetRelationsByIDs`+`ListAllEvents` leaves both the Dolt HEAD and `dolt_status` unchanged — reads write nothing (`claims_readonly_test.go`), and attribution written by the real write path derives back into a `claims.Held` for the right checkout (`claims_readonly_test.go`).
 
@@ -900,7 +900,7 @@ Tests: `TestRestoreNeverUnpurges` (`purge_test.go`) — a pre-purge backup resto
 
 ---
 
-### 9. Meta and sync state
+### 9. Meta and restore digest
 
 `getMeta(ctx, tx *sql.Tx, key string) (string, error)` (`store.go`): uses `tx` when non-nil, else `s.db`:
 ```sql
@@ -919,9 +919,9 @@ failure → `fmt.Errorf("set meta %q: %w", key, err)`. Note: called with `tx == 
 
 `ensureMetaDefault(ctx, guard, key, value)` (`store.go`): identical except the skip condition is `strings.TrimSpace(current) != ""` — any existing non-blank value is preserved.
 
-`GetSyncState(ctx) (storage.SyncState, error)` (`store.go`): two `getMeta` reads — `last_sync_path` into `state.Path` and `last_sync_hash` into `state.ContentHash`; on either error returns `(storage.SyncState{}, err)`.
+`RestoreDigest(ctx) (string, error)` (`store.go`): one `getMeta` read of `restore_digest`; the `last_sync_hash` an older lit wrote held a file hash and is not read.
 
-`RecordSyncState(ctx, state storage.SyncState) error` (`store.go`): one `withMutation(ctx, "record sync state"...)` that `setMeta`s both keys from a map literal — `last_sync_path: strings.TrimSpace(state.Path)` and `last_sync_hash: strings.TrimSpace(state.ContentHash)` — via the tx. Map iteration order means the two writes are unordered relative to each other.
+`RecordRestoreDigest(ctx, digest string) error` (`store.go`): one `withMutation(ctx, "record restore digest"...)` that `setMeta`s `restore_digest` to the digest.
 
 Round-trip evidence: `store_test.go`.
 
@@ -1263,7 +1263,7 @@ step in reconcile's list).
 - Written through `INSERT ... ON DUPLICATE KEY UPDATE meta_value = VALUES(meta_value)` (`internal/store/store.go`); read at `internal/store/store.go`, absent key yields `""` not an error (`internal/store/store.go`).
 - Keys observed in production code:
   - `workspace_id` — written by reconcile via `ensureMetaValue` (`internal/store/schema_reconcile.go`).
-  - `last_sync_path`, `last_sync_hash` — read at `internal/store/store.go`, written at `internal/store/store.go`.
+  - `restore_digest` — read at `internal/store/store.go`, written at `internal/store/store.go`; `last_sync_path` and `last_sync_hash`, written by older lits, are no longer read or written.
 
 ### 2.8 `migration_quarantine`
 
@@ -3402,11 +3402,10 @@ Three write surfaces consume `Store.Export`:
 - `List` reads that dir, skips directories and any entry not ending in `.json`; a missing dir returns `[]Snapshot{}` and no error.
 - `Prune(storageDir, keep)` errors on `keep <= 0` (test `internal/backup/backup_test.go`); `backupCreateLeaf` defaults `--keep` to `20` (`internal/cli/backup.go`), and `restoreFromExportPath` hardcodes `backup.Prune(dir, 20)` (`cli/backup.go`).
 
-**(c) Sync file / last-sync base** — `internal/syncfile/syncfile.go`. `WriteAtomic(path, export)`:
+**(c) Sync file** — `internal/syncfile/syncfile.go`. `WriteAtomic(path, export)`:
 - `marshalExport` = `json.MarshalIndent(export, "", "  ")` **plus a trailing `'\n'`** (`syncfile.go`).
 - `os.MkdirAll(dir, 0o755)`, then `atomicfile.WriteFile(cleanPath, payload, 0o600, atomicfile.Durable)`; a failure is `write sync file: %w` (`syncfile.go`).
 - returns `hashPayload(payload)` — the content hash of the bytes written.
-- The sync base lives at `filepath.Join(ap.Workspace.StorageDir, "last-sync-base.json")` (`internal/cli/backup.go`).
 
 There is **no manifest or index file**: `backup.List` derives the listing by reading the directory (`backup.go`).
 
@@ -3637,9 +3636,8 @@ Plan reviews (`insertPlanReviewTx`, `plan_review.go`): `id, issue_id, plan_diges
 
 ### 3.5 The surrounding CLI restore flow
 
-`restoreFromExportPath` (`internal/cli/backup.go`), in order: acquire `storage.Sync.Of(ap.Store)` and `storage.Import.Of(ap.Store)` capabilities up front; `syncfile.Read(restorePath)`; `ap.Store.Export(ctx)` for the local state; `syncer.GetSyncState`; if a sync state exists and `--force` was not passed, hash `last-sync-base.json` and compare against `hashExport(localExport)` — mismatch → `MergeConflictError{Message: "restore conflict: local workspace has unsynced changes since last sync base"}` (`backup.go`); `backup.Create` a pre-restore snapshot, whose path the outcome carries; `backup.Prune(dir, 20)`; `replacement := importer.ReplaceFromExport` (its `Removed` read inside the replace's transaction, `removedBy` in `internal/store/import_export.go`) whose result the outcome carries as a non-nil `*storage.Replacement`; re-`Export` and `syncfile.WriteAtomic(syncBasePath(ap), restoredExport)`; `syncfile.HashFile(restorePath)`; `syncer.RecordSyncState({Path, ContentHash})`; return the outcome (the replacement and the pre-restore snapshot path). `restoreFromExportPath` wraps that sequence (`restoreFromExport`) and, on the way out whatever the outcome, records one sync trace record: `recordSyncCommandTrace(ws, "lit backup restore", "restored", err, metadata)` with metadata `path` and, only when the replace committed, `removed`, `removed_ids`, `unlooped`, `unlooped_cuts`, `rehomed`, `rehomed_moves`, `rekeyed`, `rekeyed_moves` (`replacementMetadata`, `internal/cli/restore_removed.go`, which calls `landingMetadata`). The leaf prints `restored <path>` when every step finished, then, when the replacement is non-nil, `writeReplacement` (`writeRemoved`, then `writeLanding(stdout, "the backup", landing)`) whether or not the restore finished.
+`restoreFromExportPath` (`internal/cli/backup.go`), in order: acquire the `storage.Import.Of(ap.Store)` capability up front; `syncfile.Read(restorePath)`; `ap.Store.Export(ctx)` for the local state; `importer.RestoreDigest`; `guardRestore(recorded, localExport, force)` gives the verdict the outcome carries — `forced`, `unrecorded` (no digest recorded), `unchanged` (`syncfile.ContentHash(localExport)` equals the recorded digest), or `changed`, which returns `RestoreOverwriteError{}` (`errors.go`; reason `restore_would_overwrite`, exit 5) (`backup.go`); `backup.Create` a pre-restore snapshot, whose path the outcome carries; `backup.Prune(dir, 20)`; `replacement := importer.ReplaceFromExport` (its `Removed` read inside the replace's transaction, `removedBy` in `internal/store/import_export.go`) whose result the outcome carries as a non-nil `*storage.Replacement`; re-`Export`; `syncfile.ContentHash(restoredExport)`; `importer.RecordRestoreDigest(digest)`; return the outcome (the verdict, the replacement, and the pre-restore snapshot path). `restoreFromExportPath` wraps that sequence (`restoreFromExport`) and, on the way out whatever the outcome, records one sync trace record: `recordSyncCommandTrace(ws, "lit backup restore", "restored", err, metadata)` with metadata `path`, `restore_guard` when the verdict was reached, and, only when the replace committed, `removed`, `removed_ids`, `unlooped`, `unlooped_cuts`, `rehomed`, `rehomed_moves`, `rekeyed`, `rekeyed_moves` (`replacementMetadata`, `internal/cli/restore_removed.go`, which calls `landingMetadata`). The leaf prints `restored <path>` when every step finished, then, when the replacement is non-nil, `writeReplacement` (`writeRemoved`, then `writeLanding(stdout, "the backup", landing)`) whether or not the restore finished.
 
-`hashExport` uses `json.MarshalIndent(export, "", "  ")` (`backup.go`) — note: **no trailing newline**, unlike `syncfile.marshalExport`.
 
 Usage strings: `restoreUsage = "usage: lit backup restore (--latest | --path <export.json>) [--force]"` (`backup.go`); passing both → that string + `" — --latest and --path are mutually exclusive"` (`backup.go`); `--latest` with no snapshots → `errors.New("no backups available")` (`backup.go`).
 
@@ -3989,9 +3987,8 @@ When the file states a parent on an update, `reparented %d issues` and `%d issue
 | backup dir | `<StorageDir>/backups` | `internal/backup/backup.go` |
 | backup filename format | `20060102-150405.000000000` + `.json` | `internal/backup/backup.go` |
 | backup dir mode | `0o755` | `internal/backup/backup.go` |
-| sync-base path | `<StorageDir>/last-sync-base.json` | `internal/cli/backup.go` |
 | syncfile temp pattern | `.links-sync-*.json` | `internal/syncfile/syncfile.go` |
-| JSON indent (export/stdout, syncfile, hashExport) | `"", "  "` (two spaces) | `cli.go`, `syncfile.go`, `cli/backup.go` |
+| JSON indent (export/stdout, syncfile) | `"", "  "` (two spaces) | `cli.go`, `syncfile.go` |
 | default `--keep` for backup create / restore prune | `20` / `20` | `cli/backup.go` |
 
 ## 7. Cross-cutting error-message index for this slice

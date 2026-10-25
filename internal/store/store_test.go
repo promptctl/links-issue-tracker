@@ -1319,7 +1319,7 @@ func issueWithStatus(t *testing.T, issue model.Issue, status model.State) model.
 	return hydrated
 }
 
-func TestReplaceFromExportAndSyncState(t *testing.T) {
+func TestReplaceFromExportAndRestoreDigest(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
@@ -1388,17 +1388,11 @@ func TestReplaceFromExportAndSyncState(t *testing.T) {
 		t.Fatalf("labels = %#v", replaced.Labels)
 	}
 
-	state := storage.SyncState{Path: "/tmp/export.json", ContentHash: "abc123"}
-	if err := st.RecordSyncState(ctx, state); err != nil {
-		t.Fatalf("RecordSyncState() error = %v", err)
+	if err := st.RecordRestoreDigest(ctx, "abc123"); err != nil {
+		t.Fatalf("RecordRestoreDigest() error = %v", err)
 	}
-	loadedState, err := st.GetSyncState(ctx)
-	if err != nil {
-		t.Fatalf("GetSyncState() error = %v", err)
-	}
-	encoded, _ := json.Marshal(loadedState)
-	if string(encoded) == "" || loadedState.Path != state.Path || loadedState.ContentHash != state.ContentHash {
-		t.Fatalf("loadedState = %#v", loadedState)
+	if digest, err := st.RestoreDigest(ctx); err != nil || digest != "abc123" {
+		t.Fatalf("RestoreDigest() = %q, %v; want the digest recorded", digest, err)
 	}
 
 	if _, err := st.GetIssue(ctx, issue.ID); err == nil {

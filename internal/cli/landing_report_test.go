@@ -109,27 +109,12 @@ func TestBackupRestoreNamesTheTicketsItMovesIntoAnEpic(t *testing.T) {
 }
 
 // TestBackupRestoreTracesItsMovesWhenALaterStepFails fails the restore after
-// the store has committed it — the sync base cannot be written — and finds the
+// the store has committed it — the restore digest cannot be recorded — and finds the
 // moves in the output and on the trace all the same: both report what the
 // store holds.
 func TestBackupRestoreTracesItsMovesWhenALaterStepFails(t *testing.T) {
 	repo, task, path := newPreContainmentBackup(t)
-	ws, err := workspace.Resolve(testEnv(), repo)
-	if err != nil {
-		t.Fatalf("workspace.Resolve() error = %v", err)
-	}
-	base := filepath.Join(ws.StorageDir, "last-sync-base.json")
-	if err := os.RemoveAll(base); err != nil {
-		t.Fatalf("clear sync base: %v", err)
-	}
-	if err := os.MkdirAll(filepath.Join(base, "blocked"), 0o755); err != nil {
-		t.Fatalf("block sync base: %v", err)
-	}
-
-	out, err := runCLIInDirAllowError(t, repo, "backup", "restore", "--path", path, "--force")
-	if err == nil {
-		t.Fatalf("restore succeeded with its sync base blocked; the test needs a failure after the commit")
-	}
+	out := restoreFailingAfterItsReplace(t, repo, "--path", path, "--force")
 	if !strings.Contains(out, "moved 1 ticket(s) the backup held outside an epic;") || !strings.Contains(out, task) {
 		t.Errorf("failed restore output %q does not name the move the store committed, %s", out, task)
 	}

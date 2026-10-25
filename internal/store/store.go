@@ -579,31 +579,17 @@ func (s *Store) reconnect(ctx context.Context) error {
 	return nil
 }
 
-func (s *Store) GetSyncState(ctx context.Context) (storage.SyncState, error) {
-	state := storage.SyncState{}
-	var err error
-	state.Path, err = s.getMeta(ctx, nil, "last_sync_path")
-	if err != nil {
-		return storage.SyncState{}, err
-	}
-	state.ContentHash, err = s.getMeta(ctx, nil, "last_sync_hash")
-	if err != nil {
-		return storage.SyncState{}, err
-	}
-	return state, nil
+// RestoreDigest and RecordRestoreDigest keep the digest under the meta key
+// restore_digest. The last_sync_hash an older lit wrote is a hash of the
+// restored file, not of the store's content, so it is not read: a workspace
+// upgraded past it reads as having no digest rather than as changed.
+func (s *Store) RestoreDigest(ctx context.Context) (string, error) {
+	return s.getMeta(ctx, nil, "restore_digest")
 }
 
-func (s *Store) RecordSyncState(ctx context.Context, state storage.SyncState) error {
-	return s.withMutation(ctx, "record sync state", func(ctx context.Context, tx *sql.Tx) error {
-		for key, value := range map[string]string{
-			"last_sync_path": strings.TrimSpace(state.Path),
-			"last_sync_hash": strings.TrimSpace(state.ContentHash),
-		} {
-			if err := s.setMeta(ctx, tx, key, value); err != nil {
-				return err
-			}
-		}
-		return nil
+func (s *Store) RecordRestoreDigest(ctx context.Context, digest string) error {
+	return s.withMutation(ctx, "record restore digest", func(ctx context.Context, tx *sql.Tx) error {
+		return s.setMeta(ctx, tx, "restore_digest", digest)
 	})
 }
 

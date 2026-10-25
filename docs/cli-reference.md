@@ -83,6 +83,7 @@ the code it arrives on:
 | `version_not_found` | 4 | `lit history --version` named a version past the ones the issue's history records, or `lit verdict --plan` a digest of no plan text it records |
 | `merge_conflict` | 5 | A sync merge conflict |
 | `sync_divergence` | 5 | Local and remote diverged in a way the message tells you how to resolve |
+| `restore_would_overwrite` | 5 | `lit backup restore` would overwrite changes made since the last restore; `--force` restores anyway, after the backup it always takes |
 | `owner_approval_required` | 5 | `lit sync reconcile take` would discard one side's issues and needs the owner's approval |
 | `no_ready_work` | 6 | `lit next` had no ticket for you |
 | `scope_exhausted` | 6 | `lit next` found open work in your claimed epic but none you can reach; the message names what stops it |
@@ -991,7 +992,8 @@ lit backup restore (--latest | --path <p>) [--force]
 
 Rotating JSON **data-export** backups (`--keep`, default 20) — the data-recovery
 family, wrapping `lit export`; distinct from the filesystem-level `lit snapshots`.
-`restore` refuses to overwrite unsynced state without `--force`, and is the one
+`restore` refuses to overwrite changes made since the last restore without
+`--force`, and is the one
 home for loading an export JSON. It replaces the whole workspace, so every ticket
 the workspace holds and the file does not is destroyed: the restore names each one,
 their count, and the pre-restore backup that still holds them, along with the
