@@ -68,8 +68,8 @@ lit start <id>                                        # claim a ticket
 lit done <id>                                         # finish it (closes immediately)
 ```
 
-`lit init` also wires this repo for agents: it adds a short `lit` section to `AGENTS.md`
-and `CLAUDE.md` telling any coding agent to run `lit quickstart` before touching work.
+The `lit` Claude Code plugin's `quickstart` skill tells any coding agent in a `lit` repo to
+run `lit quickstart` before touching work.
 
 ## Pointing an AI agent at it
 

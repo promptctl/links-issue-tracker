@@ -58,7 +58,7 @@ func newSharedCheckouts(t *testing.T) (reRootedCheckouts, string) {
 	runGit(t, r.alpha, "add", "-A")
 	runGit(t, r.alpha, "commit", "-m", "seed")
 	runGit(t, r.alpha, "push", "origin", "HEAD")
-	runCLIInDir(t, r.alpha, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, r.alpha, "init", "--skip-hooks")
 	r.epic = newEpicInDir(t, r.alpha, "shared-epic")
 	r.ticket = extractTicketID(t, runCLIInDir(t, r.alpha, "new", "--title", "shared-ticket", "--topic", "demo", "--type", "task", "--parent", r.epic))
 	runCLIInDir(t, r.alpha, "new", "--title", "filler", "--topic", "demo", "--type", "task", "--parent", r.epic)
@@ -67,7 +67,7 @@ func newSharedCheckouts(t *testing.T) (reRootedCheckouts, string) {
 	runGit(t, base, "clone", remote, "bravo")
 	runGit(t, r.bravo, "config", "user.email", "b@b.co")
 	runGit(t, r.bravo, "config", "user.name", "bravo")
-	runCLIInDir(t, r.bravo, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, r.bravo, "init", "--skip-hooks")
 	return r, base
 }
 
@@ -233,7 +233,7 @@ func TestSyncFetchWithNoKnownSyncBranchFetchesAndFollowsNothing(t *testing.T) {
 	runGit(t, alpha, "add", "-A")
 	runGit(t, alpha, "commit", "-m", "seed")
 	runGit(t, alpha, "push", "origin", "HEAD")
-	runCLIInDir(t, alpha, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, alpha, "init", "--skip-hooks")
 	runCLIInDir(t, alpha, "sync", "push", "--set-upstream")
 
 	runGit(t, remote, "symbolic-ref", "HEAD", "refs/heads/no-such-branch")

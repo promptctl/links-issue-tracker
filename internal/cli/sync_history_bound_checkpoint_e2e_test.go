@@ -146,7 +146,7 @@ func driveTheBound(t *testing.T, rounds int) {
 	// A checkout that adopts the remote now adopts the re-rooted history.
 	runGit(t, base, "clone", remote, "gamma")
 	gammaDir := filepath.Join(base, "gamma")
-	runCLIInDir(t, gammaDir, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, gammaDir, "init", "--skip-hooks")
 	newBoundCheckout(t, "gamma", gammaDir, "").assertUnderTheBound(t)
 }
 

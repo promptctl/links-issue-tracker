@@ -29,7 +29,7 @@ func TestSyncReconcileNamesContestedLaneAfterPartitionedDoubleStart(t *testing.T
 	runGit(t, alpha, "add", "-A")
 	runGit(t, alpha, "commit", "-m", "seed")
 	runGit(t, alpha, "push", "origin", "HEAD")
-	runCLIInDir(t, alpha, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, alpha, "init", "--skip-hooks")
 	epic := extractTicketID(t, runCLIInDir(t, alpha, "new", "--title", "contest epic", "--topic", "contest-e2e", "--type", "epic"))
 	ticket := extractTicketID(t, runCLIInDir(t, alpha, "new", "--title", "contested lane", "--topic", "contest-e2e", "--type", "task", "--parent", epic))
 	runCLIInDir(t, alpha, "sync", "push", "--set-upstream")
@@ -41,7 +41,7 @@ func TestSyncReconcileNamesContestedLaneAfterPartitionedDoubleStart(t *testing.T
 	runGit(t, base, "clone", remote, "bravo")
 	runGit(t, bravo, "config", "user.email", "b@b.co")
 	runGit(t, bravo, "config", "user.name", "bravo")
-	runCLIInDir(t, bravo, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, bravo, "init", "--skip-hooks")
 
 	runCLIInDir(t, alpha, "start", ticket, "--by", "alpha-agent")
 	runCLIInDir(t, alpha, "sync", "push")
@@ -81,7 +81,7 @@ func TestSyncReconcileNoContestNamesNoContest(t *testing.T) {
 	runGit(t, alpha, "add", "-A")
 	runGit(t, alpha, "commit", "-m", "seed")
 	runGit(t, alpha, "push", "origin", "HEAD")
-	runCLIInDir(t, alpha, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, alpha, "init", "--skip-hooks")
 	epicA := extractTicketID(t, runCLIInDir(t, alpha, "new", "--title", "alphas epic", "--topic", "contest-e2e", "--type", "epic"))
 	ticketA := extractTicketID(t, runCLIInDir(t, alpha, "new", "--title", "alphas ticket", "--topic", "contest-e2e", "--type", "task", "--parent", epicA))
 	runCLIInDir(t, alpha, "sync", "push", "--set-upstream")
@@ -90,7 +90,7 @@ func TestSyncReconcileNoContestNamesNoContest(t *testing.T) {
 	runGit(t, base, "clone", remote, "bravo")
 	runGit(t, bravo, "config", "user.email", "b@b.co")
 	runGit(t, bravo, "config", "user.name", "bravo")
-	runCLIInDir(t, bravo, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, bravo, "init", "--skip-hooks")
 
 	// Ordinary divergence with no shared lane: alpha starts its own ticket,
 	// bravo files an unrelated one. Reconciling this merges histories with no

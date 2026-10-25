@@ -14,7 +14,7 @@ Ordering is a global **rank**: a base-62 string whose lexicographic order is the
 
 ## The work loop
 
-A repository joins lit with `lit init`, which — before creating anything — checks whether the git remote already carries a backlog and clones it if so; otherwise it creates an empty store. Init also installs a managed `pre-push` git hook and managed sections in `AGENTS.md`/`CLAUDE.md` that tell agents to start with `lit quickstart`, the built-in guidance router.
+A repository joins lit with `lit init`, which — before creating anything — checks whether the git remote already carries a backlog and clones it if so; otherwise it creates an empty store. Init also installs a managed `pre-push` git hook. Agents are told to start with `lit quickstart`, the built-in guidance router, by the plugin's `quickstart` skill.
 
 From there the agent loop is:
 

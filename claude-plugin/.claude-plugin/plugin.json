@@ -1,6 +1,6 @@
 {
   "name": "lit",
-  "description": "The /next skill for repos tracked with lit, the agent-native issue tracker.",
+  "description": "The /next and quickstart skills for repos tracked with lit, the agent-native issue tracker.",
   "author": {
     "name": "lit",
     "url": "https://github.com/promptctl/links-issue-tracker"

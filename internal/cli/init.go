@@ -21,10 +21,6 @@ type initReport struct {
 	DatabasePath string          `json:"database_path"`
 	DBCreated    bool            `json:"db_created"`
 	Hooks        string          `json:"hooks"`
-	Agents       string          `json:"agents"`
-	Claude       string          `json:"claude"`
-	AgentsSource string          `json:"agents_source,omitempty"`
-	ClaudeSource string          `json:"claude_source,omitempty"`
 	Sync         initSyncOutcome `json:"sync"`
 }
 
@@ -37,7 +33,6 @@ type initReport struct {
 func initLeaf() (wsLeaf, wsAcquire) {
 	fs := newCobraFlagSet("init").Detail(helpText("init"))
 	skipHooks := fs.Bool("skip-hooks", false, "Skip git hook installation")
-	skipAgents := fs.Bool("skip-agents", false, "Skip AGENTS.md integration update")
 	prefix := fs.String("prefix", "", "Issue ID prefix for a new workspace (default: derived from the repository name)")
 
 	// A flag the caller never typed is the zero request, which runs the default
@@ -139,8 +134,6 @@ func initLeaf() (wsLeaf, wsAcquire) {
 			DatabasePath: ws.DatabasePath,
 			DBCreated:    dbCreated,
 			Hooks:        "skipped",
-			Agents:       "skipped",
-			Claude:       "skipped",
 			Sync:         syncOutcome,
 		}
 
@@ -156,17 +149,6 @@ func initLeaf() (wsLeaf, wsAcquire) {
 			}
 		}
 
-		if !*skipAgents {
-			agentsResult, claudeResult, agentsErr := ensureLinksAgentFiles(inv.Env, ws.RootDir)
-			if agentsErr != nil {
-				return agentsErr
-			}
-			report.AgentsSource = string(agentsResult.Source)
-			report.ClaudeSource = string(claudeResult.Source)
-			report.Agents = managedAssetStatus(agentsResult.Changed, agentsResult.Created)
-			report.Claude = managedAssetStatus(claudeResult.Changed, claudeResult.Created)
-		}
-
 		// Resolved for the human output, here at the boundary, and threaded through
 		// as a value so writeInitHumanOutput/writeInitSyncLine stay pure renderers
 		// over an already-known build status. This is a separate resolution from
@@ -180,26 +162,12 @@ func initLeaf() (wsLeaf, wsAcquire) {
 }
 
 // initUsage is the one spelling of init's surface. [LAW:one-source-of-truth]
-const initUsage = "usage: lit init [--prefix <prefix>] [--skip-hooks] [--skip-agents]"
+const initUsage = "usage: lit init [--prefix <prefix>] [--skip-hooks]"
 
 type labeledStatus struct {
 	label  string
 	status string
 	reason string
-}
-
-func sourceDetail(source string, status string) string {
-	return composeSourceReason("", source, status)
-}
-
-func composeSourceReason(reason, source, status string) string {
-	if source == "" || status == "skipped" {
-		return reason
-	}
-	if reason != "" {
-		return reason + ", via " + source
-	}
-	return "via " + source
 }
 
 func formatLabeledEntry(item labeledStatus) string {
@@ -213,8 +181,6 @@ func formatLabeledEntry(item labeledStatus) string {
 func writeInitHumanOutput(w io.Writer, report initReport, buildNote string) error {
 	items := []labeledStatus{
 		{"pre-push hook", report.Hooks, ""},
-		{"AGENTS.md", report.Agents, sourceDetail(report.AgentsSource, report.Agents)},
-		{"CLAUDE.md", report.Claude, sourceDetail(report.ClaudeSource, report.Claude)},
 	}
 
 	var updated, skipped, unchanged []string

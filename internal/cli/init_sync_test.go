@@ -148,7 +148,7 @@ func TestInitAdoptsExistingRemoteBacklog(t *testing.T) {
 	runGit(t, producer, "add", "-A")
 	runGit(t, producer, "commit", "-m", "seed")
 	runGit(t, producer, "push", "origin", "HEAD")
-	runCLIInDir(t, producer, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, producer, "init", "--skip-hooks")
 	epicID := newEpicInDir(t, producer, "remote-epic")
 	runCLIInDir(t, producer, "new", "--title", "remote-ticket", "--topic", "demo", "--type", "task", "--parent", epicID)
 	runCLIInDir(t, producer, "sync", "push", "--set-upstream")
@@ -159,7 +159,7 @@ func TestInitAdoptsExistingRemoteBacklog(t *testing.T) {
 	runGit(t, consumer, "config", "user.email", "b@b.co")
 	runGit(t, consumer, "config", "user.name", "bravo")
 	progress := captureProgress(t)
-	initOut := runCLIInDir(t, consumer, "init", "--skip-hooks", "--skip-agents")
+	initOut := runCLIInDir(t, consumer, "init", "--skip-hooks")
 	if !strings.Contains(initOut, "Pulled existing backlog from origin/master") {
 		t.Fatalf("consumer init output missing adopt line:\n%s", initOut)
 	}
@@ -225,7 +225,7 @@ func TestInitBesideARemoteDoltCannotHold(t *testing.T) {
 
 	fresh, freshWS := consumerOf("bravo")
 	progress := captureProgress(t)
-	runCLIInDir(t, fresh, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, fresh, "init", "--skip-hooks")
 	if !strings.Contains(progress.String(), "the git remote's name is one Dolt cannot hold, so lit cannot sync with it until it is renamed (git remote rename); starting with an empty backlog") {
 		t.Fatalf("init beside my.fork with no lit data: progress missing the fresh start:\n%s", progress.String())
 	}
@@ -236,11 +236,11 @@ func TestInitBesideARemoteDoltCannotHold(t *testing.T) {
 		t.Fatalf("init trace records = %+v, want the first to decide remote_refused for my.fork", records)
 	}
 
-	runCLIInDir(t, producer, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, producer, "init", "--skip-hooks")
 	runCLIInDir(t, producer, "new", "--title", "remote-epic", "--topic", "demo", "--type", "epic")
 	runCLIInDir(t, producer, "sync", "push", "--set-upstream")
 	held, heldWS := consumerOf("charlie")
-	out, err := runCLIInDirAllowError(t, held, "init", "--skip-hooks", "--skip-agents")
+	out, err := runCLIInDirAllowError(t, held, "init", "--skip-hooks")
 	if err == nil || !strings.Contains(err.Error(), `remote "my.fork" carries lit ticket data (refs/dolt/*), which lit cannot adopt: remote "my.fork" has "." in its name`) {
 		t.Fatalf("init beside my.fork carrying lit data = %q, %v; want the refusal naming the data and the name", out, err)
 	}
@@ -274,7 +274,7 @@ func TestInitHardStopsWhenRemoteHasDataButAdoptCannotComplete(t *testing.T) {
 	runGit(t, producer, "add", "-A")
 	runGit(t, producer, "commit", "-m", "seed")
 	runGit(t, producer, "push", "origin", "HEAD")
-	runCLIInDir(t, producer, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, producer, "init", "--skip-hooks")
 	epicID := newEpicInDir(t, producer, "remote-epic")
 	runCLIInDir(t, producer, "new", "--title", "remote-ticket", "--topic", "demo", "--type", "task", "--parent", epicID)
 	// A successful sync push lands the backlog under refs/dolt/* on the remote.
@@ -288,7 +288,7 @@ func TestInitHardStopsWhenRemoteHasDataButAdoptCannotComplete(t *testing.T) {
 	// Force the adopt to resolve a branch the remote's Dolt data is not on, so
 	// the clone-based adopt fails even though refs/dolt/* is confirmed present.
 	t.Setenv("LINKS_DEBUG_DOLT_SYNC_BRANCH", "branch-the-remote-does-not-have")
-	initOut, initErr := runCLIInDirAllowError(t, consumer, "init", "--skip-hooks", "--skip-agents")
+	initOut, initErr := runCLIInDirAllowError(t, consumer, "init", "--skip-hooks")
 
 	if initErr == nil {
 		t.Fatalf("Run(init) error = nil, want a hard failure when adopt cannot complete; output:\n%s", initOut)
@@ -331,7 +331,7 @@ func TestInitHardStopsWhenRemoteHasDataButAdoptCannotComplete(t *testing.T) {
 	if err := os.Unsetenv("LINKS_DEBUG_DOLT_SYNC_BRANCH"); err != nil {
 		t.Fatalf("Unsetenv error = %v", err)
 	}
-	retryOut := runCLIInDir(t, consumer, "init", "--skip-hooks", "--skip-agents")
+	retryOut := runCLIInDir(t, consumer, "init", "--skip-hooks")
 	if !strings.Contains(retryOut, "Pulled existing backlog from origin/master") {
 		t.Fatalf("retry init output missing adopt line:\n%s", retryOut)
 	}
@@ -367,7 +367,7 @@ func TestInitHealsAbandonedAdoptResidueOtherCommandsRefuse(t *testing.T) {
 	runGit(t, producer, "add", "-A")
 	runGit(t, producer, "commit", "-m", "seed")
 	runGit(t, producer, "push", "origin", "HEAD")
-	runCLIInDir(t, producer, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, producer, "init", "--skip-hooks")
 	epicID := newEpicInDir(t, producer, "remote-epic")
 	runCLIInDir(t, producer, "new", "--title", "remote-ticket", "--topic", "demo", "--type", "task", "--parent", epicID)
 	runCLIInDir(t, producer, "sync", "push", "--set-upstream")
@@ -422,7 +422,7 @@ func TestInitHealsAbandonedAdoptResidueOtherCommandsRefuse(t *testing.T) {
 
 	// The heal: a plain `lit init` discards the residue, adopts the remote
 	// backlog, and clears the marker — no manual cleanup anywhere.
-	initOut := runCLIInDir(t, consumer, "init", "--skip-hooks", "--skip-agents")
+	initOut := runCLIInDir(t, consumer, "init", "--skip-hooks")
 	if !strings.Contains(initOut, "Pulled existing backlog from origin/master") {
 		t.Fatalf("healing init output missing adopt line:\n%s", initOut)
 	}
@@ -444,7 +444,7 @@ func TestInitHealsAbandonedAdoptResidueOtherCommandsRefuse(t *testing.T) {
 	writeAbandonedAdoptMarker()
 	runGit(t, consumer, "remote", "remove", "origin")
 	progress := captureProgress(t)
-	out, initErr := runCLIInDirAllowError(t, consumer, "init", "--skip-hooks", "--skip-agents")
+	out, initErr := runCLIInDirAllowError(t, consumer, "init", "--skip-hooks")
 	if initErr == nil {
 		t.Fatalf("Run(init, remote gone) error = nil, want the interrupted-adopt refusal; output:\n%s", out)
 	}
@@ -479,7 +479,7 @@ func TestInitHardStopsAndCreatesNoStoreWhenRemoteDetectionFails(t *testing.T) {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}
 
-	initOut, initErr := runCLIInDirAllowError(t, repo, "init", "--skip-hooks", "--skip-agents")
+	initOut, initErr := runCLIInDirAllowError(t, repo, "init", "--skip-hooks")
 
 	if initErr == nil {
 		t.Fatalf("Run(init) error = nil, want a hard failure when remote detection fails; output:\n%s", initOut)
@@ -554,7 +554,7 @@ func newInitTestRepo(t *testing.T) string {
 	t.Helper()
 	repo := t.TempDir()
 	runGit(t, repo, "init")
-	runCLIInDir(t, repo, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, repo, "init", "--skip-hooks")
 	return repo
 }
 

@@ -279,7 +279,7 @@ func setupWedgeWorkspace(t *testing.T, self string) (workspace.Info, string) {
 
 	cadenceConfig := pinOnPushCadence(t, base)
 	if out, err := runLit(t, root, self, onPushEnv(cadenceConfig, "1"),
-		"init", "--skip-hooks", "--skip-agents"); err != nil {
+		"init", "--skip-hooks"); err != nil {
 		t.Fatalf("lit init: %v\noutput:\n%s", err, out)
 	}
 
@@ -505,7 +505,7 @@ func TestAPeerPushReachesTheStoreThroughTheReceiveWorker(t *testing.T) {
 	runGit(t, producer, "add", "-A")
 	runGit(t, producer, "commit", "-m", "seed")
 	runGit(t, producer, "push", "origin", "HEAD")
-	lit(producer, quiet, "init", "--skip-hooks", "--skip-agents")
+	lit(producer, quiet, "init", "--skip-hooks")
 	epic := newEpicViaLit(t, producer, self, quiet, "peer-epic")
 	lit(producer, quiet, "new", "--title", "first-ticket", "--topic", "demo", "--type", "task", "--parent", epic)
 	lit(producer, quiet, "sync", "push", "--set-upstream")
@@ -514,7 +514,7 @@ func TestAPeerPushReachesTheStoreThroughTheReceiveWorker(t *testing.T) {
 	runGit(t, base, "clone", filepath.Join(base, "remote.git"), "bravo")
 	runGit(t, consumer, "config", "user.email", "b@b.co")
 	runGit(t, consumer, "config", "user.name", "bravo")
-	lit(consumer, quiet, "init", "--skip-hooks", "--skip-agents")
+	lit(consumer, quiet, "init", "--skip-hooks")
 	ws, err := workspace.Resolve(testEnv(), consumer)
 	if err != nil {
 		t.Fatalf("resolve consumer workspace: %v", err)
@@ -592,7 +592,7 @@ func setupGitWedgeWorkspace(t *testing.T, self, remoteURL string) (workspace.Inf
 
 	cadenceConfig := pinOnPushCadence(t, base)
 	if out, err := runLit(t, root, self, onPushEnv(cadenceConfig, "1"),
-		"init", "--skip-hooks", "--skip-agents"); err != nil {
+		"init", "--skip-hooks"); err != nil {
 		t.Fatalf("lit init: %v\noutput:\n%s", err, out)
 	}
 

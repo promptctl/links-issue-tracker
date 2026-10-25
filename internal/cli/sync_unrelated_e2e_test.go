@@ -33,7 +33,7 @@ func TestExplicitReconcileSurfacesUnrelatedHistories(t *testing.T) {
 	runGit(t, producer, "add", "-A")
 	runGit(t, producer, "commit", "-m", "seed")
 	runGit(t, producer, "push", "origin", "HEAD")
-	runCLIInDir(t, producer, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, producer, "init", "--skip-hooks")
 	producerEpic := newEpicInDir(t, producer, "producer-epic")
 	producerID := firstIssueID(t, runCLIInDir(t, producer, "new", "--title", "producer-ticket", "--topic", "demo", "--type", "task", "--parent", producerEpic))
 
@@ -44,7 +44,7 @@ func TestExplicitReconcileSurfacesUnrelatedHistories(t *testing.T) {
 	runGit(t, base, "clone", remote, "bravo")
 	runGit(t, consumer, "config", "user.email", "b@b.co")
 	runGit(t, consumer, "config", "user.name", "bravo")
-	runCLIInDir(t, consumer, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, consumer, "init", "--skip-hooks")
 	consumerEpic := newEpicInDir(t, consumer, "consumer-epic")
 	consumerID := firstIssueID(t, runCLIInDir(t, consumer, "new", "--title", "consumer-ticket", "--topic", "demo", "--type", "task", "--parent", consumerEpic))
 
@@ -118,7 +118,7 @@ func TestReconcileCombineUnionsUnrelatedHistories(t *testing.T) {
 	runGit(t, producer, "add", "-A")
 	runGit(t, producer, "commit", "-m", "seed")
 	runGit(t, producer, "push", "origin", "HEAD")
-	runCLIInDir(t, producer, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, producer, "init", "--skip-hooks")
 	producerEpic := newEpicInDir(t, producer, "producer-epic")
 	producerID := firstIssueID(t, runCLIInDir(t, producer, "new", "--title", "producer-ticket", "--topic", "demo", "--type", "task", "--parent", producerEpic))
 
@@ -128,7 +128,7 @@ func TestReconcileCombineUnionsUnrelatedHistories(t *testing.T) {
 	runGit(t, base, "clone", remote, "bravo")
 	runGit(t, consumer, "config", "user.email", "b@b.co")
 	runGit(t, consumer, "config", "user.name", "bravo")
-	runCLIInDir(t, consumer, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, consumer, "init", "--skip-hooks")
 	consumerEpic := newEpicInDir(t, consumer, "consumer-epic")
 	consumerID := firstIssueID(t, runCLIInDir(t, consumer, "new", "--title", "consumer-ticket", "--topic", "demo", "--type", "task", "--parent", consumerEpic))
 

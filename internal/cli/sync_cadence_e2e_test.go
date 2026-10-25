@@ -45,7 +45,7 @@ func litRepoForCadence(t *testing.T) (dir, marker string) {
 	// init runs with auto-sync still disabled by TestMain, so the workspace
 	// starts with no probe marker and each test below observes only what its
 	// own command did.
-	runCLIInDir(t, dir, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, dir, "init", "--skip-hooks")
 
 	ws := workspace.Info{Location: workspace.LocationFromStorageDir(filepath.Join(dir, ".git", "links"))}
 	marker = compactMarkerPath(ws)

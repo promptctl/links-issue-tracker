@@ -106,7 +106,7 @@ func proseDivergedClones(t *testing.T) (consumer, ticketID string) {
 	runGit(t, producer, "add", "-A")
 	runGit(t, producer, "commit", "-m", "seed")
 	runGit(t, producer, "push", "origin", "HEAD")
-	runCLIInDir(t, producer, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, producer, "init", "--skip-hooks")
 	epicID := newEpicInDir(t, producer, "shared-epic")
 	ticketID = extractTicketID(t, runCLIInDir(t, producer, "new", "--title", "shared-ticket", "--description", "original-desc", "--topic", "demo", "--type", "task", "--parent", epicID))
 	runCLIInDir(t, producer, "sync", "push", "--set-upstream")
@@ -115,7 +115,7 @@ func proseDivergedClones(t *testing.T) (consumer, ticketID string) {
 	runGit(t, base, "clone", remote, "bravo")
 	runGit(t, consumer, "config", "user.email", "b@b.co")
 	runGit(t, consumer, "config", "user.name", "bravo")
-	runCLIInDir(t, consumer, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, consumer, "init", "--skip-hooks")
 
 	// Both sides rewrite the SAME free-text field to different text.
 	runCLIInDir(t, producer, "update", ticketID, "--description", "alpha-desc")

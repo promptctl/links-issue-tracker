@@ -34,8 +34,8 @@ import (
 // [FRAMING:representation] the map has to match the territory in both
 // directions, and the forbidden property is lit-specific, never merely tracked.
 var aConsumerRepoPlausiblyHasThis = map[string]bool{
-	"AGENTS.md":  true, // written by lit init
-	"CLAUDE.md":  true, // written by lit init
+	"AGENTS.md":  true,
+	"CLAUDE.md":  true,
 	"README.md":  true,
 	"LICENSE":    true,
 	".gitignore": true,

@@ -263,7 +263,7 @@ func idsLoaded(stdout []byte, loads []storage.ImportTreeSpec) ([]string, error) 
 // commit.gpgsign=false stops a developer with global signing turned on from
 // aborting the run on a key prompt; --no-verify keeps a global core.hooksPath
 // from running hooks on a workspace that passed --skip-hooks to lit init for
-// exactly that reason. --skip-hooks and --skip-agents keep generation
+// exactly that reason. --skip-hooks and keep generation
 // hermetic: a git hook and an AGENTS.md rewrite are effects on the workspace
 // that have nothing to do with its size, and the hook would then run on every
 // write probe.
@@ -277,7 +277,7 @@ func generationSteps(bin litBinary, rows int, specs []importSpec) []step {
 		{budget: runBudget, argv: []string{"git", "-c", "user.email=perfbench@invalid", "-c", "user.name=perfbench",
 			"-c", "commit.gpgsign=false",
 			"commit", "-q", "--no-verify", "--allow-empty", "-m", "perfbench workspace"}},
-		{budget: runBudget, argv: []string{bin.path, "init", "--prefix", "bench", "--skip-hooks", "--skip-agents"}},
+		{budget: runBudget, argv: []string{bin.path, "init", "--prefix", "bench", "--skip-hooks"}},
 	}
 	for _, spec := range specs {
 		steps = append(steps, step{budget: importBudget(rows), argv: []string{bin.path, "import", "--path", spec.path}, loads: spec.records})

@@ -65,7 +65,7 @@ func TestReceiveFetchLeavesTheLiveStoreFree(t *testing.T) {
 		}
 		return out
 	}
-	mustLit(producer, quiet, "init", "--skip-hooks", "--skip-agents")
+	mustLit(producer, quiet, "init", "--skip-hooks")
 	// The epic travels with the first push, so the consumer's init adopts it
 	// and the consumer's own leaf below can name it.
 	epic := newEpicViaLit(t, producer, self, quiet, "shared-epic")
@@ -76,7 +76,7 @@ func TestReceiveFetchLeavesTheLiveStoreFree(t *testing.T) {
 	runGit(t, base, "clone", remote, "bravo")
 	runGit(t, consumer, "config", "user.email", "b@b.co")
 	runGit(t, consumer, "config", "user.name", "bravo")
-	mustLit(consumer, quiet, "init", "--skip-hooks", "--skip-agents")
+	mustLit(consumer, quiet, "init", "--skip-hooks")
 
 	mustLit(producer, quiet, "new", "--title", "peer-ticket", "--topic", "demo", "--type", "task", "--parent", epic)
 	mustLit(producer, quiet, "sync", "push")

@@ -70,7 +70,7 @@ func TestPushFailureBannerReachesMutationOnlySession(t *testing.T) {
 	// push also records the push-outcome marker as "pushed", so the healthy
 	// assertion below starts from a truthful baseline.
 	if out, err := runLit(t, root, self, isolatedEnv(xdgConfigHome, "1"),
-		"init", "--skip-hooks", "--skip-agents"); err != nil {
+		"init", "--skip-hooks"); err != nil {
 		t.Fatalf("lit init: %v\noutput:\n%s", err, out)
 	}
 	// The epic every mutation below files into is part of the bootstrap, made

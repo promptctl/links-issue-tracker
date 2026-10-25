@@ -79,7 +79,7 @@ func TestAutomaticReceiveFastForwardsEstablishedClone(t *testing.T) {
 	runGit(t, producer, "add", "-A")
 	runGit(t, producer, "commit", "-m", "seed")
 	runGit(t, producer, "push", "origin", "HEAD")
-	runCLIInDir(t, producer, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, producer, "init", "--skip-hooks")
 	epicID := newEpicInDir(t, producer, "shared-epic")
 	runCLIInDir(t, producer, "new", "--title", "first-ticket", "--topic", "demo", "--type", "task", "--parent", epicID)
 	runCLIInDir(t, producer, "sync", "push", "--set-upstream")
@@ -89,7 +89,7 @@ func TestAutomaticReceiveFastForwardsEstablishedClone(t *testing.T) {
 	runGit(t, base, "clone", remote, "bravo")
 	runGit(t, consumer, "config", "user.email", "b@b.co")
 	runGit(t, consumer, "config", "user.name", "bravo")
-	runCLIInDir(t, consumer, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, consumer, "init", "--skip-hooks")
 	if !strings.Contains(runCLIInDir(t, consumer, "backlog"), "first-ticket") {
 		t.Fatalf("consumer did not adopt first-ticket on init")
 	}

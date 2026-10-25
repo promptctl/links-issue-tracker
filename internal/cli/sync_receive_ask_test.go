@@ -153,7 +153,7 @@ func twoClonesOverOneDoltRemote(t *testing.T) (remote, producer, consumer string
 	runGit(t, producer, "add", "-A")
 	runGit(t, producer, "commit", "-m", "seed")
 	runGit(t, producer, "push", "origin", "HEAD")
-	runCLIInDir(t, producer, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, producer, "init", "--skip-hooks")
 	epicID = newEpicInDir(t, producer, "shared-epic")
 	runCLIInDir(t, producer, "new", "--title", "first-ticket", "--topic", "demo", "--type", "task", "--parent", epicID)
 	runCLIInDir(t, producer, "sync", "push", "--set-upstream")
@@ -162,7 +162,7 @@ func twoClonesOverOneDoltRemote(t *testing.T) (remote, producer, consumer string
 	runGit(t, base, "clone", remote, "bravo")
 	runGit(t, consumer, "config", "user.email", "b@b.co")
 	runGit(t, consumer, "config", "user.name", "bravo")
-	runCLIInDir(t, consumer, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, consumer, "init", "--skip-hooks")
 	ws = workspace.Info{Location: workspace.LocationFromStorageDir(filepath.Join(consumer, ".git", "links"))}
 	return remote, producer, consumer, ws, epicID
 }
