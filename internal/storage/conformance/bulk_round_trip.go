@@ -45,7 +45,8 @@ func aBulkFileReadOutOfTheStoreGoesBackInAsANoOp(t *testing.T, ctx context.Conte
 	}
 	assertStrings(t, "updated", result.Updated, nil)
 	assertStrings(t, "fields held", result.FieldsHeld, ids)
-	assertStrings(t, "parent held", result.ParentHeld, ids)
+	// The two epics sit at the top level, so their documents state no parent.
+	assertStrings(t, "parent held", result.ParentHeld, []string{blocker.ID, full.ID})
 	assertStrings(t, "blocked_by held", result.BlockedByHeld, ids)
 	if result.EdgesAdded+result.EdgesRemoved != 0 {
 		t.Errorf("edges added %d, removed %d, want none", result.EdgesAdded, result.EdgesRemoved)

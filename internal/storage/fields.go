@@ -199,7 +199,9 @@ func bulkUpdatePatch(doc BulkIssueSpec) (UpdateIssueInput, error) {
 
 // BulkUpdateDocument is the update document that states everything about an
 // issue a bulk file can edit, as it stands: every editable field, its parent
-// ("" for none) and its whole blocked-by set ([] for none). It is
+// when it has one, and its whole blocked-by set ([] for none). An issue with
+// no parent states none rather than `parent: ""`, which is a clear, a move the
+// gate judges and refuses for a leaf older data left with no epic. It is
 // bulkUpdatePatch's inverse, so a file of these imported unedited moves
 // nothing, and editing one value in it edits exactly that value.
 //
@@ -211,15 +213,14 @@ func BulkUpdateDocument(rel IssueRelations) BulkIssueSpec {
 	for _, field := range issueFields {
 		field.toBulk(rel.Issue, &doc)
 	}
-	parent := ""
 	if rel.Parent != nil {
-		parent = rel.Parent.ID
+		doc.Parent = &rel.Parent.ID
 	}
 	blockedBy := make([]string, len(rel.BlockedBy))
 	for i, blocker := range rel.BlockedBy {
 		blockedBy[i] = blocker.ID
 	}
-	doc.Parent, doc.BlockedBy = &parent, &blockedBy
+	doc.BlockedBy = &blockedBy
 	return doc
 }
 

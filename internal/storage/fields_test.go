@@ -235,11 +235,11 @@ func TestABulkUpdateDocumentRoundTripsItsIssue(t *testing.T) {
 // key of the bulk file but the four an update cannot carry back — local_id
 // names a create, topic is immutable, rank moves an issue rather than saying
 // where it stands, and reason annotates an edit the document does not make —
-// and states each of the others even when the issue's value is empty, so an
-// agent sees every key it may edit. The keys are read off the type, so a key
+// and states each of the others even when the issue's value is empty, the
+// parent whenever there is one, so an agent sees every key it may edit. The keys are read off the type, so a key
 // added to the file and left out of the document fails here.
 func TestABulkUpdateDocumentStatesEveryKeyAnUpdateOwns(t *testing.T) {
-	text, err := yaml.Marshal(storage.BulkUpdateDocument(storage.IssueRelations{Issue: model.Issue{ID: "links-x-1", Title: "bare", IssueType: model.TypeTask}}))
+	text, err := yaml.Marshal(storage.BulkUpdateDocument(storage.IssueRelations{Issue: model.Issue{ID: "links-x-1", Title: "bare", IssueType: model.TypeTask}, Parent: &model.Issue{ID: "links-x"}}))
 	if err != nil {
 		t.Fatalf("marshal the document: %v", err)
 	}
@@ -260,5 +260,19 @@ func TestABulkUpdateDocumentStatesEveryKeyAnUpdateOwns(t *testing.T) {
 	slices.Sort(want)
 	if !slices.Equal(got, want) {
 		t.Errorf("the document states keys %v, want %v; the document:\n%s", got, want, text)
+	}
+}
+
+// A leaf older data left with no epic reads out as a document stating no
+// parent, which the gate admits as stating nothing about where it sits, where
+// `parent: ""` would be a clear the gate refuses for a leaf.
+func TestTheDocumentOfAnIssueWithNoParentStatesNone(t *testing.T) {
+	leaf := model.Issue{ID: "lit-loose", Title: "loose", IssueType: model.TypeTask}
+	doc := storage.BulkUpdateDocument(storage.IssueRelations{Issue: leaf})
+	if doc.Parent != nil {
+		t.Fatalf("the document states parent %q, want none", *doc.Parent)
+	}
+	if _, err := storage.ParseBulkFile([]storage.BulkIssueSpec{doc}, map[string]model.IssueType{leaf.ID: model.TypeTask}); err != nil {
+		t.Errorf("ParseBulkFile(the loose leaf's own document) error = %v", err)
 	}
 }

@@ -436,11 +436,14 @@ a table.
 
 `--format yaml` prints each listed issue as a `lit import` update document instead
 of a row: its `id` and every key an update document may set, at the value the issue
-holds — `parent: ""` and `blocked_by: []` included — and never `topic` or `rank`.
+holds — `blocked_by: []` included, and `parent` whenever the issue has one — and
+never `topic` or `rank`.
 That is the read half of editing tickets in place: `lit ls --query <sel> --format
 yaml > f.yaml`, edit f.yaml, `lit import --path f.yaml`. Imported unedited, the file
 changes nothing and the import reports every document as already holding its fields;
-edited, it changes only the values edited. It prints every editable field, so
+edited, it changes only the values edited. A file that would leave a blocked_by inside
+one epic is refused whole, so a selection holding one that a reparent left behind goes
+back in once that blocker is dropped from the file. It prints every editable field, so
 `--columns` with it is a usage error.
 
 The `state` cell names why a closed ticket closed: `closed:duplicate`,

@@ -30,7 +30,7 @@ func TestListYAMLRoundTripsThroughImport(t *testing.T) {
 	if !strings.Contains(out, "updated 0 issues\n3 issues already had the fields the file states\n") {
 		t.Errorf("the unedited round trip's import output:\n%s", out)
 	}
-	assertFacts(t, map[string]string{"import.updated": "0", "import.fields_held": "3", "import.parent_held": "3", "import.blocked_by_held": "3", "import.edges_added": "0", "import.edges_removed": "0"})
+	assertFacts(t, map[string]string{"import.updated": "0", "import.fields_held": "3", "import.parent_held": "2", "import.blocked_by_held": "3", "import.edges_added": "0", "import.edges_removed": "0"})
 
 	edited := strings.Replace(listed, "title: full\n", "title: full, retitled\n", 1)
 	if edited == listed {

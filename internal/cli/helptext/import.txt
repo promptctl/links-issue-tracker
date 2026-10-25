@@ -100,9 +100,12 @@ YAML bulk file (creates and updates)
 
   lit ls --format yaml prints the issues it lists as update documents
   of this shape: each one's id and every key an update document may set,
-  at the value the issue holds, parent: "" and blocked_by: [] included.
-  Imported unedited, that file changes nothing; edit the values to
-  change and import it, and only what was edited moves.
+  at the value the issue holds, blocked_by: [] included, and parent
+  whenever the issue has one. Imported unedited, that file changes
+  nothing; edit the values to change and import it, and only what was
+  edited moves. A file is refused whole if it would leave a blocked_by
+  inside one epic, so a selection holding one that a reparent left
+  behind goes back in once that blocker is dropped from the file.
 
   parent on an update document reparents the issue, as lit parent set
   does, and parent: "" clears it, as lit parent clear does; the same rules
