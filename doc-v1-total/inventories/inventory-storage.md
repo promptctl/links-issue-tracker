@@ -72,7 +72,7 @@ General contract: every method is a pure read from the caller's view; two identi
 - The single execution path for issue-record changes; the `Change` value carries all variability, so there is no second mutation verb (`internal/storage/contract.go`).
 - A pure no-op records nothing in history (`internal/storage/contract.go`).
 - An illegal transition is refused rather than silently ignored (`internal/storage/contract.go`).
-- `Applied` carries the issue as the change left it and the `claims.Handover` the change recorded, nil for every change but a start taking a ticket somebody had already taken (`internal/storage/issues.go`).
+- `Applied` carries the issue as the change left it, the `claims.Handover` the change recorded — nil for every change but a start taking a ticket somebody had already taken — and `Fields`, the change rows its field patch made, empty for a patch that moved no field (`internal/storage/issues.go`).
 
 **`Purge(ctx, in PurgeInput) (PurgeResult, error)`** — `internal/storage/contract.go`
 - Permanently removes an issue — its row, comments, plan reviews, labels, history, and every edge to or from it — in one write, leaving a `model.Purge` record that names the ticket by its id and `created_at` and holds nothing of its content (`internal/storage/contract.go`; `internal/model/purge.go`).
@@ -421,7 +421,9 @@ Rule for the whole struct: **every slice is an OR within itself and an AND again
 - `BlockedBySet`, `BlockedByHeld`, `BlockedByUndone []string` — the same three accounts of the update documents' `blocked_by` sets: changed, already exactly as stated, put back by a refusal (`internal/storage/bulk.go`).
 - `EdgesAdded`, `EdgesRemoved int` — every edge the file's edge step wrote, a create's `blocked_by` included; zero once a refusal's undo put them back (`internal/storage/bulk.go`).
 - `RecordEdges(step EdgeStep)` fills the six edge fields from the step, the update documents' sets only, by relation type; `EdgesUndone()` moves `Reparented` to `ReparentsUndone` and `BlockedBySet` to `BlockedByUndone` and zeroes the two counts (`internal/storage/bulk.go`).
-- `Updated []string` — real IDs of every updated issue, in the order applied (`internal/storage/bulk.go`).
+- `Updated []string` — real IDs of the issues whose fields an update document moved, in the order applied (`internal/storage/bulk.go`).
+- `FieldsHeld []string` — real IDs of the issues whose fields already were what their update document states, in the order applied (`internal/storage/bulk.go`).
+- `RecordUpdate(applied Applied)` files one applied update under `FieldsHeld` when `applied.Fields` is empty, else under `Updated`; both engines record every update through it (`internal/storage/bulk.go`).
 - `Ranked RankSetResult` — the `RankSet` the file's `rank: top` documents made, in file order; no resolutions when the file states no rank (`internal/storage/bulk.go`).
 - `AfterRollback(leaked []string) BulkApplyResult` — what stays written once a refused batch's creates are rolled back, `leaked` being the creates the rollback could not delete: `Created` keeps only those, and `Ranked` only the `RankedID`s that are not a create the rollback deleted; every other field is kept as is. Both engines return it beside a refusal (`internal/storage/bulk.go`).
 - `Kept(leaked []string) string` — `AfterRollback(leaked)` in words: `"kept %d reparents [%s], %d blocked_by sets [%s], %d updates [%s] and the order of %d issues [%s]"`, comma-joined, zero counts included; both engines put it in every refusal's error, after the edge step's undo (`internal/storage/bulk.go`).
@@ -835,7 +837,7 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 5. `planLifecycle(current, actor, strings.TrimSpace(c.Reason), c.Action, now)` → `(afterAction, actionEvents, handover, err)`.
 6. `planFields(afterAction, c.Fields, actor, now)` — **the field write baselines on the POST-action issue**, so a start's new assignee is what the patch diffs against rather than producing a second assignee change row.
 7. `writeIssue`, `writeLabels`, `recordEvents(actionEvents)`, `recordEvents(patch.events)` — in that order.
-8. Returns `storage.Applied{Issue: hydrate(rec, e.positions()), Handover: handover}`.
+8. Returns `storage.Applied{Issue: hydrate(rec, e.positions()), Handover: handover, Fields: patch.changes}`.
 
 **`planLifecycle`** (`internal/storage/memory/apply.go`) — a type switch on the sealed `model.Action` sum: `nil` → no transition (`current, nil, nil, nil`); `model.StatusAction` → `planStatus`; `model.RetentionAction` → `planRetention` and `model.SetPhase` → `planPhase`, each with a nil handover; `default` → **panics** with `fmt.Sprintf("illegal Action value %T", action)` (only an impostor `Action` reaches here).
 
@@ -866,7 +868,8 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 - `IssueType` set → **refused if it would cross the container/leaf line**: `model.ValidationError{Message: fmt.Sprintf("cannot change issue_type between container (%v) and leaf types: lifecycle capability would change", model.ContainerTypes())}`.
 - `Priority` set → assigned as-is.
 - `Labels` set → `model.CanonicalizeLabels(*in.Labels)`.
-- `patch.statesLabels = (in.Labels != nil)` — **not** the same question as "did the labels change": a patch restating the existing set rewrites the label rows (authorship and timestamps included), while a patch never mentioning labels leaves them as an earlier writer left them.
+- `patch.movesLabels = !slices.Equal(baseline.Labels, issue.Labels)` — "did the label set change", not "did the patch state one": a patch restating the existing set leaves the label rows (authorship and timestamps included) exactly as their writers left them, as a patch never mentioning labels does.
+- `patch.changes` is the change rows `ApplyIssueFields` returned, which `apply` hands back as `Applied.Fields`.
 - If `storage.ApplyIssueFields(baseline, in)` returns no change rows → returns the patch with **no event and no `UpdatedAt` bump**.
 - Otherwise sets `patch.issue.UpdatedAt = now` and emits one event with `reason: in.Reason`, `actor`, and the changes. **The field-change event has an empty `action` string**.
 
@@ -883,7 +886,7 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 
 **`writeIssue`** (`internal/storage/memory/apply.go`) — the one place a mutation becomes stored state; copies `title`, `description`, `prompt`, `plan`, `issueType`, `priority`, `assignee`, `lane`, `updatedAt`, `retention`, `status = statusViewOf(issue)`. **`topic`, `id`, and `createdAt` are never written here** — topic is immutable through `Apply`.
 
-**`writeLabels`** (`internal/storage/memory/apply.go`) — replaces the label set when and only when `patch.statesLabels`.
+**`writeLabels`** (`internal/storage/memory/apply.go`) — replaces the label set when and only when `patch.movesLabels`.
 
 **`statusViewOf`** (`internal/storage/memory/apply.go`) — a container projects to the **zero** `model.StatusView` (the same nothing Dolt stores as a NULL column); a leaf projects `{Value: issue.State(), ClosedAt, Resolution, RedirectTarget}`.
 
@@ -1036,7 +1039,7 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 3. Per create in `file.Creates`: `e.createIssue(create.Input(batch.resolve(create.Parent), prefix, actor))`. On failure → `refuse(fmt.Errorf("bulk: create doc %d: %w", create.Index, err))`. Records into the batch; `result.Created` is the batch's mappings, under `create.LocalID` if set, else under the new real id.
 4. **The edges**, `e.writeEdges(file, batch, actor)` into the `storage.EdgeStep` `edges`, recorded by `result.RecordEdges(edges)`: it copies `e.relations`, runs `file.WriteEdges(batch.createdIDs, edgeWriter{e, actor})` (`internal/storage/bulk.go`), and restores the copy on any error. `WriteEdges` takes every edge set the file states, in this order: each update document's parent (a set of zero or one), each create's `blocked_by`, each update document's `blocked_by`. For each set it reads `Edges` — `mustRecord` first, so a set on an id naming no issue is a not-found error — resolves its targets with `storage.ResolveRef` against the ids its creates were minted under, and removes, raw, every edge the set drops; a set with nothing to drop or add is held. Only then does it `Add` (`addRelation`) every edge any set introduces, in set order, so the cycle, same-epic and containment rules judge the graph the file ends with, with the hierarchy written before any `blocked-by` edge. An error → `"bulk: %s of %s -> %q: %w"` (`parent` or `blocked_by`; the document as its quoted id or `doc %d`; the target as the file states it). On failure → `refuse(err)`.
 5. **The ordering**, when `file.RankedIDs(batch.createdIDs)` is non-empty: one `e.rankSet(ranked)` — `RankSet` under the lock `BulkApply` already holds — into `result.Ranked`. On failure → `refuse(fmt.Errorf("bulk: rank: %w", err))`.
-6. **Updates last**, per `file.Updates` in file order: `e.apply(update.ID, storage.Change{Actor: actor, Fields: update.Patch})`. On failure → `refuse(fmt.Errorf("bulk: update %q: %w", update.ID, err))`. Appends `issue.ID` to `result.Updated`. A failing create, edge, or ordering therefore leaves no update applied.
+6. **Updates last**, per `file.Updates` in file order: `e.apply(update.ID, storage.Change{Actor: actor, Fields: update.Patch})`. On failure → `refuse(fmt.Errorf("bulk: update %q: %w", update.ID, err))`. Records the update through `result.RecordUpdate(applied)` — `Updated` when it moved a field, `FieldsHeld` when it moved none. A failing create, edge, or ordering therefore leaves no update applied.
 
 **`ImportTree(ctx, prefix, actor, specs)`**
 1. `creates, err := storage.ParseImportTreeFile(specs)` (`internal/storage/import_validate.go`, shared with the Dolt engine) — the parsed creates in write order; its error is returned as is.
