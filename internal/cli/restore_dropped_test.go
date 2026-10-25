@@ -8,8 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
 func TestDroppedByIsTheWorkspaceTicketsTheFileDoesNotHold(t *testing.T) {
@@ -26,6 +28,14 @@ func TestDroppedByIsTheWorkspaceTicketsTheFileDoesNotHold(t *testing.T) {
 	}
 	if dropped := droppedBy(export("a"), export("a", "d")); len(dropped) != 0 {
 		t.Errorf("droppedBy = %v, want none: the file holds every ticket the workspace does", dropped)
+	}
+	born := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	purging := model.Export{
+		Issues: []model.Issue{{ID: "a", CreatedAt: born}},
+		Purges: []model.Purge{{IssueID: "a", IssueCreatedAt: born}},
+	}
+	if dropped := droppedBy(export("a"), purging); len(dropped) != 1 || dropped[0].ID != "a" {
+		t.Errorf("droppedBy = %v, want a: the file's own purge cuts it from what the restore lands", dropped)
 	}
 
 	var none bytes.Buffer
@@ -103,13 +113,53 @@ func TestBackupRestoreTracesWhatTheFileLacksWhetherItLandsOrIsRefused(t *testing
 	}
 
 	later := extractTicketID(t, runCLIInDir(t, repo, "new", "--type", "task", "--title", "Unsynced", "--topic", "demo", "--parent", epic))
-	_, err := runCLIInDirAllowError(t, repo, "backup", "restore", "--path", created[1])
+	refused, err := runCLIInDirAllowError(t, repo, "backup", "restore", "--path", created[1])
 	var conflict MergeConflictError
 	if !errors.As(err, &conflict) {
 		t.Fatalf("restore over a ticket made since the last restore error = %v (%T), want the unsynced-state refusal", err, err)
 	}
+	if strings.Contains(refused, "removed ") {
+		t.Errorf("refused restore printed %q, want no ticket named removed: the refusal destroyed nothing", refused)
+	}
 	if restore := restoreTraceRecord(t, repo); restore.Metadata["absent_from_file"] != "1" || restore.Metadata["absent_from_file_ids"] != later {
 		t.Errorf("refused restore trace metadata = %v, want absent_from_file=1 (%s)", restore.Metadata, later)
+	}
+}
+
+// A restore that fails after its replace committed — the sync base cannot be
+// written — has still removed the tickets the file lacks, so its output names
+// them beside the error.
+func TestBackupRestoreThatFailsAfterItsReplaceNamesTheTicketsItRemoved(t *testing.T) {
+	repo := newInitTestRepo(t)
+	epic := newEpicInDir(t, repo, "Home")
+	created := strings.Fields(runCLIInDir(t, repo, "backup", "create"))
+	if len(created) != 2 {
+		t.Fatalf("backup create printed %v, want a name and a path", created)
+	}
+	later := extractTicketID(t, runCLIInDir(t, repo, "new", "--type", "task", "--title", "Made meanwhile", "--topic", "demo", "--parent", epic))
+	ws, err := workspace.Resolve(testEnv(), repo)
+	if err != nil {
+		t.Fatalf("workspace.Resolve() error = %v", err)
+	}
+	base := filepath.Join(ws.StorageDir, "last-sync-base.json")
+	if err := os.RemoveAll(base); err != nil {
+		t.Fatalf("clear sync base: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(base, "blocked"), 0o755); err != nil {
+		t.Fatalf("block sync base: %v", err)
+	}
+
+	out, err := runCLIInDirAllowError(t, repo, "backup", "restore", "--path", created[1], "--force")
+	if err == nil {
+		t.Fatalf("restore succeeded with its sync base blocked; the test needs a failure after the commit")
+	}
+	for _, want := range []string{"removed 1 ticket(s) the workspace held and the file does not", later} {
+		if !strings.Contains(out, want) {
+			t.Errorf("failed restore output %q lacks %q", out, want)
+		}
+	}
+	if strings.Contains(out, "restored ") {
+		t.Errorf("failed restore output %q claims the restore finished", out)
 	}
 }
 

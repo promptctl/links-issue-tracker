@@ -110,7 +110,8 @@ func TestBackupRestoreNamesTheTicketsItMovesIntoAnEpic(t *testing.T) {
 
 // TestBackupRestoreTracesItsMovesWhenALaterStepFails fails the restore after
 // the store has committed it — the sync base cannot be written — and finds the
-// moves on the trace all the same: the trace records what the store holds.
+// moves in the output and on the trace all the same: both report what the
+// store holds.
 func TestBackupRestoreTracesItsMovesWhenALaterStepFails(t *testing.T) {
 	repo, task, path := newPreContainmentBackup(t)
 	ws, err := workspace.Resolve(testEnv(), repo)
@@ -125,8 +126,12 @@ func TestBackupRestoreTracesItsMovesWhenALaterStepFails(t *testing.T) {
 		t.Fatalf("block sync base: %v", err)
 	}
 
-	if _, err := runCLIInDirAllowError(t, repo, "backup", "restore", "--path", path, "--force"); err == nil {
+	out, err := runCLIInDirAllowError(t, repo, "backup", "restore", "--path", path, "--force")
+	if err == nil {
 		t.Fatalf("restore succeeded with its sync base blocked; the test needs a failure after the commit")
+	}
+	if !strings.Contains(out, "moved 1 ticket(s) the backup held outside an epic;") || !strings.Contains(out, task) {
+		t.Errorf("failed restore output %q does not name the move the store committed, %s", out, task)
 	}
 	if restore := restoreTraceRecord(t, repo); restore.Metadata["rehomed"] != "1" || !strings.Contains(restore.Metadata["rehomed_moves"], task+" into ") {
 		t.Errorf("restore trace metadata = %v, want the one move the store committed, %s", restore.Metadata, task)

@@ -15,9 +15,12 @@ import (
 // — the sync merge stamps a row with the later of two sides while taking each
 // field from either (merge.resolve), so no stamp proves a hand edit — and so
 // restore reports what it destroys every time, and refuses nothing for it.
+// The file is read as the restore lands it, cut by its own purge records; the
+// store's purges name no live ticket, since a write never un-purges.
 func droppedBy(local, target model.Export) []model.Issue {
-	held := make(map[string]bool, len(target.Issues))
-	for _, issue := range target.Issues {
+	landing := target.ApplyPurges(target.Purges)
+	held := make(map[string]bool, len(landing.Issues))
+	for _, issue := range landing.Issues {
 		held[issue.ID] = true
 	}
 	var dropped []model.Issue
