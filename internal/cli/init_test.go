@@ -48,6 +48,31 @@ func TestInitEventSaysWhetherItBuiltTheDatabase(t *testing.T) {
 	}
 }
 
+// lit leaves agent instruction files to the plugin's quickstart skill: neither
+// init nor a quickstart refresh creates AGENTS.md or CLAUDE.md, and a file the
+// user already owns is left byte-for-byte as it was.
+func TestInitAndRefreshLeaveAgentFilesAlone(t *testing.T) {
+	isolateEvents(t)
+	dir := t.TempDir()
+	runGit(t, dir, "init")
+	runCLIInDir(t, dir, "init", "--skip-hooks")
+	runCLIInDir(t, dir, "quickstart", "--refresh")
+	for _, name := range []string{"AGENTS.md", "CLAUDE.md"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+			t.Fatalf("%s after init and refresh: stat err = %v; want not-exist", name, err)
+		}
+	}
+	owned := filepath.Join(dir, "CLAUDE.md")
+	if err := os.WriteFile(owned, []byte("mine\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCLIInDir(t, dir, "init", "--skip-hooks")
+	runCLIInDir(t, dir, "quickstart", "--refresh")
+	if got, _ := os.ReadFile(owned); string(got) != "mine\n" {
+		t.Fatalf("CLAUDE.md after init and refresh = %q; want untouched", got)
+	}
+}
+
 // A command whose open finds the database gone builds it again and says so on
 // its event, a write command and a sync command alike; a command that finds it
 // there says it built nothing.

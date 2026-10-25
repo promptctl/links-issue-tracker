@@ -17,7 +17,6 @@ type quickstartRefreshItem struct {
 	Status  string `json:"status"`
 	Managed bool   `json:"managed"`
 	Reason  string `json:"reason,omitempty"`
-	Source  string `json:"source,omitempty"`
 }
 
 type quickstartRefreshReport struct {
@@ -96,16 +95,11 @@ func refreshQuickstartTemplate(env environ.Env, workspaceRoot string, name strin
 	}, nil
 }
 
-func managedAssetStatus(changed bool, created bool) string {
-	statuses := []string{"unchanged", "updated", "created"}
-	index := 0
+func managedAssetStatus(changed bool) string {
 	if changed {
-		index = 1
+		return "updated"
 	}
-	if created {
-		index = 2
-	}
-	return statuses[index]
+	return "unchanged"
 }
 
 func formatQuickstartRefreshSummary(refresh quickstartRefreshReport) string {
@@ -146,7 +140,7 @@ func formatQuickstartRefreshSummary(refresh quickstartRefreshReport) string {
 }
 
 func quickstartHookRefreshItem(result hookInstallResult) quickstartRefreshItem {
-	status := managedAssetStatus(result.Changed, false)
+	status := managedAssetStatus(result.Changed)
 	if !result.Managed && result.Reason != "" {
 		status = "skipped"
 	}

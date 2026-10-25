@@ -273,7 +273,7 @@ One row: `install`. Prints `installed <hookPath>` whether or not anything change
 `lit quickstart [work|new|update|done|doctor|review] [--refresh] [--eject[=LIST]] [--force]` (`quickstart_topics.go`). Validation (all exit 2): at most one positional; `--refresh` and `--eject` are mutually exclusive; `--force` only with `--eject`; a topic takes no flags; unknown topics are rejected naming the six valid ones (`cli.go`).
 
 - **Topic mode** renders the topic's template (project > global > embedded), trimmed; topic output never carries the soil section (`quickstart_refresh.go`).
-- **Bare / `--refresh`** renders `quickstart.md`, appending a "soil" section when config `quickstart.soil_mode = true` (default false). `--refresh` additionally runs the same writers `init` uses — hooks and agent files — plus an **inspection-only** pass over the quickstart templates: per template, `absent` (no override), `unchanged` (override identical to embedded), or `skipped`/`customized` (override drifted; left untouched — refresh never overwrites overrides). The human summary groups items into `Refreshed:` / `Skipped:` / `Up to date:`, or `nothing to refresh` (`quickstart_refresh.go`).
+- **Bare / `--refresh`** renders `quickstart.md`, appending a "soil" section when config `quickstart.soil_mode = true` (default false). `--refresh` additionally runs the same hook writer `init` uses plus an **inspection-only** pass over the quickstart templates: per template, `absent` (no override), `unchanged` (override identical to embedded), or `skipped`/`customized` (override drifted; left untouched — refresh never overwrites overrides). The human summary groups items into `Refreshed:` / `Skipped:` / `Up to date:`, or `nothing to refresh` (`quickstart_refresh.go`).
 - **`--eject`** copies embedded defaults to the global override path `<config-dir>/templates/<name>`. Selection: bare `--eject` = all eight; otherwise comma-separated short aliases (`hook, quickstart, quickstart-done, quickstart-doctor, quickstart-new, quickstart-review, quickstart-update, quickstart-work`), unknown aliases erroring with the list. All targets are planned first; any existing file aborts the entire write phase (nothing written) unless `--force` overwrites everything. Report lines: `exists` / `skipped` / `ejected`; conflicts end in `MergeConflictError`, exit 5 (`quickstart_eject.go`).
 
 Commands emit **breadcrumbs** — `deeper guidance: lit quickstart <topic>` as a trailing output line; an unknown breadcrumb token panics (`quickstart_topics.go`).
@@ -291,7 +291,6 @@ A separate, rarer line carries build drift onto the ordinary read commands. `bui
 `resolveBuildStalenessLines` fails loud rather than silent, the way the note's own resolve step does: when `version.Get()` errors it emits `build: this binary cannot report its own identity (<err>) — its age and provenance are unknown` on every one of those three commands instead of returning no line, because a binary that cannot account for itself at all is worse news than the stale binary this banner exists to announce (`build_status.go`).
 
 ## Managed sections and embedded templates
-
 
 Template resolution (`internal/templates/templates.go`): **project** `<root>/.lit/templates/<name>` > **global** `<config-dir>/templates/<name>` > **embedded**; a layer with an absent or empty file contributes nothing; all-empty is an error.
 
