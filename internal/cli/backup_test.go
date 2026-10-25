@@ -2,6 +2,8 @@ package cli
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -69,7 +71,8 @@ func TestResolveRestorePathCap(t *testing.T) {
 
 // guardRestore lets a restore through when it is forced, when no restore has
 // recorded a digest, or when the workspace holds what the last restore left,
-// and refuses only a workspace that moved since.
+// and refuses only a workspace that moved since. A forced restore never reads
+// the record, so an unreadable one cannot block it.
 func TestGuardRestoreVerdicts(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
@@ -86,22 +89,41 @@ func TestGuardRestoreVerdicts(t *testing.T) {
 	later.ExportedAt = at.Add(time.Hour)
 	moved := later
 	moved.Issues = nil
+	recordedIn := func(t *testing.T) workspace.Info {
+		ws := declineWorkspace(t)
+		if err := writeMarkerAtomic(restoreDigestPath(ws), []byte(recorded+"\n")); err != nil {
+			t.Fatalf("record digest: %v", err)
+		}
+		return ws
+	}
+	unreadable := func(t *testing.T) workspace.Info {
+		ws := declineWorkspace(t)
+		if err := os.MkdirAll(filepath.Join(restoreDigestPath(ws), "blocked"), 0o755); err != nil {
+			t.Fatalf("block digest: %v", err)
+		}
+		return ws
+	}
+	unrecorded := declineWorkspace
 	for _, tc := range []struct {
-		name     string
-		recorded string
-		local    model.Export
-		force    bool
-		want     restoreGuard
+		name  string
+		ws    func(*testing.T) workspace.Info
+		local model.Export
+		force bool
+		want  restoreGuard
 	}{
-		{"forced over a moved workspace", recorded, moved, true, guardForced},
-		{"no recorded digest", "", moved, false, guardUnrecorded},
-		{"same content exported later", recorded, later, false, guardUnchanged},
-		{"workspace moved since", recorded, moved, false, guardChanged},
+		{"forced over a moved workspace", recordedIn, moved, true, guardForced},
+		{"forced over an unreadable record", unreadable, moved, true, guardForced},
+		{"no recorded digest", unrecorded, moved, false, guardUnrecorded},
+		{"same content exported later", recordedIn, later, false, guardUnchanged},
+		{"workspace moved since", recordedIn, moved, false, guardChanged},
 	} {
-		got, err := guardRestore(tc.recorded, tc.local, tc.force)
+		got, err := guardRestore(tc.ws(t), tc.local, tc.force)
 		if err != nil || got != tc.want {
 			t.Errorf("%s: guardRestore() = %q, %v; want %q", tc.name, got, err, tc.want)
 		}
+	}
+	if got, err := guardRestore(unreadable(t), later, false); err == nil {
+		t.Errorf("unforced over an unreadable record: guardRestore() = %q, nil; want the read error", got)
 	}
 }
 
@@ -142,5 +164,47 @@ func TestBackupRestoreAfterARestoreProceedsUntilTheWorkspaceMoves(t *testing.T) 
 	}
 	if check := restoreTraceRecord(t, repo).Metadata["restore_guard"]; check != string(guardChanged) {
 		t.Errorf("refused restore restore_guard = %q, want %q", check, guardChanged)
+	}
+}
+
+// A restore's digest is of one clone's restore, so it does not travel with the
+// store: a clone that adopted the store from another that restored has run no
+// restore of its own, and its first one is unrecorded, never compared against
+// what the other clone's restore left. Driven over a real git remote, because
+// the claim is about what sync carries.
+func TestARestoreDigestStaysInTheCloneThatRestored(t *testing.T) {
+	base := t.TempDir()
+	runGit(t, base, "init", "--bare", "remote.git")
+	remote := filepath.Join(base, "remote.git")
+	clone := func(name string) string {
+		dir := filepath.Join(base, name)
+		runGit(t, base, "clone", remote, name)
+		runGit(t, dir, "config", "user.email", name+"@example.com")
+		runGit(t, dir, "config", "user.name", name)
+		return dir
+	}
+
+	restored := clone("alpha")
+	if err := os.WriteFile(filepath.Join(restored, "readme.md"), []byte("hi\n"), 0o644); err != nil {
+		t.Fatalf("write readme error = %v", err)
+	}
+	runGit(t, restored, "add", "-A")
+	runGit(t, restored, "commit", "-m", "seed")
+	runGit(t, restored, "push", "origin", "HEAD")
+	runCLIInDir(t, restored, "init", "--skip-hooks")
+	newEpicInDir(t, restored, "Home")
+	created := strings.Fields(runCLIInDir(t, restored, "backup", "create"))
+	if len(created) != 2 {
+		t.Fatalf("backup create printed %v, want a name and a path", created)
+	}
+	runCLIInDir(t, restored, "backup", "restore", "--path", created[1])
+	runCLIInDir(t, restored, "sync", "push", "--set-upstream")
+
+	adopted := clone("bravo")
+	runCLIInDir(t, adopted, "init", "--skip-hooks")
+	runCLIInDir(t, adopted, "backup", "create")
+	runCLIInDir(t, adopted, "backup", "restore", "--latest")
+	if check := restoreTraceRecord(t, adopted).Metadata["restore_guard"]; check != string(guardUnrecorded) {
+		t.Errorf("first restore in a clone that adopted a restored store restore_guard = %q, want %q", check, guardUnrecorded)
 	}
 }

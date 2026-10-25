@@ -579,20 +579,6 @@ func (s *Store) reconnect(ctx context.Context) error {
 	return nil
 }
 
-// RestoreDigest and RecordRestoreDigest keep the digest under the meta key
-// restore_digest. The last_sync_hash an older lit wrote is a hash of the
-// restored file, not of the store's content, so it is not read: a workspace
-// upgraded past it reads as having no digest rather than as changed.
-func (s *Store) RestoreDigest(ctx context.Context) (string, error) {
-	return s.getMeta(ctx, nil, "restore_digest")
-}
-
-func (s *Store) RecordRestoreDigest(ctx context.Context, digest string) error {
-	return s.withMutation(ctx, "record restore digest", func(ctx context.Context, tx *sql.Tx) error {
-		return s.setMeta(ctx, tx, "restore_digest", digest)
-	})
-}
-
 func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (model.Issue, error) {
 	if strings.TrimSpace(in.Title) == "" {
 		return model.Issue{}, model.ValidationError{Message: "title is required"}

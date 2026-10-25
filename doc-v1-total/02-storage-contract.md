@@ -77,7 +77,7 @@ Seven optional capabilities, each a sealed generic asked for via `Of(engine)` wh
 | `checkpoints` | `Checkpointer` | create/list/prune/reset; checkpoint name format `<prefix>-<unix-nano>`; `Anchor` is an opaque engine-side identity |
 | `repair` | `Repairer` | `Doctor` (examine only), `FixIntegrity` (dangling rows, self-edges, wrong-order edges), `FixRankInversions` |
 | `schema-migration` | `SchemaMigrator` | applied schema version; downgrade to an older shape |
-| `import` | `Importer` | `ReplaceFromExport`; get/record the restore digest (the content hash of what the store held after the last restore) |
+| `import` | `Importer` | `ReplaceFromExport` |
 | `test-support` | `RawExecutor` | engine-native statement for tests |
 
 The full sync/reconcile result vocabulary (freshness states `never_synced`/`up_to_date`/`ahead`/`behind`/`diverged`; receive, pull, and reconcile state enums including `prose_pending`, `unrelated_histories`, `linearized`, `combined`, `took_local`/`took_remote`; `UnrelatedInventory` with its three disjoint sorted id-slices; `CompactionOutcome`; `HealthReport` JSON keys) is defined in `internal/storage/sync.go` and `capabilities.go`. The memory engine offers **none** of the seven capabilities (`memory/doc.go`).

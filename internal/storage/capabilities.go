@@ -528,12 +528,6 @@ func (d Downgraded) EventRecord() (map[string]any, map[string]int) {
 // (design-docs/event-store/design.md §migration)
 type Importer interface {
 	ReplaceFromExport(ctx context.Context, export model.Export) (Replacement, error)
-
-	// RestoreDigest is the content digest RecordRestoreDigest last kept — what
-	// the store held after the last restore — or "" when no restore recorded
-	// one, so a later restore can tell whether anything has changed since.
-	RestoreDigest(ctx context.Context) (string, error)
-	RecordRestoreDigest(ctx context.Context, digest string) error
 }
 
 // RawExecutor runs an engine-native statement against the store.

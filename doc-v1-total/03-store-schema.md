@@ -35,7 +35,7 @@ Every mutation routes through `withMutation(ctx, message, fn)` (`commit_lock.go`
 
 **Dolt commit identity** derives entirely from the workspace id: author name = workspace id with `@`→`_` (blank → `links`), email = `<name>@links.local` (`store.go`).
 
-Store-level commit messages used verbatim: `record restore digest`, `create issue`, `apply update`, `add comment`, `delete comment` (`store.go`), `purge issue` (`purge.go`), `add plan review` (`plan_review.go`), plus `add label`, `remove label`, `replace labels`, `add relation`, `remove relation`, `set parent`, `clear parent`, `rank to top`, `rank set`, `rank to bottom`, `rank above`, `rank below`, `fix rank inversions` from their subsystems (`labels.go`, `relations.go`, `ranking.go`).
+Store-level commit messages used verbatim: `create issue`, `apply update`, `add comment`, `delete comment` (`store.go`), `purge issue` (`purge.go`), `add plan review` (`plan_review.go`), plus `add label`, `remove label`, `replace labels`, `add relation`, `remove relation`, `set parent`, `clear parent`, `rank to top`, `rank set`, `rank to bottom`, `rank above`, `rank below`, `fix rank inversions` from their subsystems (`labels.go`, `relations.go`, `ranking.go`).
 
 ### The three locks
 
@@ -103,7 +103,7 @@ The other tables:
 
 Ordinary issue deletion is a soft `deleted_at` stamp; the one CRUD path that deletes an issue row is `Purge` (below), and the ON DELETE CASCADEs fire from it.
 
-`meta` keys used in production: `workspace_id`, `restore_digest`, `min_writer_schema`. `RestoreDigest`/`RecordRestoreDigest` read/write `restore_digest`, the content digest of what the store held after the last restore (`store.go`); `last_sync_path` and `last_sync_hash`, which an older lit wrote, are no longer read or written. `min_writer_schema` is set only by a migration that changes a write rule, and read only from a workspace ahead of the binary (`schema_operability.go`).
+`meta` keys used in production: `workspace_id`, `min_writer_schema`. `last_sync_path` and `last_sync_hash`, which an older lit wrote, are no longer read or written. `min_writer_schema` is set only by a migration that changes a write rule, and read only from a workspace ahead of the binary (`schema_operability.go`).
 
 A legacy `issue_history` table (columns `id, issue_id, action, reason, from_status, to_status, created_at, created_by`) no longer exists in any current schema; its presence on disk is the marker of a pre-goose workspace.
 
@@ -176,7 +176,7 @@ One LEFT JOIN query collapses `issue_events` × `issue_event_changes` into event
 | status transition | the verb (`start`/`done`/`close`/`reopen`) | moved fields only |
 | retention transition | the verb (`archive`/…) | `archived_at`/`deleted_at` as moved |
 | field update | NULL | one per moved field |
-| add/delete comment, add plan review, record restore digest | no event | — |
+| add/delete comment, add plan review | no event | — |
 | purge | no event (the issue's events are deleted with it) | — |
 
 ## Comments

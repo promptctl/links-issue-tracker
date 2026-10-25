@@ -36,7 +36,6 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/03-store-schema.md", Text: "issue created", Src: "issue created"},
 	{Doc: "doc-v1-total/03-store-schema.md", Text: "issue_type IN", Src: "i.issue_type IN ("},
 	{Doc: "doc-v1-total/03-store-schema.md", Text: "item_rank != ''", Src: "SELECT MAX(item_rank) FROM issues WHERE item_rank != ''"},
-	{Doc: "doc-v1-total/03-store-schema.md", Text: "record restore digest", Src: "record restore digest"},
 	{Doc: "doc-v1-total/03-store-schema.md", Text: "remove label", Src: "remove label"},
 	{Doc: "doc-v1-total/03-store-schema.md", Text: "remove relation", Src: "remove relation"},
 	{Doc: "doc-v1-total/03-store-schema.md", Text: "replace labels", Src: "replace labels"},

@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -10,7 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -129,36 +127,18 @@ func TestBackupRestoreThatFailsAfterItsReplaceNamesTheTicketsItRemoved(t *testin
 	}
 }
 
-// restoreDigestUnwritable is a store whose restore digest cannot be recorded,
-// the last step of a restore, taken after its replace has committed.
-type restoreDigestUnwritable struct {
-	storage.Store
-	storage.Importer
-}
-
-func (restoreDigestUnwritable) RecordRestoreDigest(context.Context, string) error {
-	return errors.New("restore digest unwritable")
-}
-
-// restoreFailingAfterItsReplace runs `lit backup restore args` in repo over a
-// store that cannot record its digest, so the restore fails after its replace
-// committed, and returns what it printed.
+// restoreFailingAfterItsReplace runs `lit backup restore args` in repo with
+// its digest's path held by a directory, so the restore fails at its last
+// step, after its replace committed, and returns what it printed. args must
+// force the restore: an unforced one reads that path, and fails before it.
 func restoreFailingAfterItsReplace(t *testing.T, repo string, args ...string) string {
 	t.Helper()
-	ctx := context.Background()
-	ap, err := app.Open(ctx, testEnv(), resolvedWorkspace(t, repo), app.AccessWrite)
-	if err != nil {
-		t.Fatalf("app.Open(%s) error = %v", repo, err)
+	if err := os.MkdirAll(filepath.Join(restoreDigestPath(resolvedWorkspace(t, repo)), "blocked"), 0o755); err != nil {
+		t.Fatalf("block restore digest: %v", err)
 	}
-	defer ap.Close()
-	importer, err := storage.Import.Of(ap.Store)
-	if err != nil {
-		t.Fatalf("storage.Import.Of() error = %v", err)
-	}
-	ap.Store = restoreDigestUnwritable{Store: ap.Store, Importer: importer}
-	var out bytes.Buffer
-	if err := runLeaf(backupRestoreLeaf(), ctx, &out, ap, args); err == nil {
+	out, err := runCLIInDirAllowError(t, repo, append([]string{"backup", "restore"}, args...)...)
+	if err == nil {
 		t.Fatalf("restore succeeded with its digest unwritable; the test needs a failure after the commit")
 	}
-	return out.String()
+	return out
 }

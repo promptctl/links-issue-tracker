@@ -1319,7 +1319,7 @@ func issueWithStatus(t *testing.T, issue model.Issue, status model.State) model.
 	return hydrated
 }
 
-func TestReplaceFromExportAndRestoreDigest(t *testing.T) {
+func TestReplaceFromExport(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
@@ -1386,13 +1386,6 @@ func TestReplaceFromExportAndRestoreDigest(t *testing.T) {
 	replaced := getIssueOrFatal(t, ctx, st, "issue-replaced")
 	if len(replaced.Labels) != 1 || replaced.Labels[0] != "imported" {
 		t.Fatalf("labels = %#v", replaced.Labels)
-	}
-
-	if err := st.RecordRestoreDigest(ctx, "abc123"); err != nil {
-		t.Fatalf("RecordRestoreDigest() error = %v", err)
-	}
-	if digest, err := st.RestoreDigest(ctx); err != nil || digest != "abc123" {
-		t.Fatalf("RestoreDigest() = %q, %v; want the digest recorded", digest, err)
 	}
 
 	if _, err := st.GetIssue(ctx, issue.ID); err == nil {

@@ -808,12 +808,12 @@ Family usage `usage: lit backup <create|list|restore> ...` (`backup.go`). Access
 
 `restoreFromExportPath` (`backup.go`):
 1. Requires the `storage.Import` capability up front, before any read/write (`backup.go`).
-2. `syncfile.Read(path)`, `ap.Store.Export(ctx)`, `importer.RestoreDigest(ctx)`.
-3. **Overwrite refusal** (`guardRestore`, `backup.go`): the verdict is `forced` when `--force` is given, `unrecorded` when no digest is recorded, else `unchanged` or `changed` as `syncfile.ContentHash` of the current export (canonical `MarshalIndent` + trailing newline with `exported_at` zeroed, lowercase hex) equals or differs from the recorded digest; `changed` returns `RestoreOverwriteError{}` → reason `restore_would_overwrite`, **exit 5**.
+2. `syncfile.Read(path)`, `ap.Store.Export(ctx)`.
+3. **Overwrite refusal** (`guardRestore`, `backup.go`): the verdict is `forced` when `--force` is given (the digest is not read), `unrecorded` when `<StorageDir>/restore.digest` does not exist, else `unchanged` or `changed` as `syncfile.ContentHash` of the current export (canonical `MarshalIndent` + trailing newline with `exported_at` zeroed, lowercase hex) equals or differs from the recorded digest; `changed` returns `RestoreOverwriteError{}` → reason `restore_would_overwrite`, **exit 5**.
 4. Always takes a pre-restore backup: `backup.Create(StorageDir, localExport)` then `backup.Prune(StorageDir, 20)` — the 20 is hard-coded here (`backup.go`).
 5. `replacement := importer.ReplaceFromExport(ctx, targetExport)` — the tickets it removed (`Removed`, read inside the replace's transaction, so a write that landed after step 2's export is counted too) and, in `Landing`, the parent edges the restore cut because they closed a loop, the tickets it moved into an epic and the tickets it gave a rank key of their own (`04-store-operations.md`).
 6. Re-exports the store (`backup.go`).
-7. `importer.RecordRestoreDigest(ctx, syncfile.ContentHash(restoredExport))` (`backup.go`).
+7. `writeMarkerAtomic(<StorageDir>/restore.digest, syncfile.ContentHash(restoredExport))` — a file in the clone's storage dir, not a store row, because the store syncs and the digest is of this clone's restore (`backup.go`).
 8. stdout: `restored <path>` when every step finished, then `writeReplacement(stdout, replacement, snapshotPath)` (`restore_removed.go`: `writeRemoved`, then `writeLanding(stdout, "the backup", replacement.Landing)`); the outcome carries the replacement (a `*storage.Replacement`, nil until then) only once `ReplaceFromExport` committed, and the two writers run whether or not the restore finished, so a failure after the commit still names what it removed and moved.
 9. Whatever the outcome, one sync trace record on the way out: command `lit backup restore`, decision `restored` (`error` on failure), metadata `{path}`, `{restore_guard}` once step 3 reached a verdict, plus, only when the replace committed, `{removed, removed_ids, unlooped, unlooped_cuts, rehomed, rehomed_moves, rekeyed, rekeyed_moves}` (`backup.go`).
 
@@ -1091,7 +1091,7 @@ All eight are also the payload of `lit quickstart --eject`, written to `<config.
 | Persistent divergence (≥24h or >10 commits) | `doctor` | `SyncFailureError`, exit 5 | `doctor.go` |
 | Store corruption | `doctor` | `CorruptionError`, exit 7 (reason `parent_cycle` when the report names a parent loop) | `doctor.go`, `error_output.go` |
 | Parent loop | `ls` and any read that hydrates the loop's epics; a rank verb whose walk up the parent chain meets a loop | `storage.ParentCycleError`, exit 7, reason `parent_cycle` | `error_output.go` |
-| Unsynced local changes | `backup restore` without `--force` | `MergeConflictError`, exit 5 | `backup.go` |
+| Changes since the last restore | `backup restore` without `--force` | `RestoreOverwriteError`, reason `restore_would_overwrite`, exit 5 | `backup.go`, `errors.go` |
 | `--latest` + `--path` together | `backup restore` | `UsageError`, exit 2 | `backup.go` |
 | Existing global override without `--force` | `quickstart --eject` | `MergeConflictError`, exit 5, nothing written | `quickstart_eject.go` |
 | Non-bash existing pre-push hook | `hooks install`, `init`, `quickstart --refresh` | left untouched, reported `incompatible`, exit 0 | `hooks.go` |

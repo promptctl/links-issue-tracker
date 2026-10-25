@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -14,6 +16,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/statusline"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/syncfile"
+	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
 var backupFamily = commandFamily[appSubcommand]{
@@ -159,10 +162,9 @@ func restoreFromExportPath(ctx context.Context, env environ.Env, ap *app.App, pa
 func restoreFromExport(ctx context.Context, ap *app.App, path string, force bool) (restoreOutcome, error) {
 	restorePath := filepath.Clean(path)
 	var outcome restoreOutcome
-	// [LAW:parse-dont-validate] A restore needs the import capability: the
-	// replace, and the digest of the last restore it compares the workspace
-	// against. It is asked for before anything is read, written, or backed up,
-	// and what comes back is the interface, so nothing below re-asks.
+	// [LAW:parse-dont-validate] A restore needs the import capability. It is
+	// asked for before anything is read, written, or backed up, and what comes
+	// back is the interface, so nothing below re-asks.
 	importer, err := storage.Import.Of(ap.Store)
 	if err != nil {
 		return outcome, err
@@ -175,11 +177,7 @@ func restoreFromExport(ctx context.Context, ap *app.App, path string, force bool
 	if err != nil {
 		return outcome, err
 	}
-	recorded, err := importer.RestoreDigest(ctx)
-	if err != nil {
-		return outcome, err
-	}
-	outcome.guard, err = guardRestore(recorded, localExport, force)
+	outcome.guard, err = guardRestore(ap.Workspace, localExport, force)
 	if err != nil {
 		return outcome, err
 	}
@@ -215,7 +213,17 @@ func restoreFromExport(ctx context.Context, ap *app.App, path string, force bool
 	if err != nil {
 		return outcome, err
 	}
-	return outcome, importer.RecordRestoreDigest(ctx, digest)
+	return outcome, writeMarkerAtomic(restoreDigestPath(ap.Workspace), []byte(digest+"\n"))
+}
+
+// restoreDigestPath is this clone's record of what its last restore left: the
+// content digest the next restore's guard compares against. It is a file in
+// the storage dir, never a row in the store, because the store syncs and the
+// record is of this clone's restore alone: a clone that pulled another's
+// digest would be refused over a restore it never ran.
+// [LAW:one-source-of-truth]
+func restoreDigestPath(ws workspace.Info) string {
+	return filepath.Join(ws.StorageDir, "restore.digest")
 }
 
 // restoreGuard is the overwrite guard's verdict on a restore: which check let
@@ -231,21 +239,27 @@ const (
 	guardChanged    restoreGuard = "changed"    // the workspace moved since the last restore
 )
 
-// guardRestore compares what the workspace holds with recorded, the content
-// digest the last restore took of what it left. local must come from the
-// store: syncfile.ContentHash cannot hash a decoded file.
-func guardRestore(recorded string, local model.Export, force bool) (restoreGuard, error) {
-	switch {
-	case force:
+// guardRestore compares what the workspace holds with the content digest the
+// last restore in ws took of what it left. Reading that record is part of the
+// comparison --force skips, so an unreadable record never blocks a forced
+// restore. local must come from the store: syncfile.ContentHash cannot hash a
+// decoded file.
+func guardRestore(ws workspace.Info, local model.Export, force bool) (restoreGuard, error) {
+	if force {
 		return guardForced, nil
-	case recorded == "":
+	}
+	recorded, err := os.ReadFile(restoreDigestPath(ws))
+	if errors.Is(err, fs.ErrNotExist) {
 		return guardUnrecorded, nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("read the last restore's digest: %w", err)
 	}
 	hash, err := syncfile.ContentHash(local)
 	if err != nil {
 		return "", err
 	}
-	if hash != recorded {
+	if hash != strings.TrimSpace(string(recorded)) {
 		return guardChanged, nil
 	}
 	return guardUnchanged, nil

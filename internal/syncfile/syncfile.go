@@ -23,8 +23,8 @@ func WriteAtomic(path string, export model.Export) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(cleanPath), 0o755); err != nil {
 		return "", fmt.Errorf("create sync dir: %w", err)
 	}
-	// Durable: a backup or a sync base is the copy kept for when the store is
-	// lost, so nothing could recompute it.
+	// Durable: a backup is the copy kept for when the store is lost, so
+	// nothing could recompute it.
 	if err := atomicfile.WriteFile(cleanPath, payload, 0o600, atomicfile.Durable); err != nil {
 		return "", fmt.Errorf("write sync file: %w", err)
 	}

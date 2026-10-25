@@ -550,7 +550,6 @@ They live beside the specs rather than in an engine because the schema is the co
 
 #### `Importer` (`internal/storage/capabilities.go`)
 - `ReplaceFromExport(ctx, export model.Export) (Replacement, error)` — replaces the store's entire contents with an export, and says what it removed and what it changed on the way in to land it under the store's rules (`Replacement{Removed []Removed; Landing Landing}`, `Removed{IssueID, Title}`, `internal/storage/landing.go`). Only the import half is optional; `Export` is core.
-- `RestoreDigest(ctx) (string, error)` / `RecordRestoreDigest(ctx, digest string) error` — the content digest of what the store held after the last restore (`syncfile.ContentHash`), `""` when none was recorded; the next restore compares it with the store's content.
 
 #### `RawExecutor` (`internal/storage/capabilities.go`)
 - `ExecRawForTest(ctx, query string, args ...any) error` — runs an engine-native statement so tests can plant states the contract cannot express (a corrupted row, a stale schema).
