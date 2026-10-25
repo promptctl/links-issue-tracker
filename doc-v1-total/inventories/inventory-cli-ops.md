@@ -811,13 +811,13 @@ Family usage `usage: lit backup <create|list|restore> ...` (`backup.go`). Access
 2. `syncfile.Read(path)`, `ap.Store.Export(ctx)`, `syncer.GetSyncState(ctx)`.
 3. **Unsynced-state refusal** (`backup.go`): when `state.ContentHash != ""` and `--force` is absent, hash `<StorageDir>/last-sync-base.json` (`syncBasePath`, `backup.go`); if that base hash is non-empty and differs from the SHA-256 of the current export (`hashExport`, `backup.go` — canonical `MarshalIndent` + trailing newline, lowercase hex), return `MergeConflictError{"restore conflict: local workspace has unsynced changes since last sync base"}` → **exit 5**.
 4. Always takes a pre-restore backup: `backup.Create(StorageDir, localExport)` then `backup.Prune(StorageDir, 20)` — the 20 is hard-coded here (`backup.go`).
-5. `landing := importer.ReplaceFromExport(ctx, targetExport)` — the parent edges the restore cut because they closed a loop, the tickets it moved into an epic and the tickets it gave a rank key of their own (`04-store-operations.md`).
+5. `replacement := importer.ReplaceFromExport(ctx, targetExport)` — the tickets it removed (`Removed`, read inside the replace's transaction, so a write that landed after step 2's export is counted too) and, in `Landing`, the parent edges the restore cut because they closed a loop, the tickets it moved into an epic and the tickets it gave a rank key of their own (`04-store-operations.md`).
 6. Re-exports and writes `last-sync-base.json` atomically (`backup.go`).
 7. `syncer.RecordSyncState(ctx, {Path: restorePath, ContentHash: HashFile(restorePath)})` (`backup.go`).
-8. stdout: `restored <path>`, then `writeLanding(stdout, "the backup", landing)` (`backup.go`).
-9. Whatever the outcome, one sync trace record on the way out: command `lit backup restore`, decision `restored` (`error` on failure), metadata `{path, unlooped, unlooped_cuts, rehomed, rehomed_moves, rekeyed, rekeyed_moves}` (`backup.go`).
+8. stdout: `restored <path>` when every step finished, then `writeReplacement(stdout, replacement, snapshotPath)` (`restore_removed.go`: `writeRemoved`, then `writeLanding(stdout, "the backup", replacement.Landing)`); the outcome carries the replacement (a `*storage.Replacement`, nil until then) only once `ReplaceFromExport` committed, and the two writers run whether or not the restore finished, so a failure after the commit still names what it removed and moved.
+9. Whatever the outcome, one sync trace record on the way out: command `lit backup restore`, decision `restored` (`error` on failure), metadata `{path}`, plus, only when the replace committed, `{removed, removed_ids, unlooped, unlooped_cuts, rehomed, rehomed_moves, rekeyed, rekeyed_moves}` (`backup.go`).
 
-`bulk import` is retired in favor of this path: guidance string ``use `lit backup restore --path <export.json>` — it owns the same export-restore mechanism `bulk import` duplicated`` (`register.go`).
+`bulk import` is retired: guidance string ``to edit tickets in bulk, read them out with `lit ls --format yaml` and write them back with `lit import --path <f.yaml>`; `lit backup restore --path <export.json>` replaces the whole workspace from an export, the restore `bulk import` duplicated`` (`register.go`).
 
 ---
 

@@ -304,29 +304,83 @@ ORDER BY 1, 3`)
 // the backup itself cannot know: a restore never un-purges, every ticket lives
 // inside an epic — a backup taken before v7 holds top-level leaves, and one
 // taken before a purge can hold a child of the purged epic, which the cut
-// leaves with no parent — and every rank key orders one issue.
+// leaves with no parent — and every rank key orders one issue. What it removed
+// is read in the same transaction as the clear, so a write that landed after
+// the caller's last read is counted with the rest.
 // [LAW:single-enforcer] the cut is ApplyPurges and the rest is landExport, the
 // same a sync landing applies.
-func (s *Store) ReplaceFromExport(ctx context.Context, export model.Export) (storage.Landing, error) {
-	var landing storage.Landing
+func (s *Store) ReplaceFromExport(ctx context.Context, export model.Export) (storage.Replacement, error) {
+	var replacement storage.Replacement
 	err := s.withStampedMutation(ctx, commitStamp{Message: "replace from export"}, func(ctx context.Context, tx *sql.Tx) error {
+		held, err := heldTicketsTx(ctx, tx)
+		if err != nil {
+			return err
+		}
 		cut, err := cutByHeldPurges(ctx, tx, export)
+		if err != nil {
+			return err
+		}
+		landed, landing, err := landExport(cut)
 		if err != nil {
 			return err
 		}
 		// Assigned on every attempt, so a retried mutation reports the changes
 		// of the attempt that committed.
-		var landed model.Export
-		landed, landing, err = landExport(cut)
-		if err != nil {
-			return err
-		}
+		replacement = storage.Replacement{Removed: removedBy(held, landed), Landing: landing}
 		return writeWholeExportTx(ctx, tx, landed)
 	})
 	if err != nil {
-		return storage.Landing{}, err
+		return storage.Replacement{}, err
 	}
-	return landing, nil
+	return replacement, nil
+}
+
+// heldTicket is the identity and title of one ticket the store holds: what a
+// replace needs to name the tickets it removes.
+type heldTicket struct {
+	id, title string
+	born      time.Time
+}
+
+// heldTicketsTx reads every ticket the store holds, archived and deleted
+// included, in id order.
+func heldTicketsTx(ctx context.Context, tx *sql.Tx) ([]heldTicket, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT id, title, created_at FROM issues ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("list held tickets: %w", err)
+	}
+	defer rows.Close()
+	var held []heldTicket
+	for rows.Next() {
+		var ticket heldTicket
+		var born string
+		if err := rows.Scan(&ticket.id, &ticket.title, &born); err != nil {
+			return nil, err
+		}
+		if ticket.born, err = scanTime(born); err != nil {
+			return nil, err
+		}
+		held = append(held, ticket)
+	}
+	return held, rows.Err()
+}
+
+// removedBy is every held ticket the landed export does not hold: no row under
+// its id, or a row under its id born at another instant — a different ticket,
+// which the replace writes over this one. [LAW:one-source-of-truth] a ticket's
+// identity is its id and birth, as Purge.Names reads it.
+func removedBy(held []heldTicket, landed model.Export) []storage.Removed {
+	bornOf := make(map[string]time.Time, len(landed.Issues))
+	for _, issue := range landed.Issues {
+		bornOf[issue.ID] = issue.CreatedAt
+	}
+	var removed []storage.Removed
+	for _, ticket := range held {
+		if born, ok := bornOf[ticket.id]; !ok || !born.Equal(ticket.born) {
+			removed = append(removed, storage.Removed{IssueID: ticket.id, Title: ticket.title})
+		}
+	}
+	return removed
 }
 
 // rebuildFromExport writes export as it stands, cut only by purges, for the

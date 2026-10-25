@@ -555,10 +555,11 @@ func TestRestoreCutsALoopTheExportHolds(t *testing.T) {
 	export.Relations = append(export.Relations, model.Relation{SrcID: chain[0].ID, DstID: chain[1].ID, Type: model.RelParentChild, CreatedAt: time.Now().UTC(), CreatedBy: "import"})
 	lo, hi := min(chain[0].ID, chain[1].ID), max(chain[0].ID, chain[1].ID)
 
-	landing, err := st.ReplaceFromExport(ctx, export)
+	replacement, err := st.ReplaceFromExport(ctx, export)
 	if err != nil {
 		t.Fatalf("ReplaceFromExport() of an export holding a loop error = %v, want it landed", err)
 	}
+	landing := replacement.Landing
 	want := []storage.Unlooped{{IssueID: hi, Parent: lo, Cycle: []string{lo, hi}}}
 	if !slices.EqualFunc(landing.Unlooped, want, func(a, b storage.Unlooped) bool {
 		return a.IssueID == b.IssueID && a.Parent == b.Parent && slices.Equal(a.Cycle, b.Cycle)

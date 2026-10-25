@@ -109,14 +109,19 @@ func backupRestoreLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		landing, err := restoreFromExportPath(ctx, inv.Env, ap, restorePath, *force)
-		if err != nil {
-			return err
+		restored, err := restoreFromExportPath(ctx, inv.Env, ap, restorePath, *force)
+		if err == nil {
+			_, err = fmt.Fprintf(inv.Stdout, "restored %s\n", restorePath)
 		}
-		if _, err := fmt.Fprintf(inv.Stdout, "restored %s\n", restorePath); err != nil {
-			return err
+		// A replace that committed before a later step failed has still removed
+		// and moved what it did, so it is reported whether or not the restore
+		// finished. [LAW:no-silent-failure]
+		if restored.replacement != nil {
+			if reportErr := writeReplacement(inv.Stdout, *restored.replacement, restored.snapshot); reportErr != nil {
+				return errors.Join(err, reportErr)
+			}
 		}
-		return writeLanding(inv.Stdout, "the backup", landing)
+		return err
 	}}
 }
 
@@ -124,21 +129,36 @@ func syncBasePath(ap *app.App) string {
 	return filepath.Join(ap.Workspace.StorageDir, "last-sync-base.json")
 }
 
+// restoreOutcome is what a restore did beyond loading the file: what its
+// replace removed and changed, and the pre-restore backup taken of the
+// workspace it replaced. replacement is nil until the replace commits, so a
+// replace that removed and changed nothing is told apart from one that never
+// ran. [LAW:types-are-the-program]
+type restoreOutcome struct {
+	replacement *storage.Replacement
+	snapshot    string
+}
+
 // restoreFromExportPath restores the store from the export at path and returns
-// what the restore changed to land it. Every restore leaves one sync trace
+// the restore's outcome, failed or not. Every restore leaves one sync trace
 // record, failed or not: it rewrites the sync base the next push compares
 // against, and the record carries the changes. [LAW:nothing-unseen]
-func restoreFromExportPath(ctx context.Context, env environ.Env, ap *app.App, path string, force bool) (landing storage.Landing, err error) {
+func restoreFromExportPath(ctx context.Context, env environ.Env, ap *app.App, path string, force bool) (outcome restoreOutcome, err error) {
 	defer func() {
 		metadata := map[string]string{"path": filepath.Clean(path)}
-		landingMetadata(metadata, landing)
+		// A restore whose replace never committed counted nothing, so its record
+		// carries no counts rather than zeros nobody counted.
+		if outcome.replacement != nil {
+			replacementMetadata(metadata, *outcome.replacement)
+		}
 		recordSyncCommandTrace(env, ap.Workspace, "lit backup restore", "restored", err, metadata)
 	}()
 	return restoreFromExport(ctx, ap, path, force)
 }
 
-func restoreFromExport(ctx context.Context, ap *app.App, path string, force bool) (storage.Landing, error) {
+func restoreFromExport(ctx context.Context, ap *app.App, path string, force bool) (restoreOutcome, error) {
 	restorePath := filepath.Clean(path)
+	var outcome restoreOutcome
 	// [LAW:parse-dont-validate] A restore needs two capabilities: the sync state
 	// it compares the local workspace against, and the import that replaces the
 	// contents. Both are asked for before anything is read, written, or backed
@@ -146,49 +166,52 @@ func restoreFromExport(ctx context.Context, ap *app.App, path string, force bool
 	// half-done. What comes back is the interface, so nothing below re-asks.
 	syncer, err := storage.Sync.Of(ap.Store)
 	if err != nil {
-		return storage.Landing{}, err
+		return outcome, err
 	}
 	importer, err := storage.Import.Of(ap.Store)
 	if err != nil {
-		return storage.Landing{}, err
+		return outcome, err
 	}
 	targetExport, _, err := syncfile.Read(restorePath)
 	if err != nil {
-		return storage.Landing{}, err
+		return outcome, err
 	}
 	localExport, err := ap.Store.Export(ctx)
 	if err != nil {
-		return storage.Landing{}, err
+		return outcome, err
 	}
 	state, err := syncer.GetSyncState(ctx)
 	if err != nil {
-		return storage.Landing{}, err
+		return outcome, err
 	}
 	if state.ContentHash != "" && !force {
 		baseHash, hashErr := syncfile.HashFile(syncBasePath(ap))
 		if hashErr != nil {
-			return storage.Landing{}, hashErr
+			return outcome, hashErr
 		}
 		if baseHash != "" {
 			localHash, localHashErr := hashExport(localExport)
 			if localHashErr != nil {
-				return storage.Landing{}, localHashErr
+				return outcome, localHashErr
 			}
 			if localHash != baseHash {
-				return storage.Landing{}, MergeConflictError{Message: "restore conflict: local workspace has unsynced changes since last sync base"}
+				return outcome, MergeConflictError{Message: "restore conflict: local workspace has unsynced changes since last sync base"}
 			}
 		}
 	}
-	if _, err := backup.Create(ap.Workspace.StorageDir, localExport); err != nil {
-		return storage.Landing{}, err
-	}
-	if err := backup.Prune(ap.Workspace.StorageDir, 20); err != nil {
-		return storage.Landing{}, err
-	}
-	landing, err := importer.ReplaceFromExport(ctx, targetExport)
+	snapshot, err := backup.Create(ap.Workspace.StorageDir, localExport)
 	if err != nil {
-		return storage.Landing{}, err
+		return outcome, err
 	}
+	outcome.snapshot = snapshot.Path
+	if err := backup.Prune(ap.Workspace.StorageDir, 20); err != nil {
+		return outcome, err
+	}
+	replacement, err := importer.ReplaceFromExport(ctx, targetExport)
+	if err != nil {
+		return outcome, err
+	}
+	outcome.replacement = &replacement
 	ap.Statusline.Record(statusline.Replaced{})
 	// The landing is committed from here on, so every later failure still
 	// returns it: the trace records what the store now holds, not what the
@@ -196,16 +219,16 @@ func restoreFromExport(ctx context.Context, ap *app.App, path string, force bool
 	// [LAW:single-enforcer] Restored sync base is serialized from the store so container lifecycles pass through the hydration boundary before JSON output.
 	restoredExport, err := ap.Store.Export(ctx)
 	if err != nil {
-		return landing, err
+		return outcome, err
 	}
 	if _, err := syncfile.WriteAtomic(syncBasePath(ap), restoredExport); err != nil {
-		return landing, err
+		return outcome, err
 	}
 	hash, err := syncfile.HashFile(restorePath)
 	if err != nil {
-		return landing, err
+		return outcome, err
 	}
-	return landing, syncer.RecordSyncState(ctx, storage.SyncState{
+	return outcome, syncer.RecordSyncState(ctx, storage.SyncState{
 		Path:        restorePath,
 		ContentHash: hash,
 	})

@@ -90,14 +90,15 @@ func TestFoldedCommandsPointToTheirFlags(t *testing.T) {
 	}
 }
 
-// `bulk import` is a retired subcommand that answers with the pointer to
-// `backup restore` (which owns the same export-restore mechanism) even OUTSIDE a
-// workspace. It drives the production dispatch (`Run`) from a non-repo cwd: the
-// retirement must surface before any workspace open, so a user in a plain
-// directory gets the pointer, not "requires a git repository". Only the
+// `bulk import` is a retired subcommand that answers with the pointer to the
+// bulk-edit path and to `backup restore` (which owns the same export-restore
+// mechanism) even OUTSIDE a workspace. It drives the production dispatch
+// (`Run`) from a non-repo cwd: the retirement must surface before any
+// workspace open, so a user in a plain directory gets the pointer, not
+// "requires a git repository". Only the
 // production path proves that — `runAppFamily` never opens an app at all, so a
 // test through it would pass whether or not the row is reached before the open.
-func TestBulkImportRetiredPointsToBackupRestore(t *testing.T) {
+func TestBulkImportRetiredPointsToTheEditPathAndBackupRestore(t *testing.T) {
 	prevWD, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("Getwd() error = %v", err)
@@ -117,7 +118,7 @@ func TestBulkImportRetiredPointsToBackupRestore(t *testing.T) {
 	if retired.Command != "bulk import" {
 		t.Errorf("RetiredCommandError.Command = %q, want %q", retired.Command, "bulk import")
 	}
-	for _, want := range []string{"retired", "lit backup restore"} {
+	for _, want := range []string{"retired", "lit ls --format yaml", "lit import --path", "lit backup restore"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("bulk import error = %q, want it to mention %q", err.Error(), want)
 		}

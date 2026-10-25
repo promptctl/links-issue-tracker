@@ -524,7 +524,8 @@ func (d Downgraded) EventRecord() (map[string]any, map[string]int) {
 }
 
 // Importer replaces the store's entire contents with an export, and says what
-// it changed on the way in to land it under the store's rules (Landing).
+// it removed and what it changed on the way in to land it under the store's
+// rules (Replacement).
 //
 // Its counterpart, Export, is core rather than a capability: the campaign's
 // differential oracle compares two engines through it, so every engine must
@@ -532,7 +533,7 @@ func (d Downgraded) EventRecord() (map[string]any, map[string]int) {
 // readable-out without being replaceable-in.
 // (design-docs/event-store/design.md §migration)
 type Importer interface {
-	ReplaceFromExport(ctx context.Context, export model.Export) (Landing, error)
+	ReplaceFromExport(ctx context.Context, export model.Export) (Replacement, error)
 }
 
 // RawExecutor runs an engine-native statement against the store.

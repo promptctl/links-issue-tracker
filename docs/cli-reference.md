@@ -877,8 +877,10 @@ tree spec, which only creates, wiring records to one another by an opaque `local
 
 `lit bulk import` is retired. It loaded a JSON **export** — the same restore that
 `lit backup restore --path <export.json>` already owns — so it was a duplicate
-under a name that also collided with tree-spec `import`. Use `lit backup restore`
-to load an export; an old `lit bulk import` invocation returns a pointer there.
+under a name that also collided with tree-spec `import`. An old `lit bulk import`
+invocation returns a pointer to the edit path (`lit ls --format yaml`, then
+`lit import --path <f.yaml>`) and to `lit backup restore` for replacing the whole
+workspace from an export.
 
 Both formats are documented by the command itself. Run `lit import --help` for the
 JSON tree spec and the YAML bulk file in full: every key each one accepts, which of
@@ -990,7 +992,11 @@ lit backup restore (--latest | --path <p>) [--force]
 Rotating JSON **data-export** backups (`--keep`, default 20) — the data-recovery
 family, wrapping `lit export`; distinct from the filesystem-level `lit snapshots`.
 `restore` refuses to overwrite unsynced state without `--force`, and is the one
-home for loading an export JSON (the retired `lit bulk import` pointed here).
+home for loading an export JSON. It replaces the whole workspace, so every ticket
+the workspace holds and the file does not is destroyed: the restore names each one,
+their count, and the pre-restore backup that still holds them, along with the
+`lit ls --format yaml` / `lit import` path that edits tickets without replacing the
+workspace.
 `--path` accepts any export JSON — a backup file or a sync file; provenance does
 not change behavior. You must name a source; there is no implicit default, and
 `--latest` with `--path` is an error rather than a silent precedence.
