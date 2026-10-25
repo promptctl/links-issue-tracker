@@ -134,9 +134,10 @@ type Store struct {
 	// Apply after its GetIssue, in CreateIssue after historyFiledUnder — with
 	// the commit lock held and no tx open. Production callers leave it nil; the
 	// concurrency regression tests set it to attempt a foreign write there and
-	// prove it cannot land until the planned write has. It is anchored to the
-	// reads, not to the write, so a hold that began after any of the plan's
-	// reads would leave it outside the hold and the attempt would land.
+	// prove it cannot land until the planned write has. It sits after the
+	// first read and before the rest, so a hold that leaves out the reads after
+	// it — one shrunk to the write, say — leaves it outside too, and the attempt
+	// lands; a hold that leaves out only the first read is beyond its reach.
 	// [LAW:no-shared-mutable-globals] The seam is per-Store instance state with
 	// an explicit owner, not an ambient package global — so tests holding their
 	// own Store can never race on it (and t.Parallel() stays safe).
@@ -1434,9 +1435,10 @@ func (s *Store) Apply(ctx context.Context, id string, c storage.Change) (storage
 	// write share one commit-lock hold, so no write lands between what the plan
 	// read and what it writes: the holder a start takes the ticket from, the
 	// instant it is stamped at, and whether any write is owed at all are all
-	// answers about the state the write lands on. The reads run on s.db before
-	// the mutation's tx opens — the pool has one connection — which under the
-	// hold sees exactly what the tx will.
+	// answers about the state the write lands on. Every writer of the store
+	// takes this lock, so under the hold the reads see exactly what the tx
+	// will. They run on s.db before the tx opens because the pool has one
+	// connection, which an open tx would hold.
 	var applied storage.Applied
 	if err := s.withCommitLock(ctx, func(ctx context.Context) error {
 		current, err := s.GetIssue(ctx, id)
