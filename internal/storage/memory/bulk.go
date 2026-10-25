@@ -32,8 +32,7 @@ func (e *Engine) BulkApply(ctx context.Context, prefix, actor string, specs []st
 		return storage.BulkApplyResult{}, err
 	}
 
-	var result storage.BulkApplyResult
-	if err := e.withBatch(func() error {
+	return withBatch(e, func(result *storage.BulkApplyResult) error {
 		batch := newBatch(len(specs))
 		for _, create := range file.Creates {
 			issue, err := e.createIssue(create.Input(batch.resolve(create.Parent), prefix, actor))
@@ -63,10 +62,7 @@ func (e *Engine) BulkApply(ctx context.Context, prefix, actor string, specs []st
 			result.RecordUpdate(applied)
 		}
 		return nil
-	}); err != nil {
-		return storage.BulkApplyResult{}, err
-	}
-	return result, nil
+	})
 }
 
 // ImportTree creates a whole issue tree as one batch, returning the local-ID →
@@ -81,8 +77,8 @@ func (e *Engine) ImportTree(ctx context.Context, prefix, actor string, specs []s
 		return storage.ImportTreeResult{}, err
 	}
 
-	batch := newBatch(len(specs))
-	if err := e.withBatch(func() error {
+	return withBatch(e, func(result *storage.ImportTreeResult) error {
+		batch := newBatch(len(specs))
 		for _, create := range creates {
 			issue, err := e.createIssue(create.Input(batch.resolveLocal(create.Parent), prefix, actor))
 			if err != nil {
@@ -97,11 +93,9 @@ func (e *Engine) ImportTree(ctx context.Context, prefix, actor string, specs []s
 				}
 			}
 		}
+		result.Created = batch.createdMappings()
 		return nil
-	}); err != nil {
-		return storage.ImportTreeResult{}, err
-	}
-	return storage.ImportTreeResult{Created: batch.createdMappings()}, nil
+	})
 }
 
 // edgeWriter is a bulk file's relation write: every edge it adds goes through

@@ -51,14 +51,18 @@ func TestARefusedImportLeavesTheBranchWhereItStarted(t *testing.T) {
 	assertWorkingSetClean(t, ctx, st)
 }
 
-// A refused file's error is the refusal, classified as the refusal, and it
-// records the commit the batch reset to with no reset error, so a refusal at
-// a write reads apart from one the gate made before writing anything.
+// A refused file returns the zero result, since nothing it wrote stands, and
+// its error is the refusal, classified as the refusal. It records the commit
+// the batch reset to with no reset error, so a refusal at a write reads apart
+// from one the gate made before writing anything.
 func TestARefusedImportRecordsTheCommitItResetTo(t *testing.T) {
 	ctx := context.Background()
 	st, epic := openBatchStore(t, ctx)
 	head := headCommit(t, ctx, st)
-	_, err := st.BulkApply(ctx, "test", "ada", refusedFile(epic))
+	result, err := st.BulkApply(ctx, "test", "ada", refusedFile(epic))
+	if len(result.Created) != 0 {
+		t.Errorf("result = %+v; want the zero result: the create before the refusal was reset away", result)
+	}
 	var refused *RefusedBatchError
 	if !errors.As(err, &refused) {
 		t.Fatalf("BulkApply() error = %v; want a *RefusedBatchError", err)
@@ -81,7 +85,7 @@ func TestABatchRefusedByCancellationStillResets(t *testing.T) {
 	st, epic := openBatchStore(t, context.Background())
 	head := headCommit(t, context.Background(), st)
 	ctx, cancel := context.WithCancel(context.Background())
-	err := st.withBatch(ctx, func(ctx context.Context) error {
+	_, err := withBatch(ctx, st, func(ctx context.Context, _ *storage.BulkApplyResult) error {
 		if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "lands", Topic: "topic", IssueType: "task", ParentID: epic}); err != nil {
 			t.Fatalf("CreateIssue() error = %v", err)
 		}
@@ -134,10 +138,10 @@ func TestABatchWhoseResetFailsNamesWhatStaysWritten(t *testing.T) {
 	ctx := context.Background()
 	st, epic := openBatchStore(t, ctx)
 	head := headCommit(t, ctx, st)
-	result := storage.BulkApplyResult{Created: []storage.IDMapping{storage.NewIDMapping("", "test-kept")}, Updated: []string{epic}}
 	var heard []string
 	st.ObserveChanges(func(_ storage.Change, issue model.Issue) { heard = append(heard, issue.ID) })
-	err := st.withBatch(ctx, func(ctx context.Context) error {
+	written, err := withBatch(ctx, st, func(ctx context.Context, result *storage.BulkApplyResult) error {
+		*result = storage.BulkApplyResult{Created: []storage.IDMapping{storage.NewIDMapping("", "test-kept")}, Updated: []string{epic}}
 		// A change the batch made: its write stands once the reset fails, so
 		// its observers are owed it.
 		st.notify(ctx, storage.Change{}, model.Issue{ID: epic})
@@ -150,10 +154,9 @@ func TestABatchWhoseResetFailsNamesWhatStaysWritten(t *testing.T) {
 	if len(heard) != 1 || heard[0] != epic {
 		t.Errorf("observers heard %v; want the change whose write stands after the failed reset, %s", heard, epic)
 	}
-	written, err := refusedBatch(result, err)
-	var resetFailed *RefusedBatchError
-	if !errors.As(err, &resetFailed) || resetFailed.ResetErr == nil {
-		t.Fatalf("error = %v; want a *RefusedBatchError whose reset failed", err)
+	var resetFailed *BatchResetFailedError
+	if !errors.As(err, &resetFailed) {
+		t.Fatalf("error = %v; want a *BatchResetFailedError", err)
 	}
 	if resetFailed.Head != head {
 		t.Errorf("Head = %s; want %s, the head before the batch", resetFailed.Head, head)

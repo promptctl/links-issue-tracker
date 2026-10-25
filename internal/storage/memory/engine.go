@@ -131,23 +131,26 @@ func cloneRuns[T any](runs map[string][]T) map[string][]T {
 
 // withBatch runs fn as one batch: on fn's error the engine's state is put back
 // as it was before fn ran, so a refused batch writes nothing, whatever wrote
-// before the refusal, and the changes it made are heard only once it lands.
-// The caller holds e.mu. [LAW:single-enforcer] the one
-// owner of a batch's atomicity in this engine.
-func (e *Engine) withBatch(fn func() error) error {
+// before the refusal, returns the zero result, and the changes it made are
+// heard only once it lands. fn builds the batch's result in place. The caller
+// holds e.mu. [LAW:single-enforcer] the one owner of a batch's atomicity in
+// this engine, and of what a refused batch returns.
+func withBatch[R any](e *Engine, fn func(result *R) error) (R, error) {
 	saved := e.state.clone()
 	var heard []heardChange
 	e.hearing = &heard
-	err := fn()
+	var result R
+	err := fn(&result)
 	e.hearing = nil
 	if err != nil {
 		e.state = saved
-		return err
+		var zero R
+		return zero, err
 	}
 	for _, h := range heard {
 		e.notify(h.change, h.issue)
 	}
-	return nil
+	return result, nil
 }
 
 // record is one stored issue: what an engine must keep to answer with a

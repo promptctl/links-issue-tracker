@@ -31,8 +31,7 @@ func (s *Store) BulkApply(ctx context.Context, prefix, actor string, specs []sto
 		return storage.BulkApplyResult{}, err
 	}
 
-	var result storage.BulkApplyResult
-	if err := s.withBatch(ctx, func(ctx context.Context) error {
+	return withBatch(ctx, s, func(ctx context.Context, result *storage.BulkApplyResult) error {
 		createdIDs := make([]string, 0, len(file.Creates))
 		localRealID := make(map[string]string, len(file.Creates))
 		for _, create := range file.Creates {
@@ -69,10 +68,7 @@ func (s *Store) BulkApply(ctx context.Context, prefix, actor string, specs []sto
 			result.RecordUpdate(applied)
 		}
 		return nil
-	}); err != nil {
-		return refusedBatch(result, err)
-	}
-	return result, nil
+	})
 }
 
 // edgeWriterTx is a bulk file's relation write on one tx: every edge it adds
