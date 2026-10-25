@@ -79,7 +79,7 @@ const (
 | `telemetryDir` | `string` | `store.go` = `filepath.Join(filepath.Clean(doltRootDir), "telemetry")` | never read inside `store.go` |
 | `releaseWorkspaceLock` | `func() error` | `store.go` (Open), `store.go` (openInitialized, which OpenForRead, DumpRaw and Unquarantine open through); cleared to `nil` on failure at `store.go`, and in `Close` at `store.go` | the workspace shared-lock release |
 | `attribution` | `model.Attribution` | only by `AttributeTo` (`store.go`) | stamped on every event `newEvent` mints (`store.go`) |
-| `applyPreMutationHookForTest` | `func()` | nil in production; fired at `store.go` | test seam between planning and `withMutation` in `Apply` |
+| `planReadsHookForTest` | `func()` | nil in production; fired at `store.go` | test seam amid a write's plan reads, with the commit lock held and no tx open: in `Apply` after `GetIssue`, in `CreateIssue` after `historyFiledUnder` |
 | `commitWorkingSetHookForTest` | `func() error` | nil in production; fired at `commit_lock.go` | test seam at the top of every `commitWorkingSetOnce` |
 
 Both hooks are per-`Store` instance state, not package globals (`store.go`).
@@ -399,7 +399,7 @@ Test evidence:
 9. `parentID := strings.TrimSpace(in.ParentID)` (`store.go`).
 10. `storage.RejectLeafWithoutParent(issueType, parentID)` (`internal/storage/containment.go`) → `model.ValidationError` for a leaf with no parent (`store.go`).
 
-Inside `withMutation(ctx, "create issue"...)` (`store.go`):
+Under one `withCommitLock` hold (`store.go`): `historyFiledUnder(ctx, parentID)` reads the history filed under the parent, `planReadsHookForTest` fires if set, and `s.stamps.Stamp(s.clock, filed)` takes the instant the issue is created at, so no write lands between the reading and the row stamped past it. Then, re-entrant on that hold, inside `withMutation(ctx, "create issue"...)` (`store.go`):
 1. `frame, parentType, err := filingParentTx(ctx, tx, parentID)` (`store.go`; defined `internal/store/ranking.go`): an empty `parentID` → `storage.TopLevel` and the empty type; otherwise `SELECT issue_type, deleted_at FROM issues WHERE id = ?`, the type then judged by `storage.RejectParentThatIsNotAContainer(parentID, parentType)` → `model.ValidationError` for a parent that is not an epic (`store.go`), with `sql.ErrNoRows` → `storage.NotFoundError{Entity: "issue", ID: parentID}`, other error → `fmt.Errorf("lookup parent issue %q: %w", parentID, err)`, a non-NULL `deleted_at` → `storage.TopLevel`, and a live parent → `storage.Frame(parentID)`.
 2. `issueid.NormalizeConfiguredPrefix(in.Prefix)`; failure → `fmt.Errorf("normalize issue prefix: %w", err)` (`store.go`).
 3. `issue.ID, err = newIssueID(ctx, tx, prefix, issue.Topic, issue.Title, issue.Description, createdBy, issue.CreatedAt, parentID)` (`store.go`; defined `internal/store/issue_ids.go`).
@@ -657,18 +657,19 @@ The `c.field ASC` sort is deliberate so two reads of an unchanged event compare 
 
 #### 6.1 `Apply(ctx, id string, c storage.Change) (storage.Applied, error)`
 
-`store.go`, the single execution path for issue-record changes:
+`store.go`, the single execution path for issue-record changes. Every step below runs under ONE `withCommitLock` hold, so no write lands between the plan's reads and its write; the reads run on `s.db` before the mutation's tx opens (the pool has one connection):
 1. `current, err := s.GetIssue(ctx, id)` — a not-found id fails here (`store.go`).
-2. `actor := storage.Actor(c.Actor)` — trimmed; empty → `"unknown"` (`store.go`).
-3. `baseline := current` (`store.go`).
-4. If `c.Action != nil`: `lw, err = s.planLifecycleAction(ctx, current, actor, strings.TrimSpace(c.Reason), c.Action)`; on error, returns immediately with **no** writes; then `baseline = lw.postIssue()` so a following field write diffs against the post-action issue, and `handover = lw.handover()` (`store.go`).
-5. `hasFields := !c.Fields.IsEmpty()`; if true, `fw, err = planFieldUpdate(baseline, c.Fields, actor)` — a validation error returns before any write (`store.go`).
-6. `needsActionWrite := lw != nil && !lw.isNoop()` (`store.go`).
-7. `applyPreMutationHookForTest` fires here if set (`store.go`).
-8. If `needsActionWrite || hasFields`: one `withMutation(ctx, "apply update"...)` running `lw.applyTx` then `s.applyFieldsTx`, both in the **same** tx and therefore one Dolt commit (`store.go`).
-9. Returns `storage.Applied{Issue: s.GetIssue(ctx, id), Handover: handover}` — the issue a fresh re-read, always (`store.go`).
+2. `planReadsHookForTest` fires here if set (`store.go`).
+3. `family := s.laneFamilyHistory(ctx, current.ID)`; `at := s.stamps.Stamp(s.clock, family)`; `history := eventsOf(current.ID, family)` (`store.go`).
+4. `actor := storage.Actor(c.Actor)` — trimmed; empty → `"unknown"` (`store.go`).
+5. `baseline := current` (`store.go`).
+6. If `c.Action != nil`: `lw, err = s.planLifecycleAction(current, history, at, actor, strings.TrimSpace(c.Reason), c.Action)`; on error, returns immediately with **no** writes; then `baseline = lw.postIssue()` so a following field write diffs against the post-action issue, and `handover = lw.handover()` (`store.go`).
+7. `fw, err := planFieldUpdate(baseline, c.Fields, actor)` — a validation error returns before any write; `hasFields := len(fw.changes) > 0` (`store.go`).
+8. `needsActionWrite := lw != nil && !lw.isNoop()` (`store.go`).
+9. If `needsActionWrite || hasFields`: one `withMutation(ctx, "apply update"...)`, re-entrant on the hold, running `lw.applyTx` then `s.applyFieldsTx`, both in the **same** tx and therefore one Dolt commit (`store.go`).
+10. `storage.Applied{Issue: s.GetIssue(ctx, id), Handover: handover, Fields: fw.changes}` — the issue a fresh re-read, always (`store.go`). The hold is released, then each observer is called with the change and that issue.
 
-Evidence: transition + field lands as exactly one Dolt commit with both halves visible (`update_atomicity_test.go`); an invalid field (empty title) paired with a valid transition leaves state, title, and event count **wholly** unchanged (`update_atomicity_test.go`); the full IssueType × flag-combination matrix shows container transitions rejected with `model.ContainerActionError` and nothing written, field writes succeeding on every type, and zero transition events for field-only cells (`update_matrix_test.go`).
+Evidence: a start attempted amid another Apply's plan reads waits on its hold rather than landing, and each start's assignee change and handover name the holder that held when it landed (`store_test.go`, `TestNoWriteLandsBetweenAPlanAndItsWrite`); a start attempted amid a create's plan read waits likewise and is stamped past the create (`store_test.go`, `TestNoWriteLandsWhileACreateIsPlanned`). Evidence: transition + field lands as exactly one Dolt commit with both halves visible (`update_atomicity_test.go`); an invalid field (empty title) paired with a valid transition leaves state, title, and event count **wholly** unchanged (`update_atomicity_test.go`); the full IssueType × flag-combination matrix shows container transitions rejected with `model.ContainerActionError` and nothing written, field writes succeeding on every type, and zero transition events for field-only cells (`update_matrix_test.go`).
 
 #### 6.2 `planLifecycleAction`
 
@@ -687,7 +688,7 @@ Evidence: conformance case `apply_to_frozen_names_the_thaw` (`conformance.go`).
 
 #### 6.4 `transitionWrite` and `planStatusTransition`
 
-`transitionWrite` fields (`store.go`): `issueID, fromStatus, toStatus, postAssignee string; now time.Time; closedAtArg, resolutionArg, redirectTargetArg any; action model.ActionName; reason, actor string; changes []model.FieldChange; post model.Issue; noop bool; claimHandover *claims.Handover` (`prior.HandoverTo(post)`, left nil on a no-op). Methods at `store.go`.
+`transitionWrite` fields (`store.go`): `issueID, toStatus, postAssignee string; now time.Time; closedAtArg, resolutionArg, redirectTargetArg any; action model.ActionName; reason, actor string; changes []model.FieldChange; post model.Issue; noop bool; claimHandover *claims.Handover` (`prior.HandoverTo(post)`, left nil on a no-op). Methods at `store.go`.
 
 `planStatusTransition(ctx, issue, actor, reason, action) (transitionWrite, error)` (`store.go`):
 1. `issue.Apply(action)` → `updated` or the rejection.
@@ -712,39 +713,33 @@ Evidence: each of the six non-identity (from→to) pairs records exactly one eve
 
 `store.go`:
 1. `validateRedirectTarget(ctx, tx, w.post.ID, w.post.ResolutionValue(), w.post.RedirectTargetValue())` — on the **same tx** as the write (`store.go`).
-2. The guarded UPDATE (`store.go`):
+2. The UPDATE (`store.go`):
 ```sql
-UPDATE issues SET status = ?, assignee = ?, updated_at = ?, closed_at = ?, resolution = ?, redirect_target = ? WHERE id = ? AND status = ?
+UPDATE issues SET status = ?, assignee = ?, updated_at = ?, closed_at = ?, resolution = ?, redirect_target = ? WHERE id = ?
 ```
-bound `w.toStatus, w.postAssignee, w.now.Format(time.RFC3339Nano), w.closedAtArg, w.resolutionArg, w.redirectTargetArg, w.issueID, w.fromStatus`. Failure → `fmt.Errorf("update issue status: %w", err)`.
-3. `result.RowsAffected()` failure → `fmt.Errorf("read status transition result: %w", err)` (`store.go`).
-4. `affected == 0` → look up the live status via `currentStatusTx` and return `fmt.Errorf("%s conflict: issue status is %q", w.action.Verb(), currentStatus)` (`store.go`). Exact observed text: `close conflict: issue status is "closed"` (`store_test.go`).
-5. `s.recordEvent(ctx, tx, w.issueID, string(w.action), w.reason, w.actor, w.changes)` (`store.go`).
+bound `w.toStatus, w.postAssignee, w.now.Format(time.RFC3339Nano), w.closedAtArg, w.resolutionArg, w.redirectTargetArg, w.issueID`. Failure → `fmt.Errorf("update issue status: %w", err)`. The plan was read under the hold this write lands in (§6.1), so the row is the one it planned against.
+3. `s.recordEvent(ctx, tx, w.issueID, string(w.action), w.reason, w.actor, w.changes)` (`store.go`).
 
-The UPDATE touches only the status-axis columns — a stale transition cannot clobber the retention pair (`store.go`).
+The UPDATE touches only the status-axis columns — a transition restates no retention column (`store.go`).
 
 #### 6.6 `retentionWrite` and `planRetentionTransition`
 
-`retentionWrite` fields (`store.go`): `issueID string; now time.Time; priorArchived, priorDeleted, nextArchived, nextDeleted any; action model.ActionName; reason, actor string; changes []model.FieldChange; post model.Issue`. `isNoop()` is hardcoded `false` — the Retain table has no same-state success cell (`store.go`).
+`retentionWrite` fields (`store.go`): `issueID string; now time.Time; nextArchived, nextDeleted any; action model.ActionName; reason, actor string; changes []model.FieldChange; post model.Issue`. `isNoop()` is hardcoded `false` — the Retain table has no same-state success cell (`store.go`).
 
 `planRetentionTransition(issue, actor, reason, action)` (`store.go`):
 - `now := time.Now().UTC()`;
-- reads `model.RetentionTimestamps(issue.Retention())` and `retentionColumns(issue)` as the CAS guard;
+- reads `model.RetentionTimestamps(issue.Retention())` for the change-row diff;
 - `model.Retain(issue.Retention(), action, now)` — its error is the rejection (e.g. `"issue is already archived"`, observed at `store_test.go`);
 - `post := issue; post.SetRetention(next); post.UpdatedAt = now`;
 - change rows: `archived_at` when the timestamps differ, `deleted_at` when they differ, both via `formatNullableTime` (`store.go`).
 
 `retentionWrite.applyTx` (`store.go`):
 ```sql
-UPDATE issues SET updated_at = ?, archived_at = ?, deleted_at = ? WHERE id = ? AND archived_at <=> ? AND deleted_at <=> ?
+UPDATE issues SET updated_at = ?, archived_at = ?, deleted_at = ? WHERE id = ?
 ```
-bound `w.now.Format(time.RFC3339Nano), w.nextArchived, w.nextDeleted, w.issueID, w.priorArchived, w.priorDeleted`. Uses MySQL null-safe equality `<=>`. Errors:
-- exec failure → `fmt.Errorf("update issue retention: %w", err)`;
-- `RowsAffected` failure → `fmt.Errorf("read retention transition result: %w", err)`;
-- `affected == 0` → `currentRetentionTx` then `fmt.Errorf("%s conflict: issue retention is %q", w.action.Verb(), model.RetentionName(current))`. Observed text: `archive conflict: issue retention is "archived"` (`store_test.go`).
-Then `recordEvent` with the action name, reason, actor, and change rows (`store.go`).
+bound `w.now.Format(time.RFC3339Nano), w.nextArchived, w.nextDeleted, w.issueID`; exec failure → `fmt.Errorf("update issue retention: %w", err)`. Then `recordEvent` with the action name, reason, actor, and change rows (`store.go`).
 
-Evidence: a stale archive plan loses to a competing archive with the conflict error (`store_test.go`); delete-on-archived drops the archive stamp and a later restore lands on `Live`, not `Archived` (`store_test.go`); an archive event records exactly one `archived_at` change row and no fake status row (`store_test.go`).
+Evidence: delete-on-archived drops the archive stamp and a later restore lands on `Live`, not `Archived` (`store_test.go`); an archive event records exactly one `archived_at` change row and no fake status row (`store_test.go`).
 
 #### 6.7 `validateRedirectTarget`
 
@@ -756,13 +751,11 @@ Evidence: a stale archive plan loses to a competing archive with the conflict er
 - target retention is `model.Deleted` → `fmt.Errorf("cannot redirect %s to %s: the canonical issue is deleted", closingID, *target)`;
 - `Archived` targets are accepted (matched as the specific `Deleted` variant only, `store.go`).
 
-Evidence: duplicate close records the redirect target on the issue's own column with no graph edge (`store_test.go`); a terminal `Obsolete` close records the resolution and no redirect (`store_test.go`); a redirect to a nonexistent target rolls the whole close back — status stays `open`, resolution and closed_at nil (`store_test.go`); self-redirect rejected (`store_test.go`); redirect to an **archived** canonical succeeds (`store_test.go`); redirect to a **deleted** canonical is rejected with the target id and `"deleted"` in the message and nothing persisted (`store_test.go`); a delete of the canonical injected in the plan→write window via `applyPreMutationHookForTest` is still observed and the close rejected (`store_test.go`); a redirecting outcome with an empty target is rejected (`store_test.go`).
+Evidence: duplicate close records the redirect target on the issue's own column with no graph edge (`store_test.go`); a terminal `Obsolete` close records the resolution and no redirect (`store_test.go`); a redirect to a nonexistent target rolls the whole close back — status stays `open`, resolution and closed_at nil (`store_test.go`); self-redirect rejected (`store_test.go`); redirect to an **archived** canonical succeeds (`store_test.go`); redirect to a **deleted** canonical is rejected with the target id and `"deleted"` in the message and nothing persisted (`store_test.go`); a redirecting outcome with an empty target is rejected (`store_test.go`).
 
 #### 6.8 In-tx read helpers
 
-`currentStatusTx(ctx, tx, issueID) (string, error)` (`store.go`): `SELECT status FROM issues WHERE id = ?` scanned into `sql.NullString` (status is nullable since containers store NULL). `ErrNoRows` → `storage.NotFoundError{Entity:"issue", ID: issueID}`; other → `fmt.Errorf("read issue status: %w", err)`; returns `status.String` (NULL → `""`).
-
-`currentRetentionTx(ctx, tx, issueID) (model.Retention, error)` (`store.go`): `SELECT archived_at, deleted_at FROM issues WHERE id = ?`; `ErrNoRows` → `storage.NotFoundError`; other → `fmt.Errorf("read issue retention: %w", err)`; both columns through `scanNullableTime` then `model.RetentionFromTimestamps`.
+`currentRetentionTx(ctx, tx, issueID) (model.Retention, error)` (`store.go`), read by `validateRedirectTarget` (§6.7): `SELECT archived_at, deleted_at FROM issues WHERE id = ?`; `ErrNoRows` → `storage.NotFoundError`; other → `fmt.Errorf("read issue retention: %w", err)`; both columns through `scanNullableTime` then `model.RetentionFromTimestamps`.
 
 `requireIssueExistsTx(ctx, tx, issueID) error` (`store.go`): `SELECT 1 FROM issues WHERE id = ?`; `ErrNoRows` → `storage.NotFoundError`; other → `fmt.Errorf("check issue exists: %w", err)`. Accepts archived/deleted rows — no `deleted_at` filter (`store.go`).
 

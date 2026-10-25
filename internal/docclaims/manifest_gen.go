@@ -852,7 +852,6 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "SELECT name, hash FROM dolt_branches WHERE name LIKE ? ORDER BY name", Src: "SELECT name, hash FROM dolt_branches WHERE name LIKE ? ORDER BY name"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "SELECT name, url, params FROM dolt_remotes", Src: "SELECT name, url, params FROM dolt_remotes"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "SELECT src_id, dst_id, type, created_at, created_by FROM relations ORDER BY created_at ASC", Src: "SELECT src_id, dst_id, type, created_at, created_by FROM relations ORDER BY created_at ASC"},
-	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "SELECT status FROM issues WHERE id = ?", Src: "SELECT status FROM issues WHERE id = ?"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "SELECT table_name FROM information_schema.tables WHERE table_schema = DATABASE() ORDER BY table_name", Src: "SELECT table_name FROM information_schema.tables WHERE table_schema = DATABASE() ORDER BY table_name"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "SHOW CREATE TABLE", Src: "internal/store/migrations/00001_baseline.sql"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "UPDATE issues SET closed_at = NULL WHERE status <> 'closed' AND closed_at IS NOT NULL", Src: "UPDATE issues SET closed_at = NULL WHERE status <> 'closed' AND closed_at IS NOT NULL"},
