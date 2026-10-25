@@ -25,7 +25,7 @@ type quickstartRefreshReport struct {
 }
 
 func refreshQuickstartManagedAssets(env environ.Env, ws workspace.Info) (quickstartRefreshReport, error) {
-	// [LAW:single-enforcer] Quickstart refresh reuses the existing managed writers so hook updates stay owned at one boundary.
+	// [LAW:single-enforcer] Quickstart refresh reuses the existing managed hook writer so hook updates stay owned at one boundary.
 	hookResult, hookErr := installHooks(env, ws)
 	if hookErr != nil {
 		return quickstartRefreshReport{}, hookErr
@@ -95,13 +95,6 @@ func refreshQuickstartTemplate(env environ.Env, workspaceRoot string, name strin
 	}, nil
 }
 
-func managedAssetStatus(changed bool) string {
-	if changed {
-		return "updated"
-	}
-	return "unchanged"
-}
-
 func formatQuickstartRefreshSummary(refresh quickstartRefreshReport) string {
 	items := []labeledStatus{
 		{"pre-push hook", refresh.Hooks.Status, refresh.Hooks.Reason},
@@ -140,7 +133,10 @@ func formatQuickstartRefreshSummary(refresh quickstartRefreshReport) string {
 }
 
 func quickstartHookRefreshItem(result hookInstallResult) quickstartRefreshItem {
-	status := managedAssetStatus(result.Changed)
+	status := "unchanged"
+	if result.Changed {
+		status = "updated"
+	}
 	if !result.Managed && result.Reason != "" {
 		status = "skipped"
 	}
