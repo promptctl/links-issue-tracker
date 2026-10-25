@@ -13,7 +13,8 @@ import (
 )
 
 var bulkFamily = commandFamily[appSubcommand]{
-	usage: "usage: lit bulk <label|comment|start|done|close|open|archive|unarchive|delete|restore> ...",
+	usage: "usage: lit bulk <label|comment|start|done|close|open|archive|unarchive|delete|restore> ...\n" +
+		"to edit many issues' fields, one YAML document per issue with its id: lit import --path <file.yaml>",
 	subcommands: []subcommandRow[appSubcommand]{
 		{name: "label", nestedUsage: bulkLabelFamily.usage, payload: appSubcommand{access: app.AccessWrite, declare: bulkLabelLeaf}},
 		{name: "comment", payload: appSubcommand{access: app.AccessWrite, declare: bulkCommentLeaf}},

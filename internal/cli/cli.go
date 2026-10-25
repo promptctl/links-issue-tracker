@@ -1318,7 +1318,7 @@ func historyLeaf() appLeaf {
 const statusViaVerbsGuidance = "lit update no longer changes status — the transition verbs are the single enforcer of the transition guardrails. Use: `lit start <id>` (claim → in_progress), `lit done <id>` (finish → closed), `lit close <id> --resolution <duplicate|superseded|obsolete|wontfix>` (close with an outcome), `lit open <id>` (reopen)"
 
 func updateLeaf() appLeaf {
-	fs := newCobraFlagSet("update")
+	fs := newCobraFlagSet("update").Detail(helpText("update"))
 	title := fs.String("title", "", "Issue title")
 	description := registerLongText(fs, "description", "Issue description")
 	prompt := registerLongText(fs, "prompt", "Reusable agent prompt for the work this issue captures")

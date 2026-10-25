@@ -747,7 +747,10 @@ func commandSpecs(ctx context.Context, inv Invocation) []CommandSpec {
 		// snapshots (snapshots). The mechanisms are deliberately NOT merged.
 		{Name: "export", Summary: "Write the whole workspace out as one versioned JSON export (the data-export primitive; `backup restore` reads it back)", GroupID: "data",
 			Run: r.appCmd(app.AccessRead, exportLeaf)},
-		{Name: "import", Summary: "Bulk-create/update issues from a file (the one bulk-ingest home): a JSON tree spec, or a YAML file for create-or-update by id selector", GroupID: "data",
+		// import lists beside update and bulk because editing many issues is what
+		// an agent comes to it for; the export/backup pair keeps the data-recovery
+		// story in Sync & Data.
+		{Name: "import", Summary: "Create or edit many issues from one file: YAML documents, where an `id:` edits that issue as `lit update` would (`lit ls --format yaml` writes them), or a JSON tree spec that only creates", GroupID: "operations",
 			Run: r.appCmd(app.AccessWrite, importTreeLeaf)},
 		{Name: "workspace", Summary: "Show workspace metadata", GroupID: "maintenance",
 			Run: r.wsCmd(workspaceLeaf)},
