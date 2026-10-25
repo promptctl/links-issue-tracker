@@ -983,10 +983,9 @@ Per-template status (`refreshQuickstartTemplate`, `quickstart_refresh.go`):
 - Override content identical to the embedded default → `{status: "unchanged", managed: true, path}`.
 - Override drifted → `{status: "skipped", managed: true, path, reason: "customized"}` — the file is left untouched.
 
-Hook item (`quickstartHookRefreshItem`, `quickstart_refresh.go`): status from `managedAssetStatus(Changed, false)` = `unchanged`/`updated`; forced to `skipped` when `!Managed && Reason != ""` (the incompatible-hook case).
-`managedAssetStatus(changed, created)` (`quickstart_refresh.go`): `created` wins over `changed` wins over `unchanged`.
+Hook item (`quickstartHookRefreshItem`, `quickstart_refresh.go`): status is `updated` when `Changed`, else `unchanged`; forced to `skipped` when `!Managed && Reason != ""` (the incompatible-hook case).
 
-JSON report shape (structs only; no JSON output path): `{hooks, quickstart[]}` with items `{name?, path, status, managed, reason?, source?}` (`quickstart_refresh.go`).
+JSON report shape (structs only; no JSON output path): `{hooks, quickstart[]}` with items `{name?, path, status, managed, reason?}` (`quickstart_refresh.go`).
 
 Human summary (`formatQuickstartRefreshSummary`, `quickstart_refresh.go`): labels `pre-push hook`, then `<template-basename> template` per quickstart item; grouped into
 `  Refreshed: …` (created/updated), `  Skipped: …`, `  Up to date: …`; when all three groups are empty the summary is `  nothing to refresh`.
