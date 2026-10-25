@@ -616,13 +616,6 @@ func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (m
 		issueType = model.TypeTask
 	}
 	parentID := strings.TrimSpace(in.ParentID)
-	// A new issue has no history of its own; the lane family it joins does,
-	// and the create is stamped past it, as every write is.
-	filed, err := s.historyFiledUnder(ctx, parentID)
-	if err != nil {
-		return model.Issue{}, err
-	}
-	now := s.stamps.Stamp(s.clock, filed)
 	labels, err := canonicalizeLabels(in.Labels)
 	if err != nil {
 		return model.Issue{}, err
@@ -635,6 +628,19 @@ func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (m
 	if err != nil {
 		return model.Issue{}, err
 	}
+	// Containment, first half: a leaf is never created outside an epic. Pure,
+	// so it is answered before the mutation opens. [LAW:single-enforcer]
+	if err := storage.RejectLeafWithoutParent(issueType, parentID); err != nil {
+		return model.Issue{}, err
+	}
+	// A new issue has no history of its own; the lane family it joins does,
+	// and the create is stamped past it, as every write is. Read once the
+	// input is known good, as the memory engine reads its clock.
+	filed, err := s.historyFiledUnder(ctx, parentID)
+	if err != nil {
+		return model.Issue{}, err
+	}
+	now := s.stamps.Stamp(s.clock, filed)
 	createdBy := storage.Actor(in.Actor)
 	issue := model.Issue{
 		Title:       strings.TrimSpace(in.Title),
@@ -653,11 +659,6 @@ func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (m
 	}
 	issue, err = model.HydrateRow(issue, model.StatusView{Value: model.StateOpen}, nil)
 	if err != nil {
-		return model.Issue{}, err
-	}
-	// Containment, first half: a leaf is never created outside an epic. Pure,
-	// so it is answered before the mutation opens. [LAW:single-enforcer]
-	if err := storage.RejectLeafWithoutParent(issueType, parentID); err != nil {
 		return model.Issue{}, err
 	}
 	if err := s.withMutation(ctx, "create issue", func(ctx context.Context, tx *sql.Tx) error {
@@ -1425,12 +1426,12 @@ func (s *Store) Apply(ctx context.Context, id string, c storage.Change) (storage
 	// stamps it: the issue's own events decide its holder and its phase, and
 	// the lane family's decide the instant, so the write is stamped past
 	// exactly the history it was planned against.
-	family, err := s.laneFamilyHistory(ctx, id)
+	family, err := s.laneFamilyHistory(ctx, current.ID)
 	if err != nil {
 		return storage.Applied{}, err
 	}
 	at := s.stamps.Stamp(s.clock, family)
-	history := eventsOf(id, family)
+	history := eventsOf(current.ID, family)
 	// [LAW:no-ambient-temporal-coupling] The combined transition+field update has
 	// exactly one atomicity owner: this method plans both writes (pure: reads,
 	// validation, in-memory mutation) and then performs them inside a SINGLE
@@ -1669,13 +1670,12 @@ func (s *Store) planPhaseMove(issue model.Issue, history []model.IssueEvent, at 
 }
 
 // transitionWrite is a fully-planned status transition, ready to execute
-// against a tx. planStatusTransition is the read+validate+compute half — it runs
-// Issue.Apply's guards, the assignee rule, the redirect-target validation
-// (which reads the DB to confirm the target exists), and the change-row diff,
-// but performs no writes. applyTransitionTx is the write half: the single
-// guarded UPDATE plus the event. The split is read/compute vs
-// write, not pure vs impure — planStatusTransition does read the clock and the
-// store; what it defers is every mutation. The plan also carries `post` — the
+// against a tx. planStatusTransition is the validate+compute half — it runs
+// Issue.Apply's guards, the assignee rule, and the change-row diff over the
+// issue, the history and the instant Apply read for it, and reads and writes
+// nothing itself. applyTransitionTx is the write half: the redirect-target
+// validation, which reads a row a concurrent write can move and so runs under
+// the commit lock, then the single guarded UPDATE plus the event. The plan also carries `post` — the
 // post-transition issue — which Apply uses as the baseline for a following
 // field write. A noop plan records that the target state and assignee already
 // hold, so no write is owed. [LAW:decomposition]
@@ -2290,27 +2290,38 @@ func (s *Store) listComments(ctx context.Context, issueID string) ([]model.Comme
 	return out, rows.Err()
 }
 
-// laneFamilyHistory reads the events of issueID's lane family: issueID and
-// every issue filed under a parent it is filed under, the SQL statement of
-// model.LaneFamily. queryEvents parses each stamp into its instant, so the
-// stamp taken from this read never trusts the varchar's spelling.
+// allChanges is queryEvents' changes condition that joins every event's
+// change rows.
+const allChanges = "TRUE"
+
+// laneFamilyHistory reads issueID's history and its lane family's in one
+// statement, so the plan and the stamp come from one snapshot: issueID's own
+// events whole, for the plan to decide its holder and phase on, and the rest
+// of the family — every issue filed under a parent issueID is filed under,
+// the SQL statement of model.LaneFamily — as bare events, since the stamp
+// reads only their instants and a sibling's description history is no input
+// to it. queryEvents parses each stamp into its instant, so the stamp never
+// trusts the varchar's spelling.
 func (s *Store) laneFamilyHistory(ctx context.Context, issueID string) ([]model.IssueEvent, error) {
-	events, err := s.queryEvents(ctx, `e.issue_id = ? OR e.issue_id IN (
+	events, err := s.queryEvents(ctx, `e.issue_id = ?`, `e.issue_id = ? OR e.issue_id IN (
 		SELECT sibling.src_id FROM relations own
 		JOIN relations sibling ON sibling.dst_id = own.dst_id AND sibling.type = own.type
-		WHERE own.src_id = ? AND own.type = ?)`, issueID, issueID, string(model.RelParentChild))
+		WHERE own.src_id = ? AND own.type = ?)`, issueID, issueID, issueID, string(model.RelParentChild))
 	if err != nil {
 		return nil, fmt.Errorf("read lane family history of %s: %w", issueID, err)
 	}
 	return events, nil
 }
 
-// historyFiledUnder reads the events of every issue filed under parentID, the
-// SQL statement of model.FiledUnder: the history a create filed there is
-// stamped past. No issue is filed under the empty parent.
+// historyFiledUnder reads the events of every issue filed under parentID as
+// bare events, the SQL statement of model.FiledUnder: the history a create
+// filed there is stamped past, read only for its instants. No issue is filed
+// under the empty parent. The change condition names no issue, rather than
+// being the constant FALSE, which Dolt's planner folds into a join it cannot
+// replan.
 func (s *Store) historyFiledUnder(ctx context.Context, parentID string) ([]model.IssueEvent, error) {
-	events, err := s.queryEvents(ctx, `e.issue_id IN (SELECT src_id FROM relations WHERE dst_id = ? AND type = ?)`,
-		parentID, string(model.RelParentChild))
+	events, err := s.queryEvents(ctx, `e.issue_id = ?`, `e.issue_id IN (SELECT src_id FROM relations WHERE dst_id = ? AND type = ?)`,
+		"", parentID, string(model.RelParentChild))
 	if err != nil {
 		return nil, fmt.Errorf("read the history filed under %q: %w", parentID, err)
 	}
@@ -2335,7 +2346,7 @@ func (s *Store) StampCorrections() storage.StampCorrections {
 }
 
 func (s *Store) ListEvents(ctx context.Context, issueID string) ([]model.IssueEvent, error) {
-	events, err := s.queryEvents(ctx, "e.issue_id = ?", issueID)
+	events, err := s.queryEvents(ctx, allChanges, "e.issue_id = ?", issueID)
 	if err != nil {
 		return nil, fmt.Errorf("list issue events: %w", err)
 	}
@@ -2394,7 +2405,7 @@ func (s *Store) listAllComments(ctx context.Context) ([]model.Comment, error) {
 // establishing event that decides a lane's holder can be arbitrarily old, so a
 // recency cutoff would silently drop exactly the claims it was meant to speed up.
 func (s *Store) ListAllEvents(ctx context.Context) ([]model.IssueEvent, error) {
-	events, err := s.queryEvents(ctx, "")
+	events, err := s.queryEvents(ctx, allChanges, "")
 	if err != nil {
 		return nil, fmt.Errorf("list all issue events: %w", err)
 	}
@@ -2403,11 +2414,16 @@ func (s *Store) ListAllEvents(ctx context.Context) ([]model.IssueEvent, error) {
 
 // queryEvents fetches issue_events joined with issue_event_changes in a single
 // LEFT JOIN query, collapsing the per-change rows back into IssueEvent.Changes
-// slices. whereClause is an optional SQL fragment applied after the JOIN (e.g.
-// "e.issue_id = ?"); pass "" for an unfiltered scan. [LAW:dataflow-not-control-flow]
-func (s *Store) queryEvents(ctx context.Context, whereClause string, args ...any) ([]model.IssueEvent, error) {
+// slices. changes is the SQL condition on e saying whose change rows to join:
+// allChanges for every event's, or a narrower one that reads the rest as
+// bare events — an instant and attribution, no Changes — for a caller that
+// orders by them and decides nothing from what they changed. Its placeholders
+// come first in args. whereClause is an optional SQL fragment applied after
+// the JOIN (e.g. "e.issue_id = ?"); pass "" for an unfiltered scan.
+// [LAW:dataflow-not-control-flow]
+func (s *Store) queryEvents(ctx context.Context, changes, whereClause string, args ...any) ([]model.IssueEvent, error) {
 	q := `SELECT e.id, e.issue_id, e.action, e.reason, e.actor, e.created_at, e.stream_id, e.workspace_id, c.field, c.from_value, c.to_value
-		FROM issue_events e LEFT JOIN issue_event_changes c ON c.event_id = e.id`
+		FROM issue_events e LEFT JOIN issue_event_changes c ON c.event_id = e.id AND (` + changes + `)`
 	if whereClause != "" {
 		q += " WHERE " + whereClause
 	}

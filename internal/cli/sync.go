@@ -80,6 +80,7 @@ func openSyncSessionAt(ctx context.Context, env environ.Env, databasePath, works
 		reportEventValues(ctx, "stranded_writes.commits", syncer.StrandedWritesCommits())
 		reportEventValues(ctx, "settled_last.writes", syncer.SettledLastWrites())
 		reportEventValues(ctx, "history_bound.records", syncer.HistoryBounds())
+		reportStampCorrections(ctx, st)
 		return st.Close()
 	}, nil
 }
@@ -101,6 +102,14 @@ func openSyncEngineAt(ctx context.Context, env environ.Env, databasePath, worksp
 		return nil, nil, errors.Join(err, st.Close())
 	}
 	return st, syncer, nil
+}
+
+// reportStampCorrections appends st's account of the clock readings history
+// held back to the event, one occurrence per store the invocation wrote
+// through: a sync can open more than one, and a reconcile's resolved prose is
+// where a slow clock is most likely corrected. [LAW:nothing-unseen]
+func reportStampCorrections(ctx context.Context, st storage.StampReporter) {
+	telemetry.Append(ctx, "store.stamp_corrections", st.StampCorrections().EventValue())
 }
 
 // reportEventValues appends one value per item to the event's occurrences

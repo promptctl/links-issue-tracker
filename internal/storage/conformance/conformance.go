@@ -944,8 +944,14 @@ func aReportedHandoverIsTheOneRecorded(t *testing.T, ctx context.Context, st sto
 // establishing event: both are read off the newest event, and a write stamped
 // from the slow clock alone would sort before the history it was planned
 // against (links-scale-dy46.i49). The engine also has to say it held those
-// stamps back, and by how much.
+// stamps back, and by how much. And the hold stops at the lane family: a
+// ticket under another epic, written on the same slow clock, takes the
+// clock's reading, since no lane reader compares it with this epic's events.
 func aWriteOnASlowClockSortsAfterTheHistoryItSaw(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	clk.Pin(earlierInstant.Add(-time.Hour))
+	elsewhere := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "other epic", Topic: "core", IssueType: model.TypeEpic})
+	stranger := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "stranger", Topic: "core", ParentID: elsewhere.ID})
+
 	clk.Pin(laterInstant)
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
 	held := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "held", Topic: "core", ParentID: epic.ID})
@@ -985,9 +991,21 @@ func aWriteOnASlowClockSortsAfterTheHistoryItSaw(t *testing.T, ctx context.Conte
 		t.Errorf("the lane's newest establishing event = %+v, want checkout-b's start of %s: the takeover on a slow clock lost to the start it took over", latest, sibling.ID)
 	}
 
+	title := "touched on the slow clock"
+	if _, err := st.Apply(ctx, stranger.ID, storage.Change{Fields: storage.UpdateIssueInput{Title: &title}, Actor: "grace"}); err != nil {
+		t.Fatalf("Apply edit outside the family error = %v", err)
+	}
+	strangerEvents, err := st.ListEvents(ctx, stranger.ID)
+	if err != nil {
+		t.Fatalf("ListEvents(%s) error = %v", stranger.ID, err)
+	}
+	if edit := strangerEvents[len(strangerEvents)-1]; !edit.CreatedAt.Equal(earlierInstant) {
+		t.Errorf("an edit under another epic stamped %s, want the clock's %s: the hold reached past the lane family", edit.CreatedAt, earlierInstant)
+	}
+
 	after := st.StampCorrections()
 	if got := after.Count - before.Count; got != 2 {
-		t.Errorf("stamps held back by the two slow-clock writes = %d, want 2", got)
+		t.Errorf("clock readings held back by the three slow-clock writes = %d, want 2: the two in the family", got)
 	}
 	if lag := laterInstant.Sub(earlierInstant); after.Max <= lag {
 		t.Errorf("largest stamp correction = %s, want past the clock's %s lag", after.Max, lag)

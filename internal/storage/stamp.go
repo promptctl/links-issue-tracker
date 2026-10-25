@@ -8,7 +8,7 @@ import (
 )
 
 // StampTally is where an engine reads the instant a write stamps, and the
-// record of how often history held that instant back from the clock.
+// record of how often history held that reading back from the clock.
 //
 // The instant is [model.NextEventInstant] over the history the write was
 // planned against: the clock's reading, unless that history already holds an
@@ -33,19 +33,21 @@ func (t *StampTally) Stamp(clock Clock, seen []model.IssueEvent) time.Time {
 	return at
 }
 
-// StampCorrections reports every stamp this tally has handed out that history
-// held back from the clock.
+// StampCorrections reports every clock reading this tally has taken that
+// history held back.
 func (t *StampTally) StampCorrections() StampCorrections {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.corrected
 }
 
-// StampCorrections is how far behind the history it was planned against the
-// clock was, over a store's stamps: how many stamps history held back, and
-// the largest step any of them took past the clock's reading. A clone whose
-// clock runs behind the clones it syncs with shows here, and not only in
-// event order nobody is looking at. [LAW:nothing-unseen]
+// StampCorrections is how far behind the history a write was planned against
+// the clock was, over a store's readings: how many readings history held back,
+// and the largest step any of them took past the clock. A reading is evidence
+// of the clock's skew whether or not the write it was taken for lands, so a
+// refused or no-op write counts too. A clone whose clock runs behind the
+// clones it syncs with shows here, and not only in event order nobody is
+// looking at. [LAW:nothing-unseen]
 type StampCorrections struct {
 	Count int
 	Max   time.Duration
@@ -60,11 +62,11 @@ func (c StampCorrections) after(correction time.Duration) StampCorrections {
 	return StampCorrections{Count: c.Count + 1, Max: max(c.Max, correction)}
 }
 
-// EventRecord is the corrections as event facts. Zero is recorded as zero, so
-// a command whose clock never ran behind says so rather than saying nothing.
-func (c StampCorrections) EventRecord() (facts map[string]any, counts map[string]int) {
-	return map[string]any{"store.stamp_correction_max_ns": c.Max.Nanoseconds()},
-		map[string]int{"store.stamps_corrected": c.Count}
+// EventValue is one store's corrections as an event occurrence. Zero is
+// recorded as zero, so a store whose clock never ran behind says so rather
+// than saying nothing.
+func (c StampCorrections) EventValue() map[string]any {
+	return map[string]any{"store.stamps_corrected": c.Count, "store.stamp_correction_max_ns": c.Max.Nanoseconds()}
 }
 
 // StampReporter is the account an engine gives of the stamps it handed out.
