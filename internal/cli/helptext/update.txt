@@ -1,0 +1,8 @@
+Change the fields of one issue. Only the flags you pass are written.
+
+To change many issues at once, write one YAML document per issue, each
+carrying the id: of the issue it edits, and run
+`lit import --path <file.yaml>`. Each document changes only the keys it
+sets; `lit import --help` lists the keys and the values each takes.
+`lit ls --format yaml` prints a selection of issues in that form, ready
+to edit and import back.

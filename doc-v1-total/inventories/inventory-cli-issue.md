@@ -68,7 +68,8 @@ into* one of those, the call and its observable effect are recorded here.
   render a command's page either, so `lit help <cmd>` is rewritten in argv to
   `lit <cmd> --help` (`rewriteHelpCommand`, `cli.go`) and the leaf renders both the
   description and the real flag table. Descriptions are embedded under
-  `internal/cli/helptext/`; `init`'s is `helptext/init.txt`.
+  `internal/cli/helptext/`; `init`'s is `helptext/init.txt`, `update`'s is
+  `helptext/update.txt`.
 - Help groups, in order (`register.go`):
   `bootstrap` "Human Bootstrap", `operations` "Agent Operations",
   `structure` "Dependencies & Structure", `data` "Sync & Data",
@@ -1047,7 +1048,8 @@ history:
 ### 2.7 `lit update` — Update issue fields
 
 - Registration `register.go`, `app.AccessWrite`. Handler `updateLeaf`
-  (`cli.go`).
+  (`cli.go`). Description: `helptext/update.txt`, which points at
+  `lit import --path <file.yaml>` for editing many issues.
 - Flags (`cli.go`): `--title`, `--description`, `--prompt`, `--plan` (help
   `planUsage`, as on `lit new`), `--description-file`, `--prompt-file`,
   `--plan-file`, `--type` (default `""`), `--priority` (int, default 0), `--assignee`, `--labels`,
@@ -1056,8 +1058,9 @@ history:
   `--reason` ("Reason recorded on the field-change event"), and `--by`.
 - Refusals:
   - `len(positional) != 1` → `UsageError` with the usage line
-    `"usage: lit update <id> [--title <text>] [--description <text> | --description-file <path|->] [--prompt <text> | --prompt-file <path|->] [--plan <text> | --plan-file <path|->] [--type <task|feature|bug|chore|epic>] [--priority <normal|urgent>] [--assignee <user>] [--labels <csv>] [--lane <key>] [--reason <text>]"`
-    (`cli.go`).
+    ``"usage: lit update <id> [--title <text>] [--description <text> | --description-file <path|->] [--prompt <text> | --prompt-file <path|->] [--plan <text> | --plan-file <path|->] [--type <task|feature|bug|chore|epic>] [--priority <normal|urgent>] [--assignee <user>] [--labels <csv>] [--lane <key>] [--reason <text>] (to edit many issues' fields: `lit import --path <file.yaml>`)"``
+    (`cli.go`); the parenthetical is `bulkEditGuidance` (`bulk.go`), shared with
+    `lit bulk`'s usage.
   - `--status` present (detected via `fs.Visit`) → `UsageError{statusViaVerbsGuidance}`
     → exit 2. Verbatim text: "lit update no longer changes status — the transition
     verbs are the single enforcer of the transition guardrails. Use: `lit start
@@ -1967,7 +1970,7 @@ Family `depFamily`, usage `"usage: lit dep <add|rm|ls> ..."` (`dependency.go`).
 
 ### 2.21 `lit bulk` — Bulk issue operations
 
-Family `bulkFamily`, usage `"usage: lit bulk <label|comment|start|done|close|open|archive|unarchive|delete|restore> ..."`
+Family `bulkFamily`, usage ``"usage: lit bulk <label|comment|start|done|close|open|archive|unarchive|delete|restore> ... (to edit many issues' fields: `lit import --path <file.yaml>`)"``
 (`bulk.go`). Group `operations` (`register.go`).
 Rows: `label`, `comment`, `start`, `done`, `close`, `open`, `archive`, `unarchive`, `delete`, `restore` (all write), and hidden
 `import` (`retiredSubcommand`: retired, projected `Hidden`).
@@ -2073,9 +2076,9 @@ outside a git repository (`register.go`; asserted in `retired_command_test.go`).
 
 ### 2.23 `lit import --path <file>`
 
-- Registration `register.go`, `app.AccessWrite`. Summary: "Bulk-create/update
-  issues from a file (the one bulk-ingest home): a JSON tree spec, or a YAML file
-  for create-or-update by id selector".
+- Registration `register.go`, `app.AccessWrite`, group `operations` (beside
+  `update` and `bulk`). Summary: "Create or edit many issues from one .yaml file
+  (`lit ls --format yaml` writes it), or create them from a JSON tree spec".
 - Handler `importTreeLeaf` (`cli.go`).
 - Flags: `--path` (string, `""`, "Path to a JSON tree-spec file or a YAML bulk
   create/update file"), `--by` (`cli.go`).

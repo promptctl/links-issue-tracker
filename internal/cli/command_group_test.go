@@ -371,3 +371,33 @@ func TestTransitionVerbGrouping(t *testing.T) {
 		t.Fatalf("Issue Retention header at line %d, want below Agent Operations at line %d", ret, ops)
 	}
 }
+
+// An agent that wants to edit many issues reads the command surface, not the
+// reference docs: the root help where `update` and `bulk` live, `lit update
+// --help`, and the refusals a guessed `lit bulk update` or `lit update <id>
+// <id>` earns. Each must name the YAML file path through `lit import`, the
+// claim `lit quickstart update` makes. [LAW:behavior-not-structure] read off
+// rendered output only.
+func TestBulkEditIsReachableFromTheCommandSurface(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	groupOf, _ := renderedGrouping(t)
+	for _, name := range []string{"import", "update", "bulk"} {
+		if got := groupOf[name]; got != "Agent Operations" {
+			t.Errorf("%q renders under %q in `lit --help`, want Agent Operations", name, got)
+		}
+	}
+
+	const bulkEditPath = "lit import --path <file.yaml>"
+	if got := render(t, []string{"update", "--help"}); !strings.Contains(got, bulkEditPath) {
+		t.Errorf("`lit update --help` = %q, want it to name %q", got, bulkEditPath)
+	}
+	for _, guess := range [][]string{{"bulk", "update"}, {"update", "a", "b", "--title", "x"}} {
+		var stdout bytes.Buffer
+		err := Run(context.Background(), cwdInvocation(&stdout, &stdout, guess))
+		var usage UsageError
+		if !errors.As(err, &usage) || !strings.Contains(usage.Message, bulkEditPath) {
+			t.Errorf("`lit %s` error = %v, want a usage refusal naming %q", strings.Join(guess, " "), err, bulkEditPath)
+		}
+	}
+}

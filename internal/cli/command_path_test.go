@@ -30,7 +30,7 @@ func TestRunNestedInvalidPathsReturnUsageOutsideRepo(t *testing.T) {
 		{args: []string{"dep", "unknown"}, wantErr: "usage: lit dep <add|rm|ls> ..."},
 		{args: []string{"sync", "unknown"}, wantErr: "usage: lit sync <status|remote|fetch|pull|push|compact|reconcile> ..."},
 		{args: []string{"hooks"}, wantErr: "usage: lit hooks install"},
-		{args: []string{"bulk"}, wantErr: "usage: lit bulk <label|comment|start|done|close|open|archive|unarchive|delete|restore> ..."},
+		{args: []string{"bulk"}, wantErr: bulkFamily.usage},
 		{args: []string{"backup", "prune"}, wantErr: "usage: lit backup <create|list|restore> ..."},
 		{args: []string{"snapshots", "bogus"}, wantErr: "usage: lit snapshots <new|list|restore> ..."},
 		{args: []string{"lifeboat"}, wantErr: "usage: lit lifeboat <dump|recover> ..."},

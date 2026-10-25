@@ -12,8 +12,13 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 )
 
+// bulkEditGuidance closes the two usage refusals an agent earns by guessing at
+// editing many issues — `lit bulk update` and `lit update <id> <id> ...` — with
+// the command that does it. [LAW:one-source-of-truth]
+const bulkEditGuidance = "(to edit many issues' fields: `lit import --path <file.yaml>`)"
+
 var bulkFamily = commandFamily[appSubcommand]{
-	usage: "usage: lit bulk <label|comment|start|done|close|open|archive|unarchive|delete|restore> ...",
+	usage: "usage: lit bulk <label|comment|start|done|close|open|archive|unarchive|delete|restore> ... " + bulkEditGuidance,
 	subcommands: []subcommandRow[appSubcommand]{
 		{name: "label", nestedUsage: bulkLabelFamily.usage, payload: appSubcommand{access: app.AccessWrite, declare: bulkLabelLeaf}},
 		{name: "comment", payload: appSubcommand{access: app.AccessWrite, declare: bulkCommentLeaf}},
